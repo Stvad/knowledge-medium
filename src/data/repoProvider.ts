@@ -68,6 +68,7 @@ import { toLocalDbOpenError } from '@/utils/localDbCorruption.js'
 import {
   captureDbOpenCorruption,
   recordForensicSessionStart,
+  stopSyncHealthWatch,
   watchForRuntimeCorruption,
   watchSyncHealth,
 } from '@/utils/dbForensicsHooks.js'
@@ -141,6 +142,50 @@ const enqueueOnConnectChain = <T,>(fn: () => Promise<T>): Promise<T> => {
   return attempt
 }
 
+/** How long {@link reconnectPowerSync} waits, after `connect()` resolves, for
+ *  the connection to actually reach `connected: true` before reporting
+ *  failure. `connect()` resolving is NOT evidence the connection came up:
+ *  `AbstractStreamingSyncImplementation.connect` runs
+ *  `this.connectInternal(...).catch(() => {})` internally (verified in the
+ *  PowerSync SDK source), so a stale-token or network-refused reconnect
+ *  attempt still resolves `connect()` while the database sits disconnected
+ *  exactly as it did before the attempt. Without this bound,
+ *  `reconnectPowerSync` would report success — to the command palette, the
+ *  agent bridge, and the stall episode's `reconnectAttempts` record — for an
+ *  attempt that silently did nothing. Bounded rather than unbounded so a
+ *  connection that will simply never come up (not just "slow") doesn't hang
+ *  the caller forever. */
+export const RECONNECT_CONNECTED_TIMEOUT_MS = 15_000
+
+interface ReconnectStatusDb {
+  currentStatus?: { connected?: boolean }
+  registerListener?: (l: { statusChanged?: (s: { connected?: boolean }) => void }) => () => void
+}
+
+/** Resolve `true` once `db.currentStatus.connected` is (or becomes) true,
+ *  `false` if it hasn't within `timeoutMs`. Event-driven (a `statusChanged`
+ *  listener) rather than polled — the only timer involved is the bound
+ *  itself. */
+const waitForConnected = (db: ReconnectStatusDb, timeoutMs: number): Promise<boolean> => {
+  if (db.currentStatus?.connected) return Promise.resolve(true)
+  if (typeof db.registerListener !== 'function') return Promise.resolve(false)
+  return new Promise<boolean>(resolve => {
+    let dispose: (() => void) | null = null
+    let settled = false
+    const finish = (result: boolean) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      dispose?.()
+      resolve(result)
+    }
+    const timer = setTimeout(() => finish(false), timeoutMs)
+    dispose = db.registerListener!({
+      statusChanged: status => { if (status.connected) finish(true) },
+    })
+  })
+}
+
 /**
  * Force a fresh PowerSync connection for `userId` — `disconnect()` then
  * `connect(connector)`. This is the `sync.reconnect` primitive (see
@@ -171,6 +216,16 @@ const enqueueOnConnectChain = <T,>(fn: () => Promise<T>): Promise<T> => {
  * where issuing `connect()` would make the FIRST Supabase/PowerSync request
  * of that session, violating the "local-only makes no remote request"
  * invariant this module upholds elsewhere (`isRemoteSyncActive`).
+ *
+ * REJECTS if `connect()` resolves but the connection never reaches
+ * `connected: true` within {@link RECONNECT_CONNECTED_TIMEOUT_MS} — see that
+ * constant's doc for why `connect()` resolving alone can't be trusted. This
+ * makes failure honest for every caller: the command-palette / agent-bridge
+ * action (`src/plugins/sync-recovery/action.ts`) surfaces a real error
+ * instead of reporting success for an attempt that did nothing, and the
+ * reconnect watchdog's own `try`/`catch` (dbForensicsHooks.ts
+ * `runReconnectWatchdog`) already treats a rejection here as best-effort —
+ * nothing there needed to change for this to be safe.
  */
 export const reconnectPowerSync = (userId: string): Promise<void> =>
   enqueueOnConnectChain(async () => {
@@ -187,6 +242,14 @@ export const reconnectPowerSync = (userId: string): Promise<void> =>
       getWorkspaceMode: resolver.getMode,
       getCek: resolver.getCek,
     }))
+
+    const connected = await waitForConnected(db, RECONNECT_CONNECTED_TIMEOUT_MS)
+    if (!connected) {
+      throw new Error(
+        `[sync] reconnect for ${userId}: connect() resolved but the connection never reached ` +
+        `"connected" within ${RECONNECT_CONNECTED_TIMEOUT_MS}ms`,
+      )
+    }
   })
 
 /** The active user id (whose per-user PowerSync DB is mounted), or null when
@@ -348,6 +411,14 @@ export const ensurePowerSyncReady = async (
   activeRemoteSync = useRemoteSync
 
   if (!useRemoteSync) {
+    // Tear down a PREVIOUS remote session's sync-health watcher, if any — an
+    // in-page account switch (or a mode toggle for the same account) that
+    // lands here without a reload must not leave the old watcher running.
+    // Without this it keeps sampling the OLD (now-orphaned) db on its own
+    // timer/listener and filing samples into the still-active ring under
+    // this new, local-only session. Safe/no-op when nothing was being
+    // watched (e.g. the FIRST session ever is local-only).
+    stopSyncHealthWatch()
     return
   }
 

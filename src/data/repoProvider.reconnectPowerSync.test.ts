@@ -15,6 +15,7 @@ const connectorHooks = vi.hoisted(() => ({
 
 vi.mock('@/utils/dbForensicsHooks.js', () => ({
   watchSyncHealth: vi.fn(),
+  stopSyncHealthWatch: vi.fn(),
   watchForRuntimeCorruption: vi.fn(),
   recordForensicSessionStart: vi.fn(),
   captureDbOpenCorruption: vi.fn(),
@@ -34,8 +35,13 @@ vi.mock('@powersync/web', () => {
     getOptional = async () => null
     getAll = async () => []
     registerListener = () => () => {}
-    connect = async () => {}
-    disconnect = async () => {}
+    // Real PowerSync flips `currentStatus.connected` once the stream comes
+    // up; toggling it here (rather than leaving connect/disconnect as bare
+    // no-ops) is what lets `reconnectPowerSync`'s new `waitForConnected`
+    // fast-path resolve immediately in the tests below that don't care about
+    // the timeout/failure path specifically.
+    connect = async () => { this.currentStatus = { ...this.currentStatus, connected: true } }
+    disconnect = async () => { this.currentStatus = { ...this.currentStatus, connected: false } }
     close = async () => {}
   }
   class FakeSchema {
@@ -80,11 +86,17 @@ Object.defineProperty(navigator, 'storage', {
   value: { getDirectory: async () => ({}) },
 })
 
-const { ensurePowerSyncReady, reconnectPowerSync, getPowerSyncDb } = await import('./repoProvider.js')
+const { ensurePowerSyncReady, reconnectPowerSync, getPowerSyncDb, RECONNECT_CONNECTED_TIMEOUT_MS } =
+  await import('./repoProvider.js')
 
 // Loosen the fake db's type at the call sites below rather than fighting the
 // real `PowerSyncDatabase` type for a mock-only shape.
-type FakeDb = { disconnect: () => Promise<void>; connect: (connector: unknown) => Promise<void> }
+type FakeDb = {
+  disconnect: () => Promise<void>
+  connect: (connector: unknown) => Promise<void>
+  currentStatus: Record<string, unknown>
+  registerListener: (l: { statusChanged?: (s: Record<string, unknown>) => void }) => () => void
+}
 const fakeDb = (userId: string) => getPowerSyncDb(userId) as unknown as FakeDb
 
 afterEach(() => {
@@ -98,8 +110,8 @@ describe('reconnectPowerSync', () => {
 
     const db = fakeDb('user-1')
     const order: string[] = []
-    db.disconnect = vi.fn(async () => { order.push('disconnect') })
-    db.connect = vi.fn(async () => { order.push('connect') })
+    db.disconnect = vi.fn(async () => { order.push('disconnect'); db.currentStatus = { ...db.currentStatus, connected: false } })
+    db.connect = vi.fn(async () => { order.push('connect'); db.currentStatus = { ...db.currentStatus, connected: true } })
     connectorHooks.createPowerSyncConnector.mockClear()
 
     await reconnectPowerSync('user-1')
@@ -118,14 +130,15 @@ describe('reconnectPowerSync', () => {
     const db = fakeDb('user-2')
     let active = 0
     let overlapped = false
-    const guarded = () => vi.fn(async () => {
+    const guarded = (setConnected: boolean) => vi.fn(async () => {
       active++
       if (active > 1) overlapped = true
       await Promise.resolve() // yield a tick so a real race would show up
+      db.currentStatus = { ...db.currentStatus, connected: setConnected }
       active--
     })
-    db.disconnect = guarded()
-    db.connect = guarded()
+    db.disconnect = guarded(false)
+    db.connect = guarded(true)
 
     await Promise.all([reconnectPowerSync('user-2'), reconnectPowerSync('user-2')])
 
@@ -165,5 +178,32 @@ describe('reconnectPowerSync', () => {
 
     expect(staleDb.disconnect).not.toHaveBeenCalled()
     expect(staleDb.connect).not.toHaveBeenCalled()
+  })
+
+  it('rejects when connect() resolves but the connection never reaches "connected" within the bound (PowerSync swallows connection failures internally)', async () => {
+    vi.useFakeTimers()
+    try {
+      await ensurePowerSyncReady('user-never-connects', true)
+      await reconnectPowerSync('user-never-connects') // settle the initial connect
+
+      const db = fakeDb('user-never-connects')
+      // Models AbstractStreamingSyncImplementation.connect's
+      // `connectInternal().catch(() => {})`: connect() resolves, but the
+      // connection never actually comes up (stale token, network refused).
+      db.disconnect = vi.fn(async () => { db.currentStatus = { ...db.currentStatus, connected: false } })
+      db.connect = vi.fn(async () => {})
+
+      const attempt = reconnectPowerSync('user-never-connects')
+      let outcome: 'pending' | 'resolved' | 'rejected' = 'pending'
+      attempt.then(() => { outcome = 'resolved' }, () => { outcome = 'rejected' })
+
+      await vi.advanceTimersByTimeAsync(RECONNECT_CONNECTED_TIMEOUT_MS - 1)
+      expect(outcome).toBe('pending')
+
+      await vi.advanceTimersByTimeAsync(1)
+      await expect(attempt).rejects.toThrow(/never reached "connected"/)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

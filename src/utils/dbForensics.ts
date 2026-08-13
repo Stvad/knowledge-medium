@@ -18,7 +18,7 @@
  * imported from the DB-open path without a cycle.
  */
 
-import { IdbKeyedStore } from '@/utils/idbKeyedStore.js'
+import { IdbKeyedStore, promisifyRequest } from '@/utils/idbKeyedStore.js'
 import { scanForZeroPages, type OpfsPageScanResult } from '@/utils/opfsPageScan.js'
 
 const FORENSICS_DB = 'km-db-forensics'
@@ -109,6 +109,13 @@ export interface SyncHealthSample {
   lastT: number
   /** Observations coalesced into this entry. */
   count: number
+  /** The user this sample was recorded for. IS part of the coalescing key: an
+   *  in-page account switch (remote→remote) can leave the previous user's
+   *  watcher still filing into this SAME ring for one race window (see
+   *  `stopSyncHealthWatch` in dbForensicsHooks.ts), and even without that,
+   *  two genuinely different users' identical-looking healthy states must
+   *  never coalesce into one entry attributed to neither. */
+  userId: string
   connected: boolean
   connecting: boolean
   hasSynced: boolean | null
@@ -124,6 +131,18 @@ export interface SyncHealthSample {
   /** NOT part of the coalescing key (churns on every checkpoint); updated to
    *  the newest value on each coalesce, same as `lastSyncedAt`. */
   downloading: boolean
+  /** Sticky: true if `uploading` was ever true across every observation
+   *  coalesced into this entry, even though the LATEST one (`uploading`
+   *  above) may since have gone back to false. NOT part of the coalescing
+   *  key (same reason as `uploading`) — OR'd in on every coalesce, never
+   *  cleared. This is the fact `uploading` alone can't preserve: during a
+   *  stall, "never even went true" (the upload loop isn't trying) and
+   *  "toggled true/false repeatedly" (attempting and failing) are two
+   *  different diagnoses, and a coalesced entry's LATEST `uploading` value
+   *  can't tell them apart on its own. */
+  uploadingSeen: boolean
+  /** Same as {@link uploadingSeen}, for `downloading`. */
+  downloadingSeen: boolean
   /** Raw `ps_crud` row count (capped). Null if the count query failed. */
   pendingRows: number | null
   /** Distinct blocks queued for upload — matches what the status chip shows. Null if the count query failed. */
@@ -190,6 +209,16 @@ export interface StallEpisode extends Omit<SyncHealthSample, 'lastT' | 'count'> 
    *  2026-08-13 incident had no lever at all, automatic or manual, so
    *  there was nothing to even ask this question about. */
   lastReconnectAttemptAt?: number
+  /** How many times the watchdog found the cross-tab reconnect lock
+   *  (`navigator.locks`, `enableMultiTabs: true` means every tab shares one
+   *  sync worker) already held by ANOTHER tab and skipped its own attempt
+   *  against THIS episode, rather than contending for the same reconnect.
+   *  Absent means it never happened — either no contention occurred, or the
+   *  environment lacks `navigator.locks` (in which case the watchdog always
+   *  runs unguarded and this stays absent). Set via
+   *  {@link DbForensics.recordStallReconnectSkipped}; exists so a skip
+   *  doesn't read as a silent no-op in the dump. */
+  reconnectSkippedCount?: number
 }
 
 const VISIBILITY_PREFIX = 'visibility:'
@@ -254,6 +283,28 @@ export class DbForensics {
     uncleanShutdownCount: number
   }> {
     return this.enqueue(async () => {
+      const now = Date.now()
+      // Enqueue the ring archive/reset onto `syncMutex` FIRST — before any of
+      // the slower session work below (two IndexedDB reads via `this.get`
+      // plus an OPFS `safeDbSize` lookup). This is a race against the
+      // just-armed watcher's own first sample (`watchSyncHealth`'s immediate
+      // `sample()`), which also enqueues onto `syncMutex`, via
+      // `recordSyncSample`, but only after ITS OWN async work (SQL count
+      // queries). If the archive/reset used to enqueue LATE (after the
+      // session awaits below), the watcher's sample could win that race and
+      // land in the OLD session's ring, which then gets archived out from
+      // under it — the new session boots without the very "what did the
+      // queue look like at boot" sample this module exists to capture.
+      // Enqueueing here, synchronously before any `await` in this function,
+      // wins the race unconditionally: nothing else can be queued onto
+      // `syncMutex` before this line runs. The `.catch` is attached
+      // immediately too (not left for a later `await`) so a rejection can
+      // never surface as an unhandled promise rejection regardless of what
+      // happens in the try/catch below.
+      const archiveDone = this.enqueueSync(() => this.archiveSyncRing(now)).catch(err => {
+        warn('recordSessionStart: sync ring archive failed', err)
+      })
+
       try {
         const previous = await this.get<ForensicSessionRecord>(CURRENT_SESSION_KEY)
         const meta = (await this.get<ForensicsMeta>(META_KEY)) ?? { uncleanShutdownCount: 0 }
@@ -267,7 +318,6 @@ export class DbForensics {
           await this.put(META_KEY, meta)
         }
 
-        const now = Date.now()
         const session: ForensicSessionRecord = {
           startedAt: now,
           lastSeenAt: now,
@@ -280,21 +330,11 @@ export class DbForensics {
         }
         await this.put(CURRENT_SESSION_KEY, session)
 
-        // Archive the outgoing sync-health ring (the thing missing in the
-        // 2026-08-13 iPad incident: the forensics store recorded the restarts
-        // but nothing about sync state). Runs on the SEPARATE sync mutex so it
-        // can't race a concurrent `recordSyncSample`'s read-modify-write of
-        // `sync:current`. Independently try/caught: a failure here must not
-        // clobber the unclean-shutdown result already computed above.
-        try {
-          await this.enqueueSync(() => this.archiveSyncRing(now))
-        } catch (err) {
-          warn('recordSessionStart: sync ring archive failed', err)
-        }
-
+        await archiveDone
         return { uncleanShutdown, uncleanShutdownCount: meta.uncleanShutdownCount }
       } catch (err) {
         warn('recordSessionStart failed', err)
+        await archiveDone
         return { uncleanShutdown: false, uncleanShutdownCount: 0 }
       }
     })
@@ -303,14 +343,34 @@ export class DbForensics {
   /** Archive `sync:current` (if present) under `SYNC_ARCHIVE_PREFIX<startedAt>`,
    *  trim old archives, then reset `sync:current` to a fresh empty ring dated
    *  `now`. MUST be invoked already serialized on `syncMutex` (see the two call
-   *  sites: {@link recordSessionStart} and nowhere else). */
+   *  sites: {@link recordSessionStart} and nowhere else).
+   *
+   *  The READ of `sync:current` and the WRITE of the fresh empty ring run
+   *  inside ONE IndexedDB transaction (`runTransaction`, not two separate
+   *  `tx()` calls) — otherwise a concurrent TAB's own read-modify-write of
+   *  `sync:current` (multi-tab sync is enabled) could land between this
+   *  read and this write and get silently clobbered by the reset. `syncMutex`
+   *  only serializes ops within THIS JS context/tab; it does nothing for a
+   *  separate tab's connection to the same IndexedDB database. This does NOT
+   *  fully solve multi-tab: two tabs racing this same reset can still each
+   *  see the OTHER's ring as "previous" and archive it, or a tab that's
+   *  booting (e.g. a fresh reload) can rotate the ring out from under a
+   *  still-live tab that was mid-session — those residual races are
+   *  unresolved; this only removes the plain lost-update. */
   private async archiveSyncRing(now: number): Promise<void> {
-    const previous = await this.get<SyncHealthRing>(SYNC_CURRENT_KEY)
+    const previous = await this.store.runTransaction('readwrite', async store => {
+      const current = await promisifyRequest(
+        store.get(SYNC_CURRENT_KEY) as IDBRequest<SyncHealthRing | undefined>,
+      )
+      await promisifyRequest(
+        store.put({ startedAt: now, samples: [] } satisfies SyncHealthRing, SYNC_CURRENT_KEY),
+      )
+      return current
+    })
     if (previous) {
       await this.put(`${SYNC_ARCHIVE_PREFIX}${previous.startedAt}`, previous)
       await this.trimByPrefix(SYNC_ARCHIVE_PREFIX, MAX_SYNC_ARCHIVES)
     }
-    await this.put(SYNC_CURRENT_KEY, { startedAt: now, samples: [] } satisfies SyncHealthRing)
   }
 
   /**
@@ -323,35 +383,53 @@ export class DbForensics {
    * {@link MAX_SYNC_SAMPLES}, dropping the oldest). Best-effort: swallows and
    * warns, never throws. Serialized on `syncMutex` — separate from the session
    * mutex so lifecycle events and sync samples never block each other.
+   *
+   * The read-modify-write of `sync:current` (get the ring, coalesce-or-append,
+   * put it back) runs inside ONE IndexedDB transaction — same reasoning as
+   * {@link archiveSyncRing}'s doc: `syncMutex` only serializes ops within this
+   * tab, so without a single atomic transaction a concurrent tab's own
+   * get→put cycle could land between this read and this write and be
+   * silently lost. This does NOT fully solve multi-tab coalescing (two tabs'
+   * differing-but-concurrent states can still each look like the "last"
+   * entry to the other and coalesce incorrectly) or a booting tab's
+   * `archiveSyncRing` rotating the ring out from under a still-live tab —
+   * those residual races are unresolved.
    */
   recordSyncSample(sample: Omit<SyncHealthSample, 'lastT' | 'count'>): Promise<void> {
     return this.enqueueSync(async () => {
       try {
-        const ring = (await this.get<SyncHealthRing>(SYNC_CURRENT_KEY)) ?? {
-          startedAt: sample.t,
-          samples: [],
-        }
-        const last = ring.samples[ring.samples.length - 1]
-        if (last && sameSyncState(last, sample)) {
-          last.lastT = sample.t
-          last.count += 1
-          // lastSyncedAt/uploading/downloading churn on every checkpoint even
-          // on a healthy connection (see sameSyncState — deliberately NOT part
-          // of the coalescing key), so refresh them to the newest observed
-          // value. Without this the retained entry would freeze at whatever
-          // it was on FIRST absorbing this state, misreporting "as of t" values
-          // as current.
-          last.lastSyncedAt = sample.lastSyncedAt
-          last.uploading = sample.uploading
-          last.downloading = sample.downloading
-        } else {
-          ring.samples = appendCapped(
-            ring.samples,
-            { ...sample, lastT: sample.t, count: 1 },
-            MAX_SYNC_SAMPLES,
-          )
-        }
-        await this.put(SYNC_CURRENT_KEY, ring)
+        await this.store.runTransaction('readwrite', async store => {
+          const ring = (await promisifyRequest(
+            store.get(SYNC_CURRENT_KEY) as IDBRequest<SyncHealthRing | undefined>,
+          )) ?? { startedAt: sample.t, samples: [] }
+          const last = ring.samples[ring.samples.length - 1]
+          if (last && sameSyncState(last, sample)) {
+            last.lastT = sample.t
+            last.count += 1
+            // lastSyncedAt/uploading/downloading churn on every checkpoint even
+            // on a healthy connection (see sameSyncState — deliberately NOT part
+            // of the coalescing key), so refresh them to the newest observed
+            // value. Without this the retained entry would freeze at whatever
+            // it was on FIRST absorbing this state, misreporting "as of t" values
+            // as current.
+            last.lastSyncedAt = sample.lastSyncedAt
+            last.uploading = sample.uploading
+            last.downloading = sample.downloading
+            // uploadingSeen/downloadingSeen are sticky — OR the incoming
+            // observation in, never clear. This is what lets a coalesced
+            // entry answer "did the upload loop ever even try" separately
+            // from "is it trying RIGHT NOW" (the latter is `uploading` above).
+            last.uploadingSeen = last.uploadingSeen || sample.uploadingSeen
+            last.downloadingSeen = last.downloadingSeen || sample.downloadingSeen
+          } else {
+            ring.samples = appendCapped(
+              ring.samples,
+              { ...sample, lastT: sample.t, count: 1 },
+              MAX_SYNC_SAMPLES,
+            )
+          }
+          await promisifyRequest(store.put(ring, SYNC_CURRENT_KEY))
+        })
       } catch (err) {
         warn('recordSyncSample failed', err)
       }
@@ -436,6 +514,31 @@ export class DbForensics {
         await this.put(key, episode)
       } catch (err) {
         warn('recordStallReconnectAttempt failed', err)
+      }
+    })
+  }
+
+  /**
+   * Record that the watchdog found the cross-tab reconnect lock already held
+   * by another tab and skipped its own attempt against THIS episode —
+   * increments `reconnectSkippedCount`. Same shape/contract as
+   * {@link recordStallReconnectAttempt}: no-op on a null/trimmed key,
+   * best-effort, never throws. Kept as a SEPARATE counter (not folded into
+   * `reconnectAttempts`) so the dump can tell "this tab tried and it
+   * (recorded as an attempt) didn't help" apart from "this tab deferred to
+   * another tab this round" — collapsing the two would make a skip look like
+   * a no-op attempt.
+   */
+  recordStallReconnectSkipped(key: string | null): Promise<void> {
+    return this.enqueueSync(async () => {
+      if (!key) return
+      try {
+        const episode = await this.get<StallEpisode>(key)
+        if (!episode) return
+        episode.reconnectSkippedCount = (episode.reconnectSkippedCount ?? 0) + 1
+        await this.put(key, episode)
+      } catch (err) {
+        warn('recordStallReconnectSkipped failed', err)
       }
     })
   }
@@ -577,19 +680,26 @@ const appendCapped = <T>(arr: T[], item: T, cap = MAX_SESSION_EVENTS): T[] => {
 }
 
 // Every field except t/lastT/count — the coalescing test for recordSyncSample.
-// Every field except t/lastT/count — the coalescing test for recordSyncSample.
-// Deliberately EXCLUDES lastSyncedAt/uploading/downloading: those churn on
-// every checkpoint even on an otherwise-unchanging healthy connection, so
-// including them would fragment the ring into a few minutes of history
-// instead of real state transitions (a coalesced entry still tracks their
-// newest value — see the update in recordSyncSample — it just isn't part of
-// what decides whether to coalesce). `pendingSinceT` IS included: it's
-// constant for the life of one pending-queue episode, so a change (drained
-// and refilled) correctly starts a new entry.
+// Deliberately EXCLUDES lastSyncedAt/uploading/downloading/uploadingSeen/
+// downloadingSeen: the first three churn on every checkpoint even on an
+// otherwise-unchanging healthy connection, so including them would fragment
+// the ring into a few minutes of history instead of real state transitions
+// (a coalesced entry still tracks their newest value — see the update in
+// recordSyncSample — it just isn't part of what decides whether to
+// coalesce); uploadingSeen/downloadingSeen are the STICKY aggregate of
+// uploading/downloading and would defeat their own purpose if they were part
+// of the key (a false→true flip would fragment the ring right at the moment
+// the sticky flag is meant to survive past). `pendingSinceT` IS included:
+// it's constant for the life of one pending-queue episode, so a change
+// (drained and refilled) correctly starts a new entry. `userId` IS included:
+// two different users' otherwise-identical states must never coalesce into
+// one entry attributed to neither (see the field's own doc on
+// SyncHealthSample).
 const sameSyncState = (
   a: SyncHealthSample,
   b: Omit<SyncHealthSample, 'lastT' | 'count'>,
 ): boolean =>
+  a.userId === b.userId &&
   a.connected === b.connected &&
   a.connecting === b.connecting &&
   a.hasSynced === b.hasSynced &&

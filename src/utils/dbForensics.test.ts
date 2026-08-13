@@ -181,12 +181,15 @@ const baseSyncSample = (
   overrides: Partial<Omit<SyncHealthSample, 'lastT' | 'count'>> = {},
 ): Omit<SyncHealthSample, 'lastT' | 'count'> => ({
   t: 1000,
+  userId: 'u1',
   connected: true,
   connecting: false,
   hasSynced: true,
   lastSyncedAt: 1000,
   uploading: false,
   downloading: false,
+  uploadingSeen: false,
+  downloadingSeen: false,
   pendingRows: 0,
   pendingBlocks: 0,
   pendingSinceT: null,
@@ -276,6 +279,39 @@ describe('DbForensics — sync-health sample ring', () => {
     expect(current.samples).toEqual([])
   })
 
+  it('recordSessionStart enqueues the ring archive/reset BEFORE its own session reads/writes — a concurrent boot sample lands in the NEW ring, not the old one', async () => {
+    const store = new IdbKeyedStore(`km-forensics-test-${++counter}`, 'forensics')
+    const f = new DbForensics(store)
+    await f.recordSessionStart({ userId: 'u1', dbFilename: 'kmp-v6-u1.db' })
+    await f.recordSyncSample(baseSyncSample({ t: 1000, pendingBlocks: 22 })) // pre-restart session's sample
+
+    // Model the production race in ensurePowerSyncReady: `recordForensicSessionStart`
+    // (session start) and `watchSyncHealth`'s immediate sample both fire without
+    // awaiting each other. The sample's own path only reaches `recordSyncSample`
+    // after at least one real await inside `sampleSyncHealth` (the count queries),
+    // so give the competing call here that same one-microtask head start gap
+    // rather than issuing it in the exact same synchronous tick (which wouldn't
+    // model the real race at all — see the two calls' own bodies for why).
+    const startPromise = f.recordSessionStart({ userId: 'u1', dbFilename: 'kmp-v6-u1.db' })
+    await Promise.resolve()
+    const samplePromise = f.recordSyncSample(baseSyncSample({ t: 2000, pendingBlocks: 5 })) // boot sample
+    await Promise.all([startPromise, samplePromise])
+
+    const all = await f.exportAll()
+    const current = all['sync:current'] as { samples: SyncHealthSample[] }
+    // The boot sample must be in the NEW (post-reset) ring...
+    expect(current.samples).toHaveLength(1)
+    expect(current.samples[0]).toMatchObject({ t: 2000, pendingBlocks: 5 })
+
+    // ...and the archived (OLD) ring holds exactly the pre-restart sample, not
+    // the boot sample that raced it in.
+    const archivedKeys = Object.keys(all).filter(k => k.startsWith('syncsession:'))
+    expect(archivedKeys).toHaveLength(1)
+    const archived = all[archivedKeys[0]] as { samples: SyncHealthSample[] }
+    expect(archived.samples).toHaveLength(1)
+    expect(archived.samples[0]).toMatchObject({ t: 1000, pendingBlocks: 22 })
+  })
+
   it('archive trimming caps at MAX_SYNC_ARCHIVES but never deletes sync:current', async () => {
     const f = freshForensics()
     for (let i = 0; i < MAX_SYNC_ARCHIVES + 3; i++) {
@@ -338,6 +374,112 @@ describe('DbForensics — sync-health sample ring', () => {
     const all = await f.exportAll()
     const ring = all['sync:current'] as { samples: SyncHealthSample[] }
     expect(ring.samples).toHaveLength(2)
+  })
+
+  it('uploadingSeen/downloadingSeen sticky-OR across a coalesced run: distinguishes "never even tried" from "toggled and failed"', async () => {
+    const f = freshForensics()
+    // Otherwise-identical state (still coalesces) but `uploading` toggles
+    // true then back to false within the run.
+    await f.recordSyncSample(baseSyncSample({ t: 1000, uploading: false, uploadingSeen: false }))
+    await f.recordSyncSample(baseSyncSample({ t: 2000, uploading: true, uploadingSeen: true }))
+    await f.recordSyncSample(baseSyncSample({ t: 3000, uploading: false, uploadingSeen: false }))
+
+    const all = await f.exportAll()
+    const ring = all['sync:current'] as { samples: SyncHealthSample[] }
+    // Still ONE entry — uploading/uploadingSeen churn stays out of the
+    // coalescing key.
+    expect(ring.samples).toHaveLength(1)
+    expect(ring.samples[0]).toMatchObject({
+      uploading: false, // latest observation
+      uploadingSeen: true, // sticky: it WAS true at some point during the run
+    })
+  })
+
+  it('samples from different users never coalesce, even with identical state', async () => {
+    const f = freshForensics()
+    await f.recordSyncSample(baseSyncSample({ t: 1000, userId: 'user-A' }))
+    await f.recordSyncSample(baseSyncSample({ t: 2000, userId: 'user-B' }))
+
+    const all = await f.exportAll()
+    const ring = all['sync:current'] as { samples: SyncHealthSample[] }
+    expect(ring.samples).toHaveLength(2)
+    expect(ring.samples.map(s => s.userId)).toEqual(['user-A', 'user-B'])
+  })
+
+  it('recordSyncSample does the get-modify-put of sync:current inside ONE IndexedDB transaction (atomic against a concurrent tab)', async () => {
+    const store = new IdbKeyedStore(`km-forensics-test-${++counter}`, 'forensics')
+    const calls: string[] = []
+    const originalTx = store.tx.bind(store)
+    const originalRunTransaction = store.runTransaction.bind(store)
+    store.tx = (<T>(...args: Parameters<typeof originalTx<T>>) => {
+      calls.push('tx')
+      return originalTx<T>(...args)
+    }) as typeof store.tx
+    store.runTransaction = (<T>(...args: Parameters<typeof originalRunTransaction<T>>) => {
+      calls.push('runTransaction')
+      return originalRunTransaction<T>(...args)
+    }) as typeof store.runTransaction
+
+    const f = new DbForensics(store)
+    await f.recordSyncSample(baseSyncSample({ t: 1000 }))
+
+    // Exactly ONE transaction for the whole read-modify-write — not a `tx`
+    // (get) followed by a separate `tx` (put), which would leave a window for
+    // a concurrent tab's own get→put cycle to land in between and be
+    // silently overwritten (the multi-tab `sync:current` lost-update finding).
+    expect(calls).toEqual(['runTransaction'])
+  })
+
+  it('archiveSyncRing (via recordSessionStart) is atomic against a concurrent tab\'s recordSyncSample — no sample is silently lost', async () => {
+    // A genuine two-tab race, same shape as the recordSyncSample test above.
+    // If archiveSyncRing's get(sync:current)+put(fresh empty ring) were split
+    // across two separate transactions (the pre-fix shape), this interleaving
+    // is possible: archiveSyncRing reads the ring BEFORE tab B's sample lands,
+    // tab B's own get→put completes (writing the sample into sync:current),
+    // then archiveSyncRing's put OVERWRITES sync:current with a fresh EMPTY
+    // ring built from the STALE pre-sample read — the sample vanishes
+    // entirely: not archived (archiveSyncRing archived the ring it read,
+    // without the sample) and not in the new ring (reset to empty). A single
+    // atomic transaction for the get+put makes that interleaving impossible.
+    const dbName = `km-forensics-test-${++counter}`
+    const tabA = new DbForensics(new IdbKeyedStore(dbName, 'forensics'))
+    const tabB = new DbForensics(new IdbKeyedStore(dbName, 'forensics'))
+
+    await Promise.all([
+      tabA.recordSessionStart({ userId: 'u1', dbFilename: 'kmp-v6-u1.db' }), // archives + resets sync:current
+      tabB.recordSyncSample(baseSyncSample({ t: 1000, pendingBlocks: 7 })),
+    ])
+
+    const all = await tabA.exportAll()
+    const current = (all['sync:current'] as { samples: SyncHealthSample[] }).samples
+    const archivedKeys = Object.keys(all).filter(k => k.startsWith('syncsession:'))
+    const archivedSamples = archivedKeys.flatMap(k => (all[k] as { samples: SyncHealthSample[] }).samples)
+
+    // The sample must be somewhere — either it landed before the reset (now
+    // in the archive) or after (now in sync:current) — never simply gone.
+    const found = [...current, ...archivedSamples].some(s => s.pendingBlocks === 7)
+    expect(found).toBe(true)
+  })
+
+  it('two concurrent "tabs" (separate DbForensics instances over the same underlying store) do not lose an update to sync:current', async () => {
+    const dbName = `km-forensics-test-${++counter}`
+    const tabA = new DbForensics(new IdbKeyedStore(dbName, 'forensics'))
+    const tabB = new DbForensics(new IdbKeyedStore(dbName, 'forensics'))
+
+    await Promise.all([
+      tabA.recordSyncSample(baseSyncSample({ t: 1000, pendingBlocks: 1 })),
+      tabB.recordSyncSample(baseSyncSample({ t: 2000, pendingBlocks: 2 })),
+    ])
+
+    const all = await tabA.exportAll()
+    const ring = all['sync:current'] as { samples: SyncHealthSample[] }
+    // Both tabs' writes must be present — neither silently overwrote the
+    // other's (the pre-fix shape: a separate get tx followed by a separate
+    // put tx per tab leaves a window where tab B's whole get→put cycle can
+    // land between tab A's get and put, and tab A's put then clobbers tab
+    // B's write with stale data read before B ever wrote).
+    expect(ring.samples).toHaveLength(2)
+    expect(ring.samples.map(s => s.pendingBlocks).sort()).toEqual([1, 2])
   })
 })
 

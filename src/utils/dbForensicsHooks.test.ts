@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   __resetDbForensicsHooksForTest,
+  computeSyncStall,
+  stopSyncHealthWatch,
   SYNC_SAMPLE_INTERVAL_MS,
   SYNC_STALL_THRESHOLD_MS,
   watchForRuntimeCorruption,
@@ -28,6 +30,7 @@ const stubSyncForensics = () =>
     recordStallEpisode: vi.fn().mockImplementation(async () => `stall:stub-${++stallEpisodeKeySeq}`),
     closeStallEpisode: vi.fn().mockResolvedValue(undefined),
     recordStallReconnectAttempt: vi.fn().mockResolvedValue(undefined),
+    recordStallReconnectSkipped: vi.fn().mockResolvedValue(undefined),
   }) as unknown as DbForensics
 
 // `watchSyncHealth`'s new required `reconnect` parameter — a fresh
@@ -158,6 +161,25 @@ describe('watchForRuntimeCorruption', () => {
     watchForRuntimeCorruption(db, 'user-1', 'kmp-v6-user-1.db', forensics)
     expect(forensics.captureCorruptionSnapshot).not.toHaveBeenCalled()
     expect(getLocalDbCorruptionSnapshot()).toBeNull()
+  })
+
+  it('captures the real message text from a plain-object (Comlink-serialized) downloadError, not "[object Object]"', () => {
+    // A PowerSync `downloadError` crossing the wa-sqlite worker boundary
+    // arrives as a plain object, not a real Error instance — this IS the
+    // live shape (see localDbCorruption.ts's own note on the same failure
+    // mode). The corruption MATCH still succeeds either way (it reads the
+    // message chain independently), but the captured snapshot's `sql`
+    // context must carry the real text, not `String(plainObject)` ===
+    // "[object Object]" — the whole point of a forensic snapshot is to be
+    // useful after the fact.
+    const forensics = stubForensics()
+    const plainDownloadError = { name: 'Error', message: 'disk image is malformed', stack: 'x' }
+    const db = { currentStatus: { dataFlowStatus: { downloadError: plainDownloadError } } }
+    watchForRuntimeCorruption(db, 'user-1', 'kmp-v6-user-1.db', forensics)
+
+    expect(forensics.captureCorruptionSnapshot).toHaveBeenCalledWith(
+      expect.objectContaining({ sql: { downloadError: 'disk image is malformed' } }),
+    )
   })
 
   it('re-arms for a new user after an in-page account switch (disposes the stale listener)', () => {
@@ -362,6 +384,181 @@ describe('watchSyncHealth', () => {
     expect(clearing.connected).toBe(true)
     expect(clearing.pendingBlocks).toBe(0)
   })
+
+  it('reads the real .message off a plain-object (Comlink-serialized) uploadError, not "[object Object]"', async () => {
+    const forensics = stubSyncForensics()
+    const plainUploadError = { name: 'Error', message: 'HTTP 401: invalid token', stack: 'x' }
+    const { db } = makeSyncDb({
+      ...defaultSyncStatus(),
+      dataFlowStatus: { uploading: false, downloading: false, uploadError: plainUploadError },
+    })
+
+    watchSyncHealth(db, 'user-plain-upload-error', stubReconnect(), forensics)
+    await vi.waitFor(() => expect(forensics.recordSyncSample).toHaveBeenCalledTimes(1))
+
+    const sample = (forensics.recordSyncSample as ReturnType<typeof vi.fn>).mock.calls[0][0]
+    expect(sample.uploadError).toBe('HTTP 401: invalid token')
+  })
+
+  it('stamps the sample with the userId being watched', async () => {
+    const forensics = stubSyncForensics()
+    const { db } = makeSyncDb()
+    watchSyncHealth(db, 'user-stamped', stubReconnect(), forensics)
+    await vi.waitFor(() => expect(forensics.recordSyncSample).toHaveBeenCalledTimes(1))
+    const sample = (forensics.recordSyncSample as ReturnType<typeof vi.fn>).mock.calls[0][0]
+    expect(sample.userId).toBe('user-stamped')
+  })
+
+  it('a failed count query (pendingBlocks=null) does not fabricate a stall resolution — retains the previous stall state and does not close the episode', async () => {
+    const forensics = stubSyncForensics()
+    const staleLastSyncedAt = Date.now() - SYNC_STALL_THRESHOLD_MS - 60_000
+    const counts = zeroCounts()
+    counts.set(uploadQueuePreviewCountSql, 22)
+    counts.set(uploadQueueRowCountSql, 22)
+    let failCounts = false
+    let listener: (() => void) | null = null
+    const db = {
+      currentStatus: { ...defaultSyncStatus(), lastSyncedAt: staleLastSyncedAt },
+      getAll: vi.fn(async (sql: string) => {
+        if (failCounts) throw new Error('count query boom')
+        return [{ count: counts.get(sql) ?? 0 }]
+      }),
+      registerListener: (l: { statusChanged?: () => void }) => {
+        listener = () => l.statusChanged?.()
+        return () => { listener = null }
+      },
+    } as unknown as Parameters<typeof watchSyncHealth>[0]
+    const emit = () => listener?.()
+
+    watchSyncHealth(db, 'user-null-count-retain', stubReconnect(), forensics)
+    await vi.waitFor(() => expect(forensics.recordStallEpisode).toHaveBeenCalledTimes(1))
+
+    failCounts = true
+    emit()
+    await vi.waitFor(() => expect(forensics.recordSyncSample).toHaveBeenCalledTimes(2))
+
+    // The failed-count sample must still read as stalled (retained from the
+    // previous sample) and must NOT have closed the episode — an unknown
+    // count is not a resolution.
+    const secondSample = (forensics.recordSyncSample as ReturnType<typeof vi.fn>).mock.calls[1][0]
+    expect(secondSample.pendingBlocks).toBeNull()
+    expect(secondSample.stall).toBe(true)
+    expect(forensics.closeStallEpisode).not.toHaveBeenCalled()
+  })
+
+  it('a draining backlog (pendingBlocks decreasing over time) never trips the stall, even past the threshold', async () => {
+    const forensics = stubSyncForensics()
+    const reconnect = stubReconnect()
+    let remaining = 500
+    const db = {
+      // lastSyncedAt is always "now" — isolates the test to the queue-age
+      // dimension (a draining backlog), independent of `syncStale`.
+      get currentStatus() {
+        return { ...defaultSyncStatus(), lastSyncedAt: Date.now() }
+      },
+      getAll: vi.fn(async (sql: string) => {
+        if (sql === uploadQueuePreviewCountSql || sql === uploadQueueRowCountSql) {
+          return [{ count: remaining }]
+        }
+        return [{ count: 0 }]
+      }),
+    } as unknown as Parameters<typeof watchSyncHealth>[0]
+
+    vi.useFakeTimers()
+    try {
+      watchSyncHealth(db, 'user-draining-backlog', reconnect, forensics)
+      await vi.advanceTimersByTimeAsync(0)
+
+      // Step the queue down over several minutes — past what would have been
+      // the stall threshold if the clock never reset on progress — but never
+      // let it reach zero (stays "non-empty the whole time").
+      for (let i = 0; i < 15; i++) {
+        remaining -= 30
+        await vi.advanceTimersByTimeAsync(SYNC_SAMPLE_INTERVAL_MS)
+      }
+
+      const samples = (forensics.recordSyncSample as ReturnType<typeof vi.fn>).mock.calls.map(c => c[0])
+      expect(samples.length).toBeGreaterThan(10)
+      expect(samples.every(s => s.stall === false)).toBe(true)
+      expect(reconnect).not.toHaveBeenCalled()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('serializes concurrent samples so a clearing sample cannot race the open-episode await and orphan the key', async () => {
+    let resolveRecordStallEpisode: (key: string) => void = () => {}
+    const recordStallEpisodePromise = new Promise<string>(resolve => { resolveRecordStallEpisode = resolve })
+    const forensics = {
+      recordSyncSample: vi.fn().mockResolvedValue(undefined),
+      recordStallEpisode: vi.fn().mockReturnValue(recordStallEpisodePromise),
+      closeStallEpisode: vi.fn().mockResolvedValue(undefined),
+      recordStallReconnectAttempt: vi.fn().mockResolvedValue(undefined),
+      recordStallReconnectSkipped: vi.fn().mockResolvedValue(undefined),
+    } as unknown as DbForensics
+
+    const counts = zeroCounts()
+    counts.set(uploadQueuePreviewCountSql, 22)
+    counts.set(uploadQueueRowCountSql, 22)
+    const staleLastSyncedAt = Date.now() - SYNC_STALL_THRESHOLD_MS - 60_000
+    const { db, emit } = makeSyncDb({ ...defaultSyncStatus(), lastSyncedAt: staleLastSyncedAt }, counts)
+
+    watchSyncHealth(db, 'user-concurrent-race', stubReconnect(), forensics)
+    await vi.waitFor(() => expect(forensics.recordStallEpisode).toHaveBeenCalledTimes(1))
+    // Sample #1 is now suspended awaiting recordStallEpisode — openStallEpisodeKey
+    // is still null. A second, CLEARING sample fires in that window (without
+    // serialization it would race sample #1 and see the stale null key).
+    counts.set(uploadQueuePreviewCountSql, 0)
+    counts.set(uploadQueueRowCountSql, 0)
+    emit({ ...defaultSyncStatus(), lastSyncedAt: Date.now() })
+
+    // Give the (unserialized, in a regression) second sample's own promise
+    // chain — four parallel `db.getAll` calls through `Promise.all` — plenty
+    // of microtask ticks to run all the way to its `closeStallEpisode` call
+    // BEFORE sample #1's still-pending `recordStallEpisode` await is
+    // resolved below. This is pure microtask flushing (no real timers, fully
+    // deterministic): nothing else in this test is time-dependent, and the
+    // controlled `recordStallEpisodePromise` only ever resolves when this
+    // test calls `resolveRecordStallEpisode` explicitly, so extra ticks
+    // can't accidentally let sample #1 proceed early.
+    for (let i = 0; i < 20; i++) await Promise.resolve()
+
+    resolveRecordStallEpisode('stall:1000')
+    await vi.waitFor(() => expect(forensics.recordSyncSample).toHaveBeenCalledTimes(2))
+
+    expect(forensics.closeStallEpisode).toHaveBeenCalledTimes(1)
+    expect(forensics.closeStallEpisode).toHaveBeenCalledWith('stall:1000', expect.anything())
+  })
+
+  it('collapses a burst of rapid statusChanged notifications into a bounded number of samples, not one per event', async () => {
+    // Models PowerSync emitting statusChanged for every download-progress
+    // update during an initial sync: many notifications firing while one
+    // sample is still in flight must not each queue their own run.
+    const forensics = stubSyncForensics()
+    const { db, emit } = makeSyncDb()
+
+    vi.useFakeTimers()
+    try {
+      watchSyncHealth(db, 'user-burst', stubReconnect(), forensics)
+      // Fire a burst of statusChanged notifications synchronously, before the
+      // very first (immediate) sample has had a chance to complete.
+      for (let i = 0; i < 20; i++) emit()
+
+      await vi.advanceTimersByTimeAsync(0) // flush the immediate sample + at most one coalesced re-run
+      const afterBurst = (forensics.recordSyncSample as ReturnType<typeof vi.fn>).mock.calls.length
+      // NOT one per burst event (that would be 21: 1 immediate + 20 emits).
+      expect(afterBurst).toBeLessThan(3)
+
+      // Fence: advance one full interval (a tick that DOES fire) and confirm
+      // the count grows by exactly one more — proving the burst left nothing
+      // extra queued up behind it (a stacked-N bug would show up here as a
+      // jump of more than 1, since fake-timer flushing is FIFO).
+      await vi.advanceTimersByTimeAsync(SYNC_SAMPLE_INTERVAL_MS)
+      expect(forensics.recordSyncSample).toHaveBeenCalledTimes(afterBurst + 1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
 })
 
 // A db whose `currentStatus` stays fixed (queue non-empty, lastSyncedAt
@@ -532,5 +729,184 @@ describe('reconnect watchdog', () => {
 
     await vi.waitFor(() => expect(forensics.recordStallReconnectAttempt).toHaveBeenCalledTimes(1))
     expect(forensics.recordStallReconnectAttempt).toHaveBeenCalledWith(openedKey, expect.any(Number))
+  })
+})
+
+describe('cross-tab reconnect lock', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('skips the reconnect (and records the skip) when another tab holds the cross-tab lock', async () => {
+    const forensics = stubSyncForensics()
+    const reconnect = stubReconnect()
+    const { db } = makeAlwaysStalledDb()
+
+    const request = vi.fn(async (_name: string, _opts: unknown, callback: (lock: null) => Promise<void>) => {
+      await callback(null) // lock unavailable this round — another tab owns it
+    })
+    vi.stubGlobal('navigator', { locks: { request } })
+
+    watchSyncHealth(db, 'user-watchdog-lock-contended', reconnect, forensics)
+    await vi.waitFor(() => expect(forensics.recordStallReconnectSkipped).toHaveBeenCalledTimes(1))
+
+    expect(reconnect).not.toHaveBeenCalled()
+    expect(forensics.recordStallReconnectAttempt).not.toHaveBeenCalled()
+  })
+
+  it('reconnects normally when the cross-tab lock IS acquired', async () => {
+    const forensics = stubSyncForensics()
+    const reconnect = stubReconnect()
+    const { db } = makeAlwaysStalledDb()
+
+    const request = vi.fn(async (_name: string, _opts: unknown, callback: (lock: object) => Promise<void>) => {
+      await callback({})
+    })
+    vi.stubGlobal('navigator', { locks: { request } })
+
+    watchSyncHealth(db, 'user-watchdog-lock-acquired', reconnect, forensics)
+    await vi.waitFor(() => expect(reconnect).toHaveBeenCalledTimes(1))
+    expect(forensics.recordStallReconnectSkipped).not.toHaveBeenCalled()
+  })
+
+  it('a skipped attempt does not consume a backoff step — the same tab succeeds on the very next sample once the lock frees up', async () => {
+    const forensics = stubSyncForensics()
+    const reconnect = stubReconnect()
+    const { db } = makeAlwaysStalledDb()
+
+    let held = true
+    const request = vi.fn(async (_n: string, _o: unknown, callback: (lock: object | null) => Promise<void>) => {
+      await callback(held ? null : {})
+    })
+    vi.stubGlobal('navigator', { locks: { request } })
+
+    vi.useFakeTimers()
+    try {
+      watchSyncHealth(db, 'user-watchdog-lock-then-free', reconnect, forensics)
+      await vi.advanceTimersByTimeAsync(0)
+      expect(reconnect).not.toHaveBeenCalled()
+      expect(forensics.recordStallReconnectSkipped).toHaveBeenCalledTimes(1)
+
+      // Lock frees up before the NEXT sample (one interval tick later). If
+      // the skip had wrongly consumed a backoff step, this tick would still
+      // be inside the 10min window and reconnect would stay at 0.
+      held = false
+      await vi.advanceTimersByTimeAsync(SYNC_SAMPLE_INTERVAL_MS)
+      expect(reconnect).toHaveBeenCalledTimes(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('runs unguarded (still reconnects) when navigator.locks is unavailable', async () => {
+    // The DEFAULT test environment already lacks navigator.locks (Node's
+    // built-in `navigator` has no Web Locks API) — every other watchdog test
+    // in this file already exercises this fallback implicitly. This test
+    // pins the contract explicitly: an environment with no `locks` at all
+    // must not silently stop reconnecting.
+    const forensics = stubSyncForensics()
+    const reconnect = stubReconnect()
+    const { db } = makeAlwaysStalledDb()
+
+    watchSyncHealth(db, 'user-watchdog-no-locks-api', reconnect, forensics)
+    await vi.waitFor(() => expect(reconnect).toHaveBeenCalledTimes(1))
+    expect(forensics.recordStallReconnectSkipped).not.toHaveBeenCalled()
+  })
+})
+
+describe('stopSyncHealthWatch', () => {
+  it('disposes the listener and clears the interval — a stale event/tick after stop produces no sample', async () => {
+    vi.useFakeTimers()
+    try {
+      const forensics = stubSyncForensics()
+      const { db, emit } = makeSyncDb()
+      watchSyncHealth(db, 'user-stop', stubReconnect(), forensics)
+      await vi.advanceTimersByTimeAsync(0)
+      expect(forensics.recordSyncSample).toHaveBeenCalledTimes(1)
+
+      stopSyncHealthWatch()
+
+      emit() // stale statusChanged from the torn-down db
+      await vi.advanceTimersByTimeAsync(SYNC_SAMPLE_INTERVAL_MS) // stale interval tick too
+      expect(forensics.recordSyncSample).toHaveBeenCalledTimes(1) // unchanged
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('allows re-arming for the SAME user afterward (watchSyncHealth is normally a no-op for an already-watched user, but stop clears that guard)', async () => {
+    const forensics = stubSyncForensics()
+    const { db } = makeSyncDb()
+    watchSyncHealth(db, 'user-rearm-after-stop', stubReconnect(), forensics)
+    await vi.waitFor(() => expect(forensics.recordSyncSample).toHaveBeenCalledTimes(1))
+
+    stopSyncHealthWatch()
+    watchSyncHealth(db, 'user-rearm-after-stop', stubReconnect(), forensics) // same user id
+    await vi.waitFor(() => expect(forensics.recordSyncSample).toHaveBeenCalledTimes(2))
+  })
+
+  it('is a safe no-op when nothing is being watched', () => {
+    expect(() => stopSyncHealthWatch()).not.toThrow()
+  })
+})
+
+describe('computeSyncStall', () => {
+  it('a decrease in pendingBlocks resets pendingSince — a draining backlog is not a stall', () => {
+    const r1 = computeSyncStall({
+      pendingBlocks: 100, pendingRows: 100, lastPendingBlocks: null, lastPendingRows: null,
+      lastSyncedAt: null, pendingSince: null, now: 0, previousStall: false,
+    })
+    expect(r1).toEqual({ stall: false, pendingSince: 0 })
+
+    // 11 minutes later, pendingBlocks has DECREASED (progress) — the clock
+    // resets to `now` and there is still no stall, even past the threshold.
+    const r2 = computeSyncStall({
+      pendingBlocks: 80, pendingRows: 80, lastPendingBlocks: 100, lastPendingRows: 100,
+      lastSyncedAt: null, pendingSince: r1.pendingSince, now: 11 * 60_000, previousStall: r1.stall,
+    })
+    expect(r2).toEqual({ stall: false, pendingSince: 11 * 60_000 })
+  })
+
+  it('a flat (non-decreasing) queue past the threshold DOES stall', () => {
+    const r1 = computeSyncStall({
+      pendingBlocks: 100, pendingRows: 100, lastPendingBlocks: null, lastPendingRows: null,
+      lastSyncedAt: null, pendingSince: null, now: 0, previousStall: false,
+    })
+    const r2 = computeSyncStall({
+      pendingBlocks: 100, pendingRows: 100, lastPendingBlocks: 100, lastPendingRows: 100,
+      lastSyncedAt: null, pendingSince: r1.pendingSince, now: 11 * 60_000, previousStall: r1.stall,
+    })
+    expect(r2.stall).toBe(true)
+  })
+
+  it('a decrease in pendingRows alone (same pendingBlocks) also counts as progress', () => {
+    const r1 = computeSyncStall({
+      pendingBlocks: 5, pendingRows: 500, lastPendingBlocks: null, lastPendingRows: null,
+      lastSyncedAt: null, pendingSince: null, now: 0, previousStall: false,
+    })
+    // Same distinct-block count (one block edited over and over) but the raw
+    // row count has come down a lot — real progress draining that block's
+    // backlog, even though `pendingBlocks` itself hasn't moved.
+    const r2 = computeSyncStall({
+      pendingBlocks: 5, pendingRows: 200, lastPendingBlocks: 5, lastPendingRows: 500,
+      lastSyncedAt: null, pendingSince: r1.pendingSince, now: 11 * 60_000, previousStall: r1.stall,
+    })
+    expect(r2).toEqual({ stall: false, pendingSince: 11 * 60_000 })
+  })
+
+  it('pendingBlocks === null retains the previous stall verdict and leaves pendingSince untouched', () => {
+    const r = computeSyncStall({
+      pendingBlocks: null, pendingRows: null, lastPendingBlocks: 100, lastPendingRows: 100,
+      lastSyncedAt: null, pendingSince: 12345, now: 99999, previousStall: true,
+    })
+    expect(r).toEqual({ stall: true, pendingSince: 12345 })
+  })
+
+  it('the queue draining to exactly zero clears pendingSince and is not a stall', () => {
+    const r = computeSyncStall({
+      pendingBlocks: 0, pendingRows: 0, lastPendingBlocks: 5, lastPendingRows: 5,
+      lastSyncedAt: null, pendingSince: 0, now: 20 * 60_000, previousStall: true,
+    })
+    expect(r).toEqual({ stall: false, pendingSince: null })
   })
 })

@@ -30,8 +30,22 @@ interface CorruptionWatchDb {
 const downloadErrorOf = (s: DownloadErrorStatus | undefined): unknown =>
   s?.dataFlowStatus?.downloadError ?? s?.downloadError
 
-const messageOf = (error: unknown): string =>
-  error instanceof Error ? error.message : String(error)
+// A PowerSync `downloadError` crosses the wa-sqlite Comlink worker boundary as
+// a PLAIN OBJECT (`{name, message, stack}`), not a real `Error` instance — so
+// `error instanceof Error` is false and a bare `String(error)` reads as
+// "[object Object]", losing the actual diagnostic text this module exists to
+// capture (this repo already shipped a corruption-detection bug from exactly
+// this shape once — see `isLocalDbCorruptionError`'s worker-boundary note in
+// localDbCorruption.ts). Read a string `.message` off a non-Error object
+// before falling back to `String(...)`.
+const messageOf = (error: unknown): string => {
+  if (error instanceof Error) return error.message
+  if (typeof error === 'object' && error !== null) {
+    const msg = (error as Record<string, unknown>).message
+    if (typeof msg === 'string') return msg
+  }
+  return String(error)
+}
 
 let sessionRecorded = false
 let lifecycleInstalled = false
@@ -206,19 +220,32 @@ let syncIntervalId: ReturnType<typeof setInterval> | null = null
 // Once-per-stall-episode console.warn latch: set on the not-stalled→stalled
 // transition, cleared the moment it's no longer stalled (so the NEXT episode
 // gets its own console line too), and reset on a fresh `watchSyncHealth` arm.
+// Doubles as the "previous stall verdict" fed into `computeSyncStall` as
+// `previousStall` (see that function's doc) — the two meanings coincide
+// exactly because both are driven off the identical stall transitions, and
+// using ONE variable for both is what guarantees they can't drift apart.
 let syncStallWarned = false
-// Epoch ms the CURRENT unbroken run of `pendingBlocks > 0` began, or null when
-// the queue is empty. Independent of `lastSyncedAt`: `lastSyncedAt` advances
-// on every DOWNLOAD checkpoint, so it stays "fresh" even when uploads are
-// wedged and downloads keep working — one of the two live hypotheses for the
-// 2026-08-13 incident, and a stall condition keyed only on `lastSyncedAt`
-// can't see it. This clock is the second, independent signal: how long has
-// the queue itself been non-empty. LIMITATION: it's in-memory, not persisted,
-// so a stall spanning a restart re-arms each boot and only flags again
+// Epoch ms the CURRENT unbroken run of `pendingBlocks > 0` WITHOUT PROGRESS
+// began, or null when the queue is empty. Independent of `lastSyncedAt`:
+// `lastSyncedAt` advances on every DOWNLOAD checkpoint, so it stays "fresh"
+// even when uploads are wedged and downloads keep working — one of the two
+// live hypotheses for the 2026-08-13 incident, and a stall condition keyed
+// only on `lastSyncedAt` can't see it. This clock is the second, independent
+// signal. Owned by `computeSyncStall` (see its doc): reset not just when the
+// queue empties but whenever its depth DECREASES, so a backlog that's
+// genuinely draining never reads as a stall just because draining took
+// longer than the threshold. LIMITATION: it's in-memory, not persisted, so a
+// stall spanning a restart re-arms each boot and only flags again
 // ~SYNC_STALL_THRESHOLD_MS into the new session — acceptable (the incident's
 // four restarts didn't drain the queue either way; the ring + stall-episode
 // log still show the pre-restart state via `recordSessionStart`'s archive).
 let syncPendingSince: number | null = null
+// Last observed pendingBlocks/pendingRows, feeding `computeSyncStall`'s
+// progress (depth-decrease) check. Only updated when a count query SUCCEEDS
+// (mirrors `syncPendingSince`'s "unknown must not erase known state"
+// discipline) — a transient failure must not be misread as "no progress".
+let syncLastPendingBlocks: number | null = null
+let syncLastPendingRows: number | null = null
 // The currently-open stall episode's store key (see dbForensics.ts
 // recordStallEpisode/closeStallEpisode), or null when nothing is open. Tracked
 // here, next to `syncStallWarned`, because the store has no notion of "the
@@ -236,21 +263,75 @@ let openStallEpisodeKey: string | null = null
  * silently diverge — exactly the kind of drift this module exists to catch
  * elsewhere (e.g. `downloadErrorOf`'s shared field lookup).
  *
- * The queue-age half (`queueOld`) is independently load-bearing, not just
- * belt-and-suspenders: `lastSyncedAt` advances on every DOWNLOAD checkpoint,
- * so it stays "fresh" even when uploads are wedged and downloads keep
- * working — one of the two live hypotheses for the 2026-08-13 incident. A
- * predicate keyed only on `lastSyncedAt` can't see that split at all.
+ * This function owns the FULL `pendingSince` lifecycle, not just the stall
+ * verdict — deliberately, so every rule about what "how long has the queue
+ * been stuck" means lives in exactly one place:
+ *
+ * - The queue-age half (`queueOld`) is independently load-bearing, not just
+ *   belt-and-suspenders: `lastSyncedAt` advances on every DOWNLOAD
+ *   checkpoint, so it stays "fresh" even when uploads are wedged and
+ *   downloads keep working — one of the two live hypotheses for the
+ *   2026-08-13 incident. A predicate keyed only on `lastSyncedAt` can't see
+ *   that split at all.
+ * - `pendingBlocks === null` means the COUNT QUERY FAILED, not an empty
+ *   queue. Unknown must NOT read as "not stalled" — that would let a single
+ *   transient query failure look like a resolution, closing whatever stall
+ *   episode is open and fabricating a clock reset that splits one real
+ *   incident into two. Unknown retains the PREVIOUS verdict (`previousStall`)
+ *   and leaves `pendingSince` untouched instead.
+ * - A DECREASE in either `pendingBlocks` or `pendingRows` resets
+ *   `pendingSince` to `now`, same as the queue draining to zero. A
+ *   legitimate backlog (a long offline stretch catching up, a slow link)
+ *   keeps `pendingBlocks > 0` for well over the threshold while genuinely
+ *   draining; without this it reads as a stall and the watchdog "recovers"
+ *   by disconnecting an upload stream that was making real progress — on
+ *   every backoff step, since the queue never empties long enough to reset
+ *   the schedule. A wedged queue only grows or stays flat, so it still
+ *   trips. KNOWN LIMITATION, not papered over: both counts are capped at
+ *   `uploadQueueCountCap + 1` (syncQueueSql.ts), so a backlog ABOVE the cap
+ *   reads flat at the same capped number while genuinely draining and can
+ *   still false-positive here. Accepted rather than contorted around: a
+ *   false reconnect from this is bounded (one per backoff step,
+ *   non-destructive, and visible in the episode record via
+ *   `reconnectAttempts`).
  */
 export const computeSyncStall = (params: {
   pendingBlocks: number | null
+  pendingRows: number | null
+  /** Last SUCCESSFULLY observed pendingBlocks/pendingRows (null if there
+   *  hasn't been one yet), for the progress check above. */
+  lastPendingBlocks: number | null
+  lastPendingRows: number | null
   lastSyncedAt: number | null
   pendingSince: number | null
   now: number
-}): boolean => {
+  /** The stall verdict as of the last sample where `pendingBlocks` was
+   *  known — returned verbatim when THIS sample's `pendingBlocks` is null. */
+  previousStall: boolean
+}): { stall: boolean; pendingSince: number | null } => {
+  if (params.pendingBlocks === null) {
+    return { stall: params.previousStall, pendingSince: params.pendingSince }
+  }
+
+  let pendingSince = params.pendingSince
+  if (params.pendingBlocks === 0) {
+    pendingSince = null
+  } else {
+    const blocksDecreased =
+      params.lastPendingBlocks !== null && params.pendingBlocks < params.lastPendingBlocks
+    const rowsDecreased =
+      params.lastPendingRows !== null &&
+      params.pendingRows !== null &&
+      params.pendingRows < params.lastPendingRows
+    if (pendingSince === null || blocksDecreased || rowsDecreased) {
+      pendingSince = params.now
+    }
+  }
+
   const syncStale = params.lastSyncedAt !== null && params.now - params.lastSyncedAt > SYNC_STALL_THRESHOLD_MS
-  const queueOld = params.pendingSince !== null && params.now - params.pendingSince > SYNC_STALL_THRESHOLD_MS
-  return params.pendingBlocks !== null && params.pendingBlocks > 0 && (syncStale || queueOld)
+  const queueOld = pendingSince !== null && params.now - pendingSince > SYNC_STALL_THRESHOLD_MS
+  const stall = params.pendingBlocks > 0 && (syncStale || queueOld)
+  return { stall, pendingSince }
 }
 
 /** Reconnect-watchdog backoff ladder (minutes → ms): 10 → 20 → 40, capped at
@@ -266,6 +347,49 @@ const RECONNECT_BACKOFF_STEPS_MS = [10, 20, 40, 60].map(minutes => minutes * 60_
 // stall-clear, same convention as `syncStallWarned` et al. above.
 let watchdogAttemptsInEpisode = 0
 let watchdogLastAttemptAt: number | null = null
+
+// Cross-tab leader election around the RECONNECT ITSELF (not sampling):
+// `enableMultiTabs: true` (repoProvider.ts) means every open tab of this
+// origin shares one underlying PowerSync sync worker, but
+// `watchdogAttemptsInEpisode`/`watchdogLastAttemptAt` above are module-local
+// per TAB — so two tabs hitting the same sustained stall independently
+// reconnect on the same schedule, and one tab's fresh `connect()` can be torn
+// down by the other tab's `disconnect()` moments later. `navigator.locks`
+// (Web Locks API) is a cheap, origin-scoped exclusive lock shared across
+// tabs: whichever tab acquires it this round does the reconnect; a tab that
+// can't skips (recorded via `recordStallReconnectSkipped`, not a silent
+// no-op) rather than piling onto the same recovery attempt. Feature-detected:
+// an environment without `navigator.locks` runs unguarded — no cross-tab
+// coordination at all is worse than a possible duplicate attempt.
+const RECONNECT_LOCK_NAME = 'km-sync-reconnect-watchdog'
+
+interface LocksLikeNavigator {
+  locks?: {
+    request: (
+      name: string,
+      options: { mode: 'exclusive'; ifAvailable: true },
+      callback: (lock: unknown) => Promise<void>,
+    ) => Promise<void>
+  }
+}
+
+/** Run `fn` holding the cross-tab reconnect lock. Resolves `true` if `fn` ran
+ *  (lock acquired, or there's no `navigator.locks` to guard with), `false` if
+ *  another tab holds the lock this round (`fn` was NOT run). */
+const runGuardedReconnect = async (fn: () => Promise<void>): Promise<boolean> => {
+  const locks = typeof navigator !== 'undefined' ? (navigator as LocksLikeNavigator).locks : undefined
+  if (!locks) {
+    await fn()
+    return true
+  }
+  let ran = false
+  await locks.request(RECONNECT_LOCK_NAME, { mode: 'exclusive', ifAvailable: true }, async lock => {
+    if (lock === null) return // another tab holds the lock this round — skip
+    ran = true
+    await fn()
+  })
+  return ran
+}
 
 /**
  * Best-effort auto-recovery for a sustained sync stall — the lever missing
@@ -292,11 +416,15 @@ let watchdogLastAttemptAt: number | null = null
  * firing, kept apart from the POLICY of whether/when to fire (which lives
  * entirely in this function) even though both this function and its caller
  * read the same sample: recording is a diagnostic, reconnecting is an
- * action.
+ * action. A skip (another tab owns this round — see `runGuardedReconnect`)
+ * is recorded too, via `recordStallReconnectSkipped`, WITHOUT advancing
+ * `watchdogAttemptsInEpisode`/`watchdogLastAttemptAt` — this tab didn't
+ * actually attempt anything, so it stays eligible to try again on the very
+ * next sample rather than waiting out a backoff step it never used.
  *
  * Never throws: a failing `reconnect` must not break the sampler that calls
- * this every minute (`recordStallReconnectAttempt` is already self-guarded).
- * Exactly one `console.warn` per attempt.
+ * this every minute (`recordStallReconnectAttempt`/`recordStallReconnectSkipped`
+ * are already self-guarded). Exactly one `console.warn` per attempt or skip.
  */
 const runReconnectWatchdog = async (
   userId: string,
@@ -323,23 +451,33 @@ const runReconnectWatchdog = async (
     }
   }
 
-  watchdogLastAttemptAt = now
-  watchdogAttemptsInEpisode += 1
+  const acquired = await runGuardedReconnect(async () => {
+    watchdogLastAttemptAt = now
+    watchdogAttemptsInEpisode += 1
 
-  console.warn(
-    `[db-forensics] sync watchdog: sustained stall for ${userId} — attempting sync.reconnect ` +
-    `(attempt #${watchdogAttemptsInEpisode} this episode)`,
-  )
+    console.warn(
+      `[db-forensics] sync watchdog: sustained stall for ${userId} — attempting sync.reconnect ` +
+      `(attempt #${watchdogAttemptsInEpisode} this episode)`,
+    )
 
-  await forensics.recordStallReconnectAttempt(episodeKey, now)
+    await forensics.recordStallReconnectAttempt(episodeKey, now)
 
-  try {
-    await reconnect(userId)
-  } catch {
-    // Best-effort: a failing reconnect must not break the sampler. The
-    // console.warn above already recorded that an attempt happened (one per
-    // attempt, per spec — no second warn here); whether it helped shows up
-    // in the next sample (stall clears or not) and in the episode record.
+    try {
+      await reconnect(userId)
+    } catch {
+      // Best-effort: a failing reconnect must not break the sampler. The
+      // console.warn above already recorded that an attempt happened (one per
+      // attempt, per spec — no second warn here); whether it helped shows up
+      // in the next sample (stall clears or not) and in the episode record.
+    }
+  })
+
+  if (!acquired) {
+    console.warn(
+      `[db-forensics] sync watchdog: reconnect for ${userId} skipped this round — ` +
+      'another tab holds the cross-tab lock',
+    )
+    await forensics.recordStallReconnectSkipped(episodeKey)
   }
 }
 
@@ -362,27 +500,41 @@ const sampleSyncHealth = async (
   const lastSyncedAt = toEpochMs(status?.lastSyncedAt)
   const now = Date.now()
 
-  // `pendingBlocks === null` means the COUNT QUERY FAILED, not an empty
-  // queue — leave the clock untouched rather than reset it (a transient query
-  // failure must not erase how long a real stall has been running).
+  const { stall, pendingSince } = computeSyncStall({
+    pendingBlocks,
+    pendingRows,
+    lastPendingBlocks: syncLastPendingBlocks,
+    lastPendingRows: syncLastPendingRows,
+    lastSyncedAt,
+    pendingSince: syncPendingSince,
+    now,
+    previousStall: syncStallWarned,
+  })
+  syncPendingSince = pendingSince
+  // Only remember a SUCCESSFUL count for the next sample's progress check —
+  // same "unknown must not erase known state" discipline as `pendingSince`.
   if (pendingBlocks !== null) {
-    if (pendingBlocks > 0) {
-      syncPendingSince ??= now
-    } else {
-      syncPendingSince = null
-    }
+    syncLastPendingBlocks = pendingBlocks
+    syncLastPendingRows = pendingRows
   }
 
-  const stall = computeSyncStall({ pendingBlocks, lastSyncedAt, pendingSince: syncPendingSince, now })
+  const uploading = Boolean(flowField(status, 'uploading'))
+  const downloading = Boolean(flowField(status, 'downloading'))
 
   const sample = {
     t: now,
+    userId,
     connected: Boolean(status?.connected),
     connecting: Boolean(status?.connecting),
     hasSynced: status?.hasSynced ?? null,
     lastSyncedAt,
-    uploading: Boolean(flowField(status, 'uploading')),
-    downloading: Boolean(flowField(status, 'downloading')),
+    uploading,
+    downloading,
+    // A single observation's "seen" value starts equal to its own
+    // instantaneous value — the ring's coalescing (dbForensics.ts
+    // recordSyncSample) is what turns this into the sticky OR across a run.
+    uploadingSeen: uploading,
+    downloadingSeen: downloading,
     pendingRows,
     pendingBlocks,
     pendingSinceT: syncPendingSince,
@@ -421,6 +573,76 @@ const sampleSyncHealth = async (
   await runReconnectWatchdog(userId, stall, now, openStallEpisodeKey, reconnect, forensics)
 }
 
+// Concurrent samples must not interleave: two `sampleSyncHealth` calls racing
+// across the `await recordStallEpisode`/`closeStallEpisode` awaits inside it
+// can each read `syncStallWarned`/`openStallEpisodeKey` from BEFORE the
+// other's write lands — e.g. a CLEARING sample can see `syncStallWarned ===
+// true` (set synchronously by an in-flight OPENING sample) but
+// `openStallEpisodeKey === null` (that sample hasn't finished assigning it
+// yet), close nothing, then clear the latch; the opening sample then finishes
+// and assigns the key, leaving a "resolved" episode open forever. Both
+// `statusChanged` and the interval timer fire `sampleSyncHealth`
+// fire-and-forget (`void sampleSyncHealth(...)` below), so this is reachable
+// in practice: PowerSync also emits `statusChanged` for download-progress
+// updates during an initial sync, so rapid-fire notifications launching
+// overlapping samples is a normal occurrence, not an edge case.
+//
+// Fix: serialize on a module-level chain, same idiom as
+// `DbForensics.enqueue`/`enqueueSync`. Unlike that idiom, this ALSO collapses
+// a pending re-run rather than stacking one per call: every queued call reads
+// LIVE state at run time (`db.currentStatus`, fresh counts), so a second,
+// third, ... call queued behind the same in-flight one would just repeat the
+// same work for no new information — and a single slow sample (a slow count
+// query, or a `reconnect()` the watchdog awaits) must not let arbitrarily
+// many statusChanged/interval ticks pile up behind it.
+let sampleChain: Promise<void> = Promise.resolve()
+let samplePendingRerun = false
+
+const enqueueSample = (run: () => Promise<void>): void => {
+  if (samplePendingRerun) return // one is already queued behind the in-flight sample — coalesce
+  samplePendingRerun = true
+  const runNext = () => {
+    samplePendingRerun = false
+    return run()
+  }
+  sampleChain = sampleChain.then(runNext, runNext)
+}
+
+/**
+ * Tear down the sync-health watcher (listener + interval + all per-episode
+ * state) without arming a new one. Call when the active session switches to
+ * local-only IN-PAGE (no reload) — `ensurePowerSyncReady`'s `useRemoteSync`
+ * early return happens BEFORE the `watchSyncHealth` call below (that
+ * position is load-bearing and pinned by a test: sampling a local-only
+ * session would record every sample as a false stall, since the queue is
+ * local-only and never drains to a server, and the watchdog would try to
+ * `connect()` a session that deliberately never makes a remote request), so
+ * without an explicit teardown call the PREVIOUS remote session's watcher is
+ * simply never disposed: it keeps sampling the OLD (now-orphaned) db on its
+ * own timer/listener and filing samples into the still-active ring under the
+ * new, local-only session. Safe to call when nothing is being watched
+ * (no-op). Also used internally by `watchSyncHealth`'s own re-arm and by
+ * `__resetDbForensicsHooksForTest`, so there is exactly one teardown path.
+ */
+export const stopSyncHealthWatch = (): void => {
+  disposeSyncWatch?.()
+  disposeSyncWatch = null
+  if (syncIntervalId !== null) {
+    clearInterval(syncIntervalId)
+    syncIntervalId = null
+  }
+  syncWatchedUserId = null
+  syncStallWarned = false
+  syncPendingSince = null
+  syncLastPendingBlocks = null
+  syncLastPendingRows = null
+  openStallEpisodeKey = null
+  watchdogAttemptsInEpisode = 0
+  watchdogLastAttemptAt = null
+  sampleChain = Promise.resolve()
+  samplePendingRerun = false
+}
+
 /**
  * Watch the PowerSync connection for sync-health breadcrumbs — the record
  * that was MISSING in the 2026-08-13 iPad incident (22 blocks stuck in
@@ -431,8 +653,9 @@ const sampleSyncHealth = async (
  * so a long stall costs one ring slot, not thousands.
  *
  * Re-arms per user, same shape as {@link watchForRuntimeCorruption}: on an
- * in-page account switch it disposes the previous listener + timer and
- * rebinds to the new user, re-arming the stall-warning latch too.
+ * in-page account switch it disposes the previous listener + timer (via
+ * {@link stopSyncHealthWatch}) and rebinds to the new user, re-arming the
+ * stall-warning latch too.
  *
  * `reconnect` is the `sync.reconnect` primitive (`reconnectPowerSync` in
  * repoProvider.ts), injected rather than imported so this module never
@@ -446,20 +669,10 @@ export const watchSyncHealth = (
   forensics: DbForensics = dbForensics,
 ): void => {
   if (syncWatchedUserId === userId) return
-  disposeSyncWatch?.()
-  disposeSyncWatch = null
-  if (syncIntervalId !== null) {
-    clearInterval(syncIntervalId)
-    syncIntervalId = null
-  }
+  stopSyncHealthWatch()
   syncWatchedUserId = userId
-  syncStallWarned = false
-  syncPendingSince = null
-  openStallEpisodeKey = null
-  watchdogAttemptsInEpisode = 0
-  watchdogLastAttemptAt = null
 
-  const sample = () => void sampleSyncHealth(db, userId, reconnect, forensics)
+  const sample = () => enqueueSample(() => sampleSyncHealth(db, userId, reconnect, forensics))
 
   sample() // once, immediately — don't wait a full interval to see the current state
   disposeSyncWatch = typeof db.registerListener === 'function'
@@ -477,18 +690,7 @@ export const __resetDbForensicsHooksForTest = (): void => {
   watchedUserId = null
   runtimeCorruptionCaptured = false
 
-  disposeSyncWatch?.()
-  disposeSyncWatch = null
-  if (syncIntervalId !== null) {
-    clearInterval(syncIntervalId)
-    syncIntervalId = null
-  }
-  syncWatchedUserId = null
-  syncStallWarned = false
-  syncPendingSince = null
-  openStallEpisodeKey = null
-  watchdogAttemptsInEpisode = 0
-  watchdogLastAttemptAt = null
+  stopSyncHealthWatch()
 }
 
 /**

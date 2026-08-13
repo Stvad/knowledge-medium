@@ -21,6 +21,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 const hooks = vi.hoisted(() => ({
   watchSyncHealth: vi.fn(),
+  stopSyncHealthWatch: vi.fn(),
   watchForRuntimeCorruption: vi.fn(),
   recordForensicSessionStart: vi.fn(),
   captureDbOpenCorruption: vi.fn(),
@@ -116,5 +117,17 @@ describe('ensurePowerSyncReady — sync-health watcher wiring', () => {
     expect(hooks.watchSyncHealth).toHaveBeenCalledWith(
       expect.anything(), 'user-remote-sync', expect.any(Function),
     )
+  })
+
+  it('tears down the previous watcher when an in-page switch moves to a local-only session', async () => {
+    await ensurePowerSyncReady('user-remote-then-local', true)
+    expect(hooks.watchSyncHealth).toHaveBeenCalledOnce()
+    expect(hooks.stopSyncHealthWatch).not.toHaveBeenCalled()
+
+    // Same account, now local-only — models an in-page mode switch. Without
+    // an explicit teardown call, the PREVIOUS remote session's watcher would
+    // keep sampling the old db and filing into the still-active ring.
+    await ensurePowerSyncReady('user-remote-then-local', false)
+    expect(hooks.stopSyncHealthWatch).toHaveBeenCalledOnce()
   })
 })
