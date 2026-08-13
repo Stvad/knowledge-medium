@@ -79,12 +79,27 @@ export const parseBlockRefTarget = (target: string): string | null => {
  *  Only the catastrophic tail is.
  *
  *  Deliberately here in the parser and not in the reference processor:
- *  the renderer scans through this same function, so one rule keeps
- *  "what displays as a link" and "what is recorded as a reference" from
- *  disagreeing. A processor-only cap would render a live-looking link
- *  the reference index knows nothing about. `remark-wikilinks` passes 3
- *  and 4 inherit the cap by calling `parseOutermostReferences`; passes 1
- *  and 2 match their own regexes and so re-check it explicitly. */
+ *  both the index and the renderer reach the cap through this function,
+ *  so a processor-only cap would render a live-looking link the reference
+ *  index knows nothing about. `remark-wikilinks` passes 3 and 4 inherit
+ *  the cap by calling `parseOutermostReferences`; passes 1 and 2 match
+ *  their own regexes and so re-check it explicitly.
+ *
+ *  One rule, but NOT one string, and the difference is worth stating
+ *  plainly. The index parses RAW `blocks.content`; the renderer parses
+ *  what `remark-parse` produced, which has already resolved markdown
+ *  backslash escapes. So `[[a\.b]]` is measured (and stored) as `a\.b`
+ *  by the index while the renderer binds `a.b` — and an escaped span can
+ *  therefore sit over the cap raw and under it decoded (2148 × `\.` is
+ *  4296 raw, 2148 decoded). That divergence is NOT created by this cap:
+ *  it applies to the alias VALUE at every length, predates this constant,
+ *  and is already documented at `faithfulWikilinkReplacement`, which
+ *  refuses backslash aliases for exactly this reason. The cap does not
+ *  worsen it either — decoding only ever shortens, so an escaped span can
+ *  cross the threshold in one direction only, and the effect there is to
+ *  stop minting a phantom page for a link that rendered unresolved either
+ *  way. Closing it for real means parsing the index side through markdown
+ *  too, which is issue #542. */
 export const MAX_ALIAS_LENGTH = 4096
 
 const parseWikilinkReferences = (content: string): ParsedReference[] => {

@@ -5,7 +5,7 @@ import remarkGfm from 'remark-gfm'
 import { visit } from 'unist-util-visit'
 import type { Root, RootContent } from 'mdast'
 import { remarkWikilinks } from '../remark-wikilinks.ts'
-import { MAX_ALIAS_LENGTH } from '../../../referenceParser.ts'
+import { MAX_ALIAS_LENGTH, parseReferences } from '../../../referenceParser.ts'
 import { remarkBlockrefs } from '../../blockrefs/remark-blockrefs.ts'
 
 interface WikilinkNode {
@@ -495,6 +495,32 @@ describe('MAX_ALIAS_LENGTH holds across all four passes', () => {
     expect(kept).toHaveLength(1)
     expect(kept[0].data.hProperties.alias).toBe(underSpaced)
     expect(wikilinkChildText(kept[0])).toBe('display')
+  })
+
+  // Known divergence, pinned so it is visible rather than folklore. The
+  // index parses RAW content; this plugin parses what remark produced,
+  // with backslash escapes already resolved. So the two sides measure —
+  // and name — different strings whenever escapes are present. That is a
+  // property of the alias VALUE at every length (`[[a\.b]]` is stored as
+  // `a\.b` and rendered as `a.b`), predates the cap, and is already
+  // documented at `faithfulWikilinkReplacement`. Tracked in #542; closing
+  // it means parsing the index side through markdown too. Update this
+  // test deliberately when that lands — do not "fix" it in passing.
+  it('measures the DECODED alias, which an escaped span makes shorter than raw', () => {
+    const escaped = '\\.'.repeat(MAX_ALIAS_LENGTH / 2 + 50)
+    expect(escaped.length).toBeGreaterThan(MAX_ALIAS_LENGTH)
+
+    // Raw is over the cap, so the index stores nothing for this span.
+    expect(parseReferences(`[[${escaped}]]`)).toEqual([])
+
+    // Decoded is under it, so the renderer still emits a wikilink — one
+    // that resolves to nothing, exactly as it did before the cap existed
+    // (the index never held this decoded name either way). The cap's
+    // effect here is that no phantom page gets minted for the raw form.
+    const links = collectWikilinks(transform(`[[${escaped}]]`))
+    expect(links).toHaveLength(1)
+    expect(links[0].data.hProperties.alias).toBe('.'.repeat(escaped.length / 2))
+    expect(links[0].data.hProperties.blockId).toBe('')
   })
 
   it('pass 4 (cross-node reassembly) drops an over-cap alias', () => {
