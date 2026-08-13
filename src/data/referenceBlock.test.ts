@@ -6,11 +6,19 @@
 
 import { describe, expect, it } from 'vitest'
 import {
+  GrammarShapedLabelError,
+  LossyLabelError,
+  MAX_ALIAS_LENGTH,
+  UnwritableLabelError,
+  assertRoundTrippableReferenceLabel,
   isGrammarShapedLabel,
   parseExactReferenceBlockContent,
   referenceBlockContentForId,
   referenceBlockContentForLabel,
 } from './referenceBlock.ts'
+// Cross-layer check only: the inline parser is a PLUGIN reader of the
+// same grammar, and the point of these cases is that the two agree.
+import { parseReferences } from '@/plugins/references/referenceParser'
 
 const UUID = '11111111-1111-4111-8111-111111111111'
 
@@ -172,5 +180,68 @@ describe('parseExactReferenceBlockContent — marked field forms', () => {
   it('excludes embeds — a transclusion directive, not a marker', () => {
     expect(parseExactReferenceBlockContent(`::!((${UUID}))`)).toBeNull()
     expect(parseExactReferenceBlockContent(`!((${UUID}))`)).toBeNull()
+  })
+})
+
+// A type label and a property name DOUBLE as the block's `[[label]]`
+// page, so unlike an arbitrary alias they must be expressible as a
+// wikilink. Property names always ran both halves of this hygiene; type
+// labels ran only the grammar-shaped half, so a `]]`-bearing label
+// claimed an alias nothing could link to — a gap that predates the length
+// cap and that the cap widened (Codex on PR #540).
+describe('assertRoundTrippableReferenceLabel', () => {
+  it('accepts an ordinary name', () => {
+    expect(() => assertRoundTrippableReferenceLabel('Book', 'ctx')).not.toThrow()
+  })
+
+  it('refuses a `]]`-lossy name — the pre-existing half of the gap', () => {
+    expect(() => assertRoundTrippableReferenceLabel('foo]]bar', 'ctx'))
+      .toThrow(LossyLabelError)
+  })
+
+  it('refuses a name past the alias cap', () => {
+    expect(() => assertRoundTrippableReferenceLabel('a'.repeat(MAX_ALIAS_LENGTH + 1), 'ctx'))
+      .toThrow(LossyLabelError)
+    expect(() => assertRoundTrippableReferenceLabel('a'.repeat(MAX_ALIAS_LENGTH), 'ctx'))
+      .not.toThrow()
+  })
+
+  // The UI reverts the draft field by catching the BASE class, so both
+  // refusal reasons have to reach it — the reason a base exists at all.
+  it('both refusal reasons are UnwritableLabelError', () => {
+    expect(new LossyLabelError('x', 'ctx')).toBeInstanceOf(UnwritableLabelError)
+    expect(new GrammarShapedLabelError('x', 'ctx')).toBeInstanceOf(UnwritableLabelError)
+  })
+})
+
+// This reading feeds `deriveReferenceColumns` → `reference_target_id`,
+// which in a child-backed workspace decides whether a row projects as a
+// property field. Without the bound here, a whole-block `[[<over-cap>]]`
+// with an owner was stamped as a reference block while the inline parser
+// and the renderer both read the same text as literal — one string, two
+// contradictory classifications (Codex on PR #540).
+describe('parseExactReferenceBlockContent — alias length bound', () => {
+  it('reads an alias at the cap and refuses one past it', () => {
+    const atCap = 'a'.repeat(MAX_ALIAS_LENGTH)
+    expect(parseExactReferenceBlockContent(`[[${atCap}]]`))
+      .toEqual({kind: 'alias', alias: atCap, fieldForm: false})
+    expect(parseExactReferenceBlockContent(`[[${'a'.repeat(MAX_ALIAS_LENGTH + 1)}]]`))
+      .toBeNull()
+  })
+
+  it('applies to the field form too', () => {
+    expect(parseExactReferenceBlockContent(`::[[${'a'.repeat(MAX_ALIAS_LENGTH + 1)}]]`))
+      .toBeNull()
+  })
+
+  // The bound is measured before the trim, so the two parsers agree on
+  // the exact same string. Measuring the trimmed alias instead would
+  // leave a one-character window where core says "reference" and the
+  // inline parser says "literal".
+  it('agrees with the inline parser at the boundary, whitespace included', () => {
+    const padded = `${'a'.repeat(MAX_ALIAS_LENGTH)} `
+    const content = `[[${padded}]]`
+    expect(parseExactReferenceBlockContent(content)).toBeNull()
+    expect(parseReferences(content)).toEqual([])
   })
 })

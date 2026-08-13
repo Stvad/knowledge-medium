@@ -19,7 +19,11 @@ import {
 } from '@/data/properties.js'
 import { propertyEditorOverridesFacet } from '@/data/facets.js'
 import { isValidSeededDefinition } from '@/data/definitionSeeds'
-import { assertNotGrammarShapedLabel, GrammarShapedLabelError } from '@/data/referenceBlock'
+import {
+  assertNotGrammarShapedLabel,
+  assertRoundTrippableReferenceLabel,
+  UnwritableLabelError,
+} from '@/data/referenceBlock'
 import { resolveEditorOverride } from '@/data/propertyDefinitionRegistry'
 import {readValuePresets} from '@/data/valuePresetRegistry'
 import type { Block } from '@/data/block.js'
@@ -48,7 +52,16 @@ export const writeBlockTypeLabel = async (
   // a reference span. Refuse rather than mirror; the caller reverts the
   // draft. (Blanking the label is a real operation — see the release path
   // below — so only a non-empty one is checked.)
-  if (next !== '') assertNotGrammarShapedLabel(next, 'Type label')
+  // BOTH halves of the hygiene, matching the property-name path: the
+  // grammar check alone lets through a label that is plainly a name but
+  // can't be written as `[[label]]` and read back (a `]]` renders lossily;
+  // over `MAX_ALIAS_LENGTH` doesn't parse as a reference at all). Since a
+  // defined type DOUBLES as its `[[label]]` page — the alias claim below
+  // is that contract — such a label leaves the type unlinkable by name.
+  if (next !== '') {
+    assertNotGrammarShapedLabel(next, 'Type label')
+    assertRoundTrippableReferenceLabel(next, 'Type label')
+  }
   await block.repo.tx(async tx => {
     if (next !== currentLabel) {
       await tx.setProperty(block.id, blockTypeLabelProp, next)
@@ -162,7 +175,9 @@ export const BlockTypeContentRenderer: BlockRenderer = ({block}: BlockRendererPr
     try {
       await writeBlockTypeLabel(block, label, currentContent, next)
     } catch (err) {
-      if (!(err instanceof GrammarShapedLabelError)) throw err
+      // The BASE class, so a refusal reason added later reverts the field
+      // without anyone having to remember to widen this check.
+      if (!(err instanceof UnwritableLabelError)) throw err
       // Refused: snap the field back to the committed label so it never
       // shows a name that wasn't saved.
       console.error(`[BlockTypeBlockRenderer] ${err.message}`)

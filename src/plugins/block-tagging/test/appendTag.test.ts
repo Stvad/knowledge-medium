@@ -6,6 +6,8 @@ import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { ChangeScope } from '@/data/api'
 import { appendTagToBlocks, appendTagToContent } from '../appendTag.ts'
+import { selectableTagNames, tagNameIssue } from '../config.ts'
+import { MAX_ALIAS_LENGTH, parseReferences, renderWikilink } from '@/plugins/references/referenceParser'
 
 describe('appendTagToContent', () => {
   it('appends [[name]] with a separating space when content is non-empty', () => {
@@ -49,6 +51,69 @@ describe('appendTagToContent', () => {
     const once = appendTagToContent('hello', 'srs')
     expect(once).toBe('hello [[srs]]')
     expect(appendTagToContent(once, 'srs')).toBe(once)
+  })
+
+  // Both tag entry points take free text, so nothing upstream bounds
+  // this. Over the cap the parser refuses to read the emitted `[[…]]`
+  // as a wikilink, so appending would write literal markup that never
+  // links and never gains a backlink — while `appendTagToBlocks` still
+  // counted the block as tagged, since it decides that on string
+  // inequality alone. Assert on the ROUND TRIP, not just the length:
+  // the reason to reject is that the output stops parsing back.
+  it('rejects a name longer than the parser will read back', () => {
+    const tooLong = 'a'.repeat(MAX_ALIAS_LENGTH + 1)
+    expect(appendTagToContent('hello', tooLong)).toBe('hello')
+
+    const atCap = 'a'.repeat(MAX_ALIAS_LENGTH)
+    const tagged = appendTagToContent('hello', atCap)
+    expect(tagged).toBe(`hello [[${atCap}]]`)
+    expect(parseReferences(tagged).map(r => r.alias)).toEqual([atCap])
+  })
+
+  // The picker lists these as clickable options and its submit path bails
+  // on an invalid name, so an unusable stored tag was an inert row with no
+  // explanation. Prefs written before the cap existed can still hold one.
+  it('hides configured tags this build cannot apply', () => {
+    const tooLong = 'a'.repeat(MAX_ALIAS_LENGTH + 1)
+    expect(selectableTagNames(['srs', tooLong, 'later'])).toEqual(['srs', 'later'])
+    // Not a blanket length rule, and not applied to the config editor's
+    // own list — this is only what the picker may OFFER.
+    expect(selectableTagNames(['a'.repeat(MAX_ALIAS_LENGTH)]))
+      .toEqual(['a'.repeat(MAX_ALIAS_LENGTH)])
+  })
+
+  // The entry points render a message per reason, so the reason has to be
+  // distinguishable — they used to hard-code "can't contain [[ or ]]",
+  // which the length rule turned into a lie for inputs containing neither.
+  it('reports WHY a name was rejected', () => {
+    expect(tagNameIssue('srs')).toBeNull()
+    expect(tagNameIssue('  ')).toBe('empty')
+    expect(tagNameIssue('foo[[bar')).toBe('delimiters')
+    expect(tagNameIssue('foo]]bar')).toBe('delimiters')
+    expect(tagNameIssue('a'.repeat(MAX_ALIAS_LENGTH + 1))).toBe('too-long')
+    // The trailing-`]` case is 'too-long', not 'delimiters' — a single
+    // bracket is allowed, it is the rendered padding that overflows.
+    expect(tagNameIssue(`${'a'.repeat(MAX_ALIAS_LENGTH - 1)}]`)).toBe('too-long')
+  })
+
+  // The rendered span, not the input, is what the cap applies to.
+  // `renderWikilink` pads a trailing `]` with a space to keep the closing
+  // delimiter balanced, so this name is AT the cap but emits an alias one
+  // character over it — a length check on the input alone would let it
+  // through and write markup that parses to nothing while
+  // `appendTagToBlocks` reported the block as tagged.
+  it('rejects an at-cap name whose trailing `]` pushes the rendered alias over', () => {
+    const atCapWithBracket = `${'a'.repeat(MAX_ALIAS_LENGTH - 1)}]`
+    expect(atCapWithBracket.length).toBe(MAX_ALIAS_LENGTH)
+    // The shape of the hazard: rendering pads, so the emitted alias is longer.
+    expect(renderWikilink(atCapWithBracket)).toBe(`[[${atCapWithBracket} ]]`)
+    expect(appendTagToContent('hello', atCapWithBracket)).toBe('hello')
+
+    // One char shorter renders within the cap and is still accepted, so
+    // this pins the boundary rather than "trailing brackets are banned".
+    const justUnder = `${'a'.repeat(MAX_ALIAS_LENGTH - 2)}]`
+    const tagged = appendTagToContent('hello', justUnder)
+    expect(parseReferences(tagged)).toHaveLength(1)
   })
 })
 

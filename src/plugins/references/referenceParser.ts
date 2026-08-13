@@ -19,6 +19,7 @@ import { unified } from 'unified'
 import remarkParse from 'remark-parse'
 import { visit } from 'unist-util-visit'
 import type { Text } from 'mdast'
+import { MAX_ALIAS_LENGTH } from '@/data/referenceBlock'
 
 export interface ParsedReference {
   alias: string;
@@ -54,6 +55,43 @@ export const parseBlockRefTarget = (target: string): string | null => {
   return match ? match[1].toLowerCase() : null
 }
 
+/** Re-exported, NOT declared here. `@/data/referenceBlock` owns it,
+ *  because core's whole-block reading of this same grammar
+ *  (`deriveReferenceColumns` → `reference_target_id`) has to apply the
+ *  identical bound, and core cannot import a plugin. See that
+ *  declaration for what the constant is for and why it is 4096; what
+ *  follows is only how the INLINE readers apply it.
+ *
+ *  A span over the cap is scanned past and emits no reference — the text
+ *  stays literal and no page is minted. The cost of a deliberately
+ *  generous bound is explicit: junk aliases in the low thousands (a
+ *  2951-char drawing point-array in the author's workspace) stay under it
+ *  and are NOT caught. Only the catastrophic tail is.
+ *
+ *  Applied in the parser rather than the reference processor:
+ *  both the index and the renderer reach the cap through this function,
+ *  so a processor-only cap would render a live-looking link the reference
+ *  index knows nothing about. `remark-wikilinks` passes 3 and 4 inherit
+ *  the cap by calling `parseOutermostReferences`; passes 1 and 2 match
+ *  their own regexes and so re-check it explicitly.
+ *
+ *  One rule, but NOT one string, and the difference is worth stating
+ *  plainly. The index parses RAW `blocks.content`; the renderer parses
+ *  what `remark-parse` produced, which has already resolved markdown
+ *  backslash escapes. So `[[a\.b]]` is measured (and stored) as `a\.b`
+ *  by the index while the renderer binds `a.b` — and an escaped span can
+ *  therefore sit over the cap raw and under it decoded (2148 × `\.` is
+ *  4296 raw, 2148 decoded). That divergence is NOT created by this cap:
+ *  it applies to the alias VALUE at every length, predates this constant,
+ *  and is already documented at `faithfulWikilinkReplacement`, which
+ *  refuses backslash aliases for exactly this reason. The cap does not
+ *  worsen it either — decoding only ever shortens, so an escaped span can
+ *  cross the threshold in one direction only, and the effect there is to
+ *  stop minting a phantom page for a link that rendered unresolved either
+ *  way. Closing it for real means parsing the index side through markdown
+ *  too, which is issue #542. */
+export { MAX_ALIAS_LENGTH } from '@/data/referenceBlock'
+
 const parseWikilinkReferences = (content: string): ParsedReference[] => {
   const references: ParsedReference[] = []
   const stack: number[] = [] // Stack to track opening bracket positions
@@ -67,7 +105,12 @@ const parseWikilinkReferences = (content: string): ParsedReference[] => {
       if (stack.length > 0) {
         const startPos = stack.pop()!
         const alias = content.slice(startPos + 2, i)
-        if (alias) {
+        // Gate EMISSION only — the pop above still happened, so a
+        // rejected span consumes its delimiters exactly as an accepted
+        // one does. Leaving the opener on the stack instead would let it
+        // pair with a `]]` even further downstream, which is the failure
+        // mode this cap exists to end rather than relocate.
+        if (alias && alias.length <= MAX_ALIAS_LENGTH) {
           references.push({
             alias,
             startIndex: startPos,
@@ -234,13 +277,23 @@ export function extractBlockRefIds(content: string): string[] {
 /** Render a wikilink targeting `alias`. If `alias` contains wikilink
  *  delimiters (`[[`, `]]`, or a trailing `]`), the output is
  *  syntactically safe but lossy; callers that need alias identity must
- *  verify by parsing the result. Guarantee, for non-empty `alias`: the
- *  output always parses to exactly one outermost reference spanning the
- *  whole string, and is delimiter-balanced so it cannot combine with
- *  surrounding text into a different link. Exception: `alias === ''`
- *  renders `[[]]`, which the parser's `if (alias)` gate emits ZERO
- *  references for — callers on this path already verify-by-parsing and
- *  fall back, so this is a contract-doc caveat, not a live bug. */
+ *  verify by parsing the result. Guarantee, for an `alias` that is
+ *  non-empty and at most `MAX_ALIAS_LENGTH`: the output always parses to
+ *  exactly one outermost reference spanning the whole string, and is
+ *  delimiter-balanced so it cannot combine with surrounding text into a
+ *  different link.
+ *
+ *  Two inputs fall outside that guarantee and render markup the parser
+ *  emits ZERO references for — `alias === ''` (`[[]]`, stopped by the
+ *  `if (alias)` gate) and any alias longer than `MAX_ALIAS_LENGTH`. This
+ *  function does not refuse them, because its callers split into two
+ *  kinds and only one can act on a refusal: the rewriters go through
+ *  `faithfulWikilinkReplacement`, which verifies by re-parsing and falls
+ *  back to the pinned form on `null`, so they are already safe; the
+ *  direct callers are PRODUCERS with a real user at the other end
+ *  (`appendTagToContent`), and they owe a check at their own entry point
+ *  where the input can still be rejected with an explanation instead of
+ *  silently degrading — see `isValidTagName`. */
 export const renderWikilink = (alias: string): string => {
   // `]]` inside the alias would terminate the wikilink at the wrong
   // place, and an unclosed `[[` would leak an opener that a later `]]`
@@ -257,6 +310,26 @@ export const renderWikilink = (alias: string): string => {
   const padded = safe.endsWith(']') ? safe + ' ' : safe
   return `[[${padded}]]`
 }
+
+/** Can `alias` be written as a `[[…]]` span this parser reads back as a
+ *  reference at all? False only for spans the grammar refuses outright —
+ *  today, over `MAX_ALIAS_LENGTH` measured on the RENDERED span, which is
+ *  not the same as the input length: `renderWikilink` pads a trailing `]`
+ *  with a space, so an at-cap name ending in `]` emits an alias one over.
+ *
+ *  The producer-side companion to the cap. Every surface that OFFERS or
+ *  WRITES a wikilink on a user's behalf owes this check — the tag entry
+ *  points, the `[[` autocomplete — because the alternative is handing
+ *  back markup that renders as literal text and gains no backlink, with
+ *  nothing on screen saying why.
+ *
+ *  Deliberately WEAKER than `faithfulWikilinkReplacement`: this asks only
+ *  "does a reference come back", not "is it byte-identical". The lossy
+ *  cases that already work (a backslash, a trailing `]`) keep working, so
+ *  adding this check to a surface cannot newly reject an alias that
+ *  surface accepts today. */
+export const canRenderAsWikilink = (alias: string): boolean =>
+  parseOutermostReferences(renderWikilink(alias)).length === 1
 
 /** Render an aliased blockref `[label](((id)))`. Strips `]` and
  *  newlines from `label` because the parser's regex rejects them in
