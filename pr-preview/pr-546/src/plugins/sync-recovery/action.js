@@ -1,0 +1,2 @@
+import{reconnectPowerSync as e}from"../../data/repoProvider.js";import{RefreshCw as t}from"../../../node_modules/.pnpm/lucide-react@1.12.0_react@19.2.6/node_modules/lucide-react/dist/esm/icons/refresh-cw.js";import{ActionContextTypes as n}from"../../shortcuts/types.js";var r=`sync.reconnect`,i={id:r,description:`Reconnect sync (recover a stalled upload queue)`,context:n.GLOBAL,icon:t,handler:async({uiStateBlock:t})=>{await e(t.repo.user.id)}};export{r as SYNC_RECONNECT_ACTION_ID,i as syncReconnectAction};
+//# sourceMappingURL=action.js.map

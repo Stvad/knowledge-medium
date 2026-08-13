@@ -1,0 +1,2 @@
+import{systemToggle as e}from"../../facets/togglable.js";import{actionsFacet as t}from"../../extensions/core.js";import{SYNC_RECONNECT_ACTION_ID as n,syncReconnectAction as r}from"./action.js";var i=e({id:`system:sync-recovery`,name:`Sync recovery`,description:`Adds a command to force-reconnect sync — recovers a stalled upload queue.`,essential:!0}).of([t.of(r,{source:`sync-recovery`})]);export{n as SYNC_RECONNECT_ACTION_ID,r as syncReconnectAction,i as syncRecoveryPlugin};
+//# sourceMappingURL=index.js.map
