@@ -468,6 +468,22 @@ describe('MAX_ALIAS_LENGTH holds across all four passes', () => {
     expect(wikilinkChildText(kept[0])).toBe('display')
   })
 
+  // Declining is not enough on this path. remark has ALREADY made the
+  // wrapper a `link` node before the visitor runs, so leaving it alone
+  // renders `<a href="[[…]]">display</a>` — the app's anchor component
+  // only special-cases external hrefs, and react-markdown's default
+  // urlTransform passes a colon-less string through, so a click is a
+  // relative navigation away from the page. Assert on the surviving NODE,
+  // not just on the absence of a wikilink: "no wikilink" was true of the
+  // clickable-anchor bug too (Codex on PR #540).
+  it('pass 1 leaves no navigable link node behind for a rejected alias', () => {
+    const tree = transform(`[display]([[${over}]])`)
+    const links: string[] = []
+    visit(tree, 'link', (node) => { links.push(node.url) })
+    expect(links).toEqual([])
+    expect(collectText(tree).join('')).toBe(`[display]([[${over}]])`)
+  })
+
   it('pass 2 (text-form wrapper) drops an over-cap alias', () => {
     const overSpaced = spaced(MAX_ALIAS_LENGTH + 30)
     const underSpaced = spaced(MAX_ALIAS_LENGTH - 30)

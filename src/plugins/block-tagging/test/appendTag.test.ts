@@ -6,7 +6,7 @@ import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { ChangeScope } from '@/data/api'
 import { appendTagToBlocks, appendTagToContent } from '../appendTag.ts'
-import { MAX_ALIAS_LENGTH, parseReferences } from '@/plugins/references/referenceParser'
+import { MAX_ALIAS_LENGTH, parseReferences, renderWikilink } from '@/plugins/references/referenceParser'
 
 describe('appendTagToContent', () => {
   it('appends [[name]] with a separating space when content is non-empty', () => {
@@ -67,6 +67,26 @@ describe('appendTagToContent', () => {
     const tagged = appendTagToContent('hello', atCap)
     expect(tagged).toBe(`hello [[${atCap}]]`)
     expect(parseReferences(tagged).map(r => r.alias)).toEqual([atCap])
+  })
+
+  // The rendered span, not the input, is what the cap applies to.
+  // `renderWikilink` pads a trailing `]` with a space to keep the closing
+  // delimiter balanced, so this name is AT the cap but emits an alias one
+  // character over it — a length check on the input alone would let it
+  // through and write markup that parses to nothing while
+  // `appendTagToBlocks` reported the block as tagged.
+  it('rejects an at-cap name whose trailing `]` pushes the rendered alias over', () => {
+    const atCapWithBracket = `${'a'.repeat(MAX_ALIAS_LENGTH - 1)}]`
+    expect(atCapWithBracket.length).toBe(MAX_ALIAS_LENGTH)
+    // The shape of the hazard: rendering pads, so the emitted alias is longer.
+    expect(renderWikilink(atCapWithBracket)).toBe(`[[${atCapWithBracket} ]]`)
+    expect(appendTagToContent('hello', atCapWithBracket)).toBe('hello')
+
+    // One char shorter renders within the cap and is still accepted, so
+    // this pins the boundary rather than "trailing brackets are banned".
+    const justUnder = `${'a'.repeat(MAX_ALIAS_LENGTH - 2)}]`
+    const tagged = appendTagToContent('hello', justUnder)
+    expect(parseReferences(tagged)).toHaveLength(1)
   })
 })
 

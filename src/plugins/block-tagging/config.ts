@@ -6,7 +6,7 @@ import {
   type Codec,
 } from '@/data/api'
 import { uniqueStrings } from '@/utils/array'
-import { MAX_ALIAS_LENGTH } from '@/plugins/references/referenceParser'
+import { parseOutermostReferences, renderWikilink } from '@/plugins/references/referenceParser'
 
 /** Tag names are interpolated into a wikilink (`[[name]]`). The
  *  reference parser balances `[[ … ]]` pairs, so a name containing
@@ -24,14 +24,21 @@ import { MAX_ALIAS_LENGTH } from '@/plugins/references/referenceParser'
  *  count the block as tagged, because it decides that on string
  *  inequality alone. Both tag entry points take FREE TEXT (the add-tag
  *  dialog's input and the config editor's draft field), so nothing
- *  upstream bounds this. Refusing beats silently writing dead markup. */
+ *  upstream bounds this. Refusing beats silently writing dead markup.
+ *
+ *  The length check is on the RENDERED span, not on `trimmed`, and that
+ *  distinction is load-bearing: `renderWikilink` appends a space after a
+ *  trailing `]` to keep the closing delimiter balanced, so a name of
+ *  exactly `MAX_ALIAS_LENGTH` ending in `]` emits an alias one character
+ *  OVER the cap. Comparing `trimmed.length` would wave it through.
+ *  Parsing what the renderer actually emits is the only form of this
+ *  check that cannot drift from the renderer (Codex on PR #540). */
 export const isValidTagName = (name: string): boolean => {
   const trimmed = name.trim()
   if (!trimmed) return false
-  if (trimmed.length > MAX_ALIAS_LENGTH) return false
   if (trimmed.includes('[[')) return false
   if (trimmed.includes(']]')) return false
-  return true
+  return parseOutermostReferences(renderWikilink(trimmed)).length === 1
 }
 
 export const normalizeBlockTagsConfig = (value: unknown): string[] =>

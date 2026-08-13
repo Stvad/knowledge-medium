@@ -348,6 +348,18 @@ describe('parseReferences — extension source is not scanned for content refs',
     it('still recognises a well-formed extension block', () => {
       expect(isExtensionSource({properties: {types: [EXTENSION_TYPE]}})).toBe(true)
     })
+
+    // Deliberate, and the direction matters. The codec would call this
+    // whole value malformed, but the row DOES claim the extension type,
+    // and the two readings fail very differently: honouring the claim
+    // skips parsing a source blob (worst case, an extension block's refs
+    // aren't derived — recoverable, invisible); rejecting it scans 1.7 MB
+    // of bundled JS and mints phantom pages, which is the bug this gate
+    // exists to stop. Membership wins over element-wise validity on
+    // purpose (declined Codex suggestion, PR #540).
+    it('honours an extension claim even in an otherwise malformed array', () => {
+      expect(isExtensionSource({properties: {types: [EXTENSION_TYPE, 42]}})).toBe(true)
+    })
   })
 
   // Scope check: the gate is on the CONTENT grammars only. An extension
