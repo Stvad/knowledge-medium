@@ -46,6 +46,7 @@ import {
   createPanelStackRowInTx,
   deletePanelRow,
   insertPanelRow,
+  insertSidebarStackedPanel,
   layoutBlockIdsFromRows,
   layoutSlotsFromRows,
   panelBlockIds,
@@ -1109,6 +1110,61 @@ describe('togglePanelMaximized', () => {
     expect(env.repo.block(byBlock.get('b')!).peekProperty(panelMaximizedProp)).not.toBe(true)
   })
 
+  // Maximizing a lone pane changes nothing on screen and renders no restore
+  // button, so the flag would sit invisible until the next pane opened — and
+  // the action is keyboard-dispatchable on surfaces the button never shows on.
+  it('refuses to maximize when there is nothing to hide', async () => {
+    await applyUrl('#ws-1/a')
+    const rowA = (await rowIdsByBlock()).get('a')
+    if (!rowA) throw new Error('missing a row')
+
+    expect(await togglePanelMaximized(env.repo, rowA)).toBeNull()
+
+    expect(env.repo.block(rowA).peekProperty(panelMaximizedProp)).not.toBe(true)
+  })
+
+  // Un-maximizing must still work once siblings are gone, or closing the other
+  // pane would strand the flag.
+  it('still clears a flag on a pane that is now alone', async () => {
+    await applyUrl('#ws-1/a;max')
+    const rowA = (await rowIdsByBlock()).get('a')
+    if (!rowA) throw new Error('missing a row')
+
+    expect(await togglePanelMaximized(env.repo, rowA)).toBe(false)
+
+    expect(env.repo.block(rowA).peekProperty(panelMaximizedProp)).not.toBe(true)
+  })
+
+  // Without the PANEL_TYPE gate the ancestor walk accepts ANY block: it takes
+  // the first non-stack parent for a layout session, loads that whole subtree
+  // inside the tx, and then writes layout properties onto a user's page.
+  //
+  // Two conditions are needed to actually reach the gate, and getting either
+  // wrong makes this test green with the gate deleted (both were hit while
+  // writing it): the block must be NESTED, or the ancestor walk bails out
+  // before the gate matters, and its parent needs a SECOND child, or the
+  // lone-pane refusal below catches it first.
+  it('refuses a nested non-panel block, writing nothing to it or its parent', async () => {
+    await applyUrl('#ws-1/a')
+    await seedBlocks(['user-page'])
+    await env.repo.tx(async tx => {
+      for (const [index, id] of ['page-child', 'page-sibling'].entries()) {
+        await tx.create({
+          id,
+          workspaceId: WS,
+          parentId: 'user-page',
+          orderKey: `a${index}`,
+          content: id,
+        })
+      }
+    }, {scope: ChangeScope.BlockDefault, description: 'seed nested content blocks'})
+
+    expect(await togglePanelMaximized(env.repo, 'page-child')).toBeNull()
+
+    expect(env.repo.block('page-child').peekProperty(panelMaximizedProp)).not.toBe(true)
+    expect(env.repo.block('user-page').peekProperty(activePanelIdProp)).toBeUndefined()
+  })
+
   it('clears its own flag on the second call, leaving nothing maximized', async () => {
     await applyUrl('#ws-1/a;max/b')
     const rowA = (await rowIdsByBlock()).get('a')
@@ -1127,6 +1183,33 @@ describe('togglePanelMaximized', () => {
 
     expect(env.repo.block(byBlock.get('c')!).peekProperty(panelMaximizedProp)).toBe(true)
     expect(layoutSessionBlock().peekProperty(activePanelIdProp)).toBe(byBlock.get('c'))
+  })
+
+  // Opening a pane is an explicit "show me two things". A maximize left
+  // standing renders the new pane invisible while the insert path still points
+  // activePanelId at it — so a quick-capture that writes editor state onto the
+  // new pane writes into something that never mounts.
+  it('opening a pane clears the maximize that would have hidden it', async () => {
+    await applyUrl('#ws-1/a;max/b')
+    const byBlock = await rowIdsByBlock()
+    expect(env.repo.block(byBlock.get('a')!).peekProperty(panelMaximizedProp)).toBe(true)
+
+    const newPanelId = await insertPanelRow(env.repo, layoutSessionBlock(), 'c')
+
+    expect(env.repo.block(byBlock.get('a')!).peekProperty(panelMaximizedProp)).not.toBe(true)
+    // …and the new pane keeps the activation the insert gave it.
+    expect(layoutSessionBlock().peekProperty(activePanelIdProp)).toBe(newPanelId)
+    expect(layoutSlotsFromRows(env.layoutSessionBlockId, await layoutRows())
+      .every(slot => slot.kind === 'leaf' && slot.maximized !== true)).toBe(true)
+  })
+
+  it('opening a stacked pane clears it too', async () => {
+    await applyUrl('#ws-1/a;max/b')
+    const byBlock = await rowIdsByBlock()
+
+    await insertSidebarStackedPanel(env.repo, layoutSessionBlock(), 'c')
+
+    expect(env.repo.block(byBlock.get('a')!).peekProperty(panelMaximizedProp)).not.toBe(true)
   })
 
   it('pushes a history entry (maximize is a layout change, so Back un-maximizes)', async () => {

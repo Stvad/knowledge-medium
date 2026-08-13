@@ -449,12 +449,17 @@ export const writePanelContent = async (
 /** Set ONE pane's maximize flag, guarded so `false` is never materialized on a
  *  pane that never had it (absent ≡ false).
  *
- *  Deliberately does NOT enforce the at-most-one-maximized invariant — that
- *  belongs to `togglePanelMaximized`, which lives a layer up in
- *  `panelLayoutProjection` (it needs the session's rows, and this module sits
- *  BELOW it). Safe as an inductive step: a maximized pane renders alone, so
- *  every gesture that can reach this is either in the already-maximized pane
- *  or in a layout where nothing is maximized. */
+ *  Does NOT enforce the at-most-one-maximized rule: that needs the session's
+ *  rows, and this module sits BELOW `panelLayoutProjection`, which owns them.
+ *  Callers that turn the flag ON are therefore required to clear the others
+ *  first — `prepareExclusiveMaximize` is that step, and the video-notes enter
+ *  is currently the only such caller.
+ *
+ *  Do not replace that with an inductive "a maximized pane renders alone, so
+ *  no gesture can reach a second one" argument. It reads plausibly and it is
+ *  false: `LayoutRenderer` skips the flag entirely below 768px, which is a
+ *  narrowed desktop window on the SAME session, so panes stay individually
+ *  reachable while flags pile up — observed producing a two-`max` hash. */
 const setPanelMaximizedInTx = async (
   tx: Tx,
   panelId: string,

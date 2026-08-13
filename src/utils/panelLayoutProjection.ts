@@ -516,6 +516,7 @@ export const insertPanelRow = async (
   repo.tx(async tx => {
     const parent = await tx.get(layoutSessionBlock.id)
     if (!parent) throw new Error(`insertPanelRow: layout session block ${layoutSessionBlock.id} not found`)
+    await clearMaximizedPanelsInTx(tx, parent)
 
     const siblings = await visibleChildrenOf(tx, layoutSessionBlock.id, parent.workspaceId)
     const sourceIndex = options.afterPanelId
@@ -567,6 +568,7 @@ export const insertSidebarStackedPanel = async (
   repo.tx(async tx => {
     const parent = await tx.get(layoutSessionBlock.id)
     if (!parent) throw new Error(`insertSidebarStackedPanel: layout session block ${layoutSessionBlock.id} not found`)
+    await clearMaximizedPanelsInTx(tx, parent)
 
     if (options.sourcePanelId) {
       const source = await tx.get(options.sourcePanelId)
@@ -674,18 +676,50 @@ export const activatePanelRow = async (
 
 /** Walk up from a panel row through any enclosing stack rows to the layout
  *  session row that owns them. Null when the chain is broken (a detached or
- *  mid-delete row). */
-const layoutSessionRowOf = async (tx: Tx, row: BlockData): Promise<BlockData | null> => {
-  let current = row.parentId ? await tx.get(row.parentId) : null
+ *  mid-delete row). Pass `parent` when the caller already read it, so the
+ *  first hop isn't fetched twice. */
+const layoutSessionRowOf = async (
+  tx: Tx,
+  row: BlockData,
+  parent?: BlockData | null,
+): Promise<BlockData | null> => {
+  let current = parent === undefined
+    ? (row.parentId ? await tx.get(row.parentId) : null)
+    : parent
   while (current && isPanelStackRow(current)) {
     current = current.parentId ? await tx.get(current.parentId) : null
   }
   return current
 }
 
+/** The panel rows of the session that owns `panelId`, or null when `panelId`
+ *  is not a live panel row reachable from a layout session.
+ *
+ *  The `PANEL_TYPE` gate is load-bearing, not defensive tidiness: without it
+ *  the ancestor walk happily accepts ANY block, so a caller handing over a
+ *  non-panel id (a bare ui-state block on a surface with no `panelId`) would
+ *  recursively load that block's entire subtree inside the tx and then write
+ *  layout properties onto a user's page block. */
+const sessionPanelRowsInTx = async (
+  tx: Tx,
+  panelId: string,
+): Promise<{session: BlockData; panelRows: BlockData[]} | null> => {
+  const row = await tx.get(panelId)
+  if (!row || row.deleted || !hasBlockType(row, PANEL_TYPE)) return null
+  const session = await layoutSessionRowOf(tx, row)
+  if (!session) return null
+  const panelRows = panelRowsInLayoutOrder(session.id, await loadSubtreeRowsInTx(tx, session))
+  // Defence in depth, NOT load-bearing: the walk found *a* non-stack ancestor,
+  // and this would confirm it was the session that actually renders the pane.
+  // The `PANEL_TYPE` gate above already rejects everything that reaches here
+  // wrongly, so no test can pin this clause through the public path — deleting
+  // it keeps the suite green. Kept because it is the cheap half of the check
+  // and the gate is a type tag, which a raw sync/bridge write could omit.
+  return panelRows.some(candidate => candidate.id === panelId) ? {session, panelRows} : null
+}
+
 /**
- * Toggle the maximize flag on `panelId` — the SOLE writer of the
- * at-most-one-maximized-leaf invariant (design §4.4): every other row in the
+ * Toggle the maximize flag on `panelId`, exclusively: every other row in the
  * session is cleared in the SAME tx, which also repairs a multi-`max` state
  * that a hand-crafted URL reconciled in.
  *
@@ -695,7 +729,14 @@ const layoutSessionRowOf = async (tx: Tx, row: BlockData): Promise<BlockData | n
  * relies on `LayoutRenderer`'s inbound coercion effect (which exists for the
  * URL/Back/snapshot arrivals that have no gesture at all).
  *
- * Returns the resulting flag, or null when the row is not a live panel row.
+ * Turning the flag ON needs something to hide. With a lone pane, maximizing
+ * changes nothing on screen, renders no restore affordance
+ * (`canMaximizePanel`), and leaves a flag that silently swallows the NEXT pane
+ * the user opens — so it is refused rather than planted. The action is
+ * keyboard-dispatchable on surfaces the chrome button never appears on, which
+ * is how that state was reachable at all.
+ *
+ * Returns the resulting flag, or null when the call was refused.
  */
 export const togglePanelMaximized = async (
   repo: Repo,
@@ -703,23 +744,76 @@ export const togglePanelMaximized = async (
 ): Promise<boolean | null> => {
   let result: boolean | null = null
   await repo.tx(async tx => {
-    const row = await tx.get(panelId)
-    if (!row || row.deleted || isPanelStackRow(row)) return
-    const layoutSession = await layoutSessionRowOf(tx, row)
-    if (!layoutSession) return
+    const found = await sessionPanelRowsInTx(tx, panelId)
+    if (!found) return
+    const {session, panelRows} = found
 
-    const next = !isPanelRowMaximized(row)
-    for (const other of panelRowsInLayoutOrder(layoutSession.id, await loadSubtreeRowsInTx(tx, layoutSession))) {
+    const next = !isPanelRowMaximized(panelRows.find(row => row.id === panelId)!)
+    if (next && panelRows.length <= 1) return
+
+    for (const other of panelRows) {
       const wanted = other.id === panelId && next
       if (isPanelRowMaximized(other) === wanted) continue
       await tx.setProperty(other.id, panelMaximizedProp, wanted)
     }
-    if (next && layoutSession.properties[activePanelIdProp.name] !== panelId) {
-      await tx.setProperty(layoutSession.id, activePanelIdProp, panelId)
-    }
+    if (next) await activatePanelRowInTx(tx, session.id, panelId)
     result = next
   }, {scope: ChangeScope.UiState, description: 'toggle panel maximize'})
   return result
+}
+
+/**
+ * Prepare `panelId` to become the maximized pane for a gesture that sets the
+ * flag inside SOMEONE ELSE'S transaction — `navigateInPanel`'s `maximized`
+ * option, whose writer (`setPanelMaximizedInTx`) lives below this module and
+ * cannot enumerate a session's rows.
+ *
+ * Clears every OTHER row's flag, and reports whether maximizing `panelId`
+ * would actually hide anything (same lone-pane rule as
+ * `togglePanelMaximized`), so the caller can decline instead of planting an
+ * invisible flag.
+ *
+ * Writes nothing when no other pane is flagged — the overwhelmingly common
+ * case — so it costs no row change, and therefore no projection push. The
+ * caller's own tx stays the single history entry.
+ */
+export const prepareExclusiveMaximize = async (
+  repo: Repo,
+  panelId: string,
+): Promise<boolean> => {
+  let hidesSomething = false
+  await repo.tx(async tx => {
+    const found = await sessionPanelRowsInTx(tx, panelId)
+    if (!found) return
+    hidesSomething = found.panelRows.length > 1
+    for (const other of found.panelRows) {
+      if (other.id === panelId || !isPanelRowMaximized(other)) continue
+      await tx.setProperty(other.id, panelMaximizedProp, false)
+    }
+  }, {scope: ChangeScope.UiState, description: 'clear other maximized panes'})
+  return hidesSomething
+}
+
+/**
+ * Clear every maximize flag in a layout session.
+ *
+ * Opening a pane is an explicit "show me two things" gesture, so it is also an
+ * arrangement change: a maximize left standing would render the new pane
+ * INVISIBLE (`LayoutRenderer` renders the maximized slot alone) while the
+ * insert path still points `activePanelIdProp` at it — and the maximized
+ * pane's active-panel coercion would then steal that back. Callers that write
+ * editor state onto the new pane (daily-note quick capture) would be writing
+ * into something that never mounts.
+ */
+const clearMaximizedPanelsInTx = async (
+  tx: Tx,
+  session: BlockData,
+): Promise<void> => {
+  const rows = panelRowsInLayoutOrder(session.id, await loadSubtreeRowsInTx(tx, session))
+  for (const row of rows) {
+    if (!isPanelRowMaximized(row)) continue
+    await tx.setProperty(row.id, panelMaximizedProp, false)
+  }
 }
 
 export const deletePanelRow = async (
@@ -730,7 +824,7 @@ export const deletePanelRow = async (
     const row = await tx.get(panelId)
     if (!row) return
     const parent = row.parentId ? await tx.get(row.parentId) : null
-    const layoutSession = await layoutSessionRowOf(tx, row)
+    const layoutSession = await layoutSessionRowOf(tx, row, parent)
     const rowsBeforeDelete = layoutSession
       ? await loadSubtreeRowsInTx(tx, layoutSession)
       : []

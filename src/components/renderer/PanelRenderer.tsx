@@ -272,7 +272,12 @@ export function PanelRenderer({block}: BlockRendererProps) {
       >
         <ChevronRight className="h-4 w-4" />
       </Button>
-      {canMaximizePanel && (
+      {/* `|| panelMaximized`: a flag must never be unclearable from the pane
+          that carries it. `canMaximizePanel` goes false whenever maximizing
+          would be pointless — mobile, or the siblings closed down to one —
+          and a pane that got flagged BEFORE that would otherwise keep its
+          state with no way to drop it. */}
+      {(canMaximizePanel || panelMaximized) && (
         <Button
           variant="ghost"
           size="icon"

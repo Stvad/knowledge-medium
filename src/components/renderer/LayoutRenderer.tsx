@@ -161,10 +161,6 @@ export function LayoutRenderer({block}: BlockRendererProps) {
   const activePanelSlot = activePanelId
     ? panelSlots.find(slot => slot.id === activePanelId)
     : undefined
-  const fallbackActivePanelSlot = isMobile
-    ? panelSlots.at(-1)
-    : panelSlots[0]
-  const mobilePanelSlot = activePanelSlot ?? fallbackActivePanelSlot
   // Desktop analog of the mobile single-pane path: a maximized leaf renders
   // ALONE. Sibling rows are untouched in the substrate, so un-maximizing
   // restores the exact arrangement. First flagged row wins — reconcile writes
@@ -175,6 +171,8 @@ export function LayoutRenderer({block}: BlockRendererProps) {
     const rowsById = new Map(rows.map(row => [row.id, row]))
     return panelSlots.find(slot => isPanelRowMaximized(rowsById.get(slot.id)))
   }, [isMobile, panelSlots, rows])
+  const fallbackActivePanelSlot = isMobile ? panelSlots.at(-1) : panelSlots[0]
+  const mobilePanelSlot = activePanelSlot ?? fallbackActivePanelSlot
   const slotsToRender = isMobile
     ? (mobilePanelSlot ? [mobilePanelSlot] : [])
     : (maximizedPanelSlot ? [maximizedPanelSlot] : slots)
@@ -183,24 +181,37 @@ export function LayoutRenderer({block}: BlockRendererProps) {
   const canMaximizePanel = !isMobile && panelSlots.length > 1
   const hasOneVisiblePanel = slotsToRender.length === 1 && slotsToRender[0]?.kind === 'panel'
 
-  // The maximized pane must BE the active pane. `togglePanelMaximized` already
-  // coerces for the gesture; this covers the arrivals that have no gesture at
-  // all — Back/Forward, a shared `;max` URL, a snapshot apply — where
-  // `reconcilePanelRows` sets the row flag without touching `activePanelIdProp`.
-  // Without it, keyboard dispatch keeps targeting a pane the user cannot see.
-  useEffect(() => {
-    if (!maximizedPanelSlot || activePanelId === maximizedPanelSlot.id) return
-    void block.set(activePanelIdProp, maximizedPanelSlot.id)
-  }, [block, activePanelId, maximizedPanelSlot])
+  // ── The single writer of `activePanelIdProp` from this renderer ──
+  // Two rules, in priority order, deliberately resolved BEFORE the effect
+  // rather than in two effects:
+  //
+  //  1. A maximized pane must be the active pane. It is the only pane
+  //     rendered, so otherwise keyboard dispatch targets a pane the user
+  //     cannot see (design §4.4). `togglePanelMaximized` covers the gesture;
+  //     this covers arrivals with no gesture at all — Back/Forward, a shared
+  //     `;max` link, a snapshot apply — where `reconcilePanelRows` sets the
+  //     row flag and leaves the pointer alone.
+  //  2. Otherwise, seed an unset pointer with the fallback pane.
+  //
+  // As two effects both fired in the same commit whenever the pointer was
+  // unset — which IS the shared-`;max`-link shape — and disagreed: rule 2
+  // seeded `panelSlots[0]` while rule 1 corrected to the maximized pane, so
+  // the pointer transiently named an unrendered pane (exactly what rule 1
+  // exists to prevent) and took several synced writes, each projecting a
+  // replace, to settle.
+  //
+  // Rule 2 keeps its original "pointer set at all" guard: a panel insert
+  // writes `activePanelId` and the new row in one tx, but React subscriptions
+  // can surface the property before this subtree query includes the row —
+  // treating "active id not in current rows" as stale here would let mobile
+  // immediately hide the newly opened panel.
+  const desiredActivePanelSlot = maximizedPanelSlot
+    ?? (activePanelId || activePanelSlot ? undefined : fallbackActivePanelSlot)
 
   useEffect(() => {
-    // A panel insert writes activePanelId and the new row in one tx, but
-    // React subscriptions can surface the property before this subtree
-    // query includes the row. Don't treat "active id not in current rows"
-    // as stale here or mobile can immediately hide the newly opened panel.
-    if (!fallbackActivePanelSlot || activePanelSlot || activePanelId) return
-    void block.set(activePanelIdProp, fallbackActivePanelSlot.id)
-  }, [block, activePanelId, activePanelSlot, fallbackActivePanelSlot])
+    if (!desiredActivePanelSlot || activePanelId === desiredActivePanelSlot.id) return
+    void block.set(activePanelIdProp, desiredActivePanelSlot.id)
+  }, [block, activePanelId, desiredActivePanelSlot])
 
   return <div
     data-layout-session-id={block.id}

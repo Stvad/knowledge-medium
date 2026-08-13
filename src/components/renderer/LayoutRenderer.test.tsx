@@ -6,9 +6,10 @@ import type { User } from '@/data/api'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { Repo } from '@/data/repo'
+import { Block } from '@/data/block'
 import { getLayoutSessionBlock, getUIStateBlock } from '@/data/stateBlocks'
 import { BlockContextProvider, useBlockContext } from '@/context/block'
-import { insertPanelRow, togglePanelMaximized } from '@/utils/panelLayoutProjection'
+import { insertPanelRow } from '@/utils/panelLayoutProjection'
 import { activePanelIdProp, panelMaximizedProp } from '@/data/properties'
 import { LayoutRenderer } from './LayoutRenderer'
 
@@ -200,13 +201,36 @@ describe('LayoutRenderer', () => {
         expect(layoutSessionBlock().peekProperty(activePanelIdProp)).toBe(first))
     })
 
-    it('does not fight the gesture: toggling already activates the pane it maximizes', async () => {
-      const {first, second} = await twoPanels()
+    // With activePanelId UNSET — the shipped shape of a shared `…;max` link,
+    // since reconcile leaves the pointer alone — the coercion effect and the
+    // fallback-active effect both fire in the same commit. A fallback of
+    // `panelSlots[0]` disagreed with the coercion, so activePanelId briefly
+    // named a pane that isn't rendered, then took three writes to settle.
+    it('seeds active to the maximized pane, not the first one, on a gestureless arrival', async () => {
+      const {second} = await twoPanels()
+      await setMaximized(second, true)
+      await layoutSessionBlock().set(activePanelIdProp, undefined)
+      // Record every value written, not just the settled one: the bug settled
+      // correctly too, it just went via the wrong pane first. Capture the
+      // original BEFORE spying — reaching for `Block.prototype.set` inside the
+      // implementation would re-enter the spy.
+      const writes: unknown[] = []
+      const originalSet = Block.prototype.set
+      const setSpy = vi.spyOn(Block.prototype, 'set').mockImplementation(
+        function (this: Block, prop: never, value: never) {
+          if (prop === activePanelIdProp) writes.push(value)
+          return originalSet.call(this, prop, value)
+        } as typeof Block.prototype.set,
+      )
 
-      expect(await togglePanelMaximized(env.repo, first)).toBe(true)
+      renderLayout()
 
-      expect(layoutSessionBlock().peekProperty(activePanelIdProp)).toBe(first)
-      expect(env.repo.block(second).peekProperty(panelMaximizedProp)).not.toBe(true)
+      await vi.waitFor(() =>
+        expect(layoutSessionBlock().peekProperty(activePanelIdProp)).toBe(second))
+      setSpy.mockRestore()
+      // It must never have passed THROUGH the first pane on the way, and must
+      // not have taken repeated synced writes to settle.
+      expect(writes).toEqual([second])
     })
   })
 })

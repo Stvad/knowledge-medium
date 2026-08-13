@@ -34,11 +34,16 @@ const PAGE = 'page-x'
 let sharedDb: TestDb
 let repo: Repo
 let panelId: string
+/** Ids of the extra panes `setup({panes})` opened alongside `panelId`. */
+let siblingPanelIds: string[]
 
 beforeAll(async () => { sharedDb = await createTestDb() })
 afterAll(async () => { await sharedDb.cleanup() })
 
-const setup = async ({videoChildren = [] as string[], panelShows = VIDEO} = {}) => {
+// `panes` is the TOTAL pane count. It matters because maximizing is refused
+// when there is nothing to hide, so any test asserting on the flag has to say
+// whether the pane has company.
+const setup = async ({videoChildren = [] as string[], panelShows = VIDEO, panes = 1} = {}) => {
   await resetTestDb(sharedDb.db)
   repo = createTestRepo({db: sharedDb.db, user: USER}).repo
   repo.setActiveWorkspaceId(WS)
@@ -65,12 +70,17 @@ const setup = async ({videoChildren = [] as string[], panelShows = VIDEO} = {}) 
   const uiState = await getUIStateBlock(repo, WS, USER, {})
   const layoutSession = await getLayoutSessionBlock(uiState, 'layout-session-a')
   panelId = await insertPanelRow(repo, layoutSession, panelShows)
+  siblingPanelIds = []
+  for (let index = 1; index < panes; index++) {
+    siblingPanelIds.push(await insertPanelRow(repo, layoutSession, `sibling-${index}`))
+  }
   await repo.load(panelId)
   panelHistory.clear(panelId)
 }
 
 const panelBlock = () => repo.block(panelId)
 const videoBlock = () => repo.block(VIDEO)
+const isMaximized = (id: string) => repo.block(id).peekProperty(panelMaximizedProp) === true
 
 describe('enterVideoNotesView', () => {
   beforeEach(async () => { await setup() })
@@ -116,20 +126,46 @@ describe('enterVideoNotesView', () => {
   // The immersion half of the gesture: without it, pane-scoping the notes view
   // leaves the video with only its column of a split.
   it('same-block enter maximizes the pane too', async () => {
+    await setup({panes: 2})
+
     await enterVideoNotesView(videoBlock(), panelBlock())
 
-    expect(panelBlock().peekProperty(panelMaximizedProp)).toBe(true)
+    expect(isMaximized(panelId)).toBe(true)
   })
 
   it('nested enter maximizes in the SAME tx — one history entry, not two', async () => {
-    await setup({videoChildren: ['existing-note'], panelShows: PAGE})
+    await setup({videoChildren: ['existing-note'], panelShows: PAGE, panes: 2})
 
     await enterVideoNotesView(videoBlock(), panelBlock())
 
-    expect(panelBlock().peekProperty(panelMaximizedProp)).toBe(true)
+    expect(isMaximized(panelId)).toBe(true)
     expect(panelHistory.getSnapshot(panelId).back).toEqual([
       {blockId: PAGE, viewModeEnter: VIDEO_NOTES_VIEW_MODE},
     ])
+  })
+
+  // A lone pane renders identically maximized or not, offers no restore
+  // button, and keeps the flag through an in-pane navigation away from the
+  // notes view — so the flag would sit invisible until it swallowed the next
+  // pane opened.
+  it('declines to maximize a lone pane — nothing to hide', async () => {
+    await enterVideoNotesView(videoBlock(), panelBlock())
+
+    expect(panelBlock().peekProperty(panelViewModeProp)).toBe(VIDEO_NOTES_VIEW_MODE)
+    expect(isMaximized(panelId)).toBe(false)
+  })
+
+  // The at-most-one rule for this writer: the flag itself is set from inside
+  // navigateInPanel's tx, below the layer that can see a session's rows, so
+  // the enter has to clear the others up front.
+  it('clears another pane\'s stale flag rather than making a second maximized pane', async () => {
+    await setup({panes: 2})
+    await repo.block(siblingPanelIds[0]).set(panelMaximizedProp, true)
+
+    await enterVideoNotesView(videoBlock(), panelBlock())
+
+    expect(isMaximized(panelId)).toBe(true)
+    expect(isMaximized(siblingPanelIds[0])).toBe(false)
   })
 })
 

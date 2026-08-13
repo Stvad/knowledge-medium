@@ -7,6 +7,7 @@ import {
 } from '@/data/properties.js'
 import { panelRenderScopeId } from '@/utils/renderScope'
 import { goBackInPanel, navigateInPanel, panelHistory } from '@/utils/panelHistory'
+import { prepareExclusiveMaximize } from '@/utils/panelLayoutProjection'
 import { VIDEO_NOTES_VIEW_MODE } from './view.ts'
 
 const focusVideoNoteChild = async (
@@ -80,6 +81,15 @@ export const ensureEditableVideoNoteChild = async (
  *  two are independent keys (`;view=video-notes;max`) so the generic
  *  `toggle_maximize_panel` still un-maximizes without leaving notes view.
  *
+ *  `prepareExclusiveMaximize` decides whether maximizing is warranted at all:
+ *  with a lone pane there is nothing to hide, and setting the flag anyway
+ *  leaves state that renders identically, offers no restore button, survives
+ *  an ordinary in-pane navigation away from the notes view, and then swallows
+ *  the next pane the user opens. It also clears any OTHER flagged pane, which
+ *  is what keeps the at-most-one rule true for this writer — the flag itself
+ *  is set from inside `navigateInPanel`'s tx, below the layer that can see a
+ *  session's rows.
+ *
  *  The gesture also seeds the first note child (gesture-side only — the
  *  RENDERER never writes; its empty-state affordance calls
  *  `ensureEditableVideoNoteChild` on activation instead).
@@ -91,9 +101,10 @@ export const enterVideoNotesView = async (
   uiStateBlock: Block,
 ): Promise<void> => {
   if (uiStateBlock.peekProperty(topLevelBlockIdProp) === undefined) return
+  const maximized = await prepareExclusiveMaximize(uiStateBlock.repo, uiStateBlock.id)
   await navigateInPanel(uiStateBlock, videoBlock.id, {
     viewMode: VIDEO_NOTES_VIEW_MODE,
-    maximized: true,
+    maximized,
   })
   await ensureEditableVideoNoteChild(
     videoBlock,

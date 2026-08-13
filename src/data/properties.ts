@@ -104,11 +104,19 @@ export const panelViewModeProp = seedProperty({
  *  are untouched in the substrate, so un-maximizing restores the exact
  *  arrangement.
  *
- *  Invariant — at most one maximized leaf per layout session — has a single
- *  writer: `togglePanelMaximized` clears every other row's flag in the same
- *  tx. Reconcile deliberately writes whatever the hash says (a multi-`max`
- *  hash can only be hand-crafted), and `LayoutRenderer` tolerates that by
- *  rendering the FIRST maximized row.
+ *  At most one maximized leaf per layout session. Every GESTURE that sets the
+ *  flag makes this true by clearing the others in the same pass —
+ *  `togglePanelMaximized` directly, the video-notes enter via
+ *  `prepareExclusiveMaximize` — and opening a pane clears it outright
+ *  (`clearMaximizedPanelsInTx`). It is enforced, not assumed: `LayoutRenderer`
+ *  ignores the flag entirely on a narrow viewport, so "the maximized pane
+ *  renders alone" is NOT a premise you may reason from — a window under 768px
+ *  leaves every pane reachable with flags able to accumulate.
+ *
+ *  Inbound reconcile is the one deliberate exception: it writes whatever the
+ *  hash says, so a hand-crafted multi-`max` URL round-trips instead of being
+ *  silently rewritten. `LayoutRenderer` tolerates that by rendering the FIRST
+ *  maximized row, and the next toggle repairs it.
  *
  *  A ROW prop, not a layout-session pointer like `activePanelIdProp`: the
  *  flag dies with its row, so nothing needs the remap-on-delete machinery
