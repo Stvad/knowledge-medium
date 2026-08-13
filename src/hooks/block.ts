@@ -40,7 +40,6 @@ import { useRepo } from '@/context/repo.js'
 
 const EMPTY_BLOCK_DATA_ARRAY: readonly BlockData[] = Object.freeze([])
 
-
 export interface BlockContentRevision {
   content: string
   updatedAt: number
@@ -175,9 +174,11 @@ export function useHandle<T, S = T | undefined>(
 
   // Ensure-load: fire-and-forget on mount. Idempotent (LoaderHandle and
   // Block both dedup their inflight load promise). The status() check
-  // prevents an unnecessary roundtrip when the handle is already ready — a
+  // prevents an unnecessary roundtrip when the handle is already ready. A
   // disposed handle reports its live replacement's status, so this reads the
-  // replacement, not a corpse.
+  // replacement rather than a corpse; with the key vacant it reports
+  // 'disposed' and we skip — the subscribe below resurrects it and its own
+  // first-subscriber load covers the ensure-load this one declined.
   useEffect(() => {
     if (handle.status() === 'idle') {
       void handle.load().catch(() => {/* error stored on the handle */})
@@ -191,11 +192,12 @@ export function useHandle<T, S = T | undefined>(
   // getSelection, finds the stable reference held by committedRef, and
   // skips the re-render.
   //
-  // The disposed branch keeps a subtree recoverable after its effects have
-  // been unmounted long enough for the store to GC its handle —
-  // `<Activity mode="hidden">` is the case that produces it, and subscribing
-  // to the corpse is a silent no-op with no snapshot change left to trigger a
-  // re-render. Full mechanism: docs/handle-lifecycle-hidden-subtrees.html.
+  // No disposed-handle branch here on purpose. A subtree whose effects were
+  // unmounted long enough for the store to GC its handle
+  // (`<Activity mode="hidden">`) recovers because `handle.subscribe` itself
+  // resolves to whatever is live at the key — and it has to live there rather
+  // than in this hook, because the caller cannot re-acquire under React
+  // Compiler. Full mechanism: docs/handle-lifecycle-hidden-subtrees.html.
   const subscribe = useCallback(
     (listener: () => void) => handle.subscribe(listener),
     [handle],

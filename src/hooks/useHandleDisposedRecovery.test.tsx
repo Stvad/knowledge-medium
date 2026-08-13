@@ -81,13 +81,14 @@ describe('useHandle re-acquires a disposed handle', () => {
     }
 
     // memo + stable element identity so REVEALING the lane bails out instead
-    // (redundant with each other — either bailout alone suffices; both are
-    // kept so an edit removing one doesn't silently make this vacuous)
     // of re-rendering the consumer. That is what makes this faithful: in the
     // live app the reveal is a bailout (nothing about the subtree's props
     // changed), so the consumer never re-runs its factory and never discovers
     // that the handle it holds is dead. A test that lets the reveal re-render
-    // the consumer heals through that render and pins nothing.
+    // the consumer heals through that render and pins nothing. The two
+    // bailouts are redundant with each other — either alone suffices — and
+    // both are kept so an edit dropping one doesn't silently make this
+    // vacuous.
     const Consumer = memo(() => {
       // Read the context so a change to it marks this component dirty even
       // while it sits inside a hidden Activity boundary.
@@ -149,7 +150,8 @@ describe('useHandle re-acquires a disposed handle', () => {
 
     const Consumer = memo(() => {
       useContext(TickContext)
-      // eslint-disable-next-line react-hooks/exhaustive-deps -- models compiler output: deps that never change
+      // Empty deps on purpose: models compiler output, whose cache key here
+      // is a set of values that never change.
       const handle = useMemo(() => acquire(), [])
       const value = useHandle(handle, { selector: v => (v as number[] | undefined) ?? EMPTY })
       return <div data-testid="memoized">{value.length}</div>

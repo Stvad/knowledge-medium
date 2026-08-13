@@ -36,11 +36,12 @@
 <aside class="doc-status" style="margin:0 0 1.25rem;padding:.6rem .9rem;border:1px solid #b8860b;border-radius:6px;background:rgba(184,134,11,.12);font-size:.85rem;line-height:1.45">
 <strong>Status: implemented, then corrected</strong> &middot; a defect report whose fix now ships in the same PR
 (#532). Reproduced end-to-end on the hosted build (2026-08-04) against a live workspace, then narrowed
-by reading React 19.2.6's own internals. Revised through two adversarial review rounds, which added
-the <code>read()</code>/Suspense fix and the re-acquire attempt cap described below.
+by reading React 19.2.6's own internals. Revised through several adversarial review rounds, which added
+the <code>read()</code>/Suspense fix, the re-acquire attempt cap described below, and — after the
+correction — the <code>generation</code> guard on the mid-load settle path.
 The first fix (hook-side re-acquire) proved
 largely inert in the built app — see §"Correction: the compiler memoizes the factory".
-<strong>Last verified against code:</strong> 2026-08-13 (<code>src/data/internals/handleStore.ts</code>,
+<strong>Last verified against code:</strong> 2026-08-12 (<code>src/data/internals/handleStore.ts</code>,
 <code>src/hooks/block.ts</code>, <code>src/data/api/handle.ts</code> as implemented on this branch).
 </aside>
 
@@ -297,7 +298,7 @@ spends two attempts on one logical recovery.</p>
   <td>Rejected here, then adopted once the compiler made caller-side re-acquisition impossible; the
   split-ownership objection is answered by adopting an existing replacement before resurrecting.
   Original reasoning: have a disposed handle re-register itself with the store. <code>getOrCreate</code> is a bare
-  synchronous map lookup (<span class="filepath">handleStore.ts:310–316</span>), so a handle
+  synchronous map lookup (<span class="filepath">handleStore.ts:getOrCreate()</span>), so a handle
   re-inserting under its old key <em>after</em> another consumer's render already minted a
   replacement would split ownership — double loads, split notifications. Re-acquiring through the
   factory keeps one owner per key.</td>
@@ -347,6 +348,25 @@ a replacement if the store has one and otherwise resurrecting the instance itsel
 because it still holds its key and loader. Adoption-before-resurrection is what keeps one owner per
 key — the objection that ruled this out the first time. The hook-side re-acquire machinery is removed:
 it cannot work under the compiler, and its subscribe branch actively blocked the new path.</p>
+
+<p><strong>Consequence: <code>disposed</code> stops being a one-way flag</strong>, and that quietly
+broke a guard that predates this work. <code>runLoader</code> settles with
+<code>if (this.disposed) throw</code> — "my handle died while I was loading, drop the result." Once a
+handle can come back, a pre-disposal load finds the flag reading <code>false</code> again and applies:
+it overwrites the fresh value, rolls <code>deps</code> back to the dead run's set (so later
+invalidations match the wrong rows), and spends a <code>release()</code> that belongs to the
+resurrected handle's subscriber — GC'ing a handle somebody is actively watching. So the settle path now
+compares a <code>generation</code> counter bumped by every <code>dispose()</code>, which is what "this
+run was cancelled" actually means. Reaching it needs a disposal while a load is in flight, and a load
+holds a ref-count, so only <code>HandleStore.clear()</code> gets there today — but that is public API
+and the handle should not depend on who called it.</p>
+
+<p>Fixing that turned up a neighbouring bug that is <em>not</em> ours: the disposed-mid-load path never
+released its <code>NotifyBatch</code> slot. A comment claimed the rejection handler covered it, but a
+throw from a <code>then</code>'s fulfilled handler rejects the promise that <code>then</code> returns —
+it does not route to the rejection handler beside it. A leaked slot means the barrier never closes and
+every <em>other</em> handle matched by the same invalidation silently loses its notify. Reproduced
+against the pre-branch commit, then fixed here since the code was already open.</p>
 
 <p>Measured end to end against a locally-patched build (the perspective host under
 <code>&lt;Activity&gt;</code>, hidden 9&nbsp;s): unpatched blanks the lane; patched recovers in 4 of 5

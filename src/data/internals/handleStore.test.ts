@@ -381,6 +381,156 @@ describe('LoaderHandle GC', () => {
     expect(store.size()).toBe(1)
   })
 
+  it('a load in flight at disposal cannot settle onto the resurrected handle', async () => {
+    // Resurrection made `disposed` a flag that flips BACK, so the mid-load
+    // guard can no longer read it: the pre-disposal load finds `disposed ===
+    // false` and applies. Three distinct damages, all pinned below — it
+    // overwrites the fresh value, rolls the deps back to the dead run's set
+    // (so later invalidations match the wrong rows), and spends a `release()`
+    // that belongs to the resurrected handle's subscriber, GC'ing a handle
+    // somebody is actively watching.
+    const sched = manualScheduler()
+    const store = makeStore(100, sched)
+    let releaseFirst: ((v: number[]) => void) | undefined
+    let runs = 0
+    const loader = async (ctx: { depend: (d: Dependency) => void }) => {
+      runs++
+      const id = `dep-${runs}`
+      ctx.depend({ kind: 'row', id })
+      return runs === 1 ? new Promise<number[]>(r => { releaseFirst = r }) : [99]
+    }
+    const h = store.getOrCreate('mid', () => new LoaderHandle({ store, key: 'mid', loader }))
+    const first = h.load()
+    expect(releaseFirst).toBeDefined()
+
+    // Disposal while that load is in flight. Only `HandleStore.clear()`
+    // reaches this today (a load holds a ref-count, so GC can't), but clear()
+    // is public API and the handle must not depend on who called it.
+    store.clear()
+    const seen: unknown[] = []
+    h.subscribe(v => seen.push(v))
+    await vi.waitFor(() => expect(h.peek()).toEqual([99]))
+
+    releaseFirst!([1, 2, 3])
+    await expect(first).rejects.toThrow(/disposed mid-load/)
+    await Promise.resolve()
+
+    expect(h.peek()).toEqual([99])
+    expect(seen).toEqual([[99]])
+    expect(h.__depsForTest()).toEqual([{ kind: 'row', id: 'dep-2' }])
+    // The subscriber's ref-count survived, so the GC sweep is a no-op.
+    sched.flush(1000)
+    expect(h.status()).toBe('ready')
+    expect(store.size()).toBe(1)
+  })
+
+  it('a load that REJECTS after disposal cannot error the resurrected handle', async () => {
+    // Same generation guard, rejection half: without it the dead run writes
+    // status 'error' onto the live handle and spends its ref-count too.
+    const store = makeStore(1000)
+    let failFirst: ((e: Error) => void) | undefined
+    let runs = 0
+    const loader = async () => {
+      runs++
+      return runs === 1 ? new Promise<number[]>((_, rej) => { failFirst = rej }) : [42]
+    }
+    const h = store.getOrCreate('midrej', () => new LoaderHandle({ store, key: 'midrej', loader }))
+    const first = h.load()
+    store.clear()
+    h.subscribe(() => {})
+    await vi.waitFor(() => expect(h.peek()).toEqual([42]))
+
+    failFirst!(new Error('stale run blew up'))
+    await expect(first).rejects.toThrow('stale run blew up')
+    await Promise.resolve()
+
+    expect(h.status()).toBe('ready')
+    expect(h.peek()).toEqual([42])
+  })
+
+  it('a batch member that disposes mid-load still releases its slot', async () => {
+    // Pre-existing, and load-bearing for everyone else in the batch: a throw
+    // from a `then`'s FULFILLED handler rejects the returned promise, it does
+    // not route to the rejection handler beside it — so the disposed-mid-load
+    // path had to release the slot itself. Left leaking, the barrier never
+    // closes and every OTHER matched handle's notify is dropped on the floor.
+    const store = makeStore(1000)
+    const dep: Dependency = { kind: 'row', id: 'shared' }
+    let releaseSlow: ((v: number[]) => void) | undefined
+    let slowRuns = 0
+    const slowLoader = async (ctx: { depend: (d: Dependency) => void }) => {
+      ctx.depend(dep)
+      slowRuns++
+      // Second run (the batched one) hangs until we say so.
+      if (slowRuns === 1) return [0]
+      return new Promise<number[]>(r => { releaseSlow = r })
+    }
+    let n = 0
+    // A CHANGING value: an equal reload is deduped by the structural diff and
+    // would look like a swallowed notify.
+    const fastLoader = async (ctx: { depend: (d: Dependency) => void }) => {
+      ctx.depend(dep)
+      return [++n]
+    }
+    const slow = store.getOrCreate('slow', () => new LoaderHandle({ store, key: 'slow', loader: slowLoader }))
+    const fast = store.getOrCreate('fast', () => new LoaderHandle({ store, key: 'fast', loader: fastLoader }))
+    const fastSeen: unknown[] = []
+    fast.subscribe(v => fastSeen.push(v))
+    slow.subscribe(() => {})
+    await vi.waitFor(() => expect(fastSeen).toEqual([[1]]))
+
+    // Both declare the same dep, so this opens a real batch (the store skips
+    // the barrier for a single match — with one member there is nothing for a
+    // leaked slot to strand).
+    store.invalidate({ rowIds: ['shared'] })
+    expect(slowRuns).toBe(2)
+    expect(releaseSlow).toBeDefined()
+    slow.dispose()
+    releaseSlow!([0])
+
+    // fast's notify was queued behind the barrier; it only lands if slow's
+    // vanished slot was released.
+    await vi.waitFor(() => expect(fastSeen).toEqual([[1], [2]]))
+  })
+
+  it('dispose() resets refCount so a resurrected handle can GC again', async () => {
+    // `listeners.clear()` neuters every outstanding unsubscribe closure (its
+    // `listeners.delete` returns false and it declines to release), so a
+    // ref-count left standing at disposal can never drain back to zero — the
+    // resurrected handle would then live forever. Only `HandleStore.clear()`
+    // disposes at a nonzero count today, but clear() is public API.
+    const sched = manualScheduler()
+    const store = makeStore(100, sched)
+    const { loader } = collectingLoader([1])
+    const h = store.getOrCreate('rc', () => new LoaderHandle({ store, key: 'rc', loader }))
+    h.subscribe(() => {})            // refCount 1
+    await vi.waitFor(() => expect(h.status()).toBe('ready'))
+    store.clear()                    // disposes at refCount 1
+
+    const unsub = h.subscribe(() => {})
+    await vi.waitFor(() => expect(h.status()).toBe('ready'))
+    unsub()
+    sched.flush(100)
+    expect(h.status()).toBe('disposed')
+  })
+
+  it('a disposed handle registered at its own key resurrects instead of recursing', async () => {
+    // `liveAtKey` excludes `this` from "what is live at my key". Without that
+    // exclusion a disposed handle that IS the registered one (a factory
+    // handing `getOrCreate` a cached corpse) resolves to itself, and every
+    // entry point recurses until the stack blows.
+    const store = makeStore(1000)
+    const { loader } = collectingLoader([5])
+    const h = new LoaderHandle({ store, key: 'self', loader })
+    h.dispose()
+    store.getOrCreate('self', () => h)
+    expect(store.peekHandle('self')).toBe(h)
+
+    expect(h.peek()).toBeUndefined()
+    await expect(h.load()).resolves.toEqual([5])
+    expect(h.status()).toBe('ready')
+  })
+
   it('disposes after gcTimeMs once subscribers drain', async () => {
     const sched = manualScheduler()
     const store = new HandleStore({ gcTimeMs: 100, schedule: sched.schedule })

@@ -472,6 +472,13 @@ export class LoaderHandle<T> implements Handle<T>, RegisteredHandle {
   private refCount = 0
   private cancelGc: (() => void) | null = null
   private disposed = false
+  /** Bumped by every `dispose()`. A loader run captures it at start and
+   *  settles only if it still matches, which is what "this run wasn't
+   *  cancelled" means now that `disposed` can flip back to false
+   *  (`resolveLive`). Reading the flag instead would let a pre-disposal
+   *  load publish its value onto — and consume a ref-count of — the
+   *  resurrected handle. */
+  private generation = 0
 
   /** Set when `invalidate()` fires while a load is in flight. The
    *  inflight load may have already read stale data from SQL before the
@@ -556,12 +563,20 @@ export class LoaderHandle<T> implements Handle<T>, RegisteredHandle {
   /**
    * The effecting half: resolve to the live handle at this key, resurrecting
    * THIS instance when the key is vacant (we still hold both the key and the
-   * loader). Only ever called from effect-time paths — subscribe / load /
-   * read — never during render.
+   * loader). Called only from paths that already act rather than observe:
+   * `subscribe` / `load` / `loadFresh` / `read`. `read` is the Suspense path,
+   * so this CAN run inside a render — but that render was already going to
+   * kick a load through `throw this.load()`, and a resurrection an abandoned
+   * render leaves behind is retained by nobody and GCs on the timer below.
+   * The reads that run on EVERY render (`peek`, `status`) stay on `liveAtKey`.
    *
    * It cannot produce two live handles for one key: if the store already has
    * a replacement we adopt it, and otherwise we re-register ourselves through
    * `getOrCreate`, which is the same single-owner path everyone else uses.
+   *
+   * Note the consequence for `disposed`: it is no longer a one-way flag, so
+   * nothing may treat "currently disposed" as "this loader run was
+   * cancelled". `runLoader` compares `generation` instead.
    */
   private resolveLive(): LoaderHandle<T> {
     if (!this.disposed) return this
@@ -579,6 +594,9 @@ export class LoaderHandle<T> implements Handle<T>, RegisteredHandle {
     // epoch owner (Repo) to retire old-epoch keys explicitly; a handle cannot
     // see the current epoch from here.
     this.disposed = false
+    // Re-asserting what `dispose()` already zeroed, so resurrection does not
+    // silently depend on that field list staying complete. Neither line
+    // changes behavior today — removing either passes the suite.
     this.status_ = 'idle'
     this.stale = false
     this.store.getOrCreate(this.key, () => this)
@@ -592,10 +610,12 @@ export class LoaderHandle<T> implements Handle<T>, RegisteredHandle {
     return this
   }
 
-  /** Reports `'disposed'` after GC rather than the `'idle'` the reset
-   *  `status_` holds: a holder that can't tell a dead handle from a fresh one
-   *  will happily `load()` it (rejected) and `subscribe()` to it (a no-op),
-   *  and never learn it must re-acquire. See `useHandle`. */
+  /** A disposed handle reports its replacement's status when the store has
+   *  one, and `'disposed'` only when the key is genuinely vacant — never the
+   *  `'idle'` that the reset `status_` field holds, which would be
+   *  indistinguishable from a fresh handle. Callers use it to skip a redundant
+   *  ensure-load (`useHandle`), not to decide whether the handle is usable:
+   *  every operation resolves on its own. Pure — safe on the render path. */
   status(): HandleStatus {
     if (!this.disposed) return this.status_
     const live = this.liveAtKey()
@@ -667,6 +687,8 @@ export class LoaderHandle<T> implements Handle<T>, RegisteredHandle {
     this.status_ = this.value === undefined ? 'loading' : this.status_
     this.error = undefined
     this.retain() // count the inflight load against GC
+    // Identity of THIS run against disposal. See `generation`.
+    const generation = this.generation
 
     // Snapshot the prior deps so we can restore them if this load
     // fails; meanwhile this.deps is rewritten as ctx.depend calls land,
@@ -705,8 +727,22 @@ export class LoaderHandle<T> implements Handle<T>, RegisteredHandle {
 
     const p = this.loader(ctx).then(
       (value) => {
-        // Disposal during a load: don't apply, don't notify.
-        if (this.disposed) throw new Error(`Handle ${this.key} disposed mid-load`)
+        // Disposal during a load: don't apply, don't notify. Compared by
+        // generation, not by the `disposed` flag — a handle disposed mid-load
+        // can be resurrected before this settles (`resolveLive`), and then the
+        // flag reads false and this superseded run would overwrite the live
+        // value/deps AND spend a `release()` that belongs to the resurrected
+        // handle's subscriber, GC'ing it out from under them.
+        //
+        // The batch slot is released HERE rather than in the rejection handler
+        // below: `then(onFulfilled, onRejected)` does NOT route a throw from
+        // onFulfilled into onRejected — it rejects the returned promise — so
+        // without this the barrier never closes and every OTHER member of the
+        // batch loses its notify.
+        if (this.generation !== generation) {
+          batch?.finish(null)
+          throw new Error(`Handle ${this.key} disposed mid-load`)
+        }
         // Replace live deps with the freshly-collected set (drops any
         // priorDeps the loader didn't re-declare).
         this.deps = collected
@@ -724,7 +760,9 @@ export class LoaderHandle<T> implements Handle<T>, RegisteredHandle {
           }
         }
         this.changesDuringLoad = []
-        const needsPostSettleReload = this.pendingReinvalidate && !this.disposed
+        // No `&& !this.disposed`: the generation check above already
+        // established this run is current, and disposal always bumps it.
+        const needsPostSettleReload = this.pendingReinvalidate
         this.value = value
         this.status_ = 'ready'
         this.error = undefined
@@ -772,7 +810,7 @@ export class LoaderHandle<T> implements Handle<T>, RegisteredHandle {
           } else {
             this.store.metrics.reloadsAfterSettle++
             queueMicrotask(() => {
-              if (this.disposed) return
+              if (this.generation !== generation) return
               // No-op if a fresher load is already in flight (subscribe
               // path or another invalidate scheduled it).
               if (this.inflight) return
@@ -783,13 +821,18 @@ export class LoaderHandle<T> implements Handle<T>, RegisteredHandle {
         return value
       },
       (err) => {
-        // Release the batch slot unconditionally — including the
-        // disposed-mid-load case (where the success path throws into
-        // here). The barrier must not hang on a vanished participant.
-        // Failed loads contribute no notify; the prior notify, if any,
-        // already fired on the last successful settle.
+        // Release the batch slot unconditionally: the barrier must not hang
+        // on a participant whose loader threw. Failed loads contribute no
+        // notify; the prior notify, if any, already fired on the last
+        // successful settle. (The disposed-mid-load case does NOT arrive
+        // here — a throw from the fulfilled handler rejects the promise this
+        // `then` returns rather than routing to this handler — so that path
+        // releases its own slot up there.)
         batch?.finish(null)
-        if (!this.disposed) {
+        // Generation, not the `disposed` flag: a run superseded by a
+        // dispose+resurrect must not write `status: 'error'` onto the live
+        // handle or spend its ref-count. See `generation`.
+        if (this.generation === generation) {
           // Roll back to the priorDeps — collected was incomplete.
           // The queued changes are discarded along with the partial
           // deps; a successful retry will rebuild both from scratch.
@@ -813,7 +856,7 @@ export class LoaderHandle<T> implements Handle<T>, RegisteredHandle {
             } else {
               this.store.metrics.reloadsAfterSettle++
               queueMicrotask(() => {
-                if (this.disposed) return
+                if (this.generation !== generation) return
                 if (this.inflight) return
                 void this.runLoader().catch(() => {/* error on handle */})
               })
@@ -953,6 +996,9 @@ export class LoaderHandle<T> implements Handle<T>, RegisteredHandle {
   dispose(): void {
     if (this.disposed) return
     this.disposed = true
+    // Cancels every loader run started before this point, whether or not the
+    // handle is later resurrected. See `generation`.
+    this.generation++
     if (this.cancelGc) {
       this.cancelGc()
       this.cancelGc = null
