@@ -67,7 +67,7 @@ const manualScheduler = () => {
   }
 }
 
-describe('useHandle re-acquires a disposed handle', () => {
+describe('useHandle recovers from a disposed handle', () => {
   it('recovers after a hidden subtree outlives two handle GCs', async () => {
     const sched = manualScheduler()
     const store = new HandleStore({ gcTimeMs: 100, schedule: sched.schedule })
@@ -127,8 +127,9 @@ describe('useHandle re-acquires a disposed handle', () => {
     expect(created).toBeGreaterThan(createdWhileVisible)
     sched.flush(100)      // second death — the one that defeats React's self-heal
 
-    // Reveal. The reconnected subscription lands on a disposed handle; only
-    // `useHandle` forcing a re-acquiring render gets the data back.
+    // Reveal. The reconnected subscription lands on a disposed handle, and
+    // nothing in this hook can re-acquire one (the second test shows why):
+    // recovery is `handle.subscribe` resolving to whatever is live at the key.
     rerender(<Harness hidden={false} tick={1}/>)
     // waitFor, not a counted number of act() flushes: how many render passes
     // the recovery takes is React's business, and pinning it to a count made

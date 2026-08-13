@@ -36,9 +36,10 @@
 <aside class="doc-status" style="margin:0 0 1.25rem;padding:.6rem .9rem;border:1px solid #b8860b;border-radius:6px;background:rgba(184,134,11,.12);font-size:.85rem;line-height:1.45">
 <strong>Status: implemented, then corrected</strong> &middot; a defect report whose fix now ships in the same PR
 (#532). Reproduced end-to-end on the hosted build (2026-08-04) against a live workspace, then narrowed
-by reading React 19.2.6's own internals. Revised through several adversarial review rounds, which added
+by reading React 19.2.6's own internals. Revised through four adversarial review rounds, which added
 the <code>read()</code>/Suspense fix and the re-acquire attempt cap described in §2 — and then, once the
-correction retired that whole approach, the <code>generation</code> guard on the mid-load settle path.
+correction retired that whole approach, the <code>generation</code> guard on the mid-load settle path,
+its re-check before <code>release()</code>, and the <code>loadFresh()</code> re-check.
 The first fix (hook-side re-acquire) proved largely inert in the built app and its code is gone; §2 is
 kept only because the correction reads as an answer to it. See §"Correction: the compiler memoizes the
 factory".
@@ -55,8 +56,11 @@ smallest fix that closes it.</small></p>
 permanently blank — no error, no pending work, no recovery short of remounting it. The cause is a
 lifecycle gap between <code>HandleStore</code>'s ref-counted GC and the fact that a hidden subtree
 <em>can still render while its effects are unmounted</em>. Two small changes close it: make handle
-disposal <strong>observable</strong> (a <code>'disposed'</code> status), and have
-<code>useHandle</code> <strong>re-acquire</strong> when the handle it holds is dead.
+disposal <strong>observable</strong> (a <code>'disposed'</code> status), and have a disposed handle
+<strong>resolve itself</strong> to whatever is live at its key — adopting an existing replacement, or
+resurrecting the instance when the key is vacant. (The first attempt put the repair in
+<code>useHandle</code> instead; §"Correction: the compiler memoizes the factory" is why that could not
+work.)
 </div>
 
 <h2>Why this matters</h2>
@@ -376,6 +380,34 @@ its ref-count"</em>, which fails if the check is deleted, if it reads <code>disp
 <code>generation</code>, or if it is moved to either side of the notify/<code>release()</code> pair.
 The rejection half needs no equivalent: its <code>batch.finish()</code> runs <em>before</em> its
 generation check, so listener code cannot get in behind it.</p>
+
+<p><strong>A third instance of the same shape, found by asking where else a check outlives its
+answer.</strong> Every disposal guard on the class is synchronous except one: <code>loadFresh()</code>
+checks <code>disposed</code> at entry and then <em>awaits</em> — the load, then a microtask — before
+reading <code>inflight</code>&nbsp;/&nbsp;<code>stale</code>&nbsp;/&nbsp;<code>value</code> off
+<code>this</code>. A disposal landing inside those awaits (a listener calling <code>store.clear()</code>
+from the settle notify; or a <code>release()</code> draining the last ref under a non-positive
+<code>gcTimeMs</code>) leaves all three cleared, and the loop reports <em>"completed without a
+value"</em> for a load that in fact succeeded — the exact failure the entry check was added to remove,
+one await later, and worse than plain <code>load()</code>, which resolves on that same path.
+Reproduced both ways before fixing. The check is re-taken after the awaits, and forwards the whole
+operation so the completeness boundary survives with it; the entry check is now a redundant fast path
+and is labelled as one. Pinned by <em>"loadFresh() keeps its boundary across a disposal that lands
+mid-flight"</em>, whose single assertion separates all three outcomes — throw (no re-check, or one
+placed before the awaits), the suspect value (a re-check forwarding plain <code>load()</code>), the
+clean value.</p>
+
+<p>A neighbouring defect from the same sweep is <strong>reported, not fixed</strong>: it belongs to
+<code>NotifyBatch</code> rather than to handle lifecycle, and repairing it is a semantics call on the
+fan-out contract. A batch member's queued notify closes over the value it settled with, and the
+barrier does not open until the slowest member finishes — so a handle invalidated again inside that
+window notifies with the NEW value immediately and then, at flush, with the OLD one. Reproduced:
+subscribers saw <code>[1], [3], [2]</code>. Harmless for <code>useHandle</code>, whose listener
+discards the pushed value and re-reads <code>peek()</code>, but
+<code>GroupedBacklinksLiveBridge</code>
+(<span class="filepath">src/plugins/grouped-backlinks/GroupedLinkedReferences.tsx:652–656</span>)
+consumes the pushed value directly. Two candidate repairs — have the thunk read <code>this.value</code>
+at flush time, or drop a queued notify superseded by a later one from the same handle.</p>
 
 <p>Fixing that turned up a neighbouring bug that is <em>not</em> ours: the disposed-mid-load path never
 released its <code>NotifyBatch</code> slot. A comment claimed the rejection handler covered it, but a

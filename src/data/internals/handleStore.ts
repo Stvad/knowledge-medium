@@ -646,16 +646,29 @@ export class LoaderHandle<T> implements Handle<T>, RegisteredHandle {
    * while its loader was running. Projector priming uses this completeness
    * boundary so a cached or superseded snapshot cannot release writes. */
   async loadFresh(): Promise<T> {
-    // Forward the WHOLE operation, not just the inner load(): the loop below
-    // reads `inflight` / `stale` / `value` off `this`, and disposal cleared
-    // them — so delegating only the load would settle against a corpse and
-    // throw "completed without a value" even though the replacement loaded.
+    // Fast path only — the in-loop check below subsumes it (deleting this
+    // line keeps the suite green), and it is kept because entering disposed
+    // is the common shape and skipping a wasted lap costs one comparison.
     if (this.disposed) return this.resolveLive().loadFresh()
     while (true) {
       await this.load()
       // A dirty settle schedules its follow-up reload in a microtask before
       // resolving the load promise. Yield once so that reload becomes visible.
       await Promise.resolve()
+      // The real check, and it has to sit HERE — after the awaits, before the
+      // state reads. This is the only method on the class that awaits between
+      // deciding "am I disposed" and acting on the answer, and `load()` settles
+      // by running LISTENER code: a listener is free to dispose this handle
+      // (`HandleStore.clear()`), as is a `release()` that drains the last ref
+      // under a non-positive gcTimeMs. Reading `inflight`/`stale`/`value` off
+      // a corpse — disposal cleared all three — then reports "completed
+      // without a value" for a load that in fact succeeded. Forward the WHOLE
+      // operation, never the inner `load()`: this method's contract is that
+      // the value it returns was not invalidated while its loader ran, and
+      // delegating only the load drops that. Same class as the two generation
+      // re-checks in `runLoader` — a check consumed after re-entrant code has
+      // had its turn.
+      if (this.disposed) return this.resolveLive().loadFresh()
       if (this.inflight || this.stale) continue
       if (this.value === undefined) {
         throw new Error(`Handle ${this.key} completed without a value`)

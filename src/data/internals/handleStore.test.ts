@@ -341,6 +341,52 @@ describe('LoaderHandle GC', () => {
     await expect(settled).resolves.toEqual([2])
   })
 
+  it('loadFresh() keeps its boundary across a disposal that lands mid-flight', async () => {
+    // The two tests above enter loadFresh already disposed. That entry check
+    // is only true at entry, and loadFresh is the one method on this class
+    // that awaits between its check and the state it reads: `load()` settles
+    // by running LISTENER code, and a listener may dispose the handle
+    // (`store.clear()` is public API — the same reachability the mid-load
+    // guard accepts), as may a `release()` that drains the last ref under a
+    // non-positive gcTimeMs. So the check has to be re-taken after the awaits
+    // and before the state reads, and it has to forward the whole operation.
+    //
+    // Run 1 settles and its notify disposes the handle. Run 2 (the
+    // resurrection's) is invalidated while in flight, so it is suspect. Only
+    // run 3 is clean. The single assertion below separates all three failure
+    // modes: no re-check at all (or one placed before the awaits) throws
+    // "completed without a value" off the cleared corpse; a re-check that
+    // forwards plain `load()` returns the suspect [2]; correct is [3].
+    const store = makeStore(1000)
+    const dep: Dependency = { kind: 'row', id: 'lfr' }
+    let runs = 0
+    let releaseSecond: ((v: number[]) => void) | undefined
+    const loader = async (ctx: { depend: (d: Dependency) => void }) => {
+      runs++
+      ctx.depend(dep)
+      if (runs === 2) return new Promise<number[]>(r => { releaseSecond = r })
+      return [runs]
+    }
+    const h = store.getOrCreate('lf-mid', () =>
+      new LoaderHandle({ store, key: 'lf-mid', loader }),
+    )
+    let armed = true
+    h.subscribe(() => {
+      if (!armed) return
+      armed = false
+      store.clear()
+    })
+
+    const settled = h.loadFresh()
+    await vi.waitFor(() => expect(releaseSecond).toBeDefined())
+    // Through the store, not `h.invalidate()`: this also pins that the
+    // resurrection re-registered, since an unregistered handle is never walked.
+    store.invalidate({ rowIds: ['lfr'] })
+    releaseSecond!([2])
+
+    await expect(settled).resolves.toEqual([3])
+  })
+
   it('load() through a disposed handle resolves instead of rejecting', async () => {
     // The imperative path: a caller holding a stale handle (memoized, or kept
     // across a hide) awaits load() without ever subscribing.
