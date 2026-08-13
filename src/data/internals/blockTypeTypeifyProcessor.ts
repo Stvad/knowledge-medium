@@ -111,6 +111,19 @@ export const BLOCK_TYPE_TYPEIFY_PROCESSOR = defineSameTxProcessor({
         assertRoundTrippableReferenceLabel(name, 'Block type label')
       }
 
+      // An explicit label short-circuits `name`, so the content is neither
+      // adopted nor rewritten below — and the checks above never saw it.
+      // Grammar-shaped content surviving on a type block is the residue
+      // that matters: `core.deriveReferenceTarget` stamps the row as a
+      // field form, and on a child-backed page the finished type projects
+      // as property machinery instead of appearing in the outline.
+      if (currentLabel !== '') {
+        const survivingContent = after.content.trim()
+        if (survivingContent !== '') {
+          assertNotGrammarShapedLabel(survivingContent, 'Block type content')
+        }
+      }
+
       // PAGE_TYPE via the blessed raw membership helper (a full
       // `properties` write) goes FIRST; the label / alias amendments
       // below are partial `setProperty` writes that layer on top without
