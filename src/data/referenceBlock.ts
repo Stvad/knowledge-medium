@@ -19,6 +19,31 @@ export type ExactReferenceBlockContent =
 // canonicalizes any case), while a stricter consumer can anchor the bare
 // source without it to require lowercase.
 export const UUID_RE_SOURCE = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
+
+/** Longest alias a `[[…]]` span may carry and still be read as a
+ *  reference — by ANY reader of this text.
+ *
+ *  A runaway guard. Nothing in the grammar bounds how far a `[[` may
+ *  reach for its `]]`, and text carrying code supplies unbalanced openers
+ *  for free (a regex character class opening `/[[`, a nested array
+ *  literal). One such opener in a stored extension bundle paired with a
+ *  `]]` 205 KB downstream and minted a page whose NAME was 205 KB of
+ *  JavaScript. 4096 is far above anything human-authored — the longest
+ *  real alias in the author's ~31k-alias workspace is 322 chars — so this
+ *  bounds a runaway without being a judgement about page names.
+ *
+ *  Declared HERE, in core, for the same reason `UUID_RE_SOURCE` above is
+ *  exported rather than copied: two parsers read this grammar over the
+ *  same text and must not disagree about what counts as a reference.
+ *  This module owns the whole-block reading (`deriveReferenceColumns` →
+ *  `reference_target_id`, which in a child-backed workspace decides
+ *  whether a row projects as a property field);
+ *  `@/plugins/references/referenceParser` owns the inline reading (the
+ *  backlink index and the markdown renderer). Core cannot import the
+ *  plugin, so the constant lives at the lower layer and the plugin
+ *  re-exports it — a plugin-side constant would have been a boundary
+ *  violation and a second source of truth at once. */
+export const MAX_ALIAS_LENGTH = 4096
 const UUID_RE = new RegExp(`^${UUID_RE_SOURCE}$`, 'i')
 const EXACT_BLOCK_REF_RE = /^\(\(([^()\s]+)\)\)$/
 const EXACT_ALIASED_BLOCK_REF_RE = new RegExp(
@@ -57,7 +82,14 @@ const parseReferenceSpan = (
   }
 
   if (!span.startsWith('[[') || !span.endsWith(']]')) return null
-  const alias = span.slice(2, -2).trim()
+  // Measured BEFORE the trim, because that is the string the inline
+  // parser sees for the same text — capping the trimmed value instead
+  // would leave a hairline disagreement (`[[<cap a's> ]]` is at the cap
+  // trimmed, one over untrimmed) exactly where the two readings must
+  // agree.
+  const raw = span.slice(2, -2)
+  if (raw.length > MAX_ALIAS_LENGTH) return null
+  const alias = raw.trim()
   if (!alias || alias.includes('[[') || alias.includes(']]')) return null
   return {kind: 'alias', alias, fieldForm}
 }

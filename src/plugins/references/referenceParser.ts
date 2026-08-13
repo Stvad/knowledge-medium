@@ -19,6 +19,7 @@ import { unified } from 'unified'
 import remarkParse from 'remark-parse'
 import { visit } from 'unist-util-visit'
 import type { Text } from 'mdast'
+import { MAX_ALIAS_LENGTH } from '@/data/referenceBlock'
 
 export interface ParsedReference {
   alias: string;
@@ -54,31 +55,20 @@ export const parseBlockRefTarget = (target: string): string | null => {
   return match ? match[1].toLowerCase() : null
 }
 
-/** Longest alias a `[[…]]` span may carry and still count as a wikilink.
- *  A longer span is scanned past and emits no reference — the text stays
- *  literal, and no page is minted for it.
+/** Re-exported, NOT declared here. `@/data/referenceBlock` owns it,
+ *  because core's whole-block reading of this same grammar
+ *  (`deriveReferenceColumns` → `reference_target_id`) has to apply the
+ *  identical bound, and core cannot import a plugin. See that
+ *  declaration for what the constant is for and why it is 4096; what
+ *  follows is only how the INLINE readers apply it.
  *
- *  A runaway guard, not a style rule. Nothing in this grammar bounds how
- *  far a `[[` may reach for its `]]`, and any text carrying CODE supplies
- *  unbalanced openers for free: a regex character class whose first member
- *  is a literal `[` (`/[[\]{}()*+?.\\^$|\s]/`) is a `[[`, and so is a
- *  nested array literal (`[[1,2],[3,4]]`). One such opener inside a
- *  bundled extension's source paired with a `]]` 205 KB downstream — the
- *  scanner is indifferent to the distance — and minted a page whose NAME
- *  was 205 KB of JavaScript, carried from there into the alias index,
- *  backlink panes, search and sync.
+ *  A span over the cap is scanned past and emits no reference — the text
+ *  stays literal and no page is minted. The cost of a deliberately
+ *  generous bound is explicit: junk aliases in the low thousands (a
+ *  2951-char drawing point-array in the author's workspace) stay under it
+ *  and are NOT caught. Only the catastrophic tail is.
  *
- *  Calibrated against live data: across ~31k aliases in the author's
- *  workspace the longest human-authored one is 322 chars (a multi-line
- *  quoted question used as a page title). 4096 is deliberately far above
- *  that — this is a blast-radius bound on a runaway, not a judgement
- *  about how long a page name ought to be, so it is set where "no human
- *  typed this" is beyond argument. The cost of the generous setting is
- *  explicit: junk aliases in the low thousands (a 2951-char drawing
- *  point-array in this very workspace) stay under it and are NOT caught.
- *  Only the catastrophic tail is.
- *
- *  Deliberately here in the parser and not in the reference processor:
+ *  Applied in the parser rather than the reference processor:
  *  both the index and the renderer reach the cap through this function,
  *  so a processor-only cap would render a live-looking link the reference
  *  index knows nothing about. `remark-wikilinks` passes 3 and 4 inherit
@@ -100,7 +90,7 @@ export const parseBlockRefTarget = (target: string): string | null => {
  *  stop minting a phantom page for a link that rendered unresolved either
  *  way. Closing it for real means parsing the index side through markdown
  *  too, which is issue #542. */
-export const MAX_ALIAS_LENGTH = 4096
+export { MAX_ALIAS_LENGTH } from '@/data/referenceBlock'
 
 const parseWikilinkReferences = (content: string): ParsedReference[] => {
   const references: ParsedReference[] = []
