@@ -7,7 +7,7 @@ import { useEffect, useMemo } from 'react'
 import type { BlockData } from '@/data/api'
 import type { Block } from '@/data/block.js'
 import { activePanelIdProp } from '@/data/properties.js'
-import { isPanelStackRow } from '@/utils/panelLayoutProjection.js'
+import { isPanelRowMaximized, isPanelStackRow } from '@/utils/panelLayoutProjection.js'
 
 type RenderSlot =
   | {kind: 'panel'; id: string}
@@ -52,6 +52,7 @@ function PanelSlotView({
   slot,
   layoutSessionBlock,
   canClosePanel,
+  canMaximizePanel,
   className,
   stacked,
   wideScrollSurface,
@@ -61,6 +62,7 @@ function PanelSlotView({
   slot: Extract<RenderSlot, {kind: 'panel'}>
   layoutSessionBlock: Block
   canClosePanel: boolean
+  canMaximizePanel: boolean
   className: string
   stacked: boolean
   wideScrollSurface: boolean
@@ -78,6 +80,7 @@ function PanelSlotView({
         panelId: slot.id,
         layoutSessionBlockId: layoutSessionBlock.id,
         canClosePanel,
+        canMaximizePanel,
         stackedPanel: stacked,
         wideScrollSurface,
         trackPanelFocus: trackFocus,
@@ -98,6 +101,7 @@ function SlotView({
   slot,
   layoutSessionBlock,
   canClosePanel,
+  canMaximizePanel,
   topLevel,
   wideScrollSurface,
   trackFocus,
@@ -105,6 +109,7 @@ function SlotView({
   slot: RenderSlot
   layoutSessionBlock: Block
   canClosePanel: boolean
+  canMaximizePanel: boolean
   topLevel: boolean
   wideScrollSurface: boolean
   trackFocus: boolean
@@ -114,6 +119,7 @@ function SlotView({
       slot={slot}
       layoutSessionBlock={layoutSessionBlock}
       canClosePanel={canClosePanel}
+      canMaximizePanel={canMaximizePanel}
       className={topLevel ? (wideScrollSurface ? WIDE_SCROLL_COLUMN_CLASS : TOP_LEVEL_COLUMN_CLASS) : STACK_CHILD_CLASS}
       stacked={!topLevel}
       wideScrollSurface={wideScrollSurface}
@@ -134,6 +140,7 @@ function SlotView({
           slot={child}
           layoutSessionBlock={layoutSessionBlock}
           canClosePanel={canClosePanel}
+          canMaximizePanel={canMaximizePanel}
           topLevel={false}
           wideScrollSurface={false}
           trackFocus={trackFocus}
@@ -158,11 +165,33 @@ export function LayoutRenderer({block}: BlockRendererProps) {
     ? panelSlots.at(-1)
     : panelSlots[0]
   const mobilePanelSlot = activePanelSlot ?? fallbackActivePanelSlot
+  // Desktop analog of the mobile single-pane path: a maximized leaf renders
+  // ALONE. Sibling rows are untouched in the substrate, so un-maximizing
+  // restores the exact arrangement. First flagged row wins — reconcile writes
+  // whatever the hash says, and a multi-`max` hash can only be hand-crafted
+  // (see `panelMaximizedProp`). Ignored on mobile: already single-pane.
+  const maximizedPanelSlot = useMemo(() => {
+    if (isMobile) return undefined
+    const rowsById = new Map(rows.map(row => [row.id, row]))
+    return panelSlots.find(slot => isPanelRowMaximized(rowsById.get(slot.id)))
+  }, [isMobile, panelSlots, rows])
   const slotsToRender = isMobile
     ? (mobilePanelSlot ? [mobilePanelSlot] : [])
-    : slots
+    : (maximizedPanelSlot ? [maximizedPanelSlot] : slots)
   const canClosePanel = panelSlots.length > 1
+  // Maximize hides siblings, so it only means something on a desktop split.
+  const canMaximizePanel = !isMobile && panelSlots.length > 1
   const hasOneVisiblePanel = slotsToRender.length === 1 && slotsToRender[0]?.kind === 'panel'
+
+  // The maximized pane must BE the active pane. `togglePanelMaximized` already
+  // coerces for the gesture; this covers the arrivals that have no gesture at
+  // all — Back/Forward, a shared `;max` URL, a snapshot apply — where
+  // `reconcilePanelRows` sets the row flag without touching `activePanelIdProp`.
+  // Without it, keyboard dispatch keeps targeting a pane the user cannot see.
+  useEffect(() => {
+    if (!maximizedPanelSlot || activePanelId === maximizedPanelSlot.id) return
+    void block.set(activePanelIdProp, maximizedPanelSlot.id)
+  }, [block, activePanelId, maximizedPanelSlot])
 
   useEffect(() => {
     // A panel insert writes activePanelId and the new row in one tx, but
@@ -183,6 +212,7 @@ export function LayoutRenderer({block}: BlockRendererProps) {
         slot={slot}
         layoutSessionBlock={block}
         canClosePanel={canClosePanel}
+        canMaximizePanel={canMaximizePanel}
         topLevel
         wideScrollSurface={hasOneVisiblePanel && slot.kind === 'panel'}
         trackFocus={!isMobile}

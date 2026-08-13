@@ -15,6 +15,7 @@ import { createTestRepo } from '@/data/test/createTestRepo'
 import { Repo } from '@/data/repo'
 import {
   focusedBlockLocationProp,
+  panelMaximizedProp,
   panelViewModeProp,
   topLevelBlockIdProp,
 } from '@/data/properties'
@@ -108,7 +109,27 @@ describe('enterVideoNotesView', () => {
 
     expect(plainUiState.peekProperty(topLevelBlockIdProp)).toBeUndefined()
     expect(plainUiState.peekProperty(panelViewModeProp)).toBeUndefined()
+    expect(plainUiState.peekProperty(panelMaximizedProp)).not.toBe(true)
     expect(await videoBlock().childIds.load()).toEqual([])
+  })
+
+  // The immersion half of the gesture: without it, pane-scoping the notes view
+  // leaves the video with only its column of a split.
+  it('same-block enter maximizes the pane too', async () => {
+    await enterVideoNotesView(videoBlock(), panelBlock())
+
+    expect(panelBlock().peekProperty(panelMaximizedProp)).toBe(true)
+  })
+
+  it('nested enter maximizes in the SAME tx — one history entry, not two', async () => {
+    await setup({videoChildren: ['existing-note'], panelShows: PAGE})
+
+    await enterVideoNotesView(videoBlock(), panelBlock())
+
+    expect(panelBlock().peekProperty(panelMaximizedProp)).toBe(true)
+    expect(panelHistory.getSnapshot(panelId).back).toEqual([
+      {blockId: PAGE, viewModeEnter: VIDEO_NOTES_VIEW_MODE},
+    ])
   })
 })
 
@@ -121,6 +142,9 @@ describe('closeVideoNotesView', () => {
 
     expect(panelBlock().peekProperty(topLevelBlockIdProp)).toBe(PAGE)
     expect(panelBlock().peekProperty(panelViewModeProp)).toBeUndefined()
+    // Un-maximized in the same tx as the back: leaving the pane maximized
+    // would keep every sibling pane hidden after the notes view is gone.
+    expect(panelBlock().peekProperty(panelMaximizedProp)).not.toBe(true)
     expect(panelHistory.getSnapshot(panelId).forward.map(entry => entry.blockId)).toEqual([VIDEO])
   })
 
@@ -161,6 +185,7 @@ describe('closeVideoNotesView', () => {
 
     expect(panelBlock().peekProperty(topLevelBlockIdProp)).toBe(VIDEO)
     expect(panelBlock().peekProperty(panelViewModeProp)).toBeUndefined()
+    expect(panelBlock().peekProperty(panelMaximizedProp)).not.toBe(true)
     expect(panelHistory.getSnapshot(panelId)).toStrictEqual({back: [], forward: []})
   })
 

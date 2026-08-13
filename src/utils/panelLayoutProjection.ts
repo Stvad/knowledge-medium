@@ -7,6 +7,7 @@ import {
   activePanelIdProp,
   focusedBlockLocationProp,
   normalizeViewMode,
+  panelMaximizedProp,
   panelViewModeProp,
   scrollTopProp,
   topLevelBlockIdProp,
@@ -57,6 +58,14 @@ const panelViewMode = (row: BlockData): string | undefined => {
   const stored = row.properties[panelViewModeProp.name]
   if (stored === undefined) return undefined
   return normalizeViewMode(panelViewModeProp.codec.decode(stored))
+}
+
+/** Absent ≡ false: the flag is only ever written `true` (or cleared back to
+ *  `false`), so no pane needs the property materialized to be un-maximized. */
+export const isPanelRowMaximized = (row: Pick<BlockData, 'properties'> | undefined): boolean => {
+  const stored = row?.properties[panelMaximizedProp.name]
+  if (stored === undefined) return false
+  return panelMaximizedProp.codec.decode(stored) === true
 }
 
 const sessionActivePanelId = (row: BlockData | undefined): string | undefined => {
@@ -238,10 +247,12 @@ const degradeSublayoutSlots = (slots: readonly LayoutSlot[]): LayoutSlot[] =>
     return [{kind: 'stack' as const, children: leaves}]
   })
 
-// Leaves compare blockId + viewMode + active, per `strictness`:
+// Leaves compare blockId + viewMode + maximized + active, per `strictness`:
 // - 'exact' (default): full context equality.
 // - 'ignore-active': everything but the active flag — classifies an
-//   active-only diff (replace-not-push in the projection).
+//   active-only diff (replace-not-push in the projection). `maximized` is
+//   deliberately NOT ignored here: maximizing is a real arrangement change
+//   and earns its own history entry, so Back un-maximizes (design §4.4).
 // - 'topology': kind + blockId only — routes context-only inbound diffs
 //   away from destructive materialization.
 // `rest` deliberately never participates: rows have nowhere to store
@@ -261,6 +272,7 @@ const sameLayoutSlots = (
       if (slot.blockId !== other.blockId) return false
       if (strictness === 'topology') return true
       return slot.viewMode === other.viewMode &&
+        (slot.maximized === true) === (other.maximized === true) &&
         (strictness === 'ignore-active' || (slot.active === true) === (other.active === true))
     }
     if (slot.kind === 'stack' && other.kind === 'stack') return sameLayoutSlots(slot.children, other.children, strictness)
@@ -337,6 +349,7 @@ export const layoutSlotsFromRows = (
       kind: 'leaf',
       blockId,
       ...(viewMode !== undefined ? {viewMode} : {}),
+      ...(isPanelRowMaximized(row) ? {maximized: true} : {}),
       ...(row.id === activePanelId ? {active: true} : {}),
     }
   }
@@ -444,6 +457,7 @@ export const createPanelRowInTx = async (
     orderKey: string
     blockId: string
     viewMode?: string
+    maximized?: boolean
   },
 ): Promise<string> => {
   const id = await tx.create({
@@ -456,6 +470,10 @@ export const createPanelRowInTx = async (
       [scrollTopProp.name]: scrollTopProp.codec.encode(0),
       ...(args.viewMode !== undefined
         ? {[panelViewModeProp.name]: panelViewModeProp.codec.encode(args.viewMode)}
+        : {}),
+      // Absent ≡ false, so only a true flag is materialized.
+      ...(args.maximized
+        ? {[panelMaximizedProp.name]: panelMaximizedProp.codec.encode(true)}
         : {}),
     },
   })
@@ -654,6 +672,56 @@ export const activatePanelRow = async (
   return activated
 }
 
+/** Walk up from a panel row through any enclosing stack rows to the layout
+ *  session row that owns them. Null when the chain is broken (a detached or
+ *  mid-delete row). */
+const layoutSessionRowOf = async (tx: Tx, row: BlockData): Promise<BlockData | null> => {
+  let current = row.parentId ? await tx.get(row.parentId) : null
+  while (current && isPanelStackRow(current)) {
+    current = current.parentId ? await tx.get(current.parentId) : null
+  }
+  return current
+}
+
+/**
+ * Toggle the maximize flag on `panelId` — the SOLE writer of the
+ * at-most-one-maximized-leaf invariant (design §4.4): every other row in the
+ * session is cleared in the SAME tx, which also repairs a multi-`max` state
+ * that a hand-crafted URL reconciled in.
+ *
+ * The maximized pane is also made active, in the same tx. Maximize is the
+ * first configuration where the active pane can be INVISIBLE while keyboard
+ * dispatch still targets it, and doing it here means the common gesture never
+ * relies on `LayoutRenderer`'s inbound coercion effect (which exists for the
+ * URL/Back/snapshot arrivals that have no gesture at all).
+ *
+ * Returns the resulting flag, or null when the row is not a live panel row.
+ */
+export const togglePanelMaximized = async (
+  repo: Repo,
+  panelId: string,
+): Promise<boolean | null> => {
+  let result: boolean | null = null
+  await repo.tx(async tx => {
+    const row = await tx.get(panelId)
+    if (!row || row.deleted || isPanelStackRow(row)) return
+    const layoutSession = await layoutSessionRowOf(tx, row)
+    if (!layoutSession) return
+
+    const next = !isPanelRowMaximized(row)
+    for (const other of panelRowsInLayoutOrder(layoutSession.id, await loadSubtreeRowsInTx(tx, layoutSession))) {
+      const wanted = other.id === panelId && next
+      if (isPanelRowMaximized(other) === wanted) continue
+      await tx.setProperty(other.id, panelMaximizedProp, wanted)
+    }
+    if (next && layoutSession.properties[activePanelIdProp.name] !== panelId) {
+      await tx.setProperty(layoutSession.id, activePanelIdProp, panelId)
+    }
+    result = next
+  }, {scope: ChangeScope.UiState, description: 'toggle panel maximize'})
+  return result
+}
+
 export const deletePanelRow = async (
   repo: Repo,
   panelId: string,
@@ -662,10 +730,7 @@ export const deletePanelRow = async (
     const row = await tx.get(panelId)
     if (!row) return
     const parent = row.parentId ? await tx.get(row.parentId) : null
-    let layoutSession = parent
-    while (layoutSession && isPanelStackRow(layoutSession)) {
-      layoutSession = layoutSession.parentId ? await tx.get(layoutSession.parentId) : null
-    }
+    const layoutSession = await layoutSessionRowOf(tx, row)
     const rowsBeforeDelete = layoutSession
       ? await loadSubtreeRowsInTx(tx, layoutSession)
       : []
@@ -757,6 +822,10 @@ export const reconcilePanelRows = async (
           await tx.setProperty(row.id, panelViewModeProp, leaf.viewMode)
           wrote = true
         }
+        if (isPanelRowMaximized(row) !== (leaf.maximized === true)) {
+          await tx.setProperty(row.id, panelMaximizedProp, leaf.maximized === true)
+          wrote = true
+        }
         if (leaf.active && urlActiveRowId === undefined) urlActiveRowId = row.id
       }
       if (urlActiveRowId !== undefined) {
@@ -844,6 +913,7 @@ export const reconcilePanelRows = async (
             orderKey,
             blockId,
             viewMode: target.viewMode,
+            maximized: target.maximized === true,
           })
           if (target.active && urlActiveRowId === undefined) urlActiveRowId = createdId
           continue
@@ -871,6 +941,14 @@ export const reconcilePanelRows = async (
         } else if (panelViewMode(slot.row) !== target.viewMode) {
           // Same content, different mode — sync the URL's mode onto the row.
           await tx.setProperty(slot.row.id, panelViewModeProp, target.viewMode)
+        }
+        // Maximize is ARRANGEMENT state, not (pane, block) state, so it is
+        // synced independently of the content swap above — `writePanelContent`
+        // deliberately leaves the flag alone (in-pane navigation keeps
+        // maximize). No single-maximized repair here: reconcile writes what
+        // the hash says, and `LayoutRenderer` renders the first flagged row.
+        if (isPanelRowMaximized(slot.row) !== (target.maximized === true)) {
+          await tx.setProperty(slot.row.id, panelMaximizedProp, target.maximized === true)
         }
       }
     }

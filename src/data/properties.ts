@@ -98,6 +98,30 @@ export const panelViewModeProp = seedProperty({
   changeScope: ChangeScope.UiState,
 })
 
+/** Per-panel maximize flag, persisted on the panel row. The layout URL
+ *  grammar's valueless `max` slot-context key (`src/utils/routing.ts`) maps
+ *  to this prop. A maximized visible leaf renders ALONE on desktop; siblings
+ *  are untouched in the substrate, so un-maximizing restores the exact
+ *  arrangement.
+ *
+ *  Invariant — at most one maximized leaf per layout session — has a single
+ *  writer: `togglePanelMaximized` clears every other row's flag in the same
+ *  tx. Reconcile deliberately writes whatever the hash says (a multi-`max`
+ *  hash can only be hand-crafted), and `LayoutRenderer` tolerates that by
+ *  rendering the FIRST maximized row.
+ *
+ *  A ROW prop, not a layout-session pointer like `activePanelIdProp`: the
+ *  flag dies with its row, so nothing needs the remap-on-delete machinery
+ *  (`activePanelIdAfterReconcile`, `nextActivePanelAfterClose`) that the
+ *  session-level pointer needs. */
+export const panelMaximizedProp = seedProperty({
+  seedKey: 'system:kernel-data/property/panel-maximized',
+  revision: 1,
+  name: 'panelMaximized',
+  preset: 'boolean',
+  changeScope: ChangeScope.UiState,
+})
+
 /** '' ≡ absent, canonically: the URL grammar drops an empty `view=` value,
  *  so every reader/writer of a panel view mode folds '' to undefined through
  *  this ONE helper — a stray empty-string write must never make two
@@ -666,6 +690,7 @@ export const KERNEL_PROPERTY_SEEDS: readonly AnyPropertySeedDeclaration[] = [
   activePanelIdProp,
   scrollTopProp,
   panelViewModeProp,
+  panelMaximizedProp,
   editorSelection,
   editorFocusRequestProp,
   selectionStateProp,

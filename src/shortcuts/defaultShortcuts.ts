@@ -1,4 +1,4 @@
-import { KeyboardOff, PanelRightOpen, Plus, Redo2, Settings, Undo2, ZoomIn } from 'lucide-react'
+import { KeyboardOff, Maximize2, PanelRightOpen, Plus, Redo2, Settings, Undo2, ZoomIn } from 'lucide-react'
 import { defaultActionContextConfigs } from './defaultContexts.ts'
 import {
   ActionContextTypes,
@@ -74,6 +74,7 @@ import {
   deletePanelRow,
   panelBlockId,
   panelRowsInLayoutOrder,
+  togglePanelMaximized,
 } from '@/utils/panelLayoutProjection.js'
 import { ensureMetricsConsoleHook } from '@/data/metricsConsoleHook.js'
 import { showProgress } from '@/utils/toast.js'
@@ -318,6 +319,20 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
     },
   }
 
+  const toggleMaximizePanelBlock: BlockAction = {
+    id: 'toggle_maximize_panel',
+    description: 'Maximize / restore current panel',
+    icon: Maximize2,
+    handler: async ({uiStateBlock}: BlockShortcutDependencies) => {
+      // uiStateBlock IS the panel row in panel contexts.
+      await togglePanelMaximized(repo, uiStateBlock.id)
+    },
+    defaultBinding: {
+      keys: '$mod+Shift+Backslash',
+      eventOptions: {preventDefault: true},
+    },
+  }
+
   const insertExampleExtensionsBlock: BlockAction = {
     id: 'insert_example_extensions',
     description: 'Insert example extensions under current block',
@@ -332,6 +347,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
     bindBlockActionContext(ActionContextTypes.NORMAL_MODE, zoomOutBlock),
     bindBlockActionContext(ActionContextTypes.NORMAL_MODE, openFocusedInPanelBlock),
     bindBlockActionContext(ActionContextTypes.NORMAL_MODE, closeCurrentPanelBlock),
+    bindBlockActionContext(ActionContextTypes.NORMAL_MODE, toggleMaximizePanelBlock),
     bindBlockActionContext(ActionContextTypes.NORMAL_MODE, insertExampleExtensionsBlock),
     copyBlockAction,
     copyBlockRefAction,
@@ -1124,6 +1140,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
     bindBlockActionContext(ActionContextTypes.EDIT_MODE_CM, zoomOutBlock, {idPrefix: 'edit.cm'}),
     bindBlockActionContext(ActionContextTypes.EDIT_MODE_CM, openFocusedInPanelBlock, {idPrefix: 'edit.cm'}),
     bindBlockActionContext(ActionContextTypes.EDIT_MODE_CM, closeCurrentPanelBlock, {idPrefix: 'edit.cm'}),
+    bindBlockActionContext(ActionContextTypes.EDIT_MODE_CM, toggleMaximizePanelBlock, {idPrefix: 'edit.cm'}),
     bindBlockActionContext(ActionContextTypes.EDIT_MODE_CM, insertExampleExtensionsBlock, {idPrefix: 'edit.cm'}),
     moveBlockUpCM,
     moveBlockDownCM,

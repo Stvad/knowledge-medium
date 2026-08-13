@@ -67,11 +67,18 @@ export const ensureEditableVideoNoteChild = async (
   return newId
 }
 
-/** Enter the video-notes view: put the PANE into the mode. Same-block enter
- *  (the pane already shows the video) is a mode-only tx; a nested-video
- *  enter navigates the pane to the video AND sets the mode in one tx — one
- *  projection push, one history entry stamped `viewModeEnter` (which is what
- *  lets `closeVideoNotesView` go BACK instead of stranding the pane).
+/** Enter the video-notes view: put the PANE into the mode AND maximize it.
+ *  Same-block enter (the pane already shows the video) is a state-only tx; a
+ *  nested-video enter navigates the pane to the video AND sets both keys in
+ *  one tx — one projection push, one history entry stamped `viewModeEnter`
+ *  (which is what lets `closeVideoNotesView` go BACK instead of stranding the
+ *  pane).
+ *
+ *  Maximizing is the default because the notes view is an immersion gesture:
+ *  pane-scoping it (design §4.3) otherwise gave the video only its column in a
+ *  split, which is strictly worse than the fullscreen overlay it replaced. The
+ *  two are independent keys (`;view=video-notes;max`) so the generic
+ *  `toggle_maximize_panel` still un-maximizes without leaving notes view.
  *
  *  The gesture also seeds the first note child (gesture-side only — the
  *  RENDERER never writes; its empty-state affordance calls
@@ -84,7 +91,10 @@ export const enterVideoNotesView = async (
   uiStateBlock: Block,
 ): Promise<void> => {
   if (uiStateBlock.peekProperty(topLevelBlockIdProp) === undefined) return
-  await navigateInPanel(uiStateBlock, videoBlock.id, {viewMode: VIDEO_NOTES_VIEW_MODE})
+  await navigateInPanel(uiStateBlock, videoBlock.id, {
+    viewMode: VIDEO_NOTES_VIEW_MODE,
+    maximized: true,
+  })
   await ensureEditableVideoNoteChild(
     videoBlock,
     uiStateBlock,
@@ -100,7 +110,14 @@ export const enterVideoNotesView = async (
  *  `viewModeEnter` marker, this pane ENTERED via a navigation — go back,
  *  restoring the pre-enter content (the entry's VisitState clears the
  *  mode). Otherwise (same-block enter, or a URL-borne mode) just clear the
- *  mode in place. */
+ *  mode in place.
+ *
+ *  Either way it also un-maximizes, in the SAME tx as the mode clear: close
+ *  undoes the keys enter set, and leaving the pane maximized would keep every
+ *  sibling pane hidden after the view the maximize existed for is gone. This
+ *  does drop a maximize the user had set MANUALLY before entering notes —
+ *  accepted, since enter maximizes unconditionally and nothing records which
+ *  of the two set it. */
 // Re-entry guard: a double-activation of close (double-click, repeated key)
 // must not step back twice. Keyed per panel; cleared when the first close
 // settles.
@@ -119,14 +136,14 @@ export const closeVideoNotesView = async (panelBlock: Block): Promise<void> => {
     // mode in place is.
     if (backTop?.viewModeEnter === VIDEO_NOTES_VIEW_MODE
       && await panelBlock.repo.exists(backTop.blockId)
-      && await goBackInPanel(panelBlock)) {
+      && await goBackInPanel(panelBlock, {maximized: false})) {
       return
     }
     const current = panelBlock.peekProperty(topLevelBlockIdProp)
     if (!current) return
     // Same-block with an EXPLICIT undefined mode: navigateInPanel's
     // same-block branch is presence-gated, so this is the clear-only tx.
-    await navigateInPanel(panelBlock, current, {viewMode: undefined})
+    await navigateInPanel(panelBlock, current, {viewMode: undefined, maximized: false})
   } finally {
     closingPanels.delete(panelBlock.id)
   }

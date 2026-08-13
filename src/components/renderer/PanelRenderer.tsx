@@ -2,9 +2,10 @@ import { BlockComponent } from '@/components/BlockComponent.js'
 import { BlockRendererProps } from '@/types.js'
 import { NestedBlockContextProvider, useBlockContext } from '@/context/block.js'
 import { Button } from '@/components/ui/button.js'
-import { ChevronLeft, ChevronRight, X } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Maximize2, Minimize2, X } from 'lucide-react'
 import {
   focusedBlockLocationProp,
+  panelMaximizedProp,
   panelViewModeProp,
   peekFocusedBlockLocation,
   scrollTopProp,
@@ -28,7 +29,11 @@ import {
   type VisitState,
 } from '@/utils/panelHistory.js'
 import { alignScrollportToRow } from '@/utils/panelScrollAnchor.js'
-import { activatePanelRow, deletePanelRow } from '@/utils/panelLayoutProjection.js'
+import {
+  activatePanelRow,
+  deletePanelRow,
+  togglePanelMaximized,
+} from '@/utils/panelLayoutProjection.js'
 import { outlineRenderScopeId, panelRenderScopeId } from '@/utils/renderScope.js'
 import type { MouseEvent, PointerEvent } from 'react'
 
@@ -67,8 +72,10 @@ function PanelMultiSelectActionContext({scopeRootId}: {scopeRootId: string}) {
 export function PanelRenderer({block}: BlockRendererProps) {
   const [topLevelBlockId] = usePropertyValue(block, topLevelBlockIdProp)
   const [panelViewMode] = usePropertyValue(block, panelViewModeProp)
+  const [panelMaximized] = usePropertyValue(block, panelMaximizedProp)
   const blockContext = useBlockContext()
   const canClosePanel = Boolean(blockContext.canClosePanel)
+  const canMaximizePanel = Boolean(blockContext.canMaximizePanel)
   const stackedPanel = Boolean(blockContext.stackedPanel)
   const wideScrollSurface = Boolean(blockContext.wideScrollSurface) && !stackedPanel
   const layoutSessionBlockId = typeof blockContext.layoutSessionBlockId === 'string'
@@ -265,6 +272,21 @@ export function PanelRenderer({block}: BlockRendererProps) {
       >
         <ChevronRight className="h-4 w-4" />
       </Button>
+      {canMaximizePanel && (
+        <Button
+          variant="ghost"
+          size="icon"
+          className={PANEL_ACTION_BUTTON_CLASS}
+          onFocus={trackPanelFocus ? activatePanel : undefined}
+          onClick={() => {
+            void togglePanelMaximized(repo, block.id)
+          }}
+          aria-label={panelMaximized ? 'Restore panel' : 'Maximize panel'}
+          title={panelMaximized ? 'Restore panel' : 'Maximize panel'}
+        >
+          {panelMaximized ? <Minimize2 className="h-4 w-4"/> : <Maximize2 className="h-4 w-4"/>}
+        </Button>
+      )}
       {canClosePanel && (
         <Button
           variant="ghost"

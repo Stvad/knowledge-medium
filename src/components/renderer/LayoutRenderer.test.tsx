@@ -8,7 +8,8 @@ import { createTestRepo } from '@/data/test/createTestRepo'
 import { Repo } from '@/data/repo'
 import { getLayoutSessionBlock, getUIStateBlock } from '@/data/stateBlocks'
 import { BlockContextProvider, useBlockContext } from '@/context/block'
-import { insertPanelRow } from '@/utils/panelLayoutProjection'
+import { insertPanelRow, togglePanelMaximized } from '@/utils/panelLayoutProjection'
+import { activePanelIdProp, panelMaximizedProp } from '@/data/properties'
 import { LayoutRenderer } from './LayoutRenderer'
 
 const isMobileRef = vi.hoisted(() => ({
@@ -115,5 +116,97 @@ describe('LayoutRenderer', () => {
       'data-wide-scroll-surface',
       'true',
     )
+  })
+
+  describe('maximize', () => {
+    const twoPanels = async () => ({
+      first: await insertPanelRow(env.repo, layoutSessionBlock(), 'page-a'),
+      second: await insertPanelRow(env.repo, layoutSessionBlock(), 'page-b'),
+    })
+
+    const setMaximized = (panelId: string, value: boolean) =>
+      env.repo.block(panelId).set(panelMaximizedProp, value)
+
+    it('renders a maximized panel alone, as a wide scroll surface', async () => {
+      const {first, second} = await twoPanels()
+      await setMaximized(second, true)
+
+      renderLayout()
+
+      const rendered = await screen.findByTestId(`block-${second}`)
+      expect(rendered).toHaveAttribute('data-wide-scroll-surface', 'true')
+      expect(screen.queryByTestId(`block-${first}`)).toBeNull()
+    })
+
+    it('restores the exact arrangement when the flag is cleared', async () => {
+      const {first, second} = await twoPanels()
+      await setMaximized(second, true)
+      renderLayout()
+      // Prove the hidden state first: a bare `queryByTestId(...).toBeNull()`
+      // on a query-fed surface passes on the first render regardless.
+      await screen.findByTestId(`block-${second}`)
+      expect(screen.queryByTestId(`block-${first}`)).toBeNull()
+
+      await setMaximized(second, false)
+
+      expect(await screen.findByTestId(`block-${first}`)).toBeTruthy()
+      expect(screen.getByTestId(`block-${second}`)).toBeTruthy()
+    })
+
+    it('renders the first maximized row when a hand-crafted hash flags several', async () => {
+      const {first, second} = await twoPanels()
+      await setMaximized(first, true)
+      await setMaximized(second, true)
+
+      renderLayout()
+
+      await screen.findByTestId(`block-${first}`)
+      expect(screen.queryByTestId(`block-${second}`)).toBeNull()
+    })
+
+    // Mobile's only observable coupling to the flag is the active-panel
+    // coercion (the maximize render path is desktop-only and unreachable
+    // here), and the coercion is an async write. So this asserts on the CAUSE
+    // over a real window: a bare `queryByTestId(...).toBeNull()` right after
+    // render stays green with the mobile guard deleted, because the coercion
+    // had not landed yet. The sibling desktop test proves this same wait DOES
+    // observe a coercion when one happens.
+    it('ignores the flag on mobile, which already renders one panel', async () => {
+      isMobileRef.current = true
+      const {first, second} = await twoPanels()
+      // `insertPanelRow` makes the LAST inserted panel active, so mobile shows
+      // `second` — flag `first` and assert mobile never switches to it.
+      await setMaximized(first, true)
+
+      renderLayout()
+      await screen.findByTestId(`block-${second}`)
+
+      await expect(vi.waitFor(
+        () => expect(layoutSessionBlock().peekProperty(activePanelIdProp)).toBe(first),
+        {timeout: 500},
+      )).rejects.toThrow()
+      expect(screen.queryByTestId(`block-${first}`)).toBeNull()
+    }, 20_000) // measured ~600ms: the negative wait above dominates
+
+    it('coerces a gestureless maximized arrival to be the active panel', async () => {
+      const {first, second} = await twoPanels()
+      expect(layoutSessionBlock().peekProperty(activePanelIdProp)).toBe(second)
+      // A URL / Back / snapshot arrival sets the row flag and nothing else.
+      await setMaximized(first, true)
+
+      renderLayout()
+
+      await vi.waitFor(() =>
+        expect(layoutSessionBlock().peekProperty(activePanelIdProp)).toBe(first))
+    })
+
+    it('does not fight the gesture: toggling already activates the pane it maximizes', async () => {
+      const {first, second} = await twoPanels()
+
+      expect(await togglePanelMaximized(env.repo, first)).toBe(true)
+
+      expect(layoutSessionBlock().peekProperty(activePanelIdProp)).toBe(first)
+      expect(env.repo.block(second).peekProperty(panelMaximizedProp)).not.toBe(true)
+    })
   })
 })

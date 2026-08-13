@@ -127,9 +127,15 @@ describe('slot context parsing', () => {
     {suffix: ';view=%zz;view=ok', expected: {viewMode: 'ok'}, why: 'first-VALID-wins: malformed view does not pin the dedup slot'},
     {suffix: ';view;view=x', expected: {viewMode: 'x'}, why: 'first-VALID-wins: bare view does not pin the dedup slot'},
     {suffix: ';active=maybe;active', expected: {active: true}, why: 'bad active value dropped without consuming dedup'},
-    {suffix: ';max', expected: {rest: ['max']}, why: 'unknown bare key preserved verbatim in rest'},
+    {suffix: ';max', expected: {maximized: true}, why: 'bare max is the maximize flag'},
+    {suffix: ';max;max', expected: {maximized: true}, why: 'duplicate max: maximized once'},
+    {suffix: ';max=true', expected: {maximized: true}, why: 'max=true means maximized'},
+    {suffix: ';max=false', expected: {}, why: 'max=false means absent'},
+    {suffix: ';max=maybe;max', expected: {maximized: true}, why: 'bad max value dropped without consuming dedup'},
+    {suffix: ';max;view=video-notes', expected: {maximized: true, viewMode: 'video-notes'}, why: 'view and max compose'},
+    {suffix: ';zoom', expected: {rest: ['zoom']}, why: 'unknown bare key preserved verbatim in rest'},
     {suffix: ';comments=open', expected: {rest: ['comments=open']}, why: 'unknown key=value preserved verbatim in rest'},
-    {suffix: ';max;max', expected: {rest: ['max']}, why: 'repeated unknown key deduped to one rest entry'},
+    {suffix: ';zoom;zoom', expected: {rest: ['zoom']}, why: 'repeated unknown key deduped to one rest entry'},
     {suffix: ';k=a=b', expected: {}, why: 'unknown value with a second = is malformed'},
     {suffix: ';k=a+b', expected: {}, why: 'unknown value outside the safe charset is malformed'},
     {suffix: ';k=a%3Db', expected: {rest: ['k=a%3Db']}, why: 'percent-encoded unknown value kept verbatim'},
@@ -139,7 +145,7 @@ describe('slot context parsing', () => {
   })
 
   it('re-emits unknown rest entries verbatim on build', () => {
-    for (const hash of ['#ws/b;max', '#ws/b;k=a%3Db']) {
+    for (const hash of ['#ws/b;zoom', '#ws/b;k=a%3Db']) {
       expect(buildLayoutFromSlots('ws', parseLayout(hash).slots)).toBe(hash)
     }
   })
@@ -189,9 +195,9 @@ describe('build-time context guards', () => {
     ])).toBe('#ws/b;ok=1')
   })
 
-  it('excludes reserved keys from rest at build (no duplicate view/active)', () => {
+  it('excludes reserved keys from rest at build (no duplicate view/active/max)', () => {
     expect(buildLayoutFromSlots('ws', [
-      {kind: 'leaf', blockId: 'b', viewMode: 'real', rest: ['view=evil', 'active', 'ok=1']},
+      {kind: 'leaf', blockId: 'b', viewMode: 'real', rest: ['view=evil', 'active', 'max', 'ok=1']},
     ])).toBe('#ws/b;ok=1;view=real')
   })
 })
@@ -223,10 +229,10 @@ describe('context entry robustness (review gaps)', () => {
 })
 
 describe('slot context canonical order', () => {
-  it('builds active, then rest (sorted), then view', () => {
+  it('builds every context entry in key-sorted order', () => {
     expect(buildLayoutFromSlots('ws', [
-      {kind: 'leaf', blockId: 'blockId', viewMode: 'x', active: true, rest: ['max']},
-    ])).toBe('#ws/blockId;active;max;view=x')
+      {kind: 'leaf', blockId: 'blockId', viewMode: 'x', active: true, maximized: true, rest: ['zoom']},
+    ])).toBe('#ws/blockId;active;max;view=x;zoom')
   })
 
   it('re-canonicalizes an out-of-order parse on build', () => {
