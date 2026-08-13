@@ -29,6 +29,11 @@ export interface TypeChipProps {
   /** Prefix the label with the `#` sigil (the block chip row does;
    *  the property panel shows bare labels). */
   withHash?: boolean
+  /** Density knob, merged over the base classes. For surfaces with a
+   *  fixed line box to fit — a quick-find result row reserves one 16px
+   *  line, which the default `py-0.5` would overflow by 4px. Colors and
+   *  the pill shape stay the component's; only spacing is the caller's. */
+  className?: string
 }
 
 /** Unknown id (type not registered — other device's type not yet
@@ -37,7 +42,7 @@ export interface TypeChipProps {
 const displayLabel = (type: TypeContribution | undefined, typeId: string): string =>
   type?.label ?? (typeId.length > 8 ? `${typeId.slice(0, 8)}…` : typeId)
 
-export const TypeChip = ({typeId, type, link, onRemove, withHash}: TypeChipProps) => {
+export const TypeChip = ({typeId, type, link, onRemove, withHash, className}: TypeChipProps) => {
   const label = displayLabel(type, typeId)
   const style = chipStyle(type)
   const labelText = withHash ? `#${label}` : label
@@ -46,6 +51,7 @@ export const TypeChip = ({typeId, type, link, onRemove, withHash}: TypeChipProps
       className={cn(
         'inline-flex max-w-full items-center gap-1 rounded px-1.5 py-0.5 text-xs',
         style ? '' : 'bg-muted text-muted-foreground',
+        className,
       )}
       style={style}
       title={type ? type.description ?? typeId : `Unknown type ${typeId} (not registered)`}
