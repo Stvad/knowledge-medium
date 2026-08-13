@@ -425,7 +425,7 @@ export function extractBlockRefIds(content: string): string[] {
  *  (`appendTagToContent`), and they owe a check at their own entry point
  *  where the input can still be rejected with an explanation instead of
  *  silently degrading — see `isValidTagName`. */
-export const renderWikilink = (alias: string): string => {
+const renderWikilinkUnchecked = (alias: string): string => {
   // `]]` inside the alias would terminate the wikilink at the wrong
   // place, and an unclosed `[[` would leak an opener that a later `]]`
   // anywhere in the document could pair with, swallowing unrelated
@@ -448,6 +448,11 @@ export const renderWikilink = (alias: string): string => {
   return `[[${padded}]]`
 }
 
+export const renderWikilink = (alias: string): string | null => {
+  const text = renderWikilinkUnchecked(alias)
+  return parseOutermostReferences(text).length === 1 ? text : null
+}
+
 /** Can `alias` be written as a `[[…]]` span this parser reads back as a
  *  reference at all? False only for spans the grammar refuses outright —
  *  today, over `MAX_ALIAS_LENGTH` measured on the RENDERED span, which is
@@ -466,7 +471,7 @@ export const renderWikilink = (alias: string): string => {
  *  adding this check to a surface cannot newly reject an alias that
  *  surface accepts today. */
 export const canRenderAsWikilink = (alias: string): boolean =>
-  parseOutermostReferences(renderWikilink(alias)).length === 1
+  renderWikilink(alias) !== null
 
 /** Render an aliased blockref `[label](((id)))`. Strips `]` and
  *  newlines from `label` because the parser's regex rejects them in
@@ -542,7 +547,12 @@ export const faithfulWikilinkReplacement = (alias: string): SpanReplacement | nu
   // literal alias text, and the caller has a pinned fallback that keeps
   // the TARGET regardless of how markdown treats the label.
   if (alias.includes('\\')) return null
+  // `renderWikilink` already refuses anything that doesn't parse back to
+  // exactly one reference, so the `marks.length !== 1` case below is now
+  // unreachable through it — kept because the checks after it (whole-span
+  // coverage, alias identity) are this function's own, stricter contract.
   const text = renderWikilink(alias)
+  if (text === null) return null
   const marks = parseOutermostReferences(text)
   if (marks.length !== 1) return null
   const [mark] = marks

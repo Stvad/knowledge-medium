@@ -104,9 +104,12 @@ describe('appendTagToContent', () => {
   // `appendTagToBlocks` reported the block as tagged.
   it('rejects an at-cap name whose trailing `]` pushes the rendered alias over', () => {
     const atCapWithBracket = `${'a'.repeat(MAX_ALIAS_LENGTH - 1)}]`
+    // The input is AT the cap — an input-length check would wave it
+    // through. The renderer pads the trailing `]` to keep the closing
+    // delimiter balanced, which pushes the emitted alias one over, so it
+    // refuses instead of emitting markup that parses to nothing.
     expect(atCapWithBracket.length).toBe(MAX_ALIAS_LENGTH)
-    // The shape of the hazard: rendering pads, so the emitted alias is longer.
-    expect(renderWikilink(atCapWithBracket)).toBe(`[[${atCapWithBracket} ]]`)
+    expect(renderWikilink(atCapWithBracket)).toBeNull()
     expect(appendTagToContent('hello', atCapWithBracket)).toBe('hello')
 
     // One char shorter renders within the cap and is still accepted, so
