@@ -565,9 +565,27 @@ describe('runaway wikilink spans (MAX_ALIAS_LENGTH)', () => {
     expect(extractAliases(content)).toEqual([])
   })
 
-  it('nested JSON arrays produce no reference', () => {
-    const points = Array.from({length: 300}, (_, i) => `[${i},${i}]`).join(',')
+  it('a large nested JSON array produces no reference', () => {
+    // `[[1,2],[3,4]]` opens with `[[` exactly like a wikilink. Sized off
+    // the constant so the fixture tracks the cap instead of silently
+    // sliding under it when the cap moves.
+    const point = (i: number) => `[${i},${i}]`
+    const count = Math.ceil(MAX_ALIAS_LENGTH / point(0).length) + 100
+    const points = Array.from({length: count}, (_, i) => point(i)).join(',')
+    expect(`[${points}]`.length).toBeGreaterThan(MAX_ALIAS_LENGTH)
     expect(parseReferences(`[${points}]`)).toEqual([])
+  })
+
+  // The accepted cost of a deliberately generous cap, pinned so it is a
+  // known tradeoff rather than a surprise. A short nested array still
+  // mints an alias — a 2951-char drawing point-array in the author's live
+  // workspace is exactly this. Lowering MAX_ALIAS_LENGTH is what would
+  // catch these, at the price of refusing long legitimate page names;
+  // that dial is the whole decision, so make the current setting visible.
+  it('does NOT catch a nested array shorter than the cap', () => {
+    const short = '[[1,2],[3,4]]'
+    expect(short.length).toBeLessThanOrEqual(MAX_ALIAS_LENGTH)
+    expect(parseReferences(short).map(r => r.alias)).toEqual(['1,2],[3,4'])
   })
 
   // The cap gates EMISSION only — the `]]` still closes its opener, so a

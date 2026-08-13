@@ -68,20 +68,24 @@ export const parseBlockRefTarget = (target: string): string | null => {
  *  was 205 KB of JavaScript, carried from there into the alias index,
  *  backlink panes, search and sync.
  *
- *  1024 comes from live data rather than taste: across ~31k aliases in
- *  the author's workspace the longest human-authored one is 322 chars
- *  (a multi-line quoted question used as a page title), and everything
- *  above 512 was machine junk of exactly the shape above. That leaves
- *  3x headroom over the longest real name while bounding a runaway's
- *  blast radius.
+ *  Calibrated against live data: across ~31k aliases in the author's
+ *  workspace the longest human-authored one is 322 chars (a multi-line
+ *  quoted question used as a page title). 4096 is deliberately far above
+ *  that — this is a blast-radius bound on a runaway, not a judgement
+ *  about how long a page name ought to be, so it is set where "no human
+ *  typed this" is beyond argument. The cost of the generous setting is
+ *  explicit: junk aliases in the low thousands (a 2951-char drawing
+ *  point-array in this very workspace) stay under it and are NOT caught.
+ *  Only the catastrophic tail is.
  *
  *  Deliberately here in the parser and not in the reference processor:
- *  the renderer scans through this same function (`remark-wikilinks`
- *  third/fourth passes call `parseOutermostReferences`), so one rule
- *  keeps "what displays as a link" and "what is recorded as a reference"
- *  from disagreeing. A processor-only cap would render a live-looking
- *  link the reference index knows nothing about. */
-export const MAX_ALIAS_LENGTH = 1024
+ *  the renderer scans through this same function, so one rule keeps
+ *  "what displays as a link" and "what is recorded as a reference" from
+ *  disagreeing. A processor-only cap would render a live-looking link
+ *  the reference index knows nothing about. `remark-wikilinks` passes 3
+ *  and 4 inherit the cap by calling `parseOutermostReferences`; passes 1
+ *  and 2 match their own regexes and so re-check it explicitly. */
+export const MAX_ALIAS_LENGTH = 4096
 
 const parseWikilinkReferences = (content: string): ParsedReference[] => {
   const references: ParsedReference[] = []
@@ -268,13 +272,23 @@ export function extractBlockRefIds(content: string): string[] {
 /** Render a wikilink targeting `alias`. If `alias` contains wikilink
  *  delimiters (`[[`, `]]`, or a trailing `]`), the output is
  *  syntactically safe but lossy; callers that need alias identity must
- *  verify by parsing the result. Guarantee, for non-empty `alias`: the
- *  output always parses to exactly one outermost reference spanning the
- *  whole string, and is delimiter-balanced so it cannot combine with
- *  surrounding text into a different link. Exception: `alias === ''`
- *  renders `[[]]`, which the parser's `if (alias)` gate emits ZERO
- *  references for — callers on this path already verify-by-parsing and
- *  fall back, so this is a contract-doc caveat, not a live bug. */
+ *  verify by parsing the result. Guarantee, for an `alias` that is
+ *  non-empty and at most `MAX_ALIAS_LENGTH`: the output always parses to
+ *  exactly one outermost reference spanning the whole string, and is
+ *  delimiter-balanced so it cannot combine with surrounding text into a
+ *  different link.
+ *
+ *  Two inputs fall outside that guarantee and render markup the parser
+ *  emits ZERO references for — `alias === ''` (`[[]]`, stopped by the
+ *  `if (alias)` gate) and any alias longer than `MAX_ALIAS_LENGTH`. This
+ *  function does not refuse them, because its callers split into two
+ *  kinds and only one can act on a refusal: the rewriters go through
+ *  `faithfulWikilinkReplacement`, which verifies by re-parsing and falls
+ *  back to the pinned form on `null`, so they are already safe; the
+ *  direct callers are PRODUCERS with a real user at the other end
+ *  (`appendTagToContent`), and they owe a check at their own entry point
+ *  where the input can still be rejected with an explanation instead of
+ *  silently degrading — see `isValidTagName`. */
 export const renderWikilink = (alias: string): string => {
   // `]]` inside the alias would terminate the wikilink at the wrong
   // place, and an unclosed `[[` would leak an opener that a later `]]`
