@@ -301,6 +301,22 @@ describe('block-type typeify processor', () => {
     expect(resolved?.id).toBe(id)
   })
 
+  // This processor adopts whatever content the block already had, and it
+  // fires on ANY path that adds `block-type` — including the agent
+  // bridge's raw properties bag, which does no validation. The two
+  // interactive label paths reject a name that can't be written as
+  // `[[name]]`; here there is no human to tell, so it claims no alias
+  // rather than claiming one nothing can resolve. An alias-less type is
+  // already a supported state (see the blank-label case).
+  it('adopts a `]]`-lossy name as the label but claims no alias for it', async () => {
+    env = await setup()
+    const id = await tagBlockType(env, 'Book]]Club')
+
+    const row = await env.repo.load(id)
+    expect(row!.properties[blockTypeLabelProp.name]).toBe('Book]]Club')
+    expect(row!.properties[aliasesProp.name] ?? []).toEqual([])
+  })
+
   it('trims whitespace-padded adopted content so a later rename replaces the alias', async () => {
     env = await setup()
     // `#type` on '  Book  ' adopts the name 'Book' but must also trim the
