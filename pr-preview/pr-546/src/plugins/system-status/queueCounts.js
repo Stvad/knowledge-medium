@@ -1,0 +1,2 @@
+var e=(e,t,n=!1)=>{if(e<=0)return`No unsynced changes`;let r=e===1&&!n?`block`:`blocks`;return`${n?`${e.toLocaleString()}+`:e.toLocaleString()} ${r} ${t?`changed, stored locally`:`changed, queued for upload`}`};export{e as formatPendingChanges};
+//# sourceMappingURL=queueCounts.js.map

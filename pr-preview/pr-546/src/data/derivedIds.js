@@ -1,0 +1,2 @@
+import e from"../../node_modules/.pnpm/uuid@14.0.0/node_modules/uuid/dist/v5.js";var t=t=>e(t.key,t.namespace),n=(e,t)=>e===null?{verdict:`absent`,block:null}:e.workspaceId===t.workspaceId?e.deleted?{verdict:`tombstoned`,block:e}:t.adoptable&&!t.adoptable(e)?{verdict:`rejected`,block:e}:{verdict:`ours`,block:e}:{verdict:`foreign`,block:e};export{n as classifyOccupant,t as derivedBlockId};
+//# sourceMappingURL=derivedIds.js.map
