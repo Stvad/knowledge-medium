@@ -69,6 +69,7 @@ import {
   captureDbOpenCorruption,
   recordForensicSessionStart,
   watchForRuntimeCorruption,
+  watchSyncHealth,
 } from '@/utils/dbForensicsHooks.js'
 import { releasePowerSyncConnection } from '@/data/releasePowerSyncConnection.js'
 import {
@@ -287,6 +288,13 @@ export const ensurePowerSyncReady = async (
   if (alreadyActive) {
     return
   }
+
+  // Sync-health breadcrumbs (2026-08-13 iPad incident: 22 blocks stuck in
+  // `ps_crud` for 16.3 hours with no record of sync state over time). POSITION
+  // IS LOAD-BEARING: this must stay AFTER both early returns above — a
+  // local-only session never uploads, so sampling it would record every
+  // sample as a false stall (queue always local, never draining to a server).
+  watchSyncHealth(db, userId)
 
   // Run disconnect+connect serially so we don't race two connect
   // attempts. Don't await the chain — connect can take a while and

@@ -23,12 +23,12 @@ import {
   type SyncIndicatorTone,
 } from './model.ts'
 import {
-  formatPendingChanges,
   materializeQueueCountSql,
   uploadQueueCountCap,
   uploadQueueExactCountSql,
   uploadQueuePreviewCountSql,
-} from './queueCounts.ts'
+} from '@/data/syncQueueSql.js'
+import { formatPendingChanges } from './queueCounts.ts'
 import { RejectionDialog } from './RejectionDialog.tsx'
 import { useDiagnostics } from '@/plugins/diagnostics/useDiagnostics.js'
 import { runActionByIdSafely } from '@/shortcuts/runAction.js'

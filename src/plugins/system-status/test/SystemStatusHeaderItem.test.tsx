@@ -11,7 +11,7 @@ import {
   uploadQueueCountCap,
   uploadQueueExactCountSql,
   uploadQueuePreviewCountSql,
-} from '../queueCounts.ts'
+} from '@/data/syncQueueSql.js'
 
 const mocks = vi.hoisted(() => ({
   localOnly: false,

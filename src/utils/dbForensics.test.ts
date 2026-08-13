@@ -5,7 +5,13 @@ import 'fake-indexeddb/auto'
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { IdbKeyedStore } from './idbKeyedStore.js'
-import { DbForensics } from './dbForensics.js'
+import {
+  DbForensics,
+  MAX_STALL_EPISODES,
+  MAX_SYNC_ARCHIVES,
+  MAX_SYNC_SAMPLES,
+  type SyncHealthSample,
+} from './dbForensics.js'
 
 let counter = 0
 const freshForensics = () => new DbForensics(new IdbKeyedStore(`km-forensics-test-${++counter}`, 'forensics'))
@@ -165,5 +171,226 @@ describe('DbForensics — corruption snapshot', () => {
     ])
     const all = await f.exportAll()
     expect(Object.keys(all).filter(k => k.startsWith('snapshot:'))).toHaveLength(2)
+  })
+})
+
+// A minimal complete sample, so each test only overrides the field(s) it cares
+// about. `t` defaults to 1000 — tests that record multiple samples override it
+// per call so `lastT`/coalescing behavior is legible from the numbers.
+const baseSyncSample = (
+  overrides: Partial<Omit<SyncHealthSample, 'lastT' | 'count'>> = {},
+): Omit<SyncHealthSample, 'lastT' | 'count'> => ({
+  t: 1000,
+  connected: true,
+  connecting: false,
+  hasSynced: true,
+  lastSyncedAt: 1000,
+  uploading: false,
+  downloading: false,
+  pendingRows: 0,
+  pendingBlocks: 0,
+  pendingSinceT: null,
+  rejected: 0,
+  materializing: 0,
+  uploadError: null,
+  downloadError: null,
+  stall: false,
+  ...overrides,
+})
+
+describe('DbForensics — sync-health sample ring', () => {
+  it('identical consecutive samples coalesce into one entry (count advances, t is preserved)', async () => {
+    const f = freshForensics()
+    await f.recordSyncSample(baseSyncSample({ t: 1000 }))
+    await f.recordSyncSample(baseSyncSample({ t: 2000 }))
+    await f.recordSyncSample(baseSyncSample({ t: 3000 }))
+
+    const all = await f.exportAll()
+    const ring = all['sync:current'] as { samples: SyncHealthSample[] }
+    expect(ring.samples).toHaveLength(1)
+    expect(ring.samples[0]).toMatchObject({ t: 1000, lastT: 3000, count: 3 })
+  })
+
+  it('a single changed field appends a second entry instead of coalescing', async () => {
+    const f = freshForensics()
+    await f.recordSyncSample(baseSyncSample({ t: 1000, connected: true }))
+    await f.recordSyncSample(baseSyncSample({ t: 2000, connected: false }))
+
+    const all = await f.exportAll()
+    const ring = all['sync:current'] as { samples: SyncHealthSample[] }
+    expect(ring.samples).toHaveLength(2)
+    expect(ring.samples[0]).toMatchObject({ t: 1000, lastT: 1000, count: 1, connected: true })
+    expect(ring.samples[1]).toMatchObject({ t: 2000, lastT: 2000, count: 1, connected: false })
+  })
+
+  it('the 16-hour-stall shape: 963 identical observations collapse into one entry', async () => {
+    const f = freshForensics()
+    for (let i = 0; i < 963; i++) {
+      await f.recordSyncSample(baseSyncSample({
+        t: 1000 + i * 60_000,
+        connected: false,
+        pendingBlocks: 22,
+        pendingRows: 22,
+        stall: true,
+      }))
+    }
+    const all = await f.exportAll()
+    const ring = all['sync:current'] as { samples: SyncHealthSample[] }
+    expect(ring.samples).toHaveLength(1)
+    expect(ring.samples[0].count).toBe(963)
+  })
+
+  it('ring caps at MAX_SYNC_SAMPLES, dropping the oldest entries', async () => {
+    const f = freshForensics()
+    for (let i = 0; i < MAX_SYNC_SAMPLES + 5; i++) {
+      // Each sample differs from its predecessor (pendingRows increments) so
+      // every call appends rather than coalescing.
+      await f.recordSyncSample(baseSyncSample({ t: i, pendingRows: i }))
+    }
+    const all = await f.exportAll()
+    const ring = all['sync:current'] as { samples: SyncHealthSample[] }
+    expect(ring.samples).toHaveLength(MAX_SYNC_SAMPLES)
+    expect(ring.samples[0].t).toBe(5) // oldest 5 dropped
+    expect(ring.samples[ring.samples.length - 1].t).toBe(MAX_SYNC_SAMPLES + 4)
+  })
+
+  it('recordSessionStart archives the previous ring under a distinct prefix and resets sync:current', async () => {
+    const f = freshForensics()
+    await f.recordSessionStart({ userId: 'u1', dbFilename: 'kmp-v6-u1.db' })
+    await f.recordSyncSample(baseSyncSample({ t: 1000, pendingBlocks: 22 }))
+    await f.recordSyncSample(baseSyncSample({ t: 2000, pendingBlocks: 22, connected: false }))
+
+    const before = (await f.exportAll())['sync:current'] as { startedAt: number; samples: unknown[] }
+    expect(before.samples).toHaveLength(2)
+
+    await f.recordSessionStart({ userId: 'u1', dbFilename: 'kmp-v6-u1.db' })
+
+    const all = await f.exportAll()
+    const archivedKeys = Object.keys(all).filter(k => k.startsWith('syncsession:'))
+    expect(archivedKeys).toHaveLength(1)
+    const archived = all[archivedKeys[0]] as { startedAt: number; samples: unknown[] }
+    expect(archived.startedAt).toBe(before.startedAt)
+    expect(archived.samples).toHaveLength(2)
+
+    const current = all['sync:current'] as { samples: unknown[] }
+    expect(current.samples).toEqual([])
+  })
+
+  it('archive trimming caps at MAX_SYNC_ARCHIVES but never deletes sync:current', async () => {
+    const f = freshForensics()
+    for (let i = 0; i < MAX_SYNC_ARCHIVES + 3; i++) {
+      await f.recordSessionStart({ userId: 'u1', dbFilename: 'kmp-v6-u1.db' })
+      await f.recordSyncSample(baseSyncSample({ t: i, pendingRows: i }))
+      await f.markCleanShutdown()
+    }
+    const all = await f.exportAll()
+    expect(all['sync:current']).toBeDefined()
+    const current = all['sync:current'] as { samples: unknown[] }
+    // The most recent session's own sample is still there — never swept by the trim.
+    expect(current.samples).toHaveLength(1)
+
+    const archivedKeys = Object.keys(all).filter(k => k.startsWith('syncsession:'))
+    expect(archivedKeys.length).toBeGreaterThan(0)
+    expect(archivedKeys.length).toBeLessThanOrEqual(MAX_SYNC_ARCHIVES)
+    expect(archivedKeys).not.toContain('sync:current')
+  })
+
+  it('a store that throws does not reject recordSyncSample', async () => {
+    const throwingStore = {
+      tx: async () => { throw new Error('boom') },
+      scanByPrefix: async () => { throw new Error('boom') },
+    } as unknown as IdbKeyedStore
+    const f = new DbForensics(throwingStore)
+    await expect(f.recordSyncSample(baseSyncSample())).resolves.toBeUndefined()
+    // Confirm the store really is unusable — this isn't accidentally passing
+    // because the store secretly works.
+    const all = await f.exportAll()
+    expect(all).toEqual({})
+  })
+
+  it('healthy churn in lastSyncedAt/uploading/downloading does not fragment the ring, and the retained entry updates to the newest value', async () => {
+    const f = freshForensics()
+    await f.recordSyncSample(baseSyncSample({ t: 1000, lastSyncedAt: 1000, uploading: true, downloading: false }))
+    await f.recordSyncSample(baseSyncSample({ t: 2000, lastSyncedAt: 2000, uploading: false, downloading: true }))
+    await f.recordSyncSample(baseSyncSample({ t: 3000, lastSyncedAt: 3000, uploading: false, downloading: false }))
+
+    const all = await f.exportAll()
+    const ring = all['sync:current'] as { samples: SyncHealthSample[] }
+    // One absorbing entry, not three — these three fields churn on every
+    // checkpoint even on a healthy connection and must not be part of the
+    // coalescing key.
+    expect(ring.samples).toHaveLength(1)
+    // The retained entry reflects the NEWEST observation ("as of lastT"), not
+    // whatever it happened to be when the entry was first created.
+    expect(ring.samples[0]).toMatchObject({
+      t: 1000, lastT: 3000, count: 3,
+      lastSyncedAt: 3000, uploading: false, downloading: false,
+    })
+  })
+
+  it('a change in pendingSinceT (a new pending-queue episode) still appends a new entry', async () => {
+    const f = freshForensics()
+    // Same pendingBlocks both times, but the queue drained and refilled
+    // between samples — a genuinely new episode, not a continuation.
+    await f.recordSyncSample(baseSyncSample({ t: 1000, pendingBlocks: 5, pendingSinceT: 1000 }))
+    await f.recordSyncSample(baseSyncSample({ t: 2000, pendingBlocks: 5, pendingSinceT: 2000 }))
+
+    const all = await f.exportAll()
+    const ring = all['sync:current'] as { samples: SyncHealthSample[] }
+    expect(ring.samples).toHaveLength(2)
+  })
+})
+
+describe('DbForensics — stall episodes', () => {
+  it('recordStallEpisode writes the triggering sample under stall:<t>', async () => {
+    const f = freshForensics()
+    const key = await f.recordStallEpisode(baseSyncSample({ t: 1000, pendingBlocks: 22, stall: true }))
+    expect(key).toBe('stall:1000')
+
+    const all = await f.exportAll()
+    expect(all[key as string]).toMatchObject({ t: 1000, pendingBlocks: 22, stall: true })
+    expect(all[key as string]).not.toHaveProperty('clearedAt')
+  })
+
+  it('closeStallEpisode patches how the stall resolved, without touching the opening fields', async () => {
+    const f = freshForensics()
+    const key = await f.recordStallEpisode(baseSyncSample({ t: 1000, pendingBlocks: 22, connected: false }))
+    await f.closeStallEpisode(key, { clearedAt: 5000, connected: true, lastSyncedAt: 5000, pendingBlocks: 0 })
+
+    const all = await f.exportAll()
+    expect(all[key as string]).toMatchObject({
+      t: 1000, pendingBlocks: 22, connected: false, // opening state, unchanged
+      clearedAt: 5000, clearedConnected: true, clearedLastSyncedAt: 5000, clearedPendingBlocks: 0,
+    })
+  })
+
+  it('closeStallEpisode is a no-op when key is null', async () => {
+    const f = freshForensics()
+    await expect(
+      f.closeStallEpisode(null, { clearedAt: 1, connected: true, lastSyncedAt: null, pendingBlocks: 0 }),
+    ).resolves.toBeUndefined()
+    expect(await f.exportAll()).toEqual({})
+  })
+
+  it('caps at MAX_STALL_EPISODES, dropping the oldest', async () => {
+    const f = freshForensics()
+    for (let i = 0; i < MAX_STALL_EPISODES + 3; i++) {
+      await f.recordStallEpisode(baseSyncSample({ t: 1000 + i, pendingBlocks: 1 }))
+    }
+    const all = await f.exportAll()
+    const keys = Object.keys(all).filter(k => k.startsWith('stall:'))
+    expect(keys).toHaveLength(MAX_STALL_EPISODES)
+  })
+
+  it('a store that throws does not reject recordStallEpisode or closeStallEpisode', async () => {
+    const throwingStore = {
+      tx: async () => { throw new Error('boom') },
+      scanByPrefix: async () => { throw new Error('boom') },
+    } as unknown as IdbKeyedStore
+    const f = new DbForensics(throwingStore)
+    await expect(f.recordStallEpisode(baseSyncSample())).resolves.toBeNull()
+    await expect(
+      f.closeStallEpisode('stall:1', { clearedAt: 1, connected: true, lastSyncedAt: null, pendingBlocks: 0 }),
+    ).resolves.toBeUndefined()
   })
 })

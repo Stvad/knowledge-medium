@@ -8,6 +8,12 @@
 import { dbForensics, type DbForensics } from '@/utils/dbForensics.js'
 import { isLocalDbCorruptionError, isRuntimeDbCorruptionError } from '@/utils/localDbCorruption.js'
 import { reportRuntimeLocalDbCorruption } from '@/data/localDbCorruptionSignal.js'
+import {
+  materializeQueueCountSql,
+  rejectedQueueCountSql,
+  uploadQueuePreviewCountSql,
+  uploadQueueRowCountSql,
+} from '@/data/syncQueueSql.js'
 
 // Structural PowerSync status surface (avoids importing PowerSync types; see
 // firstSync.ts for the same approach). `downloadError` lives under
@@ -119,6 +125,215 @@ export const watchForRuntimeCorruption = (
     : null
 }
 
+// Structural PowerSync status/db surface for the sync-health sampler (avoids
+// importing PowerSync types, same convention as CorruptionWatchDb above and
+// firstSync.ts's SyncStatusDb). Two candidate containers for the data-flow
+// fields — `dataFlowStatus` (the live `SyncStatus` class's getter) and
+// `dataFlow` (the plain-object shape `SyncStatus#toJSON()` produces, e.g. if
+// status ever crosses a worker boundary) — read both defensively, same reason
+// the corruption watcher above checks both `dataFlowStatus` and a top-level
+// fallback for `downloadError`.
+interface SyncFlowFields {
+  uploading?: boolean
+  downloading?: boolean
+  uploadError?: unknown
+  downloadError?: unknown
+}
+interface SyncStatusLike {
+  connected?: boolean
+  connecting?: boolean
+  hasSynced?: boolean | null
+  lastSyncedAt?: Date | number | null
+  dataFlow?: SyncFlowFields
+  dataFlowStatus?: SyncFlowFields
+}
+interface SyncHealthDb {
+  currentStatus?: SyncStatusLike
+  registerListener?: (l: { statusChanged?: (s: SyncStatusLike) => void }) => () => void
+  getAll?: (sql: string) => Promise<unknown[]>
+}
+
+const flowField = <K extends keyof SyncFlowFields>(
+  s: SyncStatusLike | undefined,
+  key: K,
+): SyncFlowFields[K] => s?.dataFlowStatus?.[key] ?? s?.dataFlow?.[key]
+
+const toEpochMs = (v: Date | number | null | undefined): number | null => {
+  if (v === null || v === undefined) return null
+  return v instanceof Date ? v.getTime() : v
+}
+
+// Truncated so a verbose/runaway error message can't dominate the ring.
+const SYNC_ERROR_MAX_LEN = 200
+const errorMessageOf = (error: unknown): string | null => {
+  if (error === undefined || error === null) return null
+  const msg = messageOf(error)
+  return msg.length > SYNC_ERROR_MAX_LEN ? msg.slice(0, SYNC_ERROR_MAX_LEN) : msg
+}
+
+interface CountRow { count: number }
+const countOf = (rows: unknown[]): number | null => {
+  const row = rows[0] as CountRow | undefined
+  const n = row ? Number(row.count) : NaN
+  return Number.isFinite(n) ? n : null
+}
+
+// Best-effort single count query — null (not a throw) on any failure or a
+// db with no `getAll`. A sample with a null count is far better than no
+// sample at all (the whole point of this module, per the iPad incident).
+const safeCount = async (db: SyncHealthDb, sql: string): Promise<number | null> => {
+  if (typeof db.getAll !== 'function') return null
+  try {
+    return countOf(await db.getAll(sql))
+  } catch {
+    return null
+  }
+}
+
+/** A queue with unsynced blocks that hasn't synced in this long is worth
+ *  flagging on its own — the 2026-08-13 iPad incident sat at 16.3 hours. */
+export const SYNC_STALL_THRESHOLD_MS = 10 * 60_000
+/** How often the watcher re-samples on its own (independent of `statusChanged`
+ *  firing). Cheap even at this cadence because `recordSyncSample` coalesces a
+ *  run of identical samples into one ring entry (see dbForensics.ts) — a
+ *  healthy, unchanging connection costs one ring slot no matter how many
+ *  intervals fire. */
+export const SYNC_SAMPLE_INTERVAL_MS = 60_000
+
+let syncWatchedUserId: string | null = null
+let disposeSyncWatch: (() => void) | null = null
+let syncIntervalId: ReturnType<typeof setInterval> | null = null
+// Once-per-stall-episode console.warn latch: set on the not-stalled→stalled
+// transition, cleared the moment it's no longer stalled (so the NEXT episode
+// gets its own console line too), and reset on a fresh `watchSyncHealth` arm.
+let syncStallWarned = false
+// Epoch ms the CURRENT unbroken run of `pendingBlocks > 0` began, or null when
+// the queue is empty. Independent of `lastSyncedAt`: `lastSyncedAt` advances
+// on every DOWNLOAD checkpoint, so it stays "fresh" even when uploads are
+// wedged and downloads keep working — one of the two live hypotheses for the
+// 2026-08-13 incident, and a stall condition keyed only on `lastSyncedAt`
+// can't see it. This clock is the second, independent signal: how long has
+// the queue itself been non-empty. LIMITATION: it's in-memory, not persisted,
+// so a stall spanning a restart re-arms each boot and only flags again
+// ~SYNC_STALL_THRESHOLD_MS into the new session — acceptable (the incident's
+// four restarts didn't drain the queue either way; the ring + stall-episode
+// log still show the pre-restart state via `recordSessionStart`'s archive).
+let syncPendingSince: number | null = null
+// The currently-open stall episode's store key (see dbForensics.ts
+// recordStallEpisode/closeStallEpisode), or null when nothing is open. Tracked
+// here, next to `syncStallWarned`, because the store has no notion of "the
+// current" episode — only the watcher knows which one is still in flight.
+let openStallEpisodeKey: string | null = null
+
+const sampleSyncHealth = async (db: SyncHealthDb, forensics: DbForensics): Promise<void> => {
+  const status = db.currentStatus
+  // The four counts are independent — run them concurrently, same reasoning
+  // as runHealthCommand (healthCommand.ts).
+  const [pendingBlocks, rejected, materializing, pendingRows] = await Promise.all([
+    safeCount(db, uploadQueuePreviewCountSql),
+    safeCount(db, rejectedQueueCountSql),
+    safeCount(db, materializeQueueCountSql),
+    safeCount(db, uploadQueueRowCountSql),
+  ])
+
+  const lastSyncedAt = toEpochMs(status?.lastSyncedAt)
+  const now = Date.now()
+
+  // `pendingBlocks === null` means the COUNT QUERY FAILED, not an empty
+  // queue — leave the clock untouched rather than reset it (a transient query
+  // failure must not erase how long a real stall has been running).
+  if (pendingBlocks !== null) {
+    if (pendingBlocks > 0) {
+      syncPendingSince ??= now
+    } else {
+      syncPendingSince = null
+    }
+  }
+
+  const syncStale = lastSyncedAt !== null && now - lastSyncedAt > SYNC_STALL_THRESHOLD_MS
+  const queueOld = syncPendingSince !== null && now - syncPendingSince > SYNC_STALL_THRESHOLD_MS
+  const stall = pendingBlocks !== null && pendingBlocks > 0 && (syncStale || queueOld)
+
+  const sample = {
+    t: now,
+    connected: Boolean(status?.connected),
+    connecting: Boolean(status?.connecting),
+    hasSynced: status?.hasSynced ?? null,
+    lastSyncedAt,
+    uploading: Boolean(flowField(status, 'uploading')),
+    downloading: Boolean(flowField(status, 'downloading')),
+    pendingRows,
+    pendingBlocks,
+    pendingSinceT: syncPendingSince,
+    rejected,
+    materializing,
+    uploadError: errorMessageOf(flowField(status, 'uploadError')),
+    downloadError: errorMessageOf(flowField(status, 'downloadError')),
+    stall,
+  }
+
+  if (stall && !syncStallWarned) {
+    syncStallWarned = true
+    const syncAgeMin = lastSyncedAt !== null ? Math.round((now - lastSyncedAt) / 60_000) : null
+    const queueAgeMin = syncPendingSince !== null ? Math.round((now - syncPendingSince) / 60_000) : null
+    console.warn(
+      `[db-forensics] sync stall detected: ${pendingBlocks} pending block(s), ` +
+      `queue non-empty for ${queueAgeMin}min, last synced ${syncAgeMin ?? 'never'}min ago`,
+    )
+    openStallEpisodeKey = await forensics.recordStallEpisode(sample)
+  } else if (!stall && syncStallWarned) {
+    syncStallWarned = false
+    await forensics.closeStallEpisode(openStallEpisodeKey, {
+      clearedAt: now,
+      connected: sample.connected,
+      lastSyncedAt: sample.lastSyncedAt,
+      pendingBlocks: sample.pendingBlocks,
+    })
+    openStallEpisodeKey = null
+  }
+
+  await forensics.recordSyncSample(sample)
+}
+
+/**
+ * Watch the PowerSync connection for sync-health breadcrumbs — the record
+ * that was MISSING in the 2026-08-13 iPad incident (22 blocks stuck in
+ * `ps_crud` for 16.3 hours; four app restarts didn't drain it; whether
+ * downloads were even working was unanswerable after the fact). Samples on
+ * arm, on every `statusChanged`, and on a `SYNC_SAMPLE_INTERVAL_MS` timer —
+ * cheap because `recordSyncSample` coalesces identical consecutive samples,
+ * so a long stall costs one ring slot, not thousands.
+ *
+ * Re-arms per user, same shape as {@link watchForRuntimeCorruption}: on an
+ * in-page account switch it disposes the previous listener + timer and
+ * rebinds to the new user, re-arming the stall-warning latch too.
+ */
+export const watchSyncHealth = (
+  db: SyncHealthDb,
+  userId: string,
+  forensics: DbForensics = dbForensics,
+): void => {
+  if (syncWatchedUserId === userId) return
+  disposeSyncWatch?.()
+  disposeSyncWatch = null
+  if (syncIntervalId !== null) {
+    clearInterval(syncIntervalId)
+    syncIntervalId = null
+  }
+  syncWatchedUserId = userId
+  syncStallWarned = false
+  syncPendingSince = null
+  openStallEpisodeKey = null
+
+  const sample = () => void sampleSyncHealth(db, forensics)
+
+  sample() // once, immediately — don't wait a full interval to see the current state
+  disposeSyncWatch = typeof db.registerListener === 'function'
+    ? db.registerListener({ statusChanged: sample })
+    : null
+  syncIntervalId = setInterval(sample, SYNC_SAMPLE_INTERVAL_MS)
+}
+
 /** Test-only: reset the once-per-process guards + per-user watcher state. */
 export const __resetDbForensicsHooksForTest = (): void => {
   sessionRecorded = false
@@ -127,6 +342,17 @@ export const __resetDbForensicsHooksForTest = (): void => {
   disposeWatch = null
   watchedUserId = null
   runtimeCorruptionCaptured = false
+
+  disposeSyncWatch?.()
+  disposeSyncWatch = null
+  if (syncIntervalId !== null) {
+    clearInterval(syncIntervalId)
+    syncIntervalId = null
+  }
+  syncWatchedUserId = null
+  syncStallWarned = false
+  syncPendingSince = null
+  openStallEpisodeKey = null
 }
 
 /**
