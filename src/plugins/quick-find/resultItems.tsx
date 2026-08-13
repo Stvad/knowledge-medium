@@ -28,6 +28,61 @@ export interface ResultRowContext {
   typeRegistry: ReadonlyMap<string, TypeContribution>
 }
 
+/** Whether this row gets a context line at all.
+ *
+ *  The line is RESERVED rather than conditional because crumbs land on a
+ *  later batched query, and a line that appears when they do would shove
+ *  every row below it. But reserving is only worth its 16px where
+ *  something can actually arrive — and for a root block nothing can:
+ *  `manyAncestors` walks parents, so a block with no parent resolves to
+ *  an empty chain by construction, not by chance. Those rows were
+ *  holding a blank line forever, which reads as a failed load rather
+ *  than as "this block has no path".
+ *
+ *  Every input here has to be settled at first paint, or the gate itself
+ *  becomes the thing that moves the row:
+ *
+ *  - `parentId` is on the match and never changes for a given row. A cut
+ *    chain still yields the `…` marker, so a parented row is never blank
+ *    for want of ancestors.
+ *  - `crumbs?.length` is the stale-payload fallback: `searchByContent`
+ *    declares no row dependency, so a block re-parented since the query
+ *    can arrive claiming `parentId: null` and then produce a real path.
+ *    Costs one row growing rather than a dropped path.
+ *  - `chipCount` alone would NOT be settled, which is the trap. `typeIds`
+ *    is fixed per row, but the REGISTRY that turns ids into chips is
+ *    live: `useTypes` re-renders on every `onTypesChange`, cold start
+ *    installs the facet runtime twice (kernel+static, then dynamic —
+ *    see `repo.ts`), and `UserTypesService` projects user-defined types
+ *    later still as their definition blocks load or sync in. Gating on
+ *    resolved chips alone therefore grew the row on the second render
+ *    for any not-yet-nameable type, and shrank it — worse, since content
+ *    jumps up under the pointer — when a type definition was deleted.
+ *    Recents are the likeliest victim: they render on the EMPTY query,
+ *    i.e. the instant ⌘P opens, which is exactly the startup window.
+ *
+ *  `unresolvedTypes` closes that: an id the registry cannot name YET may
+ *  still become a chip, so it reserves now and the chip lands in space
+ *  already held. An id it CAN name is settled — `page` resolves to a
+ *  hidden kernel seed on the first wave and stays hidden, which is what
+ *  keeps a plain page's line collapsed. Deleting a definition moves an
+ *  id back to unresolved, so the reservation survives that too.
+ *
+ *  Residual, accepted: an id that is unknown at paint and later resolves
+ *  to a HIDDEN type does collapse the line. That needs a user-defined
+ *  type with `hideFromBlockDisplay` set, on a root block, inside the
+ *  startup window — and it costs one row, once. */
+const hasContextLine = ({crumbs, chipCount, unresolvedTypes, parentId}: {
+  crumbs: readonly string[] | undefined
+  chipCount: number
+  unresolvedTypes: boolean
+  parentId: string | null
+}): boolean =>
+  chipCount > 0
+  || unresolvedTypes
+  || parentId !== null
+  || (crumbs?.length ?? 0) > 0
+
 /** The row's context line: what the block is, then where it lives.
  *
  *  One line for both, left-packed. Not a second line — that would double
@@ -49,33 +104,12 @@ export interface ResultRowContext {
  *  its reserved-but-empty box costs nothing visually.
  *
  *  Chips are `shrink-0` and the crumbs are not: when the line runs out of
- *  width the path truncates and the chips survive whole. */
-/** Whether this row gets a context line at all.
- *
- *  The line is RESERVED rather than conditional because crumbs land on a
- *  later batched query, and a line that appears when they do would shove
- *  every row below it. But reserving is only worth its 16px where
- *  something can actually arrive — and for a root block nothing can:
- *  `manyAncestors` walks parents, so a block with no parent resolves to
- *  an empty chain by construction, not by chance. Those rows were
- *  holding a blank line forever, which reads as a failed load rather
- *  than as "this block has no path".
- *
- *  So the reservation follows the block's own parent edge, known at
- *  first paint. `parentId` non-null is the reserve case; note that a cut
- *  chain still yields the `…` marker, so a parented row is never blank
- *  for want of ancestors.
- *
- *  `crumbs?.length` is the fallback for a stale payload: `searchByContent`
- *  declares no row dependency, so a block re-parented since the query
- *  can arrive claiming `parentId: null` and then produce a real path.
- *  Rare, and it costs one row growing rather than a dropped path. */
-const hasContextLine = (
-  crumbs: readonly string[] | undefined,
-  chipCount: number,
-  parentId: string | null,
-): boolean => chipCount > 0 || parentId !== null || (crumbs?.length ?? 0) > 0
-
+ *  width the path truncates and the chips survive whole. `max-w-[30%]`
+ *  is the ceiling on that priority — type labels are user-authored and
+ *  unbounded, and one 55-character label measured 348px of a 478px line,
+ *  leaving the path 124px. The cap binds only on long labels (an
+ *  ordinary "Person" is ~12% of the line), and `TypeChip`'s own
+ *  `truncate` ellipsises what it clips. */
 const contextLine = (
   crumbs: readonly string[] | undefined,
   chips: readonly DisplayableType[],
@@ -90,7 +124,7 @@ const contextLine = (
         typeId={typeId}
         type={type}
         withHash
-        className="shrink-0 py-0 leading-4"
+        className="max-w-[30%] shrink-0 py-0 leading-4"
       />
     ))}
     <BlockCrumbs crumbs={crumbs}/>
@@ -103,9 +137,14 @@ const contextLine = (
  *
  *  The crumbs arrive from a separate batched load keyed by block id, so
  *  `crumbs` is routinely `undefined` — `BlockCrumbs` renders its reserved
- *  line either way and the row height never changes. Types need no such
- *  care: they ride along with the match itself and are there on the first
- *  paint.
+ *  line either way, so the fill-in is a repaint rather than a reflow.
+ *  Types ride along with the match itself and are there on the first
+ *  paint, but the registry that NAMES them is not (see
+ *  {@link hasContextLine}).
+ *
+ *  Height is stable in every case the row can decide for itself; the one
+ *  disclosed exception is a `parentId` snapshot that was already stale
+ *  when it arrived, which {@link hasContextLine} documents.
  *
  *  Context-less rows drop the two-line styling entirely rather than
  *  keeping it with an empty slot, so they render at the same height as
@@ -125,8 +164,12 @@ const resultRow = ({key, value, text, crumbs, typeIds, parentId, typeRegistry}: 
   typeRegistry: ReadonlyMap<string, TypeContribution>
 }): QuickFindListItem => {
   const chips = displayableTypes(typeIds, typeRegistry).slice(0, MAX_ROW_TYPE_CHIPS)
+  // Ids the registry cannot name yet still hold the line — see hasContextLine.
+  const unresolvedTypes = typeIds.some(typeId => !typeRegistry.has(typeId))
   const content = <span className="w-full truncate">{truncate(text, ROW_TEXT_MAX_CHARS)}</span>
-  if (!hasContextLine(crumbs, chips.length, parentId)) return {key, value, children: content}
+  if (!hasContextLine({crumbs, chipCount: chips.length, unresolvedTypes, parentId})) {
+    return {key, value, children: content}
+  }
   return {
     key,
     value,

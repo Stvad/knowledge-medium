@@ -59,7 +59,11 @@ export const TypeChip = ({typeId, type, link, onRemove, withHash, className}: Ty
       {link ? (
         <a
           href={link.href}
-          className="truncate text-inherit no-underline hover:underline"
+          // `min-w-0`: the label is a flex item, whose default
+          // `min-width: auto` refuses to shrink below its text — so
+          // `truncate` never fired and a long label spilled past the
+          // pill's own background instead of ellipsising inside it.
+          className="min-w-0 truncate text-inherit no-underline hover:underline"
           // An <a> is draggable by default; a press-drag on the chip
           // should read as a missed click, not start a native link
           // drag.
@@ -69,7 +73,7 @@ export const TypeChip = ({typeId, type, link, onRemove, withHash, className}: Ty
           {labelText}
         </a>
       ) : (
-        <span className="truncate">{labelText}</span>
+        <span className="min-w-0 truncate">{labelText}</span>
       )}
       {onRemove && (
         <button

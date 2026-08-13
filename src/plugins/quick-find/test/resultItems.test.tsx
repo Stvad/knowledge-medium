@@ -26,10 +26,10 @@ const rowContext = (
   types: ReadonlyMap<string, TypeContribution> = typeRegistry(),
 ): ResultRowContext => ({crumbsByBlockId, typeRegistry: types})
 
-const renderBlocks = (
+const blocksList = (
   blocks: LinkTargetBlockMatch[],
-  context: ResultRowContext = rowContext(),
-) => render(
+  context: ResultRowContext,
+) => (
   <QuickFindList
     emptyMessage="No results."
     groups={[{heading: 'Blocks', items: blockResultItems(blocks, context)}]}
@@ -38,8 +38,13 @@ const renderBlocks = (
     onValueChange={() => undefined}
     query="sync"
     value=""
-  />,
+  />
 )
+
+const renderBlocks = (
+  blocks: LinkTargetBlockMatch[],
+  context: ResultRowContext = rowContext(),
+) => render(blocksList(blocks, context))
 
 const crumbLineOf = (option: HTMLElement) =>
   option.querySelector('[data-block-crumbs]')
@@ -81,6 +86,51 @@ describe('blockResultItems', () => {
     // result holding a blank line forever, which reads as a load that
     // failed rather than as a block with no path.
     renderBlocks([{...match('block-1', 'Project Alpha'), parentId: null}])
+
+    expect(crumbLineOf(screen.getByRole('option', {name: 'Project Alpha'})))
+      .not.toBeInTheDocument()
+  })
+
+  it('holds the line for a type the registry cannot name YET', () => {
+    // The row's `typeIds` are fixed, but the registry that turns them into
+    // chips is live: cold start installs the facet runtime twice, and
+    // UserTypesService projects user-defined types later still. Gating the
+    // reservation on RESOLVED chips meant this row painted with no line and
+    // then grew one on the next render — the reflow the reserved line
+    // exists to prevent, and Recents hit it hardest since they render the
+    // instant the dialog opens.
+    const blocks = [{...match('block-1', 'Ada Lovelace', ['person']), parentId: null}]
+    const {rerender} = render(blocksList(blocks, rowContext(new Map(), typeRegistry())))
+
+    const before = crumbLineOf(screen.getByRole('option', {name: /Ada Lovelace/}))
+    expect(before).toBeInTheDocument()
+    expect(before).toBeEmptyDOMElement()
+
+    rerender(blocksList(
+      blocks,
+      rowContext(new Map(), typeRegistry({id: 'person', label: 'Person'})),
+    ))
+
+    const option = screen.getByRole('option', {name: /Ada Lovelace/})
+    expect(crumbLineOf(option)).toBeInTheDocument()
+    expect(chipLabelsOf(option)).toEqual(['#Person'])
+  })
+
+  it('keeps a plain page collapsed across a registry change', () => {
+    // The other direction of the same invariant: `page` is a kernel seed
+    // that resolves hidden on the first wave and stays hidden, so a plain
+    // page must not acquire a line when the registry later grows.
+    const blocks = [{...match('block-1', 'Project Alpha', ['page']), parentId: null}]
+    const pageType = {id: 'page', label: 'Page', hideFromBlockDisplay: true}
+    const {rerender} = render(blocksList(blocks, rowContext(new Map(), typeRegistry(pageType))))
+
+    expect(crumbLineOf(screen.getByRole('option', {name: 'Project Alpha'})))
+      .not.toBeInTheDocument()
+
+    rerender(blocksList(
+      blocks,
+      rowContext(new Map(), typeRegistry(pageType, {id: 'person', label: 'Person'})),
+    ))
 
     expect(crumbLineOf(screen.getByRole('option', {name: 'Project Alpha'})))
       .not.toBeInTheDocument()
