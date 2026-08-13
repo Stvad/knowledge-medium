@@ -15,7 +15,18 @@ const CRUMB_SEPARATOR = ' › '
  *
  *  `h-4` / `leading-4` / `text-xs` are one 16px line exactly; keep them in
  *  step if the type scale changes, or the reserved box stops matching what
- *  lands in it. */
+ *  lands in it. That height is also what the whole context line measures,
+ *  since this is its tallest child — anything sharing the row (type chips)
+ *  has to fit 16px rather than the row growing to fit it.
+ *
+ *  `min-w-0` and NOT `flex-1`: the path is the part that GIVES when the
+ *  line runs out of width — it is unbounded and already degrades by
+ *  design (see `CRUMB_MAX_SEGMENTS`), whereas a companion chip is short,
+ *  bounded and cheap to keep whole. `min-w-0` is what permits that
+ *  shrink; `flex-1` would additionally make this box CLAIM the leftover
+ *  width, which pins anything beside it to the far edge of the row — a
+ *  lone type chip stranded away from the content it describes, with an
+ *  empty path's worth of gap in front of it. */
 export const BlockCrumbs = ({
   crumbs,
   className,
@@ -24,7 +35,7 @@ export const BlockCrumbs = ({
   className?: string
 }) => (
   <div
-    className={cn('h-4 w-full truncate text-xs leading-4 text-muted-foreground', className)}
+    className={cn('h-4 min-w-0 truncate text-xs leading-4 text-muted-foreground', className)}
     data-block-crumbs=""
   >
     {crumbs && crumbs.length > 0 ? crumbs.join(CRUMB_SEPARATOR) : null}

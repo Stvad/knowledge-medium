@@ -9,6 +9,7 @@ import { Repo } from '@/data/repo'
 import { searchSourcesFacet, type SearchSourceContribution } from '@/data/facets.js'
 import {
   completionTypeHint,
+  displayableTypes,
   labelForBlockData,
   searchAliasLabels,
   searchBlocksAcrossSources,
@@ -131,6 +132,38 @@ describe('completionTypeHint', () => {
   })
 })
 
+describe('displayableTypes', () => {
+  it('keeps every display-worthy type, in the order the block stores them', () => {
+    // The hint takes the first; a chip row shows several, so the filter
+    // has to be a list rather than a single winner.
+    expect(displayableTypes(
+      ['page', 'person', 'author'],
+      typeRegistry(
+        {id: 'page', label: 'Page', hideFromBlockDisplay: true},
+        {id: 'person', label: 'Person'},
+        {id: 'author', label: 'Author'},
+      ),
+    ).map(({label}) => label)).toEqual(['Person', 'Author'])
+  })
+
+  it('hands back the registry contribution, not just a name', () => {
+    // The chip colors itself from the contribution; resolving the label
+    // and then re-looking-up the type to paint it would be two lookups
+    // that can disagree.
+    const person = {id: 'person', label: 'Person'}
+
+    expect(displayableTypes(['person'], typeRegistry(person)))
+      .toEqual([{typeId: 'person', type: person, label: 'Person'}])
+  })
+
+  it('shows a repeated id once', () => {
+    // A raw properties-bag write (agent verb, importer, sync-applied row)
+    // can repeat an id; two identical chips read as two tags.
+    expect(displayableTypes(['person', 'person'], typeRegistry({id: 'person', label: 'Person'})))
+      .toHaveLength(1)
+  })
+})
+
 describe('link target autocomplete helpers', () => {
   it('labels blocks by first alias, then content, then fallback', () => {
     expect(labelForBlockData({
@@ -215,6 +248,22 @@ describe('link target autocomplete helpers', () => {
     })
 
     expect(out.blocks.map(match => match.blockId)).toEqual(['survivor'])
+  })
+
+  it('carries each content match\'s types, with no second query to fetch them', async () => {
+    // The rows behind a content match are whole `BlockData`, so a
+    // consumer that wants to show what KIND of thing a result is gets it
+    // off the row — unlike the ALIAS path, whose rows come from
+    // `block_aliases` and need `loadTypeIdsByBlock` to fill the same gap.
+    await create({id: 'ada', content: 'Ada Lovelace notes', types: ['person', 'author']})
+
+    const out = await searchLinkTargets(env.repo, {
+      workspaceId: WS,
+      query: 'Lovelace',
+      limit: 5,
+    })
+
+    expect(out.blocks.map(match => match.typeIds)).toEqual([['person', 'author']])
   })
 
   it('still returns `limit` alias survivors when the exclusion set outranks them', async () => {
@@ -332,6 +381,7 @@ describe('link target autocomplete helpers', () => {
         content: 'My Dating notes',
         label: 'My Dating notes',
         parentId: null,
+        typeIds: [],
       }],
     })
     expect(phases).toEqual(['aliases:page', 'blocks:block'])

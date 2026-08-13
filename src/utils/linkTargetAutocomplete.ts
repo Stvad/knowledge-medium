@@ -56,6 +56,14 @@ export interface LinkTargetBlockMatch {
    *  parent was excluded from the ancestor walk" — an empty ancestor
    *  chain looks identical either way (see `crumbsFromAncestors`). */
   parentId: string | null
+  /** Raw type ids, for a consumer that wants to show what KIND of thing
+   *  the row is alongside where it lives. Free here — these rows are
+   *  whole `BlockData`, so unlike the ancestor chain (a second batched
+   *  query) this costs no round trip and lands with the first paint.
+   *  Ids rather than resolved labels: the registry that names them is a
+   *  UI-time concern, same split as {@link AliasCompletionCandidate}.
+   *  Filter with {@link displayableTypes} before rendering. */
+  typeIds: readonly string[]
 }
 
 export interface LinkTargetSearchResult {
@@ -97,29 +105,58 @@ export const labelForBlockData = (
 const stringSet = (values?: Iterable<string>): Set<string> =>
   new Set(values ?? [])
 
-/** The type name shown beside a `[[` completion candidate, or
- *  `undefined` when the row has nothing worth saying.
+export interface DisplayableType {
+  typeId: string
+  type: TypeContribution
+  /** Non-empty and already trimmed — the filter drops anything without
+   *  one, so a renderer never has to fall back to the id. */
+  label: string
+}
+
+/** The types worth showing beside a block on a SUMMARY row — a `[[`
+ *  completion candidate, a quick-find result — where the block's own
+ *  renderer is not present.
  *
  *  Reuses the `hideFromBlockDisplay` rule rather than inventing a second
  *  one: a type whose chip is suppressed on the block itself is plumbing
  *  (`page` sits on every page, so annotating every row with it is pure
- *  noise), and the same judgement applies in the dropdown. Unknown ids
- *  are skipped too — `TypeChipsDecorator` keeps them visible so a tag
- *  never silently disappears from a block the user is looking at, but
- *  here there is no label to render and a raw uuid is worse than no
- *  hint. First surviving type wins; the dropdown row has space for one. */
-export const completionTypeHint = (
+ *  noise), and the same judgement applies here. Note this is a genuine
+ *  trade, not a free win — the flag means "redundant given how the block
+ *  renders itself" (`todo`'s checkbox conveys todo-ness, so its chip is
+ *  duplication), and a summary row shows none of that rendering, so
+ *  `#todo` is suppressed here where it would actually have been
+ *  informative. Deliberate: one visibility rule the user can reason
+ *  about beats a second, surface-specific one they have to discover.
+ *
+ *  Unknown ids are skipped too — `TypeChipsDecorator` keeps them visible
+ *  so a tag never silently disappears from a block the user is looking
+ *  at, but here there is no label to render and a raw uuid is worse than
+ *  no hint. Deduped: a raw properties-bag write can repeat an id, and
+ *  the same chip twice reads as two tags. */
+export const displayableTypes = (
   typeIds: readonly string[],
   registry: ReadonlyMap<string, TypeContribution>,
-): string | undefined => {
+): readonly DisplayableType[] => {
+  const seen = new Set<string>()
+  const displayable: DisplayableType[] = []
   for (const typeId of typeIds) {
+    if (seen.has(typeId)) continue
+    seen.add(typeId)
     const type = registry.get(typeId)
     if (!type || type.hideFromBlockDisplay === true) continue
     const label = type.label?.trim()
-    if (label) return label
+    if (label) displayable.push({typeId, type, label})
   }
-  return undefined
+  return displayable
 }
+
+/** The type name shown beside a `[[` completion candidate, or
+ *  `undefined` when the row has nothing worth saying. First surviving
+ *  type wins; the dropdown row has space for one. */
+export const completionTypeHint = (
+  typeIds: readonly string[],
+  registry: ReadonlyMap<string, TypeContribution>,
+): string | undefined => displayableTypes(typeIds, registry)[0]?.label
 
 /** The block's type ids, tolerant of a malformed stored value.
  *
@@ -139,7 +176,7 @@ export const completionTypeHint = (
  *  `WHERE typeof(je.value) = 'text'` (`clientSchema.ts`) and the
  *  invalidation rule's `Array.isArray` + `typeof` filter
  *  (`kernelInvalidation.ts`). */
-const readTypeIds = (data: BlockData): readonly string[] => {
+export const readTypeIds = (data: BlockData): readonly string[] => {
   const raw = data.properties[typesProp.name]
   if (!Array.isArray(raw)) return []
   return raw.filter((typeId): typeId is string => typeof typeId === 'string')
@@ -175,6 +212,7 @@ const blockMatchesFromRows = (
       content: block.content,
       label: labelForBlockData(block, block.id),
       parentId: block.parentId,
+      typeIds: readTypeIds(block),
     })
   }
   return blocks
