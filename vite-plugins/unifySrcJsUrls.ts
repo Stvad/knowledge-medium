@@ -28,6 +28,16 @@ const SRC_TS_URL_RE = /(["'])(\/src\/[^"'?#]+)\.(?:tsx|ts|jsx)(["'?#])/g
 export const rewriteSrcImports = (body: string): string =>
   body.replace(SRC_TS_URL_RE, '$1$2.js$3')
 
+// The bare-path form of the same rewrite. `SRC_TS_URL_RE` requires a
+// surrounding quote (it matches URLs embedded in a module body); HMR payload
+// fields hold the path on its own, so they need this instead.
+const SRC_TS_PATH_RE = /^(\/src\/[^?#]+)\.(?:tsx|ts|jsx)(\?|#|$)/
+
+/** `/src/foo.tsx` → `/src/foo.js` for a standalone path. Non-strings and
+ *  non-matching paths pass through untouched. */
+export const rewriteSrcPath = <T>(path: T): T =>
+  typeof path === 'string' ? path.replace(SRC_TS_PATH_RE, '$1.js$2') as T : path
+
 /**
  * Vite plugin: makes every `/src/**` module — whether imported by the
  * kernel (static, Vite-transformed) or by a dynamic-extension blob
@@ -53,10 +63,34 @@ export const rewriteSrcImports = (body: string): string =>
  *   2. `req.url` strip removes `.js` from incoming requests so
  *      Vite's file resolver still finds the actual TS source on
  *      disk and serves its transformed contents.
+ *   3. `server.hot.send` wrap applies the same rewrite to HMR update
+ *      payloads. Without it, Fast Refresh is dead repo-wide: piece 1
+ *      rewrites `__vite__createHotContext("/src/x.tsx")` in the body, so
+ *      the client keys the module under `/src/x.js`, while the update
+ *      payload travels over the WebSocket — never through `res.end` — and
+ *      still says `/src/x.tsx`. The client misses in `hotModulesMap` and
+ *      drops the update silently. (CSS is unaffected: `.css` URLs aren't
+ *      rewritten, which is why stylesheet edits were the only ones that
+ *      ever applied.)
  */
 export const unifySrcJsUrlsPlugin = (): Plugin => ({
   name: 'unify-src-js-urls',
   configureServer(server: ViteDevServer) {
+    const originalSend = server.hot.send.bind(server.hot)
+    server.hot.send = ((...args: Parameters<typeof server.hot.send>) => {
+      const payload = args[0] as {
+        type?: string
+        updates?: Array<{path?: string; acceptedPath?: string}>
+      } | undefined
+      if (payload?.type === 'update' && Array.isArray(payload.updates)) {
+        for (const update of payload.updates) {
+          update.path = rewriteSrcPath(update.path)
+          update.acceptedPath = rewriteSrcPath(update.acceptedPath)
+        }
+      }
+      return originalSend(...args)
+    }) as typeof server.hot.send
+
     server.middlewares.use((req, res, next) => {
       if (!req.url || !req.url.startsWith('/src/')) return next()
 
