@@ -31,6 +31,7 @@ import {
   definitionSeedsFacet,
   invalidationRulesFacet,
   mutatorsFacet,
+  opaqueContentTypesFacet,
   postCommitProcessorsFacet,
   queriesFacet,
   sameTxProcessorsFacet,
@@ -48,7 +49,7 @@ import { KERNEL_SAME_TX_PROCESSORS } from './internals/normalizeReferencesProces
 import { KERNEL_QUERIES } from './internals/kernelQueries'
 import { kernelInvalidationRule } from './internals/kernelInvalidation'
 import { KERNEL_PROPERTY_SEEDS } from '@/data/properties'
-import { KERNEL_TYPE_CONTRIBUTIONS } from '@/data/blockTypes'
+import { EXTENSION_TYPE, KERNEL_TYPE_CONTRIBUTIONS } from '@/data/blockTypes'
 import { kernelValuePresetCores } from '@/data/kernelValuePresetCores'
 import { userSchemasProjector } from '@/data/userSchemasService'
 import { userTypesProjector } from '@/data/userTypesService'
@@ -74,6 +75,10 @@ export const kernelDataExtension: AppExtension = systemToggle({
   KERNEL_TYPE_CONTRIBUTIONS.map(t => typeSeedsFacet.of(t, {source: 'kernel'})),
   kernelValuePresetCores.map(core => valuePresetCoresFacet.of(core, {source: 'kernel'})),
   invalidationRulesFacet.of(kernelInvalidationRule, {source: 'kernel'}),
+  // An installed extension's block carries its source as content — not
+  // prose — so content-derived readers (link parsing, search indexing, …)
+  // must skip it (see `opaqueContentTypesFacet`).
+  opaqueContentTypesFacet.of(EXTENSION_TYPE, {source: 'kernel'}),
   // Kernel singleton pages, materialised eagerly at workspace bootstrap via
   // `Repo.ensureSystemPages` (before the landing/seed) so wiki-links to their
   // reserved aliases resolve to the canonical page instead of auto-creating a

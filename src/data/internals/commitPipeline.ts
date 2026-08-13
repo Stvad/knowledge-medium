@@ -317,6 +317,9 @@ export interface RunTxParams<R> {
    *  boundary as `processors` so processor code sees a consistent
    *  runtime bundle. */
   propertySchemas: ReadonlyMap<string, AnyPropertySchema>
+  /** Block type ids whose content is not prose (`opaqueContentTypesFacet`),
+   *  captured at the same boundary as `propertySchemas`. */
+  opaqueContentTypes: ReadonlySet<string>
   /** Tx-start-captured workspace registry factory. It reads no live runtime
    * state when the target row's workspace becomes known inside the tx. */
   propertyDefinitionRegistryForWorkspace: (
@@ -367,6 +370,7 @@ export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => 
     db, cache, fn, opts, user, isReadOnly,
     newTxId, newTxSeq, newId, blockIdPolicy, now,
     mutators, processors, sameTxProcessors, propertySchemas,
+    opaqueContentTypes,
     propertyDefinitionRegistryForWorkspace,
     propertySchemaWorkspaceId,
     propertySeedNameCounts,
@@ -564,7 +568,7 @@ export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => 
               emittedEvents,
             },
             {
-              tx, db: txDb, propertySchemas,
+              tx, db: txDb, propertySchemas, opaqueContentTypes,
               resolvePropertySchemaName, resolvePropertySchemaField,
             },
           )

@@ -455,6 +455,28 @@ export const hasBlockType = (
   typeId: string,
 ): boolean => getBlockTypes(data).includes(typeId)
 
+/** Whether `data` carries a type listed in `opaqueTypes` (the
+ *  `opaqueContentTypesFacet` contributions — see `src/data/facets.ts`) —
+ *  i.e. its content is not prose and content-derived parsing should skip it.
+ *
+ *  Deliberately does NOT call `getBlockTypes`/`hasBlockType`: their
+ *  `string-list` codec THROWS a `CodecError` on a malformed `types` value,
+ *  and this runs inside post-commit processors where a throw aborts
+ *  derivation after the user's write already committed. Same hazard, same
+ *  fix as `MediaBlockRenderer.canRender`
+ *  (`src/plugins/attachments/MediaBlockRenderer.tsx`): read
+ *  `properties.types` RAW and gate on `Array.isArray` — total, never
+ *  throws. A non-string element is tolerated (membership wins over
+ *  element-wise validity) because the safe failure here is "treat it as
+ *  opaque", not "parse a source bundle as prose". */
+export const hasOpaqueContent = (
+  data: Pick<BlockData, 'properties'>,
+  opaqueTypes: ReadonlySet<string>,
+): boolean => {
+  const types = data.properties[typesProp.name]
+  return Array.isArray(types) && types.some(t => opaqueTypes.has(t))
+}
+
 /** The block's `alias` list, tolerant of an absent / malformed value
  *  (treated as none). Shared by every reader that only needs "which
  *  aliases does this row claim" — the alias-sync processor, the

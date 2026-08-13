@@ -510,6 +510,9 @@ export class Repo {
   private _propertyEditorOverrides: ReadonlyMap<string, AnyPropertyEditorOverride> = new Map()
   private _valuePresetCores: ReadonlyMap<string, AnyValuePresetCore> = new Map()
   private invalidationRules: readonly InvalidationRule[] = []
+  /** Block type ids whose content is not prose (see `opaqueContentTypesFacet`).
+   *  Exposed via the `opaqueContentTypes` getter. */
+  private _opaqueContentTypes: ReadonlySet<string> = new Set()
   /** Facet→registry bridge (audit D1(c)) — owns the installed
    *  FacetRuntime, the rebuild steps, the per-facet change subscriptions,
    *  and the React-facing schema/type/override/preset change channels.
@@ -740,6 +743,11 @@ export class Repo {
     return this._types
   }
 
+  /** Block type ids whose content is not prose — see `opaqueContentTypesFacet`. */
+  get opaqueContentTypes(): ReadonlySet<string> {
+    return this._opaqueContentTypes
+  }
+
   get propertySchemas(): ReadonlyMap<string, AnyPropertySchema> {
     return this._propertySchemas
   }
@@ -937,6 +945,7 @@ export class Repo {
       applyProcessors: (processors) => { this.processors = processors },
       applySameTxProcessors: (processors) => { this.sameTxProcessors = processors },
       applyInvalidationRules: (rules) => { this.invalidationRules = rules },
+      applyOpaqueContentTypes: (types) => { this._opaqueContentTypes = types },
       applyWorkspaceBackfills: (backfills) => { this._workspaceBackfills = backfills },
       applyTypesAndSchemas: (
         types,
@@ -1760,6 +1769,7 @@ export class Repo {
         processors: this.processors,
         sameTxProcessors: this.sameTxProcessors,
         propertySchemas: this._propertySchemas,
+        opaqueContentTypes: this._opaqueContentTypes,
         // Serve the tx's active-at-start workspace, or the retained previous one,
         // from their frozen snapshots; any other workspace resolves null (fail
         // closed). Frozen at tx-start so a mid-tx workspace switch can't re-scope

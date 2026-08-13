@@ -189,6 +189,9 @@ export interface SameTxCtx {
   db: SameTxReadDb
   /** Merged property-schema registry snapshotted at tx start. */
   propertySchemas: ReadonlyMap<string, AnyPropertySchema>
+  /** Block type ids whose content is not prose (`opaqueContentTypesFacet`),
+   *  snapshotted at tx start like `propertySchemas`. */
+  opaqueContentTypes: ReadonlySet<string>
   /** Resolve a property-schema NAME against `workspaceId`'s deterministic
    *  fleet-wide winner map — the same tx-start-captured identity primitive
    *  `tx.setProperty` resolves through (schema unification §7). `resolved`

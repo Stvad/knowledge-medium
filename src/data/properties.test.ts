@@ -6,6 +6,7 @@ import {
   addedTypes,
   focusedBlockLocationFromProperties,
   focusedBlockLocationProp,
+  hasOpaqueContent,
   removedTypes,
   typesProp,
 } from '@/data/properties'
@@ -77,6 +78,39 @@ describe('addedTypes / removedTypes', () => {
     const r: ChangedRow = {id: 'b1', before: blockData(['task']), after}
     expect(removedTypes(r)).toEqual(['task'])
     expect(addedTypes(r)).toEqual([])
+  })
+})
+
+describe('hasOpaqueContent', () => {
+  const opaqueTypes = new Set(['extension'])
+
+  it('matches when the type is present', () => {
+    expect(hasOpaqueContent({properties: {[typesProp.name]: ['extension']}}, opaqueTypes)).toBe(true)
+  })
+
+  it('is false when absent', () => {
+    expect(hasOpaqueContent({properties: {[typesProp.name]: ['task']}}, opaqueTypes)).toBe(false)
+    expect(hasOpaqueContent({properties: {}}, opaqueTypes)).toBe(false)
+  })
+
+  it('is total for a scalar types value', () => {
+    expect(hasOpaqueContent({properties: {[typesProp.name]: 'extension'}}, opaqueTypes)).toBe(false)
+  })
+
+  it('is total for an object types value', () => {
+    expect(hasOpaqueContent({properties: {[typesProp.name]: {extension: true}}}, opaqueTypes)).toBe(false)
+  })
+
+  it('is total for a null types value', () => {
+    expect(hasOpaqueContent({properties: {[typesProp.name]: null}}, opaqueTypes)).toBe(false)
+  })
+
+  it('is total for an array containing a non-string element', () => {
+    expect(hasOpaqueContent({properties: {[typesProp.name]: [42, {bad: true}]}}, opaqueTypes)).toBe(false)
+  })
+
+  it('still matches when a non-string element sits alongside an opaque type', () => {
+    expect(hasOpaqueContent({properties: {[typesProp.name]: ['extension', 42]}}, opaqueTypes)).toBe(true)
   })
 })
 

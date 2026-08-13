@@ -33,6 +33,7 @@ import { kernelDataExtension } from '../kernelDataExtension'
 import {
   definitionSeedsFacet,
   mutatorsFacet,
+  opaqueContentTypesFacet,
   propertyEditorOverridesFacet,
   queriesFacet,
   typeSeedsFacet,
@@ -236,6 +237,13 @@ describe('type seed registration', () => {
     // the seed's seedKey/revision don't leak into `repo.types`.
     expect(repo.types.get(PAGE_TYPE)).not.toHaveProperty('seedKey')
     expect(repo.types.get(PAGE_TYPE)).not.toHaveProperty('revision')
+  })
+})
+
+describe('opaqueContentTypesFacet', () => {
+  it('kernelDataExtension contributes EXTENSION_TYPE', () => {
+    const runtime = resolveFacetRuntimeSync([kernelDataExtension])
+    expect(runtime.read(opaqueContentTypesFacet)).toContain(EXTENSION_TYPE)
   })
 })
 

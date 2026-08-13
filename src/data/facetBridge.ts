@@ -53,6 +53,7 @@ import {
   invalidationRulesFacet,
   definitionSeedsFacet,
   mutatorsFacet,
+  opaqueContentTypesFacet,
   postCommitProcessorsFacet,
   propertyEditorOverridesFacet,
   projectedPropertyDefinitionsFacet,
@@ -102,6 +103,7 @@ export interface FacetBridgeTarget {
   applyProcessors(processors: Map<string, AnyPostCommitProcessor>): void
   applySameTxProcessors(processors: Map<string, AnySameTxProcessor>): void
   applyInvalidationRules(rules: readonly InvalidationRule[]): void
+  applyOpaqueContentTypes(types: ReadonlySet<string>): void
   applyWorkspaceBackfills(backfills: readonly WorkspaceBackfill[]): void
   applyTypesAndSchemas(
     types: ReadonlyMap<string, TypeContribution>,
@@ -313,6 +315,11 @@ export class FacetBridge {
         id: 'invalidationRules',
         inputs: [invalidationRulesFacet as Facet<unknown, unknown>],
         run: (rt) => { target.applyInvalidationRules(rt.read(invalidationRulesFacet)) },
+      },
+      {
+        id: 'opaqueContentTypes',
+        inputs: [opaqueContentTypesFacet as Facet<unknown, unknown>],
+        run: (rt) => { target.applyOpaqueContentTypes(new Set(rt.read(opaqueContentTypesFacet))) },
       },
       {
         id: 'workspaceBackfills',
