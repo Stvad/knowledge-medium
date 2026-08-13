@@ -136,15 +136,12 @@ describe('useHandle re-acquires a disposed handle', () => {
   })
 
   it('recovers even when the holder memoizes its handle', async () => {
-    // This is the case that matters in the built app. React Compiler output
-    // memoizes the factory call on deps that never change, e.g.
-    //   $[1] !== block.id || $[2] !== block.repo.query
-    //     ? (t1 = block.repo.query.subtree({...}))
-    //     : t1 = $[3]
-    // so a consumer handed a disposed handle gets the SAME instance back on
-    // every later render. Any recovery that depends on the caller re-running
-    // its factory is therefore dead on arrival in production. useMemo here
-    // models exactly that shape.
+    // The case that matters in the built app: React Compiler memoizes the
+    // factory call on deps that never change, so a consumer handed a disposed
+    // handle gets the SAME instance back forever, and any recovery that needs
+    // the caller to re-run its factory is dead on arrival. useMemo models that
+    // shape. Compiled output and full mechanism:
+    // docs/handle-lifecycle-hidden-subtrees.html §"Correction".
     const sched = manualScheduler()
     const store = new HandleStore({ gcTimeMs: 100, schedule: sched.schedule })
     const loader = async () => [1, 2, 3]

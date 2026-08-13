@@ -324,7 +324,11 @@ describe('LoaderHandle GC', () => {
     // A holder that cannot re-acquire (a memoized handle) still has to receive
     // invalidations, so subscribe resolves rather than attaching to a corpse.
     const store = makeStore(1000)
-    const { loader } = collectingLoader([1])
+    // A CHANGING value: the store skips notifying when the reloaded value is
+    // structurally equal, so a constant loader would make the second
+    // invalidation look like a lost event.
+    let tick = 0
+    const loader = async () => [++tick]
     const dead = store.getOrCreate('sub', () => new LoaderHandle({ store, key: 'sub', loader }))
     dead.dispose()
     const live = store.getOrCreate('sub', () => new LoaderHandle({ store, key: 'sub', loader }))
@@ -334,6 +338,17 @@ describe('LoaderHandle GC', () => {
     dead.subscribe(v => seen.push(v))
     live.invalidate()
     await vi.waitFor(() => expect(seen.length).toBeGreaterThan(0))
+
+    // Adoption, not a duplicate: exactly one handle owns the key, and the
+    // events came from THAT handle. Without these the test passes even if the
+    // corpse resurrects itself alongside the replacement.
+    expect(store.size()).toBe(1)
+    expect(store.peekHandle('sub')).toBe(live)
+
+    // …and it keeps delivering, not just the first time.
+    const before = seen.length
+    live.invalidate()
+    await vi.waitFor(() => expect(seen.length).toBeGreaterThan(before))
   })
 
   it('a disposed handle resolves to the live one at its key', async () => {

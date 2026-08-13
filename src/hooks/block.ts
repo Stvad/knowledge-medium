@@ -175,13 +175,11 @@ export function useHandle<T, S = T | undefined>(
 
   // Ensure-load: fire-and-forget on mount. Idempotent (LoaderHandle and
   // Block both dedup their inflight load promise). The status() check
-  // prevents an unnecessary roundtrip when the handle is already ready —
-  // and skips a disposed one, whose load() only ever rejects.
+  // prevents an unnecessary roundtrip when the handle is already ready — a
+  // disposed handle reports its live replacement's status, so this reads the
+  // replacement, not a corpse.
   useEffect(() => {
-    // `'disposed'` is included on purpose: a handle GC'd while this subtree
-    // sat with its effects unmounted resolves itself on load(), which is how
-    // the subtree gets live data back. See LoaderHandle.resolveLive.
-    if (handle.status() === 'idle' || handle.status() === 'disposed') {
+    if (handle.status() === 'idle') {
       void handle.load().catch(() => {/* error stored on the handle */})
     }
   }, [handle])

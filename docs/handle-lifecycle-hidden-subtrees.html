@@ -225,6 +225,10 @@ did.</p>
 
 <h3>2. <code>useHandle</code> re-acquires when its handle is dead</h3>
 
+<div class="note"><strong>Superseded in full by §"Correction: the compiler memoizes the factory".</strong>
+Everything in this subsection describes the first attempt, whose code has since been deleted. It is
+kept because the correction only makes sense against it.</div>
+
 <p><code>useHandle</code> is the one funnel every consumer goes through, so the repair belongs there
 rather than at each call site. In the subscribe callback — which React invokes from a passive effect,
 so dispatching state there is ordinary usage — ask for the render that re-acquires:</p>
@@ -265,7 +269,7 @@ to reset the attempt budget described below. Two owners would each spend from th
 logical recovery.</p>
 
 <p>Re-acquisition converges: the fresh handle is retained by the very subscription that follows,
-which cancels its constructor GC (<span class="filepath">handleStore.ts:876–883</span>), and
+which cancels its constructor GC (<span class="filepath">handleStore.ts:retain()</span>), and
 <code>dispose()</code> removes the key synchronously before any later <code>getOrCreate</code> can
 run.</p>
 
@@ -289,8 +293,10 @@ spends two attempts on one logical recovery.</p>
 <table>
 <tr><th>Option</th><th>Why not</th></tr>
 <tr>
-  <td>Revive on subscribe</td>
-  <td>Have a disposed handle re-register itself with the store. <code>getOrCreate</code> is a bare
+  <td>Revive on subscribe <em>(this is what shipped — see the correction below)</em></td>
+  <td>Rejected here, then adopted once the compiler made caller-side re-acquisition impossible; the
+  split-ownership objection is answered by adopting an existing replacement before resurrecting.
+  Original reasoning: have a disposed handle re-register itself with the store. <code>getOrCreate</code> is a bare
   synchronous map lookup (<span class="filepath">handleStore.ts:310–316</span>), so a handle
   re-inserting under its old key <em>after</em> another consumer's render already minted a
   replacement would split ownership — double loads, split notifications. Re-acquiring through the
@@ -378,12 +384,16 @@ bypassing the hook entirely — under the first fix it got nothing; under handle
 <code>subscribe()</code> resolves like anyone else's. That is the main argument for fixing it at this
 layer: there is exactly one place to get it right.</p>
 
-<p>One nuance that is NOT resolved: query handles are keyed with the registry epoch
+<p>One trade is NOT resolved, and it is a real one. Query handles are keyed with the registry epoch
 (<code>query:&lt;name&gt;@&lt;epoch&gt;</code>, <span class="filepath">src/data/repo.ts:3727</span>), so
-resurrecting a handle from a superseded epoch keeps serving its captured registry snapshot. That is
-already the documented behavior for old-epoch handles that simply never got GC'd
-(<span class="filepath">repo.ts:3496–3501</span>) — resurrection extends their life rather than
-changing what they serve — but it does mean a memoized holder can outlive a registry swap.</p>
+resurrecting a handle from a superseded epoch keeps serving the registry snapshot its loader
+captured. Serving the old snapshot is already the contract for an old-epoch handle that simply
+hasn't been GC'd (<span class="filepath">repo.ts:3496–3501</span>) — but resurrection turns
+<em>bounded</em> into <em>unbounded</em>: such a handle used to die at GC and stay dead, and a holder
+that keeps resolving can now keep a superseded resolver alive indefinitely. Fresh lookups are
+unaffected (they key at the current epoch), and closing this properly needs the epoch owner
+(<code>Repo</code>) to retire old-epoch keys explicitly, since a handle cannot see the current epoch
+from where it sits. Called out rather than hidden.</p>
 
 </body>
 </html>

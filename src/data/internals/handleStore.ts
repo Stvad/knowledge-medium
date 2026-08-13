@@ -567,20 +567,26 @@ export class LoaderHandle<T> implements Handle<T>, RegisteredHandle {
     if (!this.disposed) return this
     const existing = this.liveAtKey()
     if (existing) return existing
-    // Epoch nuance: query keys embed the registry epoch
-    // (`query:<name>@<epoch>`, repo.ts), so resurrecting re-registers under
-    // the OLD key and keeps serving the registry snapshot this loader
-    // captured. That is already what an old-epoch handle does when it simply
-    // hasn't been GC'd yet (repo.ts: "existing handles stay at the old epoch
-    // and keep serving their captured snapshot") — resurrection extends such
-    // a handle's life, it does not change what it serves, and new lookups
-    // still resolve the current epoch's key.
+    // Epoch caveat, stated plainly because it is a real trade: query keys
+    // embed the registry epoch (`query:<name>@<epoch>`, repo.ts), so
+    // resurrecting re-registers under the OLD key and keeps serving the
+    // registry snapshot this loader captured. Serving the old snapshot is
+    // already the contract for a not-yet-GC'd old-epoch handle (repo.ts), but
+    // this DOES change bounded into unbounded: previously such a handle died
+    // at GC and stayed dead, and now a holder that keeps resolving can keep a
+    // superseded resolver alive indefinitely. Nothing new lookups do is
+    // affected — they key at the current epoch. Closing it properly needs the
+    // epoch owner (Repo) to retire old-epoch keys explicitly; a handle cannot
+    // see the current epoch from here.
     this.disposed = false
     this.status_ = 'idle'
     this.stale = false
     this.store.getOrCreate(this.key, () => this)
-    // Re-arm the constructor's GC sweep: a resurrection nothing goes on to
-    // retain must not leak, exactly as at construction.
+    // Re-arm the constructor's GC sweep so a resurrection nothing goes on to
+    // retain cannot leak. Defence in depth rather than load-bearing: every
+    // caller into resolveLive() retains synchronously right after, so this
+    // timer is always cancelled before it can fire. Removing it breaks no
+    // test — it exists for the next caller that forgets.
     const gcMs = this.store.getGcTimeMs()
     if (gcMs > 0) this.cancelGc = this.store.getScheduler()(() => this.dispose(), gcMs)
     return this
@@ -952,6 +958,12 @@ export class LoaderHandle<T> implements Handle<T>, RegisteredHandle {
       this.cancelGc = null
     }
     this.listeners.clear()
+    // Reset with the listeners: `listeners.clear()` neuters every outstanding
+    // unsubscribe closure, so a nonzero count here could never drain back to 0
+    // and the handle would never GC again after a resurrection. Only reachable
+    // via `HandleStore.clear()` today (no non-test callers), but clear() is
+    // public API.
+    this.refCount = 0
     this.deps = []
     this.changesDuringLoad = []
     this.value = undefined
