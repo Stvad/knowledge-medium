@@ -239,12 +239,8 @@ describe('alias.sync — rapid title edits', () => {
   })
 })
 
-// Content↔alias parity assumes the content IS a name. For a block whose
-// content is not prose the mirror is wrong in both directions, and both
-// directions produced real damage — see the guard's comment in
-// `planSync`. These drive the REAL processor through `repo.tx`, and the
-// fixtures are the live shape: an extension block whose alias list is
-// `[slug, <its own source>]`.
+// These drive the REAL processor through `repo.tx`, on the live fixture
+// shape: an extension block whose alias list is `[slug, <its own source>]`.
 describe('alias.sync — opaque-content blocks have no content↔alias parity', () => {
   const SOURCE = 'import {actionsFacet} from "@/extensions/core.js"\nexport default 1'
 
@@ -263,8 +259,8 @@ describe('alias.sync — opaque-content blocks have no content↔alias parity', 
     await flush()
   }
 
-  // content → alias: the #541 shape. A reinstall rewrites `content`, and
-  // the drift-heal used to append the whole new bundle as an alias entry.
+  // content → alias (#541): a reinstall rewrites `content`, and the
+  // drift-heal used to append the whole new bundle as an alias entry.
   it('does not mirror a source bundle into the alias list on a content change', async () => {
     await createExtensionBlock(['readwise'])
     await env.repo.mutate.setContent({id: 'ext', content: `${SOURCE}\n// v2`})
@@ -273,10 +269,9 @@ describe('alias.sync — opaque-content blocks have no content↔alias parity', 
     expect(await readAliases('ext')).toEqual(['readwise'])
   })
 
-  // alias → content: the data-loss shape. Renaming the oversized entry —
-  // exactly what cleaning up #541 by hand looks like — matched
-  // `after.content === removed[0]` and wrote the new alias text into
-  // `content`, destroying the extension's source.
+  // alias → content: the data-loss shape. Renaming the oversized entry
+  // matched `after.content === removed[0]` and wrote the new alias text
+  // into `content`, destroying the source.
   it('does not overwrite content when an alias equal to it is renamed', async () => {
     await createExtensionBlock(['readwise', SOURCE])
     await env.repo.tx(
@@ -288,12 +283,9 @@ describe('alias.sync — opaque-content blocks have no content↔alias parity', 
     expect((await env.read('ext'))!.content).toBe(SOURCE)
   })
 
-  // `before`/`after` are whole-TX snapshots, so a single tx that both
-  // detags the opaque type and edits the aliases lands with
-  // `after` no longer opaque — and a gate reading only `after` falls
-  // straight through to the logic it exists to prevent. That is the
-  // data-loss path again, reached by the most plausible cleanup gesture
-  // there is: "this isn't an extension any more, and fix its name".
+  // Pins the EITHER-side gate: whole-tx snapshots mean a detag + alias
+  // edit in one tx arrives with `after` already non-opaque, so an
+  // `after`-only gate falls through to the data-loss branch above.
   it('holds when the opaque type is removed in the SAME tx as an alias edit', async () => {
     await createExtensionBlock(['readwise', SOURCE])
 

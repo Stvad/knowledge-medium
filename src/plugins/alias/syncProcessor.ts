@@ -104,38 +104,16 @@ export const planSync = (
   if (row.before === null || row.after === null) return null
   if (row.after.deleted) return null
 
-  // Content and alias are two views of ONE name only when the content is
-  // a name. For a block whose content is not prose — an installed
-  // extension's source, a drawing's JSON — the mirror is wrong in BOTH
-  // directions, and both have bitten:
+  // Content↔alias parity only means anything when the content IS a name.
+  // An opaque-content block has none to maintain, and the mirror corrupts
+  // it in both directions — appending its own source as an alias, and (the
+  // reverse branch) overwriting that source with the renamed alias text.
   //
-  //  content → alias (Rules 1/2 below): three legacy extension blocks
-  //    carry 18–91 KB of their own bundled source as an alias entry,
-  //    because the drift-heal appended `after.content` verbatim. That is
-  //    issue #541, and it is the same family as the 205 KB page name.
-  //
-  //  alias → content (the reverse branch): a rename of such an entry
-  //    matches `after.content === removed[0]` and writes the NEW ALIAS
-  //    TEXT into `content` — overwriting the extension's source with a
-  //    short string. Editing the bad alias is exactly what someone
-  //    cleaning up #541 would do, so the repair path was the data-loss
-  //    path.
-  //
-  // One guard for both: an opaque-content block simply has no
-  // content↔alias parity to maintain.
-  //
-  // EITHER SIDE, not just `after`. `before`/`after` are whole-TX
-  // snapshots, so one tx that both detags the opaque type and edits the
-  // aliases arrives with `after` no longer opaque — and an `after`-only
-  // gate falls straight through to the branch it exists to block, with
-  // `before`'s 91 KB content still sitting there to be overwritten. That
-  // is not a contrived shape: "this isn't an extension any more, and fix
-  // its name" is the most natural cleanup gesture for the bad rows.
-  //
-  // Skipping the whole tx is the safe miss on a boundary crossing. The
-  // block converges on its next edit, by which point it is unambiguously
-  // one kind of thing and the diff is computed over content that was the
-  // same kind on both sides.
+  // EITHER side, not just `after`: these are whole-TX snapshots, so a tx
+  // that both detags the type and edits the aliases arrives with `after`
+  // already non-opaque, falling through to the branch this exists to
+  // block. Skipping the whole tx is the safe miss — the block converges on
+  // its next edit, when it is unambiguously one kind of thing.
   if (hasOpaqueContent(row.before, opaqueContentTypes)
     || hasOpaqueContent(row.after, opaqueContentTypes)) return null
 

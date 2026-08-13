@@ -134,13 +134,9 @@ export const buildTypeTagSource = ({repo, block}: CodeMirrorExtensionContext): C
       // definition block committed on a registration timeout — the type
       // may still appear moments later, re-picking reuses it) get the
       // generic toast.
-      // A refused NAME is the same situation as a structured rejection —
-      // the user did something specific and fixable, and the generic
-      // "couldn't tag" hides which part was the problem. `#type` on a
-      // block whose content can't be a `[[name]]` is the discoverable way
-      // to hit this (the create flow validates before opening a tx), and
-      // the block's own content is the thing to change, which the generic
-      // message doesn't hint at. These errors carry their explanation.
+      // A refused NAME is fixable by the user, and these errors already
+      // say how — the generic "couldn't tag" would bury that. Reachable
+      // via `#type` on a block whose content can't be a `[[name]]`.
       if (err instanceof UnwritableLabelError) {
         showError(err.message)
       } else if (!(err instanceof ProcessorRejection)) {

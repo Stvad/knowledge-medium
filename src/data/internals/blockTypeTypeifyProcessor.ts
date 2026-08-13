@@ -88,24 +88,17 @@ export const BLOCK_TYPE_TYPEIFY_PROCESSOR = defineSameTxProcessor({
       const currentLabel = (typeof rawLabel === 'string' ? rawLabel : '').trim()
       const name = currentLabel || after.content.trim()
 
-      // Name hygiene, BEFORE any write. This processor adopts whatever
-      // content the block already had as the type's name and claims it as
-      // an alias, and it fires on ANY path that adds `block-type` — the
-      // agent bridge's raw properties bag most concretely, not just
-      // `createTypeBlock` (which runs these same two asserts up front, so
-      // they are a no-op for it). Without them, arbitrary prose became a
-      // claimed, globally-resolvable alias.
+      // This adopts existing content as the type's name and claims it as
+      // an alias, on ANY path that adds `block-type` — so the check has to
+      // be here and not only in `createTypeBlock` (which pre-checks, making
+      // these a no-op for it); the agent bridge's raw properties bag is the
+      // path that gets here unvalidated.
       //
-      // THROWS rather than skipping the alias claim. A type whose name
-      // cannot be written as `[[name]]` is broken in the way that matters
-      // — nothing can link to it — and producing one silently is exactly
-      // the failure mode that made this whole family of bugs expensive to
-      // find. Same-tx, so the throw rolls the tagging back atomically and
-      // the caller sees why; both refusals derive from `UnwritableLabelError`,
-      // which the type-label UI already catches to revert its field.
-      //
-      // Ordered before the writes below only for clarity — a same-tx
-      // throw discards them either way.
+      // THROWS rather than skipping the claim: a type whose name can't be
+      // written as `[[name]]` is unlinkable, and minting one silently is
+      // the failure mode this whole family of bugs is made of. Same-tx, so
+      // it rolls the tagging back atomically; both refusals derive from
+      // `UnwritableLabelError`, which the type-label UI catches to revert.
       if (name !== '') {
         assertNotGrammarShapedLabel(name, 'Block type label')
         assertRoundTrippableReferenceLabel(name, 'Block type label')

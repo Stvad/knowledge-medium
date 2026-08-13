@@ -173,32 +173,15 @@ const buildSourcePlan = async (
   source: BlockData,
   before: BlockData | null,
 ): Promise<SourcePlan> => {
-  // Running the wikilink / blockref grammars over content that isn't
-  // prose is a category error: a regex character class whose first member
-  // is a literal `[` (`/[[\]{}()*+?.\\^$|\s]/`) is a `[[` opener, and so
-  // is a nested array literal. The scanner pairs one with whatever `]]`
-  // comes next — in a 1.7 MB extension bundle that was 205 KB downstream
-  // — and this processor then mints a page NAMED after the span. One
-  // installed extension produced three such pages before this gate.
+  // Content grammars ONLY — this must not become an early return. An
+  // opaque-content block still carries typed properties, and dropping
+  // those property refs below would be a quieter version of the same bug.
+  // Nothing rendered is lost either: such a block never reaches the
+  // markdown pipeline, so there is no displayed wikilink to un-link.
   //
-  // Which types those are is a FACET, not a list here: extension source
-  // is the case that bit us, but a drawing's JSON and an imported binary
-  // payload want the same treatment, and the type's own plugin is what
-  // knows. See `opaqueContentTypesFacet`.
-  //
-  // Nothing displayed is lost by skipping. An opaque-content block does
-  // not reach the markdown pipeline — an extension block is claimed by
-  // `CodeMirrorExtensionBlockRenderer` and shown in a code editor — so
-  // there is no rendered wikilink here whose reference we would drop.
-  //
-  // Content grammars ONLY. Property refs still project below: such a
-  // block carries typed properties like any other, and dropping those
-  // would be a quieter version of the same bug.
-  //
-  // Existing blocks converge lazily rather than by a sweep: `properties`
-  // and `content` are both watched, so the next write to one re-parses
-  // under this gate, drops the stale refs, and lets
-  // `reapOrphanAliasSeats` collect the seats they were holding open.
+  // Stale refs on existing blocks clear lazily — `properties` is watched
+  // alongside `content`, so the next write to either re-parses under this
+  // gate and frees the alias seats those refs were holding open.
   const scanContent = !hasOpaqueContent(source, ctx.repo.opaqueContentTypes)
   const aliasMarks = scanContent ? parseAliasMarks(source.content) : []
   const blockRefMarks = scanContent ? parseBlockRefs(source.content) : []

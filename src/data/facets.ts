@@ -279,17 +279,15 @@ export const invalidationRulesFacet = defineFacet<InvalidationRule, readonly Inv
 })
 
 /** Block type ids whose CONTENT is not prose — an installed extension's
- *  source, a drawing's JSON, an imported binary-ish payload. A block
- *  carrying one of these types in its `types` list has content that
- *  machinery reading block content as text-with-meaning (link parsing,
- *  search indexing, and similar content-derived readers) must skip.
+ *  source, a drawing's JSON, an imported binary-ish payload. Machinery
+ *  that reads block content as text-with-meaning (link parsing, search
+ *  indexing, content rewrites) must skip a block carrying one of these.
  *
- *  This is a facet rather than a field on `TypeContribution` /
- *  `defineType` deliberately: type declarations materialize as
- *  user-editable `block-type` blocks, so a field there would become
- *  user-editable data — but "does this type's content parse as prose"
- *  is a code concern, not something a user should be able to flip from
- *  the type editor. */
+ *  A facet rather than a field on `TypeContribution` / `defineType`
+ *  deliberately: type declarations materialize as user-editable
+ *  `block-type` blocks, so a field there would be user-editable data —
+ *  and whether content parses as prose is a code concern, not something
+ *  to flip from the type editor. */
 export const opaqueContentTypesFacet = defineFacet<string, readonly string[]>({
   id: 'data.opaqueContentTypes',
   validate: (v): v is string => typeof v === 'string' && v.length > 0,
