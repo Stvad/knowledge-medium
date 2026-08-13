@@ -6,6 +6,7 @@ import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { ChangeScope } from '@/data/api'
 import { appendTagToBlocks, appendTagToContent } from '../appendTag.ts'
+import { tagNameIssue } from '../config.ts'
 import { MAX_ALIAS_LENGTH, parseReferences, renderWikilink } from '@/plugins/references/referenceParser'
 
 describe('appendTagToContent', () => {
@@ -67,6 +68,20 @@ describe('appendTagToContent', () => {
     const tagged = appendTagToContent('hello', atCap)
     expect(tagged).toBe(`hello [[${atCap}]]`)
     expect(parseReferences(tagged).map(r => r.alias)).toEqual([atCap])
+  })
+
+  // The entry points render a message per reason, so the reason has to be
+  // distinguishable — they used to hard-code "can't contain [[ or ]]",
+  // which the length rule turned into a lie for inputs containing neither.
+  it('reports WHY a name was rejected', () => {
+    expect(tagNameIssue('srs')).toBeNull()
+    expect(tagNameIssue('  ')).toBe('empty')
+    expect(tagNameIssue('foo[[bar')).toBe('delimiters')
+    expect(tagNameIssue('foo]]bar')).toBe('delimiters')
+    expect(tagNameIssue('a'.repeat(MAX_ALIAS_LENGTH + 1))).toBe('too-long')
+    // The trailing-`]` case is 'too-long', not 'delimiters' — a single
+    // bracket is allowed, it is the rendered padding that overflows.
+    expect(tagNameIssue(`${'a'.repeat(MAX_ALIAS_LENGTH - 1)}]`)).toBe('too-long')
   })
 
   // The rendered span, not the input, is what the cap applies to.

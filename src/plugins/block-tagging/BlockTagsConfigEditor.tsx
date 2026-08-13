@@ -3,7 +3,8 @@ import { Plus, X } from 'lucide-react'
 import { isReadOnlyBlock, type PropertyEditorProps } from '@/data/api'
 import { Button } from '@/components/ui/button.js'
 import { Input } from '@/components/ui/input.js'
-import { isValidTagName, normalizeBlockTagsConfig } from './config.ts'
+import { isValidTagName, normalizeBlockTagsConfig, tagNameIssue } from './config.ts'
+import { MAX_ALIAS_LENGTH } from '@/plugins/references/referenceParser'
 
 export const BlockTagsConfigEditor = ({
   value,
@@ -21,7 +22,7 @@ export const BlockTagsConfigEditor = ({
     setDraft('')
   }
 
-  const draftInvalid = draft.trim().length > 0 && !isValidTagName(draft)
+  const draftIssue = draft.trim().length > 0 ? tagNameIssue(draft) : null
 
   const handleKeyDown = (event: KeyboardEvent<HTMLInputElement>): void => {
     if (event.key === 'Enter') {
@@ -78,9 +79,14 @@ export const BlockTagsConfigEditor = ({
               <Plus className="h-4 w-4" />
             </Button>
           </div>
-          {draftInvalid && (
+          {draftIssue === 'delimiters' && (
             <p className="text-xs text-destructive">
               Tag names can&apos;t contain <code>[[</code> or <code>]]</code>.
+            </p>
+          )}
+          {draftIssue === 'too-long' && (
+            <p className="text-xs text-destructive">
+              Tag names must be under {MAX_ALIAS_LENGTH} characters.
             </p>
           )}
         </>

@@ -6,7 +6,7 @@ import {
   type Codec,
 } from '@/data/api'
 import { uniqueStrings } from '@/utils/array'
-import { parseOutermostReferences, renderWikilink } from '@/plugins/references/referenceParser'
+import { canRenderAsWikilink } from '@/plugins/references/referenceParser'
 
 /** Tag names are interpolated into a wikilink (`[[name]]`). The
  *  reference parser balances `[[ … ]]` pairs, so a name containing
@@ -33,12 +33,24 @@ import { parseOutermostReferences, renderWikilink } from '@/plugins/references/r
  *  OVER the cap. Comparing `trimmed.length` would wave it through.
  *  Parsing what the renderer actually emits is the only form of this
  *  check that cannot drift from the renderer (Codex on PR #540). */
-export const isValidTagName = (name: string): boolean => {
+export const isValidTagName = (name: string): boolean =>
+  tagNameIssue(name) === null
+
+/** WHY a tag name was rejected, so the entry points can say something
+ *  true. They used to hard-code "can't contain `[[` or `]]`", which was
+ *  the only rule; the length rule made that message a lie for an input
+ *  containing neither delimiter — the control went disabled with an
+ *  error naming characters that weren't there and no hint that
+ *  shortening would fix it (Codex on PR #540). A reason code rather than
+ *  a string so each surface keeps its own markup for the delimiters. */
+export type TagNameIssue = 'empty' | 'delimiters' | 'too-long'
+
+export const tagNameIssue = (name: string): TagNameIssue | null => {
   const trimmed = name.trim()
-  if (!trimmed) return false
-  if (trimmed.includes('[[')) return false
-  if (trimmed.includes(']]')) return false
-  return parseOutermostReferences(renderWikilink(trimmed)).length === 1
+  if (!trimmed) return 'empty'
+  if (trimmed.includes('[[') || trimmed.includes(']]')) return 'delimiters'
+  if (!canRenderAsWikilink(trimmed)) return 'too-long'
+  return null
 }
 
 export const normalizeBlockTagsConfig = (value: unknown): string[] =>

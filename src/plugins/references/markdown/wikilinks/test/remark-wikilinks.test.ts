@@ -444,6 +444,12 @@ describe('rewriting a [display]([[alias]]) wikilink, end to end', () => {
 // their own regexes and never call `parseOutermostReferences`, so without
 // an explicit re-check they would render a live link for a span the
 // reference index treats as literal text (Codex on PR #540).
+const inlineValue = (node: unknown): string => {
+  const n = node as {value?: string; children?: unknown[]}
+  if (typeof n.value === 'string') return n.value
+  return (n.children ?? []).map(inlineValue).join('')
+}
+
 describe('MAX_ALIAS_LENGTH holds across all four passes', () => {
   // Bracket- and newline-free, so it can reach every pass. Kept just over
   // and just under the cap so each pair isolates the length rule alone —
@@ -521,6 +527,31 @@ describe('MAX_ALIAS_LENGTH holds across all four passes', () => {
     expect(links).toHaveLength(1)
     expect(links[0].data.hProperties.alias).toBe('.'.repeat(escaped.length / 2))
     expect(links[0].data.hProperties.blockId).toBe('')
+  })
+
+  // Degrading must not eat the display content. Flattening children to a
+  // string dropped any leaf carrying neither `value` nor `children` — an
+  // `image` is exactly that — so `[![alt](pic.png)]([[…]])` came out as
+  // `[]([[…]])`, losing the picture (Codex on PR #540).
+  it('keeps an image in the display of a rejected link', () => {
+    const tree = transform(`[![alt text](pic.png)]([[${over}]])`)
+    expect(collectWikilinks(tree)).toEqual([])
+
+    const images: Array<{url: string; alt: string | null | undefined}> = []
+    visit(tree, 'image', (node) => { images.push({url: node.url, alt: node.alt}) })
+    expect(images).toEqual([{url: 'pic.png', alt: 'alt text'}])
+
+    // …and no navigable link survives alongside it.
+    const links: string[] = []
+    visit(tree, 'link', (node) => { links.push(node.url) })
+    expect(links).toEqual([])
+  })
+
+  it('keeps emphasis in the display of a rejected link', () => {
+    const tree = transform(`[*em*]([[${over}]])`)
+    const emphasised: string[] = []
+    visit(tree, 'emphasis', (node) => { emphasised.push(inlineValue(node)) })
+    expect(emphasised).toEqual(['em'])
   })
 
   it('pass 4 (cross-node reassembly) drops an over-cap alias', () => {

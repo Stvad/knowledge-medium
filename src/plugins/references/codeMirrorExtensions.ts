@@ -15,6 +15,8 @@ import {
   searchBlocksAcrossSources,
 } from '@/utils/linkTargetAutocomplete.js'
 import { loadRecentBlockIds } from '@/plugins/quick-find/recents.js'
+import { canRenderAsWikilink } from './referenceParser.ts'
+import type { TypeContribution } from '@/data/api'
 
 const referenceAutocompleteTheme = EditorView.theme({
   '.cm-tooltip.cm-tooltip-autocomplete.tm-reference-autocomplete': {
@@ -113,6 +115,32 @@ const insertAtCaretForMisplacedDiff = Prec.highest(
   }),
 )
 
+/** Alias search rows → `[[` completions, dropping any target the wikilink
+ *  grammar can't carry.
+ *
+ *  Offering such a target hands the user dead markup: accepting the
+ *  completion writes a span the parser reads no reference from, so it
+ *  renders as literal text and gains no backlink, with nothing on screen
+ *  saying why. Reachable today — a workspace can already hold over-cap
+ *  aliases (this PR's phantom pages are exactly that, and several begin
+ *  `import {`, so typing `[[import ` surfaces them). Filtering is also the
+ *  right end state: those names cannot be linked to at all, so listing
+ *  them offers a broken choice (Codex on PR #540).
+ *
+ *  Split out and exported so the filter is testable — inside the
+ *  `getAliases` closure it is reachable only through a live CodeMirror
+ *  completion context. */
+export const aliasCompletions = (
+  matches: readonly {label: string; typeIds: readonly string[]}[],
+  typeRegistry: ReadonlyMap<string, TypeContribution>,
+): Array<{label: string; detail: string | undefined}> =>
+  matches
+    .filter(match => canRenderAsWikilink(match.label))
+    .map(match => ({
+      label: match.label,
+      detail: completionTypeHint(match.typeIds, typeRegistry),
+    }))
+
 const buildWikilinkSource = ({repo}: CodeMirrorExtensionContext): CompletionSource =>
   backlinkCompletionSource({
     getAliases: async (filter: string) => {
@@ -134,10 +162,7 @@ const buildWikilinkSource = ({repo}: CodeMirrorExtensionContext): CompletionSour
       const typeRegistry = repo.types
       // No `type` — `backlinkCompletionSource` already defaults alias
       // candidates to 'class'.
-      const aliases = matches.map(match => ({
-        label: match.label,
-        detail: completionTypeHint(match.typeIds, typeRegistry),
-      }))
+      const aliases = aliasCompletions(matches, typeRegistry)
       const dateCompletions = relativeDateCandidates(filter).map(candidate => {
         const label = formatRoamDate(candidate.date)
         return {

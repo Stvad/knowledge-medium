@@ -321,6 +321,26 @@ export const renderWikilink = (alias: string): string => {
   return `[[${padded}]]`
 }
 
+/** Can `alias` be written as a `[[…]]` span this parser reads back as a
+ *  reference at all? False only for spans the grammar refuses outright —
+ *  today, over `MAX_ALIAS_LENGTH` measured on the RENDERED span, which is
+ *  not the same as the input length: `renderWikilink` pads a trailing `]`
+ *  with a space, so an at-cap name ending in `]` emits an alias one over.
+ *
+ *  The producer-side companion to the cap. Every surface that OFFERS or
+ *  WRITES a wikilink on a user's behalf owes this check — the tag entry
+ *  points, the `[[` autocomplete — because the alternative is handing
+ *  back markup that renders as literal text and gains no backlink, with
+ *  nothing on screen saying why.
+ *
+ *  Deliberately WEAKER than `faithfulWikilinkReplacement`: this asks only
+ *  "does a reference come back", not "is it byte-identical". The lossy
+ *  cases that already work (a backslash, a trailing `]`) keep working, so
+ *  adding this check to a surface cannot newly reject an alias that
+ *  surface accepts today. */
+export const canRenderAsWikilink = (alias: string): boolean =>
+  parseOutermostReferences(renderWikilink(alias)).length === 1
+
 /** Render an aliased blockref `[label](((id)))`. Strips `]` and
  *  newlines from `label` because the parser's regex rejects them in
  *  the label segment (see `ALIASED_BLOCK_REF_RE`). `id` is assumed
