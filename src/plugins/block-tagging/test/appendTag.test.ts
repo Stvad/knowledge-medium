@@ -6,7 +6,7 @@ import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { ChangeScope } from '@/data/api'
 import { appendTagToBlocks, appendTagToContent } from '../appendTag.ts'
-import { tagNameIssue } from '../config.ts'
+import { selectableTagNames, tagNameIssue } from '../config.ts'
 import { MAX_ALIAS_LENGTH, parseReferences, renderWikilink } from '@/plugins/references/referenceParser'
 
 describe('appendTagToContent', () => {
@@ -68,6 +68,18 @@ describe('appendTagToContent', () => {
     const tagged = appendTagToContent('hello', atCap)
     expect(tagged).toBe(`hello [[${atCap}]]`)
     expect(parseReferences(tagged).map(r => r.alias)).toEqual([atCap])
+  })
+
+  // The picker lists these as clickable options and its submit path bails
+  // on an invalid name, so an unusable stored tag was an inert row with no
+  // explanation. Prefs written before the cap existed can still hold one.
+  it('hides configured tags this build cannot apply', () => {
+    const tooLong = 'a'.repeat(MAX_ALIAS_LENGTH + 1)
+    expect(selectableTagNames(['srs', tooLong, 'later'])).toEqual(['srs', 'later'])
+    // Not a blanket length rule, and not applied to the config editor's
+    // own list — this is only what the picker may OFFER.
+    expect(selectableTagNames(['a'.repeat(MAX_ALIAS_LENGTH)]))
+      .toEqual(['a'.repeat(MAX_ALIAS_LENGTH)])
   })
 
   // The entry points render a message per reason, so the reason has to be

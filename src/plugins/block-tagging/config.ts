@@ -56,6 +56,23 @@ export const tagNameIssue = (name: string): TagNameIssue | null => {
 export const normalizeBlockTagsConfig = (value: unknown): string[] =>
   uniqueStrings(value)
 
+/** Configured tags this build can actually apply.
+ *
+ *  Stored prefs are not guaranteed valid: the config editor accepted
+ *  unbounded names before the alias cap and `normalizeBlockTagsConfig`
+ *  preserves whatever is there, so prefs written by an older build can
+ *  hold a name that no longer passes. Offering one in the picker made
+ *  clicking it a silent no-op — the submit path bails on
+ *  `isValidTagName` and the picker's error line is derived from the
+ *  TYPED QUERY, which is usually empty, so the user got neither a tag nor
+ *  a reason (Codex on PR #540).
+ *
+ *  For the PICKER only. The config editor deliberately shows every stored
+ *  tag, valid or not — it is where an unusable one gets removed, and
+ *  hiding it there would make it unreachable as well as unusable. */
+export const selectableTagNames = (value: unknown): string[] =>
+  normalizeBlockTagsConfig(value).filter(isValidTagName)
+
 export const blockTagsConfigCodec: Codec<string[]> = {
   type: 'blockTagging:tagsConfig',
   encode: normalizeBlockTagsConfig,

@@ -14,7 +14,7 @@ import {
   blockTaggingPrefsType,
   blockTagsConfigProp,
   isValidTagName,
-  normalizeBlockTagsConfig,
+  selectableTagNames,
   tagNameIssue,
 } from './config.ts'
 import { MAX_ALIAS_LENGTH } from '@/plugins/references/referenceParser'
@@ -34,7 +34,9 @@ export const AddTagDialog = ({
   cancel,
 }: DialogContextProps<AddTagDialogResult>) => {
   const [storedTags] = usePluginPrefsProperty(blockTaggingPrefsType, blockTagsConfigProp)
-  const tags = useMemo(() => normalizeBlockTagsConfig(storedTags), [storedTags])
+  // Only tags this build can actually apply — see `selectableTagNames`
+  // for why stored prefs can contain ones it can't.
+  const tags = useMemo(() => selectableTagNames(storedTags), [storedTags])
   const [query, setQuery] = useState('')
   const filteredTags = useMemo(() => filterTags(tags, query), [tags, query])
   const inputRef = useRef<HTMLInputElement>(null)

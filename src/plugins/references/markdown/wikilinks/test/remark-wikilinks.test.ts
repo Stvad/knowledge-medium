@@ -547,6 +547,12 @@ describe('MAX_ALIAS_LENGTH holds across all four passes', () => {
     expect(links).toEqual([])
   })
 
+  it('keeps a link title when degrading a rejected link', () => {
+    const tree = transform(`[display]([[${over}]] "tooltip")`)
+    expect(collectWikilinks(tree)).toEqual([])
+    expect(collectText(tree).join('')).toBe(`[display]([[${over}]] "tooltip")`)
+  })
+
   it('keeps emphasis in the display of a rejected link', () => {
     const tree = transform(`[*em*]([[${over}]])`)
     const emphasised: string[] = []
