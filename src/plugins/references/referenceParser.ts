@@ -19,7 +19,12 @@ import { unified } from 'unified'
 import remarkParse from 'remark-parse'
 import { visit } from 'unist-util-visit'
 import type { Text } from 'mdast'
-import { MAX_ALIAS_LENGTH } from '@/data/referenceBlock'
+import {
+  MAX_ALIAS_LENGTH,
+  UUID_RE_SOURCE,
+  aliasedBlockRefSpanSource,
+  blockRefSpanSource,
+} from '@/data/referenceBlock'
 
 export interface ParsedReference {
   alias: string;
@@ -39,14 +44,21 @@ export interface ParsedBlockRef {
   label?: string;
 }
 
-// UUIDv4 shape — anchors what counts as a block-ref id. We deliberately keep
-// this strict so accidental double-parens in prose (e.g. "((not an id))")
-// don't get treated as references.
-const UUID_RE_SOURCE = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
-const ALIASED_BLOCK_REF_RE = new RegExp(`\\[([^\\]\\n]*)\\]\\(\\(\\((${UUID_RE_SOURCE})\\)\\)\\)`, 'gi')
-const BLOCK_REF_RE = new RegExp(`\\(\\((${UUID_RE_SOURCE})\\)\\)`, 'gi')
-const BLOCK_EMBED_RE = new RegExp(`!\\(\\((${UUID_RE_SOURCE})\\)\\)`, 'gi')
-const BLOCK_REF_TARGET_RE = new RegExp(`^\\(\\((${UUID_RE_SOURCE})\\)\\)$`, 'i')
+// Span SHAPES come from `@/data/referenceBlock`, which owns this grammar
+// for both of its readers — this file scans spans out of prose, that one
+// classifies whole-block content. Duplicating the shapes here is how they
+// drift, and a span that is a reference to one reader and prose to the
+// other is the bug class behind #540/#541/#542. Only the ANCHORING and
+// FLAGS are this reader's own: global, because it scans; and see the
+// docblock there for the three differences that are deliberate.
+//
+// UUID-only ids, deliberately narrower than the whole-block reading's
+// broad class, so accidental double-parens in prose (e.g. "((not an id))")
+// don't become backlinks.
+const ALIASED_BLOCK_REF_RE = new RegExp(aliasedBlockRefSpanSource(UUID_RE_SOURCE), 'gi')
+const BLOCK_REF_RE = new RegExp(blockRefSpanSource(UUID_RE_SOURCE), 'gi')
+const BLOCK_EMBED_RE = new RegExp(`!${blockRefSpanSource(UUID_RE_SOURCE)}`, 'gi')
+const BLOCK_REF_TARGET_RE = new RegExp(`^${blockRefSpanSource(UUID_RE_SOURCE)}$`, 'i')
 
 export const isBlockRefId = (s: string) => new RegExp(`^${UUID_RE_SOURCE}$`, 'i').test(s)
 

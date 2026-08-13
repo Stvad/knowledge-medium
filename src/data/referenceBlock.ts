@@ -44,15 +44,52 @@ export const UUID_RE_SOURCE = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[
  *  re-exports it — a plugin-side constant would have been a boundary
  *  violation and a second source of truth at once. */
 export const MAX_ALIAS_LENGTH = 4096
+/** Id class the WHOLE-BLOCK reading accepts inside `((…))` — any run
+ *  without parens or whitespace, so a field row can address a block whose
+ *  id was supplied by a caller rather than generated. The inline reading
+ *  deliberately narrows this to `UUID_RE_SOURCE`; see the divergence note
+ *  on {@link blockRefSpanSource}. */
+export const BROAD_BLOCK_REF_ID_SOURCE = '[^()\\s]+'
+
+/** ──── Span sources, shared by BOTH readers of this grammar ────
+ *
+ *  There are two: this module reads WHOLE-BLOCK content (one span, or
+ *  nothing) and `@/plugins/references/referenceParser` scans INLINE spans
+ *  out of prose. They are separate functions because they answer separate
+ *  questions, but the SHAPES they match must not drift — a span that is a
+ *  reference to one reader and prose to the other is the bug class that
+ *  produced #540, #541 and #542. So the shapes live here, once, and each
+ *  reader anchors and flags them for its own job.
+ *
+ *  Three differences ARE deliberate, and are parameters rather than
+ *  accidents:
+ *   - the id class inside `((…))` — broad whole-block (above), UUID-only
+ *     inline so prose like "((not an id))" never becomes a backlink;
+ *   - trimming — whole-block trims its alias, inline takes the span
+ *     verbatim (both bound by `MAX_ALIAS_LENGTH`, measured pre-trim so
+ *     the two agree at the boundary);
+ *   - nesting — inline emits nested spans, whole-block has none to emit.
+ */
+export const blockRefSpanSource = (idSource: string): string =>
+  `\\(\\((${idSource})\\)\\)`
+
+/** `[label](((id)))`. The label class excludes `]` and newlines, which is
+ *  what makes the form unambiguous — `renderAliasedBlockref` strips both
+ *  for exactly this reason. */
+export const aliasedBlockRefSpanSource = (idSource: string): string =>
+  `\\[([^\\]\\n]*)\\]\\(\\(\\((${idSource})\\)\\)\\)`
+
 const UUID_RE = new RegExp(`^${UUID_RE_SOURCE}$`, 'i')
-const EXACT_BLOCK_REF_RE = /^\(\(([^()\s]+)\)\)$/
+const EXACT_BLOCK_REF_RE = new RegExp(
+  `^${blockRefSpanSource(BROAD_BLOCK_REF_ID_SOURCE)}$`,
+)
 const EXACT_ALIASED_BLOCK_REF_RE = new RegExp(
-  `^\\[([^\\]\\n]*)\\]\\(\\(\\((${UUID_RE_SOURCE})\\)\\)\\)$`, 'i',
+  `^${aliasedBlockRefSpanSource(UUID_RE_SOURCE)}$`, 'i',
 )
 
 /** The ids `((id))` content can actually round-trip — the same character class
  *  {@link EXACT_BLOCK_REF_RE} accepts inside the parens. */
-const RENDERABLE_BLOCK_REF_ID_RE = /^[^()\s]+$/
+const RENDERABLE_BLOCK_REF_ID_RE = new RegExp(`^${BROAD_BLOCK_REF_ID_SOURCE}$`)
 
 /** The `::` field marker (properties-as-blocks §7 grammar box): trimmed
  *  content = `::` + one whole-block reference span, NO space between marker
