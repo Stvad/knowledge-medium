@@ -794,6 +794,18 @@ export class LoaderHandle<T> implements Handle<T>, RegisteredHandle {
           this.store.metrics.notifiesSkippedByDiff++
           batch?.finish(null)
         }
+        // Re-check the generation, because the step above ran LISTENER code
+        // (directly via `notify`, or indirectly — `batch.finish` can close the
+        // barrier and flush every member's queued notify). A listener is free
+        // to dispose this handle and something is then free to resurrect it,
+        // all synchronously and all after the check at the top of this
+        // handler. `release()` past that point spends a ref-count belonging to
+        // the resurrected handle's subscriber, and the handle GCs out from
+        // under somebody who is actively watching it — the same damage the
+        // top-of-handler check prevents, through a later window. Returning
+        // here leaks nothing: `dispose()` zeroed `refCount`, so the retain
+        // this run took is already gone.
+        if (this.generation !== generation) return value
         this.release() // drop the inflight ref
         // If invalidations arrived during this load, the data we just
         // returned may already be stale. Re-run via a microtask so the
@@ -1012,6 +1024,19 @@ export class LoaderHandle<T> implements Handle<T>, RegisteredHandle {
     this.refCount = 0
     this.deps = []
     this.changesDuringLoad = []
+    // The two live-run flags. Neither is observable across a resurrection
+    // today — `resolveLive` re-zeroes `stale`, and every path that resurrects
+    // continues straight into a `runLoader` that zeroes both at run start —
+    // and no test pins them, deliberately: there is nothing to observe. They
+    // are here because `dispose()` is where the "this handle carries no live
+    // state" claim is made, and `resolveLive` states in a comment that it is
+    // merely re-asserting what dispose already zeroed. That claim was false
+    // for `stale` (routinely `true` at disposal: it is set precisely when an
+    // invalidation lands on a handle with no listeners, which is the same
+    // handle GC then collects), so the list is completed rather than the
+    // claim weakened.
+    this.pendingReinvalidate = false
+    this.stale = false
     this.value = undefined
     this.notifiedValue = undefined
     this.hasNotifiedValue = false

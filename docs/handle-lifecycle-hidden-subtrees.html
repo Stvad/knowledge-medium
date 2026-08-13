@@ -37,11 +37,12 @@
 <strong>Status: implemented, then corrected</strong> &middot; a defect report whose fix now ships in the same PR
 (#532). Reproduced end-to-end on the hosted build (2026-08-04) against a live workspace, then narrowed
 by reading React 19.2.6's own internals. Revised through several adversarial review rounds, which added
-the <code>read()</code>/Suspense fix, the re-acquire attempt cap described below, and — after the
-correction — the <code>generation</code> guard on the mid-load settle path.
-The first fix (hook-side re-acquire) proved
-largely inert in the built app — see §"Correction: the compiler memoizes the factory".
-<strong>Last verified against code:</strong> 2026-08-12 (<code>src/data/internals/handleStore.ts</code>,
+the <code>read()</code>/Suspense fix and the re-acquire attempt cap described in §2 — and then, once the
+correction retired that whole approach, the <code>generation</code> guard on the mid-load settle path.
+The first fix (hook-side re-acquire) proved largely inert in the built app and its code is gone; §2 is
+kept only because the correction reads as an answer to it. See §"Correction: the compiler memoizes the
+factory".
+<strong>Last verified against code:</strong> 2026-08-13 (<code>src/data/internals/handleStore.ts</code>,
 <code>src/hooks/block.ts</code>, <code>src/data/api/handle.ts</code> as implemented on this branch).
 </aside>
 
@@ -360,6 +361,21 @@ compares a <code>generation</code> counter bumped by every <code>dispose()</code
 run was cancelled" actually means. Reaching it needs a disposal while a load is in flight, and a load
 holds a ref-count, so only <code>HandleStore.clear()</code> gets there today — but that is public API
 and the handle should not depend on who called it.</p>
+
+<p><strong>One check is not enough, and that took a further round to see.</strong> The generation
+comparison at the top of the settle handler is not the last thing that handler does. It goes on to run
+<em>listener</em> code — <code>notify()</code> directly, or a <code>batch.finish()</code> that closes
+the barrier and flushes every member's queued notify — and only <em>then</em> calls
+<code>release()</code>. A listener may dispose the handle, and anything may resurrect it, synchronously
+inside that window; the dead run's <code>release()</code> then spends a ref-count belonging to the
+resurrected handle's new subscriber and the GC sweep collects a handle somebody is actively watching.
+Identical damage, later window. So the generation is re-checked immediately before
+<code>release()</code>. Demonstrated with a listener that calls <code>store.clear()</code> and
+re-subscribes; pinned by <em>"a listener that disposes mid-notify cannot cost the resurrected handle
+its ref-count"</em>, which fails if the check is deleted, if it reads <code>disposed</code> instead of
+<code>generation</code>, or if it is moved to either side of the notify/<code>release()</code> pair.
+The rejection half needs no equivalent: its <code>batch.finish()</code> runs <em>before</em> its
+generation check, so listener code cannot get in behind it.</p>
 
 <p>Fixing that turned up a neighbouring bug that is <em>not</em> ours: the disposed-mid-load path never
 released its <code>NotifyBatch</code> slot. A comment claimed the rejection handler covered it, but a

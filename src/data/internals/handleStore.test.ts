@@ -306,6 +306,41 @@ describe('LoaderHandle GC', () => {
     await expect(dead.loadFresh()).resolves.toEqual([9])
   })
 
+  it('loadFresh() through a disposed handle keeps its completeness boundary', async () => {
+    // The test above only pins "does not throw", which a forward to plain
+    // `load()` also satisfies — and that forward would silently downgrade the
+    // guarantee projector priming depends on: `loadFresh` must not return a
+    // value that was already invalidated while its loader ran. Here the
+    // replacement's first run is invalidated mid-flight, so `load()` would
+    // hand back the suspect [1] and only `loadFresh` waits for the clean [2].
+    const store = makeStore(1000)
+    const dep: Dependency = { kind: 'row', id: 'r' }
+    let runs = 0
+    let releaseFirst: ((v: number[]) => void) | undefined
+    const loader = async (ctx: { depend: (d: Dependency) => void }) => {
+      runs++
+      ctx.depend(dep)
+      if (runs === 1) return new Promise<number[]>(r => { releaseFirst = r })
+      return [runs]
+    }
+    const dead = store.getOrCreate('boundary', () =>
+      new LoaderHandle({ store, key: 'boundary', loader }),
+    )
+    dead.dispose()
+    const live = store.getOrCreate('boundary', () =>
+      new LoaderHandle({ store, key: 'boundary', loader }),
+    )
+
+    const settled = dead.loadFresh()
+    // The loader runs synchronously up to its first await, so the first run is
+    // already in flight here — no yield needed before invalidating it.
+    expect(releaseFirst).toBeDefined()
+    live.invalidate()
+    releaseFirst!([1])
+
+    await expect(settled).resolves.toEqual([2])
+  })
+
   it('load() through a disposed handle resolves instead of rejecting', async () => {
     // The imperative path: a caller holding a stale handle (memoized, or kept
     // across a hide) awaits load() without ever subscribing.
@@ -381,6 +416,34 @@ describe('LoaderHandle GC', () => {
     expect(store.size()).toBe(1)
   })
 
+  it('a resurrected handle still receives store-driven invalidations', async () => {
+    // `store.size()` pins that resurrection re-registers; this pins WHY that
+    // matters. The store only walks handles in its map, so a resurrection that
+    // came back without re-registering would load once, render, and then never
+    // update again — a revealed subtree frozen at the value it woke up with,
+    // with no error anywhere. Driven through `store.invalidate` (the real
+    // commit path) rather than `handle.invalidate` so the map walk is what is
+    // under test.
+    const store = makeStore(1000)
+    const dep: Dependency = { kind: 'row', id: 'x' }
+    let n = 0
+    const loader = async (ctx: { depend: (d: Dependency) => void }) => {
+      ctx.depend(dep)
+      return [++n]
+    }
+    const h = store.getOrCreate('revived', () =>
+      new LoaderHandle({ store, key: 'revived', loader }),
+    )
+    h.dispose()
+
+    const seen: unknown[] = []
+    h.subscribe(v => seen.push(v))
+    await vi.waitFor(() => expect(h.peek()).toEqual([1]))
+
+    store.invalidate({ rowIds: ['x'] })
+    await vi.waitFor(() => expect(seen).toEqual([[1], [2]]))
+  })
+
   it('a load in flight at disposal cannot settle onto the resurrected handle', async () => {
     // Resurrection made `disposed` a flag that flips BACK, so the mid-load
     // guard can no longer read it: the pre-disposal load finds `disposed ===
@@ -422,6 +485,40 @@ describe('LoaderHandle GC', () => {
     sched.flush(1000)
     expect(h.status()).toBe('ready')
     expect(store.size()).toBe(1)
+  })
+
+  it('a listener that disposes mid-notify cannot cost the resurrected handle its ref-count', async () => {
+    // The generation check at the top of the settle handler is not enough on
+    // its own: the handler goes on to run LISTENER code (`notify`, or a
+    // `batch.finish` that closes the barrier and flushes every member's queued
+    // notify) and only THEN calls `release()`. A listener may dispose the
+    // handle and something may resurrect it, all synchronously, inside that
+    // window — after which the dead run's `release()` spends a ref-count that
+    // belongs to the resurrected handle's new subscriber, and the GC sweep
+    // collects a handle somebody is actively watching. Same damage as the
+    // mid-load case below, reached through a later window.
+    const sched = manualScheduler()
+    const store = makeStore(100, sched)
+    let n = 0
+    const loader = async () => [++n]
+    const h = store.getOrCreate('reentrant', () =>
+      new LoaderHandle({ store, key: 'reentrant', loader }),
+    )
+
+    let armed = true
+    const seenSecond: unknown[] = []
+    h.subscribe(() => {
+      if (!armed) return
+      armed = false
+      store.clear()
+      h.subscribe(v => seenSecond.push(v))
+    })
+    await vi.waitFor(() => expect(seenSecond.length).toBeGreaterThan(0))
+
+    // The second subscriber never left, so nothing may collect this handle.
+    sched.flush(1000)
+    expect(store.size()).toBe(1)
+    expect(h.status()).not.toBe('disposed')
   })
 
   it('a load that REJECTS after disposal cannot error the resurrected handle', async () => {
