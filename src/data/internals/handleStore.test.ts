@@ -271,11 +271,57 @@ describe('LoaderHandle structural diffing (§9.4)', () => {
 })
 
 describe('LoaderHandle GC', () => {
-  it('read() on a disposed handle throws an Error, not a retry promise', async () => {
-    // Falling through to the promise path would hand a Suspense boundary a
-    // fresh rejected promise on every attempt — render, throw, reject,
-    // re-render, forever, with nothing surfacing. An Error reaches the
-    // nearest error boundary instead.
+  it('a disposed handle forwards peek/status to the live replacement', async () => {
+    // Render-path reads: they must see the replacement's data WITHOUT
+    // creating anything (peek/status run during render).
+    const store = makeStore(1000)
+    const { loader } = collectingLoader([7, 8])
+    const dead = store.getOrCreate('fwd', () => new LoaderHandle({ store, key: 'fwd', loader }))
+    dead.dispose()
+    expect(dead.status()).toBe('disposed')
+    expect(dead.peek()).toBeUndefined()
+
+    const live = store.getOrCreate('fwd', () => new LoaderHandle({ store, key: 'fwd', loader }))
+    await live.load()
+
+    expect(dead.status()).toBe('ready')
+    expect(dead.peek()).toEqual([7, 8])
+    expect(store.size()).toBe(1)
+  })
+
+  it('load() through a disposed handle resolves instead of rejecting', async () => {
+    // The imperative path: a caller holding a stale handle (memoized, or kept
+    // across a hide) awaits load() without ever subscribing.
+    const store = makeStore(1000)
+    const { loader } = collectingLoader([4, 5, 6])
+    const dead = store.getOrCreate('imperative', () =>
+      new LoaderHandle({ store, key: 'imperative', loader }),
+    )
+    dead.dispose()
+
+    await expect(dead.load()).resolves.toEqual([4, 5, 6])
+    expect(store.size()).toBe(1)
+  })
+
+  it('subscribing through a disposed handle delivers the replacement events', async () => {
+    // A holder that cannot re-acquire (a memoized handle) still has to receive
+    // invalidations, so subscribe resolves rather than attaching to a corpse.
+    const store = makeStore(1000)
+    const { loader } = collectingLoader([1])
+    const dead = store.getOrCreate('sub', () => new LoaderHandle({ store, key: 'sub', loader }))
+    dead.dispose()
+    const live = store.getOrCreate('sub', () => new LoaderHandle({ store, key: 'sub', loader }))
+    await live.load()
+
+    const seen: unknown[] = []
+    dead.subscribe(v => seen.push(v))
+    live.invalidate()
+    await vi.waitFor(() => expect(seen.length).toBeGreaterThan(0))
+  })
+
+  it('a disposed handle resolves to the live one at its key', async () => {
+    // The holder cannot always re-acquire — React Compiler output memoizes
+    // the factory call — so the handle resolves itself instead of dead-ending.
     const sched = manualScheduler()
     const store = new HandleStore({ gcTimeMs: 100, schedule: sched.schedule })
     const { loader } = collectingLoader([1, 2, 3])
@@ -285,13 +331,22 @@ describe('LoaderHandle GC', () => {
     await h.load()
     sched.flush(100)
     expect(h.status()).toBe('disposed')
-    expect(() => h.read()).toThrow(/has been disposed/)
-    try {
-      h.read()
-    } catch (thrown) {
-      expect(thrown).toBeInstanceOf(Error)
-      expect(thrown).not.toBeInstanceOf(Promise)
-    }
+
+    // A replacement minted by anyone else is adopted, not rivalled.
+    const replacement = store.getOrCreate('read:disposed', () =>
+      new LoaderHandle({ store, key: 'read:disposed', loader }),
+    )
+    await replacement.load()
+    expect(h.status()).toBe('ready')
+    expect(h.peek()).toEqual([1, 2, 3])
+    expect(h.read()).toEqual([1, 2, 3])
+
+    // …and with the key vacant, subscribing resurrects rather than no-oping.
+    replacement.dispose()
+    const seen: unknown[] = []
+    h.subscribe(v => seen.push(v))
+    await vi.waitFor(() => expect(h.status()).toBe('ready'))
+    expect(store.size()).toBe(1)
   })
 
   it('disposes after gcTimeMs once subscribers drain', async () => {

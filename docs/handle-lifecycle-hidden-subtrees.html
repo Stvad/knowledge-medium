@@ -34,11 +34,13 @@
 <body>
 
 <aside class="doc-status" style="margin:0 0 1.25rem;padding:.6rem .9rem;border:1px solid #b8860b;border-radius:6px;background:rgba(184,134,11,.12);font-size:.85rem;line-height:1.45">
-<strong>Status: implemented</strong> &middot; a defect report whose fix now ships in the same PR
+<strong>Status: implemented, then corrected</strong> &middot; a defect report whose fix now ships in the same PR
 (#532). Reproduced end-to-end on the hosted build (2026-08-04) against a live workspace, then narrowed
 by reading React 19.2.6's own internals. Revised through two adversarial review rounds, which added
 the <code>read()</code>/Suspense fix and the re-acquire attempt cap described below.
-<strong>Last verified against code:</strong> 2026-08-05 (<code>src/data/internals/handleStore.ts</code>,
+The first fix (hook-side re-acquire) proved
+largely inert in the built app — see §"Correction: the compiler memoizes the factory".
+<strong>Last verified against code:</strong> 2026-08-13 (<code>src/data/internals/handleStore.ts</code>,
 <code>src/hooks/block.ts</code>, <code>src/data/api/handle.ts</code> as implemented on this branch).
 </aside>
 
@@ -267,8 +269,8 @@ which cancels its constructor GC (<span class="filepath">handleStore.ts:876–88
 <code>dispose()</code> removes the key synchronously before any later <code>getOrCreate</code> can
 run.</p>
 
-<p>That rests on an invariant the hook cannot enforce: <strong>the caller's factory must run on every
-render and return a live handle.</strong> Two shapes violate it — one that memoizes the handle
+<p><strong>Superseded — see the correction below.</strong> That rests on an invariant the hook cannot
+enforce: <strong>the caller's factory must run on every render and return a live handle.</strong> Two shapes violate it — one that memoizes the handle
 (<code>useMemo(() =&gt; repo.query.subtree(…), [id])</code>), which hands back the same corpse, and one
 that mints a fresh dead handle per render. Every call site in core satisfies it today
 (<code>useChildIds</code>, <code>useChildren</code>, <code>useSubtree</code>, <code>useParents</code>,
@@ -312,6 +314,39 @@ spends two attempts on one logical recovery.</p>
 </tr>
 </table>
 </div>
+
+<h2>Correction: the compiler memoizes the factory</h2>
+
+<p>The invariant above — "every call site in core satisfies it today; they call the factory inline" —
+is true in the source and <strong>false in the build</strong>. This app compiles with React Compiler
+(<span class="filepath">vite.config.ts:77</span>, <code>babel({presets: [reactCompilerPreset()]})</code>,
+unconditional, so it applies in dev too), and the compiler hoists the factory call into its memo
+cache. From the served <code>LayoutRenderer</code>:</p>
+
+<pre><code>if ($[1] !== block.id || $[2] !== block.repo.query) {
+  t1 = block.repo.query.subtree({id: block.id, hidePropertyChildren: true});
+} else {
+  t1 = $[3];        // cache hit — the disposed handle, forever
+}</code></pre>
+
+<p><code>block.id</code> and <code>block.repo.query</code> never change, so the render forced to
+re-acquire gets the same corpse back. Every compiled consumer memoizes; the invariant is not
+something callers can be asked to uphold. Worse, the dev-only warning that was supposed to make this
+diagnosable is stripped from production builds, so it failed silently.</p>
+
+<p><strong>The repair moves into the handle.</strong> A disposed handle now resolves to whatever is
+live at its key: <code>peek</code>/<code>status</code> forward to an existing replacement (pure — safe
+on the render path), and <code>subscribe</code>/<code>load</code>/<code>read</code> resolve, adopting
+a replacement if the store has one and otherwise resurrecting the instance itself, which it can do
+because it still holds its key and loader. Adoption-before-resurrection is what keeps one owner per
+key — the objection that ruled this out the first time. The hook-side re-acquire machinery is removed:
+it cannot work under the compiler, and its subscribe branch actively blocked the new path.</p>
+
+<p>Measured end to end against a locally-patched build (the perspective host under
+<code>&lt;Activity&gt;</code>, hidden 9&nbsp;s): unpatched blanks the lane; patched recovers in 4 of 5
+clean runs. The one failure followed a mid-run extension re-pin and is probably confounded, but that
+is not established — treat "reliably fixed end to end" as not yet proven, while the unit-level
+contract is pinned per clause.</p>
 
 <h2>Pinning it</h2>
 

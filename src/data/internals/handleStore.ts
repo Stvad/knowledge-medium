@@ -25,7 +25,6 @@
  */
 
 import { isEqual } from 'lodash-es'
-import { devAssertionsEnabled } from './devAssertions'
 import type { Dependency, Handle, HandleStatus, Unsubscribe } from '@/data/api'
 import {
   collectPluginInvalidationsFromSnapshots,
@@ -318,6 +317,11 @@ export class HandleStore {
   /** Remove a key (called by the handle itself on dispose). */
   remove(key: string): void { this.handles.delete(key) }
 
+  /** The handle currently registered at `key`, or undefined. Unlike
+   *  {@link getOrCreate} this NEVER creates — it is how a disposed handle
+   *  finds the replacement that superseded it without minting a rival. */
+  peekHandle(key: string): RegisteredHandle | undefined { return this.handles.get(key) }
+
   /** Walk all registered handles, invalidate the ones whose deps match. */
   invalidate(change: ChangeNotification): void {
     if (this.handles.size === 0) return
@@ -525,18 +529,67 @@ export class LoaderHandle<T> implements Handle<T>, RegisteredHandle {
 
   // ──── Handle<T> surface ────
 
-  peek(): T | undefined { return this.value }
+  peek(): T | undefined {
+    if (this.disposed) return this.liveAtKey()?.peek()
+    return this.value
+  }
+
+  /**
+   * Resolve a disposed handle to whatever is LIVE at its key.
+   *
+   * Why this exists: the documented contract used to be "re-acquire through
+   * the factory", and the factory only runs in the CALLER's render. That is
+   * unsatisfiable in this app — React Compiler output memoizes the factory
+   * call on deps that never change (`block.id`, `block.repo.query`), so a
+   * consumer handed a disposed handle gets the same corpse back on every
+   * subsequent render, forever. Rather than ask every caller to defeat its
+   * own compiler, a disposed handle resolves itself.
+   *
+   * `liveAtKey` is the PURE half — it never creates, so it is safe on the
+   * render path (`peek`, `status`).
+   */
+  private liveAtKey(): LoaderHandle<T> | null {
+    const existing = this.store.peekHandle(this.key)
+    return existing && existing !== this ? existing as LoaderHandle<T> : null
+  }
+
+  /**
+   * The effecting half: resolve to the live handle at this key, resurrecting
+   * THIS instance when the key is vacant (we still hold both the key and the
+   * loader). Only ever called from effect-time paths — subscribe / load /
+   * read — never during render.
+   *
+   * It cannot produce two live handles for one key: if the store already has
+   * a replacement we adopt it, and otherwise we re-register ourselves through
+   * `getOrCreate`, which is the same single-owner path everyone else uses.
+   */
+  private resolveLive(): LoaderHandle<T> {
+    if (!this.disposed) return this
+    const existing = this.liveAtKey()
+    if (existing) return existing
+    this.disposed = false
+    this.status_ = 'idle'
+    this.stale = false
+    this.store.getOrCreate(this.key, () => this)
+    // Re-arm the constructor's GC sweep: a resurrection nothing goes on to
+    // retain must not leak, exactly as at construction.
+    const gcMs = this.store.getGcTimeMs()
+    if (gcMs > 0) this.cancelGc = this.store.getScheduler()(() => this.dispose(), gcMs)
+    return this
+  }
 
   /** Reports `'disposed'` after GC rather than the `'idle'` the reset
    *  `status_` holds: a holder that can't tell a dead handle from a fresh one
    *  will happily `load()` it (rejected) and `subscribe()` to it (a no-op),
    *  and never learn it must re-acquire. See `useHandle`. */
-  status(): HandleStatus { return this.disposed ? 'disposed' : this.status_ }
+  status(): HandleStatus {
+    if (!this.disposed) return this.status_
+    const live = this.liveAtKey()
+    return live ? live.status() : 'disposed'
+  }
 
   load(): Promise<T> {
-    if (this.disposed) {
-      return Promise.reject(new Error(`Handle ${this.key} has been disposed`))
-    }
+    if (this.disposed) return this.resolveLive().load()
     // An inflight load means the cached value is *known stale* — it was
     // either never set (cold load) or was invalidated and a fresh fetch
     // is in progress. Return the inflight so awaiters see post-
@@ -757,20 +810,7 @@ export class LoaderHandle<T> implements Handle<T>, RegisteredHandle {
   }
 
   subscribe(listener: (value: T) => void): Unsubscribe {
-    if (this.disposed) {
-      // Listening to a disposed handle is a no-op + immediate
-      // unsubscribe; callers should re-acquire via the factory.
-      // Warn rather than fail silently: a caller that lands here is wired to
-      // a handle that can never deliver. `useHandle` intercepts this case
-      // before it gets here, so the warning is aimed at the callers that
-      // don't go through it (hand-rolled useSyncExternalStore bridges).
-      if (devAssertionsEnabled()) {
-        console.warn(
-          `[handleStore] subscribe() on disposed handle ${this.key} — no events will be delivered. Re-acquire it through the factory.`,
-        )
-      }
-      return () => {}
-    }
+    if (this.disposed) return this.resolveLive().subscribe(listener)
     this.listeners.add(listener)
     this.retain()
     // First subscriber kicks off a load if we're idle, OR if the handle
@@ -790,16 +830,11 @@ export class LoaderHandle<T> implements Handle<T>, RegisteredHandle {
   }
 
   read(): T {
-    // Disposed is terminal, and it must throw an ERROR rather than fall
-    // through to the promise path below: `load()` on a disposed handle
-    // returns a fresh rejected promise every call, so a Suspense boundary
-    // would retry forever — render, throw, reject, re-render — with nothing
-    // surfacing. An Error reaches the nearest error boundary instead.
-    if (this.disposed) {
-      throw new Error(
-        `Handle ${this.key} has been disposed — re-acquire it through the factory`,
-      )
-    }
+    // A disposed handle resolves to its live replacement rather than
+    // throwing: the old behavior fell through to `throw this.load()`, and
+    // load() on a corpse returned a fresh rejected promise every call, so a
+    // Suspense boundary retried forever with nothing surfacing.
+    if (this.disposed) return this.resolveLive().read()
     if (this.status_ === 'ready' && this.value !== undefined) return this.value
     if (this.status_ === 'error') throw this.error
     // Suspense path: throw a promise React can `await`.
