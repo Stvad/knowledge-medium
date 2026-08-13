@@ -49,6 +49,7 @@ import {
   getAliases,
   getBlockTypes,
 } from '@/data/properties'
+import { isRoundTrippableReferenceLabel } from '@/data/referenceBlock'
 import { seededDefinitionKey } from '@/data/definitionSeeds'
 import { isTypeSeedKey } from '@/data/typeSeeds'
 
@@ -105,7 +106,24 @@ export const BLOCK_TYPE_TYPEIFY_PROCESSOR = defineSameTxProcessor({
           await ctx.tx.update(row.id, {content: name})
         }
       }
-      if (name !== '') {
+      // Claim the label as an alias only if it can actually SERVE as one.
+      // This processor adopts a block's pre-existing content as the type's
+      // name, so the name is whatever prose happened to be there — and any
+      // path that adds `block-type` to an existing block reaches here (the
+      // agent bridge's raw properties bag, most concretely), not just
+      // `createTypeBlock`. A name that can't be written as `[[name]]` and
+      // read back — `]]`-lossy, or over `MAX_ALIAS_LENGTH` — would claim an
+      // alias nothing can resolve, which is worse than claiming none.
+      //
+      // SKIPS rather than throws, unlike the two interactive type-label
+      // paths. Those have a human at the keyboard and a field to revert;
+      // this is a kernel same-tx processor, where throwing rolls back the
+      // user's whole write for a reason that is incidental to what they
+      // asked for ("tag this as a type"). An alias-less type is already a
+      // supported state — `writeBlockTypeLabel` documents the blank-label
+      // case — so degrading to it is the coherent failure. The tradeoff:
+      // no feedback, so the type is silently unlinkable by name.
+      if (name !== '' && isRoundTrippableReferenceLabel(name)) {
         const aliases = getAliases(after)
         if (!aliases.includes(name)) {
           await ctx.tx.setProperty(row.id, aliasesProp, [...aliases, name])
