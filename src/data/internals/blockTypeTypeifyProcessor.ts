@@ -49,7 +49,10 @@ import {
   getAliases,
   getBlockTypes,
 } from '@/data/properties'
-import { isRoundTrippableReferenceLabel } from '@/data/referenceBlock'
+import {
+  assertNotGrammarShapedLabel,
+  assertRoundTrippableReferenceLabel,
+} from '@/data/referenceBlock'
 import { seededDefinitionKey } from '@/data/definitionSeeds'
 import { isTypeSeedKey } from '@/data/typeSeeds'
 
@@ -85,6 +88,29 @@ export const BLOCK_TYPE_TYPEIFY_PROCESSOR = defineSameTxProcessor({
       const currentLabel = (typeof rawLabel === 'string' ? rawLabel : '').trim()
       const name = currentLabel || after.content.trim()
 
+      // Name hygiene, BEFORE any write. This processor adopts whatever
+      // content the block already had as the type's name and claims it as
+      // an alias, and it fires on ANY path that adds `block-type` — the
+      // agent bridge's raw properties bag most concretely, not just
+      // `createTypeBlock` (which runs these same two asserts up front, so
+      // they are a no-op for it). Without them, arbitrary prose became a
+      // claimed, globally-resolvable alias.
+      //
+      // THROWS rather than skipping the alias claim. A type whose name
+      // cannot be written as `[[name]]` is broken in the way that matters
+      // — nothing can link to it — and producing one silently is exactly
+      // the failure mode that made this whole family of bugs expensive to
+      // find. Same-tx, so the throw rolls the tagging back atomically and
+      // the caller sees why; both refusals derive from `UnwritableLabelError`,
+      // which the type-label UI already catches to revert its field.
+      //
+      // Ordered before the writes below only for clarity — a same-tx
+      // throw discards them either way.
+      if (name !== '') {
+        assertNotGrammarShapedLabel(name, 'Block type label')
+        assertRoundTrippableReferenceLabel(name, 'Block type label')
+      }
+
       // PAGE_TYPE via the blessed raw membership helper (a full
       // `properties` write) goes FIRST; the label / alias amendments
       // below are partial `setProperty` writes that layer on top without
@@ -106,24 +132,7 @@ export const BLOCK_TYPE_TYPEIFY_PROCESSOR = defineSameTxProcessor({
           await ctx.tx.update(row.id, {content: name})
         }
       }
-      // Claim the label as an alias only if it can actually SERVE as one.
-      // This processor adopts a block's pre-existing content as the type's
-      // name, so the name is whatever prose happened to be there — and any
-      // path that adds `block-type` to an existing block reaches here (the
-      // agent bridge's raw properties bag, most concretely), not just
-      // `createTypeBlock`. A name that can't be written as `[[name]]` and
-      // read back — `]]`-lossy, or over `MAX_ALIAS_LENGTH` — would claim an
-      // alias nothing can resolve, which is worse than claiming none.
-      //
-      // SKIPS rather than throws, unlike the two interactive type-label
-      // paths. Those have a human at the keyboard and a field to revert;
-      // this is a kernel same-tx processor, where throwing rolls back the
-      // user's whole write for a reason that is incidental to what they
-      // asked for ("tag this as a type"). An alias-less type is already a
-      // supported state — `writeBlockTypeLabel` documents the blank-label
-      // case — so degrading to it is the coherent failure. The tradeoff:
-      // no feedback, so the type is silently unlinkable by name.
-      if (name !== '' && isRoundTrippableReferenceLabel(name)) {
+      if (name !== '') {
         const aliases = getAliases(after)
         if (!aliases.includes(name)) {
           await ctx.tx.setProperty(row.id, aliasesProp, [...aliases, name])
