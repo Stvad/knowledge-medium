@@ -76,7 +76,7 @@ import {
   resolveAliasSeatId,
 } from '@/data/targets'
 import { EXTENSION_TYPE } from '@/data/blockTypes'
-import { aliasesProp, hasBlockType } from '@/data/properties'
+import { aliasesProp, typesProp } from '@/data/properties'
 import { deleteSubtreeInTx } from '@/data/subtreeDelete'
 import {
   dailyNoteBlockId,
@@ -117,6 +117,33 @@ const hasLiveReferrer = async (
  *  check. Adding a new parse-relevant column is a single-edit change here. */
 const planBasisOf = (row: BlockData): string =>
   JSON.stringify([row.content, row.properties, row.references])
+
+/** Is this row an installed extension's SOURCE block?
+ *
+ *  A raw-array read rather than `hasBlockType`, which decodes through the
+ *  `string-list` codec and THROWS a `CodecError` on a malformed `types`
+ *  value — a non-array, or an array holding a non-string. A throw in this
+ *  processor's read phase would land AFTER the user's write committed and
+ *  abort the whole `apply`, freezing references for its own row and every
+ *  other row in the same event.
+ *
+ *  DEFENCE IN DEPTH, not a load-bearing guard: that scenario is currently
+ *  unreachable through a local write, because the kernel's SAME-TX
+ *  `core.blockTypeTypeify` calls `addedTypes` → `getBlockTypes` on every
+ *  changed row first and throws there instead — which rolls the write
+ *  back rather than corrupting derived state (verified by writing both
+ *  malformed shapes through `repo.tx`; the tx rejects). So this is
+ *  unpinnable through the public path and is unit-tested directly
+ *  instead. It stays because the total read costs nothing, and because a
+ *  wrong-shaped value reading as "not an extension" is the right answer
+ *  anyway — the block gets parsed like ordinary content, exactly as
+ *  before this gate existed. Same shape as `MediaBlockRenderer.canRender`,
+ *  which documents the identical `getBlockTypes` hazard on the render
+ *  side. */
+export const isExtensionSource = (source: Pick<BlockData, 'properties'>): boolean => {
+  const types = source.properties[typesProp.name]
+  return Array.isArray(types) && types.includes(EXTENSION_TYPE)
+}
 
 /** Per-source plan built during the read phase. The write phase consumes
  *  this and issues all writes in a single tx. */
@@ -197,7 +224,7 @@ const buildSourcePlan = async (
   // `properties` and `content` are both watched, so the next write to one
   // re-parses under this gate, drops the stale refs, and lets
   // `reapOrphanAliasSeats` collect the seats they were holding open.
-  const scanContent = !hasBlockType(source, EXTENSION_TYPE)
+  const scanContent = !isExtensionSource(source)
   const aliasMarks = scanContent ? parseAliasMarks(source.content) : []
   const blockRefMarks = scanContent ? parseBlockRefs(source.content) : []
 
