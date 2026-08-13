@@ -289,6 +289,23 @@ describe('LoaderHandle GC', () => {
     expect(store.size()).toBe(1)
   })
 
+  it('loadFresh() through a disposed handle resolves instead of throwing', async () => {
+    // loadFresh settles against `inflight`/`stale`/`value`, all of which
+    // disposal cleared — forwarding only the inner load() would throw
+    // "completed without a value" despite the replacement loading fine.
+    const store = makeStore(1000)
+    const { loader } = collectingLoader([9])
+    const dead = store.getOrCreate('fresh', () => new LoaderHandle({ store, key: 'fresh', loader }))
+    dead.dispose()
+    // ADOPTION, not resurrection: someone else already remade the key, so the
+    // loop would settle against `this` (still disposed, value cleared) while
+    // the data lives on the replacement. The vacant-key path can't show this —
+    // there `load()` resurrects `this`, so the loop reads valid state.
+    store.getOrCreate('fresh', () => new LoaderHandle({ store, key: 'fresh', loader }))
+
+    await expect(dead.loadFresh()).resolves.toEqual([9])
+  })
+
   it('load() through a disposed handle resolves instead of rejecting', async () => {
     // The imperative path: a caller holding a stale handle (memoized, or kept
     // across a hide) awaits load() without ever subscribing.

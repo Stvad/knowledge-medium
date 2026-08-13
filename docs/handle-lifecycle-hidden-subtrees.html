@@ -362,25 +362,28 @@ fail.</p>
 <h2>Scope</h2>
 
 <p>Deliberately narrow: no change to GC policy or to the store's key model. One behavior on the
-public <code>Handle&lt;T&gt;</code> surface does change: <code>read()</code> on a disposed handle now
-throws a synchronous <code>Error</code> instead of falling through to <code>throw this.load()</code>.
-That path handed a Suspense boundary a freshly rejected promise on every retry — render, throw,
-reject, re-render, forever, with nothing surfacing — so an error boundary is strictly better. No live
-caller reaches it today (only <code>Block</code> is Suspense-read, and it never disposes), but it is
-part of this diff rather than a separate concern.</p>
+public <code>Handle&lt;T&gt;</code> surface does change: <code>read()</code> on a disposed handle
+resolves through to the live handle at its key instead of falling through to
+<code>throw this.load()</code>. That path handed a Suspense boundary a freshly rejected promise on
+every retry — render, throw, reject, re-render, forever, with nothing surfacing.</p>
 
 <p>Otherwise this is the minimum that makes <code>&lt;Activity&gt;</code> usable with KM's data layer,
 and it removes a silent failure mode whether or not core adopts Activity anywhere.</p>
 
-<p>One known gap is left deliberately unfixed. <code>useHandle</code> is not the only way a component
-subscribes to a store-backed handle: <code>GroupedBacklinksLiveBridge</code>
+<p>Raw subscribers are covered too, now that the repair lives in the handle rather than in
+<code>useHandle</code>. <code>GroupedBacklinksLiveBridge</code>
 (<span class="filepath">src/plugins/grouped-backlinks/GroupedLinkedReferences.tsx:642–660</span>)
-acquires its handle during its parent's render and subscribes in a raw <code>useEffect</code>, so it
-carries the identical hazard and none of this fix. It is dormant today (nothing uses
-<code>&lt;Activity&gt;</code> yet) and routing it through <code>useHandle</code> means restructuring
-its snapshot/query-epoch logic — real work, not a one-liner. A sweep of <code>src/</code> found no
-other live instance of the shape. Flagged rather than fixed so whoever wires up the first
-<code>&lt;Activity&gt;</code> consumer doesn't rediscover it the hard way.</p>
+acquires its handle during its parent's render and subscribes in a raw <code>useEffect</code>,
+bypassing the hook entirely — under the first fix it got nothing; under handle-level resolution its
+<code>subscribe()</code> resolves like anyone else's. That is the main argument for fixing it at this
+layer: there is exactly one place to get it right.</p>
+
+<p>One nuance that is NOT resolved: query handles are keyed with the registry epoch
+(<code>query:&lt;name&gt;@&lt;epoch&gt;</code>, <span class="filepath">src/data/repo.ts:3727</span>), so
+resurrecting a handle from a superseded epoch keeps serving its captured registry snapshot. That is
+already the documented behavior for old-epoch handles that simply never got GC'd
+(<span class="filepath">repo.ts:3496–3501</span>) — resurrection extends their life rather than
+changing what they serve — but it does mean a memoized holder can outlive a registry swap.</p>
 
 </body>
 </html>

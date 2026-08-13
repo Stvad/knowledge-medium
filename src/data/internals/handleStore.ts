@@ -567,6 +567,14 @@ export class LoaderHandle<T> implements Handle<T>, RegisteredHandle {
     if (!this.disposed) return this
     const existing = this.liveAtKey()
     if (existing) return existing
+    // Epoch nuance: query keys embed the registry epoch
+    // (`query:<name>@<epoch>`, repo.ts), so resurrecting re-registers under
+    // the OLD key and keeps serving the registry snapshot this loader
+    // captured. That is already what an old-epoch handle does when it simply
+    // hasn't been GC'd yet (repo.ts: "existing handles stay at the old epoch
+    // and keep serving their captured snapshot") — resurrection extends such
+    // a handle's life, it does not change what it serves, and new lookups
+    // still resolve the current epoch's key.
     this.disposed = false
     this.status_ = 'idle'
     this.stale = false
@@ -612,6 +620,11 @@ export class LoaderHandle<T> implements Handle<T>, RegisteredHandle {
    * while its loader was running. Projector priming uses this completeness
    * boundary so a cached or superseded snapshot cannot release writes. */
   async loadFresh(): Promise<T> {
+    // Forward the WHOLE operation, not just the inner load(): the loop below
+    // reads `inflight` / `stale` / `value` off `this`, and disposal cleared
+    // them — so delegating only the load would settle against a corpse and
+    // throw "completed without a value" even though the replacement loaded.
+    if (this.disposed) return this.resolveLive().loadFresh()
     while (true) {
       await this.load()
       // A dirty settle schedules its follow-up reload in a microtask before
