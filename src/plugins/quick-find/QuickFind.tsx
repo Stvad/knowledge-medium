@@ -444,7 +444,18 @@ function QuickFindDialog({
     ...recents.map(item => ({id: item.blockId, parentId: item.parentId})),
   ])
   const typeRegistry = useTypes()
-  const rowContext = {crumbsByBlockId: blockCrumbs, typeRegistry}
+  // A code-declared type's display metadata is compiled in, so a row can
+  // safely decide its layout from it. A block-backed one's lives on an
+  // editable definition block, so it is never settled — see
+  // `hasContextLine`. Read per render: this component already re-renders
+  // on every `onTypesChange`, which is exactly when the answer moves.
+  const seedKeyById = repo.typeDefinitions?.seedKeyById
+  const rowContext = {
+    crumbsByBlockId: blockCrumbs,
+    typeRegistry,
+    isSettledType: (typeId: string) =>
+      typeRegistry.has(typeId) && (seedKeyById?.has(typeId) ?? false),
+  }
 
   useEffect(() => {
     if (!open) return

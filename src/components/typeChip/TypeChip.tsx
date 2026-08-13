@@ -29,10 +29,15 @@ export interface TypeChipProps {
   /** Prefix the label with the `#` sigil (the block chip row does;
    *  the property panel shows bare labels). */
   withHash?: boolean
-  /** Density knob, merged over the base classes. For surfaces with a
-   *  fixed line box to fit — a quick-find result row reserves one 16px
-   *  line, which the default `py-0.5` would overflow by 4px. Colors and
-   *  the pill shape stay the component's; only spacing is the caller's. */
+  /** Layout override, merged over the base classes by tailwind-merge.
+   *  For surfaces with a box to fit: a quick-find result row reserves one
+   *  16px line (which the default `py-0.5` would overflow by 4px) and
+   *  caps each chip's share of that line.
+   *
+   *  A general override, not spacing-only — it can also replace the
+   *  `max-w-full` guard and the unregistered-type fallback colors. A
+   *  REGISTERED type's colors are safe either way: `chipStyle` applies
+   *  them as an inline `style`, which no class can outrank. */
   className?: string
 }
 

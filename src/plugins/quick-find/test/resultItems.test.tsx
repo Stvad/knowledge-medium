@@ -21,10 +21,19 @@ const typeRegistry = (
   ...types: {id: string; label?: string; hideFromBlockDisplay?: boolean}[]
 ): ReadonlyMap<string, TypeContribution> => new Map(types.map(type => [type.id, type]))
 
+/** `settled` names the CODE-declared type ids — the ones whose label and
+ *  `hideFromBlockDisplay` are compiled in and so cannot move under a
+ *  rendered row. Anything else (a user-defined type, an id the registry
+ *  has not resolved) is unsettled and holds the line. */
 const rowContext = (
   crumbsByBlockId: ReadonlyMap<string, readonly string[]> = new Map(),
   types: ReadonlyMap<string, TypeContribution> = typeRegistry(),
-): ResultRowContext => ({crumbsByBlockId, typeRegistry: types})
+  settled: readonly string[] = [...types.keys()],
+): ResultRowContext => ({
+  crumbsByBlockId,
+  typeRegistry: types,
+  isSettledType: (typeId: string) => types.has(typeId) && settled.includes(typeId),
+})
 
 const blocksList = (
   blocks: LinkTargetBlockMatch[],
@@ -143,6 +152,27 @@ describe('blockResultItems', () => {
 
     expect(crumbLineOf(screen.getByRole('option', {name: 'Project Alpha'})))
       .not.toBeInTheDocument()
+  })
+
+  it('holds the line when a user-defined type hides itself mid-dialog', () => {
+    // `hideFromBlockDisplay` is an ordinary checkbox on a user-defined
+    // type's own definition block, so a REGISTERED id's displayability can
+    // change under a rendered row — the id never leaves the registry, so
+    // "is it registered" cannot detect it. Settled means code-declared;
+    // `person` here is block-backed, so the line is held either way.
+    const blocks = [{...match('block-1', 'Ada Lovelace', ['person']), parentId: null}]
+    const visible = typeRegistry({id: 'person', label: 'Person'})
+    const hidden = typeRegistry({id: 'person', label: 'Person', hideFromBlockDisplay: true})
+    const {rerender} = render(blocksList(blocks, rowContext(new Map(), visible, [])))
+
+    expect(chipLabelsOf(screen.getByRole('option', {name: /Ada Lovelace/}))).toEqual(['#Person'])
+
+    rerender(blocksList(blocks, rowContext(new Map(), hidden, [])))
+
+    const option = screen.getByRole('option', {name: /Ada Lovelace/})
+    expect(chipLabelsOf(option)).toEqual([])
+    // The chip went, but the row kept its shape.
+    expect(crumbLineOf(option)).toBeInTheDocument()
   })
 
   it('still gives a root block a line when it has types to put there', () => {

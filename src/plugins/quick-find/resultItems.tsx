@@ -27,6 +27,10 @@ const MAX_ROW_TYPE_CHIPS = 2
 export interface ResultRowContext {
   crumbsByBlockId: ReadonlyMap<string, readonly string[]>
   typeRegistry: ReadonlyMap<string, TypeContribution>
+  /** Whether this type id's DISPLAYABILITY is fixed for the dialog's
+   *  lifetime — see {@link hasContextLine}, which reserves space for
+   *  anything that isn't. */
+  isSettledType: (typeId: string) => boolean
 }
 
 /** Whether this row gets a context line at all.
@@ -62,25 +66,32 @@ export interface ResultRowContext {
  *    Recents are the likeliest victim: they render on the EMPTY query,
  *    i.e. the instant ⌘P opens, which is exactly the startup window.
  *
- *  `unresolvedTypes` closes that: an id the registry cannot name YET may
- *  still become a chip, so it reserves now and the chip lands in space
- *  already held. An id it CAN name is settled — `page` resolves to a
- *  hidden kernel seed on the first wave and stays hidden, which is what
- *  keeps a plain page's line collapsed. Deleting a definition moves an
- *  id back to unresolved, so the reservation survives that too.
+ *  `unsettledTypes` closes that, and "settled" has to mean more than
+ *  "the registry knows this id". Being in the registry only fixes
+ *  WHETHER the id resolves; `displayableTypes` also reads `label` and
+ *  `hideFromBlockDisplay` off the same contribution, and for a
+ *  BLOCK-BACKED type those are ordinary properties of its definition
+ *  block — an editable checkbox in that type's own property panel.
+ *  Toggling one republishes through `UserTypesService` without the id
+ *  ever leaving the registry, so a row whose only chip was that type
+ *  would collapse mid-dialog. A CODE-declared type has no such surface:
+ *  its metadata is compiled in, and the declaration wins over any
+ *  block that claims its id. So settled = registered AND carrying a
+ *  seed key (`repo.typeDefinitions.seedKeyById`), which is what keeps a
+ *  plain page's line collapsed — `page` is a kernel seed — while any
+ *  user-defined type holds the line whether or not it currently shows.
  *
- *  Residual, accepted: an id that is unknown at paint and later resolves
- *  to a HIDDEN type does collapse the line. That needs a user-defined
- *  type with `hideFromBlockDisplay` set, on a root block, inside the
- *  startup window — and it costs one row, once. */
-const hasContextLine = ({crumbs, chipCount, unresolvedTypes, parentId}: {
+ *  Note `getTypeBlockId` is NOT the test for this: it is total for
+ *  materialized code seeds too (`definitionSeeds.ts`), so it would call
+ *  `page` block-backed and bring every blank page line back. */
+const hasContextLine = ({crumbs, chipCount, unsettledTypes, parentId}: {
   crumbs: readonly string[] | undefined
   chipCount: number
-  unresolvedTypes: boolean
+  unsettledTypes: boolean
   parentId: string | null
 }): boolean =>
   chipCount > 0
-  || unresolvedTypes
+  || unsettledTypes
   || parentId !== null
   || (crumbs?.length ?? 0) > 0
 
@@ -155,20 +166,19 @@ const contextLine = (
  *  `items-stretch` (over the base row's `items-center`) is what gives the
  *  two children full width, which is what makes `truncate` truncate
  *  rather than overflow. */
-const resultRow = ({key, value, text, crumbs, typeIds, parentId, typeRegistry}: {
+const resultRow = ({key, value, text, crumbs, typeIds, parentId, typeRegistry, isSettledType}: {
   key: string
   value: string
   text: string
   crumbs: readonly string[] | undefined
   typeIds: readonly string[]
   parentId: string | null
-  typeRegistry: ReadonlyMap<string, TypeContribution>
-}): QuickFindListItem => {
+} & Pick<ResultRowContext, 'typeRegistry' | 'isSettledType'>): QuickFindListItem => {
   const chips = displayableTypes(typeIds, typeRegistry).slice(0, MAX_ROW_TYPE_CHIPS)
-  // Ids the registry cannot name yet still hold the line — see hasContextLine.
-  const unresolvedTypes = typeIds.some(typeId => !typeRegistry.has(typeId))
+  // Ids whose displayability can still change hold the line — see hasContextLine.
+  const unsettledTypes = typeIds.some(typeId => !isSettledType(typeId))
   const content = <span className="w-full truncate">{truncate(text, ROW_TEXT_MAX_CHARS)}</span>
-  if (!hasContextLine({crumbs, chipCount: chips.length, unresolvedTypes, parentId})) {
+  if (!hasContextLine({crumbs, chipCount: chips.length, unsettledTypes, parentId})) {
     return {key, value, children: content}
   }
   return {
@@ -187,7 +197,7 @@ const resultRow = ({key, value, text, crumbs, typeIds, parentId, typeRegistry}: 
 /** Rows of the "Blocks" (content-match) group. */
 export const blockResultItems = (
   blocks: readonly LinkTargetBlockMatch[],
-  {crumbsByBlockId, typeRegistry}: ResultRowContext,
+  {crumbsByBlockId, typeRegistry, isSettledType}: ResultRowContext,
 ): QuickFindListItem[] =>
   blocks.map(match => resultRow({
     key: `block:${match.blockId}`,
@@ -197,6 +207,7 @@ export const blockResultItems = (
     typeIds: match.typeIds,
     parentId: match.parentId,
     typeRegistry,
+    isSettledType,
   }))
 
 /** Rows of the "Recent" group.
@@ -210,7 +221,7 @@ export const blockResultItems = (
  *  the two can't disagree about a block's path on screen at once. */
 export const recentResultItems = (
   recents: readonly RecentItem[],
-  {crumbsByBlockId, typeRegistry}: ResultRowContext,
+  {crumbsByBlockId, typeRegistry, isSettledType}: ResultRowContext,
 ): QuickFindListItem[] =>
   recents.map(item => resultRow({
     key: `recent:${item.blockId}`,
@@ -220,4 +231,5 @@ export const recentResultItems = (
     typeIds: item.typeIds,
     parentId: item.parentId,
     typeRegistry,
+    isSettledType,
   }))
