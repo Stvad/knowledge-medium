@@ -39,6 +39,7 @@ import type {
 import { ChangeScope, ProcessorRejection } from '@/data/api'
 import { getBlockTypes } from '@/data/properties'
 import { createTypeBlock } from '@/data/typeExtraction'
+import { UnwritableLabelError } from '@/data/referenceBlock'
 import { showError } from '@/utils/toast'
 import {
   buildTypeTagCandidates,
@@ -133,7 +134,16 @@ export const buildTypeTagSource = ({repo, block}: CodeMirrorExtensionContext): C
       // definition block committed on a registration timeout — the type
       // may still appear moments later, re-picking reuses it) get the
       // generic toast.
-      if (!(err instanceof ProcessorRejection)) {
+      // A refused NAME is the same situation as a structured rejection —
+      // the user did something specific and fixable, and the generic
+      // "couldn't tag" hides which part was the problem. `#type` on a
+      // block whose content can't be a `[[name]]` is the discoverable way
+      // to hit this (the create flow validates before opening a tx), and
+      // the block's own content is the thing to change, which the generic
+      // message doesn't hint at. These errors carry their explanation.
+      if (err instanceof UnwritableLabelError) {
+        showError(err.message)
+      } else if (!(err instanceof ProcessorRejection)) {
         showError(candidate.kind === 'create'
           ? `Couldn't finish creating type "${candidate.label}"`
           : `Couldn't tag with "${candidate.label}"`)
