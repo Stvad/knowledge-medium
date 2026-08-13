@@ -36,6 +36,39 @@ export const MAX_CREATES_PER_SUPABASE_RPC = 500
  *  separate RPC transactions is safe. Mirrors `MAX_CREATES_PER_SUPABASE_RPC`. */
 export const MAX_PATCHES_PER_SUPABASE_RPC = 500
 
+/** Client-side abort budget for every Supabase upload request in this file —
+ *  `apply_block_patches`, `apply_block_creates`, and the block DELETE. Without
+ *  this, a fetch that never settles (plausible around an iOS background/
+ *  foreground transition) leaves the connector's `uploadData` promise
+ *  permanently pending — PowerSync's upload loop awaits it, so uploads stop
+ *  silently and permanently for the life of the process: no console error, no
+ *  `ps_crud_rejected` row, no retry (the 2026-08-13 iPad incident: 22 blocks
+ *  stuck in `ps_crud` for 16.3 hours, one session alive 15.8h of that and never
+ *  uploading once). `withUploadTimeout` below races every request against this
+ *  budget so the call always settles one way or the other.
+ *
+ *  Value is chosen ABOVE the server's `statement_timeout` for these RPCs, not
+ *  below it — aborting the client fetch does NOT roll back the server
+ *  transaction, so a client timeout shorter than the server's would abandon
+ *  work that then lands anyway and gets retried (see `withUploadTimeout`'s doc
+ *  comment for why that retry is itself safe). Neither `apply_block_patches`
+ *  nor `apply_block_creates` sets its own `statement_timeout` — the only
+ *  per-function override anywhere in the migrations is `delete_workspace`'s
+ *  5min (20260513205724_extend_delete_workspace_timeout.sql) — so both RPCs
+ *  run under the `authenticated` role's Supabase-platform default of 8s
+ *  (https://supabase.com/docs/guides/database/postgres/timeouts; confirmed via
+ *  the platform docs, not present in this repo's migrations). 60s leaves
+ *  ~7.5x headroom over that 8s ceiling: for a full 500-row batch
+ *  (MAX_CREATES_PER_SUPABASE_RPC / MAX_PATCHES_PER_SUPABASE_RPC), most of the
+ *  budget is there to cover request/response transfer time on a slow mobile
+ *  link, not server execution — the 500-row cap itself exists specifically to
+ *  keep server execution well under the 8s statement_timeout (see that
+ *  constant's comment above). If the live project's configured default is
+ *  ever raised above 8s, this still holds: 60s only needs to exceed whatever
+ *  ceiling is actually in effect, and a stale assumption here fails safe
+ *  (worst case, an occasional legitimate-but-slow request gets retried). */
+export const UPLOAD_RPC_TIMEOUT_MS = 60_000
+
 export const hasPowerSyncServiceConfig = Boolean(powerSyncUrl)
 export const hasRemoteSyncConfig = hasSupabaseAuthConfig && hasPowerSyncServiceConfig
 
@@ -201,6 +234,64 @@ const assertSupabase = () => {
  *  (401/403/408/429) transient. See `uploadErrorClassifier.ts` and issue #190. */
 const throwWithHttpStatus = (error: object, status: number): never => {
   throw Object.assign(error, {status})
+}
+
+/** Runs one Supabase request with a hard client-side abort at
+ *  {@link UPLOAD_RPC_TIMEOUT_MS}. `run` receives the `AbortSignal` to chain
+ *  onto the request via postgrest-js's `.abortSignal(...)` — present on this
+ *  pinned `@supabase/postgrest-js` version (see
+ *  `PostgrestTransformBuilder.abortSignal` in node_modules; confirmed, not
+ *  assumed). The abort is RACED against the request rather than trusted
+ *  alone: if some layer of the stack doesn't fully honor the signal — the
+ *  exact failure mode this change targets, a fetch that never settles — the
+ *  race still forces the call to settle once the timer fires.
+ *
+ *  Retrying after this timeout is safe:
+ *   - Creates go through `apply_block_creates`, which is "Insert-or-TOUCH:
+ *     preserve the server row, but emit a WAL change so the racing client
+ *     gets an echo" (see that RPC's migration header) — never a destructive
+ *     overwrite, so a re-sent create either really inserts or safely re-touches.
+ *   - Patches are "column-narrow and idempotent, so splitting them across
+ *     separate RPC transactions is safe" (see `MAX_PATCHES_PER_SUPABASE_RPC`
+ *     above) — replaying the same patch payload writes the same columns again.
+ *   - A DELETE retried after its row was already removed server-side is a
+ *     normal SQL no-op (0 rows affected, not an error).
+ *
+ *  The synthesized timeout error is a plain `Error` (`name: 'TimeoutError'`,
+ *  no `code`/`status` fields) — `classifyUploadError` already routes that
+ *  shape to `transient` via its "no code we recognise and no 4xx" fallthrough,
+ *  so no classifier change is needed. Pinned by a dedicated test in
+ *  powersync.test.ts rather than a classifier-side rule, since the fallthrough
+ *  already covers it (see that test for the reasoning). */
+const withUploadTimeout = async <T>(
+  run: (signal: AbortSignal) => PromiseLike<T>,
+): Promise<T> => {
+  const controller = new AbortController()
+  const timer = setTimeout(() => {
+    const error = new Error(
+      `Supabase upload request aborted: exceeded the ${UPLOAD_RPC_TIMEOUT_MS}ms ` +
+      'client-side timeout (UPLOAD_RPC_TIMEOUT_MS)',
+    )
+    error.name = 'TimeoutError'
+    controller.abort(error)
+  }, UPLOAD_RPC_TIMEOUT_MS)
+
+  // Reject on the signal itself (not just on our own timer firing) so the
+  // race settles even if `abort()` were ever triggered from elsewhere with a
+  // different reason — the reason threads through to the classifier.
+  const timedOut = new Promise<never>((_resolve, reject) => {
+    controller.signal.addEventListener(
+      'abort',
+      () => reject(controller.signal.reason as Error),
+      {once: true},
+    )
+  })
+
+  try {
+    return await Promise.race([Promise.resolve(run(controller.signal)), timedOut])
+  } finally {
+    clearTimeout(timer)
+  }
 }
 
 const blockPayloadFromPut = (entry: CrudEntry): BlockUploadPayload => ({
@@ -391,7 +482,9 @@ const applyBlockPatchesRpc = async (
   for (const batch of chunk(patches, MAX_PATCHES_PER_SUPABASE_RPC)) {
     console.debug('[powersync] PATCH batch', batch.length)
     const payload = batch.map(patch => ({id: patch.id, ...patch.payload}))
-    const {error, status} = await client.rpc('apply_block_patches', {patches: payload})
+    const {error, status} = await withUploadTimeout(signal =>
+      client.rpc('apply_block_patches', {patches: payload}).abortSignal(signal),
+    )
 
     if (error) {
       throwWithHttpStatus(error, status)
@@ -403,11 +496,14 @@ const applyBlockDelete = async (id: string) => {
   const client = assertSupabase()
 
   console.debug('[powersync] DELETE', id)
-  // eslint-disable-next-line no-restricted-syntax -- programmatic delete: Supabase query builder, not a Block
-  const {error, status} = await client
-    .from('blocks')
-    .delete()
-    .eq('id', id)
+  const {error, status} = await withUploadTimeout(signal =>
+    // eslint-disable-next-line no-restricted-syntax -- programmatic delete: Supabase query builder, not a Block
+    client
+      .from('blocks')
+      .delete()
+      .eq('id', id)
+      .abortSignal(signal),
+  )
 
   if (error) {
     throwWithHttpStatus(error, status)
@@ -439,7 +535,9 @@ const applyBlockCreates = async (rows: readonly BlockUploadPayload[]) => {
   // DEFERRABLE within a tx but not across them.
   for (const batch of chunk(orderedBlockUpserts(rows), MAX_CREATES_PER_SUPABASE_RPC)) {
     console.debug('[powersync] CREATE batch', batch.length)
-    const {error, status} = await client.rpc('apply_block_creates', {creates: batch})
+    const {error, status} = await withUploadTimeout(signal =>
+      client.rpc('apply_block_creates', {creates: batch}).abortSignal(signal),
+    )
 
     if (error) {
       throwWithHttpStatus(error, status)

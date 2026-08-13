@@ -180,5 +180,22 @@ describe('classifyUploadError', () => {
       // loudly-logged retries will tell us to add a new case here.
       expect(classifyUploadError(postgrestError('99999'))).toBe('transient')
     })
+
+    it('classifies the client-side upload-timeout abort (powersync.ts withUploadTimeout) as transient', () => {
+      // THE critical correctness constraint for the upload-timeout change
+      // (2026-08-13 iPad incident: a fetch that never settled left the
+      // connector's uploadData promise pending for 15.8h, no error, no
+      // retry). `withUploadTimeout` aborts with a plain `Error`
+      // (`name: 'TimeoutError'`, no `code`/`status`) — the exact shape the
+      // "plain Error (no code, no status)" test above already covers, but
+      // pinned here explicitly by name so a reader of this file sees why it
+      // matters: if this ever classified `permanent` or `ambiguous`-to-
+      // -exhaustion instead, the fix would convert a silent hang into a
+      // QUARANTINED upload (user edits parked in ps_crud_rejected) — worse
+      // than the bug it fixes. See `withUploadTimeout` in powersync.ts.
+      const timeoutAbort = new Error('Supabase upload request aborted: exceeded the 60000ms client-side timeout')
+      timeoutAbort.name = 'TimeoutError'
+      expect(classifyUploadError(timeoutAbort)).toBe('transient')
+    })
   })
 })
