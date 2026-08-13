@@ -297,10 +297,10 @@ describe('LoaderHandle GC', () => {
     const { loader } = collectingLoader([9])
     const dead = store.getOrCreate('fresh', () => new LoaderHandle({ store, key: 'fresh', loader }))
     dead.dispose()
-    // ADOPTION, not resurrection: someone else already remade the key, so the
-    // loop would settle against `this` (still disposed, value cleared) while
-    // the data lives on the replacement. The vacant-key path can't show this —
-    // there `load()` resurrects `this`, so the loop reads valid state.
+    // A replacement already exists, so this is the ADOPTION path — but the
+    // vacant-key path would pin the same thing: either way `this` stays
+    // disposed with its value cleared, so a forward of only the inner `load()`
+    // leaves the loop reading a corpse.
     store.getOrCreate('fresh', () => new LoaderHandle({ store, key: 'fresh', loader }))
 
     await expect(dead.loadFresh()).resolves.toEqual([9])
@@ -351,9 +351,8 @@ describe('LoaderHandle GC', () => {
     // non-positive gcTimeMs. So the check has to be re-taken after the awaits
     // and before the state reads, and it has to forward the whole operation.
     //
-    // Run 1 settles and its notify disposes the handle. Run 2 (the
-    // resurrection's) is invalidated while in flight, so it is suspect. Only
-    // run 3 is clean. The single assertion below separates all three failure
+    // Run 1 settles and its notify disposes the handle. Run 2 (the sibling's)
+    // is invalidated while in flight, so it is suspect. Only run 3 is clean. The single assertion below separates all three failure
     // modes: no re-check at all (or one placed before the awaits) throws
     // "completed without a value" off the cleared corpse; a re-check that
     // forwards plain `load()` returns the suspect [2]; correct is [3].
@@ -379,8 +378,8 @@ describe('LoaderHandle GC', () => {
 
     const settled = h.loadFresh()
     await vi.waitFor(() => expect(releaseSecond).toBeDefined())
-    // Through the store, not `h.invalidate()`: this also pins that the
-    // resurrection re-registered, since an unregistered handle is never walked.
+    // Through the store, not `h.invalidate()`: this also pins that the sibling
+    // was registered, since an unregistered handle is never walked.
     store.invalidate({ rowIds: ['lfr'] })
     releaseSecond!([2])
 
@@ -422,7 +421,7 @@ describe('LoaderHandle GC', () => {
 
     // Adoption, not a duplicate: exactly one handle owns the key, and the
     // events came from THAT handle. Without these the test passes even if the
-    // corpse resurrects itself alongside the replacement.
+    // corpse mints a rival alongside the replacement.
     expect(store.size()).toBe(1)
     expect(store.peekHandle('sub')).toBe(live)
 
@@ -454,22 +453,28 @@ describe('LoaderHandle GC', () => {
     expect(h.peek()).toEqual([1, 2, 3])
     expect(h.read()).toEqual([1, 2, 3])
 
-    // …and with the key vacant, subscribing resurrects rather than no-oping.
+    // …and with the key vacant, subscribing mints a SIBLING and forwards to
+    // it, rather than no-oping — and `h` itself stays dead. That last part is
+    // the whole point of the shape: `disposed` never flips back, so every site
+    // reading it as "this run was cancelled" keeps its meaning.
     replacement.dispose()
     const seen: unknown[] = []
     h.subscribe(v => seen.push(v))
     await vi.waitFor(() => expect(h.status()).toBe('ready'))
     expect(store.size()).toBe(1)
+    const sibling = store.peekHandle('read:disposed')
+    expect(sibling).toBeDefined()
+    expect(sibling).not.toBe(h)
+    expect(sibling).not.toBe(replacement)
   })
 
-  it('a resurrected handle still receives store-driven invalidations', async () => {
-    // `store.size()` pins that resurrection re-registers; this pins WHY that
-    // matters. The store only walks handles in its map, so a resurrection that
-    // came back without re-registering would load once, render, and then never
-    // update again — a revealed subtree frozen at the value it woke up with,
-    // with no error anywhere. Driven through `store.invalidate` (the real
-    // commit path) rather than `handle.invalidate` so the map walk is what is
-    // under test.
+  it('the sibling minted for a disposed handle receives store-driven invalidations', async () => {
+    // `store.size()` pins that the sibling is registered; this pins WHY that
+    // matters. The store only walks handles in its map, so a sibling minted
+    // outside `getOrCreate` would load once, render, and then never update
+    // again — a revealed subtree frozen at the value it woke up with, with no
+    // error anywhere. Driven through `store.invalidate` (the real commit path)
+    // rather than `handle.invalidate` so the map walk is what is under test.
     const store = makeStore(1000)
     const dep: Dependency = { kind: 'row', id: 'x' }
     let n = 0
@@ -490,14 +495,16 @@ describe('LoaderHandle GC', () => {
     await vi.waitFor(() => expect(seen).toEqual([[1], [2]]))
   })
 
-  it('a load in flight at disposal cannot settle onto the resurrected handle', async () => {
-    // Resurrection made `disposed` a flag that flips BACK, so the mid-load
-    // guard can no longer read it: the pre-disposal load finds `disposed ===
-    // false` and applies. Three distinct damages, all pinned below — it
-    // overwrites the fresh value, rolls the deps back to the dead run's set
-    // (so later invalidations match the wrong rows), and spends a `release()`
-    // that belongs to the resurrected handle's subscriber, GC'ing a handle
-    // somebody is actively watching.
+  it('a load in flight at disposal cannot settle onto the sibling that replaced it', async () => {
+    // The mid-load guard. The sibling shape does most of this structurally —
+    // the pre-disposal run writes to `this`, and `this` is a different object
+    // from the sibling every holder now talks through — so what the guard
+    // still owns on its own is the AWAITER's answer: without it that run
+    // resolves with the value it read and the caller never learns the handle
+    // it awaited did not adopt it. The sibling assertions pin the structural
+    // half, so a future shape that reintroduces cross-talk fails here: fresh
+    // value, fresh deps (a rollback would make later invalidations match the
+    // wrong rows), and a ref-count the dead run never spent.
     const sched = manualScheduler()
     const store = makeStore(100, sched)
     let releaseFirst: ((v: number[]) => void) | undefined
@@ -519,76 +526,20 @@ describe('LoaderHandle GC', () => {
     const seen: unknown[] = []
     h.subscribe(v => seen.push(v))
     await vi.waitFor(() => expect(h.peek()).toEqual([99]))
+    const live = store.peekHandle('mid') as unknown as LoaderHandle<number[]>
+    expect(live).not.toBe(h)
 
     releaseFirst!([1, 2, 3])
     await expect(first).rejects.toThrow(/disposed mid-load/)
     await Promise.resolve()
 
-    expect(h.peek()).toEqual([99])
+    expect(live.peek()).toEqual([99])
     expect(seen).toEqual([[99]])
-    expect(h.__depsForTest()).toEqual([{ kind: 'row', id: 'dep-2' }])
+    expect(live.__depsForTest()).toEqual([{ kind: 'row', id: 'dep-2' }])
     // The subscriber's ref-count survived, so the GC sweep is a no-op.
     sched.flush(1000)
-    expect(h.status()).toBe('ready')
+    expect(live.status()).toBe('ready')
     expect(store.size()).toBe(1)
-  })
-
-  it('a listener that disposes mid-notify cannot cost the resurrected handle its ref-count', async () => {
-    // The generation check at the top of the settle handler is not enough on
-    // its own: the handler goes on to run LISTENER code (`notify`, or a
-    // `batch.finish` that closes the barrier and flushes every member's queued
-    // notify) and only THEN calls `release()`. A listener may dispose the
-    // handle and something may resurrect it, all synchronously, inside that
-    // window — after which the dead run's `release()` spends a ref-count that
-    // belongs to the resurrected handle's new subscriber, and the GC sweep
-    // collects a handle somebody is actively watching. Same damage as the
-    // mid-load case below, reached through a later window.
-    const sched = manualScheduler()
-    const store = makeStore(100, sched)
-    let n = 0
-    const loader = async () => [++n]
-    const h = store.getOrCreate('reentrant', () =>
-      new LoaderHandle({ store, key: 'reentrant', loader }),
-    )
-
-    let armed = true
-    const seenSecond: unknown[] = []
-    h.subscribe(() => {
-      if (!armed) return
-      armed = false
-      store.clear()
-      h.subscribe(v => seenSecond.push(v))
-    })
-    await vi.waitFor(() => expect(seenSecond.length).toBeGreaterThan(0))
-
-    // The second subscriber never left, so nothing may collect this handle.
-    sched.flush(1000)
-    expect(store.size()).toBe(1)
-    expect(h.status()).not.toBe('disposed')
-  })
-
-  it('a load that REJECTS after disposal cannot error the resurrected handle', async () => {
-    // Same generation guard, rejection half: without it the dead run writes
-    // status 'error' onto the live handle and spends its ref-count too.
-    const store = makeStore(1000)
-    let failFirst: ((e: Error) => void) | undefined
-    let runs = 0
-    const loader = async () => {
-      runs++
-      return runs === 1 ? new Promise<number[]>((_, rej) => { failFirst = rej }) : [42]
-    }
-    const h = store.getOrCreate('midrej', () => new LoaderHandle({ store, key: 'midrej', loader }))
-    const first = h.load()
-    store.clear()
-    h.subscribe(() => {})
-    await vi.waitFor(() => expect(h.peek()).toEqual([42]))
-
-    failFirst!(new Error('stale run blew up'))
-    await expect(first).rejects.toThrow('stale run blew up')
-    await Promise.resolve()
-
-    expect(h.status()).toBe('ready')
-    expect(h.peek()).toEqual([42])
   })
 
   it('a batch member that disposes mid-load still releases its slot', async () => {
@@ -636,32 +587,12 @@ describe('LoaderHandle GC', () => {
     await vi.waitFor(() => expect(fastSeen).toEqual([[1], [2]]))
   })
 
-  it('dispose() resets refCount so a resurrected handle can GC again', async () => {
-    // `listeners.clear()` neuters every outstanding unsubscribe closure (its
-    // `listeners.delete` returns false and it declines to release), so a
-    // ref-count left standing at disposal can never drain back to zero — the
-    // resurrected handle would then live forever. Only `HandleStore.clear()`
-    // disposes at a nonzero count today, but clear() is public API.
-    const sched = manualScheduler()
-    const store = makeStore(100, sched)
-    const { loader } = collectingLoader([1])
-    const h = store.getOrCreate('rc', () => new LoaderHandle({ store, key: 'rc', loader }))
-    h.subscribe(() => {})            // refCount 1
-    await vi.waitFor(() => expect(h.status()).toBe('ready'))
-    store.clear()                    // disposes at refCount 1
-
-    const unsub = h.subscribe(() => {})
-    await vi.waitFor(() => expect(h.status()).toBe('ready'))
-    unsub()
-    sched.flush(100)
-    expect(h.status()).toBe('disposed')
-  })
-
-  it('a disposed handle registered at its own key resurrects instead of recursing', async () => {
-    // `liveAtKey` excludes `this` from "what is live at my key". Without that
-    // exclusion a disposed handle that IS the registered one (a factory
-    // handing `getOrCreate` a cached corpse) resolves to itself, and every
-    // entry point recurses until the stack blows.
+  it('a disposed handle that is still registered at its own key mints a sibling', async () => {
+    // `liveAtKey` excludes `this` from "what is live at my key", and
+    // `resolveLive` evicts a corpse the store is still pointing at. Without
+    // BOTH, a disposed handle that IS the registered one (a factory handing
+    // `getOrCreate` a cached corpse) resolves to itself and every entry point
+    // recurses until the stack blows.
     const store = makeStore(1000)
     const { loader } = collectingLoader([5])
     const h = new LoaderHandle({ store, key: 'self', loader })
@@ -672,6 +603,9 @@ describe('LoaderHandle GC', () => {
     expect(h.peek()).toBeUndefined()
     await expect(h.load()).resolves.toEqual([5])
     expect(h.status()).toBe('ready')
+    // The corpse was evicted for a sibling rather than revived in place.
+    expect(store.peekHandle('self')).not.toBe(h)
+    expect(store.size()).toBe(1)
   })
 
   it('disposes after gcTimeMs once subscribers drain', async () => {

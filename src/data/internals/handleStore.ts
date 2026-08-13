@@ -471,14 +471,11 @@ export class LoaderHandle<T> implements Handle<T>, RegisteredHandle {
   /** Ref count = subscribers + inflight (1 if loading). Drives GC. */
   private refCount = 0
   private cancelGc: (() => void) | null = null
+  /** One-way. Nothing ever clears it — a disposed handle becomes a permanent
+   *  forwarder to whatever is live at its key (`resolveLive`) rather than
+   *  coming back to life — so every site that reads it as "this run was
+   *  cancelled" stays correct. */
   private disposed = false
-  /** Bumped by every `dispose()`. A loader run captures it at start and
-   *  settles only if it still matches, which is what "this run wasn't
-   *  cancelled" means now that `disposed` can flip back to false
-   *  (`resolveLive`). Reading the flag instead would let a pre-disposal
-   *  load publish its value onto — and consume a ref-count of — the
-   *  resurrected handle. */
-  private generation = 0
 
   /** Set when `invalidate()` fires while a load is in flight. The
    *  inflight load may have already read stale data from SQL before the
@@ -561,53 +558,55 @@ export class LoaderHandle<T> implements Handle<T>, RegisteredHandle {
   }
 
   /**
-   * The effecting half: resolve to the live handle at this key, resurrecting
-   * THIS instance when the key is vacant (we still hold both the key and the
-   * loader). Called only from paths that already act rather than observe:
-   * `subscribe` / `load` / `loadFresh` / `read`. `read` is the Suspense path,
-   * so this CAN run inside a render — but that render was already going to
-   * kick a load through `throw this.load()`, and a resurrection an abandoned
-   * render leaves behind is retained by nobody and GCs on the timer below.
-   * The reads that run on EVERY render (`peek`, `status`) stay on `liveAtKey`.
+   * The effecting half: resolve to the live handle at this key, minting a
+   * fresh SIBLING when the key is vacant (we still hold everything the
+   * constructor needs — key, loader, equality). Called only from the paths
+   * that already act rather than observe: `subscribe` / `load` / `loadFresh` /
+   * `read`. `read` is the Suspense path, so this CAN run inside a render — but
+   * that render was already going to kick a load through `throw this.load()`,
+   * and a sibling an abandoned render leaves behind is retained by nobody and
+   * GCs on the constructor's own idle sweep. The reads that run on EVERY
+   * render (`peek`, `status`) stay on `liveAtKey`.
    *
-   * It cannot produce two live handles for one key: if the store already has
-   * a replacement we adopt it, and otherwise we re-register ourselves through
-   * `getOrCreate`, which is the same single-owner path everyone else uses.
+   * `this` stays disposed forever — a disposed handle is a permanent one-hop
+   * forwarder, never a thing that comes back to life. That is what keeps
+   * `disposed` one-way, so `runLoader` and friends can go on reading it as
+   * "this run was cancelled".
    *
-   * Note the consequence for `disposed`: it is no longer a one-way flag, so
-   * nothing may treat "currently disposed" as "this loader run was
-   * cancelled". `runLoader` compares `generation` instead.
+   * It cannot produce two live handles for one key, because `getOrCreate` IS
+   * adopt-or-mint: it hands back whatever someone else already registered and
+   * runs the factory only when the key is vacant. Adoption therefore needs no
+   * separate branch here — the same single-owner path every other caller uses
+   * gives it for free.
+   *
+   * Epoch caveat, stated plainly because it is a real trade: query keys embed
+   * the registry epoch (`query:<name>@<epoch>`, repo.ts) and the loader we
+   * hand the sibling captured that epoch's registry snapshot, so the sibling
+   * is registered under the OLD key and keeps serving the OLD snapshot.
+   * Serving it is already the contract for a not-yet-GC'd old-epoch handle
+   * (repo.ts), but this DOES change bounded into unbounded: previously such a
+   * handle died at GC and stayed dead, and now a holder that keeps resolving
+   * can keep a superseded resolver alive indefinitely. Nothing new lookups do
+   * is affected — they key at the current epoch. Closing it properly needs the
+   * epoch owner (Repo) to retire old-epoch keys explicitly; a handle cannot
+   * see the current epoch from here.
    */
   private resolveLive(): LoaderHandle<T> {
+    // Defence in depth: the four call sites all test `disposed` first, so
+    // nothing reaches here live. Without it a live handle would evict ITSELF
+    // below and mint a rival at its own key.
     if (!this.disposed) return this
-    const existing = this.liveAtKey()
-    if (existing) return existing
-    // Epoch caveat, stated plainly because it is a real trade: query keys
-    // embed the registry epoch (`query:<name>@<epoch>`, repo.ts), so
-    // resurrecting re-registers under the OLD key and keeps serving the
-    // registry snapshot this loader captured. Serving the old snapshot is
-    // already the contract for a not-yet-GC'd old-epoch handle (repo.ts), but
-    // this DOES change bounded into unbounded: previously such a handle died
-    // at GC and stayed dead, and now a holder that keeps resolving can keep a
-    // superseded resolver alive indefinitely. Nothing new lookups do is
-    // affected — they key at the current epoch. Closing it properly needs the
-    // epoch owner (Repo) to retire old-epoch keys explicitly; a handle cannot
-    // see the current epoch from here.
-    this.disposed = false
-    // Re-asserting what `dispose()` already zeroed, so resurrection does not
-    // silently depend on that field list staying complete. Neither line
-    // changes behavior today — removing either passes the suite.
-    this.status_ = 'idle'
-    this.stale = false
-    this.store.getOrCreate(this.key, () => this)
-    // Re-arm the constructor's GC sweep so a resurrection nothing goes on to
-    // retain cannot leak. Defence in depth rather than load-bearing: every
-    // caller into resolveLive() retains synchronously right after, so this
-    // timer is always cancelled before it can fire. Removing it breaks no
-    // test — it exists for the next caller that forgets.
-    const gcMs = this.store.getGcTimeMs()
-    if (gcMs > 0) this.cancelGc = this.store.getScheduler()(() => this.dispose(), gcMs)
-    return this
+    // The store can still be pointing AT this corpse: `dispose()` removes its
+    // own entry, but a factory that hands `getOrCreate` a cached dead handle
+    // puts one back. Evict it first or `getOrCreate` below returns the corpse
+    // and every entry point recurses into itself until the stack blows.
+    if (this.store.peekHandle(this.key) === this) this.store.remove(this.key)
+    return this.store.getOrCreate(this.key, () => new LoaderHandle({
+      store: this.store,
+      key: this.key,
+      loader: this.loader,
+      equality: this.equality,
+    }))
   }
 
   /** A disposed handle reports its replacement's status when the store has
@@ -646,10 +645,9 @@ export class LoaderHandle<T> implements Handle<T>, RegisteredHandle {
    * while its loader was running. Projector priming uses this completeness
    * boundary so a cached or superseded snapshot cannot release writes. */
   async loadFresh(): Promise<T> {
-    // Fast path only — the in-loop check below subsumes it (deleting this
-    // line keeps the suite green), and it is kept because entering disposed
-    // is the common shape and skipping a wasted lap costs one comparison.
-    if (this.disposed) return this.resolveLive().loadFresh()
+    // No disposed check at entry: the in-loop one below subsumes it (an
+    // entering corpse's `load()` forwards, then the loop's check hands the
+    // whole operation to the same live handle one lap later).
     while (true) {
       await this.load()
       // A dirty settle schedules its follow-up reload in a microtask before
@@ -665,9 +663,7 @@ export class LoaderHandle<T> implements Handle<T>, RegisteredHandle {
       // without a value" for a load that in fact succeeded. Forward the WHOLE
       // operation, never the inner `load()`: this method's contract is that
       // the value it returns was not invalidated while its loader ran, and
-      // delegating only the load drops that. Same class as the two generation
-      // re-checks in `runLoader` — a check consumed after re-entrant code has
-      // had its turn.
+      // delegating only the load drops that.
       if (this.disposed) return this.resolveLive().loadFresh()
       if (this.inflight || this.stale) continue
       if (this.value === undefined) {
@@ -700,8 +696,6 @@ export class LoaderHandle<T> implements Handle<T>, RegisteredHandle {
     this.status_ = this.value === undefined ? 'loading' : this.status_
     this.error = undefined
     this.retain() // count the inflight load against GC
-    // Identity of THIS run against disposal. See `generation`.
-    const generation = this.generation
 
     // Snapshot the prior deps so we can restore them if this load
     // fails; meanwhile this.deps is rewritten as ctx.depend calls land,
@@ -740,19 +734,15 @@ export class LoaderHandle<T> implements Handle<T>, RegisteredHandle {
 
     const p = this.loader(ctx).then(
       (value) => {
-        // Disposal during a load: don't apply, don't notify. Compared by
-        // generation, not by the `disposed` flag — a handle disposed mid-load
-        // can be resurrected before this settles (`resolveLive`), and then the
-        // flag reads false and this superseded run would overwrite the live
-        // value/deps AND spend a `release()` that belongs to the resurrected
-        // handle's subscriber, GC'ing it out from under them.
+        // Disposal during a load: don't apply, don't notify. The awaiter is
+        // told, rather than handed a value the handle never adopted.
         //
         // The batch slot is released HERE rather than in the rejection handler
         // below: `then(onFulfilled, onRejected)` does NOT route a throw from
         // onFulfilled into onRejected — it rejects the returned promise — so
         // without this the barrier never closes and every OTHER member of the
         // batch loses its notify.
-        if (this.generation !== generation) {
+        if (this.disposed) {
           batch?.finish(null)
           throw new Error(`Handle ${this.key} disposed mid-load`)
         }
@@ -773,9 +763,7 @@ export class LoaderHandle<T> implements Handle<T>, RegisteredHandle {
           }
         }
         this.changesDuringLoad = []
-        // No `&& !this.disposed`: the generation check above already
-        // established this run is current, and disposal always bumps it.
-        const needsPostSettleReload = this.pendingReinvalidate
+        const needsPostSettleReload = this.pendingReinvalidate && !this.disposed
         this.value = value
         this.status_ = 'ready'
         this.error = undefined
@@ -807,18 +795,6 @@ export class LoaderHandle<T> implements Handle<T>, RegisteredHandle {
           this.store.metrics.notifiesSkippedByDiff++
           batch?.finish(null)
         }
-        // Re-check the generation, because the step above ran LISTENER code
-        // (directly via `notify`, or indirectly — `batch.finish` can close the
-        // barrier and flush every member's queued notify). A listener is free
-        // to dispose this handle and something is then free to resurrect it,
-        // all synchronously and all after the check at the top of this
-        // handler. `release()` past that point spends a ref-count belonging to
-        // the resurrected handle's subscriber, and the handle GCs out from
-        // under somebody who is actively watching it — the same damage the
-        // top-of-handler check prevents, through a later window. Returning
-        // here leaks nothing: `dispose()` zeroed `refCount`, so the retain
-        // this run took is already gone.
-        if (this.generation !== generation) return value
         this.release() // drop the inflight ref
         // If invalidations arrived during this load, the data we just
         // returned may already be stale. Re-run via a microtask so the
@@ -835,7 +811,7 @@ export class LoaderHandle<T> implements Handle<T>, RegisteredHandle {
           } else {
             this.store.metrics.reloadsAfterSettle++
             queueMicrotask(() => {
-              if (this.generation !== generation) return
+              if (this.disposed) return
               // No-op if a fresher load is already in flight (subscribe
               // path or another invalidate scheduled it).
               if (this.inflight) return
@@ -854,10 +830,7 @@ export class LoaderHandle<T> implements Handle<T>, RegisteredHandle {
         // `then` returns rather than routing to this handler — so that path
         // releases its own slot up there.)
         batch?.finish(null)
-        // Generation, not the `disposed` flag: a run superseded by a
-        // dispose+resurrect must not write `status: 'error'` onto the live
-        // handle or spend its ref-count. See `generation`.
-        if (this.generation === generation) {
+        if (!this.disposed) {
           // Roll back to the priorDeps — collected was incomplete.
           // The queued changes are discarded along with the partial
           // deps; a successful retry will rebuild both from scratch.
@@ -881,7 +854,7 @@ export class LoaderHandle<T> implements Handle<T>, RegisteredHandle {
             } else {
               this.store.metrics.reloadsAfterSettle++
               queueMicrotask(() => {
-                if (this.generation !== generation) return
+                if (this.disposed) return
                 if (this.inflight) return
                 void this.runLoader().catch(() => {/* error on handle */})
               })
@@ -1021,33 +994,19 @@ export class LoaderHandle<T> implements Handle<T>, RegisteredHandle {
   dispose(): void {
     if (this.disposed) return
     this.disposed = true
-    // Cancels every loader run started before this point, whether or not the
-    // handle is later resurrected. See `generation`.
-    this.generation++
     if (this.cancelGc) {
       this.cancelGc()
       this.cancelGc = null
     }
     this.listeners.clear()
-    // Reset with the listeners: `listeners.clear()` neuters every outstanding
-    // unsubscribe closure, so a nonzero count here could never drain back to 0
-    // and the handle would never GC again after a resurrection. Only reachable
-    // via `HandleStore.clear()` today (no non-test callers), but clear() is
-    // public API.
-    this.refCount = 0
     this.deps = []
     this.changesDuringLoad = []
-    // The two live-run flags. Neither is observable across a resurrection
-    // today — `resolveLive` re-zeroes `stale`, and every path that resurrects
-    // continues straight into a `runLoader` that zeroes both at run start —
-    // and no test pins them, deliberately: there is nothing to observe. They
-    // are here because `dispose()` is where the "this handle carries no live
-    // state" claim is made, and `resolveLive` states in a comment that it is
-    // merely re-asserting what dispose already zeroed. That claim was false
-    // for `stale` (routinely `true` at disposal: it is set precisely when an
-    // invalidation lands on a handle with no listeners, which is the same
-    // handle GC then collects), so the list is completed rather than the
-    // claim weakened.
+    // The ref-count and the two live-run flags complete the "this handle
+    // carries no live state" claim this method makes. None of the three is
+    // observable — `this` is now a permanent forwarder and every reader
+    // (`retain`/`release`/`loadFresh`) checks `disposed` first — so no test
+    // pins them; they are hygiene, not mechanism.
+    this.refCount = 0
     this.pendingReinvalidate = false
     this.stale = false
     this.value = undefined

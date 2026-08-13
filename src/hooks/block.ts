@@ -177,8 +177,8 @@ export function useHandle<T, S = T | undefined>(
   // prevents an unnecessary roundtrip when the handle is already ready. A
   // disposed handle reports its live replacement's status, so this reads the
   // replacement rather than a corpse; with the key vacant it reports
-  // 'disposed' and we skip — the subscribe below resurrects it and its own
-  // first-subscriber load covers the ensure-load this one declined.
+  // 'disposed' and we skip — the subscribe below mints a live handle at that
+  // key, whose own first-subscriber load covers the ensure-load we declined.
   useEffect(() => {
     if (handle.status() === 'idle') {
       void handle.load().catch(() => {/* error stored on the handle */})

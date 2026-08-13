@@ -36,10 +36,10 @@
 <aside class="doc-status" style="margin:0 0 1.25rem;padding:.6rem .9rem;border:1px solid #b8860b;border-radius:6px;background:rgba(184,134,11,.12);font-size:.85rem;line-height:1.45">
 <strong>Status: implemented, then corrected</strong> &middot; a defect report whose fix now ships in the same PR
 (#532). Reproduced end-to-end on the hosted build (2026-08-04) against a live workspace, then narrowed
-by reading React 19.2.6's own internals. Revised through four adversarial review rounds, which added
+by reading React 19.2.6's own internals. Revised through several adversarial review rounds, which added
 the <code>read()</code>/Suspense fix and the re-acquire attempt cap described in §2 — and then, once the
-correction retired that whole approach, the <code>generation</code> guard on the mid-load settle path,
-its re-check before <code>release()</code>, and the <code>loadFresh()</code> re-check.
+correction retired that whole approach, the <code>loadFresh()</code> re-check and the
+<code>NotifyBatch</code> slot release.
 The first fix (hook-side re-acquire) proved largely inert in the built app and its code is gone; §2 is
 kept only because the correction reads as an answer to it. See §"Correction: the compiler memoizes the
 factory".
@@ -58,7 +58,8 @@ lifecycle gap between <code>HandleStore</code>'s ref-counted GC and the fact tha
 <em>can still render while its effects are unmounted</em>. Two small changes close it: make handle
 disposal <strong>observable</strong> (a <code>'disposed'</code> status), and have a disposed handle
 <strong>resolve itself</strong> to whatever is live at its key — adopting an existing replacement, or
-resurrecting the instance when the key is vacant. (The first attempt put the repair in
+minting a fresh sibling when the key is vacant. The disposed instance never comes back to life; it
+becomes a permanent one-hop forwarder through the store. (The first attempt put the repair in
 <code>useHandle</code> instead; §"Correction: the compiler memoizes the factory" is why that could not
 work.)
 </div>
@@ -299,9 +300,11 @@ spends two attempts on one logical recovery.</p>
 <table>
 <tr><th>Option</th><th>Why not</th></tr>
 <tr>
-  <td>Revive on subscribe <em>(this is what shipped — see the correction below)</em></td>
-  <td>Rejected here, then adopted once the compiler made caller-side re-acquisition impossible; the
-  split-ownership objection is answered by adopting an existing replacement before resurrecting.
+  <td>Resolve on subscribe <em>(this is what shipped — see the correction below)</em></td>
+  <td>Rejected here, then adopted once the compiler made caller-side re-acquisition impossible. The
+  split-ownership objection is answered by routing the resolution through <code>getOrCreate</code>,
+  which is itself adopt-or-mint: an existing replacement is handed back, a vacant key gets a fresh
+  sibling, and the corpse is never re-registered.
   Original reasoning: have a disposed handle re-register itself with the store. <code>getOrCreate</code> is a bare
   synchronous map lookup (<span class="filepath">handleStore.ts:getOrCreate()</span>), so a handle
   re-inserting under its old key <em>after</em> another consumer's render already minted a
@@ -348,51 +351,55 @@ diagnosable is stripped from production builds, so it failed silently.</p>
 
 <p><strong>The repair moves into the handle.</strong> A disposed handle now resolves to whatever is
 live at its key: <code>peek</code>/<code>status</code> forward to an existing replacement (pure — safe
-on the render path), and <code>subscribe</code>/<code>load</code>/<code>read</code> resolve, adopting
-a replacement if the store has one and otherwise resurrecting the instance itself, which it can do
-because it still holds its key and loader. Adoption-before-resurrection is what keeps one owner per
-key — the objection that ruled this out the first time. The hook-side re-acquire machinery is removed:
-it cannot work under the compiler, and its subscribe branch actively blocked the new path.</p>
+on the render path), and <code>subscribe</code>/<code>load</code>/<code>loadFresh</code>/<code>read</code>
+go through <code>getOrCreate</code> at that key and operate on whatever comes back — a replacement the
+store already holds, or a fresh <strong>sibling</strong> built from the key, loader and equality this
+instance still carries. Because <code>getOrCreate</code> is itself adopt-or-mint, one owner per key
+falls out for free — the objection that ruled this out the first time. The hook-side re-acquire
+machinery is removed: it cannot work under the compiler, and its subscribe branch actively blocked the
+new path.</p>
 
-<p><strong>Consequence: <code>disposed</code> stops being a one-way flag</strong>, and that quietly
-broke a guard that predates this work. <code>runLoader</code> settles with
-<code>if (this.disposed) throw</code> — "my handle died while I was loading, drop the result." Once a
-handle can come back, a pre-disposal load finds the flag reading <code>false</code> again and applies:
-it overwrites the fresh value, rolls <code>deps</code> back to the dead run's set (so later
-invalidations match the wrong rows), and spends a <code>release()</code> that belongs to the
-resurrected handle's subscriber — GC'ing a handle somebody is actively watching. So the settle path now
-compares a <code>generation</code> counter bumped by every <code>dispose()</code>, which is what "this
-run was cancelled" actually means. Reaching it needs a disposal while a load is in flight, and a load
-holds a ref-count, so only <code>HandleStore.clear()</code> gets there today — but that is public API
-and the handle should not depend on who called it.</p>
+<p><strong>Why a sibling rather than reviving the instance.</strong> An earlier cut of this fix
+un-disposed the handle and re-registered it under its own key. That works, and it costs the class its
+strongest invariant: <code>disposed</code> stops being one-way. Several guards that predate this work
+read the flag as <em>"this loader run was cancelled"</em> — <code>runLoader</code>'s mid-load settle
+check, its two post-settle microtasks, <code>loadFresh</code>'s state reads — and every one of them
+silently changes meaning when the flag can flip back. A pre-disposal load would find
+<code>disposed === false</code> again and apply: overwrite the fresh value, roll <code>deps</code> back
+to the dead run's set (so later invalidations match the wrong rows), and spend a <code>release()</code>
+that belongs to the revived handle's subscriber, GC'ing a handle somebody is actively watching. Each
+site needed a <code>generation</code> counter instead of the flag, and each was found by a separate
+review round rather than by the compiler — the signature of an invariant that has to be remembered.
+Minting a sibling keeps the flag one-way and makes the whole class of bug unrepresentable: the dead
+run's writes land on an object nothing reads, and every existing <code>disposed</code> check keeps the
+meaning it always had.</p>
 
-<p><strong>One check is not enough, and that took a further round to see.</strong> The generation
-comparison at the top of the settle handler is not the last thing that handler does. It goes on to run
-<em>listener</em> code — <code>notify()</code> directly, or a <code>batch.finish()</code> that closes
-the barrier and flushes every member's queued notify — and only <em>then</em> calls
-<code>release()</code>. A listener may dispose the handle, and anything may resurrect it, synchronously
-inside that window; the dead run's <code>release()</code> then spends a ref-count belonging to the
-resurrected handle's new subscriber and the GC sweep collects a handle somebody is actively watching.
-Identical damage, later window. So the generation is re-checked immediately before
-<code>release()</code>. Demonstrated with a listener that calls <code>store.clear()</code> and
-re-subscribes; pinned by <em>"a listener that disposes mid-notify cannot cost the resurrected handle
-its ref-count"</em>, which fails if the check is deleted, if it reads <code>disposed</code> instead of
-<code>generation</code>, or if it is moved to either side of the notify/<code>release()</code> pair.
-The rejection half needs no equivalent: its <code>batch.finish()</code> runs <em>before</em> its
-generation check, so listener code cannot get in behind it.</p>
+<p><strong>What the sibling shape costs.</strong> Handle identity is no longer stable across a GC
+boundary: a holder that survives one keeps an object that is permanently <em>not</em> the store's
+entry, where resurrection handed back the same instance. Nothing in <code>src/</code> depends on that
+today — no code compares a held handle against <code>peekHandle(key)</code>, and none uses handles as
+map keys — but it is now a rule rather than an accident, and it is the one thing to check before
+adding such code. The rest is small: one extra <code>LoaderHandle</code> object per key per
+GC-cycle-with-a-live-holder (nothing chains — the corpse resolves through the store on each call and
+never stores what it found), and an unsubscribe closure returned by a corpse that targets the sibling
+it was taken from rather than whatever is live later. That last one is not a regression: under
+resurrection <code>dispose()</code>'s <code>listeners.clear()</code> neutered the closure just the
+same.</p>
 
-<p><strong>A third instance of the same shape, found by asking where else a check outlives its
-answer.</strong> Every disposal guard on the class is synchronous except one: <code>loadFresh()</code>
-checks <code>disposed</code> at entry and then <em>awaits</em> — the load, then a microtask — before
+<p><strong>One disposal check does still have to be re-taken, and the sibling shape does not remove
+it.</strong> The hazard there is <em>awaiting at all</em>, not the flag's direction. Every disposal
+guard on the class is synchronous except one: <code>loadFresh()</code> loops, and it <em>awaits</em> —
+the load, then a microtask — before
 reading <code>inflight</code>&nbsp;/&nbsp;<code>stale</code>&nbsp;/&nbsp;<code>value</code> off
 <code>this</code>. A disposal landing inside those awaits (a listener calling <code>store.clear()</code>
 from the settle notify; or a <code>release()</code> draining the last ref under a non-positive
 <code>gcTimeMs</code>) leaves all three cleared, and the loop reports <em>"completed without a
-value"</em> for a load that in fact succeeded — the exact failure the entry check was added to remove,
-one await later, and worse than plain <code>load()</code>, which resolves on that same path.
-Reproduced both ways before fixing. The check is re-taken after the awaits, and forwards the whole
-operation so the completeness boundary survives with it; the entry check is now a redundant fast path
-and is labelled as one. Pinned by <em>"loadFresh() keeps its boundary across a disposal that lands
+value"</em> for a load that in fact succeeded — the exact failure the disposal check exists to
+prevent, one await later, and worse than plain <code>load()</code>, which resolves on that same path.
+Reproduced both ways before fixing. The check sits after the awaits and before the state reads, and it
+forwards the whole operation so the completeness boundary survives with it; no separate entry check is
+needed, since an entering corpse's <code>load()</code> forwards and the loop's check hands the
+operation on one lap later. Pinned by <em>"loadFresh() keeps its boundary across a disposal that lands
 mid-flight"</em>, whose single assertion separates all three outcomes — throw (no re-check, or one
 placed before the awaits), the suspect value (a re-check forwarding plain <code>load()</code>), the
 clean value.</p>
@@ -454,9 +461,10 @@ layer: there is exactly one place to get it right.</p>
 
 <p>One trade is NOT resolved, and it is a real one. Query handles are keyed with the registry epoch
 (<code>query:&lt;name&gt;@&lt;epoch&gt;</code>, <span class="filepath">src/data/repo.ts:3727</span>), so
-resurrecting a handle from a superseded epoch keeps serving the registry snapshot its loader
-captured. Serving the old snapshot is already the contract for an old-epoch handle that simply
-hasn't been GC'd (<span class="filepath">repo.ts:3496–3501</span>) — but resurrection turns
+a sibling minted for a superseded epoch is registered under the OLD key and keeps serving the registry
+snapshot its inherited loader captured. Serving the old snapshot is already the contract for an
+old-epoch handle that simply hasn't been GC'd
+(<span class="filepath">repo.ts:3496–3501</span>) — but resolving turns
 <em>bounded</em> into <em>unbounded</em>: such a handle used to die at GC and stay dead, and a holder
 that keeps resolving can now keep a superseded resolver alive indefinitely. Fresh lookups are
 unaffected (they key at the current epoch), and closing this properly needs the epoch owner
