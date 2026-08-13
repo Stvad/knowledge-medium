@@ -342,17 +342,19 @@ describe('LoaderHandle GC', () => {
   })
 
   it('loadFresh() keeps its boundary across a disposal that lands mid-flight', async () => {
-    // The two tests above enter loadFresh already disposed. That entry check
-    // is only true at entry, and loadFresh is the one method on this class
-    // that awaits between its check and the state it reads: `load()` settles
-    // by running LISTENER code, and a listener may dispose the handle
+    // The two tests above enter loadFresh already disposed, which any check
+    // placed at entry would also catch. This one disposes it MID-loop, and
+    // loadFresh is the only method on this class that awaits between deciding
+    // "am I disposed" and reading the state that answer governs: `load()`
+    // settles by running LISTENER code, and a listener may dispose the handle
     // (`store.clear()` is public API — the same reachability the mid-load
-    // guard accepts), as may a `release()` that drains the last ref under a
-    // non-positive gcTimeMs. So the check has to be re-taken after the awaits
-    // and before the state reads, and it has to forward the whole operation.
+    // guard accepts, and it ignores the ref-count loadFresh holds). So the
+    // check has to sit after the awaits and before the state reads, and it has
+    // to forward the whole operation.
     //
     // Run 1 settles and its notify disposes the handle. Run 2 (the sibling's)
-    // is invalidated while in flight, so it is suspect. Only run 3 is clean. The single assertion below separates all three failure
+    // is invalidated while in flight, so it is suspect. Only run 3 is clean.
+    // The single assertion below separates all three failure
     // modes: no re-check at all (or one placed before the awaits) throws
     // "completed without a value" off the cleared corpse; a re-check that
     // forwards plain `load()` returns the suspect [2]; correct is [3].
@@ -384,6 +386,34 @@ describe('LoaderHandle GC', () => {
     releaseSecond!([2])
 
     await expect(settled).resolves.toEqual([3])
+  })
+
+  it('loadFresh() holds a ref, so a self-disposing lap cannot spin', async () => {
+    // `gcTimeMs: 0` is the synchronous-dispose config the class documents.
+    // Without loadFresh's own retain, the inflight load's `release()` on settle
+    // drains the last ref and disposes the handle IN the lap that just loaded
+    // it; the check above then forwards to a fresh sibling, whose loadFresh
+    // does exactly the same. The loop never terminates — and because it is a
+    // microtask chain, it starves timers too, so the failure is a hung event
+    // loop rather than a slow test. The loader aborts after 5 runs so a
+    // regression here reports instead of hanging the suite.
+    const store = makeStore(0)
+    let runs = 0
+    const loader = async () => {
+      runs++
+      if (runs > 5) throw new Error(`loadFresh re-ran the loader ${runs} times`)
+      return [runs]
+    }
+    const h = store.getOrCreate('lf-selfgc', () =>
+      new LoaderHandle({ store, key: 'lf-selfgc', loader }),
+    )
+
+    await expect(h.loadFresh()).resolves.toEqual([1])
+    expect(runs).toBe(1)
+    // The retain is given back: the handle still collects on the same lap it
+    // would have without it, so this buys termination and nothing else.
+    expect(h.status()).toBe('disposed')
+    expect(store.size()).toBe(0)
   })
 
   it('load() through a disposed handle resolves instead of rejecting', async () => {

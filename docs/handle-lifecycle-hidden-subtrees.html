@@ -38,8 +38,8 @@
 (#532). Reproduced end-to-end on the hosted build (2026-08-04) against a live workspace, then narrowed
 by reading React 19.2.6's own internals. Revised through several adversarial review rounds, which added
 the <code>read()</code>/Suspense fix and the re-acquire attempt cap described in §2 — and then, once the
-correction retired that whole approach, the <code>loadFresh()</code> re-check and the
-<code>NotifyBatch</code> slot release.
+correction retired that whole approach, the <code>loadFresh()</code> re-check, its ref-count hold, and
+the <code>NotifyBatch</code> slot release.
 The first fix (hook-side re-acquire) proved largely inert in the built app and its code is gone; §2 is
 kept only because the correction reads as an answer to it. See §"Correction: the compiler memoizes the
 factory".
@@ -228,7 +228,10 @@ stubbed on <code>Block</code>.</p>
 
 <p>Separately, <code>subscribe()</code> on a disposed handle should warn in development rather than
 silently returning a no-op. The silence is the single biggest reason this took as long to find as it
-did.</p>
+did. <em>Superseded by the correction below</em>: <code>subscribe()</code> no longer has a no-op path
+to warn about — it resolves through the store and delivers — so the dev warning is not in the shipped
+code. The <code>'disposed'</code> status above is; it is what <code>useHandle</code> reads to skip a
+redundant ensure-load.</p>
 
 <h3>2. <code>useHandle</code> re-acquires when its handle is dead</h3>
 
@@ -391,18 +394,36 @@ it.</strong> The hazard there is <em>awaiting at all</em>, not the flag's direct
 guard on the class is synchronous except one: <code>loadFresh()</code> loops, and it <em>awaits</em> —
 the load, then a microtask — before
 reading <code>inflight</code>&nbsp;/&nbsp;<code>stale</code>&nbsp;/&nbsp;<code>value</code> off
-<code>this</code>. A disposal landing inside those awaits (a listener calling <code>store.clear()</code>
-from the settle notify; or a <code>release()</code> draining the last ref under a non-positive
-<code>gcTimeMs</code>) leaves all three cleared, and the loop reports <em>"completed without a
+<code>this</code>. A disposal landing inside those awaits — a listener calling <code>store.clear()</code>
+from the settle notify — leaves all three cleared, and the loop reports <em>"completed without a
 value"</em> for a load that in fact succeeded — the exact failure the disposal check exists to
 prevent, one await later, and worse than plain <code>load()</code>, which resolves on that same path.
-Reproduced both ways before fixing. The check sits after the awaits and before the state reads, and it
+The check sits after the awaits and before the state reads, and it
 forwards the whole operation so the completeness boundary survives with it; no separate entry check is
 needed, since an entering corpse's <code>load()</code> forwards and the loop's check hands the
 operation on one lap later. Pinned by <em>"loadFresh() keeps its boundary across a disposal that lands
 mid-flight"</em>, whose single assertion separates all three outcomes — throw (no re-check, or one
 placed before the awaits), the suspect value (a re-check forwarding plain <code>load()</code>), the
 clean value.</p>
+
+<p><strong>And the other way that check could be reached turned out to be a hang, so it is now
+unreachable instead.</strong> The second disposal shape originally listed above was
+<em>a <code>release()</code> draining the last ref under a non-positive <code>gcTimeMs</code></em> —
+the synchronous-dispose config the class documents. That one is not a disposal loadFresh should
+survive; it is a disposal loadFresh <em>causes</em>. The loop held no ref of its own, so the only
+thing keeping the handle alive between laps was the inflight load's retain, which
+<code>runLoader</code> gives back on settle. With <code>gcTimeMs: 0</code> that release disposes
+synchronously, so each lap killed the handle it had just loaded, the check forwarded to a fresh
+sibling, and the sibling did the same — an unbounded loader loop, and because it is a microtask chain
+it starves timers too, so <code>new HandleStore({gcTimeMs: 0})</code> plus one <code>loadFresh()</code>
+simply never returned. (Before the disposal check existed, that same config threw
+<em>"completed without a value"</em>: bad, but it terminated. Turning it into a hang was a regression
+this PR introduced.) The fix is not another check: a multi-lap operation has to be a ref-count holder
+like any subscriber, so <code>loadFresh</code> now <code>retain()</code>s at entry and
+<code>release()</code>s in a <code>finally</code>. <code>store.clear()</code> ignores ref-counts, so
+the check above keeps its one remaining trigger and its test. Pinned by <em>"loadFresh() holds a ref,
+so a self-disposing lap cannot spin"</em>, which fails if either half of the pair is dropped or if the
+retain moves inside the loop.</p>
 
 <p>A neighbouring defect from the same sweep is <strong>reported, not fixed</strong>: it belongs to
 <code>NotifyBatch</code> rather than to handle lifecycle, and repairing it is a semantics call on the

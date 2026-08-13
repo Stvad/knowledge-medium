@@ -648,28 +648,47 @@ export class LoaderHandle<T> implements Handle<T>, RegisteredHandle {
     // No disposed check at entry: the in-loop one below subsumes it (an
     // entering corpse's `load()` forwards, then the loop's check hands the
     // whole operation to the same live handle one lap later).
-    while (true) {
-      await this.load()
-      // A dirty settle schedules its follow-up reload in a microtask before
-      // resolving the load promise. Yield once so that reload becomes visible.
-      await Promise.resolve()
-      // The real check, and it has to sit HERE — after the awaits, before the
-      // state reads. This is the only method on the class that awaits between
-      // deciding "am I disposed" and acting on the answer, and `load()` settles
-      // by running LISTENER code: a listener is free to dispose this handle
-      // (`HandleStore.clear()`), as is a `release()` that drains the last ref
-      // under a non-positive gcTimeMs. Reading `inflight`/`stale`/`value` off
-      // a corpse — disposal cleared all three — then reports "completed
-      // without a value" for a load that in fact succeeded. Forward the WHOLE
-      // operation, never the inner `load()`: this method's contract is that
-      // the value it returns was not invalidated while its loader ran, and
-      // delegating only the load drops that.
-      if (this.disposed) return this.resolveLive().loadFresh()
-      if (this.inflight || this.stale) continue
-      if (this.value === undefined) {
-        throw new Error(`Handle ${this.key} completed without a value`)
+    //
+    // Hold a ref for the WHOLE operation, the way a subscriber does. This is a
+    // multi-lap operation, and between laps the only thing keeping the handle
+    // alive is the inflight load's own retain — which `runLoader` hands back
+    // on settle. Under a non-positive `gcTimeMs` that `release()` disposes
+    // synchronously, so every lap kills the handle it just loaded, the check
+    // below forwards to a fresh sibling, and the sibling repeats it: an
+    // unbounded loader loop that starves the event loop (before this retain,
+    // `new HandleStore({gcTimeMs: 0})` + one `loadFresh()` never returned).
+    // Retaining also makes the ordinary case honest — a `continue` lap cannot
+    // find its own handle collected.
+    this.retain()
+    try {
+      while (true) {
+        await this.load()
+        // A dirty settle schedules its follow-up reload in a microtask before
+        // resolving the load promise. Yield once so that reload becomes visible.
+        await Promise.resolve()
+        // The real check, and it has to sit HERE — after the awaits, before the
+        // state reads. This is the only method on the class that awaits between
+        // deciding "am I disposed" and acting on the answer, and `load()`
+        // settles by running LISTENER code: a listener is free to dispose this
+        // handle (`HandleStore.clear()`, which ignores the ref-count the retain
+        // above holds). Reading `inflight`/`stale`/`value` off a corpse —
+        // disposal cleared all three — then reports "completed without a value"
+        // for a load that in fact succeeded. Forward the WHOLE operation, never
+        // the inner `load()`: this method's contract is that the value it
+        // returns was not invalidated while its loader ran, and delegating only
+        // the load drops that.
+        if (this.disposed) return this.resolveLive().loadFresh()
+        if (this.inflight || this.stale) continue
+        if (this.value === undefined) {
+          throw new Error(`Handle ${this.key} completed without a value`)
+        }
+        return this.value
       }
-      return this.value
+    } finally {
+      // Balanced against the entry retain on every exit — value, throw, and
+      // the forward. Both calls no-op on a corpse, so an entering-disposed
+      // call is balanced too.
+      this.release()
     }
   }
 
