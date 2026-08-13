@@ -16,6 +16,7 @@ import { Block } from '../data/block'
 import {
   editorSelection,
   focusBlock,
+  getAliases,
   requestEditorFocus,
 } from '@/data/properties.js'
 import { resetBlockSelection } from '@/data/stateBlocks.js'
@@ -71,6 +72,24 @@ export interface BlockResolveContext {
   repo: Repo
   uiStateBlock: Block
   types: readonly string[]
+  /** The block's page names (`[[Inbox]]`), or `[]`.
+   *
+   *  A LIVE READ, not a captured value — `liveAliases` below makes it a
+   *  getter over `block.peek()`, so it is correct whenever you ask and it is
+   *  NOT part of this object's identity. That is the only way it can be here
+   *  at all, per the invariant above: `alias.sync` mirrors a page's content
+   *  into its own `alias` property, so a captured value would change on every
+   *  keystroke commit and remount the editor with it (PR #548).
+   *
+   *  The consequence is the thing to know before keying on it: a facet
+   *  resolver memoized on the context will NOT re-run when a block is named
+   *  or renamed, so a contribution that decides something durable from
+   *  `ctx.aliases` freezes at whatever it first resolved. For a decision that
+   *  must FOLLOW naming, take it inside a rendered component
+   *  (`useBlockAliases(block)`), or use the two facets that exist for it and
+   *  are fed reactively by their calling hooks — `blockTextClassFacet` and
+   *  `blockBulletClassFacet`, which is how the alias plugin styles pages. */
+  aliases: readonly string[]
   topLevelBlockId?: string
   /** Root of the visible subtree this mount renders (see
    *  `BlockContextType.scopeRootId`). Equals `topLevelBlockId` on the
@@ -87,6 +106,39 @@ export interface BlockResolveContext {
   blockContext?: BlockContextType
   contentRenderers?: readonly BlockContentRendererSlot[]
 }
+
+/** Attach `aliases` to a resolve context as a live getter rather than a
+ *  captured value, and return it. Every construction site goes through this,
+ *  so the field cannot be re-captured somewhere and put the identity churn
+ *  back (see the field's own docs, and PR #548).
+ *
+ *  `defineProperty`, NOT a getter in an object literal that callers spread:
+ *  object spread EVALUATES getters, so `{...withLiveAliases(x)}` would freeze
+ *  the value at spread time — the exact bug this exists to prevent. Callers
+ *  wrap their literal instead of spreading into one.
+ *
+ *  `block.peek()` is the cache's current row — synchronous, and `undefined`
+ *  before the block has loaded, which reads as no aliases. Tolerant decode
+ *  (`getAliases`), so a malformed stored value can't throw inside a facet
+ *  resolver, above the per-block error boundary.
+ *
+ *  `enumerable` so the field still survives an intentional downstream spread
+ *  (`{...resolveContext, inFocus}`) — as a snapshot at that moment, which is
+ *  no worse than the plain field such a caller would otherwise have copied. */
+export const withLiveAliases = <T extends Omit<BlockResolveContext, 'aliases'> & {block: Block}>(
+  context: T,
+): T & Pick<BlockResolveContext, 'aliases'> =>
+  Object.defineProperty(context, 'aliases', {
+    get: (): readonly string[] => {
+      const data = context.block.peek()
+      return data ? getAliases(data) : []
+    },
+    enumerable: true,
+    // Re-wrapping an already-wrapped context is a no-op rather than a
+    // TypeError — `defineProperty` defaults to non-configurable, which would
+    // make a caller that wraps defensively crash instead.
+    configurable: true,
+  }) as T & Pick<BlockResolveContext, 'aliases'>
 
 /**
  * Full interaction context — resolver context plus the reactive UI

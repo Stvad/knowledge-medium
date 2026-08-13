@@ -56,6 +56,7 @@ import {
   blockHeaderFacet,
   blockLayoutFacet,
   blockShellDecoratorsFacet,
+  withLiveAliases,
   type BlockLayout,
   type BlockLayoutSlots,
   type BlockResolveContext,
@@ -615,7 +616,7 @@ export function DefaultBlockRenderer(
   // rebuilt from stale content mid-keystroke. Nothing an ordinary edit can
   // change may be added here; see the invariant on `BlockResolveContext`.
   const scopeRootId = blockContext.scopeRootId
-  const resolveContext = useMemo<BlockResolveContext>(() => ({
+  const resolveContext = useMemo<BlockResolveContext>(() => withLiveAliases({
     block,
     repo,
     uiStateBlock,
@@ -640,6 +641,8 @@ export function DefaultBlockRenderer(
     ],
   }), [
     block,
+    // NOTE: no `aliases` dep. `withLiveAliases` installs it as a getter over
+    // the live row precisely so it is not part of this identity.
     repo,
     uiStateBlock,
     types,

@@ -11,6 +11,7 @@ const focalCtx = (blockContext: BlockContextType): BlockResolveContext => ({
   repo: {} as BlockResolveContext['repo'],
   uiStateBlock: {} as Block,
   types: [],
+  aliases: [],
   isTopLevel: true,
   blockContext,
 })

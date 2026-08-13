@@ -1,5 +1,5 @@
 import { useMemo } from 'react'
-import { shortcutSurfaceActivationsFacet } from '@/extensions/blockInteraction.js'
+import { shortcutSurfaceActivationsFacet, withLiveAliases } from '@/extensions/blockInteraction.js'
 import type {
   BlockInteractionContext,
   ShortcutSurface,
@@ -84,7 +84,7 @@ export function useShortcutSurfaceActivations(
   const resolveShortcutActivations = runtime.read(shortcutSurfaceActivationsFacet)
 
   const shortcutActivations = useMemo(
-    () => resolveShortcutActivations({
+    () => resolveShortcutActivations(withLiveAliases({
       block,
       repo,
       uiStateBlock,
@@ -102,7 +102,7 @@ export function useShortcutSurfaceActivations(
     // dependencies so handlers receive it uniformly, without each
     // activation contribution (vim, codemirror, backlinks, plugins)
     // having to forward it by hand.
-    }).map(activation => ({
+    })).map(activation => ({
       ...activation,
       dependencies: {...(activation.dependencies ?? {}), scopeRootId, scopeRootForcesOpen},
     })),

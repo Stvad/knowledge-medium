@@ -127,6 +127,28 @@ describe('wikilink parsing', () => {
     )
   })
 
+  it('does not re-scan the alias once per candidate closer', () => {
+    // `closingDelimiterFor` COUNTS the closer (one depth pass) instead of
+    // searching for it (test each candidate for balance) — Codex on PR #548,
+    // which is reachable from arbitrary pasted content on the editing path.
+    //
+    // The input isolates that one factor: a single opener, so exactly one
+    // close happens and the per-close `slice` every version pays cannot
+    // confound the measurement, with a long prefix AND a long `]` run so the
+    // search version multiplies them. Measured on this machine: 907ms
+    // searching, 2.4ms counting. Deep NESTING is separately quadratic (the
+    // per-close slice, which predates this) and is deliberately not what this
+    // asserts.
+    //
+    // The bound is set for the ~375x gap, not for the measurement: 300ms is
+    // over 100x the counting version's cost, so the full gate's ~6x p99.9
+    // slowdown cannot reach it, while the searching version misses by 10x.
+    const adversarial = '[['.concat('a'.repeat(40_000), ']'.repeat(20_000))
+    const started = performance.now()
+    parseReferences(adversarial)
+    expect(performance.now() - started).toBeLessThan(300)
+  })
+
   it('a stray `]` after a link never gets absorbed into the alias', () => {
     // The other side of the same rule, and the one protecting existing
     // content: `[[foo]]` followed by literal `]`s must keep parsing as the

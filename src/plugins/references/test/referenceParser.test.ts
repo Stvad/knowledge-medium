@@ -15,6 +15,7 @@ import {
   rewriteBlockRefs,
   faithfulWikilinkReplacement,
   pinnedSpanReplacement,
+  MAX_ALIAS_LENGTH,
 } from '../referenceParser'
 
 const UUID = '11111111-1111-4111-8111-111111111111'
@@ -587,6 +588,72 @@ Another [[normal-ref]]
         lossyLabel: false,
       })
     })
+  })
+})
+
+describe('runaway wikilink spans (MAX_ALIAS_LENGTH)', () => {
+  const alias = (n: number) => 'a'.repeat(n)
+
+  it('parses an alias at the cap and rejects one past it', () => {
+    expect(parseReferences(`[[${alias(MAX_ALIAS_LENGTH)}]]`))
+      .toHaveLength(1)
+    expect(parseReferences(`[[${alias(MAX_ALIAS_LENGTH + 1)}]]`))
+      .toEqual([])
+  })
+
+  // The regression this cap exists for. A regex character class whose
+  // first member is a literal `[` supplies a `[[` opener; the scanner
+  // paired it with a `]]` from an unrelated `x[i]]` far downstream and
+  // minted a page whose name was the whole span. Both halves are real
+  // text from the bundle that produced the 205 KB page.
+  it('does not treat a regex char class + a distant `]]` as a wikilink', () => {
+    const content = [
+      'ESCAPE: /[[\\]{}()*+?.\\\\^$|\\s]/g,',
+      'x'.repeat(MAX_ALIAS_LENGTH),
+      'while (i--) delete createDict[PROTOTYPE][enumBugKeys[i]];',
+    ].join('\n')
+    expect(parseReferences(content)).toEqual([])
+    expect(hasReferences(content)).toBe(false)
+    expect(extractAliases(content)).toEqual([])
+  })
+
+  it('a large nested JSON array produces no reference', () => {
+    // `[[1,2],[3,4]]` opens with `[[` exactly like a wikilink. Sized off
+    // the constant so the fixture tracks the cap instead of silently
+    // sliding under it when the cap moves.
+    const point = (i: number) => `[${i},${i}]`
+    const count = Math.ceil(MAX_ALIAS_LENGTH / point(0).length) + 100
+    const points = Array.from({length: count}, (_, i) => point(i)).join(',')
+    expect(`[${points}]`.length).toBeGreaterThan(MAX_ALIAS_LENGTH)
+    expect(parseReferences(`[${points}]`)).toEqual([])
+  })
+
+  // The accepted cost of a deliberately generous cap, pinned so it is a
+  // known tradeoff rather than a surprise. A short nested array still
+  // mints an alias — a 2951-char drawing point-array in the author's live
+  // workspace is exactly this. Lowering MAX_ALIAS_LENGTH is what would
+  // catch these, at the price of refusing long legitimate page names;
+  // that dial is the whole decision, so make the current setting visible.
+  it('does NOT catch a nested array shorter than the cap', () => {
+    const short = '[[1,2],[3,4]]'
+    expect(short.length).toBeLessThanOrEqual(MAX_ALIAS_LENGTH)
+    expect(parseReferences(short).map(r => r.alias)).toEqual(['1,2],[3,4'])
+  })
+
+  // The cap gates EMISSION only — the `]]` still closes its opener, so a
+  // rejected span cannot leak an opener that swallows later text.
+  it('an over-long span still consumes its delimiters', () => {
+    const content = `[[${alias(MAX_ALIAS_LENGTH + 1)}]] and [[real]]`
+    expect(parseReferences(content).map(r => r.alias)).toEqual(['real'])
+    expect(parseOutermostReferences(content).map(r => r.alias)).toEqual(['real'])
+  })
+
+  // An over-long OUTER span no longer hides a legitimate inner one from
+  // `parseOutermostReferences` (whose cursor previously skipped anything
+  // inside the emitted outer span).
+  it('emits a short alias nested inside an over-long span', () => {
+    const content = `[[${alias(MAX_ALIAS_LENGTH)} [[inner]] tail]]`
+    expect(parseOutermostReferences(content).map(r => r.alias)).toEqual(['inner'])
   })
 })
 

@@ -26,6 +26,7 @@ import { ChangeScope, codecs, defineProperty, type BlockReference } from '@/data
 import { BlockCache } from '@/data/blockCache'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
+import { EXTENSION_TYPE } from '@/data/blockTypes'
 import { aliasesProp } from '@/data/properties'
 import { seedProperty } from '@/data/propertySeeds'
 import { Repo } from '@/data/repo'
@@ -39,6 +40,7 @@ import { refTestSeed } from './refTestSeeds.ts'
 import {
   CLEANUP_ORPHAN_ALIASES_PROCESSOR,
   PARSE_REFERENCES_PROCESSOR,
+  isExtensionSource,
 } from '../referencesProcessor.ts'
 
 interface Harness {
@@ -268,6 +270,128 @@ describe('parseReferences — ref-typed properties', () => {
       {id: aliasId('content-target'), alias: 'content-target'},
       {id: 'target-c', alias: 'target-c', sourceField: 'reviewer'},
     ])
+  })
+})
+
+// An installed extension's SOURCE lives in `blocks.content` on a block
+// typed `extension`, and code hands the wikilink grammar unbalanced `[[`
+// openers for free (regex character classes, nested array literals).
+// Three pages — one named after 205 KB of bundled JavaScript — were
+// minted from a single extension's source before this gate existed.
+describe('parseReferences — extension source is not scanned for content refs', () => {
+  const SOME_UUID = '550e8400-e29b-41d4-a716-446655440000'
+
+  it('mints no alias target and records no content refs', async () => {
+    await env.repo.tx(
+      tx => tx.create({
+        id: 'ext',
+        workspaceId: WS,
+        parentId: null,
+        orderKey: 'a0',
+        content: `const RE = /[[\\]]/g\nsee [[foo]] and ((${SOME_UUID}))`,
+        properties: {types: [EXTENSION_TYPE]},
+      }),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await flush()
+
+    expect(JSON.parse((await env.read('ext'))!.references_json)).toEqual([])
+    expect(await env.read(aliasId('foo'))).toBeNull()
+  })
+
+  // The convergence path for source blocks that ALREADY minted seats:
+  // nothing rewrites their content, so the drop has to come from the
+  // re-parse that the type write itself triggers (`properties` is
+  // watched). Priming the positive case first is what makes the
+  // `toEqual([])` below evidence rather than a first-render artifact.
+  it('drops content refs already recorded when the type arrives', async () => {
+    await env.repo.tx(
+      tx => tx.create({
+        id: 'ext',
+        workspaceId: WS,
+        parentId: null,
+        orderKey: 'a0',
+        content: 'see [[foo]]',
+      }),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await flush()
+    expect(JSON.parse((await env.read('ext'))!.references_json))
+      .toEqual([{id: aliasId('foo'), alias: 'foo'}])
+
+    await env.repo.tx(
+      tx => tx.update('ext', {properties: {types: [EXTENSION_TYPE]}}),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await flush()
+    expect(JSON.parse((await env.read('ext'))!.references_json)).toEqual([])
+  })
+
+  // Direct unit test, because this is unpinnable through the public
+  // path: the kernel's same-tx `core.blockTypeTypeify` decodes `types`
+  // on every changed row and throws first, so a malformed value never
+  // reaches the read phase via `repo.tx`. See `isExtensionSource`'s
+  // declaration — the point is that it must stay TOTAL, and a future
+  // "simplify it to hasBlockType" would reintroduce a throw in a
+  // post-commit read phase, where the user's write has already landed.
+  describe('isExtensionSource is total', () => {
+    it.each([
+      ['a scalar', 'extension'],
+      ['an array with a non-string element', ['page', 42]],
+      ['an object', {0: 'extension'}],
+      ['null', null],
+    ])('reads %s as not-an-extension instead of throwing', (_label, types) => {
+      const source = {properties: {types}} as unknown as Parameters<typeof isExtensionSource>[0]
+      expect(isExtensionSource(source)).toBe(false)
+    })
+
+    it('still recognises a well-formed extension block', () => {
+      expect(isExtensionSource({properties: {types: [EXTENSION_TYPE]}})).toBe(true)
+    })
+
+    // Deliberate, and the direction matters. The codec would call this
+    // whole value malformed, but the row DOES claim the extension type,
+    // and the two readings fail very differently: honouring the claim
+    // skips parsing a source blob (worst case, an extension block's refs
+    // aren't derived — recoverable, invisible); rejecting it scans 1.7 MB
+    // of bundled JS and mints phantom pages, which is the bug this gate
+    // exists to stop. Membership wins over element-wise validity on
+    // purpose (declined Codex suggestion, PR #540).
+    it('honours an extension claim even in an otherwise malformed array', () => {
+      expect(isExtensionSource({properties: {types: [EXTENSION_TYPE, 42]}})).toBe(true)
+    })
+  })
+
+  // Scope check: the gate is on the CONTENT grammars only. An extension
+  // block carries ref-typed properties like any other block (its own
+  // `extension:name` today, anything a schema declares tomorrow), and
+  // silently dropping those would be a second, quieter version of the
+  // bug this fixes.
+  describe('ref-typed properties still project', () => {
+    const reviewerProp = refTestSeed('reviewer', 'ref')
+
+    beforeEach(async () => {
+      await env.h.cleanup()
+      env = await setup([definitionSeedsFacet.of(reviewerProp, {source: 'test'})])
+    })
+
+    it('projects a ref property on an extension-typed block', async () => {
+      await env.repo.tx(
+        tx => tx.create({
+          id: 'ext',
+          workspaceId: WS,
+          parentId: null,
+          orderKey: 'a0',
+          content: 'see [[foo]]',
+          properties: {types: [EXTENSION_TYPE], reviewer: 'target-a'},
+        }),
+        {scope: ChangeScope.BlockDefault},
+      )
+      await flush()
+
+      expect(JSON.parse((await env.read('ext'))!.references_json))
+        .toEqual([{id: 'target-a', alias: 'target-a', sourceField: 'reviewer'}])
+    })
   })
 })
 
