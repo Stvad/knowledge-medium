@@ -93,20 +93,15 @@ describe('hasOpaqueContent', () => {
     expect(hasOpaqueContent({properties: {}}, opaqueTypes)).toBe(false)
   })
 
-  it('is total for a scalar types value', () => {
-    expect(hasOpaqueContent({properties: {[typesProp.name]: 'extension'}}, opaqueTypes)).toBe(false)
-  })
-
-  it('is total for an object types value', () => {
-    expect(hasOpaqueContent({properties: {[typesProp.name]: {extension: true}}}, opaqueTypes)).toBe(false)
-  })
-
-  it('is total for a null types value', () => {
-    expect(hasOpaqueContent({properties: {[typesProp.name]: null}}, opaqueTypes)).toBe(false)
-  })
-
-  it('is total for an array containing a non-string element', () => {
-    expect(hasOpaqueContent({properties: {[typesProp.name]: [42, {bad: true}]}}, opaqueTypes)).toBe(false)
+  // Total, never throwing, is the whole point — this runs in processors
+  // where an exception lands after the user's write has committed.
+  it.each([
+    ['a scalar', 'extension'],
+    ['an object', {extension: true}],
+    ['null', null],
+    ['an array of non-strings', [42, {bad: true}]],
+  ])('is total for %s', (_label, types) => {
+    expect(hasOpaqueContent({properties: {[typesProp.name]: types}}, opaqueTypes)).toBe(false)
   })
 
   it('still matches when a non-string element sits alongside an opaque type', () => {
