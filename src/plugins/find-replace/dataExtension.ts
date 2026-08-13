@@ -7,6 +7,8 @@ import {
 } from '@/data/api'
 import { mutatorsFacet, queriesFacet } from '@/data/facets.js'
 import type { AppExtension } from '@/facets/facet.js'
+import { safeJsonParse } from '@/data/blockSchema'
+import { hasOpaqueContent } from '@/data/properties'
 import {
   KERNEL_CONTENT_CHANNEL,
   kernelContentKey,
@@ -84,10 +86,11 @@ const applyContentReplaceArgsSchema = z.object({
 interface ContentCandidateRow {
   id: string
   content: string
+  properties_json: string
 }
 
 const SELECT_CONTENT_CANDIDATES_SQL = `
-  SELECT id, content
+  SELECT id, content, properties_json
   FROM blocks
   WHERE workspace_id = ?
     AND deleted = 0
@@ -132,7 +135,18 @@ export const searchContentQuery = defineQuery<
       [workspaceId, matchCase, trimmed, matchCase, trimmed, candidateLimit + 1],
     )
     const candidateRows = rows.slice(0, candidateLimit)
+    // Opaque-content blocks never enter a bulk rewrite: a replacement
+    // inside an installed extension's stored source edits executable code,
+    // and the dialog selects every result by default. Filtered here rather
+    // than in the SQL because the types live inside `properties_json` — a
+    // `json_each` over a malformed value would fail the whole search
+    // instead of one row.
+    const opaqueTypes = ctx.repo.opaqueContentTypes
     const matches = candidateRows
+      .filter(row => !hasOpaqueContent(
+        {properties: safeJsonParse<Record<string, unknown>>(row.properties_json, {})},
+        opaqueTypes,
+      ))
       .map(row => buildContentSearchMatch(row.id, row.content, trimmed, normalizedOptions))
       .filter((match): match is NonNullable<typeof match> => match !== null)
 

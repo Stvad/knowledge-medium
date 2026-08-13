@@ -51,6 +51,7 @@ const create = async (args: {
   id: string
   content?: string
   workspaceId?: string
+  types?: readonly string[]
 }) => {
   await env.repo.tx(async tx => {
     await tx.create({
@@ -59,6 +60,7 @@ const create = async (args: {
       parentId: null,
       orderKey: `key-${args.id}`,
       content: args.content ?? '',
+      ...(args.types ? {properties: {types: args.types}} : {}),
     })
   }, {scope: ChangeScope.BlockDefault})
 }
@@ -99,6 +101,23 @@ describe('findReplaceDataExtension', () => {
     }))).toEqual([
       {id: 'a', count: 2, content: 'Alpha beta alpha'},
     ])
+  })
+
+  // An installed extension's source is a block like any other, and the
+  // dialog selects every result by default — so a term that happens to
+  // occur in a stored bundle would otherwise be rewritten inside
+  // executable code by a single "replace all".
+  it('never offers an opaque-content block as a replace candidate', async () => {
+    await create({id: 'prose', content: 'alpha in a note'})
+    await create({
+      id: 'ext',
+      content: 'export const alpha = 1',
+      types: ['extension'],
+    })
+
+    const out = await search({query: 'alpha'})
+
+    expect(out.matches.map(match => match.blockId)).toEqual(['prose'])
   })
 
   it('honors case and whole-word options', async () => {

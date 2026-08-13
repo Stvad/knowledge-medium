@@ -253,7 +253,9 @@ ${formatSqlList(BLOCK_SNAPSHOT_JSON_FIELDS.map(field => `'${field.key}', ${field
   )
 `
 
-const safeJsonParse = <T>(value: string | null | undefined, fallback: T): T => {
+/** Total JSON decode for a stored column — never throws, so a malformed
+ *  row degrades to `fallback` instead of failing the read around it. */
+export const safeJsonParse = <T>(value: string | null | undefined, fallback: T): T => {
   if (!value) return fallback
 
   try {

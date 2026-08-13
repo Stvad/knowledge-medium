@@ -259,8 +259,7 @@ describe('alias.sync — opaque-content blocks have no content↔alias parity', 
     await flush()
   }
 
-  // content → alias (#541): a reinstall rewrites `content`, and the
-  // drift-heal used to append the whole new bundle as an alias entry.
+  // Covers the content → alias leg (the Rule 1/2 drift-heal).
   it('does not mirror a source bundle into the alias list on a content change', async () => {
     await createExtensionBlock(['readwise'])
     await env.repo.mutate.setContent({id: 'ext', content: `${SOURCE}\n// v2`})
@@ -269,9 +268,8 @@ describe('alias.sync — opaque-content blocks have no content↔alias parity', 
     expect(await readAliases('ext')).toEqual(['readwise'])
   })
 
-  // alias → content: the data-loss shape. Renaming the oversized entry
-  // matched `after.content === removed[0]` and wrote the new alias text
-  // into `content`, destroying the source.
+  // Covers the alias → content leg (the `after.content === removed[0]`
+  // rename branch) — the one that WRITES to content.
   it('does not overwrite content when an alias equal to it is renamed', async () => {
     await createExtensionBlock(['readwise', SOURCE])
     await env.repo.tx(
