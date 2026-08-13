@@ -54,6 +54,52 @@ export const parseBlockRefTarget = (target: string): string | null => {
   return match ? match[1].toLowerCase() : null
 }
 
+/** Every `]` in `s` is closed by an earlier `[`, and every `[` is closed.
+ *  Single brackets only — `[[`/`]]` are just two of each, which is what
+ *  makes a nested `[[b]]` inside an alias balanced too. */
+const hasBalancedBrackets = (s: string): boolean => {
+  let depth = 0
+  for (const ch of s) {
+    if (ch === '[') depth++
+    else if (ch === ']' && --depth < 0) return false
+  }
+  return depth === 0
+}
+
+/** Where the wikilink opened at `startPos` actually closes, given that a run
+ *  of `]` begins at `runStart`.
+ *
+ *  A run of exactly two is never in doubt — it is the closer, and this
+ *  returns `runStart` unchanged. Three or more is the ambiguous case, and it
+ *  is ambiguous in exactly one way: does the extra `]` belong to the alias
+ *  or to the text after the link?
+ *
+ *    `[[Book of [x]]]`  the alias opened a `[` that wants closing → it does
+ *    `[[foo]]]`         nothing is open → the stray `]` is text
+ *
+ *  So: pick the longest candidate whose alias has balanced brackets. At most
+ *  one candidate can qualify, because appending a `]` to a balanced string
+ *  always unbalances it — the answer is unique, not a preference. When none
+ *  qualifies (an alias with an unmatched `[`, e.g. `[[a[b]]`) fall back to
+ *  the first pair, which is what this has always done.
+ *
+ *  Reading a bare `]` run this way is what removes the need for
+ *  `renderWikilink` to pad a trailing `]` into the user's own text. */
+const closingDelimiterFor = (
+  content: string,
+  startPos: number,
+  runStart: number,
+): number => {
+  let runEnd = runStart
+  while (content[runEnd] === ']') runEnd++
+  // Candidates leave two `]` for the delimiter itself; a run of 2 has only
+  // one candidate and skips the loop entirely.
+  for (let end = runEnd - 2; end > runStart; end--) {
+    if (hasBalancedBrackets(content.slice(startPos + 2, end))) return end
+  }
+  return runStart
+}
+
 const parseWikilinkReferences = (content: string): ParsedReference[] => {
   const references: ParsedReference[] = []
   const stack: number[] = [] // Stack to track opening bracket positions
@@ -66,16 +112,19 @@ const parseWikilinkReferences = (content: string): ParsedReference[] => {
     } else if (content.slice(i, i + 2) === ']]') {
       if (stack.length > 0) {
         const startPos = stack.pop()!
-        const alias = content.slice(startPos + 2, i)
+        const closeAt = closingDelimiterFor(content, startPos, i)
+        const alias = content.slice(startPos + 2, closeAt)
         if (alias) {
           references.push({
             alias,
             startIndex: startPos,
-            endIndex: i + 2,
+            endIndex: closeAt + 2,
           })
         }
+        i = closeAt + 2
+      } else {
+        i += 2
       }
-      i += 2
     } else {
       i++
     }
@@ -251,10 +300,16 @@ export const renderWikilink = (alias: string): string => {
   // runs (']]]' → '] ]]') — the space must land between EVERY two
   // adjacent delimiters. Found by referenceParser.fuzz.
   const safe = alias.replace(/\[(?=\[)/g, '[ ').replace(/\](?=\])/g, '] ')
-  // A trailing `]` would pair with the closing delimiter's first `]`
-  // and close the link one character early, leaving a stray `]`
-  // outside the parsed span.
-  const padded = safe.endsWith(']') ? safe + ' ' : safe
+  // A trailing `]` runs into the closing delimiter, and the scanner resolves
+  // that run by bracket balance (`closingDelimiterFor`). So the `]` needs no
+  // padding when the alias opened it — `Book of [x]` renders exactly, which
+  // is the common case and the one worth not mangling. An UNBALANCED trailing
+  // `]` (`foo]`) stays lossy on purpose: `[[foo]]]` has to keep meaning "link
+  // to foo, then a stray `]`" — the far commoner reading — so such an alias
+  // simply is not spellable as a wikilink. Callers that need identity rather
+  // than syntax find out via `faithfulWikilinkReplacement`, which round-trips
+  // and refuses.
+  const padded = safe.endsWith(']') && !hasBalancedBrackets(safe) ? safe + ' ' : safe
   return `[[${padded}]]`
 }
 

@@ -88,8 +88,9 @@ describe('wikilink parsing', () => {
 
   it('renderWikilink round-trips aliases without wikilink delimiters', () => {
     // Documented-safe class: non-empty, no `]]`/`[[` (renderer splits
-    // them, lossy) and no trailing `]` (renderer pads it, lossy).
-    // Balanced single brackets inside the alias are fine.
+    // them, lossy) and no trailing `]` (renderer pads an UNBALANCED one,
+    // lossy). Balanced single brackets inside the alias are fine — and a
+    // balanced trailing `]` has its own property below.
     const safeAlias = fc
       .string({minLength: 1, maxLength: 30})
       .filter(a => !a.includes(']]') && !a.includes('[[') && !a.endsWith(']'))
@@ -98,6 +99,47 @@ describe('wikilink parsing', () => {
         const rendered = renderWikilink(alias)
         const parsed = parseOutermostReferences(rendered)
         expect(parsed).toEqual([{alias, startIndex: 0, endIndex: rendered.length}])
+      }),
+      fuzzParams(200),
+    )
+  })
+
+  it('renderWikilink round-trips an alias whose own bracket is the last char', () => {
+    // The case that used to be padded (`Book of [x]` → `[[Book of [x] ]]`).
+    // BUILT balanced rather than filtered-for-balance on purpose: filtering
+    // would restate `closingDelimiterFor`'s own rule and the property could
+    // only ever agree with the implementation. Everything here ends in `]`,
+    // so each sample lands the alias right against the closing delimiter.
+    const plain = fc.string({maxLength: 6}).map(s => s.replace(/[[\]]/g, ''))
+    const wrap = (inner: fc.Arbitrary<string>) =>
+      fc.tuple(plain, inner).map(([lead, body]) => `${lead}[${body}]`)
+    const endsWithItsOwnBracket = fc
+      .oneof(wrap(plain), wrap(wrap(plain)))
+      .filter(a => !a.includes('[[') && !a.includes(']]'))
+    fc.assert(
+      fc.property(endsWithItsOwnBracket, alias => {
+        const rendered = renderWikilink(alias)
+        expect(rendered).toBe(`[[${alias}]]`)
+        expect(parseOutermostReferences(rendered))
+          .toEqual([{alias, startIndex: 0, endIndex: rendered.length}])
+      }),
+      fuzzParams(200),
+    )
+  })
+
+  it('a stray `]` after a link never gets absorbed into the alias', () => {
+    // The other side of the same rule, and the one protecting existing
+    // content: `[[foo]]` followed by literal `]`s must keep parsing as the
+    // link plus text, whatever the alias is.
+    const plainAlias = fc
+      .string({minLength: 1, maxLength: 12})
+      .map(s => s.replace(/[[\]]/g, ''))
+      .filter(a => a.length > 0)
+    fc.assert(
+      fc.property(plainAlias, fc.integer({min: 1, max: 4}), (alias, strays) => {
+        const content = `[[${alias}]]${']'.repeat(strays)}`
+        expect(parseOutermostReferences(content))
+          .toEqual([{alias, startIndex: 0, endIndex: alias.length + 4}])
       }),
       fuzzParams(200),
     )
