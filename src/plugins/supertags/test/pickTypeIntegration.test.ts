@@ -113,6 +113,30 @@ describe('supertags pick integration', () => {
     expect(resolved?.id).toBe(blockId)
   })
 
+  // The discoverable way to reach the typeify name check: `#type` on a
+  // block whose EXISTING content can't be written as `[[name]]`. The
+  // create flow validates before opening a tx, so this pick is the entry
+  // point that actually exercises the throw — and it was the one without
+  // a test (found by adversarial review). Refusing must leave the block
+  // completely untyped rather than half-tagged.
+  it.each([
+    ['`]]`-lossy content', 'Book]]Club #type', 'Book]]Club'],
+    ['grammar-shaped content', '((11111111-1111-4111-8111-111111111111)) #type',
+      '((11111111-1111-4111-8111-111111111111))'],
+  ])('#type on %s refuses the tag and leaves the block alone', async (_l, text, expected) => {
+    env = await setup()
+    const blockId = await makeBlock(env.repo, text)
+
+    await expect(pickAt(env.repo, blockId, text, 'Type')).rejects.toThrow()
+
+    const data = await env.repo.load(blockId)
+    expect(getBlockTypes(data!)).not.toContain('block-type')
+    expect(getBlockTypes(data!)).not.toContain('page')
+    expect(data!.properties.alias ?? []).toEqual([])
+    // Content untouched — the refusal rolled the whole tx back.
+    expect(data!.content).toBe(expected)
+  })
+
   it('create pick mints a registered type, tags the block, and strips the trigger', async () => {
     env = await setup()
     const blockId = await makeBlock(env.repo, 'dinner #recipe')
