@@ -1059,6 +1059,311 @@ describe('Batched notify across multiple matching handles', () => {
     store.invalidate({ parentIds: ['p'] })
     await vi.waitFor(() => expect(subscribedFired).toEqual(['sub-1', 'sub-2']))
   })
+
+  it('never delivers a value older than one a listener already saw (superseded slot dropped)', async () => {
+    // The barrier can stay open across a LATER invalidation of one of its
+    // members. That second reload is not part of the open batch, so it
+    // notifies immediately — and then the barrier flushes a thunk that was
+    // queued with the value the FIRST reload settled with. A listener that
+    // reads the pushed argument sees v2 then v1: an older value after a
+    // newer one, with nothing to correct it until the next invalidation.
+    const store = makeStore(60_000)
+
+    // `fast` declares a private row dep alongside the shared table dep, so
+    // a second change can target it alone (matched.length === 1 → no batch).
+    const fastValues = ['v0', 'v1', 'v2']
+    let fastCall = 0
+    const fast = store.getOrCreate('fast', () =>
+      new LoaderHandle<string>({
+        store, key: 'fast',
+        loader: async (ctx) => {
+          ctx.depend({ kind: 'row', id: 'fast-only' })
+          ctx.depend({ kind: 'table', table: 'blocks' })
+          return fastValues[Math.min(fastCall++, fastValues.length - 1)]
+        },
+      }),
+    )
+
+    let releaseSlow!: (v: string) => void
+    let slowPromise = Promise.resolve('slow-0')
+    const slow = store.getOrCreate('slow', () =>
+      new LoaderHandle<string>({
+        store, key: 'slow',
+        loader: async (ctx) => {
+          ctx.depend({ kind: 'table', table: 'blocks' })
+          return slowPromise
+        },
+      }),
+    )
+
+    const fired: string[] = []
+    const slowFired: string[] = []
+    fast.subscribe(v => fired.push(v))
+    slow.subscribe(v => slowFired.push(v))
+    await vi.waitFor(() => expect(fired).toEqual(['v0']))
+    slowFired.length = 0
+    fired.length = 0
+
+    // Change 1 matches both → batch. `fast` settles with 'v1' and queues its
+    // notify behind the barrier; `slow` is gated open.
+    slowPromise = new Promise<string>(r => { releaseSlow = r })
+    store.invalidate({ tables: ['blocks'] })
+    await Promise.resolve()
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(fired).toEqual([])          // held by the barrier
+    expect(fast.peek()).toBe('v1')
+
+    // Change 2 matches ONLY `fast` → no batch → notifies as soon as it settles.
+    store.invalidate({ rowIds: ['fast-only'] })
+    await vi.waitFor(() => expect(fired).toEqual(['v2']))
+    expect(fast.peek()).toBe('v2')
+
+    // Releasing the slow loader closes the barrier and drains its queue.
+    // FIFO fence rather than a microtask count: the queue drains in FINISH
+    // order and `slow` is the member being released, so its thunk is last.
+    // Seeing slow's delivery proves fast's queued thunk has already had its
+    // turn — without it, the assertions below would be checking for an
+    // absence before the thing that produces it could have run.
+    releaseSlow('slow-1')
+    await vi.waitFor(() => expect(slowFired).toEqual(['slow-1']))
+
+    // 'v1' was superseded before it was ever published; publishing it now
+    // would walk a listener backwards. And 'v2' is already what the listener
+    // last saw, so the barrier has nothing left to say — `Handle.subscribe`
+    // fires on structural change only.
+    expect(fired).toEqual(['v2'])
+    expect(fast.peek()).toBe('v2')
+  })
+
+  it('two overlapping barriers: the outer flush drops its superseded slot', async () => {
+    // Same hazard without any unbatched notify in the mix: a SECOND
+    // multi-handle invalidation lands while the first barrier is still open,
+    // so the same handle has a thunk queued in two batches at once. The inner
+    // batch closes first and publishes a2; the outer must not then republish
+    // the a1 it was queued with.
+    const store = makeStore(60_000)
+
+    const aValues = ['a0', 'a1', 'a2']
+    let aCall = 0
+    const a = store.getOrCreate('a', () =>
+      new LoaderHandle<string>({
+        store, key: 'a',
+        loader: async (ctx) => {
+          ctx.depend({ kind: 'table', table: 'blocks' })
+          return aValues[Math.min(aCall++, aValues.length - 1)]
+        },
+      }),
+    )
+
+    // Two gated siblings so the SECOND invalidate still matches >1 handle
+    // (and therefore opens its own batch) while the first barrier is open.
+    const gated = (key: string, initial: string) => {
+      let release!: (v: string) => void
+      let promise = Promise.resolve(initial)
+      const handle = store.getOrCreate(key, () =>
+        new LoaderHandle<string>({
+          store, key,
+          loader: async (ctx) => { ctx.depend({ kind: 'table', table: 'blocks' }); return promise },
+        }),
+      )
+      return {
+        handle,
+        gate() { promise = new Promise<string>(r => { release = r }) },
+        release(v: string) { release(v) },
+      }
+    }
+    const b = gated('b', 'b0')
+    const c = gated('c', 'c0')
+
+    const aFired: string[] = []
+    const cFired: string[] = []
+    a.subscribe(v => aFired.push(v))
+    b.handle.subscribe(() => {})
+    c.handle.subscribe(v => cFired.push(v))
+    await vi.waitFor(() => expect(aFired).toEqual(['a0']))
+    aFired.length = 0
+    cFired.length = 0
+
+    // Invalidate 1 → batch1 over {a, b, c}. `a` settles a1 and queues; b/c gated.
+    b.gate()
+    c.gate()
+    store.invalidate({ tables: ['blocks'] })
+    await vi.waitFor(() => expect(a.peek()).toBe('a1'))
+    expect(aFired).toEqual([])
+
+    // Invalidate 2 while batch1 is open → batch2 over the same three. b/c are
+    // mid-load and release their slots; `a` re-runs into batch2 and settles a2.
+    store.invalidate({ tables: ['blocks'] })
+    await vi.waitFor(() => expect(aFired).toEqual(['a2']))
+
+    // Close batch1. Its queued `a` thunk is the stale one.
+    c.release('c1')
+    b.release('b1')
+    await vi.waitFor(() => expect(cFired).toEqual(['c1']))
+
+    expect(aFired).toEqual(['a2'])
+    expect(a.peek()).toBe('a2')
+  })
+
+  it('an older barrier does not publish a settle the loader path suppressed as dirty', async () => {
+    const store = makeStore(60_000)
+
+    // `a` snapshots the world at loader START — the way a SQL read
+    // snapshots state before a later commit lands — so a run that is
+    // invalidated mid-flight settles with provably pre-change data.
+    let world = 'w0'
+    let aRun = 0
+    const gates: Array<Promise<void> | undefined> = []
+    const releases: Array<(() => void) | undefined> = []
+    const gate = (run: number) => {
+      gates[run] = new Promise<void>(r => { releases[run] = r })
+    }
+    const a = store.getOrCreate('a', () =>
+      new LoaderHandle<string>({
+        store, key: 'a',
+        loader: async (ctx) => {
+          const run = aRun++
+          ctx.depend({ kind: 'row', id: 'a-only' })
+          ctx.depend({ kind: 'table', table: 'blocks' })
+          const snapshot = world
+          const g = gates[run]
+          if (g) await g
+          return snapshot
+        },
+      }),
+    )
+
+    let releaseSlow!: (v: string) => void
+    let slowPromise = Promise.resolve('slow-0')
+    const slow = store.getOrCreate('slow', () =>
+      new LoaderHandle<string>({
+        store, key: 'slow',
+        loader: async (ctx) => {
+          ctx.depend({ kind: 'table', table: 'blocks' })
+          return slowPromise
+        },
+      }),
+    )
+
+    const fired: string[] = []
+    const slowFired: string[] = []
+    a.subscribe(v => fired.push(v))
+    slow.subscribe(v => slowFired.push(v))
+    await vi.waitFor(() => expect(fired).toEqual(['w0']))
+    fired.length = 0
+    slowFired.length = 0
+
+    // Change 1 matches both → batch1. `a` settles 'w1' and queues behind
+    // the barrier; `slow` holds it open.
+    world = 'w1'
+    slowPromise = new Promise<string>(r => { releaseSlow = r })
+    store.invalidate({ tables: ['blocks'] })
+    await vi.waitFor(() => expect(a.peek()).toBe('w1'))
+    expect(fired).toEqual([])
+
+    // Change 2 targets `a` alone (row dep → matched.length === 1, no batch).
+    // Gate that run so change 3 can land while it is in flight.
+    gate(2)
+    world = 'w2'
+    store.invalidate({ rowIds: ['a-only'] })
+    await vi.waitFor(() => expect(a.status()).toBe('ready')) // still 'ready', loading in place
+
+    // Change 3 lands mid-load → pendingReinvalidate. Run 2's 'w2' is now
+    // known suspect: the world already moved to 'w3'.
+    world = 'w3'
+    store.invalidate({ rowIds: ['a-only'] })
+
+    // Let run 2 settle dirty. It writes this.value='w2' but deliberately
+    // does NOT notify, and queues a clean rerun (run 3) — which we gate so
+    // the older barrier gets to flush first.
+    gate(3)
+    releases[2]!()
+    await vi.waitFor(() => expect(a.peek()).toBe('w2'))
+    await vi.waitFor(() => expect(aRun).toBe(4)) // rerun started, gated
+
+    // Close batch1. `slow`'s own delivery is the FIFO fence: the queue
+    // drains in finish order, so seeing it proves `a`'s thunk already ran.
+    releaseSlow('slow-1')
+    await vi.waitFor(() => expect(slowFired).toEqual(['slow-1']))
+
+    // 'w2' is the snapshot the settle path hid. Publishing it hands the
+    // direct-value consumers a rebuild from data already known wrong.
+    // The metric proves the slot EXISTED and was dropped, rather than the
+    // barrier never having held one.
+    expect(fired).toEqual([])
+    expect(store.metrics.snapshot().notifiesSupersededInBatch).toBe(1)
+
+    releases[3]!()
+    await vi.waitFor(() => expect(fired).toEqual(['w3']))
+  })
+
+  it('an older barrier defers a value a newer, still-open barrier owns', async () => {
+    const store = makeStore(60_000)
+
+    // Overlapping dep sets: change 1 → {a, b}, change 2 → {a, c}.
+    const order: string[] = []
+    let aWorld = 'a0'
+    const a = store.getOrCreate('a', () =>
+      new LoaderHandle<string>({
+        store, key: 'a',
+        loader: async (ctx) => {
+          ctx.depend({ kind: 'row', id: 's1' })
+          ctx.depend({ kind: 'row', id: 's2' })
+          return aWorld
+        },
+      }),
+    )
+    const gated = (key: string, dep: string, initial: string) => {
+      let release!: (v: string) => void
+      let promise = Promise.resolve(initial)
+      const handle = store.getOrCreate(key, () =>
+        new LoaderHandle<string>({
+          store, key,
+          loader: async (ctx) => { ctx.depend({ kind: 'row', id: dep }); return promise },
+        }),
+      )
+      return {
+        handle,
+        gate() { promise = new Promise<string>(r => { release = r }) },
+        release(v: string) { release(v) },
+      }
+    }
+    const b = gated('b', 's1', 'b0')
+    const c = gated('c', 's2', 'c0')
+
+    a.subscribe(v => order.push(`a:${v}`))
+    b.handle.subscribe(v => order.push(`b:${v}`))
+    c.handle.subscribe(v => order.push(`c:${v}`))
+    await vi.waitFor(() => expect(order).toHaveLength(3))
+    order.length = 0
+
+    // Invalidate 1 → batch1 over {a, b}. `a` settles a1 and queues; b gated.
+    b.gate()
+    aWorld = 'a1'
+    store.invalidate({ rowIds: ['s1'] })
+    await vi.waitFor(() => expect(a.peek()).toBe('a1'))
+    expect(order).toEqual([])
+
+    // Invalidate 2 → batch2 over {a, c}, while batch1 is still open.
+    // `a` re-runs into batch2 and settles a2; c gated.
+    c.gate()
+    aWorld = 'a2'
+    store.invalidate({ rowIds: ['s2'] })
+    await vi.waitFor(() => expect(a.peek()).toBe('a2'))
+
+    // Close batch1 (b settles). Only b belongs to this invalidation — a2 is
+    // still owned by the open batch2 and must not be split out of it.
+    b.release('b1')
+    await vi.waitFor(() => expect(order).toContain('b:b1'))
+    expect(order).toEqual(['b:b1'])
+    expect(store.metrics.snapshot().notifiesSupersededInBatch).toBe(1)
+
+    // Close batch2: a2 and c1 land together, one commit for one invalidation.
+    c.release('c1')
+    await vi.waitFor(() => expect(order).toContain('c:c1'))
+    expect(order).toEqual(['b:b1', 'a:a2', 'c:c1'])
+  })
 })
 
 describe('Mid-load invalidations are not dropped (reviewer P2)', () => {
@@ -1621,6 +1926,7 @@ describe('HandleStore metrics counters', () => {
       midLoadInvalidations: 0,
       reloadsAfterSettle: 0,
       notifiesSkippedByDiff: 0,
+      notifiesSupersededInBatch: 0,
       notifiesFired: 0,
       loaderInvalidationsDeferred: 0,
       depsDeduplicatedAtRegistration: 0,

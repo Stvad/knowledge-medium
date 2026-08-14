@@ -138,6 +138,12 @@ interface RegisteredHandle {
  *      in its own microtask. The dominant indent/move case is ready
  *      handles, so the batch covers the symptom; mid-load is a
  *      best-effort fallback.
+ *    - A barrier can outlive its own members' next re-resolve, so a queued
+ *      slot is not automatically still the truth at flush time. Each slot
+ *      carries the stamp of the settle that queued it and is DROPPED if a
+ *      later settle of that handle has landed since — see
+ *      `LoaderHandle.flushQueuedNotify` for the three ways that happens
+ *      and why dropping loses no delivery.
  */
 class NotifyBatch {
   private remaining = 0
@@ -228,6 +234,13 @@ export class HandleStoreMetrics {
   /** `notify(value)` calls where the structural diff (spec §9.4)
    *  determined the value was unchanged → listener walk skipped. */
   notifiesSkippedByDiff = 0
+  /** Notifies queued behind a `NotifyBatch` barrier that were dropped at
+   *  flush because a later run of the same handle had settled in the
+   *  meantime — the queued slot no longer speaks for the handle. See
+   *  `LoaderHandle.flushQueuedNotify`. Non-zero is normal under
+   *  overlapping invalidations; a large value means barriers are being
+   *  held open across many re-resolves of their own members. */
+  notifiesSupersededInBatch = 0
   /** `notify(value)` calls that actually walked the listener set. */
   notifiesFired = 0
   /** Invalidations that hit a handle with zero subscribers and no
@@ -256,6 +269,7 @@ export class HandleStoreMetrics {
     this.midLoadInvalidations = 0
     this.reloadsAfterSettle = 0
     this.notifiesSkippedByDiff = 0
+    this.notifiesSupersededInBatch = 0
     this.notifiesFired = 0
     this.loaderInvalidationsDeferred = 0
     this.depsDeduplicatedAtRegistration = 0
@@ -273,6 +287,7 @@ export class HandleStoreMetrics {
       midLoadInvalidations: this.midLoadInvalidations,
       reloadsAfterSettle: this.reloadsAfterSettle,
       notifiesSkippedByDiff: this.notifiesSkippedByDiff,
+      notifiesSupersededInBatch: this.notifiesSupersededInBatch,
       notifiesFired: this.notifiesFired,
       loaderInvalidationsDeferred: this.loaderInvalidationsDeferred,
       depsDeduplicatedAtRegistration: this.depsDeduplicatedAtRegistration,
@@ -476,6 +491,15 @@ export class LoaderHandle<T> implements Handle<T>, RegisteredHandle {
    *  coming back to life — so every site that reads it as "this run was
    *  cancelled" stays correct. */
   private disposed = false
+
+  /** Monotonic per-handle stamp, bumped once by every SUCCESSFUL loader
+   *  settle (clean or dirty). A notify queued behind a `NotifyBatch`
+   *  barrier carries the stamp of the run that queued it, and the flush
+   *  drops it if the stamp is no longer current — see
+   *  `flushQueuedNotify`. Only the success path bumps: a failed load
+   *  leaves `value` untouched, so a slot queued before it still speaks
+   *  for the handle. */
+  private settleSeq = 0
 
   /** Set when `invalidate()` fires while a load is in flight. The
    *  inflight load may have already read stale data from SQL before the
@@ -783,6 +807,11 @@ export class LoaderHandle<T> implements Handle<T>, RegisteredHandle {
         }
         this.changesDuringLoad = []
         const needsPostSettleReload = this.pendingReinvalidate && !this.disposed
+        // This settle supersedes every notify still queued behind an open
+        // barrier from an EARLIER run of this handle: whatever those slots
+        // were going to say, this run has since said something newer (or,
+        // when dirty, has queued the rerun that will).
+        const seq = ++this.settleSeq
         this.value = value
         this.status_ = 'ready'
         this.error = undefined
@@ -798,14 +827,19 @@ export class LoaderHandle<T> implements Handle<T>, RegisteredHandle {
           // The promise returned by this load may resolve with the value it
           // read, but subscribers should not rebuild from a snapshot already
           // known suspect. The queued reload below will publish the clean
-          // value if it differs from the last value subscribers saw.
+          // value if it differs from the last value subscribers saw. The
+          // `seq` bump above is what keeps THIS run's suspect value out of
+          // an older barrier's flush too.
           batch?.finish(null)
         } else if (willNotify) {
           // When this load was kicked off by a batched invalidate,
           // queue the notify so it lands in the same microtask as the
           // other batch members' notifies (one React commit). Without
           // a batch, fire immediately as before.
-          if (batch) batch.finish(() => this.notify(value))
+          //
+          // The thunk carries this run's stamp and value; the flush drops
+          // it if a later run has settled since — see `flushQueuedNotify`.
+          if (batch) batch.finish(() => this.flushQueuedNotify(seq, value))
           else this.notify(value)
         } else {
           // Equality match against prior value: notify suppressed.
@@ -1038,6 +1072,64 @@ export class LoaderHandle<T> implements Handle<T>, RegisteredHandle {
   }
 
   // ──── private ────
+
+  /** Flush a notify that was queued behind a `NotifyBatch` barrier.
+   *
+   *  A barrier can stay open across LATER runs of one of its own members:
+   *  that reload is not a member of the open batch (it either joins a newer
+   *  batch or runs unbatched), so by flush time the slot may no longer speak
+   *  for the handle. `seq` is the stamp of the run that queued this slot, and
+   *  a slot whose stamp is stale is DROPPED rather than published. The three
+   *  ways a slot goes stale, each of which is exactly one later settle:
+   *
+   *   1. The later run notified already (unbatched, or an inner batch that
+   *      closed first). Publishing this slot's value would walk a listener
+   *      backwards — v2 followed by the queued v1 — and since `notify()` also
+   *      writes `notifiedValue`, the structural-diff baseline would be left
+   *      disagreeing with the value the handle actually holds, with nothing
+   *      to correct it until the next invalidation.
+   *   2. The later run settled DIRTY (`needsPostSettleReload`): it wrote
+   *      `value` for peek/load callers but deliberately withheld the notify
+   *      because the snapshot is known suspect, and queued a clean rerun that
+   *      will publish. Neither this slot's own vintage nor the suspect value
+   *      is the thing to hand a subscriber; the rerun's notify is.
+   *   3. The later run is queued in a NEWER, still-open barrier. Publishing
+   *      here would split that invalidation across two commits — its other
+   *      members are still gated — which is the exact intermediate state
+   *      `NotifyBatch` exists to prevent. Deferring to the newer barrier
+   *      keeps them together.
+   *
+   *  Dropping (rather than publishing latest-known) is safe because a stamp
+   *  only goes stale via a later SUCCESSFUL settle, and every such settle
+   *  either notifies itself, is diff-suppressed as equal to what listeners
+   *  already have, or schedules the rerun that will. The one place it defers
+   *  to another barrier is (3), and that barrier's own flush is what
+   *  publishes. A failed load does NOT bump the stamp, so a slot queued
+   *  before an error still publishes the value the handle still holds.
+   *
+   *  Why not publish anyway and let the structural diff sort it out: the
+   *  consumers that read the pushed argument instead of re-reading `peek()`
+   *  — the grouped-backlinks bridge, `Repo.queryBlocks`'s freshInitial path,
+   *  `PanelLayoutProjection` — rebuild from it, so a redundant or premature
+   *  delivery is a redundant or premature rebuild, not a free no-op.
+   *
+   *  A current stamp also makes the flush-time structural diff this method
+   *  used to re-run dead: `notifiedValue` moves only inside `notify()`, and
+   *  every caller of `notify()` is either an unbatched settle (which bumps
+   *  the stamp) or another slot's flush (a different run, hence a different
+   *  stamp) — so a slot that survives the stamp check cannot be holding a
+   *  value the listeners already have. Publishing the STAMPED value rather
+   *  than `this.value` is equivalent for the same reason (only a successful
+   *  settle writes `value`, and it bumps the stamp); the stamped value is
+   *  used because it keeps the slot a self-contained record of one run. */
+  private flushQueuedNotify(seq: number, value: T): void {
+    if (this.disposed) return
+    if (seq !== this.settleSeq) {
+      this.store.metrics.notifiesSupersededInBatch++
+      return
+    }
+    this.notify(value)
+  }
 
   private notify(value: T): void {
     if (this.listeners.size === 0) return
