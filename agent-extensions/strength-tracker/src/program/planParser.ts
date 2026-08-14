@@ -357,6 +357,46 @@ const parseSessions = (
 export const isReentryTier = (node: PlanNode): boolean =>
   nodeTypes(node).includes(REENTRY_TIER_TYPE)
 
+/** What the table has to be, as opposed to what any one row has to say.
+ *
+ *  `tierFor` sorts by `maxGapDays` and takes the first row the gap fits
+ *  under. That is only "the shallowest tier deep enough" while the table is a
+ *  partition of gap-space into ESCALATING severity — and `strength:maxGapDays`
+ *  is an ordinary editable number, so it is one keystroke from not being one.
+ *  Each fault below is silent where it matters most, on the longest breaks:
+ *
+ *   - Bounds that do not strictly increase in severity order hand a longer
+ *     gap to a LIGHTER row. Set 1–2w to 35 while 2–4w stays 34 and a 35-day
+ *     break gets "same weights" while a 20-day break gets 90%.
+ *   - Equal bounds are the same fault with the sort's stability deciding it:
+ *     the row earlier in the table answers every gap the other could have.
+ *   - A finite last bound leaves gaps beyond it with NO tier. `tierFor`
+ *     returns undefined, `detectPendingLayoff` reads that as "no layoff", and
+ *     a year off then prescribes normal progression from pre-break weights —
+ *     the deepest break getting the lightest answer.
+ *
+ *  Severity order is the built-in order, which is why a row re-states one of
+ *  those five rather than inventing its own: the table always has the same
+ *  rows in the same order, and only their numbers move. */
+const tableProblems = (table: readonly ReentryTier[]): string[] => {
+  const problems = table.flatMap((tier, i) => {
+    const previous = table[i - 1]
+    if (previous === undefined || previous.maxGapDays < tier.maxGapDays) return []
+    return [
+      `"${previous.id}" ends at ${previous.maxGapDays} days but the deeper "${tier.id}" `
+      + `ends at ${tier.maxGapDays}, so a longer break would get the lighter row`,
+    ]
+  })
+  const deepest = table.at(-1)
+  if (deepest !== undefined && deepest.maxGapDays !== Infinity) {
+    problems.push(
+      `the deepest row "${deepest.id}" ends at ${deepest.maxGapDays} days, so a longer break `
+      + 'matches no row at all and is read as no layoff',
+    )
+  }
+  return problems
+}
+
 interface TierRule {
   ok: (value: number) => boolean
   expected: string
@@ -445,6 +485,11 @@ const parseReentry = (root: PlanNode, warnings: string[]): ReentryTier[] | undef
 
   const byId = new Map(DEFAULT_CONFIG.reentry.map(tier => [tier.id, tier]))
   let matched = 0
+  // Structural faults in the assembled TABLE, as opposed to a value one row
+  // got wrong. Collected rather than warned inline, because any one of them
+  // means the table cannot be trusted as a whole — see `tableProblems`.
+  const problems: string[] = []
+  const claimed = new Set<string>()
 
   for (const row of rows) {
     const text = plainText(row.content)
@@ -459,6 +504,16 @@ const parseReentry = (root: PlanNode, warnings: string[]): ReentryTier[] | undef
       warnings.push(`Re-entry row "${text}" has no \`${FIELD.tierId}\` — ignored.`)
       continue
     }
+    // Two rows claiming one tier is not a value to repair. The map holds one
+    // entry per id, so the later row would REPLACE the earlier wholesale —
+    // and since an absent field is a statement here, a second `2-4w` row that
+    // only edits the bound also resets the first row's stated percentage to
+    // neutral. Outline order would be deciding the load.
+    if (claimed.has(id)) {
+      problems.push(`two rows both state \`${FIELD.tierId}\` "${id}"`)
+      continue
+    }
+    claimed.add(id)
     // A row RE-STATES one of the built-in tiers; it cannot invent one.
     //
     // Inventing tiers was in the first draft of this and it earned its removal:
@@ -555,25 +610,20 @@ const parseReentry = (root: PlanNode, warnings: string[]): ReentryTier[] | undef
 
   if (matched === 0) return undefined
   const table = [...byId.values()]
+  problems.push(...tableProblems(table))
 
-  // Two rows ending on the same day make one of them dead. `tierFor` sorts by
-  // the bound and takes the FIRST match, and `Array#sort` is stable, so the
-  // row earlier in this list wins every gap the other could have answered —
-  // silently, and in the direction of whichever row happens to come first
-  // rather than whichever is deeper. Editing `strength:maxGapDays` is how a
-  // row ends up here (set 1–2w to 34 and it swallows 2–4w whole), which is a
-  // plausible edit with an invisible outcome, so it is worth naming.
-  const byBound = new Map<number, string>()
-  for (const tier of table) {
-    const first = byBound.get(tier.maxGapDays)
-    if (first === undefined) byBound.set(tier.maxGapDays, tier.id)
-    else {
-      warnings.push(
-        `Re-entry rows "${first}" and "${tier.id}" both end at ${tier.maxGapDays} days, so `
-        + `"${tier.id}" can never be selected — every gap that reaches it is answered by `
-        + `"${first}" first. Give them different \`${FIELD.maxGapDays}\` bounds.`,
-      )
-    }
+  // One malformed table is not used at all. Every fault below makes
+  // `tierFor` answer a gap with the wrong row rather than fail, and the
+  // wrong row is silent — no banner says "this was supposed to be a 60% cut".
+  // Repairing would mean guessing which of two contradictory statements the
+  // author meant, so it reverts to the built-in table, which satisfies all of
+  // these by construction, and says exactly what it found.
+  if (problems.length > 0) {
+    warnings.push(
+      `The re-entry table cannot be used as written (${problems.join('; ')}) — `
+      + 'keeping the built-in table until it is fixed.',
+    )
+    return undefined
   }
   return table
 }

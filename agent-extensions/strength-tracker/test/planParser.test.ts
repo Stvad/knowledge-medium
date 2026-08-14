@@ -341,17 +341,48 @@ describe('parsePlan', () => {
     expect(parsePlan(plan).reentry!.find(t => t.id === '1-2w')?.maxGapDays).toBe(12)
   })
 
-  it('warns when one row ends on the same day as another, making it unreachable', () => {
-    // `tierFor` sorts by the bound and takes the first match, and the sort is
-    // stable — so the row earlier in the table answers every gap the other
-    // could have, whichever is deeper.
+  it('refuses a table whose bounds stop escalating', () => {
+    // Set 1–2w past 2–4w and `tierFor` — which takes the shallowest row the
+    // gap fits under — hands the LONGER break the lighter row. Equal bounds
+    // are the same fault decided by the sort's stability, so one check covers
+    // both.
     const plan = node('**Plan**', [
       node('**Re-entry protocol**', [
-        tier('1–2 weeks off → …', {[FIELD.tierId]: '1-2w', [FIELD.maxGapDays]: 34}),
+        tier('1–2 weeks off → …', {[FIELD.tierId]: '1-2w', [FIELD.maxGapDays]: 35}),
       ]),
     ])
     const overlay = parsePlan(plan)
-    expect(overlay.warnings.some(w => /1-2w/.test(w) && /2-4w/.test(w) && /34/.test(w))).toBe(true)
+    expect(overlay.warnings.some(w => /1-2w/.test(w) && /2-4w/.test(w))).toBe(true)
+    expect(overlay.reentry).toBeUndefined()
+  })
+
+  it('refuses a table whose deepest row stops covering', () => {
+    // A finite last bound leaves a longer gap matching NO row; `tierFor`
+    // returns undefined and `detectPendingLayoff` reads that as no layoff, so
+    // a year off would prescribe normal progression off pre-break weights.
+    const plan = node('**Plan**', [
+      node('**Re-entry protocol**', [
+        tier('2+ months → …', {[FIELD.tierId]: '2mo+', [FIELD.maxGapDays]: 365}),
+      ]),
+    ])
+    const overlay = parsePlan(plan)
+    expect(overlay.warnings.some(w => /2mo\+/.test(w) && /365/.test(w))).toBe(true)
+    expect(overlay.reentry).toBeUndefined()
+  })
+
+  it('refuses a table where two rows claim the same tier', () => {
+    // The map holds one row per id, so the later would replace the earlier
+    // wholesale — and an absent field being a statement, a second row that
+    // only edits the bound resets the first row's stated percentage.
+    const plan = node('**Plan**', [
+      node('**Re-entry protocol**', [
+        tier('2–4 weeks → 90%', {[FIELD.tierId]: '2-4w', [FIELD.layoffPct]: 0.9}),
+        tier('2–4 weeks → …', {[FIELD.tierId]: '2-4w', [FIELD.maxGapDays]: 30}),
+      ]),
+    ])
+    const overlay = parsePlan(plan)
+    expect(overlay.warnings.some(w => /2-4w/.test(w) && new RegExp(FIELD.tierId).test(w))).toBe(true)
+    expect(overlay.reentry).toBeUndefined()
   })
 
   it('refuses a rep window that does not rise', () => {
