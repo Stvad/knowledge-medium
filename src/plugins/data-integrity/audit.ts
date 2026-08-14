@@ -517,6 +517,7 @@ const runContentLinkRecomputeCheck = async (
   let staleRefs = 0
   let opaqueContentRefBlocks = 0
   let opaqueContentRefs = 0
+  let opaqueScanned = 0
   let truncated = false
   const strippedSample: Array<{ id: string; marks: number; content_preview: string }> = []
   const staleSample: Array<{ id: string; stale: string[]; content_preview: string }> = []
@@ -585,32 +586,45 @@ const runContentLinkRecomputeCheck = async (
   // type — cheap because that set is a handful of ids, and verified properly
   // in JS afterwards (the probe can over-match; it must never under-match).
   for (const type of opaqueTypes) {
-    const rows = await db.getAll<{ id: string; properties_json: string; references_json: string }>(
-      `SELECT id, properties_json, references_json FROM blocks
-       WHERE deleted=0 AND workspace_id=?
-         AND properties_json LIKE '%' || ? || '%'
-         AND references_json != '[]'
-       ORDER BY id LIMIT ${BATCH}`,
-      [workspaceId, `"${type}"`],
-    )
-    for (const row of rows) {
-      if (!hasOpaqueContent(
-        { properties: safeJsonParse<Record<string, unknown>>(row.properties_json, {}) },
-        opaqueTypes,
-      )) continue
-      let stored: StoredRef[]
-      try {
-        stored = JSON.parse(row.references_json)
-      } catch {
-        continue
+    // Keyset-paged like the scan above. A single `LIMIT ${BATCH}` would cap
+    // this silently at the first page and report `ok` for a stale edge on
+    // any later row — in a check whose whole justification is that nothing
+    // else can see those edges.
+    let opaqueLastId = ''
+    for (;;) {
+      const rows = await db.getAll<{ id: string; properties_json: string; references_json: string }>(
+        `SELECT id, properties_json, references_json FROM blocks
+         WHERE deleted=0 AND workspace_id=?
+           AND properties_json LIKE '%' || ? || '%'
+           AND references_json != '[]'
+           AND id > ?
+         ORDER BY id LIMIT ${BATCH}`,
+        [workspaceId, `"${type}"`, opaqueLastId],
+      )
+      if (rows.length === 0) break
+        for (const row of rows) {
+        if (!hasOpaqueContent(
+          { properties: safeJsonParse<Record<string, unknown>>(row.properties_json, {}) },
+          opaqueTypes,
+        )) continue
+        let stored: StoredRef[]
+        try {
+          stored = JSON.parse(row.references_json)
+        } catch {
+          continue
+        }
+        const lingering = stored.filter((r) => r && !r.sourceField)
+        if (lingering.length === 0) continue
+        opaqueContentRefBlocks += 1
+        opaqueContentRefs += lingering.length
+        if (opaqueSample.length < sampleLimit) {
+          opaqueSample.push({ id: row.id, refs: lingering.length })
+        }
       }
-      const lingering = stored.filter((r) => r && !r.sourceField)
-      if (lingering.length === 0) continue
-      opaqueContentRefBlocks += 1
-      opaqueContentRefs += lingering.length
-      if (opaqueSample.length < sampleLimit) {
-        opaqueSample.push({ id: row.id, refs: lingering.length })
-      }
+      opaqueScanned += rows.length
+      opaqueLastId = rows[rows.length - 1].id
+      if (rows.length < BATCH) break
+      if (opaqueScanned >= contentCap) { truncated = true; break }
     }
   }
 

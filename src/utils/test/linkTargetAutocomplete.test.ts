@@ -713,6 +713,33 @@ describe('searchBlocksAcrossSources (searchSourcesFacet merge point)', () => {
     expect(results.map(block => block.id)).toEqual(['note'])
   })
 
+  // `freshestCandidatePayload` exists because a source may return a stale
+  // index snapshot — so the authoritative check cannot trust the payload's
+  // own `properties`. Here the source hands back a pre-tag copy of a block
+  // that is opaque in the DB.
+  it('filters on LIVE types, not the candidate payload\'s own properties', async () => {
+    await create({id: 'ext', content: 'dating source'})
+    const stalePayload = (await env.repo.load('ext'))!   // captured as prose
+    await env.repo.tx(
+      tx => tx.setProperty('ext', typesProp, ['extension']),
+      {scope: ChangeScope.BlockDefault},
+    )
+    const stale: SearchSourceContribution = {
+      id: 'test.stale-index',
+      search: async () => [{block: stalePayload, score: 100}],
+    }
+    env.repo.setFacetRuntime(resolveFacetRuntimeSync([
+      kernelDataExtension,
+      searchSourcesFacet.of(stale, {source: 'test'}),
+    ]))
+
+    const results = await searchBlocksAcrossSources(env.repo, {
+      workspaceId: WS, query: 'dating', limit: 10,
+    })
+
+    expect(results).toEqual([])
+  })
+
   // The recovery window must always EXCEED the fetch that came up short.
   // A fixed ceiling satisfies that only below the ceiling: `fetchLimit`
   // floors at `limit`, so at limit 201 the old ceiling-valued window was

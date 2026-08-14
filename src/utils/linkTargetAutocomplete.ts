@@ -13,6 +13,8 @@ import { buildFilterPrefixes, rankCandidates } from '@/utils/fuzzyRank.js'
  *  filter is permissive (token-prefix LIKE), so over-fetching gives the
  *  ranker enough material to find typo / out-of-order matches even when
  *  the display limit is small. */
+const EMPTY_OPAQUE_TYPES: ReadonlySet<string> = new Set()
+
 const ALIAS_CANDIDATE_MULTIPLIER = 4
 const ALIAS_CANDIDATE_CEILING = 200
 
@@ -544,11 +546,21 @@ export const searchBlocksAcrossSources = async (
     ? [...sources.values()]
     : [coreContentSearchSource]
 
+  // Ask every source for HEADROOM, not for `limit`. The opaque filter below
+  // runs after each source has already applied its own limit, so a source
+  // that honours `limit: 1` and whose top hit is opaque hands back nothing
+  // recoverable — core's widening only covers core's own window. Sources
+  // are documented as free to return more than asked; this makes the
+  // request itself generous instead of relying on that.
+  const sourceArgs: SearchSourceArgs = {
+    ...args,
+    limit: Math.max(args.limit, Math.min(args.limit * ALIAS_CANDIDATE_MULTIPLIER, ALIAS_CANDIDATE_CEILING)),
+  }
   const failures: {index: number; error: unknown}[] = []
   const candidateLists = await Promise.all(
     contributions.map(async (source, index) => {
       try {
-        return await source.search(repo, args)
+        return await source.search(repo, sourceArgs)
       } catch (error) {
         console.error(`[searchBlocksAcrossSources] source "${source.id}" threw`, error)
         failures.push({index, error})
@@ -572,9 +584,27 @@ export const searchBlocksAcrossSources = async (
   // to remember is a contract that gets forgotten. The core source filters
   // too, but only to decide whether its own window needs widening; this is
   // the authoritative pass.
-  const opaqueTypes = repo.opaqueContentTypes
-  const merged = candidateLists.flat()
-    .filter(candidate => !hasOpaqueContent(candidate.block, opaqueTypes))
+  //
+  // Against LIVE types, not the candidate's own `properties`: a source may
+  // legitimately return a stale index snapshot (that is exactly why
+  // `freshestCandidatePayload` exists), and a payload from before the block
+  // gained an opaque type would sail through a check of its own bag. One
+  // batched `block_types` read for the whole merged set — the same index
+  // `loadTypeIdsByBlock` uses, so it is `ids.length` seeks, not a scan.
+  // `?? EMPTY` because callers stub `Repo` (this helper only needs `query`
+  // and the facet runtime); a stub without the getter means "nothing is
+  // opaque", not a crash inside search.
+  const opaqueTypes = repo.opaqueContentTypes ?? EMPTY_OPAQUE_TYPES
+  const flat = candidateLists.flat()
+  const liveTypes = opaqueTypes.size === 0
+    ? new Map<string, string[]>()
+    : await loadTypeIdsByBlock(
+      repo,
+      args.workspaceId,
+      [...new Set(flat.map(candidate => candidate.block.id))],
+    )
+  const merged = opaqueTypes.size === 0 ? flat : flat.filter(candidate =>
+    !(liveTypes.get(candidate.block.id) ?? []).some(type => opaqueTypes.has(type)))
 
   const byId = new Map<string, SearchSourceCandidate>()
   for (const candidate of merged) {
