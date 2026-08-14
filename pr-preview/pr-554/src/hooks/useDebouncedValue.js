@@ -1,0 +1,2 @@
+import{useEffect as e,useState as t}from"react";import{c as n}from"react/compiler-runtime";function r(r,i){let a=n(4),[o,s]=t(r),c,l;return a[0]!==i||a[1]!==r?(c=()=>{let e=setTimeout(()=>s(r),i);return()=>clearTimeout(e)},l=[r,i],a[0]=i,a[1]=r,a[2]=c,a[3]=l):(c=a[2],l=a[3]),e(c,l),o}export{r as useDebouncedValue};
+//# sourceMappingURL=useDebouncedValue.js.map
