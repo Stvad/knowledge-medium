@@ -427,6 +427,16 @@ const blockSearchTextScore = (content: string, query: string): number => {
  *  `kernelDataExtension.ts` so it's present on every `Repo` (kernel-only
  *  or full app runtime), matching how the other kernel query/mutator
  *  defaults are wired. */
+/** Second-pass window when opaque rows crowded out the first. Headroom
+ *  RELATIVE to what was just fetched, never a fixed ceiling: `fetchLimit`
+ *  floors at `limit`, so for any `limit >= ALIAS_CANDIDATE_CEILING` (the
+ *  agent search command forwards an unbounded one) a ceiling-valued window
+ *  is no bigger than the fetch that just came up short — the recovery would
+ *  be dead exactly where the window is largest. Exported because that is an
+ *  arithmetic property, testable without seeding 200 rows. */
+export const widenedFetchLimit = (fetchLimit: number): number =>
+  Math.max(ALIAS_CANDIDATE_CEILING, fetchLimit * 2)
+
 export const coreContentSearchSource: SearchSourceContribution = {
   id: 'core.content',
   search: async (repo, {workspaceId, query, limit, recentBlockIds}) => {
@@ -461,9 +471,10 @@ export const coreContentSearchSource: SearchSourceContribution = {
     // caller sees no content result at all, with no way to page past them.
     // Widen once to the ceiling when the window came back short AND was
     // actually full (a short read means the corpus is exhausted, not crowded).
-    if (candidates.length < limit && rows.length >= fetchLimit && fetchLimit < ALIAS_CANDIDATE_CEILING) {
+    const widenedLimit = widenedFetchLimit(fetchLimit)
+    if (candidates.length < limit && rows.length >= fetchLimit && widenedLimit > fetchLimit) {
       const widened = await repo.query
-        .searchByContent({workspaceId, query, limit: ALIAS_CANDIDATE_CEILING}).load()
+        .searchByContent({workspaceId, query, limit: widenedLimit}).load()
       candidates = eligible(widened)
     }
     return candidates

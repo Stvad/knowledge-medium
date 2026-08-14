@@ -12,6 +12,7 @@ import {
   labelForBlockData,
   searchAliasLabels,
   searchBlocksAcrossSources,
+  widenedFetchLimit,
   searchLinkTargetIdCandidates,
   searchLinkTargets,
   searchLinkTargetsProgressively,
@@ -682,6 +683,17 @@ describe('link target autocomplete helpers', () => {
 })
 
 describe('searchBlocksAcrossSources (searchSourcesFacet merge point)', () => {
+  // The recovery window must always EXCEED the fetch that came up short.
+  // A fixed ceiling satisfies that only below the ceiling: `fetchLimit`
+  // floors at `limit`, so at limit 201 the old ceiling-valued window was
+  // smaller than the fetch and the recovery could never help. Asserted as
+  // arithmetic rather than through the query — reproducing it end-to-end
+  // needs 200+ seeded rows, and a smaller setup never fills the window, so
+  // the behavioural test passes with the bug present.
+  it.each([12, 48, 200, 201, 1000])('widens past a fetch window of %d', (fetchLimit) => {
+    expect(widenedFetchLimit(fetchLimit)).toBeGreaterThan(fetchLimit)
+  })
+
   it('with no extra sources contributed, reproduces the pre-facet default ranking (exact > prefix > substring)', async () => {
     // Same score buckets `orderBlockSearchRows` used to compute inline —
     // this pins that `coreContentSearchSource` alone (the only
