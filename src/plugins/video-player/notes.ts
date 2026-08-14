@@ -167,7 +167,14 @@ export const closeVideoNotesView = async (panelBlock: Block): Promise<void> => {
   closingPanels.add(panelBlock.id)
   // Only OUR maximize is ours to undo. `undefined` leaves the flag alone, so a
   // maximize the user set before entering notes survives the close.
-  const maximized = maximizedByNotesEnter.delete(panelBlock.id) ? false : undefined
+  //
+  // PEEKED here and consumed only once the close COMMITS: deleting up front
+  // spends the marker even when the tx below rejects, and the retry then
+  // computes `undefined` — so the second attempt leaves notes while keeping
+  // the auto-maximize, hiding every sibling pane with nothing left that owns
+  // the flag. Nothing re-adds it either; only a fresh enter does.
+  const maximized = maximizedByNotesEnter.has(panelBlock.id) ? false : undefined
+  let closed = false
   try {
     const backTop = panelHistory.getSnapshot(panelBlock.id).back.at(-1)
     // Only go back if the MARKED pre-enter page is still live. `goBackInPanel`
@@ -179,14 +186,19 @@ export const closeVideoNotesView = async (panelBlock: Block): Promise<void> => {
     if (backTop?.viewModeEnter === VIDEO_NOTES_VIEW_MODE
       && await panelBlock.repo.exists(backTop.blockId)
       && await goBackInPanel(panelBlock, {maximized})) {
+      closed = true
       return
     }
     const current = panelBlock.peekProperty(topLevelBlockIdProp)
+    // Not a close — the pane shows nothing, so nothing was written and the
+    // marker stays unspent.
     if (!current) return
     // Same-block with an EXPLICIT undefined mode: navigateInPanel's
     // same-block branch is presence-gated, so this is the clear-only tx.
     await navigateInPanel(panelBlock, current, {viewMode: undefined, maximized})
+    closed = true
   } finally {
+    if (closed) maximizedByNotesEnter.delete(panelBlock.id)
     closingPanels.delete(panelBlock.id)
   }
 }

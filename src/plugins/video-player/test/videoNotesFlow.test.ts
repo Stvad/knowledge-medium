@@ -210,6 +210,52 @@ describe('enterVideoNotesView', () => {
     expect(isMaximized(panelId)).toBe(true)
   })
 
+  // `LayoutRenderer` and the panel chrome degrade a malformed flag to false
+  // (`isPanelRowMaximized`), so the gesture path has to agree. Reading it
+  // strictly threw BEFORE any write, which made the notes button do nothing on
+  // a pane that rendered perfectly well. Covers both strict reads: the
+  // same-block `maximizeChanges` peek and `setPanelMaximizedInTx`'s tx read.
+  it('a malformed maximize flag degrades to false instead of wedging the gesture', async () => {
+    await setup({panes: 2})
+    // RAW write — `tx.setProperty` codec-rejects a non-boolean. This is the
+    // shape a sync-applied row or an agent-bridge write can leave behind.
+    // `tx.update` REPLACES the bag, so carry the existing properties over.
+    await repo.tx(async tx => {
+      await tx.update(panelId, {
+        properties: {...panelBlock().peek()?.properties, [panelMaximizedProp.name]: 'yes'},
+      })
+    }, {scope: ChangeScope.UiState, description: 'plant a malformed maximize flag'})
+
+    await enterVideoNotesView(videoBlock(), panelBlock())
+
+    expect(panelBlock().peekProperty(panelViewModeProp)).toBe(VIDEO_NOTES_VIEW_MODE)
+    // Read as false, so the enter claims the maximize — and writing it repairs
+    // the malformed value on the way through.
+    expect(isMaximized(panelId)).toBe(true)
+  })
+
+  // The ownership marker is spent on COMMIT, not on entry to close. Spending
+  // it up front meant a rejected close left the retry computing `undefined` —
+  // notes cleared, auto-maximize kept, every sibling pane still hidden with
+  // nothing owning the flag.
+  it('a failed close keeps ownership, so the retry still un-maximizes', async () => {
+    await setup({panes: 2})
+    await enterVideoNotesView(videoBlock(), panelBlock())
+    expect(isMaximized(panelId)).toBe(true)
+
+    const txSpy = vi.spyOn(repo, 'tx').mockRejectedValueOnce(new Error('tx boom'))
+    await expect(closeVideoNotesView(panelBlock())).rejects.toThrow('tx boom')
+    txSpy.mockRestore()
+    // Precondition: the failed close really did write nothing.
+    expect(panelBlock().peekProperty(panelViewModeProp)).toBe(VIDEO_NOTES_VIEW_MODE)
+    expect(isMaximized(panelId)).toBe(true)
+
+    await closeVideoNotesView(panelBlock())
+
+    expect(panelBlock().peekProperty(panelViewModeProp)).toBeUndefined()
+    expect(isMaximized(panelId)).toBe(false)
+  })
+
   // The at-most-one rule for this writer: the flag itself is set from inside
   // navigateInPanel's tx, below the layer that can see a session's rows, so
   // the enter has to clear the others up front.

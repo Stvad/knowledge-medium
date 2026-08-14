@@ -7,10 +7,9 @@ import { useHandle } from '@/hooks/block.js'
 import { useEffect, useMemo } from 'react'
 import type { BlockData } from '@/data/api'
 import type { Block } from '@/data/block.js'
-import { activePanelIdProp } from '@/data/properties.js'
+import { activePanelIdProp, isPanelRowMaximized } from '@/data/properties.js'
 import {
   allPanelRowsInLayoutOrder,
-  isPanelRowMaximized,
   isPanelStackRow,
   maximizeWouldHideSomething,
   sessionActivePanelId,

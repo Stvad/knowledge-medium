@@ -6,6 +6,7 @@ import { PANEL_STACK_TYPE, PANEL_TYPE } from '@/data/blockTypes'
 import {
   activePanelIdProp,
   focusedBlockLocationProp,
+  isPanelRowMaximized,
   normalizeViewMode,
   panelMaximizedProp,
   panelViewModeProp,
@@ -29,7 +30,6 @@ import { CallbackSet } from '@/utils/callbackSet'
 import { panelRenderScopeId } from '@/utils/renderScope'
 import { deleteSubtreeInTx as deleteLayoutRowSubtreeInTx } from '@/data/subtreeDelete'
 import { visibleChildrenOf } from '@/data/visibleChildren'
-import { safeDecodeRowProperty } from '@/data/rowProperty'
 import { layoutSessionBlockIdForKey, layoutSessionsContainerBlockId } from '@/data/stateBlocks'
 
 export interface ApplyLayoutResult {
@@ -61,16 +61,6 @@ const panelViewMode = (row: BlockData): string | undefined => {
   return normalizeViewMode(panelViewModeProp.codec.decode(stored))
 }
 
-
-/** Absent ≡ false (the prop's own `defaultValue`), so no pane needs the
- *  property materialized to be un-maximized.
- *
- *  `safeDecodeRowProperty`, not the strict twin: this is arrangement chrome,
- *  and it is read inside `layoutSlotsFromRows`, which every projection pass
- *  runs. A malformed value arriving from sync or a raw bridge write should
- *  cost that pane its flag, not throw the whole layout projection. */
-export const isPanelRowMaximized = (row: Pick<BlockData, 'properties'>): boolean =>
-  safeDecodeRowProperty(row, panelMaximizedProp)
 
 /**
  * The pane that takes the WHOLE layout over, or null when every pane renders.

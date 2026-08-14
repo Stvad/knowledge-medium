@@ -25,6 +25,7 @@ import { ChangeScope, type Tx } from '@/data/api'
 import {
   focusedBlockLocationProp,
   type FocusedBlockLocation,
+  isPanelRowMaximized,
   normalizeViewMode,
   panelMaximizedProp,
   panelViewModeProp,
@@ -468,8 +469,16 @@ const setPanelMaximizedInTx = async (
   panelId: string,
   maximized: boolean,
 ): Promise<void> => {
-  const current = await tx.getProperty(panelId, panelMaximizedProp)
-  if (current === maximized) return
+  // `tx.get` + the shared predicate, NOT `tx.getProperty`: the latter decodes
+  // strictly and throws on a malformed stored value, which would reject the
+  // whole enter/close tx over a flag the renderer is quietly degrading to
+  // false. Degrading here too keeps the gesture working and agrees with what
+  // the user is looking at. A malformed value survives a `false` write (it
+  // already reads as false, so this returns early) and is overwritten by a
+  // `true` one — the direction that matters, since the stale text is
+  // indistinguishable from un-maximized everywhere else.
+  const row = await tx.get(panelId)
+  if (row && isPanelRowMaximized(row) === maximized) return
   await tx.setProperty(panelId, panelMaximizedProp, maximized)
 }
 
@@ -536,8 +545,12 @@ export const navigateInPanel = async (
     const currentMode = normalizeViewMode(panelBlock.peekProperty(panelViewModeProp))
     const nextMode = normalizeViewMode(options.viewMode)
     const modeChanges = writesMode && currentMode !== nextMode
+    // Same reason as `setPanelMaximizedInTx`: `peekProperty` decodes strictly,
+    // so a malformed flag would throw here — before any state write — and the
+    // same-block enter/close would fail on a pane that renders fine.
+    const panelRow = panelBlock.peek()
     const maximizeChanges = nextMaximized !== undefined &&
-      (panelBlock.peekProperty(panelMaximizedProp) === true) !== nextMaximized
+      (panelRow ? isPanelRowMaximized(panelRow) : false) !== nextMaximized
     if (!modeChanges && !maximizeChanges) return
     await panelBlock.repo.tx(async tx => {
       if (modeChanges) await tx.setProperty(panelBlock.id, panelViewModeProp, nextMode)

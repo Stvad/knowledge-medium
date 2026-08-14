@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button.js'
 import { ChevronLeft, ChevronRight, Maximize2, Minimize2, X } from 'lucide-react'
 import {
   focusedBlockLocationProp,
+  isPanelRowMaximized,
   panelViewModeProp,
   peekFocusedBlockLocation,
   scrollTopProp,
@@ -32,7 +33,6 @@ import { isMobileViewport } from '@/utils/viewport.js'
 import {
   activatePanelRow,
   deletePanelRow,
-  isPanelRowMaximized,
   togglePanelMaximized,
 } from '@/utils/panelLayoutProjection.js'
 import { outlineRenderScopeId, panelRenderScopeId } from '@/utils/renderScope.js'

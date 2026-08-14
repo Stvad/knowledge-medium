@@ -23,6 +23,7 @@ import {
   type AnyPropertySeedDeclaration,
   type PropertySeedDeclaration,
 } from './propertySeeds'
+import { safeDecodeRowProperty } from './rowProperty'
 import { outlineRenderScopeId, panelRenderScopeId } from '@/utils/renderScope'
 
 // ──── UI-state schemas (changeScope: UiState) ────
@@ -129,6 +130,23 @@ export const panelMaximizedProp = seedProperty({
   preset: 'boolean',
   changeScope: ChangeScope.UiState,
 })
+
+/** Absent ≡ false (the prop's own `defaultValue`), so no pane needs the
+ *  property materialized to be un-maximized.
+ *
+ *  `safeDecodeRowProperty`, not the strict twin: this is arrangement chrome.
+ *  It is read inside `layoutSlotsFromRows`, which every projection pass runs,
+ *  and on the video-notes enter/close path. A malformed value arriving from
+ *  sync or a raw bridge write should cost that pane its flag, not throw the
+ *  whole layout projection or wedge a gesture.
+ *
+ *  Lives HERE, beside the property and `normalizeViewMode`, rather than in
+ *  `panelLayoutProjection` where it started: `panelHistory` needs the same
+ *  interpretation and sits BELOW that module, so the import would cycle. Two
+ *  decodes of one flag is how the strict/lenient split got in — the gesture
+ *  path threw on a value the renderer was quietly degrading. */
+export const isPanelRowMaximized = (row: Pick<BlockData, 'properties'>): boolean =>
+  safeDecodeRowProperty(row, panelMaximizedProp)
 
 /** '' ≡ absent, canonically: the URL grammar drops an empty `view=` value,
  *  so every reader/writer of a panel view mode folds '' to undefined through
