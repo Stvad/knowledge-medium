@@ -187,9 +187,15 @@ describe('LayoutRenderer', () => {
       expect(screen.getByTestId(`block-${stackedFirst}`)).toBe(before)
     })
 
-    // A maximized pane should look the same wherever it lives — the surviving
-    // stack wrapper must not keep imposing its column constraint on it.
-    it('gives a maximized stacked pane the same wide surface as a top-level one', async () => {
+    // A maximized pane should render the same wherever it lives.
+    //
+    // `data-stacked` is asserted alongside the wide flag because it is what
+    // makes the wide flag REAL: `PanelRenderer` computes
+    // `wideScrollSurface && !stackedPanel`, so a solo pane still marked stacked
+    // silently drops back to narrow chrome with no scrollport of its own.
+    // Asserting the wide flag alone passed while exactly that was happening —
+    // this mock echoes the raw context and cannot see the recomputation.
+    it('hands a maximized stacked pane the top-level pane treatment', async () => {
       const top = await insertPanelRow(env.repo, layoutSessionBlock(), 'page-a')
       const stacked = await insertSidebarStackedPanel(
         env.repo, layoutSessionBlock(), 'page-b', {sourcePanelId: top})
@@ -199,7 +205,41 @@ describe('LayoutRenderer', () => {
 
       const rendered = await screen.findByTestId(`block-${stacked}`)
       expect(rendered).toHaveAttribute('data-wide-scroll-surface', 'true')
+      expect(rendered).toHaveAttribute('data-stacked', 'false')
       expect(screen.queryByTestId(`block-${top}`)).toBeNull()
+    })
+
+    // The surviving wrapper hands its column role down rather than keeping it:
+    // spatial navigation partitions the DOM by `[data-layout-column-id]`, and a
+    // `display: contents` wrapper holding that attribute would contribute a
+    // column with no box at all.
+    it('leaves exactly one laid-out column when a stacked pane is maximized', async () => {
+      const top = await insertPanelRow(env.repo, layoutSessionBlock(), 'page-a')
+      const stacked = await insertSidebarStackedPanel(
+        env.repo, layoutSessionBlock(), 'page-b', {sourcePanelId: top})
+      await setMaximized(stacked, true)
+
+      const {container} = renderLayout()
+      await screen.findByTestId(`block-${stacked}`)
+
+      const columns = container.querySelectorAll('[data-layout-column-id]')
+      expect(columns).toHaveLength(1)
+      expect(columns[0].getAttribute('data-layout-column-id')).toBe(stacked)
+      expect(columns[0].className).not.toContain('contents')
+    })
+
+    // Ordinary stacks are untouched by the solo path: still a scrolling column
+    // of stacked children, none of them claiming the wide surface.
+    it('leaves an un-maximized stack rendering as a normal column', async () => {
+      const top = await insertPanelRow(env.repo, layoutSessionBlock(), 'page-a')
+      const stacked = await insertSidebarStackedPanel(
+        env.repo, layoutSessionBlock(), 'page-b', {sourcePanelId: top})
+
+      renderLayout()
+
+      const rendered = await screen.findByTestId(`block-${stacked}`)
+      expect(rendered).toHaveAttribute('data-stacked', 'true')
+      expect(rendered).toHaveAttribute('data-wide-scroll-surface', 'false')
     })
 
     it('restores the exact arrangement when the flag is cleared', async () => {

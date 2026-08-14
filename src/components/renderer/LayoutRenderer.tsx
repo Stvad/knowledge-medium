@@ -18,7 +18,10 @@ import {
 
 type RenderSlot =
   | {kind: 'panel'; id: string; maximized: boolean}
-  | {kind: 'stack'; id: string; children: RenderSlot[]}
+  | {kind: 'stack'; id: string; children: RenderSlot[]
+      /** Kept only to preserve the solo pane's React parent — see
+       *  `soloSlotPath`. Renders no box and defers to its single child. */
+      soloWrapper?: true}
 
 const EMPTY_ROWS: readonly BlockData[] = Object.freeze([])
 
@@ -81,7 +84,7 @@ const soloSlotPath = (slots: readonly RenderSlot[], soloId: string): RenderSlot[
       continue
     }
     const inner = soloSlotPath(slot.children, soloId)
-    if (inner.length > 0) return [{...slot, children: inner}]
+    if (inner.length > 0) return [{...slot, children: inner, soloWrapper: true}]
   }
   return []
 }
@@ -166,11 +169,28 @@ function SlotView({
     />
   }
 
+  // A stack kept ONLY to preserve the solo pane's React parent generates no box
+  // and hands its column role to that child, which then renders exactly as the
+  // top-level pane it visually is — `stackedPanel: false` included. That last
+  // part is load-bearing rather than cosmetic: `PanelRenderer` recomputes
+  // `wideScrollSurface && !stackedPanel`, so a pane still told it is stacked
+  // gets narrow chrome AND no scrollport of its own (its real stack, the thing
+  // that used to scroll it, is no longer rendering a box).
+  //
+  // The wrapper must stay a <div> whose CLASS changes. Returning a Fragment
+  // instead would change the element type at this position and remount the very
+  // pane this whole path exists to preserve — the same trap `PanelRenderer`
+  // documents on its own content frame, solved the same way.
+  const soloWrapper = slot.soloWrapper === true
   return (
     <div
       key={slot.id}
-      data-layout-column-id={topLevel ? slot.id : undefined}
-      className={`${topLevel ? (wideScrollSurface ? WIDE_SCROLL_COLUMN_CLASS : TOP_LEVEL_COLUMN_CLASS) : STACK_CHILD_CLASS} flex flex-col gap-2 overflow-y-auto pr-1`}
+      // Handed to the child along with the column role, so spatial navigation
+      // still sees exactly one `[data-layout-column-id]` box for this column.
+      data-layout-column-id={topLevel && !soloWrapper ? slot.id : undefined}
+      className={soloWrapper
+        ? 'contents'
+        : `${topLevel ? TOP_LEVEL_COLUMN_CLASS : STACK_CHILD_CLASS} flex flex-col gap-2 overflow-y-auto pr-1`}
     >
       {slot.children.map(child => (
         <SlotView
@@ -179,11 +199,8 @@ function SlotView({
           layoutSessionBlock={layoutSessionBlock}
           canClosePanel={canClosePanel}
           canMaximizePanel={canMaximizePanel}
-          topLevel={false}
-          // Forwarded, not hardcoded false: this is "one pane is the whole
-          // layout", which a surviving stack wrapper does not change. It can
-          // only be true when this stack renders a single child anyway.
-          wideScrollSurface={wideScrollSurface}
+          topLevel={soloWrapper ? topLevel : false}
+          wideScrollSurface={soloWrapper ? wideScrollSurface : false}
           trackFocus={trackFocus}
         />
       ))}
