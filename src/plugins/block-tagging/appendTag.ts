@@ -68,7 +68,7 @@ export const appendTagToBlocks = async (
       if (!row) continue
       // Before the tag check, not after: an opaque block is refused, not
       // "already tagged", and its content is not prose to search either.
-      if (hasOpaqueContent(row, repo.opaqueContentTypes)) {
+      if (hasOpaqueContent(row, tx.opaqueContentTypes)) {
         skippedOpaque += 1
         continue
       }

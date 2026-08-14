@@ -637,6 +637,20 @@ const reconcileMarkdownSubtree = async (
     if (final && existing.length > parsed.length) {
       for (let i = existing.length - 1; i >= parsed.length; i -= 1) {
         const doomed = existing[i]
+        // A block retagged opaque since the key was minted is no longer
+        // reply machinery to manage — and a reply that simply came back
+        // SHORTER must not tombstone an extension's source. Relinquish the
+        // key rather than merely skipping the delete: left tagged, it is
+        // re-collected by every future reconcile and permanently occupies a
+        // position in `existing`, so a later reply node would pair with it
+        // and (correctly) refuse to write, losing that node's content.
+        // Dropping the key detaches it; its own content is never touched.
+        if (hasOpaqueContent(doomed, tx.opaqueContentTypes)) {
+          const rest = {...doomed.properties}
+          delete rest[SUBTREE_KEY_PROP]
+          await tx.update(doomed.id, {properties: rest})
+          continue
+        }
         // Salvage the user's OWN content: a block the user nested under this
         // reply node isn't tagged with our key, so `collect` never saw it and
         // it isn't in the doomed set. `tx.delete` is a single-row soft-delete

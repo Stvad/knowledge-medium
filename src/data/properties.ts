@@ -470,8 +470,8 @@ export const hasBlockType = (
  *  type says `Record`, but callers that decode a raw `properties_json`
  *  column reach here with whatever the column held: the literal `null`
  *  parses to `null`, which is syntactically valid JSON and so never hits a
- *  `JSON.parse` fallback. Indexing that threw and took the whole caller
- *  down with it (found by review on the find-replace search). */
+ *  `JSON.parse` fallback. Indexing that throws and takes the whole caller
+ *  down with it. */
 export const hasOpaqueContent = (
   data: Pick<BlockData, 'properties'>,
   opaqueTypes: ReadonlySet<string>,

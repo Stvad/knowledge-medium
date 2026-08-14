@@ -479,6 +479,36 @@ describe('reconcile-markdown-subtree command', () => {
     expect((await replyRoots()).map(r => r.content)).toEqual(['A'])
   })
 
+  // A shorter final reply must not tombstone a block that has since been
+  // retagged opaque — losing an extension's source because the model wrote
+  // fewer bullets is not a recoverable trade. The key is relinquished
+  // rather than the delete merely skipped, so the block stops being
+  // collected at all instead of squatting a position forever.
+  it('final reconcile relinquishes an opaque trailing block instead of deleting it', async () => {
+    await create({id: TOPIC_A, content: 'mention'})
+
+    await reconcile('- A\n- B', {commandId: 'rms-o1'})
+    const roots = await replyRoots()
+    const bId = roots.find(r => r.content === 'B')!.id
+
+    // Retag B as extension source, as an install or a sync would.
+    await context.updateBlock({id: bId, properties: {
+      'claude:reply': true,
+      'agent:subtreeKey': KEY,
+      types: ['extension'],
+    }})
+
+    await reconcile('- A', {commandId: 'rms-o2', final: true})
+
+    const survivor = (await context.getSubtree(TOPIC_A)).find(row => row.id === bId)
+    expect(survivor).toBeDefined()
+    expect(survivor!.deleted ?? false).toBe(false)
+    expect(survivor!.content).toBe('B')
+    // Detached: no longer collected by this key, so it cannot squat a
+    // position that a later reply node needs.
+    expect(survivor!.properties?.['agent:subtreeKey']).toBeUndefined()
+  })
+
   it('keeps streamed reply roots contiguous when the user inserts a sibling mid-stream', async () => {
     await create({id: TOPIC_A, content: 'mention'})
     // Streaming tick 1: the first reply root lands.
