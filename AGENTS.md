@@ -170,3 +170,13 @@ bd prime                # Refresh Beads context
 
 **Architecture in one line:** issues live in a local Dolt DB; sync uses `refs/dolt/data` on your git remote; `.beads/issues.jsonl` is a passive export. See https://github.com/gastownhall/beads/blob/main/docs/core-concepts/sync-concepts.md for details and anti-patterns.
 <!-- END BEADS CODEX SETUP -->
+
+beads (`bd`) — how the two generated blocks above apply HERE (installed 2026-08-14, prefix `km`):
+- those blocks are written by `bd init` / `bd setup` and are REWRITTEN on upgrade. This section is repo-authored, survives, and wins wherever they conflict.
+- **GitHub issues stay the tracker of record.** Open work, labels and PR references live in Stvad/knowledge-medium. Beads is new here and has not replaced them: use it for the durable agent-side task graph (a multi-session plan, discovered follow-ups, blockers between pieces of ONE effort). Keep filing and labelling GitHub issues as before, and don't migrate an existing GitHub issue into beads without asking.
+- **the memory system stays where it is.** The blocks say "do NOT use MEMORY.md files" — that is beads' own house convention, not a decision made for this repo. Claude Code's per-project memory directory is loaded by the harness automatically; don't start a parallel `bd remember` store without Vlad's call.
+- commit policy is this repo's, not beads': commit after each requested change, stay on the current branch. `agent.profile` is set to `team-maintainer` so `bd prime` stops telling agents to wait for commit approval. `pnpm run check` is the gate — `bd preflight` is not a substitute.
+- **beads data is local to this checkout.** Issues live in an embedded Dolt DB under `.beads/embeddeddolt/`, which is gitignored; only config/hooks are tracked. A plain `git push` does NOT carry it (verified — pushing moves `refs/heads/*` only). Cross-machine sync would need an explicit `bd dolt push` to `refs/dolt/data` on origin, which has not been run. Assume a beads issue filed in one worktree is invisible in every other one.
+- `.beads/hooks/` is wired through `core.hooksPath`, so it OVERRIDES `.git/hooks` for this clone. Anything that installs git hooks later (husky et al.) must chain into it rather than replace it. Hook cost is ~130ms per commit.
+- `bd init` stages whole tool directories (`.beads/`, `.claude/`, `.codex/`, `.agents/`) and commits them itself. That is why `.codex/worktrees/` is gitignored — without it, re-running init would commit three full worktree checkouts.
+- never `bd edit` (opens `$EDITOR` and hangs an agent); use `bd update` flags.
