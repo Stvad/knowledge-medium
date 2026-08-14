@@ -1,2 +1,0 @@
-import{resolveFacetRuntimeSync as e}from"../facets/facet.js";import{localSchemaFacet as t}from"./facets.js";var n=n=>e(n).read(t),r=async(e,t)=>{for(let n of t)for(let t of n.statements??[])await e.execute(t);for(let n of t)for(let t of n.backfills??[])await t.run(e)};export{r as applyLocalSchemaContributions,n as resolveLocalSchemaContributions};
-//# sourceMappingURL=localSchema.js.map
