@@ -381,10 +381,24 @@ export const isReentryTier = (node: PlanNode): boolean =>
 const tableProblems = (table: readonly ReentryTier[]): string[] => {
   const problems = table.flatMap((tier, i) => {
     const previous = table[i - 1]
-    if (previous === undefined || previous.maxGapDays < tier.maxGapDays) return []
+    if (previous === undefined) return []
     return [
-      `"${previous.id}" ends at ${previous.maxGapDays} days but the deeper "${tier.id}" `
-      + `ends at ${tier.maxGapDays}, so a longer break would get the lighter row`,
+      ...previous.maxGapDays < tier.maxGapDays ? [] : [
+        `"${previous.id}" ends at ${previous.maxGapDays} days but the deeper "${tier.id}" `
+        + `ends at ${tier.maxGapDays}, so a longer break would get the lighter row`,
+      ],
+      // Load has to fall as the break lengthens, for the same reason the
+      // bounds have to rise: the rows are an escalation, and a deeper row
+      // prescribing MORE weight than a shallower one is not a table anyone
+      // meant to write. It also disagrees with `coveringLayoff`, which reads
+      // `pct` as the measure of how deep a recorded break was — so an
+      // inverted pair makes a shallower tier "cover" a deeper one and a
+      // re-measured break can come back lighter.
+      ...previous.pct >= tier.pct ? [] : [
+        `"${previous.id}" prescribes ${Math.round(previous.pct * 100)}% but the deeper `
+        + `"${tier.id}" prescribes ${Math.round(tier.pct * 100)}%, so a longer break would get `
+        + 'more weight than a shorter one',
+      ],
     ]
   })
   const deepest = table.at(-1)
@@ -572,6 +586,26 @@ const parseReentry = (root: PlanNode, warnings: string[]): ReentryTier[] | undef
     // whole row over a set-field mistake would throw away a load cut the user
     // DID state — deciding what weight goes on a bar from an error in an
     // unrelated field.
+    // COUNT, not TALLY: `setsFor` tests `sessionsBack < overrideWindow`, so a
+    // window of 0 is false even on the first session back and the absolute
+    // set count the row states is silently never applied. A window that
+    // covers no session is not a window.
+    const statedWindow = tierNumber(props, FIELD.setsOverrideSessions, COUNT, {id, base: base.setsOverrideSessions, absent: undefined}, warnings)
+    // The window only ever qualifies an absolute count — `setsFor` reads it
+    // inside the `setsOverride !== undefined` branch — so on its own it says
+    // nothing. Reachable both ways: add the window to a row that never had a
+    // count, or delete the count from `1-2mo` and leave its window behind.
+    // Dropped rather than repaired from the built-in row, because deleting
+    // the count IS a statement here and restoring it would overrule the edit
+    // the user actually made.
+    const orphanedWindow = statedWindow !== undefined && setsOverride === undefined
+    if (orphanedWindow) {
+      warnings.push(
+        `Re-entry row "${id}" states \`${FIELD.setsOverrideSessions}\` but no \`${FIELD.targetSets}\` `
+        + 'for it to apply to, so the window does nothing — ignored. A window says how long an '
+        + 'absolute set count lasts; state the count too, or drop the window.',
+      )
+    }
     const sets = contradicts
       ? {
         setsOverride: base.setsOverride,
@@ -580,11 +614,7 @@ const parseReentry = (root: PlanNode, warnings: string[]): ReentryTier[] | undef
       }
       : {
         setsOverride,
-        // COUNT, not TALLY: `setsFor` tests `sessionsBack < overrideWindow`,
-        // so a window of 0 is false even on the first session back and the
-        // absolute set count the row states is silently never applied. A
-        // window that covers no session is not a window.
-        setsOverrideSessions: tierNumber(props, FIELD.setsOverrideSessions, COUNT, {id, base: base.setsOverrideSessions, absent: undefined}, warnings),
+        setsOverrideSessions: orphanedWindow ? undefined : statedWindow,
         setsDelta,
       }
 

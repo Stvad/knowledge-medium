@@ -273,7 +273,7 @@ describe('parsePlan', () => {
   it('refuses a fractional set count, which the block expansion rounds up in silence', () => {
     const plan = node('**Plan**', [
       node('**Re-entry protocol**', [
-        tier('1–2 months → …', {[FIELD.tierId]: '1-2mo', [FIELD.targetSets]: 2.5}),
+        tier('1–2 months → 80%', {[FIELD.tierId]: '1-2mo', [FIELD.layoffPct]: 0.8, [FIELD.targetSets]: 2.5}),
       ]),
     ])
     const overlay = parsePlan(plan)
@@ -390,8 +390,9 @@ describe('parsePlan', () => {
     // the first session back and the stated 2-set prescription never applies.
     const plan = node('**Plan**', [
       node('**Re-entry protocol**', [
-        tier('1–2 months → …', {
+        tier('1–2 months → 80%', {
           [FIELD.tierId]: '1-2mo',
+          [FIELD.layoffPct]: 0.8,
           [FIELD.targetSets]: 2,
           [FIELD.setsOverrideSessions]: 0,
         }),
@@ -401,6 +402,37 @@ describe('parsePlan', () => {
     expect(overlay.warnings.some(w => new RegExp(FIELD.setsOverrideSessions).test(w))).toBe(true)
     // The built-in window, not the one that would have been inert.
     expect(overlay.reentry!.find(t => t.id === '1-2mo')?.setsOverrideSessions).toBe(2)
+  })
+
+  it('refuses a table whose load stops falling as the break lengthens', () => {
+    // The rows are an escalation. A deeper row prescribing MORE weight than a
+    // shallower one also disagrees with `coveringLayoff`, which reads `pct` as
+    // how deep a recorded break was.
+    const plan = node('**Plan**', [
+      node('**Re-entry protocol**', [
+        tier('1–2 weeks off → …', {[FIELD.tierId]: '1-2w', [FIELD.layoffPct]: 0.8}),
+      ]),
+    ])
+    const overlay = parsePlan(plan)
+    expect(overlay.warnings.some(w => /1-2w/.test(w) && /2-4w/.test(w) && /90%/.test(w))).toBe(true)
+    expect(overlay.reentry).toBeUndefined()
+  })
+
+  it('drops a set-count window with no count for it to apply to', () => {
+    // `setsFor` reads the window only inside the `setsOverride !== undefined`
+    // branch, so on its own it says nothing. Dropped rather than repaired from
+    // the built-in row: deleting the count is a statement, and restoring it
+    // would overrule the edit that was actually made.
+    const plan = node('**Plan**', [
+      node('**Re-entry protocol**', [
+        tier('1–2 months → 80%', {[FIELD.tierId]: '1-2mo', [FIELD.layoffPct]: 0.8, [FIELD.setsOverrideSessions]: 2}),
+      ]),
+    ])
+    const overlay = parsePlan(plan)
+    expect(overlay.warnings.some(w => new RegExp(FIELD.setsOverrideSessions).test(w))).toBe(true)
+    const row = overlay.reentry!.find(t => t.id === '1-2mo')!
+    expect(row.setsOverrideSessions).toBeUndefined()
+    expect(row.setsOverride).toBeUndefined()
   })
 
   it('refuses a table where two rows claim the same tier', () => {
@@ -423,7 +455,7 @@ describe('parsePlan', () => {
     // `mergePlan` already holds this invariant for exercises.
     const plan = node('**Plan**', [
       node('**Re-entry protocol**', [
-        tier('2+ months → …', {[FIELD.tierId]: '2mo+', [FIELD.repMin]: 12, [FIELD.repMax]: 8}),
+        tier('2+ months → 60%', {[FIELD.tierId]: '2mo+', [FIELD.layoffPct]: 0.6, [FIELD.repMin]: 12, [FIELD.repMax]: 8}),
       ]),
     ])
     const overlay = parsePlan(plan)
