@@ -715,6 +715,78 @@ describe('Batched notify across multiple matching handles', () => {
     store.invalidate({ parentIds: ['p'] })
     await vi.waitFor(() => expect(subscribedFired).toEqual(['sub-1', 'sub-2']))
   })
+
+  it('never delivers a value older than one a listener already saw (queued notify publishes latest)', async () => {
+    // The barrier can stay open across a LATER invalidation of one of its
+    // members. That second reload is not part of the open batch, so it
+    // notifies immediately — and then the barrier flushes a thunk that was
+    // queued with the value the FIRST reload settled with. A listener that
+    // reads the pushed argument sees v2 then v1: an older value after a
+    // newer one, with nothing to correct it until the next invalidation.
+    const store = makeStore(60_000)
+
+    // `fast` declares a private row dep alongside the shared table dep, so
+    // a second change can target it alone (matched.length === 1 → no batch).
+    const fastValues = ['v0', 'v1', 'v2']
+    let fastCall = 0
+    const fast = store.getOrCreate('fast', () =>
+      new LoaderHandle<string>({
+        store, key: 'fast',
+        loader: async (ctx) => {
+          ctx.depend({ kind: 'row', id: 'fast-only' })
+          ctx.depend({ kind: 'table', table: 'blocks' })
+          return fastValues[Math.min(fastCall++, fastValues.length - 1)]
+        },
+      }),
+    )
+
+    let releaseSlow!: (v: string) => void
+    let slowPromise = Promise.resolve('slow-0')
+    const slow = store.getOrCreate('slow', () =>
+      new LoaderHandle<string>({
+        store, key: 'slow',
+        loader: async (ctx) => {
+          ctx.depend({ kind: 'table', table: 'blocks' })
+          return slowPromise
+        },
+      }),
+    )
+
+    const fired: string[] = []
+    fast.subscribe(v => fired.push(v))
+    slow.subscribe(() => {})
+    await vi.waitFor(() => expect(fired).toEqual(['v0']))
+    fired.length = 0
+
+    // Change 1 matches both → batch. `fast` settles with 'v1' and queues its
+    // notify behind the barrier; `slow` is gated open.
+    slowPromise = new Promise<string>(r => { releaseSlow = r })
+    store.invalidate({ tables: ['blocks'] })
+    await Promise.resolve()
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(fired).toEqual([])          // held by the barrier
+    expect(fast.peek()).toBe('v1')
+
+    // Change 2 matches ONLY `fast` → no batch → notifies as soon as it settles.
+    store.invalidate({ rowIds: ['fast-only'] })
+    await vi.waitFor(() => expect(fired).toEqual(['v2']))
+    expect(fast.peek()).toBe('v2')
+
+    // Releasing the slow loader closes the barrier and drains its queue.
+    releaseSlow('slow-1')
+    await vi.waitFor(() => expect(store.metrics.snapshot().notifiesFired).toBeGreaterThan(0))
+    await Promise.resolve()
+    await Promise.resolve()
+    await Promise.resolve()
+
+    // 'v1' was superseded before it was ever published; publishing it now
+    // would walk a listener backwards. Whatever the barrier flushes must be
+    // the handle's current value.
+    expect(fired).not.toContain('v1')
+    expect(fired.at(-1)).toBe('v2')
+    expect(fired.at(-1)).toBe(fast.peek())
+  })
 })
 
 describe('Mid-load invalidations are not dropped (reviewer P2)', () => {

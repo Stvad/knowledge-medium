@@ -675,7 +675,21 @@ export class LoaderHandle<T> implements Handle<T>, RegisteredHandle {
           // queue the notify so it lands in the same microtask as the
           // other batch members' notifies (one React commit). Without
           // a batch, fire immediately as before.
-          if (batch) batch.finish(() => this.notify(value))
+          //
+          // The queued thunk publishes `this.value` — latest-known at flush
+          // time — NOT the `value` this run settled with. The barrier can
+          // stay open across a later invalidation of this same handle (that
+          // reload is not a member of the open batch, so it notifies as soon
+          // as it settles), and closing over `value` would then walk a
+          // listener backwards: v2 followed by the queued v1. Re-reading at
+          // flush time can hand a listener the same value twice, which the
+          // equality diff already makes cheap and which no consumer can
+          // misread; handing it an older value after a newer one is not
+          // recoverable — `notify()` also writes `notifiedValue`, so the
+          // structural-diff baseline ends up disagreeing with the value the
+          // handle actually holds, and nothing corrects the stale delivery
+          // until some later invalidation re-resolves.
+          if (batch) batch.finish(() => this.notify(this.value as T))
           else this.notify(value)
         } else {
           // Equality match against prior value: notify suppressed.
