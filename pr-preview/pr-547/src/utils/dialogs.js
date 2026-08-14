@@ -1,2 +1,0 @@
-import{CallbackSet as e}from"./callbackSet.js";var t=0,n=new e(`dialogs`),r=[],i=(e,i)=>new Promise(a=>{let o=++t,s={id:o,Component:e,props:i??{},finalize:e=>{r=r.filter(e=>e.id!==o),a(e),n.notify()}};r=[...r,s],n.notify()}),a=()=>r,o=e=>n.add(e),s=()=>{let e=r;r=[],t=0;for(let t of e)t.finalize(null);n.notify()};export{s as __resetDialogsForTests,a as getDialogQueue,i as openDialog,o as subscribeDialogs};
-//# sourceMappingURL=dialogs.js.map
