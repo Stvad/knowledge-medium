@@ -127,39 +127,35 @@ describe('wikilink parsing', () => {
     )
   })
 
-  it('does not re-scan the alias once per candidate closer', () => {
-    // `closingDelimiterFor` COUNTS the closer (one depth pass) instead of
-    // searching for it (test each candidate for balance) — Codex on PR #548,
-    // which is reachable from arbitrary pasted content on the editing path.
-    //
-    // The input isolates that one factor: a single opener, so exactly one
-    // close happens and the per-close `slice` every version pays cannot
-    // confound the measurement, with a long prefix AND a long `]` run so the
-    // search version multiplies them. Measured on this machine: 907ms
-    // searching, 2.4ms counting. Deep NESTING is separately quadratic (the
-    // per-close slice, which predates this) and is deliberately not what this
-    // asserts.
-    //
-    // The bound is set for the ~375x gap, not for the measurement: 300ms is
-    // over 100x the counting version's cost, so the full gate's ~6x p99.9
-    // slowdown cannot reach it, while the searching version misses by 10x.
-    const adversarial = '[['.concat('a'.repeat(40_000), ']'.repeat(20_000))
+  // Three ways this scanner has been made quadratic, each found on PR #548
+  // and each fixed by moving work out of the per-close path. Kept together
+  // because they assert ONE property — the parse stays linear on adversarial
+  // bracket soup — and arbitrary pasted or imported block content reaches all
+  // three, on the render and post-commit paths.
+  //
+  // Timing is a blunt oracle, so the bound is set off the measured gaps, not
+  // off the measurements: every shape is now single-digit ms and the slowest
+  // pre-fix cost was 2807ms, so 300ms sits ~50x above the current worst and
+  // ~3x below the cheapest regression. The full gate's ~6x p99.9 slowdown
+  // cannot close that.
+  //
+  // Why "there is already a `slice` per close, so this is the same order" is
+  // wrong, since it is the reasoning that produced two of these: V8 answers a
+  // long `String.slice` with an O(1) SlicedString. A hand-written loop over
+  // the same range has no such out.
+  it.each([
+    // Absorbing was chosen by testing each candidate closer for balance,
+    // re-reading a near-full prefix every time. One opener, so the per-close
+    // `slice` cannot confound the measurement.
+    ['candidate search over the alias (was 907ms)', '[['.concat('a'.repeat(40_000), ']'.repeat(20_000))],
+    // Bracket depth was recomputed by scanning the alias on every close.
+    ['depth recomputed per close (was 2375ms)', '[['.repeat(16_000).concat('x', ']]'.repeat(16_000))],
+    // Nested frames close into ONE `]` run, and the run was re-walked per
+    // frame over an ever-shorter but still proportional suffix.
+    ['closing run re-walked per frame (was 2807ms)', '[[a['.repeat(32_000).concat(']'.repeat(96_000))],
+  ])('stays linear: %s', (_label, content) => {
     const started = performance.now()
-    parseReferences(adversarial)
-    expect(performance.now() - started).toBeLessThan(300)
-  })
-
-  it('does not re-read the alias once per closer', () => {
-    // The second half of the same discipline (Codex on PR #548). Bracket
-    // depth rides the opener stack, so a close is O(1) in the alias — and it
-    // has to be, because this runs once per closer and the strings it would
-    // otherwise walk are NOT free the way the caller's `slice` is (V8 answers
-    // that with an O(1) SlicedString, which is why master parses this shape
-    // in 3ms while a per-close scan took 2375ms). Now 2.5ms; the 300ms bound
-    // is >100x that and 8x under the scanning version.
-    const nested = '[['.repeat(16_000).concat('x', ']]'.repeat(16_000))
-    const started = performance.now()
-    parseReferences(nested)
+    parseReferences(content)
     expect(performance.now() - started).toBeLessThan(300)
   })
 

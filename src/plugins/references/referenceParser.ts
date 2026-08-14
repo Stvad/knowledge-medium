@@ -154,38 +154,37 @@ interface OpenWikilink {
  *  `[[outer [[Book of [x]]] tail]]`, whose outer link closes later in the
  *  content and never wanted this run's brackets.
  *
- *  EVERYTHING HERE IS O(1) except a run walk bounded by what could change the
- *  answer, and that is load-bearing rather than tidy (also Codex on #548).
- *  This runs once per closer, so anything proportional to the alias makes the
- *  whole parse quadratic — and the strings it would walk are not free the way
- *  the caller's `slice` is, which V8 answers with an O(1) SlicedString. A
- *  first cut scanned the alias here and took 2375ms on
- *  `'[['.repeat(16000) + 'x' + ']]'.repeat(16000)` against 3ms before it;
- *  arbitrary pasted or imported content reaches that shape.
+ *  EVERYTHING HERE IS O(1), and that is load-bearing rather than tidy (Codex
+ *  on #548, three rounds of it). This runs once per closer, so anything
+ *  proportional to the alias — or to the closing run — makes the whole parse
+ *  quadratic, and the strings it would walk are not free the way the caller's
+ *  `slice` is, which V8 answers with an O(1) SlicedString. Two shapes found
+ *  the two ways of getting this wrong: re-reading the alias per close took
+ *  `'[['.repeat(16000) + 'x' + ']]'.repeat(16000)` to 2375ms, and re-walking
+ *  the shared closing run per close took `'[[a['.repeat(32000) +
+ *  ']'.repeat(96000)` to 2807ms. So the alias's depth arrives on the frame
+ *  and the run's length arrives measured — this function walks nothing.
  *
  *  Reading a bare `]` run this way is what removes the need for
  *  `renderWikilink` to pad a trailing `]` into the user's own text. */
 const closingDelimiterFor = (
-  content: string,
   frame: OpenWikilink,
   depth: number,
   runStart: number,
+  /** `]` from `runStart` to the end of its maximal run. Measured ONCE per run
+   *  by the scanner and handed to every frame closing inside it — see
+   *  `runEnd` there. */
+  available: number,
   enclosing: number,
 ): number => {
   // A `]` that closed nothing means no reading of this run balances.
   if (frame.minDepth < frame.depthAtOpen) return runStart
   const absorb = depth - frame.depthAtOpen
-  // Nothing to absorb — the overwhelmingly common case, and the one that
-  // keeps deeply nested input off the run walk entirely.
   if (absorb <= 0) return runStart
-  // Walk only as far as could change the comparison below: past
-  // `absorb + 2 + 2 * enclosing` both leftovers saturate at `enclosing`.
-  const horizon = absorb + 2 + 2 * enclosing
-  let run = 0
-  while (run < horizon && content[runStart + run] === ']') run++
-  if (run < absorb + 2) return runStart
+  // The alias cannot take closers the delimiter itself still needs.
+  if (available < absorb + 2) return runStart
   // How many enclosing openers each reading leaves this run able to close.
-  const closable = (consumed: number) => Math.min((run - consumed) >> 1, enclosing)
+  const closable = (consumed: number) => Math.min((available - consumed) >> 1, enclosing)
   return closable(absorb + 2) === closable(2) ? runStart + absorb : runStart
 }
 
@@ -198,6 +197,13 @@ const parseWikilinkReferences = (content: string): ParsedReference[] => {
   // Running single-bracket depth: every `[` is +1 and every `]` is -1,
   // including the two of each that spell a wikilink's delimiters.
   let depth = 0
+  // End of the maximal `]` run the scanner is currently inside, or -1 when it
+  // is not inside one. Nested frames CLOSE INTO THE SAME RUN — `[[a[[b]]]]`
+  // pops twice out of one `]]]]` — so measuring it per frame re-walks an
+  // overlapping suffix and is quadratic in the nesting depth (Codex on #548).
+  // Measured once per run instead: `i` only moves forward, so each `]` is
+  // counted at most once across the whole parse.
+  let runEnd = -1
   let i = 0
 
   const dipTo = (value: number): void => {
@@ -211,9 +217,13 @@ const parseWikilinkReferences = (content: string): ParsedReference[] => {
       stack.push({start: i, depthAtOpen: depth, minDepth: depth})
       i += 2
     } else if (content.slice(i, i + 2) === ']]') {
+      if (i >= runEnd) {
+        runEnd = i
+        while (content[runEnd] === ']') runEnd++
+      }
       const frame = stack.pop()
       if (frame !== undefined) {
-        const closeAt = closingDelimiterFor(content, frame, depth, i, stack.length)
+        const closeAt = closingDelimiterFor(frame, depth, i, runEnd - i, stack.length)
         const alias = content.slice(frame.start + 2, closeAt)
         // Gate EMISSION only — the pop above still happened, so a
         // rejected span consumes its delimiters exactly as an accepted
