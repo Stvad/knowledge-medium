@@ -22,13 +22,14 @@ into the real account, PowerSync uploads whatever that build writes.
 | **Sandbox account** | Sign in as a throwaway account | anything whose subject *is* sync, workspaces, invites, attachments | confined to the throwaway workspace |
 | **Main account** | — | **never** | real data corruption, uploaded |
 
-Local-only is load-bearing, not a suggestion: `Login.tsx` routes to
-`LocalLogin` when the `ftm.localOnly` opt-in is set, `App.tsx` then computes
-`useRemoteSync = hasRemoteSyncConfig && !localOnly`, and `repoProvider.ts`
-returns before any remote connect when that's false. The asset lane checks the
-same flag (`isRemoteSyncActive()` in `attachments/assetResolver.ts`,
-`assetUpload.ts`, `assetDownLane.ts`), so blob puts/gets stay local too. You
-get a real repo, a real local SQLite DB, real extensions — no server.
+Local-only is load-bearing, not a suggestion: `src/components/Login.tsx`
+routes to its `LocalLogin` when the `ftm.localOnly` opt-in is set,
+`src/App.tsx` then computes `useRemoteSync = hasRemoteSyncConfig && !localOnly`,
+and `src/data/repoProvider.ts` returns before any remote connect when that's
+false. The asset lane checks the same flag (`isRemoteSyncActive()` in
+`src/plugins/attachments/assetResolver.ts`, `assetUpload.ts`,
+`assetDownLane.ts`), so blob puts/gets stay local too. You get a real repo, a
+real local SQLite DB, real extensions — no server.
 
 The local-only workspace is per-user-id and starts empty. It is not a copy of
 your sandbox data.
@@ -74,7 +75,7 @@ Notes:
 - `AGENT_RUNTIME_APP_URL` matters only to `connect` / `pair-url` — it decides
   which URL gets printed. Later commands use the saved token.
 - No `AGENT_RUNTIME_ALLOWED_ORIGINS` needed: the bridge always accepts
-  loopback origins (`server.ts:loopbackOriginPattern`).
+  loopback origins (`packages/agent-cli/src/server.ts:loopbackOriginPattern`).
 - Re-pair only if you change the port, wipe that profile's storage, or switch
   accounts.
 - The bridge secret rides inside the pairing URL — don't paste that URL
@@ -113,12 +114,14 @@ against the code on 2026-08-14:
   "offline"), and `StrictMode` (`src/main.tsx`, unconditional) double-invokes
   effects in dev only, because only the dev React build does that.
 - **Local-only has no Supabase at all**: member management, invitations,
-  attachment upload/fetch and anything gated on `useIsLocalOnly()` are inert.
-  Sign into the sandbox account instead if that's what you're testing.
+  attachment upload/fetch and anything gated on `useIsLocalOnly()`
+  (`src/components/Login.tsx`) are inert. Sign into the sandbox account
+  instead if that's what you're testing.
 - **The dev tab is a separate device for the extension trust gate.** Approvals
-  live in an origin-scoped IndexedDB store (`compiledModuleCache.ts`), so an
-  extension approved on the hosted origin is unapproved here and vice versa —
-  expect to re-run `enable-extension` against `--profile localdev`.
+  live in an origin-scoped IndexedDB store
+  (`src/extensions/compiledModuleCache.ts`), so an extension approved on the
+  hosted origin is unapproved here and vice versa — expect to re-run
+  `enable-extension` against `--profile localdev`.
 
 React Compiler is *not* on this list: `vite.config.ts` applies
 `reactCompilerPreset()` unconditionally, so dev and prod agree.

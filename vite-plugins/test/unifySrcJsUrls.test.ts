@@ -216,6 +216,39 @@ describe('unifySrcJsUrlsPlugin — HMR payload rewrite', () => {
     })
   })
 
+  it("sends a copy — the caller's payload is left untouched", () => {
+    // The assertion above cannot see this: `send` records the *reference*
+    // it was handed, so `toHaveBeenCalledWith` compares against the
+    // already-mutated object and passes whether the wrap copies or
+    // mutates in place. This is the test that pins it. It matters
+    // because Vite owns this object and keeps reading it after the
+    // call — its rolldown-dev environment builds the `hmr update
+    // <files>` log line from `updates` *after* `client.send`, so an
+    // in-place rewrite would make the dev-server log name a `.js` file
+    // that does not exist on disk.
+    const {server, send} = configure()
+    const update = {
+      type: 'js-update',
+      path: '/src/components/Header.tsx',
+      acceptedPath: '/src/components/Header.tsx',
+      timestamp: 1,
+    }
+    const payload = {type: 'update' as const, updates: [update]}
+
+    server.hot.send(payload)
+
+    expect(update.path).toBe('/src/components/Header.tsx')
+    expect(update.acceptedPath).toBe('/src/components/Header.tsx')
+    expect(payload.updates[0]).toBe(update)
+
+    // …and what actually went out is a distinct, rewritten object.
+    const sent = send.mock.calls[0][0] as typeof payload
+    expect(sent).not.toBe(payload)
+    expect(sent.updates[0]).not.toBe(update)
+    expect(sent.updates[0].path).toBe('/src/components/Header.js')
+    expect(sent.updates[0].acceptedPath).toBe('/src/components/Header.js')
+  })
+
   it('passes non-update payloads through untouched', () => {
     const {server, send} = configure()
     const payload = {type: 'full-reload', path: '/src/main.tsx'} as const

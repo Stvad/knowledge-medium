@@ -82,11 +82,27 @@ export const unifySrcJsUrlsPlugin = (): Plugin => ({
         type?: string
         updates?: Array<{path?: string; acceptedPath?: string}>
       } | undefined
+      // Send a rewritten COPY rather than mutating Vite's own object.
+      // Nothing on the send path depends on payload identity — the
+      // channel `JSON.stringify`s it and fans out — but Vite does keep
+      // reading the object it handed us: the classic `updateModules`
+      // path only gets away with in-place mutation because it builds
+      // its `hmr update <files>` log line from `updates` *before*
+      // calling `hot.send`, while the rolldown-dev environment does the
+      // reverse (sends, then maps `updates` for the same log). Copying
+      // costs one object per update and doesn't depend on which of
+      // those orderings we happen to run under.
       if (payload?.type === 'update' && Array.isArray(payload.updates)) {
-        for (const update of payload.updates) {
-          update.path = rewriteSrcPath(update.path)
-          update.acceptedPath = rewriteSrcPath(update.acceptedPath)
+        const rewritten = {
+          ...payload,
+          updates: payload.updates.map(update => ({
+            ...update,
+            path: rewriteSrcPath(update.path),
+            acceptedPath: rewriteSrcPath(update.acceptedPath),
+          })),
         }
+        const rewrittenArgs = [rewritten, ...args.slice(1)] as unknown
+        return originalSend(...(rewrittenArgs as Parameters<typeof server.hot.send>))
       }
       return originalSend(...args)
     }) as typeof server.hot.send
