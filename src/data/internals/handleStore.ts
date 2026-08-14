@@ -676,20 +676,10 @@ export class LoaderHandle<T> implements Handle<T>, RegisteredHandle {
           // other batch members' notifies (one React commit). Without
           // a batch, fire immediately as before.
           //
-          // The queued thunk publishes `this.value` — latest-known at flush
-          // time — NOT the `value` this run settled with. The barrier can
-          // stay open across a later invalidation of this same handle (that
-          // reload is not a member of the open batch, so it notifies as soon
-          // as it settles), and closing over `value` would then walk a
-          // listener backwards: v2 followed by the queued v1. Re-reading at
-          // flush time can hand a listener the same value twice, which the
-          // equality diff already makes cheap and which no consumer can
-          // misread; handing it an older value after a newer one is not
-          // recoverable — `notify()` also writes `notifiedValue`, so the
-          // structural-diff baseline ends up disagreeing with the value the
-          // handle actually holds, and nothing corrects the stale delivery
-          // until some later invalidation re-resolves.
-          if (batch) batch.finish(() => this.notify(this.value as T))
+          // The queued thunk re-decides at FLUSH time (`flushQueuedNotify`)
+          // rather than closing over the value this run settled with —
+          // see that method for why.
+          if (batch) batch.finish(() => this.flushQueuedNotify())
           else this.notify(value)
         } else {
           // Equality match against prior value: notify suppressed.
@@ -930,6 +920,40 @@ export class LoaderHandle<T> implements Handle<T>, RegisteredHandle {
   }
 
   // ──── private ────
+
+  /** Flush a notify that was queued behind a `NotifyBatch` barrier.
+   *
+   *  Publishes `this.value` — latest-known at flush time — rather than the
+   *  value the queuing run settled with. The barrier can stay open across a
+   *  LATER invalidation of this same handle: that reload is not a member of
+   *  the open batch (it either starts its own or runs unbatched), so it
+   *  notifies as soon as it settles. A thunk closing over the queuing run's
+   *  value would then walk a listener backwards — v2 followed by the queued
+   *  v1 — and `notify()` also writes `notifiedValue`, so the structural-diff
+   *  baseline would be left disagreeing with the value the handle actually
+   *  holds, with nothing to correct it until a later invalidation
+   *  re-resolves.
+   *
+   *  Re-apply the structural diff for the same reason the settle path does:
+   *  by flush time that later reload may already have published this exact
+   *  value, and `Handle.subscribe`'s contract is that a listener "fires on
+   *  structural change only" (`@/data/api/handle.ts`). Consumers that read
+   *  the pushed argument instead of re-reading `peek()` — the grouped-
+   *  backlinks bridge, `Repo.subscribeBlocks`'s projector path,
+   *  `PanelLayoutProjection` — rebuild from it, so a redundant delivery is a
+   *  redundant rebuild rather than a free no-op. */
+  private flushQueuedNotify(): void {
+    const value = this.value
+    // Defence in depth, not load-bearing: `dispose()` is the only writer of
+    // `undefined` and it clears the listener set first, so `notify()` would
+    // already early-return. Reading it explicitly keeps the type honest.
+    if (value === undefined) return
+    if (this.hasNotifiedValue && this.equality(this.notifiedValue as T, value)) {
+      this.store.metrics.notifiesSkippedByDiff++
+      return
+    }
+    this.notify(value)
+  }
 
   private notify(value: T): void {
     if (this.listeners.size === 0) return

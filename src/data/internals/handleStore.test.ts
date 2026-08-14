@@ -753,9 +753,11 @@ describe('Batched notify across multiple matching handles', () => {
     )
 
     const fired: string[] = []
+    const slowFired: string[] = []
     fast.subscribe(v => fired.push(v))
-    slow.subscribe(() => {})
+    slow.subscribe(v => slowFired.push(v))
     await vi.waitFor(() => expect(fired).toEqual(['v0']))
+    slowFired.length = 0
     fired.length = 0
 
     // Change 1 matches both → batch. `fast` settles with 'v1' and queues its
@@ -774,18 +776,90 @@ describe('Batched notify across multiple matching handles', () => {
     expect(fast.peek()).toBe('v2')
 
     // Releasing the slow loader closes the barrier and drains its queue.
+    // FIFO fence rather than a microtask count: the queue drains in FINISH
+    // order and `slow` is the member being released, so its thunk is last.
+    // Seeing slow's delivery proves fast's queued thunk has already had its
+    // turn — without it, the assertions below would be checking for an
+    // absence before the thing that produces it could have run.
     releaseSlow('slow-1')
-    await vi.waitFor(() => expect(store.metrics.snapshot().notifiesFired).toBeGreaterThan(0))
-    await Promise.resolve()
-    await Promise.resolve()
-    await Promise.resolve()
+    await vi.waitFor(() => expect(slowFired).toEqual(['slow-1']))
 
     // 'v1' was superseded before it was ever published; publishing it now
-    // would walk a listener backwards. Whatever the barrier flushes must be
-    // the handle's current value.
-    expect(fired).not.toContain('v1')
-    expect(fired.at(-1)).toBe('v2')
-    expect(fired.at(-1)).toBe(fast.peek())
+    // would walk a listener backwards. And 'v2' is already what the listener
+    // last saw, so the barrier has nothing left to say — `Handle.subscribe`
+    // fires on structural change only.
+    expect(fired).toEqual(['v2'])
+    expect(fast.peek()).toBe('v2')
+  })
+
+  it('two overlapping barriers: the outer flush publishes latest, not its own vintage', async () => {
+    // Same hazard without any unbatched notify in the mix: a SECOND
+    // multi-handle invalidation lands while the first barrier is still open,
+    // so the same handle has a thunk queued in two batches at once. The inner
+    // batch closes first and publishes a2; the outer must not then republish
+    // the a1 it was queued with.
+    const store = makeStore(60_000)
+
+    const aValues = ['a0', 'a1', 'a2']
+    let aCall = 0
+    const a = store.getOrCreate('a', () =>
+      new LoaderHandle<string>({
+        store, key: 'a',
+        loader: async (ctx) => {
+          ctx.depend({ kind: 'table', table: 'blocks' })
+          return aValues[Math.min(aCall++, aValues.length - 1)]
+        },
+      }),
+    )
+
+    // Two gated siblings so the SECOND invalidate still matches >1 handle
+    // (and therefore opens its own batch) while the first barrier is open.
+    const gated = (key: string, initial: string) => {
+      let release!: (v: string) => void
+      let promise = Promise.resolve(initial)
+      const handle = store.getOrCreate(key, () =>
+        new LoaderHandle<string>({
+          store, key,
+          loader: async (ctx) => { ctx.depend({ kind: 'table', table: 'blocks' }); return promise },
+        }),
+      )
+      return {
+        handle,
+        gate() { promise = new Promise<string>(r => { release = r }) },
+        release(v: string) { release(v) },
+      }
+    }
+    const b = gated('b', 'b0')
+    const c = gated('c', 'c0')
+
+    const aFired: string[] = []
+    const cFired: string[] = []
+    a.subscribe(v => aFired.push(v))
+    b.handle.subscribe(() => {})
+    c.handle.subscribe(v => cFired.push(v))
+    await vi.waitFor(() => expect(aFired).toEqual(['a0']))
+    aFired.length = 0
+    cFired.length = 0
+
+    // Invalidate 1 → batch1 over {a, b, c}. `a` settles a1 and queues; b/c gated.
+    b.gate()
+    c.gate()
+    store.invalidate({ tables: ['blocks'] })
+    await vi.waitFor(() => expect(a.peek()).toBe('a1'))
+    expect(aFired).toEqual([])
+
+    // Invalidate 2 while batch1 is open → batch2 over the same three. b/c are
+    // mid-load and release their slots; `a` re-runs into batch2 and settles a2.
+    store.invalidate({ tables: ['blocks'] })
+    await vi.waitFor(() => expect(aFired).toEqual(['a2']))
+
+    // Close batch1. Its queued `a` thunk is the stale one.
+    c.release('c1')
+    b.release('b1')
+    await vi.waitFor(() => expect(cFired).toEqual(['c1']))
+
+    expect(aFired).toEqual(['a2'])
+    expect(a.peek()).toBe('a2')
   })
 })
 
