@@ -187,6 +187,12 @@ export async function pickAndInsertImages(
     await withEditModeKeepalive('refocus', async () => {
       const files = await pickImageFiles()
       if (files.length === 0) return
+      // BEFORE capture. Capturing stores bytes, mints asset blocks and starts
+      // uploads — refusing afterwards discards the references and strands
+      // that media, unattached and invisible. The picker is open for as long
+      // as the user takes, so this is also the first point the answer can be
+      // trusted; the guards downstream stay for the rest of the window.
+      if (blockContentIsOpaque(block)) return
       const references = await captureFilesToReferences(block, files)
       if (references.length === 0) return
       await insertReferences(editorView, block, references)
@@ -213,6 +219,9 @@ export async function pickAndInsertImages(
 export async function pickImagesIntoBlock(block: Block): Promise<void> {
   const files = await pickImageFiles()
   if (files.length === 0) return
+  // See `pickAndInsertImages`: refuse before capture so no asset block is
+  // minted and no upload starts for an insertion that cannot land.
+  if (blockContentIsOpaque(block)) return
   const references = await captureFilesToReferences(block, files)
   if (references.length === 0) return
   await appendReferencesToBlock(block, references)
