@@ -78,27 +78,20 @@ export const mergeBlocksInTx = async (
     throw new MergeIntoDescendantError(into.id, from.id)
   }
 
-  // The target's bytes are not prose, and the write below concatenates
-  // `from`'s text straight into them. Up front with the other precondition,
-  // BEFORE any child re-homing, so the refusal costs nothing to roll back.
+  // EITHER side, up front with the other precondition and BEFORE any child
+  // re-homing, so the refusal costs nothing to roll back. As the TARGET its
+  // bytes get prose concatenated into them; as the SOURCE it is deleted by
+  // the merge and its bytes survive only as a tail on the target's prose.
   //
   // Refuse rather than fall back to `keepTarget`: `from` is deleted either
   // way, so keeping the target intact would silently destroy the SOURCE
   // block's text with nothing appended anywhere. Both outcomes lose data, so
-  // it is the user's call. Reachable from MergePicker (a dialog-length pause
-  // in which sync can add the type) and from Backspace-at-offset-0 when the
-  // previous sibling is an extension block.
-  // EITHER side. As the target its bytes get prose concatenated into them;
-  // as the SOURCE it is deleted by the merge and its bytes survive only as
-  // a tail on the target's prose (or, under `keepTarget`, not at all). Both
-  // directions are reachable — MergePicker either way, Backspace-at-start
-  // with an opaque previous sibling for the first, Backspace-at-start OF an
-  // opaque block for the second.
+  // it is the user's call.
   if (hasOpaqueContent(into, tx.opaqueContentTypes)) {
-    throw new MergeIntoOpaqueContentError(into.id, from.id)
+    throw new MergeIntoOpaqueContentError(into.id, from.id, 'into')
   }
   if (hasOpaqueContent(from, tx.opaqueContentTypes)) {
-    throw new MergeIntoOpaqueContentError(from.id, into.id)
+    throw new MergeIntoOpaqueContentError(into.id, from.id, 'from')
   }
 
   // Re-parent only `from`'s regular (visible, non property-field) children

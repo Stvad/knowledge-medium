@@ -27,6 +27,7 @@ import {
 import { resolveEditorOverride } from '@/data/propertyDefinitionRegistry'
 import {readValuePresets} from '@/data/valuePresetRegistry'
 import type { Block } from '@/data/block.js'
+import { hasOpaqueContent } from '@/data/properties.js'
 import { Input } from '@/components/ui/input.js'
 import { Button } from '@/components/ui/button.js'
 import { PropertyShapeGlyph } from '@/components/propertyPanel/shapeUi.js'
@@ -63,10 +64,18 @@ export const writeBlockTypeLabel = async (
     assertRoundTrippableReferenceLabel(next, 'Type label')
   }
   await block.repo.tx(async tx => {
+    // `block-type` and an opaque type can coexist in one `types` list, and
+    // the content mirror below REPLACES the whole block content — so editing
+    // the label of such a block would overwrite an extension's stored source
+    // with the label text. The label property itself is fine; only the
+    // mirror is refused, so the type keeps a name and the source survives.
+    const fresh = await tx.get(block.id)
+    const mirrorContent = fresh !== null
+      && !hasOpaqueContent(fresh, tx.opaqueContentTypes)
     if (next !== currentLabel) {
       await tx.setProperty(block.id, blockTypeLabelProp, next)
     }
-    if (next !== currentContent) {
+    if (next !== currentContent && mirrorContent) {
       await tx.update(block.id, {content: next})
     }
     // A defined type doubles as its `[[label]]` page. A block-type block

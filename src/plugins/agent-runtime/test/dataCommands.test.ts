@@ -532,6 +532,26 @@ describe('reconcile-markdown-subtree command', () => {
     expect((await replyRoots()).map(r => r.content)).toEqual(['A revised'])
   })
 
+  // The detached row sits BETWEEN two live reply nodes, so the replacement
+  // must take its slot. `appendKey` anchors on the last still-tagged child,
+  // which here is the LATER sibling — without seeding the cursor the
+  // regenerated node jumps past it.
+  it('places the replacement for a detached MIDDLE node at its own slot', async () => {
+    await create({id: TOPIC_A, content: 'mention'})
+
+    await reconcile('- A\n- B\n- C', {commandId: 'rms-ord1'})
+    const bId = (await replyRoots()).find(r => r.content === 'B')!.id
+    await context.updateBlock({id: bId, properties: {
+      'claude:reply': true,
+      'agent:subtreeKey': KEY,
+      types: ['extension'],
+    }})
+
+    await reconcile('- A\n- B revised\n- C', {commandId: 'rms-ord2', final: true})
+
+    expect((await replyRoots()).map(r => r.content)).toEqual(['A', 'B revised', 'C'])
+  })
+
   it('keeps streamed reply roots contiguous when the user inserts a sibling mid-stream', async () => {
     await create({id: TOPIC_A, content: 'mention'})
     // Streaming tick 1: the first reply root lands.

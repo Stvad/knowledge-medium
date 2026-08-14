@@ -120,9 +120,14 @@ export class MergeIntoOpaqueContentError extends DataLayerError {
   constructor(
     public readonly intoId: string,
     public readonly fromId: string,
+    /** WHICH side is opaque. The roles above always describe the operation
+     *  as requested — swapping them to point at the opaque block made the
+     *  message report the opposite merge. */
+    public readonly opaqueSide: 'into' | 'from',
   ) {
     super(
-      `cannot merge ${fromId} into ${intoId}: ${intoId}'s content is not text `
+      `cannot merge ${fromId} into ${intoId}: `
+      + `${opaqueSide === 'into' ? intoId : fromId}'s content is not text `
       + '(an installed extension\'s source or similar), so merging would corrupt it',
     )
   }

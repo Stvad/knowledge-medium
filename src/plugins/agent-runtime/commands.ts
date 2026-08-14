@@ -592,6 +592,20 @@ const reconcileMarkdownSubtree = async (
       // it on every future reconcile. Detaching once turns this into the
       // ordinary "nothing at this position" case, which already works.
       if (match && hasOpaqueContent(match, tx.opaqueContentTypes)) {
+        // Anchor the replacement at the DETACHED row's own slot before
+        // dropping the key. `appendKey` otherwise anchors on the last
+        // still-tagged child, which for a detach in the middle is a LATER
+        // sibling — so the regenerated node would jump past it (A, detached
+        // B, C, B'). Only when no cursor exists yet: one already set is
+        // positioned after this run's last append, which is earlier still.
+        if (!cursorByParent.has(realParentId)) {
+          const siblings = await tx.childrenOf(realParentId, workspaceId)
+          const idx = siblings.findIndex(sibling => sibling.id === match!.id)
+          cursorByParent.set(realParentId, {
+            after: match.orderKey ?? null,
+            before: idx >= 0 ? siblings[idx + 1]?.orderKey ?? null : null,
+          })
+        }
         const rest = {...match.properties}
         delete rest[SUBTREE_KEY_PROP]
         await tx.update(match.id, {properties: rest})

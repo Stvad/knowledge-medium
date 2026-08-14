@@ -10,7 +10,7 @@ import {
   PropertyEditingDependencies,
   ActionTrigger,
 } from './types'
-import { Block } from '@/data/block'
+import { Block, blockContentIsOpaque } from '@/data/block'
 import { Repo } from '@/data/repo'
 import {
   merge as mergeMutator,
@@ -1007,6 +1007,10 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
         // guarded page merges it away while `Delete` on it is refused.
         if (!await ensureDeletableThroughUi([block])) return
 
+        // `core.merge` refuses either opaque side anyway; catching it here
+        // makes the gesture a quiet no-op instead of a thrown mutator.
+        if (blockContentIsOpaque(block) || blockContentIsOpaque(prevVisible)) return
+
         // Single tx: flush the editor's live content into `from` first so
         // core.merge concatenates the latest text, then run the merge.
         // tx.run sees writes from the same tx via SQL.
@@ -1080,6 +1084,13 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
         // the editing host is a no-op. That call is vestigial anyway — see the
         // Backspace twin.)
         if (!await ensureDeletableThroughUi([nextVisible])) return
+
+        // Same slot, same reason as the guard above — and `core.merge`'s own
+        // opaque refusal is NOT enough here: the dispatch below is a real doc
+        // change, so `pushChange` persists the concatenated text even though
+        // the merge tx rolled back, duplicating the source into this block
+        // while the original survives.
+        if (blockContentIsOpaque(block) || blockContentIsOpaque(nextVisible)) return
 
         trigger.preventDefault()
 
