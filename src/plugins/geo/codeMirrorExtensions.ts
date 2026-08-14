@@ -22,6 +22,7 @@ import type {
   CodeMirrorExtensionContribution,
 } from '@/editor/codeMirrorExtensions.js'
 import { ChangeScope } from '@/data/api'
+import { hasOpaqueContent } from '@/data/properties'
 import { aliasesProp, typesProp } from '@/data/properties'
 import { PLACE_TYPE } from './blockTypes'
 import {
@@ -326,6 +327,12 @@ const buildPlaceCompletionSource = ({repo, block}: CodeMirrorExtensionContext): 
     await repo.tx(async tx => {
       const data = await tx.get(block.id)
       if (!data || data.deleted) return
+      // The pause this fallback exists for — a collision toast, the Google
+      // details fetch, the naming prompt — is exactly the window in which
+      // the block can turn opaque. Splicing a place link into an
+      // extension's stored source breaks the module, so the refusal belongs
+      // against the tx's own snapshot, not the row the pick started from.
+      if (hasOpaqueContent(data, tx.opaqueContentTypes)) return
       const idx = data.content.indexOf(triggerText)
       if (idx === -1) return
       const next = data.content.slice(0, idx) + insert

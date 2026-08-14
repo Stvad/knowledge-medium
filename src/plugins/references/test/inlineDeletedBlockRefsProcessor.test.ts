@@ -396,6 +396,35 @@ describe('property value children keep a dangling ref instead of inlining (#404)
   })
 
 
+  // The case my own earlier reasoning missed. `isPropertyValueRow` is
+  // POSITIONAL — the direct non-`::` child of a field row — so it says
+  // nothing about the child's content, and an OPAQUE block can sit in that
+  // slot. Classified before the property-row returns: bytes preserved
+  // either way, but the stale edge must still go, because nothing
+  // re-parses an opaque block to drop it.
+  it('drops the stale edge on an OPAQUE value row while keeping its bytes', async () => {
+    await seedFlippedWorkspaceWithRefValue()
+    const source = `const doc = "((${D}))"`
+    // Born as prose so the edge is real, then made opaque by a RAW write —
+    // no processor fires, `block_references` is still maintained.
+    await env.repo.tx(
+      tx => tx.update('value', {content: source}),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await env.repo.awaitProcessors()
+    await env.h.db.writeTransaction(async t => {
+      await t.execute(
+        'UPDATE blocks SET properties_json = ? WHERE id = ?',
+        [JSON.stringify({types: ['extension']}), 'value'],
+      )
+    })
+
+    await env.repo.mutate.delete({id: D})
+
+    expect(env.read('value')!.content).toBe(source)
+    expect(env.read('value')!.references).toEqual([])
+  })
+
   // Deleting the DEFINITION block, not the ref target: every field row keyed
   // to it is an ordinary reference source, so without an exemption they get
   // inlined — content replaced by the definition's text, stamp cleared — and

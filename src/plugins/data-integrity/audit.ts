@@ -603,6 +603,7 @@ const runContentLinkRecomputeCheck = async (
         [workspaceId, `"${type}"`, opaqueLastId],
       )
       if (rows.length === 0) break
+      let newlyInspected = 0
       for (const row of rows) {
         // One block carrying TWO opaque types is selected by both probes,
         // and `hasOpaqueContent` accepts it on each pass because it tests
@@ -610,6 +611,7 @@ const runContentLinkRecomputeCheck = async (
         // twice, and burns the cap twice.
         if (opaqueSeen.has(row.id)) continue
         opaqueSeen.add(row.id)
+        newlyInspected += 1
         if (!hasOpaqueContent(
           { properties: safeJsonParse<Record<string, unknown>>(row.properties_json, {}) },
           opaqueTypes,
@@ -628,7 +630,12 @@ const runContentLinkRecomputeCheck = async (
           opaqueSample.push({ id: row.id, refs: lingering.length })
         }
       }
-      opaqueScanned += rows.length
+      // Count only rows this pass actually INSPECTED. A block carrying two
+      // opaque types comes back from both probes; charging the duplicate to
+      // the cap lets a shared prefix exhaust it before later unique rows for
+      // another type are ever looked at — reporting `incomplete` for work
+      // that was really done.
+      opaqueScanned += newlyInspected
       opaqueLastId = rows[rows.length - 1].id
       if (rows.length < BATCH) break
       if (opaqueScanned >= contentCap) { truncated = true; break }

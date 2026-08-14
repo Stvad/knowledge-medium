@@ -123,21 +123,34 @@ const inlineSource = async (
   // and skip, there's nothing to inline into a block that's going away.
   const current = await tx.get(sourceId)
   if (current === null || current.deleted) return
+  // Opacity is classified FIRST, ahead of the property-row returns below.
+  // `isPropertyValueRow` is POSITIONAL — the direct non-`::` child of a
+  // field row — so it says nothing about the child's content, and an opaque
+  // block sitting in that slot hits that return before reaching the
+  // byte-preserving branch here. Both returns would then keep the bytes AND
+  // the stale edge, and nothing ever re-parses an opaque block to drop it.
+  const opaque = hasOpaqueContent(current, tx.opaqueContentTypes)
+
   // Property machinery keeps its dangling ref rather than being inlined —
   // restorable, and still carrying the property. Both levels qualify, for the
   // same identity-preserving reason: a VALUE row's `((deletedId))` is the
   // property's value, and a FIELD row's `((deletedId))` is the property's
   // identity on its owner (that one bites when the deleted block is the
   // DEFINITION — every field row keyed to it is an ordinary referrer).
-  if (await isPropertyValueRow(tx, current)) return
-  if (await isPropertyFieldRow(tx, current)) return
+  // Neither rationale survives an opaque payload: a bundle is not a decodable
+  // value, and projection reads the row's CONTENT rather than this entry, so
+  // dropping the edge costs the cell nothing.
+  if (!opaque) {
+    if (await isPropertyValueRow(tx, current)) return
+    if (await isPropertyFieldRow(tx, current)) return
+  }
 
   // Opaque content is not prose — leave the BYTES alone. Deliberately not
   // an early return: `nextReferences` below drops the stale block-ref entry
   // independently of the rewrite, and returning early would leave it
   // pointing at a deleted block forever, since the references processor no
   // longer re-parses this block to rebuild it.
-  const nextContent = hasOpaqueContent(current, tx.opaqueContentTypes)
+  const nextContent = opaque
     ? current.content
     : inlineBlockRefs(current.content, deletedId, inlineContent)
   const nextReferences = normalizeReferences(
