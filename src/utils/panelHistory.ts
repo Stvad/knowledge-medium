@@ -466,7 +466,7 @@ const setPanelMaximizedInTx = async (
   maximized: boolean,
 ): Promise<void> => {
   const current = await tx.getProperty(panelId, panelMaximizedProp)
-  if ((current === true) === maximized) return
+  if (current === maximized) return
   await tx.setProperty(panelId, panelMaximizedProp, maximized)
 }
 
@@ -599,18 +599,13 @@ const pruneDeadTop = async (
  *  forward, then restores the destination's snapshot (focused block, scroll).
  *  Dead entries at the top of the stack are dropped first, so Back never lands
  *  the pane on a tombstone; if that empties the stack, this is a no-op. */
-export interface GoBackInPanelOptions {
-  /** Arrangement override applied in the SAME tx as the content swap. Back
-   *  normally PRESERVES maximize — it is arrangement state, not (pane, block)
-   *  state — so this is only for an exit gesture undoing an arrangement its
-   *  own enter set (the notes toggle passes `false`), which keeps close to one
-   *  tx and one projection entry. */
-  maximized?: boolean
-}
-
+/** Back normally PRESERVES maximize (arrangement state, not (pane, block)
+ *  state); `maximized` is for an exit gesture undoing an arrangement its own
+ *  enter set — see `WritePanelContentOptions.maximized`, which this forwards
+ *  to. `goForwardInPanel` deliberately has no equivalent. */
 export const goBackInPanel = async (
   panelBlock: Block,
-  options: GoBackInPanelOptions = {},
+  options: Pick<WritePanelContentOptions, 'maximized'> = {},
 ): Promise<boolean> => {
   const current = panelBlock.peekProperty(topLevelBlockIdProp)
   if (!current) return false

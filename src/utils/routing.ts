@@ -206,10 +206,16 @@ const decodeContextValue = (raw: string): string | null => {
 
 type SlotContext = {viewMode?: string; active?: boolean; maximized?: boolean; rest?: string[]}
 
-/** Valueless boolean slot-context keys: `;flag` ≡ `;flag=true`, `;flag=false`
- *  is an explicit absent, anything else is malformed. */
+/** Valueless boolean slot-context keys, url key → `LayoutSlot` field: `;flag`
+ *  ≡ `;flag=true`, `;flag=false` is an explicit absent, anything else is
+ *  malformed. The SINGLE registration point — parse, build, and the reserved-
+ *  key set all derive from it, so a third flag is one entry here plus its
+ *  field on `LayoutSlot`. */
 const FLAG_SLOT_CONTEXT_KEYS = {active: 'active', max: 'maximized'} as const
 type FlagSlotContextKey = keyof typeof FLAG_SLOT_CONTEXT_KEYS
+type FlagSlotContext = Partial<Record<(typeof FLAG_SLOT_CONTEXT_KEYS)[FlagSlotContextKey], true>>
+const FLAG_SLOT_CONTEXT_ENTRIES = Object.entries(FLAG_SLOT_CONTEXT_KEYS) as
+  [FlagSlotContextKey, (typeof FLAG_SLOT_CONTEXT_KEYS)[FlagSlotContextKey]][]
 
 const isFlagSlotContextKey = (key: string): key is FlagSlotContextKey =>
   Object.hasOwn(FLAG_SLOT_CONTEXT_KEYS, key)
@@ -220,7 +226,8 @@ const isReservedSlotContextKey = (key: string): boolean =>
 const parseContextEntries = (segments: readonly string[]): SlotContext => {
   const seen = new Set<string>()
   let viewMode: string | undefined
-  const flags: {active?: boolean; maximized?: boolean} = {}
+  // Only ever assigned `true`, so it spreads straight into the result.
+  const flags: FlagSlotContext = {}
 
   for (const raw of segments) {
     const match = CONTEXT_ENTRY_RE.exec(raw)
@@ -253,8 +260,7 @@ const parseContextEntries = (segments: readonly string[]): SlotContext => {
 
   return {
     ...(viewMode !== undefined ? {viewMode} : {}),
-    ...(flags.active ? {active: true} : {}),
-    ...(flags.maximized ? {maximized: true} : {}),
+    ...flags,
     ...(rest.length > 0 ? {rest} : {}),
   }
 }
@@ -341,8 +347,9 @@ const encodeContextValue = (value: string): string =>
 
 const buildContextSuffix = (slot: SlotContext): string => {
   const entries: {key: string; text: string}[] = []
-  if (slot.active) entries.push({key: 'active', text: 'active'})
-  if (slot.maximized) entries.push({key: 'max', text: 'max'})
+  for (const [key, field] of FLAG_SLOT_CONTEXT_ENTRIES) {
+    if (slot[field]) entries.push({key, text: key})
+  }
   // local '' ≡ absent fold — see normalizeViewMode (properties.ts).
   if (slot.viewMode) entries.push({key: 'view', text: `view=${encodeContextValue(slot.viewMode)}`})
   for (const raw of slot.rest ?? []) {

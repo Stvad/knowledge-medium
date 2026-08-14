@@ -29,6 +29,7 @@ import { CallbackSet } from '@/utils/callbackSet'
 import { panelRenderScopeId } from '@/utils/renderScope'
 import { deleteSubtreeInTx as deleteLayoutRowSubtreeInTx } from '@/data/subtreeDelete'
 import { visibleChildrenOf } from '@/data/visibleChildren'
+import { safeDecodeRowProperty } from '@/data/rowProperty'
 import { layoutSessionBlockIdForKey } from '@/data/stateBlocks'
 
 export interface ApplyLayoutResult {
@@ -60,13 +61,15 @@ const panelViewMode = (row: BlockData): string | undefined => {
   return normalizeViewMode(panelViewModeProp.codec.decode(stored))
 }
 
-/** Absent ≡ false: the flag is only ever written `true` (or cleared back to
- *  `false`), so no pane needs the property materialized to be un-maximized. */
-export const isPanelRowMaximized = (row: Pick<BlockData, 'properties'> | undefined): boolean => {
-  const stored = row?.properties[panelMaximizedProp.name]
-  if (stored === undefined) return false
-  return panelMaximizedProp.codec.decode(stored) === true
-}
+/** Absent ≡ false (the prop's own `defaultValue`), so no pane needs the
+ *  property materialized to be un-maximized.
+ *
+ *  `safeDecodeRowProperty`, not the strict twin: this is arrangement chrome,
+ *  and it is read inside `layoutSlotsFromRows`, which every projection pass
+ *  runs. A malformed value arriving from sync or a raw bridge write should
+ *  cost that pane its flag, not throw the whole layout projection. */
+export const isPanelRowMaximized = (row: Pick<BlockData, 'properties'>): boolean =>
+  safeDecodeRowProperty(row, panelMaximizedProp)
 
 const sessionActivePanelId = (row: BlockData | undefined): string | undefined => {
   const stored = row?.properties[activePanelIdProp.name]
@@ -471,7 +474,6 @@ export const createPanelRowInTx = async (
       ...(args.viewMode !== undefined
         ? {[panelViewModeProp.name]: panelViewModeProp.codec.encode(args.viewMode)}
         : {}),
-      // Absent ≡ false, so only a true flag is materialized.
       ...(args.maximized
         ? {[panelMaximizedProp.name]: panelMaximizedProp.codec.encode(true)}
         : {}),
@@ -1007,7 +1009,7 @@ export const reconcilePanelRows = async (
             orderKey,
             blockId,
             viewMode: target.viewMode,
-            maximized: target.maximized === true,
+            maximized: target.maximized,
           })
           if (target.active && urlActiveRowId === undefined) urlActiveRowId = createdId
           continue
@@ -1036,11 +1038,9 @@ export const reconcilePanelRows = async (
           // Same content, different mode — sync the URL's mode onto the row.
           await tx.setProperty(slot.row.id, panelViewModeProp, target.viewMode)
         }
-        // Maximize is ARRANGEMENT state, not (pane, block) state, so it is
-        // synced independently of the content swap above — `writePanelContent`
-        // deliberately leaves the flag alone (in-pane navigation keeps
-        // maximize). No single-maximized repair here: reconcile writes what
-        // the hash says, and `LayoutRenderer` renders the first flagged row.
+        // Synced independently of the content swap above: `writePanelContent`
+        // leaves the flag alone because in-pane navigation keeps maximize (see
+        // `panelMaximizedProp` for why reconcile does no repair here).
         if (isPanelRowMaximized(slot.row) !== (target.maximized === true)) {
           await tx.setProperty(slot.row.id, panelMaximizedProp, target.maximized === true)
         }

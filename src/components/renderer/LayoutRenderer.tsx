@@ -10,7 +10,7 @@ import { activePanelIdProp } from '@/data/properties.js'
 import { isPanelRowMaximized, isPanelStackRow } from '@/utils/panelLayoutProjection.js'
 
 type RenderSlot =
-  | {kind: 'panel'; id: string}
+  | {kind: 'panel'; id: string; maximized: boolean}
   | {kind: 'stack'; id: string; children: RenderSlot[]}
 
 const EMPTY_ROWS: readonly BlockData[] = Object.freeze([])
@@ -39,7 +39,9 @@ const buildRenderSlots = (rootId: string, rows: readonly BlockData[]): RenderSlo
         children: (childrenByParent.get(row.id) ?? []).map(visit),
       }
     }
-    return {kind: 'panel', id: row.id}
+    // Stamped here, where `visit` already holds the row — the alternative is a
+    // second pass building an id→row Map the walk just threw away.
+    return {kind: 'panel', id: row.id, maximized: isPanelRowMaximized(row)}
   }
 
   return (childrenByParent.get(rootId) ?? []).map(visit)
@@ -162,15 +164,10 @@ export function LayoutRenderer({block}: BlockRendererProps) {
     ? panelSlots.find(slot => slot.id === activePanelId)
     : undefined
   // Desktop analog of the mobile single-pane path: a maximized leaf renders
-  // ALONE. Sibling rows are untouched in the substrate, so un-maximizing
-  // restores the exact arrangement. First flagged row wins — reconcile writes
-  // whatever the hash says, and a multi-`max` hash can only be hand-crafted
-  // (see `panelMaximizedProp`). Ignored on mobile: already single-pane.
-  const maximizedPanelSlot = useMemo(() => {
-    if (isMobile) return undefined
-    const rowsById = new Map(rows.map(row => [row.id, row]))
-    return panelSlots.find(slot => isPanelRowMaximized(rowsById.get(slot.id)))
-  }, [isMobile, panelSlots, rows])
+  // ALONE, first flagged row wins. Rules and rationale: `panelMaximizedProp`.
+  const maximizedPanelSlot = isMobile
+    ? undefined
+    : panelSlots.find(slot => slot.maximized)
   const fallbackActivePanelSlot = isMobile ? panelSlots.at(-1) : panelSlots[0]
   const mobilePanelSlot = activePanelSlot ?? fallbackActivePanelSlot
   const slotsToRender = isMobile
@@ -178,7 +175,7 @@ export function LayoutRenderer({block}: BlockRendererProps) {
     : (maximizedPanelSlot ? [maximizedPanelSlot] : slots)
   const canClosePanel = panelSlots.length > 1
   // Maximize hides siblings, so it only means something on a desktop split.
-  const canMaximizePanel = !isMobile && panelSlots.length > 1
+  const canMaximizePanel = !isMobile && canClosePanel
   const hasOneVisiblePanel = slotsToRender.length === 1 && slotsToRender[0]?.kind === 'panel'
 
   // ── The single writer of `activePanelIdProp` from this renderer ──
