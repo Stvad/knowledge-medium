@@ -74,3 +74,5 @@
 # sync.remote: "git+ssh://git@github.com/Stvad/knowledge-medium-beads.git"
 agent:
     profile: team-maintainer
+sync:
+    remote: "git+ssh://git@github.com/Stvad/knowledge-medium-beads.git"
