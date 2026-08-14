@@ -201,6 +201,26 @@ describe('LayoutRenderer', () => {
         expect(layoutSessionBlock().peekProperty(activePanelIdProp)).toBe(first))
     })
 
+    // The seed-the-pointer rule fires only on an ABSENT pointer. A pointer
+    // naming a row this subtree doesn't have is left alone: the row may simply
+    // not be projected yet, and seizing it would move the user's active pane.
+    // Row deletion has its own repair, so nothing needs this path to clean up.
+    it('leaves a pointer naming an unknown row alone rather than seizing it', async () => {
+      const {first} = await twoPanels()
+      const foreign = 'panel-row-from-another-session'
+      await layoutSessionBlock().set(activePanelIdProp, foreign)
+
+      renderLayout()
+      await screen.findByTestId(`block-${first}`)
+
+      // Negative over a real window: the seize would be an async write, so a
+      // bare assertion right after render passes either way.
+      await expect(vi.waitFor(
+        () => expect(layoutSessionBlock().peekProperty(activePanelIdProp)).not.toBe(foreign),
+        {timeout: 500},
+      )).rejects.toThrow()
+    }, 20_000) // measured ~600ms: the negative wait dominates
+
     // The insert clears the flag, creates the row, and moves `active` onto the
     // new pane in ONE tx — but the renderer used to read `activePanelId` from
     // a separate subscription, so it could see the new pointer against the OLD
@@ -247,13 +267,18 @@ describe('LayoutRenderer', () => {
         } as typeof Block.prototype.set,
       )
 
-      renderLayout()
+      try {
+        renderLayout()
 
-      await vi.waitFor(() =>
-        expect(layoutSessionBlock().peekProperty(activePanelIdProp)).toBe(second))
-      setSpy.mockRestore()
+        await vi.waitFor(() =>
+          expect(layoutSessionBlock().peekProperty(activePanelIdProp)).toBe(second))
+      } finally {
+        // `mockRestore` as a bare statement leaks the prototype patch to every
+        // later test in the file whenever the wait above throws.
+        setSpy.mockRestore()
+      }
       // It must never have passed THROUGH the first pane on the way, and must
-      // not have taken repeated synced writes to settle.
+      // not have taken repeated writes to settle.
       expect(writes).toEqual([second])
     })
   })

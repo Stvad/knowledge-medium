@@ -719,11 +719,16 @@ const sessionPanelRowsInTx = async (
   if (!session) return null
   const panelRows = panelRowsInLayoutOrder(session.id, await loadSubtreeRowsInTx(tx, session))
   // Defence in depth, NOT load-bearing: the walk found *a* non-stack ancestor,
-  // and this would confirm it was the session that actually renders the pane.
-  // The `PANEL_TYPE` gate above already rejects everything that reaches here
+  // and this confirms it was the session that actually renders the pane. The
+  // `PANEL_TYPE` gate above already rejects everything that reaches here
   // wrongly, so no test can pin this clause through the public path — deleting
-  // it keeps the suite green. Kept because it is the cheap half of the check
-  // and the gate is a type tag, which a raw sync/bridge write could omit.
+  // it keeps the suite green.
+  //
+  // It is NOT a backstop for a missing type tag (that fails closed at the gate
+  // above, never reaching here). What it still catches is a correctly-tagged
+  // panel row re-parented OUT of its session by a raw sync/bridge write: the
+  // walk would then hand back some other block as "the session" and we would
+  // write layout properties onto it.
   return panelRows.some(candidate => candidate.id === panelId) ? {session, panelRows} : null
 }
 
@@ -799,12 +804,15 @@ export const togglePanelMaximized = async (
 export const prepareExclusiveMaximize = async (
   repo: Repo,
   panelId: string,
+  {canRenderSplit = true}: {canRenderSplit?: boolean} = {},
 ): Promise<boolean> => {
   let hidesSomething = false
   await repo.tx(async tx => {
     const found = await sessionPanelRowsInTx(tx, panelId)
     if (!found) return
-    hidesSomething = found.panelRows.length > 1
+    // Both senses of "something to hide", matching `togglePanelMaximized`:
+    // a sibling pane AND a viewport that would otherwise render it.
+    hidesSomething = found.panelRows.length > 1 && canRenderSplit
     for (const other of found.panelRows) {
       if (other.id === panelId || !isPanelRowMaximized(other)) continue
       await tx.setProperty(other.id, panelMaximizedProp, false)

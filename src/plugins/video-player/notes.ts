@@ -8,6 +8,7 @@ import {
 import { panelRenderScopeId } from '@/utils/renderScope'
 import { goBackInPanel, navigateInPanel, panelHistory } from '@/utils/panelHistory'
 import { prepareExclusiveMaximize } from '@/utils/panelLayoutProjection'
+import { isMobileViewport } from '@/utils/viewport'
 import { VIDEO_NOTES_VIEW_MODE } from './view.ts'
 
 const focusVideoNoteChild = async (
@@ -82,10 +83,11 @@ export const ensureEditableVideoNoteChild = async (
  *  `toggle_maximize_panel` still un-maximizes without leaving notes view.
  *
  *  `prepareExclusiveMaximize` decides whether maximizing is warranted at all:
- *  with a lone pane there is nothing to hide, and setting the flag anyway
- *  leaves state that renders identically, offers no restore button, survives
- *  an ordinary in-pane navigation away from the notes view, and then swallows
- *  the next pane the user opens. It also clears any OTHER flagged pane, which
+ *  with a lone pane, or a viewport that renders one pane regardless, there is
+ *  nothing to hide, and setting the flag anyway leaves state that renders
+ *  identically, offers no restore button, survives an ordinary in-pane
+ *  navigation away from the notes view, and then swallows the next pane the
+ *  user opens. It also clears any OTHER flagged pane, which
  *  is what keeps the at-most-one rule true for this writer — the flag itself
  *  is set from inside `navigateInPanel`'s tx, below the layer that can see a
  *  session's rows.
@@ -101,7 +103,13 @@ export const enterVideoNotesView = async (
   uiStateBlock: Block,
 ): Promise<void> => {
   if (uiStateBlock.peekProperty(topLevelBlockIdProp) === undefined) return
-  const maximized = await prepareExclusiveMaximize(uiStateBlock.repo, uiStateBlock.id)
+  const maximized = await prepareExclusiveMaximize(uiStateBlock.repo, uiStateBlock.id, {
+    // A narrow viewport renders one pane and ignores the flag, so maximizing
+    // there hides nothing now and — rows being synced — hides panes on a wide
+    // viewport later with no gesture behind it. Same rule the toggle action
+    // applies; this is the other writer.
+    canRenderSplit: !isMobileViewport(),
+  })
   await navigateInPanel(uiStateBlock, videoBlock.id, {
     viewMode: VIDEO_NOTES_VIEW_MODE,
     maximized,
@@ -127,8 +135,8 @@ export const enterVideoNotesView = async (
  *  undoes the keys enter set, and leaving the pane maximized would keep every
  *  sibling pane hidden after the view the maximize existed for is gone. This
  *  does drop a maximize the user had set MANUALLY before entering notes —
- *  accepted, since enter maximizes unconditionally and nothing records which
- *  of the two set it. */
+ *  accepted, since enter maximizes whenever there is anything to hide and
+ *  nothing records which of the two set it. */
 // Re-entry guard: a double-activation of close (double-click, repeated key)
 // must not step back twice. Keyed per panel; cleared when the first close
 // settles.

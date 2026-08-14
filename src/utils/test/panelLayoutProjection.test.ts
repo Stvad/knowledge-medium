@@ -52,6 +52,7 @@ import {
   panelBlockIds,
   panelBlockId,
   panelRowsInLayoutOrder,
+  prepareExclusiveMaximize,
   reconcilePanelRows,
   retargetPanelBlockIds,
   togglePanelMaximized,
@@ -1235,6 +1236,30 @@ describe('togglePanelMaximized', () => {
     await insertSidebarStackedPanel(env.repo, layoutSessionBlock(), 'c')
 
     expect(env.repo.block(byBlock.get('a')!).peekProperty(panelMaximizedProp)).not.toBe(true)
+  })
+
+  // `prepareExclusiveMaximize` is the OTHER writer of the flag (the video-notes
+  // enter sets it from inside navigateInPanel's tx), so it carries the same
+  // two-part "nothing to hide" rule as the toggle. Reported as its own gap:
+  // gating only the toggle left the notes gesture able to plant a flag on a
+  // narrow viewport, which rows sync then carry to a wide one.
+  it('prepareExclusiveMaximize declines on a viewport that cannot render a split', async () => {
+    await applyUrl('#ws-1/a/b')
+    const rowA = (await rowIdsByBlock()).get('a')
+    if (!rowA) throw new Error('missing a row')
+
+    expect(await prepareExclusiveMaximize(env.repo, rowA, {canRenderSplit: false})).toBe(false)
+    expect(await prepareExclusiveMaximize(env.repo, rowA)).toBe(true)
+  })
+
+  it('prepareExclusiveMaximize still clears other panes even when it declines', async () => {
+    await applyUrl('#ws-1/a/b;max')
+    const byBlock = await rowIdsByBlock()
+
+    expect(await prepareExclusiveMaximize(env.repo, byBlock.get('a')!, {canRenderSplit: false}))
+      .toBe(false)
+
+    expect(env.repo.block(byBlock.get('b')!).peekProperty(panelMaximizedProp)).not.toBe(true)
   })
 
   it('pushes a history entry (maximize is a layout change, so Back un-maximizes)', async () => {

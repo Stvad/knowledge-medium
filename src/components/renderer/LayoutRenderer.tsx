@@ -205,13 +205,18 @@ export function LayoutRenderer({block}: BlockRendererProps) {
   // exists to prevent) and took several synced writes, each projecting a
   // replace, to settle.
   //
-  // Rule 2 keeps its original "pointer set at all" guard: a panel insert
-  // writes `activePanelId` and the new row in one tx, but React subscriptions
-  // can surface the property before this subtree query includes the row —
-  // treating "active id not in current rows" as stale here would let mobile
-  // immediately hide the newly opened panel.
+  // Rule 2 fires only on an ABSENT pointer, never on one that merely names a
+  // row this session doesn't have. It inherited that guard from a time when
+  // the pointer came from its own subscription and could legitimately run
+  // ahead of the rows; reading both from one snapshot (above) made that
+  // particular skew impossible. What the guard still buys is deliberate: a
+  // pointer naming an unknown row is left ALONE rather than repaired, because
+  // the row may simply not have been projected into this subtree yet, and
+  // seizing it would move the user's active pane — on mobile, visibly. Row
+  // deletion has its own repair (`activePanelIdAfterReconcile`), so nothing
+  // depends on this path to clean up.
   const desiredActivePanelSlot = maximizedPanelSlot
-    ?? (activePanelId || activePanelSlot ? undefined : fallbackActivePanelSlot)
+    ?? (activePanelId ? undefined : fallbackActivePanelSlot)
 
   useEffect(() => {
     if (!desiredActivePanelSlot || activePanelId === desiredActivePanelSlot.id) return
