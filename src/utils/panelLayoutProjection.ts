@@ -738,18 +738,24 @@ const sessionPanelRowsInTx = async (
  * relies on `LayoutRenderer`'s inbound coercion effect (which exists for the
  * URL/Back/snapshot arrivals that have no gesture at all).
  *
- * Turning the flag ON needs something to hide. With a lone pane, maximizing
- * changes nothing on screen, renders no restore affordance
- * (`canMaximizePanel`), and leaves a flag that silently swallows the NEXT pane
- * the user opens — so it is refused rather than planted. The action is
- * keyboard-dispatchable on surfaces the chrome button never appears on, which
- * is how that state was reachable at all.
+ * Turning the flag ON needs something to hide, in BOTH senses — a pane to hide
+ * (`panelRows.length > 1`) and a viewport that would otherwise show it
+ * (`canRenderSplit`, false on mobile, where the layout renders one pane
+ * regardless and ignores the flag). Either way maximizing changes nothing on
+ * screen, renders no restore affordance (`canMaximizePanel` encodes the same
+ * two conditions), and leaves a flag that silently swallows the next pane the
+ * user opens — or, since rows sync, hides panes on a WIDER viewport later with
+ * no gesture behind it. The action is keyboard-dispatchable on surfaces the
+ * chrome button never appears on, which is how that state is reachable at all.
+ *
+ * Turning it OFF is always allowed, so a flag is never stuck.
  *
  * Returns the resulting flag, or null when the call was refused.
  */
 export const togglePanelMaximized = async (
   repo: Repo,
   panelId: string,
+  {canRenderSplit = true}: {canRenderSplit?: boolean} = {},
 ): Promise<boolean | null> => {
   let result: boolean | null = null
   await repo.tx(async tx => {
@@ -758,7 +764,7 @@ export const togglePanelMaximized = async (
     const {session, panelRows} = found
 
     const next = !isPanelRowMaximized(panelRows.find(row => row.id === panelId)!)
-    if (next && panelRows.length <= 1) return
+    if (next && (panelRows.length <= 1 || !canRenderSplit)) return
 
     for (const other of panelRows) {
       const wanted = other.id === panelId && next
@@ -783,8 +789,12 @@ export const togglePanelMaximized = async (
  * invisible flag.
  *
  * Writes nothing when no other pane is flagged — the overwhelmingly common
- * case — so it costs no row change, and therefore no projection push. The
- * caller's own tx stays the single history entry.
+ * case — so it costs no row change, and therefore no projection push, leaving
+ * the caller's own tx as the single history entry. When another pane IS
+ * flagged this runs its own tx and a maximize diff pushes, so the gesture
+ * costs two browser-history entries with a half-applied state between them.
+ * That is only reachable from a multi-`max` hash (hand-crafted, per
+ * `panelMaximizedProp`), and clearing the stale flag is worth the extra entry.
  */
 export const prepareExclusiveMaximize = async (
   repo: Repo,

@@ -1123,6 +1123,31 @@ describe('togglePanelMaximized', () => {
     expect(env.repo.block(rowA).peekProperty(panelMaximizedProp)).not.toBe(true)
   })
 
+  // The other half of "nothing to hide": a viewport that renders one pane
+  // regardless ignores the flag, so setting it there writes `;max` into the
+  // shared hash and — since rows sync — hides panes on a WIDER viewport later
+  // with no gesture behind it. The action is keyboard-reachable on exactly
+  // those viewports, where the chrome button never renders.
+  it('refuses to maximize on a viewport that cannot render a split', async () => {
+    await applyUrl('#ws-1/a/b')
+    const rowA = (await rowIdsByBlock()).get('a')
+    if (!rowA) throw new Error('missing a row')
+
+    expect(await togglePanelMaximized(env.repo, rowA, {canRenderSplit: false})).toBeNull()
+
+    expect(env.repo.block(rowA).peekProperty(panelMaximizedProp)).not.toBe(true)
+  })
+
+  it('still clears an existing flag on such a viewport, so nothing is stuck', async () => {
+    await applyUrl('#ws-1/a;max/b')
+    const rowA = (await rowIdsByBlock()).get('a')
+    if (!rowA) throw new Error('missing a row')
+
+    expect(await togglePanelMaximized(env.repo, rowA, {canRenderSplit: false})).toBe(false)
+
+    expect(env.repo.block(rowA).peekProperty(panelMaximizedProp)).not.toBe(true)
+  })
+
   // Un-maximizing must still work once siblings are gone, or closing the other
   // pane would strand the flag.
   it('still clears a flag on a pane that is now alone', async () => {

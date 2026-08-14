@@ -66,6 +66,7 @@ import { AppExtension } from '@/facets/facet.js'
 import { refreshAppRuntime } from '@/facets/runtimeEvents.js'
 import { systemToggle } from '@/facets/togglable.js'
 import { getLayoutSessionBlock, getUserPrefsBlock } from '@/data/stateBlocks.js'
+import { isMobileViewport } from '@/utils/viewport.js'
 import {
   navigate,
   navigateFromGlobalCommand,
@@ -324,8 +325,12 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
     description: 'Maximize / restore current panel',
     icon: Maximize2,
     handler: async ({uiStateBlock}: BlockShortcutDependencies) => {
-      // uiStateBlock IS the panel row in panel contexts.
-      await togglePanelMaximized(repo, uiStateBlock.id)
+      // uiStateBlock IS the panel row in panel contexts. The viewport check
+      // belongs here, not in the projection: this action is the one caller
+      // that can fire on a viewport rendering a single pane (bound in
+      // NORMAL_MODE and EDIT_MODE_CM, so a hardware keyboard on a narrow
+      // window reaches it where the chrome button never renders).
+      await togglePanelMaximized(repo, uiStateBlock.id, {canRenderSplit: !isMobileViewport()})
     },
     defaultBinding: {
       keys: '$mod+Shift+Backslash',

@@ -40,6 +40,7 @@
 import { useCallback, type MouseEvent } from 'react'
 import type { Block } from '@/data/block'
 import type { Repo } from '@/data/repo'
+import type { BlockData } from '@/data/api'
 import { defineVerbFacet } from '@/facets/verbFacet'
 import { useRepo } from '@/context/repo'
 import { useBlockContext } from '@/context/block'
@@ -51,6 +52,7 @@ import { isMobileViewport } from '@/utils/viewport'
 import {
   insertPanelRow,
   insertSidebarStackedPanel,
+  isPanelRowMaximized,
   panelRowsInLayoutOrder,
 } from '@/utils/panelLayoutProjection'
 
@@ -161,12 +163,37 @@ const panelRowsForLayoutSession = async (
   await layoutSessionBlock.repo.query.subtree({id: layoutSessionBlock.id, hidePropertyChildren: true}).load(),
 )
 
+/** The panel rows the user can actually SEE.
+ *
+ *  A maximized pane renders ALONE (`LayoutRenderer`), so every "which pane does
+ *  this navigation land in" question has to ask this instead of indexing into
+ *  the raw row order. Until maximize existed, `panelRows[0]` was a sound proxy
+ *  for "the leftmost visible pane" — desktop rendered every slot — and it
+ *  stopped being one the moment a pane could be flagged away. Getting this
+ *  wrong is not a cosmetic miss: the same resolution feeds
+ *  `resolveGlobalCommandTarget`, so a READ of "what page am I on" answers with
+ *  a pane that isn't on screen, and prev/next daily note then CREATES a note
+ *  from that wrong anchor.
+ *
+ *  Deliberately answers only the maximize question. Mobile also renders one
+ *  pane, but by ACTIVE pane, and navigator gestures already route to `'active'`
+ *  there (`defaultNavigationIntent`). */
+const visiblePanelRows = (panelRows: readonly BlockData[]): readonly BlockData[] => {
+  const maximized = panelRows.find(isPanelRowMaximized)
+  return maximized ? [maximized] : panelRows
+}
+
 const resolveActivePanelRow = async (
   layoutSessionBlock: Block,
 ) => {
   await layoutSessionBlock.load()
-  const panelRows = await panelRowsForLayoutSession(layoutSessionBlock)
+  const panelRows = visiblePanelRows(await panelRowsForLayoutSession(layoutSessionBlock))
   const activePanelId = layoutSessionBlock.peekProperty(activePanelIdProp)
+  // The `find` miss is load-bearing here, not just a guard: an inbound `;max`
+  // link sets the flag and leaves the pointer alone, and the coercion that
+  // repairs it is a render effect — so the pointer legitimately names a hidden
+  // pane for a window, and narrowing first makes the fallback land on the
+  // visible one instead of `at(-1)`.
   return panelRows.find(row => row.id === activePanelId) ?? panelRows.at(-1) ?? null
 }
 
@@ -202,7 +229,7 @@ const resolveDestination = async (
         : null
     case 'main': {
       const ls = await resolveLayoutSessionBlock(repo, workspaceId)
-      const panels = await panelRowsForLayoutSession(ls)
+      const panels = visiblePanelRows(await panelRowsForLayoutSession(ls))
       return panels[0]
         ? {kind: 'panel', workspaceId, panelId: panels[0].id}
         : {kind: 'create-row', workspaceId}
