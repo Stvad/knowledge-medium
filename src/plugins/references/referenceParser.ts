@@ -109,7 +109,8 @@ const hasBalancedBrackets = (s: string): boolean => {
 }
 
 /** Where the wikilink opened at `startPos` actually closes, given that a run
- *  of `]` begins at `runStart`.
+ *  of `]` begins at `runStart` and `enclosing` openers are still unclosed
+ *  around it.
  *
  *  A run of exactly two is never in doubt — it is the closer, and this
  *  returns `runStart` unchanged. Three or more is the ambiguous case, and it
@@ -121,17 +122,28 @@ const hasBalancedBrackets = (s: string): boolean => {
  *
  *  So the alias should absorb exactly as many `]` as it has unclosed `[`.
  *  That is a COUNT, not a search: compute the alias-so-far's net bracket
- *  depth in one pass and the answer is `runStart + depth`, valid only if the
- *  run is still long enough to supply the delimiter's own two. An underflow
- *  (a `]` with no `[` to close, e.g. `[[a]b]]`) means no reading balances —
- *  fall back to the first pair, which is what this has always done.
+ *  depth in one pass and the answer is `runStart + depth`. An underflow (a
+ *  `]` with no `[` to close, e.g. `[[a]b]]`) means no reading balances — fall
+ *  back to the first pair, which is what this has always done.
  *
- *  Deliberately not "try each candidate and test it for balance" (Codex on
- *  PR #548): that re-scans a near-full prefix per candidate, so `[[` + N `[`
+ *  ENCLOSING OPENERS GET THEIR CLOSERS FIRST (Codex on PR #548). A nested
+ *  span shares the run with the links around it, so absorbing greedily can
+ *  eat a pair an outer link needed: in `[[outer [[inner[]]]]` the run is four
+ *  `]` — inner taking one for its unmatched `[` leaves a single `]`, and the
+ *  outer link is never emitted at all. Absorbing is therefore allowed only
+ *  when it does not reduce how many enclosing openers this run can still
+ *  close. That is a comparison, not a reservation, and the difference
+ *  matters: blanket-reserving two per opener would refuse
+ *  `[[outer [[Book of [x]]] tail]]`, whose outer link closes later in the
+ *  content and never wanted this run's brackets.
+ *
+ *  Deliberately not "try each candidate and test it for balance" (also Codex
+ *  on #548): that re-scans a near-full prefix per candidate, so `[[` + N `[`
  *  + N/2 `]` costs Θ(N²) and a pasted block could hang the client. This is
  *  one pass over the same prefix `parseWikilinkReferences` is about to
- *  `slice` anyway, plus at most `depth + 2` characters of the run — the
- *  same order the scanner already paid per close.
+ *  `slice` anyway, and the run walk is bounded by what could change the
+ *  answer — with an early exit at depth 0, which is every frame of the
+ *  deep-nesting shape.
  *
  *  Reading a bare `]` run this way is what removes the need for
  *  `renderWikilink` to pad a trailing `]` into the user's own text. */
@@ -139,6 +151,7 @@ const closingDelimiterFor = (
   content: string,
   startPos: number,
   runStart: number,
+  enclosing: number,
 ): number => {
   let depth = 0
   for (let j = startPos + 2; j < runStart; j++) {
@@ -146,11 +159,18 @@ const closingDelimiterFor = (
     if (ch === '[') depth++
     else if (ch === ']' && --depth < 0) return runStart
   }
-  // Only `depth + 2` closers can ever matter, so stop counting the run there
-  // — an adversarial run of a million `]` costs `depth + 2`, not its length.
-  let available = 0
-  while (available < depth + 2 && content[runStart + available] === ']') available++
-  return available >= depth + 2 ? runStart + depth : runStart
+  // Nothing to absorb — and this is also the cheap exit that keeps deeply
+  // nested input linear, since `[[`-only nesting gives every frame depth 0.
+  if (depth === 0) return runStart
+  // Walk only as far as could change the comparison below: past
+  // `depth + 2 + 2 * enclosing` both leftovers saturate at `enclosing`.
+  const horizon = depth + 2 + 2 * enclosing
+  let run = 0
+  while (run < horizon && content[runStart + run] === ']') run++
+  if (run < depth + 2) return runStart
+  // How many enclosing openers each reading leaves this run able to close.
+  const closable = (consumed: number) => Math.min((run - consumed) >> 1, enclosing)
+  return closable(depth + 2) === closable(2) ? runStart + depth : runStart
 }
 
 const parseWikilinkReferences = (content: string): ParsedReference[] => {
@@ -165,7 +185,7 @@ const parseWikilinkReferences = (content: string): ParsedReference[] => {
     } else if (content.slice(i, i + 2) === ']]') {
       if (stack.length > 0) {
         const startPos = stack.pop()!
-        const closeAt = closingDelimiterFor(content, startPos, i)
+        const closeAt = closingDelimiterFor(content, startPos, i, stack.length)
         const alias = content.slice(startPos + 2, closeAt)
         // Gate EMISSION only — the pop above still happened, so a
         // rejected span consumes its delimiters exactly as an accepted

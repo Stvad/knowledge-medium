@@ -81,13 +81,31 @@ export interface BlockResolveContext {
    *  into its own `alias` property, so a captured value would change on every
    *  keystroke commit and remount the editor with it (PR #548).
    *
-   *  The consequence is the thing to know before keying on it: a facet
-   *  resolver memoized on the context will NOT re-run when a block is named
-   *  or renamed, so a contribution that decides something durable from
-   *  `ctx.aliases` freezes at whatever it first resolved. For a decision that
-   *  must FOLLOW naming, take it inside a rendered component
-   *  (`useBlockAliases(block)`), or use the two facets that exist for it and
-   *  are fed reactively by their calling hooks — `blockTextClassFacet` and
+   *  The consequence, stated plainly because it IS a narrowing: a facet
+   *  resolver memoized on this context will not re-run when a block is named
+   *  or renamed. Before, `Layout`, the bullet's hover/context-menu sections
+   *  and the shell's click handler did re-resolve on an alias change (they
+   *  memoize on the context object); they no longer do. The content path
+   *  never did — `baseContentRenderer`, `contentSurfaceProps` and the
+   *  header/footer sections all omit the context from their deps, so within a
+   *  mounted slot they were never re-resolved at all. What "reactivity" that
+   *  path appeared to have was the slot being REBUILT, i.e. the editor
+   *  remount this field caused.
+   *
+   *  It is not restorable by putting the value back in a dep list, and the
+   *  reason is `blockContentDecoratorsFacet`'s contract a few hundred lines
+   *  down: A CONTRIBUTION IS A STRUCTURAL GATE, NOT A REACTIVE ONE, and
+   *  decorator composition mints a fresh wrapped component per resolve unless
+   *  every author memoized (the facet says authors "should"). Re-resolving on
+   *  a value that changes per keystroke therefore re-opens the same remount
+   *  through a different door. Making that safe means decoupling slot
+   *  identity from this object entirely — worth doing, not this change.
+   *
+   *  So for a decision that must FOLLOW naming, take it inside a rendered
+   *  component (`useBlockAliases(block)`) — which is exactly what the
+   *  decorator facet already tells contributors to do with data-dependent
+   *  state — or use the two facets that exist for it and are fed reactively
+   *  by their calling hooks: `blockTextClassFacet` and
    *  `blockBulletClassFacet`, which is how the alias plugin styles pages. */
   aliases: readonly string[]
   topLevelBlockId?: string

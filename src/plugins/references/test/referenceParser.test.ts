@@ -91,6 +91,25 @@ describe('referenceParser', () => {
       it('still reports nesting from both ends', () => {
         expect(parseReferences('[[a [[b]]]]').map(r => r.alias)).toEqual(['a [[b]]', 'b'])
       })
+
+      it('does not eat a closing pair an enclosing link still needs', () => {
+        // Four `]`: one for the inner alias's unmatched `[` would leave a
+        // single `]`, and the OUTER link would never be emitted at all.
+        expect(parseReferences('[[outer [[inner[]]]]').map(r => r.alias))
+          .toEqual(['outer [[inner[]]', 'inner['])
+      })
+
+      it('still absorbs when the run has pairs to spare for the enclosing link', () => {
+        expect(parseReferences('[[a [[Book of [x]]]]]').map(r => r.alias))
+          .toEqual(['a [[Book of [x]]]', 'Book of [x]'])
+      })
+
+      it('still absorbs when the enclosing link closes later in the content', () => {
+        // A blanket "reserve two per enclosing opener" would wrongly refuse
+        // this one — the outer closes at the end and never wanted this run.
+        expect(parseReferences('[[outer [[Book of [x]]] tail]]').map(r => r.alias))
+          .toEqual(['outer [[Book of [x]]] tail', 'Book of [x]'])
+      })
     })
 
     it('should ignore empty references', () => {
