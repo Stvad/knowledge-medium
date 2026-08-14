@@ -200,6 +200,35 @@ describe('referenceDateAdapter', () => {
     expect(referenceDateAdapter.canHandle(none)).toBe(false)
   })
 
+  // The cached check keeps the block out of the flows; this one decides the
+  // WRITE. A raw `writeTransaction` turns the row opaque without touching
+  // the cache — the same shape a sync or an extension install produces
+  // while a reschedule sheet sits open, and one a content-staleness check
+  // cannot see because the content did not change.
+  it('setIso refuses when the row turned opaque after the cached read', async () => {
+    const repo = makeRepo()
+    const runtime = resolveFacetRuntimeSync([kernelDataExtension])
+    repo.setFacetRuntime(runtime)
+    const content = 'const releasedOn = "[[2026-05-15]]"'
+    await repo.tx(tx => tx.create({
+      id: 'drift', workspaceId: 'ws', parentId: null, orderKey: 'a', content,
+    }), {scope: ChangeScope.BlockDefault})
+
+    const block = repo.block('drift')
+    await block.load()
+    // Still prose as far as the cache is concerned.
+    expect(referenceDateAdapter.canHandle(block)).toBe(true)
+
+    await sharedDb.db.writeTransaction(async t => {
+      await t.execute('UPDATE blocks SET properties_json = ? WHERE id = ?',
+        [JSON.stringify({types: ['extension']}), 'drift'])
+    })
+
+    expect(await referenceDateAdapter.setIso(block, '2026-06-01')).toBe(false)
+    const row = await repo.load('drift')
+    expect(row!.content).toBe(content)
+  })
+
   it('setIso preserves the reference style (ISO vs long form)', async () => {
     const repo = makeRepo()
     await repo.tx(async tx => {

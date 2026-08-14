@@ -7,7 +7,7 @@
  */
 import type { EditorView } from '@codemirror/view'
 import type { Block } from '@/data/block'
-import type { BlockData } from '@/data/api'
+import { ChangeScope, type BlockData } from '@/data/api'
 import { hasOpaqueContent } from '@/data/properties'
 import {
   parseOutermostReferences,
@@ -91,10 +91,23 @@ export const referenceDateAdapter: BlockDateAdapter = {
     if (block.repo.isReadOnly) return false
     const data = block.peek() ?? await block.load()
     if (!data || !isSchedulable(block, data)) return false
-    const nextContent = replaceSingleDateReferenceContent(data.content, iso)
-    if (nextContent === null || nextContent === data.content) return false
-    await block.setContent(nextContent)
-    return true
+    // The cached check above keeps the block out of the flows; this one
+    // decides the WRITE. Both are needed: reschedule/spread can sit between
+    // them for as long as the user takes, and a sync or extension install
+    // can turn the block opaque in that window without changing content —
+    // which is also why the content is re-derived from the tx's row rather
+    // than the snapshot read above.
+    let wrote = false
+    await block.repo.tx(async tx => {
+      const fresh = await tx.get(block.id)
+      if (!fresh || fresh.deleted) return
+      if (hasOpaqueContent(fresh, tx.opaqueContentTypes)) return
+      const nextContent = replaceSingleDateReferenceContent(fresh.content, iso)
+      if (nextContent === null || nextContent === fresh.content) return
+      await tx.update(block.id, {content: nextContent})
+      wrote = true
+    }, {scope: ChangeScope.BlockDefault, description: 'reschedule date reference'})
+    return wrote
   },
 }
 

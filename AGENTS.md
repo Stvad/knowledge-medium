@@ -35,6 +35,13 @@ secret handling:
 - when a task needs secret-backed config, infer variable names from code/docs and have the user provide or set values out of band
 - if a command must touch a secret file, avoid outputting its contents and avoid relaying secret values back to the user
 
+opaque content (blocks whose `content` is not prose — extension source, drawing JSON):
+- `opaqueContentTypesFacet` declares the type ids; `hasOpaqueContent(data, types)` is the predicate. Read the set from `tx.opaqueContentTypes` inside a write (snapshotted at tx start, same one the same-tx processors see) and `repo.opaqueContentTypes` in a query resolver.
+- the line is NOT "did the user aim at this block". It is: does the gesture EDIT THE TEXT the user is typing (editor keystrokes, paste at the caret, split/merge flushing live editor content) — those are fine — or does it TARGET a block and write text as a side effect (find-replace, add-tag, ask-agent, insert-image, reschedule, backlink rewrites)? Every gesture in the second group must check. Getting this line wrong is how ask-agent and insert-image both shipped unguarded.
+- check inside the transaction that writes, not against a cached row. Every one of these gestures has a user-length pause (a dialog, a file picker, a preview list) between the read and the write, and a block can become opaque in that window WITHOUT its content changing — so a content-staleness check does not catch it.
+- a content REWRITER (rename / merge-retarget / inline-deleted-refs) must skip the byte rewrite but still drop the stale content-derived reference edge. An early `return` leaves that edge dangling forever, because the references processor no longer re-parses the block to rebuild it.
+- testing one of these: a block created already-opaque has its content edges dropped by the references processor before your assertion runs, so the test passes with the guard removed. Create it as prose, let processors settle, then make it opaque with a RAW `db.writeTransaction` (maintains `block_references`, fires no processor — and is how a pre-upgrade block actually looks).
+
 comments:
 - keep a comment only if a competent editor would DO something different for having read it. Invariants, deliberate divergences, and "the obvious refactor here is wrong because X" earn their place. A comment that restates the line below it is worse than none — it's a second thing to keep in sync.
 - the failure mode to watch for (agents do this constantly, and this repo is already over-commented because of it): having just spent a long time understanding something, you write down the UNDERSTANDING rather than the INVARIANT. A guard whose rule is one sentence gets thirty lines narrating the investigation that found it.

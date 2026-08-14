@@ -14,6 +14,8 @@
 import { EditorSelection } from '@codemirror/state'
 import type { EditorView } from '@codemirror/view'
 import type { Block } from '@/data/block.js'
+import { ChangeScope } from '@/data/api'
+import { hasOpaqueContent } from '@/data/properties'
 import { captureMediaVerb } from '@/paste/captureMediaVerb.js'
 import { resolveEditModeKeepalive, withEditModeKeepalive } from '@/components/editModeKeepalive.js'
 import { showError } from '@/utils/toast.js'
@@ -93,13 +95,23 @@ function pickImageFiles(): Promise<File[]> {
  *  however it arrived. Shared by the normal-mode append and the edit-mode
  *  editor-unmounted fallback. */
 async function appendReferencesToBlock(block: Block, references: readonly string[]): Promise<void> {
-  const data = block.peek() ?? await block.load()
-  if (!data) return
   const refsText = references.join('\n')
-  // Trim trailing whitespace so the append doesn't open a blank line (or strand
-  // a whitespace-only block before the image).
-  const base = (data.content ?? '').replace(/\s+$/, '')
-  await block.setContent(base ? `${base}\n${refsText}` : refsText)
+  await block.repo.tx(async tx => {
+    // Re-read INSIDE the tx: the picker was open for as long as the user
+    // took, so a cached row is arbitrarily stale here.
+    const data = await tx.get(block.id)
+    if (!data || data.deleted) return
+    // Appending an image ref to an extension's stored source breaks the
+    // module. Insert-image targets a block; it does not edit the text the
+    // user is typing, so it owes this check the way ask-agent and add-tag
+    // do — and it has to be here, against the tx's own snapshot, not
+    // against the row we peeked before the picker opened.
+    if (hasOpaqueContent(data, tx.opaqueContentTypes)) return
+    // Trim trailing whitespace so the append doesn't open a blank line (or
+    // strand a whitespace-only block before the image).
+    const base = data.content.replace(/\s+$/, '')
+    await tx.update(block.id, {content: base ? `${base}\n${refsText}` : refsText})
+  }, {scope: ChangeScope.BlockDefault, description: 'insert image reference'})
 }
 
 /** Insert the captured references for an edit-mode pick. With a live editor,
