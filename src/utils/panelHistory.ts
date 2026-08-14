@@ -25,7 +25,9 @@ import { ChangeScope, type Tx } from '@/data/api'
 import {
   focusedBlockLocationProp,
   type FocusedBlockLocation,
+  isPanelRowMaximized,
   normalizeViewMode,
+  panelMaximizedProp,
   panelViewModeProp,
   scrollTopProp,
   topLevelBlockIdProp,
@@ -399,6 +401,14 @@ export interface WritePanelContentOptions {
    *  the restored `VisitState.viewMode`, URL reconcile passes the hash's
    *  slot context (never `VisitState` — the URL is authoritative there). */
   viewMode?: string
+  /** The pane's maximize flag AFTER this write, when the caller wants to
+   *  change it in THIS tx. Absent = leave it alone, which is the default and
+   *  the opposite of `viewMode`: maximize is ARRANGEMENT state, not (pane,
+   *  block) state, so ordinary in-pane navigation keeps it (design §4.4).
+   *  Only a gesture that owns the arrangement passes it — the notes toggle
+   *  sets `true` on enter and `false` on close, so one shortcut is one tx and
+   *  one history entry. */
+  maximized?: boolean
 }
 
 /** Write a panel's content: point `panelId` at `blockId` and set its focus +
@@ -427,11 +437,49 @@ export const writePanelContent = async (
   if (currentMode !== nextMode) {
     await tx.setProperty(panelId, panelViewModeProp, nextMode)
   }
+  if (options.maximized !== undefined) {
+    await setPanelMaximizedInTx(tx, panelId, options.maximized)
+  }
   await tx.setProperty(panelId, focusedBlockLocationProp, state?.focusedLocation ?? {
     blockId,
     renderScopeId: panelRenderScopeId(panelId, blockId),
   })
   await tx.setProperty(panelId, scrollTopProp, state?.scrollTop ?? 0)
+}
+
+/** Set ONE pane's maximize flag, guarded so `false` is never materialized on a
+ *  pane that never had it (absent ≡ false).
+ *
+ *  Does NOT enforce the at-most-one-maximized rule: that needs the session's
+ *  rows, and this module sits BELOW `panelLayoutProjection`, which owns them.
+ *  Callers that turn the flag ON are therefore required to clear the others
+ *  first — `prepareExclusiveMaximize` is that step, and the video-notes enter
+ *  is currently the only such caller.
+ *
+ *  Do not replace that with an inductive "a maximized pane renders alone, so
+ *  no gesture can reach a second one" argument. It reads plausibly and it is
+ *  false — `LayoutRenderer` skips the flag entirely below 768px, which is a
+ *  narrowed desktop window on the SAME session, so panes stay individually
+ *  reachable there. Gestures can no longer ACCUMULATE flags that way (every
+ *  writer now refuses below the breakpoint, see `maximizeWouldHideSomething`),
+ *  but URL reconcile still writes whatever the hash says, and the premise
+ *  itself was never true. */
+const setPanelMaximizedInTx = async (
+  tx: Tx,
+  panelId: string,
+  maximized: boolean,
+): Promise<void> => {
+  // `tx.get` + the shared predicate, NOT `tx.getProperty`: the latter decodes
+  // strictly and throws on a malformed stored value, which would reject the
+  // whole enter/close tx over a flag the renderer is quietly degrading to
+  // false. Degrading here too keeps the gesture working and agrees with what
+  // the user is looking at. A malformed value survives a `false` write (it
+  // already reads as false, so this returns early) and is overwritten by a
+  // `true` one — the direction that matters, since the stale text is
+  // indistinguishable from un-maximized everywhere else.
+  const row = await tx.get(panelId)
+  if (row && isPanelRowMaximized(row) === maximized) return
+  await tx.setProperty(panelId, panelMaximizedProp, maximized)
 }
 
 /** Swap a panel's content in its own UiState tx, wrapped in the crossfade —
@@ -458,22 +506,26 @@ export interface NavigateInPanelOptions {
    *  `viewModeEnter`. A two-step fallback (navigate, then set the mode)
    *  would project two nondeterministic hash entries. */
   viewMode?: string
+  /** Set the pane's maximize flag in the SAME tx (see
+   *  `WritePanelContentOptions.maximized`). Absent = untouched — a plain
+   *  navigation keeps whatever arrangement the pane is in. */
+  maximized?: boolean
 }
 
 /** Navigate within a panel: capture the current visit's ephemeral state, push
  *  (block, state) onto back, clear forward, then swap the panel's top-level
  *  block.
  *
- *  Same-block calls are NOT navigations. A plain call (no `viewMode` key)
- *  is a pure no-op — the mode belongs to the (pane, block) pair, and a
- *  re-navigation to the same block changes neither, so zoom-in / re-clicking
- *  the open block must not disturb an active mode. Only when the caller
- *  EXPLICITLY passes `viewMode` (including `{viewMode: undefined}`, the
- *  clear-only form) does the call run a MODE-ONLY tx (the primary enter
- *  gesture — entering notes on the currently-shown block). No history entry
- *  and no `viewModeEnter` stamp in that case: there is no pre-enter content
- *  to go back to, so a later close correctly clears the mode instead of
- *  navigating away.
+ *  Same-block calls are NOT navigations. A plain call (no `viewMode` key and
+ *  no `maximized`) is a pure no-op — the mode belongs to the (pane, block)
+ *  pair, and a re-navigation to the same block changes neither, so zoom-in /
+ *  re-clicking the open block must not disturb an active mode. Only when the
+ *  caller EXPLICITLY passes `viewMode` (including `{viewMode: undefined}`, the
+ *  clear-only form) or `maximized` does the call run a STATE-ONLY tx (the
+ *  primary enter gesture — entering notes on the currently-shown block, which
+ *  sets both keys at once). No history entry and no `viewModeEnter` stamp in
+ *  that case: there is no pre-enter content to go back to, so a later close
+ *  correctly clears the mode instead of navigating away.
  *
  *  The panel content fully swaps here — the highest-impact transition in the
  *  app — centralised so every navigation path (zoom shortcuts, wikilink clicks,
@@ -483,17 +535,27 @@ export const navigateInPanel = async (
   blockId: string,
   options: NavigateInPanelOptions = {},
 ): Promise<void> => {
+  const nextMaximized = options.maximized
   const prev = panelBlock.peekProperty(topLevelBlockIdProp)
   if (prev === blockId) {
-    // Presence-gated: a plain same-block call preserves the mode; only an
-    // explicit viewMode key (set OR undefined-to-clear) touches it.
-    if (!('viewMode' in options)) return
+    // Presence-gated: a plain same-block call preserves both; only an explicit
+    // viewMode key (set OR undefined-to-clear) or an explicit `maximized`
+    // touches them.
+    const writesMode = 'viewMode' in options
     const currentMode = normalizeViewMode(panelBlock.peekProperty(panelViewModeProp))
     const nextMode = normalizeViewMode(options.viewMode)
-    if (currentMode === nextMode) return
+    const modeChanges = writesMode && currentMode !== nextMode
+    // Same reason as `setPanelMaximizedInTx`: `peekProperty` decodes strictly,
+    // so a malformed flag would throw here — before any state write — and the
+    // same-block enter/close would fail on a pane that renders fine.
+    const panelRow = panelBlock.peek()
+    const maximizeChanges = nextMaximized !== undefined &&
+      (panelRow ? isPanelRowMaximized(panelRow) : false) !== nextMaximized
+    if (!modeChanges && !maximizeChanges) return
     await panelBlock.repo.tx(async tx => {
-      await tx.setProperty(panelBlock.id, panelViewModeProp, nextMode)
-    }, {scope: ChangeScope.UiState, description: 'set panel view mode'})
+      if (modeChanges) await tx.setProperty(panelBlock.id, panelViewModeProp, nextMode)
+      if (nextMaximized !== undefined) await setPanelMaximizedInTx(tx, panelBlock.id, nextMaximized)
+    }, {scope: ChangeScope.UiState, description: 'set panel view state'})
     return
   }
   if (prev) {
@@ -503,7 +565,10 @@ export const navigateInPanel = async (
       ...(normalizeViewMode(options.viewMode) ? {viewModeEnter: options.viewMode} : {}),
     })
   }
-  await transactPanelContent(panelBlock, blockId, undefined, 'navigate in panel', {viewMode: options.viewMode})
+  await transactPanelContent(panelBlock, blockId, undefined, 'navigate in panel', {
+    viewMode: options.viewMode,
+    ...(nextMaximized !== undefined ? {maximized: nextMaximized} : {}),
+  })
 }
 
 /**
@@ -549,8 +614,16 @@ const pruneDeadTop = async (
 /** Step the panel one entry back. Captures the current visit's state onto
  *  forward, then restores the destination's snapshot (focused block, scroll).
  *  Dead entries at the top of the stack are dropped first, so Back never lands
- *  the pane on a tombstone; if that empties the stack, this is a no-op. */
-export const goBackInPanel = async (panelBlock: Block): Promise<boolean> => {
+ *  the pane on a tombstone; if that empties the stack, this is a no-op.
+ *
+ *  Back PRESERVES maximize (arrangement state, not (pane, block) state);
+ *  `maximized` is for an exit gesture undoing an arrangement its own enter set
+ *  — see `WritePanelContentOptions.maximized`, which this forwards to.
+ *  `goForwardInPanel` deliberately has no equivalent. */
+export const goBackInPanel = async (
+  panelBlock: Block,
+  options: Pick<WritePanelContentOptions, 'maximized'> = {},
+): Promise<boolean> => {
   const current = panelBlock.peekProperty(topLevelBlockIdProp)
   if (!current) return false
   await pruneDeadTop(panelBlock, 'back')
@@ -565,7 +638,10 @@ export const goBackInPanel = async (panelBlock: Block): Promise<boolean> => {
   if (!dest) return false
   panelHistory.enqueueRestore(panelBlock.id, dest.state)
   // Chevron restore applies the remembered mode (URL-driven restores don't).
-  await transactPanelContent(panelBlock, dest.blockId, dest.state, 'panel history back', {viewMode: dest.state?.viewMode})
+  await transactPanelContent(panelBlock, dest.blockId, dest.state, 'panel history back', {
+    viewMode: dest.state?.viewMode,
+    ...(options.maximized !== undefined ? {maximized: options.maximized} : {}),
+  })
   return true
 }
 

@@ -45,22 +45,37 @@ export interface BlockContentRendererSlot {
  * facet resolver and reswap every decorator/layout/slot identity on
  * each focus toggle.
  *
+ * "Reswap every slot identity" is not a performance note, it is data
+ * loss. `DefaultBlockRenderer` builds each layout slot as a `useMemo`
+ * over this object, so a new identity is a new React element TYPE:
+ * React unmounts the old subtree and mounts a fresh one. For `Content`
+ * and `Shell` that subtree is the live CodeMirror editor, and a remount
+ * mid-typing rebuilds it from the last COMMITTED content — dropping the
+ * characters typed since, killing an open autocomplete, and moving the
+ * caret. So a field belongs here only if it is stable across ordinary
+ * editing; anything a keystroke can change does not. `aliases` was on
+ * this context for exactly one release and broke page-title editing that
+ * way: `alias.sync` mirrors a page's content into its own `alias`
+ * property in the same tx, so every debounced commit churned it. It is
+ * gone rather than narrowed — page-ness reaches the surfaces that style it
+ * through `blockTextClassFacet` / `blockBulletClassFacet`, whose calling
+ * hooks feed them `useBlockAliases(block)` reactively, and any other
+ * contribution that must FOLLOW naming reads the same hook inside its own
+ * rendered component.
+ *
  * Contributions that need reactive state read it inside their rendered
  * components via `useInFocus(block.id)` / `useInEditMode(block.id)` /
- * `useIsSelected(block.id)`, or at fire time via snapshot helpers.
+ * `useIsSelected(block.id)`, or at fire time via snapshot helpers. Facets
+ * whose contributions are pure functions (no component to hold a hook)
+ * declare their own context type and let the calling HOOK feed the
+ * reactive read — see `blockTextClassFacet` / `blockBulletClassFacet`,
+ * which is how page-ness reaches the alias plugin's styling.
  */
 export interface BlockResolveContext {
   block: Block
   repo: Repo
   uiStateBlock: Block
   types: readonly string[]
-  /** The block's page names (`[[Inbox]]`), or `[]`. Reactive, like `types`:
-   *  populated by the renderer from the block's `alias` property so a
-   *  contribution that keys on "is this a page" re-resolves when one is
-   *  added or removed, instead of freezing at the value it had when the
-   *  contribution set was first resolved. Decoded tolerantly — a malformed
-   *  stored value reads as no aliases rather than throwing. */
-  aliases: readonly string[]
   topLevelBlockId?: string
   /** Root of the visible subtree this mount renders (see
    *  `BlockContextType.scopeRootId`). Equals `topLevelBlockId` on the

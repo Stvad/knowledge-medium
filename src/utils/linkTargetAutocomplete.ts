@@ -13,10 +13,6 @@ import { buildFilterPrefixes, rankCandidates } from '@/utils/fuzzyRank.js'
  *  filter is permissive (token-prefix LIKE), so over-fetching gives the
  *  ranker enough material to find typo / out-of-order matches even when
  *  the display limit is small. */
-/** Matches the `blockIds` cap on `core.blockTypesByIds` — it REJECTS past
- *  this, so callers chunk rather than hope. */
-const BLOCK_TYPES_BATCH = 200
-
 const EMPTY_OPAQUE_TYPES: ReadonlySet<string> = new Set()
 
 const ALIAS_CANDIDATE_MULTIPLIER = 4
@@ -41,6 +37,18 @@ export interface LinkTargetAliasMatch {
   alias: string
   blockId: string
   content: string
+  /** The named block's type ids. Unlike the block rows, alias rows come
+   *  from an index join with no properties on it, so these arrive on the
+   *  SECOND callback (`onBlocks`, which re-delivers the aliases) and are
+   *  `[]` on the first. That keeps the alias paint — the fast half of the
+   *  progressive search — exactly as quick as it was.
+   *
+   *  These describe the block the row OPENS. The `[[` dropdown withholds
+   *  a type hint for a contested alias because inserting the text resolves
+   *  to the oldest claimant rather than the ranked winner; a quick-find
+   *  Pages row carries `blockId` and navigates straight to it, so the same
+   *  hazard does not apply. */
+  typeIds: readonly string[]
 }
 
 /** One row of the `[[` completion dropdown: the alias to insert plus the
@@ -62,6 +70,14 @@ export interface LinkTargetBlockMatch {
    *  parent was excluded from the ancestor walk" — an empty ancestor
    *  chain looks identical either way (see `crumbsFromAncestors`). */
   parentId: string | null
+  /** Raw type ids, for a consumer that wants to show what KIND of thing
+   *  the row is alongside where it lives. Free here — these rows are
+   *  whole `BlockData`, so unlike the ancestor chain (a second batched
+   *  query) this costs no round trip and lands with the first paint.
+   *  Ids rather than resolved labels: the registry that names them is a
+   *  UI-time concern, same split as {@link AliasCompletionCandidate}.
+   *  Filter with {@link displayableTypes} before rendering. */
+  typeIds: readonly string[]
 }
 
 export interface LinkTargetSearchResult {
@@ -103,29 +119,58 @@ export const labelForBlockData = (
 const stringSet = (values?: Iterable<string>): Set<string> =>
   new Set(values ?? [])
 
-/** The type name shown beside a `[[` completion candidate, or
- *  `undefined` when the row has nothing worth saying.
+export interface DisplayableType {
+  typeId: string
+  type: TypeContribution
+  /** Non-empty and already trimmed — the filter drops anything without
+   *  one, so a renderer never has to fall back to the id. */
+  label: string
+}
+
+/** The types worth showing beside a block on a SUMMARY row — a `[[`
+ *  completion candidate, a quick-find result — where the block's own
+ *  renderer is not present.
  *
  *  Reuses the `hideFromBlockDisplay` rule rather than inventing a second
  *  one: a type whose chip is suppressed on the block itself is plumbing
  *  (`page` sits on every page, so annotating every row with it is pure
- *  noise), and the same judgement applies in the dropdown. Unknown ids
- *  are skipped too — `TypeChipsDecorator` keeps them visible so a tag
- *  never silently disappears from a block the user is looking at, but
- *  here there is no label to render and a raw uuid is worse than no
- *  hint. First surviving type wins; the dropdown row has space for one. */
-export const completionTypeHint = (
+ *  noise), and the same judgement applies here. Note this is a genuine
+ *  trade, not a free win — the flag means "redundant given how the block
+ *  renders itself" (`todo`'s checkbox conveys todo-ness, so its chip is
+ *  duplication), and a summary row shows none of that rendering, so
+ *  `#todo` is suppressed here where it would actually have been
+ *  informative. Deliberate: one visibility rule the user can reason
+ *  about beats a second, surface-specific one they have to discover.
+ *
+ *  Unknown ids are skipped too — `TypeChipsDecorator` keeps them visible
+ *  so a tag never silently disappears from a block the user is looking
+ *  at, but here there is no label to render and a raw uuid is worse than
+ *  no hint. Deduped: a raw properties-bag write can repeat an id, and
+ *  the same chip twice reads as two tags. */
+export const displayableTypes = (
   typeIds: readonly string[],
   registry: ReadonlyMap<string, TypeContribution>,
-): string | undefined => {
+): readonly DisplayableType[] => {
+  const seen = new Set<string>()
+  const displayable: DisplayableType[] = []
   for (const typeId of typeIds) {
+    if (seen.has(typeId)) continue
+    seen.add(typeId)
     const type = registry.get(typeId)
     if (!type || type.hideFromBlockDisplay === true) continue
     const label = type.label?.trim()
-    if (label) return label
+    if (label) displayable.push({typeId, type, label})
   }
-  return undefined
+  return displayable
 }
+
+/** The type name shown beside a `[[` completion candidate, or
+ *  `undefined` when the row has nothing worth saying. First surviving
+ *  type wins; the dropdown row has space for one. */
+export const completionTypeHint = (
+  typeIds: readonly string[],
+  registry: ReadonlyMap<string, TypeContribution>,
+): string | undefined => displayableTypes(typeIds, registry)[0]?.label
 
 /** The block's type ids, tolerant of a malformed stored value.
  *
@@ -145,7 +190,7 @@ export const completionTypeHint = (
  *  `WHERE typeof(je.value) = 'text'` (`clientSchema.ts`) and the
  *  invalidation rule's `Array.isArray` + `typeof` filter
  *  (`kernelInvalidation.ts`). */
-const readTypeIds = (data: BlockData): readonly string[] => {
+export const readTypeIds = (data: BlockData): readonly string[] => {
   const raw = data.properties[typesProp.name]
   if (!Array.isArray(raw)) return []
   return raw.filter((typeId): typeId is string => typeof typeId === 'string')
@@ -163,6 +208,7 @@ const aliasMatchesFromRows = (
       alias: row.alias,
       blockId: row.blockId,
       content: row.content,
+      typeIds: [],
     })
   }
   return aliases
@@ -181,17 +227,26 @@ const blockMatchesFromRows = (
       content: block.content,
       label: labelForBlockData(block, block.id),
       parentId: block.parentId,
+      typeIds: readTypeIds(block),
     })
   }
   return blocks
 }
 
+/** `core.blockTypesByIds` validates `blockIds` at 200 entries, and a zod
+ *  failure REJECTS — a caller asking for 201 rows would lose the whole
+ *  search rather than some types. Both of today's display callers are far
+ *  under it, but the alias fetch deliberately honours limits above its own
+ *  ceiling (`Math.max(limit, …)`), so the ids reaching here are only ever
+ *  as bounded as the caller. Chunk instead of trusting that. */
+const BLOCK_TYPES_QUERY_MAX_IDS = 200
+
 /** Types for a bounded set of already-chosen blocks, as a lookup keyed
- *  by block id. One `block_types` read for the whole page of results:
- *  the index is keyed `(block_id, type)`, so this is `ids.length` seeks
- *  and stays flat as the workspace grows — unlike folding the types into
- *  the fuzzy pre-filter, which would pay per *scanned* row rather than
- *  per *displayed* one. */
+ *  by block id. One `block_types` read per 200 results: the index is
+ *  keyed `(block_id, type)`, so this is `ids.length` seeks and stays flat
+ *  as the workspace grows — unlike folding the types into the fuzzy
+ *  pre-filter, which would pay per *scanned* row rather than per
+ *  *displayed* one. */
 const loadTypeIdsByBlock = async (
   repo: Repo,
   workspaceId: string,
@@ -199,17 +254,17 @@ const loadTypeIdsByBlock = async (
 ): Promise<Map<string, string[]>> => {
   const byBlock = new Map<string, string[]>()
   if (blockIds.length === 0) return byBlock
-  // CHUNKED: `core.blockTypesByIds` caps `blockIds` at 200 by schema, and
-  // rejects — it does not truncate. The display paths stay far under that,
-  // but the merge point's live-type check runs over the whole merged
-  // candidate set, and the agent `search` command forwards an unbounded
-  // limit. An unchunked call there turns a large search into a thrown
-  // validation error rather than results.
-  for (let i = 0; i < blockIds.length; i += BLOCK_TYPES_BATCH) {
-    const rows = await repo.query.blockTypesByIds({
-      workspaceId,
-      blockIds: blockIds.slice(i, i + BLOCK_TYPES_BATCH),
-    }).load()
+  const chunks: string[][] = []
+  for (let start = 0; start < blockIds.length; start += BLOCK_TYPES_QUERY_MAX_IDS) {
+    chunks.push(blockIds.slice(start, start + BLOCK_TYPES_QUERY_MAX_IDS))
+  }
+  // Concurrent: the chunks are independent reads, and the single-connection
+  // VFS serialises them anyway — awaiting in sequence would only add
+  // round-trip latency for the same work.
+  const results = await Promise.all(
+    chunks.map(chunk => repo.query.blockTypesByIds({workspaceId, blockIds: chunk}).load()),
+  )
+  for (const rows of results) {
     for (const row of rows) {
       const existing = byBlock.get(row.blockId)
       if (existing) existing.push(row.type)
@@ -374,10 +429,13 @@ export const searchAliasMatches = async (
     recentBlockIds: args.recentBlockIds,
     limit: args.limit,
   })
+  // Types are attached later, by `searchLinkTargets`, once the surviving
+  // slice is known — see `LinkTargetAliasMatch.typeIds`.
   return rows.map(row => ({
     alias: row.alias,
     blockId: row.blockId,
     content: row.content,
+    typeIds: [],
   }))
 }
 
@@ -724,17 +782,33 @@ export const searchLinkTargetsProgressively = async (
   const blockSeenIds = new Set(seenBlockIds)
   for (const alias of aliases) blockSeenIds.add(alias.blockId)
 
+  // Only the surviving aliases, and only once they are known — so this
+  // starts AFTER the alias paint above and runs alongside the content
+  // search already in flight, costing the second paint no extra wait.
+  const aliasTypesPromise = loadTypeIdsByBlock(
+    repo,
+    workspaceId,
+    aliases.map(alias => alias.blockId),
+  )
+  const withTypes = async (): Promise<LinkTargetAliasMatch[]> => {
+    const typeIdsByBlock = await aliasTypesPromise
+    return aliases.map(alias => ({
+      ...alias,
+      typeIds: typeIdsByBlock.get(alias.blockId) ?? [],
+    }))
+  }
+
   if (blockRowsPromise === null) {
-    const result = {aliases, blocks: []}
+    const result = {aliases: await withTypes(), blocks: []}
     callbacks.onBlocks?.(result.blocks, result)
     return result
   }
 
-  const blockRows = await blockRowsPromise
+  const [blockRows, typedAliases] = await Promise.all([blockRowsPromise, withTypes()])
   if (!blockRows.ok) throw blockRows.error
 
   const blocks = blockMatchesFromRows(blockRows.rows, blockSeenIds).slice(0, limit)
-  const result = {aliases, blocks}
+  const result = {aliases: typedAliases, blocks}
   callbacks.onBlocks?.(blocks, result)
   return result
 }

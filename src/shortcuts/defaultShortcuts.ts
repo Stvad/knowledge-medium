@@ -1,4 +1,4 @@
-import { KeyboardOff, PanelRightOpen, Plus, Redo2, Settings, Undo2, ZoomIn } from 'lucide-react'
+import { KeyboardOff, Maximize2, PanelRightOpen, Plus, Redo2, Settings, Undo2, ZoomIn } from 'lucide-react'
 import { defaultActionContextConfigs } from './defaultContexts.ts'
 import {
   ActionContextTypes,
@@ -27,7 +27,6 @@ import {
 import { importState } from '@/utils/state.js'
 import { withMoveTransition } from '@/utils/viewTransition.js'
 import {
-  activePanelIdProp,
   focusBlock,
   isCollapsedProp,
   topLevelBlockIdProp,
@@ -66,14 +65,16 @@ import { AppExtension } from '@/facets/facet.js'
 import { refreshAppRuntime } from '@/facets/runtimeEvents.js'
 import { systemToggle } from '@/facets/togglable.js'
 import { getLayoutSessionBlock, getUserPrefsBlock } from '@/data/stateBlocks.js'
+import { isMobileViewport } from '@/utils/viewport.js'
 import {
   navigate,
   navigateFromGlobalCommand,
+  resolveActivePanelRow,
 } from '@/utils/navigation.js'
 import {
   deletePanelRow,
   panelBlockId,
-  panelRowsInLayoutOrder,
+  togglePanelMaximized,
 } from '@/utils/panelLayoutProjection.js'
 import { ensureMetricsConsoleHook } from '@/data/metricsConsoleHook.js'
 import { showProgress } from '@/utils/toast.js'
@@ -175,13 +176,11 @@ const createNodeInActivePanelFromGlobalContext = async (
   if (repo.isReadOnly) return
 
   const layoutSessionBlock = await getLayoutSessionBlock(uiStateBlock, repo.activeLayoutSessionId)
-  await layoutSessionBlock.load()
-  const rows = await repo.query.subtree({id: layoutSessionBlock.id, hidePropertyChildren: true}).load()
-  const panelRows = panelRowsInLayoutOrder(layoutSessionBlock.id, rows)
-  const activePanelId = layoutSessionBlock.peekProperty(activePanelIdProp)
-  const activePanelRow =
-    (activePanelId ? panelRows.find(row => row.id === activePanelId) : undefined) ??
-    panelRows.at(-1)
+  // Shared with the navigation resolver rather than re-derived: this CREATES a
+  // block in the pane it picks, and the copy that used to live here indexed
+  // raw row order, so a maximized pane meant the new node landed in a page the
+  // user could not see.
+  const activePanelRow = await resolveActivePanelRow(layoutSessionBlock)
   if (!activePanelRow) return
 
   const activeTopLevelBlockId = panelBlockId(activePanelRow)
@@ -318,6 +317,21 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
     },
   }
 
+  const toggleMaximizePanelBlock: BlockAction = {
+    id: 'toggle_maximize_panel',
+    description: 'Maximize / restore current panel',
+    icon: Maximize2,
+    handler: async ({uiStateBlock}: BlockShortcutDependencies) => {
+      // uiStateBlock IS the panel row in panel contexts. The viewport read
+      // stays with the caller (see `maximizeWouldHideSomething`).
+      await togglePanelMaximized(repo, uiStateBlock.id, {canRenderSplit: !isMobileViewport()})
+    },
+    defaultBinding: {
+      keys: '$mod+Shift+Backslash',
+      eventOptions: {preventDefault: true},
+    },
+  }
+
   const insertExampleExtensionsBlock: BlockAction = {
     id: 'insert_example_extensions',
     description: 'Insert example extensions under current block',
@@ -332,6 +346,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
     bindBlockActionContext(ActionContextTypes.NORMAL_MODE, zoomOutBlock),
     bindBlockActionContext(ActionContextTypes.NORMAL_MODE, openFocusedInPanelBlock),
     bindBlockActionContext(ActionContextTypes.NORMAL_MODE, closeCurrentPanelBlock),
+    bindBlockActionContext(ActionContextTypes.NORMAL_MODE, toggleMaximizePanelBlock),
     bindBlockActionContext(ActionContextTypes.NORMAL_MODE, insertExampleExtensionsBlock),
     copyBlockAction,
     copyBlockRefAction,
@@ -1135,6 +1150,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
     bindBlockActionContext(ActionContextTypes.EDIT_MODE_CM, zoomOutBlock, {idPrefix: 'edit.cm'}),
     bindBlockActionContext(ActionContextTypes.EDIT_MODE_CM, openFocusedInPanelBlock, {idPrefix: 'edit.cm'}),
     bindBlockActionContext(ActionContextTypes.EDIT_MODE_CM, closeCurrentPanelBlock, {idPrefix: 'edit.cm'}),
+    bindBlockActionContext(ActionContextTypes.EDIT_MODE_CM, toggleMaximizePanelBlock, {idPrefix: 'edit.cm'}),
     bindBlockActionContext(ActionContextTypes.EDIT_MODE_CM, insertExampleExtensionsBlock, {idPrefix: 'edit.cm'}),
     moveBlockUpCM,
     moveBlockDownCM,

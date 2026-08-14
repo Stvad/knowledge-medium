@@ -174,7 +174,11 @@ export function useHandle<T, S = T | undefined>(
 
   // Ensure-load: fire-and-forget on mount. Idempotent (LoaderHandle and
   // Block both dedup their inflight load promise). The status() check
-  // prevents an unnecessary roundtrip when the handle is already ready.
+  // prevents an unnecessary roundtrip when the handle is already ready. A
+  // disposed handle reports its live replacement's status, so this reads the
+  // replacement rather than a corpse; with the key vacant it reports
+  // 'disposed' and we skip — the subscribe below mints a live handle at that
+  // key, whose own first-subscriber load covers the ensure-load we declined.
   useEffect(() => {
     if (handle.status() === 'idle') {
       void handle.load().catch(() => {/* error stored on the handle */})
@@ -187,6 +191,13 @@ export function useHandle<T, S = T | undefined>(
   // change is bailed out by useSyncExternalStore: it re-checks
   // getSelection, finds the stable reference held by committedRef, and
   // skips the re-render.
+  //
+  // No disposed-handle branch here on purpose. A subtree whose effects were
+  // unmounted long enough for the store to GC its handle
+  // (`<Activity mode="hidden">`) recovers because `handle.subscribe` itself
+  // resolves to whatever is live at the key — and it has to live there rather
+  // than in this hook, because the caller cannot re-acquire under React
+  // Compiler. Full mechanism: docs/handle-lifecycle-hidden-subtrees.html.
   const subscribe = useCallback(
     (listener: () => void) => handle.subscribe(listener),
     [handle],
@@ -291,7 +302,8 @@ const EMPTY_STRING_ARRAY: readonly string[] = Object.freeze([])
  *
  *  Deliberately NOT `usePropertyValue(block, aliasesProp)`: that calls
  *  `codec.decode` with no catch, and this read runs for EVERY rendered block
- *  (it feeds `BlockResolveContext.aliases`). One malformed stored value —
+ *  (it feeds the page-styling seams — `useBlockTitleTextClass` and the bullet).
+ *  One malformed stored value —
  *  imported, hand-written, arrived over sync — would throw inside the renderer
  *  itself, above the per-block error boundary, and blank out that block's whole
  *  subtree. `getAliases` is the codebase's existing tolerant decode for exactly

@@ -171,6 +171,20 @@ describe('remarkWikilinks', () => {
       expect(wikilinkChildText(links[0])).toBe('docs')
     })
 
+    it('keeps the display text when the alias ends in its own bracket', () => {
+      // The wrapper pass used to match with a regex whose alias class excluded
+      // `[`/`]`, narrower than what the scanner accepts. Once an alias could
+      // close its own bracket (`closingDelimiterFor`), this shape stopped
+      // being recognized and rendered as literal markup with `short` lost.
+      const tree = transform('see [short]([[Book of [x]]]) here', {'Book of [x]': 'bx'})
+      const links = collectWikilinks(tree)
+      expect(links).toHaveLength(1)
+      expect(links[0].data.hProperties.alias).toBe('Book of [x]')
+      expect(links[0].data.hProperties.blockId).toBe('bx')
+      expect(wikilinkChildText(links[0])).toBe('short')
+      expect(collectText(tree)).not.toContain('[short](')
+    })
+
     it('does not mangle adjacent bare links sharing a paragraph with a spaced one', () => {
       const tree = transform(
         '[a]([[X]]) then [b]([[Long Y]]) then [[Z]] end',

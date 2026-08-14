@@ -581,11 +581,6 @@ export function DefaultBlockRenderer(
   const shellRef = useRef<HTMLDivElement | null>(null)
   const contentContainerRef = useRef<HTMLDivElement | null>(null)
   const isTopLevel = useIsFocalRender(block)
-  // The block's page names, surfaced on the resolve context so plugins can key
-  // on "is this a page" (see `aliases` on BlockResolveContext). Core reports the
-  // fact and takes no view on what it should look like — the alias plugin owns
-  // that, via `blockContentSurfacePropsFacet`.
-  const aliases = useBlockAliases(block)
 
   // The block's READ content, bare: the per-type read renderer in an error
   // boundary, no editable `block-content` wrapper, surface props, or gesture ref.
@@ -614,14 +609,17 @@ export function DefaultBlockRenderer(
   // Stable per-block resolver context — doesn't change on focus/edit/
   // selection toggles, so facet resolvers and the components they
   // produce keep stable identity. This is what stops UpdateIndicator
-  // (and any other content decorator) from remounting on every click.
+  // (and any other content decorator) from remounting on every click,
+  // and — because every slot below is a `useMemo` over this object, i.e.
+  // a React element TYPE — what stops the live editor being torn down and
+  // rebuilt from stale content mid-keystroke. Nothing an ordinary edit can
+  // change may be added here; see the invariant on `BlockResolveContext`.
   const scopeRootId = blockContext.scopeRootId
   const resolveContext = useMemo<BlockResolveContext>(() => ({
     block,
     repo,
     uiStateBlock,
     types,
-    aliases,
     topLevelBlockId,
     scopeRootId,
     isTopLevel,
@@ -645,7 +643,6 @@ export function DefaultBlockRenderer(
     repo,
     uiStateBlock,
     types,
-    aliases,
     topLevelBlockId,
     scopeRootId,
     isTopLevel,

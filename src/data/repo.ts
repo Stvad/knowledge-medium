@@ -1118,7 +1118,8 @@ export class Repo {
    *      `handlesWalked`, `handlesMatched`) and per-LoaderHandle
    *      lifecycle (`loaderInvalidations`, `loaderRuns`,
    *      `midLoadInvalidations`, `reloadsAfterSettle`,
-   *      `notifiesFired`, `notifiesSkippedByDiff`).
+   *      `notifiesFired`, `notifiesSkippedByDiff`,
+   *      `notifiesSupersededInBatch`).
    *    - `blockCache` — write/notify activity
    *      (`setSnapshotCalls`, `setSnapshotDedupHits/Misses`,
    *      `applyIfNewerSyncCalls`/`Rejected` for row_events-tail

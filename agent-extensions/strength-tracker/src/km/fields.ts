@@ -21,6 +21,12 @@ export const SETTINGS_TYPE = 'strength-settings'
 // the parser reads it as intent rather than guessing from wording.
 export const EXERCISE_DEF_TYPE = 'strength-exercise-def'
 export const ALT_GROUP_TYPE = 'strength-alt-group'
+/** One row of the plan's re-entry table. Declared rather than read out of the
+ *  sentence beside it: the prose says "drop 1 set per lift", which is both a
+ *  valid delta ("one fewer") and a valid absolute ("1 set"), and no reading of
+ *  the words settles which. A tier that governs how much weight goes on a bar
+ *  after a layoff is not a thing to infer. */
+export const REENTRY_TIER_TYPE = 'strength-reentry-tier'
 /** One block per tracked or-group choice — user state, under the settings
  *  block. A block (not a map in a property) so both ends are real refs: the
  *  group and the option each see it in their backlinks, and a deleted option
@@ -96,6 +102,27 @@ export const FIELD = {
   kind: 'strength:kind',
   catchUpIncrement: 'strength:catchUpIncrement',
   catchUpRpe: 'strength:catchUpRpe',
+  // re-entry tier (a row of the plan's re-entry table). `reentryPct`,
+  // `targetSets`, `repMin` and `repMax` are the SAME properties the layoff
+  // record and the exercise definitions use — one vocabulary, so "90% of
+  // pre-break" reads the same wherever it appears.
+  /** Which row this is (`1-2w`, `2-4w`, …). Identity, not a label: the tier a
+   *  gap resolves to used to come from a regex over the row's first words. */
+  tierId: 'strength:tierId',
+  /** Inclusive upper bound of the gap this row covers, in days. Absent keeps
+   *  the built-in boundary for this tier id — the plan states gaps in weeks,
+   *  and "1–2 weeks" is not a day count. */
+  maxGapDays: 'strength:maxGapDays',
+  /** Sets dropped from each lift's own target on the first session back. Pairs
+   *  with `targetSets` (the absolute "2 sets per lift" form); a row that states
+   *  both is refused rather than silently resolved. */
+  setsDelta: 'strength:setsDelta',
+  /** How many sessions back `targetSets` applies for. Absent = the whole ramp. */
+  setsOverrideSessions: 'strength:setsOverrideSessions',
+  /** Full sessions under this tier before normal progression resumes. */
+  sessionsToNormal: 'strength:sessionsToNormal',
+  /** Added to the percentage per session back, as a fraction (`0.05` = +5%). */
+  rampPerSession: 'strength:rampPerSession',
   /** On an `or`-group: a ref to the option block to track when the user
    *  hasn't chosen one (a bare name is still accepted). */
   altDefault: 'strength:default',

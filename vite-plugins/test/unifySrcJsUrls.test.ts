@@ -1,5 +1,6 @@
-import {describe, expect, it} from 'vitest'
-import {rewriteSrcImports} from '@/../vite-plugins/unifySrcJsUrls'
+import type {ViteDevServer} from 'vite'
+import {describe, expect, it, vi} from 'vitest'
+import {rewriteSrcImports, rewriteSrcPath, unifySrcJsUrlsPlugin} from '@/../vite-plugins/unifySrcJsUrls'
 
 // `rewriteSrcImports` is the pure heart of the `unify-src-js-urls`
 // Vite plugin. The plugin's whole job is to make every `/src/**`
@@ -140,5 +141,118 @@ describe('rewriteSrcImports — known limitation (documented in plugin)', () => 
     // limitation.
     const input = `const docsPath = "/src/components/Foo.tsx"`
     expect(rewriteSrcImports(input)).toBe(`const docsPath = "/src/components/Foo.js"`)
+  })
+})
+
+// `rewriteSrcPath` is the bare-path sibling of `rewriteSrcImports`, for
+// HMR payload fields (which hold a path with no surrounding quotes).
+describe('rewriteSrcPath — bare paths', () => {
+  it('rewrites `.tsx` / `.ts` / `.jsx` to `.js`', () => {
+    expect(rewriteSrcPath('/src/components/Header.tsx')).toBe('/src/components/Header.js')
+    expect(rewriteSrcPath('/src/data/repo.ts')).toBe('/src/data/repo.js')
+    expect(rewriteSrcPath('/src/legacy/foo.jsx')).toBe('/src/legacy/foo.js')
+  })
+
+  it('preserves query strings and hash fragments', () => {
+    expect(rewriteSrcPath('/src/foo.tsx?t=1234')).toBe('/src/foo.js?t=1234')
+    expect(rewriteSrcPath('/src/foo.tsx#region')).toBe('/src/foo.js#region')
+  })
+
+  it('leaves `.css` alone — which is why stylesheet HMR worked all along', () => {
+    expect(rewriteSrcPath('/src/index.css')).toBe('/src/index.css')
+  })
+
+  it('leaves already-canonical and non-`/src/` paths alone', () => {
+    expect(rewriteSrcPath('/src/context/repo.js')).toBe('/src/context/repo.js')
+    expect(rewriteSrcPath('/@vite/client')).toBe('/@vite/client')
+    expect(rewriteSrcPath('/node_modules/react/index.js')).toBe('/node_modules/react/index.js')
+  })
+
+  it('is anchored — a `/src/...tsx` embedded mid-string is not a path', () => {
+    expect(rewriteSrcPath('prefix/src/foo.tsx')).toBe('prefix/src/foo.tsx')
+  })
+
+  it('passes non-strings through (an HMR update may omit `acceptedPath`)', () => {
+    expect(rewriteSrcPath(undefined)).toBeUndefined()
+  })
+})
+
+// The fix itself: piece 1 rewrites `__vite__createHotContext("/src/x.tsx")`
+// in the response body, so the client keys hot modules under `.js` — but the
+// HMR update payload travels over the WebSocket, never through `res.end`.
+// Without this wrap the payload still says `.tsx`, misses `hotModulesMap`,
+// and every non-CSS update is dropped silently.
+describe('unifySrcJsUrlsPlugin — HMR payload rewrite', () => {
+  const configure = () => {
+    const send = vi.fn()
+    const server = {
+      hot: {send},
+      middlewares: {use: vi.fn()},
+    } as unknown as ViteDevServer
+    const configureServer = unifySrcJsUrlsPlugin().configureServer
+    ;(configureServer as (s: ViteDevServer) => void)(server)
+    return {server, send}
+  }
+
+  it('rewrites `path` and `acceptedPath` on update payloads', () => {
+    const {server, send} = configure()
+    server.hot.send({
+      type: 'update',
+      updates: [{
+        type: 'js-update',
+        path: '/src/components/Header.tsx',
+        acceptedPath: '/src/components/Header.tsx',
+        timestamp: 1,
+      }],
+    })
+    expect(send).toHaveBeenCalledWith({
+      type: 'update',
+      updates: [{
+        type: 'js-update',
+        path: '/src/components/Header.js',
+        acceptedPath: '/src/components/Header.js',
+        timestamp: 1,
+      }],
+    })
+  })
+
+  it("sends a copy — the caller's payload is left untouched", () => {
+    // The assertion above cannot see this: `send` records the *reference*
+    // it was handed, so `toHaveBeenCalledWith` compares against the
+    // already-mutated object and passes whether the wrap copies or
+    // mutates in place. This is the test that pins it. It matters
+    // because Vite owns this object and keeps reading it after the
+    // call — its rolldown-dev environment builds the `hmr update
+    // <files>` log line from `updates` *after* `client.send`, so an
+    // in-place rewrite would make the dev-server log name a `.js` file
+    // that does not exist on disk.
+    const {server, send} = configure()
+    const update = {
+      type: 'js-update',
+      path: '/src/components/Header.tsx',
+      acceptedPath: '/src/components/Header.tsx',
+      timestamp: 1,
+    }
+    const payload = {type: 'update' as const, updates: [update]}
+
+    server.hot.send(payload)
+
+    expect(update.path).toBe('/src/components/Header.tsx')
+    expect(update.acceptedPath).toBe('/src/components/Header.tsx')
+    expect(payload.updates[0]).toBe(update)
+
+    // …and what actually went out is a distinct, rewritten object.
+    const sent = send.mock.calls[0][0] as typeof payload
+    expect(sent).not.toBe(payload)
+    expect(sent.updates[0]).not.toBe(update)
+    expect(sent.updates[0].path).toBe('/src/components/Header.js')
+    expect(sent.updates[0].acceptedPath).toBe('/src/components/Header.js')
+  })
+
+  it('passes non-update payloads through untouched', () => {
+    const {server, send} = configure()
+    const payload = {type: 'full-reload', path: '/src/main.tsx'} as const
+    server.hot.send(payload)
+    expect(send).toHaveBeenCalledWith(payload)
   })
 })

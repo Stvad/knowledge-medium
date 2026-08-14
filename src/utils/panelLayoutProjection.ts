@@ -6,7 +6,9 @@ import { PANEL_STACK_TYPE, PANEL_TYPE } from '@/data/blockTypes'
 import {
   activePanelIdProp,
   focusedBlockLocationProp,
+  isPanelRowMaximized,
   normalizeViewMode,
+  panelMaximizedProp,
   panelViewModeProp,
   scrollTopProp,
   topLevelBlockIdProp,
@@ -28,7 +30,7 @@ import { CallbackSet } from '@/utils/callbackSet'
 import { panelRenderScopeId } from '@/utils/renderScope'
 import { deleteSubtreeInTx as deleteLayoutRowSubtreeInTx } from '@/data/subtreeDelete'
 import { visibleChildrenOf } from '@/data/visibleChildren'
-import { layoutSessionBlockIdForKey } from '@/data/stateBlocks'
+import { layoutSessionBlockIdForKey, layoutSessionsContainerBlockId } from '@/data/stateBlocks'
 
 export interface ApplyLayoutResult {
   kind: 'applied' | 'cancelled' | 'deferred' | 'empty' | 'ignored' | 'noop' | 'normalized'
@@ -59,7 +61,52 @@ const panelViewMode = (row: BlockData): string | undefined => {
   return normalizeViewMode(panelViewModeProp.codec.decode(stored))
 }
 
-const sessionActivePanelId = (row: BlockData | undefined): string | undefined => {
+
+/**
+ * The pane that takes the WHOLE layout over, or null when every pane renders.
+ *
+ * This is THE definition of "which pane the user is looking at". Every
+ * consumer — the renderer's slot list, navigation's `main`/`active` targets,
+ * the global new-node action — derives from it rather than indexing row order,
+ * because row order stopped meaning visible order the moment a pane could be
+ * flagged away. Three separate consumers each re-derived it and each got it
+ * wrong in a different way; two of those shipped as bugs that wrote into a
+ * pane the user could not see.
+ *
+ * Two independent ways a layout solos, and the order matters:
+ *  - `canRenderSplit` false (below the mobile breakpoint): the layout ALWAYS
+ *    solos, by ACTIVE pane, and the maximize flag is not consulted at all.
+ *  - otherwise: the first flagged pane, if any.
+ *
+ * `canRenderSplit` is threaded from the caller rather than peeked from
+ * `window`, so this layer stays testable without stubbing globals.
+ */
+export const soloPanelRow = (
+  panelRows: readonly BlockData[],
+  {activePanelId, canRenderSplit}: {activePanelId?: string; canRenderSplit: boolean},
+): BlockData | null =>
+  canRenderSplit
+    ? panelRows.find(isPanelRowMaximized) ?? null
+    : panelRows.find(row => row.id === activePanelId) ?? panelRows.at(-1) ?? null
+
+/** The panel rows the user can actually SEE, in layout order — `soloPanelRow`
+ *  as a list, for consumers that want to keep indexing. */
+export const visiblePanelRows = (
+  panelRows: readonly BlockData[],
+  options: {activePanelId?: string; canRenderSplit: boolean},
+): readonly BlockData[] => {
+  const solo = soloPanelRow(panelRows, options)
+  return solo ? [solo] : panelRows
+}
+
+/** The session's active-panel pointer, read off the layout-session ROW.
+ *
+ *  Callers that already hold a rows snapshot must use this rather than a
+ *  separate property subscription: the pointer and the panel rows are written
+ *  in ONE tx, but two subscriptions can deliver them in either order, and any
+ *  logic comparing them (which pane is maximized, which pane is active) then
+ *  runs against a half-applied commit. */
+export const sessionActivePanelId = (row: BlockData | undefined): string | undefined => {
   const stored = row?.properties[activePanelIdProp.name]
   if (stored === undefined) return undefined
   return activePanelIdProp.codec.decode(stored)
@@ -81,7 +128,14 @@ const buildChildrenByParent = (rows: readonly BlockData[]): Map<string, BlockDat
   return childrenByParent
 }
 
-export const panelRowsInLayoutOrder = (
+/** EVERY panel row in layout order, stacks flattened — including panes that
+ *  are not rendered. Named `all` deliberately: indexing this is right for the
+ *  projection (the hash describes the whole layout) and wrong for anything
+ *  answering "where does the user see / expect this". Three consumers indexed
+ *  it as if it were visible order; two shipped as bugs that wrote into a pane
+ *  the user could not see. For that question, use `visiblePanelRows` /
+ *  `soloPanelRow`. */
+export const allPanelRowsInLayoutOrder = (
   rootId: string,
   rows: readonly BlockData[],
 ): BlockData[] => {
@@ -196,11 +250,11 @@ const activePanelIdAfterReconcile = (
 ): string | undefined => {
   if (typeof activePanelId !== 'string') return undefined
 
-  const finalPanels = panelRowsInLayoutOrder(rootId, finalRows)
+  const finalPanels = allPanelRowsInLayoutOrder(rootId, finalRows)
   const finalPanelIds = new Set(finalPanels.map(row => row.id))
   if (finalPanelIds.has(activePanelId)) return activePanelId
 
-  const currentPanels = panelRowsInLayoutOrder(rootId, currentRows)
+  const currentPanels = allPanelRowsInLayoutOrder(rootId, currentRows)
   const activeIndex = currentPanels.findIndex(row => row.id === activePanelId)
   if (activeIndex >= 0) {
     for (let index = activeIndex + 1; index < currentPanels.length; index++) {
@@ -238,10 +292,12 @@ const degradeSublayoutSlots = (slots: readonly LayoutSlot[]): LayoutSlot[] =>
     return [{kind: 'stack' as const, children: leaves}]
   })
 
-// Leaves compare blockId + viewMode + active, per `strictness`:
+// Leaves compare blockId + viewMode + maximized + active, per `strictness`:
 // - 'exact' (default): full context equality.
 // - 'ignore-active': everything but the active flag — classifies an
-//   active-only diff (replace-not-push in the projection).
+//   active-only diff (replace-not-push in the projection). `maximized` is
+//   deliberately NOT ignored here: maximizing is a real arrangement change
+//   and earns its own history entry, so Back un-maximizes (design §4.4).
 // - 'topology': kind + blockId only — routes context-only inbound diffs
 //   away from destructive materialization.
 // `rest` deliberately never participates: rows have nowhere to store
@@ -261,6 +317,7 @@ const sameLayoutSlots = (
       if (slot.blockId !== other.blockId) return false
       if (strictness === 'topology') return true
       return slot.viewMode === other.viewMode &&
+        (slot.maximized === true) === (other.maximized === true) &&
         (strictness === 'ignore-active' || (slot.active === true) === (other.active === true))
     }
     if (slot.kind === 'stack' && other.kind === 'stack') return sameLayoutSlots(slot.children, other.children, strictness)
@@ -337,6 +394,7 @@ export const layoutSlotsFromRows = (
       kind: 'leaf',
       blockId,
       ...(viewMode !== undefined ? {viewMode} : {}),
+      ...(isPanelRowMaximized(row) ? {maximized: true} : {}),
       ...(row.id === activePanelId ? {active: true} : {}),
     }
   }
@@ -444,6 +502,7 @@ export const createPanelRowInTx = async (
     orderKey: string
     blockId: string
     viewMode?: string
+    maximized?: boolean
   },
 ): Promise<string> => {
   const id = await tx.create({
@@ -456,6 +515,9 @@ export const createPanelRowInTx = async (
       [scrollTopProp.name]: scrollTopProp.codec.encode(0),
       ...(args.viewMode !== undefined
         ? {[panelViewModeProp.name]: panelViewModeProp.codec.encode(args.viewMode)}
+        : {}),
+      ...(args.maximized
+        ? {[panelMaximizedProp.name]: panelMaximizedProp.codec.encode(true)}
         : {}),
     },
   })
@@ -498,6 +560,7 @@ export const insertPanelRow = async (
   repo.tx(async tx => {
     const parent = await tx.get(layoutSessionBlock.id)
     if (!parent) throw new Error(`insertPanelRow: layout session block ${layoutSessionBlock.id} not found`)
+    await clearMaximizedPanelsInTx(tx, parent)
 
     const siblings = await visibleChildrenOf(tx, layoutSessionBlock.id, parent.workspaceId)
     const sourceIndex = options.afterPanelId
@@ -549,6 +612,7 @@ export const insertSidebarStackedPanel = async (
   repo.tx(async tx => {
     const parent = await tx.get(layoutSessionBlock.id)
     if (!parent) throw new Error(`insertSidebarStackedPanel: layout session block ${layoutSessionBlock.id} not found`)
+    await clearMaximizedPanelsInTx(tx, parent)
 
     if (options.sourcePanelId) {
       const source = await tx.get(options.sourcePanelId)
@@ -654,6 +718,209 @@ export const activatePanelRow = async (
   return activated
 }
 
+/** Walk up from a panel row through any enclosing stack rows to the layout
+ *  session row that owns them. Null when the chain is broken (a detached or
+ *  mid-delete row). Pass `parent` when the caller already read it, so the
+ *  first hop isn't fetched twice. */
+const layoutSessionRowOf = async (
+  tx: Tx,
+  row: BlockData,
+  parent?: BlockData | null,
+): Promise<BlockData | null> => {
+  let current = parent === undefined
+    ? (row.parentId ? await tx.get(row.parentId) : null)
+    : parent
+  while (current && isPanelStackRow(current)) {
+    current = current.parentId ? await tx.get(current.parentId) : null
+  }
+  return current
+}
+
+/**
+ * Whether maximizing would actually hide anything — the ONE statement of the
+ * rule, shared by both writers of the flag and mirrored by the renderer's
+ * `canMaximizePanel`.
+ *
+ * Two independent reasons it might not, and they now carry different weight:
+ *
+ *  - `canRenderSplit` false (a viewport below the mobile breakpoint, where
+ *    `LayoutRenderer` ignores the flag) is the load-bearing one. Rows SYNC, so
+ *    a flag planted where it does nothing hides panes on a wider viewport
+ *    later with no gesture behind it.
+ *  - `panelCount > 1` is now hygiene rather than a guard against a named
+ *    failure. Its original harms have all been closed since: a lone flagged
+ *    pane renders identically, DOES get a restore button (`PanelRenderer`
+ *    shows it whenever the row is flagged), and cannot swallow the next pane
+ *    opened (both insert paths clear first). It stays because a flag that
+ *    means nothing is still worth not writing.
+ *
+ * The maximize action is keyboard-dispatchable on surfaces the chrome button
+ * never appears on, which is how these states were reachable at all.
+ *
+ * `canRenderSplit` is threaded from the caller rather than peeked from
+ * `window` here, so this layer stays testable without stubbing globals.
+ */
+export const maximizeWouldHideSomething = (
+  panelCount: number,
+  canRenderSplit: boolean,
+): boolean => panelCount > 1 && canRenderSplit
+
+/** The panel rows of the session that owns `panelId`, or null when `panelId`
+ *  is not a live panel row reachable from a layout session.
+ *
+ *  The `PANEL_TYPE` gate is load-bearing, not defensive tidiness: without it
+ *  the ancestor walk happily accepts ANY block, so a caller handing over a
+ *  non-panel id (a bare ui-state block on a surface with no `panelId`) would
+ *  recursively load that block's entire subtree inside the tx and then write
+ *  layout properties onto a user's page block. */
+const sessionPanelRowsInTx = async (
+  tx: Tx,
+  panelId: string,
+  userId: string,
+): Promise<{session: BlockData; panelRows: BlockData[]} | null> => {
+  const row = await tx.get(panelId)
+  if (!row || row.deleted || !hasBlockType(row, PANEL_TYPE)) return null
+  const session = await layoutSessionRowOf(tx, row)
+  if (!session) return null
+  // The ancestor walk finds *a* non-stack block; that is not evidence it found
+  // a layout session. A correctly-tagged panel row re-parented under an
+  // ordinary block by a raw sync/bridge write would hand back that block, and
+  // we would then write `activePanelIdProp` onto a user's page and treat its
+  // other children as panes.
+  //
+  // A subtree-membership check does NOT catch that — it starts the traversal
+  // at the block the walk returned, so the panel is always a member and the
+  // check passes vacuously. Verify the ancestor's IDENTITY instead: layout
+  // sessions are children of the deterministic `layout-sessions` container.
+  if (session.parentId !== layoutSessionsContainerBlockId(session.workspaceId, userId)) {
+    return null
+  }
+  const panelRows = allPanelRowsInLayoutOrder(session.id, await loadSubtreeRowsInTx(tx, session))
+  return {session, panelRows}
+}
+
+/**
+ * Toggle the maximize flag on `panelId`, exclusively: every other row in the
+ * session is cleared in the SAME tx, which also repairs a multi-`max` state
+ * that a hand-crafted URL reconciled in.
+ *
+ * The maximized pane is also made active, in the same tx. Maximize is the
+ * first configuration where the active pane can be INVISIBLE while keyboard
+ * dispatch still targets it, and doing it here means the common gesture never
+ * relies on `LayoutRenderer`'s inbound coercion effect (which exists for the
+ * URL/Back/snapshot arrivals that have no gesture at all).
+ *
+ * Turning the flag ON is refused unless `maximizeWouldHideSomething`; turning
+ * it OFF is always allowed, so a flag is never stuck.
+ *
+ * Returns the resulting flag, or null when the call was refused.
+ */
+export const togglePanelMaximized = async (
+  repo: Repo,
+  panelId: string,
+  {canRenderSplit = true}: {canRenderSplit?: boolean} = {},
+): Promise<boolean | null> => {
+  let result: boolean | null = null
+  await repo.tx(async tx => {
+    const found = await sessionPanelRowsInTx(tx, panelId, repo.user.id)
+    if (!found) return
+    const {session, panelRows} = found
+
+    const next = !isPanelRowMaximized(panelRows.find(row => row.id === panelId)!)
+    if (next && !maximizeWouldHideSomething(panelRows.length, canRenderSplit)) return
+
+    for (const other of panelRows) {
+      const wanted = other.id === panelId && next
+      if (isPanelRowMaximized(other) === wanted) continue
+      await tx.setProperty(other.id, panelMaximizedProp, wanted)
+    }
+    if (next) await activatePanelRowInTx(tx, session.id, panelId)
+    result = next
+  }, {scope: ChangeScope.UiState, description: 'toggle panel maximize'})
+  return result
+}
+
+/**
+ * Prepare `panelId` to become the maximized pane for a gesture that sets the
+ * flag inside SOMEONE ELSE'S transaction — `navigateInPanel`'s `maximized`
+ * option, whose writer (`setPanelMaximizedInTx`) lives below this module and
+ * cannot enumerate a session's rows.
+ *
+ * Clears every OTHER row's flag — but only when maximizing would hide
+ * anything (`maximizeWouldHideSomething`) — so the caller's own write lands
+ * exclusively.
+ *
+ * Returns whether this call NEEDS a follow-up `maximized: true` write — true
+ * only when maximizing is warranted AND the flag was not already set. In the
+ * other cases the flag is already whatever it should be, so the caller omits
+ * the key and leaves it alone.
+ *
+ * Deliberately NOT an ownership signal. It once fed a record of "which
+ * maximize is mine to undo later", which desynchronized five different ways
+ * because the flag has six writers and only one maintained the record; the
+ * video-notes close now un-maximizes unconditionally and keeps no memory. If a
+ * future caller wants attribution, store the provenance ON the row next to the
+ * flag so no writer can change one without the other — do not rebuild a
+ * side-record from this return value.
+ *
+ * A REFUSAL WRITES NOTHING — the same meaning `togglePanelMaximized` gives it,
+ * and the reason the clear is gated rather than unconditional. Clearing on a
+ * decline reads like harmless hygiene and is not: it destroys a maximize the
+ * user deliberately set. Narrow a two-pane window below the breakpoint (where
+ * the flag is ignored) and enter notes view, and an unconditional clear would
+ * drop the maximize set on the wide layout — restored by nothing, since the
+ * matching close can only clear.
+ *
+ * Writes nothing when no other pane is flagged either — the overwhelmingly
+ * common case — so it costs no row change, and therefore no projection push,
+ * leaving the caller's own tx as the single history entry. When another pane
+ * IS flagged this runs its own tx and a maximize diff pushes, so the gesture
+ * costs two browser-history entries with a half-applied state between them.
+ * That needs flag ≠ gesture pane, which an inbound `;max` link produces on its
+ * own (the pointer seeds elsewhere) — not just a hand-crafted multi-`max`
+ * hash — and clearing the stale flag is worth the extra entry.
+ */
+export const prepareExclusiveMaximize = async (
+  repo: Repo,
+  panelId: string,
+  {canRenderSplit = true}: {canRenderSplit?: boolean} = {},
+): Promise<boolean> => {
+  let needsWrite = false
+  await repo.tx(async tx => {
+    const found = await sessionPanelRowsInTx(tx, panelId, repo.user.id)
+    if (!found) return
+    if (!maximizeWouldHideSomething(found.panelRows.length, canRenderSplit)) return
+    needsWrite = !isPanelRowMaximized(found.panelRows.find(row => row.id === panelId)!)
+    for (const other of found.panelRows) {
+      if (other.id === panelId || !isPanelRowMaximized(other)) continue
+      await tx.setProperty(other.id, panelMaximizedProp, false)
+    }
+  }, {scope: ChangeScope.UiState, description: 'clear other maximized panes'})
+  return needsWrite
+}
+
+/**
+ * Clear every maximize flag in a layout session.
+ *
+ * Opening a pane is an explicit "show me two things" gesture, so it is also an
+ * arrangement change: a maximize left standing would render the new pane
+ * INVISIBLE (`LayoutRenderer` renders the maximized slot alone) while the
+ * insert path still points `activePanelIdProp` at it — and the maximized
+ * pane's active-panel coercion would then steal that back. Callers that write
+ * editor state onto the new pane (daily-note quick capture) would be writing
+ * into something that never mounts.
+ */
+const clearMaximizedPanelsInTx = async (
+  tx: Tx,
+  session: BlockData,
+): Promise<void> => {
+  const rows = allPanelRowsInLayoutOrder(session.id, await loadSubtreeRowsInTx(tx, session))
+  for (const row of rows) {
+    if (!isPanelRowMaximized(row)) continue
+    await tx.setProperty(row.id, panelMaximizedProp, false)
+  }
+}
+
 export const deletePanelRow = async (
   repo: Repo,
   panelId: string,
@@ -662,10 +929,7 @@ export const deletePanelRow = async (
     const row = await tx.get(panelId)
     if (!row) return
     const parent = row.parentId ? await tx.get(row.parentId) : null
-    let layoutSession = parent
-    while (layoutSession && isPanelStackRow(layoutSession)) {
-      layoutSession = layoutSession.parentId ? await tx.get(layoutSession.parentId) : null
-    }
+    const layoutSession = await layoutSessionRowOf(tx, row, parent)
     const rowsBeforeDelete = layoutSession
       ? await loadSubtreeRowsInTx(tx, layoutSession)
       : []
@@ -741,7 +1005,7 @@ export const reconcilePanelRows = async (
     // remounts), re-key rows via tx.move (junk UiState uploads), and
     // un-stack singleton stacks. Context diffs are applied surgically.
     const targetLeaves = collectLeafSlots(targetSlots)
-    const currentLeafRows = panelRowsInLayoutOrder(layoutSessionBlock.id, currentRows)
+    const currentLeafRows = allPanelRowsInLayoutOrder(layoutSessionBlock.id, currentRows)
       .filter(row => panelBlockId(row) !== undefined)
     if (
       sameLayoutSlots(currentLayoutSlots, targetSlots, 'topology') &&
@@ -755,6 +1019,10 @@ export const reconcilePanelRows = async (
         if (leaf.kind !== 'leaf') continue
         if (panelViewMode(row) !== leaf.viewMode) {
           await tx.setProperty(row.id, panelViewModeProp, leaf.viewMode)
+          wrote = true
+        }
+        if (isPanelRowMaximized(row) !== (leaf.maximized === true)) {
+          await tx.setProperty(row.id, panelMaximizedProp, leaf.maximized === true)
           wrote = true
         }
         if (leaf.active && urlActiveRowId === undefined) urlActiveRowId = row.id
@@ -844,6 +1112,7 @@ export const reconcilePanelRows = async (
             orderKey,
             blockId,
             viewMode: target.viewMode,
+            maximized: target.maximized,
           })
           if (target.active && urlActiveRowId === undefined) urlActiveRowId = createdId
           continue
@@ -871,6 +1140,12 @@ export const reconcilePanelRows = async (
         } else if (panelViewMode(slot.row) !== target.viewMode) {
           // Same content, different mode — sync the URL's mode onto the row.
           await tx.setProperty(slot.row.id, panelViewModeProp, target.viewMode)
+        }
+        // Synced independently of the content swap above: `writePanelContent`
+        // leaves the flag alone because in-pane navigation keeps maximize (see
+        // `panelMaximizedProp` for why reconcile does no repair here).
+        if (isPanelRowMaximized(slot.row) !== (target.maximized === true)) {
+          await tx.setProperty(slot.row.id, panelMaximizedProp, target.maximized === true)
         }
       }
     }

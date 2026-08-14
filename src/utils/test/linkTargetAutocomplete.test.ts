@@ -11,6 +11,7 @@ import { resolveFacetRuntimeSync } from '@/facets/facet'
 import { kernelDataExtension } from '@/data/kernelDataExtension'
 import {
   completionTypeHint,
+  displayableTypes,
   labelForBlockData,
   searchAliasLabels,
   searchBlocksAcrossSources,
@@ -134,6 +135,38 @@ describe('completionTypeHint', () => {
   })
 })
 
+describe('displayableTypes', () => {
+  it('keeps every display-worthy type, in the order the block stores them', () => {
+    // The hint takes the first; a chip row shows several, so the filter
+    // has to be a list rather than a single winner.
+    expect(displayableTypes(
+      ['page', 'person', 'author'],
+      typeRegistry(
+        {id: 'page', label: 'Page', hideFromBlockDisplay: true},
+        {id: 'person', label: 'Person'},
+        {id: 'author', label: 'Author'},
+      ),
+    ).map(({label}) => label)).toEqual(['Person', 'Author'])
+  })
+
+  it('hands back the registry contribution, not just a name', () => {
+    // The chip colors itself from the contribution; resolving the label
+    // and then re-looking-up the type to paint it would be two lookups
+    // that can disagree.
+    const person = {id: 'person', label: 'Person'}
+
+    expect(displayableTypes(['person'], typeRegistry(person)))
+      .toEqual([{typeId: 'person', type: person, label: 'Person'}])
+  })
+
+  it('shows a repeated id once', () => {
+    // A raw properties-bag write (agent verb, importer, sync-applied row)
+    // can repeat an id; two identical chips read as two tags.
+    expect(displayableTypes(['person', 'person'], typeRegistry({id: 'person', label: 'Person'})))
+      .toHaveLength(1)
+  })
+})
+
 describe('link target autocomplete helpers', () => {
   it('labels blocks by first alias, then content, then fallback', () => {
     expect(labelForBlockData({
@@ -220,6 +253,22 @@ describe('link target autocomplete helpers', () => {
     expect(out.blocks.map(match => match.blockId)).toEqual(['survivor'])
   })
 
+  it('carries each content match\'s types, with no second query to fetch them', async () => {
+    // The rows behind a content match are whole `BlockData`, so a
+    // consumer that wants to show what KIND of thing a result is gets it
+    // off the row — unlike the ALIAS path, whose rows come from
+    // `block_aliases` and need `loadTypeIdsByBlock` to fill the same gap.
+    await create({id: 'ada', content: 'Ada Lovelace notes', types: ['person', 'author']})
+
+    const out = await searchLinkTargets(env.repo, {
+      workspaceId: WS,
+      query: 'Lovelace',
+      limit: 5,
+    })
+
+    expect(out.blocks.map(match => match.typeIds)).toEqual([['person', 'author']])
+  })
+
   it('still returns `limit` alias survivors when the exclusion set outranks them', async () => {
     // Prefix matches outrank the substring one, so — as with the block
     // case above — the excluded ids deterministically fill `limit`.
@@ -304,6 +353,9 @@ describe('link target autocomplete helpers', () => {
         searchByContent: vi.fn(() => ({
           load: () => blockRows.promise,
         })),
+        // Alias rows carry no properties, so their types are a second
+        // read — see `LinkTargetAliasMatch.typeIds`.
+        blockTypesByIds: vi.fn(() => ({load: () => Promise.resolve([])})),
       },
     } as unknown as Repo
     const phases: string[] = []
@@ -329,15 +381,49 @@ describe('link target autocomplete helpers', () => {
     ])
 
     await expect(search).resolves.toEqual({
-      aliases: [{alias: 'Dating', blockId: 'page', content: 'Dating notes'}],
+      aliases: [{alias: 'Dating', blockId: 'page', content: 'Dating notes', typeIds: []}],
       blocks: [{
         blockId: 'block',
         content: 'My Dating notes',
         label: 'My Dating notes',
         parentId: null,
+        typeIds: [],
       }],
     })
     expect(phases).toEqual(['aliases:page', 'blocks:block'])
+  })
+
+  it('chunks the type read so a large result set does not reject the search', async () => {
+    // `core.blockTypesByIds` validates blockIds at 200 and a zod failure
+    // REJECTS — so handing it every surviving alias would lose the whole
+    // search, not just the types, the moment a caller asked for more than
+    // 200. Today's callers ask for 25, but the alias fetch deliberately
+    // honours limits above its own ceiling, so the bound is the caller's.
+    const aliasRows = Array.from({length: 250}, (_, i) => ({
+      alias: `Dating ${i}`, blockId: `page-${i}`, content: `Dating ${i}`, updatedAt: 1,
+    }))
+    const blockTypesByIds = vi.fn(({blockIds}: {blockIds: string[]}) => ({
+      load: () => Promise.resolve(blockIds.map(blockId => ({blockId, type: 'person'}))),
+    }))
+    const repo = {
+      query: {
+        aliasMatchesFuzzy: vi.fn(() => ({load: () => Promise.resolve(aliasRows)})),
+        searchByContent: vi.fn(() => ({load: () => Promise.resolve([])})),
+        blockTypesByIds,
+      },
+    } as unknown as Repo
+
+    const result = await searchLinkTargetsProgressively(repo, {
+      workspaceId: WS,
+      query: 'dating',
+      limit: 250,
+    }, {})
+
+    expect(result.aliases).toHaveLength(250)
+    // Two reads, neither over the cap — and every row still got its type.
+    const sizes = blockTypesByIds.mock.calls.map(([args]) => args.blockIds.length)
+    expect(sizes).toEqual([200, 50])
+    expect(result.aliases.every(alias => alias.typeIds.includes('person'))).toBe(true)
   })
 
   it('skips the content scan for short queries (under 3 chars)', async () => {
@@ -356,6 +442,7 @@ describe('link target autocomplete helpers', () => {
           ]),
         })),
         searchByContent,
+        blockTypesByIds: vi.fn(() => ({load: () => Promise.resolve([])})),
       },
     } as unknown as Repo
 

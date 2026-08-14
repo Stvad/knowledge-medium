@@ -8,11 +8,13 @@ import { Repo } from '@/data/repo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo, isBlockDeleted } from '@/data/test/createTestRepo'
 import {
+  activePanelIdProp,
   editorSelection,
   focusBlock,
   focusedBlockLocationProp,
   isCollapsedProp,
   isEditingProp,
+  panelMaximizedProp,
   peekFocusedBlockLocation,
   selectionStateProp,
   topLevelBlockIdProp,
@@ -28,7 +30,7 @@ import { __resetLayoutSessionIdForTesting } from '@/utils/layoutSessionId'
 import {
   insertPanelRow,
   panelBlockId,
-  panelRowsInLayoutOrder,
+  allPanelRowsInLayoutOrder,
 } from '@/utils/panelLayoutProjection'
 import { panelRenderScopeId } from '@/utils/renderScope'
 import {
@@ -368,7 +370,7 @@ describe('default CodeMirror shortcuts', () => {
 
     await waitFor(async () => {
       const rows = await env.repo.query.subtree({id: layoutSession.id}).load()
-      const panels = panelRowsInLayoutOrder(layoutSession.id, rows)
+      const panels = allPanelRowsInLayoutOrder(layoutSession.id, rows)
       expect(panelBlockId(panels[0])).toBe(prefsBlock.id)
     })
   })
@@ -449,6 +451,33 @@ describe('default CodeMirror shortcuts', () => {
       renderScopeId: panelRenderScopeId(panelId, 'root'),
     })
     expect(panelBlock.peekProperty(isEditingProp)).toBe(true)
+  })
+
+  // This action CREATES a block in whichever pane it resolves, so resolving to
+  // a hidden one writes into a page the user cannot see. It used to hand-roll
+  // the active-pane rule over raw row order; it now shares the navigation
+  // resolver, which narrows to what is rendered.
+  it('creates the node in the maximized pane, not the hidden one the pointer names', async () => {
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'hidden-page', workspaceId: WS, parentId: null, orderKey: 'a0'})
+      await tx.create({id: 'shown-page', workspaceId: WS, parentId: null, orderKey: 'a1'})
+    }, {scope: ChangeScope.BlockDefault})
+
+    const rootUiState = await getUIStateBlock(env.repo, WS, USER, {})
+    const layoutSession = await getLayoutSessionBlock(rootUiState, env.repo.activeLayoutSessionId)
+    const hiddenPanelId = await insertPanelRow(env.repo, layoutSession, 'hidden-page')
+    const shownPanelId = await insertPanelRow(env.repo, layoutSession, 'shown-page')
+    await env.repo.block(shownPanelId).set(panelMaximizedProp, true)
+    // The pointer legitimately lags onto the hidden pane after a `;max` arrival.
+    await layoutSession.set(activePanelIdProp, hiddenPanelId)
+
+    await findGlobalAction(env.repo, CREATE_NODE_IN_ACTIVE_PANEL_ACTION_ID).handler(
+      {uiStateBlock: rootUiState},
+      {preventDefault: vi.fn()} as unknown as ActionTrigger,
+    )
+
+    expect(await childIds('shown-page')).toHaveLength(1)
+    expect(await childIds('hidden-page')).toHaveLength(0)
   })
 
   it('defaults cross-block focus to the per-pane scope instead of preserving stale nested scope', async () => {

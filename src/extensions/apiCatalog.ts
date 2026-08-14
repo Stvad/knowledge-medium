@@ -12,6 +12,18 @@
 // loading the catalog never pulls the whole app surface into memory (the
 // barrel had to, just to compute `Object.keys`).
 //
+// DISCOVERY, NOT A FROZEN CONTRACT. Listing a symbol here says "this is what
+// an extension should reach for", not "this will never change". Extensions are
+// stored in the DB, so no typecheck or repo sweep can find the ones that would
+// break — but this project is early and small enough that a break is a fixable
+// error while a wrong shape is permanent, so the design wins. `aliases` came
+// off `BlockResolveContext` on exactly those grounds after it was found to
+// remount the editor on every keystroke (#548 / #553). The obligation that
+// comes with it is disclosure, not preservation: say what broke and what an
+// extension reading it would see. A warning, not a migration plan — deleting
+// is the default. See AGENTS.md ("extension api surface"). None of this
+// applies to user DATA.
+//
 // It powers discovery: `describe-runtime` / `runtime-summary` surface it as
 // the `apiSurface`, and the authoring catalog folds these entries into its
 // module list (real category + description + curated exports). It is also the

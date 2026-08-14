@@ -88,8 +88,9 @@ describe('wikilink parsing', () => {
 
   it('renderWikilink round-trips aliases without wikilink delimiters', () => {
     // Documented-safe class: non-empty, no `]]`/`[[` (renderer splits
-    // them, lossy) and no trailing `]` (renderer pads it, lossy).
-    // Balanced single brackets inside the alias are fine.
+    // them, lossy) and no trailing `]` (renderer pads an UNBALANCED one,
+    // lossy). Balanced single brackets inside the alias are fine — and a
+    // balanced trailing `]` has its own property below.
     const safeAlias = fc
       .string({minLength: 1, maxLength: 30})
       .filter(a => !a.includes(']]') && !a.includes('[[') && !a.endsWith(']'))
@@ -101,6 +102,83 @@ describe('wikilink parsing', () => {
         expect(rendered).not.toBeNull()
         const parsed = parseOutermostReferences(rendered!)
         expect(parsed).toEqual([{alias, startIndex: 0, endIndex: rendered!.length}])
+      }),
+      fuzzParams(200),
+    )
+  })
+
+  it('renderWikilink round-trips an alias whose own bracket is the last char', () => {
+    // The case that used to be padded (`Book of [x]` → `[[Book of [x] ]]`).
+    // BUILT balanced rather than filtered-for-balance on purpose: filtering
+    // would restate `closingDelimiterFor`'s own rule and the property could
+    // only ever agree with the implementation. Everything here ends in `]`,
+    // so each sample lands the alias right against the closing delimiter.
+    const plain = fc.string({maxLength: 6}).map(s => s.replace(/[[\]]/g, ''))
+    const wrap = (inner: fc.Arbitrary<string>) =>
+      fc.tuple(plain, inner).map(([lead, body]) => `${lead}[${body}]`)
+    const endsWithItsOwnBracket = fc
+      .oneof(wrap(plain), wrap(wrap(plain)))
+      .filter(a => !a.includes('[[') && !a.includes(']]'))
+    fc.assert(
+      fc.property(endsWithItsOwnBracket, alias => {
+        const rendered = renderWikilink(alias)
+        // `renderWikilink` refuses (null) anything that would not read back
+        // as one reference. Every sample here is renderable, so a null IS a
+        // failure of the property under test — asserted, not narrowed away.
+        expect(rendered).not.toBeNull()
+        expect(rendered).toBe(`[[${alias}]]`)
+        expect(parseOutermostReferences(rendered!))
+          .toEqual([{alias, startIndex: 0, endIndex: rendered!.length}])
+      }),
+      fuzzParams(200),
+    )
+  })
+
+  // Three ways this scanner has been made quadratic, each found on PR #548
+  // and each fixed by moving work out of the per-close path. Kept together
+  // because they assert ONE property — the parse stays linear on adversarial
+  // bracket soup — and arbitrary pasted or imported block content reaches all
+  // three, on the render and post-commit paths.
+  //
+  // Timing is a blunt oracle, so the bound is set off the measured gaps, not
+  // off the measurements: every shape is now single-digit ms and the slowest
+  // pre-fix cost was 2807ms, so 300ms sits ~50x above the current worst and
+  // ~3x below the cheapest regression. The full gate's ~6x p99.9 slowdown
+  // cannot close that.
+  //
+  // Why "there is already a `slice` per close, so this is the same order" is
+  // wrong, since it is the reasoning that produced two of these: V8 answers a
+  // long `String.slice` with an O(1) SlicedString. A hand-written loop over
+  // the same range has no such out.
+  it.each([
+    // Absorbing was chosen by testing each candidate closer for balance,
+    // re-reading a near-full prefix every time. One opener, so the per-close
+    // `slice` cannot confound the measurement.
+    ['candidate search over the alias (was 907ms)', '[['.concat('a'.repeat(40_000), ']'.repeat(20_000))],
+    // Bracket depth was recomputed by scanning the alias on every close.
+    ['depth recomputed per close (was 2375ms)', '[['.repeat(16_000).concat('x', ']]'.repeat(16_000))],
+    // Nested frames close into ONE `]` run, and the run was re-walked per
+    // frame over an ever-shorter but still proportional suffix.
+    ['closing run re-walked per frame (was 2807ms)', '[[a['.repeat(32_000).concat(']'.repeat(96_000))],
+  ])('stays linear: %s', (_label, content) => {
+    const started = performance.now()
+    parseReferences(content)
+    expect(performance.now() - started).toBeLessThan(300)
+  })
+
+  it('a stray `]` after a link never gets absorbed into the alias', () => {
+    // The other side of the same rule, and the one protecting existing
+    // content: `[[foo]]` followed by literal `]`s must keep parsing as the
+    // link plus text, whatever the alias is.
+    const plainAlias = fc
+      .string({minLength: 1, maxLength: 12})
+      .map(s => s.replace(/[[\]]/g, ''))
+      .filter(a => a.length > 0)
+    fc.assert(
+      fc.property(plainAlias, fc.integer({min: 1, max: 4}), (alias, strays) => {
+        const content = `[[${alias}]]${']'.repeat(strays)}`
+        expect(parseOutermostReferences(content))
+          .toEqual([{alias, startIndex: 0, endIndex: alias.length + 4}])
       }),
       fuzzParams(200),
     )

@@ -138,6 +138,12 @@ interface RegisteredHandle {
  *      in its own microtask. The dominant indent/move case is ready
  *      handles, so the batch covers the symptom; mid-load is a
  *      best-effort fallback.
+ *    - A barrier can outlive its own members' next re-resolve, so a queued
+ *      slot is not automatically still the truth at flush time. Each slot
+ *      carries the stamp of the settle that queued it and is DROPPED if a
+ *      later settle of that handle has landed since — see
+ *      `LoaderHandle.flushQueuedNotify` for the three ways that happens
+ *      and why dropping loses no delivery.
  */
 class NotifyBatch {
   private remaining = 0
@@ -228,6 +234,13 @@ export class HandleStoreMetrics {
   /** `notify(value)` calls where the structural diff (spec §9.4)
    *  determined the value was unchanged → listener walk skipped. */
   notifiesSkippedByDiff = 0
+  /** Notifies queued behind a `NotifyBatch` barrier that were dropped at
+   *  flush because a later run of the same handle had settled in the
+   *  meantime — the queued slot no longer speaks for the handle. See
+   *  `LoaderHandle.flushQueuedNotify`. Non-zero is normal under
+   *  overlapping invalidations; a large value means barriers are being
+   *  held open across many re-resolves of their own members. */
+  notifiesSupersededInBatch = 0
   /** `notify(value)` calls that actually walked the listener set. */
   notifiesFired = 0
   /** Invalidations that hit a handle with zero subscribers and no
@@ -256,6 +269,7 @@ export class HandleStoreMetrics {
     this.midLoadInvalidations = 0
     this.reloadsAfterSettle = 0
     this.notifiesSkippedByDiff = 0
+    this.notifiesSupersededInBatch = 0
     this.notifiesFired = 0
     this.loaderInvalidationsDeferred = 0
     this.depsDeduplicatedAtRegistration = 0
@@ -273,6 +287,7 @@ export class HandleStoreMetrics {
       midLoadInvalidations: this.midLoadInvalidations,
       reloadsAfterSettle: this.reloadsAfterSettle,
       notifiesSkippedByDiff: this.notifiesSkippedByDiff,
+      notifiesSupersededInBatch: this.notifiesSupersededInBatch,
       notifiesFired: this.notifiesFired,
       loaderInvalidationsDeferred: this.loaderInvalidationsDeferred,
       depsDeduplicatedAtRegistration: this.depsDeduplicatedAtRegistration,
@@ -316,6 +331,11 @@ export class HandleStore {
 
   /** Remove a key (called by the handle itself on dispose). */
   remove(key: string): void { this.handles.delete(key) }
+
+  /** The handle currently registered at `key`, or undefined. Unlike
+   *  {@link getOrCreate} this NEVER creates — it is how a disposed handle
+   *  finds the replacement that superseded it without minting a rival. */
+  peekHandle(key: string): RegisteredHandle | undefined { return this.handles.get(key) }
 
   /** Walk all registered handles, invalidate the ones whose deps match. */
   invalidate(change: ChangeNotification): void {
@@ -466,7 +486,20 @@ export class LoaderHandle<T> implements Handle<T>, RegisteredHandle {
   /** Ref count = subscribers + inflight (1 if loading). Drives GC. */
   private refCount = 0
   private cancelGc: (() => void) | null = null
+  /** One-way. Nothing ever clears it — a disposed handle becomes a permanent
+   *  forwarder to whatever is live at its key (`resolveLive`) rather than
+   *  coming back to life — so every site that reads it as "this run was
+   *  cancelled" stays correct. */
   private disposed = false
+
+  /** Monotonic per-handle stamp, bumped once by every SUCCESSFUL loader
+   *  settle (clean or dirty). A notify queued behind a `NotifyBatch`
+   *  barrier carries the stamp of the run that queued it, and the flush
+   *  drops it if the stamp is no longer current — see
+   *  `flushQueuedNotify`. Only the success path bumps: a failed load
+   *  leaves `value` untouched, so a slot queued before it still speaks
+   *  for the handle. */
+  private settleSeq = 0
 
   /** Set when `invalidate()` fires while a load is in flight. The
    *  inflight load may have already read stale data from SQL before the
@@ -524,14 +557,96 @@ export class LoaderHandle<T> implements Handle<T>, RegisteredHandle {
 
   // ──── Handle<T> surface ────
 
-  peek(): T | undefined { return this.value }
+  peek(): T | undefined {
+    if (this.disposed) return this.liveAtKey()?.peek()
+    return this.value
+  }
 
-  status(): HandleStatus { return this.status_ }
+  /**
+   * Resolve a disposed handle to whatever is LIVE at its key.
+   *
+   * Why this exists: the documented contract used to be "re-acquire through
+   * the factory", and the factory only runs in the CALLER's render. That is
+   * unsatisfiable in this app — React Compiler output memoizes the factory
+   * call on deps that never change (`block.id`, `block.repo.query`), so a
+   * consumer handed a disposed handle gets the same corpse back on every
+   * subsequent render, forever. Rather than ask every caller to defeat its
+   * own compiler, a disposed handle resolves itself.
+   *
+   * `liveAtKey` is the PURE half — it never creates, so it is safe on the
+   * render path (`peek`, `status`).
+   */
+  private liveAtKey(): LoaderHandle<T> | null {
+    const existing = this.store.peekHandle(this.key)
+    return existing && existing !== this ? existing as LoaderHandle<T> : null
+  }
+
+  /**
+   * The effecting half: resolve to the live handle at this key, minting a
+   * fresh SIBLING when the key is vacant (we still hold everything the
+   * constructor needs — key, loader, equality). Called only from the paths
+   * that already act rather than observe: `subscribe` / `load` / `loadFresh` /
+   * `read`. `read` is the Suspense path, so this CAN run inside a render — but
+   * that render was already going to kick a load through `throw this.load()`,
+   * and a sibling an abandoned render leaves behind is retained by nobody and
+   * GCs on the constructor's own idle sweep. The reads that run on EVERY
+   * render (`peek`, `status`) stay on `liveAtKey`.
+   *
+   * `this` stays disposed forever — a disposed handle is a permanent one-hop
+   * forwarder, never a thing that comes back to life. That is what keeps
+   * `disposed` one-way, so `runLoader` and friends can go on reading it as
+   * "this run was cancelled".
+   *
+   * It cannot produce two live handles for one key, because `getOrCreate` IS
+   * adopt-or-mint: it hands back whatever someone else already registered and
+   * runs the factory only when the key is vacant. Adoption therefore needs no
+   * separate branch here — the same single-owner path every other caller uses
+   * gives it for free.
+   *
+   * Epoch caveat, stated plainly because it is a real trade: query keys embed
+   * the registry epoch (`query:<name>@<epoch>`, repo.ts) and the loader we
+   * hand the sibling captured that epoch's registry snapshot, so the sibling
+   * is registered under the OLD key and keeps serving the OLD snapshot.
+   * Serving it is already the contract for a not-yet-GC'd old-epoch handle
+   * (repo.ts), but this DOES change bounded into unbounded: previously such a
+   * handle died at GC and stayed dead, and now a holder that keeps resolving
+   * can keep a superseded resolver alive indefinitely. Nothing new lookups do
+   * is affected — they key at the current epoch. Closing it properly needs the
+   * epoch owner (Repo) to retire old-epoch keys explicitly; a handle cannot
+   * see the current epoch from here.
+   */
+  private resolveLive(): LoaderHandle<T> {
+    // Defence in depth: the four call sites all test `disposed` first, so
+    // nothing reaches here live. Without it a live handle would evict ITSELF
+    // below and mint a rival at its own key.
+    if (!this.disposed) return this
+    // The store can still be pointing AT this corpse: `dispose()` removes its
+    // own entry, but a factory that hands `getOrCreate` a cached dead handle
+    // puts one back. Evict it first or `getOrCreate` below returns the corpse
+    // and every entry point recurses into itself until the stack blows.
+    if (this.store.peekHandle(this.key) === this) this.store.remove(this.key)
+    return this.store.getOrCreate(this.key, () => new LoaderHandle({
+      store: this.store,
+      key: this.key,
+      loader: this.loader,
+      equality: this.equality,
+    }))
+  }
+
+  /** A disposed handle reports its replacement's status when the store has
+   *  one, and `'disposed'` only when the key is genuinely vacant — never the
+   *  `'idle'` that the reset `status_` field holds, which would be
+   *  indistinguishable from a fresh handle. Callers use it to skip a redundant
+   *  ensure-load (`useHandle`), not to decide whether the handle is usable:
+   *  every operation resolves on its own. Pure — safe on the render path. */
+  status(): HandleStatus {
+    if (!this.disposed) return this.status_
+    const live = this.liveAtKey()
+    return live ? live.status() : 'disposed'
+  }
 
   load(): Promise<T> {
-    if (this.disposed) {
-      return Promise.reject(new Error(`Handle ${this.key} has been disposed`))
-    }
+    if (this.disposed) return this.resolveLive().load()
     // An inflight load means the cached value is *known stale* — it was
     // either never set (cold load) or was invalidated and a fresh fetch
     // is in progress. Return the inflight so awaiters see post-
@@ -554,16 +669,50 @@ export class LoaderHandle<T> implements Handle<T>, RegisteredHandle {
    * while its loader was running. Projector priming uses this completeness
    * boundary so a cached or superseded snapshot cannot release writes. */
   async loadFresh(): Promise<T> {
-    while (true) {
-      await this.load()
-      // A dirty settle schedules its follow-up reload in a microtask before
-      // resolving the load promise. Yield once so that reload becomes visible.
-      await Promise.resolve()
-      if (this.inflight || this.stale) continue
-      if (this.value === undefined) {
-        throw new Error(`Handle ${this.key} completed without a value`)
+    // No disposed check at entry: the in-loop one below subsumes it (an
+    // entering corpse's `load()` forwards, then the loop's check hands the
+    // whole operation to the same live handle one lap later).
+    //
+    // Hold a ref for the WHOLE operation, the way a subscriber does. This is a
+    // multi-lap operation, and between laps the only thing keeping the handle
+    // alive is the inflight load's own retain — which `runLoader` hands back
+    // on settle. Under a non-positive `gcTimeMs` that `release()` disposes
+    // synchronously, so every lap kills the handle it just loaded, the check
+    // below forwards to a fresh sibling, and the sibling repeats it: an
+    // unbounded loader loop that starves the event loop (before this retain,
+    // `new HandleStore({gcTimeMs: 0})` + one `loadFresh()` never returned).
+    // Retaining also makes the ordinary case honest — a `continue` lap cannot
+    // find its own handle collected.
+    this.retain()
+    try {
+      while (true) {
+        await this.load()
+        // A dirty settle schedules its follow-up reload in a microtask before
+        // resolving the load promise. Yield once so that reload becomes visible.
+        await Promise.resolve()
+        // The real check, and it has to sit HERE — after the awaits, before the
+        // state reads. This is the only method on the class that awaits between
+        // deciding "am I disposed" and acting on the answer, and `load()`
+        // settles by running LISTENER code: a listener is free to dispose this
+        // handle (`HandleStore.clear()`, which ignores the ref-count the retain
+        // above holds). Reading `inflight`/`stale`/`value` off a corpse —
+        // disposal cleared all three — then reports "completed without a value"
+        // for a load that in fact succeeded. Forward the WHOLE operation, never
+        // the inner `load()`: this method's contract is that the value it
+        // returns was not invalidated while its loader ran, and delegating only
+        // the load drops that.
+        if (this.disposed) return this.resolveLive().loadFresh()
+        if (this.inflight || this.stale) continue
+        if (this.value === undefined) {
+          throw new Error(`Handle ${this.key} completed without a value`)
+        }
+        return this.value
       }
-      return this.value
+    } finally {
+      // Balanced against the entry retain on every exit — value, throw, and
+      // the forward. Both calls no-op on a corpse, so an entering-disposed
+      // call is balanced too.
+      this.release()
     }
   }
 
@@ -628,8 +777,18 @@ export class LoaderHandle<T> implements Handle<T>, RegisteredHandle {
 
     const p = this.loader(ctx).then(
       (value) => {
-        // Disposal during a load: don't apply, don't notify.
-        if (this.disposed) throw new Error(`Handle ${this.key} disposed mid-load`)
+        // Disposal during a load: don't apply, don't notify. The awaiter is
+        // told, rather than handed a value the handle never adopted.
+        //
+        // The batch slot is released HERE rather than in the rejection handler
+        // below: `then(onFulfilled, onRejected)` does NOT route a throw from
+        // onFulfilled into onRejected — it rejects the returned promise — so
+        // without this the barrier never closes and every OTHER member of the
+        // batch loses its notify.
+        if (this.disposed) {
+          batch?.finish(null)
+          throw new Error(`Handle ${this.key} disposed mid-load`)
+        }
         // Replace live deps with the freshly-collected set (drops any
         // priorDeps the loader didn't re-declare).
         this.deps = collected
@@ -648,6 +807,11 @@ export class LoaderHandle<T> implements Handle<T>, RegisteredHandle {
         }
         this.changesDuringLoad = []
         const needsPostSettleReload = this.pendingReinvalidate && !this.disposed
+        // This settle supersedes every notify still queued behind an open
+        // barrier from an EARLIER run of this handle: whatever those slots
+        // were going to say, this run has since said something newer (or,
+        // when dirty, has queued the rerun that will).
+        const seq = ++this.settleSeq
         this.value = value
         this.status_ = 'ready'
         this.error = undefined
@@ -663,14 +827,19 @@ export class LoaderHandle<T> implements Handle<T>, RegisteredHandle {
           // The promise returned by this load may resolve with the value it
           // read, but subscribers should not rebuild from a snapshot already
           // known suspect. The queued reload below will publish the clean
-          // value if it differs from the last value subscribers saw.
+          // value if it differs from the last value subscribers saw. The
+          // `seq` bump above is what keeps THIS run's suspect value out of
+          // an older barrier's flush too.
           batch?.finish(null)
         } else if (willNotify) {
           // When this load was kicked off by a batched invalidate,
           // queue the notify so it lands in the same microtask as the
           // other batch members' notifies (one React commit). Without
           // a batch, fire immediately as before.
-          if (batch) batch.finish(() => this.notify(value))
+          //
+          // The thunk carries this run's stamp and value; the flush drops
+          // it if a later run has settled since — see `flushQueuedNotify`.
+          if (batch) batch.finish(() => this.flushQueuedNotify(seq, value))
           else this.notify(value)
         } else {
           // Equality match against prior value: notify suppressed.
@@ -706,11 +875,13 @@ export class LoaderHandle<T> implements Handle<T>, RegisteredHandle {
         return value
       },
       (err) => {
-        // Release the batch slot unconditionally — including the
-        // disposed-mid-load case (where the success path throws into
-        // here). The barrier must not hang on a vanished participant.
-        // Failed loads contribute no notify; the prior notify, if any,
-        // already fired on the last successful settle.
+        // Release the batch slot unconditionally: the barrier must not hang
+        // on a participant whose loader threw. Failed loads contribute no
+        // notify; the prior notify, if any, already fired on the last
+        // successful settle. (The disposed-mid-load case does NOT arrive
+        // here — a throw from the fulfilled handler rejects the promise this
+        // `then` returns rather than routing to this handler — so that path
+        // releases its own slot up there.)
         batch?.finish(null)
         if (!this.disposed) {
           // Roll back to the priorDeps — collected was incomplete.
@@ -752,11 +923,7 @@ export class LoaderHandle<T> implements Handle<T>, RegisteredHandle {
   }
 
   subscribe(listener: (value: T) => void): Unsubscribe {
-    if (this.disposed) {
-      // Listening to a disposed handle is a no-op + immediate
-      // unsubscribe; callers should re-acquire via the factory.
-      return () => {}
-    }
+    if (this.disposed) return this.resolveLive().subscribe(listener)
     this.listeners.add(listener)
     this.retain()
     // First subscriber kicks off a load if we're idle, OR if the handle
@@ -776,6 +943,11 @@ export class LoaderHandle<T> implements Handle<T>, RegisteredHandle {
   }
 
   read(): T {
+    // A disposed handle resolves to its live replacement rather than
+    // throwing: the old behavior fell through to `throw this.load()`, and
+    // load() on a corpse returned a fresh rejected promise every call, so a
+    // Suspense boundary retried forever with nothing surfacing.
+    if (this.disposed) return this.resolveLive().read()
     if (this.status_ === 'ready' && this.value !== undefined) return this.value
     if (this.status_ === 'error') throw this.error
     // Suspense path: throw a promise React can `await`.
@@ -882,6 +1054,14 @@ export class LoaderHandle<T> implements Handle<T>, RegisteredHandle {
     this.listeners.clear()
     this.deps = []
     this.changesDuringLoad = []
+    // The ref-count and the two live-run flags complete the "this handle
+    // carries no live state" claim this method makes. None of the three is
+    // observable — `this` is now a permanent forwarder and every reader
+    // (`retain`/`release`/`loadFresh`) checks `disposed` first — so no test
+    // pins them; they are hygiene, not mechanism.
+    this.refCount = 0
+    this.pendingReinvalidate = false
+    this.stale = false
     this.value = undefined
     this.notifiedValue = undefined
     this.hasNotifiedValue = false
@@ -892,6 +1072,64 @@ export class LoaderHandle<T> implements Handle<T>, RegisteredHandle {
   }
 
   // ──── private ────
+
+  /** Flush a notify that was queued behind a `NotifyBatch` barrier.
+   *
+   *  A barrier can stay open across LATER runs of one of its own members:
+   *  that reload is not a member of the open batch (it either joins a newer
+   *  batch or runs unbatched), so by flush time the slot may no longer speak
+   *  for the handle. `seq` is the stamp of the run that queued this slot, and
+   *  a slot whose stamp is stale is DROPPED rather than published. The three
+   *  ways a slot goes stale, each of which is exactly one later settle:
+   *
+   *   1. The later run notified already (unbatched, or an inner batch that
+   *      closed first). Publishing this slot's value would walk a listener
+   *      backwards — v2 followed by the queued v1 — and since `notify()` also
+   *      writes `notifiedValue`, the structural-diff baseline would be left
+   *      disagreeing with the value the handle actually holds, with nothing
+   *      to correct it until the next invalidation.
+   *   2. The later run settled DIRTY (`needsPostSettleReload`): it wrote
+   *      `value` for peek/load callers but deliberately withheld the notify
+   *      because the snapshot is known suspect, and queued a clean rerun that
+   *      will publish. Neither this slot's own vintage nor the suspect value
+   *      is the thing to hand a subscriber; the rerun's notify is.
+   *   3. The later run is queued in a NEWER, still-open barrier. Publishing
+   *      here would split that invalidation across two commits — its other
+   *      members are still gated — which is the exact intermediate state
+   *      `NotifyBatch` exists to prevent. Deferring to the newer barrier
+   *      keeps them together.
+   *
+   *  Dropping (rather than publishing latest-known) is safe because a stamp
+   *  only goes stale via a later SUCCESSFUL settle, and every such settle
+   *  either notifies itself, is diff-suppressed as equal to what listeners
+   *  already have, or schedules the rerun that will. The one place it defers
+   *  to another barrier is (3), and that barrier's own flush is what
+   *  publishes. A failed load does NOT bump the stamp, so a slot queued
+   *  before an error still publishes the value the handle still holds.
+   *
+   *  Why not publish anyway and let the structural diff sort it out: the
+   *  consumers that read the pushed argument instead of re-reading `peek()`
+   *  — the grouped-backlinks bridge, `Repo.queryBlocks`'s freshInitial path,
+   *  `PanelLayoutProjection` — rebuild from it, so a redundant or premature
+   *  delivery is a redundant or premature rebuild, not a free no-op.
+   *
+   *  A current stamp also makes the flush-time structural diff this method
+   *  used to re-run dead: `notifiedValue` moves only inside `notify()`, and
+   *  every caller of `notify()` is either an unbatched settle (which bumps
+   *  the stamp) or another slot's flush (a different run, hence a different
+   *  stamp) — so a slot that survives the stamp check cannot be holding a
+   *  value the listeners already have. Publishing the STAMPED value rather
+   *  than `this.value` is equivalent for the same reason (only a successful
+   *  settle writes `value`, and it bumps the stamp); the stamped value is
+   *  used because it keeps the slot a self-contained record of one run. */
+  private flushQueuedNotify(seq: number, value: T): void {
+    if (this.disposed) return
+    if (seq !== this.settleSeq) {
+      this.store.metrics.notifiesSupersededInBatch++
+      return
+    }
+    this.notify(value)
+  }
 
   private notify(value: T): void {
     if (this.listeners.size === 0) return
