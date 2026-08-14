@@ -107,6 +107,27 @@ export class MergeIntoDescendantError extends DataLayerError {
   }
 }
 
+/** Raised when the merge TARGET's content is not prose
+ *  (`opaqueContentTypesFacet`) — an installed extension's source, a
+ *  drawing's JSON.
+ *
+ *  Refuses rather than switching to `keepTarget`, which looks like the
+ *  gentler option and is worse: `from` is deleted by the merge either way,
+ *  so keeping the target's bytes would destroy the SOURCE block's text with
+ *  nothing appended anywhere. Both available outcomes lose data, so this is
+ *  the user's call to make, not the merge's. */
+export class MergeIntoOpaqueContentError extends DataLayerError {
+  constructor(
+    public readonly intoId: string,
+    public readonly fromId: string,
+  ) {
+    super(
+      `cannot merge ${fromId} into ${intoId}: ${intoId}'s content is not text `
+      + '(an installed extension\'s source or similar), so merging would corrupt it',
+    )
+  }
+}
+
 /** Thrown by the tx engine's parent preflight when a write references a
  *  non-existent parent_id. The storage layer still backs this invariant, but
  *  its local trigger collapses missing-parent and cross-workspace failures
@@ -287,6 +308,7 @@ const ERROR_NAMES: ReadonlyArray<readonly [string, {prototype: object}]> = [
   ['NotDeletedError', NotDeletedError],
   ['CycleError', CycleError],
   ['MergeIntoDescendantError', MergeIntoDescendantError],
+  ['MergeIntoOpaqueContentError', MergeIntoOpaqueContentError],
   ['ParentNotFoundError', ParentNotFoundError],
   ['ParentWorkspaceMismatchError', ParentWorkspaceMismatchError],
   ['ParentDeletedError', ParentDeletedError],

@@ -1105,6 +1105,23 @@ export const searchByContentQuery = defineQuery<
       channel: KERNEL_CONTENT_CHANNEL,
       key: kernelContentKey(workspaceId),
     })
+    // Opaque-type membership, narrowly. This query does NOT filter on it —
+    // searching for an extension BY its source is legitimate — but the rows
+    // it returns are whole `BlockData` snapshots, and consumers decide from
+    // `properties` whether to show a row (`coreContentSearchSource` drops
+    // opaque ones). A snapshot whose types have since changed is therefore
+    // stale in a way the caller acts on, and gaining a type is a
+    // property-only edit that `kernel.content` deliberately does not report.
+    // Scoped to the opaque types alone rather than all property edits — that
+    // is the fan-out the channel choice above exists to avoid, and this
+    // fires only when a block gains or loses one of a handful of type ids.
+    for (const type of ctx.repo.opaqueContentTypes) {
+      ctx.depend({
+        kind: 'plugin',
+        channel: TYPED_BLOCKS_TYPE_CHANNEL,
+        key: typedBlocksTypeKey(workspaceId, type),
+      })
+    }
     // The prefix-rank LIKE takes the escaped rankQuery (so `_`/`%` in
     // the query rank as literals); the exact `= LOWER(?)` rank takes the
     // raw rankQuery. The FTS MATCH itself is unaffected — LIKE is only a

@@ -18,6 +18,7 @@ import {
   CORE_BLOCK_MERGED_EVENT,
   ChangeScope,
   MergeIntoDescendantError,
+  MergeIntoOpaqueContentError,
   ParentDeletedError,
   codecs,
   defineProperty,
@@ -28,7 +29,7 @@ import { BlockCache } from '@/data/blockCache'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { Repo } from './repo'
-import { aliasesProp, isCollapsedProp } from '@/data/properties'
+import { aliasesProp, isCollapsedProp, typesProp } from '@/data/properties'
 
 interface Harness {
   h: TestDb
@@ -1090,6 +1091,29 @@ describe('core.merge', () => {
     await env.repo.mutate.merge({intoId: 'a', fromId: 'b'})
     expect(env.read('a')!.content).toBe('keep')
     expect(env.read('b')!.deleted).toBe(true)
+  })
+
+  // Both available outcomes lose data: concat corrupts the extension's
+  // source, keepTarget destroys `from`'s text (the merge deletes it either
+  // way). So this refuses and leaves the choice to the user.
+  it('refuses to merge into an opaque-content target, losing neither side', async () => {
+    await env.repo.tx(
+      tx => tx.create({id: 'p', workspaceId: 'ws-1', parentId: null, orderKey: 'a0'}),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await env.repo.mutate.createChild({parentId: 'p', id: 'ext', content: 'export const x = 1'})
+    await env.repo.mutate.createChild({parentId: 'p', id: 'note', content: 'a note'})
+    await env.repo.tx(
+      tx => tx.setProperty('ext', typesProp, ['extension']),
+      {scope: ChangeScope.BlockDefault},
+    )
+
+    await expect(env.repo.mutate.merge({intoId: 'ext', fromId: 'note'}))
+      .rejects.toBeInstanceOf(MergeIntoOpaqueContentError)
+
+    expect(env.read('ext')!.content).toBe('export const x = 1')
+    expect(env.read('note')!.content).toBe('a note')
+    expect(env.read('note')!.deleted).toBe(false)
   })
 
   it('rejects merging into a descendant with a typed precondition error, not a raw CycleError (#188)', async () => {

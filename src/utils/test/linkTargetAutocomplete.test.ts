@@ -719,6 +719,29 @@ describe('searchBlocksAcrossSources (searchSourcesFacet merge point)', () => {
     expect(results.map(block => block.id)).toEqual(['note'])
   })
 
+  // `fetchLimit` for limit:1 is 4, so a handful of opaque hits ranked above
+  // the note would otherwise return nothing at all.
+  //
+  // The note must rank BELOW the whole window or this proves nothing. The
+  // SQL orders by match bucket (exact / prefix / other) and only then by
+  // recency — and a fast test stamps every row in the same millisecond, so
+  // recency is not a usable lever. The bucket is: the opaque rows are
+  // PREFIX matches, the note only a substring one.
+  it('widens the fetch when opaque rows crowd out the candidate window', async () => {
+    for (let i = 0; i < 8; i++) {
+      await create({id: `ext-${i}`, content: `dating ${i}`, types: ['extension']})
+    }
+    await create({id: 'note', content: 'my dating notes'})
+
+    const results = await searchBlocksAcrossSources(env.repo, {
+      workspaceId: WS,
+      query: 'dating',
+      limit: 1,
+    })
+
+    expect(results.map(block => block.id)).toEqual(['note'])
+  })
+
   it('honors a limit above the candidate ceiling — fetchLimit floors at `limit`, not capped at 200', async () => {
     // Old fetchLimit formula was `min(limit*4, 200)`, so any requested
     // limit above 200 (e.g. an agent `search --limit 250`) capped the

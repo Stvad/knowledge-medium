@@ -1,11 +1,13 @@
 import {
   CORE_BLOCK_MERGED_EVENT,
   MergeIntoDescendantError,
+  MergeIntoOpaqueContentError,
   type BlockData,
   type BlockMergeAliasRewrite,
   type Tx,
 } from '@/data/api'
 import { keysBetween } from './orderKey'
+import { hasOpaqueContent } from './properties'
 import { getPropertyFieldTargetId } from './propertyChildren'
 import { collapseDuplicateFieldRow } from './internals/propertyChildrenProcessor'
 import { mergeProperties } from './mergeProperties'
@@ -74,6 +76,20 @@ export const mergeBlocksInTx = async (
   // user-actionable precondition error up front instead.
   if (await tx.isDescendantOf(into.id, from.id)) {
     throw new MergeIntoDescendantError(into.id, from.id)
+  }
+
+  // The target's bytes are not prose, and the write below concatenates
+  // `from`'s text straight into them. Up front with the other precondition,
+  // BEFORE any child re-homing, so the refusal costs nothing to roll back.
+  //
+  // Refuse rather than fall back to `keepTarget`: `from` is deleted either
+  // way, so keeping the target intact would silently destroy the SOURCE
+  // block's text with nothing appended anywhere. Both outcomes lose data, so
+  // it is the user's call. Reachable from MergePicker (a dialog-length pause
+  // in which sync can add the type) and from Backspace-at-offset-0 when the
+  // previous sibling is an extension block.
+  if (hasOpaqueContent(into, tx.opaqueContentTypes)) {
+    throw new MergeIntoOpaqueContentError(into.id, from.id)
   }
 
   // Re-parent only `from`'s regular (visible, non property-field) children

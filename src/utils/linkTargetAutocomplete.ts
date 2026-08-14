@@ -439,7 +439,6 @@ export const coreContentSearchSource: SearchSourceContribution = {
     // the ceiling (the ceiling is a headroom cap for the common case, not
     // a hard maximum on the result size).
     const fetchLimit = Math.max(limit, Math.min(limit * ALIAS_CANDIDATE_MULTIPLIER, ALIAS_CANDIDATE_CEILING))
-    const rows = await repo.query.searchByContent({workspaceId, query, limit: fetchLimit}).load()
     // An installed extension's stored source is not prose to search. This
     // powers quick-find, block-ref completion and the agent search command,
     // so without it a bundle surfaces as an ordinary linkable result and a
@@ -447,13 +446,27 @@ export const coreContentSearchSource: SearchSourceContribution = {
     // `core.searchByContent` because that kernel query is also how you'd
     // legitimately go LOOKING for an extension by its source.
     const opaqueTypes = repo.opaqueContentTypes
-    return rows
+    const eligible = (rows: readonly BlockData[]): SearchSourceCandidate[] => rows
       .filter(block => !hasOpaqueContent(block, opaqueTypes))
       .map((block): SearchSourceCandidate => ({
         block,
         score: blockSearchTextScore(block.content, query) +
           blockSearchRecencyBoost(block.id, recentBlockIds),
       }))
+
+    const rows = await repo.query.searchByContent({workspaceId, query, limit: fetchLimit}).load()
+    let candidates = eligible(rows)
+    // The filter runs after the SQL limit, so opaque rows consume the
+    // over-fetch window — enough of them ranked above a prose match and the
+    // caller sees no content result at all, with no way to page past them.
+    // Widen once to the ceiling when the window came back short AND was
+    // actually full (a short read means the corpus is exhausted, not crowded).
+    if (candidates.length < limit && rows.length >= fetchLimit && fetchLimit < ALIAS_CANDIDATE_CEILING) {
+      const widened = await repo.query
+        .searchByContent({workspaceId, query, limit: ALIAS_CANDIDATE_CEILING}).load()
+      candidates = eligible(widened)
+    }
+    return candidates
   },
 }
 
