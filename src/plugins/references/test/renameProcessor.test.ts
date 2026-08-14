@@ -31,6 +31,7 @@ import { computeAliasSeatId, ensureAliasTarget } from '@/data/targets'
 import { referencesDataExtension } from '../dataExtension.ts'
 import {
   applyRefRewrites,
+  rewriteSplitFor,
   splitBySurvivingSpan,
   type Rewrite,
 } from '../renameProcessor.ts'
@@ -129,6 +130,63 @@ const seedSource = async (id: string, content: string): Promise<void> => {
   )
   await flush()
 }
+
+describe('rename — opaque sources', () => {
+  // The stranding shortcut only holds while the stored edge still matches
+  // the bytes. This is the case where it does NOT: a legacy edge naming
+  // `Old` on a payload that has since been replaced and contains no
+  // `[[Old]]` at all. `splitBySurvivingSpan` would read the alias as absent
+  // — hence SWAPPED — and retarget the edge to `New`, publishing a backlink
+  // the payload does not support and that nothing will ever clean.
+  it('drops a legacy edge whose payload no longer contains the alias', async () => {
+    await seedTarget('t', 'Old', ['Old'])
+    // Born as prose so the edge is real...
+    await seedSource('s', 'See [[Old]] for context.')
+    expect(await blockReferences('s', 't')).toEqual([{alias: 'Old'}])
+
+    // ...then the payload is replaced and the block made opaque, both by a
+    // RAW write: no processor fires, so `block_references` keeps the edge
+    // while the bytes stop mentioning it. That is exactly a bundle whose
+    // source was swapped out after an interrupted cleanup.
+    const source = 'export const version = 2'
+    await env.h.db.writeTransaction(async t => {
+      await t.execute(
+        'UPDATE blocks SET content = ?, properties_json = ? WHERE id = ?',
+        [source, JSON.stringify({types: ['extension']}), 's'],
+      )
+    })
+
+    await env.repo.tx(
+      tx => tx.setProperty('t', aliasesProp, ['New']),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await flush()
+
+    // The BYTES are what this end-to-end case can prove. The edge outcome
+    // cannot be asserted here: post-commit `parseReferences` drops an opaque
+    // block's content edges either way, so a wrong answer inside the tx is
+    // laundered into a right-looking final state. That half is pinned
+    // directly on `rewriteSplitFor` below.
+    expect((await env.read('s'))!.content).toBe(source)
+  })
+
+  // The half the integration test above cannot see. Opaque ⇒ stranded
+  // WITHOUT parsing: a legacy edge on a replaced payload parses as absent,
+  // which `splitBySurvivingSpan` reads as "swapped" — and a swapped entry is
+  // retargeted to the new name rather than dropped.
+  it('classifies every rewrite as stranded on an opaque source', () => {
+    const rewrites: Rewrite[] = [{
+      alias: 'Old', replacement: '[[New]]', refAlias: 'New', pinned: false,
+      fromTargetId: 't', toTargetId: 't',
+    }]
+    const payloadWithoutTheAlias = 'export const version = 2'
+
+    expect(rewriteSplitFor(rewrites, payloadWithoutTheAlias, false).swapped).toHaveLength(1)
+    const opaque = rewriteSplitFor(rewrites, payloadWithoutTheAlias, true)
+    expect(opaque.swapped).toEqual([])
+    expect(opaque.stranded).toHaveLength(1)
+  })
+})
 
 describe('rename — Case R1 (clean 1-for-1 swap)', () => {
   it('rewrites [[Old]] → [[New]] in source content', async () => {

@@ -365,6 +365,27 @@ export const splitBySurvivingSpan = (
   }
 }
 
+/** Which rewrites still have a live span (`swapped`) and which are
+ *  stranded — the decision `applyPlan` acts on, split out because the
+ *  OPAQUE case cannot be observed end-to-end: the post-commit re-parse
+ *  drops an opaque block's content edges either way, laundering a wrong
+ *  answer here into a right-looking final state.
+ *
+ *  Opaque ⇒ everything stranded, without parsing. `splitBySurvivingSpan`
+ *  asks "does this alias still appear in the content", which is only the
+ *  right question while the stored edge matches the bytes. A LEGACY edge on
+ *  a payload that has since been replaced parses as ABSENT, so the alias
+ *  reads as swapped and its entry would be retargeted to the new name —
+ *  publishing a backlink the payload does not support. */
+export const rewriteSplitFor = (
+  rewrites: readonly Rewrite[],
+  nextContent: string,
+  opaque: boolean,
+): {swapped: Rewrite[]; stranded: Rewrite[]} =>
+  opaque
+    ? {swapped: [], stranded: [...rewrites]}
+    : splitBySurvivingSpan(rewrites, nextContent)
+
 const applyPlan = async (tx: Tx, plan: SourcePlan): Promise<void> => {
   const current = await tx.get(plan.sourceId)
   if (current === null || current.deleted) return
@@ -377,12 +398,10 @@ const applyPlan = async (tx: Tx, plan: SourcePlan): Promise<void> => {
   // pinned form. Last rewrite wins on a duplicate alias, matching the
   // entry swap's own last-write-wins map.)
   // Opaque content is not prose — leave the BYTES alone. Deliberately not
-  // an early return: with the content unchanged every alias stays present,
-  // so `splitBySurvivingSpan` reports them all STRANDED and the code below
-  // drops their stale content edges exactly as it does for an unrenderable
-  // replacement, while property-derived entries survive. Returning early
-  // would strand those edges forever, since the references processor no
-  // longer re-parses this block to rebuild them.
+  // an early return: the stale content edges still have to be dropped (see
+  // the stranding branch below), since the references processor no longer
+  // re-parses this block to rebuild them, while property-derived entries
+  // survive.
   const opaque = hasOpaqueContent(current, tx.opaqueContentTypes)
   const nextContent = opaque ? current.content : rewriteWikilinksMulti(
     current.content,
@@ -396,7 +415,7 @@ const applyPlan = async (tx: Tx, plan: SourcePlan): Promise<void> => {
     }])),
   )
 
-  const {swapped, stranded} = splitBySurvivingSpan(plan.rewrites, nextContent)
+  const {swapped, stranded} = rewriteSplitFor(plan.rewrites, nextContent, opaque)
   const invalidated = [
     ...plan.staleEdges,
     ...stranded.map(rw => ({alias: rw.alias, targetId: rw.fromTargetId})),
