@@ -518,7 +518,6 @@ const runContentLinkRecomputeCheck = async (
   let opaqueContentRefBlocks = 0
   let opaqueContentRefs = 0
   let opaqueScanned = 0
-  const opaqueSeen = new Set<string>()
   let truncated = false
   const strippedSample: Array<{ id: string; marks: number; content_preview: string }> = []
   const staleSample: Array<{ id: string; stale: string[]; content_preview: string }> = []
@@ -583,39 +582,31 @@ const runContentLinkRecomputeCheck = async (
   // publishing a backlink the bytes do not support — the audit is the only
   // thing that can see it.
   //
-  // Candidates come from a substring probe on `properties_json` per opaque
-  // type — cheap because that set is a handful of ids, and verified properly
-  // in JS afterwards (the probe can over-match; it must never under-match).
-  for (const type of opaqueTypes) {
-    // Keyset-paged like the scan above. A single `LIMIT ${BATCH}` would cap
-    // this silently at the first page and report `ok` for a stale edge on
-    // any later row — in a check whose whole justification is that nothing
-    // else can see those edges.
+  // Candidates come from `block_types`, the trigger-maintained index the
+  // rest of the app already trusts for type membership. That is exact —
+  // a substring probe over `properties_json` would have to reproduce
+  // `JSON.stringify` escaping to match an id containing `"` or `\`, and a
+  // near-miss there reads as "no such blocks" rather than as an error.
+  // One scan over every opaque type at once, so a block carrying two of
+  // them is a single row and the cap is charged once.
+  if (opaqueTypes.size > 0) {
+    const placeholders = [...opaqueTypes].map(() => '?').join(', ')
     let opaqueLastId = ''
     for (;;) {
-      const rows = await db.getAll<{ id: string; properties_json: string; references_json: string }>(
-        `SELECT id, properties_json, references_json FROM blocks
-         WHERE deleted=0 AND workspace_id=?
-           AND properties_json LIKE '%' || ? || '%'
-           AND references_json != '[]'
-           AND id > ?
-         ORDER BY id LIMIT ${BATCH}`,
-        [workspaceId, `"${type}"`, opaqueLastId],
+      const rows = await db.getAll<{ id: string; references_json: string }>(
+        `SELECT DISTINCT b.id AS id, b.references_json AS references_json
+         FROM block_types bt
+         JOIN blocks b ON b.id = bt.block_id AND b.workspace_id = bt.workspace_id
+         WHERE bt.workspace_id = ?
+           AND bt.type IN (${placeholders})
+           AND b.deleted = 0
+           AND b.references_json != '[]'
+           AND b.id > ?
+         ORDER BY b.id LIMIT ${BATCH}`,
+        [workspaceId, ...opaqueTypes, opaqueLastId],
       )
       if (rows.length === 0) break
-      let newlyInspected = 0
       for (const row of rows) {
-        // One block carrying TWO opaque types is selected by both probes,
-        // and `hasOpaqueContent` accepts it on each pass because it tests
-        // the whole set — so without this it is counted twice, sampled
-        // twice, and burns the cap twice.
-        if (opaqueSeen.has(row.id)) continue
-        opaqueSeen.add(row.id)
-        newlyInspected += 1
-        if (!hasOpaqueContent(
-          { properties: safeJsonParse<Record<string, unknown>>(row.properties_json, {}) },
-          opaqueTypes,
-        )) continue
         let stored: StoredRef[]
         try {
           stored = JSON.parse(row.references_json)
@@ -630,12 +621,7 @@ const runContentLinkRecomputeCheck = async (
           opaqueSample.push({ id: row.id, refs: lingering.length })
         }
       }
-      // Count only rows this pass actually INSPECTED. A block carrying two
-      // opaque types comes back from both probes; charging the duplicate to
-      // the cap lets a shared prefix exhaust it before later unique rows for
-      // another type are ever looked at — reporting `incomplete` for work
-      // that was really done.
-      opaqueScanned += newlyInspected
+      opaqueScanned += rows.length
       opaqueLastId = rows[rows.length - 1].id
       if (rows.length < BATCH) break
       if (opaqueScanned >= contentCap) { truncated = true; break }

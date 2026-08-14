@@ -566,6 +566,24 @@ describe('runConsistencyAudit — full (on-demand) deep checks', () => {
     expect(check.opaqueContentRefs).toBe(1)
   })
 
+  // The facet's validator accepts any non-empty string, so a contributed
+  // type id may contain characters `JSON.stringify` escapes. A substring
+  // probe over `properties_json` would have to reproduce that escaping to
+  // match, and a near-miss reads as "no such blocks" — clean, not error.
+  // Querying `block_types` sidesteps the question entirely.
+  it('finds candidates for a type id that JSON-escapes', async () => {
+    const quoted = 'ext"o\\d'
+    await ins({
+      id: 'ext-q', content: 'export const x = 1',
+      properties: { types: [quoted] },
+      references: [{ id: 'foo-id', alias: 'Foo' }],
+    })
+    const r = await runConsistencyAudit(sharedDb.db, WS, 0, {
+      full: { ...FULL, opaqueContentTypes: new Set([quoted]) },
+    })
+    expect(r.checks.content_link_recompute.opaqueContentRefBlocks).toBe(1)
+  })
+
   it('property_ref_at_rest (schema-aware) flags a value-present/ref-absent curated prop', async () => {
     await ins({ id: 'p1', properties: { 'next-review-date': '2026-01-01' }, references: [] })
     const r = await runConsistencyAudit(sharedDb.db, WS, 0, { full: FULL })
