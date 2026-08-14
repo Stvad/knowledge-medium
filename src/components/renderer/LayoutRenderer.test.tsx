@@ -21,6 +21,22 @@ vi.mock('@/utils/react.tsx', () => ({
   useIsMobile: () => isMobileRef.current,
 }))
 
+// `LayoutRenderer` decides from the SYNCHRONOUS media read, not the hook —
+// `useMedia` reports its default on the first render, which on a phone is one
+// commit of believing it is desktop. So the viewport has to be stubbed at the
+// media query, not just at the hook, or these tests exercise a viewport the
+// component does not see.
+const stubMatchMedia = () => vi.stubGlobal('matchMedia', (media: string) => ({
+  media,
+  get matches() { return isMobileRef.current },
+  addEventListener: () => {},
+  removeEventListener: () => {},
+  addListener: () => {},
+  removeListener: () => {},
+  onchange: null,
+  dispatchEvent: () => false,
+}))
+
 vi.mock('@/components/BlockComponent.tsx', () => ({
   BlockComponent: ({blockId}: {blockId: string}) => {
     const context = useBlockContext()
@@ -66,11 +82,13 @@ describe('LayoutRenderer', () => {
 
   beforeEach(async () => {
     isMobileRef.current = false
+    stubMatchMedia()
     env = await setup()
   })
 
   afterEach(async () => {
     cleanup()
+    vi.unstubAllGlobals()
   })
 
   const layoutSessionBlock = () => env.repo.block(env.layoutSessionBlockId)
@@ -188,6 +206,26 @@ describe('LayoutRenderer', () => {
       )).rejects.toThrow()
       expect(screen.queryByTestId(`block-${first}`)).toBeNull()
     }, 20_000) // measured ~600ms: the negative wait above dominates
+
+    // The mobile solo pane is DERIVED from the pointer, so it must never be
+    // treated as a coercion source: a pointer naming a row this snapshot does
+    // not carry yet would otherwise be overwritten with the fallback pane, and
+    // the row it named never becomes active when it does arrive.
+    it('does not overwrite a mobile pointer that names a not-yet-projected row', async () => {
+      isMobileRef.current = true
+      await twoPanels()
+      const notYetProjected = 'panel-row-arriving-later'
+      await layoutSessionBlock().set(activePanelIdProp, notYetProjected)
+
+      renderLayout()
+      // Mobile renders SOME pane; wait for the commit before judging the write.
+      await screen.findByTestId(/^block-/)
+
+      await expect(vi.waitFor(
+        () => expect(layoutSessionBlock().peekProperty(activePanelIdProp)).not.toBe(notYetProjected),
+        {timeout: 500},
+      )).rejects.toThrow()
+    }, 20_000) // measured ~600ms: the negative wait dominates
 
     it('coerces a gestureless maximized arrival to be the active panel', async () => {
       const {first, second} = await twoPanels()

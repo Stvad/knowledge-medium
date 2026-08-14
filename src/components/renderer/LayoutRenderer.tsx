@@ -2,6 +2,7 @@ import { BlockComponent } from '@/components/BlockComponent.js'
 import { BlockRendererProps } from '@/types.js'
 import { NestedBlockContextProvider } from '@/context/block.js'
 import { useIsMobile } from '@/utils/react.js'
+import { isMobileViewport } from '@/utils/viewport.js'
 import { useHandle } from '@/hooks/block.js'
 import { useEffect, useMemo } from 'react'
 import type { BlockData } from '@/data/api'
@@ -160,7 +161,14 @@ function SlotView({
 }
 
 export function LayoutRenderer({block}: BlockRendererProps) {
-  const isMobile = useIsMobile()
+  // Subscribed for re-renders, but NOT used as the answer: react-use's
+  // `useMedia` returns the supplied default (`false`) on its first render and
+  // corrects in an effect, so a phone opening a `;max` link would spend one
+  // commit believing it is desktop — long enough for the coercion effect below
+  // to fire and make the flagged pane active, which is exactly what mobile
+  // must not do. The synchronous media read is right on every render.
+  useIsMobile()
+  const isMobile = isMobileViewport()
   const rows = useHandle(block.repo.query.subtree({id: block.id, hidePropertyChildren: true}), {
     selector: data => data ?? EMPTY_ROWS,
   })
@@ -212,8 +220,14 @@ export function LayoutRenderer({block}: BlockRendererProps) {
   // mobile, visibly. Row deletion has its own repair
   // (`activePanelIdAfterReconcile`), so nothing depends on this path to clean
   // up a dangling pointer.
-  const desiredActivePanelSlot = soloPanelSlot
-    ?? (activePanelId ? undefined : panelSlots[0])
+  //
+  // Only a DESKTOP solo (a maximize flag) coerces an already-set pointer. The
+  // mobile solo is DERIVED from that pointer, so treating it as rule 1 would
+  // overwrite a pointer that merely names a row this snapshot doesn't carry
+  // yet — with the fallback pane, permanently — which is the opposite of the
+  // rule above.
+  const desiredActivePanelSlot = (isMobile ? undefined : soloPanelSlot)
+    ?? (activePanelId ? undefined : soloPanelSlot ?? panelSlots[0])
 
   useEffect(() => {
     if (!desiredActivePanelSlot || activePanelId === desiredActivePanelSlot.id) return

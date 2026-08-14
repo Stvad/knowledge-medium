@@ -30,7 +30,7 @@ import { panelRenderScopeId } from '@/utils/renderScope'
 import { deleteSubtreeInTx as deleteLayoutRowSubtreeInTx } from '@/data/subtreeDelete'
 import { visibleChildrenOf } from '@/data/visibleChildren'
 import { safeDecodeRowProperty } from '@/data/rowProperty'
-import { layoutSessionBlockIdForKey } from '@/data/stateBlocks'
+import { layoutSessionBlockIdForKey, layoutSessionsContainerBlockId } from '@/data/stateBlocks'
 
 export interface ApplyLayoutResult {
   kind: 'applied' | 'cancelled' | 'deferred' | 'empty' | 'ignored' | 'noop' | 'normalized'
@@ -786,18 +786,27 @@ export const maximizeWouldHideSomething = (
 const sessionPanelRowsInTx = async (
   tx: Tx,
   panelId: string,
+  userId: string,
 ): Promise<{session: BlockData; panelRows: BlockData[]} | null> => {
   const row = await tx.get(panelId)
   if (!row || row.deleted || !hasBlockType(row, PANEL_TYPE)) return null
   const session = await layoutSessionRowOf(tx, row)
   if (!session) return null
+  // The ancestor walk finds *a* non-stack block; that is not evidence it found
+  // a layout session. A correctly-tagged panel row re-parented under an
+  // ordinary block by a raw sync/bridge write would hand back that block, and
+  // we would then write `activePanelIdProp` onto a user's page and treat its
+  // other children as panes.
+  //
+  // A subtree-membership check does NOT catch that — it starts the traversal
+  // at the block the walk returned, so the panel is always a member and the
+  // check passes vacuously. Verify the ancestor's IDENTITY instead: layout
+  // sessions are children of the deterministic `layout-sessions` container.
+  if (session.parentId !== layoutSessionsContainerBlockId(session.workspaceId, userId)) {
+    return null
+  }
   const panelRows = allPanelRowsInLayoutOrder(session.id, await loadSubtreeRowsInTx(tx, session))
-  // Defence in depth, not load-bearing (the `PANEL_TYPE` gate above fails
-  // closed, so no test can pin this through the public path): catches a
-  // correctly-tagged panel row re-parented OUT of its session by a raw
-  // sync/bridge write, where the walk would hand back an unrelated block as
-  // "the session" and we would write layout properties onto it.
-  return panelRows.some(candidate => candidate.id === panelId) ? {session, panelRows} : null
+  return {session, panelRows}
 }
 
 /**
@@ -823,7 +832,7 @@ export const togglePanelMaximized = async (
 ): Promise<boolean | null> => {
   let result: boolean | null = null
   await repo.tx(async tx => {
-    const found = await sessionPanelRowsInTx(tx, panelId)
+    const found = await sessionPanelRowsInTx(tx, panelId, repo.user.id)
     if (!found) return
     const {session, panelRows} = found
 
@@ -875,7 +884,7 @@ export const prepareExclusiveMaximize = async (
 ): Promise<boolean> => {
   let hidesSomething = false
   await repo.tx(async tx => {
-    const found = await sessionPanelRowsInTx(tx, panelId)
+    const found = await sessionPanelRowsInTx(tx, panelId, repo.user.id)
     if (!found) return
     hidesSomething = maximizeWouldHideSomething(found.panelRows.length, canRenderSplit)
     if (!hidesSomething) return

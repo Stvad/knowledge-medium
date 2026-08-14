@@ -174,6 +174,25 @@ describe('enterVideoNotesView', () => {
     expect(isMaximized(panelId)).toBe(true)
   })
 
+  // Close undoes the keys ITS enter set. A maximize the user set before
+  // entering notes is not one of them, so closing must leave it standing —
+  // otherwise widening the viewport later reveals a split they had collapsed.
+  it('close leaves a maximize that this notes entry did not set', async () => {
+    await setup({panes: 2})
+    await panelBlock().set(panelMaximizedProp, true)
+    vi.stubGlobal('window', {matchMedia: vi.fn().mockReturnValue({matches: true})})
+    try {
+      await enterVideoNotesView(videoBlock(), panelBlock())
+    } finally {
+      vi.unstubAllGlobals()
+    }
+
+    await closeVideoNotesView(panelBlock())
+
+    expect(panelBlock().peekProperty(panelViewModeProp)).toBeUndefined()
+    expect(isMaximized(panelId)).toBe(true)
+  })
+
   // The at-most-one rule for this writer: the flag itself is set from inside
   // navigateInPanel's tx, below the layer that can see a session's rows, so
   // the enter has to clear the others up front.

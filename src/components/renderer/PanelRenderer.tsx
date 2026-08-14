@@ -5,7 +5,6 @@ import { Button } from '@/components/ui/button.js'
 import { ChevronLeft, ChevronRight, Maximize2, Minimize2, X } from 'lucide-react'
 import {
   focusedBlockLocationProp,
-  panelMaximizedProp,
   panelViewModeProp,
   peekFocusedBlockLocation,
   scrollTopProp,
@@ -16,7 +15,7 @@ import { useRepo } from '@/context/repo'
 import { useActionContext } from '@/shortcuts/useActionContext'
 import { ActionContextTypes } from '@/shortcuts/types'
 import { useCallback, useEffect, useMemo, useRef } from 'react'
-import { usePropertyValue } from '@/hooks/block.js'
+import { useHandle, usePropertyValue } from '@/hooks/block.js'
 import { useAppRuntime } from '@/extensions/runtimeContext.js'
 import { panelMountsFacet } from '@/extensions/core.js'
 import { ExtensionRenderBoundary } from '@/extensions/ExtensionRenderBoundary.js'
@@ -33,6 +32,7 @@ import { isMobileViewport } from '@/utils/viewport.js'
 import {
   activatePanelRow,
   deletePanelRow,
+  isPanelRowMaximized,
   togglePanelMaximized,
 } from '@/utils/panelLayoutProjection.js'
 import { outlineRenderScopeId, panelRenderScopeId } from '@/utils/renderScope.js'
@@ -73,7 +73,13 @@ function PanelMultiSelectActionContext({scopeRootId}: {scopeRootId: string}) {
 export function PanelRenderer({block}: BlockRendererProps) {
   const [topLevelBlockId] = usePropertyValue(block, topLevelBlockIdProp)
   const [panelViewMode] = usePropertyValue(block, panelViewModeProp)
-  const [panelMaximized] = usePropertyValue(block, panelMaximizedProp)
+  // A narrow selector rather than `usePropertyValue`, which decodes STRICTLY:
+  // a malformed value from sync or a raw bridge write would throw this pane
+  // into its error boundary, while `LayoutRenderer` degrades the same value to
+  // `false` and renders on. Losing an invalid flag must not cost the pane.
+  const panelMaximized = useHandle(block, {
+    selector: doc => (doc ? isPanelRowMaximized(doc) : false),
+  })
   const blockContext = useBlockContext()
   const canClosePanel = Boolean(blockContext.canClosePanel)
   const canMaximizePanel = Boolean(blockContext.canMaximizePanel)

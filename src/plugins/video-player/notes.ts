@@ -106,6 +106,8 @@ export const enterVideoNotesView = async (
   const maximized = await prepareExclusiveMaximize(uiStateBlock.repo, uiStateBlock.id, {
     canRenderSplit: !isMobileViewport(),
   })
+  if (maximized) maximizedByNotesEnter.add(uiStateBlock.id)
+  else maximizedByNotesEnter.delete(uiStateBlock.id)
   await navigateInPanel(uiStateBlock, videoBlock.id, {
     viewMode: VIDEO_NOTES_VIEW_MODE,
     // Declining is arrangement-NEUTRAL, so the key is omitted rather than sent
@@ -131,20 +133,33 @@ export const enterVideoNotesView = async (
  *  mode). Otherwise (same-block enter, or a URL-borne mode) just clear the
  *  mode in place.
  *
- *  Either way it also un-maximizes, in the SAME tx as the mode clear: close
- *  undoes the keys enter set, and leaving the pane maximized would keep every
- *  sibling pane hidden after the view the maximize existed for is gone. This
- *  does drop a maximize the user had set MANUALLY before entering notes —
- *  accepted, since enter maximizes whenever there is anything to hide and
- *  nothing records which of the two set it. */
+ *  Either way it also un-maximizes, in the SAME tx as the mode clear: leaving
+ *  the pane maximized would keep every sibling hidden after the view the
+ *  maximize existed for is gone — but ONLY a maximize this gesture's own enter
+ *  set (tracked in `maximizedByNotesEnter`), so one the user set deliberately
+ *  before entering notes survives the close. */
 // Re-entry guard: a double-activation of close (double-click, repeated key)
 // must not step back twice. Keyed per panel; cleared when the first close
 // settles.
 const closingPanels = new Set<string>()
 
+/** Panes whose maximize was set BY the notes enter, so close knows whether the
+ *  flag is its to clear. Without it, close erases a maximize the user set
+ *  deliberately — reachable whenever the enter DECLINED to maximize (a lone
+ *  pane, or a narrow viewport) on a pane that was already flagged.
+ *
+ *  In-memory and device-local by the same reasoning as the `viewModeEnter`
+ *  history marker: close-restores-arrangement is a session-scoped nicety, and
+ *  losing it across a reload degrades to leaving the flag alone, which is the
+ *  safe direction. */
+const maximizedByNotesEnter = new Set<string>()
+
 export const closeVideoNotesView = async (panelBlock: Block): Promise<void> => {
   if (closingPanels.has(panelBlock.id)) return
   closingPanels.add(panelBlock.id)
+  // Only OUR maximize is ours to undo. `undefined` leaves the flag alone, so a
+  // maximize the user set before entering notes survives the close.
+  const maximized = maximizedByNotesEnter.delete(panelBlock.id) ? false : undefined
   try {
     const backTop = panelHistory.getSnapshot(panelBlock.id).back.at(-1)
     // Only go back if the MARKED pre-enter page is still live. `goBackInPanel`
@@ -155,14 +170,14 @@ export const closeVideoNotesView = async (panelBlock: Block): Promise<void> => {
     // mode in place is.
     if (backTop?.viewModeEnter === VIDEO_NOTES_VIEW_MODE
       && await panelBlock.repo.exists(backTop.blockId)
-      && await goBackInPanel(panelBlock, {maximized: false})) {
+      && await goBackInPanel(panelBlock, {maximized})) {
       return
     }
     const current = panelBlock.peekProperty(topLevelBlockIdProp)
     if (!current) return
     // Same-block with an EXPLICIT undefined mode: navigateInPanel's
     // same-block branch is presence-gated, so this is the clear-only tx.
-    await navigateInPanel(panelBlock, current, {viewMode: undefined, maximized: false})
+    await navigateInPanel(panelBlock, current, {viewMode: undefined, maximized})
   } finally {
     closingPanels.delete(panelBlock.id)
   }

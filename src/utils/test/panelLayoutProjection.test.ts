@@ -1170,6 +1170,28 @@ describe('togglePanelMaximized', () => {
   // writing it): the block must be NESTED, or the ancestor walk bails out
   // before the gate matters, and its parent needs a SECOND child, or the
   // lone-pane refusal below catches it first.
+  // The membership check this replaced was VACUOUS: it started the traversal
+  // at whatever block the ancestor walk returned, so the panel was always a
+  // member and it passed for any parent. Identity of the ancestor is the real
+  // check — a layout session is a child of the deterministic container.
+  it('refuses a real panel row re-parented under an ordinary block', async () => {
+    await applyUrl('#ws-1/a/b')
+    const byBlock = await rowIdsByBlock()
+    const rowA = byBlock.get('a')!
+    await seedBlocks(['someones-page'])
+    // The shape a raw sync/bridge write can produce: a correctly TYPED panel
+    // row hanging off a user's page instead of a layout session.
+    await env.repo.tx(async tx => {
+      await tx.move(rowA, {parentId: 'someones-page', orderKey: 'a0'})
+      await tx.move(byBlock.get('b')!, {parentId: 'someones-page', orderKey: 'a1'})
+    }, {scope: ChangeScope.UiState, description: 'reparent panel rows'})
+
+    expect(await togglePanelMaximized(env.repo, rowA)).toBeNull()
+
+    expect(env.repo.block(rowA).peekProperty(panelMaximizedProp)).not.toBe(true)
+    expect(env.repo.block('someones-page').peekProperty(activePanelIdProp)).toBeUndefined()
+  })
+
   it('refuses a nested non-panel block, writing nothing to it or its parent', async () => {
     await applyUrl('#ws-1/a')
     await seedBlocks(['user-page'])
