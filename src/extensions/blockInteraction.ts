@@ -16,6 +16,7 @@ import { Block } from '../data/block'
 import {
   editorSelection,
   focusBlock,
+  getAliases,
   requestEditorFocus,
 } from '@/data/properties.js'
 import { resetBlockSelection } from '@/data/stateBlocks.js'
@@ -45,21 +46,67 @@ export interface BlockContentRendererSlot {
  * facet resolver and reswap every decorator/layout/slot identity on
  * each focus toggle.
  *
+ * "Reswap every slot identity" is not a performance note, it is data
+ * loss. `DefaultBlockRenderer` builds each layout slot as a `useMemo`
+ * over this object, so a new identity is a new React element TYPE:
+ * React unmounts the old subtree and mounts a fresh one. For `Content`
+ * and `Shell` that subtree is the live CodeMirror editor, and a remount
+ * mid-typing rebuilds it from the last COMMITTED content — dropping the
+ * characters typed since, killing an open autocomplete, and moving the
+ * caret. So a field belongs here only if it is stable across ordinary
+ * editing; anything a keystroke can change does not. `aliases` was on
+ * this context for exactly one release and broke page-title editing that
+ * way: `alias.sync` mirrors a page's content into its own `alias`
+ * property in the same tx, so every debounced commit churned it.
+ *
  * Contributions that need reactive state read it inside their rendered
  * components via `useInFocus(block.id)` / `useInEditMode(block.id)` /
- * `useIsSelected(block.id)`, or at fire time via snapshot helpers.
+ * `useIsSelected(block.id)`, or at fire time via snapshot helpers. Facets
+ * whose contributions are pure functions (no component to hold a hook)
+ * declare their own context type and let the calling HOOK feed the
+ * reactive read — see `blockTextClassFacet` / `blockBulletClassFacet`,
+ * which is how page-ness reaches the alias plugin's styling.
  */
 export interface BlockResolveContext {
   block: Block
   repo: Repo
   uiStateBlock: Block
   types: readonly string[]
-  /** The block's page names (`[[Inbox]]`), or `[]`. Reactive, like `types`:
-   *  populated by the renderer from the block's `alias` property so a
-   *  contribution that keys on "is this a page" re-resolves when one is
-   *  added or removed, instead of freezing at the value it had when the
-   *  contribution set was first resolved. Decoded tolerantly — a malformed
-   *  stored value reads as no aliases rather than throwing. */
+  /** The block's page names (`[[Inbox]]`), or `[]`.
+   *
+   *  A LIVE READ, not a captured value — `liveAliases` below makes it a
+   *  getter over `block.peek()`, so it is correct whenever you ask and it is
+   *  NOT part of this object's identity. That is the only way it can be here
+   *  at all, per the invariant above: `alias.sync` mirrors a page's content
+   *  into its own `alias` property, so a captured value would change on every
+   *  keystroke commit and remount the editor with it (PR #548).
+   *
+   *  The consequence, stated plainly because it IS a narrowing: a facet
+   *  resolver memoized on this context will not re-run when a block is named
+   *  or renamed. Before, `Layout`, the bullet's hover/context-menu sections
+   *  and the shell's click handler did re-resolve on an alias change (they
+   *  memoize on the context object); they no longer do. The content path
+   *  never did — `baseContentRenderer`, `contentSurfaceProps` and the
+   *  header/footer sections all omit the context from their deps, so within a
+   *  mounted slot they were never re-resolved at all. What "reactivity" that
+   *  path appeared to have was the slot being REBUILT, i.e. the editor
+   *  remount this field caused.
+   *
+   *  It is not restorable by putting the value back in a dep list, and the
+   *  reason is `blockContentDecoratorsFacet`'s contract a few hundred lines
+   *  down: A CONTRIBUTION IS A STRUCTURAL GATE, NOT A REACTIVE ONE, and
+   *  decorator composition mints a fresh wrapped component per resolve unless
+   *  every author memoized (the facet says authors "should"). Re-resolving on
+   *  a value that changes per keystroke therefore re-opens the same remount
+   *  through a different door. Making that safe means decoupling slot
+   *  identity from this object entirely — worth doing, not this change.
+   *
+   *  So for a decision that must FOLLOW naming, take it inside a rendered
+   *  component (`useBlockAliases(block)`) — which is exactly what the
+   *  decorator facet already tells contributors to do with data-dependent
+   *  state — or use the two facets that exist for it and are fed reactively
+   *  by their calling hooks: `blockTextClassFacet` and
+   *  `blockBulletClassFacet`, which is how the alias plugin styles pages. */
   aliases: readonly string[]
   topLevelBlockId?: string
   /** Root of the visible subtree this mount renders (see
@@ -77,6 +124,39 @@ export interface BlockResolveContext {
   blockContext?: BlockContextType
   contentRenderers?: readonly BlockContentRendererSlot[]
 }
+
+/** Attach `aliases` to a resolve context as a live getter rather than a
+ *  captured value, and return it. Every construction site goes through this,
+ *  so the field cannot be re-captured somewhere and put the identity churn
+ *  back (see the field's own docs, and PR #548).
+ *
+ *  `defineProperty`, NOT a getter in an object literal that callers spread:
+ *  object spread EVALUATES getters, so `{...withLiveAliases(x)}` would freeze
+ *  the value at spread time — the exact bug this exists to prevent. Callers
+ *  wrap their literal instead of spreading into one.
+ *
+ *  `block.peek()` is the cache's current row — synchronous, and `undefined`
+ *  before the block has loaded, which reads as no aliases. Tolerant decode
+ *  (`getAliases`), so a malformed stored value can't throw inside a facet
+ *  resolver, above the per-block error boundary.
+ *
+ *  `enumerable` so the field still survives an intentional downstream spread
+ *  (`{...resolveContext, inFocus}`) — as a snapshot at that moment, which is
+ *  no worse than the plain field such a caller would otherwise have copied. */
+export const withLiveAliases = <T extends Omit<BlockResolveContext, 'aliases'> & {block: Block}>(
+  context: T,
+): T & Pick<BlockResolveContext, 'aliases'> =>
+  Object.defineProperty(context, 'aliases', {
+    get: (): readonly string[] => {
+      const data = context.block.peek()
+      return data ? getAliases(data) : []
+    },
+    enumerable: true,
+    // Re-wrapping an already-wrapped context is a no-op rather than a
+    // TypeError — `defineProperty` defaults to non-configurable, which would
+    // make a caller that wraps defensively crash instead.
+    configurable: true,
+  }) as T & Pick<BlockResolveContext, 'aliases'>
 
 /**
  * Full interaction context — resolver context plus the reactive UI

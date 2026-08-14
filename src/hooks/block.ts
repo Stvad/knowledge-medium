@@ -352,7 +352,8 @@ const EMPTY_STRING_ARRAY: readonly string[] = Object.freeze([])
  *
  *  Deliberately NOT `usePropertyValue(block, aliasesProp)`: that calls
  *  `codec.decode` with no catch, and this read runs for EVERY rendered block
- *  (it feeds `BlockResolveContext.aliases`). One malformed stored value —
+ *  (it feeds the page-styling seams — `useBlockTitleTextClass` and the bullet).
+ *  One malformed stored value —
  *  imported, hand-written, arrived over sync — would throw inside the renderer
  *  itself, above the per-block error boundary, and blank out that block's whole
  *  subtree. `getAliases` is the codebase's existing tolerant decode for exactly

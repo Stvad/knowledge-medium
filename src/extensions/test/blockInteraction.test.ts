@@ -11,6 +11,7 @@ import {
   BlockResolveContext,
   ShortcutActivationContribution,
   shortcutSurfaceActivationsFacet,
+  withLiveAliases,
 } from '@/extensions/blockInteraction.js'
 import { resolveFacetRuntimeSync } from '@/facets/facet.js'
 import { codeMirrorEditModeActivation } from '@/editor/defaultInteractions.js'
@@ -21,7 +22,7 @@ const context = {
   repo: {} as Repo,
   uiStateBlock: {} as Block,
   types: [],
-    aliases: [],
+  aliases: [],
   topLevelBlockId: 'root',
   inFocus: true,
   inEditMode: false,
@@ -29,6 +30,59 @@ const context = {
   isTopLevel: false,
   contentRenderers: [],
 } satisfies BlockInteractionContext
+
+describe('withLiveAliases', () => {
+  // `aliases` stays on the CATALOGUED extension type (`apiCatalog.ts`), so an
+  // extension stored in the DB that reads `ctx.aliases` keeps working — but it
+  // must not be part of the context's identity, or `alias.sync` mirroring a
+  // page title into its own `alias` remounts the editor mid-keystroke (#548).
+  // Both halves are asserted here because each is invisible to the other's test.
+  const blockWith = (aliases?: string[]) => {
+    let current = aliases
+    return {
+      block: {
+        id: 'b',
+        peek: () => (current === undefined ? undefined : {properties: {alias: current}}),
+      } as unknown as Block,
+      rename: (next: string[]) => { current = next },
+    }
+  }
+
+  it('reads the alias at ACCESS time, not at construction time', () => {
+    const {block, rename} = blockWith(['Book'])
+    const ctx = withLiveAliases({block, repo: {} as Repo, uiStateBlock: {} as Block, types: [], isTopLevel: false})
+
+    expect(ctx.aliases).toEqual(['Book'])
+    rename(['Book of [x]'])
+    expect(ctx.aliases).toEqual(['Book of [x]'])
+  })
+
+  it('reads an unloaded or malformed row as no aliases rather than throwing', () => {
+    const unloaded = withLiveAliases({
+      block: blockWith(undefined).block, repo: {} as Repo, uiStateBlock: {} as Block, types: [], isTopLevel: false,
+    })
+    expect(unloaded.aliases).toEqual([])
+    const malformed = withLiveAliases({
+      block: {id: 'b', peek: () => ({properties: {alias: 'not-an-array'}})} as unknown as Block,
+      repo: {} as Repo, uiStateBlock: {} as Block, types: [], isTopLevel: false,
+    })
+    expect(malformed.aliases).toEqual([])
+  })
+
+  it('reports a rename WITHOUT becoming a new object', () => {
+    // The whole point. `DefaultBlockRenderer` memoizes every layout slot on
+    // this object, and a new identity there is a new React element type — so
+    // "the value changed but the reference did not" is the property that keeps
+    // the editor mounted. Re-wrapping is a no-op, not a TypeError.
+    const {block, rename} = blockWith(['Book'])
+    const ctx = withLiveAliases({block, repo: {} as Repo, uiStateBlock: {} as Block, types: [], isTopLevel: false})
+    const identity = ctx
+    rename(['Renamed'])
+    expect(ctx).toBe(identity)
+    expect(ctx.aliases).toEqual(['Renamed'])
+    expect(withLiveAliases(ctx)).toBe(ctx)
+  })
+})
 
 describe('block interaction facets', () => {
   it('lets a higher precedence click contribution replace baseline block clicks', () => {

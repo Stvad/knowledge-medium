@@ -60,6 +60,58 @@ describe('referenceParser', () => {
       expect(result[0].alias).toBe(' spaced alias ')
     })
 
+    // A run of three or more `]` is the only place the closer is in doubt,
+    // and bracket balance decides it: `[[Book of [x]]]` has an inner `[`
+    // waiting to be closed, `[[foo]]]` does not. Runs of exactly two are
+    // untouched by the rule, so ordinary content parses exactly as before.
+    describe('a run of `]` is resolved by bracket balance', () => {
+      it('lets the alias keep a `]` that closes its own `[`', () => {
+        expect(parseReferences('see [[Book of [x]]] here')).toEqual([
+          {alias: 'Book of [x]', startIndex: 4, endIndex: 19},
+        ])
+      })
+
+      it('reads a stray `]` after a plain link as text, not as part of the name', () => {
+        expect(parseReferences('see [[foo]]] here')).toEqual([
+          {alias: 'foo', startIndex: 4, endIndex: 11},
+        ])
+      })
+
+      it('takes the longest balanced reading of a longer run', () => {
+        expect(parseReferences('[[a[]]]]')[0]?.alias).toBe('a[]')
+      })
+
+      it('leaves an unbalanced `[` alone rather than refusing to link', () => {
+        // Only a run of >= 3 can change; this is a run of 2, so the alias
+        // stays exactly what it has always been even though it is unbalanced.
+        expect(parseReferences('[[a[b]]')[0]?.alias).toBe('a[b')
+        expect(parseReferences('[[a]b]]')[0]?.alias).toBe('a]b')
+      })
+
+      it('still reports nesting from both ends', () => {
+        expect(parseReferences('[[a [[b]]]]').map(r => r.alias)).toEqual(['a [[b]]', 'b'])
+      })
+
+      it('does not eat a closing pair an enclosing link still needs', () => {
+        // Four `]`: one for the inner alias's unmatched `[` would leave a
+        // single `]`, and the OUTER link would never be emitted at all.
+        expect(parseReferences('[[outer [[inner[]]]]').map(r => r.alias))
+          .toEqual(['outer [[inner[]]', 'inner['])
+      })
+
+      it('still absorbs when the run has pairs to spare for the enclosing link', () => {
+        expect(parseReferences('[[a [[Book of [x]]]]]').map(r => r.alias))
+          .toEqual(['a [[Book of [x]]]', 'Book of [x]'])
+      })
+
+      it('still absorbs when the enclosing link closes later in the content', () => {
+        // A blanket "reserve two per enclosing opener" would wrongly refuse
+        // this one — the outer closes at the end and never wanted this run.
+        expect(parseReferences('[[outer [[Book of [x]]] tail]]').map(r => r.alias))
+          .toEqual(['outer [[Book of [x]]] tail', 'Book of [x]'])
+      })
+    })
+
     it('should ignore empty references', () => {
       const content = 'Empty [[]] reference should be ignored'
       const result = parseReferences(content)
@@ -308,6 +360,25 @@ Another [[normal-ref]]
       const result = parseReferences(renderWikilink('foo]]bar'))
       expect(result).toHaveLength(1)
       expect(result[0].alias).toBe('foo] ]bar')
+    })
+
+    it('does not pad a trailing `]` the alias itself opened', () => {
+      // `Book of [x]` is a perfectly ordinary page name. The scanner reads
+      // the run of `]` by bracket balance, so the closer is unambiguous and
+      // nothing has to be inserted into the user's text.
+      expect(renderWikilink('Book of [x]')).toBe('[[Book of [x]]]')
+      expect(parseReferences('[[Book of [x]]]')[0]?.alias).toBe('Book of [x]')
+      expect(renderWikilink('[x]')).toBe('[[[x]]]')
+      expect(parseReferences('[[[x]]]')[0]?.alias).toBe('[x]')
+    })
+
+    it('still pads an UNBALANCED trailing `]`, which is genuinely ambiguous', () => {
+      // `[[foo]]]` has to keep meaning "link to foo, then a stray `]`" —
+      // that is the far commoner reading (a typo'd bracket) and it is what
+      // every neighbouring tool does. So an alias whose trailing `]` opens
+      // nothing still cannot be spelled as a wikilink, and the renderer
+      // still says so lossily rather than silently binding elsewhere.
+      expect(renderWikilink('foo]')).toBe('[[foo] ]]')
     })
   })
 

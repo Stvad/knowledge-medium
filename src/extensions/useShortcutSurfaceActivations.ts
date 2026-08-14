@@ -1,5 +1,5 @@
 import { useMemo } from 'react'
-import { shortcutSurfaceActivationsFacet } from '@/extensions/blockInteraction.js'
+import { shortcutSurfaceActivationsFacet, withLiveAliases } from '@/extensions/blockInteraction.js'
 import type {
   BlockInteractionContext,
   ShortcutSurface,
@@ -18,7 +18,7 @@ import {
   useUIStateProperty,
 } from '@/data/globalState.js'
 import { activePanelIdProp, topLevelBlockIdProp, typesProp } from '@/data/properties.js'
-import { usePropertyValue, useBlockAliases } from '@/hooks/block.js'
+import { usePropertyValue } from '@/hooks/block.js'
 
 type ShortcutSurfaceOptions =
   Partial<Omit<ShortcutSurfaceContext, keyof BlockInteractionContext | 'surface'>> &
@@ -52,9 +52,6 @@ export function useShortcutSurfaceActivations(
   const blockContext = useBlockContext()
   const [topLevelBlockId] = useUIStateProperty(topLevelBlockIdProp)
   const [types] = usePropertyValue(block, typesProp)
-  // Every BlockResolveContext carries `aliases` alongside `types`, so a
-  // shortcut-surface facet can gate on page-ness too.
-  const aliases = useBlockAliases(block)
   const panelId = typeof blockContext.panelId === 'string' ? blockContext.panelId : undefined
   const layoutSessionBlockId = typeof blockContext.layoutSessionBlockId === 'string'
     ? blockContext.layoutSessionBlockId
@@ -87,12 +84,11 @@ export function useShortcutSurfaceActivations(
   const resolveShortcutActivations = runtime.read(shortcutSurfaceActivationsFacet)
 
   const shortcutActivations = useMemo(
-    () => resolveShortcutActivations({
+    () => resolveShortcutActivations(withLiveAliases({
       block,
       repo,
       uiStateBlock,
       types,
-      aliases,
       topLevelBlockId,
       scopeRootId,
       isTopLevel: block.id === topLevelBlockId && !blockContext.isNestedSurface,
@@ -106,7 +102,7 @@ export function useShortcutSurfaceActivations(
     // dependencies so handlers receive it uniformly, without each
     // activation contribution (vim, codemirror, backlinks, plugins)
     // having to forward it by hand.
-    }).map(activation => ({
+    })).map(activation => ({
       ...activation,
       dependencies: {...(activation.dependencies ?? {}), scopeRootId, scopeRootForcesOpen},
     })),
@@ -115,7 +111,6 @@ export function useShortcutSurfaceActivations(
       repo,
       uiStateBlock,
       types,
-      aliases,
       topLevelBlockId,
       scopeRootId,
       scopeRootForcesOpen,

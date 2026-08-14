@@ -15,6 +15,7 @@ import { Repo } from '@/data/repo'
 import { typeSeedsFacet } from '@/data/facets'
 import { usePropertyValue } from '@/hooks/block'
 import { aliasPageBulletContribution, aliasPageStylingContribution } from '@/plugins/alias/pageStyling'
+import { aliasDataExtension } from '@/plugins/alias/dataExtension'
 import { aliasesProp, focusedBlockLocationProp, isCollapsedProp, showPropertiesProp, topLevelBlockIdProp } from '@/data/properties'
 import { outlineRenderScopeId } from '@/utils/renderScope'
 import { kernelPropertyUiExtension } from '@/components/propertyEditors/typesPropertyUi'
@@ -327,6 +328,10 @@ describe('DefaultBlockRenderer slot identity', () => {
       newId: () => crypto.randomUUID(),
       extensions: [
         defaultEditorInteractionExtension,
+        // The real alias sync processor: a content edit on an aliased block
+        // rewrites its `alias` property in the SAME tx, which is what makes
+        // the page case below a live-data scenario and not a synthetic one.
+        aliasDataExtension,
         blockLayoutFacet.of(
           () => ({id: 'content-shell', label: 'Content + shell', render: ContentShellLayout}),
           {source: 'test'},
@@ -340,6 +345,14 @@ describe('DefaultBlockRenderer slot identity', () => {
     await repo.tx(async tx => {
       await tx.create({id: 'root', workspaceId: 'ws-1', parentId: null, orderKey: 'a0', content: 'Root'})
       await tx.create({id: 'block-1', workspaceId: 'ws-1', parentId: 'root', orderKey: 'a0', content: 'Block'})
+      await tx.create({
+        id: 'page-1',
+        workspaceId: 'ws-1',
+        parentId: 'root',
+        orderKey: 'a1',
+        content: 'Page',
+        properties: {[aliasesProp.name]: aliasesProp.codec.encode(['Page'])},
+      })
       await tx.create({
         id: 'ui-state', workspaceId: 'ws-1', parentId: null, orderKey: 'a1',
         properties: {[topLevelBlockIdProp.name]: topLevelBlockIdProp.codec.encode('root')},
@@ -376,6 +389,38 @@ describe('DefaultBlockRenderer slot identity', () => {
 
     await waitFor(() =>
       expect(document.querySelector('[data-collapsed="true"]')).toBeTruthy(),
+    )
+    expect(contentMountCount).toBe(1)
+  })
+
+  // A page's title edit rewrites its own `alias` in the same tx (alias.sync),
+  // so `aliases` — which the resolve context carries for the alias plugin's
+  // page styling — changes on EVERY debounced keystroke commit. If that churns
+  // the content slot's identity, the editor is torn down and rebuilt mid-typing:
+  // the caret jumps, an open autocomplete dies, and characters typed since the
+  // commit are lost to the remount's `initialContent` snapshot.
+  it('does not remount the content subtree when a title edit rewrites the block alias', async () => {
+    render(
+      <AppRuntimeContextProvider value={runtime}>
+        <BlockContextProvider initialValue={{scopeRootId: 'root'}}>
+          <ActiveContextsProvider>
+            <DefaultBlockRenderer block={repo.block('page-1')} ContentRenderer={CountingContentRenderer} />
+          </ActiveContextsProvider>
+        </BlockContextProvider>
+      </AppRuntimeContextProvider>,
+    )
+
+    await screen.findByText('page-1')
+    await waitFor(() => expect(contentMountCount).toBe(1))
+
+    await act(async () => {
+      await repo.block('page-1').setContent('Page renamed')
+    })
+
+    // Precondition: the edit really did move the alias — otherwise this test
+    // would pass without ever reaching the case it is about.
+    await waitFor(() =>
+      expect(repo.block('page-1').peekProperty(aliasesProp)).toEqual(['Page renamed']),
     )
     expect(contentMountCount).toBe(1)
   })
