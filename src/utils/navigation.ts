@@ -163,27 +163,41 @@ const panelRowsForLayoutSession = async (
   await layoutSessionBlock.repo.query.subtree({id: layoutSessionBlock.id, hidePropertyChildren: true}).load(),
 )
 
-/** The panel rows the user can actually SEE.
+/** The panel rows the user can actually SEE — ask this rather than indexing
+ *  into raw row order, which stopped meaning "visible" once a pane could be
+ *  maximized (`LayoutRenderer` renders a flagged pane ALONE on desktop).
  *
- *  A maximized pane renders ALONE (`LayoutRenderer`), so every "which pane does
- *  this navigation land in" question has to ask this instead of indexing into
- *  the raw row order. Until maximize existed, `panelRows[0]` was a sound proxy
- *  for "the leftmost visible pane" — desktop rendered every slot — and it
- *  stopped being one the moment a pane could be flagged away. Getting this
- *  wrong is not a cosmetic miss: the same resolution feeds
- *  `resolveGlobalCommandTarget`, so a READ of "what page am I on" answers with
- *  a pane that isn't on screen, and prev/next daily note then CREATES a note
- *  from that wrong anchor.
+ *  MOBILE IS NOT NARROWED, and that is the whole subtlety. `LayoutRenderer`
+ *  ignores `panelMaximizedProp` on a narrow viewport and renders by ACTIVE
+ *  pane instead — so narrowing to the flagged row here would answer with a
+ *  pane the user is not looking at, i.e. reintroduce on mobile exactly the bug
+ *  this helper fixes on desktop. Reachable with no desktop and no sync:
+ *  opening `#ws/a;max/b` on a phone reconciles the flag onto `a` while the
+ *  pointer seeds to `b`, and the phone renders `b`.
  *
- *  Deliberately answers only the maximize question. Mobile also renders one
- *  pane, but by ACTIVE pane, and navigator gestures already route to `'active'`
- *  there (`defaultNavigationIntent`). */
+ *  Unnarrowed is also POSITIVELY right for `'active'`, not merely harmless:
+ *  `find(pointer) ?? at(-1)` over the full rows is the same rule
+ *  `LayoutRenderer` uses to choose the mobile pane, so the two agree by
+ *  construction. (`'main'` still answers `panelRows[0]` on mobile, which
+ *  predates maximize and is left alone.)
+ *
+ *  This is the inference `panelMaximizedProp` and `setPanelMaximizedInTx` both
+ *  warn against in so many words: "the maximized pane renders alone" is not a
+ *  premise you may reason from. It was written here anyway. */
 const visiblePanelRows = (panelRows: readonly BlockData[]): readonly BlockData[] => {
+  if (isMobileViewport()) return panelRows
   const maximized = panelRows.find(isPanelRowMaximized)
   return maximized ? [maximized] : panelRows
 }
 
-const resolveActivePanelRow = async (
+/** The panel row a global command should act on: the active pane, narrowed to
+ *  what is actually rendered first.
+ *
+ *  Exported because a second caller needs the identical rule —
+ *  `createNodeInActivePanelFromGlobalContext` (defaultShortcuts) CREATES a
+ *  block in the pane this picks, so a hand-rolled copy that drifts writes a
+ *  block into a pane the user cannot see. It carried exactly that copy. */
+export const resolveActivePanelRow = async (
   layoutSessionBlock: Block,
 ) => {
   await layoutSessionBlock.load()

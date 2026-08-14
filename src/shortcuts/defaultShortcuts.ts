@@ -27,7 +27,6 @@ import {
 import { importState } from '@/utils/state.js'
 import { withMoveTransition } from '@/utils/viewTransition.js'
 import {
-  activePanelIdProp,
   focusBlock,
   isCollapsedProp,
   topLevelBlockIdProp,
@@ -70,11 +69,11 @@ import { isMobileViewport } from '@/utils/viewport.js'
 import {
   navigate,
   navigateFromGlobalCommand,
+  resolveActivePanelRow,
 } from '@/utils/navigation.js'
 import {
   deletePanelRow,
   panelBlockId,
-  panelRowsInLayoutOrder,
   togglePanelMaximized,
 } from '@/utils/panelLayoutProjection.js'
 import { ensureMetricsConsoleHook } from '@/data/metricsConsoleHook.js'
@@ -177,13 +176,11 @@ const createNodeInActivePanelFromGlobalContext = async (
   if (repo.isReadOnly) return
 
   const layoutSessionBlock = await getLayoutSessionBlock(uiStateBlock, repo.activeLayoutSessionId)
-  await layoutSessionBlock.load()
-  const rows = await repo.query.subtree({id: layoutSessionBlock.id, hidePropertyChildren: true}).load()
-  const panelRows = panelRowsInLayoutOrder(layoutSessionBlock.id, rows)
-  const activePanelId = layoutSessionBlock.peekProperty(activePanelIdProp)
-  const activePanelRow =
-    (activePanelId ? panelRows.find(row => row.id === activePanelId) : undefined) ??
-    panelRows.at(-1)
+  // Shared with the navigation resolver rather than re-derived: this CREATES a
+  // block in the pane it picks, and the copy that used to live here indexed
+  // raw row order, so a maximized pane meant the new node landed in a page the
+  // user could not see.
+  const activePanelRow = await resolveActivePanelRow(layoutSessionBlock)
   if (!activePanelRow) return
 
   const activeTopLevelBlockId = panelBlockId(activePanelRow)
@@ -325,11 +322,8 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
     description: 'Maximize / restore current panel',
     icon: Maximize2,
     handler: async ({uiStateBlock}: BlockShortcutDependencies) => {
-      // uiStateBlock IS the panel row in panel contexts. The viewport check
-      // belongs here, not in the projection: this action is the one caller
-      // that can fire on a viewport rendering a single pane (bound in
-      // NORMAL_MODE and EDIT_MODE_CM, so a hardware keyboard on a narrow
-      // window reaches it where the chrome button never renders).
+      // uiStateBlock IS the panel row in panel contexts. The viewport read
+      // stays with the caller (see `maximizeWouldHideSomething`).
       await togglePanelMaximized(repo, uiStateBlock.id, {canRenderSplit: !isMobileViewport()})
     },
     defaultBinding: {

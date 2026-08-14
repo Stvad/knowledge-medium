@@ -104,10 +104,6 @@ export const enterVideoNotesView = async (
 ): Promise<void> => {
   if (uiStateBlock.peekProperty(topLevelBlockIdProp) === undefined) return
   const maximized = await prepareExclusiveMaximize(uiStateBlock.repo, uiStateBlock.id, {
-    // A narrow viewport renders one pane and ignores the flag, so maximizing
-    // there hides nothing now and — rows being synced — hides panes on a wide
-    // viewport later with no gesture behind it. Same rule the toggle action
-    // applies; this is the other writer.
     canRenderSplit: !isMobileViewport(),
   })
   await navigateInPanel(uiStateBlock, videoBlock.id, {

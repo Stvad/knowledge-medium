@@ -7,7 +7,12 @@ import { useEffect, useMemo } from 'react'
 import type { BlockData } from '@/data/api'
 import type { Block } from '@/data/block.js'
 import { activePanelIdProp } from '@/data/properties.js'
-import { isPanelRowMaximized, isPanelStackRow, sessionActivePanelId } from '@/utils/panelLayoutProjection.js'
+import {
+  isPanelRowMaximized,
+  isPanelStackRow,
+  maximizeWouldHideSomething,
+  sessionActivePanelId,
+} from '@/utils/panelLayoutProjection.js'
 
 type RenderSlot =
   | {kind: 'panel'; id: string; maximized: boolean}
@@ -157,14 +162,9 @@ export function LayoutRenderer({block}: BlockRendererProps) {
   const rows = useHandle(block.repo.query.subtree({id: block.id, hidePropertyChildren: true}), {
     selector: data => data ?? EMPTY_ROWS,
   })
-  // Read the pointer off the ROWS snapshot (subtree includes the root), not
-  // from a separate property subscription. An insert writes the new row, the
-  // cleared maximize flags, and this pointer in ONE tx — but two subscriptions
-  // deliver that commit in either order, and the effect below compares the
-  // pointer against the flags. Observed with a property subscription: opening
-  // a pane while another was maximized landed the pointer first, so the
-  // effect still saw the OLD flagged rows and wrote `active` back to the
-  // maximized pane, undoing the insert's activation. Same snapshot, no skew.
+  // From the ROWS snapshot, never a separate subscription — the effect below
+  // compares this pointer against the flags, and both must come from the same
+  // commit. See `sessionActivePanelId`.
   const activePanelId = sessionActivePanelId(rows.find(row => row.id === block.id))
   const slots = useMemo(() => buildRenderSlots(block.id, rows), [block.id, rows])
   const panelSlots = useMemo(() => flattenPanelSlots(slots), [slots])
@@ -182,8 +182,7 @@ export function LayoutRenderer({block}: BlockRendererProps) {
     ? (mobilePanelSlot ? [mobilePanelSlot] : [])
     : (maximizedPanelSlot ? [maximizedPanelSlot] : slots)
   const canClosePanel = panelSlots.length > 1
-  // Maximize hides siblings, so it only means something on a desktop split.
-  const canMaximizePanel = !isMobile && canClosePanel
+  const canMaximizePanel = maximizeWouldHideSomething(panelSlots.length, !isMobile)
   const hasOneVisiblePanel = slotsToRender.length === 1 && slotsToRender[0]?.kind === 'panel'
 
   // ── The single writer of `activePanelIdProp` from this renderer ──
@@ -206,15 +205,11 @@ export function LayoutRenderer({block}: BlockRendererProps) {
   // replace, to settle.
   //
   // Rule 2 fires only on an ABSENT pointer, never on one that merely names a
-  // row this session doesn't have. It inherited that guard from a time when
-  // the pointer came from its own subscription and could legitimately run
-  // ahead of the rows; reading both from one snapshot (above) made that
-  // particular skew impossible. What the guard still buys is deliberate: a
-  // pointer naming an unknown row is left ALONE rather than repaired, because
-  // the row may simply not have been projected into this subtree yet, and
-  // seizing it would move the user's active pane — on mobile, visibly. Row
-  // deletion has its own repair (`activePanelIdAfterReconcile`), so nothing
-  // depends on this path to clean up.
+  // row this session doesn't have: that row may simply not be projected into
+  // this subtree yet, and seizing it would move the user's active pane — on
+  // mobile, visibly. Row deletion has its own repair
+  // (`activePanelIdAfterReconcile`), so nothing depends on this path to clean
+  // up a dangling pointer.
   const desiredActivePanelSlot = maximizedPanelSlot
     ?? (activePanelId ? undefined : fallbackActivePanelSlot)
 

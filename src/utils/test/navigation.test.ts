@@ -233,6 +233,25 @@ describe('navigate', () => {
     expect(await resolveGlobalCommandTarget(env.repo, WS)).toMatchObject({blockId: 'b-second'})
   })
 
+  // Mobile renders by ACTIVE pane and ignores the flag, so narrowing to the
+  // flagged row there lands in a pane the user is not looking at — the desktop
+  // bug, mirrored. Reachable with no desktop and no sync: `#ws/a;max/b` on a
+  // phone reconciles the flag onto `a` while the pointer seeds to `b`.
+  it('does NOT narrow to the maximized pane on mobile, which renders by active pane', async () => {
+    stubViewport(true)
+    const layoutSession = await layoutSessionBlock()
+    const maximizedPanelId = await insertPanelRow(env.repo, layoutSession, 'b-first')
+    const visibleOnMobile = await insertPanelRow(env.repo, layoutSession, 'b-last')
+    await env.repo.block(maximizedPanelId).set(panelMaximizedProp, true)
+    // Mobile shows the ACTIVE pane; `insertPanelRow` left that on the last one.
+    expect(await currentActivePanelId()).toBe(visibleOnMobile)
+
+    const dest = await navigate(env.repo, {target: 'active', blockId: 'b-landed'})
+
+    expect(dest?.panelId).toBe(visibleOnMobile)
+    expect(await resolveGlobalCommandTarget(env.repo, WS)).toMatchObject({blockId: 'b-landed'})
+  })
+
   // An inbound `;max` link sets the flag and leaves the pointer unset — the
   // repair is a render effect, so there is a real window where `at(-1)` would
   // otherwise pick a pane that isn't on screen.
@@ -242,6 +261,22 @@ describe('navigate', () => {
     await insertPanelRow(env.repo, layoutSession, 'b-last')
     await env.repo.block(maximizedPanelId).set(panelMaximizedProp, true)
     await layoutSession.set(activePanelIdProp, undefined)
+
+    const dest = await navigate(env.repo, {target: 'active', blockId: 'b-landed'})
+
+    expect(dest?.panelId).toBe(maximizedPanelId)
+  })
+
+  // The case `visiblePanelRows`'s docstring calls load-bearing: the pointer
+  // legitimately names a hidden pane for a window after a `;max` arrival,
+  // because the coercion that repairs it is a render effect.
+  it("target 'active' with the pointer on a HIDDEN pane still lands in the visible one", async () => {
+    stubViewport(false)
+    const layoutSession = await layoutSessionBlock()
+    const hidden = await insertPanelRow(env.repo, layoutSession, 'b-hidden')
+    const maximizedPanelId = await insertPanelRow(env.repo, layoutSession, 'b-shown')
+    await env.repo.block(maximizedPanelId).set(panelMaximizedProp, true)
+    await layoutSession.set(activePanelIdProp, hidden)
 
     const dest = await navigate(env.repo, {target: 'active', blockId: 'b-landed'})
 

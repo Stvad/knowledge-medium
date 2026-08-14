@@ -701,6 +701,29 @@ const layoutSessionRowOf = async (
   return current
 }
 
+/**
+ * Whether maximizing would actually hide anything — the ONE statement of the
+ * rule, shared by both writers of the flag and mirrored by the renderer's
+ * `canMaximizePanel`.
+ *
+ * Two independent reasons it might not: no sibling pane to hide, or a viewport
+ * that renders one pane regardless (`LayoutRenderer` ignores the flag below
+ * the mobile breakpoint). Either way, setting it changes nothing on screen,
+ * renders no restore affordance, and leaves a flag that swallows the next pane
+ * the user opens — or, since rows sync, hides panes on a WIDER viewport later
+ * with no gesture behind it. The maximize action is keyboard-dispatchable on
+ * surfaces the chrome button never appears on, which is how those states were
+ * reachable at all.
+ *
+ * `canRenderSplit` is the caller's viewport read rather than a `window` peek
+ * here, matching how `navigation.ts` threads `NavigationViewport` — it keeps
+ * this layer testable without stubbing globals.
+ */
+export const maximizeWouldHideSomething = (
+  panelCount: number,
+  canRenderSplit: boolean,
+): boolean => panelCount > 1 && canRenderSplit
+
 /** The panel rows of the session that owns `panelId`, or null when `panelId`
  *  is not a live panel row reachable from a layout session.
  *
@@ -718,17 +741,11 @@ const sessionPanelRowsInTx = async (
   const session = await layoutSessionRowOf(tx, row)
   if (!session) return null
   const panelRows = panelRowsInLayoutOrder(session.id, await loadSubtreeRowsInTx(tx, session))
-  // Defence in depth, NOT load-bearing: the walk found *a* non-stack ancestor,
-  // and this confirms it was the session that actually renders the pane. The
-  // `PANEL_TYPE` gate above already rejects everything that reaches here
-  // wrongly, so no test can pin this clause through the public path — deleting
-  // it keeps the suite green.
-  //
-  // It is NOT a backstop for a missing type tag (that fails closed at the gate
-  // above, never reaching here). What it still catches is a correctly-tagged
-  // panel row re-parented OUT of its session by a raw sync/bridge write: the
-  // walk would then hand back some other block as "the session" and we would
-  // write layout properties onto it.
+  // Defence in depth, not load-bearing (the `PANEL_TYPE` gate above fails
+  // closed, so no test can pin this through the public path): catches a
+  // correctly-tagged panel row re-parented OUT of its session by a raw
+  // sync/bridge write, where the walk would hand back an unrelated block as
+  // "the session" and we would write layout properties onto it.
   return panelRows.some(candidate => candidate.id === panelId) ? {session, panelRows} : null
 }
 
@@ -743,17 +760,8 @@ const sessionPanelRowsInTx = async (
  * relies on `LayoutRenderer`'s inbound coercion effect (which exists for the
  * URL/Back/snapshot arrivals that have no gesture at all).
  *
- * Turning the flag ON needs something to hide, in BOTH senses — a pane to hide
- * (`panelRows.length > 1`) and a viewport that would otherwise show it
- * (`canRenderSplit`, false on mobile, where the layout renders one pane
- * regardless and ignores the flag). Either way maximizing changes nothing on
- * screen, renders no restore affordance (`canMaximizePanel` encodes the same
- * two conditions), and leaves a flag that silently swallows the next pane the
- * user opens — or, since rows sync, hides panes on a WIDER viewport later with
- * no gesture behind it. The action is keyboard-dispatchable on surfaces the
- * chrome button never appears on, which is how that state is reachable at all.
- *
- * Turning it OFF is always allowed, so a flag is never stuck.
+ * Turning the flag ON is refused unless `maximizeWouldHideSomething`; turning
+ * it OFF is always allowed, so a flag is never stuck.
  *
  * Returns the resulting flag, or null when the call was refused.
  */
@@ -769,7 +777,7 @@ export const togglePanelMaximized = async (
     const {session, panelRows} = found
 
     const next = !isPanelRowMaximized(panelRows.find(row => row.id === panelId)!)
-    if (next && (panelRows.length <= 1 || !canRenderSplit)) return
+    if (next && !maximizeWouldHideSomething(panelRows.length, canRenderSplit)) return
 
     for (const other of panelRows) {
       const wanted = other.id === panelId && next
@@ -810,9 +818,7 @@ export const prepareExclusiveMaximize = async (
   await repo.tx(async tx => {
     const found = await sessionPanelRowsInTx(tx, panelId)
     if (!found) return
-    // Both senses of "something to hide", matching `togglePanelMaximized`:
-    // a sibling pane AND a viewport that would otherwise render it.
-    hidesSomething = found.panelRows.length > 1 && canRenderSplit
+    hidesSomething = maximizeWouldHideSomething(found.panelRows.length, canRenderSplit)
     for (const other of found.panelRows) {
       if (other.id === panelId || !isPanelRowMaximized(other)) continue
       await tx.setProperty(other.id, panelMaximizedProp, false)
