@@ -291,7 +291,8 @@ const retargetSource = async (
   // retarget. Returning early would leave those edges pointing at the
   // tombstoned merge source forever, since the references processor no
   // longer re-parses this block to rebuild them.
-  const nextContent = hasOpaqueContent(current, tx.opaqueContentTypes)
+  const opaque = hasOpaqueContent(current, tx.opaqueContentTypes)
+  const nextContent = opaque
     ? current.content
     : retargetReferenceContent(
       current.content,
@@ -318,8 +319,19 @@ const retargetSource = async (
   const strandedAliases = new Set(
     [...aliasReplacements.keys()].filter(alias => remaining.has(alias)),
   )
+  // Opaque source: the content-derived edges are stale by construction (the
+  // bytes still name `fromId` and nothing will re-parse them), so DROP them
+  // rather than let them retarget. The stranding rule above only covers
+  // wikilink aliases — a `((fromId))` edge carries `alias === fromId`, which
+  // is not in `aliasReplacements`, so it would be rewritten to
+  // `{id: intoId, alias: intoId}` and publish a backlink the payload does
+  // not support. Property-derived edges still retarget: they project from a
+  // property VALUE that WAS rewritten.
+  const retargetInput = opaque
+    ? current.references.filter(ref => (ref.sourceField ?? '') !== '')
+    : current.references
   const nextReferences = retargetReferences(
-    current.references, event.fromId, event.intoId,
+    retargetInput, event.fromId, event.intoId,
     aliasReplacements, strandedAliases, retargetableFields,
   )
 

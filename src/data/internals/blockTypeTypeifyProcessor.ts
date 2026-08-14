@@ -90,6 +90,17 @@ export const BLOCK_TYPE_TYPEIFY_PROCESSOR = defineSameTxProcessor({
 
       const rawLabel = after.properties[blockTypeLabelProp.name]
       const currentLabel = (typeof rawLabel === 'string' ? rawLabel : '').trim()
+
+      // FIRST, before `name` is even derived. With no explicit label `name`
+      // would be the payload, and the hygiene asserts below embed their
+      // subject via `JSON.stringify` — so a bundle over `MAX_ALIAS_LENGTH`
+      // (the common case) threw a `LossyLabelError` carrying a megabyte of
+      // executable source, which the supertag UI then rendered in a toast.
+      // Wrong error, and the payload should never be copied at all.
+      if (currentLabel === '' && hasOpaqueContent(after, ctx.opaqueContentTypes)) {
+        throw new OpaqueContentLabelError('Block type label')
+      }
+
       const name = currentLabel || after.content.trim()
 
       // This adopts existing content as the type's name and claims it as
@@ -138,12 +149,6 @@ export const BLOCK_TYPE_TYPEIFY_PROCESSOR = defineSameTxProcessor({
         await ctx.tx.update(row.id, {properties: addBlockTypeToProperties(after.properties, PAGE_TYPE)})
       }
       if (currentLabel === '' && name !== '') {
-        // Adopting the content means BOTH claiming it as a name and trimming
-        // the stored bytes to it. For an opaque payload each is wrong on its
-        // own, so refuse and make the caller supply a label.
-        if (hasOpaqueContent(after, ctx.opaqueContentTypes)) {
-          throw new OpaqueContentLabelError('Block type label')
-        }
         await ctx.tx.setProperty(row.id, blockTypeLabelProp, name)
         // Trim the block's own content to the clean name too. `name` was
         // adopted FROM `content` (`content.trim()`), so this only strips

@@ -329,6 +329,20 @@ describe('block-type typeify processor', () => {
   // projects as property machinery instead of appearing in the outline.
   // Only the grammar-shape check applies here; the content is not claimed
   // as an alias when a label is supplied, so round-tripping is moot.
+  // The refusal must come BEFORE the label hygiene asserts: those embed
+  // their subject via JSON.stringify, so a bundle past the alias cap threw
+  // LossyLabelError carrying the whole source into a toast.
+  it('refuses a large opaque payload without copying it into the error', async () => {
+    env = await setup()
+    const big = `// ${'x'.repeat(MAX_ALIAS_LENGTH + 500)}`
+    const err = await tagBlockType(env, big, {[typesProp.name]: ['extension']})
+      .then(() => null, (e: unknown) => e as Error)
+
+    expect(err).toBeInstanceOf(OpaqueContentLabelError)
+    expect(err!.message).not.toContain('xxxx')
+    expect(err!.message.length).toBeLessThan(400)
+  })
+
   // An opaque payload that happens to be `::`-shaped is still not machinery:
   // the derive processor clears the columns for opaque rows regardless of
   // content, so there is nothing to refuse.
