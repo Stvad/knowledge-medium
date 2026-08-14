@@ -370,6 +370,39 @@ describe('parsePlan', () => {
     expect(overlay.reentry).toBeUndefined()
   })
 
+  it('lets rows it ignored stay ignored, instead of invalidating the table', () => {
+    // Two rows sharing an UNRECOGNISED id are two rows that do nothing. They
+    // used to read as a duplicate — and a duplicate discards the whole table
+    // — so a pair of no-op rows took a real edit down with them.
+    const plan = node('**Plan**', [
+      node('**Re-entry protocol**', [
+        tier('Some row → …', {[FIELD.tierId]: 'mystery'}),
+        tier('Another → …', {[FIELD.tierId]: 'mystery'}),
+        tier('2–4 weeks → 85%', {[FIELD.tierId]: '2-4w', [FIELD.layoffPct]: 0.85}),
+      ]),
+    ])
+    const overlay = parsePlan(plan)
+    expect(overlay.reentry!.find(t => t.id === '2-4w')?.pct).toBe(0.85)
+  })
+
+  it('refuses a set-count window that covers no session', () => {
+    // `setsFor` tests `sessionsBack < overrideWindow`, so 0 is false even on
+    // the first session back and the stated 2-set prescription never applies.
+    const plan = node('**Plan**', [
+      node('**Re-entry protocol**', [
+        tier('1–2 months → …', {
+          [FIELD.tierId]: '1-2mo',
+          [FIELD.targetSets]: 2,
+          [FIELD.setsOverrideSessions]: 0,
+        }),
+      ]),
+    ])
+    const overlay = parsePlan(plan)
+    expect(overlay.warnings.some(w => new RegExp(FIELD.setsOverrideSessions).test(w))).toBe(true)
+    // The built-in window, not the one that would have been inert.
+    expect(overlay.reentry!.find(t => t.id === '1-2mo')?.setsOverrideSessions).toBe(2)
+  })
+
   it('refuses a table where two rows claim the same tier', () => {
     // The map holds one row per id, so the later would replace the earlier
     // wholesale — and an absent field being a statement, a second row that

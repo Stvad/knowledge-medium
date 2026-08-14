@@ -504,16 +504,6 @@ const parseReentry = (root: PlanNode, warnings: string[]): ReentryTier[] | undef
       warnings.push(`Re-entry row "${text}" has no \`${FIELD.tierId}\` — ignored.`)
       continue
     }
-    // Two rows claiming one tier is not a value to repair. The map holds one
-    // entry per id, so the later row would REPLACE the earlier wholesale —
-    // and since an absent field is a statement here, a second `2-4w` row that
-    // only edits the bound also resets the first row's stated percentage to
-    // neutral. Outline order would be deciding the load.
-    if (claimed.has(id)) {
-      problems.push(`two rows both state \`${FIELD.tierId}\` "${id}"`)
-      continue
-    }
-    claimed.add(id)
     // A row RE-STATES one of the built-in tiers; it cannot invent one.
     //
     // Inventing tiers was in the first draft of this and it earned its removal:
@@ -538,6 +528,23 @@ const parseReentry = (root: PlanNode, warnings: string[]): ReentryTier[] | undef
       )
       continue
     }
+
+    // AFTER the id is known to name a real tier, not before. Claiming it
+    // first meant a row this loop had just promised to ignore could still
+    // invalidate the table: two rows sharing one UNRECOGNISED id looked like
+    // a duplicate, and a duplicate discards everything — so a pair of rows
+    // that do nothing took the other rows' edits down with them.
+    //
+    // Two rows claiming one REAL tier is not a value to repair. The map holds
+    // one entry per id, so the later row would REPLACE the earlier wholesale
+    // — and since an absent field is a statement here, a second `2-4w` row
+    // that only edits the bound also resets the first row's stated
+    // percentage. Outline order would be deciding the load.
+    if (claimed.has(id)) {
+      problems.push(`two rows both state \`${FIELD.tierId}\` "${id}"`)
+      continue
+    }
+    claimed.add(id)
 
     const maxGapDays = tierNumber(props, FIELD.maxGapDays, DAYS, {id, base: base.maxGapDays, absent: base.maxGapDays}, warnings)
 
@@ -573,7 +580,11 @@ const parseReentry = (root: PlanNode, warnings: string[]): ReentryTier[] | undef
       }
       : {
         setsOverride,
-        setsOverrideSessions: tierNumber(props, FIELD.setsOverrideSessions, TALLY, {id, base: base.setsOverrideSessions, absent: undefined}, warnings),
+        // COUNT, not TALLY: `setsFor` tests `sessionsBack < overrideWindow`,
+        // so a window of 0 is false even on the first session back and the
+        // absolute set count the row states is silently never applied. A
+        // window that covers no session is not a window.
+        setsOverrideSessions: tierNumber(props, FIELD.setsOverrideSessions, COUNT, {id, base: base.setsOverrideSessions, absent: undefined}, warnings),
         setsDelta,
       }
 
