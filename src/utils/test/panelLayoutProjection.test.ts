@@ -1297,6 +1297,21 @@ describe('togglePanelMaximized', () => {
     expect(env.repo.block(byBlock.get('b')!).peekProperty(panelMaximizedProp)).not.toBe(true)
   })
 
+  // The return value answers "is this flag mine to undo later?", so a pane
+  // that was ALREADY maximized reports false even though maximizing is
+  // warranted here — the flag belongs to whoever set it. Returning
+  // `maximizeWouldHideSomething` instead made the video-notes enter adopt a
+  // user's deliberate maximize, and its close then dropped it.
+  it('prepareExclusiveMaximize does not claim a maximize the pane already carried', async () => {
+    await applyUrl('#ws-1/a;max/b')
+    const byBlock = await rowIdsByBlock()
+
+    expect(await prepareExclusiveMaximize(env.repo, byBlock.get('a')!)).toBe(false)
+
+    // ...and leaves it standing: not claiming is arrangement-neutral.
+    expect(env.repo.block(byBlock.get('a')!).peekProperty(panelMaximizedProp)).toBe(true)
+  })
+
   it('pushes a history entry (maximize is a layout change, so Back un-maximizes)', async () => {
     await applyUrl('#ws-1/a/b')
     const rowA = (await rowIdsByBlock()).get('a')

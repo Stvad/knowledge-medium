@@ -193,6 +193,23 @@ describe('enterVideoNotesView', () => {
     expect(isMaximized(panelId)).toBe(true)
   })
 
+  // The same rule on the path that does NOT decline, which is the ordinary
+  // one: maximize a pane in a desktop split, then open notes in it. The enter
+  // would maximize, but there is nothing left to do — so it owns nothing, and
+  // close must leave the user's maximize standing.
+  it('close leaves a maximize the pane already carried, on a viewport that CAN split', async () => {
+    await setup({panes: 2})
+    await panelBlock().set(panelMaximizedProp, true)
+
+    await enterVideoNotesView(videoBlock(), panelBlock())
+    expect(isMaximized(panelId)).toBe(true)
+
+    await closeVideoNotesView(panelBlock())
+
+    expect(panelBlock().peekProperty(panelViewModeProp)).toBeUndefined()
+    expect(isMaximized(panelId)).toBe(true)
+  })
+
   // The at-most-one rule for this writer: the flag itself is set from inside
   // navigateInPanel's tx, below the layer that can see a session's rows, so
   // the enter has to clear the others up front.

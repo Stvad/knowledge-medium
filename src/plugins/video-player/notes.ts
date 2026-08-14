@@ -103,18 +103,21 @@ export const enterVideoNotesView = async (
   uiStateBlock: Block,
 ): Promise<void> => {
   if (uiStateBlock.peekProperty(topLevelBlockIdProp) === undefined) return
-  const maximized = await prepareExclusiveMaximize(uiStateBlock.repo, uiStateBlock.id, {
+  // CLAIMED, not "is maximized": false covers both a decline and a pane that
+  // was already maximized, and those two want the same follow-up write.
+  const claimedMaximize = await prepareExclusiveMaximize(uiStateBlock.repo, uiStateBlock.id, {
     canRenderSplit: !isMobileViewport(),
   })
-  if (maximized) maximizedByNotesEnter.add(uiStateBlock.id)
+  if (claimedMaximize) maximizedByNotesEnter.add(uiStateBlock.id)
   else maximizedByNotesEnter.delete(uiStateBlock.id)
   await navigateInPanel(uiStateBlock, videoBlock.id, {
     viewMode: VIDEO_NOTES_VIEW_MODE,
-    // Declining is arrangement-NEUTRAL, so the key is omitted rather than sent
-    // as `false`: passing `false` would clear a maximize this pane already
+    // Not claiming is arrangement-NEUTRAL, so the key is omitted rather than
+    // sent as `false`: passing `false` would clear a maximize this pane already
     // carried, silently undoing a deliberate one when the gesture merely had
-    // nothing to add (a narrow viewport, or a lone pane).
-    ...(maximized ? {maximized: true} : {}),
+    // nothing to add (a narrow viewport, a lone pane, or a pane the user had
+    // already maximized — which needs no write to end up maximized).
+    ...(claimedMaximize ? {maximized: true} : {}),
   })
   await ensureEditableVideoNoteChild(
     videoBlock,
@@ -145,8 +148,13 @@ const closingPanels = new Set<string>()
 
 /** Panes whose maximize was set BY the notes enter, so close knows whether the
  *  flag is its to clear. Without it, close erases a maximize the user set
- *  deliberately — reachable whenever the enter DECLINED to maximize (a lone
- *  pane, or a narrow viewport) on a pane that was already flagged.
+ *  deliberately. Two ways in, and the second is the ordinary one:
+ *  - the enter DECLINED (a lone pane, or a narrow viewport) on a pane that was
+ *    already flagged;
+ *  - the enter would have maximized, but the pane was ALREADY maximized —
+ *    maximize a pane in a desktop split, then open notes in it. Membership
+ *    here therefore tracks the TRANSITION, not "the pane ended up maximized";
+ *    the two coincide only when the pane started unmaximized.
  *
  *  In-memory and device-local by the same reasoning as the `viewModeEnter`
  *  history marker: close-restores-arrangement is a session-scoped nicety, and

@@ -856,9 +856,23 @@ export const togglePanelMaximized = async (
  * option, whose writer (`setPanelMaximizedInTx`) lives below this module and
  * cannot enumerate a session's rows.
  *
- * Reports whether maximizing `panelId` would hide anything
- * (`maximizeWouldHideSomething`) and, only when it would, clears every OTHER
- * row's flag so the caller's own write lands exclusively.
+ * Clears every OTHER row's flag — but only when maximizing would hide
+ * anything (`maximizeWouldHideSomething`) — so the caller's own write lands
+ * exclusively.
+ *
+ * Returns whether this call CLAIMED the maximize: true only when the flag was
+ * NOT already set on `panelId` AND maximizing is warranted. Already-maximized
+ * is deliberately reported as false, because the return value's real job is to
+ * answer "is this flag mine to undo later?", and a flag the pane already
+ * carried belongs to whoever set it — the user via `togglePanelMaximized`, or
+ * an inbound `;max`. Reporting `maximizeWouldHideSomething` directly, as this
+ * once did, handed the caller ownership of a maximize it merely FOUND, and the
+ * matching close then dropped a maximize the user had set deliberately.
+ *
+ * One boolean serves both of the caller's needs because the two false cases
+ * want the same write: declined means "leave the flag alone", and
+ * already-maximized means "leave the flag alone" too — omitting `maximized`
+ * from the follow-up tx leaves a set flag set, which is the wanted end state.
  *
  * A REFUSAL WRITES NOTHING — the same meaning `togglePanelMaximized` gives it,
  * and the reason the clear is gated rather than unconditional. Clearing on a
@@ -882,18 +896,18 @@ export const prepareExclusiveMaximize = async (
   panelId: string,
   {canRenderSplit = true}: {canRenderSplit?: boolean} = {},
 ): Promise<boolean> => {
-  let hidesSomething = false
+  let claimed = false
   await repo.tx(async tx => {
     const found = await sessionPanelRowsInTx(tx, panelId, repo.user.id)
     if (!found) return
-    hidesSomething = maximizeWouldHideSomething(found.panelRows.length, canRenderSplit)
-    if (!hidesSomething) return
+    if (!maximizeWouldHideSomething(found.panelRows.length, canRenderSplit)) return
+    claimed = !isPanelRowMaximized(found.panelRows.find(row => row.id === panelId)!)
     for (const other of found.panelRows) {
       if (other.id === panelId || !isPanelRowMaximized(other)) continue
       await tx.setProperty(other.id, panelMaximizedProp, false)
     }
   }, {scope: ChangeScope.UiState, description: 'clear other maximized panes'})
-  return hidesSomething
+  return claimed
 }
 
 /**
