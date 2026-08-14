@@ -61,6 +61,7 @@ const panelViewMode = (row: BlockData): string | undefined => {
   return normalizeViewMode(panelViewModeProp.codec.decode(stored))
 }
 
+
 /** Absent ≡ false (the prop's own `defaultValue`), so no pane needs the
  *  property materialized to be un-maximized.
  *
@@ -70,6 +71,43 @@ const panelViewMode = (row: BlockData): string | undefined => {
  *  cost that pane its flag, not throw the whole layout projection. */
 export const isPanelRowMaximized = (row: Pick<BlockData, 'properties'>): boolean =>
   safeDecodeRowProperty(row, panelMaximizedProp)
+
+/**
+ * The pane that takes the WHOLE layout over, or null when every pane renders.
+ *
+ * This is THE definition of "which pane the user is looking at". Every
+ * consumer — the renderer's slot list, navigation's `main`/`active` targets,
+ * the global new-node action — derives from it rather than indexing row order,
+ * because row order stopped meaning visible order the moment a pane could be
+ * flagged away. Three separate consumers each re-derived it and each got it
+ * wrong in a different way; two of those shipped as bugs that wrote into a
+ * pane the user could not see.
+ *
+ * Two independent ways a layout solos, and the order matters:
+ *  - `canRenderSplit` false (below the mobile breakpoint): the layout ALWAYS
+ *    solos, by ACTIVE pane, and the maximize flag is not consulted at all.
+ *  - otherwise: the first flagged pane, if any.
+ *
+ * `canRenderSplit` is threaded from the caller rather than peeked from
+ * `window`, so this layer stays testable without stubbing globals.
+ */
+export const soloPanelRow = (
+  panelRows: readonly BlockData[],
+  {activePanelId, canRenderSplit}: {activePanelId?: string; canRenderSplit: boolean},
+): BlockData | null =>
+  canRenderSplit
+    ? panelRows.find(isPanelRowMaximized) ?? null
+    : panelRows.find(row => row.id === activePanelId) ?? panelRows.at(-1) ?? null
+
+/** The panel rows the user can actually SEE, in layout order — `soloPanelRow`
+ *  as a list, for consumers that want to keep indexing. */
+export const visiblePanelRows = (
+  panelRows: readonly BlockData[],
+  options: {activePanelId?: string; canRenderSplit: boolean},
+): readonly BlockData[] => {
+  const solo = soloPanelRow(panelRows, options)
+  return solo ? [solo] : panelRows
+}
 
 /** The session's active-panel pointer, read off the layout-session ROW.
  *
@@ -100,7 +138,14 @@ const buildChildrenByParent = (rows: readonly BlockData[]): Map<string, BlockDat
   return childrenByParent
 }
 
-export const panelRowsInLayoutOrder = (
+/** EVERY panel row in layout order, stacks flattened — including panes that
+ *  are not rendered. Named `all` deliberately: indexing this is right for the
+ *  projection (the hash describes the whole layout) and wrong for anything
+ *  answering "where does the user see / expect this". Three consumers indexed
+ *  it as if it were visible order; two shipped as bugs that wrote into a pane
+ *  the user could not see. For that question, use `visiblePanelRows` /
+ *  `soloPanelRow`. */
+export const allPanelRowsInLayoutOrder = (
   rootId: string,
   rows: readonly BlockData[],
 ): BlockData[] => {
@@ -215,11 +260,11 @@ const activePanelIdAfterReconcile = (
 ): string | undefined => {
   if (typeof activePanelId !== 'string') return undefined
 
-  const finalPanels = panelRowsInLayoutOrder(rootId, finalRows)
+  const finalPanels = allPanelRowsInLayoutOrder(rootId, finalRows)
   const finalPanelIds = new Set(finalPanels.map(row => row.id))
   if (finalPanelIds.has(activePanelId)) return activePanelId
 
-  const currentPanels = panelRowsInLayoutOrder(rootId, currentRows)
+  const currentPanels = allPanelRowsInLayoutOrder(rootId, currentRows)
   const activeIndex = currentPanels.findIndex(row => row.id === activePanelId)
   if (activeIndex >= 0) {
     for (let index = activeIndex + 1; index < currentPanels.length; index++) {
@@ -746,7 +791,7 @@ const sessionPanelRowsInTx = async (
   if (!row || row.deleted || !hasBlockType(row, PANEL_TYPE)) return null
   const session = await layoutSessionRowOf(tx, row)
   if (!session) return null
-  const panelRows = panelRowsInLayoutOrder(session.id, await loadSubtreeRowsInTx(tx, session))
+  const panelRows = allPanelRowsInLayoutOrder(session.id, await loadSubtreeRowsInTx(tx, session))
   // Defence in depth, not load-bearing (the `PANEL_TYPE` gate above fails
   // closed, so no test can pin this through the public path): catches a
   // correctly-tagged panel row re-parented OUT of its session by a raw
@@ -857,7 +902,7 @@ const clearMaximizedPanelsInTx = async (
   tx: Tx,
   session: BlockData,
 ): Promise<void> => {
-  const rows = panelRowsInLayoutOrder(session.id, await loadSubtreeRowsInTx(tx, session))
+  const rows = allPanelRowsInLayoutOrder(session.id, await loadSubtreeRowsInTx(tx, session))
   for (const row of rows) {
     if (!isPanelRowMaximized(row)) continue
     await tx.setProperty(row.id, panelMaximizedProp, false)
@@ -948,7 +993,7 @@ export const reconcilePanelRows = async (
     // remounts), re-key rows via tx.move (junk UiState uploads), and
     // un-stack singleton stacks. Context diffs are applied surgically.
     const targetLeaves = collectLeafSlots(targetSlots)
-    const currentLeafRows = panelRowsInLayoutOrder(layoutSessionBlock.id, currentRows)
+    const currentLeafRows = allPanelRowsInLayoutOrder(layoutSessionBlock.id, currentRows)
       .filter(row => panelBlockId(row) !== undefined)
     if (
       sameLayoutSlots(currentLayoutSlots, targetSlots, 'topology') &&

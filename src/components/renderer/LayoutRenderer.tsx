@@ -8,10 +8,12 @@ import type { BlockData } from '@/data/api'
 import type { Block } from '@/data/block.js'
 import { activePanelIdProp } from '@/data/properties.js'
 import {
+  allPanelRowsInLayoutOrder,
   isPanelRowMaximized,
   isPanelStackRow,
   maximizeWouldHideSomething,
   sessionActivePanelId,
+  soloPanelRow,
 } from '@/utils/panelLayoutProjection.js'
 
 type RenderSlot =
@@ -168,19 +170,19 @@ export function LayoutRenderer({block}: BlockRendererProps) {
   const activePanelId = sessionActivePanelId(rows.find(row => row.id === block.id))
   const slots = useMemo(() => buildRenderSlots(block.id, rows), [block.id, rows])
   const panelSlots = useMemo(() => flattenPanelSlots(slots), [slots])
-  const activePanelSlot = activePanelId
-    ? panelSlots.find(slot => slot.id === activePanelId)
-    : undefined
-  // Desktop analog of the mobile single-pane path: a maximized leaf renders
-  // ALONE, first flagged row wins. Rules and rationale: `panelMaximizedProp`.
-  const maximizedPanelSlot = isMobile
-    ? undefined
-    : panelSlots.find(slot => slot.maximized)
-  const fallbackActivePanelSlot = isMobile ? panelSlots.at(-1) : panelSlots[0]
-  const mobilePanelSlot = activePanelSlot ?? fallbackActivePanelSlot
-  const slotsToRender = isMobile
-    ? (mobilePanelSlot ? [mobilePanelSlot] : [])
-    : (maximizedPanelSlot ? [maximizedPanelSlot] : slots)
+  // Does one pane take the whole layout over? The rule is `soloPanelRow` —
+  // shared with navigation, so "which pane the user sees" has exactly one
+  // answer. Both narrowing paths this used to spell out (mobile-by-active,
+  // desktop-by-flag) live there.
+  const soloPanelSlot = useMemo(() => {
+    const solo = soloPanelRow(allPanelRowsInLayoutOrder(block.id, rows), {
+      activePanelId,
+      canRenderSplit: !isMobile,
+    })
+    return solo ? panelSlots.find(slot => slot.id === solo.id) : undefined
+  }, [block.id, rows, panelSlots, activePanelId, isMobile])
+  // Only the desktop no-solo case renders the full tree; a solo pane renders alone.
+  const slotsToRender = soloPanelSlot ? [soloPanelSlot] : (isMobile ? [] : slots)
   const canClosePanel = panelSlots.length > 1
   const canMaximizePanel = maximizeWouldHideSomething(panelSlots.length, !isMobile)
   const hasOneVisiblePanel = slotsToRender.length === 1 && slotsToRender[0]?.kind === 'panel'
@@ -189,20 +191,20 @@ export function LayoutRenderer({block}: BlockRendererProps) {
   // Two rules, in priority order, deliberately resolved BEFORE the effect
   // rather than in two effects:
   //
-  //  1. A maximized pane must be the active pane. It is the only pane
-  //     rendered, so otherwise keyboard dispatch targets a pane the user
-  //     cannot see (design §4.4). `togglePanelMaximized` covers the gesture;
-  //     this covers arrivals with no gesture at all — Back/Forward, a shared
-  //     `;max` link, a snapshot apply — where `reconcilePanelRows` sets the
-  //     row flag and leaves the pointer alone.
-  //  2. Otherwise, seed an unset pointer with the fallback pane.
+  //  1. A SOLO pane must be the active pane, or keyboard dispatch targets a
+  //     pane the user cannot see (design §4.4). `togglePanelMaximized` covers
+  //     the gesture; this covers arrivals with no gesture at all — Back/Forward,
+  //     a shared `;max` link, a snapshot apply — where `reconcilePanelRows`
+  //     sets the row flag and leaves the pointer alone. On mobile the solo pane
+  //     IS the active pane whenever the pointer is set, so this self-satisfies
+  //     and only seeds an unset pointer.
+  //  2. Otherwise, seed an unset pointer with the first pane.
   //
   // As two effects both fired in the same commit whenever the pointer was
-  // unset — which IS the shared-`;max`-link shape — and disagreed: rule 2
-  // seeded `panelSlots[0]` while rule 1 corrected to the maximized pane, so
-  // the pointer transiently named an unrendered pane (exactly what rule 1
-  // exists to prevent) and took several synced writes, each projecting a
-  // replace, to settle.
+  // unset — which IS the shared-`;max`-link shape — and disagreed, so the
+  // pointer transiently named an unrendered pane (exactly what rule 1 exists
+  // to prevent) and took several synced writes, each projecting a replace, to
+  // settle.
   //
   // Rule 2 fires only on an ABSENT pointer, never on one that merely names a
   // row this session doesn't have: that row may simply not be projected into
@@ -210,8 +212,8 @@ export function LayoutRenderer({block}: BlockRendererProps) {
   // mobile, visibly. Row deletion has its own repair
   // (`activePanelIdAfterReconcile`), so nothing depends on this path to clean
   // up a dangling pointer.
-  const desiredActivePanelSlot = maximizedPanelSlot
-    ?? (activePanelId ? undefined : fallbackActivePanelSlot)
+  const desiredActivePanelSlot = soloPanelSlot
+    ?? (activePanelId ? undefined : panelSlots[0])
 
   useEffect(() => {
     if (!desiredActivePanelSlot || activePanelId === desiredActivePanelSlot.id) return

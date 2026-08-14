@@ -51,7 +51,7 @@ import {
   layoutSlotsFromRows,
   panelBlockIds,
   panelBlockId,
-  panelRowsInLayoutOrder,
+  allPanelRowsInLayoutOrder,
   prepareExclusiveMaximize,
   reconcilePanelRows,
   retargetPanelBlockIds,
@@ -1295,7 +1295,7 @@ describe('per-pane render scopes', () => {
   it('two panes showing the SAME block get distinct per-pane focus scopes', async () => {
     await applyUrl('#ws-1/same/same')
 
-    const panelRows = panelRowsInLayoutOrder(env.layoutSessionBlockId, await layoutRows())
+    const panelRows = allPanelRowsInLayoutOrder(env.layoutSessionBlockId, await layoutRows())
     expect(panelRows.map(row => panelBlockId(row))).toEqual(['same', 'same'])
     const [first, second] = panelRows
     const firstLocation = env.repo.block(first.id).peekProperty(focusedBlockLocationProp)

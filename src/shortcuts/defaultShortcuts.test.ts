@@ -30,7 +30,7 @@ import { __resetLayoutSessionIdForTesting } from '@/utils/layoutSessionId'
 import {
   insertPanelRow,
   panelBlockId,
-  panelRowsInLayoutOrder,
+  allPanelRowsInLayoutOrder,
 } from '@/utils/panelLayoutProjection'
 import { panelRenderScopeId } from '@/utils/renderScope'
 import {
@@ -370,7 +370,7 @@ describe('default CodeMirror shortcuts', () => {
 
     await waitFor(async () => {
       const rows = await env.repo.query.subtree({id: layoutSession.id}).load()
-      const panels = panelRowsInLayoutOrder(layoutSession.id, rows)
+      const panels = allPanelRowsInLayoutOrder(layoutSession.id, rows)
       expect(panelBlockId(panels[0])).toBe(prefsBlock.id)
     })
   })

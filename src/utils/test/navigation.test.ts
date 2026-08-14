@@ -233,6 +233,23 @@ describe('navigate', () => {
     expect(await resolveGlobalCommandTarget(env.repo, WS)).toMatchObject({blockId: 'b-second'})
   })
 
+  // The last place "which pane is visible" had two answers: mobile renders the
+  // ACTIVE pane, but `'main'` indexed raw row order. Same class as the
+  // maximize bugs, just never reported — a navigator gesture that reaches
+  // `'main'` on a tablet lands in a pane that isn't on screen.
+  it("target 'main' on mobile lands in the pane mobile actually renders", async () => {
+    stubViewport(true)
+    const layoutSession = await layoutSessionBlock()
+    await insertPanelRow(env.repo, layoutSession, 'b-first')
+    const visibleOnMobile = await insertPanelRow(env.repo, layoutSession, 'b-last')
+    expect(await currentActivePanelId()).toBe(visibleOnMobile)
+
+    const dest = await navigate(env.repo, {target: 'main', blockId: 'b-landed'})
+
+    expect(dest?.panelId).toBe(visibleOnMobile)
+    expect(await currentPanelBlockIds()).toEqual(['b-first', 'b-landed'])
+  })
+
   // Mobile renders by ACTIVE pane and ignores the flag, so narrowing to the
   // flagged row there lands in a pane the user is not looking at — the desktop
   // bug, mirrored. Reachable with no desktop and no sync: `#ws/a;max/b` on a

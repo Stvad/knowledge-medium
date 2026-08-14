@@ -52,8 +52,8 @@ import { isMobileViewport } from '@/utils/viewport'
 import {
   insertPanelRow,
   insertSidebarStackedPanel,
-  isPanelRowMaximized,
-  panelRowsInLayoutOrder,
+  allPanelRowsInLayoutOrder,
+  visiblePanelRows,
 } from '@/utils/panelLayoutProjection'
 
 export type NavigateInput =
@@ -158,36 +158,23 @@ const setActivePanel = async (
 
 const panelRowsForLayoutSession = async (
   layoutSessionBlock: Block,
-) => panelRowsInLayoutOrder(
+) => allPanelRowsInLayoutOrder(
   layoutSessionBlock.id,
   await layoutSessionBlock.repo.query.subtree({id: layoutSessionBlock.id, hidePropertyChildren: true}).load(),
 )
 
-/** The panel rows the user can actually SEE — ask this rather than indexing
- *  into raw row order, which stopped meaning "visible" once a pane could be
- *  maximized (`LayoutRenderer` renders a flagged pane ALONE on desktop).
- *
- *  MOBILE IS NOT NARROWED, and that is the whole subtlety. `LayoutRenderer`
- *  ignores `panelMaximizedProp` on a narrow viewport and renders by ACTIVE
- *  pane instead — so narrowing to the flagged row here would answer with a
- *  pane the user is not looking at, i.e. reintroduce on mobile exactly the bug
- *  this helper fixes on desktop. Reachable with no desktop and no sync:
- *  opening `#ws/a;max/b` on a phone reconciles the flag onto `a` while the
- *  pointer seeds to `b`, and the phone renders `b`.
- *
- *  Unnarrowed is also POSITIVELY right for `'active'`, not merely harmless:
- *  `find(pointer) ?? at(-1)` over the full rows is the same rule
- *  `LayoutRenderer` uses to choose the mobile pane, so the two agree by
- *  construction. (`'main'` still answers `panelRows[0]` on mobile, which
- *  predates maximize and is left alone.)
- *
- *  This is the inference `panelMaximizedProp` and `setPanelMaximizedInTx` both
- *  warn against in so many words: "the maximized pane renders alone" is not a
- *  premise you may reason from. It was written here anyway. */
-const visiblePanelRows = (panelRows: readonly BlockData[]): readonly BlockData[] => {
-  if (isMobileViewport()) return panelRows
-  const maximized = panelRows.find(isPanelRowMaximized)
-  return maximized ? [maximized] : panelRows
+/** The panel rows the user can actually SEE — never index raw row order, which
+ *  stopped meaning "visible order" once a pane could be flagged away. The rule
+ *  itself lives in `soloPanelRow`; this only supplies the session's pointer and
+ *  this device's viewport. */
+const visiblePanelRowsForLayoutSession = async (
+  layoutSessionBlock: Block,
+): Promise<readonly BlockData[]> => {
+  await layoutSessionBlock.load()
+  return visiblePanelRows(await panelRowsForLayoutSession(layoutSessionBlock), {
+    activePanelId: layoutSessionBlock.peekProperty(activePanelIdProp),
+    canRenderSplit: !isMobileViewport(),
+  })
 }
 
 /** The panel row a global command should act on: the active pane, narrowed to
@@ -200,8 +187,7 @@ const visiblePanelRows = (panelRows: readonly BlockData[]): readonly BlockData[]
 export const resolveActivePanelRow = async (
   layoutSessionBlock: Block,
 ) => {
-  await layoutSessionBlock.load()
-  const panelRows = visiblePanelRows(await panelRowsForLayoutSession(layoutSessionBlock))
+  const panelRows = await visiblePanelRowsForLayoutSession(layoutSessionBlock)
   const activePanelId = layoutSessionBlock.peekProperty(activePanelIdProp)
   // The `find` miss is load-bearing here, not just a guard: an inbound `;max`
   // link sets the flag and leaves the pointer alone, and the coercion that
@@ -243,7 +229,7 @@ const resolveDestination = async (
         : null
     case 'main': {
       const ls = await resolveLayoutSessionBlock(repo, workspaceId)
-      const panels = visiblePanelRows(await panelRowsForLayoutSession(ls))
+      const panels = await visiblePanelRowsForLayoutSession(ls)
       return panels[0]
         ? {kind: 'panel', workspaceId, panelId: panels[0].id}
         : {kind: 'create-row', workspaceId}
