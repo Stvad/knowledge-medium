@@ -387,13 +387,17 @@ const TALLY: TierRule = {ok: v => Number.isInteger(v) && v >= 0, expected: 'a wh
  *  `config.sets - delta`, so "-1" (a plausible way to write "one fewer") ADDS
  *  a set on the first session back. A fractional one survives all the way to
  *  the block expansion, where `i < 2.5` quietly stamps three. */
-const tierNumber = (
+const tierNumber = <Fallback extends number | undefined>(
   props: Record<string, unknown> | undefined,
   key: string,
   rule: TierRule,
-  fallback: {id: string; base: number | undefined; absent: number | undefined},
+  // Generic over the fallbacks so the result is only optional when one of them
+  // is: `maxGapDays` and `sessionsToNormal` fall back to a built-in row that
+  // always states them, and the caller should not have to re-assert that with
+  // a `?? 0` that can never fire.
+  fallback: {id: string; base: Fallback; absent: Fallback},
   warnings: string[],
-): number | undefined => {
+): number | Fallback => {
   const value = numProp(props, key)
   if (value === undefined) return fallback.absent
   if (!rule.ok(value)) {
@@ -539,12 +543,12 @@ const parseReentry = (root: PlanNode, warnings: string[]): ReentryTier[] | undef
       label: head.trim() || base.label || id,
       maxGapDays,
       guidance: tail || base.guidance || '',
-      pct: tierNumber(props, FIELD.layoffPct, FRACTION, {id, base: base.pct, absent: 1}, warnings) ?? 1,
+      pct: tierNumber(props, FIELD.layoffPct, FRACTION, {id, base: base.pct, absent: 1}, warnings),
       ...sets,
       repMin: invertedWindow ? base.repMin : statedRepMin,
       repMax: invertedWindow ? base.repMax : statedRepMax,
-      sessionsToNormal: tierNumber(props, FIELD.sessionsToNormal, TALLY, {id, base: base.sessionsToNormal, absent: base.sessionsToNormal}, warnings) ?? 0,
-      rampPerSession: tierNumber(props, FIELD.rampPerSession, RAMP, {id, base: base.rampPerSession, absent: 0}, warnings) ?? 0,
+      sessionsToNormal: tierNumber(props, FIELD.sessionsToNormal, TALLY, {id, base: base.sessionsToNormal, absent: base.sessionsToNormal}, warnings),
+      rampPerSession: tierNumber(props, FIELD.rampPerSession, RAMP, {id, base: base.rampPerSession, absent: 0}, warnings),
     })
     matched += 1
   }
