@@ -15,6 +15,7 @@ import {
   deriveReferenceColumns,
   sameTxReferenceTargetLookups,
 } from '@/data/internals/referenceTargetProcessor'
+import { hasOpaqueContent } from '@/data/properties'
 import {
   parseReferences,
   rewriteBlockRefs,
@@ -283,12 +284,21 @@ const retargetSource = async (
     }
   }
 
-  const nextContent = retargetReferenceContent(
-    current.content,
-    event.fromId,
-    event.intoId,
-    aliasReplacements,
-  )
+  // Opaque content is not prose — leave the BYTES alone. Deliberately not
+  // an early return: with the content unchanged every replaced alias is
+  // still "remaining", so it lands in `strandedAliases` below and its stale
+  // content edge is dropped, while genuine property references still
+  // retarget. Returning early would leave those edges pointing at the
+  // tombstoned merge source forever, since the references processor no
+  // longer re-parses this block to rebuild them.
+  const nextContent = hasOpaqueContent(current, tx.opaqueContentTypes)
+    ? current.content
+    : retargetReferenceContent(
+      current.content,
+      event.fromId,
+      event.intoId,
+      aliasReplacements,
+    )
   // Aliases this merge MEANT to rewrite whose span is still standing in
   // the rewritten content. Two ways in, one treatment:
   //   - the replacement could not be rendered at all (`null`), so the span

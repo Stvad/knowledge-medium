@@ -45,6 +45,7 @@ import {
   sameTxReferenceTargetLookups,
 } from '@/data/internals/referenceTargetProcessor'
 import { isPropertyFieldRow, isPropertyValueRow } from '@/data/propertyChildren'
+import { hasOpaqueContent } from '@/data/properties'
 import { inlineBlockRefs } from './referenceParser.ts'
 
 export const INLINE_DELETED_BLOCK_REFERENCES_PROCESSOR =
@@ -131,7 +132,14 @@ const inlineSource = async (
   if (await isPropertyValueRow(tx, current)) return
   if (await isPropertyFieldRow(tx, current)) return
 
-  const nextContent = inlineBlockRefs(current.content, deletedId, inlineContent)
+  // Opaque content is not prose — leave the BYTES alone. Deliberately not
+  // an early return: `nextReferences` below drops the stale block-ref entry
+  // independently of the rewrite, and returning early would leave it
+  // pointing at a deleted block forever, since the references processor no
+  // longer re-parses this block to rebuild it.
+  const nextContent = hasOpaqueContent(current, tx.opaqueContentTypes)
+    ? current.content
+    : inlineBlockRefs(current.content, deletedId, inlineContent)
   const nextReferences = normalizeReferences(
     current.references.filter(ref => !isContentBlockRefTo(ref, deletedId)),
   )

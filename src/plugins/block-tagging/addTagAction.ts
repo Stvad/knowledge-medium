@@ -19,14 +19,25 @@ const runAddTagFlow = async (blocks: readonly Block[]): Promise<void> => {
   if (!choice) return
   try {
     const result = await appendTagToBlocks(blocks, choice.tagName)
+    // A refusal is the one outcome the user can't infer from the outline,
+    // so it rides along with whatever else happened rather than losing a
+    // priority contest: a mixed selection (one already tagged, one opaque)
+    // is not "every selected block already carries the tag".
+    const refused = result.skippedOpaque > 0
+      ? ` ${result.skippedOpaque} skipped — content isn't text (e.g. extension source).`
+      : ''
     if (result.updated > 0) {
       showSuccess(
-        `Tagged ${result.updated} block${result.updated === 1 ? '' : 's'} with [[${choice.tagName}]]`,
+        `Tagged ${result.updated} block${result.updated === 1 ? '' : 's'} `
+        + `with [[${choice.tagName}]].${refused}`,
       )
     } else if (result.alreadyTagged > 0) {
-      showError(`Every selected block already carries [[${choice.tagName}]]`)
-    } else if (result.skippedOpaque > 0) {
-      showError("Can't tag a block whose content isn't text (e.g. extension source)")
+      showError(
+        `Every ${refused ? 'other ' : ''}selected block already carries `
+        + `[[${choice.tagName}]].${refused}`,
+      )
+    } else if (refused) {
+      showError(`Nothing tagged.${refused}`)
     } else {
       showError('No blocks were tagged')
     }

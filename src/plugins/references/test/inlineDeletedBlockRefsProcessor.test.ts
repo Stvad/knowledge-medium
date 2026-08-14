@@ -101,6 +101,45 @@ describe('references.inlineDeletedBlockReferences', () => {
     expect(env.read('s')!.referenceTargetId).toBeNull()
   })
 
+  // An opaque source can still carry a legacy content-derived edge from
+  // before it was excluded from parsing. Convergence is lazy, so that edge
+  // outlives the exclusion — and inlining into it would splice prose into
+  // executable source. The two halves are independent and BOTH matter: the
+  // bytes stay, the stale edge goes. An early return would keep the edge
+  // pointing at a deleted block forever.
+  it('leaves an opaque source\'s bytes alone but still drops its stale edge', async () => {
+    const source = `const doc = "((${D}))"`
+    // Born as PROSE so the edge is real, then made opaque by a RAW write.
+    // Creating it opaque would prove nothing: the references processor
+    // drops content edges on opaque blocks, so the edge would be gone
+    // before the delete and both assertions would pass with the guard
+    // removed. A raw `writeTransaction` maintains `block_references` but
+    // fires no processor — which is also exactly how a pre-upgrade block
+    // that predates the exclusion looks.
+    await env.repo.tx(async tx => {
+      await tx.create({id: D, workspaceId: WS, parentId: null, orderKey: 'a0', content: 'deleted body'})
+      await tx.create({
+        id: 's', workspaceId: WS, parentId: null, orderKey: 'a1',
+        content: source,
+        references: [{id: D, alias: D}],
+      })
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.awaitProcessors()
+    expect(env.read('s')!.references).toEqual([{id: D, alias: D}])
+
+    await env.h.db.writeTransaction(async t => {
+      await t.execute(
+        `UPDATE blocks SET properties_json = ? WHERE id = ?`,
+        [JSON.stringify({types: ['extension']}), 's'],
+      )
+    })
+
+    await env.repo.mutate.delete({id: D})
+
+    expect(env.read('s')!.content).toBe(source)
+    expect(env.read('s')!.references).toEqual([])
+  })
+
   it('inlines plain and embed marks as content but keeps an aliased mark\'s label', async () => {
     await env.repo.tx(async tx => {
       await tx.create({id: D, workspaceId: WS, parentId: null, orderKey: 'a0', content: 'BODY'})
