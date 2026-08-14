@@ -462,14 +462,23 @@ export const hasBlockType = (
  *  Reads `properties.types` RAW rather than via `getBlockTypes`/
  *  `hasBlockType`: their `string-list` codec THROWS on a malformed value,
  *  and this runs in post-commit processors where a throw aborts derivation
- *  after the user's write has committed. Total by construction, and a
- *  non-string element is tolerated — the safe failure is "treat it as
- *  opaque", not "parse a source bundle as prose". */
+ *  after the user's write has committed. A non-string element is tolerated
+ *  — the safe failure is "treat it as opaque", not "parse a source bundle
+ *  as prose".
+ *
+ *  Total for `properties` ITSELF too, not just for the `types` value. The
+ *  type says `Record`, but callers that decode a raw `properties_json`
+ *  column reach here with whatever the column held: the literal `null`
+ *  parses to `null`, which is syntactically valid JSON and so never hits a
+ *  `JSON.parse` fallback. Indexing that threw and took the whole caller
+ *  down with it (found by review on the find-replace search). */
 export const hasOpaqueContent = (
   data: Pick<BlockData, 'properties'>,
   opaqueTypes: ReadonlySet<string>,
 ): boolean => {
-  const types = data.properties[typesProp.name]
+  const properties: unknown = data.properties
+  if (properties === null || typeof properties !== 'object') return false
+  const types = (properties as Record<string, unknown>)[typesProp.name]
   return Array.isArray(types) && types.some(t => opaqueTypes.has(t))
 }
 

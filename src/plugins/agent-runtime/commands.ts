@@ -3,7 +3,7 @@ import ReactDOM from 'react-dom'
 import type { Repo } from '@/data/repo'
 import type { Block } from '@/data/block'
 import { ChangeScope, type BlockData, type BlockReference, type SubtreeRow } from '@/data/api'
-import { aliasesProp, blockTypeTypeIdProp, extensionDescriptionProp, extensionNameProp, getBlockTypes, seedKeyProp, topLevelBlockIdProp } from '@/data/properties.js'
+import { aliasesProp, blockTypeTypeIdProp, extensionDescriptionProp, extensionNameProp, getBlockTypes, hasOpaqueContent, seedKeyProp, topLevelBlockIdProp } from '@/data/properties.js'
 import { BLOCK_TYPE_TYPE, EXTENSION_TYPE, PAGE_TYPE } from '@/data/blockTypes'
 import { BACKLINKS_FOR_BLOCK_QUERY, type BacklinksFilter } from '@/plugins/backlinks/query.js'
 import { resolveBacklinksFilter, type BacklinksFilterSpec } from '@/plugins/backlinks/resolveFilter.js'
@@ -595,7 +595,14 @@ const reconcileMarkdownSubtree = async (
         // matched reply nodes isn't evicted just to close the gap (see the
         // function's BOUNDARY note).
         idMap.set(node.id, match.id)
-        if (match.content !== node.content) {
+        // Reconciliation collects by `agent:subtreeKey`, so it writes to
+        // whatever currently sits at that position — including a block
+        // retagged opaque since the key was minted. Overwriting an
+        // extension's stored source with reply markdown destroys it, and
+        // the reply is recoverable while the source is not. Position and
+        // parentage still reconcile; only the bytes are left alone.
+        if (match.content !== node.content
+          && !hasOpaqueContent(match, tx.opaqueContentTypes)) {
           await tx.update(match.id, {content: node.content})
         }
         if (match.parentId !== realParentId) {

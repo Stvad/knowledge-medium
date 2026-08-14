@@ -1,7 +1,8 @@
 import { EditorSelection } from '@codemirror/state'
 import { EditorView } from '@codemirror/view'
 import { Block } from '../../data/block'
-import { focusBlock, panelViewModeProp } from '@/data/properties.js'
+import { ChangeScope } from '@/data/api'
+import { focusBlock, hasOpaqueContent, panelViewModeProp } from '@/data/properties.js'
 import type { ShortcutActivationContribution } from '@/extensions/blockInteraction.js'
 import { actionContextsFacet, actionsFacet } from '@/extensions/core.js'
 import type { AppExtension } from '@/facets/facet.js'
@@ -80,11 +81,19 @@ const insertIntoEditor = (editorView: EditorView, text: string): void => {
 }
 
 const appendToBlock = async (block: Block, text: string): Promise<void> => {
-  const data = block.peek() ?? await block.load()
-  if (!data) return
-
-  const separator = data.content.trim().length > 0 ? ' ' : ''
-  await block.setContent(`${data.content}${separator}${text.trim()}`)
+  await block.repo.tx(async tx => {
+    const data = await tx.get(block.id)
+    if (!data || data.deleted) return
+    // The shortcut targets whatever is focused inside the video subtree, so
+    // an opaque block nested there is reachable — and appending a timestamp
+    // to an extension's stored source breaks the module. Inserting a
+    // timestamp targets a block; it does not edit the text the user is
+    // typing (that path goes through `insertIntoEditor` above), so it owes
+    // this check.
+    if (hasOpaqueContent(data, tx.opaqueContentTypes)) return
+    const separator = data.content.trim().length > 0 ? ' ' : ''
+    await tx.update(block.id, {content: `${data.content}${separator}${text.trim()}`})
+  }, {scope: ChangeScope.BlockDefault, description: 'insert video timestamp'})
 }
 
 const createTimestampNote = async (

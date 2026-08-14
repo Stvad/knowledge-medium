@@ -107,6 +107,22 @@ describe('hasOpaqueContent', () => {
   it('still matches when a non-string element sits alongside an opaque type', () => {
     expect(hasOpaqueContent({properties: {[typesProp.name]: ['extension', 42]}}, opaqueTypes)).toBe(true)
   })
+
+  // `properties` ITSELF, not just the `types` value. A caller decoding a raw
+  // `properties_json` column gets whatever the column held, and the literal
+  // `null` is valid JSON — so it never reaches a `JSON.parse` fallback and
+  // arrives here as an actual null. Indexing it used to throw and abort the
+  // caller (the find-replace search) rather than skipping one bad row.
+  it.each([
+    ['null', null],
+    ['a scalar', 'extension'],
+    ['an array', ['extension']],
+  ])('is total when properties itself is %s', (_label, properties) => {
+    expect(hasOpaqueContent(
+      {properties} as unknown as Pick<BlockData, 'properties'>,
+      opaqueTypes,
+    )).toBe(false)
+  })
 })
 
 describe('focusedBlockLocationFromProperties', () => {
