@@ -19,7 +19,7 @@ import {
   type BlockData,
   type BlockReference,
 } from '@/data/api'
-import { aliasesProp, typesProp } from '@/data/properties'
+import { aliasesProp, getBlockTypes, typesProp } from '@/data/properties'
 import { BlockCache } from '@/data/blockCache'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
@@ -517,6 +517,26 @@ describe('repo.query.searchByContent', () => {
 })
 
 describe('repo.query.recentBlocks', () => {
+  // The query does NOT filter opaque rows — consumers do, from the
+  // `properties` on these snapshots. So type membership is part of what the
+  // snapshot means, and gaining a type is a property-only edit that
+  // `kernel.content` deliberately does not report. Both loads use identical
+  // args, so they share one handle: an unchanged second result is the cache.
+  it('re-resolves when a returned row gains an opaque type', async () => {
+    await create({id: 'a', content: 'a block'})
+
+    const first = asBlocks(await env.repo.query.recentBlocks({workspaceId: WS, limit: 5}).load())
+    expect(first.map(r => r.id)).toEqual(['a'])
+
+    await env.repo.tx(
+      tx => tx.setProperty('a', typesProp, ['extension']),
+      {scope: ChangeScope.BlockDefault},
+    )
+
+    const second = asBlocks(await env.repo.query.recentBlocks({workspaceId: WS, limit: 5}).load())
+    expect(getBlockTypes(second[0])).toContain('extension')
+  })
+
   it('returns recent non-empty blocks in a workspace', async () => {
     await create({id: 'old', content: 'old block'})
     await create({id: 'empty', content: ''})

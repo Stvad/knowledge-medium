@@ -187,6 +187,11 @@ const buildWikilinkSource = ({repo}: CodeMirrorExtensionContext): CompletionSour
     },
   })
 
+/** Rows the empty-filter block-ref dropdown shows, and how many extra to
+ *  pull so an opaque run at the top of the recency list cannot empty it. */
+const BLOCKREF_RECENT_LIMIT = 12
+const BLOCKREF_RECENT_OVERFETCH = 4
+
 const buildBlockrefSource = ({repo}: CodeMirrorExtensionContext): CompletionSource =>
   blockrefCompletionSource({
     searchBlocks: async (filter: string) => {
@@ -201,16 +206,23 @@ const buildBlockrefSource = ({repo}: CodeMirrorExtensionContext): CompletionSour
         ? await searchBlocksAcrossSources(repo, {
           workspaceId,
           query,
-          limit: 12,
+          limit: BLOCKREF_RECENT_LIMIT,
         })
         // `recentBlocks` is a plain recency read with no search source in
         // front of it, so the opaque filter in `coreContentSearchSource`
         // never sees this branch — a freshly installed extension is exactly
         // the kind of row it returns, with its payload as the label.
+        //
+        // Over-fetch, because the filter runs after the SQL limit: with the
+        // 12 most recent rows all opaque (an extension install writes
+        // several at once) an exact-limit fetch returns nothing at all,
+        // and there is no pagination behind this dropdown.
         : (await repo.query.recentBlocks({
           workspaceId,
-          limit: 12,
-        }).load()).filter(block => !hasOpaqueContent(block, repo.opaqueContentTypes))
+          limit: BLOCKREF_RECENT_LIMIT * BLOCKREF_RECENT_OVERFETCH,
+        }).load())
+          .filter(block => !hasOpaqueContent(block, repo.opaqueContentTypes))
+          .slice(0, BLOCKREF_RECENT_LIMIT)
       return blocks.map(block => ({id: block.id, content: block.content}))
     },
   })

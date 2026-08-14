@@ -1171,6 +1171,19 @@ export const recentBlocksQuery = defineQuery<
       channel: KERNEL_CONTENT_CHANNEL,
       key: kernelContentKey(workspaceId),
     })
+    // Same reasoning as `searchByContent`: this returns whole BlockData
+    // snapshots and consumers filter on `properties` (block-ref completion
+    // drops opaque rows), so a snapshot whose types changed is stale in a
+    // way the caller acts on — and gaining a type is a property-only edit
+    // `kernel.content` does not report. Scoped to the opaque type ids, not
+    // all property edits, which is the fan-out the comment above avoids.
+    for (const type of ctx.repo.opaqueContentTypes) {
+      ctx.depend({
+        kind: 'plugin',
+        channel: TYPED_BLOCKS_TYPE_CHANNEL,
+        key: typedBlocksTypeKey(workspaceId, type),
+      })
+    }
     const rows = await ctx.db.getAll<BlockRow>(
       SELECT_RECENT_BLOCKS_SQL, [workspaceId, limit],
     )
