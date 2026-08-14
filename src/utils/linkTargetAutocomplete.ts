@@ -35,6 +35,18 @@ export interface LinkTargetAliasMatch {
   alias: string
   blockId: string
   content: string
+  /** The named block's type ids. Unlike the block rows, alias rows come
+   *  from an index join with no properties on it, so these arrive on the
+   *  SECOND callback (`onBlocks`, which re-delivers the aliases) and are
+   *  `[]` on the first. That keeps the alias paint — the fast half of the
+   *  progressive search — exactly as quick as it was.
+   *
+   *  These describe the block the row OPENS. The `[[` dropdown withholds
+   *  a type hint for a contested alias because inserting the text resolves
+   *  to the oldest claimant rather than the ranked winner; a quick-find
+   *  Pages row carries `blockId` and navigates straight to it, so the same
+   *  hazard does not apply. */
+  typeIds: readonly string[]
 }
 
 /** One row of the `[[` completion dropdown: the alias to insert plus the
@@ -194,6 +206,7 @@ const aliasMatchesFromRows = (
       alias: row.alias,
       blockId: row.blockId,
       content: row.content,
+      typeIds: [],
     })
   }
   return aliases
@@ -218,12 +231,20 @@ const blockMatchesFromRows = (
   return blocks
 }
 
+/** `core.blockTypesByIds` validates `blockIds` at 200 entries, and a zod
+ *  failure REJECTS — a caller asking for 201 rows would lose the whole
+ *  search rather than some types. Both of today's display callers are far
+ *  under it, but the alias fetch deliberately honours limits above its own
+ *  ceiling (`Math.max(limit, …)`), so the ids reaching here are only ever
+ *  as bounded as the caller. Chunk instead of trusting that. */
+const BLOCK_TYPES_QUERY_MAX_IDS = 200
+
 /** Types for a bounded set of already-chosen blocks, as a lookup keyed
- *  by block id. One `block_types` read for the whole page of results:
- *  the index is keyed `(block_id, type)`, so this is `ids.length` seeks
- *  and stays flat as the workspace grows — unlike folding the types into
- *  the fuzzy pre-filter, which would pay per *scanned* row rather than
- *  per *displayed* one. */
+ *  by block id. One `block_types` read per 200 results: the index is
+ *  keyed `(block_id, type)`, so this is `ids.length` seeks and stays flat
+ *  as the workspace grows — unlike folding the types into the fuzzy
+ *  pre-filter, which would pay per *scanned* row rather than per
+ *  *displayed* one. */
 const loadTypeIdsByBlock = async (
   repo: Repo,
   workspaceId: string,
@@ -231,11 +252,22 @@ const loadTypeIdsByBlock = async (
 ): Promise<Map<string, string[]>> => {
   const byBlock = new Map<string, string[]>()
   if (blockIds.length === 0) return byBlock
-  const rows = await repo.query.blockTypesByIds({workspaceId, blockIds}).load()
-  for (const row of rows) {
-    const existing = byBlock.get(row.blockId)
-    if (existing) existing.push(row.type)
-    else byBlock.set(row.blockId, [row.type])
+  const chunks: string[][] = []
+  for (let start = 0; start < blockIds.length; start += BLOCK_TYPES_QUERY_MAX_IDS) {
+    chunks.push(blockIds.slice(start, start + BLOCK_TYPES_QUERY_MAX_IDS))
+  }
+  // Concurrent: the chunks are independent reads, and the single-connection
+  // VFS serialises them anyway — awaiting in sequence would only add
+  // round-trip latency for the same work.
+  const results = await Promise.all(
+    chunks.map(chunk => repo.query.blockTypesByIds({workspaceId, blockIds: chunk}).load()),
+  )
+  for (const rows of results) {
+    for (const row of rows) {
+      const existing = byBlock.get(row.blockId)
+      if (existing) existing.push(row.type)
+      else byBlock.set(row.blockId, [row.type])
+    }
   }
   return byBlock
 }
@@ -395,10 +427,13 @@ export const searchAliasMatches = async (
     recentBlockIds: args.recentBlockIds,
     limit: args.limit,
   })
+  // Types are attached later, by `searchLinkTargets`, once the surviving
+  // slice is known — see `LinkTargetAliasMatch.typeIds`.
   return rows.map(row => ({
     alias: row.alias,
     blockId: row.blockId,
     content: row.content,
+    typeIds: [],
   }))
 }
 
@@ -676,17 +711,33 @@ export const searchLinkTargetsProgressively = async (
   const blockSeenIds = new Set(seenBlockIds)
   for (const alias of aliases) blockSeenIds.add(alias.blockId)
 
+  // Only the surviving aliases, and only once they are known — so this
+  // starts AFTER the alias paint above and runs alongside the content
+  // search already in flight, costing the second paint no extra wait.
+  const aliasTypesPromise = loadTypeIdsByBlock(
+    repo,
+    workspaceId,
+    aliases.map(alias => alias.blockId),
+  )
+  const withTypes = async (): Promise<LinkTargetAliasMatch[]> => {
+    const typeIdsByBlock = await aliasTypesPromise
+    return aliases.map(alias => ({
+      ...alias,
+      typeIds: typeIdsByBlock.get(alias.blockId) ?? [],
+    }))
+  }
+
   if (blockRowsPromise === null) {
-    const result = {aliases, blocks: []}
+    const result = {aliases: await withTypes(), blocks: []}
     callbacks.onBlocks?.(result.blocks, result)
     return result
   }
 
-  const blockRows = await blockRowsPromise
+  const [blockRows, typedAliases] = await Promise.all([blockRowsPromise, withTypes()])
   if (!blockRows.ok) throw blockRows.error
 
   const blocks = blockMatchesFromRows(blockRows.rows, blockSeenIds).slice(0, limit)
-  const result = {aliases, blocks}
+  const result = {aliases: typedAliases, blocks}
   callbacks.onBlocks?.(blocks, result)
   return result
 }

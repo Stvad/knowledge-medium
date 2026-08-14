@@ -5,7 +5,12 @@ import { afterEach, describe, expect, it } from 'vitest'
 import type { TypeContribution } from '@/data/api'
 import type { LinkTargetBlockMatch } from '@/utils/linkTargetAutocomplete.js'
 import { QuickFindList } from '../QuickFind.tsx'
-import { blockResultItems, recentResultItems, type ResultRowContext } from '../resultItems.tsx'
+import {
+  aliasResultItems,
+  blockResultItems,
+  recentResultItems,
+  type ResultRowContext,
+} from '../resultItems.tsx'
 import { quickFindSelectionAction } from '../selection.ts'
 
 afterEach(() => cleanup())
@@ -301,5 +306,63 @@ describe('blockResultItems', () => {
     expect(chipLabelsOf(notes)).toEqual(['#Person'])
     expect(crumbLineOf(design)).toHaveTextContent('Reading › Papers')
     expect(chipLabelsOf(design)).toEqual(['#Author'])
+  })
+})
+
+describe('aliasResultItems', () => {
+  const aliasRow = (
+    alias: string,
+    blockId: string,
+    typeIds: readonly string[] = [],
+  ) => ({alias, blockId, content: alias, typeIds})
+
+  it('tags a page found BY NAME, the case where the tag disambiguates most', () => {
+    // A page carries its tags in Recents, so losing them the moment you
+    // typed its name read as a bug — and this is the group where
+    // "#person or #project?" is the question being asked.
+    render(
+      <QuickFindList
+        emptyMessage="No results."
+        groups={[{
+          heading: 'Pages',
+          items: aliasResultItems(
+            [aliasRow('Ada Lovelace', 'block-1', ['person'])],
+            rowContext(new Map(), typeRegistry({id: 'person', label: 'Person'})),
+          ),
+        }]}
+        onQueryChange={() => undefined}
+        onSelect={() => undefined}
+        onValueChange={() => undefined}
+        query="ada"
+        value=""
+      />,
+    )
+
+    expect(chipLabelsOf(screen.getByRole('option', {name: /Ada Lovelace/})))
+      .toEqual(['#Person'])
+  })
+
+  it('renders the row before its types have been read', () => {
+    // Alias rows have no properties on them, so types land on the SECOND
+    // search callback. The row must be complete without them, and gaining
+    // one later must cost it nothing.
+    render(
+      <QuickFindList
+        emptyMessage="No results."
+        groups={[{
+          heading: 'Pages',
+          items: aliasResultItems([aliasRow('Ada Lovelace', 'block-1')], rowContext()),
+        }]}
+        onQueryChange={() => undefined}
+        onSelect={() => undefined}
+        onValueChange={() => undefined}
+        query="ada"
+        value=""
+      />,
+    )
+
+    const option = screen.getByRole('option', {name: /Ada Lovelace/})
+    expect(option).toHaveTextContent('Ada Lovelace')
+    expect(chipLabelsOf(option)).toEqual([])
   })
 })

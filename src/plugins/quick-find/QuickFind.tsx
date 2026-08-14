@@ -12,7 +12,6 @@ import {
   type MouseEvent,
 } from 'react'
 import { Search } from 'lucide-react'
-import { truncate } from '@/utils/string'
 import { cn } from '@/lib/utils'
 import {
   Dialog,
@@ -47,7 +46,7 @@ import {
 } from '@/data/stateBlocks.js'
 import { useAncestorCrumbs } from '@/hooks/useAncestorCrumbs.js'
 import { quickFindToggle } from './toggleStore.ts'
-import { blockResultItems, recentResultItems } from './resultItems.tsx'
+import { aliasResultItems, blockResultItems, recentResultItems } from './resultItems.tsx'
 import {
   pushRecentBlockId,
   quickFindUIStateType,
@@ -57,7 +56,6 @@ import {
 } from './recents.ts'
 import {
   nextQuickFindSelection,
-  quickFindAliasValue,
   quickFindCreateValue,
   quickFindDateValue,
   quickFindOpenTargetFromClickModifiers,
@@ -643,24 +641,7 @@ function QuickFindDialog({
   }
 
   if (aliases.length > 0) {
-    groups.push({
-      heading: 'Pages',
-      items: aliases.map(match => ({
-        key: `page:${match.blockId}:${match.alias}`,
-        value: quickFindAliasValue(match),
-        className: 'flex justify-between items-center gap-2',
-        children: (
-          <>
-            <span className="truncate">{match.alias}</span>
-            {match.content && match.content !== match.alias && (
-              <span className="text-xs text-muted-foreground truncate max-w-[40%]">
-                {truncate(match.content, 50)}
-              </span>
-            )}
-          </>
-        ),
-      })),
-    })
+    groups.push({heading: 'Pages', items: aliasResultItems(aliases, rowContext)})
   }
 
   if (blocks.length > 0) {

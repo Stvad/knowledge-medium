@@ -350,6 +350,9 @@ describe('link target autocomplete helpers', () => {
         searchByContent: vi.fn(() => ({
           load: () => blockRows.promise,
         })),
+        // Alias rows carry no properties, so their types are a second
+        // read — see `LinkTargetAliasMatch.typeIds`.
+        blockTypesByIds: vi.fn(() => ({load: () => Promise.resolve([])})),
       },
     } as unknown as Repo
     const phases: string[] = []
@@ -375,7 +378,7 @@ describe('link target autocomplete helpers', () => {
     ])
 
     await expect(search).resolves.toEqual({
-      aliases: [{alias: 'Dating', blockId: 'page', content: 'Dating notes'}],
+      aliases: [{alias: 'Dating', blockId: 'page', content: 'Dating notes', typeIds: []}],
       blocks: [{
         blockId: 'block',
         content: 'My Dating notes',
@@ -385,6 +388,39 @@ describe('link target autocomplete helpers', () => {
       }],
     })
     expect(phases).toEqual(['aliases:page', 'blocks:block'])
+  })
+
+  it('chunks the type read so a large result set does not reject the search', async () => {
+    // `core.blockTypesByIds` validates blockIds at 200 and a zod failure
+    // REJECTS — so handing it every surviving alias would lose the whole
+    // search, not just the types, the moment a caller asked for more than
+    // 200. Today's callers ask for 25, but the alias fetch deliberately
+    // honours limits above its own ceiling, so the bound is the caller's.
+    const aliasRows = Array.from({length: 250}, (_, i) => ({
+      alias: `Dating ${i}`, blockId: `page-${i}`, content: `Dating ${i}`, updatedAt: 1,
+    }))
+    const blockTypesByIds = vi.fn(({blockIds}: {blockIds: string[]}) => ({
+      load: () => Promise.resolve(blockIds.map(blockId => ({blockId, type: 'person'}))),
+    }))
+    const repo = {
+      query: {
+        aliasMatchesFuzzy: vi.fn(() => ({load: () => Promise.resolve(aliasRows)})),
+        searchByContent: vi.fn(() => ({load: () => Promise.resolve([])})),
+        blockTypesByIds,
+      },
+    } as unknown as Repo
+
+    const result = await searchLinkTargetsProgressively(repo, {
+      workspaceId: WS,
+      query: 'dating',
+      limit: 250,
+    }, {})
+
+    expect(result.aliases).toHaveLength(250)
+    // Two reads, neither over the cap — and every row still got its type.
+    const sizes = blockTypesByIds.mock.calls.map(([args]) => args.blockIds.length)
+    expect(sizes).toEqual([200, 50])
+    expect(result.aliases.every(alias => alias.typeIds.includes('person'))).toBe(true)
   })
 
   it('skips the content scan for short queries (under 3 chars)', async () => {
@@ -403,6 +439,7 @@ describe('link target autocomplete helpers', () => {
           ]),
         })),
         searchByContent,
+        blockTypesByIds: vi.fn(() => ({load: () => Promise.resolve([])})),
       },
     } as unknown as Repo
 
