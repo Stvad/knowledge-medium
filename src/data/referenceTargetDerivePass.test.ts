@@ -125,6 +125,29 @@ describe('reference-target initial derive pass', () => {
     expect(await readColumn('tombstone-ref')).toBe('dead-target')
   })
 
+  // The deferred paths (this open-time sweep and the alias-arrival drain)
+  // both funnel through `stampReferenceTargets`, and their candidate scans
+  // run OUTSIDE the write lock. A marked payload on an opaque row would
+  // otherwise gain `is_field_form` and project as property machinery —
+  // permanently, since both repair scans require `reference_target_id IS
+  // NULL` and a stamped row is never re-found.
+  it('does not stamp an opaque row, even when its whole content is a marked ref', async () => {
+    await seedRow({
+      id: 'ext',
+      content: `::((${STATUS_FIELD_ID}))`,
+      properties: {types: ['extension']},
+    })
+    await seedRow({id: 'prose', content: `::((${STATUS_FIELD_ID}))`})
+
+    const repo = setup()
+    await runPass(repo)
+
+    expect(await readColumn('ext')).toBeNull()
+    // The control: an identical PROSE row does stamp, so this is the opacity
+    // check and not the pass failing to reach either row.
+    expect(await readColumn('prose')).toBe(STATUS_FIELD_ID)
+  })
+
   it('is local bookkeeping: no updated_at advance, no upload enqueued, no user metadata', async () => {
     await seedRow({id: 'block-ref', content: '((some-target))'})
     const before = await sharedDb.db.get<{updated_at: number; user_updated_at: number}>(

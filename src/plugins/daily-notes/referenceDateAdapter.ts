@@ -6,7 +6,7 @@
  * form for the calendar sheet and scrub gestures.
  */
 import type { EditorView } from '@codemirror/view'
-import type { Block } from '@/data/block'
+import { blockContentIsOpaque, type Block } from '@/data/block'
 import { ChangeScope, type BlockData } from '@/data/api'
 import { hasOpaqueContent } from '@/data/properties'
 import {
@@ -118,6 +118,12 @@ export const createEditorReferenceDateAdapter = (editorView: EditorView): BlockD
     singleDateReferenceMatch(editorView.state.doc.toString())?.iso ?? null,
   setIso: async (block: Block, iso: string) => {
     if (block.repo.isReadOnly) return false
+    // Refuse BEFORE the dispatch: the editor's own debounced commit
+    // persists whatever the doc holds, so the `setContent` below is not the
+    // only write path and a guard after it would be too late. This variant
+    // has no production wiring today; the check is here so wiring it up
+    // later cannot reintroduce the hole its sibling already closed.
+    if (blockContentIsOpaque(block)) return false
     const sourceContent = editorView.state.doc.toString()
     const nextContent = replaceSingleDateReferenceContent(sourceContent, iso)
     if (nextContent === null || nextContent === sourceContent) return false

@@ -147,7 +147,8 @@ import {
   SELECT_BLOCK_BY_ID_SQL,
 } from './internals/kernelQueries'
 import type { InvalidationRule } from './invalidation'
-import { KERNEL_PROPERTY_SEEDS } from './properties'
+import { KERNEL_PROPERTY_SEEDS, hasOpaqueContent } from './properties'
+import { safeJsonParse } from './blockSchema'
 import { KERNEL_TYPE_CONTRIBUTIONS } from './blockTypes'
 import { propertiesPageBlockId } from './propertiesPage'
 import { typesPageBlockId } from './typesPage'
@@ -2867,6 +2868,21 @@ export class Repo {
             // Bit-only stamps (marked row, unresolvable span) skip when the
             // bit already matches — nothing to write, no snapshot churn.
             || (targetId === null && (freshRow.is_field_form === 1) === isFieldForm)
+            // Opaque content is not prose, so it has no whole-block reference
+            // to stamp. Checked HERE rather than in the two callers because
+            // both the open-time sweep and the alias-arrival drain funnel
+            // through this CAS, and this is the only point that reads the row
+            // under the write lock — the candidate scans run outside it, so a
+            // block can become opaque between scan and stamp. Without it a
+            // marked payload (`::((definitionId))`) gains `is_field_form` and
+            // projects as property machinery, which the same-tx and
+            // sync-arrival guards would then never revisit: both repair scans
+            // require `reference_target_id IS NULL`, so a stamped row is
+            // never re-found.
+            || hasOpaqueContent(
+              {properties: safeJsonParse<Record<string, unknown>>(freshRow.properties_json, {})},
+              this._opaqueContentTypes,
+            )
           ) continue
           await tx.execute(
             'UPDATE blocks SET reference_target_id = ?, is_field_form = ? WHERE id = ?',
