@@ -357,6 +357,55 @@ const parseSessions = (
 export const isReentryTier = (node: PlanNode): boolean =>
   nodeTypes(node).includes(REENTRY_TIER_TYPE)
 
+interface TierRule {
+  ok: (value: number) => boolean
+  expected: string
+}
+
+const FRACTION: TierRule = {ok: v => v > 0 && v <= 1, expected: 'a fraction above 0 and at most 1 (90% is 0.9)'}
+const RAMP: TierRule = {ok: v => v >= 0 && v <= 1, expected: 'a fraction from 0 to 1 (+5% per session is 0.05)'}
+const COUNT: TierRule = {ok: v => Number.isInteger(v) && v > 0, expected: 'a whole number above 0'}
+const DAYS: TierRule = {ok: v => v > 0, expected: 'a number of days above 0'}
+const TALLY: TierRule = {ok: v => Number.isInteger(v) && v >= 0, expected: 'a whole number, 0 or more'}
+
+/** One number off a tier row, with the three states kept apart.
+ *
+ *  ABSENT is a statement — "this row changes no set count" — and resolves to
+ *  `absent`, which is the neutral value. PRESENT BUT OUT OF RANGE is a row we
+ *  cannot read, and resolves to `base`: the built-in row's value, the same
+ *  answer a contradiction gets and for the same reason. Collapsing the two
+ *  would make a typo silently mean "no change", and for `strength:reentryPct`
+ *  that is the direction that puts pre-break weight back on the bar.
+ *
+ *  Every field needs this because the seeded properties are plain number
+ *  editors: nothing between the outline and here rejects `90` for a fraction,
+ *  and the engine's own clamps then hide it. `factorFor` takes
+ *  `Math.min(1, pct + …)`, so a percentage typed the way the row DISPLAYS it
+ *  (`90`, from "90% of last weights") clamps to 1 and applies no cut at all —
+ *  reading as "same weights" in the banner while the row says 90%. A negative
+ *  `strength:setsDelta` inverts instead of clamping: `setsFor` computes
+ *  `config.sets - delta`, so "-1" (a plausible way to write "one fewer") ADDS
+ *  a set on the first session back. A fractional one survives all the way to
+ *  the block expansion, where `i < 2.5` quietly stamps three. */
+const tierNumber = (
+  props: Record<string, unknown> | undefined,
+  key: string,
+  rule: TierRule,
+  fallback: {id: string; base: number | undefined; absent: number | undefined},
+  warnings: string[],
+): number | undefined => {
+  const value = numProp(props, key)
+  if (value === undefined) return fallback.absent
+  if (!rule.ok(value)) {
+    warnings.push(
+      `Re-entry row "${fallback.id}": \`${key}\` is ${value}, expected ${rule.expected} — `
+      + 'ignored, and the built-in row\'s value used instead.',
+    )
+    return fallback.base
+  }
+  return value
+}
+
 /** The re-entry table, read from the rows' properties.
  *
  *  Nothing here reads the sentence for a number, and that is the point. The
@@ -410,7 +459,7 @@ const parseReentry = (root: PlanNode, warnings: string[]): ReentryTier[] | undef
 
     // No bound means no gap it can classify: `tierFor` would never select it,
     // or would select it at Infinity ahead of a row that should have won.
-    const maxGapDays = numProp(props, FIELD.maxGapDays) ?? base?.maxGapDays
+    const maxGapDays = tierNumber(props, FIELD.maxGapDays, DAYS, {id, base: base?.maxGapDays, absent: base?.maxGapDays}, warnings)
     if (maxGapDays === undefined) {
       warnings.push(
         `Re-entry row "${id}" is not one of the built-in tiers and states no \`${FIELD.maxGapDays}\` — ignored.`,
@@ -421,20 +470,29 @@ const parseReentry = (root: PlanNode, warnings: string[]): ReentryTier[] | undef
     // Two ways to say how many sets, and a row states one. Resolving a row
     // that says both by precedence is how the original bug hid: the losing
     // statement stayed on screen, describing a prescription nobody got.
-    const setsOverride = numProp(props, FIELD.targetSets)
-    const setsDelta = numProp(props, FIELD.setsDelta)
+    const setsOverride = tierNumber(props, FIELD.targetSets, COUNT, {id, base: base?.setsOverride, absent: undefined}, warnings)
+    const setsDelta = tierNumber(props, FIELD.setsDelta, TALLY, {id, base: base?.setsDelta, absent: undefined}, warnings)
     const contradicts = setsOverride !== undefined && setsDelta !== undefined
     if (contradicts) {
       warnings.push(
         `Re-entry row "${id}" states both \`${FIELD.targetSets}\` and \`${FIELD.setsDelta}\` — `
         + 'they mean different things (an absolute count vs. one dropped from each lift\'s own target), '
-        + 'so neither is used and the built-in row stands. Keep one.',
+        + 'so the set counts come from the built-in row instead. Everything else this row states '
+        + 'still applies. Keep one.',
       )
     }
     // Unreadable is not the same as absent: an absent field is a statement
-    // ("no set change"), a contradiction is a row we cannot read at all. So
-    // this one falls back to the built-in rather than to neutral — the
+    // ("no set change"), a contradiction is a pair of fields we cannot read.
+    // So this one falls back to the built-in rather than to neutral — the
     // direction that keeps a cut in force instead of quietly removing one.
+    //
+    // Scoped to the set fields, and the warning says so. The row's percentage,
+    // rep window and ramp are each individually readable, and dropping the
+    // whole row over a set-field mistake would throw away a load cut the user
+    // DID state — deciding what weight goes on a bar from an error in an
+    // unrelated field. For a tier the built-ins don't have there is no row to
+    // fall back to either, so the tier would vanish and `tierFor` would hand
+    // the gap to a neighbouring row.
     const sets = contradicts
       ? {
         setsOverride: base?.setsOverride,
@@ -443,7 +501,7 @@ const parseReentry = (root: PlanNode, warnings: string[]): ReentryTier[] | undef
       }
       : {
         setsOverride,
-        setsOverrideSessions: numProp(props, FIELD.setsOverrideSessions),
+        setsOverrideSessions: tierNumber(props, FIELD.setsOverrideSessions, TALLY, {id, base: base?.setsOverrideSessions, absent: undefined}, warnings),
         setsDelta,
       }
 
@@ -452,12 +510,12 @@ const parseReentry = (root: PlanNode, warnings: string[]): ReentryTier[] | undef
       label: head.trim() || base?.label || id,
       maxGapDays,
       guidance: tail || base?.guidance || '',
-      pct: numProp(props, FIELD.layoffPct) ?? 1,
+      pct: tierNumber(props, FIELD.layoffPct, FRACTION, {id, base: base?.pct, absent: 1}, warnings) ?? 1,
       ...sets,
-      repMin: numProp(props, FIELD.repMin),
-      repMax: numProp(props, FIELD.repMax),
-      sessionsToNormal: numProp(props, FIELD.sessionsToNormal) ?? base?.sessionsToNormal ?? 0,
-      rampPerSession: numProp(props, FIELD.rampPerSession) ?? 0,
+      repMin: tierNumber(props, FIELD.repMin, COUNT, {id, base: base?.repMin, absent: undefined}, warnings),
+      repMax: tierNumber(props, FIELD.repMax, COUNT, {id, base: base?.repMax, absent: undefined}, warnings),
+      sessionsToNormal: tierNumber(props, FIELD.sessionsToNormal, TALLY, {id, base: base?.sessionsToNormal, absent: base?.sessionsToNormal}, warnings) ?? 0,
+      rampPerSession: tierNumber(props, FIELD.rampPerSession, RAMP, {id, base: base?.rampPerSession, absent: 0}, warnings) ?? 0,
     })
     matched += 1
   }

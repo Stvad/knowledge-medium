@@ -238,6 +238,68 @@ describe('parsePlan', () => {
     expect(row).toMatchObject({setsDelta: 1, setsOverride: undefined})
   })
 
+  it('refuses a percentage written the way the row displays it', () => {
+    // "90% of last weights" invites `strength:reentryPct: 90`, and the
+    // property is a plain number editor. `factorFor` takes Math.min(1, …), so
+    // 90 clamps to 1 and applies NO cut — the banner then reads "same
+    // weights" while the row says 90%. Falls back to the built-in 0.9 rather
+    // than to neutral: a typo must not be the thing that puts pre-break
+    // weight back on the bar.
+    const plan = node('**Plan**', [
+      node('**Re-entry protocol**', [
+        tier('2–4 weeks → 90%', {[FIELD.tierId]: '2-4w', [FIELD.layoffPct]: 90}),
+      ]),
+    ])
+    const overlay = parsePlan(plan)
+    expect(overlay.warnings.some(w => new RegExp(FIELD.layoffPct).test(w) && /0\.9/.test(w))).toBe(true)
+    expect(overlay.reentry!.find(t => t.id === '2-4w')?.pct).toBe(0.9)
+  })
+
+  it('refuses a negative set delta, which would ADD a set', () => {
+    // `setsFor` computes `config.sets - delta`, so -1 (a plausible way to
+    // write "one fewer") prescribes a set MORE on the first session back —
+    // an inversion, not a clamp.
+    const plan = node('**Plan**', [
+      node('**Re-entry protocol**', [
+        tier('1–2 weeks off → …', {[FIELD.tierId]: '1-2w', [FIELD.setsDelta]: -1}),
+      ]),
+    ])
+    const overlay = parsePlan(plan)
+    expect(overlay.warnings.some(w => new RegExp(FIELD.setsDelta).test(w))).toBe(true)
+    // The built-in 1–2w delta, not the inverted one.
+    expect(overlay.reentry!.find(t => t.id === '1-2w')?.setsDelta).toBe(1)
+  })
+
+  it('refuses a fractional set count, which the block expansion rounds up in silence', () => {
+    const plan = node('**Plan**', [
+      node('**Re-entry protocol**', [
+        tier('1–2 months → …', {[FIELD.tierId]: '1-2mo', [FIELD.targetSets]: 2.5}),
+      ]),
+    ])
+    const overlay = parsePlan(plan)
+    expect(overlay.warnings.some(w => new RegExp(FIELD.targetSets).test(w))).toBe(true)
+    expect(overlay.reentry!.find(t => t.id === '1-2mo')?.setsOverride).toBe(2)
+  })
+
+  it('keeps the fields a contradictory row states readably', () => {
+    // Only the set counts are unreadable. Dropping the stated 60% too would
+    // decide what weight goes on a bar from a mistake in an unrelated field,
+    // and for a tier with no built-in row the whole tier would vanish.
+    const plan = node('**Plan**', [
+      node('**Re-entry protocol**', [
+        tier('2+ months → …', {
+          [FIELD.tierId]: '2mo+',
+          [FIELD.layoffPct]: 0.5,
+          [FIELD.targetSets]: 2,
+          [FIELD.setsDelta]: 1,
+        }),
+      ]),
+    ])
+    const row = parsePlan(plan).reentry!.find(t => t.id === '2mo+')!
+    expect(row.pct).toBe(0.5)
+    expect(row).toMatchObject({setsOverride: 2, setsDelta: undefined})
+  })
+
   it('ignores a declared row that never says which tier it is, and says so', () => {
     const plan = node('**Plan**', [
       node('**Re-entry protocol**', [
