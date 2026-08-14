@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, render, screen } from '@testing-library/react'
+import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import type { User } from '@/data/api'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
@@ -9,7 +9,7 @@ import { Repo } from '@/data/repo'
 import { Block } from '@/data/block'
 import { getLayoutSessionBlock, getUIStateBlock } from '@/data/stateBlocks'
 import { BlockContextProvider, useBlockContext } from '@/context/block'
-import { insertPanelRow } from '@/utils/panelLayoutProjection'
+import { insertPanelRow, insertSidebarStackedPanel } from '@/utils/panelLayoutProjection'
 import { activePanelIdProp, panelMaximizedProp } from '@/data/properties'
 import { LayoutRenderer } from './LayoutRenderer'
 
@@ -155,6 +155,51 @@ describe('LayoutRenderer', () => {
       const rendered = await screen.findByTestId(`block-${second}`)
       expect(rendered).toHaveAttribute('data-wide-scroll-surface', 'true')
       expect(screen.queryByTestId(`block-${first}`)).toBeNull()
+    })
+
+    // Narrowing to the solo pane must PRUNE the tree to the path that reaches
+    // it, not hoist the leaf out of its stack. React identity is parent +
+    // key, so re-parenting a stacked pane to the top level unmounts and
+    // remounts it — dropping local editor state and, for the feature this
+    // whole PR exists to serve, restarting video playback.
+    //
+    // Asserted on DOM-node identity rather than structure: a remount builds a
+    // new node, so `toBe` is the direct question, and it cannot pass for a
+    // structural reason that happens to look right.
+    it('keeps a stacked pane mounted across maximize instead of re-parenting it', async () => {
+      const top = await insertPanelRow(env.repo, layoutSessionBlock(), 'page-a')
+      const stackedFirst = await insertSidebarStackedPanel(
+        env.repo, layoutSessionBlock(), 'page-b', {sourcePanelId: top})
+      const stackedSecond = await insertSidebarStackedPanel(
+        env.repo, layoutSessionBlock(), 'page-c', {sourcePanelId: stackedFirst})
+
+      renderLayout()
+      const before = await screen.findByTestId(`block-${stackedFirst}`)
+
+      await setMaximized(stackedFirst, true)
+      // Fence on the maximize LANDING before the identity check, or that check
+      // just reads the pre-maximize tree and passes for free.
+      await waitFor(() => {
+        expect(screen.queryByTestId(`block-${stackedSecond}`)).toBeNull()
+        expect(screen.queryByTestId(`block-${top}`)).toBeNull()
+      })
+
+      expect(screen.getByTestId(`block-${stackedFirst}`)).toBe(before)
+    })
+
+    // A maximized pane should look the same wherever it lives — the surviving
+    // stack wrapper must not keep imposing its column constraint on it.
+    it('gives a maximized stacked pane the same wide surface as a top-level one', async () => {
+      const top = await insertPanelRow(env.repo, layoutSessionBlock(), 'page-a')
+      const stacked = await insertSidebarStackedPanel(
+        env.repo, layoutSessionBlock(), 'page-b', {sourcePanelId: top})
+      await setMaximized(stacked, true)
+
+      renderLayout()
+
+      const rendered = await screen.findByTestId(`block-${stacked}`)
+      expect(rendered).toHaveAttribute('data-wide-scroll-surface', 'true')
+      expect(screen.queryByTestId(`block-${top}`)).toBeNull()
     })
 
     it('restores the exact arrangement when the flag is cleared', async () => {

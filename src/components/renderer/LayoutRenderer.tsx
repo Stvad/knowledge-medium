@@ -57,6 +57,35 @@ const buildRenderSlots = (rootId: string, rows: readonly BlockData[]): RenderSlo
 const flattenPanelSlots = (slots: readonly RenderSlot[]): Array<Extract<RenderSlot, {kind: 'panel'}>> =>
   slots.flatMap(slot => slot.kind === 'panel' ? [slot] : flattenPanelSlots(slot.children))
 
+/**
+ * The PATH down to `soloId` — the pane still wrapped in whatever stack it
+ * lives in — with every sibling branch dropped.
+ *
+ * Narrowing to one pane must not HOIST it. React identity is parent + key, so
+ * lifting a stacked pane to the top level unmounts and remounts it: local
+ * editor state is lost and a playing video restarts, which is a poor trade for
+ * a gesture whose whole point is to look at that pane. Keeping the wrapper
+ * keeps the component's position in the tree, and keyed reconciliation
+ * preserves it even though its stack now renders one child instead of several.
+ *
+ * Siblings are still dropped rather than hidden with CSS: an off-screen pane
+ * that stays mounted keeps running effects and playing audio.
+ *
+ * `soloId` comes from this same slot tree, so it always resolves — an empty
+ * result is unreachable, not a case to fall back from.
+ */
+const soloSlotPath = (slots: readonly RenderSlot[], soloId: string): RenderSlot[] => {
+  for (const slot of slots) {
+    if (slot.kind === 'panel') {
+      if (slot.id === soloId) return [slot]
+      continue
+    }
+    const inner = soloSlotPath(slot.children, soloId)
+    if (inner.length > 0) return [{...slot, children: inner}]
+  }
+  return []
+}
+
 function PanelSlotView({
   slot,
   layoutSessionBlock,
@@ -141,7 +170,7 @@ function SlotView({
     <div
       key={slot.id}
       data-layout-column-id={topLevel ? slot.id : undefined}
-      className={`${topLevel ? TOP_LEVEL_COLUMN_CLASS : STACK_CHILD_CLASS} flex flex-col gap-2 overflow-y-auto pr-1`}
+      className={`${topLevel ? (wideScrollSurface ? WIDE_SCROLL_COLUMN_CLASS : TOP_LEVEL_COLUMN_CLASS) : STACK_CHILD_CLASS} flex flex-col gap-2 overflow-y-auto pr-1`}
     >
       {slot.children.map(child => (
         <SlotView
@@ -151,7 +180,10 @@ function SlotView({
           canClosePanel={canClosePanel}
           canMaximizePanel={canMaximizePanel}
           topLevel={false}
-          wideScrollSurface={false}
+          // Forwarded, not hardcoded false: this is "one pane is the whole
+          // layout", which a surviving stack wrapper does not change. It can
+          // only be true when this stack renders a single child anyway.
+          wideScrollSurface={wideScrollSurface}
           trackFocus={trackFocus}
         />
       ))}
@@ -188,11 +220,19 @@ export function LayoutRenderer({block}: BlockRendererProps) {
     })
     return solo ? panelSlots.find(slot => slot.id === solo.id) : undefined
   }, [block.id, rows, panelSlots, activePanelId, isMobile])
-  // Only the desktop no-solo case renders the full tree; a solo pane renders alone.
-  const slotsToRender = soloPanelSlot ? [soloPanelSlot] : (isMobile ? [] : slots)
+  // Only the desktop no-solo case renders the full tree; a solo pane renders
+  // alone — but IN PLACE (`soloSlotPath`), so a stacked pane keeps its parent.
+  const slotsToRender = useMemo(
+    () => soloPanelSlot ? soloSlotPath(slots, soloPanelSlot.id) : (isMobile ? [] : slots),
+    [slots, soloPanelSlot, isMobile],
+  )
   const canClosePanel = panelSlots.length > 1
   const canMaximizePanel = maximizeWouldHideSomething(panelSlots.length, !isMobile)
-  const hasOneVisiblePanel = slotsToRender.length === 1 && slotsToRender[0]?.kind === 'panel'
+  // Counted over the panes actually RENDERED, at any depth: a solo pane is the
+  // only thing on screen whether or not a stack wrapper survives around it, and
+  // it should get the same wide surface either way. Reading the top-level slot
+  // kind instead made a maximized stacked pane keep a `max-w-3xl` column.
+  const hasOneVisiblePanel = flattenPanelSlots(slotsToRender).length === 1
 
   // ── The single writer of `activePanelIdProp` from this renderer ──
   // Two rules, in priority order, deliberately resolved BEFORE the effect
@@ -245,7 +285,7 @@ export function LayoutRenderer({block}: BlockRendererProps) {
         canClosePanel={canClosePanel}
         canMaximizePanel={canMaximizePanel}
         topLevel
-        wideScrollSurface={hasOneVisiblePanel && slot.kind === 'panel'}
+        wideScrollSurface={hasOneVisiblePanel}
         trackFocus={!isMobile}
       />
     ))}
