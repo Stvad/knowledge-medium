@@ -34,6 +34,7 @@ import {
   type Tx,
 } from '@/data/api'
 import { parseExactReferenceBlockContent } from '@/data/referenceBlock'
+import { hasOpaqueContent } from '@/data/properties'
 
 export const DERIVE_REFERENCE_TARGET_PROCESSOR_NAME = 'core.deriveReferenceTarget'
 
@@ -107,11 +108,24 @@ export const DERIVE_REFERENCE_TARGET_PROCESSOR = defineSameTxProcessor({
       // edit while deleted would otherwise leave a stale column that a
       // later content-unchanged restore never repairs.
       if (row === null) continue
-      const derived = await deriveReferenceColumns(
-        row.content,
-        row.workspaceId,
-        lookups,
-      )
+      // Not prose: there is no whole-block reference to derive, and a payload
+      // that happens to BE grammar-shaped (`::((definitionId))` inside a
+      // bundle) would otherwise be stamped as property machinery — which on a
+      // child-backed workspace projects the block as a field row and hides it
+      // from the outline.
+      //
+      // Derives the CLEARED columns rather than `continue`-ing: a block that
+      // gains the type AFTER being stamped has to lose the stamp, and
+      // `rerunOnDirtyRows` visits it in the same tx that tags it. A type
+      // arriving by SYNC is not covered here — that path derives at arrival
+      // and is a separate call site.
+      const derived = hasOpaqueContent(row, ctx.opaqueContentTypes)
+        ? {targetId: null, isFieldForm: false}
+        : await deriveReferenceColumns(
+          row.content,
+          row.workspaceId,
+          lookups,
+        )
       // Unresolvable-alias CREATE keeps a caller-provided id (a create that
       // seeds `reference_target_id` alongside an as-yet-unresolvable
       // `[[alias]]`); everywhere else unresolvable clears — content is the

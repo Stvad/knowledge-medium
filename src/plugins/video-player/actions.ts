@@ -1,6 +1,6 @@
 import { EditorSelection } from '@codemirror/state'
 import { EditorView } from '@codemirror/view'
-import { Block } from '../../data/block'
+import { Block, blockContentIsOpaque } from '../../data/block'
 import { ChangeScope } from '@/data/api'
 import { focusBlock, hasOpaqueContent, panelViewModeProp } from '@/data/properties.js'
 import type { ShortcutActivationContribution } from '@/extensions/blockInteraction.js'
@@ -123,6 +123,12 @@ const insertVideoTimestamp: ActionConfig = {
 
     const timestamp = `${formatVideoTimestamp(currentTime)} `
     if (deps.editorView) {
+      // Only this branch needs the pre-check: it dispatches into the live
+      // doc, which the editor persists on its own, so the tx guard in
+      // `appendToBlock` never sees it. The `createTimestampNote` branch
+      // below writes a NEW child and never touches the focused block's
+      // bytes, so it is not gated.
+      if (blockContentIsOpaque(deps.block)) return
       insertIntoEditor(deps.editorView, timestamp)
       return
     }

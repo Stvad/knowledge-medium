@@ -6,7 +6,7 @@
  * and fire the edit-settled signal so push detection skips the settle
  * window entirely — the daemon reacts in bridge-round-trip time.
  */
-import type { Block } from '@/data/block'
+import { blockContentIsOpaque, type Block } from '@/data/block'
 import { ChangeScope, propertyValue } from '@/data/api'
 import { hasOpaqueContent } from '@/data/properties'
 import {
@@ -127,6 +127,10 @@ const editModeAsk: ActionConfig<typeof ActionContextTypes.EDIT_MODE_CM> = {
   description: 'Ask Agent about this block (Edit Mode)',
   context: ActionContextTypes.EDIT_MODE_CM,
   handler: async ({block, editorView}) => {
+    // Refuse BEFORE touching the doc. The debounced commit persists
+    // whatever the doc holds, so the tx guard inside `askAgent` cannot
+    // undo a dispatch that already landed.
+    if (blockContentIsOpaque(block)) return
     // The editor doc, not the persisted block, is the source of truth
     // here — the DB trails it by the BlockEditor's commit debounce, so
     // basing the write on `fresh.content` could drop just-typed text.

@@ -13,7 +13,7 @@
  */
 import { EditorSelection } from '@codemirror/state'
 import type { EditorView } from '@codemirror/view'
-import type { Block } from '@/data/block.js'
+import { blockContentIsOpaque, type Block } from '@/data/block.js'
 import { ChangeScope } from '@/data/api'
 import { hasOpaqueContent } from '@/data/properties'
 import { captureMediaVerb } from '@/paste/captureMediaVerb.js'
@@ -128,6 +128,9 @@ export async function insertReferences(
   block: Block,
   references: readonly string[],
 ): Promise<void> {
+  // The connected-editor branch never reaches the guarded helper below, and
+  // the editor persists its own doc — so the refusal has to happen here too.
+  if (blockContentIsOpaque(block)) return
   if (editorView.dom.isConnected) {
     const insertText = references.join('\n')
     const { from, to } = editorView.state.selection.main
