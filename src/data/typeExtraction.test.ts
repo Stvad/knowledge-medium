@@ -19,6 +19,7 @@ import {
   GrammarShapedLabelError,
   LossyLabelError,
   MAX_ALIAS_LENGTH,
+  OpaqueContentLabelError,
 } from '@/data/referenceBlock'
 import { getOrCreatePropertiesPage } from '@/data/propertiesPage'
 import { getOrCreateTypesPage, typesPageBlockId } from '@/data/typesPage'
@@ -328,6 +329,27 @@ describe('block-type typeify processor', () => {
   // projects as property machinery instead of appearing in the outline.
   // Only the grammar-shape check applies here; the content is not claimed
   // as an alias when a label is supplied, so round-tripping is moot.
+  // Adopting an opaque payload as the name would claim it as a resolvable
+  // page AND trim bytes off the stored source. An explicit label is the fix,
+  // so this refuses rather than minting a nameless type.
+  it('refuses to adopt opaque content as the type name', async () => {
+    env = await setup()
+    await expect(tagBlockType(env, '  export const x = 1  ', {
+      [typesProp.name]: ['extension'],
+    })).rejects.toThrow(OpaqueContentLabelError)
+  })
+
+  it('accepts an opaque block that supplies an explicit label', async () => {
+    env = await setup()
+    const id = await tagBlockType(env, 'export const x = 1', {
+      [typesProp.name]: ['extension'],
+      [blockTypeLabelProp.name]: 'Readwise',
+    })
+    const row = await env.repo.load(id)
+    expect(row!.content).toBe('export const x = 1')
+    expect(row!.properties[blockTypeLabelProp.name]).toBe('Readwise')
+  })
+
   it('refuses when an explicit label hides grammar-shaped content', async () => {
     env = await setup()
     await expect(tagBlockType(env, '::((11111111-1111-4111-8111-111111111111))', {

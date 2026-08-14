@@ -88,6 +88,23 @@ describe('writeBlockTypeLabel', () => {
     expect(row!.properties[aliasesProp.name]).toEqual(['New', 'mine'])
   })
 
+  it('releases the old label even when the new one is already claimed', async () => {
+    const repo = await setupTypeBlock({
+      label: 'Old', content: 'export const x = 1', alias: 'Old', types: ['extension'],
+    })
+    await repo.tx(
+      tx => tx.setProperty('type-1', aliasesProp, ['Old', 'New', 'mine']),
+      {scope: ChangeScope.BlockDefault},
+    )
+
+    await writeBlockTypeLabel(repo.block('type-1'), 'Old', 'export const x = 1', 'New')
+
+    // `Old` is released — otherwise that name stays claimed forever and
+    // nothing else can take it, even though the type no longer advertises it.
+    const row = await repo.load('type-1')
+    expect(row!.properties[aliasesProp.name]).toEqual(['New', 'mine'])
+  })
+
   // The mirror below is exactly why the label needs hygiene (PR #288 §7):
   // a reference-shaped label becomes reference-shaped CONTENT, and a
   // `::`-marked one makes the type's own block a recognized property field

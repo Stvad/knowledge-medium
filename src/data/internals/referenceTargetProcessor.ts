@@ -94,7 +94,18 @@ export const sameTxReferenceTargetLookups = (
 
 export const DERIVE_REFERENCE_TARGET_PROCESSOR = defineSameTxProcessor({
   name: DERIVE_REFERENCE_TARGET_PROCESSOR_NAME,
-  watches: {kind: 'field', table: 'blocks', fields: ['content']},
+  // `properties` as well as `content`: opacity is a TYPE membership, and a
+  // block that gains or loses an opaque type without touching its content
+  // must re-derive (stamp cleared on the way in, restored on the way out).
+  // The `rerunOnDirtyRows` pass cannot cover it — that pass only revisits
+  // rows written AFTER this processor's watermark, and the user's
+  // properties-only write happens before pass one.
+  //
+  // Cost is one parse per changed row per property write (UiState focus /
+  // selection included). The parse short-circuits on anything that is not a
+  // whole-block reference span, so the alias LOOKUP inside it is reached
+  // only for the rare row whose entire content is one span.
+  watches: {kind: 'field', table: 'blocks', fields: ['content', 'properties']},
   // Issue #402: a plugin content rewrite after this ran (merge retarget,
   // deleted-ref inlining, alias reverse-sync) re-derives here instead of
   // committing a stale column. The plugins' inline recomputes stay — they
@@ -114,11 +125,11 @@ export const DERIVE_REFERENCE_TARGET_PROCESSOR = defineSameTxProcessor({
       // child-backed workspace projects the block as a field row and hides it
       // from the outline.
       //
-      // Derives the CLEARED columns rather than `continue`-ing: a block that
-      // gains the type AFTER being stamped has to lose the stamp, and
-      // `rerunOnDirtyRows` visits it in the same tx that tags it. A type
-      // arriving by SYNC is not covered here — that path derives at arrival
-      // and is a separate call site.
+      // Derives the CLEARED columns rather than `continue`-ing, so a block
+      // that gains the type AFTER being stamped loses the stamp — which is
+      // why `properties` is watched above. A type arriving by SYNC is not
+      // covered here; that path derives at arrival and is a separate call
+      // site.
       const derived = hasOpaqueContent(row, ctx.opaqueContentTypes)
         ? {targetId: null, isFieldForm: false}
         : await deriveReferenceColumns(

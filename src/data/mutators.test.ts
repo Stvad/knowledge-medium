@@ -1096,6 +1096,30 @@ describe('core.merge', () => {
   // Both available outcomes lose data: concat corrupts the extension's
   // source, keepTarget destroys `from`'s text (the merge deletes it either
   // way). So this refuses and leaves the choice to the user.
+  // A properties-ONLY write never reaches a `content`-watching processor,
+  // and the `rerunOnDirtyRows` pass cannot help: it revisits rows written
+  // AFTER the processor's watermark, and this write lands before pass one.
+  // So `core.deriveReferenceTarget` has to watch `properties` as well, or a
+  // block that becomes opaque keeps a stamp that classifies it as property
+  // machinery — which hides it from the outline on a child-backed workspace.
+  it('clears reference_target_id when a stamped block becomes opaque', async () => {
+    await env.repo.tx(
+      tx => tx.create({id: 'p', workspaceId: 'ws-1', parentId: null, orderKey: 'a0'}),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await env.repo.mutate.createChild({parentId: 'p', id: 'ref', content: '((some-target))'})
+    expect(env.read('ref')!.referenceTargetId).toBe('some-target')
+
+    await env.repo.tx(
+      tx => tx.setProperty('ref', typesProp, ['extension']),
+      {scope: ChangeScope.BlockDefault},
+    )
+
+    expect(env.read('ref')!.referenceTargetId).toBeNull()
+    // The bytes are untouched — only the derived column moved.
+    expect(env.read('ref')!.content).toBe('((some-target))')
+  })
+
   it('refuses to merge into an opaque-content target, losing neither side', async () => {
     await env.repo.tx(
       tx => tx.create({id: 'p', workspaceId: 'ws-1', parentId: null, orderKey: 'a0'}),

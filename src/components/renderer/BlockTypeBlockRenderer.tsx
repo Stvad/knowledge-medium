@@ -98,12 +98,13 @@ export const writeBlockTypeLabel = async (
         // Replace only the entry matching the OLD label; any other alias the
         // user added by hand is theirs to keep.
         const aliases = getAliases(row)
-        if (aliases.includes(currentLabel) && !aliases.includes(next)) {
-          await tx.setProperty(
-            block.id,
-            aliasesProp,
-            aliases.map(alias => alias === currentLabel ? next : alias),
-          )
+        if (aliases.includes(currentLabel)) {
+          // Drop the old entry and add the new one INDEPENDENTLY: when the
+          // block already claims both (aliases `['Old','New','mine']`), a
+          // map-in-place would be a no-op and leave `Old` claimed forever,
+          // blocking that name for anything else.
+          const kept = aliases.filter(alias => alias !== currentLabel && alias !== next)
+          await tx.setProperty(block.id, aliasesProp, [next, ...kept])
         }
       }
     } else {

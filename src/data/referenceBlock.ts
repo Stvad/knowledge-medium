@@ -280,6 +280,25 @@ export class LossyLabelError extends UnwritableLabelError {
   }
 }
 
+/** Raised when a block whose content is NOT prose (`opaqueContentTypesFacet`)
+ *  would have that content adopted as a name — the typeify processor's
+ *  `content.trim()` fallback when no explicit label was supplied.
+ *
+ *  Adopting it is wrong twice over: the payload becomes a globally-resolvable
+ *  page name, and the trim-to-name write strips bytes off the stored source.
+ *  An explicit label is the fix, so this refuses rather than producing a
+ *  nameless type — the same reasoning as the other two refusals here. */
+export class OpaqueContentLabelError extends UnwritableLabelError {
+  constructor(public readonly context: string) {
+    super(
+      `${context}: this block's content is not text (an installed extension's `
+      + 'source or similar), so it cannot be adopted as a name — set an '
+      + 'explicit label instead',
+    )
+    this.name = 'OpaqueContentLabelError'
+  }
+}
+
 /** Throwing form of {@link isRoundTrippableReferenceLabel}, for the flows
  *  whose label DOUBLES as a `[[label]]` page — a type definition, a
  *  property schema. For those the name is not an arbitrary string: it is

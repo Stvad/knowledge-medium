@@ -48,10 +48,12 @@ import {
   blockTypeLabelProp,
   getAliases,
   getBlockTypes,
+  hasOpaqueContent,
 } from '@/data/properties'
 import {
   assertNotGrammarShapedLabel,
   assertRoundTrippableReferenceLabel,
+  OpaqueContentLabelError,
 } from '@/data/referenceBlock'
 import { seededDefinitionKey } from '@/data/definitionSeeds'
 import { isTypeSeedKey } from '@/data/typeSeeds'
@@ -125,6 +127,12 @@ export const BLOCK_TYPE_TYPEIFY_PROCESSOR = defineSameTxProcessor({
         await ctx.tx.update(row.id, {properties: addBlockTypeToProperties(after.properties, PAGE_TYPE)})
       }
       if (currentLabel === '' && name !== '') {
+        // Adopting the content means BOTH claiming it as a name and trimming
+        // the stored bytes to it. For an opaque payload each is wrong on its
+        // own, so refuse and make the caller supply a label.
+        if (hasOpaqueContent(after, ctx.opaqueContentTypes)) {
+          throw new OpaqueContentLabelError('Block type label')
+        }
         await ctx.tx.setProperty(row.id, blockTypeLabelProp, name)
         // Trim the block's own content to the clean name too. `name` was
         // adopted FROM `content` (`content.trim()`), so this only strips
