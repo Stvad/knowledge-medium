@@ -89,6 +89,22 @@ export const writeBlockTypeLabel = async (
       const row = await tx.get(block.id)
       if (row && getAliases(row).length === 0) {
         await tx.setProperty(block.id, aliasesProp, [next])
+      } else if (row && !mirrorContent && currentLabel !== '' && next !== currentLabel) {
+        // Renaming a type that ALSO carries an opaque type. `aliasSyncProcessor`
+        // reconciles content→alias, and it (correctly) skips opaque rows — and
+        // we just skipped the content mirror too, so nothing else will move the
+        // claim. Without this the registry advertises `next` while `[[next]]`
+        // resolves nowhere and `[[currentLabel]]` still claims the block.
+        // Replace only the entry matching the OLD label; any other alias the
+        // user added by hand is theirs to keep.
+        const aliases = getAliases(row)
+        if (aliases.includes(currentLabel) && !aliases.includes(next)) {
+          await tx.setProperty(
+            block.id,
+            aliasesProp,
+            aliases.map(alias => alias === currentLabel ? next : alias),
+          )
+        }
       }
     } else {
       // Blanking the label un-names the type (an empty label makes

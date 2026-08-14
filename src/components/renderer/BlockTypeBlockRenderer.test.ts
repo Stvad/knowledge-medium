@@ -22,7 +22,7 @@ describe('writeBlockTypeLabel', () => {
    *  alias. Optional `initialAlias` simulates a `createTypeBlock`-minted
    *  type that already claims its label. */
   const setupTypeBlock = async (
-    initial: { label?: string; content?: string; alias?: string } = {},
+    initial: { label?: string; content?: string; alias?: string; types?: string[] } = {},
   ): Promise<Repo> => {
     h = await createTestDb()
     let idSeq = 0
@@ -47,10 +47,46 @@ describe('writeBlockTypeLabel', () => {
       if (initial.alias !== undefined) {
         await tx.setProperty('type-1', aliasesProp, [initial.alias])
       }
+      for (const extra of initial.types ?? []) {
+        await repo.addTypeInTx(tx, 'type-1', extra, {})
+      }
     }, {scope: ChangeScope.BlockDefault, description: 'create type'})
 
     return repo
   }
+
+  // A block may carry `block-type` AND an opaque type. The content mirror is
+  // refused there (it would overwrite an extension's source with the label),
+  // and `aliasSyncProcessor` skips opaque rows — so if this did not move the
+  // claim itself, the registry would advertise the new name while `[[new]]`
+  // resolved nowhere and the OLD name still claimed the block.
+  it('renames the alias without touching opaque content', async () => {
+    const repo = await setupTypeBlock({
+      label: 'Old', content: 'export const x = 1', alias: 'Old', types: ['extension'],
+    })
+
+    await writeBlockTypeLabel(repo.block('type-1'), 'Old', 'export const x = 1', 'New')
+
+    const row = await repo.load('type-1')
+    expect(row!.content).toBe('export const x = 1')
+    expect(row!.properties[blockTypeLabelProp.name]).toBe('New')
+    expect(row!.properties[aliasesProp.name]).toEqual(['New'])
+  })
+
+  it('leaves hand-added aliases alone when renaming an opaque type', async () => {
+    const repo = await setupTypeBlock({
+      label: 'Old', content: 'export const x = 1', alias: 'Old', types: ['extension'],
+    })
+    await repo.tx(
+      tx => tx.setProperty('type-1', aliasesProp, ['Old', 'mine']),
+      {scope: ChangeScope.BlockDefault},
+    )
+
+    await writeBlockTypeLabel(repo.block('type-1'), 'Old', 'export const x = 1', 'New')
+
+    const row = await repo.load('type-1')
+    expect(row!.properties[aliasesProp.name]).toEqual(['New', 'mine'])
+  })
 
   // The mirror below is exactly why the label needs hygiene (PR #288 §7):
   // a reference-shaped label becomes reference-shaped CONTENT, and a
