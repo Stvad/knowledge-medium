@@ -1270,8 +1270,10 @@ describe('togglePanelMaximized', () => {
     const rowA = (await rowIdsByBlock()).get('a')
     if (!rowA) throw new Error('missing a row')
 
-    expect(await prepareExclusiveMaximize(env.repo, rowA, {canRenderSplit: false})).toBe(false)
-    expect(await prepareExclusiveMaximize(env.repo, rowA)).toBe(true)
+    expect(await prepareExclusiveMaximize(env.repo, rowA, {canRenderSplit: false}))
+      .toEqual({claimed: false, maximized: false})
+    expect(await prepareExclusiveMaximize(env.repo, rowA))
+      .toEqual({claimed: true, maximized: true})
   })
 
   // A refusal writes NOTHING, matching what refusing means in
@@ -1283,7 +1285,7 @@ describe('togglePanelMaximized', () => {
     const byBlock = await rowIdsByBlock()
 
     expect(await prepareExclusiveMaximize(env.repo, byBlock.get('a')!, {canRenderSplit: false}))
-      .toBe(false)
+      .toEqual({claimed: false, maximized: false})
 
     expect(env.repo.block(byBlock.get('b')!).peekProperty(panelMaximizedProp)).toBe(true)
   })
@@ -1292,21 +1294,27 @@ describe('togglePanelMaximized', () => {
     await applyUrl('#ws-1/a/b;max')
     const byBlock = await rowIdsByBlock()
 
-    expect(await prepareExclusiveMaximize(env.repo, byBlock.get('a')!)).toBe(true)
+    expect(await prepareExclusiveMaximize(env.repo, byBlock.get('a')!))
+      .toEqual({claimed: true, maximized: true})
 
     expect(env.repo.block(byBlock.get('b')!).peekProperty(panelMaximizedProp)).not.toBe(true)
   })
 
-  // The return value answers "is this flag mine to undo later?", so a pane
-  // that was ALREADY maximized reports false even though maximizing is
-  // warranted here — the flag belongs to whoever set it. Returning
-  // `maximizeWouldHideSomething` instead made the video-notes enter adopt a
-  // user's deliberate maximize, and its close then dropped it.
+  // `claimed` answers "is this flag mine to undo later?", so a pane that was
+  // ALREADY maximized reports false even though maximizing is warranted here —
+  // the flag belongs to whoever set it. Returning `maximizeWouldHideSomething`
+  // instead made the video-notes enter adopt a user's deliberate maximize, and
+  // its close then dropped it.
+  //
+  // `maximized` stays TRUE, and the pair is the point: "not mine" and "not
+  // there" are different, and a caller that collapses them into `!claimed`
+  // throws away a live ownership record.
   it('prepareExclusiveMaximize does not claim a maximize the pane already carried', async () => {
     await applyUrl('#ws-1/a;max/b')
     const byBlock = await rowIdsByBlock()
 
-    expect(await prepareExclusiveMaximize(env.repo, byBlock.get('a')!)).toBe(false)
+    expect(await prepareExclusiveMaximize(env.repo, byBlock.get('a')!))
+      .toEqual({claimed: false, maximized: true})
 
     // ...and leaves it standing: not claiming is arrangement-neutral.
     expect(env.repo.block(byBlock.get('a')!).peekProperty(panelMaximizedProp)).toBe(true)

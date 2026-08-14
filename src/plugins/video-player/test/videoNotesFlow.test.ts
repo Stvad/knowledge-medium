@@ -234,6 +234,24 @@ describe('enterVideoNotesView', () => {
     expect(isMaximized(panelId)).toBe(true)
   })
 
+  // Double-activation of the notes button (the row update has not re-rendered
+  // it away yet) runs enter twice. The second call finds the pane already
+  // maximized and claims nothing — but the flag standing there is still the
+  // FIRST call's, so its ownership must survive. Discarding it left close
+  // unable to undo its own maximize, with every sibling hidden.
+  it('a repeated enter does not spend the first enter\'s maximize ownership', async () => {
+    await setup({panes: 2})
+    await enterVideoNotesView(videoBlock(), panelBlock())
+    expect(isMaximized(panelId)).toBe(true)
+
+    await enterVideoNotesView(videoBlock(), panelBlock())
+
+    await closeVideoNotesView(panelBlock())
+
+    expect(panelBlock().peekProperty(panelViewModeProp)).toBeUndefined()
+    expect(isMaximized(panelId)).toBe(false)
+  })
+
   // The ownership marker is spent on COMMIT, not on entry to close. Spending
   // it up front meant a rejected close left the retry computing `undefined` —
   // notes cleared, auto-maximize kept, every sibling pane still hidden with

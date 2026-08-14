@@ -103,13 +103,17 @@ export const enterVideoNotesView = async (
   uiStateBlock: Block,
 ): Promise<void> => {
   if (uiStateBlock.peekProperty(topLevelBlockIdProp) === undefined) return
-  // CLAIMED, not "is maximized": false covers both a decline and a pane that
-  // was already maximized, and those two want the same follow-up write.
-  const claimedMaximize = await prepareExclusiveMaximize(uiStateBlock.repo, uiStateBlock.id, {
-    canRenderSplit: !isMobileViewport(),
-  })
+  const {claimed: claimedMaximize, maximized} = await prepareExclusiveMaximize(
+    uiStateBlock.repo, uiStateBlock.id, {canRenderSplit: !isMobileViewport()})
   if (claimedMaximize) maximizedByNotesEnter.add(uiStateBlock.id)
-  else maximizedByNotesEnter.delete(uiStateBlock.id)
+  // Discard a STALE record only — one left by an enter whose flag is gone.
+  // While a flag is still standing the record must survive, because this enter
+  // may be a duplicate of the one that set it: activate the notes button twice
+  // before the row update re-renders and the second call finds the pane
+  // already maximized, claims nothing, and would otherwise spend the first
+  // call's ownership — leaving close unable to undo its own maximize, with
+  // every sibling pane hidden and nothing left that owns the flag.
+  else if (!maximized) maximizedByNotesEnter.delete(uiStateBlock.id)
   await navigateInPanel(uiStateBlock, videoBlock.id, {
     viewMode: VIDEO_NOTES_VIEW_MODE,
     // Not claiming is arrangement-NEUTRAL, so the key is omitted rather than

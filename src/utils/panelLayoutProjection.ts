@@ -840,6 +840,13 @@ export const togglePanelMaximized = async (
   return result
 }
 
+export interface ExclusiveMaximizeResult {
+  /** This call newly set the flag — so it, and only it, is the caller's to undo. */
+  claimed: boolean
+  /** The pane carries the flag once this returns, whoever set it. */
+  maximized: boolean
+}
+
 /**
  * Prepare `panelId` to become the maximized pane for a gesture that sets the
  * flag inside SOMEONE ELSE'S transaction — `navigateInPanel`'s `maximized`
@@ -850,19 +857,25 @@ export const togglePanelMaximized = async (
  * anything (`maximizeWouldHideSomething`) — so the caller's own write lands
  * exclusively.
  *
- * Returns whether this call CLAIMED the maximize: true only when the flag was
- * NOT already set on `panelId` AND maximizing is warranted. Already-maximized
- * is deliberately reported as false, because the return value's real job is to
- * answer "is this flag mine to undo later?", and a flag the pane already
- * carried belongs to whoever set it — the user via `togglePanelMaximized`, or
- * an inbound `;max`. Reporting `maximizeWouldHideSomething` directly, as this
- * once did, handed the caller ownership of a maximize it merely FOUND, and the
- * matching close then dropped a maximize the user had set deliberately.
+ * Reports two SEPARATE facts, because a caller that has to undo its own
+ * maximize later cannot reconstruct either from the other:
  *
- * One boolean serves both of the caller's needs because the two false cases
- * want the same write: declined means "leave the flag alone", and
- * already-maximized means "leave the flag alone" too — omitting `maximized`
- * from the follow-up tx leaves a set flag set, which is the wanted end state.
+ * - `claimed` — this call newly maximized the pane (the flag was not already
+ *   set, and maximizing is warranted). Only a claimed flag is the caller's to
+ *   clear later; one the pane already carried belongs to whoever set it, the
+ *   user via `togglePanelMaximized` or an inbound `;max`. Reporting
+ *   `maximizeWouldHideSomething` here, as this once did, handed the caller
+ *   ownership of a maximize it merely FOUND, and the matching close then
+ *   dropped a maximize the user had set deliberately.
+ * - `maximized` — whether the pane carries the flag at all once this returns.
+ *   Distinguishes "nobody's flag exists" from "a flag exists that is not
+ *   mine", which is what lets a caller discard a STALE ownership record
+ *   without discarding a live one. Collapsing the two into `!claimed` made a
+ *   repeated enter erase the first enter's ownership.
+ *
+ * Only `claimed` should drive a follow-up `maximized: true` write: in the
+ * other cases the flag is already whatever it should be, and omitting the key
+ * leaves it that way.
  *
  * A REFUSAL WRITES NOTHING — the same meaning `togglePanelMaximized` gives it,
  * and the reason the clear is gated rather than unconditional. Clearing on a
@@ -885,19 +898,26 @@ export const prepareExclusiveMaximize = async (
   repo: Repo,
   panelId: string,
   {canRenderSplit = true}: {canRenderSplit?: boolean} = {},
-): Promise<boolean> => {
+): Promise<ExclusiveMaximizeResult> => {
   let claimed = false
+  let maximized = false
   await repo.tx(async tx => {
     const found = await sessionPanelRowsInTx(tx, panelId, repo.user.id)
     if (!found) return
+    const alreadyMaximized = isPanelRowMaximized(found.panelRows.find(row => row.id === panelId)!)
+    // Reported even on the decline path, where the flag is left exactly as
+    // found — a caller tracking ownership needs to tell "no flag exists" from
+    // "a flag exists that is not mine".
+    maximized = alreadyMaximized
     if (!maximizeWouldHideSomething(found.panelRows.length, canRenderSplit)) return
-    claimed = !isPanelRowMaximized(found.panelRows.find(row => row.id === panelId)!)
+    claimed = !alreadyMaximized
+    maximized = true
     for (const other of found.panelRows) {
       if (other.id === panelId || !isPanelRowMaximized(other)) continue
       await tx.setProperty(other.id, panelMaximizedProp, false)
     }
   }, {scope: ChangeScope.UiState, description: 'clear other maximized panes'})
-  return claimed
+  return {claimed, maximized}
 }
 
 /**
