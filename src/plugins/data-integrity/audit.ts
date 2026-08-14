@@ -515,9 +515,13 @@ const runContentLinkRecomputeCheck = async (
   let strippedBlocks = 0
   let staleRefBlocks = 0
   let staleRefs = 0
+  let opaqueContentRefBlocks = 0
+  let opaqueContentRefs = 0
   let truncated = false
   const strippedSample: Array<{ id: string; marks: number; content_preview: string }> = []
   const staleSample: Array<{ id: string; stale: string[]; content_preview: string }> = []
+  // No content preview: the whole point is that these bytes are not prose.
+  const opaqueSample: Array<{ id: string; refs: number }> = []
   for (;;) {
     const batch = await db.getAll<{ id: string; content: string; references_json: string; properties_json: string }>(
       `SELECT id, content, references_json, properties_json FROM blocks
@@ -530,13 +534,35 @@ const runContentLinkRecomputeCheck = async (
     if (batch.length === 0) break
     for (const row of batch) {
       // Not prose, so the processor stores no content refs for it BY DESIGN —
-      // scoring it as "stripped" turns the facet's correct behavior into a
-      // permanent audit anomaly. Counted as unscanned rather than as clean:
-      // there is nothing here to recompute either way.
+      // scoring it as "stripped" would turn the facet's correct behaviour
+      // into a permanent anomaly. Do NOT parse the payload.
+      //
+      // But do not skip the row either: a LEGACY content-derived entry (from
+      // before the exclusion, or an interrupted cleanup) is stale by
+      // construction — nothing re-parses this block, so nothing will ever
+      // drop it, and it publishes a backlink the bytes do not support.
+      // Reported on its own axis, since the recompute counters describe a
+      // parse this row never gets.
       if (opaqueTypes.size > 0 && hasOpaqueContent(
         { properties: safeJsonParse<Record<string, unknown>>(row.properties_json, {}) },
         opaqueTypes,
-      )) continue
+      )) {
+        let opaqueStored: StoredRef[]
+        try {
+          opaqueStored = JSON.parse(row.references_json)
+        } catch {
+          continue
+        }
+        const lingering = opaqueStored.filter((r) => r && !r.sourceField)
+        if (lingering.length > 0) {
+          opaqueContentRefBlocks += 1
+          opaqueContentRefs += lingering.length
+          if (opaqueSample.length < sampleLimit) {
+            opaqueSample.push({ id: row.id, refs: lingering.length })
+          }
+        }
+        continue
+      }
       const parsedAliases = new Set<string>([
         ...parseReferences(row.content).map((m) => m.alias),
         ...parseBlockRefs(row.content).map((m) => m.blockId),
@@ -567,7 +593,7 @@ const runContentLinkRecomputeCheck = async (
     if (batch.length < BATCH) break
     if (scanned >= contentCap) { truncated = true; break }
   }
-  const anomalous = strippedBlocks > 0 || staleRefBlocks > 0
+  const anomalous = strippedBlocks > 0 || staleRefBlocks > 0 || opaqueContentRefBlocks > 0
   return {
     status: anomalous ? 'anomaly' : truncated ? 'incomplete' : 'ok',
     scanned,
@@ -576,8 +602,14 @@ const runContentLinkRecomputeCheck = async (
     strippedBlocks,
     staleRefBlocks,
     staleRefs,
+    /** Opaque rows still carrying a content-derived reference entry. Stale
+     *  by construction — nothing re-parses these blocks, so nothing drops
+     *  them, and each publishes a backlink the bytes do not support. */
+    opaqueContentRefBlocks,
+    opaqueContentRefs,
     strippedSample,
     staleSample,
+    opaqueSample,
   }
 }
 

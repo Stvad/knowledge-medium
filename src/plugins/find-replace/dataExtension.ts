@@ -173,14 +173,22 @@ export const searchContentQuery = defineQuery<
     // Because the filter runs after the SQL LIMIT, opaque rows consume
     // candidate slots — enough of them ranked above a prose match starves
     // the result, and there is no pagination the user could use to reach
-    // past them. Widen once (bounded by MAX_CANDIDATES) when the window
-    // came back short AND more rows were available.
+    // past them. Widen once when the window came back short AND more rows
+    // were available.
+    //
+    // RELATIVE to the window just fetched, never to `MAX_CANDIDATES`:
+    // `candidateLimit` is itself capped at that constant, so at the default
+    // `maxBlocks` of 500 the two are equal and a ceiling test never fires —
+    // dead on the default path. One widened pass, not paging to exhaustion:
+    // the scan bound is deliberate, and trading it away to serve a
+    // 5000-opaque-row corpus would be the wrong side of that tradeoff.
+    const widenedLimit = Math.max(MAX_CANDIDATES, candidateLimit * 2)
     if (
       matches.length < normalizedMaxBlocks
       && rows.length > limit
-      && limit < MAX_CANDIDATES
+      && widenedLimit > limit
     ) {
-      limit = MAX_CANDIDATES
+      limit = widenedLimit
       rows = await fetchCandidates(limit)
       matches = eligibleIn(rows, limit)
     }

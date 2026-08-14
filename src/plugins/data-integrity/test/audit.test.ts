@@ -513,6 +513,25 @@ describe('runConsistencyAudit — full (on-demand) deep checks', () => {
     expect(check.status).toBe('ok')
   })
 
+  // Skipping the row entirely reported a legacy stale edge as clean. Nothing
+  // re-parses an opaque block, so that entry can never be dropped by the
+  // normal path — the audit is the only thing that can see it.
+  it('content_link_recompute flags a lingering content ref on an opaque block', async () => {
+    await ins({
+      id: 'ext', content: 'const doc = "[[Foo]]"',
+      properties: { types: ['extension'] },
+      references: [{ id: 'foo-id', alias: 'Foo' }],
+    })
+    const r = await runConsistencyAudit(sharedDb.db, WS, 0, {
+      full: { ...FULL, opaqueContentTypes: new Set(['extension']) },
+    })
+    const check = r.checks.content_link_recompute
+    expect(check.status).toBe('anomaly')
+    expect(check.opaqueContentRefBlocks).toBe(1)
+    // NOT counted as stripped — it never got a parse.
+    expect(check.strippedBlocks).toBe(0)
+  })
+
   it('property_ref_at_rest (schema-aware) flags a value-present/ref-absent curated prop', async () => {
     await ins({ id: 'p1', properties: { 'next-review-date': '2026-01-01' }, references: [] })
     const r = await runConsistencyAudit(sharedDb.db, WS, 0, { full: FULL })
