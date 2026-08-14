@@ -79,6 +79,10 @@ for (const ws of workspaceIds) {
       // is active-only); the engine skips it for any other ws.
       schemas: repo.propertySchemas,
       activeWorkspaceId: repo.activeWorkspaceId,
+      // Without this the content-link recompute scores every extension bundle
+      // containing `[[` as a "stripped" anomaly — the references processor
+      // stores no content refs for opaque blocks BY DESIGN.
+      opaqueContentTypes: repo.opaqueContentTypes,
       candidateCap,
       contentCap,
       decryptCap,

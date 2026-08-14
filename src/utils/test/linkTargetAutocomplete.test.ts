@@ -704,6 +704,21 @@ describe('searchBlocksAcrossSources (searchSourcesFacet merge point)', () => {
     expect(await searchBlocksAcrossSources(env.repo, {workspaceId: WS, query: 'dating', limit: 0})).toEqual([])
   })
 
+  // This source backs quick-find, block-ref completion and the agent search
+  // command, so a bundle showing up here is pickable as a reference target.
+  it('omits opaque-content blocks from content search', async () => {
+    await create({id: 'note', content: 'dating notes'})
+    await create({id: 'ext', content: 'const dating = 1', types: ['extension']})
+
+    const results = await searchBlocksAcrossSources(env.repo, {
+      workspaceId: WS,
+      query: 'dating',
+      limit: 10,
+    })
+
+    expect(results.map(block => block.id)).toEqual(['note'])
+  })
+
   it('honors a limit above the candidate ceiling — fetchLimit floors at `limit`, not capped at 200', async () => {
     // Old fetchLimit formula was `min(limit*4, 200)`, so any requested
     // limit above 200 (e.g. an agent `search --limit 250`) capped the

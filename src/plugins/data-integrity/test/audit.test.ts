@@ -497,6 +497,22 @@ describe('runConsistencyAudit — full (on-demand) deep checks', () => {
     expect(check.strippedBlocks).toBe(1)
   })
 
+  // Zero stored content refs is the CORRECT state for an opaque block, so
+  // scoring it as stripped turns the facet's own behavior into a permanent
+  // anomaly — and drops 120 chars of extension source into the sample.
+  it('content_link_recompute ignores opaque-content blocks', async () => {
+    await ins({
+      id: 'ext', content: 'const doc = "[[Foo]]"',
+      properties: { types: ['extension'] }, references: [],
+    })
+    const r = await runConsistencyAudit(sharedDb.db, WS, 0, {
+      full: { ...FULL, opaqueContentTypes: new Set(['extension']) },
+    })
+    const check = r.checks.content_link_recompute
+    expect(check.strippedBlocks).toBe(0)
+    expect(check.status).toBe('ok')
+  })
+
   it('property_ref_at_rest (schema-aware) flags a value-present/ref-absent curated prop', async () => {
     await ins({ id: 'p1', properties: { 'next-review-date': '2026-01-01' }, references: [] })
     const r = await runConsistencyAudit(sharedDb.db, WS, 0, { full: FULL })

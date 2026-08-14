@@ -584,7 +584,19 @@ const reconcileMarkdownSubtree = async (
     for (let i = 0; i < parsed.length; i += 1) {
       const node = parsed[i]
       const realParentId = node.parentId ? idMap.get(node.parentId)! : parentId
-      const match = i < existing.length ? existing[i] : undefined
+      let match = i < existing.length ? existing[i] : undefined
+      // A block retagged opaque since the key was minted is no longer ours to
+      // manage. DETACH it and let the node materialize fresh below, rather
+      // than keeping it matched and skipping the write: keeping it preserved
+      // the bytes but silently dropped this reply node's content, re-losing
+      // it on every future reconcile. Detaching once turns this into the
+      // ordinary "nothing at this position" case, which already works.
+      if (match && hasOpaqueContent(match, tx.opaqueContentTypes)) {
+        const rest = {...match.properties}
+        delete rest[SUBTREE_KEY_PROP]
+        await tx.update(match.id, {properties: rest})
+        match = undefined
+      }
 
       if (match) {
         // Reconcile the block already at this pre-order position: update its
@@ -595,14 +607,7 @@ const reconcileMarkdownSubtree = async (
         // matched reply nodes isn't evicted just to close the gap (see the
         // function's BOUNDARY note).
         idMap.set(node.id, match.id)
-        // Reconciliation collects by `agent:subtreeKey`, so it writes to
-        // whatever currently sits at that position — including a block
-        // retagged opaque since the key was minted. Overwriting an
-        // extension's stored source with reply markdown destroys it, and
-        // the reply is recoverable while the source is not. Position and
-        // parentage still reconcile; only the bytes are left alone.
-        if (match.content !== node.content
-          && !hasOpaqueContent(match, tx.opaqueContentTypes)) {
+        if (match.content !== node.content) {
           await tx.update(match.id, {content: node.content})
         }
         if (match.parentId !== realParentId) {

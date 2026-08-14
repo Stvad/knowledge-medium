@@ -1,6 +1,6 @@
 import type { BlockData, TypeContribution } from '@/data/api'
 import type { Repo } from '@/data/repo'
-import { aliasesProp, typesProp } from '@/data/properties.js'
+import { aliasesProp, hasOpaqueContent, typesProp } from '@/data/properties.js'
 import {
   searchSourcesFacet,
   type SearchSourceArgs,
@@ -440,11 +440,20 @@ export const coreContentSearchSource: SearchSourceContribution = {
     // a hard maximum on the result size).
     const fetchLimit = Math.max(limit, Math.min(limit * ALIAS_CANDIDATE_MULTIPLIER, ALIAS_CANDIDATE_CEILING))
     const rows = await repo.query.searchByContent({workspaceId, query, limit: fetchLimit}).load()
-    return rows.map((block): SearchSourceCandidate => ({
-      block,
-      score: blockSearchTextScore(block.content, query) +
-        blockSearchRecencyBoost(block.id, recentBlockIds),
-    }))
+    // An installed extension's stored source is not prose to search. This
+    // powers quick-find, block-ref completion and the agent search command,
+    // so without it a bundle surfaces as an ordinary linkable result and a
+    // user can pick it as a reference target. Filtered here rather than in
+    // `core.searchByContent` because that kernel query is also how you'd
+    // legitimately go LOOKING for an extension by its source.
+    const opaqueTypes = repo.opaqueContentTypes
+    return rows
+      .filter(block => !hasOpaqueContent(block, opaqueTypes))
+      .map((block): SearchSourceCandidate => ({
+        block,
+        score: blockSearchTextScore(block.content, query) +
+          blockSearchRecencyBoost(block.id, recentBlockIds),
+      }))
   },
 }
 

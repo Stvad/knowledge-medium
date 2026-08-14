@@ -509,6 +509,29 @@ describe('reconcile-markdown-subtree command', () => {
     expect(survivor!.properties?.['agent:subtreeKey']).toBeUndefined()
   })
 
+  // The matched-position twin of the trailing case. Skipping the write would
+  // preserve the bytes but silently drop this reply node — detaching lets it
+  // materialize into a fresh block instead.
+  it('detaches an opaque MATCHED block and still materializes the reply node', async () => {
+    await create({id: TOPIC_A, content: 'mention'})
+
+    await reconcile('- A', {commandId: 'rms-m1'})
+    const aId = (await replyRoots())[0].id
+    await context.updateBlock({id: aId, properties: {
+      'claude:reply': true,
+      'agent:subtreeKey': KEY,
+      types: ['extension'],
+    }})
+
+    await reconcile('- A revised', {commandId: 'rms-m2', final: true})
+
+    const survivor = (await context.getSubtree(TOPIC_A)).find(row => row.id === aId)!
+    expect(survivor.content).toBe('A')
+    expect(survivor.properties?.['agent:subtreeKey']).toBeUndefined()
+    // The reply node still landed, in a block of its own.
+    expect((await replyRoots()).map(r => r.content)).toEqual(['A revised'])
+  })
+
   it('keeps streamed reply roots contiguous when the user inserts a sibling mid-stream', async () => {
     await create({id: TOPIC_A, content: 'mention'})
     // Streaming tick 1: the first reply root lands.

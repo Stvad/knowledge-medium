@@ -32,6 +32,8 @@ import {
 import { isRefCodec, isRefListCodec, type AnyPropertySchema } from '@/data/api'
 import { projectPropertyReferences } from '@/plugins/references/referenceProjection.js'
 import { parseReferences, parseBlockRefs } from '@/plugins/references/referenceParser.js'
+import { hasOpaqueContent } from '@/data/properties.js'
+import { safeJsonParse } from '@/data/blockSchema.js'
 
 /** Minimal DB surface the audit needs (a subset of the Repo's PowerSyncDb). */
 export interface AuditDb {
@@ -173,6 +175,13 @@ export interface AuditFullDeps {
    *  is sound only when the audited workspace IS the active one. */
   schemas: ReadonlyMap<string, AnyPropertySchema>
   activeWorkspaceId: string | null
+  /** `repo.opaqueContentTypes`. The content-link recompute MUST skip these:
+   *  the references processor deliberately stores no content refs for a block
+   *  whose content is not prose, so a perfectly healthy extension bundle that
+   *  happens to contain `[[` scores as a "stripped" anomaly — and lands 120
+   *  chars of source in the sample. Omitted (the bridge eval, older callers)
+   *  degrades to scanning everything, which is the pre-facet behavior. */
+  opaqueContentTypes?: ReadonlySet<string>
   /** Max blocks pulled into memory for the projection candidate scan (default 60k). */
   candidateCap?: number
   /** Pathological-size ceiling for the keyset-paginated content scan (default 1M). */
@@ -498,6 +507,7 @@ const runContentLinkRecomputeCheck = async (
 ): Promise<ConsistencyCheckResult> => {
   const sampleLimit = full.sampleLimit ?? 10
   const contentCap = full.contentCap ?? 1_000_000
+  const opaqueTypes = full.opaqueContentTypes ?? new Set<string>()
   const BATCH = 20000
   let lastId = ''
   let scanned = 0
@@ -509,8 +519,8 @@ const runContentLinkRecomputeCheck = async (
   const strippedSample: Array<{ id: string; marks: number; content_preview: string }> = []
   const staleSample: Array<{ id: string; stale: string[]; content_preview: string }> = []
   for (;;) {
-    const batch = await db.getAll<{ id: string; content: string; references_json: string }>(
-      `SELECT id, content, references_json FROM blocks
+    const batch = await db.getAll<{ id: string; content: string; references_json: string; properties_json: string }>(
+      `SELECT id, content, references_json, properties_json FROM blocks
        WHERE deleted=0 AND workspace_id=?
          AND (content LIKE '%[[%' OR content LIKE '%((%')
          AND id > ?
@@ -519,6 +529,14 @@ const runContentLinkRecomputeCheck = async (
     )
     if (batch.length === 0) break
     for (const row of batch) {
+      // Not prose, so the processor stores no content refs for it BY DESIGN —
+      // scoring it as "stripped" turns the facet's correct behavior into a
+      // permanent audit anomaly. Counted as unscanned rather than as clean:
+      // there is nothing here to recompute either way.
+      if (opaqueTypes.size > 0 && hasOpaqueContent(
+        { properties: safeJsonParse<Record<string, unknown>>(row.properties_json, {}) },
+        opaqueTypes,
+      )) continue
       const parsedAliases = new Set<string>([
         ...parseReferences(row.content).map((m) => m.alias),
         ...parseBlockRefs(row.content).map((m) => m.blockId),
