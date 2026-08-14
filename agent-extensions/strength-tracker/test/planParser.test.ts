@@ -312,34 +312,59 @@ describe('parsePlan', () => {
     expect(overlay.reentry!.some(t => t.pct === 0.5)).toBe(false)
   })
 
-  it('accepts a tier the built-in table does not have, when it states its own bounds', () => {
+  it('declines a row naming a tier the built-in table does not have', () => {
+    // Inventing a tier meant every field needed a "no built-in row to fall
+    // back to" branch, and each resolved to neutral — which for the
+    // percentage is no load cut at all. A row re-states one of the five.
     const plan = node('**Plan**', [
       node('**Re-entry protocol**', [
-        tier('3–5 days off → nothing changes', {
-          [FIELD.tierId]: 'short-trip',
+        tier('Some new row → 50%', {
+          [FIELD.tierId]: 'mystery',
           [FIELD.maxGapDays]: 5,
-          [FIELD.layoffPct]: 1,
+          [FIELD.layoffPct]: 0.5,
         }),
-      ]),
-    ])
-    const overlay = parsePlan(plan)
-    // (The stub plan warns about its missing session blocks; the row itself
-    // is accepted silently.)
-    expect(overlay.warnings.some(w => /short-trip/.test(w))).toBe(false)
-    expect(overlay.reentry!.find(t => t.id === 'short-trip')).toMatchObject({maxGapDays: 5, pct: 1})
-  })
-
-  it('declines an unknown tier that does not state the gap it covers', () => {
-    // Without a bound there is no gap it can classify, so admitting it would
-    // add a row `tierFor` can never select — or, worse, select at Infinity.
-    const plan = node('**Plan**', [
-      node('**Re-entry protocol**', [
-        tier('Some new row → 50%', {[FIELD.tierId]: 'mystery', [FIELD.layoffPct]: 0.5}),
       ]),
     ])
     const overlay = parsePlan(plan)
     expect(overlay.warnings.some(w => /mystery/.test(w))).toBe(true)
     expect(overlay.reentry).toBeUndefined()
+  })
+
+  it('overrides the bound of a built-in row', () => {
+    // What custom tiers were wanted for, and it never needed them: the row
+    // that decides is still one of the five, it just ends somewhere else.
+    const plan = node('**Plan**', [
+      node('**Re-entry protocol**', [
+        tier('1–2 weeks off → …', {[FIELD.tierId]: '1-2w', [FIELD.maxGapDays]: 12}),
+      ]),
+    ])
+    expect(parsePlan(plan).reentry!.find(t => t.id === '1-2w')?.maxGapDays).toBe(12)
+  })
+
+  it('warns when one row ends on the same day as another, making it unreachable', () => {
+    // `tierFor` sorts by the bound and takes the first match, and the sort is
+    // stable — so the row earlier in the table answers every gap the other
+    // could have, whichever is deeper.
+    const plan = node('**Plan**', [
+      node('**Re-entry protocol**', [
+        tier('1–2 weeks off → …', {[FIELD.tierId]: '1-2w', [FIELD.maxGapDays]: 34}),
+      ]),
+    ])
+    const overlay = parsePlan(plan)
+    expect(overlay.warnings.some(w => /1-2w/.test(w) && /2-4w/.test(w) && /34/.test(w))).toBe(true)
+  })
+
+  it('refuses a rep window that does not rise', () => {
+    // Each half passes COUNT alone; the PAIR is the thing that is wrong, and
+    // `mergePlan` already holds this invariant for exercises.
+    const plan = node('**Plan**', [
+      node('**Re-entry protocol**', [
+        tier('2+ months → …', {[FIELD.tierId]: '2mo+', [FIELD.repMin]: 12, [FIELD.repMax]: 8}),
+      ]),
+    ])
+    const overlay = parsePlan(plan)
+    expect(overlay.warnings.some(w => /2mo\+/.test(w) && /rising/.test(w))).toBe(true)
+    expect(overlay.reentry!.find(t => t.id === '2mo+')).toMatchObject({repMin: 8, repMax: 12})
   })
 
   it('takes the row label and guidance from the sentence beside the properties', () => {

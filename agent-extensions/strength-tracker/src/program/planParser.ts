@@ -455,23 +455,38 @@ const parseReentry = (root: PlanNode, warnings: string[]): ReentryTier[] | undef
       warnings.push(`Re-entry row "${text}" has no \`${FIELD.tierId}\` — ignored.`)
       continue
     }
+    // A row RE-STATES one of the built-in tiers; it cannot invent one.
+    //
+    // Inventing tiers was in the first draft of this and it earned its removal:
+    // every field then had a "what if there is no built-in row to fall back
+    // to" branch, and each one resolved to a neutral value — which for
+    // `strength:reentryPct` means no load cut at all. A tier that exists to
+    // reduce weight after a break, defaulting to reducing nothing, is the
+    // exact silent direction this whole file is about. Nothing has ever
+    // declared a custom tier, so the branch was carrying only risk.
+    //
+    // Nothing is lost that anyone was using: every number on all five rows is
+    // editable, `maxGapDays` included, so "make 1–2 weeks end at 12 days" is
+    // still one property. If a genuinely new row is ever wanted, add it to
+    // `DEFAULT_REENTRY_TIERS` — a real instance can then say what a custom
+    // tier's missing fields should mean, which is what this branch was
+    // guessing at.
     const base = byId.get(id)
-
-    // No bound means no gap it can classify: `tierFor` would never select it,
-    // or would select it at Infinity ahead of a row that should have won.
-    const maxGapDays = tierNumber(props, FIELD.maxGapDays, DAYS, {id, base: base?.maxGapDays, absent: base?.maxGapDays}, warnings)
-    if (maxGapDays === undefined) {
+    if (!base) {
       warnings.push(
-        `Re-entry row "${id}" is not one of the built-in tiers and states no \`${FIELD.maxGapDays}\` — ignored.`,
+        `Re-entry row "${id}" is not one of the built-in tiers `
+        + `(${[...byId.keys()].join(', ')}) — ignored. A row states the numbers for one of those.`,
       )
       continue
     }
 
+    const maxGapDays = tierNumber(props, FIELD.maxGapDays, DAYS, {id, base: base.maxGapDays, absent: base.maxGapDays}, warnings)
+
     // Two ways to say how many sets, and a row states one. Resolving a row
     // that says both by precedence is how the original bug hid: the losing
     // statement stayed on screen, describing a prescription nobody got.
-    const setsOverride = tierNumber(props, FIELD.targetSets, COUNT, {id, base: base?.setsOverride, absent: undefined}, warnings)
-    const setsDelta = tierNumber(props, FIELD.setsDelta, TALLY, {id, base: base?.setsDelta, absent: undefined}, warnings)
+    const setsOverride = tierNumber(props, FIELD.targetSets, COUNT, {id, base: base.setsOverride, absent: undefined}, warnings)
+    const setsDelta = tierNumber(props, FIELD.setsDelta, TALLY, {id, base: base.setsDelta, absent: undefined}, warnings)
     const contradicts = setsOverride !== undefined && setsDelta !== undefined
     if (contradicts) {
       warnings.push(
@@ -490,38 +505,73 @@ const parseReentry = (root: PlanNode, warnings: string[]): ReentryTier[] | undef
     // rep window and ramp are each individually readable, and dropping the
     // whole row over a set-field mistake would throw away a load cut the user
     // DID state — deciding what weight goes on a bar from an error in an
-    // unrelated field. For a tier the built-ins don't have there is no row to
-    // fall back to either, so the tier would vanish and `tierFor` would hand
-    // the gap to a neighbouring row.
+    // unrelated field.
     const sets = contradicts
       ? {
-        setsOverride: base?.setsOverride,
-        setsOverrideSessions: base?.setsOverrideSessions,
-        setsDelta: base?.setsDelta,
+        setsOverride: base.setsOverride,
+        setsOverrideSessions: base.setsOverrideSessions,
+        setsDelta: base.setsDelta,
       }
       : {
         setsOverride,
-        setsOverrideSessions: tierNumber(props, FIELD.setsOverrideSessions, TALLY, {id, base: base?.setsOverrideSessions, absent: undefined}, warnings),
+        setsOverrideSessions: tierNumber(props, FIELD.setsOverrideSessions, TALLY, {id, base: base.setsOverrideSessions, absent: undefined}, warnings),
         setsDelta,
       }
 
+    // A rep window is a PAIR, and each half passing on its own says nothing
+    // about the pair. `mergePlan` already refuses an exercise range unless
+    // `repMin < repMax`; a tier that overrides the window reached `repsFor`
+    // with no such check, so 12–8 stamped sets at 8 while the row claimed 12.
+    // Same fallback rule as everywhere here: unreadable takes the built-in.
+    const statedRepMin = tierNumber(props, FIELD.repMin, COUNT, {id, base: base.repMin, absent: undefined}, warnings)
+    const statedRepMax = tierNumber(props, FIELD.repMax, COUNT, {id, base: base.repMax, absent: undefined}, warnings)
+    const invertedWindow = statedRepMin !== undefined && statedRepMax !== undefined
+      && statedRepMin >= statedRepMax
+    if (invertedWindow) {
+      warnings.push(
+        `Re-entry row "${id}": \`${FIELD.repMin}\` is ${statedRepMin} and \`${FIELD.repMax}\` is `
+        + `${statedRepMax}, which is not a rising range — the built-in row's window used instead.`,
+      )
+    }
+
     byId.set(id, {
       id,
-      label: head.trim() || base?.label || id,
+      label: head.trim() || base.label || id,
       maxGapDays,
-      guidance: tail || base?.guidance || '',
-      pct: tierNumber(props, FIELD.layoffPct, FRACTION, {id, base: base?.pct, absent: 1}, warnings) ?? 1,
+      guidance: tail || base.guidance || '',
+      pct: tierNumber(props, FIELD.layoffPct, FRACTION, {id, base: base.pct, absent: 1}, warnings) ?? 1,
       ...sets,
-      repMin: tierNumber(props, FIELD.repMin, COUNT, {id, base: base?.repMin, absent: undefined}, warnings),
-      repMax: tierNumber(props, FIELD.repMax, COUNT, {id, base: base?.repMax, absent: undefined}, warnings),
-      sessionsToNormal: tierNumber(props, FIELD.sessionsToNormal, TALLY, {id, base: base?.sessionsToNormal, absent: base?.sessionsToNormal}, warnings) ?? 0,
-      rampPerSession: tierNumber(props, FIELD.rampPerSession, RAMP, {id, base: base?.rampPerSession, absent: 0}, warnings) ?? 0,
+      repMin: invertedWindow ? base.repMin : statedRepMin,
+      repMax: invertedWindow ? base.repMax : statedRepMax,
+      sessionsToNormal: tierNumber(props, FIELD.sessionsToNormal, TALLY, {id, base: base.sessionsToNormal, absent: base.sessionsToNormal}, warnings) ?? 0,
+      rampPerSession: tierNumber(props, FIELD.rampPerSession, RAMP, {id, base: base.rampPerSession, absent: 0}, warnings) ?? 0,
     })
     matched += 1
   }
 
   if (matched === 0) return undefined
-  return [...byId.values()]
+  const table = [...byId.values()]
+
+  // Two rows ending on the same day make one of them dead. `tierFor` sorts by
+  // the bound and takes the FIRST match, and `Array#sort` is stable, so the
+  // row earlier in this list wins every gap the other could have answered —
+  // silently, and in the direction of whichever row happens to come first
+  // rather than whichever is deeper. Editing `strength:maxGapDays` is how a
+  // row ends up here (set 1–2w to 34 and it swallows 2–4w whole), which is a
+  // plausible edit with an invisible outcome, so it is worth naming.
+  const byBound = new Map<number, string>()
+  for (const tier of table) {
+    const first = byBound.get(tier.maxGapDays)
+    if (first === undefined) byBound.set(tier.maxGapDays, tier.id)
+    else {
+      warnings.push(
+        `Re-entry rows "${first}" and "${tier.id}" both end at ${tier.maxGapDays} days, so `
+        + `"${tier.id}" can never be selected — every gap that reaches it is answered by `
+        + `"${first}" first. Give them different \`${FIELD.maxGapDays}\` bounds.`,
+      )
+    }
+  }
+  return table
 }
 
 /** Only the two barbell dance-lift milestones are stated numerically enough
