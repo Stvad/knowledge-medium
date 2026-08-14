@@ -154,6 +154,14 @@ kmagent --profile chrome-dev ping
 export AGENT_RUNTIME_PROFILE=chrome-dev
 ```
 
+A local dev server is its own origin, so it needs its own pairing and its own profile — point `AGENT_RUNTIME_APP_URL` at it when connecting:
+
+```bash
+AGENT_RUNTIME_APP_URL=http://localhost:<port>/ kmagent --profile localdev connect
+```
+
+Only `connect` / `pair-url` read `AGENT_RUNTIME_APP_URL` (it decides which URL is printed); later commands use the saved token. Loopback origins are always accepted by the bridge, so no `AGENT_RUNTIME_ALLOWED_ORIGINS` is needed.
+
 ## Type-vending for extension authors
 
 When you're authoring an extension that imports from Knowledge Medium modules (`@/extensions/core.js`, `@/data/api/index.js`, `@/components/ui/button.js`, etc.), `kmagent types` writes the app's compiled TypeScript declaration tree so type-aware editors resolve those imports with real signatures:

@@ -570,10 +570,17 @@ cli
   })
 
 cli
-  .command('pair-url', 'Print the current app pairing URL')
-  .action(async () => {
+  .command('pair-url', 'Print the current app pairing URL (bridge approval only)')
+  // The bare URL approves the bridge endpoint but does not open the token
+  // dialog, so on its own it never yields a token to paste back — `connect`
+  // is the command that does both. `--tokens` adds the open-tokens param for
+  // the case where you want to drive the token step by hand (e.g. opening the
+  // URL on another device, or re-generating a token for an already-paired tab).
+  .option('--tokens', 'Also open the token dialog in the app (as `connect` does)')
+  .action(async (options: {tokens?: boolean}) => {
     await ensureBridgeRunning()
-    process.stdout.write(`${await pairingUrl()}\n`)
+    const url = await pairingUrl(bridgeUrl, {openTokensDialog: Boolean(options.tokens)})
+    process.stdout.write(`${url}\n`)
   })
 
 cli
