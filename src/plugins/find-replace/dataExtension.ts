@@ -146,29 +146,49 @@ export const searchContentQuery = defineQuery<
     }
 
     const matchCase = normalizedOptions.matchCase ? 1 : 0
-    const rows = await ctx.db.getAll<ContentCandidateRow>(
-      SELECT_CONTENT_CANDIDATES_SQL,
-      [workspaceId, matchCase, trimmed, matchCase, trimmed, candidateLimit + 1],
-    )
-    const candidateRows = rows.slice(0, candidateLimit)
     // Opaque-content blocks never enter a bulk rewrite: a replacement
     // inside an installed extension's stored source edits executable code,
     // and the dialog selects every result by default. Filtered here rather
     // than in the SQL because the types live inside `properties_json` — a
     // `json_each` over a malformed value would fail the whole search
     // instead of one row.
-    const matches = candidateRows
-      .filter(row => !hasOpaqueContent(
-        {properties: safeJsonParse<Record<string, unknown>>(row.properties_json, {})},
-        opaqueTypes,
-      ))
+    const isOpaqueRow = (row: ContentCandidateRow): boolean => hasOpaqueContent(
+      {properties: safeJsonParse<Record<string, unknown>>(row.properties_json, {})},
+      opaqueTypes,
+    )
+    const fetchCandidates = (limit: number): Promise<ContentCandidateRow[]> =>
+      ctx.db.getAll<ContentCandidateRow>(
+        SELECT_CONTENT_CANDIDATES_SQL,
+        [workspaceId, matchCase, trimmed, matchCase, trimmed, limit + 1],
+      )
+    const eligibleIn = (rows: readonly ContentCandidateRow[], limit: number) => rows
+      .slice(0, limit)
+      .filter(row => !isOpaqueRow(row))
       .map(row => buildContentSearchMatch(row.id, row.content, trimmed, normalizedOptions))
       .filter((match): match is NonNullable<typeof match> => match !== null)
+
+    let limit = candidateLimit
+    let rows = await fetchCandidates(limit)
+    let matches = eligibleIn(rows, limit)
+    // Because the filter runs after the SQL LIMIT, opaque rows consume
+    // candidate slots — enough of them ranked above a prose match starves
+    // the result, and there is no pagination the user could use to reach
+    // past them. Widen once (bounded by MAX_CANDIDATES) when the window
+    // came back short AND more rows were available.
+    if (
+      matches.length < normalizedMaxBlocks
+      && rows.length > limit
+      && limit < MAX_CANDIDATES
+    ) {
+      limit = MAX_CANDIDATES
+      rows = await fetchCandidates(limit)
+      matches = eligibleIn(rows, limit)
+    }
 
     return {
       query: trimmed,
       matches: matches.slice(0, normalizedMaxBlocks),
-      truncated: rows.length > candidateLimit || matches.length > normalizedMaxBlocks,
+      truncated: rows.length > limit || matches.length > normalizedMaxBlocks,
     }
   },
 })

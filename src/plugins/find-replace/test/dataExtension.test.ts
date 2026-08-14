@@ -140,6 +140,29 @@ describe('findReplaceDataExtension', () => {
     expect((await search({query: 'alpha'})).matches).toEqual([])
   })
 
+  // The opaque filter runs after the SQL LIMIT, so opaque rows consume
+  // candidate slots. With maxBlocks 1 the window is 20 rows — 20 opaque
+  // matches ranked ahead of a prose match would starve the result, and
+  // there is no pagination to reach past them.
+  it('widens the candidate window when opaque rows crowd it out', async () => {
+    // The prose block must sort BELOW the whole 20-row window or this
+    // proves nothing. Ordering is `user_updated_at DESC, id ASC`, and a
+    // fast test can stamp every row in the same millisecond — so the id
+    // is the reliable lever: `zz-prose` sorts last either way.
+    await create({id: 'zz-prose', content: 'alpha in a note'})
+    for (let i = 0; i < 25; i++) {
+      await create({
+        id: `ext-${String(i).padStart(2, '0')}`,
+        content: `alpha ${i}`,
+        types: ['extension'],
+      })
+    }
+
+    const out = await search({query: 'alpha', maxBlocks: 1})
+
+    expect(out.matches.map(m => m.blockId)).toEqual(['zz-prose'])
+  })
+
   it('honors case and whole-word options', async () => {
     await create({id: 'a', content: 'Alpha alpha ALPHA'})
     await create({id: 'b', content: 'Alpha ALPHA betabet'})

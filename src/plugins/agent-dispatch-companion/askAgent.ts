@@ -8,6 +8,7 @@
  */
 import type { Block } from '@/data/block'
 import { ChangeScope, propertyValue } from '@/data/api'
+import { hasOpaqueContent } from '@/data/properties'
 import {
   ActionContextTypes,
   type ActionConfig,
@@ -74,6 +75,12 @@ export const askAgent = async (block: Block, liveContent?: string): Promise<void
   await block.repo.tx(async tx => {
     const fresh = await tx.get(block.id)
     if (!fresh) return
+    // Mentioning the agent means editing the block's text, so a block
+    // whose text is not prose can't be asked about this way — splicing
+    // `[[claude]]` into an extension's stored source breaks the module.
+    // Refuses the lifecycle props too, not just the content: a queued
+    // task whose prompt is a corrupted bundle is not a better outcome.
+    if (hasOpaqueContent(fresh, tx.opaqueContentTypes)) return
     // Content and props are now two writes in the one tx (setProperties can't
     // carry content). tx.update short-circuits an unchanged-content patch, and
     // the always-a-real-write guarantee rides the setProperties asked-at bump
