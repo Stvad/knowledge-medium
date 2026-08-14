@@ -192,21 +192,33 @@ export const aliasResultItems = (
     className: 'flex items-center gap-2',
     children: (
       <>
-        <span className="min-w-0 flex-1 truncate">{match.alias}</span>
+        {/* `min-w-24`, not `min-w-0`: `flex-1` is `flex: 1 1 0%`, a ZERO
+            basis, so the name has no width of its own and lives entirely
+            on what the other children leave behind. Uniquely on this row
+            they can leave nothing — a preview at 40% plus two capped
+            chips at 30% each is the whole line, and the page NAME
+            measured 0px wide, which is the one thing the row exists to
+            show. (Blocks and Recents rows carry no preview, so their two
+            chips are bounded at 60% and their text always keeps the
+            rest.) The floor is what the name is guaranteed; `truncate`
+            still fires because the floor is far below its content. */}
+        <span className="min-w-24 flex-1 truncate">{match.alias}</span>
         {match.content && match.content !== match.alias && (
-          <span className="min-w-0 max-w-[40%] shrink truncate text-xs text-muted-foreground">
+          <span className="min-w-0 max-w-[30%] shrink truncate text-xs text-muted-foreground">
             {truncate(match.content, 50)}
           </span>
         )}
         {displayableTypes(match.typeIds, typeRegistry)
           .slice(0, MAX_ROW_TYPE_CHIPS)
           .map(({typeId, type}) => (
+            // 25% rather than the 30% the other groups use: this row has
+            // four things competing for one line instead of two.
             <TypeChip
               key={typeId}
               typeId={typeId}
               type={type}
               withHash
-              className="max-w-[30%] shrink-0 py-0 leading-4"
+              className="max-w-[25%] shrink-0 py-0 leading-4"
             />
           ))}
       </>
