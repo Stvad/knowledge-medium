@@ -566,7 +566,15 @@ export const searchBlocksAcrossSources = async (
     throw failures[0].error
   }
 
+  // Enforced HERE, not per-source, so the guarantee holds for every
+  // contribution — a semantic-search plugin has no reason to know that some
+  // blocks' content is not prose, and a contract that requires each source
+  // to remember is a contract that gets forgotten. The core source filters
+  // too, but only to decide whether its own window needs widening; this is
+  // the authoritative pass.
+  const opaqueTypes = repo.opaqueContentTypes
   const merged = candidateLists.flat()
+    .filter(candidate => !hasOpaqueContent(candidate.block, opaqueTypes))
 
   const byId = new Map<string, SearchSourceCandidate>()
   for (const candidate of merged) {

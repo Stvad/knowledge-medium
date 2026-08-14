@@ -533,36 +533,15 @@ const runContentLinkRecomputeCheck = async (
     )
     if (batch.length === 0) break
     for (const row of batch) {
-      // Not prose, so the processor stores no content refs for it BY DESIGN —
+      // Not prose: the processor stores no content refs for it BY DESIGN, so
       // scoring it as "stripped" would turn the facet's correct behaviour
-      // into a permanent anomaly. Do NOT parse the payload.
-      //
-      // But do not skip the row either: a LEGACY content-derived entry (from
-      // before the exclusion, or an interrupted cleanup) is stale by
-      // construction — nothing re-parses this block, so nothing will ever
-      // drop it, and it publishes a backlink the bytes do not support.
-      // Reported on its own axis, since the recompute counters describe a
-      // parse this row never gets.
+      // into a permanent anomaly. Do NOT parse the payload. Its lingering
+      // edges are audited by their own scan below, which does not depend on
+      // the syntax prefilter this loop rides on.
       if (opaqueTypes.size > 0 && hasOpaqueContent(
         { properties: safeJsonParse<Record<string, unknown>>(row.properties_json, {}) },
         opaqueTypes,
-      )) {
-        let opaqueStored: StoredRef[]
-        try {
-          opaqueStored = JSON.parse(row.references_json)
-        } catch {
-          continue
-        }
-        const lingering = opaqueStored.filter((r) => r && !r.sourceField)
-        if (lingering.length > 0) {
-          opaqueContentRefBlocks += 1
-          opaqueContentRefs += lingering.length
-          if (opaqueSample.length < sampleLimit) {
-            opaqueSample.push({ id: row.id, refs: lingering.length })
-          }
-        }
-        continue
-      }
+      )) continue
       const parsedAliases = new Set<string>([
         ...parseReferences(row.content).map((m) => m.alias),
         ...parseBlockRefs(row.content).map((m) => m.blockId),
@@ -593,6 +572,48 @@ const runContentLinkRecomputeCheck = async (
     if (batch.length < BATCH) break
     if (scanned >= contentCap) { truncated = true; break }
   }
+  // Opaque rows carrying a content-derived reference entry, scanned on their
+  // OWN candidates. The loop above rides a `content LIKE '%[[%' OR '%((%'`
+  // prefilter, which is exactly wrong here: the case that matters is a
+  // payload REPLACED with one containing no reference syntax while an entry
+  // from the old bytes survived an interrupted cleanup. Nothing re-parses
+  // these blocks, so nothing will ever drop that entry and it keeps
+  // publishing a backlink the bytes do not support — the audit is the only
+  // thing that can see it.
+  //
+  // Candidates come from a substring probe on `properties_json` per opaque
+  // type — cheap because that set is a handful of ids, and verified properly
+  // in JS afterwards (the probe can over-match; it must never under-match).
+  for (const type of opaqueTypes) {
+    const rows = await db.getAll<{ id: string; properties_json: string; references_json: string }>(
+      `SELECT id, properties_json, references_json FROM blocks
+       WHERE deleted=0 AND workspace_id=?
+         AND properties_json LIKE '%' || ? || '%'
+         AND references_json != '[]'
+       ORDER BY id LIMIT ${BATCH}`,
+      [workspaceId, `"${type}"`],
+    )
+    for (const row of rows) {
+      if (!hasOpaqueContent(
+        { properties: safeJsonParse<Record<string, unknown>>(row.properties_json, {}) },
+        opaqueTypes,
+      )) continue
+      let stored: StoredRef[]
+      try {
+        stored = JSON.parse(row.references_json)
+      } catch {
+        continue
+      }
+      const lingering = stored.filter((r) => r && !r.sourceField)
+      if (lingering.length === 0) continue
+      opaqueContentRefBlocks += 1
+      opaqueContentRefs += lingering.length
+      if (opaqueSample.length < sampleLimit) {
+        opaqueSample.push({ id: row.id, refs: lingering.length })
+      }
+    }
+  }
+
   const anomalous = strippedBlocks > 0 || staleRefBlocks > 0 || opaqueContentRefBlocks > 0
   return {
     status: anomalous ? 'anomaly' : truncated ? 'incomplete' : 'ok',

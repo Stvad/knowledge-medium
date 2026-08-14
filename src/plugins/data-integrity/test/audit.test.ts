@@ -532,6 +532,23 @@ describe('runConsistencyAudit — full (on-demand) deep checks', () => {
     expect(check.strippedBlocks).toBe(0)
   })
 
+  // The case the syntax prefilter cannot reach: the payload was REPLACED
+  // with one containing no `[[` or `((` while an entry from the old bytes
+  // survived. Nothing re-parses the block, so nothing drops that entry.
+  it('flags a lingering ref on an opaque block whose content has no reference syntax', async () => {
+    await ins({
+      id: 'ext2', content: 'export const version = 2',
+      properties: { types: ['extension'] },
+      references: [{ id: 'foo-id', alias: 'Foo' }],
+    })
+    const r = await runConsistencyAudit(sharedDb.db, WS, 0, {
+      full: { ...FULL, opaqueContentTypes: new Set(['extension']) },
+    })
+    const check = r.checks.content_link_recompute
+    expect(check.status).toBe('anomaly')
+    expect(check.opaqueContentRefBlocks).toBe(1)
+  })
+
   it('property_ref_at_rest (schema-aware) flags a value-present/ref-absent curated prop', async () => {
     await ins({ id: 'p1', properties: { 'next-review-date': '2026-01-01' }, references: [] })
     const r = await runConsistencyAudit(sharedDb.db, WS, 0, { full: FULL })

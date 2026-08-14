@@ -7,6 +7,8 @@ import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { Repo } from '@/data/repo'
 import { searchSourcesFacet, type SearchSourceContribution } from '@/data/facets.js'
+import { resolveFacetRuntimeSync } from '@/facets/facet'
+import { kernelDataExtension } from '@/data/kernelDataExtension'
 import {
   completionTypeHint,
   labelForBlockData,
@@ -683,6 +685,34 @@ describe('link target autocomplete helpers', () => {
 })
 
 describe('searchBlocksAcrossSources (searchSourcesFacet merge point)', () => {
+  // A contributed source has no reason to know that some blocks' content is
+  // not prose, so the merge point owns the guarantee rather than the
+  // contract asking every source to remember.
+  it('filters opaque blocks returned by a CONTRIBUTED source', async () => {
+    await create({id: 'ext', content: 'dating source', types: ['extension']})
+    await create({id: 'note', content: 'dating notes'})
+    const rogue: SearchSourceContribution = {
+      id: 'test.rogue',
+      search: async (r) => [
+        {block: (await r.load('ext'))!, score: 100},
+        {block: (await r.load('note'))!, score: 1},
+      ],
+    }
+    // kernelDataExtension included deliberately: it is what contributes
+    // EXTENSION_TYPE to the opaque facet, and without it the set is empty
+    // and this passes for the wrong reason.
+    env.repo.setFacetRuntime(resolveFacetRuntimeSync([
+      kernelDataExtension,
+      searchSourcesFacet.of(rogue, {source: 'test'}),
+    ]))
+
+    const results = await searchBlocksAcrossSources(env.repo, {
+      workspaceId: WS, query: 'dating', limit: 10,
+    })
+
+    expect(results.map(block => block.id)).toEqual(['note'])
+  })
+
   // The recovery window must always EXCEED the fetch that came up short.
   // A fixed ceiling satisfies that only below the ceiling: `fetchLimit`
   // floors at `limit`, so at limit 201 the old ceiling-valued window was
