@@ -136,15 +136,37 @@ describe('appendTagToBlocks', () => {
     }).repo
   })
 
-  const seed = async (id: string, content: string): Promise<void> => {
+  const seed = async (
+    id: string,
+    content: string,
+    types?: readonly string[],
+  ): Promise<void> => {
     await repo.tx(tx => tx.create({
       id,
       workspaceId: 'ws-1',
       parentId: null,
       orderKey: `a-${id}`,
       content,
+      ...(types ? {properties: {types}} : {}),
     }), {scope: ChangeScope.BlockDefault, description: `seed ${id}`})
   }
+
+  // Appending ` [[tag]]` to an installed extension's stored source edits
+  // executable code. Reported separately from `alreadyTagged` so the
+  // action can say why nothing happened.
+  it('refuses opaque-content blocks and leaves their bytes alone', async () => {
+    await seed('a', 'a note')
+    await seed('ext', 'export const x = 1', ['extension'])
+
+    const result = await appendTagToBlocks(
+      [repo.block('a'), repo.block('ext')],
+      'srs',
+    )
+
+    expect(result).toEqual({total: 2, updated: 1, alreadyTagged: 0, skippedOpaque: 1})
+    expect((await repo.load('ext'))?.content).toBe('export const x = 1')
+    expect((await repo.load('a'))?.content).toBe('a note [[srs]]')
+  })
 
   it('appends the tag to every block in a single tx', async () => {
     await seed('a', 'first')
@@ -155,7 +177,7 @@ describe('appendTagToBlocks', () => {
       'srs',
     )
 
-    expect(result).toEqual({total: 2, updated: 2, alreadyTagged: 0})
+    expect(result).toEqual({total: 2, updated: 2, alreadyTagged: 0, skippedOpaque: 0})
     expect((await repo.load('a'))?.content).toBe('first [[srs]]')
     expect((await repo.load('b'))?.content).toBe('second [[srs]]')
   })
@@ -169,20 +191,20 @@ describe('appendTagToBlocks', () => {
       'srs',
     )
 
-    expect(result).toEqual({total: 2, updated: 1, alreadyTagged: 1})
+    expect(result).toEqual({total: 2, updated: 1, alreadyTagged: 1, skippedOpaque: 0})
     expect((await repo.load('a'))?.content).toBe('already [[srs]] tagged')
     expect((await repo.load('b'))?.content).toBe('untagged [[srs]]')
   })
 
   it('is a no-op for empty input', async () => {
     const result = await appendTagToBlocks([], 'srs')
-    expect(result).toEqual({total: 0, updated: 0, alreadyTagged: 0})
+    expect(result).toEqual({total: 0, updated: 0, alreadyTagged: 0, skippedOpaque: 0})
   })
 
   it('is a no-op when the tag name is empty', async () => {
     await seed('a', 'first')
     const result = await appendTagToBlocks([repo.block('a')], '')
-    expect(result).toEqual({total: 1, updated: 0, alreadyTagged: 0})
+    expect(result).toEqual({total: 1, updated: 0, alreadyTagged: 0, skippedOpaque: 0})
     expect((await repo.load('a'))?.content).toBe('first')
   })
 })

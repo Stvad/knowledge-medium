@@ -25,6 +25,8 @@ const runAddTagFlow = async (blocks: readonly Block[]): Promise<void> => {
       )
     } else if (result.alreadyTagged > 0) {
       showError(`Every selected block already carries [[${choice.tagName}]]`)
+    } else if (result.skippedOpaque > 0) {
+      showError("Can't tag a block whose content isn't text (e.g. extension source)")
     } else {
       showError('No blocks were tagged')
     }

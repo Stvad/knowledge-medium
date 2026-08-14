@@ -7,6 +7,8 @@
  */
 import type { EditorView } from '@codemirror/view'
 import type { Block } from '@/data/block'
+import type { BlockData } from '@/data/api'
+import { hasOpaqueContent } from '@/data/properties'
 import {
   parseOutermostReferences,
   type ParsedReference,
@@ -65,22 +67,30 @@ export const replaceSingleDateReferenceContent = (
 
 const REFERENCE_DATE_ADAPTER_ID = 'daily-notes.reference'
 
+/** A date-shaped wikilink inside an extension bundle or a drawing's JSON
+ *  is a coincidence, not a schedule. Treating it as one makes the block
+ *  reschedulable, and reschedule/spread then splice a new date into the
+ *  payload. Checked on BOTH entry points: `canHandle` keeps the block out
+ *  of the flows, `setIso` refuses a direct adapter call. */
+const isSchedulable = (block: Block, data: BlockData): boolean =>
+  !hasOpaqueContent(data, block.repo.opaqueContentTypes)
+
 export const referenceDateAdapter: BlockDateAdapter = {
   id: REFERENCE_DATE_ADAPTER_ID,
   canHandle: (block: Block) => {
     const data = block.peek()
-    if (!data) return false
+    if (!data || !isSchedulable(block, data)) return false
     return singleDateReferenceMatch(data.content) !== null
   },
   getCurrentIso: async (block: Block) => {
     const data = block.peek() ?? await block.load()
-    if (!data) return null
+    if (!data || !isSchedulable(block, data)) return null
     return singleDateReferenceMatch(data.content)?.iso ?? null
   },
   setIso: async (block: Block, iso: string) => {
     if (block.repo.isReadOnly) return false
     const data = block.peek() ?? await block.load()
-    if (!data) return false
+    if (!data || !isSchedulable(block, data)) return false
     const nextContent = replaceSingleDateReferenceContent(data.content, iso)
     if (nextContent === null || nextContent === data.content) return false
     await block.setContent(nextContent)

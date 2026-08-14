@@ -108,6 +108,35 @@ describe('blockDateAdapter dispatch', () => {
     expect(await adapter?.getCurrentIso(block)).toBe('2026-05-15')
   })
 
+  // A date-shaped wikilink inside an extension bundle is a coincidence,
+  // not a schedule — reschedule/spread would splice a new date into
+  // executable source. Both entry points are checked: the adapter must
+  // not be picked, and a direct `setIso` must refuse.
+  it('never schedules an opaque-content block, even with one date wikilink', async () => {
+    const repo = makeRepo()
+    const runtime = resolveFacetRuntimeSync([
+      kernelDataExtension,
+      blockDateAdapterFacet.of(referenceDateAdapter, {source: 'test'}),
+    ])
+    repo.setFacetRuntime(runtime)
+
+    const content = 'const releasedOn = "[[2026-05-15]]"'
+    await repo.tx(tx => tx.create({
+      id: 'ext', workspaceId: 'ws', parentId: null, orderKey: 'a',
+      content,
+      properties: {types: ['extension']},
+    }), {scope: ChangeScope.BlockDefault})
+
+    const block = repo.block('ext')
+    await block.load()
+
+    expect(pickBlockDateAdapter(runtime, block)).toBeNull()
+    expect(hasAnyBlockDateAdapter(runtime, block)).toBe(false)
+    // Direct call, bypassing the pick: still refuses, bytes untouched.
+    expect(await referenceDateAdapter.setIso(block, '2026-06-01')).toBe(false)
+    expect((await repo.load('ext'))?.content).toBe(content)
+  })
+
   it('respects negative precedence — higher-priority adapter wins when both apply', async () => {
     const repo = makeRepo()
     const winner = stubAdapter('test.high-priority', () => true)

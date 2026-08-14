@@ -1,5 +1,6 @@
 import type { Block } from '@/data/block'
 import { ChangeScope } from '@/data/api'
+import { hasOpaqueContent } from '@/data/properties'
 import { parseReferences, renderWikilink } from '@/plugins/references/referenceParser.js'
 import { isValidTagName } from './config.ts'
 
@@ -10,12 +11,17 @@ export interface AppendTagResult {
   updated: number
   /** Blocks that already carried the tag (no-op, not failure). */
   alreadyTagged: number
+  /** Blocks refused because their content is not prose
+   *  (`opaqueContentTypesFacet`) — appending to an extension's stored
+   *  source would edit executable code. */
+  skippedOpaque: number
 }
 
 const emptyResult = (blocks: readonly Block[]): AppendTagResult => ({
   total: blocks.length,
   updated: 0,
   alreadyTagged: 0,
+  skippedOpaque: 0,
 })
 
 const hasTagReference = (content: string, alias: string): boolean =>
@@ -54,11 +60,18 @@ export const appendTagToBlocks = async (
   const trimmedName = name.trim()
   let updated = 0
   let alreadyTagged = 0
+  let skippedOpaque = 0
 
   await repo.tx(async tx => {
     for (const block of blocks) {
       const row = await tx.get(block.id)
       if (!row) continue
+      // Before the tag check, not after: an opaque block is refused, not
+      // "already tagged", and its content is not prose to search either.
+      if (hasOpaqueContent(row, repo.opaqueContentTypes)) {
+        skippedOpaque += 1
+        continue
+      }
       if (hasTagReference(row.content, trimmedName)) {
         alreadyTagged += 1
         continue
@@ -70,5 +83,5 @@ export const appendTagToBlocks = async (
     }
   }, {scope: ChangeScope.BlockDefault, description: `append tag [[${trimmedName}]]`})
 
-  return {total: blocks.length, updated, alreadyTagged}
+  return {total: blocks.length, updated, alreadyTagged, skippedOpaque}
 }
