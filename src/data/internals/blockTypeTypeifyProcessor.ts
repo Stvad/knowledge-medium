@@ -117,7 +117,16 @@ export const BLOCK_TYPE_TYPEIFY_PROCESSOR = defineSameTxProcessor({
       // or `((id))` stamps only `reference_target_id`, which is not
       // machinery — refusing it would roll back a perfectly good type whose
       // note happens to be a reference.
-      if (currentLabel !== '' && parseExactReferenceBlockContent(after.content)?.fieldForm) {
+      // Not for an OPAQUE row: `core.deriveReferenceTarget` clears the derived
+      // columns for those regardless of content, so a `::`-shaped payload
+      // there cannot project as machinery — and refusing a composition
+      // BECAUSE an opaque payload happens to look grammar-shaped contradicts
+      // what opaque means (its bytes are not read as prose).
+      if (
+        currentLabel !== ''
+        && !hasOpaqueContent(after, ctx.opaqueContentTypes)
+        && parseExactReferenceBlockContent(after.content)?.fieldForm
+      ) {
         throw new GrammarShapedLabelError(after.content.trim(), 'Block type content')
       }
 

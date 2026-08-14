@@ -329,6 +329,22 @@ describe('block-type typeify processor', () => {
   // projects as property machinery instead of appearing in the outline.
   // Only the grammar-shape check applies here; the content is not claimed
   // as an alias when a label is supplied, so round-tripping is moot.
+  // An opaque payload that happens to be `::`-shaped is still not machinery:
+  // the derive processor clears the columns for opaque rows regardless of
+  // content, so there is nothing to refuse.
+  it('accepts a marked-shaped OPAQUE payload when a label is supplied', async () => {
+    env = await setup()
+    const content = '::((11111111-1111-4111-8111-111111111111))'
+    const id = await tagBlockType(env, content, {
+      [typesProp.name]: ['extension'],
+      [blockTypeLabelProp.name]: 'Readwise',
+    })
+    const row = await env.repo.load(id)
+    expect(row!.content).toBe(content)
+    expect(row!.referenceTargetId).toBeNull()
+    expect(row!.isFieldForm ?? false).toBe(false)
+  })
+
   // Only the MARKED form is machinery. An unmarked reference as the note's
   // content is just a note that happens to be a reference — refusing it
   // would roll back a valid type composition for no gain.
