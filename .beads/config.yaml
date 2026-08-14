@@ -77,4 +77,4 @@ agent:
 sync:
     remote: "git+ssh://git@github.com/Stvad/knowledge-medium-beads.git"
 prime:
-    max-memory-chars: 24000
+    max-memory-chars: 30000
