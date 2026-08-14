@@ -3,6 +3,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { ChangeScope, codecs, defineProperty, type BlockData } from '@/data/api'
 import { Repo } from '@/data/repo'
 import { projectedPropertyDefinitionsFacet } from '@/data/facets'
+import { typesProp } from '@/data/properties'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import {
@@ -118,6 +119,25 @@ describe('findReplaceDataExtension', () => {
     const out = await search({query: 'alpha'})
 
     expect(out.matches.map(match => match.blockId)).toEqual(['prose'])
+  })
+
+  // Tagging a block opaque is a property-only edit, which `kernel.content`
+  // deliberately does not report — so without a dep on type membership the
+  // cached handle keeps serving the block as a candidate. Both searches run
+  // the same args, so they share one handle: an unchanged second result is
+  // the cache, not a re-resolve.
+  it('re-resolves the search when a matching block becomes opaque', async () => {
+    await create({id: 'later-ext', content: 'alpha in a note'})
+
+    expect((await search({query: 'alpha'})).matches.map(m => m.blockId))
+      .toEqual(['later-ext'])
+
+    await env.repo.tx(
+      tx => tx.setProperty('later-ext', typesProp, ['extension']),
+      {scope: ChangeScope.BlockDefault},
+    )
+
+    expect((await search({query: 'alpha'})).matches).toEqual([])
   })
 
   it('honors case and whole-word options', async () => {

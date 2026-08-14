@@ -11,7 +11,9 @@ import { safeJsonParse } from '@/data/blockSchema'
 import { hasOpaqueContent } from '@/data/properties'
 import {
   KERNEL_CONTENT_CHANNEL,
+  TYPED_BLOCKS_TYPE_CHANNEL,
   kernelContentKey,
+  typedBlocksTypeKey,
 } from '@/data/invalidation'
 import {
   deriveReferenceColumns,
@@ -128,6 +130,20 @@ export const searchContentQuery = defineQuery<
       channel: KERNEL_CONTENT_CHANNEL,
       key: kernelContentKey(workspaceId),
     })
+    // The result EXCLUDES opaque-content blocks, so membership in those
+    // types is part of what it depends on — and gaining or losing a type
+    // is a property-only edit, which `kernel.content` deliberately does
+    // not report. Without this a cached search keeps offering a block
+    // that just became extension source (and keeps hiding one that
+    // stopped being it) until its content happens to change.
+    const opaqueTypes = ctx.repo.opaqueContentTypes
+    for (const type of opaqueTypes) {
+      ctx.depend({
+        kind: 'plugin',
+        channel: TYPED_BLOCKS_TYPE_CHANNEL,
+        key: typedBlocksTypeKey(workspaceId, type),
+      })
+    }
 
     const matchCase = normalizedOptions.matchCase ? 1 : 0
     const rows = await ctx.db.getAll<ContentCandidateRow>(
@@ -141,7 +157,6 @@ export const searchContentQuery = defineQuery<
     // than in the SQL because the types live inside `properties_json` — a
     // `json_each` over a malformed value would fail the whole search
     // instead of one row.
-    const opaqueTypes = ctx.repo.opaqueContentTypes
     const matches = candidateRows
       .filter(row => !hasOpaqueContent(
         {properties: safeJsonParse<Record<string, unknown>>(row.properties_json, {})},
