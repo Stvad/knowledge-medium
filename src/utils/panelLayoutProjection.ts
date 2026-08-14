@@ -71,7 +71,14 @@ const panelViewMode = (row: BlockData): string | undefined => {
 export const isPanelRowMaximized = (row: Pick<BlockData, 'properties'>): boolean =>
   safeDecodeRowProperty(row, panelMaximizedProp)
 
-const sessionActivePanelId = (row: BlockData | undefined): string | undefined => {
+/** The session's active-panel pointer, read off the layout-session ROW.
+ *
+ *  Callers that already hold a rows snapshot must use this rather than a
+ *  separate property subscription: the pointer and the panel rows are written
+ *  in ONE tx, but two subscriptions can deliver them in either order, and any
+ *  logic comparing them (which pane is maximized, which pane is active) then
+ *  runs against a half-applied commit. */
+export const sessionActivePanelId = (row: BlockData | undefined): string | undefined => {
   const stored = row?.properties[activePanelIdProp.name]
   if (stored === undefined) return undefined
   return activePanelIdProp.codec.decode(stored)

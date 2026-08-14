@@ -2,12 +2,12 @@ import { BlockComponent } from '@/components/BlockComponent.js'
 import { BlockRendererProps } from '@/types.js'
 import { NestedBlockContextProvider } from '@/context/block.js'
 import { useIsMobile } from '@/utils/react.js'
-import { useHandle, usePropertyValue } from '@/hooks/block.js'
+import { useHandle } from '@/hooks/block.js'
 import { useEffect, useMemo } from 'react'
 import type { BlockData } from '@/data/api'
 import type { Block } from '@/data/block.js'
 import { activePanelIdProp } from '@/data/properties.js'
-import { isPanelRowMaximized, isPanelStackRow } from '@/utils/panelLayoutProjection.js'
+import { isPanelRowMaximized, isPanelStackRow, sessionActivePanelId } from '@/utils/panelLayoutProjection.js'
 
 type RenderSlot =
   | {kind: 'panel'; id: string; maximized: boolean}
@@ -154,10 +154,18 @@ function SlotView({
 
 export function LayoutRenderer({block}: BlockRendererProps) {
   const isMobile = useIsMobile()
-  const [activePanelId] = usePropertyValue(block, activePanelIdProp)
   const rows = useHandle(block.repo.query.subtree({id: block.id, hidePropertyChildren: true}), {
     selector: data => data ?? EMPTY_ROWS,
   })
+  // Read the pointer off the ROWS snapshot (subtree includes the root), not
+  // from a separate property subscription. An insert writes the new row, the
+  // cleared maximize flags, and this pointer in ONE tx — but two subscriptions
+  // deliver that commit in either order, and the effect below compares the
+  // pointer against the flags. Observed with a property subscription: opening
+  // a pane while another was maximized landed the pointer first, so the
+  // effect still saw the OLD flagged rows and wrote `active` back to the
+  // maximized pane, undoing the insert's activation. Same snapshot, no skew.
+  const activePanelId = sessionActivePanelId(rows.find(row => row.id === block.id))
   const slots = useMemo(() => buildRenderSlots(block.id, rows), [block.id, rows])
   const panelSlots = useMemo(() => flattenPanelSlots(slots), [slots])
   const activePanelSlot = activePanelId

@@ -201,6 +201,30 @@ describe('LayoutRenderer', () => {
         expect(layoutSessionBlock().peekProperty(activePanelIdProp)).toBe(first))
     })
 
+    // The insert clears the flag, creates the row, and moves `active` onto the
+    // new pane in ONE tx — but the renderer used to read `activePanelId` from
+    // a separate subscription, so it could see the new pointer against the OLD
+    // flagged rows and write `active` straight back to the maximized pane.
+    // Only reproduces with the renderer MOUNTED (its effect is the clobberer),
+    // which is why the projection-level insert test cannot cover it.
+    it('lets an insert under a maximize keep the new pane active', async () => {
+      const {first, second} = await twoPanels()
+      await setMaximized(first, true)
+      renderLayout()
+      await screen.findByTestId(`block-${first}`)
+      expect(screen.queryByTestId(`block-${second}`)).toBeNull()
+
+      const inserted = await insertPanelRow(env.repo, layoutSessionBlock(), 'page-c')
+
+      expect(await screen.findByTestId(`block-${inserted}`)).toBeTruthy()
+      // Give the effect every chance to clobber before believing it didn't.
+      await expect(vi.waitFor(
+        () => expect(layoutSessionBlock().peekProperty(activePanelIdProp)).not.toBe(inserted),
+        {timeout: 500},
+      )).rejects.toThrow()
+      expect(screen.getByTestId(`block-${first}`)).toBeTruthy()
+    }, 20_000) // measured ~600ms: the negative wait dominates
+
     // With activePanelId UNSET — the shipped shape of a shared `…;max` link,
     // since reconcile leaves the pointer alone — the coercion effect and the
     // fallback-active effect both fire in the same commit. A fallback of
