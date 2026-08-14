@@ -260,8 +260,13 @@ export const extensionApiCatalog: ApiModuleGroup[] = [
   {
     category: 'data',
     importPath: '@/data/facets.js',
-    description: 'Data-layer facets — definition seeds, property-editor overrides, block-type seeds.',
-    exports: ['definitionSeedsFacet', 'propertyEditorOverridesFacet', 'typeSeedsFacet'],
+    description: "Data-layer facets — definition seeds, property-editor overrides, block-type seeds, and opaqueContentTypesFacet: contribute a type id there when that type's CONTENT is not prose (a stored source bundle, a drawing's JSON), and every content reader — link parsing, search, bulk rewrites — skips those blocks. Without it they are treated as text, and an ordinary find-and-replace can corrupt them.",
+    exports: [
+      'definitionSeedsFacet',
+      'opaqueContentTypesFacet',
+      'propertyEditorOverridesFacet',
+      'typeSeedsFacet',
+    ],
     types: [],
   },
   {
