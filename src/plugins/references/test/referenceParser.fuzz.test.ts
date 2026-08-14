@@ -149,6 +149,20 @@ describe('wikilink parsing', () => {
     expect(performance.now() - started).toBeLessThan(300)
   })
 
+  it('does not re-read the alias once per closer', () => {
+    // The second half of the same discipline (Codex on PR #548). Bracket
+    // depth rides the opener stack, so a close is O(1) in the alias — and it
+    // has to be, because this runs once per closer and the strings it would
+    // otherwise walk are NOT free the way the caller's `slice` is (V8 answers
+    // that with an O(1) SlicedString, which is why master parses this shape
+    // in 3ms while a per-close scan took 2375ms). Now 2.5ms; the 300ms bound
+    // is >100x that and 8x under the scanning version.
+    const nested = '[['.repeat(16_000).concat('x', ']]'.repeat(16_000))
+    const started = performance.now()
+    parseReferences(nested)
+    expect(performance.now() - started).toBeLessThan(300)
+  })
+
   it('a stray `]` after a link never gets absorbed into the alias', () => {
     // The other side of the same rule, and the one protecting existing
     // content: `[[foo]]` followed by literal `]`s must keep parsing as the

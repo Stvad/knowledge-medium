@@ -108,8 +108,24 @@ const hasBalancedBrackets = (s: string): boolean => {
   return depth === 0
 }
 
-/** Where the wikilink opened at `startPos` actually closes, given that a run
- *  of `]` begins at `runStart` and `enclosing` openers are still unclosed
+/** One unclosed `[[` the scanner is carrying, plus the bracket bookkeeping
+ *  that lets `closingDelimiterFor` answer without re-reading the alias.
+ *
+ *  `depthAtOpen` is the running single-bracket depth just after this opener
+ *  was consumed, so the alias's own net depth is `depth - depthAtOpen` — a
+ *  subtraction rather than a scan. `minDepth` is the lowest the running depth
+ *  has been since, which is how an alias containing a `]` that closes nothing
+ *  (`[[a]b]]`) is recognized: it dips below `depthAtOpen`. A popped frame
+ *  hands its `minDepth` down to the frame beneath it, since anything that
+ *  happened inside the inner alias happened inside the outer one too. */
+interface OpenWikilink {
+  start: number
+  depthAtOpen: number
+  minDepth: number
+}
+
+/** Where the wikilink opened at `frame.start` actually closes, given that a
+ *  run of `]` begins at `runStart` and `enclosing` openers are still unclosed
  *  around it.
  *
  *  A run of exactly two is never in doubt — it is the closer, and this
@@ -120,11 +136,12 @@ const hasBalancedBrackets = (s: string): boolean => {
  *    `[[Book of [x]]]`  the alias opened a `[` that wants closing → it does
  *    `[[foo]]]`         nothing is open → the stray `]` is text
  *
- *  So the alias should absorb exactly as many `]` as it has unclosed `[`.
- *  That is a COUNT, not a search: compute the alias-so-far's net bracket
- *  depth in one pass and the answer is `runStart + depth`. An underflow (a
- *  `]` with no `[` to close, e.g. `[[a]b]]`) means no reading balances — fall
- *  back to the first pair, which is what this has always done.
+ *  So the alias absorbs exactly as many `]` as it has unclosed `[`. That is a
+ *  COUNT, and the count arrives already computed: the scanner carries bracket
+ *  depth on the opener stack, so this reads `depth - frame.depthAtOpen`
+ *  instead of walking the alias. An underflow (a `]` with no `[` to close,
+ *  e.g. `[[a]b]]`) means no reading balances — fall back to the first pair,
+ *  which is what this has always done.
  *
  *  ENCLOSING OPENERS GET THEIR CLOSERS FIRST (Codex on PR #548). A nested
  *  span shares the run with the links around it, so absorbing greedily can
@@ -137,56 +154,67 @@ const hasBalancedBrackets = (s: string): boolean => {
  *  `[[outer [[Book of [x]]] tail]]`, whose outer link closes later in the
  *  content and never wanted this run's brackets.
  *
- *  Deliberately not "try each candidate and test it for balance" (also Codex
- *  on #548): that re-scans a near-full prefix per candidate, so `[[` + N `[`
- *  + N/2 `]` costs Θ(N²) and a pasted block could hang the client. This is
- *  one pass over the same prefix `parseWikilinkReferences` is about to
- *  `slice` anyway, and the run walk is bounded by what could change the
- *  answer — with an early exit at depth 0, which is every frame of the
- *  deep-nesting shape.
+ *  EVERYTHING HERE IS O(1) except a run walk bounded by what could change the
+ *  answer, and that is load-bearing rather than tidy (also Codex on #548).
+ *  This runs once per closer, so anything proportional to the alias makes the
+ *  whole parse quadratic — and the strings it would walk are not free the way
+ *  the caller's `slice` is, which V8 answers with an O(1) SlicedString. A
+ *  first cut scanned the alias here and took 2375ms on
+ *  `'[['.repeat(16000) + 'x' + ']]'.repeat(16000)` against 3ms before it;
+ *  arbitrary pasted or imported content reaches that shape.
  *
  *  Reading a bare `]` run this way is what removes the need for
  *  `renderWikilink` to pad a trailing `]` into the user's own text. */
 const closingDelimiterFor = (
   content: string,
-  startPos: number,
+  frame: OpenWikilink,
+  depth: number,
   runStart: number,
   enclosing: number,
 ): number => {
-  let depth = 0
-  for (let j = startPos + 2; j < runStart; j++) {
-    const ch = content[j]
-    if (ch === '[') depth++
-    else if (ch === ']' && --depth < 0) return runStart
-  }
-  // Nothing to absorb — and this is also the cheap exit that keeps deeply
-  // nested input linear, since `[[`-only nesting gives every frame depth 0.
-  if (depth === 0) return runStart
+  // A `]` that closed nothing means no reading of this run balances.
+  if (frame.minDepth < frame.depthAtOpen) return runStart
+  const absorb = depth - frame.depthAtOpen
+  // Nothing to absorb — the overwhelmingly common case, and the one that
+  // keeps deeply nested input off the run walk entirely.
+  if (absorb <= 0) return runStart
   // Walk only as far as could change the comparison below: past
-  // `depth + 2 + 2 * enclosing` both leftovers saturate at `enclosing`.
-  const horizon = depth + 2 + 2 * enclosing
+  // `absorb + 2 + 2 * enclosing` both leftovers saturate at `enclosing`.
+  const horizon = absorb + 2 + 2 * enclosing
   let run = 0
   while (run < horizon && content[runStart + run] === ']') run++
-  if (run < depth + 2) return runStart
+  if (run < absorb + 2) return runStart
   // How many enclosing openers each reading leaves this run able to close.
   const closable = (consumed: number) => Math.min((run - consumed) >> 1, enclosing)
-  return closable(depth + 2) === closable(2) ? runStart + depth : runStart
+  return closable(absorb + 2) === closable(2) ? runStart + absorb : runStart
 }
 
 const parseWikilinkReferences = (content: string): ParsedReference[] => {
   const references: ParsedReference[] = []
-  const stack: number[] = [] // Stack to track opening bracket positions
+  // Unclosed `[[` openers, innermost last. Each carries the bracket
+  // bookkeeping `closingDelimiterFor` needs, so the depth of an alias is
+  // never recomputed by re-reading it — see `OpenWikilink`.
+  const stack: OpenWikilink[] = []
+  // Running single-bracket depth: every `[` is +1 and every `]` is -1,
+  // including the two of each that spell a wikilink's delimiters.
+  let depth = 0
   let i = 0
+
+  const dipTo = (value: number): void => {
+    const top = stack[stack.length - 1]
+    if (top !== undefined && value < top.minDepth) top.minDepth = value
+  }
 
   while (i < content.length - 1) {
     if (content.slice(i, i + 2) === '[[') {
-      stack.push(i)
+      depth += 2
+      stack.push({start: i, depthAtOpen: depth, minDepth: depth})
       i += 2
     } else if (content.slice(i, i + 2) === ']]') {
-      if (stack.length > 0) {
-        const startPos = stack.pop()!
-        const closeAt = closingDelimiterFor(content, startPos, i, stack.length)
-        const alias = content.slice(startPos + 2, closeAt)
+      const frame = stack.pop()
+      if (frame !== undefined) {
+        const closeAt = closingDelimiterFor(content, frame, depth, i, stack.length)
+        const alias = content.slice(frame.start + 2, closeAt)
         // Gate EMISSION only — the pop above still happened, so a
         // rejected span consumes its delimiters exactly as an accepted
         // one does. Leaving the opener on the stack instead would let it
@@ -195,15 +223,24 @@ const parseWikilinkReferences = (content: string): ParsedReference[] => {
         if (alias && alias.length <= MAX_ALIAS_LENGTH) {
           references.push({
             alias,
-            startIndex: startPos,
+            startIndex: frame.start,
             endIndex: closeAt + 2,
           })
         }
+        // The absorbed closers plus the delimiter's own two, all of which
+        // are `]` and so all of which lower the running depth.
+        depth -= closeAt - i + 2
+        // Whatever dipped inside this alias dipped inside its parent too.
+        dipTo(Math.min(frame.minDepth, depth))
         i = closeAt + 2
       } else {
+        depth -= 2
         i += 2
       }
     } else {
+      const ch = content[i]
+      if (ch === '[') depth++
+      else if (ch === ']') { depth--; dipTo(depth) }
       i++
     }
   }
