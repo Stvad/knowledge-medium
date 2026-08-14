@@ -185,6 +185,32 @@ describe('prescribe — re-entry', () => {
     expect(bench.sets).toBe(2)
   })
 
+  it('keeps the lift\'s own rep window when the tier\'s half-override inverts it', () => {
+    // A tier may state one end of the range and take the other from the lift,
+    // so two individually sensible numbers can still invert once mixed: a
+    // tier asking for 12+ reps over a lift capped at 10. The parser cannot
+    // catch this — it depends on which exercise the tier lands on — and an
+    // inverted window reaches `setsFor`, which stamps `repMax ?? repMin` and
+    // prescribes the LOWER number while the range claims the higher.
+    const config = {
+      ...DEFAULT_CONFIG,
+      reentry: DEFAULT_CONFIG.reentry.map(tier =>
+        tier.id === '2mo+' ? {...tier, repMin: 12, repMax: undefined} : tier),
+    }
+    const bench = forExercise(
+      prescribe({
+        history: [sessionA('2026-01-05', at(135, 10, 10, 10))],
+        layoffs: [],
+        config,
+        now: '2026-07-23T23:00:00',
+      }),
+      'Bench press',
+    )
+    // Bench is 6–10 in the plan. 12–10 is not a window.
+    expect(bench.repMin).toBe(6)
+    expect(bench.repMax).toBe(10)
+  })
+
   it('does not count a mini day as training', () => {
     const history: WorkoutRecord[] = [
       sessionA('2026-07-03', at(135, 10, 10, 10)),

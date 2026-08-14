@@ -39,6 +39,7 @@ import {
   EXERCISE_ENTRY_TYPE,
   FIELD,
   LAYOFF_TYPE,
+  REENTRY_TIER_TYPE,
   SET_TYPE,
   SETTINGS_TYPE,
   STRENGTH_LOG_TYPE,
@@ -52,6 +53,7 @@ export {
   EXERCISE_DEF_TYPE,
   EXERCISE_ENTRY_TYPE,
   LAYOFF_TYPE,
+  REENTRY_TIER_TYPE,
   SET_TYPE,
   SETTINGS_TYPE,
   STRENGTH_LOG_TYPE,
@@ -495,6 +497,68 @@ export const altDefaultProp = seedProperty({
   changeScope: ChangeScope.BlockDefault,
 })
 
+// ──── Re-entry tier (a row of the plan's re-entry table) ────
+//
+// The percentage, the rep window and the set count reuse the properties the
+// layoff record and the exercise definitions already declare — `strength:
+// reentryPct` means the same fraction on a tier row as on the layoff it
+// produces, and reading "90%" off two differently-named properties is how the
+// two drift apart. Only the fields with no existing home are new.
+
+export const tierIdProp = seedProperty({
+  seedKey: extensionPropertySeedKey('tier-id'),
+  revision: 1,
+  name: FIELD.tierId,
+  preset: 'string',
+  defaultValue: '',
+  changeScope: ChangeScope.BlockDefault,
+})
+
+export const maxGapDaysProp = seedProperty({
+  seedKey: extensionPropertySeedKey('max-gap-days'),
+  revision: 1,
+  name: FIELD.maxGapDays,
+  preset: 'optional-number',
+  defaultValue: undefined,
+  changeScope: ChangeScope.BlockDefault,
+})
+
+export const setsDeltaProp = seedProperty({
+  seedKey: extensionPropertySeedKey('sets-delta'),
+  revision: 1,
+  name: FIELD.setsDelta,
+  preset: 'optional-number',
+  defaultValue: undefined,
+  changeScope: ChangeScope.BlockDefault,
+})
+
+export const setsOverrideSessionsProp = seedProperty({
+  seedKey: extensionPropertySeedKey('sets-override-sessions'),
+  revision: 1,
+  name: FIELD.setsOverrideSessions,
+  preset: 'optional-number',
+  defaultValue: undefined,
+  changeScope: ChangeScope.BlockDefault,
+})
+
+export const sessionsToNormalProp = seedProperty({
+  seedKey: extensionPropertySeedKey('sessions-to-normal'),
+  revision: 1,
+  name: FIELD.sessionsToNormal,
+  preset: 'optional-number',
+  defaultValue: undefined,
+  changeScope: ChangeScope.BlockDefault,
+})
+
+export const rampPerSessionProp = seedProperty({
+  seedKey: extensionPropertySeedKey('ramp-per-session'),
+  revision: 1,
+  name: FIELD.rampPerSession,
+  preset: 'optional-number',
+  defaultValue: undefined,
+  changeScope: ChangeScope.BlockDefault,
+})
+
 // ──── Types ────
 
 export const strengthLogType = seedType({
@@ -564,6 +628,30 @@ export const exerciseDefType = seedType({
     kindProp,
     catchUpIncrementProp,
     catchUpRpeProp,
+  ],
+})
+
+/** One row of the re-entry table. Completable like the exercise definitions,
+ *  and for the same reason: you tune the protocol by typing the row and
+ *  filling the property editors, and what the engine reads is then exactly
+ *  what the outline shows — no sentence that has to be phrased just so. */
+export const reentryTierType = seedType({
+  seedKey: extensionTypeSeedKey('reentry-tier'),
+  revision: 1,
+  id: REENTRY_TIER_TYPE,
+  label: 'Re-entry tier',
+  description: 'One row of the re-entry table — what to prescribe after a break of this length.',
+  properties: [
+    tierIdProp,
+    maxGapDaysProp,
+    layoffPctProp,
+    targetSetsProp,
+    setsOverrideSessionsProp,
+    setsDeltaProp,
+    repMinProp,
+    repMaxProp,
+    sessionsToNormalProp,
+    rampPerSessionProp,
   ],
 })
 
@@ -640,6 +728,7 @@ export const STRENGTH_TYPES = [
   exerciseDefType,
   altGroupType,
   altChoiceType,
+  reentryTierType,
 ]
 
 export const STRENGTH_PROPS = [
@@ -680,4 +769,10 @@ export const STRENGTH_PROPS = [
   catchUpIncrementProp,
   catchUpRpeProp,
   altDefaultProp,
+  tierIdProp,
+  maxGapDaysProp,
+  setsDeltaProp,
+  setsOverrideSessionsProp,
+  sessionsToNormalProp,
+  rampPerSessionProp,
 ]
