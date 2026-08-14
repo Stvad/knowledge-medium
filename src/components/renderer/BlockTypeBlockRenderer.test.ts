@@ -105,6 +105,21 @@ describe('writeBlockTypeLabel', () => {
     expect(row!.properties[aliasesProp.name]).toEqual(['New', 'mine'])
   })
 
+  // Claiming and releasing are independent: with the generated alias deleted
+  // by hand there is no old entry to rewrite, but `[[New]]` still has to
+  // resolve to the type — nothing else will claim it for an opaque row.
+  it('claims the new label even when no old-label alias remains', async () => {
+    const repo = await setupTypeBlock({
+      label: 'Old', content: 'export const x = 1', alias: 'mine', types: ['extension'],
+    })
+
+    await writeBlockTypeLabel(repo.block('type-1'), 'Old', 'export const x = 1', 'New')
+
+    const row = await repo.load('type-1')
+    expect(row!.properties[aliasesProp.name]).toEqual(['New', 'mine'])
+    expect(row!.content).toBe('export const x = 1')
+  })
+
   // The mirror below is exactly why the label needs hygiene (PR #288 §7):
   // a reference-shaped label becomes reference-shaped CONTENT, and a
   // `::`-marked one makes the type's own block a recognized property field

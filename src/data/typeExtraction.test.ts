@@ -329,6 +329,22 @@ describe('block-type typeify processor', () => {
   // projects as property machinery instead of appearing in the outline.
   // Only the grammar-shape check applies here; the content is not claimed
   // as an alias when a label is supplied, so round-tripping is moot.
+  // Only the MARKED form is machinery. An unmarked reference as the note's
+  // content is just a note that happens to be a reference — refusing it
+  // would roll back a valid type composition for no gain.
+  it.each([
+    ['a wikilink', '[[Foo]]'],
+    ['a block ref', '((11111111-1111-4111-8111-111111111111))'],
+  ])('accepts %s as surviving content when a label is supplied', async (_l, content) => {
+    env = await setup()
+    const id = await tagBlockType(env, content, {
+      [blockTypeLabelProp.name]: 'Book',
+    })
+    const row = await env.repo.load(id)
+    expect(row!.content).toBe(content)
+    expect(row!.properties[blockTypeLabelProp.name]).toBe('Book')
+  })
+
   // Adopting an opaque payload as the name would claim it as a resolvable
   // page AND trim bytes off the stored source. An explicit label is the fix,
   // so this refuses rather than minting a nameless type.

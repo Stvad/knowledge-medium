@@ -53,7 +53,9 @@ import {
 import {
   assertNotGrammarShapedLabel,
   assertRoundTrippableReferenceLabel,
+  GrammarShapedLabelError,
   OpaqueContentLabelError,
+  parseExactReferenceBlockContent,
 } from '@/data/referenceBlock'
 import { seededDefinitionKey } from '@/data/definitionSeeds'
 import { isTypeSeedKey } from '@/data/typeSeeds'
@@ -108,15 +110,15 @@ export const BLOCK_TYPE_TYPEIFY_PROCESSOR = defineSameTxProcessor({
 
       // An explicit label short-circuits `name`, so the content is neither
       // adopted nor rewritten below — and the checks above never saw it.
-      // Grammar-shaped content surviving on a type block is the residue
-      // that matters: `core.deriveReferenceTarget` stamps the row as a
-      // field form, and on a child-backed page the finished type projects
-      // as property machinery instead of appearing in the outline.
-      if (currentLabel !== '') {
-        const survivingContent = after.content.trim()
-        if (survivingContent !== '') {
-          assertNotGrammarShapedLabel(survivingContent, 'Block type content')
-        }
+      // Only the MARKED field form is refused: §9 recognition needs the `::`
+      // bit, so that is the shape that makes `core.deriveReferenceTarget`
+      // stamp `is_field_form` and the finished type project as property
+      // machinery instead of appearing in the outline. An UNMARKED `[[Foo]]`
+      // or `((id))` stamps only `reference_target_id`, which is not
+      // machinery — refusing it would roll back a perfectly good type whose
+      // note happens to be a reference.
+      if (currentLabel !== '' && parseExactReferenceBlockContent(after.content)?.fieldForm) {
+        throw new GrammarShapedLabelError(after.content.trim(), 'Block type content')
       }
 
       // PAGE_TYPE via the blessed raw membership helper (a full

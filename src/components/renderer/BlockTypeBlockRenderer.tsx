@@ -41,6 +41,9 @@ import type { BlockRenderer, BlockRendererProps } from '@/types.js'
 import { DefaultBlockRenderer } from './DefaultBlockRenderer.tsx'
 import { deleteBlockThroughUi } from '@/utils/deleteBlockThroughUi.js'
 
+const arraysEqual = (a: readonly string[], b: readonly string[]): boolean =>
+  a.length === b.length && a.every((value, i) => value === b[i])
+
 export const writeBlockTypeLabel = async (
   block: Block,
   currentLabel: string,
@@ -89,22 +92,24 @@ export const writeBlockTypeLabel = async (
       const row = await tx.get(block.id)
       if (row && getAliases(row).length === 0) {
         await tx.setProperty(block.id, aliasesProp, [next])
-      } else if (row && !mirrorContent && currentLabel !== '' && next !== currentLabel) {
+      } else if (row && !mirrorContent && next !== currentLabel) {
         // Renaming a type that ALSO carries an opaque type. `aliasSyncProcessor`
         // reconciles content→alias, and it (correctly) skips opaque rows — and
         // we just skipped the content mirror too, so nothing else will move the
         // claim. Without this the registry advertises `next` while `[[next]]`
-        // resolves nowhere and `[[currentLabel]]` still claims the block.
-        // Replace only the entry matching the OLD label; any other alias the
-        // user added by hand is theirs to keep.
+        // resolves nowhere.
+        //
+        // Claim `next` and release the OLD label, as two independent steps.
+        // Neither implies the other: the block may already claim both (a
+        // map-in-place would no-op and leave the old name claimed forever),
+        // or claim neither (someone deleted the generated alias by hand, and
+        // there is no old entry to rewrite — but `next` still has to resolve).
+        // Any other alias the user added stays.
         const aliases = getAliases(row)
-        if (aliases.includes(currentLabel)) {
-          // Drop the old entry and add the new one INDEPENDENTLY: when the
-          // block already claims both (aliases `['Old','New','mine']`), a
-          // map-in-place would be a no-op and leave `Old` claimed forever,
-          // blocking that name for anything else.
-          const kept = aliases.filter(alias => alias !== currentLabel && alias !== next)
-          await tx.setProperty(block.id, aliasesProp, [next, ...kept])
+        const kept = aliases.filter(alias => alias !== currentLabel && alias !== next)
+        const nextAliases = [next, ...kept]
+        if (!arraysEqual(nextAliases, aliases)) {
+          await tx.setProperty(block.id, aliasesProp, nextAliases)
         }
       }
     } else {

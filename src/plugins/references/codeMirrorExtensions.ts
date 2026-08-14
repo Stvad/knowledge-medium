@@ -1,5 +1,6 @@
 import type { CompletionSource } from '@codemirror/autocomplete'
 import { EditorView } from '@codemirror/view'
+import { hasOpaqueContent } from '@/data/properties.js'
 import { EditorSelection, EditorState, Prec } from '@codemirror/state'
 import type {
   CodeMirrorExtensionContext,
@@ -202,10 +203,14 @@ const buildBlockrefSource = ({repo}: CodeMirrorExtensionContext): CompletionSour
           query,
           limit: 12,
         })
-        : await repo.query.recentBlocks({
+        // `recentBlocks` is a plain recency read with no search source in
+        // front of it, so the opaque filter in `coreContentSearchSource`
+        // never sees this branch — a freshly installed extension is exactly
+        // the kind of row it returns, with its payload as the label.
+        : (await repo.query.recentBlocks({
           workspaceId,
           limit: 12,
-        }).load()
+        }).load()).filter(block => !hasOpaqueContent(block, repo.opaqueContentTypes))
       return blocks.map(block => ({id: block.id, content: block.content}))
     },
   })
