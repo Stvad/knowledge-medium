@@ -840,13 +840,6 @@ export const togglePanelMaximized = async (
   return result
 }
 
-export interface ExclusiveMaximizeResult {
-  /** This call newly set the flag — so it, and only it, is the caller's to undo. */
-  claimed: boolean
-  /** The pane carries the flag once this returns, whoever set it. */
-  maximized: boolean
-}
-
 /**
  * Prepare `panelId` to become the maximized pane for a gesture that sets the
  * flag inside SOMEONE ELSE'S transaction — `navigateInPanel`'s `maximized`
@@ -857,25 +850,18 @@ export interface ExclusiveMaximizeResult {
  * anything (`maximizeWouldHideSomething`) — so the caller's own write lands
  * exclusively.
  *
- * Reports two SEPARATE facts, because a caller that has to undo its own
- * maximize later cannot reconstruct either from the other:
+ * Returns whether this call NEEDS a follow-up `maximized: true` write — true
+ * only when maximizing is warranted AND the flag was not already set. In the
+ * other cases the flag is already whatever it should be, so the caller omits
+ * the key and leaves it alone.
  *
- * - `claimed` — this call newly maximized the pane (the flag was not already
- *   set, and maximizing is warranted). Only a claimed flag is the caller's to
- *   clear later; one the pane already carried belongs to whoever set it, the
- *   user via `togglePanelMaximized` or an inbound `;max`. Reporting
- *   `maximizeWouldHideSomething` here, as this once did, handed the caller
- *   ownership of a maximize it merely FOUND, and the matching close then
- *   dropped a maximize the user had set deliberately.
- * - `maximized` — whether the pane carries the flag at all once this returns.
- *   Distinguishes "nobody's flag exists" from "a flag exists that is not
- *   mine", which is what lets a caller discard a STALE ownership record
- *   without discarding a live one. Collapsing the two into `!claimed` made a
- *   repeated enter erase the first enter's ownership.
- *
- * Only `claimed` should drive a follow-up `maximized: true` write: in the
- * other cases the flag is already whatever it should be, and omitting the key
- * leaves it that way.
+ * Deliberately NOT an ownership signal. It once fed a record of "which
+ * maximize is mine to undo later", which desynchronized five different ways
+ * because the flag has six writers and only one maintained the record; the
+ * video-notes close now un-maximizes unconditionally and keeps no memory. If a
+ * future caller wants attribution, store the provenance ON the row next to the
+ * flag so no writer can change one without the other — do not rebuild a
+ * side-record from this return value.
  *
  * A REFUSAL WRITES NOTHING — the same meaning `togglePanelMaximized` gives it,
  * and the reason the clear is gated rather than unconditional. Clearing on a
@@ -898,26 +884,19 @@ export const prepareExclusiveMaximize = async (
   repo: Repo,
   panelId: string,
   {canRenderSplit = true}: {canRenderSplit?: boolean} = {},
-): Promise<ExclusiveMaximizeResult> => {
-  let claimed = false
-  let maximized = false
+): Promise<boolean> => {
+  let needsWrite = false
   await repo.tx(async tx => {
     const found = await sessionPanelRowsInTx(tx, panelId, repo.user.id)
     if (!found) return
-    const alreadyMaximized = isPanelRowMaximized(found.panelRows.find(row => row.id === panelId)!)
-    // Reported even on the decline path, where the flag is left exactly as
-    // found — a caller tracking ownership needs to tell "no flag exists" from
-    // "a flag exists that is not mine".
-    maximized = alreadyMaximized
     if (!maximizeWouldHideSomething(found.panelRows.length, canRenderSplit)) return
-    claimed = !alreadyMaximized
-    maximized = true
+    needsWrite = !isPanelRowMaximized(found.panelRows.find(row => row.id === panelId)!)
     for (const other of found.panelRows) {
       if (other.id === panelId || !isPanelRowMaximized(other)) continue
       await tx.setProperty(other.id, panelMaximizedProp, false)
     }
   }, {scope: ChangeScope.UiState, description: 'clear other maximized panes'})
-  return {claimed, maximized}
+  return needsWrite
 }
 
 /**

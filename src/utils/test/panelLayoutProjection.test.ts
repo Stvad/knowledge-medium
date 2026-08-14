@@ -1271,9 +1271,9 @@ describe('togglePanelMaximized', () => {
     if (!rowA) throw new Error('missing a row')
 
     expect(await prepareExclusiveMaximize(env.repo, rowA, {canRenderSplit: false}))
-      .toEqual({claimed: false, maximized: false})
+      .toBe(false)
     expect(await prepareExclusiveMaximize(env.repo, rowA))
-      .toEqual({claimed: true, maximized: true})
+      .toBe(true)
   })
 
   // A refusal writes NOTHING, matching what refusing means in
@@ -1285,7 +1285,7 @@ describe('togglePanelMaximized', () => {
     const byBlock = await rowIdsByBlock()
 
     expect(await prepareExclusiveMaximize(env.repo, byBlock.get('a')!, {canRenderSplit: false}))
-      .toEqual({claimed: false, maximized: false})
+      .toBe(false)
 
     expect(env.repo.block(byBlock.get('b')!).peekProperty(panelMaximizedProp)).toBe(true)
   })
@@ -1295,26 +1295,21 @@ describe('togglePanelMaximized', () => {
     const byBlock = await rowIdsByBlock()
 
     expect(await prepareExclusiveMaximize(env.repo, byBlock.get('a')!))
-      .toEqual({claimed: true, maximized: true})
+      .toBe(true)
 
     expect(env.repo.block(byBlock.get('b')!).peekProperty(panelMaximizedProp)).not.toBe(true)
   })
 
-  // `claimed` answers "is this flag mine to undo later?", so a pane that was
-  // ALREADY maximized reports false even though maximizing is warranted here —
-  // the flag belongs to whoever set it. Returning `maximizeWouldHideSomething`
-  // instead made the video-notes enter adopt a user's deliberate maximize, and
-  // its close then dropped it.
-  //
-  // `maximized` stays TRUE, and the pair is the point: "not mine" and "not
-  // there" are different, and a caller that collapses them into `!claimed`
-  // throws away a live ownership record.
-  it('prepareExclusiveMaximize does not claim a maximize the pane already carried', async () => {
+  // The return value answers "does the caller still need to WRITE the flag?",
+  // so an already-maximized pane reports false even though maximizing is
+  // warranted — the write would be a no-op, and sending it as an explicit
+  // `maximized: true` only adds a redundant row change and history entry.
+  it('prepareExclusiveMaximize reports no write needed when the pane is already maximized', async () => {
     await applyUrl('#ws-1/a;max/b')
     const byBlock = await rowIdsByBlock()
 
     expect(await prepareExclusiveMaximize(env.repo, byBlock.get('a')!))
-      .toEqual({claimed: false, maximized: true})
+      .toBe(false)
 
     // ...and leaves it standing: not claiming is arrangement-neutral.
     expect(env.repo.block(byBlock.get('a')!).peekProperty(panelMaximizedProp)).toBe(true)

@@ -174,37 +174,37 @@ describe('enterVideoNotesView', () => {
     expect(isMaximized(panelId)).toBe(true)
   })
 
-  // Close undoes the keys ITS enter set. A maximize the user set before
-  // entering notes is not one of them, so closing must leave it standing —
-  // otherwise widening the viewport later reveals a split they had collapsed.
-  it('close leaves a maximize that this notes entry did not set', async () => {
+  // The ACCEPTED COST of close having no memory: a maximize set before notes
+  // opened is cleared on close too. Close cannot tell it apart from its own —
+  // the flag is a bare boolean with six writers, and every record of who set
+  // it went stale (five separate bugs) because only one writer maintained it.
+  // Cheap to recover: the flag round-trips through the URL, so browser Back
+  // restores the arrangement, and Restore is one click.
+  it('un-maximizes on close even when the pane was maximized before notes opened', async () => {
+    await setup({panes: 2})
+    await panelBlock().set(panelMaximizedProp, true)
+
+    await enterVideoNotesView(videoBlock(), panelBlock())
+    await closeVideoNotesView(panelBlock())
+
+    expect(panelBlock().peekProperty(panelViewModeProp)).toBeUndefined()
+    expect(isMaximized(panelId)).toBe(false)
+  })
+
+  // The one case close does NOT clear, and the only condition left on the
+  // rule. Here the flag is inert and invisible — but it SYNCS, so clearing it
+  // would reach a wide layout and drop a maximize that nothing on this device
+  // could have shown or restored.
+  it('leaves the flag alone when closing on a viewport that cannot render a split', async () => {
     await setup({panes: 2})
     await panelBlock().set(panelMaximizedProp, true)
     vi.stubGlobal('window', {matchMedia: vi.fn().mockReturnValue({matches: true})})
     try {
       await enterVideoNotesView(videoBlock(), panelBlock())
+      await closeVideoNotesView(panelBlock())
     } finally {
       vi.unstubAllGlobals()
     }
-
-    await closeVideoNotesView(panelBlock())
-
-    expect(panelBlock().peekProperty(panelViewModeProp)).toBeUndefined()
-    expect(isMaximized(panelId)).toBe(true)
-  })
-
-  // The same rule on the path that does NOT decline, which is the ordinary
-  // one: maximize a pane in a desktop split, then open notes in it. The enter
-  // would maximize, but there is nothing left to do — so it owns nothing, and
-  // close must leave the user's maximize standing.
-  it('close leaves a maximize the pane already carried, on a viewport that CAN split', async () => {
-    await setup({panes: 2})
-    await panelBlock().set(panelMaximizedProp, true)
-
-    await enterVideoNotesView(videoBlock(), panelBlock())
-    expect(isMaximized(panelId)).toBe(true)
-
-    await closeVideoNotesView(panelBlock())
 
     expect(panelBlock().peekProperty(panelViewModeProp)).toBeUndefined()
     expect(isMaximized(panelId)).toBe(true)
@@ -234,29 +234,11 @@ describe('enterVideoNotesView', () => {
     expect(isMaximized(panelId)).toBe(true)
   })
 
-  // Double-activation of the notes button (the row update has not re-rendered
-  // it away yet) runs enter twice. The second call finds the pane already
-  // maximized and claims nothing — but the flag standing there is still the
-  // FIRST call's, so its ownership must survive. Discarding it left close
-  // unable to undo its own maximize, with every sibling hidden.
-  it('a repeated enter does not spend the first enter\'s maximize ownership', async () => {
-    await setup({panes: 2})
-    await enterVideoNotesView(videoBlock(), panelBlock())
-    expect(isMaximized(panelId)).toBe(true)
-
-    await enterVideoNotesView(videoBlock(), panelBlock())
-
-    await closeVideoNotesView(panelBlock())
-
-    expect(panelBlock().peekProperty(panelViewModeProp)).toBeUndefined()
-    expect(isMaximized(panelId)).toBe(false)
-  })
-
-  // The ownership marker is spent on COMMIT, not on entry to close. Spending
-  // it up front meant a rejected close left the retry computing `undefined` —
-  // notes cleared, auto-maximize kept, every sibling pane still hidden with
-  // nothing owning the flag.
-  it('a failed close keeps ownership, so the retry still un-maximizes', async () => {
+  // A rejected close leaves the pane fully in notes view, and the retry closes
+  // it — the interesting half being that the retry needs no memory of the
+  // first attempt. This is what having no ownership record buys: a failed
+  // close has nothing to have half-spent.
+  it('a failed close leaves the view intact and the retry still closes it', async () => {
     await setup({panes: 2})
     await enterVideoNotesView(videoBlock(), panelBlock())
     expect(isMaximized(panelId)).toBe(true)
