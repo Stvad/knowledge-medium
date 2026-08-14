@@ -1,5 +1,6 @@
 import {describe, expect, it} from 'vitest'
 
+import {FIELD, REENTRY_TIER_TYPE} from '../src/km/fields'
 import {
   configFromPlan,
   extractVideos,
@@ -20,6 +21,11 @@ const node = (
   children,
   properties: extra.properties,
 })
+
+/** A declared re-entry row: the sentence is what a human reads, the
+ *  properties are what the engine reads. */
+const tier = (content: string, properties: Record<string, unknown>): PlanNode =>
+  node(content, [], {properties: {[FIELD.blockTypes]: [REENTRY_TIER_TYPE], ...properties}})
 
 /** A trimmed but faithful copy of the live plan outline's shape. */
 const samplePlan = (): PlanNode =>
@@ -48,10 +54,30 @@ const samplePlan = (): PlanNode =>
     ]),
     node('**Re-entry protocol**', [
       node('Missed 1 session → repeat last session\'s weights'),
-      node('1–2 weeks off → same weights, drop 1 set per lift first session'),
-      node('2–4 weeks → 90% of last weights, normal sets; resume progression after 2 sessions'),
-      node('1–2 months → 80%, 2 sets per lift week one, +5% per session until back'),
-      node('2+ months / post-injury → 60%, 2 sets, reps 8–12, ramp 5–10%/session'),
+      tier('1–2 weeks off → same weights, drop 1 set per lift first session', {
+        [FIELD.tierId]: '1-2w',
+        [FIELD.layoffPct]: 1,
+        [FIELD.setsDelta]: 1,
+      }),
+      tier('2–4 weeks → 90% of last weights, normal sets; resume progression after 2 sessions', {
+        [FIELD.tierId]: '2-4w',
+        [FIELD.layoffPct]: 0.9,
+      }),
+      tier('1–2 months → 80%, 2 sets per lift week one, +5% per session until back', {
+        [FIELD.tierId]: '1-2mo',
+        [FIELD.layoffPct]: 0.8,
+        [FIELD.targetSets]: 2,
+        [FIELD.setsOverrideSessions]: 2,
+        [FIELD.rampPerSession]: 0.05,
+      }),
+      tier('2+ months / post-injury → 60%, 2 sets, reps 8–12, ramp 5–10%/session', {
+        [FIELD.tierId]: '2mo+',
+        [FIELD.layoffPct]: 0.6,
+        [FIELD.targetSets]: 2,
+        [FIELD.repMin]: 8,
+        [FIELD.repMax]: 12,
+        [FIELD.rampPerSession]: 0.075,
+      }),
     ]),
     node('**Dance-lift prep** — target: lift a ~120lb+ person', [
       node('Phase 1: Milestones: strict OHP 115–120×3, heavy waiter carries'),
@@ -172,6 +198,93 @@ describe('parsePlan', () => {
     expect(byId.get('2mo+')?.pct).toBe(0.6)
     expect(byId.get('2mo+')?.repMin).toBe(8)
     expect(byId.get('2mo+')?.repMax).toBe(12)
+  })
+
+  it('keeps a set delta a delta — it does not pin every lift to one set', () => {
+    // The bug this replaced: the row's own sentence says "drop 1 set", and a
+    // bare `N sets` regex read that same phrase as an ABSOLUTE 1. `setsFor`
+    // consults the override first, so every lift in the session — 3-set
+    // presses included — came out at a single set, indefinitely (the tier
+    // states no override window). A delta and an absolute are now separate
+    // properties, and a row states one of them.
+    const byId = new Map(parsePlan(samplePlan()).reentry!.map(t => [t.id, t]))
+    expect(byId.get('1-2w')?.setsDelta).toBe(1)
+    expect(byId.get('1-2w')?.setsOverride).toBeUndefined()
+  })
+
+  it('reads the absolute set count and its window off the deeper rows', () => {
+    const byId = new Map(parsePlan(samplePlan()).reentry!.map(t => [t.id, t]))
+    expect(byId.get('1-2mo')).toMatchObject({setsOverride: 2, setsOverrideSessions: 2, rampPerSession: 0.05})
+    expect(byId.get('1-2mo')?.setsDelta).toBeUndefined()
+  })
+
+  it('refuses a row that states both an absolute set count and a delta', () => {
+    // Two contradictory statements resolved by precedence is exactly how the
+    // original bug stayed invisible. Neither is taken; the built-in row for
+    // this tier stands, and the contradiction is named.
+    const plan = node('**Plan**', [
+      node('**Re-entry protocol**', [
+        tier('1–2 weeks off → …', {
+          [FIELD.tierId]: '1-2w',
+          [FIELD.targetSets]: 2,
+          [FIELD.setsDelta]: 1,
+        }),
+      ]),
+    ])
+    const overlay = parsePlan(plan)
+    const row = overlay.reentry!.find(t => t.id === '1-2w')!
+    expect(overlay.warnings.some(w => /1-2w/.test(w) && /both/i.test(w))).toBe(true)
+    // The built-in 1–2w row, untouched by either statement.
+    expect(row).toMatchObject({setsDelta: 1, setsOverride: undefined})
+  })
+
+  it('ignores a declared row that never says which tier it is, and says so', () => {
+    const plan = node('**Plan**', [
+      node('**Re-entry protocol**', [
+        tier('Some new row → 50%', {[FIELD.layoffPct]: 0.5}),
+        tier('2–4 weeks → 90%', {[FIELD.tierId]: '2-4w', [FIELD.layoffPct]: 0.9}),
+      ]),
+    ])
+    const overlay = parsePlan(plan)
+    expect(overlay.warnings.some(w => new RegExp(FIELD.tierId).test(w))).toBe(true)
+    expect(overlay.reentry!.some(t => t.pct === 0.5)).toBe(false)
+  })
+
+  it('accepts a tier the built-in table does not have, when it states its own bounds', () => {
+    const plan = node('**Plan**', [
+      node('**Re-entry protocol**', [
+        tier('3–5 days off → nothing changes', {
+          [FIELD.tierId]: 'short-trip',
+          [FIELD.maxGapDays]: 5,
+          [FIELD.layoffPct]: 1,
+        }),
+      ]),
+    ])
+    const overlay = parsePlan(plan)
+    // (The stub plan warns about its missing session blocks; the row itself
+    // is accepted silently.)
+    expect(overlay.warnings.some(w => /short-trip/.test(w))).toBe(false)
+    expect(overlay.reentry!.find(t => t.id === 'short-trip')).toMatchObject({maxGapDays: 5, pct: 1})
+  })
+
+  it('declines an unknown tier that does not state the gap it covers', () => {
+    // Without a bound there is no gap it can classify, so admitting it would
+    // add a row `tierFor` can never select — or, worse, select at Infinity.
+    const plan = node('**Plan**', [
+      node('**Re-entry protocol**', [
+        tier('Some new row → 50%', {[FIELD.tierId]: 'mystery', [FIELD.layoffPct]: 0.5}),
+      ]),
+    ])
+    const overlay = parsePlan(plan)
+    expect(overlay.warnings.some(w => /mystery/.test(w))).toBe(true)
+    expect(overlay.reentry).toBeUndefined()
+  })
+
+  it('takes the row label and guidance from the sentence beside the properties', () => {
+    const byId = new Map(parsePlan(samplePlan()).reentry!.map(t => [t.id, t]))
+    // Display only — nothing reads a number back out of this.
+    expect(byId.get('2-4w')?.label).toBe('2–4 weeks')
+    expect(byId.get('2-4w')?.guidance).toContain('90% of last weights')
   })
 
   it('reads the milestone targets at the low end of a range', () => {

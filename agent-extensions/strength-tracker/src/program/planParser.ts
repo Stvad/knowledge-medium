@@ -24,7 +24,7 @@ import type {
   SessionType,
 } from '../engine/types'
 import {altOptionKey} from '../engine/types'
-import {ALT_GROUP_TYPE, EXERCISE_DEF_TYPE, FIELD} from '../km/fields'
+import {ALT_GROUP_TYPE, EXERCISE_DEF_TYPE, FIELD, REENTRY_TIER_TYPE} from '../km/fields'
 import {DEFAULT_CONFIG} from './defaults'
 
 const MD_LINK = /\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g
@@ -353,17 +353,28 @@ const parseSessions = (
   return {exercises, notes, altDefaults}
 }
 
-const TIER_PATTERNS: ReadonlyArray<{id: string; pattern: RegExp}> = [
-  {id: 'missed-1', pattern: /missed\s+1\s+session/i},
-  {id: '1-2w', pattern: /^1\s*[–—-]\s*2\s+weeks?/i},
-  {id: '2-4w', pattern: /^2\s*[–—-]\s*4\s+weeks?/i},
-  {id: '1-2mo', pattern: /^1\s*[–—-]\s*2\s+months?/i},
-  {id: '2mo\\+', pattern: /^2\+\s*months?/i},
-]
+/** A block that declares itself a row of the re-entry table. */
+export const isReentryTier = (node: PlanNode): boolean =>
+  nodeTypes(node).includes(REENTRY_TIER_TYPE)
 
-/** Percentages, set counts and rep windows come from the plan text; the day
- *  boundaries and ramp lengths stay on the defaults, because the plan states
- *  gaps in weeks and never spells out either. */
+/** The re-entry table, read from the rows' properties.
+ *
+ *  Nothing here reads the sentence for a number, and that is the point. The
+ *  prose form of this table said "drop 1 set per lift", which is a delta by
+ *  intent and an absolute "1 set" by pattern; the two regexes that looked for
+ *  each matched the same five words, and the absolute won — so a 3×6–10 press
+ *  came back from a two-week trip prescribing a single set. There is no
+ *  wording that makes that phrase unambiguous, so the numbers moved onto
+ *  properties and the sentence became a label.
+ *
+ *  What a declared row states, it owns: an absent percentage means "same
+ *  weights", an absent set field means "no change to the lift's own target".
+ *  Deleting `strength:setsDelta` from a row removes the set cut rather than
+ *  quietly restoring the built-in one — the outline is the program, so a
+ *  field you can see is empty has to mean what it looks like. The exceptions
+ *  are the two bounds the plan never spells out (it says "1–2 weeks", not a
+ *  day count): `maxGapDays` and `sessionsToNormal` fall back to the built-in
+ *  row of the same id. */
 const parseReentry = (root: PlanNode, warnings: string[]): ReentryTier[] | undefined => {
   const section = findChild(root, /^re-?entry protocol/i)
   if (!section) {
@@ -371,47 +382,87 @@ const parseReentry = (root: PlanNode, warnings: string[]): ReentryTier[] | undef
     return undefined
   }
 
+  const rows = section.children.filter(isReentryTier)
+  if (rows.length === 0) {
+    warnings.push(
+      `No re-entry row is typed \`${REENTRY_TIER_TYPE}\` — keeping the built-in table.`,
+    )
+    return undefined
+  }
+
   const byId = new Map(DEFAULT_CONFIG.reentry.map(tier => [tier.id, tier]))
   let matched = 0
 
-  for (const child of section.children) {
-    const text = plainText(child.content)
-    const arrow = text.split(/→|->/)
-    if (arrow.length < 2) continue
-    const [head, ...tailParts] = arrow
-    const tail = tailParts.join(' ')
-    const spec = TIER_PATTERNS.find(t => t.pattern.test(head.trim()))
-    if (!spec) continue
-    const id = spec.id.replace('\\', '')
-    const base = byId.get(id)
-    if (!base) continue
+  for (const row of rows) {
+    const text = plainText(row.content)
+    const [head, ...tailParts] = text.split(/→|->/)
+    const tail = tailParts.join(' ').trim()
+    const props = row.properties
 
-    const pct = /(\d+)%/.exec(tail)
-    const setsOverride = /(\d+)\s+sets?\b/i.exec(tail)
-    const setsDelta = /drop\s+(\d+)\s+set/i.exec(tail)
-    const reps = new RegExp(String.raw`reps?\s+(\d+)\s*${DASH}\s*(\d+)`, 'i').exec(tail)
-    const ramp = new RegExp(String.raw`(?:\+|ramp\s+)(\d+)(?:\s*${DASH}\s*(\d+))?%`, 'i').exec(tail)
+    // A typed row is a declaration, so a missing identity is worth a warning
+    // rather than a silent skip — same rule as `isExerciseDef`.
+    const id = strProp(props, FIELD.tierId)?.trim()
+    if (!id) {
+      warnings.push(`Re-entry row "${text}" has no \`${FIELD.tierId}\` — ignored.`)
+      continue
+    }
+    const base = byId.get(id)
+
+    // No bound means no gap it can classify: `tierFor` would never select it,
+    // or would select it at Infinity ahead of a row that should have won.
+    const maxGapDays = numProp(props, FIELD.maxGapDays) ?? base?.maxGapDays
+    if (maxGapDays === undefined) {
+      warnings.push(
+        `Re-entry row "${id}" is not one of the built-in tiers and states no \`${FIELD.maxGapDays}\` — ignored.`,
+      )
+      continue
+    }
+
+    // Two ways to say how many sets, and a row states one. Resolving a row
+    // that says both by precedence is how the original bug hid: the losing
+    // statement stayed on screen, describing a prescription nobody got.
+    const setsOverride = numProp(props, FIELD.targetSets)
+    const setsDelta = numProp(props, FIELD.setsDelta)
+    const contradicts = setsOverride !== undefined && setsDelta !== undefined
+    if (contradicts) {
+      warnings.push(
+        `Re-entry row "${id}" states both \`${FIELD.targetSets}\` and \`${FIELD.setsDelta}\` — `
+        + 'they mean different things (an absolute count vs. one dropped from each lift\'s own target), '
+        + 'so neither is used and the built-in row stands. Keep one.',
+      )
+    }
+    // Unreadable is not the same as absent: an absent field is a statement
+    // ("no set change"), a contradiction is a row we cannot read at all. So
+    // this one falls back to the built-in rather than to neutral — the
+    // direction that keeps a cut in force instead of quietly removing one.
+    const sets = contradicts
+      ? {
+        setsOverride: base?.setsOverride,
+        setsOverrideSessions: base?.setsOverrideSessions,
+        setsDelta: base?.setsDelta,
+      }
+      : {
+        setsOverride,
+        setsOverrideSessions: numProp(props, FIELD.setsOverrideSessions),
+        setsDelta,
+      }
 
     byId.set(id, {
-      ...base,
-      guidance: tail.trim() || base.guidance,
-      pct: pct ? Number(pct[1]) / 100 : base.pct,
-      setsOverride: setsOverride ? Number(setsOverride[1]) : base.setsOverride,
-      setsDelta: setsDelta ? Number(setsDelta[1]) : base.setsDelta,
-      repMin: reps ? Number(reps[1]) : base.repMin,
-      repMax: reps ? Number(reps[2]) : base.repMax,
-      rampPerSession: ramp
-        // "5–10% per session" → take the midpoint; a single "+5%" is used as-is.
-        ? (ramp[2] ? (Number(ramp[1]) + Number(ramp[2])) / 2 : Number(ramp[1])) / 100
-        : base.rampPerSession,
+      id,
+      label: head.trim() || base?.label || id,
+      maxGapDays,
+      guidance: tail || base?.guidance || '',
+      pct: numProp(props, FIELD.layoffPct) ?? 1,
+      ...sets,
+      repMin: numProp(props, FIELD.repMin),
+      repMax: numProp(props, FIELD.repMax),
+      sessionsToNormal: numProp(props, FIELD.sessionsToNormal) ?? base?.sessionsToNormal ?? 0,
+      rampPerSession: numProp(props, FIELD.rampPerSession) ?? 0,
     })
     matched += 1
   }
 
-  if (matched === 0) {
-    warnings.push('Re-entry rows did not match the expected "gap → prescription" shape.')
-    return undefined
-  }
+  if (matched === 0) return undefined
   return [...byId.values()]
 }
 
