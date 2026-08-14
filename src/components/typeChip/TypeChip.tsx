@@ -29,6 +29,16 @@ export interface TypeChipProps {
   /** Prefix the label with the `#` sigil (the block chip row does;
    *  the property panel shows bare labels). */
   withHash?: boolean
+  /** Layout override, merged over the base classes by tailwind-merge.
+   *  For surfaces with a box to fit: a quick-find result row reserves one
+   *  16px line (which the default `py-0.5` would overflow by 4px) and
+   *  caps each chip's share of that line.
+   *
+   *  A general override, not spacing-only — it can also replace the
+   *  `max-w-full` guard and the unregistered-type fallback colors. A
+   *  REGISTERED type's colors are safe either way: `chipStyle` applies
+   *  them as an inline `style`, which no class can outrank. */
+  className?: string
 }
 
 /** Unknown id (type not registered — other device's type not yet
@@ -37,7 +47,7 @@ export interface TypeChipProps {
 const displayLabel = (type: TypeContribution | undefined, typeId: string): string =>
   type?.label ?? (typeId.length > 8 ? `${typeId.slice(0, 8)}…` : typeId)
 
-export const TypeChip = ({typeId, type, link, onRemove, withHash}: TypeChipProps) => {
+export const TypeChip = ({typeId, type, link, onRemove, withHash, className}: TypeChipProps) => {
   const label = displayLabel(type, typeId)
   const style = chipStyle(type)
   const labelText = withHash ? `#${label}` : label
@@ -46,6 +56,7 @@ export const TypeChip = ({typeId, type, link, onRemove, withHash}: TypeChipProps
       className={cn(
         'inline-flex max-w-full items-center gap-1 rounded px-1.5 py-0.5 text-xs',
         style ? '' : 'bg-muted text-muted-foreground',
+        className,
       )}
       style={style}
       title={type ? type.description ?? typeId : `Unknown type ${typeId} (not registered)`}
@@ -53,7 +64,11 @@ export const TypeChip = ({typeId, type, link, onRemove, withHash}: TypeChipProps
       {link ? (
         <a
           href={link.href}
-          className="truncate text-inherit no-underline hover:underline"
+          // `min-w-0`: the label is a flex item, whose default
+          // `min-width: auto` refuses to shrink below its text — so
+          // `truncate` never fired and a long label spilled past the
+          // pill's own background instead of ellipsising inside it.
+          className="min-w-0 truncate text-inherit no-underline hover:underline"
           // An <a> is draggable by default; a press-drag on the chip
           // should read as a missed click, not start a native link
           // drag.
@@ -63,7 +78,7 @@ export const TypeChip = ({typeId, type, link, onRemove, withHash}: TypeChipProps
           {labelText}
         </a>
       ) : (
-        <span className="truncate">{labelText}</span>
+        <span className="min-w-0 truncate">{labelText}</span>
       )}
       {onRemove && (
         <button
