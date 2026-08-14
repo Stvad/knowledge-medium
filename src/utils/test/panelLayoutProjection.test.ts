@@ -31,6 +31,7 @@ import { keysBetween } from '@/data/orderKey'
 import {
   activePanelIdProp,
   focusedBlockLocationProp,
+  panelMaximizedProp,
   panelViewModeProp,
   scrollTopProp,
   topLevelBlockIdProp,
@@ -45,13 +46,16 @@ import {
   createPanelStackRowInTx,
   deletePanelRow,
   insertPanelRow,
+  insertSidebarStackedPanel,
   layoutBlockIdsFromRows,
   layoutSlotsFromRows,
   panelBlockIds,
   panelBlockId,
-  panelRowsInLayoutOrder,
+  allPanelRowsInLayoutOrder,
+  prepareExclusiveMaximize,
   reconcilePanelRows,
   retargetPanelBlockIds,
+  togglePanelMaximized,
 } from '@/utils/panelLayoutProjection'
 import {
   __resetConfirmedDeletedForTesting,
@@ -1032,13 +1036,306 @@ describe('slot context on panel rows', () => {
     expect(env.repo.block(rowA).peekProperty(focusedBlockLocationProp)).toEqual(focusedLocation)
     expect(env.repo.block(rowA).peekProperty(scrollTopProp)).toBe(42)
   })
+
+  it('layoutSlotsFromRows emits maximized, and it composes with viewMode', async () => {
+    await createPanelRows(['a', 'b'])
+    const byBlock = await rowIdsByBlock()
+    await seedContext(byBlock.get('a')!, byBlock.get('b')!)
+    await env.repo.block(byBlock.get('a')!).set(panelMaximizedProp, true)
+
+    const slots = layoutSlotsFromRows(env.layoutSessionBlockId, await layoutRows())
+    expect(slots).toEqual([
+      {kind: 'leaf', blockId: 'a', viewMode: 'video-notes', maximized: true},
+      {kind: 'leaf', blockId: 'b', active: true},
+    ])
+    expect(buildLayoutFromSlots(WS, slots)).toBe('#ws-1/a;max;view=video-notes/b;active')
+  })
+
+  it('inbound ;max sets panelMaximized on the SAME row; inbound without it clears', async () => {
+    await applyUrl('#ws-1/a/b')
+    const rowA = (await rowIdsByBlock()).get('a')
+    if (!rowA) throw new Error('missing a row')
+
+    await applyUrl('#ws-1/a;max/b')
+    expect((await rowIdsByBlock()).get('a')).toBe(rowA)
+    expect(env.repo.block(rowA).peekProperty(panelMaximizedProp)).toBe(true)
+
+    await applyUrl('#ws-1/a/b')
+    expect((await rowIdsByBlock()).get('a')).toBe(rowA)
+    expect(env.repo.block(rowA).peekProperty(panelMaximizedProp)).not.toBe(true)
+  })
+
+  // The targeted context pass above only runs for topology-EQUAL diffs; a
+  // diff that adds a column goes through materializeSlots instead, where the
+  // flag is synced separately from the content swap.
+  it('syncs ;max onto a REUSED row when the diff also changes topology', async () => {
+    await applyUrl('#ws-1/a;max/b')
+    const rowA = (await rowIdsByBlock()).get('a')
+    if (!rowA) throw new Error('missing a row')
+    expect(env.repo.block(rowA).peekProperty(panelMaximizedProp)).toBe(true)
+
+    await applyUrl('#ws-1/a/b/c')
+
+    expect((await rowIdsByBlock()).get('a')).toBe(rowA)
+    expect(env.repo.block(rowA).peekProperty(panelMaximizedProp)).not.toBe(true)
+  })
+
+  it('reconcile writes a hand-crafted multi-;max hash verbatim (renderer picks the first)', async () => {
+    await applyUrl('#ws-1/a;max/b;max')
+    const byBlock = await rowIdsByBlock()
+    expect(env.repo.block(byBlock.get('a')!).peekProperty(panelMaximizedProp)).toBe(true)
+    expect(env.repo.block(byBlock.get('b')!).peekProperty(panelMaximizedProp)).toBe(true)
+  })
+
+  it('maximize survives an in-pane content swap — it is arrangement, not (pane, block) state', async () => {
+    await applyUrl('#ws-1/a;max/b')
+    const rowA = (await rowIdsByBlock()).get('a')
+    if (!rowA) throw new Error('missing a row')
+
+    await navigateInPanel(env.repo.block(rowA), 'c')
+
+    expect(env.repo.block(rowA).peekProperty(panelMaximizedProp)).toBe(true)
+  })
+})
+
+describe('togglePanelMaximized', () => {
+  it('flags one row and clears every other', async () => {
+    // The multi-flag state a hand-crafted hash can reconcile in (above).
+    await applyUrl('#ws-1/a;max/b;max/c')
+    const byBlock = await rowIdsByBlock()
+
+    expect(await togglePanelMaximized(env.repo, byBlock.get('c')!)).toBe(true)
+
+    expect(env.repo.block(byBlock.get('c')!).peekProperty(panelMaximizedProp)).toBe(true)
+    expect(env.repo.block(byBlock.get('a')!).peekProperty(panelMaximizedProp)).not.toBe(true)
+    expect(env.repo.block(byBlock.get('b')!).peekProperty(panelMaximizedProp)).not.toBe(true)
+  })
+
+  // Maximizing a lone pane changes nothing on screen and renders no restore
+  // button, so the flag would sit invisible until the next pane opened — and
+  // the action is keyboard-dispatchable on surfaces the button never shows on.
+  it('refuses to maximize when there is nothing to hide', async () => {
+    await applyUrl('#ws-1/a')
+    const rowA = (await rowIdsByBlock()).get('a')
+    if (!rowA) throw new Error('missing a row')
+
+    expect(await togglePanelMaximized(env.repo, rowA)).toBeNull()
+
+    expect(env.repo.block(rowA).peekProperty(panelMaximizedProp)).not.toBe(true)
+  })
+
+  // The other half of "nothing to hide": a viewport that renders one pane
+  // regardless ignores the flag, so setting it there writes `;max` into the
+  // shared hash and — since rows sync — hides panes on a WIDER viewport later
+  // with no gesture behind it. The action is keyboard-reachable on exactly
+  // those viewports, where the chrome button never renders.
+  it('refuses to maximize on a viewport that cannot render a split', async () => {
+    await applyUrl('#ws-1/a/b')
+    const rowA = (await rowIdsByBlock()).get('a')
+    if (!rowA) throw new Error('missing a row')
+
+    expect(await togglePanelMaximized(env.repo, rowA, {canRenderSplit: false})).toBeNull()
+
+    expect(env.repo.block(rowA).peekProperty(panelMaximizedProp)).not.toBe(true)
+  })
+
+  it('still clears an existing flag on such a viewport, so nothing is stuck', async () => {
+    await applyUrl('#ws-1/a;max/b')
+    const rowA = (await rowIdsByBlock()).get('a')
+    if (!rowA) throw new Error('missing a row')
+
+    expect(await togglePanelMaximized(env.repo, rowA, {canRenderSplit: false})).toBe(false)
+
+    expect(env.repo.block(rowA).peekProperty(panelMaximizedProp)).not.toBe(true)
+  })
+
+  // Un-maximizing must still work once siblings are gone, or closing the other
+  // pane would strand the flag.
+  it('still clears a flag on a pane that is now alone', async () => {
+    await applyUrl('#ws-1/a;max')
+    const rowA = (await rowIdsByBlock()).get('a')
+    if (!rowA) throw new Error('missing a row')
+
+    expect(await togglePanelMaximized(env.repo, rowA)).toBe(false)
+
+    expect(env.repo.block(rowA).peekProperty(panelMaximizedProp)).not.toBe(true)
+  })
+
+  // Without the PANEL_TYPE gate the ancestor walk accepts ANY block: it takes
+  // the first non-stack parent for a layout session, loads that whole subtree
+  // inside the tx, and then writes layout properties onto a user's page.
+  //
+  // Two conditions are needed to actually reach the gate, and getting either
+  // wrong makes this test green with the gate deleted (both were hit while
+  // writing it): the block must be NESTED, or the ancestor walk bails out
+  // before the gate matters, and its parent needs a SECOND child, or the
+  // lone-pane refusal below catches it first.
+  // The membership check this replaced was VACUOUS: it started the traversal
+  // at whatever block the ancestor walk returned, so the panel was always a
+  // member and it passed for any parent. Identity of the ancestor is the real
+  // check — a layout session is a child of the deterministic container.
+  it('refuses a real panel row re-parented under an ordinary block', async () => {
+    await applyUrl('#ws-1/a/b')
+    const byBlock = await rowIdsByBlock()
+    const rowA = byBlock.get('a')!
+    await seedBlocks(['someones-page'])
+    // The shape a raw sync/bridge write can produce: a correctly TYPED panel
+    // row hanging off a user's page instead of a layout session.
+    await env.repo.tx(async tx => {
+      await tx.move(rowA, {parentId: 'someones-page', orderKey: 'a0'})
+      await tx.move(byBlock.get('b')!, {parentId: 'someones-page', orderKey: 'a1'})
+    }, {scope: ChangeScope.UiState, description: 'reparent panel rows'})
+
+    expect(await togglePanelMaximized(env.repo, rowA)).toBeNull()
+
+    expect(env.repo.block(rowA).peekProperty(panelMaximizedProp)).not.toBe(true)
+    expect(env.repo.block('someones-page').peekProperty(activePanelIdProp)).toBeUndefined()
+  })
+
+  it('refuses a nested non-panel block, writing nothing to it or its parent', async () => {
+    await applyUrl('#ws-1/a')
+    await seedBlocks(['user-page'])
+    await env.repo.tx(async tx => {
+      for (const [index, id] of ['page-child', 'page-sibling'].entries()) {
+        await tx.create({
+          id,
+          workspaceId: WS,
+          parentId: 'user-page',
+          orderKey: `a${index}`,
+          content: id,
+        })
+      }
+    }, {scope: ChangeScope.BlockDefault, description: 'seed nested content blocks'})
+
+    expect(await togglePanelMaximized(env.repo, 'page-child')).toBeNull()
+
+    expect(env.repo.block('page-child').peekProperty(panelMaximizedProp)).not.toBe(true)
+    expect(env.repo.block('user-page').peekProperty(activePanelIdProp)).toBeUndefined()
+  })
+
+  it('clears its own flag on the second call, leaving nothing maximized', async () => {
+    await applyUrl('#ws-1/a;max/b')
+    const rowA = (await rowIdsByBlock()).get('a')
+    if (!rowA) throw new Error('missing a row')
+
+    expect(await togglePanelMaximized(env.repo, rowA)).toBe(false)
+
+    expect(env.repo.block(rowA).peekProperty(panelMaximizedProp)).not.toBe(true)
+  })
+
+  it('reaches the layout session through an enclosing stack row', async () => {
+    await applyUrl('#ws-1/a/b,c')
+    const byBlock = await rowIdsByBlock()
+
+    expect(await togglePanelMaximized(env.repo, byBlock.get('c')!)).toBe(true)
+
+    expect(env.repo.block(byBlock.get('c')!).peekProperty(panelMaximizedProp)).toBe(true)
+    expect(layoutSessionBlock().peekProperty(activePanelIdProp)).toBe(byBlock.get('c'))
+  })
+
+  // Opening a pane is an explicit "show me two things". A maximize left
+  // standing renders the new pane invisible while the insert path still points
+  // activePanelId at it — so a quick-capture that writes editor state onto the
+  // new pane writes into something that never mounts.
+  it('opening a pane clears the maximize that would have hidden it', async () => {
+    await applyUrl('#ws-1/a;max/b')
+    const byBlock = await rowIdsByBlock()
+    expect(env.repo.block(byBlock.get('a')!).peekProperty(panelMaximizedProp)).toBe(true)
+
+    const newPanelId = await insertPanelRow(env.repo, layoutSessionBlock(), 'c')
+
+    expect(env.repo.block(byBlock.get('a')!).peekProperty(panelMaximizedProp)).not.toBe(true)
+    // …and the new pane keeps the activation the insert gave it.
+    expect(layoutSessionBlock().peekProperty(activePanelIdProp)).toBe(newPanelId)
+    expect(layoutSlotsFromRows(env.layoutSessionBlockId, await layoutRows())
+      .every(slot => slot.kind === 'leaf' && slot.maximized !== true)).toBe(true)
+  })
+
+  it('opening a stacked pane clears it too', async () => {
+    await applyUrl('#ws-1/a;max/b')
+    const byBlock = await rowIdsByBlock()
+
+    await insertSidebarStackedPanel(env.repo, layoutSessionBlock(), 'c')
+
+    expect(env.repo.block(byBlock.get('a')!).peekProperty(panelMaximizedProp)).not.toBe(true)
+  })
+
+  // `prepareExclusiveMaximize` is the OTHER writer of the flag (the video-notes
+  // enter sets it from inside navigateInPanel's tx), so it carries the same
+  // two-part "nothing to hide" rule as the toggle. Reported as its own gap:
+  // gating only the toggle left the notes gesture able to plant a flag on a
+  // narrow viewport, which rows sync then carry to a wide one.
+  it('prepareExclusiveMaximize declines on a viewport that cannot render a split', async () => {
+    await applyUrl('#ws-1/a/b')
+    const rowA = (await rowIdsByBlock()).get('a')
+    if (!rowA) throw new Error('missing a row')
+
+    expect(await prepareExclusiveMaximize(env.repo, rowA, {canRenderSplit: false}))
+      .toBe(false)
+    expect(await prepareExclusiveMaximize(env.repo, rowA))
+      .toBe(true)
+  })
+
+  // A refusal writes NOTHING, matching what refusing means in
+  // `togglePanelMaximized`. Clearing on a decline looks like hygiene and is
+  // not: the flag on `b` may be a maximize the user deliberately set on a wide
+  // layout, and nothing would restore it.
+  it('prepareExclusiveMaximize leaves other panes alone when it declines', async () => {
+    await applyUrl('#ws-1/a/b;max')
+    const byBlock = await rowIdsByBlock()
+
+    expect(await prepareExclusiveMaximize(env.repo, byBlock.get('a')!, {canRenderSplit: false}))
+      .toBe(false)
+
+    expect(env.repo.block(byBlock.get('b')!).peekProperty(panelMaximizedProp)).toBe(true)
+  })
+
+  it('prepareExclusiveMaximize clears other panes when it DOES maximize', async () => {
+    await applyUrl('#ws-1/a/b;max')
+    const byBlock = await rowIdsByBlock()
+
+    expect(await prepareExclusiveMaximize(env.repo, byBlock.get('a')!))
+      .toBe(true)
+
+    expect(env.repo.block(byBlock.get('b')!).peekProperty(panelMaximizedProp)).not.toBe(true)
+  })
+
+  // The return value answers "does the caller still need to WRITE the flag?",
+  // so an already-maximized pane reports false even though maximizing is
+  // warranted — the write would be a no-op, and sending it as an explicit
+  // `maximized: true` only adds a redundant row change and history entry.
+  it('prepareExclusiveMaximize reports no write needed when the pane is already maximized', async () => {
+    await applyUrl('#ws-1/a;max/b')
+    const byBlock = await rowIdsByBlock()
+
+    expect(await prepareExclusiveMaximize(env.repo, byBlock.get('a')!))
+      .toBe(false)
+
+    // ...and leaves it standing: not claiming is arrangement-neutral.
+    expect(env.repo.block(byBlock.get('a')!).peekProperty(panelMaximizedProp)).toBe(true)
+  })
+
+  it('pushes a history entry (maximize is a layout change, so Back un-maximizes)', async () => {
+    await applyUrl('#ws-1/a/b')
+    const rowA = (await rowIdsByBlock()).get('a')
+    if (!rowA) throw new Error('missing a row')
+    const {projection, pushes, replaces} = startProjection('#ws-1/a/b')
+    await projection.start()
+
+    await togglePanelMaximized(env.repo, rowA)
+
+    // `;active` rides along because the toggle activates what it maximizes.
+    await vi.waitFor(() => expect(pushes).toEqual(['#ws-1/a;active;max/b']))
+    expect(replaces).toEqual([])
+    projection.dispose()
+  })
 })
 
 describe('per-pane render scopes', () => {
   it('two panes showing the SAME block get distinct per-pane focus scopes', async () => {
     await applyUrl('#ws-1/same/same')
 
-    const panelRows = panelRowsInLayoutOrder(env.layoutSessionBlockId, await layoutRows())
+    const panelRows = allPanelRowsInLayoutOrder(env.layoutSessionBlockId, await layoutRows())
     expect(panelRows.map(row => panelBlockId(row))).toEqual(['same', 'same'])
     const [first, second] = panelRows
     const firstLocation = env.repo.block(first.id).peekProperty(focusedBlockLocationProp)

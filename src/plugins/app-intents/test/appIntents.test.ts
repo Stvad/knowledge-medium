@@ -11,7 +11,7 @@ import { __resetLayoutSessionIdForTesting } from '@/utils/layoutSessionId'
 import {
   insertPanelRow,
   panelBlockId,
-  panelRowsInLayoutOrder,
+  allPanelRowsInLayoutOrder,
 } from '@/utils/panelLayoutProjection'
 import { __resetAppIntentForTesting, consumeAppIntent, formatSharedContent } from '../appIntents.ts'
 import {
@@ -145,7 +145,7 @@ describe('consumeAppIntent', () => {
     expect(window.location.search).toBe('')
 
     const layoutRows = await env.repo.query.subtree({id: layoutSession.id}).load()
-    const newPanel = panelRowsInLayoutOrder(layoutSession.id, layoutRows)
+    const newPanel = allPanelRowsInLayoutOrder(layoutSession.id, layoutRows)
       .find(row => panelBlockId(row) === newBlockId)
     expect(newPanel).toBeTruthy()
     const selection = env.repo.block(newPanel!.id).peekProperty(editorSelection)

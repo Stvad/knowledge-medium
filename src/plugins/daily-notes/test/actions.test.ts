@@ -19,7 +19,7 @@ import {
   isPanelStackRow,
   layoutSlotsFromRows,
   panelBlockId,
-  panelRowsInLayoutOrder,
+  allPanelRowsInLayoutOrder,
 } from '@/utils/panelLayoutProjection'
 import {
   dailyNotesActions,
@@ -113,7 +113,7 @@ describe('dailyNotesActions', () => {
       {kind: 'leaf', blockId: newBlockId, active: true},
     ])
 
-    const newPanel = panelRowsInLayoutOrder(layoutSession.id, layoutRows)
+    const newPanel = allPanelRowsInLayoutOrder(layoutSession.id, layoutRows)
       .find(row => panelBlockId(row) === newBlockId)
     expect(newPanel).toBeTruthy()
     const newPanelParent = layoutRows.find(row => row.id === newPanel!.parentId)
