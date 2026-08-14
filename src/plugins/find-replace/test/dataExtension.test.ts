@@ -164,6 +164,41 @@ describe('findReplaceDataExtension', () => {
     expect(out.truncated).toBe(true)
   })
 
+  // The plan is built before the tx opens. Tagging a previewed block
+  // opaque without touching its content slips past the `originalContent`
+  // staleness check, so the query-side filter alone cannot stop the write
+  // — the mutator has to re-read the type itself.
+  it('refuses a planned block that became opaque after the preview', async () => {
+    await create({id: 'a', content: 'alpha here'})
+    await create({id: 'turned', content: 'alpha there'})
+    const preview = await search({query: 'alpha'})
+    expect(preview.matches.map(m => m.blockId).sort()).toEqual(['a', 'turned'])
+
+    await env.repo.tx(
+      tx => tx.setProperty('turned', typesProp, ['extension']),
+      {scope: ChangeScope.BlockDefault},
+    )
+
+    const result = await env.repo.run<ApplyContentReplaceResult>(
+      FIND_REPLACE_APPLY_CONTENT_REPLACE_MUTATOR,
+      {
+        workspaceId: WS,
+        find: 'alpha',
+        replace: 'omega',
+        options: {matchCase: false, wholeWord: false},
+        items: preview.matches.map(match => ({
+          blockId: match.blockId,
+          originalContent: match.originalContent,
+        })),
+      },
+    )
+
+    expect(result.updatedBlocks).toBe(1)
+    expect(result.skippedUnavailableBlocks).toBe(1)
+    expect((await load('turned'))?.content).toBe('alpha there')
+    expect((await load('a'))?.content).toBe('omega here')
+  })
+
   it('applies replacements from preview snapshots', async () => {
     await create({id: 'a', content: 'Alpha alpha'})
     await create({id: 'b', content: 'alpha'})

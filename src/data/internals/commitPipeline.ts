@@ -482,6 +482,7 @@ export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => 
       mutatorCalls,
       mutators,
       processors,
+      opaqueContentTypes,
       propertySchemaResolverFor: resolverFor,
       sameTxEvents,
       now,

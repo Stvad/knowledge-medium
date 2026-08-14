@@ -237,6 +237,10 @@ export interface TxImplContext {
    *  fails the originating tx (clean rollback) instead of failing
    *  later at fire time. */
   processors: ReadonlyMap<string, AnyPostCommitProcessor>
+  /** Block type ids whose content is not prose, snapshotted at tx start —
+   *  the SAME set the same-tx processors get, so a mutator's refusal and a
+   *  processor's cannot disagree inside one tx. */
+  opaqueContentTypes: ReadonlySet<string>
   /** Tx-start-captured resolver factory — mirrors the commit pipeline's own
    *  `resolverFor` closure (built from the same registry-factory /
    *  workspaceId / seed-name-counts triple) so both surfaces resolve
@@ -336,6 +340,8 @@ const INSERT_SQL = `INSERT INTO blocks (${COLUMN_LIST}) VALUES (${COLUMN_PLACEHO
 export class TxImpl implements Tx {
   readonly meta: TxMeta
 
+  readonly opaqueContentTypes: ReadonlySet<string>
+
   private readonly ctx: TxImplContext
 
   /** True once `meta.workspaceId` has been pinned by the first write
@@ -362,6 +368,7 @@ export class TxImpl implements Tx {
   constructor(ctx: TxImplContext) {
     this.ctx = ctx
     this.meta = ctx.meta
+    this.opaqueContentTypes = ctx.opaqueContentTypes
     if (ctx.meta.workspaceId !== null) {
       this.workspacePinned = true
     }

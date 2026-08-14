@@ -375,6 +375,17 @@ export interface Tx {
   emitEvent<P extends string>(name: P, payload: SameTxEventPayload<P>): void
 
   readonly meta: TxMeta
+
+  /** Block type ids whose content is not prose (`opaqueContentTypesFacet`),
+   *  snapshotted at tx start like the property-schema registry.
+   *
+   *  Here because a MUTATOR is a write path that has to consult it: a
+   *  bulk content rewrite (find-and-replace) must refuse a block that
+   *  became opaque after its plan was built, and `apply` gets only
+   *  `(tx, args)` — no repo. Reading it off the tx rather than live from
+   *  the repo also means a mutator's refusal and a same-tx processor's
+   *  cannot disagree within one tx. */
+  readonly opaqueContentTypes: ReadonlySet<string>
 }
 
 export interface RepoTxOptions {

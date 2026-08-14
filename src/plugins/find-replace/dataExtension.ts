@@ -217,6 +217,16 @@ export const applyContentReplaceMutator = defineMutator<
         result.skippedChangedBlocks += 1
         continue
       }
+      // The query filters these out, so a plan should never carry one —
+      // but the plan is built BEFORE the tx opens, and a block can be
+      // tagged opaque in between without its content changing, which the
+      // staleness check above cannot see. Re-read against the tx's own
+      // snapshot rather than the live repo so this cannot disagree with
+      // the same-tx processors running over the same write.
+      if (hasOpaqueContent(current, tx.opaqueContentTypes)) {
+        result.skippedUnavailableBlocks += 1
+        continue
+      }
 
       const replaced = replaceLiteralMatches(
         current.content,
