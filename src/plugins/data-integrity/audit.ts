@@ -518,6 +518,7 @@ const runContentLinkRecomputeCheck = async (
   let opaqueContentRefBlocks = 0
   let opaqueContentRefs = 0
   let opaqueScanned = 0
+  const opaqueSeen = new Set<string>()
   let truncated = false
   const strippedSample: Array<{ id: string; marks: number; content_preview: string }> = []
   const staleSample: Array<{ id: string; stale: string[]; content_preview: string }> = []
@@ -602,7 +603,13 @@ const runContentLinkRecomputeCheck = async (
         [workspaceId, `"${type}"`, opaqueLastId],
       )
       if (rows.length === 0) break
-        for (const row of rows) {
+      for (const row of rows) {
+        // One block carrying TWO opaque types is selected by both probes,
+        // and `hasOpaqueContent` accepts it on each pass because it tests
+        // the whole set — so without this it is counted twice, sampled
+        // twice, and burns the cap twice.
+        if (opaqueSeen.has(row.id)) continue
+        opaqueSeen.add(row.id)
         if (!hasOpaqueContent(
           { properties: safeJsonParse<Record<string, unknown>>(row.properties_json, {}) },
           opaqueTypes,

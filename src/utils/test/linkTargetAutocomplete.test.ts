@@ -740,6 +740,22 @@ describe('searchBlocksAcrossSources (searchSourcesFacet merge point)', () => {
     expect(results).toEqual([])
   })
 
+  // `core.blockTypesByIds` caps its id array at 200 and REJECTS past that,
+  // so the merge point's live-type lookup has to chunk: the agent search
+  // command forwards an unbounded limit, and an unchunked call turns a
+  // large search into a thrown validation error.
+  it('survives a merged candidate set larger than the block-types id cap', async () => {
+    for (let i = 0; i < 205; i++) {
+      await create({id: `b-${String(i).padStart(3, '0')}`, content: `dating ${i}`})
+    }
+
+    const results = await searchBlocksAcrossSources(env.repo, {
+      workspaceId: WS, query: 'dating', limit: 205,
+    })
+
+    expect(results.length).toBeGreaterThan(200)
+  }, 20_000)
+
   // The recovery window must always EXCEED the fetch that came up short.
   // A fixed ceiling satisfies that only below the ceiling: `fetchLimit`
   // floors at `limit`, so at limit 201 the old ceiling-valued window was

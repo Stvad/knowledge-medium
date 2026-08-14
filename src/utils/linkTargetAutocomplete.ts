@@ -13,6 +13,10 @@ import { buildFilterPrefixes, rankCandidates } from '@/utils/fuzzyRank.js'
  *  filter is permissive (token-prefix LIKE), so over-fetching gives the
  *  ranker enough material to find typo / out-of-order matches even when
  *  the display limit is small. */
+/** Matches the `blockIds` cap on `core.blockTypesByIds` — it REJECTS past
+ *  this, so callers chunk rather than hope. */
+const BLOCK_TYPES_BATCH = 200
+
 const EMPTY_OPAQUE_TYPES: ReadonlySet<string> = new Set()
 
 const ALIAS_CANDIDATE_MULTIPLIER = 4
@@ -195,11 +199,22 @@ const loadTypeIdsByBlock = async (
 ): Promise<Map<string, string[]>> => {
   const byBlock = new Map<string, string[]>()
   if (blockIds.length === 0) return byBlock
-  const rows = await repo.query.blockTypesByIds({workspaceId, blockIds}).load()
-  for (const row of rows) {
-    const existing = byBlock.get(row.blockId)
-    if (existing) existing.push(row.type)
-    else byBlock.set(row.blockId, [row.type])
+  // CHUNKED: `core.blockTypesByIds` caps `blockIds` at 200 by schema, and
+  // rejects — it does not truncate. The display paths stay far under that,
+  // but the merge point's live-type check runs over the whole merged
+  // candidate set, and the agent `search` command forwards an unbounded
+  // limit. An unchunked call there turns a large search into a thrown
+  // validation error rather than results.
+  for (let i = 0; i < blockIds.length; i += BLOCK_TYPES_BATCH) {
+    const rows = await repo.query.blockTypesByIds({
+      workspaceId,
+      blockIds: blockIds.slice(i, i + BLOCK_TYPES_BATCH),
+    }).load()
+    for (const row of rows) {
+      const existing = byBlock.get(row.blockId)
+      if (existing) existing.push(row.type)
+      else byBlock.set(row.blockId, [row.type])
+    }
   }
   return byBlock
 }

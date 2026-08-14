@@ -549,6 +549,23 @@ describe('runConsistencyAudit — full (on-demand) deep checks', () => {
     expect(check.opaqueContentRefBlocks).toBe(1)
   })
 
+  // Two opaque types on one block means two candidate probes select it, and
+  // `hasOpaqueContent` accepts it on both — so the counters double without a
+  // seen-set.
+  it('counts a multi-typed opaque block once, not once per type', async () => {
+    await ins({
+      id: 'ext3', content: 'export const x = 1',
+      properties: { types: ['extension', 'drawing'] },
+      references: [{ id: 'foo-id', alias: 'Foo' }],
+    })
+    const r = await runConsistencyAudit(sharedDb.db, WS, 0, {
+      full: { ...FULL, opaqueContentTypes: new Set(['extension', 'drawing']) },
+    })
+    const check = r.checks.content_link_recompute
+    expect(check.opaqueContentRefBlocks).toBe(1)
+    expect(check.opaqueContentRefs).toBe(1)
+  })
+
   it('property_ref_at_rest (schema-aware) flags a value-present/ref-absent curated prop', async () => {
     await ins({ id: 'p1', properties: { 'next-review-date': '2026-01-01' }, references: [] })
     const r = await runConsistencyAudit(sharedDb.db, WS, 0, { full: FULL })
