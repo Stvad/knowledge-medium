@@ -27,7 +27,7 @@
  * case 1 and the test would pass while pinning nothing.
  */
 import { describe, expect, it } from 'vitest'
-import { Activity, createContext, memo, useContext } from 'react'
+import { Activity, createContext, memo, useContext, useMemo } from 'react'
 import { act, render, screen, waitFor } from '@testing-library/react'
 import { HandleStore, LoaderHandle } from '@/data/internals/handleStore'
 import { useHandle } from '@/hooks/block'
@@ -67,7 +67,7 @@ const manualScheduler = () => {
   }
 }
 
-describe('useHandle re-acquires a disposed handle', () => {
+describe('useHandle recovers from a disposed handle', () => {
   it('recovers after a hidden subtree outlives two handle GCs', async () => {
     const sched = manualScheduler()
     const store = new HandleStore({ gcTimeMs: 100, schedule: sched.schedule })
@@ -81,13 +81,14 @@ describe('useHandle re-acquires a disposed handle', () => {
     }
 
     // memo + stable element identity so REVEALING the lane bails out instead
-    // (redundant with each other — either bailout alone suffices; both are
-    // kept so an edit removing one doesn't silently make this vacuous)
     // of re-rendering the consumer. That is what makes this faithful: in the
     // live app the reveal is a bailout (nothing about the subtree's props
     // changed), so the consumer never re-runs its factory and never discovers
     // that the handle it holds is dead. A test that lets the reveal re-render
-    // the consumer heals through that render and pins nothing.
+    // the consumer heals through that render and pins nothing. The two
+    // bailouts are redundant with each other — either alone suffices — and
+    // both are kept so an edit dropping one doesn't silently make this
+    // vacuous.
     const Consumer = memo(() => {
       // Read the context so a change to it marks this component dirty even
       // while it sits inside a hidden Activity boundary.
@@ -126,8 +127,9 @@ describe('useHandle re-acquires a disposed handle', () => {
     expect(created).toBeGreaterThan(createdWhileVisible)
     sched.flush(100)      // second death — the one that defeats React's self-heal
 
-    // Reveal. The reconnected subscription lands on a disposed handle; only
-    // `useHandle` forcing a re-acquiring render gets the data back.
+    // Reveal. The reconnected subscription lands on a disposed handle, and
+    // nothing in this hook can re-acquire one (the second test shows why):
+    // recovery is `handle.subscribe` resolving to whatever is live at the key.
     rerender(<Harness hidden={false} tick={1}/>)
     // waitFor, not a counted number of act() flushes: how many render passes
     // the recovery takes is React's business, and pinning it to a count made
@@ -135,11 +137,13 @@ describe('useHandle re-acquires a disposed handle', () => {
     await waitFor(() => expect(screen.getByTestId('out').textContent).toBe('3'))
   })
 
-  it('gives a later disposal a full attempt budget again', async () => {
-    // Pins `attempts.current = 0`. Each hide/reveal cycle spends one attempt,
-    // so without the reset the budget runs out and a consumer that has been
-    // backgrounded a handful of times stops recovering. Six cycles is one
-    // more than REACQUIRE_ATTEMPT_LIMIT.
+  it('recovers even when the holder memoizes its handle', async () => {
+    // The case that matters in the built app: React Compiler memoizes the
+    // factory call on deps that never change, so a consumer handed a disposed
+    // handle gets the SAME instance back forever, and any recovery that needs
+    // the caller to re-run its factory is dead on arrival. useMemo models that
+    // shape. Compiled output and full mechanism:
+    // docs/handle-lifecycle-hidden-subtrees.html §"Correction".
     const sched = manualScheduler()
     const store = new HandleStore({ gcTimeMs: 100, schedule: sched.schedule })
     const loader = async () => [1, 2, 3]
@@ -147,8 +151,11 @@ describe('useHandle re-acquires a disposed handle', () => {
 
     const Consumer = memo(() => {
       useContext(TickContext)
-      const value = useHandle(acquire(), { selector: v => (v as number[] | undefined) ?? EMPTY })
-      return <div data-testid="cycles">{value.length}</div>
+      // Empty deps on purpose: models compiler output, whose cache key here
+      // is a set of values that never change.
+      const handle = useMemo(() => acquire(), [])
+      const value = useHandle(handle, { selector: v => (v as number[] | undefined) ?? EMPTY })
+      return <div data-testid="memoized">{value.length}</div>
     })
     const consumerElement = <Consumer/>
     const Harness = ({ hidden, tick }: { hidden: boolean; tick: number }) => (
@@ -158,72 +165,16 @@ describe('useHandle re-acquires a disposed handle', () => {
     )
 
     const { rerender } = render(<Harness hidden={false} tick={0}/>)
-    await waitFor(() => expect(screen.getByTestId('cycles').textContent).toBe('3'))
+    await waitFor(() => expect(screen.getByTestId('memoized').textContent).toBe('3'))
 
-    for (let cycle = 1; cycle <= 6; cycle++) {
-      rerender(<Harness hidden tick={cycle * 2}/>)
-      await act(async () => {})
-      sched.flush(100)
-      rerender(<Harness hidden tick={cycle * 2 + 1}/>)
-      await act(async () => {})
-      sched.flush(100)
-      rerender(<Harness hidden={false} tick={cycle * 2 + 1}/>)
-      await waitFor(() => expect(screen.getByTestId('cycles').textContent).toBe('3'))
-    }
-  })
-
-  it('gives up instead of spinning when the factory mints a fresh dead handle each render', async () => {
-    // The shape that actually loops: every render hands useHandle a NEW
-    // disposed handle, so its deps change and the guard re-fires each time.
-    // The attempt cap is the only thing that ends it. The explicit throw
-    // keeps a regression here a fast failure rather than a hung run.
-    const sched = manualScheduler()
-    const store = new HandleStore({ gcTimeMs: 100, schedule: sched.schedule })
-    const loader = async () => [1, 2, 3]
-    let seq = 0
-    const freshDeadHandle = () => {
-      const key = `dead:${seq++}`
-      const h = store.getOrCreate(key, () => new LoaderHandle({ store, key, loader }))
-      h.dispose()
-      return h
-    }
-    let renders = 0
-    const Consumer = () => {
-      renders++
-      if (renders > 50) throw new Error(`render loop: ${renders} renders on dead handles`)
-      const value = useHandle(freshDeadHandle(), { selector: v => (v as number[] | undefined) ?? EMPTY })
-      return <div data-testid="spin">{value.length}</div>
-    }
-    render(<Consumer/>)
+    rerender(<Harness hidden tick={0}/>)
     await act(async () => {})
-    await act(async () => {})
-    expect(renders).toBeLessThan(20)
-  })
-
-  it('gives up instead of spinning when the factory cannot replace a dead handle', async () => {
-    // A caller that memoizes its handle hands back the same corpse forever.
-    // This one terminates on its own — `subscribe`'s deps never change, so
-    // useSyncExternalStore never re-invokes it — so it pins the OUTCOME (a
-    // quiet, empty render rather than a loop), not the cap. The sibling test
-    // above is the one that exercises the cap.
-    const sched = manualScheduler()
-    const store = new HandleStore({ gcTimeMs: 100, schedule: sched.schedule })
-    const loader = async () => [1, 2, 3]
-    const dead = store.getOrCreate(KEY, () => new LoaderHandle({ store, key: KEY, loader }))
     sched.flush(100)
-    expect(dead.status()).toBe('disposed')
+    rerender(<Harness hidden tick={1}/>)
+    await act(async () => {})
+    sched.flush(100)
 
-    let renders = 0
-    const Consumer = () => {
-      renders++
-      if (renders > 50) throw new Error(`render loop: ${renders} renders on a dead handle`)
-      const value = useHandle(dead, { selector: v => (v as number[] | undefined) ?? EMPTY })
-      return <div data-testid="stuck">{value.length}</div>
-    }
-    render(<Consumer/>)
-    await act(async () => {})
-    await act(async () => {})
-    expect(renders).toBeLessThan(10)
-    expect(screen.getByTestId('stuck').textContent).toBe('0')
+    rerender(<Harness hidden={false} tick={1}/>)
+    await waitFor(() => expect(screen.getByTestId('memoized').textContent).toBe('3'))
   })
 })
