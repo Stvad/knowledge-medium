@@ -4,9 +4,10 @@ import { TypeChip } from '@/components/typeChip/TypeChip.js'
 import type { TypeContribution } from '@/data/api'
 import {
   displayableTypes,
+  type LinkTargetAliasMatch,
   type LinkTargetBlockMatch,
 } from '@/utils/linkTargetAutocomplete.js'
-import { quickFindBlockValue } from './selection.ts'
+import { quickFindAliasValue, quickFindBlockValue } from './selection.ts'
 import type { RecentItem } from './recents.ts'
 import type { QuickFindListItem } from './QuickFind.tsx'
 
@@ -166,4 +167,48 @@ export const recentResultItems = (
     typeIds: item.typeIds,
     parentId: item.parentId,
     typeRegistry,
+  }))
+
+/** Rows of the "Pages" (alias-match) group.
+ *
+ *  Single-line: the page's name is its own locator, so there is no path
+ *  to show. But its TYPES belong here as much as anywhere — arguably
+ *  more, since this is the group you land in when you search a page BY
+ *  NAME, which is exactly when `#person` vs `#project` is the thing
+ *  telling two similar names apart. Without them a page showed its tags
+ *  in Recents and lost them the moment you typed its name.
+ *
+ *  Chips trail the row, past the content preview, so they line up with
+ *  the chips on every other group's rows. They arrive on the second
+ *  search callback (see `LinkTargetAliasMatch.typeIds`) and cost this
+ *  row no reflow when they do: its height is the text's. */
+export const aliasResultItems = (
+  aliases: readonly LinkTargetAliasMatch[],
+  {typeRegistry}: ResultRowContext,
+): QuickFindListItem[] =>
+  aliases.map(match => ({
+    key: `page:${match.blockId}:${match.alias}`,
+    value: quickFindAliasValue(match),
+    className: 'flex items-center gap-2',
+    children: (
+      <>
+        <span className="min-w-0 flex-1 truncate">{match.alias}</span>
+        {match.content && match.content !== match.alias && (
+          <span className="min-w-0 max-w-[40%] shrink truncate text-xs text-muted-foreground">
+            {truncate(match.content, 50)}
+          </span>
+        )}
+        {displayableTypes(match.typeIds, typeRegistry)
+          .slice(0, MAX_ROW_TYPE_CHIPS)
+          .map(({typeId, type}) => (
+            <TypeChip
+              key={typeId}
+              typeId={typeId}
+              type={type}
+              withHash
+              className="max-w-[30%] shrink-0 py-0 leading-4"
+            />
+          ))}
+      </>
+    ),
   }))

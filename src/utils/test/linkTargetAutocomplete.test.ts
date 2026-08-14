@@ -350,6 +350,9 @@ describe('link target autocomplete helpers', () => {
         searchByContent: vi.fn(() => ({
           load: () => blockRows.promise,
         })),
+        // Alias rows carry no properties, so their types are a second
+        // read — see `LinkTargetAliasMatch.typeIds`.
+        blockTypesByIds: vi.fn(() => ({load: () => Promise.resolve([])})),
       },
     } as unknown as Repo
     const phases: string[] = []
@@ -375,7 +378,7 @@ describe('link target autocomplete helpers', () => {
     ])
 
     await expect(search).resolves.toEqual({
-      aliases: [{alias: 'Dating', blockId: 'page', content: 'Dating notes'}],
+      aliases: [{alias: 'Dating', blockId: 'page', content: 'Dating notes', typeIds: []}],
       blocks: [{
         blockId: 'block',
         content: 'My Dating notes',
@@ -403,6 +406,7 @@ describe('link target autocomplete helpers', () => {
           ]),
         })),
         searchByContent,
+        blockTypesByIds: vi.fn(() => ({load: () => Promise.resolve([])})),
       },
     } as unknown as Repo
 

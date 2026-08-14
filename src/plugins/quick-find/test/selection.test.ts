@@ -11,7 +11,7 @@ import {
 
 describe('quick find selection', () => {
   it('moves from the transient create item to the first async result', () => {
-    const firstAlias = {alias: 'Alpha', blockId: 'alpha-id', content: 'Alpha page'}
+    const firstAlias = {alias: 'Alpha', blockId: 'alpha-id', content: 'Alpha page', typeIds: []}
 
     expect(nextQuickFindSelection({
       query: 'alp',
@@ -33,7 +33,7 @@ describe('quick find selection', () => {
   })
 
   it('keeps date selected as the first visible item when a query parses as a date', () => {
-    const firstAlias = {alias: 'Tomorrow project', blockId: 'project-id', content: 'Tomorrow project'}
+    const firstAlias = {alias: 'Tomorrow project', blockId: 'project-id', content: 'Tomorrow project', typeIds: []}
 
     expect(nextQuickFindSelection({
       query: 'tomorrow',

@@ -35,6 +35,18 @@ export interface LinkTargetAliasMatch {
   alias: string
   blockId: string
   content: string
+  /** The named block's type ids. Unlike the block rows, alias rows come
+   *  from an index join with no properties on it, so these arrive on the
+   *  SECOND callback (`onBlocks`, which re-delivers the aliases) and are
+   *  `[]` on the first. That keeps the alias paint — the fast half of the
+   *  progressive search — exactly as quick as it was.
+   *
+   *  These describe the block the row OPENS. The `[[` dropdown withholds
+   *  a type hint for a contested alias because inserting the text resolves
+   *  to the oldest claimant rather than the ranked winner; a quick-find
+   *  Pages row carries `blockId` and navigates straight to it, so the same
+   *  hazard does not apply. */
+  typeIds: readonly string[]
 }
 
 /** One row of the `[[` completion dropdown: the alias to insert plus the
@@ -194,6 +206,7 @@ const aliasMatchesFromRows = (
       alias: row.alias,
       blockId: row.blockId,
       content: row.content,
+      typeIds: [],
     })
   }
   return aliases
@@ -395,10 +408,13 @@ export const searchAliasMatches = async (
     recentBlockIds: args.recentBlockIds,
     limit: args.limit,
   })
+  // Types are attached later, by `searchLinkTargets`, once the surviving
+  // slice is known — see `LinkTargetAliasMatch.typeIds`.
   return rows.map(row => ({
     alias: row.alias,
     blockId: row.blockId,
     content: row.content,
+    typeIds: [],
   }))
 }
 
@@ -676,17 +692,33 @@ export const searchLinkTargetsProgressively = async (
   const blockSeenIds = new Set(seenBlockIds)
   for (const alias of aliases) blockSeenIds.add(alias.blockId)
 
+  // Only the surviving aliases, and only once they are known — so this
+  // starts AFTER the alias paint above and runs alongside the content
+  // search already in flight, costing the second paint no extra wait.
+  const aliasTypesPromise = loadTypeIdsByBlock(
+    repo,
+    workspaceId,
+    aliases.map(alias => alias.blockId),
+  )
+  const withTypes = async (): Promise<LinkTargetAliasMatch[]> => {
+    const typeIdsByBlock = await aliasTypesPromise
+    return aliases.map(alias => ({
+      ...alias,
+      typeIds: typeIdsByBlock.get(alias.blockId) ?? [],
+    }))
+  }
+
   if (blockRowsPromise === null) {
-    const result = {aliases, blocks: []}
+    const result = {aliases: await withTypes(), blocks: []}
     callbacks.onBlocks?.(result.blocks, result)
     return result
   }
 
-  const blockRows = await blockRowsPromise
+  const [blockRows, typedAliases] = await Promise.all([blockRowsPromise, withTypes()])
   if (!blockRows.ok) throw blockRows.error
 
   const blocks = blockMatchesFromRows(blockRows.rows, blockSeenIds).slice(0, limit)
-  const result = {aliases, blocks}
+  const result = {aliases: typedAliases, blocks}
   callbacks.onBlocks?.(blocks, result)
   return result
 }
