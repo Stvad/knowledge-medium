@@ -108,7 +108,11 @@ export const enterVideoNotesView = async (
   })
   await navigateInPanel(uiStateBlock, videoBlock.id, {
     viewMode: VIDEO_NOTES_VIEW_MODE,
-    maximized,
+    // Declining is arrangement-NEUTRAL, so the key is omitted rather than sent
+    // as `false`: passing `false` would clear a maximize this pane already
+    // carried, silently undoing a deliberate one when the gesture merely had
+    // nothing to add (a narrow viewport, or a lone pane).
+    ...(maximized ? {maximized: true} : {}),
   })
   await ensureEditableVideoNoteChild(
     videoBlock,

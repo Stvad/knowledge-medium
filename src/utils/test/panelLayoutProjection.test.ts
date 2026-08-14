@@ -1099,7 +1099,7 @@ describe('slot context on panel rows', () => {
 })
 
 describe('togglePanelMaximized', () => {
-  it('is the sole writer of the invariant: flags one row and clears every other', async () => {
+  it('flags one row and clears every other', async () => {
     // The multi-flag state a hand-crafted hash can reconcile in (above).
     await applyUrl('#ws-1/a;max/b;max/c')
     const byBlock = await rowIdsByBlock()
@@ -1252,12 +1252,25 @@ describe('togglePanelMaximized', () => {
     expect(await prepareExclusiveMaximize(env.repo, rowA)).toBe(true)
   })
 
-  it('prepareExclusiveMaximize still clears other panes even when it declines', async () => {
+  // A refusal writes NOTHING, matching what refusing means in
+  // `togglePanelMaximized`. Clearing on a decline looks like hygiene and is
+  // not: the flag on `b` may be a maximize the user deliberately set on a wide
+  // layout, and nothing would restore it.
+  it('prepareExclusiveMaximize leaves other panes alone when it declines', async () => {
     await applyUrl('#ws-1/a/b;max')
     const byBlock = await rowIdsByBlock()
 
     expect(await prepareExclusiveMaximize(env.repo, byBlock.get('a')!, {canRenderSplit: false}))
       .toBe(false)
+
+    expect(env.repo.block(byBlock.get('b')!).peekProperty(panelMaximizedProp)).toBe(true)
+  })
+
+  it('prepareExclusiveMaximize clears other panes when it DOES maximize', async () => {
+    await applyUrl('#ws-1/a/b;max')
+    const byBlock = await rowIdsByBlock()
+
+    expect(await prepareExclusiveMaximize(env.repo, byBlock.get('a')!)).toBe(true)
 
     expect(env.repo.block(byBlock.get('b')!).peekProperty(panelMaximizedProp)).not.toBe(true)
   })

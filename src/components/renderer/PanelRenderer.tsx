@@ -29,6 +29,7 @@ import {
   type VisitState,
 } from '@/utils/panelHistory.js'
 import { alignScrollportToRow } from '@/utils/panelScrollAnchor.js'
+import { isMobileViewport } from '@/utils/viewport.js'
 import {
   activatePanelRow,
   deletePanelRow,
@@ -284,7 +285,7 @@ export function PanelRenderer({block}: BlockRendererProps) {
           className={PANEL_ACTION_BUTTON_CLASS}
           onFocus={trackPanelFocus ? activatePanel : undefined}
           onClick={() => {
-            void togglePanelMaximized(repo, block.id)
+            void togglePanelMaximized(repo, block.id, {canRenderSplit: !isMobileViewport()})
           }}
           aria-label={panelMaximized ? 'Restore panel' : 'Maximize panel'}
           title={panelMaximized ? 'Restore panel' : 'Maximize panel'}

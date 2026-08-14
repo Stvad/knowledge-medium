@@ -457,9 +457,12 @@ export const writePanelContent = async (
  *
  *  Do not replace that with an inductive "a maximized pane renders alone, so
  *  no gesture can reach a second one" argument. It reads plausibly and it is
- *  false: `LayoutRenderer` skips the flag entirely below 768px, which is a
+ *  false — `LayoutRenderer` skips the flag entirely below 768px, which is a
  *  narrowed desktop window on the SAME session, so panes stay individually
- *  reachable while flags pile up — observed producing a two-`max` hash. */
+ *  reachable there. Gestures can no longer ACCUMULATE flags that way (every
+ *  writer now refuses below the breakpoint, see `maximizeWouldHideSomething`),
+ *  but URL reconcile still writes whatever the hash says, and the premise
+ *  itself was never true. */
 const setPanelMaximizedInTx = async (
   tx: Tx,
   panelId: string,
@@ -598,11 +601,12 @@ const pruneDeadTop = async (
 /** Step the panel one entry back. Captures the current visit's state onto
  *  forward, then restores the destination's snapshot (focused block, scroll).
  *  Dead entries at the top of the stack are dropped first, so Back never lands
- *  the pane on a tombstone; if that empties the stack, this is a no-op. */
-/** Back normally PRESERVES maximize (arrangement state, not (pane, block)
- *  state); `maximized` is for an exit gesture undoing an arrangement its own
- *  enter set — see `WritePanelContentOptions.maximized`, which this forwards
- *  to. `goForwardInPanel` deliberately has no equivalent. */
+ *  the pane on a tombstone; if that empties the stack, this is a no-op.
+ *
+ *  Back PRESERVES maximize (arrangement state, not (pane, block) state);
+ *  `maximized` is for an exit gesture undoing an arrangement its own enter set
+ *  — see `WritePanelContentOptions.maximized`, which this forwards to.
+ *  `goForwardInPanel` deliberately has no equivalent. */
 export const goBackInPanel = async (
   panelBlock: Block,
   options: Pick<WritePanelContentOptions, 'maximized'> = {},

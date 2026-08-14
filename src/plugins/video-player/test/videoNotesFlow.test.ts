@@ -7,7 +7,7 @@
  * mode in place (no marker).
  */
 
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChangeScope, type User } from '@/data/api'
 import { getLayoutSessionBlock, getUIStateBlock } from '@/data/stateBlocks'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
@@ -153,6 +153,25 @@ describe('enterVideoNotesView', () => {
 
     expect(panelBlock().peekProperty(panelViewModeProp)).toBe(VIDEO_NOTES_VIEW_MODE)
     expect(isMaximized(panelId)).toBe(false)
+  })
+
+  // Declining must be arrangement-NEUTRAL, not a clear: the flag it would drop
+  // can be one the user deliberately set on a wide layout, and close can only
+  // clear, never restore it.
+  it('a declined enter leaves a maximize the pane already carried', async () => {
+    await setup({panes: 2})
+    await panelBlock().set(panelMaximizedProp, true)
+    // A narrow viewport: the layout renders one pane and ignores the flag, so
+    // the gesture has nothing to add and declines.
+    vi.stubGlobal('window', {matchMedia: vi.fn().mockReturnValue({matches: true})})
+    try {
+      await enterVideoNotesView(videoBlock(), panelBlock())
+    } finally {
+      vi.unstubAllGlobals()
+    }
+
+    expect(panelBlock().peekProperty(panelViewModeProp)).toBe(VIDEO_NOTES_VIEW_MODE)
+    expect(isMaximized(panelId)).toBe(true)
   })
 
   // The at-most-one rule for this writer: the flag itself is set from inside

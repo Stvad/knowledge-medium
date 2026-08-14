@@ -706,18 +706,24 @@ const layoutSessionRowOf = async (
  * rule, shared by both writers of the flag and mirrored by the renderer's
  * `canMaximizePanel`.
  *
- * Two independent reasons it might not: no sibling pane to hide, or a viewport
- * that renders one pane regardless (`LayoutRenderer` ignores the flag below
- * the mobile breakpoint). Either way, setting it changes nothing on screen,
- * renders no restore affordance, and leaves a flag that swallows the next pane
- * the user opens — or, since rows sync, hides panes on a WIDER viewport later
- * with no gesture behind it. The maximize action is keyboard-dispatchable on
- * surfaces the chrome button never appears on, which is how those states were
- * reachable at all.
+ * Two independent reasons it might not, and they now carry different weight:
  *
- * `canRenderSplit` is the caller's viewport read rather than a `window` peek
- * here, matching how `navigation.ts` threads `NavigationViewport` — it keeps
- * this layer testable without stubbing globals.
+ *  - `canRenderSplit` false (a viewport below the mobile breakpoint, where
+ *    `LayoutRenderer` ignores the flag) is the load-bearing one. Rows SYNC, so
+ *    a flag planted where it does nothing hides panes on a wider viewport
+ *    later with no gesture behind it.
+ *  - `panelCount > 1` is now hygiene rather than a guard against a named
+ *    failure. Its original harms have all been closed since: a lone flagged
+ *    pane renders identically, DOES get a restore button (`PanelRenderer`
+ *    shows it whenever the row is flagged), and cannot swallow the next pane
+ *    opened (both insert paths clear first). It stays because a flag that
+ *    means nothing is still worth not writing.
+ *
+ * The maximize action is keyboard-dispatchable on surfaces the chrome button
+ * never appears on, which is how these states were reachable at all.
+ *
+ * `canRenderSplit` is threaded from the caller rather than peeked from
+ * `window` here, so this layer stays testable without stubbing globals.
  */
 export const maximizeWouldHideSomething = (
   panelCount: number,
@@ -796,18 +802,26 @@ export const togglePanelMaximized = async (
  * option, whose writer (`setPanelMaximizedInTx`) lives below this module and
  * cannot enumerate a session's rows.
  *
- * Clears every OTHER row's flag, and reports whether maximizing `panelId`
- * would actually hide anything (same lone-pane rule as
- * `togglePanelMaximized`), so the caller can decline instead of planting an
- * invisible flag.
+ * Reports whether maximizing `panelId` would hide anything
+ * (`maximizeWouldHideSomething`) and, only when it would, clears every OTHER
+ * row's flag so the caller's own write lands exclusively.
  *
- * Writes nothing when no other pane is flagged — the overwhelmingly common
- * case — so it costs no row change, and therefore no projection push, leaving
- * the caller's own tx as the single history entry. When another pane IS
- * flagged this runs its own tx and a maximize diff pushes, so the gesture
+ * A REFUSAL WRITES NOTHING — the same meaning `togglePanelMaximized` gives it,
+ * and the reason the clear is gated rather than unconditional. Clearing on a
+ * decline reads like harmless hygiene and is not: it destroys a maximize the
+ * user deliberately set. Narrow a two-pane window below the breakpoint (where
+ * the flag is ignored) and enter notes view, and an unconditional clear would
+ * drop the maximize set on the wide layout — restored by nothing, since the
+ * matching close can only clear.
+ *
+ * Writes nothing when no other pane is flagged either — the overwhelmingly
+ * common case — so it costs no row change, and therefore no projection push,
+ * leaving the caller's own tx as the single history entry. When another pane
+ * IS flagged this runs its own tx and a maximize diff pushes, so the gesture
  * costs two browser-history entries with a half-applied state between them.
- * That is only reachable from a multi-`max` hash (hand-crafted, per
- * `panelMaximizedProp`), and clearing the stale flag is worth the extra entry.
+ * That needs flag ≠ gesture pane, which an inbound `;max` link produces on its
+ * own (the pointer seeds elsewhere) — not just a hand-crafted multi-`max`
+ * hash — and clearing the stale flag is worth the extra entry.
  */
 export const prepareExclusiveMaximize = async (
   repo: Repo,
@@ -819,6 +833,7 @@ export const prepareExclusiveMaximize = async (
     const found = await sessionPanelRowsInTx(tx, panelId)
     if (!found) return
     hidesSomething = maximizeWouldHideSomething(found.panelRows.length, canRenderSplit)
+    if (!hidesSomething) return
     for (const other of found.panelRows) {
       if (other.id === panelId || !isPanelRowMaximized(other)) continue
       await tx.setProperty(other.id, panelMaximizedProp, false)
