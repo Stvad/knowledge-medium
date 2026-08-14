@@ -111,6 +111,12 @@ export interface MaterializeDeps {
    *  batched, CAS-safe re-derive over NULL-column rows) lives on Repo;
    *  the materializer only reports names. Optional (harness tests skip). */
   readonly onAliasTargetsAdded?: (workspaceId: string, aliases: readonly string[]) => void
+  /** Block type ids whose content is not prose (`opaqueContentTypesFacet`).
+   *  The arrival derive must skip those rows the same way the same-tx
+   *  processor does, or a synced grammar-shaped payload gets stamped as
+   *  property machinery. Optional (harness tests omit it) — absent means
+   *  "nothing is opaque", the pre-facet behaviour. */
+  readonly opaqueContentTypes?: ReadonlySet<string>
   /** Derive-at-arrival seam (PR #288 slice A): build the reference-target
    *  lookups bound to this write tx. Sync-applied rows never pass through
    *  `repo.tx`, so `core.deriveReferenceTarget` can't stamp the LOCAL

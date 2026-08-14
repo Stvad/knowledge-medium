@@ -91,12 +91,9 @@ export const BLOCK_TYPE_TYPEIFY_PROCESSOR = defineSameTxProcessor({
       const rawLabel = after.properties[blockTypeLabelProp.name]
       const currentLabel = (typeof rawLabel === 'string' ? rawLabel : '').trim()
 
-      // FIRST, before `name` is even derived. With no explicit label `name`
-      // would be the payload, and the hygiene asserts below embed their
-      // subject via `JSON.stringify` — so a bundle over `MAX_ALIAS_LENGTH`
-      // (the common case) threw a `LossyLabelError` carrying a megabyte of
-      // executable source, which the supertag UI then rendered in a toast.
-      // Wrong error, and the payload should never be copied at all.
+      // Before `name` is derived, so the payload is never interpreted as a
+      // label — the asserts below embed their subject via `JSON.stringify`,
+      // and here that subject would be the whole stored source.
       if (currentLabel === '' && hasOpaqueContent(after, ctx.opaqueContentTypes)) {
         throw new OpaqueContentLabelError('Block type label')
       }

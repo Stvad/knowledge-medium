@@ -1055,6 +1055,8 @@ export class Repo {
     // behavior, so non-e2ee tests are unaffected.
     const policyDeps = this.syncObserverDeps
       ?? { getMaterializability: (): Materializability => 'copy', getCek: async () => null }
+    // eslint-disable-next-line @typescript-eslint/no-this-alias -- the getter below needs the instance, not the object literal's `this`
+    const self = this
     this.syncObserver = startBlocksSyncedObserver({
       db: this.db,
       cache: this.cache,
@@ -1073,6 +1075,9 @@ export class Repo {
         onAliasTargetsAdded: policyDeps.onAliasTargetsAdded
           ?? ((workspaceId, aliases) =>
             this.scheduleReferenceTargetNameRederive(workspaceId, aliases)),
+        // Read live rather than captured: the observer outlives any one
+        // window, and this is the same set the same-tx processor consults.
+        get opaqueContentTypes() { return self._opaqueContentTypes },
       },
       getInvalidationRules: () => this.invalidationRules,
       onCycleDetected: options?.onCycleDetected,

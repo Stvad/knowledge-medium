@@ -62,6 +62,9 @@ import type { BlockData } from '@/data/api'
 import { devAssertionsEnabled } from '@/data/internals/devAssertions.js'
 import type { TxDb } from '@/data/internals/txEngine.js'
 import { deriveReferenceColumns } from '@/data/internals/referenceTargetProcessor.js'
+import { hasOpaqueContent } from '@/data/properties.js'
+
+const EMPTY_OPAQUE_TYPES: ReadonlySet<string> = new Set()
 import type { MaterializeDeps, SyncSnapshot } from './materialize.js'
 
 /** One id the arrival-processor pass runs over this window: its pre-write
@@ -242,9 +245,19 @@ export const deriveReferenceTargetArrivalProcessor: ArrivalProcessor = {
         before,
         after: { ...after, referenceTargetId: currentColumn, isFieldForm: currentBit },
       })
+      // Opacity is part of what the columns depend on, so a type-only
+      // arrival has to re-derive too — `contentChanged` alone would let a
+      // row that just became opaque keep a stamp that classifies it as
+      // property machinery. And when content DOES change in the same
+      // envelope, an opaque payload must not be parsed at all.
+      const opaqueTypes = ctx.deps.opaqueContentTypes ?? EMPTY_OPAQUE_TYPES
+      const wasOpaque = before !== null && hasOpaqueContent(before, opaqueTypes)
+      const isOpaque = hasOpaqueContent(after, opaqueTypes)
       const contentChanged = before === null || before.content !== after.content
-      if (!contentChanged) return
-      const derived = await deriveReferenceColumns(after.content, after.workspaceId, lookups)
+      if (!contentChanged && wasOpaque === isOpaque) return
+      const derived = isOpaque
+        ? {targetId: null, isFieldForm: false}
+        : await deriveReferenceColumns(after.content, after.workspaceId, lookups)
       const derivedTarget = derived.targetId ?? null
       if (derivedTarget !== currentColumn || derived.isFieldForm !== currentBit) {
         await ctx.tx.execute(
