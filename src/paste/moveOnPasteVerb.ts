@@ -28,6 +28,7 @@ import type { Block } from '@/data/block.js'
 import type { InsertPosition } from '@/data/mutators.js'
 import { isCollapsedProp } from '@/data/properties.js'
 import { defineVerbFacet } from '@/facets/verbFacet.js'
+import { showError } from '@/utils/toast.js'
 import type { ClipboardPayload } from '@/paste/clipboardPayload.js'
 
 /** Where a completed move would land — the same shape as move-blocks'
@@ -164,6 +165,20 @@ export const tryPasteAsMoveAt = async (
   placement: 'visible' | 'sibling' = 'visible',
 ): Promise<boolean> => {
   if (!payload || payload.intent !== 'cut') return false
-  const moveTarget = await resolvePasteMoveTarget(target, position, scopeRootId, placement)
+
+  let moveTarget: PasteMoveTarget
+  try {
+    moveTarget = await resolvePasteMoveTarget(target, position, scopeRootId, placement)
+  } catch (error) {
+    // Resolving the placement reads the target and its children, and those
+    // can reject. Reported as HANDLED rather than rethrown or fallen
+    // through: the DOM handlers have already called `preventDefault` and
+    // invoke this via `void`, so a rethrow discards the paste silently,
+    // and a text-paste fallback would parse the cut markdown into new
+    // blocks beside the originals that are still sitting there.
+    console.error('[paste-as-move] could not resolve the move target', error)
+    showError("Couldn't work out where to move the blocks — nothing was moved")
+    return true
+  }
   return tryPasteAsMove(repo, moveTarget, payload)
 }

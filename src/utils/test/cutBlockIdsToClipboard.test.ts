@@ -82,7 +82,7 @@ describe('cutBlockIdsToClipboard', () => {
     expect(written).toHaveLength(1)
     expect(written[0]['text/plain']).toBe('hello')
     expect(decodePayloadHtml(written[0]['text/html'], written[0]['text/plain'])).toEqual({
-      blockIds: ['a'], workspaceId: WS, intent: 'cut',
+      blockIds: ['a'], workspaceId: WS, intent: 'cut', cutId: expect.any(String),
     })
   })
 
@@ -93,7 +93,7 @@ describe('cutBlockIdsToClipboard', () => {
     await cutBlockIdsToClipboard(['a'], repo)
 
     expect(recallPayloadForText('hello')).toEqual({
-      blockIds: ['a'], workspaceId: WS, intent: 'cut',
+      blockIds: ['a'], workspaceId: WS, intent: 'cut', cutId: expect.any(String),
     })
   })
 
@@ -169,16 +169,18 @@ describe('cutBlockIdsToClipboard', () => {
     expect(decodePayloadHtml(written[0]['text/html'], written[0]['text/plain'])?.blockIds).toEqual(['a'])
   })
 
-  it('carries only the roots that actually serialized', async () => {
-    // 'ghost' doesn't exist, so it's absent from the markdown. Carrying it
-    // anyway would relocate it on paste as though the clipboard had ever
-    // represented it.
+  it('refuses the whole cut when a selected root fails to serialize', async () => {
+    // Cutting the subset instead would look like success, and the caller
+    // clears the ENTIRE selection on success — stranding the failed blocks
+    // with nothing telling the user the cut was partial. All-or-nothing,
+    // same as `deleteBlocksThroughUi`.
     await seed('a', null, 'hello')
-    const { written } = stubClipboard()
+    const { write } = stubClipboard()
 
-    expect(await cutBlockIdsToClipboard(['a', 'ghost'], repo)).toBe(true)
+    expect(await cutBlockIdsToClipboard(['a', 'ghost'], repo)).toBe(false)
 
-    expect(decodePayloadHtml(written[0]['text/html'], written[0]['text/plain'])?.blockIds).toEqual(['a'])
+    expect(write).not.toHaveBeenCalled()
+    expect(showErrorMock).toHaveBeenCalledTimes(1)
   })
 
   it('leaves the blocks exactly where they are — a cut with no paste changes nothing', async () => {

@@ -15,7 +15,7 @@ import {
 } from './clipboardPayload.ts'
 import { readPasteEventContent } from './pasteEventContent.ts'
 
-const CUT: ClipboardPayload = {blockIds: ['a'], workspaceId: 'ws-1', intent: 'cut'}
+const CUT: ClipboardPayload = {blockIds: ['a'], workspaceId: 'ws-1', intent: 'cut', cutId: 'cut-15'}
 
 /** A ClipboardEvent stub carrying only what the reader touches. */
 const pasteEvent = (

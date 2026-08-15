@@ -86,7 +86,11 @@ export const pasteAsMoveImpl = async ({ repo, target, payload }: PasteAsMoveInpu
 
 const runPasteAsMove = async ({ repo, target, payload }: PasteAsMoveInput): Promise<boolean> => {
   if (payload.workspaceId !== repo.activeWorkspaceId) {
-    showInfo("Can't move blocks across workspaces — pasted a copy instead")
+    // Deliberately does not promise a copy landed. The caller falls
+    // through to an ordinary text paste, which for a genuinely EMPTY cut
+    // inserts nothing — so claiming a copy was pasted would be a lie in
+    // exactly the case the user is least able to explain.
+    showInfo("Can't move blocks across workspaces")
     return false
   }
 

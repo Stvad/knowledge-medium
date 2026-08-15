@@ -6,7 +6,10 @@
  * `captureMediaVerb`'s "no provider installed" default. The move-blocks
  * plugin's actual decision logic is `pasteAsMoveImpl.test.ts`.
  */
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+
+const showErrorMock = vi.hoisted(() => vi.fn())
+vi.mock('@/utils/toast.js', () => ({showError: showErrorMock, showInfo: vi.fn(), showSuccess: vi.fn()}))
 import { ChangeScope } from '@/data/api'
 import type { Repo } from '@/data/repo.js'
 import { Repo as RealRepo } from '@/data/repo'
@@ -29,7 +32,7 @@ import {
 const WS = 'ws-1'
 
 describe('pasteAsMoveVerb', () => {
-  const payload: ClipboardPayload = { blockIds: ['a'], workspaceId: WS, intent: 'cut' }
+  const payload: ClipboardPayload = { blockIds: ['a'], workspaceId: WS, intent: 'cut' , cutId: 'cut-12'}
 
   it('defaults to "not a move" (false) with no impl installed', async () => {
     const runtime = resolveFacetRuntimeSync([])
@@ -58,7 +61,7 @@ describe('pasteAsMoveVerb', () => {
 
 describe('tryPasteAsMove', () => {
   const target = { parentId: null, position: { kind: 'last' } as const }
-  const cutPayload: ClipboardPayload = { blockIds: ['a'], workspaceId: WS, intent: 'cut' }
+  const cutPayload: ClipboardPayload = { blockIds: ['a'], workspaceId: WS, intent: 'cut' , cutId: 'cut-13'}
 
   it('is false without touching the verb when there is no facet runtime yet', async () => {
     const repo = { facetRuntime: null } as unknown as Repo
@@ -69,6 +72,29 @@ describe('tryPasteAsMove', () => {
     const runtime = resolveFacetRuntimeSync([pasteAsMoveVerb.impl(() => true)])
     const repo = { facetRuntime: runtime } as unknown as Repo
     expect(await tryPasteAsMove(repo, target, cutPayload)).toBe(true)
+  })
+})
+
+describe('tryPasteAsMoveAt when the target cannot be resolved', () => {
+  it('consumes the paste and reports it, instead of letting the rejection escape', async () => {
+    // The DOM handlers have already called `preventDefault` and invoke
+    // this via `void`, so a rethrow discards the paste silently. Falling
+    // through to a text paste would be worse still — the cut markdown
+    // becomes new blocks beside the originals, which are still there.
+    const runtime = resolveFacetRuntimeSync([pasteAsMoveVerb.impl(() => true)])
+    const repo = { facetRuntime: runtime } as unknown as Repo
+    const target = {
+      id: 'gone',
+      peek: () => undefined,
+      load: async () => { throw new Error('db unavailable') },
+    } as unknown as Parameters<typeof tryPasteAsMoveAt>[1]
+
+    const result = await tryPasteAsMoveAt(repo, target, 'after', undefined, {
+      blockIds: ['a'], workspaceId: WS, intent: 'cut', cutId: 'c1',
+    })
+
+    expect(result).toBe(true)
+    expect(showErrorMock).toHaveBeenCalledTimes(1)
   })
 })
 
@@ -207,7 +233,7 @@ describe('resolvePasteMoveTarget / tryPasteAsMoveAt', () => {
       await seed('scope', 'workspaceRoot')
       await seed('a', 'workspaceRoot')
       withPasteAsMoveInstalled()
-      const payload: ClipboardPayload = { blockIds: ['a'], workspaceId: WS, intent: 'cut' }
+      const payload: ClipboardPayload = { blockIds: ['a'], workspaceId: WS, intent: 'cut' , cutId: 'cut-14'}
 
       const result = await tryPasteAsMoveAt(repo, repo.block('scope'), 'after', 'scope', payload)
 

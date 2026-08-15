@@ -1,3 +1,4 @@
+import { v4 as uuidv4 } from 'uuid'
 import { Block } from '../data/block'
 import { ClipboardData } from '../types'
 import type { Repo } from '../data/repo'
@@ -90,7 +91,7 @@ export const copyBlockToClipboard = async (block: Block): Promise<void> => {
   const data = await serializeBlock(block)
   const workspaceId = block.peek()?.workspaceId ?? block.repo.activeWorkspaceId
   if (!workspaceId) return
-  await writeToClipboard(data, {blockIds: [block.id], workspaceId, intent: 'copy'})
+  await writeToClipboard(data, {blockIds: [block.id], workspaceId, intent: 'copy', cutId: uuidv4()})
 }
 
 /** Plain-text counterpart to `writeToClipboard`, for the call sites that
@@ -234,6 +235,7 @@ export const copyBlockIdsToClipboard = async (
     blockIds: data.serializedIds,
     workspaceId,
     intent: 'copy',
+    cutId: uuidv4(),
   })
 }
 
@@ -281,10 +283,21 @@ export const cutBlockIdsToClipboard = async (
     // hint that the cut didn't happen.
     const normalizedIds = await validateSelectionHierarchy([...blockIds], repo)
     const data = await serializeSelectedBlocks(normalizedIds, repo)
+    // A short `serializedIds` means a root's subtree read failed. Refuse
+    // the whole cut rather than silently cutting a subset: the caller
+    // clears the entire selection on success, so a partial cut strands the
+    // failed blocks with nothing telling the user. Same all-or-nothing
+    // shape as `deleteBlocksThroughUi`.
+    if (data.serializedIds.length !== normalizedIds.length) {
+      throw new Error(
+        `cut serialized ${data.serializedIds.length} of ${normalizedIds.length} roots`,
+      )
+    }
     await writeToClipboard(data, {
       blockIds: data.serializedIds,
       workspaceId,
       intent: 'cut',
+      cutId: uuidv4(),
     })
   } catch (error) {
     console.warn('[cut] failed; cut cancelled', error)

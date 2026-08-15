@@ -812,6 +812,7 @@ describe('default CodeMirror shortcuts', () => {
       blockIds: ['ordinary', 'protected'],
       workspaceId: WS,
       intent: 'cut',
+      cutId: expect.any(String),
     })
     // Successful cut exits multi-select, same as the old destructive cut did.
     expect(uiStateBlock.peekProperty(selectionStateProp)?.selectedBlockIds).toEqual([])
@@ -883,6 +884,7 @@ describe('default CodeMirror shortcuts', () => {
       blockIds: ['solo'],
       workspaceId: WS,
       intent: 'cut',
+      cutId: expect.any(String),
     })
     vi.unstubAllGlobals()
   })

@@ -74,7 +74,7 @@ const rootChildIds = async (): Promise<string[]> => {
   return rows.map(r => r.id)
 }
 
-const cutPayload = (blockIds: string[]): ClipboardPayload => ({ blockIds, workspaceId: WS, intent: 'cut' })
+const cutPayload = (blockIds: string[]): ClipboardPayload => ({ blockIds, workspaceId: WS, intent: 'cut' , cutId: 'cut-21'})
 
 describe('resolveEditorPasteMove', () => {
   it('returns false and touches nothing when there is no payload — this is the common case for every ordinary editor paste', async () => {
@@ -149,7 +149,7 @@ describe('resolveEditorPasteMove', () => {
   })
 
   it('is a no-op fallback (not a move) when the payload is a COPY rather than a cut', async () => {
-    const payload: ClipboardPayload = { blockIds: ['a'], workspaceId: WS, intent: 'copy' }
+    const payload: ClipboardPayload = { blockIds: ['a'], workspaceId: WS, intent: 'copy' , cutId: 'cut-22'}
 
     const result = await resolveEditorPasteMove(repo, repo.block('dest'), payload, undefined)
 

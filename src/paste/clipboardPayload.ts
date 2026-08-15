@@ -34,11 +34,11 @@
  *
  * ## The limit
  *
- * Text copied from another app never passes through these helpers, so on
- * the text-only paths identical foreign text still resolves to a
- * remembered cut. That is inherent to fingerprinting a text-only clipboard
- * by content. Pastes carrying `text/html` are unaffected — the digest
- * binds the marker to the text it shipped with.
+ * A paste that carries NO html and whose text matches a remembered cut is
+ * indistinguishable from that cut — so plain-text-only foreign content with
+ * identical text still resolves to it. Inherent to fingerprinting a
+ * text-only clipboard by content. Any paste carrying html is exact: ours
+ * decodes (digest-bound to its text), anything else answers "not a cut".
  *
  * ## Browser support
  *
@@ -67,6 +67,12 @@ export interface ClipboardPayload {
    *  same payload shape serves both, and a reader that guessed from
    *  context would turn an ordinary copy into a move. */
   readonly intent: 'copy' | 'cut'
+  /** Identifies THIS gesture, not the blocks it names. `completedCuts` is
+   *  keyed by it, so re-cutting the same blocks is a new cut that no tab
+   *  considers spent — without it, a second tab's fresh cut of the same
+   *  ids is downgraded to a copy by the first tab's completion record,
+   *  which that tab has no way to clear. */
+  readonly cutId: string
 }
 
 interface EncodedPayload extends ClipboardPayload {
@@ -143,9 +149,11 @@ const decodeEncodedPayload = (html: string | undefined): EncodedPayload | null =
     if (!Array.isArray(parsed.blockIds)) return null
     if (!parsed.blockIds.every(id => typeof id === 'string' && id)) return null
     if (typeof parsed.digest !== 'string' || !parsed.digest) return null
+    if (typeof parsed.cutId !== 'string' || !parsed.cutId) return null
     return {
       v: parsed.v,
       digest: parsed.digest,
+      cutId: parsed.cutId,
       blockIds: parsed.blockIds,
       workspaceId: parsed.workspaceId,
       intent: parsed.intent,
@@ -168,6 +176,7 @@ export const decodePayloadHtml = (
     blockIds: encoded.blockIds,
     workspaceId: encoded.workspaceId,
     intent: encoded.intent,
+    cutId: encoded.cutId,
   })
 }
 
@@ -241,8 +250,7 @@ export const resetRememberedPayloads = (): void => {
  */
 const completedCuts = new Set<string>()
 
-const payloadKey = (payload: ClipboardPayload): string =>
-  `${payload.workspaceId}\u0000${payload.blockIds.join(',')}`
+const payloadKey = (payload: ClipboardPayload): string => payload.cutId
 
 /** Called after a cut payload has actually been relocated. */
 export const markCutCompleted = (payload: ClipboardPayload): void => {
@@ -284,8 +292,12 @@ export const forgetPayload = (text: string): void => {
 export const resolveClipboardPayload = (
   text: string,
   html: string | undefined,
-): ClipboardPayload | null =>
-  // Both halves already apply `applyCompletion`, so this is pure
-  // composition — which reader a surface reaches for cannot change the
-  // answer.
-  decodePayloadHtml(html, text) ?? recallPayloadForText(text)
+): ClipboardPayload | null => {
+  // Present-but-not-ours html is positive evidence that the clipboard item
+  // came from somewhere else, so the text-only table must not be consulted
+  // — otherwise copying rich text that happens to match a cut's markdown
+  // moves those blocks instead of pasting what was copied. The table is
+  // for callers that have NO html to go on.
+  if (html) return decodePayloadHtml(html, text)
+  return recallPayloadForText(text)
+}

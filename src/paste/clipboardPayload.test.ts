@@ -20,7 +20,7 @@ import {
   type ClipboardPayload,
 } from './clipboardPayload.ts'
 
-const CUT: ClipboardPayload = {blockIds: ['a', 'b'], workspaceId: 'ws-1', intent: 'cut'}
+const CUT: ClipboardPayload = {blockIds: ['a', 'b'], workspaceId: 'ws-1', intent: 'cut', cutId: 'cut-1'}
 const MD = '- a\n- b'
 
 beforeEach(() => { resetRememberedPayloads() })
@@ -87,8 +87,8 @@ describe('the text-only lookup table', () => {
     })
 
     it('two overlapping cuts each resolve to whatever text actually won the clipboard', () => {
-      const first: ClipboardPayload = {blockIds: ['a'], workspaceId: 'ws-1', intent: 'cut'}
-      const second: ClipboardPayload = {blockIds: ['b'], workspaceId: 'ws-1', intent: 'cut'}
+      const first: ClipboardPayload = {blockIds: ['a'], workspaceId: 'ws-1', intent: 'cut', cutId: 'cut-2'}
+      const second: ClipboardPayload = {blockIds: ['b'], workspaceId: 'ws-1', intent: 'cut', cutId: 'cut-3'}
       // Deliberately stored out of gesture order — the table has no notion
       // of which cut is "current", so order can't matter.
       rememberPayload('second cut', second)
@@ -110,7 +110,7 @@ describe('the text-only lookup table', () => {
     // but not negligible"; absorbing one here would mean moving blocks the
     // user never cut, so equality is what actually decides.
     rememberPayload('- a\n- b', CUT)
-    const forged = {blockIds: ['zzz'], workspaceId: 'ws-1', intent: 'cut'} as const
+    const forged = {blockIds: ['zzz'], workspaceId: 'ws-1', intent: 'cut', cutId: 'cut-4'} as const
     rememberPayload('- a\n- b', forged) // same key, replaces
     expect(recallPayloadForText('- a\n- b')).toEqual(forged)
     expect(recallPayloadForText('- a\n- c')).toBeNull()
@@ -118,22 +118,22 @@ describe('the text-only lookup table', () => {
 
   it('evicts oldest-first past its cap, and keeps the newest reachable', () => {
     for (let i = 0; i < 25; i++) {
-      rememberPayload(`text ${i}`, {blockIds: [`b${i}`], workspaceId: 'ws-1', intent: 'cut'})
+      rememberPayload(`text ${i}`, {blockIds: [`b${i}`], workspaceId: 'ws-1', intent: 'cut', cutId: `c${i}`})
     }
     expect(recallPayloadForText('text 0')).toBeNull()
     expect(recallPayloadForText('text 24')).toEqual({
-      blockIds: ['b24'], workspaceId: 'ws-1', intent: 'cut',
+      blockIds: ['b24'], workspaceId: 'ws-1', intent: 'cut', cutId: 'c24',
     })
   })
 
   it('re-remembering the same text refreshes its eviction position', () => {
     rememberPayload('keep me', CUT)
     for (let i = 0; i < 19; i++) {
-      rememberPayload(`filler ${i}`, {blockIds: [`f${i}`], workspaceId: 'ws-1', intent: 'cut'})
+      rememberPayload(`filler ${i}`, {blockIds: [`f${i}`], workspaceId: 'ws-1', intent: 'cut', cutId: `f${i}`})
     }
     // 20 entries: 'keep me' is the oldest and the next write would evict it.
     rememberPayload('keep me', CUT)
-    rememberPayload('one more', {blockIds: ['x'], workspaceId: 'ws-1', intent: 'cut'})
+    rememberPayload('one more', {blockIds: ['x'], workspaceId: 'ws-1', intent: 'cut', cutId: 'cut-5'})
 
     expect(recallPayloadForText('keep me')).toEqual(CUT)
     expect(recallPayloadForText('filler 0')).toBeNull()
@@ -142,7 +142,7 @@ describe('the text-only lookup table', () => {
 
 describe('resolveClipboardPayload', () => {
   it('prefers the html flavor — the authoritative, cross-tab source', () => {
-    const fromTable: ClipboardPayload = {blockIds: ['stale'], workspaceId: 'ws-1', intent: 'cut'}
+    const fromTable: ClipboardPayload = {blockIds: ['stale'], workspaceId: 'ws-1', intent: 'cut', cutId: 'cut-6'}
     rememberPayload('- a\n- b', fromTable)
 
     expect(resolveClipboardPayload(MD, encodePayloadHtml(MD, CUT))).toEqual(CUT)
@@ -153,9 +153,13 @@ describe('resolveClipboardPayload', () => {
     expect(resolveClipboardPayload('- a\n- b', undefined)).toEqual(CUT)
   })
 
-  it('falls back to the table when the html is another app\'s', () => {
+  it('treats another app\'s html as proof the clipboard is NOT ours', () => {
+    // The table is only for callers with no html to go on. Consulting it
+    // when html is present but foreign means rich text that happens to
+    // match a cut's markdown moves those blocks instead of pasting what
+    // was actually copied.
     rememberPayload('- a\n- b', CUT)
-    expect(resolveClipboardPayload('- a\n- b', '<p>from somewhere else</p>')).toEqual(CUT)
+    expect(resolveClipboardPayload('- a\n- b', '<p>from somewhere else</p>')).toBeNull()
   })
 
   it('is null when neither source knows the content', () => {
@@ -204,8 +208,25 @@ describe('resolveClipboardPayload', () => {
       expect(resolveClipboardPayload(MD, undefined)).toEqual(CUT)
     })
 
+    it('a FRESH cut of the same blocks is not spent by an earlier one', () => {
+      // The cross-tab case: tab A completed a cut of these blocks, tab B
+      // then cut them again. B's `rememberPayload` cannot reach A's
+      // completion set, so keying completion by block ids would leave A
+      // downgrading B's brand-new cut to a copy forever. The key is the
+      // gesture, not the blocks.
+      const earlier: ClipboardPayload = {
+        blockIds: ['a'], workspaceId: 'ws-1', intent: 'cut', cutId: 'gesture-1',
+      }
+      const fresh: ClipboardPayload = {
+        blockIds: ['a'], workspaceId: 'ws-1', intent: 'cut', cutId: 'gesture-2',
+      }
+      markCutCompleted(earlier)
+
+      expect(decodePayloadHtml(encodePayloadHtml(MD, fresh), MD)).toEqual(fresh)
+    })
+
     it('leaves an unrelated cut alone', () => {
-      const other: ClipboardPayload = {blockIds: ['zzz'], workspaceId: 'ws-1', intent: 'cut'}
+      const other: ClipboardPayload = {blockIds: ['zzz'], workspaceId: 'ws-1', intent: 'cut', cutId: 'cut-10'}
       rememberPayload('other text', other)
       markCutCompleted(CUT)
 
@@ -221,7 +242,7 @@ describe('resolveClipboardPayload', () => {
   // other. Both surfaces are covered because the two differ in exactly
   // whether html is available.
   it('resolves an empty-block cut from either source', () => {
-    const empty: ClipboardPayload = {blockIds: ['a'], workspaceId: 'ws-1', intent: 'cut'}
+    const empty: ClipboardPayload = {blockIds: ['a'], workspaceId: 'ws-1', intent: 'cut', cutId: 'cut-11'}
     rememberPayload('', empty)
 
     expect(resolveClipboardPayload('', undefined)).toEqual(empty)

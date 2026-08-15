@@ -100,7 +100,7 @@ const INTO_DEST: PasteMoveTarget = { parentId: 'dest', position: { kind: 'last' 
 const cut = (
   blockIds: string[],
   workspaceId = WS,
-): ClipboardPayload => ({ blockIds, workspaceId, intent: 'cut' })
+): ClipboardPayload => ({ blockIds, workspaceId, intent: 'cut' , cutId: 'cut-16'})
 
 // The impl marks completed cuts in a process-global set; reset it so a
 // test's cut isn't seen as already-spent by the next one.
@@ -283,8 +283,10 @@ describe('pasteAsMoveImpl', () => {
 
       expect(result).toBe(false)
       expect(await childIds('dest')).toEqual([])
+      // Does not promise a copy landed — for an empty cut the text-paste
+      // fallback inserts nothing.
       expect(showInfoMock).toHaveBeenCalledExactlyOnceWith(
-        "Can't move blocks across workspaces — pasted a copy instead",
+        "Can't move blocks across workspaces",
       )
     })
 
