@@ -88,7 +88,7 @@ import {
 import { readIsChildBackedWorkspace } from '@/data/workspaceSchema'
 import { keyAtStart } from '@/data/orderKey'
 import {
-  isFieldValueChild,
+  fieldValueChildren,
   isPropertyFieldInstance,
   propertyFieldContent,
   propertyValueToChildContent,
@@ -1374,9 +1374,9 @@ export class TxImpl implements Tx {
       }
       // §9 value set: `is_field_form IS NOT 1` children only — a nested
       // marked row under the field row is its own machinery, never a value
-      // candidate for overwrite/dedup.
-      const values = (await this.childrenOf(existing.id, undefined))
-        .filter(isFieldValueChild)
+      // candidate for overwrite/dedup. Shared with the deferred materialize
+      // processor, which selects the same set for the same writes.
+      const values = await fieldValueChildren(this, existing.id)
       const [primary, ...duplicates] = values
       if (primary) {
         if (primary.content !== content) await this.update(primary.id, {content})

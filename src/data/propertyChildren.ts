@@ -35,6 +35,7 @@ import {
   type Tx,
 } from '@/data/api'
 import { FIELD_FORM_MARKER, referenceBlockContentForId } from '@/data/referenceBlock'
+import { hasOpaqueContent } from '@/data/properties'
 import { jsonValuesEqual } from '@/data/internals/jsonCanonical'
 
 export const getPropertyFieldTargetId = (
@@ -74,6 +75,28 @@ export const isPropertyFieldInstance = (
 export const isFieldValueChild = (
   data: Pick<BlockData, 'isFieldForm'>,
 ): boolean => data.isFieldForm !== true
+
+/** A field row's value set: `isFieldValueChild`, minus rows whose content is
+ *  not prose.
+ *
+ *  That predicate is POSITIONAL — any unmarked child qualifies — so an
+ *  extension block parked in the slot is selectable on shape alone. The
+ *  writers would then overwrite its source with the cell's encoded value or
+ *  tombstone it as a duplicate, and the projection would read those bytes as
+ *  the property's value. It is not the property's value either way, and
+ *  skipping it lets a real value child be minted beside it rather than the
+ *  payload being conscripted as one.
+ *
+ *  ONE helper for both writers on purpose: `tx.setProperty`'s eager
+ *  dual-write and the deferred materialize processor each select the value
+ *  set, and a guard added to one of two copies is the bug this closes. */
+export const fieldValueChildren = async (
+  tx: Pick<Tx, 'childrenOf' | 'opaqueContentTypes'>,
+  fieldRowId: string,
+): Promise<BlockData[]> =>
+  (await tx.childrenOf(fieldRowId, undefined))
+    .filter(isFieldValueChild)
+    .filter(child => !hasOpaqueContent(child, tx.opaqueContentTypes))
 
 
 /** Field-row content: the §7 marked field form — the `::` marker + an exact

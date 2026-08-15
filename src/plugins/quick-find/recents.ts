@@ -3,6 +3,7 @@ import type { BlockData } from '@/data/api'
 import type { Repo } from '@/data/repo'
 import { ChangeScope, seedType, seedProperty, type PropertySeedDeclaration } from '@/data/api'
 import { getPluginUIStateBlock } from '@/data/stateBlocks.js'
+import { hasOpaqueContent } from '@/data/properties'
 import { labelForBlockData, readTypeIds } from '@/utils/linkTargetAutocomplete.js'
 
 export const RECENT_BLOCKS_LIMIT = 10
@@ -60,9 +61,20 @@ export interface RecentItem {
  *  rendering a Recent row with no visible label. `parentId` and the
  *  types both ride along on `BlockData` already — neither costs a
  *  query. */
-export const recentItemFromBlockData = (blockId: string, data: BlockData): RecentItem => ({
+export const recentItemFromBlockData = (
+  blockId: string,
+  data: BlockData,
+  opaqueContentTypes: ReadonlySet<string>,
+): RecentItem => ({
   blockId,
-  label: labelForBlockData(data, blockId),
+  // The MRU is the one list that never goes through the search merge point,
+  // so its opaque rows arrive unfiltered. They KEEP their entry — you were
+  // just editing that extension and want to get back to it — but their
+  // content is not a label: fall through to the alias, then the id, never
+  // the bytes.
+  label: hasOpaqueContent(data, opaqueContentTypes)
+    ? labelForBlockData({...data, content: ''}, blockId)
+    : labelForBlockData(data, blockId),
   parentId: data.parentId,
   typeIds: readTypeIds(data),
 })

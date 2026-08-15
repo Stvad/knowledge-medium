@@ -11,7 +11,7 @@ import { ChangeScope, codecs, defineProperty, propertyValue, type BlockData } fr
 import { keyAtStart } from './orderKey'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
-import { projectedPropertyDefinitionsFacet } from '@/data/facets'
+import { opaqueContentTypesFacet, projectedPropertyDefinitionsFacet } from '@/data/facets'
 import { mergeBlocksInTx } from './blockMerge'
 import type { Repo } from './repo'
 import {
@@ -25,6 +25,7 @@ import { BLOCK_TYPE_TYPE } from './blockTypes'
 
 const WS = 'ws-prop-children'
 const STATUS_FIELD_ID = 'field-status-children'
+const OPAQUE_TYPE = 'test-extension-source'
 
 const statusSchema = defineProperty('status', {
   codec: codecs.string,
@@ -68,6 +69,7 @@ const setup = (): Repo => {
     }],
     {workspaceId: WS},
   )
+  repo.setRuntimeContributions(opaqueContentTypesFacet, 'test-opaque', [OPAQUE_TYPE])
   return repo
 }
 
@@ -204,6 +206,40 @@ describe('flipped workspace (properties_migration = children)', () => {
     expect(values).toHaveLength(1)
     expect(values[0]!.content).toBe('done')
     expect(await cellValue('p')).toBe('done')
+  })
+
+  // `isFieldValueChild` is POSITIONAL, so an extension block parked in a
+  // field row's value slot qualifies on shape alone — and the value write
+  // would overwrite its source with the cell's encoded value. Born prose and
+  // flipped opaque by a RAW write (no processor; the shape a sync-applied or
+  // pre-upgrade row has), because a block created already-opaque would never
+  // have been selected as the value child in the first place.
+  it('does not overwrite an opaque block sitting in the value slot', async () => {
+    await seedWorkspace('children')
+    const repo = setup()
+    await createBlock(repo, 'p')
+    await repo.tx(tx => tx.setProperty('p', statusSchema, 'draft'),
+      {scope: ChangeScope.BlockDefault})
+    const [field] = await liveFieldRows('p')
+    const [value] = (await childrenRows(field!.id)).filter(v => v.deleted === 0)
+    const source = 'export const activate = () => {}'
+
+    await sharedDb.db.writeTransaction(async tx => {
+      await tx.execute(
+        `UPDATE blocks SET content = ?, properties_json = ? WHERE id = ?`,
+        [source, JSON.stringify({[typesProp.name]: [OPAQUE_TYPE]}), value!.id],
+      )
+    })
+
+    await repo.tx(tx => tx.setProperty('p', statusSchema, 'done'),
+      {scope: ChangeScope.BlockDefault})
+
+    const after = (await childrenRows(field!.id)).filter(v => v.deleted === 0)
+    // The payload is untouched AND still alive — not rewritten to 'done',
+    // and not tombstoned as a duplicate.
+    expect(after.find(v => v.id === value!.id)?.content).toBe(source)
+    // The real value landed in a block of its own beside it.
+    expect(after.map(v => v.content)).toContain('done')
   })
 
   it('the same-tx projection is idempotent — the cell is written once per tx', async () => {

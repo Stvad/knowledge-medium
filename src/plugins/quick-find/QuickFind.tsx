@@ -509,7 +509,7 @@ function QuickFindDialog({
       for (const id of ids) {
         const data = await repo.load(id)
         if (!data) continue
-        items.push(recentItemFromBlockData(id, data))
+        items.push(recentItemFromBlockData(id, data, repo.opaqueContentTypes))
       }
       if (!cancelled) setRecents(items)
     }

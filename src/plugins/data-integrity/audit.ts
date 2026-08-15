@@ -601,12 +601,18 @@ const runContentLinkRecomputeCheck = async (
   }
 
   for (;;) {
+    // Same budget the opaque pass drew from, and paged by what's left of it:
+    // consulting the cap only between fixed 20000-row pages let an already
+    // exhausted budget still buy a full extra page.
+    const proseRemaining = contentCap - scanned - opaqueScanned
+    if (proseRemaining <= 0) { truncated = true; break }
+    const proseLimit = Math.min(BATCH, proseRemaining)
     const batch = await db.getAll<{ id: string; content: string; references_json: string; properties_json: string }>(
       `SELECT id, content, references_json, properties_json FROM blocks
        WHERE deleted=0 AND workspace_id=?
          AND (content LIKE '%[[%' OR content LIKE '%((%')
          AND id > ?
-       ORDER BY id LIMIT ${BATCH}`,
+       ORDER BY id LIMIT ${proseLimit}`,
       [workspaceId, lastId],
     )
     if (batch.length === 0) break
@@ -647,8 +653,9 @@ const runContentLinkRecomputeCheck = async (
     }
     scanned += batch.length
     lastId = batch[batch.length - 1].id
-    if (batch.length < BATCH) break
-    if (scanned + opaqueScanned >= contentCap) { truncated = true; break }
+    // A short page means the candidates ran out — complete coverage, not
+    // truncation. The budget check at the top of the loop reports that.
+    if (batch.length < proseLimit) break
   }
   const anomalous = strippedBlocks > 0 || staleRefBlocks > 0 || opaqueContentRefBlocks > 0
   return {

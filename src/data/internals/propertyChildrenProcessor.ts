@@ -53,6 +53,7 @@ import {
 import { keyAtStart, keysBetween } from '@/data/orderKey'
 import {
   encodedPropertyValueToChildContent,
+  fieldValueChildren,
   getPropertyFieldTargetId,
   isFieldValueChild,
   propertiesEqual,
@@ -60,6 +61,7 @@ import {
   propertyChildContentToEncodedValue,
 } from '@/data/propertyChildren'
 import { jsonValuesEqual } from './jsonCanonical'
+import { hasOpaqueContent } from '@/data/properties'
 import { deleteSubtreeInTx } from '@/data/subtreeDelete'
 
 export const MATERIALIZE_PROPERTY_CHILDREN_PROCESSOR_NAME = 'core.materializePropertyChildren'
@@ -194,7 +196,7 @@ const firstProjectedFieldValue = async (
     // §9 value set: `is_field_form IS NOT 1` children only — a nested marked
     // row materialized under the field row is its own machinery, never a
     // value candidate.
-    const values = (await tx.childrenOf(fieldRow.id, undefined)).filter(isFieldValueChild)
+    const values = await fieldValueChildren(tx, fieldRow.id)
     for (const value of values) {
       try {
         return propertyChildContentToEncodedValue(
@@ -401,7 +403,7 @@ export const materializePropertyChildrenForExistingRow = async (
         await tx.update(primary.id, {content: fieldContent})
       }
       // §9 value set: bit-filtered — nested marked rows are machinery.
-      const values = (await tx.childrenOf(primary.id, undefined)).filter(isFieldValueChild)
+      const values = await fieldValueChildren(tx, primary.id)
       const [primaryValue, ...duplicateValues] = values
       if (primaryValue) {
         if (primaryValue.content !== content) {
@@ -533,7 +535,9 @@ export const collapseDuplicateFieldRow = async (
       }
       continue
     }
-    const survivorValues = survivorChildren.filter(isFieldValueChild)
+    const survivorValues = survivorChildren
+      .filter(isFieldValueChild)
+      .filter(v => !hasOpaqueContent(v, tx.opaqueContentTypes))
     const match = survivorValues.find(v => v.content === child.content)
     if (match) {
       await collapseDuplicateValueChild(tx, match.id, child)

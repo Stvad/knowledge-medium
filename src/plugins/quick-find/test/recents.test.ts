@@ -121,6 +121,7 @@ describe('pushRecentBlockId', () => {
 })
 
 describe('recentItemFromBlockData', () => {
+  const NO_OPAQUE: ReadonlySet<string> = new Set()
   const blockData = (overrides: Partial<BlockData>): BlockData => ({
     id: 'block-1',
     workspaceId: WS,
@@ -146,7 +147,7 @@ describe('recentItemFromBlockData', () => {
       content: 'Ada Lovelace',
       parentId: 'people-page',
       properties: {[typesProp.name]: ['person']},
-    }))).toEqual({
+    }), NO_OPAQUE)).toEqual({
       blockId: 'block-1',
       label: 'Ada Lovelace',
       parentId: 'people-page',
@@ -158,7 +159,7 @@ describe('recentItemFromBlockData', () => {
     expect(recentItemFromBlockData('block-1', blockData({
       content: 'first line of body text',
       properties: {[aliasesProp.name]: ['Project Alpha']},
-    })).label).toBe('Project Alpha')
+    }), NO_OPAQUE).label).toBe('Project Alpha')
   })
 
   it('falls through a blank alias instead of rendering a label-less row', () => {
@@ -168,7 +169,29 @@ describe('recentItemFromBlockData', () => {
     expect(recentItemFromBlockData('block-1', blockData({
       content: 'Ada Lovelace',
       properties: {[aliasesProp.name]: ['   ']},
-    })).label).toBe('Ada Lovelace')
+    }), NO_OPAQUE).label).toBe('Ada Lovelace')
+  })
+
+  // The MRU never passes through the search merge point, so it is the one
+  // list where an opaque block arrives unfiltered. It keeps its row — you
+  // were just editing that extension — but the bytes are not a label.
+  it('does not use an opaque block\'s content as its label', () => {
+    const item = recentItemFromBlockData('block-1', blockData({
+      content: 'export const activate = () => {/* … */}',
+      properties: {[typesProp.name]: ['extension']},
+    }), new Set(['extension']))
+    expect(item.label).toBe('block-1')
+  })
+
+  it('still labels an opaque block by its alias when it has one', () => {
+    const item = recentItemFromBlockData('block-1', blockData({
+      content: 'export const activate = () => {}',
+      properties: {
+        [typesProp.name]: ['extension'],
+        [aliasesProp.name]: ['Strength Tracker'],
+      },
+    }), new Set(['extension']))
+    expect(item.label).toBe('Strength Tracker')
   })
 
   it('survives a malformed types value rather than dropping the row', () => {
@@ -177,6 +200,6 @@ describe('recentItemFromBlockData', () => {
     expect(recentItemFromBlockData('block-1', blockData({
       content: 'Ada Lovelace',
       properties: {[typesProp.name]: 'person'},
-    })).typeIds).toEqual([])
+    }), NO_OPAQUE).typeIds).toEqual([])
   })
 })
