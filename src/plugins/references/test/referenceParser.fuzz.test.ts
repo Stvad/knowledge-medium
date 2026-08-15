@@ -122,9 +122,13 @@ describe('wikilink parsing', () => {
     fc.assert(
       fc.property(endsWithItsOwnBracket, alias => {
         const rendered = renderWikilink(alias)
+        // `renderWikilink` refuses (null) anything that would not read back
+        // as one reference. Every sample here is renderable, so a null IS a
+        // failure of the property under test — asserted, not narrowed away.
+        expect(rendered).not.toBeNull()
         expect(rendered).toBe(`[[${alias}]]`)
-        expect(parseOutermostReferences(rendered))
-          .toEqual([{alias, startIndex: 0, endIndex: rendered.length}])
+        expect(parseOutermostReferences(rendered!))
+          .toEqual([{alias, startIndex: 0, endIndex: rendered!.length}])
       }),
       fuzzParams(200),
     )

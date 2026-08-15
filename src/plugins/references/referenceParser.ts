@@ -413,26 +413,14 @@ export function extractBlockRefIds(content: string): string[] {
 //      / blockref syntax via string templates and accidentally diverge
 //      from parser expectations). ────
 
-/** Render a wikilink targeting `alias`. If `alias` contains wikilink
- *  delimiters (`[[`, `]]`, or a trailing `]`), the output is
- *  syntactically safe but lossy; callers that need alias identity must
- *  verify by parsing the result. Guarantee, for an `alias` that is
- *  non-empty and at most `MAX_ALIAS_LENGTH`: the output always parses to
- *  exactly one outermost reference spanning the whole string, and is
- *  delimiter-balanced so it cannot combine with surrounding text into a
- *  different link.
+/** Escape-and-wrap only — NEVER refuses. Delimiters in `alias` are made
+ *  syntactically safe (so the span cannot combine with surrounding text
+ *  into a different link) but the result is then lossy: it no longer
+ *  parses back to `alias`. Two inputs render markup the parser reads as
+ *  ZERO references — `alias === ''` and anything over `MAX_ALIAS_LENGTH`.
  *
- *  Two inputs fall outside that guarantee and render markup the parser
- *  emits ZERO references for — `alias === ''` (`[[]]`, stopped by the
- *  `if (alias)` gate) and any alias longer than `MAX_ALIAS_LENGTH`. This
- *  function does not refuse them, because its callers split into two
- *  kinds and only one can act on a refusal: the rewriters go through
- *  `faithfulWikilinkReplacement`, which verifies by re-parsing and falls
- *  back to the pinned form on `null`, so they are already safe; the
- *  direct callers are PRODUCERS with a real user at the other end
- *  (`appendTagToContent`), and they owe a check at their own entry point
- *  where the input can still be rejected with an explanation instead of
- *  silently degrading — see `isValidTagName`. */
+ *  Private for exactly that reason. `renderWikilink` is the export, and
+ *  it verifies. */
 const renderWikilinkUnchecked = (alias: string): string => {
   // `]]` inside the alias would terminate the wikilink at the wrong
   // place, and an unclosed `[[` would leak an opener that a later `]]`
@@ -456,6 +444,21 @@ const renderWikilinkUnchecked = (alias: string): string => {
   return `[[${padded}]]`
 }
 
+/** Render `alias` as a `[[…]]` span, or `null` when the result would not
+ *  read back as exactly one reference — an empty alias, or one past
+ *  `MAX_ALIAS_LENGTH` once rendered.
+ *
+ *  REFUSES rather than returning dead markup: emitting `[[]]` or an
+ *  over-cap span produces text that renders as a live-looking link the
+ *  index has no entry for. Callers must handle `null`; the rewriters
+ *  reach this through `faithfulWikilinkReplacement`, which falls back to
+ *  the pinned form, and producer call sites (`appendTagToContent`) should
+ *  still pre-validate so the user gets an explanation rather than a
+ *  silent no-op — see `isValidTagName`.
+ *
+ *  A non-null result is NOT an identity guarantee: delimiters in `alias`
+ *  render safely but lossily, so callers needing round-trip identity
+ *  compare the parsed alias themselves (`canRenderAsWikilink`). */
 export const renderWikilink = (alias: string): string | null => {
   const text = renderWikilinkUnchecked(alias)
   return parseOutermostReferences(text).length === 1 ? text : null
@@ -464,8 +467,9 @@ export const renderWikilink = (alias: string): string | null => {
 /** Can `alias` be written as a `[[…]]` span this parser reads back as a
  *  reference at all? False only for spans the grammar refuses outright —
  *  today, over `MAX_ALIAS_LENGTH` measured on the RENDERED span, which is
- *  not the same as the input length: `renderWikilink` pads a trailing `]`
- *  with a space, so an at-cap name ending in `]` emits an alias one over.
+ *  not the same as the input length: `renderWikilink` pads an UNBALANCED
+ *  trailing `]` with a space, so an at-cap name ending in one emits an
+ *  alias one over.
  *
  *  The producer-side companion to the cap. Every surface that OFFERS or
  *  WRITES a wikilink on a user's behalf owes this check — the tag entry
