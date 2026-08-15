@@ -10,31 +10,26 @@ import {
 const LOCATION = {blockId: 'row-b', renderScopeId: 'panel:page'}
 
 /**
- * Every budget below is sized for an absolute worker FREEZE, not for a slow
- * test: this file runs in ~2s alone and its slowest test in ~300ms, but the gate
- * runs one worker per core beside lint, and a descheduled worker loses whole
- * seconds at a stretch. Relative headroom buys nothing against that, and both
- * defaults fail badly under it — vitest's 5000ms `testTimeout` times the file
- * out (#571), and a freeze outlasting `vi.waitFor`'s 1000ms budget makes it
- * reject on resume even though the value it polls for is already correct (every
- * overdue timer fires in expiry order, so the rejection wins over the next poll).
+ * A budget ladder for a worker that gets FROZEN rather than merely slowed:
+ * aligner deadlines the test must outrun > the test's own budget > every
+ * `vi.waitFor` > what the tests need (~300ms at the slowest, ~2s for the file).
  *
- * The ORDER of the three is the point: whatever a freeze delays, the test's own
- * clock is what runs out first, so the report is an honest timeout rather than a
- * misleading assertion or a guard that quietly stopped applying.
+ * The ORDER is the invariant. A freeze leaves every timer overdue at once and
+ * they then fire in expiry order, so the smallest budget decides what the
+ * failure looks like — on the defaults `vi.waitFor` rejects before its next poll
+ * can read a value that is by then already correct. Keep the test's own clock
+ * the first to expire and a stalled worker reports an honest timeout instead of
+ * a wrong value or a guard that quietly stopped applying.
  */
 const TEST_BUDGET_MS = 20_000
-/** Strictly under `TEST_BUDGET_MS`, so a real failure still reports its own
- *  assertion instead of an opaque test timeout. */
+/** Under `TEST_BUDGET_MS`, so a real failure still reports its own assertion
+ *  rather than an opaque test timeout. `vi.waitFor` defaults to 1000ms. */
 const POLL_BUDGET_MS = 10_000
-/** Over `TEST_BUDGET_MS`, for an aligner deadline the test has to OUTRUN —
- *  `waitMs` where the anchor must still be honoured, `realignWindowMs` where the
- *  correction window must still be open. Defence, unlike the two above: to
- *  expire the aligner's own 2s default a freeze has to land in the gap between
- *  arming the aligner and the test's next `setTimeout`, which no SIGSTOP run
- *  hit. Worth the line anyway, because it fails as a wrong VALUE rather than a
- *  timeout, and because the negative tests would go on passing while no longer
- *  reaching the guard they name. Calls that assert synchronously don't need it. */
+/** Over `TEST_BUDGET_MS`, for an aligner deadline the test has to outrun.
+ *  Defence, but the failure it prevents is the silent one: a negative test whose
+ *  subject has already given up stays green while asserting nothing. Tests that
+ *  don't sleep before the aligner has to act are left on the real defaults, so
+ *  those stay covered — see `waits for a row that mounts later`. */
 const NEVER_MS = 60_000
 
 /** Same polling budget at every call site — `vi.waitFor` defaults to 1000ms. */
@@ -167,6 +162,27 @@ describe('alignScrollportToRow', {timeout: TEST_BUDGET_MS}, () => {
     const cancel = alignScrollportToRow(port, LOCATION, {waitMs: NEVER_MS})
     expect(port.scrollTop).toBe(0)
 
+    addRow('row-b', 'panel:page', 300)
+
+    await waitFor(() => {
+      expect(port.scrollTop).toBe(300)
+    })
+    cancel()
+  })
+
+  // The floor under ROW_WAIT_MS: `PanelRenderer` passes no options, and every
+  // other async test overrides `waitMs`, so nothing else would notice the
+  // default being cut below the hydration it exists to cover. Deliberately off
+  // the ladder above — running on the real default is the whole point, and it
+  // stays freeze-tolerant because 400ms and 2000ms keep their relative order
+  // however late they both fire.
+  it('still honours an anchor that hydrates hundreds of ms late', async () => {
+    const {port, addRow} = build(100)
+    port.scrollTop = 0
+
+    const cancel = alignScrollportToRow(port, LOCATION)
+
+    await new Promise(resolve => setTimeout(resolve, 400))
     addRow('row-b', 'panel:page', 300)
 
     await waitFor(() => {
