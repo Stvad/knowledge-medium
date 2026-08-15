@@ -10,6 +10,7 @@
 import { EditorSelection } from '@codemirror/state'
 import { CompletionContext, CompletionResult } from '@codemirror/autocomplete'
 import { flushEditorContent } from '@/editor/contentFlush.js'
+import { completionQueryEnd } from '@/utils/codemirrorCompletion.js'
 
 export interface BlockSearchHit {
   id: string
@@ -24,7 +25,10 @@ const stripWhitespace = (s: string) => s.replace(/\s+/g, ' ').trim()
 
 export function blockrefCompletionSource(options: BlockrefAutocompleteOptions) {
   return async (context: CompletionContext): Promise<CompletionResult | null> => {
-    const {state, pos} = context
+    const {state} = context
+    // End of the query region, not necessarily the caret — see
+    // `completionQueryEnd` for the wrapped-selection case.
+    const pos = completionQueryEnd(context)
     const line = state.doc.lineAt(pos)
     const lineText = line.text
     const linePos = pos - line.from
