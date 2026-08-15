@@ -2,7 +2,12 @@ import { Block } from '../data/block'
 import { ClipboardData } from '../types'
 import type { Repo } from '../data/repo'
 import { selectionStateProp } from '@/data/properties.js'
-import { encodePayloadHtml, rememberPayload, type ClipboardPayload } from '@/paste/clipboardPayload.js'
+import {
+  encodePayloadHtml,
+  forgetPayload,
+  rememberPayload,
+  type ClipboardPayload,
+} from '@/paste/clipboardPayload.js'
 import { showError } from '@/utils/toast.js'
 import { validateSelectionHierarchy } from '@/utils/selection.js'
 
@@ -67,15 +72,18 @@ const createClipboardItem = (data: ClipboardData, payload: ClipboardPayload): Cl
  *  to invalidate here when a later copy happens — see
  *  `@/paste/clipboardPayload.js`.
  *
- *  Remembered BEFORE the await: if the write is refused, the OS clipboard
- *  keeps whatever it had, and the table entry for text we never wrote is
- *  simply unreachable. */
+ *  Remembered only AFTER the write resolves. Doing it first looked safe —
+ *  "the entry is for text that never reached the clipboard, so nothing can
+ *  match it" — but that reasoning is wrong whenever the clipboard ALREADY
+ *  holds this same markdown (the user copied these blocks a moment ago).
+ *  Then a refused write leaves the text in place, the entry matches it,
+ *  and a paste moves blocks for a cut that reported itself cancelled. */
 export const writeToClipboard = async (
   data: ClipboardData,
   payload: ClipboardPayload,
 ): Promise<void> => {
-  rememberPayload(data.markdown, payload)
   await navigator.clipboard.write([createClipboardItem(data, payload)])
+  rememberPayload(data.markdown, payload)
 }
 
 export const copyBlockToClipboard = async (block: Block): Promise<void> => {
@@ -91,15 +99,26 @@ export const copyBlockToClipboard = async (block: Block): Promise<void> => {
  *  agent token, a workspace key, …). These carry no block identity, so
  *  they write no payload.
  *
- *  A named seam rather than load-bearing machinery: it used to be the
- *  choke point where every clipboard write cleared the pending-move
- *  register, and skipping it could make the next paste move the wrong
- *  blocks. Nothing depends on it now — clipboard payloads are keyed by
- *  content, so a write that bypassed this would be resolved correctly
- *  anyway. Kept because one place for clipboard text writes is worth
- *  having, not because correctness needs it. */
+ *  Drops any remembered payload for the text it writes. This is NOT the
+ *  old register's "invalidate on every write" — it's the same rule every
+ *  other write here follows: record what the clipboard now holds for this
+ *  content. A bare string carries no block identity, so what it records is
+ *  "this text is not a cut". Without it, cutting a block whose text is `T`
+ *  and then copying the identical text `T` from another block (`y c`, and
+ *  duplicate one-liners are ordinary in an outline) would leave the cut
+ *  entry standing, and the next paste would move the cut block instead of
+ *  inserting what was just copied.
+ *
+ *  Note the limit this does NOT reach: text copied from ANOTHER APP never
+ *  passes through here, so identical text from outside still resolves to a
+ *  remembered cut on the text-only paste paths. That is inherent to
+ *  fingerprinting a text-only clipboard by its content, and it is not new
+ *  — the pending-move register's sentinel compared the same way. Pastes
+ *  that carry `text/html` are unaffected: the digest check in
+ *  `resolveClipboardPayload` rejects a payload whose text doesn't match. */
 export const writeTextToClipboard = async (text: string): Promise<void> => {
   await navigator.clipboard.writeText(text)
+  forgetPayload(text)
 }
 
 /** Fire-and-forget wrapper around `writeTextToClipboard`, for handlers

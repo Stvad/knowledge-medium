@@ -43,6 +43,14 @@ vi.mock('./moveBlocks.ts', async importOriginal => {
   return { ...actual, moveBlocksTo: moveBlocksToMock }
 })
 
+// Lets a PRE-move read be driven into a transient failure.
+const liveBlockIdsMock = vi.hoisted(() => vi.fn())
+vi.mock('@/data/blockLiveness.js', async importOriginal => {
+  const actual = await importOriginal<typeof import('@/data/blockLiveness.js')>()
+  liveBlockIdsMock.mockImplementation(actual.liveBlockIds)
+  return { ...actual, liveBlockIds: liveBlockIdsMock }
+})
+
 import { ChangeScope } from '@/data/api'
 import { Repo } from '@/data/repo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
@@ -264,6 +272,22 @@ describe('pasteAsMoveImpl', () => {
   })
 
   describe('move failures', () => {
+    it('handles a rejecting PREFLIGHT read instead of letting it escape', async () => {
+      // The DOM paste handlers have already called `preventDefault` and
+      // invoke this via `void`, so an escaping rejection discards the
+      // paste outright: no move, no text paste, no toast. Invisible to a
+      // green suite, because nothing asserts on a paste that did nothing.
+      await seed('dest', null)
+      await seed('a', null)
+      liveBlockIdsMock.mockRejectedValueOnce(new Error('database is closed'))
+
+      const result = await pasteAsMoveImpl({ repo, target: INTO_DEST, payload: cut(['a']) })
+
+      expect(result).toBe(true) // handled — the caller must not text-paste
+      expect(showErrorMock).toHaveBeenCalledTimes(1)
+      expect(await childIds('dest')).toEqual([])
+    })
+
     it('reports handled, with a toast, when the move fails before anything commits', async () => {
       await seed('dest', null)
       await seed('a', null)

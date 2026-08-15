@@ -60,15 +60,22 @@ export const pasteAsMoveImpl = async ({ repo, target, payload }: PasteAsMoveInpu
     return false
   }
 
-  const liveIds = await liveBlockIds(repo, payload.blockIds)
-  if (liveIds.length === 0) return false // nothing left to move — fall back to a text paste
-
-  if (await isCycleTarget(repo, target, new Set(liveIds))) {
-    showError("Can't paste here — it's inside the block(s) you cut")
-    return true
-  }
-
   try {
+    // The preflight reads sit INSIDE the try, and it matters: the DOM
+    // paste handlers have already called `preventDefault` and invoke this
+    // via `void`, so an escaping rejection discards the paste entirely —
+    // no move, no text paste, no toast, just an unhandled rejection.
+    // (Regressed once already when this function was rewritten; the
+    // failure is invisible to a green suite because nothing asserts on a
+    // paste that silently did nothing.)
+    const liveIds = await liveBlockIds(repo, payload.blockIds)
+    if (liveIds.length === 0) return false // nothing left to move — fall back to a text paste
+
+    if (await isCycleTarget(repo, target, new Set(liveIds))) {
+      showError("Can't paste here — it's inside the block(s) you cut")
+      return true
+    }
+
     const result = await moveBlocksTo(repo, liveIds, target)
     if (liveIds.length < payload.blockIds.length) {
       const skipped = payload.blockIds.length - liveIds.length

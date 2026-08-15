@@ -20,43 +20,54 @@ import {
 } from './clipboardPayload.ts'
 
 const CUT: ClipboardPayload = {blockIds: ['a', 'b'], workspaceId: 'ws-1', intent: 'cut'}
+const MD = '- a\n- b'
 
 beforeEach(() => { resetRememberedPayloads() })
 
 describe('html flavor round trip', () => {
   it('carries the payload and the markdown', () => {
-    const html = encodePayloadHtml('- a\n- b', CUT)
-    expect(decodePayloadHtml(html)).toEqual(CUT)
+    const html = encodePayloadHtml(MD, CUT)
+    expect(decodePayloadHtml(html, MD)).toEqual(CUT)
     expect(html).toContain('- a\n- b')
   })
 
   it('escapes markdown that would otherwise be markup', () => {
-    const html = encodePayloadHtml('<script>alert(1)</script> & <b>', CUT)
+    const markup = '<script>alert(1)</script> & <b>'
+    const html = encodePayloadHtml(markup, CUT)
     expect(html).not.toContain('<script>')
     expect(html).toContain('&lt;script&gt;')
     // The marker still parses with escaped content sitting after it.
-    expect(decodePayloadHtml(html)).toEqual(CUT)
+    expect(decodePayloadHtml(html, markup)).toEqual(CUT)
   })
 
   it('survives markdown that itself contains the marker close sequence', () => {
     // The payload JSON is delimited by the FIRST `-->` after the opener,
     // so content further along can't truncate it.
-    const html = encodePayloadHtml('a --> b', CUT)
-    expect(decodePayloadHtml(html)).toEqual(CUT)
+    expect(decodePayloadHtml(encodePayloadHtml('a --> b', CUT), 'a --> b')).toEqual(CUT)
   })
 
   it('is null for html from any other app', () => {
-    expect(decodePayloadHtml('<meta charset="utf-8"><p>hello</p>')).toBeNull()
-    expect(decodePayloadHtml('')).toBeNull()
-    expect(decodePayloadHtml(undefined)).toBeNull()
+    expect(decodePayloadHtml('<meta charset="utf-8"><p>hello</p>', MD)).toBeNull()
+    expect(decodePayloadHtml('', MD)).toBeNull()
+    expect(decodePayloadHtml(undefined, MD)).toBeNull()
+  })
+
+  it('is null when the marker describes DIFFERENT text than it arrived with', () => {
+    // A rich-text app that round-trips our html can preserve the comment
+    // while the visible content changes. Without the digest the stale
+    // marker would move blocks the user never cut.
+    const html = encodePayloadHtml(MD, CUT)
+    expect(decodePayloadHtml(html, 'completely different text')).toBeNull()
+    // ...and still resolves for the text it really shipped with.
+    expect(decodePayloadHtml(html, MD)).toEqual(CUT)
   })
 
   it('is null — never a throw — for a malformed or unknown-version marker', () => {
-    expect(decodePayloadHtml('<!--knowledge-medium:{not json-->x')).toBeNull()
-    expect(decodePayloadHtml('<!--knowledge-medium:{"v":999,"blockIds":[],"workspaceId":"w","intent":"cut"}-->')).toBeNull()
-    expect(decodePayloadHtml('<!--knowledge-medium:{"v":1,"blockIds":"nope","workspaceId":"w","intent":"cut"}-->')).toBeNull()
-    expect(decodePayloadHtml('<!--knowledge-medium:{"v":1,"blockIds":[1,2],"workspaceId":"w","intent":"cut"}-->')).toBeNull()
-    expect(decodePayloadHtml('<!--knowledge-medium:{"v":1,"blockIds":[],"workspaceId":"w","intent":"paste"}-->')).toBeNull()
+    expect(decodePayloadHtml('<!--knowledge-medium:{not json-->x', MD)).toBeNull()
+    expect(decodePayloadHtml('<!--knowledge-medium:{"v":999,"blockIds":[],"workspaceId":"w","intent":"cut"}-->', MD)).toBeNull()
+    expect(decodePayloadHtml('<!--knowledge-medium:{"v":1,"blockIds":"nope","workspaceId":"w","intent":"cut"}-->', MD)).toBeNull()
+    expect(decodePayloadHtml('<!--knowledge-medium:{"v":1,"blockIds":[1,2],"workspaceId":"w","intent":"cut"}-->', MD)).toBeNull()
+    expect(decodePayloadHtml('<!--knowledge-medium:{"v":1,"blockIds":[],"workspaceId":"w","intent":"paste"}-->', MD)).toBeNull()
   })
 })
 
@@ -133,7 +144,7 @@ describe('resolveClipboardPayload', () => {
     const fromTable: ClipboardPayload = {blockIds: ['stale'], workspaceId: 'ws-1', intent: 'cut'}
     rememberPayload('- a\n- b', fromTable)
 
-    expect(resolveClipboardPayload('- a\n- b', encodePayloadHtml('- a\n- b', CUT))).toEqual(CUT)
+    expect(resolveClipboardPayload(MD, encodePayloadHtml(MD, CUT))).toEqual(CUT)
   })
 
   it('falls back to the table when there is no html — the bare-keypress paste paths', () => {

@@ -27,16 +27,37 @@
  *
  * ## The property to preserve
  *
- * Neither path ever asks "which cut is the current one?", and neither
- * needs invalidating. Copy something else and the text no longer matches,
- * so the lookup misses on its own. Two cuts race and each paste resolves
- * against whatever text the OS actually ended up holding. A stale entry is
- * unreachable rather than dangerous. **If you find yourself adding a
- * "clear this when X happens" call, the design has regressed** — that is
- * exactly the manual-agreement problem this replaced.
+ * Neither path ever asks "which cut is the current one?". Copy different
+ * content and the lookup misses on its own. Two cuts race and each paste
+ * resolves against whatever text the OS actually ended up holding. Order
+ * of gestures is not a thing this design can get wrong, which is the whole
+ * reason it exists.
  *
- * The table is deliberately NOT keyed by recency, NOT cleared on write,
- * and NOT consulted unless the full text matches.
+ * What it CAN get wrong is the mapping being incomplete — a piece of
+ * content whose entry no longer describes what the clipboard holds. So
+ * every write records what the clipboard now holds FOR THAT CONTENT:
+ * `writeToClipboard` records a payload, and `writeTextToClipboard` records
+ * "no payload" via `forgetPayload` (otherwise cutting a block whose text
+ * is `T` and then copying the identical text `T` from elsewhere would
+ * leave the cut entry standing).
+ *
+ * Read that as bookkeeping about content, not as the old register's
+ * invalidate-on-every-gesture. The line to hold: **a write may only touch
+ * the entry for the exact text it wrote.** A call that clears entries for
+ * OTHER content — "the user did something, drop the pending one" — is the
+ * manual-agreement problem coming back, and is the thing to refuse.
+ *
+ * The table is deliberately NOT keyed by recency, and NOT consulted unless
+ * the full text matches.
+ *
+ * ## The limit
+ *
+ * Text copied from ANOTHER APP never passes through these helpers, so on
+ * the text-only paste paths, identical text from outside still resolves to
+ * a remembered cut. That's inherent to fingerprinting a text-only
+ * clipboard by content, and it isn't new — the register's sentinel
+ * compared the same way. Pastes carrying `text/html` are unaffected: the
+ * digest binds the marker to the text it shipped with.
  *
  * ## Browser support
  *
@@ -71,6 +92,23 @@ export interface ClipboardPayload {
 
 interface EncodedPayload extends ClipboardPayload {
   readonly v: number
+  /** Fingerprint of the markdown this marker shipped alongside. Checked in
+   *  `resolveClipboardPayload` against the paste's actual `text/plain`.
+   *
+   *  What it stops: a rich-text app that round-trips our html — preserving
+   *  the comment while the visible content changes — would otherwise hand
+   *  back a marker claiming to describe text it no longer describes, and a
+   *  paste would move blocks the user never cut.
+   *
+   *  What it does NOT stop: deliberate forgery. An attacker who writes the
+   *  marker also writes the text, so they can make the two agree. What
+   *  actually makes that impractical is that a forged payload needs the
+   *  victim's real `workspaceId` and block ids, which aren't public, and
+   *  the worst outcome is a local, undoable move of the user's own blocks
+   *  — no read access, nothing leaves the device. A per-origin unforgeable
+   *  token would close it properly; that's not worth the persistent state
+   *  at this threat level, but it's the shape if it ever is. */
+  readonly digest: string
 }
 
 /** Marker prefix. An HTML comment rather than a wrapper element or a data
@@ -101,7 +139,7 @@ const escapeHtml = (text: string): string =>
  * `null`, i.e. a missed move rather than a wrong one.
  */
 export const encodePayloadHtml = (markdown: string, payload: ClipboardPayload): string => {
-  const encoded: EncodedPayload = {v: PAYLOAD_VERSION, ...payload}
+  const encoded: EncodedPayload = {v: PAYLOAD_VERSION, ...payload, digest: fnv1a32Hex(markdown)}
   return `${MARKER_OPEN}${JSON.stringify(encoded)}${MARKER_CLOSE}`
     + `<div style="white-space:pre-wrap">${escapeHtml(markdown)}</div>`
 }
@@ -110,7 +148,7 @@ export const encodePayloadHtml = (markdown: string, payload: ClipboardPayload): 
  *  html isn't ours (every other app's clipboard html lands here too) or
  *  carries a version/shape this build doesn't recognise. Never throws —
  *  a malformed marker is just "not ours". */
-export const decodePayloadHtml = (html: string | undefined): ClipboardPayload | null => {
+const decodeEncodedPayload = (html: string | undefined): EncodedPayload | null => {
   if (!html) return null
   const start = html.indexOf(MARKER_OPEN)
   if (start === -1) return null
@@ -125,13 +163,32 @@ export const decodePayloadHtml = (html: string | undefined): ClipboardPayload | 
     if (parsed.intent !== 'copy' && parsed.intent !== 'cut') return null
     if (!Array.isArray(parsed.blockIds)) return null
     if (!parsed.blockIds.every(id => typeof id === 'string' && id)) return null
+    if (typeof parsed.digest !== 'string' || !parsed.digest) return null
     return {
+      v: parsed.v,
+      digest: parsed.digest,
       blockIds: parsed.blockIds,
       workspaceId: parsed.workspaceId,
       intent: parsed.intent,
     }
   } catch {
     return null
+  }
+}
+
+/** Decode and verify against the text the marker arrived with. `null`
+ *  whenever the html isn't ours, is malformed, or describes different
+ *  content than `text` — see `EncodedPayload.digest`. */
+export const decodePayloadHtml = (
+  html: string | undefined,
+  text: string,
+): ClipboardPayload | null => {
+  const encoded = decodeEncodedPayload(html)
+  if (!encoded || encoded.digest !== fnv1a32Hex(text)) return null
+  return {
+    blockIds: encoded.blockIds,
+    workspaceId: encoded.workspaceId,
+    intent: encoded.intent,
   }
 }
 
@@ -185,6 +242,18 @@ export const resetRememberedPayloads = (): void => {
   remembered.clear()
 }
 
+/** Record that `text` is no longer a cut — used by the plain-text write
+ *  path, which puts content on the clipboard carrying no block identity.
+ *
+ *  This is a WRITE recording what the clipboard now holds for that
+ *  content, not an "invalidate on every gesture" hook. The distinction is
+ *  the whole design: entries are still keyed by content, still never
+ *  consulted unless the full text matches, and still have no notion of
+ *  which one is current. See `writeTextToClipboard`. */
+export const forgetPayload = (text: string): void => {
+  remembered.delete(fnv1a32Hex(text))
+}
+
 /**
  * Resolve the payload for a paste, preferring the authoritative source.
  *
@@ -197,4 +266,4 @@ export const resolveClipboardPayload = (
   text: string,
   html: string | undefined,
 ): ClipboardPayload | null =>
-  decodePayloadHtml(html) ?? recallPayloadForText(text)
+  decodePayloadHtml(html, text) ?? recallPayloadForText(text)

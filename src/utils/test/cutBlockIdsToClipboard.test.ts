@@ -26,7 +26,7 @@ import {
   recallPayloadForText,
   resetRememberedPayloads,
 } from '@/paste/clipboardPayload'
-import { cutBlockIdsToClipboard } from '@/utils/copy'
+import { cutBlockIdsToClipboard, writeTextToClipboard } from '@/utils/copy'
 
 const WS = 'ws-1'
 
@@ -81,7 +81,7 @@ describe('cutBlockIdsToClipboard', () => {
 
     expect(written).toHaveLength(1)
     expect(written[0]['text/plain']).toBe('hello')
-    expect(decodePayloadHtml(written[0]['text/html'])).toEqual({
+    expect(decodePayloadHtml(written[0]['text/html'], written[0]['text/plain'])).toEqual({
       blockIds: ['a'], workspaceId: WS, intent: 'cut',
     })
   })
@@ -98,16 +98,46 @@ describe('cutBlockIdsToClipboard', () => {
   })
 
   it('abandons the cut, with a toast, when the clipboard write is refused', async () => {
-    // Nothing to unwind: the payload was remembered against text that
-    // never reached the clipboard, so no paste can match it. The old
-    // register needed a read-back-the-clipboard sentinel dance here
-    // precisely because it could be armed independently of the write.
     await seed('a', null, 'hello')
     const write = vi.fn(async () => { throw new DOMException('refused', 'NotAllowedError') })
     vi.stubGlobal('navigator', { clipboard: { write } })
 
     expect(await cutBlockIdsToClipboard(['a'], repo)).toBe(false)
     expect(showErrorMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('a refused write leaves NO payload behind, even when the clipboard already held that exact text', async () => {
+    // The subtle one. "The entry is for text that never reached the
+    // clipboard, so nothing can match it" is false when the clipboard
+    // ALREADY holds this markdown — the user copied these blocks a moment
+    // ago. Remembering before the await made a cancelled cut still
+    // completable, so the payload is recorded only after the write lands.
+    await seed('a', null, 'hello')
+    const write = vi.fn(async () => { throw new DOMException('refused', 'NotAllowedError') })
+    vi.stubGlobal('navigator', { clipboard: { write } })
+
+    expect(await cutBlockIdsToClipboard(['a'], repo)).toBe(false)
+
+    // 'hello' is exactly what the clipboard would still be holding.
+    expect(recallPayloadForText('hello')).toBeNull()
+  })
+
+  it('a later plain-text copy of the SAME text stops resolving to the cut', async () => {
+    // Duplicate one-liners are ordinary in an outline, so "cut a block
+    // saying `hello`, then `y c` another block also saying `hello`" is a
+    // real sequence. Without recording the plain write, the next paste
+    // moves the cut block instead of inserting what was just copied.
+    await seed('a', null, 'hello')
+    const write = vi.fn(async () => {})
+    const writeText = vi.fn(async () => {})
+    vi.stubGlobal('navigator', { clipboard: { write, writeText } })
+
+    await cutBlockIdsToClipboard(['a'], repo)
+    expect(recallPayloadForText('hello')).not.toBeNull()
+
+    await writeTextToClipboard('hello')
+
+    expect(recallPayloadForText('hello')).toBeNull()
   })
 
   it('normalizes an ancestor+descendant selection, so the descendant is neither duplicated in the markdown nor listed in the payload', async () => {
@@ -123,7 +153,7 @@ describe('cutBlockIdsToClipboard', () => {
     expect(written[0]['text/plain']).toBe('- a\n  - kid')
     // 'kid' rides along inside 'a'; listing it as its own root would move
     // it twice.
-    expect(decodePayloadHtml(written[0]['text/html'])?.blockIds).toEqual(['a'])
+    expect(decodePayloadHtml(written[0]['text/html'], written[0]['text/plain'])?.blockIds).toEqual(['a'])
   })
 
   it('carries only the roots that actually serialized', async () => {
@@ -135,7 +165,7 @@ describe('cutBlockIdsToClipboard', () => {
 
     expect(await cutBlockIdsToClipboard(['a', 'ghost'], repo)).toBe(true)
 
-    expect(decodePayloadHtml(written[0]['text/html'])?.blockIds).toEqual(['a'])
+    expect(decodePayloadHtml(written[0]['text/html'], written[0]['text/plain'])?.blockIds).toEqual(['a'])
   })
 
   it('leaves the blocks exactly where they are — a cut with no paste changes nothing', async () => {
