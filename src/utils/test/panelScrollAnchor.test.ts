@@ -9,6 +9,37 @@ import {
 
 const LOCATION = {blockId: 'row-b', renderScopeId: 'panel:page'}
 
+/**
+ * Every budget below is sized for an absolute worker FREEZE, not for a slow
+ * test: this file runs in ~2s alone and its slowest test in ~300ms, but the gate
+ * runs one worker per core beside lint, and a descheduled worker loses whole
+ * seconds at a stretch. Relative headroom buys nothing against that, and both
+ * defaults fail badly under it — vitest's 5000ms `testTimeout` times the file
+ * out (#571), and a freeze outlasting `vi.waitFor`'s 1000ms budget makes it
+ * reject on resume even though the value it polls for is already correct (every
+ * overdue timer fires in expiry order, so the rejection wins over the next poll).
+ *
+ * The ORDER of the three is the point: whatever a freeze delays, the test's own
+ * clock is what runs out first, so the report is an honest timeout rather than a
+ * misleading assertion or a guard that quietly stopped applying.
+ */
+const TEST_BUDGET_MS = 20_000
+/** Strictly under `TEST_BUDGET_MS`, so a real failure still reports its own
+ *  assertion instead of an opaque test timeout. */
+const POLL_BUDGET_MS = 10_000
+/** Over `TEST_BUDGET_MS`, for an aligner deadline the test has to OUTRUN —
+ *  `waitMs` where the anchor must still be honoured, `realignWindowMs` where the
+ *  correction window must still be open. Defence, unlike the two above: to
+ *  expire the aligner's own 2s default a freeze has to land in the gap between
+ *  arming the aligner and the test's next `setTimeout`, which no SIGSTOP run
+ *  hit. Worth the line anyway, because it fails as a wrong VALUE rather than a
+ *  timeout, and because the negative tests would go on passing while no longer
+ *  reaching the guard they name. Calls that assert synchronously don't need it. */
+const NEVER_MS = 60_000
+
+/** Same polling budget at every call site — `vi.waitFor` defaults to 1000ms. */
+const waitFor = (assertion: () => void) => vi.waitFor(assertion, {timeout: POLL_BUDGET_MS})
+
 const rectAt = (top: number, height: number) => ({
   top, bottom: top + height, left: 0, right: 100, width: 100, height,
   x: 0, y: top, toJSON: () => ({}),
@@ -115,7 +146,7 @@ describe('alignRowToScrollportTop', () => {
   })
 })
 
-describe('alignScrollportToRow', () => {
+describe('alignScrollportToRow', {timeout: TEST_BUDGET_MS}, () => {
   it('aligns a row that is already rendered', () => {
     const {port, addRow} = build(100)
     addRow('row-b', 'panel:page', 300)
@@ -133,12 +164,12 @@ describe('alignScrollportToRow', () => {
     const {port, addRow} = build(100)
     port.scrollTop = 0
 
-    const cancel = alignScrollportToRow(port, LOCATION)
+    const cancel = alignScrollportToRow(port, LOCATION, {waitMs: NEVER_MS})
     expect(port.scrollTop).toBe(0)
 
     addRow('row-b', 'panel:page', 300)
 
-    await vi.waitFor(() => {
+    await waitFor(() => {
       expect(port.scrollTop).toBe(300)
     })
     cancel()
@@ -151,14 +182,14 @@ describe('alignScrollportToRow', () => {
     port.scrollTop = 0
     const row = addRow('row-b', 'panel:page', 300)
 
-    const cancel = alignScrollportToRow(port, LOCATION)
+    const cancel = alignScrollportToRow(port, LOCATION, {realignWindowMs: NEVER_MS, waitMs: NEVER_MS})
     expect(port.scrollTop).toBe(300)
 
     // Content lands above the anchor: the row is now 150px further down.
     moveRow(row, 450)
     port.appendChild(document.createElement('div'))
 
-    await vi.waitFor(() => {
+    await waitFor(() => {
       expect(port.scrollTop).toBe(450)
     })
     cancel()
@@ -171,13 +202,13 @@ describe('alignScrollportToRow', () => {
     port.scrollTop = 0
     const row = addRow('row-b', 'panel:page', 300)
 
-    const cancel = alignScrollportToRow(port, LOCATION, {realignWindowMs: 1000})
+    const cancel = alignScrollportToRow(port, LOCATION, {realignWindowMs: NEVER_MS, waitMs: NEVER_MS})
     expect(port.scrollTop).toBe(300)
 
     // No DOM change at all — just something above it growing.
     moveRow(row, 460)
 
-    await vi.waitFor(() => {
+    await waitFor(() => {
       expect(port.scrollTop).toBe(460)
     })
     cancel()
@@ -189,14 +220,14 @@ describe('alignScrollportToRow', () => {
     const {port, addRow} = build(100)
     port.scrollTop = 0
 
-    const cancel = alignScrollportToRow(port, LOCATION)
+    const cancel = alignScrollportToRow(port, LOCATION, {waitMs: NEVER_MS})
     port.dispatchEvent(new Event('keydown', {bubbles: true}))
     addRow('row-b', 'panel:page', 300)
 
     const fence = build(100)
-    const fenceCancel = alignScrollportToRow(fence.port, LOCATION)
+    const fenceCancel = alignScrollportToRow(fence.port, LOCATION, {waitMs: NEVER_MS})
     fence.addRow('row-b', 'panel:page', 300)
-    await vi.waitFor(() => {
+    await waitFor(() => {
       expect(fence.port.scrollTop).toBe(300)
     })
     fenceCancel()
@@ -213,11 +244,11 @@ describe('alignScrollportToRow', () => {
     port.scrollTop = 0
     const elsewhere = build(100)
 
-    const cancel = alignScrollportToRow(port, LOCATION)
+    const cancel = alignScrollportToRow(port, LOCATION, {waitMs: NEVER_MS})
     elsewhere.port.dispatchEvent(new Event('keydown', {bubbles: true}))
     addRow('row-b', 'panel:page', 300)
 
-    await vi.waitFor(() => {
+    await waitFor(() => {
       expect(port.scrollTop).toBe(300)
     })
     cancel()
@@ -230,7 +261,7 @@ describe('alignScrollportToRow', () => {
     port.scrollTop = 0
     const row = addRow('row-b', 'panel:page', 300)
 
-    const cancel = alignScrollportToRow(port, LOCATION, {realignWindowMs: 1000})
+    const cancel = alignScrollportToRow(port, LOCATION, {realignWindowMs: NEVER_MS, waitMs: NEVER_MS})
     expect(port.scrollTop).toBe(300)
 
     // The user drags the scrollbar somewhere else.
@@ -256,9 +287,9 @@ describe('alignScrollportToRow', () => {
     // Fence on a second aligner that IS live: once it has reacted to a
     // mutation, the cancelled one has demonstrably had its turn.
     const fence = build(100)
-    const fenceCancel = alignScrollportToRow(fence.port, LOCATION)
+    const fenceCancel = alignScrollportToRow(fence.port, LOCATION, {waitMs: NEVER_MS})
     fence.addRow('row-b', 'panel:page', 300)
-    await vi.waitFor(() => {
+    await waitFor(() => {
       expect(fence.port.scrollTop).toBe(300)
     })
     fenceCancel()
@@ -274,7 +305,7 @@ describe('alignScrollportToRow', () => {
     port.scrollTop = 0
     const row = addRow('row-b', 'panel:page', 300)
 
-    const cancel = alignScrollportToRow(port, LOCATION)
+    const cancel = alignScrollportToRow(port, LOCATION, {realignWindowMs: NEVER_MS, waitMs: NEVER_MS})
     expect(port.scrollTop).toBe(300)
 
     port.dispatchEvent(new Event('wheel'))
@@ -282,9 +313,9 @@ describe('alignScrollportToRow', () => {
     port.appendChild(document.createElement('div'))
 
     const fence = build(100)
-    const fenceCancel = alignScrollportToRow(fence.port, LOCATION)
+    const fenceCancel = alignScrollportToRow(fence.port, LOCATION, {waitMs: NEVER_MS})
     fence.addRow('row-b', 'panel:page', 300)
-    await vi.waitFor(() => {
+    await waitFor(() => {
       expect(fence.port.scrollTop).toBe(300)
     })
     fenceCancel()
@@ -294,7 +325,7 @@ describe('alignScrollportToRow', () => {
   })
 })
 
-describe('alignScrollportToRow — whose scrollport it is', () => {
+describe('alignScrollportToRow — whose scrollport it is', {timeout: TEST_BUDGET_MS}, () => {
   // A stack shares ONE `overflow-y-auto` across several panes, each of whose own
   // container is `overflow-visible`. If every pane aligned that shared port to
   // its own cursor, the stack would land wherever the last pane restored, and
@@ -333,7 +364,7 @@ describe('alignScrollportToRow — whose scrollport it is', () => {
     port.scrollTop = 0
     const row = addRow('row-b', 'some-other-scope', 300)
 
-    const cancel = alignScrollportToRow(port, LOCATION)
+    const cancel = alignScrollportToRow(port, LOCATION, {waitMs: NEVER_MS})
     expect(port.scrollTop).toBe(300)
 
     port.scrollTop = 900
@@ -357,21 +388,21 @@ describe('alignScrollportToRow — whose scrollport it is', () => {
     port.scrollTop = 0
     addRow('row-b', 'some-other-scope', 300)
 
-    const cancel = alignScrollportToRow(port, LOCATION, {realignWindowMs: 30})
+    const cancel = alignScrollportToRow(port, LOCATION, {realignWindowMs: 30, waitMs: NEVER_MS})
     expect(port.scrollTop).toBe(300)
 
     // Well past the correction window the fallback would have opened.
     await new Promise(resolve => setTimeout(resolve, 120))
     addRow('row-b', 'panel:page', 800)
 
-    await vi.waitFor(() => {
+    await waitFor(() => {
       expect(port.scrollTop).toBe(800)
     })
     cancel()
   })
 })
 
-describe('alignScrollportToRow — when the anchor never appears', () => {
+describe('alignScrollportToRow — when the anchor never appears', {timeout: TEST_BUDGET_MS}, () => {
   // Restoring by cursor assumes the cursor's row can be re-resolved after a
   // remount, and there are surfaces where it can't (a target inside an embed
   // whose source row is lazy, a layout root that renders no shell, a backlink
@@ -385,7 +416,7 @@ describe('alignScrollportToRow — when the anchor never appears', () => {
     const cancel = alignScrollportToRow(port, LOCATION, {waitMs: 60, fallbackScrollTop: 640})
     expect(port.scrollTop).toBe(0)
 
-    await vi.waitFor(() => {
+    await waitFor(() => {
       expect(port.scrollTop).toBe(640)
     })
     cancel()
@@ -401,7 +432,7 @@ describe('alignScrollportToRow — when the anchor never appears', () => {
     port.scrollTop = 0
     addRow('row-b', 'some-other-scope', 300)
 
-    const cancel = alignScrollportToRow(port, LOCATION, {realignWindowMs: 1000})
+    const cancel = alignScrollportToRow(port, LOCATION, {realignWindowMs: NEVER_MS, waitMs: NEVER_MS})
     // Fallback alignment, in the pane's own port.
     expect(port.scrollTop).toBe(300)
 
@@ -417,7 +448,7 @@ describe('alignScrollportToRow — when the anchor never appears', () => {
     nested.appendChild(exact)
     nested.scrollTop = 0
 
-    await vi.waitFor(() => {
+    await waitFor(() => {
       expect(nested.scrollTop).toBe(400)
     })
 
@@ -440,7 +471,7 @@ describe('alignScrollportToRow — when the anchor never appears', () => {
     const {port, addRow} = build(100)
     port.scrollTop = 0
 
-    const cancel = alignScrollportToRow(port, LOCATION, {waitMs: 5000, fallbackScrollTop: 640})
+    const cancel = alignScrollportToRow(port, LOCATION, {waitMs: NEVER_MS, fallbackScrollTop: 640})
 
     // Past the layout-settling grace window: this is a hand on the scrollbar.
     await new Promise(resolve => setTimeout(resolve, 150))
@@ -463,7 +494,7 @@ describe('alignScrollportToRow — when the anchor never appears', () => {
     const {port, addRow} = build(100)
     port.scrollTop = 0
 
-    const cancel = alignScrollportToRow(port, LOCATION, {waitMs: 5000, fallbackScrollTop: 640})
+    const cancel = alignScrollportToRow(port, LOCATION, {waitMs: NEVER_MS, fallbackScrollTop: 640})
 
     // Content churns, and the offset moves in the same breath.
     port.appendChild(document.createElement('div'))
@@ -473,7 +504,7 @@ describe('alignScrollportToRow — when the anchor never appears', () => {
     // The anchor arrives and must still be honoured.
     addRow('row-b', 'panel:page', 300)
 
-    await vi.waitFor(() => {
+    await waitFor(() => {
       expect(port.scrollTop).toBe(300)
     })
     cancel()
@@ -486,7 +517,7 @@ describe('alignScrollportToRow — when the anchor never appears', () => {
     const {port, addRow} = build(100)
     port.scrollTop = 0
 
-    const cancel = alignScrollportToRow(port, LOCATION, {waitMs: 5000, fallbackScrollTop: 640})
+    const cancel = alignScrollportToRow(port, LOCATION, {waitMs: NEVER_MS, fallbackScrollTop: 640})
     port.dispatchEvent(new Event('pointerdown', {bubbles: true}))
 
     addRow('row-b', 'panel:page', 300)
