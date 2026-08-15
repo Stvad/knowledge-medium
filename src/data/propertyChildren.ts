@@ -75,6 +75,19 @@ export const isFieldValueChild = (
   data: Pick<BlockData, 'isFieldForm'>,
 ): boolean => data.isFieldForm !== true
 
+/** A field row's value set — `childrenOf` narrowed by `isFieldValueChild`.
+ *
+ *  One helper for both writers on purpose: `tx.setProperty`'s eager
+ *  dual-write and the deferred materialize processor each select this set
+ *  before overwriting or folding what they find in it, so they must not be
+ *  able to disagree about what counts. Narrow it here, never at a call
+ *  site. */
+export const fieldValueChildren = async (
+  tx: Pick<Tx, 'childrenOf'>,
+  fieldRowId: string,
+): Promise<BlockData[]> =>
+  (await tx.childrenOf(fieldRowId, undefined)).filter(isFieldValueChild)
+
 
 /** Field-row content: the §7 marked field form — the `::` marker + an exact
  *  block-ref to the definition BY ID (`::((fieldId))`). Canonical and

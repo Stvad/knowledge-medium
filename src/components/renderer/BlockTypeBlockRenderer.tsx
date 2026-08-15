@@ -63,6 +63,18 @@ export const writeBlockTypeLabel = async (
     assertRoundTrippableReferenceLabel(next, 'Type label')
   }
   await block.repo.tx(async tx => {
+    // What the release path below must drop is the name this block is STORED
+    // as, not the one this editor rendered. A rename — remote, or from a
+    // second view — can land between that render and this tx, and releasing
+    // the stale captured name leaves the stored one claimed: blanking also
+    // empties `content`, so `aliasSyncProcessor`'s blank-content guard will
+    // not come back for it. Read before the writes below, which would
+    // otherwise hand back `next`.
+    const fresh = await tx.get(block.id)
+    const storedLabel = typeof fresh?.properties[blockTypeLabelProp.name] === 'string'
+      ? fresh.properties[blockTypeLabelProp.name] as string
+      : currentLabel
+    const storedContent = fresh?.content ?? currentContent
     if (next !== currentLabel) {
       await tx.setProperty(block.id, blockTypeLabelProp, next)
     }
@@ -91,7 +103,7 @@ export const writeBlockTypeLabel = async (
       // aliases stay.
       const row = await tx.get(block.id)
       if (row) {
-        const stale = new Set([currentLabel, currentContent])
+        const stale = new Set([storedLabel, storedContent])
         const aliases = getAliases(row)
         const remaining = aliases.filter(alias => !stale.has(alias))
         if (remaining.length !== aliases.length) {
