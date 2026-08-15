@@ -1,12 +1,11 @@
 // @vitest-environment node
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChangeScope } from '@/data/api'
 import { Block } from '@/data/block'
 import type { Repo } from '@/data/repo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { ActionContextTypes, type ActionConfig } from '@/shortcuts/types.js'
-import { clearPendingMove, getPendingMove, setPendingMove } from '@/utils/pendingMove.js'
 import { AGENT_PROPS } from '../chipState.ts'
 import {
   COPY_AGENT_RESUME_COMMAND_ACTION_ID,
@@ -32,10 +31,6 @@ beforeEach(async () => {
   vi.unstubAllGlobals()
   toast.showError.mockReset()
   toast.showSuccess.mockReset()
-})
-
-afterEach(() => {
-  clearPendingMove()
 })
 
 const createBlock = async (id: string, properties: Record<string, unknown> = {}) => {
@@ -110,17 +105,6 @@ describe('copyAgentResumeCommand', () => {
     expect(writeText).toHaveBeenCalledWith('codex resume --include-non-interactive \\\n  thread-1')
     expect(toast.showSuccess).toHaveBeenCalledWith('Agent resume command copied.')
     expect(toast.showError).not.toHaveBeenCalled()
-  })
-
-  it('clears an unrelated pending cut→move — this copy puts different content on the clipboard than whatever was cut', async () => {
-    setPendingMove({blockIds: ['some-other-block'], workspaceId: 'ws-1', clipboardText: 'some-other-block'})
-    const writeText = vi.fn().mockResolvedValue(undefined)
-    vi.stubGlobal('navigator', {clipboard: {writeText}})
-    const block = await createBlock('codex-task', {[AGENT_PROPS.session]: 'codex:thread-1'})
-
-    await copyAgentResumeCommand(block)
-
-    expect(getPendingMove()).toBeNull()
   })
 
   it('reports a missing usable session without writing to the clipboard', async () => {

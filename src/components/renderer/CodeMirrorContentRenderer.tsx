@@ -15,7 +15,7 @@ import {
 } from '@/paste/operations.js'
 import type { PasteRequest } from '@/paste/decision.js'
 import { tryPasteAsMoveAt } from '@/paste/moveOnPasteVerb.js'
-import { getPendingMove } from '@/utils/pendingMove.js'
+import { resolveClipboardPayload, type ClipboardPayload } from '@/paste/clipboardPayload.js'
 import { useRepo } from '@/context/repo.js'
 import { useAppRuntime } from '@/extensions/runtimeContext.js'
 import { codeMirrorExtensionsFacet } from '@/editor/codeMirrorExtensions.js'
@@ -49,10 +49,10 @@ import type { Repo } from '@/data/repo.js'
 export const resolveEditorPasteMove = (
   repo: Repo,
   block: Block,
-  text: string,
+  payload: ClipboardPayload | null,
   scopeRootId: string | undefined,
 ): Promise<boolean> =>
-  tryPasteAsMoveAt(repo, block, 'after', scopeRootId, text, 'sibling')
+  tryPasteAsMoveAt(repo, block, 'after', scopeRootId, payload, 'sibling')
 
 export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
   const repo = useRepo()
@@ -97,14 +97,15 @@ export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
     const files = e.clipboardData?.files
     const fileList = files && files.length > 0 ? Array.from(files) : []
     const text = e.clipboardData?.getData('text/plain') ?? ''
-    // A pending move must still be considered even when `text` is empty —
-    // cutting a genuinely empty block records an empty clipboardText too
-    // (see `tryPasteAsMove`'s doc) — so the no-content early return below
-    // can't fire before that's been checked. `getPendingMove()` is a
-    // synchronous, cheap check, so this costs nothing on the overwhelming
-    // majority of pastes (nothing pending).
-    const hasPendingMove = getPendingMove() !== null
-    if (!text && fileList.length === 0 && !hasPendingMove) return
+    const html = e.clipboardData?.getData('text/html') || undefined
+
+    // Resolved from THIS event's own flavors, so it describes the
+    // clipboard by construction (`@/paste/clipboardPayload.js`). Read
+    // before the no-content early return below: cutting a genuinely empty
+    // block leaves empty text, and gating on text alone would make that
+    // cut un-completable from this surface.
+    const payload = resolveClipboardPayload(text, html)
+    if (!text && fileList.length === 0 && !payload) return
 
     // Latch + reset the chord intent — the paste event can't see modifiers,
     // so the keydown handler latched it. `preventDefault` MUST run
@@ -112,20 +113,17 @@ export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
     // always takes over the paste.
     const intent = pasteIntentRef.current
     pasteIntentRef.current = 'split'
-    const html = e.clipboardData?.getData('text/html') || undefined
     e.preventDefault()
 
-    // Does this paste complete a pending cut→move (`@/utils/pendingMove.js`)?
-    // Checked before any of the paste-decision machinery below: a move
-    // relocates the ORIGINAL blocks rather than inserting text at all, and
-    // cut→paste means move regardless of which surface the paste lands on
-    // — the clipboard text IS those blocks, so inserting it as text would
-    // duplicate them (cut no longer deletes). This is the mouse-driven
-    // path (click a destination to enter edit mode, then ⌘V), so it's the
-    // common case a pending move needs to survive. If a move completes (or
-    // is refused as a would-be cycle — see `pasteAsMoveImpl`'s doc), the
-    // paste is fully handled; nothing below should also run.
-    if (await resolveEditorPasteMove(repo, block, text, blockContext.scopeRootId)) {
+    // Is this a cut being completed? Checked before any of the
+    // paste-decision machinery below: a move relocates the ORIGINAL blocks
+    // rather than inserting text at all, and cut→paste means move whichever
+    // surface the paste lands on — the clipboard text IS those blocks, so
+    // inserting it as text would duplicate them. This is the mouse-driven
+    // path (click a destination to enter edit mode, then ⌘V). If the move
+    // completes (or is refused as a would-be cycle — see `pasteAsMoveImpl`),
+    // the paste is fully handled and nothing below should also run.
+    if (await resolveEditorPasteMove(repo, block, payload, blockContext.scopeRootId)) {
       return
     }
     if (!text && fileList.length === 0) return

@@ -15,7 +15,7 @@
  * `true`, so this test exercises the SAME code the component runs, not a
  * re-implementation of it.
  */
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { ChangeScope } from '@/data/api'
 import { Repo } from '@/data/repo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
@@ -24,7 +24,7 @@ import { resolveFacetRuntimeSync } from '@/facets/facet'
 import { kernelDataExtension } from '@/data/kernelDataExtension'
 import { pasteAsMoveVerb } from '@/paste/moveOnPasteVerb'
 import { pasteAsMoveImpl } from '@/plugins/move-blocks/pasteAsMoveImpl'
-import { clearPendingMove, getPendingMove, setPendingMove } from '@/utils/pendingMove'
+import type { ClipboardPayload } from '@/paste/clipboardPayload.js'
 import { resolveEditorPasteMove } from './CodeMirrorContentRenderer.tsx'
 
 const WS = 'ws-1'
@@ -59,8 +59,6 @@ beforeEach(async () => {
   }, { scope: ChangeScope.BlockDefault, description: 'seed' })
 })
 
-afterEach(() => { clearPendingMove() })
-
 const childIds = async (parentId: string): Promise<string[]> => {
   const rows = await repo.db.getAll<{ id: string }>(
     'SELECT id FROM blocks WHERE parent_id = ? AND deleted = 0 ORDER BY order_key, id',
@@ -76,17 +74,17 @@ const rootChildIds = async (): Promise<string[]> => {
   return rows.map(r => r.id)
 }
 
+const cutPayload = (blockIds: string[]): ClipboardPayload => ({ blockIds, workspaceId: WS, intent: 'cut' })
+
 describe('resolveEditorPasteMove', () => {
-  it('returns false and touches nothing when nothing is pending — this is the common case for every ordinary editor paste', async () => {
-    const result = await resolveEditorPasteMove(repo, repo.block('dest'), 'some pasted text', undefined)
+  it('returns false and touches nothing when there is no payload — this is the common case for every ordinary editor paste', async () => {
+    const result = await resolveEditorPasteMove(repo, repo.block('dest'), null, undefined)
     expect(result).toBe(false)
     expect(await childIds('dest')).toEqual(['kid'])
   })
 
   it('completes the move — clicking into "dest" (entering edit mode) then pasting the cut block relocates it with the SAME id instead of duplicating it', async () => {
-    setPendingMove({ blockIds: ['a'], workspaceId: WS, clipboardText: 'a' })
-
-    const result = await resolveEditorPasteMove(repo, repo.block('dest'), 'a', undefined)
+    const result = await resolveEditorPasteMove(repo, repo.block('dest'), cutPayload(['a']), undefined)
 
     expect(result).toBe(true)
     // Moved, not duplicated: the SAME id 'a' — not a new id minted from
@@ -99,7 +97,6 @@ describe('resolveEditorPasteMove', () => {
     expect(await childIds('src')).toEqual([])
     expect(await childIds('dest')).toEqual(['a', 'kid'])
     expect(await rootChildIds()).toEqual(['src', 'dest', 'after', 'outer'])
-    expect(getPendingMove()).toBeNull()
   })
 
   it('targets sibling-AFTER a NON-root destination even when it has visible children — that is what placement "sibling" suppresses', async () => {
@@ -108,9 +105,7 @@ describe('resolveEditorPasteMove', () => {
     // OFF the "after a block showing its children ⇒ first child" rule.
     // The move target has to match, or completing a cut lands somewhere
     // an ordinary paste at the same caret wouldn't.
-    setPendingMove({ blockIds: ['a'], workspaceId: WS, clipboardText: 'a' })
-
-    await resolveEditorPasteMove(repo, repo.block('inner'), 'a', undefined)
+    await resolveEditorPasteMove(repo, repo.block('inner'), cutPayload(['a']), undefined)
 
     // Sibling of 'inner' under 'outer', NOT a child of 'inner' next to
     // 'innerkid'.
@@ -125,35 +120,19 @@ describe('resolveEditorPasteMove', () => {
     // a slot OUTSIDE that surface. They left the source and never visibly
     // arrived, which reads as data loss. `resolveRootDestination` applies
     // its scope-root rule for BOTH placements, so the move must too.
-    setPendingMove({ blockIds: ['a'], workspaceId: WS, clipboardText: 'a' })
-
     // 'inner' is the render-scope root here — the pane is zoomed into it.
-    await resolveEditorPasteMove(repo, repo.block('inner'), 'a', 'inner')
+    await resolveEditorPasteMove(repo, repo.block('inner'), cutPayload(['a']), 'inner')
 
     expect(repo.block('a').peek()?.parentId).toBe('inner')
     expect(await childIds('inner')).toEqual(['a', 'innerkid'])
   })
 
-  it('is a no-op fallback (not a move) when the pasted text does not match the pending move\'s clipboard text', async () => {
-    setPendingMove({ blockIds: ['a'], workspaceId: WS, clipboardText: 'a' })
+  it('is a no-op fallback (not a move) when the payload is a COPY rather than a cut', async () => {
+    const payload: ClipboardPayload = { blockIds: ['a'], workspaceId: WS, intent: 'copy' }
 
-    const result = await resolveEditorPasteMove(repo, repo.block('dest'), 'unrelated pasted text', undefined)
+    const result = await resolveEditorPasteMove(repo, repo.block('dest'), payload, undefined)
 
     expect(result).toBe(false)
     expect(repo.block('a').peek()?.parentId).toBe('src') // untouched
-  })
-
-  // Cutting a genuinely EMPTY block records an empty clipboardText. If this
-  // helper (or `tryPasteAsMove` underneath it) refused on empty text, that
-  // cut could never complete via the editor surface — the block would stay
-  // marked forever every time the user clicks in and pastes.
-  it('completes the move even when the pasted text is empty, matching an empty-block cut', async () => {
-    await repo.block('a').setContent('')
-    setPendingMove({ blockIds: ['a'], workspaceId: WS, clipboardText: '' })
-
-    const result = await resolveEditorPasteMove(repo, repo.block('dest'), '', undefined)
-
-    expect(result).toBe(true)
-    expect(repo.block('a').peek()?.parentId).toBe('dest')
   })
 })

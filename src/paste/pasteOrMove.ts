@@ -26,6 +26,7 @@ import type { Block } from '@/data/block.js'
 import type { Repo } from '@/data/repo.js'
 import { pasteFromClipboard } from '@/paste/operations.js'
 import { tryPasteAsMoveAt } from '@/paste/moveOnPasteVerb.js'
+import { recallPayloadForText } from '@/paste/clipboardPayload.js'
 
 export interface PasteOrMoveResult {
   /** A pending cut→move was consumed — completed, or refused as a
@@ -52,12 +53,20 @@ export const pasteOrMove = async (
 ): Promise<PasteOrMoveResult> => {
   const clipboardText = await navigator.clipboard.readText()
 
-  // Asked even when `clipboardText` is empty: cutting a genuinely empty
-  // block records an empty sentinel too, and gating on non-empty text
-  // would leave that cut marked forever (see `tryPasteAsMove`'s doc).
-  // `pasteFromClipboard` keeps its own empty-text bail below.
+  // This is a KEYBOARD-driven paste — a bare `p` fires no paste event, so
+  // there is no `DataTransfer` and no flavors, only text. That's exactly
+  // what the content-keyed table in `@/paste/clipboardPayload.js` is for,
+  // and why `navigator.clipboard.read()` isn't used here: it isn't
+  // supported everywhere, and a move that worked in some browsers and not
+  // others is worse than one resolution path that works in all of them.
+  //
+  // Asked even when `clipboardText` is empty — cutting a genuinely empty
+  // block leaves empty text, and gating on non-empty text would make that
+  // cut un-completable from this surface. `pasteFromClipboard` keeps its
+  // own empty-text bail below.
+  const payload = recallPayloadForText(clipboardText)
   const moved = await tryPasteAsMoveAt(
-    repo, anchor, position, scopeRootId, clipboardText, placement,
+    repo, anchor, position, scopeRootId, payload, placement,
   )
   if (moved) return {moved: true, pasted: []}
 

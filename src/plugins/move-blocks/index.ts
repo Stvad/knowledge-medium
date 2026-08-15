@@ -13,10 +13,9 @@
  *   - `pasteAsMoveImpl.ts`        — fills core's `pasteAsMoveVerb` seam, so a
  *     cut→paste (`@/shortcuts/defaultShortcuts.js`) completes as a real move
  *     instead of a text paste when the plugin is installed
- *   - `pendingMoveStyling.tsx`    — dims a block while its cut is pending
  */
 import { actionsFacet } from '@/extensions/core.js'
-import { blockContextMenuItemsFacet, blockShellDecoratorsFacet } from '@/extensions/blockInteraction.js'
+import { blockContextMenuItemsFacet } from '@/extensions/blockInteraction.js'
 import type { AppExtension } from '@/facets/facet.js'
 import { dialogAppMountExtension } from '@/extensions/dialogAppMount.js'
 import { systemToggle } from '@/facets/togglable.js'
@@ -24,7 +23,6 @@ import { pasteAsMoveVerb } from '@/paste/moveOnPasteVerb.js'
 import { moveBlockAction, moveBlocksAction } from './moveAction.ts'
 import { moveBlocksContextMenuItem } from './contextMenuItem.ts'
 import { pasteAsMoveImpl } from './pasteAsMoveImpl.ts'
-import { pendingMoveStyling } from './pendingMoveStyling.tsx'
 
 export {
   MOVE_BLOCKS_ACTION_ID,
@@ -55,13 +53,10 @@ export const moveBlocksPlugin: AppExtension = systemToggle({
   // command has no dependable way to be invoked.
   blockContextMenuItemsFacet.of(moveBlocksContextMenuItem, {source: 'move-blocks'}),
   // Fills core's cut→paste seam (`@/paste/moveOnPasteVerb.js`) so a paste
-  // that finds a still-valid pending cut relocates the original blocks
-  // (preserving ids/refs) instead of falling back to a text paste. With
-  // this plugin off, cut still marks the register (core does that
-  // unconditionally) but every paste degrades to an ordinary text paste —
-  // no data loss, just no move.
+  // carrying a cut payload relocates the original blocks (preserving
+  // ids/refs) instead of falling back to a text paste. With this plugin
+  // off, cut still writes the payload (core does that unconditionally) but
+  // every paste degrades to an ordinary text paste — no data loss, just no
+  // move.
   pasteAsMoveVerb.impl(pasteAsMoveImpl, {source: 'move-blocks'}),
-  // A decorator, not a class facet: only a component can SUBSCRIBE to the
-  // register, and this mark is the sole feedback a (non-deleting) cut gives.
-  blockShellDecoratorsFacet.of(pendingMoveStyling, {source: 'move-blocks'}),
 ])

@@ -20,7 +20,7 @@ import { resolveFacetRuntimeSync } from '@/facets/facet'
 import { kernelDataExtension } from '@/data/kernelDataExtension'
 import { pasteAsMoveVerb } from '@/paste/moveOnPasteVerb'
 import { pasteAsMoveImpl } from '@/plugins/move-blocks/pasteAsMoveImpl'
-import { clearPendingMove, getPendingMove, setPendingMove } from '@/utils/pendingMove'
+import { rememberPayload, resetRememberedPayloads } from '@/paste/clipboardPayload'
 import { ActionContextTypes, type ActionConfig, type ActionTrigger, type BlockShortcutDependencies } from '@/shortcuts/types'
 import { getVimNormalModeActions } from '../actions.ts'
 
@@ -32,6 +32,7 @@ beforeAll(async () => { sharedDb = await createTestDb() })
 afterAll(async () => { await sharedDb.cleanup() })
 
 beforeEach(async () => {
+  resetRememberedPayloads()
   await resetTestDb(sharedDb.db)
   repo = createTestRepo({ db: sharedDb.db, user: { id: 'user-1' } }).repo
   repo.setActiveWorkspaceId(WS)
@@ -42,7 +43,6 @@ beforeEach(async () => {
 })
 
 afterEach(() => {
-  clearPendingMove()
   vi.unstubAllGlobals()
 })
 
@@ -77,9 +77,9 @@ const seed = async (): Promise<void> => {
 }
 
 describe('vim paste_after / paste_before completing a pending cut as a move', () => {
-  it('paste_after moves the cut block (same id) instead of duplicating it, when the pasted text matches the register', async () => {
+  it('paste_after moves the cut block (same id) instead of duplicating it, when the pasted text matches the remembered payload', async () => {
     await seed()
-    setPendingMove({ blockIds: ['a'], workspaceId: WS, clipboardText: 'a' })
+    rememberPayload('a', { blockIds: ['a'], workspaceId: WS, intent: 'cut' })
     const readText = vi.fn(async () => 'a')
     vi.stubGlobal('navigator', { clipboard: { readText, writeText: vi.fn() } })
 
@@ -95,7 +95,6 @@ describe('vim paste_after / paste_before completing a pending cut as a move', ()
     // re-parsing the pasted markdown.
     expect(await childIds('src')).toEqual([])
     expect(repo.block('a').peek()?.parentId).toBe('root')
-    expect(getPendingMove()).toBeNull()
     // Single up-front clipboard read — not re-read again for a fallback
     // (there's no fallback here since the move completed).
     expect(readText).toHaveBeenCalledTimes(1)
@@ -103,7 +102,7 @@ describe('vim paste_after / paste_before completing a pending cut as a move', ()
 
   it('paste_before also completes the move', async () => {
     await seed()
-    setPendingMove({ blockIds: ['a'], workspaceId: WS, clipboardText: 'a' })
+    rememberPayload('a', { blockIds: ['a'], workspaceId: WS, intent: 'cut' })
     vi.stubGlobal('navigator', { clipboard: { readText: vi.fn(async () => 'a'), writeText: vi.fn() } })
 
     const action = findAction('paste_before')
@@ -115,12 +114,11 @@ describe('vim paste_after / paste_before completing a pending cut as a move', ()
 
     expect(await childIds('src')).toEqual([])
     expect(repo.block('a').peek()?.parentId).toBe('root')
-    expect(getPendingMove()).toBeNull()
   })
 
-  it('falls back to an ordinary text paste (not a move) when the clipboard no longer matches the register', async () => {
+  it('falls back to an ordinary text paste (not a move) when the clipboard no longer matches the remembered payload', async () => {
     await seed()
-    setPendingMove({ blockIds: ['a'], workspaceId: WS, clipboardText: 'a' })
+    rememberPayload('a', { blockIds: ['a'], workspaceId: WS, intent: 'cut' })
     const readText = vi.fn(async () => 'unrelated text copied since the cut')
     vi.stubGlobal('navigator', { clipboard: { readText, writeText: vi.fn() } })
 
@@ -147,7 +145,7 @@ describe('vim paste_after / paste_before completing a pending cut as a move', ()
       await tx.create({ id: 'scope', workspaceId: WS, parentId: 'workspaceRoot', orderKey: 'a0', content: 'scope' })
       await tx.create({ id: 'a', workspaceId: WS, parentId: 'workspaceRoot', orderKey: 'a1', content: 'a' })
     }, { scope: ChangeScope.BlockDefault })
-    setPendingMove({ blockIds: ['a'], workspaceId: WS, clipboardText: 'a' })
+    rememberPayload('a', { blockIds: ['a'], workspaceId: WS, intent: 'cut' })
     vi.stubGlobal('navigator', { clipboard: { readText: vi.fn(async () => 'a'), writeText: vi.fn() } })
 
     const action = findAction('paste_after')

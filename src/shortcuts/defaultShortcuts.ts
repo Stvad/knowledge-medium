@@ -1264,7 +1264,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
    * with a clipboard write bolted on; now a true (non-destructive) cut. It
    * serializes the selection to markdown, writes that to the OS clipboard
    * (unchanged from before), and marks the ids as a pending move
-   * (`cutBlockIdsToClipboard`, `@/utils/pendingMove.js`) — nothing is
+   * (`cutBlockIdsToClipboard`, `@/paste/clipboardPayload.js`) — nothing is
    * deleted or reparsed. The blocks stay exactly where they are until a
    * paste completes the move (`pasteOrMove`, wired into
    * `paste_after_selection` / `paste_before_selection` below), so an

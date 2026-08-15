@@ -6,7 +6,7 @@
  * `captureMediaVerb`'s "no provider installed" default. The move-blocks
  * plugin's actual decision logic is `pasteAsMoveImpl.test.ts`.
  */
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { ChangeScope } from '@/data/api'
 import type { Repo } from '@/data/repo.js'
 import { Repo as RealRepo } from '@/data/repo'
@@ -15,9 +15,9 @@ import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { keyBetween } from '@/data/orderKey'
 import { isCollapsedProp } from '@/data/properties.js'
-import { clearPendingMove, setPendingMove } from '@/utils/pendingMove.js'
 import { kernelDataExtension } from '@/data/kernelDataExtension'
 import { pasteAsMoveImpl } from '@/plugins/move-blocks/pasteAsMoveImpl'
+import type { ClipboardPayload } from '@/paste/clipboardPayload.js'
 import {
   pasteAsMoveVerb,
   resolvePasteMoveTarget,
@@ -26,13 +26,17 @@ import {
   type PasteAsMoveInput,
 } from './moveOnPasteVerb.ts'
 
+const WS = 'ws-1'
+
 describe('pasteAsMoveVerb', () => {
+  const payload: ClipboardPayload = { blockIds: ['a'], workspaceId: WS, intent: 'cut' }
+
   it('defaults to "not a move" (false) with no impl installed', async () => {
     const runtime = resolveFacetRuntimeSync([])
     const input: PasteAsMoveInput = {
       repo: {} as Repo,
       target: { parentId: null, position: { kind: 'last' } },
-      clipboardText: 'anything',
+      payload,
     }
     expect(await pasteAsMoveVerb.run(runtime, input)).toBe(false)
   })
@@ -44,45 +48,29 @@ describe('pasteAsMoveVerb', () => {
     ])
     const target = { parentId: 'p', position: { kind: 'last' } as const }
     const result = await pasteAsMoveVerb.run(runtime, {
-      repo: {} as Repo, target, clipboardText: 'x',
+      repo: {} as Repo, target, payload,
     })
     expect(result).toBe(true)
     expect(seen[0]?.target).toBe(target)
-    expect(seen[0]?.clipboardText).toBe('x')
+    expect(seen[0]?.payload).toBe(payload)
   })
 })
 
 describe('tryPasteAsMove', () => {
   const target = { parentId: null, position: { kind: 'last' } as const }
+  const cutPayload: ClipboardPayload = { blockIds: ['a'], workspaceId: WS, intent: 'cut' }
 
   it('is false without touching the verb when there is no facet runtime yet', async () => {
     const repo = { facetRuntime: null } as unknown as Repo
-    expect(await tryPasteAsMove(repo, target, 'some text')).toBe(false)
-  })
-
-  // Cutting a genuinely EMPTY block records an empty `clipboardText` in the
-  // pending-move register (`cutBlockIdsToClipboard`). If this short-circuited
-  // on empty text, that cut could never complete — the block would stay
-  // marked forever with no paste able to reach the impl and finish the move.
-  it('runs the verb even when the clipboard text is empty — only the text-paste fallback needs its own non-empty guard', async () => {
-    const seen: PasteAsMoveInput[] = []
-    const runtime = resolveFacetRuntimeSync([
-      pasteAsMoveVerb.impl((i): boolean => { seen.push(i); return true }),
-    ])
-    const repo = { facetRuntime: runtime } as unknown as Repo
-    expect(await tryPasteAsMove(repo, target, '')).toBe(true)
-    expect(seen).toHaveLength(1)
-    expect(seen[0]?.clipboardText).toBe('')
+    expect(await tryPasteAsMove(repo, target, cutPayload)).toBe(false)
   })
 
   it('runs the verb through repo.facetRuntime when both are present', async () => {
     const runtime = resolveFacetRuntimeSync([pasteAsMoveVerb.impl(() => true)])
     const repo = { facetRuntime: runtime } as unknown as Repo
-    expect(await tryPasteAsMove(repo, target, 'some text')).toBe(true)
+    expect(await tryPasteAsMove(repo, target, cutPayload)).toBe(true)
   })
 })
-
-const WS = 'ws-1'
 
 describe('resolvePasteMoveTarget / tryPasteAsMoveAt', () => {
   let sharedDb: TestDb
@@ -195,8 +183,6 @@ describe('resolvePasteMoveTarget / tryPasteAsMoveAt', () => {
   })
 
   describe('tryPasteAsMoveAt', () => {
-    afterEach(() => { clearPendingMove() })
-
     const withPasteAsMoveInstalled = (): void => {
       repo.setFacetRuntime(resolveFacetRuntimeSync([
         kernelDataExtension,
@@ -204,13 +190,13 @@ describe('resolvePasteMoveTarget / tryPasteAsMoveAt', () => {
       ]))
     }
 
-    it('returns false without resolving a target when nothing is pending', async () => {
+    it('returns false without resolving a target when there is no payload', async () => {
       await seed('scope', null)
-      const result = await tryPasteAsMoveAt(repo, repo.block('scope'), 'after', 'scope', 'whatever')
+      const result = await tryPasteAsMoveAt(repo, repo.block('scope'), 'after', 'scope', null)
       expect(result).toBe(false)
     })
 
-    it('completes a pending move at a scope root as FIRST CHILD, not literally after it', async () => {
+    it('completes a move at a scope root as FIRST CHILD, not literally after it', async () => {
       // This is the case a hardcoded sibling-after target gets wrong: 'scope'
       // is the render-scope root (nested under 'workspaceRoot', so this
       // isolates the scope-root check from the separate workspace-root
@@ -221,9 +207,9 @@ describe('resolvePasteMoveTarget / tryPasteAsMoveAt', () => {
       await seed('scope', 'workspaceRoot')
       await seed('a', 'workspaceRoot')
       withPasteAsMoveInstalled()
-      setPendingMove({ blockIds: ['a'], workspaceId: WS, clipboardText: 'a' })
+      const payload: ClipboardPayload = { blockIds: ['a'], workspaceId: WS, intent: 'cut' }
 
-      const result = await tryPasteAsMoveAt(repo, repo.block('scope'), 'after', 'scope', 'a')
+      const result = await tryPasteAsMoveAt(repo, repo.block('scope'), 'after', 'scope', payload)
 
       expect(result).toBe(true)
       expect(repo.block('a').peek()?.parentId).toBe('scope')

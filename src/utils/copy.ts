@@ -2,7 +2,7 @@ import { Block } from '../data/block'
 import { ClipboardData } from '../types'
 import type { Repo } from '../data/repo'
 import { selectionStateProp } from '@/data/properties.js'
-import { clearPendingMove, setPendingMove } from '@/utils/pendingMove.js'
+import { encodePayloadHtml, rememberPayload, type ClipboardPayload } from '@/paste/clipboardPayload.js'
 import { showError } from '@/utils/toast.js'
 import { validateSelectionHierarchy } from '@/utils/selection.js'
 
@@ -47,87 +47,58 @@ export const serializeBlock = async (block: Block): Promise<ClipboardData> => {
   }
 }
 
-/**
- * A single monotonic counter standing for "the clipboard's claim has
- * changed hands". Advanced by every clipboard write below
- * (`writeToClipboard` / `writeTextToClipboard`), alongside the
- * pending-move clear they already do, AND by each cut at entry — see
- * `cutBlockIdsToClipboard`, where the difference between claiming a
- * number and merely reading one decides which of two overlapping cuts
- * wins.
- *
- * A cut needs this because it isn't atomic: it awaits hierarchy
- * validation, subtree serialization, and its own write, and any other cut
- * or copy can land in those gaps. A cut that resumed into a clipboard
- * someone else had claimed used to publish anyway, leaving the register
- * pointing at one selection while the clipboard held another — worst in
- * the write-refused path, where it snapshots the OTHER gesture's text as
- * its own sentinel, so the next paste moves the wrong blocks AND
- * swallows what the user actually copied.
- *
- * Writes advance it BEFORE their await (next to the clear, which is
- * likewise unconditional) so a REFUSED write still counts as "the
- * clipboard moved on" — nothing downstream can know what the OS clipboard
- * ended up holding, so the safe reading is that it is no longer ours.
- */
-let clipboardEpoch = 0
-
-/** Read-only view, for the paste side: `pasteAsMoveImpl` claims the
- *  register and then awaits, so it has to know whether the clipboard
- *  changed hands before it hands that claim back. */
-export const clipboardClaim = (): number => clipboardEpoch
-
-const createClipboardItem = (data: ClipboardData): ClipboardItem =>
+/** Both flavors, always in step because they're built from the same
+ *  `markdown` in one place. The html flavor is what carries block identity
+ *  to a paste (`@/paste/clipboardPayload.js`); the plain-text flavor stays
+ *  the canonical rendering and is what other apps mostly take. */
+const createClipboardItem = (data: ClipboardData, payload: ClipboardPayload): ClipboardItem =>
   new ClipboardItem({
     'text/plain': new Blob([data.markdown], {type: 'text/plain'}),
-    // Todo
-    // 'application/json': new Blob([JSON.stringify(data.blocks)], {type: 'application/json'}),
+    'text/html': new Blob([encodePayloadHtml(data.markdown, payload)], {type: 'text/html'}),
   })
 
-/** Exported so `cutBlockIdsToClipboard` (below) can write the SAME
- *  `ClipboardData` it also hands to `setPendingMove` — the register's
- *  `clipboardText` has to be exactly what landed on the OS clipboard, not a
- *  second, separately-serialized copy.
+/** Write `data` to the OS clipboard, tagged with the identity of the
+ *  blocks it came from.
  *
- *  Clears any OTHER pending cut→move first: this write is about to put
- *  different content on the clipboard, which invalidates whatever move was
- *  pending (see `@/utils/pendingMove.js`) — without this, cutting block A,
- *  then copying block B, then pasting would silently MOVE A instead of
- *  copying B, because nothing ever told the register a different copy
- *  happened. Cleared unconditionally (before the write, not after) so it
- *  fires even when the write itself is refused. Harmless for the cut's OWN
- *  write: `cutBlockIdsToClipboard` calls this first and then calls
- *  `setPendingMove` right after, re-arming the register it just cleared. */
-export const writeToClipboard = async (data: ClipboardData): Promise<void> => {
-  clipboardEpoch += 1
-  clearPendingMove()
-  await navigator.clipboard.write([createClipboardItem(data)])
+ *  `rememberPayload` covers the paste paths that can only read
+ *  `text/plain` (a bare `p` keypress fires no paste event, so there are no
+ *  flavors to read); the html flavor covers everything else and works
+ *  across tabs. Both are keyed by the content itself, so there is nothing
+ *  to invalidate here when a later copy happens — see
+ *  `@/paste/clipboardPayload.js`.
+ *
+ *  Remembered BEFORE the await: if the write is refused, the OS clipboard
+ *  keeps whatever it had, and the table entry for text we never wrote is
+ *  simply unreachable. */
+export const writeToClipboard = async (
+  data: ClipboardData,
+  payload: ClipboardPayload,
+): Promise<void> => {
+  rememberPayload(data.markdown, payload)
+  await navigator.clipboard.write([createClipboardItem(data, payload)])
 }
 
-export const copyBlockToClipboard = async (block: Block): Promise<void> =>
-  writeToClipboard(await serializeBlock(block))
+export const copyBlockToClipboard = async (block: Block): Promise<void> => {
+  const data = await serializeBlock(block)
+  const workspaceId = block.peek()?.workspaceId ?? block.repo.activeWorkspaceId
+  if (!workspaceId) return
+  await writeToClipboard(data, {blockIds: [block.id], workspaceId, intent: 'copy'})
+}
 
-/** Plain-text counterpart to `writeToClipboard` above — same "clear any
- *  pending cut→move first" choke point, for the many call sites that write
- *  a bare string rather than the rich subtree `ClipboardItem` (a block id,
- *  a `((ref))`/`!((embed))`, a link, an audit sample, a resume command, an
- *  agent token, a workspace key, …). Every direct
- *  `navigator.clipboard.writeText` call site in the app should route
- *  through this (or `writeTextToClipboardBestEffort` below, for a caller
- *  that doesn't await/catch) instead of calling the browser API itself —
- *  see `writeToClipboard`'s doc for why bypassing the choke point is
- *  dangerous: a write that doesn't clear the register can leave it
- *  pointing at content the clipboard no longer holds, and the next paste
- *  silently MOVES whatever was cut instead of pasting what was just
- *  copied.
+/** Plain-text counterpart to `writeToClipboard`, for the call sites that
+ *  write a bare string rather than a block subtree (a block id, a
+ *  `((ref))`/`!((embed))`, a link, an audit sample, a resume command, an
+ *  agent token, a workspace key, …). These carry no block identity, so
+ *  they write no payload.
  *
- *  Delegates straight to `navigator.clipboard.writeText` — same
- *  synchronous-throw/rejection behaviour — so a caller that already
- *  awaits/catches a raw `navigator.clipboard.writeText(text)` call can
- *  swap this in unchanged. */
+ *  A named seam rather than load-bearing machinery: it used to be the
+ *  choke point where every clipboard write cleared the pending-move
+ *  register, and skipping it could make the next paste move the wrong
+ *  blocks. Nothing depends on it now — clipboard payloads are keyed by
+ *  content, so a write that bypassed this would be resolved correctly
+ *  anyway. Kept because one place for clipboard text writes is worth
+ *  having, not because correctness needs it. */
 export const writeTextToClipboard = async (text: string): Promise<void> => {
-  clipboardEpoch += 1
-  clearPendingMove()
   await navigator.clipboard.writeText(text)
 }
 
@@ -218,52 +189,44 @@ export const copyBlockIdsToClipboard = async (
     console.log('No blocks selected to copy')
     return
   }
-  await writeToClipboard(await serializeSelectedBlocks([...blockIds], repo))
+  const workspaceId = repo.activeWorkspaceId
+  if (!workspaceId) return
+  const data = await serializeSelectedBlocks([...blockIds], repo)
+  await writeToClipboard(data, {
+    blockIds: data.serializedIds,
+    workspaceId,
+    intent: 'copy',
+  })
 }
 
-/** Cut: like `copyBlockIdsToClipboard`, but ALSO marks `blockIds` as a
- *  pending move (`@/utils/pendingMove.js`) instead of deleting them —
- *  nothing here touches the blocks table. A paste that later finds the
- *  register still valid (workspace matches, the clipboard sentinel still
- *  matches, at least one id still live, destination outside the moved
- *  subtrees — see `pasteAsMoveImpl` in the move-blocks plugin) completes
- *  the relocation via `moveBlocksTo`, preserving ids so refs into the cut
- *  subtree survive; anything else, including no paste at all, leaves the
- *  blocks exactly where they were.
+/** Cut: `copyBlockIdsToClipboard` with `intent: 'cut'`, so a paste that
+ *  recognises the payload RELOCATES these blocks (ids preserved, refs into
+ *  the subtree survive) instead of re-parsing the markdown into new ones.
+ *  Nothing here touches the blocks table — no paste, no change.
  *
- *  Returns whether it actually marked anything — false for an empty
- *  `blockIds`, no active workspace, or a clipboard that's entirely
- *  unreachable (see below), so callers (e.g. to decide whether to also
- *  clear a UI selection) don't have to re-check.
+ *  Returns whether the cut is live, so callers can decide whether to also
+ *  clear a UI selection.
  *
- *  Normalizes `blockIds` through `validateSelectionHierarchy` BEFORE
- *  serializing: an ancestor+descendant pair in the selection (the
- *  invariant is only enforced at write time — cache-only, nothing
- *  re-validates it after a sync-applied reparent lands under it) would
- *  otherwise serialize the descendant TWICE — once nested inside the
- *  ancestor's subtree, once again as its own top-level entry — duplicating
- *  it in the clipboard markdown. `moveBlocksTo` prunes the same way
- *  internally when the move eventually runs, so normalizing up front here
- *  keeps the register, the clipboard text, and the eventual move all
- *  describing the identical set.
+ *  Normalizes through `validateSelectionHierarchy` BEFORE serializing: an
+ *  ancestor+descendant pair in the selection (the invariant is enforced
+ *  only at write time — cache-only, nothing re-validates it after a
+ *  sync-applied reparent lands under it) would otherwise serialize the
+ *  descendant TWICE, once nested in the ancestor's subtree and once as its
+ *  own entry. `moveBlocksTo` prunes identically when the move runs, so
+ *  normalizing here keeps the payload, the clipboard text and the eventual
+ *  move describing the same set.
  *
- *  Best-effort on the actual OS write, and deliberately NOT
- *  awaited-then-thrown: the register is what makes cut→paste a move; the
- *  clipboard write is the secondary courtesy that lets the same cut paste
- *  into another app. Letting a refused write (`NotAllowedError` —
- *  non-secure context, no user gesture, a stricter browser) propagate
- *  would abort before `setPendingMove` and make ⌘X a total no-op: nothing
- *  marked, nothing deleted, no feedback. Verified reachable — the write is
- *  refused outright in an automated browser context.
+ *  Carries `data.serializedIds`, not `normalizedIds`: a root that failed
+ *  to serialize (see `SerializedSelection`) is absent from the markdown
+ *  and must be absent from the payload too, or a paste would relocate
+ *  content the clipboard never represented.
  *
- *  When the write is refused, the register still needs SOME invalidation
- *  sentinel (see `PendingMove.clipboardText`'s doc) — read back whatever is
- *  currently on the clipboard and use that: "nothing copied since the cut"
- *  is still a sound signal even though it isn't our own markdown. Only when
- *  BOTH the write and the read are refused is there no usable sentinel at
- *  all; the cut can't be marked, so it's abandoned outright (toast, no
- *  register) rather than armed with no invalidation check — that would let
- *  ANY next paste, anywhere, complete as a move. */
+ *  A refused OS write (`NotAllowedError` — non-secure context, no user
+ *  gesture) fails the cut outright rather than half-arming it. Nothing to
+ *  unwind: the payload is remembered against text that never reached the
+ *  clipboard, so no paste can match it. (The old register needed an
+ *  elaborate read-back-the-clipboard-as-a-sentinel dance here precisely
+ *  because it COULD be armed independently of the write.) */
 export const cutBlockIdsToClipboard = async (
   blockIds: readonly string[],
   repo: Repo,
@@ -272,56 +235,19 @@ export const cutBlockIdsToClipboard = async (
   const workspaceId = repo.activeWorkspaceId
   if (!workspaceId) return false
 
-  // CLAIM a slot in the epoch rather than merely snapshotting it. The
-  // difference matters when two cuts are both still serializing: with a
-  // snapshot they'd hold the same number, and whichever finished FIRST
-  // would win — so a slow ⌘X on A followed by a quick ⌘X on B could leave
-  // A cut, silently dropping the user's most recent gesture. Claiming
-  // orders the gestures by when they STARTED, which is the order the user
-  // made them in, so the later cut always supersedes the earlier one.
-  const ticket = ++clipboardEpoch
-
   const normalizedIds = await validateSelectionHierarchy([...blockIds], repo)
-
   const data = await serializeSelectedBlocks(normalizedIds, repo)
-  // Defence in depth, NOT the load-bearing check — the one after the
-  // write is (it's what stops a stale register from replacing the live
-  // one, and what stops the read-back path arming these ids against
-  // another gesture's text). This earlier bail only keeps a superseded
-  // cut's markdown off a clipboard someone else has already claimed;
-  // without it the post-write check still holds the register correct and
-  // the worst outcome is a text paste of the older cut's content.
-  // Unpinned by tests for that reason: the suspension point it needs
-  // (`repo.query.subtree`, reached through a dispatch Proxy) can't be
-  // stubbed without replacing `repo.query` wholesale, which costs more
-  // than the case is worth.
-  if (clipboardEpoch !== ticket) return false
 
-  let clipboardText = data.markdown
   try {
-    await writeToClipboard(data)
+    await writeToClipboard(data, {
+      blockIds: data.serializedIds,
+      workspaceId,
+      intent: 'cut',
+    })
   } catch (error) {
-    console.warn('[cut] clipboard write refused; reading back the existing clipboard as the invalidation sentinel', error)
-    try {
-      clipboardText = await navigator.clipboard.readText()
-    } catch (readError) {
-      console.warn('[cut] clipboard read also refused; cut cannot be marked as a pending move', readError)
-      showError("Couldn't access the clipboard — cut was cancelled")
-      return false
-    }
+    console.warn('[cut] clipboard write refused; cut cancelled', error)
+    showError("Couldn't access the clipboard — cut was cancelled")
+    return false
   }
-  // Exactly one bump — our own `writeToClipboard` above, which bumps even
-  // when the underlying write is refused. Anything else means another cut
-  // or copy replaced the clipboard while we were awaiting, so this
-  // register would describe content the clipboard no longer holds; in the
-  // read-back path it would be armed against the OTHER gesture's text
-  // outright, and the next paste would move these blocks while swallowing
-  // what the user actually copied.
-  if (clipboardEpoch !== ticket + 1) return false
-  // Arm with `data.serializedIds`, not `normalizedIds` — a root that
-  // failed to serialize (see `SerializedSelection`'s doc) is absent from
-  // `clipboardText` above yet would still relocate on paste if armed here,
-  // moving content the clipboard never represented.
-  setPendingMove({blockIds: data.serializedIds, workspaceId, clipboardText})
   return true
 }

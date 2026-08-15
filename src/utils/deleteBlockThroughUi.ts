@@ -56,8 +56,8 @@ export const deleteBlockThroughUi = async (block: Block): Promise<boolean> =>
  *  `multi_select.delete_block` (bound to `Delete`) passes its whole selection
  *  here directly. `cut_selected_blocks` (bound to `$mod+x` / `d`) no longer
  *  does — since issue "true block move instead of serialize-delete-reparse"
- *  it marks the selection as a pending move instead of deleting anything, so
- *  it never reaches this module at all; see `@/utils/pendingMove.js` /
+ *  cut is non-destructive: it puts the blocks' identity on the clipboard and
+ *  a later paste relocates them, so it never reaches this module at all. See
  *  `@/utils/copy.js`'s `cutBlockIdsToClipboard`. */
 export const deleteBlocksThroughUi = async (blocks: readonly Block[]): Promise<boolean> => {
   if (!await ensureDeletableThroughUi(blocks)) return false

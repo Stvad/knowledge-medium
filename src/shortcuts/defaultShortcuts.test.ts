@@ -52,7 +52,7 @@ import { createSharedBlockActions } from '@/shortcuts/blockActions'
 import { blockDeletionGuardsFacet } from '@/extensions/core'
 import { kernelDataExtension } from '@/data/kernelDataExtension'
 import { resolveFacetRuntimeSync, type AppExtension } from '@/facets/facet'
-import { clearPendingMove, getPendingMove } from '@/utils/pendingMove'
+import { recallPayloadForText, resetRememberedPayloads } from '@/paste/clipboardPayload'
 import { pasteAsMoveVerb } from '@/paste/moveOnPasteVerb'
 import { pasteAsMoveImpl } from '@/plugins/move-blocks/pasteAsMoveImpl'
 
@@ -214,10 +214,11 @@ beforeEach(async () => {
   __resetLayoutSessionIdForTesting()
   env = await setup()
   showInfoMock.mockClear()
+  // The remembered-payload table (`@/paste/clipboardPayload`) is a process
+  // global, so a cut left in it by one test would otherwise leak into the
+  // next.
+  resetRememberedPayloads()
 })
-// `@/utils/pendingMove` is a module singleton (by design — see its doc), so
-// a cut left pending by one test would otherwise leak into the next.
-afterEach(() => { clearPendingMove() })
 
 /** `env.repo` with the move-blocks plugin's `pasteAsMoveVerb` impl wired in,
  *  on top of the kernel data extension `setFacetRuntime` always needs. Used
@@ -807,10 +808,10 @@ describe('default CodeMirror shortcuts', () => {
     expect(await isBlockDeleted(env.repo, 'protected')).toBe(false)
     expect(await isBlockDeleted(env.repo, 'ordinary')).toBe(false)
     expect(write).toHaveBeenCalledTimes(1)
-    expect(getPendingMove()).toEqual({
+    expect(recallPayloadForText('ordinary\nprotected')).toEqual({
       blockIds: ['ordinary', 'protected'],
       workspaceId: WS,
-      clipboardText: 'ordinary\nprotected',
+      intent: 'cut',
     })
     // Successful cut exits multi-select, same as the old destructive cut did.
     expect(uiStateBlock.peekProperty(selectionStateProp)?.selectedBlockIds).toEqual([])
@@ -834,10 +835,10 @@ describe('default CodeMirror shortcuts', () => {
     } as BlockShortcutDependencies, {preventDefault: vi.fn()} as unknown as ActionTrigger)
 
     expect(await isBlockDeleted(env.repo, 'solo')).toBe(false)
-    expect(getPendingMove()).toEqual({
+    expect(recallPayloadForText('solo')).toEqual({
       blockIds: ['solo'],
       workspaceId: WS,
-      clipboardText: 'solo',
+      intent: 'cut',
     })
     vi.unstubAllGlobals()
   })
@@ -872,14 +873,20 @@ describe('default CodeMirror shortcuts', () => {
     /** Cuts `blockIds` and leaves `navigator.clipboard` stubbed so a later
      *  `readText()` (either `tryPasteAsMove`'s check, or the fallback text
      *  paste re-reading it) returns EXACTLY what was written — a fixed
-     *  snapshot taken right after the cut, not a live re-derivation from
-     *  the register: `pasteAsMoveImpl` clears the register as part of
-     *  deciding, so a `readText` that looked the register up dynamically
-     *  would go stale (return '') the instant a fallback case cleared it,
-     *  before the fallback text-paste got to do its own read. */
+     *  snapshot taken right after the cut, captured off the real
+     *  `ClipboardItem` the cut wrote (identity now travels WITH the
+     *  clipboard content, not through a side register — see
+     *  `@/paste/clipboardPayload.js`'s module doc). */
     const cut = async (blockIds: string[]): Promise<void> => {
-      vi.stubGlobal('ClipboardItem', class { })
-      vi.stubGlobal('navigator', {clipboard: {write: vi.fn(async () => {}), readText: vi.fn(async () => '')}})
+      let clipboardText = ''
+      const write = vi.fn(async (items: ClipboardItem[]) => {
+        for (const item of items) {
+          if (item.types.includes('text/plain')) {
+            clipboardText = await (await item.getType('text/plain')).text()
+          }
+        }
+      })
+      vi.stubGlobal('navigator', {clipboard: {write, readText: vi.fn(async () => '')}})
       const cutAction = findMultiSelectAction(env.repo, 'cut_selected_blocks')
       await cutAction.handler({
         uiStateBlock: env.repo.block('ui'),
@@ -887,7 +894,6 @@ describe('default CodeMirror shortcuts', () => {
         anchorBlock: null,
       } as MultiSelectModeDependencies, {preventDefault: vi.fn()} as unknown as ActionTrigger)
 
-      const clipboardText = getPendingMove()?.clipboardText ?? ''
       vi.stubGlobal('navigator', {
         clipboard: {write: vi.fn(async () => {}), readText: vi.fn(async () => clipboardText)},
       })
@@ -916,7 +922,6 @@ describe('default CodeMirror shortcuts', () => {
       expect(await childIds('root')).toEqual(['src', 'dest', 'existing', 'a', 'ref'])
       // 'a' left 'src'; 'b' (never cut) stayed behind.
       expect(await childIds('src')).toEqual(['b'])
-      expect(getPendingMove()).toBeNull()
       // `ref` was never touched by the move, so its `((a))` still literally
       // names a live block — the reference resolves.
       expect(env.repo.block('ref').peek()?.content).toBe('see ((a))')
@@ -965,7 +970,6 @@ describe('default CodeMirror shortcuts', () => {
       expect(added.map(id => env.repo.block(id).peek()?.content)).toEqual(['unrelated text'])
       // And the cut block was NOT moved — still exactly where it was.
       expect(env.repo.block('a').peek()?.parentId).toBe('src')
-      expect(getPendingMove()).toBeNull()
       // Exactly ONE clipboard read for the whole handler invocation — the
       // up-front read is threaded into the fallback's `pasteFromClipboard`
       // call rather than that function re-reading the clipboard itself.
@@ -974,7 +978,7 @@ describe('default CodeMirror shortcuts', () => {
       expect(readText).toHaveBeenCalledTimes(1)
     })
 
-    it('falls back to a text paste when the pending move belongs to a different workspace, but KEEPS the register and toasts', async () => {
+    it('falls back to a text paste when the pending move belongs to a different workspace, and toasts', async () => {
       await seed()
       withPasteAsMoveInstalled()
       await cut(['a'])
@@ -988,15 +992,12 @@ describe('default CodeMirror shortcuts', () => {
       const added = await addedRootChildren(before)
       expect(added.map(id => env.repo.block(id).peek()?.content)).toEqual(['a'])
       expect(env.repo.block('a').peek()?.parentId).toBe('src')
-      // The cut is still valid back in its own workspace — dropping it here
-      // would both fail to paste anything useful AND silently destroy it.
-      expect(getPendingMove()?.blockIds).toEqual(['a'])
       expect(showInfoMock).toHaveBeenCalledTimes(1)
     })
 
-    it('the register persisting across a cross-workspace mismatch means a later paste back in the original workspace still completes the move', async () => {
-      // Separate from the "falls back... but KEEPS the register" test above
-      // (which pastes once, in ws-2): this proves the SURVIVING register is
+    it('a cross-workspace mismatch does not disturb the cut — a later paste back in the original workspace still completes the move', async () => {
+      // Separate from the "falls back... different workspace" test above
+      // (which pastes once, in ws-2): this proves the clipboard payload is
       // actually usable afterward, not just present. Doesn't itself paste
       // in ws-2 — just switches there and back — so it can't race the
       // fallback's fire-and-forget `focusBlock` the way pasting twice
@@ -1006,13 +1007,14 @@ describe('default CodeMirror shortcuts', () => {
       await cut(['a'])
 
       env.repo.setActiveWorkspaceId('ws-2')
-      expect(getPendingMove()?.blockIds).toEqual(['a']) // still armed, just inapplicable here
+      // still resolvable, just inapplicable here — nothing clears it on a
+      // workspace mismatch, see @/paste/clipboardPayload.js's module doc.
+      expect(recallPayloadForText('a')?.blockIds).toEqual(['a'])
 
       env.repo.setActiveWorkspaceId(WS)
       await pasteAfter('existing')
 
       expect(env.repo.block('a').peek()?.parentId).toBe('root')
-      expect(getPendingMove()).toBeNull()
     })
 
     it('moves the LIVE survivors (not a text-paste duplicate of everything) when a cut block was deleted before the paste', async () => {
@@ -1030,10 +1032,9 @@ describe('default CodeMirror shortcuts', () => {
       const added = await addedRootChildren(before)
       expect(added).toEqual(['a'])
       expect(env.repo.block('a').peek()?.parentId).toBe('root')
-      expect(getPendingMove()).toBeNull()
     })
 
-    it('refuses (no move, no text-paste duplication) when the destination is inside the cut subtree, and KEEPS the register', async () => {
+    it('refuses (no move, no text-paste duplication) when the destination is inside the cut subtree', async () => {
       await seed()
       withPasteAsMoveInstalled()
       await cut(['src']) // src has children a, b — cutting the whole subtree
@@ -1047,10 +1048,6 @@ describe('default CodeMirror shortcuts', () => {
       // ...and nothing was duplicated via a fallback text paste either.
       expect(await childIds('src')).toEqual(['a', 'b'])
       expect(await childIds('root')).toEqual(['src', 'dest', 'existing', 'ref'])
-      // Register SURVIVES the refusal. Dropping it would only defer the
-      // duplication this branch prevents: the next paste would find nothing
-      // pending, fall back to text, and re-create the still-present blocks.
-      expect(getPendingMove()?.blockIds).toEqual(['src'])
     })
   })
 

@@ -2,9 +2,10 @@
  * The "does this paste complete a pending cut-as-move?" seam.
  *
  * Core (`cut_selected_blocks` / `cut_block` in `@/shortcuts/defaultShortcuts.js`)
- * marks a cut in `@/utils/pendingMove.js` instead of deleting. EVERY paste
- * surface needs to ask "is there a still-valid pending move that this paste
- * should complete instead of pasting text?" before doing anything else —
+ * puts a `intent: 'cut'` payload on the clipboard instead of deleting
+ * (`@/paste/clipboardPayload.js`). EVERY paste surface asks "does this
+ * clipboard content carry a cut payload I should complete as a move
+ * instead of pasting text?" before doing anything else —
  * `defaultShortcuts.js`'s `paste_after_selection` / `paste_before_selection`,
  * `BlockPasteShellDecorator`, `CodeMirrorContentRenderer`'s editor paste, and
  * vim-normal-mode's `paste_after` / `paste_before` all call either
@@ -27,7 +28,7 @@ import type { Block } from '@/data/block.js'
 import type { InsertPosition } from '@/data/mutators.js'
 import { isCollapsedProp } from '@/data/properties.js'
 import { defineVerbFacet } from '@/facets/verbFacet.js'
-import { getPendingMove } from '@/utils/pendingMove.js'
+import type { ClipboardPayload } from '@/paste/clipboardPayload.js'
 
 /** Where a completed move would land — the same shape as move-blocks'
  *  `MoveTarget`, restated here because `InsertPosition` (the only thing it
@@ -42,9 +43,12 @@ export interface PasteMoveTarget {
 export interface PasteAsMoveInput {
   readonly repo: Repo
   readonly target: PasteMoveTarget
-  /** The exact text read off the clipboard for THIS paste — compared
-   *  against the register's `clipboardText` to decide validity. */
-  readonly clipboardText: string
+  /** The identity of the blocks on the clipboard, already resolved from
+   *  the paste's own content (`resolveClipboardPayload`). Passed IN rather
+   *  than looked up here: the caller is the only one holding the paste
+   *  event, and the payload is the whole question of validity — a caller
+   *  with no payload never reaches the verb at all. */
+  readonly payload: ClipboardPayload
 }
 
 /** `true` ⇒ the paste was consumed as a move (or refused as a would-be
@@ -79,27 +83,26 @@ const siblingMoveTarget = (
   position: { kind, siblingId: anchor.id },
 })
 
-/** Ask the verb whether `clipboardText` completes a pending move at
+/** Ask the verb whether `payload` should be completed as a move at
  *  `target`. `false` whenever there's no live facet runtime yet (very early
  *  boot) — matches `pasteFromClipboard`'s own fallback for a runtime-less
- *  Repo.
+ *  Repo — or when the payload came from a COPY rather than a cut.
  *
- *  Deliberately does NOT short-circuit on an EMPTY `clipboardText`: cutting
- *  a genuinely empty block records an empty `clipboardText` in the register
- *  too (see `cutBlockIdsToClipboard`), and an empty-text guard here would
- *  make that cut un-completable — the block would stay marked forever with
- *  no paste able to reach `pasteAsMoveImpl` and finish the move. Only the
- *  TEXT-paste fallback needs its own non-empty guard (there's nothing
- *  meaningful to insert); callers must run this check even when their own
- *  clipboard read came back empty. */
+ *  Note there is no text check here, and nothing to short-circuit on empty
+ *  text: the payload either describes this clipboard content or it doesn't,
+ *  and `resolveClipboardPayload` already answered that by content. Cutting
+ *  a genuinely empty block used to be a special case for exactly this
+ *  reason (its sentinel was the empty string, which every emptiness guard
+ *  ate); it needs no special handling now. */
 export const tryPasteAsMove = async (
   repo: Repo,
   target: PasteMoveTarget,
-  clipboardText: string,
+  payload: ClipboardPayload | null,
 ): Promise<boolean> => {
+  if (!payload || payload.intent !== 'cut') return false
   const runtime = repo.facetRuntime
   if (!runtime) return false
-  return pasteAsMoveVerb.run(runtime, { repo, target, clipboardText })
+  return pasteAsMoveVerb.run(runtime, { repo, target, payload })
 }
 
 /**
@@ -147,25 +150,22 @@ export const resolvePasteMoveTarget = async (
     : siblingMoveTarget(target, position)
 }
 
-/** Try to complete a pending cut→move at `position` relative to `target`,
+/** Try to complete `payload` as a move at `position` relative to `target`,
  *  using the same placement policy an ordinary paste there would use (see
- *  `resolvePasteMoveTarget`). `clipboardText` must be a SINGLE read
- *  already in hand — passed straight through to `tryPasteAsMove`, never
- *  re-read here (two reads of the OS clipboard can disagree, and each read
- *  can cost a system prompt on iOS).
+ *  `resolvePasteMoveTarget`).
  *
  *  Skips resolving the placement (an async children query) entirely when
- *  nothing is pending — the overwhelming majority of pastes — so an
+ *  this paste isn't a cut — the overwhelming majority of pastes — so an
  *  ordinary paste doesn't pay for it. */
 export const tryPasteAsMoveAt = async (
   repo: Repo,
   target: Block,
   position: 'before' | 'after',
   scopeRootId: string | undefined,
-  clipboardText: string,
+  payload: ClipboardPayload | null,
   placement: 'visible' | 'sibling' = 'visible',
 ): Promise<boolean> => {
-  if (!getPendingMove()) return false
+  if (!payload || payload.intent !== 'cut') return false
   const moveTarget = await resolvePasteMoveTarget(target, position, scopeRootId, placement)
-  return tryPasteAsMove(repo, moveTarget, clipboardText)
+  return tryPasteAsMove(repo, moveTarget, payload)
 }
