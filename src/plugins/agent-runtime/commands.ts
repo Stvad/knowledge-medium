@@ -513,6 +513,25 @@ const SUBTREE_KEY_PROP = 'agent:subtreeKey'
  *  mid-stream, it stays there (the reply reads split around it) rather than
  *  being evicted — respecting the user's edit over strict contiguity. The
  *  common case (a block added AFTER the reply) keeps the reply contiguous. */
+/** Where to place the replacement for a node whose block was detached (see
+ *  the opaque branch below). Anchors on the detached row's own slot, so the
+ *  regenerated node takes the position instead of jumping past the later
+ *  siblings `appendKey` would anchor on.
+ *
+ *  `null` when the row is not in this sibling set — it drifted under another
+ *  tagged parent while the destination is where the parsed tree wants it.
+ *  Order keys only compare WITHIN a sibling set, so that row's key says
+ *  nothing about where to land here; returning `null` falls through to
+ *  `appendKey`'s ordinary logic rather than seeding a meaningless bound. */
+export const detachedNodeCursor = (
+  siblings: readonly {id: string, orderKey: string}[],
+  detachedId: string,
+): {after: string | null, before: string | null} | null => {
+  const idx = siblings.findIndex(sibling => sibling.id === detachedId)
+  if (idx === -1) return null
+  return {after: siblings[idx].orderKey, before: siblings[idx + 1]?.orderKey ?? null}
+}
+
 const reconcileMarkdownSubtree = async (
   repo: Repo,
   input: ReconcileMarkdownSubtreeInput,
@@ -593,18 +612,12 @@ const reconcileMarkdownSubtree = async (
       // ordinary "nothing at this position" case, which already works.
       if (match && hasOpaqueContent(match, tx.opaqueContentTypes)) {
         // Anchor the replacement at the DETACHED row's own slot before
-        // dropping the key. `appendKey` otherwise anchors on the last
-        // still-tagged child, which for a detach in the middle is a LATER
-        // sibling — so the regenerated node would jump past it (A, detached
-        // B, C, B'). Only when no cursor exists yet: one already set is
-        // positioned after this run's last append, which is earlier still.
+        // dropping the key. Only when no cursor exists yet: one already set
+        // is positioned after this run's last append, which is earlier still.
         if (!cursorByParent.has(realParentId)) {
           const siblings = await tx.childrenOf(realParentId, workspaceId)
-          const idx = siblings.findIndex(sibling => sibling.id === match!.id)
-          cursorByParent.set(realParentId, {
-            after: match.orderKey ?? null,
-            before: idx >= 0 ? siblings[idx + 1]?.orderKey ?? null : null,
-          })
+          const seed = detachedNodeCursor(siblings, match.id)
+          if (seed) cursorByParent.set(realParentId, seed)
         }
         const rest = {...match.properties}
         delete rest[SUBTREE_KEY_PROP]

@@ -142,6 +142,7 @@ describe('placeCompletionSource — resolved insert delivery', () => {
   const buildOption = async (opts: {
     resolveName: string
     persistInsert?: (args: {triggerText: string; insert: string}) => Promise<void>
+    isOpaque?: () => boolean
   }) => {
     const source = placeCompletionSource({
       getCandidates: async () => [
@@ -153,6 +154,7 @@ describe('placeCompletionSource — resolved insert delivery', () => {
         return {kind: 'insert', name: opts.resolveName}
       },
       persistInsert: opts.persistInsert,
+      isOpaque: opts.isOpaque,
     })
     const state = EditorState.create({doc: 'met at @blue'})
     const result = await source(new CompletionContext(state, 12, true))
@@ -192,5 +194,36 @@ describe('placeCompletionSource — resolved insert delivery', () => {
     await vi.waitFor(() => {
       expect(persisted).toEqual([{triggerText: '@blue', insert: '[[Blue Bottle]]'}])
     })
+  })
+
+  it('refuses both delivery paths when the block turns opaque mid-resolution', async () => {
+    const persisted: Array<{triggerText: string; insert: string}> = []
+    let opaque = false
+    const isOpaque = vi.fn(() => opaque)
+    const {option, apply, state} = await buildOption({
+      resolveName: 'Blue Bottle',
+      persistInsert: async args => { persisted.push(args) },
+      isOpaque,
+    })
+    const view = new EditorView({state, parent: document.body})
+    try {
+      // Prime the delivery first, so the refusal below is a refusal and not
+      // an await that never settled — this test is otherwise green with the
+      // guard deleted.
+      apply(view, option, 7, 12)
+      await vi.waitFor(() => {
+        expect(view.state.doc.toString()).toBe('met at [[Blue Bottle]]')
+      })
+
+      opaque = true
+      isOpaque.mockClear()
+      const before = view.state.doc.toString()
+      apply(view, option, 7, 12)
+      await vi.waitFor(() => expect(isOpaque).toHaveBeenCalled())
+      expect(view.state.doc.toString()).toBe(before)
+      expect(persisted).toEqual([])
+    } finally {
+      view.destroy()
+    }
   })
 })

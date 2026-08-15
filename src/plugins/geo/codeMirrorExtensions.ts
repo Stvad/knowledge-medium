@@ -22,6 +22,7 @@ import type {
   CodeMirrorExtensionContribution,
 } from '@/editor/codeMirrorExtensions.js'
 import { ChangeScope } from '@/data/api'
+import { blockContentIsOpaque } from '@/data/block'
 import { hasOpaqueContent } from '@/data/properties'
 import { aliasesProp, typesProp } from '@/data/properties'
 import { PLACE_TYPE } from './blockTypes'
@@ -327,11 +328,9 @@ const buildPlaceCompletionSource = ({repo, block}: CodeMirrorExtensionContext): 
     await repo.tx(async tx => {
       const data = await tx.get(block.id)
       if (!data || data.deleted) return
-      // The pause this fallback exists for — a collision toast, the Google
-      // details fetch, the naming prompt — is exactly the window in which
-      // the block can turn opaque. Splicing a place link into an
-      // extension's stored source breaks the module, so the refusal belongs
-      // against the tx's own snapshot, not the row the pick started from.
+      // Re-checked against the tx's own snapshot rather than trusting the
+      // pre-dispatch `isOpaque` gate: the block can turn opaque between
+      // that check and this write too.
       if (hasOpaqueContent(data, tx.opaqueContentTypes)) return
       const idx = data.content.indexOf(triggerText)
       if (idx === -1) return
@@ -341,7 +340,13 @@ const buildPlaceCompletionSource = ({repo, block}: CodeMirrorExtensionContext): 
     }, {scope: ChangeScope.BlockDefault, description: 'insert place link'})
   }
 
-  return placeCompletionSource({getCandidates, resolvePlace, consumePendingCandidates, persistInsert})
+  return placeCompletionSource({
+    getCandidates,
+    resolvePlace,
+    consumePendingCandidates,
+    persistInsert,
+    isOpaque: () => blockContentIsOpaque(block),
+  })
 }
 
 export const geoCodeMirrorExtensions: CodeMirrorExtensionContribution = (ctx) => {

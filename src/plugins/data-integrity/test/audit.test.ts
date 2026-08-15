@@ -566,6 +566,25 @@ describe('runConsistencyAudit — full (on-demand) deep checks', () => {
     expect(check.opaqueContentRefs).toBe(1)
   })
 
+  // The cap used to be consulted only between fixed-size pages, so a cap
+  // below the batch size processed every candidate anyway and still reported
+  // complete coverage.
+  it('honors a contentCap smaller than one page of opaque candidates', async () => {
+    for (const id of ['cap1', 'cap2', 'cap3']) {
+      await ins({
+        id, content: 'export const x = 1',
+        properties: { types: ['extension'] },
+        references: [{ id: 'foo-id', alias: 'Foo' }],
+      })
+    }
+    const r = await runConsistencyAudit(sharedDb.db, WS, 0, {
+      full: { ...FULL, contentCap: 2, opaqueContentTypes: new Set(['extension']) },
+    })
+    const check = r.checks.content_link_recompute
+    expect(check.opaqueContentRefBlocks).toBe(2)
+    expect(check.truncated).toBe(true)
+  })
+
   // The facet's validator accepts any non-empty string, so a contributed
   // type id may contain characters `JSON.stringify` escapes. A substring
   // probe over `properties_json` would have to reproduce that escaping to

@@ -23,7 +23,7 @@ import { backlinksDataExtension } from '@/plugins/backlinks/dataExtension'
 import { groupedBacklinksDataExtension } from '@/plugins/grouped-backlinks/dataExtension'
 import { dailyNoteBlockId } from '@/plugins/daily-notes/dailyNotes'
 import { keyAtEnd } from '@/data/orderKey'
-import { createAgentRuntimeContext, executeCommand } from '../commands'
+import { createAgentRuntimeContext, detachedNodeCursor, executeCommand } from '../commands'
 import type { AgentRuntimeContext } from '../protocol'
 
 const WS = 'ws-1'
@@ -530,6 +530,32 @@ describe('reconcile-markdown-subtree command', () => {
     expect(survivor.properties?.['agent:subtreeKey']).toBeUndefined()
     // The reply node still landed, in a block of its own.
     expect((await replyRoots()).map(r => r.content)).toEqual(['A revised'])
+  })
+
+  // Order keys compare within a sibling set only. A tagged row that drifted
+  // under a DIFFERENT tagged parent is still collected in pre-order, so it
+  // can be the positional match for a node whose parent is elsewhere — and
+  // its key is then meaningless at the destination. Not reachable as an
+  // ordering assertion: the keys two small sibling sets mint happen to agree,
+  // so both branches place the block identically until the trees are large.
+  describe('detachedNodeCursor', () => {
+    const siblings = [
+      {id: 'a', orderKey: 'a0'},
+      {id: 'b', orderKey: 'a1'},
+      {id: 'c', orderKey: 'a2'},
+    ]
+
+    it('anchors on the detached row and its next sibling', () => {
+      expect(detachedNodeCursor(siblings, 'b')).toEqual({after: 'a1', before: 'a2'})
+    })
+
+    it('leaves the last row open-ended', () => {
+      expect(detachedNodeCursor(siblings, 'c')).toEqual({after: 'a2', before: null})
+    })
+
+    it('refuses to seed from a row that is not in this sibling set', () => {
+      expect(detachedNodeCursor(siblings, 'elsewhere')).toBeNull()
+    })
   })
 
   // The detached row sits BETWEEN two live reply nodes, so the replacement

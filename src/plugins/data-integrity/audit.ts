@@ -523,6 +523,78 @@ const runContentLinkRecomputeCheck = async (
   const staleSample: Array<{ id: string; stale: string[]; content_preview: string }> = []
   // No content preview: the whole point is that these bytes are not prose.
   const opaqueSample: Array<{ id: string; refs: number }> = []
+
+  // Opaque rows carrying a content-derived reference entry, scanned on their
+  // OWN candidates. The recompute loop below rides a
+  // `content LIKE '%[[%' OR '%((%'` prefilter, which is exactly wrong here:
+  // the case that matters is a payload REPLACED with one containing no
+  // reference syntax while an entry from the old bytes survived an
+  // interrupted cleanup. Nothing re-parses these blocks, so nothing will
+  // ever drop that entry and it keeps publishing a backlink the bytes do not
+  // support — the audit is the only thing that can see it.
+  //
+  // Candidates come from `block_types`, the trigger-maintained index the
+  // rest of the app already trusts for type membership. That is exact —
+  // a substring probe over `properties_json` would have to reproduce
+  // `JSON.stringify` escaping to match an id containing `"` or `\`, and a
+  // near-miss there reads as "no such blocks" rather than as an error.
+  // One scan over every opaque type at once, so a block carrying two of
+  // them is a single row and the cap is charged once.
+  //
+  // Runs BEFORE the recompute loop, and shares its budget. Two independent
+  // caps would let a caller's ceiling be exceeded twice over; taking the
+  // slice first is what keeps that from starving this scan instead, and
+  // costs the other side almost nothing — these candidates are the opaque
+  // types intersected with a non-empty `references_json`, a handful of rows
+  // where the recompute loop's prefilter can match the whole workspace.
+  // Starving it would report `opaqueContentRefBlocks: 0` on a workspace that
+  // has them, which reads as "clean" rather than as "not looked at".
+  if (opaqueTypes.size > 0) {
+    const placeholders = [...opaqueTypes].map(() => '?').join(', ')
+    let opaqueLastId = ''
+    for (;;) {
+      // Page by what's LEFT, not a fixed batch: a cap below BATCH otherwise
+      // buys nothing, because the whole page is processed before the budget
+      // is consulted.
+      const remaining = contentCap - opaqueScanned
+      if (remaining <= 0) { truncated = true; break }
+      const limit = Math.min(BATCH, remaining)
+      const rows = await db.getAll<{ id: string; references_json: string }>(
+        `SELECT DISTINCT b.id AS id, b.references_json AS references_json
+         FROM block_types bt
+         JOIN blocks b ON b.id = bt.block_id AND b.workspace_id = bt.workspace_id
+         WHERE bt.workspace_id = ?
+           AND bt.type IN (${placeholders})
+           AND b.deleted = 0
+           AND b.references_json != '[]'
+           AND b.id > ?
+         ORDER BY b.id LIMIT ${limit}`,
+        [workspaceId, ...opaqueTypes, opaqueLastId],
+      )
+      if (rows.length === 0) break
+      for (const row of rows) {
+        let stored: StoredRef[]
+        try {
+          stored = JSON.parse(row.references_json)
+        } catch {
+          continue
+        }
+        const lingering = stored.filter((r) => r && !r.sourceField)
+        if (lingering.length === 0) continue
+        opaqueContentRefBlocks += 1
+        opaqueContentRefs += lingering.length
+        if (opaqueSample.length < sampleLimit) {
+          opaqueSample.push({ id: row.id, refs: lingering.length })
+        }
+      }
+      opaqueScanned += rows.length
+      opaqueLastId = rows[rows.length - 1].id
+      // A short page means the candidates ran out, which is complete
+      // coverage — NOT truncation. Only the budget check above reports that.
+      if (rows.length < limit) break
+    }
+  }
+
   for (;;) {
     const batch = await db.getAll<{ id: string; content: string; references_json: string; properties_json: string }>(
       `SELECT id, content, references_json, properties_json FROM blocks
@@ -571,63 +643,8 @@ const runContentLinkRecomputeCheck = async (
     scanned += batch.length
     lastId = batch[batch.length - 1].id
     if (batch.length < BATCH) break
-    if (scanned >= contentCap) { truncated = true; break }
+    if (scanned + opaqueScanned >= contentCap) { truncated = true; break }
   }
-  // Opaque rows carrying a content-derived reference entry, scanned on their
-  // OWN candidates. The loop above rides a `content LIKE '%[[%' OR '%((%'`
-  // prefilter, which is exactly wrong here: the case that matters is a
-  // payload REPLACED with one containing no reference syntax while an entry
-  // from the old bytes survived an interrupted cleanup. Nothing re-parses
-  // these blocks, so nothing will ever drop that entry and it keeps
-  // publishing a backlink the bytes do not support — the audit is the only
-  // thing that can see it.
-  //
-  // Candidates come from `block_types`, the trigger-maintained index the
-  // rest of the app already trusts for type membership. That is exact —
-  // a substring probe over `properties_json` would have to reproduce
-  // `JSON.stringify` escaping to match an id containing `"` or `\`, and a
-  // near-miss there reads as "no such blocks" rather than as an error.
-  // One scan over every opaque type at once, so a block carrying two of
-  // them is a single row and the cap is charged once.
-  if (opaqueTypes.size > 0) {
-    const placeholders = [...opaqueTypes].map(() => '?').join(', ')
-    let opaqueLastId = ''
-    for (;;) {
-      const rows = await db.getAll<{ id: string; references_json: string }>(
-        `SELECT DISTINCT b.id AS id, b.references_json AS references_json
-         FROM block_types bt
-         JOIN blocks b ON b.id = bt.block_id AND b.workspace_id = bt.workspace_id
-         WHERE bt.workspace_id = ?
-           AND bt.type IN (${placeholders})
-           AND b.deleted = 0
-           AND b.references_json != '[]'
-           AND b.id > ?
-         ORDER BY b.id LIMIT ${BATCH}`,
-        [workspaceId, ...opaqueTypes, opaqueLastId],
-      )
-      if (rows.length === 0) break
-      for (const row of rows) {
-        let stored: StoredRef[]
-        try {
-          stored = JSON.parse(row.references_json)
-        } catch {
-          continue
-        }
-        const lingering = stored.filter((r) => r && !r.sourceField)
-        if (lingering.length === 0) continue
-        opaqueContentRefBlocks += 1
-        opaqueContentRefs += lingering.length
-        if (opaqueSample.length < sampleLimit) {
-          opaqueSample.push({ id: row.id, refs: lingering.length })
-        }
-      }
-      opaqueScanned += rows.length
-      opaqueLastId = rows[rows.length - 1].id
-      if (rows.length < BATCH) break
-      if (opaqueScanned >= contentCap) { truncated = true; break }
-    }
-  }
-
   const anomalous = strippedBlocks > 0 || staleRefBlocks > 0 || opaqueContentRefBlocks > 0
   return {
     status: anomalous ? 'anomaly' : truncated ? 'incomplete' : 'ok',

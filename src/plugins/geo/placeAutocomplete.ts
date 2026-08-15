@@ -112,6 +112,14 @@ export interface PlaceAutocompleteOptions {
    *  longer take the change, this is called to apply the same
    *  trigger-text → wikilink replacement to the underlying block. */
   persistInsert?: (args: {triggerText: string; insert: string}) => Promise<void>
+  /** Whether the target block's content has stopped being prose. Consulted
+   *  AFTER `resolvePlace` settles, because that is the window that matters:
+   *  a details fetch, a nearby picker or the naming prompt can each hold
+   *  for as long as the user takes, and an extension install lands in it.
+   *  Both delivery paths are downstream of this one check — the connected
+   *  view's dispatch is persisted by `flushEditorContent`, so guarding only
+   *  `persistInsert` leaves the common path open. */
+  isOpaque?: () => boolean
 }
 
 /** `@` trigger detection — the shared matcher (see
@@ -181,6 +189,7 @@ const candidateToOption = (
       const resolved = await options.resolvePlace(candidate, {view, from: applyFrom, to: applyTo})
       if (!resolved) return
       if (resolved.kind === 'handled') return
+      if (options.isOpaque?.()) return
       const insert = `[[${resolved.name}]]`
       const delivered = applyInsertToView(
         view, {from: applyFrom, to: applyTo}, triggerText, insert,
