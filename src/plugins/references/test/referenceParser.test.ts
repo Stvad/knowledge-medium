@@ -349,7 +349,7 @@ Another [[normal-ref]]
 
     it('preserves alias whitespace + special chars verbatim', () => {
       expect(renderWikilink(' Foo ')).toBe('[[ Foo ]]')
-      expect(parseReferences(renderWikilink(' Foo '))[0]?.alias).toBe(' Foo ')
+      expect(parseReferences(renderWikilink(' Foo ') ?? '')[0]?.alias).toBe(' Foo ')
       expect(renderWikilink('a/b:c')).toBe('[[a/b:c]]')
     })
 
@@ -357,7 +357,7 @@ Another [[normal-ref]]
       expect(renderWikilink('foo]]bar')).toBe('[[foo] ]bar]]')
       // Syntax safety: the parser finds one complete wikilink, but the
       // alias identity is not preserved.
-      const result = parseReferences(renderWikilink('foo]]bar'))
+      const result = parseReferences(renderWikilink('foo]]bar') ?? '')
       expect(result).toHaveLength(1)
       expect(result[0].alias).toBe('foo] ]bar')
     })

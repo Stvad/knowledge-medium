@@ -97,8 +97,11 @@ describe('wikilink parsing', () => {
     fc.assert(
       fc.property(safeAlias, alias => {
         const rendered = renderWikilink(alias)
-        const parsed = parseOutermostReferences(rendered)
-        expect(parsed).toEqual([{alias, startIndex: 0, endIndex: rendered.length}])
+        // Non-null is part of the property, not a type ceremony: an alias
+        // in the lossless class must always be renderable.
+        expect(rendered).not.toBeNull()
+        const parsed = parseOutermostReferences(rendered!)
+        expect(parsed).toEqual([{alias, startIndex: 0, endIndex: rendered!.length}])
       }),
       fuzzParams(200),
     )
@@ -119,9 +122,13 @@ describe('wikilink parsing', () => {
     fc.assert(
       fc.property(endsWithItsOwnBracket, alias => {
         const rendered = renderWikilink(alias)
+        // `renderWikilink` refuses (null) anything that would not read back
+        // as one reference. Every sample here is renderable, so a null IS a
+        // failure of the property under test — asserted, not narrowed away.
+        expect(rendered).not.toBeNull()
         expect(rendered).toBe(`[[${alias}]]`)
-        expect(parseOutermostReferences(rendered))
-          .toEqual([{alias, startIndex: 0, endIndex: rendered.length}])
+        expect(parseOutermostReferences(rendered!))
+          .toEqual([{alias, startIndex: 0, endIndex: rendered!.length}])
       }),
       fuzzParams(200),
     )
@@ -186,10 +193,14 @@ describe('wikilink parsing', () => {
     fc.assert(
       fc.property(fc.string({minLength: 1, maxLength: 30}), alias => {
         const rendered = renderWikilink(alias)
-        const parsed = parseOutermostReferences(rendered)
+        // Every alias in this class is far under `MAX_ALIAS_LENGTH`, so
+        // the refusal branch must never fire here — if it does, the
+        // renderer has started rejecting ordinary input.
+        expect(rendered).not.toBeNull()
+        const parsed = parseOutermostReferences(rendered!)
         expect(parsed).toHaveLength(1)
         expect(parsed[0].startIndex).toBe(0)
-        expect(parsed[0].endIndex).toBe(rendered.length)
+        expect(parsed[0].endIndex).toBe(rendered!.length)
       }),
       fuzzParams(300),
     )

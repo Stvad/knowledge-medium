@@ -18,7 +18,7 @@ import {
 } from './referenceBlock.ts'
 // Cross-layer check only: the inline parser is a PLUGIN reader of the
 // same grammar, and the point of these cases is that the two agree.
-import { parseReferences } from '@/plugins/references/referenceParser'
+import { parseBlockRefs, parseReferences } from '@/plugins/references/referenceParser'
 
 const UUID = '11111111-1111-4111-8111-111111111111'
 
@@ -180,6 +180,52 @@ describe('parseExactReferenceBlockContent — marked field forms', () => {
   it('excludes embeds — a transclusion directive, not a marker', () => {
     expect(parseExactReferenceBlockContent(`::!((${UUID}))`)).toBeNull()
     expect(parseExactReferenceBlockContent(`!((${UUID}))`)).toBeNull()
+  })
+})
+
+// The span shapes are declared once and consumed by both readers of this
+// grammar. These pin the contract in both directions: what must AGREE,
+// and what is allowed to differ. A future re-duplication of a shape (the
+// `UUID_RE_SOURCE` that used to be defined twice, under a comment saying
+// it wasn't) shows up here as a disagreement rather than as a bug months
+// later.
+describe('the two readers of this grammar', () => {
+  const UUID_B = '22222222-2222-4222-8222-222222222222'
+
+  it('agree on the aliased-blockref shape', () => {
+    const span = `[label](((${UUID_B})))`
+    expect(parseExactReferenceBlockContent(span))
+      .toEqual({kind: 'aliasedBlockRef', id: UUID_B, label: 'label', fieldForm: false})
+    expect(parseBlockRefs(span))
+      .toEqual([{blockId: UUID_B, label: 'label', embed: false, startIndex: 0, endIndex: span.length}])
+  })
+
+  it('agree on the plain blockref shape for a UUID', () => {
+    const span = `((${UUID_B}))`
+    expect(parseExactReferenceBlockContent(span))
+      .toEqual({kind: 'blockRef', id: UUID_B, fieldForm: false})
+    expect(parseBlockRefs(span).map(r => r.blockId)).toEqual([UUID_B])
+  })
+
+  // DELIBERATE divergence, not drift: whole-block content may address any
+  // caller-supplied id, but inline scanning stays UUID-only so prose like
+  // "((not an id))" never becomes a backlink.
+  it('diverge on a non-UUID id, by design', () => {
+    const span = '((caller-supplied-id))'
+    expect(parseExactReferenceBlockContent(span))
+      .toEqual({kind: 'blockRef', id: 'caller-supplied-id', fieldForm: false})
+    expect(parseBlockRefs(span)).toEqual([])
+  })
+
+  // The other two deliberate divergences: trim, and nesting.
+  it('diverge on trimming and nesting, by design', () => {
+    expect(parseExactReferenceBlockContent('[[  Padded  ]]'))
+      .toEqual({kind: 'alias', alias: 'Padded', fieldForm: false})
+    expect(parseReferences('[[  Padded  ]]').map(r => r.alias)).toEqual(['  Padded  '])
+
+    expect(parseExactReferenceBlockContent('[[outer [[inner]] tail]]')).toBeNull()
+    expect(parseReferences('[[outer [[inner]] tail]]').map(r => r.alias))
+      .toEqual(['outer [[inner]] tail', 'inner'])
   })
 })
 
