@@ -110,6 +110,10 @@ const searchReferenceCandidates = async (
       repo.query.recentBlocks({
         workspaceId,
         limit: SEARCH_LIMIT,
+        // Filtered before the LIMIT, so the picker spends its window on
+        // rows it can actually offer. An unaliased opaque block would
+        // otherwise arrive with its payload as both label and detail.
+        excludeOpaqueContent: true,
       }).load(),
     ])
     const seen = new Set(excluded)

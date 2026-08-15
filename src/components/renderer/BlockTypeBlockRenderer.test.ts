@@ -107,6 +107,26 @@ describe('writeBlockTypeLabel', () => {
     expect(row!.properties[aliasesProp.name]).toEqual(['Local'])
   })
 
+  // Blanking releases the GENERATED aliases — the label, and the content the
+  // mirror wrote. On an opaque block the mirror never ran, so the content is
+  // source bytes; treating them as generated deletes a same-named alias the
+  // user added by hand, which this path promises to keep.
+  it('keeps a user alias equal to opaque content when the label is blanked', async () => {
+    const source = 'export const x = 1'
+    const repo = await setupTypeBlock({
+      label: 'Old', content: source, alias: 'Old', types: ['extension'],
+    })
+    await repo.tx(
+      tx => tx.setProperty('type-1', aliasesProp, ['Old', source]),
+      {scope: ChangeScope.BlockDefault},
+    )
+
+    await writeBlockTypeLabel(repo.block('type-1'), 'Old', source, '')
+
+    const row = await repo.load('type-1')
+    expect(row!.properties[aliasesProp.name]).toEqual([source])
+  })
+
   it('releases the old label even when the new one is already claimed', async () => {
     const repo = await setupTypeBlock({
       label: 'Old', content: 'export const x = 1', alias: 'Old', types: ['extension'],

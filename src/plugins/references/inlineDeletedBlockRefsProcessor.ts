@@ -78,6 +78,7 @@ const resolveInlineContent = (
   deletedContent: ReadonlyMap<string, string>,
   memo: Map<string, string>,
   stack: Set<string>,
+  opaqueDeleted: ReadonlySet<string>,
 ): string => {
   const cached = memo.get(id)
   if (cached !== undefined) return cached
@@ -87,10 +88,15 @@ const resolveInlineContent = (
   let resolved = raw
   for (const otherId of deletedContent.keys()) {
     if (otherId === id) continue
+    // An opaque nested target would otherwise reach a prose referrer the
+    // long way round: its payload inlined into this deleted block's text,
+    // which is then spliced wholesale into everything that referenced THIS
+    // one. Its mark stays dangling here too.
+    if (opaqueDeleted.has(otherId)) continue
     resolved = inlineBlockRefs(
       resolved,
       otherId,
-      resolveInlineContent(otherId, deletedContent, memo, stack),
+      resolveInlineContent(otherId, deletedContent, memo, stack, opaqueDeleted),
     )
   }
   stack.delete(id)
@@ -196,22 +202,35 @@ export const inlineDeletedBlockRefsProcessor = defineSameTxProcessor({
     // resolveInlineContent splice nested deleted-refs transitively.
     const deletedContent = new Map<string, string>()
     const workspaceById = new Map<string, string>()
+    // Deleted blocks whose content is NOT PROSE. Inlining replaces a
+    // `((id))` mark with the text it displayed, which for these is a whole
+    // extension bundle or a drawing's JSON — spliced into an unrelated note
+    // by nothing more than deleting the block it pointed at.
+    const opaqueDeleted = new Set<string>()
     for (const emitted of event.emittedEvents) {
       const {blockId, workspaceId} = emitted.payload as CoreBlockDeletedEvent
       const block = await ctx.tx.get(blockId)
       deletedContent.set(blockId, block?.content ?? '')
       workspaceById.set(blockId, workspaceId)
+      if (block && hasOpaqueContent(block, ctx.tx.opaqueContentTypes)) {
+        opaqueDeleted.add(blockId)
+      }
     }
 
     const memo = new Map<string, string>()
     for (const [blockId, workspaceId] of workspaceById) {
+      // Referrers keep the dangling `((deletedId))` instead, which is the
+      // same answer the property rows get and for the same reason: delete is
+      // soft, so the mark stays restorable, and a referrer that is prose gets
+      // re-parsed anyway — dropping its edge here would only have it rebuilt.
+      if (opaqueDeleted.has(blockId)) continue
       const sourceRows = await ctx.db.getAll<{id: string}>(
         SELECT_LIVE_REFERENCE_SOURCE_IDS_SQL,
         [workspaceId, blockId],
       )
       if (sourceRows.length === 0) continue
       const inlineContent = resolveInlineContent(
-        blockId, deletedContent, memo, new Set(),
+        blockId, deletedContent, memo, new Set(), opaqueDeleted,
       )
       for (const {id} of sourceRows) {
         await inlineSource(ctx, id, blockId, inlineContent)

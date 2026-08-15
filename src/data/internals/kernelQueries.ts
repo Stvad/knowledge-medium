@@ -495,6 +495,33 @@ export interface BlockTypeAssignment {
   type: string
 }
 
+/** Blank `content` on alias rows whose block's content is not prose.
+ *
+ *  An aliased extension block is a legitimate link target and KEEPS its row;
+ *  what it must not hand over is the payload, which consumers render as a
+ *  preview (QuickFind's Pages row, the reference picker's candidate detail).
+ *  Redaction rather than filtering, so the row count is unchanged and no
+ *  over-fetch is needed to refill a bounded window.
+ *
+ *  Shared by both alias queries deliberately: they feed the same pickers
+ *  through different branches (typed vs empty query), and a rule applied to
+ *  one of two copies is how this reached the empty-query branch to begin
+ *  with. Callers must already declare a per-row dep — gaining an opaque type
+ *  is a write to that row, which is what re-runs the redaction. */
+const redactOpaqueAliasRows = async <T extends {blockId: string; content: string}>(
+  ctx: {db: {getAll<R>(sql: string, params?: unknown[]): Promise<R[]>}, repo: {opaqueContentTypes: ReadonlySet<string>}},
+  workspaceId: string,
+  rows: T[],
+): Promise<T[]> => {
+  if (rows.length === 0 || ctx.repo.opaqueContentTypes.size === 0) return rows
+  const opaque = await opaqueBlockIdsAmong(
+    ctx.db, workspaceId, rows.map(row => row.blockId), ctx.repo.opaqueContentTypes,
+  )
+  return opaque.size === 0
+    ? rows
+    : rows.map(row => opaque.has(row.blockId) ? {...row, content: ''} : row)
+}
+
 /** Which of `blockIds` carry one of `opaqueTypes`, from the
  *  trigger-maintained index — the LIVE answer, not whatever the caller's
  *  row snapshot happens to say about its own types.
@@ -1337,7 +1364,7 @@ export const aliasMatchesQuery = defineQuery<
     // Without them the kernel.aliases channel only catches alias-list
     // changes — content edits to a returned row would slip past.
     for (const row of rows) ctx.depend({kind: 'row', id: row.blockId})
-    return rows
+    return redactOpaqueAliasRows(ctx, workspaceId, rows)
   },
 })
 
@@ -1390,22 +1417,7 @@ export const aliasMatchesFuzzyQuery = defineQuery<
     // alias block. The same per-row dep covers the redaction below, since
     // gaining an opaque type is a write to that row.
     for (const row of rows) ctx.depend({kind: 'row', id: row.blockId})
-    if (ctx.repo.opaqueContentTypes.size === 0) return rows
-    // An aliased extension block is a legitimate link target — it KEEPS its
-    // row. What it must not hand over is `content`, which consumers render
-    // as a preview (QuickFind's Pages row, the reference picker's candidate
-    // detail). Redacted here rather than at each of them: this is the alias
-    // half of the search, which never passes the content-source merge point
-    // where that filter lives.
-    //
-    // Redaction, not filtering, so the row count is unchanged and no
-    // over-fetch is needed to refill a bounded window.
-    const opaqueBlockIds = await opaqueBlockIdsAmong(
-      ctx.db, workspaceId, rows.map(row => row.blockId), ctx.repo.opaqueContentTypes,
-    )
-    return opaqueBlockIds.size === 0
-      ? rows
-      : rows.map(row => opaqueBlockIds.has(row.blockId) ? {...row, content: ''} : row)
+    return redactOpaqueAliasRows(ctx, workspaceId, rows)
   },
 })
 

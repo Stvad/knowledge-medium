@@ -664,6 +664,19 @@ describe('repo.query.aliasesInWorkspace', () => {
 })
 
 describe('repo.query.aliasMatches', () => {
+  // The empty-query branch of the reference-property picker calls this one
+  // directly and publishes each row's content as candidate detail — a second
+  // path to the same surface the fuzzy query feeds.
+  it('redacts content for an opaque block but keeps it as a target', async () => {
+    env.repo.setRuntimeContributions(opaqueContentTypesFacet, 'test-opaque', ['extension'])
+    await create({
+      id: 'ext', content: 'export const activate = () => {}',
+      aliases: ['Strength Tracker'], types: ['extension'],
+    })
+    const out = await env.repo.query.aliasMatches({workspaceId: WS, filter: ''}).load()
+    expect(out.map(r => `${r.alias}|${r.content}`)).toEqual(['Strength Tracker|'])
+  })
+
   it('returns one row per (alias, block) with content', async () => {
     await create({id: 'a', content: 'Inbox content', aliases: ['Inbox', 'Important']})
     await create({id: 'b', content: 'Tasks content', aliases: ['Tasks']})

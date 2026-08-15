@@ -530,7 +530,11 @@ export const coreContentSearchSource: SearchSourceContribution = {
     // user can pick it as a reference target. Filtered here rather than in
     // `core.searchByContent` because that kernel query is also how you'd
     // legitimately go LOOKING for an extension by its source.
-    const opaqueTypes = repo.opaqueContentTypes
+    // Same fallback as the merge point: this file's helpers document support
+    // for query-only `Repo` doubles, where the getter is absent. Without it
+    // the FIRST resolved row throws on `opaqueTypes.has`, and the merge
+    // point's own fallback is downstream of a source that already failed.
+    const opaqueTypes = repo.opaqueContentTypes ?? EMPTY_OPAQUE_TYPES
     const eligible = (rows: readonly BlockData[]): SearchSourceCandidate[] => rows
       .filter(block => !hasOpaqueContent(block, opaqueTypes))
       .map((block): SearchSourceCandidate => ({

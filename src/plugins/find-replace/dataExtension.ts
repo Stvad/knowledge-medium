@@ -176,13 +176,17 @@ export const searchContentQuery = defineQuery<
     // past them. Widen once when the window came back short AND more rows
     // were available.
     //
-    // RELATIVE to the window just fetched, never to `MAX_CANDIDATES`:
-    // `candidateLimit` is itself capped at that constant, so at the default
-    // `maxBlocks` of 500 the two are equal and a ceiling test never fires —
-    // dead on the default path. One widened pass, not paging to exhaustion:
-    // the scan bound is deliberate, and trading it away to serve a
-    // 5000-opaque-row corpus would be the wrong side of that tradeoff.
-    const widenedLimit = Math.max(MAX_CANDIDATES, candidateLimit * 2)
+    // RELATIVE to the window just fetched, with `MAX_CANDIDATES` involved
+    // in neither direction. As a ceiling it would be dead on the default
+    // path (`candidateLimit` is capped at that constant, so the two are
+    // equal at `maxBlocks: 500` and the widened pass could never grow); as
+    // a FLOOR it sent a deliberately tiny request — `maxBlocks: 1` fetches
+    // 20 rows — straight to 5000 full content rows on its retry.
+    //
+    // One widened pass, not paging to exhaustion: the scan bound is
+    // deliberate, and trading it away to serve a 5000-opaque-row corpus
+    // would be the wrong side of that tradeoff.
+    const widenedLimit = candidateLimit * 2
     if (
       matches.length < normalizedMaxBlocks
       && rows.length > limit

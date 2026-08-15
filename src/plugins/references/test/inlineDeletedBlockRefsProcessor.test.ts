@@ -140,6 +140,66 @@ describe('references.inlineDeletedBlockReferences', () => {
     expect(env.read('s')!.references).toEqual([])
   })
 
+  // The mirror image of the case above, and the more damaging one: the
+  // REFERRER is ordinary prose and the deleted TARGET is the extension. Its
+  // payload is what inlining splices in, so deleting a referenced extension
+  // would drop a whole bundle into an unrelated note.
+  it('does not inline a deleted OPAQUE target\'s payload into a prose note', async () => {
+    const payload = 'export const activate = () => { /* 40kb of bundle */ }'
+    await env.repo.tx(async tx => {
+      await tx.create({
+        id: D, workspaceId: WS, parentId: null, orderKey: 'a0',
+        content: payload, properties: {types: ['extension']},
+      })
+      await tx.create({
+        id: 's', workspaceId: WS, parentId: null, orderKey: 'a1',
+        content: `see ((${D})) for details`,
+        references: [{id: D, alias: D}],
+      })
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.awaitProcessors()
+
+    await env.repo.mutate.delete({id: D})
+
+    // The mark stays dangling — delete is soft, so it is restorable, and a
+    // prose referrer is re-parsed anyway, so dropping the edge here would
+    // only have it rebuilt.
+    expect(env.read('s')!.content).toBe(`see ((${D})) for details`)
+    expect(env.read('s')!.content).not.toContain('activate')
+  })
+
+  // The same bytes, one hop further out. A deleted PROSE block that
+  // referenced the deleted extension carries the payload into its OWN
+  // referrers through the transitive resolution — so the outer skip is not
+  // enough on its own. Subtree delete, because that is what emits an event
+  // for both blocks in one tx.
+  it('does not leak a deleted opaque payload through a transitive inline', async () => {
+    const payload = 'export const activate = () => {}'
+    await env.repo.tx(async tx => {
+      await tx.create({
+        id: D, workspaceId: WS, parentId: null, orderKey: 'a0',
+        content: `wraps ((${C}))`,
+      })
+      await tx.create({
+        id: C, workspaceId: WS, parentId: D, orderKey: 'a0',
+        content: payload, properties: {types: ['extension']},
+      })
+      await tx.create({
+        id: 's', workspaceId: WS, parentId: null, orderKey: 'a1',
+        content: `see ((${D}))`,
+        references: [{id: D, alias: D}],
+      })
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.awaitProcessors()
+
+    await env.repo.mutate.delete({id: D})
+
+    // D's own text is inlined (it is prose), but the nested opaque mark
+    // stays a mark rather than becoming a bundle.
+    expect(env.read('s')!.content).not.toContain('activate')
+    expect(env.read('s')!.content).toBe(`see wraps ((${C}))`)
+  })
+
   it('inlines plain and embed marks as content but keeps an aliased mark\'s label', async () => {
     await env.repo.tx(async tx => {
       await tx.create({id: D, workspaceId: WS, parentId: null, orderKey: 'a0', content: 'BODY'})

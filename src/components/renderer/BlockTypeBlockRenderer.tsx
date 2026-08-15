@@ -132,7 +132,12 @@ export const writeBlockTypeLabel = async (
       // aliases stay.
       const row = await tx.get(block.id)
       if (row) {
-        const stale = new Set([storedLabel, storedContent])
+        // `storedContent` counts as a generated alias only where the mirror
+        // put it there. On an opaque block the content is source bytes the
+        // mirror never wrote, so treating it as stale would delete a
+        // same-named alias the USER added — the one thing this path promises
+        // to keep.
+        const stale = new Set(mirrorContent ? [storedLabel, storedContent] : [storedLabel])
         const aliases = getAliases(row)
         const remaining = aliases.filter(alias => !stale.has(alias))
         if (remaining.length !== aliases.length) {
