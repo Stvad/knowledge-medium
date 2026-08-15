@@ -10,7 +10,7 @@ import { focusBlock, isFocusedBlock } from '@/data/properties.js'
 import { pasteMultilineText, resolvePasteWithMediaCapture } from '@/paste/operations.js'
 import type { PasteRequest } from '@/paste/decision.js'
 import { tryPasteAsMoveAt } from '@/paste/moveOnPasteVerb.js'
-import { resolveClipboardPayload } from '@/paste/clipboardPayload.js'
+import { readPasteEventContent } from '@/paste/pasteEventContent.js'
 
 /**
  * Block-shell paste, as a shell decorator rather than a hardcoded handler on the
@@ -41,39 +41,28 @@ export function BlockPasteShellDecorator({
       if (!isFocusedBlock(uiStateBlock, block.id, renderScopeId)) return
 
       e.preventDefault()
-      // File(s) on the clipboard (a pasted image) carry no text/plain — read them
-      // before the no-content early return so an image paste isn't dropped.
-      const files = e.clipboardData.files
-      const fileList = files && files.length > 0 ? Array.from(files) : []
-      const pastedText = e.clipboardData.getData('text/plain')
-      const pastedHtml = e.clipboardData.getData('text/html') || undefined
+      const {text, html, files: fileList, payload, hasAnything} = readPasteEventContent(e)
+      if (!hasAnything) return
 
       // Does this paste complete a cut (`@/paste/clipboardPayload.js`)?
-      // Resolved from this event's own flavors, so it describes the
-      // clipboard by construction. Checked BEFORE the no-content early
-      // return below (and before the paste-decision machinery further
-      // down): a move relocates the original blocks rather than producing
-      // pasted content at all, and has to be considered even when
-      // `pastedText` is empty — cutting a genuinely empty block leaves
-      // empty text, and gating on non-empty text would make that cut
-      // un-completable here. Uses the SAME placement policy an ordinary
-      // paste here would (`tryPasteAsMoveAt` / `resolvePasteMoveTarget`);
-      // the fallback below (`pasteMultilineText`, default
-      // `placement: 'visible'`) would otherwise land the pasted content
-      // somewhere different from where the move lands.
-      const payload = resolveClipboardPayload(pastedText, pastedHtml)
+      // Checked before the paste-decision machinery below: a move
+      // relocates the original blocks rather than producing pasted content
+      // at all. Uses the SAME placement policy an ordinary paste here would
+      // (`tryPasteAsMoveAt` / `resolvePasteMoveTarget`); the fallback below
+      // (`pasteMultilineText`, default `placement: 'visible'`) would
+      // otherwise land the pasted content somewhere different from where
+      // the move lands.
       if (await tryPasteAsMoveAt(repo, block, 'after', scopeRootId, payload)) {
         return
       }
-      if (!pastedText && fileList.length === 0) return
+      if (!text && fileList.length === 0) return
 
-      const html = pastedHtml
 
       // Block-shell paste (block focused, NOT in edit mode) has no text caret, so
       // the chord intent is always 'split'. Resolve the decision, capturing any
       // pasted media first (its reference text is spliced in, landing per the text
       // policy — NOT a forced child). `null` ⇒ nothing to paste.
-      const request: PasteRequest = { text: pastedText, html, files: fileList, intent: 'split', surface: 'shell' }
+      const request: PasteRequest = { text, html, files: fileList, intent: 'split', surface: 'shell' }
       const workspaceId = block.peek()?.workspaceId ?? repo.activeWorkspaceId ?? ''
       const resolved = await resolvePasteWithMediaCapture(runtime, request, { repo, workspaceId })
       if (!resolved) return

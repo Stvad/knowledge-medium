@@ -15,7 +15,8 @@ import {
 } from '@/paste/operations.js'
 import type { PasteRequest } from '@/paste/decision.js'
 import { tryPasteAsMoveAt } from '@/paste/moveOnPasteVerb.js'
-import { resolveClipboardPayload, type ClipboardPayload } from '@/paste/clipboardPayload.js'
+import type { ClipboardPayload } from '@/paste/clipboardPayload.js'
+import { readPasteEventContent } from '@/paste/pasteEventContent.js'
 import { useRepo } from '@/context/repo.js'
 import { useAppRuntime } from '@/extensions/runtimeContext.js'
 import { codeMirrorExtensionsFacet } from '@/editor/codeMirrorExtensions.js'
@@ -91,21 +92,8 @@ export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
     // Read-only editors leave paste to the browser (a no-op on a
     // non-editable surface) — matches the historical single-block guard.
     if (repo.isReadOnly) return
-    // File(s) on the clipboard (a pasted image) carry no text/plain, so read
-    // them BEFORE the no-content early return below — otherwise an image
-    // paste would fall through to the browser.
-    const files = e.clipboardData?.files
-    const fileList = files && files.length > 0 ? Array.from(files) : []
-    const text = e.clipboardData?.getData('text/plain') ?? ''
-    const html = e.clipboardData?.getData('text/html') || undefined
-
-    // Resolved from THIS event's own flavors, so it describes the
-    // clipboard by construction (`@/paste/clipboardPayload.js`). Read
-    // before the no-content early return below: cutting a genuinely empty
-    // block leaves empty text, and gating on text alone would make that
-    // cut un-completable from this surface.
-    const payload = resolveClipboardPayload(text, html)
-    if (!text && fileList.length === 0 && !payload) return
+    const {text, html, files: fileList, payload, hasAnything} = readPasteEventContent(e)
+    if (!hasAnything) return
 
     // Latch + reset the chord intent — the paste event can't see modifiers,
     // so the keydown handler latched it. `preventDefault` MUST run
