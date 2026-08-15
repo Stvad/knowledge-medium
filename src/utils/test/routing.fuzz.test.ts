@@ -1,51 +1,12 @@
 // @vitest-environment node
 /**
- * Fuzz suite for the panel-layout hash-route grammar in `src/utils/routing.ts`
- * (grammar comment: routing.ts:1-31). See `src/test/fuzz.ts` for smoke/deep
- * tier mechanics and `docs/fuzzing.md` for conventions. Existing example
- * tests (`routing.test.ts:145-176,292-300`) pin hand-picked cases for the
- * same laws generalized here; this suite doesn't duplicate those, it fuzzes
- * around them.
+ * Fuzz suite for the panel-layout hash-route grammar, which `routing.ts`
+ * states in its own header. See `src/test/fuzz.ts` for smoke/deep tier
+ * mechanics and `docs/fuzzing.md` for conventions. `routing.test.ts` pins
+ * hand-picked cases for the same laws; this suite fuzzes around them rather
+ * than duplicating them.
  *
- * ──── Properties ────
- *
- * 1. Totality (routing.ts:237-251, 294-301): `parseLayout`/`parseAppHash`
- *    never throw on arbitrary strings over the grammar alphabet
- *    (`/ , ( ) ; = %`) plus random unicode/control chars, and the result is
- *    internally consistent (`blockIds === flattenSlots(slots)`,
- *    routing.ts:59-60/249).
- *
- * 2. Fixed point (routing.ts:184-185: "Canonicalize at PARSE time (sorted by
- *    key) so parse(x) is already a fixed point of parse∘build∘parse
- *    regardless of the URL's entry order"): `parse(build(parse(x)))` deep-
- *    equals `parse(x)` for arbitrary hashes, and — the specific law the
- *    comment names — for a fixed set of rest entries in two independently
- *    shuffled URL orders, both parse to the identical (key-sorted) result.
- *
- * 3. Structural round-trip (build routing.ts:279-286, parse routing.ts:
- *    201-251): for a randomly generated bounded-depth (<=3) `LayoutSlot[]`
- *    AST built from the valid `BLOCK_ID_RE` charset (routing.ts:127) and
- *    valid `REST_ENTRY_RE` context entries (routing.ts:134),
- *    `parseLayout(buildLayoutFromSlots(ws, slots)).slots` deep-equals the
- *    AST canonicalized the same way `buildContextSuffix`/
- *    `parseContextEntries` do (falsy flags/empty `rest`/empty `viewMode`
- *    dropped, `rest` sorted by key).
- *
- * 4. Paren atomicity (routing.ts:19-20 header rule, enforced by
- *    `strict: true` at routing.ts:198-199/206/219-221): a paren group
- *    containing one invalid segment drops the WHOLE group, while sibling
- *    top-level columns survive untouched.
- *
- * 5. `splitTopLevel(s, sep).join(sep) === s` (routing.ts:94-109). This
- *    helper is module-private with exactly four call sites — routing.ts:203
- *    (','), 218 ('/' inside a paren group), 232 (';'), 242 ('/' top level) —
- *    and no exported binding, so there's nothing to import directly and
- *    reimplementing it would just test a copy, not the real code. Instead,
- *    each call site is driven through its real public-API caller with
- *    inputs constructed so the parsed AST names the split pieces 1:1 (no
- *    loss/reorder/dedup) — recovering the *real* function's split decisions
- *    from its actual output, then checking the join law against the exact
- *    string that was fed in.
+ * Each property's law is in its `describe` name.
  */
 import { describe, it, expect } from 'vitest'
 import fc from 'fast-check'
@@ -55,13 +16,13 @@ import {
   parseAppHash,
   buildLayoutFromSlots,
   flattenSlots,
-  isReservedSlotContextKey,
+  RESERVED_SLOT_CONTEXT_KEYS,
   type LayoutSlot,
 } from '../routing'
 
 // ──── Shared charset generators ────
 
-// BLOCK_ID_RE = /^[A-Za-z0-9._-]+$/ (routing.ts:127).
+// BLOCK_ID_RE = /^[A-Za-z0-9._-]+$/.
 const BLOCK_ID_CHARS =
   'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-'.split('')
 const blockIdArb: fc.Arbitrary<string> =
@@ -72,9 +33,11 @@ const blockIdArb: fc.Arbitrary<string> =
 const invalidBlockIdArb: fc.Arbitrary<string> =
   fc.string({unit: fc.constantFrom(...BLOCK_ID_CHARS), maxLength: 4}).map(s => `%${s}`)
 
-// CONTEXT_ENTRY_RE key group = /^[a-z][a-z0-9-]*/, minus the reserved keys —
-// those are not opaque `rest` entries and are excluded via the real predicate,
-// never a copy of its contents (see isReservedSlotContextKey).
+// CONTEXT_ENTRY_RE key group = /^[a-z][a-z0-9-]*/, minus the reserved keys.
+// Excluded via routing's registration DATA, never via isReservedSlotContextKey
+// — filtering by the predicate under test would make the round-trip property
+// blind to it over-classifying an ordinary key (routing would strip that key
+// from `rest` and the generator would stop producing it, in lockstep).
 const REST_KEY_CHARS = 'abcdefghijklmnopqrstuvwxyz0123456789-'.split('')
 const restKeyArb: fc.Arbitrary<string> = fc
   .tuple(
@@ -82,9 +45,9 @@ const restKeyArb: fc.Arbitrary<string> = fc
     fc.string({unit: fc.constantFrom(...REST_KEY_CHARS), maxLength: 5}),
   )
   .map(([first, rest]) => first + rest)
-  .filter(key => !isReservedSlotContextKey(key))
+  .filter(key => !RESERVED_SLOT_CONTEXT_KEYS.includes(key))
 
-// REST_ENTRY_RE value group = /[A-Za-z0-9%._~-]*/ (routing.ts:134).
+// REST_ENTRY_RE value group = /[A-Za-z0-9%._~-]*/.
 const REST_VALUE_CHARS =
   'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789%._~-'.split('')
 const restValueArb: fc.Arbitrary<string> =
@@ -99,7 +62,7 @@ const sortByKey = (entries: readonly string[]): string[] =>
   [...entries].sort((a, b) => (entryKey(a) < entryKey(b) ? -1 : entryKey(a) > entryKey(b) ? 1 : 0))
 
 // Unique by key: parseContextEntries dedups on first-valid-wins per key
-// (routing.ts:147/156/180), so a generator with colliding keys wouldn't
+//, so a generator with colliding keys wouldn't
 // exercise these properties any differently — dedup keeps the AST/build
 // side aligned with what a parse would actually produce.
 const uniqueRestEntriesArb: fc.Arbitrary<string[]> =
@@ -127,8 +90,8 @@ describe('totality: parseLayout / parseAppHash never throw on grammar-alphabet +
         }).not.toThrow()
         expect(Array.isArray(result!.slots)).toBe(true)
         expect(Array.isArray(result!.blockIds)).toBe(true)
-        // routing.ts:249: `blockIds: flattenSlots(slots)` — the two must
-        // always agree, since the real code derives one from the other.
+        // parseLayout derives blockIds from slots via flattenSlots, so the
+        // two must always agree.
         expect(result!.blockIds).toEqual(flattenSlots(result!.slots))
       }),
       fuzzParams(200),
@@ -147,7 +110,7 @@ describe('totality: parseLayout / parseAppHash never throw on grammar-alphabet +
 
 // ──── Property 2: fixed point ────
 
-describe('fixed point: parse∘build∘parse (routing.ts:184-185)', () => {
+describe('fixed point: parse∘build∘parse', () => {
   it('holds for arbitrary hash strings', () => {
     fc.assert(
       fc.property(soupArb, raw => {
@@ -163,7 +126,7 @@ describe('fixed point: parse∘build∘parse (routing.ts:184-185)', () => {
     )
   })
 
-  it('rest-entry URL order does not affect the parsed result (routing.ts:184-186 sorts at parse time)', () => {
+  it('rest-entry URL order does not affect the parsed result', () => {
     const orderedPairArb = uniqueRestEntriesArb.chain(entries =>
       fc.tuple(
         fc.constant(entries),
@@ -211,7 +174,7 @@ const MAX_DEPTH = 3
 
 // `depth` = remaining allowed paren-nesting levels from this point; a
 // sublayout consumes exactly one level for its own columns. Stack cells
-// (kind: 'leaf' | 'sublayout' only — routing.ts:47-49/209-213) and columns
+// (kind: 'leaf' | 'sublayout' only) and columns
 // mirror the actual grammar shapes parseColumn/parseSublayout produce.
 function genCell(depth: number): fc.Arbitrary<LayoutSlot> {
   return depth > 0
@@ -263,7 +226,7 @@ const canonicalizeSlot = (slot: LayoutSlot): LayoutSlot => {
   return {kind: 'sublayout', columns: slot.columns.map(canonicalizeSlot)}
 }
 
-describe('structural round-trip: bounded-depth LayoutSlot AST (build routing.ts:279-286, parse routing.ts:201-251)', () => {
+describe('structural round-trip: bounded-depth LayoutSlot AST', () => {
   it('buildLayoutFromSlots -> parseLayout recovers the canonicalized input AST', () => {
     fc.assert(
       fc.property(blockIdArb, slotsArb, (ws, slots) => {
@@ -279,7 +242,7 @@ describe('structural round-trip: bounded-depth LayoutSlot AST (build routing.ts:
 
 // ──── Property 4: paren atomicity ────
 
-describe('paren atomicity: one invalid segment drops the WHOLE group (routing.ts:19-20, 216-223)', () => {
+describe('paren atomicity: one invalid segment drops the WHOLE group', () => {
   it('corrupting one leaf inside a paren group drops the group; sibling top-level columns survive untouched', () => {
     fc.assert(
       fc.property(
@@ -311,8 +274,14 @@ describe('paren atomicity: one invalid segment drops the WHOLE group (routing.ts
 
 // ──── Property 5: splitTopLevel(s, sep).join(sep) === s, via real callers ────
 
-describe('splitTopLevel join law, driven through its real callers (routing.ts:94-109)', () => {
-  it('comma split: parseColumn recovers cells 1:1 (routing.ts:203)', () => {
+// `splitTopLevel` is module-private with no exported binding, so each of its
+// four call sites is driven through the public API instead, with inputs whose
+// parsed AST names the split pieces 1:1 (no loss/reorder/dedup) — recovering
+// the real function's split decisions from its output. Exporting the helper to
+// call it directly is the obvious simplification and is wrong: it tests the
+// split in isolation and stops covering what each call site splits on.
+describe('splitTopLevel join law, driven through its real callers', () => {
+  it('comma split: parseColumn recovers cells 1:1', () => {
     fc.assert(
       fc.property(fc.array(blockIdArb, {minLength: 1, maxLength: 5}), pieces => {
         const text = pieces.join(',')
@@ -330,7 +299,7 @@ describe('splitTopLevel join law, driven through its real callers (routing.ts:94
     )
   })
 
-  it('top-level slash split: parseLayout recovers workspaceId + column pieces 1:1 (routing.ts:242)', () => {
+  it('top-level slash split: parseLayout recovers workspaceId + column pieces 1:1', () => {
     fc.assert(
       fc.property(blockIdArb, fc.array(blockIdArb, {minLength: 0, maxLength: 5}), (ws, pieces) => {
         const text = [ws, ...pieces].join('/')
@@ -344,7 +313,7 @@ describe('splitTopLevel join law, driven through its real callers (routing.ts:94
     )
   })
 
-  it('paren-inner slash split: parseSublayout recovers columns 1:1 (routing.ts:218)', () => {
+  it('paren-inner slash split: parseSublayout recovers columns 1:1', () => {
     fc.assert(
       fc.property(fc.array(blockIdArb, {minLength: 1, maxLength: 4}), pieces => {
         const inner = pieces.join('/')
@@ -361,7 +330,7 @@ describe('splitTopLevel join law, driven through its real callers (routing.ts:94
     )
   })
 
-  it('semicolon split: parseSlotCell recovers [blockId, ...rest] 1:1 when already key-sorted (routing.ts:232)', () => {
+  it('semicolon split: parseSlotCell recovers [blockId, ...rest] 1:1 when already key-sorted', () => {
     const sortedUniqueRestEntriesArb = uniqueRestEntriesArb.map(sortByKey)
     fc.assert(
       fc.property(blockIdArb, sortedUniqueRestEntriesArb, (blockId, entries) => {
