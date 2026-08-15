@@ -216,6 +216,9 @@ interface RememberedEntry {
 const remembered = new Map<string, RememberedEntry>()
 
 export const rememberPayload = (text: string, payload: ClipboardPayload): void => {
+  // A fresh write of these blocks is a fresh cut, even if an identical
+  // earlier one was already completed.
+  completedCuts.delete(payloadKey(payload))
   const key = fnv1a32Hex(text)
   // Re-insert so the eviction order below reflects insertion, not first
   // sight, when the same text is copied twice.
@@ -240,6 +243,36 @@ export const recallPayloadForText = (text: string): ClipboardPayload | null => {
  *  smell this design exists to remove. */
 export const resetRememberedPayloads = (): void => {
   remembered.clear()
+  completedCuts.clear()
+}
+
+/**
+ * Cuts that have already been completed as a move.
+ *
+ * A cut stays on the clipboard after it's pasted — we can't rewrite the
+ * OS clipboard from inside a paste handler, and shouldn't try. Without
+ * this, pasting a second time relocates the SAME blocks again, from the
+ * first destination to the second, so the first paste looks undone. Every
+ * text editor answers the second ⌘V after a ⌘X by inserting the text
+ * again, and that's what downgrading the intent to 'copy' produces here:
+ * the paste falls through to an ordinary text paste.
+ *
+ * Keyed by the payload's own identity, so it's content-addressed like
+ * everything else — and cleared by `rememberPayload`, so re-cutting the
+ * same blocks arms a fresh cut rather than staying permanently consumed.
+ *
+ * Per-tab, deliberately: cutting in one tab, pasting in a second, then
+ * pasting again in the FIRST would move twice. Closing that needs shared
+ * state across tabs, which is a bigger cost than the case is worth.
+ */
+const completedCuts = new Set<string>()
+
+const payloadKey = (payload: ClipboardPayload): string =>
+  `${payload.workspaceId}\u0000${payload.blockIds.join(',')}`
+
+/** Called after a cut payload has actually been relocated. */
+export const markCutCompleted = (payload: ClipboardPayload): void => {
+  completedCuts.add(payloadKey(payload))
 }
 
 /** Record that `text` is no longer a cut — used by the plain-text write
@@ -265,5 +298,14 @@ export const forgetPayload = (text: string): void => {
 export const resolveClipboardPayload = (
   text: string,
   html: string | undefined,
-): ClipboardPayload | null =>
-  decodePayloadHtml(html, text) ?? recallPayloadForText(text)
+): ClipboardPayload | null => {
+  const payload = decodePayloadHtml(html, text) ?? recallPayloadForText(text)
+  if (!payload) return null
+  // A cut that already moved is still a perfectly good description of
+  // what's on the clipboard — it just isn't a cut any more. See
+  // `completedCuts`.
+  if (payload.intent === 'cut' && completedCuts.has(payloadKey(payload))) {
+    return {...payload, intent: 'copy'}
+  }
+  return payload
+}

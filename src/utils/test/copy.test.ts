@@ -157,6 +157,23 @@ describe('serializeSelectedBlocks', () => {
     expect(result.serializedIds).toEqual(['real'])
   })
 
+  it('drops a root that turns out to live inside another root, judged by the rows it just read', async () => {
+    // Callers pre-validate the selection's hierarchy, but that check and
+    // these subtree reads are separate snapshots — a sync-applied reparent
+    // between them makes one selected root a child of another. Without
+    // pruning here the descendant appears TWICE in the markdown (nested,
+    // then standalone), and every path that doesn't re-prune (a
+    // cross-workspace paste, or the move plugin being off) materializes
+    // the duplicate for real.
+    await seed({id: 'parent', content: 'parent', children: [{id: 'child', content: 'child'}]})
+
+    const result = await serializeSelectedBlocks(['parent', 'child'], env.repo)
+
+    expect(result.markdown).toBe('- parent\n  - child')
+    expect(result.serializedIds).toEqual(['parent'])
+    expect(result.blocks.map(x => x.id)).toEqual(['parent', 'child'])
+  })
+
   it('throws when no ids could be serialized', async () => {
     await expect(serializeSelectedBlocks(['ghost-1', 'ghost-2'], env.repo))
       .rejects.toThrow('No block data could be serialized for copying')

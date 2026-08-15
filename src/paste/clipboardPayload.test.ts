@@ -11,6 +11,7 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import {
   decodePayloadHtml,
+  markCutCompleted,
   encodePayloadHtml,
   recallPayloadForText,
   rememberPayload,
@@ -159,6 +160,46 @@ describe('resolveClipboardPayload', () => {
 
   it('is null when neither source knows the content', () => {
     expect(resolveClipboardPayload('never seen', undefined)).toBeNull()
+  })
+
+  describe('a cut that already moved', () => {
+    it('downgrades to a copy, so pasting twice inserts text instead of relocating again', () => {
+      // The clipboard still carries the cut — nothing can rewrite it from
+      // inside a paste handler. Without downgrading, the second paste
+      // moves the same blocks from the first destination to the second and
+      // the first paste looks undone. Text editors insert the text again;
+      // so does this, by falling through to an ordinary paste.
+      rememberPayload(MD, CUT)
+      expect(resolveClipboardPayload(MD, undefined)).toEqual(CUT)
+
+      markCutCompleted(CUT)
+
+      expect(resolveClipboardPayload(MD, undefined)).toEqual({...CUT, intent: 'copy'})
+    })
+
+    it('downgrades on the html path too, which cannot be rewritten either', () => {
+      const html = encodePayloadHtml(MD, CUT)
+      markCutCompleted(CUT)
+
+      expect(resolveClipboardPayload(MD, html)).toEqual({...CUT, intent: 'copy'})
+    })
+
+    it('re-cutting the same blocks arms a fresh cut', () => {
+      markCutCompleted(CUT)
+      expect(resolveClipboardPayload(MD, undefined)).toBeNull() // nothing remembered yet
+
+      rememberPayload(MD, CUT)
+
+      expect(resolveClipboardPayload(MD, undefined)).toEqual(CUT)
+    })
+
+    it('leaves an unrelated cut alone', () => {
+      const other: ClipboardPayload = {blockIds: ['zzz'], workspaceId: 'ws-1', intent: 'cut'}
+      rememberPayload('other text', other)
+      markCutCompleted(CUT)
+
+      expect(resolveClipboardPayload('other text', undefined)).toEqual(other)
+    })
   })
 
   // Cutting a genuinely EMPTY block leaves empty text on the clipboard.

@@ -174,10 +174,29 @@ export const serializeSelectedBlocks = async (
     throw new Error('No block data could be serialized for copying')
   }
 
+  // Drop any root that turned out to live inside ANOTHER root's subtree,
+  // judged by the rows we just fetched rather than by a separate earlier
+  // read. Callers do pre-validate the selection's hierarchy, but that
+  // check and these subtree reads are different snapshots: a sync-applied
+  // reparent landing between them makes B a child of A after B was
+  // accepted as its own root, and the markdown then contains B twice —
+  // once nested in A, once standalone. `moveBlocksTo` re-prunes and so
+  // moves it once, but the paths that DON'T move (a cross-workspace
+  // paste, or the plugin being off) materialize the duplicate for real.
+  // Pruning here means the ids, the markdown and the payload all describe
+  // one consistent read.
+  const nested = new Set<string>()
+  for (const result of validResults) {
+    for (const row of result.data.blocks) {
+      if (row.id !== result.id) nested.add(row.id)
+    }
+  }
+  const roots = validResults.filter(result => !nested.has(result.id))
+
   return {
-    markdown: validResults.map(r => r.data.markdown).join('\n'),
-    blocks: validResults.flatMap(r => r.data.blocks),
-    serializedIds: validResults.map(r => r.id),
+    markdown: roots.map(r => r.data.markdown).join('\n'),
+    blocks: roots.flatMap(r => r.data.blocks),
+    serializedIds: roots.map(r => r.id),
   }
 }
 

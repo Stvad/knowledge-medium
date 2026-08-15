@@ -52,8 +52,19 @@ export const resolveEditorPasteMove = (
   block: Block,
   payload: ClipboardPayload | null,
   scopeRootId: string | undefined,
+  intent: PasteRequest['intent'] = 'split',
 ): Promise<boolean> =>
-  tryPasteAsMoveAt(repo, block, 'after', scopeRootId, payload, 'sibling')
+  // `single-block` is Cmd/Ctrl+Shift+V — "insert the clipboard text
+  // verbatim into this block". Completing a cut there would relocate the
+  // source blocks and insert nothing at the caret, taking the explicit
+  // command away from the user. The decision lives in here rather than in
+  // `handlePaste` so it's reachable from a test: this whole function is
+  // extracted for that reason (see the doc above).
+  tryPasteAsMoveAt(
+    repo, block, 'after', scopeRootId,
+    intent === 'single-block' ? null : payload,
+    'sibling',
+  )
 
 export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
   const repo = useRepo()
@@ -111,7 +122,7 @@ export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
     // path (click a destination to enter edit mode, then ⌘V). If the move
     // completes (or is refused as a would-be cycle — see `pasteAsMoveImpl`),
     // the paste is fully handled and nothing below should also run.
-    if (await resolveEditorPasteMove(repo, block, payload, blockContext.scopeRootId)) {
+    if (await resolveEditorPasteMove(repo, block, payload, blockContext.scopeRootId, intent)) {
       return
     }
     if (!text && fileList.length === 0) return

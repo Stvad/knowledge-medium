@@ -31,6 +31,7 @@ import type { Repo } from '@/data/repo.js'
 import { liveBlockIds } from '@/data/blockLiveness.js'
 import { showError, showInfo, showSuccess } from '@/utils/toast.js'
 import type { PasteAsMoveInput, PasteMoveTarget } from '@/paste/moveOnPasteVerb.js'
+import { markCutCompleted } from '@/paste/clipboardPayload.js'
 import { moveBlocksTo } from './moveBlocks.ts'
 import { isWithinSubtreeOfAny } from './blockSubtreeMembership.ts'
 
@@ -77,6 +78,12 @@ export const pasteAsMoveImpl = async ({ repo, target, payload }: PasteAsMoveInpu
     }
 
     const result = await moveBlocksTo(repo, liveIds, target)
+    // The cut is spent. The clipboard still carries it (nothing here can
+    // rewrite the OS clipboard), so without this a second paste would
+    // relocate the same blocks again — from this destination to the next
+    // one — and the first paste would look undone. Marked only on full
+    // success: a zero-commit or partial failure stays retryable.
+    markCutCompleted(payload)
     if (liveIds.length < payload.blockIds.length) {
       const skipped = payload.blockIds.length - liveIds.length
       showSuccess(

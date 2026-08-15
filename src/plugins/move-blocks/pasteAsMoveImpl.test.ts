@@ -57,7 +57,12 @@ import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { keyBetween } from '@/data/orderKey'
 import type { PasteMoveTarget } from '@/paste/moveOnPasteVerb'
-import type { ClipboardPayload } from '@/paste/clipboardPayload'
+import {
+  rememberPayload,
+  resetRememberedPayloads,
+  resolveClipboardPayload,
+  type ClipboardPayload,
+} from '@/paste/clipboardPayload'
 import { pasteAsMoveImpl } from './pasteAsMoveImpl.ts'
 import { PartialMoveError } from './moveBlocks.ts'
 
@@ -97,6 +102,10 @@ const cut = (
   workspaceId = WS,
 ): ClipboardPayload => ({ blockIds, workspaceId, intent: 'cut' })
 
+// The impl marks completed cuts in a process-global set; reset it so a
+// test's cut isn't seen as already-spent by the next one.
+beforeEach(() => { resetRememberedPayloads() })
+
 // The preflight's own refusal message, distinct from `CycleError`'s
 // ("moving X under Y would create a cycle") — asserting on it (not just the
 // call count) is what tells "the preflight refused" apart from "moveBlocksTo's
@@ -127,6 +136,27 @@ describe('pasteAsMoveImpl', () => {
     expect(result).toBe(true)
     expect(await childIds('dest')).toEqual(['a']) // same id — nothing minted
     expect(await childIds('src')).toEqual([])
+  })
+
+  it('a second paste of the same cut resolves as a COPY, so it cannot relocate again', async () => {
+    // End-to-end across both halves: the impl marks the cut spent, and the
+    // NEXT paste's `resolveClipboardPayload` is what sees that. Testing
+    // only through the impl would prove nothing — it trusts the payload it
+    // is handed, so it would move a second time and should.
+    await seed('dest', null)
+    await seed('a', null)
+    const markdown = 'a'
+    rememberPayload(markdown, cut(['a']))
+
+    const first = resolveClipboardPayload(markdown, undefined)
+    expect(first).toEqual(cut(['a']))
+    expect(await pasteAsMoveImpl({ repo, target: INTO_DEST, payload: first! })).toBe(true)
+    expect(await childIds('dest')).toEqual(['a'])
+
+    // Same clipboard content, nothing else copied since.
+    expect(resolveClipboardPayload(markdown, undefined)).toEqual({
+      ...cut(['a']), intent: 'copy',
+    })
   })
 
   describe('cycle refusals', () => {

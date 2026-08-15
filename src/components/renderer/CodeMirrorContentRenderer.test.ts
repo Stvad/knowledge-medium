@@ -127,6 +127,27 @@ describe('resolveEditorPasteMove', () => {
     expect(await childIds('inner')).toEqual(['a', 'innerkid'])
   })
 
+  it('does NOT move on the paste-as-plain-text chord — that command means "insert the text here"', async () => {
+    // Cmd/Ctrl+Shift+V. Completing the cut would relocate 'a' and insert
+    // nothing at the caret, which is the opposite of what was asked.
+    const result = await resolveEditorPasteMove(
+      repo, repo.block('dest'), cutPayload(['a']), undefined, 'single-block',
+    )
+
+    expect(result).toBe(false)
+    expect(repo.block('a').peek()?.parentId).toBe('src') // untouched
+  })
+
+  it('still moves on the ordinary paste chord', async () => {
+    // The control: same call, default intent.
+    const result = await resolveEditorPasteMove(
+      repo, repo.block('dest'), cutPayload(['a']), undefined, 'split',
+    )
+
+    expect(result).toBe(true)
+    expect(repo.block('a').peek()?.parentId).toBe('dest')
+  })
+
   it('is a no-op fallback (not a move) when the payload is a COPY rather than a cut', async () => {
     const payload: ClipboardPayload = { blockIds: ['a'], workspaceId: WS, intent: 'copy' }
 
