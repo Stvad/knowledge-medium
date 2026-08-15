@@ -22,10 +22,8 @@
  *     through to a text paste would parse the cut markdown into brand-new
  *     blocks while the originals still sit where they were.
  *
- * Every one of those simply falls through (or refuses); none of them has
- * any state to put back. That absence is the point — the previous design's
- * restore-the-claim paths were where four review rounds' worth of bugs
- * lived.
+ * None of them has any state to put back, which is why there are no
+ * restore paths here.
  */
 import type { Repo } from '@/data/repo.js'
 import { liveBlockIds } from '@/data/blockLiveness.js'
@@ -117,10 +115,30 @@ const runPasteAsMove = async ({ repo, target, payload }: PasteAsMoveInput): Prom
     }
 
     const result = await moveBlocksTo(repo, liveIds, target)
-    // Nothing relocated at all — every source was gone by the time its
-    // move ran. Not a move, so the caller text-pastes rather than being
-    // told a move happened that visibly did nothing.
-    if (result.moved === 0) return 'not-a-move'
+    if (result.moved === 0) {
+      // Nothing relocated. WHY decides what the caller should do, and the
+      // two reasons want opposite answers:
+      //
+      //   - every source is tombstoned. The blocks are gone for good, so a
+      //     text paste re-creating them is the useful outcome.
+      //   - every source is merely ABSENT here — an html cut pasted in a
+      //     second tab before those rows synced. They are coming. A text
+      //     paste would duplicate them the moment they arrive, while the
+      //     cut is still armed, so refuse and let the user retry.
+      //
+      // Re-read AFTER the move to tell them apart. `moveBlocksTo` skips
+      // only rows that are missing or tombstoned, so anything that didn't
+      // move is one of those; `liveBlockIds` excludes the tombstones and
+      // keeps the merely-absent ("missing ≠ deleted"), which is exactly
+      // the split. The pre-move read can't answer this — in it, a block
+      // deleted a moment later still looks live.
+      const absent = await liveBlockIds(repo, liveIds)
+      if (absent.length > 0) {
+        showError("Those blocks haven't synced here yet — try again in a moment")
+        return 'refused'
+      }
+      return 'not-a-move'
+    }
 
     // Accounting is against `accountedIds`, which includes blocks pruned
     // away because an ancestor in the same request carried them along —

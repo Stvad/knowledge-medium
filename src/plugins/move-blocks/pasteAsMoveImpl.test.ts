@@ -474,6 +474,20 @@ describe('pasteAsMoveImpl', () => {
     expect(showSuccessMock).not.toHaveBeenCalled()
   })
 
+  it('refuses rather than duplicating when every source is merely UNSYNCED', async () => {
+    // An html cut pasted in a second tab before those rows arrive. A text
+    // paste would materialize copies, and the cut is still armed — so the
+    // blocks get duplicated the moment they sync. Refuse instead.
+    await seed('dest', null)
+    const payload = cut(['not-here-yet'])
+
+    const result = await pasteAsMoveImpl({ repo, target: INTO_DEST, payload })
+
+    expect(result).toBe('refused') // consumed — no duplicating text paste
+    expect(await childIds('dest')).toEqual([])
+    expect(showErrorMock).toHaveBeenCalledTimes(1)
+  })
+
   describe('move failures', () => {
     it('handles a rejecting PREFLIGHT read instead of letting it escape', async () => {
       // The DOM paste handlers have already called `preventDefault` and

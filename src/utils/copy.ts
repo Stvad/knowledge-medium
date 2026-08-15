@@ -10,7 +10,6 @@ import {
   type ClipboardPayload,
 } from '@/paste/clipboardPayload.js'
 import { showError } from '@/utils/toast.js'
-import { validateSelectionHierarchy } from '@/utils/selection.js'
 
 const createIndentedContent = (content: string, depth: number): string => {
   const indentBy = '  '
@@ -131,8 +130,12 @@ export const writeTextToClipboard = async (text: string): Promise<void> => {
  *  surface as an unhandled-rejection warning; these copies are
  *  informational; unlike cut, nothing depends on the OS write actually
  *  landing (`cutBlockIdsToClipboard` handles ITS write failure
- *  explicitly). The pending-move clear itself is unconditional and
- *  synchronous either way. */
+ *  explicitly).
+ *
+ *  Note the payload bookkeeping is skipped along with the write: a refused
+ *  write never reaches `forgetPayload`, so any entry for this text stays.
+ *  Harmless — the clipboard still holds whatever it held, which is what
+ *  that entry describes. */
 export const writeTextToClipboardBestEffort = (text: string): void => {
   void writeTextToClipboard(text).catch(() => {})
 }
@@ -247,14 +250,11 @@ export const copyBlockIdsToClipboard = async (
  *  Returns whether the cut is live, so callers can decide whether to also
  *  clear a UI selection.
  *
- *  Normalizes through `validateSelectionHierarchy` BEFORE serializing: an
- *  ancestor+descendant pair in the selection (the invariant is enforced
- *  only at write time — cache-only, nothing re-validates it after a
- *  sync-applied reparent lands under it) would otherwise serialize the
- *  descendant TWICE, once nested in the ancestor's subtree and once as its
- *  own entry. `moveBlocksTo` prunes identically when the move runs, so
- *  normalizing here keeps the payload, the clipboard text and the eventual
- *  move describing the same set.
+ *  Pruning of ancestor+descendant pairs happens inside
+ *  `serializeSelectedBlocks`, from the rows it reads — not as a separate
+ *  pass beforehand. Two reads can disagree about the hierarchy (a
+ *  sync-applied reparent between them), and then the ids, the markdown and
+ *  the payload describe different sets.
  *
  *  Carries `data.serializedIds`, not `normalizedIds`: a root that failed
  *  to serialize (see `SerializedSelection`) is absent from the markdown
@@ -281,17 +281,21 @@ export const cutBlockIdsToClipboard = async (
     // `HotkeyReconciler` — so a hierarchy or serialization failure escaping
     // here means the user sees nothing at all: no toast, no clipboard, no
     // hint that the cut didn't happen.
-    const normalizedIds = await validateSelectionHierarchy([...blockIds], repo)
-    const data = await serializeSelectedBlocks(normalizedIds, repo)
-    // A short `serializedIds` means a root's subtree read failed. Refuse
-    // the whole cut rather than silently cutting a subset: the caller
-    // clears the entire selection on success, so a partial cut strands the
-    // failed blocks with nothing telling the user. Same all-or-nothing
-    // shape as `deleteBlocksThroughUi`.
-    if (data.serializedIds.length !== normalizedIds.length) {
-      throw new Error(
-        `cut serialized ${data.serializedIds.length} of ${normalizedIds.length} roots`,
-      )
+    const data = await serializeSelectedBlocks([...blockIds], repo)
+    // Every requested id must appear SOMEWHERE in what we serialized —
+    // as a root, or nested inside one. Checked against the rows the
+    // serialization actually read, so the hierarchy question is answered
+    // by one snapshot: a separate pre-validation pass could prune B as
+    // A's descendant while the subsequent read saw B already detached,
+    // leaving a count that matched and a cut that silently dropped it.
+    //
+    // All-or-nothing, like `deleteBlocksThroughUi`: the caller clears the
+    // whole selection on success, so a partial cut strands the missing
+    // blocks with nothing telling the user.
+    const covered = new Set(data.blocks.map(block => block.id))
+    const missing = [...blockIds].filter(id => !covered.has(id))
+    if (missing.length > 0) {
+      throw new Error(`cut could not serialize ${missing.length} of ${blockIds.length} blocks`)
     }
     await writeToClipboard(data, {
       blockIds: data.serializedIds,
