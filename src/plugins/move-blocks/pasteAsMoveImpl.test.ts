@@ -92,6 +92,13 @@ const childIds = async (parentId: string): Promise<string[]> => {
   return rows.map(r => r.id)
 }
 
+const parentOf = async (id: string): Promise<string | null> => {
+  const row = await repo.db.getOptional<{ parent_id: string | null }>(
+    'SELECT parent_id FROM blocks WHERE id = ?', [id],
+  )
+  return row?.parent_id ?? null
+}
+
 const INTO_DEST: PasteMoveTarget = { parentId: 'dest', position: { kind: 'last' } }
 
 /** A cut payload for `blockIds`, in the active workspace unless told
@@ -438,6 +445,33 @@ describe('pasteAsMoveImpl', () => {
     expect(await pasteAsMoveImpl({ repo, target: INTO_DEST, payload })).toBe('moved')
 
     expect(recallPayloadForText(markdown)).toEqual({...payload, intent: 'copy'})
+  })
+
+  it('completes the cut when one root got reparented under another before the paste', async () => {
+    // A and B were cut as separate roots; B became A's child in between
+    // (a manual move, or a sync-applied reparent). `moveBlocksTo` prunes B
+    // and carries it inside A's subtree, so it never appears in
+    // `movedIds` — subtracting those directly would treat B as left
+    // behind, never finish the cut, misreport it as skipped, and let every
+    // later paste relocate both again.
+    await seed('dest', null)
+    await seed('a', null)
+    await seed('b', null)
+    const markdown = 'a+b'
+    const payload = cut(['a', 'b'])
+    rememberPayload(markdown, payload)
+
+    // The reparent, after the cut.
+    await repo.mutate.move({id: 'b', parentId: 'a', position: {kind: 'last'}})
+
+    const result = await pasteAsMoveImpl({ repo, target: INTO_DEST, payload })
+
+    expect(result).toBe('moved')
+    expect(await childIds('dest')).toEqual(['a'])
+    expect(await parentOf('b')).toBe('a') // rode along inside 'a'
+    // Spent, and no bogus "1 was skipped".
+    expect(recallPayloadForText(markdown)).toEqual({...payload, intent: 'copy'})
+    expect(showSuccessMock).not.toHaveBeenCalled()
   })
 
   describe('move failures', () => {

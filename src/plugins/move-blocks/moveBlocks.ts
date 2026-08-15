@@ -32,6 +32,7 @@ import type { Repo } from '@/data/repo.js'
 import { move as moveMutator, type InsertPosition } from '@/data/mutators.js'
 import { ChangeScope } from '@/data/api'
 import { validateSelectionHierarchy } from '@/utils/selection.js'
+import { isWithinSubtreeOfAny } from './blockSubtreeMembership.ts'
 import { isCollapsedProp } from '@/data/properties.js'
 
 /** Where a batch should land: a parent (`null` = workspace root) plus
@@ -49,6 +50,17 @@ export interface MoveBlocksResult {
    *  Callers need these (not just the count) to subtract them from the
    *  ui-state selection — see `moveAction`. */
   movedIds: readonly string[]
+  /** Every REQUESTED id that ended up at the destination — `movedIds`
+   *  plus the ones pruned away because an ancestor in the same request
+   *  carried them along.
+   *
+   *  Reported here rather than re-derived by callers: pruning is this
+   *  function's decision, so anyone reconstructing "did my whole request
+   *  land?" from `movedIds` alone has to duplicate the hierarchy rule and
+   *  will disagree the moment the tree changed between the two reads.
+   *  `pasteAsMoveImpl` counted a carried-along block as left behind and
+   *  never finished the cut. */
+  accountedIds: readonly string[]
 }
 
 /**
@@ -110,7 +122,7 @@ export const moveBlocksTo = async (
   target: MoveTarget,
 ): Promise<MoveBlocksResult> => {
   const prunedIds = await validateSelectionHierarchy([...blockIds], repo)
-  if (prunedIds.length === 0) return { moved: 0, movedIds: [] }
+  if (prunedIds.length === 0) return { moved: 0, movedIds: [], accountedIds: [] }
 
   let moved = 0
   const movedIds: string[] = []
@@ -151,7 +163,26 @@ export const moveBlocksTo = async (
     if (moved === 0) throw error
     throw new PartialMoveError([...movedIds], error)
   }
-  return { moved, movedIds }
+  return { moved, movedIds, accountedIds: await accountFor(repo, blockIds, movedIds) }
+}
+
+/** Which of the originally REQUESTED ids are now at the destination.
+ *
+ *  A requested id that isn't in `movedIds` was pruned as a descendant; it
+ *  travelled if the root that swallowed it moved. Checked against the
+ *  post-move tree, which is what makes this agree with the pruning rather
+ *  than re-deriving it from a stale read. */
+const accountFor = async (
+  repo: Repo,
+  requested: readonly string[],
+  movedIds: readonly string[],
+): Promise<string[]> => {
+  const moved = new Set(movedIds)
+  const accounted: string[] = []
+  for (const id of requested) {
+    if (moved.has(id) || await isWithinSubtreeOfAny(repo, id, moved)) accounted.push(id)
+  }
+  return accounted
 }
 
 /**

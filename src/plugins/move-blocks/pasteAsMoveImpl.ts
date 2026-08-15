@@ -122,7 +122,9 @@ const runPasteAsMove = async ({ repo, target, payload }: PasteAsMoveInput): Prom
     // told a move happened that visibly did nothing.
     if (result.moved === 0) return 'not-a-move'
 
-    // Accounting is against `movedIds`, not the count. `liveBlockIds`
+    // Accounting is against `accountedIds`, which includes blocks pruned
+    // away because an ancestor in the same request carried them along —
+    // `movedIds` lists only the roots that were placed. `liveBlockIds`
     // deliberately keeps ids that are merely MISSING locally ("missing ≠
     // deleted"), and `moveBlocksTo` skips those inside its transaction —
     // so a payload can move some blocks while another sits unsynced. That
@@ -131,11 +133,11 @@ const runPasteAsMove = async ({ repo, target, payload }: PasteAsMoveInput): Prom
     // this tab downgraded to a copy. Leave such a cut live so a paste
     // after the sync can finish it; re-moving the blocks that already
     // landed is idempotent.
-    const moved = new Set(result.movedIds)
-    const leftBehind = liveIds.filter(id => !moved.has(id))
+    const accounted = new Set(result.accountedIds)
+    const leftBehind = liveIds.filter(id => !accounted.has(id))
     if (leftBehind.length === 0) markCutCompleted(payload)
 
-    const skipped = payload.blockIds.length - result.moved
+    const skipped = payload.blockIds.length - accounted.size
     if (skipped > 0) {
       showSuccess(
         `Moved ${result.moved} block${result.moved === 1 ? '' : 's'} — `

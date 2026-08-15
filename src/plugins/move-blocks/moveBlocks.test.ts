@@ -83,7 +83,7 @@ describe('moveBlocksTo', () => {
 
     const result = await moveBlocksTo(repo, ['c2', 'c1', 'c3'], INTO_DEST)
 
-    expect(result).toEqual({ moved: 3, movedIds: ['c2', 'c1', 'c3'] })
+    expect(result).toEqual({ moved: 3, movedIds: ['c2', 'c1', 'c3'], accountedIds: ['c2', 'c1', 'c3'] })
     expect(await childIds('dest')).toEqual(['already-there', 'c2', 'c1', 'c3'])
     expect(await childIds('src')).toEqual([])
   })
@@ -97,7 +97,9 @@ describe('moveBlocksTo', () => {
 
     // Only 'a' actually moves; 'b' rides along as a's child, not as a
     // separate move.
-    expect(result).toEqual({ moved: 1, movedIds: ['a'] })
+    // 'b' is accounted for: it rode along inside 'a'. A caller that
+    // subtracted only `movedIds` would treat it as left behind.
+    expect(result).toEqual({ moved: 1, movedIds: ['a'], accountedIds: ['a', 'b'] })
     expect(await childIds('dest')).toEqual(['a'])
     expect(await parentOf('b')).toBe('a')
   })
@@ -296,7 +298,7 @@ describe('moveBlocksTo', () => {
   it('is a no-op for an empty selection', async () => {
     await seed('dest', null)
     const result = await moveBlocksTo(repo, [], INTO_DEST)
-    expect(result).toEqual({ moved: 0, movedIds: [] })
+    expect(result).toEqual({ moved: 0, movedIds: [], accountedIds: [] })
   })
 
   it('skips a tombstoned block and does not count it as moved', async () => {
