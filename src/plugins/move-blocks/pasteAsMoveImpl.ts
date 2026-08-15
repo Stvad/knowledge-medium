@@ -70,8 +70,10 @@ const isCycleTarget = async (
  *  hand-back path to get wrong. */
 const movesInFlight = new Set<string>()
 
-const inFlightKey = (payload: PasteAsMoveInput['payload']): string =>
-  `${payload.workspaceId}\u0000${payload.blockIds.join(',')}`
+/** The GESTURE, not the blocks — same key `completedCuts` uses. Keying by
+ *  workspace+ids instead would collide a fresh cut of the same blocks with
+ *  an older paste still in flight, and silently refuse the newer one. */
+const inFlightKey = (payload: PasteAsMoveInput['payload']): string => payload.cutId
 
 export const pasteAsMoveImpl = async ({ repo, target, payload }: PasteAsMoveInput): Promise<PasteAsMoveResult> => {
   // Synchronous, before any await — two handlers can't both pass this.
@@ -115,21 +117,29 @@ const runPasteAsMove = async ({ repo, target, payload }: PasteAsMoveInput): Prom
     }
 
     const result = await moveBlocksTo(repo, liveIds, target)
-    // Nothing actually relocated — every source was tombstoned between the
-    // liveness read and its move. Not a move, so the caller text-pastes
-    // rather than being told a move happened that visibly did nothing.
+    // Nothing relocated at all — every source was gone by the time its
+    // move ran. Not a move, so the caller text-pastes rather than being
+    // told a move happened that visibly did nothing.
     if (result.moved === 0) return 'not-a-move'
-    // The cut is spent. The clipboard still carries it (nothing here can
-    // rewrite the OS clipboard), so without this a second paste would
-    // relocate the same blocks again — from this destination to the next
-    // one — and the first paste would look undone. Marked only on full
-    // success: a zero-commit or partial failure stays retryable.
-    markCutCompleted(payload)
-    if (liveIds.length < payload.blockIds.length) {
-      const skipped = payload.blockIds.length - liveIds.length
+
+    // Accounting is against `movedIds`, not the count. `liveBlockIds`
+    // deliberately keeps ids that are merely MISSING locally ("missing ≠
+    // deleted"), and `moveBlocksTo` skips those inside its transaction —
+    // so a payload can move some blocks while another sits unsynced. That
+    // is not a finished cut: spending it here would strand the absent
+    // block at its old parent once it arrives, with every later paste in
+    // this tab downgraded to a copy. Leave such a cut live so a paste
+    // after the sync can finish it; re-moving the blocks that already
+    // landed is idempotent.
+    const moved = new Set(result.movedIds)
+    const leftBehind = liveIds.filter(id => !moved.has(id))
+    if (leftBehind.length === 0) markCutCompleted(payload)
+
+    const skipped = payload.blockIds.length - result.moved
+    if (skipped > 0) {
       showSuccess(
         `Moved ${result.moved} block${result.moved === 1 ? '' : 's'} — `
-        + `${skipped} ${skipped === 1 ? 'was' : 'were'} already deleted and skipped`,
+        + `${skipped} ${skipped === 1 ? 'was' : 'were'} skipped`,
       )
     }
   } catch (error) {

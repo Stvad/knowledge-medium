@@ -49,18 +49,12 @@ export const anyBlockTombstoned = async (
  *  unsynced id in the survivors list rather than dropping it). Preserves
  *  the input order.
  *
- *  Used by `pasteAsMoveImpl` to move the SURVIVORS of a pending cut→move
- *  instead of refusing the whole batch — and re-creating every block,
- *  including the untouched ones — just because one of the cut ids was
- *  deleted before the paste.
+ *  Used by `pasteAsMoveImpl` to move the survivors of a cut rather than
+ *  refusing the whole batch because one id was deleted since.
  *
  *  Reads in chunks of `LIVENESS_CHUNK`, mirroring `FIELD_PROBE_CHUNK` in
  *  `repo.ts`: one bound parameter per id would otherwise blow SQLite's
- *  bound-parameter cap on a large multi-select cut. That failure would be
- *  worse than a slow query — `pasteAsMoveImpl` deliberately RESTORES the
- *  pending-move register on any thrown error, so a paste that hits an
- *  oversized query here would retry the exact same oversized query on
- *  every subsequent paste attempt, and the cut could never complete. */
+ *  bound-parameter cap on a large multi-select cut. */
 const LIVENESS_CHUNK = 500
 
 export const liveBlockIds = async (

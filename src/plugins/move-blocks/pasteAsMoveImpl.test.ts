@@ -97,10 +97,14 @@ const INTO_DEST: PasteMoveTarget = { parentId: 'dest', position: { kind: 'last' 
 /** A cut payload for `blockIds`, in the active workspace unless told
  *  otherwise. Note there is no clipboard TEXT here at all — resolving the
  *  payload against the clipboard already happened in the caller. */
+// Each call is a distinct GESTURE, as a real cut is — two cuts of the same
+// blocks are not the same cut, and both `completedCuts` and the in-flight
+// guard key on that.
+let cutSeq = 0
 const cut = (
   blockIds: string[],
   workspaceId = WS,
-): ClipboardPayload => ({ blockIds, workspaceId, intent: 'cut' , cutId: 'cut-16'})
+): ClipboardPayload => ({ blockIds, workspaceId, intent: 'cut', cutId: `cut-${++cutSeq}` })
 
 // The impl marks completed cuts in a process-global set; reset it so a
 // test's cut isn't seen as already-spent by the next one.
@@ -147,17 +151,17 @@ describe('pasteAsMoveImpl', () => {
     await seed('dest', null)
     await seed('a', null)
     const markdown = 'a'
-    rememberPayload(markdown, cut(['a']))
+    // One gesture, read twice — `cut()` mints a new one per call.
+    const gesture = cut(['a'])
+    rememberPayload(markdown, gesture)
 
     const first = recallPayloadForText(markdown)
-    expect(first).toEqual(cut(['a']))
+    expect(first).toEqual(gesture)
     expect(await pasteAsMoveImpl({ repo, target: INTO_DEST, payload: first! })).toBe('moved')
     expect(await childIds('dest')).toEqual(['a'])
 
     // Same clipboard content, nothing else copied since.
-    expect(recallPayloadForText(markdown)).toEqual({
-      ...cut(['a']), intent: 'copy',
-    })
+    expect(recallPayloadForText(markdown)).toEqual({...gesture, intent: 'copy'})
   })
 
   it('a concurrent second paste of the same cut is swallowed, not run twice', async () => {
@@ -182,12 +186,15 @@ describe('pasteAsMoveImpl', () => {
     await vi.waitFor(() => { expect(started).toBe(1) })
 
     // Fired while the first is still inside its move.
-    const second = await pasteAsMoveImpl({
-      repo, target: { parentId: 'dest2', position: { kind: 'last' } }, payload,
-    })
+    let second: unknown
+    try {
+      second = await pasteAsMoveImpl({
+        repo, target: { parentId: 'dest2', position: { kind: 'last' } }, payload,
+      })
+    } finally {
+      releaseFirst()
+    }
     expect(second).toBe('refused') // consumed — no duplicating text paste
-
-    releaseFirst()
     expect(await first).toBe('moved')
 
     // The load-bearing assertion. Asserting only on the FINAL tree passes
@@ -197,6 +204,41 @@ describe('pasteAsMoveImpl', () => {
     expect(moveBlocksToMock).toHaveBeenCalledTimes(1)
     expect(await childIds('dest')).toEqual(['a'])
     expect(await childIds('dest2')).toEqual([])
+  })
+
+  it('a fresh cut of the same blocks is not blocked by an older paste still in flight', async () => {
+    // The in-flight guard keys on the gesture, not the blocks. Keying by
+    // workspace+ids would collide the two and silently refuse the NEWER
+    // cut while the older paste wins.
+    await seed('dest', null)
+    await seed('dest2', null)
+    await seed('a', null)
+    const older = cut(['a'])
+    const newer = cut(['a']) // same blocks, different gesture
+
+    let releaseOlder = (): void => {}
+    const olderMayProceed = new Promise<void>(resolve => { releaseOlder = resolve })
+    let started = 0
+    moveBlocksToMock.mockImplementationOnce(async (r, ids, t) => {
+      started += 1
+      await olderMayProceed
+      return realMoveBlocksTo.current!(r, ids, t)
+    })
+
+    const first = pasteAsMoveImpl({ repo, target: INTO_DEST, payload: older })
+    await vi.waitFor(() => { expect(started).toBe(1) })
+
+    try {
+      const second = await pasteAsMoveImpl({
+        repo, target: { parentId: 'dest2', position: { kind: 'last' } }, payload: newer,
+      })
+      expect(second).toBe('moved') // not refused as a collision
+    } finally {
+      // Release even on failure: an abandoned paste never runs its
+      // `finally`, so its in-flight entry would leak into later tests.
+      releaseOlder()
+      await first
+    }
   })
 
   describe('cycle refusals', () => {
@@ -317,7 +359,7 @@ describe('pasteAsMoveImpl', () => {
       expect(result).toBe('moved')
       expect(await childIds('dest')).toEqual(['a'])
       expect(showSuccessMock).toHaveBeenCalledExactlyOnceWith(
-        'Moved 1 block — 1 was already deleted and skipped',
+        'Moved 1 block — 1 was skipped',
       )
     })
 
@@ -364,6 +406,38 @@ describe('pasteAsMoveImpl', () => {
     expect(await childIds('dest')).toEqual([])
     // Still a live cut — a later paste can still complete it.
     expect(recallPayloadForText(markdown)).toEqual(payload)
+  })
+
+  it('keeps the cut retryable when a block is merely UNSYNCED rather than deleted', async () => {
+    // `liveBlockIds` keeps ids that are missing locally ("missing ≠
+    // deleted"), and the move skips them in-transaction. Spending the cut
+    // on the partial result would strand the absent block at its old
+    // parent once it syncs, with every later paste downgraded to a copy.
+    await seed('dest', null)
+    await seed('here', null)
+    const markdown = 'here+elsewhere'
+    const payload = cut(['here', 'unsynced'])
+    rememberPayload(markdown, payload)
+
+    const result = await pasteAsMoveImpl({ repo, target: INTO_DEST, payload })
+
+    expect(result).toBe('moved')
+    expect(await childIds('dest')).toEqual(['here'])
+    // Still live: a paste after 'unsynced' arrives can finish the job.
+    expect(recallPayloadForText(markdown)).toEqual(payload)
+  })
+
+  it('spends the cut once every block is accounted for', async () => {
+    // The control for the case above.
+    await seed('dest', null)
+    await seed('a', null)
+    const markdown = 'a'
+    const payload = cut(['a'])
+    rememberPayload(markdown, payload)
+
+    expect(await pasteAsMoveImpl({ repo, target: INTO_DEST, payload })).toBe('moved')
+
+    expect(recallPayloadForText(markdown)).toEqual({...payload, intent: 'copy'})
   })
 
   describe('move failures', () => {
