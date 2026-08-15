@@ -1,0 +1,2 @@
+import{resolveClipboardPayload as e}from"./clipboardPayload.js";var t=t=>{let n=t.clipboardData?.files,r=n&&n.length>0?Array.from(n):[],i=t.clipboardData?.getData(`text/plain`)??``,a=t.clipboardData?.getData(`text/html`)||void 0,o=e(i,a);return{text:i,html:a,files:r,payload:o,hasAnything:!!i||r.length>0||o!==null}};export{t as readPasteEventContent};
+//# sourceMappingURL=pasteEventContent.js.map
