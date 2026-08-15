@@ -185,11 +185,11 @@ export const decodePayloadHtml = (
 ): ClipboardPayload | null => {
   const encoded = decodeEncodedPayload(html)
   if (!encoded || encoded.digest !== fnv1a32Hex(text)) return null
-  return {
+  return applyCompletion({
     blockIds: encoded.blockIds,
     workspaceId: encoded.workspaceId,
     intent: encoded.intent,
-  }
+  })
 }
 
 /**
@@ -234,7 +234,7 @@ export const rememberPayload = (text: string, payload: ClipboardPayload): void =
 export const recallPayloadForText = (text: string): ClipboardPayload | null => {
   const entry = remembered.get(fnv1a32Hex(text))
   // Full-text equality, not just the hash — see MAX_REMEMBERED's doc.
-  return entry && entry.text === text ? entry.payload : null
+  return applyCompletion(entry && entry.text === text ? entry.payload : null)
 }
 
 /** Test-only: the table is process-global, so a test that writes to it
@@ -275,6 +275,18 @@ export const markCutCompleted = (payload: ClipboardPayload): void => {
   completedCuts.add(payloadKey(payload))
 }
 
+/** Applied at EVERY point a payload is read, not just in the composed
+ *  `resolveClipboardPayload`. Putting it only there left
+ *  `recallPayloadForText` handing out live cuts, and the one caller that
+ *  used it directly (the keyboard paste path) went on relocating a spent
+ *  cut — the exact bug `markCutCompleted` exists to prevent, surviving on
+ *  the other surface. A reader that can return an un-downgraded payload is
+ *  a reader someone will use. */
+const applyCompletion = (payload: ClipboardPayload | null): ClipboardPayload | null => {
+  if (!payload || payload.intent !== 'cut') return payload
+  return completedCuts.has(payloadKey(payload)) ? {...payload, intent: 'copy'} : payload
+}
+
 /** Record that `text` is no longer a cut — used by the plain-text write
  *  path, which puts content on the clipboard carrying no block identity.
  *
@@ -298,14 +310,8 @@ export const forgetPayload = (text: string): void => {
 export const resolveClipboardPayload = (
   text: string,
   html: string | undefined,
-): ClipboardPayload | null => {
-  const payload = decodePayloadHtml(html, text) ?? recallPayloadForText(text)
-  if (!payload) return null
-  // A cut that already moved is still a perfectly good description of
-  // what's on the clipboard — it just isn't a cut any more. See
-  // `completedCuts`.
-  if (payload.intent === 'cut' && completedCuts.has(payloadKey(payload))) {
-    return {...payload, intent: 'copy'}
-  }
-  return payload
-}
+): ClipboardPayload | null =>
+  // Both halves already apply `applyCompletion`, so this is pure
+  // composition — which reader a surface reaches for cannot change the
+  // answer.
+  decodePayloadHtml(html, text) ?? recallPayloadForText(text)

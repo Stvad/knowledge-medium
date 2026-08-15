@@ -177,6 +177,17 @@ describe('resolveClipboardPayload', () => {
       expect(resolveClipboardPayload(MD, undefined)).toEqual({...CUT, intent: 'copy'})
     })
 
+    it('downgrades through the RAW table read too, not only the composed resolver', () => {
+      // The keyboard paste path reaches for the table. When the downgrade
+      // lived only in `resolveClipboardPayload`, that surface kept
+      // relocating a spent cut — the same bug, surviving on the other
+      // surface. Every reader applies it now.
+      rememberPayload(MD, CUT)
+      markCutCompleted(CUT)
+
+      expect(recallPayloadForText(MD)).toEqual({...CUT, intent: 'copy'})
+    })
+
     it('downgrades on the html path too, which cannot be rewritten either', () => {
       const html = encodePayloadHtml(MD, CUT)
       markCutCompleted(CUT)

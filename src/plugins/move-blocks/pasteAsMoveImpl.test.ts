@@ -123,6 +123,7 @@ beforeEach(async () => {
   showErrorMock.mockClear()
   showInfoMock.mockClear()
   showSuccessMock.mockClear()
+  moveBlocksToMock.mockClear()
 })
 
 describe('pasteAsMoveImpl', () => {
@@ -157,6 +158,45 @@ describe('pasteAsMoveImpl', () => {
     expect(resolveClipboardPayload(markdown, undefined)).toEqual({
       ...cut(['a']), intent: 'copy',
     })
+  })
+
+  it('a concurrent second paste of the same cut is swallowed, not run twice', async () => {
+    // Both handlers resolve the same live cut — `markCutCompleted` hasn't
+    // fired yet — so without a re-entrancy guard the second move relocates
+    // the blocks straight off the destination the first just put them on.
+    await seed('dest', null)
+    await seed('dest2', null)
+    await seed('a', null)
+    const payload = cut(['a'])
+
+    let releaseFirst = (): void => {}
+    const firstMayProceed = new Promise<void>(resolve => { releaseFirst = resolve })
+    let started = 0
+    moveBlocksToMock.mockImplementationOnce(async (r, ids, t) => {
+      started += 1
+      await firstMayProceed
+      return realMoveBlocksTo.current!(r, ids, t)
+    })
+
+    const first = pasteAsMoveImpl({ repo, target: INTO_DEST, payload })
+    await vi.waitFor(() => { expect(started).toBe(1) })
+
+    // Fired while the first is still inside its move.
+    const second = await pasteAsMoveImpl({
+      repo, target: { parentId: 'dest2', position: { kind: 'last' } }, payload,
+    })
+    expect(second).toBe(true) // handled — no duplicating text paste either
+
+    releaseFirst()
+    expect(await first).toBe(true)
+
+    // The load-bearing assertion. Asserting only on the FINAL tree passes
+    // either way: without the guard the second move puts 'a' in dest2 and
+    // the first then pulls it back to dest, landing in the same place. The
+    // observable difference is that the move ran twice at all.
+    expect(moveBlocksToMock).toHaveBeenCalledTimes(1)
+    expect(await childIds('dest')).toEqual(['a'])
+    expect(await childIds('dest2')).toEqual([])
   })
 
   describe('cycle refusals', () => {

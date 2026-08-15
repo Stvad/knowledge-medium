@@ -140,6 +140,19 @@ describe('cutBlockIdsToClipboard', () => {
     expect(recallPayloadForText('hello')).toBeNull()
   })
 
+  it('reports failure, with a toast, when a PREFLIGHT read rejects', async () => {
+    // `$mod+x` has already claimed the gesture and a rejected action
+    // promise is only logged, so an escaping serialization failure means
+    // the user sees nothing at all — no toast, no clipboard, no hint the
+    // cut didn't happen.
+    await seed('a', null, 'hello')
+    stubClipboard()
+
+    // 'ghost' alone can't serialize, so serializeSelectedBlocks throws.
+    expect(await cutBlockIdsToClipboard(['ghost'], repo)).toBe(false)
+    expect(showErrorMock).toHaveBeenCalledTimes(1)
+  })
+
   it('normalizes an ancestor+descendant selection, so the descendant is neither duplicated in the markdown nor listed in the payload', async () => {
     await seed('a', null, 'a')
     await seed('kid', 'a', 'kid')

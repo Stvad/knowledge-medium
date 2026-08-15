@@ -273,18 +273,22 @@ export const cutBlockIdsToClipboard = async (
   const workspaceId = repo.activeWorkspaceId
   if (!workspaceId) return false
 
-  const normalizedIds = await validateSelectionHierarchy([...blockIds], repo)
-  const data = await serializeSelectedBlocks(normalizedIds, repo)
-
   try {
+    // The reads are inside the handled path too. `$mod+x` has already
+    // claimed the gesture, and a rejected action promise is only logged by
+    // `HotkeyReconciler` — so a hierarchy or serialization failure escaping
+    // here means the user sees nothing at all: no toast, no clipboard, no
+    // hint that the cut didn't happen.
+    const normalizedIds = await validateSelectionHierarchy([...blockIds], repo)
+    const data = await serializeSelectedBlocks(normalizedIds, repo)
     await writeToClipboard(data, {
       blockIds: data.serializedIds,
       workspaceId,
       intent: 'cut',
     })
   } catch (error) {
-    console.warn('[cut] clipboard write refused; cut cancelled', error)
-    showError("Couldn't access the clipboard — cut was cancelled")
+    console.warn('[cut] failed; cut cancelled', error)
+    showError("Couldn't cut — the clipboard was unavailable")
     return false
   }
   return true

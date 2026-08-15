@@ -55,7 +55,36 @@ const isCycleTarget = async (
   return siblingId !== undefined && isWithinSubtreeOfAny(repo, siblingId, movingIds)
 }
 
+/** Cuts with a move already running.
+ *
+ *  A re-entrancy guard, not a claim: `markCutCompleted` only fires once
+ *  the move has committed, so two pastes fired inside that window both
+ *  resolve the same live cut and both call `moveBlocksTo` — the second
+ *  relocating the blocks straight off the destination the first just put
+ *  them on. Held for the duration of ONE call and released in a `finally`,
+ *  so unlike the register this owns nothing across gestures and has no
+ *  hand-back path to get wrong. */
+const movesInFlight = new Set<string>()
+
+const inFlightKey = (payload: PasteAsMoveInput['payload']): string =>
+  `${payload.workspaceId}\u0000${payload.blockIds.join(',')}`
+
 export const pasteAsMoveImpl = async ({ repo, target, payload }: PasteAsMoveInput): Promise<boolean> => {
+  // Synchronous, before any await — two handlers can't both pass this.
+  const key = inFlightKey(payload)
+  // Reported as handled: the user pressed paste twice and the first one is
+  // doing it. Falling through to a text paste instead would insert a
+  // duplicate of the blocks that are already on their way.
+  if (movesInFlight.has(key)) return true
+  movesInFlight.add(key)
+  try {
+    return await runPasteAsMove({ repo, target, payload })
+  } finally {
+    movesInFlight.delete(key)
+  }
+}
+
+const runPasteAsMove = async ({ repo, target, payload }: PasteAsMoveInput): Promise<boolean> => {
   if (payload.workspaceId !== repo.activeWorkspaceId) {
     showInfo("Can't move blocks across workspaces — pasted a copy instead")
     return false

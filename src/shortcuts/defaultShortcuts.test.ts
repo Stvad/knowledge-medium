@@ -818,6 +818,50 @@ describe('default CodeMirror shortcuts', () => {
     vi.unstubAllGlobals()
   })
 
+  it('does not clear a selection the user made WHILE the cut was in flight', async () => {
+    // The cut resumes after serializing and writing the clipboard — long
+    // enough for the user to have selected something else. Clearing
+    // unconditionally erases that newer gesture, whose blocks this cut
+    // never touched.
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'r'})
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'cut-me', content: 'cut-me'})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'later', content: 'later'})
+    const uiStateBlock = env.repo.block('root')
+    await uiStateBlock.set(selectionStateProp, {
+      anchorBlockId: 'cut-me',
+      selectedBlockIds: ['cut-me'],
+    })
+
+    let releaseWrite = (): void => {}
+    const writeLanded = new Promise<void>(resolve => { releaseWrite = resolve })
+    let writes = 0
+    const write = vi.fn(async () => { writes += 1; await writeLanded })
+    vi.stubGlobal('ClipboardItem', class { })
+    vi.stubGlobal('navigator', {clipboard: {write}})
+
+    const action = findMultiSelectAction(env.repo, 'cut_selected_blocks')
+    const running = action.handler({
+      uiStateBlock,
+      selectedBlocks: [env.repo.block('cut-me')],
+      anchorBlock: null,
+    } as MultiSelectModeDependencies, {preventDefault: vi.fn()} as unknown as ActionTrigger)
+
+    await vi.waitFor(() => { expect(writes).toBe(1) })
+    // The user moves on to a different selection mid-cut.
+    await uiStateBlock.set(selectionStateProp, {
+      anchorBlockId: 'later',
+      selectedBlockIds: ['later'],
+    })
+
+    releaseWrite()
+    await running
+
+    expect(uiStateBlock.peekProperty(selectionStateProp)?.selectedBlockIds).toEqual(['later'])
+    vi.unstubAllGlobals()
+  })
+
   it('normal-mode cut_block ($mod+x) marks just the focused block, without touching selection state', async () => {
     await env.repo.tx(async tx => {
       await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'r'})

@@ -64,7 +64,11 @@ import { actionContextsFacet, actionsFacet } from '@/extensions/core.js'
 import { AppExtension } from '@/facets/facet.js'
 import { refreshAppRuntime } from '@/facets/runtimeEvents.js'
 import { systemToggle } from '@/facets/togglable.js'
-import { getLayoutSessionBlock, getUserPrefsBlock } from '@/data/stateBlocks.js'
+import {
+  getLayoutSessionBlock,
+  getSelectionStateSnapshot,
+  getUserPrefsBlock,
+} from '@/data/stateBlocks.js'
 import { isMobileViewport } from '@/utils/viewport.js'
 import {
   navigate,
@@ -1276,12 +1280,29 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
    * there's no vanished content to redirect focus away from, so — unlike
    * `deleteSelectedBlocks` — nothing else moves.
    */
+  /** Clear the multi-select selection, but only if it is still the one
+   *  this gesture acted on.
+   *
+   *  Both callers below resume after awaits long enough for the user to
+   *  have selected something else (subtree serialization, a clipboard
+   *  write, a move). Resetting unconditionally then erases a NEWER
+   *  selection whose blocks this gesture never touched. */
+  const clearSelectionIfUnchanged = async (
+    uiStateBlock: Block,
+    actedOn: readonly Block[],
+  ): Promise<void> => {
+    const live = getSelectionStateSnapshot(uiStateBlock).selectedBlockIds
+    const acted = actedOn.map(block => block.id)
+    if (live.length !== acted.length || live.some((id, i) => id !== acted[i])) return
+    await uiStateBlock.set(selectionStateProp, selectionStateProp.defaultValue)
+  }
+
   const cutSelectedBlocks = async (deps: MultiSelectModeDependencies): Promise<void> => {
     const {uiStateBlock, selectedBlocks} = deps
     if (!selectedBlocks.length) return
 
     const marked = await cutBlockIdsToClipboard(selectedBlocks.map(block => block.id), repo)
-    if (marked) await uiStateBlock.set(selectionStateProp, selectionStateProp.defaultValue)
+    if (marked) await clearSelectionIfUnchanged(uiStateBlock, selectedBlocks)
   }
 
   /**
@@ -1318,7 +1339,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
     })
 
     if (!result.moved && !result.pasted[0]) return
-    await uiStateBlock.set(selectionStateProp, selectionStateProp.defaultValue)
+    await clearSelectionIfUnchanged(uiStateBlock, selectedBlocks)
     if (result.pasted[0]) void focusBlock(uiStateBlock, result.pasted[0].id)
   }
 

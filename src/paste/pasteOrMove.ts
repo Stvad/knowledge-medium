@@ -26,7 +26,7 @@ import type { Block } from '@/data/block.js'
 import type { Repo } from '@/data/repo.js'
 import { pasteFromClipboard } from '@/paste/operations.js'
 import { tryPasteAsMoveAt } from '@/paste/moveOnPasteVerb.js'
-import { recallPayloadForText } from '@/paste/clipboardPayload.js'
+import { resolveClipboardPayload } from '@/paste/clipboardPayload.js'
 
 export interface PasteOrMoveResult {
   /** A pending cut→move was consumed — completed, or refused as a
@@ -64,7 +64,9 @@ export const pasteOrMove = async (
   // block leaves empty text, and gating on non-empty text would make that
   // cut un-completable from this surface. `pasteFromClipboard` keeps its
   // own empty-text bail below.
-  const payload = recallPayloadForText(clipboardText)
+  // No html to pass — that's the whole distinction of this path. Goes
+  // through the documented entry point rather than the table directly.
+  const payload = resolveClipboardPayload(clipboardText, undefined)
   const moved = await tryPasteAsMoveAt(
     repo, anchor, position, scopeRootId, payload, placement,
   )
