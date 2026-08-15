@@ -26,7 +26,7 @@ import type { Block } from '@/data/block.js'
 import type { Repo } from '@/data/repo.js'
 import { pasteFromClipboard } from '@/paste/operations.js'
 import { tryPasteAsMoveAt } from '@/paste/moveOnPasteVerb.js'
-import { resolveClipboardPayload } from '@/paste/clipboardPayload.js'
+import { recallPayloadForText } from '@/paste/clipboardPayload.js'
 
 export interface PasteOrMoveResult {
   /** A pending cut→move was consumed — completed, or refused as a
@@ -64,13 +64,18 @@ export const pasteOrMove = async (
   // block leaves empty text, and gating on non-empty text would make that
   // cut un-completable from this surface. `pasteFromClipboard` keeps its
   // own empty-text bail below.
-  // No html to pass — that's the whole distinction of this path. Goes
-  // through the documented entry point rather than the table directly.
-  const payload = resolveClipboardPayload(clipboardText, undefined)
-  const moved = await tryPasteAsMoveAt(
+  // The table is the only reader available here: a bare keypress fires no
+  // paste event, so there are no flavors to read. See
+  // `@/paste/clipboardPayload.js` on why event surfaces use the other one.
+  const payload = recallPayloadForText(clipboardText)
+  const outcome = await tryPasteAsMoveAt(
     repo, anchor, position, scopeRootId, payload, placement,
   )
-  if (moved) return {moved: true, pasted: []}
+  // A refusal is consumed but changed nothing, so it must NOT report
+  // `moved` — callers use that to decide whether to clear the user's
+  // selection, and clearing it after a refusal takes away the range they
+  // need in order to retry somewhere valid.
+  if (outcome !== 'not-a-move') return {moved: outcome === 'moved', pasted: []}
 
   const pasted = await pasteFromClipboard(
     anchor,

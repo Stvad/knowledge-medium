@@ -282,22 +282,20 @@ export const forgetPayload = (text: string): void => {
 }
 
 /**
- * Resolve the payload for a paste, preferring the authoritative source.
+ * Two readers, chosen by what the CALLER can see — never by inspecting
+ * the content:
  *
- * `html` is present exactly when the caller holds a real `DataTransfer`
- * (a paste EVENT). Keyboard-driven pastes pass `undefined` and fall to the
- * table. Both are content-addressed, so they can't disagree about
- * anything except availability.
+ *   - a paste EVENT holds a full `DataTransfer`, so `decodePayloadHtml`
+ *     is exact. Our own writes always include the html flavor, which makes
+ *     its ABSENCE just as conclusive as foreign html: no marker means not
+ *     ours. An event surface must never consult the table, or plain text
+ *     copied from another app that happens to match a remembered cut moves
+ *     those blocks.
+ *   - a keyboard paste has only `readText()`, so `recallPayloadForText` is
+ *     all there is.
+ *
+ * There is deliberately no combined helper. One existed and branched on
+ * whether html was truthy, which reads as the same rule but isn't: it made
+ * an event with no html indistinguishable from a keyboard paste, and
+ * reopened exactly the case above.
  */
-export const resolveClipboardPayload = (
-  text: string,
-  html: string | undefined,
-): ClipboardPayload | null => {
-  // Present-but-not-ours html is positive evidence that the clipboard item
-  // came from somewhere else, so the text-only table must not be consulted
-  // — otherwise copying rich text that happens to match a cut's markdown
-  // moves those blocks instead of pasting what was copied. The table is
-  // for callers that have NO html to go on.
-  if (html) return decodePayloadHtml(html, text)
-  return recallPayloadForText(text)
-}

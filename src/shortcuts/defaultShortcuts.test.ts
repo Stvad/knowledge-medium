@@ -954,6 +954,27 @@ describe('default CodeMirror shortcuts', () => {
       } as MultiSelectModeDependencies, {preventDefault: vi.fn()} as unknown as ActionTrigger)
     }
 
+    it('a REFUSED move leaves the selection alone — the user needs it to retry', async () => {
+      // Pasting inside the block you cut is refused, not performed. The
+      // paste is consumed either way (a text paste there would duplicate
+      // the cut content beside the untouched originals), but nothing
+      // moved, so clearing the selection would take away the range the
+      // user needs in order to aim somewhere valid.
+      await seed()
+      withPasteAsMoveInstalled()
+      await cut(['src'])
+      const uiStateBlock = env.repo.block('ui')
+      await uiStateBlock.set(selectionStateProp, {
+        anchorBlockId: 'a', selectedBlockIds: ['a'],
+      })
+
+      // 'a' is inside 'src', which is the block being moved.
+      await pasteAfter('a')
+
+      expect(env.repo.block('src').peek()?.parentId).toBe('root') // unmoved
+      expect(uiStateBlock.peekProperty(selectionStateProp)?.selectedBlockIds).toEqual(['a'])
+    })
+
     it('happy path: moves the cut blocks preserving ids, clears the register, and leaves a reference into the moved subtree resolvable', async () => {
       await seed()
       withPasteAsMoveInstalled()

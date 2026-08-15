@@ -16,7 +16,6 @@ import {
   recallPayloadForText,
   rememberPayload,
   resetRememberedPayloads,
-  resolveClipboardPayload,
   type ClipboardPayload,
 } from './clipboardPayload.ts'
 
@@ -140,112 +139,102 @@ describe('the text-only lookup table', () => {
   })
 })
 
-describe('resolveClipboardPayload', () => {
-  it('prefers the html flavor — the authoritative, cross-tab source', () => {
-    const fromTable: ClipboardPayload = {blockIds: ['stale'], workspaceId: 'ws-1', intent: 'cut', cutId: 'cut-6'}
-    rememberPayload('- a\n- b', fromTable)
-
-    expect(resolveClipboardPayload(MD, encodePayloadHtml(MD, CUT))).toEqual(CUT)
+describe('the two readers', () => {
+  // Which reader a surface uses is decided by what it can SEE, never by
+  // inspecting the content. Events read html; keyboard pastes read the
+  // table. A combined helper that branched on whether html was truthy made
+  // an event with no html look like a keyboard paste — which is exactly
+  // how foreign plain text ended up matching a remembered cut.
+  it('an event with our marker decodes it', () => {
+    expect(decodePayloadHtml(encodePayloadHtml(MD, CUT), MD)).toEqual(CUT)
   })
 
-  it('falls back to the table when there is no html — the bare-keypress paste paths', () => {
-    rememberPayload('- a\n- b', CUT)
-    expect(resolveClipboardPayload('- a\n- b', undefined)).toEqual(CUT)
+  it('an event with ANOTHER app\'s html is not a cut, even if the text matches one', () => {
+    rememberPayload(MD, CUT)
+    expect(decodePayloadHtml('<p>from somewhere else</p>', MD)).toBeNull()
   })
 
-  it('treats another app\'s html as proof the clipboard is NOT ours', () => {
-    // The table is only for callers with no html to go on. Consulting it
-    // when html is present but foreign means rich text that happens to
-    // match a cut's markdown moves those blocks instead of pasting what
-    // was actually copied.
-    rememberPayload('- a\n- b', CUT)
-    expect(resolveClipboardPayload('- a\n- b', '<p>from somewhere else</p>')).toBeNull()
+  it('an event with NO html is not a cut either — our writes always carry the marker', () => {
+    rememberPayload(MD, CUT)
+    expect(decodePayloadHtml(undefined, MD)).toBeNull()
+    expect(decodePayloadHtml('', MD)).toBeNull()
   })
 
-  it('is null when neither source knows the content', () => {
-    expect(resolveClipboardPayload('never seen', undefined)).toBeNull()
+  it('a keyboard paste has only the table, and finds the cut there', () => {
+    rememberPayload(MD, CUT)
+    expect(recallPayloadForText(MD)).toEqual(CUT)
   })
 
-  describe('a cut that already moved', () => {
-    it('downgrades to a copy, so pasting twice inserts text instead of relocating again', () => {
-      // The clipboard still carries the cut — nothing can rewrite it from
-      // inside a paste handler. Without downgrading, the second paste
-      // moves the same blocks from the first destination to the second and
-      // the first paste looks undone. Text editors insert the text again;
-      // so does this, by falling through to an ordinary paste.
-      rememberPayload(MD, CUT)
-      expect(resolveClipboardPayload(MD, undefined)).toEqual(CUT)
-
-      markCutCompleted(CUT)
-
-      expect(resolveClipboardPayload(MD, undefined)).toEqual({...CUT, intent: 'copy'})
-    })
-
-    it('downgrades through the RAW table read too, not only the composed resolver', () => {
-      // The keyboard paste path reaches for the table. When the downgrade
-      // lived only in `resolveClipboardPayload`, that surface kept
-      // relocating a spent cut — the same bug, surviving on the other
-      // surface. Every reader applies it now.
-      rememberPayload(MD, CUT)
-      markCutCompleted(CUT)
-
-      expect(recallPayloadForText(MD)).toEqual({...CUT, intent: 'copy'})
-    })
-
-    it('downgrades on the html path too, which cannot be rewritten either', () => {
-      const html = encodePayloadHtml(MD, CUT)
-      markCutCompleted(CUT)
-
-      expect(resolveClipboardPayload(MD, html)).toEqual({...CUT, intent: 'copy'})
-    })
-
-    it('re-cutting the same blocks arms a fresh cut', () => {
-      markCutCompleted(CUT)
-      expect(resolveClipboardPayload(MD, undefined)).toBeNull() // nothing remembered yet
-
-      rememberPayload(MD, CUT)
-
-      expect(resolveClipboardPayload(MD, undefined)).toEqual(CUT)
-    })
-
-    it('a FRESH cut of the same blocks is not spent by an earlier one', () => {
-      // The cross-tab case: tab A completed a cut of these blocks, tab B
-      // then cut them again. B's `rememberPayload` cannot reach A's
-      // completion set, so keying completion by block ids would leave A
-      // downgrading B's brand-new cut to a copy forever. The key is the
-      // gesture, not the blocks.
-      const earlier: ClipboardPayload = {
-        blockIds: ['a'], workspaceId: 'ws-1', intent: 'cut', cutId: 'gesture-1',
-      }
-      const fresh: ClipboardPayload = {
-        blockIds: ['a'], workspaceId: 'ws-1', intent: 'cut', cutId: 'gesture-2',
-      }
-      markCutCompleted(earlier)
-
-      expect(decodePayloadHtml(encodePayloadHtml(MD, fresh), MD)).toEqual(fresh)
-    })
-
-    it('leaves an unrelated cut alone', () => {
-      const other: ClipboardPayload = {blockIds: ['zzz'], workspaceId: 'ws-1', intent: 'cut', cutId: 'cut-10'}
-      rememberPayload('other text', other)
-      markCutCompleted(CUT)
-
-      expect(resolveClipboardPayload('other text', undefined)).toEqual(other)
-    })
+  it('a keyboard paste of unknown text finds nothing', () => {
+    expect(recallPayloadForText('never seen')).toBeNull()
   })
 
-  // Cutting a genuinely EMPTY block leaves empty text on the clipboard.
-  // Under the register this was a standing hazard — the sentinel was the
-  // empty string, and every "did the user actually copy anything?" guard
-  // ate it, so the cut could never be completed. Here empty text is not a
-  // special case at all, which is the point: it's just a key like any
-  // other. Both surfaces are covered because the two differ in exactly
-  // whether html is available.
-  it('resolves an empty-block cut from either source', () => {
-    const empty: ClipboardPayload = {blockIds: ['a'], workspaceId: 'ws-1', intent: 'cut', cutId: 'cut-11'}
+  // Cutting a genuinely EMPTY block leaves empty text on the clipboard,
+  // and under the register that was a standing hazard: the sentinel was
+  // the empty string, which every "did the user copy anything?" guard ate.
+  // Here it is a key like any other.
+  it('resolves an empty-block cut on both surfaces', () => {
+    const empty: ClipboardPayload = {
+      blockIds: ['a'], workspaceId: 'ws-1', intent: 'cut', cutId: 'empty-1',
+    }
     rememberPayload('', empty)
 
-    expect(resolveClipboardPayload('', undefined)).toEqual(empty)
-    expect(resolveClipboardPayload('', encodePayloadHtml('', empty))).toEqual(empty)
+    expect(recallPayloadForText('')).toEqual(empty)
+    expect(decodePayloadHtml(encodePayloadHtml('', empty), '')).toEqual(empty)
+  })
+})
+
+describe('a cut that already moved', () => {
+  it('downgrades to a copy, so pasting twice inserts text instead of relocating again', () => {
+    // Nothing can rewrite the OS clipboard from inside a paste handler, so
+    // the cut is still sitting there. Without the downgrade the second
+    // paste moves the same blocks from the first destination to the
+    // second, and the first paste looks undone.
+    rememberPayload(MD, CUT)
+    expect(recallPayloadForText(MD)).toEqual(CUT)
+
+    markCutCompleted(CUT)
+
+    expect(recallPayloadForText(MD)).toEqual({...CUT, intent: 'copy'})
+  })
+
+  it('downgrades on the html reader too, which cannot be rewritten either', () => {
+    const html = encodePayloadHtml(MD, CUT)
+    markCutCompleted(CUT)
+
+    expect(decodePayloadHtml(html, MD)).toEqual({...CUT, intent: 'copy'})
+  })
+
+  it('re-cutting the same blocks arms a fresh cut', () => {
+    markCutCompleted(CUT)
+    rememberPayload(MD, CUT)
+
+    expect(recallPayloadForText(MD)).toEqual(CUT)
+  })
+
+  it('a FRESH cut of the same blocks is not spent by an earlier one', () => {
+    // The cross-tab case: tab A completed a cut of these blocks, tab B cut
+    // them again. B's `rememberPayload` cannot reach A's completion set,
+    // so keying completion by block ids would leave A downgrading B's
+    // brand-new cut forever. The key is the gesture, not the blocks.
+    const earlier: ClipboardPayload = {
+      blockIds: ['a'], workspaceId: 'ws-1', intent: 'cut', cutId: 'gesture-1',
+    }
+    const fresh: ClipboardPayload = {
+      blockIds: ['a'], workspaceId: 'ws-1', intent: 'cut', cutId: 'gesture-2',
+    }
+    markCutCompleted(earlier)
+
+    expect(decodePayloadHtml(encodePayloadHtml(MD, fresh), MD)).toEqual(fresh)
+  })
+
+  it('leaves an unrelated cut alone', () => {
+    const other: ClipboardPayload = {
+      blockIds: ['zzz'], workspaceId: 'ws-1', intent: 'cut', cutId: 'other-1',
+    }
+    rememberPayload('other text', other)
+    markCutCompleted(CUT)
+
+    expect(recallPayloadForText('other text')).toEqual(other)
   })
 })

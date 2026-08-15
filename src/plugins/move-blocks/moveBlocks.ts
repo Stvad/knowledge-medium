@@ -29,7 +29,8 @@
  * order-safe.
  */
 import type { Repo } from '@/data/repo.js'
-import type { InsertPosition } from '@/data/mutators.js'
+import { move as moveMutator, type InsertPosition } from '@/data/mutators.js'
+import { ChangeScope } from '@/data/api'
 import { validateSelectionHierarchy } from '@/utils/selection.js'
 import { isCollapsedProp } from '@/data/properties.js'
 
@@ -112,17 +113,27 @@ export const moveBlocksTo = async (
   if (prunedIds.length === 0) return { moved: 0, movedIds: [] }
 
   let moved = 0
+  const movedIds: string[] = []
   try {
     await repo.undoGroup(async grouped => {
       // Chain each block after the previous one — see the ordering rule.
       let position = target.position
       for (const id of prunedIds) {
-        await grouped.mutate.move({
-          id,
-          parentId: target.parentId,
-          position,
-        })
+        // Liveness is checked in the SAME transaction that relocates the
+        // block, against its own row. `core.move` deliberately permits
+        // moving a tombstone (materialization and undo replay need that),
+        // so a caller that pre-filtered with a separate query counts a
+        // block deleted in the meantime as moved — and reports success for
+        // a batch that visibly did nothing.
+        const relocated = await grouped.tx(async tx => {
+          const row = await tx.get(id)
+          if (!row || row.deleted) return false
+          await tx.run(moveMutator, {id, parentId: target.parentId, position})
+          return true
+        }, {scope: ChangeScope.BlockDefault, description: `move ${id}`})
+        if (!relocated) continue
         moved += 1
+        movedIds.push(id)
         // Reveal after the FIRST block lands, not after the loop. Each
         // move commits its own tx, so a failure partway through would
         // skip an end-of-loop reveal and leave the blocks that DID move
@@ -138,9 +149,9 @@ export const moveBlocksTo = async (
     // Nothing committed yet → the original error is the whole story.
     // Otherwise the caller needs the ids (see `PartialMoveError`).
     if (moved === 0) throw error
-    throw new PartialMoveError(prunedIds.slice(0, moved), error)
+    throw new PartialMoveError([...movedIds], error)
   }
-  return { moved, movedIds: prunedIds.slice(0, moved) }
+  return { moved, movedIds }
 }
 
 /**

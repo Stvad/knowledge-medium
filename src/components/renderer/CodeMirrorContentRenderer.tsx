@@ -14,7 +14,7 @@ import {
   resolvePasteWithMediaCapture,
 } from '@/paste/operations.js'
 import type { PasteRequest } from '@/paste/decision.js'
-import { tryPasteAsMoveAt } from '@/paste/moveOnPasteVerb.js'
+import { tryPasteAsMoveAt, type PasteAsMoveResult } from '@/paste/moveOnPasteVerb.js'
 import type { ClipboardPayload } from '@/paste/clipboardPayload.js'
 import { readPasteEventContent } from '@/paste/pasteEventContent.js'
 import { useRepo } from '@/context/repo.js'
@@ -52,7 +52,7 @@ export const resolveEditorPasteMove = (
   payload: ClipboardPayload | null,
   scopeRootId: string | undefined,
   intent: PasteRequest['intent'] = 'split',
-): Promise<boolean> =>
+): Promise<PasteAsMoveResult> =>
   // `single-block` is Cmd/Ctrl+Shift+V — "insert the clipboard text
   // verbatim into this block". Completing a cut there would relocate the
   // source blocks and insert nothing at the caret, taking the explicit
@@ -121,7 +121,9 @@ export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
     // path (click a destination to enter edit mode, then ⌘V). If the move
     // completes (or is refused as a would-be cycle — see `pasteAsMoveImpl`),
     // the paste is fully handled and nothing below should also run.
-    if (await resolveEditorPasteMove(repo, block, payload, blockContext.scopeRootId, intent)) {
+    // Both 'moved' and 'refused' mean the paste is consumed; only
+    // 'not-a-move' falls through to the text path below.
+    if (await resolveEditorPasteMove(repo, block, payload, blockContext.scopeRootId, intent) !== 'not-a-move') {
       return
     }
     if (!text && fileList.length === 0) return

@@ -58,9 +58,9 @@ import { createTestRepo } from '@/data/test/createTestRepo'
 import { keyBetween } from '@/data/orderKey'
 import type { PasteMoveTarget } from '@/paste/moveOnPasteVerb'
 import {
+  recallPayloadForText,
   rememberPayload,
   resetRememberedPayloads,
-  resolveClipboardPayload,
   type ClipboardPayload,
 } from '@/paste/clipboardPayload'
 import { pasteAsMoveImpl } from './pasteAsMoveImpl.ts'
@@ -134,7 +134,7 @@ describe('pasteAsMoveImpl', () => {
 
     const result = await pasteAsMoveImpl({ repo, target: INTO_DEST, payload: cut(['a']) })
 
-    expect(result).toBe(true)
+    expect(result).toBe('moved')
     expect(await childIds('dest')).toEqual(['a']) // same id — nothing minted
     expect(await childIds('src')).toEqual([])
   })
@@ -149,13 +149,13 @@ describe('pasteAsMoveImpl', () => {
     const markdown = 'a'
     rememberPayload(markdown, cut(['a']))
 
-    const first = resolveClipboardPayload(markdown, undefined)
+    const first = recallPayloadForText(markdown)
     expect(first).toEqual(cut(['a']))
-    expect(await pasteAsMoveImpl({ repo, target: INTO_DEST, payload: first! })).toBe(true)
+    expect(await pasteAsMoveImpl({ repo, target: INTO_DEST, payload: first! })).toBe('moved')
     expect(await childIds('dest')).toEqual(['a'])
 
     // Same clipboard content, nothing else copied since.
-    expect(resolveClipboardPayload(markdown, undefined)).toEqual({
+    expect(recallPayloadForText(markdown)).toEqual({
       ...cut(['a']), intent: 'copy',
     })
   })
@@ -185,10 +185,10 @@ describe('pasteAsMoveImpl', () => {
     const second = await pasteAsMoveImpl({
       repo, target: { parentId: 'dest2', position: { kind: 'last' } }, payload,
     })
-    expect(second).toBe(true) // handled — no duplicating text paste either
+    expect(second).toBe('refused') // consumed — no duplicating text paste
 
     releaseFirst()
-    expect(await first).toBe(true)
+    expect(await first).toBe('moved')
 
     // The load-bearing assertion. Asserting only on the FINAL tree passes
     // either way: without the guard the second move puts 'a' in dest2 and
@@ -208,7 +208,7 @@ describe('pasteAsMoveImpl', () => {
         repo, target: { parentId: 'a', position: { kind: 'last' } }, payload: cut(['a']),
       })
 
-      expect(result).toBe(true) // handled — caller must NOT also text-paste
+      expect(result).toBe('refused') // consumed, but nothing moved
       expect(showErrorMock).toHaveBeenCalledExactlyOnceWith(CYCLE_MESSAGE)
       expect(await childIds('a')).toEqual(['b']) // unchanged
     })
@@ -222,7 +222,7 @@ describe('pasteAsMoveImpl', () => {
         repo, target: { parentId: 'c', position: { kind: 'last' } }, payload: cut(['a']),
       })
 
-      expect(result).toBe(true)
+      expect(result).toBe('refused')
       expect(showErrorMock).toHaveBeenCalledExactlyOnceWith(CYCLE_MESSAGE)
       expect(await childIds('c')).toEqual([])
     })
@@ -237,7 +237,7 @@ describe('pasteAsMoveImpl', () => {
         payload: cut(['a']),
       })
 
-      expect(result).toBe(true)
+      expect(result).toBe('refused')
       expect(showErrorMock).toHaveBeenCalledExactlyOnceWith(CYCLE_MESSAGE)
     })
 
@@ -250,7 +250,7 @@ describe('pasteAsMoveImpl', () => {
         repo, target: { parentId: 'sibling', position: { kind: 'last' } }, payload: cut(['a']),
       })
 
-      expect(result).toBe(true)
+      expect(result).toBe('moved')
       expect(showErrorMock).not.toHaveBeenCalled()
       expect(await childIds('sibling')).toEqual(['a'])
     })
@@ -267,7 +267,7 @@ describe('pasteAsMoveImpl', () => {
       // caller's, resolved from a clipboard the refusal never touched.
       const result = await pasteAsMoveImpl({ repo, target: INTO_DEST, payload: cut(['a']) })
 
-      expect(result).toBe(true)
+      expect(result).toBe('moved')
       expect(await childIds('dest')).toEqual(['a'])
     })
   })
@@ -281,7 +281,7 @@ describe('pasteAsMoveImpl', () => {
         repo, target: INTO_DEST, payload: cut(['a'], 'ws-other'),
       })
 
-      expect(result).toBe(false)
+      expect(result).toBe('not-a-move')
       expect(await childIds('dest')).toEqual([])
       // Does not promise a copy landed — for an empty cut the text-paste
       // fallback inserts nothing.
@@ -300,7 +300,7 @@ describe('pasteAsMoveImpl', () => {
         repo, target: INTO_DEST, payload: cut(['a'], 'ws-other'),
       })
 
-      expect(result).toBe(true)
+      expect(result).toBe('moved')
       expect(await childIds('dest')).toEqual(['a'])
     })
   })
@@ -314,7 +314,7 @@ describe('pasteAsMoveImpl', () => {
 
       const result = await pasteAsMoveImpl({ repo, target: INTO_DEST, payload: cut(['a', 'b']) })
 
-      expect(result).toBe(true)
+      expect(result).toBe('moved')
       expect(await childIds('dest')).toEqual(['a'])
       expect(showSuccessMock).toHaveBeenCalledExactlyOnceWith(
         'Moved 1 block — 1 was already deleted and skipped',
@@ -328,7 +328,7 @@ describe('pasteAsMoveImpl', () => {
 
       const result = await pasteAsMoveImpl({ repo, target: INTO_DEST, payload: cut(['a']) })
 
-      expect(result).toBe(false)
+      expect(result).toBe('not-a-move')
       expect(await childIds('dest')).toEqual([])
       expect(showSuccessMock).not.toHaveBeenCalled()
     })
@@ -343,6 +343,29 @@ describe('pasteAsMoveImpl', () => {
     })
   })
 
+  it('does not spend the cut when every source was tombstoned after the liveness read', async () => {
+    // The race the in-transaction check exists for: `liveBlockIds` said
+    // the block was live, it was deleted before the move committed, and
+    // `moveBlocksTo` skipped it. Reporting a move here would spend the cut
+    // for a paste that visibly did nothing, and suppress the text
+    // fallback too.
+    await seed('dest', null)
+    await seed('a', null)
+    const markdown = 'a'
+    const payload = cut(['a'])
+    rememberPayload(markdown, payload)
+
+    await repo.block('a').delete()
+    liveBlockIdsMock.mockResolvedValueOnce(['a']) // stale: read before the delete
+
+    const result = await pasteAsMoveImpl({ repo, target: INTO_DEST, payload })
+
+    expect(result).toBe('not-a-move') // caller text-pastes instead
+    expect(await childIds('dest')).toEqual([])
+    // Still a live cut — a later paste can still complete it.
+    expect(recallPayloadForText(markdown)).toEqual(payload)
+  })
+
   describe('move failures', () => {
     it('handles a rejecting PREFLIGHT read instead of letting it escape', async () => {
       // The DOM paste handlers have already called `preventDefault` and
@@ -355,7 +378,7 @@ describe('pasteAsMoveImpl', () => {
 
       const result = await pasteAsMoveImpl({ repo, target: INTO_DEST, payload: cut(['a']) })
 
-      expect(result).toBe(true) // handled — the caller must not text-paste
+      expect(result).toBe('refused') // handled — the caller must not text-paste
       expect(showErrorMock).toHaveBeenCalledTimes(1)
       expect(await childIds('dest')).toEqual([])
     })
@@ -369,7 +392,7 @@ describe('pasteAsMoveImpl', () => {
 
       // `true` so the caller does NOT then text-paste, which would parse
       // the cut markdown into new blocks beside the untouched originals.
-      expect(result).toBe(true)
+      expect(result).toBe('refused')
       expect(await childIds('dest')).toEqual([])
       expect(showErrorMock).toHaveBeenCalledTimes(1)
     })
@@ -392,11 +415,11 @@ describe('pasteAsMoveImpl', () => {
         throw new PartialMoveError([ids[0]], new Error('interrupted'))
       })
 
-      expect(await pasteAsMoveImpl({ repo, target: INTO_DEST, payload: cut(['a', 'b', 'c']) })).toBe(true)
+      expect(await pasteAsMoveImpl({ repo, target: INTO_DEST, payload: cut(['a', 'b', 'c']) })).toBe('refused')
       expect(await childIds('dest')).toEqual(['a'])
 
       // The retry uses the same payload the clipboard still carries.
-      expect(await pasteAsMoveImpl({ repo, target: INTO_DEST, payload: cut(['a', 'b', 'c']) })).toBe(true)
+      expect(await pasteAsMoveImpl({ repo, target: INTO_DEST, payload: cut(['a', 'b', 'c']) })).toBe('moved')
       expect(await childIds('dest')).toEqual(['a', 'b', 'c'])
     })
   })

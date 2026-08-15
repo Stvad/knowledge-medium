@@ -20,11 +20,7 @@
  * payloads differently (text-only clipboard, no flavors).
  */
 import type { ClipboardEvent } from 'react'
-import {
-  decodePayloadHtml,
-  resolveClipboardPayload,
-  type ClipboardPayload,
-} from '@/paste/clipboardPayload.js'
+import { decodePayloadHtml, type ClipboardPayload } from '@/paste/clipboardPayload.js'
 
 export interface PasteEventContent {
   /** `text/plain`, or '' when absent. */
@@ -49,14 +45,12 @@ export const readPasteEventContent = (
   const fileList = files && files.length > 0 ? Array.from(files) : []
   const text = e.clipboardData?.getData('text/plain') ?? ''
   const html = e.clipboardData?.getData('text/html') || undefined
-  // A file-bearing event only trusts a payload carried INLINE in the html.
-  // Our own cuts always write that flavor, so an in-app paste is
-  // unaffected; an image copied from another app arrives with files, empty
-  // text and no marker, and would otherwise recall a remembered cut of an
-  // EMPTY block — moving that block and discarding the image.
-  const payload = fileList.length > 0
-    ? decodePayloadHtml(html, text)
-    : resolveClipboardPayload(text, html)
+  // Events read the html flavor and nothing else — see
+  // `@/paste/clipboardPayload.js` on why the absence of our marker is
+  // conclusive here. This is what keeps an image (or plain text) copied
+  // from another app from matching a remembered cut of an empty block and
+  // moving it instead.
+  const payload = decodePayloadHtml(html, text)
 
   return {
     text,

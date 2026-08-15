@@ -298,4 +298,37 @@ describe('moveBlocksTo', () => {
     const result = await moveBlocksTo(repo, [], INTO_DEST)
     expect(result).toEqual({ moved: 0, movedIds: [] })
   })
+
+  it('skips a tombstoned block and does not count it as moved', async () => {
+    // `core.move` deliberately permits relocating a tombstone
+    // (materialization and undo replay need that), so a caller that
+    // pre-filtered with a separate query would count a block deleted since
+    // as moved — and report success for a batch that visibly did nothing.
+    // The check therefore lives in the transaction that relocates.
+    await seed('dest', null)
+    await seed('live', null)
+    await seed('dead', null)
+    await repo.block('dead').delete()
+
+    const result = await moveBlocksTo(repo, ['dead', 'live'], {
+      parentId: 'dest', position: {kind: 'last'},
+    })
+
+    expect(result.moved).toBe(1)
+    expect(result.movedIds).toEqual(['live'])
+    expect(await childIds('dest')).toEqual(['live'])
+  })
+
+  it('reports nothing moved when every block is a tombstone', async () => {
+    await seed('dest', null)
+    await seed('dead', null)
+    await repo.block('dead').delete()
+
+    const result = await moveBlocksTo(repo, ['dead'], {
+      parentId: 'dest', position: {kind: 'last'},
+    })
+
+    expect(result.moved).toBe(0)
+    expect(result.movedIds).toEqual([])
+  })
 })

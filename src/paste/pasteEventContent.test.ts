@@ -54,14 +54,20 @@ describe('readPasteEventContent', () => {
     expect(content.hasAnything).toBe(true)
   })
 
-  it('reports something to do for an EMPTY-block cut, whose text is empty', () => {
-    // Both resolution paths, because the two surfaces differ in exactly
-    // whether html is available. An emptiness guard that ran before the
-    // payload was resolved would make this cut permanently uncompletable.
+  it('reports something to do for an EMPTY-block cut carrying our marker', () => {
+    // Empty text with the marker is still a cut to complete; an emptiness
+    // guard running before the payload was read would make that cut
+    // permanently uncompletable from this surface.
+    expect(readPasteEventContent(pasteEvent({html: encodePayloadHtml('', CUT)})).hasAnything).toBe(true)
+  })
+
+  it('reports NOTHING to do for an empty event, even with a cut remembered', () => {
+    // Events read html only. A remembered cut belongs to the keyboard
+    // path; honouring it here is how foreign plain text (and file-only
+    // pastes) ended up matching a cut of an empty block.
     rememberPayload('', CUT)
 
-    expect(readPasteEventContent(pasteEvent({})).hasAnything).toBe(true)
-    expect(readPasteEventContent(pasteEvent({html: encodePayloadHtml('', CUT)})).hasAnything).toBe(true)
+    expect(readPasteEventContent(pasteEvent({})).hasAnything).toBe(false)
   })
 
   it('will not complete a remembered cut for a file-only paste from another app', () => {

@@ -27,6 +27,7 @@ import {
   tryPasteAsMove,
   tryPasteAsMoveAt,
   type PasteAsMoveInput,
+  type PasteAsMoveResult,
 } from './moveOnPasteVerb.ts'
 
 const WS = 'ws-1'
@@ -34,26 +35,26 @@ const WS = 'ws-1'
 describe('pasteAsMoveVerb', () => {
   const payload: ClipboardPayload = { blockIds: ['a'], workspaceId: WS, intent: 'cut' , cutId: 'cut-12'}
 
-  it('defaults to "not a move" (false) with no impl installed', async () => {
+  it('defaults to "not-a-move" with no impl installed', async () => {
     const runtime = resolveFacetRuntimeSync([])
     const input: PasteAsMoveInput = {
       repo: {} as Repo,
       target: { parentId: null, position: { kind: 'last' } },
       payload,
     }
-    expect(await pasteAsMoveVerb.run(runtime, input)).toBe(false)
+    expect(await pasteAsMoveVerb.run(runtime, input)).toBe('not-a-move')
   })
 
   it('runs the registered impl with the input and returns its result', async () => {
     const seen: PasteAsMoveInput[] = []
     const runtime = resolveFacetRuntimeSync([
-      pasteAsMoveVerb.impl((i): boolean => { seen.push(i); return true }),
+      pasteAsMoveVerb.impl((i): PasteAsMoveResult => { seen.push(i); return 'moved' }),
     ])
     const target = { parentId: 'p', position: { kind: 'last' } as const }
     const result = await pasteAsMoveVerb.run(runtime, {
       repo: {} as Repo, target, payload,
     })
-    expect(result).toBe(true)
+    expect(result).toBe('moved')
     expect(seen[0]?.target).toBe(target)
     expect(seen[0]?.payload).toBe(payload)
   })
@@ -63,15 +64,15 @@ describe('tryPasteAsMove', () => {
   const target = { parentId: null, position: { kind: 'last' } as const }
   const cutPayload: ClipboardPayload = { blockIds: ['a'], workspaceId: WS, intent: 'cut' , cutId: 'cut-13'}
 
-  it('is false without touching the verb when there is no facet runtime yet', async () => {
+  it('is not-a-move without touching the verb when there is no facet runtime yet', async () => {
     const repo = { facetRuntime: null } as unknown as Repo
-    expect(await tryPasteAsMove(repo, target, cutPayload)).toBe(false)
+    expect(await tryPasteAsMove(repo, target, cutPayload)).toBe('not-a-move')
   })
 
   it('runs the verb through repo.facetRuntime when both are present', async () => {
-    const runtime = resolveFacetRuntimeSync([pasteAsMoveVerb.impl(() => true)])
+    const runtime = resolveFacetRuntimeSync([pasteAsMoveVerb.impl(() => 'moved' as const)])
     const repo = { facetRuntime: runtime } as unknown as Repo
-    expect(await tryPasteAsMove(repo, target, cutPayload)).toBe(true)
+    expect(await tryPasteAsMove(repo, target, cutPayload)).toBe('moved')
   })
 })
 
@@ -81,7 +82,7 @@ describe('tryPasteAsMoveAt when the target cannot be resolved', () => {
     // this via `void`, so a rethrow discards the paste silently. Falling
     // through to a text paste would be worse still — the cut markdown
     // becomes new blocks beside the originals, which are still there.
-    const runtime = resolveFacetRuntimeSync([pasteAsMoveVerb.impl(() => true)])
+    const runtime = resolveFacetRuntimeSync([pasteAsMoveVerb.impl(() => 'moved' as const)])
     const repo = { facetRuntime: runtime } as unknown as Repo
     const target = {
       id: 'gone',
@@ -93,7 +94,7 @@ describe('tryPasteAsMoveAt when the target cannot be resolved', () => {
       blockIds: ['a'], workspaceId: WS, intent: 'cut', cutId: 'c1',
     })
 
-    expect(result).toBe(true)
+    expect(result).toBe('refused')
     expect(showErrorMock).toHaveBeenCalledTimes(1)
   })
 })
@@ -216,10 +217,10 @@ describe('resolvePasteMoveTarget / tryPasteAsMoveAt', () => {
       ]))
     }
 
-    it('returns false without resolving a target when there is no payload', async () => {
+    it('returns not-a-move without resolving a target when there is no payload', async () => {
       await seed('scope', null)
       const result = await tryPasteAsMoveAt(repo, repo.block('scope'), 'after', 'scope', null)
-      expect(result).toBe(false)
+      expect(result).toBe('not-a-move')
     })
 
     it('completes a move at a scope root as FIRST CHILD, not literally after it', async () => {
@@ -237,7 +238,7 @@ describe('resolvePasteMoveTarget / tryPasteAsMoveAt', () => {
 
       const result = await tryPasteAsMoveAt(repo, repo.block('scope'), 'after', 'scope', payload)
 
-      expect(result).toBe(true)
+      expect(result).toBe('moved')
       expect(repo.block('a').peek()?.parentId).toBe('scope')
     })
   })

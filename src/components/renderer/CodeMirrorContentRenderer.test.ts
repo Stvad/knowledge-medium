@@ -77,16 +77,16 @@ const rootChildIds = async (): Promise<string[]> => {
 const cutPayload = (blockIds: string[]): ClipboardPayload => ({ blockIds, workspaceId: WS, intent: 'cut' , cutId: 'cut-21'})
 
 describe('resolveEditorPasteMove', () => {
-  it('returns false and touches nothing when there is no payload — this is the common case for every ordinary editor paste', async () => {
+  it('returns not-a-move and touches nothing when there is no payload — this is the common case for every ordinary editor paste', async () => {
     const result = await resolveEditorPasteMove(repo, repo.block('dest'), null, undefined)
-    expect(result).toBe(false)
+    expect(result).toBe('not-a-move')
     expect(await childIds('dest')).toEqual(['kid'])
   })
 
   it('completes the move — clicking into "dest" (entering edit mode) then pasting the cut block relocates it with the SAME id instead of duplicating it', async () => {
     const result = await resolveEditorPasteMove(repo, repo.block('dest'), cutPayload(['a']), undefined)
 
-    expect(result).toBe(true)
+    expect(result).toBe('moved')
     // Moved, not duplicated: the SAME id 'a' — not a new id minted from
     // re-parsing the pasted text — and it's gone from 'src' where it used
     // to live. 'dest' is a WORKSPACE ROOT, so it lands as dest's first
@@ -134,7 +134,7 @@ describe('resolveEditorPasteMove', () => {
       repo, repo.block('dest'), cutPayload(['a']), undefined, 'single-block',
     )
 
-    expect(result).toBe(false)
+    expect(result).toBe('not-a-move')
     expect(repo.block('a').peek()?.parentId).toBe('src') // untouched
   })
 
@@ -144,7 +144,7 @@ describe('resolveEditorPasteMove', () => {
       repo, repo.block('dest'), cutPayload(['a']), undefined, 'split',
     )
 
-    expect(result).toBe(true)
+    expect(result).toBe('moved')
     expect(repo.block('a').peek()?.parentId).toBe('dest')
   })
 
@@ -153,7 +153,7 @@ describe('resolveEditorPasteMove', () => {
 
     const result = await resolveEditorPasteMove(repo, repo.block('dest'), payload, undefined)
 
-    expect(result).toBe(false)
+    expect(result).toBe('not-a-move')
     expect(repo.block('a').peek()?.parentId).toBe('src') // untouched
   })
 })

@@ -52,7 +52,9 @@ export function BlockPasteShellDecorator({
       // (`pasteMultilineText`, default `placement: 'visible'`) would
       // otherwise land the pasted content somewhere different from where
       // the move lands.
-      if (await tryPasteAsMoveAt(repo, block, 'after', scopeRootId, payload)) {
+      // 'moved' and 'refused' both consume the paste; only 'not-a-move'
+      // falls through to the text path below.
+      if (await tryPasteAsMoveAt(repo, block, 'after', scopeRootId, payload) !== 'not-a-move') {
         return
       }
       if (!text && fileList.length === 0) return

@@ -52,15 +52,23 @@ export interface PasteAsMoveInput {
   readonly payload: ClipboardPayload
 }
 
-/** `true` ⇒ the paste was consumed as a move (or refused as a would-be
- *  cycle, see `pasteAsMoveImpl`'s doc) — the caller must NOT also do a text
- *  paste. `false` ⇒ not a move (nothing pending, or the register no longer
- *  validates) — the caller falls through to its normal text paste. */
-export type PasteAsMoveResult = boolean
+/**
+ * Three outcomes, not two. `moved` and `refused` both mean "do not also
+ * text-paste", but they differ in whether anything happened — and a caller
+ * that collapses them mutates UI state for a refusal: `pasteAroundSelection`
+ * cleared the user's selection when a cycle was refused, taking away the
+ * range they needed in order to retry.
+ *
+ *   - `moved`       — blocks relocated. The paste is done.
+ *   - `refused`     — recognised as a cut but declined (cycle, failure).
+ *                     Consumed, nothing changed, UI state untouched.
+ *   - `not-a-move`  — not a cut at all; fall through to a text paste.
+ */
+export type PasteAsMoveResult = 'moved' | 'refused' | 'not-a-move'
 
 export const pasteAsMoveVerb = defineVerbFacet<PasteAsMoveInput, PasteAsMoveResult>({
   id: 'core.paste-as-move',
-  defaultImpl: () => false,
+  defaultImpl: () => 'not-a-move' as const,
   // Effectful (the impl calls `moveBlocksTo`, which writes blocks) — never
   // re-run the harmless default after a partial effect; see verbFacet's
   // onError doc. The impl is expected to handle its OWN failures (toast +
@@ -97,10 +105,10 @@ export const tryPasteAsMove = async (
   repo: Repo,
   target: PasteMoveTarget,
   payload: ClipboardPayload | null,
-): Promise<boolean> => {
-  if (!payload || payload.intent !== 'cut') return false
+): Promise<PasteAsMoveResult> => {
+  if (!payload || payload.intent !== 'cut') return 'not-a-move'
   const runtime = repo.facetRuntime
-  if (!runtime) return false
+  if (!runtime) return 'not-a-move'
   return pasteAsMoveVerb.run(runtime, { repo, target, payload })
 }
 
@@ -163,8 +171,8 @@ export const tryPasteAsMoveAt = async (
   scopeRootId: string | undefined,
   payload: ClipboardPayload | null,
   placement: 'visible' | 'sibling' = 'visible',
-): Promise<boolean> => {
-  if (!payload || payload.intent !== 'cut') return false
+): Promise<PasteAsMoveResult> => {
+  if (!payload || payload.intent !== 'cut') return 'not-a-move'
 
   let moveTarget: PasteMoveTarget
   try {
@@ -178,7 +186,7 @@ export const tryPasteAsMoveAt = async (
     // blocks beside the originals that are still sitting there.
     console.error('[paste-as-move] could not resolve the move target', error)
     showError("Couldn't work out where to move the blocks — nothing was moved")
-    return true
+    return 'refused'
   }
   return tryPasteAsMove(repo, moveTarget, payload)
 }

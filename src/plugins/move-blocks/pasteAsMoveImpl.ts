@@ -30,7 +30,11 @@
 import type { Repo } from '@/data/repo.js'
 import { liveBlockIds } from '@/data/blockLiveness.js'
 import { showError, showInfo, showSuccess } from '@/utils/toast.js'
-import type { PasteAsMoveInput, PasteMoveTarget } from '@/paste/moveOnPasteVerb.js'
+import type {
+  PasteAsMoveInput,
+  PasteAsMoveResult,
+  PasteMoveTarget,
+} from '@/paste/moveOnPasteVerb.js'
 import { markCutCompleted } from '@/paste/clipboardPayload.js'
 import { moveBlocksTo } from './moveBlocks.ts'
 import { isWithinSubtreeOfAny } from './blockSubtreeMembership.ts'
@@ -69,13 +73,13 @@ const movesInFlight = new Set<string>()
 const inFlightKey = (payload: PasteAsMoveInput['payload']): string =>
   `${payload.workspaceId}\u0000${payload.blockIds.join(',')}`
 
-export const pasteAsMoveImpl = async ({ repo, target, payload }: PasteAsMoveInput): Promise<boolean> => {
+export const pasteAsMoveImpl = async ({ repo, target, payload }: PasteAsMoveInput): Promise<PasteAsMoveResult> => {
   // Synchronous, before any await — two handlers can't both pass this.
   const key = inFlightKey(payload)
   // Reported as handled: the user pressed paste twice and the first one is
   // doing it. Falling through to a text paste instead would insert a
   // duplicate of the blocks that are already on their way.
-  if (movesInFlight.has(key)) return true
+  if (movesInFlight.has(key)) return 'refused'
   movesInFlight.add(key)
   try {
     return await runPasteAsMove({ repo, target, payload })
@@ -84,14 +88,14 @@ export const pasteAsMoveImpl = async ({ repo, target, payload }: PasteAsMoveInpu
   }
 }
 
-const runPasteAsMove = async ({ repo, target, payload }: PasteAsMoveInput): Promise<boolean> => {
+const runPasteAsMove = async ({ repo, target, payload }: PasteAsMoveInput): Promise<PasteAsMoveResult> => {
   if (payload.workspaceId !== repo.activeWorkspaceId) {
     // Deliberately does not promise a copy landed. The caller falls
     // through to an ordinary text paste, which for a genuinely EMPTY cut
     // inserts nothing — so claiming a copy was pasted would be a lie in
     // exactly the case the user is least able to explain.
     showInfo("Can't move blocks across workspaces")
-    return false
+    return 'not-a-move'
   }
 
   try {
@@ -103,14 +107,18 @@ const runPasteAsMove = async ({ repo, target, payload }: PasteAsMoveInput): Prom
     // failure is invisible to a green suite because nothing asserts on a
     // paste that silently did nothing.)
     const liveIds = await liveBlockIds(repo, payload.blockIds)
-    if (liveIds.length === 0) return false // nothing left to move — fall back to a text paste
+    if (liveIds.length === 0) return 'not-a-move' // nothing left — fall back to a text paste
 
     if (await isCycleTarget(repo, target, new Set(liveIds))) {
       showError("Can't paste here — it's inside the block(s) you cut")
-      return true
+      return 'refused'
     }
 
     const result = await moveBlocksTo(repo, liveIds, target)
+    // Nothing actually relocated — every source was tombstoned between the
+    // liveness read and its move. Not a move, so the caller text-pastes
+    // rather than being told a move happened that visibly did nothing.
+    if (result.moved === 0) return 'not-a-move'
     // The cut is spent. The clipboard still carries it (nothing here can
     // rewrite the OS clipboard), so without this a second paste would
     // relocate the same blocks again — from this destination to the next
@@ -132,7 +140,7 @@ const runPasteAsMove = async ({ repo, target, payload }: PasteAsMoveInput): Prom
     // narrow-the-register-to-the-suffix dance, which also got the
     // continuation order wrong.
     showError(error instanceof Error ? error.message : 'Failed to move blocks')
-    return true
+    return 'refused'
   }
-  return true
+  return 'moved'
 }
