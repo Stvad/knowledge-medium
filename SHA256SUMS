@@ -1727,7 +1727,7 @@ a4b29da45b71646760ea11229b8b6e46a7866453446de4638cdad117d9e9ebcb  ./src/App.js
 39808076fb3f1d8e9d016a11e4bcf0d52b4b7cac48154d753e23b687058e605c  ./src/App.js.map
 0b6cdff83c4e2e654daed8de1db8c4dca693242715e28de06767a51c7c78de15  ./src/appUpdate.js
 90769c02d289c099463e0237f99fa41a7d0faec88ff0ec0c7261af894a4fb1b9  ./src/appUpdate.js.map
-17fdc6342b46908d1396778e86fb3890a2b5d8ca37c61a1afe7ebf227ec25ae1  ./src/appVersion.js
+4ac446cd192cc2e692e4c9ccd1fa87836dd1834577e1e63bd9864811c2e1f2ec  ./src/appVersion.js
 76bd53c764d4393e8e6411205df2c6642a2c684e22691666337476b2a22938a5  ./src/appVersion.js.map
 fea5c9bcdb0b19b9e7a2c87061e8af20afffcb227e47dba1dada4088258e6f93  ./src/bootstrap/resolveWorkspace.js
 c357de0c880a035b6a5fc81aa7642f7adc3c69f64384e749738c74fb09afa57e  ./src/bootstrap/resolveWorkspace.js.map
@@ -1813,8 +1813,8 @@ ff7db8f9d9b3d4c63edc362a43c2136336be0749978a32e10a2a76ca50630b67  ./src/componen
 731237bcef7723dde63a17aea1172781faa91417c33b60fac884b0f48c4fb8c9  ./src/components/references/useBlockRefAncestors.js.map
 81a86bda723777cf826581dd98ff55fe4c52acba10fb8f4125ed086e65b44de7  ./src/components/renderer/BlockInfoDialog.js
 98321b11aeacc2ce1862c1489620d22b759727d54974d49c027c29cefb1d42e4  ./src/components/renderer/BlockInfoDialog.js.map
-cea3dfa9f55c6a99466493b63d7931488eb083484f555abf80e09cbd51d92904  ./src/components/renderer/BlockTypeBlockRenderer.js
-c6346bd585a9148dd3ab845665699d060b4f050da4a5651dc2f83e9161f4d404  ./src/components/renderer/BlockTypeBlockRenderer.js.map
+e7f212671bc25697f5e3b25a106975220dd81810337b45e6115221f7d3d85c0a  ./src/components/renderer/BlockTypeBlockRenderer.js
+bd6d964317d8c42d88215a46b58fff5e338ba2043d937324301b5c244292882c  ./src/components/renderer/BlockTypeBlockRenderer.js.map
 f54cceabe0fe3b072d56007dea6081b7d0cc3f21c94c60eec93747e72f035d6f  ./src/components/renderer/BulletHoverCard.js
 fb0cbae6d3c4dc53ed0b1c4b4a00ccd87154ccad0dd2045e194ac94f1032d09c  ./src/components/renderer/BulletHoverCard.js.map
 6aaafa1673e0b3eba38a2f6731d708f5babe8007f33ca37a03678af26d87d0db  ./src/components/renderer/CodeMirrorContentRenderer.js
@@ -1997,8 +1997,8 @@ b033ce33bc649f4cddc2494adf7611e667dc8c1d6ab3c575bbdd4061f312128c  ./src/data/int
 d187945ee4b4766057dddea710973a6fcb903ecf1efa6d81dd50e77b2ddad1ee  ./src/data/internals/normalizeReferencesProcessor.js.map
 7153449a5ffb1f6b89a6c9d6664f9945c906480dfcf86f14762c65912a06f4c9  ./src/data/internals/processorRunner.js
 2904ca3c2219fa65d56b0294d3dbead0bbe5655a553351108a893e5a96c30738  ./src/data/internals/processorRunner.js.map
-e075a3f96536ec811ffa4275bf725700d93dd07e88dd33e20986474538e34ced  ./src/data/internals/propertyChildrenProcessor.js
-f955b8b7c4180609016be976dd4280bfabcc7e44c142b1a90433d787e9dfc221  ./src/data/internals/propertyChildrenProcessor.js.map
+c42dabfb53532d7b3670d696b798546d75a5823ed61de1679003c01574d1278b  ./src/data/internals/propertyChildrenProcessor.js
+ab7fae8410fbb66b234a12beb1813047c794dfa1ae9e7c07b7462ac1a46a9183  ./src/data/internals/propertyChildrenProcessor.js.map
 d43631b42ca21ac359f7c9633d973f70f760d1e3d99469f20b188f4b3154107c  ./src/data/internals/propertyDefinitionMigrations.js
 68dd92b999f937eeb9d1effdcd2ffef40c4518c83a311fcf2979deb1de8fec36  ./src/data/internals/propertyDefinitionMigrations.js.map
 6537e696f26f2cc30f679322407c7d52232eb251ed6c52bece88d03a41fc945f  ./src/data/internals/propertyRenameProcessor.js
@@ -2025,8 +2025,8 @@ c4ec247662059f560ccb7bcb800b818bde0d7a00f52a4d1a170c000002ecb372  ./src/data/int
 ab6c78ae304eb1d13e81fb3c46dc8a35792c096956b4e458bcf71df105edb143  ./src/data/internals/timingMetrics.js.map
 57d7f9fae4f657bc872175792bd53eeab952c73ce94dce281fb0ac70c53eed41  ./src/data/internals/treeQueries.js
 b623576c8edb56139a9c93e3086c0052c59917bc367fcbecbbc9243064a67b68  ./src/data/internals/treeQueries.js.map
-19805c8074a7592a0ba2ab1d0de6edc0f31b16d6aa79af079496e518589d547f  ./src/data/internals/txEngine.js
-78781b51b8653a42b2139ad4149bff5d8f991fbb4bcee52364e67b4d9287976b  ./src/data/internals/txEngine.js.map
+68f1a78a40c48a14450e268147ce89c02f825bf71330ab749b08dab945da4bb2  ./src/data/internals/txEngine.js
+bc2c341b4459356a94de34b258d9a1d35ca7ea9acbddf6890feb9dca773076bc  ./src/data/internals/txEngine.js.map
 95ce5c330353fab29527a26d58a62e53eea2796d16417429c855a799b3c8eb80  ./src/data/internals/txSnapshots.js
 02429f11b175f68ce1cc0e6f3c0fe906f4a5b46cf7f12efba1ea9dc5d6f4f33d  ./src/data/internals/txSnapshots.js.map
 6510b2982f2531cf1790e9e04013b45ae7b8f6a6a2b6b4895ced5e7dc05e2483  ./src/data/internals/typedBlockQuery.js
@@ -2066,8 +2066,8 @@ ab8fe4c3c7a5ebc24c83f0a46c4592ad158aead4af0eab7dd3179b6e14218ede  ./src/data/pro
 2efc3757955ff280507629f9f4c2f0b2b3a1fee065944ce15f48cffb3d7b6fe4  ./src/data/properties.js.map
 b4fa1760ea9bc636c981275bc7f708dd01911aded9b5a046a6f0f23c218cd15f  ./src/data/propertiesPage.js
 fb2b06c2e07c0d0c555e113ddc39a7d974f0032b76a23692ee1942e13c769fc9  ./src/data/propertiesPage.js.map
-fc96530342c002800428114bef5dbb7c949ef22d94e8e13d2f4683f7047c23c2  ./src/data/propertyChildren.js
-64bb0a4aefb6bac5aa21f3e42450a72c5354ef86049c333f061857d66df14010  ./src/data/propertyChildren.js.map
+95c596a4951515738d0571da7ab8a15e4031c3fa73a78d1e338575bd68fa10cb  ./src/data/propertyChildren.js
+0830bf56de6de0b519157eeab2519978c6726db7591921ec89c90cf07a442748  ./src/data/propertyChildren.js.map
 4afe27339b6d20b5414b9329d054692bf1563f532ccc2653c5d0ac4b82a66b21  ./src/data/propertyDefinitionMetadata.js
 1d7ff8a56fb1e07e0fca0d5ecfd0a14f99a3fce9195f6acd3a1ba8f4fec7b0c9  ./src/data/propertyDefinitionMetadata.js.map
 c6494f8ca9db8de90fb92d38ea8ec8792db787a6b7b2afd1ec78ee8194ff0890  ./src/data/propertyDefinitionRegistry.js
@@ -2610,8 +2610,8 @@ f080e0872062153324ece2001fabc8eee74b717082b9248df79897e3b7ee66c8  ./src/plugins/
 c547173a9faf901ecba85b8d220428d1985b700141b1143eb8b62c1dd8c4e67f  ./src/plugins/daily-notes/wikilinkDateDecorator.js.map
 4a41ae2bcd4e29d56aeeabfea3620d93940015998b8e88e86f6c1d5f16f113ed  ./src/plugins/data-integrity/ConsistencyAuditDialog.js
 7a7e0580c38ee2861422a4ce505f0fc2f8a75f438c3edb5cda42d34534a619e0  ./src/plugins/data-integrity/ConsistencyAuditDialog.js.map
-be713b5ba6a5d1f1f8cee0a5653048547cb80f11138acfaf27215307181bc9ce  ./src/plugins/data-integrity/audit.js
-726996f2974359fe86b596d379ede13023430ff66750189fc5d4cf1fcdfaf37f  ./src/plugins/data-integrity/audit.js.map
+5a3f2ebae0f5feaba39923640f53c14c8a746e49c13e45eb4346561edfb86a5e  ./src/plugins/data-integrity/audit.js
+fd2639db7c9b21d0d216854f36e0513962c36488b344d872e1bc1b91ea5967e3  ./src/plugins/data-integrity/audit.js.map
 049030d71aaf7b31b6fd376516a90ac23c6cfbf7a4cf9d2302494df47afdd7a4  ./src/plugins/data-integrity/auditAction.js
 42613477882de5010c221773185f9aa127e5c6937f36f8cc519a851daa98d3c8  ./src/plugins/data-integrity/auditAction.js.map
 f262f7c3292e32ee4f6548b7a324d68d2e7bce3a3c654911c6d1359a1adde7b4  ./src/plugins/data-integrity/diagnosticsSource.js
@@ -3329,8 +3329,8 @@ ea7891e59b3608440c35c38901ebf443535471174fcbae950c1c74f2885c571a  ./src/utils/vi
 69754adc2a0ce8f9699da30476838e93fd95bd4b61eda37060f239224bc9b656  ./src/utils/viewTransition.js.map
 eda7cd6e992fb9f7324505e9817253123005c192d80e9c52ac4b14967936955c  ./src/utils/viewport.js
 a2bcdb138bcf84f7f3f9fc982c821e724fe578c3ea7971a890ea1ea9bc4c837f  ./src/utils/viewport.js.map
-80b4a2373c6eac4d78d457189a99029dc199ca022156958209dbb93aff06607d  ./sw.js
-3e457ada8594c2df290a8d937fe12d6e1ba1a5e964e82c567b265d448d0c9f84  ./version.json
+4c35b651bc5589b4c8fb415d9b51733c033aab7ca776c6fbdc7e4d706ae4aea3  ./sw.js
+e724c6d5ace62299c95d694f3da5306defda03301f7acd64442f6a366dc4dc95  ./version.json
 4a748afd443918bb16591c834c401dae33e87861ab5dbad0811c3a3b4a9214fb  ./vite.svg
 643714fb239b199a921024c34f82d13697a3803c91c97ff8da10455a09249406  ./wa-sqlite-async.wasm
 d167becf5a6949b1f31b1d026dc15e138b2b34b12fc44b71c56164392900b3b8  ./wa-sqlite.wasm
