@@ -70,11 +70,9 @@ export const pasteAsMoveVerb = defineVerbFacet<PasteAsMoveInput, PasteAsMoveResu
 /** Sibling-insert target anchored on `anchor`: land the moved content
  *  immediately before or after it, under the same parent.
  *
- *  Deliberately NOT exported. It is only ever correct as the FALLBACK
- *  branch of `resolvePasteMoveTarget` below — reaching for it directly is
- *  how the editor surface ended up moving blocks out of the rendered
- *  scope, because a "sibling" of a scope root sits outside the surface
- *  entirely. */
+ *  Deliberately NOT exported: it is only correct as the FALLBACK branch of
+ *  `resolvePasteMoveTarget` below. A "sibling" of a scope root sits
+ *  outside the rendered surface entirely. */
 const siblingMoveTarget = (
   anchor: Block,
   kind: 'before' | 'after',

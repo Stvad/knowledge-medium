@@ -33,11 +33,10 @@ import type { Repo } from '@/data/repo.js'
  * Resolved through `resolvePasteMoveTarget` with `placement: 'sibling'`,
  * matching what `pasteEditModeMultilineText` passes to its own
  * `resolveRootDestination`. 'sibling' does NOT mean "always a sibling":
- * that placement only suppresses the visible-children rule, and the root
- * rules still apply. This used to hardcode a sibling target, which moved
- * the cut blocks out of the rendered surface whenever the edited block WAS
- * the render-scope root — they left the source and never visibly arrived.
- * Hence `scopeRootId` is threaded in.
+ * it suppresses only the visible-children rule, and the root rules still
+ * apply — which is why `scopeRootId` is threaded in. A hardcoded sibling
+ * target moves the cut blocks OUTSIDE the rendered surface when the edited
+ * block is the render-scope root, so they never visibly arrive.
  *
  * Extracted from `handlePaste` so it's directly testable: rendering a live
  * CodeMirror instance to exercise a real `ClipboardEvent` isn't practical

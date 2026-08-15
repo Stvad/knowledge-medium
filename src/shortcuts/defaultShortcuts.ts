@@ -64,11 +64,7 @@ import { actionContextsFacet, actionsFacet } from '@/extensions/core.js'
 import { AppExtension } from '@/facets/facet.js'
 import { refreshAppRuntime } from '@/facets/runtimeEvents.js'
 import { systemToggle } from '@/facets/togglable.js'
-import {
-  getLayoutSessionBlock,
-  getSelectionStateSnapshot,
-  getUserPrefsBlock,
-} from '@/data/stateBlocks.js'
+import { getLayoutSessionBlock, getUserPrefsBlock } from '@/data/stateBlocks.js'
 import { isMobileViewport } from '@/utils/viewport.js'
 import {
   navigate,
@@ -1281,20 +1277,25 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
    * `deleteSelectedBlocks` — nothing else moves.
    */
   /** Clear the multi-select selection, but only if it is still the one
-   *  this gesture acted on.
+   *  this gesture acted on — the callers resume after awaits long enough
+   *  for the user to have selected something else, and must not erase that.
    *
-   *  Both callers below resume after awaits long enough for the user to
-   *  have selected something else (subtree serialization, a clipboard
-   *  write, a move). Resetting unconditionally then erases a NEWER
-   *  selection whose blocks this gesture never touched. */
+   *  The comparison runs INSIDE the write transaction, against its own
+   *  row. A pre-read followed by an unconditional `set` leaves a window
+   *  where a newer selection commits between the two and is then
+   *  overwritten by a check that already passed. */
   const clearSelectionIfUnchanged = async (
     uiStateBlock: Block,
     actedOn: readonly Block[],
   ): Promise<void> => {
-    const live = getSelectionStateSnapshot(uiStateBlock).selectedBlockIds
     const acted = actedOn.map(block => block.id)
-    if (live.length !== acted.length || live.some((id, i) => id !== acted[i])) return
-    await uiStateBlock.set(selectionStateProp, selectionStateProp.defaultValue)
+    await uiStateBlock.set(selectionStateProp, current => {
+      const live = current?.selectedBlockIds ?? []
+      const unchanged = live.length === acted.length && live.every((id, i) => id === acted[i])
+      return unchanged
+        ? selectionStateProp.defaultValue
+        : current ?? selectionStateProp.defaultValue
+    })
   }
 
   const cutSelectedBlocks = async (deps: MultiSelectModeDependencies): Promise<void> => {

@@ -64,6 +64,28 @@ describe('readPasteEventContent', () => {
     expect(readPasteEventContent(pasteEvent({html: encodePayloadHtml('', CUT)})).hasAnything).toBe(true)
   })
 
+  it('will not complete a remembered cut for a file-only paste from another app', () => {
+    // An empty-block cut leaves empty text. An image copied elsewhere
+    // arrives with files, empty text and no marker — recalling that cut
+    // would move the block and throw the image away.
+    rememberPayload('', CUT)
+
+    const content = readPasteEventContent(pasteEvent({files: [anImage()]}))
+
+    expect(content.payload).toBeNull()
+    expect(content.files).toHaveLength(1)
+  })
+
+  it('still completes an in-app cut pasted alongside files, which carries the inline marker', () => {
+    // The control: our own writes always include the html flavor, so
+    // requiring it costs nothing on the in-app path.
+    const content = readPasteEventContent(pasteEvent({
+      text: 'hello', html: encodePayloadHtml('hello', CUT), files: [anImage()],
+    }))
+
+    expect(content.payload).toEqual(CUT)
+  })
+
   it('leaves html undefined rather than empty-string when absent', () => {
     // `PasteRequest.html` is optional and downstream treats '' as present;
     // both handlers relied on the `|| undefined` this now owns.

@@ -2,71 +2,50 @@
  * What a copy/cut puts on the clipboard, beyond the text — and how a paste
  * gets it back.
  *
- * ## Why this exists
+ * A paste that should MOVE the copied blocks has to answer "which blocks
+ * is this clipboard content?". Identity therefore travels WITH the
+ * content, through two lookups that are both keyed by what the clipboard
+ * holds right now:
  *
- * A paste that should MOVE the copied blocks (cut→paste) has to answer
- * "which blocks is this clipboard content?". The obvious implementation —
- * remember the ids in a module variable when the user cuts — makes that
- * variable a second source of truth beside the OS clipboard, with no
- * transaction spanning the two. Keeping them in agreement is then manual,
- * and every gap is a bug: a copy that forgets to clear the variable, a cut
- * that resumes after a later one, a paste that restores a claim another
- * gesture already took. That shape went through twelve review rounds, four
- * of which were repairs to the previous repair.
+ *   - `text/html` carries the payload inline. Any paste holding a real
+ *     `DataTransfer` reads it straight off the event.
+ *   - `rememberPayload` / `recallPayloadForText` is a table for the paths
+ *     that only see `text/plain` — a bare `p` keypress fires no paste
+ *     event, so those call `navigator.clipboard.readText()` and have no
+ *     flavors to read.
  *
- * So the identity travels WITH the content instead. Both lookups below are
- * keyed by what is actually on the clipboard right now:
+ * ## The rules
  *
- *   - `text/html` carries the payload inline (`encodePayloadHtml` /
- *     `decodePayloadHtml`). Any paste holding a real `DataTransfer` reads
- *     it straight off the event.
- *   - `rememberPayload` / `recallPayloadForText` is a lookup TABLE for the
- *     paste paths that can only see `text/plain` — a bare `p` keypress
- *     fires no paste event, so those must call
- *     `navigator.clipboard.readText()` and have no flavors to read.
+ * **A write may only touch the entry for the exact text it wrote.** Every
+ * write records what the clipboard now holds for its own content:
+ * `writeToClipboard` a payload, `writeTextToClipboard` "no payload" via
+ * `forgetPayload`. A call that clears entries for OTHER content — "the
+ * user did something, drop the pending one" — is the thing to refuse.
  *
- * ## The property to preserve
+ * **Every reader applies `applyCompletion`**, not just the composed
+ * `resolveClipboardPayload`. A reader that can hand back a spent cut is a
+ * reader someone will use.
  *
- * Neither path ever asks "which cut is the current one?". Copy different
- * content and the lookup misses on its own. Two cuts race and each paste
- * resolves against whatever text the OS actually ended up holding. Order
- * of gestures is not a thing this design can get wrong, which is the whole
- * reason it exists.
- *
- * What it CAN get wrong is the mapping being incomplete — a piece of
- * content whose entry no longer describes what the clipboard holds. So
- * every write records what the clipboard now holds FOR THAT CONTENT:
- * `writeToClipboard` records a payload, and `writeTextToClipboard` records
- * "no payload" via `forgetPayload` (otherwise cutting a block whose text
- * is `T` and then copying the identical text `T` from elsewhere would
- * leave the cut entry standing).
- *
- * Read that as bookkeeping about content, not as the old register's
- * invalidate-on-every-gesture. The line to hold: **a write may only touch
- * the entry for the exact text it wrote.** A call that clears entries for
- * OTHER content — "the user did something, drop the pending one" — is the
- * manual-agreement problem coming back, and is the thing to refuse.
- *
- * The table is deliberately NOT keyed by recency, and NOT consulted unless
- * the full text matches.
+ * The obvious simplification — remember the ids in a module variable on
+ * cut — is wrong: that variable is a second source of truth beside the OS
+ * clipboard with no transaction spanning the two, so agreement becomes
+ * manual and every gap is a bug. Content addressing removes the question
+ * "which cut is current?" rather than answering it.
  *
  * ## The limit
  *
- * Text copied from ANOTHER APP never passes through these helpers, so on
- * the text-only paste paths, identical text from outside still resolves to
- * a remembered cut. That's inherent to fingerprinting a text-only
- * clipboard by content, and it isn't new — the register's sentinel
- * compared the same way. Pastes carrying `text/html` are unaffected: the
- * digest binds the marker to the text it shipped with.
+ * Text copied from another app never passes through these helpers, so on
+ * the text-only paths identical foreign text still resolves to a
+ * remembered cut. That is inherent to fingerprinting a text-only clipboard
+ * by content. Pastes carrying `text/html` are unaffected — the digest
+ * binds the marker to the text it shipped with.
  *
  * ## Browser support
  *
- * No capability detection anywhere, on purpose. `text/html` on both the
- * write (`ClipboardItem`) and the read (`DataTransfer.getData`) is
- * universally supported; `navigator.clipboard.read()` — which would let
- * the keyboard paths reach flavors too — is NOT, so it is not used at all
- * rather than used behind a branch that makes the feature work in some
- * browsers and not others.
+ * No capability detection, deliberately. `text/html` on write
+ * (`ClipboardItem`) and read (`DataTransfer.getData`) is universally
+ * supported; `navigator.clipboard.read()` is not, so it is not used at all
+ * rather than behind a branch that works in some browsers and not others.
  */
 import { fnv1a32Hex } from '@/utils/fnv1a.js'
 
@@ -247,23 +226,18 @@ export const resetRememberedPayloads = (): void => {
 }
 
 /**
- * Cuts that have already been completed as a move.
+ * Cuts already completed as a move.
  *
- * A cut stays on the clipboard after it's pasted — we can't rewrite the
- * OS clipboard from inside a paste handler, and shouldn't try. Without
- * this, pasting a second time relocates the SAME blocks again, from the
- * first destination to the second, so the first paste looks undone. Every
- * text editor answers the second ⌘V after a ⌘X by inserting the text
- * again, and that's what downgrading the intent to 'copy' produces here:
- * the paste falls through to an ordinary text paste.
+ * A cut stays on the clipboard after it's pasted — nothing can rewrite the
+ * OS clipboard from inside a paste handler — so without this a second
+ * paste relocates the same blocks again, from the first destination to the
+ * second, and the first paste looks undone. Downgrading the intent to
+ * 'copy' makes that second ⌘V insert text, matching ⌘X⌘V⌘V anywhere else.
  *
- * Keyed by the payload's own identity, so it's content-addressed like
- * everything else — and cleared by `rememberPayload`, so re-cutting the
- * same blocks arms a fresh cut rather than staying permanently consumed.
- *
- * Per-tab, deliberately: cutting in one tab, pasting in a second, then
- * pasting again in the FIRST would move twice. Closing that needs shared
- * state across tabs, which is a bigger cost than the case is worth.
+ * Cleared by `rememberPayload`, so re-cutting the same blocks arms a fresh
+ * cut. Per-tab: cutting in one tab, pasting in a second, then pasting
+ * again in the FIRST moves twice; closing that needs cross-tab shared
+ * state, which costs more than the case is worth.
  */
 const completedCuts = new Set<string>()
 

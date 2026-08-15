@@ -1,11 +1,10 @@
 /**
  * The opening moves every paste-EVENT handler makes, in one place.
  *
- * There are two such handlers — the block shell
+ * Two handlers share it — the block shell
  * (`@/editor/BlockPasteShellDecorator.js`) and the editor
- * (`CodeMirrorContentRenderer`) — and they used to hand-roll the same
- * four steps in the same order, with the same three ways to get it
- * subtly wrong:
+ * (`CodeMirrorContentRenderer`). The order is load-bearing, and each step
+ * has a silent failure if moved:
  *
  *   1. read `files` BEFORE any early return, or an image paste (which
  *      carries no `text/plain`) is silently dropped;
@@ -21,7 +20,11 @@
  * payloads differently (text-only clipboard, no flavors).
  */
 import type { ClipboardEvent } from 'react'
-import { resolveClipboardPayload, type ClipboardPayload } from '@/paste/clipboardPayload.js'
+import {
+  decodePayloadHtml,
+  resolveClipboardPayload,
+  type ClipboardPayload,
+} from '@/paste/clipboardPayload.js'
 
 export interface PasteEventContent {
   /** `text/plain`, or '' when absent. */
@@ -46,7 +49,14 @@ export const readPasteEventContent = (
   const fileList = files && files.length > 0 ? Array.from(files) : []
   const text = e.clipboardData?.getData('text/plain') ?? ''
   const html = e.clipboardData?.getData('text/html') || undefined
-  const payload = resolveClipboardPayload(text, html)
+  // A file-bearing event only trusts a payload carried INLINE in the html.
+  // Our own cuts always write that flavor, so an in-app paste is
+  // unaffected; an image copied from another app arrives with files, empty
+  // text and no marker, and would otherwise recall a remembered cut of an
+  // EMPTY block — moving that block and discarding the image.
+  const payload = fileList.length > 0
+    ? decodePayloadHtml(html, text)
+    : resolveClipboardPayload(text, html)
 
   return {
     text,
