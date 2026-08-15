@@ -291,16 +291,27 @@ export const SELECT_BLOCKS_BY_CONTENT_SQL = `
   LIMIT ?
 `
 
-/** Recent non-empty blocks in a workspace, used by empty-query pickers. */
-export const SELECT_RECENT_BLOCKS_SQL = `
+/** Recent non-empty blocks in a workspace, used by empty-query pickers.
+ *
+ *  `excludeTypes` filters IN THE QUERY, before the limit. A caller that
+ *  drops rows after this returns has a window that is short by however many
+ *  it dropped, and a picker with no pagination behind it cannot recover
+ *  them — over-fetching only moves that cliff further out. */
+export const selectRecentBlocksSql = (excludeTypeCount: number): string => `
   SELECT ${SELECT_BLOCK_COLUMNS_SQL}
   FROM blocks
   WHERE workspace_id = ?
     AND deleted = 0
     AND content != ''
+    ${excludeTypeCount === 0 ? '' : `AND id NOT IN (
+      SELECT block_id FROM block_types
+       WHERE workspace_id = ?
+         AND type IN (${Array.from({length: excludeTypeCount}, () => '?').join(', ')}))`}
   ORDER BY coalesce(user_updated_at, updated_at) DESC, id ASC
   LIMIT ?
 `
+
+export const SELECT_RECENT_BLOCKS_SQL = selectRecentBlocksSql(0)
 
 /** Distinct alias values in a workspace, optionally substring-filtered.
  *  Reads `block_aliases` (the trigger-maintained side index in
@@ -482,6 +493,36 @@ export interface AliasMatchWithRecency extends AliasMatch {
 export interface BlockTypeAssignment {
   blockId: string
   type: string
+}
+
+/** Which of `blockIds` carry one of `opaqueTypes`, from the
+ *  trigger-maintained index — the LIVE answer, not whatever the caller's
+ *  row snapshot happens to say about its own types.
+ *
+ *  Chunked: SQLite caps host parameters (999 by default), and both lists
+ *  ride in the same statement. */
+const opaqueBlockIdsAmong = async (
+  db: {getAll<T>(sql: string, params?: unknown[]): Promise<T[]>},
+  workspaceId: string,
+  blockIds: readonly string[],
+  opaqueTypes: ReadonlySet<string>,
+): Promise<Set<string>> => {
+  const types = [...opaqueTypes]
+  const unique = [...new Set(blockIds)]
+  const chunkSize = Math.max(1, 900 - types.length)
+  const found = new Set<string>()
+  for (let i = 0; i < unique.length; i += chunkSize) {
+    const chunk = unique.slice(i, i + chunkSize)
+    const rows = await db.getAll<{block_id: string}>(
+      `SELECT DISTINCT block_id FROM block_types
+        WHERE workspace_id = ?
+          AND type IN (${types.map(() => '?').join(', ')})
+          AND block_id IN (${chunk.map(() => '?').join(', ')})`,
+      [workspaceId, ...types, ...chunk],
+    )
+    for (const row of rows) found.add(row.block_id)
+  }
+  return found
 }
 
 /** Live-claimant count for one alias string. */
@@ -1149,16 +1190,19 @@ export const searchByContentQuery = defineQuery<
 
 /** Recent non-empty block candidates. Empty workspaceId returns []. */
 export const recentBlocksQuery = defineQuery<
-  {workspaceId: string; limit?: number},
+  {workspaceId: string; limit?: number; excludeOpaqueContent?: boolean},
   BlockData[]
 >({
   name: 'core.recentBlocks',
   argsSchema: z.object({
     workspaceId: z.string(),
     limit: z.number().optional(),
+    /** Drop blocks whose content is not prose (`opaqueContentTypesFacet`)
+     *  inside the query, so the caller's window is `limit` USABLE rows. */
+    excludeOpaqueContent: z.boolean().optional(),
   }),
   resultSchema: blockDataArraySchema,
-  resolve: async ({workspaceId, limit = 50}, ctx) => {
+  resolve: async ({workspaceId, limit = 50, excludeOpaqueContent = false}, ctx) => {
     if (!workspaceId) return []
     // `kernel.content` covers content edits + live-set membership
     // changes. The SQL also orders by `updated_at`, but we deliberately
@@ -1184,8 +1228,12 @@ export const recentBlocksQuery = defineQuery<
         key: typedBlocksTypeKey(workspaceId, type),
       })
     }
+    const excluded = excludeOpaqueContent ? [...ctx.repo.opaqueContentTypes] : []
     const rows = await ctx.db.getAll<BlockRow>(
-      SELECT_RECENT_BLOCKS_SQL, [workspaceId, limit],
+      selectRecentBlocksSql(excluded.length),
+      excluded.length === 0
+        ? [workspaceId, limit]
+        : [workspaceId, workspaceId, ...excluded, limit],
     )
     // Skip per-row deps for the same reason as searchByContent:
     // the kernel.content channel covers content edits + live-set
@@ -1339,9 +1387,25 @@ export const aliasMatchesFuzzyQuery = defineQuery<
     // Same reasoning as `aliasMatches`: this query returns a custom row
     // shape (no BlockData hydration), so per-row deps have to be
     // declared explicitly to catch content edits on a currently-shown
-    // alias block.
+    // alias block. The same per-row dep covers the redaction below, since
+    // gaining an opaque type is a write to that row.
     for (const row of rows) ctx.depend({kind: 'row', id: row.blockId})
-    return rows
+    if (ctx.repo.opaqueContentTypes.size === 0) return rows
+    // An aliased extension block is a legitimate link target — it KEEPS its
+    // row. What it must not hand over is `content`, which consumers render
+    // as a preview (QuickFind's Pages row, the reference picker's candidate
+    // detail). Redacted here rather than at each of them: this is the alias
+    // half of the search, which never passes the content-source merge point
+    // where that filter lives.
+    //
+    // Redaction, not filtering, so the row count is unchanged and no
+    // over-fetch is needed to refill a bounded window.
+    const opaqueBlockIds = await opaqueBlockIdsAmong(
+      ctx.db, workspaceId, rows.map(row => row.blockId), ctx.repo.opaqueContentTypes,
+    )
+    return opaqueBlockIds.size === 0
+      ? rows
+      : rows.map(row => opaqueBlockIds.has(row.blockId) ? {...row, content: ''} : row)
   },
 })
 

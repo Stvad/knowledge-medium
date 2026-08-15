@@ -600,6 +600,18 @@ const runContentLinkRecomputeCheck = async (
     }
   }
 
+  // Opaque rows are excluded in SQL, not just skipped in JS below. They can
+  // satisfy the syntax prefilter too (reference syntax inside a payload is
+  // ordinary), and the pass above has already charged them — fetching them
+  // again spends the SHARED budget twice on one row, which can exhaust the
+  // cap before later prose candidates are ever examined.
+  const opaqueExclusionSql = opaqueTypes.size > 0
+    ? `AND id NOT IN (SELECT block_id FROM block_types
+                       WHERE workspace_id = ? AND type IN (${[...opaqueTypes].map(() => '?').join(', ')}))`
+    : ''
+  const opaqueExclusionParams = opaqueTypes.size > 0
+    ? [workspaceId, ...opaqueTypes]
+    : []
   for (;;) {
     // Same budget the opaque pass drew from, and paged by what's left of it:
     // consulting the cap only between fixed 20000-row pages let an already
@@ -611,9 +623,10 @@ const runContentLinkRecomputeCheck = async (
       `SELECT id, content, references_json, properties_json FROM blocks
        WHERE deleted=0 AND workspace_id=?
          AND (content LIKE '%[[%' OR content LIKE '%((%')
+         ${opaqueExclusionSql}
          AND id > ?
        ORDER BY id LIMIT ${proseLimit}`,
-      [workspaceId, lastId],
+      [workspaceId, ...opaqueExclusionParams, lastId],
     )
     if (batch.length === 0) break
     for (const row of batch) {

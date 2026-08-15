@@ -75,6 +75,16 @@ export const writeBlockTypeLabel = async (
     const fresh = await tx.get(block.id)
     const mirrorContent = fresh !== null
       && !hasOpaqueContent(fresh, tx.opaqueContentTypes)
+    // What the release paths below must drop is the name this block is
+    // STORED as, not the one this editor rendered. A remote rename can land
+    // between that render and this tx, and releasing the stale captured name
+    // leaves the stored one claimed forever — which, on an opaque row that
+    // `aliasSyncProcessor` skips, nothing else will ever move. Read before
+    // the label write below, which would otherwise return `next`.
+    const storedLabel = typeof fresh?.properties[blockTypeLabelProp.name] === 'string'
+      ? fresh.properties[blockTypeLabelProp.name] as string
+      : currentLabel
+    const storedContent = fresh?.content ?? currentContent
     if (next !== currentLabel) {
       await tx.setProperty(block.id, blockTypeLabelProp, next)
     }
@@ -106,7 +116,7 @@ export const writeBlockTypeLabel = async (
         // there is no old entry to rewrite — but `next` still has to resolve).
         // Any other alias the user added stays.
         const aliases = getAliases(row)
-        const kept = aliases.filter(alias => alias !== currentLabel && alias !== next)
+        const kept = aliases.filter(alias => alias !== storedLabel && alias !== next)
         const nextAliases = [next, ...kept]
         if (!arraysEqual(nextAliases, aliases)) {
           await tx.setProperty(block.id, aliasesProp, nextAliases)
@@ -122,7 +132,7 @@ export const writeBlockTypeLabel = async (
       // aliases stay.
       const row = await tx.get(block.id)
       if (row) {
-        const stale = new Set([currentLabel, currentContent])
+        const stale = new Set([storedLabel, storedContent])
         const aliases = getAliases(row)
         const remaining = aliases.filter(alias => !stale.has(alias))
         if (remaining.length !== aliases.length) {

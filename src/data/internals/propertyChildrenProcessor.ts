@@ -538,7 +538,13 @@ export const collapseDuplicateFieldRow = async (
     const survivorValues = survivorChildren
       .filter(isFieldValueChild)
       .filter(v => !hasOpaqueContent(v, tx.opaqueContentTypes))
-    const match = survivorValues.find(v => v.content === child.content)
+    // Both SIDES, not just the candidates: folding tombstones the duplicate,
+    // so an opaque payload whose bytes happen to equal a prose value would be
+    // deleted by a dedup it was never a participant in. It moves over intact
+    // instead — the survivor keeps its own value, and nothing is lost.
+    const match = hasOpaqueContent(child, tx.opaqueContentTypes)
+      ? undefined
+      : survivorValues.find(v => v.content === child.content)
     if (match) {
       await collapseDuplicateValueChild(tx, match.id, child)
     } else {
@@ -579,7 +585,15 @@ export const PROJECT_PROPERTY_CHILDREN_PROCESSOR = defineSameTxProcessor({
   // and value-set both read the bit, so a bit-only change (arrival repair,
   // the catch-up sweep stamping existing marked rows) must re-project; bulk
   // repair paths that write the bit raw enqueue projection explicitly.
-  watches: {kind: 'field', table: 'blocks', fields: ['content', 'referenceTargetId', 'isFieldForm', 'parentId', 'orderKey', 'deleted']},
+  //
+  // `properties` is watched for the same reason one step out: the value set
+  // now also drops opaque rows, and a row gains or loses an opaque type
+  // through a properties-only write that moves no other watched field. The
+  // reference-target processor re-derives on that write, but for ordinary
+  // value text its derivation is a no-op, so nothing downstream would wake
+  // this projector — the cell would keep exposing bytes that left the value
+  // set, or stay unset after a child became prose again.
+  watches: {kind: 'field', table: 'blocks', fields: ['content', 'properties', 'referenceTargetId', 'isFieldForm', 'parentId', 'orderKey', 'deleted']},
   // Issue #402: a plugin rewriting field/value-row content after this
   // ran (merge retarget on a value child or on a definition's field
   // rows, alias reverse-sync turning a child into `::((fieldId))`,

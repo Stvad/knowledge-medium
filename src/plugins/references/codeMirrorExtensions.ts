@@ -1,6 +1,5 @@
 import type { CompletionSource } from '@codemirror/autocomplete'
 import { EditorView } from '@codemirror/view'
-import { hasOpaqueContent } from '@/data/properties.js'
 import { EditorSelection, EditorState, Prec } from '@codemirror/state'
 import type {
   CodeMirrorExtensionContext,
@@ -187,10 +186,8 @@ const buildWikilinkSource = ({repo}: CodeMirrorExtensionContext): CompletionSour
     },
   })
 
-/** Rows the empty-filter block-ref dropdown shows, and how many extra to
- *  pull so an opaque run at the top of the recency list cannot empty it. */
+/** Rows the empty-filter block-ref dropdown shows. */
 const BLOCKREF_RECENT_LIMIT = 12
-const BLOCKREF_RECENT_OVERFETCH = 4
 
 const buildBlockrefSource = ({repo}: CodeMirrorExtensionContext): CompletionSource =>
   blockrefCompletionSource({
@@ -213,16 +210,15 @@ const buildBlockrefSource = ({repo}: CodeMirrorExtensionContext): CompletionSour
         // never sees this branch — a freshly installed extension is exactly
         // the kind of row it returns, with its payload as the label.
         //
-        // Over-fetch, because the filter runs after the SQL limit: with the
-        // 12 most recent rows all opaque (an extension install writes
-        // several at once) an exact-limit fetch returns nothing at all,
-        // and there is no pagination behind this dropdown.
-        : (await repo.query.recentBlocks({
+        // Excluded IN the query rather than filtered after it. A post-filter
+        // is short by whatever it drops, and this dropdown has no pagination
+        // to reach past the gap; over-fetching only moves the cliff (with
+        // every row in the widened window opaque, it still returns nothing).
+        : await repo.query.recentBlocks({
           workspaceId,
-          limit: BLOCKREF_RECENT_LIMIT * BLOCKREF_RECENT_OVERFETCH,
-        }).load())
-          .filter(block => !hasOpaqueContent(block, repo.opaqueContentTypes))
-          .slice(0, BLOCKREF_RECENT_LIMIT)
+          limit: BLOCKREF_RECENT_LIMIT,
+          excludeOpaqueContent: true,
+        }).load()
       return blocks.map(block => ({id: block.id, content: block.content}))
     },
   })

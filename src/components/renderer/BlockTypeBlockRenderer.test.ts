@@ -88,6 +88,25 @@ describe('writeBlockTypeLabel', () => {
     expect(row!.properties[aliasesProp.name]).toEqual(['New', 'mine'])
   })
 
+  // The editor captured `Old` when it rendered; a remote rename advanced the
+  // stored label and its alias to `Remote` before this commit landed.
+  // Releasing the CAPTURED name leaves `[[Remote]]` claimed forever — on an
+  // opaque row `aliasSyncProcessor` skips, nothing else will ever move it.
+  it('releases the label as stored, not as captured, when a rename landed first', async () => {
+    const repo = await setupTypeBlock({
+      label: 'Old', content: 'export const x = 1', alias: 'Old', types: ['extension'],
+    })
+    await repo.tx(async tx => {
+      await tx.setProperty('type-1', blockTypeLabelProp, 'Remote')
+      await tx.setProperty('type-1', aliasesProp, ['Remote'])
+    }, {scope: ChangeScope.BlockDefault})
+
+    await writeBlockTypeLabel(repo.block('type-1'), 'Old', 'export const x = 1', 'Local')
+
+    const row = await repo.load('type-1')
+    expect(row!.properties[aliasesProp.name]).toEqual(['Local'])
+  })
+
   it('releases the old label even when the new one is already claimed', async () => {
     const repo = await setupTypeBlock({
       label: 'Old', content: 'export const x = 1', alias: 'Old', types: ['extension'],

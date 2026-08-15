@@ -24,7 +24,7 @@ import { BlockCache } from '@/data/blockCache'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { kernelDataExtension } from '../kernelDataExtension'
-import { queriesFacet } from '../facets'
+import { opaqueContentTypesFacet, queriesFacet } from '../facets'
 import { Repo } from '../repo'
 import { SELECT_BLOCKS_BY_CONTENT_SQL, compileBlocksContentSearchQuery } from './kernelQueries'
 
@@ -557,6 +557,27 @@ describe('repo.query.recentBlocks', () => {
 
     expect(out.map(r => r.id)).toEqual(['c', 'b'])
   })
+
+  // Excluded BEFORE the limit. A caller filtering afterwards gets a window
+  // short by whatever it dropped, and the empty-query pickers this feeds have
+  // no pagination to reach past the gap — an extension install writes several
+  // opaque rows at once, which is exactly a run at the top of the recency
+  // list.
+  it('excludeOpaqueContent spends the limit on usable rows only', async () => {
+    env.repo.setRuntimeContributions(opaqueContentTypesFacet, 'test-opaque', ['extension'])
+    await create({id: 'prose-1', content: 'oldest prose'})
+    await create({id: 'prose-2', content: 'newer prose'})
+    await create({id: 'ext-1', content: 'export const a = 1', types: ['extension']})
+    await create({id: 'ext-2', content: 'export const b = 2', types: ['extension']})
+
+    const out = asBlocks(await env.repo.query.recentBlocks({
+      workspaceId: WS, limit: 2, excludeOpaqueContent: true,
+    }).load())
+
+    // Both slots hold prose. A post-filter of the same window would have
+    // returned nothing — the two opaque rows are the most recent.
+    expect(out.map(r => r.id)).toEqual(['prose-2', 'prose-1'])
+  })
 })
 
 describe('repo.query.firstChildByContent', () => {
@@ -689,6 +710,31 @@ describe('repo.query.aliasMatchesFuzzy', () => {
       {alias: 'Inbox', blockId: 'a', content: 'Inbox content', updatedAt: expect.any(Number)},
     ])
     expect(out[0].updatedAt).toBeGreaterThan(0)
+  })
+
+  // The alias half of the search never passes the content-source merge
+  // point where the opaque filter lives, so its `content` reached QuickFind's
+  // Pages preview and the reference picker's candidate detail verbatim. The
+  // row is a legitimate link target and STAYS — only the bytes go.
+  it('redacts content for an opaque block but keeps it as a target', async () => {
+    env.repo.setRuntimeContributions(opaqueContentTypesFacet, 'test-opaque', ['extension'])
+    await create({
+      id: 'ext', content: 'export const activate = () => {}',
+      aliases: ['Strength Tracker'], types: ['extension'],
+    })
+    await create({id: 'prose', content: 'Strength notes', aliases: ['Strength Log']})
+
+    const out = await env.repo.query.aliasMatchesFuzzy({
+      workspaceId: WS,
+      prefixes: ['str'],
+    }).load()
+
+    const ext = out.find(row => row.blockId === 'ext')
+    expect(ext).toBeDefined()
+    expect(ext!.alias).toBe('Strength Tracker')
+    expect(ext!.content).toBe('')
+    // Ordinary rows are untouched.
+    expect(out.find(row => row.blockId === 'prose')!.content).toBe('Strength notes')
   })
 
   it('AND-filters across prefixes (word-skip pre-filter)', async () => {

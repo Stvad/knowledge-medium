@@ -242,6 +242,29 @@ describe('flipped workspace (properties_migration = children)', () => {
     expect(after.map(v => v.content)).toContain('done')
   })
 
+  // Gaining an opaque type is a PROPERTIES-only write: it moves no content,
+  // no bit, no edge. With the value set now filtered on opacity, nothing else
+  // would wake the projector, and the cell would keep publishing bytes that
+  // had left the value set.
+  it('re-projects the owner when a value child gains an opaque type', async () => {
+    await seedWorkspace('children')
+    const repo = setup()
+    await createBlock(repo, 'p')
+    await repo.tx(tx => tx.setProperty('p', statusSchema, 'draft'),
+      {scope: ChangeScope.BlockDefault})
+    const [field] = await liveFieldRows('p')
+    const [value] = (await childrenRows(field!.id)).filter(v => v.deleted === 0)
+    expect(await cellValue('p')).toBe('draft')
+
+    await repo.tx(tx => tx.update(value!.id, {
+      properties: {[typesProp.name]: [OPAQUE_TYPE]},
+    }), {scope: ChangeScope.BlockDefault})
+
+    // The only value left the value set, so the key reads as unset — the
+    // §9 rule for "nothing under this field parses".
+    expect(await cellValue('p')).toBeUndefined()
+  })
+
   it('the same-tx projection is idempotent — the cell is written once per tx', async () => {
     await seedWorkspace('children')
     const repo = setup()
@@ -1070,6 +1093,44 @@ describe('duplicate collapse preservation (§9, slice B3)', () => {
     )
     expect(commentB.deleted).toBe(0)
     expect(commentB.parent_id).toBe('value-b')
+  })
+
+  // Folding TOMBSTONES the loser. Filtering only the survivor candidates
+  // leaves the incoming duplicate unchecked, so an opaque payload whose bytes
+  // happen to equal a prose value is deleted by a dedup it is not part of.
+  it('moves an opaque duplicate child instead of folding it away', async () => {
+    await seedWorkspace('children')
+    const repo = setup()
+    await createBlock(repo, 'into')
+    await createBlock(repo, 'from')
+    // Equal values on both sides — without the guard this is exactly the
+    // "exact duplicate" case the collapse folds.
+    await repo.tx(tx => tx.setProperty('into', statusSchema, 'shared'),
+      {scope: ChangeScope.BlockDefault})
+    await repo.tx(tx => tx.setProperty('from', statusSchema, 'shared'),
+      {scope: ChangeScope.BlockDefault})
+    const [fromField] = await liveFieldRows('from')
+    const [fromValue] = (await childrenRows(fromField!.id)).filter(v => v.deleted === 0)
+    const [intoField] = await liveFieldRows('into')
+
+    await sharedDb.db.writeTransaction(async tx => {
+      await tx.execute(
+        `UPDATE blocks SET properties_json = ? WHERE id = ?`,
+        [JSON.stringify({[typesProp.name]: [OPAQUE_TYPE]}), fromValue!.id],
+      )
+    })
+
+    await repo.tx(async tx => {
+      const into = await tx.get('into')
+      const from = await tx.get('from')
+      await mergeBlocksInTx(tx, {into: into!, from: from!})
+    }, {scope: ChangeScope.BlockDefault})
+
+    const survivor = await sharedDb.db.get<{deleted: number; parent_id: string}>(
+      'SELECT deleted, parent_id FROM blocks WHERE id = ?', [fromValue!.id],
+    )
+    expect(survivor.deleted).toBe(0)
+    expect(survivor.parent_id).toBe(intoField!.id)
   })
 
   it('a non-equal setProperty after a merge keeps the divergent peer (eager dual-write parity with materialize, #386 ultra-review)', async () => {
