@@ -1,2 +1,0 @@
-import{CallbackSet as e}from"./callbackSet.js";import{useSyncExternalStore as t}from"react";var n=null,r=null,i=new e(`pending-move`),a=e=>{n=e,r=new Set(e.blockIds),i.notify()},o=()=>n,s=()=>{n!==null&&(n=null,r=null,i.notify())},c=e=>i.add(e),l=()=>t(c,u,d);function u(){return r}function d(){return null}export{s as clearPendingMove,o as getPendingMove,a as setPendingMove,c as subscribePendingMove,l as usePendingMoveIds};
-//# sourceMappingURL=pendingMove.js.map
