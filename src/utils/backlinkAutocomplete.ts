@@ -6,7 +6,10 @@
 import { Extension, EditorSelection } from '@codemirror/state'
 import { autocompletion, CompletionContext, CompletionResult } from '@codemirror/autocomplete'
 import { keymap } from '@codemirror/view'
-import { completionKeymapWithEscapeFallthrough } from '@/utils/codemirrorCompletion.js'
+import {
+  completionKeymapWithEscapeFallthrough,
+  completionQueryEnd,
+} from '@/utils/codemirrorCompletion.js'
 import { flushEditorContent } from '@/editor/contentFlush.js'
 
 export interface BacklinkCompletionCandidate {
@@ -43,7 +46,10 @@ export function createBacklinkAutocomplete(options: BacklinkAutocompleteOptions)
  */
 export function backlinkCompletionSource(options: BacklinkAutocompleteOptions) {
   return async (context: CompletionContext): Promise<CompletionResult | null> => {
-    const { state, pos } = context
+    const { state } = context
+    // End of the query region, not necessarily the caret — see
+    // `completionQueryEnd` for the wrapped-selection case.
+    const pos = completionQueryEnd(context)
     const line = state.doc.lineAt(pos)
     const lineText = line.text
     const linePos = pos - line.from
