@@ -525,13 +525,18 @@ const runContentLinkRecomputeCheck = async (
       ])
       if (parsedAliases.size === 0) continue
       withMarks += 1
-      let stored: StoredRef[]
+      let stored: unknown
       try {
         stored = JSON.parse(row.references_json)
       } catch {
         continue
       }
-      const contentRefs = stored.filter((r) => r && !r.sourceField)
+      // Parsing succeeding says nothing about the SHAPE — `null` and `{}` are
+      // valid JSON, and both reach the filter below and throw. That aborts
+      // the whole check to `error`, hiding every row it had left to look at,
+      // on the one path whose purpose is finding damaged storage.
+      if (!Array.isArray(stored)) continue
+      const contentRefs = (stored as StoredRef[]).filter((r) => r && !r.sourceField)
       if (contentRefs.length === 0) {
         strippedBlocks += 1
         if (strippedSample.length < sampleLimit) strippedSample.push({ id: row.id, marks: parsedAliases.size, content_preview: row.content.slice(0, 120) })

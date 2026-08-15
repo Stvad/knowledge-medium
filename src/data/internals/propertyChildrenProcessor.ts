@@ -54,6 +54,7 @@ import { keyAtStart, keysBetween } from '@/data/orderKey'
 import {
   encodedPropertyValueToChildContent,
   getPropertyFieldTargetId,
+  fieldValueChildren,
   isFieldValueChild,
   propertiesEqual,
   propertyFieldContent,
@@ -194,7 +195,7 @@ const firstProjectedFieldValue = async (
     // §9 value set: `is_field_form IS NOT 1` children only — a nested marked
     // row materialized under the field row is its own machinery, never a
     // value candidate.
-    const values = (await tx.childrenOf(fieldRow.id, undefined)).filter(isFieldValueChild)
+    const values = await fieldValueChildren(tx, fieldRow.id)
     for (const value of values) {
       try {
         return propertyChildContentToEncodedValue(
@@ -401,7 +402,7 @@ export const materializePropertyChildrenForExistingRow = async (
         await tx.update(primary.id, {content: fieldContent})
       }
       // §9 value set: bit-filtered — nested marked rows are machinery.
-      const values = (await tx.childrenOf(primary.id, undefined)).filter(isFieldValueChild)
+      const values = await fieldValueChildren(tx, primary.id)
       const [primaryValue, ...duplicateValues] = values
       if (primaryValue) {
         if (primaryValue.content !== content) {

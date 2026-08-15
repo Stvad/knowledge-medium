@@ -102,6 +102,30 @@ describe('writeBlockTypeLabel', () => {
     expect(block.peekProperty(aliasesProp)).toEqual(['Author'])
   })
 
+  // The editor captured `Author` when it rendered; a rename — remote, or from
+  // a second view — advanced the stored label, content and alias to `Editor`
+  // before this commit landed. Releasing the CAPTURED name drops nothing and
+  // leaves `[[Editor]]` claimed by a now-typeless block; blanking empties
+  // `content` too, so `aliasSyncProcessor`'s blank-content guard will not
+  // come back for it either.
+  it('releases the label as stored, not as captured, when a rename landed first', async () => {
+    const repo = await setupTypeBlock({ label: 'Author', content: 'Author', alias: 'Author' })
+    const block = repo.block('type-1')
+    await repo.tx(async tx => {
+      await tx.setProperty('type-1', blockTypeLabelProp, 'Editor')
+      await tx.update('type-1', { content: 'Editor' })
+      await tx.setProperty('type-1', aliasesProp, ['Editor'])
+    }, { scope: ChangeScope.BlockDefault, description: 'rename from elsewhere' })
+
+    await writeBlockTypeLabel(block, 'Author', 'Author', '')
+
+    expect(block.peekProperty(aliasesProp)).toEqual([])
+    const resolved = await repo.query
+      .aliasLookup({ workspaceId: 'ws-1', alias: 'Editor' })
+      .load()
+    expect(resolved).toBeNull()
+  })
+
   it('releases the name alias when the label is blanked (so the name can be re-created)', async () => {
     // Blanking un-names the type; aliasSyncProcessor's blank-content guard
     // won't release the alias, so writeBlockTypeLabel must — else [[Author]]

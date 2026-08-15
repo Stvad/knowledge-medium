@@ -497,6 +497,23 @@ describe('runConsistencyAudit — full (on-demand) deep checks', () => {
     expect(check.strippedBlocks).toBe(1)
   })
 
+  // `null` and `{}` parse fine, so a successful `JSON.parse` says nothing
+  // about the shape. Throwing here degrades the whole check to `error` and
+  // hides every other row — on the one path whose job is damaged storage.
+  it('content_link_recompute survives a row whose references_json is valid JSON but not an array', async () => {
+    await ins({ id: 'bad', content: '[[Foo]]', references: [] })
+    await ins({ id: 'good', content: '[[Bar]]', references: [] })
+    await sharedDb.db.execute(
+      `UPDATE blocks SET references_json = 'null' WHERE id = 'bad'`,
+    )
+
+    const r = await runConsistencyAudit(sharedDb.db, WS, 0, { full: FULL })
+    const check = r.checks.content_link_recompute
+    expect(check.status).not.toBe('error')
+    // The malformed row is skipped; the healthy one is still scored.
+    expect(check.strippedBlocks).toBe(1)
+  })
+
   it('property_ref_at_rest (schema-aware) flags a value-present/ref-absent curated prop', async () => {
     await ins({ id: 'p1', properties: { 'next-review-date': '2026-01-01' }, references: [] })
     const r = await runConsistencyAudit(sharedDb.db, WS, 0, { full: FULL })
