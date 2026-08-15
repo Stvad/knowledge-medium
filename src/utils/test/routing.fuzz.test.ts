@@ -28,7 +28,7 @@
  *    valid `REST_ENTRY_RE` context entries (routing.ts:134),
  *    `parseLayout(buildLayoutFromSlots(ws, slots)).slots` deep-equals the
  *    AST canonicalized the same way `buildContextSuffix`/
- *    `parseContextEntries` do (falsy `active`/empty `rest`/empty `viewMode`
+ *    `parseContextEntries` do (falsy flags/empty `rest`/empty `viewMode`
  *    dropped, `rest` sorted by key).
  *
  * 4. Paren atomicity (routing.ts:19-20 header rule, enforced by
@@ -55,6 +55,7 @@ import {
   parseAppHash,
   buildLayoutFromSlots,
   flattenSlots,
+  isReservedSlotContextKey,
   type LayoutSlot,
 } from '../routing'
 
@@ -71,8 +72,9 @@ const blockIdArb: fc.Arbitrary<string> =
 const invalidBlockIdArb: fc.Arbitrary<string> =
   fc.string({unit: fc.constantFrom(...BLOCK_ID_CHARS), maxLength: 4}).map(s => `%${s}`)
 
-// CONTEXT_ENTRY_RE key group = /^[a-z][a-z0-9-]*/ (routing.ts:128); 'view'
-// and 'active' are reserved (routing.ts:160,168) so excluded from "rest".
+// CONTEXT_ENTRY_RE key group = /^[a-z][a-z0-9-]*/, minus the reserved keys —
+// those are not opaque `rest` entries and are excluded via the real predicate,
+// never a copy of its contents (see isReservedSlotContextKey).
 const REST_KEY_CHARS = 'abcdefghijklmnopqrstuvwxyz0123456789-'.split('')
 const restKeyArb: fc.Arbitrary<string> = fc
   .tuple(
@@ -80,7 +82,7 @@ const restKeyArb: fc.Arbitrary<string> = fc
     fc.string({unit: fc.constantFrom(...REST_KEY_CHARS), maxLength: 5}),
   )
   .map(([first, rest]) => first + rest)
-  .filter(key => key !== 'view' && key !== 'active')
+  .filter(key => !isReservedSlotContextKey(key))
 
 // REST_ENTRY_RE value group = /[A-Za-z0-9%._~-]*/ (routing.ts:134).
 const REST_VALUE_CHARS =
@@ -201,6 +203,7 @@ const leafArb: fc.Arbitrary<Leaf> = fc.record({
   blockId: blockIdArb,
   viewMode: fc.option(fc.string({minLength: 1, maxLength: 10}), {nil: undefined}),
   active: fc.boolean(),
+  maximized: fc.boolean(),
   rest: uniqueRestEntriesArb,
 })
 
@@ -241,9 +244,9 @@ function genColumn(depth: number): fc.Arbitrary<LayoutSlot> {
 const slotsArb: fc.Arbitrary<LayoutSlot[]> =
   fc.array(genColumn(MAX_DEPTH), {minLength: 0, maxLength: 4})
 
-/** Mirrors buildContextSuffix (routing.ts:260-277) / parseContextEntries
- *  (routing.ts:146-193)'s canonicalization: falsy `active`, empty `rest`,
- *  and empty/absent `viewMode` are all dropped; `rest` is sorted by key. */
+/** Mirrors buildContextSuffix / parseContextEntries' canonicalization: falsy
+ *  flags, empty `rest`, and empty/absent `viewMode` are all dropped; `rest` is
+ *  sorted by key. One arm per flag in FLAG_SLOT_CONTEXT_KEYS. */
 const canonicalizeSlot = (slot: LayoutSlot): LayoutSlot => {
   if (slot.kind === 'leaf') {
     const rest = sortByKey(slot.rest ?? [])
@@ -252,6 +255,7 @@ const canonicalizeSlot = (slot: LayoutSlot): LayoutSlot => {
       blockId: slot.blockId,
       ...(slot.viewMode ? {viewMode: slot.viewMode} : {}),
       ...(slot.active ? {active: true} : {}),
+      ...(slot.maximized ? {maximized: true} : {}),
       ...(rest.length > 0 ? {rest} : {}),
     }
   }

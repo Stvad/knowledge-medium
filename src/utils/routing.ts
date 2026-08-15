@@ -220,7 +220,12 @@ const FLAG_SLOT_CONTEXT_ENTRIES = Object.entries(FLAG_SLOT_CONTEXT_KEYS) as
 const isFlagSlotContextKey = (key: string): key is FlagSlotContextKey =>
   Object.hasOwn(FLAG_SLOT_CONTEXT_KEYS, key)
 
-const isReservedSlotContextKey = (key: string): boolean =>
+/** Keys that can never be an opaque `rest` entry — each takes its own parse
+ *  branch and is stripped from `rest` on build. Exported so tests derive the
+ *  set from this registration point rather than re-listing it: a hand-copied
+ *  list stops matching the moment a flag is added, and nothing fails until a
+ *  deep fuzz run happens to generate the new key. */
+export const isReservedSlotContextKey = (key: string): boolean =>
   key === 'view' || isFlagSlotContextKey(key)
 
 const parseContextEntries = (segments: readonly string[]): SlotContext => {
