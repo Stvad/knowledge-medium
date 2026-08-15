@@ -220,8 +220,31 @@ const FLAG_SLOT_CONTEXT_ENTRIES = Object.entries(FLAG_SLOT_CONTEXT_KEYS) as
 const isFlagSlotContextKey = (key: string): key is FlagSlotContextKey =>
   Object.hasOwn(FLAG_SLOT_CONTEXT_KEYS, key)
 
+/** The one single-valued reserved key (`;view=<percent-encoded>`), as opposed
+ *  to the valueless FLAG_SLOT_CONTEXT_KEYS. */
+const VIEW_SLOT_CONTEXT_KEY = 'view'
+
+/** Registration DATA for the keys that can never be an opaque `rest` entry —
+ *  each has a dedicated parse branch and is stripped from `rest` on build.
+ *  Exported so tests derive their exclusion set from the registration rather
+ *  than re-listing it by hand (a hand-copied list stops matching the moment a
+ *  flag is added, and nothing fails until a deep fuzz run happens to generate
+ *  the new key).
+ *
+ *  Deliberately a SEPARATE expression from `isReservedSlotContextKey`, not its
+ *  implementation and not implemented in terms of it: collapsing the two makes
+ *  the fuzz generator exclude exactly what the predicate claims, so a predicate
+ *  that drifts into reserving an ORDINARY key would strip that key from `rest`
+ *  and simultaneously stop it being generated — silent data loss, green suite.
+ *  Two expressions over the same registration keeps the round-trip property an
+ *  independent check on the predicate. */
+export const RESERVED_SLOT_CONTEXT_KEYS: readonly string[] = [
+  VIEW_SLOT_CONTEXT_KEY,
+  ...Object.keys(FLAG_SLOT_CONTEXT_KEYS),
+]
+
 const isReservedSlotContextKey = (key: string): boolean =>
-  key === 'view' || isFlagSlotContextKey(key)
+  key === VIEW_SLOT_CONTEXT_KEY || isFlagSlotContextKey(key)
 
 const parseContextEntries = (segments: readonly string[]): SlotContext => {
   const seen = new Set<string>()
@@ -238,7 +261,7 @@ const parseContextEntries = (segments: readonly string[]): SlotContext => {
     const hasValue = match[2] !== undefined
     const value = match[3] ?? ''
 
-    if (key === 'view') {
+    if (key === VIEW_SLOT_CONTEXT_KEY) {
       if (!hasValue) continue
       const decoded = decodeContextValue(value)
       // local '' ≡ absent fold — see normalizeViewMode (properties.ts);
@@ -351,7 +374,12 @@ const buildContextSuffix = (slot: SlotContext): string => {
     if (slot[field]) entries.push({key, text: key})
   }
   // local '' ≡ absent fold — see normalizeViewMode (properties.ts).
-  if (slot.viewMode) entries.push({key: 'view', text: `view=${encodeContextValue(slot.viewMode)}`})
+  if (slot.viewMode) {
+    entries.push({
+      key: VIEW_SLOT_CONTEXT_KEY,
+      text: `${VIEW_SLOT_CONTEXT_KEY}=${encodeContextValue(slot.viewMode)}`,
+    })
+  }
   for (const raw of slot.rest ?? []) {
     // Guard programmatically constructed slots: drop malformed entries
     // (REST_ENTRY_RE, same rule as parse) and entries squatting on the
