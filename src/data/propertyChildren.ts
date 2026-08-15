@@ -79,10 +79,9 @@ export const isFieldValueChild = (
  *
  *  One helper for both writers on purpose: `tx.setProperty`'s eager
  *  dual-write and the deferred materialize processor each select this set
- *  before overwriting or folding what they find in it, and the two must not
- *  be able to disagree about what counts. They were separate copies of the
- *  same two lines, which is a standing invitation for a rule to be added to
- *  one of them. */
+ *  before overwriting or folding what they find in it, so they must not be
+ *  able to disagree about what counts. Narrow it here, never at a call
+ *  site. */
 export const fieldValueChildren = async (
   tx: Pick<Tx, 'childrenOf'>,
   fieldRowId: string,

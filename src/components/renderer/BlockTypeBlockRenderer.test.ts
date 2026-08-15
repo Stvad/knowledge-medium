@@ -1,21 +1,22 @@
 // @vitest-environment node
 
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { ChangeScope } from '@/data/api'
 import { BLOCK_TYPE_TYPE } from '@/data/blockTypes'
 import { aliasesProp, blockTypeLabelProp } from '@/data/properties'
 import type { Repo } from '@/data/repo'
-import { createTestDb, type TestDb } from '@/data/test/createTestDb'
+import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { writeBlockTypeLabel } from './BlockTypeBlockRenderer'
 
 describe('writeBlockTypeLabel', () => {
-  let h: TestDb | undefined
-
-  afterEach(async () => {
-    await h?.cleanup()
-    h = undefined
-  })
+  // One DB for the file, reset between tests. The repo is still built fresh
+  // per test — these exercise processor-driven alias writes, so they want
+  // their own registry and id sequence, just not their own database.
+  let h: TestDb
+  beforeAll(async () => { h = await createTestDb() })
+  afterAll(async () => { await h.cleanup() })
+  beforeEach(async () => { await resetTestDb(h.db) })
 
   /** Fresh repo + one alias-less `block-type` block (`type-1`), mirroring
    *  the Types-page "New type" button: created with an empty label and no
@@ -24,7 +25,6 @@ describe('writeBlockTypeLabel', () => {
   const setupTypeBlock = async (
     initial: { label?: string; content?: string; alias?: string } = {},
   ): Promise<Repo> => {
-    h = await createTestDb()
     let idSeq = 0
     const { repo } = createTestRepo({
       db: h.db,
