@@ -31,10 +31,8 @@ export const appendTagToContent = (content: string, name: string): string => {
   if (!isValidTagName(name)) return content
   const trimmedName = name.trim()
   if (hasTagReference(content, trimmedName)) return content
-  // Checked even though `isValidTagName` above already implies it. The
-  // template literal below would have interpolated a `null` as the string
-  // "null" — the one shape of this bug the compiler cannot see — so the
-  // narrowing is what keeps the refusal real rather than decorative.
+  // `isValidTagName` above already implies this, but the narrowing is what
+  // stops the template literal below interpolating a null as "null".
   const rendered = renderWikilink(trimmedName)
   if (rendered === null) return content
   const separator = content.length === 0 || /\s$/.test(content) ? '' : ' '

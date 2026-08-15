@@ -37,6 +37,12 @@ secret handling:
 - when a task needs secret-backed config, infer variable names from code/docs and have the user provide or set values out of band
 - if a command must touch a secret file, avoid outputting its contents and avoid relaying secret values back to the user
 
+comments:
+- keep a comment only if a competent editor would DO something different for having read it. Invariants, deliberate divergences, and "the obvious refactor here is wrong because X" earn their place. A comment that restates the line below it is worse than none — it's a second thing to keep in sync.
+- the failure mode to watch for (agents do this constantly, and this repo is already over-commented because of it): having just spent a long time understanding something, you write down the UNDERSTANDING rather than the INVARIANT. A guard whose rule is one sentence gets thirty lines narrating the investigation that found it.
+- incident history — how the bug was found, how big the payload was, which extension produced it — belongs in the issue and the PR body. It is not a comment. Reaching for it is the tell that you're writing for the reviewer of this diff rather than for whoever edits the line in a year.
+- state the rule, then why the obvious simplification is wrong, in that order, in as few lines as it takes.
+
 testing:
 - don't add tests that just re-state the code (like testing what is our default shortcut binding is. this just duplicates the shortcut string for no benefit)
 - fuzz suites (`*.fuzz.test.ts`, fast-check) run as a small fixed-seed smoke tier inside the normal gate and as random-seed deep runs via `pnpm fuzz` + the nightly `fuzz-nightly.yml` workflow. Reproduce failures with `FUZZ_SEED`/`FUZZ_PATH`; conventions + oracle discipline in `docs/fuzzing.md`. Never weaken a failing property to make it pass — diagnose (real bug vs wrong oracle) first.

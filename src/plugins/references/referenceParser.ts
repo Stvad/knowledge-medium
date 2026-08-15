@@ -45,16 +45,12 @@ export interface ParsedBlockRef {
 }
 
 // Span SHAPES come from `@/data/referenceBlock`, which owns this grammar
-// for both of its readers — this file scans spans out of prose, that one
-// classifies whole-block content. Duplicating the shapes here is how they
-// drift, and a span that is a reference to one reader and prose to the
-// other is the bug class behind #540/#541/#542. Only the ANCHORING and
-// FLAGS are this reader's own: global, because it scans; and see the
-// docblock there for the three differences that are deliberate.
+// for both readers; a second copy here is how the two drift apart. Only
+// the anchoring and flags are this reader's own — global, because it
+// scans. See that module's docblock for the deliberate divergences.
 //
-// UUID-only ids, deliberately narrower than the whole-block reading's
-// broad class, so accidental double-parens in prose (e.g. "((not an id))")
-// don't become backlinks.
+// UUID-only ids, narrower than the whole-block reading, so accidental
+// double-parens in prose ("((not an id))") don't become backlinks.
 const ALIASED_BLOCK_REF_RE = new RegExp(aliasedBlockRefSpanSource(UUID_RE_SOURCE), 'gi')
 const BLOCK_REF_RE = new RegExp(blockRefSpanSource(UUID_RE_SOURCE), 'gi')
 const BLOCK_EMBED_RE = new RegExp(`!${blockRefSpanSource(UUID_RE_SOURCE)}`, 'gi')
@@ -559,10 +555,9 @@ export const faithfulWikilinkReplacement = (alias: string): SpanReplacement | nu
   // literal alias text, and the caller has a pinned fallback that keeps
   // the TARGET regardless of how markdown treats the label.
   if (alias.includes('\\')) return null
-  // `renderWikilink` already refuses anything that doesn't parse back to
-  // exactly one reference, so the `marks.length !== 1` case below is now
-  // unreachable through it — kept because the checks after it (whole-span
-  // coverage, alias identity) are this function's own, stricter contract.
+  // Defence in depth: `renderWikilink` already refuses anything that
+  // doesn't parse back to one reference, so `marks.length !== 1` is
+  // unreachable through it. The checks after it are this function's own.
   const text = renderWikilink(alias)
   if (text === null) return null
   const marks = parseOutermostReferences(text)

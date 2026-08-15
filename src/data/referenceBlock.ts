@@ -23,45 +23,32 @@ export const UUID_RE_SOURCE = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[
 /** Longest alias a `[[…]]` span may carry and still be read as a
  *  reference — by ANY reader of this text.
  *
- *  A runaway guard. Nothing in the grammar bounds how far a `[[` may
+ *  A runaway guard: nothing in the grammar bounds how far a `[[` may
  *  reach for its `]]`, and text carrying code supplies unbalanced openers
  *  for free (a regex character class opening `/[[`, a nested array
- *  literal). One such opener in a stored extension bundle paired with a
- *  `]]` 205 KB downstream and minted a page whose NAME was 205 KB of
- *  JavaScript. 4096 is far above anything human-authored — the longest
- *  real alias in the author's ~31k-alias workspace is 322 chars — so this
+ *  literal). 4096 sits far above anything human-authored — the longest
+ *  real alias measured across a ~31k-alias workspace was 322 chars — so it
  *  bounds a runaway without being a judgement about page names.
  *
- *  Declared HERE, in core, for the same reason `UUID_RE_SOURCE` above is
- *  exported rather than copied: two parsers read this grammar over the
- *  same text and must not disagree about what counts as a reference.
- *  This module owns the whole-block reading (`deriveReferenceColumns` →
- *  `reference_target_id`, which in a child-backed workspace decides
- *  whether a row projects as a property field);
- *  `@/plugins/references/referenceParser` owns the inline reading (the
- *  backlink index and the markdown renderer). Core cannot import the
- *  plugin, so the constant lives at the lower layer and the plugin
- *  re-exports it — a plugin-side constant would have been a boundary
- *  violation and a second source of truth at once. */
+ *  In core, not the plugin: both readers of this grammar must agree on
+ *  what counts as a reference, and core cannot import the plugin — so the
+ *  plugin re-exports this rather than declaring its own copy. */
 export const MAX_ALIAS_LENGTH = 4096
 /** Id class the WHOLE-BLOCK reading accepts inside `((…))` — any run
  *  without parens or whitespace, so a field row can address a block whose
- *  id was supplied by a caller rather than generated. The inline reading
- *  deliberately narrows this to `UUID_RE_SOURCE`; see the divergence note
- *  on {@link blockRefSpanSource}. */
+ *  id came from a caller rather than being generated. The inline reading
+ *  narrows this deliberately; see {@link blockRefSpanSource}. */
 export const BROAD_BLOCK_REF_ID_SOURCE = '[^()\\s]+'
 
-/** ──── Span sources, shared by BOTH readers of this grammar ────
+/** ──── Span shapes, shared by BOTH readers of this grammar ────
  *
- *  There are two: this module reads WHOLE-BLOCK content (one span, or
- *  nothing) and `@/plugins/references/referenceParser` scans INLINE spans
- *  out of prose. They are separate functions because they answer separate
- *  questions, but the SHAPES they match must not drift — a span that is a
- *  reference to one reader and prose to the other is the bug class that
- *  produced #540, #541 and #542. So the shapes live here, once, and each
- *  reader anchors and flags them for its own job.
+ *  This module reads WHOLE-BLOCK content (one span, or nothing);
+ *  `@/plugins/references/referenceParser` scans INLINE spans out of prose.
+ *  The shapes must not drift, or a span is a reference to one reader and
+ *  prose to the other — so they live here once, and each reader anchors
+ *  and flags them for its own job.
  *
- *  Three differences ARE deliberate, and are parameters rather than
+ *  Three divergences ARE deliberate, hence parameters rather than
  *  accidents:
  *   - the id class inside `((…))` — broad whole-block (above), UUID-only
  *     inline so prose like "((not an id))" never becomes a backlink;
