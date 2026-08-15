@@ -566,6 +566,33 @@ describe('runConsistencyAudit — full (on-demand) deep checks', () => {
     expect(check.opaqueContentRefs).toBe(1)
   })
 
+  // `null` and `{}` parse fine, so a successful `JSON.parse` says nothing
+  // about the shape. Throwing here degrades the whole check to `error` and
+  // hides every other row — on the one path whose job is damaged storage.
+  it('skips an opaque row whose references_json is valid JSON but not an array', async () => {
+    await ins({
+      id: 'ext-null', content: 'export const x = 1',
+      properties: { types: ['extension'] },
+      references: [{ id: 'foo-id', alias: 'Foo' }],
+    })
+    await ins({
+      id: 'ext-ok', content: 'export const y = 2',
+      properties: { types: ['extension'] },
+      references: [{ id: 'bar-id', alias: 'Bar' }],
+    })
+    await sharedDb.db.execute(
+      `UPDATE blocks SET references_json = 'null' WHERE id = 'ext-null'`,
+    )
+
+    const r = await runConsistencyAudit(sharedDb.db, WS, 0, {
+      full: { ...FULL, opaqueContentTypes: new Set(['extension']) },
+    })
+    const check = r.checks.content_link_recompute
+    expect(check.status).not.toBe('error')
+    // The malformed row is skipped; the healthy one is still reported.
+    expect(check.opaqueContentRefBlocks).toBe(1)
+  })
+
   // The cap used to be consulted only between fixed-size pages, so a cap
   // below the batch size processed every candidate anyway and still reported
   // complete coverage.

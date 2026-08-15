@@ -573,13 +573,18 @@ const runContentLinkRecomputeCheck = async (
       )
       if (rows.length === 0) break
       for (const row of rows) {
-        let stored: StoredRef[]
+        let stored: unknown
         try {
           stored = JSON.parse(row.references_json)
         } catch {
           continue
         }
-        const lingering = stored.filter((r) => r && !r.sourceField)
+        // `null` and `{}` are valid JSON, so parsing succeeding says nothing
+        // about the shape. Auditing damaged storage is this path's whole
+        // job — a throw here degrades the check to `error` and hides every
+        // other row it had left to look at.
+        if (!Array.isArray(stored)) continue
+        const lingering = (stored as StoredRef[]).filter((r) => r && !r.sourceField)
         if (lingering.length === 0) continue
         opaqueContentRefBlocks += 1
         opaqueContentRefs += lingering.length

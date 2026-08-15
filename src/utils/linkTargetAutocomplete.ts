@@ -625,9 +625,16 @@ export const searchBlocksAcrossSources = async (
   // recoverable — core's widening only covers core's own window. Sources
   // are documented as free to return more than asked; this makes the
   // request itself generous instead of relying on that.
+  //
+  // Relative to the request, with NO ceiling: capping the total at
+  // `ALIAS_CANDIDATE_CEILING` left `limit >= 200` with zero headroom, which
+  // is the same shape as the widening bug that ceiling already caused once.
+  // Still one shot — a source whose first `limit * MULTIPLIER` hits are all
+  // opaque returns short rather than being re-queried, since "exhausted" is
+  // not something the source contract lets us tell from "capped".
   const sourceArgs: SearchSourceArgs = {
     ...args,
-    limit: Math.max(args.limit, Math.min(args.limit * ALIAS_CANDIDATE_MULTIPLIER, ALIAS_CANDIDATE_CEILING)),
+    limit: args.limit * ALIAS_CANDIDATE_MULTIPLIER,
   }
   const failures: {index: number; error: unknown}[] = []
   const candidateLists = await Promise.all(

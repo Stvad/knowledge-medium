@@ -965,6 +965,24 @@ describe('searchBlocksAcrossSources (searchSourcesFacet merge point)', () => {
     expect(results.map(block => block.id)).toEqual(['semantic-hit', 'core-hit'])
   })
 
+  // The ceiling used to cap the TOTAL, so any `limit >= ALIAS_CANDIDATE_CEILING`
+  // asked sources for exactly `limit` — zero headroom, leaving the opaque
+  // filter at the merge point nothing spare to drop. Same shape as the
+  // widening bug that ceiling already caused once.
+  it('asks contributed sources for headroom proportional to the limit', async () => {
+    const seen: number[] = []
+    const probe: SearchSourceContribution = {
+      id: 'test.probe',
+      search: async (_repo, sourceArgs) => { seen.push(sourceArgs.limit); return [] },
+    }
+    env.repo.setRuntimeContributions(searchSourcesFacet, 'test:probe', [probe])
+
+    await searchBlocksAcrossSources(env.repo, {workspaceId: WS, query: 'sync', limit: 5})
+    await searchBlocksAcrossSources(env.repo, {workspaceId: WS, query: 'sync', limit: 500})
+
+    expect(seen).toEqual([20, 2000])
+  })
+
   it('dedupes a block id contributed by two sources, ranking by the max score but keeping the freshest payload', async () => {
     // Core matches "shared" as a prefix hit (score 200) with its real DB
     // content and a real (freshly-written) `userUpdatedAt`. The toy

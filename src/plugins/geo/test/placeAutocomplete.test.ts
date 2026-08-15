@@ -143,6 +143,7 @@ describe('placeCompletionSource — resolved insert delivery', () => {
     resolveName: string
     persistInsert?: (args: {triggerText: string; insert: string}) => Promise<void>
     isOpaque?: () => boolean
+    onResolve?: () => void
   }) => {
     const source = placeCompletionSource({
       getCandidates: async () => [
@@ -150,6 +151,7 @@ describe('placeCompletionSource — resolved insert delivery', () => {
       ],
       // Simulate a slow resolution (details fetch / collision toast).
       resolvePlace: async () => {
+        opts.onResolve?.()
         await new Promise(r => setTimeout(r, 0))
         return {kind: 'insert', name: opts.resolveName}
       },
@@ -222,6 +224,36 @@ describe('placeCompletionSource — resolved insert delivery', () => {
       await vi.waitFor(() => expect(isOpaque).toHaveBeenCalled())
       expect(view.state.doc.toString()).toBe(before)
       expect(persisted).toEqual([])
+    } finally {
+      view.destroy()
+    }
+  })
+
+  // Resolving a place is not free: it bootstraps the Locations page, mints or
+  // enriches a Place block, and spends a billable details request. Refusing
+  // only after it settles discards the link and strands all of that.
+  it('refuses an opaque target before paying for resolution', async () => {
+    let resolves = 0
+    let opaque = false
+    const {option, apply, state} = await buildOption({
+      resolveName: 'Blue Bottle',
+      isOpaque: () => opaque,
+      onResolve: () => { resolves += 1 },
+    })
+    const view = new EditorView({state, parent: document.body})
+    try {
+      // Prove resolution happens at all on this path first, so the zero
+      // below is a refusal rather than a call that simply never landed.
+      apply(view, option, 7, 12)
+      await vi.waitFor(() => expect(resolves).toBe(1))
+
+      opaque = true
+      apply(view, option, 7, 12)
+      // FIFO fence: a later non-opaque pick must resolve, and in-order
+      // delivery then proves the opaque one produced no resolution of its own.
+      opaque = false
+      apply(view, option, 7, 12)
+      await vi.waitFor(() => expect(resolves).toBe(2))
     } finally {
       view.destroy()
     }

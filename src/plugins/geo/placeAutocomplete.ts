@@ -113,12 +113,12 @@ export interface PlaceAutocompleteOptions {
    *  trigger-text → wikilink replacement to the underlying block. */
   persistInsert?: (args: {triggerText: string; insert: string}) => Promise<void>
   /** Whether the target block's content has stopped being prose. Consulted
-   *  AFTER `resolvePlace` settles, because that is the window that matters:
-   *  a details fetch, a nearby picker or the naming prompt can each hold
-   *  for as long as the user takes, and an extension install lands in it.
-   *  Both delivery paths are downstream of this one check — the connected
-   *  view's dispatch is persisted by `flushEditorContent`, so guarding only
-   *  `persistInsert` leaves the common path open. */
+   *  twice: before `resolvePlace`, which is billable and mints blocks, and
+   *  again after it settles, since that await is a user-length pause an
+   *  extension install can land in. Both delivery paths sit downstream of
+   *  the second check — the connected view's dispatch is persisted by
+   *  `flushEditorContent`, so guarding only `persistInsert` leaves the
+   *  common path open. */
   isOpaque?: () => boolean
 }
 
@@ -186,9 +186,17 @@ const candidateToOption = (
     // Fire-and-forget — the dropdown closes immediately. Errors
     // surface via the resolvePlace impl (toast, console).
     void (async () => {
+      // Before resolution, not only before the write: resolving a place
+      // bootstraps the Locations page, mints or enriches a Place block, and
+      // spends a billable details request. Refusing afterwards discards the
+      // link but leaves all of that behind.
+      if (options.isOpaque?.()) return
       const resolved = await options.resolvePlace(candidate, {view, from: applyFrom, to: applyTo})
       if (!resolved) return
       if (resolved.kind === 'handled') return
+      // Again after the await — the resolution is a user-length pause (the
+      // details fetch, the nearby picker, the naming prompt) and the block
+      // can turn opaque inside it.
       if (options.isOpaque?.()) return
       const insert = `[[${resolved.name}]]`
       const delivered = applyInsertToView(

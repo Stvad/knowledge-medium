@@ -40,19 +40,14 @@ const liveSnapshot = (snapshot: BlockData | undefined): BlockData | undefined | 
   return snapshot.deleted ? null : snapshot
 }
 
-/** "This gesture must not edit this block's TEXT" — for the EDITOR-side
- *  half of a text-writing gesture, where there is no tx to check against.
+/** "This gesture must not edit this block's TEXT" — for the EDITOR-side half
+ *  of a text-writing gesture, where there is no tx to check against. Call it
+ *  BEFORE dispatching into the doc: the editor's own debounced commit
+ *  persists whatever the doc holds, so a refusal inside the tx is too late.
  *
- *  Ask-agent, insert-image and insert-timestamp each have two paths: a
- *  transaction (guarded by `tx.opaqueContentTypes`) and an edit-mode branch
- *  that dispatches straight into the live CodeMirror doc. The second one
- *  bypasses the tx entirely — the editor's own debounced commit persists the
- *  mutated doc afterwards, so refusing in the tx is too late and the doc has
- *  already been corrupted on screen. Call this BEFORE dispatching.
- *
- *  Reads the live repo set (there is no tx here); the in-tx check remains
- *  the authoritative one. Absent/unloaded rows are not opaque — a UI
- *  refusal must not fire on "we don't know yet". */
+ *  Reads the live repo set; the in-tx check remains the authoritative one.
+ *  Absent/unloaded rows are not opaque — a UI refusal must not fire on "we
+ *  don't know yet". */
 export const blockContentIsOpaque = (block: Block): boolean => {
   const data = block.peek()
   if (!data) return false
