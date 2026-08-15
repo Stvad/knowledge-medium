@@ -168,6 +168,41 @@ describe('references.inlineDeletedBlockReferences', () => {
     expect(env.read('s')!.content).not.toContain('activate')
   })
 
+  // The INTERSECTION of the two opaque cases. Skipping the target's referrers
+  // wholesale would also skip the edge-only cleanup an opaque source needs —
+  // and that source is never re-parsed, so nothing would ever come back for
+  // it. Bytes stay, edge goes, exactly as when the target is prose.
+  it('drops an opaque source\'s stale edge even when the target is opaque too', async () => {
+    const source = `const doc = "((${D}))"`
+    await env.repo.tx(async tx => {
+      await tx.create({
+        id: D, workspaceId: WS, parentId: null, orderKey: 'a0',
+        content: 'export const activate = () => {}',
+        properties: {types: ['extension']},
+      })
+      // Born PROSE so the edge is real — see the sibling test above.
+      await tx.create({
+        id: 's', workspaceId: WS, parentId: null, orderKey: 'a1',
+        content: source,
+        references: [{id: D, alias: D}],
+      })
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.awaitProcessors()
+    expect(env.read('s')!.references).toEqual([{id: D, alias: D}])
+
+    await env.h.db.writeTransaction(async t => {
+      await t.execute(
+        `UPDATE blocks SET properties_json = ? WHERE id = ?`,
+        [JSON.stringify({types: ['extension']}), 's'],
+      )
+    })
+
+    await env.repo.mutate.delete({id: D})
+
+    expect(env.read('s')!.content).toBe(source)
+    expect(env.read('s')!.references).toEqual([])
+  })
+
   // The same bytes, one hop further out. A deleted PROSE block that
   // referenced the deleted extension carries the payload into its OWN
   // referrers through the transitive resolution — so the outer skip is not

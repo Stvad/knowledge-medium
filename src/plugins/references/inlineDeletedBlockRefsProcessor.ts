@@ -120,6 +120,7 @@ const inlineSource = async (
   sourceId: string,
   deletedId: string,
   inlineContent: string,
+  targetOpaque: boolean,
 ): Promise<void> => {
   const tx = ctx.tx
   // Re-read staged state: the source may itself have been deleted earlier
@@ -136,6 +137,13 @@ const inlineSource = async (
   // byte-preserving branch here. Both returns would then keep the bytes AND
   // the stale edge, and nothing ever re-parses an opaque block to drop it.
   const opaque = hasOpaqueContent(current, tx.opaqueContentTypes)
+
+  // A PROSE referrer to an opaque target keeps both its mark and its edge:
+  // the mark is restorable (delete is soft), and this block gets re-parsed,
+  // so dropping the edge here would only have it rebuilt. An OPAQUE referrer
+  // falls through instead — its edge is a legacy one from before it stopped
+  // being parsed, and nothing else will ever come back to drop it.
+  if (targetOpaque && !opaque) return
 
   // Property machinery keeps its dangling ref rather than being inlined —
   // restorable, and still carrying the property. Both levels qualify, for the
@@ -219,21 +227,20 @@ export const inlineDeletedBlockRefsProcessor = defineSameTxProcessor({
 
     const memo = new Map<string, string>()
     for (const [blockId, workspaceId] of workspaceById) {
-      // Referrers keep the dangling `((deletedId))` instead, which is the
-      // same answer the property rows get and for the same reason: delete is
-      // soft, so the mark stays restorable, and a referrer that is prose gets
-      // re-parsed anyway — dropping its edge here would only have it rebuilt.
-      if (opaqueDeleted.has(blockId)) continue
       const sourceRows = await ctx.db.getAll<{id: string}>(
         SELECT_LIVE_REFERENCE_SOURCE_IDS_SQL,
         [workspaceId, blockId],
       )
       if (sourceRows.length === 0) continue
-      const inlineContent = resolveInlineContent(
-        blockId, deletedContent, memo, new Set(), opaqueDeleted,
-      )
+      const targetOpaque = opaqueDeleted.has(blockId)
+      // Not resolved at all for an opaque target — no caller may splice those
+      // bytes, and the referrers that still get a write here keep their own
+      // content. Passing '' rather than the payload keeps that unmissable.
+      const inlineContent = targetOpaque
+        ? ''
+        : resolveInlineContent(blockId, deletedContent, memo, new Set(), opaqueDeleted)
       for (const {id} of sourceRows) {
-        await inlineSource(ctx, id, blockId, inlineContent)
+        await inlineSource(ctx, id, blockId, inlineContent, targetOpaque)
       }
     }
   },
