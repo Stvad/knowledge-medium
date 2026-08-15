@@ -498,9 +498,12 @@ describe('runConsistencyAudit — full (on-demand) deep checks', () => {
   })
 
   // `null` and `{}` parse fine, so a successful `JSON.parse` says nothing
-  // about the shape. Throwing here degrades the whole check to `error` and
-  // hides every other row — on the one path whose job is damaged storage.
-  it('content_link_recompute survives a row whose references_json is valid JSON but not an array', async () => {
+  // about the shape. Throwing degrades the whole check to `error` and hides
+  // every other row; silently skipping is just as bad in the other
+  // direction, because the mirror check's malformed count is
+  // `NOT json_valid(...)` and `json_valid('null')` is TRUE — so this is the
+  // only check that can see the row at all.
+  it('content_link_recompute reports a row whose references_json is valid JSON but not an array', async () => {
     await ins({ id: 'bad', content: '[[Foo]]', references: [] })
     await ins({ id: 'good', content: '[[Bar]]', references: [] })
     await sharedDb.db.execute(
@@ -509,9 +512,24 @@ describe('runConsistencyAudit — full (on-demand) deep checks', () => {
 
     const r = await runConsistencyAudit(sharedDb.db, WS, 0, { full: FULL })
     const check = r.checks.content_link_recompute
-    expect(check.status).not.toBe('error')
-    // The malformed row is skipped; the healthy one is still scored.
+    expect(check.status).toBe('anomaly')
+    expect(check.malformedRefsBlocks).toBe(1)
+    expect(check.malformedRefsSample).toEqual([{ id: 'bad', refs_json_type: 'null' }])
+    // Scanning continued — the healthy row is still scored on its own axis.
     expect(check.strippedBlocks).toBe(1)
+  })
+
+  // The sibling shape: `{}` rather than `null`, so the recorded type is the
+  // thing that distinguishes them for whoever has to go fix the row.
+  it('records the JSON type of a malformed references_json', async () => {
+    await ins({ id: 'obj', content: '[[Foo]]', references: [] })
+    await sharedDb.db.execute(
+      `UPDATE blocks SET references_json = '{}' WHERE id = 'obj'`,
+    )
+
+    const r = await runConsistencyAudit(sharedDb.db, WS, 0, { full: FULL })
+    expect(r.checks.content_link_recompute.malformedRefsSample)
+      .toEqual([{ id: 'obj', refs_json_type: 'object' }])
   })
 
   it('property_ref_at_rest (schema-aware) flags a value-present/ref-absent curated prop', async () => {

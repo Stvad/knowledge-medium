@@ -505,9 +505,13 @@ const runContentLinkRecomputeCheck = async (
   let strippedBlocks = 0
   let staleRefBlocks = 0
   let staleRefs = 0
+  let malformedRefsBlocks = 0
   let truncated = false
   const strippedSample: Array<{ id: string; marks: number; content_preview: string }> = []
   const staleSample: Array<{ id: string; stale: string[]; content_preview: string }> = []
+  // The JSON TYPE, not the bytes — knowing it isn't an array is the whole
+  // diagnosis, and the bytes would put reference aliases in the sample.
+  const malformedRefsSample: Array<{ id: string; refs_json_type: string }> = []
   for (;;) {
     const batch = await db.getAll<{ id: string; content: string; references_json: string }>(
       `SELECT id, content, references_json FROM blocks
@@ -532,10 +536,25 @@ const runContentLinkRecomputeCheck = async (
         continue
       }
       // Parsing succeeding says nothing about the SHAPE — `null` and `{}` are
-      // valid JSON, and both reach the filter below and throw. That aborts
-      // the whole check to `error`, hiding every row it had left to look at,
-      // on the one path whose purpose is finding damaged storage.
-      if (!Array.isArray(stored)) continue
+      // valid JSON, and both reach the filter below and throw, which aborts
+      // the whole check to `error` and hides every row it had left.
+      //
+      // REPORTED, not skipped. This is the only check that can see it: the
+      // mirror check's malformed count is `NOT json_valid(...)`, and
+      // `json_valid('null')` is true — so a row whose reference storage is
+      // well-formed JSON of the wrong type reads as healthy everywhere else,
+      // and skipping it here would let the audit answer `ok` for a block
+      // whose refs are unusable.
+      if (!Array.isArray(stored)) {
+        malformedRefsBlocks += 1
+        if (malformedRefsSample.length < sampleLimit) {
+          malformedRefsSample.push({
+            id: row.id,
+            refs_json_type: stored === null ? 'null' : typeof stored,
+          })
+        }
+        continue
+      }
       const contentRefs = (stored as StoredRef[]).filter((r) => r && !r.sourceField)
       if (contentRefs.length === 0) {
         strippedBlocks += 1
@@ -554,7 +573,7 @@ const runContentLinkRecomputeCheck = async (
     if (batch.length < BATCH) break
     if (scanned >= contentCap) { truncated = true; break }
   }
-  const anomalous = strippedBlocks > 0 || staleRefBlocks > 0
+  const anomalous = strippedBlocks > 0 || staleRefBlocks > 0 || malformedRefsBlocks > 0
   return {
     status: anomalous ? 'anomaly' : truncated ? 'incomplete' : 'ok',
     scanned,
@@ -563,8 +582,12 @@ const runContentLinkRecomputeCheck = async (
     strippedBlocks,
     staleRefBlocks,
     staleRefs,
+    /** Rows whose `references_json` parsed but is not an array — corrupt
+     *  reference storage that `json_valid` cannot see. */
+    malformedRefsBlocks,
     strippedSample,
     staleSample,
+    malformedRefsSample,
   }
 }
 
