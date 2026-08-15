@@ -8,7 +8,7 @@ inner loop (this repo is built primarily by agents — keep the edit→verify cy
 - for `src/` work prefer a LOCAL dev server over the live client: `pnpm dev`, open `http://localhost:<port>/` in a browser profile that is NOT your main account, pick **"Use without sync (local-only)"** on the login screen, and pair a dedicated CLI profile against that origin (`AGENT_RUNTIME_APP_URL=http://localhost:<port>/ pnpm agent connect --profile localdev`). Local-only sets `useRemoteSync: false` — no PowerSync connect, no Supabase request — so the mutating verbs above are free there, and a `src/` edit is a `pnpm agent reload --profile localdev` away instead of a merge+deploy away.
 - edits under `vite-plugins/` or to `vite.config.ts` need a dev-server **restart**, not a reload. The dev tab is not production (no service worker, base `/` vs `/knowledge-medium/`, unbundled module graph, its own origin for the extension trust gate) — setup walkthrough + the full mismatch list is the `local-dev-loop` skill.
 - the data layer lives in `src/data/` (`Repo`: `query` / `tx` / `mutate` over blocks); prefer the bridge's `describe-runtime` over inferring internal shapes from memory.
-- `pnpm run check` does NOT typecheck or lint `agent-extensions/` (eslint-ignored, outside the app tsconfig). Typecheck the FLAT files with `npx tsc --noEmit -p agent-extensions/tsconfig.flat.json` (resolves `@/…` against real `src`; the `kernel-types` stubs from `pnpm agent types` are a snapshot from the last agent-cli build and can lag). **Read that config's header before writing your own** — a `baseUrl` in a scoped tsconfig makes `tsc` exit 2 on the CONFIG before compiling anything, which looks exactly like a clean run. It DOES run the tests of the FLAT extension files (anything matching `agent-extensions/*.{test,spec}.{ts,tsx}`), so the top level of that directory is gate-sensitive: put throwaway probes in `tmp/` (still excluded), never next to the extension. The `agent-extensions/<pkg>/` subpackages are excluded and keep their own `pnpm -C … run check` — which only `social-media-publisher` runs in CI, so strength-tracker's tests are on you to run.
+- `pnpm run check` does NOT typecheck or lint `agent-extensions/` (eslint-ignored, outside the app tsconfig). Typecheck the FLAT files with `npx tsc --noEmit -p agent-extensions/tsconfig.flat.json` (resolves `@/…` against real `src`; the `kernel-types` stubs from `pnpm agent types` are a snapshot from the last agent-cli build and can lag). **Read that config's header before writing your own** — a `baseUrl` in a scoped tsconfig makes `tsc` exit 2 on the CONFIG before compiling anything, which looks exactly like a clean run. It DOES run the tests of the FLAT extension files (anything matching `agent-extensions/*.{test,spec}.{ts,tsx}`), so the top level of that directory is gate-sensitive: put throwaway probes in `tmp/` (still excluded), never next to the extension. The `agent-extensions/<pkg>/` subpackages are excluded from the root gate and keep their own `pnpm -C … run check`; CI runs that for BOTH real subpackages — `social-media-publisher` and `strength-tracker` (`.github/workflows/run-tests.yml`, "Run … extension checks" steps). A NEW subpackage gets no CI coverage until you add its step there, so its tests are on you until then.
 - a flat extension's test resolves `@/…` through the root vitest alias (real `src`), so it catches a renamed kernel symbol or a broken import path — but it is NOT the installed extension's resolution and does not prove the installed module loads. The app maps `@/` → `./src/` through the page importmap (exact emitted filenames only: `@/dir/name.js`, `@/dir/name/index.js`) and transpiles with Babel-standalone; vitest happily resolves extensionless `@/data/api`, which 404s live. See `src/extensions/apiCatalog.ts`. A gate failure in a flat extension also only means the REPO file is broken — the live extension runs a copy stored in the DB, so fixing it needs `pnpm agent install-extension` to reach the user.
 
 data-model grain (read BEFORE designing what an extension or plugin stores):
@@ -108,3 +108,106 @@ ui event channels (audit B3 — do not reintroduce the untyped window.CustomEven
 supabase / hosted database:
 - never create a table in the `public` schema of the hosted Supabase project without RLS. Supabase grants `anon`/`authenticated` full CRUD on public tables by default, and `CREATE TABLE` / `CREATE TABLE AS` do NOT enable RLS — so the table is immediately world-readable/writable via the anon key until locked down. This includes ad-hoc backup/snapshot/staging tables created via `db query` or `psql`, not just app tables in migrations.
 - create such tables with `enable row level security` (no policy = default-deny) + `revoke all ... from anon, authenticated` in the same transaction, or in a schema PostgREST doesn't expose. After any ad-hoc table creation, confirm `select relname from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and c.relkind='r' and not c.relrowsecurity` returns zero rows. See the supabase skill for the full recipe.
+
+<!-- BEGIN BEADS INTEGRATION v:1 profile:minimal hash:1105d646 -->
+## Beads Issue Tracker
+
+This project uses **bd (beads)** for issue tracking. Run `bd prime` to see full workflow context and commands.
+
+### Quick Reference
+
+```bash
+bd ready              # Find available work
+bd show <id>          # View issue details
+bd update <id> --claim  # Claim work
+bd close <id>         # Complete work
+```
+
+### Rules
+
+- Use `bd` for ALL task tracking — do NOT use TodoWrite, TaskCreate, or markdown TODO lists
+- Run `bd prime` for detailed command reference and session close protocol
+- Use `bd remember` for persistent knowledge — do NOT use MEMORY.md files
+
+**Architecture in one line:** issues live in a local Dolt DB; sync uses `refs/dolt/data` on your git remote; `.beads/issues.jsonl` is a passive export. See https://github.com/gastownhall/beads/blob/main/docs/core-concepts/sync-concepts.md for details and anti-patterns.
+
+## Agent Context Profiles
+
+The managed Beads block is task-tracking guidance, not permission to override repository, user, or orchestrator instructions.
+
+- **Conservative (default)**: Use `bd` for task tracking. Do not run git commits, git pushes, or Dolt remote sync unless explicitly asked. At handoff, report changed files, validation, and suggested next commands.
+- **Minimal**: Keep tool instruction files as pointers to `bd prime`; use the same conservative git policy unless active instructions say otherwise.
+- **Team-maintainer**: Only when the repository explicitly opts in, agents may close beads, run quality gates, commit, and push as part of session close. A current "do not commit" or "do not push" instruction still wins.
+
+## Session Completion
+
+This protocol applies when ending a Beads implementation workflow. It is subordinate to explicit user, repository, and orchestrator instructions.
+
+1. **File issues for remaining work** - Create beads for anything that needs follow-up
+2. **Run quality gates** (if code changed) - Tests, linters, builds
+3. **Update issue status** - Close finished work, update in-progress items
+4. **Handle git/sync by active profile**:
+   ```bash
+   # Conservative/minimal/default: report status and proposed commands; wait for approval.
+   git status
+
+   # Team-maintainer opt-in only, unless current instructions forbid it:
+   git pull --rebase
+   git push
+   git status
+   ```
+5. **Hand off** - Summarize changes, validation, issue status, and any blocked sync/commit/push step
+
+**Critical rules:**
+- Explicit user or orchestrator instructions override this Beads block.
+- Do not commit or push without clear authority from the active profile or the current user request.
+- If a required sync or push is blocked, stop and report the exact command and error.
+<!-- END BEADS INTEGRATION -->
+
+<!-- BEGIN BEADS CODEX SETUP: generated by bd setup codex -->
+## Beads Issue Tracker
+
+Use Beads (`bd`) for durable task tracking in repositories that include it. Use the `beads` skill at `.agents/skills/beads/SKILL.md` (project install) or `~/.agents/skills/beads/SKILL.md` (global install) for Beads workflow guidance, then use the `bd` CLI for issue operations.
+
+### Quick Reference
+
+```bash
+bd ready                # Find available work
+bd show <id>            # View issue details
+bd update <id> --claim  # Claim work
+bd close <id>           # Complete work
+bd prime                # Refresh Beads context
+```
+
+### Rules
+
+- Use `bd` for all task tracking; do not create markdown TODO lists.
+- Run `bd prime` when Beads context is missing or stale. Codex 0.129.0+ can load Beads context automatically through native hooks; use `/hooks` to inspect or toggle them.
+- Keep persistent project memory in Beads via `bd remember`; do not create ad hoc memory files.
+
+**Architecture in one line:** issues live in a local Dolt DB; sync uses `refs/dolt/data` on your git remote; `.beads/issues.jsonl` is a passive export. See https://github.com/gastownhall/beads/blob/main/docs/core-concepts/sync-concepts.md for details and anti-patterns.
+<!-- END BEADS CODEX SETUP -->
+
+beads (`bd`) — how the two generated blocks above apply HERE (installed 2026-08-14, prefix `km`):
+- those blocks are written by `bd init` / `bd setup` and are REWRITTEN on upgrade. This section is repo-authored, survives, and wins wherever they conflict.
+- **beads is the source of truth for issues; GitHub is a bidirectional mirror.** All 193 issues (129 open) were imported with `bd github sync --pull-only`; each bead keeps an `External:` link to its GitHub issue, and type/priority/labels carry over. Sync needs a token it does not store: `GITHUB_TOKEN=$(gh auth token) bd github sync`. Sync CONVERGES — after an item is pushed it stops appearing in `--dry-run`, so a full run is a one-time catch-up, not per-run churn.
+- **the label taxonomy is deliberately DUAL** (Vlad's call). A push mints `type::*` / `priority::*` labels in the public repo alongside the hand-maintained `bug`/`P2`/`ui` ones; there is no config to disable it. Currently 4 `type::`/`priority::` labels across 192 issues. Don't "clean these up" — they are the machine half, and new work filed in beads will carry only them.
+- **a `--pull-only` import FLATTENS priority to P2.** The initial import put all 193 beads at priority 2 while the real priority lived only in the `P0`–`P4` LABEL; 60 were corrected by deriving the number from the label, and the fix pushed back out. `bd ready` and `bd list --priority` sort on the bead field, so after any future pull of GitHub-origin issues, re-derive it — otherwise the ordering beads exists to give you is uniformly meaningless.
+- **memory lives in beads ONLY** (migrated 2026-08-14; Vlad's call — no dual system, no sync step). This **overrides the harness default** of writing memory files: do NOT create or edit `.md` files under `~/.claude/projects/<project>/memory/`. That directory now holds a pointer `MEMORY.md` and a frozen verbatim copy of the 100 pre-migration files under `archive/frozen-2026-08-14/`, kept only for recovery. Write with `bd remember --key <slug> -- <content>` (update-in-place on the same key), read with `bd memories <keyword>` / `bd recall <key>`, and the curated index is `bd recall 00-index` — **add a line there for every new memory**, since the index is what makes the rest discoverable. Convention for NEW memories: first line is a one-line description, blank line, then the body; cross-reference as `[[key]]`. (The 100 migrated ones still carry their original YAML frontmatter — harmless, and it holds the same description + type — so expect both shapes; don't mass-rewrite them for cosmetics.) Why: files under `~/.claude` are per-machine and unsynced (that repo has no remote and its allowlist excludes `projects/`), so a memory written on one machine was invisible everywhere else and to Codex. Four mechanics that are easy to get wrong:
+  - content starting with `---` (frontmatter) is parsed as a flag — the payload MUST come after a `--` separator.
+  - a memory is capped at **65,535 bytes** (Dolt TEXT). Two memories exceeded it and are split into `<slug>` + `<slug>-part2`, each carrying a nav header naming its siblings.
+  - `prime.max-memory-chars` drops WHOLE memories **alphabetically**; it does not truncate them. That is the lever: the curated index is keyed `00-index` so it sorts first and always survives the cap (set to 30000). Session start injects the index plus a few more and a pointer to the rest — read-on-demand for everything else. **The cap MUST stay comfortably above the index's own size** (~18KB and growing as memories are added): the cap drops whole memories rather than truncating, so an index that outgrew it would vanish from every session silently. Re-check the margin (`bd recall 00-index | wc -c`) whenever you add a batch of memories.
+  - a memory that grows into an append-only project log should be REFACTORED, not left to accrete: keep state, deferred work and traps; drop what git and the PRs already record; lift reusable lessons into their own memories. Archive the pre-refactor text verbatim under `memory/archive/` first. Two 100KB-class memories were cut ~86% this way. **Re-verify every live-state claim while you are in there** — a stale "a powersync deploy is still needed" claim survived precisely because it sat buried in an 88KB file (see `reference_coverage_claims_rot`).
+- **task tracking split:** beads owns durable work — anything that must survive a thread reset, a handoff, or that another person or agent should be able to resume. The harness task list (TodoWrite/TaskCreate) is for the CURRENT turn's execution checklist only. The generated block above says never to use them at all; that is beads' house convention, and the beads skill itself draws the same line this bullet does.
+- commit policy is this repo's, not beads': commit after each requested change, stay on the current branch. `agent.profile` is set to `team-maintainer` so `bd prime` stops telling agents to wait for commit approval. `pnpm run check` is the gate — `bd preflight` is not a substitute.
+- **beads data syncs to a PRIVATE remote, and must keep doing so.** `Stvad/knowledge-medium` is public: a ref pushed there is fetchable by anyone via `git fetch origin 'refs/dolt/*'` — invisible in the web UI, but not private. Beads data therefore goes to `Stvad/knowledge-medium-beads` (private) via `bd dolt push` / `bd dolt pull`. A plain `git push` never carries beads data (verified: it moves `refs/heads/*` only).
+- **worktrees SHARE the one database** (verified): `bd` resolves through the worktree's git common-dir, so a worktree anywhere — under `.claude/worktrees/`, a sibling directory, or `~/.codex/worktrees/` — sees the same issues, the same memories and the same remote registry as the main checkout. It has no `.beads/` of its own and needs no setup. Concurrent writes from two worktrees both land (tested). A separate CLONE (a cloud session, another machine) is the case that starts empty.
+- **the Dolt remote registry is NOT `sync.remote`, and it self-adopts.** `bd dolt push` reads `bd dolt remote list`, not the `sync.remote` config key. With the registry empty it silently ADOPTS git origin — in a non-TTY agent shell it does this with no prompt, which is how beads data briefly landed on the public repo during setup. The registry lives in gitignored `.beads/embeddeddolt/`, so **a fresh CLONE starts empty and will re-adopt the public origin on first push.** In a new clone, run this BEFORE any `bd dolt push`:
+  ```bash
+  bd dolt remote add origin git+ssh://git@github.com/Stvad/knowledge-medium-beads.git
+  ```
+  and prefer `BD_NO_REMOTE_ADOPT=1 bd dolt push` so a missing registry fails loudly instead of adopting.
+- **`bd config set` auto-commits to the current branch.** Changing config writes a `bd: …` commit without asking. Expect stray commits on your branch after config changes; that is bd, not you.
+- `.beads/hooks/` is wired through `core.hooksPath`, so it OVERRIDES `.git/hooks` for this clone. Anything that installs git hooks later (husky et al.) must chain into it rather than replace it. Hook cost is ~130ms per commit.
+- `bd init` stages whole tool directories (`.beads/`, `.claude/`, `.codex/`, `.agents/`) and commits them itself. That is why `.codex/worktrees/` is gitignored — without it, re-running init would commit three full worktree checkouts.
+- never `bd edit` (opens `$EDITOR` and hangs an agent); use `bd update` flags.
