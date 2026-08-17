@@ -46,7 +46,6 @@ import{defineQuery as e}from"../api/query.js";import{_enum as t,array as n,boole
     UNION
     SELECT b.id FROM blocks b
       JOIN user_state ON b.parent_id = user_state.id
-     WHERE b.deleted = 0
   )
   SELECT ${m(`blocks`)}
   FROM blocks
