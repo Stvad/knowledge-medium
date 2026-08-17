@@ -19,7 +19,8 @@
  */
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import { ChangeScope } from '@/data/api'
+import { ChangeScope, codecs, defineProperty } from '@/data/api'
+import { projectedPropertyDefinitionsFacet } from '@/data/facets'
 import { BlockCache } from '@/data/blockCache'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
@@ -129,6 +130,54 @@ const derivedColumns = async (id: string) =>
   env.h.db.get<{reference_target_id: string | null; is_field_form: 1 | null}>(
     'SELECT reference_target_id, is_field_form FROM blocks WHERE id = ?', [id],
   )
+
+/** Make WS child-backed and register `fieldId` as a projected property
+ *  definition, so `isPropertyFieldRow` can actually recognize a `::` row.
+ *
+ *  Needed because §9 recognition is FOUR conditions, not one: the marker
+ *  bit, a non-null parent, a flipped workspace, and a target that resolves
+ *  to a definition. Seeding only the marker (the shape `seedSource`
+ *  produces, at `parentId: null`, in an unflipped workspace) builds a row
+ *  that is NOT a field row — which is what the first version of these
+ *  tests did, so they asserted the marked tier on rows that should never
+ *  have reached it (Codex on PR #484). */
+const flipWorkspaceWithDefinition = async (fieldId: string): Promise<void> => {
+  await env.h.db.execute(
+    `UPDATE workspaces SET properties_migration = 'children' WHERE id = ?`, [WS])
+  if ((await env.h.db.getAll('SELECT id FROM workspaces WHERE id = ?', [WS])).length === 0) {
+    await env.h.db.execute(
+      `INSERT INTO workspaces (id, name, owner_user_id, create_time, update_time,
+         encryption_mode, wk_canary, properties_migration)
+       VALUES (?, 'test ws', 'user-1', 1, 1, 'none', NULL, 'children')`, [WS])
+  }
+  const schema = defineProperty('status', {
+    codec: codecs.string, defaultValue: '', changeScope: ChangeScope.BlockDefault,
+  })
+  env.repo.setRuntimeContributions(
+    projectedPropertyDefinitionsFacet,
+    'test-marked-row-definition',
+    [{
+      metadata: {
+        fieldId, workspaceId: WS, createdAt: 1, name: schema.name,
+        changeScope: schema.changeScope, hidden: false, origin: 'user' as const,
+      },
+      schema,
+    }],
+    {workspaceId: WS},
+  )
+}
+
+/** A marked NAME row that really is a field row: parented under `owner`,
+ *  in the flipped workspace, addressing `fieldId` by name. */
+const seedMarkedFieldRow = async (id: string, alias: string): Promise<void> => {
+  await env.repo.tx(async tx => {
+    if ((await tx.get('owner')) === null) {
+      await tx.create({id: 'owner', workspaceId: WS, parentId: null, orderKey: 'o0', content: 'owner'})
+    }
+    await tx.create({id, workspaceId: WS, parentId: 'owner', orderKey: 'm0', content: `::[[${alias}]]`})
+  }, {scope: ChangeScope.BlockDefault})
+  await flush()
+}
 
 const seedSource = async (id: string, content: string): Promise<void> => {
   await env.repo.tx(
@@ -585,8 +634,9 @@ describe('rename — the references-parse fence (§11 group 4)', () => {
                              properties_json, references_json, created_at, updated_at,
                              created_by, updated_by, deleted,
                              reference_target_id, is_field_form)
-         VALUES (?, ?, NULL, 'b0', ?, '{}', '[]', 1, 1, 'u', 'u', 0, ?, ?)`,
-        [id, WS, content, derived?.referenceTargetId ?? null,
+         VALUES (?, ?, ?, 'b0', ?, '{}', '[]', 1, 1, 'u', 'u', 0, ?, ?)`,
+        [id, WS, derived === undefined ? null : 'owner', content,
+         derived?.referenceTargetId ?? null,
          derived?.isFieldForm === true ? 1 : null],
       )
     })
@@ -618,7 +668,12 @@ describe('rename — the references-parse fence (§11 group 4)', () => {
     // A `::[[old]]` field row typed just before the release is the case the
     // doc names. Its derived columns ARE stamped same-tx, so the row keeps
     // resolving; what it loses without the fence is the canonical re-key.
+    await flipWorkspaceWithDefinition(PIN_TARGET)
     await seedTarget(PIN_TARGET, '', ['Status'])
+    await env.repo.tx(tx => tx.create({
+      id: 'owner', workspaceId: WS, parentId: null, orderKey: 'o0', content: 'owner',
+    }), {scope: ChangeScope.BlockDefault})
+    await flush()
     await seedUndrainedSource('marked', '::[[Status]]',
       {referenceTargetId: PIN_TARGET, isFieldForm: true})
     expect(await blockReferences('marked', PIN_TARGET)).toEqual([])
@@ -708,6 +763,41 @@ describe('rename — the references-parse fence (§11 group 4)', () => {
     expect((await env.read('ext'))!.content).toBe(code)
   })
 
+  it('skips the content leg when TWO targets release the same alias in one commit', async () => {
+    // #460's sync-induced state: the alias-uniqueness trigger fires only for
+    // local user txs, so two blocks can co-claim one name. If both release it
+    // in a single commit, each reads zero post-tx claimants — so each would
+    // run the content leg over the SAME textual referrers, and the span would
+    // pin to whichever target iterated last while its edge followed the
+    // other. The fence falls back to the edge leg, which is target-keyed.
+    //
+    // The source is undrained (no edge), so "edge leg only" means no rewrite
+    // at all — which is the observable: the span keeps late-binding and the
+    // pending parse resolves it, rather than being pinned to an
+    // iteration-order-dependent block.
+    await seedTarget('t', '', ['Win'])
+    // Raw insert: bypasses the uniqueness trigger, the same shape a synced
+    // co-claim arrives in (and what the #460 test in this file uses).
+    await env.h.db.writeTransaction(async tx => {
+      await tx.execute(
+        `INSERT INTO blocks (id, workspace_id, parent_id, order_key, content,
+           properties_json, references_json, created_at, updated_at,
+           created_by, updated_by, deleted)
+         VALUES (?, ?, NULL, 'z0', 'Squatter', ?, '[]', 1, 1, 'u', 'u', 0)`,
+        [PIN_TARGET, WS, JSON.stringify({alias: ['Win']})],
+      )
+    })
+    await seedUndrainedSource('s', 'see [[Win]] please')
+
+    await env.repo.tx(async tx => {
+      await tx.setProperty('t', aliasesProp, [])
+      await tx.setProperty(PIN_TARGET, aliasesProp, [])
+    }, {scope: ChangeScope.BlockDefault})
+    await flush()
+
+    expect((await env.read('s'))!.content).toBe('see [[Win]] please')
+  })
+
   it('leaves an undrained source alone on a HANDOFF', async () => {
     // The fence is deliberately release-only, and this locks in that the
     // handoff path stays a content no-op: `[[Shared]]` already resolves
@@ -746,8 +836,9 @@ describe('rename — marked name rows re-key to canonical ::((A)) (§11 group 2)
     // invented label.
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     try {
+      await flipWorkspaceWithDefinition(PIN_TARGET)
       await seedTarget(PIN_TARGET, '', ['Status'])
-      await seedSource('marked', '::[[Status]]')
+      await seedMarkedFieldRow('marked', 'Status')
       await seedSource('prose', 'tracked in [[Status]] today')
 
       await env.repo.tx(
@@ -780,8 +871,9 @@ describe('rename — marked name rows re-key to canonical ::((A)) (§11 group 2)
     // to warn about.
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     try {
+      await flipWorkspaceWithDefinition(PIN_TARGET)
       await seedTarget(PIN_TARGET, '', ['a]b'])
-      await seedSource('marked', '::[[a]b]]')
+      await seedMarkedFieldRow('marked', 'a]b')
       expect(await blockReferences('marked', PIN_TARGET)).toEqual([{alias: 'a]b'}])
 
       await env.repo.tx(
@@ -827,16 +919,25 @@ describe('rename — marked name rows re-key to canonical ::((A)) (§11 group 2)
     }
   })
 
-  it('re-keys a marked row whose alias is stored with surrounding whitespace', async () => {
-    // Codex on PR #484. The whole-block parser trims its alias, the inline one
-    // (which produced the `block_references.alias` this enumeration keys on)
-    // does not — so a padded alias matched the edge but failed the marked-row
-    // test, fell through to the pinned tier, and got `::[ Status ](((id)))`.
-    // A padded alias is not hypothetical: `setProperty(aliasesProp, ['Old '])`
-    // is an existing tested case in this file.
+  it('a PADDED alias cannot reach the marked tier at all — the derive trims first', async () => {
+    // Codex on PR #484 flagged that `isMarkedNameRowFor` compared against the
+    // whole-block parser's TRIMMED alias while the edge carries the raw one.
+    // That inconsistency was real and is fixed (the comparison now uses the
+    // raw span), but it turns out to change no behaviour, and saying so is
+    // worth more than a test implying otherwise.
+    //
+    // `deriveReferenceColumns` trims too, and it trims BEFORE the alias
+    // lookup — so for `::[[Status ]]` it looks up `Status` while the target
+    // claims `Status `, finds nothing, and leaves `reference_target_id` NULL.
+    // A padded marked row therefore fails §9 recognition on the definition
+    // condition and can never be a field row, whatever this comparison says.
+    // It degrades to the pinned tier, which for an unrecognized row is the
+    // right outcome: it keeps the author's visible text.
+    await flipWorkspaceWithDefinition(PIN_TARGET)
     await seedTarget(PIN_TARGET, '', ['Status '])
-    await seedSource('marked', '::[[Status ]]')
-    expect(await blockReferences('marked', PIN_TARGET)).toEqual([{alias: 'Status '}])
+    await seedMarkedFieldRow('marked', 'Status ')
+    // The precondition that actually decides it, asserted not inferred.
+    expect((await derivedColumns('marked')).reference_target_id).toBeNull()
 
     await env.repo.tx(
       tx => tx.setProperty(PIN_TARGET, aliasesProp, []),
@@ -844,9 +945,31 @@ describe('rename — marked name rows re-key to canonical ::((A)) (§11 group 2)
     )
     await flush()
 
-    expect((await env.read('marked'))!.content).toBe(`::((${PIN_TARGET}))`)
-    expect(await derivedColumns('marked'))
+    expect((await env.read('marked'))!.content)
+      .toBe(`::[Status ](((${PIN_TARGET})))`)
+  })
+
+  it('a ROOT `::[[alias]]` row keeps the pinned label — the marker alone is not machinery', async () => {
+    // §9 recognition is four conditions, and this pins the parent one: a
+    // workspace-root row has no owner to be a field OF, so its `::` is just
+    // text and its visible label is the author's. Dropping it for `::((id))`
+    // would silently retitle user content. Same workspace, same definition,
+    // same marker as the passing marked-row case above — only the parent
+    // differs, so this isolates the condition.
+    await flipWorkspaceWithDefinition(PIN_TARGET)
+    await seedTarget(PIN_TARGET, '', ['Status'])
+    await seedSource('root-marked', '::[[Status]]')   // seedSource => parentId null
+    expect((await derivedColumns('root-marked')))
       .toEqual({reference_target_id: PIN_TARGET, is_field_form: 1})
+
+    await env.repo.tx(
+      tx => tx.setProperty(PIN_TARGET, aliasesProp, []),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await flush()
+
+    expect((await env.read('root-marked'))!.content)
+      .toBe(`::[Status](((${PIN_TARGET})))`)
   })
 
   it('leaves a clean 1-for-1 rename in wikilink form, marked or not', async () => {
@@ -875,8 +998,9 @@ describe('rename — marked name rows re-key to canonical ::((A)) (§11 group 2)
     // dropped for the re-parse to rebind, exactly as the pinned tier does.
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     try {
+      await flipWorkspaceWithDefinition('t')
       await seedTarget('t', '', ['A'])
-      await seedSource('marked', '::[[A]]')
+      await seedMarkedFieldRow('marked', 'A')
       expect(await blockReferences('marked', 't')).toEqual([{alias: 'A'}])
 
       await env.repo.tx(

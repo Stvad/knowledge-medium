@@ -82,6 +82,7 @@ import {
 } from '@/data/api'
 import { aliasesProp, getAliases } from '@/data/properties'
 import { FIELD_FORM_MARKER, parseExactReferenceBlockContent } from '@/data/referenceBlock'
+import { isPropertyFieldRow } from '@/data/propertyChildren'
 import {
   deriveReferenceColumns,
   sameTxReferenceTargetLookups,
@@ -171,22 +172,19 @@ const SELECT_BACKLINK_SOURCES_SQL = `
  *  ALIAS to compare, because that is the parser that produced the
  *  `block_references.alias` this enumeration is keyed on.
  *
- *  KNOWN GAP, confirmed and not yet fixed (Codex on PR #484, tracked on
- *  #443). This asks only what the CONTENT says. §9 recognition also
- *  requires a non-null parent (a workspace-root `::` row is user content,
- *  not a field row — it has no owner to be a field OF), a flipped
- *  workspace, and a target that resolves to a definition —
- *  `isPropertyFieldInstance` is the composed predicate. So a root-level or
- *  unflipped `::[[α]]`, or one pointing at an ordinary page, takes the
- *  marked tier here and loses the author's visible label to `::((id))`
- *  when it should keep the pinned form.
+ *  Content alone is NOT enough, and asking only it was a bug (Codex on
+ *  PR #484). §9 recognition also needs a non-null parent — a workspace-root
+ *  `::` row has no owner to be a field OF, so its marker is just text — a
+ *  FLIPPED workspace, and a target that resolves to a definition.
+ *  `isPropertyFieldRow` is that composed predicate, and it is awaited here
+ *  rather than restated. Without it a root-level `::[[α]]`, or one pointing
+ *  at an ordinary page, took the marked tier and lost the author's visible
+ *  label to `::((id))` when it should keep the pinned form.
  *
- *  The tests below do NOT currently pin the difference: `seedSource`
- *  creates at `parentId: null`, so every marked-row case is a ROOT row —
- *  by §9 exactly the shape that is NOT a field row. They assert today's
- *  behaviour, not the intended behaviour. Said here rather than left
- *  implicit, because a green suite over the wrong precondition is the
- *  failure mode this repo keeps re-learning.
+ *  This is also why the tier is DORMANT today: every workspace is at
+ *  `properties_migration = 'cell'`, so the flip probe refuses every row and
+ *  the pinned tier handles all of them. That is correct, not a regression —
+ *  a `::`-prefixed row in an unflipped workspace really is ordinary content.
  *
  *  Using `exact.alias` for the comparison was wrong, and not merely
  *  conservatively so (Codex on PR #484). The whole-block parser TRIMS its
@@ -196,15 +194,20 @@ const SELECT_BACKLINK_SOURCES_SQL = `
  *  through to the pinned tier, and got `::[ α ](((id)))`: the invented
  *  label this whole arm exists to prevent, plus sanitization and its
  *  warning. Comparing the raw span makes the two agree by construction. */
-const isMarkedNameRowFor = (content: string, alias: string): boolean => {
-  const trimmed = content.trim()
+const isMarkedNameRowFor = async (
+  tx: Tx,
+  source: BlockData,
+  alias: string,
+): Promise<boolean> => {
+  const trimmed = source.content.trim()
   const exact = parseExactReferenceBlockContent(trimmed)
   if (exact?.kind !== 'alias' || !exact.fieldForm) return false
   const marks = parseReferences(trimmed)
-  return marks.length === 1
-    && marks[0].alias === alias
-    && marks[0].startIndex === FIELD_FORM_MARKER.length
-    && marks[0].endIndex === trimmed.length
+  if (marks.length !== 1
+    || marks[0].alias !== alias
+    || marks[0].startIndex !== FIELD_FORM_MARKER.length
+    || marks[0].endIndex !== trimmed.length) return false
+  return isPropertyFieldRow(tx, source)
 }
 
 /** Replacement form for a single removed alias α — the rename ladder,
@@ -293,6 +296,9 @@ const collectTargetPlans = async (
   before: BlockData,
   after: BlockData,
   plansBySourceId: Map<string, SourcePlan>,
+  /** Aliases MORE THAN ONE target releases in this same commit — see
+   *  `coReleasedAliases`. The content leg is skipped for these. */
+  coReleased: ReadonlySet<string>,
 ): Promise<void> => {
   const beforeAliases = getAliases(before)
   const afterAliases = getAliases(after)
@@ -331,7 +337,14 @@ const collectTargetPlans = async (
     // is unavailable to a same-tx processor. Gated on the release path
     // because the content leg does no target check and is only SOUND there;
     // on a handoff it would merely be wasted work (see its docblock).
-    const sources = claimants.length === 0
+    // The content leg is sound only when THIS target owned every `[[α]]`
+    // span — see `wikilinkSourcesByContent`. Two targets releasing α in one
+    // commit both read zero claimants, so both would claim the same textual
+    // referrers and the span would pin to whichever iterated last while its
+    // edge followed the other. Fall back to the edge leg, which is
+    // target-keyed and therefore still attributes each row correctly; the
+    // undrained window simply stays open for that commit.
+    const sources = claimants.length === 0 && !coReleased.has(alias)
       ? mergeReferrers(
           edgeSources,
           await wikilinkSourcesByContent(ctx.db, after.workspaceId, alias),
@@ -348,8 +361,14 @@ const collectTargetPlans = async (
       {markedRow: false, sourceIds: []},
       {markedRow: true, sourceIds: []},
     ]
-    for (const {sourceId, content} of sources) {
-      partitions[isMarkedNameRowFor(content, alias) ? 1 : 0].sourceIds.push(sourceId)
+    for (const {sourceId} of sources) {
+      // The row, not the enumerated content: recognition needs `parentId`,
+      // `workspaceId` and the derived columns too, and `tx.get` sees this
+      // tx's staged state.
+      const source = await ctx.tx.get(sourceId)
+      if (source === null) continue
+      const marked = await isMarkedNameRowFor(ctx.tx, source, alias)
+      partitions[marked ? 1 : 0].sourceIds.push(sourceId)
     }
 
     for (const {markedRow, sourceIds} of partitions) {
@@ -387,6 +406,33 @@ const collectTargetPlans = async (
       }
     }
   }
+}
+
+/** Aliases that MORE THAN ONE target gives up in this one commit.
+ *
+ *  Normally impossible — the alias-uniqueness trigger admits a single
+ *  claimant — but it fires only for local user transactions, so
+ *  sync-applied rows can leave two blocks co-claiming one name (#460).
+ *  When both then release it, each sees zero post-tx claimants and each
+ *  would run the content leg over the SAME textual referrers, which is the
+ *  one case that leg's "this target owned every span" premise does not
+ *  cover (Codex on PR #484).
+ *
+ *  Computed once per event from the same before/after pairs the loop
+ *  walks, so it costs nothing and cannot disagree with what the loop
+ *  processes. */
+const coReleasedAliases = (event: SameTxEvent): ReadonlySet<string> => {
+  const releaseCount = new Map<string, number>()
+  for (const row of event.changedRows) {
+    if (row.before === null || row.after === null || row.after.deleted) continue
+    if (!aliasFieldChanged(row.before, row.after)) continue
+    const afterAliases = new Set(getAliases(row.after))
+    for (const alias of new Set(getAliases(row.before))) {
+      if (afterAliases.has(alias)) continue
+      releaseCount.set(alias, (releaseCount.get(alias) ?? 0) + 1)
+    }
+  }
+  return new Set([...releaseCount].filter(([, n]) => n > 1).map(([alias]) => alias))
 }
 
 /** Apply rewrites to a source's `references` list. Content edges
@@ -590,11 +636,12 @@ export const renameBacklinksProcessor = defineSameTxProcessor({
   // rule beyond what props-as-blocks needs).
   apply: async (event: SameTxEvent, ctx: SameTxCtx) => {
     const plansBySourceId = new Map<string, SourcePlan>()
+    const coReleased = coReleasedAliases(event)
     for (const row of event.changedRows) {
       if (row.before === null || row.after === null) continue
       if (row.after.deleted) continue
       if (!aliasFieldChanged(row.before, row.after)) continue
-      await collectTargetPlans(ctx, row.before, row.after, plansBySourceId)
+      await collectTargetPlans(ctx, row.before, row.after, plansBySourceId, coReleased)
     }
     // Collect every target's plans BEFORE applying any: one commit can
     // rename several targets that share a source, and the content splice
