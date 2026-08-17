@@ -33,32 +33,27 @@ transaction. This directory is only for data orphaned *before* that landed.
 
 ## Detecting
 
-A uuid-shaped `types` token with no live block behind it is orphaned. The uuid
-shape is what separates a user type (token = block id) from a seeded type:
+A token is orphaned iff **the live registry does not publish it**. That is the
+definition, and the script applies it directly: collect every distinct `types`
+token in the workspace, then keep the ones missing from `repo.types`.
 
-```sql
-WITH tok AS (
-  SELECT b.id AS member_id, b.deleted AS member_deleted, je.value AS token
-  FROM blocks b, json_each(b.properties_json, '$.types') je
-  WHERE b.workspace_id = ?1 AND json_valid(b.properties_json)
-    AND typeof(je.value) = 'text' AND length(je.value) = 36
-    AND je.value GLOB '[0-9a-f]*-[0-9a-f]*-[0-9a-f]*-[0-9a-f]*-[0-9a-f]*'
-)
-SELECT tok.token,
-       CASE WHEN t.id IS NULL THEN 'no-row' ELSE 'tombstoned' END AS type_state,
-       COALESCE(t.content, '') AS tombstone_content,
-       SUM(CASE WHEN tok.member_deleted = 0 THEN 1 ELSE 0 END) AS live_members
-FROM tok
-LEFT JOIN blocks t ON t.id = tok.token AND t.workspace_id = ?1
-WHERE t.id IS NULL OR t.deleted = 1
-GROUP BY tok.token
-ORDER BY live_members DESC
-```
+It is tempting to infer this from the token's *shape* instead — a user type's
+token is a uuid-shaped block id, a seeded type's is a short string like `todo` —
+but that heuristic is wrong in both directions. It misses a user type whose
+definition block carries a caller-supplied non-uuid id (an import can mint its
+own), reading that block id as though it were a seeded token; and it would
+misjudge any future seeded id that happened to look like a uuid. `repo.types`
+already holds every resolvable token, so no guessing is needed.
 
-Reading `properties_json` directly rather than joining `block_types` is
-deliberate: `block_types` excludes deleted rows, so it cannot see a token
-stranded on a soft-deleted member — one that comes back the moment the user
-restores the block.
+The enumeration reads `properties_json` directly rather than joining
+`block_types`, which is also deliberate: `block_types` excludes deleted rows, so
+it cannot see a token stranded on a soft-deleted member — one that comes back
+the moment the user restores the block.
+
+Each token is reported with a `type_state` of `no-row`, `tombstoned`, or
+`live-but-unpublished` (a definition block that exists but fails to publish, e.g.
+a `block-type` row with an empty label — visible in the audit, never
+auto-repaired).
 
 **As of 2026-07-30 this returns zero rows on the primary workspace** (checked
 across all three workspaces on the client, for live and deleted members alike).

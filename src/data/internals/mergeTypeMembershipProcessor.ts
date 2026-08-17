@@ -43,7 +43,8 @@ import {
   type CoreBlockMergedEvent,
   type SameTxCtx,
 } from '@/data/api'
-import { setBlockTypesInProperties, typesProp } from '@/data/properties'
+import { BLOCK_TYPE_TYPE } from '@/data/blockTypes'
+import { hasBlockType, setBlockTypesInProperties, typesProp } from '@/data/properties'
 import { typeMembershipTokenFor } from '@/data/typeDefinitionMetadata'
 
 export const RETARGET_MERGED_TYPE_MEMBERSHIP_PROCESSOR_NAME =
@@ -66,6 +67,67 @@ const SELECT_TYPE_MEMBER_IDS_SQL = `
     AND b.deleted = 0
   ORDER BY b.created_at, b.id
 `
+
+/** Members whose row is TOMBSTONED, which `block_types` structurally cannot see
+ *  (its update trigger re-inserts only `WHEN deleted = 0`). Their stored token
+ *  still names the merged-away type, so restoring such a block after the merge
+ *  would resurrect it silently un-typed — the exact damage this processor
+ *  exists to prevent, just deferred to whenever the user hits undo or runs a
+ *  restore.
+ *
+ *  Worth diverging from `mergeRetargetProcessor` here, which deliberately skips
+ *  deleted sources: a restored block's REFERENCES are re-derived from its
+ *  content by `parseReferences` on the next write, so skipping them costs
+ *  nothing. Membership has no such re-derivation — `types` is stored state, and
+ *  a token lost here is lost for good.
+ *
+ *  Matched with `LIKE` over the raw JSON rather than `json_each`, because
+ *  `json_each` THROWS on a malformed `properties_json`, and one corrupt
+ *  unrelated tombstone must not abort the user's merge. The `LIKE` is only a
+ *  prefilter — it can match the id anywhere in the bag — so every hit is
+ *  re-checked by `rewriteTypeToken` against the real `types` cell.
+ *
+ *  Unindexable by construction (a leading-wildcard `LIKE`), so this is a scan of
+ *  the workspace's tombstones. It is gated at the call site on the merged-away
+ *  block actually being a type definition, which makes it rare enough to pay
+ *  for: ordinary block merges never reach it. */
+const SELECT_DELETED_TYPE_MEMBER_IDS_SQL = `
+  SELECT id
+  FROM blocks
+  WHERE workspace_id = ?
+    AND deleted = 1
+    AND properties_json LIKE ?
+  ORDER BY created_at, id
+`
+
+/** Follow `fromId` through every merge THIS tx emitted, to the block that
+ *  actually survives it.
+ *
+ *  A composed mutator can merge `A → B` and then `B → C` in one transaction.
+ *  Processors run after the whole user fn, so by the time the `A → B` event is
+ *  handled, `B` is already a tombstone: retargeting onto it would move `A`'s
+ *  members onto a dead block, and bailing (the previous behavior) left them on
+ *  the dead `A`. Both are the silent un-typing this processor exists to stop, so
+ *  resolve the chain and land them on `C`.
+ *
+ *  Returns `null` for a cycle (`A → B`, `B → A` in one tx — degenerate, but a
+ *  `while` here must not be able to spin), letting the caller fall back to the
+ *  event's own destination. */
+const resolveTerminalDestination = (
+  fromId: string,
+  mergeMap: ReadonlyMap<string, string>,
+): string | null => {
+  const seen = new Set<string>([fromId])
+  let current = mergeMap.get(fromId)
+  while (current !== undefined) {
+    if (seen.has(current)) return null
+    seen.add(current)
+    const next = mergeMap.get(current)
+    if (next === undefined) return current
+    current = next
+  }
+  return null
+}
 
 /** `unchanged` — this cell doesn't name the merged-away type; `rewritten` —
  *  `value` is the new raw cell; `undecodable` — the cell names it but its shape
@@ -134,9 +196,16 @@ const rewriteTypeToken = (
 
 const retargetTypeMembership = async (
   event: CoreBlockMergedEvent,
+  mergeMap: ReadonlyMap<string, string>,
   ctx: SameTxCtx,
 ): Promise<void> => {
-  const into = await ctx.tx.get(event.intoId)
+  // The event's own `intoId` is only the IMMEDIATE destination; in a chained
+  // merge it is itself a tombstone by now. See `resolveTerminalDestination`.
+  const destinationId = resolveTerminalDestination(event.fromId, mergeMap) ?? event.intoId
+  const into = await ctx.tx.get(destinationId)
+  // A destination still deleted after chain resolution was deleted outright
+  // rather than merged onward, so there is nowhere better to point: leave the
+  // members alone rather than moving them from one tombstone to another.
   if (into === null || into.deleted) return
   // The token the survivor's type is tagged under, via the SAME §9 claim rule
   // the registry publishes by, so the tag a merge writes is byte-equal to the
@@ -166,9 +235,25 @@ const retargetTypeMembership = async (
     SELECT_TYPE_MEMBER_IDS_SQL,
     [event.fromId, event.workspaceId],
   )
+  // Tombstoned members are invisible to that index; sweep for them separately,
+  // but only when the merged-away block really was a type definition, so the
+  // unindexable scan stays off the path of an ordinary block merge. Reading
+  // `from` through `tx.get` still works — it is soft-deleted, bag intact.
+  const from = await ctx.tx.get(event.fromId)
+  if (from !== null && hasBlockType(from, BLOCK_TYPE_TYPE)) {
+    const deletedMembers = await ctx.db.getAll<{id: string}>(
+      SELECT_DELETED_TYPE_MEMBER_IDS_SQL,
+      [event.workspaceId, `%${JSON.stringify(event.fromId)}%`],
+    )
+    members.push(...deletedMembers)
+  }
   for (const {id} of members) {
     const row = await ctx.tx.get(id)
-    if (row === null || row.deleted) continue
+    // Deliberately NOT skipping tombstones — see
+    // `SELECT_DELETED_TYPE_MEMBER_IDS_SQL`. Rewriting a tombstone's bag does not
+    // resurrect it (`deleted` is untouched); it just means the row carries a
+    // live token if it is ever restored.
+    if (row === null) continue
     const rewrite = rewriteTypeToken(
       row.properties[typesProp.name], event.fromId, intoToken)
     if (rewrite.outcome === 'unchanged') continue
@@ -194,8 +279,16 @@ export const RETARGET_MERGED_TYPE_MEMBERSHIP_PROCESSOR = defineSameTxProcessor({
   name: RETARGET_MERGED_TYPE_MEMBERSHIP_PROCESSOR_NAME,
   watches: {kind: 'event', events: [CORE_BLOCK_MERGED_EVENT]},
   apply: async (event, ctx) => {
-    for (const emitted of event.emittedEvents) {
-      await retargetTypeMembership(emitted.payload as CoreBlockMergedEvent, ctx)
+    const payloads = event.emittedEvents.map(e => e.payload as CoreBlockMergedEvent)
+    // Every merge this tx performed, so each event can resolve past the ones
+    // that ran after it. Built over ALL payloads before any is processed —
+    // the chain is only visible from the whole set.
+    const mergeMap = new Map(payloads.map(p => [p.fromId, p.intoId]))
+    for (const payload of payloads) {
+      // Sequential, and each iteration re-reads its members through `tx.get`:
+      // a block tagged with two of this tx's merged-away types therefore picks
+      // up both rewrites instead of the second clobbering the first.
+      await retargetTypeMembership(payload, mergeMap, ctx)
     }
   },
 })

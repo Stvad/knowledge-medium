@@ -64,7 +64,6 @@ if (!workspaceId) {
   return {error: 'No active workspace is pinned; refusing to run. Open the workspace first.'}
 }
 
-const UUID_GLOB = '[0-9a-f]*-[0-9a-f]*-[0-9a-f]*-[0-9a-f]*-[0-9a-f]*'
 const jsonOf = raw => { try { return JSON.parse(raw) } catch { return null } }
 
 // ── revert mode ───────────────────────────────────────────────────────────
@@ -100,20 +99,25 @@ if (revertEntries) {
 }
 
 // ── 1. find dangling membership tokens ────────────────────────────────────
-// A user-defined type's membership token IS its definition block's id, so a
-// uuid-shaped token with no live block behind it is orphaned. Seeded types
-// (`page`, `todo`, …) use short string ids that legitimately have no block at
-// `id = token`, which is exactly what the uuid shape filter excludes.
-const dangling = await sql(`
+// Orphaned means exactly "the live registry does not publish this token" — so
+// ask the registry, rather than inferring it from the token's SHAPE. A
+// uuid-shape filter gets this wrong in both directions: it misses a user type
+// whose definition block carries a caller-supplied non-uuid id (imports can
+// mint their own) and reads that block id as if it were a seeded short id, and
+// it would misjudge any future seeded id that happened to look like a uuid.
+// `repo.types` already holds every resolvable token — seeded ids synthesized
+// from code declarations plus every live block-backed type.
+const allTokens = await sql(`
   WITH tok AS (
     SELECT b.id AS member_id, b.deleted AS member_deleted, je.value AS token
     FROM blocks b, json_each(b.properties_json, '$.types') je
     WHERE b.workspace_id = ? AND json_valid(b.properties_json)
-      AND typeof(je.value) = 'text' AND length(je.value) = 36
-      AND je.value GLOB '${UUID_GLOB}'
+      AND typeof(je.value) = 'text'
   )
   SELECT tok.token,
-         CASE WHEN t.id IS NULL THEN 'no-row' ELSE 'tombstoned' END AS type_state,
+         CASE WHEN t.id IS NULL THEN 'no-row'
+              WHEN t.deleted = 1 THEN 'tombstoned'
+              ELSE 'live-but-unpublished' END AS type_state,
          COALESCE(t.content, '') AS tombstone_content,
          COALESCE(json_extract(t.properties_json, '$."block-type:label"'), '') AS tombstone_label,
          COALESCE(json_extract(t.properties_json, '$.alias'), '') AS tombstone_aliases,
@@ -121,9 +125,14 @@ const dangling = await sql(`
          SUM(CASE WHEN tok.member_deleted = 1 THEN 1 ELSE 0 END) AS deleted_members
   FROM tok
   LEFT JOIN blocks t ON t.id = tok.token AND t.workspace_id = ?
-  WHERE t.id IS NULL OR t.deleted = 1
   GROUP BY tok.token
   ORDER BY live_members DESC`, [workspaceId, workspaceId])
+
+const publishedTypes = repo.types ?? new Map()
+if (publishedTypes.size === 0) {
+  return {error: 'repo.types is empty — the type registry has not published yet. Retry once the client has settled.'}
+}
+const dangling = allTokens.filter(row => !publishedTypes.has(row.token))
 
 if (dangling.length === 0) {
   return {mode: 'audit', workspaceId, dangling: 0, note: 'No orphaned type memberships found. Nothing to repair.'}
@@ -195,23 +204,34 @@ const resolveFromNames = async row => {
   return {destination: matches[0].id, confidence: 'name-match', matchedName: matches[0].content}
 }
 
-/** Membership token of a destination row, by the §9 claim rule that
- *  `typeMembershipTokenFor` (src/data/typeDefinitionMetadata.ts) applies: a
- *  `block-type:type-id` differing from the block's own id counts only with
- *  valid `/type/` seed provenance, else the token is the block id. */
+/** Definition block id → the token that block's type is actually PUBLISHED
+ *  under, read straight off the live registry.
+ *
+ *  Deliberately not a second implementation of the §9 claim rule. Deciding it
+ *  here from `block-type:type-id` + `seed:key` means re-deriving, in SQL, a
+ *  rule whose real form includes the deterministic seed-id equation
+ *  (`seededDefinitionKey`) — checking only the key's GRAMMAR would honor a
+ *  claim the runtime demotes (reachable via a cross-workspace paste or an
+ *  import), and the repair would then write a token nothing resolves: the very
+ *  bug being fixed. `blockIdByTypeId` is the runtime's own answer, so agreement
+ *  is structural rather than maintained by hand. */
+const typeIdByBlockId = new Map()
+for (const [typeId, blockId] of (repo.typeDefinitions?.blockIdByTypeId ?? new Map())) {
+  typeIdByBlockId.set(blockId, typeId)
+}
+
 const destinationToken = async id => {
   const row = await sql(`
     SELECT b.id, b.content,
-           COALESCE(json_extract(b.properties_json, '$."block-type:type-id"'), '') AS claimed,
-           COALESCE(json_extract(b.properties_json, '$."seed:key"'), '') AS seed_key,
-           COALESCE(json_extract(b.properties_json, '$."block-type:label"'), '') AS label,
-           EXISTS (SELECT 1 FROM json_each(b.properties_json, '$.types') je WHERE je.value = 'block-type') AS is_type
+           COALESCE(json_extract(b.properties_json, '$."block-type:label"'), '') AS label
     FROM blocks b WHERE b.id = ? AND b.workspace_id = ? AND b.deleted = 0`,
     [id, workspaceId], 'optional')
   if (!row) return null
-  const isTypeSeedKey = typeof row.seed_key === 'string' && /^[^/]+\/type\/[^/]+$/.test(row.seed_key)
-  const token = row.claimed && row.claimed !== row.id && isTypeSeedKey ? row.claimed : row.id
-  return {token, isType: row.is_type === 1, label: row.label || row.content}
+  const token = typeIdByBlockId.get(id)
+  // No registry binding = this block is not a published type. Reported as
+  // blocked below rather than repaired, so a destination that only LOOKS like a
+  // type definition can't absorb members.
+  return {token: token ?? null, isType: token !== undefined, label: row.label || row.content}
 }
 
 const plan = []
@@ -243,7 +263,13 @@ for (const row of dangling) {
 }
 
 // ── 3. build the per-member work list ─────────────────────────────────────
-const work = []
+// Keyed by MEMBER, not by token. `setBlockTypes` replaces the whole list, so a
+// block carrying two orphaned tokens (tagged with both `Dancer` and `Dance`
+// when each was merged away) must have both mappings folded into ONE write:
+// emitting a work item per token would compute each `after` from the same
+// original `before`, and the second write would revert the first token's repair
+// while the journal recorded two conflicting `before` lists for one block.
+const byMember = new Map()
 for (const entry of plan.filter(p => p.actionable)) {
   const members = await sql(`
     SELECT b.id, json_extract(b.properties_json, '$.types') AS types
@@ -252,22 +278,29 @@ for (const entry of plan.filter(p => p.actionable)) {
     WHERE b.workspace_id = ? AND b.deleted = 0 AND bt.type = ?
     ORDER BY b.created_at, b.id`, [workspaceId, entry.token])
   for (const member of members) {
-    const before = jsonOf(member.types)
-    // Only a well-formed string list is rewritten. A malformed cell is reported
-    // for separate handling — `getBlockTypes` throws on it, which would abort
-    // the write tx (the same reason the merge processor skips these).
-    if (!Array.isArray(before) || before.some(t => typeof t !== 'string')) {
-      work.push({blockId: member.id, token: entry.token, skipped: 'types cell is not a string list', before})
-      continue
+    let item = byMember.get(member.id)
+    if (!item) {
+      const before = jsonOf(member.types)
+      // Only a well-formed string list is rewritten. A malformed cell is reported
+      // for separate handling — `getBlockTypes` throws on it, which would abort
+      // the write tx (the same reason the merge processor skips these).
+      item = (!Array.isArray(before) || before.some(t => typeof t !== 'string'))
+        ? {blockId: member.id, tokens: [], skipped: 'types cell is not a string list', before}
+        : {blockId: member.id, tokens: [], before, after: [...before]}
+      byMember.set(member.id, item)
     }
-    const after = []
-    for (const t of before) {
-      const mapped = t === entry.token ? entry.destination_token : t
-      if (!after.includes(mapped)) after.push(mapped)
+    item.tokens.push(entry.token)
+    if (item.skipped) continue
+    // Fold this mapping onto the running `after`, so successive entries compose.
+    const mapped = []
+    for (const t of item.after) {
+      const to = t === entry.token ? entry.destination_token : t
+      if (!mapped.includes(to)) mapped.push(to)
     }
-    work.push({blockId: member.id, token: entry.token, before, after})
+    item.after = mapped
   }
 }
+const work = [...byMember.values()]
 
 const writable = work.filter(w => !w.skipped).slice(0, LIMIT)
 const summary = {

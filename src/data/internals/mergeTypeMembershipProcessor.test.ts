@@ -2,6 +2,7 @@
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { ChangeScope, type BlockData } from '@/data/api'
+import { mergeBlocksInTx } from '@/data/blockMerge'
 import { BLOCK_TYPE_TYPE } from '@/data/blockTypes'
 import { addBlockTypeToProperties, getBlockTypes, typesProp } from '@/data/properties'
 import type { Repo } from '@/data/repo'
@@ -55,6 +56,20 @@ const createTypeDefinition = async (
       properties: typesProperty(BLOCK_TYPE_TYPE),
     })
   }, {scope: ChangeScope.BlockDefault})
+}
+
+/** A plain block tagged with `typeIds`, settled. */
+const createMember = async (
+  id: string, content: string, ...typeIds: readonly string[]
+): Promise<void> => {
+  await env.repo.tx(async tx => {
+    await tx.create({
+      id, workspaceId: WS, parentId: 'p', orderKey: 'b0',
+      content,
+      properties: typesProperty(...typeIds),
+    })
+  }, {scope: ChangeScope.BlockDefault})
+  await env.repo.awaitProcessors()
 }
 
 const indexedTypes = async (id: string): Promise<string[]> => {
@@ -258,6 +273,98 @@ describe('core.retargetMergedTypeMembership', () => {
       await env.repo.mutate.merge({intoId: TYPE_B, fromId: TYPE_A, contentStrategy: 'keepTarget'})
 
       expect(await storedTypes(MEMBER)).toEqual([TYPE_B, 7])
+    })
+  })
+
+  // Processors run after the whole user fn, so in a chained merge the first
+  // event's `intoId` is ALREADY a tombstone by the time it is handled. Both
+  // naive answers strand the members (retarget onto the dead middle block, or
+  // bail and leave them on the dead source), so the chain has to be resolved.
+  describe('chained merges in one tx', () => {
+    const TYPE_C = '5555eeee-5555-4555-8555-555555555555'
+
+    beforeEach(async () => {
+      await createTypeDefinition(env.repo, TYPE_C, 'Human', 'a3')
+      await env.repo.awaitProcessors()
+    })
+
+    const chainMerge = async (): Promise<void> => {
+      await env.repo.tx(async tx => {
+        const requireBlock = async (id: string): Promise<BlockData> => {
+          const row = await tx.get(id)
+          if (row === null) throw new Error(`missing ${id}`)
+          return row
+        }
+        await mergeBlocksInTx(tx, {
+          into: await requireBlock(TYPE_B),
+          from: await requireBlock(TYPE_A),
+          contentStrategy: 'keepTarget',
+        })
+        await mergeBlocksInTx(tx, {
+          into: await requireBlock(TYPE_C),
+          from: await requireBlock(TYPE_B),
+          contentStrategy: 'keepTarget',
+        })
+      }, {scope: ChangeScope.BlockDefault})
+    }
+
+    it('lands a member of the first source on the terminal survivor', async () => {
+      await createMember(MEMBER, 'Member of A', TYPE_A)
+
+      await chainMerge()
+
+      expect(getBlockTypes(env.read(MEMBER)!)).toEqual([TYPE_C])
+      expect(await indexedTypes(MEMBER)).toEqual([TYPE_C])
+    })
+
+    // Each event re-reads its members through `tx.get`, so the second merge's
+    // rewrite composes with the first instead of clobbering it — and the two
+    // tokens collapse to one because they now name the same survivor.
+    it('collapses a member tagged with BOTH merged-away types to a single tag', async () => {
+      await createMember(MEMBER, 'Member of A and B', TYPE_A, TYPE_B)
+
+      await chainMerge()
+
+      expect(getBlockTypes(env.read(MEMBER)!)).toEqual([TYPE_C])
+    })
+  })
+
+  // `block_types` structurally cannot see these rows (its update trigger
+  // re-inserts only `WHEN deleted = 0`), so without the separate tombstone
+  // sweep a restore after the merge resurrects the block silently un-typed.
+  describe('tombstoned members', () => {
+    it('retargets a member that was already deleted when the merge ran', async () => {
+      await createMember(MEMBER, 'Deleted member of A', TYPE_A)
+      await env.repo.tx(async tx => {
+        await tx.delete(MEMBER)
+      }, {scope: ChangeScope.BlockDefault})
+      await env.repo.awaitProcessors()
+      expect(await indexedTypes(MEMBER)).toEqual([])
+
+      await env.repo.mutate.merge({intoId: TYPE_B, fromId: TYPE_A, contentStrategy: 'keepTarget'})
+
+      // Still a tombstone — the rewrite touches the bag, never `deleted`.
+      expect(env.read(MEMBER)!.deleted).toBe(true)
+      expect(getBlockTypes(env.read(MEMBER)!)).toEqual([TYPE_B])
+    })
+
+    it('gives a restored member live membership again', async () => {
+      await createMember(MEMBER, 'Deleted member of A', TYPE_A)
+      await env.repo.tx(async tx => {
+        await tx.delete(MEMBER)
+      }, {scope: ChangeScope.BlockDefault})
+      await env.repo.awaitProcessors()
+
+      await env.repo.mutate.merge({intoId: TYPE_B, fromId: TYPE_A, contentStrategy: 'keepTarget'})
+      await env.repo.awaitProcessors()
+
+      await env.repo.mutate.restore({id: MEMBER})
+      await env.repo.awaitProcessors()
+      expect(env.read(MEMBER)!.deleted).toBe(false)
+
+      // The whole point: the index rebuilt from the restored bag names the
+      // SURVIVOR. Before the tombstone sweep this came back as the dead TYPE_A.
+      expect(await indexedTypes(MEMBER)).toEqual([TYPE_B])
     })
   })
 })
