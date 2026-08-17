@@ -688,6 +688,40 @@ export const isInteractiveContentEvent = (event: { target: EventTarget | null })
 }
 
 /**
+ * Where one block's DOM ends and another's begins: a content surface
+ * (`DefaultBlockRenderer`'s content slot) or a block shell. Walking up from an
+ * event target, the first of these decides which block the target belongs to.
+ *
+ * BOTH are needed. A shell holds more than its content slot — the bullet, the
+ * property panel, a breadcrumb chain, whatever chrome a surface adds — and a
+ * target there has no `.block-content` above it until the CONTAINER's, which
+ * would read as the container's own. Neither marker alone spans a block.
+ */
+const BLOCK_BOUNDARY_SELECTOR = '.block-content, .tm-block'
+
+/**
+ * Is this event's target on OUR surface, rather than on a nested block's?
+ *
+ * Innermost wins unconditionally, whether or not the nested block handles that
+ * gesture: an ancestor must not inherit a gesture the block under the pointer
+ * declined (a nested block in edit mode disables its swipe, and "swipe the
+ * container instead" is never the right reading of that).
+ *
+ * Propagation cannot stand in for this. A renderer that fills a content slot
+ * with real block rows puts one surface inside another, and then each phase
+ * fails its own way: bubbling lets the container act LAST and overwrite,
+ * capturing lets it act FIRST and consume. Ordinary outline children sit
+ * outside their parent's content slot, which is why only such surfaces are
+ * affected — and why testing this needs one of them.
+ */
+export const ownsGestureTarget = (element: HTMLElement, target: EventTarget | null): boolean => {
+  if (typeof Node === 'undefined' || !(target instanceof Node)) return true
+  const start = target.nodeType === Node.ELEMENT_NODE ? (target as Element) : target.parentElement
+  const boundary = start?.closest(BLOCK_BOUNDARY_SELECTOR)
+  return !boundary || boundary === element
+}
+
+/**
  * Enter edit mode for a block from its flat dependencies — the core used by
  * both the `BlockResolveContext` wrapper below and the pointer-dispatched
  * click-to-edit action (which only carries `{block, uiStateBlock, renderScopeId}`).

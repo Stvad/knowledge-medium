@@ -113,6 +113,27 @@ const surfaceOf = (el: HTMLElement): string | undefined =>
 export const visibilityTargetFor = (el: HTMLElement): HTMLElement =>
   el.querySelector<HTMLElement>(VISIBILITY_TARGET_SELECTOR) ?? el
 
+/** Is this row a whole VIEW of other rows rather than a row of its own?
+ *
+ *  A renderer may fill the focal block's content slot with real block rows: the
+ *  Readwise review backlog, a review deck, the recents list. That block's "own
+ *  row" then spans every row it shows — tall enough to read as on screen at
+ *  every scroll position, and first in document order. Callers picking a row BY
+ *  GEOMETRY need to tell it from an ordinary row; walking (j/k) does not, and
+ *  still treats it as one.
+ *
+ *  FOCAL is half the test, and not a shortcut for "the big one". A block whose
+ *  content merely INCLUDES an embedded row (`!((id))` mounts a full nav row
+ *  inside the host's content) also holds other rows, and it is an ordinary row
+ *  in every way that matters here — its own text is right there, it goes off
+ *  screen when scrolled past, and geometry describes it perfectly. Only the
+ *  focal block can have a view for a content slot; scoping to it keeps every
+ *  outline row, embed host or not, out of this.
+ */
+export const isRowAViewOfOtherRows = (el: HTMLElement): boolean =>
+  el.classList.contains('top-level-block') &&
+  Boolean(visibilityTargetFor(el).querySelector(NAV_ITEM_SELECTOR))
+
 const isRecoveryTargetVisible = (el: HTMLElement): boolean =>
   isElementProperlyVisible(visibilityTargetFor(el))
 
