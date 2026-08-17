@@ -12,11 +12,9 @@ import type {
 export const SRS_REVIEW_CARD_ID = 'srsReviewCardId'
 export const SRS_REVIEW_REVEALED = 'srsReviewRevealed'
 
-// `shellProps` go on the card's own wrapper. They used to be dropped, which
-// silently cost the card its identity in the DOM: no block boundary for pointer
-// ownership (the deck claimed gestures aimed at the card), no focus or edit
-// tagging, and no spatial-nav row, since the decorators write that through the
-// props' `ref`.
+// `shellProps` go on the card's own wrapper: it IS the block's surface here, so
+// dropping them would leave the card with no identity in the DOM and the deck
+// around it answering for its gestures, focus and navigation.
 
 /** Question phase: render the card's own content only, dropping the
  *  children subtree (the answer). */

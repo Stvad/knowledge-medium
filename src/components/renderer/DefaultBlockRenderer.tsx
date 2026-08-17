@@ -536,20 +536,6 @@ function BlockShell({
       : undefined,
   }), [block.id, blockContext.renderScopeId, inEditMode, handleBlockClick, shellRef])
 
-  // A layout that never spreads `shellProps` silently gives up everything they
-  // carry — the block's identity in the DOM, its gesture boundary, focus and
-  // edit tagging, the shell click, and (through `ref`) the spatial-nav row
-  // tagging decorators write. The SRS review card did exactly that and nothing
-  // reported it; each consumer just quietly resolved to the wrong block. `ref`
-  // is the detector: it can only stay null if nothing received the props.
-  useEffect(() => {
-    if (!import.meta.env.DEV) return
-    if (shellRef.current) return
-    console.error(
-      `Block ${block.id}: its layout mounted Shell but did not spread shellProps onto an element. ` +
-      'Gestures, focus, edit state and spatial navigation all resolve through those props.',
-    )
-  }, [block.id, shellRef])
 
   const resolveBlockShellDecorators = runtime.read(blockShellDecoratorsFacet)
   const shellDecorators = useMemo(
@@ -615,7 +601,7 @@ export function DefaultBlockRenderer(
   // `BlockRenderer` slot below — no thunk needed.
   // Takes no props of its own (it closes over `block`), but carries the
   // renderer's text/view answer so whoever mounts it can still ask.
-  const RawContentSlot = useMemo<FunctionComponent & Pick<BlockRenderer, 'showsBlockText'>>(
+  const RawContentSlot = useMemo<FunctionComponent & Pick<BlockRenderer, 'showsOwnContent'>>(
     () => Object.assign(
       function BlockRawContentSlot() {
         return (
@@ -625,7 +611,7 @@ export function DefaultBlockRenderer(
         )
       },
       // Hand-off: this slot shows whatever it wraps, so it answers for it.
-      {showsBlockText: DefaultContentRenderer.showsBlockText},
+      {showsOwnContent: DefaultContentRenderer.showsOwnContent},
     ),
     [block, DefaultContentRenderer],
   )
@@ -714,12 +700,12 @@ export function DefaultBlockRenderer(
       // the renderer, but the renderer is what KNOWS: comparing identities here
       // reads a wrapper (the edit dispatcher stands in front of both text
       // renderers for every ordinary block) as a view, which switches this off
-      // everywhere. `showsBlockText` travels through wrappers instead.
+      // everywhere. `showsOwnContent` travels through wrappers instead.
       //
       // Absent means "a view", so an extension's surface classifies correctly
       // without the extension knowing this exists — they live in the DB, where
       // no sweep reaches.
-      const showsBlockText = baseContentRenderer.showsBlockText === true
+      const showsOwnContent = baseContentRenderer.showsOwnContent === true
       const decorateContent = runtime.read(blockContentDecoratorsFacet)
       const ContentRenderer = useMemo(
         () => decorateContent(resolveContext, baseContentRenderer),
@@ -745,7 +731,7 @@ export function DefaultBlockRenderer(
         <div
           {...contentSurfaceProps}
           data-block-visibility-target="true"
-          {...(showsBlockText ? {} : {[BLOCK_CONTENT_VIEW_ATTRIBUTE]: 'true'})}
+          {...(showsOwnContent ? {} : {[BLOCK_CONTENT_VIEW_ATTRIBUTE]: 'true'})}
           className={`block-content${topLevelClass}${contentSurfaceProps.className ? ` ${contentSurfaceProps.className}` : ''}`}
           ref={contentGestureRef}
         >
@@ -843,7 +829,19 @@ export function DefaultBlockRenderer(
   // to become focusable/editable; the shell's machinery (paste/click, shell
   // decorators, shortcut activations) only runs when mounted — see `BlockShell`.
   const ShellSlot = useMemo<BlockShellSlot>(() => {
-    return function BlockShellSlot({children}: BlockShellSlotProps) {
+    return function BlockShellSlot({children, shortcutsOnly}: BlockShellSlotProps) {
+      // Dropping `shellProps` costs the block its identity in the DOM — its
+      // boundary, focus and edit tagging, the shell click, and (through `ref`)
+      // the spatial-nav row. Consumers then resolve to an ancestor instead,
+      // and nothing says so. `ref` is the detector: it can only stay null if no
+      // element received the props.
+      useEffect(() => {
+        if (!import.meta.env.DEV || shortcutsOnly || shellRef.current) return
+        console.error(
+          `Block ${resolveContext.block.id}: its layout mounted Shell without spreading shellProps. ` +
+          'Pass shortcutsOnly if that is deliberate.',
+        )
+      }, [shortcutsOnly])
       return (
         <BlockShell
           resolveContext={resolveContext}

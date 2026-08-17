@@ -83,3 +83,7 @@ CodeMirrorExtensionBlockRenderer.canRender = ({block}: BlockRendererProps) => {
   return data ? hasBlockType(data, EXTENSION_TYPE) : false
 }
 CodeMirrorExtensionBlockRenderer.priority = () => 5
+
+// Both draw this block's own source — see `showsOwnContent`.
+ExtensionViewer.showsOwnContent = true
+ExtensionEditor.showsOwnContent = true

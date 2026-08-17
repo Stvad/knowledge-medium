@@ -90,20 +90,22 @@ export interface BlockRenderer extends FunctionComponent<BlockRendererProps> {
     canRender?: (props: BlockRendererProps) => boolean;
     priority?: (props: BlockRendererProps) => number;
     /**
-     * Does this render the block's own TEXT, as opposed to a view of other
-     * things (a review backlog, a review deck, a recents list)?
-     *
-     * Absent means no, which is what lets an extension's surface be classified
-     * without the extension knowing this exists — they live in the DB, where no
-     * sweep reaches. The two renderers that draw block text set it, and a
-     * renderer that WRAPS another must pass it along or everything it wraps
-     * silently becomes a view: the edit dispatcher wraps both text renderers
-     * for every ordinary block, so a missed hand-off there is app-wide.
+     * Does this render THIS block's own content — its text, its image, its
+     * extension source, its property schema — as opposed to a view of OTHER
+     * blocks (a review backlog, a review deck, a recents list)?
      *
      * Consumers care because a view's row describes everything it shows rather
-     * than the block, which anything reasoning about row geometry has to know.
+     * than the block itself, which anything reasoning about row geometry has to
+     * know. Set it on any renderer that draws the block it is given.
+     *
+     * Absent means "a view", which is what lets an extension's surface be
+     * classified without the extension knowing this exists — extensions live in
+     * the DB, where no sweep reaches. A renderer that WRAPS another must pass
+     * it along, or everything it wraps silently becomes a view: the edit
+     * dispatcher wraps the text renderers for every ordinary block, so a missed
+     * hand-off there is app-wide.
      */
-    showsBlockText?: boolean;
+    showsOwnContent?: boolean;
 }
 
 export interface RendererRegistry {

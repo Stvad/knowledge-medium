@@ -295,6 +295,20 @@ export type BlockShellRender = (shellProps: BlockShellProps) => ReactNode
 
 export interface BlockShellSlotProps {
   children: BlockShellRender
+  /**
+   * This layout wants the shell's shortcut surface and decorators but is NOT
+   * making an element the block's own surface, so it deliberately ignores
+   * `shellProps`. Say so, and the dev-time check that catches an accidental
+   * drop stays useful.
+   *
+   * Legitimate: a layout whose body is a composed pane rather than the block
+   * (video-notes puts the block's children in an aside; putting the props on
+   * that pane would make the whole thing focusable and click-to-edit). NOT
+   * legitimate for a layout that renders the block itself — dropping them
+   * there costs the block its identity, and every consumer then resolves to an
+   * ancestor.
+   */
+  shortcutsOnly?: boolean
 }
 
 /** Opt-in interactive block surface. Rendering it runs the shell decorators
@@ -713,8 +727,8 @@ export const isInteractiveContentEvent = (event: { target: EventTarget | null })
  * would read as the container's own. Neither marker alone spans a block.
  *
  * The shell half is an attribute carried by `shellProps`, not the default
- * layout's `.tm-block` class: a layout is free to style its own wrapper, and
- * one that did (the SRS review card) had no boundary at all.
+ * layout's class: a layout is free to style its own wrapper, and one that does
+ * must still be recognisable as a block.
  */
 const BLOCK_BOUNDARY_SELECTOR = `.block-content, [${BLOCK_SHELL_ATTRIBUTE}]`
 

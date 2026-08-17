@@ -178,5 +178,4 @@ export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
   )
 }
 
-// The same text, editable — see `BlockRenderer.showsBlockText`.
-CodeMirrorContentRenderer.showsBlockText = true
+CodeMirrorContentRenderer.showsOwnContent = true

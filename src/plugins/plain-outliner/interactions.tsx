@@ -32,7 +32,7 @@ export const blockEditingContentRenderer: BlockContentRendererContribution = con
       // Hand-off: the dispatcher shows one of its two slots, both of which are
       // the block's text in the ordinary case. Without this every block in the
       // app reads as a view, since this wrapper is what the slot actually sees.
-      Dispatcher.showsBlockText = Primary.showsBlockText
+      Dispatcher.showsOwnContent = Primary.showsOwnContent
       return Dispatcher
     })()
 

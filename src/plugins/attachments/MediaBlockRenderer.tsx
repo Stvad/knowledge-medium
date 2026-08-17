@@ -123,3 +123,6 @@ MediaBlockRenderer.canRender = ({ block }: BlockRendererProps) => {
   return Array.isArray(types) && types.includes(MEDIA_TYPE)
 }
 MediaBlockRenderer.priority = () => 5
+
+// Draws the block itself, not a view of others — see `showsOwnContent`.
+MediaContentRenderer.showsOwnContent = true

@@ -736,12 +736,17 @@ const DroppedShellLayout: BlockLayout = ({Content, Shell}) => (
   <Shell>{() => <div className="dropped-shell"><Content /></div>}</Shell>
 )
 
+/** The same, but saying it is deliberate — the video-notes shape, where the
+ *  body is a composed pane rather than the block. */
+const ShortcutsOnlyLayout: BlockLayout = ({Content, Shell}) => (
+  <Shell shortcutsOnly>{() => <div className="dropped-shell"><Content /></div>}</Shell>
+)
+
 // Whether a content slot holds a VIEW (a review backlog, a deck, a recents
 // list) or the block's own text. Only the slot can answer — it resolved the
 // renderer — and callers reasoning about a row's geometry read the answer off
 // the DOM instead of inferring it from what happens to be mounted inside.
 describe('content-view marking', () => {
-  let sharedDb: TestDb
   let repo: Repo
   let runtime: FacetRuntime
   /** The same fixture with the REAL plain-outliner plugin mounted, which is
@@ -749,8 +754,6 @@ describe('content-view marking', () => {
    *  both text renderers. */
   let outlinerRuntime: FacetRuntime
 
-  beforeAll(async () => { sharedDb = await createTestDb() })
-  afterAll(async () => { await sharedDb.cleanup() })
   beforeEach(async () => {
     await resetTestDb(sharedDb.db)
     repo = createTestRepo({
@@ -877,12 +880,10 @@ describe('content-view marking', () => {
 })
 
 describe('a layout that drops shellProps', () => {
-  let sharedDb: TestDb
   let repo: Repo
   let runtime: FacetRuntime
+  let shortcutsOnlyRuntime: FacetRuntime
 
-  beforeAll(async () => { sharedDb = await createTestDb() })
-  afterAll(async () => { await sharedDb.cleanup() })
   beforeEach(async () => {
     await resetTestDb(sharedDb.db)
     repo = createTestRepo({
@@ -898,6 +899,18 @@ describe('a layout that drops shellProps', () => {
       ],
     }).repo
     runtime = repo.facetRuntime!
+    shortcutsOnlyRuntime = createTestRepo({
+      db: sharedDb.db,
+      user: {id: 'user-1'},
+      newId: () => crypto.randomUUID(),
+      extensions: [
+        defaultEditorInteractionExtension,
+        blockLayoutFacet.of(
+          () => ({id: 'shortcuts-only', label: 'Shortcuts only', render: ShortcutsOnlyLayout}),
+          {source: 'test'},
+        ),
+      ],
+    }).repo.facetRuntime!
     repo.setActiveWorkspaceId('ws-1')
     repoRef.current = repo
     await repo.tx(async tx => {
@@ -931,7 +944,29 @@ describe('a layout that drops shellProps', () => {
 
     await waitFor(() => expect(document.querySelector('.dropped-shell')).not.toBeNull())
     expect(document.querySelector('[data-block-shell]')).toBeNull()
-    expect(error).toHaveBeenCalledWith(expect.stringContaining('did not spread shellProps'))
+    expect(error).toHaveBeenCalledWith(expect.stringContaining('without spreading shellProps'))
+    error.mockRestore()
+  })
+
+  // Not every Shell consumer is making an element the block's surface: a
+  // layout whose body is a composed pane wants the shortcut surface and
+  // nothing else. Reporting those too would make the check noise, and noise is
+  // how a real drop goes unnoticed.
+  it('is silent when the layout says the drop is deliberate', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    render(
+      <AppRuntimeContextProvider value={shortcutsOnlyRuntime}>
+        <BlockContextProvider initialValue={{scopeRootId: 'root'}}>
+          <ActiveContextsProvider>
+            <DefaultBlockRenderer block={repo.block('root')} />
+          </ActiveContextsProvider>
+        </BlockContextProvider>
+      </AppRuntimeContextProvider>,
+    )
+
+    await waitFor(() => expect(document.querySelector('.dropped-shell')).not.toBeNull())
+    expect(error).not.toHaveBeenCalled()
     error.mockRestore()
   })
 })
