@@ -12,12 +12,20 @@ import{propertyNameProp as e}from"../../data/properties.js";import{PROPERTY_SCHE
             (SELECT json_group_array(bt.type) FROM block_types bt
               WHERE bt.block_id = ranked.blockId AND bt.workspace_id = ?) AS types
        FROM (
-         SELECT j.key AS property,
-                b.id AS blockId,
-                ROW_NUMBER() OVER (PARTITION BY j.key ORDER BY b.id) AS rn
-           FROM blocks b, json_each(${a}) j
-          WHERE b.workspace_id = ? AND b.deleted = 0
-            AND j.key IN (SELECT value FROM json_each(?))
+         SELECT property, blockId,
+                ROW_NUMBER() OVER (PARTITION BY property ORDER BY blockId) AS rn
+           FROM (
+             -- DISTINCT because a stored bag CAN repeat a key: JSON.stringify
+             -- cannot produce one, but a raw SQL write can, and the types
+             -- trigger sees only one row so nothing rejects it. Without this,
+             -- json_each emits a row per occurrence and one block could eat
+             -- the whole per-key cap: repeating in sampleBlockIds, inflating
+             -- sampledBlocks, and hiding the blocks that actually differ.
+             SELECT DISTINCT j.key AS property, b.id AS blockId
+               FROM blocks b, json_each(${a}) j
+              WHERE b.workspace_id = ? AND b.deleted = 0
+                AND j.key IN (SELECT value FROM json_each(?))
+           )
        ) ranked
       WHERE ranked.rn <= ?`,[t,t,JSON.stringify(o.map(e=>e.property)),r.blocksPerKey]),c=new Map,l=new Map;for(let e of s){let t=f(e.property),n=l.get(t)??[];n.length<i&&(n.push(e.blockId),l.set(t,n));let r=c.get(t)??new Map;for(let t of d(e.types))r.set(t,(r.get(t)??0)+1);c.set(t,r)}for(let e of o)e.sampleBlockIds=l.get(e.property)??[],e.types=[...c.get(e.property)??new Map].map(([e,t])=>({type:e,sampledBlocks:t})).sort((e,t)=>t.sampledBlocks-e.sampledBlocks||e.type.localeCompare(t.type))};export{r as PROVENANCE_BLOCKS_PER_KEY,n as PROVENANCE_KEY_LIMIT,p as auditPropertyRegistration,u as describeUnregisteredProperty};
 //# sourceMappingURL=propertyRegistrationAudit.js.map
