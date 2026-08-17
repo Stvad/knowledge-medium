@@ -232,6 +232,34 @@ export interface BlockGestureController {
 }
 
 /**
+ * The DOM marker for a block's gesture surface: `DefaultBlockRenderer`'s content
+ * slot. The nearest one above an event target names the block the gesture is ON.
+ */
+const GESTURE_SURFACE_SELECTOR = '.block-content'
+
+/**
+ * Is this event's target on OUR surface, rather than on a nested block's?
+ *
+ * Pointer events bubble, so a swipe on a block rendered inside ANOTHER block's
+ * content slot — the Readwise review backlog, a review deck, any surface that
+ * mounts real rows in the content area — reaches the container's listeners too,
+ * and both controllers recognize the same motion. The container's dispatch lands
+ * last, so the gesture acts on the container. An ordinary outline block's
+ * children sit outside its content slot, which is why only these surfaces bit.
+ *
+ * Innermost wins unconditionally, whether or not the nested block has a
+ * recognizer for that gesture: an ancestor must not inherit a gesture the block
+ * under the finger declined (a nested block in edit mode disables its swipe, and
+ * "swipe the container instead" is never the right reading of that).
+ */
+export const ownsGestureTarget = (element: HTMLElement, target: EventTarget | null): boolean => {
+  if (typeof Node === 'undefined' || !(target instanceof Node)) return true
+  const start = target.nodeType === Node.ELEMENT_NODE ? (target as Element) : target.parentElement
+  const surface = start?.closest(GESTURE_SURFACE_SELECTOR)
+  return !surface || surface === element
+}
+
+/**
  * The per-block recognition loop, framework-agnostic so it can be driven by
  * synthetic samples in tests. Holds the session (active pointers) + arbitration
  * state (which recognizer owns the block, which are out) for ONE block — there
@@ -445,6 +473,10 @@ export const createBlockGestureController = ({
 
   return {
     handlePointerDown(sample) {
+      // A pointer that went down on a NESTED block's surface belongs to that
+      // block (see `ownsGestureTarget`). Never registering it is what drops the
+      // rest of its session: every later phase is gated on `pointers`.
+      if (!ownsGestureTarget(element, sample.target)) return false
       pointers.set(sample.pointerId, toPointer(sample))
       return run('down', sample)
     },
@@ -455,6 +487,9 @@ export const createBlockGestureController = ({
       return run('move', sample)
     },
     handlePointerUp(sample) {
+      // An up for a pointer we never took (a nested block's, or one that went
+      // down before these listeners existed) is not part of any session here.
+      if (!pointers.has(sample.pointerId)) return false
       // Run BEFORE removing the pointer so the session still includes it.
       const prevent = run('up', sample)
       pointers.delete(sample.pointerId)
@@ -462,6 +497,7 @@ export const createBlockGestureController = ({
       return prevent
     },
     handlePointerCancel(sample) {
+      if (!pointers.has(sample.pointerId)) return
       const changed = toPointer(sample)
       const session = sessionWith(changed)
       const ctx: GestureEventContext = {element, event: sample.event}

@@ -7,6 +7,7 @@ import {
   isInstanceAt,
   locationOf,
   panelInstances,
+  rowContainsOtherRows,
   visibilityTargetFor,
 } from '@/plugins/spatial-navigation/walker.js'
 import {
@@ -43,6 +44,19 @@ export const isRowInViewport = (instance: HTMLElement): boolean => {
   const target = visibilityTargetFor(instance)
   return isElementProperlyVisible(target, getElementScrollportBounds(target))
 }
+
+/**
+ * Is this a row geometry can speak for at all? A row holding other rows (see
+ * `rowContainsOtherRows`) is on screen at every scroll position and comes first
+ * in document order, so it would win every pick.
+ *
+ * Excluded from both sides of the decision, not just from the candidates: asking
+ * "is the cursor's row still visible" of such a container always answers yes, so
+ * leaving it on the focused side would pin the cursor there for as long as it
+ * held it — the same cursor/viewport disagreement this plugin exists to remove,
+ * one level up.
+ */
+const isGeometricRow = (instance: HTMLElement): boolean => !rowContainsOtherRows(instance)
 
 /** The thing that actually scrolls this row. Null = the page itself, and two
  *  nulls compare equal, which is what makes the filter below work for a panel
@@ -88,10 +102,12 @@ export const resolveViewportAnchor = (
   // scroll — `PanelFocusRecovery` owns it, and it picks by data-tree
   // neighbourhood rather than by geometry.
   if (!focused) return null
-  if (isRowInViewport(focused)) return null
+  if (isGeometricRow(focused) && isRowInViewport(focused)) return null
 
   const port = scrollportOf(focused)
-  const anchor = instances.find(el => scrollportOf(el) === port && isRowInViewport(el))
+  const anchor = instances.find(
+    el => scrollportOf(el) === port && isGeometricRow(el) && isRowInViewport(el),
+  )
   if (!anchor) return null
   const location = locationOf(anchor)
   if (!location || sameFocusedBlockLocation(location, focusedLocation)) return null

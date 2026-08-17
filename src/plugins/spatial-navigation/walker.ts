@@ -113,6 +113,19 @@ const surfaceOf = (el: HTMLElement): string | undefined =>
 export const visibilityTargetFor = (el: HTMLElement): HTMLElement =>
   el.querySelector<HTMLElement>(VISIBILITY_TARGET_SELECTOR) ?? el
 
+/** Does this row's own content row hold OTHER rows?
+ *
+ *  Normally no: a block's children render outside its content slot, so a row's
+ *  visibility target is its own text and nothing else. But a renderer may fill
+ *  the content slot with real block rows (the Readwise review backlog, a review
+ *  deck, the recents list), and then the container's "own row" spans every row
+ *  it shows — tall enough to read as on screen at every scroll position, and
+ *  first in document order. Callers picking a row BY GEOMETRY need to tell the
+ *  two apart; walking (j/k) does not, and still treats it as an ordinary row.
+ */
+export const rowContainsOtherRows = (el: HTMLElement): boolean =>
+  Boolean(visibilityTargetFor(el).querySelector(NAV_ITEM_SELECTOR))
+
 const isRecoveryTargetVisible = (el: HTMLElement): boolean =>
   isElementProperlyVisible(visibilityTargetFor(el))
 

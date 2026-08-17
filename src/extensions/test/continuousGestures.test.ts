@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   createBlockGestureController,
   unionTouchAction,
@@ -463,5 +463,97 @@ describe('unionTouchAction', () => {
     expect(enabledTouchAction([on, off])).toBe('pan-y') // the disabling 'none' is excluded
     expect(enabledTouchAction([on, always])).toBe('pan-y')
     expect(enabledTouchAction([off])).toBeUndefined()
+  })
+})
+
+describe('nested gesture surfaces', () => {
+  // A block rendered inside ANOTHER block's content slot (the Readwise review
+  // backlog, a review deck) puts one `.block-content` inside another, and
+  // pointer events bubble — so the container's controller sees the nested
+  // block's swipe and, dispatching last, ran the gesture on itself.
+  const buildNested = () => {
+    const outer = document.createElement('div')
+    outer.className = 'block-content'
+    const inner = document.createElement('div')
+    inner.className = 'block-content'
+    const innerText = document.createElement('span')
+    inner.appendChild(innerText)
+    outer.appendChild(inner)
+    document.body.appendChild(outer)
+    return {outer, inner, innerText}
+  }
+
+  const sampleOn = (target: EventTarget, pointerId: number, x: number): PointerSample => ({
+    ...sample(pointerId, x, 0),
+    target,
+  })
+
+  afterEach(() => {
+    document.body.innerHTML = ''
+  })
+
+  const commitOnUp: GestureRecognizer = {
+    id: 'swipe',
+    onPointerUp: () => ({status: 'commit', gesture: 'swipe-left', deps}),
+  }
+
+  it('ignores a gesture that started on a nested block surface', () => {
+    const {outer, innerText} = buildNested()
+    const dispatch = makeDispatch()
+    const controller = createBlockGestureController({
+      recognizers: [commitOnUp], element: outer, dispatch,
+    })
+
+    controller.handlePointerDown(sampleOn(innerText, 1, 0))
+    const prevented = controller.handlePointerUp(sampleOn(innerText, 1, -60))
+
+    expect(dispatch).not.toHaveBeenCalled()
+    expect(prevented).toBe(false)
+  })
+
+  it('still recognizes a gesture on its own surface', () => {
+    const {outer} = buildNested()
+    const dispatch = makeDispatch()
+    const controller = createBlockGestureController({
+      recognizers: [commitOnUp], element: outer, dispatch,
+    })
+
+    controller.handlePointerDown(sampleOn(outer, 1, 0))
+    controller.handlePointerUp(sampleOn(outer, 1, -60))
+
+    expect(dispatch).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not tear down its own in-flight gesture when a nested block cancels', () => {
+    // Two fingers, one on each surface. The nested one's cancel must not reach
+    // recognizers here, or a nested block scrolling out from under a finger
+    // would drop the container's half-built gesture.
+    const {outer, innerText} = buildNested()
+    const onPointerCancel = vi.fn()
+    const controller = createBlockGestureController({
+      recognizers: [{id: 'r', onPointerCancel}], element: outer, dispatch: makeDispatch(),
+    })
+
+    controller.handlePointerDown(sampleOn(outer, 1, 0))
+    controller.handlePointerDown(sampleOn(innerText, 2, 0))
+    controller.handlePointerCancel(sampleOn(innerText, 2, -60))
+
+    expect(onPointerCancel).not.toHaveBeenCalled()
+  })
+
+  it('drops the rest of a foreign pointer session, not just its down', () => {
+    // The move/up phases carry the same target, but the guard that matters is
+    // the session one: a recognizer must never see a move for a pointer the
+    // controller declined, whatever that move's target says.
+    const {outer, innerText} = buildNested()
+    const onPointerMove = vi.fn(() => GESTURE_ACTIVE)
+    const controller = createBlockGestureController({
+      recognizers: [{id: 'r', onPointerMove}], element: outer, dispatch: makeDispatch(),
+    })
+
+    controller.handlePointerDown(sampleOn(innerText, 1, 0))
+    controller.handlePointerMove(sampleOn(outer, 1, -60))
+
+    expect(onPointerMove).not.toHaveBeenCalled()
   })
 })
