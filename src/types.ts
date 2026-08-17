@@ -90,22 +90,27 @@ export interface BlockRenderer extends FunctionComponent<BlockRendererProps> {
     canRender?: (props: BlockRendererProps) => boolean;
     priority?: (props: BlockRendererProps) => number;
     /**
-     * Does this render THIS block's own content — its text, its image, its
-     * extension source, its property schema — as opposed to a view of OTHER
-     * blocks (a review backlog, a review deck, a recents list)?
+     * Does this fill the block's content slot with OTHER blocks' rows — a
+     * review backlog, a review deck, a recents list — rather than drawing the
+     * block it was given?
      *
-     * Consumers care because a view's row describes everything it shows rather
-     * than the block itself, which anything reasoning about row geometry has to
-     * know. Set it on any renderer that draws the block it is given.
+     * Consumers care because such a row's rect describes everything it shows
+     * instead of the block, which anything reasoning about row geometry has to
+     * know.
      *
-     * Absent means "a view", which is what lets an extension's surface be
-     * classified without the extension knowing this exists — extensions live in
-     * the DB, where no sweep reaches. A renderer that WRAPS another must pass
-     * it along, or everything it wraps silently becomes a view: the edit
-     * dispatcher wraps the text renderers for every ordinary block, so a missed
-     * hand-off there is app-wide.
+     * Declared by the few, not the many. Renderers that draw their own block
+     * (text, an image, an extension's source, a property schema, a video
+     * player, a type editor) are the overwhelming majority and say nothing;
+     * the alternative made every one of them responsible for a flag it had no
+     * reason to know about, and forgetting it silently stopped that block's row
+     * being a row. Forgetting THIS only costs a view the special handling,
+     * which is where things stood before it existed.
+     *
+     * A renderer that WRAPS another must pass it along, or a view behind a
+     * wrapper reads as an ordinary block: the edit dispatcher wraps the content
+     * renderer for every block, view or not.
      */
-    showsOwnContent?: boolean;
+    showsOtherBlocks?: boolean;
 }
 
 export interface RendererRegistry {

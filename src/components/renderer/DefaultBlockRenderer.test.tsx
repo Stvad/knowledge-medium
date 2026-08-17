@@ -742,10 +742,17 @@ const ShortcutsOnlyLayout: BlockLayout = ({Content, Shell}) => (
   <Shell shortcutsOnly>{() => <div className="dropped-shell"><Content /></div>}</Shell>
 )
 
-// Whether a content slot holds a VIEW (a review backlog, a deck, a recents
-// list) or the block's own text. Only the slot can answer — it resolved the
-// renderer — and callers reasoning about a row's geometry read the answer off
-// the DOM instead of inferring it from what happens to be mounted inside.
+/** A surface that fills the slot with other blocks' rows, and says so — the
+ *  backlog/deck/recents shape. */
+const ViewSurfaceRenderer = Object.assign(
+  ({block}: BlockRendererProps) => <div className="view-surface">{block.id}</div>,
+  {showsOtherBlocks: true},
+)
+
+// Whether a content slot is filled with other blocks' rows or draws the block
+// itself. The renderer declares it, the slot records it, and callers reasoning
+// about a row's geometry read it off the DOM rather than inferring it from what
+// happens to be mounted inside.
 describe('content-view marking', () => {
   let repo: Repo
   let runtime: FacetRuntime
@@ -763,8 +770,8 @@ describe('content-view marking', () => {
       extensions: [
         defaultEditorInteractionExtension,
         blockContentRendererFacet.of(
-          ctx => ctx.block.id === 'surface-root'
-            ? defineVariant('test.surface', 'Surface', FacetSurfaceRenderer)
+          ctx => ctx.block.id === 'view-root'
+            ? defineVariant('test.view', 'View', ViewSurfaceRenderer)
             : null,
           {source: 'test'},
         ),
@@ -782,7 +789,7 @@ describe('content-view marking', () => {
 
     await repo.tx(async tx => {
       await tx.create({id: 'root', workspaceId: 'ws-1', parentId: null, orderKey: 'a0', content: 'Page title'})
-      await tx.create({id: 'surface-root', workspaceId: 'ws-1', parentId: null, orderKey: 'a2', content: 'Surface page'})
+      await tx.create({id: 'view-root', workspaceId: 'ws-1', parentId: null, orderKey: 'a2', content: 'View page'})
       await tx.create({
         id: 'ui-state', workspaceId: 'ws-1', parentId: null, orderKey: 'a1',
         properties: {[topLevelBlockIdProp.name]: topLevelBlockIdProp.codec.encode('root')},
@@ -808,12 +815,12 @@ describe('content-view marking', () => {
       </AppRuntimeContextProvider>,
     )
 
-  const renderWithPlainOutliner = (id: string) =>
+  const renderWithPlainOutliner = (id: string, ContentRenderer?: typeof ViewSurfaceRenderer) =>
     render(
       <AppRuntimeContextProvider value={outlinerRuntime}>
         <BlockContextProvider initialValue={{scopeRootId: id}}>
           <ActiveContextsProvider>
-            <DefaultBlockRenderer block={repo.block(id)} />
+            <DefaultBlockRenderer block={repo.block(id)} ContentRenderer={ContentRenderer} />
           </ActiveContextsProvider>
         </BlockContextProvider>
       </AppRuntimeContextProvider>,
@@ -832,18 +839,18 @@ describe('content-view marking', () => {
     expect(shell?.getAttribute('data-block-id')).toBe('root')
   })
 
-  it('marks a slot whose renderer came as the ContentRenderer prop', async () => {
-    renderBlock('root', FacetSurfaceRenderer)
+  it('marks a slot whose view came as the ContentRenderer prop', async () => {
+    renderBlock('root', ViewSurfaceRenderer)
 
-    await waitFor(() => expect(document.querySelector('.facet-surface')).not.toBeNull())
+    await waitFor(() => expect(document.querySelector('.view-surface')).not.toBeNull())
     expect(marked()).toBe(true)
   })
 
-  it('marks a slot whose renderer won the facet', async () => {
+  it('marks a slot whose view won the facet', async () => {
     // The half a check on the prop cannot see: the caller passes nothing.
-    renderBlock('surface-root')
+    renderBlock('view-root')
 
-    await waitFor(() => expect(document.querySelector('.facet-surface')).not.toBeNull())
+    await waitFor(() => expect(document.querySelector('.view-surface')).not.toBeNull())
     expect(marked()).toBe(true)
   })
 
@@ -856,11 +863,21 @@ describe('content-view marking', () => {
     expect(marked()).toBe(false)
   })
 
-  // The plugin that is actually mounted in the app wraps both text renderers in
-  // a generated dispatcher, so the slot never sees either of them directly. A
-  // check on renderer identity read every ordinary block as a view and switched
-  // cursor-follows-scroll off app-wide; a fixture without the plugin cannot see
-  // that, which is precisely why this test mounts the real one.
+  // Renderers that draw their own block — media, a video player, a type editor,
+  // an extension's source — are the majority and declare nothing. Treating that
+  // silence as "a view" made every one of them responsible for a flag it had no
+  // reason to know about, and each miss stopped that block's row being a row.
+  it('leaves a custom renderer that draws its own block unmarked', async () => {
+    renderBlock('root', FacetSurfaceRenderer)
+
+    await waitFor(() => expect(document.querySelector('.facet-surface')).not.toBeNull())
+    expect(marked()).toBe(false)
+  })
+
+  // The plugin that is actually mounted in the app wraps the content renderer
+  // in a generated dispatcher, so the slot never sees the real one directly. A
+  // fixture without the plugin cannot see what that does to either answer,
+  // which is precisely why these two mount the real one.
   it('leaves an ordinary block unmarked through the real editing dispatcher', async () => {
     renderWithPlainOutliner('root')
 
@@ -868,11 +885,23 @@ describe('content-view marking', () => {
     expect(marked()).toBe(false)
   })
 
-  it('leaves a surface that composes the text renderer marked', async () => {
+  it('still marks a view through the real editing dispatcher', async () => {
+    // The hand-off is what this rests on: the dispatcher is what the slot sees,
+    // so a view behind it reads as an ordinary block unless the flag travels.
+    renderWithPlainOutliner('root', ViewSurfaceRenderer)
+
+    await waitFor(() => expect(document.querySelector('.view-surface')).not.toBeNull())
+    expect(marked()).toBe(true)
+  })
+
+  it('marks a view that composes the text renderer', async () => {
     // The recents shape: a real title above a list of other blocks' rows. It
-    // is still a view — its row spans the list, which is what geometry callers
-    // are asking about — even though a title renders through it.
-    renderBlock('root', TitlePlusSurfaceRenderer)
+    // declares itself a view — its row spans the list, which is what geometry
+    // callers are asking about — even though a title renders through it.
+    renderBlock('root', Object.assign(
+      (props: BlockRendererProps) => <TitlePlusSurfaceRenderer {...props} />,
+      {showsOtherBlocks: true},
+    ))
 
     await screen.findByText('Page title')
     expect(marked()).toBe(true)

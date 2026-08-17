@@ -177,5 +177,3 @@ export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
     />
   )
 }
-
-CodeMirrorContentRenderer.showsOwnContent = true

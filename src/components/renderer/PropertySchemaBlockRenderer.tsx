@@ -352,6 +352,3 @@ export const PropertySchemaBlockRenderer: BlockRenderer = Object.assign(
   },
 )
 PropertySchemaBlockRenderer.displayName = 'PropertySchemaBlockRenderer'
-
-// Draws the block itself, not a view of others — see `showsOwnContent`.
-PropertySchemaContentRenderer.showsOwnContent = true

@@ -87,6 +87,3 @@ export function MarkdownContentRenderer({
     </Container>
   )
 }
-
-// Anything wrapping this has to pass the flag along — see `showsOwnContent`.
-MarkdownContentRenderer.showsOwnContent = true

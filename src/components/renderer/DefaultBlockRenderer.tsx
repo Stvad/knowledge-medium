@@ -601,7 +601,7 @@ export function DefaultBlockRenderer(
   // `BlockRenderer` slot below — no thunk needed.
   // Takes no props of its own (it closes over `block`), but carries the
   // renderer's text/view answer so whoever mounts it can still ask.
-  const RawContentSlot = useMemo<FunctionComponent & Pick<BlockRenderer, 'showsOwnContent'>>(
+  const RawContentSlot = useMemo<FunctionComponent & Pick<BlockRenderer, 'showsOtherBlocks'>>(
     () => Object.assign(
       function BlockRawContentSlot() {
         return (
@@ -611,7 +611,7 @@ export function DefaultBlockRenderer(
         )
       },
       // Hand-off: this slot shows whatever it wraps, so it answers for it.
-      {showsOwnContent: DefaultContentRenderer.showsOwnContent},
+      {showsOtherBlocks: DefaultContentRenderer.showsOtherBlocks},
     ),
     [block, DefaultContentRenderer],
   )
@@ -693,19 +693,12 @@ export function DefaultBlockRenderer(
         () => resolveBlockContentRenderer(resolveContext).last?.render ?? DefaultContentRenderer,
         [resolveBlockContentRenderer],
       )
-      // Does this slot show the block's own TEXT, or a view of other things —
-      // a review backlog, a review deck, a recents list, a video player?
-      //
-      // The slot is where the answer gets recorded because it is what resolved
-      // the renderer, but the renderer is what KNOWS: comparing identities here
-      // reads a wrapper (the edit dispatcher stands in front of both text
-      // renderers for every ordinary block) as a view, which switches this off
-      // everywhere. `showsOwnContent` travels through wrappers instead.
-      //
-      // Absent means "a view", so an extension's surface classifies correctly
-      // without the extension knowing this exists — they live in the DB, where
-      // no sweep reaches.
-      const showsOwnContent = baseContentRenderer.showsOwnContent === true
+      // Is this slot filled with other blocks' rows (a review backlog, a deck,
+      // a recents list) rather than the block itself? The slot records it
+      // because it resolved the renderer, but the renderer is what KNOWS —
+      // comparing identities here would read every wrapper as a view, and the
+      // edit dispatcher wraps the content renderer for every block in the app.
+      const showsOtherBlocks = baseContentRenderer.showsOtherBlocks === true
       const decorateContent = runtime.read(blockContentDecoratorsFacet)
       const ContentRenderer = useMemo(
         () => decorateContent(resolveContext, baseContentRenderer),
@@ -731,7 +724,7 @@ export function DefaultBlockRenderer(
         <div
           {...contentSurfaceProps}
           data-block-visibility-target="true"
-          {...(showsOwnContent ? {} : {[BLOCK_CONTENT_VIEW_ATTRIBUTE]: 'true'})}
+          {...(showsOtherBlocks ? {[BLOCK_CONTENT_VIEW_ATTRIBUTE]: 'true'} : {})}
           className={`block-content${topLevelClass}${contentSurfaceProps.className ? ` ${contentSurfaceProps.className}` : ''}`}
           ref={contentGestureRef}
         >
