@@ -283,10 +283,9 @@ describe('blockContentPointerGestures (content-surface pointer gestures)', () =>
       expect(mockDispatchPointerAction).toHaveBeenCalledTimes(1)
     })
 
-    // Both ENDPOINTS have to be ours, and the two checks answer different
-    // questions — don't take a session that began on another block, don't act
-    // on one that ended there. Each mixed case below pins one of them; the
-    // both-ends-nested tap is caught by either, so it pins neither on its own.
+    // A touch sequence is dispatched to the element it STARTED on, so the
+    // ownership question is asked once, at touchstart — which is also the only
+    // mixed case that can actually occur.
     const tap = (
       surface: BlockContentSurfaceProps,
       outer: HTMLElement,
@@ -311,12 +310,6 @@ describe('blockContentPointerGestures (content-surface pointer gestures)', () =>
     it('does not take a tap that BEGAN on a nested surface', () => {
       const {outer, innerText, ownText} = nested()
       tap(props(), outer, innerText, ownText)
-      expect(mockDispatchPointerAction).not.toHaveBeenCalled()
-    })
-
-    it('does not take a tap that ENDED on a nested surface', () => {
-      const {outer, innerText, ownText} = nested()
-      tap(props(), outer, ownText, innerText)
       expect(mockDispatchPointerAction).not.toHaveBeenCalled()
     })
 

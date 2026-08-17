@@ -138,7 +138,12 @@ export const blockContentPointerGestures: BlockContentSurfaceContribution = cont
   /** Events on a nested block's surface belong to that block, not to us (see
    *  `ownsGestureTarget`). Load-bearing for the CAPTURE handler in particular:
    *  capture runs outer → inner, so a container would claim a nested block's
-   *  double-click before that block ever saw it. */
+   *  double-click before that block ever saw it.
+   *
+   *  For touch it is asked ONCE, at `touchstart`. Every event of a touch
+   *  sequence is dispatched to the element the touch STARTED on, so a second
+   *  check at `touchend` would re-read the same target — a foreign sequence is
+   *  already dropped by never recording its start. */
   const isOurs = (event: {currentTarget: HTMLElement; target: EventTarget | null}): boolean =>
     ownsGestureTarget(event.currentTarget, event.target)
 
@@ -164,7 +169,6 @@ export const blockContentPointerGestures: BlockContentSurfaceContribution = cont
       })
     },
     onTouchEnd: (event: TouchEvent<HTMLDivElement>) => {
-      if (!isOurs(event)) return
       const start = contentTouchStarts.get(context.block.id)
       contentTouchStarts.delete(context.block.id)
       const touch = event.changedTouches[0]
