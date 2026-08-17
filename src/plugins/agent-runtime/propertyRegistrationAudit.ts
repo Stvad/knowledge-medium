@@ -152,9 +152,14 @@ const undeclaredFix =
 
 const brokenDefinitionFix =
   'A definition block exists for this name but the workspace cannot build behavior ' +
-  'from it (unknown preset, config the codec rejects, or metadata that fails to ' +
-  'parse), so it registers no schema and the name resolves to nothing. Repair that ' +
-  'definition block — adding a second one for the same name would collide.'
+  'from it, so it registers no schema and the name resolves to nothing. Check IN ' +
+  'THIS ORDER: (1) is its preset contributed by an extension that is not installed / ' +
+  'enabled / loaded here? `tryBuildSchema` returns nothing for an unknown preset id, ' +
+  'and the definition is then perfectly valid — enabling the provider fixes it, while ' +
+  'editing the block would destroy a working preset config; (2) only if the provider ' +
+  'IS loaded, repair the block itself (config the codec rejects, or metadata that ' +
+  'fails to parse). Either way do not add a second definition for this name — it ' +
+  'would collide.'
 
 const emptyKeyFix =
   'The empty property key is a hard flip blocker: no definition can ever back it. ' +
@@ -276,8 +281,21 @@ export const auditPropertyRegistration = async (
   // change-scope, or any decode throw) contributes NO registry entry, so the
   // registry would report zero and send the operator to synthesis — creating
   // the colliding second definition `brokenDefinitionFix` warns about.
+  // Same object guard as the histogram. `json_extract` RAISES on malformed
+  // JSON, which would abort the whole audit — and the one time you most want
+  // this report is while investigating corruption, so it must degrade into an
+  // incomplete report (with `unreadableBlocks` non-zero) rather than die.
+  //
+  // Defence in depth for the malformed case specifically, not a live path:
+  // the `blocks` update triggers run `json_each(NEW.properties_json, ...)`
+  // themselves (`clientSchema.ts`), so SQLite rejects a malformed write
+  // before it lands and no SQL path can create such a row. Only disk-level
+  // corruption (issue #284), which never runs the triggers, can — and it can
+  // leave a stale `block_types` entry pointing at the corrupt row, which is
+  // what would drag it into this join. The valid-but-non-object case IS
+  // reachable and is what the guard handles day to day.
   const definitionRows = await repo.db.getAll<{name: string | null; n: number}>(
-    `SELECT json_extract(b.properties_json, ?) AS name, COUNT(*) AS n
+    `SELECT json_extract(${OBJECT_BAG}, ?) AS name, COUNT(*) AS n
        FROM blocks b
        JOIN block_types t ON t.block_id = b.id AND t.workspace_id = b.workspace_id
       WHERE t.type = ? AND b.workspace_id = ? AND b.deleted = 0

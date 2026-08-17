@@ -147,6 +147,14 @@ describe('auditPropertyRegistration', () => {
     expect(findEntry(audit, 'demo:undeclared')!.cells).toBe(1)
   })
 
+  // NOTE: the MALFORMED-JSON half of the object guard is not pinned here,
+  // and can't be: the `blocks` update triggers themselves run
+  // `json_each(NEW.properties_json, '$.types')` (clientSchema.ts), which
+  // raises on malformed JSON, so the write is rejected before it lands. Only
+  // disk-level corruption (issue #284) can produce such a row, and that
+  // bypasses the triggers. The guard is defence in depth for that case; the
+  // VALID-but-non-object half above is reachable and is pinned.
+
   it('reports a genuine empty-string key as a flip blocker through the real audit', async () => {
     await create({id: 'ok', properties: {'demo:undeclared': 'x'}})
     await create({id: 'empty'})
@@ -277,12 +285,17 @@ describe('describeUnregisteredProperty', () => {
     expect(fix).toMatch(/collid|strand/i)
   })
 
-  it('sends a broken definition block to repair, never to synthesis', () => {
+  it('checks the preset provider BEFORE telling anyone to edit a definition block', () => {
+    // `tryBuildSchema` returns nothing for a preset whose plugin isn't loaded
+    // ("preset's plugin may not be loaded", userSchemasService.ts) — the
+    // definition is then perfectly valid, and editing it would destroy a
+    // working preset config.
     const {fix} = describeUnregisteredProperty({
       property: 'demo:broken', reason: 'definition-unavailable', definitionBlocks: 1,
     })
-    expect(fix).toMatch(/repair/i)
     expect(fix).not.toMatch(/orphan\s+synthesis/i)
+    expect(fix).toMatch(/repair/i)
+    expect(fix.search(/enabl/i)).toBeLessThan(fix.search(/repair the block/i))
   })
 
   it('calls the empty key a hard flip blocker', () => {
