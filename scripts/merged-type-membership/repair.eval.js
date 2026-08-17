@@ -39,7 +39,11 @@
  *    the merge, or when exactly ONE live type definition matches the
  *    tombstone's alias/label. Anything else is reported as unresolved.
  *  - Reversible two ways: the printed `journal` replays exact prior values via
- *    mode 3 above, and each write is independently undoable in-app.
+ *    mode 3 above, and each write is independently undoable in-app. The revert
+ *    writes the cell DIRECTLY rather than through `setBlockTypes`, because that
+ *    validates newly-added tokens and a revert restores the pre-repair list —
+ *    which by definition holds the dangling token the registry does not know.
+ *    It re-checks the current value inside its own tx before overwriting.
  *
  * Options (via --data / --data-json):
  *   apply:        false (default) → audit only; true → write.
@@ -56,7 +60,9 @@
 const options = data && !Array.isArray(data) ? data : {}
 const revertEntries = Array.isArray(data) ? data : options.revert
 const APPLY = options.apply === true
-const LIMIT = Number.isInteger(options.limit) ? options.limit : 500
+// `>= 0` matters: `slice(0, -1)` would write every eligible member except the
+// last, turning a cap that reads like "touch at most N" into "touch all but N".
+const LIMIT = Number.isInteger(options.limit) && options.limit >= 0 ? options.limit : 500
 const ALLOW_HEURISTIC = options.allowHeuristic === true
 
 const workspaceId = repo.activeWorkspaceId
@@ -65,6 +71,13 @@ if (!workspaceId) {
 }
 
 const jsonOf = raw => { try { return JSON.parse(raw) } catch { return null } }
+/** A row's alias list, tolerating every malformed shape. Imported/sync-applied
+ *  data can store `alias` as an object or a number, and both `for...of` and
+ *  spread over that THROW — during audit-plan construction, so one malformed
+ *  row would abort the whole tool including for unrelated actionable tokens.
+ *  ONE helper because fixing only the site that was reported left the sibling
+ *  line carrying the identical crash. */
+const aliasList = raw => { const v = jsonOf(raw); return Array.isArray(v) ? v : [] }
 
 // ── revert mode ───────────────────────────────────────────────────────────
 if (revertEntries) {
@@ -94,14 +107,26 @@ if (revertEntries) {
     // normal entry. Restoring a previously-recorded state is exactly the case
     // where that validation is wrong, so write the cell directly, in a
     // BlockDefault tx so it stays undoable and syncs like any user edit.
-    await repo.tx(async tx => {
+    //
+    // The equality check above is a fast pre-filter only — between that query
+    // and this tx, a sync update or another window can change the cell, and
+    // overwriting it here would be exactly the clobber the check advertises
+    // against. So re-check INSIDE the tx, against the tx's own read, and let
+    // that be the authority.
+    const outcome = await repo.tx(async tx => {
       const current = await tx.get(entry.blockId)
-      if (!current || current.deleted) return
+      if (!current || current.deleted) return {skipped: 'not a live block in this workspace'}
+      const inTx = current.properties?.types
+      if (options.force !== true &&
+          JSON.stringify(inTx) !== JSON.stringify(entry.after)) {
+        return {skipped: 'types changed since the repair', current: inTx, expected: entry.after}
+      }
       await tx.update(entry.blockId, {
         properties: {...current.properties, types: [...entry.before]},
       })
+      return {restored: entry.before}
     }, {scope: 'block-default', description: 'revert merged-type-membership repair'})
-    restored.push({blockId: entry.blockId, restored: entry.before})
+    restored.push({blockId: entry.blockId, ...outcome})
   }
   return {
     mode: APPLY ? 'revert-applied' : 'revert-preview (nothing written)',
@@ -207,8 +232,7 @@ const resolveFromNames = async row => {
   // as an object or a number, and `for...of` over that THROWS. This runs while
   // building every audit entry, so one malformed tombstone would abort the
   // whole tool — including for unrelated, perfectly actionable tokens.
-  const rawAliases = jsonOf(row.tombstone_aliases)
-  for (const a of Array.isArray(rawAliases) ? rawAliases : []) {
+  for (const a of aliasList(row.tombstone_aliases)) {
     if (typeof a === 'string' && a.trim()) names.add(a.trim().toLowerCase())
   }
   if (names.size === 0) return null
@@ -221,7 +245,7 @@ const resolveFromNames = async row => {
       AND EXISTS (SELECT 1 FROM json_each(b.properties_json, '$.types') je WHERE je.value = 'block-type')`,
     [workspaceId])
   const matches = candidates.filter(c => {
-    const own = [c.content, c.label, ...(jsonOf(c.aliases) ?? [])]
+    const own = [c.content, c.label, ...aliasList(c.aliases)]
     return own.some(n => typeof n === 'string' && names.has(n.trim().toLowerCase()))
   })
   if (matches.length !== 1) {
@@ -320,11 +344,19 @@ for (const entry of plan.filter(p => p.actionable)) {
   // "nothing left to do", which is exactly wrong. The runtime processor now
   // handles this case for merges going forward.
   const tombstoned = await sql(`
-    SELECT id FROM blocks
+    SELECT id, json_extract(properties_json, '$.types') AS types FROM blocks
     WHERE workspace_id = ? AND deleted = 1 AND properties_json LIKE ?
     ORDER BY created_at, id`, [workspaceId, `%${JSON.stringify(entry.token)}%`])
   for (const dead of tombstoned) {
-    if (byMember.has(dead.id)) continue
+    // The `LIKE` matches the token ANYWHERE in the bag — a ref property holding
+    // the same id counts — so recheck the actual `types` cell, the way the
+    // runtime processor's equivalent prefilter does. Without this the tool tells
+    // you to restore a block that was never a member.
+    const deadTypes = jsonOf(dead.types)
+    if (!Array.isArray(deadTypes) || !deadTypes.includes(entry.token)) continue
+    const existing = byMember.get(dead.id)
+    // Don't let the first token seen suppress a later real one: accumulate.
+    if (existing) { if (!existing.tokens.includes(entry.token)) existing.tokens.push(entry.token); continue }
     byMember.set(dead.id, {
       blockId: dead.id, tokens: [entry.token],
       skipped: 'member is tombstoned — restore it, then re-run to repair',
