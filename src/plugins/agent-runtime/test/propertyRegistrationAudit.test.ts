@@ -124,6 +124,18 @@ describe('auditPropertyRegistration', () => {
     expect(entry!.fix).not.toMatch(/orphan\s+synthesis/i)
   })
 
+  // NOTE: "a seeded definition is credited to its EFFECTIVE (registry-
+  // normalized) name, not a drifted stored one" is NOT pinned, and I could
+  // not construct it here. Staging the divergence needs a seed-backed row
+  // whose stored name differs from the seed's declared name, and both routes
+  // are closed in-harness: writing one through `repo.tx` is refused outright
+  // (`SeededDefinitionWriteError`: "its bag is code-owned"), and a raw
+  // `db.execute` write fires no reprojection, so the registry never
+  // normalizes and the scenario evaporates. Seeds also don't materialize a
+  // definition block in this harness at all. The guard is the
+  // `definitionsByFieldId` lookup in `auditPropertyRegistration`; its
+  // rationale is recorded there.
+
   // NOTE: the "resolver is captured before any await" property (so a live
   // workspace switch mid-audit can't void the classification) is NOT pinned
   // by a test. Intercepting it needs a spy on `repo.db`, which is the shared
@@ -259,6 +271,37 @@ describe('auditPropertyRegistration', () => {
     // as a smaller problem than it is.
     expect(omitted.cells).toBe(1)
     expect(omitted.sampleBlockIds).toEqual([])
+  })
+
+  it('gives every key its own provenance budget — a high-volume key cannot starve a small one', async () => {
+    // This is the whole point of the per-key ROW_NUMBER cap over a global
+    // ORDER BY … LIMIT. Two keys are required to tell them apart: with one
+    // key the two are indistinguishable, which is why every other cap test
+    // here would pass against the starving version too.
+    // 'demo:big' sorts before 'demo:small', so a global LIMIT spends its
+    // whole budget on 'demo:big' and 'demo:small' comes back with nothing.
+    await create({id: 'b1', properties: {types: ['demo-thing'], 'demo:big': 'x'}})
+    await create({id: 'b2', properties: {types: ['demo-thing'], 'demo:big': 'x'}})
+    await create({id: 'b3', properties: {types: ['demo-thing'], 'demo:big': 'x'}})
+    await create({id: 'b4', properties: {types: ['demo-thing'], 'demo:small': 'x'}})
+
+    const audit = await auditPropertyRegistration(repo, WS, {blocksPerKey: 1})
+
+    expect(findEntry(audit, 'demo:big')!.sampleBlockIds).toHaveLength(1)
+    expect(findEntry(audit, 'demo:small')!.sampleBlockIds).toEqual(['b4'])
+  })
+
+  it('clamps a degenerate blocksPerKey instead of silently reporting every key as untyped', async () => {
+    // `rn` starts at 1, so an unclamped 0 filters EVERY provenance row while
+    // leaving `provenanceOmitted` unset — indistinguishable from "sampled,
+    // and genuinely has no types".
+    await create({id: 'b1', properties: {types: ['demo-thing'], 'demo:undeclared': 'x'}})
+
+    const audit = await auditPropertyRegistration(repo, WS, {blocksPerKey: 0})
+    const entry = findEntry(audit, 'demo:undeclared')!
+
+    expect(entry.sampleBlockIds).toEqual(['b1'])
+    expect(entry.types).toEqual([{type: 'demo-thing', sampledBlocks: 1}])
   })
 
   it('samples at most blocksPerKey blocks for provenance while keeping the exact cell count', async () => {

@@ -143,18 +143,23 @@ const SAMPLES_PER_KEY = 3
  *  corrupt scalar cell would surface as a phantom empty-string key and be
  *  reported as a hard flip blocker.
  *
- *  KEEP THE `CASE` (and, for the `NOT_` twin, keep it a `WHERE` conjunct).
- *  SQLite does NOT short-circuit a bare `json_valid(x) AND json_type(x)=…`
- *  boolean expression — both function opcodes run and `json_type` raises
- *  `malformed JSON`. It is the `CASE WHEN` that compiles to a real `IfNot`
- *  jump skipping the second call. So flattening this into a plain boolean
- *  expression — a computed column, a `SELECT` list item — silently
- *  reintroduces the abort this guard exists to prevent. */
-const OBJECT_BAG = `CASE WHEN json_valid(b.properties_json) AND json_type(b.properties_json) = 'object'
-                        THEN b.properties_json ELSE '{}' END`
-/** The same predicate, for counting the rows the guard excludes. */
-const NOT_OBJECT_BAG =
-  `NOT (json_valid(properties_json) AND json_type(properties_json) = 'object')`
+ *  KEEP THE `CASE`, and keep the `NOT_` twin a `WHERE` conjunct. Whether
+ *  SQLite short-circuits this `AND` depends on the CONTEXT, which is easy to
+ *  break by accident (all verified against sqlite3 3.51):
+ *    - in a `WHERE` clause it does — the row is filtered, nothing raises;
+ *    - in a value-producing position (a `SELECT` list item, a computed
+ *      column) it does NOT — both function opcodes run and `json_type`
+ *      raises `malformed JSON`;
+ *    - inside `CASE WHEN … THEN … ELSE … END` it does, because the `CASE`
+ *      compiles to a real jump over the second call.
+ *  So hoisting this predicate into a `SELECT` list, or dropping the `CASE`
+ *  to "simplify", silently reintroduces the abort this guard prevents. */
+const IS_OBJECT_BAG =
+  `json_valid(b.properties_json) AND json_type(b.properties_json) = 'object'`
+const OBJECT_BAG = `CASE WHEN ${IS_OBJECT_BAG} THEN b.properties_json ELSE '{}' END`
+/** Exact logical complement, derived from the same source so the two can
+ *  never drift into disagreeing about which rows the histogram skipped. */
+const NOT_OBJECT_BAG = `NOT (${IS_OBJECT_BAG})`
 
 const undeclaredFix =
   'Nothing declares this name — no definition block, no code seed — so property ' +
@@ -286,8 +291,8 @@ export const auditPropertyRegistration = async (
   )
 
   const unreadable = await repo.db.get<{n: number}>(
-    `SELECT COUNT(*) AS n FROM blocks
-      WHERE workspace_id = ? AND deleted = 0 AND ${NOT_OBJECT_BAG}`,
+    `SELECT COUNT(*) AS n FROM blocks b
+      WHERE b.workspace_id = ? AND b.deleted = 0 AND ${NOT_OBJECT_BAG}`,
     [workspaceId],
   )
 
@@ -310,17 +315,28 @@ export const auditPropertyRegistration = async (
   // leave a stale `block_types` entry pointing at the corrupt row, which is
   // what would drag it into this join. The valid-but-non-object case IS
   // reachable and is what the guard handles day to day.
-  const definitionRows = await repo.db.getAll<{name: string | null; n: number}>(
-    `SELECT json_extract(${OBJECT_BAG}, ?) AS name, COUNT(*) AS n
+  const definitionRows = await repo.db.getAll<{id: string; name: string | null}>(
+    `SELECT b.id AS id, json_extract(${OBJECT_BAG}, ?) AS name
        FROM blocks b
        JOIN block_types t ON t.block_id = b.id AND t.workspace_id = b.workspace_id
-      WHERE t.type = ? AND b.workspace_id = ? AND b.deleted = 0
-      GROUP BY name`,
+      WHERE t.type = ? AND b.workspace_id = ? AND b.deleted = 0`,
     [`$."${propertyNameProp.name}"`, PROPERTY_SCHEMA_TYPE, workspaceId],
   )
+  // Count each definition under its EFFECTIVE name, which is not always the
+  // stored one. `buildPropertyDefinitionRegistry` rewrites a seed-backed
+  // row's name to the seed's DECLARED name when the stored value has drifted
+  // (older client, import, sync). Counting the raw column would credit such a
+  // block to the stale key, so a cell still using that key — genuinely
+  // orphaned — would be told to "repair the definition" and steered away from
+  // the synthesis it actually needs, while the definition is in fact fine.
+  // Rows the registry doesn't know (metadata that fails to parse) fall back
+  // to the stored name, which is the whole reason this reads `blocks` at all.
   const definitionBlocksByName = new Map<string, number>()
   for (const row of definitionRows) {
-    if (typeof row.name === 'string') definitionBlocksByName.set(row.name, row.n)
+    const effectiveName = registry.definitionsByFieldId.get(row.id)?.name
+      ?? (typeof row.name === 'string' ? row.name : undefined)
+    if (effectiveName === undefined) continue
+    definitionBlocksByName.set(effectiveName, (definitionBlocksByName.get(effectiveName) ?? 0) + 1)
   }
 
   const unregistered: UnregisteredProperty[] = []
@@ -352,9 +368,14 @@ export const auditPropertyRegistration = async (
   unregistered.sort((left, right) =>
     right.cells - left.cells || left.property.localeCompare(right.property))
 
+  // Clamp rather than trust. `rn` starts at 1, so `blocksPerKey: 0` would
+  // filter EVERY provenance row while leaving `provenanceOmitted` unset —
+  // every in-cap key would read as "sampled, genuinely no types" when in
+  // fact nothing was sampled. A negative `keys` is worse than useless too:
+  // `slice(0, -1)` keeps all-but-the-last rather than meaning "none".
   await attachProvenance(repo, workspaceId, unregistered, {
-    keys: limits.keys ?? PROVENANCE_KEY_LIMIT,
-    blocksPerKey: limits.blocksPerKey ?? PROVENANCE_BLOCKS_PER_KEY,
+    keys: Math.max(0, Math.floor(limits.keys ?? PROVENANCE_KEY_LIMIT)),
+    blocksPerKey: Math.max(1, Math.floor(limits.blocksPerKey ?? PROVENANCE_BLOCKS_PER_KEY)),
   })
 
   return {
