@@ -2513,28 +2513,19 @@ export class Repo {
     if (this.isReadOnly || !workspaceId || this._workspaceBackfills.length === 0) return
     const backfills = this._workspaceBackfills
     {
-      // Gate on the download queue draining, NOT on `onFirstSync` (`hasSynced`
-      // persists across sessions, so it fires synchronously on every warm
-      // client and gates nothing). Two hazards this closes, both of which bite
-      // a device that synced days ago and opens today:
+      // A backfill must not write while this device is behind the server: its
+      // writes upload a whole `properties_json` bag, so a stale row drops
+      // concurrent edits from elsewhere (#237), and its one-shot marker makes a
+      // half-scanned run permanent.
       //
-      //   1. the one-shot marker. `runWorkspaceBackfills` records it after any
-      //      clean run, so a pass that scanned a half-downloaded graph burns
-      //      its only attempt — the daily-note:date regression exactly.
-      //   2. worse, lost edits. `apply_block_patches` assigns `properties_json`
-      //      wholesale (column-LWW; per-key merge is unbuilt — #237), so a
-      //      write built from a stale local row uploads the whole stale bag and
-      //      drops property edits another device made that haven't arrived yet.
-      //      A backfill is the worst shape for this: unattended, across every
-      //      matching row, seconds after open.
+      // NOT `onFirstSync` — `hasSynced` persists across sessions, so it fires
+      // synchronously on every warm client and gates nothing.
       //
-      // A session that never connects never runs its backfills — correct for
-      // catch-up work, which retries on the next open.
-      // Gate FIRST, then defer to idle — not the other way round. An idle job
-      // that waits on the gate from inside would never settle on a device that
-      // never connects, leaving a promise pending forever in the drain set
-      // (and hanging `awaitWorkspaceBackfills`). Arming the gate here means a
-      // session that never catches up simply never schedules a job.
+      // Gate FIRST, then defer to idle: an idle job that awaited the gate from
+      // inside would never settle on a device that never connects, parking a
+      // promise in the drain set forever and hanging
+      // `awaitWorkspaceBackfills`. A session that never catches up therefore
+      // schedules nothing, which is correct for catch-up work.
       const arm = (): void => {
         this.disposeBackfillSyncGate?.()
         this.disposeBackfillSyncGate = this.backfillSyncGate(() => {
