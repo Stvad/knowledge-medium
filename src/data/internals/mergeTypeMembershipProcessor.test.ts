@@ -387,6 +387,38 @@ describe('core.retargetMergedTypeMembership', () => {
     expect(env.read(RAW_SOURCE)!.deleted).toBe(true)
   })
 
+  // Tolerating the malformed cell must not mean BELIEVING it. Reading a scalar
+  // `types: "block-type"` as the list `["block-type"]` let a malformed ordinary
+  // block pass the ownership gate — the gate that exists to stop a
+  // non-definition from mass-retagging a type's members. The codec and the type
+  // registry both reject that row as a type; this has to agree with them.
+  // The destination must be a block with its OWN valid `types` cell: that is
+  // what makes the merge complete at all. Merging into a block that LACKS the
+  // key copies the malformed cell onto it, and typeify then throws while
+  // decoding — so that variant aborts before this processor is ever consulted,
+  // and cannot exercise the gate.
+  it('does not treat a malformed source cell as proof it was a type definition', async () => {
+    const RAW_SOURCE = '9999bbbb-9999-4999-8999-999999999999'
+    // A member carrying the malformed block's id as a token — imported data can
+    // do this. Without the fix this is what gets silently retagged.
+    await createMember(MEMBER, 'carries the raw source id as a token', RAW_SOURCE)
+    await env.h.db.writeTransaction(async tx => {
+      await tx.execute(
+        `INSERT INTO blocks (id, workspace_id, parent_id, order_key, content,
+                             properties_json, references_json, created_at, updated_at,
+                             created_by, updated_by, deleted)
+         VALUES (?, ?, 'p', 'd0', 'malformed non-definition', ?, '[]', 1, 1, 'peer', 'peer', 0)`,
+        [RAW_SOURCE, WS, JSON.stringify({[typesProp.name]: BLOCK_TYPE_TYPE})])
+    })
+
+    await env.repo.mutate.merge({
+      intoId: TYPE_B, fromId: RAW_SOURCE, contentStrategy: 'keepTarget'})
+
+    // Untouched: a malformed cell is not evidence that this block was the type
+    // definition owning that token.
+    expect(getBlockTypes(env.read(MEMBER)!)).toEqual([RAW_SOURCE])
+  })
+
   // `block_types` structurally cannot see these rows (its update trigger
   // re-inserts only `WHEN deleted = 0`), so without the separate tombstone
   // sweep a restore after the merge resurrects the block silently un-typed.

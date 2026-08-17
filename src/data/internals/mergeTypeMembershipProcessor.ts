@@ -130,23 +130,35 @@ const resolveTerminalDestination = (
   return null
 }
 
-/** The string tokens in a row's raw `types` cell, tolerating every malformed
- *  shape by ignoring what it can't read.
+/** A row's `types` tokens when the cell is WELL-FORMED, else `null`.
  *
- *  `getBlockTypes`/`hasBlockType` THROW on a malformed cell (unlike
- *  `getAliases`, which has exactly this tolerance). Deciding the source gate
- *  with those would mean a merge whose SOURCE carries a malformed synced
- *  `types` cell aborts wholesale — while this same processor deliberately
- *  tolerates that shape on every MEMBER row. The source deserves the same
- *  treatment: `mergeProperties` keeps the destination's valid cell in that
- *  case, so the merge itself is perfectly well-defined.
+ *  Two requirements that pull in opposite directions, and conflating them was a
+ *  real bug:
+ *
+ *   - Don't THROW. `getBlockTypes`/`hasBlockType` throw on a malformed cell
+ *     (unlike `getAliases`, which has exactly this tolerance), so deciding the
+ *     source gate with those would roll back a merge whose SOURCE carries a
+ *     malformed synced cell — while this same processor deliberately tolerates
+ *     that shape on every MEMBER row.
+ *   - Don't ACCEPT. A malformed cell is not evidence of anything. Reading
+ *     `types: "block-type"` (a scalar — the sync-applied shape) as the list
+ *     `["block-type"]` made a malformed ordinary block pass the ownership gate
+ *     that exists precisely to stop a non-definition from mass-retagging a
+ *     type's members. The codec and the type-definition registry both REJECT
+ *     that row as a type; this must agree with them, not out-guess them.
+ *
+ *  So: tolerate the decode failure, and treat it as NON-owning. `null` is the
+ *  distinction — "this cell says nothing" is not "this cell says no tokens".
  *
  *  (The asymmetry in `getBlockTypes` is worth closing at the source; until it
  *  is, this is the local defence.) */
-const rawTypeTokens = (row: BlockData): readonly string[] => {
+const wellFormedTypeTokens = (row: BlockData): readonly string[] | null => {
   const raw = row.properties[typesProp.name]
-  const cell = Array.isArray(raw) ? raw : [raw]
-  return cell.filter((el): el is string => typeof el === 'string')
+  if (raw === undefined) return []
+  if (!Array.isArray(raw)) return null
+  return raw.every((el): el is string => typeof el === 'string')
+    ? (raw as readonly string[])
+    : null
 }
 
 /** `unchanged` — this cell doesn't name the merged-away type; `rewritten` —
@@ -269,7 +281,9 @@ const retargetTypeMembership = async (
   // visible to the audit query and are repairable out of band, whereas a false
   // POSITIVE silently mass-retags an entire seeded type.
   const from = await ctx.tx.get(event.fromId)
-  if (from === null || !rawTypeTokens(from).includes(BLOCK_TYPE_TYPE)) return
+  if (from === null) return
+  const fromTokens = wellFormedTypeTokens(from)
+  if (fromTokens === null || !fromTokens.includes(BLOCK_TYPE_TYPE)) return
 
   const members = await ctx.db.getAll<{id: string}>(
     SELECT_TYPE_MEMBER_IDS_SQL,
