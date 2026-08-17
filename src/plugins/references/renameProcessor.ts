@@ -81,7 +81,7 @@ import {
   type Tx,
 } from '@/data/api'
 import { aliasesProp, getAliases } from '@/data/properties'
-import { parseExactReferenceBlockContent } from '@/data/referenceBlock'
+import { FIELD_FORM_MARKER, parseExactReferenceBlockContent } from '@/data/referenceBlock'
 import {
   deriveReferenceColumns,
   sameTxReferenceTargetLookups,
@@ -165,14 +165,29 @@ const SELECT_BACKLINK_SOURCES_SQL = `
  *  written, and slice 1 of #443 is the recorded cost of treating a derived
  *  column as the signal when the content is right there.
  *
- *  `exact.alias` is TRIMMED by the whole-block parser while
- *  `block_references.alias` is not, so a `::[[ α ]]` row whose released
- *  alias carries surrounding whitespace reads as not-marked and takes the
- *  ordinary pinned tier. Conservative in the safe direction, and only
- *  reachable for an alias stored with padding. */
+ *  TWO parsers, each asked what it alone can answer. The whole-block parse
+ *  establishes the SHAPE — `::` plus exactly one wikilink span, which is
+ *  what makes the row a marked name row — and the inline parse supplies the
+ *  ALIAS to compare, because that is the parser that produced the
+ *  `block_references.alias` this enumeration is keyed on.
+ *
+ *  Using `exact.alias` for the comparison was wrong, and not merely
+ *  conservatively so (Codex on PR #484). The whole-block parser TRIMS its
+ *  alias while the inline one does not, so a `::[[ α ]]` row whose alias is
+ *  stored with padding — `tx.setProperty(aliasesProp, ['Old '])` is an
+ *  existing, tested case — matched the edge but failed this equality, fell
+ *  through to the pinned tier, and got `::[ α ](((id)))`: the invented
+ *  label this whole arm exists to prevent, plus sanitization and its
+ *  warning. Comparing the raw span makes the two agree by construction. */
 const isMarkedNameRowFor = (content: string, alias: string): boolean => {
-  const exact = parseExactReferenceBlockContent(content)
-  return exact?.kind === 'alias' && exact.fieldForm && exact.alias === alias
+  const trimmed = content.trim()
+  const exact = parseExactReferenceBlockContent(trimmed)
+  if (exact?.kind !== 'alias' || !exact.fieldForm) return false
+  const marks = parseReferences(trimmed)
+  return marks.length === 1
+    && marks[0].alias === alias
+    && marks[0].startIndex === FIELD_FORM_MARKER.length
+    && marks[0].endIndex === trimmed.length
 }
 
 /** Replacement form for a single removed alias α — the rename ladder,

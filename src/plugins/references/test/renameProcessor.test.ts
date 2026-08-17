@@ -654,6 +654,31 @@ describe('rename — the references-parse fence (§11 group 4)', () => {
     expect((await env.read('other'))!.content).toBe('see [[status]] please')
   })
 
+  it('falls back to a scan when the alias holds a NUL byte, instead of throwing', async () => {
+    // Codex on PR #484, and reachable end-to-end: nothing rejects a NUL in an
+    // alias — `parseReferences` accepts it, `setProperty` stores it,
+    // `block_aliases` indexes it. FTS5 reads its query as a C string, so
+    // `MATCH '"[[a<NUL>b]]"'` raises `unterminated string`. This runs INSIDE
+    // the user's transaction, so the throw would roll their whole rename back
+    // — not merely miss a rewrite. The fence degrades to an `instr` scan.
+    const NUL = '\u0000'
+    const alias = `a${NUL}b`
+    await seedTarget(PIN_TARGET, '', [alias])
+    await seedSource('s', `see [[${alias}]] please`)
+
+    await env.repo.tx(
+      tx => tx.setProperty(PIN_TARGET, aliasesProp, []),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await flush()
+
+    // The tx committed (a throw would have rolled it back, leaving the alias)
+    // and the span was rewritten like any other.
+    expect(JSON.parse((await env.read(PIN_TARGET))!.properties_json).alias)
+      .toEqual([])
+    expect((await env.read('s'))!.content).toBe(`see [${alias}](((${PIN_TARGET}))) please`)
+  })
+
   it('leaves an undrained source alone on a HANDOFF', async () => {
     // The fence is deliberately release-only, and this locks in that the
     // handoff path stays a content no-op: `[[Shared]]` already resolves
@@ -771,6 +796,28 @@ describe('rename — marked name rows re-key to canonical ::((A)) (§11 group 2)
     } finally {
       warn.mockRestore()
     }
+  })
+
+  it('re-keys a marked row whose alias is stored with surrounding whitespace', async () => {
+    // Codex on PR #484. The whole-block parser trims its alias, the inline one
+    // (which produced the `block_references.alias` this enumeration keys on)
+    // does not — so a padded alias matched the edge but failed the marked-row
+    // test, fell through to the pinned tier, and got `::[ Status ](((id)))`.
+    // A padded alias is not hypothetical: `setProperty(aliasesProp, ['Old '])`
+    // is an existing tested case in this file.
+    await seedTarget(PIN_TARGET, '', ['Status '])
+    await seedSource('marked', '::[[Status ]]')
+    expect(await blockReferences('marked', PIN_TARGET)).toEqual([{alias: 'Status '}])
+
+    await env.repo.tx(
+      tx => tx.setProperty(PIN_TARGET, aliasesProp, []),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await flush()
+
+    expect((await env.read('marked'))!.content).toBe(`::((${PIN_TARGET}))`)
+    expect(await derivedColumns('marked'))
+      .toEqual({reference_target_id: PIN_TARGET, is_field_form: 1})
   })
 
   it('leaves a clean 1-for-1 rename in wikilink form, marked or not', async () => {

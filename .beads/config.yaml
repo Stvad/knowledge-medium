@@ -75,6 +75,6 @@
 agent:
     profile: team-maintainer
 sync:
-    remote: "git+ssh://git@github.com/Stvad/knowledge-medium-beads.git"
+    remote: "git+https://github.com/Stvad/knowledge-medium-beads.git"
 prime:
     max-memory-chars: 30000

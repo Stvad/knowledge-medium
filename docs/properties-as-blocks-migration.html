@@ -336,6 +336,17 @@
 
 <aside class="doc-status">
   <strong>Status: current (planning), with one §9 correction.</strong>
+  <strong>Last verified against code: 2026-08-17, master <code>26416b5</code>.</strong>
+  That verification covers the entries marked <strong>landed</strong> below
+  &mdash; each was checked against the implementation on this branch, not
+  against the pre-implementation snapshots this banner cites further down for
+  the document's original authorship. Everything NOT marked landed remains at
+  its original verification state, which for most of the document is the
+  2026-07-01 rewrite: planning prose, not a description of shipped code. In
+  particular the migration is still <em>dark</em> &mdash;
+  <code>workspaces.properties_migration</code> is <code>'cell'</code>
+  everywhere, no slice-C backfill exists, and nothing here should be read as
+  describing behaviour a user can observe today.
   The rename-rewrite requirements in §9 were reconciled 2026-07-30 against
   <a href="https://github.com/Stvad/knowledge-medium/issues/461">#461</a>
   (<code>references.renameBacklinks</code> moved post-commit &rarr; same-tx):

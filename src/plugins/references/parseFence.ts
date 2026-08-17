@@ -75,6 +75,20 @@ const SELECT_FTS_CANDIDATES_SQL = `
   ORDER BY b.order_key, b.id
 `
 
+/** Same candidate set, without FTS5 — for a needle FTS5 cannot be ASKED
+ *  about. Same columns, filters and ordering, so the two are
+ *  interchangeable from the caller's side; only the cost differs (this one
+ *  scans the workspace). */
+const SELECT_SCAN_CANDIDATES_SQL = `
+  SELECT b.id AS sourceId, b.content AS content
+  FROM blocks b
+  WHERE b.workspace_id = ?
+    AND instr(b.content, ?) > 0
+    AND b.deleted = 0
+    AND b.content != ''
+  ORDER BY b.order_key, b.id
+`
+
 /** An FTS5 phrase matching `text` literally. Double-quoting makes every
  *  character inside it user text rather than FTS5 syntax — which the
  *  wikilink form needs, since `[`, `]` and `*` are all operators
@@ -84,6 +98,22 @@ const SELECT_FTS_CANDIDATES_SQL = `
  *  shortest wikilink form is `[[a]]` at five, so no alias is too short to
  *  be searchable. */
 const ftsPhrase = (text: string): string => `"${text.replace(/"/g, '""')}"`
+
+/** A NUL byte is the one character no FTS5 query string can carry: the
+ *  query is read as a C string, so `MATCH '"[[a<NUL>b]]"'` fails with
+ *  `unterminated string` rather than matching nothing.
+ *
+ *  It has to be handled rather than assumed away, because it is REACHABLE:
+ *  nothing rejects a NUL in an alias. `parseReferences` accepts it,
+ *  `tx.setProperty(aliasesProp, …)` stores it, `block_aliases` indexes it,
+ *  and SQLite round-trips the content byte-for-byte. Measured all four.
+ *  And a throw here is not a missed rewrite — this runs inside the user's
+ *  transaction, so it would roll their whole rename back.
+ *
+ *  Only NUL. Every other character an alias can hold survives the phrase
+ *  quoting above, including the FTS5 operators — `"`, `*`, `^`, newline
+ *  and backslash were each checked against the real engine. */
+const containsNul = (text: string): boolean => text.includes('\u0000')
 
 /**
  * Sources carrying a `[[alias]]` span in their CONTENT right now,
@@ -112,9 +142,16 @@ export const wikilinkSourcesByContent = async (
   alias: string,
 ): Promise<ReferrerRow[]> => {
   if (alias === '') return []
+  const needle = `[[${alias}]]`
+  // Degrade to a scan rather than throw. FTS5 cannot be asked about a NUL
+  // (see `containsNul`), and this runs inside the user's transaction, so
+  // letting the query throw would roll their rename back. `instr` reads
+  // the stored TEXT rather than a query string and matches an embedded NUL
+  // correctly — verified against the engine, not assumed, since plenty of
+  // SQL string functions do truncate there.
   const candidates = await db.getAll<ReferrerRow>(
-    SELECT_FTS_CANDIDATES_SQL,
-    [workspaceId, ftsPhrase(`[[${alias}]]`)],
+    containsNul(needle) ? SELECT_SCAN_CANDIDATES_SQL : SELECT_FTS_CANDIDATES_SQL,
+    [workspaceId, containsNul(needle) ? needle : ftsPhrase(needle)],
   )
   return candidates.filter(row =>
     parseReferences(row.content).some(mark => mark.alias === alias))
