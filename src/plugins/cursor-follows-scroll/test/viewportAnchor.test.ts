@@ -183,6 +183,8 @@ describe('resolveViewportAnchor', () => {
       document.body.appendChild(panel)
 
       const container = document.createElement('div')
+      // Focal row: only the focal block's content slot can hold a whole view.
+      container.className = 'top-level-block'
       container.setAttribute('data-block-nav-item', 'true')
       container.setAttribute('data-block-id', 'backlog')
       container.setAttribute('data-render-scope-id', SCOPE)
@@ -227,6 +229,21 @@ describe('resolveViewportAnchor', () => {
       ])
 
       expect(anchorFor(panel, 'backlog')).toEqual({blockId: 'note-b', renderScopeId: SCOPE})
+    })
+
+    // An `!((id))` embed mounts a full nav row inside its HOST's content, so
+    // "holds other rows" alone would classify an ordinary outline block as a
+    // view — and then re-anchor away from it while it sat fully on screen.
+    it('leaves an ordinary row that merely contains an embed alone', () => {
+      // The embedded row is on screen, so a misclassified host hands it the
+      // cursor — the assertion below is only meaningful because of that.
+      const panel = buildBacklog([{blockId: 'embedded', top: 40}], 20)
+      const host = panel.querySelector<HTMLElement>('[data-block-id="backlog"]')
+      if (!host) throw new Error('no host row')
+      host.classList.remove('top-level-block')
+      host.setAttribute('data-block-id', 'host')
+
+      expect(anchorFor(panel, 'host')).toBeNull()
     })
 
     it('declines rather than falling back to it when no note is on screen', () => {

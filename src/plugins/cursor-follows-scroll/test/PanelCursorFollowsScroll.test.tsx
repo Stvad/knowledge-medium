@@ -99,7 +99,13 @@ const buildPanel = (panelId: string, rows: ReadonlyArray<[string, number]>): Pan
   return {
     port,
     addRow,
-    addNestingRow: (blockId, top, height) => addRow(blockId, top, port, height),
+    addNestingRow: (blockId, top, height) => {
+      const target = addRow(blockId, top, port, height)
+      // Only the FOCAL row's content slot can hold a whole view; an ordinary
+      // row that merely contains an embed is not one.
+      shells.get(blockId)?.classList.add('top-level-block')
+      return target
+    },
     shellOf: (blockId) => {
       const shell = shells.get(blockId)
       if (!shell) throw new Error(`no row ${blockId}`)
@@ -381,12 +387,21 @@ describe('PanelCursorFollowsScroll', () => {
     const container = dom.addNestingRow('backlog', -600, 2000)
     dom.addRow('note-a', -400, container)
     await focusBlock(panel, 'backlog', {renderScopeId: SCOPE})
+    const fence = await withFence()
 
-    render(<PanelCursorFollowsScroll block={panel}/>)
+    render(
+      <>
+        <PanelCursorFollowsScroll block={panel}/>
+        <PanelCursorFollowsScroll block={fence.fencePanel}/>
+      </>,
+    )
 
     // Scrolled, and nothing inside the container is on screen to anchor to.
+    // The fence settles on the same delay, so its arrival is the proof this
+    // panel's settle has already run and found nothing — no wall-clock wait.
     dom.scroll()
-    await new Promise(resolve => setTimeout(resolve, 200))
+    fence.scrollAway()
+    await fence.settled()
     expect(peekFocusedBlockLocation(panel)?.blockId).toBe('backlog')
 
     // A note mounts into view, with no scroll of its own. The mutation path
