@@ -937,10 +937,20 @@ cli
 cli
   .command('audit-properties', wireDescription('audit-properties'))
   .option('--workspace <id>', 'Assert the workspace being audited (defaults to the active one; a workspace whose definition registry is not loaded is refused, not reported on)')
-  .action(async (options: {workspace?: string}) => {
+  .action(async (options: {workspace?: string | number}) => {
+    // Test PRESENCE, not truthiness. CAC parses `--workspace ""` (a shell
+    // expanding an unset variable) into the NUMBER 0 — falsy but present — so
+    // a truthiness check drops the assertion here and the command layer's
+    // empty-value rejection never runs, silently auditing the ACTIVE
+    // workspace. That is precisely the wrong-graph outcome this option exists
+    // to prevent. Normalize the 0 artifact back to an empty string so the
+    // purpose-built error is what the user actually sees.
+    const asserted = options.workspace === undefined
+      ? undefined
+      : options.workspace === 0 ? '' : String(options.workspace)
     await runAndPrint({
       type: 'audit-properties',
-      ...(options.workspace ? {workspaceId: options.workspace} : {}),
+      ...(asserted !== undefined ? {workspaceId: asserted} : {}),
     })
   })
 
