@@ -78,6 +78,12 @@ const jsonOf = raw => { try { return JSON.parse(raw) } catch { return null } }
  *  ONE helper because fixing only the site that was reported left the sibling
  *  line carrying the identical crash. */
 const aliasList = raw => { const v = jsonOf(raw); return Array.isArray(v) ? v : [] }
+/** Escape SQLite LIKE metacharacters. `JSON.stringify` escapes JSON syntax but
+ *  NOT `%`/`_`, so an id containing either would match unrelated merge records —
+ *  and since the exact `fromId` check happens only AFTER `LIMIT 20`, those false
+ *  matches can fill the window and hide the real merge, reporting a repairable
+ *  token as unresolved. Pair with `ESCAPE '\\'` in the query. */
+const likeEscape = value => value.replace(/[\\%_]/g, c => `\\${c}`)
 
 // ── revert mode ───────────────────────────────────────────────────────────
 if (revertEntries) {
@@ -195,12 +201,12 @@ const resolveFromCommandLog = async token => {
   for (let i = 0; i < 10; i++) {
     const rows = await sql(`
       SELECT mutator_calls, created_at FROM command_events
-      WHERE workspace_id = ? AND mutator_calls LIKE ?
+      WHERE workspace_id = ? AND mutator_calls LIKE ? ESCAPE '\\'
       ORDER BY created_at ASC LIMIT 20`,
       // `JSON.stringify`, not raw interpolation: an id containing `"` or `\\`
       // is stored ESCAPED in `mutator_calls`, so the raw form would never match
       // and the token would be reported unresolved despite having provenance.
-      [workspaceId, `%"fromId":${JSON.stringify(current)}%`])
+      [workspaceId, `%${likeEscape(`"fromId":${JSON.stringify(current)}`)}%`])
     let next
     for (const row of rows) {
       const calls = jsonOf(row.mutator_calls)
