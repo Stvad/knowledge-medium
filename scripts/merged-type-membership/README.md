@@ -119,7 +119,12 @@ Options: `apply` (default false), `limit` (default 500), `allowHeuristic`
   another dangling token.
 - Reversible two ways: the printed journal replays the exact prior lists (and
   refuses to clobber anything edited since the repair unless `force: true`), and
-  every individual write is undoable in-app.
+  every individual write is undoable in-app. The revert path deliberately writes
+  the cell directly instead of going through `setBlockTypes`: that validates
+  every newly-added token against the registry, and a revert restores the
+  PRE-repair list, which by definition holds the dangling token that is absent
+  from `repo.types`. The validated path can therefore never replay this tool's
+  own journal — it would abort on the first ordinary entry.
 - A destination that is not itself a type definition is reported and skipped, so
   a repair can't quietly move members onto a plain page.
 - A malformed `types` cell is reported, never rewritten — `getBlockTypes` throws

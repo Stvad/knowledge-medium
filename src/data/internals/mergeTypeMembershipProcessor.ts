@@ -130,28 +130,18 @@ const resolveTerminalDestination = (
   return null
 }
 
-/** A row's `types` tokens when the cell is WELL-FORMED, else `null`.
+/** A row's `types` tokens when the cell is WELL-FORMED, else `null` — where
+ *  `null` means "this cell says nothing", which is NOT "this cell says no
+ *  tokens".
  *
- *  Two requirements that pull in opposite directions, and conflating them was a
- *  real bug:
- *
- *   - Don't THROW. `getBlockTypes`/`hasBlockType` throw on a malformed cell
- *     (unlike `getAliases`, which has exactly this tolerance), so deciding the
- *     source gate with those would roll back a merge whose SOURCE carries a
- *     malformed synced cell — while this same processor deliberately tolerates
- *     that shape on every MEMBER row.
- *   - Don't ACCEPT. A malformed cell is not evidence of anything. Reading
- *     `types: "block-type"` (a scalar — the sync-applied shape) as the list
- *     `["block-type"]` made a malformed ordinary block pass the ownership gate
- *     that exists precisely to stop a non-definition from mass-retagging a
- *     type's members. The codec and the type-definition registry both REJECT
- *     that row as a type; this must agree with them, not out-guess them.
- *
- *  So: tolerate the decode failure, and treat it as NON-owning. `null` is the
- *  distinction — "this cell says nothing" is not "this cell says no tokens".
- *
- *  (The asymmetry in `getBlockTypes` is worth closing at the source; until it
- *  is, this is the local defence.) */
+ *  Both halves are load-bearing, and the obvious tolerant decode gets one of
+ *  them wrong. It must not THROW: `getBlockTypes`/`hasBlockType` do, on a
+ *  malformed cell, so using them here would let a malformed synced cell on the
+ *  merge source roll back the whole merge. It must also not ACCEPT: reading the
+ *  scalar `types: "block-type"` as `["block-type"]` would let a malformed
+ *  ordinary block satisfy the ownership gate, and the codec and type registry
+ *  both reject that row as a type. Agree with them rather than out-guessing
+ *  them. */
 const wellFormedTypeTokens = (row: BlockData): readonly string[] | null => {
   const raw = row.properties[typesProp.name]
   if (raw === undefined) return []

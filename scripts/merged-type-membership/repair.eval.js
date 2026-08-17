@@ -86,7 +86,21 @@ if (revertEntries) {
       continue
     }
     if (!APPLY) { restored.push({blockId: entry.blockId, would_restore: entry.before}); continue }
-    await repo.setBlockTypes(entry.blockId, entry.before)
+    // NOT `setBlockTypes`: it validates every newly-added token against the
+    // registry (`requireTypeContribution`) and throws for an unregistered one.
+    // A revert restores the PRE-repair list, which by definition contains the
+    // dangling token that is absent from `repo.types` — so the validated path
+    // can never replay this tool's own journal, and would abort on the first
+    // normal entry. Restoring a previously-recorded state is exactly the case
+    // where that validation is wrong, so write the cell directly, in a
+    // BlockDefault tx so it stays undoable and syncs like any user edit.
+    await repo.tx(async tx => {
+      const current = await tx.get(entry.blockId)
+      if (!current || current.deleted) return
+      await tx.update(entry.blockId, {
+        properties: {...current.properties, types: [...entry.before]},
+      })
+    }, {scope: 'block-default', description: 'revert merged-type-membership repair'})
     restored.push({blockId: entry.blockId, restored: entry.before})
   }
   return {
@@ -189,7 +203,12 @@ const resolveFromNames = async row => {
   for (const n of [row.tombstone_label, row.tombstone_content]) {
     if (typeof n === 'string' && n.trim()) names.add(n.trim().toLowerCase())
   }
-  for (const a of jsonOf(row.tombstone_aliases) ?? []) {
+  // `Array.isArray`, not `?? []`: imported/sync-applied data can store `alias`
+  // as an object or a number, and `for...of` over that THROWS. This runs while
+  // building every audit entry, so one malformed tombstone would abort the
+  // whole tool — including for unrelated, perfectly actionable tokens.
+  const rawAliases = jsonOf(row.tombstone_aliases)
+  for (const a of Array.isArray(rawAliases) ? rawAliases : []) {
     if (typeof a === 'string' && a.trim()) names.add(a.trim().toLowerCase())
   }
   if (names.size === 0) return null
