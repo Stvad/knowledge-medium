@@ -1667,6 +1667,64 @@ describe('invalidation', () => {
     }
   })
 
+  // `recentActivity` is the exception to the rule above: it reports which
+  // PAGE an edit happened under, so a parent move changes its answer with
+  // no content written anywhere.
+  it('recentActivity: a parent move of a listed row invalidates, and re-homes the entry', async () => {
+    await create({id: 'p1', content: 'Page one', types: ['page']})
+    await create({id: 'p2', content: 'Page two', types: ['page']})
+    await create({id: 'a', parentId: 'p1', content: 'a note'})
+    const handle = env.repo.query.recentActivity({workspaceId: WS, limit: 10})
+    const chainOf = (id: string) =>
+      handle.peek()?.find(e => e.block.id === id)?.ancestors.map(b => b.id)
+    await handle.load()
+    expect(chainOf('a')).toEqual(['p1'])
+
+    const fired: number[] = []
+    const unsub = handle.subscribe(() => { fired.push(1) })
+    try {
+      await env.repo.tx(
+        tx => tx.move('a', {parentId: 'p2', orderKey: 'a0'}),
+        {scope: ChangeScope.BlockDefault},
+      )
+      await vi.waitFor(() => {
+        expect(fired.length).toBeGreaterThan(0)
+        expect(chainOf('a')).toEqual(['p2'])
+      })
+    } finally {
+      unsub()
+    }
+  })
+
+  it('recentActivity: a move of the PAGE a listed row sits under invalidates too', async () => {
+    // Nothing about row `a` changes here — its container moves out from
+    // under it, which is why the dep covers the chain, not just the row.
+    // `p1` is deliberately empty-content so it is NOT itself a listed row:
+    // otherwise its own per-row dep would catch the move and this would
+    // pass with the ancestor dep deleted.
+    await create({id: 'p1', content: '', types: ['page']})
+    await create({id: 'p2', content: 'Page two', types: ['page']})
+    await create({id: 'a', parentId: 'p1', content: 'a note'})
+    const handle = env.repo.query.recentActivity({workspaceId: WS, limit: 10})
+    await handle.load()
+
+    const fired: number[] = []
+    const unsub = handle.subscribe(() => { fired.push(1) })
+    try {
+      await env.repo.tx(
+        tx => tx.move('p1', {parentId: 'p2', orderKey: 'a0'}),
+        {scope: ChangeScope.BlockDefault},
+      )
+      await vi.waitFor(() => {
+        expect(fired.length).toBeGreaterThan(0)
+        expect(handle.peek()?.find(e => e.block.id === 'a')?.ancestors.map(b => b.id))
+          .toEqual(['p1', 'p2'])
+      })
+    } finally {
+      unsub()
+    }
+  })
+
   it('searchByContent / recentBlocks: non-content property edit on a result row does NOT invalidate', async () => {
     // Same rationale as the parent-move case: editing an unrelated
     // property on a currently-returned row leaves content + liveness

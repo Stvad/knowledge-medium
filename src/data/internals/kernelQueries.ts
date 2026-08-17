@@ -1299,17 +1299,15 @@ export const recentActivityQuery = defineQuery<
     // ordering between content events rather than waking on every
     // `updated_at` bump (which every UiState write causes).
     //
-    // The exclusion filters on axes this channel does not carry (type
-    // tags, and the parent edges the state-root walk follows), and
-    // deliberately declares no dep for either: a block becomes app-owned
-    // at the moment it is created under a state root or minted with a
-    // system type, and the create itself fires this channel. A LATER
-    // re-parent or type-tag of an already-listed row corrects itself on
-    // the next content event.
+    // TYPE TAGS are the one filtering axis with no dep, accepted rather
+    // than missed: a block acquires a system type at the moment it is
+    // minted (a create, which fires this channel), and the one gesture
+    // that adds a type to a live block — `#type` — rewrites its content
+    // in the same breath. Tagging an already-listed row `panel` out of
+    // nowhere is not a flow that exists.
     //
-    // Ancestors skip per-row deps too: what a reader sees of an ancestor
-    // is its CONTENT (the entry's title), and a rename fires this same
-    // channel.
+    // Ancestors skip per-row deps: what a reader sees of an ancestor is
+    // its CONTENT (the entry's title), and a rename fires this channel.
     ctx.depend({
       kind: 'plugin',
       channel: KERNEL_CONTENT_CHANNEL,
@@ -1330,14 +1328,31 @@ export const recentActivityQuery = defineQuery<
     for (const block of blocks) chainsByStart.set(block.id, [])
     for (const row of chainRows) chainsByStart.get(row.chain_start_id)?.push(row)
 
-    return blocks.map(block => ({
-      block,
+    return blocks.map(block => {
       // One call per chain so hydrate order stays depth-ascending within
       // it, as `core.manyAncestors` does.
-      ancestors: ctx.hydrateBlocks(
+      const ancestors = ctx.hydrateBlocks(
         asBlockRows(chainsByStart.get(block.id) ?? []), {declareRowDeps: false},
-      ),
-    }))
+      )
+      // A parent change is the one edit that changes what this entry SAYS
+      // without touching any content: moved to another page, the entry
+      // keeps naming the old one; moved under a state root, it should
+      // have left the feed entirely. `kernel.content` doesn't carry it,
+      // so declare it per block — on the ancestors too, since a page
+      // moved out from under a row re-homes that row's entry without the
+      // row itself moving. Narrow on purpose: this channel is keyed per
+      // block and fires only on a `parent_id` change, so it costs a wake
+      // exactly when the answer changed, unlike a row dep (which every
+      // UiState property write would trip).
+      for (const shown of [block, ...ancestors]) {
+        ctx.depend({
+          kind: 'plugin',
+          channel: TYPED_BLOCKS_STRUCTURE_CHANNEL,
+          key: typedBlocksStructureKey(workspaceId, shown.id),
+        })
+      }
+      return {block, ancestors}
+    })
   },
 })
 
