@@ -10,20 +10,39 @@ import {
   CodeMirrorEditModeDependencies,
 } from './types'
 import { useUIStateBlock } from '@/data/globalState.js'
+import { useShortcutSurfacesSuspended } from '@/shortcuts/ShortcutSurfaceSuspension.js'
+
+interface ResolvedActivation {
+  context: ActionContextType
+  dependencies: BaseShortcutDependencies
+}
+
+/** Stable identity, so a suspended subtree's effect doesn't re-run per render. */
+const NO_ACTIVATIONS: readonly ResolvedActivation[] = []
 
 /**
  * Hook to activate any number of shortcut contexts described by facet contributions.
+ *
+ * This is the single funnel for DECLARATIVE activation — `useActionContext`
+ * and its per-context wrappers below, `useShortcutSurfaceActivations`, and
+ * `ReviewSession` all land here — so it is also where
+ * {@link useShortcutSurfacesSuspended} is honoured: a suspended subtree
+ * resolves to NO activations, which makes the register/deregister effect
+ * below deactivate everything the subtree owns and re-register it when
+ * suspension lifts. See `ShortcutSurfaceSuspension.tsx` for why that is a
+ * separate context rather than a `blockContext` flag.
  */
 export function useActionContextActivations(
   activations: readonly ActionContextActivation[],
 ): void {
   const uiStateBlock = useUIStateBlock()
+  const suspended = useShortcutSurfacesSuspended()
   // Subscribe to the STABLE dispatch context — this hook is called by every
   // block that registers shortcut surfaces, so re-rendering them all on every
   // activation change would be a fan-out nightmare.
   const {activate, deactivate} = useActiveContextsDispatch()
 
-  const activeActivations = useMemo(() => activations
+  const activeActivations = useMemo(() => suspended ? NO_ACTIVATIONS : activations
     .filter(activation => activation.enabled !== false)
     .map(activation => ({
       context: activation.context,
@@ -32,7 +51,7 @@ export function useActionContextActivations(
         uiStateBlock,
       } as BaseShortcutDependencies,
     })),
-  [activations, uiStateBlock])
+  [activations, uiStateBlock, suspended])
 
   useEffect(() => {
     if (!activeActivations.length) return

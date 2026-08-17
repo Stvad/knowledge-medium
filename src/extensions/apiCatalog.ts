@@ -203,6 +203,16 @@ export const extensionApiCatalog: ApiModuleGroup[] = [
     exports: ['bindBlockActionContext', 'createSharedBlockActions', 'extendSelectionDown', 'extendSelectionUp'],
     types: [],
   },
+  {
+    category: 'actions',
+    importPath: '@/shortcuts/ShortcutSurfaceSuspension.js',
+    description: 'Suspend a subtree\'s declarative shortcut activations WITHOUT unmounting it — for hosts that keep several layout sessions mounted and show one.',
+    exports: [
+      'ShortcutSurfaceSuspensionContext', 'ShortcutSurfaceSuspensionProvider',
+      'useShortcutSurfacesSuspended',
+    ],
+    types: [],
+  },
 
   // --- Data / block primitives ----------------------------------------------
   {
