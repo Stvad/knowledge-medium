@@ -194,6 +194,20 @@ describe('groupRecentActivity', () => {
     expect(groups.map(g => g.anchorId)).toEqual(['page-1', 'page-2'])
   })
 
+  it('never titles an entry with a page from another workspace', () => {
+    const {rows, ancestorsById} = world([
+      {id: 'foreign-page', page: true},
+      {id: 'edit', parentId: 'foreign-page', ago: 1},
+    ])
+    // The shape sync can apply: a parent edge across workspaces, which
+    // `manyAncestors` follows because it has no workspace predicate.
+    const foreign = ancestorsById.get('edit')!.map(a => ({...a, workspaceId: 'other-ws'}))
+
+    const groups = groupRecentActivity(rows, new Map([['edit', foreign]]))
+
+    expect(groups.map(g => g.anchorId)).toEqual(['edit'])
+  })
+
   it('leaves a pageless block as its own entry', () => {
     const {rows, ancestorsById} = world([
       {id: 'orphan', ago: 1},

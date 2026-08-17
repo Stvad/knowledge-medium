@@ -65,7 +65,26 @@ export const groupRecentActivity = (
 ): RecentActivityGroup[] => {
   const gap = options.sessionGapMs ?? DEFAULT_SESSION_GAP_MS
   const editedAt = new Map<string, number>()
-  for (const row of rows) editedAt.set(row.id, editTime(row))
+  const workspaceOf = new Map<string, string>()
+  for (const row of rows) {
+    editedAt.set(row.id, editTime(row))
+    workspaceOf.set(row.id, row.workspaceId)
+  }
+
+  /** The row's chain, truncated at the first ancestor from another
+   *  workspace. `core.manyAncestors` walks `parent_id` with no workspace
+   *  predicate, and a cross-workspace parent edge IS reachable — the
+   *  workspace-invariant trigger is skipped for sync-applied writes — so
+   *  an unfiltered chain can hand a foreign page to the folds below and
+   *  put another workspace's title in this workspace's feed. Truncating
+   *  rather than skipping: past a foreign edge the chain is no longer a
+   *  path through this workspace's tree. */
+  const chainFor = (id: string): readonly BlockData[] => {
+    const workspaceId = workspaceOf.get(id)
+    const chain = ancestorsById.get(id) ?? []
+    const foreign = chain.findIndex(ancestor => ancestor.workspaceId !== workspaceId)
+    return foreign === -1 ? chain : chain.slice(0, foreign)
+  }
 
   // ── Fold 1: into the nearest edited ancestor of the same session ──
   const anchorOf = new Map<string, string>()
@@ -76,7 +95,7 @@ export const groupRecentActivity = (
     // ascending, but the seed also makes a malformed input (a row listed
     // as its own ancestor) terminate instead of recursing forever.
     anchorOf.set(id, id)
-    for (const ancestor of ancestorsById.get(id) ?? []) {
+    for (const ancestor of chainFor(id)) {
       const ancestorEdit = editedAt.get(ancestor.id)
       if (ancestorEdit === undefined) continue
       // Stop at the NEAREST edited ancestor either way. Out of session,
@@ -115,7 +134,7 @@ export const groupRecentActivity = (
   const containerOf = (anchorId: string): string | null => {
     const self = blocksById.get(anchorId)
     if (self && isPage(self)) return anchorId
-    for (const ancestor of ancestorsById.get(anchorId) ?? []) {
+    for (const ancestor of chainFor(anchorId)) {
       if (isPage(ancestor)) return ancestor.id
     }
     return null

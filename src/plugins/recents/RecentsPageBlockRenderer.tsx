@@ -26,17 +26,28 @@ import type { BlockRenderer, BlockRendererProps } from '@/types.js'
 import { formatRelativeTime } from '@/utils/relativeTime.js'
 import { groupRecentActivity, type RecentActivityGroup } from './grouping.js'
 
-/** Rows scanned before grouping. Deliberately larger than the number of
- *  entries shown: one entry can absorb a whole imported tree, so a
- *  window sized to the entry count would render a handful of entries on
- *  a day with one big import. */
-const RECENTS_ROW_LIMIT = 200
-const RECENTS_GROUP_LIMIT = 50
+/** Rows scanned per page of the feed. Sized in ROWS, not entries,
+ *  because one entry can absorb a whole imported tree — which is also
+ *  why the window has to be extendable: a 500-block import would
+ *  otherwise fill the window with a single entry and put every older
+ *  entry permanently out of reach. "Show older" adds another page. */
+const RECENTS_ROW_PAGE = 200
 /** Members shown before "+N more". Enough to see what an entry covers
  *  without an import's 80 rows pushing the next entry off the screen. */
 const COLLAPSED_MEMBER_COUNT = 3
-const ROW_ESTIMATED_HEIGHT_PX = 48
+const ANCHOR_LINE_HEIGHT_PX = 24
+const MEMBER_LINE_HEIGHT_PX = 22
+const ROW_PADDING_PX = 16
 const ROW_OVERSCAN_PX = 600
+
+/** What a collapsed entry actually occupies — an anchor line plus its
+ *  visible members. A flat estimate reserves one line for every entry
+ *  and lets multi-member rows grow on mount, which shoves the feed down
+ *  under the reader as they scroll. */
+const estimatedRowHeight = (group: RecentActivityGroup): number =>
+  ANCHOR_LINE_HEIGHT_PX
+  + Math.min(group.memberIds.length, COLLAPSED_MEMBER_COUNT) * MEMBER_LINE_HEIGHT_PX
+  + ROW_PADDING_PX
 
 const EMPTY_ROWS: BlockData[] = []
 
@@ -64,7 +75,7 @@ function RecentGroupRow({group, now}: RecentGroupRowProps) {
     <LazyViewportMount
       cacheKey={`recents:${key}`}
       blockId={group.anchorId}
-      estimatedHeightPx={ROW_ESTIMATED_HEIGHT_PX}
+      estimatedHeightPx={estimatedRowHeight(group)}
       overscanPx={ROW_OVERSCAN_PX}
       renderPlaceholder={(props) => <RecentRowPlaceholder {...props}/>}
     >
@@ -111,8 +122,9 @@ interface RecentsListProps {
 
 export function RecentsList({workspaceId}: RecentsListProps) {
   const repo = useRepo()
+  const [rowLimit, setRowLimit] = useState(RECENTS_ROW_PAGE)
   const rows = useHandle(
-    repo.query.recentBlocks({workspaceId, limit: RECENTS_ROW_LIMIT, excludeSystem: true}),
+    repo.query.recentBlocks({workspaceId, limit: rowLimit, excludeSystem: true}),
     {selector: data => data ?? EMPTY_ROWS},
   )
   const ids = useMemo(() => rows.map(row => row.id), [rows])
@@ -124,8 +136,15 @@ export function RecentsList({workspaceId}: RecentsListProps) {
 
   const groups = useMemo(() => {
     const ancestorsById = new Map(ancestors.map(entry => [entry.startId, entry.ancestors]))
-    return groupRecentActivity(rows, ancestorsById).slice(0, RECENTS_GROUP_LIMIT)
+    return groupRecentActivity(rows, ancestorsById)
   }, [rows, ancestors])
+
+  // A full window means the query hit the limit rather than running out
+  // of history, so there IS more to show. Every entry the window
+  // produced is rendered (the rows are lazily mounted anyway) — capping
+  // entries on top of capping rows would drop activity with nothing on
+  // screen to say so.
+  const hasMore = rows.length >= rowLimit
 
   if (groups.length === 0) {
     return (
@@ -136,16 +155,27 @@ export function RecentsList({workspaceId}: RecentsListProps) {
   }
 
   return (
-    <ul
-      aria-label="Recent activity"
-      className="flex flex-col divide-y divide-border/40 border-t border-border/40"
-    >
-      {groups.map(group => (
-        <li key={groupKey(group)}>
-          <RecentGroupRow group={group} now={now}/>
-        </li>
-      ))}
-    </ul>
+    <div className="flex flex-col">
+      <ul
+        aria-label="Recent activity"
+        className="flex flex-col divide-y divide-border/40 border-t border-border/40"
+      >
+        {groups.map(group => (
+          <li key={groupKey(group)}>
+            <RecentGroupRow group={group} now={now}/>
+          </li>
+        ))}
+      </ul>
+      {hasMore && (
+        <button
+          type="button"
+          className="self-start py-3 text-sm text-muted-foreground hover:text-foreground"
+          onClick={() => setRowLimit(limit => limit + RECENTS_ROW_PAGE)}
+        >
+          Show older activity
+        </button>
+      )}
+    </div>
   )
 }
 

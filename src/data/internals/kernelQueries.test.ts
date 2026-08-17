@@ -598,6 +598,22 @@ describe('repo.query.recentBlocks', () => {
       expect(out.map(r => r.id)).toEqual(['note-2', 'note-1'])
     })
 
+    it('walks through a tombstoned state parent to its still-live children', async () => {
+      // Sync-apply permits a live child under a tombstoned parent (the
+      // parent-not-deleted trigger is skipped for `source IS NULL`), so
+      // this shape is reachable. Written raw for exactly that reason —
+      // `repo.tx` would refuse to produce it.
+      await create({id: 'note', content: 'a real note'})
+      await seedUserState()
+      await env.h.db.execute('UPDATE blocks SET deleted = 1 WHERE id = ?', ['plugin-state'])
+
+      const out = asBlocks(await env.repo.query.recentBlocks({
+        workspaceId: WS, limit: 50, excludeSystem: true,
+      }).load())
+
+      expect(out.map(r => r.id)).toEqual(['note'])
+    })
+
     it('scopes the user-state walk to the workspace', async () => {
       await create({id: 'other-user-page', content: 'Alice', types: ['user'], workspaceId: OTHER_WS})
       // Same parent id across workspaces shouldn't happen, but the walk

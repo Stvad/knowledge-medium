@@ -97,6 +97,24 @@ describe('RecentsList', () => {
     expect(screen.getByText('m5')).toBeInTheDocument()
   })
 
+  it('offers a wider window when one entry swallows the whole page of rows', () => {
+    const root = block('tree-root', null, 0)
+    // A full window: 200 rows, all one imported tree, so grouping yields
+    // a single entry. Without the extension every older entry would be
+    // unreachable until 200 newer edits pushed this import out.
+    const rows = [root, ...Array.from({length: 199}, (_, i) => block(`n${i}`, 'tree-root', i))]
+    state.rows = rows
+    state.ancestors = rows.map(r => ({startId: r.id, ancestors: r.id === 'tree-root' ? [] : [root]}))
+
+    render(<RecentsList workspaceId="ws"/>)
+
+    expect(screen.getByRole('list', {name: 'Recent activity'}).children).toHaveLength(1)
+    expect(state.recentArgs).toMatchObject({limit: 200})
+
+    fireEvent.click(screen.getByRole('button', {name: 'Show older activity'}))
+    expect(state.recentArgs).toMatchObject({limit: 400})
+  })
+
   it('shows the empty state when nothing recent survives the filter', () => {
     render(<RecentsList workspaceId="ws"/>)
     expect(screen.getByText(/No recent edits yet/)).toBeInTheDocument()

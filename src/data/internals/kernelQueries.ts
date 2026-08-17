@@ -320,6 +320,14 @@ export const SELECT_RECENT_BLOCKS_SQL = `
  *  fetched window instead would hand back a page short by whatever it
  *  dropped, and a run of ineligible rows would empty it.
  *
+ *  The walk deliberately does NOT filter `deleted = 0`, for the same
+ *  reason `IS_DESCENDANT_OF_SQL` doesn't: descent is a structural fact
+ *  about `parent_id`, independent of soft-delete. Sync-apply permits a
+ *  live child under a tombstoned parent (`blocks_parent_not_deleted_check_*`
+ *  is skipped for `source IS NULL` writes), so stopping at a tombstone
+ *  would leak that live state row into the feed as user activity. The
+ *  outer query still filters deleted rows out of the RESULT.
+ *
  *  Params: workspaceId, USER_TYPE, workspaceId, ...SYSTEM_BLOCK_TYPES,
  *  limit — see `recentUserBlocksParams`. */
 export const SELECT_RECENT_USER_BLOCKS_SQL = `
@@ -329,7 +337,6 @@ export const SELECT_RECENT_USER_BLOCKS_SQL = `
     UNION
     SELECT b.id FROM blocks b
       JOIN user_state ON b.parent_id = user_state.id
-     WHERE b.deleted = 0
   )
   SELECT ${buildQualifiedBlockColumnsSql('blocks')}
   FROM blocks
