@@ -165,24 +165,17 @@ type TypeCellRewrite =
  *  `CodecError` that would roll back the user's whole merge over one unrelated
  *  bad row.
  *
- *  Only a well-formed `string[]` cell is retargeted. A malformed one is
- *  reachable here even though no LOCAL write path can produce it — typeify
- *  decodes `types` on every local properties write and throws — because a
- *  SYNC-APPLIED row bypasses the same-tx pass while the `block_types` triggers
- *  still index it. Notably `json_each(properties_json, '$.types')` over a SCALAR
- *  yields that scalar, so even `types: "<fromId>"` is indexed as a real
- *  membership and arrives here.
+ *  Only a well-formed `string[]` cell is retargeted; a malformed one is left
+ *  untouched. That is not fastidiousness — such a row CANNOT be retargeted from
+ *  inside this tx at all. Any write dirties it for typeify's `rerunOnDirtyRows`
+ *  pass, which decodes the row's BEFORE snapshot (the malformed value, whatever
+ *  we wrote over it) and throws, aborting the merge. Skipping keeps the merge
+ *  working and leaves the stale token to the audit query.
  *
- *  Such a row is left strictly ALONE, and the reason is not squeamishness about
- *  editing malformed data: it CANNOT be retargeted from inside this tx at all.
- *  Any write dirties the row for typeify's `rerunOnDirtyRows` pass, and that
- *  re-run decodes the row's BEFORE snapshot — the malformed value, whatever we
- *  wrote over it — so it throws and aborts the merge either way. Skipping keeps
- *  the merge working; the row's stale token stays visible to the same audit
- *  query that finds every other dangling token, and is repairable outside a
- *  merge tx. (Root cause worth fixing separately: unlike `getAliases`,
- *  `getBlockTypes` has no malformed-value tolerance, so one bad synced `types`
- *  cell bricks its row against every local properties write.)
+ *  Malformed cells reach here despite no local write path producing one:
+ *  sync-applied rows bypass the same-tx pass while the `block_types` triggers
+ *  still index them, and `json_each` over a SCALAR yields that scalar, so even
+ *  `types: "<fromId>"` is indexed as a real membership.
  *
  *  Deliberately NOT sharing `projectedIdOf`'s trim: a ref cell tolerates
  *  whitespace padding around an id, but a membership token is compared verbatim

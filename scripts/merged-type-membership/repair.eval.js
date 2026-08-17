@@ -29,12 +29,12 @@
  *  - Scoped to `repo.activeWorkspaceId`. Aborts if no workspace is pinned, and
  *    every query filters on it, so an unopened workspace is never touched.
  *  - Dry-run by default. Nothing is written unless `apply: true` is passed.
- *  - Writes go through `repo.setBlockTypes`, not raw SQL: each member is one
+ *  - Repairs go through `repo.setBlockTypes`, not raw SQL: each member is one
  *    `repo.tx` under `ChangeScope.BlockDefault`, so it lands in `row_events`,
  *    on the undo stack, and syncs like any user edit. It also REFUSES to write
  *    a token the type registry cannot resolve — the very invariant being
  *    restored — so a mis-resolved destination fails loudly instead of writing
- *    another dangling token.
+ *    another dangling token. (The REVERT path is the one exception; see below.)
  *  - Never guesses. A destination is used only when `command_events` records
  *    the merge, or when exactly ONE live type definition matches the
  *    tombstone's alias/label. Anything else is reported as unresolved.
@@ -197,7 +197,10 @@ const resolveFromCommandLog = async token => {
       SELECT mutator_calls, created_at FROM command_events
       WHERE workspace_id = ? AND mutator_calls LIKE ?
       ORDER BY created_at ASC LIMIT 20`,
-      [workspaceId, `%"fromId":"${current}"%`])
+      // `JSON.stringify`, not raw interpolation: an id containing `"` or `\\`
+      // is stored ESCAPED in `mutator_calls`, so the raw form would never match
+      // and the token would be reported unresolved despite having provenance.
+      [workspaceId, `%"fromId":${JSON.stringify(current)}%`])
     let next
     for (const row of rows) {
       const calls = jsonOf(row.mutator_calls)
