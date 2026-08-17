@@ -329,6 +329,64 @@ describe('core.retargetMergedTypeMembership', () => {
     })
   })
 
+  // `bt.type = fromId` does NOT prove the merged-away block owned that token:
+  // membership tokens and block ids are both unrestricted strings, and a seeded
+  // type needs no backing block at its token. Without a source gate, merging an
+  // ordinary block that merely CARRIES the id `todo` would sweep up every member
+  // of the seeded Todo type and retag them onto its survivor.
+  describe('source ownership', () => {
+    const SEEDED_TOKEN = 'todo'
+    const IMPOSTOR = SEEDED_TOKEN
+    const SURVIVOR = '7777ffff-7777-4777-8777-777777777777'
+
+    it('does not retag members of a seeded type when an unrelated block shares its token', async () => {
+      // A block whose id happens to equal a seeded membership token, and a
+      // genuine member of that seeded type.
+      await env.repo.tx(async tx => {
+        await tx.create({
+          id: IMPOSTOR, workspaceId: WS, parentId: 'p', orderKey: 'c0',
+          content: 'a plain block that happens to be id "todo"',
+        })
+        await tx.create({
+          id: SURVIVOR, workspaceId: WS, parentId: 'p', orderKey: 'c1',
+          content: 'unrelated survivor',
+        })
+      }, {scope: ChangeScope.BlockDefault})
+      await createMember(MEMBER, 'a real todo', SEEDED_TOKEN)
+      expect(await indexedTypes(MEMBER)).toEqual([SEEDED_TOKEN])
+
+      await env.repo.mutate.merge({
+        intoId: SURVIVOR, fromId: IMPOSTOR, contentStrategy: 'keepTarget'})
+
+      // Untouched: the merged block was never a type definition.
+      expect(getBlockTypes(env.read(MEMBER)!)).toEqual([SEEDED_TOKEN])
+      expect(await indexedTypes(MEMBER)).toEqual([SEEDED_TOKEN])
+    })
+  })
+
+  // The source gate reads `types` off the merge SOURCE. Doing that through
+  // `hasBlockType` would throw on a malformed synced cell and roll the merge
+  // back — while this same processor deliberately tolerates that shape on every
+  // member row. Same tolerance both sides.
+  it('survives a malformed types cell on the merge source', async () => {
+    const RAW_SOURCE = '8888aaaa-8888-4888-8888-888888888888'
+    // Raw insert = the shape a SYNC-APPLIED row has: the triggers maintain the
+    // side indexes, but no same-tx processor ever validated the cell.
+    await env.h.db.writeTransaction(async tx => {
+      await tx.execute(
+        `INSERT INTO blocks (id, workspace_id, parent_id, order_key, content,
+                             properties_json, references_json, created_at, updated_at,
+                             created_by, updated_by, deleted)
+         VALUES (?, ?, 'p', 'c9', 'malformed source', ?, '[]', 1, 1, 'peer', 'peer', 0)`,
+        [RAW_SOURCE, WS, JSON.stringify({[typesProp.name]: BLOCK_TYPE_TYPE})])
+    })
+
+    await expect(env.repo.mutate.merge({
+      intoId: TYPE_B, fromId: RAW_SOURCE, contentStrategy: 'keepTarget'})).resolves.not.toThrow()
+
+    expect(env.read(RAW_SOURCE)!.deleted).toBe(true)
+  })
+
   // `block_types` structurally cannot see these rows (its update trigger
   // re-inserts only `WHEN deleted = 0`), so without the separate tombstone
   // sweep a restore after the merge resurrects the block silently un-typed.

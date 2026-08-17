@@ -124,3 +124,17 @@ Options: `apply` (default false), `limit` (default 500), `allowHeuristic`
   a repair can't quietly move members onto a plain page.
 - A malformed `types` cell is reported, never rewritten — `getBlockTypes` throws
   on it, which would abort the write transaction.
+- A definition block that is **live but unpublished** (restored or recreated,
+  and currently failing to publish — an empty label, say) is reported and never
+  repaired, however old a merge record names it. Its members belong to the live
+  block; moving them to a historical survivor would be a fresh data loss. Fix
+  the definition instead.
+- **Tombstoned members cannot be repaired by this tool.** `setBlockTypes`
+  no-ops on a deleted row by contract, so they are listed as skipped with
+  `restore it, then re-run` rather than silently omitted — restoring one
+  otherwise resurrects the orphaned membership unchanged. (Merges going forward
+  don't have this problem: the runtime processor sweeps tombstones directly.)
+- The merge record used for resolution is the **oldest** call naming the source,
+  not the newest: `mergeBlocksInTx` no-ops on an already-tombstoned source but
+  the mutator call is still recorded, so a retry leaves a later row naming a
+  destination that was never applied.

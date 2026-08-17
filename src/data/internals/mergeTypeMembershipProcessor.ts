@@ -40,11 +40,12 @@ import {
   CORE_BLOCK_MERGED_EVENT,
   defineSameTxProcessor,
   type AnySameTxProcessor,
+  type BlockData,
   type CoreBlockMergedEvent,
   type SameTxCtx,
 } from '@/data/api'
 import { BLOCK_TYPE_TYPE } from '@/data/blockTypes'
-import { hasBlockType, setBlockTypesInProperties, typesProp } from '@/data/properties'
+import { setBlockTypesInProperties, typesProp } from '@/data/properties'
 import { typeMembershipTokenFor } from '@/data/typeDefinitionMetadata'
 
 export const RETARGET_MERGED_TYPE_MEMBERSHIP_PROCESSOR_NAME =
@@ -127,6 +128,25 @@ const resolveTerminalDestination = (
     current = next
   }
   return null
+}
+
+/** The string tokens in a row's raw `types` cell, tolerating every malformed
+ *  shape by ignoring what it can't read.
+ *
+ *  `getBlockTypes`/`hasBlockType` THROW on a malformed cell (unlike
+ *  `getAliases`, which has exactly this tolerance). Deciding the source gate
+ *  with those would mean a merge whose SOURCE carries a malformed synced
+ *  `types` cell aborts wholesale — while this same processor deliberately
+ *  tolerates that shape on every MEMBER row. The source deserves the same
+ *  treatment: `mergeProperties` keeps the destination's valid cell in that
+ *  case, so the merge itself is perfectly well-defined.
+ *
+ *  (The asymmetry in `getBlockTypes` is worth closing at the source; until it
+ *  is, this is the local defence.) */
+const rawTypeTokens = (row: BlockData): readonly string[] => {
+  const raw = row.properties[typesProp.name]
+  const cell = Array.isArray(raw) ? raw : [raw]
+  return cell.filter((el): el is string => typeof el === 'string')
 }
 
 /** `unchanged` — this cell doesn't name the merged-away type; `rewritten` —
@@ -231,22 +251,35 @@ const retargetTypeMembership = async (
   // merged-away id as its own type id would make every rewrite below identity.
   if (intoToken === event.fromId) return
 
+  // The merged-away block must actually BE the type definition that owns these
+  // memberships. `bt.type = event.fromId` alone does not prove that: a
+  // membership token is any string, block ids are any string, and a seeded type
+  // (`todo`) needs no backing block at its token — so an ordinary block that
+  // merely HAPPENS to carry the id `todo` (an import minting its own ids is the
+  // realistic route) would match every member of the seeded Todo type, and
+  // merging that unrelated block would retag all of them onto its survivor.
+  //
+  // Reading `from` through `tx.get` still works — it is soft-deleted, bag
+  // intact. Gating here rather than at the sweep also keeps an ordinary block
+  // merge off BOTH queries.
+  //
+  // The trade, stated plainly: a definition row that was stripped of its
+  // `block-type` tag before being merged no longer looks like a type here, so
+  // its members are not retargeted. That is the safe direction — they stay
+  // visible to the audit query and are repairable out of band, whereas a false
+  // POSITIVE silently mass-retags an entire seeded type.
+  const from = await ctx.tx.get(event.fromId)
+  if (from === null || !rawTypeTokens(from).includes(BLOCK_TYPE_TYPE)) return
+
   const members = await ctx.db.getAll<{id: string}>(
     SELECT_TYPE_MEMBER_IDS_SQL,
     [event.fromId, event.workspaceId],
   )
-  // Tombstoned members are invisible to that index; sweep for them separately,
-  // but only when the merged-away block really was a type definition, so the
-  // unindexable scan stays off the path of an ordinary block merge. Reading
-  // `from` through `tx.get` still works — it is soft-deleted, bag intact.
-  const from = await ctx.tx.get(event.fromId)
-  if (from !== null && hasBlockType(from, BLOCK_TYPE_TYPE)) {
-    const deletedMembers = await ctx.db.getAll<{id: string}>(
-      SELECT_DELETED_TYPE_MEMBER_IDS_SQL,
-      [event.workspaceId, `%${JSON.stringify(event.fromId)}%`],
-    )
-    members.push(...deletedMembers)
-  }
+  // Tombstoned members are invisible to that index; sweep for them separately.
+  members.push(...await ctx.db.getAll<{id: string}>(
+    SELECT_DELETED_TYPE_MEMBER_IDS_SQL,
+    [event.workspaceId, `%${JSON.stringify(event.fromId)}%`],
+  ))
   for (const {id} of members) {
     const row = await ctx.tx.get(id)
     // Deliberately NOT skipping tombstones — see

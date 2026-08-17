@@ -141,7 +141,14 @@ if (dangling.length === 0) {
 // ── 2. resolve each dangling token to a destination ───────────────────────
 /** Exact resolution: the recorded merge that tombstoned this block. Chains are
  *  followed (a survivor can itself have been merged away later) with a cycle
- *  guard and a hop cap. */
+ *  guard and a hop cap.
+ *
+ *  OLDEST match first, deliberately. `mergeBlocksInTx` no-ops when the source is
+ *  already tombstoned, but the mutator call is still recorded — so a retry of an
+ *  already-completed merge (the alias-collision button re-firing, #188) leaves a
+ *  LATER row naming a different, never-applied destination. Newest-first would
+ *  prefer exactly that phantom and retag members somewhere they never lived; the
+ *  earliest call naming this source is the one that actually moved it. */
 const resolveFromCommandLog = async token => {
   const hops = []
   const seen = new Set([token])
@@ -150,7 +157,7 @@ const resolveFromCommandLog = async token => {
     const rows = await sql(`
       SELECT mutator_calls, created_at FROM command_events
       WHERE workspace_id = ? AND mutator_calls LIKE ?
-      ORDER BY created_at DESC LIMIT 20`,
+      ORDER BY created_at ASC LIMIT 20`,
       [workspaceId, `%"fromId":"${current}"%`])
     let next
     for (const row of rows) {
@@ -257,6 +264,15 @@ for (const row of dangling) {
       if (!dest.isType) entry.blocked = 'destination is not a type definition (would write another unresolvable token)'
     }
   }
+  // A token whose definition block is LIVE is never repaired by retargeting,
+  // however old a merge record names it. `live-but-unpublished` means the block
+  // is back (restored, or recreated at the same id) and merely failing to
+  // publish — an empty label, say. Moving its current members to a historical
+  // survivor on the strength of a stale merge row would be a fresh data loss;
+  // the fix is to make that definition publish again.
+  if (entry.type_state === 'live-but-unpublished') {
+    entry.blocked = 'definition block is live but unpublished — fix the definition (e.g. give it a label) instead of retargeting its members'
+  }
   entry.actionable = Boolean(entry.destination) && !entry.blocked &&
     (entry.confidence === 'command-log' || (ALLOW_HEURISTIC && entry.confidence === 'name-match'))
   plan.push(entry)
@@ -277,6 +293,24 @@ for (const entry of plan.filter(p => p.actionable)) {
     JOIN block_types bt ON bt.block_id = b.id AND bt.workspace_id = b.workspace_id
     WHERE b.workspace_id = ? AND b.deleted = 0 AND bt.type = ?
     ORDER BY b.created_at, b.id`, [workspaceId, entry.token])
+  // Tombstoned members carry the same orphaned token but are invisible to
+  // `block_types`, and `setBlockTypes` refuses to write to a deleted row
+  // (it no-ops by contract), so this tool CANNOT repair them — restoring one
+  // resurrects the orphaned membership unchanged. Surface them explicitly
+  // instead of leaving them out of the plan entirely: silence here reads as
+  // "nothing left to do", which is exactly wrong. The runtime processor now
+  // handles this case for merges going forward.
+  const tombstoned = await sql(`
+    SELECT id FROM blocks
+    WHERE workspace_id = ? AND deleted = 1 AND properties_json LIKE ?
+    ORDER BY created_at, id`, [workspaceId, `%${JSON.stringify(entry.token)}%`])
+  for (const dead of tombstoned) {
+    if (byMember.has(dead.id)) continue
+    byMember.set(dead.id, {
+      blockId: dead.id, tokens: [entry.token],
+      skipped: 'member is tombstoned — restore it, then re-run to repair',
+    })
+  }
   for (const member of members) {
     let item = byMember.get(member.id)
     if (!item) {
