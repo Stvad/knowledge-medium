@@ -159,6 +159,11 @@ export const groupRecentActivity = (
         ...existing.group.memberIds,
         ...tree.rows.map(r => r.id).filter(id => id !== existing.group.anchorId),
       ]
+      // The container's OWN edit arriving in this session is what makes
+      // the anchor an edit rather than context.
+      if (tree.rows.some(r => r.id === existing.group.anchorId)) {
+        existing.group.anchorEdited = true
+      }
       existing.oldestEditedAt = Math.min(
         existing.oldestEditedAt,
         ...tree.rows.map(editTime),
@@ -169,7 +174,10 @@ export const groupRecentActivity = (
     const anchorId = containerId ?? tree.anchorId
     const group: RecentActivityGroup = {
       anchorId,
-      anchorEdited: editedAt.has(anchorId),
+      // Per ENTRY, not per feed: a page edited in some other session is
+      // context here, and claiming otherwise suppresses the "N blocks
+      // changed" line that says what this entry actually contains.
+      anchorEdited: tree.rows.some(r => r.id === anchorId),
       memberIds: tree.rows.map(r => r.id).filter(id => id !== anchorId),
       // The tree's own newest edit, NOT the container's: a page edited in
       // some other session has its own entry, and folding its timestamp

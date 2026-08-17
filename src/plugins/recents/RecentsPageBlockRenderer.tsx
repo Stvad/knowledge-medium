@@ -1,9 +1,10 @@
 /** Renderer for the Recents page. Wraps the default page layout and
  *  swaps the content area for a Tana-style feed of recent activity,
- *  backed by the kernel `recentBlocks` query (`excludeSystem`, so panels,
- *  preferences and other app-owned rows never read as edits) plus
- *  `manyAncestors`, which is what lets `groupRecentActivity` fold an
- *  edited tree back into the one thing it was.
+ *  backed by the kernel `recentActivity` query, which returns
+ *  user-authored rows only (panels, preferences and other app-owned rows
+ *  never read as edits) each with its ancestor chain — what lets
+ *  `groupRecentActivity` fold an edited tree back into the one thing it
+ *  was.
  *
  *  Rows render as `BlockRef` — one navigating line of the block's own
  *  content. Not `BlockEmbed`: an embed mounts the target's whole subtree,
@@ -15,7 +16,6 @@ import { useRepo } from '@/context/repo.js'
 import { useHandle } from '@/hooks/block.js'
 import { useMinuteClock } from '@/hooks/useMinuteClock.js'
 import { RECENTS_PAGE_TYPE } from '@/data/blockTypes.js'
-import type { BlockData } from '@/data/api'
 import { MarkdownContentRenderer } from '@/components/renderer/MarkdownContentRenderer.js'
 import { DefaultBlockRenderer } from '@/components/renderer/DefaultBlockRenderer.js'
 import { BlockRef } from '@/components/references/BlockRef.js'
@@ -48,8 +48,6 @@ const estimatedRowHeight = (group: RecentActivityGroup): number =>
   ANCHOR_LINE_HEIGHT_PX
   + Math.min(group.memberIds.length, COLLAPSED_MEMBER_COUNT) * MEMBER_LINE_HEIGHT_PX
   + ROW_PADDING_PX
-
-const EMPTY_ROWS: BlockData[] = []
 
 const RecentRowPlaceholder = ({reservedHeight}: LazyViewportPlaceholderProps) => (
   <div className="py-2" style={{minHeight: reservedHeight}} aria-hidden>
@@ -123,29 +121,30 @@ interface RecentsListProps {
 export function RecentsList({workspaceId}: RecentsListProps) {
   const repo = useRepo()
   const [rowLimit, setRowLimit] = useState(RECENTS_ROW_PAGE)
-  const rows = useHandle(
-    repo.query.recentBlocks({workspaceId, limit: rowLimit, excludeSystem: true}),
-    {selector: data => data ?? EMPTY_ROWS},
-  )
-  const ids = useMemo(() => rows.map(row => row.id), [rows])
-  const ancestors = useHandle(
-    repo.query.manyAncestors({ids}),
-    {selector: data => data ?? []},
+  // `null` while the first window is still loading — distinct from a
+  // resolved empty window, which is what the empty state is about.
+  const entries = useHandle(
+    repo.query.recentActivity({workspaceId, limit: rowLimit}),
+    {selector: data => data ?? null},
   )
   const now = useMinuteClock()
 
   const groups = useMemo(() => {
-    const ancestorsById = new Map(ancestors.map(entry => [entry.startId, entry.ancestors]))
-    return groupRecentActivity(rows, ancestorsById)
-  }, [rows, ancestors])
+    if (!entries) return null
+    return groupRecentActivity(
+      entries.map(entry => entry.block),
+      new Map(entries.map(entry => [entry.block.id, entry.ancestors])),
+    )
+  }, [entries])
 
   // A full window means the query hit the limit rather than running out
   // of history, so there IS more to show. Every entry the window
   // produced is rendered (the rows are lazily mounted anyway) — capping
   // entries on top of capping rows would drop activity with nothing on
   // screen to say so.
-  const hasMore = rows.length >= rowLimit
+  const hasMore = (entries?.length ?? 0) >= rowLimit
 
+  if (groups === null) return null
   if (groups.length === 0) {
     return (
       <div className="py-6 text-sm text-muted-foreground">

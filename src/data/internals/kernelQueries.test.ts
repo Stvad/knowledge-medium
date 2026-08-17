@@ -19,14 +19,16 @@ import {
   type BlockData,
   type BlockReference,
 } from '@/data/api'
-import { aliasesProp, typesProp } from '@/data/properties'
+import { aliasesProp, seedKeyProp, typesProp } from '@/data/properties'
+import { stateChildBlockId } from '@/data/derivedIds'
+import { UI_STATE_PATH_PART, USER_PREFS_PATH_PART } from '@/data/userPrefs'
 import { BlockCache } from '@/data/blockCache'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { kernelDataExtension } from '../kernelDataExtension'
 import { queriesFacet } from '../facets'
 import { Repo } from '../repo'
-import { SELECT_BLOCKS_BY_CONTENT_SQL, compileBlocksContentSearchQuery } from './kernelQueries'
+import { SELECT_BLOCKS_BY_CONTENT_SQL, compileBlocksContentSearchQuery, type RecentActivityEntry } from './kernelQueries'
 
 const WS = 'ws-1'
 const OTHER_WS = 'ws-2'
@@ -90,6 +92,10 @@ const create = async (args: {
 // previously narrowed `unknown`; kept as no-op identities to keep
 // the `await ... .load()` call sites stable while we verify behavior.
 const asBlocks = (v: BlockData[] | undefined): BlockData[] => v ?? []
+/** `recentActivity` returns each row with its chain; most assertions
+ *  here are about WHICH rows come back. */
+const activityBlocks = (v: RecentActivityEntry[] | undefined): BlockData[] =>
+  (v ?? []).map(entry => entry.block)
 const asIds = (v: string[] | undefined): string[] => v ?? []
 const asBlockOrNull = (v: BlockData | null | undefined): BlockData | null => v ?? null
 
@@ -538,50 +544,92 @@ describe('repo.query.recentBlocks', () => {
     expect(out.map(r => r.id)).toEqual(['c', 'b'])
   })
 
-  describe('excludeSystem', () => {
+})
+
+describe('repo.query.recentActivity', () => {
+    // Real derived ids: the filter walks down from
+    // `stateChildBlockId(userPage, <root>)`, so a test that invented
+    // plain ids for the roots would exercise nothing.
+    const UI_STATE_ID = stateChildBlockId('user-page', UI_STATE_PATH_PART)
+    const PREFS_ID = stateChildBlockId('user-page', USER_PREFS_PATH_PART)
+
     // The per-user state subtree, as `stateBlocks.ts` builds it:
     // user page → ui-state → per-plugin state → records.
     const seedUserState = async () => {
       await create({id: 'user-page', content: 'Alice', types: ['page', 'user']})
-      await create({id: 'ui-state', parentId: 'user-page', content: 'ui-state'})
-      await create({id: 'plugin-state', parentId: 'ui-state', content: 'Startup metrics'})
+      await create({id: UI_STATE_ID, parentId: 'user-page', content: 'ui-state'})
+      await create({id: 'plugin-state', parentId: UI_STATE_ID, content: 'Startup metrics'})
       await create({id: 'metrics-record', parentId: 'plugin-state', content: '2026-08-17T00:00:00Z'})
+      await create({id: PREFS_ID, parentId: 'user-page', content: 'Preferences'})
+      await create({id: 'plugin-prefs', parentId: PREFS_ID, content: 'Daily notes'})
     }
 
-    it('drops every descendant of a user page, at any depth', async () => {
+    it('drops every descendant of a state root, at any depth', async () => {
       await create({id: 'note', content: 'a real note'})
       await seedUserState()
 
-      const out = asBlocks(await env.repo.query.recentBlocks({
-        workspaceId: WS, limit: 50, excludeSystem: true,
+      const out = activityBlocks(await env.repo.query.recentActivity({
+        workspaceId: WS, limit: 50,
       }).load())
 
       expect(out.map(r => r.id)).toEqual(['note'])
     })
 
-    it('keeps them without the flag', async () => {
+    it('keeps a note the user authored on their own user page', async () => {
+      // The user page is an ordinary navigable page; only its two state
+      // roots are app-owned. Walking from the page itself would swallow
+      // this.
+      await seedUserState()
+      await create({id: 'my-note', parentId: 'user-page', content: 'a note on my page'})
+
+      const out = activityBlocks(await env.repo.query.recentActivity({
+        workspaceId: WS, limit: 50,
+      }).load())
+
+      expect(out.map(r => r.id)).toEqual(['my-note'])
+    })
+
+    it('is the whole difference from recentBlocks, which still sees it all', async () => {
       await create({id: 'note', content: 'a real note'})
       await seedUserState()
 
       const out = asBlocks(await env.repo.query.recentBlocks({workspaceId: WS, limit: 50}).load())
 
       expect(out.map(r => r.id).sort()).toEqual(
-        ['metrics-record', 'note', 'plugin-state', 'ui-state', 'user-page'],
+        [UI_STATE_ID, PREFS_ID, 'metrics-record', 'note', 'plugin-prefs', 'plugin-state', 'user-page'].sort(),
       )
     })
 
     it('drops workspace-root system rows by type but keeps user-defined types', async () => {
       await create({id: 'note', content: 'a real note'})
       await create({id: 'panel', content: 'some-block-id', type: 'panel'})
-      await create({id: 'schema', content: 'Status', type: 'property-schema'})
       await create({id: 'recents-page', content: 'Recents', types: ['page', 'panel:recents']})
       await create({id: 'my-type', content: 'Book', types: ['page', 'block-type']})
 
-      const out = asBlocks(await env.repo.query.recentBlocks({
-        workspaceId: WS, limit: 50, excludeSystem: true,
+      const out = activityBlocks(await env.repo.query.recentActivity({
+        workspaceId: WS, limit: 50,
       }).load())
 
       expect(out.map(r => r.id).sort()).toEqual(['my-type', 'note'])
+    })
+
+    it('drops code-seeded definition blocks but keeps hand-made ones of the same type', async () => {
+      await create({id: 'my-schema', content: 'Status', type: 'property-schema'})
+      await create({id: 'my-extension', content: 'My extension', type: 'extension'})
+      await create({id: 'seeded-schema', content: 'seed:key', type: 'property-schema'})
+      await env.h.db.execute(
+        `UPDATE blocks SET properties_json = ? WHERE id = ?`,
+        [JSON.stringify({
+          types: ['property-schema'],
+          [seedKeyProp.name]: 'system:kernel-data/property/alias',
+        }), 'seeded-schema'],
+      )
+
+      const out = activityBlocks(await env.repo.query.recentActivity({
+        workspaceId: WS, limit: 50,
+      }).load())
+
+      expect(out.map(r => r.id).sort()).toEqual(['my-extension', 'my-schema'])
     })
 
     it('filters before the limit — a run of system rows cannot empty the page', async () => {
@@ -591,8 +639,8 @@ describe('repo.query.recentBlocks', () => {
         await create({id: `panel-${i}`, content: `panel ${i}`, type: 'panel'})
       }
 
-      const out = asBlocks(await env.repo.query.recentBlocks({
-        workspaceId: WS, limit: 2, excludeSystem: true,
+      const out = activityBlocks(await env.repo.query.recentActivity({
+        workspaceId: WS, limit: 2,
       }).load())
 
       expect(out.map(r => r.id)).toEqual(['note-2', 'note-1'])
@@ -607,8 +655,8 @@ describe('repo.query.recentBlocks', () => {
       await seedUserState()
       await env.h.db.execute('UPDATE blocks SET deleted = 1 WHERE id = ?', ['plugin-state'])
 
-      const out = asBlocks(await env.repo.query.recentBlocks({
-        workspaceId: WS, limit: 50, excludeSystem: true,
+      const out = activityBlocks(await env.repo.query.recentActivity({
+        workspaceId: WS, limit: 50,
       }).load())
 
       expect(out.map(r => r.id)).toEqual(['note'])
@@ -620,13 +668,12 @@ describe('repo.query.recentBlocks', () => {
       // must key off this workspace's user pages regardless.
       await create({id: 'note', content: 'a real note'})
 
-      const out = asBlocks(await env.repo.query.recentBlocks({
-        workspaceId: WS, limit: 50, excludeSystem: true,
+      const out = activityBlocks(await env.repo.query.recentActivity({
+        workspaceId: WS, limit: 50,
       }).load())
 
       expect(out.map(r => r.id)).toEqual(['note'])
     })
-  })
 })
 
 describe('repo.query.firstChildByContent', () => {

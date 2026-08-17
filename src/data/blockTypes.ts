@@ -43,25 +43,26 @@ export const RECENTS_PAGE_TYPE = 'panel:recents'
 export const USER_TYPE = 'user'
 
 /** Types whose blocks are the app's own bookkeeping rather than anything
- *  the user authored — the rows an "activity" surface (`recentBlocks`
- *  with `excludeSystem`) must not report as an edit.
+ *  the user authored — the rows the activity surface
+ *  (`core.recentActivity`) must not report as an edit.
  *
- *  This list only has to name what lives OUTSIDE the per-user state
- *  subtree: everything reached through `getPluginUIStateBlock` /
- *  `getPluginPrefsBlock` (panels, layout sessions, per-plugin prefs,
- *  startup-metrics records, …) hangs off a `USER_TYPE` page and is
- *  excluded structurally, which is what keeps a plugin's private state
- *  out of Recents without the kernel naming that plugin.
+ *  Deliberately narrow, because it is the least precise of the three
+ *  tests that surface applies. Per-user state (panels, layout sessions,
+ *  per-plugin prefs and ui-state, records filed under them) is excluded
+ *  STRUCTURALLY, by descent from a user's state roots; code-owned
+ *  definition blocks are excluded by their `seed:key` property. What is
+ *  left for this list is the app-owned rows that match neither: layout
+ *  rows and the singleton kernel pages.
  *
- *  `BLOCK_TYPE_TYPE` is deliberately absent: a user-defined type is
- *  authored content (the `#type` gesture), and the kernel's own type
- *  seeds only rewrite on a seed revision bump. */
+ *  Types an authoring flow can produce therefore stay OFF this list even
+ *  when the kernel also mints them — `block-type` (the `#type` gesture),
+ *  `property-schema` (the Properties page), `extension` (extension source
+ *  is edited in the app). Their seeded twins carry `seed:key`; the ones a
+ *  user made do not, and those edits belong in the feed. */
 export const SYSTEM_BLOCK_TYPES: readonly string[] = [
   PANEL_TYPE,
   PANEL_STACK_TYPE,
   USER_TYPE,
-  EXTENSION_TYPE,
-  PROPERTY_SCHEMA_TYPE,
   PROPERTIES_PAGE_TYPE,
   TYPES_PAGE_TYPE,
   RECENTS_PAGE_TYPE,

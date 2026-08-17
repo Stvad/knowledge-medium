@@ -162,6 +162,10 @@ describe('groupRecentActivity', () => {
     expect(groups.map(g => g.anchorId)).toEqual(['page', 'other-page', 'page'])
     expect(groups[2]!.memberIds).toEqual(['yesterday'])
     expect(groups[2]!.lastEditedAt).toBe(T0 - 1500 * MINUTE)
+    // The page's own edit belongs to the newest entry, so in the old
+    // session the page is context — not something edited then.
+    expect(groups[0]!.anchorEdited).toBe(true)
+    expect(groups[2]!.anchorEdited).toBe(false)
   })
 
   it('keeps a folded tree out of the page entry beside it', () => {
