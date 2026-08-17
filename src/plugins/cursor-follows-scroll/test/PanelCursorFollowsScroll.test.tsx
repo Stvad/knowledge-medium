@@ -61,7 +61,11 @@ interface PanelDom {
   /** Move a row's content rect — the test's stand-in for scrolling, since
    *  happy-dom has no layout to move on its own. */
   moveRow: (blockId: string, top: number) => void
-  addRow: (blockId: string, top: number) => void
+  addRow: (blockId: string, top: number, parent?: HTMLElement) => void
+  /** A row whose own visibility target HOLDS other rows — what a renderer that
+   *  fills a block's content slot with real rows produces. Returns that target,
+   *  to be passed as the `parent` of the rows it shows. */
+  addNestingRow: (blockId: string, top: number, height: number) => HTMLElement
   scroll: () => void
 }
 
@@ -76,24 +80,26 @@ const buildPanel = (panelId: string, rows: ReadonlyArray<[string, number]>): Pan
 
   const targets = new Map<string, HTMLElement>()
   const shells = new Map<string, HTMLElement>()
-  const addRow = (blockId: string, top: number) => {
+  const addRow = (blockId: string, top: number, parent: HTMLElement = port, height = 30) => {
     const shell = document.createElement('div')
     shell.setAttribute('data-block-nav-item', 'true')
     shell.setAttribute('data-block-id', blockId)
     shell.setAttribute('data-render-scope-id', SCOPE)
     const target = document.createElement('div')
     target.setAttribute('data-block-visibility-target', 'true')
-    stubRect(target, top, 30)
+    stubRect(target, top, height)
     shell.appendChild(target)
-    port.appendChild(shell)
+    parent.appendChild(shell)
     targets.set(blockId, target)
     shells.set(blockId, shell)
+    return target
   }
   for (const [blockId, top] of rows) addRow(blockId, top)
 
   return {
     port,
     addRow,
+    addNestingRow: (blockId, top, height) => addRow(blockId, top, port, height),
     shellOf: (blockId) => {
       const shell = shells.get(blockId)
       if (!shell) throw new Error(`no row ${blockId}`)
@@ -361,6 +367,34 @@ describe('PanelCursorFollowsScroll', () => {
 
     await vi.waitFor(() => {
       expect(peekFocusedBlockLocation(panel)?.blockId).toBe('b')
+    }, {timeout: 2000})
+  })
+
+  // The cursor sits on a row that CONTAINS the rows (a Readwise review backlog
+  // fills its content slot with real highlights). Its own row spans the whole
+  // view, so every plain "is the cursor still on screen" test answers yes — and
+  // the retry, whose whole job is the not-mounted-yet case, was gated on one.
+  it('retries for a cursor on a row that holds the rows', async () => {
+    const panel = repo.block(PANEL_ID)
+    const dom = buildPanel(PANEL_ID, [])
+    const container = dom.addNestingRow('backlog', -600, 2000)
+    dom.addRow('note-a', -400, container)
+    await focusBlock(panel, 'backlog', {renderScopeId: SCOPE})
+
+    render(<PanelCursorFollowsScroll block={panel}/>)
+
+    // Scrolled, and nothing inside the container is on screen to anchor to.
+    dom.scroll()
+    await new Promise(resolve => setTimeout(resolve, 200))
+    expect(peekFocusedBlockLocation(panel)?.blockId).toBe('backlog')
+
+    // A note mounts into view, with no scroll of its own. The mutation path
+    // can't rescue this — it asks the same always-true question of the
+    // container — so only the retry gets the cursor onto the note.
+    dom.addRow('note-b', 20, container)
+
+    await vi.waitFor(() => {
+      expect(peekFocusedBlockLocation(panel)?.blockId).toBe('note-b')
     }, {timeout: 2000})
   })
 

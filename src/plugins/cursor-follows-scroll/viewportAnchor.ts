@@ -58,6 +58,17 @@ export const isRowInViewport = (instance: HTMLElement): boolean => {
  */
 const isGeometricRow = (instance: HTMLElement): boolean => !rowContainsOtherRows(instance)
 
+/**
+ * Is the CURSOR's own row settled where the user is looking — i.e. is there
+ * nothing to re-anchor? The question every caller here asks of the focused row,
+ * shared so the container exception can't be applied in one place and forgotten
+ * in another: a container answers "yes, always" to `isRowInViewport` alone, and
+ * a caller that took that answer would refuse the very work this plugin exists
+ * to do (`PanelCursorFollowsScroll`'s lazy-mount retry did).
+ */
+export const isCursorRowSettled = (instance: HTMLElement): boolean =>
+  isGeometricRow(instance) && isRowInViewport(instance)
+
 /** The thing that actually scrolls this row. Null = the page itself, and two
  *  nulls compare equal, which is what makes the filter below work for a panel
  *  with no inner scroll container at all. */
@@ -102,7 +113,7 @@ export const resolveViewportAnchor = (
   // scroll — `PanelFocusRecovery` owns it, and it picks by data-tree
   // neighbourhood rather than by geometry.
   if (!focused) return null
-  if (isGeometricRow(focused) && isRowInViewport(focused)) return null
+  if (isCursorRowSettled(focused)) return null
 
   const port = scrollportOf(focused)
   const anchor = instances.find(

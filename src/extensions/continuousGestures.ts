@@ -232,10 +232,16 @@ export interface BlockGestureController {
 }
 
 /**
- * The DOM marker for a block's gesture surface: `DefaultBlockRenderer`'s content
- * slot. The nearest one above an event target names the block the gesture is ON.
+ * Where one block's DOM ends and another's begins: a content surface
+ * (`DefaultBlockRenderer`'s content slot) or a block shell. Walking up from an
+ * event target, the first of these decides which block the target belongs to.
+ *
+ * BOTH are needed. A shell holds more than its content slot — the bullet, the
+ * property panel, a breadcrumb chain, whatever chrome a surface adds — and a
+ * target there has no `.block-content` above it until the CONTAINER's, which
+ * would read as the container's own. Neither marker alone spans a block.
  */
-const GESTURE_SURFACE_SELECTOR = '.block-content'
+const BLOCK_BOUNDARY_SELECTOR = '.block-content, .tm-block'
 
 /**
  * Is this event's target on OUR surface, rather than on a nested block's?
@@ -255,8 +261,8 @@ const GESTURE_SURFACE_SELECTOR = '.block-content'
 export const ownsGestureTarget = (element: HTMLElement, target: EventTarget | null): boolean => {
   if (typeof Node === 'undefined' || !(target instanceof Node)) return true
   const start = target.nodeType === Node.ELEMENT_NODE ? (target as Element) : target.parentElement
-  const surface = start?.closest(GESTURE_SURFACE_SELECTOR)
-  return !surface || surface === element
+  const boundary = start?.closest(BLOCK_BOUNDARY_SELECTOR)
+  return !boundary || boundary === element
 }
 
 /**

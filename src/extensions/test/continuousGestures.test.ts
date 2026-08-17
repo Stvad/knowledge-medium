@@ -474,13 +474,20 @@ describe('nested gesture surfaces', () => {
   const buildNested = () => {
     const outer = document.createElement('div')
     outer.className = 'block-content'
+    const shell = document.createElement('div')
+    shell.className = 'tm-block'
+    // Shell chrome OUTSIDE the nested content slot: the bullet, a breadcrumb
+    // chain, the property panel. No `.block-content` above it but the
+    // container's, which is what made the content marker alone insufficient.
+    const bullet = document.createElement('button')
     const inner = document.createElement('div')
     inner.className = 'block-content'
     const innerText = document.createElement('span')
     inner.appendChild(innerText)
-    outer.appendChild(inner)
+    shell.append(bullet, inner)
+    outer.appendChild(shell)
     document.body.appendChild(outer)
-    return {outer, inner, innerText}
+    return {outer, inner, innerText, bullet}
   }
 
   const sampleOn = (target: EventTarget, pointerId: number, x: number): PointerSample => ({
@@ -509,6 +516,19 @@ describe('nested gesture surfaces', () => {
 
     expect(dispatch).not.toHaveBeenCalled()
     expect(prevented).toBe(false)
+  })
+
+  it('ignores a gesture on a nested block shell outside its content slot', () => {
+    const {outer, bullet} = buildNested()
+    const dispatch = makeDispatch()
+    const controller = createBlockGestureController({
+      recognizers: [commitOnUp], element: outer, dispatch,
+    })
+
+    controller.handlePointerDown(sampleOn(bullet, 1, 0))
+    controller.handlePointerUp(sampleOn(bullet, 1, -60))
+
+    expect(dispatch).not.toHaveBeenCalled()
   })
 
   it('still recognizes a gesture on its own surface', () => {
