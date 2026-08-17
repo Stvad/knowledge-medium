@@ -28,6 +28,7 @@ export const SrsReviewDeckRenderer: BlockRenderer = Object.assign(
     <DefaultBlockRenderer
       {...props}
       ContentRenderer={ReviewDeckContent}
+      contentShowsOtherBlocks
       EditContentRenderer={ReviewDeckContent}
     />
   ),
@@ -40,6 +41,3 @@ export const SrsReviewDeckRenderer: BlockRenderer = Object.assign(
   },
 )
 SrsReviewDeckRenderer.displayName = 'SrsReviewDeckRenderer'
-
-// Fills the content slot with other blocks' rows — see `showsOtherBlocks`.
-ReviewDeckContent.showsOtherBlocks = true

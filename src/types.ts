@@ -89,28 +89,6 @@ export interface BlockRendererProps {
 export interface BlockRenderer extends FunctionComponent<BlockRendererProps> {
     canRender?: (props: BlockRendererProps) => boolean;
     priority?: (props: BlockRendererProps) => number;
-    /**
-     * Does this fill the block's content slot with OTHER blocks' rows — a
-     * review backlog, a review deck, a recents list — rather than drawing the
-     * block it was given?
-     *
-     * Consumers care because such a row's rect describes everything it shows
-     * instead of the block, which anything reasoning about row geometry has to
-     * know.
-     *
-     * Declared by the few, not the many. Renderers that draw their own block
-     * (text, an image, an extension's source, a property schema, a video
-     * player, a type editor) are the overwhelming majority and say nothing;
-     * the alternative made every one of them responsible for a flag it had no
-     * reason to know about, and forgetting it silently stopped that block's row
-     * being a row. Forgetting THIS only costs a view the special handling,
-     * which is where things stood before it existed.
-     *
-     * A renderer that WRAPS another must pass it along, or a view behind a
-     * wrapper reads as an ordinary block: the edit dispatcher wraps the content
-     * renderer for every block, view or not.
-     */
-    showsOtherBlocks?: boolean;
 }
 
 export interface RendererRegistry {

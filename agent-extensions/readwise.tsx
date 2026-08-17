@@ -2268,10 +2268,6 @@ const ReviewBacklogContent: BlockRenderer = ({ block }: BlockRendererProps) => {
   )
 }
 ReviewBacklogContent.displayName = 'ReadwiseReviewBacklogContent'
-// This slot is filled with other blocks' rows, so this page's row spans all of
-// them rather than describing the page. Anything reasoning about row geometry
-// (the cursor-follows-scroll anchor) needs to know — see `showsOtherBlocks`.
-ReviewBacklogContent.showsOtherBlocks = true
 
 /** Keep the default block frame, swap the content area for the backlog. Same
  *  shape as the SRS review deck renderer and the block-type renderer. */
@@ -2281,6 +2277,10 @@ const ReviewBacklogRenderer: BlockRenderer = Object.assign(
       {...props}
       ContentRenderer={ReviewBacklogContent}
       EditContentRenderer={ReviewBacklogContent}
+      // Filled with other blocks' rows, so this page's row spans all of them
+      // rather than describing the page. Whatever reasons about row geometry
+      // (the cursor-follows-scroll anchor) needs to know.
+      contentShowsOtherBlocks
     />
   ),
   {

@@ -742,12 +742,11 @@ const ShortcutsOnlyLayout: BlockLayout = ({Content, Shell}) => (
   <Shell shortcutsOnly>{() => <div className="dropped-shell"><Content /></div>}</Shell>
 )
 
-/** A surface that fills the slot with other blocks' rows, and says so — the
- *  backlog/deck/recents shape. */
-const ViewSurfaceRenderer = Object.assign(
-  ({block}: BlockRendererProps) => <div className="view-surface">{block.id}</div>,
-  {showsOtherBlocks: true},
-)
+/** A surface that fills the slot with other blocks' rows — the
+ *  backlog/deck/recents shape. It declares nothing itself; whoever chooses it
+ *  does. */
+const ViewSurfaceRenderer = ({block}: BlockRendererProps) =>
+  <div className="view-surface">{block.id}</div>
 
 // Whether a content slot is filled with other blocks' rows or draws the block
 // itself. The renderer declares it, the slot records it, and callers reasoning
@@ -771,7 +770,7 @@ describe('content-view marking', () => {
         defaultEditorInteractionExtension,
         blockContentRendererFacet.of(
           ctx => ctx.block.id === 'view-root'
-            ? defineVariant('test.view', 'View', ViewSurfaceRenderer)
+            ? {...defineVariant('test.view', 'View', ViewSurfaceRenderer), showsOtherBlocks: true}
             : null,
           {source: 'test'},
         ),
@@ -804,23 +803,39 @@ describe('content-view marking', () => {
     uiStateBlockRef.current = undefined
   })
 
-  const renderBlock = (id: string, ContentRenderer?: typeof FacetSurfaceRenderer) =>
+  const renderBlock = (
+    id: string,
+    ContentRenderer?: typeof FacetSurfaceRenderer,
+    contentShowsOtherBlocks?: boolean,
+  ) =>
     render(
       <AppRuntimeContextProvider value={runtime}>
         <BlockContextProvider initialValue={{scopeRootId: id}}>
           <ActiveContextsProvider>
-            <DefaultBlockRenderer block={repo.block(id)} ContentRenderer={ContentRenderer} />
+            <DefaultBlockRenderer
+              block={repo.block(id)}
+              ContentRenderer={ContentRenderer}
+              contentShowsOtherBlocks={contentShowsOtherBlocks}
+            />
           </ActiveContextsProvider>
         </BlockContextProvider>
       </AppRuntimeContextProvider>,
     )
 
-  const renderWithPlainOutliner = (id: string, ContentRenderer?: typeof ViewSurfaceRenderer) =>
+  const renderWithPlainOutliner = (
+    id: string,
+    ContentRenderer?: typeof ViewSurfaceRenderer,
+    contentShowsOtherBlocks?: boolean,
+  ) =>
     render(
       <AppRuntimeContextProvider value={outlinerRuntime}>
         <BlockContextProvider initialValue={{scopeRootId: id}}>
           <ActiveContextsProvider>
-            <DefaultBlockRenderer block={repo.block(id)} ContentRenderer={ContentRenderer} />
+            <DefaultBlockRenderer
+              block={repo.block(id)}
+              ContentRenderer={ContentRenderer}
+              contentShowsOtherBlocks={contentShowsOtherBlocks}
+            />
           </ActiveContextsProvider>
         </BlockContextProvider>
       </AppRuntimeContextProvider>,
@@ -840,7 +855,7 @@ describe('content-view marking', () => {
   })
 
   it('marks a slot whose view came as the ContentRenderer prop', async () => {
-    renderBlock('root', ViewSurfaceRenderer)
+    renderBlock('root', ViewSurfaceRenderer, true)
 
     await waitFor(() => expect(document.querySelector('.view-surface')).not.toBeNull())
     expect(marked()).toBe(true)
@@ -886,9 +901,10 @@ describe('content-view marking', () => {
   })
 
   it('still marks a view through the real editing dispatcher', async () => {
-    // The hand-off is what this rests on: the dispatcher is what the slot sees,
-    // so a view behind it reads as an ordinary block unless the flag travels.
-    renderWithPlainOutliner('root', ViewSurfaceRenderer)
+    // The dispatcher is what the slot resolves to, for every block in the app.
+    // Reading the answer off it — rather than off whoever chose the renderer —
+    // is how a view behind it comes out looking like an ordinary block.
+    renderWithPlainOutliner('root', ViewSurfaceRenderer, true)
 
     await waitFor(() => expect(document.querySelector('.view-surface')).not.toBeNull())
     expect(marked()).toBe(true)
@@ -898,10 +914,7 @@ describe('content-view marking', () => {
     // The recents shape: a real title above a list of other blocks' rows. It
     // declares itself a view — its row spans the list, which is what geometry
     // callers are asking about — even though a title renders through it.
-    renderBlock('root', Object.assign(
-      (props: BlockRendererProps) => <TitlePlusSurfaceRenderer {...props} />,
-      {showsOtherBlocks: true},
-    ))
+    renderBlock('root', TitlePlusSurfaceRenderer, true)
 
     await screen.findByText('Page title')
     expect(marked()).toBe(true)

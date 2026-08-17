@@ -73,6 +73,10 @@ import { useContinuousGestures } from '@/extensions/continuousGestures.js'
 interface DefaultBlockRendererProps extends BlockRendererProps {
   ContentRenderer?: BlockRenderer;
   EditContentRenderer?: BlockRenderer;
+  /** Declares that the `ContentRenderer` composed here fills the slot with
+   *  OTHER blocks' rows — see `Variant.showsOtherBlocks`, which says the same
+   *  thing for a renderer that arrives through the facet instead. */
+  contentShowsOtherBlocks?: boolean;
 }
 
 /** Todo plausibly the following 2 things should be "actions" too
@@ -571,6 +575,7 @@ export function DefaultBlockRenderer(
     block,
     ContentRenderer: DefaultContentRenderer = MarkdownContentRenderer,
     EditContentRenderer = CodeMirrorContentRenderer,
+    contentShowsOtherBlocks,
   }: DefaultBlockRendererProps,
 ) {
   const repo = useRepo()
@@ -599,22 +604,15 @@ export function DefaultBlockRenderer(
   // Typed as a `FunctionComponent` (not `ComponentType`) so it's assignable both
   // to the `RawContent` slot AND directly to the dispatcher's `primary`
   // `BlockRenderer` slot below — no thunk needed.
-  // Takes no props of its own (it closes over `block`), but carries the
-  // renderer's text/view answer so whoever mounts it can still ask.
-  const RawContentSlot = useMemo<FunctionComponent & Pick<BlockRenderer, 'showsOtherBlocks'>>(
-    () => Object.assign(
-      function BlockRawContentSlot() {
-        return (
-          <ErrorBoundary FallbackComponent={FallbackComponent}>
-            <DefaultContentRenderer block={block}/>
-          </ErrorBoundary>
-        )
-      },
-      // Hand-off: this slot shows whatever it wraps, so it answers for it.
-      {showsOtherBlocks: DefaultContentRenderer.showsOtherBlocks},
-    ),
-    [block, DefaultContentRenderer],
-  )
+  const RawContentSlot = useMemo<FunctionComponent>(() => {
+    return function BlockRawContentSlot() {
+      return (
+        <ErrorBoundary FallbackComponent={FallbackComponent}>
+          <DefaultContentRenderer block={block}/>
+        </ErrorBoundary>
+      )
+    }
+  }, [block, DefaultContentRenderer])
 
   // Stable per-block resolver context — doesn't change on focus/edit/
   // selection toggles, so facet resolvers and the components they
@@ -689,16 +687,19 @@ export function DefaultBlockRenderer(
       // component each call (e.g. plain-outliner's edit-mode dispatcher) don't
       // hand back a new identity every render and remount the content subtree.
       const resolveBlockContentRenderer = runtime.read(blockContentRendererFacet)
-      const baseContentRenderer = useMemo(
-        () => resolveBlockContentRenderer(resolveContext).last?.render ?? DefaultContentRenderer,
+      const contentVariant = useMemo(
+        () => resolveBlockContentRenderer(resolveContext).last,
         [resolveBlockContentRenderer],
       )
+      const baseContentRenderer = contentVariant?.render ?? DefaultContentRenderer
       // Is this slot filled with other blocks' rows (a review backlog, a deck,
-      // a recents list) rather than the block itself? The slot records it
-      // because it resolved the renderer, but the renderer is what KNOWS —
-      // comparing identities here would read every wrapper as a view, and the
-      // edit dispatcher wraps the content renderer for every block in the app.
-      const showsOtherBlocks = baseContentRenderer.showsOtherBlocks === true
+      // a recents list) rather than the block itself? Read from whoever CHOSE
+      // the renderer — the contributing variant, else the caller that composed
+      // one — never from the resolved component, which is a wrapper as often as
+      // not (the editing dispatcher stands in front of every block's content
+      // renderer, and would answer for none of them).
+      const showsOtherBlocks =
+        contentVariant?.showsOtherBlocks ?? contentShowsOtherBlocks ?? false
       const decorateContent = runtime.read(blockContentDecoratorsFacet)
       const ContentRenderer = useMemo(
         () => decorateContent(resolveContext, baseContentRenderer),
@@ -736,7 +737,7 @@ export function DefaultBlockRenderer(
     }
   }, [
     block, resolveContext, runtime, isTopLevel,
-    DefaultContentRenderer, contentContainerRef,
+    DefaultContentRenderer, contentShowsOtherBlocks, contentContainerRef,
   ])
 
   const PropertiesSlot = useMemo<ComponentType | null>(() => {

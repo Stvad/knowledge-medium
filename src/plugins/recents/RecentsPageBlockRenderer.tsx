@@ -195,6 +195,7 @@ export const RecentsPageBlockRenderer: BlockRenderer = Object.assign(
     <DefaultBlockRenderer
       {...props}
       ContentRenderer={RecentsPageContentRenderer}
+      contentShowsOtherBlocks
     />
   ),
   {
@@ -208,6 +209,3 @@ export const RecentsPageBlockRenderer: BlockRenderer = Object.assign(
   },
 )
 RecentsPageBlockRenderer.displayName = 'RecentsPageBlockRenderer'
-
-// Fills the content slot with other blocks' rows — see `showsOtherBlocks`.
-RecentsPageContentRenderer.showsOtherBlocks = true

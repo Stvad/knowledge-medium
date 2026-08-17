@@ -29,10 +29,6 @@ export const blockEditingContentRenderer: BlockContentRendererContribution = con
         return <Renderer {...props}/>
       }
       Dispatcher.displayName = 'BlockEditingDispatcher'
-      // Hand-off: the dispatcher shows one of its slots, so it answers for
-      // them. This wrapper is what the content slot actually sees, so a view
-      // behind it would otherwise read as an ordinary block.
-      Dispatcher.showsOtherBlocks = Primary.showsOtherBlocks
       return Dispatcher
     })()
 
