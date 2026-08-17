@@ -10,14 +10,20 @@
 export const USER_PREFS_PATH_PART = 'user-prefs'
 export const UI_STATE_PATH_PART = 'ui-state'
 
-/** Every direct child a user page gets from the state bootstrap. These
- *  two roots are what "app-owned state" means structurally — everything
- *  else (panels, layout sessions, per-plugin prefs and ui-state, records
- *  filed under them) hangs BELOW one of them, while a block the user
+/** The state roots `stateBlocks.ts` puts under a user page. Everything it
+ *  owns — panels, layout sessions, per-plugin prefs and ui-state, records
+ *  filed under them — hangs BELOW one of these, while a block the user
  *  authors on their own page hangs off the page directly and is ordinary
  *  content. `userStateRootBlockIds` turns this list into the ids the
- *  Recents filter walks down from, so a THIRD root added to
- *  `stateBlocks.ts` must be added here or it will read as user activity. */
+ *  Recents filter walks down from.
+ *
+ *  KNOWN INCOMPLETE, and not fixable by extending this list: a PLUGIN can
+ *  put its own state under the user page on a namespace of its own
+ *  (`left-sidebar`'s Shortcuts subtree does), and core may not name a
+ *  plugin's ids — that is the kernel/plugin boundary, not an oversight.
+ *  Such a subtree reads as user activity in Recents. Closing it needs the
+ *  producer to MARK its state rather than the reader to enumerate them;
+ *  see the discussion on #575 before adding a special case here. */
 export const USER_STATE_ROOT_PATHS: readonly string[] = [
   UI_STATE_PATH_PART,
   USER_PREFS_PATH_PART,
