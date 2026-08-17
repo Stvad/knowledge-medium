@@ -154,12 +154,32 @@ describe('round trip: propertyChildContentToEncodedValue(propertyValueToChildCon
     )
   })
 
-  it('ref: a non-empty id renders as an editable ((id)) span and reads back via the supplied referenceTargetId', () => {
+  it('ref: a non-empty id renders as an editable ((id)) span and reads the id back out of it', () => {
     fc.assert(
       fc.property(idArb, id => {
         const content = propertyValueToChildContent(refSchema, id)
         expect(content).toBe(`((${id}))`)
-        expect(propertyChildContentToEncodedValue(refSchema, content, id)).toBe(id)
+        // The decode parses the span rather than reading the derived column
+        // (#443 group 3), so this is a genuine round trip through one string
+        // and the fuzz has no second input to keep consistent with it.
+        expect(propertyChildContentToEncodedValue(refSchema, content)).toBe(id)
+      }),
+      fuzzParams(150),
+    )
+  })
+
+  // The forms the decode must REFUSE, fuzzed over the same id alphabet: a
+  // whole-block wikilink (a name, not an identity — `reference_target_id`
+  // stamps for it and used to make it decode) and the `::`-marked span (a
+  // field row, not a value). Refusing means the row keeps its text and the
+  // owner's cell key reads unset, never re-pointed at a name's target.
+  it('ref: rejects the name form and the marked form for every id', () => {
+    fc.assert(
+      fc.property(idArb, id => {
+        expect(() => propertyChildContentToEncodedValue(refSchema, `[[${id}]]`))
+          .toThrow(CodecError)
+        expect(() => propertyChildContentToEncodedValue(refSchema, `::((${id}))`))
+          .toThrow(CodecError)
       }),
       fuzzParams(150),
     )
@@ -205,11 +225,11 @@ describe('enum leniency: a retired option decodes but is not re-canonicalized (p
   })
 })
 
-describe('ref: the empty/cleared value is a documented non-round-trip (propertyChildren.ts:162-173)', () => {
-  it('renders as empty content, and empty content alone is not decodable (no id to derive from)', () => {
+describe('ref: the empty/cleared value is a documented non-round-trip', () => {
+  it('renders as empty content, and empty content alone is not decodable (no span to read an id from)', () => {
     const content = propertyValueToChildContent(refSchema, '')
     expect(content).toBe('')
-    expect(() => propertyChildContentToEncodedValue(refSchema, content, null)).toThrow(CodecError)
+    expect(() => propertyChildContentToEncodedValue(refSchema, content)).toThrow(CodecError)
   })
 })
 

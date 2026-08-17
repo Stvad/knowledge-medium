@@ -19,7 +19,8 @@
  */
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import { ChangeScope } from '@/data/api'
+import { ChangeScope, codecs, defineProperty } from '@/data/api'
+import { projectedPropertyDefinitionsFacet } from '@/data/facets'
 import { BlockCache } from '@/data/blockCache'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
@@ -121,6 +122,62 @@ const blockReferences = async (sourceId: string, targetId: string) =>
      WHERE source_id = ? AND target_id = ? ORDER BY alias`,
     [sourceId, targetId],
   )
+
+/** The two LOCAL derived columns — what makes a row a field row (§7/§9).
+ *  `env.read` doesn't select them (they're device-local reflections of
+ *  content, not part of the synced row the other assertions look at). */
+const derivedColumns = async (id: string) =>
+  env.h.db.get<{reference_target_id: string | null; is_field_form: 1 | null}>(
+    'SELECT reference_target_id, is_field_form FROM blocks WHERE id = ?', [id],
+  )
+
+/** Make WS child-backed and register `fieldId` as a projected property
+ *  definition, so `isPropertyFieldRow` can actually recognize a `::` row.
+ *
+ *  Needed because §9 recognition is FOUR conditions, not one: the marker
+ *  bit, a non-null parent, a flipped workspace, and a target that resolves
+ *  to a definition. Seeding only the marker (the shape `seedSource`
+ *  produces, at `parentId: null`, in an unflipped workspace) builds a row
+ *  that is NOT a field row — which is what the first version of these
+ *  tests did, so they asserted the marked tier on rows that should never
+ *  have reached it (Codex on PR #484). */
+const flipWorkspaceWithDefinition = async (fieldId: string): Promise<void> => {
+  await env.h.db.execute(
+    `UPDATE workspaces SET properties_migration = 'children' WHERE id = ?`, [WS])
+  if ((await env.h.db.getAll('SELECT id FROM workspaces WHERE id = ?', [WS])).length === 0) {
+    await env.h.db.execute(
+      `INSERT INTO workspaces (id, name, owner_user_id, create_time, update_time,
+         encryption_mode, wk_canary, properties_migration)
+       VALUES (?, 'test ws', 'user-1', 1, 1, 'none', NULL, 'children')`, [WS])
+  }
+  const schema = defineProperty('status', {
+    codec: codecs.string, defaultValue: '', changeScope: ChangeScope.BlockDefault,
+  })
+  env.repo.setRuntimeContributions(
+    projectedPropertyDefinitionsFacet,
+    'test-marked-row-definition',
+    [{
+      metadata: {
+        fieldId, workspaceId: WS, createdAt: 1, name: schema.name,
+        changeScope: schema.changeScope, hidden: false, origin: 'user' as const,
+      },
+      schema,
+    }],
+    {workspaceId: WS},
+  )
+}
+
+/** A marked NAME row that really is a field row: parented under `owner`,
+ *  in the flipped workspace, addressing `fieldId` by name. */
+const seedMarkedFieldRow = async (id: string, alias: string): Promise<void> => {
+  await env.repo.tx(async tx => {
+    if ((await tx.get('owner')) === null) {
+      await tx.create({id: 'owner', workspaceId: WS, parentId: null, orderKey: 'o0', content: 'owner'})
+    }
+    await tx.create({id, workspaceId: WS, parentId: 'owner', orderKey: 'm0', content: `::[[${alias}]]`})
+  }, {scope: ChangeScope.BlockDefault})
+  await flush()
+}
 
 const seedSource = async (id: string, content: string): Promise<void> => {
   await env.repo.tx(
@@ -541,6 +598,420 @@ describe('rename — whole-span round-trip guard (§11 group 2)', () => {
       expect(await blockReferences('s', computeAliasSeatId('A', WS, 0)))
         .toEqual([{alias: 'A'}])
       expect(warn.mock.calls.flat().join(' ')).toContain('cannot pin a span')
+    } finally {
+      warn.mockRestore()
+    }
+  })
+})
+
+describe('rename — the references-parse fence (§11 group 4)', () => {
+  /** A source with content but NO parsed edge — the undrained window the
+   *  fence covers.
+   *
+   *  A RAW `db.writeTransaction`, not `repo.tx` without a flush. Skipping the
+   *  flush looks like it produces this state but doesn't reliably: every
+   *  `await` before the rename — including the ones asserting the
+   *  precondition — gives the already-queued parse a chance to run, so the
+   *  test silently drifts into testing the drained path. (Measured: two of
+   *  these tests passed with the fence removed for exactly that reason.) A
+   *  raw write still maintains every trigger-backed index — `blocks_fts`
+   *  included, which is the whole point — while firing no post-commit
+   *  processor at all.
+   *
+   *  It fires no SAME-TX processor either, so `derived` supplies by hand
+   *  what `core.deriveReferenceTarget` would have stamped. That is the
+   *  honest shape of the case: a row edited in a previous tx had its same-tx
+   *  derive run inside that tx, and only its post-commit parse is
+   *  outstanding. */
+  const seedUndrainedSource = async (
+    id: string,
+    content: string,
+    derived?: {referenceTargetId: string; isFieldForm: boolean},
+  ): Promise<void> => {
+    await env.h.db.writeTransaction(async tx => {
+      await tx.execute(
+        `INSERT INTO blocks (id, workspace_id, parent_id, order_key, content,
+                             properties_json, references_json, created_at, updated_at,
+                             created_by, updated_by, deleted,
+                             reference_target_id, is_field_form)
+         VALUES (?, ?, ?, 'b0', ?, '{}', '[]', 1, 1, 'u', 'u', 0, ?, ?)`,
+        [id, WS, derived === undefined ? null : 'owner', content,
+         derived?.referenceTargetId ?? null,
+         derived?.isFieldForm === true ? 1 : null],
+      )
+    })
+  }
+
+  it('rewrites a source whose edge has not been parsed yet', async () => {
+    // Measured before the fix: the source kept `see [[Old]]`, and the late
+    // parse then MINTED A SEAT for the now-unclaimed `Old` and bound the span
+    // to that empty stub — a live link to a real block became a link to
+    // nothing, silently. The precondition is asserted, not assumed, because
+    // the whole test is vacuous if the edge happens to be there already.
+    await seedTarget('t', 'Old', ['Old'])
+    await seedUndrainedSource('s', 'see [[Old]]')
+    expect(await blockReferences('s', 't')).toEqual([])
+
+    await env.repo.tx(
+      tx => tx.setProperty('t', aliasesProp, ['New']),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await flush()
+
+    expect((await env.read('s'))!.content).toBe('see [[New]]')
+    expect(await blockReferences('s', 't')).toEqual([{alias: 'New'}])
+    // The span must NOT have been rebound to a freshly minted seat.
+    expect(await blockReferences('s', computeAliasSeatId('Old', WS, 0))).toEqual([])
+  })
+
+  it('re-keys an undrained MARKED row too — it has a stamp but still no edge', async () => {
+    // A `::[[old]]` field row typed just before the release is the case the
+    // doc names. Its derived columns ARE stamped same-tx, so the row keeps
+    // resolving; what it loses without the fence is the canonical re-key.
+    await flipWorkspaceWithDefinition(PIN_TARGET)
+    await seedTarget(PIN_TARGET, '', ['Status'])
+    await env.repo.tx(tx => tx.create({
+      id: 'owner', workspaceId: WS, parentId: null, orderKey: 'o0', content: 'owner',
+    }), {scope: ChangeScope.BlockDefault})
+    await flush()
+    await seedUndrainedSource('marked', '::[[Status]]',
+      {referenceTargetId: PIN_TARGET, isFieldForm: true})
+    expect(await blockReferences('marked', PIN_TARGET)).toEqual([])
+    expect(await derivedColumns('marked'))
+      .toEqual({reference_target_id: PIN_TARGET, is_field_form: 1})
+
+    await env.repo.tx(
+      tx => tx.setProperty(PIN_TARGET, aliasesProp, []),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await flush()
+
+    expect((await env.read('marked'))!.content).toBe(`::((${PIN_TARGET}))`)
+  })
+
+  it('does not rewrite a differently-cased alias the FTS match also returns', async () => {
+    // `blocks_fts` is `case_sensitive 0`, so releasing `Status` makes the
+    // fence's MATCH return a `[[status]]` row too. This locks the OUTCOME,
+    // and deliberately not the mechanism: the exact-alias filter in
+    // `parseFence` is an efficiency guard (dropping it fails no test —
+    // the splice is keyed on `Status` and matches nothing), so what is
+    // asserted here is that the two layers together never touch a span that
+    // never pointed at this block.
+    await seedTarget(PIN_TARGET, '', ['Status'])
+    await seedUndrainedSource('other', 'see [[status]] please')
+
+    await env.repo.tx(
+      tx => tx.setProperty(PIN_TARGET, aliasesProp, []),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await flush()
+
+    expect((await env.read('other'))!.content).toBe('see [[status]] please')
+  })
+
+  it('falls back to a scan when the alias holds a NUL byte, instead of throwing', async () => {
+    // Codex on PR #484, and reachable end-to-end: nothing rejects a NUL in an
+    // alias — `parseReferences` accepts it, `setProperty` stores it,
+    // `block_aliases` indexes it. FTS5 reads its query as a C string, so
+    // `MATCH '"[[a<NUL>b]]"'` raises `unterminated string`. This runs INSIDE
+    // the user's transaction, so the throw would roll their whole rename back
+    // — not merely miss a rewrite. The fence degrades to an `instr` scan.
+    const NUL = '\u0000'
+    const alias = `a${NUL}b`
+    await seedTarget(PIN_TARGET, '', [alias])
+    await seedSource('s', `see [[${alias}]] please`)
+
+    await env.repo.tx(
+      tx => tx.setProperty(PIN_TARGET, aliasesProp, []),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await flush()
+
+    // The tx committed (a throw would have rolled it back, leaving the alias)
+    // and the span was rewritten like any other.
+    expect(JSON.parse((await env.read(PIN_TARGET))!.properties_json).alias)
+      .toEqual([])
+    expect((await env.read('s'))!.content).toBe(`see [${alias}](((${PIN_TARGET}))) please`)
+  })
+
+  it("never rewrites an installed extension's source code", async () => {
+    // Codex on PR #484, P1. `references.parseReferences` deliberately does not
+    // run the wikilink grammar over extension source (code hands it `[[`
+    // openers for free — one real extension minted three phantom pages before
+    // that gate). So extension blocks have NO edge, which is exactly why the
+    // edge-keyed leg never reached them and the content leg would. Rewriting a
+    // span inside stored source corrupts an extension so it no longer loads.
+    await seedTarget('t', 'Old', ['Old'])
+    const code = 'const re = /[[Old]]/g // matches [[Old]]'
+    await env.repo.tx(async tx => {
+      await tx.create({
+        id: 'ext', workspaceId: WS, parentId: null, orderKey: 'e0',
+        content: code, properties: {types: ['extension']},
+      })
+    }, {scope: ChangeScope.BlockDefault})
+    await flush()
+    // Precondition, asserted not assumed: the extension really has no edge,
+    // so this test is about the content leg and nothing else.
+    expect(await blockReferences('ext', 't')).toEqual([])
+
+    await env.repo.tx(
+      tx => tx.setProperty('t', aliasesProp, ['New']),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await flush()
+
+    expect((await env.read('ext'))!.content).toBe(code)
+  })
+
+  it('skips the content leg when TWO targets release the same alias in one commit', async () => {
+    // #460's sync-induced state: the alias-uniqueness trigger fires only for
+    // local user txs, so two blocks can co-claim one name. If both release it
+    // in a single commit, each reads zero post-tx claimants — so each would
+    // run the content leg over the SAME textual referrers, and the span would
+    // pin to whichever target iterated last while its edge followed the
+    // other. The fence falls back to the edge leg, which is target-keyed.
+    //
+    // The source is undrained (no edge), so "edge leg only" means no rewrite
+    // at all — which is the observable: the span keeps late-binding and the
+    // pending parse resolves it, rather than being pinned to an
+    // iteration-order-dependent block.
+    await seedTarget('t', '', ['Win'])
+    // Raw insert: bypasses the uniqueness trigger, the same shape a synced
+    // co-claim arrives in (and what the #460 test in this file uses).
+    await env.h.db.writeTransaction(async tx => {
+      await tx.execute(
+        `INSERT INTO blocks (id, workspace_id, parent_id, order_key, content,
+           properties_json, references_json, created_at, updated_at,
+           created_by, updated_by, deleted)
+         VALUES (?, ?, NULL, 'z0', 'Squatter', ?, '[]', 1, 1, 'u', 'u', 0)`,
+        [PIN_TARGET, WS, JSON.stringify({alias: ['Win']})],
+      )
+    })
+    await seedUndrainedSource('s', 'see [[Win]] please')
+
+    await env.repo.tx(async tx => {
+      await tx.setProperty('t', aliasesProp, [])
+      await tx.setProperty(PIN_TARGET, aliasesProp, [])
+    }, {scope: ChangeScope.BlockDefault})
+    await flush()
+
+    expect((await env.read('s'))!.content).toBe('see [[Win]] please')
+  })
+
+  it('leaves an undrained source alone on a HANDOFF', async () => {
+    // The fence is deliberately release-only, and this locks in that the
+    // handoff path stays a content no-op: `[[Shared]]` already resolves
+    // where the author expects (`u` owns the name now), so late-binding it
+    // is the correct outcome and rewriting would steal the span.
+    //
+    // The raw seed has no pending parse to eventually bind the span — that
+    // is the one thing it can't model — so this asserts only what holds
+    // regardless: content untouched, and no edge invented for either block.
+    await seedTarget('t', 'Shared', ['Shared'])
+    await seedTarget('u', 'U', [])
+    await seedUndrainedSource('s', 'see [[Shared]]')
+
+    await env.repo.tx(async tx => {
+      await tx.setProperty('t', aliasesProp, [])
+      await tx.setProperty('u', aliasesProp, ['Shared'])
+    }, {scope: ChangeScope.BlockDefault})
+    await flush()
+
+    expect((await env.read('s'))!.content).toBe('see [[Shared]]')
+    expect(await blockReferences('s', 't')).toEqual([])
+  })
+})
+
+describe('rename — marked name rows re-key to canonical ::((A)) (§11 group 2)', () => {
+  // The last open arm of group 2: "its lossy-name fallback for MARKED rows is
+  // canonical `::((A))`, never a pinned label". A marked row is a property
+  // field row (§7) — it renders its property NAME, resolved through the
+  // definition its id points at — so a pinned label is text the row never
+  // displays. The tier is chosen per SOURCE, not per alias.
+
+  it('re-keys a marked name row to ::((A)) where a prose span gets the pinned label', async () => {
+    // Both referrers in ONE commit, so this also pins the partitioning: a
+    // blanket switch to the canonical form would break the prose span's
+    // display text, and no switch at all would leave the marked row with an
+    // invented label.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      await flipWorkspaceWithDefinition(PIN_TARGET)
+      await seedTarget(PIN_TARGET, '', ['Status'])
+      await seedMarkedFieldRow('marked', 'Status')
+      await seedSource('prose', 'tracked in [[Status]] today')
+
+      await env.repo.tx(
+        tx => tx.setProperty(PIN_TARGET, aliasesProp, []),
+        {scope: ChangeScope.BlockDefault},
+      )
+      await flush()
+
+      expect((await env.read('marked'))!.content).toBe(`::((${PIN_TARGET}))`)
+      expect((await env.read('prose'))!.content)
+        .toBe(`tracked in [Status](((${PIN_TARGET}))) today`)
+      // Both still bind, and the marked row is still a field row: the
+      // canonical form keeps BOTH derived columns, which is what makes it
+      // machinery at all.
+      expect(await blockReferences('marked', PIN_TARGET)).toEqual([{alias: PIN_TARGET}])
+      expect(await derivedColumns('marked'))
+        .toEqual({reference_target_id: PIN_TARGET, is_field_form: 1})
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  it('re-keys a LOSSY-name marked row cleanly, with no sanitized display to report', async () => {
+    // The behavioural gain, and the case the doc's wording names. `]` is legal
+    // in a wikilink alias but illegal in an aliased-blockref label, so the
+    // pinned tier can only display `ab` — it rewrites, but reports a changed
+    // display (see the sibling test above, which asserts exactly that for a
+    // prose span). On a marked row that display was never rendered in the
+    // first place, so the canonical form loses nothing and there is nothing
+    // to warn about.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      await flipWorkspaceWithDefinition(PIN_TARGET)
+      await seedTarget(PIN_TARGET, '', ['a]b'])
+      await seedMarkedFieldRow('marked', 'a]b')
+      expect(await blockReferences('marked', PIN_TARGET)).toEqual([{alias: 'a]b'}])
+
+      await env.repo.tx(
+        tx => tx.setProperty(PIN_TARGET, aliasesProp, []),
+        {scope: ChangeScope.BlockDefault},
+      )
+      await flush()
+
+      expect((await env.read('marked'))!.content).toBe(`::((${PIN_TARGET}))`)
+      expect(await blockReferences('marked', PIN_TARGET)).toEqual([{alias: PIN_TARGET}])
+      expect(warn.mock.calls.flat().join(' ')).not.toContain('sanitized text')
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  it('pins an UNMARKED whole-content [[α]] row — only the marker makes it machinery', async () => {
+    // The `::` marker is the whole difference. A block whose entire content is
+    // a page link is ordinary user content, and its display text is the alias
+    // the author typed: `((A))` would render A's CURRENT title instead, which
+    // after the release is the new name — silently retitling the user's link.
+    // Only a field row has a name of its own to render, which is why it can
+    // afford to drop the label.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      await seedTarget(PIN_TARGET, '', ['Status'])
+      await seedSource('unmarked', '[[Status]]')
+
+      await env.repo.tx(
+        tx => tx.setProperty(PIN_TARGET, aliasesProp, []),
+        {scope: ChangeScope.BlockDefault},
+      )
+      await flush()
+
+      expect((await env.read('unmarked'))!.content).toBe(`[Status](((${PIN_TARGET})))`)
+      // And it is NOT a field row: the aliased form stamps the target column
+      // for any whole-block span, so the bit is the only thing separating the
+      // two — assert it, or this passes for the wrong reason.
+      expect(await derivedColumns('unmarked'))
+        .toEqual({reference_target_id: PIN_TARGET, is_field_form: null})
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  it('a PADDED alias cannot reach the marked tier at all — the derive trims first', async () => {
+    // Codex on PR #484 flagged that `isMarkedNameRowFor` compared against the
+    // whole-block parser's TRIMMED alias while the edge carries the raw one.
+    // That inconsistency was real and is fixed (the comparison now uses the
+    // raw span), but it turns out to change no behaviour, and saying so is
+    // worth more than a test implying otherwise.
+    //
+    // `deriveReferenceColumns` trims too, and it trims BEFORE the alias
+    // lookup — so for `::[[Status ]]` it looks up `Status` while the target
+    // claims `Status `, finds nothing, and leaves `reference_target_id` NULL.
+    // A padded marked row therefore fails §9 recognition on the definition
+    // condition and can never be a field row, whatever this comparison says.
+    // It degrades to the pinned tier, which for an unrecognized row is the
+    // right outcome: it keeps the author's visible text.
+    await flipWorkspaceWithDefinition(PIN_TARGET)
+    await seedTarget(PIN_TARGET, '', ['Status '])
+    await seedMarkedFieldRow('marked', 'Status ')
+    // The precondition that actually decides it, asserted not inferred.
+    expect((await derivedColumns('marked')).reference_target_id).toBeNull()
+
+    await env.repo.tx(
+      tx => tx.setProperty(PIN_TARGET, aliasesProp, []),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await flush()
+
+    expect((await env.read('marked'))!.content)
+      .toBe(`::[Status ](((${PIN_TARGET})))`)
+  })
+
+  it('a ROOT `::[[alias]]` row keeps the pinned label — the marker alone is not machinery', async () => {
+    // §9 recognition is four conditions, and this pins the parent one: a
+    // workspace-root row has no owner to be a field OF, so its `::` is just
+    // text and its visible label is the author's. Dropping it for `::((id))`
+    // would silently retitle user content. Same workspace, same definition,
+    // same marker as the passing marked-row case above — only the parent
+    // differs, so this isolates the condition.
+    await flipWorkspaceWithDefinition(PIN_TARGET)
+    await seedTarget(PIN_TARGET, '', ['Status'])
+    await seedSource('root-marked', '::[[Status]]')   // seedSource => parentId null
+    expect((await derivedColumns('root-marked')))
+      .toEqual({reference_target_id: PIN_TARGET, is_field_form: 1})
+
+    await env.repo.tx(
+      tx => tx.setProperty(PIN_TARGET, aliasesProp, []),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await flush()
+
+    expect((await env.read('root-marked'))!.content)
+      .toBe(`::[Status](((${PIN_TARGET})))`)
+  })
+
+  it('leaves a clean 1-for-1 rename in wikilink form, marked or not', async () => {
+    // Liveness for the tier ABOVE the fallback: the marked arm changes the
+    // fallback only. A name row follows the living name exactly as a link
+    // does — pinning it here would convert every renamed field row to an
+    // id-addressed one behind the user's back.
+    await seedTarget('t', 'Old', ['Old'])
+    await seedSource('marked', '::[[Old]]')
+
+    await env.repo.tx(
+      tx => tx.setProperty('t', aliasesProp, ['New']),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await flush()
+
+    expect((await env.read('marked'))!.content).toBe('::[[New]]')
+    expect(await blockReferences('marked', 't')).toEqual([{alias: 'New'}])
+  })
+
+  it('leaves a marked row alone when the target is not UUID-shaped', async () => {
+    // The canonical form is checked against the INLINE grammar, which is
+    // UUID-only — the same grammar that produces the edge the rewriter swaps
+    // in lockstep. Emitting `::((t))` would write an entry for an edge no
+    // re-parse produces. So the content is left alone and the stale edge is
+    // dropped for the re-parse to rebind, exactly as the pinned tier does.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      await flipWorkspaceWithDefinition('t')
+      await seedTarget('t', '', ['A'])
+      await seedMarkedFieldRow('marked', 'A')
+      expect(await blockReferences('marked', 't')).toEqual([{alias: 'A'}])
+
+      await env.repo.tx(
+        tx => tx.setProperty('t', aliasesProp, []),
+        {scope: ChangeScope.BlockDefault},
+      )
+      await flush()
+
+      expect((await env.read('marked'))!.content).toBe('::[[A]]')
+      expect(await blockReferences('marked', 't')).toEqual([])
+      expect(warn.mock.calls.flat().join(' ')).toContain('cannot re-key a marked row')
     } finally {
       warn.mockRestore()
     }
