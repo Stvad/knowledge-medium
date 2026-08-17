@@ -171,6 +171,23 @@ const SELECT_BACKLINK_SOURCES_SQL = `
  *  ALIAS to compare, because that is the parser that produced the
  *  `block_references.alias` this enumeration is keyed on.
  *
+ *  KNOWN GAP, confirmed and not yet fixed (Codex on PR #484, tracked on
+ *  #443). This asks only what the CONTENT says. §9 recognition also
+ *  requires a non-null parent (a workspace-root `::` row is user content,
+ *  not a field row — it has no owner to be a field OF), a flipped
+ *  workspace, and a target that resolves to a definition —
+ *  `isPropertyFieldInstance` is the composed predicate. So a root-level or
+ *  unflipped `::[[α]]`, or one pointing at an ordinary page, takes the
+ *  marked tier here and loses the author's visible label to `::((id))`
+ *  when it should keep the pinned form.
+ *
+ *  The tests below do NOT currently pin the difference: `seedSource`
+ *  creates at `parentId: null`, so every marked-row case is a ROOT row —
+ *  by §9 exactly the shape that is NOT a field row. They assert today's
+ *  behaviour, not the intended behaviour. Said here rather than left
+ *  implicit, because a green suite over the wrong precondition is the
+ *  failure mode this repo keeps re-learning.
+ *
  *  Using `exact.alias` for the comparison was wrong, and not merely
  *  conservatively so (Codex on PR #484). The whole-block parser TRIMS its
  *  alias while the inline one does not, so a `::[[ α ]]` row whose alias is

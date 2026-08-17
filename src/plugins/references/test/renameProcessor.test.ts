@@ -679,6 +679,35 @@ describe('rename — the references-parse fence (§11 group 4)', () => {
     expect((await env.read('s'))!.content).toBe(`see [${alias}](((${PIN_TARGET}))) please`)
   })
 
+  it("never rewrites an installed extension's source code", async () => {
+    // Codex on PR #484, P1. `references.parseReferences` deliberately does not
+    // run the wikilink grammar over extension source (code hands it `[[`
+    // openers for free — one real extension minted three phantom pages before
+    // that gate). So extension blocks have NO edge, which is exactly why the
+    // edge-keyed leg never reached them and the content leg would. Rewriting a
+    // span inside stored source corrupts an extension so it no longer loads.
+    await seedTarget('t', 'Old', ['Old'])
+    const code = 'const re = /[[Old]]/g // matches [[Old]]'
+    await env.repo.tx(async tx => {
+      await tx.create({
+        id: 'ext', workspaceId: WS, parentId: null, orderKey: 'e0',
+        content: code, properties: {types: ['extension']},
+      })
+    }, {scope: ChangeScope.BlockDefault})
+    await flush()
+    // Precondition, asserted not assumed: the extension really has no edge,
+    // so this test is about the content leg and nothing else.
+    expect(await blockReferences('ext', 't')).toEqual([])
+
+    await env.repo.tx(
+      tx => tx.setProperty('t', aliasesProp, ['New']),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await flush()
+
+    expect((await env.read('ext'))!.content).toBe(code)
+  })
+
   it('leaves an undrained source alone on a HANDOFF', async () => {
     // The fence is deliberately release-only, and this locks in that the
     // handoff path stays a content no-op: `[[Shared]]` already resolves

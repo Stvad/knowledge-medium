@@ -47,12 +47,37 @@
 
 import type { SameTxReadDb } from '@/data/api'
 import { parseReferences } from './referenceParser.ts'
+import { isExtensionSource } from './referencesProcessor.ts'
 
 /** One enumerated referrer: the id plus the content every caller needs
  *  anyway (to classify the row and to splice its spans). */
 export interface ReferrerRow {
   sourceId: string
   content: string
+}
+
+/** A candidate row before filtering: `ReferrerRow` plus the raw
+ *  `properties_json` the extension-source check needs. Not part of the
+ *  returned shape — callers get plain `ReferrerRow`s. */
+interface CandidateRow extends ReferrerRow {
+  propertiesJson: string | null
+}
+
+/** `blocks.properties_json` → the bag `isExtensionSource` reads. Tolerant
+ *  by design: this is a candidate FILTER, and a row whose JSON is
+ *  unparseable is not an extension source (its `types` can't say so), so
+ *  it falls through to the ordinary content path — the same answer the
+ *  processor's own raw-array read gives for a wrong-shaped value. */
+const parsePropertiesJson = (json: string | null): Record<string, unknown> => {
+  if (json === null) return {}
+  try {
+    const parsed: unknown = JSON.parse(json)
+    return typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : {}
+  } catch {
+    return {}
+  }
 }
 
 /** Candidate rows whose CONTENT contains a literal substring, read from
@@ -63,7 +88,8 @@ export interface ReferrerRow {
  *  row the index doesn't actually cover. Ordered like the edge-keyed
  *  enumerations it supplements, so a merged result stays deterministic. */
 const SELECT_FTS_CANDIDATES_SQL = `
-  SELECT blocks_fts.block_id AS sourceId, b.content AS content
+  SELECT blocks_fts.block_id AS sourceId, b.content AS content,
+         b.properties_json AS propertiesJson
   FROM blocks_fts
   JOIN blocks b
     ON b.id = blocks_fts.block_id
@@ -80,7 +106,8 @@ const SELECT_FTS_CANDIDATES_SQL = `
  *  interchangeable from the caller's side; only the cost differs (this one
  *  scans the workspace). */
 const SELECT_SCAN_CANDIDATES_SQL = `
-  SELECT b.id AS sourceId, b.content AS content
+  SELECT b.id AS sourceId, b.content AS content,
+         b.properties_json AS propertiesJson
   FROM blocks b
   WHERE b.workspace_id = ?
     AND instr(b.content, ?) > 0
@@ -130,6 +157,19 @@ const containsNul = (text: string): boolean => text.includes('\u0000')
  * `[[alias]]` span in the workspace resolved to it. That is why callers
  * must gate this on the release path — the result is only sound there.
  *
+ * KNOWN GAP, confirmed and not yet fixed (Codex on PR #484, tracked on
+ * #443). "Only claimant" is read per TARGET, so it does not hold when ONE
+ * transaction releases the same alias from two co-claimants — the
+ * sync-induced state of #460, where the uniqueness trigger never fired.
+ * Each target then sees zero post-tx claimants, both take the release
+ * path, and this leg hands both the same textual referrers. The source
+ * plan ends up with two rewrites for one alias with different targets:
+ * `rewriteWikilinksMulti` keeps the last, while `applyRefRewrites` follows
+ * whichever target the existing edge named, so content and edge can pin to
+ * different blocks and the outcome depends on iteration order. The fix is
+ * to group releases by alias and run this leg only for the target that
+ * owned the pre-tx binding.
+ *
  * Calling it on a handoff/co-claim path is WASTEFUL rather than wrong,
  * which mutation-testing confirms: doing so fails no test. There the
  * rewrite changes no content and only drops stale edges, and a row with no
@@ -149,12 +189,26 @@ export const wikilinkSourcesByContent = async (
   // the stored TEXT rather than a query string and matches an embedded NUL
   // correctly — verified against the engine, not assumed, since plenty of
   // SQL string functions do truncate there.
-  const candidates = await db.getAll<ReferrerRow>(
+  const candidates = await db.getAll<CandidateRow>(
     containsNul(needle) ? SELECT_SCAN_CANDIDATES_SQL : SELECT_FTS_CANDIDATES_SQL,
     [workspaceId, containsNul(needle) ? needle : ftsPhrase(needle)],
   )
-  return candidates.filter(row =>
-    parseReferences(row.content).some(mark => mark.alias === alias))
+  return candidates
+    // An installed extension's SOURCE lives in `blocks.content`, and
+    // `references.parseReferences` deliberately does NOT run the wikilink
+    // grammar over it: code supplies `[[` openers for free (a regex class
+    // starting with a literal `[`, a nested array literal), and one real
+    // extension minted three phantom pages before that gate landed.
+    //
+    // Which means extension blocks have no edge — so the edge-keyed leg
+    // could never reach them, and this leg reads content directly and
+    // WOULD. Rewriting a span inside stored source is not a missed
+    // rewrite, it is a corrupted extension that no longer loads. The
+    // exclusion is imported from the processor that owns it rather than
+    // restated, so the two cannot drift (Codex on PR #484).
+    .filter(row => !isExtensionSource({properties: parsePropertiesJson(row.propertiesJson)}))
+    .filter(row => parseReferences(row.content).some(mark => mark.alias === alias))
+    .map(({sourceId, content}) => ({sourceId, content}))
 }
 
 /** Union the legs, first occurrence of an id winning.
