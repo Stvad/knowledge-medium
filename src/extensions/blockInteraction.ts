@@ -702,19 +702,17 @@ const BLOCK_BOUNDARY_SELECTOR = '.block-content, .tm-block'
 /**
  * Is this event's target on OUR surface, rather than on a nested block's?
  *
- * A renderer can fill a block's content slot with real block rows — the Readwise
- * review backlog, a review deck — putting one block's surface inside another's.
- * An ordinary outline block's children sit OUTSIDE its content slot, which is
- * why only these surfaces are affected. Every pointer handler on a content
- * surface then sees the nested block's events too, and both phases get it wrong
- * in their own direction: a bubbling handler lets the container act LAST and
- * overwrite (the swipe menu opened for the backlog), a capturing one lets it act
- * FIRST and consume (a double-click on a highlight edited the backlog).
- *
  * Innermost wins unconditionally, whether or not the nested block handles that
  * gesture: an ancestor must not inherit a gesture the block under the pointer
  * declined (a nested block in edit mode disables its swipe, and "swipe the
  * container instead" is never the right reading of that).
+ *
+ * Propagation cannot stand in for this. A renderer that fills a content slot
+ * with real block rows puts one surface inside another, and then each phase
+ * fails its own way: bubbling lets the container act LAST and overwrite,
+ * capturing lets it act FIRST and consume. Ordinary outline children sit
+ * outside their parent's content slot, which is why only such surfaces are
+ * affected — and why testing this needs one of them.
  */
 export const ownsGestureTarget = (element: HTMLElement, target: EventTarget | null): boolean => {
   if (typeof Node === 'undefined' || !(target instanceof Node)) return true
