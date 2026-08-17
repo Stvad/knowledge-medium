@@ -2540,6 +2540,14 @@ export class Repo {
         this.disposeBackfillSyncGate = this.backfillSyncGate(() => {
           this.disposeBackfillSyncGate = undefined
           this.workspaceBackfillJobs.schedule(async () => {
+            // Workspace check FIRST, before the re-probe below — the order is
+            // load-bearing. `arm()` disposes whatever gate is currently held,
+            // so re-arming for a workspace the user has already left would tear
+            // down the gate the INCOMING workspace's bootstrap just armed and
+            // replace it with a stale one; that workspace would then never
+            // backfill. Nothing to re-arm for a departed workspace anyway: its
+            // own bootstrap arms again if the user returns.
+            if (this._client.activeWorkspaceId !== workspaceId) return
             // The gate opening only proved the device was caught up THEN; the
             // idle deferral is 10-30s of window in which a fresh download can
             // start, which is exactly the state the gate exists to keep us out
@@ -2549,10 +2557,6 @@ export class Repo {
             let settledNow = false
             this.backfillSyncGate(() => { settledNow = true })()
             if (!settledNow) { arm(); return }
-            // The workspace can also have changed under us during that window.
-            // `runWorkspaceBackfills` writes whatever id it is handed, and the
-            // access/read-only state it checks is the CURRENT session's.
-            if (this._client.activeWorkspaceId !== workspaceId) return
             await this.runWorkspaceBackfills(workspaceId, backfills)
           })
         })

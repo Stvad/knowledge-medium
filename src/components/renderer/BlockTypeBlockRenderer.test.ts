@@ -10,14 +10,16 @@ import { createTestRepo } from '@/data/test/createTestRepo'
 import { aliasDataExtension } from '@/plugins/alias/dataExtension'
 import { writeBlockTypeLabel } from './BlockTypeBlockRenderer'
 
+// One DB for the FILE — both suites below share it, reset between tests. The
+// repo is still built fresh per test: these exercise processor-driven alias
+// writes, so they want their own registry and id sequence, just not their own
+// database.
+let h: TestDb
+beforeAll(async () => { h = await createTestDb() })
+afterAll(async () => { await h.cleanup() })
+beforeEach(async () => { await resetTestDb(h.db) })
+
 describe('writeBlockTypeLabel', () => {
-  // One DB for the file, reset between tests. The repo is still built fresh
-  // per test — these exercise processor-driven alias writes, so they want
-  // their own registry and id sequence, just not their own database.
-  let h: TestDb
-  beforeAll(async () => { h = await createTestDb() })
-  afterAll(async () => { await h.cleanup() })
-  beforeEach(async () => { await resetTestDb(h.db) })
 
   /** Fresh repo + one alias-less `block-type` block (`type-1`), mirroring
    *  the Types-page "New type" button: created with an empty label and no
@@ -154,12 +156,6 @@ describe('writeBlockTypeLabel', () => {
  *  being claimed" is a property of the two together, and that is where the
  *  drift bug lived. */
 describe('writeBlockTypeLabel + alias.sync — the old name must stop being claimed', () => {
-  // Same shared-DB shape as the suite above: one DB per file, reset per test.
-  let h: TestDb
-  beforeAll(async () => { h = await createTestDb() })
-  afterAll(async () => { await h.cleanup() })
-  beforeEach(async () => { await resetTestDb(h.db) })
-
   const setupTypeBlock = async (
     initial: { label: string; content: string; aliases: readonly string[] },
   ): Promise<Repo> => {

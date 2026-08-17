@@ -12,6 +12,7 @@ import { createTestRepo } from '@/data/test/createTestRepo'
  *  to the user's undo stack. */
 
 const WS = 'ws-backfill-runner'
+const OTHER_WS = 'ws-backfill-runner-other'
 
 let sharedDb: TestDb
 
@@ -21,9 +22,11 @@ const probeBackfill = (runs: string[]): WorkspaceBackfill => ({
   id: 'probe-backfill-v1',
   run: async ({workspaceId, tx}) => {
     runs.push(workspaceId)
+    const targetId = workspaceId === WS ? 'target' : `target-${workspaceId}`
     await tx(async t => {
-      const row = await t.get('target')
-      await t.update('target', {properties: {...row?.properties, 'probe:mark': 'backfilled'}})
+      const row = await t.get(targetId)
+      if (!row) return
+      await t.update(targetId, {properties: {...row.properties, 'probe:mark': 'backfilled'}})
     }, {description: 'probe backfill write'})
   },
 })
@@ -148,6 +151,33 @@ describe('workspace backfill runner — sync gating', () => {
     await repo.awaitWorkspaceBackfills()
 
     expect(runs).toEqual([])
+  })
+
+  it('a departed workspace’s job does not steal the incoming workspace’s gate', async () => {
+    // Position test, not a behaviour test: the re-probe's `arm()` disposes
+    // whatever gate is currently held. If it runs BEFORE the workspace check,
+    // a stale job for A tears down the gate B's bootstrap just armed and
+    // replaces it with an A gate — so B never backfills at all.
+    const runs: string[] = []
+    const g = controllableGate()
+    const repo = makeRepo(probeBackfill(runs), g.gate)
+    await seedTarget(repo)
+
+    repo.scheduleWorkspaceBackfills(WS)
+    g.open()                    // A's job is scheduled
+    g.close()                   // ...and will find itself un-settled
+    repo.setActiveWorkspaceId(OTHER_WS)
+    repo.scheduleWorkspaceBackfills(OTHER_WS)   // B arms its own gate
+    expect(g.armed()).toBe(1)
+
+    await vi.runAllTimersAsync()                // A's stale job runs and bails
+    await repo.awaitWorkspaceBackfills()
+
+    // B's gate must still be the one armed: opening it runs B, not A.
+    g.open()
+    await vi.runAllTimersAsync()
+    await repo.awaitWorkspaceBackfills()
+    expect(runs).toEqual([OTHER_WS])
   })
 
   it('disposes a gate still armed for a workspace the user left', async () => {
