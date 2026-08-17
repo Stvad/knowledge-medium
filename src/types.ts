@@ -89,6 +89,21 @@ export interface BlockRendererProps {
 export interface BlockRenderer extends FunctionComponent<BlockRendererProps> {
     canRender?: (props: BlockRendererProps) => boolean;
     priority?: (props: BlockRendererProps) => number;
+    /**
+     * Does this render the block's own TEXT, as opposed to a view of other
+     * things (a review backlog, a review deck, a recents list)?
+     *
+     * Absent means no, which is what lets an extension's surface be classified
+     * without the extension knowing this exists — they live in the DB, where no
+     * sweep reaches. The two renderers that draw block text set it, and a
+     * renderer that WRAPS another must pass it along or everything it wraps
+     * silently becomes a view: the edit dispatcher wraps both text renderers
+     * for every ordinary block, so a missed hand-off there is app-wide.
+     *
+     * Consumers care because a view's row describes everything it shows rather
+     * than the block, which anything reasoning about row geometry has to know.
+     */
+    showsBlockText?: boolean;
 }
 
 export interface RendererRegistry {

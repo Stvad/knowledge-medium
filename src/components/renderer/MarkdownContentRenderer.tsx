@@ -87,3 +87,7 @@ export function MarkdownContentRenderer({
     </Container>
   )
 }
+
+// This IS the block's own text — see `BlockRenderer.showsBlockText`. Anything
+// wrapping it has to pass the flag along.
+MarkdownContentRenderer.showsBlockText = true

@@ -25,6 +25,7 @@ import { BlockContextProvider } from '@/context/block'
 import { blockContentRendererFacet, blockLayoutFacet, type BlockLayout } from '@/extensions/blockInteraction'
 import { defineVariant } from '@/facets/variantFacet'
 import { defaultEditorInteractionExtension } from '@/editor/defaultInteractions'
+import { plainOutlinerPlugin } from '@/plugins/plain-outliner'
 import { type FacetRuntime } from '@/facets/facet'
 import { ActiveContextsProvider } from '@/shortcuts/ActiveContexts'
 import type { Block } from '@/data/block'
@@ -743,6 +744,10 @@ describe('content-view marking', () => {
   let sharedDb: TestDb
   let repo: Repo
   let runtime: FacetRuntime
+  /** The same fixture with the REAL plain-outliner plugin mounted, which is
+   *  what the app runs — its editing dispatcher stands between the slot and
+   *  both text renderers. */
+  let outlinerRuntime: FacetRuntime
 
   beforeAll(async () => { sharedDb = await createTestDb() })
   afterAll(async () => { await sharedDb.cleanup() })
@@ -763,6 +768,12 @@ describe('content-view marking', () => {
       ],
     }).repo
     runtime = repo.facetRuntime!
+    outlinerRuntime = createTestRepo({
+      db: sharedDb.db,
+      user: {id: 'user-1'},
+      newId: () => crypto.randomUUID(),
+      extensions: [defaultEditorInteractionExtension, plainOutlinerPlugin],
+    }).repo.facetRuntime!
     repo.setActiveWorkspaceId('ws-1')
     repoRef.current = repo
 
@@ -789,6 +800,17 @@ describe('content-view marking', () => {
         <BlockContextProvider initialValue={{scopeRootId: id}}>
           <ActiveContextsProvider>
             <DefaultBlockRenderer block={repo.block(id)} ContentRenderer={ContentRenderer} />
+          </ActiveContextsProvider>
+        </BlockContextProvider>
+      </AppRuntimeContextProvider>,
+    )
+
+  const renderWithPlainOutliner = (id: string) =>
+    render(
+      <AppRuntimeContextProvider value={outlinerRuntime}>
+        <BlockContextProvider initialValue={{scopeRootId: id}}>
+          <ActiveContextsProvider>
+            <DefaultBlockRenderer block={repo.block(id)} />
           </ActiveContextsProvider>
         </BlockContextProvider>
       </AppRuntimeContextProvider>,
@@ -827,6 +849,18 @@ describe('content-view marking', () => {
 
     // Proven present before asserting the attribute is absent, so this cannot
     // pass on a slot that simply had not rendered yet.
+    await screen.findByText('Page title')
+    expect(marked()).toBe(false)
+  })
+
+  // The plugin that is actually mounted in the app wraps both text renderers in
+  // a generated dispatcher, so the slot never sees either of them directly. A
+  // check on renderer identity read every ordinary block as a view and switched
+  // cursor-follows-scroll off app-wide; a fixture without the plugin cannot see
+  // that, which is precisely why this test mounts the real one.
+  it('leaves an ordinary block unmarked through the real editing dispatcher', async () => {
+    renderWithPlainOutliner('root')
+
     await screen.findByText('Page title')
     expect(marked()).toBe(false)
   })

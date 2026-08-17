@@ -613,15 +613,22 @@ export function DefaultBlockRenderer(
   // Typed as a `FunctionComponent` (not `ComponentType`) so it's assignable both
   // to the `RawContent` slot AND directly to the dispatcher's `primary`
   // `BlockRenderer` slot below — no thunk needed.
-  const RawContentSlot = useMemo<FunctionComponent>(() => {
-    return function BlockRawContentSlot() {
-      return (
-        <ErrorBoundary FallbackComponent={FallbackComponent}>
-          <DefaultContentRenderer block={block}/>
-        </ErrorBoundary>
-      )
-    }
-  }, [block, DefaultContentRenderer])
+  // Takes no props of its own (it closes over `block`), but carries the
+  // renderer's text/view answer so whoever mounts it can still ask.
+  const RawContentSlot = useMemo<FunctionComponent & Pick<BlockRenderer, 'showsBlockText'>>(
+    () => Object.assign(
+      function BlockRawContentSlot() {
+        return (
+          <ErrorBoundary FallbackComponent={FallbackComponent}>
+            <DefaultContentRenderer block={block}/>
+          </ErrorBoundary>
+        )
+      },
+      // Hand-off: this slot shows whatever it wraps, so it answers for it.
+      {showsBlockText: DefaultContentRenderer.showsBlockText},
+    ),
+    [block, DefaultContentRenderer],
+  )
 
   // Stable per-block resolver context — doesn't change on focus/edit/
   // selection toggles, so facet resolvers and the components they
@@ -703,20 +710,16 @@ export function DefaultBlockRenderer(
       // Does this slot show the block's own TEXT, or a view of other things —
       // a review backlog, a review deck, a recents list, a video player?
       //
-      // Only the slot can answer: it is what resolved the renderer, and both
-      // ways one arrives (the facet, or the `ContentRenderer` prop) are visible
-      // right here. Everyone downstream was otherwise left inferring it from
-      // the DOM, which cannot be done — "holds other blocks' rows" is also true
-      // of a paragraph containing an embed, and false for a backlog whose rows
-      // are all still lazy placeholders. Both misreadings shipped.
+      // The slot is where the answer gets recorded because it is what resolved
+      // the renderer, but the renderer is what KNOWS: comparing identities here
+      // reads a wrapper (the edit dispatcher stands in front of both text
+      // renderers for every ordinary block) as a view, which switches this off
+      // everywhere. `showsBlockText` travels through wrappers instead.
       //
-      // Derived rather than declared so an extension's renderer needs no
-      // update to be classified (extensions live in the DB, where no sweep
-      // reaches). The cost is that a custom renderer drawing the block's own
-      // text reads as a view; if one ever needs to say otherwise, a static on
-      // the component is the place to add it.
-      const showsBlockText = baseContentRenderer === MarkdownContentRenderer
-        || baseContentRenderer === CodeMirrorContentRenderer
+      // Absent means "a view", so an extension's surface classifies correctly
+      // without the extension knowing this exists — they live in the DB, where
+      // no sweep reaches.
+      const showsBlockText = baseContentRenderer.showsBlockText === true
       const decorateContent = runtime.read(blockContentDecoratorsFacet)
       const ContentRenderer = useMemo(
         () => decorateContent(resolveContext, baseContentRenderer),
