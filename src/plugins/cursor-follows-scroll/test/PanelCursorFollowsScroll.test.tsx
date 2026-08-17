@@ -138,10 +138,11 @@ afterEach(() => {
 })
 
 /** A second panel whose cursor IS scrolled away, mounted alongside the subject.
- *  Its re-anchor lands on the same scroll event and the same settle delay, so
- *  once it has fired the subject has demonstrably had its turn — the negative
- *  assertions below are observations, not races with the property
- *  subscription. */
+ *  Scrolled at the same moment as the subject and settling on the same delay,
+ *  so once it has fired the subject has demonstrably had its turn — the
+ *  negative assertions below are observations, not races with the property
+ *  subscription. (Each panel now only reacts to scrolls of its own, so the
+ *  fence must be scrolled alongside the subject, never instead of it.) */
 const withFence = async () => {
   const fencePanel = repo.block(FENCE_PANEL_ID)
   const dom = buildPanel(FENCE_PANEL_ID, [['fence-a', 20], ['fence-b', 200]])
@@ -395,6 +396,40 @@ describe('PanelCursorFollowsScroll', () => {
 
     await vi.waitFor(() => {
       expect(peekFocusedBlockLocation(panel)?.blockId).toBe('note-b')
+    }, {timeout: 2000})
+  })
+
+  // A cursor on a row that holds the rows is never "still on screen" in the
+  // sense the settle asks about, so nothing about ITS state stops an unrelated
+  // pane's scroll from re-anchoring a viewport that never moved. The scroll
+  // listener is document-capture, so those events do arrive here.
+  it('ignores a scroll in another panel', async () => {
+    const panel = repo.block(PANEL_ID)
+    const dom = buildPanel(PANEL_ID, [])
+    const container = dom.addNestingRow('backlog', -600, 2000)
+    dom.addRow('note-a', 20, container)
+    await focusBlock(panel, 'backlog', {renderScopeId: SCOPE})
+    const fence = await withFence()
+
+    render(
+      <>
+        <PanelCursorFollowsScroll block={panel}/>
+        <PanelCursorFollowsScroll block={fence.fencePanel}/>
+      </>,
+    )
+
+    // Only the fence scrolls. Its own re-anchor lands, which is the fence: by
+    // the time it has, this panel has had every chance to react.
+    fence.scrollAway()
+
+    await fence.settled()
+    expect(peekFocusedBlockLocation(panel)?.blockId).toBe('backlog')
+
+    // ...and this panel's own scroll still moves it, so the gate narrowed the
+    // trigger rather than switching it off.
+    dom.scroll()
+    await vi.waitFor(() => {
+      expect(peekFocusedBlockLocation(panel)?.blockId).toBe('note-a')
     }, {timeout: 2000})
   })
 

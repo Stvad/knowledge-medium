@@ -146,7 +146,15 @@ export function PanelCursorFollowsScroll({block}: {block: Block}) {
     }
     const scheduler = createSettleScheduler(() => settle())
 
-    const onScroll = () => {
+    const onScroll = (event: Event) => {
+      // Only scrolls that could have moved THIS panel. The listener is
+      // document-capture (see below), so another panel's port reaches us too —
+      // harmless while every cursor's row went off screen before anything
+      // happened, but a cursor on a row that CONTAINS the rows is never on
+      // screen in that sense, so an unrelated pane's scroll would re-anchor a
+      // viewport that never moved.
+      const target = event.target
+      if (target instanceof Node && !target.contains(panelEl) && !panelEl.contains(target)) return
       sample()
       if (!seenOnScreen) return
       if (block.peekProperty(isEditingProp)) suppressedWhileEditing = true
@@ -212,8 +220,8 @@ export function PanelCursorFollowsScroll({block}: {block: Block}) {
     // Capture at the document: scroll doesn't bubble, and which element
     // actually scrolls varies (the panel's own overflow container normally, an
     // ancestor for a stacked panel, a nested port inside a mode renderer).
-    // Scrolls belonging to other panels reach us too and cost a settle check
-    // that finds this cursor still on screen.
+    // Which is why `onScroll` filters by relationship to the panel rather than
+    // by a fixed element.
     document.addEventListener('scroll', onScroll, {capture: true, passive: true})
     return () => {
       document.removeEventListener('scroll', onScroll, {capture: true})
