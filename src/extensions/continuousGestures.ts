@@ -36,7 +36,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore
 import type { RefCallback, RefObject } from 'react'
 import { defineFacet, isFunction } from '@/facets/facet.js'
 import { useAppRuntime } from '@/extensions/runtimeContext.js'
-import type { BlockResolveContext } from '@/extensions/blockInteraction.js'
+import { ownsGestureTarget, type BlockResolveContext } from '@/extensions/blockInteraction.js'
 import type { ActionTrigger, BaseShortcutDependencies } from '@/shortcuts/types.js'
 import {
   dispatchGesture as defaultDispatchGesture,
@@ -229,40 +229,6 @@ export interface BlockGestureController {
   handlePointerCancel(sample: PointerSample): void
   /** Union `touch-action` the React layer applies to the surface. */
   readonly touchAction: string | undefined
-}
-
-/**
- * Where one block's DOM ends and another's begins: a content surface
- * (`DefaultBlockRenderer`'s content slot) or a block shell. Walking up from an
- * event target, the first of these decides which block the target belongs to.
- *
- * BOTH are needed. A shell holds more than its content slot — the bullet, the
- * property panel, a breadcrumb chain, whatever chrome a surface adds — and a
- * target there has no `.block-content` above it until the CONTAINER's, which
- * would read as the container's own. Neither marker alone spans a block.
- */
-const BLOCK_BOUNDARY_SELECTOR = '.block-content, .tm-block'
-
-/**
- * Is this event's target on OUR surface, rather than on a nested block's?
- *
- * Pointer events bubble, so a swipe on a block rendered inside ANOTHER block's
- * content slot — the Readwise review backlog, a review deck, any surface that
- * mounts real rows in the content area — reaches the container's listeners too,
- * and both controllers recognize the same motion. The container's dispatch lands
- * last, so the gesture acts on the container. An ordinary outline block's
- * children sit outside its content slot, which is why only these surfaces bit.
- *
- * Innermost wins unconditionally, whether or not the nested block has a
- * recognizer for that gesture: an ancestor must not inherit a gesture the block
- * under the finger declined (a nested block in edit mode disables its swipe, and
- * "swipe the container instead" is never the right reading of that).
- */
-export const ownsGestureTarget = (element: HTMLElement, target: EventTarget | null): boolean => {
-  if (typeof Node === 'undefined' || !(target instanceof Node)) return true
-  const start = target.nodeType === Node.ELEMENT_NODE ? (target as Element) : target.parentElement
-  const boundary = start?.closest(BLOCK_BOUNDARY_SELECTOR)
-  return !boundary || boundary === element
 }
 
 /**

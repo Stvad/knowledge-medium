@@ -252,4 +252,78 @@ describe('blockContentPointerGestures (content-surface pointer gestures)', () =>
     surface.onTouchEnd?.(touchAt(80, 80))
     expect(mockDispatchPointerAction).not.toHaveBeenCalled()
   })
+
+  // A renderer that fills a block's content slot with real rows (the Readwise
+  // review backlog) puts one content surface inside another. Capture runs outer
+  // → inner, so without an ownership check the CONTAINER claims a nested
+  // block's double-click first and preventDefaults — the nested block never
+  // sees it, and the double-click lands on the backlog page.
+  describe('a nested block surface', () => {
+    const nested = () => {
+      const outer = document.createElement('div')
+      outer.className = 'block-content'
+      const inner = document.createElement('div')
+      inner.className = 'block-content'
+      const innerText = document.createElement('span')
+      inner.appendChild(innerText)
+      const ownText = document.createElement('span')
+      outer.append(ownText, inner)
+      return {outer, innerText, ownText}
+    }
+
+    it('leaves a nested surface its own double-click', () => {
+      const {outer, innerText} = nested()
+      props().onMouseDownCapture?.(mouseDown({currentTarget: outer, target: innerText}))
+      expect(mockDispatchPointerAction).not.toHaveBeenCalled()
+    })
+
+    it('still claims a double-click on its own content', () => {
+      const {outer, ownText} = nested()
+      props().onMouseDownCapture?.(mouseDown({currentTarget: outer, target: ownText}))
+      expect(mockDispatchPointerAction).toHaveBeenCalledTimes(1)
+    })
+
+    // Both ENDPOINTS have to be ours, and the two checks answer different
+    // questions — don't take a session that began on another block, don't act
+    // on one that ended there. Each mixed case below pins one of them; the
+    // both-ends-nested tap is caught by either, so it pins neither on its own.
+    const tap = (
+      surface: BlockContentSurfaceProps,
+      outer: HTMLElement,
+      startTarget: EventTarget,
+      endTarget: EventTarget,
+    ) => {
+      const at = (x: number, y: number, target: EventTarget) => ({
+        ...touchAt(x, y),
+        currentTarget: outer,
+        target,
+      }) as unknown as TouchEvent<HTMLDivElement>
+      surface.onTouchStart?.(at(5, 5, startTarget))
+      surface.onTouchEnd?.(at(6, 6, endTarget))
+    }
+
+    it('leaves a nested surface its own tap', () => {
+      const {outer, innerText} = nested()
+      tap(props(), outer, innerText, innerText)
+      expect(mockDispatchPointerAction).not.toHaveBeenCalled()
+    })
+
+    it('does not take a tap that BEGAN on a nested surface', () => {
+      const {outer, innerText, ownText} = nested()
+      tap(props(), outer, innerText, ownText)
+      expect(mockDispatchPointerAction).not.toHaveBeenCalled()
+    })
+
+    it('does not take a tap that ENDED on a nested surface', () => {
+      const {outer, innerText, ownText} = nested()
+      tap(props(), outer, ownText, innerText)
+      expect(mockDispatchPointerAction).not.toHaveBeenCalled()
+    })
+
+    it('still takes a tap that stays on its own content', () => {
+      const {outer, ownText} = nested()
+      tap(props(), outer, ownText, ownText)
+      expect(mockDispatchPointerAction).toHaveBeenCalledTimes(1)
+    })
+  })
 })

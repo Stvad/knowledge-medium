@@ -6,6 +6,7 @@ import {
   blockShellDecoratorsFacet,
   isInteractiveContentEvent,
   isSelectionClick,
+  ownsGestureTarget,
   type BlockContentSurfaceContribution,
   type BlockResolveContext,
   type BlockShellDecoratorContribution,
@@ -134,8 +135,16 @@ export const blockContentPointerGestures: BlockContentSurfaceContribution = cont
     dispatchPointerAction(event, blockPointerDepsFrom(context, event))
   }
 
+  /** Events on a nested block's surface belong to that block, not to us (see
+   *  `ownsGestureTarget`). Load-bearing for the CAPTURE handler in particular:
+   *  capture runs outer → inner, so a container would claim a nested block's
+   *  double-click before that block ever saw it. */
+  const isOurs = (event: {currentTarget: HTMLElement; target: EventTarget | null}): boolean =>
+    ownsGestureTarget(event.currentTarget, event.target)
+
   return {
     onMouseDownCapture: (event: MouseEvent<HTMLDivElement>) => {
+      if (!isOurs(event)) return
       // A shell-level selection gesture already preventDefaulted (capture runs
       // shell → content), so skip it here rather than double-routing.
       if (event.defaultPrevented) return
@@ -145,6 +154,7 @@ export const blockContentPointerGestures: BlockContentSurfaceContribution = cont
       dispatchGesture(event)
     },
     onTouchStart: (event: TouchEvent<HTMLDivElement>) => {
+      if (!isOurs(event)) return
       const touch = event.touches[0]
       if (!touch) return
       contentTouchStarts.set(context.block.id, {
@@ -154,6 +164,7 @@ export const blockContentPointerGestures: BlockContentSurfaceContribution = cont
       })
     },
     onTouchEnd: (event: TouchEvent<HTMLDivElement>) => {
+      if (!isOurs(event)) return
       const start = contentTouchStarts.get(context.block.id)
       contentTouchStarts.delete(context.block.id)
       const touch = event.changedTouches[0]
