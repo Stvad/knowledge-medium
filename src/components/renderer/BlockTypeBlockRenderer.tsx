@@ -95,9 +95,9 @@ export const writeBlockTypeLabel = async (
         await tx.setProperty(block.id, aliasesProp, [next])
       } else if (
         row
-        && currentLabel !== ''
-        && currentLabel !== currentContent
-        && aliases.includes(currentLabel)
+        && storedLabel !== ''
+        && storedLabel !== storedContent
+        && aliases.includes(storedLabel)
       ) {
         // Drift case, the one shape `aliasSyncProcessor` structurally cannot
         // reconcile: it replaces the alias entry matching the block's OLD
@@ -111,7 +111,7 @@ export const writeBlockTypeLabel = async (
         // UI path produces) stay owned by that processor. Afterwards it no-ops
         // by its own rule-2 short-circuit, since the list now contains the new
         // content.
-        const replaced = aliases.map(alias => (alias === currentLabel ? next : alias))
+        const replaced = aliases.map(alias => (alias === storedLabel ? next : alias))
         await tx.setProperty(block.id, aliasesProp, [...new Set(replaced)])
       }
     } else {

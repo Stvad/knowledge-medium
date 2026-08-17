@@ -1362,6 +1362,14 @@ export class Repo {
       // one (a same-workspace projector re-pin keeps the current generation).
       this.seedMaterializationGeneration.abort()
       this.seedMaterializationGeneration = new AbortController()
+      // Same for a backfill gate still armed for the departed workspace. It
+      // captures that workspace id, and `scheduleWorkspaceBackfills` only
+      // disposes a stale gate when it is reached again — which the read-only /
+      // no-backfills early returns can skip entirely. Left armed, a status
+      // change later fires it and writes the departed workspace under the
+      // current session's access state.
+      this.disposeBackfillSyncGate?.()
+      this.disposeBackfillSyncGate = undefined
     }
     this.facetBridge.setActiveWorkspaceId(workspaceId)
     try {
@@ -2527,13 +2535,29 @@ export class Repo {
       // never connects, leaving a promise pending forever in the drain set
       // (and hanging `awaitWorkspaceBackfills`). Arming the gate here means a
       // session that never catches up simply never schedules a job.
-      this.disposeBackfillSyncGate?.()
-      this.disposeBackfillSyncGate = this.backfillSyncGate(() => {
-        this.disposeBackfillSyncGate = undefined
-        this.workspaceBackfillJobs.schedule(() =>
-          this.runWorkspaceBackfills(workspaceId, backfills),
-        )
-      })
+      const arm = (): void => {
+        this.disposeBackfillSyncGate?.()
+        this.disposeBackfillSyncGate = this.backfillSyncGate(() => {
+          this.disposeBackfillSyncGate = undefined
+          this.workspaceBackfillJobs.schedule(async () => {
+            // The gate opening only proved the device was caught up THEN; the
+            // idle deferral is 10-30s of window in which a fresh download can
+            // start, which is exactly the state the gate exists to keep us out
+            // of. Re-probe by arming a throwaway gate and seeing whether it
+            // fires synchronously — that is the settled predicate, reusing the
+            // injected function rather than growing the option into a pair.
+            let settledNow = false
+            this.backfillSyncGate(() => { settledNow = true })()
+            if (!settledNow) { arm(); return }
+            // The workspace can also have changed under us during that window.
+            // `runWorkspaceBackfills` writes whatever id it is handed, and the
+            // access/read-only state it checks is the CURRENT session's.
+            if (this._client.activeWorkspaceId !== workspaceId) return
+            await this.runWorkspaceBackfills(workspaceId, backfills)
+          })
+        })
+      }
+      arm()
     }
   }
 

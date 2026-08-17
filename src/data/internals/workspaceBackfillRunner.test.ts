@@ -59,24 +59,112 @@ beforeEach(async () => { await resetTestDb(sharedDb.db); vi.useFakeTimers() })
 afterEach(() => { vi.useRealTimers() })
 
 describe('workspace backfill runner — sync gating', () => {
+  /** A gate with the real contract: fires SYNCHRONOUSLY when already settled,
+   *  otherwise parks the callback until `open()`. The synchronous-when-settled
+   *  half is load-bearing — the runner re-probes with a throwaway gate at job
+   *  execution time and reads "fired synchronously" as "still settled". */
+  const controllableGate = () => {
+    let settled = false
+    let waiters: (() => void)[] = []
+    return {
+      gate: (cb: () => void) => {
+        if (settled) { cb(); return () => {} }
+        waiters.push(cb)
+        return () => { waiters = waiters.filter(w => w !== cb) }
+      },
+      open: () => {
+        settled = true
+        const pending = waiters
+        waiters = []
+        for (const w of pending) w()
+      },
+      close: () => { settled = false },
+      /** Callbacks still parked — i.e. listeners a real gate would be holding. */
+      armed: () => waiters.length,
+    }
+  }
+
   it('does not run while the device is still catching up', async () => {
     // The hazard is not just "misses rows". `apply_block_patches` assigns
     // `properties_json` wholesale, so a write built from a stale local row
     // uploads the whole stale bag and drops property edits made elsewhere that
     // haven't arrived. A half-synced device must not write at all.
     const runs: string[] = []
-    let openGate: (() => void) | undefined
-    const repo = makeRepo(probeBackfill(runs), cb => { openGate = cb; return () => {} })
+    const g = controllableGate()
+    const repo = makeRepo(probeBackfill(runs), g.gate)
     await seedTarget(repo)
 
     await drain(repo)
     expect(runs).toEqual([])
 
     // Catch-up completes; the armed gate opens and the pass runs.
-    openGate!()
+    g.open()
     await vi.runAllTimersAsync()
     await repo.awaitWorkspaceBackfills()
     expect(runs).toEqual([WS])
+  })
+
+  it('re-probes at execution time — a download starting during the idle delay defers it', async () => {
+    // The gate opening only proves the device was caught up THEN. The idle
+    // deferral is 10-30s in which a fresh download can start, which is exactly
+    // the state the gate exists to keep writes out of.
+    //
+    // Ordering is the whole test: the gate has to be ARMED before it is opened,
+    // or the open finds no waiter and the job is never scheduled — which passes
+    // for the wrong reason, since the re-probe is then never reached.
+    const runs: string[] = []
+    const g = controllableGate()
+    const repo = makeRepo(probeBackfill(runs), g.gate)
+    await seedTarget(repo)
+
+    repo.scheduleWorkspaceBackfills(WS)   // arm, still catching up
+    g.open()                              // caught up → schedules the idle job
+    g.close()                             // a fresh download starts before it runs
+    await vi.runAllTimersAsync()
+    await repo.awaitWorkspaceBackfills()
+    expect(runs).toEqual([])
+
+    // Once it settles again the re-armed gate lets the pass through.
+    g.open()
+    await vi.runAllTimersAsync()
+    await repo.awaitWorkspaceBackfills()
+    expect(runs).toEqual([WS])
+  })
+
+  it('does not write a workspace the user left during the idle delay', async () => {
+    // `runWorkspaceBackfills` writes whatever id it was handed, and the
+    // read-only/access state it checks is the CURRENT session's — so a job
+    // queued for A must not execute after the user moved to B.
+    const runs: string[] = []
+    const g = controllableGate()
+    const repo = makeRepo(probeBackfill(runs), g.gate)
+    await seedTarget(repo)
+
+    repo.scheduleWorkspaceBackfills(WS)
+    g.open()                              // job scheduled for WS
+    repo.setActiveWorkspaceId('ws-somewhere-else')
+    await vi.runAllTimersAsync()
+    await repo.awaitWorkspaceBackfills()
+
+    expect(runs).toEqual([])
+  })
+
+  it('disposes a gate still armed for a workspace the user left', async () => {
+    // Distinct from the check above, which catches an already-SCHEDULED job.
+    // This one is about a gate still parked: it holds a status listener and
+    // captures the departed workspace id. `scheduleWorkspaceBackfills` only
+    // disposes a stale gate when it is reached again, which the read-only /
+    // no-backfills early returns skip entirely — so the leaving path must.
+    const g = controllableGate()
+    const repo = makeRepo(probeBackfill([]), g.gate)
+    await seedTarget(repo)
+
+    repo.scheduleWorkspaceBackfills(WS)   // arms, never opens
+    expect(g.armed()).toBe(1)
+
+    repo.setActiveWorkspaceId('ws-somewhere-else')
+
+    expect(g.armed()).toBe(0)
   })
 
   it('records no completion marker while gated, so the next open retries', async () => {

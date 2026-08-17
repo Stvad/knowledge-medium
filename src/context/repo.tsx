@@ -30,6 +30,12 @@ const initRepo = memoize(
       cache,
       user: {id: user.id, name: user.name},
       syncObserverDeps: syncObserverDepsFor(user.id),
+      // A local-only session still gets a real PowerSyncDatabase, but
+      // `ensurePowerSyncReady` returns before `db.connect()` — so the default
+      // gate (connected && !downloading) would never open and this session
+      // would never run a workspace backfill, on this or any later open. There
+      // is no server to be behind here, so nothing to wait for.
+      ...(useRemoteSync ? {} : {backfillSyncGate: (cb: () => void) => { cb(); return () => {} }}),
     })
     repo.setFacetRuntime(resolveFacetRuntimeSync(staticDataExtensions, {
       repo,
