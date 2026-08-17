@@ -55,6 +55,7 @@ const shellState = (
   overrides: Partial<BlockShellState['shellProps']> = {},
 ): BlockShellState => ({
   shellProps: {
+    'data-block-shell': 'true',
     'data-block-id': context.block.id,
     'data-editing': 'false',
     tabIndex: 0,

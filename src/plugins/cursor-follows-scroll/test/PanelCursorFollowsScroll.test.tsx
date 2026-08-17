@@ -101,9 +101,9 @@ const buildPanel = (panelId: string, rows: ReadonlyArray<[string, number]>): Pan
     addRow,
     addNestingRow: (blockId, top, height) => {
       const target = addRow(blockId, top, port, height)
-      // Only the FOCAL row's content slot can hold a whole view; an ordinary
-      // row that merely contains an embed is not one.
-      shells.get(blockId)?.classList.add('top-level-block')
+      // What the content slot stamps when its renderer shows a view rather
+      // than the block's own text.
+      target.setAttribute('data-block-content-view', 'true')
       return target
     },
     shellOf: (blockId) => {

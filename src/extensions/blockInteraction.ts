@@ -234,7 +234,22 @@ export type BlockBulletHoverResolver =
 // layout (a block reference) simply doesn't render `Shell`, so it pays for
 // none of that — the lazy-slot equivalent of "don't allocate what you don't
 // use".
+/** Marks the element a layout spreads `shellProps` onto as this block's shell —
+ *  the outer half of a block's DOM boundary (`.block-content` is the inner
+ *  half). Travels with the props rather than with the default layout's class so
+ *  a layout that styles its own wrapper still declares the boundary, and any
+ *  handler resolving ownership can ask one question of both halves. */
+export const BLOCK_SHELL_ATTRIBUTE = 'data-block-shell'
+
+/** Marks a content slot that holds a VIEW — a review backlog, a review deck, a
+ *  recents list — rather than the block's own text. Written by the slot, which
+ *  is the only place that knows: it resolved the renderer. Callers reasoning
+ *  about a row's GEOMETRY need it, because such a row's rect describes
+ *  everything it shows rather than the block itself. */
+export const BLOCK_CONTENT_VIEW_ATTRIBUTE = 'data-block-content-view'
+
 export interface BlockShellProps {
+  'data-block-shell': 'true'
   'data-block-id': string
   'data-render-scope-id'?: string
   'data-editing': 'true' | 'false'
@@ -696,8 +711,12 @@ export const isInteractiveContentEvent = (event: { target: EventTarget | null })
  * property panel, a breadcrumb chain, whatever chrome a surface adds — and a
  * target there has no `.block-content` above it until the CONTAINER's, which
  * would read as the container's own. Neither marker alone spans a block.
+ *
+ * The shell half is an attribute carried by `shellProps`, not the default
+ * layout's `.tm-block` class: a layout is free to style its own wrapper, and
+ * one that did (the SRS review card) had no boundary at all.
  */
-const BLOCK_BOUNDARY_SELECTOR = '.block-content, .tm-block'
+const BLOCK_BOUNDARY_SELECTOR = `.block-content, [${BLOCK_SHELL_ATTRIBUTE}]`
 
 /**
  * Is this event's target on OUR surface, rather than on a nested block's?

@@ -728,3 +728,176 @@ describe('title typography', () => {
     expect(title?.contains(document.querySelector('.composed-surface'))).toBe(false)
   })
 })
+
+/** A layout that mounts `Shell` and then ignores its props — the mistake the
+ *  dev-time check exists to make loud. */
+const DroppedShellLayout: BlockLayout = ({Content, Shell}) => (
+  <Shell>{() => <div className="dropped-shell"><Content /></div>}</Shell>
+)
+
+// Whether a content slot holds a VIEW (a review backlog, a deck, a recents
+// list) or the block's own text. Only the slot can answer — it resolved the
+// renderer — and callers reasoning about a row's geometry read the answer off
+// the DOM instead of inferring it from what happens to be mounted inside.
+describe('content-view marking', () => {
+  let sharedDb: TestDb
+  let repo: Repo
+  let runtime: FacetRuntime
+
+  beforeAll(async () => { sharedDb = await createTestDb() })
+  afterAll(async () => { await sharedDb.cleanup() })
+  beforeEach(async () => {
+    await resetTestDb(sharedDb.db)
+    repo = createTestRepo({
+      db: sharedDb.db,
+      user: {id: 'user-1'},
+      newId: () => crypto.randomUUID(),
+      extensions: [
+        defaultEditorInteractionExtension,
+        blockContentRendererFacet.of(
+          ctx => ctx.block.id === 'surface-root'
+            ? defineVariant('test.surface', 'Surface', FacetSurfaceRenderer)
+            : null,
+          {source: 'test'},
+        ),
+      ],
+    }).repo
+    runtime = repo.facetRuntime!
+    repo.setActiveWorkspaceId('ws-1')
+    repoRef.current = repo
+
+    await repo.tx(async tx => {
+      await tx.create({id: 'root', workspaceId: 'ws-1', parentId: null, orderKey: 'a0', content: 'Page title'})
+      await tx.create({id: 'surface-root', workspaceId: 'ws-1', parentId: null, orderKey: 'a2', content: 'Surface page'})
+      await tx.create({
+        id: 'ui-state', workspaceId: 'ws-1', parentId: null, orderKey: 'a1',
+        properties: {[topLevelBlockIdProp.name]: topLevelBlockIdProp.codec.encode('root')},
+      })
+    }, {scope: ChangeScope.BlockDefault, description: 'content-view fixture'})
+    uiStateBlockRef.current = repo.block('ui-state')
+  })
+
+  afterEach(() => {
+    cleanup()
+    repoRef.current = undefined
+    uiStateBlockRef.current = undefined
+  })
+
+  const renderBlock = (id: string, ContentRenderer?: typeof FacetSurfaceRenderer) =>
+    render(
+      <AppRuntimeContextProvider value={runtime}>
+        <BlockContextProvider initialValue={{scopeRootId: id}}>
+          <ActiveContextsProvider>
+            <DefaultBlockRenderer block={repo.block(id)} ContentRenderer={ContentRenderer} />
+          </ActiveContextsProvider>
+        </BlockContextProvider>
+      </AppRuntimeContextProvider>,
+    )
+
+  const marked = () => document.querySelector('.block-content')?.hasAttribute('data-block-content-view')
+
+  it('marks the shell element as the block boundary', async () => {
+    // The outer half of the pair. It travels with `shellProps` rather than the
+    // default layout's class so a layout styling its own wrapper still
+    // declares it — which is exactly what the SRS review card does.
+    renderBlock('root')
+
+    await screen.findByText('Page title')
+    const shell = document.querySelector('[data-block-shell]')
+    expect(shell?.getAttribute('data-block-id')).toBe('root')
+  })
+
+  it('marks a slot whose renderer came as the ContentRenderer prop', async () => {
+    renderBlock('root', FacetSurfaceRenderer)
+
+    await waitFor(() => expect(document.querySelector('.facet-surface')).not.toBeNull())
+    expect(marked()).toBe(true)
+  })
+
+  it('marks a slot whose renderer won the facet', async () => {
+    // The half a check on the prop cannot see: the caller passes nothing.
+    renderBlock('surface-root')
+
+    await waitFor(() => expect(document.querySelector('.facet-surface')).not.toBeNull())
+    expect(marked()).toBe(true)
+  })
+
+  it('leaves an ordinary block showing its own text unmarked', async () => {
+    renderBlock('root')
+
+    // Proven present before asserting the attribute is absent, so this cannot
+    // pass on a slot that simply had not rendered yet.
+    await screen.findByText('Page title')
+    expect(marked()).toBe(false)
+  })
+
+  it('leaves a surface that composes the text renderer marked', async () => {
+    // The recents shape: a real title above a list of other blocks' rows. It
+    // is still a view — its row spans the list, which is what geometry callers
+    // are asking about — even though a title renders through it.
+    renderBlock('root', TitlePlusSurfaceRenderer)
+
+    await screen.findByText('Page title')
+    expect(marked()).toBe(true)
+  })
+})
+
+describe('a layout that drops shellProps', () => {
+  let sharedDb: TestDb
+  let repo: Repo
+  let runtime: FacetRuntime
+
+  beforeAll(async () => { sharedDb = await createTestDb() })
+  afterAll(async () => { await sharedDb.cleanup() })
+  beforeEach(async () => {
+    await resetTestDb(sharedDb.db)
+    repo = createTestRepo({
+      db: sharedDb.db,
+      user: {id: 'user-1'},
+      newId: () => crypto.randomUUID(),
+      extensions: [
+        defaultEditorInteractionExtension,
+        blockLayoutFacet.of(
+          () => ({id: 'dropped', label: 'Dropped shell', render: DroppedShellLayout}),
+          {source: 'test'},
+        ),
+      ],
+    }).repo
+    runtime = repo.facetRuntime!
+    repo.setActiveWorkspaceId('ws-1')
+    repoRef.current = repo
+    await repo.tx(async tx => {
+      await tx.create({id: 'root', workspaceId: 'ws-1', parentId: null, orderKey: 'a0', content: 'Page title'})
+      await tx.create({id: 'ui-state', workspaceId: 'ws-1', parentId: null, orderKey: 'a1'})
+    }, {scope: ChangeScope.BlockDefault, description: 'dropped shell fixture'})
+    uiStateBlockRef.current = repo.block('ui-state')
+  })
+
+  afterEach(() => {
+    cleanup()
+    repoRef.current = undefined
+    uiStateBlockRef.current = undefined
+  })
+
+  // Silent is the failure mode worth pinning: the block simply has no identity
+  // in the DOM, and every consumer resolves to an ancestor instead. Nothing
+  // threw when the SRS review card did this.
+  it('is reported, rather than silently losing the block\'s identity', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    render(
+      <AppRuntimeContextProvider value={runtime}>
+        <BlockContextProvider initialValue={{scopeRootId: 'root'}}>
+          <ActiveContextsProvider>
+            <DefaultBlockRenderer block={repo.block('root')} />
+          </ActiveContextsProvider>
+        </BlockContextProvider>
+      </AppRuntimeContextProvider>,
+    )
+
+    await waitFor(() => expect(document.querySelector('.dropped-shell')).not.toBeNull())
+    expect(document.querySelector('[data-block-shell]')).toBeNull()
+    expect(error).toHaveBeenCalledWith(expect.stringContaining('did not spread shellProps'))
+    error.mockRestore()
+  })
+})

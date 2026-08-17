@@ -12,16 +12,18 @@ import type {
 export const SRS_REVIEW_CARD_ID = 'srsReviewCardId'
 export const SRS_REVIEW_REVEALED = 'srsReviewRevealed'
 
-// The card mounts `Shell` (ignoring its `shellProps`, as these layouts always
-// have) purely to keep the focused card's 'block' shortcut surface + shell
-// decorators running — behaviour-neutral with the previous always-on shell.
+// `shellProps` go on the card's own wrapper. They used to be dropped, which
+// silently cost the card its identity in the DOM: no block boundary for pointer
+// ownership (the deck claimed gestures aimed at the card), no focus or edit
+// tagging, and no spatial-nav row, since the decorators write that through the
+// props' `ref`.
 
 /** Question phase: render the card's own content only, dropping the
  *  children subtree (the answer). */
 const QuestionOnlyLayout = ({Content, Shell}: BlockLayoutSlots) => (
   <Shell>
-    {() => (
-      <div className="srs-review-card-question min-w-0">
+    {({className, ...shellProps}) => (
+      <div {...shellProps} className={`srs-review-card-question min-w-0 ${className ?? ''}`}>
         <Content />
       </div>
     )}
@@ -36,8 +38,8 @@ const QuestionOnlyLayout = ({Content, Shell}: BlockLayoutSlots) => (
  *  regardless of the card's stored collapse state. */
 const AnswerLayout = ({Content, Children, Shell}: BlockLayoutSlots) => (
   <Shell>
-    {() => (
-      <div className="srs-review-card-answer min-w-0">
+    {({className, ...shellProps}) => (
+      <div {...shellProps} className={`srs-review-card-answer min-w-0 ${className ?? ''}`}>
         <Content />
         <Children />
       </div>

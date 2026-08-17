@@ -16,7 +16,7 @@ import { CodeMirrorContentRenderer } from '@/components/renderer/CodeMirrorConte
 import { BulletHoverCard, useBulletHover } from '@/components/renderer/BulletHoverCard.js'
 import { BlockInfoDialog } from '@/components/renderer/BlockInfoDialog.js'
 import { openDialog } from '@/utils/dialogs.js'
-import { useRef, useMemo } from 'react'
+import { useRef, useMemo, useEffect } from 'react'
 import { Block } from '../../data/block'
 import {
   useUIStateProperty,
@@ -51,6 +51,7 @@ import {
   blockClickHandlersFacet,
   blockContentDecoratorsFacet,
   blockContentRendererFacet,
+  BLOCK_CONTENT_VIEW_ATTRIBUTE,
   blockContentSurfacePropsFacet,
   blockContextMenuItemsFacet,
   blockHeaderFacet,
@@ -522,6 +523,7 @@ function BlockShell({
   // selection/focus), so paste composes with the rest of the shell decorators
   // rather than being hardcoded on the wrapper.
   const shellProps = useMemo<BlockShellProps>(() => ({
+    'data-block-shell': 'true',
     'data-block-id': block.id,
     'data-render-scope-id': typeof blockContext.renderScopeId === 'string'
       ? blockContext.renderScopeId
@@ -533,6 +535,21 @@ function BlockShell({
       ? (event) => { void handleBlockClick(event) }
       : undefined,
   }), [block.id, blockContext.renderScopeId, inEditMode, handleBlockClick, shellRef])
+
+  // A layout that never spreads `shellProps` silently gives up everything they
+  // carry — the block's identity in the DOM, its gesture boundary, focus and
+  // edit tagging, the shell click, and (through `ref`) the spatial-nav row
+  // tagging decorators write. The SRS review card did exactly that and nothing
+  // reported it; each consumer just quietly resolved to the wrong block. `ref`
+  // is the detector: it can only stay null if nothing received the props.
+  useEffect(() => {
+    if (!import.meta.env.DEV) return
+    if (shellRef.current) return
+    console.error(
+      `Block ${block.id}: its layout mounted Shell but did not spread shellProps onto an element. ` +
+      'Gestures, focus, edit state and spatial navigation all resolve through those props.',
+    )
+  }, [block.id, shellRef])
 
   const resolveBlockShellDecorators = runtime.read(blockShellDecoratorsFacet)
   const shellDecorators = useMemo(
@@ -683,6 +700,23 @@ export function DefaultBlockRenderer(
         () => resolveBlockContentRenderer(resolveContext).last?.render ?? DefaultContentRenderer,
         [resolveBlockContentRenderer],
       )
+      // Does this slot show the block's own TEXT, or a view of other things —
+      // a review backlog, a review deck, a recents list, a video player?
+      //
+      // Only the slot can answer: it is what resolved the renderer, and both
+      // ways one arrives (the facet, or the `ContentRenderer` prop) are visible
+      // right here. Everyone downstream was otherwise left inferring it from
+      // the DOM, which cannot be done — "holds other blocks' rows" is also true
+      // of a paragraph containing an embed, and false for a backlog whose rows
+      // are all still lazy placeholders. Both misreadings shipped.
+      //
+      // Derived rather than declared so an extension's renderer needs no
+      // update to be classified (extensions live in the DB, where no sweep
+      // reaches). The cost is that a custom renderer drawing the block's own
+      // text reads as a view; if one ever needs to say otherwise, a static on
+      // the component is the place to add it.
+      const showsBlockText = baseContentRenderer === MarkdownContentRenderer
+        || baseContentRenderer === CodeMirrorContentRenderer
       const decorateContent = runtime.read(blockContentDecoratorsFacet)
       const ContentRenderer = useMemo(
         () => decorateContent(resolveContext, baseContentRenderer),
@@ -708,6 +742,7 @@ export function DefaultBlockRenderer(
         <div
           {...contentSurfaceProps}
           data-block-visibility-target="true"
+          {...(showsBlockText ? {} : {[BLOCK_CONTENT_VIEW_ATTRIBUTE]: 'true'})}
           className={`block-content${topLevelClass}${contentSurfaceProps.className ? ` ${contentSurfaceProps.className}` : ''}`}
           ref={contentGestureRef}
         >
