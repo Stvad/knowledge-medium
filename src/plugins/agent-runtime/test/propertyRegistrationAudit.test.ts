@@ -155,6 +155,29 @@ describe('auditPropertyRegistration', () => {
   // bypasses the triggers. The guard is defence in depth for that case; the
   // VALID-but-non-object half above is reachable and is pinned.
 
+  it('counts a block once for provenance even if its bag repeats the key', async () => {
+    // A raw write CAN store a duplicated key (JSON.stringify can't produce
+    // one, and the `$.types` trigger sees a single row so nothing rejects
+    // it). `json_each` then emits a row per occurrence — without a DISTINCT
+    // one block could eat the whole per-key cap, repeat in `sampleBlockIds`
+    // and inflate `sampledBlocks`, hiding the blocks that actually differ.
+    await create({id: 'dup', properties: {types: ['demo-thing']}})
+    await create({id: 'plain', properties: {types: ['demo-thing'], 'demo:dup': 'x'}})
+    await repo.db.execute(
+      'UPDATE blocks SET properties_json = ? WHERE id = ?',
+      ['{"types":["demo-thing"],"demo:dup":1,"demo:dup":2}', 'dup'])
+
+    // A cap of 2 is what discriminates: the raw ranking is dup, dup, plain,
+    // so with a cap of 1 both versions return `dup` and the bug hides. With
+    // 2, the un-deduplicated query spends BOTH slots on `dup` and never
+    // surfaces `plain`.
+    const audit = await auditPropertyRegistration(repo, WS, {blocksPerKey: 2})
+    const entry = findEntry(audit, 'demo:dup')!
+
+    expect(entry.sampleBlockIds).toEqual(['dup', 'plain'])
+    expect(entry.types).toEqual([{type: 'demo-thing', sampledBlocks: 2}])
+  })
+
   it('reports a genuine empty-string key as a flip blocker through the real audit', async () => {
     await create({id: 'ok', properties: {'demo:undeclared': 'x'}})
     await create({id: 'empty'})
@@ -263,6 +286,18 @@ describe('audit-properties command', () => {
 
     expect(result.workspaceId).toBe(WS)
     expect(result.unregistered.map(entry => entry.property)).toContain('demo:undeclared')
+  })
+
+  it('rejects an EMPTY --workspace instead of silently auditing the active one', async () => {
+    // `--workspace "$UNSET"` expands to '' — the assertion exists to pin the
+    // graph, so falling back would hand back a remediation list for a
+    // workspace the caller never named.
+    await create({id: 'b1', properties: {'demo:undeclared': 'x'}})
+
+    await expect(executeCommand(
+      {commandId: 'a-3', type: 'audit-properties', workspaceId: '   '},
+      context,
+    )).rejects.toThrow(/empty value/i)
   })
 
   it('refuses an explicit workspace whose registry is not loaded', async () => {

@@ -92,6 +92,16 @@ export interface UnregisteredProperty {
   provenanceOmitted?: true
 }
 
+/** POINT IN TIME, not a snapshot. The passes below are separate reads, so a
+ *  write landing mid-audit can skew them against each other (a block created
+ *  after the histogram can appear in `sampleBlockIds` without contributing to
+ *  `cells`; a concurrent delete can leave a count with no provenance). Not
+ *  worth fixing here: `PowerSyncDb` exposes no read-snapshot primitive, and
+ *  its only transaction is `writeTransaction` — taking a write lock across a
+ *  full-workspace scan would stall the live app and break this verb's
+ *  read-only contract to tidy an advisory report that is re-run for free.
+ *  The counts describe a slow-moving property of the graph (which keys have
+ *  definitions), so skew is self-correcting on the next run. */
 export interface PropertyRegistrationAudit {
   workspaceId: string
   distinctProperties: number
@@ -129,11 +139,17 @@ const SAMPLES_PER_KEY = 3
 
 /** `json_each` raises on malformed JSON and invents keys for valid non-object
  *  JSON (integer indices for an array, a single NULL key for a scalar), so it
- *  is guarded on BOTH validity and object-ness. Guarding inside the argument
- *  makes the skip evaluation-order independent rather than relying on a
- *  `WHERE` term being applied first. Without the object test, a corrupt
- *  scalar cell would surface as a phantom empty-string key and be reported as
- *  a hard flip blocker. */
+ *  is guarded on BOTH validity and object-ness. Without the object test, a
+ *  corrupt scalar cell would surface as a phantom empty-string key and be
+ *  reported as a hard flip blocker.
+ *
+ *  KEEP THE `CASE` (and, for the `NOT_` twin, keep it a `WHERE` conjunct).
+ *  SQLite does NOT short-circuit a bare `json_valid(x) AND json_type(x)=…`
+ *  boolean expression — both function opcodes run and `json_type` raises
+ *  `malformed JSON`. It is the `CASE WHEN` that compiles to a real `IfNot`
+ *  jump skipping the second call. So flattening this into a plain boolean
+ *  expression — a computed column, a `SELECT` list item — silently
+ *  reintroduces the abort this guard exists to prevent. */
 const OBJECT_BAG = `CASE WHEN json_valid(b.properties_json) AND json_type(b.properties_json) = 'object'
                         THEN b.properties_json ELSE '{}' END`
 /** The same predicate, for counting the rows the guard excludes. */
@@ -378,12 +394,20 @@ const attachProvenance = async (
             (SELECT json_group_array(bt.type) FROM block_types bt
               WHERE bt.block_id = ranked.blockId AND bt.workspace_id = ?) AS types
        FROM (
-         SELECT j.key AS property,
-                b.id AS blockId,
-                ROW_NUMBER() OVER (PARTITION BY j.key ORDER BY b.id) AS rn
-           FROM blocks b, json_each(${OBJECT_BAG}) j
-          WHERE b.workspace_id = ? AND b.deleted = 0
-            AND j.key IN (SELECT value FROM json_each(?))
+         SELECT property, blockId,
+                ROW_NUMBER() OVER (PARTITION BY property ORDER BY blockId) AS rn
+           FROM (
+             -- DISTINCT because a stored bag CAN repeat a key: JSON.stringify
+             -- cannot produce one, but a raw SQL write can, and the types
+             -- trigger sees only one row so nothing rejects it. Without this,
+             -- json_each emits a row per occurrence and one block could eat
+             -- the whole per-key cap: repeating in sampleBlockIds, inflating
+             -- sampledBlocks, and hiding the blocks that actually differ.
+             SELECT DISTINCT j.key AS property, b.id AS blockId
+               FROM blocks b, json_each(${OBJECT_BAG}) j
+              WHERE b.workspace_id = ? AND b.deleted = 0
+                AND j.key IN (SELECT value FROM json_each(?))
+           )
        ) ranked
       WHERE ranked.rn <= ?`,
     [

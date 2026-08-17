@@ -413,8 +413,21 @@ const auditRuntimeExtension = async (
 const auditRuntimeProperties = async (
   repo: Repo,
   input: {workspaceId?: string},
-): Promise<PropertyRegistrationAudit> =>
-  auditPropertyRegistration(repo, input.workspaceId?.trim() || resolveWorkspaceId(repo))
+): Promise<PropertyRegistrationAudit> => {
+  // An EMPTY assertion is not the same as no assertion. `--workspace` exists
+  // to pin which graph is being audited, so a shell expanding an unset
+  // variable (`--workspace "$WS"`) must fail loudly rather than quietly
+  // auditing the active workspace and handing back a remediation list for
+  // the wrong graph.
+  if (input.workspaceId !== undefined && input.workspaceId.trim() === '') {
+    throw new Error(
+      'audit-properties: --workspace was given an empty value. It asserts which ' +
+      'workspace is audited, so an empty expansion must fail rather than fall back ' +
+      'to the active one. Pass a real workspace id, or omit the option entirely.',
+    )
+  }
+  return auditPropertyRegistration(repo, input.workspaceId?.trim() || resolveWorkspaceId(repo))
+}
 
 const mapPosition = (
   position: BlockPosition | undefined,
