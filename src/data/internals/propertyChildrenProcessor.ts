@@ -83,6 +83,12 @@ interface PropertyChildrenLookups {
  *  materialize direction to feed. */
 export type ProjectionLookups = Pick<PropertyChildrenLookups, 'resolveFieldSchema'>
 
+/** The materialize direction's half. Cell keys are name-keyed, so this
+ *  direction never resolves a fieldId — which lets a caller that already
+ *  knows which schemas it is materializing supply just those, instead of a
+ *  whole workspace resolver (`mergeBlocksInTx`'s pre-backfill catch-up). */
+export type MaterializeLookups = Pick<PropertyChildrenLookups, 'resolveNameSchema'>
+
 /** The fields the projection direction reads off a changed row. Narrower
  *  than `BlockData` so a repair path can retain a few columns per stamped
  *  row instead of whole rows (bags + references) across a workspace scan. */
@@ -329,7 +335,7 @@ const changedPropertyNames = (
 export const materializePropertyChildrenForExistingRow = async (
   tx: Tx,
   row: BlockData,
-  lookups: PropertyChildrenLookups,
+  lookups: MaterializeLookups,
   names: readonly string[] = Object.keys(row.properties),
 ): Promise<void> => {
   if (row.deleted) return
