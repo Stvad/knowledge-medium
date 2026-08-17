@@ -221,11 +221,13 @@ export interface AuditExtensionResult {
 }
 
 export interface AuditPropertiesInput {
-  /** Workspace to audit. Defaults to the active one, and in practice only
-   *  the active workspace can be audited: classification runs on the
-   *  property-definition registry, which is loaded for the active (and
-   *  immediately-previous) workspace only. Passing anything else is refused
-   *  rather than answered with a report that calls every key unregistered.
+  /** Workspace to audit. Defaults to, and in practice must be, the ACTIVE
+   *  one: classification runs on `repo.propertyDefinitions`, which is the
+   *  active workspace's registry only. (The resolver itself would also serve
+   *  the immediately-previous workspace, but that snapshot isn't reachable
+   *  through a public getter, so the audit doesn't claim to cover it.)
+   *  Anything else is refused rather than answered with a report that calls
+   *  every key unregistered.
    *  Useful as an assertion when a script must not audit the wrong graph. */
   workspaceId?: string
 }
