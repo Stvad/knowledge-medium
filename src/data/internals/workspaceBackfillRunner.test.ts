@@ -22,7 +22,8 @@ const probeBackfill = (runs: string[]): WorkspaceBackfill => ({
   run: async ({workspaceId, tx}) => {
     runs.push(workspaceId)
     await tx(async t => {
-      await t.update('target', {content: 'backfilled'})
+      const row = await t.get('target')
+      await t.update('target', {properties: {...row?.properties, 'probe:mark': 'backfilled'}})
     }, {description: 'probe backfill write'})
   },
 })
@@ -185,24 +186,55 @@ describe('workspace backfill runner — sync gating', () => {
 describe('workspace backfill runner — undo', () => {
   it('keeps its writes off the user’s undo stack', async () => {
     // The pass fires ~10-30s after workspace open, i.e. while the user is
-    // already editing. On the stack, their next cmd-Z reverts the backfill
-    // instead of their own edit — and the marker is recorded, so it never
-    // comes back.
+    // already editing. As its own entry it would be TOP of the stack, so their
+    // next cmd-Z reverts the backfill instead of their own edit — and the
+    // marker is recorded, so it never comes back.
     const runs: string[] = []
     const repo = makeRepo(probeBackfill(runs))
     await seedTarget(repo)
-    // The user's own edit, made after the seed.
+    // The user edits a DIFFERENT block, so their entry doesn't overlap the
+    // backfill's row — the ordinary case, and the one this fix is for.
+    await repo.tx(async tx => {
+      await tx.create({id: 'elsewhere', workspaceId: WS, parentId: null, orderKey: 'a1', content: 'before'})
+    }, {scope: ChangeScope.BlockDefault, description: 'seed elsewhere'})
+    await repo.tx(async tx => {
+      await tx.update('elsewhere', {content: 'user edit'})
+    }, {scope: ChangeScope.BlockDefault, description: 'user edit'})
+
+    await drain(repo)
+    expect(runs).toEqual([WS])
+    expect((await repo.load('target'))?.properties['probe:mark']).toBe('backfilled')
+
+    await repo.undo(ChangeScope.BlockDefault)
+
+    // cmd-Z landed on the user's edit, and the backfill's write survived.
+    expect((await repo.load('elsewhere'))?.content).toBe('before')
+    expect((await repo.load('target'))?.properties['probe:mark']).toBe('backfilled')
+  })
+
+  it('is still reverted by an undo entry that already covers the same row', async () => {
+    // KNOWN LIMITATION, recorded rather than hidden. Undo replay restores an
+    // entry's whole `before` row snapshot, not a field delta — so when the user
+    // edited the very row a later backfill touches, their cmd-Z takes the
+    // backfill's write with it, and the completion marker makes that permanent.
+    // `skipUndo` cannot fix this: the damage comes from the USER's entry, which
+    // must stay undoable. Pre-existing — before `skipUndo` the same cmd-Z
+    // reverted the backfill directly, as its own top-of-stack entry. Closing it
+    // means rebasing or invalidating overlapping history, which is undo-internals
+    // surgery and a separate decision.
+    const repo = makeRepo(probeBackfill([]))
+    await seedTarget(repo)
     await repo.tx(async tx => {
       await tx.update('target', {content: 'user edit'})
     }, {scope: ChangeScope.BlockDefault, description: 'user edit'})
 
     await drain(repo)
-    expect(runs).toEqual([WS])
-    expect((await repo.load('target'))?.content).toBe('backfilled')
+    expect((await repo.load('target'))?.properties['probe:mark']).toBe('backfilled')
 
-    // One cmd-Z must land on the user's edit, not on the backfill.
     await repo.undo(ChangeScope.BlockDefault)
+
     expect((await repo.load('target'))?.content).toBe('original')
+    expect((await repo.load('target'))?.properties['probe:mark']).toBeUndefined()
   })
 
   it('still uploads — suppressing undo must not make it a local-only write', async () => {
