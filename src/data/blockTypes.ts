@@ -42,6 +42,31 @@ export const RECENTS_PAGE_TYPE = 'panel:recents'
  *  surfaces resolve an id to its page/name. Kernel-owned. */
 export const USER_TYPE = 'user'
 
+/** Types whose blocks are the app's own bookkeeping rather than anything
+ *  the user authored — the rows an "activity" surface (`recentBlocks`
+ *  with `excludeSystem`) must not report as an edit.
+ *
+ *  This list only has to name what lives OUTSIDE the per-user state
+ *  subtree: everything reached through `getPluginUIStateBlock` /
+ *  `getPluginPrefsBlock` (panels, layout sessions, per-plugin prefs,
+ *  startup-metrics records, …) hangs off a `USER_TYPE` page and is
+ *  excluded structurally, which is what keeps a plugin's private state
+ *  out of Recents without the kernel naming that plugin.
+ *
+ *  `BLOCK_TYPE_TYPE` is deliberately absent: a user-defined type is
+ *  authored content (the `#type` gesture), and the kernel's own type
+ *  seeds only rewrite on a seed revision bump. */
+export const SYSTEM_BLOCK_TYPES: readonly string[] = [
+  PANEL_TYPE,
+  PANEL_STACK_TYPE,
+  USER_TYPE,
+  EXTENSION_TYPE,
+  PROPERTY_SCHEMA_TYPE,
+  PROPERTIES_PAGE_TYPE,
+  TYPES_PAGE_TYPE,
+  RECENTS_PAGE_TYPE,
+]
+
 /** Kernel-owned block types, declared as code seeds (`seedType`) so the
  * schema-unification materializer mints one deterministic backing block per type
  * per workspace (`src/data/definitionSeeds.ts`) — the type-side twin of

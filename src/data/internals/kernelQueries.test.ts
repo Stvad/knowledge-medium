@@ -537,6 +537,80 @@ describe('repo.query.recentBlocks', () => {
 
     expect(out.map(r => r.id)).toEqual(['c', 'b'])
   })
+
+  describe('excludeSystem', () => {
+    // The per-user state subtree, as `stateBlocks.ts` builds it:
+    // user page → ui-state → per-plugin state → records.
+    const seedUserState = async () => {
+      await create({id: 'user-page', content: 'Alice', types: ['page', 'user']})
+      await create({id: 'ui-state', parentId: 'user-page', content: 'ui-state'})
+      await create({id: 'plugin-state', parentId: 'ui-state', content: 'Startup metrics'})
+      await create({id: 'metrics-record', parentId: 'plugin-state', content: '2026-08-17T00:00:00Z'})
+    }
+
+    it('drops every descendant of a user page, at any depth', async () => {
+      await create({id: 'note', content: 'a real note'})
+      await seedUserState()
+
+      const out = asBlocks(await env.repo.query.recentBlocks({
+        workspaceId: WS, limit: 50, excludeSystem: true,
+      }).load())
+
+      expect(out.map(r => r.id)).toEqual(['note'])
+    })
+
+    it('keeps them without the flag', async () => {
+      await create({id: 'note', content: 'a real note'})
+      await seedUserState()
+
+      const out = asBlocks(await env.repo.query.recentBlocks({workspaceId: WS, limit: 50}).load())
+
+      expect(out.map(r => r.id).sort()).toEqual(
+        ['metrics-record', 'note', 'plugin-state', 'ui-state', 'user-page'],
+      )
+    })
+
+    it('drops workspace-root system rows by type but keeps user-defined types', async () => {
+      await create({id: 'note', content: 'a real note'})
+      await create({id: 'panel', content: 'some-block-id', type: 'panel'})
+      await create({id: 'schema', content: 'Status', type: 'property-schema'})
+      await create({id: 'recents-page', content: 'Recents', types: ['page', 'panel:recents']})
+      await create({id: 'my-type', content: 'Book', types: ['page', 'block-type']})
+
+      const out = asBlocks(await env.repo.query.recentBlocks({
+        workspaceId: WS, limit: 50, excludeSystem: true,
+      }).load())
+
+      expect(out.map(r => r.id).sort()).toEqual(['my-type', 'note'])
+    })
+
+    it('filters before the limit — a run of system rows cannot empty the page', async () => {
+      await create({id: 'note-1', content: 'first'})
+      await create({id: 'note-2', content: 'second'})
+      for (let i = 0; i < 5; i++) {
+        await create({id: `panel-${i}`, content: `panel ${i}`, type: 'panel'})
+      }
+
+      const out = asBlocks(await env.repo.query.recentBlocks({
+        workspaceId: WS, limit: 2, excludeSystem: true,
+      }).load())
+
+      expect(out.map(r => r.id)).toEqual(['note-2', 'note-1'])
+    })
+
+    it('scopes the user-state walk to the workspace', async () => {
+      await create({id: 'other-user-page', content: 'Alice', types: ['user'], workspaceId: OTHER_WS})
+      // Same parent id across workspaces shouldn't happen, but the walk
+      // must key off this workspace's user pages regardless.
+      await create({id: 'note', content: 'a real note'})
+
+      const out = asBlocks(await env.repo.query.recentBlocks({
+        workspaceId: WS, limit: 50, excludeSystem: true,
+      }).load())
+
+      expect(out.map(r => r.id)).toEqual(['note'])
+    })
+  })
 })
 
 describe('repo.query.firstChildByContent', () => {

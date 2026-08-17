@@ -32,6 +32,7 @@ import {
   type TypedBlockQueryReferenceFilter,
 } from '@/data/api'
 import { SELECT_BLOCK_COLUMNS_SQL, buildQualifiedBlockColumnsSql, type BlockRow } from '@/data/blockSchema'
+import { SYSTEM_BLOCK_TYPES, USER_TYPE } from '@/data/blockTypes'
 import {
   ANCESTORS_SQL,
   CHILDREN_IDS_SQL,
@@ -301,6 +302,55 @@ export const SELECT_RECENT_BLOCKS_SQL = `
   ORDER BY coalesce(user_updated_at, updated_at) DESC, id ASC
   LIMIT ?
 `
+
+/** `SELECT_RECENT_BLOCKS_SQL` restricted to user-authored rows — the
+ *  activity view (Recents), where a panel row or a preferences block is
+ *  noise, not an edit.
+ *
+ *  Two exclusions, and the structural one carries the weight: every
+ *  per-user state row (panels, layout sessions, per-plugin prefs and
+ *  ui-state, and whatever records a plugin files under them) descends
+ *  from that user's `USER_TYPE` page, so walking DOWN from the user
+ *  pages — a set bounded by the UI surface, not by document size —
+ *  drops all of it without the kernel knowing any plugin's type ids.
+ *  The type list then covers the app-owned rows that live at the
+ *  workspace root instead (`SYSTEM_BLOCK_TYPES`).
+ *
+ *  Both filters sit inside the statement, before the LIMIT: filtering a
+ *  fetched window instead would hand back a page short by whatever it
+ *  dropped, and a run of ineligible rows would empty it.
+ *
+ *  Params: workspaceId, USER_TYPE, workspaceId, ...SYSTEM_BLOCK_TYPES,
+ *  limit — see `recentUserBlocksParams`. */
+export const SELECT_RECENT_USER_BLOCKS_SQL = `
+  WITH RECURSIVE user_state(id) AS (
+    SELECT block_id FROM block_types
+     WHERE workspace_id = ? AND type = ?
+    UNION
+    SELECT b.id FROM blocks b
+      JOIN user_state ON b.parent_id = user_state.id
+     WHERE b.deleted = 0
+  )
+  SELECT ${buildQualifiedBlockColumnsSql('blocks')}
+  FROM blocks
+  WHERE blocks.workspace_id = ?
+    AND blocks.deleted = 0
+    AND blocks.content != ''
+    AND blocks.id NOT IN (SELECT id FROM user_state)
+    AND NOT EXISTS (
+      SELECT 1 FROM block_types bt
+       WHERE bt.block_id = blocks.id
+         AND bt.type IN (${SYSTEM_BLOCK_TYPES.map(() => '?').join(', ')})
+    )
+  ORDER BY coalesce(blocks.user_updated_at, blocks.updated_at) DESC, blocks.id ASC
+  LIMIT ?
+`
+
+/** Bind list for `SELECT_RECENT_USER_BLOCKS_SQL`. Single-sourced so the
+ *  placeholder count in the statement and the parameter order can't
+ *  drift as `SYSTEM_BLOCK_TYPES` grows. */
+export const recentUserBlocksParams = (workspaceId: string, limit: number): unknown[] =>
+  [workspaceId, USER_TYPE, workspaceId, ...SYSTEM_BLOCK_TYPES, limit]
 
 /** Distinct alias values in a workspace, optionally substring-filtered.
  *  Reads `block_aliases` (the trigger-maintained side index in
@@ -1132,16 +1182,17 @@ export const searchByContentQuery = defineQuery<
 
 /** Recent non-empty block candidates. Empty workspaceId returns []. */
 export const recentBlocksQuery = defineQuery<
-  {workspaceId: string; limit?: number},
+  {workspaceId: string; limit?: number; excludeSystem?: boolean},
   BlockData[]
 >({
   name: 'core.recentBlocks',
   argsSchema: z.object({
     workspaceId: z.string(),
     limit: z.number().optional(),
+    excludeSystem: z.boolean().optional(),
   }),
   resultSchema: blockDataArraySchema,
-  resolve: async ({workspaceId, limit = 50}, ctx) => {
+  resolve: async ({workspaceId, limit = 50, excludeSystem = false}, ctx) => {
     if (!workspaceId) return []
     // `kernel.content` covers content edits + live-set membership
     // changes. The SQL also orders by `updated_at`, but we deliberately
@@ -1149,14 +1200,27 @@ export const recentBlocksQuery = defineQuery<
     // here would put us back at workspace-broad cost (every UiState
     // write bumps `updated_at`). The picker tolerates lightly stale
     // ordering between content events.
+    //
+    // `excludeSystem` filters on two axes this channel does not carry
+    // (type tags, and the parent edges the user-state walk follows), and
+    // deliberately declares no dep for either: a block only becomes
+    // system-owned at the moment it is created under a user page or
+    // minted with a system type, and the create itself fires this
+    // channel. The uncovered case is a LATER re-parent or type-tag of an
+    // already-listed row, which corrects itself on the next content
+    // event — the same staleness the ordering already accepts.
     ctx.depend({
       kind: 'plugin',
       channel: KERNEL_CONTENT_CHANNEL,
       key: kernelContentKey(workspaceId),
     })
-    const rows = await ctx.db.getAll<BlockRow>(
-      SELECT_RECENT_BLOCKS_SQL, [workspaceId, limit],
-    )
+    const rows = excludeSystem
+      ? await ctx.db.getAll<BlockRow>(
+        SELECT_RECENT_USER_BLOCKS_SQL, recentUserBlocksParams(workspaceId, limit),
+      )
+      : await ctx.db.getAll<BlockRow>(
+        SELECT_RECENT_BLOCKS_SQL, [workspaceId, limit],
+      )
     // Skip per-row deps for the same reason as searchByContent:
     // the kernel.content channel covers content edits + live-set
     // membership, and we explicitly tolerate stale recency ordering
