@@ -1,7 +1,7 @@
 // @vitest-environment node
 /**
  * Fuzz suite for `convertEmptyChildBlockToProperty`
- * (`src/utils/propertyCreation.ts`) — the `>`-on-empty-block gesture that
+ * (`src/utils/propertyCreation.ts`) — the `::`-on-empty-block gesture that
  * `delete()`s a scaffold block and turns it into a property-create request
  * on its parent. Two independent holes were already found and fixed in
  * this one small guard:
