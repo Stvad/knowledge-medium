@@ -300,7 +300,7 @@ describe('workspace backfill runner — sync gating', () => {
       user: {id: 'user-1'},
       backfillSyncGate: g.gate,
       backfillCompletionClaim: {
-        tryClaim: async (ws, id) => { if (claimed.has(id)) return false; claimed.add(id); return true },
+        tryClaim: async (_ws, id) => { if (claimed.has(id)) return false; claimed.add(id); return true },
         markComplete: async () => {},
         releaseClaim: async (_ws, id) => { released.push(id); claimed.delete(id) },
       },
