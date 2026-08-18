@@ -436,6 +436,27 @@ describe('pasteAsMoveImpl', () => {
     expect(recallPayloadForText(markdown)).toEqual({...payload, intent: 'copy'})
   })
 
+  it('still reports a committed move when the post-move reclassification fails', async () => {
+    // Every move has COMMITTED by the time the reclassification read runs.
+    // Letting it reject reaches the failure catch, which tells the user
+    // nothing happened, leaves the relocated blocks in the live selection,
+    // and leaves the cut armed to move them a second time.
+    await seed('dest', null)
+    await seed('a', null)
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const payload = cut(['a', 'unsynced'])
+
+    liveBlockIdsMock.mockImplementationOnce(async () => ['a', 'unsynced']) // preflight
+    liveBlockIdsMock.mockRejectedValueOnce(new Error('db blipped'))        // reclassify
+
+    const result = await pasteAsMoveImpl({ repo, target: INTO_DEST, payload })
+
+    expect(result).toBe('moved')
+    expect(await childIds('dest')).toEqual(['a'])
+    expect(warn).toHaveBeenCalled()
+    warn.mockRestore()
+  })
+
   it('keeps the cut retryable when a block is merely UNSYNCED rather than deleted', async () => {
     // `liveBlockIds` keeps ids that are missing locally ("missing ≠
     // deleted"), and the move skips them in-transaction. Spending the cut

@@ -85,6 +85,23 @@ const INTO_DEST = {parentId: 'dest', position: {kind: 'last'}} as const
 const depths = () => repo.undoManager.depths(ChangeScope.BlockDefault)
 
 describe('moveBlocksTo', () => {
+  it('reports a source the transaction skipped, so callers can unselect it', async () => {
+    // The row was gone by the time its own transaction ran (tombstoned, or
+    // not present locally). It moved nothing and carried nothing, so it is
+    // in neither `movedIds` nor `accountedIds` — but a caller holding UI
+    // state still has to drop it, or multi-select shortcuts stay pointed
+    // at a row that isn't there.
+    await seed('dest', null)
+    await seed('a', null)
+    await seed('gone', null)
+    await repo.block('gone').delete()
+
+    const result = await moveBlocksTo(repo, ['a', 'gone'], INTO_DEST)
+
+    expect(result.movedIds).toEqual(['a'])
+    expect(result.skippedIds).toEqual(['gone'])
+  })
+
   it('still returns the committed move when post-commit accounting fails', async () => {
     // `accountFor` runs after every transaction has committed. Letting its
     // failure escape made the caller take its generic-error branch, so the
@@ -123,7 +140,7 @@ describe('moveBlocksTo', () => {
 
     const result = await moveBlocksTo(repo, ['c2', 'c1', 'c3'], INTO_DEST)
 
-    expect(result).toEqual({ moved: 3, movedIds: ['c2', 'c1', 'c3'], accountedIds: ['c2', 'c1', 'c3'] })
+    expect(result).toEqual({ moved: 3, movedIds: ['c2', 'c1', 'c3'], accountedIds: ['c2', 'c1', 'c3'], skippedIds: [] })
     expect(await childIds('dest')).toEqual(['already-there', 'c2', 'c1', 'c3'])
     expect(await childIds('src')).toEqual([])
   })
@@ -139,7 +156,7 @@ describe('moveBlocksTo', () => {
     // separate move.
     // 'b' is accounted for: it rode along inside 'a'. A caller that
     // subtracted only `movedIds` would treat it as left behind.
-    expect(result).toEqual({ moved: 1, movedIds: ['a'], accountedIds: ['a', 'b'] })
+    expect(result).toEqual({ moved: 1, movedIds: ['a'], accountedIds: ['a', 'b'], skippedIds: [] })
     expect(await childIds('dest')).toEqual(['a'])
     expect(await parentOf('b')).toBe('a')
   })
@@ -338,7 +355,7 @@ describe('moveBlocksTo', () => {
   it('is a no-op for an empty selection', async () => {
     await seed('dest', null)
     const result = await moveBlocksTo(repo, [], INTO_DEST)
-    expect(result).toEqual({ moved: 0, movedIds: [], accountedIds: [] })
+    expect(result).toEqual({ moved: 0, movedIds: [], accountedIds: [], skippedIds: [] })
   })
 
   it('skips a tombstoned block and does not count it as moved', async () => {

@@ -50,6 +50,12 @@ export interface MoveBlocksResult {
    *  Callers need these (not just the count) to subtract them from the
    *  ui-state selection — see `moveAction`. */
   movedIds: readonly string[]
+  /** Requested roots the move SKIPPED because the row was gone by the time
+   *  its transaction ran — tombstoned or not present locally. They are not
+   *  in `movedIds` (nothing moved) and not in `accountedIds` (nothing
+   *  carried them), but a caller holding UI state must still drop them:
+   *  they no longer exist to be selected. */
+  skippedIds: readonly string[]
   /** Every REQUESTED id that ended up at the destination — `movedIds`
    *  plus the ones pruned away because an ancestor in the same request
    *  carried them along.
@@ -122,9 +128,10 @@ export const moveBlocksTo = async (
   target: MoveTarget,
 ): Promise<MoveBlocksResult> => {
   const prunedIds = await validateSelectionHierarchy([...blockIds], repo)
-  if (prunedIds.length === 0) return { moved: 0, movedIds: [], accountedIds: [] }
+  if (prunedIds.length === 0) return { moved: 0, movedIds: [], accountedIds: [], skippedIds: [] }
 
   let moved = 0
+  const skippedIds: string[] = []
   const movedIds: string[] = []
   try {
     await repo.undoGroup(async grouped => {
@@ -143,7 +150,7 @@ export const moveBlocksTo = async (
           await tx.run(moveMutator, {id, parentId: target.parentId, position})
           return true
         }, {scope: ChangeScope.BlockDefault, description: `move ${id}`})
-        if (!relocated) continue
+        if (!relocated) { skippedIds.push(id); continue }
         moved += 1
         movedIds.push(id)
         // Reveal after the FIRST block lands, not after the loop. Each
@@ -176,7 +183,7 @@ export const moveBlocksTo = async (
   } catch (error) {
     console.warn('[move-blocks] could not account for carried-along blocks', error)
   }
-  return { moved, movedIds, accountedIds }
+  return { moved, movedIds, accountedIds, skippedIds }
 }
 
 /** Which of the originally REQUESTED ids are now at the destination.

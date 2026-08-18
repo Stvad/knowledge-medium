@@ -157,9 +157,22 @@ const runPasteAsMove = async ({ repo, target, payload }: PasteAsMoveInput): Prom
     // paste relocates the blocks that DID move and the first paste looks
     // undone. A merely-absent block will arrive, and the cut should stay
     // live so a paste after the sync can finish it.
-    const stillComing = unaccounted.length > 0
-      ? await liveBlockIds(repo, unaccounted)
-      : unaccounted
+    //
+    // Degrades rather than throwing, for the same reason `moveBlocksTo`'s
+    // own accounting does: every move has already COMMITTED by here, and
+    // letting this read reject would hit the catch below and report the
+    // paste as `refused` — telling the user nothing happened, leaving the
+    // relocated blocks in the live selection, and leaving the cut armed to
+    // move them again. Failing to reclassify only leaves the cut
+    // retryable, which is the harmless direction.
+    let stillComing = unaccounted
+    if (unaccounted.length > 0) {
+      try {
+        stillComing = await liveBlockIds(repo, unaccounted)
+      } catch (error) {
+        console.warn('[paste-as-move] could not reclassify unaccounted blocks', error)
+      }
+    }
     if (stillComing.length === 0) markCutCompleted(payload)
 
     const skipped = payload.blockIds.length - accounted.size

@@ -132,6 +132,15 @@ export const runMoveFlow = async (
       parentId: choice.destinationId,
       position: { kind: 'last' },
     })
+    // A source the move SKIPPED (tombstoned or gone locally while the
+    // picker was open) has to leave the selection too. It didn't move, so
+    // it is in neither `movedIds` nor `accountedIds` — but it no longer
+    // exists to be selected, and leaving it there points later
+    // multi-select shortcuts at a row that isn't on screen. Done for the
+    // all-skipped case as well, which reports no move at all.
+    if (context && result.skippedIds.length > 0) {
+      await dropMovedFromSelection(context.uiStateBlock, result.skippedIds)
+    }
     if (result.moved > 0) {
       // Every SELECTED id covered by a committed root — not just the ones
       // we asked to move. `moveBlocksTo` prunes descendants, so a set
