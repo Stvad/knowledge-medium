@@ -323,7 +323,10 @@ ${recognizedFieldRowSql('blocks')}
 `
 
 /** Outline form of {@link CHILDREN_SQL}: excludes recognized field rows in
- *  a flipped workspace. Bind `[parentId]`. */
+ *  a flipped workspace. Bind `[parentId, seedDefinitionIdsJson]` — the second
+ *  is `recognizedFieldRowSql`'s registry set; pass `'[]'` for none. Omitting
+ *  it binds NULL, which `json_each` reads as zero rows, so a caller that
+ *  forgets it silently gets the pre-#389 answer rather than an error. */
 export const VISIBLE_CHILDREN_SQL = `
   SELECT * FROM blocks
    WHERE parent_id = ? AND deleted = 0
@@ -331,7 +334,8 @@ ${VISIBLE_CHILD_PREDICATE_SQL}
    ORDER BY order_key, id
 `
 
-/** Outline form of {@link CHILDREN_IDS_SQL}. Bind `[parentId]`. */
+/** Outline form of {@link CHILDREN_IDS_SQL}. Bind
+ *  `[parentId, seedDefinitionIdsJson]` — see {@link VISIBLE_CHILDREN_SQL}. */
 export const VISIBLE_CHILDREN_IDS_SQL = `
   SELECT id FROM blocks
    WHERE parent_id = ? AND deleted = 0
@@ -358,7 +362,9 @@ ${VISIBLE_CHILD_PREDICATE_SQL}
  * ref-typed VALUE deeper in a property subtree is unmarked and never
  * pruned, which is all the exemption existed to protect).
  *
- * Bind `[rootId]`. Same selected columns + depth semantics as SUBTREE_SQL;
+ * Bind `[rootId, seedDefinitionIdsJson]` (see {@link VISIBLE_CHILDREN_SQL});
+ * the second parameter sits inside the recursive term and is bound once for
+ * the statement. Same selected columns + depth semantics as SUBTREE_SQL;
  * the `INDEXED BY` planner-pin note there applies here too. An un-flipped
  * workspace short-circuits on the `workspaces` probe exactly like
  * VISIBLE_CHILD_PREDICATE_SQL (dormant: zero rows pruned).

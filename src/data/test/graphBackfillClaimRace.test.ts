@@ -96,23 +96,17 @@ describe('per-graph claim over two converging databases', () => {
       db: device.db,
       claimantId,
       tx: (fn, opts) => device.repo.tx(fn, opts),
-      // The settle does a real round trip. That is the whole point: it puts
-      // convergence BETWEEN the claim write and the re-read, which is the
-      // only interleaving in which the re-read can change an answer.
-      syncSettled: (cb) => { void settle(device).then(cb); return () => {} },
+      // Only THIS device's own actions — push my write to the server, then
+      // take back whatever the server now says. An earlier version also
+      // flushed the PEER's queue, which no real device can do and which
+      // handed the test the very property production lacked.
+      awaitConverged: async () => {
+        await upload(device, server)
+        await deliverAndDrain(device, server)
+        return true
+      },
       ensureHome: (workspaceId) => getOrCreateMigrationsPage(device.repo, workspaceId),
     })
-
-    // Serialized so the two devices' round trips don't interleave mid-upload;
-    // the ordering under test is claim-then-converge, not upload atomicity.
-    let chain: Promise<void> = Promise.resolve()
-    const settle = (me: Device): Promise<void> => {
-      chain = chain.then(async () => {
-        for (const d of [a, b]) await upload(d, server)
-        await deliverAndDrain(me, server)
-      })
-      return chain
-    }
 
     const claimA = claimFor(a, 'device-a')
     const claimB = claimFor(b, 'device-b')
@@ -152,5 +146,65 @@ describe('per-graph claim over two converging databases', () => {
       claimB.tryClaim(WS, 'cell-to-children-v1'),
     ])
     expect([reA, reB].filter(Boolean)).toHaveLength(1)
+  }, 20_000)
+
+  it('converges under equal clocks, where a nonzero-stamp mint would strand', async () => {
+    // The case that made the earlier version of this file record
+    // non-convergence as a law: with indistinguishable stamps neither device
+    // adopted the other's row, so each kept reading its own claim as won.
+    // That was a missing `systemMint`, not a limit of the mechanism —
+    // `syncObserver/reconcile.ts` names equal NONZERO stamps on one
+    // deterministic id as the shape invariant I1 misreads. Stamp 0 yields via
+    // I2 instead, so both devices adopt the server's answer.
+    await resetTestDb(dbA.db)
+    await resetTestDb(dbB.db)
+    let serverClock = 1_800_000_000_000
+    const server = createFakeSyncServer({now: () => ++serverClock})
+
+    // SAME starting clock on both — no ordering to lean on.
+    const mk = (db: TestDb['db'], tag: 'a' | 'b'): Device => {
+      let time = 1_700_000_000_000
+      let idCursor = 0
+      const {repo, cache} = createTestRepo({
+        db, user: {id: 'user-1'}, now: () => ++time,
+        newId: () => `${tag}-gen-${++idCursor}`,
+      })
+      repo.setActiveWorkspaceId(WS)
+      return {db, repo, cache, cursor: 0}
+    }
+    const a = mk(dbA.db, 'a')
+    const b = mk(dbB.db, 'b')
+
+    const claimFor = (device: Device, claimantId: string) => createGraphBackfillClaim({
+      db: device.db,
+      claimantId,
+      tx: (fn, opts) => device.repo.tx(fn, opts),
+      awaitConverged: async () => {
+        await upload(device, server)
+        await deliverAndDrain(device, server)
+        return true
+      },
+      ensureHome: (workspaceId) => getOrCreateMigrationsPage(device.repo, workspaceId),
+    })
+
+    const won = await Promise.all([
+      claimFor(a, 'device-a').tryClaim(WS, 'tie-v1'),
+      claimFor(b, 'device-b').tryClaim(WS, 'tie-v1'),
+    ])
+    expect(won.filter(Boolean)).toHaveLength(1)
+
+    for (let round = 0; round < 3; round++) {
+      for (const d of [a, b]) await upload(d, server)
+      for (const d of [a, b]) await deliverAndDrain(d, server)
+    }
+
+    const claimId = graphBackfillClaimBlockId(WS, 'tie-v1')
+    const ownerOn = async (device: Device): Promise<string> => {
+      const row = await device.db.get<{properties_json: string}>(
+        'SELECT properties_json FROM blocks WHERE id = ?', [claimId],
+      )
+      return (JSON.parse(row.properties_json) as Record<string, string>)['migration:claimant']
+    }
+    expect(await ownerOn(a)).toBe(await ownerOn(b))
   }, 20_000)
 })

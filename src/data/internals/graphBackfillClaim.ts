@@ -18,20 +18,28 @@
  * which would run the same upload-carrying pass again, the exact hazard this
  * seam exists to prevent.
  *
- * ## Why last-write-wins is enough
+ * ## What makes the re-read a decision
  *
  * Two devices opening a freshly flipped workspace both see no claim and both
- * write one. They write the SAME block id, so sync converges on one winner,
- * and once it has, both devices read the same value — whoever is named
- * proceeds and the other backs off. That is real mutual exclusion, but ONLY
- * on the far side of convergence: a read taken before the write has settled
- * says "mine" on both devices. The caller therefore claims, waits for sync to
- * settle, and re-reads before doing any bulk work.
+ * write one, to the SAME block id. Reading straight back proves nothing —
+ * each sees its own row. Two things make the second read authoritative:
  *
- * The residual window degrades to wasted work, never to wrong data: the pass
- * is idempotent per row, and `assertBackfillMayWrite` aborts a losing device
- * cleanly mid-pass.
+ *  - `awaitConverged` (`claimConvergence.ts`) blocks until our write has
+ *    reached the server AND a checkpoint has come back, so what we then read
+ *    is the server's resolution rather than our own echo. A timeout backs
+ *    OFF; proceeding unconverged is the failure this exists to prevent.
+ *  - the create is a `systemMint` (stamp 0). Two nonzero-stamp mints of one
+ *    deterministic id are misread as identical by the reconcile gate, and the
+ *    loser strands believing it won — the shape `syncObserver/reconcile.ts`
+ *    documents. Stamp 0 makes both yield to the server instead.
  *
+ * Both are pinned over two real databases in `graphBackfillClaimRace.test.ts`;
+ * removing either lets both devices proceed.
+ *
+ * A device that loses AFTER starting is caught by nothing here — the runner's
+ * per-transaction preconditions check generation, workspace and sync state,
+ * not the claim — so it writes until its pass ends. Tolerable only because
+ * these passes are idempotent per row.
  */
 
 import { ChangeScope, type Tx } from '@/data/api'
@@ -145,12 +153,22 @@ export interface GraphBackfillClaimDeps {
     fn: (tx: Tx) => Promise<R>,
     opts: {scope: ChangeScope; skipUndo?: boolean; description?: string},
   ): Promise<R>
-  /** Runs `cb` once this device is connected and not downloading. */
-  syncSettled(cb: () => void): () => void
-  /** Identifies this claimant. Must be at least as fine-grained as a device:
-   *  finer is harmless (two windows share a local DB, so the loser sees the
-   *  winner on its first read), coarser is the dangerous direction, because
-   *  two devices would then read each other's claim as their own. */
+  /** Resolves true once this device's claim write has reached the server AND
+   *  a checkpoint has since come back — i.e. the local row is now the
+   *  server's answer rather than our own echo. False means back off.
+   *  See `claimConvergence.ts`; `connected && !downloading` is NOT this. */
+  awaitConverged(claimId: string): Promise<boolean>
+  /** Identifies this claimant, and must be UNIQUE per client instance.
+   *
+   *  Shared is the failure that matters: two clients carrying one token both
+   *  read the converged claim as their own and both run the pass, which no
+   *  amount of convergence can fix. That ruled out the layout-session id — an
+   *  installed-app window and a duplicated tab can carry the same value.
+   *
+   *  The cost of uniqueness is that a restarted client cannot recognise its
+   *  own stranded claim, so a client that dies mid-pass leaves one for a human
+   *  to delete. That is the documented recovery either way, and it fails safe;
+   *  a shared token fails toward the duplicate uploading pass. */
   readonly claimantId: string
   ensureHome(workspaceId: string): Promise<unknown>
 }
@@ -204,29 +222,32 @@ export const createGraphBackfillClaim = (
         await tx.update(claimId, {properties: claimProperties})
         return
       }
+      // `systemMint` (stamp 0) like every other deterministic-id creator.
+      // Without it this is a nonzero-stamp mint of a shared id, which
+      // `syncObserver/reconcile.ts` names as its known blind spot: two devices
+      // minting the same id produce equal nonzero stamps from different
+      // writes, invariant I1 reads them as identical, the incoming row is
+      // skip-stale'd, and the loser strands believing it won. Stamp 0 yields
+      // via I2 instead, so both devices adopt the server's answer.
       await tx.create({
         id: claimId,
         workspaceId,
         parentId: migrationsPageBlockId(workspaceId),
-        orderKey: keyAtStart(null),
+        orderKey: keyAtStart(),
         content: backfillId,
         properties: claimProperties,
-      })
+      }, {systemMint: true})
     }, {scope: ChangeScope.BlockDefault, skipUndo: true,
         description: `claim backfill ${backfillId}`})
 
-    // Settle, THEN re-read. The write above is not a decision: before
-    // convergence every racing device reads its own claim back and believes
-    // it won. Only the post-settle read is authoritative.
+    // Converge, THEN re-read. The write above is not a decision: until the
+    // server has resolved it against any peer's write to the same id, every
+    // racing device reads its own row back and believes it won.
     //
-    // Do NOT invoke the returned disposer here. It unregisters the listener,
-    // and an earlier version called it eagerly — so whenever the gate was not
-    // ALREADY settled the callback could never fire, this promise never
-    // resolved, and `tryClaim` hung for the session while the claim it had
-    // just written made every other device back off. `onSyncSettled` disposes
-    // its own listener before invoking the callback, so there is nothing to
-    // clean up on the resolving path.
-    await new Promise<void>(resolve => { deps.syncSettled(resolve) })
+    // A timeout backs off rather than proceeding. The two outcomes are not
+    // symmetric: not running is a deferral the next open retries, running
+    // unconverged is the duplicated upload-carrying pass this exists to stop.
+    if (!await deps.awaitConverged(claimId)) return false
     return decideClaim(await readGraphBackfillClaim(deps.db, claimId), deps.claimantId) === 'proceed'
   },
 
