@@ -1,2 +1,2 @@
-import{blockRendererFacet as e}from"./blockInteraction.js";var t=t=>{let n={};for(let r of t.contributionsById(e.id)){let e=r.value;n[e.id]=e}return n};export{t as readRuntimeRenderers};
+import{dedupeVariantRegistrations as e}from"../facets/variantFacet.js";import{blockRendererFacet as t}from"./blockInteraction.js";var n=n=>{let r=n.contributionsById(t.id).toSorted((e,t)=>(e.precedence??0)-(t.precedence??0)).map(e=>e.value);return Object.fromEntries(e(r).map(e=>[e.id,e]))};export{n as readRuntimeRenderers};
 //# sourceMappingURL=runtimeRenderers.js.map
