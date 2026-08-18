@@ -1,2 +1,2 @@
-import{rejectionToastFacet as e}from"./core.js";import{showCustom as t,showError as n}from"../utils/toast.js";var r=12e3,i=(e,i,a)=>{let o=a.get(e.code);if(!o){n(e.message);return}t(t=>o.render(e,i,t),{duration:r})},a=(t,n)=>i(t,n,n.facetRuntime?.read(e)??new Map);export{i as routeProcessorRejection,a as surfaceProcessorRejection};
+import{rejectionToastFacet as e}from"./core.js";import{showCustom as t,showError as n}from"../utils/toast.js";var r=12e3,i=e=>`rejection:${e.code}:${e.message}`,a=(e,a,o)=>{let s=o.get(e.code),c=i(e);if(!s){n(e.message,{id:c});return}t(t=>s.render(e,a,t),{duration:r,id:c})},o=(t,n)=>a(t,n,n.facetRuntime?.read(e)??new Map);export{a as routeProcessorRejection,o as surfaceProcessorRejection};
 //# sourceMappingURL=processorRejectionToast.js.map
