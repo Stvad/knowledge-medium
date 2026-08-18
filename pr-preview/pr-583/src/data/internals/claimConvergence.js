@@ -1,0 +1,2 @@
+var e=async(e,n)=>{let r=e.now()+e.timeoutMs,i=null,a=e.onStatusChange(()=>{i?.()});try{for(;await e.hasPendingUpload(n);){if(e.now()>=r)return!1;await t(e,e=>{i=e})}let a=e.lastSyncedAt();for(;;){let n=e.lastSyncedAt();if(n!==null&&(a===null||n>a))return!0;if(e.now()>=r)return!1;await t(e,e=>{i=e})}}finally{a()}},t=async(e,t)=>{await new Promise(n=>{let r=!1,i=()=>{r||(r=!0,n())};t(i),e.sleep(e.pollMs).then(i)})};export{e as awaitClaimConverged};
+//# sourceMappingURL=claimConvergence.js.map
