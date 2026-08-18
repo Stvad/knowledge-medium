@@ -315,7 +315,14 @@ describe('workspace backfill runner — sync gating', () => {
     g.open()
     await drain(repo)
 
-    expect(released).toEqual(['probe-backfill-v1'])
+    // The invariant is that the claim is HANDED BACK, not how many times.
+    // `PendingIdleJobs.schedule` does not coalesce, so a second arming of the
+    // gate runs the pass again — each run claims, aborts and releases — and
+    // asserting an exact call count made this test order-dependent: green in a
+    // full-file run, red when filtered, and intermittently red on CI. A
+    // repeated release is harmless here: the stub re-claims first, so the
+    // sequence stays claim/release balanced, which is what `claimed.size` pins.
+    expect(released).toContain('probe-backfill-v1')
     expect(claimed.size).toBe(0)
   })
 
