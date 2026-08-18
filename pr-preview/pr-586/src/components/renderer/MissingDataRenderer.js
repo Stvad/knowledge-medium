@@ -1,0 +1,2 @@
+import{c as e}from"react/compiler-runtime";import{jsx as t}from"react/jsx-runtime";var n=n=>{let r=e(2),{block:i}=n,a;return r[0]===i?a=r[1]:(a=i?.peek()===void 0?t(`div`,{className:`text-gray-500 text-sm`,children:`Loading block...`}):null,r[0]=i,r[1]=a),a},r={id:`missingData`,label:`Missing block`,resolve:e=>e.block.peek()?null:{render:n}};export{n as MissingDataRenderer,r as missingDataRendererRegistration};
+//# sourceMappingURL=MissingDataRenderer.js.map

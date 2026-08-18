@@ -1,0 +1,2 @@
+import{blockRendererFacet as e}from"./blockInteraction.js";var t=t=>{let n={};for(let r of t.contributionsById(e.id)){let e=r.value;n[e.id]=e}return n};export{t as readRuntimeRenderers};
+//# sourceMappingURL=runtimeRenderers.js.map
