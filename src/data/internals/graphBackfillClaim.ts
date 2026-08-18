@@ -18,34 +18,30 @@
  * which would run the same upload-carrying pass again, the exact hazard this
  * seam exists to prevent.
  *
- * ## Where exactly-once actually comes from
+ * ## This RECORDS a run; it does not arbitrate one
  *
- * NOT from this claim. A pass on this seam is OPERATOR-TRIGGERED: a human
- * runs it, on one device, once (§11 — "operator-run-once per workspace", and
- * the doc declines an attestation RPC for the same reason). There is no race
- * to arbitrate, so the claim's job is to RECORD, not to decide.
+ * Exactly-once comes from the pass being `trigger: 'operator'` — a human runs
+ * it, on one device, deliberately (§11, "operator-run-once per workspace").
+ * Nothing here decides who may run; there is no race to decide.
  *
- * That is a deliberate retreat from an earlier design in which `tryClaim`
- * waited for the write to converge before trusting its own read. Chasing
- * exactly-once across N devices over a last-write-wins layer with no server
- * arbitration has no fixed point: each layer of the pipeline is another place
- * a local read is stale (upload queue, download checkpoint, the throttled
- * `blocks_synced` drain, the rejection quarantine), and every wait added to
- * cover one needs a timeout, which strands a claim, which needs reclaim,
- * which needs arbitration. Six review rounds each closed one window and
- * revealed the next. Moving the guarantee to the trigger deletes the class.
+ * Do not add arbitration back. Exactly-once across N devices over a
+ * last-write-wins layer with no server arbitration is not reachable: every
+ * layer of the pipeline is another place a local read is stale (upload queue,
+ * download checkpoint, the throttled `blocks_synced` drain, the rejection
+ * quarantine), and each wait added to cover one needs a timeout, which
+ * strands a claim, which needs reclaim, which needs arbitration. An earlier
+ * revision tried and the regress had no fixed point.
  *
- * What the record still buys, and it is worth having:
- *  - a completed pass is visible to every device, so a second operator on a
- *    second device is told it is already done. Duplicate "done" is harmless
- *    under LWW, which is why recording needs no arbitration.
+ * What the record buys:
+ *  - a completed pass is visible to every device, so a second operator is
+ *    told it is done. Duplicate "done" is harmless under LWW, which is why
+ *    recording needs no arbitration.
  *  - an in-flight claim is a readable, deletable block, so an interrupted run
  *    is diagnosable rather than invisible.
  *
- * What it does NOT buy: two operators triggering the pass simultaneously on
- * two devices can both run it. That is accepted — it needs deliberate human
- * action on two machines at once, and these passes are idempotent per row, so
- * the cost is duplicated work rather than corruption.
+ * What it does not: two operators triggering simultaneously on two devices
+ * both run. Accepted — it takes deliberate human action on two machines at
+ * once, and these passes are idempotent per row.
  */
 
 import { ChangeScope, type Tx } from '@/data/api'

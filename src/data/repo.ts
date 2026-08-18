@@ -650,6 +650,9 @@ export class Repo {
    *  (`RepoOptions.backfillSyncGate`). */
   private readonly backfillSyncGate: (cb: () => void) => () => void
   /** See `RepoOptions.backfillCompletionClaim`. Absent ⇒ backfills refuse. */
+  /** Passes actually entered, so `runWorkspaceBackfillNow` can distinguish
+   *  "ran" from "the claim says someone already has it". */
+  private operatorBackfillRuns = 0
   private readonly backfillCompletionClaim: BackfillCompletionClaim | undefined
   /** Disposer for a gate armed but not yet opened, so a workspace switch or
    *  repo teardown doesn't leave a status listener attached. */
@@ -2518,8 +2521,13 @@ export class Repo {
    * returns immediately; tests drain via `awaitWorkspaceBackfills()`.
    */
   scheduleWorkspaceBackfills(workspaceId: string): void {
-    if (this.isReadOnly || !workspaceId || this._workspaceBackfills.length === 0) return
-    const backfills = this._workspaceBackfills
+    if (this.isReadOnly || !workspaceId) return
+    // `operator` passes are excluded HERE rather than inside the runner, so
+    // that "nothing automatic starts one" is true of the scheduler itself and
+    // not a condition some later caller of `runWorkspaceBackfills` could
+    // forget. `runWorkspaceBackfillNow` is their only entry point.
+    const backfills = this._workspaceBackfills.filter(b => b.trigger === 'workspace-open')
+    if (backfills.length === 0) return
     const generation = this.workspaceGeneration
     {
       // A backfill must not write while this device is behind the server: its
@@ -2774,6 +2782,35 @@ export class Repo {
     }
   }
 
+  /**
+   * Run ONE `operator`-triggered backfill now, because a human asked.
+   *
+   * The deliberate act is the point: a once-per-graph pass that uploads
+   * source-of-truth rows cannot be made exactly-once by machinery over a
+   * last-write-wins sync layer, so it is made exactly-once by a person
+   * running it in one place. The completion claim then records it so other
+   * devices skip — recording needs no arbitration, since a duplicate "done"
+   * is harmless.
+   *
+   * Everything else is the automatic path's: sync gating, the per-transaction
+   * preconditions, `BlockDefault` scope, `skipUndo`, and the claim. Returns
+   * what happened so a caller can tell the operator, rather than logging into
+   * the void.
+   */
+  async runWorkspaceBackfillNow(
+    workspaceId: string,
+    backfillId: string,
+  ): Promise<'ran' | 'already-done-or-held' | 'not-found' | 'read-only'> {
+    if (this.isReadOnly) return 'read-only'
+    const backfill = this._workspaceBackfills.find(
+      b => b.id === backfillId && b.trigger === 'operator',
+    )
+    if (!backfill) return 'not-found'
+    const before = this.operatorBackfillRuns
+    await this.runWorkspaceBackfills(workspaceId, [backfill], this.workspaceGeneration)
+    return this.operatorBackfillRuns > before ? 'ran' : 'already-done-or-held'
+  }
+
   private async runWorkspaceBackfills(
     workspaceId: string,
     backfills: readonly WorkspaceBackfill[],
@@ -2816,6 +2853,7 @@ export class Repo {
       }
       if (!(await claim.tryClaim(workspaceId, backfill.id))) continue
       const resolver = this.propertySchemaResolverFor(workspaceId)
+      this.operatorBackfillRuns++
       const ctx: WorkspaceBackfillContext = {
         workspaceId,
         // One resolver for the whole run, through the canonical factory: the

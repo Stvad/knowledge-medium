@@ -140,6 +140,7 @@ const SAFE_VIA_PROTOTYPE: Record<string, string> = {
   runReferenceTargetDerivePass: 'private; jobs are enqueued via the DELEGATED schedule* overrides',
   drainNameRederives: 'private; jobs are enqueued via the facetBridge-bound schedule',
   runWorkspaceBackfills: 'private; jobs are enqueued via the DELEGATED schedule* overrides',
+  runWorkspaceBackfillNow: 'operator entry point; runs through the same private runner, writes only via the DELEGATED tx',
   propertyRegistryReadyFor: 'read — inspects the registry snapshots; assigns nothing',
   workspaceSeeds: 'private read; reached only via the DELEGATED schedule/run seed-materialization members',
   scheduleReprojection: 'private; invoked by constructor-bound facetBridge',
@@ -173,6 +174,7 @@ const SAFE_VIA_PROTOTYPE: Record<string, string> = {
  *  `(x as any).field =` dynamic write would escape the inventory —
  *  don't introduce either on Repo. */
 const SAFE_INSTANCE_FIELDS: Record<string, string> = {
+  operatorBackfillRuns: 'data field — a counter the operator entry point reads to report ran vs skipped',
   _propertyDefinitionRegistry: 'data field',
   _previousPropertyDefinitionRegistry: 'data field',
   _typeDefinitionRegistry: 'data field',
