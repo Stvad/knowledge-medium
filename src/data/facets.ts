@@ -276,6 +276,13 @@ export const workspaceBackfillsFacet = defineFacet<WorkspaceBackfill, readonly W
  * `ensure` MUST be idempotent and write at a deterministic, workspace-derived
  * id (see `getOrCreateKernelPage`) so repeated bootstraps and offline-
  * converging clients all land on the same row.
+ *
+ * It MAY be skipped: `ensureSystemPages` reports and swallows a failing
+ * `ensure` so one page cannot stop the workspace opening. Whether that is
+ * momentary or lasts the session is YOUR consumers' doing — one that
+ * get-or-creates the page at its point of use retries the moment the feature is
+ * touched, while one that navigates to the derived id (the Recents header item)
+ * finds nothing there until the next workspace open. Prefer the former.
  */
 export interface SystemPage {
   /** Stable id, for facet dedup. */
