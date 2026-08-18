@@ -91,6 +91,7 @@ const SAFE_VIA_PROTOTYPE: Record<string, string> = {
 
   // ── writes into a caller-provided tx (grouping follows the caller) ──
   assertBackfillMayWrite: 'read — throws or returns; assigns no Repo fields',
+  backfillSyncSettledNow: 'read — samples the injected gate; assigns no Repo fields',
   addTypeInTx: 'writes into the caller tx',
   addTypeInTxLenient: 'writes into the caller tx',
   removeTypeInTx: 'writes into the caller tx',

@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { describe, expect, it } from 'vitest'
-import { claimFromProperties, decideClaim, type GraphBackfillClaim } from './graphBackfillClaim'
+import { claimFromProperties, createGraphBackfillClaim, decideClaim, type GraphBackfillClaim } from './graphBackfillClaim'
 
 const ME = 'device-a'
 const THEM = 'device-b'
@@ -40,5 +40,34 @@ describe('a live row that is not a decodable claim', () => {
     expect(claimFromProperties({
       'migration:claimant': 'device-a', 'migration:claimed-at': 1000,
     })).toEqual({claimantId: 'device-a', claimedAt: 1000})
+  })
+})
+
+describe('a claim that arrives between the read and the transaction', () => {
+  it('is honoured — tryClaim returns false rather than running anyway', async () => {
+    // The interleaving: the pre-read sees nothing, so we decide to claim; by
+    // the time the writing tx holds the row, a peer's claim has landed. The
+    // tx correctly declines to overwrite it — and the CALLER has to be told,
+    // or it runs a migration it just watched someone else take.
+    const peerClaim = {
+      'migration:claimant': 'device-peer',
+      'migration:claimed-at': 1000,
+    }
+    const claim = createGraphBackfillClaim({
+      // Pre-read: unclaimed.
+      db: {getOptional: async () => null},
+      // In-tx: the peer's claim is already there.
+      tx: async <R,>(fn: (tx: never) => Promise<R>): Promise<R> => fn({
+        get: async () => ({deleted: false, properties: peerClaim}),
+        create: async () => 'unused',
+        update: async () => undefined,
+        delete: async () => undefined,
+        restore: async () => undefined,
+      } as never),
+      claimantId: 'device-a',
+      ensureHome: async () => undefined,
+    } as unknown as Parameters<typeof createGraphBackfillClaim>[0])
+
+    expect(await claim.tryClaim('ws', 'race-v1')).toBe(false)
   })
 })

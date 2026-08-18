@@ -499,3 +499,61 @@ describe('workspace backfill runner — operator trigger', () => {
     expect(runs).toEqual([])
   })
 })
+
+describe('workspace backfill runner — operator outcomes', () => {
+  it('does not claim while this device is behind the server', async () => {
+    // `tryClaim` WRITES (the Migrations page, then the claim row). Claiming
+    // first and discovering staleness inside the pass leaves both that create
+    // and its release queued — on reconnect they can tombstone a completion
+    // this device never saw, freeing later operators to repeat the migration.
+    const runs: string[] = []
+    const claimAttempts: string[] = []
+    // A gate that never fires = this device is behind and stays behind.
+    const neverSettles = () => () => {}
+    const {repo} = createTestRepo({
+      db: sharedDb.db,
+      user: {id: 'user-1'},
+      backfillSyncGate: neverSettles,
+      backfillCompletionClaim: {
+        tryClaim: async (_ws, id) => { claimAttempts.push(id); return true },
+        markComplete: async () => {},
+        releaseClaim: async () => {},
+      },
+    })
+    repo.setActiveWorkspaceId(WS)
+    repo.setRuntimeContributions(workspaceBackfillsFacet, 'test-backfills', [{
+      id: 'operator-sync-v1',
+      trigger: 'operator' as const,
+      run: async ({workspaceId}) => { runs.push(workspaceId) },
+    }])
+    await seedTarget(repo)
+
+    expect(await repo.runWorkspaceBackfillNow(WS, 'operator-sync-v1')).toBe('already-done-or-held')
+    expect(claimAttempts).toEqual([])
+    expect(runs).toEqual([])
+  })
+
+  it('reports failure, not success, when the pass throws', async () => {
+    // Reporting "ran" for a pass that died tells the operator the migration is
+    // done when it is not, and costs them the retry.
+    const {repo} = createTestRepo({
+      db: sharedDb.db,
+      user: {id: 'user-1'},
+      backfillCompletionClaim: {
+        tryClaim: async () => true,
+        markComplete: async () => {},
+        releaseClaim: async () => {},
+      },
+    })
+    repo.setActiveWorkspaceId(WS)
+    repo.setRuntimeContributions(workspaceBackfillsFacet, 'test-backfills', [{
+      id: 'operator-throws-v1',
+      trigger: 'operator' as const,
+      run: async () => { throw new Error('pass exploded') },
+    }])
+    await seedTarget(repo)
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    expect(await repo.runWorkspaceBackfillNow(WS, 'operator-throws-v1')).toBe('already-done-or-held')
+  })
+})

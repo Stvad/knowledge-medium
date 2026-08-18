@@ -2740,6 +2740,15 @@ export class Repo {
     ) !== null
   }
 
+  /** Is this device caught up right now? Same predicate the scheduler gates
+   *  on, sampled synchronously — `backfillSyncGate` fires its callback
+   *  immediately when settled, so an unfired callback means "not settled". */
+  private backfillSyncSettledNow(): boolean {
+    let settled = false
+    this.backfillSyncGate(() => { settled = true })()
+    return settled
+  }
+
   private async assertBackfillMayWrite(
     workspaceId: string,
     backfillId: string,
@@ -2851,9 +2860,22 @@ export class Repo {
         )
         continue
       }
+      // BEFORE claiming, not only before writing. `tryClaim` itself WRITES —
+      // it ensures the Migrations page and creates the claim row — so on a
+      // disconnected or stale device the old order wrote a claim, hit the
+      // in-transaction sync assertion, and released it. Both writes then sat
+      // in the upload queue, and on reconnect the create could conflict with
+      // an unseen server completion while the following `deleted=1` patch
+      // tombstoned it, freeing later operators to repeat the migration.
+      if (!this.backfillSyncSettledNow()) {
+        console.warn(
+          `[workspaceBackfills] "${backfill.id}" deferred: this device is not caught ` +
+          `up with the server, so claiming would write from a stale view.`,
+        )
+        continue
+      }
       if (!(await claim.tryClaim(workspaceId, backfill.id))) continue
       const resolver = this.propertySchemaResolverFor(workspaceId)
-      this.operatorBackfillRuns++
       const ctx: WorkspaceBackfillContext = {
         workspaceId,
         // One resolver for the whole run, through the canonical factory: the
@@ -2901,6 +2923,12 @@ export class Repo {
         await this.assertBackfillMayWrite(workspaceId, backfill.id, generation)
         await backfill.run(ctx)
         await this.assertBackfillMayWrite(workspaceId, backfill.id, generation)
+        // Counted after the pass RETURNED and its post-conditions held.
+        // Incrementing on entry made `runWorkspaceBackfillNow` report "ran"
+        // for a pass that threw or was aborted by a precondition, telling an
+        // operator the migration is done when it is not and costing them the
+        // retry.
+        this.operatorBackfillRuns++
         // Record the marker only after a clean run — a thrown backfill leaves
         // it unset so the next open retries (backfills are written idempotent
         // via a per-row recheck, so a retry is cheap).

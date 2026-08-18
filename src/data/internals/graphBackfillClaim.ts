@@ -199,7 +199,7 @@ export const createGraphBackfillClaim = (
       [migrationClaimantProp.name]: deps.claimantId,
       [migrationClaimedAtProp.name]: Date.now(),
     }, MIGRATION_CLAIM_TYPE)
-    if (first === 'claim') await deps.tx(async tx => {
+    const won = first !== 'claim' ? true : await deps.tx(async tx => {
       // Re-checked inside the WRITING tx against this row: the read above
       // happened outside it, and a peer's claim can arrive in between.
       const existing = await tx.get(claimId)
@@ -211,9 +211,12 @@ export const createGraphBackfillClaim = (
         // open took the identical path. The migration could never run again.
         // The id is machinery-owned, so overwriting a non-claim there is
         // repair, not data loss.
-        if (claimFromProperties(existing.properties) !== null) return
+        // A valid claim arrived between the read above and this transaction.
+        // It is authoritative — and the caller must be TOLD, or it runs a
+        // migration it just watched someone else take.
+        if (claimFromProperties(existing.properties) !== null) return false
         await tx.update(claimId, {properties: claimProperties})
-        return
+        return true
       }
       if (existing?.deleted) {
         // Deleting the claim block IS the documented recovery for a claimant
@@ -239,7 +242,7 @@ export const createGraphBackfillClaim = (
         // winner recovery for a permanent complication of the id scheme.
         await tx.restore(claimId, {content: backfillId})
         await tx.update(claimId, {properties: claimProperties})
-        return
+        return true
       }
       // `systemMint` (stamp 0) like every other deterministic-id creator.
       // Without it this is a nonzero-stamp mint of a shared id, which
@@ -256,12 +259,13 @@ export const createGraphBackfillClaim = (
         content: backfillId,
         properties: claimProperties,
       }, {systemMint: true})
+      return true
     }, {scope: ChangeScope.BlockDefault, skipUndo: true,
         description: `claim backfill ${backfillId}`})
 
     // No convergence wait. Under an operator trigger there is nothing to
     // arbitrate, and the wait was unwinnable anyway — see the module header.
-    return true
+    return won
   },
 
   async markComplete(workspaceId, backfillId) {
