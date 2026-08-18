@@ -11,7 +11,7 @@
  */
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import { ChangeScope, ProcessorRejection } from '@/data/api'
+import { ChangeScope } from '@/data/api'
 import { aliasesProp } from '@/data/properties'
 import { systemPagesFacet } from '@/data/facets'
 import type { AppExtension } from '@/facets/facet'
@@ -84,16 +84,16 @@ describe('Repo.ensureSystemPages', () => {
   })
 
   /**
-   * One page's failure must not take the workspace down with it.
-   *
-   * `bootstrapWorkspace` awaits this on the critical path with no catch, so a
-   * bare `Promise.all` makes any single `ensure` rejection fatal to workspace
-   * OPEN — and the realistic cause is an alias a user's own block already
-   * holds, whose remedy (rename that block) needs the app to be open.
+   * One page's failure must not take the workspace down with it — on an
+   * EXISTING workspace. `bootstrapWorkspace` awaits this on the critical path
+   * with no catch, so a bare `Promise.all` makes any single `ensure` rejection
+   * fatal to workspace OPEN, and the realistic cause is an alias a user's own
+   * block already holds, whose remedy (rename that block) needs the app open.
    */
   describe('when one page cannot be created', () => {
     it('resolves rather than rejecting, and still creates every other page', async () => {
       await seatAlias(env.repo, 'user-page', 'Properties')
+      vi.spyOn(console, 'error').mockImplementation(() => {})
 
       await expect(env.repo.ensureSystemPages(WS)).resolves.toBeUndefined()
 
@@ -123,62 +123,35 @@ describe('Repo.ensureSystemPages', () => {
       expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('test:broken'))
     })
 
-    it('tells the user, for a failure nothing else reported', async () => {
+    /**
+     * ...but on a FRESHLY CREATED workspace the same failure stays fatal, and
+     * the reason is data safety rather than severity. A new workspace has no
+     * blocks, so no alias can be taken and the failure is transient or a bug —
+     * while the first-run seed immediately after publishes `[[Properties]]`,
+     * `[[Types]]`, `[[Locations]]` and `[[Journal]]` into the tutorial. With no
+     * page holding those names the references processor mints a rival at an
+     * alias-seat id for each, and the canonical page can never be created
+     * afterwards. Throwing leaves the workspace unseeded and lets the retry
+     * work; swallowing makes a transient failure permanent.
+     */
+    it('is fatal on a freshly created workspace, where swallowing would strand a rival', async () => {
       env = await setup([
         systemPagesFacet.of(
-          {id: 'test:broken', ensure: () => Promise.reject(new Error('plugin bug'))},
+          {id: 'test:broken', ensure: () => Promise.reject(new Error('transient'))},
           {source: 'test'},
         ),
       ])
-      vi.spyOn(console, 'error').mockImplementation(() => {})
-      const errors: ProcessorRejection[] = []
-      env.repo.onUserError(e => errors.push(e))
 
-      await env.repo.ensureSystemPages(WS)
-
-      expect(errors).toHaveLength(1)
-      expect(errors[0].code).toBe('systemPage.unavailable')
-      expect(errors[0].meta).toMatchObject({pageId: 'test:broken', workspaceId: WS})
-    })
-
-    it('re-reports the actionable rejection itself, never a vaguer wrapper', async () => {
-      // `alias.collision` names the conflicting block and offers to open it —
-      // that IS the remedy. Wrapping it in a generic `systemPage.unavailable`
-      // notice would replace the one thing the user can act on. Two land here
-      // (repo.tx fires one on its way out, this fires the second); collapsing
-      // them belongs to the toast layer, which keys a slot on (code, message).
-      await seatAlias(env.repo, 'user-page', 'Properties')
       const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
-      const errors: ProcessorRejection[] = []
-      env.repo.onUserError(e => errors.push(e))
 
-      await env.repo.ensureSystemPages(WS)
+      await expect(env.repo.ensureSystemPages(WS, {freshlyCreated: true}))
+        .rejects.toThrow('transient')
 
-      expect(errors.map(e => e.code)).toEqual(['alias.collision', 'alias.collision'])
-      // Logged all the same: that rejection names the conflicting block but not
-      // which system page was lost to it, and only this line says so.
-      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('kernel:properties'))
-    })
-
-    it('surfaces a rejection an owner threw without ever opening a tx', async () => {
-      // `SystemPage.ensure` is any async function, so a contributor can build a
-      // ProcessorRejection from its own validation and reject with it directly.
-      // Nothing fanned that one out, so treating "is a ProcessorRejection" as
-      // "someone already told the user" would leave this failure silent.
-      const ownRejection = new ProcessorRejection('bad spec', 'test.badSpec', {})
-      env = await setup([
-        systemPagesFacet.of(
-          {id: 'test:preflight', ensure: () => Promise.reject(ownRejection)},
-          {source: 'test'},
-        ),
-      ])
-      vi.spyOn(console, 'error').mockImplementation(() => {})
-      const errors: ProcessorRejection[] = []
-      env.repo.onUserError(e => errors.push(e))
-
-      await env.repo.ensureSystemPages(WS)
-
-      expect(errors).toEqual([ownRejection])
+      // And the refusal comes BEFORE the log, whose "will retry on the next
+      // workspace open" is false once the throw stops bootstrap. Safe as an
+      // absence assertion: the catch runs synchronously, and the await above
+      // has already settled.
+      expect(errorSpy).not.toHaveBeenCalled()
     })
   })
 

@@ -131,7 +131,6 @@ const SAFE_VIA_PROTOTYPE: Record<string, string> = {
   hydrateRows: 'private read + shared-cache mutation',
   makeQueryCtx: 'private (reached via delegated runQuery / real-repo query proxy)',
   propertyDefinitionProjector: 'private read through the constructor-bound projector service',
-  reportSystemPageFailure: 'private; logs + notifies the shared userErrorListeners CallbackSet — assigns no Repo field, stores nothing capturing `this`',
   reprojectRefTypedProperties: 'private-ish maintenance; invoked by constructor-bound facetBridge',
   resolveTypedBlockQuery: 'private read',
   runReconcileRescan: 'private; jobs are enqueued via the DELEGATED schedule* overrides',

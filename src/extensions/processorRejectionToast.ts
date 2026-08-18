@@ -27,16 +27,6 @@ import { showCustom, showError } from '@/utils/toast.js'
  *  actionable (open / merge / pick a new name). */
 const REJECTION_TOAST_DURATION_MS = 12000
 
-/** One slot per distinct rejection. Two producers can hit the SAME condition a
- *  moment apart — bootstrap's `ensureSystemPages` and the seed materializer
- *  both claim the Properties page's alias — and an identical actionable toast
- *  shown twice is noise, not information. Keyed on the public (code, message)
- *  pair so core stays ignorant of any specific rejection's `meta` shape;
- *  producers that mean two genuinely distinct notices already differ in message
- *  (the per-definition codec-change reports name theirs). */
-const toastSlotId = (error: ProcessorRejection): string =>
-  `rejection:${error.code}:${error.message}`
-
 /** Dispatch one rejection to the renderer contributed for its `code`,
  *  wrapping it in `showCustom`. An unknown code falls back to the raw
  *  message — better than swallowing silently; any new processor that
@@ -49,14 +39,13 @@ export const routeProcessorRejection = (
   contributions: ReadonlyMap<string, RejectionToastContribution>,
 ): void => {
   const contribution = contributions.get(error.code)
-  const id = toastSlotId(error)
   if (!contribution) {
-    showError(error.message, {id})
+    showError(error.message)
     return
   }
   showCustom(
-    toastId => contribution.render(error, repo, toastId),
-    {duration: REJECTION_TOAST_DURATION_MS, id},
+    id => contribution.render(error, repo, id),
+    {duration: REJECTION_TOAST_DURATION_MS},
   )
 }
 

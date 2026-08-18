@@ -41,33 +41,8 @@ describe('routeProcessorRejection', () => {
 
     routeProcessorRejection(error, repo, new Map())
 
-    expect(showError).toHaveBeenCalledWith('something failed', {id: expect.any(String)})
+    expect(showError).toHaveBeenCalledWith('something failed')
     expect(showCustom).not.toHaveBeenCalled()
-  })
-
-  /** Two producers can hit one condition a moment apart — bootstrap's
-   *  `ensureSystemPages` and the seed materializer both claim the Properties
-   *  page's alias — and sonner reuses the slot when the id repeats. Without a
-   *  stable id the user gets the same actionable toast stacked twice. */
-  it('gives two reports of the same condition one toast slot, and distinct ones their own', () => {
-    const contributions = new Map<string, RejectionToastContribution>([
-      ['alias.collision', {code: 'alias.collision', render: () => createElement('span')}],
-    ])
-    const idFor = (message: string): unknown => {
-      vi.clearAllMocks()
-      routeProcessorRejection(
-        new ProcessorRejection(message, 'alias.collision', {}), repo, contributions,
-      )
-      return vi.mocked(showCustom).mock.calls[0][1]?.id
-    }
-
-    const first = idFor('Alias "Properties" is already used by another block')
-    const repeat = idFor('Alias "Properties" is already used by another block')
-    const other = idFor('Alias "Types" is already used by another block')
-
-    expect(typeof first).toBe('string')
-    expect(repeat).toBe(first)
-    expect(other).not.toBe(first)
   })
 })
 
@@ -111,7 +86,7 @@ describe('surfaceProcessorRejection (resolved-runtime wiring)', () => {
       repoStub,
     )
 
-    expect(showError).toHaveBeenCalledWith('bootstrap collision', {id: expect.any(String)})
+    expect(showError).toHaveBeenCalledWith('bootstrap collision')
     expect(showCustom).not.toHaveBeenCalled()
   })
 })

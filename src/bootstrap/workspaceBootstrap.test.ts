@@ -17,6 +17,7 @@ import { aliasesProp } from '@/data/properties'
 import { propertiesPageBlockId } from '@/data/propertiesPage'
 import { typesPageBlockId } from '@/data/typesPage'
 import { recentsPageBlockId } from '@/data/recentsPage'
+import { systemPagesFacet } from '@/data/facets'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { Repo } from '@/data/repo'
@@ -60,15 +61,38 @@ afterEach(async () => {
   ])
 })
 
-const open = () => bootstrapWorkspace({
+const open = (freshlyCreated = false) => bootstrapWorkspace({
   repo,
   workspaceId: WS,
-  freshlyCreated: false,
+  freshlyCreated,
   requestedHash: `#${WS}`,
   requestedWorkspaceId: WS,
 })
 
 describe('bootstrapWorkspace', () => {
+  /**
+   * The other half of the same rule: on a workspace this run just created, a
+   * system page that cannot be materialized must STOP bootstrap. Nothing has
+   * claimed the reserved aliases yet, and the landing resolver immediately
+   * after seeds a tutorial containing `[[Properties]]`, `[[Types]]`,
+   * `[[Locations]]` and `[[Journal]]` — each of which the references processor
+   * would auto-create a rival for, permanently taking the name. Throwing here
+   * leaves the workspace unseeded and the retry able to succeed.
+   */
+  it('does NOT open a freshly created workspace whose system page failed', async () => {
+    repo.setRuntimeContributions(systemPagesFacet, 'test-pages', [
+      {id: 'test:broken', ensure: () => Promise.reject(new Error('transient'))},
+    ])
+
+    await expect(open(true)).rejects.toThrow('transient')
+
+    // Nothing was seeded, so no rival holds a reserved alias: the retry is clean.
+    const seatedAliases = await sharedDb.db.getAll<{alias: string}>(
+      'SELECT alias FROM block_aliases WHERE workspace_id = ?', [WS],
+    )
+    expect(seatedAliases.map(r => r.alias)).not.toContain('Properties')
+  })
+
   it('opens the workspace even when a user block already holds a system page alias', async () => {
     // Exactly the shape a user leaves behind by naming one of their own pages
     // "Properties": the alias is unique per workspace, so the kernel page's
