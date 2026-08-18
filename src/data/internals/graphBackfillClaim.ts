@@ -218,6 +218,21 @@ export const createGraphBackfillClaim = (
         // DuplicateIdError on one, which the caller swallows as "skip" — so
         // the gesture meant to REOPEN the migration would instead wedge it
         // shut for good. Restore the row instead of inserting a new one.
+        //
+        // ACCEPTED, not overlooked: this reclaim is NOT single-winner the way
+        // the create above is. `systemMint` is an insert-only option by
+        // design — a row may be born a speculative default, never promoted
+        // into one — so restore+update emits ordinary nonzero-stamped
+        // patches, and two clients reopening after the same deletion can each
+        // end up believing they hold it. Making it single-winner needs
+        // server-side arbitration this stack does not have.
+        //
+        // Taken because the outcome sits in the residual we already accept:
+        // a duplicate run of a per-row-idempotent pass, in a window that
+        // opens only after a human has deliberately deleted a claim AND two
+        // clients reopen concurrently. The alternative — generation-suffixed
+        // ids so each reclaim is a fresh systemMint create — buys single-
+        // winner recovery for a permanent complication of the id scheme.
         await tx.restore(claimId, {content: backfillId})
         await tx.update(claimId, {properties: claimProperties})
         return
