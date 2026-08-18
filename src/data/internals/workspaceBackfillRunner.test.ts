@@ -53,13 +53,23 @@ const seedTarget = async (repo: Repo): Promise<void> => {
 
 const drain = async (repo: Repo): Promise<void> => {
   repo.scheduleWorkspaceBackfills(WS)
-  // Looped to a fixpoint, not run once. `awaitWorkspaceBackfills` can return
-  // while work is still in flight: `runAllTimersAsync` flushes microtasks
-  // between timers, but a continuation that only schedules ITS timer after
-  // enough awaits is missed, so the barrier resolves early and the test reads
-  // a half-finished state (km-vq0m). Re-running until nothing new is pending
-  // settles it without depending on how many awaits deep the runner is.
-  for (let i = 0; i < 5; i++) {
+  // ONE pass. Most tests here park the gate and assert on exactly what that
+  // pass did, so draining further would run work they are asserting has not
+  // happened. A test that needs the runner to reach a settled state drives
+  // its own condition — see `settleUntil`.
+  await vi.runAllTimersAsync()
+  await repo.awaitWorkspaceBackfills()
+}
+
+/** Keep driving the runner until `done()` holds.
+ *
+ *  `awaitWorkspaceBackfills` can return while work is still in flight: it
+ *  does not see a continuation that schedules ITS timer several awaits later,
+ *  so the barrier resolves and an assertion reads half-finished state. Wait on
+ *  the outcome instead of on the barrier. Bounded to fail rather than hang;
+ *  the bound is a livelock guard, not the definition of settled. */
+const settleUntil = async (repo: Repo, done: () => boolean): Promise<void> => {
+  for (let i = 0; i < 20 && !done(); i++) {
     await vi.runAllTimersAsync()
     await repo.awaitWorkspaceBackfills()
   }
@@ -330,16 +340,14 @@ describe('workspace backfill runner — sync gating', () => {
 
     g.open()
     await drain(repo)
+    await settleUntil(repo, () => released.length > 0 && claimed.size === 0)
 
     // The invariant is that every claim is handed BACK — balance, not a call
     // count. `PendingIdleJobs.schedule` does not coalesce, so the pass can be
     // armed more than once and each arming legitimately claims, aborts and
-    // releases; an exact count asserts scheduling, not the contract.
-    // Balance, not a call count: `PendingIdleJobs.schedule` does not coalesce,
-    // so the pass can be armed more than once and each arming legitimately
-    // claims, aborts and releases. An exact count asserts scheduling rather
-    // than the contract. A release with NO claim behind it is the real defect
-    // — on a synced once-per-graph claim it frees one another runner holds.
+    // releases; an exact count asserts scheduling, not the contract. A release
+    // with NO claim behind it is the real defect — on a synced once-per-graph
+    // claim it frees one another runner holds.
     expect(unheldReleases).toEqual([])
     expect(released).toContain('probe-backfill-v1')
     expect(claimed.size).toBe(0)
