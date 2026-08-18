@@ -33,6 +33,14 @@
  *
  */
 
+import { stateChildBlockId } from '@/data/derivedIds'
+import { migrationsPageBlockId } from '@/data/migrationsPage'
+import {
+  migrationClaimantProp,
+  migrationClaimedAtProp,
+  migrationCompletedAtProp,
+} from '@/data/properties'
+
 /** What a claim block carries. Absent `completedAt` means "in flight". */
 export interface GraphBackfillClaim {
   readonly claimantId: string
@@ -69,4 +77,46 @@ export const decideClaim = (
   if (claim === null) return 'claim'
   if (claim.completedAt !== undefined) return 'already-complete'
   return claim.claimantId === claimantId ? 'proceed' : 'back-off'
+}
+
+// ---------------------------------------------------------------------------
+// IO
+// ---------------------------------------------------------------------------
+
+/** Deterministic id of the claim block for one backfill in one workspace.
+ *  A state child of the workspace's Migrations page, so every device in the
+ *  graph derives the same id and their writes converge on one row. */
+export const graphBackfillClaimBlockId = (
+  workspaceId: string,
+  backfillId: string,
+): string => stateChildBlockId(migrationsPageBlockId(workspaceId), backfillId)
+
+/** Read the claim as the local DB currently has it. `null` when no row
+ *  exists, and also when the row is a tombstone — deleting the claim block
+ *  IS the documented recovery for a device that died mid-pass, so a
+ *  tombstone must read as "unclaimed", not as "claimed by a ghost". */
+export const readGraphBackfillClaim = async (
+  db: {getOptional<T>(sql: string, params?: unknown[]): Promise<T | null>},
+  claimId: string,
+): Promise<GraphBackfillClaim | null> => {
+  const row = await db.getOptional<{properties_json: string}>(
+    'SELECT properties_json FROM blocks WHERE id = ? AND deleted = 0', [claimId],
+  )
+  if (row === null || row === undefined) return null
+  let props: Record<string, unknown>
+  try {
+    props = JSON.parse(row.properties_json || '{}') as Record<string, unknown>
+  } catch {
+    return null
+  }
+  const claimantId = props[migrationClaimantProp.name]
+  const claimedAt = props[migrationClaimedAtProp.name]
+  // A row that does not parse as a claim reads as unclaimed rather than
+  // throwing: this runs on the workspace-open path, and a malformed claim
+  // must not be able to wedge every future run of every backfill.
+  if (typeof claimantId !== 'string' || typeof claimedAt !== 'number') return null
+  const completedAt = props[migrationCompletedAtProp.name]
+  return typeof completedAt === 'number'
+    ? {claimantId, claimedAt, completedAt}
+    : {claimantId, claimedAt}
 }

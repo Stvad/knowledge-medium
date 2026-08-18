@@ -485,6 +485,38 @@ export const userIdProp = seedProperty({
 // The shared string-list core exposes readonly values, while its decoder
 // returns a fresh mutable array. Preserve aliasesProp's historical string[]
 // handle contract without widening the public seedProperty overloads.
+/** Fields of a `per-graph` backfill claim (see
+ *  `internals/graphBackfillClaim.ts`). Declared as seeds rather than written
+ *  as raw keys because an unregistered key is exactly what property
+ *  migration skips silently — a migration's own bookkeeping must not be the
+ *  thing a migration cannot carry. Hidden: this is machinery, not content. */
+export const migrationClaimantProp = seedProperty({
+  seedKey: 'system:kernel-data/property/migration-claimant',
+  revision: 1,
+  name: 'migration:claimant',
+  preset: 'string',
+  changeScope: ChangeScope.BlockDefault,
+  hidden: true,
+})
+
+export const migrationClaimedAtProp = seedProperty({
+  seedKey: 'system:kernel-data/property/migration-claimed-at',
+  revision: 1,
+  name: 'migration:claimed-at',
+  preset: 'number',
+  changeScope: ChangeScope.BlockDefault,
+  hidden: true,
+})
+
+export const migrationCompletedAtProp = seedProperty({
+  seedKey: 'system:kernel-data/property/migration-completed-at',
+  revision: 1,
+  name: 'migration:completed-at',
+  preset: 'optional-number',
+  changeScope: ChangeScope.BlockDefault,
+  hidden: true,
+})
+
 export const aliasesProp = seedProperty({
   seedKey: 'system:kernel-data/property/alias',
   revision: 1,
@@ -728,6 +760,9 @@ export const KERNEL_PROPERTY_SEEDS: readonly AnyPropertySeedDeclaration[] = [
   createdAtProp,
   sourceBlockIdProp,
   aliasesProp,
+  migrationClaimantProp,
+  migrationClaimedAtProp,
+  migrationCompletedAtProp,
   // extension block fields
   extensionNameProp,
   extensionDescriptionProp,

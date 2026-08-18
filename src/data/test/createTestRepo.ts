@@ -62,6 +62,7 @@ export interface CreateTestRepoOptions {
   installKernelRuntime?: boolean
   /** Override the workspace-backfill sync gate (default: opens immediately). */
   backfillSyncGate?: (cb: () => void) => () => void
+  graphBackfillClaimantId?: string
   /** Reject `BlockDefault` / `References` writes (read-only mode). Default false. */
   isReadOnly?: boolean
   /** Override the deterministic generators. Defaults are monotonic counters so
@@ -113,6 +114,7 @@ export const createTestRepo = (opts: CreateTestRepoOptions): TestRepo => {
     // never open and every backfill would hang. Default to an immediate
     // gate; tests that exercise the gating itself inject their own.
     backfillSyncGate: opts.backfillSyncGate ?? ((cb) => { cb(); return () => {} }),
+    ...(opts.graphBackfillClaimantId ? {graphBackfillClaimantId: opts.graphBackfillClaimantId} : {}),
   })
   if (opts.extensions?.length) {
     repo.setFacetRuntime(resolveFacetRuntimeSync([kernelDataExtension, ...opts.extensions]))

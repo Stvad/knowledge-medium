@@ -35,11 +35,13 @@ const probeBackfill = (runs: string[]): WorkspaceBackfill => ({
 const makeRepo = (
   backfill: WorkspaceBackfill,
   gate?: (cb: () => void) => () => void,
+  claimantId?: string,
 ): Repo => {
   const {repo} = createTestRepo({
     db: sharedDb.db,
     user: {id: 'user-1'},
     ...(gate ? {backfillSyncGate: gate} : {}),
+    ...(claimantId ? {graphBackfillClaimantId: claimantId} : {}),
   })
   repo.setActiveWorkspaceId(WS)
   repo.setRuntimeContributions(workspaceBackfillsFacet, 'test-backfills', [backfill])
@@ -204,24 +206,24 @@ describe('workspace backfill runner — sync gating', () => {
     expect(markers).toEqual([])           // ...but wrote nothing and recorded nothing
   })
 
-  it('refuses a per-graph backfill rather than giving it per-device semantics', async () => {
-    // Silently falling back to the local marker would have every device run an
-    // upload-carrying repair — the exact hazard the field exists to prevent.
+  it('never records a per-graph pass under the per-device local marker', async () => {
+    // The invariant the old refusal protected, kept now that the claim store
+    // exists: falling back to the local marker would have every device run an
+    // upload-carrying repair, which is what the field exists to prevent. The
+    // claim is the ONLY record of a per-graph pass, so the local-marker table
+    // must stay empty even on the device that ran it.
     const runs: string[] = []
     const perGraph: WorkspaceBackfill = {
       id: 'per-graph-probe-v1',
       completion: 'per-graph',
       run: async ({workspaceId}) => { runs.push(workspaceId) },
     }
-    const errors: string[] = []
-    vi.spyOn(console, 'error').mockImplementation((m: unknown) => { errors.push(String(m)) })
-    const repo = makeRepo(perGraph)
+    const repo = makeRepo(perGraph, undefined, 'device-a')
     await seedTarget(repo)
 
     await drain(repo)
 
-    expect(runs).toEqual([])
-    expect(errors.join(' ')).toContain("completion: 'per-graph'")
+    expect(runs).toEqual([WS])
     const markers = await sharedDb.db.getAll<{key: string}>(
       "SELECT key FROM client_schema_state WHERE key LIKE 'workspace_backfill:%'",
     )
@@ -352,5 +354,49 @@ describe('workspace backfill runner — undo', () => {
       .map(r => JSON.parse(r.data) as {id: string})
       .filter(e => e.id === 'target')
     expect(ops.length).toBeGreaterThan(0)
+  })
+})
+
+describe('workspace backfill runner — per-graph claims', () => {
+  /** Same backfill id on two repos = two devices racing the same pass. */
+  const graphBackfill = (runs: string[], label: string): WorkspaceBackfill => ({
+    id: 'graph-backfill-v1',
+    completion: 'per-graph',
+    run: async ({tx}) => {
+      runs.push(label)
+      await tx(async t => {
+        const row = await t.get('target')
+        if (!row) return
+        await t.update('target', {properties: {...row.properties, 'probe:by': label}})
+      }, {description: 'graph backfill write'})
+    },
+  })
+
+  it('runs the pass once across two devices sharing the graph', async () => {
+    const runs: string[] = []
+    const deviceA = makeRepo(graphBackfill(runs, 'A'), undefined, 'device-a')
+    await seedTarget(deviceA)
+    await drain(deviceA)
+    expect(runs).toEqual(['A'])
+
+    // A second device on the SAME local DB sees A's converged claim. The
+    // local marker cannot carry this: it is per-device by construction, which
+    // is the whole reason `per-graph` exists.
+    const deviceB = makeRepo(graphBackfill(runs, 'B'), undefined, 'device-b')
+    await drain(deviceB)
+    expect(runs).toEqual(['A'])
+  })
+
+  it('does not re-run for the device that already completed it', async () => {
+    const runs: string[] = []
+    const deviceA = makeRepo(graphBackfill(runs, 'A'), undefined, 'device-a')
+    await seedTarget(deviceA)
+    await drain(deviceA)
+    expect(runs).toEqual(['A'])
+
+    // Re-opening the workspace on the SAME device: the claim still names it,
+    // so an ownership-first read would rerun the entire pass every open.
+    await drain(deviceA)
+    expect(runs).toEqual(['A'])
   })
 })

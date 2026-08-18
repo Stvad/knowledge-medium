@@ -57,6 +57,13 @@ import {
 } from './internals/refProjection'
 import { runTx, type PowerSyncDb } from './internals/commitPipeline'
 import { onSyncSettled } from './internals/firstSync'
+import {
+  decideClaim,
+  graphBackfillClaimBlockId,
+  readGraphBackfillClaim,
+} from './internals/graphBackfillClaim'
+import { getOrCreateMigrationsPage, migrationsPageBlockId } from './migrationsPage'
+import { keyAtStart } from './orderKey'
 import { devAssertionsEnabled } from './internals/devAssertions'
 import type { BlockCache } from '@/data/blockCache'
 import {
@@ -148,7 +155,12 @@ import {
   SELECT_BLOCK_BY_ID_SQL,
 } from './internals/kernelQueries'
 import type { InvalidationRule } from './invalidation'
-import { KERNEL_PROPERTY_SEEDS } from './properties'
+import {
+  KERNEL_PROPERTY_SEEDS,
+  migrationClaimantProp,
+  migrationClaimedAtProp,
+  migrationCompletedAtProp,
+} from './properties'
 import { KERNEL_TYPE_CONTRIBUTIONS } from './blockTypes'
 import { propertiesPageBlockId } from './propertiesPage'
 import { typesPageBlockId } from './typesPage'
@@ -403,6 +415,11 @@ export interface RepoOptions {
    *  visibly. Tests pass an immediate gate; `onSyncSettled` itself is covered
    *  directly in `firstSync.test.ts`. */
   backfillSyncGate?: (cb: () => void) => () => void
+  /** Claimant token for `per-graph` backfill claims. Injectable because the
+   *  production default identifies a BROWSER PROFILE, so two Repos in one
+   *  process share it — which would make a two-device race untestable, and
+   *  silently so: the second device would read its own id and proceed. */
+  graphBackfillClaimantId?: string
   /** When true (default), the Layout B sync observer is started at
    *  construction time so sync-applied writes — staged into `blocks_synced`
    *  — materialize into the app-visible `blocks` table and invalidate
@@ -649,6 +666,7 @@ export class Repo {
   private readonly workspaceBackfillJobs = new PendingIdleJobs((fn) => scheduleDeepIdle(fn, CATCHUP_DEEP_IDLE))
   /** Arms a callback for when this device is no longer behind the server
    *  (`RepoOptions.backfillSyncGate`). */
+  private readonly injectedClaimantId: string | null
   private readonly backfillSyncGate: (cb: () => void) => () => void
   /** Disposer for a gate armed but not yet opened, so a workspace switch or
    *  repo teardown doesn't leave a status listener attached. */
@@ -914,6 +932,7 @@ export class Repo {
       SELECT_WORKSPACE_BACKFILL_MARKERS_SQL,
       RECORD_WORKSPACE_BACKFILL_MARKER_SQL,
     )
+    this.injectedClaimantId = opts.graphBackfillClaimantId ?? null
     this.backfillSyncGate = opts.backfillSyncGate
       ?? ((cb) => onSyncSettled(this.db as unknown as Parameters<typeof onSyncSettled>[0], cb))
     this.syncObserverDeps = opts.syncObserverDeps
@@ -2749,6 +2768,109 @@ export class Repo {
     }
   }
 
+  /** Claimant token for a `per-graph` claim.
+   *
+   *  The active layout session id: distinct per window, and derived from a
+   *  per-profile base id, so it is at least as fine-grained as a device. That
+   *  direction is the safe one — two windows on one device would each claim,
+   *  but they share a local DB, so the loser sees the winner's row on its very
+   *  first read. A token COARSER than a device would be the dangerous error,
+   *  since two devices could then read a claim as their own.
+   *
+   *  A claim left by a session that never comes back is cleared by deleting
+   *  the claim block. */
+  private graphBackfillClaimantId(): string {
+    return this.injectedClaimantId ?? this.activeLayoutSessionId
+  }
+
+  /**
+   * Decide whether THIS device should run a `per-graph` backfill, using the
+   * synced claim block (`internals/graphBackfillClaim.ts`).
+   *
+   * Claim, wait for sync to settle, then re-read. The settle is not optional
+   * and not a nicety: two devices opening a freshly flipped workspace both
+   * see no claim and both write one, and because they write the SAME
+   * deterministic id, sync converges on a single winner. A read taken before
+   * that convergence says "mine" on both. Only the post-settle read is a
+   * decision.
+   *
+   * Failing closed (`false`) on any error is deliberate: not running is a
+   * deferral the next workspace open retries, while running without a valid
+   * claim is the duplicated upload-carrying pass this exists to prevent.
+   */
+  private async resolveGraphBackfillClaim(
+    workspaceId: string,
+    backfillId: string,
+  ): Promise<'proceed' | 'skip'> {
+    try {
+      const claimId = graphBackfillClaimBlockId(workspaceId, backfillId)
+      const claimantId = this.graphBackfillClaimantId()
+      // Ensure our own parent rather than trusting bootstrap ordering.
+      // `ensureSystemPages` does run first today, but a claim that silently
+      // fails to write reads as "unclaimed" on every device, which is the one
+      // outcome that turns this into a duplicated pass instead of a skipped
+      // one. Idempotent and cached, so the steady-state cost is a lookup.
+      await getOrCreateMigrationsPage(this, workspaceId)
+      const first = decideClaim(await readGraphBackfillClaim(this.db, claimId), claimantId)
+      if (first === 'already-complete' || first === 'back-off') return 'skip'
+      if (first === 'proceed') return 'proceed'
+
+      await this.tx(async tx => {
+        await tx.create({
+          id: claimId,
+          workspaceId,
+          parentId: migrationsPageBlockId(workspaceId),
+          orderKey: keyAtStart(null),
+          content: backfillId,
+          properties: {
+            [migrationClaimantProp.name]: claimantId,
+            [migrationClaimedAtProp.name]: Date.now(),
+          },
+        })
+      }, {scope: ChangeScope.BlockDefault, skipUndo: true,
+          description: `claim per-graph backfill ${backfillId}`})
+
+      // Settle, then re-read. Whoever the converged row names wins; everyone
+      // else backs off and the workspace is repaired exactly once.
+      //
+      // NOT PINNED BY A TEST, deliberately: the race this closes needs two
+      // DATABASES converging through sync, and every test here shares one
+      // local DB, where the first read already sees a peer's claim. Deleting
+      // this re-read keeps the suite green — so treat it as load-bearing on
+      // the strength of the argument, not of coverage. Closing that gap needs
+      // a two-client sync harness, which §12 already wants for the
+      // concurrent dual-write dedup test.
+      await new Promise<void>(resolve => { this.backfillSyncGate(resolve)() })
+      return decideClaim(await readGraphBackfillClaim(this.db, claimId), claimantId) === 'proceed'
+        ? 'proceed'
+        : 'skip'
+    } catch (err) {
+      console.error(
+        `[workspaceBackfills] "${backfillId}" could not resolve its per-graph claim: ` +
+        `${err instanceof Error ? err.message : String(err)}`,
+      )
+      return 'skip'
+    }
+  }
+
+  /** Stamp `completedAt` on the synced claim. Best-effort: a failure here
+   *  leaves the claim in flight, so the pass runs again — wasteful but
+   *  idempotent, which is the safe direction. */
+  private async completeGraphBackfillClaim(
+    workspaceId: string,
+    backfillId: string,
+  ): Promise<void> {
+    const claimId = graphBackfillClaimBlockId(workspaceId, backfillId)
+    await this.tx(async tx => {
+      const row = await tx.get(claimId)
+      if (!row) return
+      await tx.update(claimId, {
+        properties: {...row.properties, [migrationCompletedAtProp.name]: Date.now()},
+      })
+    }, {scope: ChangeScope.BlockDefault, skipUndo: true,
+        description: `complete per-graph backfill ${backfillId}`})
+  }
+
   private async runWorkspaceBackfills(
     workspaceId: string,
     backfills: readonly WorkspaceBackfill[],
@@ -2765,16 +2887,9 @@ export class Repo {
       if (this.workspaceGeneration !== generation) return
       if (markers.has(workspaceBackfillMarkerKey(workspaceId, backfill.id))) continue
       if (backfill.completion === 'per-graph') {
-        // Refuse rather than fall back to the local marker: `per-graph` exists
-        // because running an upload-carrying repair on every device is the
-        // hazard, so silently giving it per-device semantics is the exact
-        // failure the field was added to make impossible.
-        console.error(
-          `[workspaceBackfills] "${backfill.id}" declares completion: 'per-graph', ` +
-          `which needs a synced completion claim that does not exist yet — skipping. ` +
-          `Implement the claim store before registering it.`,
-        )
-        continue
+        const decision = await this.resolveGraphBackfillClaim(workspaceId, backfill.id)
+        if (decision !== 'proceed') continue
+        if (this.workspaceGeneration !== generation) return
       }
       const ctx: WorkspaceBackfillContext = {
         workspaceId,
@@ -2808,10 +2923,25 @@ export class Repo {
       }
       try {
         await backfill.run(ctx)
+        if (backfill.completion === 'per-graph') {
+          // Stamp completion on the SYNCED claim, not just the local marker:
+          // without it the claim stays "in flight" forever, so this device
+          // re-runs the whole pass on every workspace open (its own id is
+          // still in `claimantId`) and no peer can ever tell it finished.
+          await this.completeGraphBackfillClaim(workspaceId, backfill.id)
+        }
         // Record the marker only after a clean run — a thrown backfill leaves
         // it unset so the next open retries (backfills are written idempotent
         // via a per-row recheck, so a retry is cheap).
-        await this.workspaceBackfillMarkers.set(workspaceBackfillMarkerKey(workspaceId, backfill.id))
+        //
+        // per-device ONLY. The synced claim is the sole record of a per-graph
+        // pass, and a local marker alongside it would defeat the documented
+        // recovery: deleting a claim stranded by a device that never came back
+        // is supposed to re-open the pass, but any device also holding a local
+        // marker would go on skipping it forever.
+        if (backfill.completion === 'per-device') {
+          await this.workspaceBackfillMarkers.set(workspaceBackfillMarkerKey(workspaceId, backfill.id))
+        }
       } catch (err) {
         const reason = err instanceof Error ? err.message : String(err)
         console.error(

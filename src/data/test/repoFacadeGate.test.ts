@@ -140,6 +140,9 @@ const SAFE_VIA_PROTOTYPE: Record<string, string> = {
   runReferenceTargetDerivePass: 'private; jobs are enqueued via the DELEGATED schedule* overrides',
   drainNameRederives: 'private; jobs are enqueued via the facetBridge-bound schedule',
   runWorkspaceBackfills: 'private; jobs are enqueued via the DELEGATED schedule* overrides',
+  graphBackfillClaimantId: 'read — returns an injected string or a getter read; assigns nothing',
+  resolveGraphBackfillClaim: 'private; reads the claim and writes through the DELEGATED tx',
+  completeGraphBackfillClaim: 'private; writes through the DELEGATED tx, assigns no Repo fields',
   workspaceSeeds: 'private read; reached only via the DELEGATED schedule/run seed-materialization members',
   scheduleReprojection: 'private; invoked by constructor-bound facetBridge',
   schedulePropertyDefinitionMigrations: 'invoked by constructor-bound facetBridge',
@@ -172,6 +175,7 @@ const SAFE_VIA_PROTOTYPE: Record<string, string> = {
  *  `(x as any).field =` dynamic write would escape the inventory —
  *  don't introduce either on Repo. */
 const SAFE_INSTANCE_FIELDS: Record<string, string> = {
+  injectedClaimantId: 'data field — an immutable string|null read by the per-graph claim',
   _propertyDefinitionRegistry: 'data field',
   _previousPropertyDefinitionRegistry: 'data field',
   _typeDefinitionRegistry: 'data field',
