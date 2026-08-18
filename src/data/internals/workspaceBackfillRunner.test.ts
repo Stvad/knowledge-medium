@@ -53,8 +53,16 @@ const seedTarget = async (repo: Repo): Promise<void> => {
 
 const drain = async (repo: Repo): Promise<void> => {
   repo.scheduleWorkspaceBackfills(WS)
-  await vi.runAllTimersAsync()
-  await repo.awaitWorkspaceBackfills()
+  // Looped to a fixpoint, not run once. `awaitWorkspaceBackfills` can return
+  // while work is still in flight: `runAllTimersAsync` flushes microtasks
+  // between timers, but a continuation that only schedules ITS timer after
+  // enough awaits is missed, so the barrier resolves early and the test reads
+  // a half-finished state (km-vq0m). Re-running until nothing new is pending
+  // settles it without depending on how many awaits deep the runner is.
+  for (let i = 0; i < 5; i++) {
+    await vi.runAllTimersAsync()
+    await repo.awaitWorkspaceBackfills()
+  }
 }
 
 beforeAll(async () => { sharedDb = await createTestDb() })
@@ -327,6 +335,11 @@ describe('workspace backfill runner — sync gating', () => {
     // count. `PendingIdleJobs.schedule` does not coalesce, so the pass can be
     // armed more than once and each arming legitimately claims, aborts and
     // releases; an exact count asserts scheduling, not the contract.
+    // Balance, not a call count: `PendingIdleJobs.schedule` does not coalesce,
+    // so the pass can be armed more than once and each arming legitimately
+    // claims, aborts and releases. An exact count asserts scheduling rather
+    // than the contract. A release with NO claim behind it is the real defect
+    // — on a synced once-per-graph claim it frees one another runner holds.
     expect(unheldReleases).toEqual([])
     expect(released).toContain('probe-backfill-v1')
     expect(claimed.size).toBe(0)
