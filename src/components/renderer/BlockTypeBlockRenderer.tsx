@@ -93,26 +93,6 @@ export const writeBlockTypeLabel = async (
       const aliases = row ? getAliases(row) : []
       if (row && aliases.length === 0) {
         await tx.setProperty(block.id, aliasesProp, [next])
-      } else if (
-        row
-        && storedLabel !== ''
-        && storedLabel !== storedContent
-        && aliases.includes(storedLabel)
-      ) {
-        // Drift case, the one shape `aliasSyncProcessor` structurally cannot
-        // reconcile: it replaces the alias entry matching the block's OLD
-        // CONTENT, so when the alias tracks the LABEL and the two have drifted
-        // apart, its rule 1 misses and rule 2 merely APPENDS the new name —
-        // leaving the old one still claimed. `[[oldName]]` would keep resolving
-        // to the renamed type, and re-creating a type called oldName would fail
-        // with `alias.collision`.
-        //
-        // Take over only this case; content-anchored renames (the shape every
-        // UI path produces) stay owned by that processor. Afterwards it no-ops
-        // by its own rule-2 short-circuit, since the list now contains the new
-        // content.
-        const replaced = aliases.map(alias => (alias === storedLabel ? next : alias))
-        await tx.setProperty(block.id, aliasesProp, [...new Set(replaced)])
       }
     } else {
       // Blanking the label un-names the type (an empty label makes

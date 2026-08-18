@@ -20,6 +20,7 @@ let sharedDb: TestDb
  *  observable through undo. */
 const probeBackfill = (runs: string[]): WorkspaceBackfill => ({
   id: 'probe-backfill-v1',
+  completion: 'per-device',
   run: async ({workspaceId, tx}) => {
     runs.push(workspaceId)
     const targetId = workspaceId === WS ? 'target' : `target-${workspaceId}`
@@ -65,8 +66,9 @@ afterEach(() => { vi.useRealTimers() })
 describe('workspace backfill runner — sync gating', () => {
   /** A gate with the real contract: fires SYNCHRONOUSLY when already settled,
    *  otherwise parks the callback until `open()`. The synchronous-when-settled
-   *  half is load-bearing — the runner re-probes with a throwaway gate at job
-   *  execution time and reads "fired synchronously" as "still settled". */
+   *  half is load-bearing — `assertBackfillMayWrite` probes with a throwaway
+   *  gate before every transaction and reads "fired synchronously" as "still
+   *  settled". */
   const controllableGate = () => {
     let settled = false
     let waiters: (() => void)[] = []
@@ -108,84 +110,88 @@ describe('workspace backfill runner — sync gating', () => {
     expect(runs).toEqual([WS])
   })
 
-  it('re-probes at execution time — a download starting during the idle delay defers it', async () => {
-    // The gate opening only proves the device was caught up THEN. The idle
-    // deferral is 10-30s in which a fresh download can start, which is exactly
-    // the state the gate exists to keep writes out of.
-    //
-    // Ordering is the whole test: the gate has to be ARMED before it is opened,
-    // or the open finds no waiter and the job is never scheduled — which passes
-    // for the wrong reason, since the re-probe is then never reached.
-    const runs: string[] = []
+  it('aborts mid-run when the device falls behind between batches', async () => {
+    // The check is per-TRANSACTION now, not once before the run. A chunked pass
+    // writes over minutes, so a single pre-run check only ever covered the
+    // first batch — this pins the batches after it.
     const g = controllableGate()
-    const repo = makeRepo(probeBackfill(runs), g.gate)
+    const batches: number[] = []
+    const chunked: WorkspaceBackfill = {
+      id: 'chunked-probe-v1',
+      completion: 'per-device',
+      run: async ({tx}) => {
+        for (let i = 0; i < 3; i++) {
+          if (i === 1) g.close()          // a fresh download starts mid-run
+          await tx(async () => { batches.push(i) }, {description: `batch ${i}`})
+        }
+      },
+    }
+    const repo = makeRepo(chunked, g.gate)
     await seedTarget(repo)
 
-    repo.scheduleWorkspaceBackfills(WS)   // arm, still catching up
-    g.open()                              // caught up → schedules the idle job
-    g.close()                             // a fresh download starts before it runs
-    await vi.runAllTimersAsync()
-    await repo.awaitWorkspaceBackfills()
-    expect(runs).toEqual([])
-
-    // Once it settles again the re-armed gate lets the pass through.
     g.open()
-    await vi.runAllTimersAsync()
-    await repo.awaitWorkspaceBackfills()
-    expect(runs).toEqual([WS])
+    await drain(repo)
+
+    // First batch ran; the second aborted the pass rather than writing stale.
+    expect(batches).toEqual([0])
+    const markers = await sharedDb.db.getAll<{key: string}>(
+      "SELECT key FROM client_schema_state WHERE key LIKE 'workspace_backfill:%'",
+    )
+    expect(markers).toEqual([])   // no marker → next open retries
   })
 
-  it('does not write a workspace the user left during the idle delay', async () => {
-    // `runWorkspaceBackfills` writes whatever id it was handed, and the
-    // read-only/access state it checks is the CURRENT session's — so a job
-    // queued for A must not execute after the user moved to B.
-    const runs: string[] = []
+  it('aborts mid-run when the user leaves the workspace between batches', async () => {
     const g = controllableGate()
-    const repo = makeRepo(probeBackfill(runs), g.gate)
+    const batches: number[] = []
+    const chunked: WorkspaceBackfill = {
+      id: 'chunked-probe-v1',
+      completion: 'per-device',
+      run: async ({tx}) => {
+        for (let i = 0; i < 3; i++) {
+          if (i === 1) repo.setActiveWorkspaceId(OTHER_WS)
+          await tx(async () => { batches.push(i) }, {description: `batch ${i}`})
+        }
+      },
+    }
+    const repo = makeRepo(chunked, g.gate)
     await seedTarget(repo)
 
-    repo.scheduleWorkspaceBackfills(WS)
-    g.open()                              // job scheduled for WS
-    repo.setActiveWorkspaceId('ws-somewhere-else')
-    await vi.runAllTimersAsync()
-    await repo.awaitWorkspaceBackfills()
+    g.open()
+    await drain(repo)
 
-    expect(runs).toEqual([])
+    expect(batches).toEqual([0])
   })
 
-  it('a departed workspace’s job does not steal the incoming workspace’s gate', async () => {
-    // Position test, not a behaviour test: the re-probe's `arm()` disposes
-    // whatever gate is currently held. If it runs BEFORE the workspace check,
-    // a stale job for A tears down the gate B's bootstrap just armed and
-    // replaces it with an A gate — so B never backfills at all.
+  it('refuses a per-graph backfill rather than giving it per-device semantics', async () => {
+    // Silently falling back to the local marker would have every device run an
+    // upload-carrying repair — the exact hazard the field exists to prevent.
     const runs: string[] = []
-    const g = controllableGate()
-    const repo = makeRepo(probeBackfill(runs), g.gate)
+    const perGraph: WorkspaceBackfill = {
+      id: 'per-graph-probe-v1',
+      completion: 'per-graph',
+      run: async ({workspaceId}) => { runs.push(workspaceId) },
+    }
+    const errors: string[] = []
+    vi.spyOn(console, 'error').mockImplementation((m: unknown) => { errors.push(String(m)) })
+    const repo = makeRepo(perGraph)
     await seedTarget(repo)
 
-    repo.scheduleWorkspaceBackfills(WS)
-    g.open()                    // A's job is scheduled
-    g.close()                   // ...and will find itself un-settled
-    repo.setActiveWorkspaceId(OTHER_WS)
-    repo.scheduleWorkspaceBackfills(OTHER_WS)   // B arms its own gate
-    expect(g.armed()).toBe(1)
+    await drain(repo)
 
-    await vi.runAllTimersAsync()                // A's stale job runs and bails
-    await repo.awaitWorkspaceBackfills()
-
-    // B's gate must still be the one armed: opening it runs B, not A.
-    g.open()
-    await vi.runAllTimersAsync()
-    await repo.awaitWorkspaceBackfills()
-    expect(runs).toEqual([OTHER_WS])
+    expect(runs).toEqual([])
+    expect(errors.join(' ')).toContain("completion: 'per-graph'")
+    const markers = await sharedDb.db.getAll<{key: string}>(
+      "SELECT key FROM client_schema_state WHERE key LIKE 'workspace_backfill:%'",
+    )
+    expect(markers).toEqual([])
   })
 
   it('disposes a gate still armed for a workspace the user left', async () => {
-    // Distinct from the check above, which catches an already-SCHEDULED job.
-    // This one is about a gate still parked: it holds a status listener and
-    // captures the departed workspace id. `scheduleWorkspaceBackfills` only
-    // disposes a stale gate when it is reached again, which the read-only /
-    // no-backfills early returns skip entirely — so the leaving path must.
+    // Listener hygiene, distinct from the per-transaction checks above: a gate
+    // still PARKED holds a status listener and captures the departed workspace
+    // id. `scheduleWorkspaceBackfills` only disposes a stale gate when it is
+    // reached again, which the read-only / no-backfills early returns skip
+    // entirely — so the leaving path must.
     const g = controllableGate()
     const repo = makeRepo(probeBackfill([]), g.gate)
     await seedTarget(repo)

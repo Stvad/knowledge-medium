@@ -66,6 +66,10 @@ export const dailyNoteDateBackfill: WorkspaceBackfill = {
   // notes whose `daily-note:date` was dropped by a 2026-06-14 server pass after
   // the v1 run had already recorded its one-shot marker (see docstring).
   id: 'daily-note-date-from-alias-v2',
+  // Per-device: the repair is small and idempotent, so every device converging
+  // on it independently is acceptable. A large upload-carrying repair would be
+  // 'per-graph' — see `WorkspaceBackfillCompletion`.
+  completion: 'per-device',
   run: async ({workspaceId, getAll, tx}) => {
     const rows = await getAll<{id: string; iso: string}>(
       SELECT_LEGACY_DAILY_NOTES_MISSING_DATE_SQL,

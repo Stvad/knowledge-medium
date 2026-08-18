@@ -83,10 +83,29 @@ const isLocalSchemaContribution = (value: unknown): value is LocalSchemaContribu
  * deferred off the workspace-open critical path — see
  * `Repo.scheduleWorkspaceBackfills`.
  */
+/** Where a backfill's "already done" record lives — and therefore how many
+ *  devices run it. Explicit because getting it wrong is silent and expensive,
+ *  and because the two answers are two different KINDS of operation:
+ *
+ *  - `per-device`: the completion marker is local (`client_schema_state`), so
+ *    every device runs the pass once. Correct only when the pass rebuilds
+ *    state that is itself per-device — or, as for `daily-note:date`, when the
+ *    repair is small and converging on every device is acceptable.
+ *  - `per-graph`: the pass repairs SOURCE-OF-TRUTH rows and uploads them, so it
+ *    must happen once for the whole graph. A local marker would have every
+ *    device independently attempt an upload-carrying repair — which is the root
+ *    of the stale-read / last-write-wins hazard, not a side effect of it. The
+ *    claim has to live in synced data so one device runs and the rest see it
+ *    done. */
+export type WorkspaceBackfillCompletion = 'per-device' | 'per-graph'
+
 export interface WorkspaceBackfill {
   /** Stable id; doubles as the per-workspace completion-marker suffix. Change
    *  it to force a re-run on every workspace. */
   readonly id: string
+  /** Required, with no default: the wrong answer here is invisible at the call
+   *  site and costly in production, so every backfill states it. */
+  readonly completion: WorkspaceBackfillCompletion
   run: (ctx: WorkspaceBackfillContext) => Promise<void>
 }
 
@@ -115,7 +134,8 @@ export interface WorkspaceBackfillContext {
 }
 
 const isWorkspaceBackfill = (value: unknown): value is WorkspaceBackfill =>
-  isRecord(value) && typeof value.id === 'string' && typeof value.run === 'function'
+  isRecord(value) && typeof value.id === 'string' && typeof value.run === 'function' &&
+  (value.completion === 'per-device' || value.completion === 'per-graph')
 
 const isInvalidationRule = (value: unknown): value is InvalidationRule =>
   isRecord(value) &&

@@ -90,6 +90,7 @@ const SAFE_VIA_PROTOTYPE: Record<string, string> = {
   undoManagerFor: 'mints UndoManager into the shared map, but UndoManager captures no repo',
 
   // ── writes into a caller-provided tx (grouping follows the caller) ──
+  assertBackfillMayWrite: 'read — throws or returns; assigns no Repo fields',
   addTypeInTx: 'writes into the caller tx',
   addTypeInTxLenient: 'writes into the caller tx',
   removeTypeInTx: 'writes into the caller tx',

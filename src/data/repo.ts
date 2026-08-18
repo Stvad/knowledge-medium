@@ -2530,26 +2530,9 @@ export class Repo {
         this.disposeBackfillSyncGate?.()
         this.disposeBackfillSyncGate = this.backfillSyncGate(() => {
           this.disposeBackfillSyncGate = undefined
-          this.workspaceBackfillJobs.schedule(async () => {
-            // Workspace check FIRST, before the re-probe below — the order is
-            // load-bearing. `arm()` disposes whatever gate is currently held,
-            // so re-arming for a workspace the user has already left would tear
-            // down the gate the INCOMING workspace's bootstrap just armed and
-            // replace it with a stale one; that workspace would then never
-            // backfill. Nothing to re-arm for a departed workspace anyway: its
-            // own bootstrap arms again if the user returns.
-            if (this._client.activeWorkspaceId !== workspaceId) return
-            // The gate opening only proved the device was caught up THEN; the
-            // idle deferral is 10-30s of window in which a fresh download can
-            // start, which is exactly the state the gate exists to keep us out
-            // of. Re-probe by arming a throwaway gate and seeing whether it
-            // fires synchronously — that is the settled predicate, reusing the
-            // injected function rather than growing the option into a pair.
-            let settledNow = false
-            this.backfillSyncGate(() => { settledNow = true })()
-            if (!settledNow) { arm(); return }
-            await this.runWorkspaceBackfills(workspaceId, backfills)
-          })
+          this.workspaceBackfillJobs.schedule(() =>
+            this.runWorkspaceBackfills(workspaceId, backfills),
+          )
         })
       }
       arm()
@@ -2708,6 +2691,26 @@ export class Repo {
     await this.seedMaterializationJobs.drain()
   }
 
+  /** Preconditions every backfill transaction must still satisfy. Separate
+   *  from the scheduling gate because scheduling proves a fact at one instant
+   *  and a chunked pass writes over many. */
+  private assertBackfillMayWrite(workspaceId: string, backfillId: string): void {
+    if (this._client.activeWorkspaceId !== workspaceId) {
+      throw new Error(
+        `[workspaceBackfills] "${backfillId}" aborted: workspace ${workspaceId} is no ` +
+        `longer active. Its writes would land under the current session's access state.`,
+      )
+    }
+    let settled = false
+    this.backfillSyncGate(() => { settled = true })()
+    if (!settled) {
+      throw new Error(
+        `[workspaceBackfills] "${backfillId}" aborted: this device fell behind the ` +
+        `server mid-run. Writing now would upload a stale properties bag.`,
+      )
+    }
+  }
+
   private async runWorkspaceBackfills(
     workspaceId: string,
     backfills: readonly WorkspaceBackfill[],
@@ -2718,6 +2721,18 @@ export class Repo {
       // writes — re-check per backfill (the loop can span several txs).
       if (this.isReadOnly) return
       if (markers.has(workspaceBackfillMarkerKey(workspaceId, backfill.id))) continue
+      if (backfill.completion === 'per-graph') {
+        // Refuse rather than fall back to the local marker: `per-graph` exists
+        // because running an upload-carrying repair on every device is the
+        // hazard, so silently giving it per-device semantics is the exact
+        // failure the field was added to make impossible.
+        console.error(
+          `[workspaceBackfills] "${backfill.id}" declares completion: 'per-graph', ` +
+          `which needs a synced completion claim that does not exist yet — skipping. ` +
+          `Implement the claim store before registering it.`,
+        )
+        continue
+      }
       const ctx: WorkspaceBackfillContext = {
         workspaceId,
         getAll: <T>(sql: string, params?: readonly unknown[]) =>
@@ -2729,12 +2744,21 @@ export class Repo {
         // workspace open, so on the stack it means a cmd-Z aimed at the user's
         // own edit reverts the whole batch, permanently (the completion marker
         // is already recorded).
-        tx: <R>(fn: (tx: Tx) => Promise<R>, opts: {description?: string}) =>
-          this.tx(fn, {
+        tx: <R>(fn: (tx: Tx) => Promise<R>, opts: {description?: string}) => {
+          // Checked HERE, per transaction, not once before the run. A pass can
+          // be chunked across minutes (the properties-as-blocks cell->children
+          // migration is ~650k creates), so "was this device caught up, and was
+          // this still the open workspace" has to be re-answered for every
+          // batch — a single pre-run check only ever covered the first one.
+          // Throwing aborts the run with no marker recorded, so the next open
+          // retries.
+          this.assertBackfillMayWrite(workspaceId, backfill.id)
+          return this.tx(fn, {
             scope: ChangeScope.BlockDefault,
             description: opts.description,
             skipUndo: true,
-          }),
+          })
+        },
       }
       try {
         await backfill.run(ctx)
