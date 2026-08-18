@@ -224,6 +224,7 @@ const SAFE_INSTANCE_FIELDS: Record<string, string> = {
   workspaceBackfillJobs: 'shared job queue (facade never enqueues — schedule* overrides)',
   workspaceBackfillMarkers: 'shared object',
   backfillSyncGate: 'injected function, captures no repo (default closes over this.db only)',
+  workspaceGeneration: 'counter bumped on workspace change; read-compared by backfill jobs',
   disposeBackfillSyncGate: 'disposer for the armed gate; reassigned only by scheduleWorkspaceBackfills, which the facade overrides',
   referenceTargetDeriveJobs: 'shared job queue (facade never enqueues — schedule* overrides)',
   referenceTargetSweepDone: 'shared Set (session bookkeeping)',

@@ -162,6 +162,48 @@ describe('workspace backfill runner — sync gating', () => {
     expect(batches).toEqual([0])
   })
 
+  it('aborts a job scheduled during an earlier visit to the same workspace', async () => {
+    // A -> B -> A. Comparing workspace IDs alone accepts the first visit's job
+    // once the user returns, but that is a different open with a different
+    // registry and access state.
+    const g = controllableGate()
+    const runs: string[] = []
+    const repo = makeRepo(probeBackfill(runs), g.gate)
+    await seedTarget(repo)
+
+    repo.scheduleWorkspaceBackfills(WS)
+    g.open()                              // visit 1's job is queued
+    repo.setActiveWorkspaceId(OTHER_WS)
+    repo.setActiveWorkspaceId(WS)         // back again — same id, new generation
+    await vi.runAllTimersAsync()
+    await repo.awaitWorkspaceBackfills()
+
+    expect(runs).toEqual([])
+  })
+
+  it('aborts while synced rows are still draining into blocks', async () => {
+    // "Downloaded" is not "materialized": the observer stages arrivals in
+    // `blocks_synced_changes` and drains them in throttled windows, so the
+    // status can read settled while rows this pass reads are still queued.
+    const g = controllableGate()
+    const runs: string[] = []
+    const repo = makeRepo(probeBackfill(runs), g.gate)
+    await seedTarget(repo)
+    await sharedDb.db.execute(
+      "INSERT INTO blocks_synced_changes (id, op) VALUES ('pending-row', 'upsert')",
+    )
+
+    g.open()
+    await drain(repo)
+
+    expect(runs).toEqual([WS])            // run() started...
+    expect((await repo.load('target'))?.properties['probe:mark']).toBeUndefined()
+    const markers = await sharedDb.db.getAll<{key: string}>(
+      "SELECT key FROM client_schema_state WHERE key LIKE 'workspace_backfill:%'",
+    )
+    expect(markers).toEqual([])           // ...but wrote nothing and recorded nothing
+  })
+
   it('refuses a per-graph backfill rather than giving it per-device semantics', async () => {
     // Silently falling back to the local marker would have every device run an
     // upload-carrying repair — the exact hazard the field exists to prevent.
@@ -184,6 +226,30 @@ describe('workspace backfill runner — sync gating', () => {
       "SELECT key FROM client_schema_state WHERE key LIKE 'workspace_backfill:%'",
     )
     expect(markers).toEqual([])
+  })
+
+  it('re-arms the restored workspace when pinning the incoming one throws', async () => {
+    // The leaving path disposes the outgoing gate before the pin is attempted.
+    // If the pin throws, `setActiveWorkspaceId` restores the previous workspace
+    // — but nothing re-armed its gate, so it would silently never backfill for
+    // the rest of the session.
+    const g = controllableGate()
+    const repo = makeRepo(probeBackfill([]), g.gate)
+    await seedTarget(repo)
+
+    repo.scheduleWorkspaceBackfills(WS)
+    expect(g.armed()).toBe(1)
+
+    vi.spyOn(repo.projectors, 'pinWorkspace').mockImplementationOnce(() => {
+      throw new Error('pin failed')
+    })
+    // The pin failure is re-thrown after the restore; the restore is the part
+    // under test.
+    expect(() => repo.setActiveWorkspaceId(OTHER_WS)).toThrow(/pin failed/)
+
+    // Restored to WS, and its gate is armed again.
+    expect(repo.activeWorkspaceId).toBe(WS)
+    expect(g.armed()).toBe(1)
   })
 
   it('disposes a gate still armed for a workspace the user left', async () => {

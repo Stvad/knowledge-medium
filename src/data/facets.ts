@@ -88,9 +88,11 @@ const isLocalSchemaContribution = (value: unknown): value is LocalSchemaContribu
  *  and because the two answers are two different KINDS of operation:
  *
  *  - `per-device`: the completion marker is local (`client_schema_state`), so
- *    every device runs the pass once. Correct only when the pass rebuilds
- *    state that is itself per-device — or, as for `daily-note:date`, when the
- *    repair is small and converging on every device is acceptable.
+ *    every device runs the pass once. Every pass through THIS seam uploads, so
+ *    this is a deliberate acceptance of N devices each attempting the repair,
+ *    not a neutral default — take it only for a repair whose stale-bag risk you
+ *    have actually weighed. A pass that rebuilds per-device DERIVED state does
+ *    not belong on this seam at all (see AGENTS.md).
  *  - `per-graph`: the pass repairs SOURCE-OF-TRUTH rows and uploads them, so it
  *    must happen once for the whole graph. A local marker would have every
  *    device independently attempt an upload-carrying repair — which is the root

@@ -18,7 +18,7 @@ export interface SyncStatusDb {
  *  currently BEHIND the server, as opposed to whether it has ever synced. */
 interface SettleStatus {
   connected?: boolean
-  dataFlowStatus?: { downloading?: boolean }
+  dataFlowStatus?: { downloading?: boolean; downloadError?: unknown }
 }
 
 interface SettleStatusDb {
@@ -26,8 +26,15 @@ interface SettleStatusDb {
   registerListener?: (l: { statusChanged?: (s: SettleStatus) => void }) => () => void
 }
 
+/** `downloadError` is published when a download attempt fails and stays set
+ *  until the next successful sync clears it, so a retry gap reads as
+ *  connected-and-idle while the device is in fact behind. Treating that as
+ *  settled is the one shape "not currently downloading" gets wrong in the
+ *  direction that matters. */
 const isSettled = (s: SettleStatus | undefined): boolean =>
-  s?.connected === true && s.dataFlowStatus?.downloading !== true
+  s?.connected === true
+  && s.dataFlowStatus?.downloading !== true
+  && s.dataFlowStatus?.downloadError == null
 
 /**
  * Run `cb` once this device's download queue looks drained — connected, with

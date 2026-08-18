@@ -5,21 +5,24 @@ import { onSyncSettled } from './firstSync'
 
 /** Minimal stand-in for PowerSync's status surface. `emit` drives a status
  *  change the way the real client does. */
-const fakeDb = (initial: {connected?: boolean; downloading?: boolean} | null) => {
-  const listeners: ((s: {connected?: boolean; dataFlowStatus?: {downloading?: boolean}}) => void)[] = []
+const fakeDb = (initial: {connected?: boolean; downloading?: boolean; downloadError?: unknown} | null) => {
+  const listeners: ((s: {connected?: boolean; dataFlowStatus?: {downloading?: boolean; downloadError?: unknown}}) => void)[] = []
   return {
     db: initial === null ? {} : {
       currentStatus: {
         connected: initial.connected,
-        dataFlowStatus: {downloading: initial.downloading},
+        dataFlowStatus: {downloading: initial.downloading, downloadError: initial.downloadError},
       },
       registerListener: (l: {statusChanged?: (s: never) => void}) => {
         if (l.statusChanged) listeners.push(l.statusChanged as never)
         return () => { listeners.length = 0 }
       },
     },
-    emit: (s: {connected?: boolean; downloading?: boolean}) => {
-      for (const l of [...listeners]) l({connected: s.connected, dataFlowStatus: {downloading: s.downloading}})
+    emit: (s: {connected?: boolean; downloading?: boolean; downloadError?: unknown}) => {
+      for (const l of [...listeners]) l({
+        connected: s.connected,
+        dataFlowStatus: {downloading: s.downloading, downloadError: s.downloadError},
+      })
     },
     get listenerCount() { return listeners.length },
   }
@@ -60,6 +63,21 @@ describe('onSyncSettled', () => {
     const {db, emit} = fakeDb({connected: false, downloading: false})
     let fired = 0
     onSyncSettled(db, () => { fired++ })
+    expect(fired).toBe(0)
+
+    emit({connected: true, downloading: false})
+    expect(fired).toBe(1)
+  })
+
+  it('waits while a download error is outstanding', () => {
+    // A failed attempt publishes `downloadError` and leaves it set until the
+    // next successful sync clears it, so the retry gap reads as
+    // connected-and-idle while the device is in fact behind.
+    const {db, emit} = fakeDb({connected: true, downloading: true})
+    let fired = 0
+    onSyncSettled(db, () => { fired++ })
+
+    emit({connected: true, downloading: false, downloadError: new Error('offline')})
     expect(fired).toBe(0)
 
     emit({connected: true, downloading: false})
