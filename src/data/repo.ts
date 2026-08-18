@@ -2521,18 +2521,22 @@ export class Repo {
    *  and a user-facing notice, because a degradation nobody is told about is
    *  indistinguishable from a bug in the feature that lost its page.
    *
-   *  A `ProcessorRejection` is logged only — every one that escapes `repo.tx`
-   *  was already fanned out to `onUserError` there, and for the dominant case
-   *  (`alias.collision`) that notice names the conflicting block and offers to
-   *  open it. A second, vaguer toast would stack on the actionable one. */
+   *  A `ProcessorRejection` is re-reported AS ITSELF rather than wrapped: for
+   *  the dominant case (`alias.collision`) it names the conflicting block and
+   *  offers to open it, where a generic notice would only say something broke.
+   *  Do not reintroduce a "`repo.tx` already fanned this one out" check here —
+   *  being a ProcessorRejection does not prove a tx produced it, and the
+   *  contributor that builds one before ever opening a tx would lose its only
+   *  notice. Repeats are the toast layer's to collapse, and it does: it keys a
+   *  slot on (code, message), so this and the seed materializer hitting the
+   *  same collision a moment later share one toast instead of stacking. */
   private reportSystemPageFailure(pageId: string, workspaceId: string, error: unknown): void {
     const reason = error instanceof Error ? error.message : String(error)
     console.error(
       `[ensureSystemPages] ${pageId} unavailable in workspace ${workspaceId} `
       + `(will retry on the next workspace open): ${reason}`,
     )
-    if (error instanceof ProcessorRejection) return
-    this.userErrorListeners.notify(new ProcessorRejection(
+    this.userErrorListeners.notify(error instanceof ProcessorRejection ? error : new ProcessorRejection(
       `The system page "${pageId}" could not be set up, so the feature behind it may not work: ${reason}`,
       'systemPage.unavailable',
       {pageId, workspaceId},

@@ -43,7 +43,6 @@ const setup = async (extras: readonly AppExtension[] = []): Promise<Harness> => 
     user: { id: 'user-1' },
     extensions: [dailyNotesDataExtension, geoDataExtension, ...extras],
   })
-  repo.setActiveWorkspaceId(WS)
   return { h, repo }
 }
 
@@ -142,11 +141,12 @@ describe('Repo.ensureSystemPages', () => {
       expect(errors[0].meta).toMatchObject({pageId: 'test:broken', workspaceId: WS})
     })
 
-    it('does not re-report a rejection the tx already surfaced', async () => {
-      // `repo.tx` fires `onUserError` with the actionable `alias.collision`
-      // rejection on its way out (it carries the conflicting block and an
-      // open/merge affordance). A second, vaguer notice for the same cause
-      // would stack a toast on top of the one that can actually be acted on.
+    it('re-reports the actionable rejection itself, never a vaguer wrapper', async () => {
+      // `alias.collision` names the conflicting block and offers to open it —
+      // that IS the remedy. Wrapping it in a generic `systemPage.unavailable`
+      // notice would replace the one thing the user can act on. Two land here
+      // (repo.tx fires one on its way out, this fires the second); collapsing
+      // them belongs to the toast layer, which keys a slot on (code, message).
       await seatAlias(env.repo, 'user-page', 'Properties')
       const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
       const errors: ProcessorRejection[] = []
@@ -154,10 +154,31 @@ describe('Repo.ensureSystemPages', () => {
 
       await env.repo.ensureSystemPages(WS)
 
-      expect(errors.map(e => e.code)).toEqual(['alias.collision'])
+      expect(errors.map(e => e.code)).toEqual(['alias.collision', 'alias.collision'])
       // Logged all the same: that rejection names the conflicting block but not
       // which system page was lost to it, and only this line says so.
       expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('kernel:properties'))
+    })
+
+    it('surfaces a rejection an owner threw without ever opening a tx', async () => {
+      // `SystemPage.ensure` is any async function, so a contributor can build a
+      // ProcessorRejection from its own validation and reject with it directly.
+      // Nothing fanned that one out, so treating "is a ProcessorRejection" as
+      // "someone already told the user" would leave this failure silent.
+      const ownRejection = new ProcessorRejection('bad spec', 'test.badSpec', {})
+      env = await setup([
+        systemPagesFacet.of(
+          {id: 'test:preflight', ensure: () => Promise.reject(ownRejection)},
+          {source: 'test'},
+        ),
+      ])
+      vi.spyOn(console, 'error').mockImplementation(() => {})
+      const errors: ProcessorRejection[] = []
+      env.repo.onUserError(e => errors.push(e))
+
+      await env.repo.ensureSystemPages(WS)
+
+      expect(errors).toEqual([ownRejection])
     })
   })
 
