@@ -90,7 +90,8 @@ export const writeBlockTypeLabel = async (
     // a colliding label is rejected by the alias-uniqueness trigger.
     if (next !== '') {
       const row = await tx.get(block.id)
-      if (row && getAliases(row).length === 0) {
+      const aliases = row ? getAliases(row) : []
+      if (row && aliases.length === 0) {
         await tx.setProperty(block.id, aliasesProp, [next])
       }
     } else {

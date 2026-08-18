@@ -19,7 +19,6 @@ import type {
   AnyValuePresetCore,
   AnyValuePresetPresentation,
   BlockData,
-  ChangeScope,
   Tx,
 } from '@/data/api'
 import type {ProjectedPropertyDefinition} from '@/data/propertyDefinitionRegistry'
@@ -80,10 +79,44 @@ const isLocalSchemaContribution = (value: unknown): value is LocalSchemaContribu
  * `repo.tx`, so its rows carry `source = 'user'` and actually upload — the
  * server, and every other client, converge.
  *
- * The repo runs each registered backfill at most once per (workspace, id),
- * deferred off the workspace-open critical path — see
+ * Completion is once per GRAPH, recorded through `BackfillCompletionClaim` —
+ * not once per device. Deferred off the workspace-open critical path; see
  * `Repo.scheduleWorkspaceBackfills`.
  */
+/** Decides which device runs a migration, and records that it finished — in
+ *  SYNCED data, so a repair that uploads happens once per GRAPH.
+ *
+ *  Every pass on this seam writes source-of-truth rows and uploads them, so N
+ *  devices each running it independently is N chances to build a write from a
+ *  stale local row and overwrite concurrent edits (`apply_block_patches`
+ *  assigns `properties_json` wholesale). A local marker in
+ *  `client_schema_state` cannot express "already done for everyone".
+ *
+ *  ACQUIRE, don't check-then-mark. An `isDone()` read followed by a later
+ *  `markDone()` is a race with no winner: two devices opening the graph before
+ *  the completion row has propagated both read "not done", both run the
+ *  uploading pass, and both record it afterwards. `tryClaim` exists so the
+ *  decision and the record are one step, and so an implementer has to confront
+ *  the three questions this seam cannot answer for them:
+ *
+ *   1. how atomic can a claim be over a last-write-wins sync layer? Perfect
+ *      mutual exclusion may not be reachable — in which case say so, and rely
+ *      on passes being idempotent per row.
+ *   2. what happens to a claim whose device crashed mid-run? Without an expiry
+ *      or lease, one dead device blocks the migration for the whole graph.
+ *   3. is a duplicate run tolerable if 1 fails? For an idempotent repair,
+ *      usually yes; the cost is the stale-bag exposure, not corruption. */
+export interface BackfillCompletionClaim {
+  /** Claim the right to run this pass for this workspace. `false` means
+   *  someone else has it or it is already complete — skip, don't run. */
+  tryClaim(workspaceId: string, backfillId: string): Promise<boolean>
+  /** The claimed run finished. Record completion where every device sees it. */
+  markComplete(workspaceId: string, backfillId: string): Promise<void>
+  /** The claimed run aborted without finishing (a transient precondition, a
+   *  thrown backfill). Give the claim back, or the pass never runs again. */
+  releaseClaim(workspaceId: string, backfillId: string): Promise<void>
+}
+
 export interface WorkspaceBackfill {
   /** Stable id; doubles as the per-workspace completion-marker suffix. Change
    *  it to force a re-run on every workspace. */
@@ -99,10 +132,19 @@ export interface WorkspaceBackfillContext {
   /** Raw read against the local DB — use to find candidate rows. */
   getAll: <T>(sql: string, params?: readonly unknown[]) => Promise<T[]>
   /** Run a writing transaction. Routes through `repo.tx`, so writes carry
-   *  source='user' and upload (the whole point — a raw write would not). */
+   *  source='user' and upload (the whole point — a raw write would not).
+   *
+   *  Scope and undo-recording are fixed by the runner and deliberately not
+   *  parameters. The scope stays `BlockDefault` — a backfill amends ordinary
+   *  document properties, so it must keep the read-only gate and the
+   *  seed-definition guard, which both key off it — but the undo entry is
+   *  suppressed (`skipUndo`): the pass runs unattended seconds after workspace
+   *  open, so on the undo stack it means a cmd-Z aimed at the user's own edit
+   *  reverts the whole pass, permanently (the completion marker is already
+   *  recorded by then). */
   tx: <R>(
     fn: (tx: Tx) => Promise<R>,
-    opts: {scope: ChangeScope; description?: string},
+    opts: {description?: string},
   ) => Promise<R>
 }
 
