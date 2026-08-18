@@ -2495,11 +2495,48 @@ export class Repo {
    * contributions installed at construction (`staticDataExtensions`) — so no
    * separate runtime resolution is needed. Awaited (not deferred): the pages
    * must exist before the seed's references parse.
+   *
+   * NOTHING here is fatal: a failing `ensure` is reported and skipped, and this
+   * resolves regardless. Keep it that way — `bootstrapWorkspace` awaits this on
+   * the critical path with no catch, so a throw reintroduced here does not
+   * degrade a feature, it stops the app coming up. No page is worth that: the
+   * realistic failure is a reserved alias a user's own block already holds
+   * ("Properties" is an ordinary English word), and its remedy — rename that
+   * block — needs the app running. Same isolate-and-log shape as
+   * `materializeSeedKind` below, the other half of this bootstrap.
    */
   async ensureSystemPages(workspaceId: string): Promise<void> {
     if (!workspaceId) return
     const pages = this.facetRuntime?.read(systemPagesFacet) ?? []
-    await Promise.all(pages.map(page => page.ensure(this, workspaceId)))
+    await Promise.all(pages.map(async page => {
+      try {
+        await page.ensure(this, workspaceId)
+      } catch (error) {
+        this.reportSystemPageFailure(page.id, workspaceId, error)
+      }
+    }))
+  }
+
+  /** Report a page that could not be materialized: console for the developer,
+   *  and a user-facing notice, because a degradation nobody is told about is
+   *  indistinguishable from a bug in the feature that lost its page.
+   *
+   *  A `ProcessorRejection` is logged only — every one that escapes `repo.tx`
+   *  was already fanned out to `onUserError` there, and for the dominant case
+   *  (`alias.collision`) that notice names the conflicting block and offers to
+   *  open it. A second, vaguer toast would stack on the actionable one. */
+  private reportSystemPageFailure(pageId: string, workspaceId: string, error: unknown): void {
+    const reason = error instanceof Error ? error.message : String(error)
+    console.error(
+      `[ensureSystemPages] ${pageId} unavailable in workspace ${workspaceId} `
+      + `(will retry on the next workspace open): ${reason}`,
+    )
+    if (error instanceof ProcessorRejection) return
+    this.userErrorListeners.notify(new ProcessorRejection(
+      `The system page "${pageId}" could not be set up, so the feature behind it may not work: ${reason}`,
+      'systemPage.unavailable',
+      {pageId, workspaceId},
+    ))
   }
 
   /**

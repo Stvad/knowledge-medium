@@ -10,8 +10,12 @@
  * get-or-creates each (idempotent, deterministic id).
  */
 
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { ChangeScope, ProcessorRejection } from '@/data/api'
 import { aliasesProp } from '@/data/properties'
+import { systemPagesFacet } from '@/data/facets'
+import type { AppExtension } from '@/facets/facet'
+import { propertiesPageBlockId } from '@/data/propertiesPage'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { Repo } from '@/data/repo'
@@ -29,7 +33,7 @@ interface Harness {
   repo: Repo
 }
 
-const setup = async (): Promise<Harness> => {
+const setup = async (extras: readonly AppExtension[] = []): Promise<Harness> => {
   await resetTestDb(sharedDb.db)
   const h = sharedDb
   // Install the data extensions that own system pages — exactly the data-layer
@@ -37,8 +41,9 @@ const setup = async (): Promise<Harness> => {
   const { repo } = createTestRepo({
     db: h.db,
     user: { id: 'user-1' },
-    extensions: [dailyNotesDataExtension, geoDataExtension],
+    extensions: [dailyNotesDataExtension, geoDataExtension, ...extras],
   })
+  repo.setActiveWorkspaceId(WS)
   return { h, repo }
 }
 
@@ -47,6 +52,17 @@ let env: Harness
 beforeAll(async () => { sharedDb = await createTestDb() })
 afterAll(async () => { await sharedDb.cleanup() })
 beforeEach(async () => { env = await setup() })
+afterEach(() => { vi.restoreAllMocks() })
+
+/** Park `alias` on an ordinary user block, the way a user who happened to name
+ *  a page "Properties" leaves the workspace. `aliasesProp` is unique per
+ *  workspace, so the kernel page's own claim is then refused. */
+const seatAlias = async (repo: Repo, id: string, alias: string): Promise<void> => {
+  await repo.tx(async tx => {
+    await tx.create({id, workspaceId: WS, parentId: null, orderKey: 'a9', content: alias})
+    await tx.setProperty(id, aliasesProp, [alias])
+  }, {scope: ChangeScope.BlockDefault})
+}
 
 const aliasesInWorkspace = async (h: TestDb, repo: Repo): Promise<Set<string>> => {
   const rows = await h.db.getAll<{ id: string }>('SELECT id FROM blocks WHERE deleted = 0')
@@ -66,6 +82,83 @@ describe('Repo.ensureSystemPages', () => {
     for (const expected of EXPECTED_ALIASES) {
       expect(aliases.has(expected)).toBe(true)
     }
+  })
+
+  /**
+   * One page's failure must not take the workspace down with it.
+   *
+   * `bootstrapWorkspace` awaits this on the critical path with no catch, so a
+   * bare `Promise.all` makes any single `ensure` rejection fatal to workspace
+   * OPEN — and the realistic cause is an alias a user's own block already
+   * holds, whose remedy (rename that block) needs the app to be open.
+   */
+  describe('when one page cannot be created', () => {
+    it('resolves rather than rejecting, and still creates every other page', async () => {
+      await seatAlias(env.repo, 'user-page', 'Properties')
+
+      await expect(env.repo.ensureSystemPages(WS)).resolves.toBeUndefined()
+
+      const aliases = await aliasesInWorkspace(env.h, env.repo)
+      for (const expected of EXPECTED_ALIASES.filter(a => a !== 'Properties')) {
+        expect(aliases.has(expected)).toBe(true)
+      }
+      // The one that failed is genuinely absent — degraded, not silently faked.
+      expect(await env.repo.load(propertiesPageBlockId(WS))).toBeNull()
+    })
+
+    it('survives an owner whose ensure throws something that is not a rejection', async () => {
+      // A plugin bug, not a data condition — an extension is transpiled, not
+      // typechecked, so its `ensure` can throw anything at all.
+      env = await setup([
+        systemPagesFacet.of(
+          {id: 'test:broken', ensure: () => Promise.reject(new Error('plugin bug'))},
+          {source: 'test'},
+        ),
+      ])
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+      await expect(env.repo.ensureSystemPages(WS)).resolves.toBeUndefined()
+
+      const aliases = await aliasesInWorkspace(env.h, env.repo)
+      for (const expected of EXPECTED_ALIASES) expect(aliases.has(expected)).toBe(true)
+      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('test:broken'))
+    })
+
+    it('tells the user, for a failure nothing else reported', async () => {
+      env = await setup([
+        systemPagesFacet.of(
+          {id: 'test:broken', ensure: () => Promise.reject(new Error('plugin bug'))},
+          {source: 'test'},
+        ),
+      ])
+      vi.spyOn(console, 'error').mockImplementation(() => {})
+      const errors: ProcessorRejection[] = []
+      env.repo.onUserError(e => errors.push(e))
+
+      await env.repo.ensureSystemPages(WS)
+
+      expect(errors).toHaveLength(1)
+      expect(errors[0].code).toBe('systemPage.unavailable')
+      expect(errors[0].meta).toMatchObject({pageId: 'test:broken', workspaceId: WS})
+    })
+
+    it('does not re-report a rejection the tx already surfaced', async () => {
+      // `repo.tx` fires `onUserError` with the actionable `alias.collision`
+      // rejection on its way out (it carries the conflicting block and an
+      // open/merge affordance). A second, vaguer notice for the same cause
+      // would stack a toast on top of the one that can actually be acted on.
+      await seatAlias(env.repo, 'user-page', 'Properties')
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+      const errors: ProcessorRejection[] = []
+      env.repo.onUserError(e => errors.push(e))
+
+      await env.repo.ensureSystemPages(WS)
+
+      expect(errors.map(e => e.code)).toEqual(['alias.collision'])
+      // Logged all the same: that rejection names the conflicting block but not
+      // which system page was lost to it, and only this line says so.
+      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('kernel:properties'))
+    })
   })
 
   it('is idempotent — a second run creates no new rows', async () => {
