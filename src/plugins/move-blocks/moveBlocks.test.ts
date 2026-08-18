@@ -6,7 +6,18 @@
  * destination inside the movers' own subtree.
  */
 
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+
+// Delegates to the real helper; individual tests reject it once to drive
+// the post-commit accounting failure.
+const isWithinSubtreeOfAnyMock = vi.hoisted(() => vi.fn())
+const realIsWithinSubtreeOfAny = vi.hoisted(() => ({} as { current?: unknown })) as never
+vi.mock('./blockSubtreeMembership.ts', async importOriginal => {
+  const actual = await importOriginal<typeof import('./blockSubtreeMembership.ts')>()
+  ;(realIsWithinSubtreeOfAny as never as {current: unknown}).current = actual.isWithinSubtreeOfAny
+  isWithinSubtreeOfAnyMock.mockImplementation(actual.isWithinSubtreeOfAny)
+  return { ...actual, isWithinSubtreeOfAny: isWithinSubtreeOfAnyMock }
+})
 import { CycleError, ChangeScope } from '@/data/api'
 import { Repo } from '@/data/repo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
@@ -23,6 +34,9 @@ beforeAll(async () => { sharedDb = await createTestDb() })
 afterAll(async () => { await sharedDb.cleanup() })
 
 beforeEach(async () => {
+  isWithinSubtreeOfAnyMock.mockReset()
+  isWithinSubtreeOfAnyMock.mockImplementation(
+    (realIsWithinSubtreeOfAny as never as {current: never}).current)
   lastKeyByParent.clear()
   await resetTestDb(sharedDb.db)
   repo = createTestRepo({ db: sharedDb.db, user: { id: 'user-1' } }).repo
@@ -71,6 +85,32 @@ const INTO_DEST = {parentId: 'dest', position: {kind: 'last'}} as const
 const depths = () => repo.undoManager.depths(ChangeScope.BlockDefault)
 
 describe('moveBlocksTo', () => {
+  it('still returns the committed move when post-commit accounting fails', async () => {
+    // `accountFor` runs after every transaction has committed. Letting its
+    // failure escape made the caller take its generic-error branch, so the
+    // relocated blocks stayed in the live selection and later multi-select
+    // shortcuts could act on them at their new home.
+    //
+    // 'kid' is pruned (it rides along inside 'a'), which is the only shape
+    // that reaches the ancestry read — an id that moved on its own
+    // short-circuits before it.
+    await seed('dest', null)
+    await seed('a', null)
+    await seed('kid', 'a')
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    isWithinSubtreeOfAnyMock.mockRejectedValueOnce(new Error('db blipped'))
+
+    const result = await moveBlocksTo(repo, ['a', 'kid'], INTO_DEST)
+
+    expect(result.moved).toBe(1)
+    expect(result.movedIds).toEqual(['a'])
+    // Degraded, not lost: 'kid' is omitted, which under-reports coverage
+    // and so errs toward keeping a cut retryable.
+    expect(result.accountedIds).toEqual(['a'])
+    expect(warn).toHaveBeenCalled()
+    warn.mockRestore()
+  })
+
   it('moves N blocks contiguously under the destination, preserving input order', async () => {
     await seed('dest', null)
     await seed('src', null)

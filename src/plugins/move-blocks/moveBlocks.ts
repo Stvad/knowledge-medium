@@ -163,7 +163,20 @@ export const moveBlocksTo = async (
     if (moved === 0) throw error
     throw new PartialMoveError([...movedIds], error)
   }
-  return { moved, movedIds, accountedIds: await accountFor(repo, blockIds, movedIds) }
+  // Accounting is a convenience for callers, not part of the move, and it
+  // runs after every transaction has committed. A transient failure in its
+  // ancestry read must not discard a result whose moves all landed — the
+  // caller would take its generic-error branch and leave relocated blocks
+  // in the live selection. Degrade to `movedIds`, which UNDER-reports
+  // coverage: that errs toward keeping a cut retryable rather than
+  // spending one that didn't fully land.
+  let accountedIds: readonly string[] = movedIds
+  try {
+    accountedIds = await accountFor(repo, blockIds, movedIds)
+  } catch (error) {
+    console.warn('[move-blocks] could not account for carried-along blocks', error)
+  }
+  return { moved, movedIds, accountedIds }
 }
 
 /** Which of the originally REQUESTED ids are now at the destination.
