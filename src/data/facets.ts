@@ -83,23 +83,38 @@ const isLocalSchemaContribution = (value: unknown): value is LocalSchemaContribu
  * not once per device. Deferred off the workspace-open critical path; see
  * `Repo.scheduleWorkspaceBackfills`.
  */
-/** Records that a migration is done, in SYNCED data, so it happens once per
- *  GRAPH rather than once per device.
+/** Decides which device runs a migration, and records that it finished — in
+ *  SYNCED data, so a repair that uploads happens once per GRAPH.
  *
  *  Every pass on this seam writes source-of-truth rows and uploads them, so N
  *  devices each running it independently is N chances to build a write from a
  *  stale local row and overwrite concurrent edits (`apply_block_patches`
- *  assigns `properties_json` wholesale). A local completion marker in
- *  `client_schema_state` cannot express "already done for everyone" — hence
- *  this seam rather than a boolean on the backfill.
+ *  assigns `properties_json` wholesale). A local marker in
+ *  `client_schema_state` cannot express "already done for everyone".
  *
- *  No production implementation exists yet, and `Repo` REFUSES to run any
- *  backfill without one rather than falling back to a local marker. */
+ *  ACQUIRE, don't check-then-mark. An `isDone()` read followed by a later
+ *  `markDone()` is a race with no winner: two devices opening the graph before
+ *  the completion row has propagated both read "not done", both run the
+ *  uploading pass, and both record it afterwards. `tryClaim` exists so the
+ *  decision and the record are one step, and so an implementer has to confront
+ *  the three questions this seam cannot answer for them:
+ *
+ *   1. how atomic can a claim be over a last-write-wins sync layer? Perfect
+ *      mutual exclusion may not be reachable — in which case say so, and rely
+ *      on passes being idempotent per row.
+ *   2. what happens to a claim whose device crashed mid-run? Without an expiry
+ *      or lease, one dead device blocks the migration for the whole graph.
+ *   3. is a duplicate run tolerable if 1 fails? For an idempotent repair,
+ *      usually yes; the cost is the stale-bag exposure, not corruption. */
 export interface BackfillCompletionClaim {
-  /** True when this (workspace, backfill) is already complete for the graph. */
-  isDone(workspaceId: string, backfillId: string): Promise<boolean>
-  /** Record completion where every device will see it. */
-  markDone(workspaceId: string, backfillId: string): Promise<void>
+  /** Claim the right to run this pass for this workspace. `false` means
+   *  someone else has it or it is already complete — skip, don't run. */
+  tryClaim(workspaceId: string, backfillId: string): Promise<boolean>
+  /** The claimed run finished. Record completion where every device sees it. */
+  markComplete(workspaceId: string, backfillId: string): Promise<void>
+  /** The claimed run aborted without finishing (a transient precondition, a
+   *  thrown backfill). Give the claim back, or the pass never runs again. */
+  releaseClaim(workspaceId: string, backfillId: string): Promise<void>
 }
 
 export interface WorkspaceBackfill {

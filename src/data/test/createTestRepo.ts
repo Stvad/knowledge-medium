@@ -125,15 +125,16 @@ export const createTestRepo = (opts: CreateTestRepoOptions): TestRepo => {
     // `in` rather than `??` so a test can pass `undefined` to mean "none
     // configured" and exercise the refusal, instead of silently getting the stub.
     backfillCompletionClaim: 'backfillCompletionClaim' in opts ? opts.backfillCompletionClaim : {
-      isDone: async (ws: string, id: string) => (await opts.db.getOptional<{key: string}>(
+      tryClaim: async (ws: string, id: string) => (await opts.db.getOptional<{key: string}>(
         'SELECT key FROM client_schema_state WHERE key = ?', [`workspace_backfill:${ws}:${id}`],
-      )) !== null,
-      markDone: async (ws: string, id: string) => {
+      )) === null,
+      markComplete: async (ws: string, id: string) => {
         await opts.db.execute(
           'INSERT OR REPLACE INTO client_schema_state (key, value) VALUES (?, ?)',
           [`workspace_backfill:${ws}:${id}`, '1'],
         )
       },
+      releaseClaim: async () => {},
     },
   })
   if (opts.extensions?.length) {

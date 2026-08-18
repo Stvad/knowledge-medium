@@ -2776,7 +2776,7 @@ export class Repo {
       // scheduled. `assertBackfillMayWrite` catches this per transaction, but
       // that is one tx too late to avoid the scan a backfill does first.
       if (this.workspaceGeneration !== generation) return
-      if (await claim.isDone(workspaceId, backfill.id)) continue
+      if (!(await claim.tryClaim(workspaceId, backfill.id))) continue
       const ctx: WorkspaceBackfillContext = {
         workspaceId,
         getAll: <T>(sql: string, params?: readonly unknown[]) =>
@@ -2819,9 +2819,12 @@ export class Repo {
         // Record the marker only after a clean run — a thrown backfill leaves
         // it unset so the next open retries (backfills are written idempotent
         // via a per-row recheck, so a retry is cheap).
-        await claim.markDone(workspaceId, backfill.id)
+        await claim.markComplete(workspaceId, backfill.id)
       } catch (err) {
         const reason = err instanceof Error ? err.message : String(err)
+        // Claimed but didn't finish — hand it back either way, or this pass is
+        // blocked for the whole graph by one device's bad moment.
+        await claim.releaseClaim(workspaceId, backfill.id).catch(() => {})
         if ((err as {kind?: string} | null)?.kind === Repo.TRANSIENT) {
           // These clear on their own — the download finishes, the queue drains.
           // Logging and walking away would leave the pass undone for the whole

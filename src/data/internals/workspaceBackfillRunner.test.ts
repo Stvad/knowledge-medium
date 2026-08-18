@@ -289,6 +289,36 @@ describe('workspace backfill runner — sync gating', () => {
     expect((await repo.load('target'))?.properties['probe:mark']).toBe('backfilled')
   })
 
+  it('releases the claim when a run aborts, so it is not blocked forever', async () => {
+    // A claimed-but-unfinished pass must hand the claim back: otherwise one
+    // device's transient bad moment blocks the migration for the whole graph.
+    const g = controllableGate()
+    const released: string[] = []
+    const claimed = new Set<string>()
+    const {repo} = createTestRepo({
+      db: sharedDb.db,
+      user: {id: 'user-1'},
+      backfillSyncGate: g.gate,
+      backfillCompletionClaim: {
+        tryClaim: async (ws, id) => { if (claimed.has(id)) return false; claimed.add(id); return true },
+        markComplete: async () => {},
+        releaseClaim: async (_ws, id) => { released.push(id); claimed.delete(id) },
+      },
+    })
+    repo.setActiveWorkspaceId(WS)
+    repo.setRuntimeContributions(workspaceBackfillsFacet, 'test-backfills', [probeBackfill([])])
+    await seedTarget(repo)
+    await sharedDb.db.execute(
+      "INSERT INTO blocks_synced_changes (id, op) VALUES ('draining', 'upsert')",
+    )
+
+    g.open()
+    await drain(repo)
+
+    expect(released).toEqual(['probe-backfill-v1'])
+    expect(claimed.size).toBe(0)
+  })
+
   it('refuses every backfill when no completion claim is configured', async () => {
     // Production has no synced claim store yet. Falling back to the local
     // marker would have each device attempt an upload-carrying repair
