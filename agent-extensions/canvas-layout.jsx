@@ -1,4 +1,5 @@
-import { blockRenderersFacet, actionsFacet } from '@/extensions/core.js'
+import { actionsFacet } from '@/extensions/core.js'
+import { blockRendererFacet } from '@/extensions/blockInteraction.js'
 import { definitionSeedsFacet } from '@/data/facets.js'
 import { ActionContextTypes } from '@/shortcuts/types.js'
 import { seedProperty, ChangeScope } from '@/data/api/index.js'
@@ -387,9 +388,16 @@ export default [
   definitionSeedsFacet.of(canvasYProp),
   definitionSeedsFacet.of(canvasWProp),
   definitionSeedsFacet.of(canvasHProp),
-  blockRenderersFacet.of({
+  // Same id replaces the host's 'layout' variant in place, keeping its
+  // precedence. The gate has to come along: a registration with a bare
+  // `render` and no `resolve` claims EVERY block.
+  blockRendererFacet.of({
     id: 'layout',
-    renderer: CanvasLayoutRenderer,
+    label: 'Canvas layout',
+    resolve: ctx =>
+      ctx.blockContext && !ctx.blockContext.layoutBoundary && !ctx.blockContext.panelId
+        ? { render: CanvasLayoutRenderer }
+        : null,
   }),
   actionsFacet.of(toggleCanvasLayoutAction),
   actionsFacet.of(enableCanvasLayoutAction),

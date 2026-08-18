@@ -32,9 +32,10 @@ import {
   actionsFacet,
   appEffectsFacet,
   appMountsFacet,
-  blockRenderersFacet,
 } from '@/extensions/core.js'
+import { blockRendererFacet } from '@/extensions/blockInteraction.js'
 import { readRuntimeActions } from '@/extensions/runtimeActions.js'
+import { readRuntimeRenderers } from '@/extensions/runtimeRenderers.js'
 import { invokeAction } from '@/shortcuts/actionDispatch.js'
 import type { BaseShortcutDependencies } from '@/shortcuts/types.js'
 import { refreshAppRuntime } from '@/facets/runtimeEvents.js'
@@ -279,7 +280,7 @@ const verifyExtensionBlock = async (
     },
   )
 
-  const renderersContribs = verificationRuntime.contributionsById(blockRenderersFacet.id)
+  const renderersContribs = verificationRuntime.contributionsById(blockRendererFacet.id)
   const appMountsContribs = verificationRuntime.contributionsById(appMountsFacet.id)
   const appEffectsContribs = verificationRuntime.contributionsById(appEffectsFacet.id)
 
@@ -1552,7 +1553,7 @@ export const createAgentRuntimeContext = ({
     uninstallExtension: input => uninstallRuntimeExtension(repo, input),
     auditExtension: input => auditRuntimeExtension(repo, input),
     actions: readRuntimeActions(runtime),
-    renderers: runtime.read(blockRenderersFacet),
+    renderers: readRuntimeRenderers(runtime),
     refreshAppRuntime,
     React,
     ReactDOM,

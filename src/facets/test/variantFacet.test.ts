@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   defineVariantFacet,
   defineVariant,
-  type VariantContribution,
+  type VariantRegistration,
 } from '../variantFacet.ts'
 import { resolveFacetRuntimeSync } from '../facet.ts'
 
@@ -24,8 +24,8 @@ describe('defineVariantFacet', () => {
 
   it('collects all returned variants in precedence order', () => {
     const facet = defineVariantFacet<TestCtx, string>({id: 'test.variant.collect'})
-    const A: VariantContribution<TestCtx, string> = () => defineVariant('a', 'A', 'render-a')
-    const B: VariantContribution<TestCtx, string> = () => defineVariant('b', 'B', 'render-b')
+    const A: VariantRegistration<TestCtx, string> = defineVariant('a', 'A', 'render-a')
+    const B: VariantRegistration<TestCtx, string> = defineVariant('b', 'B', 'render-b')
 
     const runtime = resolveFacetRuntimeSync([
       facet.of(A, {precedence: 1}),
@@ -40,9 +40,12 @@ describe('defineVariantFacet', () => {
 
   it('skips contributions returning null/undefined/false (gating)', () => {
     const facet = defineVariantFacet<TestCtx, string>({id: 'test.variant.gating'})
-    const Always: VariantContribution<TestCtx, string> = () => defineVariant('always', 'Always', 'r1')
-    const TopLevelOnly: VariantContribution<TestCtx, string> = ctx =>
-      ctx.isTopLevel ? defineVariant('top', 'Top', 'r2') : null
+    const Always: VariantRegistration<TestCtx, string> = defineVariant('always', 'Always', 'r1')
+    const TopLevelOnly: VariantRegistration<TestCtx, string> = {
+      id: 'top',
+      label: 'Top',
+      resolve: ctx => ctx.isTopLevel ? {render: 'r2'} : null,
+    }
 
     const runtime = resolveFacetRuntimeSync([
       facet.of(Always),
@@ -57,8 +60,8 @@ describe('defineVariantFacet', () => {
   it('byId looks up a specific variant; returns undefined for missing ids', () => {
     const facet = defineVariantFacet<TestCtx, string>({id: 'test.variant.byid'})
     const runtime = resolveFacetRuntimeSync([
-      facet.of(() => defineVariant('flat', 'Flat', 'flat-r')),
-      facet.of(() => defineVariant('grouped', 'Grouped', 'grouped-r')),
+      facet.of(defineVariant('flat', 'Flat', 'flat-r')),
+      facet.of(defineVariant('grouped', 'Grouped', 'grouped-r')),
     ])
 
     const selection = runtime.read(facet)({isTopLevel: true})
@@ -69,10 +72,10 @@ describe('defineVariantFacet', () => {
     expect(selection.byId(undefined)).toBeUndefined()
   })
 
-  it('rejects non-function contributions via validate', () => {
+  it('rejects invalid contributions via validate', () => {
     const facet = defineVariantFacet<TestCtx, string>({id: 'test.variant.validate'})
     // Smuggle an invalid contribution past TS so we exercise runtime validation.
-    const invalid = facet.of('not-a-function' as unknown as VariantContribution<TestCtx, string>)
+    const invalid = facet.of('not-a-registration' as unknown as VariantRegistration<TestCtx, string>)
     const runtime = resolveFacetRuntimeSync([invalid])
 
     expect(runtime.read(facet)({isTopLevel: true}).all).toEqual([])

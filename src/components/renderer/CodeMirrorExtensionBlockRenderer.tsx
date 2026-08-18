@@ -7,7 +7,7 @@ import { createTypeScriptConfig } from '@/utils/codemirror.js'
 import { useExtensionLoadError } from '@/extensions/extensionLoadErrors.js'
 import { useContent } from '@/hooks/block.js'
 import { EXTENSION_TYPE } from '@/data/blockTypes'
-import { hasBlockType } from '@/data/properties'
+import type { BlockRendererRegistration } from '@/extensions/blockInteraction.js'
 
 const extensionFrameClass = 'border rounded-md overflow-hidden'
 const extensionTheme = 'dark'
@@ -78,8 +78,9 @@ export const CodeMirrorExtensionBlockRenderer: BlockRenderer = (props: BlockRend
     EditContentRenderer={ExtensionEditor}
   />
 
-CodeMirrorExtensionBlockRenderer.canRender = ({block}: BlockRendererProps) => {
-  const data = block.peek()
-  return data ? hasBlockType(data, EXTENSION_TYPE) : false
+export const codeMirrorExtensionRendererRegistration: BlockRendererRegistration = {
+  id: 'extension',
+  label: 'Extension source',
+  resolve: ctx =>
+    ctx.types.includes(EXTENSION_TYPE) ? {render: CodeMirrorExtensionBlockRenderer} : null,
 }
-CodeMirrorExtensionBlockRenderer.priority = () => 5

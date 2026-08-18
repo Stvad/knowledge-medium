@@ -1,14 +1,16 @@
 import {
-  actionsFacet, appEffectsFacet, appMountsFacet, blockRenderersFacet,
+  actionsFacet, appEffectsFacet, appMountsFacet,
 } from '@/extensions/core.js'
 import {
   actionDispatchWrap, type ActionDispatchDecorator,
 } from '@/shortcuts/actionDispatch.js'
 import {
   blockContentDecoratorsFacet,
+  blockRendererFacet,
   cachedContentDecorator,
   type BlockContentDecorator,
   type BlockContentDecoratorContribution,
+  type BlockRendererRegistration,
 } from '@/extensions/blockInteraction.js'
 import {
   ChangeScope, seedType, definePropertyEditorOverride, seedProperty,
@@ -2271,32 +2273,25 @@ ReviewBacklogContent.displayName = 'ReadwiseReviewBacklogContent'
 
 /** Keep the default block frame, swap the content area for the backlog. Same
  *  shape as the SRS review deck renderer and the block-type renderer. */
-const ReviewBacklogRenderer: BlockRenderer = Object.assign(
-  (props: BlockRendererProps) => (
-    <DefaultBlockRenderer
-      {...props}
-      ContentRenderer={ReviewBacklogContent}
-      EditContentRenderer={ReviewBacklogContent}
-      // Filled with other blocks' rows, so this page's row spans all of them
-      // rather than describing the page. Whatever reasons about row geometry
-      // (the cursor-follows-scroll anchor) needs to know.
-      contentShowsOtherBlocks
-    />
-  ),
-  {
-    canRender: ({ block }: BlockRendererProps): boolean => {
-      const data = block.peek()
-      if (!data) return false
-      try {
-        return getBlockTypes(data).includes(REVIEW_BACKLOG_TYPE)
-      } catch {
-        return false
-      }
-    },
-    priority: () => 100,
-  },
+const ReviewBacklogRenderer: BlockRenderer = (props: BlockRendererProps) => (
+  <DefaultBlockRenderer
+    {...props}
+    ContentRenderer={ReviewBacklogContent}
+    EditContentRenderer={ReviewBacklogContent}
+    // Filled with other blocks' rows, so this page's row spans all of them
+    // rather than describing the page. Whatever reasons about row geometry
+    // (the cursor-follows-scroll anchor) needs to know.
+    contentShowsOtherBlocks
+  />
 )
 ReviewBacklogRenderer.displayName = 'ReadwiseReviewBacklogRenderer'
+
+const reviewBacklogRendererRegistration: BlockRendererRegistration = {
+  id: 'readwiseReviewBacklog',
+  label: 'Readwise review backlog',
+  resolve: ctx =>
+    ctx.types.includes(REVIEW_BACKLOG_TYPE) ? { render: ReviewBacklogRenderer } : null,
+}
 
 const openReviewBacklogAction = {
   id: OPEN_REVIEW_BACKLOG_ACTION_ID,
@@ -2500,9 +2495,9 @@ export default [
   blockContentDecoratorsFacet.of(readwiseDailyNoteBacklogDecorator, { source }),
   leftSidebarSectionsFacet.of(readwiseBacklogSidebarSection, { source }),
 
-  blockRenderersFacet.of(
-    { id: 'readwiseReviewBacklog', renderer: ReviewBacklogRenderer },
-    { source },
+  blockRendererFacet.of(
+    reviewBacklogRendererRegistration,
+    { source, precedence: 100 },
   ),
 
   actionsFacet.of(openSettingsAction, { source }),

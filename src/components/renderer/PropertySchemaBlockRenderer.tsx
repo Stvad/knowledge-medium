@@ -25,6 +25,7 @@ import type { BlockRenderer, BlockRendererProps } from '@/types.js'
 import { PropertyShapeGlyph } from '@/components/propertyPanel/shapeUi.js'
 import { DefaultBlockRenderer } from './DefaultBlockRenderer.tsx'
 import { deleteBlockThroughUi } from '@/utils/deleteBlockThroughUi.js'
+import type { BlockRendererRegistration } from '@/extensions/blockInteraction.js'
 
 const renderConfigEditor = (
   preset: AnyJoinedValuePreset,
@@ -327,28 +328,17 @@ PropertySchemaContentRenderer.displayName = 'PropertySchemaContentRenderer'
 /** Outer wrapper: keeps the default block layout (children,
  *  indentation, drag handle, focus chrome) and swaps in the
  *  schema-editing content renderer. */
-export const PropertySchemaBlockRenderer: BlockRenderer = Object.assign(
-  (props: BlockRendererProps) => (
-    <DefaultBlockRenderer
-      {...props}
-      ContentRenderer={PropertySchemaContentRenderer}
-      EditContentRenderer={PropertySchemaContentRenderer}
-    />
-  ),
-  {
-    canRender: ({block}: BlockRendererProps): boolean => {
-      // useRenderer's chooser also calls useData(block) before
-      // running canRender, so by the time we get here block.peek()
-      // is non-null on hot loads. On the very first render, peek
-      // can be null — return false in that case so the chooser
-      // falls back to the default renderer; once the block loads,
-      // useRenderer reruns and we'll match.
-      const data = block.peek()
-      if (!data) return false
-      const types = data.properties.types
-      return Array.isArray(types) && types.includes('property-schema')
-    },
-    priority: () => 100,
-  },
+export const PropertySchemaBlockRenderer: BlockRenderer = (props: BlockRendererProps) => (
+  <DefaultBlockRenderer
+    {...props}
+    ContentRenderer={PropertySchemaContentRenderer}
+    EditContentRenderer={PropertySchemaContentRenderer}
+  />
 )
 PropertySchemaBlockRenderer.displayName = 'PropertySchemaBlockRenderer'
+
+export const propertySchemaRendererRegistration: BlockRendererRegistration = {
+  id: 'propertySchema',
+  label: 'Property schema editor',
+  resolve: ctx => ctx.types.includes('property-schema') ? {render: PropertySchemaBlockRenderer} : null,
+}

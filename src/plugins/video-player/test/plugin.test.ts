@@ -4,9 +4,14 @@ import { definitionSeedsFacet } from '@/data/facets.js'
 import type { Block } from '@/data/block'
 import { makeBlockData } from '@/data/test/factories.js'
 import { resolveFacetRuntimeSync } from '@/facets/facet.js'
+import type { Repo } from '@/data/repo'
+import type { BlockRendererContext } from '@/extensions/blockInteraction.js'
 import { videoPlayerPlugin } from '../index.ts'
 import { videoNotesPaneRatioProp } from '../view.ts'
-import { VideoPlayerRenderer } from '../VideoPlayerRenderer.tsx'
+import { VideoPlayerRenderer, videoPlayerRendererRegistration } from '../VideoPlayerRenderer.tsx'
+import { VideoNotesRenderer } from '../VideoNotesRenderer.tsx'
+import { blockRendererFacet } from '@/extensions/blockInteraction.js'
+import { VIDEO_NOTES_VIEW_MODE } from '../view.ts'
 
 const blockWithContent = (content: string): Block => ({
   id: 'video',
@@ -17,8 +22,10 @@ const blockWithContent = (content: string): Block => ({
   }),
 } as unknown as Block)
 
-const canRenderContent = (content: string) =>
-  VideoPlayerRenderer.canRender?.({block: blockWithContent(content)}) ?? false
+const canRenderContent = (content: string) => {
+  const ctx: BlockRendererContext = {block: blockWithContent(content), repo: {} as Repo, types: []}
+  return videoPlayerRendererRegistration.resolve?.(ctx) !== null
+}
 
 describe('videoPlayerPlugin', () => {
   it('contributes its player property seeds', () => {
@@ -43,5 +50,24 @@ describe('videoPlayerPlugin', () => {
 
   it('does not render playable relative paths as video URLs', () => {
     expect(canRenderContent('video.mp4')).toBe(false)
+  })
+
+  // Both renderers claim a playable block in the mode; the winner is decided
+  // by the precedences the plugin registers them at, which nothing else in
+  // either file states.
+  it('gives the notes arrangement the block in video-notes mode, over the plain player', () => {
+    const resolve = resolveFacetRuntimeSync(videoPlayerPlugin).read(blockRendererFacet)
+    const block = blockWithContent('https://example.com/video.mp4')
+    const inMode = {
+      block,
+      repo: {} as Repo,
+      types: [],
+      blockContext: {panelViewMode: VIDEO_NOTES_VIEW_MODE, scopeRootId: block.id},
+    }
+
+    expect(resolve(inMode).all.map(variant => variant.render))
+      .toEqual(expect.arrayContaining([VideoPlayerRenderer, VideoNotesRenderer]))
+    expect(resolve(inMode).last?.render).toBe(VideoNotesRenderer)
+    expect(resolve({...inMode, blockContext: {}}).last?.render).toBe(VideoPlayerRenderer)
   })
 })

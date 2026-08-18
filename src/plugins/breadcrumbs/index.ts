@@ -1,9 +1,8 @@
-import { blockHeaderFacet } from '@/extensions/blockInteraction.js'
-import { blockRenderersFacet, type RendererContribution } from '@/extensions/core.js'
+import { blockHeaderFacet, blockRendererFacet } from '@/extensions/blockInteraction.js'
 import type { AppExtension } from '@/facets/facet.js'
 import { systemToggle } from '@/facets/togglable.js'
 import { Breadcrumbs } from './Breadcrumbs.tsx'
-import { BreadcrumbRenderer } from './BreadcrumbRenderer.tsx'
+import { breadcrumbRendererRegistration } from './BreadcrumbRenderer.tsx'
 
 export { BreadcrumbList } from './BreadcrumbList.tsx'
 export { PromotableBreadcrumbList } from './PromotableBreadcrumbList.tsx'
@@ -12,17 +11,12 @@ export { BreadcrumbRenderer } from './BreadcrumbRenderer.tsx'
 export { Breadcrumbs } from './Breadcrumbs.tsx'
 export { getBreadcrumbContentPreview } from './breadcrumbPreview.ts'
 
-export const breadcrumbRendererContribution: RendererContribution = {
-  id: 'breadcrumb',
-  renderer: BreadcrumbRenderer,
-}
-
 export const breadcrumbsPlugin: AppExtension = systemToggle({
   id: 'system:breadcrumbs',
   name: 'Breadcrumbs',
   description: 'Ancestor chain rendered above each panel.',
 }).of([
-  blockRenderersFacet.of(breadcrumbRendererContribution, {source: 'breadcrumbs'}),
+  blockRendererFacet.of(breadcrumbRendererRegistration, {source: 'breadcrumbs', precedence: 10}),
   // Header section: top-level breadcrumbs. Self-gates on isTopLevel so
   // non-top-level blocks pay no header cost.
   blockHeaderFacet.of(

@@ -8,7 +8,7 @@
 // which resolve through the page-global importmap to the same module
 // instances the running app uses.
 //
-// Renderer-bearing examples register a renderer via blockRenderersFacet
+// Renderer-bearing examples register a renderer via blockRendererFacet
 // and compose with the default block chrome by delegating to
 // DefaultBlockRenderer with a custom ContentRenderer prop — same shape
 // as plugins/video-player/VideoPlayerRenderer. The block keeps its
@@ -39,7 +39,6 @@ const HELLO_RENDERER_SOURCE = `import { ChangeScope, seedProperty } from '@/data
 import { definitionSeedsFacet } from '@/data/facets.js'
 import { blockContentRendererFacet } from '@/extensions/blockInteraction.js'
 import { extensionPropertySeedKey } from '@/extensions/dynamicExtensionSeeds.js'
-import { defineVariant } from '@/facets/variantFacet.js'
 
 // Variant on blockContentRendererFacet: contributes an alternative
 // content renderer for blocks tagged 'user:hello = true'. Returning
@@ -71,9 +70,11 @@ export default [
   // Register the schema so the value-preset / property-editor lookups
   // can find this prop, and describeRuntime can list it.
   definitionSeedsFacet.of(helloProp),
-  blockContentRendererFacet.of((ctx) => {
-    if (!ctx.block.peekProperty(helloProp)) return null
-    return defineVariant('user.hello', 'Hello', HelloContent)
+  blockContentRendererFacet.of({
+    id: 'user.hello',
+    label: 'Hello',
+    resolve: (ctx) =>
+      ctx.block.peekProperty(helloProp) ? { render: HelloContent } : null,
   }),
 ]
 `
@@ -210,7 +211,7 @@ export default [
 `
 
 const KUDOS_FACET_SOURCE = `import { DefaultBlockRenderer } from '@/components/renderer/DefaultBlockRenderer.js'
-import { blockRenderersFacet } from '@/extensions/core.js'
+import { blockRendererFacet } from '@/extensions/blockInteraction.js'
 import { defineFacet } from '@/facets/facet.js'
 
 // Demonstrates defining a brand-new facet inside an extension block,
@@ -243,9 +244,13 @@ const KudosBannerRenderer = (props) =>
 
 export default [
   kudosFacet.of({ from: 'self', message: 'Hello from the defining block' }),
-  blockRenderersFacet.of({
+  blockRendererFacet.of({
     id: 'kudos-banner',
-    renderer: KudosBannerRenderer,
+    label: 'Kudos banner',
+    // No resolve: this one is only ever reached through the block's
+    // 'renderer' property, so it must not claim blocks on its own.
+    render: KudosBannerRenderer,
+    claims: false,
   }),
 ]
 `
@@ -254,7 +259,6 @@ const SPLIT_LAYOUT_SOURCE = `import { ChangeScope, seedProperty } from '@/data/a
 import { definitionSeedsFacet } from '@/data/facets.js'
 import { blockLayoutFacet } from '@/extensions/blockInteraction.js'
 import { extensionPropertySeedKey } from '@/extensions/dynamicExtensionSeeds.js'
-import { defineVariant } from '@/facets/variantFacet.js'
 
 // blockLayoutFacet contributions arrange the four slots (Content,
 // Properties, Children, Footer) inside a block's body. Each slot is
@@ -296,23 +300,26 @@ const SplitLayout = ({ Content, Children, Properties, Footer }) => (
 // is 'split'. Returning null for everything else lets ordinary blocks
 // fall through to the default vertical layout.
 //
-// blockLayoutFacet is a variant facet — contributions return
-// {id, label, render} (or use defineVariant() sugar) so a future
-// picker UI could enumerate them. Returning null still means "this
-// variant doesn't apply here".
+// blockLayoutFacet is a variant facet — a contribution is
+// {id, label, resolve} (or {id, label, render} / defineVariant() sugar
+// when it applies everywhere), so a picker UI can enumerate what is
+// installed without a block in hand. resolve returning null still means
+// "this variant doesn't apply here".
 export default [
   // Register the schema so describeRuntime / property-editor lookups
   // know about this property.
   definitionSeedsFacet.of(layoutProp),
-  blockLayoutFacet.of((ctx) => {
-    if (ctx.block.peekProperty(layoutProp) !== 'split') return null
-    return defineVariant('split', 'Split (content / children)', SplitLayout)
+  blockLayoutFacet.of({
+    id: 'split',
+    label: 'Split (content / children)',
+    resolve: (ctx) =>
+      ctx.block.peekProperty(layoutProp) === 'split' ? { render: SplitLayout } : null,
   }),
 ]
 `
 
-const LAYOUT_RENDERER_OVERRIDE_SOURCE = `import { LayoutRenderer } from '@/components/renderer/LayoutRenderer.js'
-import { blockRenderersFacet } from '@/extensions/core.js'
+const LAYOUT_RENDERER_OVERRIDE_SOURCE = `import { LayoutRenderer, layoutRendererRegistration } from '@/components/renderer/LayoutRenderer.js'
+import { blockRendererFacet } from '@/extensions/blockInteraction.js'
 
 // Replaces the app-wide renderer registered under id 'layout', so
 // inserting this example wraps every panel with the custom frame
@@ -338,18 +345,20 @@ const DemoLayoutRenderer = (props) => (
   </div>
 )
 
-DemoLayoutRenderer.canRender = LayoutRenderer.canRender
-DemoLayoutRenderer.priority = LayoutRenderer.priority
-
-export default blockRenderersFacet.of({
+// Registering the same id replaces the host's variant in place, keeping
+// the slot (and therefore the precedence) it was registered at. Reusing
+// its resolve keeps the gate identical too — only the component differs.
+export default blockRendererFacet.of({
   id: 'layout',
-  renderer: DemoLayoutRenderer,
+  label: 'Panel layout (demo)',
+  resolve: (ctx) =>
+    layoutRendererRegistration.resolve?.(ctx) ? { render: DemoLayoutRenderer } : null,
 })
 `
 
 const DEFAULT_RENDERER_OVERRIDE_SOURCE = `import { DefaultBlockRenderer } from '@/components/renderer/DefaultBlockRenderer.js'
 import { MarkdownContentRenderer } from '@/components/renderer/MarkdownContentRenderer.js'
-import { blockRenderersFacet } from '@/extensions/core.js'
+import { blockRendererFacet } from '@/extensions/blockInteraction.js'
 
 // Replaces the fallback renderer registered under id 'default'.
 // Inserting this example immediately changes every ordinary block
@@ -375,9 +384,10 @@ const PlaceholderDefaultRenderer = (props) => (
   <DefaultBlockRenderer {...props} ContentRenderer={PlaceholderContent} />
 )
 
-export default blockRenderersFacet.of({
+export default blockRendererFacet.of({
   id: 'default',
-  renderer: PlaceholderDefaultRenderer,
+  label: 'Block',
+  render: PlaceholderDefaultRenderer,
 })
 `
 

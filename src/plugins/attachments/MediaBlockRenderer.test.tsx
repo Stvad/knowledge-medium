@@ -3,8 +3,8 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Block } from '@/data/block.js'
-import { typesProp } from '@/data/properties.js'
-import type { BlockRendererProps } from '@/types.js'
+import type { Repo } from '@/data/repo.js'
+import type { BlockRendererContext } from '@/extensions/blockInteraction.js'
 
 // Control the block's props, the eager URL state, and the lazy resolve without the data layer.
 const h = vi.hoisted(() => ({
@@ -39,7 +39,7 @@ vi.mock('@/extensions/runtimeContext.js', async () => {
   return { useAppRuntime: () => ({ read: () => [imageMediaViewer, audioMediaViewer, pdfMediaViewer] }) }
 })
 
-const { MediaBlockRenderer, MediaContentRenderer } = await import('./MediaBlockRenderer.js')
+const { MediaBlockRenderer, MediaContentRenderer, mediaRendererRegistration } = await import('./MediaBlockRenderer.js')
 
 const block = { repo: { activeWorkspaceId: 'ws-A' }, hasType: (t: string) => t === 'media' } as unknown as Block
 const renderContent = () => render(<MediaContentRenderer block={block} />)
@@ -425,30 +425,19 @@ describe('MediaContentRenderer — PDF branch', () => {
   })
 })
 
-describe('MediaBlockRenderer.canRender', () => {
-  // canRender must gate on a LOADED snapshot via peek() — `block.hasType()` reads
-  // block.data, which THROWS for a not-yet-loaded / missing row, and useRenderer
-  // runs canRender for every block during its load window.
-  const peeking = (value: unknown) => ({ peek: () => value }) as unknown as Block
-  const typed = (types: string[]) => ({ properties: { [typesProp.name]: typesProp.codec.encode(types) } })
+describe('mediaRendererRegistration.resolve', () => {
+  // `ctx.types` is now the caller's job to derive totally from a block snapshot
+  // (see `typesOf` in `src/hooks/useRendererRegistry.tsx`, covered by that
+  // hook's own test) — resolve itself just checks an already-decoded array, so
+  // it can't throw regardless of the underlying block's load state or a
+  // malformed `types` property. Only the claim/no-claim behavior is this
+  // registration's own to pin.
+  const ctxFor = (types: string[]): BlockRendererContext =>
+    ({ block: {} as Block, repo: {} as Repo, types })
 
-  it('returns true only for a loaded media-typed block', () => {
-    expect(MediaBlockRenderer.canRender?.({ block: peeking(typed(['media'])) } as BlockRendererProps)).toBe(true)
-    expect(MediaBlockRenderer.canRender?.({ block: peeking(typed(['note'])) } as BlockRendererProps)).toBe(false)
-  })
-
-  it('never throws on a not-yet-loaded (undefined) or confirmed-missing (null) block', () => {
-    expect(MediaBlockRenderer.canRender?.({ block: peeking(undefined) } as BlockRendererProps)).toBe(false)
-    expect(MediaBlockRenderer.canRender?.({ block: peeking(null) } as BlockRendererProps)).toBe(false)
-  })
-
-  it('never throws on a malformed types value (raw read, not the throwing codec)', () => {
-    // The cache boundary validates JSON syntax, not shape — a corrupt/legacy row
-    // could carry types: "media" (string) or [1] (non-string). canRender must
-    // read it total (Array.isArray), never route through the throwing codec.
-    const malformed = (types: unknown) => peeking({ properties: { types } })
-    expect(MediaBlockRenderer.canRender?.({ block: malformed('media') } as BlockRendererProps)).toBe(false)
-    expect(MediaBlockRenderer.canRender?.({ block: malformed([1, 2]) } as BlockRendererProps)).toBe(false)
-    expect(MediaBlockRenderer.canRender?.({ block: malformed(undefined) } as BlockRendererProps)).toBe(false)
+  it('claims a media-typed block, and only a media-typed block', () => {
+    expect(mediaRendererRegistration.resolve?.(ctxFor(['media']))).toEqual({ render: MediaBlockRenderer })
+    expect(mediaRendererRegistration.resolve?.(ctxFor(['note']))).toBeNull()
+    expect(mediaRendererRegistration.resolve?.(ctxFor([]))).toBeNull()
   })
 })

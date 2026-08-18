@@ -7,11 +7,11 @@ import { createContext } from 'react'
  * (TopLevelRenderer by default, or an extension override) consumes it via
  * `usePanelLayoutProjection`.
  *
- * An extension can become the layout-root renderer two ways — a
- * higher-priority renderer registered for `layoutBoundary && !panelId`, OR a
+ * An extension can become the layout-root renderer two ways — a renderer
+ * claiming `layoutBoundary && !panelId` at a higher precedence, OR a
  * `renderer` property (rendererProp) set on the layout-session block itself
- * (useRenderer checks that first, ahead of canRender/priority — see
- * @/hooks/useRendererRegistry). Both fully bypass TopLevelRenderer, so
+ * (useRenderer resolves that by id first, ahead of what claims the block —
+ * see @/hooks/useRendererRegistry). Both fully bypass TopLevelRenderer, so
  * whichever one is in play must call `usePanelLayoutProjection` itself or
  * this context goes unconsumed and the URL⇄layout sync silently dies.
  *

@@ -1,6 +1,6 @@
 import type {
   BlockLayout,
-  BlockLayoutContribution,
+  BlockLayoutRegistration,
   BlockLayoutSlots,
 } from '@/extensions/blockInteraction.js'
 import { ReferenceLink } from './ReferenceLink.tsx'
@@ -41,7 +41,8 @@ const ReferenceLayout: BlockLayout = ({block, RawContent}: BlockLayoutSlots) => 
  * (see `BlockEmbed`), so it renders as an embed rather than inheriting this
  * layout. A nested `((id))` reference sets `isReference` itself, which is correct.
  */
-export const referenceLayoutContribution: BlockLayoutContribution = ctx => {
-  if (!ctx.blockContext?.isReference) return null
-  return {id: 'references.reference', label: 'Block reference', render: ReferenceLayout}
+export const referenceLayoutRegistration: BlockLayoutRegistration = {
+  id: 'references.reference',
+  label: 'Block reference',
+  resolve: ctx => ctx.blockContext?.isReference ? {render: ReferenceLayout} : null,
 }

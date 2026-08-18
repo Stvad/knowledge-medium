@@ -14,9 +14,9 @@ import {useEffect, useState} from 'react'
 
 import {DefaultBlockRenderer} from '@/components/renderer/DefaultBlockRenderer.js'
 import {useRepo} from '@/context/repo.js'
-import {getBlockTypes} from '@/data/properties.js'
 import {useWorkspaceId} from '@/hooks/block.js'
 import type {BlockRenderer, BlockRendererProps} from '@/types.js'
+import type {BlockRendererRegistration} from '@/extensions/blockInteraction.js'
 
 import type {ProgramConfig} from '../engine/types'
 import {DEFAULT_CONFIG} from '../program/defaults'
@@ -97,20 +97,18 @@ const StrengthLogContent: BlockRenderer = ({block}: BlockRendererProps) => {
 }
 StrengthLogContent.displayName = 'StrengthLogContent'
 
-export const StrengthLogRenderer: BlockRenderer = Object.assign(
-  (props: BlockRendererProps) => (
-    <DefaultBlockRenderer
-      {...props}
-      ContentRenderer={StrengthLogContent}
-      EditContentRenderer={StrengthLogContent}
-    />
-  ),
-  {
-    canRender: ({block}: BlockRendererProps): boolean => {
-      const data = block.peek()
-      return !!data && getBlockTypes(data).includes(STRENGTH_LOG_TYPE)
-    },
-    priority: () => 100,
-  },
+export const StrengthLogRenderer: BlockRenderer = (props: BlockRendererProps) => (
+  <DefaultBlockRenderer
+    {...props}
+    ContentRenderer={StrengthLogContent}
+    EditContentRenderer={StrengthLogContent}
+  />
 )
 StrengthLogRenderer.displayName = 'StrengthLogRenderer'
+
+export const strengthLogRendererRegistration: BlockRendererRegistration = {
+  id: 'strengthLog',
+  label: 'Strength log',
+  resolve: ctx =>
+    ctx.types.includes(STRENGTH_LOG_TYPE) ? {render: StrengthLogRenderer} : null,
+}

@@ -133,7 +133,7 @@ describe('getApiSurface', () => {
     const exports = surfaceExports(surface)
     expect(exports).toContain('defineFacet')
     expect(exports).toContain('actionsFacet')
-    expect(exports).toContain('blockRenderersFacet')
+    expect(exports).toContain('blockRendererFacet')
     expect(exports).toContain('getUserPrefsBlock')
     // Discoverability now names the owning module directly.
     const facetModule = surface.modules.find(module => module.importPath === '@/facets/facet.js')

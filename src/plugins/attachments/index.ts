@@ -3,7 +3,7 @@
  * renderer, mirroring the video-player plugin's facet wiring.
  *
  * Scope: the `media` block TYPE + its property schemas (typeSeedsFacet /
- * definitionSeedsFacet), the {@link MediaBlockRenderer} (blockRenderersFacet), the
+ * definitionSeedsFacet), the {@link MediaBlockRenderer} (blockRendererFacet), the
  * boot upload reconciler (appMountsFacet), and the paste rule that turns a file paste
  * into a media capture (pasteDecisionVerb decorator). Everything the feature adds is
  * gated on this one toggle — disable it and a file paste falls through to a text
@@ -11,12 +11,13 @@
  */
 
 import { definitionSeedsFacet, typeSeedsFacet } from '@/data/facets.js'
-import { actionsFacet, appMountsFacet, blockRenderersFacet } from '@/extensions/core.js'
+import { actionsFacet, appMountsFacet } from '@/extensions/core.js'
+import { blockRendererFacet } from '@/extensions/blockInteraction.js'
 import type { AppExtension } from '@/facets/facet.js'
 import { systemToggle } from '@/facets/togglable.js'
 import { diagnosticsFacet } from '@/plugins/diagnostics/facet.js'
 import { mobileKeyboardToolbarItemsFacet } from '@/plugins/mobile-keyboard-toolbar/facet.js'
-import { MediaBlockRenderer } from './MediaBlockRenderer.js'
+import { mediaRendererRegistration } from './MediaBlockRenderer.js'
 import { audioMediaViewer, imageMediaViewer, pdfMediaViewer } from './mediaViewers.js'
 import { mediaViewersFacet } from './mediaViewersFacet.js'
 import { MediaDownLaneReplicator } from './MediaDownLaneReplicator.js'
@@ -43,7 +44,7 @@ export const attachmentsPlugin: AppExtension = systemToggle({
   typeSeedsFacet.of(MEDIA_TYPE_CONTRIBUTION, { source: 'attachments' }),
   typeSeedsFacet.of(ASSETS_TYPE_CONTRIBUTION, { source: 'attachments' }),
   MEDIA_PROPERTY_SCHEMAS.map((schema) => definitionSeedsFacet.of(schema, { source: 'attachments' })),
-  blockRenderersFacet.of({ id: 'media', renderer: MediaBlockRenderer }, { source: 'attachments' }),
+  blockRendererFacet.of(mediaRendererRegistration, { source: 'attachments', precedence: 5 }),
   // The image + audio + PDF mime-family viewers. A video plugin registers its own viewer
   // on this facet and the renderer dispatches to it — no renderer change.
   mediaViewersFacet.of(imageMediaViewer, { source: 'attachments' }),

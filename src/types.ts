@@ -84,16 +84,13 @@ export interface BlockRendererProps {
 }
 
 /**
- * Should this actually be an object with a `render` method?
+ * Just a component. Which blocks it draws, how strongly it claims them
+ * and what the resulting row shows are facts about the REGISTRATION, not
+ * about the component — see `blockRendererFacet`. A static rides
+ * component identity, so every wrapper has to hand it on and it can only
+ * answer once for all blocks forever.
  */
-export interface BlockRenderer extends FunctionComponent<BlockRendererProps> {
-    canRender?: (props: BlockRendererProps) => boolean;
-    priority?: (props: BlockRendererProps) => number;
-}
-
-export interface RendererRegistry {
-    [key: string]: BlockRenderer;
-}
+export type BlockRenderer = FunctionComponent<BlockRendererProps>
 
 /** EditorSelectionState now lives at @/data/properties — re-exported
  *  here during the 1.6 migration so call sites that still import from

@@ -1,10 +1,10 @@
 import { Clock } from 'lucide-react'
 import {
   actionsFacet,
-  blockRenderersFacet,
   headerItemsFacet,
   type HeaderItemContribution,
 } from '@/extensions/core.js'
+import { blockRendererFacet } from '@/extensions/blockInteraction.js'
 import type { AppExtension } from '@/facets/facet.js'
 import { systemToggle } from '@/facets/togglable.js'
 import { ActionContextTypes, type ActionConfig } from '@/shortcuts/types.js'
@@ -12,7 +12,7 @@ import { recentsPageBlockId } from '@/data/recentsPage.js'
 import { navigateFromGlobalCommand } from '@/utils/navigation.js'
 import type { Repo } from '@/data/repo'
 import { RecentsHeaderItem } from './HeaderItem.tsx'
-import { RecentsPageBlockRenderer } from './RecentsPageBlockRenderer.tsx'
+import { recentsPageRendererRegistration } from './RecentsPageBlockRenderer.tsx'
 
 export const OPEN_RECENTS_ACTION_ID = 'open_recents'
 
@@ -42,9 +42,9 @@ export const recentsPlugin = ({repo}: {repo: Repo}): AppExtension =>
     name: 'Recents',
     description: 'Tana-style view of recently-edited blocks in the workspace.',
   }).of([
-    blockRenderersFacet.of(
-      {id: 'recentsPage', renderer: RecentsPageBlockRenderer},
-      {source: 'recents'},
+    blockRendererFacet.of(
+      recentsPageRendererRegistration,
+      {source: 'recents', precedence: 100},
     ),
     // Precedence 35 places this after the dialog-launcher buttons
     // (quick-find at 10, command-palette at 20), keeping action /

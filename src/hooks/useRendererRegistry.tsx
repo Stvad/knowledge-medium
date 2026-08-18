@@ -1,43 +1,54 @@
-import { BlockRendererProps } from '../types'
-import { rendererProp } from '@/data/properties.js'
-import { usePropertyValue, useData } from '@/hooks/block.js'
-import { blockRenderersFacet } from '@/extensions/core.js'
+import { BlockRendererProps, BlockRenderer } from '../types'
+import { getBlockTypes, rendererProp } from '@/data/properties.js'
+import { useData, usePropertyValue } from '@/hooks/block.js'
+import type { BlockData } from '@/data/api'
+import { blockRendererFacet } from '@/extensions/blockInteraction.js'
 import { refreshAppRuntime } from '@/facets/runtimeEvents.js'
 import { useAppRuntime } from '@/extensions/runtimeContext.js'
-
-export { defaultRegistry } from '@/extensions/defaultRenderers.js'
+import { useRepo } from '@/context/repo.js'
+import { DefaultBlockRenderer } from '@/components/renderer/DefaultBlockRenderer.js'
 
 export const refreshRendererRegistry = async () => {
   refreshAppRuntime()
 }
 
-export const useRenderer = ({block, context}: BlockRendererProps) => {
-  'use no memo'
-  useData(block)
-  /**
-   * The above is a cludge to make this re-render on useData changes, compiler would over-memoize this otherwise
-   * Ideally we make the dependency clear and structural tho
-   */
+const NO_TYPES: readonly string[] = []
 
-  const [rendererKey] = usePropertyValue(block, rendererProp)
-  const runtime = useAppRuntime()
-  const registry = runtime.read(blockRenderersFacet)
-
-  if (rendererKey && registry[rendererKey]) {
-    return registry[rendererKey]
+/**
+ * Total, by contract. Resolution runs for every block during its loading
+ * window, ABOVE `BlockComponent`'s ErrorBoundary, so a malformed `types`
+ * value must not throw here — `getBlockTypes` raises a CodecError on a
+ * non-array or a non-string element, which the cache boundary does not
+ * validate. Every per-type gate used to hand-roll its own total read for
+ * this reason; they read `ctx.types` now, so the totality lives here.
+ */
+const typesOf = (data: BlockData | undefined): readonly string[] => {
+  if (!data) return NO_TYPES
+  try {
+    return getBlockTypes(data)
+  } catch {
+    return NO_TYPES
   }
+}
 
-  /**
-   * todo, caching of renderer for each block?
-   * maybe do per/type?
-   * also allowing people to switch between renderers would be good
-   */
+/**
+ * Pick the renderer for a block: the one the block's `renderer` property
+ * names, else the strongest registration that claims it (see
+ * `blockRendererFacet`), else the plain default.
+ *
+ * `useData` is a whole-block subscription, and the snapshot is threaded
+ * into the resolution rather than peeked out of `block` inside it. Most
+ * gates key off `types`, but not all — the video player recognizes a URL
+ * in the CONTENT — so the resolution has to re-run on any change to the
+ * block, and passing the snapshot in is what makes that dependency
+ * structural instead of something the memoizer has to be told to ignore.
+ */
+export const useRenderer = ({block, context}: BlockRendererProps): BlockRenderer => {
+  const data = useData(block)
+  const [rendererKey] = usePropertyValue(block, rendererProp)
+  const repo = useRepo()
+  const resolve = useAppRuntime().read(blockRendererFacet)
 
-  const possibleRenderers = Object.values(registry)
-    .filter(renderer => renderer.canRender?.({block, context}))
-
-  const firstPriority = possibleRenderers.sort((a, b) =>
-    (b.priority?.({block, context}) || 0) - (a.priority?.({block, context}) || 0))[0]
-
-  return firstPriority ?? registry.default
+  const selection = resolve({block, repo, types: typesOf(data), blockContext: context})
+  return (selection.byId(rendererKey) ?? selection.last)?.render ?? DefaultBlockRenderer
 }
