@@ -759,6 +759,10 @@ describe('content-view marking', () => {
    *  what the app runs — its editing dispatcher stands between the slot and
    *  both text renderers. */
   let outlinerRuntime: FacetRuntime
+  /** A facet override that REPLACES whatever the block composed, and says
+   *  nothing about itself — an extension's renderer, contributed after the
+   *  static plugins. */
+  let overrideRuntime: FacetRuntime
 
   beforeEach(async () => {
     await resetTestDb(sharedDb.db)
@@ -782,6 +786,18 @@ describe('content-view marking', () => {
       user: {id: 'user-1'},
       newId: () => crypto.randomUUID(),
       extensions: [defaultEditorInteractionExtension, plainOutlinerPlugin],
+    }).repo.facetRuntime!
+    overrideRuntime = createTestRepo({
+      db: sharedDb.db,
+      user: {id: 'user-1'},
+      newId: () => crypto.randomUUID(),
+      extensions: [
+        defaultEditorInteractionExtension,
+        blockContentRendererFacet.of(
+          () => defineVariant('test.override', 'Override', FacetSurfaceRenderer),
+          {source: 'test'},
+        ),
+      ],
     }).repo.facetRuntime!
     repo.setActiveWorkspaceId('ws-1')
     repoRef.current = repo
@@ -897,6 +913,31 @@ describe('content-view marking', () => {
     renderWithPlainOutliner('root')
 
     await screen.findByText('Page title')
+    expect(marked()).toBe(false)
+  })
+
+  // An override renders its OWN content, so the displaced view's answer stops
+  // describing what is on screen. Silence from a variant has to mean "not a
+  // view" rather than "ask whoever I displaced" — only a variant that renders
+  // what the block composed may defer, and it says so.
+  it('does not inherit the composed view\'s answer when a variant replaces it', async () => {
+    render(
+      <AppRuntimeContextProvider value={overrideRuntime}>
+        <BlockContextProvider initialValue={{scopeRootId: 'root'}}>
+          <ActiveContextsProvider>
+            <DefaultBlockRenderer
+              block={repo.block('root')}
+              ContentRenderer={ViewSurfaceRenderer}
+              contentShowsOtherBlocks
+            />
+          </ActiveContextsProvider>
+        </BlockContextProvider>
+      </AppRuntimeContextProvider>,
+    )
+
+    // The override won — the composed view is not what rendered.
+    await waitFor(() => expect(document.querySelector('.facet-surface')).not.toBeNull())
+    expect(document.querySelector('.view-surface')).toBeNull()
     expect(marked()).toBe(false)
   })
 

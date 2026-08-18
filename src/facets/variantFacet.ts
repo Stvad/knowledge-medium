@@ -25,8 +25,15 @@ export interface Variant<Render> {
    * front of the content renderer for every block in the app — silently did
    * not. Meaningless for slots whose variants aren't content renderers; those
    * simply omit it.
+   *
+   * `'as-composed'` is for a variant that renders whatever the block's own
+   * renderer composed rather than replacing it — the editing dispatcher, which
+   * picks between the read and edit slots. Only such a variant may defer; a
+   * variant that REPLACES the composed renderer draws its own content, and
+   * inheriting the displaced renderer's answer would describe the wrong thing.
+   * Omitting it therefore means "not a view", never "ask whoever I displaced".
    */
-  showsOtherBlocks?: boolean
+  showsOtherBlocks?: boolean | 'as-composed'
 }
 
 /**

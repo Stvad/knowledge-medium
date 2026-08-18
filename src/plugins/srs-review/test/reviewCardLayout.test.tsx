@@ -10,11 +10,10 @@ import {
   SRS_REVIEW_REVEALED,
 } from '../reviewCardLayout.tsx'
 
-// The card styles its own wrapper rather than using the default layout, so it
-// is solely responsible for spreading `shellProps` onto it. It used to render
-// `Shell` and ignore them, which left the card with no identity in the DOM:
-// the review deck around it then answered for the card's pointer gestures, and
-// spatial navigation could not see it as a row.
+// The card styles its own wrapper instead of using the default layout, so it
+// alone is responsible for spreading `shellProps` onto it. Without them the
+// card has no identity in the DOM at all, and the surface around it answers
+// for its gestures, focus and navigation.
 const SHELL_PROPS = {
   'data-block-shell': 'true',
   'data-block-id': 'card',

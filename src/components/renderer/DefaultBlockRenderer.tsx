@@ -694,12 +694,20 @@ export function DefaultBlockRenderer(
       const baseContentRenderer = contentVariant?.render ?? DefaultContentRenderer
       // Is this slot filled with other blocks' rows (a review backlog, a deck,
       // a recents list) rather than the block itself? Read from whoever CHOSE
-      // the renderer — the contributing variant, else the caller that composed
-      // one — never from the resolved component, which is a wrapper as often as
-      // not (the editing dispatcher stands in front of every block's content
-      // renderer, and would answer for none of them).
-      const showsOtherBlocks =
-        contentVariant?.showsOtherBlocks ?? contentShowsOtherBlocks ?? false
+      // the renderer, never from the resolved component — that is a wrapper as
+      // often as not, and the editing dispatcher wraps every block's content
+      // renderer in the app.
+      //
+      // A contributed variant answers for itself, EXCEPT the deferring kind
+      // that renders what the block composed. Silence from a variant means
+      // "not a view", not "ask whoever I displaced": an override draws its own
+      // content, so inheriting the displaced view's answer would mark a row
+      // that no longer shows other blocks.
+      const showsOtherBlocks = contentVariant
+        ? (contentVariant.showsOtherBlocks === 'as-composed'
+            ? contentShowsOtherBlocks === true
+            : contentVariant.showsOtherBlocks === true)
+        : contentShowsOtherBlocks === true
       const decorateContent = runtime.read(blockContentDecoratorsFacet)
       const ContentRenderer = useMemo(
         () => decorateContent(resolveContext, baseContentRenderer),
