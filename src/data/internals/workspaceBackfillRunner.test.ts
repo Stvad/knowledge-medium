@@ -264,6 +264,31 @@ describe('workspace backfill runner — sync gating', () => {
     expect(markers).toEqual([])
   })
 
+  it('retries once a transient abort clears, rather than giving up for the session', async () => {
+    // The aborts are momentary by construction — the download finishes, the
+    // queue drains. Logging and walking away would leave the pass undone for
+    // the whole session even though its blocker was seconds long.
+    const g = controllableGate()
+    const runs: string[] = []
+    const repo = makeRepo(probeBackfill(runs), g.gate)
+    await seedTarget(repo)
+    await sharedDb.db.execute(
+      "INSERT INTO blocks_synced_changes (id, op) VALUES ('draining', 'upsert')",
+    )
+
+    g.open()
+    await drain(repo)
+    expect(runs).toEqual([])                       // aborted: rows still staging
+
+    // The queue drains; the re-armed pass goes through without another open.
+    await sharedDb.db.execute('DELETE FROM blocks_synced_changes')
+    await vi.runAllTimersAsync()
+    await repo.awaitWorkspaceBackfills()
+
+    expect(runs).toEqual([WS])
+    expect((await repo.load('target'))?.properties['probe:mark']).toBe('backfilled')
+  })
+
   it('refuses every backfill when no completion claim is configured', async () => {
     // Production has no synced claim store yet. Falling back to the local
     // marker would have each device attempt an upload-carrying repair

@@ -2700,6 +2700,11 @@ export class Repo {
     await this.seedMaterializationJobs.drain()
   }
 
+  /** Thrown when a precondition that can CLEAR ON ITS OWN blocks the pass —
+   *  the device fell behind, rows are staging, the workspace changed. Typed so
+   *  the runner can re-arm instead of writing the pass off for the session. */
+  private static readonly TRANSIENT = 'backfill-precondition'
+
   /** Preconditions every backfill transaction must still satisfy. Separate
    *  from the scheduling gate because scheduling proves a fact at one instant
    *  and a chunked pass writes over many. */
@@ -2709,17 +2714,17 @@ export class Repo {
     generation: number,
   ): Promise<void> {
     if (this.workspaceGeneration !== generation) {
-      throw new Error(
+      throw Object.assign(new Error(
         `[workspaceBackfills] "${backfillId}" aborted: workspace ${workspaceId} was ` +
         `re-opened since this pass was scheduled. The earlier visit's job must not ` +
         `write into the new one.`,
-      )
+      ), {kind: Repo.TRANSIENT})
     }
     if (this._client.activeWorkspaceId !== workspaceId) {
-      throw new Error(
+      throw Object.assign(new Error(
         `[workspaceBackfills] "${backfillId}" aborted: workspace ${workspaceId} is no ` +
         `longer active. Its writes would land under the current session's access state.`,
-      )
+      ), {kind: Repo.TRANSIENT})
     }
     // "Downloaded" is not "materialized": the sync observer stages arrivals in
     // `blocks_synced_changes` and drains them into `blocks` in throttled
@@ -2730,18 +2735,18 @@ export class Repo {
       'SELECT 1 AS one FROM blocks_synced_changes LIMIT 1',
     )
     if (staged !== null) {
-      throw new Error(
+      throw Object.assign(new Error(
         `[workspaceBackfills] "${backfillId}" aborted: synced rows are still draining ` +
         `into blocks. Reading now would scan a partially materialized graph.`,
-      )
+      ), {kind: Repo.TRANSIENT})
     }
     let settled = false
     this.backfillSyncGate(() => { settled = true })()
     if (!settled) {
-      throw new Error(
+      throw Object.assign(new Error(
         `[workspaceBackfills] "${backfillId}" aborted: this device fell behind the ` +
         `server mid-run. Writing now would upload a stale properties bag.`,
-      )
+      ), {kind: Repo.TRANSIENT})
     }
   }
 
@@ -2817,6 +2822,15 @@ export class Repo {
         await claim.markDone(workspaceId, backfill.id)
       } catch (err) {
         const reason = err instanceof Error ? err.message : String(err)
+        if ((err as {kind?: string} | null)?.kind === Repo.TRANSIENT) {
+          // These clear on their own — the download finishes, the queue drains.
+          // Logging and walking away would leave the pass undone for the whole
+          // session even though its blocker is momentary, so re-arm and let the
+          // gate + deep-idle deferral bound the retry.
+          console.warn(`[workspaceBackfills] ${reason} — will retry when it clears`)
+          this.scheduleWorkspaceBackfills(workspaceId)
+          return
+        }
         console.error(
           `[workspaceBackfills] "${backfill.id}" failed for workspace ${workspaceId}: ${reason}`,
         )
