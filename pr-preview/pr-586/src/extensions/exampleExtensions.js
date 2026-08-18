@@ -298,15 +298,17 @@ const DemoLayoutRenderer = (props) => (
   </div>
 )
 
-// Registering the same id replaces the host's variant in place, keeping
-// the slot (and therefore the precedence) it was registered at. Reusing
-// its resolve keeps the gate identical too — only the component differs.
+// Same id as the host's layout renderer, at the precedence the host holds:
+// among registrations sharing an id only the strongest survives, and an
+// equal precedence goes to whoever registered later (extensions register
+// after core). Reusing the host's resolve keeps the gate identical too —
+// only the component differs.
 export default blockRendererFacet.of({
   id: 'layout',
   label: 'Panel layout (demo)',
   resolve: (ctx) =>
     layoutRendererRegistration.resolve?.(ctx) ? { render: DemoLayoutRenderer } : null,
-})
+}, { precedence: 20 })
 `},{id:`default-renderer-placeholder`,name:`Default renderer placeholder`,description:`Overrides the fallback 'default' renderer id so ordinary empty blocks show a muted read-mode placeholder.`,source:`import { DefaultBlockRenderer } from '@/components/renderer/DefaultBlockRenderer.js'
 import { MarkdownContentRenderer } from '@/components/renderer/MarkdownContentRenderer.js'
 import { blockRendererFacet } from '@/extensions/blockInteraction.js'
@@ -335,6 +337,11 @@ const PlaceholderDefaultRenderer = (props) => (
   <DefaultBlockRenderer {...props} ContentRenderer={PlaceholderContent} />
 )
 
+// No precedence: the host's 'default' sits at the implicit 0 and an equal
+// precedence goes to whoever registered later, so this replaces it. Raising
+// it would ALSO lift the default renderer above the ladder above it — the
+// not-yet-loaded placeholder at 1, the extension editor at 5 — which is a
+// different change than replacing the fallback.
 export default blockRendererFacet.of({
   id: 'default',
   label: 'Block',
