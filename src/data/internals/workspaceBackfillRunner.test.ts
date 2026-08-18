@@ -294,6 +294,10 @@ describe('workspace backfill runner — sync gating', () => {
     // device's transient bad moment blocks the migration for the whole graph.
     const g = controllableGate()
     const released: string[] = []
+    /** Releases with no claim behind them. Recorded rather than ignored: on a
+     *  synced once-per-graph claim, an unmatched release frees a claim another
+     *  runner holds. */
+    const unheldReleases: string[] = []
     const claimed = new Set<string>()
     const {repo} = createTestRepo({
       db: sharedDb.db,
@@ -302,7 +306,11 @@ describe('workspace backfill runner — sync gating', () => {
       backfillCompletionClaim: {
         tryClaim: async (_ws, id) => { if (claimed.has(id)) return false; claimed.add(id); return true },
         markComplete: async () => {},
-        releaseClaim: async (_ws, id) => { released.push(id); claimed.delete(id) },
+        releaseClaim: async (_ws, id) => {
+          if (!claimed.has(id)) { unheldReleases.push(id); return }
+          released.push(id)
+          claimed.delete(id)
+        },
       },
     })
     repo.setActiveWorkspaceId(WS)
@@ -315,13 +323,11 @@ describe('workspace backfill runner — sync gating', () => {
     g.open()
     await drain(repo)
 
-    // The invariant is that the claim is HANDED BACK, not how many times.
-    // `PendingIdleJobs.schedule` does not coalesce, so a second arming of the
-    // gate runs the pass again — each run claims, aborts and releases — and
-    // asserting an exact call count made this test order-dependent: green in a
-    // full-file run, red when filtered, and intermittently red on CI. A
-    // repeated release is harmless here: the stub re-claims first, so the
-    // sequence stays claim/release balanced, which is what `claimed.size` pins.
+    // The invariant is that every claim is handed BACK — balance, not a call
+    // count. `PendingIdleJobs.schedule` does not coalesce, so the pass can be
+    // armed more than once and each arming legitimately claims, aborts and
+    // releases; an exact count asserts scheduling, not the contract.
+    expect(unheldReleases).toEqual([])
     expect(released).toContain('probe-backfill-v1')
     expect(claimed.size).toBe(0)
   })
