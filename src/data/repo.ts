@@ -2744,21 +2744,28 @@ export class Repo {
         // workspace open, so on the stack it means a cmd-Z aimed at the user's
         // own edit reverts the whole batch, permanently (the completion marker
         // is already recorded).
-        tx: <R>(fn: (tx: Tx) => Promise<R>, opts: {description?: string}) => {
-          // Checked HERE, per transaction, not once before the run. A pass can
-          // be chunked across minutes (the properties-as-blocks cell->children
-          // migration is ~650k creates), so "was this device caught up, and was
-          // this still the open workspace" has to be re-answered for every
-          // batch — a single pre-run check only ever covered the first one.
-          // Throwing aborts the run with no marker recorded, so the next open
-          // retries.
-          this.assertBackfillMayWrite(workspaceId, backfill.id)
-          return this.tx(fn, {
+        tx: <R>(fn: (tx: Tx) => Promise<R>, opts: {description?: string}) =>
+          // Checked per transaction and INSIDE it, after acquisition — not once
+          // before the run, and not just before `repo.tx`. Two separate reasons:
+          // a pass can be chunked across minutes (the properties-as-blocks
+          // cell->children migration is ~650k creates), so a pre-run check only
+          // ever covered the first batch; and `repo.tx` itself awaits
+          // definition readiness and the write lock, so a check before it can
+          // go stale before `fn` reads a row. Throwing here aborts the tx and
+          // the run with no marker recorded, so the next open retries.
+          //
+          // The tests pin that this check EXISTS, not that it sits inside the
+          // callback: moving it back outside keeps them green, because the
+          // window it closes is `repo.tx`'s own await. Don't read a passing
+          // suite as licence to hoist it.
+          this.tx(async t => {
+            this.assertBackfillMayWrite(workspaceId, backfill.id)
+            return fn(t)
+          }, {
             scope: ChangeScope.BlockDefault,
             description: opts.description,
             skipUndo: true,
-          })
-        },
+          }),
       }
       try {
         await backfill.run(ctx)
