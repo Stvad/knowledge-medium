@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { describe, expect, it } from 'vitest'
-import { createGraphBackfillClaim, decideClaim, type GraphBackfillClaim } from './graphBackfillClaim'
+import { claimFromProperties, createGraphBackfillClaim, decideClaim, type GraphBackfillClaim } from './graphBackfillClaim'
 
 const ME = 'device-a'
 const THEM = 'device-b'
@@ -88,4 +88,20 @@ describe('tryClaim and the sync-settled gate', () => {
     g.settle()
     await expect(pending).resolves.toBe(true)
   }, 10_000)
+})
+
+describe('a live row that is not a decodable claim', () => {
+  it('is repaired rather than treated as a peer claim', () => {
+    // The wedge this pins: such a row reads as UNCLAIMED to every reader
+    // (`claimFromProperties` -> null), so yielding to it on mere existence
+    // left the post-settle read unclaimed too and `tryClaim` returned false
+    // on every future open.
+    expect(claimFromProperties({})).toBeNull()
+    expect(claimFromProperties({'migration:claimant': 'device-a'})).toBeNull()
+    expect(claimFromProperties({'migration:claimed-at': 1000})).toBeNull()
+    // A well-formed one still decodes, so a genuine peer claim is preserved.
+    expect(claimFromProperties({
+      'migration:claimant': 'device-a', 'migration:claimed-at': 1000,
+    })).toEqual({claimantId: 'device-a', claimedAt: 1000})
+  })
 })

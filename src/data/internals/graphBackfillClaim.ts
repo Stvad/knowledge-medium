@@ -101,6 +101,23 @@ export const graphBackfillClaimBlockId = (
  *  exists, and also when the row is a tombstone — deleting the claim block
  *  IS the documented recovery for a device that died mid-pass, so a
  *  tombstone must read as "unclaimed", not as "claimed by a ghost". */
+/** Decode a claim from a property bag. `null` when the bag is not a claim —
+ *  which the callers treat as UNCLAIMED, so a hand-edited or half-written row
+ *  can never wedge every future run of every backfill. Kept separate from the
+ *  DB read so the writing transaction decides against its OWN row with the
+ *  same rule, rather than a second hand-rolled copy of it. */
+export const claimFromProperties = (
+  props: Record<string, unknown>,
+): GraphBackfillClaim | null => {
+  const claimantId = props[migrationClaimantProp.name]
+  const claimedAt = props[migrationClaimedAtProp.name]
+  if (typeof claimantId !== 'string' || typeof claimedAt !== 'number') return null
+  const completedAt = props[migrationCompletedAtProp.name]
+  return typeof completedAt === 'number'
+    ? {claimantId, claimedAt, completedAt}
+    : {claimantId, claimedAt}
+}
+
 export const readGraphBackfillClaim = async (
   db: {getOptional<T>(sql: string, params?: unknown[]): Promise<T | null>},
   claimId: string,
@@ -108,23 +125,12 @@ export const readGraphBackfillClaim = async (
   const row = await db.getOptional<{properties_json: string}>(
     'SELECT properties_json FROM blocks WHERE id = ? AND deleted = 0', [claimId],
   )
-  if (row === null || row === undefined) return null
-  let props: Record<string, unknown>
+  if (!row) return null
   try {
-    props = JSON.parse(row.properties_json || '{}') as Record<string, unknown>
+    return claimFromProperties(JSON.parse(row.properties_json || '{}') as Record<string, unknown>)
   } catch {
     return null
   }
-  const claimantId = props[migrationClaimantProp.name]
-  const claimedAt = props[migrationClaimedAtProp.name]
-  // A row that does not parse as a claim reads as unclaimed rather than
-  // throwing: this runs on the workspace-open path, and a malformed claim
-  // must not be able to wedge every future run of every backfill.
-  if (typeof claimantId !== 'string' || typeof claimedAt !== 'number') return null
-  const completedAt = props[migrationCompletedAtProp.name]
-  return typeof completedAt === 'number'
-    ? {claimantId, claimedAt, completedAt}
-    : {claimantId, claimedAt}
 }
 
 // ---------------------------------------------------------------------------
@@ -175,7 +181,18 @@ export const createGraphBackfillClaim = (
       // Re-checked inside the WRITING tx against this row: the read above
       // happened outside it, and a peer's claim can arrive in between.
       const existing = await tx.get(claimId)
-      if (existing && !existing.deleted) return
+      if (existing && !existing.deleted) {
+        // Yield only to a row that actually decodes AS a claim. A live row
+        // whose bookkeeping is missing or malformed reads as UNCLAIMED to
+        // every reader, so returning on mere existence left the post-settle
+        // read unclaimed too — `tryClaim` returned false, and every later
+        // open took the identical path. The migration could never run again.
+        // The id is machinery-owned, so overwriting a non-claim there is
+        // repair, not data loss.
+        if (claimFromProperties(existing.properties) !== null) return
+        await tx.update(claimId, {properties: claimProperties})
+        return
+      }
       if (existing?.deleted) {
         // Deleting the claim block IS the documented recovery for a claimant
         // that never came back, and it leaves a TOMBSTONE at this
@@ -235,8 +252,7 @@ export const createGraphBackfillClaim = (
       // the same source-of-truth pass while the winner is still running.
       const row = await tx.get(claimId)
       if (!row || row.deleted) return
-      if (row.properties[migrationClaimantProp.name] !== deps.claimantId) return
-      if (row.properties[migrationCompletedAtProp.name] !== undefined) return
+      if (decideClaim(claimFromProperties(row.properties), deps.claimantId) !== 'proceed') return
       await tx.delete(claimId)
     }, {scope: ChangeScope.BlockDefault, skipUndo: true,
         description: `release backfill claim ${backfillId}`})
