@@ -37,9 +37,11 @@
 import { ChangeScope, type Tx } from '@/data/api'
 import type { BackfillCompletionClaim } from '@/data/facets'
 import { keyAtStart } from '@/data/orderKey'
+import { MIGRATION_CLAIM_TYPE } from '@/data/blockTypes'
 import { stateChildBlockId } from '@/data/derivedIds'
 import { migrationsPageBlockId } from '@/data/migrationsPage'
 import {
+  addBlockTypeToProperties,
   migrationClaimantProp,
   migrationClaimedAtProp,
   migrationCompletedAtProp,
@@ -161,17 +163,37 @@ export const createGraphBackfillClaim = (
     if (first === 'already-complete' || first === 'back-off') return false
     if (first === 'proceed') return true
 
+    // Typed so the Recents exclusion skips it: that filter tests system types
+    // on each RESULT ROW, so the parent page's own marker does not cover the
+    // rows beneath it. Via `addBlockTypeToProperties` because this is raw
+    // BlockData being planned, which is the one sanctioned direct-write path.
+    const claimProperties = addBlockTypeToProperties({
+      [migrationClaimantProp.name]: deps.claimantId,
+      [migrationClaimedAtProp.name]: Date.now(),
+    }, MIGRATION_CLAIM_TYPE)
     await deps.tx(async tx => {
+      // Re-checked inside the WRITING tx against this row: the read above
+      // happened outside it, and a peer's claim can arrive in between.
+      const existing = await tx.get(claimId)
+      if (existing && !existing.deleted) return
+      if (existing?.deleted) {
+        // Deleting the claim block IS the documented recovery for a claimant
+        // that never came back, and it leaves a TOMBSTONE at this
+        // deterministic id. `tx.create` is a plain INSERT that throws
+        // DuplicateIdError on one, which the caller swallows as "skip" — so
+        // the gesture meant to REOPEN the migration would instead wedge it
+        // shut for good. Restore the row instead of inserting a new one.
+        await tx.restore(claimId, {content: backfillId})
+        await tx.update(claimId, {properties: claimProperties})
+        return
+      }
       await tx.create({
         id: claimId,
         workspaceId,
         parentId: migrationsPageBlockId(workspaceId),
         orderKey: keyAtStart(null),
         content: backfillId,
-        properties: {
-          [migrationClaimantProp.name]: deps.claimantId,
-          [migrationClaimedAtProp.name]: Date.now(),
-        },
+        properties: claimProperties,
       })
     }, {scope: ChangeScope.BlockDefault, skipUndo: true,
         description: `claim backfill ${backfillId}`})
@@ -179,7 +201,15 @@ export const createGraphBackfillClaim = (
     // Settle, THEN re-read. The write above is not a decision: before
     // convergence every racing device reads its own claim back and believes
     // it won. Only the post-settle read is authoritative.
-    await new Promise<void>(resolve => { deps.syncSettled(resolve)() })
+    //
+    // Do NOT invoke the returned disposer here. It unregisters the listener,
+    // and an earlier version called it eagerly — so whenever the gate was not
+    // ALREADY settled the callback could never fire, this promise never
+    // resolved, and `tryClaim` hung for the session while the claim it had
+    // just written made every other device back off. `onSyncSettled` disposes
+    // its own listener before invoking the callback, so there is nothing to
+    // clean up on the resolving path.
+    await new Promise<void>(resolve => { deps.syncSettled(resolve) })
     return decideClaim(await readGraphBackfillClaim(deps.db, claimId), deps.claimantId) === 'proceed'
   },
 
@@ -197,17 +227,16 @@ export const createGraphBackfillClaim = (
 
   async releaseClaim(workspaceId, backfillId) {
     const claimId = graphBackfillClaimBlockId(workspaceId, backfillId)
-    const claim = await readGraphBackfillClaim(deps.db, claimId)
-    // Release only what is still OURS and still in flight. A claim that
-    // converged to another device belongs to that run, and deleting it here
-    // would hand a second device the right to run concurrently — turning an
-    // abort on this device into the duplicate uploading pass the seam exists
-    // to prevent.
-    if (claim === null || claim.claimantId !== deps.claimantId) return
-    if (claim.completedAt !== undefined) return
     await deps.tx(async tx => {
+      // Ownership is decided from the TRANSACTION's own row, not from a read
+      // taken before it. Sync can replace this device's claim with the
+      // winner's in that gap, and deleting on the strength of the stale read
+      // would remove a PEER's live claim — freeing a second device to start
+      // the same source-of-truth pass while the winner is still running.
       const row = await tx.get(claimId)
-      if (!row) return
+      if (!row || row.deleted) return
+      if (row.properties[migrationClaimantProp.name] !== deps.claimantId) return
+      if (row.properties[migrationCompletedAtProp.name] !== undefined) return
       await tx.delete(claimId)
     }, {scope: ChangeScope.BlockDefault, skipUndo: true,
         description: `release backfill claim ${backfillId}`})

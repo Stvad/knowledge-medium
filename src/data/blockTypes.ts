@@ -43,6 +43,12 @@ export const RECENTS_PAGE_TYPE = 'panel:recents'
  *  let a second user's devices run the same upload-carrying pass again,
  *  which is the hazard `per-graph` exists to prevent. */
 export const MIGRATIONS_PAGE_TYPE = 'panel:migrations'
+/** Marker for a single migration's completion claim — app bookkeeping, not
+ *  content. Needed SEPARATELY from the page's marker because the Recents
+ *  exclusion tests system types on each RESULT ROW (`bt.block_id =
+ *  blocks.id`); it only walks down from the user-state roots, so tagging the
+ *  parent page does nothing for the rows beneath it. */
+export const MIGRATION_CLAIM_TYPE = 'system:migration-claim'
 /** Per-user "user page" type. Tagged alongside `PAGE_TYPE` (so the page
  *  stays navigable) and carries the user's opaque id as a property,
  *  letting `block_types`-indexed lookups enumerate users and attribution
@@ -74,6 +80,7 @@ export const SYSTEM_BLOCK_TYPES: readonly string[] = [
   TYPES_PAGE_TYPE,
   RECENTS_PAGE_TYPE,
   MIGRATIONS_PAGE_TYPE,
+  MIGRATION_CLAIM_TYPE,
 ]
 
 /** Kernel-owned block types, declared as code seeds (`seedType`) so the
@@ -183,6 +190,13 @@ export const KERNEL_TYPE_CONTRIBUTIONS: readonly TypeSeedDeclaration[] = [
     label: 'Migrations page',
     ...INFRASTRUCTURE_TYPE_DISPLAY,
     properties: [aliasesProp],
+  }),
+  seedType({
+    seedKey: 'system:kernel-data/type/system:migration-claim',
+    revision: 1,
+    id: MIGRATION_CLAIM_TYPE,
+    label: 'Migration claim',
+    ...INFRASTRUCTURE_TYPE_DISPLAY,
   }),
   seedType({
     seedKey: 'system:kernel-data/type/user',
