@@ -53,8 +53,26 @@ const seedTarget = async (repo: Repo): Promise<void> => {
 
 const drain = async (repo: Repo): Promise<void> => {
   repo.scheduleWorkspaceBackfills(WS)
+  // ONE pass. Most tests here park the gate and assert on exactly what that
+  // pass did, so draining further would run work they are asserting has not
+  // happened. A test that needs the runner to reach a settled state drives
+  // its own condition — see `settleUntil`.
   await vi.runAllTimersAsync()
   await repo.awaitWorkspaceBackfills()
+}
+
+/** Keep driving the runner until `done()` holds.
+ *
+ *  `awaitWorkspaceBackfills` can return while work is still in flight: it
+ *  does not see a continuation that schedules ITS timer several awaits later,
+ *  so the barrier resolves and an assertion reads half-finished state. Wait on
+ *  the outcome instead of on the barrier. Bounded to fail rather than hang;
+ *  the bound is a livelock guard, not the definition of settled. */
+const settleUntil = async (repo: Repo, done: () => boolean): Promise<void> => {
+  for (let i = 0; i < 20 && !done(); i++) {
+    await vi.runAllTimersAsync()
+    await repo.awaitWorkspaceBackfills()
+  }
 }
 
 beforeAll(async () => { sharedDb = await createTestDb() })
@@ -294,6 +312,10 @@ describe('workspace backfill runner — sync gating', () => {
     // device's transient bad moment blocks the migration for the whole graph.
     const g = controllableGate()
     const released: string[] = []
+    /** Releases with no claim behind them. Recorded rather than ignored: on a
+     *  synced once-per-graph claim, an unmatched release frees a claim another
+     *  runner holds. */
+    const unheldReleases: string[] = []
     const claimed = new Set<string>()
     const {repo} = createTestRepo({
       db: sharedDb.db,
@@ -302,7 +324,11 @@ describe('workspace backfill runner — sync gating', () => {
       backfillCompletionClaim: {
         tryClaim: async (_ws, id) => { if (claimed.has(id)) return false; claimed.add(id); return true },
         markComplete: async () => {},
-        releaseClaim: async (_ws, id) => { released.push(id); claimed.delete(id) },
+        releaseClaim: async (_ws, id) => {
+          if (!claimed.has(id)) { unheldReleases.push(id); return }
+          released.push(id)
+          claimed.delete(id)
+        },
       },
     })
     repo.setActiveWorkspaceId(WS)
@@ -314,8 +340,16 @@ describe('workspace backfill runner — sync gating', () => {
 
     g.open()
     await drain(repo)
+    await settleUntil(repo, () => released.length > 0 && claimed.size === 0)
 
-    expect(released).toEqual(['probe-backfill-v1'])
+    // The invariant is that every claim is handed BACK — balance, not a call
+    // count. `PendingIdleJobs.schedule` does not coalesce, so the pass can be
+    // armed more than once and each arming legitimately claims, aborts and
+    // releases; an exact count asserts scheduling, not the contract. A release
+    // with NO claim behind it is the real defect — on a synced once-per-graph
+    // claim it frees one another runner holds.
+    expect(unheldReleases).toEqual([])
+    expect(released).toContain('probe-backfill-v1')
     expect(claimed.size).toBe(0)
   })
 
