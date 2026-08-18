@@ -9,6 +9,7 @@
  */
 
 import { defineFacet, keyedMapFacet } from '@/facets/facet'
+import type { ResolvedPropertySchema } from '@/data/api/propertySchema'
 import type {
   AnyMutator,
   AnyPostCommitProcessor,
@@ -146,6 +147,18 @@ export interface WorkspaceBackfillContext {
     fn: (tx: Tx) => Promise<R>,
     opts: {description?: string},
   ) => Promise<R>
+  /** Resolve a property NAME to its winning schema for this workspace.
+   *
+   *  On the context rather than on `Tx` because the pass this seam exists for
+   *  reads cell KEYS, which are names, while `Tx` resolves by fieldId. Bound
+   *  to this run's workspace for the same reason every other member is: a
+   *  backfill must not be able to reach another workspace's registry.
+   *
+   *  `undefined` for a name no definition claims. That is not an error and
+   *  must not abort the pass — an unregistered key is data property migration
+   *  deliberately leaves in the cell (`pnpm agent audit-properties` reports
+   *  the set). */
+  resolveNameSchema: (name: string) => ResolvedPropertySchema<unknown> | undefined
 }
 
 const isWorkspaceBackfill = (value: unknown): value is WorkspaceBackfill =>

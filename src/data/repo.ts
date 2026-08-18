@@ -57,6 +57,7 @@ import {
 } from './internals/refProjection'
 import { runTx, type PowerSyncDb } from './internals/commitPipeline'
 import { onSyncSettled } from './internals/firstSync'
+import type { ResolvedPropertySchema } from './api/propertySchema'
 import { devAssertionsEnabled } from './internals/devAssertions'
 import type { BlockCache } from '@/data/blockCache'
 import {
@@ -2779,6 +2780,14 @@ export class Repo {
       if (!(await claim.tryClaim(workspaceId, backfill.id))) continue
       const ctx: WorkspaceBackfillContext = {
         workspaceId,
+        resolveNameSchema: (name) => {
+          const resolution = propertySchemaResolverForWorkspace(
+            this._propertyDefinitionRegistry, workspaceId,
+          ).resolve(name)
+          return resolution.status === 'resolved'
+            ? resolution.schema as ResolvedPropertySchema<unknown>
+            : undefined
+        },
         getAll: <T>(sql: string, params?: readonly unknown[]) =>
           this.db.getAll<T>(sql, params as unknown[] | undefined),
         // Scope and undo-recording are NOT the backfill's to choose. The scope
