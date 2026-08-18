@@ -20,7 +20,6 @@ let sharedDb: TestDb
  *  observable through undo. */
 const probeBackfill = (runs: string[]): WorkspaceBackfill => ({
   id: 'probe-backfill-v1',
-  completion: 'per-device',
   run: async ({workspaceId, tx}) => {
     runs.push(workspaceId)
     const targetId = workspaceId === WS ? 'target' : `target-${workspaceId}`
@@ -35,13 +34,11 @@ const probeBackfill = (runs: string[]): WorkspaceBackfill => ({
 const makeRepo = (
   backfill: WorkspaceBackfill,
   gate?: (cb: () => void) => () => void,
-  claimantId?: string,
 ): Repo => {
   const {repo} = createTestRepo({
     db: sharedDb.db,
     user: {id: 'user-1'},
     ...(gate ? {backfillSyncGate: gate} : {}),
-    ...(claimantId ? {graphBackfillClaimantId: claimantId} : {}),
   })
   repo.setActiveWorkspaceId(WS)
   repo.setRuntimeContributions(workspaceBackfillsFacet, 'test-backfills', [backfill])
@@ -120,7 +117,6 @@ describe('workspace backfill runner — sync gating', () => {
     const batches: number[] = []
     const chunked: WorkspaceBackfill = {
       id: 'chunked-probe-v1',
-      completion: 'per-device',
       run: async ({tx}) => {
         for (let i = 0; i < 3; i++) {
           if (i === 1) g.close()          // a fresh download starts mid-run
@@ -147,7 +143,6 @@ describe('workspace backfill runner — sync gating', () => {
     const batches: number[] = []
     const chunked: WorkspaceBackfill = {
       id: 'chunked-probe-v1',
-      completion: 'per-device',
       run: async ({tx}) => {
         for (let i = 0; i < 3; i++) {
           if (i === 1) repo.setActiveWorkspaceId(OTHER_WS)
@@ -183,13 +178,50 @@ describe('workspace backfill runner — sync gating', () => {
     expect(runs).toEqual([])
   })
 
-  it('aborts while synced rows are still draining into blocks', async () => {
-    // "Downloaded" is not "materialized": the observer stages arrivals in
-    // `blocks_synced_changes` and drains them in throttled windows, so the
-    // status can read settled while rows this pass reads are still queued.
+  it('aborts mid-run when rows start staging between batches', async () => {
+    // The pre-run check catches a graph that is already draining; this pins the
+    // PER-TRANSACTION one, which is the only thing covering staging that starts
+    // after a chunked pass has begun.
     const g = controllableGate()
-    const runs: string[] = []
-    const repo = makeRepo(probeBackfill(runs), g.gate)
+    const batches: number[] = []
+    const chunked: WorkspaceBackfill = {
+      id: 'chunked-staging-v1',
+      run: async ({tx}) => {
+        for (let i = 0; i < 3; i++) {
+          if (i === 1) {
+            await sharedDb.db.execute(
+              "INSERT INTO blocks_synced_changes (id, op) VALUES ('late-row', 'upsert')",
+            )
+          }
+          await tx(async () => { batches.push(i) }, {description: `batch ${i}`})
+        }
+      },
+    }
+    const repo = makeRepo(chunked, g.gate)
+    await seedTarget(repo)
+
+    g.open()
+    await drain(repo)
+
+    expect(batches).toEqual([0])
+    const markers = await sharedDb.db.getAll<{key: string}>(
+      "SELECT key FROM client_schema_state WHERE key LIKE 'workspace_backfill:%'",
+    )
+    expect(markers).toEqual([])
+  })
+
+  it('records no marker for a run that found nothing while rows were still staged', async () => {
+    // The per-transaction check only fires when a pass WRITES. A pass that
+    // finds no candidates is exactly what a partially materialized graph looks
+    // like — the rows are staged, not yet in `blocks` — so without a check
+    // around the run itself it would record its one-shot marker as done.
+    const g = controllableGate()
+    const ran: string[] = []
+    const findsNothing: WorkspaceBackfill = {
+      id: 'finds-nothing-v1',
+      run: async ({workspaceId}) => { ran.push(workspaceId) },   // never calls tx
+    }
+    const repo = makeRepo(findsNothing, g.gate)
     await seedTarget(repo)
     await sharedDb.db.execute(
       "INSERT INTO blocks_synced_changes (id, op) VALUES ('pending-row', 'upsert')",
@@ -198,60 +230,116 @@ describe('workspace backfill runner — sync gating', () => {
     g.open()
     await drain(repo)
 
-    expect(runs).toEqual([WS])            // run() started...
-    expect((await repo.load('target'))?.properties['probe:mark']).toBeUndefined()
-    const markers = await sharedDb.db.getAll<{key: string}>(
-      "SELECT key FROM client_schema_state WHERE key LIKE 'workspace_backfill:%'",
-    )
-    expect(markers).toEqual([])           // ...but wrote nothing and recorded nothing
-  })
-
-  it('never records a per-graph pass under the per-device local marker', async () => {
-    // The invariant the old refusal protected, kept now that the claim store
-    // exists: falling back to the local marker would have every device run an
-    // upload-carrying repair, which is what the field exists to prevent. The
-    // claim is the ONLY record of a per-graph pass, so the local-marker table
-    // must stay empty even on the device that ran it.
-    const runs: string[] = []
-    const perGraph: WorkspaceBackfill = {
-      id: 'per-graph-probe-v1',
-      completion: 'per-graph',
-      run: async ({workspaceId}) => { runs.push(workspaceId) },
-    }
-    const repo = makeRepo(perGraph, undefined, 'device-a')
-    await seedTarget(repo)
-
-    await drain(repo)
-
-    expect(runs).toEqual([WS])
+    expect(ran).toEqual([])
     const markers = await sharedDb.db.getAll<{key: string}>(
       "SELECT key FROM client_schema_state WHERE key LIKE 'workspace_backfill:%'",
     )
     expect(markers).toEqual([])
   })
 
-  it('re-arms the restored workspace when pinning the incoming one throws', async () => {
-    // The leaving path disposes the outgoing gate before the pin is attempted.
-    // If the pin throws, `setActiveWorkspaceId` restores the previous workspace
-    // — but nothing re-armed its gate, so it would silently never backfill for
-    // the rest of the session.
+  it('records no marker when rows stage after the pass’s last write', async () => {
+    // The narrow window the other two checks miss: pre-run passed, every
+    // transaction passed, and staging begins before completion is claimed.
+    // Recording the marker there would call a run over a graph that had gone
+    // stale mid-pass "done", permanently.
     const g = controllableGate()
-    const repo = makeRepo(probeBackfill([]), g.gate)
+    const late: WorkspaceBackfill = {
+      id: 'stages-after-write-v1',
+      run: async ({tx}) => {
+        await tx(async () => {}, {description: 'the only batch'})
+        await sharedDb.db.execute(
+          "INSERT INTO blocks_synced_changes (id, op) VALUES ('after-write', 'upsert')",
+        )
+      },
+    }
+    const repo = makeRepo(late, g.gate)
     await seedTarget(repo)
 
-    repo.scheduleWorkspaceBackfills(WS)
-    expect(g.armed()).toBe(1)
+    g.open()
+    await drain(repo)
 
-    vi.spyOn(repo.projectors, 'pinWorkspace').mockImplementationOnce(() => {
-      throw new Error('pin failed')
+    const markers = await sharedDb.db.getAll<{key: string}>(
+      "SELECT key FROM client_schema_state WHERE key LIKE 'workspace_backfill:%'",
+    )
+    expect(markers).toEqual([])
+  })
+
+  it('retries once a transient abort clears, rather than giving up for the session', async () => {
+    // The aborts are momentary by construction — the download finishes, the
+    // queue drains. Logging and walking away would leave the pass undone for
+    // the whole session even though its blocker was seconds long.
+    const g = controllableGate()
+    const runs: string[] = []
+    const repo = makeRepo(probeBackfill(runs), g.gate)
+    await seedTarget(repo)
+    await sharedDb.db.execute(
+      "INSERT INTO blocks_synced_changes (id, op) VALUES ('draining', 'upsert')",
+    )
+
+    g.open()
+    await drain(repo)
+    expect(runs).toEqual([])                       // aborted: rows still staging
+
+    // The queue drains; the re-armed pass goes through without another open.
+    await sharedDb.db.execute('DELETE FROM blocks_synced_changes')
+    await vi.runAllTimersAsync()
+    await repo.awaitWorkspaceBackfills()
+
+    expect(runs).toEqual([WS])
+    expect((await repo.load('target'))?.properties['probe:mark']).toBe('backfilled')
+  })
+
+  it('releases the claim when a run aborts, so it is not blocked forever', async () => {
+    // A claimed-but-unfinished pass must hand the claim back: otherwise one
+    // device's transient bad moment blocks the migration for the whole graph.
+    const g = controllableGate()
+    const released: string[] = []
+    const claimed = new Set<string>()
+    const {repo} = createTestRepo({
+      db: sharedDb.db,
+      user: {id: 'user-1'},
+      backfillSyncGate: g.gate,
+      backfillCompletionClaim: {
+        tryClaim: async (_ws, id) => { if (claimed.has(id)) return false; claimed.add(id); return true },
+        markComplete: async () => {},
+        releaseClaim: async (_ws, id) => { released.push(id); claimed.delete(id) },
+      },
     })
-    // The pin failure is re-thrown after the restore; the restore is the part
-    // under test.
-    expect(() => repo.setActiveWorkspaceId(OTHER_WS)).toThrow(/pin failed/)
+    repo.setActiveWorkspaceId(WS)
+    repo.setRuntimeContributions(workspaceBackfillsFacet, 'test-backfills', [probeBackfill([])])
+    await seedTarget(repo)
+    await sharedDb.db.execute(
+      "INSERT INTO blocks_synced_changes (id, op) VALUES ('draining', 'upsert')",
+    )
 
-    // Restored to WS, and its gate is armed again.
-    expect(repo.activeWorkspaceId).toBe(WS)
-    expect(g.armed()).toBe(1)
+    g.open()
+    await drain(repo)
+
+    expect(released).toEqual(['probe-backfill-v1'])
+    expect(claimed.size).toBe(0)
+  })
+
+  it('refuses every backfill when no completion claim is configured', async () => {
+    // Production has no synced claim store yet. Falling back to the local
+    // marker would have each device attempt an upload-carrying repair
+    // independently — the stale-write hazard itself — so the runner refuses.
+    const runs: string[] = []
+    const errors: string[] = []
+    vi.spyOn(console, 'error').mockImplementation((m: unknown) => { errors.push(String(m)) })
+    const {repo} = createTestRepo({
+      db: sharedDb.db,
+      user: {id: 'user-1'},
+      backfillSyncGate: (cb) => { cb(); return () => {} },
+      backfillCompletionClaim: undefined as never,   // explicit: none configured
+    })
+    repo.setActiveWorkspaceId(WS)
+    repo.setRuntimeContributions(workspaceBackfillsFacet, 'test-backfills', [probeBackfill(runs)])
+    await seedTarget(repo)
+
+    await drain(repo)
+
+    expect(runs).toEqual([])
+    expect(errors.join(' ')).toContain('no BackfillCompletionClaim is configured')
   })
 
   it('disposes a gate still armed for a workspace the user left', async () => {
@@ -354,49 +442,5 @@ describe('workspace backfill runner — undo', () => {
       .map(r => JSON.parse(r.data) as {id: string})
       .filter(e => e.id === 'target')
     expect(ops.length).toBeGreaterThan(0)
-  })
-})
-
-describe('workspace backfill runner — per-graph claims', () => {
-  /** Same backfill id on two repos = two devices racing the same pass. */
-  const graphBackfill = (runs: string[], label: string): WorkspaceBackfill => ({
-    id: 'graph-backfill-v1',
-    completion: 'per-graph',
-    run: async ({tx}) => {
-      runs.push(label)
-      await tx(async t => {
-        const row = await t.get('target')
-        if (!row) return
-        await t.update('target', {properties: {...row.properties, 'probe:by': label}})
-      }, {description: 'graph backfill write'})
-    },
-  })
-
-  it('runs the pass once across two devices sharing the graph', async () => {
-    const runs: string[] = []
-    const deviceA = makeRepo(graphBackfill(runs, 'A'), undefined, 'device-a')
-    await seedTarget(deviceA)
-    await drain(deviceA)
-    expect(runs).toEqual(['A'])
-
-    // A second device on the SAME local DB sees A's converged claim. The
-    // local marker cannot carry this: it is per-device by construction, which
-    // is the whole reason `per-graph` exists.
-    const deviceB = makeRepo(graphBackfill(runs, 'B'), undefined, 'device-b')
-    await drain(deviceB)
-    expect(runs).toEqual(['A'])
-  })
-
-  it('does not re-run for the device that already completed it', async () => {
-    const runs: string[] = []
-    const deviceA = makeRepo(graphBackfill(runs, 'A'), undefined, 'device-a')
-    await seedTarget(deviceA)
-    await drain(deviceA)
-    expect(runs).toEqual(['A'])
-
-    // Re-opening the workspace on the SAME device: the claim still names it,
-    // so an ownership-first read would rerun the entire pass every open.
-    await drain(deviceA)
-    expect(runs).toEqual(['A'])
   })
 })

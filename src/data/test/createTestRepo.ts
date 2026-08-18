@@ -42,6 +42,7 @@
 
 import type { User } from '@/data/api/user.js'
 import { BlockCache } from '@/data/blockCache'
+import type { BackfillCompletionClaim } from '@/data/facets'
 import { kernelDataExtension } from '@/data/kernelDataExtension.js'
 import { Repo, type RepoOptions } from '@/data/repo'
 import { resolveFacetRuntimeSync, type AppExtension } from '@/facets/facet.js'
@@ -62,7 +63,10 @@ export interface CreateTestRepoOptions {
   installKernelRuntime?: boolean
   /** Override the workspace-backfill sync gate (default: opens immediately). */
   backfillSyncGate?: (cb: () => void) => () => void
-  graphBackfillClaimantId?: string
+  /** Override the migration-completion claim (default: a local stand-in that
+   *  writes the same `client_schema_state` keys the marker store used, so tests
+   *  can assert on completion without a synced implementation existing). */
+  backfillCompletionClaim?: BackfillCompletionClaim
   /** Reject `BlockDefault` / `References` writes (read-only mode). Default false. */
   isReadOnly?: boolean
   /** Override the deterministic generators. Defaults are monotonic counters so
@@ -114,7 +118,24 @@ export const createTestRepo = (opts: CreateTestRepoOptions): TestRepo => {
     // never open and every backfill would hang. Default to an immediate
     // gate; tests that exercise the gating itself inject their own.
     backfillSyncGate: opts.backfillSyncGate ?? ((cb) => { cb(); return () => {} }),
-    ...(opts.graphBackfillClaimantId ? {graphBackfillClaimantId: opts.graphBackfillClaimantId} : {}),
+    // Production REFUSES without a claim (completion must be recorded once per
+    // graph, and no synced store exists yet). Tests get a local stand-in so the
+    // runner's own machinery stays exercised; it deliberately does NOT model
+    // cross-device visibility, which is the part slice C has to build.
+    // `in` rather than `??` so a test can pass `undefined` to mean "none
+    // configured" and exercise the refusal, instead of silently getting the stub.
+    backfillCompletionClaim: 'backfillCompletionClaim' in opts ? opts.backfillCompletionClaim : {
+      tryClaim: async (ws: string, id: string) => (await opts.db.getOptional<{key: string}>(
+        'SELECT key FROM client_schema_state WHERE key = ?', [`workspace_backfill:${ws}:${id}`],
+      )) === null,
+      markComplete: async (ws: string, id: string) => {
+        await opts.db.execute(
+          'INSERT OR REPLACE INTO client_schema_state (key, value) VALUES (?, ?)',
+          [`workspace_backfill:${ws}:${id}`, '1'],
+        )
+      },
+      releaseClaim: async () => {},
+    },
   })
   if (opts.extensions?.length) {
     repo.setFacetRuntime(resolveFacetRuntimeSync([kernelDataExtension, ...opts.extensions]))
