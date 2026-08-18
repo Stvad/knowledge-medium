@@ -175,7 +175,6 @@ const SAFE_VIA_PROTOTYPE: Record<string, string> = {
  *  `(x as any).field =` dynamic write would escape the inventory —
  *  don't introduce either on Repo. */
 const SAFE_INSTANCE_FIELDS: Record<string, string> = {
-  operatorBackfillRuns: 'data field — a counter the operator entry point reads to report ran vs skipped',
   _propertyDefinitionRegistry: 'data field',
   _previousPropertyDefinitionRegistry: 'data field',
   _typeDefinitionRegistry: 'data field',

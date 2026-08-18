@@ -650,9 +650,6 @@ export class Repo {
    *  (`RepoOptions.backfillSyncGate`). */
   private readonly backfillSyncGate: (cb: () => void) => () => void
   /** See `RepoOptions.backfillCompletionClaim`. Absent ⇒ backfills refuse. */
-  /** Passes actually entered, so `runWorkspaceBackfillNow` can distinguish
-   *  "ran" from "the claim says someone already has it". */
-  private operatorBackfillRuns = 0
   private readonly backfillCompletionClaim: BackfillCompletionClaim | undefined
   /** Disposer for a gate armed but not yet opened, so a workspace switch or
    *  repo teardown doesn't leave a status listener attached. */
@@ -2547,9 +2544,11 @@ export class Repo {
         this.disposeBackfillSyncGate?.()
         this.disposeBackfillSyncGate = this.backfillSyncGate(() => {
           this.disposeBackfillSyncGate = undefined
-          this.workspaceBackfillJobs.schedule(() =>
-            this.runWorkspaceBackfills(workspaceId, backfills, generation),
-          )
+          this.workspaceBackfillJobs.schedule(async () => {
+            // The automatic path discards the outcome — nobody is waiting to
+            // be told. Only the operator entry point reads it.
+            await this.runWorkspaceBackfills(workspaceId, backfills, generation)
+          })
         })
       }
       arm()
@@ -2815,16 +2814,32 @@ export class Repo {
       b => b.id === backfillId && b.trigger === 'operator',
     )
     if (!backfill) return 'not-found'
-    const before = this.operatorBackfillRuns
-    await this.runWorkspaceBackfills(workspaceId, [backfill], this.workspaceGeneration)
-    return this.operatorBackfillRuns > before ? 'ran' : 'already-done-or-held'
+    const completed = await this.runWorkspaceBackfills(
+      workspaceId, [backfill], this.workspaceGeneration,
+    )
+    // The fix for the shared-counter bug is that `completed` is LOCAL to this
+    // invocation: a repo-wide counter could not say which call finished, so
+    // two overlapping operator calls — or an automatic workspace-open pass in
+    // the same window — let one report "ran" on the strength of another's
+    // success.
+    //
+    // Keying on this id as well is defence in depth, not load-bearing: the
+    // call above passes a single-element array, so the set can only contain
+    // this backfill. Deleting the key fails no test. It is written this way
+    // so that a future caller passing more than one is correct by
+    // construction rather than by that argument.
+    return completed.has(backfill.id) ? 'ran' : 'already-done-or-held'
   }
 
+  /** Returns the ids that RAN TO COMPLETION — not merely those attempted, so
+   *  a caller can report an outcome tied to its own request rather than to
+   *  whatever else happened to finish. */
   private async runWorkspaceBackfills(
     workspaceId: string,
     backfills: readonly WorkspaceBackfill[],
     generation: number,
-  ): Promise<void> {
+  ): Promise<ReadonlySet<string>> {
+    const completed = new Set<string>()
     const claim = this.backfillCompletionClaim
     if (!claim) {
       // Refuse rather than fall back to the local marker. Every pass here
@@ -2836,16 +2851,16 @@ export class Repo {
         `${workspaceId}: no BackfillCompletionClaim is configured, so completion ` +
         `cannot be recorded once per graph.`,
       )
-      return
+      return completed
     }
     for (const backfill of backfills) {
       // A role flip to read-only during the deferral window must stop further
       // writes — re-check per backfill (the loop can span several txs).
-      if (this.isReadOnly) return
+      if (this.isReadOnly) return completed
       // Don't even START a pass whose workspace has been re-opened since it was
       // scheduled. `assertBackfillMayWrite` catches this per transaction, but
       // that is one tx too late to avoid the scan a backfill does first.
-      if (this.workspaceGeneration !== generation) return
+      if (this.workspaceGeneration !== generation) return completed
       // BEFORE claiming: an unprimed registry makes the whole graph look like
       // it has zero registered properties, so a pass would find no candidates,
       // write nothing, and then record a PERMANENT per-graph completion — the
@@ -2928,7 +2943,7 @@ export class Repo {
         // for a pass that threw or was aborted by a precondition, telling an
         // operator the migration is done when it is not and costing them the
         // retry.
-        this.operatorBackfillRuns++
+        completed.add(backfill.id)
         // Record the marker only after a clean run — a thrown backfill leaves
         // it unset so the next open retries (backfills are written idempotent
         // via a per-row recheck, so a retry is cheap).
@@ -2945,13 +2960,14 @@ export class Repo {
           // gate + deep-idle deferral bound the retry.
           console.warn(`[workspaceBackfills] ${reason} — will retry when it clears`)
           this.scheduleWorkspaceBackfills(workspaceId)
-          return
+          return completed
         }
         console.error(
           `[workspaceBackfills] "${backfill.id}" failed for workspace ${workspaceId}: ${reason}`,
         )
       }
     }
+    return completed
   }
 
   /**
