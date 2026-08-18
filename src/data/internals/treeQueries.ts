@@ -271,9 +271,21 @@ export const CHILDREN_IDS_SQL = `
  * predicate; slice D reuses that mechanism for the hidden-tier set).
  *
  * An un-flipped workspace short-circuits on the `workspaces` probe
- * (dormant: today's behavior, zero rows filtered). No extra parameters —
- * the flat predicate is fully expressed over the candidate row's own
- * columns, which is what deleting the positional walk buys.
+ * (dormant: today's behavior, zero rows filtered).
+ *
+ * ONE bound parameter: a JSON array of definition ids the registry knows
+ * but `block_types` may not carry yet (#389 item 7). Property seed
+ * definition ids are deterministic — `propertyDefinitionBlockId` is
+ * uuidv5 over `workspaceId:seedKey` — so the set is a pure computation
+ * over the loaded declarations, needing no DB state and nothing to
+ * invalidate; a newly loaded plugin's seeds are simply known to the next
+ * query. Binding it rather than storing it is what keeps `block_types`
+ * derived-from-`blocks` by trigger alone.
+ *
+ * Salted by workspace, so another workspace's set can never match these
+ * rows: a background workspace falls back to the `block_types` leg, which
+ * is exactly today's behaviour rather than a wrong answer. Pass `'[]'`
+ * when no registry is reachable.
  *
  * NULL-SAFETY is load-bearing (§9's recorded failure mode, caught by this
  * file's own tests): the bit is NULL on every unmarked row, and this
@@ -290,11 +302,17 @@ const recognizedFieldRowSql = (rowRef: string): string => `
         WHERE w.id = ${rowRef}.workspace_id
           AND w.properties_migration IN ('children', 'cell-off')
      )
-     AND EXISTS (
-       SELECT 1 FROM block_types bt
-        WHERE bt.block_id = ${rowRef}.reference_target_id
-          AND bt.type = 'property-schema'
-          AND bt.workspace_id = ${rowRef}.workspace_id
+     AND (
+       EXISTS (
+         SELECT 1 FROM block_types bt
+          WHERE bt.block_id = ${rowRef}.reference_target_id
+            AND bt.type = 'property-schema'
+            AND bt.workspace_id = ${rowRef}.workspace_id
+       )
+       OR EXISTS (
+         SELECT 1 FROM json_each(?) seed
+          WHERE seed.value = ${rowRef}.reference_target_id
+       )
      )
 `
 

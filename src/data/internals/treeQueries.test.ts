@@ -313,8 +313,32 @@ describe('VISIBLE_CHILDREN_SQL / VISIBLE_SUBTREE_SQL — flat §9 recognition', 
     // A MARKED child targeting the definition IS machinery and filters.
     await insertBlock({id: 'F', parent_id: 'P', reference_target_id: DEF, is_field_form: 1, order_key: 'a2'})
 
-    const rows = await h.db.getAll<{id: string}>(VISIBLE_CHILDREN_SQL, ['P'])
+    const rows = await h.db.getAll<{id: string}>(VISIBLE_CHILDREN_SQL, ['P', '[]'])
     expect(rows.map(r => r.id)).toEqual(['C', 'L'])
+  })
+
+  it('filters a marked row whose SEED definition has not materialized yet (#389 item 7)', async () => {
+    // A code-declared property seed the registry knows but
+    // `materializePropertySeeds` has not written to `blocks` yet — so
+    // `block_types` carries nothing for it. Reachable on a warm device when
+    // a field row arrives over sync ahead of its definition block, which no
+    // boot-time ordering rule covers. The tx-layer checker resolves this
+    // through the registry and hides the row; the SQL predicate consults
+    // only `block_types` and shows it. Same row, two answers.
+    const UNMATERIALIZED_SEED = 'seed-def-not-yet-materialized'
+    await insertBlock({id: 'P3', parent_id: null, order_key: 'b0'})
+    await insertBlock({id: 'C3', parent_id: 'P3', order_key: 'a0'})
+    await insertBlock({
+      id: 'F3', parent_id: 'P3', reference_target_id: UNMATERIALIZED_SEED,
+      is_field_form: 1, order_key: 'a1',
+    })
+
+    // The registry-derived seed-id set is bound into the predicate, so the
+    // row classifies without any DB state for the definition.
+    const rows = await h.db.getAll<{id: string}>(
+      VISIBLE_CHILDREN_SQL, ['P3', JSON.stringify([UNMATERIALIZED_SEED])],
+    )
+    expect(rows.map(r => r.id)).toEqual(['C3'])
   })
 
   it('VISIBLE_SUBTREE_SQL prunes AT each marked row, keeps unmarked stamped rows, and never prunes the root', async () => {
@@ -327,12 +351,12 @@ describe('VISIBLE_CHILDREN_SQL / VISIBLE_SUBTREE_SQL — flat §9 recognition', 
     // Unmarked stamped row (the old look-alike) descends normally.
     await insertBlock({id: 'L2', parent_id: 'P2', reference_target_id: DEF, order_key: 'a0'})
 
-    const rows = await h.db.getAll<{id: string}>(VISIBLE_SUBTREE_SQL, ['P2'])
+    const rows = await h.db.getAll<{id: string}>(VISIBLE_SUBTREE_SQL, ['P2', '[]'])
     expect(rows.map(r => r.id)).toEqual(['P2', 'L2'])
 
     // The ROOT itself is never pruned — opening a field row shows its
     // subtree (its value child), minus nothing here (V2 is unmarked).
-    const fromField = await h.db.getAll<{id: string}>(VISIBLE_SUBTREE_SQL, ['F2'])
+    const fromField = await h.db.getAll<{id: string}>(VISIBLE_SUBTREE_SQL, ['F2', '[]'])
     expect(fromField.map(r => r.id)).toEqual(['F2', 'V2'])
   })
 })
