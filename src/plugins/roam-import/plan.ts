@@ -56,6 +56,11 @@ export {
   type PromotionOptions,
   type PromotionResult,
 } from './promotion'
+// Re-exported alongside promotion deliberately: promoting a `key:: value`
+// attribute without registering a definition for the key it invents is the
+// footgun this pairs with (issue #501). A consumer that finds one should
+// find the other.
+export { ensurePromotedPropertySchemas, type PromotedPropertyBag } from './schemaReconciliation'
 export {
   type PreparedRoamMemoEntry,
   type PreparedRoamMemoSnapshot,

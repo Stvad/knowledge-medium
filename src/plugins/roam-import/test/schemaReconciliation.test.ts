@@ -9,6 +9,7 @@ import { getOrCreatePropertiesPage } from '@/data/propertiesPage'
 import { Repo } from '@/data/repo'
 import {
   applySchemaReconciliation,
+  ensurePromotedPropertySchemas,
   collectSchemaReconciliationPlan,
   normalizeListPropertyValues,
   normalizeRefPropertyValues,
@@ -442,5 +443,70 @@ describe('normalizeRefPropertyValues', () => {
     ]
     normalizeRefPropertyValues(blocks, new Map([['roam:plain', 'refList']]), new Map(), [])
     expect(blocks[0].properties['roam:plain']).toBe('just a string')
+  })
+})
+
+describe('ensurePromotedPropertySchemas', () => {
+  // Content promotion invents key names from block text, so no code seed can
+  // declare them — the definition has to be minted at write time or the key
+  // lands definition-less and property migration skips it forever (#501).
+  it('registers a definition for a promoted key nothing declared', async () => {
+    const blocks = [block('a', {'matrix:timestamp': '13/06/2026 13:39:23 UTC'})]
+
+    expect(env.repo.propertySchemas.get('matrix:timestamp')).toBeUndefined()
+    await ensurePromotedPropertySchemas(env.repo, blocks)
+
+    expect(env.repo.propertySchemas.get('matrix:timestamp')).toBeDefined()
+  })
+
+  it('downgrades a refList classification to list, so page tokens stay decodable', async () => {
+    // The importer pairs refList with normalizeRefPropertyValues + an
+    // aliasIdMap it builds during import. A streaming consumer has neither,
+    // so registering refList here would store `[[X]]` token strings under a
+    // codec that rejects them on read — an undecodable cell, which is worse
+    // than leaving the key unregistered.
+    const blocks = [
+      block('a', {'matrix:topic': ['[[Alpha]]', '[[Beta]]']}),
+      block('b', {'matrix:topic': ['[[Gamma]]']}),
+    ]
+
+    await ensurePromotedPropertySchemas(env.repo, blocks)
+
+    const codecType = env.repo.propertySchemas.get('matrix:topic')?.codec.type
+    expect(codecType).not.toBe('refList')
+    expect(codecType).toBe('list')
+    // And what it registered must decode what is actually stored.
+    expect(() => env.repo.propertySchemas.get('matrix:topic')!.codec.decode(
+      blocks[0]!.properties['matrix:topic'])).not.toThrow()
+  })
+
+  it('normalizes a later scalar under a list schema an earlier batch registered', async () => {
+    // Keying normalization off this call's registrations alone would leave
+    // batch two writing a bare scalar under batch one's list codec.
+    await ensurePromotedPropertySchemas(env.repo, [
+      block('a', {'matrix:tag': ['one', 'two']}),
+      block('b', {'matrix:tag': ['three']}),
+    ])
+    expect(env.repo.propertySchemas.get('matrix:tag')?.codec.type).toBe('list')
+
+    const laterBatch = [block('c', {'matrix:tag': 'solo'})]
+    await ensurePromotedPropertySchemas(env.repo, laterBatch)
+
+    expect(laterBatch[0]!.properties['matrix:tag']).toEqual(['solo'])
+    expect(() => env.repo.propertySchemas.get('matrix:tag')!.codec.decode(
+      laterBatch[0]!.properties['matrix:tag'])).not.toThrow()
+  })
+
+  it('leaves an already-declared key on its existing schema', async () => {
+    await ensurePromotedPropertySchemas(env.repo, [block('a', {'matrix:note': 'hello'})])
+    const first = env.repo.propertySchemas.get('matrix:note')
+
+    await ensurePromotedPropertySchemas(env.repo, [block('b', {'matrix:note': 'again'})])
+
+    expect(env.repo.propertySchemas.get('matrix:note')?.codec.type).toBe(first?.codec.type)
+  })
+
+  it('is a no-op for an empty batch', async () => {
+    await expect(ensurePromotedPropertySchemas(env.repo, [])).resolves.toEqual([])
   })
 })

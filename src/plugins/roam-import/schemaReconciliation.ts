@@ -415,3 +415,80 @@ const collectTokens = (raw: unknown): string[] | null => {
   }
   return null
 }
+
+/** The minimum a caller must supply: whatever it is about to write. Kept
+ *  structural so an extension can pass its own in-flight block tree. */
+export interface PromotedPropertyBag {
+  readonly id?: string
+  properties?: Record<string, unknown>
+}
+
+/** Register a definition for every promoted `key:: value` attribute a
+ *  consumer is about to write, and normalize the values so the codec it
+ *  registered can actually decode them.
+ *
+ *  Content promotion INVENTS property names from block text, so no code seed
+ *  can declare them ahead of time — the definition has to be minted at write
+ *  time or the key lands definition-less. That matters beyond tidiness:
+ *  property migration skips a key with no schema (`propertyChildrenProcessor`
+ *  — no schema, `continue`), so it is the one class of property data a
+ *  child-backed workspace cannot carry, and §9 requires every key to resolve
+ *  a definition before a workspace flips. `addSchema` is the normal
+ *  key-minting path that maintains that invariant; a promotion consumer that
+ *  skips it violates the invariant by construction.
+ *
+ *  This is the STREAMING counterpart to the importer's phase 4, which plans
+ *  over a whole graph at once. Two differences fall out of that, both
+ *  load-bearing:
+ *
+ *  - **refList is downgraded to `list`.** The importer pairs a refList
+ *    classification with `normalizeRefPropertyValues`, which rewrites
+ *    `[[X]]` tokens to ids via an `aliasIdMap` it builds during the import.
+ *    A streaming consumer has no such map, so registering refList would
+ *    store token strings under a codec that rejects them on first read —
+ *    an undecodable cell, which is worse than an unregistered key (it leaves
+ *    the cell and its value child permanently divergent).
+ *
+ *  - **Normalization is driven by the EFFECTIVE registry, not by what this
+ *    call registered.** A key registered as `list` by an earlier batch still
+ *    needs this batch's scalar value widened; keying off `toRegister` alone
+ *    would write an undecodable scalar under the previous batch's schema.
+ *
+ *  `bags` is mutated in place (the normalizers do), so pass the blocks you
+ *  are about to write. Returns diagnostics worth logging; it never throws for
+ *  a single unregistrable name — that one key stays unregistered and the
+ *  audit (`kmagent audit-properties`) will report it. */
+export const ensurePromotedPropertySchemas = async (
+  repo: Repo,
+  bags: ReadonlyArray<PromotedPropertyBag>,
+): Promise<ReadonlyArray<string>> => {
+  if (bags.length === 0) return []
+
+  // The plan/normalize helpers below read only `.id` and `.properties`, so a
+  // caller can hand over its own in-flight block tree (an extension building
+  // one to write has no BlockData rows yet) instead of synthesizing rows.
+  const asBlocks = bags as unknown as ReadonlyArray<BlockData>
+  const {toRegister, diagnostics} = collectSchemaReconciliationPlan(asBlocks, repo)
+  const notes = [...diagnostics]
+
+  const registrable = toRegister.map(entry => entry.presetId === 'refList'
+    ? {name: entry.name, presetId: 'list' as const}
+    : entry)
+  await applySchemaReconciliation(registrable, repo, notes)
+
+  // Post-registration so freshly-added contributions are visible here too.
+  const schemas = repo.propertySchemas
+  const stringNames = new Set<string>()
+  const listNames = new Set<string>()
+  for (const bag of bags) {
+    for (const name of Object.keys(bag.properties ?? {})) {
+      const codecType = schemas.get(name)?.codec.type
+      if (codecType === 'string') stringNames.add(name)
+      else if (codecType === 'list') listNames.add(name)
+    }
+  }
+  normalizeStringPropertyValues(asBlocks, stringNames)
+  normalizeListPropertyValues(asBlocks, listNames)
+
+  return notes
+}

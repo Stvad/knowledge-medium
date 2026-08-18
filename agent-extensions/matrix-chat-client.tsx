@@ -27,7 +27,7 @@ import { keyAtEnd, keysBetween } from '@/data/orderKey.js'
 import { createOrRestoreTargetBlock } from '@/data/targets.js'
 import { addBlockTypeToProperties, showPropertiesProp } from '@/data/properties.js'
 import { dailyNoteBlockId, getOrCreateDailyNote, todayIso } from '@/plugins/daily-notes/index.js'
-import { computePromotedFromChildren } from '@/plugins/roam-import/plan.js'
+import { computePromotedFromChildren, ensurePromotedPropertySchemas } from '@/plugins/roam-import/plan.js'
 import { navigate } from '@/utils/navigation.js'
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
@@ -591,6 +591,12 @@ const nestTopLevelBlocksUnderFirst = (blocks: BlockDef[]): BlockDef[] => {
   }]
 }
 
+/** Every node in a built tree, so promoted keys at any depth get a
+ *  definition. `ensurePromotedPropertySchemas` normalizes in place, so these
+ *  must be the SAME objects that are about to be written, not copies. */
+const flattenBlockDefs = (blocks: BlockDef[]): BlockDef[] =>
+  blocks.flatMap(block => [block, ...flattenBlockDefs(block.children ?? [])])
+
 const createBlocksFromEvent = (event: any, matrixClient: any): BlockDef[] => {
   const text = getMessageText(event, matrixClient)
   return withPromotedMatrixProperties(
@@ -690,6 +696,15 @@ const appendMatrixMessage = async (repo: any, config: MatrixConfig, event: any, 
   await getOrCreateDailyNote(repo, workspaceId, iso)
   const dailyId = dailyNoteBlockId(workspaceId, iso)
 
+  // Promotion INVENTS property names from message text (`key:: value`), so no
+  // code seed can declare them. Mint their definitions BEFORE the write:
+  // `addSchema` does its own writes and cannot run inside the tx below, and a
+  // key that lands definition-less is skipped by property migration forever
+  // (#501). Built out here so the same tree is registered and then written.
+  const messageTree = createBlocksFromEvent(event, matrixClient)
+  const promotionNotes = await ensurePromotedPropertySchemas(repo, flattenBlockDefs(messageTree))
+  for (const note of promotionNotes) console.warn('[matrix] promoted property:', note)
+
   await repo.tx(async (tx: any) => {
     const tagBlockId = await ensureMatrixTagBlock(tx, workspaceId, dailyId, iso)
 
@@ -712,7 +727,7 @@ const appendMatrixMessage = async (repo: any, config: MatrixConfig, event: any, 
       tx,
       workspaceId,
       tagBlockId,
-      createBlocksFromEvent(event, matrixClient),
+      messageTree,
       eventId,
       {
         [eventIdProp.name]: eventId,
