@@ -385,4 +385,19 @@ export interface RepoTxOptions {
    *  `tx_context` / `row_events`. Minted by `repo.undoGroup` and
    *  injected by its facade — callers don't set this by hand. */
   groupId?: string
+  /** Skip recording an undo entry for this tx, without changing its scope.
+   *
+   *  For writes the program makes on the user's behalf while they are doing
+   *  something else — a one-shot `WorkspaceBackfill` firing seconds after
+   *  workspace open is the motivating case. Such a batch is a document edit in
+   *  every other respect (it must stay read-only-gated and seed-guarded, so it
+   *  keeps `BlockDefault`), but putting it on the undo stack means a cmd-Z
+   *  aimed at the user's own edit silently reverts the whole pass — and with
+   *  the pass's completion marker already recorded, permanently.
+   *
+   *  Prefer a non-undoable SCOPE when the write genuinely is not a document
+   *  edit (`UiState`, `UserPrefs`, `Automation`). This flag exists for the case
+   *  where the scope must stay `BlockDefault` for gating reasons but the entry
+   *  would be a trap. Default false (entries are recorded as usual). */
+  skipUndo?: boolean
 }

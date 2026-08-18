@@ -9,14 +9,16 @@ import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { writeBlockTypeLabel } from './BlockTypeBlockRenderer'
 
+// One DB for the FILE — both suites below share it, reset between tests. The
+// repo is still built fresh per test: these exercise processor-driven alias
+// writes, so they want their own registry and id sequence, just not their own
+// database.
+let h: TestDb
+beforeAll(async () => { h = await createTestDb() })
+afterAll(async () => { await h.cleanup() })
+beforeEach(async () => { await resetTestDb(h.db) })
+
 describe('writeBlockTypeLabel', () => {
-  // One DB for the file, reset between tests. The repo is still built fresh
-  // per test — these exercise processor-driven alias writes, so they want
-  // their own registry and id sequence, just not their own database.
-  let h: TestDb
-  beforeAll(async () => { h = await createTestDb() })
-  afterAll(async () => { await h.cleanup() })
-  beforeEach(async () => { await resetTestDb(h.db) })
 
   /** Fresh repo + one alias-less `block-type` block (`type-1`), mirroring
    *  the Types-page "New type" button: created with an empty label and no

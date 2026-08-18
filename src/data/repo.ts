@@ -56,6 +56,7 @@ import {
   refTypedSchemaNames,
 } from './internals/refProjection'
 import { runTx, type PowerSyncDb } from './internals/commitPipeline'
+import { onSyncSettled } from './internals/firstSync'
 import { devAssertionsEnabled } from './internals/devAssertions'
 import type { BlockCache } from '@/data/blockCache'
 import {
@@ -392,6 +393,16 @@ export interface RepoOptions {
    *  pass `false` and call `setFacetRuntime` themselves, or just call
    *  `setFacetRuntime` (it REPLACES the kernel install). */
   installKernelRuntime?: boolean
+  /** Gate for one-shot `WorkspaceBackfill` passes: arms `cb` for when this
+   *  device is no longer behind the server, and returns a disposer. Default
+   *  `onSyncSettled(db)` — connected with no download in flight.
+   *
+   *  Injected because the default would never open under test: `createTestDb`
+   *  opens a real `PowerSyncDatabase` with no backend connector, so it reports
+   *  `connected: false` forever and every backfill would hang rather than fail
+   *  visibly. Tests pass an immediate gate; `onSyncSettled` itself is covered
+   *  directly in `firstSync.test.ts`. */
+  backfillSyncGate?: (cb: () => void) => () => void
   /** When true (default), the Layout B sync observer is started at
    *  construction time so sync-applied writes — staged into `blocks_synced`
    *  — materialize into the app-visible `blocks` table and invalidate
@@ -636,6 +647,17 @@ export class Repo {
    *  drained by `awaitWorkspaceBackfills()` for deterministic test quiescence,
    *  mirroring `reprojectionJobs`. */
   private readonly workspaceBackfillJobs = new PendingIdleJobs((fn) => scheduleDeepIdle(fn, CATCHUP_DEEP_IDLE))
+  /** Arms a callback for when this device is no longer behind the server
+   *  (`RepoOptions.backfillSyncGate`). */
+  private readonly backfillSyncGate: (cb: () => void) => () => void
+  /** Disposer for a gate armed but not yet opened, so a workspace switch or
+   *  repo teardown doesn't leave a status listener attached. */
+  private disposeBackfillSyncGate: (() => void) | undefined
+  /** Bumped on every workspace CHANGE. A backfill job captures it and compares
+   *  at write time: comparing workspace ids alone accepts a stale job from an
+   *  earlier visit once the user returns (A -> B -> A), which is a different
+   *  open with a different registry and access state. */
+  private workspaceGeneration = 0
   /** In-flight one-time reconcile-rescan runs — drained by
    *  `awaitReconcileRescans()`, same pattern. */
   private readonly reconcileRescanJobs = new PendingIdleJobs((fn) => scheduleDeepIdle(fn, CATCHUP_DEEP_IDLE))
@@ -892,6 +914,8 @@ export class Repo {
       SELECT_WORKSPACE_BACKFILL_MARKERS_SQL,
       RECORD_WORKSPACE_BACKFILL_MARKER_SQL,
     )
+    this.backfillSyncGate = opts.backfillSyncGate
+      ?? ((cb) => onSyncSettled(this.db as unknown as Parameters<typeof onSyncSettled>[0], cb))
     this.syncObserverDeps = opts.syncObserverDeps
     this.cache = opts.cache
     this._client = new ClientContext({user: opts.user})
@@ -1343,6 +1367,15 @@ export class Repo {
       // one (a same-workspace projector re-pin keeps the current generation).
       this.seedMaterializationGeneration.abort()
       this.seedMaterializationGeneration = new AbortController()
+      this.workspaceGeneration++
+      // Same for a backfill gate still armed for the departed workspace. It
+      // captures that workspace id, and `scheduleWorkspaceBackfills` only
+      // disposes a stale gate when it is reached again — which the read-only /
+      // no-backfills early returns can skip entirely. Left armed, a status
+      // change later fires it and writes the departed workspace under the
+      // current session's access state.
+      this.disposeBackfillSyncGate?.()
+      this.disposeBackfillSyncGate = undefined
     }
     this.facetBridge.setActiveWorkspaceId(workspaceId)
     try {
@@ -1361,7 +1394,13 @@ export class Repo {
       // aborted parked pass isn't stranded until the next seed change (a no-op
       // if the pinned registry isn't the restored workspace's).
       this.seedMaterializationGeneration = new AbortController()
-      if (restoredWorkspaceId) this.scheduleWorkspaceSeedMaterialization(restoredWorkspaceId, false)
+      if (restoredWorkspaceId) {
+        this.scheduleWorkspaceSeedMaterialization(restoredWorkspaceId, false)
+        // The switch path above already disposed this workspace's gate on the
+        // way out. Nothing else re-arms it, so without this the restored
+        // workspace silently never backfills for the rest of the session.
+        this.scheduleWorkspaceBackfills(restoredWorkspaceId)
+      }
       throw error
     }
   }
@@ -1474,7 +1513,7 @@ export class Repo {
     // scopes are filtered inside `record`; zero-write txs have no pinned
     // workspace (null) and nothing to undo, so skip them here. Replays go
     // through `_replay`, not here, so they don't add new history.
-    if (result.workspaceId !== null) {
+    if (result.workspaceId !== null && !opts.skipUndo) {
       this.undoManagerFor(result.workspaceId).record({
         scope: opts.scope,
         txId: result.txId,
@@ -2485,9 +2524,32 @@ export class Repo {
   scheduleWorkspaceBackfills(workspaceId: string): void {
     if (this.isReadOnly || !workspaceId || this._workspaceBackfills.length === 0) return
     const backfills = this._workspaceBackfills
-    this.workspaceBackfillJobs.schedule(() =>
-      this.runWorkspaceBackfills(workspaceId, backfills),
-    )
+    const generation = this.workspaceGeneration
+    {
+      // A backfill must not write while this device is behind the server: its
+      // writes upload a whole `properties_json` bag, so a stale row drops
+      // concurrent edits from elsewhere (#237), and its one-shot marker makes a
+      // half-scanned run permanent.
+      //
+      // NOT `onFirstSync` — `hasSynced` persists across sessions, so it fires
+      // synchronously on every warm client and gates nothing.
+      //
+      // Gate FIRST, then defer to idle: an idle job that awaited the gate from
+      // inside would never settle on a device that never connects, parking a
+      // promise in the drain set forever and hanging
+      // `awaitWorkspaceBackfills`. A session that never catches up therefore
+      // schedules nothing, which is correct for catch-up work.
+      const arm = (): void => {
+        this.disposeBackfillSyncGate?.()
+        this.disposeBackfillSyncGate = this.backfillSyncGate(() => {
+          this.disposeBackfillSyncGate = undefined
+          this.workspaceBackfillJobs.schedule(() =>
+            this.runWorkspaceBackfills(workspaceId, backfills, generation),
+          )
+        })
+      }
+      arm()
+    }
   }
 
   /**
@@ -2642,22 +2704,107 @@ export class Repo {
     await this.seedMaterializationJobs.drain()
   }
 
+  /** Preconditions every backfill transaction must still satisfy. Separate
+   *  from the scheduling gate because scheduling proves a fact at one instant
+   *  and a chunked pass writes over many. */
+  private async assertBackfillMayWrite(
+    workspaceId: string,
+    backfillId: string,
+    generation: number,
+  ): Promise<void> {
+    if (this.workspaceGeneration !== generation) {
+      throw new Error(
+        `[workspaceBackfills] "${backfillId}" aborted: workspace ${workspaceId} was ` +
+        `re-opened since this pass was scheduled. The earlier visit's job must not ` +
+        `write into the new one.`,
+      )
+    }
+    if (this._client.activeWorkspaceId !== workspaceId) {
+      throw new Error(
+        `[workspaceBackfills] "${backfillId}" aborted: workspace ${workspaceId} is no ` +
+        `longer active. Its writes would land under the current session's access state.`,
+      )
+    }
+    // "Downloaded" is not "materialized": the sync observer stages arrivals in
+    // `blocks_synced_changes` and drains them into `blocks` in throttled
+    // windows, so the status can read settled while rows this pass will scan
+    // are still queued. Read from INSIDE the write transaction — staging can
+    // otherwise land between an outside check and lock acquisition.
+    const staged = await this.db.getOptional<{one: number}>(
+      'SELECT 1 AS one FROM blocks_synced_changes LIMIT 1',
+    )
+    if (staged !== null) {
+      throw new Error(
+        `[workspaceBackfills] "${backfillId}" aborted: synced rows are still draining ` +
+        `into blocks. Reading now would scan a partially materialized graph.`,
+      )
+    }
+    let settled = false
+    this.backfillSyncGate(() => { settled = true })()
+    if (!settled) {
+      throw new Error(
+        `[workspaceBackfills] "${backfillId}" aborted: this device fell behind the ` +
+        `server mid-run. Writing now would upload a stale properties bag.`,
+      )
+    }
+  }
+
   private async runWorkspaceBackfills(
     workspaceId: string,
     backfills: readonly WorkspaceBackfill[],
+    generation: number,
   ): Promise<void> {
     const markers = await this.workspaceBackfillMarkers.load()
     for (const backfill of backfills) {
       // A role flip to read-only during the deferral window must stop further
       // writes — re-check per backfill (the loop can span several txs).
       if (this.isReadOnly) return
+      // Don't even START a pass whose workspace has been re-opened since it was
+      // scheduled. `assertBackfillMayWrite` catches this per transaction, but
+      // that is one tx too late to avoid the scan a backfill does first.
+      if (this.workspaceGeneration !== generation) return
       if (markers.has(workspaceBackfillMarkerKey(workspaceId, backfill.id))) continue
+      if (backfill.completion === 'per-graph') {
+        // Refuse rather than fall back to the local marker: `per-graph` exists
+        // because running an upload-carrying repair on every device is the
+        // hazard, so silently giving it per-device semantics is the exact
+        // failure the field was added to make impossible.
+        console.error(
+          `[workspaceBackfills] "${backfill.id}" declares completion: 'per-graph', ` +
+          `which needs a synced completion claim that does not exist yet — skipping. ` +
+          `Implement the claim store before registering it.`,
+        )
+        continue
+      }
       const ctx: WorkspaceBackfillContext = {
         workspaceId,
         getAll: <T>(sql: string, params?: readonly unknown[]) =>
           this.db.getAll<T>(sql, params as unknown[] | undefined),
-        tx: <R>(fn: (tx: Tx) => Promise<R>, opts: {scope: ChangeScope; description?: string}) =>
-          this.tx(fn, opts),
+        // Scope and undo-recording are NOT the backfill's to choose. The scope
+        // stays `BlockDefault` — these ARE document edits and must keep the
+        // read-only gate and the seed-definition guard, both of which key off
+        // it — but the undo entry is suppressed: the pass fires seconds after
+        // workspace open, so on the stack it means a cmd-Z aimed at the user's
+        // own edit reverts the whole batch, permanently (the completion marker
+        // is already recorded).
+        tx: async <R>(fn: (tx: Tx) => Promise<R>, opts: {description?: string}): Promise<R> => {
+          // Checked per transaction and INSIDE it, after acquisition — not once
+          // before the run, and not just before `repo.tx`. Two separate reasons:
+          // a pass can be chunked across minutes (the properties-as-blocks
+          // cell->children migration is ~650k creates), so a pre-run check only
+          // ever covered the first batch; and `repo.tx` itself awaits
+          // definition readiness and the write lock, so a check before it can
+          // go stale before `fn` reads a row. Throwing here aborts the tx and
+          // the run with no marker recorded, so the next open retries.
+          return this.tx(async t => {
+            await this.assertBackfillMayWrite(workspaceId, backfill.id, generation)
+            return fn(t)
+          }, {
+            scope: ChangeScope.BlockDefault,
+            description: opts.description,
+            skipUndo: true,
+          })
+        },
       }
       try {
         await backfill.run(ctx)

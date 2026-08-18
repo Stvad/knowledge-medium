@@ -90,6 +90,7 @@ const SAFE_VIA_PROTOTYPE: Record<string, string> = {
   undoManagerFor: 'mints UndoManager into the shared map, but UndoManager captures no repo',
 
   // ── writes into a caller-provided tx (grouping follows the caller) ──
+  assertBackfillMayWrite: 'read — throws or returns; assigns no Repo fields',
   addTypeInTx: 'writes into the caller tx',
   addTypeInTxLenient: 'writes into the caller tx',
   removeTypeInTx: 'writes into the caller tx',
@@ -222,6 +223,9 @@ const SAFE_INSTANCE_FIELDS: Record<string, string> = {
   userTypes: 'stateful service constructor-bound to the real repo — documented group-escaping',
   workspaceBackfillJobs: 'shared job queue (facade never enqueues — schedule* overrides)',
   workspaceBackfillMarkers: 'shared object',
+  backfillSyncGate: 'injected function, captures no repo (default closes over this.db only)',
+  workspaceGeneration: 'counter bumped on workspace change; read-compared by backfill jobs',
+  disposeBackfillSyncGate: 'disposer for the armed gate; reassigned only by scheduleWorkspaceBackfills, which the facade overrides',
   referenceTargetDeriveJobs: 'shared job queue (facade never enqueues — schedule* overrides)',
   referenceTargetSweepDone: 'shared Set (session bookkeeping)',
   pendingNameRederives: 'shared Map (session bookkeeping)',
