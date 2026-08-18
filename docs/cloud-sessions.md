@@ -32,6 +32,17 @@ Reads, issue mutations and `bd remember` all work locally against the cloned DB 
 
 `bd backup init` drops `.beads/dolt-backup*.json`, untracked but NOT gitignored — `bd backup remove` when done, and never `git add -A`.
 
+### Prefer the tracked JSONL when only issues need to travel
+
+`bd backup` carries everything and costs a private-repo detour. For the common case — a session that filed or updated some issues — `.beads/issues.jsonl` is tracked and not gitignored, so the session's normal `git push` to the main repo carries them:
+
+1. `bd export -o .beads/issues.jsonl` and commit it with your other work,
+2. on any other machine, `git pull` then **`bd import`** with NO arguments — it defaults to that path and upserts (new issues created, existing updated), so a partial or stale file is safe.
+
+What this does NOT carry: Dolt history and branches, and memories — `bd export` excludes memories by default and MUST keep doing so, since this file lands on the PUBLIC repo (never pass `--all` / `--include-memories` when writing it). Use `bd backup` when history or memories actually need to travel.
+
+Do not expect the git hooks to do it for you: `bd hooks run post-merge` does NOT import a changed JSONL. Measured — appended a synthetic record, ran the hook, watched it never reach the DB — so this is one bare command on the receiving side, not zero.
+
 ## A push probe proves nothing until you see the pack move
 
 Ref deletion 403s here with or without a PAT and no MCP tool deletes a branch, so the temptation is a throwaway probe made safe with `--atomic` plus a poison-pill refspec. That shape is a TRAP: if the client rejects the poison locally (a non-fast-forward, or any ref whose remote object you lack — "fetch first"), `--atomic` aborts in `send-pack` and **no bytes are ever sent**. It reports `atomic push failed for ref …. status: 5`, which is git's own `REF_STATUS_REJECT_FETCH_FIRST`, not a server reply — so a probe that tested nothing reads exactly like a probe that passed. Always push with `--progress` and require `Writing objects: 100% … done.` before believing any conclusion about what the remote accepts.
