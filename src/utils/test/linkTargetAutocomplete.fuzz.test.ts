@@ -216,16 +216,15 @@ const makeRepo = (sources: readonly SearchSourceContribution[]): Repo => {
 }
 
 /** Independent re-expression of `freshestCandidatePayload`'s rule
- *  (linkTargetAutocomplete.ts:328-380, issue #450) — which itself
- *  implements the contract on `SearchSourceContribution`
- *  (`src/data/facets.ts:330-346`): "the surviving `block` payload is
- *  whichever duplicate's `userUpdatedAt` is newest (falling back to the
- *  higher-scored one on a tie/missing timestamp)". Generalized to a
- *  whole group: newest `userUpdatedAt` wins ONLY when EVERY candidate in
- *  the group has one (ties broken by higher score); the moment ANY
- *  candidate in the group lacks one, the WHOLE group falls back to
- *  highest score — a single timestamp-less duplicate hands the group's
- *  decision to score, it doesn't just remove itself from contention.
+ *  (issue #450) — which itself implements the contract on
+ *  `SearchSourceContribution` (`src/data/facets.ts`): candidates carrying
+ *  a finite `userUpdatedAt` outrank every candidate that does not; among
+ *  them newest wins, ties broken by higher score; only when NO candidate
+ *  in the group carries one does highest score decide. A timestamp-less
+ *  candidate removes itself from payload contention rather than handing
+ *  the whole group's decision to score — it is off-contract
+ *  (`BlockData.userUpdatedAt` is required), so it must not be able to
+ *  surface another source's stale copy over live data.
  *  Deliberately structured differently from production's left-to-right
  *  `reduce` — an explicit every()-then-filter()-then-max() shape — so
  *  this isn't just a renamed copy of the same expression, while still
@@ -250,13 +249,13 @@ const pickFreshestPayload = (candidates: readonly Candidate[]): Candidate => {
     if (typeof raw !== 'number') return undefined
     return raw - raw === 0 ? raw : undefined
   }
-  const allTimed = candidates.every(c => stampOf(c) !== undefined)
-  if (!allTimed) {
+  const timed = candidates.filter(c => stampOf(c) !== undefined)
+  if (timed.length === 0) {
     const bestScore = Math.max(...candidates.map(c => c.score))
     return candidates.find(c => c.score === bestScore)!
   }
-  const bestTime = Math.max(...candidates.map(c => stampOf(c)!))
-  const finalists = candidates.filter(c => stampOf(c) === bestTime)
+  const bestTime = Math.max(...timed.map(c => stampOf(c)!))
+  const finalists = timed.filter(c => stampOf(c) === bestTime)
   const bestScore = Math.max(...finalists.map(c => c.score))
   return finalists.find(c => c.score === bestScore)!
 }
@@ -425,22 +424,16 @@ describe('searchBlocksAcrossSources — model differential over generated async 
   }
 
   it('the surviving payload for a duplicate-id group is invariant under permutation of source order', async () => {
-    // `score` values are constrained UNIQUE across the group (not just
-    // unique as a whole tuple): under the corrected rule, the MOMENT any
-    // candidate in the group lacks a timestamp, the winner is decided by
-    // score ALONE across every candidate — timestamps are ignored
-    // entirely, even candidates that have one. So two candidates with
-    // DIFFERENT timestamps but the SAME score would be a genuine,
-    // order-dependent tie in that regime (whichever is earliest in fold
-    // order wins) even though their full (score, userUpdatedAt) tuples
-    // differ — a weaker "unique tuple" constraint isn't enough to keep
-    // the winner unambiguous here. Deduping by score alone rules out
-    // every tie this rule can produce (the all-timed regime's
-    // (timestamp, score) tie-break also can't fire once scores are
-    // globally unique), so the winner is always uniquely determined
-    // regardless of fold order — which is exactly what this property
-    // checks. The pinned canary below covers the actual fuzz-found
-    // defect with fixed values.
+    // `score` values are constrained UNIQUE across the group, which rules
+    // out every tie the rule can produce and so leaves the winner uniquely
+    // determined — the precondition for asking whether fold order changes
+    // it. Both regimes tie-break on score last (timestamped candidates:
+    // newest, then score; an all-untimed group: score alone), so globally
+    // unique scores make both unambiguous. A weaker "unique (score,
+    // timestamp) tuple" constraint would NOT be enough: an all-untimed
+    // group decides on score alone, where two candidates differing only in
+    // timestamp are a genuine order-dependent tie. The pinned canaries
+    // below cover the actual fuzz-found defect with fixed values.
     const uniqueScoreGroupArb = fc.uniqueArray(
       fc.integer({min: 0, max: 500}),
       {minLength: 2, maxLength: 6},
@@ -464,27 +457,17 @@ describe('searchBlocksAcrossSources — model differential over generated async 
     )
   }, fuzzTestTimeout())
 
-  it('canary: contract-faithful fallback survives a 3-way duplicate group in every fold order (issue #450)', async () => {
-    // Pinned fuzz-found counterexample, per the corrected contract read
-    // (`SearchSourceContribution` docblock, `src/data/facets.ts:330-346`):
-    // "falling back to the higher-scored one on a tie/MISSING timestamp"
-    // means a missing timestamp ANYWHERE in the group hands the whole
-    // group's decision to score — not just that one candidate's own
-    // comparisons. A has an older timestamp than B but the highest score
-    // in the group; C has no timestamp at all. Because C lacks a
-    // timestamp, the WHOLE group falls back to score, so A (score 5)
-    // must win regardless of fold order — B's newer timestamp never
-    // enters the decision once any group member is missing one.
+  it('canary: an off-contract candidate cannot decide a 3-way duplicate group, in any fold order (issue #450)', async () => {
+    // The fuzz-found counterexample. A and B both carry timestamps; C
+    // carries none, which makes it off-contract (`BlockData.userUpdatedAt`
+    // is required). B is the freshest well-formed candidate, so B's copy
+    // of the block is what the user must see — in all six orders, and
+    // whatever C's score is.
     //
-    // Verified against the true pre-fix single-pass fold (PR #449 HEAD
-    // before this fix, hand-traced and confirmed by temporarily
-    // reverting `freshestCandidatePayload` locally): that fold picked B
-    // instead of A on 4 of the 6 orders below — (A,B,C), (A,C,B),
-    // (B,A,C), (C,A,B) — because the pairwise comparisons let B's
-    // timestamp "win" a step before ever being weighed against C's
-    // missing one, silently narrowing the contract's whole-group
-    // fallback to a pairwise one. Only (B,C,A) and (C,B,A) coincidentally
-    // matched the contract-correct answer (A) pre-fix.
+    // Verified to FAIL against the original pre-#450 pairwise running
+    // fold (spliced back in locally): on order (B,C,A) it answered A,
+    // where the rule requires B. So this pins the order-dependence
+    // itself, not merely the rule.
     const A = {score: 5, userUpdatedAt: 10}
     const B = {score: 0, userUpdatedAt: 20}
     const C = {score: 3, userUpdatedAt: undefined}
@@ -495,38 +478,60 @@ describe('searchBlocksAcrossSources — model differential over generated async 
     for (const order of orders) {
       const result = await runDupGroup(order)
       expect(result, JSON.stringify(order)).toHaveLength(1)
-      // A has the highest score, and C's missing timestamp forces the
-      // whole group to decide by score alone — A must win regardless of
-      // fold order.
-      expect(result[0].userUpdatedAt, JSON.stringify(order)).toBe(A.userUpdatedAt)
-      expect(result[0].content, JSON.stringify(order)).toBe(`${A.score}:${A.userUpdatedAt}`)
+      expect(result[0].userUpdatedAt, JSON.stringify(order)).toBe(B.userUpdatedAt)
+      expect(result[0].content, JSON.stringify(order)).toBe(`${B.score}:${B.userUpdatedAt}`)
     }
   })
 
-  it('canary: a timestamp-less candidate can still win on score alone against a timestamped one (facets.ts contract)', async () => {
-    // Directly pins the contract's "missing timestamp" fallback with the
-    // minimal 2-candidate case: X has a timestamp but the LOWER score; Y
-    // has no timestamp but the HIGHER score. The contract says a missing
-    // timestamp falls back to score — Y must win despite having no
-    // timestamp at all, in both orders.
+  it('canary: a high score cannot buy an off-contract candidate the payload (facets.ts contract)', async () => {
+    // The minimal shape of the decision this rule turns on, and the one
+    // the contract was flipped over twice: X is well-formed but scores 1;
+    // Y has no timestamp and scores 50. Y's score still sets the merged
+    // rank (asserted below) — but X's copy is what gets displayed, since
+    // Y's is a snapshot of unknown age from a source that broke the
+    // contract.
     //
-    // NOTE: unlike the 3-way canary above, this 2-candidate case already
-    // resolved correctly under the ORIGINAL pre-fix pairwise fold in
-    // both orders (verified) — a 2-element pairwise comparison is
-    // inherently order-independent except on an exact score tie, and
-    // there's no tie here. It does, however, distinguish the CORRECTED
-    // rule from an intermediate fix attempt that filtered to
-    // timestamped candidates first (which would wrongly keep X): see the
-    // module docblock's "FUZZ-FOUND HISTORY". Kept as a direct pin of
-    // the contract itself, not a regression pin against the original bug.
+    // This pins the rule, not a regression: a 2-element pairwise fold is
+    // order-independent absent an exact tie, so it never exhibited #450.
+    // It DOES fail against the previous rule (whole-group score fallback),
+    // which answered Y.
     const X = {score: 1, userUpdatedAt: 20}
     const Y = {score: 50, userUpdatedAt: undefined}
 
     for (const order of [[X, Y], [Y, X]]) {
       const result = await runDupGroup(order)
       expect(result, JSON.stringify(order)).toHaveLength(1)
-      expect(result[0].content, JSON.stringify(order)).toBe(`${Y.score}:${Y.userUpdatedAt}`)
+      expect(result[0].content, JSON.stringify(order)).toBe(`${X.score}:${X.userUpdatedAt}`)
     }
+  })
+
+  it('an off-contract candidate still contributes its score to the merged rank', async () => {
+    // Losing the payload must not also lose the ranking signal: the
+    // block should still sort at score 50, not 1. Pinned through the real
+    // merge point by giving a second block a score between the two — if
+    // the off-contract candidate's score were dropped, `dup-block` would
+    // sort below it.
+    const sources: SearchSourceContribution[] = [
+      {
+        id: 'well-formed',
+        search: async () => [{score: 1, block: makeBlockData('dup-block', 20, 'live')}],
+      },
+      {
+        id: 'off-contract',
+        search: async () => [{score: 50, block: makeBlockData('dup-block', undefined, 'stale')}],
+      },
+      {
+        id: 'other',
+        search: async () => [{score: 25, block: makeBlockData('other-block', 5, 'other')}],
+      },
+    ]
+    const result = await searchBlocksAcrossSources(makeRepo(sources), {
+      workspaceId: WS,
+      query: 'q',
+      limit: 10,
+    })
+    expect(result.map(b => b.id)).toEqual(['dup-block', 'other-block'])
+    expect(result[0].content).toBe('live')
   })
 
   it('canary: a NaN timestamp is MISSING, not newest — it must not reintroduce order-dependence (Codex, PR #449)', async () => {

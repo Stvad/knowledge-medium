@@ -426,20 +426,33 @@ export interface SearchSourceArgs {
  *  surviving score is the MAX across duplicates, but the surviving
  *  `block` payload is whichever duplicate's `userUpdatedAt` is newest,
  *  so a stale index copy can't shadow live data just because it scored
- *  higher. That rule is decided over the duplicate GROUP as a whole,
- *  never pairwise: a pairwise fold of "newest, else higher score" is
+ *  higher.
+ *
+ *  That rule is decided over the duplicate GROUP as a whole, never
+ *  pairwise: a pairwise fold of "newest, else higher score" is
  *  non-associative, so the winner depends on the order sources happen to
- *  be registered in (a real bug — issue #450 — and the earlier wording
- *  here, "falling back to the higher-scored one on a tie/missing
- *  timestamp", was ambiguous enough to produce two different wrong
- *  implementations). Precisely: if EVERY duplicate carries a FINITE
- *  `userUpdatedAt`, the newest wins, ties broken by higher score; if ANY
- *  duplicate lacks one, timestamps are ignored entirely and the highest
- *  score wins across the whole group. Finite, not merely `typeof
- *  'number'` — `NaN` passes typeof and then loses every comparison
- *  including against itself, which brings the order-dependence straight
- *  back, and `Infinity` would win unconditionally; a source contributing
- *  either gets the missing-timestamp fallback. A source that throws is logged and dropped so it can't take
+ *  be registered in (issue #450). Precisely, and prescriptively — this
+ *  paragraph is the spec, not a description of the implementation, and
+ *  earlier prose here was vague enough to produce three different
+ *  implementations:
+ *   - duplicates carrying a FINITE `userUpdatedAt` outrank every
+ *     duplicate that does not. Among them the newest wins, ties broken by
+ *     higher score, then by group order.
+ *   - only when NO duplicate in the group carries one does the highest
+ *     score win.
+ *  Finite, not merely `typeof 'number'` — `NaN` passes typeof and then
+ *  loses every comparison including against itself, which brings the
+ *  order-dependence straight back, and `Infinity` would win
+ *  unconditionally.
+ *
+ *  `BlockData.userUpdatedAt` is a required number, so a candidate without
+ *  one is a bug in the contributing source; the merge point warns and
+ *  keeps its score (ranking is unaffected) but will not display its copy
+ *  of the block over a well-formed one. The alternative — letting one
+ *  such candidate push its whole group onto the score fallback — meant a
+ *  single malformed contribution could surface another source's STALE
+ *  copy over live data, which is the failure this rule exists to prevent.
+ *  A source that throws is logged and dropped so it can't take
  *  down another source's results — UNLESS every contributed source
  *  throws, in which case the merge point rethrows the first error
  *  rather than resolving to an empty result. Core registers its FTS
