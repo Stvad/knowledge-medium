@@ -1010,8 +1010,8 @@ describe('a layout that drops shellProps', () => {
   })
 
   // Silent is the failure mode worth pinning: the block simply has no identity
-  // in the DOM, and every consumer resolves to an ancestor instead. Nothing
-  // threw when the SRS review card did this.
+  // in the DOM, and every consumer resolves to an ancestor instead — nothing
+  // throws, so only the report says anything at all.
   it('is reported, rather than silently losing the block\'s identity', async () => {
     const error = vi.spyOn(console, 'error').mockImplementation(() => {})
 
