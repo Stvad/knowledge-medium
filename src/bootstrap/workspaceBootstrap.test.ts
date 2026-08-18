@@ -39,7 +39,26 @@ beforeEach(async () => {
   }).repo
   repo.setActiveWorkspaceId(WS)
 })
-afterEach(() => { vi.restoreAllMocks() })
+afterEach(async () => {
+  vi.restoreAllMocks()
+  // `bootstrapWorkspace` schedules real deferred work — seed materialization,
+  // backfills, reprojection, reference-target derive, reconcile rescan. Left
+  // running, those callbacks resume against the next test's freshly reset
+  // database, or a closed one after `afterAll`. Unpinning the workspace is the
+  // production cancel path rather than a test-only hatch: it aborts the parked
+  // access waits and disposes the backfill gate, which is also what lets the
+  // drains below finish — a `freshlyCreated: false` seed pass parks on a
+  // membership row that never arrives in a bare test database, so draining
+  // without the unpin hangs instead of settling.
+  repo.setActiveWorkspaceId(null)
+  await Promise.all([
+    repo.awaitSeedMaterialization(),
+    repo.awaitWorkspaceBackfills(),
+    repo.awaitReprojections(),
+    repo.awaitReferenceTargetDerive(),
+    repo.awaitReconcileRescans(),
+  ])
+})
 
 const open = () => bootstrapWorkspace({
   repo,
