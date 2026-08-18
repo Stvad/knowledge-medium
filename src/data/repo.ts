@@ -69,6 +69,7 @@ import { kernelDataExtension } from './kernelDataExtension'
 import {
   systemPagesFacet,
   type WorkspaceBackfill,
+  type BackfillCompletionClaim,
   type WorkspaceBackfillContext,
 } from './facets'
 import { ProcessorRunner } from './internals/processorRunner'
@@ -98,9 +99,6 @@ import {
   RECORD_REPROJECT_REF_MARKER_SQL,
   REPROJECT_REF_MARKER_PREFIX,
   SELECT_REPROJECT_REF_MARKERS_SQL,
-  RECORD_WORKSPACE_BACKFILL_MARKER_SQL,
-  WORKSPACE_BACKFILL_MARKER_PREFIX,
-  SELECT_WORKSPACE_BACKFILL_MARKERS_SQL,
   RECONCILE_RESCAN_MARKER_PREFIX,
   SELECT_RECONCILE_RESCAN_MARKER_SQL,
   RECORD_RECONCILE_RESCAN_MARKER_SQL,
@@ -275,8 +273,6 @@ const reprojectionMarkerKey = (workspaceId: string, name: string): string =>
 /** Suffix (after the `workspace_backfill:` prefix) of a per-workspace
  *  workspace-backfill completion marker — `<workspaceId>:<backfillId>`. Same
  *  shape/rationale as `reprojectionMarkerKey`. */
-const workspaceBackfillMarkerKey = (workspaceId: string, id: string): string =>
-  `${workspaceId}:${id}`
 
 /** Equal iff `a` and `b` have the same key set AND `eq` holds for every shared
  *  key's values. An absent map is the empty map; the default `eq` compares keys
@@ -403,6 +399,13 @@ export interface RepoOptions {
    *  visibly. Tests pass an immediate gate; `onSyncSettled` itself is covered
    *  directly in `firstSync.test.ts`. */
   backfillSyncGate?: (cb: () => void) => () => void
+  /** Records migration completion in SYNCED data, so a repair that uploads
+   *  happens once per graph. Without one, `runWorkspaceBackfills` refuses every
+   *  registration rather than falling back to the per-device marker — which
+   *  would have every device attempt the repair independently. No production
+   *  implementation exists yet; slice C of the properties-as-blocks migration
+   *  owns building it. */
+  backfillCompletionClaim?: BackfillCompletionClaim
   /** When true (default), the Layout B sync observer is started at
    *  construction time so sync-applied writes — staged into `blocks_synced`
    *  — materialize into the app-visible `blocks` table and invalidate
@@ -639,10 +642,6 @@ export class Repo {
    *  refreshed by the `workspaceBackfills` rebuild step). Run once per
    *  workspace by `scheduleWorkspaceBackfills`. */
   private _workspaceBackfills: readonly WorkspaceBackfill[] = []
-  /** Lazy in-memory mirror of the workspace-backfill completion markers in
-   *  `client_schema_state` (rows keyed `workspace_backfill:<ws>:<id>`), same
-   *  pattern as `reprojectionMarkers`. Constructed in the constructor. */
-  private readonly workspaceBackfillMarkers: MarkerStore
   /** In-flight workspace-backfill runs whose deferral timer has fired —
    *  drained by `awaitWorkspaceBackfills()` for deterministic test quiescence,
    *  mirroring `reprojectionJobs`. */
@@ -650,6 +649,8 @@ export class Repo {
   /** Arms a callback for when this device is no longer behind the server
    *  (`RepoOptions.backfillSyncGate`). */
   private readonly backfillSyncGate: (cb: () => void) => () => void
+  /** See `RepoOptions.backfillCompletionClaim`. Absent ⇒ backfills refuse. */
+  private readonly backfillCompletionClaim: BackfillCompletionClaim | undefined
   /** Disposer for a gate armed but not yet opened, so a workspace switch or
    *  repo teardown doesn't leave a status listener attached. */
   private disposeBackfillSyncGate: (() => void) | undefined
@@ -908,12 +909,7 @@ export class Repo {
       RECORD_REPROJECT_REF_MARKER_SQL,
       CLEAR_REPROJECT_REF_MARKER_SQL,
     )
-    this.workspaceBackfillMarkers = new MarkerStore(
-      this.db,
-      WORKSPACE_BACKFILL_MARKER_PREFIX,
-      SELECT_WORKSPACE_BACKFILL_MARKERS_SQL,
-      RECORD_WORKSPACE_BACKFILL_MARKER_SQL,
-    )
+    this.backfillCompletionClaim = opts.backfillCompletionClaim
     this.backfillSyncGate = opts.backfillSyncGate
       ?? ((cb) => onSyncSettled(this.db as unknown as Parameters<typeof onSyncSettled>[0], cb))
     this.syncObserverDeps = opts.syncObserverDeps
@@ -2754,7 +2750,19 @@ export class Repo {
     backfills: readonly WorkspaceBackfill[],
     generation: number,
   ): Promise<void> {
-    const markers = await this.workspaceBackfillMarkers.load()
+    const claim = this.backfillCompletionClaim
+    if (!claim) {
+      // Refuse rather than fall back to the local marker. Every pass here
+      // uploads, so "done" has to be recorded where every device sees it;
+      // a per-device marker would have each one attempt the repair
+      // independently, which is the stale-write hazard itself.
+      console.error(
+        `[workspaceBackfills] skipping ${backfills.length} backfill(s) for workspace ` +
+        `${workspaceId}: no BackfillCompletionClaim is configured, so completion ` +
+        `cannot be recorded once per graph.`,
+      )
+      return
+    }
     for (const backfill of backfills) {
       // A role flip to read-only during the deferral window must stop further
       // writes — re-check per backfill (the loop can span several txs).
@@ -2763,19 +2771,7 @@ export class Repo {
       // scheduled. `assertBackfillMayWrite` catches this per transaction, but
       // that is one tx too late to avoid the scan a backfill does first.
       if (this.workspaceGeneration !== generation) return
-      if (markers.has(workspaceBackfillMarkerKey(workspaceId, backfill.id))) continue
-      if (backfill.completion === 'per-graph') {
-        // Refuse rather than fall back to the local marker: `per-graph` exists
-        // because running an upload-carrying repair on every device is the
-        // hazard, so silently giving it per-device semantics is the exact
-        // failure the field was added to make impossible.
-        console.error(
-          `[workspaceBackfills] "${backfill.id}" declares completion: 'per-graph', ` +
-          `which needs a synced completion claim that does not exist yet — skipping. ` +
-          `Implement the claim store before registering it.`,
-        )
-        continue
-      }
+      if (await claim.isDone(workspaceId, backfill.id)) continue
       const ctx: WorkspaceBackfillContext = {
         workspaceId,
         getAll: <T>(sql: string, params?: readonly unknown[]) =>
@@ -2818,7 +2814,7 @@ export class Repo {
         // Record the marker only after a clean run — a thrown backfill leaves
         // it unset so the next open retries (backfills are written idempotent
         // via a per-row recheck, so a retry is cheap).
-        await this.workspaceBackfillMarkers.set(workspaceBackfillMarkerKey(workspaceId, backfill.id))
+        await claim.markDone(workspaceId, backfill.id)
       } catch (err) {
         const reason = err instanceof Error ? err.message : String(err)
         console.error(

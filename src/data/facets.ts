@@ -79,35 +79,33 @@ const isLocalSchemaContribution = (value: unknown): value is LocalSchemaContribu
  * `repo.tx`, so its rows carry `source = 'user'` and actually upload — the
  * server, and every other client, converge.
  *
- * The repo runs each registered backfill at most once per (workspace, id),
- * deferred off the workspace-open critical path — see
+ * Completion is once per GRAPH, recorded through `BackfillCompletionClaim` —
+ * not once per device. Deferred off the workspace-open critical path; see
  * `Repo.scheduleWorkspaceBackfills`.
  */
-/** Where a backfill's "already done" record lives — and therefore how many
- *  devices run it. Explicit because getting it wrong is silent and expensive,
- *  and because the two answers are two different KINDS of operation:
+/** Records that a migration is done, in SYNCED data, so it happens once per
+ *  GRAPH rather than once per device.
  *
- *  - `per-device`: the completion marker is local (`client_schema_state`), so
- *    every device runs the pass once. Every pass through THIS seam uploads, so
- *    this is a deliberate acceptance of N devices each attempting the repair,
- *    not a neutral default — take it only for a repair whose stale-bag risk you
- *    have actually weighed. A pass that rebuilds per-device DERIVED state does
- *    not belong on this seam at all (see AGENTS.md).
- *  - `per-graph`: the pass repairs SOURCE-OF-TRUTH rows and uploads them, so it
- *    must happen once for the whole graph. A local marker would have every
- *    device independently attempt an upload-carrying repair — which is the root
- *    of the stale-read / last-write-wins hazard, not a side effect of it. The
- *    claim has to live in synced data so one device runs and the rest see it
- *    done. */
-export type WorkspaceBackfillCompletion = 'per-device' | 'per-graph'
+ *  Every pass on this seam writes source-of-truth rows and uploads them, so N
+ *  devices each running it independently is N chances to build a write from a
+ *  stale local row and overwrite concurrent edits (`apply_block_patches`
+ *  assigns `properties_json` wholesale). A local completion marker in
+ *  `client_schema_state` cannot express "already done for everyone" — hence
+ *  this seam rather than a boolean on the backfill.
+ *
+ *  No production implementation exists yet, and `Repo` REFUSES to run any
+ *  backfill without one rather than falling back to a local marker. */
+export interface BackfillCompletionClaim {
+  /** True when this (workspace, backfill) is already complete for the graph. */
+  isDone(workspaceId: string, backfillId: string): Promise<boolean>
+  /** Record completion where every device will see it. */
+  markDone(workspaceId: string, backfillId: string): Promise<void>
+}
 
 export interface WorkspaceBackfill {
   /** Stable id; doubles as the per-workspace completion-marker suffix. Change
    *  it to force a re-run on every workspace. */
   readonly id: string
-  /** Required, with no default: the wrong answer here is invisible at the call
-   *  site and costly in production, so every backfill states it. */
-  readonly completion: WorkspaceBackfillCompletion
   run: (ctx: WorkspaceBackfillContext) => Promise<void>
 }
 
@@ -136,8 +134,7 @@ export interface WorkspaceBackfillContext {
 }
 
 const isWorkspaceBackfill = (value: unknown): value is WorkspaceBackfill =>
-  isRecord(value) && typeof value.id === 'string' && typeof value.run === 'function' &&
-  (value.completion === 'per-device' || value.completion === 'per-graph')
+  isRecord(value) && typeof value.id === 'string' && typeof value.run === 'function'
 
 const isInvalidationRule = (value: unknown): value is InvalidationRule =>
   isRecord(value) &&

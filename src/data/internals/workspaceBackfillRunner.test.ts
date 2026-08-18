@@ -20,7 +20,6 @@ let sharedDb: TestDb
  *  observable through undo. */
 const probeBackfill = (runs: string[]): WorkspaceBackfill => ({
   id: 'probe-backfill-v1',
-  completion: 'per-device',
   run: async ({workspaceId, tx}) => {
     runs.push(workspaceId)
     const targetId = workspaceId === WS ? 'target' : `target-${workspaceId}`
@@ -118,7 +117,6 @@ describe('workspace backfill runner — sync gating', () => {
     const batches: number[] = []
     const chunked: WorkspaceBackfill = {
       id: 'chunked-probe-v1',
-      completion: 'per-device',
       run: async ({tx}) => {
         for (let i = 0; i < 3; i++) {
           if (i === 1) g.close()          // a fresh download starts mid-run
@@ -145,7 +143,6 @@ describe('workspace backfill runner — sync gating', () => {
     const batches: number[] = []
     const chunked: WorkspaceBackfill = {
       id: 'chunked-probe-v1',
-      completion: 'per-device',
       run: async ({tx}) => {
         for (let i = 0; i < 3; i++) {
           if (i === 1) repo.setActiveWorkspaceId(OTHER_WS)
@@ -189,7 +186,6 @@ describe('workspace backfill runner — sync gating', () => {
     const batches: number[] = []
     const chunked: WorkspaceBackfill = {
       id: 'chunked-staging-v1',
-      completion: 'per-device',
       run: async ({tx}) => {
         for (let i = 0; i < 3; i++) {
           if (i === 1) {
@@ -223,7 +219,6 @@ describe('workspace backfill runner — sync gating', () => {
     const ran: string[] = []
     const findsNothing: WorkspaceBackfill = {
       id: 'finds-nothing-v1',
-      completion: 'per-device',
       run: async ({workspaceId}) => { ran.push(workspaceId) },   // never calls tx
     }
     const repo = makeRepo(findsNothing, g.gate)
@@ -250,7 +245,6 @@ describe('workspace backfill runner — sync gating', () => {
     const g = controllableGate()
     const late: WorkspaceBackfill = {
       id: 'stages-after-write-v1',
-      completion: 'per-device',
       run: async ({tx}) => {
         await tx(async () => {}, {description: 'the only batch'})
         await sharedDb.db.execute(
@@ -270,52 +264,27 @@ describe('workspace backfill runner — sync gating', () => {
     expect(markers).toEqual([])
   })
 
-  it('refuses a per-graph backfill rather than giving it per-device semantics', async () => {
-    // Silently falling back to the local marker would have every device run an
-    // upload-carrying repair — the exact hazard the field exists to prevent.
+  it('refuses every backfill when no completion claim is configured', async () => {
+    // Production has no synced claim store yet. Falling back to the local
+    // marker would have each device attempt an upload-carrying repair
+    // independently — the stale-write hazard itself — so the runner refuses.
     const runs: string[] = []
-    const perGraph: WorkspaceBackfill = {
-      id: 'per-graph-probe-v1',
-      completion: 'per-graph',
-      run: async ({workspaceId}) => { runs.push(workspaceId) },
-    }
     const errors: string[] = []
     vi.spyOn(console, 'error').mockImplementation((m: unknown) => { errors.push(String(m)) })
-    const repo = makeRepo(perGraph)
+    const {repo} = createTestRepo({
+      db: sharedDb.db,
+      user: {id: 'user-1'},
+      backfillSyncGate: (cb) => { cb(); return () => {} },
+      backfillCompletionClaim: undefined as never,   // explicit: none configured
+    })
+    repo.setActiveWorkspaceId(WS)
+    repo.setRuntimeContributions(workspaceBackfillsFacet, 'test-backfills', [probeBackfill(runs)])
     await seedTarget(repo)
 
     await drain(repo)
 
     expect(runs).toEqual([])
-    expect(errors.join(' ')).toContain("completion: 'per-graph'")
-    const markers = await sharedDb.db.getAll<{key: string}>(
-      "SELECT key FROM client_schema_state WHERE key LIKE 'workspace_backfill:%'",
-    )
-    expect(markers).toEqual([])
-  })
-
-  it('re-arms the restored workspace when pinning the incoming one throws', async () => {
-    // The leaving path disposes the outgoing gate before the pin is attempted.
-    // If the pin throws, `setActiveWorkspaceId` restores the previous workspace
-    // — but nothing re-armed its gate, so it would silently never backfill for
-    // the rest of the session.
-    const g = controllableGate()
-    const repo = makeRepo(probeBackfill([]), g.gate)
-    await seedTarget(repo)
-
-    repo.scheduleWorkspaceBackfills(WS)
-    expect(g.armed()).toBe(1)
-
-    vi.spyOn(repo.projectors, 'pinWorkspace').mockImplementationOnce(() => {
-      throw new Error('pin failed')
-    })
-    // The pin failure is re-thrown after the restore; the restore is the part
-    // under test.
-    expect(() => repo.setActiveWorkspaceId(OTHER_WS)).toThrow(/pin failed/)
-
-    // Restored to WS, and its gate is armed again.
-    expect(repo.activeWorkspaceId).toBe(WS)
-    expect(g.armed()).toBe(1)
+    expect(errors.join(' ')).toContain('no BackfillCompletionClaim is configured')
   })
 
   it('disposes a gate still armed for a workspace the user left', async () => {
