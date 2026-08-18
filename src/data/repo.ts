@@ -2714,7 +2714,16 @@ export class Repo {
    *  answers `identity-unavailable` for EVERY name when the snapshot is null
    *  or belongs to another workspace. That is indistinguishable, at the call
    *  site, from "this key genuinely has no definition" — and a backfill that
-   *  reads it as the latter concludes there is nothing to migrate. */
+   *  reads it as the latter concludes there is nothing to migrate, writes
+   *  nothing, and then records a PERMANENT per-graph completion.
+   *
+   *  UNPINNED BY A TEST, and labelled so rather than left looking covered.
+   *  Reaching an unprimed registry from a constructed Repo is a race: the
+   *  runtime primes one asynchronously, so a test that leaves it absent (or
+   *  sets it for another workspace) is green or red depending on which side
+   *  of that priming the deferred job lands — measured, twice, as green
+   *  locally and red on CI. Pinning it wants a Repo whose priming is
+   *  injectable, which does not exist yet. */
   private propertyRegistryReadyFor(workspaceId: string): boolean {
     return registryForWorkspace(
       this._propertyDefinitionRegistry,

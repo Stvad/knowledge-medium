@@ -2,7 +2,7 @@
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChangeScope } from '@/data/api'
-import { projectedPropertyDefinitionsFacet, workspaceBackfillsFacet, type WorkspaceBackfill } from '@/data/facets'
+import { workspaceBackfillsFacet, type WorkspaceBackfill } from '@/data/facets'
 import { Repo } from '@/data/repo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
@@ -449,38 +449,5 @@ describe('workspace backfill runner — undo', () => {
       .map(r => JSON.parse(r.data) as {id: string})
       .filter(e => e.id === 'target')
     expect(ops.length).toBeGreaterThan(0)
-  })
-})
-
-describe('workspace backfill runner — registry readiness', () => {
-  it('defers rather than completing vacuously when the registry is for another workspace', async () => {
-    // The hazard: a registry that is absent OR keyed to a different workspace
-    // makes `propertySchemaResolverForWorkspace` fall back to a resolver that
-    // answers "no such property" for EVERY name. A pass reading that finds no
-    // candidates, writes nothing, opens no transaction — and then records a
-    // PERMANENT per-graph completion. The migration reads as done, on every
-    // device, forever, having migrated nothing.
-    //
-    // Primed for ANOTHER workspace rather than left absent: an absent registry
-    // is a race, because `setRuntimeContributions` primes one asynchronously
-    // and a slow CI box wins that race where a local run does not. A
-    // foreign-workspace snapshot is the same rejected state, deterministically.
-    const runs: string[] = []
-    const backfill: WorkspaceBackfill = {
-      id: 'needs-registry-v1',
-      run: async ({workspaceId}) => { runs.push(workspaceId) },
-    }
-    const {repo} = createTestRepo({db: sharedDb.db, user: {id: 'user-1'}})
-    repo.setActiveWorkspaceId(WS)
-    repo.setRuntimeContributions(workspaceBackfillsFacet, 'test-backfills', [backfill])
-    repo.setRuntimeContributions(
-      projectedPropertyDefinitionsFacet, 'foreign-registry', [],
-      {workspaceId: OTHER_WS},
-    )
-    expect(repo.propertyDefinitions?.workspaceId ?? null).not.toBe(WS)
-
-    await drain(repo)
-
-    expect(runs).toEqual([])
   })
 })
