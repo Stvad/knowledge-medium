@@ -251,6 +251,7 @@ describe('per-graph claim over two converging databases', () => {
     const claimA = claimFor(a, 'device-a', () => aConverges)
     expect(await claimA.tryClaim(WS, 'retry-v1')).toBe(false)
 
+
     // Meanwhile B claims for real and wins the server.
     const claimB = claimFor(b, 'device-b', () => true)
     expect(await claimB.tryClaim(WS, 'retry-v1')).toBe(true)
