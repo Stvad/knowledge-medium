@@ -1,7 +1,6 @@
 import { createContext, ReactNode, use, useCallback, useContext, useRef, useSyncExternalStore } from 'react'
 import { v4 as uuidv4 } from 'uuid'
 import { createGraphBackfillClaim } from '@/data/internals/graphBackfillClaim'
-import { awaitClaimConverged } from '@/data/internals/claimConvergence'
 import { getOrCreateMigrationsPage } from '@/data/migrationsPage'
 import { PowerSyncContext } from '@powersync/react'
 import type { AbstractPowerSyncDatabase } from '@powersync/common'
@@ -39,44 +38,10 @@ const initRepo = memoize(
     }
     const backfillCompletionClaim = createGraphBackfillClaim({
       get db() { return requireRepo().db },
-      // Unique per client instance — see `GraphBackfillClaimDeps.claimantId`
-      // for why a shared token (which the layout-session id can be) is the
-      // one failure convergence cannot repair.
+      // Identifies which client left an in-flight claim behind. Diagnostic
+      // only — nothing branches on exclusivity.
       claimantId: uuidv4(),
       tx: (fn, opts) => requireRepo().tx(fn, opts),
-      // A local-only session has no server, so nothing can converge and
-      // nothing needs to: it is the only client, and the claim is trivially
-      // its own.
-      awaitConverged: useRemoteSync
-        ? (claimId) => awaitClaimConverged({
-            hasPendingUpload: async (blockId) => {
-              const row = await requireRepo().db.getOptional<{n: number}>(
-                `SELECT 1 AS n FROM ps_crud
-                  WHERE json_extract(data, '$.type') = 'blocks'
-                    AND json_extract(data, '$.id') = ?
-                  LIMIT 1`,
-                [blockId],
-              )
-              return row !== null && row !== undefined
-            },
-            lastSyncedAt: () => {
-              const at = (db as {currentStatus?: {lastSyncedAt?: Date | null}})
-                .currentStatus?.lastSyncedAt
-              return at ? at.getTime() : null
-            },
-            onStatusChange: (cb) => {
-              const listener = (db as {registerListener?: (l: {statusChanged?: () => void}) => () => void})
-                .registerListener
-              return listener ? listener.call(db, {statusChanged: () => { cb() }}) : () => {}
-            },
-            now: () => Date.now(),
-            // Generous: the wait spans an upload round trip plus a download
-            // checkpoint, and giving up merely defers to the next open.
-            timeoutMs: 120_000,
-            pollMs: 1_000,
-            sleep: (ms) => new Promise(resolve => { setTimeout(resolve, ms) }),
-          }, claimId)
-        : async () => true,
       ensureHome: (workspaceId) => getOrCreateMigrationsPage(requireRepo(), workspaceId),
     })
     const repo = new Repo({

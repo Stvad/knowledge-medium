@@ -18,28 +18,34 @@
  * which would run the same upload-carrying pass again, the exact hazard this
  * seam exists to prevent.
  *
- * ## What makes the re-read a decision
+ * ## Where exactly-once actually comes from
  *
- * Two devices opening a freshly flipped workspace both see no claim and both
- * write one, to the SAME block id. Reading straight back proves nothing —
- * each sees its own row. Two things make the second read authoritative:
+ * NOT from this claim. A pass on this seam is OPERATOR-TRIGGERED: a human
+ * runs it, on one device, once (§11 — "operator-run-once per workspace", and
+ * the doc declines an attestation RPC for the same reason). There is no race
+ * to arbitrate, so the claim's job is to RECORD, not to decide.
  *
- *  - `awaitConverged` (`claimConvergence.ts`) blocks until our write has
- *    reached the server AND a checkpoint has come back, so what we then read
- *    is the server's resolution rather than our own echo. A timeout backs
- *    OFF; proceeding unconverged is the failure this exists to prevent.
- *  - the create is a `systemMint` (stamp 0). Two nonzero-stamp mints of one
- *    deterministic id are misread as identical by the reconcile gate, and the
- *    loser strands believing it won — the shape `syncObserver/reconcile.ts`
- *    documents. Stamp 0 makes both yield to the server instead.
+ * That is a deliberate retreat from an earlier design in which `tryClaim`
+ * waited for the write to converge before trusting its own read. Chasing
+ * exactly-once across N devices over a last-write-wins layer with no server
+ * arbitration has no fixed point: each layer of the pipeline is another place
+ * a local read is stale (upload queue, download checkpoint, the throttled
+ * `blocks_synced` drain, the rejection quarantine), and every wait added to
+ * cover one needs a timeout, which strands a claim, which needs reclaim,
+ * which needs arbitration. Six review rounds each closed one window and
+ * revealed the next. Moving the guarantee to the trigger deletes the class.
  *
- * Both are pinned over two real databases in `graphBackfillClaimRace.test.ts`;
- * removing either lets both devices proceed.
+ * What the record still buys, and it is worth having:
+ *  - a completed pass is visible to every device, so a second operator on a
+ *    second device is told it is already done. Duplicate "done" is harmless
+ *    under LWW, which is why recording needs no arbitration.
+ *  - an in-flight claim is a readable, deletable block, so an interrupted run
+ *    is diagnosable rather than invisible.
  *
- * A device that loses AFTER starting is caught by nothing here — the runner's
- * per-transaction preconditions check generation, workspace and sync state,
- * not the claim — so it writes until its pass ends. Tolerable only because
- * these passes are idempotent per row.
+ * What it does NOT buy: two operators triggering the pass simultaneously on
+ * two devices can both run it. That is accepted — it needs deliberate human
+ * action on two machines at once, and these passes are idempotent per row, so
+ * the cost is duplicated work rather than corruption.
  */
 
 import { ChangeScope, type Tx } from '@/data/api'
@@ -153,22 +159,9 @@ export interface GraphBackfillClaimDeps {
     fn: (tx: Tx) => Promise<R>,
     opts: {scope: ChangeScope; skipUndo?: boolean; description?: string},
   ): Promise<R>
-  /** Resolves true once this device's claim write has reached the server AND
-   *  a checkpoint has since come back — i.e. the local row is now the
-   *  server's answer rather than our own echo. False means back off.
-   *  See `claimConvergence.ts`; `connected && !downloading` is NOT this. */
-  awaitConverged(claimId: string): Promise<boolean>
-  /** Identifies this claimant, and must be UNIQUE per client instance.
-   *
-   *  Shared is the failure that matters: two clients carrying one token both
-   *  read the converged claim as their own and both run the pass, which no
-   *  amount of convergence can fix. That ruled out the layout-session id — an
-   *  installed-app window and a duplicated tab can carry the same value.
-   *
-   *  The cost of uniqueness is that a restarted client cannot recognise its
-   *  own stranded claim, so a client that dies mid-pass leaves one for a human
-   *  to delete. That is the documented recovery either way, and it fails safe;
-   *  a shared token fails toward the duplicate uploading pass. */
+  /** Who holds the claim. Diagnostic rather than load-bearing now: nothing
+   *  branches on exclusivity, so this only has to be specific enough to tell
+   *  an operator WHICH client left an in-flight claim behind. */
   readonly claimantId: string
   ensureHome(workspaceId: string): Promise<unknown>
 }
@@ -270,15 +263,9 @@ export const createGraphBackfillClaim = (
     }, {scope: ChangeScope.BlockDefault, skipUndo: true,
         description: `claim backfill ${backfillId}`})
 
-    // Converge, THEN re-read. The write above is not a decision: until the
-    // server has resolved it against any peer's write to the same id, every
-    // racing device reads its own row back and believes it won.
-    //
-    // A timeout backs off rather than proceeding. The two outcomes are not
-    // symmetric: not running is a deferral the next open retries, running
-    // unconverged is the duplicated upload-carrying pass this exists to stop.
-    if (!await deps.awaitConverged(claimId)) return false
-    return decideClaim(await readGraphBackfillClaim(deps.db, claimId), deps.claimantId) === 'proceed'
+    // No convergence wait. Under an operator trigger there is nothing to
+    // arbitrate, and the wait was unwinnable anyway — see the module header.
+    return true
   },
 
   async markComplete(workspaceId, backfillId) {
