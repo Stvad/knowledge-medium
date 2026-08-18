@@ -22,16 +22,23 @@ import { gfmMarkdownExtension } from '@/markdown/defaultMarkdownExtension.js'
  * same scale (breadcrumbs 10, media 5, the SRS deck and the recents page
  * 100), so a plugin renderer and a core one are ordered by one number
  * rather than by which layer registered them.
+ *
+ * An equal precedence is decided by registration order, so two renderers
+ * that can claim the SAME block need distinct numbers or the winner is
+ * whatever the extension graph happens to visit last. That is why the two
+ * type editors differ by one: a block may legally carry both
+ * `property-schema` and `block-type`, and the schema editor is the one
+ * that has always won it.
  */
-const CORE_RENDERERS: readonly (readonly [BlockRendererRegistration, number])[] = [
+export const coreRendererLadder: readonly (readonly [BlockRendererRegistration, number])[] = [
   [{id: 'default', label: 'Block', render: DefaultBlockRenderer}, 0],
   [missingDataRendererRegistration, 1],
   [codeMirrorExtensionRendererRegistration, 5],
   [panelRendererRegistration, 5],
   [topLevelRendererRegistration, 20],
   [layoutRendererRegistration, 20],
-  [propertySchemaRendererRegistration, 100],
   [blockTypeRendererRegistration, 100],
+  [propertySchemaRendererRegistration, 101],
 ]
 
 export const defaultRenderersExtension = systemToggle({
@@ -41,7 +48,7 @@ export const defaultRenderersExtension = systemToggle({
   essential: true,
 }).of([
   markdownExtensionsFacet.of(gfmMarkdownExtension, {source: 'defaultRenderers'}),
-  ...CORE_RENDERERS.map(([registration, precedence]) =>
+  ...coreRendererLadder.map(([registration, precedence]) =>
     blockRendererFacet.of(registration, {precedence, source: 'defaultRenderers'}),
   ),
 ])

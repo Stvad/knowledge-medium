@@ -136,6 +136,36 @@ const factsFor = <Context, Render>(
 }
 
 /**
+ * Collapse same-id registrations to the one that wins. Same id = same
+ * variant, so only one survives: the strongest. That is how an extension
+ * overrides a built-in — register `{id: 'layout', …}` at the precedence
+ * the built-in holds (a later registration takes an equal one) or above,
+ * and yours is the layout variant.
+ *
+ * Takes registrations ALREADY sorted ascending by precedence, which is
+ * what `combine` receives (`FacetRuntime.read` sorts before combining, so
+ * registration order is gone by then) — the survivor is simply the LAST
+ * namesake. Anything enumerating the same set from raw contributions must
+ * sort the same way FIRST or it will collapse to a different winner than
+ * the live resolver.
+ *
+ * The survivor keeps the last one's POSITION as well as its value: a
+ * plain `Map.set` keeps the first insertion's position, which would seat
+ * an override below variants it outranks and hand `last` to one of them.
+ * Delete-then-set moves it to the end.
+ */
+export const dedupeVariantRegistrations = <Context, Render>(
+  registrations: readonly VariantRegistration<Context, Render>[],
+): VariantRegistration<Context, Render>[] => {
+  const byId = new Map<string, VariantRegistration<Context, Render>>()
+  for (const registration of registrations) {
+    byId.delete(registration.id)
+    byId.set(registration.id, registration)
+  }
+  return [...byId.values()]
+}
+
+/**
  * Define a facet whose contributions register named alternatives
  * (variants) for a slot. The resolved value enumerates the variants that
  * apply to a block and offers convenience pickers (`last`, `first`,
@@ -161,23 +191,7 @@ export function defineVariantFacet<Context, Render>({
   >({
     id,
     combine: registrations => {
-      // Same id = same variant, so only one survives: the strongest. That is
-      // how an extension overrides a built-in — register `{id: 'layout', …}`
-      // at the precedence the built-in holds (later registration takes an
-      // equal one) or above, and yours is the layout variant.
-      //
-      // `registrations` arrives sorted ascending by precedence — registration
-      // order is already gone — so the survivor is simply the LAST namesake,
-      // and it has to keep the last one's POSITION as well as its value. A
-      // plain `Map.set` would keep the first insertion's position, seating an
-      // override below variants it outranks and handing `last` to one of
-      // them; delete-then-set moves it to the end.
-      const byId = new Map<string, VariantRegistration<Context, Render>>()
-      for (const registration of registrations) {
-        byId.delete(registration.id)
-        byId.set(registration.id, registration)
-      }
-      const deduped = [...byId.values()]
+      const deduped = dedupeVariantRegistrations(registrations)
 
       return context => {
         const all: Variant<Render>[] = []
