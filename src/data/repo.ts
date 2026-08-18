@@ -2753,11 +2753,6 @@ export class Repo {
           // definition readiness and the write lock, so a check before it can
           // go stale before `fn` reads a row. Throwing here aborts the tx and
           // the run with no marker recorded, so the next open retries.
-          //
-          // The tests pin that this check EXISTS, not that it sits inside the
-          // callback: moving it back outside keeps them green, because the
-          // window it closes is `repo.tx`'s own await. Don't read a passing
-          // suite as licence to hoist it.
           this.tx(async t => {
             this.assertBackfillMayWrite(workspaceId, backfill.id)
             return fn(t)
