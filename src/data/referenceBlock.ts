@@ -118,6 +118,25 @@ const parseReferenceSpan = (
   return {kind: 'alias', alias, fieldForm}
 }
 
+/** The ID-CARRYING kinds: the span names a block id outright, so it
+ *  resolves TEXTUALLY with no name lookup, no alias index, and no seat
+ *  minting. `alias` is the odd one out — it names a NAME, and what that
+ *  name resolves to is a fact about the workspace rather than about the
+ *  text.
+ *
+ *  A named fragment because two sites branch on exactly this distinction
+ *  and mean different things by it — `deriveReferenceColumns` takes the
+ *  textual shortcut for these and falls through to the alias lookup
+ *  otherwise; the ref-value decode ACCEPTS only these, because a ref
+ *  property stores identity and must not follow a name (§9 value
+ *  decoding). Neither is an exhaustive `switch`, so a fourth id-carrying
+ *  variant added to {@link ExactReferenceBlockContent} would silently
+ *  miss both call sites; here it's one line to update. */
+export const isIdCarryingReference = (
+  parsed: ExactReferenceBlockContent | null,
+): parsed is Extract<ExactReferenceBlockContent, {kind: 'blockRef' | 'aliasedBlockRef'}> =>
+  parsed !== null && (parsed.kind === 'blockRef' || parsed.kind === 'aliasedBlockRef')
+
 /** Parse whole-block reference content: one reference span — exact ref
  *  `((id))` (broad-id grammar), wikilink `[[alias]]`, or aliased blockref
  *  `[label](((uuid)))` (plugin-mirrored, UUID-only) — optionally preceded by

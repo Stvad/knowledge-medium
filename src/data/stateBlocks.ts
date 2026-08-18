@@ -20,7 +20,7 @@ import {
   type User,
 } from '@/data/api'
 import { Block } from './block'
-import { derivedBlockId } from './derivedIds'
+import { derivedBlockId, stateChildBlockId } from './derivedIds'
 import type { Repo } from './repo'
 import type { BlockContextType } from '@/types'
 import {
@@ -31,7 +31,7 @@ import {
   userIdProp,
   type BlockSelectionState,
 } from '@/data/properties'
-import { USER_PREFS_PATH_PART } from '@/data/userPrefs.js'
+import { UI_STATE_PATH_PART, USER_PREFS_PATH_PART } from '@/data/userPrefs.js'
 import { PAGE_TYPE, USER_TYPE } from '@/data/blockTypes.js'
 
 // ──── Deterministic-id namespaces ────
@@ -41,10 +41,11 @@ import { PAGE_TYPE, USER_TYPE } from '@/data/blockTypes.js'
 // intentionally differs from the pre-UserPrefs UI-state namespace whose
 // rows predate uniform upload routing and may not exist on the server.
 const USER_PAGE_NS = '99b1b4e5-6f58-4fd2-9089-dc3b358dd4df'
-// Per-(parent, content) state child — used by the bootstrap below
-// (user-prefs, ui-state, panels, panel/main, etc.) so each name resolves
-// to the same block id across clients.
-const STATE_CHILD_NS = '8f6c2c84-1c12-4e4a-8b9e-9b0f87a7e1d2'
+// The per-(parent, content) state-child derivation used by the bootstrap
+// below (user-prefs, ui-state, panels, panel/main, etc.) now lives in
+// `derivedIds.ts` — re-exported here because this is where callers look
+// for it, and because the Recents filter derives the same ids without
+// being able to import this module.
 
 /** Deterministic id of a user's "user page" block. Exported so display
  *  surfaces can resolve an arbitrary `userId` (e.g. a row's `updatedBy`)
@@ -54,12 +55,7 @@ const STATE_CHILD_NS = '8f6c2c84-1c12-4e4a-8b9e-9b0f87a7e1d2'
 export const userPageBlockId = (workspaceId: string, userId: string): string =>
   derivedBlockId({namespace: USER_PAGE_NS, key: `${workspaceId}:${userId}`})
 
-/** Deterministic id of a named state child under `parentId`. Exported so
- *  `derivedIds.test.ts` can pin the formula: every user preference, ui-state
- *  row, panel and per-plugin prefs block hangs off one of these, so a change
- *  to the key or the namespace orphans all of them at once. */
-export const stateChildBlockId = (parentId: string, content: string): string =>
-  derivedBlockId({namespace: STATE_CHILD_NS, key: `${parentId}:${content}`})
+export { stateChildBlockId }
 
 const snapshotIncludingType = (repo: Repo, type: TypeContribution): TypeRegistrySnapshot => {
   const snapshot = repo.snapshotTypeRegistries()
@@ -344,8 +340,6 @@ export const getPluginPrefsBlock = memoize(
   (repo, workspaceId, user, type) =>
     instanceKey(repo, workspaceId, user.id, 'plugin-prefs', type.id),
 )
-
-const UI_STATE_PATH_PART = 'ui-state'
 
 /** Resolve the UI-state block scoped to the current panel context.
  *  In a panel context (`context.panelId`), returns the panel's own

@@ -17,7 +17,7 @@ import { BulletHoverCard, useBulletHover } from '@/components/renderer/BulletHov
 import { BlockInfoDialog } from '@/components/renderer/BlockInfoDialog.js'
 import { openDialog } from '@/utils/dialogs.js'
 import { writeTextToClipboardBestEffort } from '@/utils/copy.js'
-import { useRef, useMemo } from 'react'
+import { useRef, useMemo, useEffect } from 'react'
 import { Block } from '../../data/block'
 import {
   useUIStateProperty,
@@ -52,6 +52,7 @@ import {
   blockClickHandlersFacet,
   blockContentDecoratorsFacet,
   blockContentRendererFacet,
+  BLOCK_CONTENT_VIEW_ATTRIBUTE,
   blockContentSurfacePropsFacet,
   blockContextMenuItemsFacet,
   blockHeaderFacet,
@@ -73,6 +74,10 @@ import { useContinuousGestures } from '@/extensions/continuousGestures.js'
 interface DefaultBlockRendererProps extends BlockRendererProps {
   ContentRenderer?: BlockRenderer;
   EditContentRenderer?: BlockRenderer;
+  /** Declares that the `ContentRenderer` composed here fills the slot with
+   *  OTHER blocks' rows — see `Variant.showsOtherBlocks`, which says the same
+   *  thing for a renderer that arrives through the facet instead. */
+  contentShowsOtherBlocks?: boolean;
 }
 
 /** Todo plausibly the following 2 things should be "actions" too
@@ -87,23 +92,20 @@ interface DefaultBlockRendererProps extends BlockRendererProps {
  *
  */
 
-// Routed through `writeTextToClipboardBestEffort` (block-move-ui review item
-// 1), not a raw `navigator.clipboard.writeText` — these three bypassed the
-// pending-move choke point entirely: cut a block, then use one of these
-// bullet-menu items, and if the just-copied text happened to still match the
-// register's invalidation sentinel, the next paste would MOVE the cut block
-// instead of pasting the id/ref/embed just copied. Exported so they're
-// directly unit-testable (`DefaultBlockRenderer.test.tsx`) without having to
-// drive the Radix context menu.
-export const copyBlockId = (block: Block) => {
+// Every clipboard write goes through `@/utils/copy.js`, never
+// `navigator.clipboard.writeText` directly: a write has to invalidate any
+// cut payload remembered against the text it overwrites, or a later paste
+// resolves that text to the cut and MOVES those blocks instead of pasting
+// the id/ref/embed.
+const copyBlockId = (block: Block) => {
   writeTextToClipboardBestEffort(block.id)
 }
 
-export const copyBlockRef = (block: Block) => {
+const copyBlockRef = (block: Block) => {
   writeTextToClipboardBestEffort(`((${block.id}))`)
 }
 
-export const copyBlockEmbed = (block: Block) => {
+const copyBlockEmbed = (block: Block) => {
   writeTextToClipboardBestEffort(`!((${block.id}))`)
 }
 
@@ -531,6 +533,7 @@ function BlockShell({
   // selection/focus), so paste composes with the rest of the shell decorators
   // rather than being hardcoded on the wrapper.
   const shellProps = useMemo<BlockShellProps>(() => ({
+    'data-block-shell': 'true',
     'data-block-id': block.id,
     'data-render-scope-id': typeof blockContext.renderScopeId === 'string'
       ? blockContext.renderScopeId
@@ -542,6 +545,7 @@ function BlockShell({
       ? (event) => { void handleBlockClick(event) }
       : undefined,
   }), [block.id, blockContext.renderScopeId, inEditMode, handleBlockClick, shellRef])
+
 
   const resolveBlockShellDecorators = runtime.read(blockShellDecoratorsFacet)
   const shellDecorators = useMemo(
@@ -577,6 +581,7 @@ export function DefaultBlockRenderer(
     block,
     ContentRenderer: DefaultContentRenderer = MarkdownContentRenderer,
     EditContentRenderer = CodeMirrorContentRenderer,
+    contentShowsOtherBlocks,
   }: DefaultBlockRendererProps,
 ) {
   const repo = useRepo()
@@ -688,10 +693,27 @@ export function DefaultBlockRenderer(
       // component each call (e.g. plain-outliner's edit-mode dispatcher) don't
       // hand back a new identity every render and remount the content subtree.
       const resolveBlockContentRenderer = runtime.read(blockContentRendererFacet)
-      const baseContentRenderer = useMemo(
-        () => resolveBlockContentRenderer(resolveContext).last?.render ?? DefaultContentRenderer,
+      const contentVariant = useMemo(
+        () => resolveBlockContentRenderer(resolveContext).last,
         [resolveBlockContentRenderer],
       )
+      const baseContentRenderer = contentVariant?.render ?? DefaultContentRenderer
+      // Is this slot filled with other blocks' rows (a review backlog, a deck,
+      // a recents list) rather than the block itself? Read from whoever CHOSE
+      // the renderer, never from the resolved component — that is a wrapper as
+      // often as not, and the editing dispatcher wraps every block's content
+      // renderer in the app.
+      //
+      // A contributed variant answers for itself, EXCEPT the deferring kind
+      // that renders what the block composed. Silence from a variant means
+      // "not a view", not "ask whoever I displaced": an override draws its own
+      // content, so inheriting the displaced view's answer would mark a row
+      // that no longer shows other blocks.
+      const showsOtherBlocks = contentVariant
+        ? (contentVariant.showsOtherBlocks === 'as-composed'
+            ? contentShowsOtherBlocks === true
+            : contentVariant.showsOtherBlocks === true)
+        : contentShowsOtherBlocks === true
       const decorateContent = runtime.read(blockContentDecoratorsFacet)
       const ContentRenderer = useMemo(
         () => decorateContent(resolveContext, baseContentRenderer),
@@ -717,6 +739,7 @@ export function DefaultBlockRenderer(
         <div
           {...contentSurfaceProps}
           data-block-visibility-target="true"
+          {...(showsOtherBlocks ? {[BLOCK_CONTENT_VIEW_ATTRIBUTE]: 'true'} : {})}
           className={`block-content${topLevelClass}${contentSurfaceProps.className ? ` ${contentSurfaceProps.className}` : ''}`}
           ref={contentGestureRef}
         >
@@ -728,7 +751,7 @@ export function DefaultBlockRenderer(
     }
   }, [
     block, resolveContext, runtime, isTopLevel,
-    DefaultContentRenderer, contentContainerRef,
+    DefaultContentRenderer, contentShowsOtherBlocks, contentContainerRef,
   ])
 
   const PropertiesSlot = useMemo<ComponentType | null>(() => {
@@ -814,7 +837,19 @@ export function DefaultBlockRenderer(
   // to become focusable/editable; the shell's machinery (paste/click, shell
   // decorators, shortcut activations) only runs when mounted — see `BlockShell`.
   const ShellSlot = useMemo<BlockShellSlot>(() => {
-    return function BlockShellSlot({children}: BlockShellSlotProps) {
+    return function BlockShellSlot({children, shortcutsOnly}: BlockShellSlotProps) {
+      // Dropping `shellProps` costs the block its identity in the DOM — its
+      // boundary, focus and edit tagging, the shell click, and (through `ref`)
+      // the spatial-nav row. Consumers then resolve to an ancestor instead,
+      // and nothing says so. `ref` is the detector: it can only stay null if no
+      // element received the props.
+      useEffect(() => {
+        if (!import.meta.env.DEV || shortcutsOnly || shellRef.current) return
+        console.error(
+          `Block ${resolveContext.block.id}: its layout mounted Shell without spreading shellProps. ` +
+          'Pass shortcutsOnly if that is deliberate.',
+        )
+      }, [shortcutsOnly])
       return (
         <BlockShell
           resolveContext={resolveContext}

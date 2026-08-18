@@ -42,6 +42,32 @@ export const RECENTS_PAGE_TYPE = 'panel:recents'
  *  surfaces resolve an id to its page/name. Kernel-owned. */
 export const USER_TYPE = 'user'
 
+/** Types whose blocks are the app's own bookkeeping rather than anything
+ *  the user authored — the rows the activity surface
+ *  (`core.recentActivity`) must not report as an edit.
+ *
+ *  Deliberately narrow, because it is the least precise of the three
+ *  tests that surface applies. Per-user state (panels, layout sessions,
+ *  per-plugin prefs and ui-state, records filed under them) is excluded
+ *  STRUCTURALLY, by descent from a user's state roots; code-owned
+ *  definition blocks are excluded by their `seed:key` property. What is
+ *  left for this list is the app-owned rows that match neither: layout
+ *  rows and the singleton kernel pages.
+ *
+ *  Types an authoring flow can produce therefore stay OFF this list even
+ *  when the kernel also mints them — `block-type` (the `#type` gesture),
+ *  `property-schema` (the Properties page), `extension` (extension source
+ *  is edited in the app). Their seeded twins carry `seed:key`; the ones a
+ *  user made do not, and those edits belong in the feed. */
+export const SYSTEM_BLOCK_TYPES: readonly string[] = [
+  PANEL_TYPE,
+  PANEL_STACK_TYPE,
+  USER_TYPE,
+  PROPERTIES_PAGE_TYPE,
+  TYPES_PAGE_TYPE,
+  RECENTS_PAGE_TYPE,
+]
+
 /** Kernel-owned block types, declared as code seeds (`seedType`) so the
  * schema-unification materializer mints one deterministic backing block per type
  * per workspace (`src/data/definitionSeeds.ts`) — the type-side twin of

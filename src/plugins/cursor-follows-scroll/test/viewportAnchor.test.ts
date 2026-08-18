@@ -168,6 +168,124 @@ describe('resolveViewportAnchor', () => {
     expect(anchorFor(panel, 'note-a')).toEqual({blockId: 'note-b', renderScopeId: SCOPE})
   })
 
+  // A renderer that fills a block's content slot with real rows (the Readwise
+  // review backlog) makes that block's own row span the whole view: tall enough
+  // to be on screen at every scroll position, and first in document order. It
+  // took the cursor from every note that scrolled off.
+  describe('a row whose content slot holds other rows', () => {
+    const buildBacklog = (rows: readonly RowSpec[], containerTop = -600): HTMLElement => {
+      const panel = document.createElement('div')
+      panel.setAttribute('data-panel-id', 'panel')
+      const port = document.createElement('div')
+      port.style.overflowY = 'auto'
+      stubRect(port, PORT_TOP, PORT_BOTTOM - PORT_TOP)
+      panel.appendChild(port)
+      document.body.appendChild(panel)
+
+      const container = document.createElement('div')
+      container.setAttribute('data-block-nav-item', 'true')
+      container.setAttribute('data-block-id', 'backlog')
+      container.setAttribute('data-render-scope-id', SCOPE)
+      const containerTarget = document.createElement('div')
+      containerTarget.setAttribute('data-block-visibility-target', 'true')
+      // What the content slot stamps when its renderer shows a view rather
+      // than the block's own text.
+      containerTarget.setAttribute('data-block-content-view', 'true')
+      // The whole view, several screens tall — the shape that reads as visible
+      // wherever you are in it.
+      stubRect(containerTarget, containerTop, 2000)
+      container.appendChild(containerTarget)
+      port.appendChild(container)
+
+      for (const row of rows) {
+        const shell = document.createElement('div')
+        shell.setAttribute('data-block-nav-item', 'true')
+        shell.setAttribute('data-block-id', row.blockId)
+        shell.setAttribute('data-render-scope-id', row.scope ?? SCOPE)
+        const target = document.createElement('div')
+        target.setAttribute('data-block-visibility-target', 'true')
+        stubRect(target, row.top, 30)
+        shell.appendChild(target)
+        containerTarget.appendChild(shell)
+      }
+      return panel
+    }
+
+    it('is not the anchor a scrolled-off note lands on', () => {
+      const panel = buildBacklog([
+        {blockId: 'note-a', top: -400},
+        {blockId: 'note-b', top: 40},
+        {blockId: 'note-c', top: 200},
+      ])
+
+      expect(anchorFor(panel, 'note-a')).toEqual({blockId: 'note-b', renderScopeId: SCOPE})
+    })
+
+    it('hands the cursor on when it holds it and the view scrolls', () => {
+      // Its own row is "visible" at every scroll position, so treating it as a
+      // row on the focused side would pin the cursor to it forever.
+      const panel = buildBacklog([
+        {blockId: 'note-a', top: -400},
+        {blockId: 'note-b', top: 40},
+      ])
+
+      expect(anchorFor(panel, 'backlog')).toEqual({blockId: 'note-b', renderScopeId: SCOPE})
+    })
+
+    // An `!((id))` embed mounts a full nav row inside its HOST's content, so
+    // inferring "is a view" from the rows underneath classified an ordinary
+    // block as one — and then re-anchored away from it while it sat fully on
+    // screen. The host declares nothing, so it is a row like any other.
+    it('leaves an ordinary row that merely contains an embed alone', () => {
+      // The embedded row is on screen, so a misclassified host hands it the
+      // cursor — the assertion below is only meaningful because of that.
+      const panel = buildBacklog([{blockId: 'embedded', top: 40}], 20)
+      const host = panel.querySelector<HTMLElement>('[data-block-id="backlog"]')
+      const hostTarget = host?.querySelector<HTMLElement>('[data-block-visibility-target]')
+      if (!host || !hostTarget) throw new Error('no host row')
+      hostTarget.removeAttribute('data-block-content-view')
+      host.setAttribute('data-block-id', 'host')
+
+      expect(anchorFor(panel, 'host')).toBeNull()
+    })
+
+    // The rows are what a DOM inference reads, and on a cold view they have
+    // not mounted yet — so the view read as an ordinary row exactly when the
+    // re-anchor was most needed. The declaration does not depend on them.
+    it('is a view before any of its rows have mounted', () => {
+      const panel = buildBacklog([], -600)
+
+      // Cursor on the view, nothing inside it mounted: no anchor to move to,
+      // but the view must not read as a settled ordinary row.
+      expect(anchorFor(panel, 'backlog')).toBeNull()
+
+      // A row mounts into view and the cursor moves — which can only happen if
+      // the view was never treated as the cursor's own settled row.
+      const container = panel.querySelector<HTMLElement>('[data-block-content-view]')
+      if (!container) throw new Error('no view target')
+      const shell = document.createElement('div')
+      shell.setAttribute('data-block-nav-item', 'true')
+      shell.setAttribute('data-block-id', 'note-a')
+      shell.setAttribute('data-render-scope-id', SCOPE)
+      const target = document.createElement('div')
+      target.setAttribute('data-block-visibility-target', 'true')
+      stubRect(target, 40, 30)
+      shell.appendChild(target)
+      container.appendChild(shell)
+
+      expect(anchorFor(panel, 'backlog')).toEqual({blockId: 'note-a', renderScopeId: SCOPE})
+    })
+
+    it('declines rather than falling back to it when no note is on screen', () => {
+      const panel = buildBacklog([
+        {blockId: 'note-a', top: -400},
+        {blockId: 'note-b', top: 900},
+      ])
+
+      expect(anchorFor(panel, 'note-a')).toBeNull()
+    })
+  })
+
   // Two panels can show the same block; the cursor is a (block, scope) pair and
   // a row from another scope is not the cursor's row.
   it('matches the cursor on its render scope, not the block id alone', () => {

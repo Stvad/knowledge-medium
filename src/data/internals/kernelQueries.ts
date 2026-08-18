@@ -32,6 +32,9 @@ import {
   type TypedBlockQueryReferenceFilter,
 } from '@/data/api'
 import { SELECT_BLOCK_COLUMNS_SQL, buildQualifiedBlockColumnsSql, type BlockRow } from '@/data/blockSchema'
+import { SYSTEM_BLOCK_TYPES, USER_TYPE } from '@/data/blockTypes'
+import { userStateRootBlockIds } from '@/data/derivedIds'
+import { seedKeyProp } from '@/data/properties'
 import {
   ANCESTORS_SQL,
   CHILDREN_IDS_SQL,
@@ -301,6 +304,83 @@ export const SELECT_RECENT_BLOCKS_SQL = `
   ORDER BY coalesce(user_updated_at, updated_at) DESC, id ASC
   LIMIT ?
 `
+
+/** User pages in a workspace — the seed for deriving that workspace's
+ *  app-state roots. */
+export const SELECT_USER_PAGE_IDS_SQL = `
+  SELECT block_id AS id FROM block_types
+   WHERE workspace_id = ? AND type = ?
+`
+
+/** `SELECT_RECENT_BLOCKS_SQL` restricted to user-authored rows — the
+ *  activity view (Recents), where a panel row or a preferences block is
+ *  noise, not an edit.
+ *
+ *  Three exclusions, and the structural one carries the weight: every
+ *  per-user state row (panels, layout sessions, per-plugin prefs and
+ *  ui-state, and whatever records a plugin files under them) descends
+ *  from one of that user's two state roots, so walking DOWN from those
+ *  roots — a set bounded by the UI surface, not by document size — drops
+ *  all of it without the kernel knowing any plugin's type ids.
+ *
+ *  The walk starts at the ROOTS, not at the user page above them: a user
+ *  page is an ordinary navigable page, and a note authored directly on it
+ *  is content. Only `ui-state` / `user-prefs` and their descendants are
+ *  app-owned (`USER_STATE_ROOT_PATHS`).
+ *
+ *  Then `SYSTEM_BLOCK_TYPES` covers app-owned rows that live at the
+ *  workspace root instead, and a `seed:key` property marks a block as a
+ *  materialized CODE seed. The seed-key test is what lets the type list
+ *  stay narrow: a property-schema or block-type block a user created is
+ *  authored content and stays, while the kernel's own definition blocks —
+ *  rewritten en masse on a seed revision bump — do not.
+ *
+ *  All of it sits inside the statement, before the LIMIT: filtering a
+ *  fetched window instead would hand back a page short by whatever it
+ *  dropped, and a run of ineligible rows would empty it.
+ *
+ *  The walk deliberately does NOT filter `deleted = 0`, for the same
+ *  reason `IS_DESCENDANT_OF_SQL` doesn't: descent is a structural fact
+ *  about `parent_id`, independent of soft-delete. Sync-apply permits a
+ *  live child under a tombstoned parent (`blocks_parent_not_deleted_check_*`
+ *  is skipped for `source IS NULL` writes), so stopping at a tombstone
+ *  would leak that live state row into the feed as user activity. The
+ *  outer query still filters deleted rows out of the RESULT.
+ *
+ *  Params: stateRootIdsJson, workspaceId, ...SYSTEM_BLOCK_TYPES, limit —
+ *  see `recentUserBlocksParams`. */
+export const SELECT_RECENT_USER_BLOCKS_SQL = `
+  WITH RECURSIVE user_state(id) AS (
+    SELECT value FROM json_each(?)
+    UNION
+    SELECT b.id FROM blocks b
+      JOIN user_state ON b.parent_id = user_state.id
+  )
+  SELECT ${buildQualifiedBlockColumnsSql('blocks')}
+  FROM blocks
+  WHERE blocks.workspace_id = ?
+    AND blocks.deleted = 0
+    AND blocks.content != ''
+    AND blocks.id NOT IN (SELECT id FROM user_state)
+    AND json_extract(blocks.properties_json, '$."${seedKeyProp.name}"') IS NULL
+    AND NOT EXISTS (
+      SELECT 1 FROM block_types bt
+       WHERE bt.block_id = blocks.id
+         AND bt.type IN (${SYSTEM_BLOCK_TYPES.map(() => '?').join(', ')})
+    )
+  ORDER BY coalesce(blocks.user_updated_at, blocks.updated_at) DESC, blocks.id ASC
+  LIMIT ?
+`
+
+/** Bind list for `SELECT_RECENT_USER_BLOCKS_SQL`. Single-sourced so the
+ *  placeholder count in the statement and the parameter order can't
+ *  drift as `SYSTEM_BLOCK_TYPES` grows. */
+export const recentUserBlocksParams = (
+  stateRootIds: readonly string[],
+  workspaceId: string,
+  limit: number,
+): unknown[] =>
+  [JSON.stringify(stateRootIds), workspaceId, ...SYSTEM_BLOCK_TYPES, limit]
 
 /** Distinct alias values in a workspace, optionally substring-filtered.
  *  Reads `block_aliases` (the trigger-maintained side index in
@@ -1130,6 +1210,22 @@ export const searchByContentQuery = defineQuery<
   },
 })
 
+/** The app-state roots of every user in `workspaceId` — the seeds the
+ *  Recents filter walks down from. Two steps because the roots' ids are a
+ *  uuid-v5 derivation off the user page (`stateChildBlockId`), which SQL
+ *  cannot compute: read the user pages, derive in JS. Both halves are
+ *  cheap — one indexed `block_types` read, and a couple of hashes per
+ *  user. */
+const userStateRootIds = async (
+  ctx: {db: {getAll: <T>(sql: string, params: unknown[]) => Promise<T[]>}},
+  workspaceId: string,
+): Promise<string[]> => {
+  const pages = await ctx.db.getAll<{id: string}>(
+    SELECT_USER_PAGE_IDS_SQL, [workspaceId, USER_TYPE],
+  )
+  return pages.flatMap(page => userStateRootBlockIds(page.id))
+}
+
 /** Recent non-empty block candidates. Empty workspaceId returns []. */
 export const recentBlocksQuery = defineQuery<
   {workspaceId: string; limit?: number},
@@ -1143,12 +1239,6 @@ export const recentBlocksQuery = defineQuery<
   resultSchema: blockDataArraySchema,
   resolve: async ({workspaceId, limit = 50}, ctx) => {
     if (!workspaceId) return []
-    // `kernel.content` covers content edits + live-set membership
-    // changes. The SQL also orders by `updated_at`, but we deliberately
-    // don't fire on every update — chasing perfect recency ordering
-    // here would put us back at workspace-broad cost (every UiState
-    // write bumps `updated_at`). The picker tolerates lightly stale
-    // ordering between content events.
     ctx.depend({
       kind: 'plugin',
       channel: KERNEL_CONTENT_CHANNEL,
@@ -1164,6 +1254,105 @@ export const recentBlocksQuery = defineQuery<
     // row don't change membership or content — leaving them out of
     // the dep set keeps the picker from churning on UiState writes.
     return ctx.hydrateBlocks(asBlockRows(rows), {declareRowDeps: false})
+  },
+})
+
+export interface RecentActivityEntry {
+  block: BlockData
+  /** Leaf-to-root chain, block itself excluded — the shape
+   *  `core.manyAncestors` returns. */
+  ancestors: BlockData[]
+}
+
+const recentActivityResultSchema: Schema<RecentActivityEntry[]> = {
+  parse: (input) => input as RecentActivityEntry[],
+}
+
+/** Recently edited USER-AUTHORED blocks, each with its ancestor chain —
+ *  what an activity feed needs to fold an edited tree back into one entry
+ *  and to name the page an edit happened on.
+ *
+ *  One query rather than `recentBlocks` + `manyAncestors` because the
+ *  chains must correspond to the rows. Two handles resolve independently
+ *  and the ancestor handle is re-keyed by the id set, so every change to
+ *  the rows re-opens a window where the chains are missing — during which
+ *  a consumer either paints every row as rootless (wrong groups, then a
+ *  reflow) or blanks the feed. Resolving both here makes that window
+ *  structurally impossible, and it costs one round trip less.
+ *
+ *  What "user-authored" excludes is `SELECT_RECENT_USER_BLOCKS_SQL`'s
+ *  business — read that. Empty workspaceId returns []. */
+export const recentActivityQuery = defineQuery<
+  {workspaceId: string; limit?: number},
+  RecentActivityEntry[]
+>({
+  name: 'core.recentActivity',
+  argsSchema: z.object({
+    workspaceId: z.string(),
+    limit: z.number().optional(),
+  }),
+  resultSchema: recentActivityResultSchema,
+  resolve: async ({workspaceId, limit = 50}, ctx) => {
+    if (!workspaceId) return []
+    // Same dep policy as `recentBlocks` — `kernel.content` covers content
+    // edits and live-set membership, and we accept lightly stale recency
+    // ordering between content events rather than waking on every
+    // `updated_at` bump (which every UiState write causes).
+    //
+    // TYPE TAGS are the one filtering axis with no dep, accepted rather
+    // than missed: a block acquires a system type at the moment it is
+    // minted (a create, which fires this channel), and the one gesture
+    // that adds a type to a live block — `#type` — rewrites its content
+    // in the same breath. Tagging an already-listed row `panel` out of
+    // nowhere is not a flow that exists.
+    //
+    // Ancestors skip per-row deps: what a reader sees of an ancestor is
+    // its CONTENT (the entry's title), and a rename fires this channel.
+    ctx.depend({
+      kind: 'plugin',
+      channel: KERNEL_CONTENT_CHANNEL,
+      key: kernelContentKey(workspaceId),
+    })
+    const rows = await ctx.db.getAll<BlockRow>(
+      SELECT_RECENT_USER_BLOCKS_SQL,
+      recentUserBlocksParams(await userStateRootIds(ctx, workspaceId), workspaceId, limit),
+    )
+    const blocks = ctx.hydrateBlocks(asBlockRows(rows), {declareRowDeps: false})
+    if (blocks.length === 0) return []
+
+    type ChainRow = BlockRow & {chain_start_id: string}
+    const chainRows = await ctx.db.getAll<ChainRow>(
+      manyAncestorsSql(blocks.length), blocks.map(block => block.id),
+    )
+    const chainsByStart = new Map<string, BlockRow[]>()
+    for (const block of blocks) chainsByStart.set(block.id, [])
+    for (const row of chainRows) chainsByStart.get(row.chain_start_id)?.push(row)
+
+    return blocks.map(block => {
+      // One call per chain so hydrate order stays depth-ascending within
+      // it, as `core.manyAncestors` does.
+      const ancestors = ctx.hydrateBlocks(
+        asBlockRows(chainsByStart.get(block.id) ?? []), {declareRowDeps: false},
+      )
+      // A parent change is the one edit that changes what this entry SAYS
+      // without touching any content: moved to another page, the entry
+      // keeps naming the old one; moved under a state root, it should
+      // have left the feed entirely. `kernel.content` doesn't carry it,
+      // so declare it per block — on the ancestors too, since a page
+      // moved out from under a row re-homes that row's entry without the
+      // row itself moving. Narrow on purpose: this channel is keyed per
+      // block and fires only on a `parent_id` change, so it costs a wake
+      // exactly when the answer changed, unlike a row dep (which every
+      // UiState property write would trip).
+      for (const shown of [block, ...ancestors]) {
+        ctx.depend({
+          kind: 'plugin',
+          channel: TYPED_BLOCKS_STRUCTURE_CHANNEL,
+          key: typedBlocksStructureKey(workspaceId, shown.id),
+        })
+      }
+      return {block, ancestors}
+    })
   },
 })
 
@@ -1505,6 +1694,7 @@ export const KERNEL_QUERIES: ReadonlyArray<AnyQuery> = [
   typedBlockCountQuery,
   searchByContentQuery,
   recentBlocksQuery,
+  recentActivityQuery,
   firstChildByContentQuery,
   aliasesInWorkspaceQuery,
   aliasMatchesQuery,
@@ -1534,6 +1724,7 @@ declare module '@/data/api' {
     'core.typedBlockCount': typeof typedBlockCountQuery
     'core.searchByContent': typeof searchByContentQuery
     'core.recentBlocks': typeof recentBlocksQuery
+    'core.recentActivity': typeof recentActivityQuery
     'core.firstChildByContent': typeof firstChildByContentQuery
     'core.aliasesInWorkspace': typeof aliasesInWorkspaceQuery
     'core.aliasMatches': typeof aliasMatchesQuery

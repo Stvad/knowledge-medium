@@ -336,13 +336,29 @@
 
 <aside class="doc-status">
   <strong>Status: current (planning), with one §9 correction.</strong>
+  <strong>Last verified against code: 2026-08-17, master <code>26416b5</code>.</strong>
+  That verification covers the entries marked <strong>landed</strong> below
+  &mdash; each was checked against the implementation on this branch, not
+  against the pre-implementation snapshots this banner cites further down for
+  the document's original authorship. Everything NOT marked landed remains at
+  its original verification state, which for most of the document is the
+  2026-07-01 rewrite: planning prose, not a description of shipped code. In
+  particular the migration is still <em>dark</em> &mdash;
+  <code>workspaces.properties_migration</code> is <code>'cell'</code>
+  everywhere, no slice-C backfill exists, and nothing here should be read as
+  describing behaviour a user can observe today.
   The rename-rewrite requirements in §9 were reconciled 2026-07-30 against
   <a href="https://github.com/Stvad/knowledge-medium/issues/461">#461</a>
   (<code>references.renameBacklinks</code> moved post-commit &rarr; same-tx):
   the local read&rarr;write window and everything built for it &mdash; the
   seat-target disjunction, the window-seat predicate, later-edit-wins &mdash;
-  are marked superseded in place; the sync-arrival window and the
-  references-parse fence are unaffected and still open. Rest of the document
+  are marked superseded in place; the sync-arrival window is unaffected and
+  still open, and the references-parse fence is now landed for the rename
+  enumeration (see §9) and still open for delete/merge.
+  §11 items landing out of
+  <a href="https://github.com/Stvad/knowledge-medium/issues/443">#443</a> are
+  marked <strong>landed</strong> at the entry that specifies them, with the
+  shipped mechanism named. Rest of the document
   as below. Rewritten 2026-07-01 against master
   <code>8a6f22cd</code> and the spike merge in
   <a href="https://github.com/Stvad/knowledge-medium/pull/285">PR #285</a>
@@ -2213,8 +2229,26 @@ supabase skill if it's kept.
     the release.
     <br><br>
     What SURVIVES from them is the
-    <em>references-parse fence</em> requirement, unchanged and still open
-    (§11 group 4): <code>block_references</code> is written by a post-commit
+    <em>references-parse fence</em> requirement &mdash; <strong>landed for the
+    rename enumeration</strong> (#443 group 4), by a different mechanism than
+    the drain described below, which a same-tx processor cannot perform. There
+    is no reliable "is a parse outstanding?" signal to gate on either:
+    <code>processorRunner</code>'s pending set excludes a delayed job whose
+    timer hasn't fired. What IS available is a second index over the same text
+    that does not lag &mdash; <code>blocks_fts</code>, the trigram FTS5 index
+    over <code>blocks.content</code>, which like <code>block_aliases</code> is
+    TRIGGER-maintained and so is written in the same SQL transaction as the
+    content itself. <code>parseFence.ts</code> enumerates through it as a
+    second leg, merged with the edge-keyed one and gated on the release path
+    (where the renaming block was the alias's only claimant, so every
+    <code>[[&alpha;]]</code> span resolved to it and no target check is
+    needed). The failure it closes was measured, and is worse than this entry
+    describes: the missed source kept <code>[[Old]]</code> and the late parse
+    then MINTED A SEAT for the now-unclaimed name and bound the span to that
+    empty stub &mdash; a live link became a link to nothing, silently. Still
+    open for the delete/merge enumerations, which key on target id rather than
+    alias, though the mechanism generalizes. Original entry:
+    <code>block_references</code> is written by a post-commit
     processor, so a <code>::[[old]]</code> row edited or pasted in a
     <em>previous</em> tx whose parse has not drained yet can have <em>no
     edge at all</em> when the rename enumerates &mdash; and an unfenced scan
@@ -2496,9 +2530,22 @@ supabase skill if it's kept.
     silently coerce a typed <code>[[Mary]]</code> — or a typo'd
     <code>[[Marry]]</code> binding a fresh empty seat — into a valid ref
     value): the projection's decode, a derive-time pass that may parse
-    content, accepts the <em>id-carrying</em> forms only (today
-    <code>parseBlockRefTarget</code>'s exact anchor; the aliased blockref is
-    the natural widening when the ref-codec pass takes it up). Prose typed
+    content, accepts the <em>id-carrying</em> forms only.
+    <strong>Landed</strong> (#443 group 3):
+    <code>propertyChildContentToEncodedValue</code>'s <code>ref</code> case
+    parses through <code>parseExactReferenceBlockContent</code> and takes
+    <code>blockRef</code> / <code>aliasedBlockRef</code> — both id-carrying
+    forms, so the aliased widening came for free — rejecting the
+    <code>alias</code> kind and the <code>::</code>-marked forms. It reads the
+    id out of the span rather than off the column, which the forms make
+    equivalent (both resolve <em>textually</em> in
+    <code>deriveReferenceColumns</code>) while also answering for content that
+    has no row yet: that is what find-replace's value guard needs, and its
+    former <code>deriveReferenceColumns</code> pre-resolve — an async alias
+    lookup per candidate row, which made the guard agree with the wrong
+    decode — is gone with it. The column read it replaces was live: a
+    measured cell went <code>'target-xyz'</code> →
+    <code>'mary-page'</code> on a hand-typed <code>[[Mary]]</code>. Prose typed
     into a ref property ("people type text
     into a ref property, like a log") — whole-block wikilinks included —
     fails that check, the projection skips it, and
@@ -3011,8 +3058,19 @@ them as one-off flow patches would reproduce the per-caller forget-me failure
     B2); the delete flow triggers the release rewrite explicitly (a bare
     tombstone leaves no properties diff — §9); the rename plan's source
     enumeration is alias-keyed with the claimant-or-provable-seat target
-    disjunction, and its lossy-name fallback for marked rows is canonical
-    <code>::((A))</code>, never a pinned label (§9); the whole-span round-trip guard
+    disjunction, and <s>its lossy-name fallback for marked rows is canonical
+    <code>::((A))</code>, never a pinned label (§9)</s> &mdash;
+    <strong>landed</strong> (#443 group 2): the ladder's fallback tier is chosen
+    per SOURCE, and a marked name row takes
+    <code>canonicalIdSpanReplacement</code> &mdash; the id form with no label,
+    checked against the inline grammar (which owns the edge the rewriter swaps
+    in lockstep, and is UUID-only, so a non-UUID target is refused exactly as
+    the pinned tier refuses it). The wikilink tier is unchanged and still wins
+    a clean 1-for-1: id-carrying rows are identity-pinned, name rows follow the
+    living name, and a marked name row is still a name row. An
+    <em>unmarked</em> whole-content <code>[[α]]</code> row keeps the pinned
+    label &mdash; only the marker makes a row machinery with a name of its own
+    to render; the whole-span round-trip guard
     (render → parse back through the owning parser → compare target
     <em>and</em> label; the aliased form is UUID-only, so non-UUID targets
     fail it too) applies at <em>every</em> span-rendering
@@ -3025,9 +3083,10 @@ them as one-off flow patches would reproduce the per-caller forget-me failure
     tombstoned definition rows (today <code>propertyDefinitionMetadata</code>
     drops them) — plus the same tolerance in the schema-returning lookup
     (§9); the two named selection predicates as defined-once fragments every
-    site composes (§7); the ref-codec decode's id-carrying form check, never
-    column nullness (§9); sync-off/readiness scans on the tombstone-tolerant
-    fieldId set (§11 cell end-state).</li>
+    site composes (§7); <s>the ref-codec decode's id-carrying form check, never
+    column nullness (§9)</s> &mdash; <strong>landed</strong> (#443 group 3; see the
+    Value-decoding entry in §9 for what shipped); sync-off/readiness scans on the
+    tombstone-tolerant fieldId set (§11 cell end-state).</li>
   <li><strong>Seats &amp; cleanup (standalone).</strong>
     <code>cleanupOrphanAliasesProcessor</code> graduates to the canonical
     subtree delete, gated on the seat-shape predicate — still matches

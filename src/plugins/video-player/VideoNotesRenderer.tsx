@@ -266,7 +266,9 @@ export const VideoNotesLayout: BlockLayout = (slots) => {
     </div>
   )
 
-  return <Shell>{() => notesView}</Shell>
+  // Shortcut surface only: the body here is a composed pane, and making it the
+  // block's own surface would put focus and click-to-edit on the whole thing.
+  return <Shell shortcutsOnly>{() => notesView}</Shell>
 }
 
 /** Layout gate: the video block itself, rendered as a pane top-level in

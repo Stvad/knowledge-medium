@@ -34,7 +34,12 @@ import {
   type PropertySchema,
   type Tx,
 } from '@/data/api'
-import { FIELD_FORM_MARKER, referenceBlockContentForId } from '@/data/referenceBlock'
+import {
+  FIELD_FORM_MARKER,
+  isIdCarryingReference,
+  parseExactReferenceBlockContent,
+  referenceBlockContentForId,
+} from '@/data/referenceBlock'
 import { jsonValuesEqual } from '@/data/internals/jsonCanonical'
 
 export const getPropertyFieldTargetId = (
@@ -206,7 +211,6 @@ const encodedValueToContent = (schema: AnyPropertySchema, encoded: unknown): str
 const contentToEncodedValue = (
   schema: AnyPropertySchema,
   content: string,
-  referenceTargetId: string | null,
 ): unknown => {
   if (
     (schema.codec.type === 'string' || schema.codec.type === 'url')
@@ -223,19 +227,46 @@ const contentToEncodedValue = (
     return schema.codec.encode(schema.codec.decode(null))
   }
   switch (schema.codec.type) {
-    case 'ref':
-      // The column IS the decoded ref value: DERIVE already parsed the content
-      // (`((id))` textually, `[[alias]]` via lookup) and stored the result,
-      // keeping "column is null iff content isn't a resolvable exact ref". So
-      // we re-use that parse instead of re-doing it — and a NULL column means
-      // the content is prose / a dangling ref: unparseable, so the projection
-      // skips it and the cell reads unset while the row keeps its text. The
-      // explicit-null case for an optional ref is handled by the sentinel
-      // above, before we get here.
-      if (referenceTargetId === null) {
-        throw new CodecError('resolvable reference', content)
+    case 'ref': {
+      // The gate is this content's FORM, never `reference_target_id`'s
+      // nullness (§9; PR #417 review). The column is not the "is this a ref
+      // value" signal it looks like: `core.deriveReferenceTarget` stamps it
+      // for a whole-block `[[alias]]` too, and a `[[alias]]` nothing claims
+      // MINTS a seat and then resolves. So trusting any non-null target
+      // silently coerced prose typed into a ref property — `[[Mary]]`, or a
+      // typo'd `[[Marry]]` binding a fresh empty seat — into whatever that
+      // name pointed at, overwriting the id the property held.
+      //
+      // `isIdCarryingReference` is the same fragment `deriveReferenceColumns`
+      // branches on, and those forms resolve TEXTUALLY there — no lookup, no
+      // minting — so `exact.id` is exactly what the column would hold,
+      // computed from the same parser rather than as a second policy. Reading
+      // it here also means a row whose stamp hasn't landed yet (raw write,
+      // sync arrival before the derive seam) projects correctly instead of
+      // reading unset.
+      //
+      // Refusing a name row is the whole point: the row keeps its text and
+      // stays visible/fixable in the tree while the cell key reads unset.
+      // Refs are identity, and a ref property that silently followed a name
+      // would be a different feature. For a REQUIRED ref this clause is
+      // defence in depth — `codecs.ref`'s own `decode(undefined)` throws
+      // downstream anyway — but for `optionalRef` it is the only thing that
+      // refuses: `decode(undefined)` there returns undefined, which
+      // `firstProjectedFieldValue` reads as "nothing parsed", so it would
+      // stop scanning and skip a LATER value child that does name an id.
+      //
+      // `fieldForm` is refused because `::((id))` is a FIELD ROW (§7),
+      // machinery rather than a value. Reachable through find-replace, whose
+      // value guard asks this function whether the PROPOSED content still
+      // decodes — a replace that prepends `::` to a ref value would otherwise
+      // pass the guard, get written, leave the value set (the bit stamps
+      // same-tx), and drop the owner's key with no error.
+      const exact = parseExactReferenceBlockContent(content)
+      if (!isIdCarryingReference(exact) || exact.fieldForm) {
+        throw new CodecError('id-carrying reference', content)
       }
-      return referenceTargetId
+      return exact.id
+    }
     case 'string':
     case 'url':
       return content
@@ -267,16 +298,16 @@ export const encodedPropertyValueToChildContent = (
  *  stored on the parent cell. Throws when the child content cannot be
  *  interpreted for this field's current codec.
  *
- *  `referenceTargetId` is the value child's derived column — the source of
- *  truth for a `ref`-typed value (its content is the `((id))` edit affordance,
- *  the column is the resolved id). Every caller has the row in hand; pass
- *  `row.referenceTargetId ?? null`. It is unused for non-ref codecs. */
+ *  A function of `content` ALONE — for every codec including `ref`, which
+ *  parses the id out of the id-carrying span rather than reading the derived
+ *  column (see the `ref` case). That makes this decode answerable about
+ *  PROPOSED content, which is what find-replace's value guard needs, and
+ *  independent of whether a row's stamp has landed yet. */
 export const propertyChildContentToEncodedValue = (
   schema: AnyPropertySchema,
   content: string,
-  referenceTargetId: string | null = null,
 ): unknown => {
-  const encoded = contentToEncodedValue(schema, content, referenceTargetId)
+  const encoded = contentToEncodedValue(schema, content)
   // Decode and re-encode so tolerant user text ("1" for number,
   // date strings, etc.) lands in the same canonical JSON shape as
   // tx.setProperty would have stored directly.
