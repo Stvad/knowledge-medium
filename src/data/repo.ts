@@ -2528,8 +2528,14 @@ export class Repo {
     // `allSettled`, not `all`: `all` rejects the instant one ensure does while
     // its siblings keep writing, so the throw below would hand control back to a
     // caller that tears down — or reloads — with page creates still in flight.
+    //
+    // The `async` wrapper is load-bearing: `allSettled` only settles what the
+    // array already holds, so a contributor that throws SYNCHRONOUSLY would
+    // escape from `map` before it is ever called. A dynamic extension is
+    // transpiled, not typechecked, and `never` satisfies the `Promise` return
+    // type — so an ordinary bug on the first line arrives that way.
     const outcomes = await Promise.allSettled(
-      pages.map(page => page.ensure(this, workspaceId)),
+      pages.map(async page => page.ensure(this, workspaceId)),
     )
     const failures = outcomes.flatMap((outcome, i) =>
       outcome.status === 'rejected' ? [{pageId: pages[i].id, reason: outcome.reason}] : [])

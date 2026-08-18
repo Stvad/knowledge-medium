@@ -277,12 +277,17 @@ export const workspaceBackfillsFacet = defineFacet<WorkspaceBackfill, readonly W
  * id (see `getOrCreateKernelPage`) so repeated bootstraps and offline-
  * converging clients all land on the same row.
  *
- * It MAY be skipped: `ensureSystemPages` reports and swallows a failing
- * `ensure` so one page cannot stop the workspace opening. Whether that is
- * momentary or lasts the session is YOUR consumers' doing — one that
- * get-or-creates the page at its point of use retries the moment the feature is
- * touched, while one that navigates to the derived id (the Recents header item)
- * finds nothing there until the next workspace open. Prefer the former.
+ * It MAY be skipped — on an EXISTING workspace. `ensureSystemPages` reports a
+ * failing `ensure` and carries on, so one page cannot stop the workspace
+ * opening. Whether that skip is momentary or lasts the session is YOUR
+ * consumers' doing — one that get-or-creates the page at its point of use
+ * retries the moment the feature is touched, while one that navigates to the
+ * derived id (the Recents header item) finds nothing there until the next
+ * workspace open. Prefer the former.
+ *
+ * On a FRESHLY CREATED workspace it is NOT skipped: the failure stops bootstrap,
+ * so an `ensure` that throws unconditionally makes every new workspace
+ * unopenable. `Repo.ensureSystemPages` says why that asymmetry is deliberate.
  */
 export interface SystemPage {
   /** Stable id, for facet dedup. */

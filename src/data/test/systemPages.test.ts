@@ -134,12 +134,33 @@ describe('Repo.ensureSystemPages', () => {
      * afterwards. Throwing leaves the workspace unseeded and lets the retry
      * work; swallowing makes a transient failure permanent.
      */
+    it('survives an owner that throws SYNCHRONOUSLY, before returning a promise', async () => {
+      // `Promise.allSettled` only settles what the array already holds, so a
+      // synchronous throw escapes from `map` and takes workspace open with it —
+      // the one shape a rejected-promise fixture cannot reach. Reachable in
+      // practice: an extension is transpiled, not typechecked, so an ordinary
+      // bug on the first line of `ensure` arrives exactly like this, and TS
+      // accepts it because `never` satisfies the `Promise` return type.
+      env = await setup([
+        systemPagesFacet.of(
+          {id: 'test:sync-throw', ensure: (): Promise<unknown> => { throw new Error('sync bug') }},
+          {source: 'test'},
+        ),
+      ])
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+      await expect(env.repo.ensureSystemPages(WS)).resolves.toBeUndefined()
+
+      const aliases = await aliasesInWorkspace(env.h, env.repo)
+      for (const expected of EXPECTED_ALIASES) expect(aliases.has(expected)).toBe(true)
+      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('test:sync-throw'))
+    })
+
     it('lets every other page finish before it throws, leaving nothing in flight', async () => {
       // `Promise.all` rejects the instant one ensure does and leaves its
       // siblings writing — into whatever database the caller has moved on to.
-      // That is not hypothetical: it polluted the next test in this very file
-      // once the fresh-workspace branch started throwing. Settling all of them
-      // first is what makes the throw safe to tear down (or reload) after.
+      // Settling all of them first is what makes the throw safe to tear down
+      // (or reload) after.
       env = await setup([
         systemPagesFacet.of(
           {id: 'test:broken', ensure: () => Promise.reject(new Error('transient'))},
