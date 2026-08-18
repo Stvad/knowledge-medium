@@ -436,8 +436,19 @@ describe('mediaRendererRegistration.resolve', () => {
     ({ block: {} as Block, repo: {} as Repo, types })
 
   it('claims a media-typed block, and only a media-typed block', () => {
-    expect(mediaRendererRegistration.resolve?.(ctxFor(['media']))).toEqual({ render: MediaBlockRenderer })
-    expect(mediaRendererRegistration.resolve?.(ctxFor(['note']))).toBeNull()
-    expect(mediaRendererRegistration.resolve?.(ctxFor([]))).toBeNull()
+    expect(mediaRendererRegistration.resolve?.(ctxFor(['media'])))
+      .toEqual({ render: MediaBlockRenderer, claims: true })
+    expect(mediaRendererRegistration.resolve?.(ctxFor(['note'])))
+      .toEqual({ render: MediaBlockRenderer, claims: false })
+    expect(mediaRendererRegistration.resolve?.(ctxFor([])))
+      .toEqual({ render: MediaBlockRenderer, claims: false })
+  })
+
+  // It declines rather than dropping out, so a block whose stored `renderer`
+  // property names it still gets it — see the same shape on the extension and
+  // video-player registrations.
+  it('stays available to an explicit request on a block it does not claim', () => {
+    expect(mediaRendererRegistration.resolve?.(ctxFor(['note'])))
+      .toMatchObject({ render: MediaBlockRenderer })
   })
 })

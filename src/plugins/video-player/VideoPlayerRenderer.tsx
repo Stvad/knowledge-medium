@@ -175,5 +175,8 @@ export const VideoPlayerRenderer: BlockRenderer = (props: BlockRendererProps) =>
 export const videoPlayerRendererRegistration: BlockRendererRegistration = {
   id: 'videoPlayer',
   label: 'Video player',
-  resolve: ctx => isPlayableVideoBlock(ctx.block) ? {render: VideoPlayerRenderer} : null,
+  // Offered for any block, claims only playable ones — see the extension
+  // renderer's registration for why the gate is `claims` rather than a null
+  // return.
+  resolve: ctx => ({render: VideoPlayerRenderer, claims: isPlayableVideoBlock(ctx.block)}),
 }

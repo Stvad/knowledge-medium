@@ -22,9 +22,13 @@ const blockWithContent = (content: string): Block => ({
   }),
 } as unknown as Block)
 
+// The player OFFERS itself for anything (an explicit `renderer: videoPlayer`
+// has to keep working on a block it wouldn't take by itself) — what varies is
+// whether it CLAIMS the block.
 const canRenderContent = (content: string) => {
   const ctx: BlockRendererContext = {block: blockWithContent(content), repo: {} as Repo, types: []}
-  return videoPlayerRendererRegistration.resolve?.(ctx) !== null
+  const facts = videoPlayerRendererRegistration.resolve?.(ctx)
+  return facts ? facts.claims === true : false
 }
 
 describe('videoPlayerPlugin', () => {

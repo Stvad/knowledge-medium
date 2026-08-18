@@ -52,16 +52,27 @@ describe('codeMirrorExtensionRendererRegistration.resolve', () => {
   it('claims the block when it has the extension type', () => {
     const block = fakeBlock('ext-1', {[typesProp.name]: typesProp.codec.encode([EXTENSION_TYPE])})
     expect(codeMirrorExtensionRendererRegistration.resolve?.(ctxFor(block)))
-      .toEqual({render: CodeMirrorExtensionBlockRenderer})
+      .toEqual({render: CodeMirrorExtensionBlockRenderer, claims: true})
   })
 
-  it('returns null when block has another type', () => {
+  it('declines a block with another type', () => {
     const block = fakeBlock('plain-1', {[typesProp.name]: typesProp.codec.encode(['note'])})
-    expect(codeMirrorExtensionRendererRegistration.resolve?.(ctxFor(block))).toBeNull()
+    expect(codeMirrorExtensionRendererRegistration.resolve?.(ctxFor(block)))
+      .toMatchObject({claims: false})
   })
 
-  it('returns null when types property is missing', () => {
+  it('declines a block with no types property', () => {
     const block = fakeBlock('plain-2')
-    expect(codeMirrorExtensionRendererRegistration.resolve?.(ctxFor(block))).toBeNull()
+    expect(codeMirrorExtensionRendererRegistration.resolve?.(ctxFor(block)))
+      .toMatchObject({claims: false})
+  })
+
+  // Declining without dropping out is what keeps a stored `renderer:
+  // extension` on an ordinary block working — the registry lookup used to
+  // bypass the gate entirely, and `byId` only sees variants that resolved.
+  it('stays available to an explicit request on a block it does not claim', () => {
+    const block = fakeBlock('plain-3', {[typesProp.name]: typesProp.codec.encode(['note'])})
+    expect(codeMirrorExtensionRendererRegistration.resolve?.(ctxFor(block)))
+      .toMatchObject({render: CodeMirrorExtensionBlockRenderer})
   })
 })

@@ -388,9 +388,11 @@ export default [
   definitionSeedsFacet.of(canvasYProp),
   definitionSeedsFacet.of(canvasWProp),
   definitionSeedsFacet.of(canvasHProp),
-  // Same id replaces the host's 'layout' variant in place, keeping its
-  // precedence. The gate has to come along: a registration with a bare
-  // `render` and no `resolve` claims EVERY block.
+  // Same id as the host's layout renderer, at the precedence the host holds
+  // (an equal precedence goes to whoever registered later, and extensions
+  // register after core) — that is what makes this a replacement rather than
+  // a namesake that loses. The gate has to come along too: a registration
+  // with a bare `render` and no `resolve` claims EVERY block.
   blockRendererFacet.of({
     id: 'layout',
     label: 'Canvas layout',
@@ -398,7 +400,7 @@ export default [
       ctx.blockContext && !ctx.blockContext.layoutBoundary && !ctx.blockContext.panelId
         ? { render: CanvasLayoutRenderer }
         : null,
-  }),
+  }, { precedence: 20 }),
   actionsFacet.of(toggleCanvasLayoutAction),
   actionsFacet.of(enableCanvasLayoutAction),
   actionsFacet.of(disableCanvasLayoutAction),

@@ -189,7 +189,7 @@ describe('videoNotesRendererRegistration.resolve', () => {
   it('does not select without the mode (videoPlayer keeps winning)', () => {
     expect(videoNotesRendererRegistration.resolve?.(ctxFor(playable, {scopeRootId: VIDEO}))).toBeNull()
     expect(videoPlayerRendererRegistration.resolve?.(ctxFor(playable, {})))
-      .toEqual({render: VideoPlayerRenderer})
+      .toEqual({render: VideoPlayerRenderer, claims: true})
   })
 
   it('does not let a NESTED playable block claim the mode (non-video top-level pane)', () => {

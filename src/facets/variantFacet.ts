@@ -161,15 +161,22 @@ export function defineVariantFacet<Context, Render>({
   >({
     id,
     combine: registrations => {
-      // Same id = same variant: a later registration REPLACES an earlier one,
-      // IN PLACE. That is how an extension overrides a built-in — register
-      // `{id: 'layout', …}` and yours is the layout variant — and keeping the
-      // original's slot is the point: the override inherits the precedence
-      // that made the thing it replaced rank where it did, instead of
-      // silently dropping to the extension's own (usually 0). A Map keeps the
-      // first insertion's position with the last one's value.
+      // Same id = same variant, so only one survives: the strongest. That is
+      // how an extension overrides a built-in — register `{id: 'layout', …}`
+      // at the precedence the built-in holds (later registration takes an
+      // equal one) or above, and yours is the layout variant.
+      //
+      // `registrations` arrives sorted ascending by precedence — registration
+      // order is already gone — so the survivor is simply the LAST namesake,
+      // and it has to keep the last one's POSITION as well as its value. A
+      // plain `Map.set` would keep the first insertion's position, seating an
+      // override below variants it outranks and handing `last` to one of
+      // them; delete-then-set moves it to the end.
       const byId = new Map<string, VariantRegistration<Context, Render>>()
-      for (const registration of registrations) byId.set(registration.id, registration)
+      for (const registration of registrations) {
+        byId.delete(registration.id)
+        byId.set(registration.id, registration)
+      }
       const deduped = [...byId.values()]
 
       return context => {

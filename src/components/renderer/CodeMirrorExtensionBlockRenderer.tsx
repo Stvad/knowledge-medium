@@ -81,6 +81,12 @@ export const CodeMirrorExtensionBlockRenderer: BlockRenderer = (props: BlockRend
 export const codeMirrorExtensionRendererRegistration: BlockRendererRegistration = {
   id: 'extension',
   label: 'Extension source',
-  resolve: ctx =>
-    ctx.types.includes(EXTENSION_TYPE) ? {render: CodeMirrorExtensionBlockRenderer} : null,
+  // Offered for any block, claims only extension blocks. "Edit this as
+  // source" is a thing to ask a block for, and asking is what a `renderer`
+  // property IS — declining outright would make a stored `renderer:
+  // extension` on an ordinary block silently do nothing.
+  resolve: ctx => ({
+    render: CodeMirrorExtensionBlockRenderer,
+    claims: ctx.types.includes(EXTENSION_TYPE),
+  }),
 }

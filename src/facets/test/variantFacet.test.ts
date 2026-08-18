@@ -72,6 +72,54 @@ describe('defineVariantFacet', () => {
     expect(selection.byId(undefined)).toBeUndefined()
   })
 
+  // The override idiom: an extension registers the id a built-in already
+  // holds. `read` sorts by precedence BEFORE combining, so registration order
+  // is gone by then — the survivor has to be chosen by precedence, and it has
+  // to sit at the winner's slot, not at the loser's.
+  describe('same-id registrations', () => {
+    const facet = defineVariantFacet<TestCtx, string>({id: 'test.variant.override'})
+    const host: VariantRegistration<TestCtx, string> = defineVariant('layout', 'Host', 'host-r')
+    const other: VariantRegistration<TestCtx, string> = defineVariant('other', 'Other', 'other-r')
+
+    const idsAndRenders = (...extensions: Parameters<typeof resolveFacetRuntimeSync>[0][]) => {
+      const selection = resolveFacetRuntimeSync(extensions).read(facet)({isTopLevel: true})
+      return {ids: selection.all.map(v => v.id), renders: selection.all.map(v => v.render)}
+    }
+
+    it('let the higher precedence win, whichever order they were registered in', () => {
+      const override = defineVariant('layout', 'Override', 'override-r')
+      expect(idsAndRenders(facet.of(host, {precedence: 20}), facet.of(override, {precedence: 30})).renders)
+        .toEqual(['override-r'])
+      expect(idsAndRenders(facet.of(override, {precedence: 30}), facet.of(host, {precedence: 20})).renders)
+        .toEqual(['override-r'])
+    })
+
+    it('let the later registration win an equal precedence', () => {
+      const override = defineVariant('layout', 'Override', 'override-r')
+      expect(idsAndRenders(facet.of(host, {precedence: 20}), facet.of(override, {precedence: 20})).renders)
+        .toEqual(['override-r'])
+    })
+
+    it('leave a lower-precedence namesake losing, as any other contribution would', () => {
+      const weak = defineVariant('layout', 'Weak', 'weak-r')
+      expect(idsAndRenders(facet.of(host, {precedence: 20}), facet.of(weak)).renders)
+        .toEqual(['host-r'])
+    })
+
+    it('seat the survivor at the winning precedence, not the losing one', () => {
+      const override = defineVariant('layout', 'Override', 'override-r')
+      // 'other' sits between the two 'layout' registrations. The survivor
+      // outranks it, so it must sort after it — seating the survivor at the
+      // loser's slot would put it first and hand `last` to the wrong variant.
+      const {ids} = idsAndRenders(
+        facet.of(override, {precedence: 30}),
+        facet.of(host, {precedence: 20}),
+        facet.of(other, {precedence: 25}),
+      )
+      expect(ids).toEqual(['other', 'layout'])
+    })
+  })
+
   it('rejects invalid contributions via validate', () => {
     const facet = defineVariantFacet<TestCtx, string>({id: 'test.variant.validate'})
     // Smuggle an invalid contribution past TS so we exercise runtime validation.

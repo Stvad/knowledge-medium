@@ -114,5 +114,8 @@ export const MediaBlockRenderer: BlockRenderer = (props: BlockRendererProps) => 
 export const mediaRendererRegistration: BlockRendererRegistration = {
   id: 'media',
   label: 'Media',
-  resolve: ctx => ctx.types.includes(MEDIA_TYPE) ? {render: MediaBlockRenderer} : null,
+  // Offered for any block, claims only media blocks — see the extension
+  // renderer's registration for why the gate is `claims` rather than a null
+  // return.
+  resolve: ctx => ({render: MediaBlockRenderer, claims: ctx.types.includes(MEDIA_TYPE)}),
 }
