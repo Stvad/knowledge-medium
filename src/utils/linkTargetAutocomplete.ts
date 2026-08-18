@@ -2,10 +2,12 @@ import type { BlockData, TypeContribution } from '@/data/api'
 import type { Repo } from '@/data/repo'
 import { aliasesProp, typesProp } from '@/data/properties.js'
 import {
+  searchSourceHealthFacet,
   searchSourcesFacet,
   type SearchSourceArgs,
   type SearchSourceCandidate,
   type SearchSourceContribution,
+  type SearchSourceHealthEvent,
 } from '@/data/facets.js'
 import { buildFilterPrefixes, rankCandidates } from '@/utils/fuzzyRank.js'
 
@@ -576,33 +578,53 @@ const freshestCandidatePayload = (
   })
 }
 
-/** Sources already reported for contributing a candidate whose
- *  `userUpdatedAt` isn't a finite number. Deduped by source because search
- *  runs on every keystroke — an unguarded warning would bury the one line
- *  the plugin author needs under thousands of copies. Module-scoped, so
- *  it's once per session, not once per search. */
+/** Console-warn once per source per session, alongside the health event.
+ *  Search runs on every keystroke, so an unguarded warning would bury the
+ *  one line a plugin author needs under thousands of copies. The health
+ *  reporters get EVERY event (they need the repeats to know a source is
+ *  still broken); only the console is deduped. */
 const offContractSourcesWarned = new Set<string>()
 
 /** `BlockData.userUpdatedAt` is a required number, so a candidate without a
  *  finite one is a bug in the source that produced it — and an invisible
  *  one, since the merge point can still rank and even display the block.
- *  Name the source once so it's fixable; `freshestCandidatePayload` handles
- *  the consequence (such a candidate keeps its score but loses the payload
- *  to any well-formed duplicate). */
-const warnOnOffContractCandidate = (
+ *  Returns the offending detail line, or null when the batch is clean.
+ *  `freshestCandidatePayload` handles the consequence: such a candidate
+ *  keeps its score but loses the payload to any well-formed duplicate. */
+const offContractCandidateDetail = (
   sourceId: string,
   candidates: readonly SearchSourceCandidate[],
-): void => {
-  if (offContractSourcesWarned.has(sourceId)) return
+): string | null => {
   const offender = candidates.find(c => !Number.isFinite(c.block.userUpdatedAt))
-  if (!offender) return
-  offContractSourcesWarned.add(sourceId)
-  console.warn(
-    `[searchBlocksAcrossSources] source "${sourceId}" returned block ${offender.block.id} ` +
-      `with a non-finite userUpdatedAt (${String(offender.block.userUpdatedAt)}). ` +
-      `BlockData.userUpdatedAt is required; this candidate still counts toward ranking, ` +
-      `but its copy of the block will not be displayed over a well-formed duplicate.`,
-  )
+  if (!offender) return null
+  const detail =
+    `returned block ${offender.block.id} with a non-finite userUpdatedAt ` +
+    `(${String(offender.block.userUpdatedAt)}). BlockData.userUpdatedAt is required; ` +
+    `this candidate still counts toward ranking, but its copy of the block will not ` +
+    `be displayed over a well-formed duplicate.`
+  if (!offContractSourcesWarned.has(sourceId)) {
+    offContractSourcesWarned.add(sourceId)
+    console.warn(`[searchBlocksAcrossSources] source "${sourceId}" ${detail}`)
+  }
+  return detail
+}
+
+/** Fan a health event out to every contributed reporter. Isolated per
+ *  reporter: a reporter that throws must not take down the search it is
+ *  only observing, nor the reporters after it. */
+const reportSearchSourceHealth = (
+  repo: Repo,
+  event: SearchSourceHealthEvent,
+): void => {
+  const reporters = repo.facetRuntime?.read(searchSourceHealthFacet)
+  if (!reporters) return
+  for (const reporter of reporters.values()) {
+    try {
+      reporter.report(event)
+    } catch (error) {
+      console.error(`[searchBlocksAcrossSources] health reporter "${reporter.id}" threw`, error)
+    }
+  }
 }
 
 /** Fan out `query` to every contributed `searchSourcesFacet` source (core's
@@ -653,10 +675,14 @@ export const searchBlocksAcrossSources = async (
     contributions.map(async (source, index) => {
       try {
         const candidates = await source.search(repo, args)
-        warnOnOffContractCandidate(source.id, candidates)
+        const detail = offContractCandidateDetail(source.id, candidates)
+        reportSearchSourceHealth(repo, detail === null
+          ? {sourceId: source.id, kind: 'ok'}
+          : {sourceId: source.id, kind: 'malformed-candidate', detail})
         return candidates
       } catch (error) {
         console.error(`[searchBlocksAcrossSources] source "${source.id}" threw`, error)
+        reportSearchSourceHealth(repo, {sourceId: source.id, kind: 'threw', error})
         failures.push({index, error})
         return []
       }

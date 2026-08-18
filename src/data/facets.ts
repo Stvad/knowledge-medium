@@ -466,3 +466,39 @@ export interface SearchSourceContribution {
 }
 
 export const searchSourcesFacet = keyedMapFacet<SearchSourceContribution>('data.searchSources', s => s.id)
+
+/** What the merge point observed about one source on one search.
+ *
+ *  `'ok'` matters as much as the failures: without it a health surface
+ *  latches on the first transient error and never clears. Every source
+ *  that returns reports exactly one of these per search. */
+export interface SearchSourceHealthEvent {
+  readonly sourceId: string
+  readonly kind: 'ok' | 'threw' | 'malformed-candidate'
+  /** Present on `'threw'` — whatever the source rejected with. */
+  readonly error?: unknown
+  /** Present on `'malformed-candidate'` — one line naming what was wrong,
+   *  suitable for showing a plugin author. */
+  readonly detail?: string
+}
+
+/** An observer of search-source health, called by `searchBlocksAcrossSources`
+ *  after every source settles.
+ *
+ *  This exists because the interesting failure is INVISIBLE: when one source
+ *  throws and another succeeds, search quietly returns fewer results and the
+ *  user is told nothing (only a total failure reaches them, via the rethrow).
+ *  Core cannot surface that itself — an indicator is a plugin concern and core
+ *  may not depend on the plugin layer — so core emits and whoever cares
+ *  listens. `report` MUST NOT throw and MUST be cheap: it runs inside every
+ *  keystroke's search. The merge point isolates throws anyway, so a broken
+ *  reporter degrades itself rather than search. */
+export interface SearchSourceHealthReporter {
+  readonly id: string
+  report: (event: SearchSourceHealthEvent) => void
+}
+
+export const searchSourceHealthFacet = keyedMapFacet<SearchSourceHealthReporter>(
+  'data.searchSourceHealthReporters',
+  r => r.id,
+)

@@ -6,7 +6,12 @@ import { aliasesProp, typesProp } from '@/data/properties.js'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { Repo } from '@/data/repo'
-import { searchSourcesFacet, type SearchSourceContribution } from '@/data/facets.js'
+import {
+  searchSourceHealthFacet,
+  searchSourcesFacet,
+  type SearchSourceContribution,
+  type SearchSourceHealthEvent,
+} from '@/data/facets.js'
 import {
   completionTypeHint,
   displayableTypes,
@@ -917,5 +922,60 @@ describe('searchBlocksAcrossSources (searchSourcesFacet merge point)', () => {
       query: 'sync',
       limit: 10,
     })).rejects.toThrow('db exploded')
+  })
+
+  it('reports each source\'s outcome to the health seam, including recovery', async () => {
+    // Pins the seam end to end through the REAL merge point: core emits,
+    // a registered reporter receives. The 'ok' events are what let a
+    // health surface clear instead of latching on one transient failure.
+    await create({id: 'core-hit', content: 'sync notes'})
+    const events: SearchSourceHealthEvent[] = []
+    env.repo.setRuntimeContributions(searchSourceHealthFacet, 'test:reporter', [
+      {id: 'test.reporter', report: (event) => { events.push(event) }},
+    ])
+
+    let broken = true
+    env.repo.setRuntimeContributions(searchSourcesFacet, 'test:flaky', [{
+      id: 'test.flaky',
+      search: async () => {
+        if (broken) throw new Error('index offline')
+        return []
+      },
+    }])
+
+    await searchBlocksAcrossSources(env.repo, {workspaceId: WS, query: 'sync', limit: 10})
+    expect(events).toContainEqual(expect.objectContaining({sourceId: 'test.flaky', kind: 'threw'}))
+    expect(events).toContainEqual(expect.objectContaining({sourceId: 'core.content', kind: 'ok'}))
+
+    broken = false
+    events.length = 0
+    await searchBlocksAcrossSources(env.repo, {workspaceId: WS, query: 'sync', limit: 10})
+    expect(events).toContainEqual(expect.objectContaining({sourceId: 'test.flaky', kind: 'ok'}))
+  })
+
+  it('reports a malformed candidate, and a reporter that throws cannot break search', async () => {
+    await create({id: 'core-hit', content: 'sync notes'})
+    const events: SearchSourceHealthEvent[] = []
+    env.repo.setRuntimeContributions(searchSourceHealthFacet, 'test:reporter', [
+      // The throwing reporter is registered FIRST, so if throws were not
+      // isolated it would also prevent the second one from ever running.
+      {id: 'test.hostile', report: () => { throw new Error('reporter exploded') }},
+      {id: 'test.reporter', report: (event) => { events.push(event) }},
+    ])
+    env.repo.setRuntimeContributions(searchSourcesFacet, 'test:malformed', [{
+      id: 'test.malformed',
+      search: async () => [{
+        block: {...blockData('ghost', 'no timestamp'), userUpdatedAt: undefined as unknown as number},
+        score: 500,
+      }],
+    }])
+
+    const results = await searchBlocksAcrossSources(env.repo, {workspaceId: WS, query: 'sync', limit: 10})
+
+    expect(results.map(block => block.id)).toContain('ghost')
+    expect(events).toContainEqual(expect.objectContaining({
+      sourceId: 'test.malformed',
+      kind: 'malformed-candidate',
+    }))
   })
 })
