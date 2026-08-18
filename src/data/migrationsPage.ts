@@ -13,7 +13,13 @@ import { MIGRATIONS_PAGE_TYPE } from '@/data/blockTypes'
 import { getOrCreateKernelPage, kernelPageBlockId } from './kernelPage'
 
 const MIGRATIONS_PAGE_NS = 'f1c0a7e2-5b3d-4a8e-9c1f-2d6b8e4a0c73'
-const MIGRATIONS_ALIAS = 'Migrations'
+/** Deliberately not `Migrations`. This page is created by `ensureSystemPages`
+ *  on the bootstrap critical path, and the alias-uniqueness trigger aborts the
+ *  transaction if any live block already holds the name — which, on a mature
+ *  graph, would stop the workspace opening at all, unreachably. Unlike
+ *  Properties / Types / Recents, this alias is being reserved on graphs that
+ *  already have years of content, so it has to be a string nobody has typed. */
+const MIGRATIONS_ALIAS = 'System Migrations (km)'
 
 export const migrationsPageBlockId = (workspaceId: string): string =>
   kernelPageBlockId(workspaceId, MIGRATIONS_PAGE_NS)
