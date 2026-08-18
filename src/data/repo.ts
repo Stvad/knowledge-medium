@@ -2807,7 +2807,14 @@ export class Repo {
         },
       }
       try {
+        // Before the scan, and again before claiming completion. The
+        // per-transaction check only fires when a pass WRITES: a run that finds
+        // no candidates — precisely what a partially materialized graph looks
+        // like, since the rows are staged and not yet in `blocks` — would
+        // otherwise sail through and record its one-shot marker as done.
+        await this.assertBackfillMayWrite(workspaceId, backfill.id, generation)
         await backfill.run(ctx)
+        await this.assertBackfillMayWrite(workspaceId, backfill.id, generation)
         // Record the marker only after a clean run — a thrown backfill leaves
         // it unset so the next open retries (backfills are written idempotent
         // via a per-row recheck, so a retry is cheap).

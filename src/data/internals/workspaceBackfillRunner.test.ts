@@ -181,13 +181,52 @@ describe('workspace backfill runner — sync gating', () => {
     expect(runs).toEqual([])
   })
 
-  it('aborts while synced rows are still draining into blocks', async () => {
-    // "Downloaded" is not "materialized": the observer stages arrivals in
-    // `blocks_synced_changes` and drains them in throttled windows, so the
-    // status can read settled while rows this pass reads are still queued.
+  it('aborts mid-run when rows start staging between batches', async () => {
+    // The pre-run check catches a graph that is already draining; this pins the
+    // PER-TRANSACTION one, which is the only thing covering staging that starts
+    // after a chunked pass has begun.
     const g = controllableGate()
-    const runs: string[] = []
-    const repo = makeRepo(probeBackfill(runs), g.gate)
+    const batches: number[] = []
+    const chunked: WorkspaceBackfill = {
+      id: 'chunked-staging-v1',
+      completion: 'per-device',
+      run: async ({tx}) => {
+        for (let i = 0; i < 3; i++) {
+          if (i === 1) {
+            await sharedDb.db.execute(
+              "INSERT INTO blocks_synced_changes (id, op) VALUES ('late-row', 'upsert')",
+            )
+          }
+          await tx(async () => { batches.push(i) }, {description: `batch ${i}`})
+        }
+      },
+    }
+    const repo = makeRepo(chunked, g.gate)
+    await seedTarget(repo)
+
+    g.open()
+    await drain(repo)
+
+    expect(batches).toEqual([0])
+    const markers = await sharedDb.db.getAll<{key: string}>(
+      "SELECT key FROM client_schema_state WHERE key LIKE 'workspace_backfill:%'",
+    )
+    expect(markers).toEqual([])
+  })
+
+  it('records no marker for a run that found nothing while rows were still staged', async () => {
+    // The per-transaction check only fires when a pass WRITES. A pass that
+    // finds no candidates is exactly what a partially materialized graph looks
+    // like — the rows are staged, not yet in `blocks` — so without a check
+    // around the run itself it would record its one-shot marker as done.
+    const g = controllableGate()
+    const ran: string[] = []
+    const findsNothing: WorkspaceBackfill = {
+      id: 'finds-nothing-v1',
+      completion: 'per-device',
+      run: async ({workspaceId}) => { ran.push(workspaceId) },   // never calls tx
+    }
+    const repo = makeRepo(findsNothing, g.gate)
     await seedTarget(repo)
     await sharedDb.db.execute(
       "INSERT INTO blocks_synced_changes (id, op) VALUES ('pending-row', 'upsert')",
@@ -196,12 +235,39 @@ describe('workspace backfill runner — sync gating', () => {
     g.open()
     await drain(repo)
 
-    expect(runs).toEqual([WS])            // run() started...
-    expect((await repo.load('target'))?.properties['probe:mark']).toBeUndefined()
+    expect(ran).toEqual([])
     const markers = await sharedDb.db.getAll<{key: string}>(
       "SELECT key FROM client_schema_state WHERE key LIKE 'workspace_backfill:%'",
     )
-    expect(markers).toEqual([])           // ...but wrote nothing and recorded nothing
+    expect(markers).toEqual([])
+  })
+
+  it('records no marker when rows stage after the pass’s last write', async () => {
+    // The narrow window the other two checks miss: pre-run passed, every
+    // transaction passed, and staging begins before completion is claimed.
+    // Recording the marker there would call a run over a graph that had gone
+    // stale mid-pass "done", permanently.
+    const g = controllableGate()
+    const late: WorkspaceBackfill = {
+      id: 'stages-after-write-v1',
+      completion: 'per-device',
+      run: async ({tx}) => {
+        await tx(async () => {}, {description: 'the only batch'})
+        await sharedDb.db.execute(
+          "INSERT INTO blocks_synced_changes (id, op) VALUES ('after-write', 'upsert')",
+        )
+      },
+    }
+    const repo = makeRepo(late, g.gate)
+    await seedTarget(repo)
+
+    g.open()
+    await drain(repo)
+
+    const markers = await sharedDb.db.getAll<{key: string}>(
+      "SELECT key FROM client_schema_state WHERE key LIKE 'workspace_backfill:%'",
+    )
+    expect(markers).toEqual([])
   })
 
   it('refuses a per-graph backfill rather than giving it per-device semantics', async () => {
