@@ -115,7 +115,7 @@ export const copyBlockToClipboard = async (block: Block): Promise<void> => {
  *  fingerprinting a text-only clipboard by its content, and it is not new
  *  — the pending-move register's sentinel compared the same way. Pastes
  *  that carry `text/html` are unaffected: the digest check in
- *  `resolveClipboardPayload` rejects a payload whose text doesn't match. */
+ *  `decodePayloadHtml` rejects a payload whose text doesn't match. */
 export const writeTextToClipboard = async (text: string): Promise<void> => {
   await navigator.clipboard.writeText(text)
   forgetPayload(text)
@@ -256,7 +256,7 @@ export const copyBlockIdsToClipboard = async (
  *  sync-applied reparent between them), and then the ids, the markdown and
  *  the payload describe different sets.
  *
- *  Carries `data.serializedIds`, not `normalizedIds`: a root that failed
+ *  Carries `data.serializedIds`, not the requested ids: a root that failed
  *  to serialize (see `SerializedSelection`) is absent from the markdown
  *  and must be absent from the payload too, or a paste would relocate
  *  content the clipboard never represented.

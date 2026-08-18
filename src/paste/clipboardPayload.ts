@@ -23,7 +23,7 @@
  * user did something, drop the pending one" — is the thing to refuse.
  *
  * **Every reader applies `applyCompletion`**, not just the composed
- * `resolveClipboardPayload`. A reader that can hand back a spent cut is a
+ * one of them. A reader that can hand back a spent cut is a
  * reader someone will use.
  *
  * The obvious simplification — remember the ids in a module variable on
@@ -78,7 +78,7 @@ export interface ClipboardPayload {
 interface EncodedPayload extends ClipboardPayload {
   readonly v: number
   /** Fingerprint of the markdown this marker shipped alongside. Checked in
-   *  `resolveClipboardPayload` against the paste's actual `text/plain`.
+   *  `decodePayloadHtml` against the paste's actual `text/plain`.
    *
    *  What it stops: a rich-text app that round-trips our html — preserving
    *  the comment while the visible content changes — would otherwise hand
@@ -258,7 +258,7 @@ export const markCutCompleted = (payload: ClipboardPayload): void => {
 }
 
 /** Applied at EVERY point a payload is read, not just in the composed
- *  `resolveClipboardPayload`. Putting it only there left
+ *  one reader. Putting it in only one left
  *  `recallPayloadForText` handing out live cuts, and the one caller that
  *  used it directly (the keyboard paste path) went on relocating a spent
  *  cut — the exact bug `markCutCompleted` exists to prevent, surviving on

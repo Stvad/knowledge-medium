@@ -6,7 +6,7 @@
  *
  * The validity question is already answered before we get here: the
  * payload came out of the clipboard content itself
- * (`resolveClipboardPayload`), so if it's present it describes what is on
+ * (see `@/paste/clipboardPayload.js`), so if it's present it describes what is on
  * the clipboard right now, by construction. There is no register to claim,
  * nothing to invalidate, and no way for a second paste to race this one
  * into acting on a stale gesture. What remains is genuinely about THIS

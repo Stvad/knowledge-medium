@@ -45,7 +45,7 @@ export interface PasteAsMoveInput {
   readonly repo: Repo
   readonly target: PasteMoveTarget
   /** The identity of the blocks on the clipboard, already resolved from
-   *  the paste's own content (`resolveClipboardPayload`). Passed IN rather
+   *  the paste's own content (`@/paste/clipboardPayload.js`). Passed IN rather
    *  than looked up here: the caller is the only one holding the paste
    *  event, and the payload is the whole question of validity — a caller
    *  with no payload never reaches the verb at all. */
@@ -71,8 +71,8 @@ export const pasteAsMoveVerb = defineVerbFacet<PasteAsMoveInput, PasteAsMoveResu
   defaultImpl: () => 'not-a-move' as const,
   // Effectful (the impl calls `moveBlocksTo`, which writes blocks) — never
   // re-run the harmless default after a partial effect; see verbFacet's
-  // onError doc. The impl is expected to handle its OWN failures (toast +
-  // clearPendingMove) rather than throw; a throw here means a genuine bug.
+  // onError doc. The impl reports its own failures as `refused` with a
+  // toast rather than throwing; a throw here means a genuine bug.
   onError: 'rethrow',
 })
 
@@ -97,7 +97,7 @@ const siblingMoveTarget = (
  *
  *  Note there is no text check here, and nothing to short-circuit on empty
  *  text: the payload either describes this clipboard content or it doesn't,
- *  and `resolveClipboardPayload` already answered that by content — so a
+ *  and the payload lookup already answered that by content — so a
  *  cut of a genuinely empty block needs no special handling here, even
  *  though its text is the empty string every emptiness guard eats. */
 export const tryPasteAsMove = async (

@@ -151,7 +151,7 @@ describe('pasteAsMoveImpl', () => {
 
   it('a second paste of the same cut resolves as a COPY, so it cannot relocate again', async () => {
     // End-to-end across both halves: the impl marks the cut spent, and the
-    // NEXT paste's `resolveClipboardPayload` is what sees that. Testing
+    // NEXT paste's payload lookup is what sees that. Testing
     // only through the impl would prove nothing — it trusts the payload it
     // is handed, so it would move a second time and should.
     await seed('dest', null)

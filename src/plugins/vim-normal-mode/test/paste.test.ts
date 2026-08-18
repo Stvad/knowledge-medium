@@ -65,7 +65,7 @@ const trigger = { preventDefault: vi.fn() } as unknown as ActionTrigger
 /** Seeds `root` → `{src → a, dest}`. `dest` is deliberately nested under
  *  `root` rather than itself being a workspace root — a workspace root
  *  always takes pasted/moved content as children regardless of position
- *  (see `resolveVisiblePasteMoveTarget`'s doc), which would mask whether a
+ *  (see `resolvePasteMoveTarget`'s doc), which would mask whether a
  *  test is actually landing "after" vs "as a child". */
 const seed = async (): Promise<void> => {
   await repo.tx(async tx => {
