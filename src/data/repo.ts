@@ -2707,11 +2707,11 @@ export class Repo {
   /** Preconditions every backfill transaction must still satisfy. Separate
    *  from the scheduling gate because scheduling proves a fact at one instant
    *  and a chunked pass writes over many. */
-  private assertBackfillMayWrite(
+  private async assertBackfillMayWrite(
     workspaceId: string,
     backfillId: string,
     generation: number,
-  ): void {
+  ): Promise<void> {
     if (this.workspaceGeneration !== generation) {
       throw new Error(
         `[workspaceBackfills] "${backfillId}" aborted: workspace ${workspaceId} was ` +
@@ -2723,6 +2723,20 @@ export class Repo {
       throw new Error(
         `[workspaceBackfills] "${backfillId}" aborted: workspace ${workspaceId} is no ` +
         `longer active. Its writes would land under the current session's access state.`,
+      )
+    }
+    // "Downloaded" is not "materialized": the sync observer stages arrivals in
+    // `blocks_synced_changes` and drains them into `blocks` in throttled
+    // windows, so the status can read settled while rows this pass will scan
+    // are still queued. Read from INSIDE the write transaction — staging can
+    // otherwise land between an outside check and lock acquisition.
+    const staged = await this.db.getOptional<{one: number}>(
+      'SELECT 1 AS one FROM blocks_synced_changes LIMIT 1',
+    )
+    if (staged !== null) {
+      throw new Error(
+        `[workspaceBackfills] "${backfillId}" aborted: synced rows are still draining ` +
+        `into blocks. Reading now would scan a partially materialized graph.`,
       )
     }
     let settled = false
@@ -2774,23 +2788,6 @@ export class Repo {
         // own edit reverts the whole batch, permanently (the completion marker
         // is already recorded).
         tx: async <R>(fn: (tx: Tx) => Promise<R>, opts: {description?: string}): Promise<R> => {
-          // "Downloaded" is not "materialized": the sync observer stages
-          // arrivals in `blocks_synced_changes` and drains them into `blocks`
-          // in throttled windows, so `downloading === false` can be true while
-          // rows this pass will read are still queued. Checked just OUTSIDE the
-          // tx rather than inside it — reading through `this.db` while holding
-          // the write lock is not safe, and the queue drains in batches, so a
-          // finer moment buys nothing.
-          const staged = await this.db.getOptional<{one: number}>(
-            'SELECT 1 AS one FROM blocks_synced_changes LIMIT 1',
-          )
-          if (staged !== null) {
-            throw new Error(
-              `[workspaceBackfills] "${backfill.id}" aborted: synced rows are still ` +
-              `draining into blocks. Reading now would scan a partially materialized ` +
-              `graph.`,
-            )
-          }
           // Checked per transaction and INSIDE it, after acquisition — not once
           // before the run, and not just before `repo.tx`. Two separate reasons:
           // a pass can be chunked across minutes (the properties-as-blocks
@@ -2800,7 +2797,7 @@ export class Repo {
           // go stale before `fn` reads a row. Throwing here aborts the tx and
           // the run with no marker recorded, so the next open retries.
           return this.tx(async t => {
-            this.assertBackfillMayWrite(workspaceId, backfill.id, generation)
+            await this.assertBackfillMayWrite(workspaceId, backfill.id, generation)
             return fn(t)
           }, {
             scope: ChangeScope.BlockDefault,
