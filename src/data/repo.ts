@@ -2524,12 +2524,10 @@ export class Repo {
    *  A `ProcessorRejection` is re-reported AS ITSELF rather than wrapped: for
    *  the dominant case (`alias.collision`) it names the conflicting block and
    *  offers to open it, where a generic notice would only say something broke.
-   *  Do not reintroduce a "`repo.tx` already fanned this one out" check here —
-   *  being a ProcessorRejection does not prove a tx produced it, and the
-   *  contributor that builds one before ever opening a tx would lose its only
-   *  notice. Repeats are the toast layer's to collapse, and it does: it keys a
-   *  slot on (code, message), so this and the seed materializer hitting the
-   *  same collision a moment later share one toast instead of stacking. */
+   *  Do not reintroduce a "`repo.tx` already fanned this one out" check — being
+   *  a ProcessorRejection does not prove a tx produced it, and a contributor
+   *  that builds one before ever opening a tx would lose its only notice.
+   *  Collapsing repeats is the presentation layer's call, not this one's. */
   private reportSystemPageFailure(pageId: string, workspaceId: string, error: unknown): void {
     const reason = error instanceof Error ? error.message : String(error)
     console.error(
