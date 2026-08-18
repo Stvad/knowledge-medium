@@ -140,6 +140,7 @@ const SAFE_VIA_PROTOTYPE: Record<string, string> = {
   runReferenceTargetDerivePass: 'private; jobs are enqueued via the DELEGATED schedule* overrides',
   drainNameRederives: 'private; jobs are enqueued via the facetBridge-bound schedule',
   runWorkspaceBackfills: 'private; jobs are enqueued via the DELEGATED schedule* overrides',
+  propertyRegistryReadyFor: 'read — inspects the registry snapshots; assigns nothing',
   workspaceSeeds: 'private read; reached only via the DELEGATED schedule/run seed-materialization members',
   scheduleReprojection: 'private; invoked by constructor-bound facetBridge',
   schedulePropertyDefinitionMigrations: 'invoked by constructor-bound facetBridge',

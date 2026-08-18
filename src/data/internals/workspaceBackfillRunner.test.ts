@@ -444,3 +444,28 @@ describe('workspace backfill runner — undo', () => {
     expect(ops.length).toBeGreaterThan(0)
   })
 })
+
+describe('workspace backfill runner — registry readiness', () => {
+  it('defers rather than completing vacuously when the registry is not primed', async () => {
+    // The hazard: an unprimed registry answers "no such property" for EVERY
+    // name, so a pass finds no candidates, writes nothing, opens no
+    // transaction — and then records a PERMANENT per-graph completion. The
+    // migration reads as done, on every device, forever, having migrated
+    // nothing.
+    const runs: string[] = []
+    const backfill: WorkspaceBackfill = {
+      id: 'needs-registry-v1',
+      run: async ({workspaceId}) => { runs.push(workspaceId) },
+    }
+    const {repo} = createTestRepo({db: sharedDb.db, user: {id: 'user-1'}})
+    repo.setActiveWorkspaceId(WS)
+    repo.setRuntimeContributions(workspaceBackfillsFacet, 'test-backfills', [backfill])
+    // No `projectedPropertyDefinitionsFacet` contribution → no registry.
+
+    repo.scheduleWorkspaceBackfills(WS)
+    await vi.runAllTimersAsync()
+    await repo.awaitWorkspaceBackfills()
+
+    expect(runs).toEqual([])
+  })
+})

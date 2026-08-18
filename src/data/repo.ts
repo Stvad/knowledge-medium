@@ -57,7 +57,6 @@ import {
 } from './internals/refProjection'
 import { runTx, type PowerSyncDb } from './internals/commitPipeline'
 import { onSyncSettled } from './internals/firstSync'
-import type { ResolvedPropertySchema } from './api/propertySchema'
 import { devAssertionsEnabled } from './internals/devAssertions'
 import type { BlockCache } from '@/data/blockCache'
 import {
@@ -2709,6 +2708,21 @@ export class Repo {
   /** Preconditions every backfill transaction must still satisfy. Separate
    *  from the scheduling gate because scheduling proves a fact at one instant
    *  and a chunked pass writes over many. */
+  /** Is this workspace's property registry primed?
+   *
+   *  `propertySchemaResolverForWorkspace` falls back to a resolver that
+   *  answers `identity-unavailable` for EVERY name when the snapshot is null
+   *  or belongs to another workspace. That is indistinguishable, at the call
+   *  site, from "this key genuinely has no definition" — and a backfill that
+   *  reads it as the latter concludes there is nothing to migrate. */
+  private propertyRegistryReadyFor(workspaceId: string): boolean {
+    return registryForWorkspace(
+      this._propertyDefinitionRegistry,
+      this._previousPropertyDefinitionRegistry,
+      workspaceId,
+    ) !== null
+  }
+
   private async assertBackfillMayWrite(
     workspaceId: string,
     backfillId: string,
@@ -2777,16 +2791,31 @@ export class Repo {
       // scheduled. `assertBackfillMayWrite` catches this per transaction, but
       // that is one tx too late to avoid the scan a backfill does first.
       if (this.workspaceGeneration !== generation) return
+      // BEFORE claiming: an unprimed registry makes the whole graph look like
+      // it has zero registered properties, so a pass would find no candidates,
+      // write nothing, and then record a PERMANENT per-graph completion — the
+      // migration marked done without migrating anything, on every device
+      // forever. Checked here rather than only inside the writes because a run
+      // that finds no candidates never opens a transaction at all.
+      if (!this.propertyRegistryReadyFor(workspaceId)) {
+        console.warn(
+          `[workspaceBackfills] "${backfill.id}" deferred: workspace ${workspaceId}'s ` +
+          `property registry is not primed, so a scan would see no registered ` +
+          `properties and complete vacuously. Retrying on the next open.`,
+        )
+        continue
+      }
       if (!(await claim.tryClaim(workspaceId, backfill.id))) continue
+      const resolver = this.propertySchemaResolverFor(workspaceId)
       const ctx: WorkspaceBackfillContext = {
         workspaceId,
+        // One resolver for the whole run, through the canonical factory: the
+        // per-call version built a fresh one for every cell key (a pass over
+        // ~650k rows resolves that many times) and bypassed the
+        // previous-registry fallback every other site gets.
         resolveNameSchema: (name) => {
-          const resolution = propertySchemaResolverForWorkspace(
-            this._propertyDefinitionRegistry, workspaceId,
-          ).resolve(name)
-          return resolution.status === 'resolved'
-            ? resolution.schema as ResolvedPropertySchema<unknown>
-            : undefined
+          const resolution = resolver.resolve(name)
+          return resolution.status === 'resolved' ? resolution.schema : undefined
         },
         getAll: <T>(sql: string, params?: readonly unknown[]) =>
           this.db.getAll<T>(sql, params as unknown[] | undefined),

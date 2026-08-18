@@ -282,10 +282,13 @@ export const CHILDREN_IDS_SQL = `
  * query. Binding it rather than storing it is what keeps `block_types`
  * derived-from-`blocks` by trigger alone.
  *
- * Salted by workspace, so another workspace's set can never match these
- * rows: a background workspace falls back to the `block_types` leg, which
- * is exactly today's behaviour rather than a wrong answer. Pass `'[]'`
- * when no registry is reachable.
+ * Workspace-guarded like the `block_types` leg beside it, and for the reason
+ * that leg states: a foreign workspace's definition id must degrade to a
+ * VISIBLE "unknown field" row per §9. Salting alone does not give that —
+ * it stops workspace B's own ids from matching, but a row IN B whose
+ * `reference_target_id` names the ACTIVE workspace's seed (a cross-workspace
+ * copy) would otherwise match and be hidden. Pass `'[]', ''` when no registry
+ * is reachable.
  *
  * NULL-SAFETY is load-bearing (§9's recorded failure mode, caught by this
  * file's own tests): the bit is NULL on every unmarked row, and this
@@ -312,6 +315,7 @@ const recognizedFieldRowSql = (rowRef: string): string => `
        OR EXISTS (
          SELECT 1 FROM json_each(?) seed
           WHERE seed.value = ${rowRef}.reference_target_id
+            AND ${rowRef}.workspace_id = ?
        )
      )
 `
@@ -323,10 +327,11 @@ ${recognizedFieldRowSql('blocks')}
 `
 
 /** Outline form of {@link CHILDREN_SQL}: excludes recognized field rows in
- *  a flipped workspace. Bind `[parentId, seedDefinitionIdsJson]` — the second
- *  is `recognizedFieldRowSql`'s registry set; pass `'[]'` for none. Omitting
- *  it binds NULL, which `json_each` reads as zero rows, so a caller that
- *  forgets it silently gets the pre-#389 answer rather than an error. */
+ *  a flipped workspace. Bind `[parentId, seedDefinitionIdsJson, seedWorkspaceId]`
+ *  — the registry's set and the workspace it belongs to; pass `'[]', ''` for
+ *  none. Omitting them binds NULL, which `json_each` reads as zero rows, so a
+ *  caller that forgets silently gets the pre-#389 answer rather than an
+ *  error. */
 export const VISIBLE_CHILDREN_SQL = `
   SELECT * FROM blocks
    WHERE parent_id = ? AND deleted = 0
@@ -335,7 +340,8 @@ ${VISIBLE_CHILD_PREDICATE_SQL}
 `
 
 /** Outline form of {@link CHILDREN_IDS_SQL}. Bind
- *  `[parentId, seedDefinitionIdsJson]` — see {@link VISIBLE_CHILDREN_SQL}. */
+ *  `[parentId, seedDefinitionIdsJson, seedWorkspaceId]` — see
+ *  {@link VISIBLE_CHILDREN_SQL}. */
 export const VISIBLE_CHILDREN_IDS_SQL = `
   SELECT id FROM blocks
    WHERE parent_id = ? AND deleted = 0
@@ -362,9 +368,9 @@ ${VISIBLE_CHILD_PREDICATE_SQL}
  * ref-typed VALUE deeper in a property subtree is unmarked and never
  * pruned, which is all the exemption existed to protect).
  *
- * Bind `[rootId, seedDefinitionIdsJson]` (see {@link VISIBLE_CHILDREN_SQL});
- * the second parameter sits inside the recursive term and is bound once for
- * the statement. Same selected columns + depth semantics as SUBTREE_SQL;
+ * Bind `[rootId, seedDefinitionIdsJson, seedWorkspaceId]` (see
+ * {@link VISIBLE_CHILDREN_SQL}); the trailing two sit inside the recursive
+ * term and are bound once for the statement. Same selected columns + depth semantics as SUBTREE_SQL;
  * the `INDEXED BY` planner-pin note there applies here too. An un-flipped
  * workspace short-circuits on the `workspaces` probe exactly like
  * VISIBLE_CHILD_PREDICATE_SQL (dormant: zero rows pruned).
