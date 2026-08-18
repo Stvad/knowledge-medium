@@ -170,6 +170,12 @@ export const runMoveFlow = async (
         context.uiStateBlock,
         await selectedIdsCoveredByMove(repo, context.uiStateBlock, new Set(error.movedIds)),
       )
+      // Skipped sources no longer exist, so they must leave the selection
+      // on this path too — a batch can skip one and then fail on a later
+      // block, and this branch is the only one that runs.
+      if (error.skippedIds.length > 0) {
+        await dropMovedFromSelection(context.uiStateBlock, error.skippedIds)
+      }
     }
     showError(
       error instanceof Error ? error.message : 'Failed to move blocks',

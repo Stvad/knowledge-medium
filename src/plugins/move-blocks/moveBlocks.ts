@@ -87,7 +87,17 @@ export class PartialMoveError extends Error {
    *  have already relocated. */
   readonly movedIds: readonly string[]
 
-  constructor(movedIds: readonly string[], override readonly cause: unknown) {
+  /** Sources the batch skipped before it failed — see `skippedIds` on
+   *  {@link MoveBlocksResult}. Carried here for the same reason
+   *  `movedIds` is: the caller has UI state to correct either way, and a
+   *  failure part-way through is exactly when it can't re-derive it. */
+  readonly skippedIds: readonly string[]
+
+  constructor(
+    movedIds: readonly string[],
+    skippedIds: readonly string[],
+    override readonly cause: unknown,
+  ) {
     const detail = cause instanceof Error ? cause.message : String(cause)
     const moved = movedIds.length
     super(
@@ -96,6 +106,7 @@ export class PartialMoveError extends Error {
     )
     this.name = 'PartialMoveError'
     this.movedIds = movedIds
+    this.skippedIds = skippedIds
   }
 
   get moved(): number { return this.movedIds.length }
@@ -168,7 +179,7 @@ export const moveBlocksTo = async (
     // Nothing committed yet → the original error is the whole story.
     // Otherwise the caller needs the ids (see `PartialMoveError`).
     if (moved === 0) throw error
-    throw new PartialMoveError([...movedIds], error)
+    throw new PartialMoveError([...movedIds], [...skippedIds], error)
   }
   // Accounting is a convenience for callers, not part of the move, and it
   // runs after every transaction has committed. A transient failure in its

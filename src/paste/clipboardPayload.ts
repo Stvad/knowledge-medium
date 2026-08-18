@@ -124,6 +124,16 @@ const escapeHtml = (text: string): string =>
  * `null`, i.e. a missed move rather than a wrong one.
  */
 export const encodePayloadHtml = (markdown: string, payload: ClipboardPayload): string => {
+  // Only a CUT puts identity on the clipboard. The html flavor travels
+  // verbatim into whatever the user pastes into, so anyone with that
+  // document can read the marker — and for a copy the ids buy nothing:
+  // `tryPasteAsMove` answers 'not-a-move' for any non-cut intent, so
+  // nothing ever reads them. A copy still gets remembered LOCALLY (see
+  // `rememberPayload`), which is what stops a stale cut of identical text
+  // from firing, and that costs no disclosure.
+  if (payload.intent !== 'cut') {
+    return `<div style="white-space:pre-wrap">${escapeHtml(markdown)}</div>`
+  }
   const encoded: EncodedPayload = {v: PAYLOAD_VERSION, ...payload, digest: fnv1a32Hex(markdown)}
   return `${MARKER_OPEN}${JSON.stringify(encoded)}${MARKER_CLOSE}`
     + `<div style="white-space:pre-wrap">${escapeHtml(markdown)}</div>`

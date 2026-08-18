@@ -71,6 +71,34 @@ describe('html flavor round trip', () => {
   })
 })
 
+describe('what a COPY puts on the clipboard', () => {
+  it('carries no identity marker — the html leaves the app and the ids buy nothing', () => {
+    // A recipient of the pasted rich text can read the raw html flavor, so
+    // the marker is a disclosure of workspace and block ids. Nothing reads
+    // them for a copy: any non-cut intent answers 'not-a-move'.
+    // Ids that cannot collide with the markdown, so "absent" means absent.
+    const copied = {
+      blockIds: ['blk-zzz-1'], workspaceId: 'ws-zzz', intent: 'copy' as const, cutId: 'gesture-zzz',
+    }
+    const html = encodePayloadHtml(MD, copied)
+
+    expect(html).not.toContain('knowledge-medium')
+    expect(html).not.toContain('ws-zzz')
+    expect(html).not.toContain('blk-zzz-1')
+    expect(html).not.toContain('gesture-zzz')
+    expect(html).toContain(MD)
+    expect(decodePayloadHtml(html, MD)).toBeNull()
+  })
+
+  it('is still remembered locally, so a stale cut of identical text cannot fire', () => {
+    // The local entry is what shadows the cut; it discloses nothing.
+    rememberPayload(MD, CUT)
+    rememberPayload(MD, {...CUT, intent: 'copy'})
+
+    expect(recallPayloadForText(MD)?.intent).toBe('copy')
+  })
+})
+
 describe('the text-only lookup table', () => {
   it('recalls a payload for the exact text it was stored under', () => {
     rememberPayload('- a\n- b', CUT)

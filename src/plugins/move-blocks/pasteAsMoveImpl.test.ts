@@ -576,7 +576,7 @@ describe('pasteAsMoveImpl', () => {
         // Commit a real prefix, then fail — the shape of a mid-batch tx
         // refusal.
         await realMoveBlocksTo.current!(r, [ids[0]], target)
-        throw new PartialMoveError([ids[0]], new Error('interrupted'))
+        throw new PartialMoveError([ids[0]], [], new Error('interrupted'))
       })
 
       expect(await pasteAsMoveImpl({ repo, target: INTO_DEST, payload: cut(['a', 'b', 'c']) })).toBe('refused')

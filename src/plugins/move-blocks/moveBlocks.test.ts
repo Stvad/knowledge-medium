@@ -85,6 +85,30 @@ const INTO_DEST = {parentId: 'dest', position: {kind: 'last'}} as const
 const depths = () => repo.undoManager.depths(ChangeScope.BlockDefault)
 
 describe('moveBlocksTo', () => {
+  it('carries skipped sources through a PARTIAL failure too', async () => {
+    // A batch can skip a vanished source and then fail on a later block.
+    // The error branch is the only one that runs, so if the skipped ids
+    // don't reach it the stale selection survives exactly the case this
+    // reporting exists for. Same cycle setup as the partial-failure test
+    // below: 'x' lands in 'd', then 'p' can't because 'd' is inside it.
+    await seed('gone', null)
+    await seed('x', null)
+    await seed('p', null)
+    await seed('d', 'p')
+    await repo.block('gone').delete()
+
+    const error = await moveBlocksTo(repo, ['gone', 'x', 'p'], {
+      parentId: 'd', position: {kind: 'last'},
+    }).then(
+      () => { throw new Error('expected the batch to fail part-way') },
+      (e: unknown) => e,
+    )
+
+    expect(error).toBeInstanceOf(PartialMoveError)
+    expect((error as PartialMoveError).movedIds).toEqual(['x'])
+    expect((error as PartialMoveError).skippedIds).toEqual(['gone'])
+  })
+
   it('reports a source the transaction skipped, so callers can unselect it', async () => {
     // The row was gone by the time its own transaction ran (tombstoned, or
     // not present locally). It moved nothing and carried nothing, so it is
