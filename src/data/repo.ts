@@ -650,6 +650,10 @@ export class Repo {
    *  (`RepoOptions.backfillSyncGate`). */
   private readonly backfillSyncGate: (cb: () => void) => () => void
   /** See `RepoOptions.backfillCompletionClaim`. Absent ⇒ backfills refuse. */
+  /** `workspaceId:backfillId` of operator passes running right now. Two
+   *  invocations in one Repo share a claimant, so the CLAIM cannot separate
+   *  them — this can. */
+  private readonly inFlightOperatorBackfills = new Set<string>()
   private readonly backfillCompletionClaim: BackfillCompletionClaim | undefined
   /** Disposer for a gate armed but not yet opened, so a workspace switch or
    *  repo teardown doesn't leave a status listener attached. */
@@ -2808,15 +2812,27 @@ export class Repo {
   async runWorkspaceBackfillNow(
     workspaceId: string,
     backfillId: string,
-  ): Promise<'ran' | 'already-done-or-held' | 'not-found' | 'read-only'> {
+  ): Promise<'ran' | 'already-done-or-held' | 'already-running' | 'not-found' | 'read-only'> {
     if (this.isReadOnly) return 'read-only'
     const backfill = this._workspaceBackfills.find(
       b => b.id === backfillId && b.trigger === 'operator',
     )
     if (!backfill) return 'not-found'
-    const completed = await this.runWorkspaceBackfills(
-      workspaceId, [backfill], this.workspaceGeneration,
-    )
+    // Single-flight per (workspace, backfill). Two invocations in ONE Repo —
+    // an operator double-clicking, or clicking again during a long pass —
+    // share a claimant, so the second would read the first's claim as its own
+    // and proceed. Then either one aborting releases the claim they SHARE
+    // while the other is still writing, and the survivor's `markComplete`
+    // stamps a tombstone: the completion becomes invisible and the next
+    // operator repeats the whole migration. The claim cannot see this, since
+    // both invocations are legitimately the same claimant.
+    const flightKey = `${workspaceId}:${backfillId}`
+    if (this.inFlightOperatorBackfills.has(flightKey)) return 'already-running'
+    this.inFlightOperatorBackfills.add(flightKey)
+    try {
+      const completed = await this.runWorkspaceBackfills(
+        workspaceId, [backfill], this.workspaceGeneration,
+      )
     // The fix for the shared-counter bug is that `completed` is LOCAL to this
     // invocation: a repo-wide counter could not say which call finished, so
     // two overlapping operator calls — or an automatic workspace-open pass in
@@ -2828,7 +2844,10 @@ export class Repo {
     // this backfill. Deleting the key fails no test. It is written this way
     // so that a future caller passing more than one is correct by
     // construction rather than by that argument.
-    return completed.has(backfill.id) ? 'ran' : 'already-done-or-held'
+      return completed.has(backfill.id) ? 'ran' : 'already-done-or-held'
+    } finally {
+      this.inFlightOperatorBackfills.delete(flightKey)
+    }
   }
 
   /** Returns the ids that RAN TO COMPLETION — not merely those attempted, so

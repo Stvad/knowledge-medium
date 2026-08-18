@@ -584,3 +584,44 @@ describe('workspace backfill runner — operator outcomes', () => {
     expect(await repo.runWorkspaceBackfillNow(WS, 'operator-throws-v1')).toBe('already-done-or-held')
   })
 })
+
+describe('workspace backfill runner — concurrent operator invocations', () => {
+  it('single-flights the same pass instead of running it twice', async () => {
+    // Two invocations in one Repo share a claimant, so the claim reads the
+    // second as the same owner and would let it proceed. Then either one
+    // aborting releases the claim they SHARE while the other still writes,
+    // and the survivor's markComplete stamps a tombstone — completion goes
+    // invisible and the next operator repeats the migration.
+    let release!: () => void
+    const started: string[] = []
+    const {repo} = createTestRepo({
+      db: sharedDb.db,
+      user: {id: 'user-1'},
+      backfillCompletionClaim: {
+        tryClaim: async () => true,
+        markComplete: async () => {},
+        releaseClaim: async () => {},
+      },
+    })
+    repo.setActiveWorkspaceId(WS)
+    repo.setRuntimeContributions(workspaceBackfillsFacet, 'test-backfills', [{
+      id: 'operator-slow-v1',
+      trigger: 'operator' as const,
+      run: async ({workspaceId}) => {
+        started.push(workspaceId)
+        await new Promise<void>(resolve => { release = resolve })
+      },
+    }])
+    await seedTarget(repo)
+
+    const first = repo.runWorkspaceBackfillNow(WS, 'operator-slow-v1')
+    await vi.waitFor(() => { expect(started).toHaveLength(1) })
+
+    // Second invocation while the first is still inside `run`.
+    expect(await repo.runWorkspaceBackfillNow(WS, 'operator-slow-v1')).toBe('already-running')
+    expect(started).toHaveLength(1)
+
+    release()
+    expect(await first).toBe('ran')
+  })
+})

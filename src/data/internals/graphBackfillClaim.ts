@@ -174,14 +174,12 @@ export const createGraphBackfillClaim = (
 
     const first = decideClaim(await readGraphBackfillClaim(deps.db, claimId), deps.claimantId)
     if (first === 'already-complete' || first === 'back-off') return false
-    // Deliberately NOT an early `return true` for `proceed`. A claim already
-    // naming us is usually one WE wrote on an earlier attempt that then timed
-    // out waiting to converge: the row is still in the upload queue, and a
-    // peer may hold the authoritative claim stuck behind it. `claimantId` is
-    // stable for the life of the Repo, so without this the second attempt in
-    // a session would run the pass having never once heard from the server.
-    // A remembered claim takes the same wait below as a fresh one; it just
-    // skips re-writing the row.
+    // `proceed` means a claim here already names us — normally our own from a
+    // previous operator run of the same pass. Taken at face value: there is
+    // nothing to wait for, because nothing arbitrates (see the module header).
+    // Two invocations in ONE Repo also land here, since they share a
+    // claimant; `Repo.runWorkspaceBackfillNow` single-flights that, because
+    // no claim can tell those two apart.
 
     // Typed so the Recents exclusion skips it: that filter tests system types
     // on each RESULT ROW, so the parent page's own marker does not cover the
