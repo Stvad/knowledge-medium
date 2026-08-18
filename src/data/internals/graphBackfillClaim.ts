@@ -7,10 +7,15 @@
  * has to live in synced data so one device runs and the rest see it taken.
  *
  * `blocks` is the only synced table a client writes, so the claim is a block:
- * a state child under the user page's `migrations` root, at a deterministic
- * id, one per backfill. Being a real block is the point rather than an
- * accident — a device that dies mid-pass leaves a claim nobody will release,
- * and the recovery for that is "look at it, delete it".
+ * a state child under the workspace's Migrations page, at a deterministic id,
+ * one per backfill. Being a real block is the point rather than an accident —
+ * a device that dies mid-pass leaves a claim nobody will release, and the
+ * recovery for that is "look at it, delete it".
+ *
+ * WORKSPACE-scoped, not per-user. A workspace can be shared, and a claim
+ * hanging off one user's page would be invisible to another user's devices —
+ * which would run the same upload-carrying pass again, the exact hazard
+ * `per-graph` exists to prevent.
  *
  * ## Why last-write-wins is enough
  *
@@ -26,10 +31,6 @@
  * is idempotent per row, and `assertBackfillMayWrite` aborts a losing device
  * cleanly mid-pass.
  *
- * SCOPE: the claim hangs off a USER page, so it coordinates one user's
- * devices, not two different users. That matches how the pass is meant to be
- * run — a once-per-workspace operator event — and a second user racing it
- * costs duplicate work rather than corruption.
  */
 
 /** What a claim block carries. Absent `completedAt` means "in flight". */

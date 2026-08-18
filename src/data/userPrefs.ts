@@ -9,12 +9,6 @@
  *  ids without an import cycle. */
 export const USER_PREFS_PATH_PART = 'user-prefs'
 export const UI_STATE_PATH_PART = 'ui-state'
-/** Home for one-shot data-migration bookkeeping — above all the `per-graph`
- *  backfill claims, which must be SYNCED so one device runs an
- *  upload-carrying repair and the others see it taken. A state root rather
- *  than a child of `user-prefs`: this is not a preference, and rooting it
- *  here is what makes the Recents filter skip it for free. */
-export const MIGRATIONS_PATH_PART = 'migrations'
 
 /** The state roots `stateBlocks.ts` puts under a user page. Everything it
  *  owns — panels, layout sessions, per-plugin prefs and ui-state, records
@@ -33,5 +27,4 @@ export const MIGRATIONS_PATH_PART = 'migrations'
 export const USER_STATE_ROOT_PATHS: readonly string[] = [
   UI_STATE_PATH_PART,
   USER_PREFS_PATH_PART,
-  MIGRATIONS_PATH_PART,
 ]

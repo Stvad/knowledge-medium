@@ -36,6 +36,13 @@ export const TYPES_PAGE_TYPE = 'panel:types'
 /** Marker type for the singleton Recents page — a Tana-style view of
  *  recently-edited blocks in the workspace. */
 export const RECENTS_PAGE_TYPE = 'panel:recents'
+/** Marker type for the singleton Migrations page — workspace-scoped
+ *  bookkeeping for one-shot data migrations, above all the `per-graph`
+ *  backfill claims. Workspace-scoped rather than per-user on purpose: a
+ *  workspace can be SHARED, and a claim anchored to one user's page would
+ *  let a second user's devices run the same upload-carrying pass again,
+ *  which is the hazard `per-graph` exists to prevent. */
+export const MIGRATIONS_PAGE_TYPE = 'panel:migrations'
 /** Per-user "user page" type. Tagged alongside `PAGE_TYPE` (so the page
  *  stays navigable) and carries the user's opaque id as a property,
  *  letting `block_types`-indexed lookups enumerate users and attribution
@@ -66,6 +73,7 @@ export const SYSTEM_BLOCK_TYPES: readonly string[] = [
   PROPERTIES_PAGE_TYPE,
   TYPES_PAGE_TYPE,
   RECENTS_PAGE_TYPE,
+  MIGRATIONS_PAGE_TYPE,
 ]
 
 /** Kernel-owned block types, declared as code seeds (`seedType`) so the
@@ -165,6 +173,14 @@ export const KERNEL_TYPE_CONTRIBUTIONS: readonly TypeSeedDeclaration[] = [
     revision: 1,
     id: RECENTS_PAGE_TYPE,
     label: 'Recents page',
+    ...INFRASTRUCTURE_TYPE_DISPLAY,
+    properties: [aliasesProp],
+  }),
+  seedType({
+    seedKey: 'system:kernel-data/type/panel:migrations',
+    revision: 1,
+    id: MIGRATIONS_PAGE_TYPE,
+    label: 'Migrations page',
     ...INFRASTRUCTURE_TYPE_DISPLAY,
     properties: [aliasesProp],
   }),
