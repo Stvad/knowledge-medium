@@ -195,6 +195,7 @@ export const RecentsPageBlockRenderer: BlockRenderer = Object.assign(
     <DefaultBlockRenderer
       {...props}
       ContentRenderer={RecentsPageContentRenderer}
+      contentShowsOtherBlocks
     />
   ),
   {

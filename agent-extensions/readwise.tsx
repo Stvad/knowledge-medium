@@ -2277,6 +2277,10 @@ const ReviewBacklogRenderer: BlockRenderer = Object.assign(
       {...props}
       ContentRenderer={ReviewBacklogContent}
       EditContentRenderer={ReviewBacklogContent}
+      // Filled with other blocks' rows, so this page's row spans all of them
+      // rather than describing the page. Whatever reasons about row geometry
+      // (the cursor-follows-scroll anchor) needs to know.
+      contentShowsOtherBlocks
     />
   ),
   {
