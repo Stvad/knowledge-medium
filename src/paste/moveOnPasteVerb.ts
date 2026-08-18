@@ -97,10 +97,9 @@ const siblingMoveTarget = (
  *
  *  Note there is no text check here, and nothing to short-circuit on empty
  *  text: the payload either describes this clipboard content or it doesn't,
- *  and `resolveClipboardPayload` already answered that by content. Cutting
- *  a genuinely empty block used to be a special case for exactly this
- *  reason (its sentinel was the empty string, which every emptiness guard
- *  ate); it needs no special handling now. */
+ *  and `resolveClipboardPayload` already answered that by content — so a
+ *  cut of a genuinely empty block needs no special handling here, even
+ *  though its text is the empty string every emptiness guard eats. */
 export const tryPasteAsMove = async (
   repo: Repo,
   target: PasteMoveTarget,

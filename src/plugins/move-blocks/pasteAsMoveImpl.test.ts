@@ -8,10 +8,9 @@
  * which also proves the CALLER's text-paste fallback runs for each
  * declined case.
  *
- * This file used to be a register-VALIDITY matrix — is the pending move
- * still current, does the sentinel match, who owns the claim, does a
- * failure hand it back. None of that survives: the payload arrives already
- * resolved from the clipboard's own content, so validity isn't a question
+ * Validity is not a question this file asks: the payload arrives already
+ * resolved from the clipboard's own content, so what is left to test is
+ * what the impl DOES with a payload it is handed
  * this function can answer differently from its caller. What's left is
  * about THIS paste — wrong workspace, dead blocks, a cycle — and the write.
  *
@@ -413,6 +412,28 @@ describe('pasteAsMoveImpl', () => {
     expect(await childIds('dest')).toEqual([])
     // Still a live cut — a later paste can still complete it.
     expect(recallPayloadForText(markdown)).toEqual(payload)
+  })
+
+  it('spends the cut when the only unaccounted block was TOMBSTONED since the read', async () => {
+    // The mixed case: A moves, B was deleted after the liveness read so the
+    // move skipped it. B is never coming, so holding the cut open means the
+    // next paste relocates A again and the first paste looks undone.
+    await seed('dest', null)
+    await seed('a', null)
+    await seed('b', null)
+    const markdown = 'a+b'
+    const payload = cut(['a', 'b'])
+    rememberPayload(markdown, payload)
+
+    // Liveness sees both; 'b' is tombstoned before the move runs.
+    liveBlockIdsMock.mockImplementationOnce(async () => {
+      await repo.block('b').delete()
+      return ['a', 'b']
+    })
+
+    expect(await pasteAsMoveImpl({ repo, target: INTO_DEST, payload })).toBe('moved')
+    expect(await childIds('dest')).toEqual(['a'])
+    expect(recallPayloadForText(markdown)).toEqual({...payload, intent: 'copy'})
   })
 
   it('keeps the cut retryable when a block is merely UNSYNCED rather than deleted', async () => {

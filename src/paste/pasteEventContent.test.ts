@@ -1,9 +1,9 @@
 // @vitest-environment node
 /**
  * The shared opening of both paste-EVENT handlers. Each case here is a way
- * the two used to be able to drift apart, and each failure is silent — a
- * dropped image paste or an uncompletable cut looks exactly like "the user
- * pasted nothing".
+ * the two could drift apart, and each failure is silent — a dropped image
+ * paste or an uncompletable cut looks exactly like "the user pasted
+ * nothing".
  */
 import { beforeEach, describe, expect, it } from 'vitest'
 import type { ClipboardEvent } from 'react'

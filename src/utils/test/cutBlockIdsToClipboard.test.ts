@@ -3,10 +3,7 @@
  * `cutBlockIdsToClipboard` — the parts `copy.test.ts` (node env) excludes
  * because they need a DOM `navigator.clipboard`.
  *
- * Most of what this file used to test is gone with the pending-move
- * register: a clipboard-write-refused sentinel, a read-back fallback, an
- * epoch, per-gesture tickets, and two describe blocks of overlapping-cut
- * ordering. Identity now travels on the clipboard
+ * Identity travels on the clipboard
  * (`@/paste/clipboardPayload.js`), so "which cut is current" isn't a
  * question anyone asks and none of that machinery has a replacement to
  * test. What's left is what cut actually promises.
@@ -195,8 +192,8 @@ describe('cutBlockIdsToClipboard', () => {
     expect(row).toEqual({ parent_id: null, deleted: 0 })
   })
 
-  // The scenario that cost four review rounds under the register, now with
-  // nothing guarding it but the design itself.
+  // Nothing guards this but the design: each cut is addressed by its own
+  // content, so completion order cannot matter.
   it('two overlapping cuts each stay resolvable, in either completion order', async () => {
     await seed('a', null, 'first cut')
     await seed('b', null, 'second cut')

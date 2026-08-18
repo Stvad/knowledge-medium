@@ -4,9 +4,9 @@
  * with the clipboard content, so a paste resolves against what the OS
  * actually holds rather than against a remembered "current cut".
  *
- * The tests worth having here are the ones that used to be BUGS in the
- * register design — each is a scenario that needed an explicit
- * invalidation call before, and now needs none.
+ * The cases worth having are the ones where a design that tracked cuts
+ * separately would need an explicit invalidation call, and this one needs
+ * none.
  */
 import { beforeEach, describe, expect, it } from 'vitest'
 import {

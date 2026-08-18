@@ -103,9 +103,6 @@ const runPasteAsMove = async ({ repo, target, payload }: PasteAsMoveInput): Prom
     // paste handlers have already called `preventDefault` and invoke this
     // via `void`, so an escaping rejection discards the paste entirely —
     // no move, no text paste, no toast, just an unhandled rejection.
-    // (Regressed once already when this function was rewritten; the
-    // failure is invisible to a green suite because nothing asserts on a
-    // paste that silently did nothing.)
     const liveIds = await liveBlockIds(repo, payload.blockIds)
     if (liveIds.length === 0) return 'not-a-move' // nothing left — fall back to a text paste
 
@@ -152,8 +149,18 @@ const runPasteAsMove = async ({ repo, target, payload }: PasteAsMoveInput): Prom
     // after the sync can finish it; re-moving the blocks that already
     // landed is idempotent.
     const accounted = new Set(result.accountedIds)
-    const leftBehind = liveIds.filter(id => !accounted.has(id))
-    if (leftBehind.length === 0) markCutCompleted(payload)
+    const unaccounted = liveIds.filter(id => !accounted.has(id))
+    // Re-classify against the tree as it is NOW, not against the pre-move
+    // read. An id can go missing between the two for two reasons and only
+    // one of them is worth waiting for: a block tombstoned since the read
+    // is never coming, so holding the cut open for it means every later
+    // paste relocates the blocks that DID move and the first paste looks
+    // undone. A merely-absent block will arrive, and the cut should stay
+    // live so a paste after the sync can finish it.
+    const stillComing = unaccounted.length > 0
+      ? await liveBlockIds(repo, unaccounted)
+      : unaccounted
+    if (stillComing.length === 0) markCutCompleted(payload)
 
     const skipped = payload.blockIds.length - accounted.size
     if (skipped > 0) {

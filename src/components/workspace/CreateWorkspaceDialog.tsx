@@ -196,10 +196,9 @@ export function RevealWorkspaceKey({
 
   const copy = async () => {
     try {
-      // `writeTextToClipboard` (not a raw `navigator.clipboard.writeText`)
-      // clears any pending cut→move first — this copy puts DIFFERENT
-      // content on the clipboard than whatever was cut, which must
-      // invalidate the move the same way every other clipboard write does.
+      // Goes through `@/utils/copy.js` rather than
+      // `navigator.clipboard.writeText`: a write has to drop any cut
+      // payload remembered against the text it puts on the clipboard.
       await writeTextToClipboard(workspaceKey)
       setCopyState('copied')
       window.setTimeout(() => setCopyState('idle'), 1500)

@@ -1260,21 +1260,18 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
   }
 
   /**
-   * `$mod+x` / `d` in multi-select — used to be `delete_selected_blocks`
-   * with a clipboard write bolted on; now a true (non-destructive) cut. It
-   * serializes the selection to markdown, writes that to the OS clipboard
-   * (unchanged from before), and marks the ids as a pending move
-   * (`cutBlockIdsToClipboard`, `@/paste/clipboardPayload.js`) — nothing is
-   * deleted or reparsed. The blocks stay exactly where they are until a
-   * paste completes the move (`pasteOrMove`, wired into
-   * `paste_after_selection` / `paste_before_selection` below), so an
-   * un-pasted cut loses nothing: no delete means no deletion guard to
-   * consult here either, unlike the old delete-based cut.
+   * `$mod+x` / `d` in multi-select. Non-destructive: it serializes the
+   * selection to markdown and writes that to the OS clipboard carrying the
+   * blocks' identity (`cutBlockIdsToClipboard`,
+   * `@/paste/clipboardPayload.js`). Nothing is deleted, and the blocks stay
+   * where they are until a paste completes the move (`pasteOrMove`, wired
+   * into `paste_after_selection` / `paste_before_selection` below) — so an
+   * un-pasted cut loses nothing, and there are no deletion guards to
+   * consult because there is no delete.
    *
-   * Selection clears on a successful mark (matching the old cut's
-   * "successful destructive action exits multi-select" convention), but
-   * there's no vanished content to redirect focus away from, so — unlike
-   * `deleteSelectedBlocks` — nothing else moves.
+   * Selection clears on success (a completed gesture exits multi-select),
+   * but nothing vanished, so unlike `deleteSelectedBlocks` there is no
+   * focus to redirect.
    */
   /** Clear the multi-select selection, but only if it is still the one
    *  this gesture acted on — the callers resume after awaits long enough

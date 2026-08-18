@@ -766,12 +766,10 @@ describe('default CodeMirror shortcuts', () => {
   })
 
   it('cut does not delete — it marks the selection as a pending move, even over a block a deletion guard would refuse', async () => {
-    // `cut_selected_blocks` is bound to `d` and `$mod+x` in multi-select. It
-    // used to be delete-with-a-clipboard-write, so it ran the deletion
-    // guards; now it deletes nothing at all (the move happens on a LATER
-    // paste, via moveBlocksTo), so there's nothing here for a deletion
-    // guard to refuse — a guard the plugin still has registered (e.g. for a
-    // genuine delete elsewhere) must not block a cut.
+    // `cut_selected_blocks` (`d` / `$mod+x` in multi-select) deletes
+    // nothing — the move happens on a LATER paste, via `moveBlocksTo`. So a
+    // deletion guard, which the plugin still has registered for genuine
+    // deletes elsewhere, must not block a cut.
     await env.repo.tx(async tx => {
       await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'r'})
       await tx.create({id: 'ui', workspaceId: WS, parentId: null, orderKey: 'z0'})
