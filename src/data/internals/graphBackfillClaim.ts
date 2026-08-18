@@ -185,17 +185,32 @@ export const createGraphBackfillClaim = (
 
     const first = decideClaim(await readGraphBackfillClaim(deps.db, claimId), deps.claimantId)
     if (first === 'already-complete' || first === 'back-off') return false
-    if (first === 'proceed') return true
+    // Deliberately NOT an early `return true` for `proceed`. A claim already
+    // naming us is usually one WE wrote on an earlier attempt that then timed
+    // out waiting to converge: the row is still in the upload queue, and a
+    // peer may hold the authoritative claim stuck behind it. `claimantId` is
+    // stable for the life of the Repo, so without this the second attempt in
+    // a session would run the pass having never once heard from the server.
+    // A remembered claim takes the same wait below as a fresh one; it just
+    // skips re-writing the row.
 
     // Typed so the Recents exclusion skips it: that filter tests system types
     // on each RESULT ROW, so the parent page's own marker does not cover the
     // rows beneath it. Via `addBlockTypeToProperties` because this is raw
     // BlockData being planned, which is the one sanctioned direct-write path.
+    //
+    // KNOWN GAP, deliberately not fixed here: post-flip these properties
+    // materialize into field/value CHILDREN, which carry no system type, so
+    // they still read as user activity. The honest fix is not claim-specific
+    // — "property machinery must not look like an edit" is the invisibility
+    // half of slice C (#389), and it needs a decision about whether Recents
+    // excludes descendants of system-typed rows or maps machinery to its
+    // owner. Tagging one block's descendants would leave the class untouched.
     const claimProperties = addBlockTypeToProperties({
       [migrationClaimantProp.name]: deps.claimantId,
       [migrationClaimedAtProp.name]: Date.now(),
     }, MIGRATION_CLAIM_TYPE)
-    await deps.tx(async tx => {
+    if (first === 'claim') await deps.tx(async tx => {
       // Re-checked inside the WRITING tx against this row: the read above
       // happened outside it, and a peer's claim can arrive in between.
       const existing = await tx.get(claimId)

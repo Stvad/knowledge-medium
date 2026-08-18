@@ -207,4 +207,57 @@ describe('per-graph claim over two converging databases', () => {
     }
     expect(await ownerOn(a)).toBe(await ownerOn(b))
   }, 20_000)
+
+  it('re-converges a claim it already holds instead of trusting the remembered row', async () => {
+    // A first attempt that wrote its claim and then TIMED OUT converging
+    // leaves that row in the local DB naming us. `claimantId` is stable for
+    // the life of a Repo, so a naive second attempt reads "mine → proceed"
+    // and runs the pass having never heard from the server — while a peer may
+    // hold the authoritative claim behind our still-queued upload.
+    await resetTestDb(dbA.db)
+    await resetTestDb(dbB.db)
+    let serverClock = 1_800_000_000_000
+    const server = createFakeSyncServer({now: () => ++serverClock})
+
+    const mk = (db: TestDb['db'], tag: 'a' | 'b', clockStart: number): Device => {
+      let time = clockStart
+      let idCursor = 0
+      const {repo, cache} = createTestRepo({
+        db, user: {id: 'user-1'}, now: () => ++time,
+        newId: () => `${tag}-gen-${++idCursor}`,
+      })
+      repo.setActiveWorkspaceId(WS)
+      return {db, repo, cache, cursor: 0}
+    }
+    const a = mk(dbA.db, 'a', 1_700_000_000_000)
+    const b = mk(dbB.db, 'b', 1_700_000_500_000)
+
+    const claimFor = (device: Device, claimantId: string, converged: () => boolean) =>
+      createGraphBackfillClaim({
+        db: device.db,
+        claimantId,
+        tx: (fn, opts) => device.repo.tx(fn, opts),
+        awaitConverged: async () => {
+          if (!converged()) return false
+          await upload(device, server)
+          await deliverAndDrain(device, server)
+          return true
+        },
+        ensureHome: (workspaceId) => getOrCreateMigrationsPage(device.repo, workspaceId),
+      })
+
+    // A claims, but its convergence times out — the row is written locally.
+    let aConverges = false
+    const claimA = claimFor(a, 'device-a', () => aConverges)
+    expect(await claimA.tryClaim(WS, 'retry-v1')).toBe(false)
+
+    // Meanwhile B claims for real and wins the server.
+    const claimB = claimFor(b, 'device-b', () => true)
+    expect(await claimB.tryClaim(WS, 'retry-v1')).toBe(true)
+
+    // A retries. Its LOCAL row still says "device-a"; only converging can
+    // tell it otherwise.
+    aConverges = true
+    expect(await claimA.tryClaim(WS, 'retry-v1')).toBe(false)
+  }, 20_000)
 })
