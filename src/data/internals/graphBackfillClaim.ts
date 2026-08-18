@@ -1,10 +1,11 @@
 /**
- * The synced completion claim a `per-graph` workspace backfill needs.
+ * The production `BackfillCompletionClaim`: block-backed, synced, one claim
+ * per (workspace, backfill).
  *
- * A `per-device` backfill records a local marker, so every device runs it
- * once. A `per-graph` pass repairs SOURCE-OF-TRUTH rows and uploads them, so
- * running it everywhere is the hazard rather than a side effect — the claim
- * has to live in synced data so one device runs and the rest see it taken.
+ * A workspace backfill repairs SOURCE-OF-TRUTH rows and uploads them, so
+ * running it on every device is the hazard rather than a side effect — the
+ * record has to live in synced data so one device runs and the rest see it
+ * taken.
  *
  * `blocks` is the only synced table a client writes, so the claim is a block:
  * a state child under the workspace's Migrations page, at a deterministic id,
@@ -14,8 +15,8 @@
  *
  * WORKSPACE-scoped, not per-user. A workspace can be shared, and a claim
  * hanging off one user's page would be invisible to another user's devices —
- * which would run the same upload-carrying pass again, the exact hazard
- * `per-graph` exists to prevent.
+ * which would run the same upload-carrying pass again, the exact hazard this
+ * seam exists to prevent.
  *
  * ## Why last-write-wins is enough
  *
@@ -33,6 +34,9 @@
  *
  */
 
+import { ChangeScope, type Tx } from '@/data/api'
+import type { BackfillCompletionClaim } from '@/data/facets'
+import { keyAtStart } from '@/data/orderKey'
 import { stateChildBlockId } from '@/data/derivedIds'
 import { migrationsPageBlockId } from '@/data/migrationsPage'
 import {
@@ -120,3 +124,92 @@ export const readGraphBackfillClaim = async (
     ? {claimantId, claimedAt, completedAt}
     : {claimantId, claimedAt}
 }
+
+// ---------------------------------------------------------------------------
+// The seam implementation
+// ---------------------------------------------------------------------------
+
+/** Minimal surface the claim needs, so it can be built at the composition
+ *  root without dragging the whole Repo type into its tests. */
+export interface GraphBackfillClaimDeps {
+  readonly db: {getOptional<T>(sql: string, params?: unknown[]): Promise<T | null>}
+  tx<R>(
+    fn: (tx: Tx) => Promise<R>,
+    opts: {scope: ChangeScope; skipUndo?: boolean; description?: string},
+  ): Promise<R>
+  /** Runs `cb` once this device is connected and not downloading. */
+  syncSettled(cb: () => void): () => void
+  /** Identifies this claimant. Must be at least as fine-grained as a device:
+   *  finer is harmless (two windows share a local DB, so the loser sees the
+   *  winner on its first read), coarser is the dangerous direction, because
+   *  two devices would then read each other's claim as their own. */
+  readonly claimantId: string
+  ensureHome(workspaceId: string): Promise<unknown>
+}
+
+export const createGraphBackfillClaim = (
+  deps: GraphBackfillClaimDeps,
+): BackfillCompletionClaim => ({
+  async tryClaim(workspaceId, backfillId) {
+    const claimId = graphBackfillClaimBlockId(workspaceId, backfillId)
+    // Ensure our own parent rather than trusting bootstrap ordering: a claim
+    // that silently fails to write reads as "unclaimed" on every device,
+    // which is the one outcome that turns this into a duplicated pass.
+    await deps.ensureHome(workspaceId)
+
+    const first = decideClaim(await readGraphBackfillClaim(deps.db, claimId), deps.claimantId)
+    if (first === 'already-complete' || first === 'back-off') return false
+    if (first === 'proceed') return true
+
+    await deps.tx(async tx => {
+      await tx.create({
+        id: claimId,
+        workspaceId,
+        parentId: migrationsPageBlockId(workspaceId),
+        orderKey: keyAtStart(null),
+        content: backfillId,
+        properties: {
+          [migrationClaimantProp.name]: deps.claimantId,
+          [migrationClaimedAtProp.name]: Date.now(),
+        },
+      })
+    }, {scope: ChangeScope.BlockDefault, skipUndo: true,
+        description: `claim backfill ${backfillId}`})
+
+    // Settle, THEN re-read. The write above is not a decision: before
+    // convergence every racing device reads its own claim back and believes
+    // it won. Only the post-settle read is authoritative.
+    await new Promise<void>(resolve => { deps.syncSettled(resolve)() })
+    return decideClaim(await readGraphBackfillClaim(deps.db, claimId), deps.claimantId) === 'proceed'
+  },
+
+  async markComplete(workspaceId, backfillId) {
+    const claimId = graphBackfillClaimBlockId(workspaceId, backfillId)
+    await deps.tx(async tx => {
+      const row = await tx.get(claimId)
+      if (!row) return
+      await tx.update(claimId, {
+        properties: {...row.properties, [migrationCompletedAtProp.name]: Date.now()},
+      })
+    }, {scope: ChangeScope.BlockDefault, skipUndo: true,
+        description: `complete backfill ${backfillId}`})
+  },
+
+  async releaseClaim(workspaceId, backfillId) {
+    const claimId = graphBackfillClaimBlockId(workspaceId, backfillId)
+    const claim = await readGraphBackfillClaim(deps.db, claimId)
+    // Release only what is still OURS and still in flight. A claim that
+    // converged to another device belongs to that run, and deleting it here
+    // would hand a second device the right to run concurrently — turning an
+    // abort on this device into the duplicate uploading pass the seam exists
+    // to prevent.
+    if (claim === null || claim.claimantId !== deps.claimantId) return
+    if (claim.completedAt !== undefined) return
+    await deps.tx(async tx => {
+      const row = await tx.get(claimId)
+      if (!row) return
+      await tx.delete(claimId)
+    }, {scope: ChangeScope.BlockDefault, skipUndo: true,
+        description: `release backfill claim ${backfillId}`})
+  },
+})
