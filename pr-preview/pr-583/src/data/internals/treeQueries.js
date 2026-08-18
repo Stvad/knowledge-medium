@@ -117,6 +117,7 @@ var e=`
        OR EXISTS (
          SELECT 1 FROM json_each(?) seed
           WHERE seed.value = ${e}.reference_target_id
+            AND ${e}.workspace_id = ?
        )
      )
 `,c=`
