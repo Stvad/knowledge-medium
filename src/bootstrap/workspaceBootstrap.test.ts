@@ -86,11 +86,23 @@ describe('bootstrapWorkspace', () => {
 
     await expect(open(true)).rejects.toThrow('transient')
 
-    // Nothing was seeded, so no rival holds a reserved alias: the retry is clean.
-    const seatedAliases = await sharedDb.db.getAll<{alias: string}>(
-      'SELECT alias FROM block_aliases WHERE workspace_id = ?', [WS],
+    // The seed never ran, so nothing auto-created a rival: every reserved alias
+    // that IS claimed is held by its own canonical page. Asserted as "held by
+    // the right id" rather than "held by nobody" — the sibling pages are allowed
+    // to finish (they must, or the throw would strand writes), so their aliases
+    // are legitimately present and their absence would prove nothing.
+    const holders = await sharedDb.db.getAll<{alias: string; block_id: string}>(
+      'SELECT alias, block_id FROM block_aliases WHERE workspace_id = ?', [WS],
     )
-    expect(seatedAliases.map(r => r.alias)).not.toContain('Properties')
+    const canonical = new Map([
+      ['Properties', propertiesPageBlockId(WS)],
+      ['Types', typesPageBlockId(WS)],
+      ['Recents', recentsPageBlockId(WS)],
+    ])
+    for (const {alias, block_id} of holders) {
+      const expectedId = canonical.get(alias)
+      if (expectedId) expect(block_id).toBe(expectedId)
+    }
   })
 
   it('opens the workspace even when a user block already holds a system page alias', async () => {

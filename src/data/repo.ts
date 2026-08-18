@@ -2525,18 +2525,24 @@ export class Repo {
   ): Promise<void> {
     if (!workspaceId) return
     const pages = this.facetRuntime?.read(systemPagesFacet) ?? []
-    await Promise.all(pages.map(async page => {
-      try {
-        await page.ensure(this, workspaceId)
-      } catch (error) {
-        if (freshlyCreated) throw error
-        const reason = error instanceof Error ? error.message : String(error)
-        console.error(
-          `[ensureSystemPages] ${page.id} unavailable in workspace ${workspaceId} `
-          + `(will retry on the next workspace open): ${reason}`,
-        )
-      }
-    }))
+    // `allSettled`, not `all`: `all` rejects the instant one ensure does while
+    // its siblings keep writing, so the throw below would hand control back to a
+    // caller that tears down — or reloads — with page creates still in flight.
+    const outcomes = await Promise.allSettled(
+      pages.map(page => page.ensure(this, workspaceId)),
+    )
+    const failures = outcomes.flatMap((outcome, i) =>
+      outcome.status === 'rejected' ? [{pageId: pages[i].id, reason: outcome.reason}] : [])
+    // Before the log, whose "will retry on the next workspace open" is false once
+    // this stops bootstrap.
+    if (freshlyCreated && failures.length > 0) throw failures[0].reason
+    for (const {pageId, reason} of failures) {
+      const detail = reason instanceof Error ? reason.message : String(reason)
+      console.error(
+        `[ensureSystemPages] ${pageId} unavailable in workspace ${workspaceId} `
+        + `(will retry on the next workspace open): ${detail}`,
+      )
+    }
   }
 
   /**

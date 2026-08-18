@@ -134,6 +134,28 @@ describe('Repo.ensureSystemPages', () => {
      * afterwards. Throwing leaves the workspace unseeded and lets the retry
      * work; swallowing makes a transient failure permanent.
      */
+    it('lets every other page finish before it throws, leaving nothing in flight', async () => {
+      // `Promise.all` rejects the instant one ensure does and leaves its
+      // siblings writing — into whatever database the caller has moved on to.
+      // That is not hypothetical: it polluted the next test in this very file
+      // once the fresh-workspace branch started throwing. Settling all of them
+      // first is what makes the throw safe to tear down (or reload) after.
+      env = await setup([
+        systemPagesFacet.of(
+          {id: 'test:broken', ensure: () => Promise.reject(new Error('transient'))},
+          {source: 'test'},
+        ),
+      ])
+
+      await expect(env.repo.ensureSystemPages(WS, {freshlyCreated: true}))
+        .rejects.toThrow('transient')
+
+      // Asserted positively — every real page is already committed by the time
+      // the rejection surfaces — so this cannot pass by racing.
+      const aliases = await aliasesInWorkspace(env.h, env.repo)
+      for (const expected of EXPECTED_ALIASES) expect(aliases.has(expected)).toBe(true)
+    })
+
     it('is fatal on a freshly created workspace, where swallowing would strand a rival', async () => {
       env = await setup([
         systemPagesFacet.of(
@@ -156,14 +178,20 @@ describe('Repo.ensureSystemPages', () => {
   })
 
   it('is idempotent — a second run creates no new rows', async () => {
+    // Compares the row SET, not a count: a count that moves says only "one
+    // more", where the ids name which page appeared late and whether the
+    // newcomer is even a system page.
+    const liveRows = async (): Promise<string[]> => (
+      await env.h.db.getAll<{ id: string; content: string }>(
+        'SELECT id, content FROM blocks WHERE deleted = 0 ORDER BY id',
+      )
+    ).map(r => `${r.content} (${r.id})`)
+
     await env.repo.ensureSystemPages(WS)
-    const before = (await env.h.db.getAll<{ c: number }>(
-      'SELECT COUNT(*) AS c FROM blocks WHERE deleted = 0',
-    ))[0]?.c
+    const before = await liveRows()
     await env.repo.ensureSystemPages(WS)
-    const after = (await env.h.db.getAll<{ c: number }>(
-      'SELECT COUNT(*) AS c FROM blocks WHERE deleted = 0',
-    ))[0]?.c
-    expect(after).toBe(before)
+
+    expect(await liveRows()).toEqual(before)
+    expect(before).toHaveLength(EXPECTED_ALIASES.length)
   })
 })
