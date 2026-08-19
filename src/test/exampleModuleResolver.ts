@@ -168,3 +168,19 @@ export const fixtureHygieneProblems = (
   }
   return {badSpecifiers, badSuppressions}
 }
+
+/** Identifiers written as a call in backticked PROSE — `seedType({…})`,
+ *  `getPluginPrefsBlock(repo, …)`. The catalog's guide text is full of these
+ *  and nothing compiles it, which is the same hole the worked examples used
+ *  to have: a rename leaves the prose describing an API that is gone. (It
+ *  already happened — the prose advertised a `set` prop on
+ *  PropertyEditorProps long after the real one was `onChange`.)
+ *
+ *  Member calls (`repo.tx(`, `block.set(`) are skipped: they are methods, not
+ *  module exports, and the catalog does not claim to list them. */
+export const proseCallIdentifiers = (text: string): string[] => {
+  const calls = [...text.matchAll(/`([^`]*)`/g)]
+    .flatMap(match => [...match[1].matchAll(/(^|[^.\w])([A-Za-z_$][\w$]*)\s*\(/g)])
+    .map(match => match[2])
+  return [...new Set(calls)]
+}

@@ -3,10 +3,12 @@ import {describe, expect, it} from 'vitest'
 import {ChangeScope} from '@/data/api'
 import {definitionSeedsFacet} from '@/data/facets'
 import {resolveFacetRuntimeSync} from '@/facets/facet'
+import { extensionApiCatalog } from '@/extensions/apiCatalog'
 import {
   evaluateExampleModule,
   parseNamedImports,
   fixtureHygieneProblems,
+  proseCallIdentifiers,
   unknownCatalogImports,
 } from '@/test/exampleModuleResolver'
 import {
@@ -128,6 +130,36 @@ describe('authoring catalog example drift guard', () => {
     expect(
       badSuppressions,
       `${badSuppressions.join(', ')} — a fixture must not suppress the checks`,
+    ).toEqual([])
+  })
+
+  it('every API the guide PROSE names in a call still exists', () => {
+    // The worked examples compile now; the prose around them does not. It
+    // carries ~10 API-shaped snippets with real signatures, and a rename
+    // drifts them silently — which is not hypothetical: the prose advertised
+    // `PropertyEditorProps.set` for as long as the examples were strings,
+    // while the real prop was `onChange`. Same failure mode, one field over.
+    const catalog = describeAuthoringCatalog()
+    const prose = JSON.stringify([
+      catalog.storage.principles,
+      catalog.storage.patterns.map(p => [p.when, p.use, p.modules]),
+      catalog.storage.credentials.rule,
+      catalog.storage.credentials.currentAffordance,
+      catalog.guides.map(g => [g.principles, g.steps, g.commands, g.afterInstall]),
+    ])
+    const known = new Set(extensionApiCatalog.flatMap(g => [...g.exports, ...g.types]))
+    // Not module exports: React's own hooks, and the shell/JS builtins the
+    // command lines and prose legitimately mention.
+    const notOurs = new Set([
+      'useState', 'useSyncExternalStore', 'useEffect', 'useMemo', 'useCallback',
+      'require', 'fetch', 'Set', 'Map', 'Promise', 'JSON', 'Object', 'Array',
+      'if', 'for', 'while', 'switch', 'catch', 'function', 'return', 'typeof',
+    ])
+    const missing = proseCallIdentifiers(prose)
+      .filter(name => !known.has(name) && !notOurs.has(name))
+    expect(
+      missing,
+      `${missing.join(', ')} — named as a call in catalog prose but not on the curated API surface`,
     ).toEqual([])
   })
 
