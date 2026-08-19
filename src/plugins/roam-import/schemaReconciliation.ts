@@ -488,10 +488,35 @@ export const ensurePromotedPropertySchemas = async (
   const {toRegister, diagnostics} = collectSchemaReconciliationPlan(asBlocks, repo)
   const notes = [...diagnostics]
 
-  const registrable = toRegister.map(entry => entry.presetId === 'refList'
-    ? {name: entry.name, presetId: 'list' as const}
-    : entry)
-  await applySchemaReconciliation(registrable, repo, notes)
+  // `addSchema` resolves the workspace itself from `repo.activeWorkspaceId`,
+  // and each registration is a separate await. A switch mid-batch would put
+  // the remaining definitions in the NEW workspace while the caller writes
+  // its blocks to the old one — so the batch is pinned and abandoned rather
+  // than half-landed somewhere else. Checking only around the whole call is
+  // not enough; the window is between the keys.
+  const pinnedWorkspaceId = repo.activeWorkspaceId
+  for (const entry of toRegister) {
+    if (repo.activeWorkspaceId !== pinnedWorkspaceId) {
+      notes.push(
+        `Stopped registering promoted properties: the active workspace changed mid-batch `
+        + `(was ${String(pinnedWorkspaceId)}). Remaining keys were left unregistered.`,
+      )
+      break
+    }
+    // refList would need `normalizeRefPropertyValues` + an aliasIdMap, which
+    // only the importer builds; storing tokens under it rejects them on read.
+    const presetId = entry.presetId === 'refList' ? 'list' as const : entry.presetId
+    const config = entry.targetTypes ? {targetTypes: entry.targetTypes} : undefined
+    try {
+      await repo.userSchemas.addSchema(
+        config ? {name: entry.name, presetId, config} : {name: entry.name, presetId})
+    } catch (err) {
+      notes.push(
+        `Could not register promoted property ${JSON.stringify(entry.name)} `
+        + `(preset ${presetId}): ${err instanceof Error ? err.message : String(err)}`,
+      )
+    }
+  }
 
   // Driven by the EFFECTIVE registry, not by what this call registered: a key
   // an earlier batch registered as `list` still needs this batch's scalar
@@ -505,6 +530,27 @@ export const ensurePromotedPropertySchemas = async (
       if (codecType === 'string') stringNames.add(name)
       else if (codecType === 'list') listNames.add(name)
     }
+  }
+  // ACCEPTED LIMITATION, reported rather than silently applied. If a key was
+  // first seen as a scalar it registered `string`, and a later batch carrying
+  // repeated values gets JSON-encoded into that string
+  // (`normalizeStringPropertyValues`) so it still decodes — readable, but a
+  // list editor and queries see one opaque value. Promoted keys are
+  // homogeneous in practice (production: matrix:timestamp 100% scalar over
+  // 316 cells, matrix:url 100% array over 174), and the alternatives are
+  // worse: widening the schema strands the scalars already stored under it,
+  // and registering everything as json throws away the useful typing for
+  // every key to serve a case that does not occur. So it is named here, and
+  // named in the diagnostics when it actually happens, so the fix (widen that
+  // one definition by hand) is obvious.
+  for (const name of stringNames) {
+    const widened = bags.some(bag => Array.isArray(bag.properties?.[name]))
+    if (!widened) continue
+    notes.push(
+      `Promoted property ${JSON.stringify(name)} is registered as a string but this batch `
+      + 'carries repeated values; they are stored JSON-encoded. Change that definition to '
+      + 'the list preset if the key is meant to be multi-valued.',
+    )
   }
   normalizeStringPropertyValues(asBlocks, stringNames)
   normalizeListPropertyValues(asBlocks, listNames)

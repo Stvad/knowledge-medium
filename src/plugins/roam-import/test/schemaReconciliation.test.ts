@@ -511,6 +511,44 @@ describe('ensurePromotedPropertySchemas', () => {
     expect(notes.length).toBeGreaterThan(0)
   })
 
+  it('reports when repeated values land under a scalar-first string schema', async () => {
+    // Registration order decides the preset, so a key first seen as a scalar
+    // registers `string`; a later batch of repeated values is then JSON-
+    // encoded to stay decodable. Accepted (promoted keys are homogeneous in
+    // practice) but never silent — the diagnostic names the key and the fix.
+    await ensurePromotedPropertySchemas(env.repo, [block('a', {'matrix:topic': 'solo'})])
+    expect(env.repo.propertySchemas.get('matrix:topic')?.codec.type).toBe('string')
+
+    const later = [block('b', {'matrix:topic': ['one', 'two']})]
+    const notes = await ensurePromotedPropertySchemas(env.repo, later)
+
+    expect(notes.join(' ')).toMatch(/matrix:topic/)
+    expect(notes.join(' ')).toMatch(/list preset/i)
+    // Still decodable — degraded, not lost.
+    expect(() => env.repo.propertySchemas.get('matrix:topic')!.codec.decode(
+      later[0]!.properties['matrix:topic'])).not.toThrow()
+  })
+
+  it('abandons the batch when the active workspace changes mid-registration', async () => {
+    // `addSchema` targets whatever workspace is active, and each key is a
+    // separate await — so a switch between keys would scatter definitions
+    // across two workspaces.
+    const blocks = [block('a', {'matrix:first': 'x', 'matrix:second': 'y'})]
+    const realAddSchema = env.repo.userSchemas.addSchema.bind(env.repo.userSchemas)
+    let calls = 0
+    ;(env.repo.userSchemas as {addSchema: typeof realAddSchema}).addSchema = async (args) => {
+      calls += 1
+      const result = await realAddSchema(args)
+      env.repo.setActiveWorkspaceId('ws-somewhere-else')
+      return result
+    }
+
+    const notes = await ensurePromotedPropertySchemas(env.repo, blocks)
+
+    expect(calls).toBe(1)
+    expect(notes.join(' ')).toMatch(/active workspace changed/i)
+  })
+
   it('leaves an already-declared key on its existing schema', async () => {
     await env.repo.userSchemas.addSchema({name: 'matrix:refined', presetId: 'string'})
 

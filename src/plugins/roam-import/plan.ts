@@ -59,8 +59,15 @@ export {
 // Re-exported alongside promotion deliberately: promoting a `key:: value`
 // attribute without registering a definition for the key it invents is the
 // footgun this pairs with (issue #501). A consumer that finds one should
-// find the other. Note it MUTATES the bags it is given (it drops keys it
-// cannot register), so pass the blocks you are about to write.
+// find the other.
+//
+// It does NOT drop keys it cannot register — it reports them and leaves them
+// in place, because it cannot know whether the caller kept the source block
+// (a subtractive consumer has already dropped the bullet, so deleting would
+// destroy the text). Declining such keys is the CALLER's job, upstream, via
+// `PromotionOptions.acceptKey` + `isRegistrablePropertyName`. What it does
+// mutate is values, normalizing them to match the codec it registered — so
+// pass the blocks you are about to write, not copies.
 export {
   ensurePromotedPropertySchemas,
   isRegistrablePropertyName,
