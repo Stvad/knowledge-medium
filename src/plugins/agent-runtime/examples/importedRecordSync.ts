@@ -5,19 +5,14 @@ import { getOrCreateKernelPage } from '@/data/kernelPage.js'
 import { getOrCreateTypedChild } from '@/data/typedRecords.js'
 import type { Repo } from '@/data/repo.js'
 
-// (`kmagent types --module "@/data/api/index.js"` for the full Tx surface.)
-// One namespace per KIND — the root page and the highlights are two kinds, so
-// they get two. (They key differently too: a kernel page's key is the
-// workspace id alone.)
-// Generate your OWN namespace UUIDs and never change them (`crypto.randomUUID()`
-// in any browser console) — copying these verbatim makes two extensions share
-// one root page.
+// One namespace per KIND, and generate your OWN (`crypto.randomUUID()`);
+// changing one later orphans every row already written under it. A kernel
+// page keys on the workspace id alone, a typed child on {namespace, key}.
 const READWISE_ROOT_NS = '7c4b1e93-6a25-4d8f-b013-9e2a5c7f4d61'
 const READWISE_HL_NS = '2f68d0a5-4c19-4b73-8e5a-6d1b3f9c8074'
 
-// Source ids and source-owned fields are REGISTERED properties, not bare keys
-// in a raw `properties` object: an unregistered key has no codec and no
-// editor, and `kmagent audit-extension` flags it.
+// Registered properties, not bare keys in a raw `properties` object: an
+// unregistered key has no codec or editor, and audit-extension flags it.
 const highlightIdProp = seedProperty({
   seedKey: extensionPropertySeedKey('highlight-id'),
   revision: 1,
@@ -35,9 +30,8 @@ const noteProp = seedProperty({
   changeScope: ChangeScope.BlockDefault,
 })
 
-// A type id that was never registered throws when tagged and rolls the whole
-// transaction back, so declare before you tag. Contributing them IS this
-// default export — nothing below runs until the runtime has resolved it.
+// Tagging an unregistered type id throws and rolls the whole tx back, so
+// declare before you tag. Contributing them IS this default export.
 const libraryType = seedType({
   seedKey: extensionTypeSeedKey('library'),
   revision: 1,
@@ -91,27 +85,18 @@ export const syncHighlights = async (
         types: [highlightType.id],
       })
 
-      // 'created' → written from the spec above.
-      // 'adopted' → it was already there and this call did NOT overwrite its
-      //             content or properties; the user's own edits survive a
-      //             re-sync.
-      // 'taken'   → the id holds something you can't use (deleted, or another
-      //             workspace's row). Nothing was written, and there is no id
-      //             of yours to write to.
-      //
-      // So: write the fields the SOURCE owns on both of the first two. Gating
-      // them on 'adopted' alone leaves every first-seen record without them
-      // until something re-fetches it — which a checkpointed incremental sync
-      // never does.
+      // 'created' wrote the spec; 'adopted' found it and deliberately left
+      // content/properties alone so the user's edits survive; 'taken' wrote
+      // nothing and its id is not yours. So write source-owned fields on the
+      // first two — gating on 'adopted' alone leaves every first-seen record
+      // without them until something re-fetches it, which an incremental
+      // sync never does.
       if (outcome.status !== 'taken') {
-        // NOT in the spec above: `properties` there is applied on CREATE only,
-        // so anything passed that way never reaches an adopted record — and
-        // the external id is the most source-owned field there is. Write them
-        // here, where both outcomes go through.
+        // NOT via the spec's `properties`: that is applied on CREATE only,
+        // so it never reaches an adopted record.
         await tx.setProperty(outcome.id, highlightIdProp, hl.id)
-        // No `&& hl.note`: a guard on the value writes it but never CLEARS it,
-        // so a note the user deleted upstream sticks forever. The prop is
-        // `optional-string` precisely so `undefined` is a legal write.
+        // No `&& hl.note`: guarding on the value writes it but never CLEARS
+        // it, so a note deleted upstream sticks forever.
         await tx.setProperty(outcome.id, noteProp, hl.note)
       }
     }

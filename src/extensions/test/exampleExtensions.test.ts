@@ -5,7 +5,7 @@ import { describeAuthoringCatalog } from '@/plugins/agent-runtime/authoringCatal
 import { ChangeScope } from '@/data/api'
 import { definitionSeedsFacet } from '@/data/facets'
 import { resolveFacetRuntimeSync } from '@/facets/facet'
-import { evaluateExampleModule, unknownCatalogImports } from '@/test/exampleModuleResolver'
+import { evaluateExampleModule, fixtureHygieneProblems, unknownCatalogImports } from '@/test/exampleModuleResolver'
 
 /** The example-extension fixture files, as source text — the same `?raw`
  *  inlining exampleExtensions.ts itself uses, resolved independently so the
@@ -77,28 +77,15 @@ describe('exampleExtensions — templated sources', () => {
       Object.keys(fixtureSources).length,
     )
 
-    // The runtime accepts ONLY `@/dir/name.js` — the importmap maps `@/` to
-    // ./src/ and the loader instantiates from a blob: URL, against which a
-    // relative specifier can never resolve. tsconfig's bundler resolution is
-    // far laxer (`@/data/api`, `@/data/api/index.ts`, `../../data/api.js` all
-    // typecheck), and moving these into real files newly exposed the
-    // specifiers to IDE renames and codemods. Nothing else pins the FORM.
-    const badSpecifiers: string[] = []
-    const badSuppressions: string[] = []
-    for (const [path, source] of Object.entries(fixtureSources)) {
-      for (const match of source.matchAll(/\bfrom\s*['"]([^'"]+)['"]/g)) {
-        const specifier = match[1]
-        if (specifier === 'react' || specifier === 'react-dom') continue
-        if (!/^@\/[\w./-]+\.js$/.test(specifier)) badSpecifiers.push(`${path}: ${specifier}`)
-      }
-      // A suppression turns a compiled fixture back into an unchecked string —
-      // the exact state this whole change exists to leave behind.
-      if (/@ts-(nocheck|ignore|expect-error)|eslint-disable/.test(source)) {
-        badSuppressions.push(path)
-      }
-    }
+    // Specifier form and suppression comments — the two things tsc cannot
+    // check about a fixture. Shared with the other example family so a fix
+    // lands once; see fixtureHygieneProblems for why each rule exists.
+    const {badSpecifiers, badSuppressions} = fixtureHygieneProblems(fixtureSources)
     expect(badSpecifiers, badSpecifiers.join('\n')).toEqual([])
-    expect(badSuppressions, `${badSuppressions.join(', ')} — a fixture must not suppress the checks`).toEqual([])
+    expect(
+      badSuppressions,
+      `${badSuppressions.join(', ')} — a fixture must not suppress the checks`,
+    ).toEqual([])
   })
 
   it('the fixture files stay out of the discoverable module/component lists', () => {

@@ -100,19 +100,20 @@ export interface AuthoringCatalogFilters {
   guides?: string[]
   modules?: string[]
   components?: string[]
-  /** Guide-only / `--brief`. Two effects, both about not shipping what the
-   *  caller didn't ask for:
-   *    - omit the module + component glob dumps (150KB of internal paths);
-   *    - replace each STORAGE pattern's worked source with a pointer to the
-   *      command that fetches it. The guide the caller asked for still
-   *      carries its own examples in full, so the code matching what they
-   *      are reading is always present — what goes is the worked source for
-   *      the patterns they didn't ask about, which was most of the payload. */
+  /** Guide-only mode — inferred by the CLI from `--guide`; there is no
+   *  `--brief` flag, and cac rejects an unregistered one outright. Omits the
+   *  module + component glob dumps, ~150KB of internal paths an agent reading
+   *  a guide has no use for; the guide's `preferredModules` already names
+   *  what matters.
+   *
+   *  It deliberately does NOT touch the storage worked sources. Reducing
+   *  those to a "fetch it with …" pointer was tried and reverted: measured,
+   *  it saved ~10KB on a guide-filtered call while the follow-up the pointer
+   *  asked for cost ~45KB, so an agent that obeyed it paid nearly double. It
+   *  also elided the sources the guides steer you toward — `record-grain`
+   *  recommends `getOrCreateTypedChild` and the only two worked sources for
+   *  it were both pointered away. */
   brief?: boolean
-  /** Keep the storage worked sources even under `brief`. Set when the caller
-   *  explicitly asked for storage (`--storage`) — which is exactly what the
-   *  brief-mode pointer tells them to run, so the pointer is never a lie. */
-  storage?: boolean
 }
 
 type RuntimeModule = Record<string, unknown>
@@ -146,48 +147,6 @@ const eagerUiModules = import.meta.glob('/src/components/ui/*.{ts,tsx}', {
  *  the compiled source file behind it. */
 const example = (label: string, source: string): AuthoringExample =>
   ({label, code: source.trimEnd()})
-
-// Names only flags the RELEASED cli accepts. `--guide <id> --storage` already
-// yields brief output WITH the worked sources (brief is inferred from --guide,
-// and --storage is not a heavy filter), so the pointer needs no new flag —
-// which matters because the kernel deploys on its own while `kmagent` is
-// installed separately, and cac rejects an unknown flag outright (exit 1)
-// rather than ignoring it. Keeping --guide also makes the follow-up call
-// cheap instead of pulling every guide's sources.
-const BRIEF_EXAMPLE_POINTER = [
-  '// Worked source omitted here. Fetch it with:',
-  '//   pnpm agent describe-runtime --guide <the guide you are reading> --storage',
-].join('\n')
-
-/** Keep the label (so the agent knows the example exists and what it shows)
- *  and swap the body for the command that retrieves it. */
-const examplePointer = (source: AuthoringExample): AuthoringExample =>
-  ({label: source.label, code: BRIEF_EXAMPLE_POINTER})
-
-/** Pattern ids the returned guides actually name in their prose. Brief mode
- *  keeps THOSE sources in full: eliding the pattern a guide tells you to
- *  prefer — while shipping the shape it tells you to avoid — inverts the
- *  guide. Derived by scanning rather than hand-listed so it cannot go stale;
- *  the ids are distinctive slugs, so a scan is exact. */
-const patternsNamedBy = (guides: AuthoringGuide[]): Set<string> => {
-  const prose = JSON.stringify(guides)
-  return new Set(
-    storageGuide.patterns.map(pattern => pattern.id).filter(id => prose.includes(id)),
-  )
-}
-
-const briefStorage = (
-  guide: AuthoringStorageGuide,
-  keep: Set<string>,
-): AuthoringStorageGuide => ({
-  ...guide,
-  patterns: guide.patterns.map(pattern => pattern.example && !keep.has(pattern.id)
-    ? {...pattern, example: examplePointer(pattern.example)}
-    : pattern),
-  // Credentials stay in full — 632 bytes, and every sync guide's principles
-  // are about them, so this is the one source brief mode must never hide.
-  credentials: guide.credentials,
-})
 
 const storageGuide: AuthoringStorageGuide = {
   principles: [
@@ -232,7 +191,7 @@ const storageGuide: AuthoringStorageGuide = {
     {
       id: 'imported-record-blocks',
       when: 'External records such as Readwise books/highlights that should be queryable and editable as blocks.',
-      use: 'Define source-id properties (`readwise:userBookId`, `readwise:highlightId`, …), then let `getOrCreateTypedChild` own the write: give it a `{namespace, key}` built from the external id and it creates on the first sync and adopts on every one after, so re-syncing lands on the existing block instead of duplicating it. Adopt does NOT update it: content, properties and position are deliberately left alone so a user\'s own edits survive, which means the fields your SOURCE owns are yours to write after the call — and on every outcome, not just the created one. Do NOT pin a derived id onto a bare `tx.create` — that throws `DuplicateIdError` the second time round and takes the whole transaction with it.',
+      use: 'Define source-id properties (`readwise:userBookId`, `readwise:highlightId`, …), then let `getOrCreateTypedChild` own the write: give it a `{namespace, key}` built from the external id and it creates on the first sync and adopts on every one after, so re-syncing lands on the existing block instead of duplicating it. Adopt does NOT update it: content, properties and position are deliberately left alone so a user\'s own edits survive, so the fields your SOURCE owns are yours to write after the call — on the adopted one too, not just the created one. Not on `taken`: that wrote nothing and the id is not yours. Do NOT pin a derived id onto a bare `tx.create` — that throws `DuplicateIdError` the second time round and takes the whole transaction with it.',
       modules: ['@/data/api/index.js', '@/data/kernelPage.js', '@/data/typedRecords.js'],
       example: example('Idempotent record sync', importedRecordSyncSource),
     },
@@ -735,9 +694,7 @@ export const describeAuthoringCatalog = (
 
   return {
     guides: matchedGuides,
-    storage: filters.brief && !filters.storage
-      ? briefStorage(storageGuide, patternsNamedBy(matchedGuides))
-      : storageGuide,
+    storage: storageGuide,
     modules,
     components,
   }

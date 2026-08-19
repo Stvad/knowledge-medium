@@ -437,12 +437,9 @@ export const describeRuntime = async (
       modules: filters.modules,
       components: filters.components,
       // In brief mode, suppress the module/component glob dumps — 150KB of
-      // internal paths the agent doesn't need while reading a guide (the
-      // guide's `preferredModules` already names what matters) — and reduce
-      // the storage patterns' worked sources to a pointer, unless the caller
-      // explicitly asked for storage.
+      // internal paths the agent doesn't need while reading a guide. The
+      // guide's `preferredModules` field already names what matters.
       brief: briefMode,
-      storage: filters.storage,
     }, context.document),
     ...(includeDataModel ? {dataModel: DATA_MODEL_GUIDE} : {}),
   }

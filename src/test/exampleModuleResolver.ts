@@ -116,3 +116,55 @@ export const unknownCatalogImports = (source: string): Array<{specifier: string,
     const known = catalogByPath.get(specifier)
     return known ? !known.has(name) : false
   })
+
+/** Every module specifier a source imports, across ALL import forms: the
+ *  `from '…'` clause, a bare side-effect `import '…'`, and dynamic
+ *  `import('…')`. Scoped to import STATEMENTS — a `\bfrom` scan over the whole
+ *  file also matches English prose, and these fixtures are teaching material
+ *  full of comments. */
+export const importedSpecifiers = (source: string): string[] => {
+  const pattern
+    = /(?:^|\n)\s*(?:import|export)\b[^;\n]*?\bfrom\s*['"]([^'"]+)['"]|(?:^|\n)\s*import\s*['"]([^'"]+)['"]|\bimport\(\s*['"]([^'"]+)['"]/g
+  return [...source.matchAll(pattern)]
+    .map(match => match[1] ?? match[2] ?? match[3])
+    .filter((specifier): specifier is string => Boolean(specifier))
+}
+
+/** The ONE form the extension runtime accepts. `@/` is an importmap prefix
+ *  mapping to ./src/, and the loader instantiates from a `blob:` URL — so a
+ *  relative or extensionless specifier cannot resolve there, however happily
+ *  tsconfig's bundler resolution accepts it. `react` / `react-dom` are
+ *  importmap entries in their own right, including their subpath prefixes
+ *  (`react/jsx-runtime`, `react-dom/client`). Backtracking above the `@/`
+ *  prefix is rejected by the import-maps spec even though it typechecks. */
+const runnableSpecifier = (specifier: string): boolean => {
+  if (specifier === 'react' || specifier === 'react-dom') return true
+  if (specifier.startsWith('react/') || specifier.startsWith('react-dom/')) return true
+  return /^@\/[\w./-]+\.js$/.test(specifier) && !specifier.includes('../')
+}
+
+// Anchored to a comment opener: these files legitimately DISCUSS suppressions
+// in prose ("never reach for @ts-expect-error here"), which a bare substring
+// search bans along with the real thing.
+const SUPPRESSION = /(^|\s)(\/\/|\/\*)\s*(@ts-(nocheck|ignore|expect-error)|eslint-disable)/m
+
+/**
+ * Shared hygiene checks for compiled example fixtures. Both example families
+ * need identical rules, and a rule fixed in one place must not have to be
+ * fixed twice.
+ *
+ * Returns problems rather than asserting, so the caller supplies the message.
+ */
+export const fixtureHygieneProblems = (
+  fixtureSources: Record<string, string>,
+): {badSpecifiers: string[], badSuppressions: string[]} => {
+  const badSpecifiers: string[] = []
+  const badSuppressions: string[] = []
+  for (const [path, source] of Object.entries(fixtureSources)) {
+    for (const specifier of importedSpecifiers(source)) {
+      if (!runnableSpecifier(specifier)) badSpecifiers.push(`${path}: ${specifier}`)
+    }
+    if (SUPPRESSION.test(source)) badSuppressions.push(path)
+  }
+  return {badSpecifiers, badSuppressions}
+}
