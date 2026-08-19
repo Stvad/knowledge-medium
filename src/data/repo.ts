@@ -2752,6 +2752,16 @@ export class Repo {
     return settled
   }
 
+  /** When this device last COMPLETED a sync, or undefined if it never has (or
+   *  there is no sync layer). Persisted by PowerSync across sessions, so on a
+   *  warm client it is last session's — which is exactly why it is worth
+   *  reporting: it says how current the local rows a full-graph read scanned
+   *  actually are. Measured NOT to advance on an idle connected client, so it
+   *  is a basis to state, never a freshness gate to refuse on. */
+  get lastSyncedAt(): Date | undefined {
+    return (this.db as {currentStatus?: {lastSyncedAt?: Date}}).currentStatus?.lastSyncedAt
+  }
+
   /**
    * Why this device's view of the graph is INCOMPLETE right now, or null when
    * nothing is outstanding. There are two independent ways to be behind and a
@@ -2772,16 +2782,6 @@ export class Repo {
    * so reads as "nothing to fix" when rows are missing) — one predicate,
    * because a rule added to one of two copies is how these diverge.
    */
-  /** When this device last COMPLETED a sync, or undefined if it never has (or
-   *  there is no sync layer). Persisted by PowerSync across sessions, so on a
-   *  warm client it is last session's — which is exactly why it is worth
-   *  reporting: it says how current the local rows a full-graph read scanned
-   *  actually are. Measured NOT to advance on an idle connected client, so it
-   *  is a basis to state, never a freshness gate to refuse on. */
-  get lastSyncedAt(): Date | undefined {
-    return (this.db as {currentStatus?: {lastSyncedAt?: Date}}).currentStatus?.lastSyncedAt
-  }
-
   async syncViewGap(): Promise<string | null> {
     const staged = await this.db.getOptional<{one: number}>(
       'SELECT 1 AS one FROM blocks_synced_changes LIMIT 1',

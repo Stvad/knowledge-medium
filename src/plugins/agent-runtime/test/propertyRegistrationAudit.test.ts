@@ -46,8 +46,8 @@ beforeAll(async () => { sharedDb = await createTestDb() })
 afterAll(async () => { await sharedDb.cleanup() })
 
 /** Rebuild the repo under test, optionally with a sync gate that says this
- *  device is behind. The audit refuses to report from an incomplete view, and
- *  the gate is the only injectable half of that predicate. */
+ *  device is behind. The gate is the only injectable half of `syncViewGap`,
+ *  which the audit reports rather than refuses on. */
 const installRepo = (backfillSyncGate?: (cb: () => void) => () => void) => {
   repo = createTestRepo({
     db: sharedDb.db,
