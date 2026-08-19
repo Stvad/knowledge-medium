@@ -63,7 +63,7 @@
  */
 
 import { spawnSync } from 'node:child_process'
-import { existsSync, readFileSync, rmdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -84,18 +84,39 @@ export const extractBeadIds = text => [...new Set(text.match(BEAD_ID) ?? [])]
 // issues as a side effect of a local command. Position alone is not enough:
 // quoted prose can contain `;`/newlines that fake a segment start, so the
 // positional regexes run against a SKELETON of the command with quoted spans
-// removed. Single-quoted text never executes and is dropped; command
-// substitutions DO execute even inside double quotes, so their bodies are
-// lifted out as segments of their own before the double-quoted spans go.
-// (Commands arrive from the Bash tool, so quotes are balanced; this is a
-// guard for that shape, not a full shell parser.)
+// removed. ONE left-to-right pass decides span ownership — the shell's rule
+// for balanced input; sequential per-quote passes let an apostrophe inside
+// one double-quoted arg pair with one in a later arg and swallow a genuine
+// publish between them. Single-quoted text never executes and is dropped;
+// command substitutions DO execute, even inside double quotes, so their
+// bodies are lifted out as segments of their own; double-quoted remainders
+// blank. Heredoc bodies are left in place — an ACCEPTED false-positive
+// surface: a heredoc line that starts with a publish verb fakes command
+// position and blocks, and the escape hatch covers it; parsing heredocs is
+// more surface than this guard warrants. (Commands arrive from the Bash
+// tool, so quotes are balanced; this is a guard, not a shell parser.)
 const commandSkeleton = cmd => {
-  const noSingle = cmd.replace(/'[^']*'/g, "''")
-  const lifted = [
-    ...[...noSingle.matchAll(/\$\(([^)]*)\)/g)].map(m => m[1]),
-    ...[...noSingle.matchAll(/`([^`]*)`/g)].map(m => m[1]),
-  ]
-  return [noSingle.replace(/"(?:\\.|[^"\\])*"/g, '""'), ...lifted].join('\n')
+  const lifted = []
+  const liftSubstitutions = span => {
+    for (const m of span.matchAll(/\$\(([^)]*)\)/g)) lifted.push(m[1])
+    for (const m of span.matchAll(/`([^`]*)`/g)) lifted.push(m[1])
+  }
+  const skeleton = cmd.replace(/'[^']*'|"(?:\\.|[^"\\])*"|\$\(([^)]*)\)|`([^`]*)`/g, (m, dollarBody, tickBody) => {
+    if (dollarBody !== undefined) {
+      lifted.push(dollarBody)
+      return '$()'
+    }
+    if (tickBody !== undefined) {
+      lifted.push(tickBody)
+      return '``'
+    }
+    if (m.startsWith('"')) {
+      liftSubstitutions(m)
+      return '""'
+    }
+    return "''"
+  })
+  return [skeleton, ...lifted].join('\n')
 }
 
 const SEGMENT_START = String.raw`(?:^|[;&|(]\s*)`
@@ -280,16 +301,15 @@ const processAlive = pid => {
  */
 const withLock = (root, fn) => {
   const lock = join(root, '.beads', 'github-sync.lock')
-  // Migrate the pre-pid shape (a directory) so it can't wedge the file lock.
-  try {
-    if (statSync(lock, { throwIfNoEntry: false })?.isDirectory()) rmdirSync(lock)
-  } catch {}
   const deadline = Date.now() + 20_000
   for (;;) {
     try {
       writeFileSync(lock, String(process.pid), { flag: 'wx' })
       break
     } catch {
+      // The deadline bounds EVERY loop path — an unremovable lock path (e.g.
+      // a stray directory unlink can't clear) must skip, not spin forever.
+      if (Date.now() > deadline) return { skipped: `lock at ${lock} could not be acquired in 20s` }
       const holder = Number(tryRead(lock))
       const age = Date.now() - (statSync(lock, { throwIfNoEntry: false })?.mtimeMs ?? Date.now())
       if ((holder && !processAlive(holder)) || age > 10 * 60_000) {
@@ -298,7 +318,6 @@ const withLock = (root, fn) => {
         } catch {}
         continue
       }
-      if (Date.now() > deadline) return { skipped: `another sync is running (pid ${holder || 'unknown'})` }
       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 500)
     }
   }
@@ -310,21 +329,17 @@ const withLock = (root, fn) => {
   // Covers a kill landing while this process is between children. While a
   // spawnSync child runs, the event loop is blocked and no handler fires —
   // that leak is what the dead-pid steal above then heals.
-  const onTerm = () => {
+  const onSignal = sig => {
     unlock()
-    process.exit(143)
+    process.exit(sig === 'SIGINT' ? 130 : 143)
   }
-  const onInt = () => {
-    unlock()
-    process.exit(130)
-  }
-  process.on('SIGTERM', onTerm)
-  process.on('SIGINT', onInt)
+  process.on('SIGTERM', onSignal)
+  process.on('SIGINT', onSignal)
   try {
     return fn()
   } finally {
-    process.off('SIGTERM', onTerm)
-    process.off('SIGINT', onInt)
+    process.off('SIGTERM', onSignal)
+    process.off('SIGINT', onSignal)
     unlock()
   }
 }
@@ -447,7 +462,10 @@ const runSync = ({ quiet = false, dryRun = false } = {}) => {
       report.push(ok ? `closed issue #${number} to match closed bead ${id}` : `FAILED to close issue #${number} (bead ${id}) — close it by hand or re-run`)
     }
 
-    const changed = closes.length + fixes.length + closePushes.length > 0 || syncSummary.some(l => /[1-9]/.test(l))
+    // "Changed" means an action was reported — a close-push candidate that
+    // turned out converged (silent continue above) must not un-quiet a run.
+    const actionReported = report.some(l => !syncSummary.includes(l))
+    const changed = actionReported || syncSummary.some(l => /[1-9]/.test(l))
     if (!quiet || changed) console.log(['bd-github-sync:', ...report].join('\n  '))
     return { closes, fixes, closePushes }
   })

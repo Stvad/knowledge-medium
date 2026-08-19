@@ -75,6 +75,9 @@ describe('matchesPrCommand', () => {
     'xargs gh issue close',
     '/usr/local/bin/gh pr create --fill',
     'VAR="a b" gh pr edit 1 --body x',
+    // apostrophes inside double-quoted args must not bridge spans and
+    // swallow the publish between them (round-3 regression shape)
+    `git commit -m "don't regress the parser" && gh pr comment 5 --body "it doesn't handle km-abc yet"`,
   ])('matches publishing command: %s', cmd => {
     expect(matchesPrCommand(cmd)).toBe(true)
   })
@@ -104,6 +107,10 @@ describe('allowsBeadIds', () => {
     expect(allowsBeadIds('KM_ALLOW_BEAD_IDS=1 gh pr create --body "km-abc"')).toBe(true)
     expect(allowsBeadIds('cd /r && KM_ALLOW_BEAD_IDS=1 gh pr edit 1 --body x')).toBe(true)
     expect(allowsBeadIds('FOO=bar KM_ALLOW_BEAD_IDS=1 gh pr create')).toBe(true)
+    // apostrophes in surrounding args must not swallow the marker
+    expect(
+      allowsBeadIds(`git commit -m "don't" && KM_ALLOW_BEAD_IDS=1 gh pr comment 5 --body "isn't km-x"`),
+    ).toBe(true)
   })
 
   it('ignores the marker quoted inside an argument (it would be published)', () => {
@@ -286,7 +293,10 @@ describe('hookPrePr process behavior', { timeout: 20_000 }, () => {
     mkdirSync(shimDir)
     const shimLog = join(repo, 'bd-shim.log')
     writeFileSync(shimLog, '')
-    writeFileSync(join(shimDir, 'bd'), `#!/bin/sh\necho "bd $@" >> "${shimLog}"\nexit 0\n`)
+    // The shim answers --version with real text: initializedDbRoot treats
+    // empty stdout as "bd missing", which would silently turn dbReady repos
+    // DB-less and make the zero-calls assertions vacuous.
+    writeFileSync(join(shimDir, 'bd'), `#!/bin/sh\necho "bd $@" >> "${shimLog}"\necho "bd-shim 0.0.0"\nexit 0\n`)
     chmodSync(join(shimDir, 'bd'), 0o755)
     const env = { ...process.env, PATH: `${shimDir}:${process.env.PATH}`, BD_GITHUB_SYNC_DRY: '1' }
     const hook = (command: string) => {
@@ -317,5 +327,16 @@ describe('hookPrePr process behavior', { timeout: 20_000 }, () => {
     const r = hook('git commit -m "fix parser; gh pr comment is the follow-up\nrefs km-zzzz"')
     expect(r.status).toBe(0)
     expect(shimCalls()).toBe('')
+  })
+
+  // Positive control: the zero-calls assertions above are negative tests, so
+  // prove the shim plumbing actually intercepts when bd SHOULD run —
+  // otherwise a broken PATH front would pass all of them vacuously.
+  it('routes lookup through bd in a DB-ready repo (shim interception works)', () => {
+    const { hook, shimCalls } = makeRepo({ dbReady: true })
+    const r = hook('gh pr create --title t --body "tracks km-zzzz"')
+    expect(r.status).toBe(2)
+    expect(shimCalls()).toContain('bd --version')
+    expect(shimCalls()).toContain('bd show km-zzzz --json')
   })
 })
