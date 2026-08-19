@@ -76,23 +76,36 @@ export const openTutorialInActiveWorkspace = async (repo: Repo): Promise<boolean
   // up front: opening an already-present tutorial is a lookup plus a
   // navigation and must not flash one.
   let banner: ProgressToast | undefined
+  // Silence is only right when the tutorial actually arrives; a failure has
+  // nothing on screen to speak for it. Routes through whichever toast exists:
+  // the seed branch owns a progress toast to resolve, the already-present
+  // branch never opened one.
+  const reportFailure = (message: string): false => {
+    if (banner) banner.fail(message)
+    else showError(message)
+    return false
+  }
+
   try {
     const { tutorialId } = await insertTutorialIntoWorkspace(repo, workspaceId, () => {
       banner = showProgress('Inserting tutorial…')
     })
     // `navigateFromGlobalCommand` resolves `NavigationResult | null` and never
-    // rejects — a vetoed/suppressed gesture comes back as `null`. Discarding it
-    // would report success for a tutorial that was seeded but never opened,
-    // which is the same lie this function exists to stop telling.
+    // rejects — `null` is a vetoed/suppressed gesture OR a navigation that
+    // threw and was caught inside `navigate`. Under the default policy a plain
+    // navigator gesture always resolves to `navigate`, so `null` here means the
+    // tutorial did not open, and reporting success (or nothing) for it is the
+    // lie this function exists to stop telling.
     const navigated = await navigateFromGlobalCommand(repo, { blockId: tutorialId, workspaceId })
+    if (navigated === null) return reportFailure('Insert tutorial failed: could not open the tutorial')
+
     banner?.done()
-    return navigated !== null
+    return true
   } catch (err) {
     console.error('[onboarding] insert tutorial failed:', err)
-    const message = `Insert tutorial failed: ${err instanceof Error ? err.message : String(err)}`
-    if (banner) banner.fail(message)
-    else showError(message)
-    return false
+    return reportFailure(
+      `Insert tutorial failed: ${err instanceof Error ? err.message : String(err)}`,
+    )
   }
 }
 

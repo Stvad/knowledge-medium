@@ -78,6 +78,28 @@ describe('openTutorialInActiveWorkspace', () => {
     expect(mocks.progress.done).toHaveBeenCalledWith()
   })
 
+  it('reports a navigation that never landed, on either branch', async () => {
+    // `null` is a vetoed gesture or a navigation that threw inside `navigate` —
+    // either way nothing opened, and nothing on screen says so.
+    mocks.navigates = null
+    mocks.existing = {id: 'tutorial-1'}
+
+    expect(await openTutorialInActiveWorkspace(repo)).toBe(false)
+    expect(mocks.showError).toHaveBeenCalledWith('Insert tutorial failed: could not open the tutorial')
+    expect(mocks.progress.done).not.toHaveBeenCalled()
+
+    mocks.showError.mockClear()
+    mocks.existing = null
+
+    expect(await openTutorialInActiveWorkspace(repo)).toBe(false)
+    // The seed branch has a progress toast open; it resolves as the failure
+    // rather than leaving a second toast beside it.
+    expect(mocks.progress.fail)
+      .toHaveBeenCalledWith('Insert tutorial failed: could not open the tutorial')
+    expect(mocks.showError).not.toHaveBeenCalled()
+    expect(mocks.progress.done).not.toHaveBeenCalled()
+  })
+
   it('reports a failed seed through the progress toast it opened', async () => {
     const logged = vi.spyOn(console, 'error').mockImplementation(() => {})
     mocks.seed.mockRejectedValue(new Error('disk full'))
