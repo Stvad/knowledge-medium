@@ -41,7 +41,7 @@ import {
   renderKernelTypesInstallSummary,
 } from './kernelDts.js'
 import {renderSubtreeOutline} from './subtreeOutline.js'
-import {workspaceAssertion} from './cliOptions.js'
+import {limitOption, workspaceAssertion} from './cliOptions.js'
 import {extensionScaffold, slugify, titleize} from './scaffold.js'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
@@ -792,7 +792,7 @@ cli
       type: 'page',
       name: text,
       ...workspaceAssertion(options.workspace),
-      ...(options.limit !== undefined ? {limit: Number(options.limit)} : {}),
+      ...limitOption(options.limit),
     })
   })
 
@@ -820,7 +820,7 @@ cli
       type: 'search',
       query: text,
       ...workspaceAssertion(options.workspace),
-      ...(options.limit !== undefined ? {limit: Number(options.limit)} : {}),
+      ...limitOption(options.limit),
     })
   })
 

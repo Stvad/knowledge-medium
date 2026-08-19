@@ -331,37 +331,33 @@ describe('audit-properties command', () => {
     expect(result.unregistered.map(entry => entry.property)).toContain('demo:undeclared')
   })
 
-  it('rejects an EMPTY --workspace instead of silently auditing the active one', async () => {
-    // `--workspace "$UNSET"` expands to '' — the assertion exists to pin the
-    // graph, so falling back would hand back a remediation list for a
-    // workspace the caller never named.
-    await create({id: 'b1', properties: {'demo:undeclared': 'x'}})
-
-    await expect(executeCommand(
-      {commandId: 'a-3', type: 'audit-properties', workspaceId: '   '},
-      context,
-    )).rejects.toThrow(/empty value/i)
-  })
-
-  // page/search/daily-note go through `commandWorkspaceId`; the backlinks
-  // verbs go through `resolveBlockWorkspaceId` instead, so both resolvers
-  // need a case or one guard stays unpinned.
+  // Verbs, then values. page/search/daily-note resolve through
+  // `commandWorkspaceId`; the backlinks verbs resolve through
+  // `resolveBlockWorkspaceId`; audit-properties checks its own input. Each
+  // needs a row or one guard stays unpinned.
+  //
+  // Both values are load-bearing and neither subsumes the other. '' is the
+  // only one the CLI can emit (cac turns `--workspace ""` into 0, which the
+  // CLI normalizes back to ''), and it is the value that FALLS BACK to the
+  // active workspace when unguarded — the wrong-graph answer itself. '  ' is
+  // truthy, so it is what pins the guard ABOVE each resolver's
+  // `override && return override` short-circuit rather than below it.
   it.each([
+    ['audit-properties', {type: 'audit-properties'}],
     ['page', {type: 'page', name: 'x'}],
     ['search', {type: 'search', query: 'x'}],
     ['daily-note', {type: 'daily-note', date: '2026-08-18'}],
     ['backlinks', {type: 'backlinks', blockId: 'b1'}],
     ['grouped-backlinks', {type: 'grouped-backlinks', blockId: 'b1'}],
-  ] as const)('rejects an EMPTY workspace assertion on %s instead of answering about the active one', async (_label, base) => {
-    await create({id: 'b1', properties: {'demo:undeclared': 'x'}})
-    // CAC turns `--workspace ""` into the number 0, which the CLI normalizes
-    // to ''. Both shared resolvers used to treat that as "no override" and
-    // fall back — answering about a graph the caller never named.
-    await expect(executeCommand(
-      {commandId: 'w-1', ...base, workspaceId: '  '} as never,
-      context,
-    )).rejects.toThrow(/empty value/i)
-  })
+  ].flatMap(([label, base]) => ['', '  '].map(workspaceId => [label, workspaceId, base])))(
+    '%s rejects an EMPTY workspace assertion (%j) instead of answering about the active one',
+    async (_label, workspaceId, base) => {
+      await expect(executeCommand(
+        {commandId: 'w-1', ...(base as object), workspaceId} as never,
+        context,
+      )).rejects.toThrow(/empty value/i)
+    },
+  )
 
   it('refuses an explicit workspace whose registry is not loaded', async () => {
     await expect(executeCommand(
