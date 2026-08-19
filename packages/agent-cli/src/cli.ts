@@ -954,10 +954,16 @@ cli
     })
   })
 
+// A full properties migration is hundreds of thousands of writes; measured
+// runs land near 8 minutes on a fast native engine and a browser is a
+// multiple of that. Matches the server's inFlightCommandTtlMs (server.ts)
+// so the CLI doesn't give up on a run the bridge is still willing to track.
+const runBackfillDefaultWaitSeconds = 3600
+
 cli
   .command('run-backfill <backfillId>', wireDescription('run-backfill'))
   .option('--workspace <id>', 'Assert the workspace the pass writes to (defaults to the active one)')
-  .option('--wait <seconds>', 'How long to wait for the pass to finish (default 1800). A full properties migration is hundreds of thousands of writes and runs for minutes; the default command timeout would give up while the app is still working, reporting a timeout for a run that is in fact progressing.', {default: 1800})
+  .option('--wait <seconds>', `How long to wait for the pass to finish (default ${runBackfillDefaultWaitSeconds}). A full properties migration is hundreds of thousands of writes and runs for minutes; the default command timeout would give up while the app is still working, reporting a timeout for a run that is in fact progressing.`, {default: runBackfillDefaultWaitSeconds})
   .action(async (backfillId: string, options: {workspace?: string | number; wait?: string | number}) => {
     // Same 0-for-empty artifact CAC produces for `--workspace ""` as in
     // `audit-properties`; normalize it back so the command layer's purpose-built
@@ -970,7 +976,7 @@ cli
       type: 'run-backfill',
       backfillId,
       ...(asserted !== undefined ? {workspaceId: asserted} : {}),
-    }, {timeoutMs: Math.max(1, Number(options.wait) || 1800) * 1000})
+    }, {timeoutMs: Math.max(1, Number(options.wait) || runBackfillDefaultWaitSeconds) * 1000})
     process.stdout.write(`${JSON.stringify(value, null, 2)}\n`)
   })
 

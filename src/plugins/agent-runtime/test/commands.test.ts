@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { EXTENSION_TYPE, PAGE_TYPE } from '@/data/blockTypes'
 import { ChangeScope } from '@/data/api'
 import { aliasesProp, extensionDescriptionProp, extensionNameProp, typesProp } from '@/data/properties'
@@ -17,6 +17,7 @@ import { createAgentRuntimeContext, executeCommand } from '../commands'
 import type { AgentRuntimeContext, InstallExtensionResult } from '../protocol'
 import { InvalidBlockIdError } from '@/data/blockId'
 import type { BlockData } from '@/data/api'
+import { PROPERTY_CELL_BACKFILL_ID, propertyCellBackfill } from '@/data/internals/propertyCellBackfill'
 
 const WS = 'ws-1'
 const USER = {id: 'user-1', name: 'Alice'}
@@ -660,6 +661,66 @@ describe('agent runtime commands', () => {
       }, env.context)).rejects.toThrow(InvalidBlockIdError)
 
       expect(await env.repo.load(VALID_ID)).toBeNull()
+    })
+  })
+
+  // run-backfill's run-detail decoration: the properties-cell backfill's
+  // `lastRun` is populated by whoever last entered the pass, and only taken
+  // (consumed) here — a caller that never takes it (e.g. the command-palette
+  // surface) leaves it sitting there for the NEXT run-backfill call to pick
+  // up, however unrelated that call's own outcome is.
+  //
+  // `repo.runWorkspaceBackfillNow` is mocked in both tests rather than driven
+  // for real: its outcome also depends on the property registry priming from
+  // an async subscription (`setFacetRuntime`), which upstream's own comment
+  // (repo.ts, `propertyRegistryReadyFor`) documents as "UNPINNED BY A TEST —
+  // measured green locally, red on CI". `lastRun` itself is populated for
+  // real, by calling `propertyCellBackfill.run` directly against a minimal
+  // context — the same seam `repo.runWorkspaceBackfillNow` uses internally,
+  // without that race.
+  describe('run-backfill run detail', () => {
+    const populateLastRun = () => propertyCellBackfill.run({
+      workspaceId: WS,
+      getAll: (sql, params) => env.repo.db.getAll(sql, params as unknown[] | undefined),
+      tx: (fn, opts) => env.repo.tx(fn, {scope: ChangeScope.BlockDefault, skipUndo: true, ...opts}),
+      resolveNameSchema: () => undefined,
+      resolveFieldSchema: () => undefined,
+    })
+
+    it('decorates a `ran` outcome with the pass\'s own counts', async () => {
+      // `lastRun` populated for real; this request's own outcome is mocked
+      // 'ran' so the decoration condition takes it.
+      await populateLastRun()
+      const spy = vi.spyOn(env.repo, 'runWorkspaceBackfillNow')
+        .mockResolvedValue({outcome: 'ran', undoHistoryCleared: false})
+      try {
+        const result = await env.context.runBackfill({backfillId: PROPERTY_CELL_BACKFILL_ID})
+        expect(result.outcome).toBe('ran')
+        expect(result.blocksScanned).toBeDefined()
+        expect(result.blocksMaterialized).toBeDefined()
+      } finally {
+        spy.mockRestore()
+      }
+    })
+
+    it('does not decorate a non-ran outcome with a stale run left over from an earlier call', async () => {
+      // `lastRun` populated for real by an earlier, unconsumed run — the
+      // command-palette's shape, which subscribes to progress and never
+      // takes it.
+      await populateLastRun()
+
+      // This request's own outcome never entered the pass.
+      const spy = vi.spyOn(env.repo, 'runWorkspaceBackfillNow')
+        .mockResolvedValue({outcome: 'held-by-peer', undoHistoryCleared: false})
+      try {
+        const result = await env.context.runBackfill({backfillId: PROPERTY_CELL_BACKFILL_ID})
+        expect(result.outcome).toBe('held-by-peer')
+        expect(result.blocksScanned).toBeUndefined()
+        expect(result.blocksMaterialized).toBeUndefined()
+        expect(result.failures).toBeUndefined()
+      } finally {
+        spy.mockRestore()
+      }
     })
   })
 })

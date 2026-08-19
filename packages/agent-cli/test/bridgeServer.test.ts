@@ -89,6 +89,29 @@ const registerClient = async (clientId: string, body: object) => {
   expect(response.ok).toBe(true)
 }
 
+/** Spin up a dedicated server process with its own env — for tests that
+ *  need a TTL override the shared per-file server (started once in
+ *  beforeAll) can't apply without a restart. */
+const spawnBridgeServer = async (
+  env: Record<string, string>,
+): Promise<{baseUrl: string, stop: () => Promise<void>}> => {
+  const port = await pickPort()
+  const proc = spawn('node', [serverScript], {
+    env: {...process.env, AGENT_RUNTIME_PORT: String(port), AGENT_RUNTIME_HOST: '127.0.0.1', ...env},
+    stdio: ['ignore', 'ignore', 'pipe'],
+  })
+  await waitForReady(port)
+  return {
+    baseUrl: `http://127.0.0.1:${port}`,
+    stop: async () => {
+      if (!proc.killed) {
+        proc.kill('SIGKILL')
+        await new Promise(resolve => proc.once('exit', resolve))
+      }
+    },
+  }
+}
+
 describe('agent runtime bridge', () => {
   it('rejects browser requests from disallowed origins', async () => {
     const response = await fetch(`${baseUrl}/health`, {
@@ -310,6 +333,64 @@ describe('agent runtime bridge', () => {
     expect(body.result.value).toBe('pong')
     expect(body.targetClientId).toBe('alice-tab')
   })
+
+  // Regression test for a completed command being reaped ~commandTtlMs after
+  // it was CREATED rather than after it FINISHED: a long-running command
+  // (kept `delivered` here well past commandTtlMs, standing in for a
+  // multi-minute migration) already has a stale createdAt by the time it
+  // completes, so aging from createdAt reaps it on the very next request —
+  // which is exactly the CLI's own status poll. Needs a dedicated server
+  // (own TTL env) since the shared per-file server's TTLs are fixed at
+  // startup.
+  it('keeps a completed command readable for commandTtlMs after it completed, not after it was created', async () => {
+    const {baseUrl: ttlBaseUrl, stop} = await spawnBridgeServer({
+      AGENT_RUNTIME_BRIDGE_SECRET: bridgeSecret,
+      AGENT_RUNTIME_COMMAND_TTL_MS: '1000',
+      AGENT_RUNTIME_INFLIGHT_COMMAND_TTL_MS: '60000',
+    })
+    try {
+      await fetch(`${ttlBaseUrl}/runtime/clients/alice-tab`, {
+        method: 'POST',
+        headers: {'content-type': 'application/json', ...bridgeHeaders},
+        body: JSON.stringify({
+          tokens: [{token: 'TOKEN-A', label: 'cli', userId: 'alice', workspaceId: 'ws-1'}],
+        }),
+      })
+
+      const submission = await fetch(`${ttlBaseUrl}/runtime/commands`, {
+        method: 'POST',
+        headers: {'content-type': 'application/json', authorization: 'Bearer TOKEN-A'},
+        body: JSON.stringify({type: 'ping'}),
+      })
+      const {id} = await submission.json()
+
+      await fetch(`${ttlBaseUrl}/runtime/commands/next?clientId=alice-tab&timeoutMs=2000`, {
+        headers: bridgeHeaders,
+      })
+
+      // Stay `delivered` past commandTtlMs (1s) — bounded only by the much
+      // larger inFlightCommandTtlMs (60s) — so createdAt is already stale
+      // by the time the command completes.
+      await new Promise(resolve => setTimeout(resolve, 1500))
+
+      await fetch(`${ttlBaseUrl}/runtime/commands/${id}/result`, {
+        method: 'POST',
+        headers: {'content-type': 'application/json', ...bridgeHeaders, 'x-agent-runtime-client-id': 'alice-tab'},
+        body: JSON.stringify({ok: true, value: 'pong'}),
+      })
+
+      // Poll immediately: cleanup() runs at the top of this very request.
+      const status = await fetch(`${ttlBaseUrl}/runtime/commands/${id}`, {
+        headers: {authorization: 'Bearer TOKEN-A'},
+      })
+      expect(status.status).toBe(200)
+      const body = await status.json()
+      expect(body.status).toBe('completed')
+      expect(body.result.value).toBe('pong')
+    } finally {
+      await stop()
+    }
+  }, 20_000)
 
   it('allows command status polling after the submitting token re-registers under a new client id', async () => {
     await registerClient('alice-tab', {

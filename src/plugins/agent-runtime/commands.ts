@@ -473,6 +473,14 @@ const runRuntimeBackfill = async (
     )
   }
   const result = await repo.runWorkspaceBackfillNow(workspaceId, input.backfillId)
+  // Only an outcome where the pass was actually ENTERED can wear its run
+  // detail — 'ran', or 'failed' (a throw partway still ran, and its partial
+  // counts are the most useful thing to hand the operator). Every other
+  // outcome never called the pass, so a `lastRun` left over from an earlier
+  // invocation must not decorate this response. Allow-listing the outcomes
+  // that ran (rather than deny-listing the ones that didn't) fails closed if
+  // the outcome union gains or renames a member.
+  const passWasEntered = result.outcome === 'ran' || result.outcome === 'failed'
   return {
     backfillId: input.backfillId,
     workspaceId,
@@ -481,7 +489,7 @@ const runRuntimeBackfill = async (
     // the detail an operator acts on is collected from the pass itself — only
     // when THIS request is the one that ran it, or a `not-found` for some other
     // id would come back wearing the last migration's counts.
-    ...(input.backfillId === PROPERTY_CELL_BACKFILL_ID
+    ...(passWasEntered && input.backfillId === PROPERTY_CELL_BACKFILL_ID
       ? takeLastPropertyCellBackfillRun(workspaceId) ?? {}
       : {}),
   }

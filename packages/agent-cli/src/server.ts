@@ -28,13 +28,21 @@ const host = bridgeHost()
 if ((host === '0.0.0.0' || host === '::') && process.env.AGENT_RUNTIME_ALLOW_NETWORK !== 'true') {
   throw new Error('Refusing to expose agent runtime bridge on the network without AGENT_RUNTIME_ALLOW_NETWORK=true')
 }
-const commandTtlMs = 10 * 60 * 1000
+// Test-only escape hatch: shrinking a TTL lets a test observe expiry
+// without a multi-minute sleep. Both env vars are unset in every real
+// deployment, so production timing is exactly the hardcoded fallback.
+const envDurationMsOverride = (name: string, fallback: number): number => {
+  const raw = Number(process.env[name])
+  return Number.isFinite(raw) && raw > 0 ? raw : fallback
+}
+
+const commandTtlMs = envDurationMsOverride('AGENT_RUNTIME_COMMAND_TTL_MS', 10 * 60 * 1000)
 /** A `delivered` command is IN FLIGHT, not garbage — the app is still working
  *  on it. Reaping it on the same clock as a finished one deleted the record
  *  out from under a long operator pass (the properties migration runs for
  *  minutes), so the CLI's next poll got `Unknown command` while the app kept
  *  going. Still bounded, so a tab that dies mid-command cannot leak forever. */
-const inFlightCommandTtlMs = 60 * 60 * 1000
+const inFlightCommandTtlMs = envDurationMsOverride('AGENT_RUNTIME_INFLIGHT_COMMAND_TTL_MS', 60 * 60 * 1000)
 const clientTtlMs = 60_000
 const unknownTokenMessage = [
   'Agent token is not registered with the local bridge.',
@@ -365,8 +373,15 @@ const cleanup = () => {
   const inFlightExpiry = now() - inFlightCommandTtlMs
   for (const [id, command] of commands) {
     if (command.status === 'pending') continue
-    const expiry = command.status === 'delivered' ? inFlightExpiry : commandExpiry
-    if (command.createdAt < expiry) commands.delete(id)
+    if (command.status === 'delivered') {
+      if (command.createdAt < inFlightExpiry) commands.delete(id)
+      continue
+    }
+    // Terminal (completed/failed): age from completedAt, not createdAt.
+    // A migration that runs past commandTtlMs before finishing would
+    // otherwise already be older than commandExpiry the instant it
+    // completes, and get reaped on the CLI's very next status poll.
+    if ((command.completedAt ?? command.createdAt) < commandExpiry) commands.delete(id)
   }
 
   const clientExpiry = now() - clientTtlMs
