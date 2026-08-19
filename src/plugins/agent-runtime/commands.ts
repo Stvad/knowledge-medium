@@ -1244,6 +1244,7 @@ const resolveBlockWorkspaceId = async (
   blockId: string,
   override: unknown,
 ): Promise<string> => {
+  assertNonEmptyWorkspaceOverride(override)
   if (isString(override) && override) return override
   const data = await repo.load(blockId)
   if (data?.workspaceId) return data.workspaceId
@@ -1382,7 +1383,22 @@ const hydrateData = (data: BlockData): HydratedBlockRef => ({
   deepLink: deepLinkFor(data.workspaceId, data.id),
 })
 
+/** An EMPTY override is not the same as no override. A caller that passed
+ *  `workspaceId` is ASSERTING which graph to answer about — usually a script
+ *  whose `--workspace "$WS"` expanded an unset variable — so falling back to
+ *  the active workspace would answer about a graph it never named. Refuse. */
+const assertNonEmptyWorkspaceOverride = (override: unknown): void => {
+  if (isString(override) && override.trim() === '') {
+    throw new Error(
+      'workspaceId was given an empty value. It asserts which workspace to use, so an '
+      + 'empty expansion must fail rather than fall back to the active one. Pass a real '
+      + 'workspace id, or omit it entirely.',
+    )
+  }
+}
+
 const commandWorkspaceId = (repo: Repo, override: unknown): string => {
+  assertNonEmptyWorkspaceOverride(override)
   if (isString(override) && override) return override
   if (repo.activeWorkspaceId) return repo.activeWorkspaceId
   throw new Error('No active workspace; pass workspaceId')

@@ -522,6 +522,17 @@ cli.option('--profile, -p <name>', 'Saved CLI token profile to use')
 
 // ----- Local / bridge-management commands ---------------------------
 
+/** Test PRESENCE, not truthiness. CAC parses `--workspace ""` (a shell
+ *  expanding an unset variable) into the NUMBER 0 — falsy but present — so a
+ *  truthiness check silently drops the assertion and the command answers
+ *  about the ACTIVE workspace instead of the one the caller named. Normalize
+ *  that artifact back to an empty string so the command layer's purpose-built
+ *  rejection is what surfaces. */
+const workspaceAssertion = (workspace: string | number | undefined): {workspaceId?: string} => {
+  if (workspace === undefined) return {}
+  return {workspaceId: workspace === 0 ? '' : String(workspace)}
+}
+
 cli
   .command('connect [token]', 'Pair the agent CLI with the app (or save a token directly)')
   .option('--force', 'Re-pair even if an active connection already exists')
@@ -744,7 +755,7 @@ cli
       type: 'backlinks',
       id: blockId,
       ...(filter !== undefined ? {filter} : {}),
-      ...(options.workspace ? {workspaceId: options.workspace} : {}),
+      ...workspaceAssertion(options.workspace),
     })
   })
 
@@ -764,7 +775,7 @@ cli
       id: blockId,
       ...(filter !== undefined ? {filter} : {}),
       ...(grouping !== undefined ? {grouping} : {}),
-      ...(options.workspace ? {workspaceId: options.workspace} : {}),
+      ...workspaceAssertion(options.workspace),
     })
   })
 
@@ -790,7 +801,7 @@ cli
     await runAndPrint({
       type: 'page',
       name: text,
-      ...(options.workspace ? {workspaceId: options.workspace} : {}),
+      ...workspaceAssertion(options.workspace),
       ...(options.limit !== undefined ? {limit: Number(options.limit)} : {}),
     })
   })
@@ -804,7 +815,7 @@ cli
     await runAndPrint({
       type: 'daily-note',
       date: text,
-      ...(options.workspace ? {workspaceId: options.workspace} : {}),
+      ...workspaceAssertion(options.workspace),
     })
   })
 
@@ -818,7 +829,7 @@ cli
     await runAndPrint({
       type: 'search',
       query: text,
-      ...(options.workspace ? {workspaceId: options.workspace} : {}),
+      ...workspaceAssertion(options.workspace),
       ...(options.limit !== undefined ? {limit: Number(options.limit)} : {}),
     })
   })

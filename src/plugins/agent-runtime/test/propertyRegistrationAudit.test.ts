@@ -343,6 +343,20 @@ describe('audit-properties command', () => {
     )).rejects.toThrow(/empty value/i)
   })
 
+  it.each([
+    ['page', {type: 'page', name: 'x'}],
+    ['search', {type: 'search', query: 'x'}],
+    ['daily-note', {type: 'daily-note', date: '2026-08-18'}],
+  ] as const)('rejects an EMPTY workspace assertion on %s instead of answering about the active one', async (_label, base) => {
+    // CAC turns `--workspace ""` into the number 0, which the CLI normalizes
+    // to ''. Both shared resolvers used to treat that as "no override" and
+    // fall back — answering about a graph the caller never named.
+    await expect(executeCommand(
+      {commandId: 'w-1', ...base, workspaceId: '  '} as never,
+      context,
+    )).rejects.toThrow(/empty value/i)
+  })
+
   it('refuses an explicit workspace whose registry is not loaded', async () => {
     await expect(executeCommand(
       {commandId: 'a-2', type: 'audit-properties', workspaceId: 'ws-unloaded'},
