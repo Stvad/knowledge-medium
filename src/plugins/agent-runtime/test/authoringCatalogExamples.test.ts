@@ -133,6 +133,20 @@ describe('authoring catalog example drift guard', () => {
     ).toEqual([])
   })
 
+  it('the fixtures stay out of the published kernel-types surface too', async () => {
+    // The catalog glob keeps them out of `describe-runtime`'s module list, but
+    // that is only one of two discovery channels: `pnpm agent types` installs
+    // a .d.ts tree into an author's editor, and a fixture emitted there
+    // autocompletes as `@/plugins/agent-runtime/examples/settingsDialog.js` —
+    // a module the runtime cannot import. Same decision, other surface.
+    const {readFileSync} = await import('node:fs')
+    const config = readFileSync(
+      new URL('../../../../tsconfig.kernel-types.json', import.meta.url),
+      'utf8',
+    )
+    expect(config).toContain('src/**/examples/**')
+  })
+
   it('every API the guide PROSE names in a call still exists', () => {
     // The worked examples compile now; the prose around them does not. It
     // carries ~10 API-shaped snippets with real signatures, and a rename
