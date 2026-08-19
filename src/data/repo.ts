@@ -92,6 +92,11 @@ import {
   type BlocksSyncedObserver,
   type BlocksSyncedObserverArgs,
 } from '@/data/internals/syncObserver/observer'
+import {
+  STAGED_DEEPER_THAN_SCAN_SQL,
+  STAGED_GAP_WITHIN_SCAN_SQL,
+  STAGED_SCAN_LIMIT,
+} from '@/data/internals/syncObserver/reconcile'
 import type { MaterializeDeps } from '@/data/internals/syncObserver/materialize'
 import type { Materializability } from '@/sync/transform'
 import {
@@ -248,41 +253,6 @@ const nameDispatchProxy = <T,>(dispatch: (name: string) => unknown): T =>
  *  Sized to comfortably cover a cold-start window (a few dozen txs) so
  *  diagnostic dumps right after page load don't lose entries. */
 const TX_LOG_CAPACITY = 64
-
-/**
- * Is any staged row one the drain would actually APPLY?
- *
- * `blocks_synced_changes` being non-empty is not the same claim as "my view of
- * `blocks` is behind". Every local write echoes back down the sync stream and
- * re-stages itself, so a device that is writing has a near-permanently
- * non-empty queue built entirely from rows it already has — and a pass that
- * refuses while rows are staged then refuses because of its own progress.
- *
- * The exclusion is not a heuristic about who wrote the row: it is
- * `decideStagingRow`'s invariant I1 (`internals/syncObserver/reconcile.ts`),
- * which the drain itself applies. Equal NONZERO stamps ⟺ identical content,
- * because the server strictly advances `updated_at` on any content change, so
- * such a row resolves `skip-stale` and changes nothing. Counting it as a gap
- * reports work the drain is about to discard.
- *
- * Everything unproven is a gap, deliberately: a missing synced row, a missing
- * local row, and I2's `0` sentinel (a speculative deterministic-id mint, where
- * equal stamps do NOT imply equal content and the local row always yields).
- * Rows held by I1's sibling `hasPendingUpload` skip are NOT excluded — that
- * would mean reading `ps_crud` per call, and over-reporting is the safe
- * direction for a predicate whose callers refuse on it.
- */
-const STAGED_ROW_WOULD_CHANGE_BLOCKS_SQL = `
-  SELECT 1 AS one
-    FROM blocks_synced_changes c
-    LEFT JOIN blocks_synced s ON s.id = c.id
-    LEFT JOIN blocks b ON b.id = c.id
-   WHERE c.op = 'delete'
-      OR s.id IS NULL
-      OR b.id IS NULL
-      OR b.updated_at = 0
-      OR b.updated_at <> s.updated_at
-   LIMIT 1`
 
 /** Registry key for the per-workspace undo manager when no workspace is
  *  active (issue #186). Workspace ids are UUIDs, so this sentinel can
@@ -2841,8 +2811,17 @@ export class Repo {
    * added to one of two copies is how these diverge.
    */
   async syncViewGap(): Promise<string | null> {
-    const staged = await this.db.getOptional<{one: number}>(STAGED_ROW_WOULD_CHANGE_BLOCKS_SQL)
+    const staged = await this.db.getOptional<{one: number}>(
+      STAGED_GAP_WITHIN_SCAN_SQL, [STAGED_SCAN_LIMIT],
+    )
     if (staged !== null) return 'synced rows are still draining into `blocks`'
+    const deeper = await this.db.getOptional<{one: number}>(
+      STAGED_DEEPER_THAN_SCAN_SQL, [STAGED_SCAN_LIMIT],
+    )
+    if (deeper !== null) {
+      return `more than ${STAGED_SCAN_LIMIT.toLocaleString()} synced rows are staged, `
+        + 'so this device is behind on materializing them into `blocks`'
+    }
     if (!this.backfillSyncSettledNow()) {
       return 'this device is not caught up with the server '
         + '(still downloading, disconnected, or a download error)'
@@ -3021,13 +3000,22 @@ export class Repo {
           `[workspaceBackfills] "${backfill.id}" deferred: ${gap}, so claiming would ` +
           `write from a stale view.`,
         )
-        // Re-arm, exactly as the TRANSIENT catch below does. The caught-up half
-        // of this gate would self-re-arm through `arm()`'s parked callback, but
-        // the staged-rows half has no gate to park on — nothing fires when the
-        // queue drains, so without this the pass is written off for the whole
-        // session by a blocker that clears in milliseconds.
+        // Re-arm and RETURN, exactly as the TRANSIENT catch below does. The
+        // caught-up half of this gate would self-re-arm through `arm()`'s
+        // parked callback, but the staged-rows half has no gate to park on —
+        // nothing fires when the queue drains, so without this an automatic
+        // pass is written off for the whole session by a blocker that clears
+        // in milliseconds. Returning is what keeps that to ONE re-arm: the gap
+        // is a property of the device, not of a backfill, so every remaining
+        // one would defer identically — and `arm()` only de-dupes a PARKED
+        // gate, so N re-arms here would each schedule their own job and each
+        // job would re-run all N passes.
+        //
+        // Re-arming reaches `workspace-open` passes only, which is all
+        // `scheduleWorkspaceBackfills` schedules. An `operator` pass defers to
+        // its caller, who is a person that can be told to retry.
         this.scheduleWorkspaceBackfills(workspaceId)
-        continue
+        return {completed, undoHistoryCleared, deferred, failed}
       }
       if (!(await claim.tryClaim(workspaceId, backfill.id, {
         reclaimCompleted: backfill.trigger === 'operator',

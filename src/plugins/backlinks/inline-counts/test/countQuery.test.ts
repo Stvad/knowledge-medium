@@ -209,13 +209,18 @@ describe('backlinks.countForBlock — handle behaviour', () => {
 
   // The badge must not count sources the expanded list drops, or the user sees
   // a phantom backlink that vanishes on expand.
-  it('excludes property-machinery sources in a child-backed workspace (badge/list parity)', async () => {
+  // Both states, because the cell->children backfill mints machinery BEFORE
+  // the flip: the badge used to take a pure-aggregate fast path when
+  // un-flipped, and then counted a hidden value row the expanded list dropped.
+  it.each(['children', 'cell'])(
+    'excludes property-machinery sources, properties_migration=%s (badge/list parity)',
+    async (migration) => {
     const FLIP_WS = 'ws-flip'
     await sharedDb.db.execute(
       `INSERT OR REPLACE INTO workspaces
          (id, name, owner_user_id, create_time, update_time, encryption_mode, wk_canary, properties_migration)
-       VALUES (?, 'flip ws', 'user-1', 1, 1, 'none', NULL, 'children')`,
-      [FLIP_WS],
+       VALUES (?, 'flip ws', 'user-1', 1, 1, 'none', NULL, ?)`,
+      [FLIP_WS, migration],
     )
     const createIn = (args: {
       id: string; parentId?: string | null; content?: string

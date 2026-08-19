@@ -373,7 +373,7 @@ describe('workspace backfill runner — sync gating', () => {
     })
     repo.setActiveWorkspaceId(WS)
     // Staged AFTER the claim, from inside the run: rows staged up front no
-    // longer reach `tryClaim` at all (see the test below), so a pass that
+    // longer reach `tryClaim` at all (see the test above), so a pass that
     // aborts while HOLDING a claim is the only shape that still exercises the
     // hand-back this test exists for.
     repo.setRuntimeContributions(workspaceBackfillsFacet, 'test-backfills', [{

@@ -4,7 +4,6 @@ import {
   TYPED_BLOCKS_STRUCTURE_CHANNEL,
   typedBlocksStructureKey,
 } from '@/data/invalidation'
-import { readIsChildBackedWorkspace } from '@/data/workspaceSchema'
 import { BACKLINKS_FOR_BLOCK_QUERY } from '../query.ts'
 
 export const BACKLINKS_COUNT_FOR_BLOCK_QUERY = 'backlinks.countForBlock'
@@ -31,10 +30,13 @@ const numberSchema: Schema<number> = {
  *  `[[Target]]` must not inflate the badge past the list the user gets on
  *  expand. That exclusion is a post-filter on ids, so counting it means
  *  materialising them — which is exactly what this query exists to avoid.
- *  Hence two paths: an un-flipped workspace has no machinery at all, so it
- *  keeps the pure `core.typedBlockCount` aggregate (all of prod, no
- *  regression); a child-backed workspace defers to `backlinks.forBlock` and
- *  takes its length, making badge and list agree by construction.
+ *  So it always defers to `backlinks.forBlock` and takes its length, making
+ *  badge and list agree by construction. There used to be a second path — the
+ *  pure `core.typedBlockCount` aggregate for un-flipped workspaces, on the
+ *  premise that they hold no machinery. The cell->children backfill mints it
+ *  before the flip, and the badge then counted a hidden value row the expanded
+ *  list did not: 2 on the badge, 1 in the list, on every page with a ref-typed
+ *  property pointing at the target.
  *
  *  Explicit const type (like `backlinksForBlockQuery`) so `typeof` is knowable
  *  without inferring this initializer, which would loop through QueryRegistry
@@ -59,14 +61,7 @@ export const backlinksCountForBlockQuery: Query<
       channel: TYPED_BLOCKS_STRUCTURE_CHANNEL,
       key: typedBlocksStructureKey(workspaceId, id),
     })
-    if (await readIsChildBackedWorkspace(ctx.db, workspaceId)) {
-      return (await ctx.run(BACKLINKS_FOR_BLOCK_QUERY, { workspaceId, id })).length
-    }
-    return ctx.run('core.typedBlockCount', {
-      workspaceId,
-      referencedBy: { id },
-      exclude: [{ scope: 'self', id }],
-    })
+    return (await ctx.run(BACKLINKS_FOR_BLOCK_QUERY, { workspaceId, id })).length
   },
 })
 

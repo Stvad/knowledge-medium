@@ -22,6 +22,7 @@ import {
   typedBlocksStructureKey,
 } from '@/data/invalidation'
 import { typesProp } from '@/data/properties.js'
+import { registrySeedParams } from '@/data/internals/kernelQueries'
 import {
   buildGroupedBacklinks,
   type GroupedBacklinkCandidate,
@@ -131,7 +132,7 @@ const resolveBacklinkSourceIds = async (
   // surface that didn't filter. Un-gated for the reason given there: the
   // backfill mints value rows before the flip.
   if (ids.length === 0) return ids
-  const machinery = await propertyMachinerySourceIds(ctx.db, ids)
+  const machinery = await propertyMachinerySourceIds(ctx.db, ids, registrySeedParams(ctx.repo))
   return machinery.size === 0 ? ids : ids.filter(sourceId => !machinery.has(sourceId))
 }
 

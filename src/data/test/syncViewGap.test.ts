@@ -20,6 +20,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { BLOCKS_SYNCED_RAW_TABLE, blockToSyncedRowParams } from '@/data/blockSchema'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
+import { decideStagingRow } from '@/data/internals/syncObserver/reconcile'
 import { ChangeScope } from '@/data/api'
 import type { BlockData } from '@/data/api'
 
@@ -64,6 +65,46 @@ const localStamp = async (id: string): Promise<number> =>
     'SELECT updated_at FROM blocks WHERE id = ?', [id],
   ))!.updated_at
 
+/** `n` benign staged rows: `blocks` and `blocks_synced` agree at the same
+ *  nonzero stamp, so every one of them is an echo the drain would discard.
+ *  Generated in three statements rather than 3n round-trips. */
+const seedBenignBacklog = async (n: number) => {
+  const gen = `WITH RECURSIVE seq(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM seq WHERE i < ${n})`
+  await sharedDb.db.execute(
+    `${gen} INSERT INTO blocks (id, workspace_id, parent_id, order_key, content,
+       properties_json, created_at, updated_at, user_updated_at, created_by, updated_by, deleted)
+     SELECT 'bulk' || i, ?, NULL, 'a0', 'v', '{}', 1, 1000 + i, 1000 + i, 'u', 'u', 0 FROM seq`, [WS])
+  await sharedDb.db.execute(
+    `${gen} INSERT INTO blocks_synced (id, workspace_id, parent_id, order_key, content,
+       properties_json, created_at, updated_at, user_updated_at, created_by, updated_by, deleted)
+     SELECT 'bulk' || i, ?, NULL, 'a0', 'v', '{}', 1, 1000 + i, 1000 + i, 'u', 'u', 0 FROM seq`, [WS])
+  await sharedDb.db.execute(
+    `${gen} INSERT INTO blocks_synced_changes (id, op) SELECT 'bulk' || i, 'upsert' FROM seq`)
+}
+
+describe('agreement with the drain (invariant I1)', () => {
+  // The SQL restates a rule `decideStagingRow` owns. This is the coupling: if
+  // I1 moves and the SQL does not, the gate starts reporting "nothing to do"
+  // while the drain is about to rewrite `blocks` — the stale-view write the
+  // whole gate exists to prevent. The clauses with no `decideStagingRow`
+  // input (a staged delete, a missing synced row) stay hand-written above.
+  it.each([
+    {local: 5, synced: 5},
+    {local: 5, synced: 6},
+    {local: 6, synced: 5},
+    {local: 0, synced: 0},
+  ])('matches skip-stale for local=$local synced=$synced', async ({local, synced}) => {
+    const repo = makeRepo()
+    await seedLocal('oracle', local)
+    await deliver(syncedRow({id: 'oracle', updatedAt: synced}))
+
+    const drainSkips = decideStagingRow('copy', synced, {
+      localUpdatedAt: local, hasPendingUpload: false,
+    }).kind === 'skip-stale'
+    expect(await repo.syncViewGap() === null).toBe(drainSkips)
+  })
+})
+
 describe('Repo.syncViewGap', () => {
   it('reports no gap when the only staged rows are this device\'s own echo', async () => {
     // THE case that decides whether a long uploading pass can finish: it
@@ -102,15 +143,26 @@ describe('Repo.syncViewGap', () => {
     // A speculative deterministic-id mint. Equal stamps do NOT mean identical
     // content here, so the drain applies and the view really is incomplete.
     const repo = makeRepo()
-    await sharedDb.db.writeTransaction(async tx => {
-      await tx.execute(
-        `INSERT INTO blocks (id, workspace_id, parent_id, order_key, content, properties_json,
-           created_at, updated_at, user_updated_at, created_by, updated_by, deleted)
-         VALUES ('minted', ?, NULL, 'a0', 'v', '{}', 0, 0, 0, 'u', 'u', 0)`, [WS])
-    })
+    await seedLocal('minted', 0)
     await deliver(syncedRow({id: 'minted', updatedAt: 0}))
     expect(await repo.syncViewGap()).toMatch(/draining/)
   })
+
+  it('reports no gap for a large all-echo backlog that stays within the scan bound', async () => {
+    const repo = makeRepo()
+    await seedBenignBacklog(2_000)
+    expect(await repo.syncViewGap()).toBeNull()
+  })
+
+  it('reports a gap once the backlog outruns the scan bound, without scanning it', async () => {
+    // The probe runs inside the backfill's write transaction and cannot
+    // short-circuit on an all-echo queue, so it is bounded. Past the bound we
+    // report rather than scan on: that much undrained material IS a real
+    // materialization backlog, and yielding lets the drain catch up.
+    const repo = makeRepo()
+    await seedBenignBacklog(10_001)
+    expect(await repo.syncViewGap()).toMatch(/behind on materializing/)
+  }, 30_000)
 
   it('reports a gap for a staged upsert with no synced row, which proves nothing', async () => {
     // Isolates the `s.id IS NULL` clause: the local row exists and is NOT
@@ -139,12 +191,4 @@ describe('Repo.syncViewGap', () => {
     expect(await repo.syncViewGap()).toMatch(/draining/)
   })
 
-  it('reports a gap for a staged delete even though no synced row remains', async () => {
-    const repo = makeRepo()
-    await deliver(syncedRow({id: 'gone', updatedAt: 5}))
-    await sharedDb.db.execute('DELETE FROM blocks_synced_changes')
-    await sharedDb.db.execute(BLOCKS_SYNCED_RAW_TABLE.delete.sql, ['gone'])
-
-    expect(await repo.syncViewGap()).toMatch(/draining/)
-  })
 })

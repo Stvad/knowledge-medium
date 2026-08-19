@@ -136,3 +136,67 @@ export const decideStagingRow = (
   // rehydrates from the server-healed disk.)
   return { kind: 'apply', decrypt: materializability === 'decrypt' }
 }
+
+/**
+ * Is any staged row one the drain would actually APPLY?
+ *
+ * `blocks_synced_changes` being non-empty is not the same claim as "my view of
+ * `blocks` is behind". Every local write echoes back down the sync stream and
+ * re-stages itself, so a device that is writing has a near-permanently
+ * non-empty queue built entirely from rows it already has — and a pass that
+ * refuses while rows are staged then refuses because of its own progress.
+ *
+ * The exclusion is not a heuristic about who wrote the row: it is
+ * {@link decideStagingRow}'s invariant I1 — the rule this file exists to
+ * state, which is why the SQL lives beside it rather than at its call site.
+ * Equal NONZERO stamps ⟺ identical content,
+ * because the server strictly advances `updated_at` on any content change, so
+ * such a row resolves `skip-stale` and changes nothing. Counting it as a gap
+ * reports work the drain is about to discard.
+ *
+ * The identity holds only while the client's proposed stamp is at or below
+ * server-now: `blocks_clamp_updated_at` clamps a FUTURE stamp down on insert,
+ * and a create gets no floor to restore it. A device whose clock leads the
+ * server therefore sees its own creates echo back with a LOWER stamp, reads a
+ * genuine gap, and gains nothing here — correctly, since the drain really
+ * would rewrite those rows.
+ *
+ * Everything unproven is a gap, deliberately: a missing synced row, a missing
+ * local row, and I2's `0` sentinel (a speculative deterministic-id mint, where
+ * equal stamps do NOT imply equal content and the local row always yields).
+ * Rows held by I1's sibling `hasPendingUpload` skip are NOT excluded — that
+ * would mean reading `ps_crud` per call, and over-reporting is the safe
+ * direction for a predicate whose callers refuse on it.
+ */
+export const STAGED_GAP_WITHIN_SCAN_SQL = `
+  SELECT 1 AS one
+    FROM (SELECT seq, id, op FROM blocks_synced_changes ORDER BY seq LIMIT ?) c
+    LEFT JOIN blocks_synced s ON s.id = c.id
+    LEFT JOIN blocks b ON b.id = c.id
+   WHERE c.op = 'delete'
+      OR s.id IS NULL
+      OR b.id IS NULL
+      OR b.updated_at = 0
+      OR b.updated_at <> s.updated_at
+   LIMIT 1`
+
+/** Rows past {@link STAGED_SCAN_LIMIT}. No joins — a rowid walk, ~an order of
+ *  magnitude cheaper per row than the probe above. */
+export const STAGED_DEEPER_THAN_SCAN_SQL = 'SELECT 1 AS one FROM blocks_synced_changes LIMIT 1 OFFSET ?'
+
+/** How many staged rows the benign-echo probe will examine per call.
+ *
+ *  The probe runs INSIDE the backfill's write transaction, and the echo case
+ *  it exists for is precisely the one where no row qualifies — so `LIMIT 1`
+ *  never short-circuits and the scan runs to the end. Measured: ~4.5us/row, so
+ *  an unbounded scan of a 200k-row queue costs ~900ms per batch, against the
+ *  ~430ms whole-batch budget `TARGET_INSERT_ROWS` exists to protect. The
+ *  bigger the backlog the narrowing is meant to tolerate, the more the
+ *  tolerating costs.
+ *
+ *  Past the bound we report a gap rather than scanning on. That is not a
+ *  fallback to the old bug: ~10 drain windows' worth of undrained rows means
+ *  this device has a real materialization backlog, and yielding so the drain
+ *  can catch up is the correct answer — the pass resumes on the next attempt,
+ *  which is cheap because its progress is derived from the data. */
+export const STAGED_SCAN_LIMIT = 10_000

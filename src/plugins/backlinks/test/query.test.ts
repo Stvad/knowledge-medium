@@ -370,9 +370,30 @@ describe('backlinksDataExtension query', () => {
       await createIn({id: 'Q'})
 
       const machinery = await propertyMachinerySourceIds(
-        env.h.db, ['V1', 'Q', 'V2'], 1,
+        env.h.db, ['V1', 'Q', 'V2'], ['[]', ''], 1,
       )
       expect([...machinery].sort()).toEqual(['V1', 'V2'])
+    })
+
+    it('recognizes a field row keyed to a seed definition `block_types` does not carry yet', async () => {
+      // #389 item 7: a code-declared seed the registry knows but
+      // `materializePropertySeeds` has not written. The outline binds these
+      // ids and hides such a row; before the shared fragment the walk did not,
+      // so its value row's `[[Target]]` surfaced as a duplicate of the owner's
+      // projected property edge.
+      await seedFlipped()
+      const SEED = 'seed-def-unmaterialized'
+      await createIn({id: 'Target'})
+      await createIn({id: 'O'})
+      await createIn({id: 'F', parentId: 'O', content: `::((${SEED}))`, referenceTargetId: SEED})
+      await createIn({id: 'V', parentId: 'F', references: [{id: 'Target', alias: 'T'}]})
+
+      // No `block_types` row exists for SEED, so only the bound seed set can
+      // classify it — with an empty set the walk must NOT classify it.
+      expect([...await propertyMachinerySourceIds(env.h.db, ['V'], ['[]', ''])]).toEqual([])
+      expect([...await propertyMachinerySourceIds(
+        env.h.db, ['V'], [JSON.stringify([SEED]), FLIP_WS],
+      )]).toEqual(['V'])
     })
 
     it('converges (does not hang or error) when a source sits under a cyclic, non-matching ancestor chain (issue #404 item 8b)', async () => {

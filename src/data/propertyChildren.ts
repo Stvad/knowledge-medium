@@ -22,7 +22,8 @@
  * is that block's field row, and an unmarked ref targeting a definition is a
  * plain reference block, full stop (the bit is what makes ref-typed values
  * pointing at definitions unambiguous — no positional rule needed). Callers
- * own the flip gate; these helpers own the bit/column/definition half.
+ * own the read/write-DIRECTION gate (is the cell or the child the truth);
+ * these helpers own the bit/column/definition half, flipped or not.
  *
  * A field row's VALUE SET is exactly its `is_field_form IS NOT 1` children
  * (`isFieldValueChild` / the SQL twin) — a binding selection discipline
@@ -404,7 +405,10 @@ const propertyValueFieldRow = async (
  * Is `row` ITSELF a recognized property field row — the `::((fieldId))`
  * child that carries a property's identity on its owner (PR #288 §9)?
  * The flat predicate directly: bit ∧ non-null parent ∧ shadow-tolerant
- * definition resolution (`tx.isPropertyFieldDefinition`) ∧ flip gate.
+ * definition resolution (`tx.isPropertyFieldDefinition`). Not flip-gated —
+ * see the module header: the backfill mints these rows before the flip, and
+ * these consumers REWRITE CONTENT, so a gate here is a window in which
+ * deleting a definition or a linked page mangles real property machinery.
  *
  * Write paths need this for the same reason they need the value-row check, one
  * level up: a field row's content IS the property's identity, so rewriting it
@@ -417,12 +421,11 @@ export const isPropertyFieldRow = async (
   row: Pick<BlockData, 'id' | 'parentId' | 'workspaceId' | 'referenceTargetId' | 'isFieldForm'>,
 ): Promise<boolean> => {
   // One cheap pre-filter, and it earns its place: the bit is stamped on every
-  // field row, so an unmarked row is decided without the async flip probe.
-  // The remaining conditions (non-null parent, resolvable definition) are the
-  // composed predicate's own — restating them here would just be a second
-  // copy to keep in sync.
+  // field row, so an unmarked row is decided without the async definition
+  // lookup. The remaining conditions (non-null parent, resolvable definition)
+  // are the composed predicate's own — restating them here would just be a
+  // second copy to keep in sync.
   if (row.isFieldForm !== true) return false
-  if (!(await tx.isPropertyChildBackedWorkspace(row.workspaceId))) return false
   return isPropertyFieldInstance(row, (fieldId) =>
     tx.isPropertyFieldDefinition(row.workspaceId, fieldId))
 }

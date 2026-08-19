@@ -110,6 +110,11 @@ const fieldRowCount = async (): Promise<number> => (await repo.db.get<{n: number
     WHERE workspace_id = ? AND deleted = 0 AND is_field_form = 1`, [WS],
 ))!.n
 
+// Four of these run multi-sweep convergence loops and measure 636/444/364/356 ms
+// alone. The gate runs one worker per core, where a test's wall clock stretches
+// ~6x at p99.9 — so against vitest's 5000 ms default they intermittently redden
+// an unrelated PR's gate. Explicit budgets rather than a global raise, which
+// would make every genuine hang in this file cost 20 s before reporting.
 describe('property cell → children backfill', () => {
   it('gives a registered cell key its field row and value row', async () => {
     await create('b1', {'demo:note': 'hello'})
@@ -183,7 +188,7 @@ describe('property cell → children backfill', () => {
     expect((await run()).outcome).toBe('ran')
 
     expect(await fieldRowCount()).toBe(ids.length)
-  })
+  }, 20_000)
 
   it('reports a block whose cell value cannot be decoded and migrates the rest', async () => {
     // A legacy raw `tx.update({properties})` can leave a value the schema's
@@ -225,7 +230,7 @@ describe('property cell → children backfill', () => {
     expect(edited).toBe(true)
     expect(progress.sweeps).toBeGreaterThan(1)
     expect(await fieldRowsOf(ids[0]!)).toHaveLength(2)
-  })
+  }, 20_000)
 
   it('migrates an owner whose existing field row belongs to a different property', async () => {
     // The predicate this replaced compared key COUNT against field-row count,
@@ -285,7 +290,7 @@ describe('property cell → children backfill', () => {
 
     expect(progress.sweeps).toBeGreaterThan(1)
     expect((await fieldRowsOf(ids[0]!))[0]!.values).toEqual(['edited after the visit'])
-  })
+  }, 20_000)
 
   it('refuses to run against a workspace that has already flipped', async () => {
     // Past the flip the CHILDREN are authoritative and the cell is a derived
@@ -410,7 +415,7 @@ describe('property cell → children backfill', () => {
     // was still rewriting value children, so the operator is told to run again
     // rather than left to assume the children match the cells.
     expect(progress.editedUnderPass).toBe(true)
-  })
+  }, 20_000)
 
   it('will not follow a field row into another workspace to delete its owner', async () => {
     // The orphan leg reaches an owner through its FIELD ROWS, and `tx.get`

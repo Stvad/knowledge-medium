@@ -56,8 +56,13 @@ export class PendingIdleJobs {
   }
 
   /** Await every job whose deferral timer has already fired. Loops so a
-   *  job that settles while we await an earlier one is still drained;
-   *  terminates because these jobs never schedule further jobs. */
+   *  job that settles while we await an earlier one is still drained.
+   *
+   *  NOT a settle barrier for every caller: a workspace backfill that defers
+   *  on the sync gate re-arms itself, so it can enqueue a SUCCESSOR job. That
+   *  successor's deferral timer has not fired yet, so this returns without it
+   *  — which is what makes the loop terminate, and also why a test asserting
+   *  "the pass has finished" must wait on the outcome rather than on this. */
   async drain(): Promise<void> {
     while (this.pending.size > 0) {
       await Promise.all([...this.pending])

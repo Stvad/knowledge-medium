@@ -9,6 +9,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { ChangeScope, codecs, defineProperty, propertyValue, type BlockData } from '@/data/api'
 import { keyAtStart } from './orderKey'
+import { propertyFieldContent } from './propertyChildren'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { projectedPropertyDefinitionsFacet } from '@/data/facets'
@@ -730,6 +731,36 @@ describe('childrenOf visible-children exclusion (§9)', () => {
       {scope: ChangeScope.BlockDefault})
     return repo
   }
+
+  it('excludes them in an UN-flipped workspace too, matching the SQL view', async () => {
+    // `tx.childrenOf(..., hidePropertyChildren)` is the in-transaction twin of
+    // VISIBLE_CHILDREN_SQL and must answer the same question. The backfill
+    // mints field rows before the flip; while this was gated and the SQL was
+    // not, the two disagreed — and `agent-runtime`'s delete path uses THIS one
+    // to decide what is foreign content to rescue, so a hidden field row got
+    // reparented onto the wrong owner.
+    await seedWorkspace('cell')
+    const repo = setup()
+    await seedDefinitionBlock(repo)
+    await createBlock(repo, 'p')
+    await repo.tx(async tx => {
+      await tx.create({
+        id: 'content-child', workspaceId: WS, parentId: 'p', orderKey: 'm', content: 'note',
+      })
+      // Built by hand: the dual-write processors are dormant pre-flip, which
+      // is exactly why only the backfill produces this shape.
+      await tx.create({
+        id: 'field', workspaceId: WS, parentId: 'p', orderKey: 'a',
+        content: propertyFieldContent(STATUS_FIELD_ID), referenceTargetId: STATUS_FIELD_ID,
+      })
+    }, {scope: ChangeScope.BlockDefault})
+
+    await repo.tx(async tx => {
+      const visible = await tx.childrenOf('p', undefined, {hidePropertyChildren: true})
+      expect(visible.map(c => c.id)).toEqual(['content-child'])
+      expect(await tx.childrenOf('p')).toHaveLength(2)
+    }, {scope: ChangeScope.BlockDefault})
+  })
 
   it('default excludes recognized field rows; machinery opts in', async () => {
     const repo = await setupFlipped()

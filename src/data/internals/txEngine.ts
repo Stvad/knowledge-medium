@@ -950,7 +950,6 @@ export class TxImpl implements Tx {
     if (parentId === null) return data
     if (options?.hidePropertyChildren !== true || data.length === 0) return data
     if (!data.some(row => row.isFieldForm === true)) return data
-    if (!(await this.isPropertyChildBackedWorkspace(data[0]!.workspaceId))) return data
     const isFieldDefinition = this.isFieldDefinitionCheckerFor(data[0]!.workspaceId)
     return data.filter(row => !isPropertyFieldInstance(row, isFieldDefinition))
   }

@@ -11,6 +11,8 @@ import {
   TYPED_BLOCKS_STRUCTURE_CHANNEL,
   typedBlocksStructureKey,
 } from '@/data/invalidation'
+import { recognizedFieldRowSql } from '@/data/internals/treeQueries'
+import { registrySeedParams } from '@/data/internals/kernelQueries'
 
 export const BACKLINKS_FOR_BLOCK_QUERY = 'backlinks.forBlock'
 
@@ -22,17 +24,18 @@ const MACHINERY_SOURCE_CHUNK = 500
 
 /** Which of `sourceIds` are property-subtree INTERIOR machinery — a value child,
  *  or a row deeper inside a property subtree, whose parent chain passes through
- *  a §9 field row. Same recognition as `VISIBLE_CHILD_PREDICATE_SQL`, which
- *  means all THREE of its terms: the `::` bit (`is_field_form`, NULL on every
- *  unmarked row so COALESCE pins the three-valued logic), a workspace-scoped
- *  `block_types = 'property-schema'` probe on a non-null
- *  `reference_target_id`, and root rows exempt via `parent_id IS NOT NULL`.
+ *  a §9 field row. Recognition IS `recognizedFieldRowSql`, shared with the
+ *  outline rather than restated: the walk hoists the four columns it reads
+ *  under the names it expects, so parity is structural instead of a claim in
+ *  a comment. It was a claim in a comment, and it was wrong in both
+ *  directions — the `::` bit was missing (so any descendant of a row that
+ *  merely REFERENCED a definition counted as machinery, losing real
+ *  backlinks) and so was the seed-definition leg (so a field row keyed to a
+ *  code-declared seed `materializePropertySeeds` had not written yet was
+ *  machinery to the outline and not to backlinks).
  *
- *  The bit was missing here while the doc already claimed parity, so ANY
- *  descendant of ANY row that merely referenced a definition counted as
- *  machinery — an ordinary child of a block linking to the `status` property
- *  page silently lost its backlink. Root ancestors were exempt, which is why
- *  the obvious one-level fixture never caught it.
+ *  Bind `[...sourceIdChunk, seedDefinitionIdsJson, seedWorkspaceId]`: the
+ *  fragment's two parameters sit textually after the chunk placeholders.
  *
  *  STRICTLY INTERIOR (`depth > 0`): the field row ITSELF is deliberately NOT
  *  matched. The de-dup this filter exists for only applies to interiors — a
@@ -59,6 +62,7 @@ const MACHINERY_SOURCE_CHUNK = 500
 export const propertyMachinerySourceIds = async (
   db: { getAll<T>(sql: string, params?: unknown[]): Promise<T[]> },
   sourceIds: readonly string[],
+  seedParams: readonly [string, string] = ['[]', ''],
   chunkSize: number = MACHINERY_SOURCE_CHUNK,
 ): Promise<Set<string>> => {
   const machinery = new Set<string>()
@@ -82,16 +86,8 @@ export const propertyMachinerySourceIds = async (
        SELECT DISTINCT up.start_id AS id
          FROM up
         WHERE up.depth > 0
-          AND COALESCE(up.is_field_form, 0) = 1
-          AND up.reference_target_id IS NOT NULL
-          AND up.parent_id IS NOT NULL
-          AND EXISTS (
-            SELECT 1 FROM block_types bt
-             WHERE bt.block_id = up.reference_target_id
-               AND bt.type = 'property-schema'
-               AND bt.workspace_id = up.workspace_id
-          )`,
-      [...chunk],
+          AND (${recognizedFieldRowSql('up')})`,
+      [...chunk, ...seedParams],
     )
     for (const r of rows) machinery.add(r.id)
   }
@@ -219,7 +215,7 @@ export const backlinksForBlockQuery: Query<
     // row's `[[X]]` then duplicates the owner's projected property edge on a
     // surface that had stopped filtering.
     if (rawSources || ids.length === 0) return ids
-    const machinery = await propertyMachinerySourceIds(ctx.db, ids)
+    const machinery = await propertyMachinerySourceIds(ctx.db, ids, registrySeedParams(ctx.repo))
     return machinery.size === 0 ? ids : ids.filter(sourceId => !machinery.has(sourceId))
   },
 })

@@ -222,9 +222,9 @@ export const applyContentReplaceMutator = defineMutator<
       // forced re-run the write goes through and the property reads unset
       // (visible in the value row, undo-recoverable) until the text is fixed.
       //
-      // Dormant un-flipped: both recognizers return false/null whenever the
-      // workspace isn't child-backed (no field rows are ever recognized), so
-      // this whole section is a no-op there.
+      // Live in an un-flipped workspace too: the cell→children backfill
+      // mints value rows before the flip, and rewriting one corrupts a typed
+      // value exactly as it would after.
       const schema = await resolvePropertyValueFieldSchema(tx, current)
       if (schema !== null && !force) {
         // The check is on the PROPOSED content, and asking it takes nothing

@@ -246,9 +246,9 @@ export const CHILDREN_IDS_SQL = `
  * INTERIM, and deliberately so. The settled display model (§10) is two
  * tiers rendered IN PLACE: a NON-hidden property is an ordinary outline
  * child at its true position and must NOT be filtered here; only
- * HIDDEN-tier rows are. Filtering all of them is correct only while every
- * workspace reads 'cell' (nothing is child-backed, so this predicate
- * filters zero rows in practice). The tier-aware predicate lands with
+ * HIDDEN-tier rows are. Filtering all of them is a simplification with a
+ * real cost now that the backfill mints machinery pre-flip — this prunes
+ * rows for real, in every workspace. The tier-aware predicate lands with
  * slice D and asks a different question — "is this a HIDDEN-tier
  * definition?" rather than "is this a definition?".
  *
@@ -310,7 +310,7 @@ export const CHILDREN_IDS_SQL = `
  * silently HIDING every ordinary child. COALESCE pins the three-valued
  * logic down.
  */
-const recognizedFieldRowSql = (rowRef: string): string => `
+export const recognizedFieldRowSql = (rowRef: string): string => `
      COALESCE(${rowRef}.is_field_form, 0) = 1
      AND ${rowRef}.parent_id IS NOT NULL
      AND (
