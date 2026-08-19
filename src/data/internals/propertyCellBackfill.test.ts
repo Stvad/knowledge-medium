@@ -15,7 +15,7 @@ import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { ChangeScope as Scope } from '@/data/api'
 import type { WorkspaceBackfillContext } from '@/data/facets'
-import { PROPERTY_CELL_BACKFILL_ID, runPropertyCellBackfill } from './propertyCellBackfill'
+import { CANDIDATE_SQL, PROPERTY_CELL_BACKFILL_ID, runPropertyCellBackfill } from './propertyCellBackfill'
 
 const WS = 'ws-cell-backfill'
 
@@ -324,6 +324,85 @@ describe('property cell → children backfill', () => {
 
     await repo.undo(ChangeScope.BlockDefault)
     expect((await repo.load('b1'))?.content).toBe('user edit')
+  })
+
+  it("deletes a removed key's children even when another key on the block is junk", async () => {
+    // The materializer walks the name list and THROWS at the first undecodable
+    // cell value, so catching per ROW strands every name after it — and the
+    // deletion names come last. One junk value kept the children of a key the
+    // user had deleted, which the flip would then make authoritative.
+    await create('b1', {'demo:note': 'gone soon'})
+    await runPropertyCellBackfill(makeCtx())
+    expect(await fieldRowsOf('b1')).toHaveLength(1)
+
+    // Raw, so no processor normalizes it on the way in — the shape legacy
+    // junk and a sync-applied row both have.
+    await sharedDb.db.execute(
+      `UPDATE blocks SET properties_json = ? WHERE id = ?`,
+      [JSON.stringify({'demo:extra': {not: 'a string'}}), 'b1'],
+    )
+
+    const progress = await runPropertyCellBackfill(makeCtx())
+
+    expect(await fieldRowsOf('b1')).toEqual([])
+    // Two sweeps ran and the junk key failed in each, but the operator's
+    // repair worklist names it once: counts are the CURRENT sweep's.
+    expect(progress.sweeps).toBe(2)
+    expect(progress.failureCount).toBe(1)
+  })
+
+  it('converges while a property is rewritten under it, as an open editor does', async () => {
+    // `editorSelection` and `isEditing` are registered properties on the panel
+    // block, so a caret movement IS a property write. Treating a rewritten
+    // value child as "not converged yet" bought a full extra sweep for each
+    // one, and four of them ended the run unconverged with every row already
+    // written and no completion recorded.
+    const ids = Array.from({length: 150}, (_, i) => `b${String(i).padStart(4, '0')}`)
+    for (const id of ids) await create(id, {'demo:note': id})
+
+    let caret = 0
+    const progress = await runPropertyCellBackfill(makeCtx(), async () => {
+      caret += 1
+      await repo.tx(async tx => {
+        await tx.update(ids[0]!, {properties: {'demo:note': `caret-${caret}`}})
+      }, {scope: ChangeScope.BlockDefault, description: 'caret move'})
+    })
+
+    expect(progress.sweeps).toBe(2)
+  })
+
+  it('migrates a block carrying more keys than one transaction budgets for', async () => {
+    // The budget is in inserted ROWS, so a block heavy enough to blow it on
+    // its own must still be taken — a batch that admits nothing never drains
+    // the queue.
+    const many = Array.from({length: 120}, (_, i) => seedProperty({
+      seedKey: `test/property/bulk-${i}`, revision: 1, name: `demo:bulk${i}`,
+      preset: 'optional-string', defaultValue: undefined,
+      changeScope: ChangeScope.BlockDefault,
+    }))
+    repo.setFacetRuntime(resolveFacetRuntimeSync([
+      kernelDataExtension,
+      ...many.map(prop => definitionSeedsFacet.of(prop, {source: 'test'})),
+    ], {repo, workspaceId: WS, safeMode: false}))
+    await create('fat', Object.fromEntries(many.map(prop => [prop.name, 'v'])))
+
+    const progress = await runPropertyCellBackfill(makeCtx())
+
+    expect(await fieldRowsOf('fat')).toHaveLength(many.length)
+    expect(progress.failureCount).toBe(0)
+  }, 30_000)
+
+  it('scans candidates through the non-empty properties index', async () => {
+    // The index is only reachable because the predicate carries the literal
+    // `properties_json <> '{}'`; SQLite cannot infer it from the json_each
+    // EXISTS. Drop either half and every batch re-reads and re-sorts the whole
+    // workspace instead.
+    const plan = await repo.db.getAll<{detail: string}>(
+      `EXPLAIN QUERY PLAN ${CANDIDATE_SQL}`, [WS, '', 10],
+    )
+
+    expect(plan.map(row => row.detail).join(' | '))
+      .toContain('idx_blocks_workspace_nonempty_properties')
   })
 
   it('is never scheduled — only an operator can start it', async () => {
