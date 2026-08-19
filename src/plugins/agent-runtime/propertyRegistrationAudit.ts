@@ -262,35 +262,19 @@ const parseTypes = (json: string | null): string[] => {
 const keyOf = (raw: string | null): string => typeof raw === 'string' ? raw : String(raw ?? '')
 
 /**
- * Refuse to produce a report from an incomplete view of the graph, and return
- * the arrival mark to compare the other side of the scan against.
+ * Refuse to report from an incomplete view. Rows this device has not
+ * downloaded, or has not yet drained out of `blocks_synced_changes`, are not
+ * in `blocks`, so an under-count reads as "nothing to fix" — and this verb is
+ * the advertised pre-flip check, so a clean report gets acted on.
  *
- * The scan below enumerates the keys present in `blocks`. Rows this device has
- * not downloaded, or has downloaded but not yet drained out of
- * `blocks_synced_changes`, are simply not there — so the audit under-reports
- * silently, and an empty `unregistered` list is indistinguishable from a
- * complete one. That matters more here than for a normal stale read because
- * this verb is the advertised pre-flip check (AGENTS.md): a clean report is
- * ACTED ON, and the keys hiding in the un-arrived rows stay cell-only forever
- * once a workspace flips (`propertyChildrenProcessor` skips unregistered keys).
- *
- * TWO SAMPLES ARE NOT ENOUGH, which is what the arrival mark is for. "Is sync
- * work outstanding" reads false both before an arrival and after it has
- * drained, so a whole download-and-drain cycle can complete between the
- * opening and closing checks with neither seeing it. `stagedArrivalMark` is
- * monotone, so comparing it across the scan catches an arrival whether or not
- * it is still in flight when we look.
- *
- * THE MARK BRACKET MUST CONTAIN THE QUEUE CHECKS, not sit inside them — the
- * whole guarantee turns on that ordering. Read the opening mark AFTER the
- * opening queue check and a row staged in between is already counted in it;
- * if that row then drains before the closing checks, both queue checks pass,
- * both marks agree, and the scan that missed it reports clean. Opening mark
- * first, closing mark last: then every arrival is either still queued when a
- * check looks (refused there) or lands after the opening mark (refused by the
- * comparison).
- *
- * A refusal costs the operator a retry; a wrong all-clear costs data.
+ * Two rules, each easy to undo by accident:
+ *  - the queue check alone is not enough. It reads false both before an
+ *    arrival and after it drains, so a whole cycle can pass between two checks
+ *    unseen; the monotone `stagedArrivalMark` is what sees it.
+ *  - the mark bracket must CONTAIN the checks — opening mark first, closing
+ *    mark last. Read the opening mark after the opening check and a row staged
+ *    in between is already counted in it, so a drain before the close leaves
+ *    both marks equal and the scan that missed the row reports clean.
  */
 const assertNoOutstandingSync = async (
   repo: Repo,
@@ -318,26 +302,40 @@ export const auditPropertyRegistration = async (
   workspaceId: string,
   limits: {keys?: number; blocksPerKey?: number} = {},
 ): Promise<PropertyRegistrationAudit> => {
-  // Capture the registry AND the resolver up front, before any `await`.
+  // Validate, wait for the projector, validate again, then capture the
+  // resolver with no further `await` before the scans.
   //
-  // Two reasons. (1) `propertySchemaResolverFor` fails CLOSED for a workspace
-  // that is neither active nor immediately-previous — every name resolves to
-  // identity-unavailable, so auditing through it would report the whole graph
-  // as unregistered: a false list that reads authoritative and could talk
-  // someone into synthesizing definitions for keys that already have them.
-  // (2) This runs against the LIVE client, where the user can switch
-  // workspaces during the queries below; the resolver holds its snapshot by
-  // value, so taking it here makes the classification immune to that. Same
-  // rule as `schedulePropertyDefinitionMigrations` in `repo.ts` — resolve
-  // now, not when the later work runs.
-  const registry = repo.propertyDefinitions
-  if (!registry || registry.workspaceId !== workspaceId) {
-    throw new Error(
-      `Cannot audit ${workspaceId}: its property-definition registry is not loaded ` +
-      `(loaded: ${registry?.workspaceId ?? 'none'}). Classification would read every key ` +
-      'as unregistered. Open that workspace in the app and re-run.',
-    )
+  // The FIRST validation has to precede the wait, not follow it:
+  // `whenPropertyDefinitionsReady` refuses a workspace that is not active with
+  // its own message, which names no fix. This one does.
+  //
+  // The wait: the registry is DERIVED from definition blocks, so a snapshot
+  // taken mid-rebuild calls a key whose definition has already landed
+  // "broken". Not a proof — a definition arriving later still lags — but that
+  // error runs in the cheap direction: a false positive the operator
+  // investigates and re-runs, unlike a missing-rows all-clear.
+  //
+  // The capture: `propertySchemaResolverFor` fails CLOSED for a workspace that
+  // is neither active nor immediately-previous, so a workspace switch during
+  // the queries below would report the whole graph as unregistered — a false
+  // list that reads authoritative and could talk someone into synthesizing
+  // definitions for keys that already have them. The resolver holds its
+  // snapshot by value, so taking it here makes the classification immune. Same
+  // rule as `schedulePropertyDefinitionMigrations` in `repo.ts`.
+  const requireRegistry = () => {
+    const loaded = repo.propertyDefinitions
+    if (!loaded || loaded.workspaceId !== workspaceId) {
+      throw new Error(
+        `Cannot audit ${workspaceId}: its property-definition registry is not loaded ` +
+        `(loaded: ${loaded?.workspaceId ?? 'none'}). Classification would read every key ` +
+        'as unregistered. Open that workspace in the app and re-run.',
+      )
+    }
+    return loaded
   }
+  requireRegistry()
+  await repo.whenPropertyDefinitionsReady(workspaceId)
+  const registry = requireRegistry()
   const resolver = repo.propertySchemaResolverFor(workspaceId)
 
   // Mark FIRST — see the bracket rule on `assertNoOutstandingSync`.

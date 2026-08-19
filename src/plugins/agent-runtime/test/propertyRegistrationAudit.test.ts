@@ -245,6 +245,26 @@ describe('auditPropertyRegistration', () => {
       .rejects.toThrow(/registry/i)
   })
 
+  it('waits for the definition projector before classifying anything', async () => {
+    // The registry is derived from definition blocks by an async projector, so
+    // a snapshot read mid-rebuild calls a key whose definition already landed
+    // "broken" and sends the operator to repair a definition that is fine.
+    await create({id: 'b1', properties: {[declaredProp.name]: 'v'}})
+    const order: string[] = []
+    vi.spyOn(repo, 'whenPropertyDefinitionsReady').mockImplementation(async () => {
+      order.push('waited')
+    })
+    const getAll = sharedDb.db.getAll.bind(sharedDb.db)
+    vi.spyOn(sharedDb.db, 'getAll').mockImplementation(async (sql: string, params?: unknown[]) => {
+      order.push('scanned')
+      return getAll(sql, params as never[])
+    })
+
+    await auditPropertyRegistration(repo, WS)
+
+    expect(order[0]).toBe('waited')
+  })
+
   it('totals cover every key, not just the unregistered ones', async () => {
     await create({id: 'b1', properties: {[declaredProp.name]: 'v', 'demo:undeclared': 'x'}})
 
