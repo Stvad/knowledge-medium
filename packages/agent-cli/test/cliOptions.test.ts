@@ -37,13 +37,20 @@ describe('workspaceAssertion', () => {
     const parsed = parseWorkspaceOption(['page', 'x', '--workspace', 'ws-1'])
     expect(workspaceAssertion(parsed as string)).toEqual({workspaceId: 'ws-1'})
   })
+
+  it('refuses a repeated --workspace instead of joining it into a bogus id', () => {
+    // CAC collects a repeated flag into an array. Coercing it with String()
+    // yields 'a,b', which the wire schema's `z.string()` accepts — so the
+    // command answers confidently about a workspace that does not exist.
+    const parsed = parseWorkspaceOption(['page', 'x', '--workspace', 'a', '--workspace', 'b'])
+    expect(parsed).toEqual(['a', 'b'])
+
+    expect(() => workspaceAssertion(parsed)).toThrow(/single workspace id/i)
+  })
 })
 
 describe('limitOption', () => {
   it('refuses an EMPTY --limit instead of running the query with LIMIT 0', () => {
-    // Same CAC artifact as `--workspace`, but a truthiness check would MASK
-    // this one: 0 is a valid-looking bound, so it flows all the way to SQL
-    // and reports "nothing found" for a page that exists.
     const parsed = parseOption('limit', ['page', 'x', '--limit', ''])
     expect(parsed).toBe(0)
 

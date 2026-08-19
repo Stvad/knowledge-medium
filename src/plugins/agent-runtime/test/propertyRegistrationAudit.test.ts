@@ -340,17 +340,16 @@ describe('audit-properties command', () => {
 })
 
 describe('shared workspace resolution', () => {
-  // Verbs, then values. Three resolvers reach `assertedWorkspaceOverride`:
-  // `commandWorkspaceId` (page/search/daily-note), `resolveBlockWorkspaceId`
-  // (the backlinks verbs), and audit-properties' own call. The remaining rows
-  // pin per-verb dispatch — that each verb reaches a resolver at all.
+  // Three resolvers reach `assertedWorkspaceOverride`: `commandWorkspaceId`
+  // (page/search/daily-note), `resolveBlockWorkspaceId` (the backlinks verbs),
+  // and audit-properties' own call. The remaining rows pin per-verb dispatch —
+  // that each verb reaches a resolver at all.
   //
-  // Both values are load-bearing and neither subsumes the other. '' is the
-  // only one the CLI can emit (cac turns `--workspace ""` into 0, which the
-  // CLI normalizes back to ''), and it is the value that FALLS BACK to the
-  // active workspace when unguarded — the wrong-graph answer itself. '  ' is
-  // truthy, so it is what pins the guard ABOVE each resolver's
-  // `override && return override` short-circuit rather than below it.
+  // WHITESPACE, not '', because it is the value that discriminates: '  ' is
+  // truthy, so it is what fails if the check is dropped from the normalizer OR
+  // sequenced below a resolver's `override && return override`. '' survives
+  // both of those mutations on its own; it gets one row below, for the
+  // CLI-emits-this link rather than for guard coverage.
   it.each([
     ['audit-properties', {type: 'audit-properties'}],
     ['page', {type: 'page', name: 'x'}],
@@ -358,15 +357,23 @@ describe('shared workspace resolution', () => {
     ['daily-note', {type: 'daily-note', date: '2026-08-18'}],
     ['backlinks', {type: 'backlinks', blockId: 'b1'}],
     ['grouped-backlinks', {type: 'grouped-backlinks', blockId: 'b1'}],
-  ].flatMap(([label, base]) => ['', '  '].map(workspaceId => [label, workspaceId, base])))(
-    '%s rejects an EMPTY workspace assertion (%j) instead of answering about the active one',
-    async (_label, workspaceId, base) => {
+  ] as const)(
+    '%s rejects an EMPTY workspace assertion instead of answering about the active one',
+    async (_label, base) => {
       await expect(executeCommand(
-        {commandId: 'w-1', ...(base as object), workspaceId} as never,
+        {commandId: 'w-1', ...base, workspaceId: '  '} as never,
         context,
       )).rejects.toThrow(/empty value/i)
     },
   )
+
+  // The exact value `workspaceAssertion` emits for `--workspace ""`.
+  it("rejects the '' the CLI normalizes cac's 0 artifact into", async () => {
+    await expect(executeCommand(
+      {commandId: 'w-3', type: 'page', name: 'x', workspaceId: ''},
+      context,
+    )).rejects.toThrow(/empty value/i)
+  })
 
   // A padded expansion used to mean two different things: audit-properties
   // trimmed, the read verbs passed ' ws-1 ' through to the lookup and

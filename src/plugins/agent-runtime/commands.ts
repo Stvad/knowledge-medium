@@ -1375,14 +1375,9 @@ const hydrateData = (data: BlockData): HydratedBlockRef => ({
 })
 
 /** The one place a `workspaceId` override becomes a usable id: trims, and
- *  refuses a blank one.
- *
- *  Returning the value rather than asserting beside it is what keeps the two
- *  from drifting. As a bare guard it had to be SEQUENCED above each
- *  resolver's `override && return override` — a whitespace-only string is
- *  truthy and passes that — and each resolver still had to decide separately
- *  whether to trim. Two of the three didn't, so `--workspace " ws "` audited
- *  the real graph but gave `page` a confident empty answer. */
+ *  refuses a blank one. Returns rather than asserting beside the value, so no
+ *  consumer re-decides whether to trim and none has to be sequenced above its
+ *  own `override && return override` — which whitespace passes. */
 const assertedWorkspaceOverride = (override: unknown): string | undefined => {
   if (!isString(override)) return undefined
   const asserted = override.trim()

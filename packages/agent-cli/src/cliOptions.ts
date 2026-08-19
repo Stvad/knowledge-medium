@@ -11,11 +11,19 @@
  *  one. The 0 is normalized back to '' so the command layer's purpose-built
  *  rejection is what the user sees. (A literal `--workspace 0` is therefore
  *  unrepresentable; workspace ids are uuids.) */
-export const workspaceAssertion = (
-  workspace: string | number | undefined,
-): {workspaceId?: string} => {
+export const workspaceAssertion = (workspace: unknown): {workspaceId?: string} => {
   if (workspace === undefined) return {}
-  return {workspaceId: workspace === 0 ? '' : String(workspace)}
+  if (workspace === 0) return {workspaceId: ''}
+  // Not `String(workspace)`: CAC hands back an ARRAY for a repeated flag, and
+  // 'a,b' satisfies the wire schema's `z.string()` where the array itself was
+  // cleanly rejected. Coercing turns a caller error into a confident answer
+  // about a graph that does not exist — the failure this option prevents.
+  if (typeof workspace !== 'string') {
+    throw new Error(
+      `--workspace expects a single workspace id; got ${JSON.stringify(workspace)}.`,
+    )
+  }
+  return {workspaceId: workspace}
 }
 
 /** Turn a `--limit` option into the command's `limit` field.
@@ -25,7 +33,7 @@ export const workspaceAssertion = (
  *  as a real bound — `typeof command.limit === 'number'` passes, and a
  *  `limit = 50` destructuring default is bypassed — so the query runs
  *  `LIMIT 0` and reports "nothing found" for a graph that has the answer. */
-export const limitOption = (limit: string | number | undefined): {limit?: number} => {
+export const limitOption = (limit: unknown): {limit?: number} => {
   if (limit === undefined) return {}
   const parsed = Number(limit)
   if (!Number.isInteger(parsed) || parsed < 1) {
