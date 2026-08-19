@@ -467,8 +467,19 @@ interface ReferenceTargetStampContext {
  *  the workspace's undo stack whenever it writes, and a user who is not told
  *  finds their history silently gone. */
 export interface OperatorBackfillResult {
-  outcome: 'ran' | 'already-done-or-held' | 'already-running' | 'not-found' | 'read-only'
+  outcome:
+    | 'ran'
+    | 'already-done-or-held'
+    | 'already-running'
+    | 'deferred'
+    | 'not-found'
+    | 'read-only'
   undoHistoryCleared: boolean
+  /** Why a `deferred` pass did not start — a precondition that clears on its
+   *  own (this device behind the server, the registry not primed yet). Split
+   *  out from `already-done-or-held` because the two call for opposite
+   *  responses: wait and retry, versus stop asking. */
+  reason?: string
 }
 
 export class Repo {
@@ -2841,7 +2852,7 @@ export class Repo {
     }
     this.inFlightOperatorBackfills.add(flightKey)
     try {
-      const {completed, undoHistoryCleared} = await this.runWorkspaceBackfills(
+      const {completed, undoHistoryCleared, deferred} = await this.runWorkspaceBackfills(
         workspaceId, [backfill], this.workspaceGeneration,
       )
     // The fix for the shared-counter bug is that `completed` is LOCAL to this
@@ -2855,10 +2866,9 @@ export class Repo {
     // this backfill. Deleting the key fails no test. It is written this way
     // so that a future caller passing more than one is correct by
     // construction rather than by that argument.
-      return {
-        outcome: completed.has(backfill.id) ? 'ran' : 'already-done-or-held',
-        undoHistoryCleared,
-      }
+      if (completed.has(backfill.id)) return {outcome: 'ran', undoHistoryCleared}
+      if (deferred !== null) return {outcome: 'deferred', undoHistoryCleared, reason: deferred}
+      return {outcome: 'already-done-or-held', undoHistoryCleared}
     } finally {
       this.inFlightOperatorBackfills.delete(flightKey)
     }
@@ -2871,9 +2881,17 @@ export class Repo {
     workspaceId: string,
     backfills: readonly WorkspaceBackfill[],
     generation: number,
-  ): Promise<{completed: ReadonlySet<string>; undoHistoryCleared: boolean}> {
+  ): Promise<{
+    completed: ReadonlySet<string>
+    undoHistoryCleared: boolean
+    deferred: string | null
+  }> {
     const completed = new Set<string>()
     let undoHistoryCleared = false
+    // Set at each precondition that makes a pass skip WITHOUT the claim having
+    // refused it, so an operator hears "not yet, retry" rather than "already
+    // done" — the same string an unattended run only logs.
+    let deferred: string | null = null
     const claim = this.backfillCompletionClaim
     if (!claim) {
       // Refuse rather than fall back to the local marker. Every pass here
@@ -2885,16 +2903,16 @@ export class Repo {
         `${workspaceId}: no BackfillCompletionClaim is configured, so completion ` +
         `cannot be recorded once per graph.`,
       )
-      return {completed, undoHistoryCleared}
+      return {completed, undoHistoryCleared, deferred}
     }
     for (const backfill of backfills) {
       // A role flip to read-only during the deferral window must stop further
       // writes — re-check per backfill (the loop can span several txs).
-      if (this.isReadOnly) return {completed, undoHistoryCleared}
+      if (this.isReadOnly) return {completed, undoHistoryCleared, deferred}
       // Don't even START a pass whose workspace has been re-opened since it was
       // scheduled. `assertBackfillMayWrite` catches this per transaction, but
       // that is one tx too late to avoid the scan a backfill does first.
-      if (this.workspaceGeneration !== generation) return {completed, undoHistoryCleared}
+      if (this.workspaceGeneration !== generation) return {completed, undoHistoryCleared, deferred}
       // BEFORE claiming: an unprimed registry makes the whole graph look like
       // it has zero registered properties, so a pass would find no candidates,
       // write nothing, and then record a PERMANENT per-graph completion — the
@@ -2902,6 +2920,7 @@ export class Repo {
       // forever. Checked here rather than only inside the writes because a run
       // that finds no candidates never opens a transaction at all.
       if (!this.propertyRegistryReadyFor(workspaceId)) {
+        deferred = `workspace ${workspaceId}'s property registry is not primed yet`
         console.warn(
           `[workspaceBackfills] "${backfill.id}" deferred: workspace ${workspaceId}'s ` +
           `property registry is not primed, so a scan would see no registered ` +
@@ -2917,6 +2936,7 @@ export class Repo {
       // an unseen server completion while the following `deleted=1` patch
       // tombstoned it, freeing later operators to repeat the migration.
       if (!this.backfillSyncSettledNow()) {
+        deferred = 'this device is not caught up with the server'
         console.warn(
           `[workspaceBackfills] "${backfill.id}" deferred: this device is not caught ` +
           `up with the server, so claiming would write from a stale view.`,
@@ -3007,7 +3027,7 @@ export class Repo {
           // gate + deep-idle deferral bound the retry.
           console.warn(`[workspaceBackfills] ${reason} — will retry when it clears`)
           this.scheduleWorkspaceBackfills(workspaceId)
-          return {completed, undoHistoryCleared}
+          return {completed, undoHistoryCleared, deferred}
         }
         console.error(
           `[workspaceBackfills] "${backfill.id}" failed for workspace ${workspaceId}: ${reason}`,
@@ -3036,7 +3056,7 @@ export class Repo {
         }
       }
     }
-    return {completed, undoHistoryCleared}
+    return {completed, undoHistoryCleared, deferred}
   }
 
   /**

@@ -24,6 +24,7 @@
  */
 
 import type { WorkspaceBackfill, WorkspaceBackfillContext } from '@/data/facets'
+import { CallbackSet } from '@/utils/callbackSet'
 import { materializePropertyChildrenForExistingRow } from './propertyChildrenProcessor'
 
 export const PROPERTY_CELL_BACKFILL_ID = 'properties:cell-to-children'
@@ -56,12 +57,8 @@ export const PROPERTY_CELL_BACKFILL_BATCH = 100
  * batch. The pass's own creates (field and value rows) carry no properties, so
  * they never re-enter this result and the scan cannot feed itself.
  */
-const CANDIDATE_SQL = `
-  SELECT b.id AS id
-    FROM blocks b
-   WHERE b.workspace_id = ?
-     AND b.deleted = 0
-     AND b.id > ?
+const OWES_CHILDREN = `
+    b.deleted = 0
      AND json_valid(b.properties_json)
      AND json_type(b.properties_json) = 'object'
      AND (SELECT COUNT(*) FROM json_each(b.properties_json)) >
@@ -69,9 +66,43 @@ const CANDIDATE_SQL = `
            WHERE c.parent_id = b.id
              AND c.workspace_id = b.workspace_id
              AND c.deleted = 0
-             AND c.is_field_form = 1)
+             AND c.is_field_form = 1)`
+
+const CANDIDATE_SQL = `
+  SELECT b.id AS id
+    FROM blocks b
+   WHERE b.workspace_id = ?
+     AND b.id > ?
+     AND ${OWES_CHILDREN}
    ORDER BY b.id
    LIMIT ?`
+
+/** How much is left to do, for a confirmation prompt. Same predicate as the
+ *  pass, so the number the user is shown is the number of blocks it will
+ *  actually visit — including the over-approximation, which is why this is
+ *  worded as "blocks to check" wherever it surfaces. */
+export const countPropertyCellBackfillCandidates = async (
+  getAll: <T>(sql: string, params?: readonly unknown[]) => Promise<T[]>,
+  workspaceId: string,
+): Promise<number> => {
+  const rows = await getAll<{n: number}>(
+    `SELECT COUNT(*) AS n FROM blocks b WHERE b.workspace_id = ? AND ${OWES_CHILDREN}`,
+    [workspaceId],
+  )
+  return rows[0]?.n ?? 0
+}
+
+/** Progress fan-out for a surface that wants to show a running count. The pass
+ *  runs inside the backfill runner, which has no channel back to whoever asked
+ *  for it, and a module registry is the sanctioned shape for that (AGENTS.md:
+ *  no untyped window events). Fires per committed batch. */
+const progressListeners = new CallbackSet<[PropertyCellBackfillProgress]>(
+  'property-cell-backfill',
+)
+
+export const onPropertyCellBackfillProgress = (
+  listener: (progress: PropertyCellBackfillProgress) => void,
+): (() => void) => progressListeners.add(listener)
 
 export interface PropertyCellBackfillProgress {
   blocksScanned: number
@@ -159,6 +190,7 @@ export const propertyCellBackfill: WorkspaceBackfill = {
       console.info(
         `[${PROPERTY_CELL_BACKFILL_ID}] ${p.blocksMaterialized}/${p.blocksScanned} blocks`,
       )
+      progressListeners.notify(p)
     })
     if (progress.failures.length > 0) {
       console.warn(

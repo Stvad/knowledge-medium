@@ -567,7 +567,14 @@ describe('workspace backfill runner — operator outcomes', () => {
     }])
     await seedTarget(repo)
 
-    expect((await repo.runWorkspaceBackfillNow(WS, 'operator-sync-v1')).outcome).toBe('already-done-or-held')
+    // `deferred`, not `already-done-or-held`: the two call for opposite
+    // responses, and an operator told "already done" here would stop retrying
+    // a migration that has not started.
+    expect(await repo.runWorkspaceBackfillNow(WS, 'operator-sync-v1')).toEqual({
+      outcome: 'deferred',
+      undoHistoryCleared: false,
+      reason: 'this device is not caught up with the server',
+    })
     expect(claimAttempts).toEqual([])
     expect(runs).toEqual([])
   })
