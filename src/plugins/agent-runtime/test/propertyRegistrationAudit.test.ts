@@ -453,23 +453,60 @@ describe('audit-properties command', () => {
     expect(result.unregistered.map(entry => entry.property)).toContain('demo:undeclared')
   })
 
-  it('rejects an EMPTY --workspace instead of silently auditing the active one', async () => {
-    // `--workspace "$UNSET"` expands to '' — the assertion exists to pin the
-    // graph, so falling back would hand back a remediation list for a
-    // workspace the caller never named.
-    await create({id: 'b1', properties: {'demo:undeclared': 'x'}})
-
-    await expect(executeCommand(
-      {commandId: 'a-3', type: 'audit-properties', workspaceId: '   '},
-      context,
-    )).rejects.toThrow(/empty value/i)
-  })
-
   it('refuses an explicit workspace whose registry is not loaded', async () => {
     await expect(executeCommand(
       {commandId: 'a-2', type: 'audit-properties', workspaceId: 'ws-unloaded'},
       context,
     )).rejects.toThrow(/registry/i)
+  })
+})
+
+describe('shared workspace resolution', () => {
+  // Three resolvers reach `assertedWorkspaceOverride`: `commandWorkspaceId`
+  // (page/search/daily-note), `resolveBlockWorkspaceId` (the backlinks verbs),
+  // and audit-properties' own call. The remaining rows pin per-verb dispatch —
+  // that each verb reaches a resolver at all.
+  //
+  // WHITESPACE, not '', because it is the value that discriminates: '  ' is
+  // truthy, so it is what fails if the check is dropped from the normalizer OR
+  // sequenced below a resolver's `override && return override`. '' survives
+  // both of those mutations on its own; it gets one row below, for the
+  // CLI-emits-this link rather than for guard coverage.
+  it.each([
+    ['audit-properties', {type: 'audit-properties'}],
+    ['page', {type: 'page', name: 'x'}],
+    ['search', {type: 'search', query: 'x'}],
+    ['daily-note', {type: 'daily-note', date: '2026-08-18'}],
+    ['backlinks', {type: 'backlinks', blockId: 'b1'}],
+    ['grouped-backlinks', {type: 'grouped-backlinks', blockId: 'b1'}],
+  ] as const)(
+    '%s rejects an EMPTY workspace assertion instead of answering about the active one',
+    async (_label, base) => {
+      await expect(executeCommand(
+        {commandId: 'w-1', ...base, workspaceId: '  '} as never,
+        context,
+      )).rejects.toThrow(/empty value/i)
+    },
+  )
+
+  // The exact value `workspaceAssertion` emits for `--workspace ""`.
+  it("rejects the '' the CLI normalizes cac's 0 artifact into", async () => {
+    await expect(executeCommand(
+      {commandId: 'w-3', type: 'page', name: 'x', workspaceId: ''},
+      context,
+    )).rejects.toThrow(/empty value/i)
+  })
+
+  // A padded expansion used to mean two different things: audit-properties
+  // trimmed, the read verbs passed ' ws-1 ' through to the lookup and
+  // answered "no such page" for a workspace that exists.
+  it('trims a padded assertion rather than resolving it as a literal id', async () => {
+    const result = await executeCommand(
+      {commandId: 'w-2', type: 'page', name: 'x', workspaceId: `  ${WS}  `},
+      context,
+    ) as {workspaceId: string}
+
+    expect(result.workspaceId).toBe(WS)
   })
 })
 

@@ -414,19 +414,10 @@ const auditRuntimeProperties = async (
   repo: Repo,
   input: {workspaceId?: string},
 ): Promise<PropertyRegistrationAudit> => {
-  // An EMPTY assertion is not the same as no assertion. `--workspace` exists
-  // to pin which graph is being audited, so a shell expanding an unset
-  // variable (`--workspace "$WS"`) must fail loudly rather than quietly
-  // auditing the active workspace and handing back a remediation list for
-  // the wrong graph.
-  if (input.workspaceId !== undefined && input.workspaceId.trim() === '') {
-    throw new Error(
-      'audit-properties: --workspace was given an empty value. It asserts which ' +
-      'workspace is audited, so an empty expansion must fail rather than fall back ' +
-      'to the active one. Pass a real workspace id, or omit the option entirely.',
-    )
-  }
-  return auditPropertyRegistration(repo, input.workspaceId?.trim() || resolveWorkspaceId(repo))
+  return auditPropertyRegistration(
+    repo,
+    assertedWorkspaceOverride(input.workspaceId) ?? resolveWorkspaceId(repo),
+  )
 }
 
 const mapPosition = (
@@ -1244,7 +1235,8 @@ const resolveBlockWorkspaceId = async (
   blockId: string,
   override: unknown,
 ): Promise<string> => {
-  if (isString(override) && override) return override
+  const asserted = assertedWorkspaceOverride(override)
+  if (asserted) return asserted
   const data = await repo.load(blockId)
   if (data?.workspaceId) return data.workspaceId
   if (repo.activeWorkspaceId) return repo.activeWorkspaceId
@@ -1382,8 +1374,26 @@ const hydrateData = (data: BlockData): HydratedBlockRef => ({
   deepLink: deepLinkFor(data.workspaceId, data.id),
 })
 
+/** The one place a `workspaceId` override becomes a usable id: trims, and
+ *  refuses a blank one. Returns rather than asserting beside the value, so no
+ *  consumer re-decides whether to trim and none has to be sequenced above its
+ *  own `override && return override` — which whitespace passes. */
+const assertedWorkspaceOverride = (override: unknown): string | undefined => {
+  if (!isString(override)) return undefined
+  const asserted = override.trim()
+  if (asserted === '') {
+    throw new Error(
+      'workspaceId (--workspace) was given an empty value. It asserts which workspace to '
+      + 'use, so an empty expansion must fail rather than fall back to the active one. '
+      + 'Pass a real workspace id, or omit it entirely.',
+    )
+  }
+  return asserted
+}
+
 const commandWorkspaceId = (repo: Repo, override: unknown): string => {
-  if (isString(override) && override) return override
+  const asserted = assertedWorkspaceOverride(override)
+  if (asserted) return asserted
   if (repo.activeWorkspaceId) return repo.activeWorkspaceId
   throw new Error('No active workspace; pass workspaceId')
 }

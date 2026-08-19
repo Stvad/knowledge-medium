@@ -330,7 +330,7 @@ export const pageCommandSchema = z.looseObject({
   type: z.literal('page'),
   name: z.string(),
   workspaceId: z.string().optional(),
-  limit: z.number().optional(),
+  limit: z.number().int().positive().optional(),
   ...commandIdField,
 })
 
@@ -349,7 +349,7 @@ export const searchCommandSchema = z.looseObject({
   type: z.literal('search'),
   query: z.string(),
   workspaceId: z.string().optional(),
-  limit: z.number().optional(),
+  limit: z.number().int().positive().optional(),
   ...commandIdField,
 })
 
