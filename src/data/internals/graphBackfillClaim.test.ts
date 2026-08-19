@@ -95,3 +95,48 @@ describe('a foreign block sitting at the claim id', () => {
     await expect(claim.tryClaim('ws', 'foreign-v1')).rejects.toThrow(/workspace/i)
   })
 })
+
+describe('completing a claim that was tombstoned underneath us', () => {
+  it('restores it rather than stamping a deleted row', async () => {
+    // Two operators on different devices is accepted, so the one that aborts
+    // releases the claim they share and its delete can sync in before the
+    // survivor completes. Stamping completedAt onto a tombstone records
+    // NOTHING — readGraphBackfillClaim filters deleted=0 — so every device
+    // still reads unclaimed and the next operator repeats the migration,
+    // while this one was told it ran.
+    const calls: string[] = []
+    const claim = createGraphBackfillClaim({
+      db: {getOptional: async () => null},
+      tx: async <R,>(fn: (tx: never) => Promise<R>): Promise<R> => fn({
+        get: async () => ({workspaceId: 'ws', deleted: true, properties: {}}),
+        restore: async () => { calls.push('restore') },
+        update: async () => { calls.push('update') },
+        create: async () => 'unused',
+        delete: async () => undefined,
+      } as never),
+      claimantId: 'device-a',
+      ensureHome: async () => undefined,
+    } as unknown as Parameters<typeof createGraphBackfillClaim>[0])
+
+    await claim.markComplete('ws', 'tomb-v1')
+    expect(calls).toEqual(['restore', 'update'])
+  })
+
+  it('refuses to report completion when the claim block is gone entirely', async () => {
+    const claim = createGraphBackfillClaim({
+      db: {getOptional: async () => null},
+      tx: async <R,>(fn: (tx: never) => Promise<R>): Promise<R> => fn({
+        get: async () => null,
+        restore: async () => undefined,
+        update: async () => undefined,
+        create: async () => 'unused',
+        delete: async () => undefined,
+      } as never),
+      claimantId: 'device-a',
+      ensureHome: async () => undefined,
+    } as unknown as Parameters<typeof createGraphBackfillClaim>[0])
+
+    // Silently succeeding would report "ran" for a migration nothing records.
+    await expect(claim.markComplete('ws', 'gone-v1')).rejects.toThrow(/claim block is gone/)
+  })
+})

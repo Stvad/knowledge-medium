@@ -290,7 +290,21 @@ export const createGraphBackfillClaim = (
     const claimId = graphBackfillClaimBlockId(workspaceId, backfillId)
     await deps.tx(async tx => {
       const row = await tx.get(claimId)
-      if (!row) return
+      if (!row) {
+        throw new Error(
+          `[graphBackfillClaim] cannot record completion of "${backfillId}": its claim ` +
+          `block is gone. The pass ran but nothing records it, so the next operator ` +
+          `would repeat it.`,
+        )
+      }
+      // A TOMBSTONE has to be restored, not stamped. Two operators can run
+      // concurrently on different devices (accepted — see the module header),
+      // and the one that aborts releases the claim they share; its delete can
+      // sync in before the survivor completes. Stamping `completedAt` onto a
+      // deleted row records nothing: `readGraphBackfillClaim` filters
+      // `deleted = 0`, so every device still reads "unclaimed" and the next
+      // operator repeats the whole migration — while this one was told "ran".
+      if (row.deleted) await tx.restore(claimId, {content: backfillId})
       await tx.update(claimId, {
         properties: {...row.properties, [migrationCompletedAtProp.name]: Date.now()},
       })
