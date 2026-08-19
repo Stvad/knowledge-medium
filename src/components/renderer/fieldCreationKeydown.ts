@@ -15,7 +15,10 @@ const TRIGGER_PREFIX = FIELD_FORM_MARKER.slice(0, -1)
 const TRIGGER_KEY = FIELD_FORM_MARKER.slice(-1)
 
 /** Whether the document is exactly `expected` with the caret at its end — i.e.
- *  still precisely what this gesture put there, with nothing typed since. */
+ *  still precisely what this gesture put there, with nothing typed since.
+ *  Callers must dispatch SYNCHRONOUSLY on a true result: an await in between is
+ *  what this reopens the window against, and two colons typed fast enough do
+ *  run two of these gestures concurrently. */
 const docIsExactly = (view: EditorView, expected: string): boolean => {
   const selection = view.state.selection.main
   return (
@@ -33,15 +36,12 @@ const docIsExactly = (view: EditorView, expected: string): boolean => {
  *  awaited, because the user keeps typing through that window. */
 const isTriggerState = (view: EditorView): boolean => docIsExactly(view, TRIGGER_PREFIX)
 
-/** Hand back the whole marker the keydown suppressed half of, when the gesture
- *  declines. `left` is what this gesture last put in the document; anything
- *  else means the user typed on and the text is theirs, not ours.
- *
- *  Best effort by nature: a dispatch onto an editor that has already unmounted
- *  reaches no update listener, so a gesture abandoned in that sub-frame window
- *  keeps whatever the unmount flush persisted. Costs one character, and the
- *  alternative — writing through the repo behind the editor's back — is a
- *  second persistence path racing that same flush. */
+/** Hand back the marker this gesture suppressed, gated on `left` — what it last
+ *  put in the document — still being there; anything else and the user typed
+ *  on, so the text is theirs. Best effort: an unmounted editor's dispatch
+ *  reaches no listener, so an abandoned gesture keeps whatever the unmount
+ *  flush persisted. Recovering that needs a second persistence path racing the
+ *  same flush, which is not worth one character. */
 const restoreTypedMarker = (view: EditorView, left: string): void => {
   if (!docIsExactly(view, left)) return
   view.dispatch({
@@ -92,28 +92,38 @@ const createFieldFromTrigger = async (
   block: BlockRendererProps['block'],
   repo: Repo,
 ): Promise<void> => {
-  // Decide BEFORE touching the live doc: everything dispatched below is
-  // persisted by the editor's own debounced commit, so a refusal discovered
-  // afterwards could not take it back.
-  const eligible = await canConvertEmptyChildBlockToProperty(block, repo)
-  if (!eligible) return restoreTypedMarker(view, TRIGGER_PREFIX)
+  // What this gesture last put in the document, i.e. what it owes back if it
+  // does not go through. A THROWN failure owes it just as much as a refusal
+  // does — neither leaves the user's text where they typed it.
+  let left = TRIGGER_PREFIX
+  try {
+    // Decide BEFORE touching the live doc: everything dispatched below is
+    // persisted by the editor's own debounced commit, so a refusal discovered
+    // afterwards could not take it back.
+    const eligible = await canConvertEmptyChildBlockToProperty(block, repo)
+    if (!eligible) return restoreTypedMarker(view, left)
 
-  // That query awaited, and the keystrokes kept coming — so re-read the live
-  // document instead of trusting the keydown's snapshot. Anything but the bare
-  // trigger means the block now holds content the clear below would wipe.
-  if (!isTriggerState(view)) return
+    // That query awaited, and the keystrokes kept coming — so re-read the live
+    // document instead of trusting the keydown's snapshot. Anything but the
+    // bare trigger means the block holds content the clear below would wipe.
+    if (!isTriggerState(view)) return
 
-  // Drop the pending first colon and commit that now: the debounce is holding
-  // it, and `tx.update` writes tombstones happily, so an unflushed `":"` would
-  // land on the block the conversion is about to delete.
-  view.dispatch({changes: {from: 0, to: view.state.doc.length, insert: ''}})
-  flushEditorContent(view)
+    // Drop the pending first colon and commit that now: the debounce is
+    // holding it, and `tx.update` writes tombstones happily, so an unflushed
+    // `":"` would land on the block the conversion is about to delete.
+    view.dispatch({changes: {from: 0, to: view.state.doc.length, insert: ''}})
+    flushEditorContent(view)
+    left = ''
 
-  // The conversion re-checks eligibility against its own row before deleting
-  // (which is what makes it safe), and this document was already cleared on
-  // the strength of the earlier answer — so its refusal owes the text back
-  // just as much as the first one did.
-  if (!await convertEmptyChildBlockToProperty(block, repo)) restoreTypedMarker(view, '')
+    // The conversion re-checks eligibility against its own row before deleting
+    // (which is what makes it safe), and this document was already cleared on
+    // the strength of the earlier answer — so its refusal owes the text back
+    // just as much as the first one did.
+    if (!await convertEmptyChildBlockToProperty(block, repo)) restoreTypedMarker(view, left)
+  } catch (error) {
+    restoreTypedMarker(view, left)
+    throw error
+  }
 }
 
 export const createFieldCreationKeydownExtension = (

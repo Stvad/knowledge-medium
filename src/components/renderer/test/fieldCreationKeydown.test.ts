@@ -30,7 +30,10 @@ import {
 import { editorContentFlushFacet } from '@/editor/contentFlush.js'
 import { handleFieldCreationKeydown } from '../fieldCreationKeydown.ts'
 import type { Repo } from '@/data/repo'
-import type { BlockRendererProps } from '@/types'
+import type { BlockData, BlockRendererProps } from '@/types'
+
+// Only `parentId` is read by the handler; the rest of BlockData is irrelevant here.
+const ELIGIBLE = {parentId: 'parent-1'} as unknown as BlockData
 
 const canConvertMock = vi.mocked(canConvertEmptyChildBlockToProperty)
 const convertMock = vi.mocked(convertEmptyChildBlockToProperty)
@@ -116,7 +119,7 @@ const settle = () => new Promise(resolve => setTimeout(resolve, 0))
 afterEach(() => {
   canConvertMock.mockClear()
   convertMock.mockClear()
-  canConvertMock.mockResolvedValue({parentId: 'parent-1'} as never)
+  canConvertMock.mockResolvedValue(ELIGIBLE)
   convertMock.mockResolvedValue(true)
 })
 
@@ -151,7 +154,7 @@ describe('handleFieldCreationKeydown', () => {
     // Refuse BEFORE clearing: the editor's debounced commit persists a dispatch
     // on its own, so a late refusal could not take it back. The block is left
     // holding the whole `::` the user typed, not half of it.
-    canConvertMock.mockResolvedValue(null as never)
+    canConvertMock.mockResolvedValue(null)
     const h = fire()
     expect(h.handled).toBe(true)
     await settle()
@@ -184,6 +187,23 @@ describe('handleFieldCreationKeydown', () => {
     expect(h.doc()).toBe('hi')
   })
 
+  it('hands the marker back when the eligibility query THROWS', async () => {
+    canConvertMock.mockRejectedValue(new Error('db unavailable'))
+    const h = fire()
+    await settle()
+    expect(h.doc()).toBe('::')
+  })
+
+  it('hands the marker back when the conversion THROWS after the clear', async () => {
+    // The doc is already cleared and flushed by then, so a throw that skipped
+    // the restore would leave the block silently empty — the same hole a
+    // refusal would leave, through a different door.
+    convertMock.mockRejectedValue(new Error('delete failed'))
+    const h = fire()
+    await settle()
+    expect(h.doc()).toBe('::')
+  })
+
   it.each([true, false])(
     'abandons the gesture when the user types on mid-query (eligible=%s)',
     async eligible => {
@@ -195,7 +215,7 @@ describe('handleFieldCreationKeydown', () => {
       const h = mount()
       canConvertMock.mockImplementation(async () => {
         h.type('abc')
-        return (eligible ? {parentId: 'parent-1'} : null) as never
+        return eligible ? ELIGIBLE : null
       })
 
       expect(h.fire()).toBe(true)
