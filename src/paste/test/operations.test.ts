@@ -97,6 +97,27 @@ describe('pasteMultilineText', () => {
     expect(await childContents('root')).toEqual(['Alpha', 'Next'])
   })
 
+  it('keeps a NESTED paste at its clipboard depth when a blank target with children absorbs', async () => {
+    // Same collision as the editor path: the blank target becomes `Project`,
+    // whose own tasks claim the first-child slot, so `Notes` must stay a peer
+    // of the target rather than joining the task list.
+    await createBlock('root', 'Root', null, 'a0')
+    await createBlock('empty', '', 'root', 'a1')
+    await createBlock('kid', 'Kid', 'empty', 'a0')
+    await createBlock('next', 'Next', 'root', 'a2')
+
+    await pasteMultilineText(
+      '- Project\n  - Task 1\n  - Task 2\n- Notes',
+      env.repo.block('empty'),
+      env.repo,
+      {scopeRootId: 'root'},
+    )
+
+    expect(env.repo.block('empty').peek()?.content).toBe('Project')
+    expect(await childContents('empty')).toEqual(['Task 1', 'Task 2', 'Kid'])
+    expect(await childContents('root')).toEqual(['Project', 'Notes', 'Next'])
+  })
+
   it('inserts a multi-block paste between tied siblings without losing content (#198)', async () => {
     // The insertion neighbours (the target and its next sibling) share an
     // order_key. The old keysBetween(lower, upper) threw "<key> >= <key>" on the
@@ -390,7 +411,50 @@ describe('pasteEditModeMultilineText', () => {
     expect(await childContents('root')).toEqual(['hello alpha', 'Next'])
   })
 
-  it('keeps a NESTED paste at its clipboard depth when the edited block has children', async () => {
+  it('still nests a paste whose LATER root has children — only root #1 contests the slot', async () => {
+    // Pins whose children matter. Root #1 (`alpha`) is childless, so nothing
+    // competes for the first-child slot and the run stays contiguous, even
+    // though the clipboard is nested further down. Widening the rule to "the
+    // clipboard is nested anywhere" would wrongly push this run out to sibling
+    // placement.
+    await createBlock('root', 'Root', null, 'a0')
+    await createBlock('target', 'Header ', 'root', 'a1')
+    await createBlock('kid', 'Kid', 'target', 'a0')
+    await createBlock('next', 'Next', 'root', 'a2')
+
+    const plan = planEditModeMultilinePaste('alpha\n- beta\n  - b1\n- gamma', 'Header ', {
+      from: 'Header '.length,
+      to: 'Header '.length,
+    })
+
+    await pasteEditModeMultilineText(plan!, env.repo.block('target'), env.repo, {scopeRootId: 'root'})
+
+    expect(env.repo.block('target').peek()?.content).toBe('Header alpha')
+    expect(await childContents('target')).toEqual(['beta', 'gamma', 'Kid'])
+    expect(await childContents('root')).toEqual(['Header alpha', 'Next'])
+  })
+
+  it('reveals a collapsed target whose absorbed root brings children', async () => {
+    // The absorbed root's children reparent onto the target no matter how
+    // placement resolves, so a collapsed target must be revealed or the paste
+    // lands invisible — with focus on a block that isn't rendered.
+    await createBlock('root', 'Root', null, 'a0')
+    await createBlock('target', 'Header ', 'root', 'a1')
+    await createBlock('kid', 'Kid', 'target', 'a0')
+    await env.repo.block('target').set(isCollapsedProp, true)
+
+    const plan = planEditModeMultilinePaste('- P\n  - T1\n  - T2', 'Header ', {
+      from: 'Header '.length,
+      to: 'Header '.length,
+    })
+
+    await pasteEditModeMultilineText(plan!, env.repo.block('target'), env.repo, {scopeRootId: 'root'})
+
+    expect(env.repo.block('target').peek()?.properties[isCollapsedProp.name]).toBe(false)
+    expect(await childContents('target')).toEqual(['T1', 'T2', 'Kid'])
+  })
+
+  it('keeps a NESTED paste at its clipboard depth when the edited block has a parent in scope', async () => {
     // The absorbed root owns the first-child slot, so `Notes` — a peer of
     // `Project` in the clipboard — must stay a peer of the edited block, not
     // join `Project`'s task list where nothing distinguishes it from a task.
