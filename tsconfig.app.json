@@ -30,5 +30,10 @@
     }
 
   },
-  "include": ["src"]
+  "include": ["src"],
+  // The service worker entry runs in a WebWorker global, not the DOM — it's
+  // owned by tsconfig.sw.json (WebWorker lib) so its `self` isn't mistyped as a
+  // Window here. Its pure sibling helpers (src/sw/*.ts) and their tests stay in
+  // this project (globals-free, DOM lib is a harmless superset).
+  "exclude": ["src/sw/sw.ts"]
 }

@@ -1,0 +1,167 @@
+name: Publish packages
+
+# Publish-on-version-change: after a green "Run Tests" on master, publish any
+# workspace package whose package.json version isn't on npm yet. Bump a
+# package's version in your PR and the merge releases it; leave it and this is a
+# no-op. See scripts/publish-packages.mjs for the per-package logic.
+#
+# Two jobs, on purpose (OIDC supply-chain isolation): `build` installs the whole
+# workspace, compiles the packages, and `pnpm pack`s each into a tarball — i.e.
+# runs third-party install/build code, and is where workspace: dep ranges get
+# rewritten to concrete semver (pnpm pack's doing, at pack time — see
+# scripts/publish-packages.mjs) — but holds NO id-token. `publish` holds
+# `id-token: write` (the OIDC publish capability) but runs NO third-party code
+# and NO pnpm workspace operations at all: it only downloads the prebuilt
+# tarballs and `npm publish --ignore-scripts` each one directly (a tarball's
+# manifest is already-resolved static content, so publishing it needs no
+# workspace resolution). So a malicious transitive postinstall in the build
+# can't reach the token that mints npm releases.
+on:
+  workflow_run:
+    workflows: ["Run Tests"]
+    types: [completed]
+  # Manual re-run against the current master (e.g. to smoke-test the pipeline).
+  workflow_dispatch:
+
+# Serialize publish runs: the version check (npm view) and the publish are not
+# atomic, so two overlapping runs on the same version would race and the loser
+# would 403. Queue instead of cancel — never kill an in-flight npm publish.
+concurrency:
+  group: publish-packages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    # The whole pipeline is gated here; `publish` inherits it via `needs: build`
+    # (a skipped or failed build skips publish). Both entry paths are
+    # master-only:
+    #  - workflow_run: only after Run Tests *succeeded* for a push to master
+    #    (a fork PR runs Run Tests as event 'pull_request', never 'push', so it
+    #    can't reach the pipeline / the OIDC token).
+    #  - workflow_dispatch: a manual master-only re-run (no workflow_run payload,
+    #    so it bypasses the success gate — hence the explicit ref check, or a
+    #    dispatch against any other branch could build+publish untested code).
+    if: >
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/master') ||
+      (github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.head_branch == 'master' &&
+       github.event.workflow_run.conclusion == 'success')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          # Build the exact commit Run Tests validated (falls back to the ref a
+          # manual dispatch selected).
+          ref: ${{ github.event.workflow_run.head_sha || github.ref }}
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '26.x'
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # Produce the publish-ready dist for both packages: tsc -b scoped to just
+      # the two packages (not the whole app — agent-dispatch pulls agent-cli via
+      # its project reference) plus agent-cli's generated kernel-types (which
+      # still walk the app's @/ source, so the app types shipped to consumers
+      # stay correct). Same dist each package's prepublishOnly would build; the
+      # publish job never has to build. compile:packages shares its build-
+      # kernel-types + chmod tail with `compile` (compile:post), so it can't
+      # drift from the full build.
+      - name: Build packages
+        run: pnpm run compile:packages
+
+      # upload-artifact's if-no-files-found checks the *combined* count across
+      # both paths, so it wouldn't catch one package's dist being empty while
+      # the other has files. Assert each package's entry point exists before we
+      # hand a possibly-partial artifact to the publish job.
+      - name: Verify build output
+        run: |
+          test -s packages/agent-cli/dist/cli.js
+          test -s packages/agent-dispatch/dist/daemon.js
+
+      # Full install + workspace links are live here, so this is where
+      # `pnpm pack` rewrites each package's workspace:^ deps to a concrete
+      # semver range in the tarball's manifest (see scripts/publish-packages.mjs
+      # and the comment in pnpm-workspace.yaml) — the publish job below never
+      # runs pnpm and so could never do this rewrite itself.
+      - name: Pack packages
+        run: node scripts/publish-packages.mjs --pack
+
+      - name: Upload packed tarballs
+        uses: actions/upload-artifact@v4
+        with:
+          name: package-tarballs
+          # scripts/publish-packages.mjs --pack writes here; the publish job
+          # downloads it back to the same `packed/` path it reads from.
+          path: packed
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    # Inherits the master-only gate from `build` via needs. The explicit
+    # success() guard is defense-in-depth: this is the one condition the whole
+    # publish invariant hangs on, so state it rather than lean on the default —
+    # a future edit that copies an always()/!cancelled() pattern can't silently
+    # reopen the gate without a visible diff to this line.
+    needs: build
+    if: needs.build.result == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # OIDC trusted publishing; auto-attaches provenance
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.ref }}
+
+      # No pnpm here at all, on purpose — this job's whole point is to run no
+      # workspace operations (module comment at the top of the file). Only
+      # Node + npm below, for the registry auth and the actual publish.
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '26.x'
+          registry-url: 'https://registry.npmjs.org'
+
+      # LOAD-BEARING for Trusted Publishing: this job publishes directly with
+      # `npm publish` (no pnpm delegation anymore — the build job's `pnpm
+      # pack` already did the one thing that needed pnpm, rewriting
+      # workspace:^ ranges into the tarball's manifest), so THIS npm's version
+      # governs the OIDC exchange and provenance/sigstore attestation
+      # outright. Pinned because @latest currently resolves to npm 12.0.0,
+      # which crashes provenance generation ("Cannot find module 'sigstore'",
+      # npm/cli#9722). The pin also backs scripts/publish-packages.mjs's
+      # `npm view` idempotency pre-check. NOTE: re-evaluate this pin if the
+      # packageManager pnpm version ever changes — it no longer has anything
+      # to do with npm here (that delegation is gone); it would only affect
+      # `pnpm pack`'s rewrite behavior in the build job. --ignore-scripts
+      # keeps this token-bearing job script-free by construction
+      # (npm@11.18.0 ships none today, but a future pin bump shouldn't be
+      # able to silently run install code beside the OIDC token).
+      - name: Install npm for the publish + pre-check
+        run: npm install -g npm@11.18.0 --ignore-scripts
+
+      # Bring in the tarballs packed by the token-less build job. This job
+      # runs no pnpm install and no pnpm workspace operations at all — it
+      # only reads each tarball's already-resolved manifest and publishes it
+      # with --ignore-scripts, so no third-party code executes alongside the
+      # id-token.
+      - name: Download packed tarballs
+        uses: actions/download-artifact@v4
+        with:
+          name: package-tarballs
+          path: packed
+
+      - name: Publish changed packages
+        run: node scripts/publish-packages.mjs --publish

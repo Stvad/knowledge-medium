@@ -7,8 +7,7 @@ import { definePropertyEditorOverride } from '@/data/api'
 import { locationProp } from './properties'
 import { LocationPropertyEditor } from './LocationPropertyEditor'
 
-export const locationPropertyEditorOverride = definePropertyEditorOverride<string | undefined>({
-  name: locationProp.name,
+export const locationPropertyEditorOverride = definePropertyEditorOverride(locationProp, {
   label: 'Location',
   Editor: LocationPropertyEditor,
 })

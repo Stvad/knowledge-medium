@@ -1,16 +1,16 @@
 // @vitest-environment node
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
-import { resolveFacetRuntimeSync } from '@/facets/facet'
 import { ChangeScope, type BlockData } from '@/data/api'
-import { BlockCache } from '@/data/blockCache'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
-import { kernelDataExtension } from '@/data/kernelDataExtension'
+import { createTestRepo } from '@/data/test/createTestRepo'
 import { kernelPropertyUiExtension } from '@/components/propertyEditors/typesPropertyUi'
 import { kernelValuePresetsExtension } from '@/components/propertyEditors/kernelValuePresets'
 import { getOrCreatePropertiesPage } from '@/data/propertiesPage'
 import { Repo } from '@/data/repo'
 import {
   applySchemaReconciliation,
+  ensurePromotedPropertySchemas,
+  isRegistrablePropertyName,
   collectSchemaReconciliationPlan,
   normalizeListPropertyValues,
   normalizeRefPropertyValues,
@@ -28,26 +28,18 @@ interface Harness {
 const setup = async (): Promise<Harness> => {
   // Shared DB opened once per file (beforeAll), reset here per test.
   await resetTestDb(sharedDb.db)
-  const cache = new BlockCache()
-  let timeCursor = 1700_000_000_000
-  let idCursor = 0
-  const repo = new Repo({
+  const { repo } = createTestRepo({
     db: sharedDb.db,
-    cache,
     user: {id: 'user-1'},
-    now: () => ++timeCursor,
-    newId: () => `gen-${++idCursor}`,
-    startSyncObserver: false,
+    extensions: [
+      kernelPropertyUiExtension,
+      kernelValuePresetsExtension,
+    ],
   })
   repo.setActiveWorkspaceId(WS)
-  repo.setFacetRuntime(resolveFacetRuntimeSync([
-    kernelDataExtension,
-    kernelPropertyUiExtension,
-    kernelValuePresetsExtension,
-  ]))
   await getOrCreatePropertiesPage(repo, WS)
-  const dispose = repo.userSchemas.start()
-  const h: TestDb = {db: sharedDb.db, cleanup: async () => { repo.stopSyncObserver() }}
+  const dispose = (): void => repo.setActiveWorkspaceId(null)
+  const h: TestDb = {db: sharedDb.db, cleanup: async () => {}}
   return {h, repo, dispose}
 }
 
@@ -452,5 +444,164 @@ describe('normalizeRefPropertyValues', () => {
     ]
     normalizeRefPropertyValues(blocks, new Map([['roam:plain', 'refList']]), new Map(), [])
     expect(blocks[0].properties['roam:plain']).toBe('just a string')
+  })
+})
+
+describe('ensurePromotedPropertySchemas', () => {
+  // Content promotion invents key names from block text, so no code seed can
+  // declare them — the definition has to be minted at write time or the key
+  // lands definition-less and property migration skips it forever (#501).
+  it('registers a definition for a promoted key nothing declared', async () => {
+    const blocks = [block('a', {'matrix:timestamp': '13/06/2026 13:39:23 UTC'})]
+
+    expect(env.repo.propertySchemas.get('matrix:timestamp')).toBeUndefined()
+    await ensurePromotedPropertySchemas(env.repo, blocks)
+
+    expect(env.repo.propertySchemas.get('matrix:timestamp')).toBeDefined()
+  })
+
+  it('keeps a scalar key a string instead of widening it into a one-item list', async () => {
+    // Promoted keys are homogeneous in practice, so per-key inference lands
+    // the useful type. Verified against production: matrix:timestamp is 100%
+    // scalar over 316 cells, matrix:url 100% array over 174.
+    await ensurePromotedPropertySchemas(env.repo, [
+      block('a', {'matrix:when': 'yesterday'}),
+      block('b', {'matrix:when': 'today'}),
+    ])
+
+    expect(env.repo.propertySchemas.get('matrix:when')?.codec.type).toBe('string')
+  })
+
+  it('downgrades refList to list, so page tokens stay decodable without an aliasIdMap', async () => {
+    const blocks = [
+      block('a', {'matrix:topic': ['[[Alpha]]', '[[Beta]]']}),
+      block('b', {'matrix:topic': ['[[Gamma]]']}),
+    ]
+
+    await ensurePromotedPropertySchemas(env.repo, blocks)
+
+    const codec = env.repo.propertySchemas.get('matrix:topic')!.codec
+    expect(codec.type).not.toBe('refList')
+    expect(() => codec.decode(blocks[0]!.properties['matrix:topic'])).not.toThrow()
+  })
+
+  it('normalizes a mixed batch to match the preset it just registered', async () => {
+    // Classification samples the whole batch, so a key that is scalar on one
+    // block and a list on another registers `list` — the scalar then has to
+    // be widened or it would not decode under the schema this call chose.
+    const blocks = [
+      block('a', {'matrix:tag': ['one', 'two']}),
+      block('b', {'matrix:tag': 'solo'}),
+    ]
+
+    await ensurePromotedPropertySchemas(env.repo, blocks)
+
+    expect(env.repo.propertySchemas.get('matrix:tag')?.codec.type).toBe('list')
+    expect(blocks[1]!.properties['matrix:tag']).toEqual(['solo'])
+  })
+
+  it('never deletes a key it could not register — the caller may have dropped the source block', async () => {
+    // A subtractive consumer (matrix ingest) has already removed the bullet by
+    // this point, so deleting the property here would destroy the only
+    // remaining copy of the user's text. Such keys are declined UPSTREAM via
+    // isRegistrablePropertyName instead.
+    const blocks = [block('a', {'matrix:[[status]]': 'done'})]
+
+    const notes = await ensurePromotedPropertySchemas(env.repo, blocks)
+
+    expect(blocks[0]!.properties['matrix:[[status]]']).toBe('done')
+    expect(notes.length).toBeGreaterThan(0)
+  })
+
+  it('reshapes a value to fit a pre-existing schema rather than writing one that will not decode', async () => {
+    // Post-flip the materialize processor decodes during the write and
+    // THROWS, rolling back the transaction — for a poll-driven caller that
+    // holds its cursor on failure that is an infinite retry, i.e. ingest
+    // stops permanently. Reshaping is the lesser evil.
+    await env.repo.userSchemas.addSchema({name: 'matrix:topic', presetId: 'string'})
+    const schema = env.repo.propertySchemas.get('matrix:topic')!
+
+    const later = [block('b', {'matrix:topic': ['one', 'two']})]
+    await ensurePromotedPropertySchemas(env.repo, later)
+
+    expect(() => schema.codec.decode(later[0]!.properties['matrix:topic'])).not.toThrow()
+  })
+
+  it('reports a value no reshaping can fix, since post-flip that write is rejected', async () => {
+    // Normalization only covers string and list; a narrower pre-existing
+    // schema can still receive text that cannot be made to fit (#594).
+    await env.repo.userSchemas.addSchema({name: 'matrix:count', presetId: 'number'})
+
+    const notes = await ensurePromotedPropertySchemas(env.repo, [
+      block('a', {'matrix:count': 'not-a-number'}),
+    ])
+
+    expect(notes.join(' ')).toMatch(/matrix:count/)
+    expect(notes.join(' ')).toMatch(/does not decode/i)
+  })
+
+  it('abandons the batch when the active workspace changes mid-registration', async () => {
+    // `addSchema` targets whatever workspace is active, and each key is a
+    // separate await — so a switch between keys would scatter definitions
+    // across two workspaces.
+    const blocks = [block('a', {'matrix:first': 'x', 'matrix:second': 'y'})]
+    const realAddSchema = env.repo.userSchemas.addSchema.bind(env.repo.userSchemas)
+    let calls = 0
+    ;(env.repo.userSchemas as {addSchema: typeof realAddSchema}).addSchema = async (args) => {
+      calls += 1
+      const result = await realAddSchema(args)
+      env.repo.setActiveWorkspaceId('ws-somewhere-else')
+      return result
+    }
+
+    const notes = await ensurePromotedPropertySchemas(env.repo, blocks)
+
+    expect(calls).toBe(1)
+    expect(notes.join(' ')).toMatch(/active workspace changed/i)
+  })
+
+  it('names every key still lacking a definition, so a swallowed failure is not silent', async () => {
+    // addSchema can fail for reasons a caller's workspace check cannot see
+    // (it also compares the projector generation, so A->B->A throws while
+    // activeWorkspaceId matches again). Such a key becomes a definition-less
+    // cell — reported loudly rather than blocking the write, since deferring
+    // on a persistent failure would stall the caller forever.
+    const realAddSchema = env.repo.userSchemas.addSchema.bind(env.repo.userSchemas)
+    ;(env.repo.userSchemas as {addSchema: typeof realAddSchema}).addSchema = async () => {
+      throw new Error('[addSchema] active workspace generation changed before schema creation')
+    }
+
+    const notes = await ensurePromotedPropertySchemas(env.repo, [
+      block('a', {'matrix:doomed': 'x'}),
+    ])
+
+    ;(env.repo.userSchemas as {addSchema: typeof realAddSchema}).addSchema = realAddSchema
+    expect(notes.join(' ')).toMatch(/matrix:doomed/)
+    expect(notes.join(' ')).toMatch(/NO definition/)
+  })
+
+  it('leaves an already-declared key on its existing schema', async () => {
+    await env.repo.userSchemas.addSchema({name: 'matrix:refined', presetId: 'string'})
+
+    await ensurePromotedPropertySchemas(env.repo, [block('a', {'matrix:refined': 'hello'})])
+
+    expect(env.repo.propertySchemas.get('matrix:refined')?.codec.type).toBe('string')
+  })
+
+  it('is a no-op for an empty batch', async () => {
+    await expect(ensurePromotedPropertySchemas(env.repo, [])).resolves.toEqual([])
+  })
+})
+
+describe('isRegistrablePropertyName', () => {
+  it('rejects exactly the names addSchema refuses, so promotion can decline them first', async () => {
+    expect(isRegistrablePropertyName('matrix:status')).toBe(true)
+    expect(isRegistrablePropertyName('matrix:[[status]]')).toBe(false)
+    expect(isRegistrablePropertyName('   ')).toBe(false)
+
+    // Pin it against the real thing rather than restating the predicate.
+    await expect(env.repo.userSchemas.addSchema({
+      name: 'matrix:[[status]]', presetId: 'string',
+    })).rejects.toThrow()
   })
 })

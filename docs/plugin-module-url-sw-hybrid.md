@@ -12,7 +12,7 @@
 > other files' citations are unaffected). Grounded against `src/extensions/compileExtensionModule.ts`,
 > `compiledModuleCache.ts`,
 > `dynamicExtensions.ts`, `AppRuntimeProvider.tsx`, `src/extensions/api.ts`, `index.html` (importmap),
-> `vite.config.ts` (`preserveModules`), `vite-plugins/unifySrcJsUrls.ts`, `public/sw.js`,
+> `vite.config.ts` (`preserveModules`), `vite-plugins/unifySrcJsUrls.ts`, `src/sw/sw.ts` + `src/sw/worker.ts`,
 > `src/registerServiceWorker.ts`, `src/sync/transform.ts` + `src/data/internals/syncObserver/materialize.ts`
 > (in-thread decryption), `docs/lock-and-wipe-coarse-recommendation.md` (coarse platform wipe), and the
 > media-attachments design (PR #230) §7.3 / §18 (the in-thread/SW decryption fork — the direct analog; external
@@ -75,8 +75,10 @@ So today: **dynamic `import()` of a Blob object URL**, no `eval`, no SW.
 **Inter-module imports resolve through the realm-global import map** in `index.html:37`
 (`"react"`/`"react-dom"` → esm.sh, `"@/"` → `"./src/"`), *not* relatively. An import map is keyed to the
 *document/realm*, not the importer's URL, and its relative address values (`./src/`) resolve against the
-**document** base — which is why a Blob module can `import {…} from '@/extensions/api.js'`
-(`src/extensions/exampleExtensions.ts:208`) and get **the same module instance the app uses**. In prod those land
+**document** base — which is why a Blob module can `import {…} from '@/extensions/core.js'`
+(`src/extensions/exampleExtensions.ts:83`) and get **the same module instance the app uses** (the
+extension-surface re-export barrel this example used to cite was retired — extensions now import each
+symbol from its real owning module directly). In prod those land
 on *stable* unhashed URLs because the Vite build uses `preserveModules:true` + `entryFileNames:'[name].js'`
 (`vite.config.ts:138-142`); `vite-plugins/unifySrcJsUrls.ts` makes dev match by rewriting `/src/foo.tsx`→`.js`
 (otherwise every `createContext`/store singleton duplicates — the `useRepo must be used within a RepoContext`
@@ -172,11 +174,13 @@ Babel from cache, and even a **miss** falls through to a plain network fetch (`a
 liveness: the `respondWith` promise must carry a **bounded timeout** so a stuck produce (e.g. an offline cold
 compile with Babel absent) fails the import (→ shell) rather than hanging it forever.
 
-**Offline cold-compile depends on Babel being precached** (`@babel/standalone/babel.js` in `PRECACHE_LAZY_ASSETS`,
-injected by `scripts/inject-sw-build-id.mjs`). This is in tension with §4.2's "slim the `install` `waitUntil`":
-slimming must keep Babel in precache (or move it off the activate-gating path while still caching it), else an
-offline cold compile of a brand-new extension can't run. Modules are otherwise only requested by a live page (the
-producer is always present), so there's no "serve a module without the producer" offline gap.
+**Offline cold-compile depends on Babel being precached** (`@babel/standalone/babel.js`, now covered by the
+full-graph `PRECACHE_REST_ASSETS` list injected by `scripts/inject-sw-build-id.ts` — which precaches the whole
+emitted asset graph, superseding the earlier babel-only closure). This is in tension with §4.2's "slim the
+`install` `waitUntil`": full precache deliberately makes `install` heavier so each generation's cache is complete
+(the fix for the cross-generation module-skew described in `src/sw/sw.ts`'s header). Modules are otherwise only
+requested by a live page (the producer is always present), so there's no "serve a module without the producer"
+offline gap.
 
 **No *additional* plaintext at rest.** Under on-demand the compiled bytes never land in a Cache — they transit the
 message port and live only in the realm module map (memory, gone on reload). But the design **keeps** the existing
@@ -205,7 +209,7 @@ demand-driving.
 ### 3.3 Route + ordering — load-bearing (mirrors media §7.3's "asset route must be FIRST")
 
 A dynamically `import()`ed module has `request.destination === 'script'`, so it is **already caught by
-`isCacheableAsset`** (`public/sw.js:212` lists `'script'`) → served from this generation's caches → miss →
+`isCacheableAsset`** (`src/sw/assets.ts` lists `'script'` in its destination set) → served from this generation's caches → miss →
 network → `Response.error()`. The new `/module/` branch **must be inserted before** `isCacheableAsset`, matched by
 `url.pathname.startsWith(MODULE_PREFIX)` where `MODULE_PREFIX = ${base}module/`. Order: (1) navigations → shell;
 (1.5) **`/module/` → on-demand proxy**; (2) cacheable assets; (3) vendor; (4) passthrough.
@@ -226,9 +230,9 @@ path doesn't regress here because it has no transitive imports at all; this is a
 
 ## 4. First-load control — page-initiated claim, and dropping the fallback
 
-Plugins load at **startup**, exactly when a freshly-registered SW may not yet control the page. `public/sw.js`
-**deliberately omits `clients.claim()`** (`public/sw.js:13`, and the closing note at `:190`) — a fresh install
-`skipWaiting()`s (`:160`) to control the *next* load but leaves the current first-visit page uncontrolled for its
+Plugins load at **startup**, exactly when a freshly-registered SW may not yet control the page. The SW
+**deliberately omits `clients.claim()`** (see the `src/sw/sw.ts` header, and the `activate` note in `src/sw/worker.ts`) — a fresh install
+`skipWaiting()`s to control the *next* load but leaves the current first-visit page uncontrolled for its
 lifetime. So a first-visit `import("${BASE_URL}module/<id>")` goes around the SW → 404 → the plugin breaks (a
 *feature*, not an image). This is the same hazard the media doc flags.
 
@@ -238,7 +242,7 @@ The naive fix — `clients.claim()` in `activate` — reintroduces version skew,
 deploy** and would grab long-open pages that already loaded the *old* generation, then serve them a *new*-gen lazy
 chunk. Page-initiated claim is better but **not automatically skew-safe** (Codex #251): after a deploy,
 `navigator.serviceWorker.ready` can resolve to the *previous* active worker before the new `sw.js` installs, so a
-naive `CLAIM` could let an **old** generation claim a **current**-build page — and since `public/sw.js` then
+naive `CLAIM` could let an **old** generation claim a **current**-build page — and since the SW then
 serves same-origin scripts cache-first from *its* generation cache, later lazy/module fetches become old bytes in
 a new app. So the handshake must claim only a worker whose **generation matches the page build**:
 
@@ -374,7 +378,7 @@ populated for module subresource fetches (§3.1).
 2. **Transitive-import hash pinning** (producer): rewrite a dep ref → `${BASE_URL}module/<dep>?v=<depApprovedHash>`
    from each dep's **approved record** (cheap lookup, no compile); unapproved deps fail closed. The fiddliest
    piece; also defines the authoring specifier for "import another block."
-3. **`public/sw.js`**: new `/module/` branch **before** `isCacheableAsset` (§3.3) that proxies to the requesting
+3. **`src/sw/worker.ts`**: new `/module/` branch **before** `isCacheableAsset` (§3.3) that proxies to the requesting
    client via `MessageChannel`, with the no-client/timeout/produce-failure → `Response` mapping (§3.1); add the
    **generation-gated** `CLAIM` handler (§4.1); keep Babel in precache.
 4. **Bootstrap gate** (`AppRuntimeProvider` / `registerServiceWorker`): page-initiated, **build-id-matched** claim,

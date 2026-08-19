@@ -1,10 +1,7 @@
 import {
   ChangeScope,
-  codecs,
-  defineBlockType,
-  defineProperty,
-  type PropertySchema,
-  type TypeContribution,
+  seedProperty,
+  seedType,
 } from '@/data/api'
 import { aliasesProp } from '@/data/properties'
 
@@ -16,16 +13,18 @@ export const DAILY_NOTE_TYPE = 'daily-note'
  *  parsing aliases at query time. Populated at write by
  *  `getOrCreateDailyNote` / `ensureDailyNoteTarget` and backfilled
  *  once per device from the ISO alias for pre-existing rows. */
-export const dailyNoteDateProp: PropertySchema<Date | undefined> = defineProperty<Date | undefined>(
-  'daily-note:date',
-  {
-    codec: codecs.date,
-    defaultValue: undefined,
-    changeScope: ChangeScope.BlockDefault,
-  },
-)
+export const dailyNoteDateProp = seedProperty({
+  seedKey: 'system:daily-notes/property/date',
+  revision: 1,
+  name: 'daily-note:date',
+  preset: 'date',
+  defaultValue: undefined,
+  changeScope: ChangeScope.BlockDefault,
+})
 
-export const dailyNoteType: TypeContribution = defineBlockType({
+export const dailyNoteType = seedType({
+  seedKey: 'system:daily-notes/type/daily-note',
+  revision: 1,
   id: DAILY_NOTE_TYPE,
   label: 'Daily note',
   properties: [aliasesProp, dailyNoteDateProp],

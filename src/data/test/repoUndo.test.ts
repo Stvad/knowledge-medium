@@ -20,10 +20,11 @@
  *     by checking ps_crud row count grew after the undo replay
  */
 
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { ChangeScope, ReadOnlyError } from '@/data/api'
-import { BlockCache } from '@/data/blockCache'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
+import { createTestRepo, isBlockDeleted } from '@/data/test/createTestRepo'
+import { aliasesProp } from '@/data/properties'
 import { Repo } from '../repo'
 
 const WS = 'ws-1'
@@ -37,18 +38,9 @@ const setup = async (): Promise<Harness> => {
   // Shared DB opened once per file, reset between tests; fresh Repo per test.
   await resetTestDb(sharedDb.db)
   const h = sharedDb
-  const cache = new BlockCache()
-  let timeCursor = 1700_000_000_000
-  let idCursor = 0
-  const repo = new Repo({
+  const {repo} = createTestRepo({
     db: h.db,
-    cache,
     user: {id: 'user-1'},
-    now: () => ++timeCursor,
-    newId: () => `gen-${++idCursor}`,
-    // Disable kernel processors so parseReferences doesn't fire and
-    // add its own tx entries during these tests — keeps the audited
-    // stack predictable.
   })
   // Undo / redo are scoped to the active workspace (issue #186); pin it
   // to WS so the default-workspace edits below are the cmd-Z target.
@@ -80,14 +72,6 @@ const readContent = async (repo: Repo, id: string): Promise<string | null> => {
   return row.deleted === 1 ? null : row.content
 }
 
-const isDeleted = async (repo: Repo, id: string): Promise<boolean> => {
-  const row = await repo.db.getOptional<{deleted: number}>(
-    'SELECT deleted FROM blocks WHERE id = ?',
-    [id],
-  )
-  return row?.deleted === 1
-}
-
 const rowCount = async (repo: Repo, table: string): Promise<number> => {
   const row = await repo.db.get<{n: number}>(`SELECT COUNT(*) AS n FROM ${table}`)
   return row.n
@@ -98,7 +82,6 @@ let env: Harness
 beforeAll(async () => { sharedDb = await createTestDb() })
 afterAll(async () => { await sharedDb.cleanup() })
 beforeEach(async () => { env = await setup() })
-afterEach(() => { env.repo.stopSyncObserver() })
 
 describe('repo.undo / redo on tx.update (setContent)', () => {
   it('reverts content on undo and re-applies on redo', async () => {
@@ -132,13 +115,13 @@ describe('repo.undo / redo on tx.create', () => {
         content: 'created',
       })
     }, {scope: ChangeScope.BlockDefault})
-    expect(await isDeleted(env.repo, 'fresh')).toBe(false)
+    expect(await isBlockDeleted(env.repo, 'fresh')).toBe(false)
 
     expect(await env.repo.undo()).toBe(true)
-    expect(await isDeleted(env.repo, 'fresh')).toBe(true)
+    expect(await isBlockDeleted(env.repo, 'fresh')).toBe(true)
 
     expect(await env.repo.redo()).toBe(true)
-    expect(await isDeleted(env.repo, 'fresh')).toBe(false)
+    expect(await isBlockDeleted(env.repo, 'fresh')).toBe(false)
     expect(await readContent(env.repo, 'fresh')).toBe('created')
   })
 })
@@ -150,14 +133,14 @@ describe('repo.undo / redo on tx.delete', () => {
     await env.repo.tx(async (tx) => {
       await tx.delete('doomed')
     }, {scope: ChangeScope.BlockDefault})
-    expect(await isDeleted(env.repo, 'doomed')).toBe(true)
+    expect(await isBlockDeleted(env.repo, 'doomed')).toBe(true)
 
     expect(await env.repo.undo()).toBe(true)
-    expect(await isDeleted(env.repo, 'doomed')).toBe(false)
+    expect(await isBlockDeleted(env.repo, 'doomed')).toBe(false)
     expect(await readContent(env.repo, 'doomed')).toBe('live')
 
     expect(await env.repo.redo()).toBe(true)
-    expect(await isDeleted(env.repo, 'doomed')).toBe(true)
+    expect(await isBlockDeleted(env.repo, 'doomed')).toBe(true)
   })
 })
 
@@ -348,6 +331,70 @@ describe('repo.undo / redo on empty stack', () => {
   it('returns false when there is nothing to undo / redo', async () => {
     expect(await env.repo.undo()).toBe(false)
     expect(await env.repo.redo()).toBe(false)
+  })
+})
+
+describe('replay ordering vs parent-liveness trigger', () => {
+  // core.merge touches the rehomed children before tombstoning the
+  // merged-from block, so a first-touch-order replay would restore the
+  // children under a still-tombstoned parent and abort on the
+  // blocks_parent_not_deleted trigger. `replayApplicationOrder` must
+  // make the whole round-trip work regardless of touch order.
+  // Found by repoMutators.fuzz.test.ts.
+  it('undoes and redoes a merge of a block that has children', async () => {
+    await seedRoot(env.repo, 'root')
+    const a = await env.repo.mutate.createChild({parentId: 'root', content: 'A'})
+    const b = await env.repo.mutate.createChild({parentId: a, content: 'B'})
+    env.repo.undoManager.clear()
+
+    await env.repo.mutate.merge({intoId: 'root', fromId: a})
+    expect(await isBlockDeleted(env.repo, a)).toBe(true)
+
+    expect(await env.repo.undo()).toBe(true)
+    expect(await isBlockDeleted(env.repo, a)).toBe(false)
+    const bRow = await env.repo.db.get<{parent_id: string}>(
+      'SELECT parent_id FROM blocks WHERE id = ?', [b])
+    expect(bRow.parent_id).toBe(a)
+
+    expect(await env.repo.redo()).toBe(true)
+    expect(await isBlockDeleted(env.repo, a)).toBe(true)
+    const bRow2 = await env.repo.db.get<{parent_id: string}>(
+      'SELECT parent_id FROM blocks WHERE id = ?', [b])
+    expect(bRow2.parent_id).toBe('root')
+  })
+})
+
+describe('replay ordering vs alias-uniqueness trigger', () => {
+  // Merging two alias-carrying blocks hands the source's alias to the
+  // target (mergeProperties array union). Undo must restore the source
+  // (re-claiming its alias) AND revert the target (releasing it) in the
+  // same replay tx — a fixed application order can deadlock on the
+  // block_aliases_workspace_alias_unique trigger when the source is
+  // applied while the target still owns the merged alias. The replay
+  // worklist retries constraint-aborted rows after the releasing row
+  // lands. (Codex review find on PR #371.)
+  it('undoes and redoes a merge where both blocks own aliases', async () => {
+    await seedRoot(env.repo, 'root')
+    const a = await env.repo.mutate.createChild({parentId: 'root', content: 'A'})
+    const b = await env.repo.mutate.createChild({parentId: 'root', content: 'B'})
+    await env.repo.mutate.setProperty({id: a, schema: aliasesProp, value: ['alias-a']})
+    await env.repo.mutate.setProperty({id: b, schema: aliasesProp, value: ['alias-b']})
+    env.repo.undoManager.clear()
+
+    await env.repo.mutate.merge({intoId: a, fromId: b})
+    expect(await isBlockDeleted(env.repo, b)).toBe(true)
+
+    expect(await env.repo.undo()).toBe(true)
+    expect(await isBlockDeleted(env.repo, b)).toBe(false)
+    const claim = await env.repo.db.getAll<{block_id: string}>(
+      'SELECT block_id FROM block_aliases WHERE alias = ? ORDER BY block_id', ['alias-b'])
+    expect(claim).toEqual([{block_id: b}])
+
+    expect(await env.repo.redo()).toBe(true)
+    expect(await isBlockDeleted(env.repo, b)).toBe(true)
+    const claimAfterRedo = await env.repo.db.getAll<{block_id: string}>(
+      'SELECT block_id FROM block_aliases WHERE alias = ? ORDER BY block_id', ['alias-b'])
+    expect(claimAfterRedo).toEqual([{block_id: a}])
   })
 })
 

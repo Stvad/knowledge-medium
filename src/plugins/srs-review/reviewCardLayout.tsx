@@ -12,12 +12,20 @@ import type {
 export const SRS_REVIEW_CARD_ID = 'srsReviewCardId'
 export const SRS_REVIEW_REVEALED = 'srsReviewRevealed'
 
+// `shellProps` go on the card's own wrapper: it IS the block's surface here, so
+// dropping them would leave the card with no identity in the DOM and the deck
+// around it answering for its gestures, focus and navigation.
+
 /** Question phase: render the card's own content only, dropping the
  *  children subtree (the answer). */
-const QuestionOnlyLayout = ({Content}: BlockLayoutSlots) => (
-  <div className="srs-review-card-question min-w-0">
-    <Content />
-  </div>
+const QuestionOnlyLayout = ({Content, Shell}: BlockLayoutSlots) => (
+  <Shell>
+    {({className, ...shellProps}) => (
+      <div {...shellProps} className={`srs-review-card-question min-w-0 ${className ?? ''}`}>
+        <Content />
+      </div>
+    )}
+  </Shell>
 )
 
 /** Answer phase: render content + the children subtree directly. We do
@@ -26,11 +34,15 @@ const QuestionOnlyLayout = ({Content}: BlockLayoutSlots) => (
  *  is `isNestedSurface`, so a card that's collapsed in the outline would
  *  reveal no answer at all. Rendering `Children` raw shows the answer
  *  regardless of the card's stored collapse state. */
-const AnswerLayout = ({Content, Children}: BlockLayoutSlots) => (
-  <div className="srs-review-card-answer min-w-0">
-    <Content />
-    <Children />
-  </div>
+const AnswerLayout = ({Content, Children, Shell}: BlockLayoutSlots) => (
+  <Shell>
+    {({className, ...shellProps}) => (
+      <div {...shellProps} className={`srs-review-card-answer min-w-0 ${className ?? ''}`}>
+        <Content />
+        <Children />
+      </div>
+    )}
+  </Shell>
 )
 
 export const srsReviewCardLayoutContribution: BlockLayoutContribution = ctx => {

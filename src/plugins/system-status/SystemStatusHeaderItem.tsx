@@ -31,7 +31,7 @@ import {
 } from './queueCounts.ts'
 import { RejectionDialog } from './RejectionDialog.tsx'
 import { useDiagnostics } from '@/plugins/diagnostics/useDiagnostics.js'
-import { runActionById } from '@/shortcuts/runAction.js'
+import { runActionByIdSafely } from '@/shortcuts/runAction.js'
 
 interface UploadQueueCountRow {
   count: number
@@ -123,6 +123,13 @@ const formatLastSyncedAt = (date: Date | undefined): string => {
   if (!date) return 'Not synced yet'
   return date.toLocaleString()
 }
+
+// Fire-and-forget dispatch of a global action by id — the indirection every
+// control in this dropdown uses (a diagnostic's Inspect / Reload). Failures
+// are logged, never surfaced into render.
+const dispatchAction = (actionId: string): Promise<boolean> =>
+  runActionByIdSafely(actionId, new CustomEvent('run-diagnostic-action'))
+
 
 // The build the client is running — the committer-date version (e.g.
 // "2026.06.13-1216"). Rendered as quiet metadata: muted, no underline (the
@@ -287,16 +294,6 @@ function SyncStatusHeaderContent({
   // already reddens the whole chip (diagnosticAlert), so it doesn't also dot.
   const nudge = diagnosticItems.find((it) => it.snapshot.nudge)
   const showStatusDot = Boolean(nudge) && !errorDiagnostic
-  // Run a diagnostic's inspect action (e.g. re-run the audit + open its dialog).
-  const runDiagnosticAction = (actionId: string): void => {
-    try {
-      void Promise.resolve(
-        runActionById(actionId, new CustomEvent('run-diagnostic-action')),
-      ).catch((e) => console.error('Failed to run diagnostic action', e))
-    } catch (e) {
-      console.error('Failed to run diagnostic action', e)
-    }
-  }
   const view = getSyncIndicatorView({
     localOnly,
     connected: status.connected,
@@ -419,7 +416,7 @@ function SyncStatusHeaderContent({
                       size="sm"
                       variant="outline"
                       className="h-7 shrink-0 text-xs"
-                      onClick={() => runDiagnosticAction(item.snapshot.actionId!)}
+                      onClick={() => void dispatchAction(item.snapshot.actionId!)}
                     >
                       {item.snapshot.actionLabel ?? 'Inspect'}
                     </Button>

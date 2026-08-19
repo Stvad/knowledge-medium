@@ -1,7 +1,6 @@
 import {
   ChangeScope,
-  codecs,
-  defineProperty,
+  seedProperty,
   type BlockData,
 } from '@/data/api'
 import { hasBlockType } from '@/data/properties.js'
@@ -21,8 +20,11 @@ export const defaultBacklinksViewIdForBlock = (
 /** Optional per-block backlinks-view variant override. When unset, the
  *  coordinator derives the view from the target block: grouped for
  *  daily-note pages, flat otherwise. */
-export const backlinksViewProp = defineProperty<string | undefined>('backlinks:viewId', {
-  codec: codecs.optionalString,
+export const backlinksViewProp = seedProperty({
+  seedKey: 'system:backlinks-view/property/view-id',
+  revision: 1,
+  name: 'backlinks:viewId',
+  preset: 'optional-string',
   defaultValue: undefined,
   changeScope: ChangeScope.BlockDefault,
 })

@@ -10,7 +10,10 @@
 
 import type {AppExtension} from '@/facets/facet.js'
 import {systemToggle} from '@/facets/togglable.js'
+import {valuePresetPresentationsFacet} from '@/data/facets.js'
+import {defineHiddenPresetPresentation} from '@/data/api'
 import {extensionsDataExtension} from './dataExtension.ts'
+import {extensionsOverridesPresetCore} from './config.ts'
 
 export const extensionsSettingsPlugin: AppExtension = systemToggle({
   id: 'system:extensions-settings',
@@ -19,6 +22,10 @@ export const extensionsSettingsPlugin: AppExtension = systemToggle({
   essential: true,
 }).of([
   extensionsDataExtension,
+  valuePresetPresentationsFacet.of(
+    defineHiddenPresetPresentation(extensionsOverridesPresetCore, 'Extension overrides'),
+    {source: 'extensions-settings'},
+  ),
 ])
 
 export {

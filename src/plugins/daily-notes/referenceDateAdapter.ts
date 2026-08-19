@@ -53,8 +53,13 @@ export const replaceSingleDateReferenceContent = (
   const nextAlias = match.style === 'iso'
     ? iso
     : formatRoamDate(isoToLocalDate(iso))
+  // Unreachable for a date alias (short, delimiter-free), but `null` is
+  // already this function's "no rewrite" answer — and beats splicing the
+  // string "null" into the user's content.
+  const rendered = renderWikilink(nextAlias)
+  if (rendered === null) return null
   return content.slice(0, match.ref.startIndex) +
-    renderWikilink(nextAlias) +
+    rendered +
     content.slice(match.ref.endIndex)
 }
 

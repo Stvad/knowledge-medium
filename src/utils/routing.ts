@@ -1,17 +1,48 @@
-// URL hash format: #<workspaceId>/<slot1>/<slot2>/...
+// URL hash format: #<workspaceId>/<column1>/<column2>/...
 //
-// A slot is either a bare block id or a sidebar stack:
-//   #ws/a/b/c          flat horizontal panels
-//   #ws/a/(s:x,b)/c    x stacked above b in the second horizontal column
+// hash   := '#' ws ('/' column)*           (+ optional '?query' — see
+//           splitHashRouteAndParams / preserveHashQueryParams, unchanged)
+// ws     := workspaceId (';' entry)*       matrix-style context on the
+//           WORKSPACE token (e.g. `#ws;persp=x/a`). Core assigns no
+//           semantics to ANY ws key — `persp` (perspective → layout-session
+//           mapping) is interpreted extension-side; every well-formed entry
+//           is preserved opaquely in `wsContext`, mirroring the slot
+//           `rest[]` pattern (REST_ENTRY_RE well-formedness on both sides,
+//           first-valid-wins per key, key-sorted at parse). Unlike slot
+//           context there are NO reserved keys here: `view`/`active` have
+//           no workspace meaning and ride through as opaque entries too.
+//           Splitting these off is also what keeps `workspaceId` CLEAN —
+//           previously `#ws;persp=x/...` yielded the garbage id
+//           `ws;persp=x`, so a persp-only change read as a workspace
+//           change (spurious full remount via layoutWorkspaceChanged).
+// column := cell (',' cell)*               a multi-cell column is a vertical
+//           stack: `#ws/a/b,c/d` puts b above c in the middle column
+// cell   := slot | '(' layout ')'          a parenthesized cell is a nested
+//           sub-layout; not implemented yet in the panel rows — parsed and
+//           round-tripped so deeper layouts become a data-model change
+//           later (inbound URLs degrade them to stacks meanwhile)
+// layout := column ('/' column)*           the grammar inside a paren cell
+// slot   := blockId (';' entry)*           matrix-style per-slot context:
+//           `;view=<value>` (percent-encoded viewMode), the valueless flags
+//           `;active` and `;max` (also `;<flag>=true` / `;<flag>=false`),
+//           any other well-formed `key`/`key=value` preserved verbatim as an
+//           opaque context entry (see REST_ENTRY_RE)
+//
+// Malformed input follows two rules: OUTSIDE parens, salvage what you can
+// (invalid cells/columns are dropped individually, the rest of the layout
+// survives); a PAREN GROUP is atomic — any invalid content inside it drops
+// the whole group.
 //
 // Ids are UUIDs (text). An empty hash means "use the user's last-active
 // workspace from localStorage, falling back to the first synced workspace".
 // A hash with only a workspace id (no `/`) means "restore or create the
 // workspace's layout-session panel layout".
 //
-// Phase 2 drops support for legacy hashes (`#<blockId>` without a workspace
-// id). The previous data is disposable per the workspace migration, so any
-// bookmarked legacy URL won't resolve to a real block anyway.
+// Phase 2 dropped support for legacy hashes (`#<blockId>` without a
+// workspace id). This rewrite retires the old `(s:a,b)` stack prefix in
+// favor of the plain comma grammar above — `(s:` tokens are deliberately
+// NOT recognized any more (their inner content fails the blockId charset,
+// so a whole `(s:…)` group parses out cleanly).
 
 export interface AppRoute {
   workspaceId?: string
@@ -20,18 +51,42 @@ export interface AppRoute {
 
 export interface AppLayoutRoute {
   workspaceId?: string
+  /** Opaque matrix entries carried on the WORKSPACE token (`#ws;persp=x/…`),
+   *  raw `key[=value]` strings, key-sorted. Present only when non-empty —
+   *  like a leaf's `rest`. Core never interprets these; it only guarantees
+   *  they parse off cleanly (so `workspaceId` never contains them) and
+   *  round-trip through `buildLayoutFromSlots`'s `wsContext` argument. */
+  wsContext?: string[]
   slots: LayoutSlot[]
   blockIds: string[]
 }
 
 export type LayoutSlot =
-  | {kind: 'leaf'; blockId: string}
+  | {
+      kind: 'leaf'
+      blockId: string
+      viewMode?: string
+      active?: boolean
+      maximized?: boolean
+      rest?: string[]
+    }
   | {kind: 'stack'; children: LayoutSlot[]}
+  // Each sublayout column is represented exactly like a top-level column:
+  // a leaf, or a stack when the column has multiple cells.
+  | {kind: 'sublayout'; columns: LayoutSlot[]}
 
-const flattenSlots = (slots: readonly LayoutSlot[]): string[] =>
-  slots.flatMap(slot => slot.kind === 'leaf' ? [slot.blockId] : flattenSlots(slot.children))
+type LeafLayoutSlot = Extract<LayoutSlot, {kind: 'leaf'}>
 
-const splitHashRouteAndParams = (hash: string | undefined | null) => {
+/** All leaf slots in pre-order (stacks and sublayouts flattened). */
+export const collectLeafSlots = (slots: readonly LayoutSlot[]): LeafLayoutSlot[] =>
+  slots.flatMap(slot => slot.kind === 'leaf'
+    ? [slot]
+    : collectLeafSlots(slot.kind === 'stack' ? slot.children : slot.columns))
+
+export const flattenSlots = (slots: readonly LayoutSlot[]): string[] =>
+  collectLeafSlots(slots).map(leaf => leaf.blockId)
+
+export const splitHashRouteAndParams = (hash: string | undefined | null) => {
   const raw = hash ?? ''
   const trimmed = raw.startsWith('#') ? raw.slice(1) : raw
   const queryIndex = trimmed.indexOf('?')
@@ -80,19 +135,211 @@ const splitTopLevel = (input: string, separator: string): string[] => {
   return out
 }
 
-const parseSlot = (raw: string): LayoutSlot | null => {
-  const token = raw.trim()
-  if (!token) return null
-  if (token.startsWith('(s:') && token.endsWith(')')) {
-    const inner = token.slice(3, -1)
-    return {
-      kind: 'stack',
-      children: splitTopLevel(inner, ',')
-        .map(parseSlot)
-        .filter((slot): slot is LayoutSlot => Boolean(slot)),
+// True only when `token` starts with '(' and that SAME paren's matching ')'
+// is the very last character — i.e. the whole token is one balanced group,
+// not (e.g.) "(a)/(b)" sitting next to something else.
+const isFullyParenWrapped = (token: string): boolean => {
+  if (token.length < 2 || token[0] !== '(' || token[token.length - 1] !== ')') return false
+  let depth = 0
+  for (let index = 0; index < token.length; index++) {
+    if (token[index] === '(') depth++
+    else if (token[index] === ')') {
+      depth--
+      if (depth === 0) return index === token.length - 1
     }
   }
-  return {kind: 'leaf', blockId: token}
+  return false
+}
+
+const BLOCK_ID_RE = /^[A-Za-z0-9._-]+$/
+const CONTEXT_ENTRY_RE = /^([a-z][a-z0-9-]*)(=(.*))?$/
+
+// An unknown (rest) entry must be a well-formed percent-encoded segment on
+// BOTH sides: parse only keeps entries matching this, and build re-checks
+// programmatically constructed slots — keeping parse and build symmetric so
+// no entry can survive a parse only to vanish on the next normalization.
+const REST_ENTRY_RE = /^[a-z][a-z0-9-]*(=[A-Za-z0-9%._~-]*)?$/
+
+const byEntryKey = (a: {key: string}, b: {key: string}): number =>
+  a.key < b.key ? -1 : a.key > b.key ? 1 : 0
+
+// Shared rest-entry collection: validate REST_ENTRY_RE, first-VALID-wins
+// dedup by key (a Set, so a later malformed entry never evicts an earlier
+// valid one and vice versa), key-sort. Used by both parseContextEntries'
+// unknown-key handling (below, with the reserved keys excluded via
+// `isReserved` since each of those takes its own single-value branch) and
+// canonicalWsContextEntries (no reserved keys at all — every ws-token entry
+// is opaque). Splitting this out of a single per-key branch into an
+// independent pass over `segments` is behavior-preserving: reserved keys
+// and rest keys are mutually exclusive by construction (a given key string
+// is always classified the same way), so the two passes' dedup sets never
+// need to interact.
+const collectRestEntries = (
+  segments: readonly string[],
+  isReserved: (key: string) => boolean = () => false,
+): string[] => {
+  const seen = new Set<string>()
+  const entries: {key: string; raw: string}[] = []
+  for (const raw of segments) {
+    // Malformed entry (extra '=', unsafe value chars): drop without
+    // consuming the dedup slot, so a later valid entry for the same key
+    // still wins.
+    if (!REST_ENTRY_RE.test(raw)) continue
+    const key = CONTEXT_ENTRY_RE.exec(raw)![1] // REST_ENTRY_RE-validated, key group always matches
+    if (isReserved(key) || seen.has(key)) continue
+    seen.add(key)
+    entries.push({key, raw})
+  }
+  // Canonicalize at PARSE time (sorted by key) so parse(x) is already a
+  // fixed point of parse∘build∘parse regardless of the URL's entry order.
+  entries.sort(byEntryKey)
+  return entries.map(entry => entry.raw)
+}
+
+const decodeContextValue = (raw: string): string | null => {
+  try {
+    return decodeURIComponent(raw)
+  } catch {
+    return null
+  }
+}
+
+type SlotContext = {viewMode?: string; active?: boolean; maximized?: boolean; rest?: string[]}
+
+/** Valueless boolean slot-context keys, url key → `LayoutSlot` field: `;flag`
+ *  ≡ `;flag=true`, `;flag=false` is an explicit absent, anything else is
+ *  malformed. The SINGLE registration point — parse, build, and the reserved-
+ *  key set all derive from it, so a third flag is one entry here plus its
+ *  field on `LayoutSlot`. */
+const FLAG_SLOT_CONTEXT_KEYS = {active: 'active', max: 'maximized'} as const
+type FlagSlotContextKey = keyof typeof FLAG_SLOT_CONTEXT_KEYS
+type FlagSlotContext = Partial<Record<(typeof FLAG_SLOT_CONTEXT_KEYS)[FlagSlotContextKey], true>>
+const FLAG_SLOT_CONTEXT_ENTRIES = Object.entries(FLAG_SLOT_CONTEXT_KEYS) as
+  [FlagSlotContextKey, (typeof FLAG_SLOT_CONTEXT_KEYS)[FlagSlotContextKey]][]
+
+const isFlagSlotContextKey = (key: string): key is FlagSlotContextKey =>
+  Object.hasOwn(FLAG_SLOT_CONTEXT_KEYS, key)
+
+/** The one single-valued reserved key (`;view=<percent-encoded>`), as opposed
+ *  to the valueless FLAG_SLOT_CONTEXT_KEYS. */
+const VIEW_SLOT_CONTEXT_KEY = 'view'
+
+/** Registration DATA for the keys that can never be an opaque `rest` entry —
+ *  each has a dedicated parse branch and is stripped from `rest` on build.
+ *  Exported so tests derive their exclusion set from the registration rather
+ *  than re-listing it by hand (a hand-copied list stops matching the moment a
+ *  flag is added, and nothing fails until a deep fuzz run happens to generate
+ *  the new key).
+ *
+ *  Deliberately a SEPARATE expression from `isReservedSlotContextKey`, not its
+ *  implementation and not implemented in terms of it: collapsing the two makes
+ *  the fuzz generator exclude exactly what the predicate claims, so a predicate
+ *  that drifts into reserving an ORDINARY key would strip that key from `rest`
+ *  and simultaneously stop it being generated — silent data loss, green suite.
+ *  Two expressions over the same registration keeps the round-trip property an
+ *  independent check on the predicate. */
+export const RESERVED_SLOT_CONTEXT_KEYS: readonly string[] = [
+  VIEW_SLOT_CONTEXT_KEY,
+  ...Object.keys(FLAG_SLOT_CONTEXT_KEYS),
+]
+
+const isReservedSlotContextKey = (key: string): boolean =>
+  key === VIEW_SLOT_CONTEXT_KEY || isFlagSlotContextKey(key)
+
+const parseContextEntries = (segments: readonly string[]): SlotContext => {
+  const seen = new Set<string>()
+  let viewMode: string | undefined
+  // Only ever assigned `true`, so it spreads straight into the result.
+  const flags: FlagSlotContext = {}
+
+  for (const raw of segments) {
+    const match = CONTEXT_ENTRY_RE.exec(raw)
+    if (!match) continue
+    const key = match[1]
+    if (!isReservedSlotContextKey(key)) continue
+    if (seen.has(key)) continue
+    const hasValue = match[2] !== undefined
+    const value = match[3] ?? ''
+
+    if (key === VIEW_SLOT_CONTEXT_KEY) {
+      if (!hasValue) continue
+      const decoded = decodeContextValue(value)
+      // local '' ≡ absent fold — see normalizeViewMode (properties.ts);
+      // routing stays import-free of the data layer.
+      if (!decoded) continue
+      viewMode = decoded
+      seen.add(key)
+    } else if (isFlagSlotContextKey(key)) {
+      if (!hasValue || value === 'true') {
+        flags[FLAG_SLOT_CONTEXT_KEYS[key]] = true
+        seen.add(key)
+      } else if (value === 'false') {
+        seen.add(key)
+      } // else malformed value: drop, and don't consume the dedup slot
+    }
+  }
+
+  const rest = collectRestEntries(segments, isReservedSlotContextKey)
+
+  return {
+    ...(viewMode !== undefined ? {viewMode} : {}),
+    ...flags,
+    ...(rest.length > 0 ? {rest} : {}),
+  }
+}
+
+// Column parsing carries the header's two malformed-input rules: with
+// `strict: false` (outside parens) invalid cells are dropped individually
+// and the survivors keep the column alive; with `strict: true` (inside a
+// paren group) ANY invalid cell voids the column, and parseSublayout
+// propagates that to drop the whole group atomically.
+// 0 cells -> no column; 1 -> that slot directly; >=2 -> a stack.
+const parseColumn = (text: string, strict: boolean): LayoutSlot | null => {
+  const cells: LayoutSlot[] = []
+  for (const raw of splitTopLevel(text, ',')) {
+    const slot = parseSlotCell(raw)
+    if (!slot) {
+      if (strict) return null
+      continue
+    }
+    cells.push(slot)
+  }
+  if (cells.length === 0) return null
+  if (cells.length === 1) return cells[0]
+  return {kind: 'stack', children: cells}
+}
+
+const parseSublayout = (inner: string): LayoutSlot | null => {
+  const columns: LayoutSlot[] = []
+  for (const text of splitTopLevel(inner, '/')) {
+    const column = parseColumn(text, true)
+    if (!column) return null
+    columns.push(column)
+  }
+  return {kind: 'sublayout', columns}
+}
+
+// Ws-token context entries (see the `ws` grammar rule in the header):
+// every key is opaque, so this is collectRestEntries with no reserved keys.
+// Shared between parse and build — build re-checks programmatically
+// constructed entries against the same rules so parse(x) stays a fixed
+// point of parse∘build∘parse for the ws segment too.
+const canonicalWsContextEntries = (
+  segments: readonly string[],
+): string[] | undefined => {
+  const entries = collectRestEntries(segments)
+  return entries.length > 0 ? entries : undefined
+}
+
+const parseSlotCell = (raw: string): LayoutSlot | null => {
+  const token = raw.trim()
+  if (!token) return null
+
+  if (isFullyParenWrapped(token)) return parseSublayout(token.slice(1, -1))
+
+  const [blockId, ...contextSegments] = splitTopLevel(token, ';')
+  if (!blockId || !BLOCK_ID_RE.test(blockId)) return null
+  return {kind: 'leaf', blockId, ...parseContextEntries(contextSegments)}
 }
 
 export const parseLayout = (hash: string | undefined | null): AppLayoutRoute => {
@@ -100,12 +347,15 @@ export const parseLayout = (hash: string | undefined | null): AppLayoutRoute => 
   const trimmed = splitHashRouteAndParams(hash).route
   if (!trimmed) return {slots: [], blockIds: []}
 
-  const [workspaceId, ...slotTokens] = splitTopLevel(trimmed, '/')
-  const slots = slotTokens
-    .map(parseSlot)
+  const [workspaceToken, ...columnTokens] = splitTopLevel(trimmed, '/')
+  const [workspaceId, ...wsContextSegments] = splitTopLevel(workspaceToken, ';')
+  const wsContext = canonicalWsContextEntries(wsContextSegments)
+  const slots = columnTokens
+    .map(token => parseColumn(token, false))
     .filter((slot): slot is LayoutSlot => Boolean(slot))
   return {
     workspaceId: workspaceId || undefined,
+    ...(wsContext !== undefined ? {wsContext} : {}),
     slots,
     blockIds: flattenSlots(slots),
   }
@@ -114,13 +364,56 @@ export const parseLayout = (hash: string | undefined | null): AppLayoutRoute => 
 export const buildLayout = (workspaceId: string, blockIds: readonly string[] = []): string =>
   blockIds.length > 0 ? `#${workspaceId}/${blockIds.join('/')}` : `#${workspaceId}`
 
-const buildLayoutSlot = (slot: LayoutSlot): string => {
-  if (slot.kind === 'leaf') return slot.blockId
-  return `(s:${slot.children.map(buildLayoutSlot).join(',')})`
+const UNSAFE_ENCODE_RE = /[!'()*]/g
+const encodeContextValue = (value: string): string =>
+  encodeURIComponent(value).replace(UNSAFE_ENCODE_RE, char => `%${char.charCodeAt(0).toString(16).toUpperCase()}`)
+
+const buildContextSuffix = (slot: SlotContext): string => {
+  const entries: {key: string; text: string}[] = []
+  for (const [key, field] of FLAG_SLOT_CONTEXT_ENTRIES) {
+    if (slot[field]) entries.push({key, text: key})
+  }
+  // local '' ≡ absent fold — see normalizeViewMode (properties.ts).
+  if (slot.viewMode) {
+    entries.push({
+      key: VIEW_SLOT_CONTEXT_KEY,
+      text: `${VIEW_SLOT_CONTEXT_KEY}=${encodeContextValue(slot.viewMode)}`,
+    })
+  }
+  for (const raw of slot.rest ?? []) {
+    // Guard programmatically constructed slots: drop malformed entries
+    // (REST_ENTRY_RE, same rule as parse) and entries squatting on the
+    // reserved keys — viewMode/active/maximized own those; a rest duplicate
+    // would emit the key twice.
+    if (!REST_ENTRY_RE.test(raw)) continue
+    const key = CONTEXT_ENTRY_RE.exec(raw)![1]  // REST_ENTRY_RE-validated above, so the key group always matches
+    if (isReservedSlotContextKey(key)) continue
+    entries.push({key, text: raw})
+  }
+  entries.sort(byEntryKey)
+  return entries.map(entry => `;${entry.text}`).join('')
 }
 
-export const buildLayoutFromSlots = (workspaceId: string, slots: readonly LayoutSlot[] = []): string =>
-  slots.length > 0 ? `#${workspaceId}/${slots.map(buildLayoutSlot).join('/')}` : `#${workspaceId}`
+const buildLayoutSlot = (slot: LayoutSlot): string => {
+  if (slot.kind === 'leaf') return `${slot.blockId}${buildContextSuffix(slot)}`
+  if (slot.kind === 'stack') return slot.children.map(buildLayoutSlot).join(',')
+  return `(${slot.columns.map(buildLayoutSlot).join('/')})`
+}
+
+export const buildLayoutFromSlots = (
+  workspaceId: string,
+  slots: readonly LayoutSlot[] = [],
+  /** Opaque ws-token entries to re-emit after the workspace id (see
+   *  `AppLayoutRoute.wsContext`). Malformed/duplicate entries are dropped
+   *  and the rest key-sorted — the same canonicalization parse applies. */
+  wsContext?: readonly string[],
+): string => {
+  const wsSuffix = (canonicalWsContextEntries(wsContext ?? []) ?? [])
+    .map(entry => `;${entry}`)
+    .join('')
+  const ws = `${workspaceId}${wsSuffix}`
+  return slots.length > 0 ? `#${ws}/${slots.map(buildLayoutSlot).join('/')}` : `#${ws}`
+}
 
 export const layoutWorkspaceChanged = (
   previousHash: string | undefined | null,
@@ -139,6 +432,49 @@ export const parseAppHash = (hash: string | undefined | null): AppRoute => {
 
 export const buildAppHash = (workspaceId: string, blockId?: string): string =>
   buildLayout(workspaceId, blockId ? [blockId] : [])
+
+/**
+ * `buildAppHash` + the CURRENT hash's same-workspace ws-context (e.g.
+ * `;persp=…`) re-attached: `#ws;persp=lane/block`.
+ *
+ * In-app `<a href>` anchors build with THIS so a native navigation (no JS
+ * interceptor, or a modified/middle click falling through to the browser)
+ * stays in the active perspective lane — a context-free hash reads as the
+ * base session, so a plain internal click would otherwise exit the lane.
+ * Cross-workspace links still drop the context: it belongs to the source
+ * workspace's token.
+ *
+ * Deliberately NOT the default: a perspective lane is device-local UiState
+ * that must not leak into a durable shared URL, so copy/share builders keep
+ * plain `buildAppHash` (see the copy-link action). The workspace-switching
+ * `setHash` sites also keep it — they all fire cross-workspace-only, where
+ * this variant would drop the context anyway.
+ *
+ * `currentHash` is read at call (render) time, which is only correct
+ * while a SINGLE session's tree renders — anchor components therefore go
+ * through `useAppHashInContext` / `appHashForSession`
+ * (src/context/layoutWsContext.tsx, the canonical statement of why), which
+ * fall back to this function when no session provider is mounted.
+ * Chrome-level anchors outside any session refresh at interaction time
+ * instead (see AccountHeaderItem).
+ *
+ * Known trade-off for the out-of-core session host: a lane-carrying href
+ * opened in a NEW tab deep-links into that lane's session — and since a
+ * perspective session's id is derived from its key and its rows sync, the
+ * new tab's reconcile rewrites layout the source tab shares. The host owns
+ * the inbound-deep-link policy (reconcile vs fork vs read-only); core just
+ * guarantees the lane attribution is carried.
+ */
+export const buildAppHashInContext = (
+  workspaceId: string,
+  blockId?: string,
+  currentHash: string | undefined | null =
+    typeof window === 'undefined' ? undefined : window.location.hash,
+): string => {
+  const current = parseLayout(currentHash)
+  const wsContext = current.workspaceId === workspaceId ? current.wsContext : undefined
+  return buildLayoutFromSlots(workspaceId, blockId ? [{kind: 'leaf', blockId}] : [], wsContext)
+}
 
 /**
  * Promote an app hash (from `buildAppHash` / `buildLayout` /

@@ -23,19 +23,22 @@
  */
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
+import { v4 as uuidv4 } from 'uuid'
 import {
   ChangeScope,
   codecs,
   defineProperty,
   defineSameTxProcessor,
+  seedType,
   type TypeContribution,
+  type TypeSeedDeclaration,
   type User,
 } from '@/data/api'
-import { BlockCache } from '@/data/blockCache'
-import { sameTxProcessorsFacet, typesFacet } from '@/data/facets'
+import { sameTxProcessorsFacet, typeSeedsFacet } from '@/data/facets'
 import { kernelDataExtension } from '@/data/kernelDataExtension'
 import { addedTypes } from '@/data/properties'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
+import { createTestRepo } from '@/data/test/createTestRepo'
 import { resolveFacetRuntimeSync } from '@/facets/facet'
 import { Repo } from '../repo'
 import { PAGE_TYPE, USER_TYPE } from '@/data/blockTypes'
@@ -54,9 +57,10 @@ import {
   getUIStateBlock,
   getUserBlock,
   getUserPrefsBlock,
+  layoutSessionBlockIdForKey,
+  layoutSessionsContainerBlockId,
   resetBlockSelection,
 } from '@/data/stateBlocks'
-import { defineBlockType } from '@/data/api'
 
 const WS = 'ws-1'
 const USER: User = {id: 'user-1', name: 'Alice'}
@@ -71,27 +75,27 @@ interface Harness {
 // per-Repo memoize cache), so it must NOT reset — reset lives in beforeEach.
 // `h.cleanup` disposes this harness's sync observer without closing the shared
 // DB, so every `*.h.cleanup()` call (main or secondary) stays correct.
-const setup = async (types: readonly TypeContribution[] = []): Promise<Harness> => {
-  const cache = new BlockCache()
-  const repo = new Repo({
+const setup = async (types: readonly TypeSeedDeclaration[] = []): Promise<Harness> => {
+  // Match the Repo production defaults (uuid ids + a per-Repo monotonic
+  // tx-seq) rather than the harness's deterministic counters: several tests
+  // build a SECOND Repo over the SAME shared db, and shared-deterministic
+  // newId/newTxSeq would collide on command_events.tx_id.
+  let txSeq = Date.now()
+  const { repo } = createTestRepo({
     db: sharedDb.db,
-    cache,
     user: USER,
+    newId: uuidv4,
+    newTxSeq: () => ++txSeq,
+    extensions: types.length > 0 ? [types.map(type => typeSeedsFacet.of(type, {source: 'test'}))] : undefined,
   })
   repo.setActiveWorkspaceId(WS)
-  if (types.length > 0) {
-    repo.setFacetRuntime(resolveFacetRuntimeSync([
-      kernelDataExtension,
-      types.map(type => typesFacet.of(type, {source: 'test'})),
-    ]))
-  }
   return {h: {db: sharedDb.db, cleanup: async () => { repo.stopSyncObserver() }}, repo}
 }
 
-const registerTypes = (repo: Repo, types: readonly TypeContribution[]): void => {
+const registerTypes = (repo: Repo, types: readonly TypeSeedDeclaration[]): void => {
   repo.setFacetRuntime(resolveFacetRuntimeSync([
     kernelDataExtension,
-    types.map(type => typesFacet.of(type, {source: 'test'})),
+    types.map(type => typeSeedsFacet.of(type, {source: 'test'})),
   ]))
 }
 
@@ -189,11 +193,13 @@ describe('getUserPrefsBlock', () => {
     // like any other write; the server's RLS rejection then lands in
     // ps_crud_rejected, which the status surface exposes.
     const h = await createTestDb()
-    const repo = new Repo({
+    let txSeq = Date.now()
+    const { repo } = createTestRepo({
       db: h.db,
-      cache: new BlockCache(),
       user: USER,
       isReadOnly: true,
+      newId: uuidv4,
+      newTxSeq: () => ++txSeq,
     })
     repo.setActiveWorkspaceId(WS)
 
@@ -215,7 +221,9 @@ describe('getUserPrefsBlock', () => {
 })
 
 describe('getPluginPrefsBlock', () => {
-  const examplePrefsType = defineBlockType({
+  const examplePrefsType = seedType({
+    seedKey: 'test/type/example-plugin-prefs',
+    revision: 1,
     id: 'example-plugin-prefs',
     label: 'Example plugin prefs',
   })
@@ -239,8 +247,12 @@ describe('getPluginPrefsBlock', () => {
   })
 
   it('falls back to the type id when the contribution omits a label', async () => {
-    const unlabeled = defineBlockType({id: 'unlabeled-plugin-prefs'})
-    const otherEnv = await setup([unlabeled])
+    // Deliberately a plain, unregistered TypeContribution (not a seedType — a
+    // seed always carries a non-empty label): getPluginPrefsBlock/ensureStateChild
+    // build their own ad hoc registry snapshot for a type not yet known to the
+    // facet system (`snapshotIncludingType`), so this needs no facet registration.
+    const unlabeled: TypeContribution = {id: 'unlabeled-plugin-prefs'}
+    const otherEnv = await setup()
     try {
       const block = await getPluginPrefsBlock(otherEnv.repo, WS, USER, unlabeled)
       expect(block.peek()?.content).toBe('unlabeled-plugin-prefs')
@@ -257,7 +269,7 @@ describe('getPluginPrefsBlock', () => {
   })
 
   it('isolates distinct plugin prefs into distinct sub-blocks', async () => {
-    const otherType = defineBlockType({id: 'other-plugin-prefs'})
+    const otherType = seedType({seedKey: 'test/type/other-plugin-prefs', revision: 1, id: 'other-plugin-prefs', label: 'Other plugin prefs'})
     registerTypes(env.repo, [examplePrefsType, otherType])
     const a = await getPluginPrefsBlock(env.repo, WS, USER, examplePrefsType)
     const b = await getPluginPrefsBlock(env.repo, WS, USER, otherType)
@@ -283,7 +295,9 @@ describe('getPluginPrefsBlock', () => {
       defaultValue: false,
       changeScope: ChangeScope.UserPrefs,
     })
-    const setupType = defineBlockType({
+    const setupType = seedType({
+      seedKey: 'test/type/setup-plugin-prefs',
+      revision: 1,
       id: 'setup-plugin-prefs',
       label: 'Setup plugin prefs',
       properties: [setupRanProp],
@@ -300,7 +314,7 @@ describe('getPluginPrefsBlock', () => {
     })
     env.repo.setFacetRuntime(resolveFacetRuntimeSync([
       kernelDataExtension,
-      typesFacet.of(setupType, {source: 'test'}),
+      typeSeedsFacet.of(setupType, {source: 'test'}),
       sameTxProcessorsFacet.of(setupProcessor, {source: 'test'}),
     ]))
 
@@ -312,7 +326,9 @@ describe('getPluginPrefsBlock', () => {
 })
 
 describe('getPluginUIStateBlock', () => {
-  const exampleUIStateType = defineBlockType({
+  const exampleUIStateType = seedType({
+    seedKey: 'test/type/example-plugin-ui-state',
+    revision: 1,
     id: 'example-plugin-ui-state',
     label: 'Example plugin state',
   })
@@ -416,6 +432,22 @@ describe('getLayoutSessionBlock', () => {
     expect(a.peek()?.parentId).toBe(b.peek()?.parentId)
     expect(a.peek()?.content).toBe('layout-session-a')
     expect(b.peek()?.content).toBe('layout-session-b')
+  })
+
+  it('materializes EXACTLY the block id the pure derivations predict (external session-host mapping pin)', async () => {
+    // A keep-alive session host never materializes: it derives each warm session's
+    // block id synchronously via layoutSessionBlockIdForKey and mounts that.
+    // This pins the derivation against the materializer — if either side's
+    // uuidv5 chain changes without the other, the host would render
+    // nonexistent blocks under the opt-in.
+    const uiState = await getUIStateBlock(env.repo, WS, USER, {})
+    const session = await getLayoutSessionBlock(uiState, 'layout-session-a')
+
+    expect(session.id).toBe(layoutSessionBlockIdForKey(WS, USER.id, 'layout-session-a'))
+    // …and the container half of the chain agrees too (canRender's id).
+    expect(session.peek()?.parentId).toBe(layoutSessionsContainerBlockId(WS, USER.id))
+    // The session KEY is not itself a block id — the domains genuinely differ.
+    expect(session.id).not.toBe('layout-session-a')
   })
 })
 

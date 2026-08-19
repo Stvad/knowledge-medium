@@ -1,4 +1,4 @@
-import { ChangeScope, codecs, defineBlockType, defineProperty } from '@/data/api'
+import { ChangeScope, seedProperty, seedType, INFRASTRUCTURE_TYPE_DISPLAY } from '@/data/api'
 
 export const SRS_REVIEW_DECK_TYPE = 'srs-review-deck'
 
@@ -6,8 +6,11 @@ export const SRS_REVIEW_DECK_TYPE = 'srs-review-deck'
  *  `blockTagsConfigProp`). Resolved to a block id at query time via
  *  `core.aliasLookup`. Empty string is the "all due" deck — every SRS
  *  card due today or earlier, regardless of tag. */
-export const reviewDeckTagProp = defineProperty<string>('srs-review:deck-tag', {
-  codec: codecs.string,
+export const reviewDeckTagProp = seedProperty({
+  seedKey: 'system:srs-review/property/deck-tag',
+  revision: 1,
+  name: 'srs-review:deck-tag',
+  preset: 'string',
   defaultValue: '',
   changeScope: ChangeScope.BlockDefault,
 })
@@ -17,13 +20,18 @@ export const reviewDeckTagProp = defineProperty<string>('srs-review:deck-tag', {
  *  flag (rather than React state) so reopening the deck block resumes
  *  the chosen deck instead of dropping back to the picker. The session
  *  writes it back to false via its "Change deck" affordance. */
-export const reviewDeckStartedProp = defineProperty<boolean>('srs-review:deck-started', {
-  codec: codecs.boolean,
+export const reviewDeckStartedProp = seedProperty({
+  seedKey: 'system:srs-review/property/deck-started',
+  revision: 1,
+  name: 'srs-review:deck-started',
+  preset: 'boolean',
   defaultValue: false,
   changeScope: ChangeScope.BlockDefault,
 })
 
-export const srsReviewDeckType = defineBlockType({
+export const srsReviewDeckType = seedType({
+  seedKey: 'system:srs-review/type/srs-review-deck',
+  revision: 1,
   id: SRS_REVIEW_DECK_TYPE,
   label: 'SRS review deck',
   properties: [reviewDeckTagProp, reviewDeckStartedProp],
@@ -51,14 +59,20 @@ export interface ReviewProgress {
  *  scalar props. `ChangeScope.UiState` routes it into the ui-state
  *  subtree, undo-segregated from document edits — it's session/UI state,
  *  not document content. */
-export const reviewProgressProp = defineProperty<ReviewProgress | null>('srs-review:progress', {
-  codec: codecs.unsafeIdentity<ReviewProgress | null>(),
+export const reviewProgressProp = seedProperty<ReviewProgress | null>({
+  seedKey: 'system:srs-review/property/progress',
+  revision: 1,
+  name: 'srs-review:progress',
+  preset: 'json',
   defaultValue: null,
   changeScope: ChangeScope.UiState,
 })
 
-export const srsReviewProgressType = defineBlockType({
+export const srsReviewProgressType = seedType({
+  seedKey: 'system:srs-review/type/srs-review-progress',
+  revision: 1,
   id: SRS_REVIEW_PROGRESS_TYPE,
   label: 'SRS review progress',
+  ...INFRASTRUCTURE_TYPE_DISPLAY,
   properties: [reviewProgressProp],
 })

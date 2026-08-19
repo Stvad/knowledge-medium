@@ -6,12 +6,12 @@
  *  when it's the type a schema is already on (`keepId`), so that schema
  *  still shows its current type rather than a blank selector. */
 
-import type { AnyValuePreset } from '@/data/api'
+import type { AnyJoinedValuePreset } from '@/data/api'
 
 export const selectablePresets = (
-  presets: ReadonlyMap<string, AnyValuePreset>,
+  presets: ReadonlyMap<string, AnyJoinedValuePreset>,
   keepId?: string,
-): AnyValuePreset[] =>
+): AnyJoinedValuePreset[] =>
   Array.from(presets.values())
     .filter(preset => !preset.hideFromPicker || preset.id === keepId)
     .sort((a, b) => a.label.localeCompare(b.label))

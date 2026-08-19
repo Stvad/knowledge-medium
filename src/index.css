@@ -1,5 +1,8 @@
 @import "tailwindcss";
 @import "tw-animate-css";
+/* Force-generated utility vocabulary so dynamically-loaded extensions
+ * (whose source Tailwind never scans) can rely on standard classes. */
+@import "./extension-utilities.css";
 
 @plugin "tailwind-scrollbar";
 
@@ -238,6 +241,18 @@
     overflow-x: auto;
   }
 
+  /* A quote is marked by the rule down its left edge, not by space around it:
+     these sit inline in an outline where every bullet is already its own row,
+     so vertical padding would break the list's rhythm. Preflight zeroes the
+     UA margin; the stray newlines that used to add a blank line above and
+     below are dropped in `defaultMarkdownExtension`. Sized in `em` so the rule
+     and its gutter scale with the surrounding text (a title block renders at
+     1.5rem). */
+  blockquote {
+    border-left: 0.1875em solid hsl(var(--muted-foreground) / 0.4);
+    padding-left: 0.65em;
+  }
+
   a {
     @apply text-link underline;
     /* A long URL is a single unbreakable token; let it wrap to fit
@@ -252,6 +267,20 @@
 
   a.wikilink:hover {
     @apply underline;
+  }
+
+  .blockref,
+  a.blockref {
+    text-decoration-line: underline;
+    text-decoration-style: dotted;
+    text-decoration-color: hsl(var(--muted-foreground) / 0.62);
+    text-decoration-thickness: 1px;
+    text-underline-offset: 0.18em;
+  }
+
+  .blockref:hover,
+  a.blockref:hover {
+    text-decoration-color: hsl(var(--muted-foreground) / 0.78);
   }
 
   img {
@@ -383,11 +412,33 @@
     color: hsl(var(--muted-foreground));
   }
 
+  /* The focal block's content slot: spacing under the document body. Holds
+     whatever renderer won the content facet, so nothing INHERITABLE belongs
+     here — see `blockTitleText.ts`. */
   .block-content.top-level-content {
+    margin-bottom: 0.5rem;
+  }
+
+  /* Title typography, applied by the renderers that draw the focal block's own
+     text (markdown read + CodeMirror edit), so it can never leak into a plugin
+     surface mounted in the same slot. */
+  .block-title-text {
     font-size: 1.5rem;
     font-weight: 600;
     line-height: 1.25;
-    margin-bottom: 0.5rem;
+  }
+
+  /* NOTE: the open page's title deliberately gets NO extra treatment — see
+     `pageStyling.ts` in the alias plugin for why the size step + hairline
+     rule that used to live here were removed. */
+
+  /* A page seen anywhere OTHER than as the open page — nested in the outline,
+     in search results, in a backlink entry. Deliberately weight-only: these
+     sit in a list of sibling bullets, and changing their size would break the
+     vertical rhythm that makes an outline scannable. The goal is "I can tell
+     that line is a page", not "that line is a heading". */
+  .page-name-text {
+    font-weight: 600;
   }
 
   .tm-block[data-editing='true'] {
@@ -397,5 +448,32 @@
   .tm-block[data-editing='true'] .block-body,
   .tm-block[data-editing='true'] .block-content {
     overflow: visible;
+  }
+}
+
+/*
+  A page's bullet: a ring instead of a filled dot. Contributed by the alias
+  plugin through `blockBulletClassFacet` — core paints no opinion about which
+  blocks are pages.
+
+  In @layer utilities, NOT components, and that is load-bearing: the dot's base
+  look comes from utilities on the element (`h-1.5 w-1.5 bg-muted-foreground/80`),
+  which Tailwind emits into this layer, so a components-layer rule loses to them
+  outright — the ring drew but the fill it was supposed to replace stayed. Same
+  layer, higher specificity (two classes vs one), so this wins on the cascade's
+  own terms rather than on `!important`.
+
+  Drawn as an INSET shadow rather than a border so it composes with the
+  collapsed-with-children halo (a 4px border OUTSIDE the dot) instead of
+  competing for the same property. The 2px size bump is what makes the hole
+  legible; the dot is centred in a fixed-size anchor (`.bullet-link`, h-6 w-5),
+  so growing it moves no text.
+*/
+@layer utilities {
+  .bullet.page-bullet {
+    width: 0.5rem;
+    height: 0.5rem;
+    background-color: transparent;
+    box-shadow: inset 0 0 0 1.5px hsl(var(--muted-foreground) / 0.8);
   }
 }

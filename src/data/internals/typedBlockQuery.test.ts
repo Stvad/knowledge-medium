@@ -3,62 +3,62 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { resolveFacetRuntimeSync } from '@/facets/facet'
 import {
   ChangeScope,
-  codecs,
-  defineProperty,
+  seedProperty,
+  seedType,
   type BlockReference,
 } from '@/data/api'
 import { BlockCache } from '@/data/blockCache'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
-import { BLOCKS_SYNCED_RAW_TABLE, blockToRowParams } from '@/data/blockSchema'
+import { BLOCKS_SYNCED_RAW_TABLE, blockToSyncedRowParams } from '@/data/blockSchema'
 import { typesProp } from '@/data/properties'
-import { propertySchemasFacet } from '../facets'
+import { definitionSeedsFacet, typeSeedsFacet } from '../facets'
 import { kernelDataExtension } from '../kernelDataExtension'
 import { Repo } from '../repo'
+import { compileTypedBlockQuery } from './typedBlockQuery'
+import type { ResolvedTypedBlockQuery } from '@/data/api'
 
 const WS = 'ws-1'
 const OTHER_WS = 'ws-2'
 
-const statusProp = defineProperty<string>('status', {
-  codec: codecs.string,
-  defaultValue: 'open',
-  changeScope: ChangeScope.BlockDefault,
+// Test property fixtures — code-owned seeds so they resolve by name in the
+// property registry (the type-lift that used to surface a type's embedded
+// schemas is gone; a property must be a seed to be queryable/resolvable).
+const statusProp = seedProperty({
+  seedKey: 'test/property/status', revision: 1, name: 'status',
+  preset: 'string', defaultValue: 'open', changeScope: ChangeScope.BlockDefault,
 })
 
-const doneProp = defineProperty<boolean>('done', {
-  codec: codecs.boolean,
-  defaultValue: false,
-  changeScope: ChangeScope.BlockDefault,
+const doneProp = seedProperty({
+  seedKey: 'test/property/done', revision: 1, name: 'done',
+  preset: 'boolean', defaultValue: false, changeScope: ChangeScope.BlockDefault,
 })
 
-const priorityProp = defineProperty<number>('priority', {
-  codec: codecs.number,
-  defaultValue: 0,
-  changeScope: ChangeScope.BlockDefault,
+const priorityProp = seedProperty({
+  seedKey: 'test/property/priority', revision: 1, name: 'priority',
+  preset: 'number', defaultValue: 0, changeScope: ChangeScope.BlockDefault,
 })
 
-const dueProp = defineProperty<Date | undefined>('due', {
-  codec: codecs.date,
-  defaultValue: undefined,
-  changeScope: ChangeScope.BlockDefault,
+const dueProp = seedProperty({
+  seedKey: 'test/property/due', revision: 1, name: 'due',
+  preset: 'date', defaultValue: undefined, changeScope: ChangeScope.BlockDefault,
 })
 
-const weirdNameProp = defineProperty<string>('weird:name.with-dot-hyphen', {
-  codec: codecs.string,
-  defaultValue: '',
-  changeScope: ChangeScope.BlockDefault,
+const weirdNameProp = seedProperty({
+  seedKey: 'test/property/weird-name', revision: 1, name: 'weird:name.with-dot-hyphen',
+  preset: 'string', defaultValue: '', changeScope: ChangeScope.BlockDefault,
 })
 
-const labelsProp = defineProperty<readonly string[]>('labels', {
-  codec: codecs.list(codecs.string),
-  defaultValue: [],
-  changeScope: ChangeScope.BlockDefault,
+const labelsProp = seedProperty({
+  seedKey: 'test/property/labels', revision: 1, name: 'labels',
+  preset: 'string-list', defaultValue: [], changeScope: ChangeScope.BlockDefault,
 })
 
-const reviewerProp = defineProperty<string>('reviewer', {
-  codec: codecs.ref(),
-  defaultValue: '',
-  changeScope: ChangeScope.BlockDefault,
+const reviewerProp = seedProperty({
+  seedKey: 'test/property/reviewer', revision: 1, name: 'reviewer',
+  preset: 'ref', defaultValue: '', changeScope: ChangeScope.BlockDefault,
 })
+
+const queryProps = [statusProp, doneProp, priorityProp, dueProp, weirdNameProp, labelsProp, reviewerProp]
 
 interface Harness {
   h: TestDb
@@ -78,16 +78,19 @@ const setup = async (): Promise<Harness> => {
     user: {id: 'user-1'},
     now: () => ++timeCursor,
     newId: () => `gen-${++idCursor}`,
+    // Mnemonic ids — see the MNEMONIC IDS note in createTestRepo.ts.
+    blockIdPolicy: 'any',
   })
   repo.setFacetRuntime(resolveFacetRuntimeSync([
     kernelDataExtension,
-    propertySchemasFacet.of(statusProp, {source: 'test'}),
-    propertySchemasFacet.of(doneProp, {source: 'test'}),
-    propertySchemasFacet.of(priorityProp, {source: 'test'}),
-    propertySchemasFacet.of(dueProp, {source: 'test'}),
-    propertySchemasFacet.of(weirdNameProp, {source: 'test'}),
-    propertySchemasFacet.of(labelsProp, {source: 'test'}),
-    propertySchemasFacet.of(reviewerProp, {source: 'test'}),
+    ...queryProps.map(prop => definitionSeedsFacet.of(prop, {source: 'test'})),
+    typeSeedsFacet.of(seedType({
+      seedKey: 'test/type/typed-block-query-props',
+      revision: 1,
+      id: 'test:typed-block-query-props',
+      label: 'Typed block query props',
+      properties: queryProps,
+    }), {source: 'test'}),
   ]))
   repo.setActiveWorkspaceId(WS)
   return {h, repo}
@@ -589,7 +592,7 @@ describe('repo.subscribeBlocks', () => {
     // A brand-new typed block arrives via the sync path: staged into
     // blocks_synced, materialized by the observer. New id ⇒ no prior local
     // row, so no pending-upload gate to clear.
-    await env.h.db.execute(BLOCKS_SYNCED_RAW_TABLE.put.sql, blockToRowParams({
+    await env.h.db.execute(BLOCKS_SYNCED_RAW_TABLE.put.sql, blockToSyncedRowParams({
       id: 'remote-todo', workspaceId: WS, parentId: null, orderKey: 'a0',
       content: '', properties: {[typesProp.name]: ['todo']}, references: [],
       createdAt: 0, updatedAt: 0, userUpdatedAt: 0, createdBy: 'remote', updatedBy: 'remote', deleted: false,
@@ -626,5 +629,40 @@ describe('repo.countBlocksUsingProperty', () => {
     await create({id: 'miss', properties: {status: 'open'}})
 
     expect(await env.repo.countBlocksUsingProperty(weirdNameProp.name)).toBe(1)
+  })
+})
+
+// Why the type filter is a JOIN and not a correlated EXISTS, including the
+// crossover where it is SLOWER: see the block comment on `typeJoin` in
+// typedBlockQuery.ts. These tests pin the emitted shape and the param order.
+describe('compileTypedBlockQuery — type filter join order', () => {
+  const compileTypes = (types: string[], extra: Partial<ResolvedTypedBlockQuery> = {}) =>
+    compileTypedBlockQuery(
+      {workspaceId: WS, types, match: [], exclude: [], ...extra},
+      new Map(),
+      {projection: 'ids'},
+    )
+
+  it('joins block_types instead of probing it per candidate row', () => {
+    const {sql} = compileTypes(['property-schema'])
+    expect(sql).toContain('JOIN block_types bt')
+    expect(sql).not.toMatch(/EXISTS\s*\(\s*SELECT 1\s*FROM block_types/)
+  })
+
+  it('binds the type params in FROM-clause position, ahead of the WHERE params', () => {
+    // The join's `?` now precedes `b.workspace_id = ?` in the statement text,
+    // so a params array still ordered WHERE-first would silently filter by the
+    // wrong values rather than throw.
+    const {sql, params} = compileTypes(['property-schema', 'block-type'])
+    // Types arrive sorted — normalizeTypedBlockQuery canonicalises them so the
+    // compiled SQL is a stable cache key.
+    expect(params).toEqual(['block-type', 'property-schema', WS])
+    expect(sql.indexOf('bt.type IN')).toBeLessThan(sql.indexOf('b.workspace_id = ?'))
+  })
+
+  it('keeps referencedBy params in statement order when both are present', () => {
+    const {sql, params} = compileTypes(['todo'], {referencedBy: {id: 'target-1'}})
+    expect(params).toEqual(['todo', WS, 'target-1'])
+    expect(sql.indexOf('bt.type IN')).toBeLessThan(sql.indexOf('br.workspace_id = ?'))
   })
 })

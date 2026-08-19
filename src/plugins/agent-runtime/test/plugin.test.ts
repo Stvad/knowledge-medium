@@ -1,3 +1,4 @@
+// @vitest-environment happy-dom
 import { describe, expect, it } from 'vitest'
 import { actionsFacet, appEffectsFacet, appMountsFacet } from '@/extensions/core.js'
 import { resolveFacetRuntimeSync } from '@/facets/facet.js'

@@ -1,9 +1,30 @@
+import { useSyncExternalStore } from 'react'
 import { Button } from '@/components/ui/button'
 import { useSignOut } from '@/components/Login.js'
 import type { FallbackProps } from 'react-error-boundary'
+import { corruptErrorUserId } from '@/utils/localDbCorruption.js'
+import { LocalDbCorruptionFallback } from '@/components/util/LocalDbCorruptionFallback.js'
+import {
+  getLocalDbCorruptionSnapshot,
+  subscribeLocalDbCorruption,
+} from '@/data/localDbCorruptionSignal.js'
 
 const errorMessage = (error: unknown): string =>
   error instanceof Error ? error.message : String(error)
+
+/**
+ * Bridges a RUNTIME local-DB corruption into the bootstrap ErrorBoundary. A
+ * corrupt already-open DB surfaces inside the PowerSync sync worker, not as a
+ * React render throw, so nothing would reach the boundary. Mounted as a sibling
+ * of RepoProvider INSIDE the ErrorBoundary, this reads the latched signal and
+ * throws it during render → BootstrapErrorFallback → LocalDbCorruptionFallback
+ * (same Export + Reset flow as the open-time case). See localDbCorruptionSignal.
+ */
+export function LocalDbCorruptionSentinel(): null {
+  const error = useSyncExternalStore(subscribeLocalDbCorruption, getLocalDbCorruptionSnapshot)
+  if (error) throw error
+  return null
+}
 
 export function FallbackComponent({error}: FallbackProps) {
   return <div>Something went wrong: {errorMessage(error)}</div>
@@ -21,6 +42,18 @@ export function FallbackComponent({error}: FallbackProps) {
 // and PowerSync removes rows the user lost access to, so localStorage is
 // almost always self-healing.
 export function BootstrapErrorFallback({error}: FallbackProps) {
+  // A corrupt local SQLite DB gets its own recovery UI (Export + Reset) — the
+  // generic Reload/Sign out below can't fix a malformed file. See
+  // localDbCorruption.ts for how the error is tagged at the DB-open boundary.
+  const corruptUserId = corruptErrorUserId(error)
+  if (corruptUserId !== null) {
+    return <LocalDbCorruptionFallback userId={corruptUserId} detail={errorMessage(error)} />
+  }
+
+  return <GenericBootstrapErrorFallback error={error} />
+}
+
+function GenericBootstrapErrorFallback({error}: {error: unknown}) {
   const signOut = useSignOut()
 
   const handleSignOut = async () => {

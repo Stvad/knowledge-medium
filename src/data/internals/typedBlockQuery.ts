@@ -282,14 +282,13 @@ const compilePredicateAgainstRow = (
  *  scope) or as an EXISTS over the ancestor_chain CTE rows that share
  *  `block_id = b.id` (ancestor scope, includes b itself).
  *
- *  Page-as-tag: in ancestor scope, a `referencedBy:{id:X}` sub-clause
- *  also matches when the root ancestor's own id IS X — Roam treats a
- *  page as an implicit reference target for every block it contains.
- *  Filtering by a page name should match blocks living on that page
- *  even when no ancestor sources an explicit reference. Pre-unification
- *  SQL encoded this by UNIONing the root ancestor's id into the
- *  context set; `sourceField` predicates target a specific reference
- *  channel and stay strict (the page-is-itself case has no channel). */
+ *  Ancestor-as-tag: in ancestor scope, a `referencedBy:{id:X}` sub-clause
+ *  also matches when any ancestor's own id IS X — Roam treats a parent
+ *  block/page as an implicit reference target for everything it contains.
+ *  Filtering by a parent name should match blocks living under that parent
+ *  even when no ancestor sources an explicit reference. `sourceField`
+ *  predicates target a specific reference channel and stay strict (the
+ *  ancestor-is-itself case has no channel). */
 const compileScopedPredicate = (
   predicate: BlockPredicate,
   propertySchemas: ReadonlyMap<string, AnyPropertySchema>,
@@ -318,7 +317,7 @@ const compileScopedPredicate = (
   if (predicate.referencedBy !== undefined) {
     const refExists = compileReferencedByExists(predicate.referencedBy, 'anc.id')
     if (predicate.referencedBy.sourceField === undefined) {
-      clauses.push(`(${refExists.sql} OR (ac.anc_parent_id IS NULL AND anc.id = ?))`)
+      clauses.push(`(${refExists.sql} OR anc.id = ?)`)
       params.push(...refExists.params, predicate.referencedBy.id)
     } else {
       clauses.push(refExists.sql)
@@ -439,10 +438,49 @@ export const buildCandidatesCte = (
   const clauses: string[] = []
   let from: string
 
+  // A JOIN rather than a correlated `EXISTS (SELECT 1 FROM block_types …)`.
+  // SQLite cannot hoist a correlated subquery into the outer loop, so the
+  // EXISTS form pinned the candidate scan to `blocks` filtered by workspace
+  // alone — every live block in the workspace, probing `block_types` once per
+  // row (346k probes to return 562 rows on a real client: 294ms warm, 5.3s
+  // cold). As a join the planner may instead drive from
+  // `idx_block_types_type_workspace`, whose leading `type` column is the
+  // selective one — measured 12ms. Matches the shape `SELECT_BLOCKS_BY_TYPE_SQL`
+  // has always used.
+  //
+  // NOT strictly faster, and the crossover is worth knowing: the join wins when
+  // the type is more selective than the other predicates, which is the reported
+  // shape (types-only, or a type covering a small share of the workspace). When
+  // a type covers most of the workspace AND a `where` term is the selective one
+  // AND `sqlite_stat1` is absent, the planner can pick bt-driving and pay a
+  // per-type-row `blocks` PK lookup that the EXISTS form deferred until after
+  // the cheap `json_extract` filter — measured 82ms → 185ms at 100% type
+  // coverage over 300k blocks. Bounded (~2-3x, still sub-200ms) and it
+  // evaporates once ANALYZE has run, which `runAnalyzeIfStale` now keeps true.
+  //
+  // `bt.workspace_id = b.workspace_id` is redundant for correctness (the
+  // `(block_id, type)` PK already pins the row) but load-bearing for hitting
+  // the composite index via transitive-equality propagation from
+  // `b.workspace_id = ?`. In the referencedBy branch there is no
+  // `b.workspace_id = ?` to propagate from — scoping comes via
+  // `br.workspace_id = ?` — and the planner uses the PK autoindex instead.
+  const typeJoin = types.length > 0
+    ? `
+      JOIN block_types bt
+        ON bt.block_id = b.id
+       AND bt.workspace_id = b.workspace_id
+       AND bt.type IN (${types.map(() => '?').join(', ')})`
+    : ''
+
+  // Param order is statement order, and the join's placeholders sit in the FROM
+  // clause — ahead of every WHERE placeholder — so the type params go first.
+  // `params` is still empty here, so one push before the branch covers both.
+  params.push(...types)
+
   if (normalized.referencedBy !== undefined) {
     from = `
       FROM block_references br
-      JOIN blocks b ON b.id = br.source_id
+      JOIN blocks b ON b.id = br.source_id${typeJoin}
     `.trim()
     clauses.push('br.workspace_id = ?', 'br.target_id = ?', 'b.deleted = 0')
     params.push(normalized.workspaceId, normalized.referencedBy.id)
@@ -451,22 +489,9 @@ export const buildCandidatesCte = (
       params.push(normalized.referencedBy.sourceField)
     }
   } else {
-    from = 'FROM blocks b'
+    from = `FROM blocks b${typeJoin}`
     clauses.push('b.workspace_id = ?', 'b.deleted = 0')
     params.push(normalized.workspaceId)
-  }
-
-  if (types.length > 0) {
-    clauses.push(`
-      EXISTS (
-        SELECT 1
-        FROM block_types bt
-        WHERE bt.block_id = b.id
-          AND bt.workspace_id = b.workspace_id
-          AND bt.type IN (${types.map(() => '?').join(', ')})
-      )
-    `.trim())
-    params.push(...types)
   }
 
   if (normalized.where !== undefined) {
@@ -499,6 +524,13 @@ export const buildCandidatesCte = (
     params.push(...compiled.params)
   }
 
+  // DISTINCT is LOAD-BEARING, not defensive. It was redundant while the type
+  // filter was an EXISTS (b.id is unique in `blocks`); now it is the only thing
+  // absorbing the `block_types` join's row multiplication, so a block carrying
+  // two of the requested types yields one candidate rather than two — which
+  // `projection: 'count'` would otherwise report as two. `INNER` on the join is
+  // load-bearing for the same reason in reverse: LEFT would readmit untyped
+  // blocks. Both are pinned by the multi-type cases in typedBlockQuery.test.ts.
   return {
     sql: `candidates AS (
       SELECT DISTINCT b.id

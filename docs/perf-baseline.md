@@ -12,7 +12,7 @@ the legacy `repo.findX` / `repo.subtree(id)` / `repo.children(id)`
 factories were deleted in Phase 4 chunk C-2.
 
 The bench harness lives in [scripts/bench/](../scripts/bench). Re-run
-with `yarn bench [suite...]` (suites: `writes`, `reads`, `handles`,
+with `pnpm bench [suite...]` (suites: `writes`, `reads`, `handles`,
 `search`, `tail`, `scale`). Raw JSON results are in
 [tmp/bench-results/](../tmp/bench-results/).
 
@@ -443,17 +443,17 @@ is unchanged but the cost numbers are refreshed.
 
 ```bash
 # Full default run (no large fixtures):
-yarn bench
+pnpm bench
 
 # A single suite:
-yarn bench writes
-yarn bench handles
+pnpm bench writes
+pnpm bench handles
 
 # Multiple, with stable output filename for diffing:
-yarn bench writes reads --out tmp/bench-results/baseline.json
+pnpm bench writes reads --out tmp/bench-results/baseline.json
 
 # Include the heavy scale variants (50k+ blocks, 10k chains):
-yarn bench scale --scale full
+pnpm bench scale --scale full
 ```
 
 Suites: `writes`, `reads`, `handles`, `search`, `tail`, `scale`.

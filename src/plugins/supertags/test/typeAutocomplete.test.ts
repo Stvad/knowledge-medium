@@ -1,0 +1,590 @@
+// @vitest-environment happy-dom
+import { CompletionContext } from '@codemirror/autocomplete'
+import { markdown, markdownLanguage } from '@codemirror/lang-markdown'
+import { EditorState } from '@codemirror/state'
+import { EditorView } from '@codemirror/view'
+import { describe, expect, it, vi } from 'vitest'
+import type { TypeContribution } from '@/data/api'
+import { PAGE_TYPE } from '@/data/blockTypes'
+import {
+  buildTypeTagCandidates,
+  findCompletableTypeByName,
+  matchHashTrigger,
+  planTriggerDeletion,
+  planTriggerRestore,
+  restoreDeletedTextToView,
+  typeTagCompletionSource,
+  visibleTagTypeIds,
+  type TypeTagCandidate,
+} from '../typeAutocomplete'
+
+describe('matchHashTrigger', () => {
+  // Char-generic behavior (whitespace/word-cap/wikilink/… guards) is
+  // covered in src/editor/test/triggerMatch.test.ts against the shared
+  // matcher; this suite pins only the #-specific wiring.
+  it('matches a basic tag query', () => {
+    expect(matchHashTrigger('call mom #todo', 14)).toEqual({from: 9, query: 'todo'})
+  })
+
+  it('does NOT match a markdown heading (query starts with a space)', () => {
+    expect(matchHashTrigger('# Title', 7)).toBeNull()
+  })
+
+  it('does NOT match stacked hashes (## heading territory)', () => {
+    expect(matchHashTrigger('##task', 6)).toBeNull()
+  })
+
+  it('DOES match a tag glued onto the tail of a word (title#todo)', () => {
+    // The one-word-block case: `#` should fire without a throwaway
+    // leading space (unlike `@`, which stays email-strict).
+    expect(matchHashTrigger('title#todo', 10)).toEqual({from: 5, query: 'todo'})
+    expect(matchHashTrigger('title#', 6)).toEqual({from: 5, query: ''})
+  })
+
+  it('does NOT match inside a URL path (slash earlier in the token)', () => {
+    expect(matchHashTrigger('example.com/page#section', 24)).toBeNull()
+  })
+})
+
+const registryOf = (...types: TypeContribution[]): ReadonlyMap<string, TypeContribution> =>
+  new Map(types.map(t => [t.id, t]))
+
+const existingIds = (out: readonly TypeTagCandidate[]): string[] =>
+  out.flatMap(c => c.kind === 'existing' ? [c.id] : [])
+
+const TASK: TypeContribution = {id: 'uuid-task', label: 'Task'}
+const TRIP: TypeContribution = {id: 'uuid-trip', label: 'Trip', description: 'A journey'}
+const TODO: TypeContribution = {id: 'todo', label: 'Todo'}
+const PAGE: TypeContribution = {id: PAGE_TYPE, label: 'Page', hideFromCompletion: true, hideFromBlockDisplay: true}
+// Mirrors the pluginPrefsExtension/pluginUIStateExtension stamp:
+// completion-hidden, chip-visible.
+const PREFS: TypeContribution = {id: 'quick-find-ui-state', label: 'Quick find', hideFromCompletion: true}
+
+describe('buildTypeTagCandidates', () => {
+  it('lists all visible types for an empty query, without a create sentinel', () => {
+    const out = buildTypeTagCandidates({
+      registry: registryOf(TASK, TRIP, PAGE),
+      currentTypeIds: [],
+      query: '',
+    })
+    expect(existingIds(out)).toEqual(['uuid-task', 'uuid-trip'])
+    expect(out.every(c => c.kind === 'existing')).toBe(true)
+  })
+
+  it('filters by label and id, case-insensitively', () => {
+    const byLabel = buildTypeTagCandidates({
+      registry: registryOf(TASK, TRIP),
+      currentTypeIds: [],
+      query: 'tA',
+    })
+    expect(existingIds(byLabel)).toEqual(['uuid-task'])
+
+    const byId = buildTypeTagCandidates({
+      registry: registryOf(TODO, TRIP),
+      currentTypeIds: [],
+      query: 'todo',
+    })
+    expect(byId[0]).toMatchObject({kind: 'existing', id: 'todo'})
+  })
+
+  it('excludes types already on the block', () => {
+    const out = buildTypeTagCandidates({
+      registry: registryOf(TASK, TRIP),
+      currentTypeIds: ['uuid-task'],
+      query: '',
+    })
+    expect(existingIds(out)).toEqual(['uuid-trip'])
+  })
+
+  it('excludes hideFromCompletion contributions — kernel structure and plugin plumbing alike', () => {
+    const out = buildTypeTagCandidates({
+      registry: registryOf(PAGE, PREFS, TASK),
+      currentTypeIds: [],
+      query: '',
+    })
+    expect(existingIds(out)).toEqual(['uuid-task'])
+  })
+
+  it('ranks prefix matches above contains matches', () => {
+    const stash: TypeContribution = {id: 'uuid-stash', label: 'Stash'}
+    const shopping: TypeContribution = {id: 'uuid-shop', label: 'Shopping'}
+    const out = buildTypeTagCandidates({
+      registry: registryOf(stash, shopping),
+      currentTypeIds: [],
+      query: 'sh',
+    })
+    expect(out.filter(c => c.kind === 'existing').map(c => c.label))
+      .toEqual(['Shopping', 'Stash'])
+  })
+
+  it('appends a create sentinel for a non-matching query, trimmed', () => {
+    const out = buildTypeTagCandidates({
+      registry: registryOf(TASK),
+      currentTypeIds: [],
+      query: 'Recipe ',
+    })
+    expect(out[out.length - 1]).toMatchObject({kind: 'create', label: 'Recipe'})
+  })
+
+  it('offers no create sentinel when the query exactly matches a taggable label — even an already-applied one', () => {
+    const applied = buildTypeTagCandidates({
+      registry: registryOf(TASK),
+      currentTypeIds: ['uuid-task'],
+      query: 'task',
+    })
+    expect(applied).toEqual([])
+  })
+
+  it('an exact match on a STRUCTURAL label is not a dead end — create is offered', () => {
+    // Without this, `#page` / `#user` would silently show nothing:
+    // the hidden-from-completion type never appears as a candidate, and its label
+    // suppressing the sentinel would leave zero options.
+    const out = buildTypeTagCandidates({
+      registry: registryOf(PAGE),
+      currentTypeIds: [],
+      query: 'page',
+    })
+    expect(out).toEqual([{kind: 'create', label: 'page', detail: 'Create new type'}])
+  })
+
+  it('carries the type description as detail', () => {
+    const out = buildTypeTagCandidates({
+      registry: registryOf(TRIP),
+      currentTypeIds: [],
+      query: 'trip',
+    })
+    expect(out[0].detail).toBe('A journey')
+  })
+})
+
+describe('visibleTagTypeIds', () => {
+  const HIDDEN: TypeContribution = {id: 'uuid-secret', label: 'Secret', hideFromBlockDisplay: true}
+
+  it('drops infrastructure kernel types and hideFromBlockDisplay opt-outs, keeps the rest in order', () => {
+    const registry = registryOf(TASK, TRIP, PAGE, HIDDEN)
+    expect(visibleTagTypeIds(
+      ['uuid-task', PAGE_TYPE, 'uuid-secret', 'uuid-trip'], registry))
+      .toEqual(['uuid-task', 'uuid-trip'])
+  })
+
+  it('keeps types missing from the registry (label falls back to the id)', () => {
+    expect(visibleTagTypeIds(['uuid-unknown'], registryOf())).toEqual(['uuid-unknown'])
+  })
+
+  it('the flags are orthogonal: a completion-hidden type (prefs container) still shows its chip', () => {
+    expect(visibleTagTypeIds(['quick-find-ui-state'], registryOf(PREFS)))
+      .toEqual(['quick-find-ui-state'])
+  })
+
+  it('hideFromBlockDisplay types stay offerable in the # autocomplete', () => {
+    const out = buildTypeTagCandidates({
+      registry: registryOf(HIDDEN),
+      currentTypeIds: [],
+      query: 'sec',
+    })
+    expect(out[0]).toMatchObject({kind: 'existing', id: 'uuid-secret'})
+  })
+})
+
+describe('typeTagCompletionSource', () => {
+  const contextFor = (doc: string, pos: number, explicit = false): CompletionContext =>
+    new CompletionContext(EditorState.create({doc}), pos, explicit)
+
+  const candidate = (): TypeTagCandidate => ({kind: 'existing', id: 'uuid-task', label: 'Task'})
+
+  it('returns null when there is no # trigger at the cursor', async () => {
+    const source = typeTagCompletionSource({
+      getCandidates: () => [candidate()],
+      pickType: async () => {},
+    })
+    expect(await source(contextFor('plain prose', 11))).toBeNull()
+  })
+
+  it('anchors the result at the # and labels the create sentinel', async () => {
+    const source = typeTagCompletionSource({
+      getCandidates: () => [candidate(), {kind: 'create', label: 'Recipe'}],
+      pickType: async () => {},
+    })
+    const result = await source(contextFor('note #rec', 9))
+    expect(result).toMatchObject({from: 5, to: 9, filter: false})
+    expect(result!.options.map(o => o.label)).toEqual(['Task', 'Create type "Recipe"'])
+  })
+
+  it('opens on a word-glued # once a query char is typed, but not on the bare glued # (C#/F# footgun)', async () => {
+    const source = typeTagCompletionSource({
+      getCandidates: () => [candidate()],
+      pickType: async () => {},
+    })
+    // Bare glued `#` (`C#`) stays closed — one stray Enter here would
+    // otherwise mis-tag the block.
+    expect(await source(contextFor('C#', 2))).toBeNull()
+    // …but an explicit invocation still opens it.
+    expect(await source(contextFor('C#', 2, true))).toMatchObject({from: 1, to: 2})
+    // A query char makes it an intentional tag → opens.
+    expect(await source(contextFor('title#t', 7))).toMatchObject({from: 5, to: 7})
+    // A spaced (non-glued) empty `#` is a deliberate gesture → still opens.
+    expect(await source(contextFor('note #', 6))).toMatchObject({from: 5, to: 6})
+  })
+
+  it('returns null for zero candidates unless explicitly invoked', async () => {
+    const source = typeTagCompletionSource({
+      getCandidates: () => [],
+      pickType: async () => {},
+    })
+    expect(await source(contextFor('#zzz', 4))).toBeNull()
+    const explicit = await source(contextFor('#zzz', 4, true))
+    expect(explicit).toMatchObject({options: []})
+  })
+
+  it('never fires inside literal markdown — code (fenced/indented/inline) or URLs', async () => {
+    // Harm rationale lives at the gate call in typeTagCompletionSource.
+    const source = typeTagCompletionSource({
+      getCandidates: () => [candidate()],
+      pickType: async () => {},
+    })
+    const markdownContext = (doc: string, pos: number): CompletionContext =>
+      new CompletionContext(
+        EditorState.create({doc, extensions: [markdown({base: markdownLanguage})]}),
+        pos,
+        false,
+      )
+    const fenced = '```\n#define FOO\n```'
+    expect(await source(markdownContext(fenced, fenced.indexOf('FOO') - 1))).toBeNull()
+    // Indented code resolves through CodeBlock, not FencedCode — this
+    // case discriminates that entry of the node set.
+    const indented = '    #define FOO'
+    expect(await source(markdownContext(indented, indented.indexOf('FOO') - 1))).toBeNull()
+    const inline = 'run `#deploy` now'
+    expect(await source(markdownContext(inline, inline.indexOf('`', 5)))).toBeNull()
+    // A URL anchor is not a tag (the `/` before `#` passes the
+    // word-char guard, so only the tree check catches it).
+    const url = 'see http://example.com/#anc'
+    expect(await source(markdownContext(url, url.length))).toBeNull()
+    // …and the gate must not over-block prose in the same language.
+    const prose = 'note #rec'
+    expect(await source(markdownContext(prose, prose.length))).not.toBeNull()
+  })
+
+  it('on apply, deletes the trigger command boundary and hands pickType the candidate + doc snapshots', async () => {
+    const picked: TypeTagCandidate[] = []
+    const contexts: unknown[] = []
+    const source = typeTagCompletionSource({
+      getCandidates: () => [candidate()],
+      pickType: async (c, ctx) => { picked.push(c); contexts.push(ctx) },
+    })
+    const view = new EditorView({
+      state: EditorState.create({doc: 'call mom #ta'}),
+      parent: document.body,
+    })
+    try {
+      const result = await source(new CompletionContext(view.state, 12, false))
+      const option = result!.options[0]
+      const apply = option.apply as (view: EditorView, c: unknown, from: number, to: number) => void
+      apply(view, option, result!.from, 12)
+      expect(view.state.doc.toString()).toBe('call mom')
+      expect(view.state.selection.main.head).toBe(8)
+      expect(picked).toEqual([candidate()])
+      // The snapshots are the restore contract — position, not text
+      // search (see planTriggerRestore).
+      expect(contexts).toEqual([{
+        triggerText: '#ta',
+        at: 9,
+        deletedText: ' #ta',
+        deletionFrom: 8,
+        docBefore: 'call mom #ta',
+        docAfter: 'call mom',
+      }])
+    } finally {
+      view.destroy()
+    }
+  })
+
+  it('on apply, removes only the trigger span for a type command between two words', async () => {
+    const contexts: unknown[] = []
+    const source = typeTagCompletionSource({
+      getCandidates: () => [candidate()],
+      pickType: async (_c, ctx) => { contexts.push(ctx) },
+    })
+    const view = new EditorView({
+      state: EditorState.create({doc: 'call #ta mom'}),
+      parent: document.body,
+    })
+    try {
+      const result = await source(new CompletionContext(view.state, 8, false))
+      const option = result!.options[0]
+      const apply = option.apply as (view: EditorView, c: unknown, from: number, to: number) => void
+      apply(view, option, result!.from, 8)
+      expect(view.state.doc.toString()).toBe('call  mom')
+      expect(view.state.selection.main.head).toBe(5)
+      expect(contexts).toEqual([{
+        triggerText: '#ta',
+        at: 5,
+        deletedText: '#ta',
+        deletionFrom: 5,
+        docBefore: 'call #ta mom',
+        docAfter: 'call  mom',
+      }])
+    } finally {
+      view.destroy()
+    }
+  })
+
+  it('a failed pick restores the deleted command span into the view and warns', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const source = typeTagCompletionSource({
+        getCandidates: () => [candidate()],
+        pickType: async () => { throw new Error('registry says no') },
+      })
+      const view = new EditorView({
+        state: EditorState.create({doc: 'call mom #ta'}),
+        parent: document.body,
+      })
+      try {
+        const result = await source(new CompletionContext(view.state, 12, false))
+        const option = result!.options[0]
+        const apply = option.apply as (view: EditorView, c: unknown, from: number, to: number) => void
+        apply(view, option, result!.from, 12)
+        expect(view.state.doc.toString()).toBe('call mom')
+        await vi.waitFor(() => {
+          expect(warn).toHaveBeenCalledWith(
+            '[supertags] failed to apply type', 'Task', expect.any(Error))
+          expect(view.state.doc.toString()).toBe('call mom #ta')
+        })
+        expect(view.state.selection.main.head).toBe(12)
+      } finally {
+        view.destroy()
+      }
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  it('a failed in-text pick restores without duplicating surrounding spaces', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const source = typeTagCompletionSource({
+        getCandidates: () => [candidate()],
+        pickType: async () => { throw new Error('registry says no') },
+      })
+      const view = new EditorView({
+        state: EditorState.create({doc: 'call #ta mom'}),
+        parent: document.body,
+      })
+      try {
+        const result = await source(new CompletionContext(view.state, 8, false))
+        const option = result!.options[0]
+        const apply = option.apply as (view: EditorView, c: unknown, from: number, to: number) => void
+        apply(view, option, result!.from, 8)
+        expect(view.state.doc.toString()).toBe('call  mom')
+        await vi.waitFor(() => {
+          expect(warn).toHaveBeenCalledWith(
+            '[supertags] failed to apply type', 'Task', expect.any(Error))
+          expect(view.state.doc.toString()).toBe('call #ta mom')
+        })
+        expect(view.state.selection.main.head).toBe(8)
+      } finally {
+        view.destroy()
+      }
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  it('falls back to restoreTrigger when the view is unmounted at failure time', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const restored: string[] = []
+      let failPick: () => void = () => {}
+      const source = typeTagCompletionSource({
+        getCandidates: () => [candidate()],
+        pickType: () => new Promise((_, reject) => {
+          failPick = () => reject(new Error('too late'))
+        }),
+        restoreTrigger: async ({triggerText}) => { restored.push(triggerText) },
+      })
+      const view = new EditorView({
+        state: EditorState.create({doc: '#ta'}),
+        parent: document.body,
+      })
+      const result = await source(new CompletionContext(view.state, 3, false))
+      const option = result!.options[0]
+      const apply = option.apply as (view: EditorView, c: unknown, from: number, to: number) => void
+      apply(view, option, result!.from, 3)
+      view.destroy()
+      failPick()
+      await vi.waitFor(() => {
+        expect(restored).toEqual(['#ta'])
+      })
+    } finally {
+      warn.mockRestore()
+    }
+  })
+})
+
+describe('planTriggerDeletion', () => {
+  it('removes the left separator when accepting a trailing tag command', () => {
+    expect(planTriggerDeletion('Project #Area', 8, 13)).toEqual({
+      from: 7,
+      to: 13,
+    })
+    expect(planTriggerDeletion('Project  #Area', 9, 14)).toEqual({
+      from: 7,
+      to: 14,
+    })
+    expect(planTriggerDeletion('Project #Area ', 8, 14)).toEqual({
+      from: 7,
+      to: 14,
+    })
+  })
+
+  it('preserves surrounding spaces when a tag command sits between text', () => {
+    expect(planTriggerDeletion('Project #Area notes', 8, 13)).toEqual({
+      from: 8,
+      to: 13,
+    })
+    expect(planTriggerDeletion('Project #Area notes', 8, 14)).toEqual({
+      from: 8,
+      to: 13,
+    })
+    expect(planTriggerDeletion('Project  #Area  notes', 9, 14)).toEqual({
+      from: 9,
+      to: 14,
+    })
+    expect(planTriggerDeletion('Project  #Area  notes', 9, 15)).toEqual({
+      from: 9,
+      to: 14,
+    })
+  })
+
+  it('removes the right separator when the command starts the content', () => {
+    expect(planTriggerDeletion('#Area Project', 0, 5)).toEqual({
+      from: 0,
+      to: 6,
+    })
+    expect(planTriggerDeletion('#Area Project', 0, 6)).toEqual({
+      from: 0,
+      to: 6,
+    })
+  })
+
+  it('treats soft line breaks as tag command boundaries', () => {
+    const startOfLine = 'Intro\n#Area notes'
+    const startOfLineFrom = startOfLine.indexOf('#Area')
+    expect(planTriggerDeletion(startOfLine, startOfLineFrom, startOfLineFrom + '#Area'.length))
+      .toEqual({
+        from: startOfLineFrom,
+        to: startOfLineFrom + '#Area '.length,
+      })
+
+    const endOfLine = 'Intro #Area\nnotes'
+    const endOfLineFrom = endOfLine.indexOf('#Area')
+    expect(planTriggerDeletion(endOfLine, endOfLineFrom, endOfLineFrom + '#Area'.length))
+      .toEqual({
+        from: endOfLine.indexOf(' #Area'),
+        to: endOfLineFrom + '#Area'.length,
+      })
+  })
+
+  it('preserves indentation before a line-start tag command', () => {
+    const doc = 'Intro\n  #Area notes'
+    const from = doc.indexOf('#Area')
+    expect(planTriggerDeletion(doc, from, from + '#Area'.length)).toEqual({
+      from,
+      to: from + '#Area '.length,
+    })
+  })
+
+  it('removes indentation before a line-start trailing tag command', () => {
+    const doc = 'Intro\n  #Area  '
+    const from = doc.indexOf('#Area')
+    expect(planTriggerDeletion(doc, from, from + '#Area  '.length)).toEqual({
+      from: doc.indexOf('  #Area'),
+      to: doc.length,
+    })
+  })
+})
+
+describe('findCompletableTypeByName', () => {
+  it('matches label and id case-insensitively, skipping hideFromCompletion types', () => {
+    const registry = registryOf(TASK, PAGE)
+    expect(findCompletableTypeByName(registry, 'tAsK')).toBe(TASK)
+    expect(findCompletableTypeByName(registry, 'uuid-task')).toBe(TASK)
+    expect(findCompletableTypeByName(registry, 'Page')).toBeUndefined()
+    expect(findCompletableTypeByName(registry, '')).toBeUndefined()
+  })
+
+  it('reads the COMPLETION flag, not the chip flag: a chip-hidden type is still the create-dedup target', () => {
+    // If this read ever switched to hideFromBlockDisplay, typing the
+    // exact label of a chip-hidden type (`#Todo`) would offer "Create
+    // type" and mint a duplicate — these two pin each flag direction.
+    const chipHidden: TypeContribution = {id: 'uuid-secret', label: 'Secret', hideFromBlockDisplay: true}
+    expect(findCompletableTypeByName(registryOf(chipHidden), 'secret')).toBe(chipHidden)
+
+    const out = buildTypeTagCandidates({
+      registry: registryOf(chipHidden),
+      currentTypeIds: [],
+      query: 'Secret',
+    })
+    expect(out).toEqual([{kind: 'existing', id: 'uuid-secret', label: 'Secret', detail: undefined}])
+  })
+})
+
+describe('restoreDeletedTextToView', () => {
+  it('re-inserts at the original spot, clamped to the live doc', () => {
+    const view = new EditorView({
+      state: EditorState.create({doc: 'ab'}),
+      parent: document.body,
+    })
+    try {
+      expect(restoreDeletedTextToView(view, {
+        triggerText: '#ta',
+        at: 9,
+        deletedText: '#ta',
+        deletionFrom: 9,
+        docBefore: 'ab#ta',
+        docAfter: 'ab',
+      })).toBe(true)
+      expect(view.state.doc.toString()).toBe('ab#ta')
+    } finally {
+      view.destroy()
+    }
+  })
+
+  it('returns false for an unmounted view', () => {
+    const view = new EditorView({state: EditorState.create({doc: 'ab'})})
+    view.destroy()
+    expect(restoreDeletedTextToView(view, {
+      triggerText: '#ta',
+      at: 0,
+      deletedText: '#ta',
+      deletionFrom: 0,
+      docBefore: '#taab',
+      docAfter: 'ab',
+    })).toBe(false)
+  })
+})
+
+describe('planTriggerRestore', () => {
+  const ctx = {
+    triggerText: '#ta',
+    at: 5,
+    deletedText: '#ta',
+    deletionFrom: 5,
+    docBefore: 'call #ta mom',
+    docAfter: 'call  mom',
+  }
+
+  it('restores the exact pre-pick doc when content matches the post-deletion snapshot', () => {
+    expect(planTriggerRestore('call  mom', ctx)).toBe('call #ta mom')
+  })
+
+  it('no-ops when the deleted command span is demonstrably back at its spot', () => {
+    expect(planTriggerRestore('call #ta mom', ctx)).toBeNull()
+  })
+
+  it('falls back to a clamped positional insert on drifted content', () => {
+    expect(planTriggerRestore('call', ctx)).toBe('call#ta')
+    expect(planTriggerRestore('call  mom and dad', ctx)).toBe('call #ta mom and dad')
+  })
+})

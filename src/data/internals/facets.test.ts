@@ -9,8 +9,8 @@
  *     registrations DO NOT carry over (the runtime is the snapshot)
  *   - a plugin mutator registered via the runtime is dispatchable via
  *     repo.run('plugin:foo', args) and via repo.mutate['plugin:foo']
- *   - kernelDataExtension contributes kernel property schemas through
- *     propertySchemasFacet (Phase 3 — chunk A)
+ *   - kernelDataExtension contributes kernel property declarations through
+ *     definitionSeedsFacet
  */
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -20,37 +20,38 @@ import { resolveFacetRuntimeSync } from '@/facets/facet'
 import {
   ChangeScope,
   codecs,
-  defineBlockType,
   defineMutator,
-  definePreset,
-  defineProperty,
+  definePresetCore,
   definePropertyEditorOverride,
   defineQuery,
   MutatorNotRegisteredError,
+  seedType,
 } from '@/data/api'
 import { BlockCache } from '@/data/blockCache'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { kernelDataExtension } from '../kernelDataExtension'
 import {
+  definitionSeedsFacet,
   mutatorsFacet,
   propertyEditorOverridesFacet,
-  propertySchemasFacet,
   queriesFacet,
-  typesFacet,
-  valuePresetsFacet,
+  typeSeedsFacet,
+  valuePresetCoresFacet,
 } from '../facets'
 import {
-  KERNEL_PROPERTY_SCHEMAS,
+  KERNEL_PROPERTY_SEEDS,
   blockTypeDescriptionProp,
   blockTypeLabelProp,
   blockTypePropertiesProp,
   extensionDescriptionProp,
   extensionNameProp,
 } from '@/data/properties'
+import { seedProperty } from '@/data/propertySeeds'
 import {
   BLOCK_TYPE_TYPE,
   EXTENSION_TYPE,
   KERNEL_TYPE_CONTRIBUTIONS,
+  PAGE_TYPE,
   PROPERTY_SCHEMA_TYPE,
   TYPES_PAGE_TYPE,
 } from '@/data/blockTypes'
@@ -75,6 +76,8 @@ beforeEach(async () => {
     user: {id: 'user-1'},
     now: () => ++timeCursor,
     newId: () => `gen-${++idCursor}`,
+    // Mnemonic ids — see the MNEMONIC IDS note in createTestRepo.ts.
+    blockIdPolicy: 'any',
     // Start empty so setFacetRuntime is the only registration path.
     installKernelRuntime: false,
   })
@@ -166,141 +169,36 @@ describe('setFacetRuntime + mutatorsFacet', () => {
   })
 })
 
-describe('propertySchemasFacet — kernel registration', () => {
-  it('kernelDataExtension contributes every KERNEL_PROPERTY_SCHEMAS entry', () => {
+describe('kernel property declaration registration', () => {
+  it('kernelDataExtension contributes every kernel entry as a definition seed', () => {
     const runtime = resolveFacetRuntimeSync([kernelDataExtension])
-    const registered = runtime.read(propertySchemasFacet)
-    expect(registered.size).toBe(KERNEL_PROPERTY_SCHEMAS.length)
-    for (const schema of KERNEL_PROPERTY_SCHEMAS) {
-      // Identity-equal: facet stores the same instance.
-      expect(registered.get(schema.name)).toBe(schema)
-    }
-  })
-
-  it('plugin schema layered onto kernel coexists by name', () => {
-    const pluginSchema = defineProperty<string | undefined>('plugin:foo', {
-      codec: codecs.optionalString,
-      defaultValue: undefined,
-      changeScope: ChangeScope.BlockDefault,
-    })
-    const runtime = resolveFacetRuntimeSync([
-      kernelDataExtension,
-      propertySchemasFacet.of(pluginSchema, {source: 'plugin'}),
-    ])
-    const registered = runtime.read(propertySchemasFacet)
-    expect(registered.get('plugin:foo')).toBe(pluginSchema)
-    // Kernel entries still present.
-    for (const schema of KERNEL_PROPERTY_SCHEMAS) {
-      expect(registered.get(schema.name)).toBe(schema)
-    }
-  })
-
-  it('duplicate-name registration logs a warning and last-wins', () => {
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    try {
-      const a = defineProperty<string | undefined>('plugin:dup', {
-        codec: codecs.optionalString,
-        defaultValue: undefined,
-        changeScope: ChangeScope.BlockDefault,
-      })
-      const b = defineProperty<string | undefined>('plugin:dup', {
-        codec: codecs.optionalString,
-        defaultValue: undefined,
-        changeScope: ChangeScope.BlockDefault,
-      })
-      const runtime = resolveFacetRuntimeSync([
-        propertySchemasFacet.of(a, {source: 'test'}),
-        propertySchemasFacet.of(b, {source: 'test'}),
-      ])
-      const registered = runtime.read(propertySchemasFacet)
-      expect(registered.get('plugin:dup')).toBe(b)
-      expect(warn).toHaveBeenCalledOnce()
-    } finally {
-      warn.mockRestore()
-    }
+    expect(runtime.read(definitionSeedsFacet)).toEqual(KERNEL_PROPERTY_SEEDS)
   })
 })
 
-describe('typesFacet + schema lift', () => {
-  it('typesFacet combines contributions by id with last-wins warnings', () => {
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    try {
-      const a = defineBlockType({id: 'task', label: 'Task A'})
-      const b = defineBlockType({id: 'task', label: 'Task B'})
-      const runtime = resolveFacetRuntimeSync([
-        typesFacet.of(a, {source: 'test'}),
-        typesFacet.of(b, {source: 'test'}),
-      ])
-      const registered = runtime.read(typesFacet)
-      expect(registered.get('task')).toBe(b)
-      expect(warn).toHaveBeenCalledOnce()
-    } finally {
-      warn.mockRestore()
-    }
-  })
-
-  it('kernelDataExtension contributes kernel block types', () => {
+describe('type seed registration', () => {
+  it('kernelDataExtension contributes kernel block types as seeds', () => {
+    // Kernel types are code seeds — they register into `typeSeedsFacet` (a list
+    // facet the materializer reads); the static `typesFacet` path is gone (D).
     const runtime = resolveFacetRuntimeSync([kernelDataExtension])
-    const registered = runtime.read(typesFacet)
-    expect(registered.size).toBe(KERNEL_TYPE_CONTRIBUTIONS.length)
+    const registered = runtime.read(typeSeedsFacet)
+    expect(registered.length).toBe(KERNEL_TYPE_CONTRIBUTIONS.length)
+    const byId = new Map(registered.map(t => [t.id, t]))
     for (const type of KERNEL_TYPE_CONTRIBUTIONS) {
-      expect(registered.get(type.id)).toBe(type)
+      expect(byId.get(type.id)).toBe(type)
     }
   })
 
-  it('Extension blocks lift name and description metadata properties', () => {
+  it('Extension blocks carry name and description metadata properties', () => {
     const runtime = resolveFacetRuntimeSync([kernelDataExtension])
-    const registered = runtime.read(typesFacet)
-    const extensionType = registered.get(EXTENSION_TYPE)
+    const extensionType = runtime.read(typeSeedsFacet).find(t => t.id === EXTENSION_TYPE)
 
     expect(extensionType?.properties).toEqual(
       expect.arrayContaining([extensionNameProp, extensionDescriptionProp]),
     )
   })
 
-  it('Repo exposes schemas lifted from type contributions', () => {
-    const liftedSchema = defineProperty<string>('task:status', {
-      codec: codecs.string,
-      defaultValue: 'open',
-      changeScope: ChangeScope.BlockDefault,
-    })
-    const taskType = defineBlockType({id: 'task', properties: [liftedSchema]})
-    const runtime = resolveFacetRuntimeSync([
-      typesFacet.of(taskType, {source: 'test'}),
-    ])
-    repo.setFacetRuntime(runtime)
-
-    expect(repo.types.get('task')).toBe(taskType)
-    expect(repo.propertySchemas.get('task:status')).toBe(liftedSchema)
-  })
-
-  it('direct property schema registrations override type-lifted conflicts', () => {
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    try {
-      const liftedSchema = defineProperty<string>('status', {
-        codec: codecs.string,
-        defaultValue: 'open',
-        changeScope: ChangeScope.BlockDefault,
-      })
-      const directSchema = defineProperty<string>('status', {
-        codec: codecs.string,
-        defaultValue: 'todo',
-        changeScope: ChangeScope.BlockDefault,
-      })
-      const runtime = resolveFacetRuntimeSync([
-        typesFacet.of(defineBlockType({id: 'task', properties: [liftedSchema]}), {source: 'test'}),
-        propertySchemasFacet.of(directSchema, {source: 'test'}),
-      ])
-      repo.setFacetRuntime(runtime)
-
-      expect(repo.propertySchemas.get('status')).toBe(directSchema)
-      expect(warn).toHaveBeenCalledOnce()
-    } finally {
-      warn.mockRestore()
-    }
-  })
-
-  it('block-type kernel contribution lifts label, description, and properties props', () => {
+  it('block-type kernel contribution surfaces label, description, and properties props', () => {
     const runtime = resolveFacetRuntimeSync([kernelDataExtension])
     repo.setFacetRuntime(runtime)
     const blockType = repo.types.get(BLOCK_TYPE_TYPE)
@@ -325,50 +223,39 @@ describe('typesFacet + schema lift', () => {
     expect(repo.types.has(TYPES_PAGE_TYPE)).toBe(true)
   })
 
-  it('shared schema object lifted by multiple types dedups without warning', () => {
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    try {
-      const sharedSchema = defineProperty<string>('status', {
-        codec: codecs.string,
-        defaultValue: 'open',
-        changeScope: ChangeScope.BlockDefault,
-      })
-      const runtime = resolveFacetRuntimeSync([
-        typesFacet.of(defineBlockType({id: 'todo', properties: [sharedSchema]}), {source: 'test'}),
-        typesFacet.of(defineBlockType({id: 'task', properties: [sharedSchema]}), {source: 'test'}),
-      ])
-      repo.setFacetRuntime(runtime)
-
-      expect(repo.propertySchemas.get('status')).toBe(sharedSchema)
-      expect(warn).not.toHaveBeenCalled()
-    } finally {
-      warn.mockRestore()
-    }
+  it('surfaces kernel type seeds in repo.types BEFORE a workspace pin (buildUnboundTypes fallback)', () => {
+    // No setActiveWorkspaceId: the type-definition registry is null, so repo.types
+    // must fall back to the unbound seed synthesis. Direct regression guard for the
+    // move of kernel types onto `typeSeedsFacet` — without the fallback, `repo.types`
+    // would be empty until a workspace pins the registry.
+    const runtime = resolveFacetRuntimeSync([kernelDataExtension])
+    repo.setFacetRuntime(runtime)
+    expect(repo.activeWorkspaceId).toBeNull()
+    expect(repo.types.get(PAGE_TYPE)?.label).toBe('Page')
+    // The synthesized contribution is provenance-stripped (seedContribution) —
+    // the seed's seedKey/revision don't leak into `repo.types`.
+    expect(repo.types.get(PAGE_TYPE)).not.toHaveProperty('seedKey')
+    expect(repo.types.get(PAGE_TYPE)).not.toHaveProperty('revision')
   })
 })
 
-describe('valuePresetsFacet', () => {
-  it('keys presets by id and last-wins on collision', () => {
-    const Editor = (): JSX.Element => createElement('span', null, null)
-    const first = definePreset<string>({
+describe('valuePresetCoresFacet', () => {
+  it('keys cores by id and last-wins on collision', () => {
+    const first = definePresetCore<string>({
       id: 'string',
-      label: 'First',
       build: () => codecs.string,
-      defaultValue: '',
-      Editor,
+      defaultValue: 'first',
     })
-    const second = definePreset<string>({
+    const second = definePresetCore<string>({
       id: 'string',
-      label: 'Second',
       build: () => codecs.string,
-      defaultValue: '',
-      Editor,
+      defaultValue: 'second',
     })
     const runtime = resolveFacetRuntimeSync([
-      valuePresetsFacet.of(first, {source: 'test'}),
-      valuePresetsFacet.of(second, {source: 'test'}),
+      valuePresetCoresFacet.of(first, {source: 'test'}),
+      valuePresetCoresFacet.of(second, {source: 'test'}),
     ])
-    expect(runtime.read(valuePresetsFacet).get('string')?.label).toBe('Second')
+    expect(runtime.read(valuePresetCoresFacet).get('string')?.defaultValue).toBe('second')
   })
 })
 
@@ -397,8 +284,14 @@ describe('facet variance — typed plugin contributions register without widenin
   })
 
   it('propertyEditorOverridesFacet accepts a typed PropertyEditorOverride<Date | undefined>', () => {
-    const typedUi = definePropertyEditorOverride<Date | undefined>({
+    const dueDateProp = seedProperty({
+      seedKey: 'system:test-plugin/property/due-date',
+      revision: 1,
       name: 'tasks:due-date',
+      preset: 'date',
+      changeScope: ChangeScope.BlockDefault,
+    })
+    const typedUi = definePropertyEditorOverride(dueDateProp, {
       label: 'Due date',
       Editor: (): JSX.Element => createElement('span', null, null),
     })
@@ -406,20 +299,7 @@ describe('facet variance — typed plugin contributions register without widenin
       propertyEditorOverridesFacet.of(typedUi, {source: 'plugin'}),
     ])
     const registered = runtime.read(propertyEditorOverridesFacet)
-    expect(registered.get('tasks:due-date')).toBe(typedUi)
-  })
-
-  it('propertySchemasFacet accepts a typed PropertySchema<Date | undefined>', () => {
-    const typedSchema = defineProperty<Date | undefined>('tasks:due-date', {
-      codec: codecs.date,
-      defaultValue: undefined,
-      changeScope: ChangeScope.BlockDefault,
-    })
-    const runtime = resolveFacetRuntimeSync([
-      propertySchemasFacet.of(typedSchema, {source: 'plugin'}),
-    ])
-    const registered = runtime.read(propertySchemasFacet)
-    expect(registered.get('tasks:due-date')).toBe(typedSchema)
+    expect(registered.get(dueDateProp.seedKey)).toBe(typedUi)
   })
 })
 
@@ -429,27 +309,28 @@ describe('Repo.onTypesChange', () => {
   // user-types adoption flows (e.g. createTypeBlock's commit→
   // registration handoff) to bridge between txs without polling.
 
-  it('fires when setRuntimeContributions publishes into the typesFacet user-data bucket', () => {
+  it('fires when setRuntimeContributions publishes into the typeSeedsFacet user-data bucket', () => {
     repo.setFacetRuntime(resolveFacetRuntimeSync([kernelDataExtension]))
     let calls = 0
     repo.onTypesChange(() => { calls++ })
-    const userType = defineBlockType({id: 'user-defined-type-1'})
-    repo.setRuntimeContributions(typesFacet, 'user-data', [userType])
+    repo.setRuntimeContributions(typeSeedsFacet, 'user-data', [
+      seedType({seedKey: 'test/type/user-defined-type-1', revision: 1, id: 'user-defined-type-1', label: 'User type 1'}),
+    ])
     expect(calls).toBe(1)
-    expect(repo.types.get('user-defined-type-1')).toBe(userType)
+    // The published contribution is the provenance-stripped seed synthesis.
+    expect(repo.types.get('user-defined-type-1')).toMatchObject({id: 'user-defined-type-1', label: 'User type 1'})
   })
 
   it('fires when setFacetRuntime swaps in a runtime with new type contributions', () => {
     repo.setFacetRuntime(resolveFacetRuntimeSync([kernelDataExtension]))
     let calls = 0
     repo.onTypesChange(() => { calls++ })
-    const extra = defineBlockType({id: 'extra-type'})
     repo.setFacetRuntime(resolveFacetRuntimeSync([
       kernelDataExtension,
-      typesFacet.of(extra, {source: 'test'}),
+      typeSeedsFacet.of(seedType({seedKey: 'test/type/extra-type', revision: 1, id: 'extra-type', label: 'Extra'}), {source: 'test'}),
     ]))
     expect(calls).toBeGreaterThan(0)
-    expect(repo.types.get('extra-type')).toBe(extra)
+    expect(repo.types.get('extra-type')).toMatchObject({id: 'extra-type', label: 'Extra'})
   })
 
   it('disposer prevents subsequent notifications', () => {
@@ -457,8 +338,8 @@ describe('Repo.onTypesChange', () => {
     let calls = 0
     const dispose = repo.onTypesChange(() => { calls++ })
     dispose()
-    repo.setRuntimeContributions(typesFacet, 'user-data', [
-      defineBlockType({id: 'a-type'}),
+    repo.setRuntimeContributions(typeSeedsFacet, 'user-data', [
+      seedType({seedKey: 'test/type/a-type', revision: 1, id: 'a-type', label: 'A'}),
     ])
     expect(calls).toBe(0)
   })

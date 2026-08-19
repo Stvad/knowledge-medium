@@ -1,10 +1,11 @@
 /**
  * Extensions meta-plugin data registrations.
  *
- *   - `propertySchemasFacet` registers the overrides codec so the
+ *   - `definitionSeedsFacet` registers the overrides declaration so the
  *     property reads/writes go through the strict decoder.
- *   - `pluginPrefsExtension` bundles the `typesFacet` registration
- *     for the prefs sub-block with an idle-time eager bootstrap.
+ *   - `pluginPrefsExtension` bundles the container-type registration
+ *     (a `seedType` here → `typeSeedsFacet`) for the prefs sub-block
+ *     with an idle-time eager bootstrap.
  *     The bootstrap creates the block before the user navigates to
  *     Preferences, so its existence isn't gated on opening the
  *     settings UI.
@@ -20,18 +21,20 @@
  */
 import {actionsFacet, appEffectsFacet} from '@/extensions/core.js'
 import type {AppExtension} from '@/facets/facet.js'
-import {propertyEditorOverridesFacet, propertySchemasFacet} from '@/data/facets.js'
+import {definitionSeedsFacet, propertyEditorOverridesFacet, valuePresetCoresFacet} from '@/data/facets.js'
 import {pluginPrefsExtension} from '@/data/pluginStateExtensions.js'
 import {openExtensionsSettingsAction} from './actions.ts'
 import {
   extensionsOverridesProp,
+  extensionsOverridesPresetCore,
   extensionsPrefsType,
 } from './config.ts'
 import {extensionsSyncEffect} from './effect.ts'
 import {extensionsOverridesUi} from './propertyEditorOverride.ts'
 
 export const extensionsDataExtension: AppExtension = [
-  propertySchemasFacet.of(extensionsOverridesProp, {source: 'extensions-settings'}),
+  definitionSeedsFacet.of(extensionsOverridesProp, {source: 'extensions-settings'}),
+  valuePresetCoresFacet.of(extensionsOverridesPresetCore, {source: 'extensions-settings'}),
   propertyEditorOverridesFacet.of(extensionsOverridesUi, {source: 'extensions-settings'}),
   ...pluginPrefsExtension(extensionsPrefsType, 'extensions-settings'),
   appEffectsFacet.of(extensionsSyncEffect, {source: 'extensions-settings'}),

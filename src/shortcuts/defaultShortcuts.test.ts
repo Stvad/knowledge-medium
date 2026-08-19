@@ -1,18 +1,20 @@
-// @vitest-environment jsdom
+// @vitest-environment happy-dom
 
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { waitFor } from '@testing-library/react'
-import type { EditorView } from '@codemirror/view'
-import { BlockCache } from '@/data/blockCache'
+import { EditorView } from '@codemirror/view'
 import { ChangeScope, type User } from '@/data/api'
 import { Repo } from '@/data/repo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
+import { createTestRepo, isBlockDeleted } from '@/data/test/createTestRepo'
 import {
+  activePanelIdProp,
   editorSelection,
   focusBlock,
   focusedBlockLocationProp,
   isCollapsedProp,
   isEditingProp,
+  panelMaximizedProp,
   peekFocusedBlockLocation,
   selectionStateProp,
   topLevelBlockIdProp,
@@ -24,24 +26,25 @@ import {
   RELOAD_IN_SAFE_MODE_ACTION_ID,
   getDefaultActions,
 } from '@/shortcuts/defaultShortcuts'
-import {
-  __resetLayoutSessionIdForTesting,
-  getLayoutSessionId,
-} from '@/utils/layoutSessionId'
+import { __resetLayoutSessionIdForTesting } from '@/utils/layoutSessionId'
 import {
   insertPanelRow,
   panelBlockId,
-  panelRowsInLayoutOrder,
+  allPanelRowsInLayoutOrder,
 } from '@/utils/panelLayoutProjection'
-import { outlineRenderScopeId } from '@/utils/renderScope'
+import { panelRenderScopeId } from '@/utils/renderScope'
 import {
   ActionContextTypes,
   type ActionConfig,
   type ActionTrigger,
   type BlockShortcutDependencies,
   type CodeMirrorEditModeDependencies,
+  type MultiSelectModeDependencies,
 } from '@/shortcuts/types'
 import { createSharedBlockActions } from '@/shortcuts/blockActions'
+import { blockDeletionGuardsFacet } from '@/extensions/core'
+import { kernelDataExtension } from '@/data/kernelDataExtension'
+import { resolveFacetRuntimeSync } from '@/facets/facet'
 
 const WS = 'ws-1'
 const USER: User = {id: 'user-1'}
@@ -54,10 +57,8 @@ interface Harness {
 const setup = async (): Promise<Harness> => {
   await resetTestDb(sharedDb.db)
   const h = sharedDb
-  const cache = new BlockCache()
-  const repo = new Repo({
+  const { repo } = createTestRepo({
     db: h.db,
-    cache,
     user: USER,
   })
   repo.setActiveWorkspaceId(WS)
@@ -73,11 +74,15 @@ const makeSelection = (from: number, to = from) => ({
   main: {empty: from === to, from, to, anchor: from, head: to},
 })
 
-const codeMirrorEditorView = (content: string, cursor: number): EditorView => {
+const codeMirrorEditorView = (
+  content: string,
+  cursor: number,
+): EditorView => {
   let text = content
   let selection = makeSelection(cursor)
 
   const view = {
+    dom: document.createElement('div'),
     dispatch: vi.fn((spec: FakeEditorDispatchSpec) => {
       if (spec.changes) {
         text = text.slice(0, spec.changes.from) + spec.changes.insert + text.slice(spec.changes.to)
@@ -132,6 +137,18 @@ const findEditModeAction = (
   return action
 }
 
+const findMultiSelectAction = (
+  repo: Repo,
+  id: string,
+): ActionConfig<typeof ActionContextTypes.MULTI_SELECT_MODE> => {
+  const action = getDefaultActions({repo}).find(
+    (candidate): candidate is ActionConfig<typeof ActionContextTypes.MULTI_SELECT_MODE> =>
+      candidate.id === id && candidate.context === ActionContextTypes.MULTI_SELECT_MODE,
+  )
+  if (!action) throw new Error(`Action not found: ${id}`)
+  return action
+}
+
 const findNormalModeAction = (
   repo: Repo,
   id: string,
@@ -179,11 +196,6 @@ const seedPanelAndContent = async (): Promise<{uiStateBlock: ReturnType<Repo['bl
   }
 }
 
-const isDeleted = async (id: string): Promise<boolean> => {
-  const row = await env.h.db.get<{deleted: number}>('SELECT deleted FROM blocks WHERE id = ?', [id])
-  return row.deleted === 1
-}
-
 let sharedDb: TestDb
 let env: Harness
 beforeAll(async () => { sharedDb = await createTestDb() })
@@ -192,7 +204,6 @@ beforeEach(async () => {
   __resetLayoutSessionIdForTesting()
   env = await setup()
 })
-afterEach(async () => { env.repo.stopSyncObserver() })
 
 describe('default CodeMirror shortcuts', () => {
   it('prevents native CodeMirror handling for structural move shortcuts', () => {
@@ -245,7 +256,7 @@ describe('default CodeMirror shortcuts', () => {
     expect(uiStateBlock.peekProperty(isEditingProp)).toBe(true)
   })
 
-  it('escalates to block selection (preventDefault, exits edit mode) when the caret is at the block edge', async () => {
+  it('escalates to block selection (preventDefault, exits edit mode) when the caret is at the block edge — Roam-style: first press selects just the current block, next extends', async () => {
     await env.repo.tx(async tx => {
       await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0'})
       await tx.create({id: 'ui', workspaceId: WS, parentId: null, orderKey: 'z0'})
@@ -259,19 +270,30 @@ describe('default CodeMirror shortcuts', () => {
     await focusBlock(uiStateBlock, 'current')
     await uiStateBlock.set(isEditingProp, true)
 
-    const trigger = {preventDefault: vi.fn()} as unknown as ActionTrigger
-    await findEditModeAction(env.repo, 'edit.cm.extend_selection_up').handler({
+    const editDeps = {
       block: env.repo.block('current'),
       editorView: codeMirrorEditorView('current', 0), // caret at block start
       uiStateBlock,
       scopeRootId: 'root',
-    } satisfies CodeMirrorEditModeDependencies, trigger)
+    } satisfies CodeMirrorEditModeDependencies
+
+    const trigger = {preventDefault: vi.fn()} as unknown as ActionTrigger
+    await findEditModeAction(env.repo, 'edit.cm.extend_selection_up').handler(editDeps, trigger)
 
     expect(trigger.preventDefault).toHaveBeenCalledTimes(1)
     await waitFor(() => expect(uiStateBlock.peekProperty(isEditingProp)).toBe(false))
-    // Escalation actually committed a block selection (and clearEditing folded
-    // the edit-mode exit into the same transaction) — not just exited edit mode.
-    expect(uiStateBlock.peekProperty(selectionStateProp)?.selectedBlockIds).toEqual(['prev', 'current'])
+    // First press selects ONLY the focused block (Roam-style) — and clearEditing
+    // folded the edit-mode exit into the same transaction.
+    expect(uiStateBlock.peekProperty(selectionStateProp)?.selectedBlockIds).toEqual(['current'])
+
+    // Second press now extends to the previous visible block.
+    await findEditModeAction(env.repo, 'edit.cm.extend_selection_up').handler(
+      editDeps,
+      {preventDefault: vi.fn()} as unknown as ActionTrigger,
+    )
+    await waitFor(() =>
+      expect(uiStateBlock.peekProperty(selectionStateProp)?.selectedBlockIds).toEqual(['prev', 'current']),
+    )
   })
 
   it('stays in edit mode when Shift+ArrowUp at block start has no previous block to escalate into', async () => {
@@ -305,9 +327,10 @@ describe('default CodeMirror shortcuts', () => {
     expect(uiStateBlock.peekProperty(isEditingProp)).toBe(true)
   })
 
-  it('stays in edit mode when Shift+ArrowDown at block end has no next block to escalate into', async () => {
-    // Editing the last block in a panel: there is no next visible block, so
-    // escalation must NOT eject the user from edit mode with nothing selected.
+  it('selects just the current block when Shift+ArrowDown at block end has no next block (Roam-style first press)', async () => {
+    // Editing the last block in a panel: there's no next visible block, but the
+    // Roam-style first press still selects the current block (so you can act on
+    // it) rather than no-opping.
     await env.repo.tx(async tx => {
       await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0'})
       await tx.create({id: 'ui', workspaceId: WS, parentId: null, orderKey: 'z0'})
@@ -328,15 +351,16 @@ describe('default CodeMirror shortcuts', () => {
       scopeRootId: 'root',
     } satisfies CodeMirrorEditModeDependencies, trigger)
 
-    expect(trigger.preventDefault).not.toHaveBeenCalled()
-    expect(uiStateBlock.peekProperty(isEditingProp)).toBe(true)
+    expect(trigger.preventDefault).toHaveBeenCalledTimes(1)
+    await waitFor(() => expect(uiStateBlock.peekProperty(isEditingProp)).toBe(false))
+    expect(uiStateBlock.peekProperty(selectionStateProp)?.selectedBlockIds).toEqual(['last'])
   })
 
   it('opens the root preferences block from the global action', async () => {
     const action = findGlobalAction(env.repo, OPEN_PREFERENCES_ACTION_ID)
 
     const rootUiState = await getUIStateBlock(env.repo, WS, USER, {})
-    const layoutSession = await getLayoutSessionBlock(rootUiState, getLayoutSessionId())
+    const layoutSession = await getLayoutSessionBlock(rootUiState, env.repo.activeLayoutSessionId)
     const prefsBlock = await getUserPrefsBlock(env.repo, WS, USER)
 
     await action.handler(
@@ -346,7 +370,7 @@ describe('default CodeMirror shortcuts', () => {
 
     await waitFor(async () => {
       const rows = await env.repo.query.subtree({id: layoutSession.id}).load()
-      const panels = panelRowsInLayoutOrder(layoutSession.id, rows)
+      const panels = allPanelRowsInLayoutOrder(layoutSession.id, rows)
       expect(panelBlockId(panels[0])).toBe(prefsBlock.id)
     })
   })
@@ -360,7 +384,7 @@ describe('default CodeMirror shortcuts', () => {
       uiStateBlock,
     } satisfies BlockShortcutDependencies, {preventDefault: vi.fn()} as unknown as ActionTrigger)
 
-    expect(await isDeleted('panel')).toBe(true)
+    expect(await isBlockDeleted(env.repo, 'panel')).toBe(true)
   })
 
   it('closes the current panel from CodeMirror edit mode', async () => {
@@ -373,7 +397,7 @@ describe('default CodeMirror shortcuts', () => {
       uiStateBlock,
     } satisfies CodeMirrorEditModeDependencies, {preventDefault: vi.fn()} as unknown as ActionTrigger)
 
-    expect(await isDeleted('panel')).toBe(true)
+    expect(await isBlockDeleted(env.repo, 'panel')).toBe(true)
   })
 
   it('registers a command-palette action for reloading in safe mode', () => {
@@ -401,7 +425,7 @@ describe('default CodeMirror shortcuts', () => {
     }, {scope: ChangeScope.BlockDefault})
 
     const rootUiState = await getUIStateBlock(env.repo, WS, USER, {})
-    const layoutSession = await getLayoutSessionBlock(rootUiState, getLayoutSessionId())
+    const layoutSession = await getLayoutSessionBlock(rootUiState, env.repo.activeLayoutSessionId)
     const panelId = await insertPanelRow(env.repo, layoutSession, 'root')
     await env.repo.block(panelId).set(focusedBlockLocationProp, {
       blockId: 'existing-child',
@@ -424,12 +448,39 @@ describe('default CodeMirror shortcuts', () => {
     expect(peekFocusedBlockLocation(panelBlock)?.blockId).toBe(newNodeId)
     expect(panelBlock.peekProperty(focusedBlockLocationProp)).toEqual({
       blockId: newNodeId,
-      renderScopeId: outlineRenderScopeId('root'),
+      renderScopeId: panelRenderScopeId(panelId, 'root'),
     })
     expect(panelBlock.peekProperty(isEditingProp)).toBe(true)
   })
 
-  it('defaults cross-block focus to the panel outline scope instead of preserving stale nested scope', async () => {
+  // This action CREATES a block in whichever pane it resolves, so resolving to
+  // a hidden one writes into a page the user cannot see. It used to hand-roll
+  // the active-pane rule over raw row order; it now shares the navigation
+  // resolver, which narrows to what is rendered.
+  it('creates the node in the maximized pane, not the hidden one the pointer names', async () => {
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'hidden-page', workspaceId: WS, parentId: null, orderKey: 'a0'})
+      await tx.create({id: 'shown-page', workspaceId: WS, parentId: null, orderKey: 'a1'})
+    }, {scope: ChangeScope.BlockDefault})
+
+    const rootUiState = await getUIStateBlock(env.repo, WS, USER, {})
+    const layoutSession = await getLayoutSessionBlock(rootUiState, env.repo.activeLayoutSessionId)
+    const hiddenPanelId = await insertPanelRow(env.repo, layoutSession, 'hidden-page')
+    const shownPanelId = await insertPanelRow(env.repo, layoutSession, 'shown-page')
+    await env.repo.block(shownPanelId).set(panelMaximizedProp, true)
+    // The pointer legitimately lags onto the hidden pane after a `;max` arrival.
+    await layoutSession.set(activePanelIdProp, hiddenPanelId)
+
+    await findGlobalAction(env.repo, CREATE_NODE_IN_ACTIVE_PANEL_ACTION_ID).handler(
+      {uiStateBlock: rootUiState},
+      {preventDefault: vi.fn()} as unknown as ActionTrigger,
+    )
+
+    expect(await childIds('shown-page')).toHaveLength(1)
+    expect(await childIds('hidden-page')).toHaveLength(0)
+  })
+
+  it('defaults cross-block focus to the per-pane scope instead of preserving stale nested scope', async () => {
     await env.repo.tx(async tx => {
       await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0'})
       await tx.create({id: 'ui', workspaceId: WS, parentId: null, orderKey: 'z0'})
@@ -446,9 +497,11 @@ describe('default CodeMirror shortcuts', () => {
 
     await focusBlock(uiStateBlock, 'next')
 
+    // 'ui' carries topLevelBlockIdProp, so focusBlock treats it as a panel
+    // row and defaults to the per-pane scope.
     expect(uiStateBlock.peekProperty(focusedBlockLocationProp)).toEqual({
       blockId: 'next',
-      renderScopeId: outlineRenderScopeId('root'),
+      renderScopeId: panelRenderScopeId('ui', 'root'),
     })
   })
 
@@ -544,6 +597,199 @@ describe('default CodeMirror shortcuts', () => {
     })
   })
 
+  it('refuses to Backspace away the scope root even when it is empty', async () => {
+    // Reachable from the keyboard: split the zoomed page at cursor 0 (its
+    // content moves down), then Backspace at 0 in the now-empty root —
+    // without the canMergeUp guard the handler tombstoned the whole
+    // rendered surface (Codex review on the interaction fuzzer, PR #371).
+    // This gates the BACKSPACE gesture, which means "consume this block and
+    // put the cursor on the previous visible one" and has nowhere to land at
+    // the scope root. An explicit Delete on the same block IS allowed — that's
+    // page deletion (see the delete_block tests below).
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0', content: ''})
+      await tx.create({id: 'ui', workspaceId: WS, parentId: null, orderKey: 'z0'})
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'child', content: 'child'})
+
+    const uiStateBlock = env.repo.block('ui')
+    await uiStateBlock.set(topLevelBlockIdProp, 'root')
+    await focusBlock(uiStateBlock, 'root')
+
+    const action = findEditModeAction(env.repo, 'delete_empty_block_cm')
+    const trigger = {preventDefault: vi.fn()} as unknown as ActionTrigger
+
+    await action.handler({
+      block: env.repo.block('root'),
+      editorView: emptyEditorView(),
+      uiStateBlock,
+      scopeRootId: 'root',
+    } satisfies CodeMirrorEditModeDependencies, trigger)
+
+    expect(trigger.preventDefault).not.toHaveBeenCalled()
+    expect(env.repo.block('root').peek()).not.toBeNull()
+    expect(env.repo.block('root').peekRaw()?.deleted).toBe(false)
+  })
+
+  it('Backspace on an empty block consults the deletion guards', async () => {
+    // Not the scope root, so `canMergeUp` is true and this path used to run
+    // straight to `block.delete()`. That let a daily note rendered as a child
+    // (its natural place, under the Journal) be destroyed by emptying its title
+    // and pressing Backspace — straight past the veto.
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'r'})
+      await tx.create({id: 'ui', workspaceId: WS, parentId: null, orderKey: 'z0'})
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'first', content: 'first'})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'protected', content: ''})
+
+    const uiStateBlock = env.repo.block('ui')
+    await uiStateBlock.set(topLevelBlockIdProp, 'root')
+    env.repo.setFacetRuntime(resolveFacetRuntimeSync([
+      // setFacetRuntime REPLACES the registries, so the kernel data
+      // contribution has to be re-included or `childIds` stops resolving.
+      kernelDataExtension,
+      blockDeletionGuardsFacet.of(
+        block => (block.id === 'protected' ? 'Nope.' : null),
+        {source: 'test'},
+      ),
+    ]))
+
+    const action = findEditModeAction(env.repo, 'delete_empty_block_cm')
+    await action.handler({
+      block: env.repo.block('protected'),
+      editorView: emptyEditorView(),
+      uiStateBlock,
+      scopeRootId: 'root',
+    } satisfies CodeMirrorEditModeDependencies, {preventDefault: vi.fn()} as unknown as ActionTrigger)
+
+    expect(await isBlockDeleted(env.repo, 'protected')).toBe(false)
+    // Focus must not have moved for a delete that never happened.
+    expect(peekFocusedBlockLocation(uiStateBlock)?.blockId).not.toBe('first')
+  })
+
+  it('multi-select Delete refuses the whole selection when one block is guarded', async () => {
+    // Matches cut. The fan-out is per-block, so without a batch preflight the
+    // unguarded sibling was deleted and only the protected one survived —
+    // `Delete` half-deleting a selection that `d` refuses wholesale.
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'r'})
+      await tx.create({id: 'ui', workspaceId: WS, parentId: null, orderKey: 'z0'})
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'ordinary', content: 'ordinary'})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'protected', content: 'protected'})
+
+    const uiStateBlock = env.repo.block('ui')
+    env.repo.setFacetRuntime(resolveFacetRuntimeSync([
+      kernelDataExtension,
+      blockDeletionGuardsFacet.of(
+        block => (block.id === 'protected' ? 'Nope.' : null),
+        {source: 'test'},
+      ),
+    ]))
+
+    await uiStateBlock.set(selectionStateProp, {
+      ...selectionStateProp.defaultValue,
+      selectedBlockIds: ['ordinary', 'protected'],
+    })
+
+    const action = findMultiSelectAction(env.repo, 'multi_select.delete_block')
+    await action.handler({
+      uiStateBlock,
+      selectedBlocks: [env.repo.block('ordinary'), env.repo.block('protected')],
+      anchorBlock: null,
+    } as MultiSelectModeDependencies, {preventDefault: vi.fn()} as unknown as ActionTrigger)
+
+    expect(await isBlockDeleted(env.repo, 'protected')).toBe(false)
+    expect(await isBlockDeleted(env.repo, 'ordinary')).toBe(false)
+    // Refused: the selection is intact so the user can narrow it and retry.
+    expect(uiStateBlock.peekProperty(selectionStateProp)?.selectedBlockIds)
+      .toEqual(['ordinary', 'protected'])
+  })
+
+  it('multi-select Delete clears the selection, so the pane leaves multi-select', async () => {
+    // MULTI_SELECT_MODE is modal and stays active while `selectedBlockIds` is
+    // non-empty. Leaving the deleted ids there parked the pane in multi-select
+    // over tombstones — nothing highlighted, every keystroke still routed to
+    // multi-select handlers. `cut` cleared it; `Delete` did not.
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'r'})
+      await tx.create({id: 'ui', workspaceId: WS, parentId: null, orderKey: 'z0'})
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'one', content: 'one'})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'two', content: 'two'})
+
+    const uiStateBlock = env.repo.block('ui')
+    await uiStateBlock.set(selectionStateProp, {
+      ...selectionStateProp.defaultValue,
+      selectedBlockIds: ['one', 'two'],
+    })
+
+    const action = findMultiSelectAction(env.repo, 'multi_select.delete_block')
+    await action.handler({
+      uiStateBlock,
+      selectedBlocks: [env.repo.block('one'), env.repo.block('two')],
+      anchorBlock: null,
+    } as MultiSelectModeDependencies, {preventDefault: vi.fn()} as unknown as ActionTrigger)
+
+    expect(await isBlockDeleted(env.repo, 'one')).toBe(true)
+    expect(await isBlockDeleted(env.repo, 'two')).toBe(true)
+    expect(uiStateBlock.peekProperty(selectionStateProp)?.selectedBlockIds).toEqual([])
+  })
+
+  it('cut refuses the whole selection when a block is guarded, and writes no clipboard', async () => {
+    // `cut_selected_blocks` is bound to `d` in multi-select. It called
+    // `block.delete()` directly, so `Delete` on a daily note was refused while
+    // `d` on the identical selection destroyed it.
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'r'})
+      await tx.create({id: 'ui', workspaceId: WS, parentId: null, orderKey: 'z0'})
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'ordinary', content: 'ordinary'})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'protected', content: 'protected'})
+
+    const uiStateBlock = env.repo.block('ui')
+    env.repo.setFacetRuntime(resolveFacetRuntimeSync([
+      // setFacetRuntime REPLACES the registries, so the kernel data
+      // contribution has to be re-included or `childIds` stops resolving.
+      kernelDataExtension,
+      blockDeletionGuardsFacet.of(
+        block => (block.id === 'protected' ? 'Nope.' : null),
+        {source: 'test'},
+      ),
+    ]))
+
+    await uiStateBlock.set(selectionStateProp, {
+      ...selectionStateProp.defaultValue,
+      selectedBlockIds: ['ordinary', 'protected'],
+    })
+    const write = vi.fn(async () => {})
+    vi.stubGlobal('ClipboardItem', class { })
+    vi.stubGlobal('navigator', {clipboard: {write}})
+
+    const action = findMultiSelectAction(env.repo, 'cut_selected_blocks')
+    await action.handler({
+      uiStateBlock,
+      selectedBlocks: [env.repo.block('ordinary'), env.repo.block('protected')],
+      anchorBlock: null,
+    } as MultiSelectModeDependencies, {preventDefault: vi.fn()} as unknown as ActionTrigger)
+
+    // All-or-nothing: the unguarded sibling survives too, rather than the
+    // selection being half-cut.
+    expect(await isBlockDeleted(env.repo, 'protected')).toBe(false)
+    expect(await isBlockDeleted(env.repo, 'ordinary')).toBe(false)
+    // And the guard runs BEFORE the copy: a refused cut must not leave the
+    // user believing the content is on their clipboard. Asserting only that
+    // nothing was deleted can't see this — `deleteBlocksThroughUi` re-checks
+    // the guards itself, so the deletion assertions pass even with the
+    // pre-copy check removed.
+    expect(write).not.toHaveBeenCalled()
+    // The selection survives too, so the user can narrow it and retry.
+    expect(uiStateBlock.peekProperty(selectionStateProp)?.selectedBlockIds)
+      .toEqual(['ordinary', 'protected'])
+    vi.unstubAllGlobals()
+  })
+
   it("merges a first child with children into its parent when it is the parent's only child", async () => {
     await env.repo.tx(async tx => {
       await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0'})
@@ -609,6 +855,396 @@ describe('default CodeMirror shortcuts', () => {
     expect(env.repo.block('current').peek()?.deleted).toBe(false)
     expect(await childIds('parent')).toEqual(['current', 'sibling'])
     expect(await childIds('current')).toEqual(['child'])
+  })
+
+  it('a guarded next block is not merged away — and the editor is left untouched', async () => {
+    // A merge DESTROYS the next block (`core.merge` soft-deletes its `from`),
+    // so it needs the deletion guards. The editor assertion is the load-bearing
+    // one: this handler re-arms CodeMirror with the concatenated text, and that
+    // dispatch is a real doc change, so `onChange` → debounced `pushChange`
+    // persists it. Guarding after the dispatch (as the first version did) left
+    // a refused merge writing the merged content while the next block survived.
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0'})
+      await tx.create({id: 'ui', workspaceId: WS, parentId: null, orderKey: 'z0'})
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'current', content: 'current'})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'protected', content: 'protected'})
+
+    const uiStateBlock = env.repo.block('ui')
+    await uiStateBlock.set(topLevelBlockIdProp, 'root')
+    await focusBlock(uiStateBlock, 'current')
+    env.repo.setFacetRuntime(resolveFacetRuntimeSync([
+      kernelDataExtension,
+      blockDeletionGuardsFacet.of(
+        block => (block.id === 'protected' ? 'Nope.' : null),
+        {source: 'test'},
+      ),
+    ]))
+
+    const action = findEditModeAction(env.repo, 'merge_next_block_cm')
+    const editorView = codeMirrorEditorView('current', 'current'.length)
+    await action.handler({
+      block: env.repo.block('current'),
+      editorView,
+      uiStateBlock,
+      scopeRootId: 'root',
+    } satisfies CodeMirrorEditModeDependencies, {preventDefault: vi.fn()} as unknown as ActionTrigger)
+
+    expect(await isBlockDeleted(env.repo, 'protected')).toBe(false)
+    expect(env.repo.block('current').peek()?.content).toBe('current')
+    // No half-applied merge parked in the editor waiting to be flushed.
+    expect(editorView.state.doc.toString()).toBe('current')
+  })
+
+  it('a guarded block is not merged away by Backspace at offset 0', async () => {
+    // The Backspace twin of the above: this branch merges the CURRENT block
+    // into the previous one, which destroys the current block.
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0'})
+      await tx.create({id: 'ui', workspaceId: WS, parentId: null, orderKey: 'z0'})
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'first', content: 'first'})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'protected', content: 'protected'})
+
+    const uiStateBlock = env.repo.block('ui')
+    await uiStateBlock.set(topLevelBlockIdProp, 'root')
+    await focusBlock(uiStateBlock, 'protected')
+    env.repo.setFacetRuntime(resolveFacetRuntimeSync([
+      kernelDataExtension,
+      blockDeletionGuardsFacet.of(
+        block => (block.id === 'protected' ? 'Nope.' : null),
+        {source: 'test'},
+      ),
+    ]))
+
+    const action = findEditModeAction(env.repo, 'delete_empty_block_cm')
+    await action.handler({
+      block: env.repo.block('protected'),
+      editorView: codeMirrorEditorView('protected', 0),
+      uiStateBlock,
+      scopeRootId: 'root',
+    } satisfies CodeMirrorEditModeDependencies, {preventDefault: vi.fn()} as unknown as ActionTrigger)
+
+    expect(await isBlockDeleted(env.repo, 'protected')).toBe(false)
+    expect(env.repo.block('first').peek()?.content).toBe('first')
+  })
+
+  it('merges the next block into the current block when pressing delete at block end', async () => {
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0'})
+      await tx.create({id: 'ui', workspaceId: WS, parentId: null, orderKey: 'z0'})
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'current', content: 'current'})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'next', content: 'next'})
+
+    const uiStateBlock = env.repo.block('ui')
+    await uiStateBlock.set(topLevelBlockIdProp, 'root')
+    await focusBlock(uiStateBlock, 'current')
+
+    const action = findEditModeAction(env.repo, 'merge_next_block_cm')
+    const trigger = {preventDefault: vi.fn()} as unknown as ActionTrigger
+    const editorView = codeMirrorEditorView('current', 'current'.length)
+
+    await action.handler({
+      block: env.repo.block('current'),
+      editorView,
+      uiStateBlock,
+      scopeRootId: 'root',
+    } satisfies CodeMirrorEditModeDependencies, trigger)
+
+    expect(trigger.preventDefault).toHaveBeenCalledTimes(1)
+    expect(env.repo.block('current').peek()?.content).toBe('currentnext')
+    expect(env.repo.block('next').peek()).toBeNull()
+    expect(env.repo.block('next').peekRaw()?.deleted).toBe(true)
+    // Focus stays in this block, caret parked at the join; the editor is
+    // re-armed synchronously with the merged text so a debounced flush
+    // can't roll it back.
+    expect(editorView.state.doc.toString()).toBe('currentnext')
+    expect(editorView.state.selection.main.from).toBe('current'.length)
+    expect(peekFocusedBlockLocation(uiStateBlock)?.blockId).toBe('current')
+    expect(uiStateBlock.peekProperty(editorSelection)).toEqual({
+      blockId: 'current',
+      start: 'current'.length,
+    })
+  })
+
+  it('deletes an empty next block when pressing delete at block end', async () => {
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0'})
+      await tx.create({id: 'ui', workspaceId: WS, parentId: null, orderKey: 'z0'})
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'current', content: 'current'})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'empty', content: ''})
+
+    const uiStateBlock = env.repo.block('ui')
+    await uiStateBlock.set(topLevelBlockIdProp, 'root')
+    await focusBlock(uiStateBlock, 'current')
+
+    const action = findEditModeAction(env.repo, 'merge_next_block_cm')
+    const trigger = {preventDefault: vi.fn()} as unknown as ActionTrigger
+
+    await action.handler({
+      block: env.repo.block('current'),
+      editorView: codeMirrorEditorView('current', 'current'.length),
+      uiStateBlock,
+      scopeRootId: 'root',
+    } satisfies CodeMirrorEditModeDependencies, trigger)
+
+    expect(trigger.preventDefault).toHaveBeenCalledTimes(1)
+    expect(env.repo.block('current').peek()?.content).toBe('current')
+    expect(env.repo.block('empty').peek()).toBeNull()
+    expect(env.repo.block('empty').peekRaw()?.deleted).toBe(true)
+  })
+
+  it("merges an only child into its parent when pressing delete at the parent's end", async () => {
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0'})
+      await tx.create({id: 'ui', workspaceId: WS, parentId: null, orderKey: 'z0'})
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'parent', content: 'parent '})
+    await env.repo.mutate.createChild({parentId: 'parent', id: 'current', content: 'current'})
+    await env.repo.mutate.createChild({parentId: 'current', id: 'child', content: 'child'})
+
+    const uiStateBlock = env.repo.block('ui')
+    await uiStateBlock.set(topLevelBlockIdProp, 'root')
+    await focusBlock(uiStateBlock, 'parent')
+
+    const action = findEditModeAction(env.repo, 'merge_next_block_cm')
+    const trigger = {preventDefault: vi.fn()} as unknown as ActionTrigger
+
+    await action.handler({
+      block: env.repo.block('parent'),
+      editorView: codeMirrorEditorView('parent ', 'parent '.length),
+      uiStateBlock,
+      scopeRootId: 'root',
+    } satisfies CodeMirrorEditModeDependencies, trigger)
+
+    expect(trigger.preventDefault).toHaveBeenCalledTimes(1)
+    expect(env.repo.block('parent').peek()?.content).toBe('parent current')
+    expect(env.repo.block('current').peek()).toBeNull()
+    expect(env.repo.block('current').peekRaw()?.deleted).toBe(true)
+    expect(await childIds('parent')).toEqual(['child'])
+    expect(env.repo.block('child').peek()?.deleted).toBe(false)
+    expect(peekFocusedBlockLocation(uiStateBlock)?.blockId).toBe('parent')
+    expect(uiStateBlock.peekProperty(editorSelection)).toEqual({
+      blockId: 'parent',
+      start: 'parent '.length,
+    })
+  })
+
+  it('does not merge the next block when both blocks have independent children', async () => {
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0'})
+      await tx.create({id: 'ui', workspaceId: WS, parentId: null, orderKey: 'z0'})
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'a', content: 'a'})
+    await env.repo.mutate.createChild({parentId: 'a', id: 'ac', content: 'ac'})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'b', content: 'b'})
+    await env.repo.mutate.createChild({parentId: 'b', id: 'bc', content: 'bc'})
+    // Collapse `a` so its next visible block is sibling `b` (not child `ac`),
+    // putting two independent child lists on either side of the boundary.
+    await env.repo.block('a').set(isCollapsedProp, true)
+
+    const uiStateBlock = env.repo.block('ui')
+    await uiStateBlock.set(topLevelBlockIdProp, 'root')
+    await focusBlock(uiStateBlock, 'a')
+
+    const action = findEditModeAction(env.repo, 'merge_next_block_cm')
+    const trigger = {preventDefault: vi.fn()} as unknown as ActionTrigger
+
+    await action.handler({
+      block: env.repo.block('a'),
+      editorView: codeMirrorEditorView('a', 'a'.length),
+      uiStateBlock,
+      scopeRootId: 'root',
+    } satisfies CodeMirrorEditModeDependencies, trigger)
+
+    expect(trigger.preventDefault).not.toHaveBeenCalled()
+    expect(env.repo.block('a').peek()?.content).toBe('a')
+    expect(env.repo.block('b').peek()?.deleted).toBe(false)
+    expect(await childIds('a')).toEqual(['ac'])
+    expect(await childIds('b')).toEqual(['bc'])
+  })
+
+  it('stands aside (no merge) when pressing delete at the end of the last visible block', async () => {
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0'})
+      await tx.create({id: 'ui', workspaceId: WS, parentId: null, orderKey: 'z0'})
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'current', content: 'current'})
+
+    const uiStateBlock = env.repo.block('ui')
+    await uiStateBlock.set(topLevelBlockIdProp, 'root')
+    await focusBlock(uiStateBlock, 'current')
+
+    const action = findEditModeAction(env.repo, 'merge_next_block_cm')
+    const trigger = {preventDefault: vi.fn()} as unknown as ActionTrigger
+
+    await action.handler({
+      block: env.repo.block('current'),
+      editorView: codeMirrorEditorView('current', 'current'.length),
+      uiStateBlock,
+      scopeRootId: 'root',
+    } satisfies CodeMirrorEditModeDependencies, trigger)
+
+    expect(trigger.preventDefault).not.toHaveBeenCalled()
+    expect(env.repo.block('current').peek()?.content).toBe('current')
+    expect(env.repo.block('current').peek()?.deleted).toBe(false)
+  })
+
+  it('stands aside (no merge) when the caret is not at the block end', async () => {
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0'})
+      await tx.create({id: 'ui', workspaceId: WS, parentId: null, orderKey: 'z0'})
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'current', content: 'current'})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'next', content: 'next'})
+
+    const uiStateBlock = env.repo.block('ui')
+    await uiStateBlock.set(topLevelBlockIdProp, 'root')
+    await focusBlock(uiStateBlock, 'current')
+
+    const action = findEditModeAction(env.repo, 'merge_next_block_cm')
+    const trigger = {preventDefault: vi.fn()} as unknown as ActionTrigger
+
+    await action.handler({
+      block: env.repo.block('current'),
+      // Caret mid-block, not at the end — CodeMirror's own forward-delete owns
+      // this; the merge must stand aside or it would fire on every Delete.
+      editorView: codeMirrorEditorView('current', 3),
+      uiStateBlock,
+      scopeRootId: 'root',
+    } satisfies CodeMirrorEditModeDependencies, trigger)
+
+    expect(trigger.preventDefault).not.toHaveBeenCalled()
+    expect(env.repo.block('current').peek()?.content).toBe('current')
+    expect(env.repo.block('next').peek()?.deleted).toBe(false)
+  })
+
+  it('stands aside (no merge) when there is a non-empty selection', async () => {
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0'})
+      await tx.create({id: 'ui', workspaceId: WS, parentId: null, orderKey: 'z0'})
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'current', content: 'current'})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'next', content: 'next'})
+
+    const uiStateBlock = env.repo.block('ui')
+    await uiStateBlock.set(topLevelBlockIdProp, 'root')
+    await focusBlock(uiStateBlock, 'current')
+
+    const action = findEditModeAction(env.repo, 'merge_next_block_cm')
+    const trigger = {preventDefault: vi.fn()} as unknown as ActionTrigger
+
+    const editorView = codeMirrorEditorView('current', 'current'.length)
+    // A selection that reaches the block end but is NOT empty — CodeMirror's
+    // delete removes the selected range, so the merge must stand aside even
+    // though `sel.to === doc.length`.
+    editorView.dispatch({selection: {anchor: 2, head: 'current'.length}})
+
+    await action.handler({
+      block: env.repo.block('current'),
+      editorView,
+      uiStateBlock,
+      scopeRootId: 'root',
+    } satisfies CodeMirrorEditModeDependencies, trigger)
+
+    expect(trigger.preventDefault).not.toHaveBeenCalled()
+    expect(env.repo.block('current').peek()?.content).toBe('current')
+    expect(env.repo.block('next').peek()?.deleted).toBe(false)
+  })
+
+  it('stands aside (no merge) when pressing delete at the end of the scope root', async () => {
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0'})
+      await tx.create({id: 'ui', workspaceId: WS, parentId: null, orderKey: 'z0'})
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'child', content: 'child'})
+
+    const uiStateBlock = env.repo.block('ui')
+    await uiStateBlock.set(topLevelBlockIdProp, 'root')
+    await focusBlock(uiStateBlock, 'root')
+
+    const action = findEditModeAction(env.repo, 'merge_next_block_cm')
+    const trigger = {preventDefault: vi.fn()} as unknown as ActionTrigger
+
+    await action.handler({
+      // The next visible block from the scope root is its own first child;
+      // absorbing it up into the page/view header is refused (mirror of
+      // Backspace refusing to merge the scope root upward).
+      block: env.repo.block('root'),
+      editorView: codeMirrorEditorView('', 0),
+      uiStateBlock,
+      scopeRootId: 'root',
+    } satisfies CodeMirrorEditModeDependencies, trigger)
+
+    expect(trigger.preventDefault).not.toHaveBeenCalled()
+    expect(await childIds('root')).toEqual(['child'])
+    expect(env.repo.block('child').peek()?.deleted).toBe(false)
+  })
+
+  it('absorbs the next block into an empty current block on delete at block end', async () => {
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0'})
+      await tx.create({id: 'ui', workspaceId: WS, parentId: null, orderKey: 'z0'})
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'current', content: ''})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'next', content: 'next'})
+
+    const uiStateBlock = env.repo.block('ui')
+    await uiStateBlock.set(topLevelBlockIdProp, 'root')
+    await focusBlock(uiStateBlock, 'current')
+
+    const action = findEditModeAction(env.repo, 'merge_next_block_cm')
+    const trigger = {preventDefault: vi.fn()} as unknown as ActionTrigger
+
+    await action.handler({
+      // Forward-delete on an empty block pulls the next block's text up into
+      // it (a text editor's Delete on an empty line) — unlike Backspace-on-
+      // empty, which deletes the empty block and moves focus up.
+      block: env.repo.block('current'),
+      editorView: codeMirrorEditorView('', 0),
+      uiStateBlock,
+      scopeRootId: 'root',
+    } satisfies CodeMirrorEditModeDependencies, trigger)
+
+    expect(trigger.preventDefault).toHaveBeenCalledTimes(1)
+    expect(env.repo.block('current').peek()?.content).toBe('next')
+    expect(env.repo.block('next').peek()).toBeNull()
+    expect(env.repo.block('next').peekRaw()?.deleted).toBe(true)
+  })
+
+  it("re-homes a folded-up child's own children in order when delete merges an only child", async () => {
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0'})
+      await tx.create({id: 'ui', workspaceId: WS, parentId: null, orderKey: 'z0'})
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'parent', content: 'parent '})
+    await env.repo.mutate.createChild({parentId: 'parent', id: 'current', content: 'current'})
+    await env.repo.mutate.createChild({parentId: 'current', id: 'c1', content: 'c1'})
+    await env.repo.mutate.createChild({parentId: 'current', id: 'c2', content: 'c2'})
+
+    const uiStateBlock = env.repo.block('ui')
+    await uiStateBlock.set(topLevelBlockIdProp, 'root')
+    await focusBlock(uiStateBlock, 'parent')
+
+    const action = findEditModeAction(env.repo, 'merge_next_block_cm')
+    const trigger = {preventDefault: vi.fn()} as unknown as ActionTrigger
+
+    await action.handler({
+      block: env.repo.block('parent'),
+      editorView: codeMirrorEditorView('parent ', 'parent '.length),
+      uiStateBlock,
+      scopeRootId: 'root',
+    } satisfies CodeMirrorEditModeDependencies, trigger)
+
+    expect(trigger.preventDefault).toHaveBeenCalledTimes(1)
+    expect(env.repo.block('parent').peek()?.content).toBe('parent current')
+    expect(env.repo.block('current').peek()).toBeNull()
+    // `current` was parent's only child, so its grandchildren take its slot —
+    // re-homed under parent with their relative order preserved.
+    expect(await childIds('parent')).toEqual(['c1', 'c2'])
   })
 
   it('splits a middle block into a prefix sibling above and keeps focus on the suffix block', async () => {
@@ -793,5 +1429,148 @@ describe('default CodeMirror shortcuts', () => {
 
     expect(env.repo.block('victim').peek()).toBeNull()
     expect(env.repo.block('victim').peekRaw()?.deleted).toBe(true)
+  })
+
+  it('deletes the focal page when the pane is a real panel surface', async () => {
+    // Delete on the panel's own page. The handler just deletes it (and its
+    // subtree) — a real panel row carries a mounted PanelContentRecovery
+    // watcher that navigates the pane off the tombstone separately, so the
+    // handler no longer steers navigation itself.
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'page', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'page'})
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.mutate.createChild({parentId: 'page', id: 'child', content: 'child'})
+
+    const rootUiState = await getUIStateBlock(env.repo, WS, USER, {})
+    const layoutSession = await getLayoutSessionBlock(rootUiState, env.repo.activeLayoutSessionId)
+    const panelId = await insertPanelRow(env.repo, layoutSession, 'page')
+    const uiStateBlock = env.repo.block(panelId)
+
+    const {deleteBlock} = createSharedBlockActions({repo: env.repo})
+    await deleteBlock.handler(
+      {block: env.repo.block('page'), uiStateBlock, scopeRootId: 'page'},
+      {preventDefault: vi.fn()} as unknown as ActionTrigger,
+    )
+
+    expect(await isBlockDeleted(env.repo, 'page')).toBe(true)
+    expect(await isBlockDeleted(env.repo, 'child')).toBe(true)
+  })
+
+  it('deletes the focal page headlessly too (no panel surface required)', async () => {
+    // A bare UI-state block (agent bridge, fuzz harness) has no panel row and no
+    // recovery watcher. The delete still goes through: deletion is not a
+    // scope-relative decision, and the handler deliberately doesn't inspect the
+    // surface — recovery is the surface's job, and a headless caller has no
+    // surface to recover.
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'page', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'page'})
+      await tx.create({id: 'ui', workspaceId: WS, parentId: null, orderKey: 'z0'})
+    }, {scope: ChangeScope.BlockDefault})
+
+    const uiStateBlock = env.repo.block('ui')
+    await uiStateBlock.set(topLevelBlockIdProp, 'page')
+
+    const {deleteBlock} = createSharedBlockActions({repo: env.repo})
+    await deleteBlock.handler(
+      {block: env.repo.block('page'), uiStateBlock, scopeRootId: 'page'},
+      {preventDefault: vi.fn()} as unknown as ActionTrigger,
+    )
+
+    expect(await isBlockDeleted(env.repo, 'page')).toBe(true)
+  })
+
+  it('Shift+Up from the first bullet selects the whole page, and Delete then removes it', async () => {
+    // Records ACCEPTED behaviour, deliberately, so it isn't left living only in
+    // a fuzz-harness exclusion. `previousVisibleBlock` returns the parent even
+    // when it is the scope root, and `validateSelectionHierarchy` keeps an
+    // ancestor while dropping its descendants — so a second extend-up from a
+    // page's first bullet COLLAPSES the selection onto the page rather than
+    // growing it. Deleting then takes the page and its subtree.
+    //
+    // This is intended: the page renders highlighted while selected (the
+    // selection background wraps `<Children/>`, so the whole subtree is
+    // visibly shaded), and deleting a selected block has always taken its
+    // subtree. If the collapse is ever made to stop at the scope root instead,
+    // this test should fail and be rewritten — that's the point of it.
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'page', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'page'})
+      await tx.create({id: 'ui', workspaceId: WS, parentId: null, orderKey: 'z0'})
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.mutate.createChild({parentId: 'page', id: 'c1', content: 'first'})
+    await env.repo.mutate.createChild({parentId: 'page', id: 'c2', content: 'second'})
+
+    const uiStateBlock = env.repo.block('ui')
+    await uiStateBlock.set(topLevelBlockIdProp, 'page')
+    await focusBlock(uiStateBlock, 'c1')
+
+    const {extendSelectionUp, deleteBlock} = createSharedBlockActions({repo: env.repo})
+    const deps = {uiStateBlock, block: env.repo.block('c1'), scopeRootId: 'page'}
+    const trigger = {preventDefault: vi.fn()} as unknown as ActionTrigger
+
+    await extendSelectionUp.handler(deps, trigger)
+    expect(uiStateBlock.peekProperty(selectionStateProp)?.selectedBlockIds).toEqual(['c1'])
+
+    // Second press: collapses onto the page rather than extending.
+    await extendSelectionUp.handler(deps, trigger)
+    expect(uiStateBlock.peekProperty(selectionStateProp)?.selectedBlockIds).toEqual(['page'])
+
+    await deleteBlock.handler(
+      {uiStateBlock, block: env.repo.block('page'), scopeRootId: 'page'},
+      trigger,
+    )
+
+    expect(await isBlockDeleted(env.repo, 'page')).toBe(true)
+    expect(await isBlockDeleted(env.repo, 'c1')).toBe(true)
+  })
+
+  it('refuses when a registered deletion guard vetoes the block', async () => {
+    // The guard facet is how daily-notes protects its get-or-create pages.
+    // Multi-select delete fans out through this same handler, so it's covered
+    // by the same check.
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'protected', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'p'})
+      await tx.create({id: 'ui', workspaceId: WS, parentId: null, orderKey: 'z0'})
+    }, {scope: ChangeScope.BlockDefault})
+    env.repo.setFacetRuntime(resolveFacetRuntimeSync([
+      // setFacetRuntime REPLACES the registries, so the kernel data
+      // contribution has to be re-included or `childIds` stops resolving.
+      kernelDataExtension,
+      blockDeletionGuardsFacet.of(
+        block => (block.id === 'protected' ? 'Nope.' : null),
+        {source: 'test'},
+      ),
+    ]))
+
+    const {deleteBlock} = createSharedBlockActions({repo: env.repo})
+    await deleteBlock.handler(
+      {block: env.repo.block('protected'), uiStateBlock: env.repo.block('ui'), scopeRootId: 'protected'},
+      {preventDefault: vi.fn()} as unknown as ActionTrigger,
+    )
+
+    expect(await isBlockDeleted(env.repo, 'protected')).toBe(false)
+  })
+
+  it('deletes a non-focal scope root (a backlink/embed of another block)', async () => {
+    // A block rendered as the scope root of a NESTED surface (an embed / backlink
+    // entry of a different block than the pane's page) is an ordinary deletable
+    // block — the nested surface just re-queries. It is NOT the focal page, so
+    // it takes the normal delete path (no page-delete gating).
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'page', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'page'})
+      await tx.create({id: 'ui', workspaceId: WS, parentId: null, orderKey: 'z0'})
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.mutate.createChild({parentId: 'page', id: 'embedded', content: 'embedded'})
+
+    const uiStateBlock = env.repo.block('ui')
+    // Panel shows 'page'; 'embedded' is the scope root of a nested embed surface.
+    await uiStateBlock.set(topLevelBlockIdProp, 'page')
+
+    const {deleteBlock} = createSharedBlockActions({repo: env.repo})
+    await deleteBlock.handler(
+      {block: env.repo.block('embedded'), uiStateBlock, scopeRootId: 'embedded'},
+      {preventDefault: vi.fn()} as unknown as ActionTrigger,
+    )
+
+    expect(await isBlockDeleted(env.repo, 'embedded')).toBe(true)
   })
 })

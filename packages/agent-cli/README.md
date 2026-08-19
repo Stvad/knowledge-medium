@@ -1,8 +1,8 @@
 # @knowledge-medium/agent-cli
 
-`kmagent` — CLI + local HTTP bridge for driving the [Knowledge Medium](https://github.com/stvad/knowledge-medium) app from an agent (Claude, your own scripts, anything that can spawn a child process).
+`kmagent` — CLI + local HTTP bridge for driving the [Knowledge Medium](https://github.com/stvad/knowledge-medium) app from an agent (Claude, Codex, your own scripts, anything that can spawn a child process).
 
-Pairs once with a browser tab over a localhost relay, then forwards JSON commands to a long-poll loop inside the app. The CLI is the agent-facing surface; the bridge is the loopback HTTP server that brokers the connection.
+Pairs once with a browser tab over a localhost relay, then forwards JSON commands to a long-poll loop inside the app. The CLI is the agent-facing surface; the bridge is the loopback HTTP server that brokers the connection. The package also ships `km-mcp`, a generic graph MCP server backed by the same bridge.
 
 ## Install
 
@@ -47,14 +47,21 @@ The CLI exposes both *local* commands (pairing, profile management) and *bridge*
 | `kmagent ping` | Ping the bridge + runtime; print a status summary. |
 | `kmagent status` | Show bridge status (clients, commands). |
 | `kmagent runtime-summary` | Compact agent-oriented runtime context. |
+| `kmagent health` | Sync-health snapshot: block vs blocks_synced counts, upload queue, materialization backlog. |
 | `kmagent describe-runtime` | Full or targeted runtime diagnostics (`--guide <id>`, `--storage`, …). |
-| `kmagent sql <mode> <sql> [paramsJson]` | Run SQL (mode: `all\|get\|optional\|execute`). |
+| `kmagent sql <mode> <sql> [paramsJson] [--allow-synced-write]` | Run SQL (mode: `all\|get\|optional\|execute`). Refuses a raw write to a synced table (`blocks`, `workspaces`, `workspace_members`) unless `--allow-synced-write` is passed — see note below. |
 | `kmagent get-block <id>` | Fetch a block. |
-| `kmagent subtree <rootId> [--include-root]` | Fetch a subtree. |
+| `kmagent subtree <rootId> [--json]` | Fetch a subtree as a depth-indented outline (`--json` for the raw flat array). |
 | `kmagent create-block <json>` | Create a block from a JSON body. |
 | `kmagent update-block <json>` | Update a block from a JSON body. |
-| `kmagent install-extension <file> [label]` | Install a JS extension; `--verify` reports what it contributed. |
+| `kmagent move-block <json>` | Move a block to a parent/position from a JSON body. |
+| `kmagent delete-block <id>` | Soft-delete a block and its descendants. |
+| `kmagent restore-block <id>` | Restore one soft-deleted block; descendants stay deleted unless restored separately. |
+| `kmagent new-extension <name> [dir]` | Scaffold a standalone extension project (deps, gate, `@/` declarations included) in the shape the `record-grain` guide describes. |
+| `kmagent install-extension <file> [label]` | Install a JS extension; reports whether it is actually `running` here. `--verify` reports what it contributed, plus data-model lint warnings. |
 | `kmagent enable-extension <handle>` | Enable / `disable-extension`, `uninstall-extension`. |
+| `kmagent audit-extension <handle>` | Audit the data an extension wrote: block ids in non-ref properties, records buried in JSON cells, properties with no registered schema, declared types nothing carries. |
+| `kmagent audit-properties [--workspace <id>]` | Every property key in the workspace's data the registry does not resolve — the keys property migration skips silently. Per key: exact cell count, why it doesn't resolve, the fix — plus sampled blocks and the types they carry. Active workspace only; refuses rather than mis-reporting. |
 | `kmagent run-action <id> [depsJson]` | Run a registered action by id. |
 | `kmagent eval [--raw] [--file <path>] [--data <path> \| --data-json <json>] <code>` | Run JS in the app (use `return …` to print a value). See [Eval execution scope](#eval-execution-scope) for the bindings available inside the code. |
 | `kmagent reload` | Hard-reload the app tab and wait for it to reconnect. |
@@ -63,6 +70,40 @@ The CLI exposes both *local* commands (pairing, profile management) and *bridge*
 | `kmagent raw <json>` | Send an arbitrary JSON command envelope to the bridge. |
 
 Run `kmagent <command> --help` for per-command details or `kmagent --help` for the full menu.
+
+**`kmagent sql` and synced tables:** a raw `INSERT`/`UPDATE`/`DELETE` against `blocks`, `workspaces`, or `workspace_members` bypasses `repo.tx` — it leaves `tx_context.source = NULL` (the row never uploads to the server or other clients) and skips the kernel's post-commit derivations (block_types, reference normalization, property projection), so derived state goes stale. `kmagent sql` refuses such writes by default and names the offending table in the error. Prefer `create-block` / `update-block` / `run-action` (all go through `repo.tx`) for a normal write. If you genuinely need a raw statement against one of these tables, pass `--allow-synced-write` (or `{allowSyncedWrite: true}` on a `kmagent raw` body) to opt in for that one call.
+
+## MCP Server
+
+`km-mcp` exposes the graph-safe subset of bridge operations as MCP tools: `get_block`, `subtree`, `backlinks`, `page`, `daily_note`, `search`, `sql_query`, `create_block`, `update_block`, `move_block`, `delete_block`, and `restore_block`. It deliberately excludes eval, SQL execute, and extension lifecycle commands.
+
+```json
+{
+  "mcpServers": {
+    "km": {
+      "command": "km-mcp",
+      "env": {"AGENT_RUNTIME_PROFILE": "agent-dispatch"}
+    }
+  }
+}
+```
+
+When running from a repo checkout instead of an installed package, point at
+the built entrypoint directly:
+
+```json
+{
+  "mcpServers": {
+    "km": {
+      "command": "node",
+      "args": ["<repo>/packages/agent-cli/dist/mcp.js"],
+      "env": {"AGENT_RUNTIME_PROFILE": "agent-dispatch"}
+    }
+  }
+}
+```
+
+`km-mcp` is generic graph access. Dispatch-specific loop-prevention policy, including blocked watcher-target wikilinks, lives in the `agent-dispatch` MCP wrapper.
 
 ## Eval execution scope
 
@@ -74,9 +115,9 @@ Run `kmagent <command> --help` for per-command details or `kmagent --help` for t
 | `db` | `repo.db` — the underlying database handle. |
 | `runtime` | The `FacetRuntime`. Prefer `describe-runtime` over reading internal caches. |
 | `safeMode` | `true` when the runtime is paused for safe-mode boot. |
-| `sql(sql, params?, mode?)` | Thin SQL helper, matches `kmagent sql`. |
+| `sql(sql, params?, mode?, allowSyncedWrite?)` | Thin SQL helper, matches `kmagent sql` — including its refusal of raw writes to synced tables (see the note above `kmagent sql`) unless `allowSyncedWrite` is `true`. |
 | `block(id)` / `getBlock(id)` / `getSubtree(rootId)` | Block accessors. |
-| `createBlock(input)` / `updateBlock(input)` | Block mutators (same shape as the wire commands). |
+| `createBlock(input)` / `updateBlock(input)` / `moveBlock(input)` / `deleteBlock(input)` / `restoreBlock(input)` | Block mutators (same shape as the wire commands; restore is one block only). |
 | `installExtension(input)` / `setExtensionEnabled(input)` / `uninstallExtension(input)` | Extension lifecycle. |
 | `actions`, `renderers` | Registered actions and block renderers. |
 | `refreshAppRuntime` | Re-run runtime registration (rarely needed). |
@@ -114,9 +155,17 @@ kmagent --profile chrome-dev ping
 export AGENT_RUNTIME_PROFILE=chrome-dev
 ```
 
+A local dev server is its own origin, so it needs its own pairing and its own profile — point `AGENT_RUNTIME_APP_URL` at it when connecting:
+
+```bash
+AGENT_RUNTIME_APP_URL=http://localhost:<port>/ kmagent --profile localdev connect
+```
+
+Only `connect` / `pair-url` read `AGENT_RUNTIME_APP_URL` (it decides which URL is printed); later commands use the saved token. Loopback origins are always accepted by the bridge, so no `AGENT_RUNTIME_ALLOWED_ORIGINS` is needed.
+
 ## Type-vending for extension authors
 
-When you're authoring an extension that imports from Knowledge Medium modules (`@/extensions/api.js`, `@/data/api`, `@/components/ui/button.js`, etc.), `kmagent types` writes the app's compiled TypeScript declaration tree so type-aware editors resolve those imports with real signatures:
+When you're authoring an extension that imports from Knowledge Medium modules (`@/extensions/core.js`, `@/data/api/index.js`, `@/components/ui/button.js`, etc.), `kmagent types` writes the app's compiled TypeScript declaration tree so type-aware editors resolve those imports with real signatures:
 
 ```bash
 kmagent types agent-extensions/kernel-types
@@ -141,7 +190,7 @@ Re-run with `--force` after updating the app or CLI.
 For quick inspection, print one compiled module declaration to stdout:
 
 ```bash
-kmagent types --module '@/extensions/api.js'
+kmagent types --module '@/data/api/index.js'
 kmagent types --module '@/data/api'
 ```
 

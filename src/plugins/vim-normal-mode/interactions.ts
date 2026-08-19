@@ -7,22 +7,23 @@ import {
 import {
   ActionContextTypes,
   type ActionConfig,
-  type ActionTransform,
   type ActionTrigger,
   type BlockPointerDependencies,
 } from '@/shortcuts/types.js'
+import type { ActionDispatchDecorator } from '@/shortcuts/actionDispatch.js'
 import { ENTER_BLOCK_EDIT_MODE_ACTION_ID } from '@/plugins/plain-outliner/clickToEditAction.js'
 
 /**
  * Vim normal mode: a single click focuses the block instead of entering edit
  * mode (double-click / tap still edits — see `enterBlockEditModeOnGestureAction`).
  *
- * Decorates the plain-outliner click-to-edit pointer action by replacing its
- * handler, the same Replace semantics vim used to get by winning the
- * `blockClickHandlersFacet` last-contribution race — now expressed through the
- * one transform mechanism. Interactive descendants are excluded upstream by the
- * `block-pointer` context's `pointerTargetFilter`, so the handler doesn't
- * re-check them.
+ * Wraps the plain-outliner click-to-edit pointer action at DISPATCH time,
+ * replacing its behaviour (it never calls `next`) — the same Replace semantics
+ * vim used to get by winning the `blockClickHandlersFacet` last-contribution
+ * race, now expressed through the action-dispatch seam rather than an
+ * `actionTransformsFacet` handler rewrite. Interactive descendants are excluded
+ * upstream by the `block-pointer` context's `pointerTargetFilter`, so the
+ * handler doesn't re-check them.
  *
  * Coupling note: this targets plain-outliner's action id, so single-click-focus
  * only applies when plain-outliner is enabled (it provides the click-to-edit
@@ -30,16 +31,13 @@ import { ENTER_BLOCK_EDIT_MODE_ACTION_ID } from '@/plugins/plain-outliner/clickT
  * text blocks plain-outliner renders — but disabling plain-outliner while vim
  * stays on would drop click-to-focus rather than fall back to it.
  */
-export const vimClickToFocusTransform: ActionTransform = {
+export const vimClickToFocusDecorator: ActionDispatchDecorator = {
   actionId: ENTER_BLOCK_EDIT_MODE_ACTION_ID,
   context: ActionContextTypes.BLOCK_POINTER,
-  apply: action => ({
-    ...action,
-    handler: (deps) => {
-      const {block, uiStateBlock, renderScopeId} = deps as BlockPointerDependencies
-      void focusBlockWithoutEditing(block, uiStateBlock, renderScopeId)
-    },
-  }),
+  wrap: (deps) => {
+    const {block, uiStateBlock, renderScopeId} = deps as BlockPointerDependencies
+    void focusBlockWithoutEditing(block, uiStateBlock, renderScopeId)
+  },
 }
 
 export const ENTER_BLOCK_EDIT_MODE_GESTURE_ACTION_ID = 'vim.block.enter-edit-mode-gesture'
@@ -61,7 +59,7 @@ const pointerSelectionFromTrigger = (
 
 /**
  * Vim normal mode: a double-click (mouse) or tap (touch) enters edit mode — the
- * counterpart to `vimClickToFocusTransform`, which makes a single click focus
+ * counterpart to `vimClickToFocusDecorator`, which makes a single click focus
  * rather than edit. A pointer-bound `block-pointer` action, so it dispatches
  * through the same `resolve` + coordinator path as click-to-edit and selection,
  * with the block's deps SUPPLIED. The gesture is RECOGNISED and routed by core's

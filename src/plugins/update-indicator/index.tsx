@@ -5,7 +5,7 @@ import {
 import { appEffectsFacet } from '@/extensions/core.js'
 import { AppExtension } from '@/facets/facet.js'
 import { systemToggle } from '@/facets/togglable.js'
-import { propertySchemasFacet } from '@/data/facets.js'
+import { definitionSeedsFacet } from '@/data/facets.js'
 import { pluginPrefsExtension } from '@/data/pluginStateExtensions.js'
 import { UpdateIndicator } from './UpdateIndicator.tsx'
 import {
@@ -38,8 +38,8 @@ export const updateIndicatorPlugin: AppExtension = systemToggle({
   description: 'Subtle indicator when a new app build has been deployed since this tab loaded.',
 }).of([
   appEffectsFacet.of(updateIndicatorLoadTimeEffect, {source: 'update-indicator'}),
-  propertySchemasFacet.of(previousLoadTimeProp, {source: 'update-indicator'}),
-  propertySchemasFacet.of(currentLoadTimeProp, {source: 'update-indicator'}),
+  definitionSeedsFacet.of(previousLoadTimeProp, {source: 'update-indicator'}),
+  definitionSeedsFacet.of(currentLoadTimeProp, {source: 'update-indicator'}),
   ...pluginPrefsExtension(updateIndicatorPrefsType, 'update-indicator'),
   blockContentDecoratorsFacet.of(updateIndicatorDecorator, {source: 'update-indicator'}),
 ])

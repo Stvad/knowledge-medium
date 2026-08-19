@@ -16,6 +16,7 @@ import { use, useCallback } from 'react'
 import { useBlockContext } from '@/context/block.js'
 import { useUser } from '@/components/Login.js'
 import { useRepo } from '@/context/repo.js'
+import { useActiveWorkspaceId } from '@/hooks/useWorkspaces.js'
 import {
   ChangeScope,
   isSystemAuthor,
@@ -31,7 +32,6 @@ import {
   isEditingProp,
 } from '@/data/properties'
 import { usePropertyValue, useHandle, useChildren } from '@/hooks/block'
-import { getLayoutSessionId } from '@/utils/layoutSessionId'
 import {
   getLayoutSessionBlock,
   getPluginPrefsBlock,
@@ -63,18 +63,30 @@ export function useRootUIStateBlock(): Block {
   return use(getUIStateBlock(repo, workspaceId, user, {}))
 }
 
-export function useLayoutSessionBlock(layoutSessionId = getLayoutSessionId()): Block {
-  return use(getLayoutSessionBlock(useRootUIStateBlock(), layoutSessionId))
+export function useLayoutSessionBlock(layoutSessionId?: string): Block {
+  const repo = useRepo()
+  return use(getLayoutSessionBlock(useRootUIStateBlock(), layoutSessionId ?? repo.activeLayoutSessionId))
 }
 
-export function usePanelsForLayoutSession(layoutSessionId = getLayoutSessionId()): Block[] {
+export function usePanelsForLayoutSession(layoutSessionId?: string): Block[] {
   return useChildren(useLayoutSessionBlock(layoutSessionId))
 }
 
 export function useUserBlock(): Block {
   const repo = useRepo()
   const user = useUser()
-  const workspaceId = requireWorkspaceId(repo, 'useUserBlock')
+  // `useActiveWorkspaceId` re-renders this hook on a workspace switch (via its
+  // hash subscription) while resolving the *committed* active workspace (the
+  // pin) — so persistent surfaces that hold the user block (the left sidebar's
+  // shortcuts) follow a switch instead of staying pinned to the previous
+  // workspace, without ever resolving a not-yet-validated URL workspace (which
+  // would have getUserBlock write a user-page row into it). The pin alone is
+  // non-reactive, so reading it without the subscription left those surfaces
+  // stale after a switch.
+  const workspaceId = useActiveWorkspaceId()
+  if (!workspaceId) {
+    throw new Error('useUserBlock requires an active workspace')
+  }
 
   return use(getUserBlock(repo, workspaceId, user))
 }
@@ -90,10 +102,13 @@ export function useUserBlock(): Block {
  *  yet) `name` falls back to the raw id and `blockId` is omitted — so
  *  attribution degrades to the prior plain-text behaviour rather than
  *  rendering a link to a block that doesn't exist. */
-export function useUserPage(userId: string): {name: string; blockId?: string} {
+export function useUserPage(userId: string, workspaceId?: string): {name: string; blockId?: string} {
   const repo = useRepo()
-  const workspaceId = requireWorkspaceId(repo, 'useUserPage')
-  const id = userPageBlockId(workspaceId, userId)
+  // Resolve against the caller-supplied workspace when given (attribution for
+  // a block whose workspace may not be the active one — e.g. a non-modal info
+  // dialog left open across a workspace switch), else the active workspace.
+  const resolvedWorkspaceId = workspaceId ?? requireWorkspaceId(repo, 'useUserPage')
+  const id = userPageBlockId(resolvedWorkspaceId, userId)
   const block = repo.block(id)
   const resolved = useHandle(block, {
     selector: doc => doc

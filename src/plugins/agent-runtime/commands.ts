@@ -2,9 +2,9 @@ import React from 'react'
 import ReactDOM from 'react-dom'
 import type { Repo } from '@/data/repo'
 import type { Block } from '@/data/block'
-import { ChangeScope, type BlockData, type BlockReference } from '@/data/api'
-import { aliasesProp, extensionDescriptionProp, extensionNameProp, getBlockTypes, topLevelBlockIdProp } from '@/data/properties.js'
-import { EXTENSION_TYPE, PAGE_TYPE } from '@/data/blockTypes'
+import { ChangeScope, type BlockData, type BlockReference, type SubtreeRow } from '@/data/api'
+import { aliasesProp, blockTypeTypeIdProp, extensionDescriptionProp, extensionNameProp, getBlockTypes, seedKeyProp, topLevelBlockIdProp } from '@/data/properties.js'
+import { BLOCK_TYPE_TYPE, EXTENSION_TYPE, PAGE_TYPE } from '@/data/blockTypes'
 import { BACKLINKS_FOR_BLOCK_QUERY, type BacklinksFilter } from '@/plugins/backlinks/query.js'
 import { resolveBacklinksFilter, type BacklinksFilterSpec } from '@/plugins/backlinks/resolveFilter.js'
 import {
@@ -17,10 +17,17 @@ import {
 } from '@/plugins/grouped-backlinks/resolveConfig.js'
 import type { GroupedBacklinksConfig } from '@/plugins/grouped-backlinks/config.js'
 import { parseRelativeDate } from '@/utils/relativeDate.js'
+import { searchBlocksAcrossSources } from '@/utils/linkTargetAutocomplete.js'
 import { formatRoamDate } from '@/utils/dailyPage.js'
 import { dailyNoteBlockId } from '@/plugins/daily-notes/dailyNotes.js'
+import { assertCanonicalBlockId } from '@/data/blockId.js'
 import { DATA_MODEL_GUIDE } from './dataModelGuide.ts'
-import { keyAtEnd } from '@/data/orderKey.js'
+import { runHealthCommand } from './healthCommand.ts'
+import { watchEventsRegistry } from './watchEvents.ts'
+import { keyAtEnd, keyBetween } from '@/data/orderKey.js'
+import { deleteSubtreeInTx } from '@/data/subtreeDelete.js'
+import { syncedWriteTarget } from '@/data/syncedTableWriteGuard.js'
+import { parseMarkdownToBlocks, type ParsedBlock } from '@/utils/markdownParser.js'
 import {
   actionsFacet,
   appEffectsFacet,
@@ -28,18 +35,24 @@ import {
   blockRenderersFacet,
 } from '@/extensions/core.js'
 import { readRuntimeActions } from '@/extensions/runtimeActions.js'
+import { invokeAction } from '@/shortcuts/actionDispatch.js'
+import type { BaseShortcutDependencies } from '@/shortcuts/types.js'
 import { refreshAppRuntime } from '@/facets/runtimeEvents.js'
 import { dynamicExtensionsExtension } from '@/extensions/dynamicExtensions.js'
 import { resolveAppRuntime } from '@/facets/resolveAppRuntime.js'
-import { applyToggle } from '@/facets/togglable.js'
+import { applyToggle, isEnabled } from '@/facets/togglable.js'
 import { userExtensionToggle } from '@/extensions/extensionToggles.js'
 import {
   approveExtension,
   createCompileCache,
+  hashExtensionSource,
+  readApproval,
   revokeExtensionApproval,
 } from '@/extensions/compileExtensionModule.js'
 import { findExtensionBlock } from '@/extensions/extensionLookup.js'
 import { lintExtensionSource } from './extensionLint.ts'
+import { auditExtensionData, writeWarnings, type GrainWarning } from './grainAudit.ts'
+import { auditPropertyRegistration, type PropertyRegistrationAudit } from './propertyRegistrationAudit.ts'
 import { getPluginPrefsBlock } from '@/data/stateBlocks.js'
 import {
   extensionsOverridesProp,
@@ -52,14 +65,27 @@ import {
   pingRuntime,
 } from './describeRuntime.ts'
 import type {KnownAgentCommand} from '@knowledge-medium/agent-cli/protocol'
+import {
+  PROPERTY_CELL_BACKFILL_ID,
+  takeLastPropertyCellBackfillRun,
+} from '@/data/internals/propertyCellBackfill'
 import type {
   AgentRuntimeBridgeOptions,
   AgentRuntimeContext,
   BlockPosition,
   CreateBlockInput,
+  ReconcileMarkdownSubtreeInput,
+  ReconcileMarkdownSubtreeResult,
+  DeleteBlockInput,
+  DeleteBlockResult,
+  AuditExtensionResult,
   ExtensionVerificationResult,
   InstallExtensionInput,
   InstallExtensionResult,
+  MoveBlockInput,
+  MoveBlockPosition,
+  RestoreBlockInput,
+  RunBackfillResult,
   SetExtensionEnabledInput,
   SetExtensionEnabledResult,
   SqlMode,
@@ -117,6 +143,19 @@ const getPosition = (value: unknown): BlockPosition | undefined => {
   return value
 }
 
+const getMoveBlockPosition = (value: unknown): MoveBlockPosition => {
+  if (!isRecord(value)) {
+    throw new Error('position must be an object with kind first|last|before|after')
+  }
+  if (value.kind === 'first' || value.kind === 'last') {
+    return {kind: value.kind}
+  }
+  if (value.kind === 'before' || value.kind === 'after') {
+    return {kind: value.kind, siblingId: requireString(value.siblingId, 'position.siblingId')}
+  }
+  throw new Error('position.kind must be one of: first, last, before, after')
+}
+
 const getBlockDataInput = (command: KnownAgentCommand): Partial<BlockData> => {
   const data = isRecord(command.data)
     ? structuredClone(command.data) as Partial<BlockData>
@@ -136,12 +175,40 @@ const getBlockDataInput = (command: KnownAgentCommand): Partial<BlockData> => {
   return data
 }
 
+/** Guard for the bridge's raw `sql` verb (any mode — `execute` is the common
+ *  shape, but `all`/`get`/`optional` reach the same `repo.db` connection and
+ *  could carry a write statement too). A raw write to a synced table
+ *  (`blocks`, `workspaces`, `workspace_members`) bypasses `repo.tx`: it
+ *  leaves `tx_context.source = NULL` so the upload trigger never fires (the
+ *  write is local-only — see `syncedTableWriteGuard.ts`), AND it skips the
+ *  kernel's post-commit derivations (block_types, reference normalization,
+ *  property projection), desyncing derived state. `allowSyncedWrite` is the
+ *  explicit, one-call opt-out for a deliberate surgical fix. */
+const assertSyncedTableWriteAllowed = (sql: string, allowSyncedWrite: boolean): void => {
+  if (allowSyncedWrite) return
+  // Scans the whole statement text — CTE prefixes, later statements, and
+  // trigger bodies included (see syncedTableWriteGuard.ts).
+  const target = syncedWriteTarget(sql)
+  if (target === null) return
+  throw new Error(
+    `sql: refusing to write to synced table "${target}" via raw SQL — this bypasses ` +
+      'repo.tx, so the write leaves tx_context.source = NULL (never uploads to the ' +
+      'server or other clients) and skips the kernel derivations (block_types, ' +
+      'reference normalization, property projection), desyncing derived state. Use ' +
+      'create-block / update-block / run-action (which go through repo.tx) for a normal ' +
+      'write. For a deliberate surgical fix, pass --allow-synced-write on the CLI ' +
+      '(or {allowSyncedWrite: true} on the command body) to override this check.',
+  )
+}
+
 const runSql = async (
   repo: Repo,
   sql: string,
   params: unknown[] = [],
   mode: SqlMode = 'all',
+  allowSyncedWrite = false,
 ) => {
+  assertSyncedTableWriteAllowed(sql, allowSyncedWrite)
   if (mode === 'get') return repo.db.get(sql, params)
   if (mode === 'optional') return repo.db.getOptional(sql, params)
   if (mode === 'execute') return repo.db.execute(sql, params)
@@ -257,12 +324,190 @@ const verifyExtensionBlock = async (
   }
 }
 
+/** Will this extension actually run on this device, and if not, why not?
+ *
+ *  Two independent gates gate every extension: a SYNCED enabled intent, and
+ *  a DEVICE-LOCAL approval pinned to the source's hash. Installing new source
+ *  invalidates the second one, so an update to an enabled extension used to
+ *  land silently dead — the block updated, nothing ran, and writes that
+ *  depended on its schemas went through raw. Reporting both gates (and
+ *  re-pinning below) is what makes that visible instead of mysterious. */
+const readRunState = async (
+  repo: Repo,
+  workspaceId: string,
+  block: BlockData,
+): Promise<{approved: boolean; enabled: boolean; running: boolean}> => {
+  const approval = await readApproval(block.id).catch(() => null)
+  const approved = Boolean(approval) && (await hashExtensionSource(block.content ?? '')) === approval?.sourceHash
+  let enabled = false
+  try {
+    const prefsBlock = await getPluginPrefsBlock(repo, workspaceId, repo.user, extensionsPrefsType)
+    const overrides = prefsBlock.peekProperty(extensionsOverridesProp) ?? new Map<string, boolean>()
+    enabled = isEnabled(userExtensionToggle(block), overrides)
+  } catch {
+    // Prefs unavailable (fresh profile / read failure) — intent reads as
+    // absent, which for a user-installed extension means disabled.
+  }
+  return {approved, enabled, running: approved && enabled}
+}
+
+/** What to do about an extension that isn't running, in one line. */
+const runStateHint = (
+  state: {approved: boolean; enabled: boolean; running: boolean},
+  handle: string,
+): string | undefined => {
+  if (state.running) return undefined
+  return state.enabled && !state.approved
+    ? `Enabled, but this device hasn't approved the current source — it is NOT running here: pnpm agent enable-extension ${handle}`
+    : `Not running yet — enable it on this device: pnpm agent enable-extension ${handle}`
+}
+
+/** The type ids an installed extension has actually SEEDED, read from the
+ *  definition blocks rather than by compiling the source. Two reasons: it
+ *  works for an extension that isn't running, and it reflects the schemas
+ *  the stored data was written against — which is what an audit is about.
+ *  Extension-owned seed keys are `<blockId>/type/<key>` (see
+ *  `dynamicExtensionSeeds.ts`). */
+const seededTypeIds = async (
+  repo: Repo,
+  workspaceId: string,
+  extensionBlockId: string,
+): Promise<string[]> => {
+  const rows = await repo.db.getAll<{typeId: string | null}>(
+    `SELECT json_extract(b.properties_json, '$."${blockTypeTypeIdProp.name}"') AS typeId
+     FROM blocks b JOIN block_types t ON t.block_id = b.id
+     WHERE t.type = ? AND b.workspace_id = ? AND b.deleted = 0
+       AND json_extract(b.properties_json, '$."${seedKeyProp.name}"') LIKE ?`,
+    [BLOCK_TYPE_TYPE, workspaceId, `${encodeURIComponent(extensionBlockId)}/type/%`],
+  )
+  return rows.map(row => row.typeId).filter((id): id is string => typeof id === 'string' && id.length > 0)
+}
+
+/** Audit the data an installed extension has written: does it match the
+ *  grain the app rewards? The source lint (install-time) can only read
+ *  declarations; this reads values, so it can tell a live block id parked in
+ *  a string property from an external id that merely looks like one. */
+const auditRuntimeExtension = async (
+  repo: Repo,
+  input: {id?: string; label?: string},
+): Promise<AuditExtensionResult> => {
+  const workspaceId = resolveWorkspaceId(repo)
+  if (!input.id?.trim() && !input.label?.trim()) {
+    throw new Error('audit-extension requires `id` or `label`')
+  }
+  const found = await findExtensionBlock(repo, workspaceId, input)
+  if (!found) {
+    throw new Error(`No installed extension matches "${input.id ?? input.label}"`)
+  }
+
+  const typeIds = await seededTypeIds(repo, workspaceId, found.block.id)
+  const audit = await auditExtensionData(repo, workspaceId, typeIds)
+  const runState = await readRunState(repo, workspaceId, found.block)
+
+  return {
+    id: found.block.id,
+    label: found.label,
+    ...runState,
+    ...audit,
+    lint: lintExtensionSource(found.block.content ?? ''),
+  }
+}
+
+/** Workspace-wide counterpart to `audit-extension`'s `unknown-property`
+ *  rule: every key in the data, not just the ones on one extension's types. */
+const auditRuntimeProperties = async (
+  repo: Repo,
+  input: {workspaceId?: string},
+): Promise<PropertyRegistrationAudit> => {
+  return auditPropertyRegistration(
+    repo,
+    assertedWorkspaceOverride(input.workspaceId) ?? resolveWorkspaceId(repo),
+  )
+}
+
+/** Run one `operator`-triggered workspace backfill — the properties
+ *  cell → children migration and anything later on that seam.
+ *
+ *  This is the whole operator surface for a pass that is deliberately NOT
+ *  scheduled: exactly-once across a fleet is not reachable over a
+ *  last-write-wins sync layer, so it is reached by a person running it in one
+ *  place while the others receive the rows. The outcome is returned rather
+ *  than logged so the caller can tell whether it ran, was already done, or
+ *  refused — and whether it dropped the workspace's undo history. */
+const runRuntimeBackfill = async (
+  repo: Repo,
+  input: {backfillId: string; workspaceId?: string},
+): Promise<RunBackfillResult> => {
+  // Same rule as `audit-properties`: `--workspace "$UNSET"` must fail rather
+  // than fall back to the active workspace. It matters more here — this one
+  // WRITES, and a migration run against a graph the operator did not name is
+  // not something a retry undoes.
+  if (input.workspaceId !== undefined && input.workspaceId.trim() === '') {
+    throw new Error(
+      'run-backfill: --workspace was given an empty value. It asserts which workspace ' +
+      'the pass writes to, so an empty expansion must fail rather than fall back to ' +
+      'the active one. Pass a real workspace id, or omit the option entirely.',
+    )
+  }
+  const workspaceId = input.workspaceId?.trim() || resolveWorkspaceId(repo)
+  // Refused HERE, before the runner. A backfill for a non-active workspace
+  // aborts on its own per-transaction check — but only AFTER `tryClaim` has
+  // already written: it ensures a Migrations page and creates a claim row, so
+  // a mistyped assertion leaves two blocks in a graph the operator never meant
+  // to touch and reports nothing more alarming than "already done".
+  if (workspaceId !== repo.activeWorkspaceId) {
+    throw new Error(
+      `run-backfill: --workspace ${workspaceId} is not the active workspace ` +
+      `(${repo.activeWorkspaceId ?? 'none'}). The pass writes to the workspace this ` +
+      'client has open, so the option is an assertion, not a target — open that ' +
+      'workspace and re-run.',
+    )
+  }
+  const result = await repo.runWorkspaceBackfillNow(workspaceId, input.backfillId)
+  // Only an outcome where the pass was actually ENTERED can wear its run
+  // detail — 'ran', or 'failed' (a throw partway still ran, and its partial
+  // counts are the most useful thing to hand the operator). Every other
+  // outcome never called the pass, so a `lastRun` left over from an earlier
+  // invocation must not decorate this response. Allow-listing the outcomes
+  // that ran (rather than deny-listing the ones that didn't) fails closed if
+  // the outcome union gains or renames a member.
+  const passWasEntered = result.outcome === 'ran' || result.outcome === 'failed'
+  return {
+    backfillId: input.backfillId,
+    workspaceId,
+    ...result,
+    // The seam hands back nothing (an unattended pass has no one to tell), so
+    // the detail an operator acts on is collected from the pass itself — only
+    // when THIS request is the one that ran it, or a `not-found` for some other
+    // id would come back wearing the last migration's counts.
+    ...(passWasEntered && input.backfillId === PROPERTY_CELL_BACKFILL_ID
+      ? takeLastPropertyCellBackfillRun(workspaceId) ?? {}
+      : {}),
+  }
+}
+
 const mapPosition = (
   position: BlockPosition | undefined,
 ): {kind: 'first'} | {kind: 'last'} | undefined => {
   if (position === undefined || position === 'last') return {kind: 'last'}
   if (position === 'first' || position === 0) return {kind: 'first'}
   return {kind: 'last'}
+}
+
+/** Attach data-model warnings about what this write just stored. They ride
+ *  ALONGSIDE the block's own fields and are never persisted, so a consumer
+ *  reading `.id` / `.properties` is unaffected while the agent still sees
+ *  that (say) it parked a block id in a schema-less property. Reports only
+ *  the keys THIS write supplied, so an update doesn't re-warn about
+ *  everything already on the block. */
+const withGrainWarnings = async (
+  repo: Repo,
+  block: BlockData | null,
+  written: Readonly<Record<string, unknown>> | undefined,
+): Promise<BlockData | (BlockData & {agentWarnings: GrainWarning[]}) | null> => {
+  if (!block) return block
+  const warnings = await writeWarnings(repo, written)
+  return warnings.length > 0 ? {...block, agentWarnings: warnings} : block
 }
 
 const createRuntimeBlock = async (
@@ -272,6 +517,17 @@ const createRuntimeBlock = async (
   const content = input.content ?? (input.data?.content as string | undefined) ?? ''
   const properties = input.properties ?? (input.data?.properties as Record<string, unknown> | undefined)
   const explicitId = input.data?.id as string | undefined
+  // Caller-supplied ids must be canonical UUIDs (issue #456): a non-UUID id
+  // from an agent/CLI caller can render ambiguously in the outline (control
+  // characters, bidi reordering, homoglyphs — see PR #447's history) in a
+  // way no render-time filter alone can fully rule out.
+  //
+  // NOT the enforcement point — `tx.create` is (see @/data/blockId), and it
+  // would reject this id a few frames later regardless. This check is here
+  // for the MESSAGE: it names the command an agent actually typed, before any
+  // write, instead of surfacing a `tx.create:` rejection from three layers
+  // down mid-transaction. Deleting it loses that; it does not open the hole.
+  if (explicitId !== undefined) assertCanonicalBlockId(explicitId, 'createBlock')
   const references = input.data?.references as BlockReference[] | undefined
 
   if (input.parentId) {
@@ -283,7 +539,7 @@ const createRuntimeBlock = async (
       position: mapPosition(input.position),
       id: explicitId,
     }) as string
-    return repo.load(id)
+    return withGrainWarnings(repo, await repo.load(id), properties)
   }
 
   const workspaceId = (input.data?.workspaceId as string | undefined) ?? repo.activeWorkspaceId
@@ -303,29 +559,268 @@ const createRuntimeBlock = async (
       references,
     })
   }, {scope: ChangeScope.BlockDefault, description: 'agent runtime create root block'})
-  return repo.load(id)
+  return withGrainWarnings(repo, await repo.load(id), properties)
+}
+
+/** App-owned property that tags every block of a reconciled subtree with
+ *  its caller-supplied `key`. The reconcile identifies "this subtree" by
+ *  this tag, so it never touches user content interleaved under the same
+ *  parent, and successive reconciles of the same key converge in place. */
+const SUBTREE_KEY_PROP = 'agent:subtreeKey'
+
+/** Reconcile the keyed block subtree under `parentId` to match `markdown`,
+ *  in ONE transaction (atomic — never a partial tree). The markdown is
+ *  parsed with the app's own paste parser (`parseMarkdownToBlocks`) so the
+ *  split matches "paste as markdown" exactly; `shape:'block'` keeps it one
+ *  block. Every block is tagged `SUBTREE_KEY_PROP=key` plus `properties`
+ *  (the daemon passes `claude:reply`).
+ *
+ *  Idempotent by `key`: the tagged blocks are made to carry the parsed
+ *  tree's content/parentage by a positional (pre-order) reconcile — update
+ *  the block at each position, re-parent it if its parent drifted, create
+ *  new tail nodes (appended contiguously with the reply's existing nodes —
+ *  see `appendKey`), and (only on `final`) delete trailing tagged blocks
+ *  with no parsed counterpart. So re-sending the same markdown is a no-op
+ *  and a growing markdown (a live stream) just extends the tail — no
+ *  duplication, safe to retry. This unifies "stream the reply" and "split
+ *  the reply": streaming is repeated reconciles with the growing text; the
+ *  terminal write is the last reconcile.
+ *
+ *  BOUNDARY: a matched block keeps its own order key, so the reply's nodes
+ *  stay in correct RELATIVE order but aren't forcibly made ADJACENT. If the
+ *  user deliberately drops a block BETWEEN two already-placed reply nodes
+ *  mid-stream, it stays there (the reply reads split around it) rather than
+ *  being evicted — respecting the user's edit over strict contiguity. The
+ *  common case (a block added AFTER the reply) keeps the reply contiguous. */
+const reconcileMarkdownSubtree = async (
+  repo: Repo,
+  input: ReconcileMarkdownSubtreeInput,
+): Promise<ReconcileMarkdownSubtreeResult> => {
+  const {parentId, key, properties, shape, final} = input
+  // shape 'block' → the whole markdown is ONE root block (newlines kept);
+  // 'outline' (default) → split along the markdown outline.
+  const parsed: ParsedBlock[] = shape === 'block'
+    ? (input.markdown.length === 0
+        ? []
+        : [{id: 'block-root', orderKey: '', content: input.markdown}])
+    : parseMarkdownToBlocks(input.markdown)
+
+  const ids: string[] = []
+  const rootIds: string[] = []
+
+  await repo.tx(async tx => {
+    const parent = await tx.get(parentId)
+    if (!parent) throw new Error(`reconcile-markdown-subtree: parent ${parentId} not found`)
+    const {workspaceId} = parent
+
+    // This subtree's existing blocks, in pre-order (the target we reconcile
+    // onto). Walk children depth-first following ONLY tagged blocks, so user
+    // content interleaved under the parent is skipped and never touched.
+    const existing: BlockData[] = []
+    const collect = async (pid: string): Promise<void> => {
+      for (const child of await tx.childrenOf(pid, workspaceId)) {
+        if (child.properties?.[SUBTREE_KEY_PROP] !== key) continue
+        existing.push(child)
+        await collect(child.id)
+      }
+    }
+    await collect(parentId)
+
+    // Cursor per real parent for APPENDING new nodes. To keep the subtree
+    // CONTIGUOUS, new nodes slot right after the parent's last child ALREADY
+    // TAGGED with this key (a prior reconcile's node) and BEFORE that node's
+    // next sibling — so a block the user inserted after a streamed root
+    // mid-run can't split the reply around unrelated content. When the parent
+    // has no tagged child yet (a fresh reply, or a freshly-created reply
+    // parent), append after its last child so the reply lands after existing
+    // content. `keyBetween` needs a strictly-greater upper bound, so a tie
+    // between the anchor and its next sibling falls back to open-ended append.
+    const cursorByParent = new Map<string, {after: string | null, before: string | null}>()
+    const appendKey = async (realParentId: string): Promise<string> => {
+      let cursor = cursorByParent.get(realParentId)
+      if (!cursor) {
+        const children = await tx.childrenOf(realParentId, workspaceId)
+        let anchor = -1
+        for (let j = children.length - 1; j >= 0; j -= 1) {
+          if (children[j].properties?.[SUBTREE_KEY_PROP] === key) { anchor = j; break }
+        }
+        cursor = anchor === -1
+          ? {after: children.at(-1)?.orderKey ?? null, before: null}
+          : {after: children[anchor].orderKey, before: children[anchor + 1]?.orderKey ?? null}
+        cursorByParent.set(realParentId, cursor)
+      }
+      const upper = cursor.before !== null && (cursor.after === null || cursor.before > cursor.after)
+        ? cursor.before
+        : null
+      const orderKey = keyBetween(cursor.after, upper)
+      cursor.after = orderKey
+      return orderKey
+    }
+
+    const idMap = new Map<string, string>()          // parsed id → real id
+    const blockProps = {...(properties ?? {}), [SUBTREE_KEY_PROP]: key}
+
+    for (let i = 0; i < parsed.length; i += 1) {
+      const node = parsed[i]
+      const realParentId = node.parentId ? idMap.get(node.parentId)! : parentId
+      const match = i < existing.length ? existing[i] : undefined
+
+      if (match) {
+        // Reconcile the block already at this pre-order position: update its
+        // content, and re-parent it (to the end of the new parent's run) only
+        // if its PARENT drifted. Its own order key is left alone — a no-op on
+        // the common append-only stream (stable prefix, growing tail); and a
+        // deliberate boundary otherwise, so a user block wedged between two
+        // matched reply nodes isn't evicted just to close the gap (see the
+        // function's BOUNDARY note).
+        idMap.set(node.id, match.id)
+        if (match.content !== node.content) {
+          await tx.update(match.id, {content: node.content})
+        }
+        if (match.parentId !== realParentId) {
+          await tx.move(match.id, {parentId: realParentId, orderKey: await appendKey(realParentId)})
+        }
+      } else {
+        const id = crypto.randomUUID()
+        await tx.create({
+          id,
+          workspaceId,
+          parentId: realParentId,
+          orderKey: await appendKey(realParentId),
+          content: node.content,
+          properties: blockProps,
+        })
+        idMap.set(node.id, id)
+      }
+
+      const realId = idMap.get(node.id)!
+      ids.push(realId)
+      if (!node.parentId) rootIds.push(realId)
+    }
+
+    // Trailing extras: tagged blocks past the end of the parsed tree — only
+    // reachable when the final text parses to FEWER nodes than an earlier
+    // streamed tick (e.g. resultText trimmed a trailing bullet, or a failed
+    // run collapses a streamed outline to a single note block). In pre-order
+    // a parent precedes its children, so the trailing slice is closed under
+    // descendants; delete it leaf-first (reverse order) so no parent orphans
+    // a child. Only on `final` — a mid-stream tick must not delete a tail it
+    // simply hasn't re-streamed yet.
+    if (final && existing.length > parsed.length) {
+      for (let i = existing.length - 1; i >= parsed.length; i -= 1) {
+        const doomed = existing[i]
+        // Salvage the user's OWN content: a block the user nested under this
+        // reply node isn't tagged with our key, so `collect` never saw it and
+        // it isn't in the doomed set. `tx.delete` is a single-row soft-delete
+        // (no cascade), so leaving it would strand it under a tombstone and it
+        // would vanish from the outline. Reparent any such foreign child up to
+        // the doomed node's parent BEFORE deleting — deleting leaf-first means
+        // the doomed node's own tagged children are already gone, so only
+        // foreign children remain, and a child under a parent that is itself
+        // doomed bubbles up again until it lands under a surviving ancestor.
+        const target = doomed.parentId ?? parentId
+        // Visible view: a property field row is machinery OWNED by `doomed`
+        // (not foreign content), so it must not be rescued/reparented — it
+        // goes with `doomed` in the subtree-delete below.
+        const foreign = (await tx.childrenOf(doomed.id, workspaceId, {hidePropertyChildren: true}))
+          .filter(child => child.properties?.[SUBTREE_KEY_PROP] !== key)
+        if (foreign.length > 0) {
+          // Land the rescued children in the doomed node's OWN slot (between
+          // it and its next sibling), keeping their relative order, rather
+          // than at the parent's end. Slot-anchoring is what makes order
+          // correct regardless of the reverse (leaf-first) walk: each doomed
+          // sibling's children land at that sibling's position, so notes
+          // under an earlier reply node stay before notes under a later one,
+          // and neither jumps past unrelated content that followed the reply.
+          const siblings = await tx.childrenOf(target, workspaceId)
+          const doomedIdx = siblings.findIndex(sibling => sibling.id === doomed.id)
+          const nextKey = doomedIdx >= 0 ? siblings[doomedIdx + 1]?.orderKey ?? null : null
+          let lower: string | null = doomed.orderKey ?? null
+          for (const child of foreign) {
+            const upper = nextKey !== null && (lower === null || nextKey > lower) ? nextKey : null
+            const orderKey = keyBetween(lower, upper)
+            await tx.move(child.id, {parentId: target, orderKey})
+            lower = orderKey
+          }
+        }
+        // Subtree-delete (not single-row): after foreign content is rescued
+        // above, `doomed`'s only remaining descendants are its own property
+        // field/value machinery, which must be tombstoned with it rather
+        // than stranded live under the tombstone (§9). In an un-flipped
+        // workspace there is no machinery, so this equals the single-row
+        // delete it replaces.
+        // eslint-disable-next-line no-restricted-syntax -- programmatic delete: agent bridge reconciling a markdown subtree, not a user gesture
+        await deleteSubtreeInTx(tx, doomed.id)
+      }
+    }
+  }, {scope: ChangeScope.BlockDefault, description: 'agent runtime reconcile markdown subtree'})
+
+  return {ids, rootIds}
 }
 
 const updateRuntimeBlock = async (
   repo: Repo,
   input: UpdateBlockInput,
 ): Promise<BlockData | null> => {
-  const before = await repo.load(input.id)
-  if (!before) throw new Error(`updateBlock: block ${input.id} not found`)
-
-  const nextProperties = input.properties === undefined
-    ? undefined
-    : input.replaceProperties
-      ? structuredClone(input.properties) as Record<string, unknown>
-      : {...before.properties, ...structuredClone(input.properties)} as Record<string, unknown>
-
+  // Read INSIDE the tx so a merge-update is an ATOMIC read-modify-write.
+  // repo.tx runs its whole body in one db.writeTransaction, which SQLite
+  // serializes against every other writer — so no concurrent update to the
+  // same block can land between this read and this write. A prior
+  // repo.load-then-merge OUTSIDE the tx had a TOCTOU: a full-map write built
+  // from a stale snapshot clobbered any property another writer set in the
+  // gap (e.g. an agent-dispatch orphan-clear reverting a channel task's
+  // concurrently-written agent:status back to `running`).
+  let found = false
   await repo.tx(async tx => {
+    const before = await tx.get(input.id)
+    if (!before || before.deleted) return
+    found = true
+    const nextProperties = input.properties === undefined
+      ? undefined
+      : input.replaceProperties
+        ? structuredClone(input.properties) as Record<string, unknown>
+        : {...before.properties, ...structuredClone(input.properties)} as Record<string, unknown>
+    // Deliberately the RAW bag write, not the typed setProperty/setProperties:
+    // `input.properties` is arbitrary external JSON (raw-encoded values, often
+    // schema-less keys from agent extensions). The typed primitives would throw
+    // on an unresolvable schema or an undecodable value; the raw write + the
+    // same-tx MATERIALIZE processor instead reconciles the schema-backed,
+    // decodable subset into children (create/update, and delete-by-omission on
+    // a `replaceProperties` replace) and gracefully leaves the rest cell-only
+    // (MATERIALIZE skips keys it can't resolve/decode). Read-inside-tx above
+    // already closed the TOCTOU clobber this verb was once flagged for.
     await tx.update(input.id, {
       ...(input.content !== undefined ? {content: input.content} : {}),
       ...(nextProperties !== undefined ? {properties: nextProperties} : {}),
     })
   }, {scope: ChangeScope.BlockDefault, description: 'agent runtime block update'})
 
+  if (!found) throw new Error(`updateBlock: block ${input.id} not found`)
+  return withGrainWarnings(repo, await repo.load(input.id), input.properties)
+}
+
+const moveRuntimeBlock = async (
+  repo: Repo,
+  input: MoveBlockInput,
+): Promise<BlockData | null> => {
+  await repo.mutate.move(input)
+  return repo.load(input.id)
+}
+
+const deleteRuntimeBlock = async (
+  repo: Repo,
+  input: DeleteBlockInput,
+): Promise<DeleteBlockResult> => {
+  // eslint-disable-next-line no-restricted-syntax -- programmatic delete: agent bridge is not a UI gesture; UI-layer guards deliberately don't apply
+  await repo.mutate.delete(input)
+  return {id: input.id, deleted: true}
+}
+
+const restoreRuntimeBlock = async (
+  repo: Repo,
+  input: RestoreBlockInput,
+): Promise<BlockData | null> => {
+  await repo.mutate.restore(input)
   return repo.load(input.id)
 }
 
@@ -352,7 +847,9 @@ const extensionBlockProperties = (
 
 const resolveWorkspaceId = (repo: Repo): string => {
   if (repo.activeWorkspaceId) return repo.activeWorkspaceId
-  throw new Error('install-extension requires an active workspace')
+  // Shared by the extension verbs and the property audit — keep the message
+  // verb-agnostic rather than naming whichever caller came first.
+  throw new Error('this command requires an active workspace')
 }
 
 const installRuntimeExtension = async (
@@ -366,6 +863,22 @@ const installRuntimeExtension = async (
   // description=null means "leave existing description untouched on update,
   // skip writing it on first install". An explicit empty string clears it.
   const description = input.description === undefined ? null : input.description
+
+  // Message-quality check for a caller-supplied id (issue #456), as in
+  // createBlock — `tx.create` is the enforcement point and would reject this
+  // id anyway; this names the command, before any lookup or write.
+  //
+  // Validated RAW, and ahead of the `existing` lookup below, because both the
+  // trim on `installedId` and the lookup itself would otherwise LAUNDER a
+  // malformed value: `"<uuid>\n"` trims to a canonical id, so the block would
+  // be stored (or matched) under an id silently DIFFERENT from the string the
+  // caller passed — precisely the normalization @/data/blockId's case policy
+  // refuses to do for hex case, and inconsistent with create-block, which
+  // never trims. An id is an opaque token; whitespace in one is a caller bug
+  // worth reporting, not something to quietly absorb.
+  if (input.id !== undefined && input.id !== '') {
+    assertCanonicalBlockId(input.id, 'installExtension')
+  }
 
   const label = input.label?.trim() || null
   const workspaceId = resolveWorkspaceId(repo)
@@ -383,6 +896,13 @@ const installRuntimeExtension = async (
     : null
 
   if (existing) {
+    // Was THIS device already running this block? If so, the trust decision
+    // has been made and the update arrives through the same authorized local
+    // channel (the paired bridge) — so re-pin it to the new source rather
+    // than leaving the extension silently dead until someone re-enables it.
+    // A block this device never approved stays unapproved: install is not
+    // where trust gets granted for the first time.
+    const wasApproved = Boolean(await readApproval(existing.id).catch(() => null))
     const typeSnapshot = repo.snapshotTypeRegistries()
     await repo.tx(async tx => {
       const current = await tx.get(existing.id)
@@ -402,13 +922,23 @@ const installRuntimeExtension = async (
     const verification = input.verify
       ? await verifyExtensionBlock(repo, context, existing.id)
       : undefined
+    if (wasApproved) {
+      // Best-effort: a source that no longer transpiles can't be pinned, and
+      // that failure belongs to verify/reload, not to the install itself.
+      await approveExtension(existing.id, source).catch(() => undefined)
+    }
     const reloaded = input.reload !== false
     if (reloaded) refreshAppRuntime()
+    const updated = await repo.load(existing.id)
+    const runState = updated ? await readRunState(repo, workspaceId, updated) : undefined
+    const hint = runState ? runStateHint(runState, label ? `"${label}"` : existing.id) : undefined
     return {
       id: existing.id,
       inserted: false,
       label,
       reloaded,
+      ...(runState ?? {}),
+      ...(hint ? {hint} : {}),
       ...(verification ? {verification} : {}),
     }
   }
@@ -418,6 +948,8 @@ const installRuntimeExtension = async (
     ? null
     : await repo.query.aliasLookup({workspaceId, alias: agentExtensionsParentAlias}).load() as BlockData | null
 
+  // Already validated raw at the top of the function; the trim is now only
+  // the `undefined`/`''` → "no id supplied, mint one" normalization.
   let installedId = input.id?.trim() || ''
   const typeSnapshot = repo.snapshotTypeRegistries()
   await repo.tx(async tx => {
@@ -484,11 +1016,21 @@ const installRuntimeExtension = async (
     : undefined
   const reloaded = input.reload !== false
   if (reloaded) refreshAppRuntime()
+  // A first install grants no trust and sets no intent, so it does NOT run
+  // yet. Saying so here is the point: the old result looked identical to a
+  // successful update, which is how an install could appear to work while
+  // nothing it declared was ever registered.
+  const installed = await repo.load(installedId)
+  const runState = installed ? await readRunState(repo, workspaceId, installed) : undefined
   return {
     id: installedId,
     inserted: true,
     label,
     reloaded,
+    ...(runState ?? {}),
+    ...(runState && runStateHint(runState, label ? `"${label}"` : installedId)
+      ? {hint: runStateHint(runState, label ? `"${label}"` : installedId)}
+      : {}),
     ...(verification ? {verification} : {}),
   }
 }
@@ -561,6 +1103,7 @@ const uninstallRuntimeExtension = async (
   // We mirror the install path's scope/description naming for
   // grep-ability in the change log.
   await repo.tx(async tx => {
+    // eslint-disable-next-line no-restricted-syntax -- programmatic delete: extension uninstall via the agent bridge, no UI entry point
     await tx.delete(found.block.id)
   }, {
     scope: ChangeScope.BlockDefault,
@@ -626,15 +1169,22 @@ const runRuntimeAction = async (
     ? dependencies.scopeRootId
     : realUiStateBlock?.peekProperty(topLevelBlockIdProp)
 
+  // Route imperative agent dispatch through the same `invokeAction` choke the
+  // keyboard / pointer / runActionById paths use, so the action-dispatch
+  // middleware (and the behaviour decorators migrated off `actionTransformsFacet`)
+  // cover M-x-style dispatch too — otherwise calling `action.handler` directly
+  // would skip the decorators the effective action no longer carries.
+  const deps = {
+    uiStateBlock,
+    block,
+    selectedBlocks,
+    anchorBlock,
+    scopeRootId,
+  } as BaseShortcutDependencies
+  const trigger = new CustomEvent('agent-runtime:run-action', {detail: {actionId}})
   let returned: unknown
   try {
-    returned = await action.handler({
-      uiStateBlock,
-      block,
-      selectedBlocks,
-      anchorBlock,
-      scopeRootId,
-    }, new CustomEvent('agent-runtime:run-action', {detail: {actionId}}))
+    returned = await invokeAction(context.runtime, {action, deps, trigger})
   } catch (handlerError) {
     // Bubble up with action context so the CLI shows "which action
     // failed", not just an opaque dispatcher message.
@@ -751,7 +1301,8 @@ const resolveBlockWorkspaceId = async (
   blockId: string,
   override: unknown,
 ): Promise<string> => {
-  if (isString(override) && override) return override
+  const asserted = assertedWorkspaceOverride(override)
+  if (asserted) return asserted
   const data = await repo.load(blockId)
   if (data?.workspaceId) return data.workspaceId
   if (repo.activeWorkspaceId) return repo.activeWorkspaceId
@@ -889,8 +1440,26 @@ const hydrateData = (data: BlockData): HydratedBlockRef => ({
   deepLink: deepLinkFor(data.workspaceId, data.id),
 })
 
+/** The one place a `workspaceId` override becomes a usable id: trims, and
+ *  refuses a blank one. Returns rather than asserting beside the value, so no
+ *  consumer re-decides whether to trim and none has to be sequenced above its
+ *  own `override && return override` — which whitespace passes. */
+const assertedWorkspaceOverride = (override: unknown): string | undefined => {
+  if (!isString(override)) return undefined
+  const asserted = override.trim()
+  if (asserted === '') {
+    throw new Error(
+      'workspaceId (--workspace) was given an empty value. It asserts which workspace to '
+      + 'use, so an empty expansion must fail rather than fall back to the active one. '
+      + 'Pass a real workspace id, or omit it entirely.',
+    )
+  }
+  return asserted
+}
+
 const commandWorkspaceId = (repo: Repo, override: unknown): string => {
-  if (isString(override) && override) return override
+  const asserted = assertedWorkspaceOverride(override)
+  if (asserted) return asserted
   if (repo.activeWorkspaceId) return repo.activeWorkspaceId
   throw new Error('No active workspace; pass workspaceId')
 }
@@ -982,7 +1551,10 @@ const runSearchCommand = async (
   const workspaceId = commandWorkspaceId(repo, command.workspaceId)
   const limit = typeof command.limit === 'number' ? command.limit : 50
 
-  const rows = await repo.query.searchByContent({workspaceId, query, limit}).load()
+  // Shared merge point (searchSourcesFacet), not a direct
+  // `searchByContent` call, so a contributed search source (e.g. semantic
+  // search) is reachable from the agent `search` command too.
+  const rows = await searchBlocksAcrossSources(repo, {workspaceId, query, limit})
   return {
     query,
     workspaceId,
@@ -1025,6 +1597,9 @@ const {
   getSubtree,
   createBlock,
   updateBlock,
+  moveBlock,
+  deleteBlock,
+  restoreBlock,
   installExtension,
   setExtensionEnabled,
   uninstallExtension,
@@ -1056,15 +1631,28 @@ export const createAgentRuntimeContext = ({
     db: repo.db,
     runtime,
     safeMode,
-    sql: (sql, params, mode) => runSql(repo, sql, params, mode),
+    sql: (sql, params, mode, allowSyncedWrite) => runSql(repo, sql, params, mode, allowSyncedWrite),
     block: id => repo.block(id),
     getBlock: id => repo.load(id),
-    getSubtree: async rootId => await repo.query.subtree({id: rootId}).load() as BlockData[],
+    // The visible outline: `get-subtree` (and the MCP `subtree` tool, and
+    // agent-dispatch's prompt render) already surface each row's property BAG,
+    // so emitting field/value rows too would show the same properties a second
+    // time as `((fieldId))` blocks pretending to be user content. Agents that
+    // genuinely want raw storage have `sql` (PR #386 review).
+    getSubtree: async rootId =>
+      await repo.query.subtree({id: rootId, hidePropertyChildren: true}).load() as SubtreeRow[],
     createBlock: input => createRuntimeBlock(repo, input),
+    reconcileMarkdownSubtree: input => reconcileMarkdownSubtree(repo, input),
     updateBlock: input => updateRuntimeBlock(repo, input),
+    moveBlock: input => moveRuntimeBlock(repo, input),
+    deleteBlock: input => deleteRuntimeBlock(repo, input),
+    restoreBlock: input => restoreRuntimeBlock(repo, input),
     installExtension: input => installRuntimeExtension(repo, input, context),
     setExtensionEnabled: input => setExtensionEnabled(repo, input),
     uninstallExtension: input => uninstallRuntimeExtension(repo, input),
+    auditExtension: input => auditRuntimeExtension(repo, input),
+    auditProperties: input => auditRuntimeProperties(repo, input),
+    runBackfill: input => runRuntimeBackfill(repo, input),
     actions: readRuntimeActions(runtime),
     renderers: runtime.read(blockRenderersFacet),
     refreshAppRuntime,
@@ -1087,6 +1675,9 @@ export const executeCommand = async (
 
     case 'runtime-summary':
       return describeRuntimeSummary(context)
+
+    case 'health':
+      return runHealthCommand(context.repo)
 
     case 'describe-runtime':
       return describeRuntime(context, {
@@ -1111,7 +1702,7 @@ export const executeCommand = async (
         throw new Error('mode must be one of: all, get, optional, execute')
       }
 
-      return context.sql(sql, getParams(command.params), mode)
+      return context.sql(sql, getParams(command.params), mode, command.allowSyncedWrite === true)
     }
 
     case 'get-block':
@@ -1128,6 +1719,25 @@ export const executeCommand = async (
         position: getPosition(command.position),
         data: getBlockDataInput(command),
       })
+
+    case 'reconcile-markdown-subtree': {
+      const properties = command.properties === undefined
+        ? undefined
+        : isRecord(command.properties)
+          ? structuredClone(command.properties) as BlockProperties
+          : undefined
+      if (command.properties !== undefined && !properties) {
+        throw new Error('properties must be an object')
+      }
+      return context.reconcileMarkdownSubtree({
+        parentId: requireString(command.parentId, 'parentId'),
+        markdown: requireString(command.markdown, 'markdown'),
+        key: requireString(command.key, 'key'),
+        shape: command.shape === 'block' ? 'block' : command.shape === 'outline' ? 'outline' : undefined,
+        final: command.final === true,
+        properties,
+      })
+    }
 
     case 'update-block': {
       const properties = command.properties === undefined
@@ -1158,6 +1768,27 @@ export const executeCommand = async (
         replaceProperties: Boolean(command.replaceProperties),
       })
     }
+
+    case 'move-block': {
+      const parentId = command.parentId === null
+        ? null
+        : requireString(command.parentId, 'parentId')
+      return context.moveBlock({
+        id: requireString(command.blockId ?? command.id, 'blockId'),
+        parentId,
+        position: getMoveBlockPosition(command.position),
+      })
+    }
+
+    case 'delete-block':
+      return context.deleteBlock({
+        id: requireString(command.blockId ?? command.id, 'blockId'),
+      })
+
+    case 'restore-block':
+      return context.restoreBlock({
+        id: requireString(command.blockId ?? command.id, 'blockId'),
+      })
 
     case 'install-extension':
       return context.installExtension({
@@ -1201,6 +1832,27 @@ export const executeCommand = async (
         label: command.label === undefined ? undefined : requireString(command.label, 'label'),
       })
 
+    case 'audit-extension':
+      return context.auditExtension({
+        id: command.id === undefined ? undefined : requireString(command.id, 'id'),
+        label: command.label === undefined ? undefined : requireString(command.label, 'label'),
+      })
+
+    case 'audit-properties':
+      return context.auditProperties({
+        workspaceId: command.workspaceId === undefined
+          ? undefined
+          : requireString(command.workspaceId, 'workspaceId'),
+      })
+
+    case 'run-backfill':
+      return context.runBackfill({
+        backfillId: requireString(command.backfillId, 'backfillId'),
+        workspaceId: command.workspaceId === undefined
+          ? undefined
+          : requireString(command.workspaceId, 'workspaceId'),
+      })
+
     case 'run-action':
     case 'action':
       return runRuntimeAction(command, context)
@@ -1225,6 +1877,16 @@ export const executeCommand = async (
 
     case 'search':
       return runSearchCommand(context.repo, command)
+
+    case 'watch-events':
+      // Detection relocation (see watchEvents.ts): the tab hosts the
+      // reactive watchers; the registering consumer long-polls the
+      // bridge events channel for their settle events.
+      return watchEventsRegistry.register(context.db, {
+        consumer: command.consumer,
+        watchers: command.watchers,
+        ttlMs: command.ttlMs,
+      })
 
     default: {
       // Exhaustive — the union covers everything; TS narrows `command`

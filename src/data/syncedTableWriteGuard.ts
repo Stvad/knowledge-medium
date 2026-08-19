@@ -22,56 +22,17 @@
  * throws immediately — in dev, CI, and prod — instead of failing silently at
  * sync time. (It never fires for the current backfills, which all target local
  * tables; it only bites a newly-introduced regression.)
+ *
+ * The recognizer that decides "does this SQL write a synced table" — and the
+ * design rationale behind it (why it's position-independent, the single-quote
+ * second pass, the destructive-DDL narrowing) — lives in
+ * `syncedTableSqlRecognizer.js`, shared as-is with the static half of this
+ * bug class, `eslint-rules/no-raw-synced-table-writes.js`. See that file's
+ * module doc for the algorithm.
  */
 
-/** App-visible / synced tables whose changes must propagate through the upload
- *  path. These are exact names: `blocks_fts`, `blocks_synced`, `block_aliases`,
- *  etc. are deliberately NOT here — they are local. */
-const SYNCED_TABLES: ReadonlySet<string> = new Set([
-  'blocks',
-  'workspaces',
-  'workspace_members',
-])
-
-/** Strip a leading run of `--` line comments, block comments, and whitespace
- *  so the verb match below sees the real first token. */
-const stripLeading = (sql: string): string => {
-  let s = sql.trimStart()
-  for (;;) {
-    if (s.startsWith('--')) {
-      const nl = s.indexOf('\n')
-      s = nl === -1 ? '' : s.slice(nl + 1).trimStart()
-    } else if (s.startsWith('/*')) {
-      const end = s.indexOf('*/')
-      s = end === -1 ? '' : s.slice(end + 2).trimStart()
-    } else {
-      return s
-    }
-  }
-}
-
-/** Strip one layer of identifier quoting: "x", `x`, [x], 'x'. */
-const unquote = (ident: string): string =>
-  ident.replace(/^["'`[]/, '').replace(/["'`\]]$/, '')
-
-/**
- * The table an INSERT / UPDATE / DELETE writes to, lowercased, or `null` for
- * any other statement (SELECT, CREATE INDEX/TRIGGER, DROP, PRAGMA, …). Reads
- * the *write target* — the table after `INTO` / `UPDATE` / `DELETE FROM` — so a
- * statement that only mentions a synced table in a `FROM`/subquery (e.g. a
- * local-index backfill `INSERT INTO block_aliases … SELECT … FROM blocks`) is
- * correctly attributed to its real target.
- */
-export const writeTargetTable = (sql: string): string | null => {
-  const s = stripLeading(sql)
-  const insert = s.match(/^(?:insert(?:\s+or\s+\w+)?|replace)\s+into\s+([^\s(]+)/i)
-  if (insert) return unquote(insert[1]).toLowerCase()
-  const update = s.match(/^update\s+(?:or\s+\w+\s+)?([^\s(]+)/i)
-  if (update) return unquote(update[1]).toLowerCase()
-  const del = s.match(/^delete\s+from\s+([^\s(]+)/i)
-  if (del) return unquote(del[1]).toLowerCase()
-  return null
-}
+export { SYNCED_TABLES, writeTargets, syncedWriteTarget } from './syncedTableSqlRecognizer.js'
+import { syncedWriteTarget } from './syncedTableSqlRecognizer.js'
 
 type ExecuteFn<A extends unknown[], R> = (sql: string, ...rest: A) => Promise<R>
 
@@ -80,8 +41,8 @@ export const guardSyncedTableWrites = <A extends unknown[], R>(
   execute: ExecuteFn<A, R>,
 ): ExecuteFn<A, R> =>
   (sql, ...rest) => {
-    const target = writeTargetTable(sql)
-    if (target !== null && SYNCED_TABLES.has(target)) {
+    const target = syncedWriteTarget(sql)
+    if (target !== null) {
       return Promise.reject(
         new Error(
           `[syncedTableWriteGuard] refusing a raw write to synced table "${target}". ` +
@@ -89,7 +50,11 @@ export const guardSyncedTableWrites = <A extends unknown[], R>(
             'tx_context.source = NULL, so the upload trigger never fires and the write is ' +
             'local-only — it will silently never sync (see the daily-note:date backfill, ' +
             'gone in 8c50f167). Route synced-table backfills through repo.tx — e.g. ' +
-            `workspaceBackfillsFacet — which uploads. Offending SQL: ${sql.trim().slice(0, 120)}`,
+            'workspaceBackfillsFacet — which uploads. If this is destructive DDL ' +
+            '(DROP TABLE / ALTER … RENAME / ALTER … DROP COLUMN), it is refused for a ' +
+            'different reason: it would discard synced state the server still holds, and ' +
+            'belongs in a migration rather than an ad-hoc execute. Additive DDL ' +
+            `(ALTER … ADD COLUMN) and trigger/index maintenance are allowed. Offending SQL: ${sql.trim().slice(0, 120)}`,
         ),
       )
     }

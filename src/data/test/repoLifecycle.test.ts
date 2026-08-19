@@ -10,6 +10,13 @@
  *     even for the same id
  *   - setReadOnly toggles isReadOnly visibly to subsequent reads
  *   - activeWorkspaceId getter/setter round-trip; null is allowed
+ *   - activeLayoutSessionId getter/setter round-trip; falls back to the
+ *     per-device base id when unset (replaces the old module-global
+ *     `activeLayoutSessionId` store's own unit tests)
+ *   - repo.client (ClientContext): user exposure, per-instance
+ *     independence, and shim ⇄ client state sharing — the acting-as
+ *     state has one home on ClientContext and Repo's public
+ *     user/activeWorkspaceId/activeLayoutSessionId API delegates to it
  *   - instanceId is unique across Repo constructions (memoize-key
  *     contract used by globalState.ts)
  *
@@ -20,10 +27,35 @@
  */
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import { BlockCache } from '@/data/blockCache'
-import { ChangeScope } from '@/data/api'
+
+// Pin the per-device base id so the activeLayoutSessionId fallback
+// assertions are deterministic (the real getLayoutSessionId touches
+// window/sessionStorage, and is a random uuid in this @vitest-environment
+// node file's window-less default path).
+vi.mock('@/utils/layoutSessionId', () => ({
+  getLayoutSessionId: () => 'base-session-id',
+}))
+
+import {
+  ChangeScope,
+  defineProperty,
+  codecs,
+  type BlockData,
+} from '@/data/api'
+import {
+  definitionBlockProjectorFacet,
+  definitionSeedsFacet,
+  projectedPropertyDefinitionsFacet,
+} from '@/data/facets'
+import type {DefinitionBlockProjector} from '@/data/projectorRuntime'
+import {propertyDefinitionBlockId} from '@/data/definitionSeeds'
+import {seedProperty} from '@/data/propertySeeds'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
+import { createTestRepo } from '@/data/test/createTestRepo'
+import {kernelDataExtension} from '@/data/kernelDataExtension'
+import {defineFacet, resolveFacetRuntimeSync} from '@/facets/facet'
 import { Repo } from '../repo'
+import { ClientContext, type ClientContextReader } from '../clientContext'
 
 interface Harness {
   h: TestDb
@@ -35,13 +67,11 @@ interface Harness {
 // it must NOT reset — reset lives in beforeEach. `h.cleanup` disposes this
 // harness's observer without closing the shared DB.
 const setup = async (): Promise<Harness> => {
-  const cache = new BlockCache()
-  const repo = new Repo({
+  const {repo} = createTestRepo({
     db: sharedDb.db,
-    cache,
     user: {id: 'user-1'},
   })
-  return {h: {db: sharedDb.db, cleanup: async () => { repo.stopSyncObserver() }}, repo}
+  return {h: {db: sharedDb.db, cleanup: async () => {}}, repo}
 }
 
 let sharedDb: TestDb
@@ -93,9 +123,8 @@ describe('repo.setReadOnly', () => {
   it('respects opts.isReadOnly at construction', () => {
     // Construction-only assertion — no DB I/O — so it rides the shared DB
     // with the observer off rather than opening its own harness.
-    const repo = new Repo({
+    const {repo} = createTestRepo({
       db: sharedDb.db,
-      cache: new BlockCache(),
       user: {id: 'u'},
       isReadOnly: true,
       startSyncObserver: false,
@@ -113,6 +142,359 @@ describe('repo.activeWorkspaceId', () => {
     expect(env.repo.activeWorkspaceId).toBe('ws-2')
     env.repo.setActiveWorkspaceId(null)
     expect(env.repo.activeWorkspaceId).toBeNull()
+  })
+
+  it('owns projector lifecycle at the workspace pin in production mode', () => {
+    const {repo} = createTestRepo({
+      db: sharedDb.db,
+      user: {id: 'u'},
+    })
+    const pin = vi.spyOn(repo.projectors, 'pinWorkspace')
+
+    repo.setActiveWorkspaceId('ws-1')
+    repo.setActiveWorkspaceId('ws-1')
+    repo.setActiveWorkspaceId('ws-2')
+    repo.setActiveWorkspaceId(null)
+
+    expect(pin.mock.calls).toEqual([['ws-1'], ['ws-2'], [null]])
+  })
+
+  it('rolls back the Repo pin when projector startup fails and permits retry', () => {
+    const {repo} = createTestRepo({db: sharedDb.db, user: {id: 'u'}})
+    repo.setActiveWorkspaceId('ws-1')
+    const originalPin = repo.projectors.pinWorkspace.bind(repo.projectors)
+    const pin = vi.spyOn(repo.projectors, 'pinWorkspace').mockImplementation(workspaceId => {
+      if (workspaceId === 'ws-2') throw new Error('injected projector failure')
+      originalPin(workspaceId)
+    })
+
+    expect(() => repo.setActiveWorkspaceId('ws-2')).toThrow('injected projector failure')
+    expect(repo.activeWorkspaceId).toBe('ws-1')
+
+    pin.mockRestore()
+    expect(() => repo.setActiveWorkspaceId('ws-2')).not.toThrow()
+    expect(repo.activeWorkspaceId).toBe('ws-2')
+    repo.setActiveWorkspaceId(null)
+  })
+
+  it('starts descriptors that arrive in a replacement runtime for an already-active workspace', async () => {
+    const {repo} = createTestRepo({
+      db: sharedDb.db,
+      user: {id: 'u'},
+      installKernelRuntime: false,
+    })
+    repo.setFacetRuntime(resolveFacetRuntimeSync([]))
+    repo.setActiveWorkspaceId('ws-late-runtime')
+    expect(repo.projectors.isPrimed('ws-late-runtime')).toBe(true)
+
+    repo.setFacetRuntime(resolveFacetRuntimeSync([kernelDataExtension]))
+    await expect(repo.projectors.whenPrimed('ws-late-runtime')).resolves.toBeUndefined()
+    expect(repo.projectors.isPrimed('ws-late-runtime')).toBe(true)
+    repo.setActiveWorkspaceId(null)
+  })
+
+  it('resolves the seed per workspace, unshadowed by a same-name stored definition', async () => {
+    const declaration = seedProperty({
+      seedKey: 'system:kernel-data/property/test-synthesized',
+      revision: 1,
+      name: 'test:synthesized',
+      preset: 'string',
+      changeScope: ChangeScope.BlockDefault,
+    })
+    const {repo} = createTestRepo({
+      db: sharedDb.db,
+      user: {id: 'u'},
+      installKernelRuntime: false,
+    })
+    repo.setFacetRuntime(resolveFacetRuntimeSync([
+      kernelDataExtension,
+      definitionSeedsFacet.of(declaration),
+    ]))
+
+    expect(repo.propertySchemas.get(declaration.name)).toBe(declaration)
+    expect(repo.propertyDefinitions).toBeNull()
+
+    await repo.tx(
+      tx => tx.create({
+        id: 'synthesis-target-a',
+        workspaceId: 'ws-synthesis-a',
+        parentId: null,
+        orderKey: 'a0',
+      }),
+      {scope: ChangeScope.BlockDefault},
+    )
+    // A same-name USER definition (a stored winner) in ws-synthesis-a.
+    await repo.tx(
+      tx => tx.create({
+        id: 'stored-winner-a',
+        workspaceId: 'ws-synthesis-a',
+        parentId: null,
+        orderKey: 'a1',
+        properties: {
+          types: ['property-schema'],
+          'property-schema:name': declaration.name,
+          'property-schema:preset': 'string',
+        },
+      }),
+      {scope: ChangeScope.BlockDefault},
+    )
+
+    repo.setActiveWorkspaceId('ws-synthesis-a')
+    expect(repo.propertyDefinitions).toBeNull()
+    await repo.whenPropertyDefinitionsReady('ws-synthesis-a')
+    // The stored winner exists by field id, but v1 makes a code-owned seed
+    // unshadowable, so it resolves to its own per-workspace field.
+    expect(repo.propertyDefinitions?.definitionsByFieldId.has('stored-winner-a')).toBe(true)
+    expect(repo.propertySchemaResolverFor('ws-synthesis-a').resolve(declaration)).toEqual({
+      status: 'resolved',
+      schema: expect.objectContaining({
+        fieldId: propertyDefinitionBlockId('ws-synthesis-a', declaration.seedKey),
+        workspaceId: 'ws-synthesis-a',
+      }),
+    })
+
+    // A different workspace (no stored winner) resolves the seed to ITS field.
+    repo.setActiveWorkspaceId('ws-synthesis-b')
+    expect(repo.propertyDefinitions).toBeNull()
+    await repo.whenPropertyDefinitionsReady('ws-synthesis-b')
+    expect(repo.propertyDefinitions).toMatchObject({workspaceId: 'ws-synthesis-b'})
+    expect(repo.propertySchemaResolverFor('ws-synthesis-b').resolve(declaration)).toEqual({
+      status: 'resolved',
+      schema: expect.objectContaining({
+        fieldId: propertyDefinitionBlockId('ws-synthesis-b', declaration.seedKey),
+        workspaceId: 'ws-synthesis-b',
+      }),
+    })
+    repo.setActiveWorkspaceId(null)
+  })
+
+  it('cancels a queued transaction when the active projector generation changes', async () => {
+    const {repo} = createTestRepo({db: sharedDb.db, user: {id: 'u'}})
+    repo.setActiveWorkspaceId('ws-queued-a')
+    await repo.whenPropertyDefinitionsReady('ws-queued-a')
+    let release!: () => void
+    const readiness = new Promise<void>(resolve => { release = resolve })
+    vi.spyOn(repo, 'whenPropertyDefinitionsReady').mockReturnValueOnce(readiness)
+    const body = vi.fn()
+
+    const pending = repo.tx(body, {scope: ChangeScope.BlockDefault})
+    repo.setActiveWorkspaceId('ws-queued-b')
+    release()
+
+    await expect(pending).rejects.toThrow(
+      'active workspace generation changed while waiting for ws-queued-a',
+    )
+    expect(body).not.toHaveBeenCalled()
+    repo.setActiveWorkspaceId(null)
+  })
+
+  it('recomputes synthesis when a seed contribution arrives after projector priming', async () => {
+    const declaration = seedProperty({
+      seedKey: 'system:test-plugin/property/late-seed',
+      revision: 1,
+      name: 'test:late-seed',
+      preset: 'string',
+      changeScope: ChangeScope.BlockDefault,
+    })
+    const {repo} = createTestRepo({db: sharedDb.db, user: {id: 'u'}})
+    repo.setActiveWorkspaceId('ws-late-seed')
+    await repo.whenPropertyDefinitionsReady('ws-late-seed')
+    expect(repo.propertySchemas.has(declaration.name)).toBe(false)
+
+    repo.setRuntimeContributions(definitionSeedsFacet, 'test-late-seed', [declaration])
+
+    expect(repo.propertySchemas.get(declaration.name)).toBe(declaration)
+    expect(repo.propertySchemaResolverFor('ws-late-seed').resolve(declaration)).toEqual({
+      status: 'resolved',
+      schema: expect.objectContaining({
+        fieldId: propertyDefinitionBlockId('ws-late-seed', declaration.seedKey),
+        origin: 'plugin:system:test-plugin',
+      }),
+    })
+    repo.setActiveWorkspaceId(null)
+  })
+
+  it('rebuilds workspace-scoped schema state once per pin transition', () => {
+    const {repo} = createTestRepo({
+      db: sharedDb.db,
+      user: {id: 'u'},
+      installKernelRuntime: false,
+    })
+    repo.setFacetRuntime(resolveFacetRuntimeSync([]))
+    const schema = defineProperty('test:scoped', {
+      codec: codecs.string,
+      defaultValue: '',
+      changeScope: ChangeScope.BlockDefault,
+    })
+    repo.setRuntimeContributions(
+      projectedPropertyDefinitionsFacet,
+      'test-scoped',
+      [{
+        metadata: {
+          fieldId: 'field-scoped',
+          workspaceId: 'ws-scoped',
+          createdAt: 1,
+          name: schema.name,
+          changeScope: schema.changeScope,
+          hidden: false,
+          origin: 'user',
+        },
+        schema,
+      }],
+      {workspaceId: 'ws-scoped'},
+    )
+    let rebuilds = 0
+    const dispose = repo.onPropertySchemasChange(() => { rebuilds += 1 })
+
+    repo.setActiveWorkspaceId('ws-scoped')
+    expect(rebuilds).toBe(1)
+    expect(repo.propertySchemas.get(schema.name)).toBe(schema)
+
+    dispose()
+    repo.setActiveWorkspaceId(null)
+  })
+
+  it('mirrors a failed runtime-replacement reconcile and permits an explicit retry', () => {
+    const {repo} = createTestRepo({
+      db: sharedDb.db,
+      user: {id: 'u'},
+      installKernelRuntime: false,
+    })
+    repo.setFacetRuntime(resolveFacetRuntimeSync([]))
+    repo.setActiveWorkspaceId('ws-runtime-failure')
+
+    let failStart = true
+    const targetFacet = defineFacet<{readonly id: string}>({id: 'test.runtime-failure-target'})
+    const throwingDescriptor: DefinitionBlockProjector<BlockData, {readonly id: string}> = {
+      id: 'test-runtime-failure',
+      metaType: 'test-runtime-failure',
+      targetFacet,
+      sourceId: 'test-runtime-failure',
+      project: block => ({id: block.id}),
+      keyOf: contribution => contribution.id,
+      secondarySignal: () => {
+        if (failStart) throw new Error('replacement projector failed')
+        return vi.fn()
+      },
+    }
+    const replacement = resolveFacetRuntimeSync([
+      kernelDataExtension,
+      definitionBlockProjectorFacet.of(throwingDescriptor),
+    ])
+
+    expect(() => repo.setFacetRuntime(replacement)).toThrow(
+      'failed to pin ws-runtime-failure and restore ws-runtime-failure',
+    )
+    expect(repo.activeWorkspaceId).toBeNull()
+    expect(repo.projectors.workspaceId).toBeNull()
+
+    failStart = false
+    expect(() => repo.setActiveWorkspaceId('ws-runtime-failure')).not.toThrow()
+    expect(repo.activeWorkspaceId).toBe('ws-runtime-failure')
+    expect(repo.projectors.workspaceId).toBe('ws-runtime-failure')
+    repo.setActiveWorkspaceId(null)
+  })
+
+  it('falls back to a null pin when incoming start and outgoing restoration both fail', () => {
+    const {repo} = createTestRepo({db: sharedDb.db, user: {id: 'u'}})
+    repo.setActiveWorkspaceId('ws-1')
+    const originalPin = repo.projectors.pinWorkspace.bind(repo.projectors)
+    const pin = vi.spyOn(repo.projectors, 'pinWorkspace').mockImplementation(workspaceId => {
+      if (workspaceId === 'ws-2') {
+        originalPin(null)
+        throw new AggregateError([new Error('incoming'), new Error('rollback')], 'nested failure')
+      }
+      originalPin(workspaceId)
+    })
+
+    expect(() => repo.setActiveWorkspaceId('ws-2')).toThrow('nested failure')
+    expect(repo.activeWorkspaceId).toBeNull()
+    expect(repo.projectors.workspaceId).toBeNull()
+
+    pin.mockRestore()
+    expect(() => repo.setActiveWorkspaceId('ws-1')).not.toThrow()
+    expect(repo.activeWorkspaceId).toBe('ws-1')
+    repo.setActiveWorkspaceId(null)
+  })
+})
+
+describe('repo.activeLayoutSessionId', () => {
+  it('falls back to the per-device base id when unset, and round-trips through the setter', () => {
+    expect(env.repo.activeLayoutSessionId).toBe('base-session-id')
+
+    env.repo.setActiveLayoutSessionId('perspective-1')
+    expect(env.repo.activeLayoutSessionId).toBe('perspective-1')
+
+    env.repo.setActiveLayoutSessionId('perspective-2')
+    expect(env.repo.activeLayoutSessionId).toBe('perspective-2')
+
+    // null restores the base-id fallback.
+    env.repo.setActiveLayoutSessionId(null)
+    expect(env.repo.activeLayoutSessionId).toBe('base-session-id')
+  })
+
+  it('is independent per Repo instance', async () => {
+    const other = await setup()
+    try {
+      env.repo.setActiveLayoutSessionId('perspective-a')
+      other.repo.setActiveLayoutSessionId('perspective-b')
+      expect(env.repo.activeLayoutSessionId).toBe('perspective-a')
+      expect(other.repo.activeLayoutSessionId).toBe('perspective-b')
+    } finally {
+      env.repo.setActiveLayoutSessionId(null)
+      await other.h.cleanup()
+    }
+  })
+})
+
+describe('repo.client (ClientContext)', () => {
+  // `repo.client` is publicly typed as `ClientContextReader` (no set
+  // methods — see clientContext.ts) so production code can't bypass Repo's
+  // transition. These tests deliberately reach the CONCRETE ClientContext
+  // to prove ITS OWN bare-write contract (no Repo side effects; one shared
+  // home for the field) — the thing only the concrete class can exercise.
+  // Never do this cast outside a test.
+  const asConcrete = (client: ClientContextReader): ClientContext => client as ClientContext
+
+  it('exposes the acting user; repo.user delegates to it', () => {
+    expect(env.repo.client.user).toEqual({id: 'user-1'})
+    expect(env.repo.user).toBe(env.repo.client.user)
+  })
+
+  it('is per-Repo-instance (independent acting-as state)', async () => {
+    const other = await setup()
+    try {
+      expect(other.repo.client).not.toBe(env.repo.client)
+      asConcrete(env.repo.client).setActiveLayoutSessionId('mine')
+      expect(other.repo.client.activeLayoutSessionId).toBe('base-session-id')
+    } finally {
+      asConcrete(env.repo.client).setActiveLayoutSessionId(null)
+      await other.h.cleanup()
+    }
+  })
+
+  it('layout-session fallback + set round-trip directly via repo.client', () => {
+    expect(env.repo.client.activeLayoutSessionId).toBe('base-session-id')
+    asConcrete(env.repo.client).setActiveLayoutSessionId('perspective-direct')
+    expect(env.repo.client.activeLayoutSessionId).toBe('perspective-direct')
+    // The Repo shims read/write the SAME state — one home for the field.
+    expect(env.repo.activeLayoutSessionId).toBe('perspective-direct')
+    env.repo.setActiveLayoutSessionId(null)
+    expect(env.repo.client.activeLayoutSessionId).toBe('base-session-id')
+  })
+
+  it('workspace pin state is shared between the Repo shim and client reads', () => {
+    expect(env.repo.client.activeWorkspaceId).toBeNull()
+    env.repo.setActiveWorkspaceId('ws-client')
+    expect(env.repo.client.activeWorkspaceId).toBe('ws-client')
+    env.repo.setActiveWorkspaceId(null)
+    expect(env.repo.client.activeWorkspaceId).toBeNull()
+    // Reverse direction: a bare client write (no Repo side effects — see
+    // ClientContext's doc) is visible through the Repo shim, pinning that
+    // there is exactly one home for the field.
+    asConcrete(env.repo.client).setActiveWorkspaceId('ws-direct')
+    expect(env.repo.activeWorkspaceId).toBe('ws-direct')
+    asConcrete(env.repo.client).setActiveWorkspaceId(null)
   })
 })
 

@@ -46,8 +46,10 @@ function blockStringProperty(
 
 /** Resolve a display name from block-level data only — no module
  *  compilation. Uses the explicit `extension:name`, falling back to a
- *  block-id snippet (rendered as a link in the settings UI). */
-function blockOnlyName(block: BlockData): string {
+ *  block-id snippet (rendered as a link in the settings UI). Exported so
+ *  non-toggle surfaces (the global approval prompts) can label an
+ *  extension without constructing a full togglable. */
+export function extensionDisplayName(block: BlockData): string {
   const name = extensionName(block)
   if (name) return name
 
@@ -58,7 +60,7 @@ function blockOnlyName(block: BlockData): string {
 /** The label that identifies this extension block: its explicit
  *  `extension:name` (set at install time). The agent bridge uses this to
  *  resolve `enable-extension <name>` / `uninstall-extension <name>` to a
- *  block; the settings UI uses `blockOnlyName` (above) for display.
+ *  block; the settings UI uses `extensionDisplayName` (above) for display.
  *  Undefined when absent/empty/malformed. */
 export function extensionName(block: BlockData): string | undefined {
   return blockStringProperty(block, extensionNameProp)
@@ -70,7 +72,7 @@ export function extensionName(block: BlockData): string | undefined {
 export function userExtensionToggle(block: BlockData): Togglable {
   return userToggle({
     id: block.id,
-    name: blockOnlyName(block),
+    name: extensionDisplayName(block),
     description: blockStringProperty(block, extensionDescriptionProp),
   })
 }

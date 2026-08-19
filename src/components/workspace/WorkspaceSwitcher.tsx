@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useState } from 'react'
 import { ChevronDown, Eye, Plus, Settings } from 'lucide-react'
 import {
   DropdownMenu,
@@ -8,10 +8,10 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
-import { useWorkspaces, useMyWorkspaceRoles } from '@/hooks/useWorkspaces'
+import { useWorkspaces, useMyWorkspaceRoles, useActiveWorkspaceId } from '@/hooks/useWorkspaces'
 import { useRepo } from '@/context/repo'
 import { useHash } from 'react-use'
-import { buildAppHash, parseAppHash } from '@/utils/routing'
+import { buildAppHash } from '@/utils/routing'
 import { forgetRememberedWorkspace } from '@/utils/lastWorkspace'
 import { CreateWorkspaceDialog } from '@/components/workspace/CreateWorkspaceDialog'
 import { WorkspaceSettingsDialog } from '@/components/workspace/WorkspaceSettingsDialog'
@@ -27,18 +27,15 @@ export function WorkspaceSwitcher({
   const repo = useRepo()
   // useHash listens for `hashchange` (which `useLocation` does not). That's
   // what makes a hash assignment alone enough to re-render — no page reload
-  // needed when switching workspaces.
-  const [hash, setHash] = useHash()
+  // needed when switching workspaces. `useActiveWorkspaceId` (the read side)
+  // is built on the same subscription; we still need `setHash` to navigate.
+  const [, setHash] = useHash()
+  const activeWorkspaceId = useActiveWorkspaceId()
   const {workspaces} = useWorkspaces()
   const {rolesByWorkspaceId} = useMyWorkspaceRoles()
   const localOnly = useIsLocalOnly()
   const [createOpen, setCreateOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
-
-  const activeWorkspaceId = useMemo(() => {
-    const {workspaceId} = parseAppHash(hash)
-    return workspaceId ?? repo.activeWorkspaceId ?? null
-  }, [hash, repo.activeWorkspaceId])
 
   const activeWorkspace = workspaces.find((w) => w.id === activeWorkspaceId)
   const displayName = activeWorkspace?.name ?? 'Loading…'

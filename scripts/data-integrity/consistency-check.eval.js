@@ -15,7 +15,7 @@
 // check logic is duplicated between this bridge script and the engine.
 //
 // Run via the agent bridge (target tab must be focused/connected):
-//   yarn agent --profile <name> eval --file scripts/data-integrity/consistency-check.eval.js
+//   pnpm agent --profile <name> eval --file scripts/data-integrity/consistency-check.eval.js
 //   ... --data-json '{"workspaceId":"…"}'                # one workspace (default: active)
 //   ... --data-json '{"allWorkspaces":true}'             # every workspace on the client
 //   ... --data-json '{"sampleLimit":20,"candidateCap":80000,"contentCap":2000000}'

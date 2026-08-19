@@ -3,9 +3,10 @@
 // `insert_example_extensions` NORMAL_MODE action.
 //
 // Each entry is an ESM module text whose `default` export is an
-// AppExtension — see dynamicExtensions.ts for the contract. Imports
-// resolve through the page-global importmap, so `@/extensions/api.js`
-// returns the same module instance the running app uses.
+// AppExtension — see dynamicExtensions.ts for the contract. Imports use
+// real module paths (e.g. `@/extensions/core.js`, `@/data/api/index.js`),
+// which resolve through the page-global importmap to the same module
+// instances the running app uses.
 //
 // Renderer-bearing examples register a renderer via blockRenderersFacet
 // and compose with the default block chrome by delegating to
@@ -34,14 +35,11 @@ export interface ExampleExtensionDefinition {
   source: string
 }
 
-const HELLO_RENDERER_SOURCE = `import {
-  blockContentRendererFacet,
-  ChangeScope,
-  codecs,
-  defineProperty,
-  defineVariant,
-  propertySchemasFacet,
-} from '@/extensions/api.js'
+const HELLO_RENDERER_SOURCE = `import { ChangeScope, seedProperty } from '@/data/api/index.js'
+import { definitionSeedsFacet } from '@/data/facets.js'
+import { blockContentRendererFacet } from '@/extensions/blockInteraction.js'
+import { extensionPropertySeedKey } from '@/extensions/dynamicExtensionSeeds.js'
+import { defineVariant } from '@/facets/variantFacet.js'
 
 // Variant on blockContentRendererFacet: contributes an alternative
 // content renderer for blocks tagged 'user:hello = true'. Returning
@@ -51,8 +49,11 @@ const HELLO_RENDERER_SOURCE = `import {
 // content area inside DefaultBlockRenderer — the rest of the block
 // chrome is untouched.
 
-const helloProp = defineProperty('user:hello', {
-  codec: codecs.boolean,
+const helloProp = seedProperty({
+  seedKey: extensionPropertySeedKey('hello'),
+  revision: 1,
+  name: 'user:hello',
+  preset: 'boolean',
   defaultValue: false,
   changeScope: ChangeScope.BlockDefault,
 })
@@ -69,7 +70,7 @@ const HelloContent = ({ block }) => (
 export default [
   // Register the schema so the value-preset / property-editor lookups
   // can find this prop, and describeRuntime can list it.
-  propertySchemasFacet.of(helloProp),
+  definitionSeedsFacet.of(helloProp),
   blockContentRendererFacet.of((ctx) => {
     if (!ctx.block.peekProperty(helloProp)) return null
     return defineVariant('user.hello', 'Hello', HelloContent)
@@ -77,13 +78,10 @@ export default [
 ]
 `
 
-const FOLD_ALL_ACTION_SOURCE = `import {
-  actionsFacet,
-  ActionContextTypes,
-  ChangeScope,
-  isCollapsedProp,
-  topLevelBlockIdProp,
-} from '@/extensions/api.js'
+const FOLD_ALL_ACTION_SOURCE = `import { ChangeScope } from '@/data/api/index.js'
+import { isCollapsedProp, topLevelBlockIdProp } from '@/data/properties.js'
+import { actionsFacet } from '@/extensions/core.js'
+import { ActionContextTypes } from '@/shortcuts/types.js'
 
 // Toggle collapse on every visible descendant of the top-level block.
 // Demonstrates a single action contribution with a default keybinding.
@@ -99,7 +97,9 @@ export default actionsFacet.of({
   id: 'user.fold-all',
   description: 'Fold/unfold every block in the current view',
   context: ActionContextTypes.NORMAL_MODE,
-  defaultBinding: { keys: '$mod+Shift+f' },
+  // $mod+Shift+u — $mod+Shift+f is taken by Find-and-replace (global), so
+  // pressing it would fire both. Pick a free chord for the demo.
+  defaultBinding: { keys: '$mod+Shift+u' },
   handler: async ({ uiStateBlock }) => {
     const topLevelId = uiStateBlock.peekProperty(topLevelBlockIdProp)
     if (!topLevelId) return
@@ -109,7 +109,7 @@ export default actionsFacet.of({
     // peekProperty reads below are sync. The root is included in the subtree
     // and filtered out at the consumer boundary so the subtree query stays
     // includeRoot=true (the only shape we keep going forward).
-    const subtreeWithRoot = await repo.query.subtree({id: topLevelId}).load()
+    const subtreeWithRoot = await repo.query.subtree({id: topLevelId, hidePropertyChildren: true}).load()
     const subtree = subtreeWithRoot.filter(d => d.id !== topLevelId)
     // If anything is uncollapsed, collapse all; otherwise expand all.
     const anyExpanded = subtree.some(
@@ -124,17 +124,16 @@ export default actionsFacet.of({
 })
 `
 
-const EMOJI_REACT_SOURCE = `import {
-  actionsFacet,
-  ActionContextTypes,
+const EMOJI_REACT_SOURCE = `import { ChangeScope, seedProperty } from '@/data/api/index.js'
+import { definitionSeedsFacet } from '@/data/facets.js'
+import {
   blockClickHandlersFacet,
   blockContentDecoratorsFacet,
-  ChangeScope,
-  codecs,
-  defineProperty,
   isSelectionClick,
-  propertySchemasFacet,
-} from '@/extensions/api.js'
+} from '@/extensions/blockInteraction.js'
+import { actionsFacet } from '@/extensions/core.js'
+import { extensionPropertySeedKey } from '@/extensions/dynamicExtensionSeeds.js'
+import { ActionContextTypes } from '@/shortcuts/types.js'
 
 // Multi-facet plugin: an action, a click handler, and a content
 // decorator that layers a reactions row (stored under property
@@ -145,8 +144,11 @@ const EMOJI_REACT_SOURCE = `import {
 // custom 'renderer: hello-renderer' property still gets its reactions
 // row.
 
-const reactionsProp = defineProperty('user:reactions', {
-  codec: codecs.list(codecs.string),
+const reactionsProp = seedProperty({
+  seedKey: extensionPropertySeedKey('reactions'),
+  revision: 1,
+  name: 'user:reactions',
+  preset: 'string-list',
   defaultValue: [],
   changeScope: ChangeScope.BlockDefault,
 })
@@ -168,7 +170,7 @@ const cycleReaction = async (block) => {
 export default [
   // Register the schema so the codec/editor lookups know about this
   // property and describeRuntime can list it.
-  propertySchemasFacet.of(reactionsProp),
+  definitionSeedsFacet.of(reactionsProp),
 
   // Click on a block while holding Alt to add a reaction.
   blockClickHandlersFacet.of((ctx) => (event) => {
@@ -184,7 +186,9 @@ export default [
     id: 'user.add-reaction',
     description: 'Add a reaction emoji to the focused block',
     context: ActionContextTypes.NORMAL_MODE,
-    defaultBinding: { keys: '$mod+Shift+r' },
+    // $mod+Shift+e — $mod+Shift+r collides with SRS "Open review"
+    // (Control+Shift+r) on Linux/Windows, where $mod is Ctrl. Use a free chord.
+    defaultBinding: { keys: '$mod+Shift+e' },
     handler: async ({ block }) => cycleReaction(block),
   }),
 
@@ -205,8 +209,9 @@ export default [
 ]
 `
 
-const KUDOS_FACET_SOURCE = `import { defineFacet, blockRenderersFacet } from '@/extensions/api.js'
-import { DefaultBlockRenderer } from '@/components/renderer/DefaultBlockRenderer.js'
+const KUDOS_FACET_SOURCE = `import { DefaultBlockRenderer } from '@/components/renderer/DefaultBlockRenderer.js'
+import { blockRenderersFacet } from '@/extensions/core.js'
+import { defineFacet } from '@/facets/facet.js'
 
 // Demonstrates defining a brand-new facet inside an extension block,
 // contributing to it from the same block, and registering a
@@ -245,14 +250,11 @@ export default [
 ]
 `
 
-const SPLIT_LAYOUT_SOURCE = `import {
-  blockLayoutFacet,
-  ChangeScope,
-  codecs,
-  defineProperty,
-  defineVariant,
-  propertySchemasFacet,
-} from '@/extensions/api.js'
+const SPLIT_LAYOUT_SOURCE = `import { ChangeScope, seedProperty } from '@/data/api/index.js'
+import { definitionSeedsFacet } from '@/data/facets.js'
+import { blockLayoutFacet } from '@/extensions/blockInteraction.js'
+import { extensionPropertySeedKey } from '@/extensions/dynamicExtensionSeeds.js'
+import { defineVariant } from '@/facets/variantFacet.js'
 
 // blockLayoutFacet contributions arrange the four slots (Content,
 // Properties, Children, Footer) inside a block's body. Each slot is
@@ -266,8 +268,12 @@ const SPLIT_LAYOUT_SOURCE = `import {
 // arranges the slots; the slots' insides are still resolved through
 // the rest of the registry.
 
-const layoutProp = defineProperty('user:layout', {
-  codec: codecs.string,
+const layoutProp = seedProperty({
+  seedKey: extensionPropertySeedKey('layout'),
+  revision: 1,
+  name: 'user:layout',
+  preset: 'optional-string',
+  defaultValue: undefined,
   changeScope: ChangeScope.BlockDefault,
 })
 
@@ -297,7 +303,7 @@ const SplitLayout = ({ Content, Children, Properties, Footer }) => (
 export default [
   // Register the schema so describeRuntime / property-editor lookups
   // know about this property.
-  propertySchemasFacet.of(layoutProp),
+  definitionSeedsFacet.of(layoutProp),
   blockLayoutFacet.of((ctx) => {
     if (ctx.block.peekProperty(layoutProp) !== 'split') return null
     return defineVariant('split', 'Split (content / children)', SplitLayout)
@@ -305,8 +311,8 @@ export default [
 ]
 `
 
-const LAYOUT_RENDERER_OVERRIDE_SOURCE = `import { blockRenderersFacet } from '@/extensions/api.js'
-import { LayoutRenderer } from '@/components/renderer/LayoutRenderer.js'
+const LAYOUT_RENDERER_OVERRIDE_SOURCE = `import { LayoutRenderer } from '@/components/renderer/LayoutRenderer.js'
+import { blockRenderersFacet } from '@/extensions/core.js'
 
 // Replaces the app-wide renderer registered under id 'layout', so
 // inserting this example wraps every panel with the custom frame
@@ -341,9 +347,9 @@ export default blockRenderersFacet.of({
 })
 `
 
-const DEFAULT_RENDERER_OVERRIDE_SOURCE = `import { blockRenderersFacet } from '@/extensions/api.js'
-import { DefaultBlockRenderer } from '@/components/renderer/DefaultBlockRenderer.js'
+const DEFAULT_RENDERER_OVERRIDE_SOURCE = `import { DefaultBlockRenderer } from '@/components/renderer/DefaultBlockRenderer.js'
 import { MarkdownContentRenderer } from '@/components/renderer/MarkdownContentRenderer.js'
+import { blockRenderersFacet } from '@/extensions/core.js'
 
 // Replaces the fallback renderer registered under id 'default'.
 // Inserting this example immediately changes every ordinary block

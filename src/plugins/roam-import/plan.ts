@@ -21,9 +21,9 @@ import {
   ROAM_TIMESTAMP_PROP,
   ROAM_URL_PROP,
   uniqueExactStrings,
-  uniqueStrings,
 } from './properties'
 import { computePromotedFromChildren } from './promotion'
+import { uniqueStrings } from '@/utils/array'
 import {
   collectRoamMemoEntries,
   propertiesFromRoamMemo,
@@ -56,6 +56,23 @@ export {
   type PromotionOptions,
   type PromotionResult,
 } from './promotion'
+// Re-exported alongside promotion deliberately: promoting a `key:: value`
+// attribute without registering a definition for the key it invents is the
+// footgun this pairs with (issue #501). A consumer that finds one should
+// find the other.
+//
+// It does NOT drop keys it cannot register — it reports them and leaves them
+// in place, because it cannot know whether the caller kept the source block
+// (a subtractive consumer has already dropped the bullet, so deleting would
+// destroy the text). Declining such keys is the CALLER's job, upstream, via
+// `PromotionOptions.acceptKey` + `isRegistrablePropertyName`. What it does
+// mutate is values, normalizing them to match the codec it registered — so
+// pass the blocks you are about to write, not copies.
+export {
+  ensurePromotedPropertySchemas,
+  isRegistrablePropertyName,
+  type PromotedPropertyBag,
+} from './schemaReconciliation'
 export {
   type PreparedRoamMemoEntry,
   type PreparedRoamMemoSnapshot,
@@ -329,8 +346,6 @@ interface ComposeArgs {
   promotedFromChildren?: Record<string, unknown>
 }
 
-const hasOwn = (obj: Record<string, unknown>, key: string): boolean =>
-  Object.prototype.hasOwnProperty.call(obj, key)
 
 const propertyValues = (value: unknown): unknown[] =>
   value === undefined || value === null
@@ -398,21 +413,21 @@ const reconcileReadwisePromotedMetadata = (
   const preservedProperties: Record<string, unknown> = {}
 
   const hasDerivedArticleMetadata =
-    hasOwn(derivedProperties, ROAM_AUTHOR_PROP) ||
-    hasOwn(derivedProperties, ROAM_URL_PROP)
+    Object.hasOwn(derivedProperties, ROAM_AUTHOR_PROP) ||
+    Object.hasOwn(derivedProperties, ROAM_URL_PROP)
   if (!hasDerivedArticleMetadata) {
     return {derivedProperties, promotedProperties, preservedProperties}
   }
 
   const notes: string[] = []
-  if (hasOwn(promotedProperties, ROAM_URL_PROP)) {
+  if (Object.hasOwn(promotedProperties, ROAM_URL_PROP)) {
     const promotedUrl = promotedProperties[ROAM_URL_PROP]
     const matrixUrls = matrixUrlValues(promotedUrl)
     if (matrixUrls.length > 0) {
       preservedProperties[ROAM_MESSAGE_URL_PROP] = propertyValueFromList(matrixUrls)
       notes.push(`preserved Matrix URL as ${ROAM_MESSAGE_URL_PROP}`)
     }
-    if (hasOwn(derivedProperties, ROAM_URL_PROP)) {
+    if (Object.hasOwn(derivedProperties, ROAM_URL_PROP)) {
       const promotedOnly = valuesNotIn(promotedUrl, derivedProperties[ROAM_URL_PROP])
       if (promotedOnly.length > 0) {
         derivedProperties[ROAM_URL_PROP] = mergePropertyValues(
@@ -425,10 +440,10 @@ const reconcileReadwisePromotedMetadata = (
     }
   }
 
-  let movedMessageMetadata = hasOwn(preservedProperties, ROAM_MESSAGE_URL_PROP)
-  if (hasOwn(promotedProperties, ROAM_AUTHOR_PROP)) {
+  let movedMessageMetadata = Object.hasOwn(preservedProperties, ROAM_MESSAGE_URL_PROP)
+  if (Object.hasOwn(promotedProperties, ROAM_AUTHOR_PROP)) {
     const promotedAuthor = promotedProperties[ROAM_AUTHOR_PROP]
-    if (!hasOwn(derivedProperties, ROAM_AUTHOR_PROP) ||
+    if (!Object.hasOwn(derivedProperties, ROAM_AUTHOR_PROP) ||
         !propertyValuesEqual(derivedProperties[ROAM_AUTHOR_PROP], promotedAuthor)) {
       preservedProperties[ROAM_MESSAGE_AUTHOR_PROP] = promotedAuthor
       notes.push(`preserved promoted ${ROAM_AUTHOR_PROP} as ${ROAM_MESSAGE_AUTHOR_PROP}`)
@@ -437,7 +452,7 @@ const reconcileReadwisePromotedMetadata = (
     delete promotedProperties[ROAM_AUTHOR_PROP]
   }
 
-  if (movedMessageMetadata && hasOwn(promotedProperties, ROAM_TIMESTAMP_PROP)) {
+  if (movedMessageMetadata && Object.hasOwn(promotedProperties, ROAM_TIMESTAMP_PROP)) {
     preservedProperties[ROAM_MESSAGE_TIMESTAMP_PROP] = promotedProperties[ROAM_TIMESTAMP_PROP]
     delete promotedProperties[ROAM_TIMESTAMP_PROP]
     notes.push(`preserved promoted ${ROAM_TIMESTAMP_PROP} as ${ROAM_MESSAGE_TIMESTAMP_PROP}`)

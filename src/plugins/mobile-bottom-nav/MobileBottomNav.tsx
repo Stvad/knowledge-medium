@@ -1,7 +1,6 @@
 import { useIsMobile } from '@/utils/react.js'
-import { useAppRuntime } from '@/extensions/runtimeContext.js'
 import { useActiveContextsState, type ActiveContextsMap } from '@/shortcuts/ActiveContexts.js'
-import { actionRuntimeKey, getEffectiveActions } from '@/shortcuts/effectiveActions.js'
+import { useActionRefItems } from '@/shortcuts/actionRefItems.js'
 import { dispatchActionWithDeps } from '@/shortcuts/runAction.js'
 import { ActionContextTypes, type ActionConfig } from '@/shortcuts/types.js'
 import { mobileBottomNavItemsFacet } from './facet.ts'
@@ -45,14 +44,10 @@ function MobileBottomNavActionButton({
 }
 
 function MobileBottomNavSurface() {
-  const runtime = useAppRuntime()
-  const items = runtime.read(mobileBottomNavItemsFacet)
-  const actionsByKey = new Map(
-    getEffectiveActions(runtime).map(action => [actionRuntimeKey(action), action]),
-  )
+  const resolved = useActionRefItems(mobileBottomNavItemsFacet, ActionContextTypes.GLOBAL)
   const activeContexts = useActiveContextsState()
 
-  if (items.length === 0) return null
+  if (resolved.length === 0) return null
 
   return (
     <nav
@@ -62,20 +57,16 @@ function MobileBottomNavSurface() {
       data-block-interaction="ignore"
     >
       <div className="mx-auto flex h-16 max-w-md items-center justify-around">
-        {items.map(({id, actionId, context}) => {
-          const action = actionsByKey.get(
-            actionRuntimeKey({id: actionId, context: context ?? ActionContextTypes.GLOBAL}),
-          )
-          if (!action) return null
-          return (
+        {resolved.map(({item, action}) =>
+          action ? (
             <MobileBottomNavActionButton
-              key={id}
+              key={item.id}
               action={action}
               activeContexts={activeContexts}
               disabled={!activeContexts.has(action.context)}
             />
-          )
-        })}
+          ) : null,
+        )}
       </div>
     </nav>
   )

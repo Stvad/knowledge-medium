@@ -32,12 +32,14 @@
  * The `dailyNotesPlugin` AppExtension contributes:
  *   - the three global `open_*_daily_note` actions, and
  *   - a header button that opens the daily-note picker dialog, and
+ *   - prev/next-day arrows flanking a zoomed-in daily note's title
+ *     (`DateNavDecorator`), which navigate their own panel, and
  *   - a `workspaceLandingFacet` resolver that lands the user on
  *     today's note when the panel layout is empty (plus a tutorial
  *     bullet on first-run workspaces).
  *
  * `dailyNotesDataExtension` (in `dataExtension.ts`) contributes the
- * `daily-note` block type via `typesFacet`. It's a separate export so
+ * `daily-note` block type as a `seedType` on `typeSeedsFacet`. It's a separate export so
  * `staticDataExtensions.ts` can install it before the React app
  * mounts, alongside the kernel + other data-only plugins.
  */
@@ -48,23 +50,27 @@ import {
   actionContextsFacet,
   actionsFacet,
   appMountsFacet,
+  blockDeletionGuardsFacet,
   headerItemsFacet,
   workspaceLandingFacet,
   type AppMountContribution,
   type HeaderItemContribution,
 } from '@/extensions/core.js'
+import { blockContentDecoratorsFacet } from '@/extensions/blockInteraction.js'
 import { dialogAppMountExtension } from '@/extensions/dialogAppMount.js'
 import { continuousGestureRecognizersFacet } from '@/extensions/continuousGestures.js'
 import { ActionContextTypes, type ActionConfig } from '@/shortcuts/types.js'
-import { parseAppHash } from '@/utils/routing.js'
+import { activeWorkspaceIdPreferringHash } from '@/utils/navigation.js'
 import { CalendarDays } from 'lucide-react'
 import { quickActionItemsFacet } from '@/plugins/swipe-quick-actions'
 import { dailyNotesActions, resolveCurrentDailyNoteIso } from './actions.ts'
 import { dailyNotesDataExtension } from './dataExtension.ts'
 import { DailyNotePicker } from './DailyNotePicker.tsx'
 import { DailyNotePickerHeaderItem } from './HeaderItem.tsx'
+import { dateNavDecoratorContribution } from './DateNavDecorator.tsx'
 import { openDialog } from '@/utils/dialogs.js'
 import { todayDailyNoteLanding } from './landing.ts'
+import { dailyNotesDeletionGuard } from './deletionGuard.ts'
 import { blockDateAdapterFacet } from './blockDateAdapter.ts'
 import { referenceDateAdapter } from './referenceDateAdapter.ts'
 import { wikilinkDisplayDecoratorFacet } from '@/plugins/references/markdown/wikilinks/wikilinkDecorator.js'
@@ -132,8 +138,7 @@ export const openDailyNotePickerAction = (
   context: ActionContextTypes.GLOBAL,
   icon: CalendarDays,
   handler: async () => {
-    const route = parseAppHash(window.location.hash)
-    const workspaceId = route.workspaceId ?? repo.activeWorkspaceId
+    const workspaceId = activeWorkspaceIdPreferringHash(repo)
     const initialIso = workspaceId
       ? (await resolveCurrentDailyNoteIso(repo, workspaceId)) ?? undefined
       : undefined
@@ -200,9 +205,30 @@ export const dailyNotesPlugin = ({repo}: {repo: Repo}): AppExtension =>
       source: 'daily-notes',
       precedence: 5,
     }),
+    // Prev/next-day arrows on the zoomed-in note's title (they used to be a
+    // pair of header buttons — see DateNavDecorator.tsx for why they moved).
+    //
+    // Negative precedence is about NESTING, not alignment (the arrows stay on
+    // the title line via `items-start` — see DateNavDecorator.tsx). A decorator
+    // that stacks chrome BELOW the content — readwise's "N highlights to
+    // review" hint is one — otherwise lands inside the arrows' row and gets
+    // indented behind the left arrow instead of starting at the block's edge.
+    // At equal precedence the nesting falls to registration order, which put a
+    // runtime-installed extension inside us; ordering below every
+    // default-precedence contribution makes it independent of who registers
+    // when. -50 keeps us OUTSIDE supertags (-100) so the type chips stay on the
+    // title line.
+    blockContentDecoratorsFacet.of(dateNavDecoratorContribution, {
+      source: 'daily-notes',
+      precedence: -50,
+    }),
     workspaceLandingFacet.of(todayDailyNoteLanding, {source: 'daily-notes'}),
+    // Daily notes and the Journal are get-or-create, so a UI delete never
+    // sticks — it just discards the contents. Refuse it (see deletionGuard.ts).
+    blockDeletionGuardsFacet.of(dailyNotesDeletionGuard, {source: 'daily-notes'}),
   ])
 
+export { dateNavDecoratorContribution } from './DateNavDecorator.tsx'
 export { DAILY_NOTE_TYPE, dailyNoteDateProp, dailyNoteType } from './schema.ts'
 export { dailyNotesDataExtension } from './dataExtension.ts'
 export {
@@ -214,6 +240,7 @@ export {
   ensureDailyNoteTarget,
   getOrCreateDailyNote,
   getOrCreateJournalBlock,
+  dailyNoteIsoFromAliases,
   isDateAlias,
   isValidDateAlias,
   journalBlockId,

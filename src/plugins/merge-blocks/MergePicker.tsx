@@ -7,38 +7,23 @@
  * pick and is soft-deleted); the picked block is the TARGET. Picker
  * results filter to pages only when the source is itself a page —
  * otherwise the picker is more useful as an open block-search (mirrors
- * `QuickFind`'s aliases + blocks groups).
+ * `QuickFind`'s aliases + blocks groups). The search UI itself is
+ * `BlockSearchPicker` (shared with `MoveDestinationPicker`); this picker
+ * owns only the merge session + commit semantics.
  *
  * Content strategy is chosen at commit time by `pickMergeContentStrategy`
  * (page-involving merges keep target, outline-block merges concat) so
  * the kernel `core.merge` mutator stays generic.
  */
 import { useEffect, useRef, useState } from 'react'
-import {
-  CommandDialog,
-  CommandInput,
-  CommandList,
-  CommandEmpty,
-  CommandGroup,
-  CommandItem,
-} from '@/components/ui/command'
+import { BlockSearchPicker } from '@/components/BlockSearchPicker.tsx'
 import { useRepo } from '@/context/repo.js'
 import { PAGE_TYPE } from '@/data/blockTypes.js'
 import { hasBlockType } from '@/data/properties.js'
 import { useNavigate } from '@/utils/navigation.js'
-import {
-  searchLinkTargets,
-  type LinkTargetAliasMatch,
-  type LinkTargetBlockMatch,
-} from '@/utils/linkTargetAutocomplete.js'
 import type { DialogContextProps } from '@/utils/dialogs.js'
 import { pickMergeContentStrategy } from './strategy.ts'
-
-const SEARCH_LIMIT = 25
-const DEBOUNCE_MS = 80
-
-const truncate = (text: string, max = 80) =>
-  text.length > max ? text.slice(0, max - 1) + '…' : text
+import { ensureDeletableThroughUi } from '@/utils/deleteBlockThroughUi.js'
 
 interface ActiveSession {
   sourceBlockId: string
@@ -47,12 +32,6 @@ interface ActiveSession {
    *  re-read the block on every keystroke to decide which results group
    *  to filter. */
   sourceIsPage: boolean
-}
-
-interface SearchResultState {
-  query: string
-  aliases: LinkTargetAliasMatch[]
-  blocks: LinkTargetBlockMatch[]
 }
 
 export interface MergePickerProps {
@@ -70,14 +49,7 @@ export function MergePicker({
   const navigate = useNavigate()
 
   const [session, setSession] = useState<ActiveSession | null>(null)
-  const [query, setQuery] = useState('')
-  const [value, setValue] = useState('')
   const [pending, setPending] = useState(false)
-  const [searchResults, setSearchResults] = useState<SearchResultState>({
-    query: '',
-    aliases: [],
-    blocks: [],
-  })
 
   // The finalize callbacks are fresh closures from the DialogHost on
   // each of its renders; read them through a ref so the load effect can
@@ -105,34 +77,15 @@ export function MergePicker({
         workspaceId,
         sourceIsPage: hasBlockType(data, PAGE_TYPE),
       })
-    })()
+    })().catch(error => {
+      // Cancel rather than swallow: nothing renders until `session`
+      // lands, so a rejected load would leave an invisible dialog whose
+      // `openDialog` promise never settles.
+      console.error(`[merge-blocks] failed to load source ${sourceBlockId}`, error)
+      if (!cancelled) cancelRef.current()
+    })
     return () => { cancelled = true }
   }, [repo, sourceBlockId, workspaceId])
-
-  const trimmedQuery = query.trim()
-
-  useEffect(() => {
-    if (!session || !trimmedQuery) return
-    let cancelled = false
-    const timer = setTimeout(async () => {
-      const results = await searchLinkTargets(repo, {
-        workspaceId: session.workspaceId,
-        query: trimmedQuery,
-        limit: SEARCH_LIMIT,
-        excludeBlockIds: [session.sourceBlockId],
-      })
-      if (cancelled) return
-      setSearchResults({
-        query: trimmedQuery,
-        aliases: results.aliases,
-        blocks: results.blocks,
-      })
-    }, DEBOUNCE_MS)
-    return () => {
-      cancelled = true
-      clearTimeout(timer)
-    }
-  }, [session, trimmedQuery, repo])
 
   const commit = async (targetBlockId: string) => {
     if (!session || pending) return
@@ -146,6 +99,11 @@ export function MergePicker({
         console.error('[merge-blocks] source or target missing at commit')
         return
       }
+      // The source block is destroyed by the merge, so it needs the same UI
+      // veto as a delete — this picker explicitly supports merging a whole
+      // page away.
+      if (!await ensureDeletableThroughUi([sourceBlock])) return
+
       const contentStrategy = pickMergeContentStrategy(sourceData, targetData)
       await repo.mutate.merge({
         intoId: targetBlockId,
@@ -169,90 +127,32 @@ export function MergePicker({
     }
   }
 
+  // Unlike the other openDialog dialogs (which render with a bare
+  // `open`), this one gates its very rendering on `session` — the async
+  // source-block load that decides page-vs-block search — so the picker
+  // doesn't flash before `sourceIsPage` is known.
   if (!session) return null
 
   // Source is a page → only the aliases group is meaningful (pages are
   // identified by alias). Content-match blocks are typically outline
   // rows and would muddle the picker for the page-consolidation flow.
   const showBlocks = !session.sourceIsPage
-  const aliases = trimmedQuery && searchResults.query === trimmedQuery
-    ? searchResults.aliases
-    : []
-  const blocks = showBlocks && trimmedQuery && searchResults.query === trimmedQuery
-    ? searchResults.blocks
-    : []
 
   return (
-    // Unlike the other openDialog dialogs (which render with a bare
-    // `open`), this one gates visibility on `session` — the async
-    // source-block load that decides page-vs-block search — so the
-    // CommandDialog doesn't flash before `sourceIsPage` is known.
-    <CommandDialog
-      open={session !== null}
-      onOpenChange={isOpen => { if (!isOpen) cancel() }}
+    <BlockSearchPicker
       title={session.sourceIsPage ? 'Merge this page into…' : 'Merge this block into…'}
       description={
         session.sourceIsPage
           ? 'Source page (with this block\'s content + properties) folds into the picked page; aliases union so old links keep resolving.'
           : 'This block\'s content + children fold into the picked block, then this block is removed.'
       }
-      contentClassName="top-[12vh] translate-y-0"
-      commandProps={{
-        shouldFilter: false,
-        value,
-        onValueChange: setValue,
-      }}
-    >
-      <CommandInput
-        placeholder={session.sourceIsPage ? 'Find page to merge into…' : 'Find target block…'}
-        value={query}
-        onValueChange={nextQuery => {
-          setQuery(nextQuery)
-          setValue('')
-        }}
-        disabled={pending}
-      />
-      <CommandList>
-        <CommandEmpty>
-          {trimmedQuery ? 'No results.' : 'Type to search.'}
-        </CommandEmpty>
-
-        {aliases.length > 0 && (
-          <CommandGroup heading="Pages">
-            {aliases.map(match => (
-              <CommandItem
-                key={`page:${match.blockId}:${match.alias}`}
-                value={`page:${match.blockId}:${match.alias}`}
-                onSelect={() => { void commit(match.blockId) }}
-                disabled={pending}
-                className="flex justify-between items-center gap-2"
-              >
-                <span className="truncate">{match.alias}</span>
-                {match.content && match.content !== match.alias && (
-                  <span className="text-xs text-muted-foreground truncate max-w-[40%]">
-                    {truncate(match.content, 50)}
-                  </span>
-                )}
-              </CommandItem>
-            ))}
-          </CommandGroup>
-        )}
-
-        {blocks.length > 0 && (
-          <CommandGroup heading="Blocks">
-            {blocks.map(match => (
-              <CommandItem
-                key={`block:${match.blockId}`}
-                value={`block:${match.blockId}`}
-                onSelect={() => { void commit(match.blockId) }}
-                disabled={pending}
-              >
-                <span className="truncate">{truncate(match.content)}</span>
-              </CommandItem>
-            ))}
-          </CommandGroup>
-        )}
-      </CommandList>
-    </CommandDialog>
+      placeholder={session.sourceIsPage ? 'Find page to merge into…' : 'Find target block…'}
+      workspaceId={session.workspaceId}
+      excludeBlockIds={[session.sourceBlockId]}
+      showBlocks={showBlocks}
+      disabled={pending}
+      onSelect={blockId => { void commit(blockId) }}
+      onCancel={cancel}
+    />
   )
 }

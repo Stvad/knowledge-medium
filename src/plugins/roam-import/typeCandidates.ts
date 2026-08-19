@@ -1,3 +1,4 @@
+import { uniqueStrings } from '@/utils/array'
 import { aliasesProp, typesProp } from '@/data/properties'
 import type { RoamImportPlan } from './plan'
 import { parseRoamImportReferences } from './references'
@@ -54,21 +55,9 @@ const isPureTokenString = (value: string): boolean => {
   return parsePageTokenList(value) !== null
 }
 
-const uniqueNonEmpty = (values: readonly string[]): string[] => {
-  const out: string[] = []
-  const seen = new Set<string>()
-  for (const value of values) {
-    const trimmed = value.trim()
-    if (trimmed.length === 0 || seen.has(trimmed)) continue
-    seen.add(trimmed)
-    out.push(trimmed)
-  }
-  return out
-}
-
 const collectIsaAliases = (value: unknown): string[] => {
   if (Array.isArray(value)) {
-    return uniqueNonEmpty(value.flatMap(collectIsaAliases))
+    return uniqueStrings(value.flatMap(collectIsaAliases))
   }
   if (typeof value !== 'string') return []
 
@@ -76,7 +65,7 @@ const collectIsaAliases = (value: unknown): string[] => {
   if (trimmed.length === 0) return []
 
   if (isPureTokenString(trimmed)) {
-    return uniqueNonEmpty(parseRoamImportReferences(trimmed).map(ref => ref.alias))
+    return uniqueStrings(parseRoamImportReferences(trimmed).map(ref => ref.alias))
   }
 
   // Plain-string `isa::person` is a legitimate Roam spelling and is

@@ -1,3 +1,5 @@
+import { z } from 'zod'
+
 export interface TypedBlockQueryReferenceFilter {
   readonly id: string
   readonly sourceField?: string
@@ -108,3 +110,25 @@ export interface TypedBlockQuery {
  *  the two shapes are identical. Kept as an alias for back-compat with
  *  internal call sites that name the resolved form explicitly. */
 export type ResolvedTypedBlockQuery = TypedBlockQuery
+
+/** Runtime validators for the predicate language above. Co-located with the
+ *  types so a field added to `BlockPredicate` / `TypedBlockQueryReferenceFilter`
+ *  can't silently drift from its validator. Shared by the kernel typed-block
+ *  query and the backlinks / grouped-backlinks plugins. Exposed as bare objects;
+ *  each call site applies `.optional()` / `.array()` as it needs. */
+export const referenceFilterSchema = z.object({
+  id: z.string(),
+  sourceField: z.string().optional(),
+})
+
+export const blockPredicateSchema = z.object({
+  scope: z.enum(['self', 'ancestor']).optional(),
+  id: z.string().optional(),
+  where: z.record(z.string(), z.unknown()).optional(),
+  referencedBy: referenceFilterSchema.optional(),
+})
+
+export const backlinksFilterSchema = z.object({
+  include: z.array(blockPredicateSchema).optional(),
+  exclude: z.array(blockPredicateSchema).optional(),
+})

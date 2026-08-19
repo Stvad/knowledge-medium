@@ -2,7 +2,10 @@ import { Repo } from '../../data/repo'
 import {
   focusBlock,
   isCollapsedProp,
+  peekFocusedBlockLocation,
+  sameFocusedBlockLocation,
   selectionStateProp,
+  uiStateRenderScopeId,
 } from '@/data/properties.js'
 import {
   getLastVisibleDescendant,
@@ -24,9 +27,28 @@ import {
   ActionContextTypes,
   BlockShortcutDependencies,
 } from '@/shortcuts/types.js'
-import { outlineRenderScopeId } from '@/utils/renderScope.js'
 
 const JUMP_BLOCK_COUNT = 8
+
+/**
+ * True when the panel's focus has moved off the row this invocation started
+ * from. The model walks below `await` — on an uncached `childIds` that's a DB
+ * round-trip — and a click or a second keystroke can land inside that window;
+ * writing afterwards would overwrite the newer intent, or make two fast
+ * presses land on the same row. The keystroke's premise is gone, so drop it.
+ *
+ * Only meaningful when `renderScopeId` identifies the rendered row (it always
+ * does on a real dispatch); without one there's nothing to compare against and
+ * the write proceeds as before.
+ */
+const focusMovedDuringWalk = (deps: BlockShortcutDependencies): boolean => {
+  const {block, uiStateBlock, renderScopeId} = deps
+  if (!block || !uiStateBlock || !renderScopeId) return false
+  return !sameFocusedBlockLocation(
+    peekFocusedBlockLocation(uiStateBlock),
+    {blockId: block.id, renderScopeId},
+  )
+}
 
 /** Walk up to `count` visible blocks in `direction`, stopping early at the
  *  scope boundary. Returns the landing block, or null when the start block is
@@ -58,23 +80,18 @@ export function getVimNormalModeActions({repo}: { repo: Repo }): ActionConfig<ty
     outdentBlock,
     moveBlockUp,
     moveBlockDown,
-    deleteBlock,
-    togglePropertiesDisplay,
-    toggleBlockCollapse,
     extendSelectionUp,
     extendSelectionDown,
   } = createSharedBlockActions({repo})
 
+  // `delete_block`, `toggle_properties` and `toggle_collapse` used to be
+  // defined here. They now live in `getDefaultActionGroups` (with the same
+  // NORMAL_MODE context and the same keys) so they are registered on a default
+  // install too — the block/swipe menu dispatches them by id and can't reach an
+  // action that only an opt-in plugin defines. Same move the copy actions made
+  // earlier; see the comment beside them there.
   const indentBlockAction = bindBlockActionContext(ActionContextTypes.NORMAL_MODE, indentBlock)
   const outdentBlockAction = bindBlockActionContext(ActionContextTypes.NORMAL_MODE, outdentBlock)
-  const deleteBlockAction = {
-    ...bindBlockActionContext(ActionContextTypes.NORMAL_MODE, deleteBlock),
-    defaultBinding: {
-      keys: ['Delete', 'Backspace', 'd d'],
-    },
-  }
-  const togglePropertiesDisplayAction = bindBlockActionContext(ActionContextTypes.NORMAL_MODE, togglePropertiesDisplay)
-  const toggleBlockCollapseAction = bindBlockActionContext(ActionContextTypes.NORMAL_MODE, toggleBlockCollapse)
   const extendSelectionUpAction = {
     ...bindBlockActionContext(ActionContextTypes.NORMAL_MODE, extendSelectionUp),
     defaultBinding: {
@@ -102,7 +119,9 @@ export function getVimNormalModeActions({repo}: { repo: Repo }): ActionConfig<ty
         if (!block || !uiStateBlock || !scopeRootId) return
 
         const next = await nextVisibleBlock(block, scopeRootId, deps.scopeRootForcesOpen)
-        if (next) void focusBlock(uiStateBlock, next.id, {renderScopeId: deps.renderScopeId})
+        if (next && !focusMovedDuringWalk(deps)) {
+          void focusBlock(uiStateBlock, next.id, {renderScopeId: deps.renderScopeId})
+        }
       },
       defaultBinding: {
         keys: ['ArrowDown', 'j'],
@@ -116,7 +135,9 @@ export function getVimNormalModeActions({repo}: { repo: Repo }): ActionConfig<ty
         if (!block || !uiStateBlock || !scopeRootId) return
 
         const prev = await previousVisibleBlock(block, scopeRootId)
-        if (prev) void focusBlock(uiStateBlock, prev.id, {renderScopeId: deps.renderScopeId})
+        if (prev && !focusMovedDuringWalk(deps)) {
+          void focusBlock(uiStateBlock, prev.id, {renderScopeId: deps.renderScopeId})
+        }
       },
       defaultBinding: {
         keys: ['ArrowUp', 'k'],
@@ -141,9 +162,6 @@ export function getVimNormalModeActions({repo}: { repo: Repo }): ActionConfig<ty
         keys: 'a',
       },
     }),
-    toggleBlockCollapseAction,
-    togglePropertiesDisplayAction,
-    deleteBlockAction,
     bindNormal({
       id: 'create_block_below_and_edit',
       description: 'Create block below (or as child) and enter edit mode',
@@ -191,7 +209,7 @@ export function getVimNormalModeActions({repo}: { repo: Repo }): ActionConfig<ty
         if (!scopeRootId) return
 
         void focusBlock(uiStateBlock, scopeRootId, {
-          renderScopeId: renderScopeId ?? outlineRenderScopeId(scopeRootId),
+          renderScopeId: renderScopeId ?? uiStateRenderScopeId(uiStateBlock, scopeRootId),
         })
       },
       defaultBinding: {
@@ -212,7 +230,7 @@ export function getVimNormalModeActions({repo}: { repo: Repo }): ActionConfig<ty
         if (!lastBlock) return
 
         void focusBlock(uiStateBlock, lastBlock.id, {
-          renderScopeId: renderScopeId ?? outlineRenderScopeId(scopeRootId),
+          renderScopeId: renderScopeId ?? uiStateRenderScopeId(uiStateBlock, scopeRootId),
         })
       },
       defaultBinding: {

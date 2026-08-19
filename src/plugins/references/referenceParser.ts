@@ -19,6 +19,12 @@ import { unified } from 'unified'
 import remarkParse from 'remark-parse'
 import { visit } from 'unist-util-visit'
 import type { Text } from 'mdast'
+import {
+  MAX_ALIAS_LENGTH,
+  UUID_RE_SOURCE,
+  aliasedBlockRefSpanSource,
+  blockRefSpanSource,
+} from '@/data/referenceBlock'
 
 export interface ParsedReference {
   alias: string;
@@ -31,17 +37,24 @@ export interface ParsedBlockRef {
   startIndex: number;
   endIndex: number;
   embed: boolean;  // true for !((id)), false for plain ((id))
-  label?: string;  // display label from [label](((id)))
+  /** Display label from `[label](((id)))`. Present (possibly `''` —
+   *  the renderer falls back to displaying the id) iff the mark used
+   *  the aliased form; absent for plain/embed marks. Rewriters key on
+   *  presence to preserve the mark's form. */
+  label?: string;
 }
 
-// UUIDv4 shape — anchors what counts as a block-ref id. We deliberately keep
-// this strict so accidental double-parens in prose (e.g. "((not an id))")
-// don't get treated as references.
-const UUID_RE_SOURCE = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
-const ALIASED_BLOCK_REF_RE = new RegExp(`\\[([^\\]\\n]*)\\]\\(\\(\\((${UUID_RE_SOURCE})\\)\\)\\)`, 'gi')
-const BLOCK_REF_RE = new RegExp(`\\(\\((${UUID_RE_SOURCE})\\)\\)`, 'gi')
-const BLOCK_EMBED_RE = new RegExp(`!\\(\\((${UUID_RE_SOURCE})\\)\\)`, 'gi')
-const BLOCK_REF_TARGET_RE = new RegExp(`^\\(\\((${UUID_RE_SOURCE})\\)\\)$`, 'i')
+// Span SHAPES come from `@/data/referenceBlock`, which owns this grammar
+// for both readers; a second copy here is how the two drift apart. Only
+// the anchoring and flags are this reader's own — global, because it
+// scans. See that module's docblock for the deliberate divergences.
+//
+// UUID-only ids, narrower than the whole-block reading, so accidental
+// double-parens in prose ("((not an id))") don't become backlinks.
+const ALIASED_BLOCK_REF_RE = new RegExp(aliasedBlockRefSpanSource(UUID_RE_SOURCE), 'gi')
+const BLOCK_REF_RE = new RegExp(blockRefSpanSource(UUID_RE_SOURCE), 'gi')
+const BLOCK_EMBED_RE = new RegExp(`!${blockRefSpanSource(UUID_RE_SOURCE)}`, 'gi')
+const BLOCK_REF_TARGET_RE = new RegExp(`^${blockRefSpanSource(UUID_RE_SOURCE)}$`, 'i')
 
 export const isBlockRefId = (s: string) => new RegExp(`^${UUID_RE_SOURCE}$`, 'i').test(s)
 
@@ -50,29 +63,202 @@ export const parseBlockRefTarget = (target: string): string | null => {
   return match ? match[1].toLowerCase() : null
 }
 
+/** Re-exported, NOT declared here. `@/data/referenceBlock` owns it,
+ *  because core's whole-block reading of this same grammar
+ *  (`deriveReferenceColumns` → `reference_target_id`) has to apply the
+ *  identical bound, and core cannot import a plugin. See that
+ *  declaration for what the constant is for and why it is 4096; what
+ *  follows is only how the INLINE readers apply it.
+ *
+ *  A span over the cap is scanned past and emits no reference — the text
+ *  stays literal and no page is minted. The cost of a deliberately
+ *  generous bound is explicit: junk aliases in the low thousands (a
+ *  2951-char drawing point-array in the author's workspace) stay under it
+ *  and are NOT caught. Only the catastrophic tail is.
+ *
+ *  Applied in the parser rather than the reference processor:
+ *  both the index and the renderer reach the cap through this function,
+ *  so a processor-only cap would render a live-looking link the reference
+ *  index knows nothing about. `remark-wikilinks` passes 3 and 4 inherit
+ *  the cap by calling `parseOutermostReferences`; passes 1 and 2 match
+ *  their own regexes and so re-check it explicitly.
+ *
+ *  One rule, but NOT one string, and the difference is worth stating
+ *  plainly. The index parses RAW `blocks.content`; the renderer parses
+ *  what `remark-parse` produced, which has already resolved markdown
+ *  backslash escapes. So `[[a\.b]]` is measured (and stored) as `a\.b`
+ *  by the index while the renderer binds `a.b` — and an escaped span can
+ *  therefore sit over the cap raw and under it decoded (2148 × `\.` is
+ *  4296 raw, 2148 decoded). That divergence is NOT created by this cap:
+ *  it applies to the alias VALUE at every length, predates this constant,
+ *  and is already documented at `faithfulWikilinkReplacement`, which
+ *  refuses backslash aliases for exactly this reason. The cap does not
+ *  worsen it either — decoding only ever shortens, so an escaped span can
+ *  cross the threshold in one direction only, and the effect there is to
+ *  stop minting a phantom page for a link that rendered unresolved either
+ *  way. Closing it for real means parsing the index side through markdown
+ *  too, which is issue #542. */
+export { MAX_ALIAS_LENGTH } from '@/data/referenceBlock'
+
+/** Every `]` in `s` is closed by an earlier `[`, and every `[` is closed.
+ *  Single brackets only — `[[`/`]]` are just two of each, which is what
+ *  makes a nested `[[b]]` inside an alias balanced too.
+ *
+ *  Not used by the scanner (which tracks the same quantity incrementally,
+ *  see `closingDelimiterFor`); this is `renderWikilink`'s copy of the
+ *  question, asked about a bare alias with no surrounding content. */
+const hasBalancedBrackets = (s: string): boolean => {
+  let depth = 0
+  for (const ch of s) {
+    if (ch === '[') depth++
+    else if (ch === ']' && --depth < 0) return false
+  }
+  return depth === 0
+}
+
+/** One unclosed `[[` the scanner is carrying, plus the bracket bookkeeping
+ *  that lets `closingDelimiterFor` answer without re-reading the alias.
+ *
+ *  `depthAtOpen` is the running single-bracket depth just after this opener
+ *  was consumed, so the alias's own net depth is `depth - depthAtOpen` — a
+ *  subtraction rather than a scan. `minDepth` is the lowest the running depth
+ *  has been since, which is how an alias containing a `]` that closes nothing
+ *  (`[[a]b]]`) is recognized: it dips below `depthAtOpen`. A popped frame
+ *  hands its `minDepth` down to the frame beneath it, since anything that
+ *  happened inside the inner alias happened inside the outer one too. */
+interface OpenWikilink {
+  start: number
+  depthAtOpen: number
+  minDepth: number
+}
+
+/** Where the wikilink opened at `frame.start` actually closes, given that a
+ *  run of `]` begins at `runStart` and `enclosing` openers are still unclosed
+ *  around it.
+ *
+ *  A run of exactly two is never in doubt — it is the closer, and this
+ *  returns `runStart` unchanged. Three or more is the ambiguous case, and it
+ *  is ambiguous in exactly one way: does the extra `]` belong to the alias
+ *  or to the text after the link?
+ *
+ *    `[[Book of [x]]]`  the alias opened a `[` that wants closing → it does
+ *    `[[foo]]]`         nothing is open → the stray `]` is text
+ *
+ *  So the alias absorbs exactly as many `]` as it has unclosed `[`. That is a
+ *  COUNT, and the count arrives already computed: the scanner carries bracket
+ *  depth on the opener stack, so this reads `depth - frame.depthAtOpen`
+ *  instead of walking the alias. An underflow (a `]` with no `[` to close,
+ *  e.g. `[[a]b]]`) means no reading balances — fall back to the first pair,
+ *  which is what this has always done.
+ *
+ *  ENCLOSING OPENERS GET THEIR CLOSERS FIRST (Codex on PR #548). A nested
+ *  span shares the run with the links around it, so absorbing greedily can
+ *  eat a pair an outer link needed: in `[[outer [[inner[]]]]` the run is four
+ *  `]` — inner taking one for its unmatched `[` leaves a single `]`, and the
+ *  outer link is never emitted at all. Absorbing is therefore allowed only
+ *  when it does not reduce how many enclosing openers this run can still
+ *  close. That is a comparison, not a reservation, and the difference
+ *  matters: blanket-reserving two per opener would refuse
+ *  `[[outer [[Book of [x]]] tail]]`, whose outer link closes later in the
+ *  content and never wanted this run's brackets.
+ *
+ *  EVERYTHING HERE IS O(1), and that is load-bearing rather than tidy (Codex
+ *  on #548, three rounds of it). This runs once per closer, so anything
+ *  proportional to the alias — or to the closing run — makes the whole parse
+ *  quadratic, and the strings it would walk are not free the way the caller's
+ *  `slice` is, which V8 answers with an O(1) SlicedString. Two shapes found
+ *  the two ways of getting this wrong: re-reading the alias per close took
+ *  `'[['.repeat(16000) + 'x' + ']]'.repeat(16000)` to 2375ms, and re-walking
+ *  the shared closing run per close took `'[[a['.repeat(32000) +
+ *  ']'.repeat(96000)` to 2807ms. So the alias's depth arrives on the frame
+ *  and the run's length arrives measured — this function walks nothing.
+ *
+ *  Reading a bare `]` run this way is what removes the need for
+ *  `renderWikilink` to pad a trailing `]` into the user's own text. */
+const closingDelimiterFor = (
+  frame: OpenWikilink,
+  depth: number,
+  runStart: number,
+  /** `]` from `runStart` to the end of its maximal run. Measured ONCE per run
+   *  by the scanner and handed to every frame closing inside it — see
+   *  `runEnd` there. */
+  available: number,
+  enclosing: number,
+): number => {
+  // A `]` that closed nothing means no reading of this run balances.
+  if (frame.minDepth < frame.depthAtOpen) return runStart
+  const absorb = depth - frame.depthAtOpen
+  if (absorb <= 0) return runStart
+  // The alias cannot take closers the delimiter itself still needs.
+  if (available < absorb + 2) return runStart
+  // How many enclosing openers each reading leaves this run able to close.
+  const closable = (consumed: number) => Math.min((available - consumed) >> 1, enclosing)
+  return closable(absorb + 2) === closable(2) ? runStart + absorb : runStart
+}
+
 const parseWikilinkReferences = (content: string): ParsedReference[] => {
   const references: ParsedReference[] = []
-  const stack: number[] = [] // Stack to track opening bracket positions
+  // Unclosed `[[` openers, innermost last. Each carries the bracket
+  // bookkeeping `closingDelimiterFor` needs, so the depth of an alias is
+  // never recomputed by re-reading it — see `OpenWikilink`.
+  const stack: OpenWikilink[] = []
+  // Running single-bracket depth: every `[` is +1 and every `]` is -1,
+  // including the two of each that spell a wikilink's delimiters.
+  let depth = 0
+  // End of the maximal `]` run the scanner is currently inside, or -1 when it
+  // is not inside one. Nested frames CLOSE INTO THE SAME RUN — `[[a[[b]]]]`
+  // pops twice out of one `]]]]` — so measuring it per frame re-walks an
+  // overlapping suffix and is quadratic in the nesting depth (Codex on #548).
+  // Measured once per run instead: `i` only moves forward, so each `]` is
+  // counted at most once across the whole parse.
+  let runEnd = -1
   let i = 0
+
+  const dipTo = (value: number): void => {
+    const top = stack[stack.length - 1]
+    if (top !== undefined && value < top.minDepth) top.minDepth = value
+  }
 
   while (i < content.length - 1) {
     if (content.slice(i, i + 2) === '[[') {
-      stack.push(i)
+      depth += 2
+      stack.push({start: i, depthAtOpen: depth, minDepth: depth})
       i += 2
     } else if (content.slice(i, i + 2) === ']]') {
-      if (stack.length > 0) {
-        const startPos = stack.pop()!
-        const alias = content.slice(startPos + 2, i)
-        if (alias) {
+      if (i >= runEnd) {
+        runEnd = i
+        while (content[runEnd] === ']') runEnd++
+      }
+      const frame = stack.pop()
+      if (frame !== undefined) {
+        const closeAt = closingDelimiterFor(frame, depth, i, runEnd - i, stack.length)
+        const alias = content.slice(frame.start + 2, closeAt)
+        // Gate EMISSION only — the pop above still happened, so a
+        // rejected span consumes its delimiters exactly as an accepted
+        // one does. Leaving the opener on the stack instead would let it
+        // pair with a `]]` even further downstream, which is the failure
+        // mode this cap exists to end rather than relocate.
+        if (alias && alias.length <= MAX_ALIAS_LENGTH) {
           references.push({
             alias,
-            startIndex: startPos,
-            endIndex: i + 2,
+            startIndex: frame.start,
+            endIndex: closeAt + 2,
           })
         }
+        // The absorbed closers plus the delimiter's own two, all of which
+        // are `]` and so all of which lower the running depth.
+        depth -= closeAt - i + 2
+        // Whatever dipped inside this alias dipped inside its parent too.
+        dipTo(Math.min(frame.minDepth, depth))
+        i = closeAt + 2
+      } else {
+        depth -= 2
+        i += 2
       }
-      i += 2
     } else {
+      const ch = content[i]
+      if (ch === '[') depth++
+      else if (ch === ']') { depth--; dipTo(depth) }
       i++
     }
   }
@@ -174,13 +360,17 @@ export function parseBlockRefs(content: string): ParsedBlockRef[] {
   while ((match = ALIASED_BLOCK_REF_RE.exec(content)) !== null) {
     const start = match.index
     const end = start + match[0].length
-    const label = match[1].trim()
     found.push({
       blockId: match[2].toLowerCase(),
       startIndex: start,
       endIndex: end,
       embed: false,
-      ...(label ? {label} : {}),
+      // Always present for the aliased form, even when '' — a truthy
+      // gate here made `[](((id)))` indistinguishable from `((id))`,
+      // so rewriteBlockRefs silently degraded the aliased form to a
+      // plain ref (changing display semantics from id-fallback to
+      // target content). Found by referenceParser.fuzz.
+      label: match[1].trim(),
     })
     consumed.push([start, end])
   }
@@ -223,21 +413,86 @@ export function extractBlockRefIds(content: string): string[] {
 //      / blockref syntax via string templates and accidentally diverge
 //      from parser expectations). ────
 
-/** Render a wikilink targeting `alias`. If `alias` contains the closing
- *  wikilink delimiter, the output is syntactically safe but lossy;
- *  callers that need alias identity must verify by parsing the result. */
-export const renderWikilink = (alias: string): string => {
+/** Escape-and-wrap only — NEVER refuses. Delimiters in `alias` are made
+ *  syntactically safe (so the span cannot combine with surrounding text
+ *  into a different link) but the result is then lossy: it no longer
+ *  parses back to `alias`. Two inputs render markup the parser reads as
+ *  ZERO references — `alias === ''` and anything over `MAX_ALIAS_LENGTH`.
+ *
+ *  Private for exactly that reason. `renderWikilink` is the export, and
+ *  it verifies. */
+const renderWikilinkUnchecked = (alias: string): string => {
   // `]]` inside the alias would terminate the wikilink at the wrong
-  // place. Splitting it with a space keeps the visible text close to
-  // the input, but it no longer parses to the same alias.
-  const safe = alias.replace(/]]/g, '] ]')
-  return `[[${safe}]]`
+  // place, and an unclosed `[[` would leak an opener that a later `]]`
+  // anywhere in the document could pair with, swallowing unrelated
+  // text. Splitting with a space keeps the visible text close to the
+  // input, but it no longer parses to the same alias. Lookahead, not
+  // pair replacement: replacing the pair `]]` recreates one on odd
+  // runs (']]]' → '] ]]') — the space must land between EVERY two
+  // adjacent delimiters. Found by referenceParser.fuzz.
+  const safe = alias.replace(/\[(?=\[)/g, '[ ').replace(/\](?=\])/g, '] ')
+  // A trailing `]` runs into the closing delimiter, and the scanner resolves
+  // that run by bracket balance (`closingDelimiterFor`). So the `]` needs no
+  // padding when the alias opened it — `Book of [x]` renders exactly, which
+  // is the common case and the one worth not mangling. An UNBALANCED trailing
+  // `]` (`foo]`) stays lossy on purpose: `[[foo]]]` has to keep meaning "link
+  // to foo, then a stray `]`" — the far commoner reading — so such an alias
+  // simply is not spellable as a wikilink. Callers that need identity rather
+  // than syntax find out via `faithfulWikilinkReplacement`, which round-trips
+  // and refuses.
+  const padded = safe.endsWith(']') && !hasBalancedBrackets(safe) ? safe + ' ' : safe
+  return `[[${padded}]]`
 }
+
+/** Render `alias` as a `[[…]]` span, or `null` when the result would not
+ *  read back as exactly one reference — an empty alias, or one past
+ *  `MAX_ALIAS_LENGTH` once rendered.
+ *
+ *  REFUSES rather than returning dead markup: emitting `[[]]` or an
+ *  over-cap span produces text that renders as a live-looking link the
+ *  index has no entry for. Callers must handle `null`; the rewriters
+ *  reach this through `faithfulWikilinkReplacement`, which falls back to
+ *  the pinned form, and producer call sites (`appendTagToContent`) should
+ *  still pre-validate so the user gets an explanation rather than a
+ *  silent no-op — see `isValidTagName`.
+ *
+ *  A non-null result is NOT an identity guarantee: delimiters in `alias`
+ *  render safely but lossily, so callers needing round-trip identity
+ *  compare the parsed alias themselves (`canRenderAsWikilink`). */
+export const renderWikilink = (alias: string): string | null => {
+  const text = renderWikilinkUnchecked(alias)
+  return parseOutermostReferences(text).length === 1 ? text : null
+}
+
+/** Can `alias` be written as a `[[…]]` span this parser reads back as a
+ *  reference at all? False only for spans the grammar refuses outright —
+ *  today, over `MAX_ALIAS_LENGTH` measured on the RENDERED span, which is
+ *  not the same as the input length: `renderWikilink` pads an UNBALANCED
+ *  trailing `]` with a space, so an at-cap name ending in one emits an
+ *  alias one over.
+ *
+ *  The producer-side companion to the cap. Every surface that OFFERS or
+ *  WRITES a wikilink on a user's behalf owes this check — the tag entry
+ *  points, the `[[` autocomplete — because the alternative is handing
+ *  back markup that renders as literal text and gains no backlink, with
+ *  nothing on screen saying why.
+ *
+ *  Deliberately WEAKER than `faithfulWikilinkReplacement`: this asks only
+ *  "does a reference come back", not "is it byte-identical". The lossy
+ *  cases that already work (a backslash, a trailing `]`) keep working, so
+ *  adding this check to a surface cannot newly reject an alias that
+ *  surface accepts today. */
+export const canRenderAsWikilink = (alias: string): boolean =>
+  renderWikilink(alias) !== null
 
 /** Render an aliased blockref `[label](((id)))`. Strips `]` and
  *  newlines from `label` because the parser's regex rejects them in
  *  the label segment (see `ALIASED_BLOCK_REF_RE`). `id` is assumed
- *  to be a UUID — already safe. */
+ *  to be a UUID — already safe. An empty label (also after stripping)
+ *  is allowed — the parser matches `[]` (zero-length label) and the
+ *  live renderer then displays the target's content, exactly like a
+ *  plain `((id))` (remark-blockrefs emits no display children for an
+ *  empty label; only unresolved targets fall back to the short id). */
 export const renderAliasedBlockref = (label: string, id: string): string => {
   // Parser regex: `\[([^\]\n]*)\]\(\(\((UUID)\)\)\)`. Anything in `]`
   // or `\n` would break the match; drop them. Empty label after
@@ -245,6 +500,311 @@ export const renderAliasedBlockref = (label: string, id: string): string => {
   // label) and the renderer falls back to displaying the id.
   const safeLabel = label.replace(/[\]\n]/g, '')
   return `[${safeLabel}](((${id})))`
+}
+
+// ──── Whole-span round-trip guard (props-as-blocks §11, group 2) ────
+//
+// Both renderers above are deliberately lossy-but-SAFE: they mangle
+// input that would break the grammar (`renderWikilink` spaces apart
+// adjacent delimiters; `renderAliasedBlockref` strips `]` and newlines
+// from the label) so the output always PARSES. "Parses" is not "means
+// what the author wrote" — and every site that renders a span to
+// REPLACE an existing one is trading the author's text for machine
+// text, so it owes a proof that the trade preserved both halves of the
+// span's meaning: the target it resolves to, and the text it displays.
+//
+// The guard is that proof: render → parse back through this same
+// parser → compare target AND label. Callers get one of three
+// outcomes rather than a bare string, because the right fallback
+// differs by which half failed (see `SpanReplacement`).
+
+/** A verified replacement for one reference span. */
+export interface SpanReplacement {
+  /** Literal text to splice in place of the old span. */
+  text: string
+  /** The alias a re-parse of `text` yields: the alias itself for the
+   *  wikilink form, the normalized target id for the pinned form (the
+   *  grammar makes an aliased blockref's alias its id). Returned
+   *  alongside the text so a rewriter can update content and its stored
+   *  edge list in lockstep instead of re-deriving one from the other. */
+  refAlias: string
+  /** Normalized target id the spliced text actually binds to, when the
+   *  replacement PINS to one. `null` for the wikilink form, which is
+   *  late-binding and names no id. Callers use it so the stored edge's
+   *  `id` and `alias` stay in the same normalization as each other. */
+  toTargetId: string | null
+  /** True when `text` resolves to the intended target but DISPLAYS
+   *  something other than the requested label (`]`/newline stripped,
+   *  surrounding whitespace trimmed). The link is intact; the visible
+   *  text changed, so callers report it rather than failing. */
+  lossyLabel: boolean
+}
+
+/** `[[alias]]`, but only when it parses back to exactly this alias and
+ *  nothing else. Returns `null` when the wikilink form cannot carry
+ *  the alias faithfully — blank (`[[]]` parses to zero references) or
+ *  containing delimiters `renderWikilink` has to space apart. There is
+ *  no lossy tier here: a wikilink's label IS its target, so a mangled
+ *  label is a mangled binding. */
+export const faithfulWikilinkReplacement = (alias: string): SpanReplacement | null => {
+  // MARKDOWN is a third grammar over this text, and it owns `\` as an
+  // escape. The parsers here keep a backslash verbatim, so `[[abc\]]`
+  // looks like a clean round trip — but remark resolves `\]` to a literal
+  // `]` before `remark-wikilinks` ever sees the text, and the rendered
+  // link binds to alias `abc` while the edge we store says `abc\`. The
+  // span points somewhere the projection doesn't, which is the exact
+  // failure this guard exists to refuse.
+  //
+  // Refused rather than escaped: doubling the backslash would change the
+  // literal alias text, and the caller has a pinned fallback that keeps
+  // the TARGET regardless of how markdown treats the label.
+  if (alias.includes('\\')) return null
+  // Defence in depth: `renderWikilink` already refuses anything that
+  // doesn't parse back to one reference, so `marks.length !== 1` is
+  // unreachable through it. The checks after it are this function's own.
+  const text = renderWikilink(alias)
+  if (text === null) return null
+  const marks = parseOutermostReferences(text)
+  if (marks.length !== 1) return null
+  const [mark] = marks
+  if (mark.startIndex !== 0 || mark.endIndex !== text.length) return null
+  if (mark.alias !== alias) return null
+  return {text, refAlias: alias, toTargetId: null, lossyLabel: false}
+}
+
+/** `[label](((targetId)))` — the pinned form, which keeps the display
+ *  text the source author wrote while binding to a stable id.
+ *
+ *  Returns `null` when the rendered span does not parse back to
+ *  `targetId`. The aliased form's id segment is UUID-only
+ *  (`ALIASED_BLOCK_REF_RE`), so a non-UUID-shaped target fails here —
+ *  and that failure MUST NOT be papered over: emitting the text anyway
+ *  turns the span into prose and destroys the reference outright.
+ *  Callers leave the span alone and report instead.
+ *
+ *  A label that survives the round-trip only after sanitization comes
+ *  back with `lossyLabel: true`. That tier exists because the two
+ *  failures are not equally bad: the reference still lands on the
+ *  right block, only its visible text changed, and refusing to rewrite
+ *  would strand the span on a name nothing claims. */
+/** Characters a label carries through our own round trip but that
+ *  MARKDOWN re-interprets when it renders the span. See the
+ *  `lossyLabel` note in `pinnedSpanReplacement`. */
+const MARKDOWN_UNSAFE_LABEL_RE = /[\\[]/
+
+export const pinnedSpanReplacement = (
+  label: string,
+  targetId: string,
+): SpanReplacement | null => {
+  const text = renderAliasedBlockref(label, targetId)
+  const marks = parseBlockRefs(text)
+  // A non-UUID target fails HERE, not on the id comparison below: the
+  // grammar simply doesn't match, so the span parses to zero marks.
+  if (marks.length !== 1) return null
+  const [mark] = marks
+  if (mark.startIndex !== 0 || mark.endIndex !== text.length) return null
+  // EXACT, not `targetId.toLowerCase()`. The parser canonicalizes
+  // UUID-shaped ids to lowercase, so comparing against a pre-lowered
+  // target re-states the parser's rule here and certifies a round trip
+  // that did not happen: for a caller-supplied upper-case id (`tx.create`
+  // and the agent bridge both accept caller ids verbatim, and SQLite
+  // compares `blocks.id` case-sensitively) the check would pass while the
+  // spliced text and the stored edge bind to a lowercase id no row has.
+  // `referenceBlockContentForId` rejects this same divergence on the
+  // `((id))` form for the same reason (PR #386 review); a whole-span guard
+  // that tolerates it is strictly worse than one that refuses, because the
+  // caller then leaves the span alone instead of re-pointing it at nothing.
+  if (mark.blockId !== targetId) return null
+  // The span must also be INERT under the other grammar sharing this
+  // text. `renderAliasedBlockref` strips `]` and newlines but keeps `[`,
+  // so a label like `a[[b` renders a perfectly valid aliased blockref
+  // that also carries an unbalanced wikilink OPENER. Parsing the span in
+  // isolation sees nothing wrong — there's no closing `]]` in it — but
+  // splice it into a source with any later `]]` and the pair closes
+  // across the spliced text, manufacturing a bogus wikilink that binds a
+  // reference and mints a seat. `renderWikilink` already spaces adjacent
+  // delimiters apart for exactly this reason; the pinned form can't
+  // (its leading `[` is grammar), so it refuses instead.
+  //
+  // `]]` needs no test: the renderer strips every `]` from the label and
+  // the template contributes exactly one, so a closer can't be formed.
+  if (text.includes('[[')) return null
+  // `refAlias` / `toTargetId` are what a re-parse ACTUALLY yields, so
+  // both carry the parser's normalized (lower-cased) id —
+  // `parseReferences` emits `{id: mark.blockId, alias: mark.blockId}`
+  // for blockref edges. Returning a normalized alias beside an
+  // unnormalized id would write an entry pair no re-parse produces, and
+  // whose `block_references.target_id` joins nothing.
+  // `parseBlockRefs` trims the captured label, so leading/trailing
+  // whitespace counts as lossy alongside the stripped characters.
+  return {
+    text,
+    refAlias: mark.blockId,
+    toTargetId: mark.blockId,
+    // Markdown re-parses this label, and two characters survive our own
+    // round trip while changing what it renders:
+    //   `\`  escapes the next character, so `abc\` displays as `abc`.
+    //   `[`  opens a nested link, so `a[b` splits into literal text `[a`
+    //        followed by a link labelled only `b` — the label is
+    //        reordered and only its suffix is clickable.
+    // (`]` needs no entry: the renderer strips every one.)
+    //
+    // Reported rather than refused, unlike the wikilink form: the id
+    // segment carries the binding either way, so the reference still
+    // lands on the right block and only the visible text changes — which
+    // is exactly the distinction `lossyLabel` exists to draw.
+    lossyLabel: mark.label !== label || MARKDOWN_UNSAFE_LABEL_RE.test(label),
+  }
+}
+
+/** `((targetId))` — the canonical id form, carrying NO display text.
+ *
+ *  The third tier of the replacement ladder, and the one a MARKED row
+ *  wants: a field row renders its property name (resolved through the
+ *  definition the id points at), so a pinned label is text it never
+ *  displays, and `::((id))` is the canonical shape every other field row
+ *  already has (§7).
+ *
+ *  Having no label also makes it the only tier that can't be lossy, and
+ *  the only one that survives a label the pinned form has to refuse: an
+ *  alias containing `[[` smuggles a wikilink opener through
+ *  `pinnedSpanReplacement`, which refuses rather than splice it — with
+ *  nothing to put in a label there is nothing left to refuse.
+ *
+ *  Returns null on the same terms as the pinned form: the inline blockref
+ *  grammar is UUID-only, so a target whose id doesn't round-trip
+ *  character-for-character gets no replacement at all rather than text
+ *  that reads as prose. */
+export const canonicalIdSpanReplacement = (targetId: string): SpanReplacement | null => {
+  const text = `((${targetId}))`
+  const marks = parseBlockRefs(text)
+  // A non-UUID target fails HERE: the grammar doesn't match, so zero marks.
+  if (marks.length !== 1) return null
+  const [mark] = marks
+  if (mark.startIndex !== 0 || mark.endIndex !== text.length) return null
+  // EXACT, for the reason spelled out at `pinnedSpanReplacement`: the parser
+  // lower-cases UUID-shaped ids, so comparing against a pre-lowered target
+  // would certify a round trip that did not happen and bind the span to an
+  // id no row has.
+  if (mark.blockId !== targetId) return null
+  return {text, refAlias: mark.blockId, toTargetId: mark.blockId, lossyLabel: false}
+}
+
+/** `[display]([[alias]])` — a wikilink carrying custom display text.
+ *
+ *  A THIRD span shape the rewriters have to know about, because
+ *  `parseReferences` doesn't: it reports only the inner `[[alias]]`, while
+ *  `remark-wikilinks` treats the whole wrapper as one wikilink whose
+ *  rendered children are `display` (its first pass matches a `link` node
+ *  with url `[[alias]]`; its `LINK_FORM_RE` pass catches the same shape
+ *  when the alias has spaces and remark therefore never made a link).
+ *
+ *  Splicing a PINNED replacement into the inner span alone yields
+ *  `[display]([label](((uuid))))`, which the real pipeline renders as an
+ *  ordinary markdown link whose URL is `[label](((uuid)))` — verified
+ *  against `remarkWikilinks` + `remarkBlockrefs`, not assumed. Neither a
+ *  wikilink nor a blockref: the reference is destroyed while the stored
+ *  edge moves to the target, so content and edge disagree permanently.
+ *  (The wikilink→wikilink swap is safe: `[display]([[new]])` is still the
+ *  same shape. Only the pinned form has to widen its range.)
+ *
+ *  `image: true` for `![display]([[alias]])`, which markdown parses as an
+ *  IMAGE — it carries no reference at render time even before a rewrite,
+ *  so pinned callers step over it exactly as they do a page embed rather
+ *  than converting an image into a blockref.
+ *
+ *  Returns null when the wrapper doesn't match the grammar the renderer
+ *  accepts, in which case the inner span is the whole span. */
+export const linkFormWrapperAround = (
+  content: string,
+  mark: {startIndex: number; endIndex: number},
+): {start: number; end: number; display: string; image: boolean} | null => {
+  if (content[mark.endIndex] !== ')') return null
+  if (mark.startIndex < 2) return null
+  if (content.slice(mark.startIndex - 2, mark.startIndex) !== '](') return null
+  const close = mark.startIndex - 2
+  const open = content.lastIndexOf('[', close - 1)
+  if (open === -1) return null
+  const display = content.slice(open + 1, close)
+  // Same character class as the renderer's `LINK_FORM_RE` display group.
+  // `lastIndexOf` already guarantees no `[`; this rejects `]` and newlines,
+  // which would make remark parse something other than one link.
+  if (/[[\]\n]/.test(display)) return null
+  return {
+    start: open,
+    end: mark.endIndex + 1,
+    display,
+    image: open > 0 && content[open - 1] === '!',
+  }
+}
+
+/** How one alias's spans should be replaced. `pinnedTargetId` is set iff
+ *  `text` is the PINNED form `[label](((id)))` — it lets the splice widen
+ *  its range over a `[display]([[alias]])` wrapper and re-render with the
+ *  author's display text (see `linkFormWrapperAround`). Pinned callers
+ *  pass it alongside `skipEmbeds`; both derive from the same
+ *  `SpanReplacement.toTargetId`. */
+export interface WikilinkRewrite {
+  text: string
+  skipEmbeds?: boolean
+  pinnedTargetId?: string
+}
+
+/** The splice range and text for one mark, or `null` to leave it alone.
+ *  Shared by both rewriters so the wrapper and embed rules cannot drift
+ *  between the rename path and the merge path. */
+const spliceFor = (
+  content: string,
+  mark: {startIndex: number; endIndex: number},
+  rewrite: WikilinkRewrite,
+): {start: number; end: number; text: string} | null => {
+  const pinned = rewrite.pinnedTargetId
+  if (pinned !== undefined) {
+    const wrapper = linkFormWrapperAround(content, mark)
+    if (wrapper !== null) {
+      // An image carries no reference to preserve; leave the text as-is.
+      if (wrapper.image) return null
+      // Re-render with the AUTHOR's display text rather than the ladder's
+      // `pinLabel` — in this shape the author's text is `display`, and the
+      // pinned form's whole purpose is to keep it. Verified the same way
+      // every other spliced span is.
+      //
+      // The `null` branch is DEFENCE IN DEPTH, not a reachable path. It
+      // needs `pinnedSpanReplacement` to refuse, and for a display this
+      // detection accepts that means only a non-UUID target — which
+      // already made the LADDER refuse upstream, so no pinned replacement
+      // would exist to splice here. (`[` can't appear: the opener scan
+      // takes the innermost bracket. `]`/newline can't: rejected above.)
+      // Kept anyway, because the two calls verify DIFFERENT labels — the
+      // ladder's invented one, this one's authored one — and a splice that
+      // emits unverified text is wrong on its own terms. Degrades like an
+      // embed: a working late-binding link, whose now-stale edge the caller
+      // invalidates for the re-parse.
+      //
+      // `lossyLabel` is deliberately NOT reported here, unlike in
+      // `preferredSpanReplacement`. That warning exists because the ladder
+      // INVENTS a label and may sanitize it; here the label is text the
+      // author already had in a label position, so the rendered display
+      // does not change. Its `]`/newline half cannot fire either — the
+      // wrapper detection already rejects both.
+      const replacement = pinnedSpanReplacement(wrapper.display, pinned)
+      if (replacement === null) return null
+      return {start: wrapper.start, end: wrapper.end, text: replacement.text}
+    }
+  }
+  // `![[alias]]` is the PAGE EMBED form, and markdown is a third grammar
+  // sharing this text. Splicing the pinned form under a leading `!` yields
+  // `![label](((uuid)))` — a markdown IMAGE, and `remark-blockrefs` only
+  // visits `link`/`text` nodes, so it renders as a broken `<img>`. The
+  // reference survives; the display doesn't, which is the half of the
+  // span's meaning the pinned form exists to preserve. Callers splicing a
+  // pinned replacement pass `skipEmbeds` and leave those spans as the
+  // working late-binding embed they already are. (A wikilink→wikilink swap
+  // is safe under `!` — still a page embed — so this is opt-in, not
+  // automatic.)
+  if (rewrite.skipEmbeds
+    && mark.startIndex > 0 && content[mark.startIndex - 1] === '!') return null
+  return {start: mark.startIndex, end: mark.endIndex, text: rewrite.text}
 }
 
 /** Replace every wikilink whose alias exactly matches `alias` with
@@ -258,10 +818,12 @@ export const rewriteWikilinks = (
   content: string,
   alias: string,
   replacement: string,
+  opts?: {skipEmbeds?: boolean; pinnedTargetId?: string},
 ): string => {
   if (alias === '') return content  // parser never emits empty-alias marks
   const marks = parseReferences(content)
   if (marks.length === 0) return content
+  const rewrite: WikilinkRewrite = {text: replacement, ...opts}
   let result = ''
   let cursor = 0
   for (const mark of marks) {
@@ -270,9 +832,52 @@ export const rewriteWikilinks = (
     // rewritten — replacing both would corrupt the outer's text.
     if (mark.startIndex < cursor) continue
     if (mark.alias !== alias) continue
-    result += content.slice(cursor, mark.startIndex)
-    result += replacement
-    cursor = mark.endIndex
+    const splice = spliceFor(content, mark, rewrite)
+    if (splice === null) continue
+    // A wrapper splice starts BEFORE the mark; if a previous replacement
+    // already consumed that text, widening here would corrupt it.
+    if (splice.start < cursor) continue
+    result += content.slice(cursor, splice.start)
+    result += splice.text
+    cursor = splice.end
+  }
+  return cursor === 0 ? content : result + content.slice(cursor)
+}
+
+/** Apply SEVERAL alias rewrites in ONE pass over the original spans.
+ *
+ *  Not the same as calling `rewriteWikilinks` once per alias. Sequential
+ *  calls each re-parse the previous call's OUTPUT, so a replacement can
+ *  be consumed by a later rewrite: given `α → β` and `β → γ` (one synced
+ *  commit can rename two blocks at once), a source holding `[[α]]` has
+ *  it turned into `[[β]]` by the first pass and then into `[[γ]]` by the
+ *  second — stealing α's link for γ, while the stored edge still maps
+ *  α's entry to β's block. Parsing once and splicing from the ORIGINAL
+ *  content makes each span the target of at most one rewrite.
+ *
+ *  `skipEmbeds` / `pinnedTargetId` are per-alias because they track
+ *  whether THAT alias's replacement is the pinned form (see
+ *  `rewriteWikilinks` and `linkFormWrapperAround`). */
+export const rewriteWikilinksMulti = (
+  content: string,
+  replacements: ReadonlyMap<string, WikilinkRewrite>,
+): string => {
+  if (replacements.size === 0) return content
+  const marks = parseReferences(content)
+  if (marks.length === 0) return content
+  let result = ''
+  let cursor = 0
+  for (const mark of marks) {
+    if (mark.startIndex < cursor) continue
+    const replacement = replacements.get(mark.alias)
+    if (replacement === undefined) continue
+    const splice = spliceFor(content, mark, replacement)
+    if (splice === null) continue
+    // See `rewriteWikilinks`: a wrapper splice reaches back before the mark.
+    if (splice.start < cursor) continue
+    result += content.slice(cursor, splice.start)
+    result += splice.text
+    cursor = splice.end
   }
   return cursor === 0 ? content : result + content.slice(cursor)
 }
@@ -300,7 +905,12 @@ export const inlineBlockRefs = (
     if (mark.startIndex < cursor) continue
     if (mark.blockId !== normalizedId) continue
     result += content.slice(cursor, mark.startIndex)
-    result += mark.label !== undefined ? mark.label : inlineContent
+    // Degrade to what the mark DISPLAYED: the label for labeled marks;
+    // the target's content otherwise. An EMPTY-label aliased mark
+    // renders like a plain ref (remark-blockrefs emits no display
+    // children for it, so BlockRef falls back to target content) —
+    // it takes the inlineContent path too.
+    result += mark.label ? mark.label : inlineContent
     cursor = mark.endIndex
   }
   return cursor === 0 ? content : result + content.slice(cursor)

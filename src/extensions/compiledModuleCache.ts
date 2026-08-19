@@ -22,12 +22,14 @@
  * revokes a single approval (disable / uninstall / remote-disable);
  * `clear` empties the whole store (currently exercised only by tests).
  *
- * Mirrors the interface + in-memory-fallback + IndexedDB pattern of
- * `sync/keys/keyStore.ts`. Unlike that store — which holds a
+ * The IndexedDB glue (cached connection, commit-durable `tx`) lives in the
+ * shared {@link IdbKeyedStore}. Unlike `sync/keys/keyStore.ts` — which holds a
  * non-cloneable `CryptoKey` and therefore can't run under Node's
  * `structuredClone` — our records are plain JSON, so the IndexedDB path
  * is exercised directly in tests via `fake-indexeddb`.
  */
+
+import {IdbKeyedStore} from '@/utils/idbKeyedStore.js'
 
 export interface CompiledRecord {
   /** Pure SHA-256 of `approvedSource`. NOT salted by compiler version
@@ -99,84 +101,30 @@ export class InMemoryCompiledModuleCache implements CompiledModuleCache {
 
 export const DB_NAME = 'km-extension-compiled'
 export const STORE_NAME = 'compiled_modules'
-const DB_VERSION = 1
-
-const promisifyRequest = <T>(request: IDBRequest<T>): Promise<T> =>
-  new Promise((resolve, reject) => {
-    request.onsuccess = () => resolve(request.result)
-    request.onerror = () => reject(request.error)
-  })
 
 /** IndexedDB-backed store. The values are plain JSON, so unlike
- *  `keyStore.ts` this path runs fine under `fake-indexeddb` in tests. */
+ *  `keyStore.ts` this path runs fine under `fake-indexeddb` in tests. The
+ *  cached connection + commit-durable `tx` come from {@link IdbKeyedStore}. */
 export class IndexedDbCompiledModuleCache implements CompiledModuleCache {
-  private dbPromise: Promise<IDBDatabase> | null = null
-
-  private openDb(): Promise<IDBDatabase> {
-    if (!this.dbPromise) {
-      this.dbPromise = new Promise<IDBDatabase>((resolve, reject) => {
-        const request = indexedDB.open(DB_NAME, DB_VERSION)
-        request.onupgradeneeded = () => {
-          const db = request.result
-          if (!db.objectStoreNames.contains(STORE_NAME)) {
-            db.createObjectStore(STORE_NAME)
-          }
-        }
-        request.onsuccess = () => resolve(request.result)
-        request.onerror = () => reject(request.error)
-      }).catch((err: unknown) => {
-        // Don't cache a rejected open: a transient failure (storage
-        // pressure, a racing version upgrade) would otherwise wedge every
-        // later read/write on this instance. Clear the handle so the next
-        // call retries a fresh open — a missed read just recompiles.
-        this.dbPromise = null
-        throw err
-      })
-    }
-    return this.dbPromise
-  }
-
-  private async tx<T>(
-    mode: IDBTransactionMode,
-    run: (store: IDBObjectStore) => IDBRequest<T>,
-  ): Promise<T> {
-    const db = await this.openDb()
-    const transaction = db.transaction(STORE_NAME, mode)
-    // Resolve on the transaction commit (`oncomplete`), not just the
-    // request's `onsuccess` — a write is only durable once the tx
-    // commits, and the cross-reload read in our tests depends on that
-    // durability. Register handlers synchronously so a commit that fires
-    // before we await can't be missed.
-    const committed = new Promise<void>((resolve, reject) => {
-      transaction.oncomplete = () => resolve()
-      transaction.onabort = () =>
-        reject(transaction.error ?? new Error('IndexedDB transaction aborted'))
-      transaction.onerror = () =>
-        reject(transaction.error ?? new Error('IndexedDB transaction error'))
-    })
-    const store = transaction.objectStore(STORE_NAME)
-    const result = await promisifyRequest(run(store))
-    await committed
-    return result
-  }
+  private readonly idb = new IdbKeyedStore(DB_NAME, STORE_NAME)
 
   async read(blockId: string): Promise<CompiledRecord | undefined> {
-    const result = await this.tx<CompiledRecord | undefined>('readonly', store =>
+    const result = await this.idb.tx<CompiledRecord | undefined>('readonly', store =>
       store.get(blockId),
     )
     return result ?? undefined
   }
 
   async write(blockId: string, record: CompiledRecord): Promise<void> {
-    await this.tx('readwrite', store => store.put(record, blockId))
+    await this.idb.tx('readwrite', store => store.put(record, blockId))
   }
 
   async delete(blockId: string): Promise<void> {
-    await this.tx('readwrite', store => store.delete(blockId))
+    await this.idb.tx('readwrite', store => store.delete(blockId))
   }
 
   async clear(): Promise<void> {
-    await this.tx('readwrite', store => store.clear())
+    await this.idb.tx('readwrite', store => store.clear())
   }
 }
 

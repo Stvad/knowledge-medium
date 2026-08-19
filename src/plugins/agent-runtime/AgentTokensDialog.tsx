@@ -167,7 +167,7 @@ function AgentTokensDialogBody({
               <>
                 Run{' '}
                 <code className="break-all whitespace-normal">
-                  yarn agent connect {justMinted.token}
+                  pnpm agent connect {justMinted.token}
                 </code>{' '}
                 to register it with the CLI.
               </>

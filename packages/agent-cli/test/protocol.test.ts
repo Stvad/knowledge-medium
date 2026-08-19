@@ -55,6 +55,29 @@ describe('known command unions (strict per-verb validation)', () => {
     expect(knownAgentCommandSchema.safeParse({type: 'sql', sql: 'SELECT 1'}).success).toBe(true)
   })
 
+  // The CLI refuses a non-positive `--limit`, but the bridge is a second
+  // entry point: 0 survives `typeof command.limit === 'number'` downstream,
+  // bypasses the per-command default and runs LIMIT 0 — a confident empty
+  // answer rather than an error.
+  it.each(['page', 'search'] as const)('rejects a non-positive limit on %s', type => {
+    const base = type === 'page' ? {type, name: 'x'} : {type, query: 'x'}
+    expect(knownAgentCommandSchema.safeParse({...base, limit: 0}).success).toBe(false)
+    expect(knownAgentCommandSchema.safeParse({...base, limit: 1.5}).success).toBe(false)
+    expect(knownAgentCommandSchema.safeParse({...base, limit: 20}).success).toBe(true)
+  })
+
+  it('rejects duplicate watcher names in one watch-events registration', () => {
+    const watcher = (name: string) => ({kind: 'sql', name, sql: 'SELECT id FROM blocks'})
+    expect(knownAgentCommandSchema.safeParse({
+      type: 'watch-events', consumer: 'daemon', watchers: [watcher('a'), watcher('b')],
+    }).success).toBe(true)
+    // Names key the consumer's exemption pools — dupes would merge two
+    // watchers' settle semantics under one name.
+    expect(knownAgentCommandSchema.safeParse({
+      type: 'watch-events', consumer: 'daemon', watchers: [watcher('a'), watcher('a')],
+    }).success).toBe(false)
+  })
+
   it('keeps legacy aliases in the kernel union but not in the CLI canonical union', () => {
     // `action` / `set-extension-enabled` are back-compat aliases the kernel
     // still dispatches, so they validate against knownAgentCommandSchema...

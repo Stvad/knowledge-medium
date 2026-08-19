@@ -1,7 +1,7 @@
-import { memoize } from 'lodash-es'
-import { v5 as uuidv5 } from 'uuid'
+import {memoize} from '@/utils/memoize'
 import type { Block } from '@/data/block.js'
 import { ChangeScope } from '@/data/api'
+import { derivedBlockId } from '@/data/derivedIds'
 import { createOrRestoreTargetBlock } from '@/data/targets.js'
 import { keyAtEnd } from '@/data/orderKey.js'
 import { getOrCreateJournalBlock } from '@/plugins/daily-notes'
@@ -19,10 +19,10 @@ const SHORTCUTS_NS = 'c1d7a2e3-4b6f-4a8e-9c5d-2f3b6e8a1c47'
 const JOURNAL_SHORTCUT_NS = 'b2a4f7c9-3d5e-4f1b-8a2c-9e7b6d4f3a51'
 
 export const shortcutsBlockId = (userBlockId: string): string =>
-  uuidv5(userBlockId, SHORTCUTS_NS)
+  derivedBlockId({namespace: SHORTCUTS_NS, key: userBlockId})
 
 export const journalShortcutBlockId = (shortcutsId: string): string =>
-  uuidv5(shortcutsId, JOURNAL_SHORTCUT_NS)
+  derivedBlockId({namespace: JOURNAL_SHORTCUT_NS, key: shortcutsId})
 
 export const getOrCreateShortcutsBlock = memoize(
   async (userBlock: Block): Promise<Block> => {

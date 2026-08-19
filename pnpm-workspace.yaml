@@ -1,0 +1,36 @@
+packages:
+  - packages/*
+
+# In-workspace deps use the workspace: protocol (agent-dispatch -> agent-cli
+# is workspace:^), so they always resolve to the in-repo package — a plain
+# semver range silently falls back to the stale published version the moment
+# the local version leaves the range (0.x minors count as breaking). To make
+# that publishable, scripts/publish-packages.mjs's --pack mode runs `pnpm
+# pack` (NOT plain `npm pack`), which rewrites workspace:^ to a concrete
+# ^<version> range in the packed tarball's manifest; --publish then ships
+# that tarball as-is with plain `npm publish` (no workspace resolution left
+# to do by then).
+#
+# linkWorkspacePackages only affects plain semver ranges (it links them
+# yarn-1-style when satisfiable); kept as belt-and-suspenders for any future
+# dep that forgets the workspace: protocol.
+linkWorkspacePackages: true
+
+# pnpm blocks dependency build scripts by default; these two genuinely need
+# theirs (native/wasm setup). Anything new that wants one will warn at install.
+onlyBuiltDependencies:
+  - better-sqlite3
+  - '@journeyapps/wa-sqlite'
+
+# Was `resolutions` under yarn 1: pin the CodeMirror/Lezer family to single
+# versions so transitive copies can't fork editor state.
+overrides:
+  '@codemirror/state': ^6.6.0
+  '@codemirror/view': ^6.43.0
+  '@codemirror/commands': ^6.10.3
+  '@codemirror/language': ^6.11.0
+  '@codemirror/autocomplete': ^6.18.0
+  '@codemirror/search': ^6.5.0
+  '@lezer/common': ^1.5.2
+  '@lezer/highlight': ^1.2.1
+  '@lezer/lr': ^1.4.2

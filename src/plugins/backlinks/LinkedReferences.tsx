@@ -13,7 +13,7 @@ import {
   type BacklinksFilter,
 } from './query.ts'
 import { useBacklinkFilterState } from './useStoredBacklinkFilter.ts'
-import { LazyBacklinkItem } from './BacklinkEntry.tsx'
+import { LazyBlockEntry } from './BlockEntry.tsx'
 
 export function LinkedReferences({block, controls}: BacklinksViewRendererProps) {
   const repo = useRepo()
@@ -128,7 +128,7 @@ function LinkedReferencesInner({
             ) : (
               <div className="mt-3 flex flex-col gap-3">
                 {backlinks.map(backlinkBlock => (
-                  <LazyBacklinkItem
+                  <LazyBlockEntry
                     key={backlinkBlock.id}
                     block={backlinkBlock}
                     scopeId={`flat:${backlinkBlock.id}`}

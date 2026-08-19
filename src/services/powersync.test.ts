@@ -14,7 +14,9 @@ vi.mock('@/services/supabase.js', () => ({
 import {
   AMBIGUOUS_RETRY_BUDGET,
   MAX_PATCHES_PER_SUPABASE_RPC,
+  MAX_CREATES_PER_SUPABASE_RPC,
   __applyBlockPatchesRpcForTest,
+  __applyBlockCreatesForTest,
   __applyCompactedBlockOperationsForTest,
   __recordRejectionToTableForTest,
   __compactBlockCrudEntriesForTest,
@@ -195,6 +197,73 @@ describe('PowerSync upload compaction', () => {
     ])
   })
 
+  it('keeps the EARLIEST base_updated_at when coalescing a burst of patches (#381)', () => {
+    // Every other column is last-write-wins — the newest value is what ships.
+    // The base is the opposite: it describes the server state the burst started
+    // from, and only the first patch knows that. Each later patch was stamped
+    // against the previous LOCAL version, which the server has never seen, so
+    // taking the last one could make a genuinely drifted burst look clean and
+    // silently reintroduce the equal-stamp skip this key exists to prevent.
+    const operations = __compactBlockCrudEntriesForTest([
+      patch(1, 'block-a', {content: 'v1', updated_at: 101, base_updated_at: 100}, 1),
+      patch(2, 'block-a', {content: 'v2', updated_at: 102, base_updated_at: 101}, 2),
+      patch(3, 'block-a', {content: 'v3', updated_at: 103, base_updated_at: 102}, 3),
+    ])
+
+    expect(operations).toEqual([
+      {
+        kind: 'patch',
+        id: 'block-a',
+        order: 0,
+        payload: {content: 'v3', updated_at: 103, base_updated_at: 100},
+      },
+    ])
+  })
+
+  it('keeps the earliest base UNKNOWN when a pre-upgrade patch leads the burst (#381)', () => {
+    // `ps_crud` is persistent, so an upgrade can leave a PATCH queued by the
+    // previous bundle (no base — it predates the trigger change) ahead of one
+    // queued after the reload (base present). An absent base is not "no
+    // opinion": the protocol reads unknown as drifted. Inheriting the later
+    // patch's base would assert a starting point this burst never had, and if
+    // that stamp happened to match the server's current version the merged
+    // patch would read as CLEAN — the equal-stamp skip, right back again.
+    const operations = __compactBlockCrudEntriesForTest([
+      patch(1, 'block-a', {content: 'v1', updated_at: 101}, 1),
+      patch(2, 'block-a', {content: 'v2', updated_at: 102, base_updated_at: 101}, 2),
+    ])
+
+    expect(operations).toEqual([
+      {
+        kind: 'patch',
+        id: 'block-a',
+        order: 0,
+        payload: {content: 'v2', updated_at: 102},
+      },
+    ])
+  })
+
+  it('drops base_updated_at when a same-tx PATCH fuses into its CREATE', () => {
+    // Creates go to apply_block_creates, which has no drift concept: an INSERT
+    // has no prior version and the ON CONFLICT branch is a deliberate no-op
+    // TOUCH that must not advance the stamp (#244). The key would be ignored by
+    // that RPC's closed column list anyway — stripping keeps the create payload
+    // to real columns.
+    const operations = __compactBlockCrudEntriesForTest([
+      put(1, 'block-a', {workspace_id: 'ws', content: 'A', updated_at: 1}, 1),
+      patch(2, 'block-a', {content: 'A2', updated_at: 2, base_updated_at: 1}, 1),
+    ])
+
+    expect(operations).toEqual([
+      {
+        kind: 'create',
+        id: 'block-a',
+        order: 0,
+        payload: {id: 'block-a', workspace_id: 'ws', content: 'A2', updated_at: 2},
+      },
+    ])
+  })
+
   it('lets a final delete supersede earlier writes for the same block', () => {
     const operations = __compactBlockCrudEntriesForTest([
       put(1, 'block-a', {content: 'A'}),
@@ -226,11 +295,13 @@ describe('PowerSync upload compaction', () => {
 // uploadTransactionsWithFallback — rejection-tolerance orchestrator.
 //
 // The handler runs an optimistic batched upload (current fast path); on
-// permanent failure it isolates the bad tx by re-applying each tx
-// individually, recording the rejection to ps_crud_rejected, and
-// continuing past the rejection so the rest of the queue drains. The
-// alternative — the prior `throw` on any failure — jammed the bucket
-// and surfaced as "sync stops working" until manual ps_crud surgery.
+// ANY failure (transient, permanent, or ambiguous) it isolates per tx by
+// re-applying each tx individually — draining the succeeded prefix,
+// recording a permanent rejection to ps_crud_rejected, and re-throwing a
+// transient one so only the failing tx retries. The original alternative —
+// `throw` the whole batch on any failure — jammed the bucket on a permanent
+// error, and (once creates became insert-or-TOUCH) re-touched every
+// already-landed create on every retry of a transient error.
 // ===========================================================================
 
 interface FakeTransaction {
@@ -367,7 +438,7 @@ describe('uploadTransactionsWithFallback', () => {
     // 23503; classifier marks permanent; per-tx fallback applies
     // tx1 (succeeds), tx2 (fails — recorded), tx3 (succeeds). All
     // three end up complete()'d so ps_crud drains; only tx2 lands
-    // in ps_crud_rejected.
+    // in ps_crud_rejected. Fixing commit: 58140b90d (issue #459).
     const tx1 = fakeTx(10, [new CrudEntry(1, UpdateType.PUT, 'blocks', 'block-a', 10, {content: 'A'})])
     const tx2 = fakeTx(20, [new CrudEntry(2, UpdateType.PATCH, 'blocks', 'block-b', 20, {deleted: true})])
     const tx3 = fakeTx(30, [new CrudEntry(3, UpdateType.PUT, 'blocks', 'block-c', 30, {content: 'C'})])
@@ -393,26 +464,35 @@ describe('uploadTransactionsWithFallback', () => {
     expect(tx3.completed).toBe(true)
   })
 
-  it('transient failure on batch: re-throws without completing or recording', async () => {
-    // Transient = network blip, 5xx, etc. PowerSync's contract is
-    // "throw → retry the batch later." We must NOT complete any tx
-    // (would lose data) and must NOT record (it's not a rejection,
-    // it's a temporary failure). Per-tx fallback should NOT run.
+  it('transient failure on batch: drops to per-tx, drains the succeeded prefix, re-throws the rest', async () => {
+    // A transient batch error does NOT re-throw the whole batch. It drops into
+    // the per-tx loop so a succeeded prefix drains and only the still-failing tx
+    // retries. This bounds the re-touch of the drained prefix (tx1 here): without
+    // it, a transient failure on a later op (here tx2) would replay the whole
+    // batch every ~5s, re-running apply_block_creates and re-touching every
+    // already-landed create (tx1) — a real WAL write + fleet echo each — for the
+    // life of the transient. tx1 drains once; tx2 stays queued (not recorded —
+    // transient is not a rejection). Fixing commit: 05fe86074 (issue #459).
     const tx1 = fakeTx(1, [new CrudEntry(1, UpdateType.PUT, 'blocks', 'block-a', 1, {content: 'A'})])
+    const tx2 = fakeTx(2, [new CrudEntry(2, UpdateType.PATCH, 'blocks', 'block-b', 2, {content: 'B'})])
     const {applyOperations, recordRejection} = collectCalls()
-    applyOperations.mockRejectedValueOnce(networkError())
+    applyOperations
+      .mockRejectedValueOnce(networkError()) // batch fails transiently → per-tx
+      .mockResolvedValueOnce(undefined)      // tx1 (already-landed create) drains
+      .mockRejectedValueOnce(networkError()) // tx2 still transient → re-throw
 
     await expect(
       __uploadTransactionsWithFallbackForTest(
         fakeDb,
-        [tx1] as unknown as CrudTransaction[],
+        [tx1, tx2] as unknown as CrudTransaction[],
         {applyOperations, recordRejection},
       ),
     ).rejects.toThrow('fetch failed')
 
-    expect(applyOperations).toHaveBeenCalledTimes(1)
+    expect(applyOperations).toHaveBeenCalledTimes(3) // batch + tx1 + tx2 (was 1 whole-batch throw)
     expect(recordRejection).not.toHaveBeenCalled()
-    expect(tx1.completed).toBe(false)
+    expect(tx1.completed).toBe(true)  // succeeded prefix drains — no re-touch on retry
+    expect(tx2.completed).toBe(false) // still-failing tx stays queued for retry
   })
 
   it('transient failure during per-tx fallback: re-throws so PowerSync retries the remainder', async () => {
@@ -703,7 +783,7 @@ describe('defaultBlockUploadSink.applyPatches — RPC contract', () => {
     // PowerSync retries the same oversized batch forever and the queue never
     // drains. Cap the per-RPC size so each call stays well under the timeout;
     // the patches are column-narrow and idempotent, so splitting them across
-    // separate RPC transactions is safe.
+    // separate RPC transactions is safe. Fixing commit: 9fc1b8729 (issue #459).
     supabaseRef.rpc.mockResolvedValue({data: null, error: null})
     const total = MAX_PATCHES_PER_SUPABASE_RPC * 2 + 1
     const patches = Array.from({length: total}, (_, i) => ({
@@ -774,6 +854,7 @@ describe('defaultBlockUploadSink.applyPatches — RPC contract', () => {
     // a code, so it gets a retry budget then quarantine. Note: unlike the
     // standalone classifier tests, this error carries no `.status` of its own —
     // it gets one only because the sink threads it (the production shape).
+    // Fixing commit: 71bd72efe (issue #459).
     supabaseRef.rpc.mockResolvedValueOnce({data: null, error: {message: 'Bad Request'}, status: 400})
 
     const thrown = await __applyBlockPatchesRpcForTest([
@@ -904,35 +985,104 @@ describe('defaultBlockUploadSink.applyPatches — RPC contract', () => {
 })
 
 // ===========================================================================
+// applyBlockCreates — insert-or-touch RPC wire shape + chunking.
+//
+// CREATEs ship via `apply_block_creates` (ON CONFLICT DO UPDATE SET updated_at =
+// blocks.updated_at — a no-op touch that echoes the server row to heal an
+// insert-or-skip phantom). Same statement-timeout guard as apply_block_patches:
+// a bulk import / schema reprojection lands as one big tx, so the per-RPC row
+// count is capped. The cross-chunk ordering guarantee is load-bearing.
+// ===========================================================================
+
+describe('applyBlockCreates — RPC wire + chunking', () => {
+  beforeEach(() => {
+    supabaseRef.rpc.mockReset()
+  })
+
+  it('ships a batch as one rpc("apply_block_creates", {creates}) call', async () => {
+    supabaseRef.rpc.mockResolvedValueOnce({data: null, error: null})
+
+    await __applyBlockCreatesForTest([
+      {id: 'block-a', workspace_id: 'w', content: 'A'},
+      {id: 'block-b', workspace_id: 'w', content: 'B'},
+    ])
+
+    expect(supabaseRef.rpc).toHaveBeenCalledTimes(1)
+    expect(supabaseRef.rpc).toHaveBeenCalledWith('apply_block_creates', {
+      creates: [
+        {id: 'block-a', workspace_id: 'w', content: 'A'},
+        {id: 'block-b', workspace_id: 'w', content: 'B'},
+      ],
+    })
+  })
+
+  it('chunks an oversized create batch into capped RPC calls, order preserved across chunks', async () => {
+    // orderedBlockUpserts runs before chunk(), so a parent never lands in a later
+    // chunk than its child — each chunk is a separate RPC = separate transaction,
+    // and the parent self-FK is only DEFERRABLE within one transaction.
+    supabaseRef.rpc.mockResolvedValue({data: null, error: null})
+    const total = MAX_CREATES_PER_SUPABASE_RPC * 2 + 1
+    const rows = Array.from({length: total}, (_, i) => ({
+      id: `block-${i}`, workspace_id: 'w', parent_id: null, content: `c${i}`,
+    }))
+
+    await __applyBlockCreatesForTest(rows)
+
+    // ceil(total / cap) calls, none exceeding the cap, every create shipped once
+    // in the original (topologically-stable) order.
+    expect(supabaseRef.rpc).toHaveBeenCalledTimes(3)
+    const shipped = supabaseRef.rpc.mock.calls.flatMap(
+      call => (call[1] as {creates: Array<{id: string}>}).creates,
+    )
+    expect(shipped).toHaveLength(total)
+    expect(shipped.map(r => r.id)).toEqual(rows.map(r => r.id))
+    for (const call of supabaseRef.rpc.mock.calls) {
+      expect((call[1] as {creates: unknown[]}).creates.length)
+        .toBeLessThanOrEqual(MAX_CREATES_PER_SUPABASE_RPC)
+    }
+  })
+
+  it('is a no-op when given an empty create array', async () => {
+    await __applyBlockCreatesForTest([])
+    expect(supabaseRef.rpc).not.toHaveBeenCalled()
+  })
+})
+
+// ===========================================================================
 // defaultBlockUploadSink.createRows / deleteRow — status threading (#190).
 //
-// The status-threading fix touches all three sinks, but the supabase mock
-// historically stubbed only `.rpc`, so the CREATE (`.from().upsert()`) and
-// DELETE (`.from().delete()`) sinks had no coverage proving they thread the
-// response HTTP status onto the thrown error. Drive them through the real
-// default sink (no stubSink) so a regression to a bare `throw error` — which
-// would re-open the dead-status hole #190 closed — is caught.
+// The status-threading fix touches all three sinks. The CREATE sink ships via
+// the `apply_block_creates` RPC and the DELETE sink via `.from().delete()`, so
+// both need coverage proving they thread the response HTTP status onto the thrown
+// error. Drive them through the real default sink (no stubSink) so a regression
+// to a bare `throw error` — which would re-open the dead-status hole #190 closed
+// — is caught.
 // ===========================================================================
 
 describe('defaultBlockUploadSink create/delete — status threading', () => {
   beforeEach(() => {
     supabaseRef.from.mockReset()
+    supabaseRef.rpc.mockReset()
   })
 
   it('threads the response HTTP status onto a codeless 4xx from the CREATE sink', async () => {
-    const upsert = vi.fn().mockResolvedValue({data: null, error: {message: 'Bad Request'}, status: 400})
-    supabaseRef.from.mockReturnValue({upsert})
+    // Fixing commit: 71bd72efe (issue #459).
+    supabaseRef.rpc.mockResolvedValue({data: null, error: {message: 'Bad Request'}, status: 400})
 
     const thrown = await __applyCompactedBlockOperationsForTest(
       fakeDatabase,
       [{kind: 'create', id: 'block-a', payload: {id: 'block-a', content: 'A'}, order: 0}],
     ).catch((err: unknown) => err)
 
+    expect(supabaseRef.rpc).toHaveBeenCalledWith('apply_block_creates', {
+      creates: [{id: 'block-a', content: 'A'}],
+    })
     expect(thrown).toMatchObject({status: 400, message: 'Bad Request'})
     expect(classifyUploadError(thrown)).toBe('ambiguous')
   })
 
   it('threads the response HTTP status onto a codeless 4xx from the DELETE sink', async () => {
+    // Fixing commit: 71bd72efe (issue #459).
     const eq = vi.fn().mockResolvedValue({data: null, error: {message: 'Bad Request'}, status: 400})
     const del = vi.fn().mockReturnValue({eq})
     supabaseRef.from.mockReturnValue({delete: del})
@@ -981,6 +1131,7 @@ describe('recordRejectionToTable — atomic + idempotent', () => {
   }
 
   it('records every entry in one writeTransaction, led by a DELETE-by-tx_id', async () => {
+    // Fixing commit: 267558e29 (issue #459).
     const {db, calls, directExecute, writeTxCount} = collectWrites()
     const tx = fakeTx(42, [
       new CrudEntry(1, UpdateType.PATCH, 'blocks', 'block-a', 42, {content: 'A'}),

@@ -9,11 +9,12 @@ import {
 import type { Block } from '@/data/block'
 import {
   findRecoveryAnchor,
+  instanceAt,
   locationOf,
   panelById,
-  panelInstances,
   rememberInstancePosition,
 } from './walker.ts'
+import { resolveSpatialNavExclusions } from './exclusionsFacet.ts'
 
 /**
  * How long to wait before committing a recovery write after the focused
@@ -150,22 +151,21 @@ const runRecoveryCheck = (
 
   if (!focusedLocation) return
 
-  const panelEl = panelById(block.id)
-  if (!panelEl) return
+  // Resolved once per check off this block's repo — the same non-React
+  // `facetRuntime` access path `actions.ts`'s `excludedSurfacesFor` uses;
+  // this component isn't rendered inside the panel's own React tree so it
+  // can't rely on hook-based facet access either. See `exclusionsFacet.ts`.
+  const excludedSurfaces = resolveSpatialNavExclusions(block.repo.facetRuntime)
 
-  const instances = panelInstances(panelEl)
-  if (instances.length === 0) return
-
-  const focusedInstance = instances.find(el => {
-    const location = locationOf(el)
-    return location?.blockId === focusedLocation.blockId
-      && location.renderScopeId === focusedLocation.renderScopeId
-  })
+  // No panel and no instances both land on the same answer as a missing row:
+  // `findRecoveryAnchor` returns null for either, and a null anchor is the
+  // early exit below.
+  const focusedInstance = instanceAt(block.id, focusedLocation, excludedSurfaces)
 
   if (focusedInstance) {
     // Block is alive in the panel — refresh the sibling/ancestor hint
     // so the next disappearance lands on the right recovery target.
-    rememberInstancePosition(block.id, focusedInstance)
+    rememberInstancePosition(block.id, focusedInstance, excludedSurfaces)
     return
   }
 
@@ -176,27 +176,23 @@ const runRecoveryCheck = (
   // (which `findRecoveryAnchor` enforces) — that quietly leaves the
   // panel alone during initial mounts where the focused block's data
   // hasn't loaded yet.
-  if (!findRecoveryAnchor(block.id, focusedLocation)) return
+  if (!findRecoveryAnchor(block.id, focusedLocation, excludedSurfaces)) return
 
   pendingTimerRef.current = setTimeout(() => {
     pendingTimerRef.current = null
     // Re-verify at the moment of write — anything could have changed
-    // during the debounce window.
+    // during the debounce window, including the resolved exclusion set
+    // itself (a facet runtime swap mid-debounce), so re-resolve it here
+    // too rather than close over the value from the start of the check.
     const stillFocused = peekFocusedBlockLocation(block)
     if (
       !stillFocused ||
       stillFocused.blockId !== focusedLocation.blockId ||
       stillFocused.renderScopeId !== focusedLocation.renderScopeId
     ) return
-    const panel = panelById(block.id)
-    if (!panel) return
-    const refreshed = panelInstances(panel)
-    if (refreshed.find(el => {
-      const location = locationOf(el)
-      return location?.blockId === focusedLocation.blockId
-        && location.renderScopeId === focusedLocation.renderScopeId
-    })) return
-    const anchor = findRecoveryAnchor(block.id, focusedLocation)
+    const excludedSurfaces = resolveSpatialNavExclusions(block.repo.facetRuntime)
+    if (instanceAt(block.id, focusedLocation, excludedSurfaces)) return
+    const anchor = findRecoveryAnchor(block.id, focusedLocation, excludedSurfaces)
     const recoveryLocation = anchor ? locationOf(anchor) : null
     if (
       !recoveryLocation ||

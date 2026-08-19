@@ -1,8 +1,44 @@
-# Malleable Thought Medium
+# Knowledge Medium
+
+**A malleable, offline-first medium for knowledge work.** &nbsp;·&nbsp; [**Try the live version →**](https://stvad.github.io/knowledge-medium/)
+
+A Roam/Workflowy-like outliner where *everything is a block and everything is an
+extension* — notes, daily notes, settings, even the renderers that draw the
+screen. The app is a thin host that assembles itself from those blocks at
+runtime, so you can reshape it from inside. It runs in the browser as an
+installable PWA, is local-first (instant, offline-capable), and syncs across
+devices via PowerSync + Supabase.
+
+**The idea:** log in and you get an opinionated knowledge-management tool (think
+Notion / Roam / Obsidian) you can be productive in immediately — but those
+defaults are an *example, not a prescription*. They're assembled from a small set
+of primitives, so you (or a coding agent on your behalf) can remix them into the
+tool that fits how your mind works; "Notion" and "Roam" are just different views
+over the same blocks. The hard, generic parts — sync, collaboration, offline,
+storage, querying — are solved once and exposed as building blocks, so shaping
+the app to you means composing components instead of rebuilding infrastructure.
+(In the spirit of [malleable
+software](https://www.inkandswitch.com/essay/malleable-software/).)
+
+**What's different:** one universal `blocks` table for everything (pages, todos,
+flashcards, places, settings, renderer source — set apart only by multi-valued
+types + typed properties); the whole app is facet-based extensions you can author
+live in-browser (no build step); config, prefs, and UI state live *in the
+document* as blocks (so they sync and version with your notes); and a runtime
+bridge lets agents/scripts drive the live app from your terminal.
+
+**Features** (learn them in the built-in `[[Tutorial]]`): outlining with fold /
+zoom / drag and vim or arrow-key motion · `[[wiki links]]`, block refs `((id))`,
+inline embeds `!((id))`, and indexed backlinks · side panels + multi-select ·
+QuickFind and workspace-wide find-and-replace · daily notes with quick capture ·
+typed properties & user-defined types · first-class places & maps · todos and
+SM-2.5 spaced repetition · Roam import, themes, and a touch-first mobile UI.
+
+---
 
 ## Supabase + PowerSync Setup
 
-This repo now expects:
+This repo expects:
 - Supabase hosted Postgres for the source database
 - Supabase Auth for app sessions (email OTP, with anonymous as a fallback)
 - PowerSync Cloud for syncing into local SQLite
@@ -55,7 +91,7 @@ npx powersync@latest deploy
 8. Start the app:
 
 ```bash
-yarn dev
+pnpm dev
 ```
 
 ### Local Database Migration Tests
@@ -63,31 +99,31 @@ yarn dev
 Run the SQL migration test suite with:
 
 ```bash
-yarn check:db
+pnpm check:db
 ```
 
 This starts a local Supabase Postgres test container, applies
 `supabase/migrations/*.sql` as `supabase_admin`, runs every pgTAP test in
 `supabase/tests`, and then removes the test database container so the next run
-starts clean. It is not part of `yarn check`; the pre-commit gate stays JS-only
+starts clean. It is not part of `pnpm check`; the pre-commit gate stays JS-only
 and does not require a container runtime.
 
-For Apple Container, install `container` and `socktainer`. `yarn check:db`
+For Apple Container, install `container` and `socktainer`. `pnpm check:db`
 uses the shared runtime helper and starts the Apple container system plus a
 managed Socktainer process when `DOCKER_HOST` is unset:
 
 ```bash
-yarn check:db
+pnpm check:db
 ```
 
 The runtime helper is also available directly:
 
 ```bash
-yarn db:runtime:apple
+pnpm db:runtime:apple
 ```
 
 That starts Apple Container/Socktainer and prints the Docker host it prepared.
-If `DOCKER_HOST` is already set, `yarn check:db` respects it. To force the
+If `DOCKER_HOST` is already set, `pnpm check:db` respects it. To force the
 default Docker runtime, set `CHECK_DB_CONTAINER_RUNTIME=docker`.
 
 ### Notes
@@ -108,70 +144,44 @@ The app exposes a first-class runtime bridge for coding agents. The browser app 
 Start the app:
 
 ```bash
-yarn dev
+pnpm dev
 ```
 
 Then use the CLI from another terminal. If the local relay is not running, the CLI starts it in the background before submitting the command:
 
 ```bash
-yarn agent connect
-yarn agent ping
-yarn agent sql all "SELECT id, content FROM blocks LIMIT 5"
-yarn agent create-block '{"parentId":"<block-id>","content":"Created by agent"}'
-yarn agent eval 'return { workspaceId: repo.activeWorkspaceId, user: repo.user }'
+pnpm agent connect
+pnpm agent ping
+pnpm agent sql all "SELECT id, content FROM blocks LIMIT 5"
+pnpm agent create-block '{"parentId":"<block-id>","content":"Created by agent"}'
+pnpm agent delete-block "<block-id>"
+pnpm agent restore-block "<block-id>"
+pnpm agent eval 'return { workspaceId: repo.activeWorkspaceId, user: repo.user }'
 ```
 
-`yarn agent connect` prints an app URL, opens the token dialog when that URL is loaded, then waits for the copied token to be pasted back into the terminal. After that one-time pairing, normal `yarn agent ...` commands use the stored token automatically.
+`pnpm agent connect` prints an app URL, opens the token dialog when that URL is loaded, then waits for the copied token to be pasted back into the terminal. After that one-time pairing, normal `pnpm agent ...` commands use the stored token automatically.
 
-Available runtime-code bindings include `repo`, `db`, `runtime`, `safeMode`, `sql`, `block`, `getBlock`, `getSubtree`, `createBlock`, `updateBlock`, `installExtension`, `actions`, `renderers`, `refreshAppRuntime`, `React`, `ReactDOM`, `window`, and `document`.
+Available runtime-code bindings include `repo`, `db`, `runtime`, `safeMode`, `sql`, `block`, `getBlock`, `getSubtree`, `createBlock`, `updateBlock`, `moveBlock`, `deleteBlock`, `restoreBlock`, `installExtension`, `setExtensionEnabled`, `uninstallExtension`, `actions`, `renderers`, `refreshAppRuntime`, `React`, `ReactDOM`, `window`, and `document`.
 
-By default the bridge uses `http://127.0.0.1:8787`. The bridge secret is stored in the local config file (`~/.config/knowledge-medium/agent-bridge.json` by default), so pairing is normally one-time per browser profile and app origin. Run `yarn agent pair-url` or foreground the relay with `yarn agent:server` to get a bridge-only pairing URL. Override the pairing target with `AGENT_RUNTIME_APP_URL`, the browser endpoint with `VITE_AGENT_RUNTIME_URL`, and the CLI endpoint with `AGENT_RUNTIME_URL`.
+For an agent-facing orientation to the data model, run `pnpm agent data-model`.
 
-The bridge only accepts browser origins from loopback hosts and configured app origins. Add comma-separated entries with `AGENT_RUNTIME_ALLOWED_ORIGINS`; browser origins do not include URL paths, so GitHub Pages is allowed as `https://stvad.github.io`. Detailed `/health` output requires the bridge secret header; the CLI reads the persisted local secret automatically for `yarn agent status`.
+By default the bridge uses `http://127.0.0.1:8787`. The bridge secret is stored in the local config file (`~/.config/knowledge-medium/agent-bridge.json` by default), so pairing is normally one-time per browser profile and app origin. Run `pnpm agent pair-url` or foreground the relay with `pnpm agent:server` to get a bridge-only pairing URL. Override the pairing target with `AGENT_RUNTIME_APP_URL`, the browser endpoint with `VITE_AGENT_RUNTIME_URL`, and the CLI endpoint with `AGENT_RUNTIME_URL`.
+
+The bridge only accepts browser origins from loopback hosts and configured app origins. Add comma-separated entries with `AGENT_RUNTIME_ALLOWED_ORIGINS`; browser origins do not include URL paths, so GitHub Pages is allowed as `https://stvad.github.io`. Detailed `/health` output requires the bridge secret header; the CLI reads the persisted local secret automatically for `pnpm agent status`.
 
 ---
 
-## Expanding the ESLint configuration
+## Development
 
-If you are developing a production application, we recommend updating the configuration to enable type aware lint rules:
-
-- Configure the top-level `parserOptions` property like this:
-
-```js
-export default tseslint.config({
-  languageOptions: {
-    // other options...
-    parserOptions: {
-      project: ['./tsconfig.node.json', './tsconfig.app.json'],
-      tsconfigRootDir: import.meta.dirname,
-    },
-  },
-})
+```bash
+pnpm dev      # start the app (Vite)
+pnpm check    # the verification gate: typecheck, lint, and tests
+pnpm build    # production build
 ```
 
-- Replace `tseslint.configs.recommended` to `tseslint.configs.recommendedTypeChecked` or `tseslint.configs.strictTypeChecked`
-- Optionally add `...tseslint.configs.stylisticTypeChecked`
-- Install [eslint-plugin-react](https://github.com/jsx-eslint/eslint-plugin-react) and update the config:
-
-```js
-// eslint.config.js
-import react from 'eslint-plugin-react'
-
-export default tseslint.config({
-  // Set the react version
-  settings: { react: { version: '18.3' } },
-  plugins: {
-    // Add the react plugin
-    react,
-  },
-  rules: {
-    // other rules...
-    // Enable its recommended rules
-    ...react.configs.recommended.rules,
-    ...react.configs['jsx-runtime'].rules,
-  },
-})
-```
+See [`AGENTS.md`](./AGENTS.md) for verification, testing, and contribution
+conventions, and [`docs/`](./docs) for design notes (treat these as dated
+intent — the code and tests are authoritative).
 
 ## License
 

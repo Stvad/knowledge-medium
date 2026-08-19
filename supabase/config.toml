@@ -23,3 +23,13 @@ otp_expiry = 3600
 [auth.email.template.magic_link]
 subject = "Your sign-in code"
 content_path = "./supabase/templates/magic_link.html"
+
+# Media attachments bucket (design §10). Declared here so a local `supabase start`
+# provisions it on boot — the migration that creates it on the hosted project is
+# guarded out locally because the Storage tables don't exist at migration time
+# (see supabase/migrations/20260625000000_add_attachments_storage.sql). config.toml
+# can't declare storage.objects RLS policies; apply the migration's policies
+# against the local stack once Storage is up when exercising RLS locally.
+[storage.buckets.attachments]
+public = false
+file_size_limit = "50MiB"

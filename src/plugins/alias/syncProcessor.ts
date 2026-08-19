@@ -21,15 +21,26 @@
  *
  * Placement (same-tx vs post-commit):
  *   Sync runs inside the user's writeTransaction so content + alias
- *   writes commit atomically. Rename remains post-commit (see
- *   `@/plugins/references/renameProcessor.ts`) — the cross-block
- *   rewrites are too expensive to inline on the typing path, and
- *   eventual consistency is fine for backlink display text.
+ *   writes commit atomically. Rename (`references.renameBacklinks`) is
+ *   same-tx too as of #461, and is registered to run AFTER this
+ *   processor: the ordinary rename gesture is a title edit, so the alias
+ *   diff rename reacts to is the one written HERE by rule 1. Both halves
+ *   of a rename therefore land in one commit and one undo entry.
  *
  *   The "stale plan" guard that the post-commit version needed
  *   (re-read row at apply time, skip on divergence) is gone here —
  *   we're inside the same tx, so the snapshot we plan against IS
  *   the live state.
+ *
+ *   Not `rerunOnDirtyRows`: rename's own content rewrites can land on an
+ *   ALIASED source whose title embeds the renamed wikilink (`See [[Foo]]`
+ *   as a page title), and this processor no longer gets a second look at
+ *   it — the block keeps its old alias text until its next edit. The
+ *   post-commit rename got that reconciliation for free by writing in a
+ *   tx of its own. Left alone deliberately: opting into the re-run means
+ *   taking on the merged-baseline `before` semantics for a
+ *   content↔alias reconciliation, which is a bigger change than the
+ *   obscure case it fixes.
  */
 
 import {
@@ -41,7 +52,11 @@ import {
   type SameTxCtx,
   type SameTxEvent,
 } from '@/data/api'
-import { aliasesProp } from '@/data/properties'
+import {
+  deriveReferenceColumns,
+  sameTxReferenceTargetLookups,
+} from '@/data/internals/referenceTargetProcessor'
+import { aliasesProp, getAliases } from '@/data/properties'
 
 export const ALIAS_SYNC_PROCESSOR = 'alias.sync'
 
@@ -53,17 +68,11 @@ interface SyncPlan {
   contentNext: string | null
   aliasesNext: readonly string[] | null
   dropSourceAliasesOnCollision: readonly string[]
+  /** The row's derived `reference_target_id` as the tx already has it, so a
+   *  content rewrite can recompute the column without re-reading the row. */
+  referenceTargetIdBefore: string | null
 }
 
-const decodeAliases = (block: BlockData): readonly string[] => {
-  const encoded = block.properties[aliasesProp.name]
-  if (encoded === undefined) return []
-  try {
-    return aliasesProp.codec.decode(encoded)
-  } catch {
-    return []
-  }
-}
 
 const arraysEqual = (a: readonly string[], b: readonly string[]): boolean => {
   if (a.length !== b.length) return false
@@ -94,8 +103,8 @@ export const planSync = (row: ChangedRow): SyncPlan | null => {
 
   const before = row.before
   const after = row.after
-  const beforeAliases = decodeAliases(before)
-  const afterAliases = decodeAliases(after)
+  const beforeAliases = getAliases(before)
+  const afterAliases = getAliases(after)
   // Sync only reconciles blocks that ARE aliased.
   if (afterAliases.length === 0) return null
   const contentChanged = before.content !== after.content
@@ -117,6 +126,7 @@ export const planSync = (row: ChangedRow): SyncPlan | null => {
         workspaceId: after.workspaceId,
         contentNext: null,
         aliasesNext: replaced,
+        referenceTargetIdBefore: after.referenceTargetId ?? null,
         dropSourceAliasesOnCollision: before.content === '' ? [] : [before.content],
       }
     }
@@ -128,6 +138,7 @@ export const planSync = (row: ChangedRow): SyncPlan | null => {
       workspaceId: after.workspaceId,
       contentNext: null,
       aliasesNext: [...afterAliases, after.content],
+      referenceTargetIdBefore: after.referenceTargetId ?? null,
       dropSourceAliasesOnCollision: [],
     }
   }
@@ -146,6 +157,7 @@ export const planSync = (row: ChangedRow): SyncPlan | null => {
       workspaceId: after.workspaceId,
       contentNext: added[0],
       aliasesNext: null,
+      referenceTargetIdBefore: after.referenceTargetId ?? null,
       dropSourceAliasesOnCollision: [],
     }
   }
@@ -186,7 +198,37 @@ const applyPlan = async (ctx: SameTxCtx, plan: SyncPlan): Promise<void> => {
     await ctx.tx.setProperty(plan.id, aliasesProp, [...plan.aliasesNext], {skipMetadata: true})
   }
   if (plan.contentNext !== null) {
-    await ctx.tx.update(plan.id, {content: plan.contentNext}, {skipMetadata: true})
+    // AR1 rewrites content AFTER `core.deriveReferenceTarget` ran (kernel
+    // same-tx processors precede plugin ones), and AR1's own precondition is
+    // that content did NOT change in this tx — so derive never fired for this
+    // row at all and nothing will re-derive the column. Recompute it inline
+    // from the rewritten content, the same contract `mergeRetargetProcessor`
+    // and `inlineDeletedBlockRefsProcessor` follow.
+    //
+    // Reachable when the swapped alias is itself spelled as a reference
+    // (`[[Foo]]` as an alias STRING): the row's stamp would keep pointing at
+    // the removed alias's target while its content names the added one — and
+    // in a child-backed workspace a stamp resolving to a property definition
+    // is what makes a row a field row, so the row would stay hidden and
+    // projected under the wrong definition.
+    const patch: Partial<Pick<BlockData, 'content' | 'referenceTargetId' | 'isFieldForm'>> = {
+      content: plan.contentNext,
+    }
+    const derived = await deriveReferenceColumns(
+      plan.contentNext,
+      plan.workspaceId,
+      sameTxReferenceTargetLookups(ctx.tx),
+    )
+    // Always an update of an existing row (never a create), so an
+    // unresolvable alias (`undefined`) clears rather than preserving an id.
+    const nextTargetId = derived.targetId ?? null
+    if ((plan.referenceTargetIdBefore ?? null) !== nextTargetId) {
+      patch.referenceTargetId = nextTargetId
+    }
+    // The bit rides the same recompute — a rewrite can move content into or
+    // out of the marked form, and nothing else re-derives it this tx.
+    patch.isFieldForm = derived.isFieldForm
+    await ctx.tx.update(plan.id, patch, {skipMetadata: true})
   }
 }
 

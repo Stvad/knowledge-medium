@@ -55,17 +55,62 @@ export function parseMarkdownToBlocks(text: string): ParsedBlock[] {
     return { type: 'text', content: trimmedLine };
   }
 
-  // First pass: parse lines into blocks with levels
-  for (const line of lines) {
-    const originalLineContent = line;
-    const trimmedLine = line.trim();
+  // First pass: parse lines into blocks with levels. Index-based (not
+  // for-of) so a fenced code block can consume its inner lines in one step.
+  let idx = 0;
+  while (idx < lines.length) {
+    const originalLineContent = lines[idx];
+    const trimmedLine = originalLineContent.trim();
 
     if (!trimmedLine) {
+      idx++;
       continue; // Skip empty lines
     }
 
-    const currentLineRawIndent = getIndentationLevel(originalLineContent);
-    const { type: currentLineType, content: processedContent } = determineLineTypeAndContent(trimmedLine);
+    let currentLineRawIndent: number;
+    let currentLineType: string;
+    let processedContent: string;
+
+    const fenceOpen = /^([`~])\1{2,}/.exec(trimmedLine);
+    if (fenceOpen) {
+      // Fenced code block → ONE block. Handles both ``` and ~~~ fences
+      // (CommonMark). Consume through the closing fence or EOF, keep both
+      // fences, and never interpret the inner lines as list markers /
+      // headers. The closer is a run of the SAME char, AT LEAST as long as
+      // the opener, with nothing else on the line — so a reply can open with
+      // ```` (or ~~~) to wrap content that itself contains ``` without
+      // closing early. The opening fence's leading indentation is stripped
+      // from every line so nested code doesn't carry the fence's indent; it
+      // nests like a plain line at that opening indent.
+      const closesFence = new RegExp('^' + fenceOpen[1] + '{' + fenceOpen[0].length + ',}$');
+      currentLineRawIndent = getIndentationLevel(originalLineContent);
+      currentLineType = 'text';
+      const openingWs = originalLineContent.match(/^[ \t]*/)?.[0].length ?? 0;
+      const stripOpeningIndent = (raw: string): string => {
+        let removed = 0;
+        let cut = 0;
+        while (cut < raw.length && removed < openingWs && (raw[cut] === ' ' || raw[cut] === '\t')) {
+          removed++;
+          cut++;
+        }
+        return raw.slice(cut);
+      };
+      const fenceLines = [stripOpeningIndent(originalLineContent)];
+      idx++;
+      while (idx < lines.length) {
+        const fenceLine = lines[idx];
+        fenceLines.push(stripOpeningIndent(fenceLine));
+        idx++;
+        if (closesFence.test(fenceLine.trim())) break; // include the closing fence, then stop
+      }
+      processedContent = fenceLines.join('\n').replace(/[ \t\r\n]+$/, '');
+    } else {
+      currentLineRawIndent = getIndentationLevel(originalLineContent);
+      const lineParts = determineLineTypeAndContent(trimmedLine);
+      currentLineType = lineParts.type;
+      processedContent = lineParts.content;
+      idx++;
+    }
 
     if (baseIndent === -1) {
       baseIndent = currentLineRawIndent;

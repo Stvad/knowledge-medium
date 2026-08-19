@@ -32,10 +32,8 @@ import {useCallback} from 'react'
 import type {PropertyEditorProps} from '@/data/api'
 import type {Block} from '@/data/block.js'
 import {useRepo} from '@/context/repo.js'
-import {
-  approveExtension,
-  lookupApproval,
-} from '@/extensions/compileExtensionModule.js'
+import {lookupApproval} from '@/extensions/compileExtensionModule.js'
+import {approveExtensionHere} from '@/extensions/approveExtensionHere.js'
 import {refreshAppRuntime} from '@/facets/runtimeEvents.js'
 import {applyToggle, type Overrides, type Togglable} from '@/facets/togglable.js'
 import {showError} from '@/utils/toast.js'
@@ -55,30 +53,12 @@ export const ExtensionsOverridesEditor = ({
 
   // Approve (or re-approve) a user extension on THIS device: pin the live
   // source so the loader will run it. The EXPLICIT trust action, shared by
-  // "Enable here" (cross-device) and "Update" (source drifted). Returns
-  // whether trust was established; surfaces a toast on failure so the caller
-  // can avoid setting "enabled" intent against a non-existent approval
-  // (which would silently loop on needs-approval — #67 review).
+  // "Enable here" (cross-device) and "Update" (source drifted). Delegates to
+  // the keyed-by-blockId `approveExtensionHere` (also used by the global
+  // prompt toast) so both surfaces establish trust identically.
   const approveHere = useCallback(
-    async (handle: Togglable): Promise<boolean> => {
-      const block = await repo.load(handle.id)
-      if (!block) {
-        showError(`Couldn't enable "${handle.name}" — its definition block wasn't found.`)
-        return false
-      }
-      try {
-        await approveExtension(handle.id, block.content ?? '')
-        return true
-      } catch (error) {
-        console.error(`Failed to approve extension ${handle.id}`, error)
-        showError(
-          `Couldn't enable "${handle.name}" — ${
-            error instanceof Error ? error.message : 'approval could not be saved'
-          }.`,
-        )
-        return false
-      }
-    },
+    (handle: Togglable): Promise<boolean> =>
+      approveExtensionHere(repo, handle.id, handle.name),
     [repo],
   )
 

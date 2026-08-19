@@ -11,9 +11,13 @@
  *     contract)
  *   - maxDepth caps stack length; oldest entries fall off
  *   - Stacks cleared via `clear()`
+ *   - Group merge (issue #306): a record whose `groupId` matches the
+ *     top-of-stack entry MERGES into it (per-block earliest `before`,
+ *     latest `after`; steps appended; redo cleared) instead of pushing
  *
- * The replay-against-DB tests live in `repoUndo.test.ts` — they need
- * the real `Repo` + PowerSync harness because they exercise SQL state.
+ * The replay-against-DB tests live in `repoUndo.test.ts` (and
+ * `repoUndoGroup.test.ts` for grouped txs) — they need the real
+ * `Repo` + PowerSync harness because they exercise SQL state.
  */
 
 import { describe, expect, it, vi } from 'vitest'
@@ -214,6 +218,134 @@ describe('UndoManager.subscribe', () => {
     m.record(entry('t2', ChangeScope.BlockDefault))
 
     expect(listener).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('UndoManager.record — group merge (issue #306)', () => {
+  const A1 = makeBlockData({id: 'a', workspaceId: 'ws-1', content: 'A1'})
+  const A2 = makeBlockData({id: 'a', workspaceId: 'ws-1', content: 'A2'})
+  const B1 = makeBlockData({id: 'b', workspaceId: 'ws-1', content: 'B1'})
+
+  /** Grouped entry with explicit per-block (before, after) pairs. */
+  const groupedEntry = (
+    txId: string,
+    groupId: string | undefined,
+    rows: Array<[string, {before: typeof A1 | null; after: typeof A1 | null}]>,
+    description = `tx ${txId}`,
+  ) => {
+    const snapshots = newSnapshotsMap()
+    for (const [id, snap] of rows) snapshots.set(id, snap)
+    return {
+      txId,
+      scope: ChangeScope.BlockDefault,
+      snapshots,
+      description,
+      groupId,
+      steps: [{txId, description}],
+    }
+  }
+
+  it('merges a same-group record into the top entry instead of pushing', () => {
+    const m = new UndoManager()
+    m.record(groupedEntry('t1', 'g1', [['a', {before: null, after: A1}]]))
+    m.record(groupedEntry('t2', 'g1', [['b', {before: null, after: B1}]]))
+
+    expect(m.depths(ChangeScope.BlockDefault)).toEqual({undo: 1, redo: 0})
+    const top = m.peekUndo(ChangeScope.BlockDefault)!
+    expect(top.groupId).toBe('g1')
+    expect(top.snapshots.get('a')).toEqual({before: null, after: A1})
+    expect(top.snapshots.get('b')).toEqual({before: null, after: B1})
+    expect(top.steps?.map(s => s.txId)).toEqual(['t1', 't2'])
+  })
+
+  it('folds per-block snapshots: earliest before, latest after', () => {
+    const m = new UndoManager()
+    // tx1 creates `a` (before: null); tx2 updates it A1 → A2. The merged
+    // entry must keep before=null (undo removes the block — the
+    // inverse-of-create path) and after=A2 (redo restores the final state).
+    m.record(groupedEntry('t1', 'g1', [['a', {before: null, after: A1}]]))
+    m.record(groupedEntry('t2', 'g1', [['a', {before: A1, after: A2}]]))
+
+    expect(m.depths(ChangeScope.BlockDefault)).toEqual({undo: 1, redo: 0})
+    expect(m.peekUndo(ChangeScope.BlockDefault)!.snapshots.get('a'))
+      .toEqual({before: null, after: A2})
+  })
+
+  it('takes the latest description on merge (the last step names the action)', () => {
+    const m = new UndoManager()
+    m.record(groupedEntry('t1', 'g1', [['a', {before: null, after: A1}]], 'create daily note'))
+    m.record(groupedEntry('t2', 'g1', [['a', {before: A1, after: A2}]], 'srs reschedule'))
+    expect(m.peekUndo(ChangeScope.BlockDefault)!.description).toBe('srs reschedule')
+  })
+
+  it('clears the redo stack when a record merges', () => {
+    const m = new UndoManager()
+    m.record(groupedEntry('t1', 'g1', [['a', {before: null, after: A1}]]))
+    // Simulate: a later plain tx was undone, leaving it on redo while the
+    // group entry is back on top of undo.
+    m.pushRedo(ChangeScope.BlockDefault, entry('undone-later-tx', ChangeScope.BlockDefault))
+
+    m.record(groupedEntry('t2', 'g1', [['a', {before: A1, after: A2}]]))
+
+    expect(m.depths(ChangeScope.BlockDefault)).toEqual({undo: 1, redo: 0})
+  })
+
+  it('notifies subscribers exactly once per merge, after the redo clear', () => {
+    const m = new UndoManager()
+    m.record(groupedEntry('t1', 'g1', [['a', {before: null, after: A1}]]))
+    m.pushRedo(ChangeScope.BlockDefault, entry('stale-redo', ChangeScope.BlockDefault))
+    const observed: Array<{undo: number; redo: number}> = []
+    m.subscribe(ChangeScope.BlockDefault, () => {
+      observed.push(m.depths(ChangeScope.BlockDefault))
+    })
+
+    m.record(groupedEntry('t2', 'g1', [['a', {before: A1, after: A2}]]))
+
+    expect(observed).toEqual([{undo: 1, redo: 0}])
+  })
+
+  it('does not merge entries with different group ids', () => {
+    const m = new UndoManager()
+    m.record(groupedEntry('t1', 'g1', [['a', {before: null, after: A1}]]))
+    m.record(groupedEntry('t2', 'g2', [['b', {before: null, after: B1}]]))
+    expect(m.depths(ChangeScope.BlockDefault)).toEqual({undo: 2, redo: 0})
+  })
+
+  it('does not merge an ungrouped record into a grouped top (and vice versa)', () => {
+    const m = new UndoManager()
+    m.record(groupedEntry('t1', 'g1', [['a', {before: null, after: A1}]]))
+    m.record(entry('plain', ChangeScope.BlockDefault))
+    expect(m.depths(ChangeScope.BlockDefault)).toEqual({undo: 2, redo: 0})
+
+    // A grouped record over an ungrouped top pushes too — matching is by
+    // identity of groupId, never by absence.
+    m.record(groupedEntry('t3', 'g1', [['b', {before: null, after: B1}]]))
+    expect(m.depths(ChangeScope.BlockDefault)).toEqual({undo: 3, redo: 0})
+  })
+
+  it('splits the group when a foreign tx lands in between', () => {
+    const m = new UndoManager()
+    m.record(groupedEntry('t1', 'g1', [['a', {before: null, after: A1}]]))
+    m.record(entry('foreign', ChangeScope.BlockDefault))
+    m.record(groupedEntry('t3', 'g1', [['a', {before: A1, after: A2}]]))
+
+    // Three entries: [g1 first half, foreign, g1 second half]. Undo peels
+    // them in reverse order, so the foreign tx is never folded into the
+    // group and undoing the top group entry can't revert the foreign write.
+    expect(m.depths(ChangeScope.BlockDefault)).toEqual({undo: 3, redo: 0})
+    expect(m.peekUndo(ChangeScope.BlockDefault)!.snapshots.get('a'))
+      .toEqual({before: A1, after: A2})
+  })
+
+  it('still drops zero-write grouped entries without clearing redo', () => {
+    const m = new UndoManager()
+    m.record(groupedEntry('t1', 'g1', [['a', {before: null, after: A1}]]))
+    m.pushRedo(ChangeScope.BlockDefault, entry('keep', ChangeScope.BlockDefault))
+
+    m.record(groupedEntry('empty', 'g1', []))
+
+    expect(m.depths(ChangeScope.BlockDefault)).toEqual({undo: 1, redo: 1})
+    expect(m.peekUndo(ChangeScope.BlockDefault)!.steps?.map(s => s.txId)).toEqual(['t1'])
   })
 })
 

@@ -27,12 +27,35 @@ export interface AppEffectContext {
  *  affordances (a [[Tutorial]] bullet etc.).
  *
  *  Runs BEFORE React mounts (inside App.tsx's bootstrap chain), so
- *  resolvers cannot use hooks or read the live `FacetRuntime`. Talk
- *  to the Repo directly. */
+ *  resolvers cannot use hooks or read the live `FacetRuntime`. Talk to the
+ *  Repo directly, including for type/schema lookups via
+ *  `repo.snapshotTypeRegistries()` — which at this point holds the
+ *  `staticDataExtensions` registered onto the Repo at construction. A
+ *  resolver that seeds blocks of a plugin type must ensure that plugin's
+ *  data extension is in `staticDataExtensions`. */
 export interface WorkspaceLandingContext {
   repo: Repo
   workspaceId: string
   freshlyCreated: boolean
+  /** A block the caller must NOT be landed on, because it is being deleted.
+   *  A resolver that would answer with this id must return null WITHOUT
+   *  touching the DB — resolvers are get-or-create by contract (below), and
+   *  `getOrCreateDailyNote` restores a soft-deleted row, so resolving the
+   *  landing during delete-recovery would silently resurrect the page the
+   *  user just deleted. Decide it from an id you can compute, not from a
+   *  row you had to create first. Unset outside recovery (bootstrap).
+   *
+   *  Declining on an EXACT id match is not enough. The excluded id is the page
+   *  of the pane being recovered, which need not be the root of the deleted
+   *  subtree — a pane zoomed into a child recovers with the child's id, and a
+   *  resolver that only checks equality sails past and recreates the deleted
+   *  parent. If your resolver's get-or-create can restore an ancestor (or any
+   *  other row) that the delete may have taken, check those for tombstones too
+   *  — `anyBlockTombstoned` in `@/data/blockLiveness` reads them directly,
+   *  which is necessary because the Block facade can't tell a tombstone from a
+   *  row that simply isn't here. `todayDailyNoteLanding` does exactly this for
+   *  today's note and the Journal. */
+  excludeBlockId?: string
 }
 
 /** A landing resolver returns the block id to open, or null to defer
@@ -282,6 +305,82 @@ export const actionContextsFacet = defineFacet<ActionContextConfig, readonly Act
   id: 'core.action-contexts',
   validate: isActionContextConfig,
 })
+
+/**
+ * A veto on deleting a block THROUGH THE UI. Return a short user-facing reason
+ * to refuse, or null to allow.
+ *
+ * This is a UI-layer affordance, deliberately not a data-layer guard: it exists
+ * to stop a keystroke doing something pointless or destructive-looking, not to
+ * make a row immortal. Programmatic callers (the agent bridge, migrations,
+ * cleanup) go straight to `block.delete()` and are unaffected — the data layer's
+ * own guards (`SeededDefinitionWriteError`, read-only workspaces) are the rules
+ * that genuinely cannot be bypassed.
+ *
+ * The motivating case: pages that are get-or-CREATE by construction (today's
+ * daily note, the Journal). Deleting one doesn't stick — revisiting the date
+ * recreates it — so the gesture reads as broken while still destroying the
+ * page's contents.
+ */
+export type BlockDeletionGuard = (block: Block) => Promise<string | null> | string | null
+
+export const blockDeletionGuardsFacet = defineFacet<BlockDeletionGuard, readonly BlockDeletionGuard[]>({
+  id: 'core.block-deletion-guards',
+  validate: (value): value is BlockDeletionGuard => typeof value === 'function',
+})
+
+/** How long a single guard gets to answer before it is treated as "allow".
+ *  Guards are supposed to be a types/id check; anything at this scale is a bug,
+ *  and the alternative to giving up is a Delete key that hangs forever. */
+const GUARD_TIMEOUT_MS = 5_000
+/** Distinguishes "the timeout won the race" from a guard that legitimately
+ *  answered null, so only the former is reported as broken. */
+const GUARD_TIMED_OUT = Symbol('deletion-guard-timeout')
+
+/** First refusal reason from any registered guard, or null when every guard
+ *  allows the delete.
+ *
+ *  A guard that throws, rejects, hangs, or answers with something that isn't a
+ *  non-empty string is logged and treated as "allow": guards come from
+ *  user-installable extensions, and a broken one shouldn't be able to make
+ *  blocks undeletable. (An earlier version handled only the throw/reject case,
+ *  so a guard that never settled left `ensureDeletableThroughUi` awaiting
+ *  forever — a permanent, silent veto, exactly what the rule forbids.) Erring
+ *  toward allowing is the right side to fail on: the delete is soft and
+ *  undoable, whereas an unresponsive gesture is not recoverable at all. */
+export const resolveDeletionRefusal = async (
+  repo: Repo,
+  block: Block,
+): Promise<string | null> => {
+  for (const guard of repo.facetRuntime?.read(blockDeletionGuardsFacet) ?? []) {
+    let timer: ReturnType<typeof setTimeout> | undefined
+    try {
+      // The timer is cleared in `finally`, so a guard that answers promptly
+      // neither logs nor leaves a pending timeout behind.
+      const reason = await Promise.race([
+        Promise.resolve(guard(block)),
+        new Promise<typeof GUARD_TIMED_OUT>(resolve => {
+          timer = setTimeout(() => resolve(GUARD_TIMED_OUT), GUARD_TIMEOUT_MS)
+        }),
+      ])
+      if (reason === GUARD_TIMED_OUT) {
+        console.error('[deletion-guard] guard did not answer in time; allowing the delete')
+        continue
+      }
+      if (!reason) continue
+      if (typeof reason !== 'string') {
+        console.error('[deletion-guard] guard returned a non-string reason; allowing the delete', reason)
+        continue
+      }
+      return reason
+    } catch (error) {
+      console.error('[deletion-guard] guard threw; allowing the delete', error)
+    } finally {
+      if (timer !== undefined) clearTimeout(timer)
+    }
+  }
+  return null
+}
 
 /** Plugins contribute landing resolvers; App.tsx tries them in order
  *  on bootstrap-with-empty-layout and uses the first non-null result.

@@ -1,5 +1,7 @@
+import { extensionApiCatalog } from '@/extensions/apiCatalog.js'
+
 export type AuthoringCatalogSource =
-  | 'generated-api'
+  | 'curated-api'
   | 'generated-module-glob'
   | 'html-importmap'
   | 'html-preload'
@@ -10,6 +12,10 @@ export interface AuthoringModuleSummary {
   category: string
   description: string
   exports?: string[]
+  /** Type-only exports, for curated-API modules. Surfaced for discovery and
+   *  searched by the `--modules <term>` filter so a type-name lookup (e.g.
+   *  `PropertyEditorProps`) finds the module that owns it. */
+  types?: string[]
   source: AuthoringCatalogSource
   safeForExtensions?: boolean
 }
@@ -83,11 +89,6 @@ export interface AuthoringCatalogFilters {
   omitDiscoverableModules?: boolean
 }
 
-interface ApiSurfaceLike {
-  module: string
-  exports: string[]
-}
-
 type RuntimeModule = Record<string, unknown>
 
 const internalModuleIndex = import.meta.glob([
@@ -111,7 +112,7 @@ const storageGuide: AuthoringStorageGuide = {
   principles: [
     'Store plugin configuration and sync state in system blocks whenever possible.',
     'Use typed properties with ChangeScope.UserPrefs for per-user preferences and ChangeScope.BlockDefault for workspace/content data.',
-    'Use `pluginBlockId(workspaceId, NAMESPACE, key)` for plugin-owned singleton blocks so upserts are idempotent across reinstalls.',
+    'Let the platform own get-or-create for plugin-owned blocks — `getOrCreateKernelPage` for a root page, `getOrCreateTypedChild` for the records under it — so re-installs and second devices land on the existing block instead of duplicating it.',
     'Use deterministic external-id properties on imported records so sync plugins can upsert instead of duplicating data.',
     'Keep credentials in `window.localStorage`, scoped under a `knowledge-medium:<plugin>:...` key. Never echo token values through bridge output.',
   ],
@@ -119,25 +120,38 @@ const storageGuide: AuthoringStorageGuide = {
     {
       id: 'user-prefs-config',
       when: 'Per-user plugin settings, defaults, and lightweight sync checkpoints.',
-      use: 'Define a TypeContribution for the plugin via `defineBlockType({id, label, properties})` and register it through `typesFacet`. Then read/write the per-plugin sub-block via `getPluginPrefsBlock(repo, workspaceId, user, type)`. Each plugin gets its own row under user-prefs, so unrelated plugins\' settings can\'t clobber each other.',
-      modules: ['@/extensions/api.js'],
+      use: 'Define a seeded block type for the plugin via `seedType({seedKey: extensionTypeSeedKey(\'prefs\'), revision: 1, id, label, properties})` and register it through `typeSeedsFacet`. Then read/write the per-plugin sub-block via `getPluginPrefsBlock(repo, workspaceId, user, type)`. Each plugin gets its own row under user-prefs, so unrelated plugins\' settings can\'t clobber each other.',
+      modules: ['@/data/api/index.js', '@/data/facets.js', '@/extensions/dynamicExtensionSeeds.js', '@/data/stateBlocks.js'],
       example: {
         label: 'Define a prefs type and read/write a setting',
         code: [
-          "import {",
-          "  ChangeScope, codecs, defineBlockType, defineProperty,",
-          "  getPluginPrefsBlock, typesFacet, propertySchemasFacet,",
-          "} from '@/extensions/api.js'",
+          "import { ChangeScope, seedProperty, seedType } from '@/data/api/index.js'",
+          "import { definitionSeedsFacet, typeSeedsFacet } from '@/data/facets.js'",
+          "import { extensionPropertySeedKey, extensionTypeSeedKey } from '@/extensions/dynamicExtensionSeeds.js'",
+          "import { getPluginPrefsBlock } from '@/data/stateBlocks.js'",
           "",
-          "const lastSyncProp = defineProperty('readwise:lastSyncedAt', {",
-          "  codec: codecs.optionalString,",
-          "  defaultValue: null,",
+          "const lastSyncProp = seedProperty({",
+          "  seedKey: extensionPropertySeedKey('last-synced-at'),",
+          "  revision: 1,",
+          "  name: 'readwise:lastSyncedAt',",
+          "  preset: 'optional-string',",
+          "  defaultValue: undefined,",
           "  changeScope: ChangeScope.UserPrefs,",
           "})",
           "",
-          "const readwisePrefsType = defineBlockType({",
+          "const readwisePrefsType = seedType({",
+          "  // A per-block reserved key the loader binds to this extension block",
+          "  // (@extension/type/<key> → <blockId>/type/<key>). Unique within the",
+          "  // extension; short, stable, never changed once shipped.",
+          "  seedKey: extensionTypeSeedKey('prefs'),",
+          "  revision: 1,",
           "  id: 'readwise-prefs',",
           "  label: 'Readwise',",
+          "  // Prefs containers are plumbing for the # dropdown, but their",
+          "  // chip is informative when the container block itself is on",
+          "  // screen — hide completion only (matches the in-repo",
+          "  // pluginPrefsExtension stamp).",
+          "  hideFromCompletion: true,",
           "  properties: [lastSyncProp],",
           "})",
           "",
@@ -148,8 +162,8 @@ const storageGuide: AuthoringStorageGuide = {
           "",
           "// Top-level facet contributions:",
           "export default [",
-          "  typesFacet.of(readwisePrefsType, {source: 'readwise'}),",
-          "  propertySchemasFacet.of(lastSyncProp, {source: 'readwise'}),",
+          "  typeSeedsFacet.of(readwisePrefsType, {source: 'readwise'}),",
+          "  definitionSeedsFacet.of(lastSyncProp, {source: 'readwise'}),",
           "  // ... actions, mounts, etc.",
           "]",
         ].join('\n'),
@@ -158,34 +172,66 @@ const storageGuide: AuthoringStorageGuide = {
     {
       id: 'plugin-root-singleton',
       when: 'The plugin needs a stable workspace-scoped root block — e.g. a "Readwise Library" page that all imported books/highlights live under.',
-      use: 'Hardcode a UUID v4 once as your plugin\'s namespace constant, then derive every plugin-owned id with `pluginBlockId(workspaceId, NAMESPACE, key)`. Same inputs always produce the same id, so re-running the install (or running on a fresh device) lands on the same block and your upserts stay idempotent. Use the same helper for per-record ids by passing a key like `book:${externalId}`.',
-      modules: ['@/extensions/api.js'],
+      use: 'Hardcode a UUID v4 once per block kind as a namespace constant, then let the platform own the get-or-create: `getOrCreateKernelPage` for the root page, `getOrCreateTypedChild` for the records under it. Both derive the block id deterministically, so re-running the install, a fresh device, or two calls racing all land on the same block. Do NOT derive the id and then `repo.load` + `tx.create` yourself: the load answers for the moment it ran, so both writers see nothing, and the second `tx.create` throws instead of adopting. MIGRATING an existing plugin: a kernel page keys on the workspace id ALONE, while `pluginBlockId(ws, NS, key)` keys on `${ws}:${key}` — so switching a live root page onto `getOrCreateKernelPage` while keeping the same namespace constant lands on a DIFFERENT id. The next run then creates an empty root beside the real one and the user\'s imported subtree looks lost. Two ways through, and nothing does either for you: (1) do not switch — a root already reachable by `pluginBlockId` plus your own get-or-create is fine as it is, and this recommendation is for NEW roots; or (2) switch and move the data in the same release, in this ORDER: clear the alias on the old root FIRST (aliases are unique per workspace, so creating the kernel page while the old root still claims the name aborts the whole transaction on the uniqueness trigger), then `getOrCreateKernelPage`, then re-parent the old root\'s children under it, then delete the old root — guarded so it runs once and is a no-op when the old root is already gone or empty.',
+      modules: ['@/data/api/index.js', '@/data/kernelPage.js', '@/data/typedRecords.js'],
       example: {
-        label: 'Deterministic id for a plugin root block',
+        label: 'A plugin root page, and idempotent records under it',
         code: [
-          "import { ChangeScope, pluginBlockId } from '@/extensions/api.js'",
+          "import { ChangeScope, propertyValue, seedType } from '@/data/api/index.js'",
+          "import { typeSeedsFacet } from '@/data/facets.js'",
+          "import { extensionTypeSeedKey } from '@/extensions/dynamicExtensionSeeds.js'",
+          "import { getOrCreateKernelPage } from '@/data/kernelPage.js'",
+          "import { getOrCreateTypedChild } from '@/data/typedRecords.js'",
           "",
-          "// Generate ONE namespace UUID for your plugin and never change it.",
-          "// (Run `crypto.randomUUID()` in any browser console.)",
-          "const READWISE_NS = '0d4f1c2e-7e9a-4f4d-a4f1-2c0a3a6e7f01'",
+          "// Generate ONE namespace UUID per block kind and never change it —",
+          "// changing it re-points the kind at fresh ids and orphans every row",
+          "// already written. (`crypto.randomUUID()` in any browser console.)",
+          "const READWISE_ROOT_NS = '7c4b1e93-6a25-4d8f-b013-9e2a5c7f4d61'",
+          "const READWISE_BOOK_NS = '3b91e4c7-5a2d-4f18-9e63-0c7a2d5b8f14'",
           "",
-          "// In a sync handler:",
-          "const rootId = pluginBlockId(repo.activeWorkspaceId, READWISE_NS, 'library-root')",
-          "const existing = await repo.load(rootId)",
-          "if (!existing) {",
-          "  await repo.tx(async tx => {",
-          "    await tx.create({",
-          "      id: rootId,                              // pin the id",
-          "      workspaceId: repo.activeWorkspaceId,",
-          "      parentId: null,",
-          "      content: 'Readwise Library',",
-          "      properties: { alias: ['Readwise Library'], types: ['page'] },",
+          "// Every type id you tag must be REGISTERED first — tagging an unknown",
+          "// one throws and rolls the transaction back. Declare each with",
+          "// seedType and contribute it through typeSeedsFacet (shape in the",
+          "// user-prefs-config pattern); the calls below just name them.",
+          "const libraryType = seedType({seedKey: extensionTypeSeedKey('library'), revision: 1, id: 'readwise:library', label: 'Readwise Library', properties: []})",
+          "const bookType = seedType({seedKey: extensionTypeSeedKey('book'), revision: 1, id: 'readwise:book', label: 'Book', properties: [bookIdProp]})",
+          "export default [typeSeedsFacet.of(libraryType), typeSeedsFacet.of(bookType)]",
+          "",
+          "// The root page: id = uuidv5(workspaceId, NS) — the workspace is the",
+          "// WHOLE key, so there is one per workspace. Also repairs a row that",
+          "// lost its alias or type, and restores one that was deleted.",
+          "const root = await getOrCreateKernelPage(repo, repo.activeWorkspaceId, {",
+          "  namespace: READWISE_ROOT_NS,",
+          "  alias: 'Readwise Library',",
+          "  markerType: libraryType.id,   // what you subscribeBlocks({types}) for",
+          "})",
+          "",
+          "// One block per book, under it. The key is whatever makes it THIS",
+          "// book — include the workspace, since ids are global.",
+          "await repo.tx(async tx => {",
+          "  for (const book of books) {",
+          "    const outcome = await getOrCreateTypedChild(repo, tx, {",
+          "      identity: {",
+          "        namespace: READWISE_BOOK_NS,",
+          "        key: `${repo.activeWorkspaceId}|${book.userBookId}`,",
+          "      },",
+          "      parentId: root.id,",
+          "      content: book.title,",
+          "      types: [bookType.id],",
+          "      properties: [propertyValue(bookIdProp, book.userBookId)],",
           "    })",
-          "  }, { scope: ChangeScope.BlockDefault, description: 'create readwise root' })",
-          "}",
-          "",
-          "// Per-record ids — same helper, different key:",
-          "const bookId = pluginBlockId(repo.activeWorkspaceId, READWISE_NS, `book:${userBookId}`)",
+          "    // Fields the SOURCE owns get written on both outcomes. 'adopted'",
+          "    // means the block was already there and this call did not touch",
+          "    // its content or properties — not that there is nothing to write.",
+          "    // Skipping the create would leave a first-seen book with no",
+          "    // progress until something happened to re-fetch it, which an",
+          "    // incremental sync never does. 'taken' wrote nothing at all, so",
+          "    // there is no id of yours to write to.",
+          "    if (outcome.status !== 'taken') {",
+          "      await tx.setProperty(outcome.id, progressProp, book.progress)",
+          "    }",
+          "  }",
+          "}, { scope: ChangeScope.BlockDefault, description: 'sync readwise books' })",
         ].join('\n'),
       },
     },
@@ -193,42 +239,60 @@ const storageGuide: AuthoringStorageGuide = {
       id: 'workspace-config-block',
       when: 'Workspace-visible plugin configuration or shared sync state.',
       use: 'Use a deterministic id (see `plugin-root-singleton`) for a config block, then store config as properties and child blocks. Prefer this over user-prefs when the config should sync across all of the user\'s devices and be visible to other workspace members.',
-      modules: ['@/extensions/api.js'],
+      modules: ['@/data/api/index.js', '@/extensions/pluginIds.js'],
     },
     {
       id: 'settings-via-property-editor-override',
       when: 'Settings / configuration UI for a plugin — what a user sees when they want to change how the plugin behaves. Preferred over a modal dialog: configuration belongs *with* the block whose properties it edits, syncs naturally, and is browsable / scriptable like any other block.',
-      use: 'Define a custom property editor with `definePropertyEditorOverride({name, label, Editor})` and register it via `propertyEditorOverridesFacet`. The Editor receives `PropertyEditorProps<T>` (`value`, `set`, `block`, etc.). To "open settings" from the command palette or a header item, navigate to the prefs block with `navigate(repo, {target: \'new-panel\', blockId: prefsBlock.id, workspaceId})` — the property panel renders your custom Editor inline. Reserve modal dialogs — `openDialog(Component)`, or `appMountsFacet` + a `useSyncExternalStore` visibility store — for *interactive* flows (search, picker), not for configuration.',
-      modules: ['@/extensions/api.js', '@/utils/navigation.js'],
+      use: 'Define a custom property editor with `definePropertyEditorOverride(propHandle, {label, Editor})` (pass the seed handle it presents) and register it via `propertyEditorOverridesFacet`. The Editor receives `PropertyEditorProps<T>` (`value`, `set`, `block`, etc.). To "open settings" from the command palette or a header item, navigate to the prefs block with `navigate(repo, {target: \'new-panel\', blockId: prefsBlock.id, workspaceId})` — the property panel renders your custom Editor inline. Reserve modal dialogs — `openDialog(Component)`, or `appMountsFacet` + a `useSyncExternalStore` visibility store — for *interactive* flows (search, picker), not for configuration.',
+      modules: [
+        '@/extensions/core.js', '@/shortcuts/types.js', '@/data/api/index.js',
+        '@/data/facets.js', '@/extensions/dynamicExtensionSeeds.js',
+        '@/data/stateBlocks.js', '@/data/properties.js', '@/utils/navigation.js',
+      ],
       example: {
         label: 'Custom settings UI as a property-editor override on the prefs block',
         code: [
+          "import { actionsFacet } from '@/extensions/core.js'",
+          "import { ActionContextTypes } from '@/shortcuts/types.js'",
           "import {",
-          "  actionsFacet, ActionContextTypes, ChangeScope, codecs,",
-          "  defineBlockType, defineProperty, definePropertyEditorOverride,",
-          "  getPluginPrefsBlock, propertyEditorOverridesFacet,",
-          "  propertySchemasFacet, showPropertiesProp, typesFacet,",
+          "  ChangeScope, definePropertyEditorOverride, seedProperty, seedType,",
           "  type PropertyEditorProps,",
-          "} from '@/extensions/api.js'",
+          "} from '@/data/api/index.js'",
+          "import {",
+          "  definitionSeedsFacet, propertyEditorOverridesFacet, typeSeedsFacet,",
+          "} from '@/data/facets.js'",
+          "import { extensionPropertySeedKey, extensionTypeSeedKey } from '@/extensions/dynamicExtensionSeeds.js'",
+          "import { getPluginPrefsBlock } from '@/data/stateBlocks.js'",
+          "import { showPropertiesProp } from '@/data/properties.js'",
           "import { navigate } from '@/utils/navigation.js'",
           "",
           "// 1. Each setting is its own typed property of the prefs block.",
           "//    ChangeScope.UserPrefs keeps them per-user (sync across the",
           "//    user's devices, not shared with other workspace members).",
-          "const autoSyncProp = defineProperty<boolean>('readwise:autoSync', {",
-          "  codec: codecs.boolean,",
+          "const autoSyncProp = seedProperty({",
+          "  seedKey: extensionPropertySeedKey('auto-sync'),",
+          "  revision: 1,",
+          "  name: 'readwise:autoSync',",
+          "  preset: 'boolean',",
           "  defaultValue: false,",
           "  changeScope: ChangeScope.UserPrefs,",
           "})",
-          "const intervalMinutesProp = defineProperty<number>('readwise:intervalMinutes', {",
-          "  codec: codecs.number,",
+          "const intervalMinutesProp = seedProperty({",
+          "  seedKey: extensionPropertySeedKey('interval-minutes'),",
+          "  revision: 1,",
+          "  name: 'readwise:intervalMinutes',",
+          "  preset: 'number',",
           "  defaultValue: 60,",
           "  changeScope: ChangeScope.UserPrefs,",
           "})",
           "",
-          "const readwisePrefsType = defineBlockType({",
+          "const readwisePrefsType = seedType({",
+          "  seedKey: extensionTypeSeedKey('prefs'),",
+          "  revision: 1,",
           "  id: 'readwise-prefs',",
           "  label: 'Readwise',",
+          "  hideFromCompletion: true, // dropdown plumbing; chip stays informative",
           "  properties: [autoSyncProp, intervalMinutesProp],",
           "})",
           "",
@@ -248,8 +312,7 @@ const storageGuide: AuthoringStorageGuide = {
           "  </label>",
           ")",
           "",
-          "const autoSyncUi = definePropertyEditorOverride<boolean>({",
-          "  name: autoSyncProp.name,",
+          "const autoSyncUi = definePropertyEditorOverride(autoSyncProp, {",
           "  label: 'Auto-sync',",
           "  Editor: AutoSyncEditor,",
           "})",
@@ -276,9 +339,9 @@ const storageGuide: AuthoringStorageGuide = {
           "",
           "// 4. Wire the contributions.",
           "export default [",
-          "  typesFacet.of(readwisePrefsType, {source: 'readwise'}),",
-          "  propertySchemasFacet.of(autoSyncProp, {source: 'readwise'}),",
-          "  propertySchemasFacet.of(intervalMinutesProp, {source: 'readwise'}),",
+          "  typeSeedsFacet.of(readwisePrefsType, {source: 'readwise'}),",
+          "  definitionSeedsFacet.of(autoSyncProp, {source: 'readwise'}),",
+          "  definitionSeedsFacet.of(intervalMinutesProp, {source: 'readwise'}),",
           "  propertyEditorOverridesFacet.of(autoSyncUi, {source: 'readwise'}),",
           "  actionsFacet.of(openSettings, {source: 'readwise'}),",
           "]",
@@ -288,56 +351,63 @@ const storageGuide: AuthoringStorageGuide = {
     {
       id: 'imported-record-blocks',
       when: 'External records such as Readwise books/highlights that should be queryable and editable as blocks.',
-      use: 'Define source-id properties (`readwise:user_book_id`, `readwise:highlight_id`, …) and either upsert by id-lookup or derive the block id from the external id with `pluginBlockId(workspaceId, NAMESPACE, `book:${id}`)`. Either way, the second sync of the same record must update the existing block, not create a duplicate.',
-      modules: ['@/extensions/api.js'],
+      use: 'Define source-id properties (`readwise:user_book_id`, `readwise:highlight_id`, …), then let `getOrCreateTypedChild` own the write: give it a `{namespace, key}` built from the external id and it creates on the first sync and adopts on every one after, so re-syncing updates the existing block instead of duplicating it. Do NOT pin a derived id onto a bare `tx.create` — that throws `DuplicateIdError` the second time round and takes the whole transaction with it.',
+      modules: ['@/data/api/index.js', '@/data/kernelPage.js', '@/data/typedRecords.js'],
       example: {
-        label: 'Tx mutation primitives — create/read/update inside a transaction',
+        label: 'Idempotent record sync',
         code: [
-          "import {",
-          "  ChangeScope, keyAtEnd, keysBetween, pluginBlockId,",
-          "} from '@/extensions/api.js'",
+          "import { ChangeScope, propertyValue } from '@/data/api/index.js'",
+          "import { getOrCreateKernelPage } from '@/data/kernelPage.js'",
+          "import { getOrCreateTypedChild } from '@/data/typedRecords.js'",
           "",
-          "// Inside `await repo.tx(async tx => { ... }, {scope, description})`:",
-          "//",
-          "//   tx.get(id)                       → Promise<BlockData | null>",
-          "//   tx.peek(id)                      → BlockData | null (sync, snapshot read)",
-          "//   tx.create({...})                 → Promise<string> (new id, or pin via {id})",
-          "//   tx.update(id, patch)             → patch is {content?, properties?, references?}",
-          "//   tx.delete(id) / tx.restore(id)   → soft delete + recover",
-          "//   tx.move(id, {parentId, orderKey})",
-          "//   tx.childrenOf(parentId, wsId?)   → Promise<BlockData[]> (order_key ascending)",
-          "//   tx.parentOf(childId)             → Promise<BlockData | null>",
+          "// (`kmagent types --module @/data/api/index.js` for the full Tx surface.)",
+          "// One namespace per KIND — the root page and the highlights are two",
+          "// kinds, so they get two. (They key differently too: a kernel page's",
+          "// key is the workspace id alone.)",
+          "const READWISE_ROOT_NS = '7c4b1e93-6a25-4d8f-b013-9e2a5c7f4d61'",
+          "const READWISE_HL_NS = '2f68d0a5-4c19-4b73-8e5a-6d1b3f9c8074'",
           "",
-          "// Idempotent upsert by deterministic id:",
-          "const READWISE_NS = '0d4f1c2e-7e9a-4f4d-a4f1-2c0a3a6e7f01'",
+          "// `libraryType` / `highlightType` are seedType declarations contributed",
+          "// through typeSeedsFacet — see the plugin-root-singleton pattern. A type",
+          "// id that was never registered throws when tagged and rolls the whole",
+          "// transaction back, so declare before you tag.",
+          "const root = await getOrCreateKernelPage(repo, repo.activeWorkspaceId, {",
+          "  namespace: READWISE_ROOT_NS,",
+          "  alias: 'Readwise Library',",
+          "  markerType: libraryType.id,",
+          "})",
           "",
           "await repo.tx(async tx => {",
-          "  const rootId = pluginBlockId(repo.activeWorkspaceId, READWISE_NS, 'library-root')",
-          "  const existingRoot = await tx.get(rootId)",
-          "  if (!existingRoot) {",
-          "    await tx.create({",
-          "      id: rootId,                                  // pin",
-          "      workspaceId: repo.activeWorkspaceId,",
-          "      parentId: null,",
-          "      content: 'Readwise Library',",
-          "      properties: { alias: ['Readwise Library'], types: ['page'] },",
-          "    })",
-          "  }",
-          "",
-          "  // Insert N highlights as children, using order keys that sort",
-          "  // between the existing last child and the end-of-list.",
-          "  const children = await tx.childrenOf(rootId)",
-          "  const lastKey = children.at(-1)?.orderKey ?? null",
-          "  const newKeys = keysBetween(lastKey, null, highlights.length)",
-          "  for (const [i, hl] of highlights.entries()) {",
-          "    await tx.create({",
-          "      id: pluginBlockId(repo.activeWorkspaceId, READWISE_NS, `hl:${hl.id}`),",
-          "      workspaceId: repo.activeWorkspaceId,",
-          "      parentId: rootId,",
-          "      orderKey: newKeys[i],",
+          "  for (const hl of highlights) {",
+          "    const outcome = await getOrCreateTypedChild(repo, tx, {",
+          "      // Whatever makes this THIS highlight. Include the workspace:",
+          "      // block ids are global, and two workspaces deriving one id",
+          "      // collide.",
+          "      identity: {",
+          "        namespace: READWISE_HL_NS,",
+          "        key: `${repo.activeWorkspaceId}|hl:${hl.id}`,",
+          "      },",
+          "      parentId: root.id,          // appended last; no order-key maths",
           "      content: hl.text,",
-          "      properties: { 'readwise:highlight_id': String(hl.id) },",
+          "      types: [highlightType.id],   // declared with seedType + typeSeedsFacet",
+          "      properties: [propertyValue(highlightIdProp, String(hl.id))],",
           "    })",
+          "",
+          "    // 'created' → written from the spec above.",
+          "    // 'adopted' → it was already there and this call did NOT",
+          "    //             overwrite its content or properties; the user's own",
+          "    //             edits survive a re-sync.",
+          "    // 'taken'   → the id holds something you can't use (deleted, or",
+          "    //             another workspace's row). Nothing was written, and",
+          "    //             there is no id of yours to write to.",
+          "    //",
+          "    // So: write the fields the SOURCE owns on both of the first two.",
+          "    // Gating them on 'adopted' alone leaves every first-seen record",
+          "    // without them until something re-fetches it — which a",
+          "    // checkpointed incremental sync never does.",
+          "    if (outcome.status !== 'taken' && hl.note) {",
+          "      await tx.setProperty(outcome.id, noteProp, hl.note)",
+          "    }",
           "  }",
           "}, { scope: ChangeScope.BlockDefault, description: 'readwise sync' })",
         ].join('\n'),
@@ -369,10 +439,10 @@ const storageGuide: AuthoringStorageGuide = {
 const settingsDialogExample: AuthoringExample = {
   label: 'Setup dialog mounted via appMountsFacet; visibility is a typed module store flipped by an action',
   code: [
-    "import {",
-    "  actionsFacet, appMountsFacet, ActionContextTypes,",
-    "  useRepo, showError, showSuccess,",
-    "} from '@/extensions/api.js'",
+    "import { actionsFacet, appMountsFacet } from '@/extensions/core.js'",
+    "import { ActionContextTypes } from '@/shortcuts/types.js'",
+    "import { useRepo } from '@/context/repo.js'",
+    "import { showError, showSuccess } from '@/utils/toast.js'",
     "import {",
     "  Dialog, DialogContent, DialogDescription, DialogFooter,",
     "  DialogHeader, DialogTitle,",
@@ -474,10 +544,10 @@ const openDialogExample: AuthoringExample = {
     "// reactive subscription), `openDialog(Component, props)` returns",
     "// a promise that resolves with the user's choice. The dialog",
     "// component receives `resolve(value)` and `cancel()` as props.",
-    "import {",
-    "  actionsFacet, ActionContextTypes, openDialog,",
-    "  showError, showSuccess,",
-    "} from '@/extensions/api.js'",
+    "import { actionsFacet } from '@/extensions/core.js'",
+    "import { ActionContextTypes } from '@/shortcuts/types.js'",
+    "import { openDialog } from '@/utils/dialogs.js'",
+    "import { showError, showSuccess } from '@/utils/toast.js'",
     "import {",
     "  Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle,",
     "} from '@/components/ui/dialog.js'",
@@ -527,43 +597,59 @@ const guides: AuthoringGuide[] = [
       'Use block-backed config and sync checkpoints.',
       'Use a Dialog mounted through appMountsFacet for setup — never window.prompt/alert/confirm.',
       'Store credentials in window.localStorage; everything else (settings, checkpoints, imported data) lives in blocks.',
-      'Use stable external ids on imported records, or derive their block ids deterministically with uuidv5, so re-syncs upsert instead of duplicating.',
+      'Give imported records a stable external-id property AND a derived block id, via `getOrCreateTypedChild` with a `{namespace, key}` built from the external id, so a re-sync adopts instead of duplicating.',
     ],
     steps: [
-      'Define typed properties for external ids and source metadata via `defineProperty` + `propertySchemasFacet`. Persist sync checkpoints on a `getPluginPrefsBlock` sub-block, not localStorage.',
+      'Define typed properties for external ids and source metadata via `seedProperty` + `definitionSeedsFacet`. Persist sync checkpoints on a `getPluginPrefsBlock` sub-block, not localStorage.',
       'Render a Dialog component, mount it via `appMountsFacet`, and drive its open/closed state from a small typed module store the component reads with `useSyncExternalStore`. The configure action flips that store directly — never a `window` CustomEvent. Validate credentials against the provider\'s auth endpoint before saving. (For one-shot prompts, `openDialog(Component)` is the simpler imperative alternative — see the settings-dialog guide.)',
       'Add a manual sync action through `actionsFacet`. The handler reads the checkpoint from the prefs block, fetches incremental updates, and runs a single `repo.tx`. Wrap the body in `showProgress(...)` so the user sees per-page / per-book progress and a final summary.',
-      'Anchor imported content under a plugin-owned root block whose id is `pluginBlockId(workspaceId, NAMESPACE, "library-root")` — see the `plugin-root-singleton` storage pattern.',
-      'Upsert child records the same way: derive the block id from the external id, or look up by an external-id property. Never create a second block for the same external record.',
+      'Anchor imported content under a plugin-owned root page created with `getOrCreateKernelPage` — see the `plugin-root-singleton` storage pattern.',
+      'Write child records with `getOrCreateTypedChild`, keyed on the external id. Not a bare `tx.create` at a derived id — that throws `DuplicateIdError` on the second sync and takes the transaction with it — and not lookup-then-create, which duplicates under concurrent writers because the lookup answers for the moment it ran.',
       'For *background* sync (poll a webhook / poll on an interval) use `appEffectsFacet.of({id, start: ({repo}) => { ... return cleanup })`. Manual sync via an action is enough for most plugins — only reach for an effect when the data source itself pushes. The effect object must be a STABLE reference: define it once at module scope (not inline in a function-valued extension), and export your extension as an array, not a function — a fresh `{id, start}` every resolve reads as "code changed" and silently restarts the effect (dropping its connection / interval) on every unrelated extension toggle.',
     ],
     preferredModules: [
-      '@/extensions/api.js',
+      '@/extensions/core.js',
+      '@/shortcuts/types.js',
+      // Data primitives the steps require (seedProperty, definitionSeedsFacet,
+      // getPluginPrefsBlock, extensionPropertySeedKey, and the two
+      // get-or-creates the storage steps now name). In brief mode
+      // preferredModules is the ONLY module hint, so a step that recommends a
+      // helper whose module is missing here sends the agent off to invent one.
+      '@/data/api/index.js',
+      '@/data/facets.js',
+      '@/data/kernelPage.js',
+      '@/data/typedRecords.js',
+      '@/data/stateBlocks.js',
+      '@/extensions/dynamicExtensionSeeds.js',
+      '@/extensions/pluginIds.js',
+      '@/context/repo.js',
+      '@/utils/dialogs.js',
+      '@/utils/toast.js',
       '@/components/ui/dialog.js',
       '@/components/ui/input.js',
       '@/components/ui/button.js',
       '@/components/ui/label.js',
     ],
-    relatedFacets: ['core.actions', 'core.app-mounts', 'core.app-effects', 'data.propertySchemas', 'data.types'],
+    relatedFacets: ['core.actions', 'core.app-mounts', 'core.app-effects', 'data.definition-seeds', 'data.types'],
     commands: [
-      'yarn agent describe-runtime --guide external-sync-plugin --storage',
-      'yarn agent describe-runtime --components dialog,input,button,label',
+      'pnpm agent describe-runtime --guide external-sync-plugin --storage',
+      'pnpm agent describe-runtime --components dialog,input,button,label',
       // Writes compiled declarations for the app's vendored `@/...`
       // modules, so TS-aware editors resolve extension imports with
       // the same signatures the app build checks.
-      'yarn agent types agent-extensions/kernel-types',
-      'yarn agent types --module "@/extensions/api.js"',
+      'pnpm agent types agent-extensions/kernel-types',
+      'pnpm agent types --module "@/data/api/index.js"',
       // Convention: extension source files live under `agent-extensions/`
       // at the repo root. The matrix-chat-client + canvas-layout
       // extensions are there as references.
-      'yarn agent install-extension --verify [--description "<text>"] agent-extensions/<plugin>.js <label>',
-      'yarn agent enable-extension <label>',
-      'yarn agent uninstall-extension <label>',
+      'pnpm agent install-extension --verify [--description "<text>"] agent-extensions/<plugin>.js <label>',
+      'pnpm agent enable-extension <label>',
+      'pnpm agent uninstall-extension <label>',
     ],
     afterInstall: [
-      'User-installed extensions are disabled by default (`userExtensionToggle` sets `defaultEnabled: false`). After install, run `yarn agent enable-extension <label>` (or `<id>`) before its actions show up in `yarn agent run-action`.',
+      'User-installed extensions are disabled by default (`userExtensionToggle` sets `defaultEnabled: false`). After install, run `pnpm agent enable-extension <label>` (or `<id>`) before its actions show up in `pnpm agent run-action`.',
       'enable-extension does two things (issue #67): it sets the synced "enabled" intent AND grants THIS device a trust approval pinned to the current source hash. A block runs only with both — so enabling on the bridge runs it on the bridge.',
-      'After you EDIT an extension (install-extension onto the same block, or hand-edit the source), re-run `yarn agent enable-extension <label>` to re-pin the new source on this device. Until you do, the device keeps running the PREVIOUSLY approved version and the settings UI shows "Update available" — the live source is never auto-executed.',
+      'After you EDIT an extension (install-extension onto the same block, or hand-edit the source), re-run `pnpm agent enable-extension <label>` to re-pin the new source on this device. Until you do, the device keeps running the PREVIOUSLY approved version and the settings UI shows "Update available" — the live source is never auto-executed.',
       'disable-extension / a source change do NOT stop a running extension by themselves: disable only clears intent (the trust grant persists for a frictionless re-enable), and a drifted source keeps running the pinned version. uninstall-extension deletes the block and revokes the device trust.',
       'Do not retry `install-extension` if the action is "not found" — the install succeeded; the toggle/approval is just off. Run enable-extension.',
       'Pass `--verify` to `install-extension` to see the facets/actions the extension contributed without enabling/approving it (verify compiles the live source in isolation for diagnostics only).',
@@ -593,7 +679,21 @@ const guides: AuthoringGuide[] = [
       'Save non-secret values via `getPluginPrefsBlock`; save credentials to `localStorage`.',
     ],
     preferredModules: [
-      '@/extensions/api.js',
+      '@/extensions/core.js',
+      '@/shortcuts/types.js',
+      // The property-editor-override path + saving non-secret settings need
+      // these (definePropertyEditorOverride, propertyEditorOverridesFacet,
+      // getPluginPrefsBlock), and the storage steps name the two
+      // get-or-creates; brief mode surfaces only preferredModules, so a step
+      // whose helper has no module here sends the agent off to invent one.
+      '@/data/api/index.js',
+      '@/data/kernelPage.js',
+      '@/data/typedRecords.js',
+      '@/data/facets.js',
+      '@/data/stateBlocks.js',
+      '@/context/repo.js',
+      '@/utils/dialogs.js',
+      '@/utils/toast.js',
       '@/components/ui/dialog.js',
       '@/components/ui/input.js',
       '@/components/ui/button.js',
@@ -601,10 +701,10 @@ const guides: AuthoringGuide[] = [
     ],
     relatedFacets: ['core.app-mounts', 'core.actions'],
     commands: [
-      'yarn agent describe-runtime --components dialog,input,button,label',
-      'yarn agent describe-runtime --modules components/ui',
-      'yarn agent types agent-extensions/kernel-types',
-      'yarn agent types --module "@/components/ui/dialog.js"',
+      'pnpm agent describe-runtime --components dialog,input,button,label',
+      'pnpm agent describe-runtime --modules components/ui',
+      'pnpm agent types agent-extensions/kernel-types',
+      'pnpm agent types --module "@/components/ui/dialog.js"',
     ],
     examples: [
       settingsDialogExample,
@@ -618,22 +718,155 @@ const guides: AuthoringGuide[] = [
     principles: storageGuide.principles,
     steps: [
       'Choose UserPrefs for per-user settings and BlockDefault for shared workspace/content data.',
-      'Define properties with explicit codecs.',
-      'For per-plugin sub-blocks under user-prefs, define a `TypeContribution` via `defineBlockType` and read/write via `getPluginPrefsBlock(repo, workspaceId, user, type)`.',
-      'For plugin-owned singleton blocks (e.g. import roots), derive the id deterministically via `pluginBlockId(workspaceId, NS, key)` so re-installs land on the same block.',
+      'Define properties with stable seed keys and value presets, then register them through `definitionSeedsFacet`.',
+      'For per-plugin sub-blocks under user-prefs, define a seeded block type via `seedType({seedKey: extensionTypeSeedKey(key), revision, id, label, properties})` and read/write via `getPluginPrefsBlock(repo, workspaceId, user, type)`.',
+      'For plugin-owned singleton blocks (e.g. import roots), reach for `getOrCreateKernelPage` — it derives the id from the workspace and handles the create, the repair and the restore, so re-installs land on the same block.',
       'Store large or user-visible imported data as child/content blocks.',
     ],
-    preferredModules: ['@/extensions/api.js'],
-    relatedFacets: ['data.propertySchemas', 'data.types'],
+    preferredModules: [
+      // Same rule as the settings-dialog list above, which is where it is
+      // written down: brief mode surfaces only these, so a step naming a helper
+      // whose module is absent sends the agent off to invent an import path.
+      // The singleton step names `getOrCreateKernelPage`; records filed under
+      // that root are `getOrCreateTypedChild`. Both modules belong here.
+      //
+      // `@/extensions/pluginIds.js` is deliberately gone: it returns an id and
+      // nothing else, which reads like a lookup and isn't, and no step here
+      // names it any more.
+      '@/data/api/index.js',
+      '@/data/facets.js',
+      '@/extensions/dynamicExtensionSeeds.js',
+      '@/data/stateBlocks.js',
+      '@/data/kernelPage.js',
+      '@/data/typedRecords.js',
+    ],
+    relatedFacets: ['data.definition-seeds', 'data.types'],
     commands: [
-      'yarn agent describe-runtime --storage',
-      'yarn agent describe-runtime --facets data.propertySchemas',
-      'yarn agent types agent-extensions/kernel-types',
-      'yarn agent types --module "@/extensions/api.js"',
+      'pnpm agent describe-runtime --storage',
+      'pnpm agent describe-runtime --facets data.definition-seeds',
+      'pnpm agent types agent-extensions/kernel-types',
+      'pnpm agent types --module "@/data/api/index.js"',
     ],
     examples: [
       storageGuide.patterns.find(p => p.id === 'user-prefs-config')!.example!,
       storageGuide.patterns.find(p => p.id === 'plugin-root-singleton')!.example!,
+    ],
+  },
+  {
+    id: 'record-grain',
+    title: 'Record Grain — what becomes a block, what becomes a property',
+    when: [
+      'designs a data model',
+      'stores records, entries, logs, or history',
+      'points at another block',
+      'declares types or properties',
+      'wonders whether to reuse an existing type',
+    ],
+    principles: [
+      'A block is the unit of everything this app gives you for free: SQL queries, references and backlinks, undo, sync, hand-editing in the outline, rendering. Anything you would want to see, link to, undo, or edit on its own is its own block — not a row inside a JSON cell.',
+      'Properties hold the scalar facts ABOUT a block. A property whose value is a list of records is a cell nothing can see into: not queryable, not referenceable, and clobbered wholesale by a concurrent write.',
+      'Anything that points at another block is a `ref` / `optional-ref` / `refList` property with `config: {targetTypes: [...]}` — never a bare id string, never a name. Refs project into real references, so the target\'s backlinks answer "what points at me", and the link survives renaming or moving the target.',
+      'Identity is a block id; a name is a label the user will change. Never join records on a name.',
+      'Compose before inventing. If a concept already has a type (todo, page, daily note), add that type to your block alongside your own instead of re-declaring its fields.',
+      'Type ids and property names are global. Prefix both with your extension (`myext-set`, `myext:weight`); a bare noun collides with whatever else claims it, and the loser silently gets the other schema.',
+      'Type the blocks you READ too, not just the ones you write. A typed block in the user\'s own notes gets property editors, and lets your parser read a declaration instead of guessing at prose.',
+      'The test for a good record: uninstall the extension, and the data still reads as a sensible outline.',
+      'If a record has a natural identity, derive its block id from that identity (`getOrCreateTypedChild`) instead of minting a random one. "Query for it, then create if absent" cannot be made correct — the query answers for the moment it ran, so a UI gesture that fires before it resolves, a bootstrap that runs twice, or a second device all create a duplicate. Deriving the id makes the writers converge on one row instead of racing.',
+    ],
+    steps: [
+      'Sketch the tree first: which block is the parent, what is one record, what hangs off it. One record per block, ordered by `order_key` under its parent.',
+      'Declare a namespaced type per record kind (`seedType`) and namespaced properties (`seedProperty`), registered through `typeSeedsFacet` / `definitionSeedsFacet`.',
+      'Pick presets by meaning: scalars (`number`, `string`, `date`, `strict-enum`), pointers (`ref` / `optional-ref` / `refList` with `targetTypes`), scalar lists (`string-list`). Reach for `json` only for an opaque config object you will never query into.',
+      'Write records with `createTypedChild(repo, tx, {...})` — create, type-tag, and typed properties in one call inside your transaction. When the record has a natural identity and you do not control when the write fires, use `getOrCreateTypedChild` with a `{namespace, key}` identity instead, and it becomes idempotent: repeat it and it adopts what it finds rather than duplicating it.',
+      'Compose built-ins by listing them in `types`: `[MY_TYPE, TODO_TYPE]` plus the todo `statusProp` gives a real checkbox instead of a private done flag.',
+      'Read back with a typed block query over your type id, and let backlinks answer the reverse direction instead of maintaining your own index.',
+      'After installing, run `kmagent audit-extension <label>`: it reads the blocks you actually wrote and flags block ids parked in string properties, records buried in JSON, and properties written with no registered schema. (Inside the app repo the same CLI is `pnpm agent …`.)',
+    ],
+    preferredModules: [
+      '@/data/typedRecords.js',
+      '@/data/api/index.js',
+      '@/data/facets.js',
+      '@/extensions/dynamicExtensionSeeds.js',
+      '@/plugins/todo/schema.js',
+      '@/data/orderKey.js',
+    ],
+    relatedFacets: ['data.definition-seeds', 'data.types'],
+    commands: [
+      'kmagent new-extension "<Name>"',
+      'kmagent data-model',
+      'kmagent describe-runtime --guide record-grain',
+      'kmagent audit-extension <label>',
+      'kmagent backlinks <blockId>',
+    ],
+    examples: [
+      {
+        label: 'A record per block: typed, composed with todo, linked back to its definition',
+        code: [
+          "import { ChangeScope, propertyValue, seedProperty, seedType } from '@/data/api/index.js'",
+          "import { definitionSeedsFacet, typeSeedsFacet } from '@/data/facets.js'",
+          "import { extensionPropertySeedKey, extensionTypeSeedKey } from '@/extensions/dynamicExtensionSeeds.js'",
+          "import { createTypedChild } from '@/data/typedRecords.js'",
+          "import { TODO_TYPE, statusProp as todoStatusProp } from '@/plugins/todo/schema.js'",
+          "",
+          "const SET_TYPE = 'strength-set'          // namespaced: a bare `set` would collide",
+          "",
+          "const weightProp = seedProperty({",
+          "  seedKey: extensionPropertySeedKey('set-weight'),",
+          "  revision: 1,",
+          "  name: 'strength:weight',               // namespaced too",
+          "  preset: 'number',",
+          "  defaultValue: 0,",
+          "  changeScope: ChangeScope.BlockDefault,",
+          "})",
+          "",
+          "// A pointer to another block is a REF, not a string: the target's",
+          "// backlinks then show every record that points at it.",
+          "const definitionProp = seedProperty({",
+          "  seedKey: extensionPropertySeedKey('definition'),",
+          "  revision: 1,",
+          "  name: 'strength:definition',",
+          "  preset: 'optional-ref',",
+          "  config: {targetTypes: ['strength-exercise-def']},",
+          "  defaultValue: undefined,",
+          "  changeScope: ChangeScope.BlockDefault,",
+          "})",
+          "",
+          "const setType = seedType({",
+          "  seedKey: extensionTypeSeedKey('set'),",
+          "  revision: 1,",
+          "  id: SET_TYPE,",
+          "  label: 'Set',",
+          "  properties: [weightProp, definitionProp],",
+          "})",
+          "",
+          "export default [",
+          "  definitionSeedsFacet.of(weightProp, {source: 'strength'}),",
+          "  definitionSeedsFacet.of(definitionProp, {source: 'strength'}),",
+          "  typeSeedsFacet.of(setType, {source: 'strength'}),",
+          "]",
+          "",
+          "// One block per set — NOT a `sets: [...]` JSON property on the parent.",
+          "// Each set is queryable, referenceable, undoable, hand-editable.",
+          "export const logSets = async (repo, exerciseId, definitionId, sets) => {",
+          "  await repo.tx(async tx => {",
+          "    const snapshot = repo.snapshotTypeRegistries()",
+          "    for (const set of sets) {",
+          "      await createTypedChild(repo, tx, {",
+          "        parentId: exerciseId,",
+          "        content: `${set.weight}lb × ${set.reps}`,   // readable even without the extension",
+          "        types: [SET_TYPE, TODO_TYPE],                // compose: done-ness belongs to todo",
+          "        properties: [",
+          "          propertyValue(weightProp, set.weight),",
+          "          propertyValue(definitionProp, definitionId),",
+          "          propertyValue(todoStatusProp, set.done ? 'done' : 'open'),",
+          "        ],",
+          "        typeSnapshot: snapshot,",
+          "      })",
+          "    }",
+          "  }, {scope: ChangeScope.BlockDefault, description: 'Log sets'})",
+          "}",
+        ].join('\n'),
+      },
     ],
   },
 ]
@@ -661,7 +894,7 @@ const matchesTerms = (
 }
 
 const sourcePriority = (source: AuthoringCatalogSource): number => {
-  if (source === 'generated-api') return 4
+  if (source === 'curated-api') return 4
   if (source === 'generated-module-glob') return 3
   if (source === 'html-entry') return 2
   if (source === 'html-preload') return 1
@@ -681,7 +914,6 @@ const basename = (path: string): string =>
   stripExtension(path).split('/').at(-1) ?? path
 
 const categoryForPath = (importPath: string): string => {
-  if (importPath === '@/extensions/api.js') return 'public-api'
   if (importPath.includes('/components/ui/')) return 'ui-component'
   if (importPath.includes('/components/')) return 'component'
   if (importPath.includes('/extensions/')) return 'extension-system'
@@ -691,10 +923,7 @@ const categoryForPath = (importPath: string): string => {
   return 'module'
 }
 
-const generatedDescription = (importPath: string, exports: string[] | undefined): string => {
-  if (importPath === '@/extensions/api.js') {
-    return 'Generated from the live public extension API barrel.'
-  }
+const generatedDescription = (exports: string[] | undefined): string => {
   if (exports && exports.length > 0) {
     return `Generated from the module graph; runtime exports: ${exports.slice(0, 8).join(', ')}.`
   }
@@ -713,45 +942,46 @@ const exportNames = (module: RuntimeModule | undefined): string[] | undefined =>
   return Object.keys(module).sort()
 }
 
-const generatedExportMap = (apiSurface: ApiSurfaceLike): Map<string, string[]> => {
-  const map = new Map<string, string[]>([
-    ['@/extensions/api.js', apiSurface.exports],
-  ])
-
+const eagerUiExportMap = (): Map<string, string[]> => {
+  const map = new Map<string, string[]>()
   for (const [path, module] of Object.entries(eagerUiModules)) {
     map.set(toImportPath(path), exportNames(module) ?? [])
   }
-
   return map
 }
 
-const generatedModules = (apiSurface: ApiSurfaceLike): AuthoringModuleSummary[] => {
-  const exportsByImportPath = generatedExportMap(apiSurface)
-  const modules = Object.keys(internalModuleIndex).map(path => {
+// The curated public extension API (`apiCatalog.ts`) surfaced as authoring
+// modules: real importPath, curated category + description, and the blessed
+// runtime export names. These outrank the raw module-glob entries (see
+// `sourcePriority`), so where both describe the same path the curated
+// description/category wins on merge; curated-only paths (`@/facets/*`,
+// `@/context/*`, `@/paste/*`, `@/types.js`) are added outright.
+const curatedApiModules = (): AuthoringModuleSummary[] =>
+  extensionApiCatalog.map(group => ({
+    importPath: group.importPath,
+    category: group.category,
+    description: group.description,
+    ...(group.exports.length > 0 ? {exports: group.exports} : {}),
+    ...(group.types.length > 0 ? {types: group.types} : {}),
+    source: 'curated-api',
+    safeForExtensions: true,
+  } satisfies AuthoringModuleSummary))
+
+const generatedModules = (): AuthoringModuleSummary[] => {
+  const eagerExports = eagerUiExportMap()
+  const globModules = Object.keys(internalModuleIndex).map(path => {
     const importPath = toImportPath(path)
-    const exports = exportsByImportPath.get(importPath)
+    const exports = eagerExports.get(importPath)
     return {
       importPath,
       category: categoryForPath(importPath),
-      description: generatedDescription(importPath, exports),
+      description: generatedDescription(exports),
       ...(exports ? {exports} : {}),
-      source: importPath === '@/extensions/api.js' ? 'generated-api' : 'generated-module-glob',
+      source: 'generated-module-glob',
       safeForExtensions: true,
     } satisfies AuthoringModuleSummary
   })
-
-  if (!modules.some(module => module.importPath === '@/extensions/api.js')) {
-    modules.push({
-      importPath: '@/extensions/api.js',
-      category: 'public-api',
-      description: generatedDescription('@/extensions/api.js', apiSurface.exports),
-      exports: apiSurface.exports,
-      source: 'generated-api',
-      safeForExtensions: true,
-    })
-  }
-
-  return modules
+  return [...globModules, ...curatedApiModules()]
 }
 
 const isComponentExport = (name: string): boolean =>
@@ -888,17 +1118,16 @@ const mergeModules = (modules: AuthoringModuleSummary[]): AuthoringModuleSummary
 }
 
 export const describeAuthoringCatalog = (
-  apiSurface: ApiSurfaceLike,
   filters: AuthoringCatalogFilters = {},
   document?: Document,
 ): AuthoringCatalog => {
   const modules = filters.omitDiscoverableModules
     ? []
     : mergeModules([
-      ...generatedModules(apiSurface),
+      ...generatedModules(),
       ...documentModules(document),
     ]).filter(module =>
-      matchesTerms(filters.modules, module.importPath, module.category, module.description, module.exports),
+      matchesTerms(filters.modules, module.importPath, module.category, module.description, module.exports, module.types),
     )
 
   const components = filters.omitDiscoverableModules

@@ -3,7 +3,7 @@
 import { spawn } from 'node:child_process'
 import { performance } from 'node:perf_hooks'
 
-const yarn = process.platform === 'win32' ? 'yarn.cmd' : 'yarn'
+const pnpm = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm'
 
 const compileTask = {
   name: 'compile',
@@ -14,6 +14,7 @@ const parallelTasks = [
   {name: 'lint', args: ['run', 'lint']},
   {name: 'test', args: ['run', 'test']},
   {name: 'check:sync-config', args: ['run', 'check:sync-config']},
+  {name: 'check:ambient-accessors', args: ['run', 'check:ambient-accessors']},
   {name: 'check:rpc-projections', args: ['run', 'check:rpc-projections']},
   {name: 'check:no-service-role', args: ['run', 'check:no-service-role']},
 ]
@@ -22,7 +23,7 @@ const running = new Set()
 
 const formatDuration = ms => `${(ms / 1000).toFixed(2)}s`
 
-const formatCommand = task => `${yarn} ${task.args.join(' ')}`
+const formatCommand = task => `${pnpm} ${task.args.join(' ')}`
 
 const isRunning = state =>
   state.child && state.child.exitCode === null && state.child.signalCode === null
@@ -71,7 +72,7 @@ const startTask = task => {
   console.log(`[check] starting ${task.name}: ${formatCommand(task)}`)
 
   state.promise = new Promise(resolve => {
-    const child = spawn(yarn, task.args, {
+    const child = spawn(pnpm, task.args, {
       cwd: process.cwd(),
       env: process.env,
       stdio: ['ignore', 'pipe', 'pipe'],

@@ -1,4 +1,4 @@
-import { useEffect, useId, useMemo, useState, type KeyboardEvent } from 'react'
+import { useEffect, useId, useMemo, useState } from 'react'
 import { Plus, Search, X } from 'lucide-react'
 import {
   isRefCodec,
@@ -19,6 +19,11 @@ import {
   type LinkTargetIdCandidate,
 } from '@/utils/linkTargetAutocomplete.js'
 import { FloatingListbox } from '@/components/ui/floating-listbox.js'
+import { useAutocompleteListbox } from '@/hooks/useAutocompleteListbox.js'
+import {
+  dismissOnFieldEscape,
+  usePropertyEditingActivation,
+} from '@/components/propertyPanel/usePropertyEditingActivation.js'
 
 const SEARCH_LIMIT = 12
 const EMPTY_REFS: readonly string[] = Object.freeze([])
@@ -190,6 +195,7 @@ export function ReferenceSearch({
   placeholder,
   selectionMode,
   onPick,
+  propertyField = false,
 }: {
   owner: Block
   excludeIds: readonly string[]
@@ -197,16 +203,41 @@ export function ReferenceSearch({
   placeholder: string
   selectionMode: 'single' | 'multiple'
   onPick: (blockId: string) => void
+  /** True when this search IS a property field (the ref / refList editors in
+   *  the property panel), as opposed to a picker embedded in some other
+   *  surface. Property fields activate the modal `PROPERTY_EDITING` context
+   *  while focused, so block-scoped chords stay shadowed and Escape exits
+   *  the field. Off by default — a picker inside a dialog has its own owner
+   *  for those keys. */
+  propertyField?: boolean
 }) {
   const listboxId = useId()
+  const propertyEditingFocus = usePropertyEditingActivation(propertyField ? owner : null)
   const [shellElement, setShellElement] = useState<HTMLDivElement | null>(null)
   const workspaceId = useWorkspaceId(owner, owner.repo.activeWorkspaceId ?? '')
   const [query, setQuery] = useState('')
   const [open, setOpen] = useState(false)
   const [loading, setLoading] = useState(false)
-  const [activeIndex, setActiveIndex] = useState(0)
   const [candidates, setCandidates] = useState<LinkTargetIdCandidate[]>([])
   const normalizedExcludeIds = useMemo(() => normalizeIds(excludeIds), [excludeIds])
+
+  const pick = (candidate: LinkTargetIdCandidate) => {
+    onPick(candidate.id)
+    setQuery('')
+    setOpen(false)
+  }
+
+  const { activeIndex, setActiveIndex, onKeyDown, getOptionProps } = useAutocompleteListbox({
+    itemCount: candidates.length,
+    setOpen,
+    commitOnTab: true,
+    onCommit: index => {
+      const candidate = candidates[index]
+      if (!candidate) return false
+      pick(candidate)
+      return true
+    },
+  })
 
   useEffect(() => {
     if (!open) return
@@ -236,44 +267,7 @@ export function ReferenceSearch({
     return () => {
       cancelled = true
     }
-  }, [normalizedExcludeIds, open, owner.repo, query, targetTypes, workspaceId])
-
-  const pick = (candidate: LinkTargetIdCandidate) => {
-    onPick(candidate.id)
-    setQuery('')
-    setOpen(false)
-  }
-
-  const commitActive = (): boolean => {
-    const candidate = candidates[activeIndex] ?? candidates[0]
-    if (!candidate) return false
-    pick(candidate)
-    return true
-  }
-
-  const handleKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
-    if (event.key === 'ArrowDown') {
-      event.preventDefault()
-      setOpen(true)
-      setActiveIndex(index => Math.min(index + 1, Math.max(candidates.length - 1, 0)))
-      return
-    }
-
-    if (event.key === 'ArrowUp') {
-      event.preventDefault()
-      setActiveIndex(index => Math.max(index - 1, 0))
-      return
-    }
-
-    if (event.key === 'Enter' || event.key === 'Tab') {
-      if (commitActive()) event.preventDefault()
-      return
-    }
-
-    if (event.key === 'Escape') {
-      setOpen(false)
-    }
-  }
+  }, [normalizedExcludeIds, open, owner.repo, query, setActiveIndex, targetTypes, workspaceId])
 
   return (
     <div
@@ -296,12 +290,27 @@ export function ReferenceSearch({
           aria-expanded={open}
           aria-controls={listboxId}
           aria-autocomplete="list"
-          onFocus={() => setOpen(true)}
+          onFocus={event => {
+            propertyEditingFocus.onFocus(event)
+            setOpen(true)
+          }}
+          onBlur={propertyEditingFocus.onBlur}
           onChange={event => {
             setQuery(event.target.value)
             setOpen(true)
           }}
-          onKeyDown={handleKeyDown}
+          onKeyDown={event => {
+            if (event.key === 'Escape') {
+              // The dropdown always shows something while `open` (results, or
+              // a "no matching blocks" row), so closing it is a real dismiss:
+              // claim the key and keep the caret here. With it already closed
+              // the event falls through to `exit_property_editing`, which
+              // blurs the field (property fields only — see `propertyField`).
+              dismissOnFieldEscape(event, open && (() => setOpen(false)))
+              return
+            }
+            onKeyDown(event)
+          }}
         />
       </div>
 
@@ -319,14 +328,10 @@ export function ReferenceSearch({
             <button
               key={`${candidate.id}:${candidate.label}`}
               type="button"
-              role="option"
-              aria-selected={index === activeIndex}
+              {...getOptionProps(index)}
               className={`flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left ${
                 index === activeIndex ? 'bg-accent text-accent-foreground' : 'hover:bg-accent hover:text-accent-foreground'
               }`}
-              onMouseDown={event => event.preventDefault()}
-              onMouseEnter={() => setActiveIndex(index)}
-              onClick={() => pick(candidate)}
             >
               {selectionMode === 'multiple' && (
                 <Plus className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
@@ -381,6 +386,7 @@ function RefPropertyEditorInner({
       placeholder="Search blocks"
       selectionMode="single"
       onPick={onChange}
+      propertyField
     />
   )
 }
@@ -427,6 +433,7 @@ function RefListPropertyEditorInner({
           placeholder={blockIds.length > 0 ? 'Add block' : 'Search blocks'}
           selectionMode="multiple"
           onPick={add}
+          propertyField
         />
       )}
       {readOnly && blockIds.length === 0 && <EmptyReference />}

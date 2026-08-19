@@ -1,7 +1,35 @@
 import { EditorSelection, type EditorState, type Extension, type SelectionRange, type StateCommand } from '@codemirror/state'
-import { EditorView, keymap, type KeyBinding } from '@codemirror/view'
+import { EditorView, ViewPlugin, keymap, type KeyBinding } from '@codemirror/view'
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown'
 import { javascript } from '@codemirror/lang-javascript'
+import { insertNewline } from '@codemirror/commands'
+import { acceptCompletion, completionStatus } from '@codemirror/autocomplete'
+import { isIOS } from '@/utils/platform.js'
+
+/** Clamp every range of a selection into `[0, docLength]`. For
+ *  dispatching a REMEMBERED selection against a doc that may have
+ *  shrunk since it was captured — a debounce-persisted selection
+ *  restored on focus, or a selection carried across an external
+ *  content adoption. CodeMirror throws "Selection points outside of
+ *  document" on a raw out-of-range anchor, and (for adoption) omitting
+ *  the selection instead would let default mapping collapse the cursor
+ *  to 0. */
+export const clampSelectionToLength = (
+  selection: EditorSelection,
+  docLength: number,
+): EditorSelection =>
+  EditorSelection.create(
+    selection.ranges.map(range =>
+      EditorSelection.range(
+        // Both bounds: persisted selections are synced data a bridge /
+        // import can corrupt. An overlong offset throws at dispatch; a
+        // negative one is silently ACCEPTED into state (checkSelection
+        // only rejects past-end), leaving a corrupt selection live.
+        Math.max(0, Math.min(range.anchor, docLength)),
+        Math.max(0, Math.min(range.head, docLength)),
+      )),
+    selection.mainIndex,
+  )
 
 /** Produce the change/range spec for one selection range that either
  *  inserts an empty `open`/`close` pair at the cursor or wraps the
@@ -31,40 +59,29 @@ export const wrapRangeWithPair = (
 const markdownInlineFormatCommand = (open: string, close = open): StateCommand =>
   ({state, dispatch}) => {
     const transaction = state.changeByRange(range => {
-      if (range.empty) {
-        const isBetweenMarkers =
-          range.from >= open.length &&
-          range.to + close.length <= state.doc.length &&
-          state.sliceDoc(range.from - open.length, range.from) === open &&
-          state.sliceDoc(range.to, range.to + close.length) === close
+      // A non-empty selection that itself contains the markers (e.g. the whole
+      // `**bold**` is selected) — unwrap the inner pair. Checked before the
+      // surrounded-by-markers case below so that selecting the inner `*a*` of a
+      // nested `**a**` unwraps the inner pair rather than stripping the outer.
+      if (!range.empty) {
+        const selectedText = state.sliceDoc(range.from, range.to)
+        const isWrappedSelection =
+          selectedText.startsWith(open) &&
+          selectedText.endsWith(close) &&
+          selectedText.length >= open.length + close.length
 
-        if (isBetweenMarkers) {
+        if (isWrappedSelection) {
+          const unwrappedText = selectedText.slice(open.length, selectedText.length - close.length)
           return {
-            changes: [
-              {from: range.from - open.length, to: range.from},
-              {from: range.to, to: range.to + close.length},
-            ],
-            range: EditorSelection.cursor(range.from - open.length),
+            changes: {from: range.from, to: range.to, insert: unwrappedText},
+            range: EditorSelection.range(range.from, range.from + unwrappedText.length),
           }
         }
-
-        return wrapRangeWithPair(state, range, open, close)
       }
 
-      const selectedText = state.sliceDoc(range.from, range.to)
-      const isWrappedSelection =
-        selectedText.startsWith(open) &&
-        selectedText.endsWith(close) &&
-        selectedText.length >= open.length + close.length
-
-      if (isWrappedSelection) {
-        const unwrappedText = selectedText.slice(open.length, selectedText.length - close.length)
-        return {
-          changes: {from: range.from, to: range.to, insert: unwrappedText},
-          range: EditorSelection.range(range.from, range.from + unwrappedText.length),
-        }
-      }
-
+      // Markers sit immediately OUTSIDE the range — strip them. Handles both the
+      // empty cursor-between-markers case and the non-empty surrounded case: for
+      // an empty range `EditorSelection.range(x, x)` collapses to a cursor at x.
       const beforeSelection = range.from - open.length
       const afterSelection = range.to + close.length
       const isSurroundedByMarkers =
@@ -115,13 +132,111 @@ const mdNoQuoteClose = markdownLanguage.data.of({
   }
 });
 
+// Shift+Enter inserts a single soft line break inside the block. The block
+// editor (CodeMirrorContentRenderer) disables CM's defaultKeymap and binds no
+// Enter/Shift-Enter handler, so the break is produced by the native
+// `insertLineBreak` beforeinput. iOS WebKit applies that native break TWICE
+// inside a contentEditable (CM then observes "\n\n"), while desktop applies it
+// once — the source of the iPad double-newline bug. Take the input over: insert
+// exactly one line break and preventDefault so no engine can double it.
+// preventDefault on `beforeinput` IS honoured on iOS (unlike on keydown),
+// verified on-device. Plain Enter (block split) arrives as `insertParagraph`
+// and is owned by the Enter shortcut, so we don't touch it.
+export const softLineBreakOnBeforeInput = EditorView.domEventHandlers({
+  beforeinput(event, view) {
+    if (event.inputType !== 'insertLineBreak') return false
+    if (view.state.readOnly) return false // insertNewline has no read-only guard of its own
+    insertNewline(view)
+    event.preventDefault()
+    return true
+  },
+})
+
+// iOS-only: accept an open autocomplete on Enter BEFORE CodeMirror defers the key.
+//
+// On iOS, CM's InputState.keydown defers Enter/Backspace/Delete (`pendingIOSKey`)
+// and runs its keymap only on a later, non-bubbling synthetic Enter — a workaround
+// for a WebKit bug where preventDefaulting these keys freezes the *software*
+// keyboard's autocapitalization. Side effect: the real Enter bubbles past CM
+// (unhandled, un-stopped) to the window-level `split_block_cm` shortcut, so with a
+// completion open the block splits instead of accepting. We can't reconfigure the
+// deferral, and no keymap / domEventHandler can run ahead of it — they're all
+// dispatched by `runHandlers`, which the deferral short-circuits (handleEvent runs
+// InputState.keydown first and returns early when it defers). CM's own keydown
+// listener is a BUBBLE-phase handler on contentDOM, so a CAPTURE-phase listener on
+// the editor wrapper (an ancestor) runs first: we accept the completion there and
+// stop the event dead, so CM never defers it and no window shortcut sees it.
+// This preventDefault is the very thing CM's deferral avoids — but verified
+// on-device (iPad, iOS 26): accepting a completion this way does NOT disturb
+// software-keyboard autocapitalization (and hardware presses, the common case that
+// reaches here, never involved autocaps anyway). So no keyboard-type gate is needed.
+class AcceptCompletionOnEnterCapture {
+  private readonly onKeydown: (event: KeyboardEvent) => void
+  constructor(private readonly view: EditorView) {
+    this.onKeydown = (event) => {
+      if (
+        event.key !== 'Enter' ||
+        event.isComposing ||
+        event.keyCode === 229 ||
+        event.shiftKey ||
+        event.altKey ||
+        event.metaKey ||
+        event.ctrlKey
+      )
+        return
+      // Gate on 'active' only — NOT 'pending'. With activateOnTyping + async
+      // completion sources, completionStatus reports 'pending' transiently after
+      // *every* keystroke in plain prose (sources flip to Pending on input, before
+      // the debounce and before any popup exists), so swallowing on 'pending' would
+      // eat prose Enters. Accepted edge: pressing Enter during the brief async
+      // refresh of an already-open popup (status 'pending', panel disabled) still
+      // splits under it. Closing that would need to track the open dialog directly —
+      // no public autocomplete helper reports a *disabled* refreshing panel.
+      if (completionStatus(this.view.state) !== 'active') return
+      // Accept (a no-op inside CM's brief post-open interactionDelay) and swallow
+      // the key: preventDefault stops the native paragraph; stopImmediatePropagation
+      // stops both CM's deferral (its listener is on contentDOM, a descendant) and
+      // the window-level split shortcut (bubble phase).
+      acceptCompletion(this.view)
+      event.preventDefault()
+      event.stopImmediatePropagation()
+    }
+    view.dom.addEventListener('keydown', this.onKeydown, true)
+  }
+
+  destroy() {
+    this.view.dom.removeEventListener('keydown', this.onKeydown, true)
+  }
+}
+
+/** The capture-phase completion-accept plugin. Exported so tests can force it on
+ *  regardless of platform (the shipped extension below only attaches it on iOS). */
+export const acceptCompletionOnEnterCapture = ViewPlugin.fromClass(AcceptCompletionOnEnterCapture)
+
+/** iOS-only; empty elsewhere (off iOS, CM's completion keymap accepts + stops
+ *  Enter before it can reach a window shortcut). */
+export const acceptCompletionBeforeIOSDefer: Extension = isIOS() ? acceptCompletionOnEnterCapture : []
+
 export const createMinimalMarkdownConfig = (
   pluginExtensions: readonly Extension[] = [],
 ): Extension[] => {
   const extensions = [
     markdown({addKeymap: false, base: markdownLanguage}),
     keymap.of(markdownFormattingKeymap),
+    softLineBreakOnBeforeInput,
+    acceptCompletionBeforeIOSDefer,
     mdNoQuoteClose,
+    // CodeMirror defaults all three input-assist attributes OFF. We opt browser
+    // spellcheck and sentence auto-capitalization back ON for prose note-taking
+    // (autocorrect stays off — it fights the `[[ ]]`/`(( ))` completion and mangles
+    // technical text). autocapitalize only ever influences the SOFT keyboard (the
+    // hardware keyboard's caps is a separate iOS setting, not this attribute), and
+    // acceptCompletionBeforeIOSDefer's preventDefault leaves it intact (verified
+    // on-device).
+    EditorView.contentAttributes.of({
+      autocapitalize: 'sentences',
+      spellcheck: 'true',
+    }),
     EditorView.theme({
       '&': {
         // Default CodeMirror styles paint the editor white; setting
@@ -142,6 +257,18 @@ export const createMinimalMarkdownConfig = (
         fontSize: "inherit",
         color: "inherit",
         lineHeight: "inherit",
+        // Each block is its own auto-height editor that must never scroll
+        // internally — the surrounding page is the only scroll container.
+        // CodeMirror's base theme makes `.cm-scroller` `overflow: auto`, and
+        // the selection layer reports a few px of phantom scrollHeight beyond
+        // the content (the touch selection handles past the last line). On iOS
+        // WebKit, dragging a multi-line selection through the last line fires a
+        // native scroll-to-selection that scrolls the editor into that phantom
+        // gap and leaves `scrollTop` stuck > 0 — the whole block's text appears
+        // to shift up by those few px. `clip` makes the scroller a non-scroll
+        // container (so scroll-to-selection can't move it) and clips the
+        // overhang. Verified on-device (iPad, iOS 26): the shift is gone.
+        overflow: "clip",
       },
       '.cm-editor': {outline: 'none'},
       '.cm-focused': {outline: 'none'},
@@ -177,7 +304,15 @@ export const createTypeScriptConfig = (): Extension[] => [
     '&': {background: 'transparent', color: 'inherit'},
     '.cm-editor': {border: '1px solid hsl(var(--border))', borderRadius: '4px'},
     '.cm-content': {padding: '8px'},
+    // Wrapping (below) means no horizontal scroll, so the scroller can be a
+    // non-scroll container — same as the markdown block editor. This also
+    // avoids the iOS multi-line-selection scroll-shift (see the `.cm-scroller`
+    // note in createMinimalMarkdownConfig).
+    '.cm-scroller': {overflow: 'clip'},
   }),
+  // Wrap long code lines instead of scrolling horizontally — in a narrow
+  // outliner column, off-screen horizontal scroll hides content.
+  EditorView.lineWrapping,
 ]
 
 /**

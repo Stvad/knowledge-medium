@@ -5,7 +5,8 @@
     <link rel="icon" type="image/svg+xml" href="./icon.svg" />
     <link rel="apple-touch-icon" href="./apple-touch-icon.png" />
     <link rel="manifest" href="./manifest.webmanifest" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+    <!-- interactive-widget=resizes-content shrinks the LAYOUT viewport when the on-screen keyboard opens, so the mobile editing toolbar (position:fixed; bottom:0) rides above the keyboard on Chromium (Chrome/Edge/Samsung) and Firefox. Safari ignores the key: there the layout viewport stays full-height and fixed elements are layout-anchored, so bottom:0 sits BEHIND the keyboard and useKeyboardInset supplies the lift instead. Load-bearing for src/plugins/mobile-keyboard-toolbar. -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover, interactive-widget=resizes-content" />
     <meta name="theme-color" content="#1e1b4b" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="mobile-web-app-capable" content="yes" />
@@ -15,22 +16,26 @@
     <title>Knowledge medium</title>
     <script>
       // Resolve the persisted theme before paint so we don't flash the
-      // default palette. Keep the storage key in sync with
-      // THEME_STORAGE_KEY in src/plugins/theme-toggle/theme.ts and the
-      // default ids in sync with DEFAULT_THEME_ID_LIGHT / _DARK in
-      // src/plugins/default-themes/themes.ts. Unknown stored values
-      // fall through to the :root defaults in src/index.css until the
-      // theme-toggle style-sync effect injects the matching rule.
+      // default palette. The __KM_..._ tokens below are generated at
+      // build/dev time (vite-plugins/injectThemeBootDefaults.ts) from
+      // THEME_STORAGE_KEY and DEFAULT_THEME_ID_LIGHT / _DARK — the
+      // source of truth for all three lives in src/themeBootDefaults.ts,
+      // so this script can't drift from the values
+      // src/plugins/theme-toggle/theme.ts and
+      // src/plugins/default-themes/themes.ts actually use. Unknown
+      // stored values fall through to the :root defaults in
+      // src/index.css until the theme-toggle style-sync effect injects
+      // the matching rule.
       (function () {
         try {
-          var stored = window.localStorage.getItem('theme')
+          var stored = window.localStorage.getItem(__KM_THEME_STORAGE_KEY__)
           var prefersDark =
             window.matchMedia &&
             window.matchMedia('(prefers-color-scheme: dark)').matches
           document.documentElement.dataset.theme =
-            stored || (prefersDark ? 'sunset-warm-dark' : 'sunset-warm-light')
+            stored || (prefersDark ? __KM_DEFAULT_THEME_ID_DARK__ : __KM_DEFAULT_THEME_ID_LIGHT__)
         } catch (e) {
-          document.documentElement.dataset.theme = 'sunset-warm-light'
+          document.documentElement.dataset.theme = __KM_DEFAULT_THEME_ID_LIGHT__
         }
       })()
     </script>

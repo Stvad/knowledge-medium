@@ -10,7 +10,7 @@ import { appUpdate } from '@/appUpdate.js'
  * Update behaviour (see also src/appUpdate.ts):
  *  - When a new SW reaches `installed` while an old one still controls the
  *    page, we flag the update. The SW self-`skipWaiting()`s in its own
- *    install handler (public/sw.js), so it activates in the background on
+ *    install handler (src/sw/sw.ts), so it activates in the background on
  *    its own — the `SKIP_WAITING` postMessage below is only a fallback for
  *    a worker that somehow didn't. We do NOT reload the page. The point is
  *    that the *next* load — whether the user clicks the Reload prompt or
@@ -33,6 +33,35 @@ import { appUpdate } from '@/appUpdate.js'
 // Re-check sw.js this often for tabs that stay open across a deploy.
 const UPDATE_POLL_INTERVAL_MS = 30 * 60 * 1000
 
+// The active registration, captured once register() resolves, so the
+// `app.checkForUpdates` action can trigger an on-demand update check. This
+// matters more under cache-first navigation (src/sw/worker.ts): a new deploy is
+// otherwise only noticed on the interval poll or the next reload.
+let activeRegistration: ServiceWorkerRegistration | undefined
+
+export type AppUpdateCheckResult = 'update-found' | 'up-to-date' | 'no-worker' | 'error'
+
+/**
+ * Imperatively ask the browser to re-fetch sw.js and install it if it changed —
+ * the same check the interval poll / visibilitychange / online listeners run,
+ * exposed for the `app.checkForUpdates` action. A found update still flows
+ * through the existing `updatefound` → `appUpdate.markAvailable()` path (the
+ * reload toast); here we only classify the outcome for immediate feedback.
+ */
+export const checkForAppUpdate = async (): Promise<AppUpdateCheckResult> => {
+  if (typeof navigator === 'undefined' || !navigator.serviceWorker) return 'no-worker'
+  const registration = activeRegistration ?? (await navigator.serviceWorker.getRegistration())
+  if (!registration) return 'no-worker'
+  try {
+    await registration.update()
+  } catch {
+    return 'error'
+  }
+  return registration.installing || registration.waiting || appUpdate.isAvailable()
+    ? 'update-found'
+    : 'up-to-date'
+}
+
 export const registerServiceWorker = (): void => {
   if (!import.meta.env.PROD) return
   if (typeof window === 'undefined') return
@@ -43,6 +72,7 @@ export const registerServiceWorker = (): void => {
   navigator.serviceWorker
     .register(swUrl, {scope: import.meta.env.BASE_URL})
     .then((registration) => {
+      activeRegistration = registration
       // A worker that reaches `installed` *while another version already
       // controls the page* is a pending update. On the very first install
       // there's no controller yet, so that worker is the first version, not

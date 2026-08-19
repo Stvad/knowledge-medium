@@ -1,6 +1,69 @@
-export const isElementProperlyVisible = (element: HTMLElement): boolean => {
+export type VerticalVisibilityBounds = Readonly<{
+  top: number
+  bottom: number
+}>
+
+const windowVisibilityBounds = (): VerticalVisibilityBounds => ({
+  top: 0,
+  bottom: window.innerHeight || document.documentElement.clientHeight,
+})
+
+/** The closest ancestor that scrolls `element` vertically, or null when the
+ *  page itself is the only scrollport. Callers that measure visibility want
+ *  its rect; callers that observe intersection want it as the observer root
+ *  (an `IntersectionObserver` `rootMargin` expands only the ROOT's rect —
+ *  clip rects of scrolling ancestors in between are applied unexpanded, so
+ *  an observer rooted at the viewport gets no overscan at all inside one of
+ *  these).
+ *
+ *  Note the predicate reads COMPUTED `overflowY`, which CSS propagates from
+ *  `overflow-x` — an `overflow-x: auto` element with no explicit `overflow-y`
+ *  computes `auto` here and counts as a match. Fine for today's callers (such
+ *  a wrapper still clips vertically), but it's why this asks about a
+ *  scrollport rather than claiming the element definitely scrolls. */
+export const nearestScrollableAncestor = (element: HTMLElement): HTMLElement | null => {
+  let ancestor = element.parentElement
+  while (ancestor) {
+    const {overflowY} = window.getComputedStyle(ancestor)
+    if (overflowY === 'auto' || overflowY === 'scroll' || overflowY === 'overlay') return ancestor
+    ancestor = ancestor.parentElement
+  }
+  return null
+}
+
+/** Where `element` can actually be seen: the window, clipped by EVERY scrollport
+ *  between it and the root.
+ *
+ *  All of them, not just the nearest: panes nest. A note row inside the
+ *  video-notes aside sits in that aside's scrollport, and the whole pane is
+ *  clipped again by the shared scrollport a stacked slot puts around it. Taking
+ *  only the nearest, a row scrolled out of sight behind the OUTER clip still
+ *  measured as visible — so the focus decorator saw no reason to scroll it in
+ *  and cursor-follows-scroll saw no reason to move off it. */
+export const getElementScrollportBounds = (element: HTMLElement): VerticalVisibilityBounds => {
+  let bounds = windowVisibilityBounds()
+  let ancestor = element.parentElement
+  while (ancestor) {
+    const {overflowY} = window.getComputedStyle(ancestor)
+    if (overflowY === 'auto' || overflowY === 'scroll' || overflowY === 'overlay') {
+      const rect = ancestor.getBoundingClientRect()
+      bounds = {
+        top: Math.max(bounds.top, rect.top),
+        bottom: Math.min(bounds.bottom, rect.bottom),
+      }
+    }
+    ancestor = ancestor.parentElement
+  }
+  return bounds
+}
+
+export const isElementProperlyVisible = (
+  element: HTMLElement,
+  visibilityBounds: VerticalVisibilityBounds = windowVisibilityBounds(),
+): boolean => {
   const rect = element.getBoundingClientRect()
-  const windowHeight = window.innerHeight || document.documentElement.clientHeight
+  const viewportHeight = Math.max(0, visibilityBounds.bottom - visibilityBounds.top)
+  if (viewportHeight <= 0) return false
 
   const elementHeight = rect.height
 
@@ -13,18 +76,18 @@ export const isElementProperlyVisible = (element: HTMLElement): boolean => {
   const minVisibleHeight = lineHeight
 
   // Calculate how much of the element is visible vertically
-  const visibleTop = Math.max(0, rect.top)
-  const visibleBottom = Math.min(windowHeight, rect.bottom)
+  const visibleTop = Math.max(visibilityBounds.top, rect.top)
+  const visibleBottom = Math.min(visibilityBounds.bottom, rect.bottom)
   const visibleHeight = Math.max(0, visibleBottom - visibleTop)
 
   // For small elements (shorter than viewport): require at least one line height to be visible
-  if (elementHeight <= windowHeight) {
+  if (elementHeight <= viewportHeight) {
     return visibleHeight >= minVisibleHeight
   }
 
   // For large elements (taller than viewport): check if a reasonable portion is visible
   // and that we're not at an awkward position (like showing just the very top or bottom)
-  const heightRatio = visibleHeight / windowHeight
+  const heightRatio = visibleHeight / viewportHeight
   const elementVisibilityRatio = visibleHeight / elementHeight
 
   // For tall elements, we want either:

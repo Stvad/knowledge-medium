@@ -14,6 +14,7 @@
 */
 
 import { defineFacet } from '@/facets/facet.js'
+import { THEME_STORAGE_KEY } from '@/themeBootDefaults.js'
 
 export interface ThemeDefinition {
   readonly id: string
@@ -83,7 +84,7 @@ export const setThemeRegistry = (next: readonly ThemeDefinition[]): void => {
   registryById = new Map(next.map((t) => [t.id, t]))
 }
 
-export const THEME_STORAGE_KEY = 'theme'
+export { THEME_STORAGE_KEY }
 
 const getDocumentRoot = (): HTMLElement => window.document.documentElement
 

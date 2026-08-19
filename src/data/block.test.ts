@@ -10,7 +10,7 @@
  *     repo.children
  */
 
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import {
   BlockNotFoundError,
   BlockNotLoadedError,
@@ -21,6 +21,7 @@ import {
 } from '@/data/api'
 import { BlockCache } from '@/data/blockCache'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
+import { createTestRepo } from '@/data/test/createTestRepo'
 import { Block } from './block'
 import { Repo } from './repo'
 
@@ -34,15 +35,9 @@ const setup = async (): Promise<Harness> => {
   // Shared DB opened once per file, reset between tests; fresh Repo per test.
   await resetTestDb(sharedDb.db)
   const h = sharedDb
-  const cache = new BlockCache()
-  let timeCursor = 1700_000_000_000
-  let idCursor = 0
-  const repo = new Repo({
+  const {repo, cache} = createTestRepo({
     db: h.db,
-    cache,
     user: {id: 'user-1'},
-    now: () => ++timeCursor,
-    newId: () => `gen-${++idCursor}`,
   })
   return {h, cache, repo}
 }
@@ -52,7 +47,6 @@ let env: Harness
 beforeAll(async () => { sharedDb = await createTestDb() })
 afterAll(async () => { await sharedDb.cleanup() })
 beforeEach(async () => { env = await setup() })
-afterEach(() => { env.repo.stopSyncObserver() })
 
 const titleProp = defineProperty<string>('title', {
   codec: codecs.string,
@@ -426,9 +420,12 @@ describe('Block.childIds / children / parent', () => {
     expect(ids).toEqual(['c1', 'c2'])
   })
 
-  it('childIds is identity-stable with repo.query.childIds', () => {
+  it('childIds is identity-stable with repo.query.childIds (visible view)', () => {
     const b = new Block(env.repo, 'p')
-    expect(b.childIds).toBe(env.repo.query.childIds({id: 'p'}))
+    // The facade getter speaks the visible/outline view (§9), so it delegates
+    // to the `hidePropertyChildren`-keyed handle — same instance the option
+    // returns, distinct from the everything-view handle.
+    expect(b.childIds).toBe(env.repo.query.childIds({id: 'p', hidePropertyChildren: true}))
   })
 
   it('children returns the repo.children handle with full BlockData rows', async () => {

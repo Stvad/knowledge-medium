@@ -1,4 +1,5 @@
 import type { ComponentType } from 'react'
+import { cn } from '@/lib/utils'
 import {
   Braces,
   Calendar,
@@ -38,9 +39,9 @@ export function PropertyShapeGlyph({
   Glyph?: ComponentType<{className?: string}>
   className?: string
 }) {
-  if (Glyph) return <Glyph className={`h-3.5 w-3.5 ${className}`} />
+  if (Glyph) return <Glyph className={cn('h-3.5 w-3.5', className)} />
   const Icon = TYPE_GLYPHS[shape] ?? TypeIcon
-  return <Icon className={`h-3.5 w-3.5 ${className}`} strokeWidth={1.8} />
+  return <Icon className={cn('h-3.5 w-3.5', className)} strokeWidth={1.8} />
 }
 
 export function PropertyShapeButton({
@@ -75,7 +76,7 @@ export function PropertyShapeButton({
     <button
       type="button"
       disabled={disabled}
-      className={`flex h-7 w-5 items-center justify-center rounded-sm ${tone} focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring`}
+      className={cn('flex h-7 w-5 items-center justify-center rounded-sm', tone, 'focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring')}
       title={
         disabled
           ? `${label} — built-in ${propertyShapeLabel(shape)} field, no config`

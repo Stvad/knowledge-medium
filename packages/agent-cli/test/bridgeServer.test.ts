@@ -2,7 +2,7 @@
  *  as a child process on a random port and exercise it over the wire:
  *  token auth, per-client queues, and client-gone failure modes. */
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
-import { spawn, ChildProcess } from 'node:child_process'
+import { spawn } from 'node:child_process'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import net from 'node:net'
@@ -36,41 +36,31 @@ const waitForReady = async (port: number, attempts = 50) => {
   throw new Error(`Bridge server failed to start on port ${port}`)
 }
 
-let server: ChildProcess
+let sharedServer: {baseUrl: string, stop: () => Promise<void>}
 let baseUrl: string
 const bridgeSecret = 'BRIDGE-SECRET'
 const bridgeHeaders = {'x-agent-runtime-secret': bridgeSecret}
 const unknownTokenMessage =
   'Agent token is not registered with the local bridge. ' +
-  'Open or focus the app tab for the same workspace, then retry; if needed, run `yarn agent connect` to pair a fresh token. ' +
+  'Open or focus the app tab for the same workspace, then retry; if needed, run `kmagent connect` to pair a fresh token. ' +
   'Common causes: the bridge restarted, the app tab disconnected or idled out, the token was revoked, or the CLI is using a token/profile from another workspace or browser profile.'
 
 // One server for the whole file. Each test wipes state via the
 // secret-gated reset route (enabled by AGENT_RUNTIME_TEST_RESET) instead
 // of paying a fresh spawn + port-bind per case — which also removes the
 // pick-port/spawn TOCTOU race from every-test down to a single occurrence.
+// `spawnBridgeServer` is defined further below, but the reference is safe:
+// vitest doesn't invoke a `beforeAll` callback until the module has fully
+// evaluated, by which point the const is initialized.
 beforeAll(async () => {
-  const port = await pickPort()
-  baseUrl = `http://127.0.0.1:${port}`
-  server = spawn('node', [serverScript], {
-    env: {
-      ...process.env,
-      AGENT_RUNTIME_PORT: String(port),
-      AGENT_RUNTIME_HOST: '127.0.0.1',
-      AGENT_RUNTIME_BRIDGE_SECRET: bridgeSecret,
-      AGENT_RUNTIME_TEST_RESET: 'true',
-    },
-    stdio: ['ignore', 'ignore', 'pipe'],
+  sharedServer = await spawnBridgeServer({
+    AGENT_RUNTIME_BRIDGE_SECRET: bridgeSecret,
+    AGENT_RUNTIME_TEST_RESET: 'true',
   })
-  await waitForReady(port)
+  baseUrl = sharedServer.baseUrl
 })
 
-afterAll(async () => {
-  if (server && !server.killed) {
-    server.kill('SIGKILL')
-    await new Promise(resolve => server.once('exit', resolve))
-  }
-})
+afterAll(() => sharedServer.stop())
 
 beforeEach(async () => {
   const response = await fetch(`${baseUrl}/runtime/test/reset`, {
@@ -87,6 +77,30 @@ const registerClient = async (clientId: string, body: object) => {
     body: JSON.stringify(body),
   })
   expect(response.ok).toBe(true)
+}
+
+/** Spawn the bridge server on a free port, wait for /health, and return a
+ *  stop() to kill it. Backs both the shared per-file server (beforeAll
+ *  above) and tests that need their own env — e.g. a TTL override the
+ *  shared server's fixed-at-startup env can't apply without a restart. */
+const spawnBridgeServer = async (
+  env: Record<string, string>,
+): Promise<{baseUrl: string, stop: () => Promise<void>}> => {
+  const port = await pickPort()
+  const proc = spawn('node', [serverScript], {
+    env: {...process.env, AGENT_RUNTIME_PORT: String(port), AGENT_RUNTIME_HOST: '127.0.0.1', ...env},
+    stdio: ['ignore', 'ignore', 'pipe'],
+  })
+  await waitForReady(port)
+  return {
+    baseUrl: `http://127.0.0.1:${port}`,
+    stop: async () => {
+      if (!proc.killed) {
+        proc.kill('SIGKILL')
+        await new Promise(resolve => proc.once('exit', resolve))
+      }
+    },
+  }
 }
 
 describe('agent runtime bridge', () => {
@@ -153,6 +167,30 @@ describe('agent runtime bridge', () => {
       method: 'POST',
       headers: {'content-type': 'application/json', authorization: 'Bearer TOKEN-A'},
       body: JSON.stringify({type: 'eval', code: 'return 1'}),
+    })
+    expect(write.status).toBe(403)
+  })
+
+  it('derives the read-only allowlist from the command registry', async () => {
+    await registerClient('alice-tab', {
+      tokens: [{token: 'TOKEN-A', label: 'cli', userId: 'alice', workspaceId: 'ws-1', scope: 'read-only'}],
+    })
+
+    // A verb classified `readOnly: true` in knownCommandRegistry (not in
+    // the old hand-listed switch) is accepted — proving the allowlist is
+    // registry-derived, not a stale literal set.
+    const read = await fetch(`${baseUrl}/runtime/commands`, {
+      method: 'POST',
+      headers: {'content-type': 'application/json', authorization: 'Bearer TOKEN-A'},
+      body: JSON.stringify({type: 'search', query: 'anything'}),
+    })
+    expect(read.status).toBe(202)
+
+    // A verb classified `readOnly: false` is denied.
+    const write = await fetch(`${baseUrl}/runtime/commands`, {
+      method: 'POST',
+      headers: {'content-type': 'application/json', authorization: 'Bearer TOKEN-A'},
+      body: JSON.stringify({type: 'create-block', content: 'nope'}),
     })
     expect(write.status).toBe(403)
   })
@@ -287,6 +325,76 @@ describe('agent runtime bridge', () => {
     expect(body.targetClientId).toBe('alice-tab')
   })
 
+  // Regression test for a completed command being reaped ~commandTtlMs after
+  // it was CREATED rather than after it FINISHED: a long-running command
+  // (kept `delivered` here well past commandTtlMs, standing in for a
+  // multi-minute migration) already has a stale createdAt by the time it
+  // completes, so aging from createdAt reaps it on the very next request —
+  // which is exactly the CLI's own status poll. Needs a dedicated server
+  // (own TTL env) since the shared per-file server's TTLs are fixed at
+  // startup.
+  it('keeps a completed command readable for commandTtlMs after it completed, not after it was created', async () => {
+    const {baseUrl: ttlBaseUrl, stop} = await spawnBridgeServer({
+      AGENT_RUNTIME_BRIDGE_SECRET: bridgeSecret,
+      AGENT_RUNTIME_COMMAND_TTL_MS: '1000',
+      AGENT_RUNTIME_INFLIGHT_COMMAND_TTL_MS: '60000',
+    })
+    try {
+      await fetch(`${ttlBaseUrl}/runtime/clients/alice-tab`, {
+        method: 'POST',
+        headers: {'content-type': 'application/json', ...bridgeHeaders},
+        body: JSON.stringify({
+          tokens: [{token: 'TOKEN-A', label: 'cli', userId: 'alice', workspaceId: 'ws-1'}],
+        }),
+      })
+
+      const submission = await fetch(`${ttlBaseUrl}/runtime/commands`, {
+        method: 'POST',
+        headers: {'content-type': 'application/json', authorization: 'Bearer TOKEN-A'},
+        body: JSON.stringify({type: 'ping'}),
+      })
+      const {id} = await submission.json()
+
+      await fetch(`${ttlBaseUrl}/runtime/commands/next?clientId=alice-tab&timeoutMs=2000`, {
+        headers: bridgeHeaders,
+      })
+
+      // Stay `delivered` past commandTtlMs (1s) — bounded only by the much
+      // larger inFlightCommandTtlMs (60s) — so createdAt is already stale
+      // by the time the command completes.
+      await new Promise(resolve => setTimeout(resolve, 1500))
+
+      await fetch(`${ttlBaseUrl}/runtime/commands/${id}/result`, {
+        method: 'POST',
+        headers: {'content-type': 'application/json', ...bridgeHeaders, 'x-agent-runtime-client-id': 'alice-tab'},
+        body: JSON.stringify({ok: true, value: 'pong'}),
+      })
+
+      // Poll immediately: cleanup() runs at the top of this very request.
+      const status = await fetch(`${ttlBaseUrl}/runtime/commands/${id}`, {
+        headers: {authorization: 'Bearer TOKEN-A'},
+      })
+      expect(status.status).toBe(200)
+      const body = await status.json()
+      expect(body.status).toBe('completed')
+      expect(body.result.value).toBe('pong')
+
+      // Negative control: prove the shrunk TTL is actually in effect. Without
+      // this, a broken envDurationMsOverride would silently fall back to the
+      // real 10-minute default, every command would stay readable, and the
+      // assertions above would pass without pinning anything. Age the same
+      // command past commandTtlMs (1s) from completion and confirm it IS
+      // reaped.
+      await new Promise(resolve => setTimeout(resolve, 1500))
+      const expired = await fetch(`${ttlBaseUrl}/runtime/commands/${id}`, {
+        headers: {authorization: 'Bearer TOKEN-A'},
+      })
+      expect(expired.status).toBe(404)
+    } finally {
+      await stop()
+    }
+  }, 20_000)
+
   it('allows command status polling after the submitting token re-registers under a new client id', async () => {
     await registerClient('alice-tab', {
       audience: {userId: 'alice', workspaceId: 'ws-1'},
@@ -367,5 +475,135 @@ describe('agent runtime bridge', () => {
     ))
     expect(statuses.map(status => status.status)).toEqual(['completed', 'completed'])
     expect(statuses.map(status => status.result.value).sort()).toEqual(['result-0', 'result-1'])
+  })
+
+  it('blocks side-effecting SELECTs and multi-statement SQL for read-only tokens', async () => {
+    await registerClient('alice-tab', {
+      tokens: [{token: 'TOKEN-A', label: 'cli', userId: 'alice', workspaceId: 'ws-1', scope: 'read-only'}],
+    })
+
+    // A SELECT prologue is not enough: powersync_clear wipes local data.
+    for (const sql of [
+      'SELECT powersync_clear(1)',
+      'select 1; drop table blocks',
+    ]) {
+      const response = await fetch(`${baseUrl}/runtime/commands`, {
+        method: 'POST',
+        headers: {'content-type': 'application/json', authorization: 'Bearer TOKEN-A'},
+        body: JSON.stringify({type: 'sql', mode: 'all', sql}),
+      })
+      expect(response.status, sql).toBe(403)
+    }
+  })
+
+  it('blocks watch-events registration for read-only tokens', async () => {
+    await registerClient('alice-tab', {
+      tokens: [{token: 'TOKEN-A', label: 'cli', userId: 'alice', workspaceId: 'ws-1', scope: 'read-only'}],
+    })
+
+    // The registry marks watch-events readOnly: false — the watcher SQL
+    // is read-only but the tab EXECUTES it repeatedly on every change,
+    // which a read-scoped token must not be able to install.
+    const response = await fetch(`${baseUrl}/runtime/commands`, {
+      method: 'POST',
+      headers: {'content-type': 'application/json', authorization: 'Bearer TOKEN-A'},
+      body: JSON.stringify({
+        type: 'watch-events',
+        consumer: 'snoop',
+        watchers: [{kind: 'sql', name: 'w', sql: 'SELECT id FROM blocks'}],
+      }),
+    })
+    expect(response.status).toBe(403)
+  })
+})
+
+describe('events channel', () => {
+  const postEvent = (clientId: string, event: object) =>
+    fetch(`${baseUrl}/runtime/events`, {
+      method: 'POST',
+      headers: {'content-type': 'application/json', ...bridgeHeaders, 'x-agent-runtime-client-id': clientId},
+      body: JSON.stringify(event),
+    })
+
+  const nextEvents = (token: string, query = '') =>
+    fetch(`${baseUrl}/runtime/events/next${query}`, {
+      headers: {authorization: `Bearer ${token}`},
+    })
+
+  const registerAlice = () => registerClient('alice-tab', {
+    audience: {userId: 'alice', workspaceId: 'ws-1'},
+    tokens: [{token: 'TOKEN-A', label: 'cli', userId: 'alice', workspaceId: 'ws-1'}],
+  })
+
+  it('requires a registered client (and the bridge secret) to post events', async () => {
+    const noSecret = await fetch(`${baseUrl}/runtime/events`, {
+      method: 'POST',
+      headers: {'content-type': 'application/json', 'x-agent-runtime-client-id': 'alice-tab'},
+      body: JSON.stringify({type: 'watcher-settled'}),
+    })
+    expect(noSecret.status).toBe(401)
+
+    const unregistered = await postEvent('ghost-tab', {type: 'watcher-settled'})
+    expect(unregistered.status).toBe(409)
+  })
+
+  it('delivers events to a parked long-poll for the same audience', async () => {
+    await registerAlice()
+
+    const bootstrap = await nextEvents('TOKEN-A').then(response => response.json())
+    expect(bootstrap).toEqual({events: [], nextSeq: 0})
+
+    // Park a long-poll, then push — the waiter must wake with the event.
+    const parked = nextEvents('TOKEN-A', `?afterSeq=${bootstrap.nextSeq}&timeoutMs=5000`)
+    const posted = await postEvent('alice-tab', {type: 'watcher-settled', watcher: 'claude-mentions'})
+    expect(posted.status).toBe(202)
+
+    const body = await (await parked).json()
+    expect(body.nextSeq).toBe(1)
+    expect(body.events).toHaveLength(1)
+    expect(body.events[0].event).toMatchObject({type: 'watcher-settled', watcher: 'claude-mentions'})
+    expect(body.events[0].clientId).toBe('alice-tab')
+
+    // Cursor advanced: nothing new to read.
+    const drained = await nextEvents('TOKEN-A', '?afterSeq=1&timeoutMs=100').then(response => response.json())
+    expect(drained.events).toEqual([])
+  })
+
+  it('buffers events posted before the consumer polls', async () => {
+    await registerAlice()
+    await postEvent('alice-tab', {type: 'watcher-settled', watcher: 'w1'})
+    await postEvent('alice-tab', {type: 'watcher-settled', watcher: 'w2'})
+
+    const body = await nextEvents('TOKEN-A', '?afterSeq=0&timeoutMs=100').then(response => response.json())
+    expect(body.events.map((entry: {event: {watcher: string}}) => entry.event.watcher)).toEqual(['w1', 'w2'])
+    expect(body.nextSeq).toBe(2)
+  })
+
+  it('isolates event streams by audience', async () => {
+    await registerAlice()
+    await registerClient('bob-tab', {
+      audience: {userId: 'bob', workspaceId: 'ws-2'},
+      tokens: [{token: 'TOKEN-B', label: 'cli', userId: 'bob', workspaceId: 'ws-2'}],
+    })
+
+    await postEvent('alice-tab', {type: 'watcher-settled', watcher: 'alice-only'})
+
+    const bob = await nextEvents('TOKEN-B', '?afterSeq=0&timeoutMs=100').then(response => response.json())
+    expect(bob.events).toEqual([])
+    const alice = await nextEvents('TOKEN-A', '?afterSeq=0&timeoutMs=100').then(response => response.json())
+    expect(alice.events).toHaveLength(1)
+  })
+
+  it('flags a stale cursor after a bridge restart instead of parking forever', async () => {
+    await registerAlice()
+    // Fresh server state (per-test reset): a cursor from a previous
+    // bridge lifetime points past the tail.
+    const body = await nextEvents('TOKEN-A', '?afterSeq=41&timeoutMs=100').then(response => response.json())
+    expect(body).toEqual({events: [], nextSeq: 0, reset: true})
+  })
+
+  it('rejects event reads without a token', async () => {
+    const response = await fetch(`${baseUrl}/runtime/events/next`)
+    expect(response.status).toBe(401)
   })
 })

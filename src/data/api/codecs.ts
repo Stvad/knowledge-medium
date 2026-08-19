@@ -75,6 +75,13 @@ export interface RefListCodec extends Codec<readonly string[]> {
   decodeValid?(json: unknown): string[]
 }
 
+export interface OptionalRefCodec extends Codec<string | undefined> {
+  readonly type: 'ref'
+  readonly targetTypes: readonly string[]
+}
+
+export type RefLikeCodec = RefCodec | OptionalRefCodec
+
 const stringCodec: Codec<string> = {
   type: 'string',
   encode: v => v,
@@ -178,6 +185,13 @@ const ref = (options?: RefCodecOptions): RefCodec => ({
   decode: stringCodec.decode,
 })
 
+const optionalRef = (options?: RefCodecOptions): OptionalRefCodec => ({
+  type: 'ref',
+  targetTypes: normalizeTargetTypes(options),
+  encode: value => (value === undefined || value === '' ? null : stringCodec.encode(value)),
+  decode: json => (json === null || json === undefined || json === '' ? undefined : stringCodec.decode(json)),
+})
+
 const refList = (options?: RefCodecOptions): RefListCodec => {
   return {
     type: 'refList',
@@ -272,11 +286,19 @@ const enumCodec = <const T extends string>(
 export const isEnumCodec = (codec: unknown): codec is EnumCodec =>
   typeof codec === 'object' && codec !== null && (codec as Codec<unknown>).type === 'enum'
 
-export const isRefCodec = (codec: unknown): codec is RefCodec =>
+export const isRefCodec = (codec: unknown): codec is RefLikeCodec =>
   typeof codec === 'object' && codec !== null && (codec as Codec<unknown>).type === 'ref'
 
 export const isRefListCodec = (codec: unknown): codec is RefListCodec =>
   typeof codec === 'object' && codec !== null && (codec as Codec<unknown>).type === 'refList'
+
+export const decodeRefId = (codec: RefLikeCodec, value: unknown): string | undefined => {
+  try {
+    return codec.decode(value)
+  } catch {
+    return undefined
+  }
+}
 
 /** Project a refList codec's value to its well-formed ref ids — the
  *  reference-projection-safe entry point. Prefers the codec's own lenient
@@ -383,6 +405,7 @@ export const codecs = {
   enum: enumCodec,
   list,
   ref,
+  optionalRef,
   refList,
   unsafeIdentity,
   optionalString: optionalStringCodec,

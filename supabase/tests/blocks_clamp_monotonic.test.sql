@@ -1,7 +1,7 @@
 -- Behavioral tests for the monotonic clamp + user_updated_at split added in
 -- 20260612000000_add_user_updated_at_monotonic_clamp.sql. Run with:
 --
---   yarn check:db
+--   pnpm check:db
 --
 -- pgTAP, self-wrapped in BEGIN/ROLLBACK so manual psql runs leave no residue.
 

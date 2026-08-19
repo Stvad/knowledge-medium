@@ -18,6 +18,7 @@
 
 import type { BlockData } from '@/data/api'
 import type { Repo } from '@/data/repo'
+import { resolveEditorOverride } from '@/data/propertyDefinitionRegistry'
 import {
   ROAM_PAGE_ALIAS_PROP,
   collectAliasesFromRoamSemanticRefListValue,
@@ -236,8 +237,10 @@ export const collectSchemaReconciliationPlan = (
       continue
     }
 
-    // Reserved kernel-internal slot (per §6 collision rule).
-    if (overrides.get(name)?.hidden === true) {
+    // Reserved kernel-internal slot (per §6 collision rule). The override
+    // join is by seed identity (B′ §8), so a `hidden` override is matched
+    // through the name's winning definition rather than by raw name.
+    if (resolveEditorOverride(name, repo.propertyDefinitions, overrides, existingSchema)?.hidden === true) {
       skippedReserved.push(name)
       continue
     }
@@ -411,4 +414,164 @@ const collectTokens = (raw: unknown): string[] | null => {
     return out
   }
   return null
+}
+
+/** The minimum a caller must supply: whatever it is about to write. Kept
+ *  structural so an extension can pass its own in-flight block tree. */
+export interface PromotedPropertyBag {
+  readonly id?: string
+  properties?: Record<string, unknown>
+}
+
+/** Re-exported from the data layer so a promotion consumer has it to hand.
+ *  It is the SAME function `addSchema` gates on, deliberately — a mirror here
+ *  could drift and let a name through that registration then rejects, after
+ *  a subtractive consumer had already dropped the source bullet. */
+export { isRegistrablePropertyName } from '@/data/userSchemasService'
+
+/** Register a definition for every promoted `key:: value` attribute a
+ *  consumer is about to write, and normalize the values so the codec it
+ *  registered can decode them.
+ *
+ *  Content promotion INVENTS property names from block text, so no code seed
+ *  can declare them ahead of time — the definition has to be minted at write
+ *  time or the key lands definition-less. Property migration skips a key with
+ *  no schema (`propertyChildrenProcessor` — no schema, `continue`), so it is
+ *  the one class of property data a child-backed workspace cannot carry, and
+ *  §9 requires every key to resolve a definition before a workspace flips.
+ *
+ *  Preset choice is PER KEY, from the values in hand: promoted attributes are
+ *  homogeneous in practice, so inference lands the useful type rather than
+ *  widening every scalar into a one-item list.
+ *
+ *  Two known limits, both deliberate:
+ *
+ *  - **refList is downgraded to `list`.** The importer earns refList by
+ *    building an `aliasIdMap` and rewriting `[[X]]` tokens to ids via
+ *    `normalizeRefPropertyValues`. A streaming consumer has neither, so
+ *    registering refList would store token strings under a codec that
+ *    rejects them on read.
+ *  - **Two devices meeting one new key before syncing can still disagree**
+ *    if they happen to observe different shapes first; the registry keeps one
+ *    definition per name, so the loser's cells would not decode. Not
+ *    corrupting — the values are intact and the definition is editable — and
+ *    `kmagent audit-properties` surfaces it. Converging this properly needs a
+ *    deterministic definition id, which is an `addSchema` API change.
+ *
+ *  This does NOT delete anything from `bags`. A key it cannot register is
+ *  reported and left alone: the helper cannot know whether its caller kept
+ *  the source block, and a subtractive consumer would lose the text entirely.
+ *  Decline such keys upstream with `isRegistrablePropertyName` instead.
+ *
+ *  `bags` is mutated in place by normalization, so pass the blocks you are
+ *  about to write. Returns diagnostics worth logging. */
+export const ensurePromotedPropertySchemas = async (
+  repo: Repo,
+  bags: ReadonlyArray<PromotedPropertyBag>,
+): Promise<ReadonlyArray<string>> => {
+  if (bags.length === 0) return []
+
+  // The plan/normalize helpers read only `.id` and `.properties`, so a caller
+  // can hand over its own in-flight tree rather than synthesizing rows.
+  const names = new Set<string>()
+  for (const bag of bags) for (const key of Object.keys(bag.properties ?? {})) names.add(key)
+
+  const asBlocks = bags as unknown as ReadonlyArray<BlockData>
+  const {toRegister, diagnostics} = collectSchemaReconciliationPlan(asBlocks, repo)
+  const notes = [...diagnostics]
+
+  // `addSchema` resolves the workspace itself from `repo.activeWorkspaceId`,
+  // and each registration is a separate await. A switch mid-batch would put
+  // the remaining definitions in the NEW workspace while the caller writes
+  // its blocks to the old one — so the batch is pinned and abandoned rather
+  // than half-landed somewhere else. Checking only around the whole call is
+  // not enough; the window is between the keys.
+  const pinnedWorkspaceId = repo.activeWorkspaceId
+  const registeredNow = new Map<string, string>()
+  for (const entry of toRegister) {
+    if (repo.activeWorkspaceId !== pinnedWorkspaceId) {
+      notes.push(
+        `Stopped registering promoted properties: the active workspace changed mid-batch `
+        + `(was ${String(pinnedWorkspaceId)}). Remaining keys were left unregistered.`,
+      )
+      break
+    }
+    // refList would need `normalizeRefPropertyValues` + an aliasIdMap, which
+    // only the importer builds; storing tokens under it rejects them on read.
+    const presetId = entry.presetId === 'refList' ? 'list' as const : entry.presetId
+    const config = entry.targetTypes ? {targetTypes: entry.targetTypes} : undefined
+    try {
+      await repo.userSchemas.addSchema(
+        config ? {name: entry.name, presetId, config} : {name: entry.name, presetId})
+      registeredNow.set(entry.name, presetId)
+    } catch (err) {
+      notes.push(
+        `Could not register promoted property ${JSON.stringify(entry.name)} `
+        + `(preset ${presetId}): ${err instanceof Error ? err.message : String(err)}`,
+      )
+    }
+  }
+
+  // Normalize against the EFFECTIVE registry, not merely what this call
+  // registered. A value that does not decode under its key's schema is not
+  // cosmetic: post-flip `MATERIALIZE_PROPERTY_CHILDREN_PROCESSOR` decodes
+  // during the write and THROWS, rolling the whole transaction back — and a
+  // poll-driven caller that holds its cursor on failure then retries the same
+  // event forever. Reshaping the value is the lesser evil.
+  const stringNames = new Set<string>()
+  const listNames = new Set<string>()
+  for (const name of names) {
+    const codecType = repo.propertySchemas.get(name)?.codec.type
+    if (codecType === 'string') stringNames.add(name)
+    else if (codecType === 'list') listNames.add(name)
+  }
+  normalizeStringPropertyValues(asBlocks, stringNames)
+  normalizeListPropertyValues(asBlocks, listNames)
+
+  // One postcondition covering both ways a key can still be un-carryable:
+  // no definition at all, or a value that will not decode under the
+  // definition it has. Reported, never enforced — see the note on this
+  // helper: refusing the write trades a recoverable state for a stalled
+  // caller, and both cases are swept by §9 orphan synthesis before any flip.
+  const missing: string[] = []
+  const undecodable: string[] = []
+  for (const name of names) {
+    const schema = repo.propertySchemas.get(name)
+    if (!schema) { missing.push(name); continue }
+    for (const bag of bags) {
+      const properties = bag.properties
+      if (!properties || !(name in properties)) continue
+      try {
+        schema.codec.decode(properties[name])
+      } catch {
+        undecodable.push(name)
+        break
+      }
+    }
+  }
+  if (missing.length > 0) {
+    notes.push(
+      `${missing.length} promoted key(s) have NO definition and will be skipped by property `
+      + `migration: ${missing.map(n => JSON.stringify(n)).join(', ')}. `
+      + 'Re-run once the workspace settles, or let §9 orphan synthesis pick them up; '
+      + '`kmagent audit-properties` lists them.',
+    )
+  }
+  if (undecodable.length > 0) {
+    // Normalization only covers `string` and `list`. A key whose existing
+    // schema is narrower (url, number, boolean, date…) can still receive
+    // arbitrary promoted text that no reshaping fixes — and post-flip that
+    // aborts the writing transaction. Tracked in #594; reported loudly here
+    // because the caller cannot otherwise tell it is about to write a value
+    // its own schema rejects.
+    notes.push(
+      `${undecodable.length} promoted key(s) carry a value that does not decode under their `
+      + `existing definition: ${undecodable.map(n => JSON.stringify(n)).join(', ')}. `
+      + 'This value cannot be made to fit by reshaping; widen or correct that definition. '
+      + 'In a child-backed workspace a write like this is REJECTED by the materialize '
+      + 'processor, so it must be resolved before that workspace flips.',
+    )
+  }
+
+  return notes
 }

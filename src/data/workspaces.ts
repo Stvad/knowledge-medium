@@ -9,6 +9,7 @@ import type {
 } from '@/types'
 import type { Repo } from './repo'
 import {
+  parsePropertiesMigration,
   parseWorkspaceMemberRow,
   parseWorkspaceRow,
   type WorkspaceMemberRow,
@@ -41,6 +42,10 @@ type RpcWorkspaceRow = {
   // the domain Workspace so the optimistic prime preserves the canary.
   encryption_mode: string
   wk_canary: string | null
+  // Properties-as-blocks rollout lever (PR #288 §6). Optional: RPCs
+  // deployed before the column exist return rows without it; absence
+  // parses as 'cell' (dormant).
+  properties_migration?: string | null
 }
 
 const parseRpcWorkspace = (row: RpcWorkspaceRow): Workspace => ({
@@ -51,6 +56,7 @@ const parseRpcWorkspace = (row: RpcWorkspaceRow): Workspace => ({
   updateTime: toNumber(row.update_time),
   encryptionMode: row.encryption_mode,
   wkCanary: row.wk_canary,
+  propertiesMigration: parsePropertiesMigration(row.properties_migration),
 })
 
 // @projects: workspace_members
@@ -349,13 +355,15 @@ export const listWorkspaceMembersWithEmails = async (
 // ---------------------------------------------------------------------------
 
 const SELECT_LOCAL_WORKSPACES_SQL = `
-  SELECT id, name, owner_user_id, create_time, update_time, encryption_mode, wk_canary
+  SELECT id, name, owner_user_id, create_time, update_time, encryption_mode,
+         wk_canary, properties_migration
   FROM workspaces
   ORDER BY create_time ASC, id ASC
 `
 
 const SELECT_LOCAL_WORKSPACE_BY_ID_SQL = `
-  SELECT id, name, owner_user_id, create_time, update_time, encryption_mode, wk_canary
+  SELECT id, name, owner_user_id, create_time, update_time, encryption_mode,
+         wk_canary, properties_migration
   FROM workspaces
   WHERE id = ?
   LIMIT 1
@@ -422,6 +430,107 @@ export const getLocalMemberRole = async (
   return row ? (row.role as WorkspaceRole) : null
 }
 
+export interface AwaitLocalMemberRoleOptions {
+  readonly signal?: AbortSignal
+}
+
+const memberRoleAbortError = (): DOMException =>
+  new DOMException('Waiting for local workspace membership was aborted', 'AbortError')
+
+/** Wait until the target membership row is present in the local replica.
+ * Subscribing before the second query closes the query-before-listener race;
+ * table notifications are only a wake-up signal, so every one rechecks the
+ * exact workspace/user key. */
+export const awaitLocalMemberRole = async (
+  repo: Repo,
+  workspaceId: string,
+  userId: string,
+  options: AwaitLocalMemberRoleOptions = {},
+): Promise<WorkspaceRole> => {
+  const {signal} = options
+  if (signal?.aborted) throw memberRoleAbortError()
+
+  const immediate = await getLocalMemberRole(repo, workspaceId, userId)
+  if (signal?.aborted) throw memberRoleAbortError()
+  if (immediate !== null) return immediate
+
+  return new Promise<WorkspaceRole>((resolve, reject) => {
+    let settled = false
+    let unsubscribe: (() => void) | null = null
+    let disposeRequested = false
+
+    const dispose = (): unknown | null => {
+      signal?.removeEventListener('abort', onAbort)
+      if (unsubscribe) {
+        const current = unsubscribe
+        unsubscribe = null
+        try {
+          current()
+        } catch (error) {
+          return error
+        }
+      } else {
+        // onError/abort may fire synchronously while onChange is still
+        // constructing its disposer. Honor cleanup as soon as it returns.
+        disposeRequested = true
+      }
+      return null
+    }
+    const succeed = (role: WorkspaceRole) => {
+      if (settled) return
+      settled = true
+      const cleanupError = dispose()
+      if (cleanupError) reject(cleanupError)
+      else resolve(role)
+    }
+    const fail = (error: unknown) => {
+      if (settled) return
+      settled = true
+      dispose()
+      reject(error)
+    }
+    const check = async () => {
+      if (settled) return
+      try {
+        const role = await getLocalMemberRole(repo, workspaceId, userId)
+        if (signal?.aborted) {
+          fail(memberRoleAbortError())
+        } else if (role !== null) {
+          succeed(role)
+        }
+      } catch (error) {
+        fail(error)
+      }
+    }
+    function onAbort() {
+      fail(memberRoleAbortError())
+    }
+
+    try {
+      unsubscribe = repo.db.onChange(
+        {onChange: check, onError: fail},
+        {tables: ['workspace_members']},
+      )
+      if (disposeRequested) {
+        const current = unsubscribe
+        unsubscribe = null
+        current()
+        return
+      }
+      signal?.addEventListener('abort', onAbort, {once: true})
+      if (signal?.aborted) {
+        onAbort()
+        return
+      }
+      // Post-subscription recheck: a row may have arrived after the initial
+      // query but before the listener was installed.
+      void check()
+    } catch (error) {
+      fail(error)
+    }
+  })
+}
+
 // ---------------------------------------------------------------------------
 // Optimistic local seeding (after RPC returns, before sync replicates).
 //
@@ -438,11 +547,14 @@ const primeLocalWorkspace = async (repo: Repo, workspace: Workspace): Promise<vo
   // would reset encryption_mode/wk_canary to their column defaults
   // (none/null) — nulling a synced canary in the RPC-before-sync window and
   // making an E2EE workspace look plaintext on a fresh create until sync
-  // catches up (§7).
+  // catches up (§7). Same reasoning for properties_migration: dropping it
+  // would locally reset a flipped workspace to 'cell', silently routing
+  // property writes down the cell-only path until PowerSync replays the row.
   await repo.db.execute(
     `INSERT OR REPLACE INTO workspaces
-       (id, name, owner_user_id, create_time, update_time, encryption_mode, wk_canary)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+       (id, name, owner_user_id, create_time, update_time, encryption_mode, wk_canary,
+        properties_migration)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       workspace.id,
       workspace.name,
@@ -451,6 +563,7 @@ const primeLocalWorkspace = async (repo: Repo, workspace: Workspace): Promise<vo
       workspace.updateTime,
       workspace.encryptionMode,
       workspace.wkCanary,
+      workspace.propertiesMigration,
     ],
   )
 }
@@ -535,6 +648,7 @@ export const ensureLocalPersonalWorkspace = async (
     // Local-only personal workspace is always plaintext.
     encryptionMode: 'none',
     wkCanary: null,
+    propertiesMigration: 'cell',
   }
   const member: WorkspaceMembership = {
     id: memberId,

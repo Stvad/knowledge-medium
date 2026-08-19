@@ -44,18 +44,18 @@ held behind an explicit `apply` flag.
 
 ```sh
 # Read-only detector (reusable; overlaps integrity task_8d697142 — narrow on purpose)
-yarn agent --profile <profile> eval --file scripts/dangling-refs/detect.eval.js
+pnpm agent --profile <profile> eval --file scripts/dangling-refs/detect.eval.js
 
 # Re-point merged refs — DRY-RUN by default (prints the plan, writes nothing)
-yarn agent --profile <profile> eval --file scripts/dangling-refs/remediate.eval.js
+pnpm agent --profile <profile> eval --file scripts/dangling-refs/remediate.eval.js
 # ... APPLY (writes synced data — hold for explicit approval)
-yarn agent --profile <profile> eval --file scripts/dangling-refs/remediate.eval.js \
+pnpm agent --profile <profile> eval --file scripts/dangling-refs/remediate.eval.js \
   --data-json '{"apply":true}'
 
 # Restore soft-deleted targets the user wants back (pass the leaf ids)
-yarn agent --profile <profile> eval --file scripts/dangling-refs/restore-deleted-blocks.eval.js \
+pnpm agent --profile <profile> eval --file scripts/dangling-refs/restore-deleted-blocks.eval.js \
   --data-json '{"leaves":["<id>","<id>"]}'                 # dry-run
-yarn agent --profile <profile> eval --file scripts/dangling-refs/restore-deleted-blocks.eval.js \
+pnpm agent --profile <profile> eval --file scripts/dangling-refs/restore-deleted-blocks.eval.js \
   --data-json '{"apply":true,"leaves":["<id>","<id>"]}'     # apply
 ```
 

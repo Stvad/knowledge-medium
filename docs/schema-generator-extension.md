@@ -10,7 +10,7 @@ The propagation chain for a column on `workspaces` / `workspace_members` / `work
 |---|---|---|
 | 1. Postgres DDL | `supabase/migrations/*.sql` | source of truth (manual) |
 | 2. TS column lists | [src/data/workspaceSchema.ts:41](src/data/workspaceSchema.ts:41), [82](src/data/workspaceSchema.ts:82); `src/data/blockSchema.ts` `BLOCK_STORAGE_COLUMNS` | manual |
-| 3. PowerSync sync rules | [powersync/sync-config.yaml](powersync/sync-config.yaml) | **generated** from #2 by [scripts/gen-sync-config.ts:32](scripts/gen-sync-config.ts:32); CI: `yarn check:sync-config` ([package.json:23](package.json:23)) |
+| 3. PowerSync sync rules | [powersync/sync-config.yaml](powersync/sync-config.yaml) | **generated** from #2 by [scripts/gen-sync-config.ts:32](scripts/gen-sync-config.ts:32); CI: `pnpm check:sync-config` ([package.json:23](package.json:23)) |
 | 4. RPC `RETURNS TABLE` clauses | `supabase/migrations/*.sql` (2 functions) | manual |
 | 5. TS row interfaces + parsers (local) | [src/data/workspaceSchema.ts:33](src/data/workspaceSchema.ts:33), [62](src/data/workspaceSchema.ts:62), [74](src/data/workspaceSchema.ts:74), [111](src/data/workspaceSchema.ts:111) | manual |
 | 6. TS RPC row types + parsers | [src/data/workspaces.ts:32](src/data/workspaces.ts:32), [48](src/data/workspaces.ts:48), [64](src/data/workspaces.ts:64), [84](src/data/workspaces.ts:84) (4 row types, 4 parse fns) | manual |
@@ -61,7 +61,7 @@ A "when you add a column to a workspace-related table" section in [CONTRIBUTING.
 
 **B + A-lite, in that order.**
 
-Land **option B** first — a `check:rpc-projections` script wired into `yarn check`. Concrete shape:
+Land **option B** first — a `check:rpc-projections` script wired into `pnpm check`. Concrete shape:
 
 - Source of truth: the migrations themselves. Walk `supabase/migrations/*.sql` in filename order; build a per-table column set from `CREATE TABLE` bodies, then mutate it via `ALTER TABLE ... ADD COLUMN` / `DROP COLUMN`. No new TS-side column array is required for a table to be checked — adding the column in the migration is sufficient.
 - Tag each enumerated RPC with a comment like `-- @projects: workspace_members + email` above its `CREATE OR REPLACE FUNCTION`. Script parses the comment and the following `RETURNS TABLE(...)` and asserts the columns match the migration-derived set ∪ declared extras.

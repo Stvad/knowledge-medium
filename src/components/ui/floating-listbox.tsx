@@ -1,6 +1,7 @@
-import { useEffect, useState, type CSSProperties, type ReactNode } from 'react'
+import { useMemo, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { cn } from '@/lib/utils.js'
+import { useAnchoredFloating } from './anchored-floating.js'
 
 interface FloatingListboxPlacementOptions {
   minWidth: number
@@ -27,52 +28,11 @@ const DEFAULT_MAX_HEIGHT = 224
 const DEFAULT_VIEWPORT_MARGIN = 8
 const DEFAULT_GAP = 4
 
-const clamp = (value: number, min: number, max: number): number =>
-  Math.min(Math.max(value, min), max)
-
-const placementStyle = (
-  anchor: HTMLElement,
-  {
-    minWidth,
-    maxWidth,
-    minHeight,
-    maxHeight,
-    viewportMargin,
-    gap,
-  }: FloatingListboxPlacementOptions,
-): CSSProperties => {
-  const rect = anchor.getBoundingClientRect()
-  const viewportWidth = window.innerWidth
-  const viewportHeight = window.innerHeight
-  const maxUsableWidth = Math.max(0, viewportWidth - viewportMargin * 2)
-  const usableMinWidth = Math.min(minWidth, maxUsableWidth)
-  const width = Math.min(Math.max(rect.width, usableMinWidth), maxWidth, maxUsableWidth)
-  const maxLeft = Math.max(viewportMargin, viewportWidth - width - viewportMargin)
-  const left = clamp(rect.left, viewportMargin, maxLeft)
-
-  const spaceBelow = viewportHeight - rect.bottom - viewportMargin
-  const spaceAbove = rect.top - viewportMargin
-  const openAbove = spaceBelow < minHeight * 1.5 && spaceAbove > spaceBelow
-  const maxUsableHeight = Math.max(0, viewportHeight - viewportMargin * 2)
-  const usableMinHeight = Math.min(minHeight, maxUsableHeight)
-  const availableHeight = Math.max(
-    usableMinHeight,
-    openAbove ? spaceAbove - gap : spaceBelow - gap,
-  )
-  const listboxMaxHeight = Math.min(maxHeight, availableHeight, maxUsableHeight)
-  const maxTop = Math.max(viewportMargin, viewportHeight - listboxMaxHeight - viewportMargin)
-  const top = openAbove
-    ? clamp(rect.top - listboxMaxHeight - gap, viewportMargin, maxTop)
-    : clamp(rect.bottom + gap, viewportMargin, maxTop)
-
-  return {
-    left,
-    top,
-    width,
-    maxHeight: listboxMaxHeight,
-  }
-}
-
+/** An anchored, viewport-clamped popover list (autocomplete/picker
+ *  dropdowns). Positioning is delegated to {@link useAnchoredFloating} so
+ *  Floating UI's `autoUpdate` keeps it glued to the anchor when the anchor
+ *  resizes or content above it reflows — cases the previous window-only
+ *  tracker missed. */
 export function FloatingListbox({
   open,
   anchorElement,
@@ -87,23 +47,19 @@ export function FloatingListbox({
   viewportMargin = DEFAULT_VIEWPORT_MARGIN,
   gap = DEFAULT_GAP,
 }: FloatingListboxProps) {
-  const [viewportVersion, setViewportVersion] = useState(0)
+  const sizing = useMemo(
+    () => ({minWidth, maxWidth, minHeight, maxHeight}),
+    [minWidth, maxWidth, minHeight, maxHeight],
+  )
+  const {floatingStyle, setFloatingElement} = useAnchoredFloating({
+    open,
+    anchorElement,
+    gap,
+    viewportMargin,
+    sizing,
+  })
 
-  useEffect(() => {
-    if (!open || typeof window === 'undefined') return undefined
-
-    const refresh = () => setViewportVersion(version => version + 1)
-    window.addEventListener('resize', refresh)
-    window.addEventListener('scroll', refresh, true)
-    return () => {
-      window.removeEventListener('resize', refresh)
-      window.removeEventListener('scroll', refresh, true)
-    }
-  }, [open])
-
-  if (!open || !anchorElement || typeof document === 'undefined' || typeof window === 'undefined') return null
-
-  void viewportVersion
+  if (!open || !anchorElement || typeof document === 'undefined') return null
 
   return createPortal(
     // `pointer-events-auto` is load-bearing: when this listbox renders
@@ -115,18 +71,12 @@ export function FloatingListbox({
     <div
       id={id}
       role={role}
+      ref={setFloatingElement}
       className={cn(
         'pointer-events-auto fixed z-[1000] overflow-auto rounded-md border border-border bg-popover p-1 text-sm shadow-lg',
         className,
       )}
-      style={placementStyle(anchorElement, {
-        minWidth,
-        maxWidth,
-        minHeight,
-        maxHeight,
-        viewportMargin,
-        gap,
-      })}
+      style={floatingStyle}
     >
       {children}
     </div>,

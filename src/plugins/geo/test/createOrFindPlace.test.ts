@@ -1,15 +1,13 @@
 // @vitest-environment node
 
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
-import { resolveFacetRuntimeSync } from '@/facets/facet'
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { ChangeScope } from '@/data/api'
 import type { Block } from '@/data/block'
-import { BlockCache } from '@/data/blockCache'
 import { PAGE_TYPE } from '@/data/blockTypes'
-import { kernelDataExtension } from '@/data/kernelDataExtension'
 import { aliasesProp, typesProp } from '@/data/properties'
 import { Repo } from '@/data/repo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
+import { createTestRepo, isBlockDeleted } from '@/data/test/createTestRepo'
 import { PLACE_TYPE } from '../blockTypes'
 import { geoDataExtension } from '../dataExtension'
 import {
@@ -40,13 +38,12 @@ interface Harness {
 const setup = async (): Promise<Harness> => {
   await resetTestDb(sharedDb.db)
   const h = sharedDb
-  const repo = new Repo({
+  const { repo } = createTestRepo({
     db: h.db,
-    cache: new BlockCache(),
+    extensions: [geoDataExtension],
     user: {id: 'user-1'},
   })
   repo.setActiveWorkspaceId(WS)
-  repo.setFacetRuntime(resolveFacetRuntimeSync([kernelDataExtension, geoDataExtension]))
   return {h, repo}
 }
 
@@ -55,9 +52,6 @@ let env: Harness
 beforeAll(async () => { sharedDb = await createTestDb() })
 afterAll(async () => { await sharedDb.cleanup() })
 beforeEach(async () => { env = await setup() })
-// Dispose the per-test Repo's sync observer so its db.onChange subscription
-// doesn't leak onto the shared DB (closed once in afterAll).
-afterEach(() => { env.repo.stopSyncObserver() })
 
 /** Unwrap the ok-arm — most tests expect creation to succeed. */
 const create = async (candidate: PlaceCandidate): Promise<Block> => {
@@ -235,5 +229,16 @@ describe('addPlaceToExistingBlock', () => {
 
   it('rejects a missing block', async () => {
     await expect(addPlaceToExistingBlock(env.repo, 'nope', DANDELION)).rejects.toThrow()
+  })
+})
+
+describe('undo grouping (issue #306)', () => {
+  it('Locations-page bootstrap + place creation record ONE undo entry', async () => {
+    const block = await create(DANDELION)
+    expect(env.repo.undoManager.depths(ChangeScope.BlockDefault)).toEqual({undo: 1, redo: 0})
+
+    expect(await env.repo.undo()).toBe(true)
+    expect(await isBlockDeleted(env.repo, block.id)).toBe(true)
+    expect(await isBlockDeleted(env.repo, locationsPageBlockId(WS))).toBe(true)
   })
 })

@@ -1,22 +1,17 @@
-// @vitest-environment jsdom
+// @vitest-environment happy-dom
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChangeScope, type User } from '@/data/api'
-import { BlockCache } from '@/data/blockCache'
-import { kernelDataExtension } from '@/data/kernelDataExtension'
 import { getLayoutSessionBlock, getUIStateBlock } from '@/data/stateBlocks'
 import { editorSelection } from '@/data/properties'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
+import { createTestRepo } from '@/data/test/createTestRepo'
 import { Repo } from '@/data/repo'
-import { resolveFacetRuntimeSync } from '@/facets/facet'
-import {
-  __resetLayoutSessionIdForTesting,
-  getLayoutSessionId,
-} from '@/utils/layoutSessionId'
+import { __resetLayoutSessionIdForTesting } from '@/utils/layoutSessionId'
 import {
   insertPanelRow,
   panelBlockId,
-  panelRowsInLayoutOrder,
+  allPanelRowsInLayoutOrder,
 } from '@/utils/panelLayoutProjection'
 import { __resetAppIntentForTesting, consumeAppIntent, formatSharedContent } from '../appIntents.ts'
 import {
@@ -45,17 +40,11 @@ interface Harness {
 const setup = async (): Promise<Harness> => {
   await resetTestDb(sharedDb.db)
   const h = sharedDb
-  let id = 0
-  const repo = new Repo({
+  const { repo } = createTestRepo({
     db: h.db,
-    cache: new BlockCache(),
     user: USER,
-    newId: () => `gen-${++id}`,
+    extensions: [dailyNotesDataExtension],
   })
-  repo.setFacetRuntime(resolveFacetRuntimeSync([
-    kernelDataExtension,
-    dailyNotesDataExtension,
-  ]))
   repo.setActiveWorkspaceId(WS)
   return {h, repo}
 }
@@ -86,7 +75,6 @@ beforeEach(async () => {
 afterEach(async () => {
   vi.useRealTimers()
   setLocationSearch('')
-  env.repo.stopSyncObserver()
 })
 
 const seedLandingLayout = async () => {
@@ -101,7 +89,7 @@ const seedLandingLayout = async () => {
     })
   }, {scope: ChangeScope.BlockDefault})
   const rootUiState = await getUIStateBlock(env.repo, WS, USER, {})
-  const layoutSession = await getLayoutSessionBlock(rootUiState, getLayoutSessionId())
+  const layoutSession = await getLayoutSessionBlock(rootUiState, env.repo.activeLayoutSessionId)
   await insertPanelRow(env.repo, layoutSession, 'main-block')
   return {daily, layoutSession}
 }
@@ -157,7 +145,7 @@ describe('consumeAppIntent', () => {
     expect(window.location.search).toBe('')
 
     const layoutRows = await env.repo.query.subtree({id: layoutSession.id}).load()
-    const newPanel = panelRowsInLayoutOrder(layoutSession.id, layoutRows)
+    const newPanel = allPanelRowsInLayoutOrder(layoutSession.id, layoutRows)
       .find(row => panelBlockId(row) === newBlockId)
     expect(newPanel).toBeTruthy()
     const selection = env.repo.block(newPanel!.id).peekProperty(editorSelection)

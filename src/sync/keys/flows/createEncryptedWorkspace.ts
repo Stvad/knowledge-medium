@@ -16,6 +16,7 @@
  */
 
 import { validateCanary, mintCanary } from '../../crypto/canary.js'
+import { deriveContentKeyHmac } from '../../crypto/contentKey.js'
 import {
   formatWorkspaceKey,
   generateWorkspaceKeyBytes,
@@ -67,8 +68,20 @@ export const createEncryptedWorkspace = async <T extends object>(
   // The paste-friendly string is the ONLY place the raw key ever leaves this
   // function; show it once, then it lives only as a non-extractable handle.
   const workspaceKey = formatWorkspaceKey(keyBytes)
-  const cryptoKey = await importWorkspaceKey(keyBytes)
-  keyBytes.fill(0) // drop the raw bytes once imported (the handle is enough)
+  let cryptoKey: CryptoKey
+  let contentKeyHmac: CryptoKey
+  try {
+    cryptoKey = await importWorkspaceKey(keyBytes)
+    // Derive K_id (§10) from the raw bytes BEFORE zeroing — their only in-scope
+    // window (the imported WK handle is non-extractable). Co-located with the WK
+    // in one keyStore record so they evict together.
+    contentKeyHmac = await deriveContentKeyHmac(keyBytes)
+  } finally {
+    // Zero on EVERY exit (success or a throw mid-import/derive) — symmetric with
+    // the §8.2 unlock flow, so a reject in import/derive can't leave the raw WK
+    // bytes on the GC heap.
+    keyBytes.fill(0)
+  }
 
   const wkCanary = await mintCanary(cryptoKey, workspaceId)
   // Self-check (§8.1): prove the EXACT string we show the user re-imports to a
@@ -76,7 +89,13 @@ export const createEncryptedWorkspace = async <T extends object>(
   // Re-deriving from `workspaceKey` (not reusing `cryptoKey`) is what makes this
   // a real proof of recoverability, not just "this key opens it". Fail before
   // creating a server row whose canary no device could ever open.
-  const verifyKey = await importWorkspaceKey(parseWorkspaceKey(workspaceKey))
+  const verifyBytes = parseWorkspaceKey(workspaceKey)
+  let verifyKey: CryptoKey
+  try {
+    verifyKey = await importWorkspaceKey(verifyBytes)
+  } finally {
+    verifyBytes.fill(0) // same best-effort zero as keyBytes — no raw WK bytes left on the heap
+  }
   if (!(await validateCanary(verifyKey, wkCanary, workspaceId))) {
     throw new Error('createEncryptedWorkspace: minted canary failed round-trip self-validation')
   }
@@ -89,7 +108,7 @@ export const createEncryptedWorkspace = async <T extends object>(
   // WK would loop on the same failed write. Cleaned up immediately; the real key
   // is persisted after the row exists.
   try {
-    await deps.keyStore.put(deps.userId, KEY_STORE_PROBE_ID, cryptoKey)
+    await deps.keyStore.put(deps.userId, KEY_STORE_PROBE_ID, { wk: cryptoKey, contentKeyHmac })
     await deps.keyStore.delete(deps.userId, KEY_STORE_PROBE_ID)
   } catch {
     throw new Error(
@@ -123,7 +142,7 @@ export const createEncryptedWorkspace = async <T extends object>(
     )
   }
   try {
-    await deps.keyStore.put(deps.userId, workspaceId, cryptoKey)
+    await deps.keyStore.put(deps.userId, workspaceId, { wk: cryptoKey, contentKeyHmac })
   } catch (err) {
     console.warn(
       `createEncryptedWorkspace: key store write failed for ${workspaceId}; ` +

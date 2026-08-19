@@ -120,14 +120,21 @@ export function AppRuntimeProvider({
 
   useEffect(() => {
     let cancelled = false
-    // Wipe stale errors + trust statuses from the previous resolution; the
-    // loader will re-report any that still apply.
-    errorStore.reset()
-    approvalStore.reset()
+    // Buffer this resolution's error + trust-status reports and publish each
+    // store as ONE atomic old→new transition on success (commitBatch below),
+    // instead of resetting to empty now and dribbling re-reports in after the
+    // async resolve. The reset→dribble shape briefly blanked both maps, which
+    // flickered the global prompt toasts + status-chip dot (and blinked the
+    // row status icons). The loader re-reports every still-applicable entry,
+    // so the batch starts empty and drops anything no longer reported.
+    errorStore.beginBatch()
+    approvalStore.beginBatch()
 
     if (!workspaceId) {
       // Should not happen — getInitialBlock sets activeWorkspaceId
       // before any render. If it does, there's nothing to load.
+      errorStore.abandonBatch()
+      approvalStore.abandonBatch()
       return
     }
 
@@ -162,6 +169,9 @@ export function AppRuntimeProvider({
         ], {overrides, safeMode, context: runtimeContext})
 
         if (!cancelled) {
+          // Publish both maps atomically now that the resolve is complete.
+          errorStore.commitBatch()
+          approvalStore.commitBatch()
           setRuntime(nextRuntime)
           // Sync the merged runtime (kernel + static + dynamic) into
           // Repo so plugin-contributed mutators and post-commit
@@ -171,8 +181,24 @@ export function AppRuntimeProvider({
           // layer's dispatch / processor surfaces.
           repo.setFacetRuntime(nextRuntime)
         }
+        // On cancel we intentionally leave the buffers uncommitted; the next
+        // resolve's beginBatch discards them. (Stores are also recreated per
+        // workspace, so a switch can't leak a stale buffer.)
       } catch (error) {
         console.error('Failed to resolve app runtime', error)
+        // Close our batches on error so they don't stay open (a stuck batch
+        // would silently swallow every later report). BUT only when this is
+        // still the active resolve — same `!cancelled` guard as the commit
+        // path above. If we were superseded, a newer resolve has already
+        // opened its OWN batch on these shared stores; abandoning here would
+        // clobber it, dropping its buffered reports and no-op'ing its commit.
+        // (A cancelled resolve needn't clean up anyway: the newer resolve's
+        // beginBatch already replaced our buffer.) abandonBatch leaves the
+        // last-known map intact — stale-on-error beats blanking every prompt.
+        if (!cancelled) {
+          errorStore.abandonBatch()
+          approvalStore.abandonBatch()
+        }
       }
     })()
 
@@ -198,23 +224,6 @@ export function AppRuntimeProvider({
   // reconcile effect above so a deps change re-runs reconciliation
   // (the diff) rather than tearing every effect down.
   useEffect(() => () => effectReconciler.dispose(), [effectReconciler])
-
-  // Start every definition-block projector (issue #90) for the active
-  // workspace: user-defined property-schema blocks → propertySchemasFacet
-  // and block-type blocks → typesFacet, each mirrored into a 'user-data'
-  // bucket by the shared ProjectorRuntime. `startAll` reads the
-  // descriptors from `definitionBlockProjectorFacet` and starts them in
-  // dependency order (schemas before types, since the type build path
-  // resolves block-type:properties refs through the schema projector);
-  // the returned disposer tears them down in reverse. The same singleton
-  // facades (repo.userSchemas / repo.userTypes) that imperative call
-  // sites use — e.g. addSchema on AddPropertyForm submit — read the
-  // resulting in-memory state through this runtime.
-  useEffect(() => {
-    if (!workspaceId) return
-    const dispose = repo.projectors.startAll()
-    return () => dispose()
-  }, [repo, workspaceId])
 
   return (
     <AppRuntimeContextProvider value={runtime}>

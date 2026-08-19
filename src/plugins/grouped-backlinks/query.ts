@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { defineQuery, type QueryCtx, type Schema } from '@/data/api'
+import { backlinksFilterSchema, defineQuery, type QueryCtx, type Schema } from '@/data/api'
 import {
   buildQualifiedBlockColumnsSql,
   type BlockRow,
@@ -8,8 +8,10 @@ import { labelForBlockData } from '@/utils/linkTargetAutocomplete.js'
 import {
   hasBacklinksFilter,
   normalizeBacklinksFilter,
+  propertyMachinerySourceIds,
   type BacklinksFilter,
 } from '@/plugins/backlinks/query.js'
+import { readIsChildBackedWorkspace } from '@/data/workspaceSchema'
 import {
   TYPED_BLOCKS_LABEL_CHANNEL,
   TYPED_BLOCKS_PROPERTY_CHANNEL,
@@ -21,7 +23,6 @@ import {
   typedBlocksStructureKey,
 } from '@/data/invalidation'
 import { typesProp } from '@/data/properties.js'
-import { typesFacet } from '@/data/facets.js'
 import {
   buildGroupedBacklinks,
   type GroupedBacklinkCandidate,
@@ -71,23 +72,6 @@ const groupedBacklinksSchema: Schema<GroupedBacklinksResult> = {
   parse: (input) => input as GroupedBacklinksResult,
 }
 
-const referenceFilterSchema = z.object({
-  id: z.string(),
-  sourceField: z.string().optional(),
-})
-
-const blockPredicateSchema = z.object({
-  scope: z.enum(['self', 'ancestor']).optional(),
-  id: z.string().optional(),
-  where: z.record(z.string(), z.unknown()).optional(),
-  referencedBy: referenceFilterSchema.optional(),
-})
-
-const backlinksFilterSchema = z.object({
-  include: z.array(blockPredicateSchema).optional(),
-  exclude: z.array(blockPredicateSchema).optional(),
-}).optional()
-
 const groupedBacklinksConfigSchema = z.object({
   highPriorityTags: z.array(z.string()).optional(),
   lowPriorityTags: z.array(z.string()).optional(),
@@ -132,14 +116,26 @@ const resolveBacklinkSourceIds = async (
   workspaceId: string,
   id: string,
   filter?: Required<BacklinksFilter>,
-): Promise<string[]> =>
-  (await ctx.run('core.typedBlockIds', {
+): Promise<string[]> => {
+  const ids = (await ctx.run('core.typedBlockIds', {
     workspaceId,
     referencedBy: {id},
     match: filter?.include,
     exclude: filter?.exclude,
     order: 'created-desc',
   })).filter(sourceId => sourceId !== id)
+  // Same flip-gated property-machinery exclusion `backlinks.forBlock` applies
+  // (PR #386 review): grouped backlinks resolve their own sources rather than
+  // routing through that query, so without this a hidden value row's
+  // `[[Target]]` disappears from Linked References and the inline count but
+  // still shows up here — duplicating the owner's projected property backlink
+  // on the one surface that didn't filter. Dormant while un-flipped: no
+  // machinery exists to exclude, and this pays only the cached flip read.
+  if (ids.length === 0) return ids
+  if (!(await readIsChildBackedWorkspace(ctx.db, workspaceId))) return ids
+  const machinery = await propertyMachinerySourceIds(ctx.db, ids)
+  return machinery.size === 0 ? ids : ids.filter(sourceId => !machinery.has(sourceId))
+}
 
 const resolveSourceParents = async (
   ctx: QueryCtx,
@@ -171,6 +167,22 @@ const resolveSourceParents = async (
  *  the SQLite parameter ceiling that would have been hit by a
  *  per-id `VALUES (?)` list on heavily-linked targets. */
 const SOURCE_IDS_CTE = `source_ids(id) AS (SELECT value FROM json_each(?))`
+
+/** Hydrate the member (source/backlink) rows by id. Grouping consumes the
+ *  members' *references* (via `block_references`) and their parent edges, but
+ *  never the members' own rows — `resolveBacklinkSourceIds` returns ids only.
+ *  Group-header actions (e.g. daily-notes "spread") gate visibility on each
+ *  member's content through the action's `isVisible` (`block.peek()`), so this
+ *  primes those rows into the cache. One JSON-array bind (same trick as
+ *  `SOURCE_IDS_CTE`) avoids the SQLite parameter ceiling on heavily-linked
+ *  targets. */
+export const SELECT_GROUPED_BACKLINK_MEMBER_ROWS_SQL = `
+  WITH ${SOURCE_IDS_CTE}
+  SELECT ${buildQualifiedBlockColumnsSql('b')}
+  FROM source_ids s
+  JOIN blocks b ON b.id = s.id
+  WHERE b.deleted = 0
+`
 
 /** Group context = (refs from source + each ancestor) UNION (root
  *  ancestor's own id). Roam-style: "what context is each backlink
@@ -304,7 +316,7 @@ export const groupedBacklinksForBlockQuery = defineQuery<
   argsSchema: z.object({
     workspaceId: z.string(),
     id: z.string(),
-    filter: backlinksFilterSchema,
+    filter: backlinksFilterSchema.optional(),
     groupingConfig: groupedBacklinksConfigSchema,
   }),
   resultSchema: groupedBacklinksSchema,
@@ -360,6 +372,17 @@ export const groupedBacklinksForBlockQuery = defineQuery<
     // Avoids the SQLite parameter ceiling on heavily-linked targets.
     const sourceIdsJson = JSON.stringify(sourceIds)
 
+    // Prime member rows (see SELECT_GROUPED_BACKLINK_MEMBER_ROWS_SQL).
+    // `declareRowDeps: false` keeps the ids-only projection's invalidation
+    // shape: a plain content edit to a member won't re-fire this collection
+    // handle (a date-ref add/remove still will — the sources already declare
+    // refs-of deps via `dependOnSourceContextNode`).
+    const memberRows = await ctx.db.getAll<BlockRow>(
+      SELECT_GROUPED_BACKLINK_MEMBER_ROWS_SQL,
+      [sourceIdsJson],
+    )
+    ctx.hydrateBlocks(asBlockRows(memberRows), {declareRowDeps: false})
+
     const candidateRows = await ctx.db.getAll<CandidateRow>(
       SELECT_GROUPED_BACKLINK_CANDIDATES_SQL,
       [sourceIdsJson, workspaceId, id],
@@ -408,10 +431,10 @@ export const groupedBacklinksForBlockQuery = defineQuery<
 
     // User-defined types store the block-type block's id in `types[]`
     // (not its label string), so a raw `type_name` is a UUID we have
-    // to dereference for display. Use the in-memory `typesFacet`
-    // registry — it carries both kernel-contributed types and
-    // user-defined types materialized at runtime by
-    // `UserTypesService`. O(1) Map lookup, no DB roundtrip.
+    // to dereference for display. Use the in-memory merged `repo.types`
+    // registry — it carries both kernel/plugin code types and the
+    // block-built user types (materialized at runtime by `UserTypesService`
+    // through the type-definition registry). O(1) Map lookup, no DB roundtrip.
     //
     // A SQL-driven label lookup against `blocks` measured 4 seconds
     // for 4 ids in practice on a real-world DB (the planner couldn't
@@ -419,15 +442,13 @@ export const groupedBacklinksForBlockQuery = defineQuery<
     // left or the right). The in-memory path sidesteps that entirely.
     //
     // Eventual consistency: renaming a type block republishes the
-    // facet contribution but does not invalidate this query handle,
-    // so the panel keeps the previous label until any other dep
-    // wakes the resolver. Accepted in exchange for the perf win.
-    const typesRegistry = ctx.repo.facetRuntime?.read(typesFacet)
+    // registry but does not invalidate this query handle, so the panel
+    // keeps the previous label until any other dep wakes the resolver.
+    // Accepted in exchange for the perf win.
+    const typesRegistry = ctx.repo.types
     const typeLabelById = new Map<string, string>()
-    if (typesRegistry) {
-      for (const contribution of typesRegistry.values()) {
-        typeLabelById.set(contribution.id, contribution.label ?? contribution.id)
-      }
+    for (const contribution of typesRegistry.values()) {
+      typeLabelById.set(contribution.id, contribution.label ?? contribution.id)
     }
 
     const groupRowsById = new Map<string, BlockRow>()
@@ -483,7 +504,7 @@ export const groupedBacklinksForBlockQuery = defineQuery<
       const groupId = `type:${row.type_name}`
       const groupLabel = typeLabelById.get(row.type_name) ?? row.type_name
       for (const sourceId of sources) {
-        const key = `${sourceId} ${groupId}`
+        const key = `${sourceId}\x00${groupId}`
         if (emittedTypeCandidates.has(key)) continue
         emittedTypeCandidates.add(key)
         candidates.push({

@@ -1,5 +1,4 @@
-/** Kernel ValuePreset set + the contributions extension that registers
- *  them via `valuePresetsFacet`. See user-defined-properties.md §1. */
+/** React presentation joined onto data-layer kernel preset cores. */
 
 import {
   AtSign,
@@ -12,15 +11,31 @@ import {
   Type as TypeIcon,
 } from 'lucide-react'
 import {
-  CodecError,
-  codecs,
-  definePreset,
-  type AnyValuePreset,
-  type Codec,
+  joinValuePreset,
+  type AnyValuePresetPresentation,
   type PropertyEditor,
-  type RefCodecOptions,
+  type ValuePresetCore,
+  type ValuePresetPresentation,
 } from '@/data/api'
-import { valuePresetsFacet } from '@/data/facets.js'
+import { valuePresetPresentationsFacet } from '@/data/facets.js'
+import {
+  booleanValuePresetCore,
+  dateValuePresetCore,
+  enumValuePresetCore,
+  listValuePresetCore,
+  jsonValuePresetCore,
+  numberValuePresetCore,
+  optionalJsonValuePresetCore,
+  optionalNumberValuePresetCore,
+  optionalRefValuePresetCore,
+  optionalStringValuePresetCore,
+  refListValuePresetCore,
+  refValuePresetCore,
+  strictEnumValuePresetCore,
+  stringValuePresetCore,
+  stringListValuePresetCore,
+  urlValuePresetCore,
+} from '@/data/kernelValuePresetCores'
 import type { AppExtension } from '@/facets/facet.js'
 import { systemToggle } from '@/facets/togglable.js'
 import {
@@ -34,29 +49,7 @@ import {
 import { RefListPropertyEditor, RefPropertyEditor } from './RefPropertyEditor'
 import { RefTargetTypePicker } from './RefTargetTypePicker'
 import { SelectPropertyEditor } from './SelectPropertyEditor'
-
-/** Validates ref / refList preset config. `targetTypes`, when present,
- *  must be a string[]; anything else is rejected at the parse boundary
- *  so `build` always sees well-typed config. */
-const refConfigCodec: Codec<RefCodecOptions> = {
-  type: 'ref-config',
-  encode: cfg => {
-    if (cfg.targetTypes === undefined || cfg.targetTypes.length === 0) return {}
-    return {targetTypes: [...cfg.targetTypes]}
-  },
-  decode: json => {
-    if (json === null || typeof json !== 'object' || Array.isArray(json)) {
-      throw new CodecError('ref config object', json)
-    }
-    const obj = json as Record<string, unknown>
-    if (obj.targetTypes !== undefined) {
-      if (!Array.isArray(obj.targetTypes) || !obj.targetTypes.every(t => typeof t === 'string')) {
-        throw new CodecError('ref config targetTypes (string[])', obj.targetTypes)
-      }
-    }
-    return {targetTypes: obj.targetTypes as readonly string[] | undefined}
-  },
-}
+import {EnumOptionsConfigEditor} from './EnumOptionsConfigEditor'
 
 /** Existing kernel editors are typed `PropertyEditor<unknown>`, which
  *  is invariant against the per-preset `PropertyEditor<TValue>`
@@ -69,94 +62,126 @@ const refConfigCodec: Codec<RefCodecOptions> = {
 const asEditor = <T>(editor: PropertyEditor<any>): PropertyEditor<T> =>
   editor as unknown as PropertyEditor<T>
 
-export const kernelValuePresets: readonly AnyValuePreset[] = [
-  definePreset<string>({
+/** Validate a kernel core/presentation id match and return the presentation
+ *  half — cores are registered separately via `kernelDataExtension`. */
+const kernelPresetPresentation = <TValue, TConfig>(
+  core: ValuePresetCore<TValue, TConfig>,
+  presentation: ValuePresetPresentation<NoInfer<TValue>, NoInfer<TConfig>>,
+): ValuePresetPresentation<TValue, TConfig> => {
+  joinValuePreset(core, presentation) // throws on id mismatch; result unused
+  return presentation
+}
+
+export const kernelValuePresetPresentations: readonly AnyValuePresetPresentation[] = [
+  kernelPresetPresentation(stringValuePresetCore, {
     id: 'string',
     label: 'Plain text',
     Glyph: TypeIcon,
-    build: () => codecs.string,
-    defaultValue: '',
     Editor: asEditor<string>(StringPropertyEditor),
   }),
-  definePreset<number>({
+  kernelPresetPresentation(numberValuePresetCore, {
     id: 'number',
     label: 'Number',
     Glyph: Hash,
-    build: () => codecs.number,
-    defaultValue: 0,
     Editor: asEditor<number>(NumberPropertyEditor),
   }),
-  definePreset<boolean>({
+  kernelPresetPresentation(booleanValuePresetCore, {
     id: 'boolean',
     label: 'Checkbox',
     Glyph: CheckSquare,
-    build: () => codecs.boolean,
-    defaultValue: false,
     Editor: asEditor<boolean>(BooleanPropertyEditor),
   }),
-  definePreset<unknown[]>({
+  kernelPresetPresentation(listValuePresetCore, {
     id: 'list',
     label: 'Options',
     Glyph: List,
-    build: () => codecs.list(codecs.unsafeIdentity<unknown>()),
-    defaultValue: [],
     Editor: asEditor<unknown[]>(ListPropertyEditor),
   }),
-  definePreset<Date | undefined>({
+  kernelPresetPresentation(dateValuePresetCore, {
     id: 'date',
     label: 'Date',
     Glyph: Calendar,
-    // codecs.date is natively absence-aware (Codec<Date | undefined>) —
-    // see codecs.ts for why no codecs.optional wrapper exists.
-    build: () => codecs.date,
-    defaultValue: undefined,
     Editor: asEditor<Date | undefined>(DatePropertyEditor),
   }),
-  definePreset<string>({
+  kernelPresetPresentation(urlValuePresetCore, {
     id: 'url',
     label: 'URL',
     Glyph: LinkIcon,
-    build: () => codecs.url,
-    defaultValue: '',
     Editor: asEditor<string>(UrlPropertyEditor),
   }),
-  definePreset<string>({
-    // Provides the `<select>` editor for stored enum properties (options
-    // ride on the codec). Hidden from the AddPropertyForm picker — an
-    // ad-hoc enum has no options-config UI, so it's only useful when a
-    // plugin's settings schema supplies the options via `codecs.enum`.
+  kernelPresetPresentation(enumValuePresetCore, {
+    // Options ride on the codec and are edited on the schema definition.
     id: 'enum',
     label: 'Choice',
     Glyph: ChevronDownSquare,
-    // Placeholder codec: the preset only supplies the editor (resolved by
-    // codec.type), and is hidden from the picker, so this is never used to
-    // mint a schema. The explicit <string> keeps it a `Codec<string>`.
-    build: () => codecs.enum<string>([]),
-    defaultValue: '',
     Editor: asEditor<string>(SelectPropertyEditor),
+    ConfigEditor: EnumOptionsConfigEditor,
+  }),
+  kernelPresetPresentation(strictEnumValuePresetCore, {
+    // Code-declared fixed unions (todo status, char scope,
+    // property-schema:change-scope). Same editor/config as Choice, but hidden
+    // from the user's preset picker — these are code-owned, not user-created.
+    // Registered so materialized seed definitions render their options instead
+    // of "strict-enum (unknown)".
+    id: 'strict-enum',
+    label: 'Choice (fixed)',
+    Glyph: ChevronDownSquare,
+    Editor: asEditor<string>(SelectPropertyEditor),
+    ConfigEditor: EnumOptionsConfigEditor,
     hideFromPicker: true,
   }),
-  definePreset<string, RefCodecOptions>({
+  kernelPresetPresentation(refValuePresetCore, {
     id: 'ref',
     label: 'Reference',
     Glyph: AtSign,
-    build: cfg => codecs.ref(cfg),
-    defaultValue: '',
-    defaultConfig: {},
-    configCodec: refConfigCodec,
     Editor: asEditor<string>(RefPropertyEditor),
     ConfigEditor: RefTargetTypePicker,
   }),
-  definePreset<readonly string[], RefCodecOptions>({
+  kernelPresetPresentation(refListValuePresetCore, {
     id: 'refList',
     label: 'References',
     Glyph: AtSign,
-    build: cfg => codecs.refList(cfg),
-    defaultValue: [],
-    defaultConfig: {},
-    configCodec: refConfigCodec,
     Editor: asEditor<readonly string[]>(RefListPropertyEditor),
     ConfigEditor: RefTargetTypePicker,
+  }),
+  kernelPresetPresentation(optionalStringValuePresetCore, {
+    id: 'optional-string',
+    label: 'Optional text',
+    Glyph: TypeIcon,
+    Editor: asEditor<string | undefined>(StringPropertyEditor),
+    hideFromPicker: true,
+  }),
+  kernelPresetPresentation(optionalNumberValuePresetCore, {
+    id: 'optional-number',
+    label: 'Optional number',
+    Glyph: Hash,
+    Editor: asEditor<number | undefined>(NumberPropertyEditor),
+    hideFromPicker: true,
+  }),
+  kernelPresetPresentation(stringListValuePresetCore, {
+    id: 'string-list',
+    label: 'Text list',
+    Glyph: List,
+    Editor: asEditor<readonly string[]>(ListPropertyEditor),
+    hideFromPicker: true,
+  }),
+  kernelPresetPresentation(optionalRefValuePresetCore, {
+    id: 'optional-ref',
+    label: 'Optional reference',
+    Glyph: AtSign,
+    Editor: asEditor<string | undefined>(RefPropertyEditor),
+    ConfigEditor: RefTargetTypePicker,
+    hideFromPicker: true,
+  }),
+  kernelPresetPresentation(jsonValuePresetCore, {
+    id: 'json',
+    label: 'JSON',
+    hideFromPicker: true,
+  }),
+  kernelPresetPresentation(optionalJsonValuePresetCore, {
+    id: 'optional-json',
+    label: 'Optional JSON',
+    hideFromPicker: true,
   }),
 ]
 
@@ -165,4 +190,6 @@ export const kernelValuePresetsExtension: AppExtension = systemToggle({
   name: 'Property value presets',
   description: "Default editor + glyph for each codec type, used by any property that doesn't ship a per-name override.",
   essential: true,
-}).of(kernelValuePresets.map(preset => valuePresetsFacet.of(preset, {source: 'kernel-ui'})))
+}).of([
+  kernelValuePresetPresentations.map(preset => valuePresetPresentationsFacet.of(preset, {source: 'kernel-ui'})),
+])

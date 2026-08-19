@@ -28,6 +28,7 @@ export const SrsReviewDeckRenderer: BlockRenderer = Object.assign(
     <DefaultBlockRenderer
       {...props}
       ContentRenderer={ReviewDeckContent}
+      contentShowsOtherBlocks
       EditContentRenderer={ReviewDeckContent}
     />
   ),

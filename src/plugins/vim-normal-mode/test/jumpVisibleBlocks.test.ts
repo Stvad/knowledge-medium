@@ -6,11 +6,11 @@
  * steps, clamping at the scope edge, and reporting "no movement" as null.
  */
 
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
-import { BlockCache } from '@/data/blockCache'
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { ChangeScope } from '@/data/api'
 import { Repo } from '@/data/repo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
+import { createTestRepo } from '@/data/test/createTestRepo'
 import { jumpVisibleBlocks } from '../actions.ts'
 
 const WS = 'ws-1'
@@ -27,12 +27,10 @@ afterAll(async () => { await sharedDb.cleanup() })
 
 beforeEach(async () => {
   await resetTestDb(sharedDb.db)
-  repo = new Repo({
+  repo = createTestRepo({
     db: sharedDb.db,
-    cache: new BlockCache(),
     user: {id: 'user-1'},
-    startSyncObserver: false,
-  })
+  }).repo
   repo.setActiveWorkspaceId(WS)
   await repo.tx(async tx => {
     await tx.create({id: ROOT, workspaceId: WS, parentId: null, orderKey: 'a'})
@@ -47,7 +45,6 @@ beforeEach(async () => {
     }
   }, {scope: ChangeScope.BlockDefault})
 })
-afterEach(() => { repo.stopSyncObserver() })
 
 const jump = (from: string, count: number, direction: 'up' | 'down') =>
   jumpVisibleBlocks(repo.block(from), ROOT, count, direction)

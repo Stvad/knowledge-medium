@@ -45,13 +45,19 @@ export interface ParsedAliasCollision {
 }
 
 /** Decode SQLite's `hex()` output (uppercase hex of the UTF-8 bytes)
- *  back to the original string. Empty input decodes to `''`. */
+ *  back to the original string. Empty input decodes to `''`.
+ *
+ *  `ignoreBOM: true` because this is an exact round-trip of bytes the
+ *  trigger hex-encoded, not a document read: the default decoder eats a
+ *  leading U+FEFF, which would silently hand back an alias one character
+ *  short of the one the row actually holds — so the repair path would
+ *  look up the wrong alias. Same defect class as issue #534 (aead.ts). */
 const decodeHexUtf8 = (hex: string): string => {
   const bytes = new Uint8Array(hex.length / 2)
   for (let i = 0; i < hex.length; i += 2) {
     bytes[i / 2] = parseInt(hex.slice(i, i + 2), 16)
   }
-  return new TextDecoder().decode(bytes)
+  return new TextDecoder('utf-8', {ignoreBOM: true}).decode(bytes)
 }
 
 /** Recognise the trigger-raised parent-deleted error from

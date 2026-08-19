@@ -38,8 +38,12 @@ import {
   BLOCKS_SYNCED_RAW_TABLE,
   CREATE_BLOCKS_PARENT_ORDER_INDEX_SQL,
   CREATE_BLOCKS_SYNCED_TABLE_SQL,
+  CREATE_BLOCKS_FIELD_FORM_INDEX_SQL,
+  CREATE_BLOCKS_REFERENCE_TARGET_PARENT_INDEX_SQL,
   CREATE_BLOCKS_TABLE_SQL,
   CREATE_BLOCKS_WORKSPACE_ACTIVE_INDEX_SQL,
+  CREATE_BLOCKS_WORKSPACE_NONEMPTY_PROPERTIES_INDEX_SQL,
+  ensureBlockLocalColumns,
 } from '@/data/blockSchema'
 import {
   CREATE_WORKSPACES_TABLE_SQL,
@@ -48,6 +52,7 @@ import {
   WORKSPACES_RAW_TABLE,
   WORKSPACE_MEMBERS_RAW_TABLE,
   ensureWorkspaceE2eeColumns,
+  ensureWorkspacePropertiesMigrationColumn,
 } from '@/data/workspaceSchema'
 import {
   CLIENT_SCHEMA_STATEMENTS,
@@ -55,16 +60,28 @@ import {
   backfillBlocksFtsIfEmpty,
   backfillBlockTypesIfEmpty,
   ensureBlockUserUpdatedAtColumn,
+  ensureUndoGroupIdColumns,
 } from '@/data/internals/clientSchema'
 import { runAnalyzeIfStale } from '@/data/maintenance'
 import { onFirstSync } from '@/data/internals/firstSync.js'
-import { scheduleIdle } from '@/utils/scheduleIdle.js'
+import { CATCHUP_DEEP_IDLE, scheduleDeepIdle } from '@/utils/scheduleIdle.js'
+import { toLocalDbOpenError } from '@/utils/localDbCorruption.js'
+import {
+  captureDbOpenCorruption,
+  recordForensicSessionStart,
+  watchForRuntimeCorruption,
+} from '@/utils/dbForensicsHooks.js'
+import { releasePowerSyncConnection } from '@/data/releasePowerSyncConnection.js'
 import {
   applyLocalSchemaContributions,
   resolveLocalSchemaContributions,
 } from '@/data/localSchema.js'
 import { guardSyncedTableWrites } from '@/data/syncedTableWriteGuard.js'
 import { staticDataExtensions } from '@/extensions/staticDataExtensions.js'
+import {
+  dbFilenameForUser,
+  recordPreviewDatabaseForReaper,
+} from '@/data/localDbStorage.js'
 
 const appSchema = new Schema({})
 // Layout B (design doc §9.2): PowerSync writes EVERY downloaded block — the
@@ -81,30 +98,14 @@ appSchema.withRawTables({
   workspace_members: WORKSPACE_MEMBERS_RAW_TABLE,
 })
 
-// wa-sqlite's VFS caps pathnames at 64 chars (mxPathname in
-// node_modules/@journeyapps/wa-sqlite/src/VFS.js). SQLite derives
-// WAL/journal/shm paths from the dbFilename with suffixes up to ~10
-// chars, so the base has to stay well under 64 or sqlite3_open_v2
-// fails with "Filename too long" and no useful error. 7 (prefix) +
-// 40 (user) + 3 (suffix) = 50 — safe headroom.
-const MAX_USER_SEGMENT = 40
-
-// v6 = baseline (OPFSCoopSync + multi-tabs on @powersync/web@1.38.1).
-// History: v3 was the original IDB layout; v4 introduced OPFS; v5
-// reverted to IDB to test whether the bucket-wipe pattern was
-// OPFS-specific (it wasn't — wipes reproduce identically on both, so
-// the cause is upstream of storage). v6 returns to the intended
-// production setup: OPFSCoopSync for fast sync access handles + multi-
-// tabs enabled. Each VFS bump gets a fresh filename so we don't reuse
-// storage across backends.
-export const dbFilenameForUser = (userId: string) => {
-  const sanitized = userId.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, MAX_USER_SEGMENT)
-  return `kmp-v6-${sanitized}.db`
-}
-
 const dbsByUser = new Map<string, PowerSyncDatabase>()
 const initPromises = new Map<string, Promise<void>>()
 let activeUserId: string | null = null
+// Whether the ACTIVE session connects to remote (vs local-only mode). Set alongside
+// activeUserId in ensurePowerSyncReady; read by the attachment up-lane + resolver so a
+// local-only session makes NO Supabase Storage request — the same "no remote requests
+// in local-only" contract this module already upholds for the PowerSync connect below.
+let activeRemoteSync = false
 let connectChain: Promise<void> = Promise.resolve()
 
 // One §6 sync resolver per user, shared by both halves of the Layout B
@@ -121,6 +122,34 @@ const resolverForUser = (userId: string): SyncResolver => {
   }
   return resolver
 }
+
+/** The active user id (whose per-user PowerSync DB is mounted), or null when
+ *  signed out. The asset byte path (§7.3) scopes its OPFS store + resolver to
+ *  this — re-read at call time so an account switch is reflected.
+ *
+ *  @ambient allowIn: src/data/repoProvider.ts, src/plugins/attachments/assetUpload.ts, src/plugins/attachments/assetResolver.ts
+ *  @ambientMessage getActiveUserId() reads the ambient active-user global. Use the injected channel instead: repo.user.id (a Repo/Block is already in scope at every call site) or useUser() in a component.
+ */
+export const getActiveUserId = (): string | null => activeUserId
+
+/** Whether the active session has remote sync ENABLED (vs local-only). The attachment
+ *  up-lane + resolver gate on this so a local-only session uploads/fetches NOTHING
+ *  to/from Supabase Storage — `supabase` being non-null only means auth is CONFIGURED,
+ *  not that this session opted into remote. */
+export const isRemoteSyncActive = (): boolean => activeRemoteSync
+
+/** The active user's §6 sync resolver (materializability / WK / K_id), or null
+ *  when signed out. The in-thread asset resolver delegates its decode + content-
+ *  key decisions to it, so they share the one §6 policy source. */
+export const getActiveSyncResolver = (): SyncResolver | null =>
+  activeUserId ? resolverForUser(activeUserId) : null
+
+/** The §6 sync resolver for a SPECIFIC user (materializability / WK / K_id),
+ *  regardless of who is active. The byte up-lane binds this at its entry boundary
+ *  (capture / drain) so an operation initiated for one user can't read another
+ *  user's keys if the active account switches mid-flight. (The read-path asset
+ *  resolver legitimately follows the ACTIVE user instead — see assetResolver.ts.) */
+export const syncResolverForUser = (userId: string): SyncResolver => resolverForUser(userId)
 
 /** Observer deps for the Repo's `syncObserverDeps` parameter, drawn from
  *  the same per-user resolver the upload connector uses — so download
@@ -182,6 +211,26 @@ export const getPowerSyncDb = (userId: string): PowerSyncDatabase => {
   return db
 }
 
+/**
+ * Close the user's PowerSync connection IF one was already constructed (release
+ * the OPFS sync access handle) and forget it. Unlike `getPowerSyncDb`, this NEVER
+ * constructs a connection — the recovery path is about to delete the `.db`, and
+ * opening a fresh connection to it would re-acquire the very handle we need
+ * released (and re-fail on the corrupt file). No-op when nothing is open.
+ *
+ * A failed-init connection (corrupt DB) needs the adapter released directly —
+ * its high-level close() re-throws the rejected init before freeing the OPFS
+ * handle — so we go through `releasePowerSyncConnection`. We still drop it from
+ * the maps so a later reload re-inits cleanly.
+ */
+export const closePowerSyncDbIfOpen = async (userId: string): Promise<void> => {
+  const existing = dbsByUser.get(userId)
+  dbsByUser.delete(userId)
+  initPromises.delete(userId)
+  if (!existing) return
+  await releasePowerSyncConnection(existing)
+}
+
 // `useRemoteSync` is the runtime gate (defaults to the build-time
 // `hasRemoteSyncConfig`). Callers pass `false` when the user opted into
 // local-only mode at login — in that case we still init the local DB +
@@ -193,6 +242,8 @@ export const ensurePowerSyncReady = async (
 ) => {
   await assertOpfsAvailable()
 
+  const dbFilename = dbFilenameForUser(userId)
+  await recordPreviewDatabaseForReaper(dbFilename)
   const db = getPowerSyncDb(userId)
 
   let initPromise = initPromises.get(userId)
@@ -200,18 +251,43 @@ export const ensurePowerSyncReady = async (
     initPromise = initializePowerSyncDb(db)
     initPromises.set(userId, initPromise)
   }
-  await initPromise
+  try {
+    await initPromise
+  } catch (error) {
+    // A corrupt local `.db` surfaces here (e.g. "database disk image is
+    // malformed"). Record a forensic snapshot (issue #284) BEFORE anything
+    // touches the file, then re-throw as a typed, recoverable error carrying the
+    // userId so the bootstrap error boundary can offer Export + Reset. Any other
+    // failure passes through unchanged.
+    captureDbOpenCorruption(userId, dbFilename, error)
+    throw toLocalDbOpenError(error, userId)
+  }
+
+  // Out-of-band forensic instrumentation (issue #284): record the session (with
+  // unclean-shutdown detection), schedule an idle zero-page scan, and watch for
+  // a RUNTIME sync-apply corruption the DB-open detector never sees. All
+  // best-effort — guarded to run once per process, never throws into boot.
+  recordForensicSessionStart(userId, dbFilename)
+  watchForRuntimeCorruption(db, userId, dbFilename)
+
+  // The local DB is now mounted for this user — record it as the active account in
+  // BOTH modes. The asset byte path (§7.3) + media capture key off getActiveUserId,
+  // so a local-only session must still set it or every image/file paste reaches
+  // captureMedia as `no-user` and is silently dropped. Only the REMOTE connect
+  // below is gated on useRemoteSync.
+  const previousUserId = activeUserId
+  const alreadyActive = activeUserId === userId
+  activeUserId = userId
+  // Record the session's mode for the asset lane (set in BOTH modes, like activeUserId).
+  activeRemoteSync = useRemoteSync
 
   if (!useRemoteSync) {
     return
   }
 
-  if (activeUserId === userId) {
+  if (alreadyActive) {
     return
   }
-
-  const previousUserId = activeUserId
-  activeUserId = userId
 
   // Run disconnect+connect serially so we don't race two connect
   // attempts. Don't await the chain — connect can take a while and
@@ -281,6 +357,26 @@ const initializePowerSyncDb = async (powerSyncDb: PowerSyncDatabase) => {
   await powerSyncDb.execute(CREATE_BLOCKS_SYNCED_TABLE_SQL)
   await powerSyncDb.execute(CREATE_BLOCKS_PARENT_ORDER_INDEX_SQL)
   await powerSyncDb.execute(CREATE_BLOCKS_WORKSPACE_ACTIVE_INDEX_SQL)
+  await powerSyncDb.execute(CREATE_BLOCKS_WORKSPACE_NONEMPTY_PROPERTIES_INDEX_SQL)
+  // Idempotent local migration: add the LOCAL-only derived columns
+  // (`reference_target_id`) to an existing `blocks` table. MUST run before
+  // the CLIENT_SCHEMA_STATEMENTS loop below — the recreated row_events
+  // trigger bodies reference the column (SQLite accepts a CREATE TRIGGER
+  // against a missing column and only fails at fire time). `blocks_synced`
+  // deliberately does NOT get it (never synced; PR #288 §11 slice A). The
+  // index is created after so it exists on upgrading devices too.
+  await ensureBlockLocalColumns(powerSyncDb)
+  await powerSyncDb.execute(CREATE_BLOCKS_REFERENCE_TARGET_PARENT_INDEX_SQL)
+  await powerSyncDb.execute(CREATE_BLOCKS_FIELD_FORM_INDEX_SQL)
+  // Idempotent local migration: add `group_id` to an existing
+  // tx_context / row_events (undo grouping, issue #306). MUST run
+  // before ANY re-creation of the row_events trigger bodies — that
+  // includes `withTriggerSuspended` inside `ensureBlockUserUpdatedAtColumn`
+  // below (its backfill bracket re-installs blocks_row_event_update
+  // from the NEW constant, whose body references group_id), not just
+  // the CLIENT_SCHEMA_STATEMENTS loop. Fresh DBs skip it (tables don't
+  // exist yet; the CREATEs carry the column).
+  await ensureUndoGroupIdColumns(powerSyncDb)
   // Idempotent local migration: add `user_updated_at` to an existing
   // `blocks` / `blocks_synced` on upgrading devices (CREATE TABLE IF NOT
   // EXISTS above is a no-op when the table already exists) + one-shot
@@ -293,6 +389,9 @@ const initializePowerSyncDb = async (powerSyncDb: PowerSyncDatabase) => {
   // `workspaces` table on upgrading devices (CREATE TABLE IF NOT EXISTS
   // above is a no-op when the table already exists). §7 / e2ee-design.
   await ensureWorkspaceE2eeColumns(powerSyncDb)
+  // Properties-as-blocks rollout lever (PR #288 §6) — nullable; absence
+  // reads as 'cell' (dormant) via parseWorkspaceRow.
+  await ensureWorkspacePropertiesMigrationColumn(powerSyncDb)
   await powerSyncDb.execute(CREATE_WORKSPACE_MEMBERS_TABLE_SQL)
   await powerSyncDb.execute(CREATE_WORKSPACE_MEMBERS_INDEX_SQL)
 
@@ -301,7 +400,9 @@ const initializePowerSyncDb = async (powerSyncDb: PowerSyncDatabase) => {
   // Statements include
   // CREATE TABLE IF NOT EXISTS / CREATE INDEX IF NOT EXISTS / CREATE
   // TRIGGER IF NOT EXISTS so re-running is a no-op against an
-  // already-bootstrapped dev database.
+  // already-bootstrapped dev database. (`ensureUndoGroupIdColumns`
+  // already ran above, so the recreated trigger bodies can reference
+  // row_events.group_id.)
   for (const stmt of CLIENT_SCHEMA_STATEMENTS) {
     await powerSyncDb.execute(stmt)
   }
@@ -317,8 +418,12 @@ const initializePowerSyncDb = async (powerSyncDb: PowerSyncDatabase) => {
     // backfills must go through repo.tx (workspaceBackfillsFacet).
     execute: guardSyncedTableWrites((sql: string, params?: unknown[]) =>
       powerSyncDb.execute(sql, params as never[] | undefined)),
-    getOptional: async <T,>(sql: string) => {
-      const row = await powerSyncDb.getOptional<T>(sql)
+    // Forwards params. Dropping them silently bound NULL for any `?` in a
+    // bootstrap read, so the query matched nothing and the caller read that as
+    // "not done yet" — a backfill/marker probe that can never see its own
+    // completion re-runs its scan on every boot.
+    getOptional: async <T,>(sql: string, params?: unknown[]) => {
+      const row = await powerSyncDb.getOptional<T>(sql, params as never[] | undefined)
       return row ?? null
     },
   }
@@ -334,20 +439,32 @@ const initializePowerSyncDb = async (powerSyncDb: PowerSyncDatabase) => {
   // `sqlite_stat1`, so the planner makes pessimal join-order choices on
   // `blocks` once a workspace is large (a 4-id `json_each` lookup can
   // degenerate to a 4-second scan of the workspace partial index).
-  // `runAnalyzeIfStale` re-runs only when the live `blocks` count has
-  // drifted from the count the stats were built on (see clientSchema), so
-  // a stable workspace pays nothing and a grown one self-corrects. Both
-  // the count probe and ANALYZE run on the single SQLite worker, so every
-  // trigger below is idle-deferred — never on the first-paint path.
+  // `runAnalyzeIfStale` asks SQLite what is stale (`PRAGMA optimize`) and
+  // re-analyzes only that — a settled workspace pays ~nothing, and the boot
+  // after a release that adds an index pays one table rather than the whole
+  // file. See clientSchema / docs/pragma-optimize-spike.
   //
-  // (a) Boot: catches anything that changed since the last session — a
-  // prior-session import, organic growth, or the legacy "0 0" stats bug.
+  // scheduleDEEPIdle, not scheduleIdle: the latter's 2s cap means it WILL run
+  // inside the cold-start window on a busy load (its own doc says so). When
+  // this DOES fire it runs a real ANALYZE on the single SQLite worker — on a
+  // cold fresh device, potentially every table at once — and parking that
+  // worker for seconds IS the freeze this whole change is about, so it must
+  // not land on first paint.
+  //
   const scheduleAnalyzeCheck = (reason: string) => {
-    scheduleIdle(() => {
-      void runAnalyzeIfStale(backfillDb).catch(error => {
+    scheduleDeepIdle(() => {
+      void runAnalyzeIfStale(backfillDb).then(({proposed}) => {
+        // Silent when nothing was stale, which is every boot after the first —
+        // but when it DOES park the worker, say which tables it was for.
+        // Otherwise the only symptom of a mis-tuned staleness rule is an
+        // unexplained pause.
+        if (proposed && proposed.length > 0) {
+          console.info(`[Repo] ANALYZE (${reason}):`, proposed.join(', '))
+        }
+      }).catch(error => {
         console.warn(`[Repo] ANALYZE check failed (${reason}):`, error)
       })
-    })
+    }, CATCHUP_DEEP_IDLE)
   }
   scheduleAnalyzeCheck('boot')
 

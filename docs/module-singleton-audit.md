@@ -35,7 +35,6 @@ not-reset) is a flake risk.
 | `data/repo.ts` `reprojectionMarkers` | `__resetReprojectionMarkerCache` |
 | `extensions/blockGestureConflicts.ts` `activeGestureByBlockId` | `__resetBlockGestureClaimsForTest` |
 | `extensions/compileExtensionModule.ts` `compileImpl` / `defaultCache` | `__setCompileImplForTest` / `__resetCompileCacheForTest` |
-| `plugins/agent-runtime/describeRuntime.ts` `cachedApiSurface` | `__resetApiSurfaceCacheForTest` |
 | `plugins/app-intents/appIntents.ts` `consumed` | `__resetAppIntentForTesting` |
 | `plugins/spatial-navigation/walker.ts` `lastPositionByPanel` | `__resetSpatialNavigationForTesting` |
 | `utils/dialogs.ts` `nextId` / `queue` | `__resetDialogsForTests` |

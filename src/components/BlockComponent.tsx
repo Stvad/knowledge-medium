@@ -49,11 +49,21 @@ export const BlockChildren = ({block}: { block: Block }) => {
   // about to enter the viewport, then mounts the real BlockComponent.
   // For trees of thousands of blocks this drops initial-mount cost from
   // O(N) to O(visible-window) without flattening the tree.
+  //
+  // The scope is read ONCE here and passed down rather than each child reading
+  // context for itself: a deferred row publishes it (see `LazyViewportMount`),
+  // and a `useContext` per placeholder would make every context change re-render
+  // thousands of them — the per-block subscription fan-out the spatial-nav
+  // shell decorator documents as the pitfall to avoid. Children render in this
+  // context, so its scope is the one they will have.
+  const {renderScopeId} = useBlockContext()
+
   return <>
     {useChildIds(block).map((childId) => (
       <LazyBlockComponent
         key={childId}
         blockId={childId}
+        renderScopeId={renderScopeId}
       />
     ))}
   </>

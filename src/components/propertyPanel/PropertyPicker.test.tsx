@@ -1,0 +1,200 @@
+// @vitest-environment happy-dom
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import {ChangeScope} from '@/data/api'
+import { propertyEditorOverridesFacet, valuePresetCoresFacet, valuePresetPresentationsFacet } from '@/data/facets.js'
+import type { Block } from '@/data/block'
+import {buildPropertyDefinitionRegistry} from '@/data/propertyDefinitionRegistry'
+import {seedProperty} from '@/data/propertySeeds'
+import { PropertyPicker } from './PropertyPicker.tsx'
+
+const store = vi.hoisted(() => ({
+  byFacetId: new Map<string, unknown>(),
+  schemas: new Map<string, unknown>(),
+}))
+
+vi.mock('@/extensions/runtimeContext.ts', () => ({
+  useAppRuntime: () => ({read: (facet: {id: string}) => store.byFacetId.get(facet.id) ?? new Map()}),
+}))
+vi.mock('@/hooks/propertySchemas.ts', () => ({
+  usePropertySchemas: () => store.schemas,
+}))
+// The activation hook needs the shortcut providers; `consumeFieldEscape` from
+// the same module is real logic under test below, so keep the rest intact.
+vi.mock('./usePropertyEditingActivation', async (importOriginal) => ({
+  ...await importOriginal<object>(),
+  usePropertyEditingActivation: () => ({onFocus: () => {}, onBlur: () => {}}),
+}))
+
+const schema = (name: string) => ({name, codec: {type: 'string'}})
+const pickerBlock = (propertyDefinitions: Block['repo']['propertyDefinitions'] = null) => ({
+  repo: {propertyDefinitions},
+}) as Block
+// Read the highlighted option from the input's aria-activedescendant rather than
+// the rendered listbox: the input attribute updates synchronously with state,
+// whereas FloatingListbox mounts its options asynchronously (floating-ui
+// computePosition), which is racy to assert on directly.
+const activeOption = () =>
+  screen.getByPlaceholderText('Field').getAttribute('aria-activedescendant') ?? ''
+
+beforeEach(() => {
+  store.schemas = new Map([['apple', schema('apple')], ['apricot', schema('apricot')]])
+  store.byFacetId = new Map<string, unknown>([
+    // Mirror the runtime shape: the picker reads the joined registry
+    // (cores ⋈ presentations by id), so seed both facets. This test asserts
+    // suggestion navigation/reset, not preset display, so the preset contents
+    // aren't what's under test.
+    [valuePresetCoresFacet.id, new Map([['string', {id: 'string', build: () => ({type: 'string'}), defaultValue: ''}]])],
+    [valuePresetPresentationsFacet.id, new Map([['string', {id: 'string', label: 'Text', Glyph: () => null}]])],
+    [propertyEditorOverridesFacet.id, new Map()],
+  ])
+})
+
+describe('PropertyPicker', () => {
+  // Guards the regression Codex flagged: the picker stays mounted after submit()
+  // (BlockTypeBlockRenderer), so reset() must clear the listbox's activeIndex —
+  // otherwise the next property's suggestions open on a stale highlight.
+  it('resets the highlighted suggestion after submit so the next session starts at the top', async () => {
+    const onAdd = vi.fn().mockResolvedValue(undefined)
+    render(
+      <PropertyPicker
+        onAdd={onAdd}
+        onConfigureNewSchema={vi.fn().mockResolvedValue(undefined)}
+        block={pickerBlock()}
+      />,
+    )
+    const input = screen.getByPlaceholderText('Field')
+
+    // Open suggestions and arrow down to the 2nd row.
+    fireEvent.change(input, {target: {value: 'ap'}})
+    expect(activeOption()).toMatch(/-option-0$/) // apple, index 0
+    fireEvent.keyDown(input, {key: 'ArrowDown'})
+    expect(activeOption()).toMatch(/-option-1$/) // apricot, index 1
+
+    // Commit it (Enter) → submit() → onAdd → reset(). Wait for reset to settle
+    // (input cleared) before reopening, so focus can't race the async close that
+    // reset() performs — otherwise a late reset() would re-close the list.
+    await act(async () => { fireEvent.keyDown(input, {key: 'Enter'}) })
+    expect(onAdd).toHaveBeenCalledTimes(1)
+    await waitFor(() => expect((input as HTMLInputElement).value).toBe(''))
+
+    // Reopen WITHOUT typing — onFocus does not reset the index, so this only
+    // passes if reset() already cleared it. Highlight must be back at the top.
+    fireEvent.focus(input)
+    expect(activeOption()).toMatch(/-option-0$/)
+  })
+
+  // Escape has two jobs in a property field and they must not both run on one
+  // press: dismiss what the field has open, or (nothing open) exit the field
+  // via the property-editing `exit_property_editing` action, which listens on
+  // `window`. A window listener stands in for that action here.
+  describe('Escape ownership', () => {
+    const renderPicker = (onEscape?: () => void) => {
+      render(
+        <PropertyPicker
+          onAdd={vi.fn()}
+          onConfigureNewSchema={vi.fn()}
+          block={pickerBlock()}
+          onEscape={onEscape}
+        />,
+      )
+      const input = screen.getByPlaceholderText('Field')
+      fireEvent.focus(input)
+      return input
+    }
+
+    it('dismisses its own suggestion list first, then lets Escape exit the field', () => {
+      const reachedShortcuts = vi.fn()
+      window.addEventListener('keydown', reachedShortcuts)
+      try {
+        const input = renderPicker()
+        expect(activeOption()).toMatch(/-option-0$/)
+
+        fireEvent.keyDown(input, {key: 'Escape'})
+        expect(input.getAttribute('aria-activedescendant')).toBeNull()
+        expect(reachedShortcuts).not.toHaveBeenCalled()
+
+        fireEvent.keyDown(input, {key: 'Escape'})
+        expect(reachedShortcuts).toHaveBeenCalledTimes(1)
+      } finally {
+        window.removeEventListener('keydown', reachedShortcuts)
+      }
+    })
+
+    it('leaves a composing Escape alone instead of dismissing the list', () => {
+      // Mid-composition Escape drops the IME's pending candidate. Dismissing
+      // the suggestion list here would consume the key (preventDefault +
+      // stopPropagation) and take it away from the input method entirely —
+      // the list is still open afterwards precisely because we did nothing.
+      const reachedShortcuts = vi.fn()
+      window.addEventListener('keydown', reachedShortcuts)
+      try {
+        const input = renderPicker()
+        expect(activeOption()).toMatch(/-option-0$/)
+
+        fireEvent.keyDown(input, {key: 'Escape', isComposing: true})
+
+        expect(activeOption()).toMatch(/-option-0$/)
+        expect(reachedShortcuts).toHaveBeenCalledTimes(1)
+      } finally {
+        window.removeEventListener('keydown', reachedShortcuts)
+      }
+    })
+
+    it('keeps Escape when the parent still has an add-row to cancel', () => {
+      const reachedShortcuts = vi.fn()
+      const onEscape = vi.fn()
+      window.addEventListener('keydown', reachedShortcuts)
+      try {
+        const input = renderPicker(onEscape)
+        fireEvent.keyDown(input, {key: 'Escape'}) // closes the list
+        fireEvent.keyDown(input, {key: 'Escape'}) // cancels the add row
+
+        expect(onEscape).toHaveBeenCalledTimes(1)
+        expect(reachedShortcuts).not.toHaveBeenCalled()
+      } finally {
+        window.removeEventListener('keydown', reachedShortcuts)
+      }
+    })
+  })
+
+  it('does not suggest, submit, or configure a hidden seed when bound or at stage 0', async () => {
+    const hidden = seedProperty({
+      seedKey: 'plugin:test/property/secret',
+      revision: 1,
+      name: 'secret',
+      preset: 'string',
+      changeScope: ChangeScope.BlockDefault,
+      hidden: true,
+    })
+    const snapshot = buildPropertyDefinitionRegistry({
+      workspaceId: 'ws',
+      projectedDefinitions: new Map(),
+      seeds: [hidden],
+    })
+    store.schemas = new Map(snapshot.schemas)
+    for (const definitions of [snapshot, null]) {
+      const onAdd = vi.fn()
+      const onConfigureNewSchema = vi.fn()
+      const view = render(
+        <PropertyPicker
+          onAdd={onAdd}
+          onConfigureNewSchema={onConfigureNewSchema}
+          block={pickerBlock(definitions)}
+        />,
+      )
+
+      const input = screen.getByPlaceholderText('Field')
+      fireEvent.change(input, {target: {value: hidden.name}})
+      // itemCount=0 is reflected synchronously even though FloatingListbox
+      // itself mounts asynchronously.
+      expect(input.getAttribute('aria-activedescendant')).toBeNull()
+      fireEvent.keyDown(input, {key: 'Enter'})
+      fireEvent.click(screen.getByRole('button', {name: 'Configure New field'}))
+
+      expect(onAdd).not.toHaveBeenCalled()
+      expect(onConfigureNewSchema).not.toHaveBeenCalled()
+      view.unmount()
+    }
+  })
+})

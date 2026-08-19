@@ -83,6 +83,11 @@ export const runtimeSummaryCommandSchema = z.looseObject({
   ...commandIdField,
 })
 
+export const healthCommandSchema = z.looseObject({
+  type: z.literal('health'),
+  ...commandIdField,
+})
+
 export const describeRuntimeCommandSchema = z.looseObject({
   type: z.literal('describe-runtime'),
   actions: z.array(z.string()).optional(),
@@ -106,6 +111,12 @@ export const sqlCommandSchema = z.looseObject({
   sql: z.string(),
   mode: sqlModeSchema.optional(),
   params: z.array(z.unknown()).optional(),
+  /** Override the kernel's refusal to write to a synced table (`blocks`,
+   *  `workspaces`, `workspace_members`) via raw SQL — such a write bypasses
+   *  repo.tx, so it never uploads and skips the kernel derivations. Unset
+   *  (or false) keeps the guard on; true is a deliberate, one-call opt-out
+   *  (the CLI's `--allow-synced-write`). */
+  allowSyncedWrite: z.boolean().optional(),
   ...commandIdField,
 })
 
@@ -122,7 +133,6 @@ export const getBlockCommandSchema = z.looseObject({
 export const getSubtreeCommandSchema = z.looseObject({
   type: z.literal('get-subtree'),
   rootId: z.string(),
-  includeRoot: z.boolean().optional(),
   ...commandIdField,
 })
 
@@ -133,6 +143,30 @@ export const createBlockCommandSchema = z.looseObject({
   ...commandIdField,
 })
 
+/** Reconcile a keyed block SUBTREE under `parentId` to match `markdown`,
+ *  in one transaction. The markdown is parsed with the app's own paste
+ *  parser so the split matches "paste as markdown" exactly. Every block of
+ *  the subtree is tagged with `key`, and the app makes the tagged subtree
+ *  EQUAL the parsed tree — creating, updating, re-ordering, and (on `final`)
+ *  deleting to converge. Idempotent by that key: re-sending the same
+ *  markdown lands the same tree, no duplication, so a transient failure is
+ *  safe to retry. `shape: 'block'` keeps the whole markdown as ONE block
+ *  (no outline split); `'outline'` (default) splits along the markdown
+ *  outline. `properties` (looseObject passthrough) is applied to every
+ *  block — the dispatch daemon uses it to tag `claude:reply`. Streaming a
+ *  reply calls this repeatedly with the growing text (same key); the last
+ *  call passes `final: true`. Replaces the old one-shot
+ *  `create-blocks-from-markdown`. */
+export const reconcileMarkdownSubtreeCommandSchema = z.looseObject({
+  type: z.literal('reconcile-markdown-subtree'),
+  parentId: z.string(),
+  markdown: z.string(),
+  key: z.string(),
+  shape: z.enum(['outline', 'block']).optional(),
+  final: z.boolean().optional(),
+  ...commandIdField,
+})
+
 export const updateBlockCommandSchema = z.looseObject({
   type: z.literal('update-block'),
   id: z.string().optional(),
@@ -140,6 +174,36 @@ export const updateBlockCommandSchema = z.looseObject({
   content: z.string().optional(),
   replaceProperties: z.boolean().optional(),
   // properties forwarded verbatim (looseObject).
+  ...commandIdField,
+})
+
+export const moveBlockPositionSchema = z.discriminatedUnion('kind', [
+  z.object({kind: z.literal('first')}),
+  z.object({kind: z.literal('last')}),
+  z.object({kind: z.literal('before'), siblingId: z.string()}),
+  z.object({kind: z.literal('after'), siblingId: z.string()}),
+])
+
+export const moveBlockCommandSchema = z.looseObject({
+  type: z.literal('move-block'),
+  id: z.string().optional(),
+  blockId: z.string().optional(),
+  parentId: z.string().nullable(),
+  position: moveBlockPositionSchema,
+  ...commandIdField,
+})
+
+export const deleteBlockCommandSchema = z.looseObject({
+  type: z.literal('delete-block'),
+  id: z.string().optional(),
+  blockId: z.string().optional(),
+  ...commandIdField,
+})
+
+export const restoreBlockCommandSchema = z.looseObject({
+  type: z.literal('restore-block'),
+  id: z.string().optional(),
+  blockId: z.string().optional(),
   ...commandIdField,
 })
 
@@ -185,6 +249,26 @@ export const uninstallExtensionCommandSchema = z.looseObject({
   type: z.literal('uninstall-extension'),
   id: z.string().optional(),
   label: z.string().optional(),
+  ...commandIdField,
+})
+
+export const auditExtensionCommandSchema = z.looseObject({
+  type: z.literal('audit-extension'),
+  id: z.string().optional(),
+  label: z.string().optional(),
+  ...commandIdField,
+})
+
+export const auditPropertiesCommandSchema = z.looseObject({
+  type: z.literal('audit-properties'),
+  workspaceId: z.string().optional(),
+  ...commandIdField,
+})
+
+export const runBackfillCommandSchema = z.looseObject({
+  type: z.literal('run-backfill'),
+  backfillId: z.string(),
+  workspaceId: z.string().optional(),
   ...commandIdField,
 })
 
@@ -253,7 +337,7 @@ export const pageCommandSchema = z.looseObject({
   type: z.literal('page'),
   name: z.string(),
   workspaceId: z.string().optional(),
-  limit: z.number().optional(),
+  limit: z.number().int().positive().optional(),
   ...commandIdField,
 })
 
@@ -272,25 +356,146 @@ export const searchCommandSchema = z.looseObject({
   type: z.literal('search'),
   query: z.string(),
   workspaceId: z.string().optional(),
-  limit: z.number().optional(),
+  limit: z.number().int().positive().optional(),
   ...commandIdField,
 })
+
+// ----- read-only SQL guard --------------------------------------------
+
+/** Side-effecting SQL functions PowerSync registers on the SAME wa-sqlite
+ *  connection the bridge uses — `SELECT powersync_clear(1)` wipes local
+ *  (incl. un-uploaded) data, `powersync_replace_schema` / `_control`
+ *  corrupt schema/sync state. A `SELECT` prologue does NOT make a
+ *  statement read-only here, so these must be denied regardless of
+ *  prologue. Match the bare `powersync_` TOKEN, not `powersync_` + `(`:
+ *  a SQLite comment counts as whitespace, so a comment wedged between the
+ *  name and its paren makes a valid call that a `\s*\(` guard would miss
+ *  — but the function name itself must appear as one contiguous
+ *  identifier to be callable (a comment can't split it), so the bare
+ *  token match is comment-proof. The app registers no other writable
+ *  UDFs (verified), so this family is the whole vector. */
+const SIDE_EFFECTING_FN = /\bpowersync_/i
+
+/** Textual read-only enforcement, shared by every surface that accepts
+ *  SQL it will run repeatedly or on someone else's authority (the km MCP
+ *  graph tools, agent-dispatch watcher configs, watch-events registrations,
+ *  the bridge's read-only token scope): single statement, no
+ *  side-effecting function call, and either a SELECT/PRAGMA-info/EXPLAIN
+ *  prologue or a WITH containing no mutating keyword — CTEs can head
+ *  `WITH … UPDATE/INSERT/DELETE`, so `with` alone proves nothing. The
+ *  keyword/function scan can false-positive on string literals; rewrite
+ *  the query (or use the write tools) in that case. */
+export const isReadOnlySql = (sql: string): boolean => {
+  const body = sql.trim().replace(/;\s*$/, '')
+  if (body.includes(';')) return false
+  if (SIDE_EFFECTING_FN.test(body)) return false
+  if (/^(select|pragma table_info|explain)\b/i.test(body)) return true
+  if (/^with\b/i.test(body)) {
+    return !/\b(insert|update|delete|replace|drop|alter|create|vacuum|attach|detach|reindex)\b/i.test(body)
+  }
+  return false
+}
+
+// ----- watch-events (push detection) ----------------------------------
+
+/** Schema bounds, exported so consumers building registrations (e.g.
+ *  the agent-dispatch daemon's config) can validate against the SAME
+ *  limits — an over-cap value fails the tab's schema at registration
+ *  time, where it's indistinguishable from an old bundle. */
+export const WATCH_EVENTS_MAX_SETTLE_MS = 600_000
+export const WATCH_EVENTS_MAX_TABLES = 8
+
+const watcherSettleMsField = {
+  /** Quiet window: the result set must be stable this long before an
+   *  event is emitted (restarted on every further change). */
+  settleMs: z.number().int().min(0).max(WATCH_EVENTS_MAX_SETTLE_MS).optional(),
+}
+
+/** Watch an arbitrary read-only query: the tab re-runs it on changes to
+ *  `tables` and emits when the result set settles on a new value. */
+export const watchEventsSqlWatcherSchema = z.looseObject({
+  kind: z.literal('sql'),
+  name: z.string().min(1),
+  sql: z.string().refine(isReadOnlySql, {
+    message: 'watcher sql must be a single read-only statement (SELECT / PRAGMA table_info / EXPLAIN, or a non-mutating WITH)',
+  }),
+  params: z.array(z.unknown()).optional(),
+  /** Tables whose changes re-run the query (default: blocks). */
+  tables: z.array(z.string().min(1)).max(WATCH_EVENTS_MAX_TABLES).optional(),
+  ...watcherSettleMsField,
+})
+
+/** Watch the backlinks of one block/page — the tab owns the query shape
+ *  so consumers don't hand-roll reference-table SQL. */
+export const watchEventsBacklinksWatcherSchema = z.looseObject({
+  kind: z.literal('backlinks'),
+  name: z.string().min(1),
+  targetId: z.string().min(1),
+  ...watcherSettleMsField,
+})
+
+export const watchEventsWatcherSchema = z.discriminatedUnion('kind', [
+  watchEventsSqlWatcherSchema,
+  watchEventsBacklinksWatcherSchema,
+])
+export type WatchEventsWatcher = z.infer<typeof watchEventsWatcherSchema>
+
+/** Replace `consumer`'s whole watcher registration (empty = unregister).
+ *  Registrations live in the tab: they die with it and expire after
+ *  `ttlMs` without a refresh, so consumers re-send this periodically. */
+export const watchEventsCommandSchema = z.looseObject({
+  type: z.literal('watch-events'),
+  consumer: z.string().min(1),
+  watchers: z.array(watchEventsWatcherSchema).max(64)
+    // Names key the consumer's exemption pools — duplicates would merge
+    // two watchers' settle semantics under one name.
+    .refine(
+      watchers => new Set(watchers.map(watcher => watcher.name)).size === watchers.length,
+      {message: 'watcher names must be unique within a registration'},
+    ),
+  ttlMs: z.number().int().min(1_000).max(24 * 3_600_000).optional(),
+  ...commandIdField,
+})
+
+/** One event as stored/delivered by the bridge's events channel. */
+export interface BridgeEventRecord {
+  seq: number
+  receivedAt: number
+  clientId: string
+  event: Record<string, unknown>
+}
+
+/** GET /runtime/events/next response. `reset` marks a stale consumer
+ *  cursor (bridge restarted): adopt `nextSeq` and assume missed events. */
+export interface EventsNextResponse {
+  events: BridgeEventRecord[]
+  nextSeq: number
+  reset?: boolean
+}
 
 /** Canonical commands the CLI emits. The 1:1 mapping to kmagent
  *  verbs makes this the right type for CLI construction sites. */
 export const knownCommandSchema = z.discriminatedUnion('type', [
   pingCommandSchema,
   runtimeSummaryCommandSchema,
+  healthCommandSchema,
   describeRuntimeCommandSchema,
   sqlCommandSchema,
   getBlockCommandSchema,
   getSubtreeCommandSchema,
   createBlockCommandSchema,
+  reconcileMarkdownSubtreeCommandSchema,
   updateBlockCommandSchema,
+  moveBlockCommandSchema,
+  deleteBlockCommandSchema,
+  restoreBlockCommandSchema,
   installExtensionCommandSchema,
   enableExtensionCommandSchema,
   disableExtensionCommandSchema,
   uninstallExtensionCommandSchema,
+  auditExtensionCommandSchema,
+  auditPropertiesCommandSchema,
+  runBackfillCommandSchema,
   runActionCommandSchema,
   evalCommandSchema,
   backlinksCommandSchema,
@@ -299,6 +504,7 @@ export const knownCommandSchema = z.discriminatedUnion('type', [
   pageCommandSchema,
   dailyNoteCommandSchema,
   searchCommandSchema,
+  watchEventsCommandSchema,
 ])
 
 /** Strict shape for any known wire command. CLI authors construct
@@ -315,17 +521,25 @@ export type KnownCommandType = KnownCommand['type']
 export const knownAgentCommandSchema = z.discriminatedUnion('type', [
   pingCommandSchema,
   runtimeSummaryCommandSchema,
+  healthCommandSchema,
   describeRuntimeCommandSchema,
   sqlCommandSchema,
   getBlockCommandSchema,
   getSubtreeCommandSchema,
   createBlockCommandSchema,
+  reconcileMarkdownSubtreeCommandSchema,
   updateBlockCommandSchema,
+  moveBlockCommandSchema,
+  deleteBlockCommandSchema,
+  restoreBlockCommandSchema,
   installExtensionCommandSchema,
   enableExtensionCommandSchema,
   disableExtensionCommandSchema,
   setExtensionEnabledCommandSchema,
   uninstallExtensionCommandSchema,
+  auditExtensionCommandSchema,
+  auditPropertiesCommandSchema,
+  runBackfillCommandSchema,
   runActionCommandSchema,
   actionCommandSchema,
   evalCommandSchema,
@@ -335,6 +549,7 @@ export const knownAgentCommandSchema = z.discriminatedUnion('type', [
   pageCommandSchema,
   dailyNoteCommandSchema,
   searchCommandSchema,
+  watchEventsCommandSchema,
 ])
 export type KnownAgentCommand = z.infer<typeof knownAgentCommandSchema>
 
@@ -349,10 +564,22 @@ export type KnownAgentCommand = z.infer<typeof knownAgentCommandSchema>
 export interface KnownCommandMeta {
   /** CLI usage example, including positional + flag hints. Phrased as
    *  the user would type it via the published bin (`kmagent X`); the
-   *  monorepo `yarn agent X` wrapper invokes the same binary. */
+   *  monorepo `pnpm agent X` wrapper invokes the same binary. */
   usage: string
   /** Short one-line description for help / summary surfaces. */
   description: string
+  /** Whether a `read-only`-scoped token may run this verb — i.e. the
+   *  verb performs no writes through the kernel. The bridge derives its
+   *  read-only allowlist from this single field (see `isReadOnlyCommand`
+   *  in `server.ts`), so the registry is the one source of truth: a verb
+   *  added to `knownCommandSchema` without a registry entry is already a
+   *  TypeScript error, and that entry must now classify `readOnly` too —
+   *  the allowlist can't silently drift when a verb is added.
+   *
+   *  `sql` is the one verb whose read-only-ness depends on the call (mode
+   *  + statement), not just the verb; it's `false` here and refined
+   *  per-mode by the bridge before this field is consulted. */
+  readOnly: boolean
 }
 
 /** Schema-derived registry of every known wire command. Typed as
@@ -368,82 +595,169 @@ export const knownCommandRegistry: Record<KnownCommandType, KnownCommandMeta> = 
   'ping': {
     usage: 'kmagent ping',
     description: 'Ping the bridge + runtime; print a status summary.',
+    readOnly: true,
   },
   'runtime-summary': {
     usage: 'kmagent runtime-summary',
     description: 'Compact agent-oriented runtime context.',
+    readOnly: true,
+  },
+  'health': {
+    usage: 'kmagent health',
+    description: 'Layout B sync-health snapshot: app-visible block count vs blocks_synced, distinct blocks queued for upload, and the materialization backlog. One read to triage a stuck or unsynced client (healthy = both queues 0 and blocks ≈ blocks_synced).',
+    readOnly: true,
   },
   'describe-runtime': {
     usage: 'kmagent describe-runtime [--actions <text>] [--facets <text>] [--guide <id>] [--modules <text>] [--components <text>] [--storage]',
     description: 'Show full or targeted runtime diagnostics. Canonical "what is registered" view — prefer over reaching into facetRuntime/Repo internals via eval. When --guide is passed alone, defaults to brief output; pass --full to include actions/facets/modules/components too.',
+    readOnly: true,
   },
   'sql': {
-    usage: 'kmagent sql <all|get|optional|execute> <sql> [paramsJson]',
-    description: 'Run SQL (mode: all|get|optional|execute).',
+    usage: 'kmagent sql <all|get|optional|execute> <sql> [paramsJson] [--allow-synced-write]',
+    description: 'Run SQL (mode: all|get|optional|execute). Refuses a raw write to a synced table (blocks, workspaces, workspace_members) — it would bypass repo.tx, so it never uploads and skips the kernel derivations (block_types, reference normalization, property projection). Use create-block/update-block/run-action for a normal write; pass --allow-synced-write for a deliberate surgical fix.',
+    // Mode-dependent: `execute` (or a mutating statement) writes. The
+    // bridge refines this per-call before consulting the registry, so
+    // the verb-level default here is the conservative `false`.
+    readOnly: false,
   },
   'get-block': {
     usage: 'kmagent get-block <id>',
     description: 'Fetch a block by id.',
+    readOnly: true,
   },
   'get-subtree': {
-    usage: 'kmagent subtree <rootId> [--include-root]',
-    description: 'Fetch the subtree rooted at <rootId>.',
+    usage: 'kmagent subtree <rootId> [--json]',
+    description: 'Fetch the subtree rooted at <rootId> (root included). Prints a depth-indented `- [id] content` outline by default (one line per block, id first); --json returns the raw flat array (each row carries its depth from the root). Both are a pre-order traversal with siblings in (order_key, id) order — already sorted; read top-to-bottom, do not re-sort.',
+    readOnly: true,
   },
   'create-block': {
     usage: 'kmagent create-block <json>',
     description: 'Create a block (body shape per <json>).',
+    readOnly: false,
+  },
+  'reconcile-markdown-subtree': {
+    usage: 'kmagent reconcile-markdown-subtree <json:{parentId,markdown,key,shape?,final?,properties?}>',
+    description: 'Reconcile a keyed block subtree under parentId to match markdown (parsed with the app paste parser), in one transaction — create/update/reorder/delete to converge. Idempotent by key, so a re-send lands the same tree. shape=block keeps it one block; properties tag every block. Streaming calls this repeatedly with the growing text; the last passes final:true.',
+    readOnly: false,
   },
   'update-block': {
     usage: 'kmagent update-block <json>',
     description: 'Update a block (body shape per <json>).',
+    readOnly: false,
+  },
+  'move-block': {
+    usage: 'kmagent move-block <json>',
+    description: 'Move a block to a new parent/position. Body: {id|blockId, parentId:string|null, position:{kind:first|last|before|after, siblingId?}}.',
+    readOnly: false,
+  },
+  'delete-block': {
+    usage: 'kmagent delete-block <id>',
+    description: 'Soft-delete a block and its descendants via core.delete.',
+    readOnly: false,
+  },
+  'restore-block': {
+    usage: 'kmagent restore-block <id>',
+    description: 'Restore one soft-deleted block via core.restore. Descendants remain deleted unless restored separately.',
+    readOnly: false,
   },
   'install-extension': {
     usage: 'kmagent install-extension [--verify] [--description <text>] <file> [label]',
     description: 'Install a JS extension. Reload is automatic; --verify reports the contributed facets/actions; label defaults to the filename without ext.',
+    readOnly: false,
   },
   'enable-extension': {
     usage: 'kmagent enable-extension <id|label>',
     description: 'Enable an installed extension by id or label. Sets the synced enabled intent AND approves the current source on this device (pins its hash) so it runs here. Re-run after editing the source to re-pin the new version.',
+    readOnly: false,
   },
   'disable-extension': {
     usage: 'kmagent disable-extension <id|label>',
     description: 'Disable an installed extension by id or label (clears the synced intent; the device trust grant persists for a frictionless re-enable).',
+    readOnly: false,
   },
   'uninstall-extension': {
     usage: 'kmagent uninstall-extension <id|label>',
     description: 'Uninstall an extension by id or label (deletes the block and revokes this device’s trust grant).',
+    readOnly: false,
+  },
+  'audit-extension': {
+    usage: 'kmagent audit-extension <id|label>',
+    description: 'Audit the DATA an installed extension wrote, against the grain the app rewards: block ids parked in non-ref properties (invisible to backlinks), records buried in a JSON cell, properties written with no registered schema (the fingerprint of a write made while the extension was not running), and declared types no block carries. Complements the install-time source lint, which can only read declarations. Also reports whether the extension is approved / enabled / actually running here.',
+    // Reads only — EXCEPT that resolving the enabled intent goes through
+    // `getPluginPrefsBlock`, which bootstraps the per-user prefs row on a
+    // profile that has never had one. That is a write, so this verb is not
+    // classified read-only rather than quietly breaking a read-only token's
+    // contract.
+    readOnly: false,
+  },
+  'audit-properties': {
+    usage: 'kmagent audit-properties [--workspace <id>]',
+    description: 'List every property key present in the workspace\'s live blocks that the registry does NOT resolve — the keys property migration skips silently (propertyChildrenProcessor: no schema → `continue`), so they are the only property data a child-backed workspace cannot carry. Per key: exact cell count, the resolver\'s own reason (nothing declares it, or a definition block exists but is broken), the fix in the order §9 requires, plus sampled blocks and the types they carry (which extension wrote it). Audits the ACTIVE workspace; it refuses one whose registry is not loaded rather than reporting every key as unregistered. Reports its own basis — `syncGap` (rows staged and not drained, or the sync layer not settled: downloading, disconnected, or a download error — so the counts are short) and `syncedThrough` (this device\'s last completed sync); an empty list under a non-null `syncGap` means nothing, and a null `syncGap` only rules out work outstanding LOCALLY. Does NOT detect shadowed definitions or seed-name collisions — those still resolve, so no key is listed. Workspace-wide counterpart to `audit-extension`, which only sees blocks carrying one extension\'s declared types.',
+    readOnly: true,
+  },
+  'run-backfill': {
+    usage: 'kmagent run-backfill <backfillId> [--workspace <id>] [--wait <seconds>]',
+    description: 'Run one operator-triggered workspace backfill (currently `properties:cell-to-children`, the properties-as-blocks migration: every registered property cell gains the field and value CHILD blocks it implies, cells untouched). Deliberately not scheduled — the pass uploads source-of-truth rows, so ONE device runs it and every other receives them; a completion claim in synced data records that. Returns `outcome` — the runner\'s own result code; see `OperatorBackfillResult` in src/data/repo.ts for the current set and what each means, rather than a copy here that can drift — plus `undoHistoryCleared`: the pass drops the workspace undo stack whenever it writes, because replaying an entry recorded before it would revert the migration. Refuses to write (outcome `deferred`) while this device is behind the server or still draining synced rows; retry once sync settles. Safe to re-run: it is idempotent per row and resumes from whatever is left to do, so an interrupted run needs no repair.',
+    readOnly: false,
   },
   'run-action': {
     usage: 'kmagent run-action <id> [depsJson]',
     description: 'Run a registered action by id.',
+    // Actions are arbitrary handlers — assume they write.
+    readOnly: false,
   },
   'eval': {
     usage: 'kmagent eval [--raw] [--file <path>] [--data <path> | --data-json <json>] <code>',
-    description: 'Run JS in the app. Use "return …" to print a value. The code runs with `repo`, `db`, `runtime`, `sql`, `block`, `getBlock`, `getSubtree`, `createBlock`, `updateBlock`, `installExtension`, `setExtensionEnabled`, `uninstallExtension`, `actions`, `renderers`, `refreshAppRuntime`, `React`, `ReactDOM`, `window`, `document` already in scope. `--data <path>` reads JSON from a file (or `--data-json <inline>` for an inline payload) and binds the parsed value as `data` — avoids template-embedding structured input in the code string.',
+    description: 'Run JS in the app. Use "return …" to print a value. The code runs with `repo`, `db`, `runtime`, `sql`, `block`, `getBlock`, `getSubtree`, `createBlock`, `updateBlock`, `moveBlock`, `deleteBlock`, `restoreBlock`, `installExtension`, `setExtensionEnabled`, `uninstallExtension`, `actions`, `renderers`, `refreshAppRuntime`, `React`, `ReactDOM`, `window`, `document` already in scope. `--data <path>` reads JSON from a file (or `--data-json <inline>` for an inline payload) and binds the parsed value as `data` — avoids template-embedding structured input in the code string.',
+    // Arbitrary code execution — never read-only.
+    readOnly: false,
   },
+  // backlinks / grouped-backlinks resolve the user's backlinks prefs
+  // sub-block (`--filter effective`, and grouped-backlinks' default
+  // `--grouping user`). That sub-block is eagerly bootstrapped at idle on
+  // every client via `pluginPrefsExtension` (src/data/pluginStateExtensions.ts),
+  // so on the warm/live client the bridge talks to it already exists and
+  // the resolve path is a pure read. (The only write either could ever do
+  // is the same one-time, benign prefs-block creation the app itself does
+  // at idle, were it somehow invoked before that bootstrap ran.)
   'backlinks': {
     usage: "kmagent backlinks <blockId> [--filter none|stored|effective|<json>] [--workspace <id>]",
     description: 'Hydrated backlinks of a block (blocks whose references point at it). --filter defaults to none. See `kmagent data-model`.',
+    readOnly: true,
   },
   'grouped-backlinks': {
     usage: "kmagent grouped-backlinks <blockId> [--filter none|stored|effective|<json>] [--grouping user|none|<json>] [--workspace <id>]",
     description: 'The grouped-references view for a block: hydrated groups (+ Other fallback). --grouping defaults to the user config (matches the UI); --filter defaults to none. See `kmagent data-model`.',
+    readOnly: true,
   },
   'data-model': {
     usage: 'kmagent data-model',
     description: "Print the agent-facing data-model guide (blocks, references, pages/daily-notes, backlinks vs grouped-backlinks, source_field, done-status, deep-links). Read this first when working with a user's data.",
+    readOnly: true,
   },
   'page': {
     usage: 'kmagent page <name> [--limit <n>] [--workspace <id>]',
     description: 'Resolve a page by alias/title: exact match plus substring candidates, hydrated.',
+    readOnly: true,
   },
   'daily-note': {
     usage: 'kmagent daily-note <date> [--workspace <id>]',
     description: 'Resolve a date (today | yesterday | 2026-06-18 | "June 17th, 2026" | "next monday") to its daily-note block (deterministic id; reports whether it exists yet).',
+    // Pure read: computes the deterministic daily-note id and loads it,
+    // reporting existence. It does NOT create the note.
+    readOnly: true,
   },
   'search': {
     usage: 'kmagent search <query> [--limit <n>] [--workspace <id>]',
     description: 'Full-text search over block content; hydrated results.',
+    readOnly: true,
+  },
+  'watch-events': {
+    usage: 'kmagent raw \'{"type":"watch-events","consumer":"...","watchers":[...]}\'',
+    description: "Replace a consumer's change-watcher registration in the tab; matching changes are pushed to the bridge events channel (GET /runtime/events/next).",
+    // Registers observers and emits events — mutates tab state, so a
+    // read-only token may not install them.
+    readOnly: false,
   },
 }
 

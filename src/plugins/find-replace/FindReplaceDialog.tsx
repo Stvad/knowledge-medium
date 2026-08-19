@@ -23,9 +23,11 @@ import {
 import { findReplaceToggle } from './toggleStore.ts'
 import type {
   ApplyContentReplaceResult,
+  ContentReplacePlanItem,
   ContentSearchMatch,
   ContentSearchResult,
   FindReplaceOptions,
+  RetryableContentReplaceSkip,
 } from './types.ts'
 
 const DEBOUNCE_MS = 120
@@ -38,8 +40,16 @@ const defaultOptions: FindReplaceOptions = {
 const resultSummary = (result: ApplyContentReplaceResult): string => {
   const changed = `${result.replacements} replacement${result.replacements === 1 ? '' : 's'} in ${result.updatedBlocks} block${result.updatedBlocks === 1 ? '' : 's'}`
   const skipped = result.skippedChangedBlocks + result.skippedUnavailableBlocks
-  if (skipped === 0) return changed
-  return `${changed}; ${skipped} skipped`
+  const base = skipped === 0 ? changed : `${changed}; ${skipped} skipped`
+  // Codec skips get their own clause, named: "3 skipped" reads like a stale
+  // match, while these were refused because the new text wouldn't parse as
+  // the property's value — the user needs to know WHICH property to go fix
+  // (#404 item 5; the original values are untouched).
+  if (result.skippedUnparseableProperty === 0) return base
+  const names = result.unparseableProperties.map(name => `"${name}"`).join(', ')
+  const count = result.skippedUnparseableProperty
+  return `${base}; ${count} left unchanged — the new text is not a valid value for `
+    + `propert${result.unparseableProperties.length === 1 ? 'y' : 'ies'} ${names}`
 }
 
 const pluralize = (count: number, singular: string, plural = `${singular}s`): string =>
@@ -66,6 +76,9 @@ export function FindReplaceDialog() {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set())
   const [loading, setLoading] = useState(false)
   const [applying, setApplying] = useState(false)
+  // Value rows a replace would leave unparseable, held back for an explicit
+  // "replace anyway" (#404 item 5). Null = no pending decision.
+  const [pendingForce, setPendingForce] = useState<RetryableContentReplaceSkip[] | null>(null)
 
   const trimmedFind = find.trim()
   const matches = useMemo(
@@ -131,7 +144,16 @@ export function FindReplaceDialog() {
     setSelectedIds(checked ? new Set(matches.map(match => match.blockId)) : new Set())
   }
 
-  const applyReplace = async (items: ContentSearchMatch[]) => {
+  const closeAndReset = () => {
+    setSearchResult({query: '', matches: [], truncated: false})
+    setSelectedIds(new Set())
+    setPendingForce(null)
+    setFind('')
+    setReplace('')
+    findReplaceToggle.close()
+  }
+
+  const runReplace = async (items: ContentReplacePlanItem[], force: boolean) => {
     const workspaceId = repo.activeWorkspaceId
     if (!workspaceId || !trimmedFind || items.length === 0 || repo.isReadOnly) return
 
@@ -139,23 +161,17 @@ export function FindReplaceDialog() {
     try {
       const result = await repo.run<ApplyContentReplaceResult>(
         FIND_REPLACE_APPLY_CONTENT_REPLACE_MUTATOR,
-        {
-          workspaceId,
-          find: trimmedFind,
-          replace,
-          options,
-          items: items.map(item => ({
-            blockId: item.blockId,
-            originalContent: item.originalContent,
-          })),
-        },
+        {workspaceId, find: trimmedFind, replace, options, items, force},
       )
       showSuccess(resultSummary(result))
-      setSearchResult({query: '', matches: [], truncated: false})
-      setSelectedIds(new Set())
-      setFind('')
-      setReplace('')
-      findReplaceToggle.close()
+      // Safe rows already applied. If any value rows would break their
+      // property's codec, hold the dialog open and let the user force just
+      // those (or leave them) instead of deciding for them (#404 item 5).
+      if (!force && result.retryableSkips.length > 0) {
+        setPendingForce(result.retryableSkips)
+        return
+      }
+      closeAndReset()
     } catch (error) {
       showError(error instanceof Error ? error.message : 'Replace failed')
     } finally {
@@ -163,8 +179,37 @@ export function FindReplaceDialog() {
     }
   }
 
+  const applyReplace = (items: ContentSearchMatch[]) =>
+    runReplace(
+      items.map(item => ({blockId: item.blockId, originalContent: item.originalContent})),
+      false,
+    )
+
+  const forcePending = () => {
+    if (!pendingForce) return
+    void runReplace(
+      pendingForce.map(skip => ({blockId: skip.blockId, originalContent: skip.originalContent})),
+      true,
+    )
+  }
+
+  const pendingProperties = useMemo(
+    () => pendingForce === null
+      ? []
+      : [...new Set(pendingForce.map(skip => skip.property))].sort(),
+    [pendingForce],
+  )
+
   return (
-    <Dialog open={open} onOpenChange={findReplaceToggle.set}>
+    <Dialog
+      open={open}
+      onOpenChange={next => {
+        // Backdrop/escape close bypasses closeAndReset — drop any pending
+        // force decision so it can't resurface on the next open.
+        if (!next) setPendingForce(null)
+        findReplaceToggle.set(next)
+      }}
+    >
       <DialogContent className="top-[12vh] max-h-[82vh] max-w-3xl translate-y-0 grid-rows-[auto_auto_minmax(0,1fr)_auto] gap-4 p-0">
         <DialogHeader className="px-5 pt-5">
           <DialogTitle className="flex items-center gap-2">
@@ -275,34 +320,76 @@ export function FindReplaceDialog() {
           </div>
         </div>
 
+        {pendingForce !== null && (
+          <div className="mx-5 rounded-md border border-amber-500/50 bg-amber-500/10 p-3 text-sm">
+            <p className="text-foreground">
+              {pluralize(pendingForce.length, 'row')} left unchanged — the new text isn&apos;t a
+              valid value for {pendingProperties.length === 1 ? 'property' : 'properties'}{' '}
+              {pendingProperties.map(name => `"${name}"`).join(', ')}.
+            </p>
+            <p className="mt-1 text-muted-foreground">
+              Replacing anyway stores the text and those properties will show no value until you fix
+              it (undo restores them).
+            </p>
+          </div>
+        )}
+
         <DialogFooter className="flex-col gap-3 border-t px-5 py-4 sm:flex-row sm:items-center sm:justify-between sm:space-x-0">
-          <div className="text-sm text-muted-foreground">
-            Selected: {blockMatchCountLabel(selectedItems.length, selectedReplacementCount)}
-          </div>
-          <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => findReplaceToggle.close()}
-            >
-              Cancel
-            </Button>
-            <Button
-              type="button"
-              variant="secondary"
-              disabled={repo.isReadOnly || applying || matches.length === 0}
-              onClick={() => void applyReplace(matches)}
-            >
-              Replace all shown
-            </Button>
-            <Button
-              type="button"
-              disabled={repo.isReadOnly || applying || selectedItems.length === 0}
-              onClick={() => void applyReplace(selectedItems)}
-            >
-              Replace selected
-            </Button>
-          </div>
+          {pendingForce !== null ? (
+            <>
+              <div className="text-sm text-muted-foreground">
+                {pluralize(pendingForce.length, 'row')} awaiting your decision
+              </div>
+              <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={applying}
+                  onClick={closeAndReset}
+                >
+                  Leave them
+                </Button>
+                <Button
+                  type="button"
+                  variant="destructive"
+                  disabled={repo.isReadOnly || applying}
+                  onClick={forcePending}
+                >
+                  Replace anyway ({pendingForce.length})
+                </Button>
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="text-sm text-muted-foreground">
+                Selected: {blockMatchCountLabel(selectedItems.length, selectedReplacementCount)}
+              </div>
+              <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => findReplaceToggle.close()}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  disabled={repo.isReadOnly || applying || matches.length === 0}
+                  onClick={() => void applyReplace(matches)}
+                >
+                  Replace all shown
+                </Button>
+                <Button
+                  type="button"
+                  disabled={repo.isReadOnly || applying || selectedItems.length === 0}
+                  onClick={() => void applyReplace(selectedItems)}
+                >
+                  Replace selected
+                </Button>
+              </div>
+            </>
+          )}
         </DialogFooter>
       </DialogContent>
     </Dialog>

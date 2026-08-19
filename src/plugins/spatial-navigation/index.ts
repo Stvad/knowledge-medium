@@ -10,11 +10,18 @@ import {
   spatialNavigationActionsExtension,
 } from './actions.ts'
 import { PanelFocusRecovery } from './PanelFocusRecovery.tsx'
+import { PanelContentRecovery } from '@/extensions/PanelContentRecovery.js'
 import { spatialNavigationShellDecorator } from './shell.ts'
+import { spatialNavExclusionsFacet } from './exclusionsFacet.ts'
 
 const panelFocusRecoveryMount: PanelMountContribution = {
   id: 'spatial-navigation.panel-focus-recovery',
   component: PanelFocusRecovery,
+}
+
+const panelContentRecoveryMount: PanelMountContribution = {
+  id: 'spatial-navigation.panel-content-recovery',
+  component: PanelContentRecovery,
 }
 
 export const spatialNavigationPlugin: AppExtension = systemToggle({
@@ -23,20 +30,32 @@ export const spatialNavigationPlugin: AppExtension = systemToggle({
   description: 'Vim-style h/j/k/l block & panel navigation driven by visible DOM order.',
 }).of([
   blockShellDecoratorsFacet.of(spatialNavigationShellDecorator, {source: 'spatial-navigation'}),
-  // Shift-click selection in visible DOM order (across backlinks/embeds) is now
-  // an ActionTransform on `extend_block_selection`, registered with the other
-  // spatial navigation transforms below — matching the keyboard
-  // `extend_selection_*` decorators.
+  // Shift-click selection in visible DOM order (across backlinks/embeds) is an
+  // action-dispatch decorator on `extend_block_selection`, registered with the
+  // other spatial-navigation behaviour decorators (and the vertical-move label
+  // transforms) inside this extension — matching the keyboard `extend_selection_*`
+  // decorators.
   spatialNavigationActionDecoratorsExtension,
   spatialNavigationActionsExtension,
   // Per-panel watchdog: when the focused rendered location disappears
   // (backlink edited out, parent collapsed), recover to the nearest
   // rendered neighbor instead of leaving the panel with a dead focus pointer.
   panelMountsFacet.of(panelFocusRecoveryMount, {source: 'spatial-navigation'}),
+  // Sibling watchdog one level up: when the panel's whole PAGE disappears
+  // (deleted here, in another pane, or remotely), step the pane onto the
+  // nearest live destination instead of rendering a tombstone. Disable this
+  // plugin and a pane just sits on the dead page until you navigate away —
+  // the pre-existing behaviour, not data loss.
+  panelMountsFacet.of(panelContentRecoveryMount, {source: 'spatial-navigation'}),
+  // Core's own surface exclusion — see `exclusionsFacet.ts`. A plugin with a
+  // custom `data-block-surface` (grid/kanban/canvas renderer) contributes its
+  // own surface name here to exempt its cells from the arrow-key walker.
+  spatialNavExclusionsFacet.of('breadcrumb', {source: 'spatial-navigation'}),
 ])
 
 export {
-  getSpatialNavigationActionDecorators,
+  getSpatialNavigationActionTransforms,
+  getSpatialNavigationDispatchDecorators,
   getSpatialNavigationActions,
   spatialNavigationActionDecoratorsExtension,
   spatialNavigationActionsExtension,
@@ -44,6 +63,7 @@ export {
 
 export {
   __resetSpatialNavigationForTesting,
+  DEFAULT_NON_NAVIGABLE_SURFACES,
   findRecoveryAnchor,
   horizontalNeighborPanel,
   locateInstance,
@@ -53,3 +73,8 @@ export {
   stackSiblingPanel,
   verticalNeighbor,
 } from './walker.ts'
+
+export {
+  resolveSpatialNavExclusions,
+  spatialNavExclusionsFacet,
+} from './exclusionsFacet.ts'

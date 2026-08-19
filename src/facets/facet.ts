@@ -193,6 +193,61 @@ export const dedupById =
  *  with — they never share a bucket id with a runtime source. */
 export type RuntimeSourceId = string
 
+export interface RuntimeContributionOptions {
+  durable?: boolean
+  /** Workspace-scoped buckets coexist under the same logical source id;
+   * reads expose only the bucket matching the runtime's active workspace. */
+  workspaceId?: string
+}
+export type WorkspaceRuntimeContributionOptions =
+  Pick<RuntimeContributionOptions, 'workspaceId'>
+
+export const runtimeContributionBucketKey = (
+  sourceId: RuntimeSourceId,
+  workspaceId?: string,
+): string =>
+  workspaceId === undefined
+    ? `unscoped:${sourceId}`
+    : `workspace:${JSON.stringify([workspaceId, sourceId])}`
+
+interface RuntimeBucket {
+  readonly contributions: FacetContribution<unknown>[]
+  readonly workspaceId?: string
+  readonly durable: boolean
+}
+
+/** Filter a facet's static + runtime buckets to the contributions visible for
+ *  `workspaceId` (unscoped buckets are always visible). Returns the shared
+ *  static array directly when there are no runtime buckets — callers only read
+ *  the result, never mutate it. */
+const collectFilteredContributions = (
+  staticContributions: readonly FacetContribution<unknown>[] | undefined,
+  runtimeBuckets: ReadonlyMap<string, RuntimeBucket> | undefined,
+  workspaceId: string | null,
+): readonly FacetContribution<unknown>[] => {
+  const stat = staticContributions ?? []
+  if (!runtimeBuckets || runtimeBuckets.size === 0) return stat
+  const out: FacetContribution<unknown>[] = [...stat]
+  for (const bucket of runtimeBuckets.values()) {
+    if (bucket.workspaceId === undefined || bucket.workspaceId === workspaceId) {
+      out.push(...bucket.contributions)
+    }
+  }
+  return out
+}
+
+const combineFacetContributions = <Input, Output>(
+  facet: Facet<Input, Output>,
+  contributions: readonly FacetContribution<unknown>[],
+  context: FacetResolveContext,
+): Output => {
+  if (!contributions.length) return facet.empty(context)
+  const values = contributions
+    .toSorted((a, b) => (a.precedence ?? 0) - (b.precedence ?? 0))
+    .map((contribution) => contribution.value as Input)
+  return facet.combine(values, context)
+}
+
 type FacetChangeListener = () => void
 
 /** NOTE: `LiveRuntimeHandle` (src/extensions/liveRuntime.ts) subclasses
@@ -212,11 +267,11 @@ export class FacetRuntime {
   private readonly staticContributionsByFacet = new Map<string, FacetContribution<unknown>[]>()
   private readonly runtimeContributionsByFacet = new Map<
     string,
-    Map<RuntimeSourceId, FacetContribution<unknown>[]>
+    Map<string, RuntimeBucket>
   >()
-  /** Per-facet set of runtime source ids marked **durable** — i.e.
-   *  written with `{durable: true}`. Durable buckets are repo-owned
-   *  user data (user property schemas / types) that must survive a
+  /** Runtime buckets keep their scope and durability beside their values so
+   *  filtering and adoption cannot drift across parallel metadata maps.
+   *  Durable buckets are repo-owned user data that must survive a
    *  `setFacetRuntime` swap; `adoptDurableContributionsFrom` copies only
    *  these forward onto the fresh runtime. Transient buckets (effect-
    *  owned outputs such as the theme apply-actions or keybinding
@@ -224,9 +279,9 @@ export class FacetRuntime {
    *  them on restart, so replaying them would strand stale entries when
    *  the effect's plugin is toggled off (the bug that reverted the
    *  literal `withContributionsFrom` in #152). */
-  private readonly durableRuntimeSources = new Map<string, Set<RuntimeSourceId>>()
   private readonly cache = new Map<string, unknown>()
   private readonly facetListeners = new Map<string, Set<FacetChangeListener>>()
+  private activeWorkspaceId: string | null = null
 
   constructor(
     public readonly context: FacetResolveContext,
@@ -239,32 +294,46 @@ export class FacetRuntime {
     }
   }
 
-  private collectContributions(facetId: string): FacetContribution<unknown>[] {
-    const stat = this.staticContributionsByFacet.get(facetId) ?? []
-    const runtime = this.runtimeContributionsByFacet.get(facetId)
-    if (!runtime || runtime.size === 0) return stat
-    const out: FacetContribution<unknown>[] = [...stat]
-    for (const bucket of runtime.values()) out.push(...bucket)
-    return out
+  private collectContributions(
+    facetId: string,
+    workspaceId: string | null = this.activeWorkspaceId,
+  ): readonly FacetContribution<unknown>[] {
+    return collectFilteredContributions(
+      this.staticContributionsByFacet.get(facetId),
+      this.runtimeContributionsByFacet.get(facetId),
+      workspaceId,
+    )
+  }
+
+  /** Flip the read filter for workspace-scoped runtime buckets. Static and
+   * unscoped runtime contributions remain visible. Every affected facet is
+   * invalidated + notified synchronously so bridge-owned registries switch
+   * before callers can perform work in the newly active workspace. */
+  setActiveWorkspaceId(workspaceId: string | null): void {
+    if (workspaceId === this.activeWorkspaceId) return
+    this.activeWorkspaceId = workspaceId
+    for (const [facetId, buckets] of this.runtimeContributionsByFacet) {
+      let hasWorkspaceScopedBucket = false
+      for (const bucket of buckets.values()) {
+        if (bucket.workspaceId === undefined) continue
+        hasWorkspaceScopedBucket = true
+        break
+      }
+      if (!hasWorkspaceScopedBucket) continue
+      this.cache.delete(facetId)
+      this.notifyFacetListeners(facetId)
+    }
   }
 
   read<Input, Output>(facet: Facet<Input, Output>): Output {
     if (this.cache.has(facet.id)) {
       return this.cache.get(facet.id) as Output
     }
-
-    const contributions = this.collectContributions(facet.id)
-    if (!contributions.length) {
-      const emptyValue = facet.empty(this.context)
-      this.cache.set(facet.id, emptyValue)
-      return emptyValue
-    }
-
-    const values = contributions
-      .toSorted((a, b) => (a.precedence ?? 0) - (b.precedence ?? 0))
-      .map((contribution) => contribution.value as Input)
-
-    const value = facet.combine(values, this.context)
+    const value = combineFacetContributions(
+      facet,
+      this.collectContributions(facet.id),
+      this.context,
+    )
     this.cache.set(facet.id, value)
     return value
   }
@@ -275,14 +344,18 @@ export class FacetRuntime {
    *
    *  `options.durable` (default false) marks the bucket as repo-owned
    *  user data that must survive `setFacetRuntime` swaps — see
-   *  `adoptDurableContributionsFrom` / `durableRuntimeSources`. Effect-
+   *  `adoptDurableContributionsFrom` / `RuntimeBucket.durable`. Effect-
    *  owned (transient) writers omit it. */
   setRuntimeContributions<Input>(
     facet: Facet<Input, unknown>,
     sourceId: RuntimeSourceId,
     contributions: readonly Input[],
-    options?: { durable?: boolean },
+    options?: RuntimeContributionOptions,
   ): void {
+    if (options?.workspaceId !== undefined && options.workspaceId.length === 0) {
+      throw new Error('[FacetRuntime.setRuntimeContributions] workspaceId must be non-empty')
+    }
+    const bucketId = runtimeContributionBucketKey(sourceId, options?.workspaceId)
     const wrapped = contributions.map(value => ({
       type: 'facet-contribution' as const,
       facet: facet as unknown as Facet<unknown, unknown>,
@@ -290,33 +363,21 @@ export class FacetRuntime {
       source: sourceId,
     } satisfies FacetContribution<unknown>))
 
-    const existing = this.runtimeContributionsByFacet.get(facet.id) ?? new Map<RuntimeSourceId, FacetContribution<unknown>[]>()
+    const existing = this.runtimeContributionsByFacet.get(facet.id) ?? new Map<string, RuntimeBucket>()
     if (wrapped.length === 0) {
-      existing.delete(sourceId)
+      existing.delete(bucketId)
       if (existing.size === 0) this.runtimeContributionsByFacet.delete(facet.id)
       else this.runtimeContributionsByFacet.set(facet.id, existing)
-      this.unmarkDurable(facet.id, sourceId)
     } else {
-      existing.set(sourceId, wrapped)
+      existing.set(bucketId, {
+        contributions: wrapped,
+        workspaceId: options?.workspaceId,
+        durable: options?.durable ?? false,
+      })
       this.runtimeContributionsByFacet.set(facet.id, existing)
-      if (options?.durable) this.markDurable(facet.id, sourceId)
-      else this.unmarkDurable(facet.id, sourceId)
     }
     this.cache.delete(facet.id)
     this.notifyFacetListeners(facet.id)
-  }
-
-  private markDurable(facetId: string, sourceId: RuntimeSourceId): void {
-    const set = this.durableRuntimeSources.get(facetId) ?? new Set<RuntimeSourceId>()
-    set.add(sourceId)
-    this.durableRuntimeSources.set(facetId, set)
-  }
-
-  private unmarkDurable(facetId: string, sourceId: RuntimeSourceId): void {
-    const set = this.durableRuntimeSources.get(facetId)
-    if (!set) return
-    set.delete(sourceId)
-    if (set.size === 0) this.durableRuntimeSources.delete(facetId)
   }
 
   /** Copy the **durable** runtime-contribution buckets from `previous`
@@ -334,17 +395,13 @@ export class FacetRuntime {
    *  `Repo.setRuntimeContributions`) — otherwise its data is adopted into the
    *  next workspace's runtime on the per-user Repo singleton. */
   adoptDurableContributionsFrom(previous: FacetRuntime): void {
-    for (const [facetId, durableSources] of previous.durableRuntimeSources) {
-      const prevBuckets = previous.runtimeContributionsByFacet.get(facetId)
-      if (!prevBuckets) continue
-      for (const sourceId of durableSources) {
-        const bucket = prevBuckets.get(sourceId)
-        if (!bucket || bucket.length === 0) continue
+    for (const [facetId, prevBuckets] of previous.runtimeContributionsByFacet) {
+      for (const [bucketId, bucket] of prevBuckets) {
+        if (!bucket.durable || bucket.contributions.length === 0) continue
         const buckets = this.runtimeContributionsByFacet.get(facetId)
-          ?? new Map<RuntimeSourceId, FacetContribution<unknown>[]>()
-        buckets.set(sourceId, bucket)
+          ?? new Map<string, RuntimeBucket>()
+        buckets.set(bucketId, bucket)
         this.runtimeContributionsByFacet.set(facetId, buckets)
-        this.markDurable(facetId, sourceId)
         this.cache.delete(facetId)
       }
     }
@@ -396,7 +453,7 @@ export class FacetRuntime {
    * needing the original Facet definition in scope.
    */
   contributionsById(facetId: string): FacetContribution<unknown>[] {
-    return this.collectContributions(facetId)
+    return [...this.collectContributions(facetId)]
   }
 }
 

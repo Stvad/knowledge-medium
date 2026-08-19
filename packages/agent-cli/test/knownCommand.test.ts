@@ -19,10 +19,14 @@ describe('knownCommandSchema — branch acceptance', () => {
     ['runtime-summary', {type: 'runtime-summary'}],
     ['describe-runtime', {type: 'describe-runtime', guides: ['external-sync-plugin'], brief: true}],
     ['sql', {type: 'sql', sql: 'SELECT 1', mode: 'all'}],
+    ['sql (allowSyncedWrite)', {type: 'sql', sql: 'UPDATE blocks SET x = 1', mode: 'execute', allowSyncedWrite: true}],
     ['get-block', {type: 'get-block', id: 'b-1'}],
-    ['get-subtree', {type: 'get-subtree', rootId: 'r-1', includeRoot: true}],
+    ['get-subtree', {type: 'get-subtree', rootId: 'r-1'}],
     ['create-block', {type: 'create-block', parentId: 'p-1', content: 'hi'}],
     ['update-block', {type: 'update-block', id: 'b-1', content: 'hi'}],
+    ['move-block', {type: 'move-block', id: 'b-1', parentId: 'p-1', position: {kind: 'last'}}],
+    ['delete-block', {type: 'delete-block', id: 'b-1'}],
+    ['restore-block', {type: 'restore-block', id: 'b-1'}],
     ['install-extension', {type: 'install-extension', source: '// source', label: 'foo'}],
     ['enable-extension', {type: 'enable-extension', label: 'foo'}],
     ['disable-extension', {type: 'disable-extension', label: 'foo'}],
@@ -68,6 +72,12 @@ describe('knownCommandSchema — rejection', () => {
     expect(knownCommandSchema.safeParse({type: 'sql', sql: 'SELECT 1', mode: 'truncate'}).success).toBe(false)
   })
 
+  it('rejects sql with a non-boolean allowSyncedWrite', () => {
+    expect(
+      knownCommandSchema.safeParse({type: 'sql', sql: 'SELECT 1', allowSyncedWrite: 'yes'}).success,
+    ).toBe(false)
+  })
+
   it('rejects install-extension without a source', () => {
     expect(knownCommandSchema.safeParse({type: 'install-extension'}).success).toBe(false)
     expect(knownCommandSchema.safeParse({type: 'install-extension', source: 123}).success).toBe(false)
@@ -104,6 +114,25 @@ describe('knownCommandSchema — rejection', () => {
 
   it('rejects get-subtree without rootId', () => {
     expect(knownCommandSchema.safeParse({type: 'get-subtree'}).success).toBe(false)
+  })
+
+  it('rejects move-block without a parentId or valid position', () => {
+    expect(knownCommandSchema.safeParse({
+      type: 'move-block',
+      id: 'b-1',
+      position: {kind: 'last'},
+    }).success).toBe(false)
+    expect(knownCommandSchema.safeParse({
+      type: 'move-block',
+      id: 'b-1',
+      parentId: 'p-1',
+      position: {kind: 'before'},
+    }).success).toBe(false)
+  })
+
+  it('rejects delete-block / restore-block with a non-string id', () => {
+    expect(knownCommandSchema.safeParse({type: 'delete-block', id: 42}).success).toBe(false)
+    expect(knownCommandSchema.safeParse({type: 'restore-block', id: 42}).success).toBe(false)
   })
 
   it('rejects backlinks / grouped-backlinks with a non-string id', () => {

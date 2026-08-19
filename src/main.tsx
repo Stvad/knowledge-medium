@@ -1,3 +1,8 @@
+// main is a BOOT SHIM — do not grow it. It mounts the provider/boundary stack
+// and the pre-React instrumentation, nothing else. New app-root behavior goes
+// into an overridable seam — a block renderer (like TopLevelRenderer), a
+// facet, or the layout-root hook (usePanelLayoutProjection / LayoutRootContext).
+// See the perspective keep-alive RFC (PR #357).
 import React, { StrictMode, Suspense } from 'react'
 import ReactDOM from 'react-dom'
 import { createRoot } from 'react-dom/client'
@@ -7,15 +12,21 @@ import App from './App.tsx'
 import { RepoProvider } from '@/context/repo.js'
 import { Login } from '@/components/Login.js'
 import { SuspenseFallback } from '@/components/util/suspense.js'
-import { BootstrapErrorFallback } from '@/components/util/error.js'
+import { BootstrapErrorFallback, LocalDbCorruptionSentinel } from '@/components/util/error.js'
 import { registerServiceWorker } from '@/registerServiceWorker.js'
 import { requestPersistentStorage } from '@/requestPersistentStorage.js'
 import { setDevAssertionsEnabled } from '@/data/internals/devAssertions.js'
 import { startStartupObservers } from '@/utils/startupTimeline.js'
+import { installDbForensicsLifecycle } from '@/utils/dbForensicsHooks.js'
 
 // Begin tracking main-thread long tasks immediately, so the startup-metrics
 // plugin can later find when boot contention stopped (time to interactivity).
 startStartupObservers()
+
+// Out-of-band local-DB corruption instrumentation (issue #284): lifecycle
+// breadcrumbs + a clean-shutdown flag, so the next OPFS corruption is
+// self-diagnosing (a still-unclean flag on boot ⇒ the process was killed).
+installDbForensicsLifecycle()
 
 // L2 data-integrity invariant assertions: on in dev builds, compiled-away to a
 // constant false in prod (import.meta.env.DEV is statically replaced by Vite).
@@ -47,6 +58,9 @@ createRoot(document.getElementById('root')!).render(
     <Suspense fallback={<SuspenseFallback/>}>
       <Login>
         <ErrorBoundary FallbackComponent={BootstrapErrorFallback}>
+          {/* Routes a RUNTIME sync-apply corruption (which opens fine, so it
+              never throws through init) into this same boundary → recovery UI. */}
+          <LocalDbCorruptionSentinel />
           <RepoProvider>
             <Suspense fallback={<SuspenseFallback/>}>
               <App/>

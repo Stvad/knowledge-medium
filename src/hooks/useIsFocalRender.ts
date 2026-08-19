@@ -17,7 +17,7 @@ import type { BlockResolveContext } from '@/extensions/blockInteraction.js'
  * not inherit the focal affordances.
  *
  * Render surface is encoded as flags on `BlockContextType` set by every
- * non-document mount (`BlockEmbed`, `BacklinkEntry`, breadcrumb list).
+ * non-document mount (`BlockEmbed`, `BlockEntry`, breadcrumb list).
  * The umbrella `isNestedSurface` is what this hook consults, so a new
  * surface only has to set the umbrella to be excluded automatically.
  */

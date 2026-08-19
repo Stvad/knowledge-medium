@@ -4,7 +4,9 @@
     "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.scripts.tsbuildinfo",
     // scripts run under Node (vite-node / tsx), so they need the Node globals
     // and `node:*` modules that the browser-oriented app config omits.
-    "types": ["node"]
+    // Some scripts import app modules whose dependency graph reads
+    // import.meta.env; retain Vite's ambient ImportMeta typing alongside Node.
+    "types": ["node", "vite/client"]
   },
   "include": ["scripts"],
   // scripts/bench/* is quarantined dead code: it predates the Layout B sync

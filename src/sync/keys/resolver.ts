@@ -44,6 +44,10 @@ export interface SyncResolver {
   readonly getMaterializability: GetMaterializability
   /** Observer + upload: the workspace key handle, or null if not loaded. */
   readonly getCek: GetCek
+  /** Asset read/write path (§10): the workspace's content-key HMAC subkey
+   *  `K_id`, or null when no key is loaded OR a legacy record predates K_id
+   *  (the §10 re-paste migration — media fails closed until re-unlock). */
+  readonly getContentKeyHmac: (workspaceId: string) => Promise<CryptoKey | null>
   /** Upload: whether to encrypt content columns on the wire. */
   readonly getMode: (workspaceId: string) => Promise<SyncMode>
 }
@@ -56,7 +60,7 @@ export const createSyncResolver = (
     const userId = getUserId()
     if (!userId) return null
     try {
-      return await keyStore.get(userId, workspaceId)
+      return (await keyStore.get(userId, workspaceId))?.wk ?? null
     } catch (err) {
       // A key-store read failure (IndexedDB unavailable / corrupt / quota) must
       // never throw out of the resolver: getMaterializability (below) runs
@@ -64,6 +68,19 @@ export const createSyncResolver = (
       // there aborts the entire observer drain and strands the durable change
       // queue. Treat an unreadable store as "no key".
       console.warn(`[syncResolver] key read failed for ${workspaceId}; treating as no key`, err)
+      return null
+    }
+  }
+
+  const getContentKeyHmac = async (workspaceId: string): Promise<CryptoKey | null> => {
+    const userId = getUserId()
+    if (!userId) return null
+    try {
+      return (await keyStore.get(userId, workspaceId))?.contentKeyHmac ?? null
+    } catch (err) {
+      // Same fail-safe as getCek: an unreadable store yields no K_id, so the
+      // asset resolver fails the media closed rather than throwing.
+      console.warn(`[syncResolver] K_id read failed for ${workspaceId}; treating as absent`, err)
       return null
     }
   }
@@ -90,5 +107,5 @@ export const createSyncResolver = (
     return getModePin(userId, workspaceId) === 'e2ee' ? 'e2ee' : 'none'
   }
 
-  return { getMaterializability, getCek, getMode }
+  return { getMaterializability, getCek, getContentKeyHmac, getMode }
 }

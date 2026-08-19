@@ -2,12 +2,15 @@
  *  any of these; they all subclass `Error`. Names align with the data-layer
  *  spec (`tasks/data-layer-redesign.md` §5.3, §10.4, §4.7, §13.1). */
 
-export class DataLayerError extends Error {
-  constructor(message: string) {
-    super(message)
-    this.name = new.target.name
-  }
-}
+import type {PropertySchemaIdentityUnavailableReason} from './propertySchema'
+
+// `name` is pinned for every subclass in the block at the BOTTOM of this file —
+// a source string literal that survives production minification. We deliberately
+// do NOT set it here via `new.target.name`: OXC minification strips class names,
+// so at runtime that resolves to a mangled identifier (e.g. "q") and every
+// data-layer error would report a garbage `name` in logs, error boundaries, and
+// telemetry.
+export class DataLayerError extends Error {}
 
 // ──── Block facade / cache ────
 
@@ -163,6 +166,62 @@ export class WorkspaceNotPinnedError extends DataLayerError {
   }
 }
 
+/** A property schema could not prove that it maps to the target workspace's
+ * winning definition. Reads degrade at their boundary; writes surface this
+ * structured error before codecs or updater callbacks run. */
+export class PropertySchemaIdentityError extends DataLayerError {
+  constructor(
+    public readonly schemaName: string,
+    public readonly reason: PropertySchemaIdentityUnavailableReason,
+  ) {
+    super(
+      `cannot write property ${JSON.stringify(schemaName)}: ` +
+      `schema identity is unavailable (${reason})`,
+    )
+  }
+}
+
+/** A property write whose RESOLVED change-scope differs from the scope the
+ *  transaction was admitted under. The tx scope is chosen from the caller's
+ *  schema; if the backing definition's change-scope was edited after the caller
+ *  captured that schema, admitting the write under the stale scope would let it
+ *  bypass the read-only gate and misroute its undo entry. */
+export class PropertySchemaScopeMismatchError extends DataLayerError {
+  constructor(
+    public readonly schemaName: string,
+    public readonly txScope: string,
+    public readonly resolvedScope: string,
+  ) {
+    super(
+      `cannot write property ${JSON.stringify(schemaName)}: resolved change-scope ` +
+      `${resolvedScope} does not match the transaction scope ${txScope} ` +
+      `(the definition's change-scope changed after the caller captured its schema)`,
+    )
+  }
+}
+
+/** A user-scope (BlockDefault) write that violates the seed-definition
+ *  invariant, in either direction: a property-bag write or delete
+ *  targeting a row that is ALREADY a materialized seed definition, or a
+ *  write (create, update, createOrGet, or a restore with a properties
+ *  patch) that makes a row BECOME a provenance-valid seed definition
+ *  (forgery) when it wasn't one before the write. A seed's bag is wholly
+ *  code-owned in v1 (schema-unification §5.1 — no user-editable fields),
+ *  so the schema editor and property panel render it read-only; this is
+ *  the data-layer backstop that keeps the invariant true for every other
+ *  writer (agent bridge, importer, the outline delete key). System writes
+ *  run under Automation scope (materialization, the §13 revision-upgrade
+ *  step) and are not blocked. */
+export class SeededDefinitionWriteError extends DataLayerError {
+  constructor(public readonly blockId: string) {
+    super(
+      `cannot edit or delete seed definition block ${blockId}: its bag is ` +
+      `code-owned (defined in code). Change the declaration and bump its ` +
+      `revision instead of editing the materialized row.`,
+    )
+  }
+}
+
 // ──── Mode / dispatch ────
 
 export class ReadOnlyError extends DataLayerError {
@@ -206,4 +265,47 @@ export class CodecError extends DataLayerError {
     })()
     super(`expected ${expected}, got ${typeof got} (${preview})`)
   }
+}
+
+// ──── Stable error names (minification-safe) ────
+//
+// Pin each error's `name` to a source string LITERAL. The base used to derive it
+// from `new.target.name`, but production OXC minification strips class names, so
+// that surfaced a mangled identifier (e.g. "q") in logs, error boundaries, and
+// telemetry. The KEYS below are string literals the minifier can't touch;
+// assigning on each prototype keeps this to one localized block instead of a
+// `this.name = '…'` in every constructor. errors.test.ts asserts this list
+// covers every exported subclass, so a new error that forgets its entry fails.
+const ERROR_NAMES: ReadonlyArray<readonly [string, {prototype: object}]> = [
+  ['DataLayerError', DataLayerError],
+  ['BlockNotLoadedError', BlockNotLoadedError],
+  ['BlockNotFoundError', BlockNotFoundError],
+  ['BlockNotFoundForTypeError', BlockNotFoundForTypeError],
+  ['DuplicateIdError', DuplicateIdError],
+  ['DeletedConflictError', DeletedConflictError],
+  ['DeterministicIdCrossWorkspaceError', DeterministicIdCrossWorkspaceError],
+  ['NotDeletedError', NotDeletedError],
+  ['CycleError', CycleError],
+  ['MergeIntoDescendantError', MergeIntoDescendantError],
+  ['ParentNotFoundError', ParentNotFoundError],
+  ['ParentWorkspaceMismatchError', ParentWorkspaceMismatchError],
+  ['ParentDeletedError', ParentDeletedError],
+  ['WorkspaceMismatchError', WorkspaceMismatchError],
+  ['WorkspaceNotPinnedError', WorkspaceNotPinnedError],
+  ['PropertySchemaIdentityError', PropertySchemaIdentityError],
+  ['PropertySchemaScopeMismatchError', PropertySchemaScopeMismatchError],
+  ['SeededDefinitionWriteError', SeededDefinitionWriteError],
+  ['ReadOnlyError', ReadOnlyError],
+  ['MutatorNotRegisteredError', MutatorNotRegisteredError],
+  ['QueryNotRegisteredError', QueryNotRegisteredError],
+  ['ProcessorNotRegisteredError', ProcessorNotRegisteredError],
+  ['CodecError', CodecError],
+]
+for (const [name, cls] of ERROR_NAMES) {
+  Object.defineProperty(cls.prototype, 'name', {
+    value: name,
+    writable: true,
+    configurable: true,
+    enumerable: false,
+  })
 }

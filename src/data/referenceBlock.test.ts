@@ -1,0 +1,293 @@
+// @vitest-environment node
+/**
+ * Whole-block reference content: the `((id))` / `[[name]]` forms property
+ * field rows and ref-typed values are written in (PR #288 §7).
+ */
+
+import { describe, expect, it } from 'vitest'
+import {
+  GrammarShapedLabelError,
+  LossyLabelError,
+  MAX_ALIAS_LENGTH,
+  UnwritableLabelError,
+  assertRoundTrippableReferenceLabel,
+  isGrammarShapedLabel,
+  parseExactReferenceBlockContent,
+  referenceBlockContentForId,
+  referenceBlockContentForLabel,
+} from './referenceBlock.ts'
+// Cross-layer check only: the inline parser is a PLUGIN reader of the
+// same grammar, and the point of these cases is that the two agree.
+import { parseBlockRefs, parseReferences } from '@/plugins/references/referenceParser'
+
+const UUID = '11111111-1111-4111-8111-111111111111'
+
+describe('referenceBlockContentForId', () => {
+  it('renders an id as whole-block ref content that parses back', () => {
+    const content = referenceBlockContentForId(UUID)
+    expect(content).toBe(`((${UUID}))`)
+    expect(parseExactReferenceBlockContent(content)).toEqual({kind: 'blockRef', id: UUID, fieldForm: false})
+  })
+
+  // Ids are normally UUIDs, but `tx.create` and the bridge's `create-block`
+  // take a caller-supplied id. One with whitespace or parens renders as a
+  // `((…))` the parser rejects — and in a child-backed workspace that lands as
+  // silent corruption: the property child is written with a prefilled
+  // `referenceTargetId`, then `core.deriveReferenceTarget` runs afterwards,
+  // can't parse the same text, clears the column, and the owner's cell quietly
+  // loses the key. Failing at render time keeps it loud and local.
+  it.each([
+    ['a space', 'block id'],
+    ['an opening paren', 'block(id'],
+    ['a closing paren', 'block)id'],
+    ['a tab', 'block\tid'],
+    ['empty', ''],
+  ])('refuses an id containing %s', (_label, id) => {
+    expect(() => referenceBlockContentForId(id)).toThrow(/cannot address block id/)
+  })
+
+  // Non-UUID ids that DO round-trip stay supported: the exact-ref grammar is
+  // deliberately broader than the inline references plugin's UUID-only one.
+  it('accepts a non-UUID id that round-trips', () => {
+    const content = referenceBlockContentForId('field-status')
+    expect(parseExactReferenceBlockContent(content)).toEqual({kind: 'blockRef', id: 'field-status', fieldForm: false})
+  })
+
+  // A case-variant UUID passes the no-parens/no-whitespace check but does NOT
+  // round-trip: the parser canonicalizes UUID-looking ids to lowercase, so the
+  // ref reads back as a DIFFERENT id (PR #386 review). Same silent-corruption
+  // shape as the unparseable case, except the derived stamp lands on a wrong or
+  // nonexistent block instead of clearing.
+  it('refuses a UUID id that is not already lowercase', () => {
+    // Must contain hex LETTERS — an all-digit UUID is unchanged by upper-casing
+    // and would vacuously pass.
+    const lower = 'abcdef01-1111-4111-8111-1111111111ab'
+    const upper = lower.toUpperCase()
+    expect(upper).not.toBe(lower)
+    expect(parseExactReferenceBlockContent(`((${upper}))`)).toEqual({kind: 'blockRef', id: lower, fieldForm: false})
+    expect(() => referenceBlockContentForId(upper)).toThrow(/does not round-trip/)
+    expect(referenceBlockContentForId(lower)).toBe(`((${lower}))`)
+  })
+})
+
+describe('referenceBlockContentForLabel', () => {
+  it('renders a label and parses it back', () => {
+    expect(parseExactReferenceBlockContent(referenceBlockContentForLabel('Status')))
+      .toEqual({kind: 'alias', alias: 'Status', fieldForm: false})
+  })
+
+  // Lossy by design (documented on the helper): `]]` can't survive the round
+  // trip, which is why `addSchema` rejects such names up front rather than
+  // rendering them here.
+  it('escapes `]]` rather than emitting an unparseable wikilink', () => {
+    expect(referenceBlockContentForLabel('foo]]bar')).toBe('[[foo] ]bar]]')
+  })
+})
+
+describe('isGrammarShapedLabel', () => {
+  const UUID = '0f7b3c1a-9d2e-4f60-8a1b-2c3d4e5f6a7b'
+
+  // The label→content mirror hazard: these titles would make the block they
+  // name into machinery (or a reference to something else) rather than a
+  // block titled with that text.
+  it.each([
+    ['a marked exact ref', `::((${UUID}))`],
+    ['a marked wikilink', '::[[status]]'],
+    ['a marked aliased blockref', `::[label](((${UUID})))`],
+    ['a bare exact ref', `((${UUID}))`],
+    ['a bare wikilink', '[[status]]'],
+    ['a non-uuid exact ref (the broad whole-block grammar)', '((field-status))'],
+  ])('rejects %s', (_label, text) => {
+    expect(isGrammarShapedLabel(text)).toBe(true)
+  })
+
+  // Ordinary names — including ones that merely CONTAIN grammar characters
+  // without being a whole span — stay usable. Over-rejecting here would ban
+  // legitimate names for no safety gain.
+  it.each([
+    ['a plain name', 'Status'],
+    ['a name with colons', 'Status:: notes'],
+    ['prose starting with the marker', '::not a span'],
+    ['a name embedding a ref', 'see ((x)) here'],
+    ['a bracketed but unclosed name', '[[status'],
+    ['an embed (a transclusion directive, never a span)', `!((${UUID}))`],
+  ])('accepts %s', (_label, text) => {
+    expect(isGrammarShapedLabel(text)).toBe(false)
+  })
+
+  it('is insensitive to surrounding whitespace, matching how content parses', () => {
+    expect(isGrammarShapedLabel(`  ::((${UUID}))  `)).toBe(true)
+  })
+})
+
+// ──── §7 grammar box: the `::` field marker + the three span forms ────
+
+describe('parseExactReferenceBlockContent — marked field forms', () => {
+  const UUID = '0f7b3c1a-9d2e-4f60-8a1b-2c3d4e5f6a7b'
+
+  it('parses ::((uuid)) as a marked blockRef (canonical field form)', () => {
+    expect(parseExactReferenceBlockContent(`::((${UUID}))`))
+      .toEqual({kind: 'blockRef', id: UUID, fieldForm: true})
+  })
+
+  it('parses ::[[name]] as a marked alias (pure syntax — resolution-independent)', () => {
+    expect(parseExactReferenceBlockContent('::[[status]]'))
+      .toEqual({kind: 'alias', alias: 'status', fieldForm: true})
+  })
+
+  it('parses ::[label](((uuid))) as a marked aliasedBlockRef', () => {
+    expect(parseExactReferenceBlockContent(`::[status](((${UUID})))`))
+      .toEqual({kind: 'aliasedBlockRef', id: UUID, label: 'status', fieldForm: true})
+  })
+
+  it('parses the unmarked aliased blockref too (target stamps for every form)', () => {
+    expect(parseExactReferenceBlockContent(`[status](((${UUID})))`))
+      .toEqual({kind: 'aliasedBlockRef', id: UUID, label: 'status', fieldForm: false})
+  })
+
+  it('canonicalizes the aliased form id to lowercase, mirroring the plugin regex', () => {
+    expect(parseExactReferenceBlockContent(`[x](((${UUID.toUpperCase()})))`))
+      .toEqual({kind: 'aliasedBlockRef', id: UUID, label: 'x', fieldForm: false})
+  })
+
+  it('keeps the aliased form UUID-only (plugin-mirrored) while exact refs stay broad', () => {
+    expect(parseExactReferenceBlockContent('[x](((not-a-uuid)))')).toBeNull()
+    expect(parseExactReferenceBlockContent('::((not-a-uuid))'))
+      .toEqual({kind: 'blockRef', id: 'not-a-uuid', fieldForm: true})
+  })
+
+  it('allows an empty aliased-form label (renders like a plain ref)', () => {
+    expect(parseExactReferenceBlockContent(`::[](((${UUID})))`))
+      .toEqual({kind: 'aliasedBlockRef', id: UUID, label: '', fieldForm: true})
+  })
+
+  it('matches on trimmed content (outer whitespace policy is pinned — a pasted trailing newline must not flicker classification)', () => {
+    expect(parseExactReferenceBlockContent(`  ::((${UUID}))\n`))
+      .toEqual({kind: 'blockRef', id: UUID, fieldForm: true})
+  })
+
+  it('admits no space between marker and span', () => {
+    expect(parseExactReferenceBlockContent(':: [[status]]')).toBeNull()
+    expect(parseExactReferenceBlockContent(`:: ((${UUID}))`)).toBeNull()
+  })
+
+  it('never reads prose starting with :: as a reference', () => {
+    expect(parseExactReferenceBlockContent('::not a span')).toBeNull()
+    expect(parseExactReferenceBlockContent('::')).toBeNull()
+    expect(parseExactReferenceBlockContent(`::((${UUID})) trailing`)).toBeNull()
+  })
+
+  it('excludes embeds — a transclusion directive, not a marker', () => {
+    expect(parseExactReferenceBlockContent(`::!((${UUID}))`)).toBeNull()
+    expect(parseExactReferenceBlockContent(`!((${UUID}))`)).toBeNull()
+  })
+})
+
+// The span shapes are declared once and consumed by both readers of this
+// grammar. These pin the contract in both directions: what must AGREE,
+// and what is allowed to differ. A future re-duplication of a shape (the
+// `UUID_RE_SOURCE` that used to be defined twice, under a comment saying
+// it wasn't) shows up here as a disagreement rather than as a bug months
+// later.
+describe('the two readers of this grammar', () => {
+  const UUID_B = '22222222-2222-4222-8222-222222222222'
+
+  it('agree on the aliased-blockref shape', () => {
+    const span = `[label](((${UUID_B})))`
+    expect(parseExactReferenceBlockContent(span))
+      .toEqual({kind: 'aliasedBlockRef', id: UUID_B, label: 'label', fieldForm: false})
+    expect(parseBlockRefs(span))
+      .toEqual([{blockId: UUID_B, label: 'label', embed: false, startIndex: 0, endIndex: span.length}])
+  })
+
+  it('agree on the plain blockref shape for a UUID', () => {
+    const span = `((${UUID_B}))`
+    expect(parseExactReferenceBlockContent(span))
+      .toEqual({kind: 'blockRef', id: UUID_B, fieldForm: false})
+    expect(parseBlockRefs(span).map(r => r.blockId)).toEqual([UUID_B])
+  })
+
+  // DELIBERATE divergence, not drift: whole-block content may address any
+  // caller-supplied id, but inline scanning stays UUID-only so prose like
+  // "((not an id))" never becomes a backlink.
+  it('diverge on a non-UUID id, by design', () => {
+    const span = '((caller-supplied-id))'
+    expect(parseExactReferenceBlockContent(span))
+      .toEqual({kind: 'blockRef', id: 'caller-supplied-id', fieldForm: false})
+    expect(parseBlockRefs(span)).toEqual([])
+  })
+
+  // The other two deliberate divergences: trim, and nesting.
+  it('diverge on trimming and nesting, by design', () => {
+    expect(parseExactReferenceBlockContent('[[  Padded  ]]'))
+      .toEqual({kind: 'alias', alias: 'Padded', fieldForm: false})
+    expect(parseReferences('[[  Padded  ]]').map(r => r.alias)).toEqual(['  Padded  '])
+
+    expect(parseExactReferenceBlockContent('[[outer [[inner]] tail]]')).toBeNull()
+    expect(parseReferences('[[outer [[inner]] tail]]').map(r => r.alias))
+      .toEqual(['outer [[inner]] tail', 'inner'])
+  })
+})
+
+// A type label and a property name DOUBLE as the block's `[[label]]`
+// page, so unlike an arbitrary alias they must be expressible as a
+// wikilink. Property names always ran both halves of this hygiene; type
+// labels ran only the grammar-shaped half, so a `]]`-bearing label
+// claimed an alias nothing could link to — a gap that predates the length
+// cap and that the cap widened (Codex on PR #540).
+describe('assertRoundTrippableReferenceLabel', () => {
+  it('accepts an ordinary name', () => {
+    expect(() => assertRoundTrippableReferenceLabel('Book', 'ctx')).not.toThrow()
+  })
+
+  it('refuses a `]]`-lossy name — the pre-existing half of the gap', () => {
+    expect(() => assertRoundTrippableReferenceLabel('foo]]bar', 'ctx'))
+      .toThrow(LossyLabelError)
+  })
+
+  it('refuses a name past the alias cap', () => {
+    expect(() => assertRoundTrippableReferenceLabel('a'.repeat(MAX_ALIAS_LENGTH + 1), 'ctx'))
+      .toThrow(LossyLabelError)
+    expect(() => assertRoundTrippableReferenceLabel('a'.repeat(MAX_ALIAS_LENGTH), 'ctx'))
+      .not.toThrow()
+  })
+
+  // The UI reverts the draft field by catching the BASE class, so both
+  // refusal reasons have to reach it — the reason a base exists at all.
+  it('both refusal reasons are UnwritableLabelError', () => {
+    expect(new LossyLabelError('x', 'ctx')).toBeInstanceOf(UnwritableLabelError)
+    expect(new GrammarShapedLabelError('x', 'ctx')).toBeInstanceOf(UnwritableLabelError)
+  })
+})
+
+// This reading feeds `deriveReferenceColumns` → `reference_target_id`,
+// which in a child-backed workspace decides whether a row projects as a
+// property field. Without the bound here, a whole-block `[[<over-cap>]]`
+// with an owner was stamped as a reference block while the inline parser
+// and the renderer both read the same text as literal — one string, two
+// contradictory classifications (Codex on PR #540).
+describe('parseExactReferenceBlockContent — alias length bound', () => {
+  it('reads an alias at the cap and refuses one past it', () => {
+    const atCap = 'a'.repeat(MAX_ALIAS_LENGTH)
+    expect(parseExactReferenceBlockContent(`[[${atCap}]]`))
+      .toEqual({kind: 'alias', alias: atCap, fieldForm: false})
+    expect(parseExactReferenceBlockContent(`[[${'a'.repeat(MAX_ALIAS_LENGTH + 1)}]]`))
+      .toBeNull()
+  })
+
+  it('applies to the field form too', () => {
+    expect(parseExactReferenceBlockContent(`::[[${'a'.repeat(MAX_ALIAS_LENGTH + 1)}]]`))
+      .toBeNull()
+  })
+
+  // The bound is measured before the trim, so the two parsers agree on
+  // the exact same string. Measuring the trimmed alias instead would
+  // leave a one-character window where core says "reference" and the
+  // inline parser says "literal".
+  it('agrees with the inline parser at the boundary, whitespace included', () => {
+    const padded = `${'a'.repeat(MAX_ALIAS_LENGTH)} `
+    const content = `[[${padded}]]`
+    expect(parseExactReferenceBlockContent(content)).toBeNull()
+    expect(parseReferences(content)).toEqual([])
+  })
+})

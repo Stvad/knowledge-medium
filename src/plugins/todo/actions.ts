@@ -30,11 +30,7 @@ const clearStatusInTx = async (block: Block): Promise<void> => {
     const row = await tx.get(block.id)
     if (!row) return
     await block.repo.removeTypeInTx(tx, block.id, TODO_TYPE)
-    const updated = await tx.get(block.id)
-    if (!updated) return
-    const next = {...updated.properties}
-    delete next[statusProp.name]
-    await tx.update(block.id, {properties: next})
+    await tx.unsetProperty(block.id, statusProp)
   }, {scope: ChangeScope.BlockDefault, description: 'cycle todo state'})
 }
 

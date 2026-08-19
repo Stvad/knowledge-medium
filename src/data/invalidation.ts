@@ -7,6 +7,18 @@ export interface ChangeSnapshotSide {
   orderKey?: string
   workspaceId: string
   deleted?: boolean
+  /** LOCAL derived reference-target column (PR #288 slice A). Surfaced so
+   *  the parent-edge computation can treat a field-row recognition flip as
+   *  a visible-membership change (§9 outline exclusion). Type-level only —
+   *  runtime values are full `BlockData` snapshots. */
+  referenceTargetId?: string | null
+  /** LOCAL derived `::` field-marker column (PR #288 §7). The OTHER half of
+   *  §9 recognition, surfaced for the same parent-edge computation as
+   *  `referenceTargetId` — and the half that moves independently: adding or
+   *  removing the marker leaves the target identical, so a comparison keyed
+   *  on the target alone would miss the recognition flip entirely. Type-level
+   *  only — runtime values are full `BlockData` snapshots. */
+  isFieldForm?: boolean
   /** Block content. Surfaced here for the kernel `content` invalidation
    *  channel — fires when content actually changes, so substring-search
    *  / recent-blocks queries don't invalidate on UiState property

@@ -1,4 +1,4 @@
-// @vitest-environment jsdom
+// @vitest-environment happy-dom
 /**
  * usePlaceSearch combines a local Place-block scan with Google autocomplete.
  * The behaviour worth pinning is the failure handling the `@`/property pickers

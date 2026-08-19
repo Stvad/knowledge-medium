@@ -9,7 +9,13 @@ import {
 } from '@/components/ui/command'
 import { useActionContext } from '@/shortcuts/useActionContext.js'
 import { useRunAction } from '@/shortcuts/runAction.js'
-import type { ActionConfig, ShortcutBinding, ActionContextType } from '@/shortcuts/types.js'
+import { useEditModeYieldKeepalive } from '@/components/useEditModeYieldKeepalive.js'
+import { actionRuntimeKey } from '@/shortcuts/effectiveActions.js'
+import {
+  type ActionConfig,
+  type ShortcutBinding,
+  type ActionContextType,
+} from '@/shortcuts/types.js'
 import { Kbd } from '@/components/ui/kbd'
 import { formatChord } from '@/plugins/keybindings-settings/keyCapture.ts'
 import { groupBy } from 'lodash-es'
@@ -37,6 +43,10 @@ export function CommandPalette() {
 
   useActionContext(COMMAND_PALETTE_CONTEXT, shortcutDependencies, open)
 
+  // Hold edit mode open (and return focus to the editor on close) when the
+  // palette was opened from edit mode — see the hook for the full contract.
+  useEditModeYieldKeepalive(open)
+
   const {actions, activeContexts, bindingsFor} = useCommandPaletteActions()
   const runAction = useRunAction()
 
@@ -50,10 +60,18 @@ export function CommandPalette() {
   }, [open, actions, activeContexts])
 
   const runCommand = (actionId: string) => {
-    try {
-      runAction(actionId, new CustomEvent('command-pallet-trigger'))
-    } catch (error) {
+    const logFailure = (error: unknown) =>
       console.error(`[CommandPalette] Failed to execute action: ${actionId}`, error)
+    try {
+      // `runAction` returns the handler's `void | Promise<void>`. The try/catch
+      // only catches a synchronous throw (e.g. resolve failing), so attach a
+      // `.catch` to surface an async handler rejection too rather than leaking
+      // it as an unhandled rejection.
+      void Promise.resolve(
+        runAction(actionId, new CustomEvent('command-pallet-trigger')),
+      ).catch(logFailure)
+    } catch (error) {
+      logFailure(error)
     } finally {
       commandPaletteToggle.close()
     }
@@ -82,10 +100,21 @@ export function CommandPalette() {
               {actionsInGroup.map((action: ActionConfig) => {
                 const bindings = bindingsFor(action)
                 const shortcutKeys = formatShortcutKeys(bindings)
+                // cmdk tracks selection by `value`, so it MUST be unique across
+                // the whole list, and a bare `action.id` is not: a description
+                // can be shared (ArrowUp/ArrowLeft "move to previous block" CM
+                // nav), and an id can be shared by distinct actions live in
+                // different contexts at once (global `undo`/`redo` + vim
+                // normal-mode `undo`/`redo`). A duplicate value makes cmdk
+                // highlight both rows and loop arrow-nav between them, so key on
+                // the context-qualified runtime key. `keywords` keeps the human
+                // group/description text searchable; onSelect runs the bare id.
+                const itemKey = actionRuntimeKey(action)
                 return (
                   <CommandItem
-                    key={action.id}
-                    value={`${groupHeading} ${action.description}`}
+                    key={itemKey}
+                    value={itemKey}
+                    keywords={[groupHeading, action.description]}
                     onSelect={() => runCommand(action.id)}
                     className="flex justify-between items-center"
                   >

@@ -14,9 +14,8 @@
 import type {
   ActionConfig,
   ActionContextType,
-  KeyCombination,
 } from '@/shortcuts/types.js'
-import { canonicalizeChord } from './canonicalizeChord.ts'
+import { canonicalizeChord, toChordArray } from './canonicalizeChord.ts'
 
 export interface KeybindingConflict {
   readonly chord: string
@@ -28,9 +27,6 @@ export interface ActionConflictParticipant {
   readonly context: ActionContextType
   readonly description: string
 }
-
-const toChordArray = (keys: KeyCombination | readonly KeyCombination[]): readonly string[] =>
-  typeof keys === 'string' ? [keys] : keys
 
 const contextsOverlap = (a: ActionContextType, b: ActionContextType): boolean =>
   a === b || a === 'global' || b === 'global'

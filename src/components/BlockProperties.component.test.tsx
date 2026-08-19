@@ -1,18 +1,17 @@
-// @vitest-environment jsdom
+// @vitest-environment happy-dom
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import {
   ChangeScope,
-  codecs,
-  defineBlockType,
-  defineProperty,
+  seedProperty,
+  seedType,
 } from '@/data/api'
-import { BlockCache } from '@/data/blockCache'
 import { kernelDataExtension } from '@/data/kernelDataExtension'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
+import { createTestRepo } from '@/data/test/createTestRepo'
 import { Repo } from '@/data/repo'
-import { typesFacet } from '@/data/facets'
+import { definitionSeedsFacet, typeSeedsFacet } from '@/data/facets'
 import { resolveFacetRuntimeSync, type FacetRuntime } from '@/facets/facet'
 import { AppRuntimeContextProvider } from '@/extensions/runtimeContext'
 import { ActiveContextsProvider } from '@/shortcuts/ActiveContexts'
@@ -21,11 +20,18 @@ import { defaultActionContextConfigs } from '@/shortcuts/defaultContexts'
 import { BlockProperties } from './BlockProperties'
 import { degradedFallbackSchema } from './propertyEditors/defaults'
 import { requestPropertyCreate } from '@/utils/propertyNavigation'
+import { buildAppHash } from '@/utils/routing'
 import { kernelPropertyUiExtension } from './propertyEditors/typesPropertyUi'
 import { kernelValuePresetsExtension } from './propertyEditors/kernelValuePresets'
 import { getOrCreatePropertiesPage } from '@/data/propertiesPage'
 import type { Block } from '@/data/block'
-import { aliasesProp, showPropertiesProp, typesProp } from '@/data/properties'
+import {
+  aliasesProp,
+  seedKeyProp,
+  seedRevisionProp,
+  showPropertiesProp,
+  typesProp,
+} from '@/data/properties'
 import { useContent } from '@/hooks/block'
 import type { BlockRendererProps } from '@/types'
 
@@ -38,6 +44,11 @@ const uiStateBlockRef = vi.hoisted(() => ({
 const navigateCallsRef = vi.hoisted(() => ({
   current: [] as unknown[],
 }))
+// Declared with the workspace arg dropped — `vi.fn` still records every
+// argument it was CALLED with, which is what the workspace assertions read.
+const useUserPageMock = vi.hoisted(() =>
+  vi.fn((userId: string): {name: string; blockId?: string} => ({name: userId})),
+)
 
 vi.mock('@/context/repo.tsx', () => ({
   useRepo: () => {
@@ -51,10 +62,11 @@ vi.mock('@/data/globalState.ts', () => ({
     if (!uiStateBlockRef.current) throw new Error('test UI state block not initialised')
     return uiStateBlockRef.current
   },
-  // Attribution name resolution is exercised in globalState's own tests;
-  // here it's identity (and reports no page) so the metadata row stays
-  // deterministic and renders as plain text.
-  useUserPage: (userId: string) => ({name: userId}),
+  // Attribution name resolution is exercised end-to-end in
+  // `data/test/useUserPage.test.tsx`; here it's identity (and reports no
+  // page) so the metadata row stays deterministic and renders as plain
+  // text. Kept as a spy so the workspace it's called WITH can be asserted.
+  useUserPage: useUserPageMock,
 }))
 
 vi.mock('@/utils/navigation.ts', () => ({
@@ -62,46 +74,59 @@ vi.mock('@/utils/navigation.ts', () => ({
     navigateCallsRef.current.push(input)
   },
   // MetadataRow's "Changed by" link uses this; record opens like navigate.
-  useOpenBlock: ({blockId}: {blockId: string}) => () => {
-    navigateCallsRef.current.push({blockId})
+  // The workspace is recorded too — it's what proves the link opens in the
+  // block's workspace rather than the active one.
+  useOpenBlock: ({blockId, workspaceId}: {blockId: string; workspaceId?: string}) => () => {
+    navigateCallsRef.current.push({blockId, workspaceId})
   },
 }))
 
-const reviewStatusProp = defineProperty<string>('phase2:review-status', {
-  codec: codecs.string,
-  defaultValue: 'open',
-  changeScope: ChangeScope.BlockDefault,
+// Type-embedded properties are code-owned seeds (the type-lift that used to
+// surface a type's embedded schemas is gone) so the panel resolves + renders
+// each row. Contributed through `definitionSeedsFacet` in the runtime below.
+const reviewStatusProp = seedProperty({
+  seedKey: 'test/property/phase2-review-status', revision: 1, name: 'phase2:review-status',
+  preset: 'string', defaultValue: 'open', changeScope: ChangeScope.BlockDefault,
 })
 
-const reviewerRefProp = defineProperty<string>('phase2:reviewer-ref', {
-  codec: codecs.ref({targetTypes: ['reviewer']}),
-  defaultValue: '',
-  changeScope: ChangeScope.BlockDefault,
+const reviewerRefProp = seedProperty({
+  seedKey: 'test/property/phase2-reviewer-ref', revision: 1, name: 'phase2:reviewer-ref',
+  preset: 'ref', config: {targetTypes: ['reviewer']}, defaultValue: '', changeScope: ChangeScope.BlockDefault,
 })
 
-const relatedRefsProp = defineProperty<readonly string[]>('phase2:related-refs', {
-  codec: codecs.refList({targetTypes: ['related']}),
-  defaultValue: [],
-  changeScope: ChangeScope.BlockDefault,
+const relatedRefsProp = seedProperty({
+  seedKey: 'test/property/phase2-related-refs', revision: 1, name: 'phase2:related-refs',
+  preset: 'refList', config: {targetTypes: ['related']}, defaultValue: [], changeScope: ChangeScope.BlockDefault,
 })
 
-const reviewType = defineBlockType({
+const reviewType = seedType({
+  seedKey: 'test/type/phase2-review',
+  revision: 1,
   id: 'phase2-review',
   label: 'Phase 2 Review',
   properties: [reviewStatusProp, reviewerRefProp, relatedRefsProp],
 })
 
-const reviewerProp = defineProperty<string>('phase2:reviewer', {
-  codec: codecs.string,
-  defaultValue: '',
-  changeScope: ChangeScope.BlockDefault,
+const reviewerProp = seedProperty({
+  seedKey: 'test/property/phase2-reviewer', revision: 1, name: 'phase2:reviewer',
+  preset: 'string', defaultValue: '', changeScope: ChangeScope.BlockDefault,
 })
 
-const assignmentType = defineBlockType({
+const assignmentType = seedType({
+  seedKey: 'test/type/phase2-assignment',
+  revision: 1,
   id: 'phase2-assignment',
   label: 'Phase 2 Assignment',
   properties: [reviewerProp],
 })
+
+const reviewTypeProps = [reviewStatusProp, reviewerRefProp, relatedRefsProp, reviewerProp]
+
+// A user-schema-backed property hidden via the `system:` name convention.
+// B′ removed the name-key editor-override join, so a code override can no
+// longer hide a user schema; the `system:` prefix (a surviving fallback in
+// `isPropertyPanelHiddenProperty`) is the mechanism now.
+const hiddenBackedName = 'system:hidden-backed'
 
 const TestBlockRenderer = ({block}: BlockRendererProps) => {
   const content = useContent(block)
@@ -119,31 +144,27 @@ describe('BlockProperties component', () => {
   beforeEach(async () => {
     await resetTestDb(sharedDb.db)
     h = sharedDb
-    let now = 1700_000_000_000
-    let idSeq = 0
-    let txSeq = 0
-    repo = new Repo({
+    ;({repo} = createTestRepo({
       db: h.db,
-      cache: new BlockCache(),
       user: {id: 'user-1'},
-      now: () => ++now,
-      newId: () => `generated-${++idSeq}`,
-      newTxSeq: () => ++txSeq,
       startSyncObserver: false,
-    })
+    }))
     runtime = resolveFacetRuntimeSync([
       kernelDataExtension,
       kernelPropertyUiExtension,
       kernelValuePresetsExtension,
       blockRenderersFacet.of({id: 'default', renderer: TestBlockRenderer}, {source: 'test'}),
-      typesFacet.of(reviewType, {source: 'test'}),
-      typesFacet.of(assignmentType, {source: 'test'}),
+      reviewTypeProps.map(prop => definitionSeedsFacet.of(prop, {source: 'test'})),
+      typeSeedsFacet.of(reviewType, {source: 'test'}),
+      typeSeedsFacet.of(assignmentType, {source: 'test'}),
       defaultActionContextConfigs.map(c => actionContextsFacet.of(c, {source: 'test'})),
     ])
     repo.setFacetRuntime(runtime)
     repo.setActiveWorkspaceId('ws-1')
     repoRef.current = repo
     navigateCallsRef.current = []
+    useUserPageMock.mockClear()
+    useUserPageMock.mockImplementation((userId: string) => ({name: userId}))
 
     await repo.tx(async tx => {
       await tx.create({
@@ -171,7 +192,50 @@ describe('BlockProperties component', () => {
     cleanup()
     repoRef.current = undefined
     uiStateBlockRef.current = undefined
-    repo.stopSyncObserver()
+  })
+
+  // A panel can show a block from another workspace (a side panel left open
+  // across a workspace switch). The user page id is derived from
+  // (workspace, userId), so BOTH the name lookup and the link the row renders
+  // have to use the block's workspace: resolving the name against the active
+  // workspace finds no page and falls back to the raw user id, while building
+  // the href against the active workspace routes a foreign block id through
+  // the wrong workspace.
+  const renderForeignWorkspacePanel = async () => {
+    await repo.tx(async tx => {
+      await tx.create({id: 'block-elsewhere', workspaceId: 'ws-2', parentId: null, orderKey: 'a0'})
+    }, {scope: ChangeScope.BlockDefault, description: 'create foreign-workspace block'})
+    expect(repo.activeWorkspaceId).toBe('ws-1')
+
+    render(
+      <AppRuntimeContextProvider value={runtime}>
+        <ActiveContextsProvider>
+        <BlockProperties block={repo.block('block-elsewhere')}/>
+        </ActiveContextsProvider>
+      </AppRuntimeContextProvider>,
+    )
+  }
+
+  it('resolves the "Changed by" author in the block\'s workspace, not the active one', async () => {
+    await renderForeignWorkspacePanel()
+
+    await waitFor(() => expect(useUserPageMock).toHaveBeenCalledWith('user-1', 'ws-2'))
+  })
+
+  it('links "Changed by" to the user page in the block\'s workspace', async () => {
+    useUserPageMock.mockImplementation((userId: string) => ({name: userId, blockId: 'user-page-ws-2'}))
+    await renderForeignWorkspacePanel()
+
+    // Metadata rows live behind the hidden-fields toggle.
+    fireEvent.click(await screen.findByText(/Show hidden fields/))
+
+    const link = await screen.findByRole('link', {name: 'user-1'})
+    // The href must carry ws-2 — the workspace the user page id came from —
+    // not the active ws-1, or the click opens nothing (or the wrong block).
+    expect(link.getAttribute('href')).toBe(buildAppHash('ws-2', 'user-page-ws-2'))
+
+    fireEvent.click(link)
+    expect(navigateCallsRef.current).toContainEqual({blockId: 'user-page-ws-2', workspaceId: 'ws-2'})
   })
 
   it('keeps primitive value edits local until blur commits them', async () => {
@@ -252,6 +316,54 @@ describe('BlockProperties component', () => {
     expect(screen.getByText('Hidden')).toBeTruthy()
     expect(screen.getByText('ID')).toBeTruthy()
     expect(screen.queryByText('types')).toBeNull()
+  })
+
+  it('keeps seed provenance fields out of ordinary rows and capability-limited under Hidden', async () => {
+    const block = repo.block('block-1')
+    // Core safety must not depend on the optional kernel-property-ui toggle.
+    runtime = resolveFacetRuntimeSync([
+      kernelDataExtension,
+      kernelValuePresetsExtension,
+      defaultActionContextConfigs.map(c => actionContextsFacet.of(c, {source: 'test'})),
+    ])
+    repo.setFacetRuntime(runtime)
+    await block.set(seedKeyProp, 'srs-rescheduling/property/config')
+    await block.set(seedRevisionProp, 3)
+
+    render(
+      <AppRuntimeContextProvider value={runtime}>
+        <ActiveContextsProvider>
+        <BlockProperties block={block}/>
+        </ActiveContextsProvider>
+      </AppRuntimeContextProvider>,
+    )
+
+    expect(document.querySelector(`[data-property-name="${seedKeyProp.name}"]`)).toBeNull()
+    expect(document.querySelector(`[data-property-name="${seedRevisionProp.name}"]`)).toBeNull()
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', {name: /show hidden fields/i}))
+    })
+
+    const hiddenLabel = screen.getByText('Hidden')
+    const hiddenGroup = hiddenLabel.parentElement?.parentElement
+    expect(hiddenGroup).toBeTruthy()
+    for (const property of [seedKeyProp, seedRevisionProp]) {
+      const row = hiddenGroup!.querySelector<HTMLElement>(
+        `[data-property-name="${property.name}"]`,
+      )
+      expect(row).toBeTruthy()
+      const glyph = within(row!).getByRole('button', {
+        name: new RegExp(`configure ${property.name}`, 'i'),
+      }) as HTMLButtonElement
+      expect(glyph.disabled).toBe(true)
+      expect(within(row!).queryByLabelText(`Field ${property.name}`)).toBeNull()
+      expect(within(row!).queryByTitle(`Delete ${property.name}`)).toBeNull()
+      expect(within(row!).queryByRole('textbox')).toBeNull()
+      expect(row!.querySelector('[data-property-value]')?.textContent).toContain(
+        JSON.stringify(block.data.properties[property.name]),
+      )
+    }
   })
 
   it('pins type membership above contributed property rows', () => {
@@ -387,6 +499,42 @@ describe('BlockProperties component', () => {
     expect(glyph.disabled).toBe(true)
     expect(glyph.title.toLowerCase()).toContain('built-in')
     expect(glyph.title.toLowerCase()).toContain('no config')
+  })
+
+  it('disables and defensively ignores configure for a hidden backed schema', async () => {
+    const block = repo.block('block-1')
+    const schema = await repo.userSchemas.addSchema({
+      name: hiddenBackedName,
+      presetId: 'string',
+    })
+    await block.set(schema, 'private')
+    expect(repo.userSchemas.getSchemaBlockId(hiddenBackedName)).toBeDefined()
+
+    render(
+      <AppRuntimeContextProvider value={runtime}>
+        <ActiveContextsProvider>
+        <BlockProperties block={block}/>
+        </ActiveContextsProvider>
+      </AppRuntimeContextProvider>,
+    )
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', {name: /show hidden fields/i}))
+    })
+
+    const glyph = within(propertyRow(hiddenBackedName))
+      .getByRole('button', {name: /configure system:hidden-backed/i}) as HTMLButtonElement
+    expect(glyph.disabled).toBe(true)
+    expect(navigateCallsRef.current).toEqual([])
+
+    // Exercise the handler independently of the disabled affordance: if a
+    // caller or browser quirk dispatches the click, the defensive row guard
+    // must still prevent the hidden schema panel from opening.
+    glyph.disabled = false
+    await act(async () => {
+      fireEvent.click(glyph)
+    })
+    expect(navigateCallsRef.current).toEqual([])
   })
 
   it('materialises a user schema and opens the side panel when the glyph is clicked on an unregistered property', async () => {

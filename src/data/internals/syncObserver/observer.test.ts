@@ -5,17 +5,13 @@
  * materialize → invalidate, plus the drain's race/failure/restart robustness.
  */
 
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import { BLOCKS_SYNCED_RAW_TABLE, blockToRowParams } from '@/data/blockSchema'
-import { BlockCache } from '@/data/blockCache'
-import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
-import { startBlocksSyncedObserver, type BlocksSyncedObserver } from './observer.js'
+import { describe, expect, it, vi } from 'vitest'
 import type { GetMaterializability, Materializability } from './materialize.js'
 import { encodeForWire, type GetCek } from '@/sync/transform.js'
 import { generateWorkspaceKeyBytes, importWorkspaceKey } from '@/sync/crypto/workspaceKey.js'
-import type { ChangeNotification } from '@/data/internals/handleStore'
 import type { InvalidationRule } from '@/data/invalidation'
 import type { BlockData, CycleDetectedEvent } from '@/data/api'
+import { constMat, stagingCiphertextParams, setupObserverTestDb } from './test/harness.js'
 
 const data = (o: Partial<BlockData> = {}): BlockData => ({
   id: 'b1', workspaceId: 'ws-plain', parentId: null, orderKey: 'a0', content: 'hello',
@@ -23,85 +19,8 @@ const data = (o: Partial<BlockData> = {}): BlockData => ({
   updatedBy: 'u', deleted: false, ...o,
 })
 
-const stagingCiphertextParams = (
-  meta: BlockData,
-  wire: { content: string; properties_json: string; references_json: string },
-): unknown[] => {
-  const params = blockToRowParams(meta)
-  params[4] = wire.content
-  params[5] = wire.properties_json
-  params[6] = wire.references_json
-  return params
-}
-
-let sharedDb: TestDb
-let env: TestDb
-let observers: BlocksSyncedObserver[]
-beforeAll(async () => { sharedDb = await createTestDb() })
-afterAll(async () => { await sharedDb.cleanup() })
-beforeEach(async () => { await resetTestDb(sharedDb.db); env = sharedDb; observers = [] })
-afterEach(() => {
-  // Dispose any observers the test started; the shared DB closes in afterAll.
-  for (const o of observers) o.dispose()
-})
-
-const put = (d: BlockData, params?: unknown[]) =>
-  env.db.execute(BLOCKS_SYNCED_RAW_TABLE.put.sql, params ?? blockToRowParams(d))
-const del = (id: string) => env.db.execute(BLOCKS_SYNCED_RAW_TABLE.delete.sql, [id])
-
-const blocks = () =>
-  env.db.getAll<{ id: string; content: string }>('SELECT id, content FROM blocks ORDER BY id')
-const queueLen = async () =>
-  (await env.db.getAll('SELECT seq FROM blocks_synced_changes')).length
-
-const BLOCK_COLS =
-  'id, workspace_id, parent_id, order_key, content, properties_json, references_json, ' +
-  'created_at, updated_at, user_updated_at, created_by, updated_by, deleted'
-/** Seed a row straight into the app-visible `blocks` table (source NULL → no
- *  ps_crud, i.e. non-pending) — the shape of a locally-minted bootstrap default
- *  the observer must let the server override. */
-const seedLocalBlock = (d: BlockData) =>
-  env.db.execute(
-    `INSERT INTO blocks (${BLOCK_COLS}) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-    blockToRowParams(d),
-  )
-
-const constMat = (m: 'copy' | 'decrypt' | 'defer'): GetMaterializability => () => m
-const noKey: GetCek = async () => null
-
-interface Harness {
-  observer: BlocksSyncedObserver
-  cache: BlockCache
-  notifications: ChangeNotification[]
-}
-
-const start = (opts: {
-  getMaterializability: GetMaterializability
-  getCek?: GetCek
-  onCycleDetected?: (e: CycleDetectedEvent) => void
-  drainChunkSize?: number
-  onError?: (err: unknown) => void
-  getInvalidationRules?: () => readonly InvalidationRule[]
-}): Harness => {
-  const cache = new BlockCache()
-  const notifications: ChangeNotification[] = []
-  const observer = startBlocksSyncedObserver({
-    db: env.db,
-    cache,
-    handleStore: { invalidate: (n) => notifications.push(n) },
-    deps: {
-      getMaterializability: opts.getMaterializability,
-      getCek: opts.getCek ?? noKey,
-    },
-    onCycleDetected: opts.onCycleDetected,
-    throttleMs: 5,
-    drainChunkSize: opts.drainChunkSize,
-    onError: opts.onError,
-    getInvalidationRules: opts.getInvalidationRules,
-  })
-  observers.push(observer)
-  return { observer, cache, notifications }
-}
+const { env, start, seedLocalBlock, stageRow: put, deleteStagingRow: del, blocks, queueLen } =
+  setupObserverTestDb()
 
 const e2eeStaging = async (plain: BlockData): Promise<{ getCek: GetCek; params: unknown[] }> => {
   const key = await importWorkspaceKey(generateWorkspaceKeyBytes())
@@ -119,9 +38,9 @@ const e2eeStaging = async (plain: BlockData): Promise<{ getCek: GetCek; params: 
 }
 
 const waitFor = async (cond: () => Promise<boolean>, ms = 3000): Promise<void> => {
-  const start = Date.now()
+  const t0 = Date.now()
   while (!(await cond())) {
-    if (Date.now() - start > ms) throw new Error('waitFor timed out')
+    if (Date.now() - t0 > ms) throw new Error('waitFor timed out')
     await new Promise(r => setTimeout(r, 15))
   }
 }

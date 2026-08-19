@@ -1,5 +1,6 @@
 import { Check, ClipboardPaste, ClockArrowDown, Gauge, RotateCcw, Scissors, Sparkles } from 'lucide-react'
 import { actionTransformsFacet, actionsFacet } from '@/extensions/core.js'
+import { actionDispatchWrap } from '@/shortcuts/actionDispatch.js'
 import type { AppExtension } from '@/facets/facet.js'
 import { systemToggle } from '@/facets/togglable.js'
 import type { Block } from '@/data/block'
@@ -271,49 +272,52 @@ export const applySrsReschedulePlan = async (
 ): Promise<boolean> => {
   if (block.repo.isReadOnly) return false
 
-  const nextReviewDaily = await getOrCreateDailyNote(
-    block.repo,
-    plan.workspaceId,
-    plan.nextReviewIso,
-  )
-  const reviewedDaily = await getOrCreateDailyNote(
-    block.repo,
-    plan.workspaceId,
-    plan.reviewedIso,
-  )
-  const snapshot: SrsReviewSnapshot = {
-    ...snapshotForPlan(plan),
-    reviewedAt: reviewedDaily.id,
-  }
-  const typeSnapshot = block.repo.snapshotTypeRegistries()
-
-  let written = false
-  await block.repo.tx(async tx => {
-    let row = await tx.get(block.id)
-    if (!row) return
-    if (!getBlockTypes(row).includes(SRS_SM25_TYPE)) {
-      await block.repo.addTypeInTx(tx, block.id, SRS_SM25_TYPE, {}, typeSnapshot)
-      row = await tx.get(block.id)
-      if (!row) return
+  // One undo entry for the whole action, daily-note creation included.
+  return block.repo.undoGroup(async repo => {
+    const nextReviewDaily = await getOrCreateDailyNote(
+      repo,
+      plan.workspaceId,
+      plan.nextReviewIso,
+    )
+    const reviewedDaily = await getOrCreateDailyNote(
+      repo,
+      plan.workspaceId,
+      plan.reviewedIso,
+    )
+    const snapshot: SrsReviewSnapshot = {
+      ...snapshotForPlan(plan),
+      reviewedAt: reviewedDaily.id,
     }
-    await tx.update(block.id, {
-      properties: {
-        ...row.properties,
-        [srsIntervalProp.name]: srsIntervalProp.codec.encode(plan.newInterval),
-        [srsFactorProp.name]: srsFactorProp.codec.encode(plan.newFactor),
-        [srsNextReviewDateProp.name]: srsNextReviewDateProp.codec.encode(nextReviewDaily.id),
-        [srsReviewCountProp.name]: srsReviewCountProp.codec.encode(plan.nextReviewCount),
-        [srsGradeProp.name]: srsGradeProp.codec.encode(plan.grade),
-        [srsSnapshotHistoryProp.name]: srsSnapshotHistoryProp.codec.encode([
-          ...plan.history,
-          snapshot,
-        ]),
-      },
-    })
-    written = true
-  }, {scope: ChangeScope.BlockDefault, description: 'srs reschedule'})
+    const typeSnapshot = repo.snapshotTypeRegistries()
 
-  return written
+    let written = false
+    await repo.tx(async tx => {
+      let row = await tx.get(block.id)
+      if (!row) return
+      if (!getBlockTypes(row).includes(SRS_SM25_TYPE)) {
+        await repo.addTypeInTx(tx, block.id, SRS_SM25_TYPE, {}, typeSnapshot)
+        row = await tx.get(block.id)
+        if (!row) return
+      }
+      await tx.update(block.id, {
+        properties: {
+          ...row.properties,
+          [srsIntervalProp.name]: srsIntervalProp.codec.encode(plan.newInterval),
+          [srsFactorProp.name]: srsFactorProp.codec.encode(plan.newFactor),
+          [srsNextReviewDateProp.name]: srsNextReviewDateProp.codec.encode(nextReviewDaily.id),
+          [srsReviewCountProp.name]: srsReviewCountProp.codec.encode(plan.nextReviewCount),
+          [srsGradeProp.name]: srsGradeProp.codec.encode(plan.grade),
+          [srsSnapshotHistoryProp.name]: srsSnapshotHistoryProp.codec.encode([
+            ...plan.history,
+            snapshot,
+          ]),
+        },
+      })
+      written = true
+    }, {scope: ChangeScope.BlockDefault, description: 'srs reschedule'})
+
+    return written
+  })
 }
 
 export const rescheduleBlock = async (
@@ -412,12 +416,13 @@ const runRescheduleWithFeedback = async (
   const workspaceId = block.peek()?.workspaceId
   if (!workspaceId) return
   const top = block.repo.undoManagerFor(workspaceId).peekUndo(ChangeScope.BlockDefault)
-  if (!top) return
+  const groupId = top?.groupId
+  if (!groupId) return
   const message = formatRescheduleToastMessage(result)
   showCustom(id => createElement(RescheduleToast, {
     toastId: id,
     message,
-    txId: top.txId,
+    groupId,
     workspaceId,
     repo: block.repo,
   }))
@@ -617,10 +622,12 @@ export const srsReschedulingPlugin: AppExtension = systemToggle({
   srsReschedulingActions.map(action =>
     actionsFacet.of(action, {source: 'srs-rescheduling'}),
   ),
+  // isVisible-only (presentational metadata) stays on the definition-transform
+  // seam; the archive behaviour wraps moved to the dispatch seam below.
   actionTransformsFacet.of(srsRescheduleDecorator, {source: 'srs-rescheduling'}),
-  actionTransformsFacet.of(srsSwipeRightDecorator, {source: 'srs-rescheduling'}),
+  actionDispatchWrap(srsSwipeRightDecorator, {source: 'srs-rescheduling'}),
   srsTodoCycleDecorators.map(decorator =>
-    actionTransformsFacet.of(decorator, {source: 'srs-rescheduling'}),
+    actionDispatchWrap(decorator, {source: 'srs-rescheduling'}),
   ),
   // Negative precedence: SRS adapter sorts before the generic reference
   // adapter so a block that is BOTH an SRS card AND has an inline date

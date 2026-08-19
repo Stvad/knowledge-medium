@@ -1,14 +1,17 @@
 // @vitest-environment node
 
-import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
-import { ChangeScope } from '@/data/api'
-import { BlockCache } from '@/data/blockCache'
+import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { ChangeScope, type BlockData } from '@/data/api'
+import { aliasesProp, typesProp } from '@/data/properties.js'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
+import { createTestRepo } from '@/data/test/createTestRepo'
 import { Repo } from '@/data/repo'
+import { definitionSeedsFacet } from '@/data/facets'
 import {
   RECENT_BLOCKS_LIMIT,
   pushRecentBlockId,
   recentBlockIdsProp,
+  recentItemFromBlockData,
 } from '../recents.ts'
 
 const WS = 'ws-1'
@@ -22,16 +25,12 @@ interface Harness {
 const setup = async (initialIds: string[]): Promise<Harness> => {
   await resetTestDb(sharedDb.db)
   const h = sharedDb
-  const cache = new BlockCache()
-  let timeCursor = 1700_000_000_000
-  let idCursor = 0
-  const repo = new Repo({
+  const { repo } = createTestRepo({
     db: h.db,
-    cache,
     user: {id: 'user-1'},
-    now: () => ++timeCursor,
-    newId: () => `gen-${++idCursor}`,
+    extensions: [definitionSeedsFacet.of(recentBlockIdsProp, {source: 'test'})],
   })
+  repo.setActiveWorkspaceId(WS)
   await repo.tx(tx => tx.create({
     id: PREFS_BLOCK_ID,
     workspaceId: WS,
@@ -49,7 +48,6 @@ let sharedDb: TestDb
 let env: Harness
 beforeAll(async () => { sharedDb = await createTestDb() })
 afterAll(async () => { await sharedDb.cleanup() })
-afterEach(() => { env?.repo.stopSyncObserver() })
 
 const flush = async (repo: Repo) => {
   await repo.tx(async () => {}, {scope: ChangeScope.UiState})
@@ -119,5 +117,66 @@ describe('pushRecentBlockId', () => {
       [WS],
     )
     expect(events.at(-1)).toEqual({scope: ChangeScope.UiState, source: 'user'})
+  })
+})
+
+describe('recentItemFromBlockData', () => {
+  const blockData = (overrides: Partial<BlockData>): BlockData => ({
+    id: 'block-1',
+    workspaceId: WS,
+    parentId: null,
+    orderKey: 'a0',
+    content: '',
+    properties: {},
+    references: [],
+    createdAt: 1,
+    updatedAt: 1,
+    userUpdatedAt: 1,
+    createdBy: 'u',
+    updatedBy: 'u',
+    deleted: false,
+    ...overrides,
+  })
+
+  it('carries the parent edge and the types a row needs to show context', () => {
+    // Both are read off `BlockData` the loader already has. The parent
+    // edge is what tells a genuine root from a block whose ancestor walk
+    // was cut; the types are what the row shows about what it IS.
+    expect(recentItemFromBlockData('block-1', blockData({
+      content: 'Ada Lovelace',
+      parentId: 'people-page',
+      properties: {[typesProp.name]: ['person']},
+    }))).toEqual({
+      blockId: 'block-1',
+      label: 'Ada Lovelace',
+      parentId: 'people-page',
+      typeIds: ['person'],
+    })
+  })
+
+  it('prefers an alias over the content, as the search rows do', () => {
+    expect(recentItemFromBlockData('block-1', blockData({
+      content: 'first line of body text',
+      properties: {[aliasesProp.name]: ['Project Alpha']},
+    })).label).toBe('Project Alpha')
+  })
+
+  it('falls through a blank alias instead of rendering a label-less row', () => {
+    // A raw properties-bag write (agent verb, importer, sync-applied row)
+    // can leave a blank or non-string first alias. Taking `aliases[0]`
+    // unconditionally puts an invisible row in the Recent group.
+    expect(recentItemFromBlockData('block-1', blockData({
+      content: 'Ada Lovelace',
+      properties: {[aliasesProp.name]: ['   ']},
+    })).label).toBe('Ada Lovelace')
+  })
+
+  it('survives a malformed types value rather than dropping the row', () => {
+    // `getBlockTypes` would throw here; a throw inside the recents loop
+    // empties the whole Recent group.
+    expect(recentItemFromBlockData('block-1', blockData({
+      content: 'Ada Lovelace',
+      properties: {[typesProp.name]: 'person'},
+    })).typeIds).toEqual([])
   })
 })

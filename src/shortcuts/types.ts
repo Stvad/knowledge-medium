@@ -42,9 +42,20 @@ export interface ActionContextConfig<T extends ActionContextType = ActionContext
   displayName: string;
   defaultEventOptions?: EventOptions;
   /**
-   * Optional filter function to determine if the context should handle the event.
-   * If any active context's eventFilter returns true, the event is processed.
-   * If no active context's eventFilter returns true, the defaultEventFilter is used.
+   * Optional widening of which keyboard events THIS context's actions accept.
+   *
+   * Scope: your own candidates only. A filter never speaks for another
+   * context's bindings — each completed candidate is judged by its own
+   * context — so returning true can't hand the event to anyone else.
+   *
+   * Additive, never a veto: returning true admits an event the default
+   * heuristic would drop (which is bare, modifier-less keys aimed at an
+   * editable target — i.e. typing); returning false just falls back to that
+   * heuristic, so deliberate modifier chords keep working without any opt-in.
+   * Declare one only to claim keys that would otherwise read as typing.
+   *
+   * Called once per completed binding rather than once per event — keep it
+   * pure.
    */
   eventFilter?: (event: KeyboardEvent) => boolean;
   /**
@@ -145,8 +156,15 @@ export interface CodeMirrorEditModeDependencies extends BlockShortcutDependencie
   editorView: EditorView;
 }
 
+/** The focused field element of a property editor. A union rather than
+ *  `HTMLInputElement` because not every property shape edits through a text
+ *  input — `enum` ("Choice") properties render a native `<select>`, which
+ *  `hasEditableTarget` likewise treats as editable, so it needs the same
+ *  Escape-exits behaviour. Actions here only focus/blur it. */
+export type PropertyEditingField = HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement
+
 export interface PropertyEditingDependencies extends BlockShortcutDependencies {
-  input: HTMLInputElement;
+  input: PropertyEditingField;
 }
 
 export interface MultiSelectModeDependencies extends BaseShortcutDependencies {

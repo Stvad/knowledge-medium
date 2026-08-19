@@ -10,13 +10,18 @@ import {
   type AnyPropertySchema,
 } from '@/data/api'
 import { typesProp } from '@/data/properties'
+import type {PropertyDefinitionMetadata} from '@/data/propertyDefinitionMetadata'
+import {buildPropertyDefinitionRegistry} from '@/data/propertyDefinitionRegistry'
+import type {TypeDefinitionMetadata} from '@/data/typeDefinitionMetadata'
+import {buildTypeDefinitionRegistry} from '@/data/typeDefinitionRegistry'
+import {seedProperty} from '@/data/propertySeeds'
 import { buildPropertyPanelModel } from './model'
 
 const schemasMap = (schemas: readonly AnyPropertySchema[]) =>
   new Map(schemas.map(schema => [schema.name, schema]))
 
 const uisMap = (uis: readonly AnyPropertyEditorOverride[]) =>
-  new Map(uis.map(ui => [ui.name, ui]))
+  new Map(uis.map(ui => [ui.seedKey, ui]))
 
 describe('buildPropertyPanelModel', () => {
   it('pins type membership outside loose property sections', () => {
@@ -28,6 +33,7 @@ describe('buildPropertyPanelModel', () => {
 
     const model = buildPropertyPanelModel({
       blockId: 'block-1',
+      workspaceId: 'ws-1',
       updatedAt: 1700_000_000_000,
       updatedBy: 'user-1',
       properties: {
@@ -35,6 +41,8 @@ describe('buildPropertyPanelModel', () => {
         [typesProp.name]: typesProp.codec.encode(['task']),
       },
       schemas: schemasMap([visibleProp, typesProp]),
+      propertyDefinitions: null,
+      typeDefinitions: null,
       uis: uisMap([]),
       presets: new Map(),
       typesRegistry: new Map(),
@@ -52,14 +60,20 @@ describe('buildPropertyPanelModel', () => {
       defaultValue: '',
       changeScope: ChangeScope.BlockDefault,
     })
-    const internalProp = defineProperty<string>('plugin:internal', {
-      codec: codecs.string,
+    // A seed handle: overrides join by seed identity (B′ §8), so the property
+    // an override hides must carry a seedKey.
+    const internalProp = seedProperty({
+      seedKey: 'system:test-plugin/property/internal',
+      revision: 1,
+      name: 'plugin:internal',
+      preset: 'string',
       defaultValue: '',
       changeScope: ChangeScope.BlockDefault,
     })
 
     const model = buildPropertyPanelModel({
       blockId: 'block-1',
+      workspaceId: 'ws-1',
       updatedAt: 1700_000_000_000,
       updatedBy: 'user-1',
       properties: {
@@ -67,9 +81,10 @@ describe('buildPropertyPanelModel', () => {
         [internalProp.name]: 'secret',
       },
       schemas: schemasMap([visibleProp, internalProp]),
+      propertyDefinitions: null,
+      typeDefinitions: null,
       uis: uisMap([
-        definePropertyEditorOverride<string>({
-          name: internalProp.name,
+        definePropertyEditorOverride(internalProp, {
           label: 'Internal',
           hidden: true,
         }),
@@ -107,10 +122,13 @@ describe('buildPropertyPanelModel', () => {
 
     const model = buildPropertyPanelModel({
       blockId: 'block-1',
+      workspaceId: 'ws-1',
       updatedAt: 1700_000_000_000,
       updatedBy: 'user-1',
       properties: {},
       schemas: schemasMap([dateProp]),
+      propertyDefinitions: null,
+      typeDefinitions: null,
       uis: uisMap([]),
       presets: new Map(),
       typesRegistry: new Map(),
@@ -145,6 +163,7 @@ describe('buildPropertyPanelModel', () => {
 
     const model = buildPropertyPanelModel({
       blockId: 'block-1',
+      workspaceId: 'ws-1',
       updatedAt: 1700_000_000_000,
       updatedBy: 'user-1',
       properties: {
@@ -152,6 +171,8 @@ describe('buildPropertyPanelModel', () => {
         [systemProp.name]: true,
       },
       schemas: schemasMap([uiStateProp, systemProp]),
+      propertyDefinitions: null,
+      typeDefinitions: null,
       uis: uisMap([]),
       presets: new Map(),
       typesRegistry: new Map(),
@@ -164,6 +185,353 @@ describe('buildPropertyPanelModel', () => {
       uiStateProp.name,
       systemProp.name,
     ])
+  })
+
+  it('uses projected hidden metadata that is absent from the ambient schema', () => {
+    const schema = defineProperty<string>('secret', {
+      codec: codecs.string,
+      defaultValue: '',
+      changeScope: ChangeScope.BlockDefault,
+    })
+    const hidden: PropertyDefinitionMetadata = {
+      fieldId: 'field-secret',
+      workspaceId: 'ws',
+      createdAt: 1,
+      name: schema.name,
+      changeScope: ChangeScope.BlockDefault,
+      hidden: true,
+      origin: 'user',
+    }
+    const propertyDefinitions = buildPropertyDefinitionRegistry({
+      workspaceId: 'ws',
+      projectedDefinitions: new Map([[hidden.fieldId, {metadata: hidden}]]),
+      seeds: [],
+    })
+
+    const model = buildPropertyPanelModel({
+      blockId: 'block-1',
+      workspaceId: 'ws-1',
+      updatedAt: 1700_000_000_000,
+      updatedBy: 'user-1',
+      properties: {[schema.name]: 'private'},
+      schemas: new Map([...propertyDefinitions.schemas, [typesProp.name, typesProp]]),
+      propertyDefinitions,
+      typeDefinitions: null,
+      uis: uisMap([]),
+      presets: new Map(),
+      typesRegistry: new Map(),
+    })
+
+    expect(model.sections.flatMap(section => section.rows.map(row => row.name)))
+      .not.toContain(schema.name)
+    expect(model.hiddenSection.rows.map(row => row.name)).toEqual([schema.name])
+  })
+
+  it('does not resurface a hidden declaration through an unset type-contributed row', () => {
+    const hidden = seedProperty({
+      seedKey: 'plugin:test/property/secret',
+      revision: 1,
+      name: 'secret',
+      preset: 'string',
+      changeScope: ChangeScope.BlockDefault,
+      hidden: true,
+    })
+    const propertyDefinitions = buildPropertyDefinitionRegistry({
+      workspaceId: 'ws',
+      projectedDefinitions: new Map(),
+      seeds: [hidden],
+    })
+
+    const model = buildPropertyPanelModel({
+      blockId: 'block-1',
+      workspaceId: 'ws-1',
+      updatedAt: 1700_000_000_000,
+      updatedBy: 'user-1',
+      properties: {[typesProp.name]: typesProp.codec.encode(['test'])},
+      schemas: new Map([...propertyDefinitions.schemas, [typesProp.name, typesProp]]),
+      propertyDefinitions,
+      typeDefinitions: null,
+      uis: uisMap([]),
+      presets: new Map(),
+      typesRegistry: new Map([['test', {id: 'test', properties: [hidden]}]]),
+    })
+
+    expect(model.sections.flatMap(section => section.rows.map(row => row.name)))
+      .not.toContain(hidden.name)
+  })
+
+  it('renders a selected metadata-only plugin definition as an attributed read-only row', () => {
+    const metadataOnly: PropertyDefinitionMetadata = {
+      fieldId: 'field-srs-config',
+      workspaceId: 'ws',
+      createdAt: 1,
+      name: 'srs:config',
+      changeScope: ChangeScope.BlockDefault,
+      hidden: false,
+      origin: 'plugin:srs-rescheduling',
+      seedKey: 'srs-rescheduling/property/config',
+    }
+    const propertyDefinitions = buildPropertyDefinitionRegistry({
+      workspaceId: 'ws',
+      projectedDefinitions: new Map([[
+        metadataOnly.fieldId,
+        {metadata: metadataOnly},
+      ]]),
+      seeds: [],
+    })
+    const encodedValue = {queue: ['block-1'], threshold: 2}
+
+    const model = buildPropertyPanelModel({
+      blockId: 'block-1',
+      workspaceId: 'ws-1',
+      updatedAt: 1700_000_000_000,
+      updatedBy: 'user-1',
+      properties: {[metadataOnly.name]: encodedValue},
+      schemas: new Map([...propertyDefinitions.schemas, [typesProp.name, typesProp]]),
+      propertyDefinitions,
+      typeDefinitions: null,
+      uis: uisMap([]),
+      presets: new Map(),
+      typesRegistry: new Map(),
+    })
+
+    const row = model.sections.flatMap(section => section.rows)
+      .find(candidate => candidate.name === metadataOnly.name)
+    expect(row).toMatchObject({
+      name: metadataOnly.name,
+      encodedValue,
+      value: encodedValue,
+      schemaUnknown: false,
+      readOnly: true,
+      statusText: 'Provided by srs-rescheduling — not installed/disabled',
+      canRename: false,
+      canDelete: false,
+      canChangeShape: false,
+      isHidden: false,
+    })
+    expect(row?.Editor).toBeUndefined()
+  })
+
+  it('attributes metadata-only user definitions to the workspace user', () => {
+    const metadataOnly: PropertyDefinitionMetadata = {
+      fieldId: 'field-user-config',
+      workspaceId: 'ws',
+      createdAt: 1,
+      name: 'user:config',
+      changeScope: ChangeScope.BlockDefault,
+      hidden: false,
+      origin: 'user',
+    }
+    const propertyDefinitions = buildPropertyDefinitionRegistry({
+      workspaceId: 'ws',
+      projectedDefinitions: new Map([[
+        metadataOnly.fieldId,
+        {metadata: metadataOnly},
+      ]]),
+      seeds: [],
+    })
+
+    const model = buildPropertyPanelModel({
+      blockId: 'block-1',
+      workspaceId: 'ws-1',
+      updatedAt: 1700_000_000_000,
+      updatedBy: 'user-1',
+      properties: {[metadataOnly.name]: {enabled: true}},
+      schemas: new Map([...propertyDefinitions.schemas, [typesProp.name, typesProp]]),
+      propertyDefinitions,
+      typeDefinitions: null,
+      uis: uisMap([]),
+      presets: new Map(),
+      typesRegistry: new Map(),
+    })
+
+    expect(model.sections.flatMap(section => section.rows)
+      .find(row => row.name === metadataOnly.name)?.statusText)
+      .toBe('User-created definition — behavior unavailable')
+  })
+
+  it('locks every row when the panel is for a materialized seed definition block', () => {
+    // Panel opened ON a code-owned seed definition block: its whole bag is
+    // seed-owned, so non-provenance rows like property-schema:preset must also
+    // be read-only — not just seed:key/seed:revision. Editing them would mutate
+    // definition metadata the panel itself trusts.
+    const seeded: PropertyDefinitionMetadata = {
+      fieldId: 'seed-def-block',
+      workspaceId: 'ws',
+      createdAt: 1,
+      name: 'test:demo',
+      changeScope: ChangeScope.BlockDefault,
+      hidden: false,
+      origin: 'plugin:system:test',
+      seedKey: 'system:test/property/demo',
+    }
+    const propertyDefinitions = buildPropertyDefinitionRegistry({
+      workspaceId: 'ws',
+      projectedDefinitions: new Map([[seeded.fieldId, {metadata: seeded}]]),
+      seeds: [],
+    })
+
+    const model = buildPropertyPanelModel({
+      blockId: seeded.fieldId,
+      workspaceId: 'ws-1',
+      updatedAt: 1700_000_000_000,
+      updatedBy: 'user-1',
+      properties: {
+        'property-schema:preset': 'optional-string',
+        [typesProp.name]: typesProp.codec.encode(['property-schema']),
+      },
+      schemas: new Map([[typesProp.name, typesProp]]),
+      propertyDefinitions,
+      typeDefinitions: null,
+      uis: uisMap([]),
+      presets: new Map(),
+      typesRegistry: new Map(),
+    })
+
+    const rows = [
+      ...model.pinnedRows,
+      ...model.sections.flatMap(section => section.rows),
+      ...model.hiddenSection.rows,
+    ]
+    const presetRow = rows.find(row => row.name === 'property-schema:preset')
+    expect(presetRow).toMatchObject({
+      readOnly: true,
+      canRename: false,
+      canDelete: false,
+      canChangeShape: false,
+    })
+    expect(presetRow?.Editor).toBeUndefined()
+    // Even the pinned type-membership row is locked on a seed definition.
+    expect(model.pinnedRows.find(row => row.name === typesProp.name)?.readOnly).toBe(true)
+  })
+
+  it('leaves a user-created definition block editable (no seed provenance)', () => {
+    const userDef: PropertyDefinitionMetadata = {
+      fieldId: 'user-def-block',
+      workspaceId: 'ws',
+      createdAt: 1,
+      name: 'my:prop',
+      changeScope: ChangeScope.BlockDefault,
+      hidden: false,
+      origin: 'user',
+    }
+    const propertyDefinitions = buildPropertyDefinitionRegistry({
+      workspaceId: 'ws',
+      projectedDefinitions: new Map([[userDef.fieldId, {metadata: userDef}]]),
+      seeds: [],
+    })
+
+    const model = buildPropertyPanelModel({
+      blockId: userDef.fieldId,
+      workspaceId: 'ws-1',
+      updatedAt: 1700_000_000_000,
+      updatedBy: 'user-1',
+      properties: {
+        'property-schema:preset': 'string',
+        [typesProp.name]: typesProp.codec.encode(['property-schema']),
+      },
+      schemas: new Map([[typesProp.name, typesProp]]),
+      propertyDefinitions,
+      typeDefinitions: null,
+      uis: uisMap([]),
+      presets: new Map(),
+      typesRegistry: new Map(),
+    })
+
+    const presetRow = model.sections
+      .flatMap(section => section.rows)
+      .find(row => row.name === 'property-schema:preset')
+    expect(presetRow?.readOnly).toBe(false)
+    expect(presetRow?.canDelete).toBe(true)
+  })
+
+  it('locks every row when the panel is for a materialized TYPE-seed definition block', () => {
+    // Panel opened ON a code-owned type-seed backing block. Its provenance lives
+    // in the TYPE registry (definitionsByBlockId), NOT the property registry, so
+    // the panel must consult typeDefinitions to lock the whole bag — otherwise a
+    // user could mutate a code-owned type definition through the property panel.
+    const seeded: TypeDefinitionMetadata = {
+      typeId: 'test-widget',
+      blockId: 'type-seed-block',
+      workspaceId: 'ws',
+      createdAt: 1,
+      label: 'Widget',
+      hideFromCompletion: false,
+      hideFromBlockDisplay: false,
+      seedKey: 'system:test/type/widget',
+    }
+    const typeDefinitions = buildTypeDefinitionRegistry({
+      workspaceId: 'ws',
+      projectedDefinitions: new Map([[seeded.blockId, {metadata: seeded, properties: []}]]),
+      seeds: [],
+    })
+
+    const model = buildPropertyPanelModel({
+      blockId: seeded.blockId,
+      workspaceId: 'ws-1',
+      updatedAt: 1700_000_000_000,
+      updatedBy: 'user-1',
+      properties: {
+        'block-type:label': 'Widget',
+        [typesProp.name]: typesProp.codec.encode(['block-type']),
+      },
+      schemas: new Map([[typesProp.name, typesProp]]),
+      propertyDefinitions: null,
+      typeDefinitions,
+      uis: uisMap([]),
+      presets: new Map(),
+      typesRegistry: new Map(),
+    })
+
+    const rows = [
+      ...model.pinnedRows,
+      ...model.sections.flatMap(section => section.rows),
+      ...model.hiddenSection.rows,
+    ]
+    const labelRow = rows.find(row => row.name === 'block-type:label')
+    expect(labelRow).toMatchObject({readOnly: true, canRename: false, canDelete: false})
+    // Even the normally-editable pinned type-membership row is locked.
+    expect(model.pinnedRows.find(row => row.name === typesProp.name)?.readOnly).toBe(true)
+  })
+
+  it('leaves a user-created type definition block editable (no seed provenance)', () => {
+    const userType: TypeDefinitionMetadata = {
+      typeId: 'user-type-block',
+      blockId: 'user-type-block',
+      workspaceId: 'ws',
+      createdAt: 1,
+      label: 'My Type',
+      hideFromCompletion: false,
+      hideFromBlockDisplay: false,
+      // no seedKey — a user-built type, freely editable
+    }
+    const typeDefinitions = buildTypeDefinitionRegistry({
+      workspaceId: 'ws',
+      projectedDefinitions: new Map([[userType.blockId, {metadata: userType, properties: []}]]),
+      seeds: [],
+    })
+
+    const model = buildPropertyPanelModel({
+      blockId: userType.blockId,
+      workspaceId: 'ws-1',
+      updatedAt: 1700_000_000_000,
+      updatedBy: 'user-1',
+      properties: {
+        'block-type:label': 'My Type',
+        [typesProp.name]: typesProp.codec.encode(['block-type']),
+      },
+      schemas: new Map([[typesProp.name, typesProp]]),
+      propertyDefinitions: null,
+      typeDefinitions,
+      uis: uisMap([]),
+      presets: new Map(),
+      typesRegistry: new Map(),
+    })
+
+    const labelRow = model.sections
+      .flatMap(section => section.rows)
+      .find(row => row.name === 'block-type:label')
+    expect(labelRow?.readOnly).toBe(false)
   })
 
 })

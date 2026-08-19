@@ -1,10 +1,11 @@
-import { ChevronsDownUp, ClipboardCopy, Copy, Link, Link2, SlidersHorizontal, Text, Trash2 } from 'lucide-react'
+import { ArrowDown, ArrowUp, ChevronsDownUp, ClipboardCopy, Copy, IndentDecrease, IndentIncrease, Link, Link2, SlidersHorizontal, Text, Trash2 } from 'lucide-react'
 import { Block } from '../data/block'
 import { Repo } from '../data/repo'
 import { resetBlockSelection } from '@/data/stateBlocks.js'
 import { copyBlockToClipboard } from '@/utils/copy.js'
 import { absoluteAppUrl, buildAppHash } from '@/utils/routing.js'
 import { withMoveTransition } from '@/utils/viewTransition.js'
+import { withRowSlide } from '@/utils/flipSlide.js'
 import {
   editorSelection,
   isCollapsedProp,
@@ -12,11 +13,13 @@ import {
   isEditingProp,
   peekFocusedBlockLocation,
   requestEditorFocus,
+  selectionStateProp,
   setIsEditing,
   showPropertiesProp,
   type EditorSelectionState,
 } from '@/data/properties.js'
 import { structuralEditPolicyForBlock } from '@/data/structuralEditPolicy.js'
+import { deleteBlockThroughUi } from '@/utils/deleteBlockThroughUi.js'
 import {
   ActionConfig,
   ActionContextType,
@@ -89,9 +92,8 @@ const reorderBlock = async (
   block: Block,
   direction: -1 | 1,
   scopeRootId: string | undefined,
-): Promise<void> => {
-  await repo.mutate.moveVertical({id: block.id, direction, scopeRootId})
-}
+): Promise<boolean> =>
+  repo.mutate.moveVertical({id: block.id, direction, scopeRootId})
 
 export const requestEditorFocusIfEditing = (uiStateBlock: Block) => {
   if (uiStateBlock.peekProperty(isEditingProp)) {
@@ -117,6 +119,12 @@ export const enterEditMode = (uiStateBlock: Block, selection?: EditorSelectionSt
  *  surface (no next block) or if the range resolved empty. Edit-mode callers
  *  use this to avoid leaving edit mode for nothing, and pass `clearEditing` so
  *  the exit folds into the selection's transaction (see extendSelectionDownEdit). */
+/** True when a block selection is already active. The Roam-style first
+ *  Shift+Direction selects just the focused block; only once something is
+ *  selected do further presses extend to neighbours. */
+const hasActiveSelection = (uiStateBlock: Block): boolean =>
+  (uiStateBlock.peekProperty(selectionStateProp)?.selectedBlockIds.length ?? 0) > 0
+
 export const extendSelectionDown = async (
   uiStateBlock: Block,
   repo: Repo,
@@ -128,6 +136,15 @@ export const extendSelectionDown = async (
 
   const focusedId = peekFocusedBlockLocation(uiStateBlock)?.blockId
   if (!focusedId) return false
+
+  // Roam-style: the first press selects just the focused block (so a single
+  // block can be selected/deleted); subsequent presses extend downward. Don't
+  // select the surface's own root — acting on the view root within its view is
+  // meaningless, so leave the keystroke native (matches the old no-op there).
+  if (!hasActiveSelection(uiStateBlock)) {
+    if (focusedId === scopeRootId) return false
+    return extendSelection(focusedId, uiStateBlock, repo, scopeRootId, scopeRootForcesOpen, clearEditing)
+  }
 
   const nextBlock = await nextVisibleBlock(repo.block(focusedId), scopeRootId, scopeRootForcesOpen)
   if (!nextBlock) return false
@@ -150,6 +167,12 @@ export const extendSelectionUp = async (
   const focusedId = peekFocusedBlockLocation(uiStateBlock)?.blockId
   if (!focusedId) return false
 
+  // Roam-style first press — see extendSelectionDown.
+  if (!hasActiveSelection(uiStateBlock)) {
+    if (focusedId === scopeRootId) return false
+    return extendSelection(focusedId, uiStateBlock, repo, scopeRootId, scopeRootForcesOpen, clearEditing)
+  }
+
   const prevBlock = await previousVisibleBlock(repo.block(focusedId), scopeRootId)
   if (!prevBlock) return false
 
@@ -157,20 +180,21 @@ export const extendSelectionUp = async (
 }
 
 export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockActions => {
-  // In-place structural shifts (indent/outdent/move/swap) deliberately
-  // run WITHOUT `withMoveTransition`. The root-level crossfade ghosts
-  // the shifting content at both old and new positions over the 250ms
-  // transition window — text overlaps itself mid-flight, reading as
-  // blur rather than movement. The atomic DOM update gives a clean
-  // instant shift, which reads correctly as "the block moved" without
-  // overlap. The data-layer `NotifyBatch` fix is what killed the
-  // original flicker; the view-transition wrap was added as polish
-  // and turned out to be net-negative for these specific operations.
-  // A future scoped-VT / per-element setup that doesn't lift everything
-  // into the document-root overlay could re-enable a slide here.
+  // In-place structural shifts deliberately run WITHOUT
+  // `withMoveTransition`: the root-level crossfade ghosts the shifting
+  // content at both old and new positions (text overlaps itself
+  // mid-flight, reading as blur), and the per-block view-transition-name
+  // attempt had its own artifacts (see DefaultBlockRenderer). The atomic
+  // DOM update from the `NotifyBatch` fix stays the substrate; move
+  // up/down now layers `withRowSlide` on top — the per-element setup the
+  // old note here wished for: element-level FLIP with plain transform
+  // transitions, no snapshot overlay, no duplicated text. Indent/outdent
+  // stay instant for now: horizontal reflow changes line wrapping, which
+  // translation-only FLIP can't express cleanly.
   const indentBlock: BlockAction = {
     id: 'indent_block',
     description: 'Indent block',
+    icon: IndentIncrease,
     handler: async (deps: BlockShortcutDependencies) => {
       // No-op on a scope root: indenting it would reparent the visible
       // root under a sibling that lives outside the surface. The
@@ -191,6 +215,7 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
   const outdentBlock: BlockAction = {
     id: 'outdent_block',
     description: 'Outdent block',
+    icon: IndentDecrease,
     handler: async ({block, uiStateBlock, scopeRootId}: BlockShortcutDependencies) => {
       if (!scopeRootId) return
 
@@ -213,10 +238,11 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
   const moveBlockUp: BlockAction = {
     id: 'move_block_up',
     description: 'Move block up',
+    icon: ArrowUp,
     handler: async (deps: BlockShortcutDependencies) => {
       const {block, uiStateBlock, scopeRootId} = deps
       if (!block) return
-      await reorderBlock(repo, block, -1, scopeRootId)
+      await withRowSlide(() => reorderBlock(repo, block, -1, scopeRootId))
       requestEditorFocusIfEditing(uiStateBlock)
     },
     defaultBinding: {
@@ -230,10 +256,11 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
   const moveBlockDown: BlockAction = {
     id: 'move_block_down',
     description: 'Move block down',
+    icon: ArrowDown,
     handler: async (deps: BlockShortcutDependencies) => {
       const {block, uiStateBlock, scopeRootId} = deps
       if (!block) return
-      await reorderBlock(repo, block, 1, scopeRootId)
+      await withRowSlide(() => reorderBlock(repo, block, 1, scopeRootId))
       requestEditorFocusIfEditing(uiStateBlock)
     },
     defaultBinding: {
@@ -252,10 +279,28 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
       const {block, uiStateBlock, scopeRootId} = deps
       if (!block || !uiStateBlock) return
 
-      // `scopeRootId` only locates the post-delete focus target; the
-      // delete itself doesn't need it. Don't gate the delete on it, so
-      // non-React runners that can't inject a scope (the agent-runtime
-      // bridge) still delete — they just skip focus recovery.
+      // No scope-root special case: deleting the root of a surface is an
+      // ordinary delete. Delete REMOVES a subtree, it doesn't relocate one
+      // across the surface boundary, so unlike indent / outdent / merge-up it
+      // isn't a scope-relative decision at all (see `structuralEditPolicy`).
+      // What the surface does afterwards is the surface's problem: a nested
+      // backlink/embed re-queries, and a panel showing the deleted page is
+      // stepped onto a live destination by the mounted `PanelContentRecovery`
+      // watcher. Keeping deletion and navigation decoupled is what makes the
+      // hard cases fall out for free — multi-pane duplicates, self-embeds of
+      // the focal page, and remote deletes all recover through the one
+      // watcher instead of N special cases here.
+      //
+      // The delete is atomic: a read-only workspace, or a guarded
+      // seed-definition ANYWHERE in the subtree, rolls the whole thing back
+      // and throws. Since nothing else moved, there is no half-state to clean
+      // up and no preflight is needed.
+
+      // `scopeRootId` only locates the post-delete focus target; the delete
+      // itself doesn't need it.
+      // Don't gate the delete on it, so non-React runners that can't
+      // inject a scope (the agent-runtime bridge) still delete — they
+      // just skip focus recovery.
       // Same-depth next sibling is the natural shift-up target. When
       // `block` has descendants those vanish too, so we can't use
       // `nextVisibleBlock` (which would descend into the doomed
@@ -265,10 +310,12 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
       // `PanelFocusRecovery` does on the DOM side, so manual deletes
       // and surprise disappearances both land on the same target.
       const next = scopeRootId ? await blockAfterSubtreeRemoval(block, scopeRootId) : null
+      let deleted = false
       await withMoveTransition(async () => {
-        await block.delete()
+        deleted = await deleteBlockThroughUi(block)
       })
-      if (next) void focusBlock(uiStateBlock, next.id, {renderScopeId: deps.renderScopeId})
+      // Don't move focus for a delete a guard refused.
+      if (deleted && next) void focusBlock(uiStateBlock, next.id, {renderScopeId: deps.renderScopeId})
     },
     defaultBinding: {
       keys: 'Delete',
@@ -385,10 +432,11 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
     description: 'Copy link to block',
     icon: Link,
     // `y l` ("yank link") — an absolute, shareable URL that opens this
-    // block. Reuses the same routing facilities the in-app `<a href>`
-    // links use: `buildAppHash` for the `#<workspaceId>/<blockId>` hash,
+    // block: `buildAppHash` for the `#<workspaceId>/<blockId>` hash,
     // `absoluteAppUrl` to promote it to an absolute URL (and drop any
-    // agent-runtime pairing secret riding in the current hash).
+    // agent-runtime pairing secret riding in the current hash). Plain
+    // buildAppHash ON PURPOSE — see buildAppHashInContext's docstring for
+    // why shared URLs must stay lane-free.
     handler: ({block}: BlockShortcutDependencies) => {
       const workspaceId = repo.activeWorkspaceId
       if (!workspaceId) return

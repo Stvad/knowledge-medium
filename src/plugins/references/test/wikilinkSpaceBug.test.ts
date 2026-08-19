@@ -1,3 +1,4 @@
+// @vitest-environment happy-dom
 /**
  * Reproduce the editor bug: typing a space at the end of `[[i]]` lands the
  * space between the two `]` instead of after them.

@@ -1,11 +1,12 @@
 import {
   ChangeScope,
-  codecs,
-  defineBlockType,
-  defineProperty,
+  seedType,
+  definePresetCore,
+  seedProperty,
   type BlockData,
   type Codec,
 } from '@/data/api'
+import { uniqueStrings } from '@/utils/array'
 
 export interface GroupedBacklinksConfig {
   highPriorityTags: string[]
@@ -65,15 +66,6 @@ export const INITIAL_GROUPED_BACKLINKS_CONFIG: GroupedBacklinksConfig = {
   ],
 }
 
-const uniqueStrings = (value: unknown): string[] =>
-  Array.from(new Set(
-    Array.isArray(value)
-      ? value.filter((item): item is string => typeof item === 'string')
-        .map(item => item.trim())
-        .filter(Boolean)
-      : [],
-  ))
-
 const stringList = (record: Record<string, unknown>, key: string): string[] =>
   uniqueStrings(record[key])
 
@@ -81,7 +73,9 @@ const optionalStringList = (
   record: Record<string, unknown>,
   key: string,
 ): string[] | undefined =>
-  Object.hasOwn(record, key) ? uniqueStrings(record[key]) : undefined
+  Object.hasOwn(record, key) && record[key] !== undefined
+    ? uniqueStrings(record[key])
+    : undefined
 
 const recordFrom = (value: unknown): Record<string, unknown> =>
   value && typeof value === 'object' && !Array.isArray(value)
@@ -135,40 +129,53 @@ export const selectGroupedBacklinksOverrides = (
     : groupedBacklinksOverridesProp.codec.decode(stored)
 }
 
-const groupedBacklinksConfigCodec: Codec<GroupedBacklinksConfig> = {
+export const groupedBacklinksConfigCodec: Codec<GroupedBacklinksConfig> = {
   type: 'groupedBacklinks:config',
   encode: normalizeGroupedBacklinksConfig,
   decode: normalizeGroupedBacklinksConfig,
 }
 
-const groupedBacklinksOverridesCodec: Codec<GroupedBacklinksOverrides> = {
+export const groupedBacklinksOverridesCodec: Codec<GroupedBacklinksOverrides> = {
   type: 'groupedBacklinks:overrides',
   encode: normalizeGroupedBacklinksOverrides,
   decode: normalizeGroupedBacklinksOverrides,
 }
 
-export const groupedBacklinksDefaultsProp = defineProperty<GroupedBacklinksConfig>(
-  'groupedBacklinks:defaults',
-  {
-    codec: groupedBacklinksConfigCodec,
-    defaultValue: INITIAL_GROUPED_BACKLINKS_CONFIG,
-    changeScope: ChangeScope.UserPrefs,
-  },
-)
+export const groupedBacklinksConfigPresetCore = definePresetCore<GroupedBacklinksConfig>({
+  id: groupedBacklinksConfigCodec.type,
+  build: () => groupedBacklinksConfigCodec,
+  defaultValue: INITIAL_GROUPED_BACKLINKS_CONFIG,
+})
 
-export const groupedBacklinksOverridesProp = defineProperty<GroupedBacklinksOverrides>(
-  'groupedBacklinks:overrides',
-  {
-    codec: groupedBacklinksOverridesCodec,
-    defaultValue: EMPTY_GROUPED_BACKLINKS_OVERRIDES,
-    changeScope: ChangeScope.BlockDefault,
-  },
-)
+export const groupedBacklinksOverridesPresetCore = definePresetCore<GroupedBacklinksOverrides>({
+  id: groupedBacklinksOverridesCodec.type,
+  build: () => groupedBacklinksOverridesCodec,
+  defaultValue: EMPTY_GROUPED_BACKLINKS_OVERRIDES,
+})
+
+export const groupedBacklinksDefaultsProp = seedProperty({
+  seedKey: 'system:grouped-backlinks/property/defaults',
+  revision: 1,
+  name: 'groupedBacklinks:defaults',
+  preset: groupedBacklinksConfigPresetCore,
+  defaultValue: INITIAL_GROUPED_BACKLINKS_CONFIG,
+  changeScope: ChangeScope.UserPrefs,
+})
+
+export const groupedBacklinksOverridesProp = seedProperty({
+  seedKey: 'system:grouped-backlinks/property/overrides',
+  revision: 1,
+  name: 'groupedBacklinks:overrides',
+  preset: groupedBacklinksOverridesPresetCore,
+  changeScope: ChangeScope.BlockDefault,
+})
 
 /** Per-plugin prefs sub-block for grouped-backlinks defaults. The
  *  defaults live here (UserPrefs scope); per-block overrides keep using
  *  `groupedBacklinksOverridesProp` on the target block itself. */
-export const groupedBacklinksPrefsType = defineBlockType({
+export const groupedBacklinksPrefsType = seedType({
+  seedKey: 'system:grouped-backlinks/type/grouped-backlinks-prefs',
+  revision: 1,
   id: 'grouped-backlinks-prefs',
   label: 'Grouped backlinks',
   properties: [groupedBacklinksDefaultsProp],
@@ -181,8 +188,12 @@ export const groupedBacklinksPrefsType = defineBlockType({
  *  query reads to expand each backlink's group set. */
 export const GROUP_WITH_PROP_NAME = 'groupWith'
 
-export const groupWithProp = defineProperty<readonly string[]>(GROUP_WITH_PROP_NAME, {
-  codec: codecs.refList(),
+export const groupWithProp = seedProperty({
+  seedKey: 'system:grouped-backlinks/property/group-with',
+  revision: 1,
+  name: GROUP_WITH_PROP_NAME,
+  preset: 'refList',
+  config: {},
   defaultValue: [],
   changeScope: ChangeScope.BlockDefault,
 })

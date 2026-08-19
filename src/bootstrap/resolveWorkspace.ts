@@ -104,7 +104,8 @@ export const resolveWorkspace = async (
   // Remote sync disabled (e.g. dev mode without VITE_SUPABASE_*) and
   // nothing local yet: synthesize a deterministic per-user personal
   // workspace + owner membership locally so the rest of bootstrap
-  // (seedTutorial, daily note, Tutorial bullet) can run unchanged.
+  // (onboarding seed, daily note + Tutorial bullet via the onboarding
+  // landing resolver) can run unchanged.
   const local = await ensureLocalPersonalWorkspace(repo)
   // Same plaintext-confirm as the remote path (§8.1) so the gate stays out of
   // the way in local-only mode.

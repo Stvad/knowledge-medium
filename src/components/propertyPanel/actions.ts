@@ -5,18 +5,25 @@ import {
 } from '@/data/api'
 import type { Block } from '@/data/block'
 import { typesProp } from '@/data/properties.js'
-import { isPropertyPanelHiddenProperty } from './visibility'
+import {
+  isPropertyPanelHiddenProperty,
+  isPropertyPanelReadOnlyProperty,
+} from './visibility'
 import type { AddPropertyArgs } from './AddPropertyForm'
-
-const hasOwn = (properties: Record<string, unknown>, name: string): boolean =>
-  Object.prototype.hasOwnProperty.call(properties, name)
+import {declarationOnlyDefinitionForName} from './declarationOnly'
 
 export const writeProperty = (
   block: Block,
   schema: AnyPropertySchema,
   decodedValue: unknown,
-): Promise<void> =>
-  block.set(schema, decodedValue)
+): Promise<void> => {
+  if (isPropertyPanelReadOnlyProperty(schema.name)) return Promise.resolve()
+  if (declarationOnlyDefinitionForName(
+    schema.name,
+    block.repo.propertyDefinitions,
+  )) return Promise.resolve()
+  return block.set(schema, decodedValue)
+}
 
 /** AddPropertyForm submit handler: adopt a registered schema if the
  *  user picked one, or have UserSchemasService.addSchema register a
@@ -31,7 +38,12 @@ export const addProperty = async (
 ): Promise<AnyPropertySchema | undefined> => {
   const name = args.name.trim()
   if (!name) return undefined
-  if (isPropertyPanelHiddenProperty(name, schemas, uis)) return undefined
+  if (isPropertyPanelHiddenProperty(name, schemas, uis, block.repo.propertyDefinitions)) {
+    return undefined
+  }
+  if (declarationOnlyDefinitionForName(name, block.repo.propertyDefinitions)) {
+    return undefined
+  }
 
   if (args.adopted) {
     return args.adopted
@@ -67,17 +79,30 @@ export const renameProperty = async (args: {
   const nextName = args.newName.trim()
   if (!nextName || nextName === args.oldName) return
   if (args.oldName === typesProp.name || nextName === typesProp.name) return
+  if (
+    isPropertyPanelReadOnlyProperty(args.oldName) ||
+    isPropertyPanelReadOnlyProperty(nextName)
+  ) return
   if (args.schemas.has(args.oldName) || args.schemas.has(nextName)) return
-  if (isPropertyPanelHiddenProperty(args.oldName, args.schemas, args.uis)) return
-  if (isPropertyPanelHiddenProperty(nextName, args.schemas, args.uis)) return
+  const definitions = args.block.repo.propertyDefinitions
+  if (declarationOnlyDefinitionForName(args.oldName, definitions)) return
+  if (declarationOnlyDefinitionForName(nextName, definitions)) return
+  if (isPropertyPanelHiddenProperty(args.oldName, args.schemas, args.uis, definitions)) return
+  if (isPropertyPanelHiddenProperty(nextName, args.schemas, args.uis, definitions)) return
 
-  const value = args.properties[args.oldName]
-  if (value === undefined || !hasOwn(args.properties, args.oldName)) return
+  // Cheap pre-gate on the panel snapshot; the authoritative check is in-tx.
+  if (!Object.hasOwn(args.properties, args.oldName)) return
 
   await args.block.repo.tx(async tx => {
-    const next = {...args.properties}
+    // Re-read the CURRENT bag inside the tx rather than trusting the panel's
+    // (possibly stale) `args.properties` snapshot — a whole-bag write off the
+    // snapshot would clobber any OTHER property a concurrent write changed
+    // between the panel opening and this commit. The tx serialises read+write.
+    const current = await tx.get(args.block.id)
+    if (!current || !Object.hasOwn(current.properties, args.oldName)) return
+    const next = {...current.properties}
+    next[nextName] = next[args.oldName]
     delete next[args.oldName]
-    next[nextName] = value
     await tx.update(args.block.id, {properties: next})
   }, {
     scope: ChangeScope.BlockDefault,
@@ -93,15 +118,43 @@ export const deleteProperty = async (args: {
   name: string
 }) => {
   if (args.name === typesProp.name) return
-  if (isPropertyPanelHiddenProperty(args.name, args.schemas, args.uis)) return
-  if (!hasOwn(args.properties, args.name)) return
+  if (isPropertyPanelReadOnlyProperty(args.name)) return
+  if (declarationOnlyDefinitionForName(
+    args.name,
+    args.block.repo.propertyDefinitions,
+  )) return
+  if (isPropertyPanelHiddenProperty(
+    args.name,
+    args.schemas,
+    args.uis,
+    args.block.repo.propertyDefinitions,
+  )) return
+  if (!Object.hasOwn(args.properties, args.name)) return
 
-  const next = {...args.properties}
-  delete next[args.name]
   const schema = args.schemas.get(args.name)
 
   await args.block.repo.tx(async tx => {
-    await tx.update(args.block.id, {properties: next})
+    if (schema) {
+      // Typed path: unsetProperty resolves identity, runs the same
+      // scope-consistency guard (resolved scope vs the scope this tx was
+      // admitted under, = schema.changeScope), removes just this key — no
+      // whole-bag replace — and, in a child-backed workspace, eagerly
+      // soft-deletes the field-row children (symmetric with setProperty's
+      // inline dual-write).
+      await tx.unsetProperty(args.block.id, schema)
+    } else {
+      // Schema-less transitional key (no registered definition): unsetProperty
+      // would throw on the unresolvable schema, so drop the bare cell key
+      // directly. Such a key has no children to reconcile (no schema → never
+      // materialized); the migration backfill is what gives it a definition.
+      // Re-read fresh inside the tx (not the panel's stale snapshot) so the
+      // whole-bag write can't clobber a concurrently-changed sibling key.
+      const current = await tx.get(args.block.id)
+      if (!current || !Object.hasOwn(current.properties, args.name)) return
+      const next = {...current.properties}
+      delete next[args.name]
+      await tx.update(args.block.id, {properties: next})
+    }
   }, {
     scope: schema?.changeScope ?? ChangeScope.BlockDefault,
     description: `delete property ${args.name}`,

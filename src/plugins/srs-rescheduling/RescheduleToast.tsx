@@ -7,7 +7,13 @@ import type { Repo } from '@/data/repo'
 export interface RescheduleToastProps {
   toastId: string | number
   message: string
-  txId: string
+  /** Undo-group token of the reschedule's (single, merged) undo entry
+   *  (issue #306). The reschedule spans several txs — daily-note
+   *  creation + the SRS property write — that merge into one entry
+   *  sharing this token, so the toast matches by groupId: a trailing
+   *  same-group tx keeps the button valid, any foreign entry on top
+   *  disables it. */
+  groupId: string
   /** Workspace the reschedule was recorded in. Undo is workspace-scoped
    *  (issue #186), so the Undo button must track this workspace's stack —
    *  `repo.undo()` only reverts the reschedule while it's the active
@@ -18,28 +24,29 @@ export interface RescheduleToastProps {
 
 /** Predicate: clicking Undo right now would revert exactly this
  *  reschedule. True only when the reschedule's workspace is active and
- *  the reschedule is still that workspace's top BlockDefault entry —
- *  mirroring what `repo.undo()` (per-workspace, issue #186) will do.
- *  `repo.undoManager` resolves to the active workspace's manager, so the
- *  active-workspace check gates which manager `peekUndo` reads. */
+ *  the reschedule's group entry is still that workspace's top
+ *  BlockDefault entry — mirroring what `repo.undo()` (per-workspace,
+ *  issue #186) will do. `repo.undoManager` resolves to the active
+ *  workspace's manager, so the active-workspace check gates which
+ *  manager `peekUndo` reads. */
 const wouldUndoThisReschedule = (
   repo: Repo,
   workspaceId: string,
-  txId: string,
+  groupId: string,
 ): boolean =>
   repo.activeWorkspaceId === workspaceId &&
-  repo.undoManager.peekUndo(ChangeScope.BlockDefault)?.txId === txId
+  repo.undoManager.peekUndo(ChangeScope.BlockDefault)?.groupId === groupId
 
 /** Custom toast body for SRS reschedule feedback. The Undo button
  *  reactively disables itself once another `BlockDefault` tx lands on
  *  top of the reschedule's workspace — at that point `repo.undo()` would
  *  revert the wrong action, so the toast hands the user off to cmd-Z.
  *  Invoked via `showRescheduleToast` in the SRS plugin entry. */
-export const RescheduleToast = ({toastId, message, txId, workspaceId, repo}: RescheduleToastProps) => {
+export const RescheduleToast = ({toastId, message, groupId, workspaceId, repo}: RescheduleToastProps) => {
   const isTopOfStack = useSyncExternalStore(
     cb => repo.undoManager.subscribe(ChangeScope.BlockDefault, cb),
-    () => wouldUndoThisReschedule(repo, workspaceId, txId),
-    () => wouldUndoThisReschedule(repo, workspaceId, txId),
+    () => wouldUndoThisReschedule(repo, workspaceId, groupId),
+    () => wouldUndoThisReschedule(repo, workspaceId, groupId),
   )
 
   const handleUndo = () => {
@@ -48,7 +55,7 @@ export const RescheduleToast = ({toastId, message, txId, workspaceId, repo}: Res
     // button's enabled-state can lag. Guard against reverting a different
     // workspace's entry (or silently no-opping) by confirming the
     // reschedule is still the live undo target before calling undo().
-    if (!wouldUndoThisReschedule(repo, workspaceId, txId)) {
+    if (!wouldUndoThisReschedule(repo, workspaceId, groupId)) {
       dismissToast(toastId)
       return
     }

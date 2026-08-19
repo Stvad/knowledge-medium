@@ -15,7 +15,7 @@
  */
 
 import { v4 as uuidv4 } from 'uuid'
-import type { FacetRuntime, Facet } from '@/facets/facet'
+import type { FacetRuntime, Facet, WorkspaceRuntimeContributionOptions } from '@/facets/facet'
 import { resolveFacetRuntimeSync } from '@/facets/facet'
 import type {
   AnyMutator,
@@ -24,7 +24,7 @@ import type {
   AnyPropertyEditorOverride,
   AnyPropertySchema,
   AnyQuery,
-  AnyValuePreset,
+  AnyValuePresetCore,
   BlockData,
   Mutator,
   MutatorRegistry,
@@ -53,14 +53,23 @@ import {
   latestRefProjectionSchema,
   projectedRefsForField,
   refCodecKind,
+  refTypedSchemaNames,
 } from './internals/refProjection'
 import { runTx, type PowerSyncDb } from './internals/commitPipeline'
+import { onSyncSettled } from './internals/firstSync'
 import { devAssertionsEnabled } from './internals/devAssertions'
 import type { BlockCache } from '@/data/blockCache'
-import { buildQualifiedBlockColumnsSql, parseBlockRow, type BlockRow } from '@/data/blockSchema'
+import {
+  BLOCKS_TABLE_COLUMN_NAMES,
+  buildQualifiedBlockColumnsSql,
+  parseBlockRow,
+  type BlockRow,
+} from '@/data/blockSchema'
 import { kernelDataExtension } from './kernelDataExtension'
 import {
+  systemPagesFacet,
   type WorkspaceBackfill,
+  type BackfillCompletionClaim,
   type WorkspaceBackfillContext,
 } from './facets'
 import { ProcessorRunner } from './internals/processorRunner'
@@ -90,13 +99,34 @@ import {
   RECORD_REPROJECT_REF_MARKER_SQL,
   REPROJECT_REF_MARKER_PREFIX,
   SELECT_REPROJECT_REF_MARKERS_SQL,
-  RECORD_WORKSPACE_BACKFILL_MARKER_SQL,
-  WORKSPACE_BACKFILL_MARKER_PREFIX,
-  SELECT_WORKSPACE_BACKFILL_MARKERS_SQL,
   RECONCILE_RESCAN_MARKER_PREFIX,
   SELECT_RECONCILE_RESCAN_MARKER_SQL,
   RECORD_RECONCILE_RESCAN_MARKER_SQL,
 } from './internals/clientSchema'
+import {
+  deriveReferenceColumns,
+  type ReferenceTargetLookups,
+} from './internals/referenceTargetProcessor'
+import { parseExactReferenceBlockContent } from './referenceBlock'
+import type { BlockIdPolicy } from './blockId'
+import type {
+  PropertyDefinitionChange,
+  PropertyDefinitionMigrationPlan,
+} from './internals/propertyDefinitionMigrations'
+import {
+  encodedPropertyValueToChildContent,
+  isFieldValueChild,
+  isPropertyFieldInstance,
+  propertyChildContentToEncodedValue,
+  rekeyParentPropertyCell,
+  type IsPropertyFieldDefinition,
+} from './propertyChildren'
+import {
+  reprojectOwnersForRowStates,
+  type ProjectableRow,
+  type ProjectionLookups,
+} from './internals/propertyChildrenProcessor'
+import { readIsChildBackedWorkspace } from '@/data/workspaceSchema'
 import { PendingIdleJobs, MarkerStore } from './internals/idleMarkerJobs'
 import {
   parseAliasCollisionError,
@@ -104,24 +134,40 @@ import {
   type ParsedAliasCollision,
 } from './internals/raiseProtocol'
 import { UndoManager, type UndoEntry } from './internals/undoManager'
+import { replayApplicationOrder } from './internals/txSnapshots'
 import { CallbackSet } from '@/utils/callbackSet'
 import { scheduleDeepIdle, CATCHUP_DEEP_IDLE } from '@/utils/scheduleIdle'
+import { ClientContext, type ClientContextReader, type LayoutSessionRouter } from './clientContext'
 import type { TxImpl } from './internals/txEngine'
 import { ANCESTORS_SQL, CHILDREN_SQL, SUBTREE_SQL } from './internals/treeQueries'
 import {
   SELECT_BLOCK_BY_ALIAS_IN_WORKSPACE_EXCLUDING_SQL,
+  SELECT_BLOCK_BY_ALIAS_IN_WORKSPACE_SQL,
   SELECT_BLOCK_BY_ID_SQL,
 } from './internals/kernelQueries'
 import type { InvalidationRule } from './invalidation'
-import { KERNEL_PROPERTY_SCHEMAS } from './properties'
+import { KERNEL_PROPERTY_SEEDS } from './properties'
 import { KERNEL_TYPE_CONTRIBUTIONS } from './blockTypes'
 import { propertiesPageBlockId } from './propertiesPage'
 import { typesPageBlockId } from './typesPage'
 import { ProjectorRuntime } from './projectorRuntime'
-import { UserSchemasService } from './userSchemasService'
+import {USER_SCHEMAS_PROJECTOR_ID, UserSchemasService} from './userSchemasService'
 import { UserTypesService } from './userTypesService'
 import { TypeTagger } from './typeTagger'
 import { FacetBridge } from './facetBridge'
+import type {PropertyDefinitionRegistrySnapshot} from './propertyDefinitionRegistry'
+import type {TypeDefinitionRegistrySnapshot} from './typeDefinitionRegistry'
+import {buildUnboundTypes, materializingTypeSeeds} from './typeDefinitionRegistry'
+import {
+  materializePropertySeeds,
+  materializeTypeSeeds,
+  awaitPropertySeedMaterializationAccess,
+} from './definitionSeeds'
+import {
+  propertySchemaResolverForWorkspace,
+  type PropertySchemaResolver,
+} from './internals/propertySchemaResolution'
+import { runFreshInitialLoad } from './internals/freshInitialLoad'
 
 /** Convert a `Mutator<Args, Result>` into the `repo.mutate` dispatcher
  *  signature `(args: Args) => Promise<Result>`. Used to project
@@ -179,8 +225,24 @@ type KnownQueryDispatch = {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export type QueryProxy = KnownQueryDispatch & { [name: string]: (args: any) => LoaderHandle<any> }
 
-const KERNEL_TYPES = new Map(KERNEL_TYPE_CONTRIBUTIONS.map(t => [t.id, t]))
-const KERNEL_PROPERTY_SCHEMA_MAP = new Map(KERNEL_PROPERTY_SCHEMAS.map(s => [s.name, s]))
+// Stage-0 `_types` fallback before any runtime installs (overwritten synchronously
+// by the constructor's kernel-runtime install). Built via `buildUnboundTypes` — the
+// same synthesis the facet rebuild uses — so its entries are provenance-stripped
+// (no `seedKey`/`revision`), byte-consistent with the post-install map rather than
+// the raw `TypeSeedDeclaration`s `KERNEL_TYPE_CONTRIBUTIONS` now holds.
+const KERNEL_TYPES = buildUnboundTypes(KERNEL_TYPE_CONTRIBUTIONS)
+const KERNEL_PROPERTY_SEED_MAP = new Map(KERNEL_PROPERTY_SEEDS.map(seed => [seed.name, seed]))
+
+/** The `repo.mutate` / `repo.query` proxy shape: string property access
+ *  returns `dispatch(name)` (a fresh dispatcher closure per access —
+ *  fine, the underlying registry lookup is a single Map.get); symbol
+ *  access resolves to undefined. One implementation shared by the
+ *  constructor's two proxies and the undoGroup facade's grouped
+ *  `mutate`, so the shape can't drift between them. */
+const nameDispatchProxy = <T,>(dispatch: (name: string) => unknown): T =>
+  new Proxy({} as Record<string, unknown>, {
+    get: (_target, prop) => (typeof prop === 'string' ? dispatch(prop) : undefined),
+  }) as T
 
 /** Bounded ring of recent tx entries surfaced via `repo.metrics().txLog`.
  *  Sized to comfortably cover a cold-start window (a few dozen txs) so
@@ -211,8 +273,83 @@ const reprojectionMarkerKey = (workspaceId: string, name: string): string =>
 /** Suffix (after the `workspace_backfill:` prefix) of a per-workspace
  *  workspace-backfill completion marker — `<workspaceId>:<backfillId>`. Same
  *  shape/rationale as `reprojectionMarkerKey`. */
-const workspaceBackfillMarkerKey = (workspaceId: string, id: string): string =>
-  `${workspaceId}:${id}`
+
+/** Equal iff `a` and `b` have the same key set AND `eq` holds for every shared
+ *  key's values. An absent map is the empty map; the default `eq` compares keys
+ *  only. `b.has(key)` gates the `b.get(key)!`, so a legitimately-undefined value
+ *  isn't mistaken for a missing key. */
+const sameKeyedMap = <T>(
+  a: ReadonlyMap<string, T> | undefined,
+  b: ReadonlyMap<string, T> | undefined,
+  eq: (av: T, bv: T) => boolean = () => true,
+): boolean => {
+  const sizeA = a?.size ?? 0
+  const sizeB = b?.size ?? 0
+  if (sizeA !== sizeB) return false
+  if (!a || !b) return true
+  for (const [key, value] of a) {
+    if (!b.has(key) || !eq(value, b.get(key)!)) return false
+  }
+  return true
+}
+
+/** True when two registry snapshots carry the same SET of seed keys (ignoring
+ *  order, revisions, and everything else). Used to fire seed materialization
+ *  only when the active workspace's declared seeds actually change — a new
+ *  seed appearing (or one dropping) is the sole trigger the create/restore pass
+ *  cares about; revisions are the operator step's concern (§4.3/§6.1). Treats
+ *  an absent map as the empty set. */
+const sameSeedKeySet = (
+  a: ReadonlyMap<string, unknown> | undefined,
+  b: ReadonlyMap<string, unknown> | undefined,
+): boolean => sameKeyedMap(a, b)
+
+/** Like {@link sameSeedKeySet}, but also compares each type seed's membership
+ *  `id`. `materializeTypeSeeds` winner-resolves a duplicate-`id` group to its
+ *  lowest-seed-key seed (`winnerTypeSeeds`), so an `id` change with no key added or
+ *  removed can still change which seed materializes for that id (a de-collision, or a
+ *  new lower-key claimant taking over), and the reschedule trigger must see it.
+ *  Property seeds carry no such id-collision resolution, so their key-set diff alone
+ *  suffices. */
+const sameTypeSeedIdentities = (
+  a: ReadonlyMap<string, {id: string}> | undefined,
+  b: ReadonlyMap<string, {id: string}> | undefined,
+): boolean => sameKeyedMap(a, b, (x, y) => x.id === y.id)
+
+/** Equal iff two string sets carry the same members. Absent set = empty. Used to
+ *  reschedule type-seed materialization when the CONTESTED seed-key set changes:
+ *  `workspaceSeeds` withholds contested keys (`contestedSeedKeys`), and the
+ *  keep-first winner they leave in `seedsByKey` may be byte-identical across a
+ *  de-collision, so `sameTypeSeedIdentities` alone wouldn't see that a withheld
+ *  key became materializable. */
+const sameStringSet = (
+  a: ReadonlySet<string> | undefined,
+  b: ReadonlySet<string> | undefined,
+): boolean => {
+  const sizeA = a?.size ?? 0
+  const sizeB = b?.size ?? 0
+  if (sizeA !== sizeB) return false
+  if (!a || !b) return true
+  for (const value of a) {
+    if (!b.has(value)) return false
+  }
+  return true
+}
+
+/** The one-deep "active-or-retained-previous" retain rule, expressed once.
+ *  Serve `workspaceId` from the active snapshot, or the immediately-previous one
+ *  still retained across a switch; any other (genuinely foreign) workspace
+ *  resolves null (fail closed). Used both live and over a tx's frozen capture. */
+const registryForWorkspace = (
+  active: PropertyDefinitionRegistrySnapshot | null,
+  previous: PropertyDefinitionRegistrySnapshot | null,
+  workspaceId: string,
+): PropertyDefinitionRegistrySnapshot | null =>
+  active?.workspaceId === workspaceId
+    ? active
+    : previous?.workspaceId === workspaceId
+      ? previous
+      : null
 
 export interface RepoOptions {
   db: PowerSyncDb
@@ -228,6 +365,14 @@ export interface RepoOptions {
   /** UUID provider — default `crypto.randomUUID`. Injected for tests
    *  that want deterministic ids. */
   newId?: () => string
+  /** Block-id shape contract for every insert this Repo makes (issue #456).
+   *  Default `'canonical'`: `tx.create` / `tx.createOrGet` reject an id that
+   *  isn't a canonical lowercase UUID, whoever supplied it — the bridge, a
+   *  kernel mutator, `createTypedChild` in an agent-authored extension, or
+   *  `newId` itself. Production constructs a Repo without this option and so
+   *  gets the guard; `createTestRepo` sets `'any'` so tests can keep mnemonic
+   *  ids. See {@link BlockIdPolicy}. */
+  blockIdPolicy?: BlockIdPolicy
   /** Monotonic INTEGER tx-grouping key provider, written into
    *  `tx_context.tx_seq` and copied to `ps_crud.tx_id` by the upload
    *  triggers. Default: a counter seeded from `Date.now()` so values
@@ -244,6 +389,23 @@ export interface RepoOptions {
    *  pass `false` and call `setFacetRuntime` themselves, or just call
    *  `setFacetRuntime` (it REPLACES the kernel install). */
   installKernelRuntime?: boolean
+  /** Gate for one-shot `WorkspaceBackfill` passes: arms `cb` for when this
+   *  device is no longer behind the server, and returns a disposer. Default
+   *  `onSyncSettled(db)` — connected with no download in flight.
+   *
+   *  Injected because the default would never open under test: `createTestDb`
+   *  opens a real `PowerSyncDatabase` with no backend connector, so it reports
+   *  `connected: false` forever and every backfill would hang rather than fail
+   *  visibly. Tests pass an immediate gate; `onSyncSettled` itself is covered
+   *  directly in `firstSync.test.ts`. */
+  backfillSyncGate?: (cb: () => void) => () => void
+  /** Records migration completion in SYNCED data, so a repair that uploads
+   *  happens once per graph. Without one, `runWorkspaceBackfills` refuses every
+   *  registration rather than falling back to the per-device marker — which
+   *  would have every device attempt the repair independently. No production
+   *  implementation exists yet; slice C of the properties-as-blocks migration
+   *  owns building it. */
+  backfillCompletionClaim?: BackfillCompletionClaim
   /** When true (default), the Layout B sync observer is started at
    *  construction time so sync-applied writes — staged into `blocks_synced`
    *  — materialize into the app-visible `blocks` table and invalidate
@@ -269,10 +431,74 @@ export type SyncObserverOptions = Pick<
   'onCycleDetected' | 'throttleMs' | 'onError'
 >
 
+/** One CAS-guarded local-columns write for `stampReferenceTargets` —
+ *  `reference_target_id` plus the `is_field_form` bit (§7 grammar box), both
+ *  from the same derive. Strictly ADDITIVE: callers pass only rows the scan
+ *  saw at a NULL target column,
+ *  and the CAS re-checks (NULL column, unchanged content) inside the write tx
+ *  — so a concurrent local edit or sync arrival that already owns the columns
+ *  since the scan is never clobbered. Re-pointing an already-stamped row is
+ *  deliberately out of scope (see `drainNameRederives`). `targetId` may be
+ *  null for a marked row whose span doesn't resolve — the bit still stamps
+ *  (pure syntax; only the target late-binds). */
+interface ReferenceTargetStamp {
+  id: string
+  scannedContent: string
+  targetId: string | null
+  isFieldForm: boolean
+}
+
+/** What a stamping pass needs to also re-project the owners of rows it turns
+ *  into field rows. `resolver` is CAPTURED at the pass's registry gate and
+ *  threaded through — never re-read at write time. Both passes are deferred
+ *  idle jobs that can span workspace switches, and
+ *  `propertySchemaResolverFor` serves only the active or immediately-previous
+ *  workspace: a run-time re-resolve after two switches fails closed, every
+ *  fieldId stops resolving, and the repair silently becomes a no-op that no
+ *  later scan can find again (the rows are no longer NULL-targeted). Same
+ *  hazard, same fix, as `runPropertyDefinitionMigrationBatch`. */
+interface ReferenceTargetStampContext {
+  readonly workspaceId: string
+  readonly resolver: PropertySchemaResolver
+}
+
+/** What an operator-triggered backfill did, for a caller that has a human to
+ *  report to. `undoHistoryCleared` is not incidental detail: the pass drops
+ *  the workspace's undo stack whenever it writes, and a user who is not told
+ *  finds their history silently gone. */
+export interface OperatorBackfillResult {
+  outcome:
+    | 'ran'
+    | 'held-by-peer'
+    | 'already-running'
+    | 'deferred'
+    | 'failed'
+    | 'not-found'
+    | 'read-only'
+  undoHistoryCleared: boolean
+  /** Why a `deferred` pass did not start, or why a `failed` one stopped. Both
+   *  are split out from `held-by-peer` because they call for the opposite
+   *  response: retry — soon, or after fixing something — versus stop asking. A
+   *  pass that aborted partway is what most needs the distinction, since some
+   *  of its batches committed. */
+  reason?: string
+}
+
 export class Repo {
   readonly db: PowerSyncDb
   readonly cache: BlockCache
-  user: User
+  /** The client's indexical "acting-as" state (user, active workspace
+   *  pin, active layout session) — one per client, 1:1 with this Repo.
+   *  Semantics live in `clientContext.ts`; Repo keeps thin delegation
+   *  shims (`user`, `activeWorkspaceId` + setter, `activeLayoutSessionId`
+   *  + setter) so the public API is unchanged.
+   *
+   *  Held privately as the CONCRETE class — the public `client` getter
+   *  below narrows to {@link ClientContextReader} so a caller reaching
+   *  `repo.client.setActiveWorkspaceId(...)` directly (bypassing this
+   *  Repo's transition) is a compile error, not just a documented
+   *  convention. Repo's own delegating setters use this private field. */
+  private readonly _client: ClientContext
   /** Read-only mode disables `BlockDefault` / `References` writes;
    *  UI-state and UserPrefs writes still pass through and queue to
    *  ps_crud — server-side rejection (RLS) lands in the rejection
@@ -284,6 +510,7 @@ export class Repo {
 
   private readonly now: () => number
   private readonly newId: () => string
+  private readonly blockIdPolicy: BlockIdPolicy
   private readonly newTxSeq: () => number
   private mutators: Map<string, AnyMutator> = new Map()
   private processors: Map<string, AnyPostCommitProcessor> = new Map()
@@ -295,9 +522,29 @@ export class Repo {
   private sameTxProcessors: Map<string, AnySameTxProcessor> = new Map()
   private queries: Map<string, AnyQuery> = new Map()
   private _types: ReadonlyMap<string, TypeContribution> = KERNEL_TYPES
-  private _propertySchemas: ReadonlyMap<string, AnyPropertySchema> = KERNEL_PROPERTY_SCHEMA_MAP
+  /** Active-workspace type-definition registry — the id-keyed, declaration-
+   * authoritative snapshot behind `getTypeBlockId` (block-backed types resolve
+   * to their durable block id) and the seed-provenance read-only gates. Null at
+   * stage 0 before a workspace pin; `_types` still holds the code contributions.
+   * Rebuilt by `applyTypesAndSchemas` from `projectedTypeDefinitionsFacet` +
+   * `typeSeedsFacet`. */
+  private _typeDefinitionRegistry: TypeDefinitionRegistrySnapshot | null = null
+  private _propertySchemas: ReadonlyMap<string, AnyPropertySchema> = KERNEL_PROPERTY_SEED_MAP
+  /** Atomic active-workspace definition snapshot. Null at stage 0 before a
+   * workspace pin; identity resolution is unavailable in that state. */
+  private _propertyDefinitionRegistry: PropertyDefinitionRegistrySnapshot | null = null
+  /** The immediately-previous active workspace's snapshot, retained across one
+   * switch so an in-flight read/tx that began for that workspace still resolves
+   * against its REAL definitions (faithful shadow/winner info) instead of a
+   * partial rebuild. Bounded to one workspace: anything older is genuinely
+   * foreign and fails closed. Rotated by `applyTypesAndSchemas` on a pin to a
+   * different workspace. */
+  private _previousPropertyDefinitionRegistry: PropertyDefinitionRegistrySnapshot | null = null
+  /** Original declaration-name multiplicity retained so both stage-0 and
+   * snapshot-bound plain-schema fallbacks reject seed-owned names. */
+  private _propertySeedNameCounts: ReadonlyMap<string, number> = new Map()
   private _propertyEditorOverrides: ReadonlyMap<string, AnyPropertyEditorOverride> = new Map()
-  private _valuePresets: ReadonlyMap<string, AnyValuePreset> = new Map()
+  private _valuePresetCores: ReadonlyMap<string, AnyValuePresetCore> = new Map()
   private invalidationRules: readonly InvalidationRule[] = []
   /** Facet→registry bridge (audit D1(c)) — owns the installed
    *  FacetRuntime, the rebuild steps, the per-facet change subscriptions,
@@ -417,17 +664,80 @@ export class Repo {
    *  refreshed by the `workspaceBackfills` rebuild step). Run once per
    *  workspace by `scheduleWorkspaceBackfills`. */
   private _workspaceBackfills: readonly WorkspaceBackfill[] = []
-  /** Lazy in-memory mirror of the workspace-backfill completion markers in
-   *  `client_schema_state` (rows keyed `workspace_backfill:<ws>:<id>`), same
-   *  pattern as `reprojectionMarkers`. Constructed in the constructor. */
-  private readonly workspaceBackfillMarkers: MarkerStore
   /** In-flight workspace-backfill runs whose deferral timer has fired —
    *  drained by `awaitWorkspaceBackfills()` for deterministic test quiescence,
    *  mirroring `reprojectionJobs`. */
   private readonly workspaceBackfillJobs = new PendingIdleJobs((fn) => scheduleDeepIdle(fn, CATCHUP_DEEP_IDLE))
+  /** Arms a callback for when this device is no longer behind the server
+   *  (`RepoOptions.backfillSyncGate`). */
+  private readonly backfillSyncGate: (cb: () => void) => () => void
+  /** See `RepoOptions.backfillCompletionClaim`. Absent ⇒ backfills refuse. */
+  /** `workspaceId:backfillId` of operator passes running right now. Two
+   *  invocations in one Repo share a claimant, so the CLAIM cannot separate
+   *  them — this can. */
+  private readonly inFlightOperatorBackfills = new Set<string>()
+  private readonly backfillCompletionClaim: BackfillCompletionClaim | undefined
+  /** Disposer for a gate armed but not yet opened, so a workspace switch or
+   *  repo teardown doesn't leave a status listener attached. */
+  private disposeBackfillSyncGate: (() => void) | undefined
+  /** Bumped on every workspace CHANGE. A backfill job captures it and compares
+   *  at write time: comparing workspace ids alone accepts a stale job from an
+   *  earlier visit once the user returns (A -> B -> A), which is a different
+   *  open with a different registry and access state. */
+  private workspaceGeneration = 0
   /** In-flight one-time reconcile-rescan runs — drained by
    *  `awaitReconcileRescans()`, same pattern. */
   private readonly reconcileRescanJobs = new PendingIdleJobs((fn) => scheduleDeepIdle(fn, CATCHUP_DEEP_IDLE))
+  /** Workspaces whose reference-target catch-up sweep ran THIS SESSION
+   *  (adversarial-review round 2: a durable once-ever marker permanently
+   *  missed definitions/aliases that arrived while the app was closed or
+   *  the workspace inactive). Cost honesty: the CANDIDATE SET shrinks after
+   *  the first run, but the LIKE prefilter itself is an O(table) scan on
+   *  every open (~50ms native / a few hundred ms in-browser at 350k rows) —
+   *  deep idle, once per workspace open; a partial expression index on the
+   *  content-shape predicate is the escape hatch if it ever matters. */
+  private readonly referenceTargetSweepDone = new Set<string>()
+  /** Accumulated `[[name]]`/alias re-derive requests per workspace, drained
+   *  in ONE batched scan per drain (never one scan per name). Names only
+   *  accumulate after the workspace's sweep ran (pre-sweep, the sweep
+   *  covers them); a drain that finds the registry pointed elsewhere leaves
+   *  the set intact and re-arms when that workspace's registry primes. */
+  private readonly pendingNameRederives = new Map<string, Set<string>>()
+  private readonly nameRederiveDrainScheduled = new Set<string>()
+  /** In-flight reference-target derive passes — drained by
+   *  `awaitReferenceTargetDerive()`, same pattern. */
+  private readonly referenceTargetDeriveJobs = new PendingIdleJobs((fn) => scheduleDeepIdle(fn, CATCHUP_DEEP_IDLE))
+  /** In-flight rename-reproject / codec re-encode migration passes
+   *  (PR #288 §7/§9, slice B2) — drained by
+   *  `awaitPropertyDefinitionMigrations()`, same pattern. */
+  private readonly propertyDefinitionMigrationJobs = new PendingIdleJobs((fn) => scheduleDeepIdle(fn, CATCHUP_DEEP_IDLE))
+  /** In-flight property-seed materialization passes (§4.3 of the schema-
+   *  unification design) — drained by `awaitSeedMaterialization()`. Unlike its
+   *  siblings the pass is create/restore-only + idempotent rather than
+   *  marker-gated once-per-workspace, so it can re-run on every seed-set change
+   *  (a probe SELECT that short-circuits in steady state). */
+  private readonly seedMaterializationJobs = new PendingIdleJobs((fn) => scheduleDeepIdle(fn, CATCHUP_DEEP_IDLE))
+  /** The "trigger generation" the seed-materialization access gate references.
+   *  A deferred pass parks on the membership row before writing; the App defaults
+   *  a not-yet-synced role to writable, so on a workspace whose membership never
+   *  syncs that wait never resolves. Without an abort, every subsequent seed-set
+   *  change would park another job (and its members subscription), unbounded.
+   *  Aborted + renewed whenever the active workspace changes, so parked waits for
+   *  a workspace we've left terminate promptly. */
+  private seedMaterializationGeneration = new AbortController()
+  /** Workspaces with a seed-materialization pass already queued or parked.
+   *  Repeated seed-set changes within one workspace (e.g. toggling several
+   *  dynamic extensions) coalesce onto the one pending pass instead of stacking
+   *  a job + a `workspace_members` subscription each; the pending pass reads the
+   *  LATEST seed set when it runs, so nothing is missed. Cleared when it settles. */
+  private readonly pendingSeedMaterializationWorkspaces = new Set<string>()
+  /** Workspaces whose seed set changed while a pass was already in flight AND had
+   *  already snapshotted its seeds (or was aborted mid-flight). Coalescing onto the
+   *  running pass would drop that change — the pass materializes only its old
+   *  snapshot. Instead we mark the workspace dirty and re-schedule ONE more pass
+   *  once the running one settles, so a newly-enabled extension's definitions land
+   *  without waiting for the next unrelated seed change or a workspace reopen. */
+  private readonly dirtySeedMaterializationWorkspaces = new Set<string>()
   /** Slowest writeTransaction observed since the last reset, by
    *  description (`opts.description` passed to `repo.tx`). Updated only
    *  when a tx exceeds the previous high-water mark, so the field is
@@ -449,8 +759,6 @@ export class Repo {
    *  so the data-integrity plugin's audit runner can reuse the same resolver for
    *  the divergence decrypt-compare (undefined in tests ⇒ cleartext-only). */
   readonly syncObserverDeps?: MaterializeDeps
-  /** Backing field for `activeWorkspaceId` (see getter/setter below). */
-  private _activeWorkspaceId: string | null = null
   /** Instance discriminator for memoization keys that need to vary
    *  across Repo instances (e.g. lodash.memoize calls in the panel /
    *  user-page bootstrap). Auto-incremented per construction. */
@@ -485,42 +793,73 @@ export class Repo {
     return this._propertySchemas
   }
 
+  get propertyDefinitions(): PropertyDefinitionRegistrySnapshot | null {
+    return this._propertyDefinitionRegistry
+  }
+
+  /** Active-workspace type-definition registry snapshot (kernel/plugin code
+   *  types are NOT in it — those live only in `types`; this is the block-built +
+   *  seed side that `getTypeBlockId` and the seed read-only gates read). Null
+   *  before a workspace pin. */
+  get typeDefinitions(): TypeDefinitionRegistrySnapshot | null {
+    return this._typeDefinitionRegistry
+  }
+
+  /** Internal identity boundary factory. The caller supplies the target row's
+   * workspace (the transaction layer owns that fact); resolve() itself accepts
+   * only a handle/name and is therefore immune to ambient workspace switches. */
+  propertySchemaResolverFor(workspaceId: string): PropertySchemaResolver {
+    // Serve the active workspace, or the immediately-previous one still retained
+    // across a switch, from its faithful snapshot. Any other (genuinely foreign)
+    // workspace fails closed — we never synthesise a partial seeds-only snapshot
+    // for a workspace whose definitions aren't loaded (which could resolve a
+    // shadowed seed as a winner). The stage-0/active boot window (null snapshot +
+    // allow-plain) still uses the transitional resolver.
+    const snapshot = registryForWorkspace(
+      this._propertyDefinitionRegistry,
+      this._previousPropertyDefinitionRegistry,
+      workspaceId,
+    )
+    return propertySchemaResolverForWorkspace(
+      snapshot,
+      workspaceId,
+      this._propertySeedNameCounts,
+      this.client.activeWorkspaceId === null || workspaceId === this.client.activeWorkspaceId,
+    )
+  }
+
   get propertyEditorOverrides(): ReadonlyMap<string, AnyPropertyEditorOverride> {
     return this._propertyEditorOverrides
   }
 
-  get valuePresets(): ReadonlyMap<string, AnyValuePreset> {
-    return this._valuePresets
+  get valuePresetCores(): ReadonlyMap<string, AnyValuePresetCore> {
+    return this._valuePresetCores
   }
 
   /** Deterministic id of the workspace's Properties page (parent of
    *  all `'property-schema'` blocks). Created lazily by
    *  `getOrCreatePropertiesPage` during workspace bootstrap. */
   get propertiesPageId(): string | null {
-    if (!this._activeWorkspaceId) return null
-    return propertiesPageBlockId(this._activeWorkspaceId)
+    if (!this.client.activeWorkspaceId) return null
+    return propertiesPageBlockId(this.client.activeWorkspaceId)
   }
 
   /** Registry + driver for definition-block projectors (the
    *  data-defined "watch a meta-type → mirror into a facet bucket"
-   *  pattern, issue #90). Owns the shared lifecycle for every projector
-   *  registered in `definitionBlockProjectorFacet`; the React provider
-   *  starts them all once per workspace via `startAll()`. The
+   *  pattern, issue #90). The synchronous Repo workspace pin owns the
+   *  lifecycle for every projector in `definitionBlockProjectorFacet`.
+   *  Each incoming generation exposes an awaitable first-tick prime. The
    *  `userSchemas` / `userTypes` facades read their state through it. */
   readonly projectors: ProjectorRuntime = new ProjectorRuntime(this)
 
-  /** UserSchemasService singleton bound to this Repo. Owns the
-   *  user-data contribution bucket on `propertySchemasFacet`; sharing
-   *  one instance means imperative call sites (the AddPropertyForm,
-   *  the Roam importer) all hit the same in-memory list rather than
-   *  each fresh instance clobbering the bucket from an empty start.
-   *  The block-subscription path is opt-in via `start()` (delegates to
-   *  the `'user-schemas'` projector). */
+  /** Thin facade over the Repo-owned `'user-schemas'` projector. The
+   *  projector runtime owns its lifecycle, contribution state, and indexes;
+   *  the Repo pin starts its workspace generation before callers can perform
+   *  workspace work. */
   readonly userSchemas: UserSchemasService = new UserSchemasService(this)
 
-  /** UserTypesService singleton bound to this Repo. Symmetric to
-   *  `userSchemas`: owns the user-data contribution bucket on
-   *  `typesFacet`. The `'user-types'` projector depends on
+  /** Thin facade over the Repo-owned `'user-types'` projector. The projector
+   *  runtime owns its lifecycle, contribution state, and indexes. It depends on
    *  `'user-schemas'` (started first) to resolve block-type:properties
    *  refList entries to live property schemas. */
   readonly userTypes: UserTypesService = new UserTypesService(this)
@@ -529,8 +868,8 @@ export class Repo {
    *  `'block-type'` block in the workspace). Created lazily by
    *  `getOrCreateTypesPage` during workspace bootstrap. */
   get typesPageId(): string | null {
-    if (!this._activeWorkspaceId) return null
-    return typesPageBlockId(this._activeWorkspaceId)
+    if (!this.client.activeWorkspaceId) return null
+    return typesPageBlockId(this.client.activeWorkspaceId)
   }
 
   /** Run `CHILDREN_SQL` for `parentId` and hydrate every row into the
@@ -596,18 +935,19 @@ export class Repo {
       RECORD_REPROJECT_REF_MARKER_SQL,
       CLEAR_REPROJECT_REF_MARKER_SQL,
     )
-    this.workspaceBackfillMarkers = new MarkerStore(
-      this.db,
-      WORKSPACE_BACKFILL_MARKER_PREFIX,
-      SELECT_WORKSPACE_BACKFILL_MARKERS_SQL,
-      RECORD_WORKSPACE_BACKFILL_MARKER_SQL,
-    )
+    this.backfillCompletionClaim = opts.backfillCompletionClaim
+    this.backfillSyncGate = opts.backfillSyncGate
+      ?? ((cb) => onSyncSettled(this.db as unknown as Parameters<typeof onSyncSettled>[0], cb))
     this.syncObserverDeps = opts.syncObserverDeps
     this.cache = opts.cache
-    this.user = opts.user
+    this._client = new ClientContext({user: opts.user})
     this.isReadOnly = opts.isReadOnly ?? false
     this.now = opts.now ?? Date.now
     this.newId = opts.newId ?? uuidv4
+    // Strict unless a caller opts out, so a Repo built the way production
+    // builds one (context/repo.tsx passes no id options at all) enforces the
+    // block-id contract without having to remember to ask for it.
+    this.blockIdPolicy = opts.blockIdPolicy ?? 'canonical'
     // Default tx-seq provider: monotonic counter seeded above any
     // value a prior Repo instance could have written. Date.now() in
     // milliseconds is plenty of headroom (Number.MAX_SAFE_INTEGER /
@@ -638,43 +978,88 @@ export class Repo {
     // subscriptions, and the React change channels.
     this.facetBridge = new FacetBridge({
       getPropertySchemas: () => this._propertySchemas,
+      getPropertyDefinitionProjector: () => this.propertyDefinitionProjector(),
       applyMutators: (mutators) => { this.mutators = mutators },
       applyProcessors: (processors) => { this.processors = processors },
       applySameTxProcessors: (processors) => { this.sameTxProcessors = processors },
       applyInvalidationRules: (rules) => { this.invalidationRules = rules },
       applyWorkspaceBackfills: (backfills) => { this._workspaceBackfills = backfills },
-      applyTypesAndSchemas: (types, propertySchemas) => {
+      applyTypesAndSchemas: (
+        types,
+        propertySchemas,
+        propertyDefinitions,
+        propertySeedNameCounts,
+        typeDefinitions,
+      ) => {
         this._types = types
         this._propertySchemas = propertySchemas
+        // Retain the outgoing workspace's faithful snapshot when pinning a
+        // DIFFERENT workspace, so an in-flight read/tx that began for it still
+        // resolves against real definitions. A same-workspace rebuild (contribution
+        // change) or a re-prime doesn't rotate the slot.
+        //
+        // Derive the incoming workspace from EITHER registry: `typeDefinitions` is
+        // built without the property registry's priming gate (facetBridge), so a
+        // type-only seed change can land while `propertyDefinitions` is still null.
+        // Falling back to the type registry's workspace keeps both the retention
+        // check and the reschedule guard below from mistaking that window for "no
+        // workspace" and skipping a type-seed materialization pass.
+        const incomingWorkspaceId =
+          propertyDefinitions?.workspaceId ?? typeDefinitions?.workspaceId ?? null
+        const currentWorkspaceId = this._propertyDefinitionRegistry?.workspaceId ?? null
+        if (this._propertyDefinitionRegistry && incomingWorkspaceId !== currentWorkspaceId) {
+          this._previousPropertyDefinitionRegistry = this._propertyDefinitionRegistry
+        }
+        // Seed materialization (§4.3): plugin/dynamic seeds first appear when the
+        // toggle-aware app runtime installs in a post-paint effect, long after
+        // bootstrap ran — so re-run the create/restore pass whenever this active
+        // workspace's materializable seed set changes (not on every type/preset
+        // rebuild). Diff BOTH registries against their PRIOR value (so assign them
+        // AFTER): a type seed (a `seedType` contribution) can appear post-bootstrap
+        // on its own, with no property-seed change to piggyback the reschedule on.
+        // The type diff is id-aware (`sameTypeSeedIdentities`): materializability
+        // there also depends on membership-id collisions, so an id that de-collides
+        // without a key change must still reschedule. It is also contested-key-aware
+        // (`sameStringSet` over `contestedSeedKeys`): a withheld duplicate-key seed
+        // leaves a byte-identical keep-first winner in `seedsByKey`, so a de-collision
+        // that makes it materializable again must reschedule even though the id diff
+        // sees no change.
+        const seedsChanged =
+          !sameSeedKeySet(this._propertyDefinitionRegistry?.seedsByKey, propertyDefinitions?.seedsByKey) ||
+          !sameTypeSeedIdentities(this._typeDefinitionRegistry?.seedsByKey, typeDefinitions?.seedsByKey) ||
+          !sameStringSet(this._typeDefinitionRegistry?.contestedSeedKeys, typeDefinitions?.contestedSeedKeys)
+        this._propertyDefinitionRegistry = propertyDefinitions
+        this._typeDefinitionRegistry = typeDefinitions
+        this._propertySeedNameCounts = propertySeedNameCounts
+        if (seedsChanged && incomingWorkspaceId !== null && incomingWorkspaceId === this.client.activeWorkspaceId) {
+          this.scheduleWorkspaceSeedMaterialization(incomingWorkspaceId, false)
+        }
+        // Re-arm name-rederive drains parked while this workspace's registry
+        // wasn't primed (drainNameRederives leaves the pending set intact in
+        // that case).
+        if (
+          incomingWorkspaceId !== null
+          && (this.pendingNameRederives.get(incomingWorkspaceId)?.size ?? 0) > 0
+          && !this.nameRederiveDrainScheduled.has(incomingWorkspaceId)
+        ) {
+          this.nameRederiveDrainScheduled.add(incomingWorkspaceId)
+          this.referenceTargetDeriveJobs.schedule(() => this.drainNameRederives(incomingWorkspaceId))
+        }
       },
       applyPropertyEditorOverrides: (overrides) => { this._propertyEditorOverrides = overrides },
-      applyValuePresets: (presets) => { this._valuePresets = presets },
+      applyValuePresetCores: (presets) => { this._valuePresetCores = presets },
       applyQueries: (queries) => { this.swapQueries(queries) },
       scheduleReprojection: (names, schemas) => { this.scheduleReprojection(names, schemas) },
+      getPropertyDefinitions: () => this._propertyDefinitionRegistry,
+      schedulePropertyDefinitionMigrations: (workspaceId, changes) => {
+        this.schedulePropertyDefinitionMigrations(workspaceId, changes)
+      },
     })
-    // Bind dispatchMutator to `this` so the Proxy's get trap doesn't
-    // need to alias `this` to a local. Each name lookup returns a
-    // fresh dispatcher closure; that's fine, the underlying registry
-    // lookup is a single Map.get.
-    const dispatch = this.dispatchMutator.bind(this)
-    this.mutate = new Proxy({} as Record<string, (args: unknown) => Promise<unknown>>, {
-      get: (_target, prop) => {
-        if (typeof prop !== 'string') return undefined
-        return dispatch(prop)
-      },
-    }) as MutateProxy
-    // Same Proxy shape as `mutate`, dispatching to `dispatchQuery`.
-    // Each name access returns a fresh dispatcher closure; the closure
-    // does the registry lookup + argsSchema validation + handleStore
-    // getOrCreate on call. Identity stability is provided by the
-    // handle-store key, not by memoizing the dispatcher itself.
-    const dispatchQ = this.dispatchQuery.bind(this)
-    this.query = new Proxy({} as Record<string, (args: unknown) => LoaderHandle<unknown>>, {
-      get: (_target, prop) => {
-        if (typeof prop !== 'string') return undefined
-        return dispatchQ(prop)
-      },
-    }) as QueryProxy
+    this.mutate = nameDispatchProxy<MutateProxy>(name => this.dispatchMutator(name))
+    // Identity stability for query handles is provided by the
+    // handle-store key inside `dispatchQuery`, not by memoizing the
+    // dispatcher itself.
+    this.query = nameDispatchProxy<QueryProxy>(name => this.dispatchQuery(name))
     // Install the kernel-only FacetRuntime so the kernel mutators,
     // queries, same-tx processors, invalidation rule, property schemas,
     // and type contributions are live before any `setFacetRuntime` swap
@@ -702,15 +1087,30 @@ export class Repo {
    *  flushing. */
   startSyncObserver(options?: SyncObserverOptions): BlocksSyncedObserver {
     if (this.syncObserver) this.syncObserver.dispose()
+    // Production passes the §6 mode/key resolver (initRepo). Tests omit it
+    // and fall back to plaintext copy-through with no key — the historical
+    // behavior, so non-e2ee tests are unaffected.
+    const policyDeps = this.syncObserverDeps
+      ?? { getMaterializability: (): Materializability => 'copy', getCek: async () => null }
     this.syncObserver = startBlocksSyncedObserver({
       db: this.db,
       cache: this.cache,
       handleStore: this.handleStore,
-      // Production passes the §6 mode/key resolver (initRepo). Tests omit it
-      // and fall back to plaintext copy-through with no key — the historical
-      // behavior, so non-e2ee tests are unaffected.
-      deps: this.syncObserverDeps
-        ?? { getMaterializability: (): Materializability => 'copy', getCek: async () => null },
+      deps: {
+        ...policyDeps,
+        // Derive-at-arrival seam (PR #288 slice A): always attached — the
+        // LOCAL `reference_target_id` column must track content for
+        // sync-applied rows on every device, e2ee included (derivation runs
+        // over decrypted content). Resolution mirrors
+        // `core.deriveReferenceTarget`: schema-name winner map first, then
+        // the `block_aliases` index read on the open write tx (so
+        // same-window alias/definition arrivals resolve).
+        referenceTargetLookups: policyDeps.referenceTargetLookups
+          ?? (tx => this.referenceTargetLookupsVia(tx)),
+        onAliasTargetsAdded: policyDeps.onAliasTargetsAdded
+          ?? ((workspaceId, aliases) =>
+            this.scheduleReferenceTargetNameRederive(workspaceId, aliases)),
+      },
       getInvalidationRules: () => this.invalidationRules,
       onCycleDetected: options?.onCycleDetected,
       throttleMs: options?.throttleMs,
@@ -750,7 +1150,8 @@ export class Repo {
    *      `handlesWalked`, `handlesMatched`) and per-LoaderHandle
    *      lifecycle (`loaderInvalidations`, `loaderRuns`,
    *      `midLoadInvalidations`, `reloadsAfterSettle`,
-   *      `notifiesFired`, `notifiesSkippedByDiff`).
+   *      `notifiesFired`, `notifiesSkippedByDiff`,
+   *      `notifiesSupersededInBatch`).
    *    - `blockCache` — write/notify activity
    *      (`setSnapshotCalls`, `setSnapshotDedupHits/Misses`,
    *      `applyIfNewerSyncCalls`/`Rejected` for row_events-tail
@@ -937,18 +1338,146 @@ export class Repo {
     return row !== null
   }
 
-  // ──── Active-workspace getter/setter (UI bookkeeping) ────
+  // ──── Acting-as delegation shims (state lives on `this._client`) ────
 
-  /** UI-visible "active" workspace pin — used by plugin hooks and
-   *  panels that need a default workspace when there's no other
-   *  context. `repo.tx` does NOT consult this; tx workspaces come from
-   *  the first write's row per spec §5.3. */
-  get activeWorkspaceId(): string | null {
-    return this._activeWorkspaceId
+  /** The `ClientContextReader` view of `this._client` — reads + the
+   *  {@link ClientContext.onActingAsChange} subscribe method, but NOT the
+   *  set methods. See {@link ClientContextReader} for why: mutating
+   *  through it would bypass this Repo's transitions. Mutate ONLY via
+   *  `repo.setActiveWorkspaceId` / `repo.setActiveLayoutSessionId`. */
+  get client(): ClientContextReader {
+    return this._client
   }
 
+  /** The authenticated user this client acts as — see
+   *  {@link ClientContext.user} (`repo.client`). A getter (not a field)
+   *  so the state has exactly one home; the read API is unchanged. */
+  get user(): User {
+    return this._client.user
+  }
+
+  // ──── Active-workspace getter/setter (UI bookkeeping) ────
+
+  /** The active workspace pin. State + semantics live on
+   *  {@link ClientContext.activeWorkspaceId} (`repo.client`); this shim
+   *  keeps the existing read API. */
+  get activeWorkspaceId(): string | null {
+    return this._client.activeWorkspaceId
+  }
+
+  /** Pin the active workspace. The STATE lives on `this._client`; the
+   *  side effects of a switch — facet-bridge notification, projector
+   *  pin/rollback, seed-materialization generation turnover — stay
+   *  here, so callers keep going through this method (never
+   *  `client.setActiveWorkspaceId` directly — and, since `repo.client` is
+   *  typed as {@link ClientContextReader}, no longer even compiles).
+   *  Note: `this._client.setActiveWorkspaceId` below fires
+   *  `onActingAsChange` on an effective change BEFORE the facet-bridge /
+   *  projector side effects below run — a subscriber reacting
+   *  synchronously observes the new pin while those are still
+   *  mid-transition (see the doc on {@link ClientContext.setActiveWorkspaceId}). */
   setActiveWorkspaceId(workspaceId: string | null): void {
-    this._activeWorkspaceId = workspaceId
+    if (
+      workspaceId === this._client.activeWorkspaceId &&
+      (!this.facetRuntime || workspaceId === this.projectors.workspaceId)
+    ) return
+    const previousWorkspaceId = this._client.activeWorkspaceId
+    this._client.setActiveWorkspaceId(workspaceId)
+    if (workspaceId !== previousWorkspaceId) {
+      // Cancel any parked seed-materialization access waits bound to the
+      // workspace we just left, then open a fresh generation for the incoming
+      // one (a same-workspace projector re-pin keeps the current generation).
+      this.seedMaterializationGeneration.abort()
+      this.seedMaterializationGeneration = new AbortController()
+      this.workspaceGeneration++
+      // Same for a backfill gate still armed for the departed workspace. It
+      // captures that workspace id, and `scheduleWorkspaceBackfills` only
+      // disposes a stale gate when it is reached again — which the read-only /
+      // no-backfills early returns can skip entirely. Left armed, a status
+      // change later fires it and writes the departed workspace under the
+      // current session's access state.
+      this.disposeBackfillSyncGate?.()
+      this.disposeBackfillSyncGate = undefined
+    }
+    this.facetBridge.setActiveWorkspaceId(workspaceId)
+    try {
+      if (this.facetRuntime) {
+        this.projectors.pinWorkspace(workspaceId)
+      }
+    } catch (error) {
+      // ProjectorRuntime attempts to restore its outgoing generation. If that
+      // nested rollback also failed, its honest state is null; mirror that
+      // rather than claiming the old workspace and suppressing a retry.
+      const restoredWorkspaceId = this.projectors.workspaceId
+      this._client.setActiveWorkspaceId(restoredWorkspaceId)
+      this.facetBridge.setActiveWorkspaceId(restoredWorkspaceId)
+      // The failed switch already aborted the outgoing seed-materialization
+      // generation. Open a fresh one and re-arm the restored workspace so its
+      // aborted parked pass isn't stranded until the next seed change (a no-op
+      // if the pinned registry isn't the restored workspace's).
+      this.seedMaterializationGeneration = new AbortController()
+      if (restoredWorkspaceId) {
+        this.scheduleWorkspaceSeedMaterialization(restoredWorkspaceId, false)
+        // The switch path above already disposed this workspace's gate on the
+        // way out. Nothing else re-arms it, so without this the restored
+        // workspace silently never backfills for the rest of the session.
+        this.scheduleWorkspaceBackfills(restoredWorkspaceId)
+      }
+      throw error
+    }
+  }
+
+  // ──── Active-layout-session getter/setter (UI bookkeeping) ────
+
+  /** The active layout-session id, with its base-seed fallback. State +
+   *  semantics live on {@link ClientContext.activeLayoutSessionId}
+   *  (`repo.client`); this shim keeps the existing read API. */
+  get activeLayoutSessionId(): string {
+    return this._client.activeLayoutSessionId
+  }
+
+  /** Override the active layout-session id (`null` restores the base
+   *  id). Pure delegation — see
+   *  {@link ClientContext.setActiveLayoutSessionId} for semantics. */
+  setActiveLayoutSessionId(id: string | null): void {
+    this._client.setActiveLayoutSessionId(id)
+  }
+
+  /** Claim a ws-context key for a session consumer in `workspaceId` (pure
+   *  delegation — see {@link ClientContext.claimLayoutContextKey} for
+   *  semantics, the (user, workspace) scoping, persistence and the
+   *  first-boot residue). Read side: `repo.client.hasClaimedLayoutContextKey`. */
+  claimLayoutContextKey(workspaceId: string, key: string): void {
+    this._client.claimLayoutContextKey(workspaceId, key)
+  }
+
+  /** Undo {@link claimLayoutContextKey} — consumers release on
+   *  disable/uninstall so stale claims don't keep deferring routes nothing
+   *  will pick up. */
+  releaseLayoutContextKey(workspaceId: string, key: string): void {
+    this._client.releaseLayoutContextKey(workspaceId, key)
+  }
+
+  /** Register (null = unregister) the session route-owner (pure delegation
+   *  — see {@link ClientContext.setLayoutSessionRouter} and the
+   *  LayoutSessionRouter protocol doc). Read side:
+   *  `repo.client.layoutSessionRouter`. */
+  setLayoutSessionRouter(router: LayoutSessionRouter | null): void {
+    this._client.setLayoutSessionRouter(router)
+  }
+
+  /** Wait until persisted property definitions have produced their first
+   * complete workspace snapshot. Bootstrap calls this before typed writes so
+   * declaration synthesis cannot temporarily outrank a stored rename/shadow. */
+  async whenPropertyDefinitionsReady(workspaceId: string): Promise<void> {
+    const handle = this.propertyDefinitionProjector()
+    if (!handle) return
+    await handle.whenPrimed(workspaceId)
+  }
+
+  private propertyDefinitionProjector() {
+    if (!this.facetRuntime) return undefined
+    return this.projectors.handle(USER_SCHEMAS_PROJECTOR_ID)
   }
 
   /** The active workspace's undo / redo manager — what cmd-Z and the
@@ -960,7 +1489,7 @@ export class Repo {
    *  (keyed by `NO_ACTIVE_WORKSPACE`) so callers don't have to null-check
    *  — `undo()` / `redo()` still guard on `activeWorkspaceId`. */
   get undoManager(): UndoManager {
-    return this.undoManagerFor(this._activeWorkspaceId ?? NO_ACTIVE_WORKSPACE)
+    return this.undoManagerFor(this.client.activeWorkspaceId ?? NO_ACTIVE_WORKSPACE)
   }
 
   /** Undo manager for a specific workspace, lazily created. `repo.tx`
@@ -1006,12 +1535,16 @@ export class Repo {
     // scopes are filtered inside `record`; zero-write txs have no pinned
     // workspace (null) and nothing to undo, so skip them here. Replays go
     // through `_replay`, not here, so they don't add new history.
-    if (result.workspaceId !== null) {
+    if (result.workspaceId !== null && !opts.skipUndo) {
       this.undoManagerFor(result.workspaceId).record({
         scope: opts.scope,
         txId: result.txId,
         snapshots: result.snapshots,
         description: opts.description,
+        // Group token (issue #306): entries sharing it merge at record
+        // time while the previous one is still top-of-stack, so a
+        // multi-tx composite reverts with one cmd-Z.
+        groupId: opts.groupId,
       })
     }
     return result.value
@@ -1046,7 +1579,7 @@ export class Repo {
    *  is pushed back so a retry once the flag settles succeeds — see
    *  issue #226.) */
   async undo(scope: ChangeScope = ChangeScope.BlockDefault): Promise<boolean> {
-    if (this._activeWorkspaceId === null) return false
+    if (this.client.activeWorkspaceId === null) return false
     const manager = this.undoManager
     const entry = manager.popUndo(scope)
     if (entry === null) return false
@@ -1057,6 +1590,15 @@ export class Repo {
     } catch (err) {
       // Replay failed — push the entry back so the user can retry
       // (e.g. after toggling read-only off, fixing a missing parent).
+      // Known narrow hazard (pre-existing, issue #226 window): if a new
+      // tx recorded during the failed replay's await, this pushback
+      // lands the entry ABOVE it — chronologically inverted. With
+      // grouping the inversion additionally makes a same-group tx merge
+      // into the pushed-back entry rather than the newer one. We keep
+      // the groupId on pushback anyway: stripping it would break the
+      // legitimate retry path (RescheduleToast re-matches the restored
+      // entry by groupId once read-only clears), which is a far more
+      // common sequence than a mid-replay same-group commit.
       manager.pushUndo(scope, entry)
       throw err
     }
@@ -1066,7 +1608,7 @@ export class Repo {
    *  workspace. Same defaults + same per-workspace + read-only
    *  semantics as `undo`, mirrored. */
   async redo(scope: ChangeScope = ChangeScope.BlockDefault): Promise<boolean> {
-    if (this._activeWorkspaceId === null) return false
+    if (this.client.activeWorkspaceId === null) return false
     const manager = this.undoManager
     const entry = manager.popRedo(scope)
     if (entry === null) return false
@@ -1078,6 +1620,147 @@ export class Repo {
       manager.pushRedo(scope, entry)
       throw err
     }
+  }
+
+  /** Run `fn` against a `Repo`-shaped facade whose every tx carries one
+   *  freshly-minted undo-group token (issue #306, docs/undo-grouping.md).
+   *  Consecutive txs opened through the facade — directly via
+   *  `grouped.tx`, or indirectly via `grouped.mutate.X` / `grouped.run`
+   *  — MERGE into a single undo entry at record time, so the whole
+   *  composite reverts with one cmd-Z. Helpers that take a `Repo`
+   *  parameter join the group simply by being handed the facade.
+   *
+   *  Wrap-site convention: name the callback parameter `repo`,
+   *  shadowing the raw repo — that way an out-of-habit `repo.tx(...)`
+   *  inside the group cannot silently open a foreign tx and split it.
+   *
+   *  Semantics to be aware of:
+   *   - Merging is top-of-stack only: a foreign tx (one opened on the
+   *     plain repo, e.g. a background write) landing mid-group SPLITS
+   *     the group into two entries rather than folding across it.
+   *   - No atomicity: each tx still commits independently. If a later
+   *     tx throws, the committed prefix stays applied and remains
+   *     covered by the (single) group entry; the error propagates.
+   *   - Nested `undoGroup` on the facade joins the OUTER group — one
+   *     user-perceived action, one entry.
+   *   - The facade must not escape the callback: its token never
+   *     expires, so a leaked reference would stamp far-future txs into
+   *     a long-dead group (see the `block` override below for the one
+   *     leak path that existed).
+   *   - Grouping covers `tx` / `mutate` / `run` and the TypeTagger
+   *     convenience writes. Two write styles deliberately do NOT join:
+   *     Block-facade sugar (`grouped.block(id).setContent(...)` routes
+   *     through `block.repo` = the real repo — a group-bound Block
+   *     would be exactly the leak the `block` override closes) and
+   *     stateful service writes (`userSchemas` / `userTypes` /
+   *     `projectors` — constructed against the real repo; a
+   *     facade-hosted twin would clobber their shared contribution
+   *     buckets). Both land as foreign txs and split the group; use
+   *     `grouped.tx` / `grouped.mutate` inside a group instead.
+   *   - Everything not overridden delegates to the real repo via the
+   *     prototype chain and therefore runs with the facade as `this` —
+   *     safe for reads and shared-object mutation, NOT safe for three
+   *     hazard classes (shared-state minting, instance-field
+   *     assignment, construction-captured collaborators), which the
+   *     overrides in {@link groupedFacade} cover — each carries its
+   *     rationale at the override. The classification rubric and the
+   *     structural enforcement live in `repoFacadeGate.test.ts`, which
+   *     fails on any Repo member that is neither overridden nor
+   *     consciously allowlisted. */
+  async undoGroup<R>(fn: (grouped: Repo) => Promise<R>): Promise<R> {
+    return fn(this.groupedFacade(this.newId()))
+  }
+
+  /** Build the group-injecting facade for {@link undoGroup}. */
+  private groupedFacade(groupId: string): Repo {
+    const facade = Object.create(this) as Repo
+    const tx = <R,>(fn: (tx: Tx) => Promise<R>, opts: RepoTxOptions): Promise<R> =>
+      this.tx(fn, {...opts, groupId})
+    const run = ((name: string, args: unknown) =>
+      this.dispatchMutator(name, groupId)(args)) as Repo['run']
+    const mutate = nameDispatchProxy<MutateProxy>(name => this.dispatchMutator(name, groupId))
+    // Async so a synchronously-throwing callback rejects like the outer
+    // `undoGroup` does instead of throwing through the caller.
+    const undoGroup = async <R,>(inner: (grouped: Repo) => Promise<R>): Promise<R> =>
+      inner(facade)
+    // `block()` on a cache miss mints `new Block(this, id)` into the
+    // repo-wide `blockFacades` identity map. With the facade as `this`
+    // that would cache a facade-bound Block FOREVER — every later
+    // ordinary edit through it (`setContent`, `set`, `delete` route
+    // through `block.repo`) would carry this group's token and merge
+    // into the long-dead group's entry (one cmd-Z would then revert an
+    // unrelated edit plus the whole composite). Mint through the real
+    // repo so shared state only ever holds real-repo Blocks.
+    const block = (id: string): Block => this.block(id)
+    // The TypeTagger convenience writes (`addType` & co.) open their own
+    // txs through the tagger's construction-captured host — the REAL
+    // repo — so on the facade they would silently escape the group and
+    // split it. A facade-hosted tagger (TypeTagger is a stateless
+    // wrapper; the facade satisfies TypeTaggerHost structurally, with
+    // grouped `tx`) keeps the documented "helpers join by being handed
+    // the facade" contract true for them. The `*InTx` variants write
+    // into a caller-provided tx and need no override.
+    const groupedTagger = new TypeTagger(facade)
+    const addType: Repo['addType'] = (blockId, typeId, initialValues = {}) =>
+      groupedTagger.addType(blockId, typeId, initialValues)
+    const removeType: Repo['removeType'] = (blockId, typeId) =>
+      groupedTagger.removeType(blockId, typeId)
+    const toggleType: Repo['toggleType'] = (blockId, typeId) =>
+      groupedTagger.toggleType(blockId, typeId)
+    const setBlockTypes: Repo['setBlockTypes'] = (blockId, typeIds) =>
+      groupedTagger.setBlockTypes(blockId, typeIds)
+    // Shared-state minting, part 2: `runQuery` (the dynamic dispatch
+    // entry point — exactly helper-shaped) would store a LoaderHandle
+    // whose loader and QueryCtx capture the facade into the SHARED
+    // handle store, where every future invalidation-driven re-resolve
+    // would see `ctx.repo` = the long-dead facade. Query resolution is
+    // never group-bound; delegate.
+    const runQuery: Repo['runQuery'] = (name, args) => this.runQuery(name, args)
+    // Deferred-job scheduling captures `this` into shared job queues
+    // that fire long after the group's lifetime — a facade-bound job
+    // would open GROUPED txs minutes later and merge system writes into
+    // the dead entry. Never group-bound; delegate.
+    const scheduleWorkspaceBackfills: Repo['scheduleWorkspaceBackfills'] = (ws) =>
+      this.scheduleWorkspaceBackfills(ws)
+    const scheduleWorkspaceRefBackfill: Repo['scheduleWorkspaceRefBackfill'] = (ws) =>
+      this.scheduleWorkspaceRefBackfill(ws)
+    const scheduleWorkspaceSeedMaterialization: Repo['scheduleWorkspaceSeedMaterialization'] =
+      (ws, freshlyCreated) => this.scheduleWorkspaceSeedMaterialization(ws, freshlyCreated)
+    const scheduleReconcileRescan: Repo['scheduleReconcileRescan'] = (ws) =>
+      this.scheduleReconcileRescan(ws)
+    const scheduleReferenceTargetDerivePass: Repo['scheduleReferenceTargetDerivePass'] = (ws) =>
+      this.scheduleReferenceTargetDerivePass(ws)
+    // Field-assigning members: run with the facade as `this`, the
+    // assignment would create a shadow property on the facade and the
+    // real repo would never see it (silent state divergence). Delegate
+    // explicitly. `undo`/`redo` belong here because `_runAndDispatch`
+    // assigns `slowestTx` mid-flight; the sync-observer pair assigns
+    // `syncObserver` (a shadowed stop would strand the real repo with a
+    // disposed observer it believes is live). `setActiveWorkspaceId`
+    // still reassigns `seedMaterializationGeneration` on a switch.
+    // `setActiveLayoutSessionId`'s state moved onto the shared
+    // ClientContext (interior mutation — safe through the chain), but it
+    // stays delegated so the acting-as setter pair keeps one facade shape.
+    const setActiveWorkspaceId: Repo['setActiveWorkspaceId'] = (id) =>
+      this.setActiveWorkspaceId(id)
+    const setActiveLayoutSessionId: Repo['setActiveLayoutSessionId'] = (id) =>
+      this.setActiveLayoutSessionId(id)
+    const setReadOnly: Repo['setReadOnly'] = (value) => this.setReadOnly(value)
+    const undo: Repo['undo'] = (scope) => this.undo(scope)
+    const redo: Repo['redo'] = (scope) => this.redo(scope)
+    const startSyncObserver: Repo['startSyncObserver'] = (options) =>
+      this.startSyncObserver(options)
+    const stopSyncObserver: Repo['stopSyncObserver'] = () => this.stopSyncObserver()
+    const resetMetrics: Repo['resetMetrics'] = () => this.resetMetrics()
+    return Object.assign(facade, {
+      tx, run, mutate, undoGroup, block, runQuery,
+      addType, removeType, toggleType, setBlockTypes,
+      scheduleWorkspaceBackfills, scheduleWorkspaceRefBackfill,
+      scheduleWorkspaceSeedMaterialization, scheduleReconcileRescan,
+      scheduleReferenceTargetDerivePass,
+      setActiveWorkspaceId, setActiveLayoutSessionId, setReadOnly, undo, redo,
+      startSyncObserver, stopSyncObserver, resetMetrics,
+    })
   }
 
   /** Shared `runTx` + processor-dispatch path. Used by both `tx`
@@ -1102,6 +1785,26 @@ export class Repo {
   ) {
     const txT0 = performance.now()
     let result
+    // A workspace pin starts the definition projector asynchronously. Delay
+    // active-workspace transactions at the one shared boundary so callers
+    // cannot capture declaration-only seed winners during that short window.
+    // The wait is generation-bound: a workspace switch rejects it instead of
+    // letting the queued transaction drift into a different workspace.
+    const readinessWorkspaceId = this.client.activeWorkspaceId
+    const readinessGenerationToken = this.projectors.generationToken
+    if (readinessWorkspaceId) {
+      await this.whenPropertyDefinitionsReady(readinessWorkspaceId)
+      if (
+        this.client.activeWorkspaceId !== readinessWorkspaceId
+        || this.projectors.generationToken !== readinessGenerationToken
+      ) {
+        throw new Error(
+          `[Repo.tx] active workspace generation changed while waiting for ${readinessWorkspaceId}`,
+        )
+      }
+    }
+    const capturedActivePropertyDefinitions = this._propertyDefinitionRegistry
+    const capturedPreviousPropertyDefinitions = this._previousPropertyDefinitionRegistry
     try {
       result = await runTx({
         db: this.db,
@@ -1113,11 +1816,24 @@ export class Repo {
         newTxId: this.newId,
         newTxSeq: this.newTxSeq,
         newId: this.newId,
+        blockIdPolicy: this.blockIdPolicy,
         now: this.now,
         mutators: this.mutators,
         processors: this.processors,
         sameTxProcessors: this.sameTxProcessors,
         propertySchemas: this._propertySchemas,
+        // Serve the tx's active-at-start workspace, or the retained previous one,
+        // from their frozen snapshots; any other workspace resolves null (fail
+        // closed). Frozen at tx-start so a mid-tx workspace switch can't re-scope
+        // resolution for the workspace the tx is operating on.
+        propertyDefinitionRegistryForWorkspace:
+          workspaceId => registryForWorkspace(
+            capturedActivePropertyDefinitions,
+            capturedPreviousPropertyDefinitions,
+            workspaceId,
+          ),
+        propertySchemaWorkspaceId: this.client.activeWorkspaceId,
+        propertySeedNameCounts: this._propertySeedNameCounts,
         // Undo/redo replays skip the same-tx processor pass so a
         // value-deriving processor can't override `applyRaw`'s exact
         // restore (#187). Post-commit processors still dispatch below.
@@ -1198,8 +1914,37 @@ export class Repo {
       : action
     await this._runAndDispatch(async (tx) => {
       const txImpl = tx as TxImpl
-      for (const [id, snap] of entry.snapshots) {
-        await txImpl.applyRaw(id, snap[direction])
+      // Start from replayApplicationOrder's topological order (see its
+      // docblock in txSnapshots.ts for the parent-before-child
+      // rationale), then worklist-retry rows a row-level trigger
+      // rejects — the topo sort can't express RESOURCE constraints
+      // between equal-depth rows. Undoing a merge of two
+      // alias-carrying blocks must revert the target (releasing the
+      // merged alias) before restoring the source (re-claiming it). A
+      // statement-level RAISE(ABORT) only rolls back that statement, so
+      // deferring the aborted row and applying the rest is safe; the
+      // replay's end state is a previously-observed valid state, so
+      // every constraint-blocked row eventually unblocks — a full pass
+      // with zero progress means the entry itself is inconsistent, and
+      // we rethrow.
+      let pending = replayApplicationOrder(entry.snapshots, direction)
+      while (pending.length > 0) {
+        const deferred: typeof pending = []
+        let lastError: unknown = null
+        for (const [id, target] of pending) {
+          try {
+            await txImpl.applyRaw(id, target)
+          } catch (err) {
+            if (parseAliasCollisionError(err) !== null || parseParentDeletedError(err) !== null) {
+              deferred.push([id, target])
+              lastError = err
+            } else {
+              throw err
+            }
+          }
+        }
+        if (deferred.length === pending.length) throw lastError
+        pending = deferred
       }
     }, {scope: entry.scope, description}, true)
   }
@@ -1246,8 +1991,43 @@ export class Repo {
   subscribeBlocks(
     query: TypedBlockQuery,
     listener: (rows: BlockData[]) => void,
+    options?: {
+      /** Projector-only mode: suppress cached delivery and emit exactly one
+       * fresh initial snapshot before forwarding later live changes. */
+      freshInitial?: boolean
+      onInitialError?: (error: unknown) => void
+    },
   ): Unsubscribe {
     const handle = this.query.typedBlocks(this.resolveTypedBlockQuery(query))
+    if (options?.freshInitial) {
+      let initialPending = true
+      const unsubscribe = handle.subscribe(rows => {
+        if (!initialPending) listener(rows)
+      })
+      // Bounded retry: a transient initial-load fault must not settle projector
+      // readiness as failed for the whole generation (which would wedge every
+      // active-workspace transaction until the next re-pin). Only a persistent
+      // failure reaches onInitialError.
+      const cancelLoad = runFreshInitialLoad(
+        () => handle.loadFresh(),
+        rows => {
+          initialPending = false
+          try {
+            listener(rows)
+          } catch (error) {
+            options.onInitialError?.(error)
+          }
+        },
+        error => {
+          initialPending = false
+          options.onInitialError?.(error)
+        },
+      )
+      return () => {
+        cancelLoad()
+        unsubscribe()
+      }
+    }
     const current = handle.peek()
     if (current !== undefined) queueMicrotask(() => listener(current))
     return handle.subscribe(listener)
@@ -1335,6 +2115,20 @@ export class Repo {
    *  the static-facet bundle the kernel ships. */
   setFacetRuntime(runtime: FacetRuntime): void {
     this.facetBridge.setFacetRuntime(runtime)
+    if (this.client.activeWorkspaceId) {
+      try {
+        this.projectors.pinWorkspace(this.client.activeWorkspaceId)
+      } catch (error) {
+        // A changed descriptor set can fail both its incoming start and the
+        // attempted restoration under this same replacement runtime. Keep the
+        // Repo/filter pin honest with the projector runtime so an explicit
+        // workspace retry is not suppressed.
+        const restoredWorkspaceId = this.projectors.workspaceId
+        this._client.setActiveWorkspaceId(restoredWorkspaceId)
+        this.facetBridge.setActiveWorkspaceId(restoredWorkspaceId)
+        throw error
+      }
+    }
   }
 
   /** Replace the runtime contribution bucket for `facet` keyed by
@@ -1345,33 +2139,33 @@ export class Repo {
    *
    *  OWNERSHIP CONTRACT: the bucket is DURABLE — it survives `setFacetRuntime`
    *  swaps via `FacetRuntime.adoptDurableContributionsFrom`, and the Repo is a
-   *  per-user singleton reused across workspace switches. A writer that owns a
-   *  workspace-scoped bucket (e.g. `UserSchemasService` / `UserTypesService`)
-   *  MUST clear it — `setRuntimeContributions(facet, sourceId, [])` — when it
-   *  tears down on a workspace switch, or the previous workspace's data is
-   *  adopted into the next workspace's runtime until the new bucket rebuilds.
-   *  (This is the leak fixed in `UserSchemasService.dispose`.) */
+   *  per-user singleton reused across workspace switches. Workspace-scoped
+   *  buckets are filtered synchronously by the Repo pin, so they cannot bleed
+   *  into another workspace. Their owner still clears the captured workspace's
+   *  bucket on teardown to bound retained/adopted state and ensure a later
+   *  restart rebuilds from the current rows. */
   setRuntimeContributions<Input>(
     facet: Facet<Input, unknown>,
     sourceId: string,
     contributions: readonly Input[],
+    options?: WorkspaceRuntimeContributionOptions,
   ): void {
-    this.facetBridge.setRuntimeContributions(facet, sourceId, contributions)
+    this.facetBridge.setRuntimeContributions(facet, sourceId, contributions, options)
   }
 
   /** Subscribe to changes on `_propertySchemas`. Fires when
-   *  `setFacetRuntime` rebuilds the schema map AND when
-   *  `setRuntimeContributions(propertySchemasFacet, ...)` updates the
-   *  user-data bucket. Used by `usePropertySchemas` so React rerenders
-   *  on user-schema add/edit/remove without a runtime swap. */
+   *  `setFacetRuntime` rebuilds the schema map AND when a projected
+   *  definition (user-schema) contribution updates the user-data bucket.
+   *  Used by `usePropertySchemas` so React rerenders on user-schema
+   *  add/edit/remove without a runtime swap. */
   onPropertySchemasChange(listener: () => void): () => void {
     return this.facetBridge.onPropertySchemasChange(listener)
   }
 
   /** Subscribe to changes on `_types`. Fires whenever the rebuild step
    *  that owns `_types` re-runs — i.e. after `setFacetRuntime` AND
-   *  after `setRuntimeContributions(typesFacet, ...)` publishes into
-   *  the user-data bucket. Symmetric to `onPropertySchemasChange`.
+   *  after `setRuntimeContributions(typeSeedsFacet | projectedTypeDefinitionsFacet, ...)`
+   *  publishes into the user-data bucket. Symmetric to `onPropertySchemasChange`.
    *  Consumers (e.g. `createTypeBlock` waiting for `UserTypesService`
    *  to publish a freshly-committed type-definition block) recheck
    *  `repo.types` inside the listener; spurious firings are tolerated. */
@@ -1458,6 +2252,16 @@ export class Repo {
     workspaceId: string,
   ): Promise<void> {
     if (this.isReadOnly || propertyNames.length === 0 || !workspaceId) return
+    // Workspace-isolation gate: only backfill the ACTIVE workspace's refs. This
+    // scan is deferred (deep-idle, up to ~30 s), so by the time it fires the user
+    // may have switched away — reprojecting a workspace they've left would write
+    // derived `references` into a non-open workspace's blocks. Skip it (leaving
+    // its marker unset) so it re-runs when that workspace is next opened
+    // (`scheduleWorkspaceRefBackfill` on bootstrap). This mirrors the
+    // seed-materialization access gate. A switch DURING the scan is still handled
+    // by the per-block frozen-snapshot fallback below and by `repo.tx`'s readiness
+    // gate, which cancels a tx parked across an active-workspace flip.
+    if (this.client.activeWorkspaceId !== workspaceId) return
     const t0 = performance.now()
     let blocksUpdated = 0
     let scanScheduled = false
@@ -1470,7 +2274,7 @@ export class Repo {
       // later takes a *fresh* `liveSchemas` snapshot (after the SELECT), so it
       // still reconciles against a redefine that lands while the scan is in
       // flight (see the `does not let an older … reprojection re-add` test).
-      const liveSchemasAtGate = this._activeWorkspaceId === workspaceId
+      const liveSchemasAtGate = this.client.activeWorkspaceId === workspaceId
         ? this._propertySchemas
         : propertySchemas
 
@@ -1560,7 +2364,7 @@ export class Repo {
       // workspace switch fall back to the scheduled snapshot so the other
       // workspace's schema set can't decide ref-ness for the captured
       // workspace's blocks.
-      const liveSchemas = this._activeWorkspaceId === workspaceId
+      const liveSchemas = this.client.activeWorkspaceId === workspaceId
         ? this._propertySchemas
         : propertySchemas
 
@@ -1675,11 +2479,26 @@ export class Repo {
     // scheduled for the workspace whose schemas actually changed. No active
     // workspace (bootstrap, before any workspace opens) ⇒ nothing to scope, so
     // there's nothing to backfill yet — skip.
-    const workspaceId = this._activeWorkspaceId
+    const workspaceId = this.client.activeWorkspaceId
     if (!workspaceId) return
     this.reprojectionJobs.schedule(() =>
       this.reprojectRefTypedProperties(names, schemas, workspaceId),
     )
+  }
+
+  /** Schedule a marker-gated reprojection over every ref-typed schema in the
+   *  active workspace. Called once per workspace open from `bootstrapWorkspace`
+   *  (the sibling of `scheduleWorkspaceBackfills`): a freshly-opened workspace
+   *  backfills its existing rows' derived references even when a ref-typed name
+   *  is unchanged from a previously-active workspace — which the facet bridge's
+   *  `changedRefSchemaNames` diff can't see. The reprojection markers are
+   *  `(workspaceId, name)`-keyed, so subsequent opens are a no-op. Scheduling on
+   *  workspace OPEN (not on every raw pin) keeps deferred scans off unrelated
+   *  in-session workspace flips. */
+  scheduleWorkspaceRefBackfill(workspaceId: string): void {
+    if (this.isReadOnly || !workspaceId || workspaceId !== this.client.activeWorkspaceId) return
+    const refNames = refTypedSchemaNames(this._propertySchemas)
+    if (refNames.length > 0) this.scheduleReprojection(refNames, this._propertySchemas)
   }
 
   /** Test escape hatch — drop the in-memory marker mirror so the next
@@ -1687,6 +2506,26 @@ export class Repo {
    *  that mutate the table out-of-band to simulate cross-session state. */
   __resetReprojectionMarkerCache(): void {
     this.reprojectionMarkers.reset()
+  }
+
+  /**
+   * Ensure every registered system page (`systemPagesFacet`) exists for
+   * `workspaceId`. Called at workspace bootstrap BEFORE the landing resolver
+   * seeds, so a `[[reserved alias]]` wiki-link (Journal/Properties/Types/
+   * Locations) resolves to the canonical page instead of auto-creating a rival
+   * that trips `alias.collision`. Each `ensure` get-or-creates at a
+   * deterministic id (idempotent), so repeated bootstraps and offline-
+   * converging clients all land on the same rows.
+   *
+   * Reads off this Repo's own `facetRuntime` — which carries the data-layer
+   * contributions installed at construction (`staticDataExtensions`) — so no
+   * separate runtime resolution is needed. Awaited (not deferred): the pages
+   * must exist before the seed's references parse.
+   */
+  async ensureSystemPages(workspaceId: string): Promise<void> {
+    if (!workspaceId) return
+    const pages = this.facetRuntime?.read(systemPagesFacet) ?? []
+    await Promise.all(pages.map(page => page.ensure(this, workspaceId)))
   }
 
   /**
@@ -1705,42 +2544,1264 @@ export class Repo {
    * returns immediately; tests drain via `awaitWorkspaceBackfills()`.
    */
   scheduleWorkspaceBackfills(workspaceId: string): void {
-    if (this.isReadOnly || !workspaceId || this._workspaceBackfills.length === 0) return
-    const backfills = this._workspaceBackfills
-    this.workspaceBackfillJobs.schedule(() =>
-      this.runWorkspaceBackfills(workspaceId, backfills),
-    )
+    if (this.isReadOnly || !workspaceId) return
+    // `operator` passes are excluded HERE rather than inside the runner, so
+    // that "nothing automatic starts one" is true of the scheduler itself and
+    // not a condition some later caller of `runWorkspaceBackfills` could
+    // forget. `runWorkspaceBackfillNow` is their only entry point.
+    const backfills = this._workspaceBackfills.filter(b => b.trigger === 'workspace-open')
+    if (backfills.length === 0) return
+    const generation = this.workspaceGeneration
+    {
+      // A backfill must not write while this device is behind the server: its
+      // writes upload a whole `properties_json` bag, so a stale row drops
+      // concurrent edits from elsewhere (#237), and its one-shot marker makes a
+      // half-scanned run permanent.
+      //
+      // NOT `onFirstSync` — `hasSynced` persists across sessions, so it fires
+      // synchronously on every warm client and gates nothing.
+      //
+      // Gate FIRST, then defer to idle: an idle job that awaited the gate from
+      // inside would never settle on a device that never connects, parking a
+      // promise in the drain set forever and hanging
+      // `awaitWorkspaceBackfills`. A session that never catches up therefore
+      // schedules nothing, which is correct for catch-up work.
+      const arm = (): void => {
+        this.disposeBackfillSyncGate?.()
+        this.disposeBackfillSyncGate = this.backfillSyncGate(() => {
+          this.disposeBackfillSyncGate = undefined
+          this.workspaceBackfillJobs.schedule(async () => {
+            // The automatic path discards the outcome — nobody is waiting to
+            // be told. Only the operator entry point reads it.
+            await this.runWorkspaceBackfills(workspaceId, backfills, generation)
+          })
+        })
+      }
+      arm()
+    }
   }
 
+  /**
+   * Materialize the code-declared property seeds visible to the installed
+   * runtime into real `property-schema` blocks under the workspace's Properties
+   * page (§4.3 of the schema-unification design). This is what makes seeded
+   * definitions visible/editable in the UI and available to clients that don't
+   * have the contributing plugin loaded; the in-memory registry itself works
+   * with zero rows, so this pass never blocks correctness.
+   *
+   * Organic + deferred: scheduled off the critical path (`scheduleDeepIdle` /
+   * `CATCHUP_DEEP_IDLE`, same scheme as `scheduleWorkspaceBackfills`) and re-run
+   * on every seed-set change — create/restore-only + idempotent, so steady state
+   * is a single probe SELECT that short-circuits on `seed:revision`. Passes
+   * COALESCE per workspace (one pending pass at a time); the pass reads the
+   * workspace's current seed set at run time, and only if that workspace is still
+   * the active/projected one, so a coalesced set-grow is picked up and a
+   * switched-away workspace is skipped.
+   *
+   * The deferred job awaits `awaitPropertySeedMaterializationAccess`, which
+   * (for a non-freshly-created workspace) waits for the membership row before
+   * writing — a fresh device defaults a not-yet-synced role to writable, so a
+   * bare `isReadOnly` check would let a viewer enqueue ~100 RLS-rejected creates.
+   * The early `isReadOnly` guard is a cheap short-circuit for a genuinely
+   * read-only session; the gate is the authoritative check.
+   */
+  /** The current property + type seed declarations for `workspaceId`, or empty
+   *  arrays when a registry is absent or pinned to a different workspace. Read
+   *  live (not snapshotted) so a coalesced pass materializes the latest set. */
+  private workspaceSeeds(workspaceId: string) {
+    const propertyRegistry = this._propertyDefinitionRegistry
+    const typeRegistry = this._typeDefinitionRegistry
+    return {
+      propertySeeds: propertyRegistry?.workspaceId === workspaceId
+        ? [...propertyRegistry.seedsByKey.values()]
+        : [],
+      // Materialize exactly the registry's winners: one backing block per membership
+      // id (the lowest-seed-key winner from `seedKeyById`), and never a contested-KEY
+      // seed (its keep-first winner is contribution-order-dependent, so the
+      // create/restore-only pass would strand a stale mirror on a later reorder). A
+      // membership-id collision is winner-resolved rather than withheld — the id's one
+      // stable winner materializes, its losers don't. `materializingTypeSeeds` is the
+      // shared derivation, so this agrees with the block-id binding and the scheduled
+      // recheck.
+      typeSeeds: typeRegistry?.workspaceId === workspaceId
+        ? materializingTypeSeeds(typeRegistry)
+        : [],
+    }
+  }
+
+  scheduleWorkspaceSeedMaterialization(workspaceId: string, freshlyCreated: boolean): void {
+    if (this.isReadOnly || !workspaceId) return
+    // Gate on EITHER registry: a type-seed-only change must still schedule a pass.
+    const {propertySeeds, typeSeeds} = this.workspaceSeeds(workspaceId)
+    if (propertySeeds.length === 0 && typeSeeds.length === 0) return
+    // Coalesce: one pending pass per workspace. Repeated seed-set changes while a
+    // pass is parked on the membership wait would otherwise stack a job + a
+    // `workspace_members` subscription each; the pending pass reads the latest
+    // seed set at run time, so a coalesced change is still materialized — UNLESS
+    // the change lands after the pass snapshotted its seeds (or under an aborted
+    // signal), which the running pass can't pick up. Mark dirty so the running
+    // job re-runs once more rather than silently dropping it.
+    if (this.pendingSeedMaterializationWorkspaces.has(workspaceId)) {
+      this.dirtySeedMaterializationWorkspaces.add(workspaceId)
+      return
+    }
+    this.pendingSeedMaterializationWorkspaces.add(workspaceId)
+    this.seedMaterializationJobs.schedule(async () => {
+      try {
+        // Re-run while dirty: a seed-set change that coalesced onto this pass
+        // after it snapshotted its seeds — or a switch-away that aborted it — sets
+        // the dirty bit; loop so the change materializes without waiting for the
+        // next unrelated change or a workspace reopen. The bit is cleared BEFORE
+        // each run so a change landing during the run re-arms it. Re-fetch the
+        // live generation each iteration: a switch-away aborts the prior one, so a
+        // re-run for a (now re-active) workspace must use the current signal, not
+        // the stale aborted one. `runWorkspaceSeedMaterialization` re-checks the
+        // active/projected workspace and reads the latest seeds, so a run whose
+        // workspace has gone away is a cheap no-op rather than a wrong write.
+        // Kept inside ONE scheduled job (not a re-schedule) so the drain barrier's
+        // single pending promise still covers the whole cascade.
+        do {
+          this.dirtySeedMaterializationWorkspaces.delete(workspaceId)
+          await this.runWorkspaceSeedMaterialization(
+            workspaceId, freshlyCreated, this.seedMaterializationGeneration.signal,
+          )
+        } while (this.dirtySeedMaterializationWorkspaces.has(workspaceId))
+      } finally {
+        this.pendingSeedMaterializationWorkspaces.delete(workspaceId)
+        this.dirtySeedMaterializationWorkspaces.delete(workspaceId)
+      }
+    })
+  }
+
+  private async runWorkspaceSeedMaterialization(
+    workspaceId: string,
+    freshlyCreated: boolean,
+    signal: AbortSignal,
+  ): Promise<void> {
+    try {
+      const access = await awaitPropertySeedMaterializationAccess(this, workspaceId, {freshlyCreated, signal})
+      if (!access.allowed) return
+    } catch (err) {
+      // A superseded generation (the user switched workspaces) aborts the parked
+      // access wait — expected, not a failure to log or retry. Gate on OUR signal
+      // so an unrelated AbortError-named failure still surfaces.
+      if (signal.aborted && err instanceof Error && err.name === 'AbortError') return
+      const reason = err instanceof Error ? err.message : String(err)
+      console.error(`[seedMaterialization] workspace ${workspaceId} access wait failed: ${reason}`)
+      return
+    }
+    // Property and type seeds back INDEPENDENT pages (Properties / Types), so run
+    // each kind as its own isolated pass: a failure materializing one (e.g. a
+    // deterministic id occupied by a foreign row) must NOT suppress the other, and
+    // each rechecks the abort signal first so a switch-away landing between the two
+    // can't create backing blocks in the workspace the user just left.
+    await this.materializeSeedKind(workspaceId, signal, 'property')
+    await this.materializeSeedKind(workspaceId, signal, 'type')
+  }
+
+  private async materializeSeedKind(
+    workspaceId: string,
+    signal: AbortSignal,
+    kind: 'property' | 'type',
+  ): Promise<void> {
+    if (signal.aborted) return
+    try {
+      // `workspaceSeeds` reads live (see its doc); one extra consequence here is
+      // that a registry rotated by a switch-away yields an empty set for the
+      // departed workspace, making this a cheap no-op.
+      const {propertySeeds, typeSeeds} = this.workspaceSeeds(workspaceId)
+      // Pass `revalidateAgainstRegistry: true`: this snapshot can go stale during the
+      // materializer's awaits (probe / ensure / tx setup), so the write path rechecks
+      // each seed against the live registry before committing (§4.3 phantom guard).
+      if (kind === 'property') {
+        if (propertySeeds.length > 0) await materializePropertySeeds(this, workspaceId, propertySeeds, signal, true)
+      } else if (typeSeeds.length > 0) {
+        await materializeTypeSeeds(this, workspaceId, typeSeeds, signal, true)
+      }
+    } catch (err) {
+      if (signal.aborted && err instanceof Error && err.name === 'AbortError') return
+      const reason = err instanceof Error ? err.message : String(err)
+      console.error(
+        `[seedMaterialization] workspace ${workspaceId} ${kind} seeds failed (will retry next open/seed change): ${reason}`,
+      )
+    }
+  }
+
+  /** Test helper — drains seed-materialization passes whose deferral timer has
+   *  fired. Mirror of `awaitWorkspaceBackfills`. */
+  async awaitSeedMaterialization(): Promise<void> {
+    await this.seedMaterializationJobs.drain()
+  }
+
+  /** Thrown when a precondition that can CLEAR ON ITS OWN blocks the pass —
+   *  the device fell behind, rows are staging, the workspace changed. Typed so
+   *  the runner can re-arm instead of writing the pass off for the session. */
+  private static readonly TRANSIENT = 'backfill-precondition'
+
+  /** Preconditions every backfill transaction must still satisfy. Separate
+   *  from the scheduling gate because scheduling proves a fact at one instant
+   *  and a chunked pass writes over many. */
+  /** Is this workspace's property registry primed?
+   *
+   *  `propertySchemaResolverForWorkspace` falls back to a resolver that
+   *  answers `identity-unavailable` for EVERY name when the snapshot is null
+   *  or belongs to another workspace. That is indistinguishable, at the call
+   *  site, from "this key genuinely has no definition" — and a backfill that
+   *  reads it as the latter concludes there is nothing to migrate, writes
+   *  nothing, and then records a PERMANENT per-graph completion.
+   *
+   *  UNPINNED BY A TEST, and labelled so rather than left looking covered.
+   *  Reaching an unprimed registry from a constructed Repo is a race: the
+   *  runtime primes one asynchronously, so a test that leaves it absent (or
+   *  sets it for another workspace) is green or red depending on which side
+   *  of that priming the deferred job lands — measured, twice, as green
+   *  locally and red on CI. Pinning it wants a Repo whose priming is
+   *  injectable, which does not exist yet. */
+  private propertyRegistryReadyFor(workspaceId: string): boolean {
+    return registryForWorkspace(
+      this._propertyDefinitionRegistry,
+      this._previousPropertyDefinitionRegistry,
+      workspaceId,
+    ) !== null
+  }
+
+  /** Is this device caught up right now? Same predicate the scheduler gates
+   *  on, sampled synchronously — `backfillSyncGate` fires its callback
+   *  immediately when settled, so an unfired callback means "not settled". */
+  private backfillSyncSettledNow(): boolean {
+    let settled = false
+    this.backfillSyncGate(() => { settled = true })()
+    return settled
+  }
+
+  /** When this device last COMPLETED a sync, or undefined if it never has (or
+   *  there is no sync layer). Persisted by PowerSync across sessions, so on a
+   *  warm client it is last session's — which is exactly why it is worth
+   *  reporting: it says how current the local rows a full-graph read scanned
+   *  actually are. A basis to state, never a freshness gate: it does not
+   *  advance on a connected idle graph, so refusing on its staleness would
+   *  make a pre-flip audit unusable on exactly the quiet graph you audit. */
+  get lastSyncedAt(): Date | undefined {
+    return (this.db as {currentStatus?: {lastSyncedAt?: Date}}).currentStatus?.lastSyncedAt
+  }
+
+  /**
+   * Why this device's view of the graph is INCOMPLETE right now, or null when
+   * nothing is outstanding. There are two independent ways to be behind and a
+   * full-graph read is only trustworthy when NEITHER holds:
+   *   - "downloaded" is not "materialized" — the sync observer stages arrivals
+   *     in `blocks_synced_changes` and drains them into `blocks` in throttled
+   *     windows, so the status reads settled while rows are still queued;
+   *   - the device is behind the server, with rows not yet downloaded at all.
+   *
+   * A local-only session still gets a real PowerSyncDatabase and simply never
+   * connects, so the default gate (connected && !downloading) would never
+   * open. `backfillSyncGate` is injected to fire immediately there
+   * (`src/context/repo.tsx`) — that injection is load-bearing, not redundant:
+   * without it this refuses forever on a device that will never connect.
+   *
+   * The text is the CAUSE only; callers state their own consequence. Shared
+   * between the backfill runner (which must not write from a stale view) and
+   * `audit-properties` (which reports it) — one predicate, because a rule
+   * added to one of two copies is how these diverge.
+   */
+  async syncViewGap(): Promise<string | null> {
+    const staged = await this.db.getOptional<{one: number}>(
+      'SELECT 1 AS one FROM blocks_synced_changes LIMIT 1',
+    )
+    if (staged !== null) return 'synced rows are still draining into `blocks`'
+    if (!this.backfillSyncSettledNow()) {
+      return 'this device is not caught up with the server '
+        + '(still downloading, disconnected, or a download error)'
+    }
+    return null
+  }
+
+  private async assertBackfillMayWrite(
+    workspaceId: string,
+    backfillId: string,
+    generation: number,
+  ): Promise<void> {
+    if (this.workspaceGeneration !== generation) {
+      throw Object.assign(new Error(
+        `[workspaceBackfills] "${backfillId}" aborted: workspace ${workspaceId} was ` +
+        `re-opened since this pass was scheduled. The earlier visit's job must not ` +
+        `write into the new one.`,
+      ), {kind: Repo.TRANSIENT})
+    }
+    if (this._client.activeWorkspaceId !== workspaceId) {
+      throw Object.assign(new Error(
+        `[workspaceBackfills] "${backfillId}" aborted: workspace ${workspaceId} is no ` +
+        `longer active. Its writes would land under the current session's access state.`,
+      ), {kind: Repo.TRANSIENT})
+    }
+    // Re-sampled per transaction while the write lock is held, so a drain
+    // cannot commit between this check and the write. Reading through
+    // `this.db` rather than the tx handle is deliberate: the drain is excluded
+    // by the lock, not by read isolation.
+    const gap = await this.syncViewGap()
+    if (gap !== null) {
+      throw Object.assign(new Error(
+        `[workspaceBackfills] "${backfillId}" aborted: ${gap}. This pass would scan an ` +
+        `incomplete view of the graph and upload a properties bag built from it.`,
+      ), {kind: Repo.TRANSIENT})
+    }
+  }
+
+  /**
+   * Run ONE `operator`-triggered backfill now, because a human asked.
+   *
+   * The deliberate act is the point: a once-per-graph pass that uploads
+   * source-of-truth rows cannot be made exactly-once by machinery over a
+   * last-write-wins sync layer, so it is made exactly-once by a person
+   * running it in one place. The completion claim then records it so other
+   * devices skip — recording needs no arbitration, since a duplicate "done"
+   * is harmless.
+   *
+   * Everything else is the automatic path's: sync gating, the per-transaction
+   * preconditions, `BlockDefault` scope, `skipUndo`, and the claim. Returns
+   * what happened so a caller can tell the operator, rather than logging into
+   * the void.
+   */
+  async runWorkspaceBackfillNow(
+    workspaceId: string,
+    backfillId: string,
+  ): Promise<OperatorBackfillResult> {
+    if (this.isReadOnly) return {outcome: 'read-only', undoHistoryCleared: false}
+    const backfill = this._workspaceBackfills.find(
+      b => b.id === backfillId && b.trigger === 'operator',
+    )
+    if (!backfill) return {outcome: 'not-found', undoHistoryCleared: false}
+    // Single-flight per (workspace, backfill). Two invocations in ONE Repo —
+    // an operator double-clicking, or clicking again during a long pass —
+    // share a claimant, so the second would read the first's claim as its own
+    // and proceed. Then either one aborting releases the claim they SHARE
+    // while the other is still writing, and the survivor's `markComplete`
+    // stamps a tombstone: the completion becomes invisible and the next
+    // operator repeats the whole migration. The claim cannot see this, since
+    // both invocations are legitimately the same claimant.
+    const flightKey = `${workspaceId}:${backfillId}`
+    if (this.inFlightOperatorBackfills.has(flightKey)) {
+      return {outcome: 'already-running', undoHistoryCleared: false}
+    }
+    this.inFlightOperatorBackfills.add(flightKey)
+    try {
+      const {completed, undoHistoryCleared, deferred, failed} = await this.runWorkspaceBackfills(
+        workspaceId, [backfill], this.workspaceGeneration,
+      )
+      // `completed` is LOCAL to this invocation. Keying on this id as well is
+      // defence in depth, not load-bearing: the call above passes a
+      // single-element array, so the set can only contain this backfill, and
+      // deleting the key fails no test. Written this way so a future caller
+      // passing more than one is correct by construction.
+      if (completed.has(backfill.id)) return {outcome: 'ran', undoHistoryCleared}
+      if (failed !== null) return {outcome: 'failed', undoHistoryCleared, reason: failed}
+      if (deferred !== null) return {outcome: 'deferred', undoHistoryCleared, reason: deferred}
+      // Nothing else is left. An operator run RECLAIMS a completed claim, so
+      // "already migrated" cannot land here — only a claim another device is
+      // holding, which includes one it took and never released.
+      return {outcome: 'held-by-peer', undoHistoryCleared}
+    } finally {
+      this.inFlightOperatorBackfills.delete(flightKey)
+    }
+  }
+
+  /** `completed` is the ids that RAN TO COMPLETION — not merely those
+   *  attempted, so a caller can report an outcome tied to its own request
+   *  rather than to whatever else happened to finish. */
   private async runWorkspaceBackfills(
     workspaceId: string,
     backfills: readonly WorkspaceBackfill[],
-  ): Promise<void> {
-    const markers = await this.workspaceBackfillMarkers.load()
+    generation: number,
+  ): Promise<{
+    completed: ReadonlySet<string>
+    undoHistoryCleared: boolean
+    deferred: string | null
+    failed: string | null
+  }> {
+    const completed = new Set<string>()
+    let undoHistoryCleared = false
+    // Set at each precondition that makes a pass skip WITHOUT the claim having
+    // refused it, so an operator hears "not yet, retry" rather than "already
+    // done" — the same string an unattended run only logs.
+    let deferred: string | null = null
+    /** Why a pass THREW. Distinct from `deferred`: waiting will not clear it,
+     *  so an operator told "already done" would never learn the migration is
+     *  incomplete — with some of its batches already committed. */
+    let failed: string | null = null
+    const claim = this.backfillCompletionClaim
+    if (!claim) {
+      // Refuse rather than fall back to the local marker. Every pass here
+      // uploads, so "done" has to be recorded where every device sees it;
+      // a per-device marker would have each one attempt the repair
+      // independently, which is the stale-write hazard itself.
+      console.error(
+        `[workspaceBackfills] skipping ${backfills.length} backfill(s) for workspace ` +
+        `${workspaceId}: no BackfillCompletionClaim is configured, so completion ` +
+        `cannot be recorded once per graph.`,
+      )
+      // Reported as a FAILURE, not left to the fallthrough — which now means
+      // "a peer holds the claim" and tells the operator to go delete a claim
+      // block that in this configuration does not exist.
+      failed = 'no BackfillCompletionClaim is configured, so completion cannot be recorded'
+      return {completed, undoHistoryCleared, deferred, failed}
+    }
     for (const backfill of backfills) {
       // A role flip to read-only during the deferral window must stop further
       // writes — re-check per backfill (the loop can span several txs).
-      if (this.isReadOnly) return
-      if (markers.has(workspaceBackfillMarkerKey(workspaceId, backfill.id))) continue
+      if (this.isReadOnly) return {completed, undoHistoryCleared, deferred, failed}
+      // Don't even START a pass whose workspace has been re-opened since it was
+      // scheduled. `assertBackfillMayWrite` catches this per transaction, but
+      // that is one tx too late to avoid the scan a backfill does first.
+      if (this.workspaceGeneration !== generation) return {completed, undoHistoryCleared, deferred, failed}
+      // BEFORE claiming: an unprimed registry makes the whole graph look like
+      // it has zero registered properties, so a pass would find no candidates,
+      // write nothing, and then record a PERMANENT per-graph completion — the
+      // migration marked done without migrating anything, on every device
+      // forever. Checked here rather than only inside the writes because a run
+      // that finds no candidates never opens a transaction at all.
+      if (!this.propertyRegistryReadyFor(workspaceId)) {
+        deferred = `workspace ${workspaceId}'s property registry is not primed yet`
+        console.warn(
+          `[workspaceBackfills] "${backfill.id}" deferred: workspace ${workspaceId}'s ` +
+          `property registry is not primed, so a scan would see no registered ` +
+          `properties and complete vacuously. Retrying on the next open.`,
+        )
+        continue
+      }
+      // BEFORE claiming, not only before writing. `tryClaim` itself WRITES —
+      // it ensures the Migrations page and creates the claim row — so on a
+      // disconnected or stale device the old order wrote a claim, hit the
+      // in-transaction sync assertion, and released it. Both writes then sat
+      // in the upload queue, and on reconnect the create could conflict with
+      // an unseen server completion while the following `deleted=1` patch
+      // tombstoned it, freeing later operators to repeat the migration.
+      if (!this.backfillSyncSettledNow()) {
+        deferred = 'this device is not caught up with the server'
+        console.warn(
+          `[workspaceBackfills] "${backfill.id}" deferred: this device is not caught ` +
+          `up with the server, so claiming would write from a stale view.`,
+        )
+        continue
+      }
+      if (!(await claim.tryClaim(workspaceId, backfill.id, {
+        reclaimCompleted: backfill.trigger === 'operator',
+      }))) continue
+      const resolver = this.propertySchemaResolverFor(workspaceId)
+      let wrote = false
       const ctx: WorkspaceBackfillContext = {
         workspaceId,
+        // One resolver for the whole run, through the canonical factory: the
+        // per-call version built a fresh one for every cell key (a pass over
+        // ~650k rows resolves that many times) and bypassed the
+        // previous-registry fallback every other site gets.
+        resolveNameSchema: (name) => {
+          const resolution = resolver.resolve(name)
+          return resolution.status === 'resolved' ? resolution.schema : undefined
+        },
+        resolveFieldSchema: (fieldId) => {
+          const resolution = resolver.resolveField(fieldId)
+          return resolution.status === 'resolved' ? resolution.schema : undefined
+        },
         getAll: <T>(sql: string, params?: readonly unknown[]) =>
           this.db.getAll<T>(sql, params as unknown[] | undefined),
-        tx: <R>(fn: (tx: Tx) => Promise<R>, opts: {scope: ChangeScope; description?: string}) =>
-          this.tx(fn, opts),
+        // Scope and undo-recording are NOT the backfill's to choose. The scope
+        // stays `BlockDefault` — these ARE document edits and must keep the
+        // read-only gate and the seed-definition guard, both of which key off
+        // it — but the undo entry is suppressed: the pass fires seconds after
+        // workspace open, so on the stack it means a cmd-Z aimed at the user's
+        // own edit reverts the whole batch, permanently (the completion marker
+        // is already recorded).
+        tx: async <R>(fn: (tx: Tx) => Promise<R>, opts: {description?: string}): Promise<R> => {
+          // Checked per transaction and INSIDE it, after acquisition — not once
+          // before the run, and not just before `repo.tx`. Two separate reasons:
+          // a pass can be chunked across minutes (the properties-as-blocks
+          // cell->children migration is ~650k creates), so a pre-run check only
+          // ever covered the first batch; and `repo.tx` itself awaits
+          // definition readiness and the write lock, so a check before it can
+          // go stale before `fn` reads a row. Throwing here aborts the tx and
+          // the run with no marker recorded, so the next open retries.
+          const result = await this.tx(async t => {
+            await this.assertBackfillMayWrite(workspaceId, backfill.id, generation)
+            return fn(t)
+          }, {
+            scope: ChangeScope.BlockDefault,
+            description: opts.description,
+            skipUndo: true,
+          })
+          // Only once a batch COMMITTED. An aborted one rolled its writes
+          // back, so it leaves nothing on the undo stack to be reverted onto.
+          // Still an over-approximation in one direction — a committed batch
+          // that happened to write nothing counts — which errs toward
+          // clearing, the safe side.
+          //
+          // Cleared HERE rather than after the pass returns: a chunked pass
+          // runs for minutes, and every one of them is a minute in which a
+          // cmd-Z can replay a pre-pass row snapshot over a batch that has
+          // already committed. The window has to close with the FIRST batch,
+          // not with the last.
+          if (!wrote) {
+            wrote = true
+            this.undoManagerFor(workspaceId).clear()
+            undoHistoryCleared = true
+            console.warn(
+              `[workspaceBackfills] "${backfill.id}" is writing to workspace ` +
+              `${workspaceId}, so its undo history was cleared — replaying an entry ` +
+              `from before the pass would revert it.`,
+            )
+          }
+          return result
+        },
       }
       try {
+        // Before the scan, and again before claiming completion. The
+        // per-transaction check only fires when a pass WRITES: a run that finds
+        // no candidates — precisely what a partially materialized graph looks
+        // like, since the rows are staged and not yet in `blocks` — would
+        // otherwise sail through and record its one-shot marker as done.
+        await this.assertBackfillMayWrite(workspaceId, backfill.id, generation)
         await backfill.run(ctx)
-        // Record the marker only after a clean run — a thrown backfill leaves
-        // it unset so the next open retries (backfills are written idempotent
-        // via a per-row recheck, so a retry is cheap).
-        await this.workspaceBackfillMarkers.set(workspaceBackfillMarkerKey(workspaceId, backfill.id))
+        await this.assertBackfillMayWrite(workspaceId, backfill.id, generation)
+        // Only after a clean run — a thrown backfill leaves the claim unset so
+        // the next attempt retries (passes are idempotent per row).
+        await claim.markComplete(workspaceId, backfill.id)
+        // And only once completion is RECORDED. Counted any earlier — on
+        // entry, or before `markComplete` whose throw the catch answers by
+        // RELEASING the claim — this reports "ran" for a migration whose
+        // per-graph record does not exist, so the operator is told it is
+        // durably done and the next invocation repeats it.
+        completed.add(backfill.id)
       } catch (err) {
         const reason = err instanceof Error ? err.message : String(err)
+        // Claimed but didn't finish — hand it back either way, or this pass is
+        // blocked for the whole graph by one device's bad moment.
+        await claim.releaseClaim(workspaceId, backfill.id).catch(() => {})
+        if ((err as {kind?: string} | null)?.kind === Repo.TRANSIENT) {
+          // The operator path has no other way to learn this: the re-arm below
+          // only helps `workspace-open` passes (`scheduleWorkspaceBackfills`
+          // filters operator ones out), and without a reason here the caller
+          // reports "already done" for a pass that aborted partway through.
+          deferred = reason
+          // These clear on their own — the download finishes, the queue drains.
+          // Logging and walking away would leave the pass undone for the whole
+          // session even though its blocker is momentary, so re-arm and let the
+          // gate + deep-idle deferral bound the retry.
+          console.warn(`[workspaceBackfills] ${reason} — will retry when it clears`)
+          this.scheduleWorkspaceBackfills(workspaceId)
+          return {completed, undoHistoryCleared, deferred, failed}
+        }
+        failed = reason
         console.error(
           `[workspaceBackfills] "${backfill.id}" failed for workspace ${workspaceId}: ${reason}`,
         )
       }
+    }
+    return {completed, undoHistoryCleared, deferred, failed}
+  }
+
+  /**
+   * One-time-per-workspace catch-up derive of the LOCAL `reference_target_id`
+   * column (PR #288 slice A). The column is derived per device and never
+   * synced, so rows that predate it — an upgrading device's whole DB, or a
+   * fresh device's rows synced before the schema registry primed — sit at
+   * NULL until this pass sweeps them; from then on the same-tx processor
+   * (local writes) and the materializer's derive-at-arrival (sync writes)
+   * maintain it incrementally.
+   *
+   * Deferred off the workspace-open critical path (`scheduleDeepIdle`, same
+   * scheme as its sibling passes) and marker-gated once per workspace. Derives
+   * textually (`((id))`) or through the alias index (`[[alias]]`) — no schema
+   * registry needed for resolution — but still scheduled after
+   * `whenPropertyDefinitionsReady` so the sweep runs against the pinned active
+   * workspace (its once-per-session gate below). NOT gated on writability: the
+   * writes are local bookkeeping (source-NULL raw UPDATEs of a never-uploaded
+   * column), safe in a read-only workspace.
+   */
+  scheduleReferenceTargetDerivePass(workspaceId: string): void {
+    if (!workspaceId) return
+    this.referenceTargetDeriveJobs.schedule(() =>
+      // Swallow + log a transient sweep failure rather than leak an unhandled
+      // rejection (the idle-job runner only does `.finally`, like the sibling
+      // `drainNameRederives` guards its own body). The sweep marker is left
+      // UNSET on throw, so the next workspace open retries — the pass is
+      // strictly additive (`reference_target_id IS NULL`), never a re-stamp,
+      // so a partial run can't double-stamp or clobber.
+      this.runReferenceTargetDerivePass(workspaceId).catch((err) => {
+        const reason = err instanceof Error ? err.message : String(err)
+        console.error(`[referenceTargetDerive] workspace ${workspaceId} sweep failed: ${reason}`)
+      }),
+    )
+  }
+
+  /** Test helper — drains derive passes whose deferral timer has fired.
+   *  Mirror of `awaitWorkspaceBackfills`. */
+  async awaitReferenceTargetDerive(): Promise<void> {
+    await this.referenceTargetDeriveJobs.drain()
+  }
+
+  private async runReferenceTargetDerivePass(workspaceId: string): Promise<void> {
+    if (this.referenceTargetSweepDone.has(workspaceId)) return
+    // Run only while this workspace is the pinned/active one — if the user
+    // switched away before the deferred job fired, skip WITHOUT the marker so
+    // the next open retries. (Resolution itself no longer needs the registry:
+    // `((id))` derives textually and `[[alias]]` through the alias index.)
+    const registry = this._propertyDefinitionRegistry
+    if (!registry || registry.workspaceId !== workspaceId) return
+    // Captured HERE, at the gate that just proved this workspace's registry
+    // is live — not at write time, which is many awaits and possibly two
+    // workspace switches later (see ReferenceTargetStampContext).
+    const stampContext: ReferenceTargetStampContext = {
+      workspaceId, resolver: this.propertySchemaResolverFor(workspaceId),
+    }
+
+    // Candidate prefilter in SQL (cheap LIKEs over one workspace, one-time);
+    // the real grammar check is `parseExactReferenceBlockContent` inside
+    // `deriveReferenceTargetId`. Deleted rows are included deliberately: a
+    // tombstone restored later arrives content-unchanged, so nothing would
+    // re-derive it. `reference_target_id IS NULL` keeps the pass strictly
+    // additive — it never second-guesses a processor- or arrival-derived
+    // value. Lean scan (id + content): the write phase re-reads fresh rows
+    // in-tx, so full rows here would only feed stale snapshots.
+    // The `'::%'` probe is the marked-form twin (§7 grammar box): every
+    // content-shape prefilter carries it, or a pasted `::[[future-field]]`
+    // (bit-worthy, target unresolvable) would never be revisited by repair.
+    const candidates = await this.db.getAll<{id: string; content: string}>(
+      `SELECT id, content FROM blocks
+        WHERE workspace_id = ?
+          AND reference_target_id IS NULL
+          AND (
+            (TRIM(content) LIKE '((%' AND TRIM(content) LIKE '%))')
+            OR (TRIM(content) LIKE '[[%' AND TRIM(content) LIKE '%]]')
+            OR TRIM(content) LIKE '[%](((%)))'
+            OR TRIM(content) LIKE '::%'
+          )`,
+      [workspaceId],
+    )
+
+    const lookups = this.referenceTargetLookupsVia()
+
+    const updates: ReferenceTargetStamp[] = []
+    for (const row of candidates) {
+      const derived = await deriveReferenceColumns(row.content, workspaceId, lookups)
+      // Target column is already NULL, so unresolved (`undefined`) and
+      // non-reference (`null`) alike mean "no target to write" — but a
+      // marked row stamps its bit regardless (pure syntax; §9 condition 1).
+      if (typeof derived.targetId === 'string' || derived.isFieldForm) {
+        updates.push({
+          id: row.id,
+          scannedContent: row.content,
+          targetId: derived.targetId ?? null,
+          isFieldForm: derived.isFieldForm,
+        })
+      }
+    }
+
+    await this.stampReferenceTargets(updates, stampContext)
+
+    this.referenceTargetSweepDone.add(workspaceId)
+    // Defense only — pre-sweep scheduling never accumulates. Note the
+    // narrow accepted window: an alias/definition arriving between this
+    // sweep's candidate SELECT and this line is dropped for the session
+    // and healed by the NEXT open's sweep.
+    this.pendingNameRederives.delete(workspaceId)
+  }
+
+  /** The one construction site for reference-target resolution outside a
+   *  repo.tx (PR #288 slice A): the `block_aliases` index read on `reader` —
+   *  the open sync-arrival write tx, or the auto-commit connection for the
+   *  idle passes. Mirrors `core.deriveReferenceTarget` (a `((id))` block-ref
+   *  resolves textually, `[[alias]]` through this lookup); the two must
+   *  resolve identically or the column diverges across write paths. */
+  private referenceTargetLookupsVia(
+    reader: {getOptional<T>(sql: string, params?: unknown[]): Promise<T | null>} = this.db,
+  ): ReferenceTargetLookups {
+    return {
+      aliasTargetId: async (alias, workspaceId) => {
+        if (alias === '' || workspaceId === '') return null
+        const row = await reader.getOptional<{id: string}>(
+          SELECT_BLOCK_BY_ALIAS_IN_WORKSPACE_SQL,
+          [workspaceId, alias],
+        )
+        return row?.id ?? null
+      },
+    }
+  }
+
+  /** Chunked raw column stamps, materializer-style: source-NULL (upload
+   *  triggers skip; row_events tags 'sync'), no repo.tx — a tx would advance
+   *  `updated_at` (the LWW row-version) for a purely local derivation.
+   *
+   *  Compare-and-set per row (adversarial-review fix): callers scan/derive
+   *  outside the write lock, so a concurrent local edit or sync arrival can
+   *  change content (the processor/arrival owns the column from then on). A
+   *  bare UPDATE would stamp a stale target that nothing ever repairs — the
+   *  row would misclassify as a field row post-flip. Only rows still at
+   *  (scanned content, NULL column) are written, and snapshots come from the
+   *  in-tx fresh rows, never scan-time state. */
+  private async stampReferenceTargets(
+    updates: readonly ReferenceTargetStamp[],
+    context: ReferenceTargetStampContext,
+  ): Promise<void> {
+    const CHUNK = 200
+    for (let i = 0; i < updates.length; i += CHUNK) {
+      const chunk = updates.slice(i, i + CHUNK)
+      // BOTH gates are re-read per chunk, and the symmetry is the point.
+      // `properties_migration` is server-driven (a synced `workspaces` row,
+      // no local writer) and `isReadOnly` is mutable and resolved
+      // asynchronously, so either can land mid-pass. Hoisting is stale in
+      // the UNSAFE direction for both: the rows still get stamped, and both
+      // repair scans require `reference_target_id IS NULL`, so once stamped
+      // nothing — not the next open's sweep, not the drain — ever re-finds
+      // them. A dormant workspace collects nothing, so the cost of asking
+      // again is one indexed row read per 200 stamps.
+      const reproject = !this.isReadOnly
+        && await readIsChildBackedWorkspace(this.db, context.workspaceId)
+      // Rows THIS chunk turned into recognized field rows. Per chunk, not
+      // per pass: the re-projection then follows its own stamps immediately,
+      // so a crash or a closed tab loses at most one chunk of repair instead
+      // of all of it — and the rows are no longer NULL-targeted, so no later
+      // scan would ever find them again.
+      const newlyRecognized: ProjectableRow[] = []
+      const snapshots = new Map<string, {before: BlockData; after: BlockData}>()
+      await this.db.writeTransaction(async tx => {
+        await tx.execute('UPDATE tx_context SET source = NULL WHERE id = 1')
+        for (const {id, scannedContent, targetId, isFieldForm} of chunk) {
+          const freshRow = await tx.getOptional<BlockRow>(
+            `SELECT ${BLOCKS_TABLE_COLUMN_NAMES.join(', ')} FROM blocks WHERE id = ?`,
+            [id],
+          )
+          if (
+            freshRow === null
+            || (freshRow.reference_target_id ?? null) !== null
+            || freshRow.content !== scannedContent
+            // Bit-only stamps (marked row, unresolvable span) skip when the
+            // bit already matches — nothing to write, no snapshot churn.
+            || (targetId === null && (freshRow.is_field_form === 1) === isFieldForm)
+          ) continue
+          await tx.execute(
+            'UPDATE blocks SET reference_target_id = ?, is_field_form = ? WHERE id = ?',
+            [targetId, isFieldForm ? 1 : null, id],
+          )
+          const before = parseBlockRow(freshRow)
+          const after = {...before, referenceTargetId: targetId, isFieldForm}
+          snapshots.set(id, {before, after})
+          // Only the "turns on" direction is reachable: the CAS above writes
+          // only rows still at a NULL target, and §9 recognition needs a
+          // resolved one — so nothing here was a field row beforehand.
+          if (reproject && targetId !== null && isFieldForm && after.parentId !== null) {
+            newlyRecognized.push({
+              id: after.id,
+              parentId: after.parentId,
+              workspaceId: after.workspaceId,
+              referenceTargetId: targetId,
+              isFieldForm,
+            })
+          }
+        }
+      })
+      if (snapshots.size === 0) continue
+      // Explicit fan-out (PR #288 §11 implementation note): `updated_at` is
+      // deliberately unchanged, so the cache's `applyIfNewer` LWW gate would
+      // reject the repair and row-version-driven invalidation sees nothing.
+      // Refresh already-cached snapshots directly (never populate cold rows)
+      // and notify handles. NEVER regress a newer cached row: in the sync
+      // ack-to-echo window the cache can legitimately be AHEAD of disk, and
+      // the LWW gate this bypasses exists precisely to protect that — only
+      // replace a snapshot the stamped disk row is at least as new as.
+      for (const {after} of snapshots.values()) {
+        const cached = this.cache.getSnapshot(after.id)
+        if (cached !== undefined && cached.updatedAt <= after.updatedAt) {
+          this.cache.setSnapshot(after)
+        }
+      }
+      this.handleStore.invalidate(
+        snapshotsToChangeNotification(snapshots, this.invalidationRules),
+      )
+      if (newlyRecognized.length === 0) continue
+      try {
+        await this.reprojectOwnersOfStampedFieldRows(newlyRecognized, context)
+      } catch (err) {
+        // The stamps are the primary job and they committed; a projection
+        // failure must not abort the pass (the sweep would never set its
+        // marker, disabling late-binding for the whole session). The repair
+        // is additive and idempotent, so any later edit to the subtree
+        // re-projects it through the ordinary processor.
+        const reason = err instanceof Error ? err.message : String(err)
+        console.error(
+          `[referenceTargetStamp] owner re-projection failed for workspace `
+          + `${context.workspaceId}: ${reason}`,
+        )
+      }
+    }
+  }
+
+  /** Owner-cell re-projection for rows a raw stamp just turned into
+   *  recognized field rows (PR #288 §9 / issue #402's derivation-liveness
+   *  group). The stamp itself deliberately bypasses `repo.tx` to preserve
+   *  `updated_at`, so no processor sees it — but resolving a `::[[Foo]]`
+   *  row's target IS the transition that makes it a field row, and the
+   *  owner's cell must gain the key at that moment rather than waiting for
+   *  an unrelated edit to the subtree.
+   *
+   *  Reachable post-flip only (the caller owns that gate): a hand-typed or
+   *  imported `::[[status]]` written before anything claimed "status"
+   *  derives to a NULL target, and the alias-claim drain (or the next open's
+   *  sweep) resolves it later. Unlike the stamp, this write goes through
+   *  `repo.tx` — it's a cell write on the PARENT, ordinary derived state,
+   *  and the projection's `skipMetadata` keeps it off "last edited".
+   *
+   *  ADDITIVE, and that is load-bearing (adversarial review). Running
+   *  outside the PROJECT processor means the cell write is not settled, so
+   *  `core.materializePropertyChildren` reads it as a key change. A `full`
+   *  projection here would therefore be destructive in the ordinary case,
+   *  not an exotic one: between a workspace flipping and its backfill
+   *  landing every owner holds cell keys with NO field rows, so the first
+   *  sweep would project "nothing parses" into an unset, and materialize
+   *  would read that unset as a user deleting the key and tombstone the
+   *  very rows the stamp just recognized — uploading the tombstones. The
+   *  overwrite direction is barred for the same reason: reconciling a
+   *  populated cell against children is the backfill's job.
+   *
+   *  `References`, not `BlockDefault` (the same call the deferred definition
+   *  migration batch makes, for the same reason): a `BlockDefault` tx lands
+   *  on the user's cmd-Z stack, so a background repair would become the
+   *  thing their next undo reverts. */
+  private async reprojectOwnersOfStampedFieldRows(
+    rows: readonly ProjectableRow[],
+    context: ReferenceTargetStampContext,
+  ): Promise<void> {
+    if (rows.length === 0) return
+    const lookups: ProjectionLookups = {
+      resolveFieldSchema: (fieldId) => {
+        const resolution = context.resolver.resolveField(fieldId)
+        return resolution.status === 'resolved' ? resolution.schema : undefined
+      },
+    }
+    await this.tx(
+      tx => reprojectOwnersForRowStates(tx, rows, lookups, 'additive'),
+      {
+        scope: ChangeScope.References,
+        description: 'reproject property cells after reference-target stamp',
+      },
+    )
+  }
+
+  /** Targeted re-derive for NEWLY-ADDED property definitions (PR #288 §9's
+   *  arrival-order repair, adversarial-review fix): `[[name]]` rows written
+   *  or synced BEFORE their definition existed derived to NULL, and nothing
+   *  content-driven ever revisits them — the definition's later
+   *  arrival/creation must enqueue this pass. Scheduled by the facet bridge
+   *  when a registry rebuild shows a fieldId with no previous entry (the
+   *  boot-time first snapshot diffs against null and is deliberately
+   *  skipped — the once-per-workspace catch-up pass covers it, running
+   *  after registry readiness). Not flip-gated: the column is slice-A
+   *  machinery, maintained everywhere. */
+  scheduleReferenceTargetNameRederive(
+    workspaceId: string,
+    names: readonly string[],
+  ): void {
+    if (!workspaceId || names.length === 0) return
+    // Pre-sweep, the per-open sweep covers every name — don't accumulate
+    // (on a fresh device EVERY page arrival gains aliases; queuing them all
+    // would just re-run the sweep's own scan).
+    if (!this.referenceTargetSweepDone.has(workspaceId)) return
+    const pending = this.pendingNameRederives.get(workspaceId) ?? new Set<string>()
+    for (const name of names) if (name !== '') pending.add(name)
+    this.pendingNameRederives.set(workspaceId, pending)
+    if (this.nameRederiveDrainScheduled.has(workspaceId)) return
+    this.nameRederiveDrainScheduled.add(workspaceId)
+    this.referenceTargetDeriveJobs.schedule(() => this.drainNameRederives(workspaceId))
+  }
+
+  /** ONE batched candidate scan per drain (the LIKE prefilter the sweep
+   *  uses, workspace-scoped, NULL-column only), matched in JS against the
+   *  pending name set via the real grammar (which tolerates inner padding a
+   *  SQL equality can't). A drain whose workspace registry isn't primed
+   *  leaves the set intact — `applyTypesAndSchemas` re-arms it when that
+   *  workspace's registry lands. */
+  private async drainNameRederives(workspaceId: string): Promise<void> {
+    this.nameRederiveDrainScheduled.delete(workspaceId)
+    const pending = this.pendingNameRederives.get(workspaceId)
+    if (!pending || pending.size === 0) return
+    const registry = this._propertyDefinitionRegistry
+    if (!registry || registry.workspaceId !== workspaceId) return
+    // Captured at the gate, not at write time (see ReferenceTargetStampContext).
+    const stampContext: ReferenceTargetStampContext = {
+      workspaceId, resolver: this.propertySchemaResolverFor(workspaceId),
+    }
+    this.pendingNameRederives.delete(workspaceId)
+    try {
+      // Strictly additive (`reference_target_id IS NULL`, like the sweep):
+      // late-bind rows that derived to NULL because their target didn't exist
+      // yet — a generic alias minted mid-session (referencesProcessor enqueues
+      // the name when it creates the seat) repairs `[[Foo]]` rows written
+      // before page Foo existed. Re-pointing an ALREADY-stamped row is
+      // deliberately NOT done: `reference_target_id`'s only consumers are
+      // property field-row recognition (is-target-a-definition), and
+      // definitions aren't name-resolvable yet, so a non-NULL re-point would
+      // change nothing any reader observes. That reclaim (with the cell
+      // reprojection a raw stamp currently skips) belongs to the auto-claim
+      // work that makes definitions name-resolvable.
+      // `'::[[%'` twin: marked alias rows late-bind exactly like unmarked
+      // ones (§7 — the bit is already stamped by derive; this repairs the
+      // target), and a prefilter without the twin would leave a pasted
+      // `::[[future-field]]` bit=1/target-NULL forever once its name mints.
+      // Alias forms ONLY, unlike the sweep's all-forms prefilter: this drain
+      // discards anything that isn't `kind === 'alias'` two lines below, and
+      // an id form can't be one. Fetching `((%…%))` rows here would scan a
+      // whole workspace's exact refs to throw every one of them away.
+      const candidates = await this.db.getAll<{id: string; content: string}>(
+        `SELECT id, content FROM blocks
+          WHERE workspace_id = ?
+            AND reference_target_id IS NULL
+            AND TRIM(content) LIKE '%]]'
+            AND (TRIM(content) LIKE '[[%' OR TRIM(content) LIKE '::[[%')`,
+        [workspaceId],
+      )
+      const lookups = this.referenceTargetLookupsVia()
+      const updates: ReferenceTargetStamp[] = []
+      for (const row of candidates) {
+        const exact = parseExactReferenceBlockContent(row.content)
+        if (exact?.kind !== 'alias' || !pending.has(exact.alias)) continue
+        const derived = await deriveReferenceColumns(row.content, workspaceId, lookups)
+        if (typeof derived.targetId === 'string') {
+          updates.push({
+            id: row.id,
+            scannedContent: row.content,
+            targetId: derived.targetId,
+            isFieldForm: derived.isFieldForm,
+          })
+        }
+      }
+      await this.stampReferenceTargets(updates, stampContext)
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err)
+      console.error(`[referenceTargetRederive] workspace ${workspaceId} failed: ${reason}`)
+      // Re-queue AND re-arm so the repair isn't consumed by a transient
+      // failure (without the re-arm the names would sit until the next
+      // alias event / registry rebuild / app open).
+      const requeued = this.pendingNameRederives.get(workspaceId) ?? new Set<string>()
+      for (const name of pending) requeued.add(name)
+      this.pendingNameRederives.set(workspaceId, requeued)
+      if (!this.nameRederiveDrainScheduled.has(workspaceId)) {
+        this.nameRederiveDrainScheduled.add(workspaceId)
+        this.referenceTargetDeriveJobs.schedule(() => this.drainNameRederives(workspaceId))
+      }
+    }
+  }
+
+  /**
+   * Rename-reproject + codec re-encode migration pass (PR #288 §7/§9, slice
+   * B2). Scheduled by the facet bridge when a registry rebuild shows a
+   * definition's NAME or codec TYPE changed under its durable fieldId —
+   * renames break silently without it: children survive untouched (the
+   * column, not the label, is authoritative) but the cell stays keyed by the
+   * dead name and every schema-aware reader falls back to `defaultValue`.
+   *
+   * Per change, one child-indexed sweep (the `reference_target_id` partial
+   * index): retitle stale field-row content (`[[old]]` → `[[new]]` — markdown
+   * export and cross-workspace re-derive-by-content bind the name), re-encode
+   * value children to the new codec's canonical content where they convert,
+   * and re-key each consuming parent's cell (drop the old key; project the
+   * new one from the first parseable value). Writes ride ordinary repo.tx —
+   * field-row content and cells are synced state, and the flip-gated
+   * processors' idempotence makes the overlap free.
+   *
+   * Values that can't convert under a codec change are REPORTED (§9: "N
+   * values can't convert" must be user-visible, not a silent unset) via the
+   * user-error toast channel; the rows stay visible/fixable in the tree.
+   *
+   * Flip-gated: an un-flipped workspace has no recognized field rows and its
+   * renames keep today's semantics; skipped entirely (no marker — this pass
+   * is change-driven, not once-per-workspace).
+   */
+  schedulePropertyDefinitionMigrations(
+    workspaceId: string,
+    changes: readonly PropertyDefinitionChange[],
+  ): void {
+    if (this.isReadOnly || !workspaceId || changes.length === 0) return
+    // Resolve NOW, not when the deferred job runs. `changes` comes from this
+    // workspace's OWN registry rebuild (the facet bridge calls
+    // `applyTypesAndSchemas` then this method synchronously, in the same
+    // tick), so `propertySchemaResolverFor(workspaceId)` is guaranteed to
+    // serve it faithfully here. The batch itself is deferred to a deep-idle
+    // job, and `propertySchemaResolverFor` only retains the active workspace
+    // or the immediately-previous one (one-deep) — by the time the job runs
+    // the user may have switched workspaces twice more, which would evict
+    // `workspaceId` from both slots and make a run-time re-resolve fail
+    // closed (empty plans, migration silently dropped with no retry, #386
+    // review). Capturing the resolved plan here instead means it describes
+    // THIS change and can never go stale from a LATER, unrelated workspace
+    // switch. A fieldId that doesn't resolve (shadowed / unavailable, §6) is
+    // dropped from the plan — the same skip the run-time check used to do,
+    // just performed here instead.
+    const resolver = this.propertySchemaResolverFor(workspaceId)
+    const plans: PropertyDefinitionMigrationPlan[] = changes.flatMap(change => {
+      const resolution = resolver.resolveField(change.fieldId)
+      return resolution.status === 'resolved' ? [{change, schema: resolution.schema}] : []
+    })
+    if (plans.length === 0) return
+    this.propertyDefinitionMigrationJobs.schedule(() =>
+      this.runPropertyDefinitionMigrations(workspaceId, plans, resolver),
+    )
+  }
+
+  /** Test helper — drains migration passes whose deferral timer has fired. */
+  async awaitPropertyDefinitionMigrations(): Promise<void> {
+    await this.propertyDefinitionMigrationJobs.drain()
+  }
+
+  private async runPropertyDefinitionMigrations(
+    workspaceId: string,
+    plans: readonly PropertyDefinitionMigrationPlan[],
+    resolver: PropertySchemaResolver,
+  ): Promise<void> {
+    if (!(await readIsChildBackedWorkspace(this.db, workspaceId))) return
+    try {
+      await this.runPropertyDefinitionMigrationBatch(workspaceId, plans, resolver)
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err)
+      const names = plans.map(({change}) => `"${change.newName}" (${change.fieldId})`).join(', ')
+      console.error(`[propertyDefinitionMigrations] ${names} failed: ${reason}`)
+    }
+  }
+
+  /** Re-key + re-encode every parent touched by THIS rebuild's definition
+   *  changes, applying each parent's whole change set in ONE cell write.
+   *
+   *  Per-change passes are unsafe when two definitions SWAP names (`a→b` and
+   *  `b→a` in one rebuild). Migrating `a→b` first writes the intermediate cell
+   *  `{b: <a's value>}`, which (1) clobbers b's value outright and (2) removes
+   *  key `a` — and because `a` now resolves through the FINAL name map to the
+   *  OTHER definition, the same-tx materializer (which watches `properties`)
+   *  reads that removal as a user delete and tombstones that definition's field
+   *  row before its own pass runs. No ordering avoids it: a swap is a cycle.
+   *
+   *  Applying a parent's whole set at once has no intermediate state: every
+   *  old name is dropped BEFORE any new name is assigned, so a swap lands as
+   *  `{a: <b's value>, b: <a's value>}` in a single write and the materializer
+   *  never sees a key go missing. */
+  private async runPropertyDefinitionMigrationBatch(
+    workspaceId: string,
+    plans: readonly PropertyDefinitionMigrationPlan[],
+    resolver: PropertySchemaResolver,
+  ): Promise<void> {
+    // `plans` arrives pre-resolved (schedule-time capture, see
+    // `schedulePropertyDefinitionMigrations`) and `resolver` is the SAME
+    // instance that resolved it — both frozen against the registry snapshot
+    // as of that moment, immune to any workspace switch that happens while
+    // this deferred batch sits queued or runs. Shadowed/unavailable
+    // definitions were already excluded from `plans` there (§6) — nothing to
+    // re-key for them.
+
+    // `parent_id IS NOT NULL`: §9 root half — a stamped workspace-root row
+    // is user content (never a field row); retitling it would rewrite the
+    // user's text.
+    // Chunked like the parent pass below: one bound variable per changed field
+    // would otherwise blow SQLITE_MAX_VARIABLE_NUMBER on a big registry rebuild
+    // (a large sync or scripted schema change), and the caller only LOGS the
+    // throw — so every affected cell would silently stay unmigrated.
+    // The Set is load-bearing, not tidiness: `SELECT DISTINCT` only dedupes
+    // WITHIN one statement, so a parent holding field rows for two changed
+    // definitions that land in different chunks would otherwise be migrated
+    // twice.
+    const fieldIds = plans.map(plan => plan.change.fieldId)
+    const FIELD_PROBE_CHUNK = 500
+    const parentIdSet = new Set<string>()
+    for (let i = 0; i < fieldIds.length; i += FIELD_PROBE_CHUNK) {
+      const fieldChunk = fieldIds.slice(i, i + FIELD_PROBE_CHUNK)
+      const candidates = await this.db.getAll<{parent_id: string | null}>(
+        `SELECT DISTINCT parent_id FROM blocks
+          WHERE workspace_id = ? AND reference_target_id IN (${fieldChunk.map(() => '?').join(', ')})
+            AND is_field_form = 1
+            AND deleted = 0 AND parent_id IS NOT NULL`,
+        [workspaceId, ...fieldChunk],
+      )
+      for (const row of candidates) {
+        if (row.parent_id !== null) parentIdSet.add(row.parent_id)
+      }
+    }
+    const parentIds = [...parentIdSet]
+    if (parentIds.length === 0) return
+
+    // Per changed definition, for the user-facing unparseable-values report.
+    const unconvertibleByField = new Map<string, number>()
+    const CHUNK = 100
+    for (let i = 0; i < parentIds.length; i += CHUNK) {
+      const chunk = parentIds.slice(i, i + CHUNK)
+      await this.tx(async tx => {
+        // Flat §9 recognition: field-row selection below keys on the BIT +
+        // fieldId (the bit is what keeps a ref-typed value pointing at this
+        // very definition from being misread as a field row — no ancestry
+        // walk exists anymore, and every owner re-keys uniformly at any
+        // depth).
+        //
+        // `isFieldDefinition` closes over the batch's captured `resolver`
+        // (schedule-time snapshot, captured in
+        // `schedulePropertyDefinitionMigrations` and threaded through as a
+        // parameter — NOT re-derived here). It used to call
+        // `this.propertySchemaResolverFor(workspaceId)` fresh per
+        // chunk, but that has the exact same one-deep active/previous fail-
+        // closed behavior as the outer resolve this method used to do: once
+        // the deferred batch's own workspace fell out of retention (further
+        // switches while THIS batch's chunks are still running), every
+        // fieldId — including the ones `plans` already proved resolvable —
+        // would stop resolving, `isPropertyFieldInstance` below would reject
+        // every sibling, and the batch would silently re-key nothing despite
+        // having non-empty plans. Reusing the captured `resolver` fixes that:
+        // it's bound to a real snapshot for the life of the batch, not to
+        // whatever workspace happens to be live when a chunk executes. This
+        // also covers ancestor fieldIds unrelated to `plans` (arbitrary other
+        // definitions encountered walking up from `parentId`), which a
+        // plans-only lookup can't answer — the resolver is what actually knows
+        // "is this fieldId some (possibly shadowed) definition in this
+        // workspace's registry", not just "is it one of the migrating ones".
+        //
+        // Trade-off: this is a fixed snapshot for the whole batch, so a
+        // genuinely concurrent definition change landing between chunks (or
+        // between schedule time and the batch running) isn't picked up
+        // here — but that's an independent, separately-diffed registry
+        // rebuild, so it schedules its OWN follow-up migration; it doesn't
+        // need this pass to also notice it. For the `plans` fieldIds
+        // specifically, `isFieldDefinition(change.fieldId)` is now
+        // provably always true (same resolver instance that already proved
+        // `change.fieldId` resolves when `plans` was built) — the guard below
+        // stays for the root-half/shared-recognizer symmetry with the
+        // ancestor walk, not as a live re-check.
+        const isFieldDefinition: IsPropertyFieldDefinition = (fieldId) => {
+          const rowResolution = resolver.resolveField(fieldId)
+          return rowResolution.status === 'resolved'
+            || (rowResolution.status === 'identity-unavailable' && rowResolution.reason === 'shadowed')
+        }
+
+        for (const parentId of chunk) {
+          // Shared swap-safe re-key: the helper owns the parent guard and
+          // the drop-all-then-set-all apply (symmetric with the same-tx
+          // rename processor). This computePlan is the codec half — it
+          // re-encodes value children under the (possibly new) codec and
+          // reports unconvertibles.
+          await rekeyParentPropertyCell(
+            tx, parentId,
+            async (siblings) => {
+              const oldNames: string[] = []
+              const assignments: Array<{name: string; value: unknown; unset: boolean}> = []
+              for (const {change, schema} of plans) {
+                let projected: unknown
+                let hasProjection = false
+                let parentUnconvertible = 0
+                let sawFieldRow = false
+                // Field-row content is `::((fieldId))` — id-addressed and
+                // rename-stable (§7), nothing to retitle. The fieldId
+                // equality picks THIS definition's field rows; the shared §9
+                // recognizer supplies the bit + root + resolvability
+                // conditions (`isFieldDefinition(change.fieldId)` is always
+                // true here — kept as the one composed predicate rather than
+                // a hand-rolled restatement).
+                for (const sibling of siblings) {
+                  if (
+                    (sibling.referenceTargetId ?? null) !== change.fieldId
+                    || !isPropertyFieldInstance(sibling, isFieldDefinition)
+                  ) continue
+                  sawFieldRow = true
+                  // §9 value set: bit-filtered — nested marked rows are
+                  // machinery, never value candidates.
+                  const values = (await tx.childrenOf(sibling.id, undefined))
+                    .filter(isFieldValueChild)
+                  for (const value of values) {
+                    try {
+                      const encoded = propertyChildContentToEncodedValue(schema, value.content)
+                      if (!hasProjection) {
+                        projected = encoded
+                        hasProjection = true
+                      }
+                      // Canonicalize the child content under the (possibly new)
+                      // codec so the stored text matches what setProperty would
+                      // write.
+                      const canonical = encodedPropertyValueToChildContent(schema, encoded)
+                      if (value.content !== canonical) {
+                        await tx.update(value.id, {content: canonical}, {skipMetadata: true})
+                      }
+                    } catch {
+                      parentUnconvertible += 1
+                    }
+                  }
+                }
+                // This parent carries no field row for this definition — its
+                // cell keys for it are none of this change's business.
+                if (!sawFieldRow) continue
+                if (parentUnconvertible > 0) {
+                  unconvertibleByField.set(
+                    change.fieldId,
+                    (unconvertibleByField.get(change.fieldId) ?? 0) + parentUnconvertible,
+                  )
+                }
+
+                if (change.oldName !== schema.name) oldNames.push(change.oldName)
+                if (hasProjection) {
+                  assignments.push({name: schema.name, value: projected, unset: false})
+                } else if (parentUnconvertible === 0) {
+                  assignments.push({name: schema.name, value: undefined, unset: true})
+                }
+                // else (all-unconvertible): leave the new key unset — no
+                // assignment.
+                //   - rename: the old key is dropped and the new key stays
+                //     absent → the cell shows unset for the unparseable values,
+                //     §9's contract. Re-keying the stale value under the new name
+                //     would violate §9 (cell derives from children).
+                //   - no rename: the existing key rides untouched (no old name to
+                //     drop, no assignment) so a stale-but-fixable value stays
+                //     visible; the next valid edit reprojects and heals it
+                //     (§5 pending-reprojection).
+                // This pass NEVER deletes value rows, so they stay live
+                // unconditionally and the unconvertible COUNT is surfaced below.
+              }
+              return {oldNames, assignments}
+            },
+          )
+        }
+      }, {
+        // References, not BlockDefault (adversarial-review blocker): a
+        // BlockDefault tx lands on the user's cmd-Z stack — a rename backing
+        // thousands of field rows would flood/evict their history, clear
+        // redo, and a stray undo would revert a migration chunk with no
+        // re-run path (the pass is change-driven, no marker). References is
+        // the maintenance bucket the ref-reprojection pass already uses:
+        // uploads normally, never exposed to cmd-Z. Writes are
+        // skipMetadata — machinery, not "last edited".
+        scope: ChangeScope.References,
+        // This pass now handles codec-TYPE changes (renames are same-tx, see
+        // core.migratePropertyRename), so a single plan is usually a re-encode
+        // (oldName === newName) — only a COMBINED rename+codec edit still shows
+        // an arrow. Word it to match rather than print "Foo -> Foo".
+        description: plans.length === 1
+          ? (plans[0].change.oldName === plans[0].schema.name
+            ? `re-encode property definition ${plans[0].schema.name}`
+            : `migrate property definition ${plans[0].change.oldName} -> ${plans[0].schema.name}`)
+          : `migrate ${plans.length} property definitions`,
+      })
+    }
+
+    // §9: a codec change that strands values must be user-visible, never a
+    // silent unset. The rows stay in the tree, fixable by hand. Reported per
+    // definition — one rebuild can change several.
+    for (const {change, schema} of plans) {
+      const unconvertible = unconvertibleByField.get(change.fieldId) ?? 0
+      if (unconvertible === 0) continue
+      // Claim only what's true: this pass never deletes a value row, so the
+      // text is preserved verbatim. It does NOT promise a surface — value
+      // children sit under a field row, and the visible view prunes field
+      // rows (§9), so post-flip they are reachable through the property
+      // rows, not by scrolling the outline. Naming the outline here would
+      // send the user somewhere the values demonstrably aren't (#386 review).
+      const message =
+        `${unconvertible} value${unconvertible === 1 ? '' : 's'} for property `
+        + `"${schema.name}" could not convert to the new type; their original `
+        + `text is preserved unchanged`
+      console.warn(`[propertyDefinitionMigrations] ${message}`)
+      this.userErrorListeners.notify(new ProcessorRejection(
+        message, 'property.codec-change.unconvertible',
+        {fieldId: change.fieldId, name: schema.name, count: unconvertible},
+      ))
     }
   }
 
@@ -1964,8 +4025,10 @@ export class Repo {
    *       plugin full-name like `'tasks:setDueDate'`)
    *    2. `'core.${name}'` (so `repo.mutate.indent` resolves to
    *       `'core.indent'` even though the registry key is full-prefixed)
-   *  Throws `MutatorNotRegisteredError` if neither matches. */
-  private dispatchMutator(name: string): (args: unknown) => Promise<unknown> {
+   *  Throws `MutatorNotRegisteredError` if neither matches.
+   *  `groupId` (from an `undoGroup` facade) stamps the dispatched tx so
+   *  it merges into the group's undo entry. */
+  private dispatchMutator(name: string, groupId?: string): (args: unknown) => Promise<unknown> {
     return async (args: unknown) => {
       const m = this.mutators.get(name) ?? this.mutators.get(`core.${name}`)
       if (!m) throw new MutatorNotRegisteredError(name)
@@ -1974,6 +4037,7 @@ export class Repo {
       return this.tx(tx => tx.run(m, validated) as Promise<unknown>, {
         scope,
         description: m.describe?.(validated),
+        groupId,
       })
     }
   }

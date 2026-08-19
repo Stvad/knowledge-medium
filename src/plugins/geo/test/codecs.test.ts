@@ -14,6 +14,12 @@ describe('optionalRefCodec', () => {
     expect(optionalRefCodec().encode(undefined)).toBeNull()
   })
 
+  it('treats the editor clear value as absent', () => {
+    const codec = optionalRefCodec()
+    expect(codec.encode('')).toBeNull()
+    expect(codec.decode('')).toBeUndefined()
+  })
+
   it('decodes null and undefined back to undefined', () => {
     const codec = optionalRefCodec()
     expect(codec.decode(null)).toBeUndefined()

@@ -2,7 +2,7 @@ import { type ComponentType } from 'react'
 import {
   type AnyPropertyEditorOverride,
   type AnyPropertySchema,
-  type AnyValuePreset,
+  type AnyJoinedValuePreset,
   type PropertyEditor,
   type TypeContribution,
 } from '@/data/api'
@@ -13,7 +13,19 @@ import {
   type PropertyPanelSection,
 } from '@/components/propertyPanelSections'
 import { resolvePropertyDisplay } from '@/components/propertyEditors/defaults'
-import { isPropertyPanelHiddenProperty } from './visibility'
+import {
+  resolveEditorOverride,
+  type PropertyDefinitionRegistrySnapshot,
+} from '@/data/propertyDefinitionRegistry'
+import type { TypeDefinitionRegistrySnapshot } from '@/data/typeDefinitionRegistry'
+import {
+  isPropertyPanelHiddenProperty,
+  isPropertyPanelReadOnlyProperty,
+} from './visibility'
+import {
+  declarationOnlyDefinitionForName,
+  declarationOnlyStatusText,
+} from './declarationOnly'
 
 const EMPTY_BLOCK_TYPES: readonly string[] = []
 
@@ -21,8 +33,12 @@ export interface PropertyPanelMetadataRow {
   readonly label: string
   readonly value: string
   /** When set, the value renders as a link opening this block (e.g.
-   *  "Changed by" → the editing user's page). */
-  readonly linkToBlockId?: string
+   *  "Changed by" → the editing user's page). The workspace travels WITH
+   *  the block id: the target is resolved in the panel block's workspace,
+   *  which isn't necessarily the active one (a panel left open across a
+   *  workspace switch). Pairing them structurally is what stops the href
+   *  from being built for a different workspace than the id came from. */
+  readonly linkTo?: {readonly blockId: string; readonly workspaceId: string}
 }
 
 export interface PropertyPanelModelRow {
@@ -46,6 +62,9 @@ export interface PropertyPanelModelRow {
   readonly canDelete: boolean
   readonly canChangeShape: boolean
   readonly isHidden: boolean
+  /** Row-level lock independent of repository read-only mode. */
+  readonly readOnly: boolean
+  readonly statusText?: string
 }
 
 export interface PropertyPanelModelSection {
@@ -89,6 +108,7 @@ const partitionProperties = (
   properties: Record<string, unknown>,
   schemas: ReadonlyMap<string, AnyPropertySchema>,
   uis: ReadonlyMap<string, AnyPropertyEditorOverride>,
+  definitions: PropertyDefinitionRegistrySnapshot | null,
 ): {
   visibleProperties: Record<string, unknown>
   hiddenProperties: Record<string, unknown>
@@ -97,42 +117,61 @@ const partitionProperties = (
   const hiddenProperties: Record<string, unknown> = {}
 
   for (const [name, value] of Object.entries(properties)) {
-    if (isPropertyPanelHiddenProperty(name, schemas, uis)) hiddenProperties[name] = value
+    if (isPropertyPanelHiddenProperty(name, schemas, uis, definitions)) hiddenProperties[name] = value
     else visibleProperties[name] = value
   }
 
   return {visibleProperties, hiddenProperties}
 }
 
-const hasOwn = (properties: Record<string, unknown>, name: string): boolean =>
-  Object.prototype.hasOwnProperty.call(properties, name)
-
 const resolveModelRow = (
   row: PropertyPanelRow,
   args: {
     schemas: ReadonlyMap<string, AnyPropertySchema>
     uis: ReadonlyMap<string, AnyPropertyEditorOverride>
-    presets: ReadonlyMap<string, AnyValuePreset>
+    presets: ReadonlyMap<string, AnyJoinedValuePreset>
+    definitions: PropertyDefinitionRegistrySnapshot | null
     hidden: boolean
+    /** True when the block this panel is for is itself a materialized seed
+     *  definition. Its whole property bag is code-owned (§5.1), so every row
+     *  is locked — not just the `seed:key`/`seed:revision` provenance markers.
+     *  Otherwise editing e.g. `property-schema:hidden` on a code-owned seed
+     *  would mutate the definition metadata the panel itself trusts. */
+    blockIsSeededDefinition: boolean
   },
 ): PropertyPanelModelRow | null => {
+  const ui = resolveEditorOverride(
+    row.name,
+    args.definitions,
+    args.uis,
+    args.schemas.get(row.name),
+  )
   const display = resolvePropertyDisplay({
     name: row.name,
     encodedValue: row.isSet ? row.encodedValue : undefined,
     schemas: args.schemas,
-    uis: args.uis,
+    override: ui,
     presets: args.presets,
   })
+  const declarationOnly = declarationOnlyDefinitionForName(
+    row.name,
+    args.definitions,
+  )
+  const rowReadOnly =
+    args.blockIsSeededDefinition ||
+    declarationOnly !== undefined ||
+    isPropertyPanelReadOnlyProperty(row.name)
 
-  if (!row.isSet && !display.isKnown) return null
+  if (!row.isSet && !display.isKnown && declarationOnly === undefined) return null
 
-  const decodedValue = row.isSet
+  const decodedValue = declarationOnly
+    ? row.encodedValue
+    : row.isSet
     ? display.isKnown
       ? safeDecode(display.schema, row.encodedValue)
       : row.encodedValue
     : display.schema.defaultValue
   const decodeFailed = row.isSet && display.isKnown && decodedValue === DECODE_FAILED
-  const ui = args.uis.get(row.name)
   const isTypeMembershipRow = row.name === typesProp.name
 
   return {
@@ -142,15 +181,21 @@ const resolveModelRow = (
     labelText: ui?.label ?? row.name,
     shape: display.shape,
     schema: display.schema,
-    schemaUnknown: !display.isKnown,
+    schemaUnknown: !display.isKnown && declarationOnly === undefined,
     decodeFailed,
     value: decodeFailed ? row.encodedValue : decodedValue,
-    Editor: display.Editor,
+    Editor: rowReadOnly ? undefined : display.Editor,
     Glyph: display.Glyph,
-    canRename: !args.hidden && !display.isKnown,
-    canDelete: !args.hidden && row.isSet && !isTypeMembershipRow,
-    canChangeShape: !args.hidden && !display.isKnown,
+    canRename: !args.hidden && !display.isKnown && !rowReadOnly,
+    canDelete: !args.hidden && row.isSet && !isTypeMembershipRow && !rowReadOnly,
+    canChangeShape: !args.hidden && !display.isKnown && !rowReadOnly,
     isHidden: args.hidden,
+    readOnly: rowReadOnly,
+    ...(declarationOnly
+      ? {
+          statusText: declarationOnlyStatusText(declarationOnly),
+        }
+      : {}),
   }
 }
 
@@ -159,8 +204,10 @@ const resolveSection = (
   args: {
     schemas: ReadonlyMap<string, AnyPropertySchema>
     uis: ReadonlyMap<string, AnyPropertyEditorOverride>
-    presets: ReadonlyMap<string, AnyValuePreset>
+    presets: ReadonlyMap<string, AnyJoinedValuePreset>
+    definitions: PropertyDefinitionRegistrySnapshot | null
     hidden: boolean
+    blockIsSeededDefinition: boolean
   },
 ): PropertyPanelModelSection | null => {
   const rows = section.rows
@@ -179,26 +226,42 @@ const resolveSection = (
 
 export const buildPropertyPanelModel = (args: {
   blockId: string
+  /** The panel block's own workspace — where `updatedByBlockId` was
+   *  resolved, and therefore where its link must open. */
+  workspaceId: string
   updatedAt: number
   updatedBy: string
   /** User page block id for `updatedBy`, so "Changed by" can link to it. */
   updatedByBlockId?: string
   properties: Record<string, unknown>
   schemas: ReadonlyMap<string, AnyPropertySchema>
+  propertyDefinitions: PropertyDefinitionRegistrySnapshot | null
+  typeDefinitions: TypeDefinitionRegistrySnapshot | null
   uis: ReadonlyMap<string, AnyPropertyEditorOverride>
-  presets: ReadonlyMap<string, AnyValuePreset>
+  presets: ReadonlyMap<string, AnyJoinedValuePreset>
   typesRegistry: ReadonlyMap<string, TypeContribution>
   syntheticRows?: readonly PropertyPanelRow[]
 }): PropertyPanelModel => {
   const blockTypes = readBlockTypes(args.properties)
+  // A materialized seed definition block's whole bag is code-owned. The
+  // registry already parsed this block's provenance (seedKey present iff it's
+  // a valid seed), so lock every row of its panel — not just the provenance
+  // markers `isPropertyPanelReadOnlyProperty` catches by name. Check BOTH
+  // registries: property-seed backing blocks are keyed in the property registry
+  // by field id; type-seed (`block-type`) backing blocks are keyed in the type
+  // registry by block id.
+  const blockIsSeededDefinition =
+    args.propertyDefinitions?.definitionsByFieldId.get(args.blockId)?.seedKey !== undefined ||
+    args.typeDefinitions?.definitionsByBlockId.get(args.blockId)?.seedKey !== undefined
   const {visibleProperties, hiddenProperties} = partitionProperties(
     args.properties,
     args.schemas,
     args.uis,
+    args.propertyDefinitions,
   )
   const pinnedRawRows: readonly PropertyPanelRow[] = [{
     name: typesProp.name,
-    encodedValue: hasOwn(visibleProperties, typesProp.name)
+    encodedValue: Object.hasOwn(visibleProperties, typesProp.name)
       ? visibleProperties[typesProp.name]
       : typesProp.codec.encode(blockTypes),
     isSet: true,
@@ -211,7 +274,9 @@ export const buildPropertyPanelModel = (args: {
       schemas: args.schemas,
       uis: args.uis,
       presets: args.presets,
+      definitions: args.propertyDefinitions,
       hidden: false,
+      blockIsSeededDefinition,
     }))
     .filter((row): row is PropertyPanelModelRow => row !== null)
 
@@ -224,11 +289,21 @@ export const buildPropertyPanelModel = (args: {
   })
 
   const sections = rawSections
-    .map(section => resolveSection(section, {
+    .map(section => resolveSection({
+      ...section,
+      rows: section.rows.filter(row => !isPropertyPanelHiddenProperty(
+        row.name,
+        args.schemas,
+        args.uis,
+        args.propertyDefinitions,
+      )),
+    }, {
       schemas: args.schemas,
       uis: args.uis,
       presets: args.presets,
+      definitions: args.propertyDefinitions,
       hidden: false,
+      blockIsSeededDefinition,
     }))
     .filter((section): section is PropertyPanelModelSection => section !== null)
 
@@ -244,13 +319,21 @@ export const buildPropertyPanelModel = (args: {
     schemas: args.schemas,
     uis: args.uis,
     presets: args.presets,
+    definitions: args.propertyDefinitions,
     hidden: true,
+    blockIsSeededDefinition,
   }) ?? {...HIDDEN_SECTION, rows: []}
 
   const metadataRows = [
     {label: 'ID', value: args.blockId},
     {label: 'Last changed', value: new Date(args.updatedAt).toLocaleString()},
-    {label: 'Changed by', value: args.updatedBy, linkToBlockId: args.updatedByBlockId},
+    {
+      label: 'Changed by',
+      value: args.updatedBy,
+      ...(args.updatedByBlockId
+        ? {linkTo: {blockId: args.updatedByBlockId, workspaceId: args.workspaceId}}
+        : {}),
+    },
   ]
 
   return {

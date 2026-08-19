@@ -68,8 +68,39 @@ const PROPERTY_FOCUSABLE_SELECTOR = [
 
 const isVisibleElement = (element: HTMLElement): boolean => {
   if (typeof window === 'undefined' || !window.getComputedStyle) return true
-  const style = window.getComputedStyle(element)
-  return style.display !== 'none' && style.visibility !== 'hidden'
+  // Prefer checkVisibility: it walks ANCESTORS, so a property row inside a
+  // warm-but-hidden layout session (display:none on some ancestor wrapper,
+  // not the row itself — see layoutSessionDom.ts) reports
+  // correctly invisible. The own-element style check below only ever saw
+  // the row's own computed style, which is unaffected by an ancestor's
+  // display:none and so falsely reported "visible". visibilityProperty
+  // extends the ancestor walk to visibility:hidden too, matching the old
+  // check's own-element visibility test.
+  if (typeof element.checkVisibility === 'function') {
+    return element.checkVisibility({visibilityProperty: true})
+  }
+  // Fallback for environments without checkVisibility (older WebViews):
+  // multi-session isolation must hold here too, so walk the ancestor chain
+  // for display:none — and content-visibility:hidden, which Chromium/WebView
+  // 85–104 support while lacking checkVisibility, so a host hiding warm
+  // sessions that way must still be caught — by hand. Only those two need
+  // the walk: an ancestor's value leaves the row's own computed style
+  // untouched, while visibility INHERITS, so the own-element visibility
+  // read already reflects a hidden (or collapsed) ancestor and honors a
+  // descendant's visible override, matching checkVisibility's semantics.
+  // Exclusion-based (not `!== 'visible'`): non-browser DOMs (happy-dom)
+  // compute '' for unstyled elements, and only these two values mean
+  // invisible per the spec checkVisibility implements.
+  const own = window.getComputedStyle(element)
+  if (own.visibility === 'hidden' || own.visibility === 'collapse') return false
+  for (let node: HTMLElement | null = element; node; node = node.parentElement) {
+    const style = node === element ? own : window.getComputedStyle(node)
+    if (style.display === 'none') return false
+    // content-visibility hides CONTENT, not the element itself — only
+    // ancestors' values matter for this row's visibility.
+    if (node !== element && style.contentVisibility === 'hidden') return false
+  }
+  return true
 }
 
 const isFocusableElement = (element: HTMLElement): boolean => {

@@ -1,12 +1,19 @@
 import {
   CORE_BLOCK_MERGED_EVENT,
   MergeIntoDescendantError,
+  type AnyPropertySchema,
   type BlockData,
   type BlockMergeAliasRewrite,
   type Tx,
 } from '@/data/api'
 import { keysBetween } from './orderKey'
+import { getPropertyFieldTargetId } from './propertyChildren'
+import {
+  collapseDuplicateFieldRow,
+  materializePropertyChildrenForExistingRow,
+} from './internals/propertyChildrenProcessor'
 import { mergeProperties } from './mergeProperties'
+import { deleteSubtreeInTx } from './subtreeDelete'
 
 export type ContentStrategy = 'concat' | 'keepTarget' | { separator: string }
 
@@ -52,6 +59,15 @@ export const mergeBlocksInTx = async (
   // under the tombstone. Treat self-merge as a no-op.
   if (into.id === from.id) return
 
+  // Merging an already-tombstoned block is a retry of a merge that
+  // already happened (e.g. the alias-collision "Merge into…" flow
+  // re-firing, #188) — treat it as a no-op like self-merge. Without
+  // this, the degenerate all-writes-elide case (tombstone delete
+  // no-ops, content/properties update elides when `from` was empty)
+  // reached emitEvent with no prior write in the tx and aborted with
+  // WorkspaceNotPinnedError. Found by repoMutators.fuzz.
+  if (from.deleted) return
+
   // Merging `from` into one of its own descendants can never succeed: the
   // child re-homing below would move an ancestor of `into` under `into` and
   // trip `tx.move`'s cycle guard mid-fold (clean rollback, raw CycleError).
@@ -64,8 +80,13 @@ export const mergeBlocksInTx = async (
     throw new MergeIntoDescendantError(into.id, from.id)
   }
 
-  const intoChildren = await tx.childrenOf(into.id)
-  const fromChildren = await tx.childrenOf(from.id)
+  // Re-parent only `from`'s regular (visible, non property-field) children
+  // under `into` — the VISIBLE view (opt into `hidePropertyChildren`).
+  // Property-field children are derived from the property bag and must NOT
+  // be carried over: the merged bag written to `into` below re-materializes
+  // the correct field/value children for `into` (PR #288 §9).
+  const intoChildren = await tx.childrenOf(into.id, undefined, {hidePropertyChildren: true})
+  const fromChildren = await tx.childrenOf(from.id, undefined, {hidePropertyChildren: true})
   if (fromChildren.length > 0) {
     const keys = keysBetween(intoChildren.at(-1)?.orderKey ?? null, null, fromChildren.length)
     for (let i = 0; i < fromChildren.length; i++) {
@@ -73,13 +94,154 @@ export const mergeBlocksInTx = async (
     }
   }
 
+  // Fold `from`'s property-field children into `into`'s using the SAME §9
+  // dedup the materializer runs for within-block duplicate field rows
+  // (`collapseDuplicateFieldRow`) — this is the merge form of #23's
+  // union-with-dedupe:
+  //   - a `from` value equal to `into`'s winning value folds (its
+  //     user-authored descendants ride onto `into`'s value);
+  //   - a DIVERGENT `from` value is kept as a peer SIBLING value under the
+  //     survivor field row (NOT nested under the winner as if it were an
+  //     annotation — see `collapseDuplicateFieldRow`): projection reads the
+  //     first value, so the cell keeps the winner while the conflicting one
+  //     stays visible and reconcilable. It is never reclassified either:
+  //     §9 recognition needs the `::` bit, and a value row doesn't carry
+  //     one wherever it is moved. That
+  //     is why no derived stamp is cleared here. The old path relocated
+  //     losers to ORDINARY content and had to null a definition-shaped
+  //     `reference_target_id` to stop them projecting as `into`'s field
+  //     rows — but that column is content-derived and device-LOCAL, so the
+  //     clear evaporated on the next edit and never synced (a peer kept
+  //     hiding the row). Marked-form recognition removes the need entirely
+  //     (#19): the loser is unmarked, so nothing can read it as machinery.
+  //   - a property `into` LACKS: the whole `from` field row moves over
+  //     intact (value + comments), becoming `into`'s field row for it.
+  const mergedProperties = mergeProps(into.properties, from.properties)
+  const fromPropertyChildren = (await tx.childrenOf(
+    from.id, undefined,
+  )).filter(child => !fromChildren.some(visible => visible.id === child.id))
+  // Destination map, built the SAME way as `fromPropertyChildren` above:
+  // raw children minus the visible ones, so a row counts as `into`'s field row
+  // only when the canonical exclusion actually hid it — which carries the flip
+  // gate, definition-ness, AND the `::` bit with it.
+  //
+  // Reading `referenceTargetId` off every raw child instead (the first version
+  // of this, PR #386 review) skipped all three. The column is a bare
+  // content-derived stamp: ANY child that is a whole-block ref carries one, so
+  // an ordinary `((definitionId))` child was recorded as the destination field
+  // row, and `collapseDuplicateFieldRow` then relocated `from`'s real
+  // values/comments under that unrelated block and tombstoned the genuine
+  // field row. Reachable from the "Merge into…" picker, not just raw tooling:
+  // its `searchByContent` has no property-child exclusion, so a property VALUE
+  // row matches on its own text and can be picked as the target.
+  //
+  // Under flat §9 recognition this needs no special case for a value-row
+  // `into`: every block hosts its own field rows through its `::` children at
+  // any depth, so the same raw-minus-visible difference is the right answer
+  // whether `into` is a page, a field row, or a value row.
+  //
+  // `intoAnchor` still walks EVERY raw child: it is the placement anchor for an
+  // adopted field row, so it wants the last physical sibling, hidden or not.
+  const intoFieldByFieldId = new Map<string, BlockData>()
+  let intoAnchor: string | null = null
+  const scanIntoChildren = async (): Promise<void> => {
+    intoFieldByFieldId.clear()
+    intoAnchor = null
+    for (const child of await tx.childrenOf(into.id, undefined)) {
+      intoAnchor = child.orderKey
+      if (intoChildren.some(visible => visible.id === child.id)) continue
+      const fieldId = getPropertyFieldTargetId(child)
+      if (fieldId !== undefined && !intoFieldByFieldId.has(fieldId)) {
+        intoFieldByFieldId.set(fieldId, child)
+      }
+    }
+  }
+  await scanIntoChildren()
+
+  // Pre-backfill catch-up (§5, #389 item 9). Between a workspace flipping and
+  // the backfill reaching `into`, `into` holds a full cell and zero field
+  // rows — the same shape as any row that arrives by sync after the flip.
+  // Without this, a key BOTH blocks hold takes the adopt branch below, and
+  // since target-wins makes the merged bag a no-op for that key, MATERIALIZE
+  // has no change to reconcile — so PROJECT rebuilds the cell from the only
+  // field row present, `from`'s, and the target's value is gone. Silent, from
+  // a plain backspace-at-start, and it uploads.
+  //
+  // Materializing `into`'s own row first restores the precondition the
+  // adopt/collapse split assumes, so the ordinary `collapseDuplicateFieldRow`
+  // path runs and the result matches a merge of two child-backed blocks:
+  // target's value wins the cell, `from`'s divergent value survives as a peer.
+  //
+  // Must run BEFORE the adopt loop, not after: once `from`'s row is adopted,
+  // `into` HAS a field row for that fieldId and the catch-up no longer fires.
+  //
+  // The `has(fieldId)` clause is the condition for needing catch-up at all —
+  // a key `into` already has a row for takes the collapse branch and wants
+  // nothing. It doubles as defence in depth against a find-or-create letting
+  // the cell overwrite children, but that direction needs cell/child
+  // divergence, which nothing can produce until the §5 arrival reconcile
+  // lands; deleting the clause today fails no test.
+  const pendingByName = new Map<string, AnyPropertySchema & {fieldId: string}>()
+  for (const fromField of fromPropertyChildren) {
+    const fieldId = getPropertyFieldTargetId(fromField)
+    if (fieldId === undefined || intoFieldByFieldId.has(fieldId)) continue
+    const schema = tx.resolvePropertyFieldSchema(into.workspaceId, fieldId)
+    if (schema === null || !Object.hasOwn(into.properties, schema.name)) continue
+    pendingByName.set(schema.name, {...schema, fieldId})
+  }
+  if (pendingByName.size > 0) {
+    await materializePropertyChildrenForExistingRow(
+      tx,
+      into,
+      // The names this call is about, resolved by the fieldId they came from —
+      // narrower than a workspace resolver by construction, so it cannot
+      // materialize a key the merge did not ask for.
+      {resolveNameSchema: name => pendingByName.get(name)},
+      [...pendingByName.keys()],
+    )
+    await scanIntoChildren()
+  }
+  for (const fromField of fromPropertyChildren) {
+    const fieldId = getPropertyFieldTargetId(fromField)
+    const intoField = fieldId !== undefined ? intoFieldByFieldId.get(fieldId) : undefined
+    if (intoField) {
+      // Merges into `into`'s existing field row for this property, deleting
+      // `fromField` and preserving every `from` value (folded or nested). When
+      // the merged bag drops a key `into` HAD, the `properties` write below is
+      // a real change for it, so MATERIALIZE reconciles `into`'s own children
+      // away — no special handling needed here.
+      await collapseDuplicateFieldRow(tx, intoField.id, fromField)
+      continue
+    }
+    // `into` lacks this field. Adopt it only if the merged bag actually keeps
+    // the property: a custom `mergeProperties` strategy can deliberately drop a
+    // source-only key, and since `into` never had it the final `properties`
+    // write is a no-op for that key — so MATERIALIZE wouldn't remove a moved
+    // field row, and its projection would add the property back, overriding the
+    // strategy. Orphan/unresolvable field rows (no schema) don't project, so
+    // they ride along harmlessly.
+    const schema = fieldId !== undefined
+      ? tx.resolvePropertyFieldSchema(from.workspaceId, fieldId)
+      : null
+    if (schema !== null && !Object.prototype.hasOwnProperty.call(mergedProperties, schema.name)) {
+      await deleteSubtreeInTx(tx, fromField.id)
+      continue
+    }
+    const [key] = keysBetween(intoAnchor, null, 1)
+    await tx.move(fromField.id, {parentId: into.id, orderKey: key})
+    intoAnchor = key
+    if (fieldId !== undefined) intoFieldByFieldId.set(fieldId, fromField)
+  }
+
   // Delete before merging properties so aliases held by `from` are
-  // released before they are added to `into`.
+  // released before they are added to `into`. `from`'s children have all
+  // been re-homed (visible ones above, property ones just now), so nothing
+  // is stranded live under the tombstone.
   await tx.delete(from.id)
 
   await tx.update(into.id, {
     content: computeMergedContent(into.content, from.content, contentStrategy),
-    properties: mergeProps(into.properties, from.properties),
+    properties: mergedProperties,
   })
 
   tx.emitEvent(CORE_BLOCK_MERGED_EVENT, {

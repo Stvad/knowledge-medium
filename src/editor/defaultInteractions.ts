@@ -6,6 +6,7 @@ import {
   blockShellDecoratorsFacet,
   isInteractiveContentEvent,
   isSelectionClick,
+  ownsGestureTarget,
   type BlockContentSurfaceContribution,
   type BlockResolveContext,
   type BlockShellDecoratorContribution,
@@ -24,6 +25,7 @@ import {
   toggleBlockSelectionAction,
 } from '@/extensions/blockSelectionAction.js'
 import { blockFocusShellDecorator } from '@/extensions/BlockFocusShellDecorator.js'
+import { blockPasteShellDecorator } from './BlockPasteShellDecorator.js'
 import { systemToggle } from '@/facets/togglable.js'
 
 export const codeMirrorEditModeActivation: ShortcutActivationContribution = context => {
@@ -133,8 +135,21 @@ export const blockContentPointerGestures: BlockContentSurfaceContribution = cont
     dispatchPointerAction(event, blockPointerDepsFrom(context, event))
   }
 
+  /** Events on a nested block's surface belong to that block, not to us (see
+   *  `ownsGestureTarget`). Load-bearing for the CAPTURE handler in particular:
+   *  capture runs outer → inner, so a container would claim a nested block's
+   *  double-click before that block ever saw it.
+   *
+   *  For touch it is asked ONCE, at `touchstart`. Every event of a touch
+   *  sequence is dispatched to the element the touch STARTED on, so a second
+   *  check at `touchend` would re-read the same target — a foreign sequence is
+   *  already dropped by never recording its start. */
+  const isOurs = (event: {currentTarget: HTMLElement; target: EventTarget | null}): boolean =>
+    ownsGestureTarget(event.currentTarget, event.target)
+
   return {
     onMouseDownCapture: (event: MouseEvent<HTMLDivElement>) => {
+      if (!isOurs(event)) return
       // A shell-level selection gesture already preventDefaulted (capture runs
       // shell → content), so skip it here rather than double-routing.
       if (event.defaultPrevented) return
@@ -144,6 +159,7 @@ export const blockContentPointerGestures: BlockContentSurfaceContribution = cont
       dispatchGesture(event)
     },
     onTouchStart: (event: TouchEvent<HTMLDivElement>) => {
+      if (!isOurs(event)) return
       const touch = event.touches[0]
       if (!touch) return
       contentTouchStarts.set(context.block.id, {
@@ -170,6 +186,7 @@ export const defaultEditorInteractionExtension: AppExtension = systemToggle({
   essential: true,
 }).of([
   blockShellDecoratorsFacet.of(blockSelectionShellDecorator, {source: 'default-block-selection'}),
+  blockShellDecoratorsFacet.of(blockPasteShellDecorator, {source: 'default-block-paste'}),
   blockShellDecoratorsFacet.of(blockFocusShellDecorator, {
     precedence: 1000,
     source: 'default-block-focus',

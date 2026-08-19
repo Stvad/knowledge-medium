@@ -34,6 +34,7 @@ import {
   useSyncExternalStore,
 } from 'react'
 import type { BlockData, Handle, PropertySchema, TypedBlockQuery } from '@/data/api'
+import { getAliases } from '@/data/properties.js'
 import { Block } from '../data/block'
 import { useRepo } from '@/context/repo.js'
 
@@ -173,7 +174,11 @@ export function useHandle<T, S = T | undefined>(
 
   // Ensure-load: fire-and-forget on mount. Idempotent (LoaderHandle and
   // Block both dedup their inflight load promise). The status() check
-  // prevents an unnecessary roundtrip when the handle is already ready.
+  // prevents an unnecessary roundtrip when the handle is already ready. A
+  // disposed handle reports its live replacement's status, so this reads the
+  // replacement rather than a corpse; with the key vacant it reports
+  // 'disposed' and we skip — the subscribe below mints a live handle at that
+  // key, whose own first-subscriber load covers the ensure-load we declined.
   useEffect(() => {
     if (handle.status() === 'idle') {
       void handle.load().catch(() => {/* error stored on the handle */})
@@ -186,6 +191,13 @@ export function useHandle<T, S = T | undefined>(
   // change is bailed out by useSyncExternalStore: it re-checks
   // getSelection, finds the stable reference held by committedRef, and
   // skips the re-render.
+  //
+  // No disposed-handle branch here on purpose. A subtree whose effects were
+  // unmounted long enough for the store to GC its handle
+  // (`<Activity mode="hidden">`) recovers because `handle.subscribe` itself
+  // resolves to whatever is live at the key — and it has to live there rather
+  // than in this hook, because the caller cannot re-acquire under React
+  // Compiler. Full mechanism: docs/handle-lifecycle-hidden-subtrees.html.
   const subscribe = useCallback(
     (listener: () => void) => handle.subscribe(listener),
     [handle],
@@ -286,6 +298,22 @@ export const usePropertyValue = useProperty
 
 const EMPTY_STRING_ARRAY: readonly string[] = Object.freeze([])
 
+/** The block's page names (`alias`), reactively.
+ *
+ *  Deliberately NOT `usePropertyValue(block, aliasesProp)`: that calls
+ *  `codec.decode` with no catch, and this read runs for EVERY rendered block
+ *  (it feeds the page-styling seams — `useBlockTitleTextClass` and the bullet).
+ *  One malformed stored value —
+ *  imported, hand-written, arrived over sync — would throw inside the renderer
+ *  itself, above the per-block error boundary, and blank out that block's whole
+ *  subtree. `getAliases` is the codebase's existing tolerant decode for exactly
+ *  this case; the shared empty array keeps the common no-alias path
+ *  identity-stable through `useHandle`'s equality bail-out. */
+export const useBlockAliases = (block: Block): readonly string[] =>
+  useHandle(block, {
+    selector: data => (data ? getAliases(data) : EMPTY_STRING_ARRAY),
+  }) as readonly string[]
+
 /** Reactive child-id list (in `(orderKey, id)` order). Returns `[]`
  *  while the handle is loading or for a leaf block.
  *
@@ -303,7 +331,10 @@ const EMPTY_STRING_ARRAY: readonly string[] = Object.freeze([])
  *  pop in block-by-block. The lean variant on `repo.childIds` is for
  *  non-rendering callers (counting / id-only scans). */
 export const useChildIds = (block: Block): string[] =>
-  useHandle(block.repo.query.childIds({id: block.id, hydrate: true}), {
+  // Display hook: the outline shows the visible view (recognized property
+  // field rows excluded, §9). Structural traversals use the everything-by-
+  // default query instead.
+  useHandle(block.repo.query.childIds({id: block.id, hydrate: true, hidePropertyChildren: true}), {
     selector: ids => ids ?? EMPTY_STRING_ARRAY,
   }) as string[]
 
@@ -317,7 +348,8 @@ export const useChildIds = (block: Block): string[] =>
  *  value to the entire block subtree. */
 export const useChildren = (block: Block): Block[] => {
   const repo = block.repo
-  return useHandle(block.repo.query.children({id: block.id}), {
+  // Display hook: visible view (property field rows excluded, §9).
+  return useHandle(block.repo.query.children({id: block.id, hidePropertyChildren: true}), {
     selector: data => (data ?? EMPTY_BLOCK_DATA_ARRAY).map(d => repo.block(d.id)),
   })
 }
@@ -334,7 +366,7 @@ export const useChildren = (block: Block): Block[] => {
  *  children (BlockChildren), so the two hooks subscribe to the same
  *  parent in lockstep and there's nothing to gain by splitting them. */
 export const useHasChildren = (block: Block): boolean =>
-  useHandle(block.repo.query.childIds({id: block.id, hydrate: true}), {
+  useHandle(block.repo.query.childIds({id: block.id, hydrate: true, hidePropertyChildren: true}), {
     selector: ids => (ids ?? EMPTY_STRING_ARRAY).length > 0,
   })
 
@@ -393,7 +425,8 @@ export const useManyParents = (blocks: readonly Block[]): ReadonlyMap<string, Bl
  *  call sites can adopt incrementally. */
 export const useSubtree = (block: Block): Block[] => {
   const repo = block.repo
-  return useHandle(block.repo.query.subtree({id: block.id}), {
+  // Display hook: visible view (property field rows excluded, §9).
+  return useHandle(block.repo.query.subtree({id: block.id, hidePropertyChildren: true}), {
     selector: data => (data ?? EMPTY_BLOCK_DATA_ARRAY).map(d => repo.block(d.id)),
   })
 }

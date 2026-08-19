@@ -8,6 +8,7 @@ import {
   type Placement,
   type VirtualElement,
 } from '@floating-ui/dom'
+import { clamp } from 'lodash-es'
 import {
   useEffect,
   useLayoutEffect,
@@ -25,13 +26,38 @@ export interface FloatingAnchorRect {
   width: number
 }
 
+/** Optional size constraints applied by the `size` middleware. When
+ *  provided, the floating element's width is matched to the anchor and
+ *  clamped to `[minWidth, maxWidth]` (and the usable viewport), and its
+ *  `maxHeight` is capped at `maxHeight` with a `minHeight` floor so it
+ *  never collapses to nothing in a cramped gap. Omit it (the
+ *  ReschedulePicker case) to leave the element's own width alone and just
+ *  cap `maxHeight` at the available space. */
+export interface FloatingSizing {
+  minWidth?: number
+  maxWidth?: number
+  minHeight?: number
+  maxHeight?: number
+}
+
 interface UseAnchoredFloatingOptions {
   open: boolean
-  anchorRect: FloatingAnchorRect | null
+  /** Live anchor element — preferred. Floating UI's `autoUpdate` tracks
+   *  this element's ancestor scroll and observes its size, so the
+   *  floating node stays glued to the anchor even when an inner panel
+   *  (not just the window) scrolls or the anchor resizes. */
+  anchorElement?: HTMLElement | null
+  /** Frozen anchor rect — for callers that only have the rect from an
+   *  event bridge and never the live element. Floating UI positions it as
+   *  a virtual element; ancestor-scroll/resize tracking is unavailable in
+   *  this mode (there's no element to observe). Ignored when
+   *  `anchorElement` is set. */
+  anchorRect?: FloatingAnchorRect | null
   placement?: Placement
   gap?: number
   viewportMargin?: number
   fallbackStyle?: CSSProperties
+  sizing?: FloatingSizing
 }
 
 const initialFloatingStyle: CSSProperties = {
@@ -59,19 +85,21 @@ export const floatingAnchorFromRect = (rect: FloatingAnchorRect): VirtualElement
 
 export const useAnchoredFloating = ({
   open,
+  anchorElement,
   anchorRect,
   placement = 'bottom',
   gap = 8,
   viewportMargin = 8,
   fallbackStyle = initialFloatingStyle,
+  sizing,
 }: UseAnchoredFloatingOptions) => {
   const [floatingElement, setFloatingElement] = useState<HTMLElement | null>(null)
   const [floatingStyle, setFloatingStyle] = useState<CSSProperties>(initialFloatingStyle)
   const [positioned, setPositioned] = useState(false)
 
-  const anchor = useMemo(
-    () => anchorRect ? floatingAnchorFromRect(anchorRect) : null,
-    [anchorRect],
+  const anchor = useMemo<HTMLElement | VirtualElement | null>(
+    () => anchorElement ?? (anchorRect ? floatingAnchorFromRect(anchorRect) : null),
+    [anchorElement, anchorRect],
   )
 
   const middleware = useMemo(
@@ -81,12 +109,30 @@ export const useAnchoredFloating = ({
       shift({padding: viewportMargin}),
       size({
         padding: viewportMargin,
-        apply: ({availableHeight, elements}) => {
-          elements.floating.style.maxHeight = `${Math.max(0, availableHeight)}px`
+        apply: ({availableWidth, availableHeight, rects, elements}) => {
+          const style = elements.floating.style
+          if (sizing) {
+            const {minWidth, maxWidth, minHeight = 0, maxHeight} = sizing
+            if (minWidth !== undefined || maxWidth !== undefined) {
+              const lower = Math.min(minWidth ?? 0, availableWidth)
+              const upper = Math.min(maxWidth ?? availableWidth, availableWidth)
+              style.width = `${clamp(rects.reference.width, lower, upper)}px`
+            }
+            // Cap at `maxHeight`, floored at `minHeight` so a gap tighter
+            // than `minHeight` keeps a scrollable minimum (overflowing the
+            // gap) rather than collapsing — like the original FloatingListbox.
+            // (The original additionally capped at the viewport height; that
+            // only diverges on viewports under ~`minHeight` tall, so it's
+            // dropped here.)
+            const cap = Math.min(maxHeight ?? availableHeight, Math.max(availableHeight, minHeight))
+            style.maxHeight = `${Math.max(0, cap)}px`
+          } else {
+            style.maxHeight = `${Math.max(0, availableHeight)}px`
+          }
         },
       }),
     ],
-    [gap, viewportMargin],
+    [gap, sizing, viewportMargin],
   )
 
   useIsomorphicLayoutEffect(() => {
@@ -119,6 +165,7 @@ export const useAnchoredFloating = ({
       cancelled = true
       cleanup()
       floatingElement.style.maxHeight = ''
+      floatingElement.style.width = ''
     }
   }, [anchor, floatingElement, middleware, open, placement])
 

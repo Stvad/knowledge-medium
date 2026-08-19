@@ -8,8 +8,8 @@ import {
   peekFocusedBlockLocation,
   sameFocusedBlockLocation,
   selectionStateProp,
+  uiStateRenderScopeId,
 } from '@/data/properties'
-import { outlineRenderScopeId } from '@/utils/renderScope'
 import { ChangeScope } from '@/data/api'
 
 /** True if `block` is collapsed *and* the caller cares. The scope root
@@ -444,7 +444,7 @@ export async function extendSelection(
     anchorBlockId: currentAnchor,
     targetLocation: {
       blockId: targetBlockId,
-      renderScopeId: currentLocation?.renderScopeId ?? outlineRenderScopeId(scopeRootId),
+      renderScopeId: currentLocation?.renderScopeId ?? uiStateRenderScopeId(uiStateBlock, scopeRootId),
     },
     selectedBlockIds: rangeIds,
     clearEditing,

@@ -11,11 +11,21 @@ import { useHandle } from '@/hooks/block.js'
 import { useAppRuntime } from '@/extensions/runtimeContext.js'
 import { ChangeScope, type AnyPropertySchema } from '@/data/api'
 import {
+  aliasesProp,
   blockTypeDescriptionProp,
   blockTypeLabelProp,
   blockTypePropertiesProp,
+  getAliases,
 } from '@/data/properties.js'
-import { propertyEditorOverridesFacet, valuePresetsFacet } from '@/data/facets.js'
+import { propertyEditorOverridesFacet } from '@/data/facets.js'
+import { isValidSeededDefinition } from '@/data/definitionSeeds'
+import {
+  assertNotGrammarShapedLabel,
+  assertRoundTrippableReferenceLabel,
+  UnwritableLabelError,
+} from '@/data/referenceBlock'
+import { resolveEditorOverride } from '@/data/propertyDefinitionRegistry'
+import {readValuePresets} from '@/data/valuePresetRegistry'
 import type { Block } from '@/data/block.js'
 import { Input } from '@/components/ui/input.js'
 import { Button } from '@/components/ui/button.js'
@@ -28,6 +38,7 @@ import {
 } from '@/components/propertyPanel/PropertyPicker.js'
 import type { BlockRenderer, BlockRendererProps } from '@/types.js'
 import { DefaultBlockRenderer } from './DefaultBlockRenderer.tsx'
+import { deleteBlockThroughUi } from '@/utils/deleteBlockThroughUi.js'
 
 export const writeBlockTypeLabel = async (
   block: Block,
@@ -36,27 +47,90 @@ export const writeBlockTypeLabel = async (
   next: string,
 ): Promise<void> => {
   if (next === currentLabel && next === currentContent) return
+  // Name hygiene (PR #288 §7): the label is mirrored into `content` below,
+  // so a grammar-shaped label would silently turn this type's own block into
+  // a reference span. Refuse rather than mirror; the caller reverts the
+  // draft. (Blanking the label is a real operation — see the release path
+  // below — so only a non-empty one is checked.)
+  // BOTH halves of the hygiene, matching the property-name path: the
+  // grammar check alone lets through a label that is plainly a name but
+  // can't be written as `[[label]]` and read back (a `]]` renders lossily;
+  // over `MAX_ALIAS_LENGTH` doesn't parse as a reference at all). Since a
+  // defined type DOUBLES as its `[[label]]` page — the alias claim below
+  // is that contract — such a label leaves the type unlinkable by name.
+  if (next !== '') {
+    assertNotGrammarShapedLabel(next, 'Type label')
+    assertRoundTrippableReferenceLabel(next, 'Type label')
+  }
   await block.repo.tx(async tx => {
+    // What the release path below must drop is the name this block is STORED
+    // as, not the one this editor rendered. A rename — remote, or from a
+    // second view — can land between that render and this tx, and releasing
+    // the stale captured name leaves the stored one claimed: blanking also
+    // empties `content`, so `aliasSyncProcessor`'s blank-content guard will
+    // not come back for it. Read before the writes below, which would
+    // otherwise hand back `next`.
+    const fresh = await tx.get(block.id)
+    const storedLabel = typeof fresh?.properties[blockTypeLabelProp.name] === 'string'
+      ? fresh.properties[blockTypeLabelProp.name] as string
+      : currentLabel
+    const storedContent = fresh?.content ?? currentContent
     if (next !== currentLabel) {
       await tx.setProperty(block.id, blockTypeLabelProp, next)
     }
     if (next !== currentContent) {
       await tx.update(block.id, {content: next})
     }
+    // A defined type doubles as its `[[label]]` page. A block-type block
+    // created blank (a bare `#type` with no content) is left unnamed and
+    // alias-less by the typeify processor, and `aliasSyncProcessor` only
+    // reconciles content→alias for blocks that ALREADY claim one — so
+    // seed the alias here the first time the label becomes non-empty.
+    // Once seeded, later renames keep it in lockstep via that processor;
+    // a colliding label is rejected by the alias-uniqueness trigger.
+    if (next !== '') {
+      const row = await tx.get(block.id)
+      const aliases = row ? getAliases(row) : []
+      if (row && aliases.length === 0) {
+        await tx.setProperty(block.id, aliasesProp, [next])
+      }
+    } else {
+      // Blanking the label un-names the type (an empty label makes
+      // `tryBuildType` drop it). Release the alias it claimed for its old
+      // name — `aliasSyncProcessor`'s blank-content guard won't, so
+      // `[[oldName]]` would otherwise keep resolving to this now-typeless
+      // block and block re-creating a type with that name
+      // (`alias.collision`). Only the old name is dropped; user-added
+      // aliases stay.
+      const row = await tx.get(block.id)
+      if (row) {
+        const stale = new Set([storedLabel, storedContent])
+        const aliases = getAliases(row)
+        const remaining = aliases.filter(alias => !stale.has(alias))
+        if (remaining.length !== aliases.length) {
+          await tx.setProperty(block.id, aliasesProp, remaining)
+        }
+      }
+    }
   }, {scope: ChangeScope.BlockDefault, description: 'edit block-type label'})
 }
 
-const BlockTypeContentRenderer: BlockRenderer = ({block}: BlockRendererProps) => {
+export const BlockTypeContentRenderer: BlockRenderer = ({block}: BlockRendererProps) => {
   const data = useHandle(block, {
     selector: d => d ? {
       id: d.id,
+      workspaceId: d.workspaceId,
       content: d.content,
       properties: d.properties,
     } : undefined,
   })
-  const readOnly = block.repo.isReadOnly
+  // A materialized type seed is code-owned and unshadowable — lock its backing
+  // row read-only, same rationale as PropertySchemaContentRenderer. A viewer
+  // (repo read-only) is the same lock for a different reason.
+  const isSeedBacked = data ? isValidSeededDefinition(data) : false
+  const readOnly = block.repo.isReadOnly || isSeedBacked
   const runtime = useAppRuntime()
-  const presets = runtime.read(valuePresetsFacet)
+  const presets = readValuePresets(runtime)
   const uis = runtime.read(propertyEditorOverridesFacet)
   const userSchemas = block.repo.userSchemas
 
@@ -111,7 +185,17 @@ const BlockTypeContentRenderer: BlockRenderer = ({block}: BlockRendererProps) =>
 
   const writeLabel = useCallback(async (next: string) => {
     const currentContent = data?.content ?? ''
-    await writeBlockTypeLabel(block, label, currentContent, next)
+    try {
+      await writeBlockTypeLabel(block, label, currentContent, next)
+    } catch (err) {
+      // The BASE class, so a refusal reason added later reverts the field
+      // without anyone having to remember to widen this check.
+      if (!(err instanceof UnwritableLabelError)) throw err
+      // Refused: snap the field back to the committed label so it never
+      // shows a name that wasn't saved.
+      console.error(`[BlockTypeBlockRenderer] ${err.message}`)
+      setDraftLabel(label)
+    }
   }, [block, data?.content, label])
 
   const writeDescription = useCallback(async (next: string) => {
@@ -184,7 +268,7 @@ const BlockTypeContentRenderer: BlockRenderer = ({block}: BlockRendererProps) =>
 
   const [confirmDelete, setConfirmDelete] = useState(false)
   const performDelete = useCallback(async () => {
-    await block.repo.mutate.delete({id: block.id})
+    await deleteBlockThroughUi(block)
   }, [block])
 
   if (!data) return null
@@ -232,7 +316,7 @@ const BlockTypeContentRenderer: BlockRenderer = ({block}: BlockRendererProps) =>
                 <>
                   <PropertyShapeGlyph
                     shape={entry.schema.codec.type}
-                    Glyph={uis.get(entry.schema.name)?.Glyph ?? presets.get(entry.schema.codec.type)?.Glyph}
+                    Glyph={resolveEditorOverride(entry.schema.name, block.repo.propertyDefinitions, uis, entry.schema)?.Glyph ?? presets.get(entry.schema.codec.type)?.Glyph}
                     className="text-muted-foreground"
                   />
                   <span className="flex-1 truncate">{entry.schema.name}</span>

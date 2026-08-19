@@ -1,0 +1,313 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>SUBTREE_SQL planner miss — every subtree load costs O(table), felt as held-j/k stalls · knowledge-medium</title>
+<style>
+  :root {
+    --bg: #fbfbfa;
+    --surface: #ffffff;
+    --surface-2: #f4f5f7;
+    --ink: #1f2328;
+    --ink-soft: #57606a;
+    --ink-faint: #8b949e;
+    --border: #e3e6ea;
+    --border-strong: #d0d7de;
+    --accent: #2f6fdb;
+    --accent-soft: #e8f0fe;
+    --green: #1a7f37;
+    --green-soft: #e6f4ea;
+    --amber: #9a6700;
+    --amber-soft: #fdf2d6;
+    --red: #cf222e;
+    --red-soft: #ffebe9;
+    --violet: #6639ba;
+    --violet-soft: #efeafb;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0d1117; --surface: #161b22; --surface-2: #1c2230;
+      --ink: #e6edf3; --ink-soft: #9da7b3; --ink-faint: #6e7681;
+      --border: #2a313c; --border-strong: #3a424e;
+      --accent: #6ea8fe; --accent-soft: #16243d;
+      --green: #4ac26b; --green-soft: #11271a;
+      --amber: #d4a72c; --amber-soft: #2b2410;
+      --red: #ff7b72; --red-soft: #2d1517;
+      --violet: #b083f0; --violet-soft: #20183a;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 16px/1.6 var(--sans);
+  }
+  main { max-width: 860px; margin: 0 auto; padding: 2.5rem 1.5rem 5rem; }
+  h1 { font-size: 1.7rem; line-height: 1.25; margin: 0.5rem 0 0.25rem; }
+  h2 { font-size: 1.25rem; margin: 2.5rem 0 0.75rem; padding-top: 1rem; border-top: 1px solid var(--border); }
+  h3 { font-size: 1.02rem; margin: 1.5rem 0 0.5rem; }
+  p, li { color: var(--ink); }
+  .subtitle { color: var(--ink-soft); margin: 0 0 1rem; }
+  code {
+    font-family: var(--mono); font-size: 0.85em;
+    background: var(--surface-2); border: 1px solid var(--border);
+    border-radius: 4px; padding: 0.08em 0.35em;
+  }
+  pre {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 8px; padding: 0.9rem 1rem; overflow-x: auto;
+    font-family: var(--mono); font-size: 0.82rem; line-height: 1.55;
+  }
+  pre code { background: none; border: none; padding: 0; }
+  .doc-status {
+    border: 1px solid var(--border-strong); border-left: 4px solid var(--accent);
+    background: var(--surface); border-radius: 8px;
+    padding: 0.65rem 1rem; margin: 0 0 1.75rem; font-size: 0.88rem; color: var(--ink-soft);
+  }
+  .doc-status b { color: var(--ink); }
+  .tldr {
+    background: var(--accent-soft); border: 1px solid var(--border);
+    border-radius: 10px; padding: 1rem 1.25rem; margin: 1.5rem 0;
+  }
+  .tldr p { margin: 0.4rem 0; }
+  table { border-collapse: collapse; width: 100%; margin: 1rem 0; font-size: 0.9rem; }
+  th, td { border: 1px solid var(--border); padding: 0.45rem 0.7rem; text-align: left; vertical-align: top; }
+  th { background: var(--surface-2); font-weight: 600; }
+  td.num, th.num { text-align: right; font-family: var(--mono); font-size: 0.85rem; white-space: nowrap; }
+  .good { color: var(--green); font-weight: 600; }
+  .bad { color: var(--red); font-weight: 600; }
+  .pill {
+    display: inline-block; font-size: 0.75rem; font-weight: 600;
+    border-radius: 999px; padding: 0.1em 0.7em; vertical-align: 1px;
+  }
+  .pill.red { background: var(--red-soft); color: var(--red); }
+  .pill.green { background: var(--green-soft); color: var(--green); }
+  .pill.amber { background: var(--amber-soft); color: var(--amber); }
+  .pill.violet { background: var(--violet-soft); color: var(--violet); }
+  .chain { list-style: none; counter-reset: step; padding: 0; margin: 1rem 0; }
+  .chain li {
+    counter-increment: step; position: relative; padding: 0.5rem 0 0.5rem 2.6rem;
+    border-left: 2px solid var(--border); margin-left: 0.9rem;
+  }
+  .chain li::before {
+    content: counter(step); position: absolute; left: -0.95rem; top: 0.55rem;
+    width: 1.8rem; height: 1.8rem; border-radius: 50%;
+    background: var(--surface); border: 2px solid var(--border-strong);
+    display: flex; align-items: center; justify-content: center;
+    font-weight: 700; font-size: 0.85rem; color: var(--ink-soft);
+  }
+  .chain li:last-child { border-left-color: transparent; }
+  details {
+    border: 1px solid var(--border); border-radius: 8px;
+    padding: 0.5rem 1rem; margin: 1rem 0; background: var(--surface);
+  }
+  summary { cursor: pointer; font-weight: 600; color: var(--ink-soft); }
+  .diff-del { color: var(--red); }
+  .diff-add { color: var(--green); }
+  .footnote { font-size: 0.85rem; color: var(--ink-faint); }
+</style>
+</head>
+<body>
+<main>
+
+<aside class="doc-status">
+  <b>Status:</b> proposal (diagnosis verified, fix measured; not yet implemented) ·
+  <b>last verified against code:</b> master <code>51a8d2d7</code>, and empirically against a live
+  production workspace (117,645-row <code>blocks</code> table), 2026-07-13.
+</aside>
+
+<h1>SUBTREE_SQL planner miss: every subtree load costs O(table), not O(subtree)</h1>
+<p class="subtitle">Felt as: holding <code>j</code>/<code>k</code> advances focus at ~5 rows/sec. Actual bug: SQLite builds a transient index over the whole <code>blocks</code> table on <em>every</em> <code>core.subtree</code> execution.</p>
+
+<div class="tldr">
+  <p><b>TL;DR.</b> SQLite cannot estimate a recursive CTE's cardinality, so for
+  <code>SUBTREE_SQL</code>'s downward join (<code>child.parent_id&nbsp;=&nbsp;subtree.id</code>) it ignores
+  <code>idx_blocks_parent_order</code> and instead builds an <b>AUTOMATIC PARTIAL COVERING INDEX</b>
+  over every live row — on every execution. A 3-row subtree load measures
+  <span class="bad">190.8&nbsp;ms</span> on a 117k-row table; the identical query with
+  <code>INDEXED&nbsp;BY&nbsp;idx_blocks_parent_order</code> measures <span class="good">1.6&nbsp;ms</span> (~120×).
+  A fresh <code>ANALYZE</code> does <em>not</em> change the plan — the fix is a one-line
+  <code>INDEXED BY</code> hint in <code>treeQueries.ts:SUBTREE_SQL</code>, plus a regression test on the query plan.</p>
+</div>
+
+<h2>1 · The symptom, and the measured chain behind it</h2>
+
+<p>Navigating a long list with held <code>j</code>/<code>k</code> (key autorepeat, ~30 presses/sec) recently became
+unusably slow — the cursor advances at roughly 5 rows/sec and keeps crawling long after the key is
+released. Instrumenting a live client (via <code>repo.metrics()</code> + a scripted probe) attributes the
+entire budget to one query:</p>
+
+<ol class="chain">
+  <li><b>Each press writes focus.</b> <code>focusBlock</code> (<code>src/data/properties.ts</code>) runs one small
+    <code>repo.tx</code> setting <code>focusedBlockLocation</code> + <code>isEditing</code> on the panel's ui-state block.
+    The very first press measures <span class="good">10&nbsp;ms</span> tx-to-commit — the write itself is fine.</li>
+  <li><b>The panel block sits inside a subscribed subtree.</b> <code>LayoutRenderer.tsx</code> and
+    <code>PanelLayoutProjection.start()</code> both hold a live <code>core.subtree(layoutSessionBlock)</code> handle,
+    and <code>core.subtree</code> registers per-row deps (via <code>hydrateBlocks</code>) for every block in its result —
+    including the panel row the focus write just touched. So <b>every keypress invalidates the layout-session
+    subtree handle</b> (confirmed: <code>loaderInvalidations</code> +1 per press, 10/10).</li>
+  <li><b>The re-run is absurdly expensive for its size.</b> The layout-session subtree is 3 live rows
+    (session root + two panels), yet each <code>core.subtree</code> loader run measures
+    <span class="bad">~185&nbsp;ms</span> (9 runs = 1,668.9&nbsp;ms during a 10-press burst).</li>
+  <li><b>The next press queues behind it.</b> All queries and txs share the one serialized PowerSync
+    connection, so each focus tx waits out the in-flight subtree re-load:
+    <code>writeTransaction</code> timings escalate 26 → 58 → 88 → 120 → 151 → 177&nbsp;ms across a burst.
+    Steady state is ~190&nbsp;ms/press; autorepeat at ~30&nbsp;Hz can never drain the queue.</li>
+</ol>
+
+<details>
+  <summary>Probe numbers (10 rapid presses, live client)</summary>
+  <table>
+    <tr><th>Metric</th><th class="num">Value</th></tr>
+    <tr><td>first press (cold, no invalidation in flight): tx-to-commit</td><td class="num">10.1 ms</td></tr>
+    <tr><td>steady-state press: tx-to-commit</td><td class="num">178–200 ms</td></tr>
+    <tr><td><code>core.subtree</code> loader runs / total</td><td class="num">9 / 1,668.9 ms</td></tr>
+    <tr><td><code>loaderInvalidations</code></td><td class="num">10 (1 per press)</td></tr>
+    <tr><td>React paint after each focus change</td><td class="num">7–13 ms</td></tr>
+  </table>
+  <p class="footnote">Paint cost is negligible — this is not a render regression. The entire per-press
+  budget is the subtree SQL re-run plus queueing behind it.</p>
+</details>
+
+<h2>2 · Root cause: the planner never uses <code>idx_blocks_parent_order</code></h2>
+
+<p><code>EXPLAIN QUERY PLAN</code> for the shipped <code>SUBTREE_SQL</code>
+(<code>src/data/internals/treeQueries.ts</code>):</p>
+
+<pre><code>CO-ROUTINE subtree
+SETUP
+  SEARCH blocks USING INDEX sqlite_autoindex_blocks_1 (id=?)
+RECURSIVE STEP
+  SCAN subtree
+  BLOOM FILTER ON child (deleted=?)
+  SEARCH child USING <b>AUTOMATIC PARTIAL COVERING INDEX</b> (deleted=?)   ← the bug
+SCAN subtree
+USE TEMP B-TREE FOR ORDER BY</code></pre>
+
+<p>An <em>automatic</em> index is a transient index SQLite builds <b>per statement execution</b>. Here it
+covers every live row of <code>blocks</code> (<code>deleted = 0</code>, ~75k rows of 117,645 total on the measured
+workspace), so every subtree load — regardless of how small the subtree is — pays an O(table · log table)
+index build. That is the ~190&nbsp;ms.</p>
+
+<p><b>Why the planner hedges:</b> SQLite has no cardinality estimate for the recursive self-reference
+(<code>SCAN subtree</code>), so it assumes the outer side of the join may be large; amortizing one covering-index
+build across many probes then looks cheaper than per-probe lookups on <code>idx_blocks_parent_order</code>
+followed by full-row fetches (<code>SELECT child.*</code>; the partial index is not covering). The estimate is
+badly wrong for typical subtrees, and the hedge re-runs on every execution.</p>
+
+<h3>Ruled out: stale statistics</h3>
+<p><code>sqlite_stat1</code> was indeed stale (it recorded 51,079 rows against an actual 117,645), but a fresh
+<code>ANALYZE blocks</code> (96.7&nbsp;ms, stats now current) <b>does not change the plan</b> — same automatic
+index, 240.2&nbsp;ms after re-analyze. The recursive-CTE cardinality blind spot, not statistics, drives the
+choice. So there is no ops-side fix; the SQL must pin the index.</p>
+
+<h3>Why it surfaced "recently"</h3>
+<p>The cost scales with total live rows, not subtree size. The measured workspace roughly doubled its
+<code>blocks</code> table in recent large imports; every <code>core.subtree</code> call site (page open, copy,
+navigation, layout projection) has been paying ~200&nbsp;ms per load, and the layout-session subscription
+wires that cost to <em>every keypress</em>, which is where it finally became impossible to ignore. This
+planner behavior also plausibly contributed to earlier reports of container-scale <code>subtree()</code> loads
+starving the connection.</p>
+
+<h2>3 · Proposed fix</h2>
+
+<p>Pin the join index in <code>SUBTREE_SQL</code>:</p>
+
+<pre><code>  WITH RECURSIVE subtree AS (
+    SELECT *, '!' || hex(id) || '/' AS path, 0 AS depth
+      FROM blocks
+     WHERE id = ? AND deleted = 0
+    UNION ALL
+    SELECT child.*, subtree.path || child.order_key || '!' || hex(child.id) || '/', subtree.depth + 1
+      FROM subtree
+<span class="diff-del">-     JOIN blocks AS child ON child.parent_id = subtree.id</span>
+<span class="diff-add">+     JOIN blocks AS child INDEXED BY idx_blocks_parent_order ON child.parent_id = subtree.id</span>
+     WHERE child.deleted = 0
+       AND subtree.depth < 100
+       AND INSTR(subtree.path, '!' || hex(child.id) || '/') = 0
+  )
+  SELECT * FROM subtree ORDER BY path</code></pre>
+
+<p>Plan after (verified live): <code>SEARCH child USING INDEX idx_blocks_parent_order (parent_id=?)</code> —
+no bloom filter, no automatic index. Measured on the same workspace, same 3-row subtree:
+<span class="bad">190.8&nbsp;ms</span> → <span class="good">1.6&nbsp;ms</span>.</p>
+
+<h3>Safety of <code>INDEXED BY</code></h3>
+<ul>
+  <li>The index is created by our own client DDL (<code>src/data/blockSchema.ts</code> —
+    <code>CREATE INDEX IF NOT EXISTS idx_blocks_parent_order ON blocks (parent_id, order_key, id) WHERE deleted = 0</code>),
+    so it is guaranteed present on every client that can run this query. <code>INDEXED BY</code> fails loudly
+    (prepare-time error) if the index is ever renamed/dropped — which is the failure mode we want, caught
+    immediately by any test that runs the query.</li>
+  <li><code>INDEXED BY</code> does not change semantics, only plan choice; the partial-index predicate
+    (<code>deleted = 0</code>) is implied by the query's own <code>child.deleted = 0</code>.</li>
+  <li>Results are unchanged (same rows, same <code>ORDER BY path</code>).</li>
+</ul>
+
+<h3>Regression test</h3>
+<p>Alongside the existing <code>treeQueries.test.ts</code> coverage, assert the plan itself so a future
+schema/SQL edit can't silently regress:</p>
+
+<pre><code>const plan = await db.getAll(`EXPLAIN QUERY PLAN ${SUBTREE_SQL}`, [rootId])
+const details = plan.map(r => r.detail).join('\n')
+expect(details).toContain('USING INDEX idx_blocks_parent_order')
+expect(details).not.toContain('AUTOMATIC')</code></pre>
+
+<h2>4 · Audit: other recursive CTEs are safe</h2>
+
+<p>Every other <code>WITH RECURSIVE</code> over <code>blocks</code> in core walks <em>upward</em>
+(<code>ON blocks.id = chain.parent_id</code> and variants) — a primary-key lookup per step, which the planner
+handles fine. Only the downward parent→children join hits the blind spot:</p>
+
+<table>
+  <tr><th>Site</th><th>Join direction</th><th>Verdict</th></tr>
+  <tr><td><code>treeQueries.ts</code> — <code>SUBTREE_SQL</code></td><td>downward (<code>child.parent_id = subtree.id</code>)</td><td><span class="pill red">affected — this fix</span></td></tr>
+  <tr><td><code>treeQueries.ts</code> — <code>ANCESTORS_SQL</code>, many-ancestors, depth walk</td><td>upward (PK lookup)</td><td><span class="pill green">safe</span></td></tr>
+  <tr><td><code>kernelQueries.ts</code> — ancestor walk (<code>walk</code> CTE)</td><td>upward (PK lookup)</td><td><span class="pill green">safe</span></td></tr>
+  <tr><td><code>kernelQueries.ts</code> — <code>childrenOf</code></td><td>flat <code>WHERE parent_id = ?</code></td><td><span class="pill green">safe (direct index use)</span></td></tr>
+  <tr><td><code>typedBlockQuery.ts</code> — ancestor-chain CTE</td><td>upward (PK lookup)</td><td><span class="pill green">safe</span></td></tr>
+  <tr><td><code>grouped-backlinks/query.ts</code> — <code>ancestor_chain</code></td><td>upward (PK lookup)</td><td><span class="pill green">safe</span></td></tr>
+</table>
+
+<p class="footnote">Rule of thumb going forward: any new recursive CTE that joins
+<code>blocks</code> downward on <code>parent_id</code> needs the <code>INDEXED BY</code> hint (or a plan-asserting test);
+check <code>EXPLAIN QUERY PLAN</code> for the string <code>AUTOMATIC</code>.</p>
+
+<h2>5 · Secondary observation (separate follow-up, not part of this change)</h2>
+
+<p>Even at 1.6&nbsp;ms, re-running the layout-session subtree on <em>every focus keystroke</em> is busywork:
+the focus write only changes <code>focusedBlockLocation</code>/<code>isEditing</code> on a panel row, which the
+layout projection and <code>LayoutRenderer</code> never read — they consume structure,
+<code>topLevelBlockId</code>, and the panel-stack type. The per-row deps from <code>hydrateBlocks</code> are
+property-name-blind, so any UiState property write on any row of any subscribed subtree re-runs the whole
+query.</p>
+
+<p>With the index fix in place this is no longer a performance problem, so it's flagged here only as a
+design note: if per-row deps ever grow property-name granularity (as the narrow-dep channels in
+<code>kernelInvalidation.ts</code> already have for <code>typedBlocks.property</code>), the layout subscription is
+the first consumer that would benefit. Not proposing anything concrete in this doc.</p>
+
+<h2>Appendix · Reproduction</h2>
+
+<details>
+  <summary>How the numbers were gathered</summary>
+  <ol>
+    <li><b>Per-press attribution:</b> <code>repo.resetMetrics()</code>, then 10× alternating
+      <code>focusBlock(uiStateBlock, rowId, {renderScopeId})</code> awaiting paint between presses; read
+      <code>repo.metrics()</code> — <code>txLog</code> (all entries <code>'focus block'</code>),
+      <code>queries['core.subtree']</code>, <code>handleStore.loaderInvalidations</code>. Repeated with real
+      <code>KeyboardEvent('j')</code> dispatch — same profile.</li>
+    <li><b>Isolated query timing:</b> <code>repo.db.getAll(SUBTREE_SQL, [layoutSessionId])</code> — 190–196&nbsp;ms
+      for 3 rows; control: <code>SELECT count(*) FROM blocks</code> (117,645) in 0.7&nbsp;ms on the same idle
+      connection, so this is query cost, not connection latency.</li>
+    <li><b>Plans:</b> <code>EXPLAIN QUERY PLAN</code> before/after the <code>INDEXED BY</code> hint (§2/§3 above).</li>
+    <li><b>ANALYZE control:</b> <code>PRAGMA analysis_limit=4000; ANALYZE blocks</code> → stats current →
+      plan unchanged, 240.2&nbsp;ms.</li>
+  </ol>
+</details>
+
+</main>
+</body>
+</html>

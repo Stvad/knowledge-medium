@@ -11,12 +11,22 @@ const createIndentedContent = (content: string, depth: number): string => {
 
 export const serializeBlock = async (block: Block): Promise<ClipboardData> => {
   // One SQL query hydrates the entire subtree in document order
-  // (SUBTREE_SQL ORDER BY path). We compute depth by walking that
-  // flat list once — the root sits at depth 0; every other row's
-  // depth is `parentDepth + 1` (parent must already have appeared
-  // since the query is depth-first). No per-parent handle creation,
-  // no recursive cache reads.
-  const blocks = await block.repo.query.subtree({id: block.id}).load()
+  // (SUBTREE_SQL ORDER BY path), each row carrying its `depth` relative to
+  // the root (0 for the root). No per-parent handle creation, no recursive
+  // cache reads, and no re-deriving depth here.
+  //
+  // `hidePropertyChildren` prunes EVERY recognized field row today, which is
+  // correct only while all workspaces read 'cell' (nothing is child-backed,
+  // so nothing is pruned). Copy is WYSIWYG per §10 — default copy serializes
+  // exactly the visible view, so once slice D's tier-aware predicate lands a
+  // NON-hidden property row travels with its subtree and only hidden-tier
+  // subtrees prune whole. That switch also closes #404's copy gap by
+  // construction: user content nested under a visible property's value stops
+  // being dropped along with the machinery. Content under a HIDDEN property's
+  // value still won't travel on default copy — an accepted WYSIWYG
+  // consequence, covered by the explicit "copy with hidden properties"
+  // command rather than by widening this call.
+  const blocks = await block.repo.query.subtree({id: block.id, hidePropertyChildren: true}).load()
   if (blocks.length === 0) {
     throw new Error(`No block data could be serialized for block with id ${block.id}`)
   }
@@ -28,18 +38,8 @@ export const serializeBlock = async (block: Block): Promise<ClipboardData> => {
     }
   }
 
-  const depthById = new Map<string, number>()
-  const markdown: string[] = []
-  for (const b of blocks) {
-    const depth = b.id === block.id
-      ? 0
-      : (depthById.get(b.parentId ?? '') ?? 0) + 1
-    depthById.set(b.id, depth)
-    markdown.push(createIndentedContent(b.content, depth))
-  }
-
   return {
-    markdown: markdown.join('\n'),
+    markdown: blocks.map(b => createIndentedContent(b.content, b.depth)).join('\n'),
     blocks,
   }
 }
@@ -101,6 +101,21 @@ export const copySelectedBlocksToClipboard = async (
     return
   }
 
-  const clipboardData = await serializeSelectedBlocks(selectionState.selectedBlockIds, repo)
-  await writeToClipboard(clipboardData)
+  await copyBlockIdsToClipboard(selectionState.selectedBlockIds, repo)
+}
+
+/** Copy an explicit set of blocks. `cut` needs this: it deletes the blocks its
+ *  DEPS name, and re-deriving the copy set from the ui-state selection means
+ *  the two can disagree — an action dispatched with supplied deps (a group
+ *  header button, the agent bridge) has no ui-state selection at all, so the
+ *  copy silently no-ops while the delete still runs. Cut what you delete. */
+export const copyBlockIdsToClipboard = async (
+  blockIds: readonly string[],
+  repo: Repo,
+): Promise<void> => {
+  if (!blockIds.length) {
+    console.log('No blocks selected to copy')
+    return
+  }
+  await writeToClipboard(await serializeSelectedBlocks([...blockIds], repo))
 }

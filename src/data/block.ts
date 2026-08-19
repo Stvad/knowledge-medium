@@ -211,9 +211,13 @@ export class Block implements Handle<BlockData | null> {
    *  fallback. Throws BlockNotLoadedError if the row isn't loaded. */
   get<T>(schema: PropertySchema<T>): T {
     const data = this.data  // throws if not loaded
-    const stored = data.properties[schema.name]
-    if (stored === undefined) return schema.defaultValue
-    return schema.codec.decode(stored)
+    const resolution = this.repo.propertySchemaResolverFor(data.workspaceId)
+      .resolveBoundary(schema)
+    if (resolution.status === 'identity-unavailable') return schema.defaultValue
+    const resolvedSchema = resolution.schema
+    const stored = data.properties[resolvedSchema.name]
+    if (stored === undefined) return resolvedSchema.defaultValue
+    return resolvedSchema.codec.decode(stored)
   }
 
   /** Like `get` but doesn't substitute the default — returns undefined
@@ -221,9 +225,13 @@ export class Block implements Handle<BlockData | null> {
   peekProperty<T>(schema: PropertySchema<T>): T | undefined {
     const snap = this.peek()
     if (snap === undefined || snap === null) return undefined
-    const stored = snap.properties[schema.name]
+    const resolution = this.repo.propertySchemaResolverFor(snap.workspaceId)
+      .resolveBoundary(schema)
+    if (resolution.status === 'identity-unavailable') return undefined
+    const resolvedSchema = resolution.schema
+    const stored = snap.properties[resolvedSchema.name]
     if (stored === undefined) return undefined
-    return schema.codec.decode(stored)
+    return resolvedSchema.codec.decode(stored)
   }
 
   get types(): readonly string[] {
@@ -242,9 +250,13 @@ export class Block implements Handle<BlockData | null> {
    *  never need to ask the BlockCache about children directly.
    *  Imperative call sites do `await block.childIds.load()`; reactive
    *  ones use `useChildIds(block)` (which subscribes to the same
-   *  handle). */
+   *  handle).
+   *
+   *  Facade getters speak the visible/outline view (property field rows
+   *  excluded, §9); drop to `repo.query.*` / `tx.childrenOf` for the
+   *  structural everything-view. */
   get childIds(): LoaderHandle<string[]> {
-    return this.repo.query.childIds({id: this.id})
+    return this.repo.query.childIds({id: this.id, hidePropertyChildren: true})
   }
 
   /** Reactive children-rows list. Same shape as `childIds` but loads
@@ -253,7 +265,7 @@ export class Block implements Handle<BlockData | null> {
    *  extra `repo.block(id).load()` per child. Callers wanting Block
    *  facades do `(await block.children.load()).map(d => repo.block(d.id))`. */
   get children(): LoaderHandle<BlockData[]> {
-    return this.repo.query.children({id: this.id})
+    return this.repo.query.children({id: this.id, hidePropertyChildren: true})
   }
 
   /** Parent as Block, or null only if this block has no parent
@@ -303,10 +315,7 @@ export class Block implements Handle<BlockData | null> {
     }
     const updater = valueOrUpdater as (current: T | undefined) => T
     await this.repo.tx(async tx => {
-      const data = await tx.get(this.id)
-      const raw = data?.properties[schema.name]
-      const current = raw === undefined ? undefined : schema.codec.decode(raw)
-      await tx.setProperty(this.id, schema, updater(current))
+      await tx.setProperty(this.id, schema, updater)
     }, {scope: schema.changeScope, description: `update property ${schema.name} on ${this.id}`})
   }
 
@@ -329,6 +338,7 @@ export class Block implements Handle<BlockData | null> {
 
   /** Subtree-aware soft-delete (mirrors legacy `Block.delete`). */
   async delete(): Promise<void> {
+    // eslint-disable-next-line no-restricted-syntax -- programmatic delete: this IS the primitive the UI choke point wraps
     await this.repo.mutate.delete({id: this.id})
   }
 }

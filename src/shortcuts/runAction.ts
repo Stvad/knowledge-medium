@@ -14,6 +14,7 @@ import {
   type BaseShortcutDependencies,
 } from '@/shortcuts/types.js'
 import type { FacetRuntime } from '@/facets/facet.js'
+import { invokeAction } from './actionDispatch.ts'
 import { getActiveActionById, getEffectiveActions } from './effectiveActions.ts'
 import { resolveDeps } from './resolve.ts'
 
@@ -52,7 +53,7 @@ export function dispatchActiveActionById(
   }
   const deps = resolveDeps(action, active, contextConfigsByType)
   if (!deps) throw new Error(`[runActionById] Context "${action.context}" is not active.`)
-  const result = action.handler(deps, trigger, dispatch)
+  const result = invokeAction(runtime, {action, deps, trigger, dispatch})
   return result === false ? undefined : result
 }
 
@@ -96,8 +97,11 @@ export function setRunActionDispatcher(next: RunActionByIdFn | null): void {
  * the handler. Callers own the precondition: an action whose handler trusts its
  * deps (e.g. an SRS-only action) must either be unreachable here when
  * inapplicable (the command palette filters by `isVisible`) or guard inside its
- * handler. `dispatchActionWithDeps` below DOES gate on `canDispatch`. Unifying
- * these gates is tracked with the broader dispatch-lifecycle work.
+ * handler. `dispatchActionWithDeps` below DOES gate on `canDispatch`. The single
+ * `invokeAction` choke (now shared by both paths) is the natural place to unify
+ * these gates, but doing so would change imperative-dispatch semantics app-wide
+ * (`runActionById` would start respecting `canDispatch`); deferred to the broader
+ * dispatch-lifecycle work.
  */
 export const runActionById: RunActionByIdFn = (actionId, trigger) => {
   if (!dispatcher) {
@@ -106,6 +110,35 @@ export const runActionById: RunActionByIdFn = (actionId, trigger) => {
     )
   }
   return dispatcher(actionId, trigger)
+}
+
+/**
+ * `runActionById` for UI callers that must not throw into render or leave an
+ * unhandled rejection: a button's onClick, a status-dropdown row.
+ *
+ * `runActionById` throws SYNCHRONOUSLY when the id isn't an active action
+ * (its plugin toggled off, its context inactive) and can reject
+ * asynchronously from the handler — so a correct call site needs both a
+ * try/catch and a `.catch`. That exact shape had been copied per call site.
+ *
+ * Resolves `true` when the dispatch completed, `false` when it failed (the
+ * error is logged, not rethrown). Callers that make a decision on the
+ * outcome — persisting a "don't show this again" flag, say — should branch on
+ * it rather than assuming the click worked. Note it reports whether DISPATCH
+ * succeeded: an action that catches its own errors internally still resolves
+ * `true`.
+ */
+export const runActionByIdSafely = async (
+  actionId: string,
+  trigger: ActionTrigger,
+): Promise<boolean> => {
+  try {
+    await runActionById(actionId, trigger)
+    return true
+  } catch (e) {
+    console.error(`[runActionById] "${actionId}" failed`, e)
+    return false
+  }
 }
 
 export type DispatchActionWithDepsFn = (

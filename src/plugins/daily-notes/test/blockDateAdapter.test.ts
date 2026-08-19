@@ -2,9 +2,8 @@
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChangeScope } from '@/data/api'
-import { BlockCache } from '@/data/blockCache'
-import { Repo } from '@/data/repo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
+import { createTestRepo } from '@/data/test/createTestRepo'
 import { kernelDataExtension } from '@/data/kernelDataExtension'
 import { resolveFacetRuntimeSync } from '@/facets/facet.js'
 import {
@@ -61,12 +60,11 @@ beforeEach(async () => {
 })
 
 const makeRepo = () =>
-  new Repo({
+  createTestRepo({
     db: sharedDb.db,
-    cache: new BlockCache(),
     user: {id: 'user-1'},
     startSyncObserver: false,
-  })
+  }).repo
 
 describe('blockDateAdapter dispatch', () => {
   it('returns null when no adapter applies', async () => {

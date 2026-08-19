@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { ChangeScope } from '@/data/api'
-import { propertySchemasFacet } from '@/data/facets.js'
+import { definitionSeedsFacet } from '@/data/facets.js'
 import { appEffectsFacet } from '@/extensions/core.js'
 import { blockContentDecoratorsFacet } from '@/extensions/blockInteraction.js'
 import { resolveFacetRuntimeSync } from '@/facets/facet.js'
@@ -21,12 +21,14 @@ describe('updateIndicatorPlugin', () => {
     expect(runtime.read(appEffectsFacet)).toContain(updateIndicatorLoadTimeEffect)
   })
 
-  it('contributes its property schemas', () => {
+  it('contributes its property seeds', () => {
     const runtime = resolveFacetRuntimeSync(updateIndicatorPlugin)
-    const schemas = runtime.read(propertySchemasFacet)
+    const seeds = runtime.read(definitionSeedsFacet)
 
-    expect(schemas.get(previousLoadTimeProp.name)).toBe(previousLoadTimeProp)
-    expect(schemas.get(currentLoadTimeProp.name)).toBe(currentLoadTimeProp)
+    expect(seeds).toEqual(expect.arrayContaining([
+      previousLoadTimeProp,
+      currentLoadTimeProp,
+    ]))
     expect(previousLoadTimeProp.changeScope).toBe(ChangeScope.UserPrefs)
     expect(currentLoadTimeProp.changeScope).toBe(ChangeScope.UserPrefs)
   })

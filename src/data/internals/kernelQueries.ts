@@ -20,15 +20,33 @@
 import { z } from 'zod'
 import {
   defineQuery,
+  blockPredicateSchema,
+  referenceFilterSchema,
   type AnyQuery,
   type BlockData,
   type BlockPredicate,
   type QueryCtx,
   type ResolvedTypedBlockQuery,
   type Schema,
+  type SubtreeRow,
+  type TypedBlockQueryReferenceFilter,
 } from '@/data/api'
 import { SELECT_BLOCK_COLUMNS_SQL, buildQualifiedBlockColumnsSql, type BlockRow } from '@/data/blockSchema'
-import { ANCESTORS_SQL, CHILDREN_IDS_SQL, CHILDREN_SQL, manyAncestorsSql, SUBTREE_SQL } from './treeQueries'
+import { SYSTEM_BLOCK_TYPES, USER_TYPE } from '@/data/blockTypes'
+import { userStateRootBlockIds } from '@/data/derivedIds'
+import { seedKeyProp } from '@/data/properties'
+import { propertyDefinitionBlockId } from '@/data/definitionSeeds'
+import type { Repo } from '@/data/repo'
+import {
+  ANCESTORS_SQL,
+  CHILDREN_IDS_SQL,
+  CHILDREN_SQL,
+  manyAncestorsSql,
+  SUBTREE_SQL,
+  VISIBLE_CHILDREN_IDS_SQL,
+  VISIBLE_CHILDREN_SQL,
+  VISIBLE_SUBTREE_SQL,
+} from './treeQueries'
 import {
   assertAncestorWalkBounded,
   buildCandidatesCte,
@@ -247,6 +265,16 @@ export const compileBlocksContentSearchQuery = (
   return {matchQuery, rankQuery}
 }
 
+/** Escape SQLite LIKE metacharacters (`%`, `_`) and the escape char
+ *  itself in a value that must be matched literally inside a LIKE
+ *  pattern. Pairs with an explicit `ESCAPE '\'` clause on the SQL side
+ *  (we use backslash as the escape char). Without this a user-typed
+ *  `_` or `%` acts as a wildcard — `a_b` would match `axb`, and a bare
+ *  `%` filter would match every row. Bound `?` params already block SQL
+ *  injection; this only fixes LIKE-pattern semantics. */
+const escapeLikePattern = (value: string): string =>
+  value.replace(/[\\%_]/g, c => `\\${c}`)
+
 /** Content search — case-insensitive trigram FTS substring match. */
 export const SELECT_BLOCKS_BY_CONTENT_SQL = `
   SELECT ${buildQualifiedBlockColumnsSql('b')}
@@ -261,7 +289,7 @@ export const SELECT_BLOCKS_BY_CONTENT_SQL = `
   ORDER BY
     CASE
       WHEN LOWER(b.content) = LOWER(?) THEN 0
-      WHEN LOWER(b.content) LIKE LOWER(?) || '%' THEN 1
+      WHEN LOWER(b.content) LIKE LOWER(?) || '%' ESCAPE '\\' THEN 1
       ELSE 2
     END,
     coalesce(b.user_updated_at, b.updated_at) DESC
@@ -279,6 +307,83 @@ export const SELECT_RECENT_BLOCKS_SQL = `
   LIMIT ?
 `
 
+/** User pages in a workspace — the seed for deriving that workspace's
+ *  app-state roots. */
+export const SELECT_USER_PAGE_IDS_SQL = `
+  SELECT block_id AS id FROM block_types
+   WHERE workspace_id = ? AND type = ?
+`
+
+/** `SELECT_RECENT_BLOCKS_SQL` restricted to user-authored rows — the
+ *  activity view (Recents), where a panel row or a preferences block is
+ *  noise, not an edit.
+ *
+ *  Three exclusions, and the structural one carries the weight: every
+ *  per-user state row (panels, layout sessions, per-plugin prefs and
+ *  ui-state, and whatever records a plugin files under them) descends
+ *  from one of that user's two state roots, so walking DOWN from those
+ *  roots — a set bounded by the UI surface, not by document size — drops
+ *  all of it without the kernel knowing any plugin's type ids.
+ *
+ *  The walk starts at the ROOTS, not at the user page above them: a user
+ *  page is an ordinary navigable page, and a note authored directly on it
+ *  is content. Only `ui-state` / `user-prefs` and their descendants are
+ *  app-owned (`USER_STATE_ROOT_PATHS`).
+ *
+ *  Then `SYSTEM_BLOCK_TYPES` covers app-owned rows that live at the
+ *  workspace root instead, and a `seed:key` property marks a block as a
+ *  materialized CODE seed. The seed-key test is what lets the type list
+ *  stay narrow: a property-schema or block-type block a user created is
+ *  authored content and stays, while the kernel's own definition blocks —
+ *  rewritten en masse on a seed revision bump — do not.
+ *
+ *  All of it sits inside the statement, before the LIMIT: filtering a
+ *  fetched window instead would hand back a page short by whatever it
+ *  dropped, and a run of ineligible rows would empty it.
+ *
+ *  The walk deliberately does NOT filter `deleted = 0`, for the same
+ *  reason `IS_DESCENDANT_OF_SQL` doesn't: descent is a structural fact
+ *  about `parent_id`, independent of soft-delete. Sync-apply permits a
+ *  live child under a tombstoned parent (`blocks_parent_not_deleted_check_*`
+ *  is skipped for `source IS NULL` writes), so stopping at a tombstone
+ *  would leak that live state row into the feed as user activity. The
+ *  outer query still filters deleted rows out of the RESULT.
+ *
+ *  Params: stateRootIdsJson, workspaceId, ...SYSTEM_BLOCK_TYPES, limit —
+ *  see `recentUserBlocksParams`. */
+export const SELECT_RECENT_USER_BLOCKS_SQL = `
+  WITH RECURSIVE user_state(id) AS (
+    SELECT value FROM json_each(?)
+    UNION
+    SELECT b.id FROM blocks b
+      JOIN user_state ON b.parent_id = user_state.id
+  )
+  SELECT ${buildQualifiedBlockColumnsSql('blocks')}
+  FROM blocks
+  WHERE blocks.workspace_id = ?
+    AND blocks.deleted = 0
+    AND blocks.content != ''
+    AND blocks.id NOT IN (SELECT id FROM user_state)
+    AND json_extract(blocks.properties_json, '$."${seedKeyProp.name}"') IS NULL
+    AND NOT EXISTS (
+      SELECT 1 FROM block_types bt
+       WHERE bt.block_id = blocks.id
+         AND bt.type IN (${SYSTEM_BLOCK_TYPES.map(() => '?').join(', ')})
+    )
+  ORDER BY coalesce(blocks.user_updated_at, blocks.updated_at) DESC, blocks.id ASC
+  LIMIT ?
+`
+
+/** Bind list for `SELECT_RECENT_USER_BLOCKS_SQL`. Single-sourced so the
+ *  placeholder count in the statement and the parameter order can't
+ *  drift as `SYSTEM_BLOCK_TYPES` grows. */
+export const recentUserBlocksParams = (
+  stateRootIds: readonly string[],
+  workspaceId: string,
+  limit: number,
+): unknown[] =>
+  [JSON.stringify(stateRootIds), workspaceId, ...SYSTEM_BLOCK_TYPES, limit]
+
 /** Distinct alias values in a workspace, optionally substring-filtered.
  *  Reads `block_aliases` (the trigger-maintained side index in
  *  clientSchema.ts) instead of scanning `json_each(properties_json,
@@ -293,12 +398,12 @@ export const SELECT_ALIASES_IN_WORKSPACE_SQL = `
   JOIN blocks b ON b.id = ba.block_id
   WHERE ba.workspace_id = ?
     AND b.deleted = 0
-    AND (? = '' OR ba.alias_lower LIKE '%' || LOWER(?) || '%')
+    AND (? = '' OR ba.alias_lower LIKE '%' || LOWER(?) || '%' ESCAPE '\\')
   GROUP BY ba.alias
   ORDER BY
     MIN(CASE
       WHEN ba.alias_lower = LOWER(?) THEN 0
-      WHEN ba.alias_lower LIKE LOWER(?) || '%' THEN 1
+      WHEN ba.alias_lower LIKE LOWER(?) || '%' ESCAPE '\\' THEN 1
       ELSE 2
     END),
     MIN(b.created_at),
@@ -319,6 +424,24 @@ export const SELECT_BLOCK_BY_ALIAS_IN_WORKSPACE_SQL = `
     AND blocks.deleted = 0
   ORDER BY blocks.created_at
   LIMIT 1
+`
+
+/** ALL live claimants of an exact alias in a workspace — no `LIMIT 1`.
+ *  The single-row lookups above tie-break on `created_at`, which is a
+ *  defense-in-depth convenience for callers that just want "the block
+ *  named X". A caller deciding whether an alias is CLAIMED cannot use
+ *  them: `block_aliases_workspace_alias_unique` only fires for local
+ *  user txs (`tx_context.source IS NOT NULL`), so sync-applied rows can
+ *  leave several live claimants, and the oldest is not necessarily the
+ *  one that matters. Same index (`idx_block_aliases_ws_alias`). */
+export const SELECT_BLOCKS_BY_ALIAS_IN_WORKSPACE_SQL = `
+  SELECT ${buildQualifiedBlockColumnsSql('blocks')}
+  FROM block_aliases ba
+  JOIN blocks ON blocks.id = ba.block_id
+  WHERE ba.workspace_id = ?
+    AND ba.alias = ?
+    AND blocks.deleted = 0
+  ORDER BY blocks.created_at
 `
 
 /** Variant of `SELECT_BLOCK_BY_ALIAS_IN_WORKSPACE_SQL` that ignores
@@ -365,7 +488,7 @@ export const SELECT_BLOCK_BY_ALIAS_IN_WORKSPACE_EXCLUDING_SQL = `
  *  aliases" path. */
 export const buildFuzzyAliasMatchesSql = (tokenCount: number): string => {
   const filters = tokenCount > 0
-    ? Array(tokenCount).fill(`ba.alias_lower LIKE '%' || ? || '%'`).join(' AND ')
+    ? Array(tokenCount).fill(`ba.alias_lower LIKE '%' || ? || '%' ESCAPE '\\'`).join(' AND ')
     : '1=1'
   return `
     SELECT
@@ -381,7 +504,7 @@ export const buildFuzzyAliasMatchesSql = (tokenCount: number): string => {
     ORDER BY
       CASE
         WHEN ba.alias_lower = ? THEN 0
-        WHEN ba.alias_lower LIKE ? || '%' THEN 1
+        WHEN ba.alias_lower LIKE ? || '%' ESCAPE '\\' THEN 1
         ELSE 2
       END,
       b.created_at,
@@ -402,11 +525,11 @@ export const SELECT_ALIAS_MATCHES_IN_WORKSPACE_SQL = `
   JOIN blocks b ON b.id = ba.block_id
   WHERE ba.workspace_id = ?
     AND b.deleted = 0
-    AND (? = '' OR ba.alias_lower LIKE '%' || LOWER(?) || '%')
+    AND (? = '' OR ba.alias_lower LIKE '%' || LOWER(?) || '%' ESCAPE '\\')
   ORDER BY
     CASE
       WHEN ba.alias_lower = LOWER(?) THEN 0
-      WHEN ba.alias_lower LIKE LOWER(?) || '%' THEN 1
+      WHEN ba.alias_lower LIKE LOWER(?) || '%' ESCAPE '\\' THEN 1
       ELSE 2
     END,
     b.created_at,
@@ -435,6 +558,18 @@ export interface AliasMatch {
 
 export interface AliasMatchWithRecency extends AliasMatch {
   updatedAt: number
+}
+
+/** One `(block, type)` membership row from the `block_types` index. */
+export interface BlockTypeAssignment {
+  blockId: string
+  type: string
+}
+
+/** Live-claimant count for one alias string. */
+export interface AliasClaimantCount {
+  alias: string
+  claimants: number
 }
 
 // ════════════════════════════════════════════════════════════════════
@@ -476,29 +611,55 @@ const numberSchema: Schema<number> = {
 const blockDataOrNullSchema: Schema<BlockData | null> = {
   parse: (input) => input as BlockData | null,
 }
+const subtreeRowArraySchema: Schema<SubtreeRow[]> = {
+  parse: (input) => input as SubtreeRow[],
+}
 
 // ──── Tree queries ────
 
-/** Subtree rooted at `id`, includeRoot=true (spec §11). Identity-stable
- *  via the dispatcher's handle-store key. Dep declaration mirrors the
- *  legacy `repo.subtree(id)` factory in `repo.ts`. */
-export const subtreeQuery = defineQuery<{id: string}, BlockData[]>({
+/** Subtree rooted at `id`, includeRoot=true (spec §11). Returns
+ *  {@link SubtreeRow}s — each block plus its `depth` relative to the root —
+ *  in pre-order, siblings by `(order_key, id)`. Identity-stable via the
+ *  dispatcher's handle-store key. Dep declaration mirrors the legacy
+ *  `repo.subtree(id)` factory in `repo.ts`.
+ *
+ *  Returns the FULL subtree by default (property field/value machinery
+ *  included) — the structural view, so a consumer never silently misses
+ *  machinery. The display-visible view — excluding recognized machinery in
+ *  a child-backed workspace (PR #288 §9 — dormant no-op while un-flipped,
+ *  and pruning at every recognized `::` field row, see
+ *  {@link VISIBLE_SUBTREE_SQL}) — is opt-in via `hidePropertyChildren:
+ *  true`, the same option `core.children` / `tx.childrenOf` take. The
+ *  outline hooks pass it; structural consumers (copy, navigation) get
+ *  everything. */
+export const subtreeQuery = defineQuery<
+  {id: string; hidePropertyChildren?: boolean},
+  SubtreeRow[]
+>({
   name: 'core.subtree',
-  argsSchema: z.object({id: z.string()}),
-  resultSchema: blockDataArraySchema,
-  resolve: async ({id}, ctx) => {
+  argsSchema: z.object({id: z.string(), hidePropertyChildren: z.boolean().optional()}),
+  resultSchema: subtreeRowArraySchema,
+  resolve: async ({id, hidePropertyChildren = false}, ctx) => {
     // Upfront deps — declared before SQL so the empty-result case (root
     // missing on first load) and any mid-load invalidations have
     // something to match against. Re-declared per-row below; HandleStore
     // tolerates duplicates.
     ctx.depend({kind: 'row', id})
     ctx.depend({kind: 'parent-edge', parentId: id})
-    const rows = await ctx.db.getAll<BlockRow & {depth: number}>(SUBTREE_SQL, [id])
+    const rows = hidePropertyChildren
+      ? await ctx.db.getAll<BlockRow & {depth: number}>(VISIBLE_SUBTREE_SQL, [id, ...registrySeedParams(ctx.repo)])
+      : await ctx.db.getAll<BlockRow & {depth: number}>(SUBTREE_SQL, [id])
     const out = ctx.hydrateBlocks(asBlockRows(rows))
-    for (const data of out) {
+    // SUBTREE_SQL already computes depth (0 at the root, +1 per level) and
+    // hydrateBlocks preserves row order, so `out[i]` ↔ `rows[i]`. depth is
+    // root-relative — a property of position in THIS subtree, not of the
+    // block — so it goes onto a fresh result wrapper, never onto the
+    // cached BlockData that hydrateBlocks just stored.
+    const withDepth = out.map((data, i): SubtreeRow => ({...data, depth: rows[i].depth}))
+    for (const data of withDepth) {
       ctx.depend({kind: 'parent-edge', parentId: data.id})
     }
-    return out
+    return withDepth
   },
 })
 
@@ -569,32 +730,90 @@ export const manyAncestorsQuery = defineQuery<
   },
 })
 
-/** Direct children of `id`, ordered `(order_key, id)`. */
-export const childrenQuery = defineQuery<{id: string}, BlockData[]>({
+/** Direct children of `id`, ordered `(order_key, id)`. Returns EVERY child
+ *  by default (property field rows included) — the structural view. The
+ *  display-visible view — excluding recognized field rows in a child-backed
+ *  workspace (PR #288 §9; dormant no-op while un-flipped) — is opt-in via
+ *  `hidePropertyChildren: true` (the outline hooks pass it), the same option
+ *  `tx.childrenOf` takes. */
+/** The registry half of the visible-children predicate (#389 item 7): the
+ *  seed-definition ids the REGISTRY knows, which `block_types` may not carry
+ *  yet, plus the workspace they belong to.
+ *
+ *  Pure — seed definition ids are uuidv5 over `workspaceId:seedKey`, so this
+ *  is a computation over the loaded declarations with no DB read. It closes
+ *  the window where a field row arrives over sync ahead of its definition
+ *  block on a warm device, and the SQL view showed a row the tx-layer
+ *  recognizer hid.
+ *
+ *  MEMOIZED on snapshot identity, and not as a micro-optimisation: these SQL
+ *  constants back `core.children` / `childIds` / `subtree`, which the outline
+ *  resolves once per rendered block, and the set is ~100 SHA-1 hashes plus a
+ *  multi-KB JSON string. Recomputing it per resolve cost tens of
+ *  milliseconds per page render for a value that only changes when the
+ *  registry is REPLACED — which is exactly what a WeakMap key expresses.
+ *
+ *  Returns `['[]', '']` when no registry is primed, which is precisely the
+ *  pre-existing `block_types`-only behaviour. */
+const seedParamsBySnapshot = new WeakMap<object, readonly [string, string]>()
+
+const registrySeedParams = (repo: Repo): readonly [string, string] => {
+  const registry = repo.propertyDefinitions
+  if (!registry) return ['[]', '']
+  const cached = seedParamsBySnapshot.get(registry)
+  if (cached) return cached
+  const ids: string[] = []
+  for (const seedKey of registry.seedsByKey.keys()) {
+    ids.push(propertyDefinitionBlockId(registry.workspaceId, seedKey))
+  }
+  const params = [JSON.stringify(ids), registry.workspaceId] as const
+  seedParamsBySnapshot.set(registry, params)
+  return params
+}
+
+export const childrenQuery = defineQuery<
+  {id: string; hidePropertyChildren?: boolean},
+  BlockData[]
+>({
   name: 'core.children',
-  argsSchema: z.object({id: z.string()}),
+  argsSchema: z.object({id: z.string(), hidePropertyChildren: z.boolean().optional()}),
   resultSchema: blockDataArraySchema,
-  resolve: async ({id}, ctx) => {
+  resolve: async ({id, hidePropertyChildren = false}, ctx) => {
     ctx.depend({kind: 'parent-edge', parentId: id})
-    const rows = await ctx.db.getAll<BlockRow>(CHILDREN_SQL, [id])
+    const rows = hidePropertyChildren
+      ? await ctx.db.getAll<BlockRow>(VISIBLE_CHILDREN_SQL, [id, ...registrySeedParams(ctx.repo)])
+      : await ctx.db.getAll<BlockRow>(CHILDREN_SQL, [id])
     return ctx.hydrateBlocks(asBlockRows(rows))
   },
 })
 
 /** Child-id list of `id` (lean shape). With `hydrate: true`, also runs
  *  the full row SELECT and primes the cache — the consumer-facing
- *  variant the React hooks use to avoid N+1 row loads on mount. */
-export const childIdsQuery = defineQuery<{id: string; hydrate?: boolean}, string[]>({
+ *  variant the React hooks use to avoid N+1 row loads on mount. Same
+ *  everything-by-default as `core.children` (the hooks opt into the
+ *  visible view via `hidePropertyChildren: true`). */
+export const childIdsQuery = defineQuery<
+  {id: string; hydrate?: boolean; hidePropertyChildren?: boolean},
+  string[]
+>({
   name: 'core.childIds',
-  argsSchema: z.object({id: z.string(), hydrate: z.boolean().optional()}),
+  argsSchema: z.object({
+    id: z.string(),
+    hydrate: z.boolean().optional(),
+    hidePropertyChildren: z.boolean().optional(),
+  }),
   resultSchema: z.array(z.string()),
-  resolve: async ({id, hydrate = false}, ctx) => {
+  resolve: async ({id, hydrate = false, hidePropertyChildren = false}, ctx) => {
     ctx.depend({kind: 'parent-edge', parentId: id})
     if (!hydrate) {
-      const rows = await ctx.db.getAll<{id: string}>(CHILDREN_IDS_SQL, [id])
+      const rows = hidePropertyChildren
+        ? await ctx.db.getAll<{id: string}>(VISIBLE_CHILDREN_IDS_SQL, [id, ...registrySeedParams(ctx.repo)])
+        : await ctx.db.getAll<{id: string}>(CHILDREN_IDS_SQL, [id])
       return rows.map(r => r.id)
     }
-    const rows = await ctx.db.getAll<BlockRow>(CHILDREN_SQL, [id])
+    const rows = hidePropertyChildren
+      ? await ctx.db.getAll<BlockRow>(VISIBLE_CHILDREN_SQL, [id, ...registrySeedParams(ctx.repo)])
+      : await ctx.db.getAll<BlockRow>(CHILDREN_SQL, [id])
     // declareRowDeps:false — result is the id list; per-row deps would
     // wake the handle on content/property edits that can't change the
     // id set. Hydration here is pure cache priming for the React hooks
@@ -627,18 +846,6 @@ export const byTypeQuery = defineQuery<{workspaceId: string; type: string}, Bloc
     )
     return ctx.hydrateBlocks(asBlockRows(rows))
   },
-})
-
-const referenceFilterSchema = z.object({
-  id: z.string(),
-  sourceField: z.string().optional(),
-})
-
-const blockPredicateSchema = z.object({
-  scope: z.enum(['self', 'ancestor']).optional(),
-  id: z.string().optional(),
-  where: z.record(z.string(), z.unknown()).optional(),
-  referencedBy: referenceFilterSchema.optional(),
 })
 
 const typedBlocksArgsSchema = z.object({
@@ -732,6 +939,34 @@ const collectWhereDeps = (
   }
 }
 
+const collectReferenceFilterDeps = (
+  ref: TypedBlockQueryReferenceFilter,
+  workspaceId: string,
+  ctx: QueryCtx,
+  opts: {includeImplicitAncestorStructure?: boolean} = {},
+): void => {
+  if (ref.sourceField !== undefined) {
+    ctx.depend({
+      kind: 'plugin',
+      channel: TYPED_BLOCKS_REFERENCE_FIELD_CHANNEL,
+      key: typedBlocksReferenceFieldKey(workspaceId, ref.id, ref.sourceField),
+    })
+    return
+  }
+  ctx.depend({
+    kind: 'plugin',
+    channel: TYPED_BLOCKS_REFERENCE_CHANNEL,
+    key: typedBlocksReferenceKey(workspaceId, ref.id),
+  })
+  if (opts.includeImplicitAncestorStructure) {
+    ctx.depend({
+      kind: 'plugin',
+      channel: TYPED_BLOCKS_STRUCTURE_CHANNEL,
+      key: typedBlocksStructureKey(workspaceId, ref.id),
+    })
+  }
+}
+
 const collectPredicateDeps = (
   predicates: readonly BlockPredicate[],
   workspaceId: string,
@@ -740,20 +975,9 @@ const collectPredicateDeps = (
   for (const predicate of predicates) {
     collectWhereDeps(predicate.where, workspaceId, ctx)
     if (predicate.referencedBy !== undefined) {
-      const ref = predicate.referencedBy
-      if (ref.sourceField !== undefined) {
-        ctx.depend({
-          kind: 'plugin',
-          channel: TYPED_BLOCKS_REFERENCE_FIELD_CHANNEL,
-          key: typedBlocksReferenceFieldKey(workspaceId, ref.id, ref.sourceField),
-        })
-      } else {
-        ctx.depend({
-          kind: 'plugin',
-          channel: TYPED_BLOCKS_REFERENCE_CHANNEL,
-          key: typedBlocksReferenceKey(workspaceId, ref.id),
-        })
-      }
+      collectReferenceFilterDeps(predicate.referencedBy, workspaceId, ctx, {
+        includeImplicitAncestorStructure: predicate.scope === 'ancestor',
+      })
     }
   }
 }
@@ -783,19 +1007,7 @@ const collectTypedBlockAxisDeps = (
   }
   collectWhereDeps(normalized.where, workspaceId, ctx)
   if (referencedBy !== undefined) {
-    if (referencedBy.sourceField !== undefined) {
-      ctx.depend({
-        kind: 'plugin',
-        channel: TYPED_BLOCKS_REFERENCE_FIELD_CHANNEL,
-        key: typedBlocksReferenceFieldKey(workspaceId, referencedBy.id, referencedBy.sourceField),
-      })
-    } else {
-      ctx.depend({
-        kind: 'plugin',
-        channel: TYPED_BLOCKS_REFERENCE_CHANNEL,
-        key: typedBlocksReferenceKey(workspaceId, referencedBy.id),
-      })
-    }
+    collectReferenceFilterDeps(referencedBy, workspaceId, ctx)
   }
   collectPredicateDeps(matchPredicates, workspaceId, ctx)
   collectPredicateDeps(excludePredicates, workspaceId, ctx)
@@ -1010,9 +1222,19 @@ export const searchByContentQuery = defineQuery<
       channel: KERNEL_CONTENT_CHANNEL,
       key: kernelContentKey(workspaceId),
     })
+    // The prefix-rank LIKE takes the escaped rankQuery (so `_`/`%` in
+    // the query rank as literals); the exact `= LOWER(?)` rank takes the
+    // raw rankQuery. The FTS MATCH itself is unaffected — LIKE is only a
+    // tiebreaker over the already-matched rows.
     const rows = await ctx.db.getAll<BlockRow>(
       SELECT_BLOCKS_BY_CONTENT_SQL,
-      [workspaceId, compiledQuery.matchQuery, compiledQuery.rankQuery, compiledQuery.rankQuery, limit],
+      [
+        workspaceId,
+        compiledQuery.matchQuery,
+        compiledQuery.rankQuery,
+        escapeLikePattern(compiledQuery.rankQuery),
+        limit,
+      ],
     )
     // Skip per-row deps. The kernel.content channel above covers
     // every axis that can flip a content-substring match: content
@@ -1024,6 +1246,22 @@ export const searchByContentQuery = defineQuery<
     return ctx.hydrateBlocks(asBlockRows(rows), {declareRowDeps: false})
   },
 })
+
+/** The app-state roots of every user in `workspaceId` — the seeds the
+ *  Recents filter walks down from. Two steps because the roots' ids are a
+ *  uuid-v5 derivation off the user page (`stateChildBlockId`), which SQL
+ *  cannot compute: read the user pages, derive in JS. Both halves are
+ *  cheap — one indexed `block_types` read, and a couple of hashes per
+ *  user. */
+const userStateRootIds = async (
+  ctx: {db: {getAll: <T>(sql: string, params: unknown[]) => Promise<T[]>}},
+  workspaceId: string,
+): Promise<string[]> => {
+  const pages = await ctx.db.getAll<{id: string}>(
+    SELECT_USER_PAGE_IDS_SQL, [workspaceId, USER_TYPE],
+  )
+  return pages.flatMap(page => userStateRootBlockIds(page.id))
+}
 
 /** Recent non-empty block candidates. Empty workspaceId returns []. */
 export const recentBlocksQuery = defineQuery<
@@ -1038,12 +1276,6 @@ export const recentBlocksQuery = defineQuery<
   resultSchema: blockDataArraySchema,
   resolve: async ({workspaceId, limit = 50}, ctx) => {
     if (!workspaceId) return []
-    // `kernel.content` covers content edits + live-set membership
-    // changes. The SQL also orders by `updated_at`, but we deliberately
-    // don't fire on every update — chasing perfect recency ordering
-    // here would put us back at workspace-broad cost (every UiState
-    // write bumps `updated_at`). The picker tolerates lightly stale
-    // ordering between content events.
     ctx.depend({
       kind: 'plugin',
       channel: KERNEL_CONTENT_CHANNEL,
@@ -1059,6 +1291,105 @@ export const recentBlocksQuery = defineQuery<
     // row don't change membership or content — leaving them out of
     // the dep set keeps the picker from churning on UiState writes.
     return ctx.hydrateBlocks(asBlockRows(rows), {declareRowDeps: false})
+  },
+})
+
+export interface RecentActivityEntry {
+  block: BlockData
+  /** Leaf-to-root chain, block itself excluded — the shape
+   *  `core.manyAncestors` returns. */
+  ancestors: BlockData[]
+}
+
+const recentActivityResultSchema: Schema<RecentActivityEntry[]> = {
+  parse: (input) => input as RecentActivityEntry[],
+}
+
+/** Recently edited USER-AUTHORED blocks, each with its ancestor chain —
+ *  what an activity feed needs to fold an edited tree back into one entry
+ *  and to name the page an edit happened on.
+ *
+ *  One query rather than `recentBlocks` + `manyAncestors` because the
+ *  chains must correspond to the rows. Two handles resolve independently
+ *  and the ancestor handle is re-keyed by the id set, so every change to
+ *  the rows re-opens a window where the chains are missing — during which
+ *  a consumer either paints every row as rootless (wrong groups, then a
+ *  reflow) or blanks the feed. Resolving both here makes that window
+ *  structurally impossible, and it costs one round trip less.
+ *
+ *  What "user-authored" excludes is `SELECT_RECENT_USER_BLOCKS_SQL`'s
+ *  business — read that. Empty workspaceId returns []. */
+export const recentActivityQuery = defineQuery<
+  {workspaceId: string; limit?: number},
+  RecentActivityEntry[]
+>({
+  name: 'core.recentActivity',
+  argsSchema: z.object({
+    workspaceId: z.string(),
+    limit: z.number().optional(),
+  }),
+  resultSchema: recentActivityResultSchema,
+  resolve: async ({workspaceId, limit = 50}, ctx) => {
+    if (!workspaceId) return []
+    // Same dep policy as `recentBlocks` — `kernel.content` covers content
+    // edits and live-set membership, and we accept lightly stale recency
+    // ordering between content events rather than waking on every
+    // `updated_at` bump (which every UiState write causes).
+    //
+    // TYPE TAGS are the one filtering axis with no dep, accepted rather
+    // than missed: a block acquires a system type at the moment it is
+    // minted (a create, which fires this channel), and the one gesture
+    // that adds a type to a live block — `#type` — rewrites its content
+    // in the same breath. Tagging an already-listed row `panel` out of
+    // nowhere is not a flow that exists.
+    //
+    // Ancestors skip per-row deps: what a reader sees of an ancestor is
+    // its CONTENT (the entry's title), and a rename fires this channel.
+    ctx.depend({
+      kind: 'plugin',
+      channel: KERNEL_CONTENT_CHANNEL,
+      key: kernelContentKey(workspaceId),
+    })
+    const rows = await ctx.db.getAll<BlockRow>(
+      SELECT_RECENT_USER_BLOCKS_SQL,
+      recentUserBlocksParams(await userStateRootIds(ctx, workspaceId), workspaceId, limit),
+    )
+    const blocks = ctx.hydrateBlocks(asBlockRows(rows), {declareRowDeps: false})
+    if (blocks.length === 0) return []
+
+    type ChainRow = BlockRow & {chain_start_id: string}
+    const chainRows = await ctx.db.getAll<ChainRow>(
+      manyAncestorsSql(blocks.length), blocks.map(block => block.id),
+    )
+    const chainsByStart = new Map<string, BlockRow[]>()
+    for (const block of blocks) chainsByStart.set(block.id, [])
+    for (const row of chainRows) chainsByStart.get(row.chain_start_id)?.push(row)
+
+    return blocks.map(block => {
+      // One call per chain so hydrate order stays depth-ascending within
+      // it, as `core.manyAncestors` does.
+      const ancestors = ctx.hydrateBlocks(
+        asBlockRows(chainsByStart.get(block.id) ?? []), {declareRowDeps: false},
+      )
+      // A parent change is the one edit that changes what this entry SAYS
+      // without touching any content: moved to another page, the entry
+      // keeps naming the old one; moved under a state root, it should
+      // have left the feed entirely. `kernel.content` doesn't carry it,
+      // so declare it per block — on the ancestors too, since a page
+      // moved out from under a row re-homes that row's entry without the
+      // row itself moving. Narrow on purpose: this channel is keyed per
+      // block and fires only on a `parent_id` change, so it costs a wake
+      // exactly when the answer changed, unlike a row dep (which every
+      // UiState property write would trip).
+      for (const shown of [block, ...ancestors]) {
+        ctx.depend({
+          kind: 'plugin',
+          channel: TYPED_BLOCKS_STRUCTURE_CHANNEL,
+          key: typedBlocksStructureKey(workspaceId, shown.id),
+        })
+      }
+      return {block, ancestors}
+    })
   },
 })
 
@@ -1105,8 +1436,12 @@ export const aliasesInWorkspaceQuery = defineQuery<
       channel: KERNEL_ALIASES_CHANNEL,
       key: kernelAliasesKey(workspaceId),
     })
+    // Escaped value backs the substring + prefix LIKEs (so `_`/`%` in
+    // the filter match literally); raw value backs the `? = ''` guard
+    // and the exact `= LOWER(?)` rank comparison.
+    const escaped = escapeLikePattern(filter)
     const rows = await ctx.db.getAll<{alias: string}>(
-      SELECT_ALIASES_IN_WORKSPACE_SQL, [workspaceId, filter, filter, filter, filter],
+      SELECT_ALIASES_IN_WORKSPACE_SQL, [workspaceId, filter, escaped, filter, escaped],
     )
     return rows.map(r => r.alias)
   },
@@ -1135,8 +1470,11 @@ export const aliasMatchesQuery = defineQuery<
       channel: KERNEL_ALIASES_CHANNEL,
       key: kernelAliasesKey(workspaceId),
     })
+    // See `aliasesInWorkspace`: escaped value for the LIKEs, raw for the
+    // `? = ''` guard and the exact `= LOWER(?)` rank comparison.
+    const escaped = escapeLikePattern(filter)
     const rows = await ctx.db.getAll<AliasMatch>(
-      SELECT_ALIAS_MATCHES_IN_WORKSPACE_SQL, [workspaceId, filter, filter, filter, filter, limit],
+      SELECT_ALIAS_MATCHES_IN_WORKSPACE_SQL, [workspaceId, filter, escaped, filter, escaped, limit],
     )
     // Per-row deps so content edits on a currently-returned alias block
     // refresh the autocomplete preview. Sister kernel queries that
@@ -1183,8 +1521,16 @@ export const aliasMatchesFuzzyQuery = defineQuery<
     const sql = buildFuzzyAliasMatchesSql(prefixes.length)
     // The two extra params back the exact/prefix ORDER BY so the LIMIT
     // retains the verbatim match; `alias_lower` is already lowercased.
+    // Prefixes are literal token substrings (first-3 of each query token,
+    // see `buildFilterPrefixes`), not wildcard patterns, so their LIKE
+    // metacharacters are escaped — as is the prefix-rank query — so a
+    // typed `_`/`%` matches literally. The exact `= ?` rank takes the
+    // raw query.
     const queryLower = query.toLowerCase()
-    const params: (string | number)[] = [workspaceId, ...prefixes, queryLower, queryLower, limit]
+    const escapedPrefixes = prefixes.map(escapeLikePattern)
+    const params: (string | number)[] = [
+      workspaceId, ...escapedPrefixes, queryLower, escapeLikePattern(queryLower), limit,
+    ]
     const rows = await ctx.db.getAll<AliasMatchWithRecency>(sql, params)
     // Same reasoning as `aliasMatches`: this query returns a custom row
     // shape (no BlockData hydration), so per-row deps have to be
@@ -1192,6 +1538,125 @@ export const aliasMatchesFuzzyQuery = defineQuery<
     // alias block.
     for (const row of rows) ctx.depend({kind: 'row', id: row.blockId})
     return rows
+  },
+})
+
+/** Types of a bounded, already-chosen set of blocks — one row per
+ *  `(blockId, type)` pair, in the order the block declares them.
+ *
+ *  Exists for display hints on rows some other query already picked —
+ *  the type shown beside each wikilink completion candidate. It is
+ *  deliberately NOT a search predicate: callers pass the ids they are
+ *  about to render, so the cost is O(ids) and independent of workspace
+ *  size. Filtering blocks BY type is `byType` / `typedBlocks`, which go
+ *  through the `block_types` index instead.
+ *
+ *  Reads `properties_json.$.types` directly rather than that index,
+ *  because the index cannot answer this question faithfully: its
+ *  PRIMARY KEY is `(block_id, type)`, so it hands rows back
+ *  type-ascending and the block's own ordering is gone. Consumers show
+ *  the FIRST type, and `searchAliasLabels`' other path reads the
+ *  property array — so an index read made the hint change (`Author` →
+ *  `Person`) as soon as the user typed a character. Both are an
+ *  `id IN (...)` seek; this one just keeps `je.key` (the array index)
+ *  to sort by, and applies the same `typeof(je.value) = 'text'`
+ *  tolerance the `block_types` trigger does, so the two paths agree on
+ *  malformed values too. Measured at 20k pages / 50 ids it costs what
+ *  the index read did — 0.277ms vs 0.284ms, best-of-60 — so the
+ *  correctness is free. Folding it into one row per block with
+ *  `json_extract(...,'$.types')` is NOT free (4.3ms, ~15x worse);
+ *  don't "optimize" it into that shape.
+ *
+ *  Per-id row deps (not just per returned row): a block that has no
+ *  types yet returns nothing, and tagging it later has to invalidate
+ *  this handle too. */
+export const blockTypesByIdsQuery = defineQuery<
+  {workspaceId: string; blockIds: string[]},
+  BlockTypeAssignment[]
+>({
+  name: 'core.blockTypesByIds',
+  argsSchema: z.object({
+    workspaceId: z.string(),
+    // Capped so "bounded, already-chosen set" is enforced rather than
+    // merely documented: this is registered as `core.blockTypesByIds`,
+    // so any plugin can call it, and one `?` placeholder per id would
+    // otherwise let a caller blow SQLITE_MAX_VARIABLE_NUMBER and
+    // declare that many row deps to walk on every later invalidation.
+    // The completion path asks for at most its display limit (50).
+    blockIds: z.array(z.string()).max(200),
+  }),
+  resultSchema: z.array(z.object({
+    blockId: z.string(),
+    type: z.string(),
+  })),
+  resolve: async ({workspaceId, blockIds}, ctx) => {
+    if (!workspaceId || blockIds.length === 0) return []
+    for (const blockId of blockIds) ctx.depend({kind: 'row', id: blockId})
+    const placeholders = blockIds.map(() => '?').join(', ')
+    return ctx.db.getAll<BlockTypeAssignment>(
+      `SELECT b.id AS blockId, je.value AS type
+       FROM blocks b, json_each(b.properties_json, '$.types') je
+       WHERE b.workspace_id = ?
+         AND b.deleted = 0
+         AND b.id IN (${placeholders})
+         AND json_type(b.properties_json, '$.types') = 'array'
+         AND typeof(je.value) = 'text'
+       ORDER BY b.id, je.key`,
+      [workspaceId, ...blockIds],
+    )
+  },
+})
+
+/** How many LIVE blocks claim each of the given aliases.
+ *
+ *  Duplicate claimants are a documented latent state: the
+ *  `block_aliases_workspace_alias_unique` trigger only fires for local
+ *  user txs, so sync-applied rows can leave several. Consumers that
+ *  show something about "the block behind this alias" need to know,
+ *  because `aliasLookup` resolves the alias to the OLDEST claimant
+ *  regardless of how anything else ranked them.
+ *
+ *  Keyed by alias rather than block id on purpose: the caller has
+ *  already truncated its ranked rows to a display limit, so counting
+ *  claimants among THOSE would miss a claimant that ranked below the
+ *  cutoff and report a contested alias as uncontested. Index-backed by
+ *  `idx_block_aliases_ws_alias`. */
+export const aliasClaimantCountsQuery = defineQuery<
+  {workspaceId: string; aliases: string[]},
+  AliasClaimantCount[]
+>({
+  name: 'core.aliasClaimantCounts',
+  argsSchema: z.object({
+    workspaceId: z.string(),
+    // Same bound + reasoning as `blockTypesByIds`.
+    aliases: z.array(z.string()).max(200),
+  }),
+  resultSchema: z.array(z.object({
+    alias: z.string(),
+    claimants: z.number(),
+  })),
+  resolve: async ({workspaceId, aliases}, ctx) => {
+    if (!workspaceId || aliases.length === 0) return []
+    // The alias channel, not per-row deps: what matters here is a
+    // claimant entering or leaving the set for these aliases, which is
+    // exactly what this channel reports (and the rows that could do it
+    // are not knowable up front).
+    ctx.depend({
+      kind: 'plugin',
+      channel: KERNEL_ALIASES_CHANNEL,
+      key: kernelAliasesKey(workspaceId),
+    })
+    const placeholders = aliases.map(() => '?').join(', ')
+    return ctx.db.getAll<AliasClaimantCount>(
+      `SELECT ba.alias AS alias, count(*) AS claimants
+       FROM block_aliases ba
+       JOIN blocks b ON b.id = ba.block_id
+       WHERE ba.workspace_id = ?
+         AND ba.alias IN (${placeholders})
+         AND b.deleted = 0
+       GROUP BY ba.alias`,
+      [workspaceId, ...aliases],
+    )
   },
 })
 
@@ -1266,10 +1731,13 @@ export const KERNEL_QUERIES: ReadonlyArray<AnyQuery> = [
   typedBlockCountQuery,
   searchByContentQuery,
   recentBlocksQuery,
+  recentActivityQuery,
   firstChildByContentQuery,
   aliasesInWorkspaceQuery,
   aliasMatchesQuery,
   aliasMatchesFuzzyQuery,
+  blockTypesByIdsQuery,
+  aliasClaimantCountsQuery,
   aliasLookupQuery,
   findExtensionBlocksQuery,
 ]
@@ -1293,10 +1761,13 @@ declare module '@/data/api' {
     'core.typedBlockCount': typeof typedBlockCountQuery
     'core.searchByContent': typeof searchByContentQuery
     'core.recentBlocks': typeof recentBlocksQuery
+    'core.recentActivity': typeof recentActivityQuery
     'core.firstChildByContent': typeof firstChildByContentQuery
     'core.aliasesInWorkspace': typeof aliasesInWorkspaceQuery
     'core.aliasMatches': typeof aliasMatchesQuery
     'core.aliasMatchesFuzzy': typeof aliasMatchesFuzzyQuery
+    'core.blockTypesByIds': typeof blockTypesByIdsQuery
+    'core.aliasClaimantCounts': typeof aliasClaimantCountsQuery
     'core.aliasLookup': typeof aliasLookupQuery
     'core.findExtensionBlocks': typeof findExtensionBlocksQuery
   }

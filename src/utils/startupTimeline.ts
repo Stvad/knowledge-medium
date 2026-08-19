@@ -21,6 +21,8 @@
  * detection).
  */
 
+import { CallbackSet } from './callbackSet'
+
 /** The boot phases we time, in roughly causal order. `firstContentPaint` is
  *  "pixels appeared"; `interactive` is the headline "contention stopped, UI
  *  usable" (time to interactivity). */
@@ -77,17 +79,14 @@ export const getStartupTimeline = (): StartupTimeline =>
 let longTaskObserver: PerformanceObserver | null = null
 let longTasksObserving = false
 let lastLongTaskEndMs: number | null = null
-const longTaskSubscribers = new Set<() => void>()
+const longTaskSubscribers = new CallbackSet('long-task')
 
 /** Subscribe to long-task occurrences. The callback fires AFTER
  *  `lastLongTaskEndMs` is updated, so a debounced quiet-window detector can
  *  reset its timer from the same event that advanced the value — avoiding the
  *  poll-vs-observer ordering race a `setTimeout`-driven reader would hit.
  *  Returns an unsubscribe. */
-export const onLongTask = (cb: () => void): (() => void) => {
-  longTaskSubscribers.add(cb)
-  return () => longTaskSubscribers.delete(cb)
-}
+export const onLongTask = (cb: () => void): (() => void) => longTaskSubscribers.add(cb)
 
 /** Start observing main-thread long tasks (≥50 ms blocks) as early as possible,
  *  so the plugin can later find the first quiet window. Idempotent and a no-op
@@ -107,10 +106,9 @@ export const startStartupObservers = (): void => {
           advanced = true
         }
       }
-      // A throwing subscriber must not break the observer or its peers.
-      if (advanced) for (const cb of longTaskSubscribers) {
-        try { cb() } catch { /* best-effort notification */ }
-      }
+      // CallbackSet.notify snapshots + isolates listener exceptions, so a
+      // throwing subscriber can't break the observer or its peers.
+      if (advanced) longTaskSubscribers.notify()
     })
     longTaskObserver.observe({ type: 'longtask', buffered: true })
   } catch {

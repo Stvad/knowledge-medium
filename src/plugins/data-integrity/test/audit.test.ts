@@ -4,9 +4,9 @@
  * plugin's run/publish/cadence wiring (schedule.ts) and that the engine's checks
  * actually catch injected inconsistencies. The engine lives in ./audit.ts.
  */
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
-import { BlockCache } from '@/data/blockCache'
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
+import { createTestRepo } from '@/data/test/createTestRepo'
 import {
   AT_REST_ANOMALY_FLOOR,
   runConsistencyAudit,
@@ -23,13 +23,14 @@ import {
   runConsistencyAuditNow,
 } from '../schedule'
 import {
-  getConsistencyAuditSnapshot,
+  getConsistencyAuditSnapshotFor,
   resetConsistencyAuditStore,
 } from '../store'
 import {
   BLOCKS_SYNCED_RAW_TABLE,
-  BLOCK_STORAGE_COLUMNS,
+  BLOCKS_TABLE_COLUMN_NAMES,
   blockToRowParams,
+  blockToSyncedRowParams,
 } from '@/data/blockSchema'
 import { encodeForWire, type Materializability } from '@/sync/transform.js'
 import { generateWorkspaceKeyBytes, importWorkspaceKey } from '@/sync/crypto/workspaceKey.js'
@@ -39,12 +40,11 @@ import { Repo } from '@/data/repo'
 
 interface Harness {
   repo: Repo
-  cleanup: () => Promise<void>
 }
 
 const setup = (db: TestDb['db']): Harness => {
-  const repo = new Repo({ db, cache: new BlockCache(), user: { id: 'user-1' } })
-  return { repo, cleanup: async () => { repo.stopSyncObserver() } }
+  const { repo } = createTestRepo({ db, user: { id: 'user-1' } })
+  return { repo }
 }
 
 let sharedDb: TestDb
@@ -58,7 +58,6 @@ beforeEach(async () => {
   resetConsistencyAuditStore()
   env = setup(sharedDb.db)
 })
-afterEach(async () => { await env.cleanup() })
 
 describe('data-integrity audit runner + cadence (schedule.ts)', () => {
   it('runs on a healthy workspace, returns + publishes a clean result', async () => {
@@ -68,7 +67,7 @@ describe('data-integrity audit runner + cadence (schedule.ts)', () => {
     expect(result.anomalies).toBe(0)
     expect(result.checks.references_index_mirror.status).toBe('ok')
     // Published to the store the diagnostics source reads.
-    expect(getConsistencyAuditSnapshot()).toBe(result)
+    expect(getConsistencyAuditSnapshotFor('ws-1')).toBe(result)
   })
 
   it('flags a mirror anomaly — an orphan block_references row (source block gone)', async () => {
@@ -83,6 +82,30 @@ describe('data-integrity audit runner + cadence (schedule.ts)', () => {
     const mirror = result.checks.references_index_mirror
     expect(mirror.status).toBe('anomaly')
     expect(mirror.orphanSourceRows).toBe(1)
+  })
+
+  // `json_valid('null')` is TRUE, so the malformed count cannot see this, and
+  // `json_each` yields nothing for it so every mirror direction reads as
+  // consistent. Workspace-wide, and deliberately on a block with NO reference
+  // syntax — the content-link recompute never selects such a row, so this is
+  // the only place the damage is visible.
+  it('flags reference storage that is valid JSON but not an array', async () => {
+    await sharedDb.db.execute(
+      `INSERT INTO blocks (id, workspace_id, parent_id, order_key, content,
+                           properties_json, references_json, created_at, updated_at,
+                           user_updated_at, created_by, updated_by, deleted)
+       VALUES ('shape-1', 'ws-5', NULL, 'a0', 'plain prose, no marks',
+               '{}', 'null', 1, 1, 1, 'u', 'u', 0)`,
+    )
+
+    const result = await runConsistencyAuditNow(env.repo, 'ws-5')
+
+    const mirror = result.checks.references_index_mirror
+    expect(mirror.status).toBe('anomaly')
+    expect(mirror.malformedRefsShape).toBe(1)
+    // NOT counted as unparseable — that number keeps its own meaning.
+    expect(mirror.malformedJson).toBe(0)
+    expect(mirror.samples).toContain('shape-1')
   })
 
   it('cadence gate: a workspace is not due right after a run, due again after reset', async () => {
@@ -109,14 +132,14 @@ describe('data-integrity audit runner + cadence (schedule.ts)', () => {
   it('the scheduling effect runs one audit on workspace open and publishes it', async () => {
     consistencyAuditEffect.start(ctx('ws-eff'))
     await settle()
-    expect(getConsistencyAuditSnapshot()?.workspaceId).toBe('ws-eff')
+    expect(getConsistencyAuditSnapshotFor('ws-eff')?.workspaceId).toBe('ws-eff')
   })
 
   it('the effect cleanup cancels a pending run before the idle job fires', async () => {
     const cleanup = consistencyAuditEffect.start(ctx('ws-eff2'))
     if (typeof cleanup === 'function') cleanup()
     await settle()
-    expect(getConsistencyAuditSnapshot()).toBeNull() // never ran
+    expect(getConsistencyAuditSnapshotFor('ws-eff2')).toBeNull() // never ran
   })
 
   it('the effect does not re-run a workspace already audited within the cadence window', async () => {
@@ -124,7 +147,7 @@ describe('data-integrity audit runner + cadence (schedule.ts)', () => {
     resetConsistencyAuditStore() // clear what the run published
     consistencyAuditEffect.start(ctx('ws-eff3')) // not due → schedules nothing
     await settle()
-    expect(getConsistencyAuditSnapshot()).toBeNull()
+    expect(getConsistencyAuditSnapshotFor('ws-eff3')).toBeNull()
   })
 })
 
@@ -225,9 +248,9 @@ describe('runConsistencyAudit — property_ref_at_rest catastrophe floor', () =>
 describe('runConsistencyAudit — e2ee encryption-awareness', () => {
   const WS = 'ws-e2ee'
   const STAMP = 1700000000000
-  const COLUMN_NAMES = BLOCK_STORAGE_COLUMNS.map(c => c.name)
   const INSERT_BLOCK_SQL =
-    `INSERT INTO blocks (${COLUMN_NAMES.join(', ')}) VALUES (${COLUMN_NAMES.map(() => '?').join(', ')})`
+    `INSERT INTO blocks (${BLOCKS_TABLE_COLUMN_NAMES.join(', ')}) ` +
+    `VALUES (${BLOCKS_TABLE_COLUMN_NAMES.map(() => '?').join(', ')})`
 
   const block = (overrides: Partial<BlockData> = {}): BlockData => ({
     id: 'b1',
@@ -264,7 +287,7 @@ describe('runConsistencyAudit — e2ee encryption-awareness', () => {
     meta: BlockData,
     wire: { content: string; properties_json: string; references_json: string },
   ): Promise<void> => {
-    const params = blockToRowParams(meta)
+    const params = blockToSyncedRowParams(meta)
     params[4] = wire.content
     params[5] = wire.properties_json
     params[6] = wire.references_json
@@ -321,7 +344,7 @@ describe('runConsistencyAudit — e2ee encryption-awareness', () => {
     const server = block({ id: 'encp', content: 'enc:v1: DIFFERENT server text' })
     await seedLocal(local)
     // Plaintext staging row (NOT sealed) — content is prefix-shaped real text.
-    await sharedDb.db.execute(BLOCKS_SYNCED_RAW_TABLE.put.sql, blockToRowParams(server))
+    await sharedDb.db.execute(BLOCKS_SYNCED_RAW_TABLE.put.sql, blockToSyncedRowParams(server))
 
     const result = await runConsistencyAudit(sharedDb.db, WS, 0, {
       decrypt: decryptDeps(key, 'copy'), // workspace confirmed plaintext
@@ -438,8 +461,9 @@ describe('runConsistencyAudit — e2ee encryption-awareness', () => {
 // These are the rich superset; the lean cadence run must NOT include them.
 describe('runConsistencyAudit — full (on-demand) deep checks', () => {
   const WS = 'ws-full'
-  const COLS = BLOCK_STORAGE_COLUMNS.map((c) => c.name)
-  const INSERT = `INSERT INTO blocks (${COLS.join(', ')}) VALUES (${COLS.map(() => '?').join(', ')})`
+  const INSERT =
+    `INSERT INTO blocks (${BLOCKS_TABLE_COLUMN_NAMES.join(', ')}) ` +
+    `VALUES (${BLOCKS_TABLE_COLUMN_NAMES.map(() => '?').join(', ')})`
   const mk = (o: Partial<BlockData> = {}): BlockData => ({
     id: 'b',
     workspaceId: WS,
@@ -494,6 +518,23 @@ describe('runConsistencyAudit — full (on-demand) deep checks', () => {
     const r = await runConsistencyAudit(sharedDb.db, WS, 0, { full: FULL })
     const check = r.checks.content_link_recompute
     expect(check.status).toBe('anomaly')
+    expect(check.strippedBlocks).toBe(1)
+  })
+
+  // `null` and `{}` parse fine, so a successful `JSON.parse` says nothing
+  // about the shape — both throw on the filter, aborting the check to
+  // `error` and hiding every row it had left.
+  it('content_link_recompute keeps scanning past a non-array references_json', async () => {
+    await ins({ id: 'bad', content: '[[Foo]]', references: [] })
+    await ins({ id: 'good', content: '[[Bar]]', references: [] })
+    await sharedDb.db.execute(
+      `UPDATE blocks SET references_json = 'null' WHERE id = 'bad'`,
+    )
+
+    const r = await runConsistencyAudit(sharedDb.db, WS, 0, { full: FULL })
+    const check = r.checks.content_link_recompute
+    expect(check.status).not.toBe('error')
+    // Scanning continued — the healthy row is still scored on its own axis.
     expect(check.strippedBlocks).toBe(1)
   })
 

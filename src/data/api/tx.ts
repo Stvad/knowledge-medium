@@ -4,7 +4,7 @@ import type {
   NewBlockData,
 } from './blockData'
 import type { ChangeScope, TxSource } from './changeScope'
-import type { PropertySchema } from './propertySchema'
+import type { AnyPropertyAssignment, AnyPropertySchema, PropertySchema } from './propertySchema'
 import type { User } from './user'
 
 /** Per-write opt: skip the engine's automatic `updatedAt`/`updatedBy` bump
@@ -122,11 +122,29 @@ export interface Tx {
 
   // ──── Data-field updates (non-structural) ────
 
-  /** Update non-structural data fields only (`content` / `references` /
-   *  `properties`). Structural mutations have their own primitives. The
-   *  patch type excludes `parentId`, `orderKey`, `workspaceId`, `deleted`,
-   *  and metadata fields at the type level. */
+  /** Update non-structural data fields only (`content` /
+   *  `referenceTargetId` / `references` / `properties`). Structural
+   *  mutations have their own primitives. The patch type excludes
+   *  `parentId`, `orderKey`, `workspaceId`, `deleted`, and metadata fields
+   *  at the type level. */
   update(id: string, patch: BlockDataPatch, opts?: TxWriteOpts): Promise<void>
+
+  /** Stamp the LOCAL derived columns — `reference_target_id` and
+   *  `is_field_form`, and ONLY those — without advancing `updated_at`. This
+   *  is the write mode for `core.deriveReferenceTarget`'s same-tx amendment:
+   *  both columns are per-device reflections of `content` (never in
+   *  `BLOCK_UPLOAD_COLUMNS`, never uploaded), so re-deriving them is not a
+   *  synced edit and must not mint an upload PATCH. Because the UPDATE
+   *  touches no upload column and leaves `updated_at` untouched,
+   *  `blocks_upload_update`'s diff predicate stays false and nothing is
+   *  enqueued — whereas `update(..., {skipMetadata})` still bumps
+   *  `updated_at` (an upload column) and ships a redundant PATCH (PR #288
+   *  §5, Decision A). Same-tab reactivity still fires (the write records a
+   *  `referenceTargetId`/`isFieldForm`-changed snapshot); cross-tab rides
+   *  the accompanying content edit's row_event. No-op when both columns
+   *  already match. Not for content-bundled retargets — those change a
+   *  synced column and go through `update`, which correctly uploads. */
+  stampReferenceTarget(id: string, targetId: string | null, isFieldForm: boolean): Promise<void>
 
   // ──── Tree moves (structural) ────
 
@@ -145,19 +163,100 @@ export interface Tx {
 
   // ──── Typed property primitives ────
 
-  /** `setProperty`: applies `codec.encode`, merges into the row's
-   *  `properties` map, and writes through immediately. Bypassing codecs
-   *  (raw `properties` writes) goes through `tx.update`. */
+  /** Resolve a schema through this transaction's row-workspace-bound winner
+   * snapshot without writing. Rejects shadowed/ambiguous identity. Callers that
+   * must stage several encoded values before one atomic raw update use this;
+   * ordinary single-property writes should call `setProperty`. */
+  resolvePropertySchema<T>(id: string, schema: PropertySchema<T>): Promise<PropertySchema<T>>
+
+  /** `setProperty`: resolves schema identity, applies `codec.encode`, merges
+   *  into the row's `properties` map, and writes through immediately.
+   *  The updater overload runs inside this serialized tx after identity is
+   *  accepted and receives `undefined` (not `defaultValue`) when absent.
+   *  Bypassing codecs (raw `properties` writes) goes through `tx.update`. */
   setProperty<T>(
     id: string,
     schema: PropertySchema<T>,
     value: T,
     opts?: TxWriteOpts,
   ): Promise<void>
+  setProperty<T>(
+    id: string,
+    schema: PropertySchema<T>,
+    updater: (current: T | undefined) => T,
+    opts?: TxWriteOpts,
+  ): Promise<void>
+
+  /** Remove ONE property key — the codec-aware counterpart to `setProperty`
+   *  (there is no "set to undefined"). Resolves schema identity and checks
+   *  scope exactly like `setProperty`, then drops just that key from the bag:
+   *  a TARGETED delete, never a whole-bag replace, so it cannot clobber a
+   *  sibling key a peer synced in. In a child-backed workspace it EAGERLY
+   *  soft-deletes the field-row subtree for the key in the same tx (symmetric
+   *  with setProperty's inline dual-write, recoverable via history — eager
+   *  rather than left to the deferred MATERIALIZE pass, whose net-diff would
+   *  miss a key set-then-unset in one tx); un-flipped it is a cell-only
+   *  removal. No-op when the key is already absent. Throws
+   *  `PropertySchemaIdentityError` if the schema has no resolvable definition,
+   *  same as `setProperty`. */
+  unsetProperty<T>(id: string, schema: PropertySchema<T>, opts?: TxWriteOpts): Promise<void>
+
+  /** Atomically set and/or unset several properties in ONE bag rewrite. This
+   *  is the batch form callers should reach for instead of a whole-bag
+   *  `tx.update({properties})`: it applies a DELTA (set these, unset these,
+   *  leave the rest alone), so it can't clobber a sibling key a peer synced
+   *  in, and it's codec-aware throughout. Build `set` entries with
+   *  `propertyValue(schema, value)` for per-entry type-checking. Every schema
+   *  is resolved + scope-checked up front (the whole batch fails before any
+   *  write on an unresolvable/mis-scoped entry). In a child-backed workspace it
+   *  EAGERLY reconciles children in the same tx — creating/updating for sets,
+   *  soft-deleting for unsets (unset wins on a key in both) — symmetric with
+   *  `setProperty`/`unsetProperty`. A net no-op (bag unchanged) is skipped.
+   *  `set` values are literals, not updater functions — read via `getProperty`
+   *  first if you need the current value. */
+  setProperties(
+    id: string,
+    changes: {
+      readonly set?: readonly AnyPropertyAssignment[]
+      readonly unset?: readonly AnyPropertySchema[]
+    },
+    opts?: TxWriteOpts,
+  ): Promise<void>
 
   /** `getProperty`: reads SQL/cache and applies `codec.decode`. Returns
    *  the schema's `defaultValue` if the property is absent. */
   getProperty<T>(id: string, schema: PropertySchema<T>): Promise<T>
+
+  /** Resolve a durable fieldId (definition block id) to its WINNING schema
+   *  against `workspaceId`'s registry snapshot — the §9 recognition/
+   *  projection primitive at tx level. Returns null for shadowed losers,
+   *  orphans, and foreign workspaces (their field rows keep classifying at
+   *  read sites but never project, so machinery that folds values into
+   *  cells treats null as "this value exists only in the tree"). */
+  resolvePropertyFieldSchema(
+    workspaceId: string,
+    fieldId: string,
+  ): AnyPropertySchema | null
+
+  /** §9 recognition, condition-3 checker: does `fieldId` name a definition
+   *  this workspace's registry can resolve — shadow-tolerant (a shadowed
+   *  loser COUNTS: its field rows keep classifying; only the name map and
+   *  projection exclude it, §6). This is the classification predicate's
+   *  fieldId half, exposed so `isPropertyFieldRow` reads the ONE checker
+   *  instead of restating the disjunction. (The rename processor and the
+   *  deferred migration batch answer the same question from their own
+   *  captured resolvers rather than the tx-start one — deliberately, since
+   *  those passes must not re-resolve at write time.) Synchronous — bound to
+   *  the tx-start registry snapshot. */
+  isPropertyFieldDefinition(workspaceId: string, fieldId: string): boolean
+
+  /** The one properties-as-blocks predicate (PR #288 §6): is `workspaceId`
+   *  flipped to child-backed properties (`workspaces.properties_migration`
+   *  at or past 'children' — never an equality test)? Shared by
+   *  recognition, the dual-write, and the projection processors; cached
+   *  per tx. Reads the local synced `workspaces` row; a missing row/column
+   *  reads as un-flipped ('cell'). */
+  isPropertyChildBackedWorkspace(workspaceId: string): Promise<boolean>
 
   // ──── Composition ────
 
@@ -170,6 +269,16 @@ export interface Tx {
 
   /** Children of `parentId`, ordered `(order_key, id)`, filtered
    *  `deleted = 0`. Reads SQL via the writeTransaction.
+   *
+   *  Returns EVERY child by default — property field/value rows included.
+   *  This is the structural view: the actual tree, no hidden rows, so a
+   *  traversal can never silently miss machinery it needs to carry (delete
+   *  cascade, copy, merge). The display-visible view — which excludes
+   *  recognized property field rows in a child-backed workspace (PR #288
+   *  §9) — is opt-IN via `{hidePropertyChildren: true}`. In an un-flipped
+   *  workspace nothing is recognized, so `hidePropertyChildren` is a no-op
+   *  (dormant).
+   *
    *  Pass `null` to enumerate workspace-root rows (rows with
    *  `parent_id IS NULL`); the result is scoped to a workspace by
    *  one of three sources, in priority order:
@@ -182,7 +291,11 @@ export interface Tx {
    *       computation.
    *  When `parentId !== null`, `workspaceId` is ignored — the parent
    *  row already constrains the query. */
-  childrenOf(parentId: string | null, workspaceId?: string): Promise<BlockData[]>
+  childrenOf(
+    parentId: string | null,
+    workspaceId?: string,
+    options?: {hidePropertyChildren?: boolean},
+  ): Promise<BlockData[]>
 
   /** Existence probe: does `parentId` have any child row? Live-only by
    *  default (`SELECT 1 … WHERE parent_id = ? AND deleted = 0 LIMIT 1`,
@@ -230,6 +343,18 @@ export interface Tx {
    *  from other clients. */
   aliasLookup(alias: string, workspaceId: string): Promise<BlockData | null>
 
+  /** EVERY live block in `workspaceId` claiming the exact `alias`,
+   *  oldest first. Use this instead of `aliasLookup` when the question
+   *  is "is this alias claimed?" rather than "which block is named X?".
+   *
+   *  `aliasLookup`'s `LIMIT 1` tie-break silently hides co-claimants,
+   *  and co-claimants are reachable: the uniqueness trigger only fires
+   *  for local user txs, so sync-applied rows can land duplicates. A
+   *  caller that vetoes on "any claimant that isn't mine" gets the wrong
+   *  answer from the single-row form whenever the row it recognizes
+   *  happens to be the oldest. Sees this tx's own writes. */
+  aliasClaimants(alias: string, workspaceId: string): Promise<BlockData[]>
+
   // ──── Post-commit scheduling ────
 
   /** Schedule a follow-up post-commit job. Runs in its own
@@ -255,4 +380,24 @@ export interface Tx {
 export interface RepoTxOptions {
   scope: ChangeScope
   description?: string
+  /** Undo-group token (issue #306). Txs sharing a `groupId` merge into
+   *  one undo entry at record time and stamp `group_id` into
+   *  `tx_context` / `row_events`. Minted by `repo.undoGroup` and
+   *  injected by its facade — callers don't set this by hand. */
+  groupId?: string
+  /** Skip recording an undo entry for this tx, without changing its scope.
+   *
+   *  For writes the program makes on the user's behalf while they are doing
+   *  something else — a one-shot `WorkspaceBackfill` firing seconds after
+   *  workspace open is the motivating case. Such a batch is a document edit in
+   *  every other respect (it must stay read-only-gated and seed-guarded, so it
+   *  keeps `BlockDefault`), but putting it on the undo stack means a cmd-Z
+   *  aimed at the user's own edit silently reverts the whole pass — and with
+   *  the pass's completion marker already recorded, permanently.
+   *
+   *  Prefer a non-undoable SCOPE when the write genuinely is not a document
+   *  edit (`UiState`, `UserPrefs`, `Automation`). This flag exists for the case
+   *  where the scope must stay `BlockDefault` for gating reasons but the entry
+   *  would be a trap. Default false (entries are recorded as usual). */
+  skipUndo?: boolean
 }

@@ -9,6 +9,7 @@ import {
   PropertyEditingDependencies,
 } from '@/shortcuts/types.js'
 import { isInteractiveContentEvent } from '@/extensions/blockInteraction.js'
+import { isPropertyEditingField } from '@/shortcuts/utils.js'
 import { Block } from '../data/block'
 import { EditorView } from '@codemirror/view'
 
@@ -22,7 +23,7 @@ const isCodeMirrorEditModeDependencies = (deps: unknown): deps is CodeMirrorEdit
   isBaseShortcutDependencies(deps) && typeof deps === 'object' && deps !== null && 'block' in deps && deps.block instanceof Block && 'editorView' in deps && deps.editorView instanceof EditorView
 
 const isPropertyEditingDependencies = (deps: unknown): deps is PropertyEditingDependencies =>
-  isBlockShortcutDependencies(deps) && typeof deps === 'object' && deps !== null && 'input' in deps && deps.input instanceof HTMLInputElement
+  isBlockShortcutDependencies(deps) && typeof deps === 'object' && deps !== null && 'input' in deps && isPropertyEditingField(deps.input)
 
 const isMultiSelectModeDependencies = (deps: unknown): deps is MultiSelectModeDependencies =>
   isBaseShortcutDependencies(deps) &&
@@ -62,6 +63,39 @@ export const defaultActionContextConfigs: readonly ActionContextConfig[] = [
     type: ActionContextTypes.PROPERTY_EDITING,
     displayName: 'Property Editing',
     modal: true,
+    // This context is only ever active while a property field (`<input>` or
+    // the `<select>` an `enum` property renders) holds focus, so every keydown
+    // it sees has an editable target — which `defaultEventFilter` drops as
+    // typing. Without an opt-in, Escape never reaches dispatch and
+    // `exit_property_editing` can't fire (the bug: "Esc in property editor
+    // does not exit edit mode").
+    //
+    // Scoped to keys that produce no text, rather than EDIT_MODE_CM's "every
+    // key inside my DOM subtree": what's claimed here stops being typing, and
+    // the field is where the user is typing.
+    //
+    // `key.length > 1` is exactly that split — named keys ('Escape', 'F2',
+    // 'Tab') produce nothing, single-character ones ('p', '?', ' ') are text.
+    // Not keyed to the literal 'Escape': a filter can't see bindings, so that
+    // would silently kill a REBINDING of `exit_property_editing` onto another
+    // bare non-text key, with no error to explain the dead key. Rebinding onto
+    // a modifier chord needs no opt-in — those clear `defaultEventFilter`
+    // already.
+    //
+    // Admitting the wider set costs nothing elsewhere: this widening applies
+    // to this context's own candidates only, so no other context's bindings
+    // become reachable through it — not GLOBAL's, and not those of a modal
+    // that shadowed this one. Bare Enter/Tab/arrows still reach the field's
+    // own React handlers either way, since admitting an event only lets a
+    // *bound* action match it, and this context's binding opts out of
+    // preventDefault.
+    //
+    // Nothing about IME compositions here: a filter only ever widens, so a
+    // `false` from it falls back to the editable-target heuristic, which
+    // admits every modifier chord — it could never veto a rebound `Ctrl+J`
+    // pressed mid-composition. The coordinator drops composing keydowns
+    // outright instead, for every context.
+    eventFilter: (event: KeyboardEvent) => event.key.length > 1,
     validateDependencies: isPropertyEditingDependencies,
   },
   {

@@ -1,4 +1,4 @@
-// @vitest-environment jsdom
+// @vitest-environment happy-dom
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { useMemo, useRef } from 'react'
@@ -13,6 +13,7 @@ import {
   type GestureRecognizer,
 } from '@/extensions/continuousGestures'
 import type { BlockResolveContext } from '@/extensions/blockInteraction'
+import { MOBILE_BREAKPOINT_QUERY } from '@/utils/viewport.js'
 
 const resolveContext = {} as unknown as BlockResolveContext
 
@@ -83,7 +84,7 @@ describe('useContinuousGestures', () => {
 
     const recognizer: GestureRecognizer = {
       id: 'swipe',
-      isEnabled: () => window.matchMedia('(max-width: 767px)').matches,
+      isEnabled: () => window.matchMedia(MOBILE_BREAKPOINT_QUERY).matches,
       touchAction: 'pan-y',
     }
     const runtime = resolveFacetRuntimeSync([

@@ -1,11 +1,37 @@
+import { BLOCK_SHELL_ATTRIBUTE } from '@/extensions/blockInteraction.js'
 import { useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
+import { nearestScrollableAncestor } from '@/utils/dom.js'
+import { registerPendingLazyMount } from './lazyMountRegistry.js'
 
 /** Session-scoped cache of measured lazy-rendered heights, keyed by the
  *  caller's stable cache key. It lets remounted placeholders reserve the
  *  last known size for the same item, reducing layout shuffle. */
 const measuredHeights = new Map<string, number>()
 const mountedCacheKeys = new Set<string>()
+
+/**
+ * Cap on how far ABOVE the scrollport we pre-mount, regardless of the
+ * caller's `overscanPx`.
+ *
+ * Overscan exists so scrolling (and keyboard navigation) doesn't run into
+ * placeholders, and both of those overwhelmingly move DOWN — upward rows are
+ * usually mounted already, since mounting is sticky. (Not after a scroll
+ * restore, where nothing above the landing point has ever mounted — and the
+ * boundary fall-through does NOT rescue that direction, because the panel's
+ * top-level row is always mounted, so the upward walker always finds *a*
+ * neighbour. Moving up across a never-mounted region jumps to that row.
+ * Pre-existing, and the reason to keep some upward overscan rather than
+ * none.) Pre-mounting far above
+ * costs on both sides: it roughly doubles the mounted set at rest, and each
+ * row that mounts above the fold swaps its height estimate for its real
+ * height, pushing visible content down on engines without scroll anchoring
+ * (WebKit doesn't support `overflow-anchor`, so iOS/Safari take the jump).
+ *
+ * Callers' `overscanPx` therefore sets the downward distance, which is the
+ * one that has to cover a keystroke; upward is clamped to this.
+ */
+const UPWARD_OVERSCAN_CAP_PX = 200
 
 export interface LazyViewportPlaceholderProps {
   reservedHeight: number
@@ -17,6 +43,23 @@ interface LazyViewportMountProps {
   overscanPx: number
   children: ReactNode
   renderPlaceholder: (props: LazyViewportPlaceholderProps) => ReactNode
+  /** The block this row renders. REQUIRED, even when `cacheKey` already is
+   *  `lazyBlockCacheKey(blockId)`: it is what keeps a row reachable by block
+   *  id whatever key its surface chose, and a surface that forgets it goes
+   *  silently unreachable to keyboard navigation and to scroll restore — see
+   *  `lazyMountRegistry`. Optional was tried and immediately drifted: the
+   *  recents rows shipped without it. */
+  blockId: string
+  /** The render scope the row WILL have once it mounts. Optional, and only
+   *  worth passing when the wrapper renders the row in the scope it already
+   *  sits in — `LazyBlockComponent` does; a surface that mints a new scope
+   *  inside the wrapper (a backlink entry, a recents embed) must NOT, because
+   *  the scope it would have to name isn't decided out here. Supplying it
+   *  publishes this placeholder as that row's reserved place in document
+   *  order (see `rowSlotIn` in the spatial-navigation walker); omitting it
+   *  leaves the placeholder anonymous, which costs only that a keyboard move
+   *  can't reason about the row until it mounts. */
+  renderScopeId?: string
 }
 
 /**
@@ -33,6 +76,8 @@ export function LazyViewportMount({
   overscanPx,
   children,
   renderPlaceholder,
+  blockId,
+  renderScopeId,
 }: LazyViewportMountProps) {
   const [mounted, setMounted] = useState(
     () => typeof IntersectionObserver === 'undefined' || mountedCacheKeys.has(cacheKey),
@@ -51,11 +96,35 @@ export function LazyViewportMount({
       (entries) => {
         if (entries[0]?.isIntersecting) setMounted(true)
       },
-      {rootMargin: `${overscanPx}px 0px`},
+      // Root at the scrolling ancestor, not the viewport: `rootMargin`
+      // expands only the ROOT's rect, while the clip rect of every scrolling
+      // ancestor in between is applied unexpanded. Rooted at the viewport
+      // (the default) our overscan was therefore worth nothing inside a
+      // scrolling panel — rows mounted only once they were literally on
+      // screen, so "the next row" was routinely absent from the DOM.
+      //
+      // Accepted cost of rooting here: clips ABOVE the root no longer apply
+      // either, so rows in a panel that is itself scrolled out of view
+      // horizontally (≥4 open columns in `.layout`) mount anyway. Bounded by
+      // that panel's own scrollport, and mounting is sticky, so it's a
+      // one-off per column. Don't "fix" it by AND-ing a viewport-rooted
+      // observer: that reimposes the unexpanded panel clip and takes the
+      // overscan back to zero.
+      {
+        root: nearestScrollableAncestor(el),
+        rootMargin: `${Math.min(overscanPx, UPWARD_OVERSCAN_CAP_PX)}px 0px ${overscanPx}px 0px`,
+      },
     )
     observer.observe(el)
     return () => observer.disconnect()
   }, [mounted, overscanPx])
+
+  // While showing a placeholder, stay reachable by key so a focus write can
+  // pull this row into existence — rationale in `lazyMountRegistry`.
+  useEffect(() => {
+    if (mounted) return
+    return registerPendingLazyMount(cacheKey, () => setMounted(true), blockId)
+  }, [mounted, cacheKey, blockId])
 
   useEffect(() => {
     if (!mounted) return
@@ -79,10 +148,39 @@ export function LazyViewportMount({
   }
 
   return (
-    <div ref={containerRef}>
+    // These mark WHERE this row is reserved while it waits. Same reason the
+    // `blockId` prop is required at all: a deferred row must stay findable.
+    // Mounting it needs the registry above; deciding whether a keyboard move
+    // would jump OVER it needs its position, which only the DOM has (see
+    // `rowSlotIn` in the spatial-navigation walker). Set on the placeholder
+    // branch only, so they mean "deferred", not "a row lives somewhere here".
+    //
+    // The scope is what makes the slot USABLE for that: one block renders under
+    // many scopes, and a wrapper that mints its own inside itself (a backlink
+    // entry, a recents embed) reserves a place for a row that will NOT belong
+    // to the scope surrounding it. Such a wrapper passes no scope, and a
+    // consumer must then ignore the slot rather than guess from its neighbours.
+    <div
+      ref={containerRef}
+      data-lazy-block-id={blockId}
+      data-lazy-render-scope-id={renderScopeId}
+      // …and that a pointer landing anywhere in the reserved area belongs to
+      // the row waiting there, not to the surface showing it. Here rather than
+      // inside the placeholder because callers wrap their own chrome around one
+      // — padding, a header skeleton, a whole group's height — and only this
+      // element spans all of it.
+      {...{[BLOCK_SHELL_ATTRIBUTE]: 'true'}}
+    >
       {renderPlaceholder({
         reservedHeight: measuredHeights.get(cacheKey) ?? estimatedHeightPx,
       })}
     </div>
   )
+}
+
+/** Test-only: drop the session caches. Without this, a cache key that mounted
+ *  in an earlier test starts the next one already mounted. */
+export const __resetLazyMountCachesForTesting = (): void => {
+  mountedCacheKeys.clear()
+  measuredHeights.clear()
 }

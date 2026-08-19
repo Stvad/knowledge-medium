@@ -6,7 +6,7 @@
  *     `block-type` block on the workspace's Types page with the
  *     caller's label + property-schema refList, then wait for
  *     `UserTypesService` to publish the contribution into the
- *     `typesFacet` user-data bucket. Returns the new block id, which
+ *     `projectedTypeDefinitionsFacet` user-data bucket. Returns the new block id, which
  *     IS the type id (the user-defined-types block-id = type-id rule).
  *
  *  2. `retagBlocks(repo, args)` — apply a type to an explicit list of
@@ -36,6 +36,8 @@ import {
   PROPERTY_SCHEMA_TYPE,
 } from '@/data/blockTypes'
 import {
+  aliasesProp,
+  blockTypeColorProp,
   blockTypeLabelProp,
   blockTypePropertiesProp,
   hasBlockType,
@@ -43,13 +45,18 @@ import {
 } from '@/data/properties'
 import type { Repo } from '@/data/repo'
 import { createChild } from '@/data/mutators'
+import {
+  assertNotGrammarShapedLabel,
+  assertRoundTrippableReferenceLabel,
+} from '@/data/referenceBlock'
+import { pickLeastUsedTypeColor } from '@/data/typeColors'
 import { typesPageBlockId } from '@/data/typesPage'
 
 // ──── Error classes ─────────────────────────────────────────────────
 
 /** Thrown by `createTypeBlock`'s Phase A→bridge handoff when the
  *  `UserTypesService` subscription doesn't publish the new id into
- *  `typesFacet`'s user-data bucket within `registrationTimeoutMs`.
+ *  `projectedTypeDefinitionsFacet`'s user-data bucket within `registrationTimeoutMs`.
  *  Realistic cause: `tryBuildType` returned null (the block-type
  *  block failed to parse — e.g. a property-schema ref doesn't
  *  resolve in the live registry). */
@@ -89,6 +96,17 @@ export interface CreateTypeBlockArgs {
    *  fails fast instead of producing a half-registered type with
    *  missing slots. */
   propertySchemaIds: readonly string[]
+  /** Chip color stamped onto `block-type:color`. Omitted → the
+   *  least-used palette entry (`pickLeastUsedTypeColor`), so freshly
+   *  created types spread across the color wheel instead of colliding
+   *  the way the pure hash fallback does. Pass `''` (or whitespace —
+   *  values are trimmed) to create the type uncolored (it then renders
+   *  with the hash fallback). The least-used pick only applies when
+   *  creating in the ACTIVE workspace: the registry projects only that
+   *  workspace's user types, so a cross-workspace pick would count the
+   *  wrong population and stamp a whole import batch one color —
+   *  those creates stay uncolored instead. */
+  color?: string
   /** Caller cancellation signal. Honored before the tx opens, after
    *  pre-tx validation reads, and during the bridge wait. */
   signal?: AbortSignal
@@ -102,7 +120,10 @@ export interface CreateTypeBlockArgs {
 /** Create a fresh `block-type` block on the workspace's Types page.
  *  Returns the new block id (== type id once registered). The
  *  returned id is in the live `repo.types` registry by the time the
- *  promise resolves. */
+ *  promise resolves. The block also claims its label as an `alias`, so
+ *  it doubles as the `[[label]]` page — meaning the label is
+ *  workspace-unique and this rejects (`alias.collision`) when a live
+ *  block already claims it. */
 export async function createTypeBlock(
   repo: Repo,
   args: CreateTypeBlockArgs,
@@ -116,6 +137,14 @@ export async function createTypeBlock(
       `UserTypesService.tryBuildType silently drops a block-type block with an empty label.`,
     )
   }
+  // Name hygiene (PR #288 §7): the label is mirrored into the definition
+  // block's `content` below, AND claimed as its alias so the type doubles
+  // as its `[[label]]` page. Both halves, matching the property-name path
+  // — a label that can't be written as `[[label]]` and read back (`]]`
+  // renders lossily, over `MAX_ALIAS_LENGTH` isn't read as a reference at
+  // all) would claim an alias nothing can link to.
+  assertNotGrammarShapedLabel(trimmedLabel, 'createTypeBlock: label')
+  assertRoundTrippableReferenceLabel(trimmedLabel, 'createTypeBlock: label')
 
   // The Types page must exist in `args.workspaceId` before we can
   // parent the new type block under it. We resolve the id from
@@ -183,7 +212,16 @@ export async function createTypeBlock(
   args.signal?.throwIfAborted()
 
   // Materialize the block-type block in a single tx: create the row,
-  // add BLOCK_TYPE_TYPE + PAGE_TYPE, stamp label + properties refList.
+  // add BLOCK_TYPE_TYPE + PAGE_TYPE, stamp label + properties refList
+  // + color. The least-used pick reads the LIVE registry (pre-tx), so
+  // two devices creating concurrently can still collide — acceptable:
+  // the color is persisted data, editable on the definition block.
+  // Cross-workspace creates skip the pick (see CreateTypeBlockArgs.color).
+  const color = args.color !== undefined
+    ? args.color.trim()
+    : args.workspaceId === repo.activeWorkspaceId
+      ? pickLeastUsedTypeColor(repo.types.values())
+      : ''
   const typeSnapshot = repo.snapshotTypeRegistries()
   let newId = ''
   await repo.tx(async tx => {
@@ -213,6 +251,20 @@ export async function createTypeBlock(
     await repo.addTypeInTx(tx, newId, PAGE_TYPE, {}, typeSnapshot)
     await tx.setProperty(newId, blockTypeLabelProp, trimmedLabel)
     await tx.setProperty(newId, blockTypePropertiesProp, args.propertySchemaIds)
+    if (color) await tx.setProperty(newId, blockTypeColorProp, color)
+    // A defined type doubles as its `[[label]]` page: claim the label as
+    // an alias so references resolve to THIS block instead of minting a
+    // duplicate alias-seat page (design.html — the type id is the same id
+    // `[[Person]]` references resolve to). Parity is self-maintaining
+    // afterwards: `writeBlockTypeLabel` keeps `content` in lockstep with
+    // the label, and `aliasSyncProcessor` reconciles `content → alias` on
+    // rename, so the alias tracks the label without extra wiring here.
+    //
+    // A type's name is therefore workspace-unique: the
+    // `block_aliases_workspace_alias_unique` trigger rejects this tx (as a
+    // structured `alias.collision`) if a live block already claims the
+    // label — a duplicate-named type is ambiguous for `[[label]]` anyway.
+    await tx.setProperty(newId, aliasesProp, [trimmedLabel])
   }, {scope: ChangeScope.BlockDefault, description: `createTypeBlock ${trimmedLabel}`})
 
   await waitForTypeRegistrationBounded(

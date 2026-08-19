@@ -19,9 +19,7 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
-const tick = () => new Promise((resolve) => setTimeout(resolve, 0))
-
-describe('compileForVerification — L1 (content-hash) cache', () => {
+describe('compileForVerification — block + content-hash cache', () => {
   it('compiles only once when called twice with the same content + block', async () => {
     let count = 0
     const restore = __setCompileImplForTest(async () => {
@@ -41,73 +39,29 @@ describe('compileForVerification — L1 (content-hash) cache', () => {
     }
   })
 
-  it('dedupes concurrent compiles of the same content', async () => {
-    let resolveCompile!: (mod: Record<string, unknown>) => void
+  it('does not share a live module between blocks with the same content', async () => {
     let count = 0
-    const pending = new Promise<Record<string, unknown>>((resolve) => {
-      resolveCompile = resolve
-    })
-    const restore = __setCompileImplForTest(() => {
+    const restore = __setCompileImplForTest(async () => {
       count += 1
-      return pending
+      return {instance: count}
     })
 
     try {
       const promiseA = compileForVerification('shared', 'block-1', cache)
       const promiseB = compileForVerification('shared', 'block-2', cache)
 
-      // Resolve and await both before asserting count, so we don't
-      // depend on microtask-timing assumptions about when a parallel
-      // compileImpl is reached.
-      const moduleObj = {default: 'shared-default'}
-      // Yield enough that hashContent has had time to resolve before
-      // we resolve the compile promise.
-      await tick()
-      resolveCompile(moduleObj)
-
       const a = await promiseA
       const b = await promiseB
-      expect(count).toBe(1)
-      expect(a.module).toBe(moduleObj)
-      expect(b.module).toBe(moduleObj)
+      expect(count).toBe(2)
+      expect(a.module).not.toBe(b.module)
     } finally {
       restore()
     }
   })
 
-  it('different blockIds with identical content share the cached module', async () => {
-    let count = 0
-    const moduleObj = {default: {shared: true}}
-    const restore = __setCompileImplForTest(async () => {
-      count += 1
-      return moduleObj
-    })
-
-    try {
-      const a = await compileForVerification('same-source', 'block-A', cache)
-      const b = await compileForVerification('same-source', 'block-B', cache)
-
-      expect(count).toBe(1)
-      expect(a.module).toBe(b.module)
-    } finally {
-      restore()
-    }
-  })
 })
 
-describe('compileForVerification — L2 (blockId) cache', () => {
-  it('returns the same module reference for the same block + content across calls', async () => {
-    const restore = __setCompileImplForTest(async () => ({default: 'first'}))
-
-    try {
-      const a = await compileForVerification('content', 'block-1', cache)
-      const b = await compileForVerification('content', 'block-1', cache)
-      expect(a.module).toBe(b.module)
-    } finally {
-      restore()
-    }
-  })
-
+describe('compileForVerification — content changes', () => {
   it('replaces the module reference when block content changes', async () => {
     const restore = __setCompileImplForTest(async (content: string) => ({source: content}))
 
@@ -153,7 +107,7 @@ describe('compileForVerification — failure handling', () => {
 })
 
 describe('compileForVerification — eviction', () => {
-  it('evictBlockFromCache drops the L2 entry but keeps L1 for shared content', async () => {
+  it('evictBlockFromCache drops the block-scoped live module', async () => {
     let count = 0
     const restore = __setCompileImplForTest(async () => {
       count += 1
@@ -164,12 +118,9 @@ describe('compileForVerification — eviction', () => {
       const a = await compileForVerification('source', 'block-A', cache)
       evictBlockFromCache('block-A', cache)
 
-      // Re-asking for the same block with the same content recomputes
-      // the L2 entry, but L1 (keyed by hash) serves the same module —
-      // so the underlying compile should not run again.
       const aAgain = await compileForVerification('source', 'block-A', cache)
-      expect(count).toBe(1)
-      expect(aAgain.module).toBe(a.module)
+      expect(count).toBe(2)
+      expect(aAgain.module).not.toBe(a.module)
     } finally {
       restore()
     }

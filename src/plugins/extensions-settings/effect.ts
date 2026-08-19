@@ -13,7 +13,6 @@
  */
 import type {AppEffect} from '@/extensions/core.js'
 import {getPluginPrefsBlock} from '@/data/stateBlocks.js'
-import type {PropertySchema} from '@/data/api'
 import {
   readOverridesCache,
   writeOverridesCache,
@@ -34,7 +33,7 @@ export const overridesEqual = (a: Overrides, b: Overrides): boolean => {
 /** Minimal Block contract we need — typed loosely so tests can stub
  *  without constructing a full Repo. */
 interface OverridesReadable {
-  peekProperty<T>(schema: PropertySchema<T>): T | undefined
+  peekProperty(schema: typeof extensionsOverridesProp): Overrides | undefined
 }
 
 /** Read the overrides map from a Block snapshot. Returns an empty map

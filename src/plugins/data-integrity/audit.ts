@@ -525,13 +525,22 @@ const runContentLinkRecomputeCheck = async (
       ])
       if (parsedAliases.size === 0) continue
       withMarks += 1
-      let stored: StoredRef[]
+      let stored: unknown
       try {
         stored = JSON.parse(row.references_json)
       } catch {
         continue
       }
-      const contentRefs = stored.filter((r) => r && !r.sourceField)
+      // Parsing succeeding says nothing about the SHAPE — `null` and `{}` are
+      // valid JSON and both throw on the filter below, which would abort this
+      // check to `error` and hide every row it had left.
+      //
+      // Skipped rather than scored HERE because this loop only sees blocks
+      // with reference syntax in their content; the shape is a property of
+      // every live block, so it is counted workspace-wide by
+      // `references_index_mirror.malformedRefsShape`.
+      if (!Array.isArray(stored)) continue
+      const contentRefs = (stored as StoredRef[]).filter((r) => r && !r.sourceField)
       if (contentRefs.length === 0) {
         strippedBlocks += 1
         if (strippedSample.length < sampleLimit) strippedSample.push({ id: row.id, marks: parsedAliases.size, content_preview: row.content.slice(0, 120) })
@@ -660,6 +669,20 @@ export const runConsistencyAudit = async (
          AND (NOT json_valid(b.references_json) OR NOT json_valid(b.properties_json))`,
       [workspaceId],
     )
+    // `json_valid` is satisfied by ANY well-formed JSON, so `null`, `{}` and
+    // `"x"` all pass the count above while being unusable as reference
+    // storage — `json_each` yields nothing for them, so every mirror
+    // direction reads as consistent and the row looks healthy. A separate
+    // counter rather than widening `malformedJson`, whose meaning
+    // ("unparseable") is what the samples and the dialog already say.
+    const malformedRefsShape = await count(
+      db,
+      `SELECT count(*) AS n FROM blocks b
+       WHERE b.deleted=0 AND b.workspace_id=?
+         AND json_valid(b.references_json)
+         AND json_type(b.references_json) != 'array'`,
+      [workspaceId],
+    )
     const missingIndexRows = await count(
       db,
       `SELECT count(*) AS n FROM (
@@ -709,8 +732,19 @@ export const runConsistencyAudit = async (
        )`,
       [workspaceId],
     )
-    const total = missingIndexRows + extraIndexRows + orphanSourceRows + duplicateTuples + malformedJson
+    const total = missingIndexRows + extraIndexRows + orphanSourceRows + duplicateTuples
+      + malformedJson + malformedRefsShape
     const samples: string[] = []
+    if (malformedRefsShape > 0) {
+      addSamples(samples, await sampleIds(
+        db,
+        `SELECT b.id AS id FROM blocks b
+         WHERE b.deleted=0 AND b.workspace_id=?
+           AND json_valid(b.references_json)
+           AND json_type(b.references_json) != 'array' LIMIT ${SAMPLE_LIMIT}`,
+        [workspaceId],
+      ))
+    }
     if (missingIndexRows > 0) {
       addSamples(samples, await sampleIds(
         db,
@@ -760,6 +794,10 @@ export const runConsistencyAudit = async (
       orphanSourceRows,
       duplicateTuples,
       malformedJson,
+      /** Live blocks whose `references_json` parses but is not an array —
+       *  unusable as reference storage, and invisible to every other count
+       *  here because `json_each` simply yields nothing for them. */
+      malformedRefsShape,
       samples,
     }
   })

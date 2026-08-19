@@ -1,58 +1,97 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 import {
   canonicalizeChord,
   matchesMouseEvent,
   normalizeChord,
-  parseChord,
+  normalizeChordSequence,
   pointerBindingDescriptor,
   type MouseChordDescriptor,
   type MouseEventLike,
 } from './canonicalizeChord.ts'
 
-describe('parseChord', () => {
-  it('splits a sequence chord into one descriptor per press', () => {
-    // The historical gap: 'g g' / 'd d' were treated as a single atomic
-    // key because the splitter only split on '+'. They must become an
-    // ordered list of presses.
-    expect(parseChord('g g')).toEqual([
-      {kind: 'key', key: 'g', mods: [], phase: 'keydown'},
-      {kind: 'key', key: 'g', mods: [], phase: 'keydown'},
-    ])
-  })
-
-  it('keeps a modifier press whole within a sequence', () => {
-    expect(parseChord('Cmd+K Cmd+S')).toEqual([
-      {kind: 'key', key: 'K', mods: ['$mod'], phase: 'keydown'},
-      {kind: 'key', key: 'S', mods: ['$mod'], phase: 'keydown'},
-    ])
-  })
-
-  it('alias-folds and orders modifiers on a plain chord', () => {
-    expect(parseChord('Shift+Cmd+k')).toEqual([
-      {kind: 'key', key: 'k', mods: ['$mod', 'Shift'], phase: 'keydown'},
-    ])
-  })
-
-  it('stamps the requested phase onto every press', () => {
-    expect(parseChord('s', 'keyup').map(d => d.phase)).toEqual(['keyup'])
-  })
-})
+// The Meta/$mod fold is platform-aware, so stub navigator.platform for the
+// cases that depend on it. Default (no stub) falls back to the jsdom
+// userAgent, which is non-Mac.
+const stubPlatform = (platform: string) => {
+  Object.defineProperty(navigator, 'platform', {configurable: true, get: () => platform})
+}
 
 describe('canonicalizeChord', () => {
+  afterEach(() => stubPlatform(''))
+
   it('canonicalises each press of a sequence instead of mangling on "+"', () => {
     // A naive '+' split would shatter 'Cmd+K Cmd+S' into ['Cmd', 'K Cmd',
     // 'S']; splitting on space first keeps each press intact.
-    expect(canonicalizeChord('Cmd+K Cmd+S')).toBe('$mod+K $mod+S')
+    expect(canonicalizeChord('Cmd+K Cmd+S')).toBe('$mod+k $mod+s')
+  })
+
+  it('folds final-key case: $mod+K and $mod+k are one binding at dispatch', () => {
+    // tinykeys compares key.toUpperCase() on both sides, so case-variant
+    // spellings dispatch identically and must share a canonical bucket
+    // (strip map, conflict detection). normalizeChord deliberately keeps
+    // case — the settings UI round-trips the user's spelling.
+    expect(canonicalizeChord('$mod+K')).toBe(canonicalizeChord('$mod+k'))
+    expect(canonicalizeChord('Cmd+K')).toBe(canonicalizeChord('$mod+k'))
   })
 
   it('treats alias- and order-equivalent chords as the same key', () => {
     expect(canonicalizeChord('Shift+Cmd+k')).toBe(canonicalizeChord('cmd+shift+k'))
+  })
+
+  it('folds Meta into $mod on macOS (Meta is the primary there)', () => {
+    stubPlatform('MacIntel')
     expect(canonicalizeChord('Meta+k')).toBe(canonicalizeChord('$mod+k'))
+  })
+
+  it('keeps Meta distinct from $mod off-Mac (Super is not Ctrl)', () => {
+    stubPlatform('Win32')
+    expect(canonicalizeChord('Meta+k')).toBe('Meta+k')
+    expect(canonicalizeChord('$mod+k')).toBe('$mod+k')
+    expect(canonicalizeChord('Meta+k')).not.toBe(canonicalizeChord('$mod+k'))
   })
 
   it('distinguishes the same chord on different phases', () => {
     expect(canonicalizeChord('s', 'hold')).not.toBe(canonicalizeChord('s', 'keyup'))
     expect(canonicalizeChord('s')).toBe('s')
+  })
+
+  it('preserves case for event.code-only keys so mis-cased overrides do not forge a collision', () => {
+    // `Digit1`/`Period`/`Space`/`KeyA`/`Numpad3` dispatch ONLY through
+    // tinykeys' case-sensitive `event.code` comparison (their event.key is
+    // '1'/'.'/' '/'a'/'3'), so a lowercase spelling fires nothing. Folding
+    // them would (a) let a dead `Control+Shift+digit1` strip the working
+    // `Control+Shift+Digit1` default and (b) is meaningless — they must
+    // stay exact-cased and in their own bucket.
+    expect(canonicalizeChord('Control+Shift+Digit1')).toBe('Control+Shift+Digit1')
+    expect(canonicalizeChord('Control+Shift+Digit1'))
+      .not.toBe(canonicalizeChord('Control+Shift+digit1'))
+    expect(canonicalizeChord('$mod+Shift+Period')).toBe('$mod+Shift+Period')
+    expect(canonicalizeChord('Space')).toBe('Space')
+    expect(canonicalizeChord('KeyA')).toBe('KeyA')
+    expect(canonicalizeChord('Numpad3')).toBe('Numpad3')
+  })
+
+  it('keeps `+` as a key instead of eating it (tinykeys splits on `+` only after \\w or ])', () => {
+    // The settings capture path records pressing `+` as 'Shift++'
+    // (keyCapture.ts pushes event.key after the modifier parts), and
+    // tinykeys parses that as Shift plus the `+` key. A naive `+` split
+    // would leave the bare modifier — and since direct overrides are
+    // INSTALLED through normalizeChordSequence, the action would end up
+    // bound to Shift alone.
+    expect(canonicalizeChord('Shift++')).toBe('Shift++')
+    expect(canonicalizeChord('$mod+Shift++')).toBe('$mod+Shift++')
+    expect(canonicalizeChord('+')).toBe('+')
+  })
+
+  it('still folds case for logical keys that dispatch via event.key', () => {
+    // Named keys whose event.key equals the code (Enter/ArrowUp/F2/Escape…)
+    // match tinykeys' case-INSENSITIVE event.key path, so mis-cased
+    // spellings still fire and must share one bucket — fold them.
+    expect(canonicalizeChord('ArrowUp')).toBe(canonicalizeChord('arrowup'))
+    expect(canonicalizeChord('Shift+Enter')).toBe(canonicalizeChord('Shift+enter'))
+    expect(canonicalizeChord('F2')).toBe(canonicalizeChord('f2'))
+    // …and single-character keys as before.
+    expect(canonicalizeChord('$mod+K')).toBe(canonicalizeChord('$mod+k'))
   })
 })
 
@@ -122,19 +161,40 @@ describe('pointerBindingDescriptor', () => {
   })
 })
 
+describe('normalizeChordSequence', () => {
+  it('normalises each press of a sequence, preserving the key\'s case', () => {
+    // The install form for keybinding overrides (issue #388): modifier
+    // aliases fold to dispatch-live names, display case survives — unlike
+    // canonicalizeChord, which case-folds because it's a comparison key.
+    expect(normalizeChordSequence('Cmd+K Cmd+S')).toBe('$mod+K $mod+S')
+    expect(normalizeChordSequence('ctrl+ArrowDown')).toBe('Control+ArrowDown')
+    expect(normalizeChordSequence('')).toBe('')
+  })
+})
+
 describe('normalizeChord (behaviour pinned across the lift)', () => {
-  // The whole PR's safety rests on normalizeChord being a relocation, not a
-  // change. keyCapture.test.ts covers the ordinary cases through the
-  // re-export; these pin the adversarial edges that the position-aware →
-  // "alias or key" rewrite could plausibly have shifted.
+  // keyCapture.test.ts covers the ordinary cases through the re-export;
+  // these pin the adversarial edges of the "alias or key" rewrite. Only the
+  // platform-independent rows live in the table (cmd folds to $mod on every
+  // platform); the meta cases are asserted per-platform below.
+  afterEach(() => stubPlatform(''))
   it.each([
     ['cmd+shift', '$mod+Shift'],       // all-modifier chord, no final key
     ['k+cmd', '$mod+k'],               // non-modifier before a modifier
-    ['meta+cmd+k', '$mod+k'],          // duplicate primary folds to one $mod
-    ['Meta+K', '$mod+K'],              // meta→$mod alias; final-key case kept
     [' cmd + k ', '$mod+k'],           // surrounding whitespace trimmed
     ['', ''],                          // empty input stays empty
+    ['Shift++', 'Shift++'],            // `+` is the key, not a separator
+    ['cmd + +', '$mod++'],             // …even authored with spaces
   ])('normalizeChord(%j) === %j', (input, expected) => {
     expect(normalizeChord(input)).toBe(expected)
+  })
+
+  it('folds meta→$mod on macOS but keeps it literal off-Mac', () => {
+    stubPlatform('MacIntel')
+    expect(normalizeChord('meta+cmd+k')).toBe('$mod+k')  // duplicate primary → one $mod
+    expect(normalizeChord('Meta+K')).toBe('$mod+K')      // final-key case kept
+    stubPlatform('Win32')
+    expect(normalizeChord('meta+cmd+k')).toBe('$mod+Meta+k')  // Cmd=$mod, Meta=Super, distinct
+    expect(normalizeChord('Meta+K')).toBe('Meta+K')
   })
 })

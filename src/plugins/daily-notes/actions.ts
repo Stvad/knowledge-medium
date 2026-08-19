@@ -45,26 +45,26 @@ import {
   ActionContextTypes,
 } from '@/shortcuts/types.js'
 import { CalendarDays, CalendarPlus } from 'lucide-react'
-import { getLayoutSessionId } from '@/utils/layoutSessionId.js'
-import { parseAppHash } from '@/utils/routing.js'
 import {
+  activeWorkspaceIdPreferringHash,
   navigate,
   navigateFromGlobalCommand,
   resolveGlobalCommandTarget,
 } from '@/utils/navigation.js'
-import { addDaysIso, getOrCreateDailyNote, todayIso } from './dailyNotes.ts'
+import {
+  addDaysIso,
+  dailyNoteIsoFromAliases,
+  getOrCreateDailyNote,
+  todayIso,
+} from './dailyNotes.ts'
 
 export const OPEN_TODAY_ACTION_ID = 'open_today'
 export const APPEND_TODAY_DAILY_BLOCK_ACTION_ID = 'append_today_daily_block'
 export const OPEN_PREVIOUS_DAILY_NOTE_ACTION_ID = 'open_previous_daily_note'
 export const OPEN_NEXT_DAILY_NOTE_ACTION_ID = 'open_next_daily_note'
 
-const ISO_ALIAS_RE = /^\d{4}-\d{2}-\d{2}$/
-
-const dailyNoteIsoFromBlock = (block: Block): string | null => {
-  const aliases = block.peekProperty(aliasesProp) ?? []
-  return aliases.find(alias => ISO_ALIAS_RE.test(alias)) ?? null
-}
+const dailyNoteIsoFromBlock = (block: Block): string | null =>
+  dailyNoteIsoFromAliases(block.peekProperty(aliasesProp) ?? [])
 
 const findContainingDailyNoteIso = async (
   repo: Repo,
@@ -109,8 +109,7 @@ export const resolveCurrentDailyNoteIso = async (
 ): Promise<string | null> => (await resolveDailyNoteAnchor(repo, workspaceId))?.iso ?? null
 
 const openDailyNoteByOffset = async (repo: Repo, offsetDays: number) => {
-  const route = parseAppHash(window.location.hash)
-  const fallbackWorkspaceId = route.workspaceId ?? repo.activeWorkspaceId
+  const fallbackWorkspaceId = activeWorkspaceIdPreferringHash(repo)
   if (!fallbackWorkspaceId) return
 
   // Anchor on the targeted panel's workspace uniformly — so under a
@@ -149,11 +148,14 @@ export const appendTodayDailyBlockInStack = async (
   if (!workspaceId || repo.isReadOnly) return null
 
   const content = options.content
-  const note = await getOrCreateDailyNote(repo, workspaceId, todayIso())
-  const blockId = await repo.mutate.createChild({
-    parentId: note.id,
-    content,
-    position: {kind: 'last'},
+  // One undo entry for note creation + the appended block.
+  const blockId = await repo.undoGroup(async repo => {
+    const note = await getOrCreateDailyNote(repo, workspaceId, todayIso())
+    return repo.mutate.createChild({
+      parentId: note.id,
+      content,
+      position: {kind: 'last'},
+    })
   })
 
   await layoutSessionBlock.load()
@@ -209,7 +211,7 @@ export const dailyNotesActions = (
     context: ActionContextTypes.GLOBAL,
     icon: CalendarPlus,
     handler: async ({uiStateBlock}) => {
-      const layoutSessionBlock = await getLayoutSessionBlock(uiStateBlock, getLayoutSessionId())
+      const layoutSessionBlock = await getLayoutSessionBlock(uiStateBlock, repo.activeLayoutSessionId)
       await appendTodayDailyBlockInStack(repo, layoutSessionBlock)
     },
     defaultBinding: {

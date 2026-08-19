@@ -1,6 +1,7 @@
 import {
   ChangeScope,
-  defineProperty,
+  definePresetCore,
+  seedProperty,
   type BlockPredicate,
   type Codec,
 } from '@/data/api'
@@ -75,8 +76,17 @@ export const backlinksFilterCodec: Codec<StoredBacklinksFilter> = {
   decode: value => normalizeBacklinksFilter(parseBacklinksFilter(value)),
 }
 
-export const backlinksFilterProp = defineProperty<StoredBacklinksFilter>('backlinks:predicates', {
-  codec: backlinksFilterCodec,
+export const backlinksFilterPresetCore = definePresetCore<StoredBacklinksFilter>({
+  id: backlinksFilterCodec.type,
+  build: () => backlinksFilterCodec,
+  defaultValue: EMPTY_BACKLINKS_FILTER,
+})
+
+export const backlinksFilterProp = seedProperty({
+  seedKey: 'system:backlinks/property/predicates',
+  revision: 1,
+  name: 'backlinks:predicates',
+  preset: backlinksFilterPresetCore,
   defaultValue: EMPTY_BACKLINKS_FILTER,
   changeScope: ChangeScope.BlockDefault,
 })

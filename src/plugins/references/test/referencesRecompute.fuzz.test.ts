@@ -1,0 +1,851 @@
+// @vitest-environment node
+/**
+ * Stateful fuzz suite for the references pipeline — the incident class
+ * that once silently stripped ~10k SRS property backlinks. See
+ * `src/test/fuzz.ts` for smoke/deep tier mechanics.
+ *
+ * Random sequences of content edits (with `[[alias]]` / `((uuid))` /
+ * `!((uuid))` / `[label](((uuid)))` marks), ref-typed property writes,
+ * alias renames, deletes/restores, and merges run against a repo with
+ * the REAL references + daily-notes extensions registered (the kernel
+ * fuzzer in `repoMutators.fuzz.test.ts` deliberately runs kernel-only,
+ * so `references.parseReferences`, the rename rewriter, the same-tx
+ * merge-retarget/inline-deleted processors, and orphan-alias cleanup
+ * never execute there — this suite is where they get fuzzed).
+ *
+ * Oracle: ops run in fc-generated batches of 1-3 (so a processor plan
+ * can still be in flight when the next op in the batch lands — the
+ * mid-plan-interleaving shape; see caseArb's docblock); after each
+ * batch the processor pipeline is drained (`flush` — the fake-timer +
+ * awaitReprojections + awaitProcessors pattern from
+ * referencesProcessor.test.ts), then the FULL consistency audit must
+ * report zero anomalies. That includes the deep checks this exists for
+ * (audit.ts):
+ *  - `content_link_recompute` — re-parse every live block's content
+ *    with the app parser and diff against stored content refs
+ *    (stripped/stale detection, audit.ts:496)
+ *  - `property_ref_projection` — recompute expected property refs via
+ *    `projectPropertyReferences` and diff stored (audit.ts:375)
+ *  - `references_index_mirror` + the other lean checks
+ * `dangling_refs` reports status 'info' by design (audit.ts:339) —
+ * refs to tombstoned targets are legal and expected here.
+ *
+ * The pipeline's own coherence contracts make the post-flush fixpoint
+ * a sound oracle, not an aspiration:
+ *  - parseReferences recomputes content refs authoritatively and
+ *    retains absent-schema property refs (reconcileDerived's `retain:
+ *    isRetainableAbsentRef`, referencesProcessor.ts:217-222)
+ *  - delete inlines `((id))` marks in referrers same-tx
+ *    (inlineDeletedBlockRefsProcessor.ts), merge retargets refs AND
+ *    rewrites content marks same-tx (mergeRetargetProcessor.ts), and
+ *    the rename processor rewrites referrers' wikilinks — each is
+ *    specified to leave content and references agreeing.
+ *
+ * Orphan-alias cleanup (`tx.afterCommit(..., {delayMs: 4000})`,
+ * referencesProcessor.ts:371) is exercised deterministically: fake
+ * timers per case, an `advanceTime` op (and the end-of-sequence flush)
+ * advances past the delay.
+ *
+ * Out of scope, deliberately:
+ *  - undo/redo oracles — processor txs run under ChangeScope.References
+ *    with their own undo bucket; the kernel suite owns undo round-trips.
+ *  - the retain-on-absent-schema path — needs mid-case schema swaps
+ *    (repo.setFacetRuntime); covered by referencesProcessor.test.ts
+ *    examples instead.
+ *
+ * Determinism: ids come from a UUID-shaped counter (the block-ref
+ * parser only recognises UUIDv4-shaped ids, referenceParser.ts:44);
+ * alias-target / daily-note ids are deterministic seat probes; order-key
+ * jitter is pinned via a seeded LCG over Math.random. Processor-minted
+ * ids (alias seats, daily-note targets) are folded into the op-target
+ * pool after each flush via a SQL scan (`collectMintedIds`) rather than
+ * derived by hand — the scan result is itself a deterministic function
+ * of the ops + seed replayed so far, so shrinking/replay stay exact.
+ */
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
+import fc from 'fast-check'
+import { fuzzParams, fuzzTestTimeout, statefulFuzzGuard } from '@/test/fuzz'
+import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
+import { createTestRepo } from '@/data/test/createTestRepo'
+import { assertLegalKernelRejection, pick, pickNonRoot } from '@/data/test/fuzzKernelHarness'
+import { ChangeScope, ProcessorRejection } from '@/data/api'
+import { aliasesProp } from '@/data/properties'
+import { definitionSeedsFacet } from '@/data/facets.js'
+import { refTestSeed } from './refTestSeeds.ts'
+import { computeAliasSeatId } from '@/data/targets'
+import { dailyNoteBlockId, dailyNotesDataExtension } from '@/plugins/daily-notes'
+import { runConsistencyAudit } from '@/plugins/data-integrity/audit'
+import type { Repo } from '@/data/repo'
+import { referencesDataExtension } from '../dataExtension.ts'
+
+const WS = 'ws-1'
+// UUID-shaped so `((ROOT))` in generated content parses as a block ref.
+const ROOT = '00000000-0000-4000-8000-000000000000'
+
+// ──── property schemas under test ────
+
+/**
+ * Built fresh per case (`buildEnv`) so the ref/refList fields' declared
+ * `changeScope` can vary (#435 item 6). Ground truth: the merge-retarget
+ * cell path used to gate its value+entry rewrite on
+ * `scopePoliciesEquivalent(field.changeScope, mergeTxScope)`
+ * (`mergeRetargetProcessor.ts` pre-cedcb65c2), so a non-BlockDefault ref
+ * property (e.g. UiState/UserPrefs/Automation) was left un-retargeted on
+ * the cell while the value-CHILD content path retargeted unconditionally —
+ * PROJECT then rebuilt the "protected" cell from the retargeted child
+ * anyway, so the pointer moved via a path the guard didn't control. Fixed
+ * by dropping the gate: `retargetSource` now retargets ref/refList values
+ * "regardless of the field's own scope" (mergeRetargetProcessor.ts:139-153).
+ * Varying the scope here is what makes that fix's actual claim — merge
+ * retarget converges no matter what `reviewerProp`/`relatedProp` declare —
+ * a property this suite exercises, not just the fixed BlockDefault case
+ * every other op already covered. Defaults to `ChangeScope.BlockDefault`
+ * for every call site that doesn't pass an explicit scope (the
+ * deterministic canaries below), unchanged from before this addition.
+ */
+const refSchemasFor = (
+  reviewerScope: ChangeScope = ChangeScope.BlockDefault,
+  relatedScope: ChangeScope = ChangeScope.BlockDefault,
+) => {
+  const reviewerProp = refTestSeed('reviewer', 'ref', reviewerScope)
+  const relatedProp = refTestSeed('related', 'refList', relatedScope)
+  const extension = [reviewerProp, relatedProp].map(p => definitionSeedsFacet.of(p, {source: 'test'}))
+  return {reviewerProp, relatedProp, extension}
+}
+
+// ──── op + content generators ────
+
+// 'ax'/'Inbox' exercise plain + case-carrying aliases; the ISO date
+// routes through the daily-note path (deterministic dailyNoteBlockId,
+// exempt from orphan cleanup — the daily branch, referencesProcessor.ts:146-172).
+// 'January 5th, 2026' is the LONG-FORM daily title: its literal alias is a
+// distinct claimable name from the ISO the daily seat claims, covering the
+// per-mark write-phase recheck in applySourcePlan (Codex round 3).
+const ALIAS_POOL = ['ax', 'ay', 'Inbox', '2026-01-05', 'January 5th, 2026'] as const
+
+// Bracket shrapnel: content the parser must treat as inert (or not —
+// either way the processor and the audit share one parser, so the
+// fixpoint oracle is parser-agnostic).
+const NOISE_POOL = ['[[', ']]', '((', '))', '[[ax', '((x', '[a](b)'] as const
+
+type Frag =
+  | {k: 'text'; s: string}
+  | {k: 'noise'; n: number}
+  | {k: 'wikilink'; a: number}
+  | {k: 'blockref'; t: number; form: 'plain' | 'embed' | 'aliased'}
+
+const fragArb: fc.Arbitrary<Frag> = fc.oneof(
+  {weight: 2, arbitrary: fc.record({k: fc.constant('text' as const), s: fc.string({maxLength: 6})})},
+  {weight: 1, arbitrary: fc.record({k: fc.constant('noise' as const), n: fc.nat(NOISE_POOL.length - 1)})},
+  {weight: 3, arbitrary: fc.record({k: fc.constant('wikilink' as const), a: fc.nat(ALIAS_POOL.length - 1)})},
+  {weight: 3, arbitrary: fc.record({
+    k: fc.constant('blockref' as const),
+    t: fc.nat(31),
+    form: fc.constantFrom('plain' as const, 'embed' as const, 'aliased' as const),
+  })},
+)
+
+const contentArb = fc.array(fragArb, {maxLength: 4})
+
+const renderContent = (frags: readonly Frag[], ids: readonly string[]): string =>
+  frags.map(f => {
+    switch (f.k) {
+      case 'text': return f.s
+      case 'noise': return NOISE_POOL[f.n]
+      case 'wikilink': return `[[${ALIAS_POOL[f.a]}]]`
+      case 'blockref': {
+        const id = ids[f.t % ids.length]
+        return f.form === 'plain' ? `((${id}))`
+          : f.form === 'embed' ? `!((${id}))`
+          : `[lbl](((${id})))`
+      }
+    }
+  }).join(' ')
+
+const sel = fc.nat(31)
+
+type OpSpec =
+  | {op: 'create'; parent: number; frags: Frag[]}
+  | {op: 'setContent'; id: number; frags: Frag[]}
+  | {op: 'setReviewer'; id: number; target: number; clear: boolean}
+  | {op: 'setRelated'; id: number; targets: number[]}
+  | {op: 'setAlias'; id: number; alias: number; clear: boolean}
+  | {op: 'deleteBlock' | 'restoreBlock'; id: number}
+  | {op: 'merge'; into: number; from: number}
+  | {op: 'advanceTime'}
+
+const opArb: fc.Arbitrary<OpSpec> = fc.oneof(
+  {weight: 4, arbitrary: fc.record({op: fc.constant('create' as const), parent: sel, frags: contentArb})},
+  {weight: 5, arbitrary: fc.record({op: fc.constant('setContent' as const), id: sel, frags: contentArb})},
+  {weight: 2, arbitrary: fc.record({op: fc.constant('setReviewer' as const), id: sel, target: sel, clear: fc.boolean()})},
+  {weight: 2, arbitrary: fc.record({op: fc.constant('setRelated' as const), id: sel, targets: fc.array(sel, {maxLength: 3})})},
+  {weight: 2, arbitrary: fc.record({op: fc.constant('setAlias' as const), id: sel, alias: fc.nat(ALIAS_POOL.length - 1), clear: fc.boolean()})},
+  {weight: 2, arbitrary: fc.record({op: fc.constantFrom('deleteBlock' as const, 'restoreBlock' as const), id: sel})},
+  {weight: 1, arbitrary: fc.record({op: fc.constant('merge' as const), into: sel, from: sel})},
+  {weight: 1, arbitrary: fc.constant({op: 'advanceTime'} as OpSpec)},
+)
+
+// Batches, not a flat op list: each batch applies 1-3 ops back-to-back
+// BEFORE the single flush+audit that follows it, so a processor plan
+// from op[0] can still be in flight (unread committed state, an
+// afterCommit not yet drained) when op[1] lands in the same tick — the
+// mid-plan-interleaving shape that found the worst bugs this suite
+// fixed (a stale plan clobbering a rename; a references-only writer
+// clobbered between plan build and apply — see the SourcePlan docblock
+// in referencesProcessor.ts). The audit oracle is unaffected: it's a
+// post-flush fixpoint, and flush still runs once per batch (and once
+// more at end-of-case), never mid-batch.
+/** Every declared `ChangeScope` — including ones policy-DIFFERENT from
+ *  BlockDefault (UiState/UserPrefs/Automation are not undoable and are
+ *  read-only-permissive; References shares BlockDefault's policy under a
+ *  separate identity) — is a legal choice for a ref-typed field's own
+ *  scope; #435 item 6 is precisely that the merge retarget must converge
+ *  regardless of which one `reviewerProp`/`relatedProp` declare. */
+const changeScopeArb: fc.Arbitrary<ChangeScope> = fc.constantFrom(...Object.values(ChangeScope))
+
+const caseArb = fc.record({
+  batches: fc.array(fc.array(opArb, {minLength: 1, maxLength: 3}), {minLength: 1, maxLength: 12}),
+  reviewerScope: changeScopeArb,
+  relatedScope: changeScopeArb,
+  prngSeed: fc.integer({min: 1, max: 2 ** 31 - 2}),
+})
+
+// Domain rejections that are legal outcomes for incoherent op combos —
+// via the shared `assertLegalKernelRejection`
+// (`@/data/test/fuzzKernelHarness`), same contract as the kernel fuzzer,
+// plus alias-collision processor rejections
+// (block_aliases_workspace_alias_unique) that the harness itself covers.
+
+// ──── execution ────
+
+interface Env {
+  repo: Repo
+  /** Drain reprojections + post-commit processors; advance past the
+   *  orphan-cleanup delay when asked (referencesProcessor.test.ts:111). */
+  flush(delayMs?: number): Promise<void>
+  /** This env's own schema instances (built by `refSchemasFor` at the scope
+   *  `buildEnv` was called with) — `applyOp` writes through THESE, not a
+   *  module-level const, so the declared scope actually varies per case. */
+  reviewerProp: ReturnType<typeof refSchemasFor>['reviewerProp']
+  relatedProp: ReturnType<typeof refSchemasFor>['relatedProp']
+}
+
+const applyOp = async (env: Env, op: OpSpec, ids: readonly string[]): Promise<string[]> => {
+  const {repo} = env
+  switch (op.op) {
+    case 'create':
+      return [await repo.mutate.createChild({
+        parentId: pick(op.parent, ids),
+        position: {kind: 'last'},
+        content: renderContent(op.frags, ids),
+      })]
+    case 'setContent':
+      await repo.mutate.setContent({id: pick(op.id, ids), content: renderContent(op.frags, ids)})
+      return []
+    case 'setReviewer':
+      await repo.mutate.setProperty({
+        id: pick(op.id, ids),
+        schema: env.reviewerProp,
+        value: op.clear ? '' : pick(op.target, ids),
+      })
+      return []
+    case 'setRelated':
+      await repo.mutate.setProperty({
+        id: pick(op.id, ids),
+        schema: env.relatedProp,
+        value: op.targets.map(t => pick(t, ids)),
+      })
+      return []
+    case 'setAlias':
+      await repo.mutate.setProperty({
+        id: pick(op.id, ids),
+        schema: aliasesProp,
+        value: op.clear ? [] : [ALIAS_POOL[op.alias]],
+      })
+      return []
+    case 'deleteBlock':
+      await repo.mutate.delete({id: pickNonRoot(op.id, ids)})
+      return []
+    case 'restoreBlock':
+      await repo.mutate.restore({id: pickNonRoot(op.id, ids)})
+      return []
+    case 'merge':
+      await repo.mutate.merge({intoId: pick(op.into, ids), fromId: pickNonRoot(op.from, ids)})
+      return []
+    case 'advanceTime':
+      await env.flush(4001)
+      return []
+  }
+}
+
+// ──── oracle ────
+
+const auditOrFail = async (db: TestDb['db'], repo: Repo): Promise<void> => {
+  const audit = await runConsistencyAudit(db, WS, 0, {
+    full: {
+      schemas: repo.propertySchemas,
+      activeWorkspaceId: repo.activeWorkspaceId,
+    },
+  })
+  expect(audit.anomalies, `consistency audit: ${JSON.stringify(audit.checks)}`).toBe(0)
+}
+
+/**
+ * Stable-wrong-binding sweep. The audit's `content_link_recompute`
+ * (audit.ts:496, `runContentLinkRecomputeCheck`) diffs the alias SET
+ * parsed from content against the alias set of stored content refs —
+ * it never compares the bound *id*. That leaves a whole bug class
+ * invisible: a `[[alias]]` entry whose stored `id` disagrees with who
+ * currently owns that alias, where every re-parse recomputes the
+ * identical wrong id (a fixpoint, so `referencesChanged` never trips
+ * and nothing heals). One such bug was real: `applySourcePlan`'s
+ * date-retarget once rewrote every entry sharing a predicted seat id
+ * instead of only the literal date-mark aliases that fell through to
+ * the ensure, hijacking an unrelated same-plan binding to wherever the
+ * ensure resolved — see the "hijack" guard note at
+ * referencesProcessor.ts:340-345 ("the wrong state is STABLE... so
+ * referencesChanged sees no delta and nothing heals").
+ *
+ * Mirrors `SELECT_BLOCK_BY_ALIAS_IN_WORKSPACE_SQL`
+ * (kernelQueries.ts:327-336 — the exact SQL backing both
+ * `tx.aliasLookup`, txEngine.ts:697-710, and `repo.query.aliasLookup`,
+ * kernelQueries.ts:1242-1262): `block_aliases` joined to `blocks`,
+ * exact-case `alias` match (NOT the `alias_lower` column — that backs
+ * only the fuzzy-match queries), workspace-scoped, `blocks.deleted =
+ * 0`, oldest claimant wins ties (`ORDER BY blocks.created_at LIMIT
+ * 1`). `tx.aliasLookup` and `repo.query.aliasLookup` share this same
+ * matching logic; they differ only in which state they read (in-tx
+ * read-your-own-writes vs. committed-only) — irrelevant here since
+ * this sweep only ever runs post-drain against committed state.
+ *
+ * Only wikilink/daily-note-derived entries are policed
+ * (`sourceField === undefined && alias !== id`): blockrefs mint
+ * `alias === id` (referencesProcessor.ts:214) and property refs carry
+ * `sourceField` — neither names an alias binding.
+ *
+ * A binding with NO current claimant is a deliberate non-finding, not
+ * an oversight: `ensureAliasTarget` / `ensureDailyNoteTarget` mint a
+ * seat that immediately claims its own alias
+ * (referencesProcessor.ts:200-206, 335-349), so "no live claimant" can
+ * only arise AFTER that owner is later tombstoned or loses the alias —
+ * i.e. ownership was deliberately released. What's left is a
+ * lazily-healed residual the add-only reconcile contract deliberately
+ * retains (`isRetainableAbsentRef`, referencesProcessor.ts:218-224)
+ * with no live owner for rename/merge to retarget it to. Policing that
+ * case would fight the add-only contract, not catch the bug class this
+ * oracle targets.
+ */
+const sweepAliasBindings = async (
+  db: TestDb['db'], workspaceId: string,
+): Promise<{inspected: number}> => {
+  const rows = await db.getAll<{id: string; references_json: string}>(
+    'SELECT id, references_json FROM blocks WHERE workspace_id = ? AND deleted = 0',
+    [workspaceId],
+  )
+  let inspected = 0
+  for (const row of rows) {
+    let refs: Array<{id?: string; alias?: string; sourceField?: string}>
+    try {
+      refs = JSON.parse(row.references_json)
+    } catch (e) {
+      // A processor bug that writes corrupt references_json must fail
+      // loudly, not silently exempt the block from the sweep. Ids in
+      // this suite are synthetic test ids — safe to print.
+      expect.fail(
+        `sweepAliasBindings: block ${row.id} has unparseable references_json `
+        + `(${String(e)}): ${row.references_json}`,
+      )
+    }
+    for (const ref of refs) {
+      if (ref.sourceField !== undefined) continue
+      if (ref.id === undefined || ref.alias === undefined || ref.alias === ref.id) continue
+      inspected += 1
+      // Same table/predicates/ordering as SELECT_BLOCK_BY_ALIAS_IN_WORKSPACE_SQL
+      // (kernelQueries.ts:327-336) — see docblock above.
+      const claimant = await db.getOptional<{id: string}>(
+        `SELECT blocks.id AS id
+         FROM block_aliases ba
+         JOIN blocks ON blocks.id = ba.block_id
+         WHERE ba.workspace_id = ?
+           AND ba.alias = ?
+           AND blocks.deleted = 0
+         ORDER BY blocks.created_at
+         LIMIT 1`,
+        [workspaceId, ref.alias],
+      )
+      if (claimant === null) continue // ownership released — see docblock, not policed
+      // Only LIVE-bound bindings are policed. A binding whose target is a
+      // TOMBSTONE while a live claimant exists is the release-reclaim
+      // residual: the claimant was deleted (claim released — block_aliases
+      // is live-only), a different block later claimed the alias, and the
+      // add-only/retain contract deliberately keeps the tombstone-bound
+      // entry so restoring the old target rebinds cleanly (retargeting it
+      // would break undo). Whether such bindings should chase the new
+      // claimant is an open product decision — issue #383 (sibling of
+      // #378's restore-side stale claims). What must NEVER happen is two
+      // LIVE blocks disagreeing: a live-bound entry pointing at a
+      // non-claimant while a live claimant exists (the #20/#25 class).
+      const boundTarget = await db.getOptional<{deleted: number}>(
+        'SELECT deleted FROM blocks WHERE id = ?', [ref.id],
+      )
+      if (boundTarget === null || boundTarget.deleted === 1) continue
+      expect(
+        ref.id,
+        `stable wrong binding: alias ${JSON.stringify(ref.alias)} on source ${row.id} `
+        + `is bound to LIVE ${ref.id}, but the current claimant of that alias is ${claimant.id}`,
+      ).toBe(claimant.id)
+    }
+  }
+  return {inspected}
+}
+
+// ──── the property ────
+
+let sharedDb: TestDb
+beforeAll(async () => { sharedDb = await createTestDb() })
+afterAll(async () => {
+  await guard.barrier()
+  await sharedDb.cleanup()
+})
+
+/** Interrupt-barrier + Math.random pin for the shared DB — see
+ *  `statefulFuzzGuard` (`@/test/fuzz`, docs/fuzzing.md §6). */
+const guard = statefulFuzzGuard()
+
+type CaseArgs = {
+  batches: OpSpec[][]
+  reviewerScope: ChangeScope
+  relatedScope: ChangeScope
+  prngSeed: number
+}
+
+/** Pull processor-minted ids (alias seats, daily-note targets) into the
+ *  op-target pool so later ops can pick them — deletes/restores/merges
+ *  were previously blind to them, missing the neighborhood of the
+ *  daily-seat collision bug this suite itself found. A SQL scan over
+ *  the (workspace-scoped) `blocks` table is deterministic given the
+ *  db state, which is itself a deterministic function of the ops +
+ *  seeded PRNG replayed so far — so this preserves shrinkability
+ *  without deriving seat ids by hand (which needs the probe index,
+ *  not just the alias — see `resolveAliasSeatId`, targets.ts:323).
+ *  `ORDER BY id` keeps the newly-appended slice's order reproducible. */
+const collectMintedIds = async (db: TestDb['db'], ids: string[]): Promise<void> => {
+  const rows = await db.getAll<{id: string}>(
+    'SELECT id FROM blocks WHERE workspace_id = ? ORDER BY id', [WS])
+  const known = new Set(ids)
+  for (const row of rows) {
+    if (known.has(row.id)) continue
+    known.add(row.id)
+    ids.push(row.id)
+  }
+}
+
+const buildEnv = async (
+  reviewerScope: ChangeScope = ChangeScope.BlockDefault,
+  relatedScope: ChangeScope = ChangeScope.BlockDefault,
+): Promise<Env> => {
+  await resetTestDb(sharedDb.db)
+  const {reviewerProp, relatedProp, extension} = refSchemasFor(reviewerScope, relatedScope)
+  // UUID-shaped deterministic ids — the block-ref parser only recognises
+  // UUIDv4-shaped ids, so createTestRepo's default `gen-N` ids would make
+  // every `((id))` frag inert (the canary below pins this can't regress).
+  let idCursor = 0
+  const {repo} = createTestRepo({
+    db: sharedDb.db,
+    user: {id: 'user-1'},
+    newId: () => `00000000-0000-4000-8000-${String(++idCursor).padStart(12, '0')}`,
+    extensions: [dailyNotesDataExtension, referencesDataExtension, ...extension],
+  })
+  repo.setActiveWorkspaceId(WS)
+  await repo.tx(async tx => {
+    await tx.create({id: ROOT, workspaceId: WS, parentId: null, orderKey: 'a0'})
+  }, {scope: ChangeScope.BlockDefault})
+  const flush = async (delayMs = 0): Promise<void> => {
+    await vi.advanceTimersByTimeAsync(1)
+    await repo.awaitReprojections()
+    await repo.awaitProcessors()
+    if (delayMs > 0) {
+      await vi.advanceTimersByTimeAsync(delayMs)
+      await repo.awaitReprojections()
+      await repo.awaitProcessors()
+    }
+  }
+  return {repo, flush, reviewerProp, relatedProp}
+}
+
+const runCase = async ({batches, reviewerScope, relatedScope}: Omit<CaseArgs, 'prngSeed'>): Promise<void> => {
+  // Fake timers so the 4s orphan-cleanup delay is drivable in-case and
+  // can never leak a live timeout into a later case (cleared below).
+  // No `shouldAdvanceTime`: that option auto-advances fake time in step
+  // with the wall clock, so the 4s orphan-cleanup timer could fire at a
+  // wall-clock-dependent point — weakening exact shrink/replay. `flush`
+  // advances fake time explicitly via `advanceTimersByTimeAsync`, which
+  // doesn't need it. Installed inside the guarded body so the barrier
+  // (which may await a still-running prior case) precedes it.
+  vi.useFakeTimers()
+  let env: Env | null = null
+  try {
+    env = await buildEnv(reviewerScope, relatedScope)
+    const ids: string[] = [ROOT]
+    for (const batch of batches) {
+      // All ops in the batch land before the batch's single flush —
+      // the mid-plan-interleaving window (see caseArb's docblock).
+      for (const op of batch) {
+        try {
+          ids.push(...await applyOp(env, op, ids))
+        } catch (e) {
+          assertLegalKernelRejection(e, JSON.stringify(op))
+        }
+      }
+      await env.flush()
+      await collectMintedIds(sharedDb.db, ids)
+      await auditOrFail(sharedDb.db, env.repo)
+      await sweepAliasBindings(sharedDb.db, WS)
+    }
+    // Fire any pending orphan cleanups, then re-audit the settled state.
+    await env.flush(4001)
+    await collectMintedIds(sharedDb.db, ids)
+    await auditOrFail(sharedDb.db, env.repo)
+    await sweepAliasBindings(sharedDb.db, WS)
+  } finally {
+    // A failing/abandoned case may leave detached processor work — drain
+    // it so it can't write into the next case's freshly reset DB.
+    if (env !== null) {
+      await env.flush().catch(() => {})
+    }
+    vi.clearAllTimers()
+    vi.useRealTimers()
+  }
+}
+
+describe('references pipeline sequences', () => {
+  it('reach a content/property ↔ references fixpoint the full audit certifies', async () => {
+    await fc.assert(
+      fc.asyncProperty(caseArb, ({batches, reviewerScope, relatedScope, prngSeed}) =>
+        guard.run(prngSeed, () => runCase({batches, reviewerScope, relatedScope}))),
+      fuzzParams(8),
+    )
+  }, fuzzTestTimeout())
+
+  // Non-vacuity canary for the `reviewerScope`/`relatedScope` axis
+  // (#435 item 6, cedcb65c2; Codex review, comment 3672657045). At
+  // fuzzParams(8) with the fixed smoke seed, none of the 8 generated
+  // cases happens to bind a non-BlockDefault reviewer/related value on
+  // a block a later valid `merge` retargets — the sequences containing
+  // `merge` either lack a prior scoped property write or target only
+  // the root before non-root ids exist. So the scope-independence
+  // property this axis exists to cover was only exercised
+  // probabilistically, by the deep tier — the smoke-tier property was
+  // green whether or not scope-independent retargeting actually held.
+  // Deterministic (not the fuzz property) so a UiState/Automation-scoped
+  // property→merge sequence runs every tier. Two DIFFERENT non-default
+  // scopes (not just one) pins the fix's actual claim: convergence
+  // doesn't depend on WHICH non-BlockDefault scope a ref/refList field
+  // declares.
+  it('merge retargets non-BlockDefault-scoped ref/refList properties, not just BlockDefault ones', async () => {
+    await guard.barrier()
+    vi.useFakeTimers({shouldAdvanceTime: true})
+    try {
+      const env = await buildEnv(ChangeScope.UiState, ChangeScope.Automation)
+      const {repo, flush} = env
+      const source = await repo.mutate.createChild({
+        parentId: ROOT, position: {kind: 'last'}, content: 'source',
+      })
+      const holder = await repo.mutate.createChild({
+        parentId: ROOT, position: {kind: 'last'}, content: 'holder',
+      })
+      const into = await repo.mutate.createChild({
+        parentId: ROOT, position: {kind: 'last'}, content: 'into',
+      })
+      await flush()
+
+      await repo.mutate.setProperty({id: holder, schema: env.reviewerProp, value: source})
+      await repo.mutate.setProperty({id: holder, schema: env.relatedProp, value: [source]})
+      await flush()
+
+      await repo.mutate.merge({intoId: into, fromId: source})
+      await flush()
+
+      const holderData = await repo.load(holder)
+      expect(holderData?.properties.reviewer, 'UiState-scoped reviewer retargeted to into').toBe(into)
+      expect(holderData?.properties.related, 'Automation-scoped related retargeted to into').toEqual([into])
+      expect(
+        holderData?.references.some(r => r.id === source),
+        `no entry may keep pointing at the tombstoned merge source (refs: ${JSON.stringify(holderData?.references)})`,
+      ).toBe(false)
+
+      // This suite's actual oracle — the full audit + stable-binding
+      // sweep — must also certify the settled state, not just the raw
+      // properties bag.
+      await auditOrFail(sharedDb.db, repo)
+      await sweepAliasBindings(sharedDb.db, WS)
+    } finally {
+      vi.clearAllTimers()
+      vi.useRealTimers()
+    }
+  })
+
+  // Non-vacuity canary: the audit oracle only bites if the op set
+  // actually drives every pipeline stage. Pins: content-ref parsing +
+  // alias/daily target creation, property-ref projection, rename
+  // rewriting, delete inlining, and orphan cleanup all observably fire
+  // under the harness (fake timers + flush) this suite uses.
+  it('op set drives every pipeline stage', async () => {
+    await guard.barrier()
+    vi.useFakeTimers({shouldAdvanceTime: true})
+    try {
+      const env = await buildEnv()
+      const {repo, flush} = env
+      const read = (id: string) =>
+        sharedDb.db.getOptional<{content: string; deleted: 0 | 1; references_json: string}>(
+          'SELECT content, deleted, references_json FROM blocks WHERE id = ?', [id])
+
+      const src = await repo.mutate.createChild({
+        parentId: ROOT,
+        position: {kind: 'last'},
+        content: `[[ax]] and ((${ROOT})) on [[2026-01-05]]`,
+      })
+      await flush()
+      const axId = computeAliasSeatId('ax', WS)
+      const dailyId = dailyNoteBlockId(WS, '2026-01-05')
+      expect((await read(axId))?.deleted, 'alias target created').toBe(0)
+      expect((await read(dailyId))?.deleted, 'daily-note target created').toBe(0)
+      const contentRefs = JSON.parse((await read(src))!.references_json) as Array<{id: string}>
+      expect(contentRefs.map(r => r.id).sort(), 'content refs parsed').toEqual(
+        [axId, ROOT, dailyId].sort())
+
+      await repo.mutate.setProperty({id: src, schema: env.reviewerProp, value: ROOT})
+      await flush()
+      const propRefs = await sharedDb.db.getAll<{n: number}>(
+        `SELECT COUNT(*) AS n FROM block_references WHERE source_field = 'reviewer'`)
+      expect(propRefs[0].n, 'property ref projected').toBeGreaterThan(0)
+
+      // Rename: the referrer's content must be rewritten [[ax]] → [[bx]].
+      await repo.mutate.setProperty({id: axId, schema: aliasesProp, value: ['bx']})
+      await flush()
+      expect((await read(src))!.content, 'rename rewrote referrer').toContain('[[bx]]')
+
+      // Delete inlining: `((target))` marks in referrers get spliced out.
+      const target = await repo.mutate.createChild({
+        parentId: ROOT, position: {kind: 'last'}, content: 'inline me',
+      })
+      await flush()
+      const referrer = await repo.mutate.createChild({
+        parentId: ROOT, position: {kind: 'last'}, content: `holds ((${target}))`,
+      })
+      await flush()
+      await repo.mutate.delete({id: target})
+      await flush()
+      expect((await read(referrer))!.content, 'deleted ref inlined').toBe('holds inline me')
+
+      // Orphan cleanup: a freshly minted alias target whose only referrer
+      // drops the mark within the 4s window gets soft-deleted.
+      const orphanSrc = await repo.mutate.createChild({
+        parentId: ROOT, position: {kind: 'last'}, content: '[[zz]]',
+      })
+      await flush()
+      const zzId = computeAliasSeatId('zz', WS)
+      expect((await read(zzId))?.deleted, 'orphan-candidate target created').toBe(0)
+      await repo.mutate.setContent({id: orphanSrc, content: 'no more link'})
+      await flush(4001)
+      expect((await read(zzId))?.deleted, 'orphan alias target cleaned up').toBe(1)
+
+      // The deep audit checks must have actually scanned this state.
+      const audit = await runConsistencyAudit(sharedDb.db, WS, 0, {
+        full: {schemas: repo.propertySchemas, activeWorkspaceId: repo.activeWorkspaceId},
+      })
+      expect(audit.anomalies, `consistency audit: ${JSON.stringify(audit.checks)}`).toBe(0)
+      const recompute = audit.checks.content_link_recompute as {status: string; blocksWithMarks: number}
+      expect(recompute.status).toBe('ok')
+      expect(recompute.blocksWithMarks, 'recompute check saw marks').toBeGreaterThan(0)
+      const projection = audit.checks.property_ref_projection as {status: string; scanned: number}
+      expect(projection.status).toBe('ok')
+      expect(projection.scanned, 'projection check saw candidates').toBeGreaterThan(0)
+    } finally {
+      vi.clearAllTimers()
+      vi.useRealTimers()
+    }
+  })
+
+  // Non-vacuity canary for `sweepAliasBindings`: the oracle only bites if
+  // its claimant-exists branch actually runs (and passes) somewhere. A
+  // suite where every binding's claimant happened to be absent would
+  // pass vacuously without ever comparing an id. Deterministic (not the
+  // fuzz property) so the "at least one inspected binding" assertion is
+  // pinned rather than probabilistic.
+  it('alias-binding sweep inspects a live wikilink binding against its claimant', async () => {
+    await guard.barrier()
+    vi.useFakeTimers({shouldAdvanceTime: true})
+    try {
+      const env = await buildEnv()
+      const {repo, flush} = env
+      const owner = await repo.mutate.createChild({
+        parentId: ROOT, position: {kind: 'last'}, content: 'owner',
+      })
+      await repo.mutate.setProperty({id: owner, schema: aliasesProp, value: ['ax']})
+      await flush()
+      await repo.mutate.createChild({
+        parentId: ROOT, position: {kind: 'last'}, content: 'referrer see [[ax]]',
+      })
+      await flush()
+      const {inspected} = await sweepAliasBindings(sharedDb.db, WS)
+      expect(inspected, 'sweep inspected at least one alias binding').toBeGreaterThan(0)
+    } finally {
+      vi.clearAllTimers()
+      vi.useRealTimers()
+    }
+  })
+
+  // Deterministic canary for the bug this suite's stable-wrong-binding
+  // sweep found (docblock above `sweepAliasBindings`): `claimLiteralDateAliases`
+  // (referencesProcessor.ts) makes the resolved date target CLAIM each
+  // long-form literal spelling that bound to it, giving the binding the
+  // same `block_aliases_workspace_alias_unique` exclusivity a plain-alias
+  // seat gets. Pins the fix end-to-end: (a) the ISO target claims the
+  // long-form literal, (b) claiming that same literal on a different
+  // block is then rejected by the uniqueness trigger, (c) the sweep
+  // stays green. Before the fix, (b) would have SUCCEEDED — leaving two
+  // live blocks disagreeing about who owns the literal, which is exactly
+  // the stable-wrong-binding class `sweepAliasBindings` polices — so a
+  // regression here would show up as this test's own (b) assertion
+  // failing, not as a sweep finding (the sweep only catches it once a
+  // second writer has actually raced in and won).
+  it('date target claims its long-form literal spelling, blocking a later collision', async () => {
+    await guard.barrier()
+    vi.useFakeTimers({shouldAdvanceTime: true})
+    try {
+      const {repo, flush} = await buildEnv()
+      const LITERAL = 'January 5th, 2026'
+      const ISO = '2026-01-05'
+      const dailyId = dailyNoteBlockId(WS, ISO)
+
+      // (a) Parse a long-form date literal wikilink — resolves to the
+      // ISO daily-note target and claims the literal spelling on it.
+      await repo.mutate.createChild({
+        parentId: ROOT, position: {kind: 'last'}, content: `[[${LITERAL}]]`,
+      })
+      await flush()
+      const claim = await sharedDb.db.getOptional<{block_id: string}>(
+        'SELECT block_id FROM block_aliases WHERE workspace_id = ? AND alias = ?',
+        [WS, LITERAL],
+      )
+      expect(claim?.block_id, 'ISO target claimed the long-form literal alias').toBe(dailyId)
+
+      // (b) A different block trying to claim the same literal must be
+      // rejected by the alias-uniqueness trigger — the claim from (a)
+      // makes the literal exclusive, same as a plain-alias seat.
+      const other = await repo.mutate.createChild({
+        parentId: ROOT, position: {kind: 'last'}, content: 'other block',
+      })
+      await flush()
+      let caught: unknown
+      try {
+        await repo.mutate.setProperty({id: other, schema: aliasesProp, value: [LITERAL]})
+      } catch (e) {
+        caught = e
+      }
+      expect(caught, 'claiming an already-claimed date literal is rejected').toBeInstanceOf(ProcessorRejection)
+      expect((caught as ProcessorRejection).code).toBe('alias.collision')
+      // The rejected tx rolled back entirely — `other` never claimed it.
+      const otherClaim = await sharedDb.db.getOptional<{block_id: string}>(
+        'SELECT block_id FROM block_aliases WHERE workspace_id = ? AND alias = ?',
+        [WS, LITERAL],
+      )
+      expect(otherClaim?.block_id, 'literal stays claimed by the ISO target').toBe(dailyId)
+
+      // (c) The sweep (and full audit) stay green over the settled state.
+      await auditOrFail(sharedDb.db, repo)
+      const {inspected} = await sweepAliasBindings(sharedDb.db, WS)
+      expect(inspected, 'sweep inspected the long-form date binding').toBeGreaterThan(0)
+    } finally {
+      vi.clearAllTimers()
+      vi.useRealTimers()
+    }
+  })
+
+  // Deterministic canary for the ISO/live-hit sibling of the long-form
+  // bug above (found by the stable-wrong-binding sweep's deep run, seed
+  // -1450147062). A daily-note seat claims its ISO alias only via
+  // `createOrRestoreTargetBlock`'s `onInsertedOrRestored`, which does NOT
+  // run on the live-row-hit path. So a seat whose ISO alias is cleared
+  // while it stays LIVE (a direct alias edit on the daily page — the
+  // fuzzer's `setAlias clear=true` landing on the processor-minted seat)
+  // was left unowned: an unrelated block could then claim the date, and
+  // content-refs still bound to the seat (by deterministic id) stably
+  // disagreed with the new `block_aliases` claimant — two LIVE blocks
+  // disagreeing, which `sweepAliasBindings` forbids and the add-only
+  // reconcile never heals (the source only re-parses on its own row).
+  // `ensureDailyNoteTarget` (`ensureSeatClaimsIso`) now re-asserts the
+  // ISO claim on the live-row-hit path. Pins: (a) the seat re-owns the
+  // ISO after a release + a fresh date parse, (b) an unrelated block then
+  // can't steal it, (c) the sweep stays green. Before the fix (a) and (b)
+  // both fail (seat stays alias-less; the steal succeeds).
+  it('daily-note seat reclaims its ISO alias after a live release, blocking a later collision', async () => {
+    await guard.barrier()
+    vi.useFakeTimers({shouldAdvanceTime: true})
+    try {
+      const {repo, flush} = await buildEnv()
+      const ISO = '2026-01-05'
+      const dailyId = dailyNoteBlockId(WS, ISO)
+      const claimantOf = (alias: string) =>
+        sharedDb.db.getOptional<{block_id: string}>(
+          'SELECT block_id FROM block_aliases WHERE workspace_id = ? AND alias = ?', [WS, alias])
+
+      // A date wikilink mints the seat, which claims the ISO. Move the
+      // minter off the date afterwards so no live referrer holds
+      // `[[ISO]]` at release time (mirrors the counterexample, where the
+      // clear landed while ROOT's content had moved to `[[ax]]`) — that
+      // keeps the alias-removal rename ladder out of the picture, so this
+      // canary isolates the seat's own re-claim.
+      const minter = await repo.mutate.createChild({
+        parentId: ROOT, position: {kind: 'last'}, content: `[[${ISO}]]`,
+      })
+      await flush()
+      expect((await claimantOf(ISO))?.block_id, 'seat claims the ISO at mint').toBe(dailyId)
+      await repo.mutate.setContent({id: minter, content: 'moved on'})
+      await flush()
+
+      // Release: a direct alias-clear on the live daily seat.
+      await repo.mutate.setProperty({id: dailyId, schema: aliasesProp, value: []})
+      await flush()
+      expect(await claimantOf(ISO), 'ISO is unclaimed after the release').toBeNull()
+
+      // A fresh `[[ISO]]` referrer resolves to the live seat and must
+      // re-claim the ISO on it (the live-row-hit path).
+      const src = await repo.mutate.createChild({
+        parentId: ROOT, position: {kind: 'last'}, content: `see [[${ISO}]]`,
+      })
+      await flush()
+      expect((await claimantOf(ISO))?.block_id, 'seat re-claimed the ISO on the live-row-hit path')
+        .toBe(dailyId)
+
+      // (b) An unrelated block can no longer steal the ISO.
+      const other = await repo.mutate.createChild({
+        parentId: ROOT, position: {kind: 'last'}, content: 'other block',
+      })
+      await flush()
+      let caught: unknown
+      try {
+        await repo.mutate.setProperty({id: other, schema: aliasesProp, value: [ISO]})
+      } catch (e) {
+        caught = e
+      }
+      expect(caught, 'stealing the re-claimed ISO is rejected').toBeInstanceOf(ProcessorRejection)
+      expect((caught as ProcessorRejection).code).toBe('alias.collision')
+
+      // (c) The original binding still points at the seat, now consistent
+      // with the claimant — sweep + full audit stay green.
+      const srcRefs = JSON.parse(
+        (await sharedDb.db.getOptional<{references_json: string}>(
+          'SELECT references_json FROM blocks WHERE id = ?', [src]))!.references_json,
+      ) as Array<{id: string; alias: string}>
+      expect(srcRefs.find(r => r.alias === ISO)?.id, 'source still binds the seat').toBe(dailyId)
+      await auditOrFail(sharedDb.db, repo)
+      const {inspected} = await sweepAliasBindings(sharedDb.db, WS)
+      expect(inspected, 'sweep inspected the date binding').toBeGreaterThan(0)
+    } finally {
+      vi.clearAllTimers()
+      vi.useRealTimers()
+    }
+  })
+})

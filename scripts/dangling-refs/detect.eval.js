@@ -7,7 +7,7 @@
 // derived references.
 //
 // Run via the agent bridge (the target tab must be focused/connected):
-//   yarn agent --profile <profile> eval --file scripts/dangling-refs/detect.eval.js
+//   pnpm agent --profile <profile> eval --file scripts/dangling-refs/detect.eval.js
 //   ... --data-json '{"workspaceId":"…"}'   # scope (defaults to the active one)
 //
 // Each ref is tagged with how it is expressed so callers can reason about

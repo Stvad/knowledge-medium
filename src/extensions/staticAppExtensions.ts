@@ -2,7 +2,8 @@ import type { Repo } from '@/data/repo'
 import { kernelDataExtension } from '@/data/kernelDataExtension.js'
 import { defaultRenderersExtension } from '@/extensions/defaultRenderers.js'
 import { toastAppMountExtension } from '@/extensions/toastAppMount.js'
-import { appUpdatePromptExtension } from '@/extensions/appUpdateMount.js'
+import { appUpdatePromptExtension } from '@/plugins/app-update-prompt'
+import { extensionPromptsExtension } from '@/plugins/extension-prompts'
 import { defaultEditorInteractionExtension } from '@/editor/defaultInteractions.js'
 import {
   defaultActionContextsExtension,
@@ -12,6 +13,7 @@ import { kernelPropertyUiExtension } from '@/components/propertyEditors/typesPro
 import { kernelValuePresetsExtension } from '@/components/propertyEditors/kernelValuePresets.js'
 import { accountHeaderPlugin } from '@/plugins/account-header'
 import { commandPalettePlugin } from '@/plugins/command-palette'
+import { shortcutHelpPlugin } from '@/plugins/shortcut-help'
 import { dailyNotesPlugin } from '@/plugins/daily-notes'
 import { findReplacePlugin } from '@/plugins/find-replace'
 import { quickFindPlugin } from '@/plugins/quick-find'
@@ -26,17 +28,23 @@ import { mobileBottomNavPlugin } from '@/plugins/mobile-bottom-nav'
 import { mobileKeyboardToolbarPlugin } from '@/plugins/mobile-keyboard-toolbar'
 import { swipeQuickActionsPlugin } from '@/plugins/swipe-quick-actions'
 import { spatialNavigationPlugin } from '@/plugins/spatial-navigation'
+import { cursorFollowsScrollPlugin } from '@/plugins/cursor-follows-scroll'
 import { vimNormalModePlugin } from '@/plugins/vim-normal-mode'
+import { onboardingPlugin } from '@/plugins/onboarding'
 import { videoPlayerPlugin } from '@/plugins/video-player'
+import { attachmentsPlugin } from '@/plugins/attachments'
 import { aliasPlugin } from '@/plugins/alias'
 import { mergeBlocksPlugin } from '@/plugins/merge-blocks'
+import { moveBlocksPlugin } from '@/plugins/move-blocks'
 import { referencesPlugin } from '@/plugins/references'
 import { geoPlugin } from '@/plugins/geo'
 import { backlinksPlugin } from '@/plugins/backlinks'
 import { groupedBacklinksPlugin } from '@/plugins/grouped-backlinks'
 import { backlinksViewPlugin } from '@/plugins/backlinks-view'
 import { updateIndicatorPlugin } from '@/plugins/update-indicator'
+import { blockInfoPlugin } from '@/plugins/block-info'
 import { agentRuntimePlugin } from '@/plugins/agent-runtime'
+import { agentDispatchCompanionPlugin } from '@/plugins/agent-dispatch-companion'
 import { appIntentsPlugin } from '@/plugins/app-intents'
 import { roamImportPlugin } from '@/plugins/roam-import'
 import { blockTaggingPlugin } from '@/plugins/block-tagging'
@@ -47,13 +55,14 @@ import { systemStatusPlugin } from '@/plugins/system-status'
 import { storagePersistencePlugin } from '@/plugins/storage-persistence'
 import { dataIntegrityPlugin } from '@/plugins/data-integrity'
 import { dbMaintenancePlugin } from '@/plugins/db-maintenance'
+import { propertiesMigrationPlugin } from '@/plugins/properties-migration'
 import { startupMetricsPlugin } from '@/plugins/startup-metrics'
 import { extensionsSettingsPlugin } from '@/plugins/extensions-settings'
 import { keybindingsSettingsPlugin } from '@/plugins/keybindings-settings'
-import { colemakKeybindingsPlugin } from '@/plugins/colemak-keybindings'
 import { extractTypePlugin } from '@/plugins/extract-type'
 import { birthdayPlugin } from '@/plugins/birthday'
 import { characterCounterPlugin } from '@/plugins/character-counter'
+import { supertagsPlugin } from '@/plugins/supertags'
 import type { AppExtension } from '@/facets/facet.js'
 
 export const staticAppExtensions = ({repo}: {repo: Repo}): AppExtension[] => [
@@ -67,13 +76,16 @@ export const staticAppExtensions = ({repo}: {repo: Repo}): AppExtension[] => [
   // below "Extensions" in the Preferences tree; functionally
   // independent (no shared facet contributions).
   keybindingsSettingsPlugin,
-  colemakKeybindingsPlugin,
   kernelDataExtension,
   kernelPropertyUiExtension,
   kernelValuePresetsExtension,
   defaultRenderersExtension,
   toastAppMountExtension,
   appUpdatePromptExtension,
+  // Surfaces extension trust prompts (needs-approval / update-available)
+  // globally — a per-extension toast + a status-chip indicator — instead of
+  // only inside the Extensions settings page.
+  extensionPromptsExtension,
   // The dialog mount (DialogHost reading the openDialog queue) is no
   // longer a top-level toggle — it's pulled in by every dialog-using
   // plugin (block-tagging, daily-notes) inside its own AppExtension
@@ -93,9 +105,14 @@ export const staticAppExtensions = ({repo}: {repo: Repo}): AppExtension[] => [
   // facet's "last wins" arrangement does the right thing without an
   // explicit precedence number.
   dailyNotesPlugin({repo}),
+  // Onboarding seeds first-run content via its own higher-precedence
+  // landing resolver, then defers the landing target to daily-notes
+  // above. Depends on daily-notes (get-or-create of today's note).
+  onboardingPlugin({repo}),
   leftSidebarPlugin,
   workspaceHeaderPlugin,
   commandPalettePlugin,
+  shortcutHelpPlugin,
   quickFindPlugin,
   recentsPlugin({repo}),
   findReplacePlugin,
@@ -107,13 +124,17 @@ export const staticAppExtensions = ({repo}: {repo: Repo}): AppExtension[] => [
   mobileKeyboardToolbarPlugin,
   swipeQuickActionsPlugin,
   spatialNavigationPlugin,
+  cursorFollowsScrollPlugin,
   vimNormalModePlugin({repo}),
   videoPlayerPlugin,
+  attachmentsPlugin,
   referencesPlugin,
   geoPlugin,
   characterCounterPlugin,
+  supertagsPlugin,
   aliasPlugin,
   mergeBlocksPlugin,
+  moveBlocksPlugin,
   // The backlinks-view coordinator reads variants registered by
   // `backlinksPlugin` and `groupedBacklinksPlugin`. Order matters only
   // for the picker UI (variants render in registration order); the
@@ -131,9 +152,12 @@ export const staticAppExtensions = ({repo}: {repo: Repo}): AppExtension[] => [
   storagePersistencePlugin,
   dataIntegrityPlugin({repo}),
   dbMaintenancePlugin({repo}),
+  propertiesMigrationPlugin({repo}),
   startupMetricsPlugin,
   updateIndicatorPlugin,
+  blockInfoPlugin,
   agentRuntimePlugin,
+  agentDispatchCompanionPlugin,
   roamImportPlugin({repo}),
   birthdayPlugin,
   // appIntentsPlugin's bootstrap effect resolves the layout-session

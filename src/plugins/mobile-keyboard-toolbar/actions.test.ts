@@ -1,3 +1,4 @@
+// @vitest-environment happy-dom
 import { EditorSelection, EditorState } from '@codemirror/state'
 import { EditorView } from '@codemirror/view'
 import { describe, expect, it } from 'vitest'

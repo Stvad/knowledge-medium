@@ -1,25 +1,40 @@
-import { v5 as uuidv5 } from 'uuid'
+import { derivedBlockId } from '@/data/derivedIds'
 
-/** Deterministic block id for a plugin-owned singleton block (e.g. a
- *  "Library" root page that all imports live under).
+/** Deterministic block id for a plugin-owned block — the ID ONLY.
  *
- *  Each plugin picks one stable namespace UUID *once* and hardcodes
- *  it — re-deriving the same ids on subsequent runs is what makes
- *  upserts idempotent across reinstalls and across the user's
- *  devices. (`crypto.randomUUID()` in any browser console will give
- *  you a fresh one.) Keys are arbitrary plugin-internal strings —
- *  conventional choices: `'root'`, `'library-root'`, `'sync-state'`,
- *  `'<external-record-id>'`. The workspace is mixed in so the same
- *  plugin in two workspaces produces distinct ids.
+ *  Probably not what you want. An id looks like a lookup and isn't: what
+ *  sits there may be nothing, a tombstone, another workspace's row, or a
+ *  block the user has since edited. Following this with `repo.load` and a
+ *  `tx.create` is the race the derived id was supposed to remove — the load
+ *  answers for the moment it ran, so two writers both see nothing and the
+ *  second `tx.create` throws `DuplicateIdError`, taking its whole
+ *  transaction with it.
+ *
+ *  Reach for the get-or-create that owns the whole dance instead:
+ *
+ *    - `getOrCreateKernelPage` (`@/data/kernelPage`) — the plugin's root
+ *      page. Creates, repairs a row that lost its alias or type, restores
+ *      one that was deleted.
+ *    - `getOrCreateTypedChild` (`@/data/typedRecords`) — a record under it.
+ *      Creates or adopts, never overwrites what it adopts, and tells you
+ *      which happened.
+ *
+ *  This helper is for the cases that genuinely want the string: asking "is
+ *  this block one of mine?", or handing a target id to something else.
+ *
+ *  Pick one namespace UUID per block kind, hardcode it, and never change
+ *  it — changing it re-points the kind at fresh ids and orphans every block
+ *  already written. (`crypto.randomUUID()` in any browser console gives you
+ *  one.) The workspace is mixed into the key, so the same plugin in two
+ *  workspaces produces distinct ids. See `@/data/derivedIds` for the rules.
  *
  *  Example:
  *
  *    const READWISE_NS = '0d4f1c2e-7e9a-4f4d-a4f1-2c0a3a6e7f01'
- *    const rootId = pluginBlockId(workspaceId, READWISE_NS, 'library-root')
- *    const bookId = pluginBlockId(workspaceId, READWISE_NS, `book:${userBookId}`)
+ *    const isMine = block.id === pluginBlockId(workspaceId, READWISE_NS, 'library-root')
  */
 export const pluginBlockId = (
   workspaceId: string,
   pluginNamespace: string,
   key: string,
-): string => uuidv5(`${workspaceId}:${key}`, pluginNamespace)
+): string => derivedBlockId({namespace: pluginNamespace, key: `${workspaceId}:${key}`})

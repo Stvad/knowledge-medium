@@ -30,7 +30,7 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { CycleDetectedEvent } from '@/data/api'
 import { BlockCache } from '@/data/blockCache'
-import { BLOCKS_SYNCED_RAW_TABLE, blockToRowParams } from '@/data/blockSchema'
+import { BLOCKS_SYNCED_RAW_TABLE, blockToSyncedRowParams } from '@/data/blockSchema'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { Repo } from '../repo'
 
@@ -72,7 +72,7 @@ const stage = (o: {
   content?: string
   updatedAt?: number
 }): Promise<unknown> =>
-  env.h.db.execute(BLOCKS_SYNCED_RAW_TABLE.put.sql, blockToRowParams({
+  env.h.db.execute(BLOCKS_SYNCED_RAW_TABLE.put.sql, blockToSyncedRowParams({
     id: o.id,
     workspaceId: o.workspaceId ?? 'ws-1',
     parentId: o.parentId ?? null,

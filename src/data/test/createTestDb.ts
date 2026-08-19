@@ -39,8 +39,12 @@ import {
   BLOCKS_SYNCED_RAW_TABLE,
   CREATE_BLOCKS_PARENT_ORDER_INDEX_SQL,
   CREATE_BLOCKS_SYNCED_TABLE_SQL,
+  CREATE_BLOCKS_FIELD_FORM_INDEX_SQL,
+  CREATE_BLOCKS_REFERENCE_TARGET_PARENT_INDEX_SQL,
   CREATE_BLOCKS_TABLE_SQL,
   CREATE_BLOCKS_WORKSPACE_ACTIVE_INDEX_SQL,
+  CREATE_BLOCKS_WORKSPACE_NONEMPTY_PROPERTIES_INDEX_SQL,
+  ensureBlockLocalColumns,
 } from '@/data/blockSchema'
 import {
   CLIENT_SCHEMA_STATEMENTS,
@@ -108,6 +112,12 @@ const initializeTestDb = async (dbDir: string): Promise<PowerSyncDatabase> => {
   await db.execute(CREATE_BLOCKS_SYNCED_TABLE_SQL)
   await db.execute(CREATE_BLOCKS_PARENT_ORDER_INDEX_SQL)
   await db.execute(CREATE_BLOCKS_WORKSPACE_ACTIVE_INDEX_SQL)
+  await db.execute(CREATE_BLOCKS_WORKSPACE_NONEMPTY_PROPERTIES_INDEX_SQL)
+  // No-op on a fresh table (CREATE carries the local columns) — mirrors the
+  // production upgrade ordering so the harness exercises the same path.
+  await ensureBlockLocalColumns(db)
+  await db.execute(CREATE_BLOCKS_REFERENCE_TARGET_PARENT_INDEX_SQL)
+  await db.execute(CREATE_BLOCKS_FIELD_FORM_INDEX_SQL)
   await db.execute(CREATE_WORKSPACES_TABLE_SQL)
   await db.execute(CREATE_WORKSPACE_MEMBERS_TABLE_SQL)
   await db.execute(CREATE_WORKSPACE_MEMBERS_INDEX_SQL)
@@ -119,8 +129,12 @@ const initializeTestDb = async (dbDir: string): Promise<PowerSyncDatabase> => {
   // before the harness opens still gets backfilled.
   const backfillDb = {
     execute: (sql: string, params?: unknown[]) => db.execute(sql, params as never[] | undefined),
-    getOptional: async <T,>(sql: string) => {
-      const row = await db.getOptional<T>(sql)
+    // Forwards params, matching repoProvider's adapter. A shim that drops them
+    // silently binds NULL for any `?`, so a bootstrap probe never sees its own
+    // completion marker and re-runs its scan forever — and TypeScript can't
+    // catch it, since a narrower arity is always assignable.
+    getOptional: async <T,>(sql: string, params?: unknown[]) => {
+      const row = await db.getOptional<T>(sql, params as never[] | undefined)
       return row ?? null
     },
   }
@@ -153,6 +167,12 @@ const getTemplateFingerprint = (): string => {
   hash.update('\0')
   hash.update(CREATE_BLOCKS_WORKSPACE_ACTIVE_INDEX_SQL)
   hash.update('\0')
+  hash.update(CREATE_BLOCKS_WORKSPACE_NONEMPTY_PROPERTIES_INDEX_SQL)
+  hash.update('\0')
+  hash.update(CREATE_BLOCKS_REFERENCE_TARGET_PARENT_INDEX_SQL)
+  hash.update('\0')
+  hash.update(CREATE_BLOCKS_FIELD_FORM_INDEX_SQL)
+  hash.update('\0')
   hash.update(CREATE_WORKSPACES_TABLE_SQL)
   hash.update('\0')
   hash.update(CREATE_WORKSPACE_MEMBERS_TABLE_SQL)
@@ -161,9 +181,20 @@ const getTemplateFingerprint = (): string => {
   hash.update('\0')
   hash.update(CLIENT_SCHEMA_STATEMENTS.join('\0'))
   hash.update('\0')
+  // Backfills are part of the schema the template bakes in — several
+  // DROP and rebuild their table, so an edit inside a backfill body can
+  // change the resulting indexes/triggers without touching `statements`.
+  // Hashing only `statements` let such an edit reuse a stale cached
+  // template forever on any machine with a warm /tmp: the suite would
+  // run against the OLD schema and a green `pnpm run check` would prove
+  // nothing about the migration ladder. (Caught exactly that way — the
+  // `block_references` alias index was added to the rebuild and the
+  // template kept serving a DB without it.) `run.toString()` is a cheap
+  // structural fingerprint of the body.
   hash.update(JSON.stringify(localSchemaContributions.map(contribution => ({
     statements: contribution.statements ?? [],
     triggerNames: contribution.triggerNames ?? [],
+    backfills: (contribution.backfills ?? []).map(b => [b.id, b.run.toString()]),
   }))))
   return hash.digest('hex').slice(0, 20)
 }
@@ -294,7 +325,7 @@ export const resetTestDb = async (db: PowerSyncDatabase): Promise<void> => {
     // as non-local (no upload-routing into ps_crud) regardless of what the
     // previous test left behind.
     await tx.execute(
-      'UPDATE tx_context SET tx_id = NULL, tx_seq = NULL, user_id = NULL, scope = NULL, source = NULL',
+      'UPDATE tx_context SET tx_id = NULL, tx_seq = NULL, user_id = NULL, scope = NULL, source = NULL, group_id = NULL',
     )
     for (const table of existing(RESET_CONTENT_TABLES)) await tx.execute(`DELETE FROM ${table}`)
     for (const table of existing(RESET_AUDIT_TABLES)) await tx.execute(`DELETE FROM ${table}`)

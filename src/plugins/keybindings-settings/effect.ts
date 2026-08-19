@@ -15,21 +15,21 @@
 import type {AppEffect} from '@/extensions/core.js'
 import {getPluginPrefsBlock} from '@/data/stateBlocks.js'
 import type {FacetRuntime} from '@/facets/facet.js'
-import type {PropertySchema} from '@/data/api'
 import {
   KEYBINDING_OVERRIDE_USER_SOURCE,
   keybindingOverridesFacet,
-  type KeybindingOverride,
 } from '@/shortcuts/keybindingOverrides.js'
 import {
   keybindingOverridesProp,
   keybindingsPrefsType,
-  type StoredKeybindingOverride,
   type StoredKeybindingOverrides,
 } from './config.ts'
+import {toFacetOverride} from './overrideStore.ts'
 
 interface OverridesReadable {
-  peekProperty<T>(schema: PropertySchema<T>): T | undefined
+  peekProperty(
+    schema: typeof keybindingOverridesProp,
+  ): StoredKeybindingOverrides | undefined
 }
 
 export const readOverridesFromBlock = (block: OverridesReadable): StoredKeybindingOverrides => {
@@ -46,13 +46,6 @@ export const readOverridesFromBlock = (block: OverridesReadable): StoredKeybindi
   }
 }
 
-const toFacetEntry = (entry: StoredKeybindingOverride): KeybindingOverride => ({
-  actionId: entry.actionId,
-  context: entry.context,
-  binding: entry.binding,
-  source: KEYBINDING_OVERRIDE_USER_SOURCE,
-})
-
 /** Push the stored overrides into the facet's runtime bucket. The
  *  facet runtime invalidates its cache and fires per-facet listeners,
  *  which `HotkeyReconciler` listens to and uses to re-run
@@ -64,7 +57,7 @@ export const pushOverridesToRuntime = (
   runtime.setRuntimeContributions(
     keybindingOverridesFacet,
     KEYBINDING_OVERRIDE_USER_SOURCE,
-    stored.map(toFacetEntry),
+    stored.map(toFacetOverride),
   )
 }
 

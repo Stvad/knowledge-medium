@@ -16,14 +16,18 @@
  *    is the real gap this module closes. Split on space FIRST, then
  *    canonicalise each press.
  */
+import { isMacPlatform } from '@/utils/platform.js'
 
 /**
  * Canonical modifier names a descriptor can carry. `$mod` is the
  * platform-primary modifier (Cmd on macOS, Ctrl elsewhere); the rest are
- * literal. `cmd`/`meta`/`os` all alias-fold to `$mod`, so `Meta` never
- * survives canonicalisation.
+ * literal. `cmd`/`meta`/`os` fold to `$mod` ONLY on macOS, where the Meta
+ * key IS the primary. Off-Mac the Meta/Super key is a distinct modifier
+ * that tinykeys dispatches as `Meta` (Ctrl is `$mod` there), so it survives
+ * canonicalisation as a literal `Meta` — folding it into `$mod` would make
+ * conflict detection treat Super+K and Ctrl+K as the same chord.
  */
-export type Modifier = '$mod' | 'Control' | 'Alt' | 'Shift'
+export type Modifier = '$mod' | 'Control' | 'Meta' | 'Alt' | 'Shift'
 
 /** When in the key lifecycle a press resolves. Mirrors the binding
  *  `phase` field in `types.ts`. */
@@ -42,24 +46,11 @@ export type PointerPhase = 'pointerdown' | 'pointerup' | 'click'
 export type TouchPhase = 'tap'
 
 /**
- * One keyboard press within a chord. A plain chord ('Cmd+K') is a single
- * descriptor; a sequence ('g g') is several.
- */
-export interface KeyChordDescriptor {
-  readonly kind: 'key'
-  /** Canonical final key, original case preserved ('k', 'K', 'Escape'). */
-  readonly key: string
-  /** Alias-folded and sorted into `MODIFIER_ORDER`. */
-  readonly mods: readonly Modifier[]
-  readonly phase: ChordPhase
-}
-
-/**
- * A single mouse/touch press. The pointer-side analogue of
- * {@link KeyChordDescriptor}: `button`/`detail` replace `key`, the modifier
- * model is shared (exact-set match — shift-click is `mods: ['Shift']` and does
- * NOT match a ctrl+shift-click). `role` optionally constrains which bound node
- * the press targets and is matched by the coordinator against the node, not by
+ * A single mouse/touch press. `button`/`detail` take the place of a
+ * keyboard key; the modifier model matches keyboard chords (exact-set
+ * match — shift-click is `mods: ['Shift']` and does NOT match a
+ * ctrl+shift-click). `role` optionally constrains which bound node the
+ * press targets and is matched by the coordinator against the node, not by
  * the pure matcher here.
  */
 export interface MouseChordDescriptor {
@@ -87,31 +78,35 @@ export interface TouchChordDescriptor {
   readonly phase: TouchPhase
 }
 
-/**
- * One press within a chord. `kind` discriminates keyboard from pointer; the
- * field was left open in Phase 0 precisely so Phase 3 could add this variant
- * without a rewrite.
- */
-export type ChordDescriptor = KeyChordDescriptor | MouseChordDescriptor | TouchChordDescriptor
-
-/** A chord is a sequence of presses; an ordinary chord is length 1. */
-export type ChordSequence = readonly ChordDescriptor[]
-
 /** Stable modifier order, so the same physical chord always serialises
- *  identically. `$mod` first, then the literal modifiers. */
-const MODIFIER_ORDER: readonly Modifier[] = ['$mod', 'Control', 'Alt', 'Shift']
+ *  identically. `$mod` first, then the literal modifiers (`Meta` in the
+ *  secondary slot, mirroring how chordFromEvent orders the captured chord). */
+const MODIFIER_ORDER: readonly Modifier[] = ['$mod', 'Control', 'Meta', 'Alt', 'Shift']
 
-/** Fold the assorted spellings of each modifier onto one canonical name. */
-const MODIFIER_ALIASES: Record<string, Modifier> = {
-  cmd: '$mod',
-  meta: '$mod',
-  os: '$mod',
-  '$mod': '$mod',
-  ctrl: 'Control',
-  control: 'Control',
-  option: 'Alt',
-  alt: 'Alt',
-  shift: 'Shift',
+/** Fold one modifier spelling onto its canonical name, or null if the token
+ *  isn't a modifier. `meta`/`os` (the Meta/Super key) are platform-aware: on
+ *  a Mac they ARE the primary and fold to `$mod`; off-Mac they're the
+ *  distinct Super/Windows key that tinykeys dispatches as `Meta`, so folding
+ *  them into `$mod` (= Ctrl there) would collapse two different chords. */
+const resolveModifier = (token: string): Modifier | null => {
+  switch (token.toLowerCase()) {
+    case '$mod':
+    case 'cmd':
+      return '$mod'
+    case 'meta':
+    case 'os':
+      return isMacPlatform() ? '$mod' : 'Meta'
+    case 'ctrl':
+    case 'control':
+      return 'Control'
+    case 'option':
+    case 'alt':
+      return 'Alt'
+    case 'shift':
+      return 'Shift'
+    default:
+      return null
+  }
 }
 
 interface ParsedPress {
@@ -119,17 +114,39 @@ interface ParsedPress {
   readonly key: string
 }
 
+/** Split a press into tokens the way tinykeys itself does: it splits on a
+ *  `+` only when that `+` FOLLOWS a word character or `]`
+ *  (`press.split(/(?<=\w|\])\+/)` in tinykeys' `parseKeybinding`). That
+ *  lookbehind is what lets `+` be a KEY — `Shift++` is Shift plus the `+`
+ *  key, which is exactly what the settings capture path records when you
+ *  press it (`chordFromEvent` in keybindings-settings/keyCapture.ts pushes
+ *  `event.key`, i.e. `'+'`, after the modifier parts).
+ *
+ *  Splitting on every `+` and dropping empty tokens would silently eat the
+ *  key and leave the bare modifier — and since direct overrides are
+ *  INSTALLED through `normalizeChordSequence`, a user's `+` override would
+ *  come back rebound to Shift alone (found by Codex review on PR #427).
+ *  Using tinykeys' own regex also keeps the odd corners (a `(regex)` key
+ *  containing `+`) tokenized identically on both sides rather than
+ *  differently-wrong.
+ *
+ *  Whitespace around a separator is collapsed first, so spaced authoring
+ *  (`cmd + k`, which the settings UI can produce) still splits — the
+ *  lookbehind alone would not fire after a space. */
+const splitPressTokens = (press: string): string[] =>
+  press.trim().replace(/\s*\+\s*/g, '+').split(/(?<=\w|\])\+/)
+
 /** Parse a single press ('Cmd+Shift+K') into ordered, alias-folded
  *  modifiers plus the final key (case preserved). Modifier tokens in any
  *  position fold to a modifier; the remaining token is the key. */
 const parsePress = (press: string): ParsedPress => {
-  const tokens = press.split('+').map(t => t.trim()).filter(Boolean)
+  const tokens = splitPressTokens(press).map(t => t.trim()).filter(Boolean)
   const mods: Modifier[] = []
   let key = ''
   for (const token of tokens) {
-    const alias = MODIFIER_ALIASES[token.toLowerCase()]
-    if (alias) {
-      mods.push(alias)
+    const mod = resolveModifier(token)
+    if (mod) {
+      mods.push(mod)
     } else {
       key = token
     }
@@ -142,6 +159,12 @@ const parsePress = (press: string): ParsedPress => {
  *  ('g g'); ordinary chords yield a single press. */
 const splitSequence = (raw: string): string[] =>
   raw.split(' ').map(p => p.trim()).filter(Boolean)
+
+/** Normalise a binding's `keys` field (one chord or a list) to a list.
+ *  The single shared copy — keybinding overrides, conflict detection, and
+ *  the shortcut-help model all expand bindings the same way. */
+export const toChordArray = (keys: string | readonly string[]): readonly string[] =>
+  typeof keys === 'string' ? [keys] : keys
 
 /** Serialise a parsed press back to its canonical chord string. */
 const formatPress = ({mods, key}: ParsedPress): string =>
@@ -161,6 +184,39 @@ export const normalizeChord = (chord: string): string =>
   formatPress(parsePress(chord))
 
 /**
+ * Sequence-aware `normalizeChord` — normalises each space-separated press.
+ * Unlike `canonicalizeChord` (a COMPARISON key: also case-folds the final
+ * key), the output preserves the key's authored case, so it is the right
+ * form for INSTALLING a binding: modifier aliases fold to the names
+ * tinykeys actually dispatches (`ctrl` → `Control`, `cmd` → `$mod`) while
+ * the display spelling stays intact (`ArrowDown`, not `arrowdown`).
+ * Canonical-bucket agreement holds by construction:
+ * `canonicalizeChord(normalizeChordSequence(c)) === canonicalizeChord(c)`
+ * (both sides run the same parse/format; canonicalize just adds the case
+ * fold) — pinned by keybindingOverrides.fuzz.test.ts.
+ */
+export const normalizeChordSequence = (chord: string): string =>
+  splitSequence(chord).map(normalizeChord).join(' ')
+
+/**
+ * `KeyboardEvent.code` key tokens that tinykeys can only match through its
+ * case-SENSITIVE `event.code` path, because their `event.key` differs from
+ * the token: code `Digit1`→key `'1'`, `Period`→`'.'`, `Space`→`' '`,
+ * `KeyA`→`'a'`, `Numpad3`→`'3'`. tinykeys tries `token.toUpperCase() ===
+ * event.key.toUpperCase()` OR `token === event.code` (tinykeys `matchKeybindingPress`),
+ * so a mis-cased spelling like `digit1` matches NEITHER — it never fires.
+ * Folding these to lowercase in the canonical key would therefore (a) claim
+ * `Digit1` and `digit1` are the same binding when only the former dispatches,
+ * letting a dead `digit1` override strip a live `Digit1` default, and (b) is
+ * meaningless anyway since the real binding must be exact-cased. Named keys
+ * whose `event.key` EQUALS the code (`Enter`, `Tab`, `Escape`, `Backspace`,
+ * `ArrowUp`, `F5`, …) are NOT here: they still match via the case-insensitive
+ * `event.key` path, so folding them is safe and keeps mis-cased spellings in
+ * one bucket. */
+const CODE_ONLY_KEY =
+  /^(?:Key[A-Z]|Digit[0-9]|Numpad\w+|Space|Period|Comma|Slash|Backslash|Semicolon|Quote|Backquote|Minus|Equal|BracketLeft|BracketRight|Intl[A-Za-z]+)$/
+
+/**
  * Canonicalise a whole chord, sequence-aware: splits on space first, then
  * canonicalises each press, so 'Cmd+K Cmd+S' becomes '$mod+k $mod+s'
  * instead of being mangled by a naive `+` split. Returns a stable string
@@ -170,28 +226,31 @@ export const normalizeChord = (chord: string): string =>
  */
 export const canonicalizeChord = (raw: string, phase?: ChordPhase): string => {
   const canonical = splitSequence(raw)
-    .map(press => formatPress(parsePress(press)))
+    // Fold the final key's CASE too, unlike `normalizeChord`: tinykeys
+    // dispatch compares `key.toUpperCase() === event.key.toUpperCase()`,
+    // so '$mod+K' and '$mod+k' are the same binding at dispatch and must
+    // land in the same bucket here (strip map, conflict detection).
+    // `normalizeChord` stays case-preserving — the settings UI stores and
+    // round-trips the user's spelling. EXCEPTION: {@link CODE_ONLY_KEY}
+    // tokens match only via tinykeys' case-sensitive `event.code` path, so
+    // folding them would corrupt the binding and forge false collisions —
+    // those keep their case.
+    .map(press => {
+      const {mods, key} = parsePress(press)
+      return formatPress({mods, key: CODE_ONLY_KEY.test(key) ? key : key.toLowerCase()})
+    })
     .join(' ')
   return phase ? `${phase}:${canonical}` : canonical
 }
 
-/**
- * Parse a chord into an ordered sequence of descriptors for matching.
- * Splits on space first, so 'd d' / 'g g' become two presses instead of
- * one atomic key — the historical cause of dead sequence chords. Plain
- * chords yield a length-1 sequence.
- */
-export const parseChord = (raw: string, phase: ChordPhase = 'keydown'): ChordSequence =>
-  splitSequence(raw).map(press => {
-    const {mods, key} = parsePress(press)
-    return {kind: 'key', key, mods, phase}
-  })
-
-/** Platform-primary detection for `$mod` (Cmd on Apple, Ctrl elsewhere),
- *  mirroring tinykeys so keyboard and pointer agree on what `$mod` means. */
-const platformPrimaryIsMeta = (): boolean =>
-  typeof navigator !== 'undefined' &&
-  /Mac|iPhone|iPod|iPad/i.test(navigator.platform || navigator.userAgent || '')
+// NOTE: keyboard EVENT matching is deliberately NOT re-implemented here.
+// Matching a KeyboardEvent against a chord is tinykeys' job
+// (`parseKeybinding` / `matchKeybindingPress`) — a hand-rolled keyboard
+// descriptor family used to live in this module and diverged from
+// tinykeys' semantics (event.code fallback, $mod platform resolution),
+// which is exactly the bug class that got it removed. This module keeps
+// chord-STRING canonicalisation plus the pointer/touch descriptors, which
+// have no tinykeys equivalent.
 
 /** The four physical modifier flags a pointer event carries. */
 export interface PointerModifierState {
@@ -205,12 +264,13 @@ export interface PointerModifierState {
  *  resolving `$mod` to the platform-primary key. Exact-match semantics: a flag
  *  not listed must be absent on the event. */
 const requiredModifierFlags = (mods: readonly Modifier[]): PointerModifierState => {
-  const primaryIsMeta = platformPrimaryIsMeta()
+  const primaryIsMeta = isMacPlatform()
   let shiftKey = false, altKey = false, ctrlKey = false, metaKey = false
   for (const mod of mods) {
     if (mod === 'Shift') shiftKey = true
     else if (mod === 'Alt') altKey = true
     else if (mod === 'Control') ctrlKey = true
+    else if (mod === 'Meta') metaKey = true
     else if (mod === '$mod') {
       if (primaryIsMeta) metaKey = true
       else ctrlKey = true

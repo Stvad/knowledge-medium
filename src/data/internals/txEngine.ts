@@ -26,9 +26,10 @@
 import type {
   AnyMutator,
   AnyPostCommitProcessor,
+  AnyPropertyAssignment,
+  AnyPropertySchema,
   BlockData,
   BlockDataPatch,
-  ChangeScope,
   Mutator,
   NewBlockData,
   PropertySchema,
@@ -45,6 +46,7 @@ import type {
 } from '@/data/api'
 import {
   BlockNotFoundError,
+  ChangeScope,
   CycleError,
   DeletedConflictError,
   DeterministicIdCrossWorkspaceError,
@@ -55,21 +57,45 @@ import {
   ParentNotFoundError,
   ParentWorkspaceMismatchError,
   ProcessorNotRegisteredError,
+  PropertySchemaScopeMismatchError,
+  SeededDefinitionWriteError,
   WorkspaceMismatchError,
   WorkspaceNotPinnedError,
   normalizeReferences,
+  scopePoliciesEquivalent,
 } from '@/data/api'
+import { isValidSeededDefinition } from '@/data/definitionSeeds'
+import { assertCanonicalBlockId, type BlockIdPolicy } from '@/data/blockId'
 import {
-  BLOCK_STORAGE_COLUMNS,
+  BLOCKS_TABLE_COLUMN_NAMES,
   blockToRowParams,
   parseBlockRow,
   type BlockRow,
 } from '@/data/blockSchema'
 import { recordWrite, type SnapshotsMap, peekSnapshot } from './txSnapshots'
 import { IS_DESCENDANT_OF_SQL } from './treeQueries'
-import { SELECT_BLOCK_BY_ALIAS_IN_WORKSPACE_SQL } from './kernelQueries'
+import {
+  SELECT_BLOCK_BY_ALIAS_IN_WORKSPACE_SQL,
+  SELECT_BLOCKS_BY_ALIAS_IN_WORKSPACE_SQL,
+} from './kernelQueries'
 import { jsonValuesEqual } from './jsonCanonical'
 import type { BlockCache } from '@/data/blockCache'
+import {
+  isResolvedPropertySchema,
+  requireWritablePropertySchema,
+  type PropertySchemaResolver,
+} from './propertySchemaResolution'
+import { readIsChildBackedWorkspace } from '@/data/workspaceSchema'
+import { keyAtStart } from '@/data/orderKey'
+import {
+  fieldValueChildren,
+  isPropertyFieldInstance,
+  propertyFieldContent,
+  propertyValueToChildContent,
+  type IsPropertyFieldDefinition,
+} from '@/data/propertyChildren'
+import { collapseDuplicateValueChild } from './propertyChildrenProcessor'
+import { deleteSubtreeInTx } from '@/data/subtreeDelete'
 
 /** Minimal subset of `@powersync/common`'s `LockContext` we actually use.
  *  Production passes the real type; the test harness's
@@ -84,6 +110,18 @@ export interface TxDb {
 const updatePatchChangesBlock = (before: BlockData, patch: BlockDataPatch): boolean => {
   if (patch.content !== undefined && patch.content !== before.content) return true
   if (
+    patch.referenceTargetId !== undefined &&
+    patch.referenceTargetId !== (before.referenceTargetId ?? null)
+  ) {
+    return true
+  }
+  if (
+    patch.isFieldForm !== undefined &&
+    patch.isFieldForm !== (before.isFieldForm ?? false)
+  ) {
+    return true
+  }
+  if (
     patch.references !== undefined &&
     !jsonValuesEqual(before.references, normalizeReferences(patch.references))
   ) {
@@ -96,6 +134,60 @@ const updatePatchChangesBlock = (before: BlockData, patch: BlockDataPatch): bool
     return true
   }
   return false
+}
+
+/** v1 invariant (schema-unification §5.1): a materialized seed definition is
+ *  wholly code-owned — its bag and lifecycle belong to materialization and
+ *  the §13 revision-upgrade step (both `Automation` scope); synced-in
+ *  changes never pass through this engine at all. The schema editor and
+ *  property panel already render seed rows read-only; this is the
+ *  data-layer backstop for the agent bridge, the importer, and the outline
+ *  delete key.
+ *
+ *  ONE commit-time check over the tx's snapshots map — the single
+ *  convergence point for everything a tx wrote — rather than per-primitive
+ *  guards. The per-site form needed every current and future write path to
+ *  remember a call and missed three: `create` (forge a provenance-valid row
+ *  at the publicly computable uuidv5 id before materialization runs),
+ *  `restore` with a properties patch, and `update` that makes an occupant
+ *  row BECOME provenance-valid (per-site guards checked only the `before`
+ *  row). Checking (before, after) pairs here covers both directions for
+ *  every primitive at once.
+ *
+ *  Rules, under `BlockDefault` scope only:
+ *   - a row may not BECOME a valid seeded definition (forgery);
+ *   - a valid seeded definition's bag may not change (which also covers
+ *     stripping its provenance) and it may not be tombstoned or
+ *     hard-deleted. Content/references edits and plain restores stay
+ *     allowed — they don't touch the code-owned fields, and
+ *     materialization itself restores tombstones.
+ *
+ *  The check is on the tx's NET effect: `snapshots` holds one (before,
+ *  after) pair per row — first-touch `before` vs last-write `after` — so
+ *  an intermediate state within the tx is never path-checked. A row
+ *  forged mid-tx and reverted before commit converges to a net no-op and
+ *  passes, even though its row/crud events may transit through the
+ *  forged state on the way there. Accepted: same-tx processors observe
+ *  net diffs too, the committed state is unforged either way, and sync
+ *  is out of this guard's threat model regardless. */
+export const assertNoSeedDefinitionWrites = (
+  snapshots: SnapshotsMap,
+  scope: ChangeScope,
+): void => {
+  if (scope !== ChangeScope.BlockDefault) return
+  for (const [id, {before, after}] of snapshots) {
+    const beforeSeed = before !== null && isValidSeededDefinition(before)
+    if (!beforeSeed && after !== null && isValidSeededDefinition(after)) {
+      throw new SeededDefinitionWriteError(id)
+    }
+    if (beforeSeed && (
+      after === null
+      || !jsonValuesEqual(before.properties, after.properties)
+      || (!before.deleted && after.deleted)
+    )) {
+      throw new SeededDefinitionWriteError(id)
+    }
+  }
 }
 
 /** Per-tx scheduling record produced by `tx.afterCommit`. The commit
@@ -145,17 +237,56 @@ export interface TxImplContext {
    *  fails the originating tx (clean rollback) instead of failing
    *  later at fire time. */
   processors: ReadonlyMap<string, AnyPostCommitProcessor>
+  /** Tx-start-captured resolver factory — mirrors the commit pipeline's own
+   *  `resolverFor` closure (built from the same registry-factory /
+   *  workspaceId / seed-name-counts triple) so both surfaces resolve
+   *  property schemas against one registry snapshot per tx, without this
+   *  context re-deriving that closure itself. */
+  propertySchemaResolverFor: (workspaceId: string) => PropertySchemaResolver
   /** UUID generator — injected for testability. */
   newId: () => string
+  /** Block-id shape contract for this tx's inserts (issue #456) — see
+   *  `@/data/blockId`. REQUIRED, with no default here or in `RunTxParams`,
+   *  even though `RepoOptions.blockIdPolicy` has one: a default on the
+   *  plumbing would mean a context that simply forgot to pass the policy
+   *  silently gets a policy, which is the failure mode this whole change
+   *  exists to remove. `Repo` is the one place that decides. */
+  blockIdPolicy: BlockIdPolicy
+  /** Write observation hook for the commit pipeline's derivation re-run
+   *  pass (issue #402): called once per recorded row write, from the same
+   *  choke point as `recordWrite`, with THIS write's (before, after) pair
+   *  — per-write granularity, unlike the snapshots map's net (tx-start,
+   *  latest) pair. The pipeline uses it to maintain per-row write
+   *  generations and the per-field settled-write baseline (which needs to
+   *  know exactly which fields each individual write touched, so a
+   *  settled amendment and a later unsettled write to the SAME row stay
+   *  distinguishable). Absent in contexts that don't run the same-tx pass
+   *  (tests constructing TxImpl directly). */
+  onWrite?: (id: string, before: BlockData | null, after: BlockData | null) => void
 }
 
-const COLUMN_NAMES = BLOCK_STORAGE_COLUMNS.map(c => c.name)
+// Live `blocks`-table column list: storage columns + local-only derived
+// columns (`reference_target_id`). Everything this engine touches is the
+// live table, never `blocks_synced`.
+const COLUMN_NAMES = BLOCKS_TABLE_COLUMN_NAMES
 const COLUMN_LIST = COLUMN_NAMES.join(', ')
 const COLUMN_PLACEHOLDERS = COLUMN_NAMES.map(() => '?').join(', ')
 
 const SELECT_BY_ID_SQL = `SELECT ${COLUMN_LIST} FROM blocks WHERE id = ?`
 const SELECT_CHILDREN_SQL =
   `SELECT ${COLUMN_LIST} FROM blocks WHERE parent_id = ? AND deleted = 0 ORDER BY order_key, id`
+// §9 binding selection discipline: field-row selection keys on the BIT as
+// well as the target — without it an unmarked `((fieldId))` link row could
+// be SELECTED as the field row and its first child overwritten with the
+// encoded value.
+const SELECT_PROPERTY_FIELD_CHILD_SQL =
+  `SELECT ${COLUMN_LIST} FROM blocks
+   WHERE workspace_id = ?
+     AND parent_id = ?
+     AND reference_target_id = ?
+     AND is_field_form = 1
+     AND deleted = 0
+   ORDER BY order_key, id`
 /** Existence probes for `tx.hasChildren`. The live-only form keeps the
  *  `deleted = 0` clause so it stays served by the partial
  *  `idx_blocks_parent_order`; the `includeDeleted` form drops it (and so
@@ -221,12 +352,94 @@ export class TxImpl implements Tx {
    *  per `repo.tx`), so it never leaks across transactions. */
   private readonly systemMintedIds = new Set<string>()
 
+  /** Per-tx cache of the properties-as-blocks flip predicate (PR #288 §6):
+   *  workspaceId → `properties_migration` at or past 'children'. One
+   *  `workspaces` read per workspace per tx; the column is synced-only
+   *  (never written through this engine), so within-tx staleness cannot
+   *  occur. */
+  private readonly childBackedWorkspaceCache = new Map<string, boolean>()
+
   constructor(ctx: TxImplContext) {
     this.ctx = ctx
     this.meta = ctx.meta
     if (ctx.meta.workspaceId !== null) {
       this.workspacePinned = true
     }
+  }
+
+  private propertySchemaResolverFor(workspaceId: string): PropertySchemaResolver {
+    return this.ctx.propertySchemaResolverFor(workspaceId)
+  }
+
+  private resolvePropertySchemaForRow<T>(
+    row: BlockData,
+    schema: PropertySchema<T>,
+  ): PropertySchema<T> {
+    return requireWritablePropertySchema(
+      schema,
+      this.propertySchemaResolverFor(row.workspaceId),
+    )
+  }
+
+  /** Scope-consistency guard shared by every property write primitive
+   *  (`setProperty` / `unsetProperty` / `setProperties`). The tx was admitted
+   *  under `this.meta.scope`, chosen from the CALLER's `schema.changeScope`. If
+   *  the definition's change-scope was edited after the caller captured its
+   *  schema, the resolved scope can differ — admitting the write under the
+   *  stale scope would bypass the read-only gate and misroute its undo entry.
+   *  Compare by POLICY (read-only behavior + undoability), not identity: a
+   *  same-policy difference (e.g. the references processor writing a
+   *  BlockDefault property under its own `References` bucket) is intentional
+   *  and harmless, while a policy difference (a stale UiState schema writing a
+   *  now-BlockDefault property) is exactly the bypass/misroute this guards. */
+  private assertPropertyWriteScope(resolvedSchema: PropertySchema<unknown>): void {
+    if (!scopePoliciesEquivalent(resolvedSchema.changeScope, this.meta.scope)) {
+      throw new PropertySchemaScopeMismatchError(
+        resolvedSchema.name, this.meta.scope, resolvedSchema.changeScope,
+      )
+    }
+  }
+
+  resolvePropertyFieldSchema(
+    workspaceId: string,
+    fieldId: string,
+  ): AnyPropertySchema | null {
+    const resolution = this.propertySchemaResolverFor(workspaceId).resolveField(fieldId)
+    return resolution.status === 'resolved' ? resolution.schema : null
+  }
+
+  async isPropertyChildBackedWorkspace(workspaceId: string): Promise<boolean> {
+    const cached = this.childBackedWorkspaceCache.get(workspaceId)
+    if (cached !== undefined) return cached
+    const flipped = await readIsChildBackedWorkspace(this.ctx.txDb, workspaceId)
+    this.childBackedWorkspaceCache.set(workspaceId, flipped)
+    return flipped
+  }
+
+  /** §9 recognition, fieldId half: does this id name a definition the
+   *  workspace's registry can resolve? Shadowed losers COUNT — their field
+   *  rows keep classifying (excluded only from the name map / projection). */
+  private isFieldDefinitionCheckerFor(workspaceId: string): IsPropertyFieldDefinition {
+    const resolver = this.propertySchemaResolverFor(workspaceId)
+    return (fieldId) => {
+      const resolution = resolver.resolveField(fieldId)
+      return resolution.status === 'resolved'
+        || (resolution.status === 'identity-unavailable' && resolution.reason === 'shadowed')
+    }
+  }
+
+  /** See the `Tx.isPropertyFieldDefinition` contract — the same checker
+   *  `isFieldDefinitionCheckerFor` builds, exposed per call. */
+  isPropertyFieldDefinition(workspaceId: string, fieldId: string): boolean {
+    return this.isFieldDefinitionCheckerFor(workspaceId)(fieldId)
+  }
+
+  /** Record one row write's (before, after) into the tx snapshots. (The §9
+   *  flat-recognition change deleted the per-tx ancestry memo this choke
+   *  point used to keep honest — classification no longer reads ancestors.) */
+  private record(id: string, before: BlockData | null, after: BlockData | null): void {
+    recordWrite(this.ctx.snapshots, id, before, after)
+    this.ctx.onWrite?.(id, before, after)
   }
 
   // ──── Reads ────
@@ -248,7 +461,7 @@ export class TxImpl implements Tx {
     this.checkWorkspace(data.workspaceId)
     await this.requireParentInWorkspace(data.parentId, data.workspaceId)
     const id = data.id ?? this.ctx.newId()
-    const row = this.buildNewBlockRow(id, data, opts)
+    const row = this.buildNewBlockRow(id, data, opts, 'tx.create')
     try {
       await this.ctx.txDb.execute(INSERT_SQL, blockToRowParams(row))
     } catch (e) {
@@ -257,7 +470,7 @@ export class TxImpl implements Tx {
     }
     this.markSystemMint(id, opts)
     this.pinWorkspace(data.workspaceId)
-    recordWrite(this.ctx.snapshots, id, null, row)
+    this.record(id, null, row)
     return id
   }
 
@@ -270,11 +483,11 @@ export class TxImpl implements Tx {
 
     if (existing === null) {
       await this.requireParentInWorkspace(data.parentId, data.workspaceId)
-      const row = this.buildNewBlockRow(data.id, data, opts)
+      const row = this.buildNewBlockRow(data.id, data, opts, 'tx.createOrGet')
       await this.ctx.txDb.execute(INSERT_SQL, blockToRowParams(row))
       this.markSystemMint(data.id, opts)
       this.pinWorkspace(data.workspaceId)
-      recordWrite(this.ctx.snapshots, data.id, null, row)
+      this.record(data.id, null, row)
       return {id: data.id, inserted: true}
     }
 
@@ -317,7 +530,7 @@ export class TxImpl implements Tx {
       [after.updatedAt, after.userUpdatedAt, after.updatedBy, id],
     )
     this.pinWorkspace(before.workspaceId)
-    recordWrite(this.ctx.snapshots, id, before, after)
+    this.record(id, before, after)
   }
 
   async restore(id: string, patch?: BlockDataPatch, opts?: TxWriteOpts): Promise<void> {
@@ -330,6 +543,10 @@ export class TxImpl implements Tx {
       ...beforeData,
       deleted: false,
       ...(patch?.content !== undefined ? {content: patch.content} : {}),
+      ...(patch?.referenceTargetId !== undefined
+        ? {referenceTargetId: patch.referenceTargetId}
+        : {}),
+      ...(patch?.isFieldForm !== undefined ? {isFieldForm: patch.isFieldForm} : {}),
       // Reference-array canonicalization runs as a same-tx processor
       // (`core.normalizeReferences`) after the user fn returns —
       // see src/data/internals/normalizeReferencesProcessor.ts.
@@ -338,9 +555,11 @@ export class TxImpl implements Tx {
       ...this.metadataPatch(id, beforeData, opts?.skipMetadata),
     }
     await this.ctx.txDb.execute(
-      `UPDATE blocks SET deleted = 0, content = ?, references_json = ?, properties_json = ?, updated_at = ?, user_updated_at = ?, updated_by = ? WHERE id = ?`,
+      `UPDATE blocks SET deleted = 0, content = ?, reference_target_id = ?, is_field_form = ?, references_json = ?, properties_json = ?, updated_at = ?, user_updated_at = ?, updated_by = ? WHERE id = ?`,
       [
         after.content,
+        after.referenceTargetId ?? null,
+        after.isFieldForm ? 1 : null,
         JSON.stringify(after.references),
         JSON.stringify(after.properties),
         after.updatedAt,
@@ -350,7 +569,7 @@ export class TxImpl implements Tx {
       ],
     )
     this.pinWorkspace(beforeData.workspaceId)
-    recordWrite(this.ctx.snapshots, id, beforeData, after)
+    this.record(id, beforeData, after)
   }
 
   // ──── Data-field updates ────
@@ -362,15 +581,21 @@ export class TxImpl implements Tx {
     const after: BlockData = {
       ...before,
       ...(patch.content !== undefined ? {content: patch.content} : {}),
+      ...(patch.referenceTargetId !== undefined
+        ? {referenceTargetId: patch.referenceTargetId}
+        : {}),
+      ...(patch.isFieldForm !== undefined ? {isFieldForm: patch.isFieldForm} : {}),
       // See note on `restore` above re: same-tx normalization.
       ...(patch.references !== undefined ? {references: patch.references} : {}),
       ...(patch.properties !== undefined ? {properties: patch.properties} : {}),
       ...this.metadataPatch(id, before, opts?.skipMetadata),
     }
     await this.ctx.txDb.execute(
-      `UPDATE blocks SET content = ?, references_json = ?, properties_json = ?, updated_at = ?, user_updated_at = ?, updated_by = ? WHERE id = ?`,
+      `UPDATE blocks SET content = ?, reference_target_id = ?, is_field_form = ?, references_json = ?, properties_json = ?, updated_at = ?, user_updated_at = ?, updated_by = ? WHERE id = ?`,
       [
         after.content,
+        after.referenceTargetId ?? null,
+        after.isFieldForm ? 1 : null,
         JSON.stringify(after.references),
         JSON.stringify(after.properties),
         after.updatedAt,
@@ -380,7 +605,34 @@ export class TxImpl implements Tx {
       ],
     )
     this.pinWorkspace(before.workspaceId)
-    recordWrite(this.ctx.snapshots, id, before, after)
+    this.record(id, before, after)
+  }
+
+  /** See the `Tx.stampReferenceTarget` contract for the why. Impl notes: the
+   *  narrow `SET reference_target_id = ?, is_field_form = ?` is load-bearing —
+   *  it names no upload column and no `updated_at`, so
+   *  `blocks_upload_update`'s diff predicate can't fire; `record` captures
+   *  the changed snapshot (flat §9 recognition deleted the ancestry memo it
+   *  used to invalidate here). No write / no snapshot when both columns
+   *  already match. */
+  async stampReferenceTarget(
+    id: string,
+    targetId: string | null,
+    isFieldForm: boolean,
+  ): Promise<void> {
+    const before = await this.requireExisting(id)
+    this.checkWorkspace(before.workspaceId)
+    if (
+      (before.referenceTargetId ?? null) === targetId
+      && (before.isFieldForm ?? false) === isFieldForm
+    ) return
+    const after: BlockData = {...before, referenceTargetId: targetId, isFieldForm}
+    await this.ctx.txDb.execute(
+      `UPDATE blocks SET reference_target_id = ?, is_field_form = ? WHERE id = ?`,
+      [targetId, isFieldForm ? 1 : null, id],
+    )
+    this.pinWorkspace(before.workspaceId)
+    this.record(id, before, after)
   }
 
   // ──── Tree moves ────
@@ -439,22 +691,93 @@ export class TxImpl implements Tx {
       [target.parentId, target.orderKey, after.updatedAt, after.userUpdatedAt, after.updatedBy, id],
     )
     this.pinWorkspace(before.workspaceId)
-    recordWrite(this.ctx.snapshots, id, before, after)
+    this.record(id, before, after)
   }
 
   // ──── Typed property primitives — the codec boundary sites ────
 
+  async resolvePropertySchema<T>(
+    id: string,
+    schema: PropertySchema<T>,
+  ): Promise<PropertySchema<T>> {
+    const before = await this.requireExisting(id)
+    this.checkWorkspace(before.workspaceId)
+    return this.resolvePropertySchemaForRow(before, schema)
+  }
+
   async setProperty<T>(
     id: string,
     schema: PropertySchema<T>,
-    value: T,
+    valueOrUpdater: T | ((current: T | undefined) => T),
     opts?: TxWriteOpts,
   ): Promise<void> {
     const before = await this.requireExisting(id)
     this.checkWorkspace(before.workspaceId)
-    const encoded = schema.codec.encode(value)
-    if (jsonValuesEqual(before.properties[schema.name], encoded)) return
-    const properties = {...before.properties, [schema.name]: encoded}
+    const resolvedSchema = this.resolvePropertySchemaForRow(before, schema)
+    this.assertPropertyWriteScope(resolvedSchema)
+    const stored = before.properties[resolvedSchema.name]
+    const value = typeof valueOrUpdater === 'function'
+      ? (valueOrUpdater as (current: T | undefined) => T)(
+        stored === undefined ? undefined : resolvedSchema.codec.decode(stored),
+      )
+      : valueOrUpdater
+    const encoded = resolvedSchema.codec.encode(value)
+    if (jsonValuesEqual(stored, encoded)) return
+    // Dual-write (PR #288 §5): in a flipped workspace every property write is
+    // child-backed — the field/value children land in the SAME tx as the cell
+    // so readers stay synchronous against the cell while the children are the
+    // truth that crosses sync. Requires resolved identity (the fieldId names
+    // the field row); a boot-window plain schema stays cell-only.
+    if (isResolvedPropertySchema(resolvedSchema) && await this.isChildBackedRow(before)) {
+      await this.writePropertyValueChild(before, resolvedSchema, value)
+    }
+    const properties = {...before.properties, [resolvedSchema.name]: encoded}
+    await this.writePropertiesBag(id, before, properties, opts)
+  }
+
+  /** The child-backing gate for a property write on `row` (schema-independent
+   *  half): just the workspace flip. Materialize-everything (§9 flat
+   *  recognition): field rows and value rows materialize their OWN bags like
+   *  every other block — a `::` child of any block is that block's field row
+   *  at any depth, so recognition reclaims nested machinery and no interior /
+   *  prospective carve-out exists. The per-schema half
+   *  (`isResolvedPropertySchema`) is checked by the caller. */
+  private async isChildBackedRow(row: BlockData): Promise<boolean> {
+    return this.isPropertyChildBackedWorkspace(row.workspaceId)
+  }
+
+  /** Eagerly soft-delete the field-row subtree(s) backing `schema` under
+   *  `parent` — the removal counterpart to `writePropertyValueChild`. Eager
+   *  (not left to the deferred MATERIALIZE pass) because MATERIALIZE diffs the
+   *  tx's NET bag change: a key `setProperty`-created then removed in the SAME
+   *  tx nets to "no change", so its eagerly-written children would never be
+   *  reconciled and PROJECT would reproject the value back. The machinery-aware
+   *  `deleteSubtreeInTx` carries any user-authored sub-children down with it
+   *  (recoverable via history), matching MATERIALIZE's own removal branch. */
+  private async deletePropertyValueChildren(
+    parent: BlockData,
+    schema: { readonly fieldId: string },
+  ): Promise<void> {
+    const fieldRows = await this.ctx.txDb.getAll<BlockRow>(
+      SELECT_PROPERTY_FIELD_CHILD_SQL,
+      [parent.workspaceId, parent.id, schema.fieldId],
+    )
+    for (const row of fieldRows) {
+      await deleteSubtreeInTx(this, row.id)
+    }
+  }
+
+  /** The identical tail of every property-bag write (`setProperty` /
+   *  `unsetProperty` / `setProperties`): stamp metadata, write ONLY
+   *  `properties_json` (+ metadata columns), pin, record. The three differ
+   *  only in how they build `properties` and reconcile children; the cell
+   *  write itself is one shape. */
+  private async writePropertiesBag(
+    id: string,
+    before: BlockData,
+    properties: Record<string, unknown>,
+    opts: TxWriteOpts | undefined,
+  ): Promise<void> {
     const after: BlockData = {
       ...before,
       properties,
@@ -465,16 +788,96 @@ export class TxImpl implements Tx {
       [JSON.stringify(properties), after.updatedAt, after.userUpdatedAt, after.updatedBy, id],
     )
     this.pinWorkspace(before.workspaceId)
-    recordWrite(this.ctx.snapshots, id, before, after)
+    this.record(id, before, after)
+  }
+
+  async unsetProperty<T>(
+    id: string,
+    schema: PropertySchema<T>,
+    opts?: TxWriteOpts,
+  ): Promise<void> {
+    const before = await this.requireExisting(id)
+    this.checkWorkspace(before.workspaceId)
+    const resolvedSchema = this.resolvePropertySchemaForRow(before, schema)
+    this.assertPropertyWriteScope(resolvedSchema)
+    if (before.properties[resolvedSchema.name] === undefined) return // absent → no-op
+    // Eager child delete, symmetric with setProperty's inline dual-write (see
+    // deletePropertyValueChildren for why "rely on the deferred MATERIALIZE
+    // pass" is unsound for a key set-then-unset in one tx).
+    if (isResolvedPropertySchema(resolvedSchema) && await this.isChildBackedRow(before)) {
+      await this.deletePropertyValueChildren(before, resolvedSchema)
+    }
+    const properties = {...before.properties}
+    delete properties[resolvedSchema.name]
+    await this.writePropertiesBag(id, before, properties, opts)
+  }
+
+  async setProperties(
+    id: string,
+    changes: {
+      readonly set?: readonly AnyPropertyAssignment[]
+      readonly unset?: readonly AnyPropertySchema[]
+    },
+    opts?: TxWriteOpts,
+  ): Promise<void> {
+    const before = await this.requireExisting(id)
+    this.checkWorkspace(before.workspaceId)
+    // Resolve + scope-check EVERY schema before any mutation, so the whole
+    // batch fails atomically on an unresolvable/mis-scoped entry rather than
+    // half-applying. Resolution also collapses each schema to its canonical
+    // stored name (the bag key), so aliased/plain handles land on one key.
+    const sets = (changes.set ?? []).map(assignment => {
+      const resolvedSchema = this.resolvePropertySchemaForRow(before, assignment.schema)
+      this.assertPropertyWriteScope(resolvedSchema)
+      return {schema: resolvedSchema, value: assignment.value}
+    })
+    const unsets = (changes.unset ?? []).map(schema => {
+      const resolvedSchema = this.resolvePropertySchemaForRow(before, schema)
+      this.assertPropertyWriteScope(resolvedSchema)
+      return resolvedSchema
+    })
+    // Apply the delta on a copy of the current bag: sets first, then unsets, so
+    // a key named in BOTH lists ends up removed (unset wins — an explicit
+    // caller intent to clear takes precedence over a stale set in the batch).
+    const properties = {...before.properties}
+    const unsetNames = new Set(unsets.map(schema => schema.name))
+    // Encode only the sets that SURVIVE the unsets. A key named in BOTH lists is
+    // cleared (unset wins), so encoding its discarded — possibly stale/invalid —
+    // set value (NaN for a number, a removed enum option) would throw the whole
+    // batch instead of applying the explicit clear. Symmetric with the child
+    // dual-write below, which already skips unset-shadowed sets.
+    for (const {schema, value} of sets) {
+      if (!unsetNames.has(schema.name)) properties[schema.name] = schema.codec.encode(value)
+    }
+    for (const name of unsetNames) delete properties[name]
+    if (jsonValuesEqual(before.properties, properties)) return // net no-op
+    // Eager child dual-write, symmetric with setProperty/unsetProperty: delete
+    // the field rows for unset keys first, then create/update for the sets that
+    // survive (a key in both lists was removed above, so skip its child write).
+    if (await this.isChildBackedRow(before)) {
+      for (const schema of unsets) {
+        if (isResolvedPropertySchema(schema)) await this.deletePropertyValueChildren(before, schema)
+      }
+      for (const {schema, value} of sets) {
+        if (!unsetNames.has(schema.name) && isResolvedPropertySchema(schema)) {
+          await this.writePropertyValueChild(before, schema, value)
+        }
+      }
+    }
+    await this.writePropertiesBag(id, before, properties, opts)
   }
 
   async getProperty<T>(id: string, schema: PropertySchema<T>): Promise<T> {
     const row = await this.ctx.txDb.getOptional<BlockRow>(SELECT_BY_ID_SQL, [id])
     if (row === null) throw new BlockNotFoundError(id)
     const data = parseBlockRow(row)
-    const stored = data.properties[schema.name]
-    if (stored === undefined) return schema.defaultValue
-    return schema.codec.decode(stored)
+    const resolution = this.propertySchemaResolverFor(data.workspaceId)
+      .resolveBoundary(schema)
+    if (resolution.status === 'identity-unavailable') return schema.defaultValue
+    const resolvedSchema = resolution.schema
+    const stored = data.properties[resolvedSchema.name]
+    if (stored === undefined) return resolvedSchema.defaultValue
+    return resolvedSchema.codec.decode(stored)
   }
 
   // ──── Composition ────
@@ -505,7 +908,12 @@ export class TxImpl implements Tx {
 
   // ──── Within-tx tree primitives ────
 
-  async childrenOf(parentId: string | null, workspaceId?: string): Promise<BlockData[]> {
+  async childrenOf(
+    parentId: string | null,
+    workspaceId?: string,
+    options?: {hidePropertyChildren?: boolean},
+  ): Promise<BlockData[]> {
+    let data: BlockData[]
     if (parentId === null) {
       // SQL `parent_id = NULL` never matches; use `IS NULL`. Scope to
       // a workspace by one of: explicit arg → pinned meta → throw.
@@ -522,10 +930,29 @@ export class TxImpl implements Tx {
         throw new WorkspaceNotPinnedError()
       }
       const rows = await this.ctx.txDb.getAll<BlockRow>(SELECT_ROOT_SIBLINGS_SQL, [ws])
-      return rows.map(parseBlockRow)
+      data = rows.map(parseBlockRow)
+    } else {
+      const rows = await this.ctx.txDb.getAll<BlockRow>(SELECT_CHILDREN_SQL, [parentId])
+      data = rows.map(parseBlockRow)
     }
-    const rows = await this.ctx.txDb.getAll<BlockRow>(SELECT_CHILDREN_SQL, [parentId])
-    return rows.map(parseBlockRow)
+    // Default returns EVERY child (structural view). The display-visible
+    // view — excluding recognized property field rows in a flipped
+    // workspace (§9) — is opt-in via `hidePropertyChildren`. Cheap
+    // short-circuits first — un-flipped workspaces (dormant) and listings
+    // with no marked rows pay only the (per-tx-cached) flip read. The flat
+    // predicate needs no ancestry exemption: only `::` rows can classify,
+    // so a ref-typed VALUE pointing at a definition is never misread — and
+    // a marked row inside a property subtree IS machinery (its parent's own
+    // field row) and filters like any other, at any depth.
+    // Root listings are exempt outright: a field row is a child of the
+    // block that OWNS the property — a workspace-root row whose content
+    // happens to be marked is user content (§9 root half).
+    if (parentId === null) return data
+    if (options?.hidePropertyChildren !== true || data.length === 0) return data
+    if (!data.some(row => row.isFieldForm === true)) return data
+    if (!(await this.isPropertyChildBackedWorkspace(data[0]!.workspaceId))) return data
+    const isFieldDefinition = this.isFieldDefinitionCheckerFor(data[0]!.workspaceId)
+    return data.filter(row => !isPropertyFieldInstance(row, isFieldDefinition))
   }
 
   async hasChildren(parentId: string, opts?: {includeDeleted?: boolean}): Promise<boolean> {
@@ -578,6 +1005,17 @@ export class TxImpl implements Tx {
       [workspaceId, alias],
     )
     return row === null ? null : parseBlockRow(row)
+  }
+
+  async aliasClaimants(alias: string, workspaceId: string): Promise<BlockData[]> {
+    // Same defensive empty-arg gate as `aliasLookup`: `block_aliases`
+    // stores empty strings, so a bad caller would otherwise get real rows.
+    if (alias === '' || workspaceId === '') return []
+    const rows = await this.ctx.txDb.getAll<BlockRow>(
+      SELECT_BLOCKS_BY_ALIAS_IN_WORKSPACE_SQL,
+      [workspaceId, alias],
+    )
+    return rows.map(parseBlockRow)
   }
 
   // ──── Post-commit scheduling ────
@@ -651,7 +1089,13 @@ export class TxImpl implements Tx {
    *  `Repo._replay`). `applyRaw`'s write is still a field change in the
    *  replay tx, so without that gate a value-deriving same-tx processor
    *  would re-derive and override the restore — leaving the row at a
-   *  derived value, not `target` (#187). */
+   *  derived value, not `target` (#187).
+   *
+   *  The row-level triggers (e.g. the parent-liveness check) still fire
+   *  per statement and can reject an intermediate replay state even
+   *  though the target state is valid — `applyRaw` itself does no
+   *  ordering or retry around that; callers own it (see
+   *  `replayApplicationOrder` in txSnapshots.ts). */
   async applyRaw(id: string, target: BlockData | null): Promise<void> {
     const beforeRow = await this.ctx.txDb.getOptional<BlockRow>(SELECT_BY_ID_SQL, [id])
     const beforeData = beforeRow === null ? null : parseBlockRow(beforeRow)
@@ -679,7 +1123,7 @@ export class TxImpl implements Tx {
         [after.updatedAt, now, userId, id],
       )
       this.pinWorkspace(beforeData.workspaceId)
-      recordWrite(this.ctx.snapshots, id, beforeData, after)
+      this.record(id, beforeData, after)
       return
     }
 
@@ -689,6 +1133,16 @@ export class TxImpl implements Tx {
       // some non-tx path; we still try to restore. Engine fields
       // (createdAt/createdBy/updatedAt/updatedBy) come from the
       // captured target.
+      //
+      // NOT gated by `blockIdPolicy` (issue #456), deliberately: this
+      // restores an id that already existed, it does not mint one. Under a
+      // strict Repo the only way a non-canonical id reaches an undo snapshot
+      // is a path the contract already exempts — a sync-materialized row, or
+      // the trusted `eval` escape hatch. Gating here would not prevent that
+      // id from existing (it is already in the user's data); it would only
+      // make UNDO fail on it, turning a tolerated foreign id into lost user
+      // history. Restore is not a write boundary, for the same reason sync
+      // apply isn't.
       const inserted: BlockData = {
         ...target,
         updatedAt: now,
@@ -699,7 +1153,7 @@ export class TxImpl implements Tx {
       }
       await this.ctx.txDb.execute(INSERT_SQL, blockToRowParams(inserted))
       this.pinWorkspace(target.workspaceId)
-      recordWrite(this.ctx.snapshots, id, null, inserted)
+      this.record(id, null, inserted)
       return
     }
 
@@ -718,9 +1172,15 @@ export class TxImpl implements Tx {
       updatedBy: userId,
     }
     await this.ctx.txDb.execute(
-      `UPDATE blocks SET parent_id = ?, order_key = ?, content = ?, properties_json = ?, references_json = ?, deleted = ?, updated_at = ?, user_updated_at = ?, updated_by = ? WHERE id = ?`,
+      `UPDATE blocks SET parent_id = ?, reference_target_id = ?, is_field_form = ?, order_key = ?, content = ?, properties_json = ?, references_json = ?, deleted = ?, updated_at = ?, user_updated_at = ?, updated_by = ? WHERE id = ?`,
       [
         target.parentId,
+        // Undo replay must restore the local derived columns too: same-tx
+        // processors are skipped on replay (`isReplay`), so nothing
+        // re-derives them — the snapshot is the only source (invariants
+        // index, PR #288: "undo restores what processors won't re-derive").
+        target.referenceTargetId ?? null,
+        target.isFieldForm ? 1 : null,
         target.orderKey,
         target.content,
         JSON.stringify(target.properties),
@@ -733,7 +1193,7 @@ export class TxImpl implements Tx {
       ],
     )
     this.pinWorkspace(beforeData.workspaceId)
-    recordWrite(this.ctx.snapshots, id, beforeData, after)
+    this.record(id, beforeData, after)
   }
 
   // ──── Internal helpers ────
@@ -806,7 +1266,22 @@ export class TxImpl implements Tx {
     id: string,
     data: NewBlockData,
     opts: TxInsertOpts | undefined,
+    context: string,
   ): BlockData {
+    // The block-id shape contract (issue #456). `create` and `createOrGet`
+    // are the two MINTING paths and both build their row here, so every id
+    // this engine brings into existence is checked once, by construction,
+    // rather than at each of the N call sites that can supply one.
+    //
+    // `applyRaw`'s re-INSERT is the third statement that can insert a row and
+    // is deliberately NOT gated — see the note at its missing-row branch.
+    //
+    // Checked on the RESOLVED id, not on `data.id`: the invariant is a
+    // property of the ROW, so a Repo wired with a `newId` that mints
+    // something non-canonical is just as much a violation as a caller passing
+    // one, and should fail the same way instead of writing a row the guard
+    // claims cannot exist.
+    if (this.ctx.blockIdPolicy === 'canonical') assertCanonicalBlockId(id, context)
     const now = this.ctx.now()
     const userId = this.meta.user.id
     // `updated_at` is the row-version. A speculative `systemMint` default and a
@@ -827,6 +1302,8 @@ export class TxImpl implements Tx {
       id,
       workspaceId: data.workspaceId,
       parentId: data.parentId,
+      referenceTargetId: data.referenceTargetId ?? null,
+      isFieldForm: data.isFieldForm ?? false,
       orderKey: data.orderKey,
       content: data.content ?? '',
       properties: data.properties ?? {},
@@ -855,6 +1332,95 @@ export class TxImpl implements Tx {
     const row = await this.ctx.txDb.getOptional<BlockRow>(SELECT_BY_ID_SQL, [id])
     if (row === null) throw new BlockNotFoundError(id)
     return parseBlockRow(row)
+  }
+
+  /** Child half of the §5 dual-write: find-or-create the field row
+   *  (`[[Schema Name]]` + fieldId in the local column) and its ONE primary
+   *  value child (scalar-first), updating stale content and soft-deleting
+   *  duplicates deterministically (`ORDER BY order_key, id` picks the same
+   *  survivor on every replica — load-bearing for the processor pair's
+   *  convergence, see propertyChildrenProcessor.ts). Ported from the PR #285
+   *  spike; identity comes from the resolved schema (never a synthetic
+   *  name-derived id). */
+  private async writePropertyValueChild<T>(
+    parent: BlockData,
+    schema: PropertySchema<T> & {readonly fieldId: string},
+    value: T,
+  ): Promise<void> {
+    const content = propertyValueToChildContent(schema, value)
+    const fieldRows = await this.ctx.txDb.getAll<BlockRow>(
+      SELECT_PROPERTY_FIELD_CHILD_SQL,
+      [parent.workspaceId, parent.id, schema.fieldId],
+    )
+    const existing = fieldRows.length > 0 ? parseBlockRow(fieldRows[0]!) : undefined
+
+    if (existing) {
+      // Child-backed field/value rows are synced data: update their content
+      // with REAL metadata (no `opts`) — same as the create path below and the
+      // deferred materialize processor (propertyChildrenProcessor.ts, which
+      // passes none). Forwarding the parent write's {skipMetadata} here would
+      // stamp these synced rows' user_updated_at/updated_by inconsistently
+      // depending on whether the change went through the eager dual-write or
+      // the deferred processor for the same logical value.
+      if (existing.content !== propertyFieldContent(schema.fieldId)) {
+        await this.update(existing.id, {content: propertyFieldContent(schema.fieldId)})
+      }
+      // §9 value set: `is_field_form IS NOT 1` children only — a nested
+      // marked row under the field row is its own machinery, never a value
+      // candidate for overwrite/dedup.
+      const values = await fieldValueChildren(this, existing.id)
+      const [primary, ...duplicates] = values
+      if (primary) {
+        if (primary.content !== content) await this.update(primary.id, {content})
+        // §9 dedup — fold ONLY exact duplicates of the value we just wrote
+        // (concurrent dual-writes of the same value), matching the deferred
+        // materialize processor (propertyChildrenProcessor.ts). A DIVERGENT
+        // peer value — e.g. a merge's surfaced conflict — is kept, not silently
+        // collapsed onto the winner: a raw `tx.update({properties})` preserves
+        // it via materialize, so this eager path must too. The shared
+        // relocate-then-subtree-delete helper keeps the loser's user-authored
+        // sub-children under the primary when a fold does happen.
+        for (const duplicate of duplicates) {
+          if (duplicate.content === content) {
+            await collapseDuplicateValueChild(this, primary.id, duplicate)
+          }
+        }
+      } else {
+        await this.create({
+          workspaceId: parent.workspaceId,
+          parentId: existing.id,
+          orderKey: keyAtStart(null),
+          content,
+        })
+      }
+      return
+    }
+
+    // Machinery inserts field rows FIRST among children (§9 ordering
+    // decision): fields cluster above content as an emergent default;
+    // orderKey stays user-owned afterwards.
+    //
+    // Canonical child-backed property rows are synced data — create them
+    // with real metadata (matching the post-commit materialize processor,
+    // which passes no opts). The parent write's {skipMetadata} governs the
+    // PARENT's updated_at only; forwarding it here would birth these synced
+    // rows with created_at=0 / created_by='' (Codex review, PR #386).
+    const fieldRowId = await this.create({
+      workspaceId: parent.workspaceId,
+      parentId: parent.id,
+      // Born classified (§9): both derived columns pre-stamped in the create
+      // so the row classifies and projects within the same single pass.
+      referenceTargetId: schema.fieldId,
+      isFieldForm: true,
+      orderKey: keyAtStart(null),
+      content: propertyFieldContent(schema.fieldId),
+    })
+    await this.create({
+      workspaceId: parent.workspaceId,
+      parentId: fieldRowId,
+      orderKey: keyAtStart(null),
+      content,
+    })
   }
 
   private async requireParentInWorkspace(

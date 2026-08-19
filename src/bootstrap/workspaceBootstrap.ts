@@ -1,11 +1,7 @@
 import type { Block } from '@/data/block.js'
 import type { Repo } from '@/data/repo.js'
-import { buildLayout, preserveHashQueryParams } from '@/utils/routing.js'
+import { buildLayout, buildLayoutFromSlots, parseLayout, preserveHashQueryParams } from '@/utils/routing.js'
 import { rememberWorkspace } from '@/utils/lastWorkspace.js'
-import { seedTutorial } from '@/initData.js'
-import { getOrCreatePropertiesPage } from '@/data/propertiesPage.js'
-import { getOrCreateTypesPage } from '@/data/typesPage.js'
-import { getOrCreateRecentsPage } from '@/data/recentsPage.js'
 import { getLayoutSessionBlock, getUIStateBlock } from '@/data/stateBlocks.js'
 import { workspaceLandingFacet } from '@/extensions/core.js'
 import { resolveAppRuntimeSync } from '@/facets/resolveAppRuntime.js'
@@ -117,6 +113,12 @@ export const bootstrapWorkspace = async ({
   requestedHash,
   requestedWorkspaceId,
 }: WorkspaceBootstrapArgs): Promise<Block> => {
+  // A workspace pin starts the property-schema projector asynchronously. Until
+  // its first complete result, declaration synthesis cannot know whether a
+  // stored definition shadows or renames a seed. Keep bootstrap's writes behind
+  // that completeness boundary; the shared Repo tx path queues other callers.
+  await repo.whenPropertyDefinitionsReady(workspaceId)
+
   // Only NOW remember it as the default. Remembering a locked/waiting workspace
   // would make the next empty-hash visit re-select it and render only the key
   // gate (no switcher), trapping the user away from accessible spaces.
@@ -131,6 +133,19 @@ export const bootstrapWorkspace = async ({
   // original daily-note:date backfill silently never synced.
   repo.scheduleWorkspaceBackfills(workspaceId)
 
+  // Backfill derived references for this workspace's pre-existing rows. The
+  // facet bridge only reprojects names whose ref-ness CHANGED on a rebuild, so a
+  // workspace sharing a ref-typed name (e.g. a static seed like next-review-date)
+  // with the previously-active one produces an empty diff and never scans its
+  // own rows. Marker-gated once per workspace, deferred off this critical path.
+  repo.scheduleWorkspaceRefBackfill(workspaceId)
+
+  // One-time catch-up derive of the LOCAL `reference_target_id` column for
+  // rows that predate it (PR #288 slice A). Marker-gated per workspace,
+  // deferred off this critical path; placed after `whenPropertyDefinitionsReady`
+  // above so the `[[name]]` tier resolves against the primed name-winner map.
+  repo.scheduleReferenceTargetDerivePass(workspaceId)
+
   // One-time post-upgrade recovery for the deterministic-id shadow: clients that
   // skip-staled the server's authoritative row under the old reconcile gate
   // consumed its change-queue entry, so a normal startup never re-evaluates it.
@@ -143,17 +158,14 @@ export const bootstrapWorkspace = async ({
   // data-integrity plugin's AppEffect (cadenced, read-only, deferred to idle),
   // which runs on workspace open and surfaces health via the diagnostics seam.
 
-  // Freshly inserted personal workspace: install the starter tutorial
-  // as its own parent-less page. The [[Tutorial]] bullet on today's
-  // daily note (added below) makes it discoverable from the landing
-  // page without hijacking it. AWAIT the seed tx so the Tutorial
-  // alias row exists before parseReferences (post-commit processor)
-  // runs against the wiki-link bullet — otherwise parseReferences
-  // creates a fresh empty alias target for "Tutorial" and the
-  // bullet points at that orphan instead of the real seeded page.
-  if (freshlyCreated) {
-    await seedTutorial(repo, workspaceId)
-  }
+  // First-run starter content (the Tutorial pages + the [[Tutorial]]
+  // discoverability bullet) is no longer seeded here: it's owned by the
+  // onboarding plugin, which contributes a `workspaceLandingFacet` resolver
+  // that seeds on `freshlyCreated` and then defers the landing target to
+  // daily-notes (see src/plugins/onboarding). That keeps first-run content
+  // out of the kernel and lets disabling the plugin remove it cleanly. The
+  // tutorial's typed demos seed against `repo.snapshotTypeRegistries()`,
+  // which is populated from `staticDataExtensions` at repo construction.
 
   // Resolve the layout-session block the app paints — the warm-start critical
   // path. This chain is genuinely serial: each ui-state child's deterministic id
@@ -189,7 +201,15 @@ export const bootstrapWorkspace = async ({
       // AppRuntimeProvider's initial render uses.
       const landingId = await resolveLandingBlockId(repo, workspaceId, freshlyCreated)
       if (landingId) {
-        replaceHash(buildLayout(workspaceId, [landingId]))
+        // Carry the inbound hash's ws-context (`;persp=` etc.) onto the
+        // landing hash: an empty layout is exactly how a fresh perspective
+        // session boots, and dropping the context here would strip the
+        // extension-side lane marker on its very first paint.
+        replaceHash(buildLayoutFromSlots(
+          workspaceId,
+          [{kind: 'leaf', blockId: landingId}],
+          parseLayout(hashForResolvedWorkspace).wsContext,
+        ))
         await repo.tx(async tx => {
           const parent = await tx.get(layoutSessionBlock.id)
           if (!parent) throw new Error(`getInitialLayout: layout session block ${layoutSessionBlock.id} not found`)
@@ -206,23 +226,33 @@ export const bootstrapWorkspace = async ({
     return layoutSessionBlock
   }
 
-  // The Properties/Types/Recents kernel pages (idempotent, deterministic ids —
-  // hosting user property-schema blocks, block-type blocks, and the recents
-  // list respectively) are independent of each other AND of the layout chain:
-  // distinct ids, no row-level overlap, and the single SQLite write lock
-  // serializes the rare cold-start create txs safely. None is needed to *paint*
-  // the layout, so all four resolve concurrently instead of in a strict
-  // sequence. On a warm start each get-or-create is one cached read, so the
-  // pages finish inside the longer (serial) layout chain and add no latency to
-  // `bootstrapDone`; on a cold start their create txs overlap the layout writes
-  // rather than queueing ahead of them. Promise.all (not a floating page
-  // promise) keeps every rejection handled.
-  const [, , , layoutSessionBlock] = await Promise.all([
-    getOrCreatePropertiesPage(repo, workspaceId),
-    getOrCreateTypesPage(repo, workspaceId),
-    getOrCreateRecentsPage(repo, workspaceId),
-    resolveLayoutSession(),
-  ])
+  // Materialise the workspace's singleton system pages (Properties/Types/
+  // Recents/Journal/Locations + any other `systemPagesFacet` contribution)
+  // BEFORE resolving the layout. The landing resolver may seed content with
+  // `[[reserved alias]]` wiki-links, and those must resolve to the canonical
+  // page rather than auto-create a rival (alias.collision) — so the pages have
+  // to exist first. That's why this is serialized ahead of the layout chain
+  // rather than racing it the way these kernel pages used to (each is
+  // idempotent + deterministic-id, so on a warm start it's just a cached read).
+  await repo.ensureSystemPages(workspaceId)
 
+  // Materialize the code-declared property seeds into block-backed definitions
+  // for this workspace (schema-unification §4.3). At bootstrap the installed
+  // runtime is the static-data one, so only its seeds land here; the post-paint
+  // app-runtime install (and dynamic-extension loads) re-fire the pass from the
+  // registry-apply path as plugin seeds appear. Deferred + create/restore-only;
+  // `freshlyCreated` lets a fresh workspace skip the membership-row wait its
+  // access gate otherwise performs.
+  //
+  // Kept after `ensureSystemPages` so the pages already exist when the pass runs:
+  // the materializer parents each definition block to `propertiesPageBlockId` /
+  // `typesPageBlockId`, and `tx.create` enforces `requireParentInWorkspace`. The
+  // pass now ensures its own parent (`config.ensureParent`), so an earlier fire —
+  // e.g. the `setActiveWorkspaceId` reschedule, which for type seeds has no priming
+  // gate and can precede this — no longer throws on a missing parent; scheduling
+  // here just means that ensure is a cheap no-op rather than the page-creating path.
+  repo.scheduleWorkspaceSeedMaterialization(workspaceId, freshlyCreated)
+
+  const layoutSessionBlock = await resolveLayoutSession()
   return layoutSessionBlock
 }

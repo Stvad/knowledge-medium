@@ -32,24 +32,30 @@ import { useNavigate, useNavigateFromGlobalCommand } from '@/utils/navigation.js
 import { parseRelativeDate, relativeDateCandidates } from '@/utils/relativeDate.js'
 import { getOrCreateDailyNote } from '@/plugins/daily-notes'
 import { formatRoamDate } from '@/utils/dailyPage.js'
-import { getLayoutSessionId } from '@/utils/layoutSessionId.js'
 import {
   searchLinkTargetsProgressively,
   type LinkTargetAliasMatch,
   type LinkTargetBlockMatch,
 } from '@/utils/linkTargetAutocomplete.js'
+import { useTypes } from '@/hooks/typeRegistry.js'
 import {
   getLayoutSessionBlock,
   getPluginUIStateBlock,
   getUIStateBlock,
   requireWorkspaceId,
 } from '@/data/stateBlocks.js'
+import { useAncestorCrumbs } from '@/hooks/useAncestorCrumbs.js'
 import { quickFindToggle } from './toggleStore.ts'
-import { pushRecentBlockId, quickFindUIStateType, recentBlockIdsProp } from './recents.ts'
+import { aliasResultItems, blockResultItems, recentResultItems } from './resultItems.tsx'
+import {
+  pushRecentBlockId,
+  quickFindUIStateType,
+  recentBlockIdsProp,
+  recentItemFromBlockData,
+  type RecentItem,
+} from './recents.ts'
 import {
   nextQuickFindSelection,
-  quickFindAliasValue,
-  quickFindBlockValue,
   quickFindCreateValue,
   quickFindDateValue,
   quickFindOpenTargetFromClickModifiers,
@@ -57,14 +63,10 @@ import {
   quickFindSelectionAction,
   type QuickFindOpenTarget,
 } from './selection.ts'
+import { isImeKeyEvent } from '@/shortcuts/utils.js'
 
 const SEARCH_LIMIT = 25
 const DEBOUNCE_MS = 80
-
-interface RecentItem {
-  blockId: string
-  label: string
-}
 
 interface SearchResultState {
   query: string
@@ -89,8 +91,6 @@ export interface QuickFindListGroup {
   items: QuickFindListItem[]
 }
 
-const truncate = (text: string, max = 80) =>
-  text.length > max ? text.slice(0, max - 1) + '…' : text
 
 const quickFindListValueSeparator = '\u001f'
 
@@ -167,7 +167,7 @@ export function QuickFindList({
 
   const handleRootKeyDown = (event: KeyboardEvent) => {
     onKeyDown?.(event)
-    if (event.defaultPrevented || event.nativeEvent.isComposing || event.keyCode === 229) return
+    if (event.defaultPrevented || isImeKeyEvent(event.nativeEvent) || isImeKeyEvent(event)) return
 
     if ((event.key === 'n' || event.key === 'j') && event.ctrlKey) {
       event.preventDefault()
@@ -369,7 +369,7 @@ function QuickFindResources({
     const rootUIStateBlock = await getUIStateBlock(repo, workspaceId, user, {})
     const [quickFindUIStateBlock, layoutSessionBlock] = await Promise.all([
       getPluginUIStateBlock(repo, workspaceId, user, quickFindUIStateType),
-      getLayoutSessionBlock(rootUIStateBlock, getLayoutSessionId()),
+      getLayoutSessionBlock(rootUIStateBlock, repo.activeLayoutSessionId),
     ])
     return {quickFindUIStateBlock, layoutSessionBlock}
   })(), [repo, user, workspaceId])
@@ -428,6 +428,21 @@ function QuickFindDialog({
   const aliases = trimmedQuery && searchResults.query === trimmedQuery ? searchResults.aliases : []
   const blocks = trimmedQuery && searchResults.query === trimmedQuery ? searchResults.blocks : []
   const [recents, setRecents] = useState<RecentItem[]>([])
+  // Ancestor crumbs load on their own batched pass AFTER these rows
+  // render, so the search path keeps its current latency and the
+  // progressive aliases→blocks paint is unchanged. `blocks` is rebuilt on
+  // every render, and gating it on the live query means it transiently
+  // empties on each keystroke — the hook keys on the ids' CONTENT and
+  // holds its claims across both, so an inline map is fine here.
+  // Blocks and Recents in one call: the hook caches per id, and the two
+  // groups are never on screen together (Recents render only for an empty
+  // query), so this is one batched load covering whichever is showing.
+  const blockCrumbs = useAncestorCrumbs([
+    ...blocks.map(match => ({id: match.blockId, parentId: match.parentId})),
+    ...recents.map(item => ({id: item.blockId, parentId: item.parentId})),
+  ])
+  const typeRegistry = useTypes()
+  const rowContext = {crumbsByBlockId: blockCrumbs, typeRegistry}
 
   useEffect(() => {
     if (!open) return
@@ -494,8 +509,7 @@ function QuickFindDialog({
       for (const id of ids) {
         const data = await repo.load(id)
         if (!data) continue
-        const blockAliases = (data.properties[aliasesProp.name] as string[] | undefined) ?? []
-        items.push({blockId: id, label: blockAliases[0] ?? data.content ?? id})
+        items.push(recentItemFromBlockData(id, data))
       }
       if (!cancelled) setRecents(items)
     }
@@ -600,17 +614,7 @@ function QuickFindDialog({
   const groups: QuickFindListGroup[] = []
 
   if (showRecents) {
-    groups.push({
-      heading: 'Recent',
-      items: recents.map(item => ({
-        key: `recent:${item.blockId}`,
-        value: `recent:${item.blockId}`,
-        className: 'flex justify-between items-center',
-        children: (
-          <span className="truncate">{truncate(item.label)}</span>
-        ),
-      })),
-    })
+    groups.push({heading: 'Recent', items: recentResultItems(recents, rowContext)})
   }
 
   if (dateCandidates.length > 0) {
@@ -637,37 +641,11 @@ function QuickFindDialog({
   }
 
   if (aliases.length > 0) {
-    groups.push({
-      heading: 'Pages',
-      items: aliases.map(match => ({
-        key: `page:${match.blockId}:${match.alias}`,
-        value: quickFindAliasValue(match),
-        className: 'flex justify-between items-center gap-2',
-        children: (
-          <>
-            <span className="truncate">{match.alias}</span>
-            {match.content && match.content !== match.alias && (
-              <span className="text-xs text-muted-foreground truncate max-w-[40%]">
-                {truncate(match.content, 50)}
-              </span>
-            )}
-          </>
-        ),
-      })),
-    })
+    groups.push({heading: 'Pages', items: aliasResultItems(aliases, rowContext)})
   }
 
   if (blocks.length > 0) {
-    groups.push({
-      heading: 'Blocks',
-      items: blocks.map(match => ({
-        key: `block:${match.blockId}`,
-        value: quickFindBlockValue(match),
-        children: (
-          <span className="truncate">{truncate(match.content)}</span>
-        ),
-      })),
-    })
+    groups.push({heading: 'Blocks', items: blockResultItems(blocks, rowContext)})
   }
 
   if (showCreate) {

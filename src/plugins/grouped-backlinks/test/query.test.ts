@@ -1,21 +1,23 @@
 // @vitest-environment node
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChangeScope, type BlockReference } from '@/data/api'
-import { BlockCache } from '@/data/blockCache'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { Repo } from '@/data/repo'
+import type { BlockCache } from '@/data/blockCache'
+import { createTestRepo } from '@/data/test/createTestRepo'
 import { resolveFacetRuntimeSync, type AppExtension } from '@/facets/facet.js'
 import { kernelDataExtension } from '@/data/kernelDataExtension.js'
 import { typesProp } from '@/data/properties.js'
-import { typesFacet } from '@/data/facets.js'
+import { seedType } from '@/data/api'
 import {
+  definitionSeedsFacet,
   invalidationRulesFacet,
   propertyEditorOverridesFacet,
-  propertySchemasFacet,
   queriesFacet,
-  valuePresetsFacet,
+  typeSeedsFacet,
 } from '@/data/facets.js'
 import { resolvePropertyDisplay } from '@/components/propertyEditors/defaults.js'
+import {readValuePresets} from '@/data/valuePresetRegistry'
 import { backlinksForBlockQuery } from '@/plugins/backlinks/query.js'
 import { referencesInvalidationRule } from '@/plugins/references/invalidation.js'
 import {
@@ -41,28 +43,22 @@ const backlinksQueryInvalidationExtension: AppExtension = [
 interface Harness {
   h: TestDb
   repo: Repo
+  cache: BlockCache
 }
 
 const setup = async (): Promise<Harness> => {
   // Shared DB opened once per file, reset between tests; fresh Repo per test.
   await resetTestDb(sharedDb.db)
   const h = sharedDb
-  const cache = new BlockCache()
-  let timeCursor = 1700_000_000_000
-  let idCursor = 0
-  const repo = new Repo({
+  const { repo, cache } = createTestRepo({
     db: h.db,
-    cache,
     user: {id: 'user-1'},
-    now: () => ++timeCursor,
-    newId: () => `gen-${++idCursor}`,
+    extensions: [
+      backlinksQueryInvalidationExtension,
+      groupedBacklinksDataExtension,
+    ],
   })
-  repo.setFacetRuntime(resolveFacetRuntimeSync([
-    kernelDataExtension,
-    backlinksQueryInvalidationExtension,
-    groupedBacklinksDataExtension,
-  ]))
-  return {h, repo}
+  return {h, repo, cache}
 }
 
 let sharedDb: TestDb
@@ -70,7 +66,6 @@ let env: Harness
 beforeAll(async () => { sharedDb = await createTestDb() })
 afterAll(async () => { await sharedDb.cleanup() })
 beforeEach(async () => { env = await setup() })
-afterEach(() => { env.repo.stopSyncObserver() })
 
 const create = async (args: {
   id: string
@@ -105,27 +100,29 @@ describe('groupedBacklinksDataExtension query', () => {
     expect(queries.get(GROUPED_BACKLINKS_FOR_BLOCK_QUERY)).toBeDefined()
   })
 
-  it('contributes grouped backlinks property schemas', () => {
+  it('contributes grouped backlinks property seeds', () => {
     const runtime = resolveFacetRuntimeSync(groupedBacklinksDataExtension)
-    const schemas = runtime.read(propertySchemasFacet)
+    const seeds = runtime.read(definitionSeedsFacet)
 
-    expect(schemas.get(groupedBacklinksDefaultsProp.name)).toBe(groupedBacklinksDefaultsProp)
-    expect(schemas.get(groupedBacklinksOverridesProp.name)).toBe(groupedBacklinksOverridesProp)
+    expect(seeds).toEqual(expect.arrayContaining([
+      groupedBacklinksDefaultsProp,
+      groupedBacklinksOverridesProp,
+    ]))
     expect(groupedBacklinksDefaultsProp.defaultValue).toEqual(INITIAL_GROUPED_BACKLINKS_CONFIG)
   })
 
   it('contributes a custom property UI for grouped backlinks defaults', () => {
     const runtime = resolveFacetRuntimeSync(groupedBacklinksPlugin)
-    const schemas = runtime.read(propertySchemasFacet)
+    const schemas = new Map([[groupedBacklinksDefaultsProp.name, groupedBacklinksDefaultsProp]])
     const uis = runtime.read(propertyEditorOverridesFacet)
 
-    expect(uis.get(groupedBacklinksDefaultsProp.name)).toBe(groupedBacklinksDefaultsUi)
+    expect(uis.get(groupedBacklinksDefaultsProp.seedKey)).toBe(groupedBacklinksDefaultsUi)
     expect(resolvePropertyDisplay({
       name: groupedBacklinksDefaultsProp.name,
       encodedValue: INITIAL_GROUPED_BACKLINKS_CONFIG,
       schemas,
-      uis,
-      presets: runtime.read(valuePresetsFacet),
+      override: uis.get(groupedBacklinksDefaultsProp.seedKey),
+      presets: readValuePresets(runtime),
     }).Editor).toBe(groupedBacklinksDefaultsUi.Editor)
   })
 
@@ -203,6 +200,51 @@ describe('groupedBacklinksDataExtension query', () => {
 
     expect(out.groups.map(group => group.label)).toEqual(['Page'])
     expect(sorted(out.groups[0].sourceIds)).toEqual(['child-1', 'child-2'])
+  })
+
+  it('primes member (source) rows into the cache', async () => {
+    // Members are resolved as ids (core.typedBlockIds), so their own rows stay
+    // unhydrated until a lazy entry loads them. Group-header actions (e.g. the
+    // daily-notes "spread" button) gate visibility on each member's content via
+    // `block.peek()`, so the query primes those rows. Proven by evicting the
+    // members to a cold-cache state, then asserting the query re-hydrates them.
+    //
+    // The members are parented under `container` (not top-level): a root-level
+    // member would become a 'root' grouping candidate and get hydrated as a
+    // group block anyway, masking whether the prime ran. Nested members are
+    // neither group blocks nor ancestors, so ONLY the prime hydrates them.
+    await create({id: 'target', content: 'Target'})
+    await create({id: 'topic', content: 'Topic'})
+    await create({id: 'container', content: 'Container'})
+    await create({
+      id: 'src-1',
+      parentId: 'container',
+      content: 'do the thing [[target]] [[topic]]',
+      references: [{id: 'target', alias: 'target'}, {id: 'topic', alias: 'topic'}],
+    })
+    await create({
+      id: 'src-2',
+      parentId: 'container',
+      content: 'another one [[target]] [[topic]]',
+      references: [{id: 'target', alias: 'target'}, {id: 'topic', alias: 'topic'}],
+    })
+
+    // Evict the members to a cold-cache state (they were cached by `create`),
+    // mirroring a fresh render where only their ids are known. Same idiom as
+    // the sibling `core.childIds { hydrate }` prime test.
+    env.cache.deleteSnapshot('src-1')
+    env.cache.deleteSnapshot('src-2')
+    expect(env.cache.getSnapshot('src-1')).toBeUndefined()
+    expect(env.cache.getSnapshot('src-2')).toBeUndefined()
+
+    const out = await env.repo.query[GROUPED_BACKLINKS_FOR_BLOCK_QUERY]({
+      workspaceId: WS,
+      id: 'target',
+    }).load()
+    expect(out.total).toBe(2)
+
+    expect(env.cache.getSnapshot('src-1')?.content).toBe('do the thing [[target]] [[topic]]')
+    expect(env.cache.getSnapshot('src-2')?.content).toBe('another one [[target]] [[topic]]')
   })
 
   it('groups incoming property references by source field even for a singleton source', async () => {
@@ -1037,9 +1079,9 @@ describe('groupedBacklinksDataExtension query', () => {
       expect(out.groups.map(group => group.label)).not.toContain('person')
     })
 
-    it('resolves user-defined type ids via typesFacet to a label', async () => {
+    it('resolves user-defined type ids via typeSeedsFacet to a label', async () => {
       // User-defined types store the block-type block's id in `types`,
-      // not its label. In production the label comes from `typesFacet`
+      // not its label. In production the label comes from `typeSeedsFacet`
       // — kernel-contributed types ride in at extension build, and
       // user-defined types are materialized into the facet by
       // `UserTypesService`. The resolver reads the facet at resolve
@@ -1049,8 +1091,8 @@ describe('groupedBacklinksDataExtension query', () => {
         kernelDataExtension,
         backlinksQueryInvalidationExtension,
         groupedBacklinksDataExtension,
-        typesFacet.of(
-          {id: 'person-type-block', label: 'Person'},
+        typeSeedsFacet.of(
+          seedType({seedKey: 'test/type/person-type-block', revision: 1, id: 'person-type-block', label: 'Person'}),
           {source: 'test'},
         ),
       ]))
@@ -1104,6 +1146,66 @@ describe('groupedBacklinksDataExtension query', () => {
       expect(noteGroup).toBeDefined()
       expect(noteGroup!.groupId).toBe('type:note')
       expect(sorted(noteGroup!.sourceIds)).toEqual(['src-1', 'src-2'])
+    })
+  })
+
+  // PR #386 review: grouped backlinks resolve their own source ids instead of
+  // routing through `backlinks.forBlock`, so the flip-gated machinery
+  // exclusion has to be applied here too — otherwise a hidden property value
+  // row is filtered out of Linked References and the inline count but still
+  // shows up grouped, duplicating the owner's projected property backlink.
+  describe('property-machinery source exclusion (§9)', () => {
+    const seedDefinitionAndFieldRow = async () => {
+      await create({id: 'target', content: 'Target'})
+      await create({id: 'defn', content: 'status'})
+      await env.h.db.execute(
+        `INSERT OR IGNORE INTO block_types (block_id, workspace_id, type)
+         VALUES ('defn', ?, 'property-schema')`,
+        [WS],
+      )
+      await create({id: 'owner', content: 'Owner'})
+      await env.repo.tx(async tx => {
+        await tx.create({
+          id: 'field', workspaceId: WS, parentId: 'owner', orderKey: 'a0',
+          content: '((defn))', referenceTargetId: 'defn',
+        })
+        await tx.create({
+          id: 'value', workspaceId: WS, parentId: 'field', orderKey: 'a0',
+          content: '[[Target]]', references: [{id: 'target', alias: 'Target'}],
+        })
+      }, {scope: ChangeScope.BlockDefault})
+      await create({id: 'ordinary', references: [{id: 'target', alias: 'Target'}]})
+    }
+
+    const setFlip = (state: string) =>
+      env.h.db.execute(
+        `INSERT OR REPLACE INTO workspaces
+           (id, name, owner_user_id, create_time, update_time, encryption_mode, wk_canary, properties_migration)
+         VALUES (?, 'test ws', 'user-1', 1, 1, 'none', NULL, ?)`,
+        [WS, state],
+      )
+
+    it('drops a hidden value-row source in a flipped workspace', async () => {
+      await seedDefinitionAndFieldRow()
+      await setFlip('children')
+
+      const out = await env.repo.query[GROUPED_BACKLINKS_FOR_BLOCK_QUERY]({
+        workspaceId: WS,
+        id: 'target',
+      }).load()
+
+      expect(sorted(out.unfilteredSourceIds)).toEqual(['ordinary'])
+    })
+
+    it('is dormant in an un-flipped workspace', async () => {
+      await seedDefinitionAndFieldRow()
+
+      const out = await env.repo.query[GROUPED_BACKLINKS_FOR_BLOCK_QUERY]({
+        workspaceId: WS,
+        id: 'target',
+      }).load()
+
+      expect(sorted(out.unfilteredSourceIds)).toEqual(['ordinary', 'value'])
     })
   })
 })

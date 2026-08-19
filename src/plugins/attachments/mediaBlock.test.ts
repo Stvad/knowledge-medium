@@ -1,0 +1,120 @@
+import { describe, expect, it } from 'vitest'
+import {
+  GENERIC_MIME,
+  MEDIA_TYPE,
+  MEDIA_TYPE_CONTRIBUTION,
+  isAudioMime,
+  isImageMime,
+  isPdfMime,
+  mediaHashProp,
+  resolveCaptureMime,
+  sniffImageMime,
+} from './mediaBlock.js'
+
+const png = () => new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0])
+const jpeg = () => new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0, 0])
+
+describe('isImageMime', () => {
+  it('is true only for image/* MIME types', () => {
+    expect(isImageMime('image/png')).toBe(true)
+    expect(isImageMime('image/jpeg')).toBe(true)
+    expect(isImageMime('image/svg+xml')).toBe(true)
+  })
+
+  it('is false for non-image and malformed/absent types', () => {
+    expect(isImageMime('application/pdf')).toBe(false)
+    expect(isImageMime('text/plain')).toBe(false)
+    expect(isImageMime('image')).toBe(false) // no slash — not a real image type
+    expect(isImageMime('')).toBe(false)
+    expect(isImageMime(undefined)).toBe(false)
+  })
+
+  it('is case-insensitive (MIME types are, even if File.type is lowercased)', () => {
+    expect(isImageMime('IMAGE/PNG')).toBe(true)
+    expect(isImageMime('Image/Gif')).toBe(true)
+  })
+})
+
+describe('isAudioMime', () => {
+  it('is true only for audio/* MIME types', () => {
+    expect(isAudioMime('audio/mpeg')).toBe(true)
+    expect(isAudioMime('audio/ogg')).toBe(true)
+    expect(isAudioMime('audio/wav')).toBe(true)
+  })
+
+  it('is false for non-audio and malformed/absent types', () => {
+    expect(isAudioMime('image/png')).toBe(false)
+    expect(isAudioMime('video/mp4')).toBe(false) // sibling family, not audio
+    expect(isAudioMime('audio')).toBe(false) // no slash — not a real audio type
+    expect(isAudioMime('')).toBe(false)
+    expect(isAudioMime(undefined)).toBe(false)
+  })
+
+  it('is case-insensitive (MIME types are, even if File.type is lowercased)', () => {
+    expect(isAudioMime('AUDIO/MPEG')).toBe(true)
+    expect(isAudioMime('Audio/Ogg')).toBe(true)
+  })
+})
+
+describe('isPdfMime', () => {
+  it('is true only for application/pdf, case-insensitively', () => {
+    expect(isPdfMime('application/pdf')).toBe(true)
+    expect(isPdfMime('APPLICATION/PDF')).toBe(true)
+    expect(isPdfMime('image/png')).toBe(false)
+    expect(isPdfMime('application/x-pdf')).toBe(false) // not the registered type
+    expect(isPdfMime('')).toBe(false)
+    expect(isPdfMime(undefined)).toBe(false)
+  })
+})
+
+describe('sniffImageMime', () => {
+  it('recognizes common raster image magic, null otherwise', () => {
+    expect(sniffImageMime(png())).toBe('image/png')
+    expect(sniffImageMime(jpeg())).toBe('image/jpeg')
+    expect(sniffImageMime(new Uint8Array([0x47, 0x49, 0x46, 0x38, 0x39, 0x61]))).toBe('image/gif')
+    expect(sniffImageMime(new Uint8Array([0x42, 0x4d, 0, 0]))).toBe('image/bmp')
+    expect(sniffImageMime(new Uint8Array([0x25, 0x50, 0x44, 0x46]))).toBeNull() // %PDF
+    expect(sniffImageMime(new Uint8Array([0x89]))).toBeNull() // too short
+  })
+})
+
+describe('resolveCaptureMime', () => {
+  it('derives image MIME from bytes when File.type is missing or generic (the dedup fix)', () => {
+    // The core Codex P2 case: a typeless/octet-stream image must still store image/* so
+    // it renders inline AND every dedup'd embed of the same bytes agrees.
+    expect(resolveCaptureMime(undefined, png())).toBe('image/png')
+    expect(resolveCaptureMime('', png())).toBe('image/png')
+    expect(resolveCaptureMime(GENERIC_MIME, png())).toBe('image/png')
+  })
+
+  it('the bytes WIN over a mislabeled declared type for a recognizable image', () => {
+    expect(resolveCaptureMime('application/pdf', jpeg())).toBe('image/jpeg')
+  })
+
+  it('sniffs %PDF- magic so a typeless / generic / mislabeled PDF still stores application/pdf', () => {
+    // A dropped/pasted PDF often arrives with an empty or octet-stream File.type; without the
+    // sniff it would store a generic MIME and never reach the inline PDF viewer (isPdfMime).
+    const pdf = new Uint8Array([0x25, 0x50, 0x44, 0x46, 0x2d, 0x31, 0x2e, 0x34]) // %PDF-1.4
+    expect(resolveCaptureMime(undefined, pdf)).toBe('application/pdf')
+    expect(resolveCaptureMime('', pdf)).toBe('application/pdf')
+    expect(resolveCaptureMime(GENERIC_MIME, pdf)).toBe('application/pdf')
+    expect(resolveCaptureMime('text/plain', pdf)).toBe('application/pdf') // bytes win over a mislabel
+  })
+
+  it('trusts a specific declared type when the bytes are neither image nor PDF, else generic', () => {
+    const zip = new Uint8Array([0x50, 0x4b, 0x03, 0x04]) // "PK.." (zip) — not sniffed
+    expect(resolveCaptureMime('application/zip', zip)).toBe('application/zip')
+    expect(resolveCaptureMime(undefined, zip)).toBe(GENERIC_MIME)
+    // A bare `%PDF` without the version dash is not the full signature → not sniffed.
+    expect(resolveCaptureMime(undefined, new Uint8Array([0x25, 0x50, 0x44, 0x46]))).toBe(GENERIC_MIME)
+  })
+})
+
+describe('media type contribution', () => {
+  it('lifts the render-critical hash field onto the media type (so addType materialises it)', () => {
+    // The resolver can't address bytes without media:hash, so it must be a
+    // property of the type — not merely set ad-hoc by capture.
+    expect(MEDIA_TYPE_CONTRIBUTION.id).toBe(MEDIA_TYPE)
+    expect(MEDIA_TYPE_CONTRIBUTION.properties).toContain(mediaHashProp)
+  })
+})

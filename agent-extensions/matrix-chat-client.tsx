@@ -1,15 +1,37 @@
+import { actionsFacet, appEffectsFacet, appMountsFacet } from '@/extensions/core.js'
+import { ActionContextTypes } from '@/shortcuts/types.js'
 import {
-  actionsFacet, ActionContextTypes, appEffectsFacet, appMountsFacet,
-  ChangeScope, codecs, defineBlockType, defineProperty, definePropertyEditorOverride,
-  getPluginPrefsBlock, pluginBlockId, propertyEditorOverridesFacet, propertySchemasFacet,
-  showError, showInfo, showSuccess, showPropertiesProp, typesFacet, useRepo,
+  blockContentDecoratorsFacet,
+  type BlockContentDecorator,
+  type BlockContentDecoratorContribution,
+} from '@/extensions/blockInteraction.js'
+import {
+  diagnosticsFacet,
+  type DiagnosticSnapshot,
+  type DiagnosticSourceContribution,
+} from '@/plugins/diagnostics/facet.js'
+import {
+  ChangeScope, seedType, seedProperty, definePropertyEditorOverride,
   type PropertyEditorProps,
-} from '@/extensions/api.js'
+} from '@/data/api/index.js'
+import { extensionPropertySeedKey, extensionTypeSeedKey } from '@/extensions/dynamicExtensionSeeds.js'
+import { getPluginPrefsBlock } from '@/data/stateBlocks.js'
+import { pluginBlockId } from '@/extensions/pluginIds.js'
+import { propertyEditorOverridesFacet, definitionSeedsFacet, typeSeedsFacet } from '@/data/facets.js'
+import { showError, showInfo, showSuccess } from '@/utils/toast.js'
+import { useRepo } from '@/context/repo.js'
+import { useHandle } from '@/hooks/block.js'
+import type { Block } from '@/data/block.js'
+import type { BlockRenderer } from '@/types.js'
 import { keyAtEnd, keysBetween } from '@/data/orderKey.js'
 import { createOrRestoreTargetBlock } from '@/data/targets.js'
-import { addBlockTypeToProperties } from '@/data/properties.js'
+import { addBlockTypeToProperties, showPropertiesProp } from '@/data/properties.js'
 import { dailyNoteBlockId, getOrCreateDailyNote, todayIso } from '@/plugins/daily-notes/index.js'
-import { computePromotedFromChildren } from '@/plugins/roam-import/plan.js'
+import {
+  computePromotedFromChildren,
+  ensurePromotedPropertySchemas,
+  isRegistrablePropertyName,
+} from '@/plugins/roam-import/plan.js'
 import { navigate } from '@/utils/navigation.js'
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
@@ -17,7 +39,7 @@ import {
 import { Button } from '@/components/ui/button.js'
 import { Input } from '@/components/ui/input.js'
 import { Label } from '@/components/ui/label.js'
-import { useEffect, useState, useSyncExternalStore } from 'react'
+import { useEffect, useState, useSyncExternalStore, type CSSProperties } from 'react'
 import * as matrixSdk from 'https://esm.sh/matrix-js-sdk@38.0.0?bundle'
 
 // ---------------------------------------------------------------------------
@@ -74,67 +96,97 @@ const RESTART_EVENT = 'matrix:ingest:restart'
 // attributes promoted out of message *content* (which keep the `matrix:*`
 // namespace — see matrixPromotionOptions below).
 
-const homeserverProp = defineProperty<string>('matrix:homeserver', {
-  codec: codecs.string,
+const homeserverProp = seedProperty({
+  seedKey: extensionPropertySeedKey('homeserver'),
+  revision: 1,
+  name: 'matrix:homeserver',
+  preset: 'string',
   defaultValue: 'https://matrix.org',
   changeScope: ChangeScope.BlockDefault,
 })
-const roomIdProp = defineProperty<string>('matrix:roomId', {
-  codec: codecs.string,
+const roomIdProp = seedProperty({
+  seedKey: extensionPropertySeedKey('room-id'),
+  revision: 1,
+  name: 'matrix:roomId',
+  preset: 'string',
   defaultValue: '',
   changeScope: ChangeScope.BlockDefault,
 })
-const autoStartProp = defineProperty<boolean>('matrix:autoStart', {
-  codec: codecs.boolean,
+const autoStartProp = seedProperty({
+  seedKey: extensionPropertySeedKey('auto-start'),
+  revision: 1,
+  name: 'matrix:autoStart',
+  preset: 'boolean',
   defaultValue: true,
   changeScope: ChangeScope.BlockDefault,
 })
-// UI hints mirrored onto the prefs block so the settings panel can render
-// connection/status without subscribing to localStorage or the poll loop.
-const connectedHintProp = defineProperty<boolean>('matrix:connected', {
-  codec: codecs.boolean,
+// UI hint mirrored onto the prefs block so the settings panel can render
+// connectivity without subscribing to localStorage or the poll loop.
+const connectedHintProp = seedProperty({
+  seedKey: extensionPropertySeedKey('connected'),
+  revision: 1,
+  name: 'matrix:connected',
+  preset: 'boolean',
   defaultValue: false,
-  changeScope: ChangeScope.UserPrefs,
-})
-const statusProp = defineProperty<string | undefined>('matrix:status', {
-  codec: codecs.optionalString,
-  defaultValue: undefined,
   changeScope: ChangeScope.UserPrefs,
 })
 
 // Per-message event metadata. Reserved `matrix-event:*` namespace.
-const eventIdProp = defineProperty<string>('matrix-event:id', {
-  codec: codecs.string,
+const eventIdProp = seedProperty({
+  seedKey: extensionPropertySeedKey('event-id'),
+  revision: 1,
+  name: 'matrix-event:id',
+  preset: 'string',
   defaultValue: '',
   changeScope: ChangeScope.BlockDefault,
 })
-const eventRoomProp = defineProperty<string>('matrix-event:room', {
-  codec: codecs.string,
+const eventRoomProp = seedProperty({
+  seedKey: extensionPropertySeedKey('event-room'),
+  revision: 1,
+  name: 'matrix-event:room',
+  preset: 'string',
   defaultValue: '',
   changeScope: ChangeScope.BlockDefault,
 })
-const eventUrlProp = defineProperty<string | undefined>('matrix-event:url', {
-  codec: codecs.optionalString,
+const eventUrlProp = seedProperty({
+  seedKey: extensionPropertySeedKey('event-url'),
+  revision: 1,
+  name: 'matrix-event:url',
+  preset: 'optional-string',
   defaultValue: undefined,
   changeScope: ChangeScope.BlockDefault,
 })
-const eventAuthorProp = defineProperty<string | undefined>('matrix-event:author', {
-  codec: codecs.optionalString,
+const eventAuthorProp = seedProperty({
+  seedKey: extensionPropertySeedKey('event-author'),
+  revision: 1,
+  name: 'matrix-event:author',
+  preset: 'optional-string',
   defaultValue: undefined,
   changeScope: ChangeScope.BlockDefault,
 })
-const eventTimestampProp = defineProperty<number | undefined>('matrix-event:timestamp', {
-  codec: codecs.optionalNumber,
+const eventTimestampProp = seedProperty({
+  seedKey: extensionPropertySeedKey('event-timestamp'),
+  revision: 1,
+  name: 'matrix-event:timestamp',
+  preset: 'optional-number',
   defaultValue: undefined,
   changeScope: ChangeScope.BlockDefault,
 })
 
-const matrixChatPrefsType = defineBlockType({
+const matrixChatPrefsType = seedType({
+  seedKey: extensionTypeSeedKey('prefs'),
+  revision: 1,
   id: 'matrix-chat-prefs',
   label: 'Matrix',
-  properties: [homeserverProp, roomIdProp, autoStartProp, connectedHintProp, statusProp],
+  // Prefs container is plumbing for the # dropdown (typing #Matrix
+  // must offer creating the user's own type, not tag with this);
+  // the chip stays informative on the container block itself.
+  hideFromCompletion: true,
+  properties: [homeserverProp, roomIdProp, autoStartProp, connectedHintProp],
 })
-const matrixMessageType = defineBlockType({
+const matrixMessageType = seedType({
+  seedKey: extensionTypeSeedKey('message'),
+  revision: 1,
   id: MATRIX_MESSAGE_TYPE,
   label: 'Matrix message',
   description: 'A message ingested from a Matrix room.',
@@ -166,6 +218,15 @@ interface MatrixConfig {
   accessToken: string
   autoStart: boolean
 }
+interface MatrixConfigCandidate {
+  baseUrl: string
+  roomId: string
+  accessToken: string | null
+  autoStart: boolean
+}
+type MatrixConfigState =
+  | {kind: 'no-workspace'}
+  | {kind: 'candidate', config: MatrixConfigCandidate}
 
 const prefsBlock = (repo: any) => {
   const workspaceId = repo.activeWorkspaceId
@@ -173,23 +234,78 @@ const prefsBlock = (repo: any) => {
   return getPluginPrefsBlock(repo, workspaceId, repo.user, matrixChatPrefsType)
 }
 
-const loadConfig = async (repo: any): Promise<MatrixConfig | null> => {
+const loadConfig = async (repo: any): Promise<MatrixConfigState> => {
   const prefs = await prefsBlock(repo)
-  if (!prefs) return null
+  if (!prefs) return {kind: 'no-workspace'}
   const baseUrl = normalizeBaseUrl(prefs.get(homeserverProp))
   const roomId = prefs.get(roomIdProp)
   const accessToken = loadToken()
-  if (!baseUrl || !roomId || !accessToken) return null
-  return {baseUrl, roomId, accessToken, autoStart: prefs.get(autoStartProp)}
+  return {kind: 'candidate', config: {baseUrl, roomId, accessToken, autoStart: prefs.get(autoStartProp)}}
 }
 
-const setStatus = async (repo: any, status: string): Promise<void> => {
-  try {
-    const prefs = await prefsBlock(repo)
-    if (prefs && prefs.peekProperty(statusProp) !== status) await prefs.set(statusProp, status)
-  } catch {
-    // status is a best-effort UI hint — never let it break the poll loop
-  }
+const MATRIX_DIAGNOSTIC_ID = 'matrix-chat-client'
+const MATRIX_CONFIGURE_ACTION_ID = 'matrix.configure'
+const matrixDiagnosticListeners = new Set<() => void>()
+let matrixDiagnosticSnapshot: DiagnosticSnapshot | null = null
+
+const matrixDiagnosticSame = (
+  left: DiagnosticSnapshot | null,
+  right: DiagnosticSnapshot | null,
+): boolean => {
+  if (left === right) return true
+  if (!left || !right) return false
+  return (
+    left.severity === right.severity &&
+    left.summary === right.summary &&
+    left.detail === right.detail &&
+    left.actionId === right.actionId &&
+    left.actionLabel === right.actionLabel &&
+    left.nudge === right.nudge
+  )
+}
+
+const setMatrixDiagnostic = (next: DiagnosticSnapshot | null): void => {
+  if (matrixDiagnosticSame(matrixDiagnosticSnapshot, next)) return
+  matrixDiagnosticSnapshot = next
+  matrixDiagnosticListeners.forEach(notify => notify())
+}
+
+const clearMatrixDiagnostic = (): void => {
+  setMatrixDiagnostic(null)
+}
+
+const matrixWarningDiagnostic = (summary: string, detail: string): DiagnosticSnapshot => ({
+  severity: 'warning',
+  summary,
+  detail,
+  actionId: MATRIX_CONFIGURE_ACTION_ID,
+  actionLabel: 'Open settings',
+  nudge: true,
+})
+
+const unconfiguredMatrixDiagnostic = matrixWarningDiagnostic(
+  'Matrix ingest is not configured',
+  'Open Matrix settings and configure homeserver and room, then save a token.',
+)
+const missingTokenMatrixDiagnostic = matrixWarningDiagnostic(
+  'Matrix token is missing',
+  'Save an access token in Matrix settings so this device can ingest messages.',
+)
+const retryErrorMatrixDiagnostic = (message: string): DiagnosticSnapshot =>
+  matrixWarningDiagnostic('Matrix ingest is retrying', message)
+const hardErrorMatrixDiagnostic = (message: string): DiagnosticSnapshot =>
+  matrixWarningDiagnostic('Matrix ingest error', message)
+
+const matrixDiagnosticSource: DiagnosticSourceContribution = {
+  id: MATRIX_DIAGNOSTIC_ID,
+  label: 'Matrix',
+  subscribe: (notify) => {
+    matrixDiagnosticListeners.add(notify)
+    return () => {
+      matrixDiagnosticListeners.delete(notify)
+    }
+  },
+  getSnapshot: () => matrixDiagnosticSnapshot,
 }
 
 // ---------------------------------------------------------------------------
@@ -404,6 +520,13 @@ const matrixEventUrl = (roomId: string, eventId: string) => `https://matrix.to/#
 const matrixPromotionOptions = {
   namespacePrefix: 'matrix',
   transformKey: (key: string) => key.toLowerCase(),
+  // Ingest promotes SUBTRACTIVELY (the bullet is dropped once hoisted), so a
+  // key that can never get a definition must be declined HERE — before
+  // bubbling — or the text is lost outright: the bullet is gone and the
+  // property would have to be dropped for lacking a definition. Declining
+  // leaves the bullet exactly as the user wrote it. `[[Page]]:: value` is the
+  // form that hits this (the name would contain `]]`).
+  acceptKey: isRegistrablePropertyName,
 }
 
 const propertyValues = (value: unknown): unknown[] => Array.isArray(value) ? value : [value]
@@ -478,6 +601,12 @@ const nestTopLevelBlocksUnderFirst = (blocks: BlockDef[]): BlockDef[] => {
     children: [...(first.children ?? []), ...rest],
   }]
 }
+
+/** Every node in a built tree, so promoted keys at any depth get a
+ *  definition. `ensurePromotedPropertySchemas` normalizes in place, so these
+ *  must be the SAME objects that are about to be written, not copies. */
+const flattenBlockDefs = (blocks: BlockDef[]): BlockDef[] =>
+  blocks.flatMap(block => [block, ...flattenBlockDefs(block.children ?? [])])
 
 const createBlocksFromEvent = (event: any, matrixClient: any): BlockDef[] => {
   const text = getMessageText(event, matrixClient)
@@ -567,9 +696,16 @@ const ensureMatrixTagBlock = async (
   return id
 }
 
-const appendMatrixMessage = async (repo: any, config: MatrixConfig, event: any, matrixClient: any): Promise<void> => {
+/** `'deferred'` means nothing was written and the caller MUST NOT advance the
+ *  sync cursor — Matrix only offers an event once, so treating a deferral as
+ *  handled loses the message permanently. `'done'` covers both a successful
+ *  ingest and a deliberate skip (no event id, already ingested). */
+type IngestOutcome = 'done' | 'deferred'
+
+const appendMatrixMessage = async (repo: any, config: MatrixConfig, event: any, matrixClient: any): Promise<IngestOutcome> => {
   const eventId = typeof event.event_id === 'string' ? event.event_id : null
-  if (!eventId) return
+  // Unprocessable forever, not deferrable — must not hold the cursor.
+  if (!eventId) return 'done'
 
   const workspaceId = repo.activeWorkspaceId
   if (!workspaceId) throw new Error('Matrix message ingest requires an active workspace')
@@ -577,6 +713,23 @@ const appendMatrixMessage = async (repo: any, config: MatrixConfig, event: any, 
   const iso = todayIso(new Date(eventTimestamp(event)))
   await getOrCreateDailyNote(repo, workspaceId, iso)
   const dailyId = dailyNoteBlockId(workspaceId, iso)
+
+  // Promotion INVENTS property names from message text (`key:: value`), so no
+  // code seed can declare them. Mint their definitions BEFORE the write:
+  // `addSchema` does its own writes and cannot run inside the tx below, and a
+  // key that lands definition-less is skipped by property migration forever
+  // (#501). Built out here so the same tree is registered and then written.
+  const messageTree = createBlocksFromEvent(event, matrixClient)
+  // `addSchema` targets whatever workspace is ACTIVE, while the write below
+  // targets the `workspaceId` captured above. A switch during the awaits
+  // already behind us would register these names into the new workspace and
+  // write the message into the old one — polluting one and leaving the other
+  // definition-less. Ingest is idempotent (deterministic message ids), so
+  // bailing here just defers this event to the next poll.
+  if (repo.activeWorkspaceId !== workspaceId) return 'deferred'
+  const promotionNotes = await ensurePromotedPropertySchemas(repo, flattenBlockDefs(messageTree))
+  for (const note of promotionNotes) console.warn('[matrix] promoted property:', note)
+  if (repo.activeWorkspaceId !== workspaceId) return 'deferred'
 
   await repo.tx(async (tx: any) => {
     const tagBlockId = await ensureMatrixTagBlock(tx, workspaceId, dailyId, iso)
@@ -600,7 +753,7 @@ const appendMatrixMessage = async (repo: any, config: MatrixConfig, event: any, 
       tx,
       workspaceId,
       tagBlockId,
-      createBlocksFromEvent(event, matrixClient),
+      messageTree,
       eventId,
       {
         [eventIdProp.name]: eventId,
@@ -611,6 +764,7 @@ const appendMatrixMessage = async (repo: any, config: MatrixConfig, event: any, 
       },
     )
   }, {scope: ChangeScope.BlockDefault, description: 'matrix message ingest'})
+  return 'done'
 }
 
 // ---------------------------------------------------------------------------
@@ -710,11 +864,11 @@ const migrateLegacyConfig = async (repo: any): Promise<void> => {
 // poll loop
 
 // Transient failures clear on the next poll, so they should stay out of the
-// user's face — log them, reflect them in the (quiet) status hint, but don't
-// toast. This covers network blips (fetch rejects with a TypeError; matrix-js-
-// sdk may rewrap it as a ConnectionError) and server-side conditions that the
-// long-poll naturally rides out (429 rate-limit, 5xx). Actionable errors — a
-// bad/expired token, a malformed request — fall through to the loud path.
+// user's face — log them, reflect them in diagnostics, but don't toast.
+// This covers network blips (fetch rejects with a TypeError; matrix-js-sdk may
+// rewrap it as a ConnectionError) and server-side conditions that the
+// long-poll naturally rides out (429 rate-limit, 5xx). Actionable errors —
+// a bad/expired token, a malformed request — fall through to the loud path.
 const RETRYABLE_MESSAGE_RE = /failed to fetch|fetch failed|network ?error|load failed/i
 
 const isRetryableError = (error: unknown): boolean => {
@@ -730,23 +884,37 @@ const isRetryableError = (error: unknown): boolean => {
 const pollLoop = async (repo: any, config: MatrixConfig, signal: AbortSignal, matrixClient: any): Promise<void> => {
   let nextBatch = loadNextBatch(config)
   // `toasted` gates the one-per-streak toast (loud, actionable errors only);
-  // `degraded` tracks whether the status hint is currently non-running so a
-  // recovered poll clears it — regardless of which kind of error set it.
+  // `degraded` tracks whether a warning is currently shown so recovery clears it.
   let toasted = false
   let degraded = false
-  await setStatus(repo, 'running')
+  clearMatrixDiagnostic()
 
   while (!signal.aborted) {
     try {
       const syncBody = await fetchMatrixSync(config, nextBatch, signal, matrixClient)
       const events = nextBatch ? roomEventsFromSync(syncBody, config.roomId) : []
 
+      // A deferral must STOP the batch and leave the cursor where it is.
+      // `next_batch` is saved below for the whole batch, and Matrix offers an
+      // event exactly once — so advancing past a message we chose not to
+      // write loses it permanently rather than retrying it.
+      let deferred = false
       for (const event of events) {
         if (event?.type !== 'm.room.message') continue
-        await appendMatrixMessage(repo, config, event, matrixClient)
+        if (await appendMatrixMessage(repo, config, event, matrixClient) === 'deferred') {
+          deferred = true
+          break
+        }
       }
 
       const newBatch = syncBody?.next_batch
+      if (deferred) {
+        // Back off rather than re-fetching the same batch immediately — the
+        // condition that deferred us (a workspace switch) is user-paced.
+        console.warn('[matrix-messages] deferring batch; sync cursor held')
+        await sleep(POLL_ERROR_DELAY_MS, signal).catch(() => undefined)
+        continue
+      }
       if (typeof newBatch === 'string') {
         nextBatch = newBatch
         saveNextBatch(config, newBatch)
@@ -754,7 +922,7 @@ const pollLoop = async (repo: any, config: MatrixConfig, signal: AbortSignal, ma
       if (degraded) {
         degraded = false
         toasted = false
-        await setStatus(repo, 'running')
+        clearMatrixDiagnostic()
       }
     } catch (error) {
       if (signal.aborted) return
@@ -762,10 +930,10 @@ const pollLoop = async (repo: any, config: MatrixConfig, signal: AbortSignal, ma
       degraded = true
       if (isRetryableError(error)) {
         console.warn('[matrix-messages] transient poll error (will retry):', message)
-        await setStatus(repo, `retrying: ${message}`)
+        setMatrixDiagnostic(retryErrorMatrixDiagnostic(message))
       } else {
         console.error('[matrix-messages]', error)
-        await setStatus(repo, `error: ${message}`)
+        setMatrixDiagnostic(hardErrorMatrixDiagnostic(message))
         // One toast per failure streak — a long-poll can fail every few
         // seconds and we don't want to bury the user in toasts.
         if (!toasted) {
@@ -794,20 +962,37 @@ const matrixIngestEffect = {
       currentAbort = null
       if (cancelled) return
 
-      const config = await loadConfig(repo).catch(() => null)
-      if (!config) {
-        await setStatus(repo, 'unconfigured')
+      const configState = await loadConfig(repo).catch(() => ({kind: 'no-workspace'} as const))
+      if (configState.kind === 'no-workspace') {
+        clearMatrixDiagnostic()
         return
       }
+
+      const config = configState.config
       if (!config.autoStart) {
-        await setStatus(repo, 'stopped')
+        clearMatrixDiagnostic()
         return
+      }
+
+      if (!config.baseUrl || !config.roomId) {
+        setMatrixDiagnostic(unconfiguredMatrixDiagnostic)
+        return
+      }
+
+      if (!config.accessToken) {
+        setMatrixDiagnostic(missingTokenMatrixDiagnostic)
+        return
+      }
+
+      const activeConfig: MatrixConfig = {
+        ...config,
+        accessToken: config.accessToken,
       }
 
       const abort = new AbortController()
       currentAbort = abort
-      const matrixClient = createMatrixClient(config)
-      void pollLoop(repo, config, abort.signal, matrixClient).catch(error => {
+      const matrixClient = createMatrixClient(activeConfig)
+      void pollLoop(repo, activeConfig, abort.signal, matrixClient).catch(error => {
         if (!abort.signal.aborted) console.error('[matrix-messages]', error)
       })
     }
@@ -989,30 +1174,17 @@ const ConnectedEditor = ({value, onChange}: PropertyEditorProps<boolean>) => {
   )
 }
 
-const StatusEditor = ({value}: PropertyEditorProps<string | undefined>) => (
-  <span style={{color: 'var(--muted-foreground)'}}>{value ?? 'idle'}</span>
-)
-
-const connectedEditor = definePropertyEditorOverride<boolean>({
-  name: connectedHintProp.name,
+const connectedEditor = definePropertyEditorOverride(connectedHintProp, {
   label: 'Matrix',
   Editor: ConnectedEditor,
 })
-const statusEditor = definePropertyEditorOverride<string | undefined>({
-  name: statusProp.name,
-  label: 'Status',
-  Editor: StatusEditor,
-})
-const homeserverEditor = definePropertyEditorOverride<string>({
-  name: homeserverProp.name,
+const homeserverEditor = definePropertyEditorOverride(homeserverProp, {
   label: 'Homeserver URL',
 })
-const roomIdEditor = definePropertyEditorOverride<string>({
-  name: roomIdProp.name,
+const roomIdEditor = definePropertyEditorOverride(roomIdProp, {
   label: 'Room ID',
 })
-const autoStartEditor = definePropertyEditorOverride<boolean>({
-  name: autoStartProp.name,
+const autoStartEditor = definePropertyEditorOverride(autoStartProp, {
   label: 'Auto-start ingest',
 })
 
@@ -1075,31 +1247,149 @@ const resetPositionAction = {
 }
 
 // ---------------------------------------------------------------------------
+// audio-url content decorator — a message carrying a `matrix:audio-url`
+// property (promoted from an `audio-url::` attribute in the message body) gets
+// a small audio glyph pinned to its top-right corner that opens the linked
+// audio in a new tab. A decorator (not a renderer override) so it composes with
+// whatever content renderer the block already uses — same idiom as the geo /
+// character-counter / readwise decorators. Gated on the stable `matrix-message`
+// type membership (resolver context doesn't track property changes); the icon
+// itself is shown/hidden inside the component from a reactive `useHandle` read,
+// so it appears the moment the property lands and vanishes if it's cleared.
+
+const AUDIO_URL_KEY = 'matrix:audio-url'
+
+// The property is promoted from message *content* (external, untrusted), so
+// only honour http(s) URLs before placing one in an <a href> — never let a
+// `javascript:`/`data:` value through. A multi-valued promotion arrives as an
+// array; take the first usable entry.
+const firstHttpUrl = (value: unknown): string | null => {
+  const candidates = Array.isArray(value) ? value : [value]
+  for (const candidate of candidates) {
+    if (typeof candidate !== 'string') continue
+    const trimmed = candidate.trim()
+    if (/^https?:\/\//i.test(trimmed)) return trimmed
+  }
+  return null
+}
+
+const matrixAudioStyles = {
+  wrapper: {position: 'relative', width: '100%'},
+  link: {
+    position: 'absolute',
+    top: '1px',
+    right: '1px',
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: '22px',
+    height: '22px',
+    borderRadius: '4px',
+    color: 'var(--muted-foreground)',
+    background: 'var(--background)',
+    cursor: 'pointer',
+    textDecoration: 'none',
+  },
+} satisfies Record<string, CSSProperties>
+
+// lucide `audio-lines` glyph, inlined to avoid a runtime dependency import.
+const AudioGlyph = () => (
+  <svg
+    xmlns='http://www.w3.org/2000/svg'
+    width='16'
+    height='16'
+    viewBox='0 0 24 24'
+    fill='none'
+    stroke='currentColor'
+    strokeWidth='2'
+    strokeLinecap='round'
+    strokeLinejoin='round'
+    aria-hidden='true'
+  >
+    <path d='M2 10v3'/>
+    <path d='M6 6v11'/>
+    <path d='M10 3v18'/>
+    <path d='M14 8v7'/>
+    <path d='M18 5v13'/>
+    <path d='M22 10v3'/>
+  </svg>
+)
+
+const MatrixAudioDecorator = ({block, Inner}: {block: Block; Inner: BlockRenderer}) => {
+  const audioUrl = useHandle(block, {
+    selector: data => firstHttpUrl(data?.properties?.[AUDIO_URL_KEY]),
+  })
+  return (
+    <div style={matrixAudioStyles.wrapper}>
+      <Inner block={block}/>
+      {audioUrl && (
+        <a
+          href={audioUrl}
+          target='_blank'
+          rel='noreferrer'
+          title='Open audio'
+          aria-label='Open audio'
+          style={matrixAudioStyles.link}
+          onClick={event => event.stopPropagation()}
+          onMouseDown={event => event.stopPropagation()}
+        >
+          <AudioGlyph/>
+        </a>
+      )}
+    </div>
+  )
+}
+
+// Cached per inner renderer so React keeps a stable component identity and
+// never unmounts the inner subtree on a parent re-render (same invariant the
+// other decorators rely on).
+const matrixAudioDecoratorCache = new WeakMap<BlockRenderer, BlockRenderer>()
+
+const decorateMatrixAudio: BlockContentDecorator = inner => {
+  const existing = matrixAudioDecoratorCache.get(inner)
+  if (existing) return existing
+  const Decorated: BlockRenderer = ({block}) => (
+    <MatrixAudioDecorator block={block} Inner={inner}/>
+  )
+  Decorated.displayName = 'WithMatrixAudio'
+  matrixAudioDecoratorCache.set(inner, Decorated)
+  return Decorated
+}
+
+const matrixAudioContentDecorator: BlockContentDecoratorContribution = ctx => {
+  if (!ctx.types.includes(MATRIX_MESSAGE_TYPE)) return null
+  if (ctx.blockContext?.isBreadcrumb) return null
+  return decorateMatrixAudio
+}
+
+// ---------------------------------------------------------------------------
 // wiring
 
 export default [
-  typesFacet.of(matrixChatPrefsType, {source}),
-  typesFacet.of(matrixMessageType, {source}),
+  typeSeedsFacet.of(matrixChatPrefsType, {source}),
+  typeSeedsFacet.of(matrixMessageType, {source}),
 
-  propertySchemasFacet.of(homeserverProp, {source}),
-  propertySchemasFacet.of(roomIdProp, {source}),
-  propertySchemasFacet.of(autoStartProp, {source}),
-  propertySchemasFacet.of(connectedHintProp, {source}),
-  propertySchemasFacet.of(statusProp, {source}),
-  propertySchemasFacet.of(eventIdProp, {source}),
-  propertySchemasFacet.of(eventRoomProp, {source}),
-  propertySchemasFacet.of(eventUrlProp, {source}),
-  propertySchemasFacet.of(eventAuthorProp, {source}),
-  propertySchemasFacet.of(eventTimestampProp, {source}),
+  definitionSeedsFacet.of(homeserverProp, {source}),
+  definitionSeedsFacet.of(roomIdProp, {source}),
+  definitionSeedsFacet.of(autoStartProp, {source}),
+  definitionSeedsFacet.of(connectedHintProp, {source}),
+  definitionSeedsFacet.of(eventIdProp, {source}),
+  definitionSeedsFacet.of(eventRoomProp, {source}),
+  definitionSeedsFacet.of(eventUrlProp, {source}),
+  definitionSeedsFacet.of(eventAuthorProp, {source}),
+  definitionSeedsFacet.of(eventTimestampProp, {source}),
 
   propertyEditorOverridesFacet.of(connectedEditor, {source}),
-  propertyEditorOverridesFacet.of(statusEditor, {source}),
   propertyEditorOverridesFacet.of(homeserverEditor, {source}),
   propertyEditorOverridesFacet.of(roomIdEditor, {source}),
   propertyEditorOverridesFacet.of(autoStartEditor, {source}),
 
+  diagnosticsFacet.of(matrixDiagnosticSource, {source}),
+
   appMountsFacet.of({id: 'matrix.setup-dialog', component: MatrixSetupDialog}, {source}),
   appEffectsFacet.of(matrixIngestEffect, {source}),
+
+  blockContentDecoratorsFacet.of(matrixAudioContentDecorator, {source}),
 
   actionsFacet.of(openSettingsAction, {source}),
   actionsFacet.of(connectAction, {source}),

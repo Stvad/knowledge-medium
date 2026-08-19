@@ -124,7 +124,7 @@ Correctly **substrate** (leave closed unless concrete demand): repo/data-backend
 - **Algebra:** same `navigationFacet` with a "global" intent tag.
 
 ### N6 — URL serialization format *(MED)*
-- **Where:** `src/utils/routing.ts` (`parseLayout`/`buildLayout`, the `#ws/a/(s:x,b)/c` grammar).
+- **Where:** `src/utils/routing.ts` (`parseLayout`/`buildLayout`, the `#ws/a/(s:x,b)/c` grammar). *[Grammar superseded 2026-07: comma-stacks (`#ws/a/x,b/c`) + parens reserved for sub-layouts; `(s:` retired — design PR #338, implementation PR #367.]*
 - **Existing/planned:** `urlSerializerFacet` — doc-only (`navigation-redesign.md:349`).
 - **Algebra:** Replace (one serializer wins). Power-user/fork axis — defer.
 
@@ -223,7 +223,7 @@ Every gap here is one of the four missing algebras (veto, policy-override, order
 - **Algebra:** `validate?: (value) => true | string` on `PropertySchema`, run on the setProperty path.
 
 ### D7 — Reference retention policy *(MED)*
-- **Where:** `src/data/api/derivedData.ts:41` (`reconcileDerived`, `retain` predicate per call-site, governed by `docs/contracts/derived-data-add-only.md` rather than a registry). The Roam importer's ref rebuild is explicitly not yet routed through this chokepoint.
+- **Where:** `src/data/api/derivedData.ts:51` (`reconcileDerived`, `retain` predicate per call-site, governed by `docs/contracts/derived-data-add-only.md` rather than a registry). The Roam importer's ref rebuild now routes through this chokepoint at all three write sites (`referencesWithProjectedProperties` for the planner + page-merge paths and the `upsertImportedBlock` existing-row branch, `src/plugins/roam-import/import.ts`); the remaining gap is that the policy is a hand-rolled `retain` predicate per site rather than a registered facet.
 - **Context:** exactly the class that caused the SRS incident; codifying it as a seam beats relying on each caller reading the contract doc.
 - **Algebra:** `refRetentionPolicyFacet` keyed by property name; default add-only.
 

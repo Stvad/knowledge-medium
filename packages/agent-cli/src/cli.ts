@@ -2,7 +2,6 @@
 import {readFileSync} from 'node:fs'
 import fs from 'node:fs/promises'
 import path from 'node:path'
-import { spawn } from 'node:child_process'
 import { createInterface } from 'node:readline/promises'
 import { fileURLToPath } from 'node:url'
 import { cac } from 'cac'
@@ -10,27 +9,42 @@ import {
   bridgeLogPath,
   bridgeSecret as resolveBridgeSecret,
   bridgeUrl as resolveBridgeUrl,
+  isErrnoException,
   isLocalBridgeUrl,
   pairingUrl,
   tokenStorePath as resolveTokenStorePath,
 } from './config.js'
 import {
   type Audience,
-  type CommandResult,
-  type CommandStatusResponse,
   getCommandMeta,
   type KnownCommand,
   type KnownCommandType,
+  moveBlockCommandSchema,
   sqlModeSchema,
   type WhoamiInfo,
 } from './protocol.js'
 import {
+  createBridgeClient,
+  defaultProfileName,
+  errorMessage,
+  startBridgeInBackground,
+  listStoredProfiles as listProfilesInStore,
+  loadStoredToken as loadStoredTokenFor,
+  normalizeProfileName,
+  removeStoredToken as removeStoredTokenFor,
+  requestJson,
+  sleep,
+  writeStoredToken as writeStoredTokenFor,
+} from './client.js'
+import {
   kernelTypeDeclarationCandidates,
   renderKernelTypesInstallSummary,
 } from './kernelDts.js'
+import {renderSubtreeOutline} from './subtreeOutline.js'
+import {limitOption, workspaceAssertion} from './cliOptions.js'
+import {extensionScaffold, slugify, titleize} from './scaffold.js'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
-const serverScript = path.join(here, 'server.js')
 const kernelTypesDir = path.join(here, 'kernel-types')
 
 // Read our own version from package.json at startup so `--version`
@@ -45,37 +59,13 @@ const pkgVersion = (() => {
   }
 })()
 const bridgeUrl = resolveBridgeUrl()
-const pollIntervalMs = 100
-const defaultTimeoutMs = 30_000
 const bridgeStartTimeoutMs = 5_000
 const tokenStorePath = resolveTokenStorePath()
-const defaultProfileName = 'default'
 let selectedProfileName = defaultProfileName
 
-// Narrow a thrown `unknown` to NodeJS fs/HTTP errors so we can check
-// `.code === 'ENOENT'` etc without sprinkling `as any` everywhere.
-const isErrnoException = (error: unknown): error is NodeJS.ErrnoException =>
-  error instanceof Error && typeof (error as NodeJS.ErrnoException).code === 'string'
-
-const errorMessage = (error: unknown): string =>
-  error instanceof Error ? error.message : String(error)
-
-interface TokenRecord {
-  token: string
-  savedAt?: number
-}
-
-interface TokenStore {
-  profiles: Record<string, TokenRecord>
-}
-
-/** Subset of fetch's `RequestInit` we use. Typed narrowly so the
- *  helpers below stay free of `any`s. */
-interface RequestOptions {
-  method?: string
-  body?: string
-  headers?: Record<string, string>
-}
+/** Bridge client bound to the currently selected profile. Created per
+ *  call because `--profile` mutates `selectedProfileName` after parse. */
+const client = () => createBridgeClient({profile: selectedProfileName})
 
 /** Per-client record returned by GET /health?detail=1 — typed loose
  *  (only the fields we read for the `ping` summary). */
@@ -91,9 +81,6 @@ interface BridgeStatusResponse {
   ok?: boolean
   clients?: BridgeStatusClient[]
 }
-
-const sleep = (ms: number): Promise<void> =>
-  new Promise(resolve => setTimeout(resolve, ms))
 
 const canAutoStartBridge = (): boolean =>
   !process.env.AGENT_RUNTIME_URL && isLocalBridgeUrl(bridgeUrl)
@@ -158,68 +145,7 @@ const extensionHandle = (handle: string): {id: string} | {label: string} => {
   return isUuid ? {id: handle} : {label: handle}
 }
 
-const normalizeProfileName = (value = '') => {
-  const name = value.trim()
-  if (!name) return defaultProfileName
-  if (!/^[A-Za-z0-9_.-]+$/.test(name)) {
-    throw new Error('Profile names may only contain letters, numbers, underscores, dots, and dashes.')
-  }
-  return name
-}
-
 selectedProfileName = normalizeProfileName(process.env.AGENT_RUNTIME_PROFILE ?? '')
-
-const normalizeTokenRecord = (value: unknown): TokenRecord | null => {
-  if (!value || typeof value !== 'object') return null
-  const candidate = value as {token?: unknown, savedAt?: unknown}
-  if (typeof candidate.token !== 'string') return null
-  return {
-    token: candidate.token,
-    savedAt: typeof candidate.savedAt === 'number' ? candidate.savedAt : undefined,
-  }
-}
-
-const normalizeTokenStore = (value: unknown): TokenStore => {
-  const profiles: Record<string, TokenRecord> = {}
-
-  if (value && typeof value === 'object') {
-    const legacy = normalizeTokenRecord(value)
-    if (legacy) profiles[defaultProfileName] = legacy
-
-    const candidate = value as {profiles?: unknown}
-    if (candidate.profiles && typeof candidate.profiles === 'object') {
-      for (const [name, record] of Object.entries(candidate.profiles as Record<string, unknown>)) {
-        const profileName = normalizeProfileName(name)
-        const normalized = normalizeTokenRecord(record)
-        if (normalized) profiles[profileName] = normalized
-      }
-    }
-  }
-
-  return {profiles}
-}
-
-const loadTokenStore = async (): Promise<TokenStore> => {
-  try {
-    const raw = await fs.readFile(tokenStorePath, 'utf8')
-    return normalizeTokenStore(JSON.parse(raw))
-  } catch (error) {
-    if (isErrnoException(error) && error.code === 'ENOENT') return {profiles: {}}
-    throw error
-  }
-}
-
-const writeTokenStore = async (store: TokenStore): Promise<void> => {
-  const profiles = Object.fromEntries(
-    Object.entries(store.profiles).sort(([a], [b]) => a.localeCompare(b)),
-  )
-  await fs.mkdir(path.dirname(tokenStorePath), {recursive: true})
-  await fs.writeFile(
-    tokenStorePath,
-    `${JSON.stringify({profiles}, null, 2)}\n`,
-    {mode: 0o600},
-  )
-}
 
 const assertBundledKernelTypes = async (): Promise<void> => {
   try {
@@ -305,73 +231,13 @@ const readKernelTypeModuleDeclaration = async (moduleSpec: string): Promise<stri
   )
 }
 
-const loadStoredToken = async (profileName = selectedProfileName): Promise<string | null> => {
-  const store = await loadTokenStore()
-  return store.profiles[profileName]?.token ?? null
-}
-
-const writeStoredToken = async (token: string, profileName = selectedProfileName): Promise<void> => {
-  const store = await loadTokenStore()
-  store.profiles[profileName] = {token, savedAt: Date.now()}
-  await writeTokenStore(store)
-}
-
-const removeStoredToken = async (profileName = selectedProfileName) => {
-  const store = await loadTokenStore()
-  if (!store.profiles[profileName]) return false
-  delete store.profiles[profileName]
-  if (Object.keys(store.profiles).length > 0) {
-    await writeTokenStore(store)
-    return true
-  }
-
-  try {
-    await fs.unlink(tokenStorePath)
-    return true
-  } catch (error) {
-    if (!isErrnoException(error) || error.code !== 'ENOENT') throw error
-    return false
-  }
-}
-
-const listStoredProfiles = async () => {
-  const store = await loadTokenStore()
-  return Object.entries(store.profiles)
-    .map(([name, record]) => ({
-      name,
-      savedAt: record.savedAt ?? null,
-      selected: name === selectedProfileName,
-    }))
-    .sort((a, b) => a.name.localeCompare(b.name))
-}
-
-const resolveToken = async () => {
-  const fromEnv = process.env.AGENT_RUNTIME_TOKEN?.trim()
-  if (fromEnv) return fromEnv
-  return loadStoredToken()
-}
-
-const requestJson = async <T = unknown>(
-  url: string,
-  options: RequestOptions = {},
-): Promise<T> => {
-  const response = await fetch(url, {
-    ...options,
-    headers: {
-      ...(options.body ? {'content-type': 'application/json'} : {}),
-      ...(options.headers ?? {}),
-    },
-  })
-
-  const text = await response.text()
-  const body = text ? JSON.parse(text) : null
-
-  if (!response.ok) {
-    throw new Error(body?.error ?? `Request failed with status ${response.status}`)
-  }
-
-  return body as T
-}
+// Thin delegates binding the store helpers from client.ts to the
+// currently selected `--profile`.
+const loadStoredToken = (profileName = selectedProfileName) => loadStoredTokenFor(profileName)
+const writeStoredToken = (token: string, profileName = selectedProfileName) => writeStoredTokenFor(token, profileName)
+const removeStoredToken = (profileName = selectedProfileName) => removeStoredTokenFor(profileName)
+const listStoredProfiles = () => listProfilesInStore(selectedProfileName)
+const resolveToken = () => client().resolveToken()
 
 const promptForToken = async () => {
   const rl = createInterface({
@@ -385,12 +251,7 @@ const promptForToken = async () => {
   }
 }
 
-const fetchBridgeHealth = async () => {
-  const response = await fetch(`${bridgeUrl}/health`)
-  if (!response.ok) {
-    throw new Error(`Bridge health check failed with status ${response.status}`)
-  }
-}
+const fetchBridgeHealth = () => client().health()
 
 const waitForBridgeReady = async () => {
   const startedAt = Date.now()
@@ -413,26 +274,6 @@ const waitForBridgeReady = async () => {
   )
 }
 
-const startBridgeInBackground = async () => {
-  const logPath = bridgeLogPath()
-  await resolveBridgeSecret()
-  await fs.mkdir(path.dirname(logPath), {recursive: true})
-  const logFile = await fs.open(logPath, 'a')
-
-  try {
-    const child = spawn(process.execPath, [serverScript], {
-      detached: true,
-      env: process.env,
-      stdio: ['ignore', logFile.fd, logFile.fd],
-    })
-    child.unref()
-  } finally {
-    await logFile.close()
-  }
-
-  process.stderr.write(`Started agent runtime bridge in the background at ${bridgeUrl}. Logs: ${logPath}\n`)
-}
-
 const ensureBridgeRunning = async () => {
   try {
     await fetchBridgeHealth()
@@ -444,6 +285,7 @@ const ensureBridgeRunning = async () => {
   }
 
   await startBridgeInBackground()
+  process.stderr.write(`Started agent runtime bridge in the background at ${bridgeUrl}. Logs: ${bridgeLogPath()}\n`)
   await waitForBridgeReady()
 }
 
@@ -508,14 +350,12 @@ const printPing = async () => {
 }
 
 const whoamiWithToken = (token: string): Promise<WhoamiInfo> =>
-  requestJson<WhoamiInfo>(`${bridgeUrl}/runtime/whoami`, {
-    headers: {authorization: `Bearer ${token}`},
-  })
+  createBridgeClient({token}).whoami()
 
 const reloadAppAndWait = async ({timeoutMs = 30_000} = {}) => {
   const token = await resolveToken()
   if (!token) {
-    throw new Error(`No agent token configured for profile "${selectedProfileName}". Run \`yarn agent --profile ${selectedProfileName} connect\` first.`)
+    throw new Error(`No agent token configured for profile "${selectedProfileName}". Run \`kmagent --profile ${selectedProfileName} connect\` first.`)
   }
 
   const before = await whoamiWithToken(token).catch(() => null)
@@ -600,7 +440,7 @@ const connectWithToken = async (
     if (!saveBeforeVerify) throw error
     process.stdout.write(
       `Token saved at ${tokenStorePath} (profile: ${selectedProfileName}), but bridge contact failed: ${errorMessage(error)}\n` +
-      `Make sure the app tab is open. Run \`yarn agent whoami\` to verify.\n`,
+      `Make sure the app tab is open. Run \`kmagent whoami\` to verify.\n`,
     )
   }
 }
@@ -633,7 +473,7 @@ const connectInteractively = async ({force = false} = {}) => {
     if (existing) {
       process.stdout.write(
         `Profile "${selectedProfileName}" has a saved token but no app tab is currently connected.\n` +
-        `Open or focus the app tab, or run \`yarn agent whoami\` to recheck. Re-pairing anyway…\n\n`,
+        `Open or focus the app tab, or run \`kmagent whoami\` to recheck. Re-pairing anyway…\n\n`,
       )
     }
   }
@@ -652,97 +492,8 @@ const connectInteractively = async ({force = false} = {}) => {
   await connectWithToken(token, {saveBeforeVerify: false})
 }
 
-// Errors the server returns when the client has temporarily lost its
-// token registration (typical after a `yarn agent reload` or after
-// `install-extension` triggers refreshAppRuntime). Retrying on these
-// for ~10–15s smooths over the reconnect gap without papering over
-// real auth failures (scope mismatch, missing token, etc.).
-const isTransientTokenError = (error: unknown): boolean => {
-  const message = errorMessage(error)
-  return message.includes('Unknown or expired token')
-    || message.includes('Missing or invalid command status credentials')
-}
-
-const authedRetryTotalMs = 15_000
-const authedRetryStartDelayMs = 200
-const authedRetryMaxDelayMs = 1_000
-
-const authedRequest = async <T = unknown>(
-  url: string,
-  options: RequestOptions = {},
-): Promise<T> => {
-  const token = await resolveToken()
-  if (!token) {
-    throw new Error(
-      `No agent token configured for profile "${selectedProfileName}". Run \`yarn agent --profile ${selectedProfileName} connect\` to pair the CLI with the app.`,
-    )
-  }
-
-  const send = (): Promise<T> => requestJson<T>(url, {
-    ...options,
-    headers: {
-      ...(options.headers ?? {}),
-      authorization: `Bearer ${token}`,
-    },
-  })
-
-  const start = Date.now()
-  let delay = authedRetryStartDelayMs
-  while (true) {
-    try {
-      return await send()
-    } catch (error) {
-      if (!isTransientTokenError(error) || Date.now() - start >= authedRetryTotalMs) {
-        throw error
-      }
-      await sleep(delay)
-      delay = Math.min(Math.round(delay * 1.5), authedRetryMaxDelayMs)
-    }
-  }
-}
-
-const submitCommand = async (command: KnownCommand): Promise<string> => {
-  const response = await authedRequest<{id: string}>(`${bridgeUrl}/runtime/commands`, {
-    method: 'POST',
-    body: JSON.stringify(command),
-  })
-
-  return response.id
-}
-
-const waitForCommand = async (
-  id: string,
-  timeoutMs = defaultTimeoutMs,
-): Promise<CommandResult> => {
-  const start = Date.now()
-
-  while (Date.now() - start < timeoutMs) {
-    const command = await authedRequest<CommandStatusResponse>(`${bridgeUrl}/runtime/commands/${id}`)
-    if (command.status === 'completed') {
-      return command.result
-    }
-    if (command.status === 'failed') {
-      const error = command.result?.error
-      throw new Error(error?.message ?? `Runtime command ${id} failed`)
-    }
-
-    await sleep(pollIntervalMs)
-  }
-
-  throw new Error(`Timed out waiting for runtime command ${id}`)
-}
-
-const runCommand = async (command: KnownCommand): Promise<unknown> => {
-  const id = await submitCommand(command)
-  const result = await waitForCommand(id)
-
-  if (!result?.ok) {
-    const error = result?.error
-    throw new Error(error?.message ?? 'Runtime command failed')
-  }
-
-  return result.value
-}
+const runCommand = (command: KnownCommand): Promise<unknown> =>
+  client().runCommand(command)
 
 /** Helper: connect to the bridge, run a wire-protocol command, and
  *  pretty-print the result. Used by the "thin" bridge-fronting commands
@@ -820,10 +571,17 @@ cli
   })
 
 cli
-  .command('pair-url', 'Print the current app pairing URL')
-  .action(async () => {
+  .command('pair-url', 'Print the current app pairing URL (bridge approval only)')
+  // The bare URL approves the bridge endpoint but does not open the token
+  // dialog, so on its own it never yields a token to paste back — `connect`
+  // is the command that does both. `--tokens` adds the open-tokens param for
+  // the case where you want to drive the token step by hand (e.g. opening the
+  // URL on another device, or re-generating a token for an already-paired tab).
+  .option('--tokens', 'Also open the token dialog in the app (as `connect` does)')
+  .action(async (options: {tokens?: boolean}) => {
     await ensureBridgeRunning()
-    process.stdout.write(`${await pairingUrl()}\n`)
+    const url = await pairingUrl(bridgeUrl, {openTokensDialog: Boolean(options.tokens)})
+    process.stdout.write(`${url}\n`)
   })
 
 cli
@@ -834,7 +592,7 @@ cli
     if (!token) {
       throw new Error(
         `No agent token configured for profile "${selectedProfileName}". `
-        + `Run \`yarn agent --profile ${selectedProfileName} connect\` first.`,
+        + `Run \`kmagent --profile ${selectedProfileName} connect\` first.`,
       )
     }
     const info = await whoamiWithToken(token)
@@ -883,6 +641,12 @@ cli
   })
 
 cli
+  .command('health', wireDescription('health'))
+  .action(async () => {
+    await runAndPrint({type: 'health'})
+  })
+
+cli
   .command('describe-runtime', wireDescription('describe-runtime'))
   .option('--actions <text>', 'Filter actions (repeatable)')
   .option('--facets <text>', 'Filter facets (repeatable)')
@@ -923,7 +687,11 @@ cli
 
 cli
   .command('sql <mode> <sql> [paramsJson]', wireDescription('sql'))
-  .action(async (mode: string, sql: string, paramsJson: string | undefined) => {
+  .option(
+    '--allow-synced-write',
+    'Override the refusal to write to a synced table (blocks/workspaces/workspace_members) via raw SQL — such a write bypasses repo.tx, so it never uploads and skips the kernel derivations. Use deliberately.',
+  )
+  .action(async (mode: string, sql: string, paramsJson: string | undefined, options: {allowSyncedWrite?: boolean}) => {
     // Parse mode + params through the schemas so an invalid `--mode`
     // or non-array params fails fast with a clear error instead of
     // round-tripping to the bridge for a less specific rejection.
@@ -935,7 +703,13 @@ cli
     if (!Array.isArray(params)) {
       throw new Error('paramsJson must be a JSON array')
     }
-    await runAndPrint({type: 'sql', mode: parsedMode.data, sql, params})
+    await runAndPrint({
+      type: 'sql',
+      mode: parsedMode.data,
+      sql,
+      params,
+      ...(options.allowSyncedWrite ? {allowSyncedWrite: true} : {}),
+    })
   })
 
 cli
@@ -946,26 +720,32 @@ cli
 
 cli
   .command('subtree <rootId>', wireDescription('get-subtree'))
-  .option('--include-root', 'Include the root block itself in the response')
-  .action(async (rootId: string, options: {includeRoot?: boolean}) => {
-    await runAndPrint({
-      type: 'get-subtree',
-      rootId,
-      includeRoot: Boolean(options.includeRoot),
-    })
+  .option('--json', 'Print the raw flat array (each row a block + its depth) instead of the indented outline')
+  .option('--props', "Append each block's properties as compact JSON after its content")
+  .action(async (rootId: string, options: {json?: boolean, props?: boolean}) => {
+    if (options.json) {
+      await runAndPrint({type: 'get-subtree', rootId})
+      return
+    }
+    // Default: a depth-indented `- [id] content` outline. The subtree
+    // comes back already in pre-order / (order_key, id) order — we render
+    // it verbatim and never re-sort (see renderSubtreeOutline).
+    await ensureBridgeRunning()
+    const value = await runCommand({type: 'get-subtree', rootId})
+    process.stdout.write(`${renderSubtreeOutline(value, {includeProperties: options.props})}\n`)
   })
 
 cli
   .command('backlinks <blockId>', wireDescription('backlinks'))
   .option('--filter <spec>', 'none|stored|effective, or inline JSON BacklinksFilter (default: none)')
   .option('--workspace <id>', "Workspace id (defaults to the block's workspace, then the active one)")
-  .action(async (blockId: string, options: {filter?: string, workspace?: string}) => {
+  .action(async (blockId: string, options: {filter?: string, workspace?: unknown}) => {
     const filter = parseSpecArg(options.filter, ['none', 'stored', 'effective'], '--filter')
     await runAndPrint({
       type: 'backlinks',
       id: blockId,
       ...(filter !== undefined ? {filter} : {}),
-      ...(options.workspace ? {workspaceId: options.workspace} : {}),
+      ...workspaceAssertion(options.workspace),
     })
   })
 
@@ -976,7 +756,7 @@ cli
   .option('--workspace <id>', "Workspace id (defaults to the block's workspace, then the active one)")
   .action(async (
     blockId: string,
-    options: {filter?: string, grouping?: string, workspace?: string},
+    options: {filter?: string, grouping?: string, workspace?: unknown},
   ) => {
     const filter = parseSpecArg(options.filter, ['none', 'stored', 'effective'], '--filter')
     const grouping = parseSpecArg(options.grouping, ['user', 'none'], '--grouping')
@@ -985,7 +765,7 @@ cli
       id: blockId,
       ...(filter !== undefined ? {filter} : {}),
       ...(grouping !== undefined ? {grouping} : {}),
-      ...(options.workspace ? {workspaceId: options.workspace} : {}),
+      ...workspaceAssertion(options.workspace),
     })
   })
 
@@ -1005,27 +785,27 @@ cli
   .command('page [...name]', wireDescription('page'))
   .option('--workspace <id>', 'Workspace id (defaults to the active one)')
   .option('--limit <n>', 'Max substring candidates (default 20)')
-  .action(async (name: unknown, options: {workspace?: string, limit?: string}) => {
+  .action(async (name: unknown, options: {workspace?: unknown, limit?: unknown}) => {
     const text = toStringArray(name).join(' ').trim()
-    if (!text) throw new Error('page requires a <name> (e.g. `yarn agent page "Project Alpha"`)')
+    if (!text) throw new Error('page requires a <name> (e.g. `kmagent page "Project Alpha"`)')
     await runAndPrint({
       type: 'page',
       name: text,
-      ...(options.workspace ? {workspaceId: options.workspace} : {}),
-      ...(options.limit !== undefined ? {limit: Number(options.limit)} : {}),
+      ...workspaceAssertion(options.workspace),
+      ...limitOption(options.limit),
     })
   })
 
 cli
   .command('daily-note [...date]', wireDescription('daily-note'))
   .option('--workspace <id>', 'Workspace id (defaults to the active one)')
-  .action(async (date: unknown, options: {workspace?: string}) => {
+  .action(async (date: unknown, options: {workspace?: unknown}) => {
     const text = toStringArray(date).join(' ').trim()
-    if (!text) throw new Error('daily-note requires a <date> (e.g. `yarn agent daily-note yesterday`)')
+    if (!text) throw new Error('daily-note requires a <date> (e.g. `kmagent daily-note yesterday`)')
     await runAndPrint({
       type: 'daily-note',
       date: text,
-      ...(options.workspace ? {workspaceId: options.workspace} : {}),
+      ...workspaceAssertion(options.workspace),
     })
   })
 
@@ -1033,14 +813,14 @@ cli
   .command('search [...query]', wireDescription('search'))
   .option('--workspace <id>', 'Workspace id (defaults to the active one)')
   .option('--limit <n>', 'Max results (default 50)')
-  .action(async (query: unknown, options: {workspace?: string, limit?: string}) => {
+  .action(async (query: unknown, options: {workspace?: unknown, limit?: unknown}) => {
     const text = toStringArray(query).join(' ').trim()
     if (!text) throw new Error('search requires a <query>')
     await runAndPrint({
       type: 'search',
       query: text,
-      ...(options.workspace ? {workspaceId: options.workspace} : {}),
-      ...(options.limit !== undefined ? {limit: Number(options.limit)} : {}),
+      ...workspaceAssertion(options.workspace),
+      ...limitOption(options.limit),
     })
   })
 
@@ -1056,6 +836,25 @@ cli
   .action(async (json: string) => {
     const parsed = parseJson(json, 'update-block json') as Record<string, unknown>
     await runAndPrint({type: 'update-block', ...parsed})
+  })
+
+cli
+  .command('move-block <json>', wireDescription('move-block'))
+  .action(async (json: string) => {
+    const parsed = parseJson(json, 'move-block json') as Record<string, unknown>
+    await runAndPrint(moveBlockCommandSchema.parse({type: 'move-block', ...parsed}))
+  })
+
+cli
+  .command('delete-block <id>', wireDescription('delete-block'))
+  .action(async (id: string) => {
+    await runAndPrint({type: 'delete-block', id})
+  })
+
+cli
+  .command('restore-block <id>', wireDescription('restore-block'))
+  .action(async (id: string) => {
+    await runAndPrint({type: 'restore-block', id})
   })
 
 cli
@@ -1095,6 +894,97 @@ cli
   .command('uninstall-extension <handle>', wireDescription('uninstall-extension'))
   .action(async (handle: string) => {
     await runAndPrint({type: 'uninstall-extension', ...extensionHandle(handle)})
+  })
+
+cli
+  .command('new-extension <name> [dir]', 'Scaffold a standalone extension project (default dir: ./<slug>). Emits a small WORKING extension in the shape the record-grain guide asks for — namespaced types, a ref property instead of an id string, one block per record via createTypedChild, done-ness composed from the built-in todo, a pure read path with a test — plus the `@/…` kernel declarations, so `npm install && npm run check` passes with no checkout of the app. Refuses to overwrite an existing directory.')
+  .action(async (name: string, dir: string | undefined) => {
+    const slug = slugify(name)
+    const title = titleize(slug)
+    const target = dir ?? slug
+    // Never clobber: a scaffold that silently overwrote a real project
+    // would be the worst possible first impression.
+    const existing = await fs.stat(target).catch(() => null)
+    if (existing) throw new Error(`${target} already exists — pass a different directory`)
+
+    const files = extensionScaffold(name)
+    for (const file of files) {
+      const full = path.join(target, file.path)
+      await fs.mkdir(path.dirname(full), {recursive: true})
+      await fs.writeFile(full, file.contents, 'utf8')
+    }
+    // The `@/…` declarations ship with this CLI. Copying them in is what
+    // lets the generated project typecheck standalone — most authors have
+    // the CLI and no checkout of the app.
+    const types = await writeKernelTypes(path.join(target, 'types'), {force: true})
+    process.stdout.write(`${JSON.stringify({
+      directory: target,
+      name: title,
+      files: [...files.map(file => file.path), `types/ (${types.fileCount} declarations)`],
+      next: [
+        `cd ${target} && npm install && npm run check`,
+        `kmagent install-extension "dist/${title}.js"`,
+        `kmagent enable-extension "${title}"`,
+      ],
+    }, null, 2)}\n`)
+  })
+
+cli
+  .command('audit-extension <handle>', wireDescription('audit-extension'))
+  .action(async (handle: string) => {
+    await runAndPrint({type: 'audit-extension', ...extensionHandle(handle)})
+  })
+
+cli
+  .command('audit-properties', wireDescription('audit-properties'))
+  .option('--workspace <id>', 'Assert the workspace being audited (defaults to the active one; a workspace whose definition registry is not loaded is refused, not reported on)')
+  .action(async (options: {workspace?: unknown}) => {
+    await runAndPrint({
+      type: 'audit-properties',
+      ...workspaceAssertion(options.workspace),
+    })
+  })
+
+// A full properties migration is hundreds of thousands of writes; measured
+// runs land near 8 minutes on a fast native engine and a browser is a
+// multiple of that. Set one minute under the server's inFlightCommandTtlMs
+// (60 min, server.ts) rather than equal to it: at an exact match, the
+// bridge can reap the in-flight command in the same instant this timeout
+// elapses, and the next poll would surface "Unknown command" instead of
+// the CLI's own clear timeout message.
+const runBackfillDefaultWaitSeconds = 3540
+
+cli
+  .command('run-backfill <backfillId>', wireDescription('run-backfill'))
+  .option('--workspace <id>', 'Assert the workspace the pass writes to (defaults to the active one)')
+  .option('--wait <seconds>', `How long to wait for the pass to finish (default ${runBackfillDefaultWaitSeconds}). A full properties migration is hundreds of thousands of writes and runs for minutes; the default command timeout would give up while the app is still working, reporting a timeout for a run that is in fact progressing.`, {default: runBackfillDefaultWaitSeconds})
+  .action(async (backfillId: string, options: {workspace?: string | number; wait?: string | number}) => {
+    // Same 0-for-empty artifact CAC produces for `--workspace ""` as in
+    // `audit-properties`; normalize it back so the command layer's purpose-built
+    // refusal is what the operator sees.
+    const asserted = options.workspace === undefined
+      ? undefined
+      : options.workspace === 0 ? '' : String(options.workspace)
+    await ensureBridgeRunning()
+    const value = await client().runCommand({
+      type: 'run-backfill',
+      backfillId,
+      ...(asserted !== undefined ? {workspaceId: asserted} : {}),
+    }, {timeoutMs: Math.max(1, Number(options.wait) || runBackfillDefaultWaitSeconds) * 1000})
+      .catch((cause: unknown) => {
+        // Giving up WAITING is not the pass giving up: it keeps running in the
+        // app, will record its per-graph completion, and its failure list —
+        // the thing an operator needs — is consumed by whichever call collects
+        // the result, so after a timeout it exists only in the app console.
+        if (!(cause instanceof Error) || !/timed out/i.test(cause.message)) throw cause
+        throw new Error(
+          `${cause.message}\nThe pass is still running in the app — this only stopped ` +
+          'waiting for it. Re-running is safe (it is single-flighted and resumes from ' +
+          'whatever is left), but the list of values it could not migrate is in the app ' +
+          'console, not here.',
+        )
+      })
+    process.stdout.write(`${JSON.stringify(value, null, 2)}\n`)
   })
 
 cli

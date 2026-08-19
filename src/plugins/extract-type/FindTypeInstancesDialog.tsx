@@ -28,6 +28,8 @@ import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
 import { Checkbox } from '@/components/ui/checkbox'
 import { useRepo } from '@/context/repo.js'
+import { useAppRuntime } from '@/extensions/runtimeContext.js'
+import {readValuePresets} from '@/data/valuePresetRegistry'
 import { isRefCodec, isRefListCodec, type BlockData } from '@/data/api'
 import {
   blockTypeLabelProp,
@@ -39,6 +41,7 @@ import {
   type PropertyShapeFilter,
 } from '@/data/typeExtraction'
 import { resolvePropertyDisplay } from '@/components/propertyEditors/defaults.js'
+import { resolveEditorOverride } from '@/data/propertyDefinitionRegistry'
 import { ReferenceSearch } from '@/components/propertyEditors/RefPropertyEditor.js'
 import type { Block } from '@/data/block'
 import type { AnyPropertySchema } from '@/data/api'
@@ -331,6 +334,7 @@ function TypeInstanceRows({
   disabled: boolean
 }) {
   const repo = useRepo()
+  const presets = readValuePresets(useAppRuntime())
   const ownerBlock = useMemo(() => repo.block(typeBlockId), [repo, typeBlockId])
   return (
     <ul className="max-h-96 min-w-0 space-y-1 overflow-auto rounded-md border p-2">
@@ -339,8 +343,13 @@ function TypeInstanceRows({
           name: choice.name,
           encodedValue: undefined,
           schemas: repo.propertySchemas,
-          uis: repo.propertyEditorOverrides,
-          presets: repo.valuePresets,
+          override: resolveEditorOverride(
+            choice.name,
+            repo.propertyDefinitions,
+            repo.propertyEditorOverrides,
+            repo.propertySchemas.get(choice.name),
+          ),
+          presets,
         })
         const Editor = display.Editor
         const setChoice = (next: Partial<PropertyShapeChoice>) => {

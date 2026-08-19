@@ -19,11 +19,18 @@ import {
   type Overrides,
 } from '@/facets/togglable.js'
 import {
+  extensionDisplayName,
   userExtensionShellToggle,
   userExtensionToggle,
 } from '@/extensions/extensionToggles.js'
 import { Repo } from '../data/repo'
 import { BlockData } from '@/types.js'
+import {definitionSeedsFacet, propertyEditorOverridesFacet, typeSeedsFacet} from '@/data/facets.js'
+import {
+  bindExtensionPropertySeed,
+  bindExtensionPropertyOverride,
+  bindExtensionTypeSeed,
+} from '@/extensions/dynamicExtensionSeeds.js'
 
 export interface ExtensionLoadErrorReporter {
   (blockId: string, error: Error): void
@@ -31,16 +38,21 @@ export interface ExtensionLoadErrorReporter {
 
 /** Device-local trust status for a block the user has enabled (intent =
  *  true) whose code is NOT currently running as-authored. Surfaced to the
- *  settings UI so the user can act:
+ *  settings UI AND the global prompt surface (toast + status chip) so the
+ *  user can act:
  *    - `needs-approval`: enabled (here or on another device) but never
  *      approved on THIS device → "Enable here" reviews + approves the live
  *      source. Nothing runs until then.
  *    - `update-available`: approved, but the live source has drifted from
  *      the approved pin → the pinned version keeps running; "Update"
- *      re-approves the live source. */
+ *      re-approves the live source.
+ *
+ *  `name` is the block's display label (from block properties, no compile) —
+ *  carried on the status so a surface that only has the blockId (the global
+ *  toast) can name the extension without re-walking the toggle tree. */
 export type ExtensionApprovalStatus =
-  | {kind: 'needs-approval'; liveHash: string}
-  | {kind: 'update-available'; liveHash: string; approvedHash: string}
+  | {kind: 'needs-approval'; name: string; liveHash: string}
+  | {kind: 'update-available'; name: string; liveHash: string; approvedHash: string}
 
 export interface ExtensionApprovalStatusReporter {
   (blockId: string, status: ExtensionApprovalStatus): void
@@ -86,9 +98,10 @@ export interface DynamicExtensionsOptions {
  *   - `module.default` must be a valid AppExtension:
  *     a FacetContribution, an array of AppExtension, an async/sync
    *     function returning AppExtension, or nullish/false.
-   *   - Imports work through the page-global importmap. `import { x }
-   *     from '@/extensions/api.js'` returns the *same* module instance
-   *     the running app uses, so contribution facets match by identity.
+   *   - Imports work through the page-global importmap. Importing a
+   *     symbol from its real module (e.g. `import { actionsFacet } from
+   *     '@/extensions/core.js'`) returns the *same* module instance the
+   *     running app uses, so contribution facets match by identity.
    *   - Display metadata comes from extension block properties, not
    *     executable module code. That keeps settings rows descriptive
    *     even when a block is disabled and intentionally not compiled.
@@ -153,6 +166,7 @@ export const dynamicExtensionsExtension = (
     if (!approval) {
       approvalStatusReporter?.(block.id, {
         kind: 'needs-approval',
+        name: extensionDisplayName(block),
         liveHash: await hashExtensionSource(block.content),
       })
       return null
@@ -161,6 +175,7 @@ export const dynamicExtensionsExtension = (
     if (liveHash !== approval.sourceHash) {
       approvalStatusReporter?.(block.id, {
         kind: 'update-available',
+        name: extensionDisplayName(block),
         liveHash,
         approvedHash: approval.sourceHash,
       })
@@ -219,12 +234,10 @@ export const dynamicExtensionsExtension = (
       }
       const exported = module.default as AppExtension
       const handle = userExtensionToggle(block)
-      const validated = validateAndPrefix(handle.of(exported), block.id)
+      const validated = validateAndPrefix(handle.of(exported), block.id, errorReporter)
       collected.push(validated ?? shell.of([]))
     } catch (error) {
-      const wrapped = error instanceof Error ? error : new Error(String(error))
-      errorReporter?.(block.id, wrapped)
-      console.error(`Failed to load extension block ${block.id}`, wrapped)
+      reportBlockLoadError(errorReporter, block.id, error)
       collected.push(shell.of([]))
     }
   }
@@ -236,8 +249,14 @@ export const dynamicExtensionsExtension = (
  * Walks an AppExtension tree, validates shape, and force-prefixes every
  * FacetContribution's `source`.
  *
- * Returns a normalized AppExtension on success; throws on shape errors so
- * the caller can attribute them to the offending block.
+ * Returns a normalized AppExtension on success. For the SYNCHRONOUS shapes
+ * (contribution / array) it throws on shape or bind errors so the caller's
+ * per-block try/catch can attribute them to the offending block. The
+ * FUNCTION shape runs later (its wrapper is invoked during whole-app
+ * resolution, past that try/catch), so it must self-attribute: `errorReporter`
+ * is threaded in and the deferred wrapper catches + reports its own bind
+ * errors, mirroring the synchronous path. Callers that can supply attribution
+ * should pass `errorReporter`.
  *
  * **Boundary preservation:** when the input array carries a togglable
  * BOUNDARY symbol (attached by `userExtensionToggle(block).of(...)`),
@@ -248,30 +267,44 @@ export const dynamicExtensionsExtension = (
 const validateAndPrefix = (
   extension: AppExtension,
   blockId: string,
+  errorReporter?: ExtensionLoadErrorReporter,
 ): AppExtension => {
   if (extension === null || extension === undefined || extension === false) {
     return null
   }
 
   if (Array.isArray(extension)) {
-    const mapped = extension.map((child) => validateAndPrefix(child, blockId))
+    const mapped = extension.map((child) => validateAndPrefix(child, blockId, errorReporter))
     const boundary = getBoundary(extension)
     if (boundary) attachBoundary(mapped, boundary)
     return mapped
   }
 
   if (typeof extension === 'function') {
-    // Wrap so the function's return value also gets prefixed.
+    // A function-shaped export defers binding: the wrapper runs LATER, during
+    // whole-app resolution (`walkAppExtension`), AFTER `dynamicExtensionsExtension`'s
+    // per-block try/catch has already returned. So a bind throw here (malformed
+    // seed, hard-coded owner, cross-block reuse, or an invalid returned shape)
+    // can't reach that catch. Without this local try/catch it would fall through
+    // to `walkAppExtension`'s generic `catch` — logged with no blockId and no
+    // `errorReporter`, so the block's contributions vanish from the settings UI
+    // with no attribution. Catch + report here so the deferred path mirrors the
+    // synchronous one, recovering to `null` (pruned, per the nullish grammar).
     return async (context) => {
-      const inner = await (extension as (
-        ctx: typeof context,
-      ) => AppExtension | Promise<AppExtension>)(context)
-      return validateAndPrefix(inner, blockId)
+      try {
+        const inner = await (extension as (
+          ctx: typeof context,
+        ) => AppExtension | Promise<AppExtension>)(context)
+        return validateAndPrefix(inner, blockId, errorReporter)
+      } catch (error) {
+        reportBlockLoadError(errorReporter, blockId, error)
+        return null
+      }
     }
   }
 
   if (isFacetContribution(extension)) {
-    return prefixContributionSource(extension, blockId)
+    return prefixContributionSource(extension, blockId, errorReporter)
   }
 
   throw new Error(
@@ -292,16 +325,43 @@ const validateAndPrefix = (
 const prefixContributionSource = (
   contribution: FacetContribution<unknown>,
   blockId: string,
+  errorReporter?: ExtensionLoadErrorReporter,
 ): FacetContribution<unknown> => {
   const blockSource = `block:${blockId}`
   const composed = contribution.source
     ? `${blockSource}/${contribution.source}`
     : blockSource
-  const result: FacetContribution<unknown> = {...contribution, source: composed}
+  const value = contribution.facet.id === definitionSeedsFacet.id
+    ? bindExtensionPropertySeed(contribution.value, blockId)
+    : contribution.facet.id === typeSeedsFacet.id
+    ? bindExtensionTypeSeed(contribution.value, blockId)
+    : contribution.facet.id === propertyEditorOverridesFacet.id
+    ? bindExtensionPropertyOverride(contribution.value, blockId)
+    : contribution.value
+  const result: FacetContribution<unknown> = {
+    ...contribution,
+    value,
+    source: composed,
+  }
   if (contribution.enables !== undefined) {
-    result.enables = validateAndPrefix(contribution.enables, blockId)
+    result.enables = validateAndPrefix(contribution.enables, blockId, errorReporter)
   }
   return result
+}
+
+/** Wrap a thrown block-load failure to an Error, attribute it to the block via
+ *  `errorReporter`, and log it. Shared by the loader's synchronous per-block
+ *  catch and the deferred function-export wrapper so the error-coercion idiom
+ *  and the log-message wording live in one place (they'd otherwise silently
+ *  drift). The caller owns recovery (push a shell vs. return null). */
+const reportBlockLoadError = (
+  errorReporter: ExtensionLoadErrorReporter | undefined,
+  blockId: string,
+  error: unknown,
+): void => {
+  const wrapped = error instanceof Error ? error : new Error(String(error))
+  errorReporter?.(blockId, wrapped)
+  console.error(`Failed to load extension block ${blockId}`, wrapped)
 }
 
 const describeShape = (value: unknown): string => {

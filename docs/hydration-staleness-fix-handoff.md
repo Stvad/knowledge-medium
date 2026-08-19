@@ -206,7 +206,7 @@ New migration under `supabase/migrations/` (use the `supabase` skill).
 
 r1 omitted this step entirely; its ordering is load-bearing. The
 `blocks_synced` stream's column list is generated from `BLOCK_STORAGE_COLUMNS`
-(`scripts/gen-sync-config.ts`), so after step 3 run `yarn gen:sync-config`,
+(`scripts/gen-sync-config.ts`), so after step 3 run `pnpm gen:sync-config`,
 commit `powersync/sync-config.yaml`, and deploy with the `powersync` skill —
 **after** the Supabase migration (the rules reference the new column and error
 against the old schema) and **before** the client bundle. Old client + new
@@ -506,7 +506,7 @@ subsumes shadow recovery for these rows. Audit history
    PUTs get `user_updated_at` populated by the trigger; their PATCHes never
    carry the column (server value survives); their literal `updated_at` patches
    get floored, never regressed.
-2. **PowerSync sync-rules deploy** (`yarn gen:sync-config` + `powersync` skill).
+2. **PowerSync sync-rules deploy** (`pnpm gen:sync-config` + `powersync` skill).
    Must follow the migration (rules reference the column) and precede the
    client bundle. Note the redeploy itself re-processes buckets (full
    re-download) — it does NOT substitute for the touch (stamps unchanged →
@@ -607,7 +607,7 @@ the full touch (with the same pre-checks) is acceptable and simpler.
 
 ## Verification
 
-`yarn run check`. Plus: pgTAP for floor/bump/COALESCE/RPC-passthrough (step 1,
+`pnpm run check`. Plus: pgTAP for floor/bump/COALESCE/RPC-passthrough (step 1,
 incl. the e2ee fresh-nonce caveat); client tests for the split (`metadataPatch`
 monotonic + skipMetadata advances `updated_at` not `user_updated_at`; mint-tx
 sentinel hold survives same-tx shaping + compaction; stamp-0 row yields to a

@@ -1,18 +1,23 @@
-// @vitest-environment jsdom
+// @vitest-environment happy-dom
 
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
-import { BlockCache } from '@/data/blockCache'
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { EXTENSION_TYPE, PAGE_TYPE } from '@/data/blockTypes'
+import { ChangeScope } from '@/data/api'
 import { aliasesProp, extensionDescriptionProp, extensionNameProp, typesProp } from '@/data/properties'
 import { Repo } from '@/data/repo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
+import { createTestRepo } from '@/data/test/createTestRepo'
 import { staticDataExtensions } from '@/extensions/staticDataExtensions'
+import { extensionsDataExtension } from '@/plugins/extensions-settings/dataExtension'
 import { resolveFacetRuntimeSync } from '@/facets/facet'
 import { __setCompileImplForTest, readApproval } from '@/extensions/compileExtensionModule'
 import { actionsFacet, appMountsFacet, blockRenderersFacet } from '@/extensions/core'
 import { ActionContextTypes } from '@/shortcuts/types'
 import { createAgentRuntimeContext, executeCommand } from '../commands'
 import type { AgentRuntimeContext, InstallExtensionResult } from '../protocol'
+import { InvalidBlockIdError } from '@/data/blockId'
+import type { BlockData } from '@/data/api'
+import { PROPERTY_CELL_BACKFILL_ID, propertyCellBackfill } from '@/data/internals/propertyCellBackfill'
 
 const WS = 'ws-1'
 const USER = {id: 'user-1', name: 'Alice'}
@@ -27,18 +32,17 @@ interface Harness {
 const setup = async (): Promise<Harness> => {
   await resetTestDb(sharedDb.db)
   const h = sharedDb
-  const repo = new Repo({
+  const { repo } = createTestRepo({
     db: h.db,
-    cache: new BlockCache(),
     user: USER,
   })
-  repo.setActiveWorkspaceId(WS)
-  const runtime = resolveFacetRuntimeSync(staticDataExtensions, {
+  const runtime = resolveFacetRuntimeSync([staticDataExtensions, extensionsDataExtension], {
     repo,
     workspaceId: WS,
     safeMode: false,
   })
   repo.setFacetRuntime(runtime)
+  repo.setActiveWorkspaceId(WS)
   const context = createAgentRuntimeContext({repo, runtime, safeMode: false})
   return {h, repo, context}
 }
@@ -48,11 +52,43 @@ let env: Harness
 beforeAll(async () => { sharedDb = await createTestDb() })
 afterAll(async () => { await sharedDb.cleanup() })
 beforeEach(async () => { env = await setup() })
-// Dispose the per-test Repo's sync observer so its db.onChange subscription
-// doesn't leak onto the shared DB (closed once in afterAll).
-afterEach(() => { env.repo.stopSyncObserver() })
 
 describe('agent runtime commands', () => {
+  it('update-block treats soft-deleted blocks as not found', async () => {
+    await env.repo.tx(
+      async tx => {
+        await tx.create({
+          id: 'deleted-target',
+          workspaceId: WS,
+          parentId: null,
+          orderKey: 'a0',
+          content: 'original',
+          properties: {keep: 'yes'},
+        })
+      },
+      {scope: ChangeScope.BlockDefault, description: 'seed deleted update-block target'},
+    )
+    await env.repo.mutate.delete({id: 'deleted-target'})
+
+    await expect(executeCommand({
+      commandId: 'update-deleted',
+      type: 'update-block',
+      id: 'deleted-target',
+      content: 'updated',
+      properties: {keep: 'no'},
+    }, env.context)).rejects.toThrow(/updateBlock: block deleted-target not found/)
+
+    const row = await env.h.db.get<{content: string; deleted: 0 | 1; properties_json: string}>(
+      'SELECT content, deleted, properties_json FROM blocks WHERE id = ?',
+      ['deleted-target'],
+    )
+    expect(row).toMatchObject({
+      content: 'original',
+      deleted: 1,
+    })
+    expect(JSON.parse(row!.properties_json)).toEqual({keep: 'yes'})
+  })
+
   it('installs labelled extensions under a per-label container page', async () => {
     const result = await executeCommand({
       commandId: 'install-1',
@@ -154,8 +190,9 @@ describe('agent runtime commands', () => {
     // though production registers it. The fix swaps in
     // resolveAppRuntime, which mirrors the production walk.
     //
-    // The vitest jsdom env can't resolve `@/extensions/api.js` from
-    // inside a Babel-compiled blob URL, so we stub the compile to
+    // The vitest happy-dom env can't resolve `@/…` app modules (e.g.
+    // `@/extensions/core.js`) from inside a Babel-compiled blob URL, so
+    // we stub the compile to
     // emit the AppExtension shape directly. The compile is just a
     // text→module step — the rest of the install + verify path is
     // exercised end-to-end.
@@ -198,7 +235,7 @@ describe('agent runtime commands', () => {
 
   it('enable-extension / disable-extension flip the overrides map', async () => {
     // enable now also grants the device-local approval (#67), which would
-    // otherwise load real Babel + a blob-URL import (unsupported in jsdom),
+    // otherwise load real Babel + a blob-URL import (unsupported in happy-dom),
     // so stub the compile pipeline to a synthetic module.
     const restore = __setCompileImplForTest(async () => ({default: []}))
     try {
@@ -329,6 +366,151 @@ describe('agent runtime commands', () => {
     }
   })
 
+  it('sql execute refuses a raw write to a synced table (blocks) by default', async () => {
+    await env.repo.tx(
+      async tx => {
+        await tx.create({
+          id: 'sql-guard-target',
+          workspaceId: WS,
+          parentId: null,
+          orderKey: 'a0',
+          content: 'original',
+        })
+      },
+      {scope: ChangeScope.BlockDefault, description: 'seed sql-guard target'},
+    )
+
+    await expect(executeCommand({
+      commandId: 'sql-guard-1',
+      type: 'sql',
+      mode: 'execute',
+      sql: 'UPDATE blocks SET content = ? WHERE id = ?',
+      params: ['raw-write', 'sql-guard-target'],
+    }, env.context)).rejects.toThrow(/refusing to write to synced table "blocks"/)
+
+    // The raw write must never have landed.
+    const row = await env.h.db.get<{content: string}>(
+      'SELECT content FROM blocks WHERE id = ?',
+      ['sql-guard-target'],
+    )
+    expect(row?.content).toBe('original')
+  })
+
+  // SQLite lets a WITH clause prefix DML, so `WITH … UPDATE blocks` is a real
+  // raw write whose first token is `WITH` — it used to sail past the guard
+  // (PR #386 review). Recursive-CTE READS are the bridge's bread and butter,
+  // so they must keep working.
+  it('sql refuses a CTE-prefixed write but still allows a CTE-prefixed read', async () => {
+    await env.repo.tx(
+      async tx => {
+        await tx.create({
+          id: 'sql-guard-cte',
+          workspaceId: WS,
+          parentId: null,
+          orderKey: 'a0',
+          content: 'original',
+        })
+      },
+      {scope: ChangeScope.BlockDefault, description: 'seed sql-guard cte target'},
+    )
+
+    await expect(executeCommand({
+      commandId: 'sql-guard-cte-1',
+      type: 'sql',
+      mode: 'execute',
+      sql: 'WITH ids AS (SELECT id FROM blocks WHERE id = ?) '
+        + 'UPDATE blocks SET content = ? WHERE id IN (SELECT id FROM ids)',
+      params: ['sql-guard-cte', 'raw-write'],
+    }, env.context)).rejects.toThrow(/refusing to write to synced table "blocks"/)
+
+    const row = await env.h.db.get<{content: string}>(
+      'SELECT content FROM blocks WHERE id = ?',
+      ['sql-guard-cte'],
+    )
+    expect(row?.content).toBe('original')
+
+    const read = await executeCommand({
+      commandId: 'sql-guard-cte-2',
+      type: 'sql',
+      mode: 'all',
+      sql: 'WITH RECURSIVE up(id) AS (SELECT id FROM blocks WHERE id = ?) SELECT id FROM up',
+      params: ['sql-guard-cte'],
+    }, env.context)
+    expect(read).toEqual([{id: 'sql-guard-cte'}])
+  })
+
+  it('sql execute allows the same write once allowSyncedWrite opts in', async () => {
+    await env.repo.tx(
+      async tx => {
+        await tx.create({
+          id: 'sql-guard-override',
+          workspaceId: WS,
+          parentId: null,
+          orderKey: 'a0',
+          content: 'original',
+        })
+      },
+      {scope: ChangeScope.BlockDefault, description: 'seed sql-guard override target'},
+    )
+
+    await executeCommand({
+      commandId: 'sql-guard-2',
+      type: 'sql',
+      mode: 'execute',
+      sql: 'UPDATE blocks SET content = ? WHERE id = ?',
+      params: ['raw-write', 'sql-guard-override'],
+      allowSyncedWrite: true,
+    }, env.context)
+
+    const row = await env.h.db.get<{content: string}>(
+      'SELECT content FROM blocks WHERE id = ?',
+      ['sql-guard-override'],
+    )
+    expect(row?.content).toBe('raw-write')
+  })
+
+  it('sql select and writes to a LOCAL table (block_aliases) are unaffected by the guard', async () => {
+    await env.repo.tx(
+      async tx => {
+        await tx.create({
+          id: 'sql-guard-select',
+          workspaceId: WS,
+          parentId: null,
+          orderKey: 'a0',
+          content: 'selectable',
+        })
+      },
+      {scope: ChangeScope.BlockDefault, description: 'seed sql-guard select target'},
+    )
+
+    // A read against the synced `blocks` table is never a "write" — the
+    // guard must not touch it.
+    const selectResult = await executeCommand({
+      commandId: 'sql-guard-select-1',
+      type: 'sql',
+      mode: 'all',
+      sql: 'SELECT content FROM blocks WHERE id = ?',
+      params: ['sql-guard-select'],
+    }, env.context) as Array<{content: string}>
+    expect(selectResult).toEqual([{content: 'selectable'}])
+
+    // A raw write to a LOCAL derived-index table (not in SYNCED_TABLES)
+    // must go through unguarded.
+    await executeCommand({
+      commandId: 'sql-guard-local-write',
+      type: 'sql',
+      mode: 'execute',
+      sql: 'INSERT OR IGNORE INTO block_aliases (block_id, workspace_id, alias, alias_lower) VALUES (?, ?, ?, ?)',
+      params: ['sql-guard-select', WS, 'Manual Alias', 'manual alias'],
+    }, env.context)
+
+    const aliasRow = await env.h.db.get<{alias: string}>(
+      'SELECT alias FROM block_aliases WHERE block_id = ?',
+      ['sql-guard-select'],
+    )
+    expect(aliasRow?.alias).toBe('Manual Alias')
+  })
+
   it('verify lists per-extension contribution ids (renderers, appMounts)', async () => {
     const renderer = () => null
     const Component = () => null
@@ -359,4 +541,186 @@ describe('agent runtime commands', () => {
     }
   })
 
+  // Block-id shape contract (issue #456), through the two bridge commands
+  // that accept an id from outside the app. The contract is ENFORCED by the
+  // tx engine (@/data/blockId, pinned in txEngine.test.ts) — these commands
+  // pre-check only so the error names the command. So this suite is about the
+  // agent-facing behaviour of that pair, not about where the guard lives:
+  // this `env` is a `createTestRepo` Repo, i.e. `blockIdPolicy: 'any'`, which
+  // means the engine-level guard is OFF here and every rejection below is
+  // genuinely the commands' own.
+  describe('explicit block id validation (issue #456)', () => {
+    // Must contain hex LETTERS (not just digits) — .toUpperCase() below
+    // needs to actually change the string for the uppercase-rejection case.
+    const VALID_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
+
+    it('create-block accepts a canonical UUID id and stores it verbatim', async () => {
+      const result = await executeCommand({
+        commandId: 'create-uuid',
+        type: 'create-block',
+        data: {id: VALID_ID, content: 'explicit uuid'},
+      }, env.context) as BlockData
+      expect(result.id).toBe(VALID_ID)
+      expect(await env.repo.load(VALID_ID)).toMatchObject({id: VALID_ID, content: 'explicit uuid'})
+    })
+
+    it('create-block still auto-mints a UUID when no id is supplied', async () => {
+      const result = await executeCommand({
+        commandId: 'create-auto',
+        type: 'create-block',
+        data: {content: 'auto id'},
+      }, env.context) as BlockData
+      expect(result.id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/)
+    })
+
+    it.each([
+      ['not a UUID at all', 'my-block'],
+      ['an uppercase UUID', VALID_ID.toUpperCase()],
+      ['a UUID with an embedded newline', `${VALID_ID.slice(0, -1)}\n`],
+      ['a UUID with an embedded `]`', `${VALID_ID.slice(0, -1)}]`],
+    ])('create-block rejects an id that is %s, with no block created', async (_label, id) => {
+      await expect(executeCommand({
+        commandId: 'create-invalid',
+        type: 'create-block',
+        data: {id, content: 'must not be created'},
+      }, env.context)).rejects.toThrow(InvalidBlockIdError)
+
+      const row = await env.repo.db.getOptional<{id: string}>(
+        'SELECT id FROM blocks WHERE content = ?',
+        ['must not be created'],
+      )
+      expect(row).toBeNull()
+    })
+
+    it('create-block rejects an invalid explicit id under a parent too (createChild path)', async () => {
+      const parent = await executeCommand({
+        commandId: 'create-parent',
+        type: 'create-block',
+        data: {content: 'parent'},
+      }, env.context) as BlockData
+
+      await expect(executeCommand({
+        commandId: 'create-child-invalid',
+        type: 'create-block',
+        parentId: parent.id,
+        data: {id: 'not-a-uuid', content: 'must not be created'},
+      }, env.context)).rejects.toThrow(InvalidBlockIdError)
+
+      const children = await env.repo.query.children({id: parent.id}).load()
+      expect(children).toHaveLength(0)
+    })
+
+    it('install-extension accepts a canonical UUID id for a brand-new extension', async () => {
+      const result = await executeCommand({
+        commandId: 'install-uuid',
+        type: 'install-extension',
+        source: 'export default []',
+        id: VALID_ID,
+        reload: false,
+      }, env.context) as InstallExtensionResult
+      expect(result.id).toBe(VALID_ID)
+      expect(await env.repo.load(VALID_ID)).toMatchObject({id: VALID_ID})
+    })
+
+    it('install-extension rejects a non-UUID id for a brand-new extension, with nothing created', async () => {
+      await expect(executeCommand({
+        commandId: 'install-invalid',
+        type: 'install-extension',
+        source: 'export default []',
+        id: 'my-plugin',
+        reload: false,
+      }, env.context)).rejects.toThrow(InvalidBlockIdError)
+
+      // Validation runs before any lookup or write, so not even the
+      // "Agent-installed extensions" root page should have been minted.
+      const root = await env.repo.query.aliasLookup({
+        workspaceId: WS,
+        alias: AGENT_EXTENSIONS_PARENT_ALIAS,
+      }).load()
+      expect(root).toBeNull()
+    })
+
+    // Separate clause from the one above, and NOT covered by it: this id is
+    // canonical after `.trim()`. install-extension used to trim before
+    // validating, so it stored the trimmed id and reported an id different
+    // from the string the caller passed — a silent normalization the case
+    // policy explicitly refuses elsewhere. Restoring the trim-then-validate
+    // order passes every other test in this suite and fails only this one.
+    // (An id whose last hex digit is REPLACED by a newline can't pin it: that
+    // string trims to 35 characters and is rejected on length either way.)
+    it.each([
+      ['a trailing newline', `${VALID_ID}\n`],
+      ['surrounding spaces', `  ${VALID_ID}  `],
+    ])('install-extension rejects an otherwise-canonical id with %s', async (_label, id) => {
+      await expect(executeCommand({
+        commandId: 'install-untrimmed',
+        type: 'install-extension',
+        source: 'export default []',
+        id,
+        reload: false,
+      }, env.context)).rejects.toThrow(InvalidBlockIdError)
+
+      expect(await env.repo.load(VALID_ID)).toBeNull()
+    })
+  })
+
+  // run-backfill's run-detail decoration: the properties-cell backfill's
+  // `lastRun` is populated by whoever last entered the pass, and only taken
+  // (consumed) here — a caller that never takes it (e.g. the command-palette
+  // surface) leaves it sitting there for the NEXT run-backfill call to pick
+  // up, however unrelated that call's own outcome is.
+  //
+  // `repo.runWorkspaceBackfillNow` is mocked in both tests rather than driven
+  // for real: its outcome also depends on the property registry priming from
+  // an async subscription (`setFacetRuntime`), which upstream's own comment
+  // (repo.ts, `propertyRegistryReadyFor`) documents as "UNPINNED BY A TEST —
+  // measured green locally, red on CI". `lastRun` itself is populated for
+  // real, by calling `propertyCellBackfill.run` directly against a minimal
+  // context — the same seam `repo.runWorkspaceBackfillNow` uses internally,
+  // without that race.
+  describe('run-backfill run detail', () => {
+    const populateLastRun = () => propertyCellBackfill.run({
+      workspaceId: WS,
+      getAll: (sql, params) => env.repo.db.getAll(sql, params as unknown[] | undefined),
+      tx: (fn, opts) => env.repo.tx(fn, {scope: ChangeScope.BlockDefault, skipUndo: true, ...opts}),
+      resolveNameSchema: () => undefined,
+      resolveFieldSchema: () => undefined,
+    })
+
+    it('decorates a `ran` outcome with the pass\'s own counts', async () => {
+      // `lastRun` populated for real; this request's own outcome is mocked
+      // 'ran' so the decoration condition takes it.
+      await populateLastRun()
+      const spy = vi.spyOn(env.repo, 'runWorkspaceBackfillNow')
+        .mockResolvedValue({outcome: 'ran', undoHistoryCleared: false})
+      try {
+        const result = await env.context.runBackfill({backfillId: PROPERTY_CELL_BACKFILL_ID})
+        expect(result.outcome).toBe('ran')
+        expect(result.blocksScanned).toBeDefined()
+        expect(result.blocksMaterialized).toBeDefined()
+      } finally {
+        spy.mockRestore()
+      }
+    })
+
+    it('does not decorate a non-ran outcome with a stale run left over from an earlier call', async () => {
+      // `lastRun` populated for real by an earlier, unconsumed run — the
+      // command-palette's shape, which subscribes to progress and never
+      // takes it.
+      await populateLastRun()
+
+      // This request's own outcome never entered the pass.
+      const spy = vi.spyOn(env.repo, 'runWorkspaceBackfillNow')
+        .mockResolvedValue({outcome: 'held-by-peer', undoHistoryCleared: false})
+      try {
+        const result = await env.context.runBackfill({backfillId: PROPERTY_CELL_BACKFILL_ID})
+        expect(result.outcome).toBe('held-by-peer')
+        expect(result.blocksScanned).toBeUndefined()
+        expect(result.blocksMaterialized).toBeUndefined()
+        expect(result.failures).toBeUndefined()
+      } finally {
+        spy.mockRestore()
+      }
+    })
+  })
 })

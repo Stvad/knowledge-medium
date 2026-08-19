@@ -29,14 +29,21 @@
 
 import {
   BLOCK_STORAGE_COLUMNS,
+  BLOCKS_TABLE_COLUMN_NAMES,
   parseBlockRow,
   type BlockRow,
 } from '@/data/blockSchema.js'
-import type { BlockData } from '@/data/api'
+import { normalizeReferences, type BlockData } from '@/data/api'
 import type { PowerSyncDb } from '@/data/internals/commitPipeline.js'
+import { devAssertionsEnabled } from '@/data/internals/devAssertions.js'
+import type { ReferenceTargetLookups } from '@/data/internals/referenceTargetProcessor.js'
 import {
   decideStagingRow,
 } from './reconcile.js'
+import {
+  ARRIVAL_PROCESSORS,
+  runArrivalProcessors,
+} from './arrivalProcessors.js'
 import {
   decodeFromWire,
   type GetCek,
@@ -88,10 +95,30 @@ type RowsReader = {
   getAll<T>(sql: string, params?: unknown[]): Promise<T[]>
 }
 
+/** SQL surface the derive-at-arrival lookups get — the open Phase-2 write
+ *  tx, so alias reads see the rows this very window just upserted. */
+export interface DeriveTxReader {
+  getOptional<T>(sql: string, params?: unknown[]): Promise<T | null>
+  getAll<T>(sql: string, params?: unknown[]): Promise<T[]>
+}
+
 export interface MaterializeDeps {
   readonly getMaterializability: GetMaterializability
   /** Workspace-key lookup, threaded to {@link decodeFromWire} for decrypt. */
   readonly getCek: GetCek
+  /** §9 arrival-order repair hook: called after a materialize pass whose
+   *  arrivals GAINED alias values — the repair executor (a deferred,
+   *  batched, CAS-safe re-derive over NULL-column rows) lives on Repo;
+   *  the materializer only reports names. Optional (harness tests skip). */
+  readonly onAliasTargetsAdded?: (workspaceId: string, aliases: readonly string[]) => void
+  /** Derive-at-arrival seam (PR #288 slice A): build the reference-target
+   *  lookups bound to this write tx. Sync-applied rows never pass through
+   *  `repo.tx`, so `core.deriveReferenceTarget` can't stamp the LOCAL
+   *  `reference_target_id` column for them — the materializer re-derives it
+   *  for content-changed arrivals, inside the same write tx and before the
+   *  invalidation fan-out, so recognition never lags reader visibility.
+   *  Optional so storage-only harness tests skip derivation. */
+  readonly referenceTargetLookups?: (tx: DeriveTxReader) => ReferenceTargetLookups
 }
 
 /** The staging-table delta to process: ids whose staging row changed, and ids
@@ -205,8 +232,11 @@ const readBlocksByIds = async (
   const out = new Map<string, BlockRow>()
   for (let i = 0; i < ids.length; i += chunkSize) {
     const chunk = ids.slice(i, i + chunkSize)
+    // Full live-table list (includes local-only columns): the before-rows
+    // both gate the write and carry `reference_target_id` into the
+    // invalidation `before` snapshots + the preserve-on-arrival path.
     const rows = await db.getAll<BlockRow>(
-      `SELECT ${COLUMN_NAMES.join(', ')} FROM blocks WHERE id IN (${buildInClause(chunk.length)})`,
+      `SELECT ${BLOCKS_TABLE_COLUMN_NAMES.join(', ')} FROM blocks WHERE id IN (${buildInClause(chunk.length)})`,
       chunk,
     )
     for (const row of rows) out.set(row.id, row)
@@ -364,15 +394,53 @@ export const materializeStagingRows = async (
       if (action.kind === 'apply') {
         await tx.execute(UPSERT_BLOCK_SQL, blockRowParams(plaintext))
         applied.push(plaintext.id)
+        const after = parseBlockRow(plaintext)
+        if (devAssertionsEnabled()) {
+          // L2 dev/test-only assertion (off in prod — issue #404 item 2):
+          // this UPSERT trusts arrived `references_json` as already
+          // canonical and never re-normalizes it. That's safe only because
+          // every writer in this codebase runs `core.normalizeReferences`
+          // (a same-tx processor, `normalizeReferencesProcessor.ts`) before
+          // the row is ever uploaded — a cross-device invariant with no
+          // local enforcement here, since sync-applied rows bypass
+          // `repo.tx` entirely and never pass through that processor.
+          // Deliberately NOT fixed by normalizing on every arrival: that
+          // would cost a JSON round-trip on every synced row (~320k in the
+          // existing dataset) to guard a risk that has never materialized.
+          // This assertion exists to catch the day that stops being true —
+          // a future writer that skips normalization, a hand-crafted sync
+          // fixture, or a non-app writer hitting the same tables directly
+          // (see issue #404 item 1) — in CI/dev, before a non-canonical row
+          // silently breaks the set-equality consumers that assume
+          // `references_json` is already sorted+deduped (the `json_each`
+          // backlinks index, `BACKLINKS_FOR_BLOCK_QUERY`, Map-keyed
+          // invalidation).
+          const canonical = normalizeReferences(after.references)
+          if (JSON.stringify(canonical) !== JSON.stringify(after.references)) {
+            throw new Error(
+              `[materialize] arrived references_json is not canonical for block ${plaintext.id} — ` +
+              'every writer is expected to normalize before upload (core.normalizeReferences)',
+            )
+          }
+        }
         snapshots.set(plaintext.id, {
           before: beforeRow ? parseBlockRow(beforeRow) : null,
-          after: parseBlockRow(plaintext),
+          after,
         })
       } else {
         // A local edit landed between Phase 1 and the lock — it wins.
         skippedStale.push(plaintext.id)
       }
     }
+
+    // ── Arrival-processor pass (`arrivalProcessors.ts`): runs AFTER every
+    // upsert in the window so a definition/alias target arriving alongside
+    // its referencing rows resolves (the alias index triggers fired on the
+    // upserts above), and INSIDE this write tx — strictly before
+    // `applyOutcome`'s invalidation fan-out, so readers never see a content
+    // change whose derived column lags. `deriveReferenceTargetArrivalProcessor`
+    // (PR #288 slice A) is currently the seam's only registered member.
+    await runArrivalProcessors(tx, snapshots, deps, ARRIVAL_PROCESSORS)
 
     const removedBeforeById = await readBlocksByIds(tx, change.removed, readChunkSize)
     // A 'delete' whose staging row still exists is an INSERT OR REPLACE
@@ -398,7 +466,63 @@ export const materializeStagingRows = async (
       const beforeRow = removedBeforeById.get(id)
       if (beforeRow) snapshots.set(id, { before: parseBlockRow(beforeRow), after: null })
     }
+    // #404 item 6 — DOCUMENTED ASSUMPTION, deliberately not fixed here (Vlad,
+    // 2026-07-20). If a hard-deleted `id` was a property field/value child in a
+    // flipped workspace, its owner's projected cell keeps the now-orphaned key:
+    // the sync path doesn't run PROJECT, and there is no authoring device to
+    // upload a corrected cell (see below). We do NOT reproject the parent on
+    // arrival, because that would mean writing `properties_json` — a SYNCED
+    // column — from the arrival path, a categorically different move than the
+    // local-only derivations this path is allowed to make (see
+    // `arrivalProcessors.ts`).
+    //
+    // Why it's safe to leave: this is unreachable in normal operation. A user
+    // delete is a SOFT delete (`deleted = 1`, an UPDATE), which arrives as an
+    // upsert, not a `removed` — and the deleting device already ran PROJECT and
+    // uploaded the corrected cell, so peers converge. A `removed` here is a
+    // physical row disappearance: a stream-exit (scope-granular — it takes the
+    // parent too, so there's nothing local to reproject) or an OUT-OF-BAND hard
+    // delete of an individual block (manual server SQL / admin op / a future
+    // block-level GC — none exist as a normal path). Only that last case strands
+    // a cell. Recovery when it does: the parent's next content edit re-triggers
+    // PROJECT locally, or a manual reproject. If a routine individual-block
+    // hard-delete is ever introduced server-side, revisit this.
   })
+
+  // §9 arrival-order repair, alias half (adversarial-review rounds 1+2): a
+  // `[[alias]]` row that arrived BEFORE its target derived to NULL, and
+  // later content-unchanged deliveries preserve that NULL forever. When an
+  // arrival GAINS an alias, hand the alias names to the repair queue —
+  // DEFERRED, never scanned inside the write tx: the candidate probe is an
+  // unindexed content scan, and on a fresh device every page arrival is an
+  // alias-gaining arrival (before === null), so in-tx scans would turn
+  // first sync into O(pages × table) inside the drain lock.
+  if (deps.onAliasTargetsAdded && snapshots.size > 0) {
+    const aliasStrings = (properties: Record<string, unknown> | undefined): string[] => {
+      const raw = properties?.alias
+      return Array.isArray(raw) ? raw.filter((a): a is string => typeof a === 'string') : []
+    }
+    const addedAliasesByWorkspace = new Map<string, Set<string>>()
+    for (const id of applied) {
+      const snap = snapshots.get(id)
+      if (!snap?.after || snap.after.deleted) continue
+      // A tombstoned `before` contributes NO aliases: the index is
+      // `WHERE deleted = 0`, so its aliases were invisible while deleted —
+      // a restore is exactly when stale `[[alias]]` NULL rows need repair.
+      const beforeAliases = new Set(
+        snap.before && !snap.before.deleted ? aliasStrings(snap.before.properties) : [],
+      )
+      for (const alias of aliasStrings(snap.after.properties)) {
+        if (beforeAliases.has(alias) || alias === '') continue
+        const bucket = addedAliasesByWorkspace.get(snap.after.workspaceId) ?? new Set<string>()
+        bucket.add(alias)
+        addedAliasesByWorkspace.set(snap.after.workspaceId, bucket)
+      }
+    }
+    for (const [workspaceId, aliases] of addedAliasesByWorkspace) {
+      deps.onAliasTargetsAdded(workspaceId, [...aliases])
+    }
+  }
 
   return { snapshots, applied, deferred, skippedStale, quarantined, deleted }
 }

@@ -2,14 +2,12 @@
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChangeScope } from '@/data/api'
-import { BlockCache } from '@/data/blockCache'
 import { dailyNoteBlockId } from '@/plugins/daily-notes'
-import { kernelDataExtension } from '@/data/kernelDataExtension'
 import { dailyNotesDataExtension } from '@/plugins/daily-notes'
 import { typesProp } from '@/data/properties'
 import { Repo } from '@/data/repo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
-import { resolveFacetRuntimeSync } from '@/facets/facet'
+import { createTestRepo, isBlockDeleted } from '@/data/test/createTestRepo'
 import {
   formatRescheduleToastMessage,
   rescheduleBlock,
@@ -40,18 +38,16 @@ beforeEach(async () => {
   h = sharedDb
   let now = 1700_000_000_000
   let id = 0
-  repo = new Repo({
+  ;({ repo } = createTestRepo({
     db: h.db,
-    cache: new BlockCache(),
     user: {id: USER},
     now: () => ++now,
     newId: () => `generated-${++id}`,
-  })
-  repo.setFacetRuntime(resolveFacetRuntimeSync([
-    kernelDataExtension,
-    dailyNotesDataExtension,
-    srsReschedulingDataExtension,
-  ]))
+    extensions: [
+      dailyNotesDataExtension,
+      srsReschedulingDataExtension,
+    ],
+  }))
   // Undo/redo are scoped to the active workspace (issue #186).
   repo.setActiveWorkspaceId(WORKSPACE)
 })
@@ -59,7 +55,6 @@ beforeEach(async () => {
 afterEach(async () => {
   vi.useRealTimers()
   vi.restoreAllMocks()
-  repo.stopSyncObserver()
 })
 
 describe('rescheduleBlock', () => {
@@ -246,6 +241,43 @@ describe('repo.undo after rescheduleBlock', () => {
     expect(block.get(srsFactorProp)).toBe(2)
     expect(block.get(srsReviewCountProp)).toBe(3)
     expect(block.get(srsSnapshotHistoryProp)).toEqual([])
+  })
+
+  it('collapses the whole reschedule — daily notes included — into ONE undo entry (issue #306)', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date(2026, 4, 5))
+    vi.spyOn(Math, 'random').mockReturnValue(0.5)
+
+    await repo.tx(async tx => {
+      await tx.create({
+        id: 'plain-block',
+        workspaceId: WORKSPACE,
+        parentId: null,
+        orderKey: 'a0',
+        content: 'First touch',
+      })
+    }, {scope: ChangeScope.BlockDefault, description: 'seed plain block'})
+    repo.undoManager.clear()
+
+    // Fresh workspace: this reschedule creates the journal block + two
+    // daily notes + the SRS property write — historically 2-4 undo
+    // entries (docs/follow-ups.md), now exactly one.
+    expect(await rescheduleBlock(repo.block('plain-block'), SrsSignal.GOOD)).not.toBeNull()
+    expect(repo.undoManager.depths(ChangeScope.BlockDefault)).toEqual({undo: 1, redo: 0})
+
+    const nextReviewId = dailyNoteBlockId(WORKSPACE, '2026-05-10')
+    const reviewedAtId = dailyNoteBlockId(WORKSPACE, '2026-05-05')
+    expect(await isBlockDeleted(repo, nextReviewId)).toBe(false)
+    expect(await isBlockDeleted(repo, reviewedAtId)).toBe(false)
+
+    // One cmd-Z reverts the whole perceived action: SRS metadata gone AND
+    // the freshly created daily notes are removed, not left behind.
+    expect(await repo.undo()).toBe(true)
+    const block = repo.block('plain-block')
+    await block.load()
+    expect(block.types).not.toContain(SRS_SM25_TYPE)
+    expect(await isBlockDeleted(repo, nextReviewId)).toBe(true)
+    expect(await isBlockDeleted(repo, reviewedAtId)).toBe(true)
   })
 
   it('drops the SRS type when the block was untyped before reschedule', async () => {

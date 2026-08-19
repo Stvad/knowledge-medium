@@ -122,7 +122,7 @@ blockRenderersFacet.of({ id: 'reactions-row', renderer: ReactionsRenderer })
 **After** — true layering, no priority race:
 
 ```js
-import { blockContentDecoratorsFacet } from '@/extensions/api.js'
+import { blockContentDecoratorsFacet } from '@/extensions/blockInteraction.js'
 
 blockContentDecoratorsFacet.of((ctx) => {
   const reactions = ctx.block.dataSync()?.properties['user:reactions']?.value

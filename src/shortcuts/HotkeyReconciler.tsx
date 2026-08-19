@@ -1,10 +1,10 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import {
-  createKeybindingsHandler,
   matchKeybindingPress,
   parseKeybinding,
   type KeybindingPress,
 } from 'tinykeys'
+import { createSequenceMatcher } from './sequenceMatcher.ts'
 import { useAppRuntime } from '@/extensions/runtimeContext.js'
 import {
   useActiveContextsDispatch,
@@ -12,6 +12,8 @@ import {
   ActiveContextsMap,
 } from '@/shortcuts/ActiveContexts.js'
 import { contextConfigsByTypeFrom, dispatchActiveActionById, setRunActionDispatcher, setActionWithDepsDispatcher } from '@/shortcuts/runAction.js'
+import { invokeAction } from '@/shortcuts/actionDispatch.js'
+import type { FacetRuntime } from '@/facets/facet.js'
 import {
   actionRuntimeKey,
   getEffectiveActions,
@@ -49,7 +51,8 @@ import {
   ShortcutBindingDefaults,
 } from '@/shortcuts/types.js'
 import type { MouseEvent as ReactMouseEvent, TouchEvent as ReactTouchEvent } from 'react'
-import { hasEditableTarget, isTypingKeyEvent, withRecoveredLetterKey } from '@/shortcuts/utils.js'
+import { hasEditableTarget, isImeKeyEvent, isTypingKeyEvent, withRecoveredLetterKey } from '@/shortcuts/utils.js'
+import { registerArmedHold } from '@/shortcuts/holdRegistry.js'
 
 /**
  * A non-hold keyboard binding's per-candidate tinykeys matcher. Fed every
@@ -89,22 +92,38 @@ const getInstallableContextDeps = (
 }
 
 /**
- * Run the same event-filter cascade tinykeys' default `ignore` would do,
- * but extended with per-context eventFilter overrides. An active context's
- * filter returning true means "I want this event even though it'd
- * normally be ignored" (e.g. property-editing needs Escape from inside
- * an <input>). Otherwise we apply the editable-target heuristic.
+ * Does this candidate's OWN context accept the event? Runs the same
+ * editable-target heuristic tinykeys' default `ignore` would, unless the
+ * context declares an `eventFilter` — which means "I want events like this
+ * even though they'd normally be ignored" (property-editing needs Escape
+ * from inside an <input>; edit-mode-cm wants keys inside `.cm-editor`).
+ *
+ * Per candidate, NOT once per event: an opt-in is a claim about the
+ * claiming context's own bindings, so it must not become permission for
+ * everyone else's. Judging the whole dispatch off any one active context's
+ * filter meant a context could hand keys to a context that never opted in —
+ * modal shadowing made that concrete (a shadowed property field's vote let
+ * Escape run `clear_selection` and Delete run the multi-select delete, which
+ * takes no confirmation), and it also let GLOBAL's bare-key bindings fire
+ * from inside a field whenever a neighbouring context had opted in. GLOBAL
+ * declares no filter, so its candidates now face the editable-target
+ * heuristic like anywhere else, and a user rebinding a global onto a bare
+ * named key can't turn typing into a command.
  */
-const shouldHandleEvent = (
+const contextAdmitsEvent = (
   event: KeyboardEvent,
-  active: ActiveContextsMap,
+  contextType: ActionContextType,
   contextConfigsByType: ReadonlyMap<ActionContextType, ActionContextConfig>,
 ): boolean => {
-  for (const type of active.keys()) {
-    const config = contextConfigsByType.get(type)
-    if (config?.eventFilter?.(event)) return true
-  }
-  return defaultEventFilter(event)
+  const filter = contextConfigsByType.get(contextType)?.eventFilter
+  // Additive, never a veto: a filter says "also admit these", so a `false`
+  // from it still falls through to the editable-target heuristic. Treating
+  // it as a veto killed deliberate modifier chords — property-editing's
+  // filter declines single-character keys, which would have made a rebind of
+  // the exit key onto Ctrl+J dead even though `defaultEventFilter` admits
+  // every modifier chord. Matches the contract declared on
+  // `ActionContextConfig.eventFilter`.
+  return filter?.(event) === true || defaultEventFilter(event)
 }
 
 /**
@@ -173,11 +192,17 @@ export function HotkeyReconciler(): null {
   const activeRef = useRef<ActiveContextsMap>(active)
   const contextConfigsByTypeRef = useRef<ReadonlyMap<ActionContextType, ActionContextConfig>>(contextConfigsByType)
   const dispatchRef = useRef<ActionDispatch>(dispatch)
+  // The runtime is needed at dispatch time so `invokeAction` can read the
+  // action-dispatch middleware facets. Threaded through a ref so the once-
+  // installed keydown coordinator and the hold companion see the current
+  // runtime without rebinding (same reason as the other refs above).
+  const runtimeRef = useRef<FacetRuntime>(runtime)
   useLayoutEffect(() => {
     activeRef.current = active
     contextConfigsByTypeRef.current = contextConfigsByType
     dispatchRef.current = dispatch
-  }, [active, contextConfigsByType, dispatch])
+    runtimeRef.current = runtime
+  }, [active, contextConfigsByType, dispatch, runtime])
 
   // Install the module-level runActionById dispatcher. Reads refs so it's
   // always current. Torn down on unmount so stray callers fail loudly.
@@ -215,7 +240,7 @@ export function HotkeyReconciler(): null {
       return runOrderedCandidates(
         ordered,
         trigger,
-        {active, contextConfigsByType, dispatch: dispatchRef.current},
+        {runtime, active, contextConfigsByType, dispatch: dispatchRef.current},
         supplied,
         () => undefined,
       )
@@ -269,7 +294,7 @@ export function HotkeyReconciler(): null {
       return runOrderedCandidates(
         ordered,
         event,
-        {active, contextConfigsByType, dispatch: dispatchRef.current},
+        {runtime, active, contextConfigsByType, dispatch: dispatchRef.current},
         supplied,
         action => applyTriggerEventOptions(event, action, contextConfigsByType),
       )
@@ -305,7 +330,7 @@ export function HotkeyReconciler(): null {
       return runOrderedCandidates(
         ordered,
         event,
-        {active, contextConfigsByType, dispatch: dispatchRef.current},
+        {runtime, active, contextConfigsByType, dispatch: dispatchRef.current},
         supplied,
         action => applyTriggerEventOptions(event, action, contextConfigsByType),
       )
@@ -341,16 +366,18 @@ export function HotkeyReconciler(): null {
         const deps = resolveDeps(action, active, contextConfigsByType, supplied)
         if (!deps) continue
         if (action.canDispatch && !action.canDispatch(deps)) continue
-        const {handler} = action
         // A preview streams MANY ticks; a throwing/rejecting handler must be
         // contained the same way the commit/keyboard path contains it
         // (runOrderedCandidates), or one bad tick becomes an uncaught error /
         // unhandled rejection on every pointer-move. Log and swallow so the
-        // gesture keeps running.
+        // gesture keeps running. Routed through `invokeAction` so a dispatch
+        // decorator that redirects/wraps the action applies to its preview
+        // identically to its commit (before/after observers see each tick — they
+        // discriminate on the trigger if they only want committed dispatches).
         const runProgress = (event: ActionTrigger): void => {
           let result: ActionHandlerResult
           try {
-            result = handler(deps, event, dispatchRef.current)
+            result = invokeAction(runtime, {action, deps, trigger: event, dispatch: dispatchRef.current})
           } catch (error) {
             console.error(`[HotkeyReconciler] Progress action ${action.id} threw`, error)
             return
@@ -428,6 +455,7 @@ export function HotkeyReconciler(): null {
           activeRef,
           contextConfigsByTypeRef,
           dispatchRef,
+          runtimeRef,
         })
         state.hold.set(actionKey, {unsubscribe})
         continue
@@ -459,6 +487,13 @@ export function HotkeyReconciler(): null {
   useEffect(() => {
     const dispatchPhase = (phase: 'keydown' | 'keyup', rawEvent: Event): void => {
       const event = withRecoveredLetterKey(rawEvent as KeyboardEvent)
+      // An in-flight IME composition owns the keyboard: its keydowns are the
+      // user talking to the input method, not to the app. Bail before the
+      // matchers so no sequence state advances either — a composing `g`
+      // must not become the first half of `g g`. Declining per action was
+      // not enough: a decline means "not handled, try the next candidate",
+      // which handed the chord to whatever ranked below.
+      if (isImeKeyEvent(event)) return
       const completed = completedRef.current
       completed.length = 0
       // Feed every candidate of this phase so each advances its own sequence
@@ -470,9 +505,14 @@ export function HotkeyReconciler(): null {
 
       const active = activeRef.current
       const contextConfigsByType = contextConfigsByTypeRef.current
-      // The filter cascade gates dispatch, not matching — sequence state has
-      // already advanced above, matching tinykeys' per-listener behaviour.
-      if (!shouldHandleEvent(event, active, contextConfigsByType)) return
+      // The filter gates dispatch, not matching — sequence state has already
+      // advanced above, matching tinykeys' per-listener behaviour. Each
+      // candidate is judged by its own context, so one context's opt-in
+      // can't speak for another's bindings.
+      const admissible = completed.filter(
+        candidate => contextAdmitsEvent(event, candidate.action.context, contextConfigsByType),
+      )
+      if (admissible.length === 0) return
 
       // Order + filter through the shared resolver (modal shadowing + the
       // precedence comparator), so the keyboard path can't diverge from the
@@ -483,13 +523,13 @@ export function HotkeyReconciler(): null {
       // fall-through conditions: deps don't resolve, canDispatch returns false,
       // or the handler synchronously returns the not-handled sentinel (`false`).
       const bindings = new Map<ActionConfig, ShortcutBindingDefaults>(
-        completed.map(c => [c.action, c.binding]),
+        admissible.map(c => [c.action, c.binding]),
       )
       const ordered = resolve([...bindings.keys()], {active, contextConfigsByType}, {kind: 'keyboard'})
       runOrderedCandidates(
         ordered,
         event,
-        {active, contextConfigsByType, dispatch: dispatchRef.current},
+        {runtime: runtimeRef.current, active, contextConfigsByType, dispatch: dispatchRef.current},
         undefined,
         action => applyEventOptions(event, action, bindings.get(action)!, contextConfigsByType),
       )
@@ -529,6 +569,7 @@ interface HoldBindingInstall {
   activeRef: { current: ActiveContextsMap }
   contextConfigsByTypeRef: { current: ReadonlyMap<ActionContextType, ActionContextConfig> }
   dispatchRef: { current: ActionDispatch }
+  runtimeRef: { current: FacetRuntime }
 }
 
 /**
@@ -548,10 +589,10 @@ interface HoldBindingInstall {
  *    still applied so the input event doesn't reach editable targets.
  *  - On keyup of the same primary key before the timer fires, cancel.
  *  - On `blur` of the window, cancel.
- *  - On timer fire, run `action.handler(deps, originalKeydown, dispatch)`
- *    after re-validating the context is still active. Same path as the
- *    keydown / keyup makeHandler uses minus the preventDefault (already
- *    done at arm time).
+ *  - On timer fire, dispatch via `invokeAction(runtime, {action, deps,
+ *    trigger: originalKeydown, dispatch})` after re-validating the context is
+ *    still active. Same path as the keydown / keyup makeHandler uses minus the
+ *    preventDefault (already done at arm time).
  *
  * Limitation: if the chord includes modifiers (e.g. `'$mod+s'`) and the
  * user releases the modifier but keeps the primary key pressed, the timer
@@ -562,7 +603,7 @@ interface HoldBindingInstall {
  * sequence" doesn't have well-defined semantics here.
  */
 const installHoldBinding = (config: HoldBindingInstall): (() => void) => {
-  const {action, binding, keys, holdMs, activeRef, contextConfigsByTypeRef, dispatchRef} = config
+  const {action, binding, keys, holdMs, activeRef, contextConfigsByTypeRef, dispatchRef, runtimeRef} = config
 
   interface ParsedHold {
     rawKey: string
@@ -586,11 +627,17 @@ const installHoldBinding = (config: HoldBindingInstall): (() => void) => {
     timer: ReturnType<typeof setTimeout>
     primaryKey: string
   } | null = null
+  // Armed timers are visible to keyboard-capture surfaces via the hold
+  // registry (see holdRegistry.ts) — they swallow the cancelling keyup, so
+  // they cancel armed holds explicitly instead.
+  let unregisterArmed: (() => void) | null = null
 
   const cancel = (): void => {
     if (!pending) return
     clearTimeout(pending.timer)
     pending = null
+    unregisterArmed?.()
+    unregisterArmed = null
   }
 
   const fire = (originalEvent: KeyboardEvent): void => {
@@ -607,7 +654,9 @@ const installHoldBinding = (config: HoldBindingInstall): (() => void) => {
     if (action.canDispatch && !action.canDispatch(deps)) return
 
     try {
-      void Promise.resolve(action.handler(deps, originalEvent, dispatchRef.current)).catch(error => {
+      void Promise.resolve(
+        invokeAction(runtimeRef.current, {action, deps, trigger: originalEvent, dispatch: dispatchRef.current}),
+      ).catch(error => {
         console.error(`[HotkeyReconciler] Action ${action.id} rejected`, error)
       })
     } catch (error) {
@@ -617,6 +666,8 @@ const installHoldBinding = (config: HoldBindingInstall): (() => void) => {
 
   const onKeydown = (rawEvent: Event): void => {
     const event = withRecoveredLetterKey(rawEvent as KeyboardEvent)
+    // Same rule as the keydown coordinator: don't arm off an IME's keys.
+    if (isImeKeyEvent(event)) return
     if (event.repeat) {
       if (pending) applyEventOptions(event, action, binding, contextConfigsByTypeRef.current)
       return
@@ -631,17 +682,22 @@ const installHoldBinding = (config: HoldBindingInstall): (() => void) => {
     const active = activeRef.current
     const contextConfigsByType = contextConfigsByTypeRef.current
     if (!getInstallableContextDeps(action, active, contextConfigsByType)) return
-    if (!shouldHandleEvent(event, active, contextConfigsByType)) return
+    // This arm is one action's, so it asks only its own context — same rule
+    // the keydown path applies per candidate.
+    if (!contextAdmitsEvent(event, action.context, contextConfigsByType)) return
 
     applyEventOptions(event, action, binding, contextConfigsByType)
 
     pending = {
+      // `cancel` does the disarm bookkeeping (timer, pending, registry);
+      // the clearTimeout on the just-fired timer is a no-op.
       timer: setTimeout(() => {
-        pending = null
+        cancel()
         fire(event)
       }, holdMs),
       primaryKey: event.key,
     }
+    unregisterArmed = registerArmedHold(cancel)
   }
 
   const onKeyup = (rawEvent: Event): void => {
@@ -666,6 +722,7 @@ const installHoldBinding = (config: HoldBindingInstall): (() => void) => {
 }
 
 interface CandidateRunContext {
+  runtime: FacetRuntime
   active: ActiveContextsMap
   contextConfigsByType: ReadonlyMap<ActionContextType, ActionContextConfig>
   dispatch: ActionDispatch
@@ -697,7 +754,7 @@ interface CandidateRunContext {
 const runOrderedCandidates = (
   ordered: readonly ActionConfig[],
   trigger: ActionTrigger,
-  {active, contextConfigsByType, dispatch}: CandidateRunContext,
+  {runtime, active, contextConfigsByType, dispatch}: CandidateRunContext,
   supplied: Partial<BaseShortcutDependencies> | undefined,
   applyOptions: (action: ActionConfig) => void,
 ): boolean => {
@@ -708,7 +765,7 @@ const runOrderedCandidates = (
 
     let result: ActionHandlerResult
     try {
-      result = action.handler(deps, trigger, dispatch)
+      result = invokeAction(runtime, {action, deps, trigger, dispatch})
     } catch (error) {
       console.error(`[HotkeyReconciler] Action ${action.id} threw`, error)
       applyOptions(action)
@@ -815,30 +872,29 @@ const applyEventOptions = (
 }
 
 /**
- * Build a candidate's tinykeys matcher. Every key in the binding maps to the
- * same callback, which records the candidate in `completedRef` for the event
- * in flight instead of running the handler — the coordinator orders the
- * recorded candidates and runs the winner.
+ * Build a candidate's per-binding sequence matcher. On a completed chord it
+ * records the candidate in `completedRef` for the event in flight instead of
+ * running the handler — the coordinator orders the recorded candidates and
+ * runs the winner.
  *
- * `createKeybindingsHandler` (rather than `tinykeys()` directly) lets the
- * coordinator preprocess each event with `withRecoveredLetterKey` before the
- * matcher sees it: tinykeys reads event.key, which Mac option-transforms
- * (Alt+y → '¥') and Linux compose setups corrupt for letter chords; the
- * wrapper restores the logical letter from event.keyCode, and works on
- * Colemak/Dvorak where event.code lies about layout. `ignore: () => false`
- * disables tinykeys' built-in editable-target filter — the coordinator runs
- * the context-aware cascade (`shouldHandleEvent`) itself, so contexts like
- * property-editing can opt into events tinykeys would otherwise drop.
+ * The matcher (`createSequenceMatcher`) is the shared port of tinykeys'
+ * sequence loop, so the inspector's which-key display and this dispatch path
+ * agree by construction. The coordinator preprocesses each event with
+ * `withRecoveredLetterKey` before the matcher sees it: tinykeys' matching
+ * reads event.key, which Mac option-transforms (Alt+y → '¥') and Linux
+ * compose setups corrupt for letter chords; the wrapper restores the logical
+ * letter from event.keyCode, and works on Colemak/Dvorak where event.code
+ * lies about layout. The matcher carries no editable-target filter — the
+ * coordinator applies it per completed candidate (`contextAdmitsEvent`), so
+ * contexts like property-editing can opt into events tinykeys would drop.
  */
 const makeMatcher = (
   action: ActionConfig,
   binding: ShortcutBindingDefaults,
   completedRef: { current: CompletedBinding[] },
 ): ((event: KeyboardEvent) => void) => {
-  const record = () => {
-    completedRef.current.push({action, binding})
+  const matcher = createSequenceMatcher(binding.keys)
+  return (event: KeyboardEvent) => {
+    if (matcher.next(event).completed) completedRef.current.push({action, binding})
   }
-  const bindingMap: Record<string, (event: KeyboardEvent) => void> = {}
-  for (const key of normalizeKeys(binding.keys)) bindingMap[key] = record
-  return createKeybindingsHandler(bindingMap, {ignore: () => false})
 }

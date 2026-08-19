@@ -5,43 +5,24 @@ import {
   useMemo,
   useSyncExternalStore,
 } from 'react'
-import { CallbackSet } from '@/utils/callbackSet'
+import { BatchableKeyedStore } from '@/extensions/batchableKeyedStore.js'
 
 export type ExtensionLoadErrorsMap = ReadonlyMap<string, Error>
 
 /**
  * Plain non-React store for extension load errors. The React provider
  * is a thin wrapper around this so the state machine itself is unit-
- * testable without mounting a component tree.
+ * testable without mounting a component tree. Batch mode (used by the
+ * runtime resolve to publish atomically) lives in the shared base.
  */
-export class ExtensionLoadErrorStore {
-  private errors: ReadonlyMap<string, Error> = new Map()
-  private readonly listeners = new CallbackSet<[]>('ExtensionLoadErrors')
-
-  getSnapshot = (): ExtensionLoadErrorsMap => this.errors
-
-  subscribe = (listener: () => void): (() => void) => this.listeners.add(listener)
-
-  reportError = (blockId: string, error: Error): void => {
-    const next = new Map(this.errors)
-    next.set(blockId, error)
-    this.errors = next
-    this.listeners.notify()
+export class ExtensionLoadErrorStore extends BatchableKeyedStore<Error> {
+  constructor() {
+    super('ExtensionLoadErrors')
   }
 
-  clearError = (blockId: string): void => {
-    if (!this.errors.has(blockId)) return
-    const next = new Map(this.errors)
-    next.delete(blockId)
-    this.errors = next
-    this.listeners.notify()
-  }
+  reportError = (blockId: string, error: Error): void => this.set(blockId, error)
 
-  reset = (): void => {
-    if (this.errors.size === 0) return
-    this.errors = new Map()
-    this.listeners.notify()
-  }
+  clearError = (blockId: string): void => this.delete(blockId)
 }
 
 interface ExtensionLoadErrorsContextValue {

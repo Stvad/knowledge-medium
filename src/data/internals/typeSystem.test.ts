@@ -1,18 +1,25 @@
 // @vitest-environment node
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
-import { resolveFacetRuntimeSync } from '@/facets/facet'
+import { resolveFacetRuntimeSync, type AppExtension } from '@/facets/facet'
 import {
   BlockNotFoundForTypeError,
   ChangeScope,
   codecs,
-  defineBlockType,
   defineProperty,
   defineSameTxProcessor,
+  seedProperty,
+  seedType,
 } from '@/data/api'
 import { BlockCache } from '@/data/blockCache'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
-import { sameTxProcessorsFacet, typesFacet } from '@/data/facets'
+import {
+  definitionSeedsFacet,
+  projectedPropertyDefinitionsFacet,
+  sameTxProcessorsFacet,
+  typeSeedsFacet,
+} from '@/data/facets'
+import {propertyDefinitionBlockId} from '@/data/definitionSeeds'
 import { addedTypes, getBlockTypes, typesProp } from '@/data/properties'
 import { Repo } from '@/data/repo'
 
@@ -34,6 +41,13 @@ const createBlock = async (id: string, properties: Record<string, unknown> = {})
   }, {scope: ChangeScope.BlockDefault, description: `create ${id}`})
 }
 
+const resolveTypeRuntime = (
+  contributions: readonly AppExtension[],
+) => resolveFacetRuntimeSync([
+  definitionSeedsFacet.of(typesProp, {source: 'test-kernel'}),
+  ...contributions,
+])
+
 beforeEach(async () => {
   await resetTestDb(sharedDb.db)
   h = sharedDb
@@ -45,6 +59,8 @@ beforeEach(async () => {
     user: {id: 'user-1'},
     now: () => ++timeCursor,
     newId: () => `gen-${++idCursor}`,
+    // Mnemonic ids — see the MNEMONIC IDS note in createTestRepo.ts.
+    blockIdPolicy: 'any',
     // Start empty so setFacetRuntime is the only registration path.
     installKernelRuntime: false,
   })
@@ -65,8 +81,11 @@ describe('Repo type membership orchestration', () => {
       changeScope: ChangeScope.BlockDefault,
     })
     let setupCalls = 0
-    const taskType = defineBlockType({
+    const taskType = seedType({
+      seedKey: 'test/type/task-1',
+      revision: 1,
       id: 'task',
+      label: 'Task',
       properties: [dueProp, setupCountProp],
     })
     const taskAddProcessor = defineSameTxProcessor({
@@ -87,8 +106,8 @@ describe('Repo type membership orchestration', () => {
         }
       },
     })
-    repo.setFacetRuntime(resolveFacetRuntimeSync([
-      typesFacet.of(taskType, {source: 'test'}),
+    repo.setFacetRuntime(resolveTypeRuntime([
+      typeSeedsFacet.of(taskType, {source: 'test'}),
       sameTxProcessorsFacet.of(taskAddProcessor, {source: 'test'}),
     ]))
     await createBlock('b1')
@@ -119,8 +138,8 @@ describe('Repo type membership orchestration', () => {
         }
       },
     })
-    repo.setFacetRuntime(resolveFacetRuntimeSync([
-      typesFacet.of(defineBlockType({id: 'task'}), {source: 'test'}),
+    repo.setFacetRuntime(resolveTypeRuntime([
+      typeSeedsFacet.of(seedType({seedKey: 'test/type/task-2', revision: 1, id: 'task', label: 'Task'}), {source: 'test'}),
       sameTxProcessorsFacet.of(recorder, {source: 'test'}),
     ]))
     await createBlock('b1')
@@ -148,8 +167,8 @@ describe('Repo type membership orchestration', () => {
       defaultValue: 'open',
       changeScope: ChangeScope.BlockDefault,
     })
-    repo.setFacetRuntime(resolveFacetRuntimeSync([
-      typesFacet.of(defineBlockType({id: 'todo', properties: [statusProp]}), {source: 'test'}),
+    repo.setFacetRuntime(resolveTypeRuntime([
+      typeSeedsFacet.of(seedType({seedKey: 'test/type/todo-1', revision: 1, id: 'todo', label: 'Todo', properties: [statusProp]}), {source: 'test'}),
     ]))
     await createBlock('b1')
 
@@ -159,9 +178,136 @@ describe('Repo type membership orchestration', () => {
     expect(repo.block('b1').get(statusProp)).toBe('open')
   })
 
+  it('applies a seed-declared type property despite an older same-name user def (no shadowing)', async () => {
+    const shadowed = seedProperty({
+      seedKey: 'system:test/property/status',
+      revision: 1,
+      name: 'status',
+      preset: 'string',
+      defaultValue: '',
+      changeScope: ChangeScope.BlockDefault,
+    })
+    const winner = defineProperty('status', {
+      codec: codecs.number,
+      defaultValue: 0,
+      changeScope: ChangeScope.BlockDefault,
+    })
+    repo.setFacetRuntime(resolveTypeRuntime([
+      typeSeedsFacet.of(seedType({seedKey: 'test/type/todo-2', revision: 1, id: 'todo', label: 'Todo', properties: [shadowed]}), {source: 'test'}),
+    ]))
+    repo.setActiveWorkspaceId('ws-1')
+    repo.setRuntimeContributions(definitionSeedsFacet, 'test-seed', [shadowed])
+    repo.setRuntimeContributions(projectedPropertyDefinitionsFacet, 'test-winner', [{
+      metadata: {
+        fieldId: 'field-user-status',
+        workspaceId: 'ws-1',
+        createdAt: 1,
+        name: 'status',
+        changeScope: ChangeScope.BlockDefault,
+        hidden: false,
+        origin: 'user',
+      },
+      schema: winner,
+    }], {workspaceId: 'ws-1'})
+    await createBlock('b1')
+
+    // v1: the seed `status` wins its name (the earlier same-name user def is
+    // excluded by the no-shadowing rule), so adding the type applies the
+    // seed-declared property's initial value instead of rejecting as shadowed.
+    await repo.addType('b1', 'todo', {status: 'seven'})
+    expect(getBlockTypes(repo.block('b1').data)).toEqual(['todo'])
+    expect(repo.block('b1').peek()!.properties.status).toBe('seven')
+  })
+
+  it('applies type-membership writes through the kernel types seed despite an older same-name user def (no shadowing)', async () => {
+    const winner = defineProperty('types', {
+      codec: codecs.string,
+      defaultValue: 'winner-default',
+      changeScope: ChangeScope.BlockDefault,
+    })
+    repo.setFacetRuntime(resolveTypeRuntime([
+      typeSeedsFacet.of(seedType({seedKey: 'test/type/todo-3', revision: 1, id: 'todo', label: 'Todo'}), {source: 'test'}),
+    ]))
+    repo.setActiveWorkspaceId('ws-1')
+    repo.setRuntimeContributions(projectedPropertyDefinitionsFacet, 'test-types-winner', [{
+      metadata: {
+        fieldId: 'field-user-types',
+        workspaceId: 'ws-1',
+        createdAt: 1,
+        name: 'types',
+        changeScope: ChangeScope.BlockDefault,
+        hidden: false,
+        origin: 'user',
+      },
+      schema: winner,
+    }], {workspaceId: 'ws-1'})
+    // Blocks whose `types` cell already holds a valid list (compatible with the
+    // kernel seed's string-list codec).
+    await createBlock('add', {types: []})
+    await createBlock('remove', {types: ['todo']})
+    await createBlock('toggle', {types: []})
+    await createBlock('set', {types: []})
+
+    // The kernel `types` seed wins over the excluded same-name user def, so
+    // membership operations resolve and mutate the cell normally.
+    await repo.addType('add', 'todo')
+    await repo.removeType('remove', 'todo')
+    await repo.toggleType('toggle', 'todo')
+    await repo.setBlockTypes('set', ['todo'])
+
+    expect(getBlockTypes(repo.block('add').data)).toEqual(['todo'])
+    expect(getBlockTypes(repo.block('remove').data)).toEqual([])
+    expect(getBlockTypes(repo.block('toggle').data)).toEqual(['todo'])
+    expect(getBlockTypes(repo.block('set').data)).toEqual(['todo'])
+  })
+
+  it('pins a divergent-named type-property seed to its declared name and preserves an existing value', async () => {
+    const declared = seedProperty({
+      seedKey: 'system:test/property/status',
+      revision: 1,
+      name: 'status',
+      preset: 'optional-string',
+      defaultValue: undefined,
+      changeScope: ChangeScope.BlockDefault,
+    })
+    const fieldId = propertyDefinitionBlockId('ws-1', declared.seedKey)
+    repo.setFacetRuntime(resolveTypeRuntime([
+      typeSeedsFacet.of(seedType({seedKey: 'test/type/todo-4', revision: 1, id: 'todo', label: 'Todo', properties: [declared]}), {source: 'test'}),
+    ]))
+    repo.setActiveWorkspaceId('ws-1')
+    repo.setRuntimeContributions(definitionSeedsFacet, 'test-seed', [declared])
+    // The projected row carries a divergent stored name; seeds are non-renamable
+    // (rename deferred to #288), so it is ignored and the property stays at its
+    // declared name — the type section and writes resolve under 'status'.
+    repo.setRuntimeContributions(projectedPropertyDefinitionsFacet, 'test-renamed', [{
+      metadata: {
+        fieldId,
+        workspaceId: 'ws-1',
+        createdAt: 1,
+        name: 'renamed-status',
+        changeScope: ChangeScope.BlockDefault,
+        hidden: false,
+        seedKey: declared.seedKey,
+        origin: 'plugin:system:test',
+      },
+    }], {workspaceId: 'ws-1'})
+    await createBlock('empty')
+    await createBlock('existing', {status: null})
+
+    await repo.addType('empty', 'todo', {status: 'initial'})
+    await repo.addType('existing', 'todo', {status: 'replacement'})
+
+    expect(repo.block('empty').peek()!.properties).toMatchObject({
+      types: ['todo'],
+      status: 'initial',
+    })
+    expect(repo.block('empty').peek()!.properties['renamed-status']).toBeUndefined()
+    expect(repo.block('existing').peek()!.properties.status).toBeNull()
+  })
+
   it('throws for unknown type ids and unknown initial value schemas', async () => {
-    repo.setFacetRuntime(resolveFacetRuntimeSync([
-      typesFacet.of(defineBlockType({id: 'todo'}), {source: 'test'}),
+    repo.setFacetRuntime(resolveTypeRuntime([
+      typeSeedsFacet.of(seedType({seedKey: 'test/type/todo-5', revision: 1, id: 'todo', label: 'Todo'}), {source: 'test'}),
     ]))
     await createBlock('b1')
 
@@ -172,9 +318,9 @@ describe('Repo type membership orchestration', () => {
   })
 
   it('removes, toggles, and sets type membership in one tx per operation', async () => {
-    repo.setFacetRuntime(resolveFacetRuntimeSync([
-      typesFacet.of(defineBlockType({id: 'a'}), {source: 'test'}),
-      typesFacet.of(defineBlockType({id: 'b'}), {source: 'test'}),
+    repo.setFacetRuntime(resolveTypeRuntime([
+      typeSeedsFacet.of(seedType({seedKey: 'test/type/a-1', revision: 1, id: 'a', label: 'A'}), {source: 'test'}),
+      typeSeedsFacet.of(seedType({seedKey: 'test/type/b-1', revision: 1, id: 'b', label: 'B'}), {source: 'test'}),
     ]))
     await createBlock('b1')
 
@@ -196,8 +342,8 @@ describe('Repo type membership orchestration', () => {
   })
 
   it('addType throws BlockNotFoundForTypeError when the target block is missing', async () => {
-    repo.setFacetRuntime(resolveFacetRuntimeSync([
-      typesFacet.of(defineBlockType({id: 'todo'}), {source: 'test'}),
+    repo.setFacetRuntime(resolveTypeRuntime([
+      typeSeedsFacet.of(seedType({seedKey: 'test/type/todo-6', revision: 1, id: 'todo', label: 'Todo'}), {source: 'test'}),
     ]))
 
     await expect(repo.addType('does-not-exist', 'todo')).rejects.toBeInstanceOf(BlockNotFoundForTypeError)
@@ -212,8 +358,8 @@ describe('Repo type membership orchestration', () => {
   })
 
   it('addTypeInTx (strict default) throws BlockNotFoundForTypeError on a missing block', async () => {
-    repo.setFacetRuntime(resolveFacetRuntimeSync([
-      typesFacet.of(defineBlockType({id: 'todo'}), {source: 'test'}),
+    repo.setFacetRuntime(resolveTypeRuntime([
+      typeSeedsFacet.of(seedType({seedKey: 'test/type/todo-7', revision: 1, id: 'todo', label: 'Todo'}), {source: 'test'}),
     ]))
     const snapshot = repo.snapshotTypeRegistries()
 
@@ -235,8 +381,8 @@ describe('Repo type membership orchestration', () => {
   })
 
   it('addTypeInTx (strict default) throws BlockNotFoundForTypeError on a tombstoned block', async () => {
-    repo.setFacetRuntime(resolveFacetRuntimeSync([
-      typesFacet.of(defineBlockType({id: 'todo'}), {source: 'test'}),
+    repo.setFacetRuntime(resolveTypeRuntime([
+      typeSeedsFacet.of(seedType({seedKey: 'test/type/todo-8', revision: 1, id: 'todo', label: 'Todo'}), {source: 'test'}),
     ]))
     await createBlock('b1')
     // Soft-delete the row so tx.get returns it with deleted=true.
@@ -263,8 +409,8 @@ describe('Repo type membership orchestration', () => {
   })
 
   it('addTypeInTxLenient silently no-ops on a missing block (preserves legacy semantics)', async () => {
-    repo.setFacetRuntime(resolveFacetRuntimeSync([
-      typesFacet.of(defineBlockType({id: 'todo'}), {source: 'test'}),
+    repo.setFacetRuntime(resolveTypeRuntime([
+      typeSeedsFacet.of(seedType({seedKey: 'test/type/todo-9', revision: 1, id: 'todo', label: 'Todo'}), {source: 'test'}),
     ]))
     const snapshot = repo.snapshotTypeRegistries()
 
@@ -275,8 +421,8 @@ describe('Repo type membership orchestration', () => {
   })
 
   it('addTypeInTxLenient silently no-ops on a tombstoned block', async () => {
-    repo.setFacetRuntime(resolveFacetRuntimeSync([
-      typesFacet.of(defineBlockType({id: 'todo'}), {source: 'test'}),
+    repo.setFacetRuntime(resolveTypeRuntime([
+      typeSeedsFacet.of(seedType({seedKey: 'test/type/todo-10', revision: 1, id: 'todo', label: 'Todo'}), {source: 'test'}),
     ]))
     await createBlock('b1')
     await repo.tx(async tx => {
@@ -290,8 +436,8 @@ describe('Repo type membership orchestration', () => {
   })
 
   it('addTypeInTx (strict default) tags a valid block normally', async () => {
-    repo.setFacetRuntime(resolveFacetRuntimeSync([
-      typesFacet.of(defineBlockType({id: 'todo'}), {source: 'test'}),
+    repo.setFacetRuntime(resolveTypeRuntime([
+      typeSeedsFacet.of(seedType({seedKey: 'test/type/todo-11', revision: 1, id: 'todo', label: 'Todo'}), {source: 'test'}),
     ]))
     await createBlock('b1')
     const snapshot = repo.snapshotTypeRegistries()
@@ -309,8 +455,8 @@ describe('Repo type membership orchestration', () => {
       defaultValue: 'open',
       changeScope: ChangeScope.BlockDefault,
     })
-    repo.setFacetRuntime(resolveFacetRuntimeSync([
-      typesFacet.of(defineBlockType({id: 'todo', properties: [statusProp]}), {source: 'test'}),
+    repo.setFacetRuntime(resolveTypeRuntime([
+      typeSeedsFacet.of(seedType({seedKey: 'test/type/todo-12', revision: 1, id: 'todo', label: 'Todo', properties: [statusProp]}), {source: 'test'}),
     ]))
     const snapshot = repo.snapshotTypeRegistries()
 

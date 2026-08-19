@@ -1,29 +1,23 @@
 import { describe, expect, it } from 'vitest'
 import type { BlockResolveContext } from '@/extensions/blockInteraction.js'
 import type { BlockRenderer } from '@/types.js'
-import { CHAR_COUNTER_TYPE } from '../blockType'
 import { characterCountDecoratorContribution } from '../CharacterCountDecorator'
 
-// The contribution only reads `ctx.types`, so a types-only partial is a
-// faithful stand-in for the full resolve context here.
+// The contribution is globally available so child blocks can inspect their
+// parent counter config at render time.
 const ctxWithTypes = (types: string[]): BlockResolveContext =>
   ({types} as unknown as BlockResolveContext)
 
 const innerStub = (): BlockRenderer => () => null
 
 describe('characterCountDecoratorContribution', () => {
-  it('skips blocks without the char-counter type', () => {
-    expect(characterCountDecoratorContribution(ctxWithTypes([]))).toBeNull()
-    expect(characterCountDecoratorContribution(ctxWithTypes(['place']))).toBeNull()
-  })
-
-  it('decorates blocks tagged char-counter', () => {
-    const decorate = characterCountDecoratorContribution(ctxWithTypes([CHAR_COUNTER_TYPE]))
+  it('contributes a decorator for all blocks', () => {
+    const decorate = characterCountDecoratorContribution(ctxWithTypes([]))
     expect(typeof decorate).toBe('function')
   })
 
   it('returns a stable wrapped renderer per inner renderer, distinct across inners', () => {
-    const decorate = characterCountDecoratorContribution(ctxWithTypes([CHAR_COUNTER_TYPE]))
+    const decorate = characterCountDecoratorContribution(ctxWithTypes([]))
     if (typeof decorate !== 'function') throw new Error('expected a decorator')
     const innerA = innerStub()
     const innerB = innerStub()

@@ -10,7 +10,7 @@
  * loop works for non-kernel contributions.
  */
 
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { z } from 'zod'
 import { resolveFacetRuntimeSync } from '@/facets/facet'
 import {
@@ -19,13 +19,16 @@ import {
   type BlockData,
   type BlockReference,
 } from '@/data/api'
-import { aliasesProp, typesProp } from '@/data/properties'
+import { aliasesProp, seedKeyProp, typesProp } from '@/data/properties'
+import { stateChildBlockId } from '@/data/derivedIds'
+import { UI_STATE_PATH_PART, USER_PREFS_PATH_PART } from '@/data/userPrefs'
 import { BlockCache } from '@/data/blockCache'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
+import { createTestRepo } from '@/data/test/createTestRepo'
 import { kernelDataExtension } from '../kernelDataExtension'
 import { queriesFacet } from '../facets'
 import { Repo } from '../repo'
-import { SELECT_BLOCKS_BY_CONTENT_SQL, compileBlocksContentSearchQuery } from './kernelQueries'
+import { SELECT_BLOCKS_BY_CONTENT_SQL, compileBlocksContentSearchQuery, type RecentActivityEntry } from './kernelQueries'
 
 const WS = 'ws-1'
 const OTHER_WS = 'ws-2'
@@ -40,17 +43,11 @@ const setup = async (): Promise<Harness> => {
   // Shared DB opened once per file, reset between tests; fresh Repo per test.
   await resetTestDb(sharedDb.db)
   const h = sharedDb
-  const cache = new BlockCache()
-  let timeCursor = 1700_000_000_000
-  let idCursor = 0
-  const repo = new Repo({
+  // Keep the processor registry empty; these query tests seed
+  // `references` directly and should not depend on plugin processors.
+  const {repo, cache} = createTestRepo({
     db: h.db,
-    cache,
     user: {id: 'user-1'},
-    now: () => ++timeCursor,
-    newId: () => `gen-${++idCursor}`,
-    // Keep the processor registry empty; these query tests seed
-    // `references` directly and should not depend on plugin processors.
   })
   return {h, cache, repo}
 }
@@ -60,9 +57,6 @@ let env: Harness
 beforeAll(async () => { sharedDb = await createTestDb() })
 afterAll(async () => { await sharedDb.cleanup() })
 beforeEach(async () => { env = await setup() })
-// Dispose the per-test Repo's default sync observer so its db.onChange
-// subscription doesn't leak onto the shared DB (closed once in afterAll).
-afterEach(() => { env.repo.stopSyncObserver() })
 
 const create = async (args: {
   id: string
@@ -72,11 +66,13 @@ const create = async (args: {
   workspaceId?: string
   aliases?: string[]
   type?: string
+  types?: string[]
   references?: BlockReference[]
 }) => {
   const properties: Record<string, unknown> = {}
   if (args.aliases) properties[aliasesProp.name] = aliasesProp.codec.encode(args.aliases)
-  if (args.type) properties[typesProp.name] = typesProp.codec.encode([args.type])
+  const types = args.types ?? (args.type ? [args.type] : null)
+  if (types) properties[typesProp.name] = typesProp.codec.encode(types)
   await env.repo.tx(async tx => {
     await tx.create({
       id: args.id,
@@ -96,6 +92,10 @@ const create = async (args: {
 // previously narrowed `unknown`; kept as no-op identities to keep
 // the `await ... .load()` call sites stable while we verify behavior.
 const asBlocks = (v: BlockData[] | undefined): BlockData[] => v ?? []
+/** `recentActivity` returns each row with its chain; most assertions
+ *  here are about WHICH rows come back. */
+const activityBlocks = (v: RecentActivityEntry[] | undefined): BlockData[] =>
+  (v ?? []).map(entry => entry.block)
 const asIds = (v: string[] | undefined): string[] => v ?? []
 const asBlockOrNull = (v: BlockData | null | undefined): BlockData | null => v ?? null
 
@@ -108,10 +108,11 @@ const asBlockOrNull = (v: BlockData | null | undefined): BlockData | null => v ?
  * re-resolves to an equal value (or coalesces with a later control write) is
  * deduped and never reaches a subscriber. The synchronous count is complete the
  * moment `tx` resolves because these tests issue only local `repo.tx` writes to
- * `blocks`: the post-commit processor registry is empty (`KERNEL_PROCESSORS` is
- * `[]` and no plugin processors are registered here) AND the default sync
- * observer only reacts to `blocks_synced` writes, so neither re-invalidates a
- * tick later.
+ * `blocks`: the only registered post-commit processor is the kernel's
+ * `core.aliasClaimRederive` (no plugin processors here), whose apply never
+ * writes blocks — it only enqueues name-rederives, which no-op before the
+ * reference-target sweep exists — AND the default sync observer only reacts to
+ * `blocks_synced` writes, so nothing re-invalidates a tick later.
  */
 const invalidations = () => env.repo.handleStore.metrics.loaderInvalidations
 
@@ -170,6 +171,17 @@ describe('repo.query.subtree', () => {
     await create({id: 'gc', parentId: 'c1', orderKey: 'a0'})
     const out = asBlocks(await env.repo.query.subtree({id: 'r'}).load())
     expect(out.map(b => b.id)).toEqual(['r', 'c1', 'gc', 'c2'])
+  })
+
+  it('carries each row depth relative to the root, dropping back across branches', async () => {
+    await create({id: 'r'})
+    await create({id: 'c1', parentId: 'r', orderKey: 'a0'})
+    await create({id: 'gc', parentId: 'c1', orderKey: 'a0'})
+    await create({id: 'c2', parentId: 'r', orderKey: 'a1'})
+    // Pre-order is [r, c1, gc, c2]; depth must drop from 2 (gc) back to 1
+    // (c2) — the shape where an out[i]↔rows[i] off-by-one would surface.
+    const out = await env.repo.query.subtree({id: 'r'}).load()
+    expect(out.map(b => [b.id, b.depth])).toEqual([['r', 0], ['c1', 1], ['gc', 2], ['c2', 1]])
   })
 
   it('excludes soft-deleted descendants', async () => {
@@ -326,6 +338,25 @@ describe('repo.query.typedBlockCount', () => {
   // The count projection must aggregate the SAME candidate set as the id
   // projection — proven here on the non-referencedBy (types) path; the
   // backlinks path is covered in plugins/backlinks/inline-counts.
+  it('does not multiply a block carrying several of the requested types', async () => {
+    // The `block_types` filter is a JOIN, so a block tagged with two of the
+    // requested types produces two candidate rows; only `SELECT DISTINCT b.id`
+    // in the CTE collapses them. `ids` would show it as a duplicate, `count`
+    // as a phantom extra. Sibling of the ancestor_chain non-multiplication
+    // case below.
+    await create({id: 'both', types: ['note', 'task']})
+    await create({id: 'one', type: 'task'})
+    // Untyped, so the join's INNER-ness is pinned here too: LEFT would keep
+    // this row (the ON clause fails, the row survives with NULL bt columns).
+    await create({id: 'untyped'})
+
+    const ids = await env.repo.query.typedBlockIds({workspaceId: WS, types: ['note', 'task']}).load()
+    const n = await env.repo.query.typedBlockCount({workspaceId: WS, types: ['note', 'task']}).load()
+
+    expect([...ids].sort()).toEqual(['both', 'one'])
+    expect(n).toBe(2)
+  })
+
   it('equals typedBlockIds length, excluding tombstoned rows', async () => {
     await create({id: 'a', type: 'note'})
     await create({id: 'b', type: 'note'})
@@ -512,6 +543,137 @@ describe('repo.query.recentBlocks', () => {
 
     expect(out.map(r => r.id)).toEqual(['c', 'b'])
   })
+
+})
+
+describe('repo.query.recentActivity', () => {
+    // Real derived ids: the filter walks down from
+    // `stateChildBlockId(userPage, <root>)`, so a test that invented
+    // plain ids for the roots would exercise nothing.
+    const UI_STATE_ID = stateChildBlockId('user-page', UI_STATE_PATH_PART)
+    const PREFS_ID = stateChildBlockId('user-page', USER_PREFS_PATH_PART)
+
+    // The per-user state subtree, as `stateBlocks.ts` builds it:
+    // user page → ui-state → per-plugin state → records.
+    const seedUserState = async () => {
+      await create({id: 'user-page', content: 'Alice', types: ['page', 'user']})
+      await create({id: UI_STATE_ID, parentId: 'user-page', content: 'ui-state'})
+      await create({id: 'plugin-state', parentId: UI_STATE_ID, content: 'Startup metrics'})
+      await create({id: 'metrics-record', parentId: 'plugin-state', content: '2026-08-17T00:00:00Z'})
+      await create({id: PREFS_ID, parentId: 'user-page', content: 'Preferences'})
+      await create({id: 'plugin-prefs', parentId: PREFS_ID, content: 'Daily notes'})
+    }
+
+    it('drops every descendant of a state root, at any depth', async () => {
+      await create({id: 'note', content: 'a real note'})
+      await seedUserState()
+
+      const out = activityBlocks(await env.repo.query.recentActivity({
+        workspaceId: WS, limit: 50,
+      }).load())
+
+      expect(out.map(r => r.id)).toEqual(['note'])
+    })
+
+    it('keeps a note the user authored on their own user page', async () => {
+      // The user page is an ordinary navigable page; only its two state
+      // roots are app-owned. Walking from the page itself would swallow
+      // this.
+      await seedUserState()
+      await create({id: 'my-note', parentId: 'user-page', content: 'a note on my page'})
+
+      const out = activityBlocks(await env.repo.query.recentActivity({
+        workspaceId: WS, limit: 50,
+      }).load())
+
+      expect(out.map(r => r.id)).toEqual(['my-note'])
+    })
+
+    it('is the whole difference from recentBlocks, which still sees it all', async () => {
+      await create({id: 'note', content: 'a real note'})
+      await seedUserState()
+
+      const out = asBlocks(await env.repo.query.recentBlocks({workspaceId: WS, limit: 50}).load())
+
+      expect(out.map(r => r.id).sort()).toEqual(
+        [UI_STATE_ID, PREFS_ID, 'metrics-record', 'note', 'plugin-prefs', 'plugin-state', 'user-page'].sort(),
+      )
+    })
+
+    it('drops workspace-root system rows by type but keeps user-defined types', async () => {
+      await create({id: 'note', content: 'a real note'})
+      await create({id: 'panel', content: 'some-block-id', type: 'panel'})
+      await create({id: 'recents-page', content: 'Recents', types: ['page', 'panel:recents']})
+      await create({id: 'my-type', content: 'Book', types: ['page', 'block-type']})
+
+      const out = activityBlocks(await env.repo.query.recentActivity({
+        workspaceId: WS, limit: 50,
+      }).load())
+
+      expect(out.map(r => r.id).sort()).toEqual(['my-type', 'note'])
+    })
+
+    it('drops code-seeded definition blocks but keeps hand-made ones of the same type', async () => {
+      await create({id: 'my-schema', content: 'Status', type: 'property-schema'})
+      await create({id: 'my-extension', content: 'My extension', type: 'extension'})
+      await create({id: 'seeded-schema', content: 'seed:key', type: 'property-schema'})
+      await env.h.db.execute(
+        `UPDATE blocks SET properties_json = ? WHERE id = ?`,
+        [JSON.stringify({
+          types: ['property-schema'],
+          [seedKeyProp.name]: 'system:kernel-data/property/alias',
+        }), 'seeded-schema'],
+      )
+
+      const out = activityBlocks(await env.repo.query.recentActivity({
+        workspaceId: WS, limit: 50,
+      }).load())
+
+      expect(out.map(r => r.id).sort()).toEqual(['my-extension', 'my-schema'])
+    })
+
+    it('filters before the limit — a run of system rows cannot empty the page', async () => {
+      await create({id: 'note-1', content: 'first'})
+      await create({id: 'note-2', content: 'second'})
+      for (let i = 0; i < 5; i++) {
+        await create({id: `panel-${i}`, content: `panel ${i}`, type: 'panel'})
+      }
+
+      const out = activityBlocks(await env.repo.query.recentActivity({
+        workspaceId: WS, limit: 2,
+      }).load())
+
+      expect(out.map(r => r.id)).toEqual(['note-2', 'note-1'])
+    })
+
+    it('walks through a tombstoned state parent to its still-live children', async () => {
+      // Sync-apply permits a live child under a tombstoned parent (the
+      // parent-not-deleted trigger is skipped for `source IS NULL`), so
+      // this shape is reachable. Written raw for exactly that reason —
+      // `repo.tx` would refuse to produce it.
+      await create({id: 'note', content: 'a real note'})
+      await seedUserState()
+      await env.h.db.execute('UPDATE blocks SET deleted = 1 WHERE id = ?', ['plugin-state'])
+
+      const out = activityBlocks(await env.repo.query.recentActivity({
+        workspaceId: WS, limit: 50,
+      }).load())
+
+      expect(out.map(r => r.id)).toEqual(['note'])
+    })
+
+    it('scopes the user-state walk to the workspace', async () => {
+      await create({id: 'other-user-page', content: 'Alice', types: ['user'], workspaceId: OTHER_WS})
+      // Same parent id across workspaces shouldn't happen, but the walk
+      // must key off this workspace's user pages regardless.
+      await create({id: 'note', content: 'a real note'})
+
+      const out = activityBlocks(await env.repo.query.recentActivity({
+        workspaceId: WS, limit: 50,
+      }).load())
+
+      expect(out.map(r => r.id)).toEqual(['note'])
+    })
 })
 
 describe('repo.query.firstChildByContent', () => {
@@ -559,6 +721,26 @@ describe('repo.query.aliasesInWorkspace', () => {
     expect(out).toEqual(['Inbox'])
   })
 
+  it('matches LIKE metacharacters in the filter literally, not as wildcards', async () => {
+    await create({id: 'underscore', aliases: ['a_b']})
+    await create({id: 'single-char', aliases: ['axb']}) // `_`-as-wildcard would match this
+    await create({id: 'percent', aliases: ['50%done']})
+    await create({id: 'plain', aliases: ['anything']}) // a bare `%` would match this if unescaped
+    await create({id: 'backslash', aliases: ['a\\b']}) // contains a literal backslash
+
+    // `_` must match a literal underscore, not any single char.
+    expect(await env.repo.query.aliasesInWorkspace({workspaceId: WS, filter: 'a_b'}).load())
+      .toEqual(['a_b'])
+    // A bare `%` must match only aliases containing a literal percent, not every row.
+    expect(await env.repo.query.aliasesInWorkspace({workspaceId: WS, filter: '%'}).load())
+      .toEqual(['50%done'])
+    // The escape char itself (`\`) must be escaped, so a backslash in the
+    // filter matches literally instead of corrupting the LIKE pattern
+    // (an unescaped `\b` would be read as escaped-`b` → pattern `%ab%`).
+    expect(await env.repo.query.aliasesInWorkspace({workspaceId: WS, filter: 'a\\b'}).load())
+      .toEqual(['a\\b'])
+  })
+
   it('orders exact aliases before prefix and substring matches', async () => {
     await create({id: 'exact', aliases: ['i']})
     await create({id: 'prefix', aliases: ['Inbox']})
@@ -604,6 +786,13 @@ describe('repo.query.aliasMatches', () => {
 
     expect(out.map(row => row.alias)).toEqual(['Dating', 'Dating pool', 'Online Dating'])
   })
+
+  it('matches LIKE metacharacters in the filter literally, not as wildcards', async () => {
+    await create({id: 'lit', content: 'c', aliases: ['a_b']})
+    await create({id: 'wild', content: 'c', aliases: ['axb']}) // `_`-as-wildcard would match this
+    const out = await env.repo.query.aliasMatches({workspaceId: WS, filter: 'a_b'}).load()
+    expect(out.map(row => row.alias)).toEqual(['a_b'])
+  })
 })
 
 describe('repo.query.aliasMatchesFuzzy', () => {
@@ -630,6 +819,18 @@ describe('repo.query.aliasMatchesFuzzy', () => {
       prefixes: ['pr', 'rev'],
     }).load()
     expect(out.map(row => row.blockId).sort()).toEqual(['match'])
+  })
+
+  it('matches LIKE metacharacters in a prefix literally, not as wildcards', async () => {
+    // Prefixes are literal token substrings, not patterns — a typed `_`
+    // must not act as a single-char wildcard in the pre-filter.
+    await create({id: 'lit', aliases: ['a_b']})
+    await create({id: 'wild', aliases: ['axb']}) // `_`-as-wildcard would match this
+    const out = await env.repo.query.aliasMatchesFuzzy({
+      workspaceId: WS,
+      prefixes: ['a_b'],
+    }).load()
+    expect(out.map(row => row.blockId)).toEqual(['lit'])
   })
 
   it('returns workspace-wide rows when prefixes is empty', async () => {
@@ -748,6 +949,90 @@ describe('repo.query.findExtensionBlocks', () => {
 // ════════════════════════════════════════════════════════════════════
 // Invalidation per dep kind
 // ════════════════════════════════════════════════════════════════════
+
+describe('repo.query.blockTypesByIds', () => {
+  it('returns types in the order the block declares them, filtering non-strings', async () => {
+    await env.h.db.execute(
+      `UPDATE blocks SET properties_json = ? WHERE id = ?`,
+      [JSON.stringify({types: ['person', null, 'author']}), 'b'],
+    ).catch(() => {})
+    await create({id: 'ordered'})
+    await env.h.db.execute(
+      `UPDATE blocks SET properties_json = ? WHERE id = ?`,
+      [JSON.stringify({types: ['person', null, 'author']}), 'ordered'],
+    )
+
+    const out = await env.repo.query.blockTypesByIds({
+      workspaceId: WS,
+      blockIds: ['ordered'],
+    }).load()
+    // Declared order, NOT the (block_id, type) index's ascending order —
+    // consumers show the first type, so 'person' has to stay first.
+    expect(out).toEqual([
+      {blockId: 'ordered', type: 'person'},
+      {blockId: 'ordered', type: 'author'},
+    ])
+  })
+
+  it('tagging a previously-untyped block invalidates the handle (per-id row dep)', async () => {
+    // The dep is declared per REQUESTED id, not per returned row. An
+    // untyped block contributes no rows, so a dep derived from the
+    // result set would never see it gain a type — the completion
+    // dropdown would keep showing no hint until something else
+    // invalidated it.
+    await create({id: 'untyped'})
+    const handle = env.repo.query.blockTypesByIds({workspaceId: WS, blockIds: ['untyped']})
+    expect(await handle.load()).toEqual([])
+
+    const fired: unknown[] = []
+    const unsub = handle.subscribe(v => { fired.push(v) })
+    try {
+      await env.repo.tx(async tx => {
+        await tx.update('untyped', {
+          properties: {[typesProp.name]: typesProp.codec.encode(['person'])},
+        })
+      }, {scope: ChangeScope.BlockDefault})
+
+      await vi.waitFor(() => {
+        expect(handle.peek()).toEqual([{blockId: 'untyped', type: 'person'}])
+      })
+    } finally {
+      unsub()
+    }
+  })
+})
+
+describe('repo.query.aliasClaimantCounts', () => {
+  it('counts live claimants per alias, ignoring deleted rows and other workspaces', async () => {
+    // Duplicate claims cannot go through `repo.tx` — the alias-uniqueness
+    // processor rejects the second one. Raw inserts are the sync-applied
+    // shape that produces co-claims in the first place: they maintain the
+    // block_aliases index but run no post-commit processor.
+    const claimRaw = async (id: string, alias: string, workspaceId = WS, deleted = 0) => {
+      await env.h.db.execute(
+        `INSERT INTO blocks (id, workspace_id, parent_id, order_key, content, properties_json,
+          references_json, created_at, updated_at, user_updated_at, created_by, updated_by, deleted)
+         VALUES (?, ?, NULL, ?, '', ?, '[]', 1, 1, 1, 'u', 'u', ?)`,
+        [id, workspaceId, `k-${id}`, JSON.stringify({[aliasesProp.name]: [alias]}), deleted],
+      )
+    }
+    await claimRaw('a1', 'Shared')
+    await claimRaw('a2', 'Shared')
+    await claimRaw('gone', 'Shared', WS, 1)
+    await claimRaw('solo', 'Solo')
+    await claimRaw('other', 'Shared', 'ws-other')
+
+    const out = await env.repo.query.aliasClaimantCounts({
+      workspaceId: WS,
+      aliases: ['Shared', 'Solo', 'Absent'],
+    }).load()
+
+    expect([...out].sort((x, y) => x.alias.localeCompare(y.alias))).toEqual([
+      {alias: 'Shared', claimants: 2},
+      {alias: 'Solo', claimants: 1},
+    ])
+  })
+})
 
 describe('invalidation', () => {
   it('subtree: a new descendant invalidates the handle (parent-edge dep)', async () => {
@@ -1135,6 +1420,39 @@ describe('invalidation', () => {
     }
   })
 
+  it('typedBlockIds (ancestor filter): restoring an implicit ancestor context invalidates', async () => {
+    await create({id: 'target'})
+    await create({id: 'context'})
+    await create({
+      id: 'src',
+      parentId: 'context',
+      references: [{id: 'target', alias: 'Target'}],
+    })
+    const handle = env.repo.query.typedBlockIds({
+      workspaceId: WS,
+      referencedBy: {id: 'target'},
+      match: [{scope: 'ancestor', referencedBy: {id: 'context'}}],
+    })
+    expect(asIds(await handle.load())).toEqual(['src'])
+
+    const fired: string[][] = []
+    const unsub = handle.subscribe((value) => { fired.push(value) })
+    try {
+      await env.repo.tx(tx => tx.delete('context'), {scope: ChangeScope.BlockDefault})
+      await vi.waitFor(() => {
+        expect(asIds(handle.peek())).toEqual([])
+      })
+
+      await env.repo.tx(tx => tx.restore('context'), {scope: ChangeScope.BlockDefault})
+      await vi.waitFor(() => {
+        expect(asIds(handle.peek())).toEqual(['src'])
+      })
+      expect(fired).toContainEqual(['src'])
+    } finally {
+      unsub()
+    }
+  })
+
   it('typedBlockIds (ancestor filter): ancestor content edits do NOT invalidate', async () => {
     await create({id: 'target'})
     await create({id: 'project'})
@@ -1346,6 +1664,64 @@ describe('invalidation', () => {
       expect(fired.length).toBe(2)
     } finally {
       u1(); u2()
+    }
+  })
+
+  // `recentActivity` is the exception to the rule above: it reports which
+  // PAGE an edit happened under, so a parent move changes its answer with
+  // no content written anywhere.
+  it('recentActivity: a parent move of a listed row invalidates, and re-homes the entry', async () => {
+    await create({id: 'p1', content: 'Page one', types: ['page']})
+    await create({id: 'p2', content: 'Page two', types: ['page']})
+    await create({id: 'a', parentId: 'p1', content: 'a note'})
+    const handle = env.repo.query.recentActivity({workspaceId: WS, limit: 10})
+    const chainOf = (id: string) =>
+      handle.peek()?.find(e => e.block.id === id)?.ancestors.map(b => b.id)
+    await handle.load()
+    expect(chainOf('a')).toEqual(['p1'])
+
+    const fired: number[] = []
+    const unsub = handle.subscribe(() => { fired.push(1) })
+    try {
+      await env.repo.tx(
+        tx => tx.move('a', {parentId: 'p2', orderKey: 'a0'}),
+        {scope: ChangeScope.BlockDefault},
+      )
+      await vi.waitFor(() => {
+        expect(fired.length).toBeGreaterThan(0)
+        expect(chainOf('a')).toEqual(['p2'])
+      })
+    } finally {
+      unsub()
+    }
+  })
+
+  it('recentActivity: a move of the PAGE a listed row sits under invalidates too', async () => {
+    // Nothing about row `a` changes here — its container moves out from
+    // under it, which is why the dep covers the chain, not just the row.
+    // `p1` is deliberately empty-content so it is NOT itself a listed row:
+    // otherwise its own per-row dep would catch the move and this would
+    // pass with the ancestor dep deleted.
+    await create({id: 'p1', content: '', types: ['page']})
+    await create({id: 'p2', content: 'Page two', types: ['page']})
+    await create({id: 'a', parentId: 'p1', content: 'a note'})
+    const handle = env.repo.query.recentActivity({workspaceId: WS, limit: 10})
+    await handle.load()
+
+    const fired: number[] = []
+    const unsub = handle.subscribe(() => { fired.push(1) })
+    try {
+      await env.repo.tx(
+        tx => tx.move('p1', {parentId: 'p2', orderKey: 'a0'}),
+        {scope: ChangeScope.BlockDefault},
+      )
+      await vi.waitFor(() => {
+        expect(fired.length).toBeGreaterThan(0)
+        expect(handle.peek()?.find(e => e.block.id === 'a')?.ancestors.map(b => b.id))
+          .toEqual(['p1', 'p2'])
+      })
+    } finally {
+      unsub()
     }
   })
 

@@ -1,11 +1,11 @@
 // @vitest-environment node
 
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { ChangeScope } from '@/data/api'
-import { BlockCache } from '@/data/blockCache'
 import { kernelDataExtension } from '@/data/kernelDataExtension'
 import { Repo } from '@/data/repo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
+import { createTestRepo, isBlockDeleted } from '@/data/test/createTestRepo'
 import { resolveFacetRuntimeSync } from '@/facets/facet.js'
 import { typesProp } from '@/data/properties.js'
 import {
@@ -29,13 +29,14 @@ let sharedDb: TestDb
 let h: TestDb
 let repo: Repo
 
+const extensions = [
+  dailyNotesDataExtension,
+  srsReschedulingPlugin,
+  blockDateAdapterFacet.of(referenceDateAdapter, {source: 'test-ref'}),
+]
+
 const setupRuntime = () => {
-  const runtime = resolveFacetRuntimeSync([
-    kernelDataExtension,
-    dailyNotesDataExtension,
-    srsReschedulingPlugin,
-    blockDateAdapterFacet.of(referenceDateAdapter, {source: 'test-ref'}),
-  ])
+  const runtime = resolveFacetRuntimeSync([kernelDataExtension, ...extensions])
   repo.setFacetRuntime(runtime)
   return runtime
 }
@@ -45,14 +46,7 @@ afterAll(async () => { await sharedDb.cleanup() })
 beforeEach(async () => {
   await resetTestDb(sharedDb.db)
   h = sharedDb
-  repo = new Repo({
-    db: h.db, cache: new BlockCache(), user: {id: 'user-1'},
-  })
-  setupRuntime()
-})
-
-afterEach(async () => {
-  repo.stopSyncObserver()
+  repo = createTestRepo({db: h.db, user: {id: 'user-1'}, extensions}).repo
 })
 
 describe('srsBlockDateAdapter', () => {
@@ -145,5 +139,32 @@ describe('srsBlockDateAdapter', () => {
     expect(await adapter?.setIso(block, '2026-06-15')).toBe(true)
     expect(block.peek()?.content).toBe('study [[2026-08-01]]')
     expect(block.get(srsNextReviewDateProp)).toBe(dailyNoteBlockId(WS, '2026-06-15'))
+  })
+})
+
+describe('setIso undo grouping (issue #306)', () => {
+  it('records ONE undo entry even when the target daily note must be created', async () => {
+    repo.setActiveWorkspaceId(WS)
+    const original = await getOrCreateDailyNote(repo, WS, '2026-05-01')
+    await repo.tx(tx => tx.create({id: 'srs', workspaceId: WS, parentId: null, orderKey: 'a',
+      content: '',
+      properties: {
+        [typesProp.name]: typesProp.codec.encode([SRS_SM25_TYPE]),
+        [srsNextReviewDateProp.name]: srsNextReviewDateProp.codec.encode(original.id),
+      },
+    }), {scope: ChangeScope.BlockDefault})
+    const block = repo.block('srs')
+    await block.load()
+    repo.undoManager.clear()
+
+    // '2026-06-15' has no daily note yet — setIso creates it (its own
+    // tx) then writes the property (another tx): merged into one entry.
+    expect(await srsBlockDateAdapter.setIso(block, '2026-06-15')).toBe(true)
+    expect(repo.undoManager.depths(ChangeScope.BlockDefault)).toEqual({undo: 1, redo: 0})
+
+    expect(await repo.undo()).toBe(true)
+    await block.load()
+    expect(block.get(srsNextReviewDateProp)).toBe(original.id)
+    expect(await isBlockDeleted(repo, dailyNoteBlockId(WS, '2026-06-15'))).toBe(true)
   })
 })

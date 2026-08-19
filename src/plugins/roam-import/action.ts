@@ -3,10 +3,10 @@ import {
   ActionConfig,
   ActionContextTypes,
 } from '@/shortcuts/types.js'
-import { parseAppHash } from '@/utils/routing.js'
+import { activeWorkspaceIdPreferringHash } from '@/utils/navigation.js'
 import { importRoam } from './import.ts'
 import { showProgress } from '@/utils/toast.js'
-import { scheduleIdle } from '@/utils/scheduleIdle.js'
+import { CATCHUP_DEEP_IDLE, scheduleDeepIdle } from '@/utils/scheduleIdle.js'
 import { runAnalyzeIfStale } from '@/data/maintenance'
 import type { RoamExport } from './types.ts'
 
@@ -37,17 +37,7 @@ export const importRoamAction = ({repo}: {repo: Repo}): ActionConfig => ({
             return
           }
 
-          // Prefer the URL hash over `repo.activeWorkspaceId` —
-          // the hash is the source of truth for what workspace
-          // the user is viewing, and `repo.activeWorkspaceId`
-          // can lag behind it (the active id flips inside
-          // App.tsx's async getInitialBlock chain, which awaits
-          // workspace lookup + role check before settling).
-          // If the user clicks the import shortcut shortly after
-          // switching workspaces, reading repo state alone would
-          // route the import into the prior workspace.
-          const workspaceId = parseAppHash(window.location.hash).workspaceId
-            ?? repo.activeWorkspaceId
+          const workspaceId = activeWorkspaceIdPreferringHash(repo)
           if (!workspaceId) {
             console.error('[roam-import] no active workspace')
             banner.fail('Roam import failed: no active workspace')
@@ -70,15 +60,21 @@ export const importRoamAction = ({repo}: {repo: Repo}): ActionConfig => ({
             `${summary.blocksWritten} blocks (${(summary.durationMs / 1000).toFixed(1)}s)`,
           )
           // A bulk import can multiply the workspace; the planner's
-          // `sqlite_stat1` is now stale and would mis-rank join orders
-          // until the next boot. Re-check drift at idle so good plans land
-          // this session without a reload (no-op unless the import grew
-          // `blocks` past the drift factor — see clientSchema.runAnalyzeIfStale).
-          scheduleIdle(() => {
+          // `sqlite_stat1` is now stale and would mis-rank join orders until
+          // the next boot. Re-check at idle so good plans land this session
+          // without a reload. Usually a no-op — it re-analyzes only what SQLite
+          // reports as stale (see clientSchema.runAnalyzeIfStale), which for a
+          // table that merely grew means ~10x growth.
+          //
+          // Deep idle, matching the boot check in repoProvider: ANALYZE is a
+          // multi-second park of the single SQLite worker, and scheduleIdle's
+          // 2s cap would land it right as the freshly-imported tree renders.
+          // Fire-and-forget: if this one no-ops, the next boot's check covers it.
+          scheduleDeepIdle(() => {
             void runAnalyzeIfStale(repo.db).catch(error => {
               console.warn('[roam-import] ANALYZE check failed:', error)
             })
-          })
+          }, CATCHUP_DEEP_IDLE)
         } catch (err) {
           console.error('[roam-import] failed:', err)
           banner.fail(`Roam import failed: ${err instanceof Error ? err.message : String(err)}`)

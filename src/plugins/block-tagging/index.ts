@@ -1,11 +1,13 @@
 import { actionsFacet } from '@/extensions/core.js'
-import { propertyEditorOverridesFacet } from '@/data/facets.js'
+import { propertyEditorOverridesFacet, valuePresetPresentationsFacet } from '@/data/facets.js'
 import type { AppExtension } from '@/facets/facet.js'
 import { dialogAppMountExtension } from '@/extensions/dialogAppMount.js'
 import { systemToggle } from '@/facets/togglable.js'
 import { groupedBacklinksGroupHeaderActionsFacet } from '@/plugins/grouped-backlinks/facet.js'
+import {defineHiddenPresetPresentation} from '@/data/api'
 import { blockTaggingDataExtension } from './dataExtension.ts'
 import { blockTagsConfigUi } from './propertyEditorOverride.ts'
+import { blockTagsConfigPresetCore } from './config.ts'
 import {
   addTagAction,
   addTagBlockAction,
@@ -26,6 +28,10 @@ export const blockTaggingPlugin: AppExtension = systemToggle({
   blockTaggingDataExtension,
   dialogAppMountExtension,
   propertyEditorOverridesFacet.of(blockTagsConfigUi, {source: 'block-tagging'}),
+  valuePresetPresentationsFacet.of(
+    defineHiddenPresetPresentation(blockTagsConfigPresetCore, 'Block-tag configuration'),
+    {source: 'block-tagging'},
+  ),
   actionsFacet.of(addTagBlockAction, {source: 'block-tagging'}),
   actionsFacet.of(addTagAction, {source: 'block-tagging'}),
   groupedBacklinksGroupHeaderActionsFacet.of(

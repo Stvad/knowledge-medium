@@ -17,7 +17,7 @@
  * snapshots → cache.
  */
 
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import {
   ChangeScope,
   CycleError,
@@ -41,8 +41,10 @@ import {
   type Schema,
 } from '@/data/api'
 import { aliasesProp } from '@/data/properties'
+import { InvalidBlockIdError } from '@/data/blockId'
 import { BlockCache } from '@/data/blockCache'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
+import { createTestRepo } from '@/data/test/createTestRepo'
 import { Repo } from '../repo'
 
 // ──── Test fixtures ────
@@ -90,22 +92,17 @@ const setup = async (overrides?: {isReadOnly?: boolean}): Promise<Harness> => {
   // Shared DB opened once per file, reset between tests; fresh Repo per test.
   await resetTestDb(sharedDb.db)
   const h = sharedDb
-  const cache = new BlockCache()
   let timeCursor = 1700_000_000_000
   const tick = () => ++timeCursor
-  let idCursor = 0
-  const newId = () => `gen-${++idCursor}`
-  const repo = new Repo({
+  // Engine tests pin Tx primitive behavior. Kernel processors firing
+  // on content writes would add follow-up txs (parseReferences) the
+  // engine assertions don't account for — keep the processor surface
+  // empty and let the parseReferences integration tests cover it.
+  const {repo, cache} = createTestRepo({
     db: h.db,
-    cache,
     user: {id: 'user-1', name: 'Test'},
     isReadOnly: overrides?.isReadOnly,
     now: tick,
-    newId,
-    // Engine tests pin Tx primitive behavior. Kernel processors firing
-    // on content writes would add follow-up txs (parseReferences) the
-    // engine assertions don't account for — keep the processor surface
-    // empty and let the parseReferences integration tests cover it.
   })
   // Register only the local test probe — afterCommit tests use it to
   // schedule explicit jobs. The rest of the engine tests don't call
@@ -127,9 +124,6 @@ let env: Harness
 beforeAll(async () => { sharedDb = await createTestDb() })
 afterAll(async () => { await sharedDb.cleanup() })
 beforeEach(async () => { env = await setup() })
-// Dispose the per-test Repo's default sync observer so its db.onChange
-// subscription doesn't leak onto the shared DB (closed once in afterAll).
-afterEach(() => { env.repo.stopSyncObserver() })
 
 // ──── tx.create ────
 
@@ -416,6 +410,46 @@ describe('tx.update (data-fields-only)', () => {
     const snap = env.cache.getSnapshot(id)!
     expect(snap.updatedAt).toBe(ratcheted + 1)                 // floored to before+1, not now()
     expect(snap.userUpdatedAt).toBeLessThan(snap.updatedAt)    // display stamp is plain now()
+  })
+})
+
+// ──── tx.stampReferenceTarget (local derived column) ────
+
+describe('tx.stampReferenceTarget (local, no-upload)', () => {
+  it('writes the column without advancing updated_at or enqueuing an upload', async () => {
+    const id = await env.repo.tx(
+      tx => tx.create({workspaceId: 'ws-1', parentId: null, orderKey: 'a0', content: '((t))'}),
+      {scope: ChangeScope.BlockDefault},
+    )
+    const createdAt = env.cache.getSnapshot(id)!.updatedAt
+    env.tick() // advance the clock: a stray updated_at bump would use this later value
+    const crudBefore = (await env.psCrud()).length
+
+    await env.repo.tx(tx => tx.stampReferenceTarget(id, 'target-x', false), {scope: ChangeScope.BlockDefault})
+
+    const snap = env.cache.getSnapshot(id)!
+    expect(snap.referenceTargetId).toBe('target-x')  // column written
+    expect(snap.updatedAt).toBe(createdAt)           // NOT advanced — not a synced edit
+    expect((await env.psCrud()).length).toBe(crudBefore)  // no upload envelope minted
+  })
+
+  it('is a no-op (no UPDATE, no row_event) when the column already holds the target', async () => {
+    const id = await env.repo.tx(
+      tx => tx.create({workspaceId: 'ws-1', parentId: null, orderKey: 'a0', content: '((t))'}),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await env.repo.tx(tx => tx.stampReferenceTarget(id, 'target-x', false), {scope: ChangeScope.BlockDefault})
+    const rowEventsAfterFirst = (
+      await env.h.db.getAll('SELECT id FROM row_events WHERE block_id = ?', [id])
+    ).length
+
+    await env.repo.tx(tx => tx.stampReferenceTarget(id, 'target-x', false), {scope: ChangeScope.BlockDefault})
+
+    // The guard short-circuits before any UPDATE, so the no-WHEN row_event
+    // trigger never fires — the count is unchanged.
+    expect((await env.h.db.getAll('SELECT id FROM row_events WHERE block_id = ?', [id])).length)
+      .toBe(rowEventsAfterFirst)
+    expect(env.cache.getSnapshot(id)!.referenceTargetId).toBe('target-x')
   })
 })
 
@@ -1178,5 +1212,116 @@ describe('commit pipeline bookkeeping', () => {
     )
     expect(allCrud[2].tx_id).not.toBeNull()
     expect(allCrud[2].tx_id).not.toBe(crud[0].tx_id)
+  })
+})
+
+// ──── Block-id shape contract (issue #456) ────
+//
+// The guard is in `buildNewBlockRow`, shared by `tx.create` and
+// `tx.createOrGet` — see `@/data/blockId` for why there. What needs pinning
+// beyond the predicate itself (blockId.test.ts) is the WIRING, and its
+// polarity in particular: these tests build a Repo the way production does,
+// with `new Repo({db, cache, user})` and no id options at all, so they fail
+// if `blockIdPolicy` stops defaulting to `'canonical'` or stops being passed
+// down through `runTx`. Using `createTestRepo` here would prove neither — it
+// injects `blockIdPolicy: 'any'` for its mnemonic ids.
+describe('block id contract (issue #456)', () => {
+  const VALID_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
+  const OTHER_VALID_ID = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
+
+  /** A Repo with production's id configuration: none. */
+  const strictRepo = (overrides?: {newId?: () => string}): Repo =>
+    new Repo({
+      db: sharedDb.db,
+      cache: new BlockCache(),
+      user: {id: 'user-1', name: 'Test'},
+      startSyncObserver: false,
+      ...overrides,
+    })
+
+  const liveIds = async (): Promise<string[]> => {
+    const rows = await sharedDb.db.getAll<{id: string}>('SELECT id FROM blocks ORDER BY id')
+    return rows.map(row => row.id)
+  }
+
+  it('rejects a non-canonical explicit id at tx.create, writing no row', async () => {
+    const repo = strictRepo()
+    await expect(repo.tx(async tx => {
+      await tx.create({id: 'my-block', workspaceId: 'ws-1', parentId: null, orderKey: 'a0'})
+    }, {scope: ChangeScope.BlockDefault})).rejects.toThrow(InvalidBlockIdError)
+
+    expect(await liveIds()).toEqual([])
+  })
+
+  it('rejects a non-canonical explicit id at tx.createOrGet too', async () => {
+    const repo = strictRepo()
+    await expect(repo.tx(async tx => {
+      await tx.createOrGet({id: 'MY-BLOCK', workspaceId: 'ws-1', parentId: null, orderKey: 'a0'})
+    }, {scope: ChangeScope.BlockDefault})).rejects.toThrow(InvalidBlockIdError)
+
+    expect(await liveIds()).toEqual([])
+  })
+
+  it('accepts canonical explicit ids through both insert paths', async () => {
+    const repo = strictRepo()
+    await repo.tx(async tx => {
+      await tx.create({id: VALID_ID, workspaceId: 'ws-1', parentId: null, orderKey: 'a0'})
+      await tx.createOrGet({id: OTHER_VALID_ID, workspaceId: 'ws-1', parentId: null, orderKey: 'a1'})
+    }, {scope: ChangeScope.BlockDefault})
+
+    expect(await liveIds()).toEqual([VALID_ID, OTHER_VALID_ID].sort())
+  })
+
+  it('accepts the id its own default minter produces', async () => {
+    const repo = strictRepo()
+    const id = await repo.tx(
+      tx => tx.create({workspaceId: 'ws-1', parentId: null, orderKey: 'a0'}),
+      {scope: ChangeScope.BlockDefault},
+    )
+    // The real default is `uuid`'s v4 — if the guard and the minter ever
+    // disagreed on shape or case, every write in the app would fail.
+    expect(await liveIds()).toEqual([id])
+  })
+
+  // Separate clause from the explicit-id one above, and invisible through it:
+  // the guard checks the RESOLVED id, so a Repo whose minter emits something
+  // non-canonical fails even though no caller supplied an id. Reverting the
+  // resolved-id decision (checking `data.id` instead) passes every other test
+  // in this describe and only fails this one.
+  it('rejects an id its own minter produced, when that minter is non-canonical', async () => {
+    const repo = strictRepo({newId: () => 'gen-1'})
+    await expect(repo.tx(
+      tx => tx.create({workspaceId: 'ws-1', parentId: null, orderKey: 'a0'}),
+      {scope: ChangeScope.BlockDefault},
+    )).rejects.toThrow(InvalidBlockIdError)
+
+    expect(await liveIds()).toEqual([])
+  })
+
+  it("names the failing primitive, so the message says which write it was", async () => {
+    const repo = strictRepo()
+    await expect(repo.tx(async tx => {
+      await tx.create({id: 'my-block', workspaceId: 'ws-1', parentId: null, orderKey: 'a0'})
+    }, {scope: ChangeScope.BlockDefault})).rejects.toThrow(/^tx\.create: /)
+  })
+
+  // The one declared relaxation (createTestRepo). Pinned so that turning the
+  // guard off stays a deliberate, visible act rather than something a future
+  // default flip could do silently to the whole suite.
+  it("lets a repo opt out with blockIdPolicy: 'any' — the test-harness shape", async () => {
+    const repo = new Repo({
+      db: sharedDb.db,
+      cache: new BlockCache(),
+      user: {id: 'user-1', name: 'Test'},
+      startSyncObserver: false,
+      blockIdPolicy: 'any',
+      newId: () => 'gen-1',
+    })
+    await repo.tx(async tx => {
+      await tx.create({id: 'root', workspaceId: 'ws-1', parentId: null, orderKey: 'a0'})
+      await tx.create({workspaceId: 'ws-1', parentId: null, orderKey: 'a1'})
+    }, {scope: ChangeScope.BlockDefault})
+
+    expect(await liveIds()).toEqual(['gen-1', 'root'])
   })
 })

@@ -1,4 +1,4 @@
-import { PanelRightOpen, Plus, Settings, Undo2, ZoomIn } from 'lucide-react'
+import { KeyboardOff, Maximize2, PanelRightOpen, Plus, Redo2, Settings, Undo2, ZoomIn } from 'lucide-react'
 import { defaultActionContextConfigs } from './defaultContexts.ts'
 import {
   ActionContextTypes,
@@ -7,6 +7,7 @@ import {
   BlockShortcutDependencies,
   MultiSelectModeDependencies,
   CodeMirrorEditModeDependencies,
+  PropertyEditingDependencies,
   ActionTrigger,
 } from './types'
 import { Block } from '@/data/block'
@@ -21,12 +22,13 @@ import {
   nextVisibleBlock,
   previousVisibleBlock,
   getRootBlock,
+  blockAfterSubtreeRemoval,
 } from '@/utils/selection.js'
 import { importState } from '@/utils/state.js'
 import { withMoveTransition } from '@/utils/viewTransition.js'
 import {
-  activePanelIdProp,
   focusBlock,
+  isCollapsedProp,
   topLevelBlockIdProp,
   editorSelection,
   setIsEditing,
@@ -51,22 +53,28 @@ import {
   cursorIsAtEnd,
   cursorIsAtStart,
 } from '@/utils/codemirror.js'
-import { copySelectedBlocksToClipboard } from '@/utils/copy.js'
+import { copyBlockIdsToClipboard, copySelectedBlocksToClipboard } from '@/utils/copy.js'
+import {
+  deleteBlockThroughUi,
+  deleteBlocksThroughUi,
+  ensureDeletableThroughUi,
+} from '@/utils/deleteBlockThroughUi.js'
 import { pasteFromClipboard } from '@/paste/operations.js'
 import { actionContextsFacet, actionsFacet } from '@/extensions/core.js'
 import { AppExtension } from '@/facets/facet.js'
 import { refreshAppRuntime } from '@/facets/runtimeEvents.js'
 import { systemToggle } from '@/facets/togglable.js'
 import { getLayoutSessionBlock, getUserPrefsBlock } from '@/data/stateBlocks.js'
-import { getLayoutSessionId } from '@/utils/layoutSessionId.js'
+import { isMobileViewport } from '@/utils/viewport.js'
 import {
   navigate,
   navigateFromGlobalCommand,
+  resolveActivePanelRow,
 } from '@/utils/navigation.js'
 import {
   deletePanelRow,
   panelBlockId,
-  panelRowsInLayoutOrder,
+  togglePanelMaximized,
 } from '@/utils/panelLayoutProjection.js'
 import { ensureMetricsConsoleHook } from '@/data/metricsConsoleHook.js'
 import { showProgress } from '@/utils/toast.js'
@@ -83,7 +91,7 @@ import { WipeLocalDataDialog } from '@/shortcuts/WipeLocalDataDialog.js'
 import { dialogAppMountExtension } from '@/extensions/dialogAppMount.js'
 import { focusPropertyRow } from '@/utils/propertyNavigation.js'
 import { reloadInSafeMode } from '@/utils/safeMode.js'
-import { outlineRenderScopeId } from '@/utils/renderScope.js'
+import { panelRenderScopeId } from '@/utils/renderScope.js'
 
 const splitCodeMirrorBlockAtCursor = async (
   block: Block,
@@ -167,14 +175,12 @@ const createNodeInActivePanelFromGlobalContext = async (
   const repo = uiStateBlock.repo
   if (repo.isReadOnly) return
 
-  const layoutSessionBlock = await getLayoutSessionBlock(uiStateBlock, getLayoutSessionId())
-  await layoutSessionBlock.load()
-  const rows = await repo.query.subtree({id: layoutSessionBlock.id}).load()
-  const panelRows = panelRowsInLayoutOrder(layoutSessionBlock.id, rows)
-  const activePanelId = layoutSessionBlock.peekProperty(activePanelIdProp)
-  const activePanelRow =
-    (activePanelId ? panelRows.find(row => row.id === activePanelId) : undefined) ??
-    panelRows.at(-1)
+  const layoutSessionBlock = await getLayoutSessionBlock(uiStateBlock, repo.activeLayoutSessionId)
+  // Shared with the navigation resolver rather than re-derived: this CREATES a
+  // block in the pane it picks, and the copy that used to live here indexed
+  // raw row order, so a maximized pane meant the new node landed in a page the
+  // user could not see.
+  const activePanelRow = await resolveActivePanelRow(layoutSessionBlock)
   if (!activePanelRow) return
 
   const activeTopLevelBlockId = panelBlockId(activePanelRow)
@@ -186,7 +192,7 @@ const createNodeInActivePanelFromGlobalContext = async (
   })
   await focusBlock(repo.block(activePanelRow.id), newId, {
     edit: true,
-    renderScopeId: outlineRenderScopeId(activeTopLevelBlockId),
+    renderScopeId: panelRenderScopeId(activePanelRow.id, activeTopLevelBlockId),
   })
 }
 
@@ -311,6 +317,21 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
     },
   }
 
+  const toggleMaximizePanelBlock: BlockAction = {
+    id: 'toggle_maximize_panel',
+    description: 'Maximize / restore current panel',
+    icon: Maximize2,
+    handler: async ({uiStateBlock}: BlockShortcutDependencies) => {
+      // uiStateBlock IS the panel row in panel contexts. The viewport read
+      // stays with the caller (see `maximizeWouldHideSomething`).
+      await togglePanelMaximized(repo, uiStateBlock.id, {canRenderSplit: !isMobileViewport()})
+    },
+    defaultBinding: {
+      keys: '$mod+Shift+Backslash',
+      eventOptions: {preventDefault: true},
+    },
+  }
+
   const insertExampleExtensionsBlock: BlockAction = {
     id: 'insert_example_extensions',
     description: 'Insert example extensions under current block',
@@ -325,25 +346,41 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
     bindBlockActionContext(ActionContextTypes.NORMAL_MODE, zoomOutBlock),
     bindBlockActionContext(ActionContextTypes.NORMAL_MODE, openFocusedInPanelBlock),
     bindBlockActionContext(ActionContextTypes.NORMAL_MODE, closeCurrentPanelBlock),
+    bindBlockActionContext(ActionContextTypes.NORMAL_MODE, toggleMaximizePanelBlock),
     bindBlockActionContext(ActionContextTypes.NORMAL_MODE, insertExampleExtensionsBlock),
     copyBlockAction,
     copyBlockRefAction,
     copyBlockEmbedAction,
     copyBlockContentAction,
     copyBlockLinkAction,
+    // Promoted out of the vim plugin, like the copy actions above it: an action
+    // has to be IN THE REGISTRY to be dispatchable at all, and the block/swipe
+    // menu and command palette dispatch by id with supplied deps rather than
+    // through an active keyboard context. Defined only by vim (an opt-in
+    // plugin), `delete_block` was absent on a default install, so the menu's
+    // Delete button logged "not registered" and did nothing —
+    // `DEFAULT_QUICK_ACTION_ITEMS` names exactly these three.
+    //
+    // They live in this group, inside `system:default-actions`, so turning that
+    // toggle off takes them with it. Deliberate: everything roots in a toggle.
+    // The keys still only fire in NORMAL_MODE, which only the vim plugin
+    // activates.
+    {...deleteBlockAction, defaultBinding: {keys: ['Delete', 'Backspace', 'd d']}},
+    togglePropertiesDisplayAction,
+    toggleBlockCollapseAction,
   ]
 
   // CodeMirror versions of move actions
   const moveBlockUpCM: ActionConfig<typeof ActionContextTypes.EDIT_MODE_CM> = {
     ...bindBlockActionContext(ActionContextTypes.EDIT_MODE_CM, moveBlockUp),
     id: 'move_block_up_cm',
-    description: 'Move block up (CodeMirror)',
+    description: 'Move block up',
   }
 
   const moveBlockDownCM: ActionConfig<typeof ActionContextTypes.EDIT_MODE_CM> = {
     ...bindBlockActionContext(ActionContextTypes.EDIT_MODE_CM, moveBlockDown),
     id: 'move_block_down_cm',
-    description: 'Move block down (CodeMirror)',
+    description: 'Move block down',
   }
 
   const globalActions: ActionConfig<typeof ActionContextTypes.GLOBAL>[] = [
@@ -362,6 +399,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
       id: 'redo',
       description: 'Redo',
       context: ActionContextTypes.GLOBAL,
+      icon: Redo2,
       handler: async () => { await repo.redo() },
       defaultBinding: {
         // $mod+Shift+z is the macOS (Cmd+Shift+Z) and Windows/Linux
@@ -417,7 +455,11 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
       handler: async ({uiStateBlock}: BaseShortcutDependencies) => {
         await repo.load(uiStateBlock.id, {ancestors: true})
         const root = getRootBlock(repo.block(uiStateBlock.id))
-        const blocks = await repo.query.subtree({id: root.id}).load()
+        // The visible outline, not raw storage: property field rows are a
+        // per-workspace representation of the cell, and `importState` replays
+        // only content/structure — so exported machinery would land in the
+        // target as ordinary `((fieldId))` rows rather than as properties.
+        const blocks = await repo.query.subtree({id: root.id, hidePropertyChildren: true}).load()
         const data = JSON.stringify({blocks}, null, 2)
 
         const downloadLink = document.createElement('a')
@@ -629,9 +671,42 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
       id: 'exit_edit_mode_cm',
       description: 'Exit edit mode',
       context: ActionContextTypes.EDIT_MODE_CM,
+      icon: KeyboardOff,
       handler: async (deps: CodeMirrorEditModeDependencies) => setIsEditing(deps.uiStateBlock, false),
       defaultBinding: {
         keys: 'Escape',
+      },
+    },
+    // Roam-style keyboard fold while editing — the non-vim analogue of vim's
+    // `z` (vim makes `z` work because it has a focused-block normal mode; the
+    // default config has no such mode, so fold lives here in edit mode). Cmd/
+    // Ctrl+Up collapses, Cmd/Ctrl+Down expands. preventDefault overrides
+    // CodeMirror's doc-start/doc-end caret jump — acceptable since blocks are
+    // short and the chevron / swipe menu remain for the mouse path.
+    {
+      id: 'collapse_block_cm',
+      description: 'Collapse block',
+      context: ActionContextTypes.EDIT_MODE_CM,
+      handler: async ({block}: CodeMirrorEditModeDependencies) => {
+        if (!block) return
+        await withMoveTransition(async () => { await block.set(isCollapsedProp, true) })
+      },
+      defaultBinding: {
+        keys: '$mod+ArrowUp',
+        eventOptions: {preventDefault: true},
+      },
+    },
+    {
+      id: 'expand_block_cm',
+      description: 'Expand block',
+      context: ActionContextTypes.EDIT_MODE_CM,
+      handler: async ({block}: CodeMirrorEditModeDependencies) => {
+        if (!block) return
+        await withMoveTransition(async () => { await block.set(isCollapsedProp, false) })
+      },
+      defaultBinding: {
+        keys: '$mod+ArrowDown',
+        eventOptions: {preventDefault: true},
       },
     },
     {
@@ -641,6 +716,11 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
       handler: async (deps: CodeMirrorEditModeDependencies) => {
         const {block, editorView, uiStateBlock, scopeRootId} = deps
         if (!block || !editorView || !uiStateBlock) return
+
+        // NOTE: Enter-accepts-an-open-completion is handled INSIDE the editor
+        // (acceptCompletionBeforeIOSDefer capture handler + CM's completion
+        // keymap), which swallow the key before it reaches this window-level
+        // shortcut. So this shortcut stays completion-unaware and just splits.
         if (!scopeRootId) return
 
         const policy = await structuralEditPolicyForBlock(block, scopeRootId)
@@ -855,7 +935,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
     },
     {
       id: 'delete_empty_block_cm',
-      description: 'Backspace at block start: delete empty / merge into previous (CodeMirror)',
+      description: 'Backspace at block start: delete empty / merge into previous',
       context: ActionContextTypes.EDIT_MODE_CM,
       handler: async (deps: CodeMirrorEditModeDependencies, trigger: ActionTrigger) => {
         const {block, editorView, uiStateBlock, scopeRootId} = deps
@@ -875,9 +955,22 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
         // Live content from the editor — SQL may lag (pushChange is debounced).
         const liveContent = editorView.state.doc.toString()
 
-        // Empty block: delete it and move focus up.
+        // Empty block: delete it and move focus up. Both branches are gated on
+        // `canMergeUp` because both are the same gesture — "consume this block
+        // and put the cursor on the previous visible one" — and at the scope
+        // root there is no such block. That's a statement about Backspace, not
+        // about deletability: explicit Delete on the scope root IS allowed
+        // (page deletion), it just isn't something Backspace should trigger on
+        // an accidentally-emptied page.
         if (liveContent === '') {
+          if (!canMergeUp) return
           trigger.preventDefault()
+          // Ask the deletion guards BEFORE moving focus — a refused delete that
+          // had already moved the cursor would look like the block vanished.
+          // This path deletes the block's whole subtree, so it needs the same
+          // veto as `delete_block`; emptying a daily note's title and pressing
+          // Backspace used to destroy it straight past the guard.
+          if (!await ensureDeletableThroughUi([block])) return
           const prevVisible = await previousVisibleBlock(block, scopeRootId)
           if (prevVisible) {
             const prevData = await prevVisible.load()
@@ -887,7 +980,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
             })
             await focusBlock(uiStateBlock, prevVisible.id, {edit: true, renderScopeId: deps.renderScopeId})
           }
-          await block.delete()
+          await deleteBlockThroughUi(block)
           return
         }
 
@@ -911,13 +1004,23 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
         const intoHasIndependentChildren = intoChildIds.some(childId => childId !== block.id)
         if (fromChildIds.length > 0 && intoHasIndependentChildren) return
 
-        // CodeMirror's backspace at pos 0 is a no-op, but stop the event
-        // anyway to avoid any chance of double-handling.
+        // Vestigial, and kept only because it costs nothing: every branch above
+        // awaits, so the event has finished dispatching by now and the browser
+        // default has already run — `move_up_from_cm_start` states that rule
+        // and calls preventDefault BEFORE its async hop for exactly this
+        // reason. There is nothing to suppress in any case: block editors pass
+        // `defaultKeymap: false`, so Backspace has no CodeMirror command, and
+        // native backspace at offset 0 of the editing host does nothing.
         trigger.preventDefault()
 
         const intoContentBefore = prevVisible.peek()?.content ?? ''
         const joinOffset = intoContentBefore.length
         const prevId = prevVisible.id
+
+        // A merge DESTROYS `from` (core.merge soft-deletes it), so it needs the
+        // same veto as an outright delete — otherwise Backspace at offset 0 of a
+        // guarded page merges it away while `Delete` on it is refused.
+        if (!await ensureDeletableThroughUi([block])) return
 
         // Single tx: flush the editor's live content into `from` first so
         // core.merge concatenates the latest text, then run the merge.
@@ -937,17 +1040,147 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
         keys: 'Backspace',
       },
     },
+    {
+      id: 'merge_next_block_cm',
+      description: 'Delete at block end: merge the next block into this one (CodeMirror)',
+      context: ActionContextTypes.EDIT_MODE_CM,
+      handler: async (deps: CodeMirrorEditModeDependencies, trigger: ActionTrigger) => {
+        const {block, editorView, uiStateBlock, scopeRootId} = deps
+        if (!block || !uiStateBlock || !editorView) return
+
+        // Mirror of delete_empty_block_cm in the down direction: Backspace
+        // at a block's start folds it into the previous visible block;
+        // Delete at a block's end folds the next visible block into this
+        // one. Both collapse the same boundary at the same join point.
+
+        // Only act when the cursor is at the very end with no selection;
+        // otherwise codemirror's default forward-delete handles it.
+        const sel = editorView.state.selection.main
+        if (!(sel.empty && sel.to === editorView.state.doc.length)) return
+
+        if (!scopeRootId) return
+
+        // Backspace refuses to merge *into* the scope root (the page/view
+        // header). Delete pulls the next block up *into* this one, so the
+        // mirror refusal is: don't absorb a child up into the scope root.
+        if (block.id === scopeRootId) return
+
+        // The next visible block is the one that folds away — the same block
+        // Backspace would merge upward if the caret sat at its start
+        // (previousVisibleBlock and nextVisibleBlock are inverses over the
+        // visible-order list, so this stays at the same boundary).
+        const nextVisible = await nextVisibleBlock(block, scopeRootId, deps.scopeRootForcesOpen)
+        if (!nextVisible) return
+
+        // Roam rule (mirror of Backspace): refuse when both blocks have
+        // independent children — reconciling two child lists isn't what the
+        // user asked for. When `next` is this block's only child there is no
+        // independent target subtree: next's children take next's slot.
+        await Promise.all([block.load(), nextVisible.load()])
+        const intoChildIds = await block.childIds.load()
+        const fromChildIds = await nextVisible.childIds.load()
+        const intoHasIndependentChildren = intoChildIds.some(childId => childId !== nextVisible.id)
+        if (fromChildIds.length > 0 && intoHasIndependentChildren) return
+
+        // Ask the deletion guards BEFORE any side effect — the merge destroys
+        // `nextVisible`, so a guarded page must not be folded away. This has to
+        // precede the editor re-arm below: that dispatch is a real doc change,
+        // so CodeMirror's onChange fires and `pushChange` persists the
+        // concatenated text ~300ms later. Guarding after it left the refusal
+        // path writing the merged content while the other block survived —
+        // silent duplication on exactly the blocks the guard protects.
+        // (Nothing is lost by returning before the `preventDefault` below:
+        // block editors pass `defaultKeymap: false`, so Delete has no
+        // CodeMirror command at all, and native forward-delete at the end of
+        // the editing host is a no-op. That call is vestigial anyway — see the
+        // Backspace twin.)
+        if (!await ensureDeletableThroughUi([nextVisible])) return
+
+        trigger.preventDefault()
+
+        // Live content from the editor — SQL may lag (pushChange is debounced).
+        const liveContent = editorView.state.doc.toString()
+        const joinOffset = liveContent.length
+        const fromContent = nextVisible.peek()?.content ?? ''
+        const fromId = nextVisible.id
+
+        // Re-arm the editor synchronously with the merged text (caret parked
+        // at the join) so its debounced pushChange carries the post-merge
+        // content. Unlike Backspace — which hands focus to the previous
+        // block's editor — Delete keeps the caret in *this* editor, so a
+        // pending flush of the pre-merge text would otherwise clobber the
+        // fold core.merge wrote to SQL. Same precaution as
+        // splitCodeMirrorBlockAtCursor.
+        editorView.dispatch({
+          changes: {from: 0, to: editorView.state.doc.length, insert: liveContent + fromContent},
+          selection: EditorSelection.cursor(joinOffset),
+        })
+
+        // Single tx: flush the editor's live content into `into` first so
+        // core.merge concatenates the latest text, then fold `next` in.
+        await repo.tx(async tx => {
+          await tx.update(block.id, {content: liveContent})
+          await tx.run(mergeMutator, {intoId: block.id, fromId})
+        }, {scope: ChangeScope.BlockDefault, description: 'merge next block into current'})
+
+        await uiStateBlock.set(editorSelection, {
+          blockId: block.id,
+          start: joinOffset,
+        })
+        await focusBlock(uiStateBlock, block.id, {edit: true, renderScopeId: deps.renderScopeId})
+      },
+      defaultBinding: {
+        keys: 'Delete',
+      },
+    },
     bindBlockActionContext(ActionContextTypes.EDIT_MODE_CM, indentBlock, {idPrefix: 'edit.cm'}),
     bindBlockActionContext(ActionContextTypes.EDIT_MODE_CM, outdentBlock, {idPrefix: 'edit.cm'}),
     bindBlockActionContext(ActionContextTypes.EDIT_MODE_CM, zoomInBlock, {idPrefix: 'edit.cm'}),
     bindBlockActionContext(ActionContextTypes.EDIT_MODE_CM, zoomOutBlock, {idPrefix: 'edit.cm'}),
     bindBlockActionContext(ActionContextTypes.EDIT_MODE_CM, openFocusedInPanelBlock, {idPrefix: 'edit.cm'}),
     bindBlockActionContext(ActionContextTypes.EDIT_MODE_CM, closeCurrentPanelBlock, {idPrefix: 'edit.cm'}),
+    bindBlockActionContext(ActionContextTypes.EDIT_MODE_CM, toggleMaximizePanelBlock, {idPrefix: 'edit.cm'}),
     bindBlockActionContext(ActionContextTypes.EDIT_MODE_CM, insertExampleExtensionsBlock, {idPrefix: 'edit.cm'}),
     moveBlockUpCM,
     moveBlockDownCM,
     extendSelectionDownEdit,
     extendSelectionUpEdit,
+  ]
+
+  // Property-panel field actions. PROPERTY_EDITING is activated (and
+  // deactivated) by `usePropertyEditingActivation` around a focused property
+  // `<input>`, so `deps.input` is exactly the field the user is typing in.
+  const propertyEditingActions: ActionConfig<typeof ActionContextTypes.PROPERTY_EDITING>[] = [
+    {
+      id: 'exit_property_editing',
+      description: 'Exit property editing',
+      context: ActionContextTypes.PROPERTY_EDITING,
+      icon: KeyboardOff,
+      // Blurring IS the exit: the input's own onBlur commits the pending
+      // value and the activation hook deactivates this context. Committing
+      // (rather than reverting) matches `exit_edit_mode_cm`, which likewise
+      // leaves the typed content in place.
+      //
+      // Deliberately no `setIsEditing(false)`: every route into a property
+      // field already left block edit mode — the arrow-key routes clear it
+      // explicitly (`move_up_from_cm_start` / `move_down_from_cm_end`) and a
+      // click into the field trips the editor's blur exit
+      // (`shouldExitEditModeAfterBlur` treats a property input as "not an
+      // editor"). A clear here would be dead code dressed as load-bearing.
+      // IME compositions are handled once, in the coordinator, which drops
+      // composing keydowns before any candidate is considered — so there is
+      // no guard here. A decline would only have meant "try the next
+      // candidate", handing the chord to a global bound to the same keys.
+      handler: (deps: PropertyEditingDependencies) => { deps.input.blur() },
+      defaultBinding: {
+        keys: 'Escape',
+        // Same stance as `exit_edit_mode_cm` (whose context defaults to
+        // preventDefault: false): leave the field's own native Escape
+        // handling alone — an open autofill/date popup, a pending IME
+        // composition. The blur happens either way.
+        eventOptions: {preventDefault: false},
+      },
+    },
   ]
 
   // Multi-select mode actions
@@ -970,6 +1203,66 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
     },
   }
 
+  /**
+   * The body of BOTH destructive multi-select gestures. `Delete` and `d` differ
+   * only in whether the selection reaches the clipboard on its way out, so they
+   * share everything else rather than each re-deriving it — the divergence is
+   * what let `d` destroy a daily note that `Delete` refused, and later let
+   * `Delete` leave the pane in multi-select over tombstones that `d` exited
+   * cleanly.
+   *
+   * Order is load-bearing:
+   *  - guards BEFORE the clipboard write, so a refused cut can't leave the user
+   *    believing the content was copied;
+   *  - the copy while the blocks still exist, in SELECTION order (the delete
+   *    runs leaf-first so each removal can't disturb the next, which is not the
+   *    order the markdown should come out in);
+   *  - the selection reset only after a delete actually HAPPENED, so a refusal
+   *    leaves it intact to narrow and retry. `deleteBlocksThroughUi` re-asks
+   *    the guards immediately before writing, and a guard is not contracted to
+   *    answer the same way twice — an answer that flips during the clipboard
+   *    write would otherwise clear the selection having deleted nothing.
+   *
+   * Focus is moved explicitly rather than left to `PanelFocusRecovery`: that
+   * watcher is mounted by the spatial-navigation plugin, which is a toggle, so
+   * relying on it would leave focus pointing at a tombstone whenever the plugin
+   * is off. The target is computed BEFORE the delete (it has to be walked while
+   * the tree still exists) from the last selected block, skipping its subtree;
+   * if that lands back inside the selection there is no sensible target and we
+   * leave focus alone.
+   */
+  const deleteSelectedBlocks = async (
+    deps: MultiSelectModeDependencies,
+    {copyFirst}: {copyFirst: boolean},
+  ): Promise<void> => {
+    const {uiStateBlock, selectedBlocks, scopeRootId} = deps
+    if (!selectedBlocks.length) return
+
+    const blocks = selectedBlocks.toReversed()
+    if (!await ensureDeletableThroughUi(blocks)) return
+
+    // Copy exactly the set we're about to delete rather than re-reading the
+    // ui-state selection: with supplied deps the two can differ, and the copy
+    // would quietly no-op while the delete went ahead.
+    if (copyFirst) await copyBlockIdsToClipboard(selectedBlocks.map(block => block.id), repo)
+
+    const selectedIds = new Set(selectedBlocks.map(block => block.id))
+    const after = scopeRootId
+      ? await blockAfterSubtreeRemoval(selectedBlocks[selectedBlocks.length - 1], scopeRootId)
+      : null
+    const focusTarget = after && !selectedIds.has(after.id) ? after : null
+
+    let deleted = false
+    await withMoveTransition(async () => {
+      deleted = await deleteBlocksThroughUi(blocks)
+    })
+    if (!deleted) return
+    await uiStateBlock.set(selectionStateProp, selectionStateProp.defaultValue)
+    if (focusTarget) {
+      void focusBlock(uiStateBlock, focusTarget.id)
+    }
+  }
+
   const multiSelectModeActions: ActionConfig<typeof ActionContextTypes.MULTI_SELECT_MODE>[] = [
     extendSelectionUpMultiAction,
     extendSelectionDownMultiAction,
@@ -977,7 +1270,13 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
     applyToAllBlocksInSelection(togglePropertiesDisplayAction),
     applyToAllBlocksInSelection(indentBlockAction),
     applyToAllBlocksInSelection(outdentBlockAction, {applyInReverseOrder: true}),
-    applyToAllBlocksInSelection(deleteBlockAction),
+    // Not a per-block fan-out: `Delete` on a selection IS `cut` minus the
+    // clipboard, so both run the same batch below rather than converging on it
+    // by having two code paths remember the same rules.
+    {
+      ...makeMultiSelect(deleteBlockAction),
+      handler: (deps: MultiSelectModeDependencies) => deleteSelectedBlocks(deps, {copyFirst: false}),
+    },
     applyToAllBlocksInSelection(moveBlockUpAction),
     applyToAllBlocksInSelection(moveBlockDownAction, {applyInReverseOrder: true}),
     {
@@ -1006,18 +1305,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
       id: 'cut_selected_blocks',
       description: 'Cut selected blocks to clipboard',
       context: ActionContextTypes.MULTI_SELECT_MODE,
-      handler: async (deps: MultiSelectModeDependencies) => {
-        const {uiStateBlock, selectedBlocks} = deps
-        if (!selectedBlocks.length) return
-
-        await copySelectedBlocksToClipboard(uiStateBlock, repo)
-        await withMoveTransition(async () => {
-          for (const block of selectedBlocks.toReversed()) {
-            await block.delete()
-          }
-        })
-        await uiStateBlock.set(selectionStateProp, selectionStateProp.defaultValue)
-      },
+      handler: (deps: MultiSelectModeDependencies) => deleteSelectedBlocks(deps, {copyFirst: true}),
       defaultBinding: {
         keys: ['$mod+x', 'd'],
         eventOptions: {
@@ -1083,6 +1371,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
     globalActions,
     normalModeActions,
     editModeCMActions,
+    propertyEditingActions,
     multiSelectModeActions,
   }
 }
@@ -1092,6 +1381,7 @@ export function getDefaultActions({repo}: { repo: Repo }): ActionConfig[] {
     globalActions,
     normalModeActions,
     editModeCMActions,
+    propertyEditingActions,
     multiSelectModeActions,
   } = getDefaultActionGroups({repo})
 
@@ -1099,6 +1389,7 @@ export function getDefaultActions({repo}: { repo: Repo }): ActionConfig[] {
     ...globalActions,
     ...normalModeActions,
     ...editModeCMActions,
+    ...propertyEditingActions,
     ...multiSelectModeActions,
   ] as ActionConfig[]
 }
@@ -1115,6 +1406,7 @@ export function defaultActionsExtension({repo}: { repo: Repo }): AppExtension {
     globalActions,
     normalModeActions,
     editModeCMActions,
+    propertyEditingActions,
     multiSelectModeActions,
   } = getDefaultActionGroups({repo})
 
@@ -1122,6 +1414,7 @@ export function defaultActionsExtension({repo}: { repo: Repo }): AppExtension {
     ...globalActions,
     ...normalModeActions,
     ...editModeCMActions,
+    ...propertyEditingActions,
     ...multiSelectModeActions,
   ] as ActionConfig[]
 

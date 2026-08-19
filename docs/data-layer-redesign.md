@@ -31,7 +31,7 @@ Estimated scope: large. Touches `src/data/**`, `src/hooks/block.ts`, `src/extens
 > **Resolved open questions:**
 > - **zod** for argsSchema (v4.10). Bundle weight + React-ecosystem familiarity beat Effect Schema; bidirectional encode/decode handled separately by `Codec<T>`. Valibot is a near-mechanical fallback if bundle pressure shows up later.
 > - **`fractional-indexing-jittered`** for order keys (v4.10). Reduces collision probability between distinct clients; `(order_key, id)` secondary sort handles residuals.
-> - **No checkpoints / undo coalescing in v1** (§16.4). Today's CodeMirror coarse-grained writes mean per-tx undo is fine. Add when per-keystroke writes route through `repo.tx`.
+> - **No checkpoints / undo coalescing in v1** (§16.4). Today's CodeMirror coarse-grained writes mean per-tx undo is fine. Add when per-keystroke writes route through `repo.tx`. (Distinct from §16.4: multi-tx *composite operations* now merge into one undo entry via `repo.undoGroup` — merge-at-record with an explicit group token, not typing coalescing. See `docs/undo-grouping.md`; addresses D5.)
 
 ---
 

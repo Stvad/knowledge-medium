@@ -1,7 +1,7 @@
 import { EditorSelection } from '@codemirror/state'
 import { EditorView } from '@codemirror/view'
 import { Block } from '../../data/block'
-import { focusBlock } from '@/data/properties.js'
+import { focusBlock, panelViewModeProp } from '@/data/properties.js'
 import type { ShortcutActivationContribution } from '@/extensions/blockInteraction.js'
 import { actionContextsFacet, actionsFacet } from '@/extensions/core.js'
 import type { AppExtension } from '@/facets/facet.js'
@@ -15,8 +15,8 @@ import {
   requestCurrentTime,
   requestVideoPlayerFocus,
 } from './registry.ts'
-import { enterVideoNotesView, focusVideoNote } from './notes.ts'
-import { videoPlayerViewProp } from './view.ts'
+import { closeVideoNotesView, enterVideoNotesView, focusVideoNote } from './notes.ts'
+import { VIDEO_NOTES_VIEW_MODE } from './view.ts'
 
 export const VIDEO_PLAYER_CONTEXT = 'video-player'
 
@@ -140,13 +140,15 @@ const toggleVideoNotesView: ActionConfig = {
   handler: async (deps) => {
     if (!isVideoPlayerShortcutDependencies(deps)) return
 
-    const currentView = deps.videoBlock.peekProperty(videoPlayerViewProp) ?? videoPlayerViewProp.defaultValue
-    if (currentView === 'notes') {
-      await deps.videoBlock.set(videoPlayerViewProp, 'default')
+    // deps.uiStateBlock IS the panel row in panel contexts — the mode lives
+    // on the PANE now (panelViewModeProp), not on the video block.
+    const panelBlock = deps.uiStateBlock
+    if (panelBlock.peekProperty(panelViewModeProp) === VIDEO_NOTES_VIEW_MODE) {
+      await closeVideoNotesView(panelBlock)
       return
     }
 
-    await enterVideoNotesView(deps.videoBlock, deps.uiStateBlock, deps.renderScopeId)
+    await enterVideoNotesView(deps.videoBlock, panelBlock)
   },
   defaultBinding: {
     keys: '$mod+Shift+n',

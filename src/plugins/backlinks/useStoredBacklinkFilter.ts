@@ -26,15 +26,13 @@ export const useStoredBacklinkFilter = (
     const normalized = normalizeBacklinksFilter(next)
     void block.repo.tx(async tx => {
       const current = await tx.get(block.id)
-      if (!current) return
+      if (!current) return // block gone: silent no-op (the typed primitives would throw)
 
-      const properties = {...current.properties}
       if (hasBacklinksFilter(normalized)) {
-        properties[backlinksFilterProp.name] = backlinksFilterProp.codec.encode(normalized)
+        await tx.setProperty(block.id, backlinksFilterProp, normalized)
       } else {
-        delete properties[backlinksFilterProp.name]
+        await tx.unsetProperty(block.id, backlinksFilterProp)
       }
-      await tx.update(block.id, {properties})
     }, {
       scope: ChangeScope.BlockDefault,
       description: 'update backlinks filter',

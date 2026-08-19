@@ -1,13 +1,16 @@
 import type React from 'react'
 import type ReactDOM from 'react-dom'
 import type { Block } from '@/data/block'
-import type { Repo } from '@/data/repo'
-import type { BlockData } from '@/data/api'
+import type { OperatorBackfillResult, Repo } from '@/data/repo'
+import type { PropertyCellBackfillProgress } from '@/data/internals/propertyCellBackfill'
+import type { BlockData, SubtreeRow } from '@/data/api'
 import type { FacetRuntime } from '@/facets/facet.js'
 import type { blockRenderersFacet } from '@/extensions/core.js'
 import type { ActionConfig } from '@/shortcuts/types.js'
 import type { BlockProperties } from '@/types.js'
 import type { refreshAppRuntime } from '@/facets/runtimeEvents.js'
+import type { GrainWarning, TypeAuditSummary } from './grainAudit.ts'
+import type { PropertyRegistrationAudit } from './propertyRegistrationAudit.ts'
 
 export type SqlMode = 'all' | 'get' | 'optional' | 'execute'
 export type BlockPosition = 'first' | 'last' | number
@@ -31,6 +34,58 @@ export interface UpdateBlockInput {
   content?: string
   properties?: BlockProperties
   replaceProperties?: boolean
+}
+
+export type MoveBlockPosition =
+  | {kind: 'first'}
+  | {kind: 'last'}
+  | {kind: 'before'; siblingId: string}
+  | {kind: 'after'; siblingId: string}
+
+export interface MoveBlockInput {
+  id: string
+  parentId: string | null
+  position: MoveBlockPosition
+}
+
+export interface DeleteBlockInput {
+  id: string
+}
+
+export interface DeleteBlockResult {
+  id: string
+  deleted: true
+}
+
+export interface RestoreBlockInput {
+  id: string
+}
+
+export interface ReconcileMarkdownSubtreeInput {
+  /** Parent the reconciled subtree lives under (its tagged children). */
+  parentId: string
+  /** Markdown parsed with the app paste parser into the target tree. */
+  markdown: string
+  /** Per-subtree identity: every block of this subtree is tagged with it,
+   *  and only blocks carrying it are reconciled. Idempotent by this key —
+   *  a re-send with the same markdown lands the same tree. */
+  key: string
+  /** `'block'` keeps the whole markdown as ONE block (no outline split);
+   *  `'outline'` (default) splits along the markdown outline. */
+  shape?: 'outline' | 'block'
+  /** The last reconcile of a stream — lets trailing tagged blocks with no
+   *  parsed counterpart be pruned (a mid-stream tick must not prune the
+   *  not-yet-restreamed tail). */
+  final?: boolean
+  /** Applied (merged) to every created block alongside the subtree key. */
+  properties?: BlockProperties
+}
+
+export interface ReconcileMarkdownSubtreeResult {
+  /** Every created/reused block id, in pre-order. */
+  ids: string[]
+  /** The top-level block ids (direct children of `parentId`). */
+  rootIds: string[]
 }
 
 export interface InstallExtensionInput {
@@ -93,6 +148,17 @@ export interface InstallExtensionResult {
   inserted: boolean
   label: string | null
   reloaded?: boolean
+  /** This device has approved the source that is now stored. */
+  approved?: boolean
+  /** The synced enable intent is on. */
+  enabled?: boolean
+  /** Both gates pass — the code is actually live on this device. An install
+   *  reporting `running: false` stored source that nothing is executing, so
+   *  nothing it declares (types, properties, renderers) is registered yet,
+   *  and writes that depend on those schemas will land raw. */
+  running?: boolean
+  /** What to do about `running: false`. */
+  hint?: string
   verification?: ExtensionVerificationResult
 }
 
@@ -128,20 +194,88 @@ export interface UninstallExtensionResult {
   removed: boolean
 }
 
+export interface AuditExtensionInput {
+  /** Extension block id. Either `id` or `label` is required. */
+  id?: string
+  /** Extension alias (the label passed at install time). */
+  label?: string
+}
+
+export interface AuditExtensionResult {
+  id: string
+  label: string | null
+  approved: boolean
+  enabled: boolean
+  running: boolean
+  /** Per declared type: how many blocks carry it, and whether the scan
+   *  limit truncated the read. */
+  types: TypeAuditSummary[]
+  blocksScanned: number
+  /** Declared types no block carries — a renamed type, or a write path
+   *  that was never finished. */
+  unusedTypes: string[]
+  /** Grain findings against the STORED values. */
+  warnings: GrainWarning[]
+  /** Declaration-level findings against the source, same set the install
+   *  verify reports. */
+  lint: ExtensionLintWarning[]
+}
+
+export interface RunBackfillInput {
+  backfillId: string
+  workspaceId?: string
+}
+
+/** Present when the pass that ran reports per-run detail. The properties
+ *  migration does: how much it swept, and every block whose legacy cell value
+ *  its codec rejected — which an operator has to see, since those keys stay
+ *  cell-only until the values are repaired and the pass re-run.
+ *
+ *  Declared off the pass's own progress type rather than re-listed: the
+ *  hand-written copy had already fallen behind it by two fields, and both of
+ *  them — the exact failure count and whether the workspace was being edited —
+ *  are ones the operator acts on. */
+export type RunBackfillResult =
+  OperatorBackfillResult
+  & {backfillId: string; workspaceId: string}
+  & Partial<PropertyCellBackfillProgress>
+
+export interface AuditPropertiesInput {
+  /** Workspace to audit. Defaults to, and in practice must be, the ACTIVE
+   *  one: classification runs on `repo.propertyDefinitions`, which is the
+   *  active workspace's registry only. (The resolver itself would also serve
+   *  the immediately-previous workspace, but that snapshot isn't reachable
+   *  through a public getter, so the audit doesn't claim to cover it.)
+   *  Anything else is refused rather than answered with a report that calls
+   *  every key unregistered.
+   *  Useful as an assertion when a script must not audit the wrong graph. */
+  workspaceId?: string
+}
+
 export interface AgentRuntimeContext {
   repo: Repo
   db: Repo['db']
   runtime: FacetRuntime
   safeMode: boolean
-  sql: (sql: string, params?: unknown[], mode?: SqlMode) => Promise<unknown>
+  /** `allowSyncedWrite` overrides the raw-write-to-synced-table refusal
+   *  (see `assertSyncedTableWriteAllowed` in commands.ts) — leave it unset
+   *  for the normal, guarded path. */
+  sql: (sql: string, params?: unknown[], mode?: SqlMode, allowSyncedWrite?: boolean) => Promise<unknown>
   block: (id: string) => Block
   getBlock: (id: string) => Promise<BlockData | null>
-  getSubtree: (rootId: string) => Promise<BlockData[]>
+  getSubtree: (rootId: string) => Promise<SubtreeRow[]>
   createBlock: (input?: CreateBlockInput) => Promise<BlockData | null>
+  reconcileMarkdownSubtree: (input: ReconcileMarkdownSubtreeInput) => Promise<ReconcileMarkdownSubtreeResult>
   updateBlock: (input: UpdateBlockInput) => Promise<BlockData | null>
+  moveBlock: (input: MoveBlockInput) => Promise<BlockData | null>
+  deleteBlock: (input: DeleteBlockInput) => Promise<DeleteBlockResult>
+  restoreBlock: (input: RestoreBlockInput) => Promise<BlockData | null>
   installExtension: (input: InstallExtensionInput) => Promise<InstallExtensionResult>
   setExtensionEnabled: (input: SetExtensionEnabledInput) => Promise<SetExtensionEnabledResult>
   uninstallExtension: (input: UninstallExtensionInput) => Promise<UninstallExtensionResult>
+  auditExtension: (input: AuditExtensionInput) => Promise<AuditExtensionResult>
+  auditProperties: (input: AuditPropertiesInput) => Promise<PropertyRegistrationAudit>
+  runBackfill: (input: RunBackfillInput) => Promise<RunBackfillResult>
   actions: readonly ActionConfig[]
   renderers: ReturnType<typeof blockRenderersFacet.empty>
   refreshAppRuntime: typeof refreshAppRuntime

@@ -41,7 +41,7 @@ const insertSyncRows = async (
     // (createTestDb leaves it NULL by default, but a prior tx in the
     // same suite could have raced — be explicit.)
     await tx.execute(
-      `UPDATE tx_context SET tx_id = NULL, tx_seq = NULL, user_id = NULL, scope = NULL, source = NULL WHERE id = 1`,
+      `UPDATE tx_context SET tx_id = NULL, tx_seq = NULL, user_id = NULL, scope = NULL, source = NULL, group_id = NULL WHERE id = 1`,
     )
     for (let i = 0; i < args.count; i++) {
       const id = uuidv4()

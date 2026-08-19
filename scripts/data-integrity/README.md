@@ -6,7 +6,7 @@ Everything here runs through the **agent bridge** against a live, connected
 client (the target tab must be focused/connected):
 
 ```
-yarn agent --profile <name> eval --file scripts/data-integrity/<file>.eval.js
+pnpm agent --profile <name> eval --file scripts/data-integrity/<file>.eval.js
 ```
 
 The bridge eval scope exposes `repo`, `db`, `sql(text, params, mode)`

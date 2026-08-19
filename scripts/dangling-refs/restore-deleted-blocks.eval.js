@@ -2,7 +2,7 @@
 // so the references that still point at them resolve again. DRY-RUN BY DEFAULT.
 //
 // Run via the agent bridge (the target tab must be focused/connected):
-//   dry-run (default):  yarn agent --profile <profile> eval \
+//   dry-run (default):  pnpm agent --profile <profile> eval \
 //                         --file scripts/dangling-refs/restore-deleted-blocks.eval.js \
 //                         --data-json '{"leaves":["<id>","<id>"]}'
 //   apply:              ... --data-json '{"apply":true,"leaves":["<id>","<id>"]}'

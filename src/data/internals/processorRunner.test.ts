@@ -23,18 +23,17 @@
  *     does not fire for that tx
  */
 
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   ChangeScope,
-  codecs,
   type AnyPostCommitProcessor,
-  defineProperty,
+  seedProperty,
 } from '@/data/api'
 import { resolveFacetRuntimeSync } from '@/facets/facet'
-import { BlockCache } from '@/data/blockCache'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
+import { createTestRepo } from '@/data/test/createTestRepo'
 import { Repo } from '../repo'
-import { postCommitProcessorsFacet, propertySchemasFacet } from '../facets'
+import { definitionSeedsFacet, postCommitProcessorsFacet } from '../facets'
 
 const WS = 'ws-1'
 
@@ -46,15 +45,9 @@ interface Harness {
 const setup = async (): Promise<Harness> => {
   await resetTestDb(sharedDb.db)
   const h = sharedDb
-  const cache = new BlockCache()
-  let timeCursor = 1700_000_000_000
-  let idCursor = 0
-  const repo = new Repo({
+  const { repo } = createTestRepo({
     db: h.db,
-    cache,
     user: {id: 'user-1'},
-    now: () => ++timeCursor,
-    newId: () => `gen-${++idCursor}`,
   })
   return {h, repo}
 }
@@ -64,9 +57,6 @@ let env: Harness
 beforeAll(async () => { sharedDb = await createTestDb() })
 afterAll(async () => { await sharedDb.cleanup() })
 beforeEach(async () => { env = await setup() })
-// Dispose the per-test Repo's sync observer so its db.onChange subscription
-// doesn't leak onto the shared DB (closed once in afterAll).
-afterEach(() => { env.repo.stopSyncObserver() })
 
 interface Calls<S = unknown> {
   events: Array<{txId: string; changedRowIds: string[]; scheduledArgs?: S}>
@@ -295,15 +285,16 @@ describe('ProcessorRunner — registry snapshot semantics', () => {
   })
 
   it('passes the propertySchemas snapshot from tx start to processors', async () => {
-    const originalSchema = defineProperty<string>('status', {
-      codec: codecs.string,
-      defaultValue: 'open',
-      changeScope: ChangeScope.BlockDefault,
+    // Same seedKey, swapped payload — an "upgrade" of the `status` property. Each
+    // runtime holds exactly one, so the registry resolves `status` to whichever
+    // object is currently contributed (identity-preserving for the assertions).
+    const originalSchema = seedProperty({
+      seedKey: 'test/property/status', revision: 1, name: 'status',
+      preset: 'string', defaultValue: 'open', changeScope: ChangeScope.BlockDefault,
     })
-    const replacementSchema = defineProperty<string>('status', {
-      codec: codecs.string,
-      defaultValue: 'done',
-      changeScope: ChangeScope.BlockDefault,
+    const replacementSchema = seedProperty({
+      seedKey: 'test/property/status', revision: 1, name: 'status',
+      preset: 'string', defaultValue: 'done', changeScope: ChangeScope.BlockDefault,
     })
     const observed: unknown[] = []
     const processor: AnyPostCommitProcessor = {
@@ -316,14 +307,14 @@ describe('ProcessorRunner — registry snapshot semantics', () => {
 
     env.repo.setFacetRuntime(resolveFacetRuntimeSync([
       postCommitProcessorsFacet.of(processor, {source: 'test'}),
-      propertySchemasFacet.of(originalSchema, {source: 'test'}),
+      definitionSeedsFacet.of(originalSchema, {source: 'test'}),
     ]))
 
     await env.repo.tx(async tx => {
       await tx.create({id: 'a', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'x'})
       env.repo.setFacetRuntime(resolveFacetRuntimeSync([
         postCommitProcessorsFacet.of(processor, {source: 'test'}),
-        propertySchemasFacet.of(replacementSchema, {source: 'test'}),
+        definitionSeedsFacet.of(replacementSchema, {source: 'test'}),
       ]))
     }, {scope: ChangeScope.BlockDefault})
     await env.repo.awaitProcessors()

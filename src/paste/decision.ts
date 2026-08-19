@@ -21,6 +21,11 @@ export type PasteDecision =
   /** Parse the (optionally rewritten) text as markdown and split it into a
    *  block tree at the cursor. */
   | {kind: 'split'; text?: string}
+  /** The paste/drop carried file(s) (image, etc.) — capture them as media
+   *  attachments (§11) rather than inserting text. The renderer reads the files
+   *  off the original event and hands them to the async capture; the decision
+   *  itself stays synchronous (it can't hash here). */
+  | {kind: 'media'}
 
 /** Where the paste is happening. `editor` has a text caret (in-block
  *  editing), so a plain single-line paste lands verbatim at the caret;
@@ -71,6 +76,12 @@ interface PasteRequestBase {
   /** Clipboard `text/html`, if any — lets format-aware overrides inspect
    *  richer content (tables, CSV pasted from a spreadsheet). */
   html?: string
+  /** File(s) carried by the paste/drop (`clipboardData.files` /
+   *  `dataTransfer.files`), e.g. a pasted/dropped image. Present (non-empty) →
+   *  the attachments plugin's decorator decides `media` (see
+   *  `src/plugins/attachments/pasteCapture.ts`); with that plugin off, files fall
+   *  through to the text branches. */
+  files?: readonly File[]
   /** Latched paste chord: plain Cmd/Ctrl+V (`split`) vs Cmd/Ctrl+Shift+V
    *  (`single-block`). The paste `ClipboardEvent` carries no modifier
    *  state, so the renderer captures this on keydown. */
@@ -92,6 +103,17 @@ interface PasteRequestBase {
  * verbatim" plugin works on single-line shell pastes too.
  */
 export const defaultPasteDecision = (request: PasteRequest): PasteDecision => {
+  // Text-only by default. The "a paste carrying file(s) is a media paste" rule is
+  // NOT here — the attachments plugin contributes it as a `pasteDecisionVerb`
+  // decorator (src/plugins/attachments/pasteCapture.ts), so disabling that plugin
+  // cleanly disables media capture (files fall through to this text default) rather
+  // than minting media blocks nothing can render. `media` stays a valid decision
+  // KIND (the renderer↔verb contract); the core default just never produces it.
+  //
+  // On a `media` decision the renderer captures the file(s) AND re-runs this verb
+  // with files stripped to also handle any accompanying text — so files and text are
+  // independent aspects of one paste (a spreadsheet copy = TSV + a PNG → attach the
+  // image AND keep the data), and the text half still gets every plugin contribution.
   if (request.intent === 'single-block') return {kind: 'single-block'}
   if (request.text.includes('\n')) return {kind: 'split'}
   return request.surface === 'editor' ? {kind: 'single-block'} : {kind: 'split'}
@@ -122,9 +144,13 @@ export const pasteDecisionVerb = defineVerbFacet<PasteRequest, PasteDecision>({
   onError: 'fallback',
   // Guard the renderers (which read `decision.kind`/`.text` right after
   // `preventDefault`) against an untyped plugin returning `undefined`/`{}`:
-  // an invalid shape falls back to `defaultPasteDecision`.
+  // an invalid shape falls back to `defaultPasteDecision`. `text` is validated
+  // UNIFORMLY across kinds (string-or-absent) — including `media`, which carries
+  // no text — so a malformed `{kind:'media', text: 123}` is rejected too, rather
+  // than slipping through a kind-specific short-circuit.
   validateResult: decision =>
     decision != null &&
-    (decision.kind === 'single-block' || decision.kind === 'split') &&
-    (decision.text === undefined || typeof decision.text === 'string'),
+    (decision.kind === 'single-block' || decision.kind === 'split' || decision.kind === 'media') &&
+    ((decision as {text?: unknown}).text === undefined ||
+      typeof (decision as {text?: unknown}).text === 'string'),
 })

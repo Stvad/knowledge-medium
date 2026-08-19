@@ -5,9 +5,10 @@ import {
   codecs,
   defineProperty,
   type AnyPropertySchema,
+  type BlockReference,
   type RefListCodec,
 } from '@/data/api'
-import { projectPropertyReferences } from '../referenceProjection'
+import { isRetainableAbsentRef, projectPropertyReferences } from '../referenceProjection'
 import { assertRefListDeriveIsAddOnly } from '@/data/test/derivedDataContract'
 
 // `projectPropertyReferences` is the post-commit references processor's
@@ -107,5 +108,71 @@ describe('projectPropertyReferences', () => {
       { id: 'ok', alias: 'ok', sourceField: 'related' },
       { id: 'target-a', alias: 'target-a', sourceField: 'reviewer' },
     ])
+  })
+})
+
+describe('isRetainableAbsentRef', () => {
+  // The retain-on-source half of the add-only contract
+  // (docs/contracts/derived-data-add-only.md): a prior property-derived ref is
+  // retained ONLY when its schema is absent (so it can't be re-derived) AND the
+  // field still holds the same value this write didn't change. Every other case
+  // must return false, so legitimate value-driven drops still happen — that
+  // value-changed boundary is the one allowed-removal exception nothing else
+  // guards. `schemas()` (empty) models the absent-schema case.
+  const absentRef = (sourceField: string): BlockReference =>
+    ({ id: 't', alias: 't', sourceField })
+
+  it('retains an absent-schema property ref whose value is unchanged', () => {
+    expect(isRetainableAbsentRef(
+      absentRef('related'),
+      { properties: { related: ['t'] } },
+      { properties: { related: ['t'] } },
+      schemas(),
+    )).toBe(true)
+  })
+
+  it('drops when this write changed the field value (value-driven removal stays allowed)', () => {
+    expect(isRetainableAbsentRef(
+      absentRef('related'),
+      { properties: { related: ['u'] } },
+      { properties: { related: ['t'] } },
+      schemas(),
+    )).toBe(false)
+  })
+
+  it('drops when the schema is present (projection is authoritative there)', () => {
+    expect(isRetainableAbsentRef(
+      absentRef('related'),
+      { properties: { related: ['t'] } },
+      { properties: { related: ['t'] } },
+      schemas(relatedProp),
+    )).toBe(false)
+  })
+
+  it('drops a content ref (no sourceField)', () => {
+    expect(isRetainableAbsentRef(
+      { id: 't', alias: 't' },
+      { properties: {} },
+      { properties: {} },
+      schemas(),
+    )).toBe(false)
+  })
+
+  it('drops when the field no longer holds a value', () => {
+    expect(isRetainableAbsentRef(
+      absentRef('related'),
+      { properties: {} },
+      { properties: { related: ['t'] } },
+      schemas(),
+    )).toBe(false)
+  })
+
+  it('drops when there is no prior snapshot to confirm the value is unchanged', () => {
+    expect(isRetainableAbsentRef(
+      absentRef('related'),
+      { properties: { related: ['t'] } },
+      null,
+      schemas(),
+    )).toBe(false)
   })
 })

@@ -26,7 +26,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { ChangeScope } from '@/data/api'
 import { BlockCache } from '@/data/blockCache'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
-import { BLOCKS_SYNCED_RAW_TABLE, blockToRowParams } from '@/data/blockSchema'
+import { BLOCKS_SYNCED_RAW_TABLE, blockToSyncedRowParams } from '@/data/blockSchema'
 import { Repo } from '../repo'
 import { resolveFacetRuntimeSync, type AppExtension } from '@/facets/facet.js'
 import { kernelDataExtension } from '@/data/kernelDataExtension.js'
@@ -52,6 +52,8 @@ const setup = async (
     cache,
     user: {id: 'u1'},
     startSyncObserver: opts.startTail ?? false, // off by default for determinism
+    // Mnemonic ids — see the MNEMONIC IDS note in createTestRepo.ts.
+    blockIdPolicy: 'any',
   })
   repo.setFacetRuntime(resolveFacetRuntimeSync([
     kernelDataExtension,
@@ -138,6 +140,62 @@ describe('snapshotsToChangeNotification', () => {
     ])
     const note = snapshotsToChangeNotification(map)
     expect(Array.from(note.parentIds!)).toEqual(['p'])
+  })
+
+  it('field-row flip (referenceTargetId change): adds the parent AND the row itself', () => {
+    // Two handles must re-resolve: the PARENT's visible children (the row
+    // appears/disappears as a field row) and `children(row)` itself (the row's
+    // own children flip between property-subtree interior and visible) — §9.
+    const map = new Map<string, ChangeSnapshot>([
+      ['c', {
+        before: {parentId: 'p', workspaceId: 'w', referenceTargetId: null},
+        after: {parentId: 'p', workspaceId: 'w', referenceTargetId: 'def-1'},
+      }],
+    ])
+    const note = snapshotsToChangeNotification(map)
+    expect(Array.from(note.parentIds!).sort()).toEqual(['c', 'p'])
+  })
+
+  // The `::` marker is the OTHER half of §9 recognition, and it is the half
+  // that moves on its own: adding or deleting the marker leaves
+  // `referenceTargetId` identical on both sides, so a comparison keyed only
+  // on the target emits no parent edge and the outline goes stale — the row
+  // stays hidden after the user un-marks it, or stays visible after they
+  // mark it, until some unrelated structural edit. Both directions, since
+  // the bit moves both ways.
+  it.each([
+    ['gaining the marker', false, true],
+    ['losing the marker', true, false],
+  ])('field-row flip by %s alone (target unchanged): adds the parent AND the row', (
+    _case, beforeBit, afterBit,
+  ) => {
+    const map = new Map<string, ChangeSnapshot>([
+      ['c', {
+        before: {parentId: 'p', workspaceId: 'w', referenceTargetId: 'def-1', isFieldForm: beforeBit},
+        after: {parentId: 'p', workspaceId: 'w', referenceTargetId: 'def-1', isFieldForm: afterBit},
+      }],
+    ])
+    const note = snapshotsToChangeNotification(map)
+    expect(Array.from(note.parentIds!).sort()).toEqual(['c', 'p'])
+  })
+
+  it('move + field-row flip in ONE tx: adds old/new parents AND the row itself', () => {
+    // `mergeBlocksInTx` clears a value row's referenceTargetId and relocates
+    // it in the same commit, so the collapsed snapshot carries both a
+    // parent change and a referenceTargetId change. The self-edge (`children
+    // (id)` must re-resolve, §9) has to survive alongside the parent move —
+    // the field-flip check is deliberately NOT chained onto the mutually
+    // exclusive membership `else if` (which the "Moved" arm would otherwise
+    // win, dropping `id`). Removing the standalone `parentIds.add(id)` makes
+    // this fail with ['p1','p2'].
+    const map = new Map<string, ChangeSnapshot>([
+      ['c', {
+        before: {parentId: 'p1', workspaceId: 'w', referenceTargetId: 'def-1'},
+        after: {parentId: 'p2', workspaceId: 'w', referenceTargetId: null},
+      }],
+    ])
+    const note = snapshotsToChangeNotification(map)
+    expect(Array.from(note.parentIds!).sort()).toEqual(['c', 'p1', 'p2'])
   })
 
   it('pure content edit: row dep only, no parent-edge', () => {
@@ -455,7 +513,7 @@ describe('sync observer: sync-applied invalidation', () => {
     updatedAt?: number
     deleted?: boolean
   }): Promise<unknown> =>
-    env.h.db.execute(BLOCKS_SYNCED_RAW_TABLE.put.sql, blockToRowParams({
+    env.h.db.execute(BLOCKS_SYNCED_RAW_TABLE.put.sql, blockToSyncedRowParams({
       id: o.id,
       workspaceId: o.workspaceId ?? 'ws-1',
       parentId: o.parentId ?? null,

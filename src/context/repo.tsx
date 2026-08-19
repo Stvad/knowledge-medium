@@ -1,7 +1,11 @@
-import { createContext, ReactNode, use, useContext } from 'react'
+import { createContext, ReactNode, use, useCallback, useContext, useRef, useSyncExternalStore } from 'react'
+import { createGraphBackfillClaim } from '@/data/internals/graphBackfillClaim'
+import { getOrCreateMigrationsPage } from '@/data/migrationsPage'
+import { getClientId } from '@/utils/clientId'
 import { PowerSyncContext } from '@powersync/react'
 import type { AbstractPowerSyncDatabase } from '@powersync/common'
 import { Repo } from '../data/repo'
+import type { ClientContextReader } from '../data/clientContext'
 import { BlockCache } from '@/data/blockCache'
 import { useIsLocalOnly, useUser } from '@/components/Login'
 import { ensurePowerSyncReady, getPowerSyncDb, syncObserverDepsFor } from '@/data/repoProvider'
@@ -24,12 +28,37 @@ const initRepo = memoize(
     // §6 mode/key resolver is built once in repoProvider and shared with the
     // upload connector; the observer deps (decrypt/copy/defer + key lookup)
     // are drawn from it here.
+    // The claim needs the Repo it is being built for (tx, db, the settle gate),
+    // so it binds lazily. Safe: nothing calls it until a workspace opens, long
+    // after construction returns.
+    let repoRef: Repo | null = null
+    const requireRepo = (): Repo => {
+      if (!repoRef) throw new Error('backfill claim used before the repo was constructed')
+      return repoRef
+    }
+    const backfillCompletionClaim = createGraphBackfillClaim({
+      get db() { return requireRepo().db },
+      // Load-bearing, not diagnostic: `decideClaim` proceeds only when a live
+      // claim names US, so this has to survive a reload or a crashed tab —
+      // otherwise the device that started a pass can never resume it.
+      claimantId: getClientId(),
+      tx: (fn, opts) => requireRepo().tx(fn, opts),
+      ensureHome: (workspaceId) => getOrCreateMigrationsPage(requireRepo(), workspaceId),
+    })
     const repo = new Repo({
       db,
       cache,
       user: {id: user.id, name: user.name},
       syncObserverDeps: syncObserverDepsFor(user.id),
+      backfillCompletionClaim,
+      // A local-only session still gets a real PowerSyncDatabase, but
+      // `ensurePowerSyncReady` returns before `db.connect()` — so the default
+      // gate (connected && !downloading) would never open and this session
+      // would never run a workspace backfill, on this or any later open. There
+      // is no server to be behind here, so nothing to wait for.
+      ...(useRemoteSync ? {} : {backfillSyncGate: (cb: () => void) => { cb(); return () => {} }}),
     })
+    repoRef = repo
     repo.setFacetRuntime(resolveFacetRuntimeSync(staticDataExtensions, {
       repo,
       workspaceId: null,
@@ -51,7 +80,10 @@ const initRepo = memoize(
   (user, useRemoteSync) => `${user.id}:${useRemoteSync ? 'remote' : 'local'}`,
 )
 
-const RepoContext = createContext<Repo | undefined>(undefined)
+// Exported for tests that need to provide a directly-constructed Repo
+// (e.g. via createTestRepo) without going through the full PowerSync
+// bootstrap in RepoProvider below.
+export const RepoContext = createContext<Repo | undefined>(undefined)
 
 export function RepoProvider({children}: { children: ReactNode }) {
   const user = useUser()
@@ -77,4 +109,38 @@ export function useRepo(): Repo {
     throw new Error('useRepo must be used within a RepoContext')
   }
   return context
+}
+
+/** The client's indexical "acting-as" state (user, active workspace pin,
+ *  active layout session) — see `src/data/clientContext.ts`. Returns the
+ *  {@link ClientContextReader} view (reads + subscribe, no set methods —
+ *  mutate via `repo.setActiveWorkspaceId` / `repo.setActiveLayoutSessionId`).
+ *
+ *  Deliberately NOT a separate React context/provider: a `ClientContext`'s
+ *  identity is 1:1 with the Repo that constructed it (`repo.client`,
+ *  assigned once in Repo's constructor), so a dedicated provider could only
+ *  ever restate — or desync from — what `useRepo()` already scopes.
+ *  Components that want the acting-as object without spelling
+ *  `useRepo().client` use this hook.
+ *
+ *  Reactive: subscribes to `client.onActingAsChange` so a component reading
+ *  `activeWorkspaceId` / `activeLayoutSessionId` through this hook re-renders
+ *  on an effective change, rather than silently going stale. The object
+ *  identity of `client` itself never changes (it's the same instance for
+ *  the Repo's lifetime), so `useSyncExternalStore` tracks a locally-bumped
+ *  revision counter purely to force the re-render — the returned value is
+ *  still the reader, not the revision. */
+export function useClientContext(): ClientContextReader {
+  const client = useRepo().client
+  const revision = useRef(0)
+  const subscribe = useCallback(
+    (onStoreChange: () => void) => client.onActingAsChange(() => {
+      revision.current++
+      onStoreChange()
+    }),
+    [client],
+  )
+  const getSnapshot = useCallback(() => revision.current, [])
+  useSyncExternalStore(subscribe, getSnapshot, getSnapshot)
+  return client
 }

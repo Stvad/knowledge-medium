@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { resolveFacetRuntimeSync } from '@/facets/facet'
 import { aliasesProp } from '@/data/properties'
-import { propertySchemasFacet, typesFacet } from '@/data/facets'
+import { definitionSeedsFacet, typeSeedsFacet } from '@/data/facets'
 import { MAP_TYPE, PLACE_TYPE } from '../blockTypes'
 import {
   locationProp,
@@ -18,11 +18,11 @@ import { geoDataExtension } from '../dataExtension'
 
 describe('geoDataExtension types', () => {
   const runtime = resolveFacetRuntimeSync(geoDataExtension)
-  const types = runtime.read(typesFacet)
-  const schemas = runtime.read(propertySchemasFacet)
+  const types = runtime.read(typeSeedsFacet)
+  const seeds = runtime.read(definitionSeedsFacet)
 
   it('registers PLACE_TYPE with the place:* property list lifted', () => {
-    const place = types.get(PLACE_TYPE)
+    const place = types.find(t => t.id === PLACE_TYPE)
     expect(place).toBeDefined()
     expect(place?.label).toBe('Place')
     const propertyNames = (place?.properties ?? []).map(p => p.name).sort()
@@ -42,26 +42,26 @@ describe('geoDataExtension types', () => {
   })
 
   it('registers MAP_TYPE with the user-facing label "Map" and aliasesProp lifted', () => {
-    const page = types.get(MAP_TYPE)
+    const page = types.find(t => t.id === MAP_TYPE)
     expect(page).toBeDefined()
     expect(page?.label).toBe('Map')
     expect(page?.properties?.map(p => p.name)).toEqual([aliasesProp.name])
   })
 
-  it('registers every place:* schema and locationProp on propertySchemasFacet', () => {
+  it('registers every place:* property seed and locationProp', () => {
     const expected = [
-      placeLatProp.name,
-      placeLngProp.name,
-      placeAddressProp.name,
-      placeGooglePlaceIdProp.name,
-      placeGoogleMapsUrlProp.name,
-      placeWebsiteProp.name,
-      placePhoneProp.name,
-      placeCategoriesProp.name,
-      locationProp.name,
+      placeLatProp,
+      placeLngProp,
+      placeAddressProp,
+      placeGooglePlaceIdProp,
+      placeGoogleMapsUrlProp,
+      placeWebsiteProp,
+      placePhoneProp,
+      placeCategoriesProp,
+      locationProp,
     ]
-    for (const name of expected) {
-      expect(schemas.has(name), `missing schema ${name}`).toBe(true)
+    for (const declaration of expected) {
+      expect(seeds, `missing seed ${declaration.name}`).toContain(declaration)
     }
   })
 })

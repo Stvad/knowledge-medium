@@ -9,8 +9,14 @@ import { formatRoamDate } from '@/utils/dailyPage.js'
 import { relativeDateCandidates } from '@/utils/relativeDate.js'
 import { backlinkCompletionSource } from '@/utils/backlinkAutocomplete.js'
 import { blockrefCompletionSource } from '@/utils/blockrefAutocomplete.js'
-import { searchAliasLabels } from '@/utils/linkTargetAutocomplete.js'
+import {
+  completionTypeHint,
+  searchAliasLabels,
+  searchBlocksAcrossSources,
+} from '@/utils/linkTargetAutocomplete.js'
 import { loadRecentBlockIds } from '@/plugins/quick-find/recents.js'
+import { canRenderAsWikilink } from './referenceParser.ts'
+import type { TypeContribution } from '@/data/api'
 
 const referenceAutocompleteTheme = EditorView.theme({
   '.cm-tooltip.cm-tooltip-autocomplete.tm-reference-autocomplete': {
@@ -109,6 +115,32 @@ const insertAtCaretForMisplacedDiff = Prec.highest(
   }),
 )
 
+/** Alias search rows → `[[` completions, dropping any target the wikilink
+ *  grammar can't carry.
+ *
+ *  Offering such a target hands the user dead markup: accepting the
+ *  completion writes a span the parser reads no reference from, so it
+ *  renders as literal text and gains no backlink, with nothing on screen
+ *  saying why. Reachable today — a workspace can already hold over-cap
+ *  aliases (this PR's phantom pages are exactly that, and several begin
+ *  `import {`, so typing `[[import ` surfaces them). Filtering is also the
+ *  right end state: those names cannot be linked to at all, so listing
+ *  them offers a broken choice (Codex on PR #540).
+ *
+ *  Split out and exported so the filter is testable — inside the
+ *  `getAliases` closure it is reachable only through a live CodeMirror
+ *  completion context. */
+export const aliasCompletions = (
+  matches: readonly {label: string; typeIds: readonly string[]}[],
+  typeRegistry: ReadonlyMap<string, TypeContribution>,
+): Array<{label: string; detail: string | undefined}> =>
+  matches
+    .filter(match => canRenderAsWikilink(match.label))
+    .map(match => ({
+      label: match.label,
+      detail: completionTypeHint(match.typeIds, typeRegistry),
+    }))
+
 const buildWikilinkSource = ({repo}: CodeMirrorExtensionContext): CompletionSource =>
   backlinkCompletionSource({
     getAliases: async (filter: string) => {
@@ -123,7 +155,14 @@ const buildWikilinkSource = ({repo}: CodeMirrorExtensionContext): CompletionSour
       // — cheap, and keeps the ranker reactive to navigation pushes
       // that happen between keystrokes.
       const recentBlockIds = await loadRecentBlockIds(repo, workspaceId)
-      const aliases = await searchAliasLabels(repo, {workspaceId, query: filter, recentBlockIds})
+      const matches = await searchAliasLabels(repo, {workspaceId, query: filter, recentBlockIds})
+      // `repo.types` is the in-memory registry snapshot — a synchronous
+      // map read, so naming each row's type costs nothing beyond the
+      // bounded per-id type lookup `searchAliasLabels` already did.
+      const typeRegistry = repo.types
+      // No `type` — `backlinkCompletionSource` already defaults alias
+      // candidates to 'class'.
+      const aliases = aliasCompletions(matches, typeRegistry)
       const dateCompletions = relativeDateCandidates(filter).map(candidate => {
         const label = formatRoamDate(candidate.date)
         return {
@@ -142,7 +181,7 @@ const buildWikilinkSource = ({repo}: CodeMirrorExtensionContext): CompletionSour
       ]))
       return [
         ...dateCompletions,
-        ...aliases.filter(alias => !dateLabels.has(alias)),
+        ...aliases.filter(alias => !dateLabels.has(alias.label)),
       ]
     },
   })
@@ -154,12 +193,15 @@ const buildBlockrefSource = ({repo}: CodeMirrorExtensionContext): CompletionSour
       if (!workspaceId) return []
 
       const query = filter.trim()
+      // Shared merge point (searchSourcesFacet), not a direct
+      // `searchByContent` call, so a contributed search source (e.g.
+      // semantic search) is reachable from block-ref completion too.
       const blocks = query
-        ? await repo.query.searchByContent({
+        ? await searchBlocksAcrossSources(repo, {
           workspaceId,
           query,
           limit: 12,
-        }).load()
+        })
         : await repo.query.recentBlocks({
           workspaceId,
           limit: 12,

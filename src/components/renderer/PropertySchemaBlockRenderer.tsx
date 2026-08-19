@@ -9,22 +9,25 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } f
 import { ChevronDown } from 'lucide-react'
 import { useHandle } from '@/hooks/block.js'
 import { useAppRuntime } from '@/extensions/runtimeContext.js'
-import { valuePresetsFacet } from '@/data/facets.js'
+import {readValuePresets} from '@/data/valuePresetRegistry'
+import { isValidSeededDefinition } from '@/data/definitionSeeds.js'
+import { isGrammarShapedLabel, isRoundTrippableReferenceLabel } from '@/data/referenceBlock'
 import { selectablePresets } from '@/components/propertyEditors/selectablePresets.js'
 import {
   presetConfigProp,
   presetIdProp,
   propertyNameProp,
 } from '@/data/properties.js'
-import { ChangeScope, type AnyValuePreset } from '@/data/api'
+import { ChangeScope, propertyValue, type AnyJoinedValuePreset } from '@/data/api'
 import { Input } from '@/components/ui/input.js'
 import { Button } from '@/components/ui/button.js'
 import type { BlockRenderer, BlockRendererProps } from '@/types.js'
 import { PropertyShapeGlyph } from '@/components/propertyPanel/shapeUi.js'
 import { DefaultBlockRenderer } from './DefaultBlockRenderer.tsx'
+import { deleteBlockThroughUi } from '@/utils/deleteBlockThroughUi.js'
 
 const renderConfigEditor = (
-  preset: AnyValuePreset,
+  preset: AnyJoinedValuePreset,
   value: unknown,
   onChange: (next: unknown) => void,
 ): React.ReactNode => {
@@ -33,7 +36,9 @@ const renderConfigEditor = (
   return <ConfigEditor value={value} onChange={onChange} />
 }
 
-const PropertySchemaContentRenderer: BlockRenderer = ({block}: BlockRendererProps) => {
+/** Exported for the read-only regression test; production mounts it only
+ *  through `PropertySchemaBlockRenderer` below. */
+export const PropertySchemaContentRenderer: BlockRenderer = ({block}: BlockRendererProps) => {
   const data = useHandle(block, {
     selector: d => d ? {
       id: d.id,
@@ -42,8 +47,18 @@ const PropertySchemaContentRenderer: BlockRenderer = ({block}: BlockRendererProp
     } : undefined,
   })
   const runtime = useAppRuntime()
-  const presets = runtime.read(valuePresetsFacet)
-  const readOnly = block.repo.isReadOnly
+  const presets = readValuePresets(runtime)
+
+  // A materialized seed row is a kernel/plugin property *defined in code*.
+  // In v1 these are code-owned and unshadowable: their name, type, config,
+  // and lifecycle are fixed by the declaration. Editing the seed's own row
+  // has no legitimate meaning and silently corrupts the definition — e.g.
+  // switching its preset leaves a stored default the new codec can't decode,
+  // which drops the whole schema to metadata-only. Render read-only so the
+  // user sees what the property is without being able to mutate it. A viewer
+  // (repo read-only) is the same case for a different reason.
+  const isSeedBacked = data ? isValidSeededDefinition(data) : false
+  const readOnly = block.repo.isReadOnly || isSeedBacked
 
   const presetId = useMemo<string>(() => {
     if (!data) return ''
@@ -90,6 +105,21 @@ const PropertySchemaContentRenderer: BlockRenderer = ({block}: BlockRendererProp
 
   const writeName = useCallback(async (next: string) => {
     if (next === propertyName) return
+    // Same invariant addSchema enforces at creation (PR #288 §7): the name
+    // must survive a `[[name]]` round-trip — field-row retitles and every
+    // re-derive-by-content path bind through that form, so a lossy label
+    // (e.g. one containing `]]`) would strand the schema's field rows.
+    // Reject by reverting the draft; the committed name stands.
+    //
+    // BOTH halves of the hygiene, matching `addSchema` — the round-trip
+    // guard alone leaves the rename path open as a bypass, because
+    // `((id))` and `::((id))` round-trip perfectly well (nothing about
+    // them is `]]`-lossy) while reading as a reference to some other block
+    // wherever the name is rendered.
+    if (!isRoundTrippableReferenceLabel(next) || isGrammarShapedLabel(next)) {
+      setDraftName(propertyName)
+      return
+    }
     await block.set(propertyNameProp, next)
   }, [block, propertyName])
 
@@ -97,23 +127,23 @@ const PropertySchemaContentRenderer: BlockRenderer = ({block}: BlockRendererProp
     if (next === presetId) return
     const target = presets.get(next)
     if (!target) return
+    // setProperties applies a two-key DELTA read against the fresh in-tx row —
+    // NOT a whole-bag replace off the (possibly stale) `data` render snapshot,
+    // which would clobber any sibling key written between render and commit.
     await block.repo.tx(async tx => {
-      await tx.update(block.id, {
-        properties: {
-          ...data!.properties,
-          [presetIdProp.name]: presetIdProp.codec.encode(next),
-          // Reset config to the new preset's defaultConfig (re-encoded
-          // through its configCodec, if any), since the previous
-          // preset's config shape doesn't apply.
-          [presetConfigProp.name]: presetConfigProp.codec.encode(
-            target.configCodec
-              ? target.configCodec.encode(target.defaultConfig as never) as Record<string, unknown>
-              : {},
-          ),
-        },
+      await tx.setProperties(block.id, {
+        set: [
+          propertyValue(presetIdProp, next),
+          // Reset config to the new preset's defaultConfig (re-encoded through
+          // its configCodec, if any), since the previous preset's config shape
+          // doesn't apply.
+          propertyValue(presetConfigProp, target.configCodec
+            ? target.configCodec.encode(target.defaultConfig as never) as Record<string, unknown>
+            : {}),
+        ],
       })
     }, {scope: ChangeScope.BlockDefault, description: `change preset to ${next}`})
-  }, [block, data, presetId, presets])
+  }, [block, presetId, presets])
 
   const writeConfig = useCallback(async (next: unknown) => {
     if (!preset?.configCodec) return
@@ -138,7 +168,7 @@ const PropertySchemaContentRenderer: BlockRenderer = ({block}: BlockRendererProp
   }, [])
 
   const performDelete = useCallback(async () => {
-    await block.repo.mutate.delete({id: block.id})
+    await deleteBlockThroughUi(block)
   }, [block])
 
   const handleDeleteClick = useCallback(async () => {
@@ -189,7 +219,7 @@ const PropertySchemaContentRenderer: BlockRenderer = ({block}: BlockRendererProp
         <Input
           value={draftName}
           placeholder="property name"
-          readOnly={readOnly}
+          disabled={readOnly}
           onChange={(e: ChangeEvent<HTMLInputElement>) => setDraftName(e.target.value)}
           onBlur={() => { void writeName(draftName.trim()) }}
           onKeyDown={(e) => {
@@ -229,9 +259,22 @@ const PropertySchemaContentRenderer: BlockRenderer = ({block}: BlockRendererProp
       {preset?.ConfigEditor && (
         <div className="grid grid-cols-[6rem,minmax(0,1fr)] gap-3">
           <label className="pt-1 text-xs font-semibold text-muted-foreground">Config</label>
-          <div>
+          {/* The config editors don't take a readOnly prop; block interaction
+              at the wrapper so a read-only schema (seed-backed or viewer)
+              still shows its options without letting them be edited. */}
+          <div
+            className={readOnly ? 'pointer-events-none opacity-60' : undefined}
+            aria-disabled={readOnly || undefined}
+          >
             {renderConfigEditor(preset, decodedConfig, writeConfig)}
           </div>
+        </div>
+      )}
+
+      {isSeedBacked && (
+        <div className="text-xs text-muted-foreground">
+          Built-in property defined in code — its name, type, and options are
+          fixed and can&rsquo;t be edited here.
         </div>
       )}
 

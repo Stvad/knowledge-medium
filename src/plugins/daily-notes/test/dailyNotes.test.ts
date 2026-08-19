@@ -13,27 +13,27 @@
  * tx.restore / tx.move) and `createTestDb` harness.
  */
 
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChangeScope } from '@/data/api'
+import { DeterministicIdCrossWorkspaceError } from '@/data/api/errors'
 import { aliasesProp } from '@/data/properties'
 import { PAGE_TYPE } from '@/data/blockTypes'
 import { dailyNoteDateProp } from '@/plugins/daily-notes/schema.js'
 import { BlockCache } from '@/data/blockCache'
-import { kernelDataExtension } from '@/data/kernelDataExtension'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { Repo } from '@/data/repo'
-import { resolveFacetRuntimeSync } from '@/facets/facet'
+import { createTestRepo, isBlockDeleted } from '@/data/test/createTestRepo'
 import {
-  DAILY_NOTE_NS,
   DAILY_NOTE_TYPE,
-  JOURNAL_NS,
   addDaysIso,
   dailyNoteBlockId,
   dailyNotesDataExtension,
   getOrCreateDailyNote,
   getOrCreateJournalBlock,
   journalBlockId,
+  todayIso,
 } from '@/plugins/daily-notes'
+import { todayDailyNoteLanding } from '@/plugins/daily-notes/landing.js'
 
 const WS = 'ws-1'
 
@@ -47,20 +47,11 @@ const setup = async (): Promise<Harness> => {
   // Shared DB opened once per file, reset between tests; fresh Repo per test.
   await resetTestDb(sharedDb.db)
   const h = sharedDb
-  const cache = new BlockCache()
-  let timeCursor = 1700_000_000_000
-  let idCursor = 0
-  const repo = new Repo({
+  const { repo, cache } = createTestRepo({
     db: h.db,
-    cache,
     user: {id: 'user-1'},
-    now: () => ++timeCursor,
-    newId: () => `gen-${++idCursor}`,
+    extensions: [dailyNotesDataExtension],
   })
-  repo.setFacetRuntime(resolveFacetRuntimeSync([
-    kernelDataExtension,
-    dailyNotesDataExtension,
-  ]))
   return {h, cache, repo}
 }
 
@@ -69,7 +60,7 @@ let env: Harness
 beforeAll(async () => { sharedDb = await createTestDb() })
 afterAll(async () => { await sharedDb.cleanup() })
 beforeEach(async () => { env = await setup() })
-afterEach(() => { env.repo.stopSyncObserver() })
+afterEach(() => { vi.restoreAllMocks() })
 
 describe('deterministic ids', () => {
   it('journalBlockId is stable for a given workspace', () => {
@@ -83,13 +74,9 @@ describe('deterministic ids', () => {
     expect(dailyNoteBlockId('ws-1', '2026-04-28')).not.toBe(dailyNoteBlockId('ws-2', '2026-04-28'))
   })
 
-  it('namespace constants are pinned', () => {
-    // Pinned so two clients deriving an id offline land on the same row
-    // once they sync. Drift on either side reintroduces the
-    // per-client duplicate-page bug.
-    expect(JOURNAL_NS).toBe('a304a5da-807a-4c20-8af3-53a033aa9df8')
-    expect(DAILY_NOTE_NS).toBe('53421e08-2f31-42f8-b73a-43830bb718f1')
-  })
+  // The namespace literals are pinned inside the id formula itself, in
+  // src/data/derivedIds.test.ts — strictly stronger than asserting the
+  // constant equals itself, since it also catches a changed key shape.
 })
 
 describe('addDaysIso', () => {
@@ -246,6 +233,156 @@ describe('getOrCreateDailyNote', () => {
     expect(restored.peekProperty(dailyNoteDateProp)?.toISOString())
       .toBe('2026-04-28T00:00:00.000Z')
   })
+
+  /** A row at this id belonging to another workspace is never ours to touch.
+   *
+   *  Both reads that can find an occupant select on id alone (`repo.load` and
+   *  `tx.get`), and what they feed rewrites aliases and types, resurrects
+   *  tombstones, and `tx.move`s the row under THIS workspace's journal — which
+   *  would pull a page out of someone else's tree.
+   *
+   *  One test per SITE. The guard runs at three points and each test below
+   *  enters through a different one, because a single test pins them only
+   *  collectively: a plain live occupant is caught by the first check and never
+   *  reaches the other two. */
+  describe('a row at this id belonging to another workspace', () => {
+    const OTHER_WS = 'ws-someone-else'
+    const foreignRow = async (deleted: boolean): Promise<string> => {
+      const id = dailyNoteBlockId(WS, ISO)
+      await env.repo.tx(async tx => {
+        await tx.create({
+          id, workspaceId: OTHER_WS, parentId: null, orderKey: 'a0',
+          content: 'someone else\'s page',
+        })
+        if (deleted) await tx.delete(id)
+      }, {scope: ChangeScope.BlockDefault})
+      return id
+    }
+
+    it('is refused rather than repaired and re-parented', async () => {
+      const id = await foreignRow(false)
+
+      await expect(getOrCreateDailyNote(env.repo, WS, ISO))
+        .rejects.toThrow(DeterministicIdCrossWorkspaceError)
+
+      // Untouched: still theirs, still where it was, no alias claimed.
+      const row = await env.repo.load(id)
+      expect(row?.workspaceId).toBe(OTHER_WS)
+      expect(row?.parentId).toBeNull()
+      expect(row?.content).toBe('someone else\'s page')
+      expect(row?.properties[aliasesProp.name]).toBeUndefined()
+    })
+
+    it('is refused rather than resurrected', async () => {
+      // A tombstone is invisible to `repo.load`, so this enters through the
+      // CREATE transaction's `tx.get` — the site that would otherwise restore
+      // it, hand it this workspace's aliases, and move it under our journal.
+      const id = await foreignRow(true)
+
+      await expect(getOrCreateDailyNote(env.repo, WS, ISO))
+        .rejects.toThrow(DeterministicIdCrossWorkspaceError)
+
+      expect(await env.repo.load(id)).toBeNull()
+    })
+
+    it('is refused even when it is shaped exactly like ours, so nothing needs repair', async () => {
+      // A correctly-shaped note makes `needsRepair` false, so the repair
+      // transaction — and the check inside it — is never reached, and the
+      // function returns the block handle directly. The check right after
+      // `repo.load` is the only thing between this call and handing another
+      // workspace's page back as this workspace's note for `ISO`.
+      //
+      // Built by creating the note properly and then relabelling the row the
+      // first read returns: the shape has to survive, and only the workspace
+      // may differ — which is exactly what sync materialization can produce.
+      const note = await getOrCreateDailyNote(env.repo, WS, ISO)
+      const shaped = {...note.peek()!, workspaceId: OTHER_WS}
+      vi.spyOn(env.repo, 'load').mockResolvedValueOnce(shaped)
+
+      await expect(getOrCreateDailyNote(env.repo, WS, ISO))
+        .rejects.toThrow(DeterministicIdCrossWorkspaceError)
+    })
+
+    it('is refused when it only becomes foreign between the read and the transaction', async () => {
+      // Sync materialization rewrites every stored column except `id`,
+      // `workspace_id` included, so the row read before the repair transaction
+      // can belong to someone else by the time it opens. Simulated by making
+      // that first read disagree with what is actually on disk — which is also
+      // the only way to reach the in-transaction check, since a row that is
+      // already foreign is stopped one site earlier.
+      const id = await foreignRow(false)
+      const asIfOurs = {...(await env.repo.load(id))!, workspaceId: WS}
+      vi.spyOn(env.repo, 'load').mockResolvedValueOnce(asIfOurs)
+
+      await expect(getOrCreateDailyNote(env.repo, WS, ISO))
+        .rejects.toThrow(DeterministicIdCrossWorkspaceError)
+
+      const row = await env.repo.load(id)
+      expect(row?.properties[aliasesProp.name]).toBeUndefined()
+      expect(row?.parentId).toBeNull()
+    })
+  })
+})
+
+describe('todayDailyNoteLanding', () => {
+  it('lands on today’s note, creating it if needed', async () => {
+    const id = await todayDailyNoteLanding({repo: env.repo, workspaceId: WS, freshlyCreated: false})
+    expect(id).toBe(dailyNoteBlockId(WS, todayIso()))
+    expect(await isBlockDeleted(env.repo, id!)).toBe(false)
+  })
+
+  it('declines — without resurrecting — when today’s note is the excluded block', async () => {
+    // Delete-recovery asks for a landing while the deleted page is still the
+    // one the pane shows. Since the resolver is get-or-CREATE and restores
+    // soft-deleted rows, answering here would silently undo the user's delete.
+    const note = await getOrCreateDailyNote(env.repo, WS, todayIso())
+    await env.repo.tx(tx => tx.delete(note.id), {scope: ChangeScope.BlockDefault})
+
+    const id = await todayDailyNoteLanding({
+      repo: env.repo, workspaceId: WS, freshlyCreated: false, excludeBlockId: note.id,
+    })
+
+    expect(id).toBeNull()
+    expect(await isBlockDeleted(env.repo, note.id)).toBe(true)
+  })
+
+  it('still answers when the excluded block is some other page', async () => {
+    const id = await todayDailyNoteLanding({
+      repo: env.repo, workspaceId: WS, freshlyCreated: false, excludeBlockId: 'unrelated-page',
+    })
+    expect(id).toBe(dailyNoteBlockId(WS, todayIso()))
+  })
+
+  it('declines whenever today’s note is a tombstone, not just on an exact id match', async () => {
+    // A pane zoomed into a CHILD of today's note recovers with the child's id,
+    // so the exact-id check doesn't fire — but answering would still restore
+    // the deleted parent note.
+    const note = await getOrCreateDailyNote(env.repo, WS, todayIso())
+    await env.repo.mutate.createChild({parentId: note.id, id: 'kid', content: 'kid'})
+    await env.repo.block(note.id).delete()
+
+    const id = await todayDailyNoteLanding({
+      repo: env.repo, workspaceId: WS, freshlyCreated: false, excludeBlockId: 'kid',
+    })
+
+    expect(id).toBeNull()
+    expect(await isBlockDeleted(env.repo, note.id)).toBe(true)
+  })
+
+  it('declines when the Journal itself is the tombstone', async () => {
+    // getOrCreateDailyNote calls getOrCreateJournalBlock, which restores a
+    // soft-deleted Journal — so recovering after a Journal delete would
+    // resurrect it and hang a fresh daily note under it.
+    const journal = await getOrCreateJournalBlock(env.repo, WS)
+    await env.repo.block(journal.id).delete()
+
+    const id = await todayDailyNoteLanding({
+      repo: env.repo, workspaceId: WS, freshlyCreated: false, excludeBlockId: journal.id,
+    })
+
+    expect(id).toBeNull()
+    expect(await isBlockDeleted(env.repo, journal.id)).toBe(true)
+  })
 })
 
 describe('idx_blocks_daily_note_date', () => {
@@ -274,5 +411,33 @@ describe('idx_blocks_daily_note_date', () => {
     `, ['2026-05-18T00:00:00.000Z'])
     const detail = plan.map(r => r.detail).join(' | ')
     expect(detail).toContain('idx_blocks_daily_note_date')
+  })
+})
+
+describe('undo grouping (issue #306)', () => {
+  it('cold-path getOrCreateDailyNote (journal + note txs) records ONE undo entry', async () => {
+    const {repo} = env
+    repo.setActiveWorkspaceId(WS)
+    const iso = '2026-04-28'
+    const note = await getOrCreateDailyNote(repo, WS, iso)
+
+    // Fresh workspace: journal bootstrap + note creation are two txs —
+    // merged into a single entry, so one cmd-Z removes both.
+    expect(repo.undoManager.depths(ChangeScope.BlockDefault)).toEqual({undo: 1, redo: 0})
+
+    expect(await repo.undo()).toBe(true)
+    expect(await isBlockDeleted(repo, note.id)).toBe(true)
+    expect(await isBlockDeleted(repo, journalBlockId(WS))).toBe(true)
+  })
+
+  it('warm-path getOrCreateDailyNote (note exists, no repair) records nothing', async () => {
+    const {repo} = env
+    repo.setActiveWorkspaceId(WS)
+    const iso = '2026-04-28'
+    await getOrCreateDailyNote(repo, WS, iso)
+    repo.undoManager.clear()
+
+    await getOrCreateDailyNote(repo, WS, iso)
+    expect(repo.undoManager.depths(ChangeScope.BlockDefault)).toEqual({undo: 0, redo: 0})
   })
 })

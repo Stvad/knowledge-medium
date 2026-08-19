@@ -1,3 +1,4 @@
+// @vitest-environment happy-dom
 import {describe, expect, it} from 'vitest'
 import {lintExtensionSource} from '@/plugins/agent-runtime/extensionLint'
 
@@ -68,7 +69,7 @@ describe('lintExtensionSource — stored-plugin-block-id', () => {
     const warning = warnings.find(w => w.rule === 'stored-plugin-block-id')
     expect(warning).toBeDefined()
     expect(warning!.catalogPattern).toBe('plugin-root-singleton')
-    expect(warning!.message).toMatch(/pluginBlockId/)
+    expect(warning!.message).toMatch(/getOrCreateKernelPage/)
   })
 
   it('matches `rootBlockId` / `pluginId` / `blockId` substrings in the storage key', () => {
@@ -157,16 +158,23 @@ describe('lintExtensionSource — clean source', () => {
   it('returns an empty array for source using the canonical patterns', () => {
     const source = `
       import {
-        ChangeScope, codecs, defineBlockType, defineProperty,
-        getPluginPrefsBlock, pluginBlockId, typesFacet,
-      } from '@/extensions/api.js'
+        ChangeScope, seedProperty, seedType,
+      } from '@/data/api/index.js'
+      import { extensionPropertySeedKey, extensionTypeSeedKey } from '@/extensions/dynamicExtensionSeeds.js'
+      import { getPluginPrefsBlock } from '@/data/stateBlocks.js'
+      import { pluginBlockId } from '@/extensions/pluginIds.js'
 
       const READWISE_NS = '0d4f1c2e-7e9a-4f4d-a4f1-2c0a3a6e7f01'
-      const lastSyncProp = defineProperty('readwise:lastSyncedAt', {
-        codec: codecs.optionalString,
+      const lastSyncProp = seedProperty({
+        seedKey: extensionPropertySeedKey('lastSyncedAt'),
+        revision: 1,
+        name: 'readwise:lastSyncedAt',
+        preset: 'optional-string',
         changeScope: ChangeScope.UserPrefs,
       })
-      const readwisePrefsType = defineBlockType({
+      const readwisePrefsType = seedType({
+        seedKey: extensionTypeSeedKey('prefs'),
+        revision: 1,
         id: 'readwise-prefs',
         label: 'Readwise',
         properties: [lastSyncProp],
@@ -217,5 +225,142 @@ describe('lintExtensionSource — output shape', () => {
       expect(warning.example.length).toBeLessThanOrEqual(120)
       expect(warning.example.endsWith('...')).toBe(true)
     }
+  })
+})
+
+// ──── data-model grain rules ────
+// These read whole `seedProperty` / `seedType` declarations: the smell is
+// always in the combination of `name` + `preset`, never in one line.
+
+describe('lintExtensionSource — records-in-json-prop', () => {
+  it('warns when a json property holds a list of records', () => {
+    const source = `
+      export const setsProp = seedProperty({
+        seedKey: extensionPropertySeedKey('sets'),
+        revision: 1,
+        name: 'strength:sets',
+        preset: 'json',
+        defaultValue: [],
+        changeScope: ChangeScope.BlockDefault,
+      })
+    `
+    const warning = lintExtensionSource(source).find(w => w.rule === 'records-in-json-prop')
+    expect(warning?.catalogPattern).toBe('record-grain')
+    expect(warning?.example).toContain('strength:sets')
+  })
+
+  it('catches a collection-shaped name even without an array default', () => {
+    const source = `
+      seedProperty({name: 'myext:entries', preset: 'optional-json', defaultValue: undefined})
+    `
+    expect(lintExtensionSource(source).map(w => w.rule)).toContain('records-in-json-prop')
+  })
+
+  it('leaves a json property holding one opaque config object alone', () => {
+    const source = `
+      seedProperty({name: 'myext:layout', preset: 'json', defaultValue: {}})
+    `
+    expect(lintExtensionSource(source).map(w => w.rule)).not.toContain('records-in-json-prop')
+  })
+
+  it('leaves a scalar list in the string-list preset alone', () => {
+    const source = `
+      seedProperty({name: 'myext:tags', preset: 'string-list', defaultValue: []})
+    `
+    expect(lintExtensionSource(source).map(w => w.rule)).not.toContain('records-in-json-prop')
+  })
+})
+
+describe('lintExtensionSource — block-id-as-string', () => {
+  it('warns when a block pointer is stored as a plain string', () => {
+    const source = `
+      seedProperty({name: 'myext:sourceBlockId', preset: 'string', defaultValue: ''})
+    `
+    const warning = lintExtensionSource(source).find(w => w.rule === 'block-id-as-string')
+    expect(warning?.message).toMatch(/targetTypes/)
+  })
+
+  it('does NOT flag an external record id (the shape the catalog recommends)', () => {
+    const source = `
+      seedProperty({name: 'readwise:highlight_id', preset: 'string', defaultValue: ''})
+      seedProperty({name: 'readwise:user_book_id', preset: 'optional-string', defaultValue: undefined})
+    `
+    expect(lintExtensionSource(source).map(w => w.rule)).not.toContain('block-id-as-string')
+  })
+
+  it('does NOT flag a pointer that already uses a ref preset', () => {
+    const source = `
+      seedProperty({name: 'myext:parentId', preset: 'optional-ref', config: {targetTypes: ['myext-thing']}})
+    `
+    expect(lintExtensionSource(source).map(w => w.rule)).not.toContain('block-id-as-string')
+  })
+})
+
+describe('lintExtensionSource — unnamespaced-declaration', () => {
+  it('warns about a bare type id', () => {
+    const source = `seedType({seedKey: k, revision: 1, id: 'set', label: 'Set'})`
+    expect(lintExtensionSource(source).map(w => w.rule)).toContain('unnamespaced-declaration')
+  })
+
+  it('warns about a property name with no namespace', () => {
+    const source = `seedProperty({name: 'weight', preset: 'number', defaultValue: 0})`
+    expect(lintExtensionSource(source).map(w => w.rule)).toContain('unnamespaced-declaration')
+  })
+
+  it('accepts prefixed declarations', () => {
+    const source = `
+      seedType({id: 'strength-set', label: 'Set'})
+      seedProperty({name: 'strength:weight', preset: 'number', defaultValue: 0})
+    `
+    expect(lintExtensionSource(source).map(w => w.rule)).not.toContain('unnamespaced-declaration')
+  })
+})
+
+describe('lintExtensionSource — reinvented-core-concept', () => {
+  it('warns when an extension declares its own done flag', () => {
+    const source = `seedProperty({name: 'strength:done', preset: 'boolean', defaultValue: false})`
+    const warning = lintExtensionSource(source).find(w => w.rule === 'reinvented-core-concept')
+    expect(warning?.message).toMatch(/TODO_TYPE/)
+  })
+
+  it('leaves a domain status alone — a session being in-progress is not todo-ness', () => {
+    const source = `
+      seedProperty({name: 'strength:status', preset: 'strict-enum', defaultValue: 'in-progress'})
+    `
+    expect(lintExtensionSource(source).map(w => w.rule)).not.toContain('reinvented-core-concept')
+  })
+
+  it('can be dismissed with a lint-ok marker', () => {
+    const source = `
+      // lint-ok: reinvented-core-concept (imported records carry the source system's own flag)
+      seedProperty({name: 'myext:completed', preset: 'boolean', defaultValue: false})
+    `
+    expect(lintExtensionSource(source).map(w => w.rule)).not.toContain('reinvented-core-concept')
+  })
+})
+
+describe('lintExtensionSource — generic declarations', () => {
+  it('reads a generic `seedProperty<T>({…})` like a plain one', () => {
+    // The real strength-tracker wrote its sets blob exactly this way; a
+    // scanner matching only the bare `seedProperty(` text skipped it.
+    const source = `
+      export const setsProp = seedProperty<Record<string, StoredSet[]>>({
+        seedKey: extensionPropertySeedKey('sets'),
+        name: 'strength:sets',
+        preset: 'json',
+        defaultValue: [],
+      })
+    `
+    expect(lintExtensionSource(source).map(w => w.rule)).toContain('records-in-json-prop')
+  })
+
+  it('tolerates whitespace between the name and its parens', () => {
+    const source = `seedType ({id: 'entry', label: 'Entry'})`
+    expect(lintExtensionSource(source).map(w => w.rule)).toContain('unnamespaced-declaration')
+  })
+
+  it('does not mistake a different function whose name merely ends the same', () => {
+    const source = `mySeedProperty({name: 'done', preset: 'boolean', defaultValue: false})`
+    expect(lintExtensionSource(source)).toEqual([])
   })
 })

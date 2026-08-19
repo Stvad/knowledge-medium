@@ -25,16 +25,22 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { ChangeScope, codecs, defineProperty, type BlockReference } from '@/data/api'
 import { BlockCache } from '@/data/blockCache'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
+import { createTestRepo } from '@/data/test/createTestRepo'
+import { EXTENSION_TYPE } from '@/data/blockTypes'
+import { aliasesProp } from '@/data/properties'
+import { seedProperty } from '@/data/propertySeeds'
 import { Repo } from '@/data/repo'
-import { computeAliasSeatId } from '@/data/targets'
+import { aliasSeatSeed, computeAliasSeatId } from '@/data/targets'
 import { dailyNoteBlockId, dailyNotesDataExtension } from '@/plugins/daily-notes'
-import { propertySchemasFacet } from '@/data/facets.js'
+import { definitionSeedsFacet, projectedPropertyDefinitionsFacet } from '@/data/facets.js'
 import { resolveFacetRuntimeSync, type AppExtension } from '@/facets/facet.js'
 import { kernelDataExtension } from '@/data/kernelDataExtension.js'
 import { referencesDataExtension } from '../dataExtension.ts'
+import { refTestSeed } from './refTestSeeds.ts'
 import {
   CLEANUP_ORPHAN_ALIASES_PROCESSOR,
   PARSE_REFERENCES_PROCESSOR,
+  isExtensionSource,
 } from '../referencesProcessor.ts'
 
 interface Harness {
@@ -53,26 +59,19 @@ const setup = async (
   // again from a nested beforeEach (with a different schema extension); the
   // reset is idempotent and h.cleanup disposes the prior Repo's observer.
   await resetTestDb(sharedDb.db)
-  const cache = new BlockCache()
-  let timeCursor = 1700_000_000_000
-  let idCursor = 0
-  const repo = new Repo({
+  const { repo, cache } = createTestRepo({
     db: sharedDb.db,
-    cache,
     user: {id: 'user-1'},
-    now: () => ++timeCursor,
-    newId: () => `gen-${++idCursor}`,
+    extensions: [
+      dailyNotesDataExtension,
+      referencesDataExtension,
+      ...extraExtensions,
+    ],
   })
   // Reprojection is workspace-scoped: it only scans + marks the active
   // workspace. All fixtures here live in WS, so make it active or every
   // schema-swap reprojection would no-op (no active workspace ⇒ skip).
   repo.setActiveWorkspaceId(WS)
-  repo.setFacetRuntime(resolveFacetRuntimeSync([
-    kernelDataExtension,
-    dailyNotesDataExtension,
-    referencesDataExtension,
-    ...extraExtensions,
-  ]))
   const h: TestDb = {db: sharedDb.db, cleanup: async () => { repo.stopSyncObserver() }}
   return {
     h,
@@ -170,29 +169,38 @@ describe('parseReferences — basic alias creation', () => {
     const refs = JSON.parse((await env.read('src'))!.references_json)
     expect(refs).toEqual([{id: someUuid, alias: someUuid}])
   })
+
+  // Regression (found by referencesRecompute.fuzz.test.ts): tx.update
+  // legally writes content on tombstones, and apply() skips soft-deleted
+  // rows — so without the `deleted` field-watch, a block edited while
+  // tombstoned came back live with marks but no derived refs.
+  it('restore re-parses content that was edited while soft-deleted', async () => {
+    await env.repo.tx(
+      tx => tx.create({id: 'src', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'plain'}),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await flush()
+    await env.repo.tx(tx => tx.delete('src'), {scope: ChangeScope.BlockDefault})
+    await flush()
+    await env.repo.tx(tx => tx.update('src', {content: 'now links [[foo]]'}), {scope: ChangeScope.BlockDefault})
+    await flush()
+    // While deleted: no derivation happened (apply skips tombstones).
+    expect(JSON.parse((await env.read('src'))!.references_json)).toEqual([])
+
+    await env.repo.tx(tx => tx.restore('src'), {scope: ChangeScope.BlockDefault})
+    await flush()
+    const refs = JSON.parse((await env.read('src'))!.references_json) as BlockReference[]
+    expect(refs).toEqual([{id: aliasId('foo'), alias: 'foo'}])
+    expect((await env.read(aliasId('foo')))?.deleted).toBe(0)
+  })
 })
 
 describe('parseReferences — ref-typed properties', () => {
-  const reviewerProp = defineProperty<string>('reviewer', {
-    codec: codecs.ref(),
-    defaultValue: '',
-    changeScope: ChangeScope.BlockDefault,
-  })
-  const relatedProp = defineProperty<readonly string[]>('related', {
-    codec: codecs.refList(),
-    defaultValue: [],
-    changeScope: ChangeScope.BlockDefault,
-  })
-  const malformedProp = defineProperty<readonly string[]>('malformed-ref-list', {
-    codec: codecs.refList(),
-    defaultValue: [],
-    changeScope: ChangeScope.BlockDefault,
-  })
-  const refSchemaExtension = [
-    propertySchemasFacet.of(reviewerProp, {source: 'test'}),
-    propertySchemasFacet.of(relatedProp, {source: 'test'}),
-    propertySchemasFacet.of(malformedProp, {source: 'test'}),
-  ]
+  const reviewerProp = refTestSeed('reviewer', 'ref')
+  const relatedProp = refTestSeed('related', 'refList')
+  const malformedProp = refTestSeed('malformed-ref-list', 'refList')
+  const refSchemaExtension = [reviewerProp, relatedProp, malformedProp].map(p =>
+    definitionSeedsFacet.of(p, {source: 'test'}))
 
   beforeEach(async () => {
     await env.h.cleanup()
@@ -209,7 +217,12 @@ describe('parseReferences — ref-typed properties', () => {
         properties: {
           reviewer: 'target-a',
           related: ['target-b', 'target-a', ''],
-          'malformed-ref-list': [42],
+          // A well-formed id alongside a malformed (non-string) element: the
+          // refList codec drops `42` element-wise (#189) and projects the
+          // survivor, proving the field is recognised as ref-typed end-to-end
+          // (an absent schema would project neither — the assertion would then
+          // simply lack the `malformed-ref-list` entry).
+          'malformed-ref-list': ['target-d', 42],
         },
       }),
       {scope: ChangeScope.BlockDefault},
@@ -218,16 +231,18 @@ describe('parseReferences — ref-typed properties', () => {
 
     const refs = JSON.parse((await env.read('src'))!.references_json)
     // tx.update normalises references_json on write — sorted by
-    // (sourceField, id, alias) with duplicates collapsed. The input
-    // `properties` here happens to produce three distinct triples; the
-    // assertion lists them in canonical-sorted order.
+    // (sourceField, id, alias) with duplicates collapsed. The assertion lists
+    // the four surviving triples in canonical-sorted order (sourceField first,
+    // so `malformed-ref-list` leads).
     expect(refs).toEqual([
+      {id: 'target-d', alias: 'target-d', sourceField: 'malformed-ref-list'},
       {id: 'target-a', alias: 'target-a', sourceField: 'related'},
       {id: 'target-b', alias: 'target-b', sourceField: 'related'},
       {id: 'target-a', alias: 'target-a', sourceField: 'reviewer'},
     ])
     expect(await env.read('target-a')).toBeNull()
     expect(await env.read('target-b')).toBeNull()
+    expect(await env.read('target-d')).toBeNull()
   })
 
   it('reprojects when only properties change', async () => {
@@ -258,44 +273,162 @@ describe('parseReferences — ref-typed properties', () => {
   })
 })
 
+// An installed extension's SOURCE lives in `blocks.content` on a block
+// typed `extension`, and code hands the wikilink grammar unbalanced `[[`
+// openers for free (regex character classes, nested array literals).
+// Three pages — one named after 205 KB of bundled JavaScript — were
+// minted from a single extension's source before this gate existed.
+describe('parseReferences — extension source is not scanned for content refs', () => {
+  const SOME_UUID = '550e8400-e29b-41d4-a716-446655440000'
+
+  it('mints no alias target and records no content refs', async () => {
+    await env.repo.tx(
+      tx => tx.create({
+        id: 'ext',
+        workspaceId: WS,
+        parentId: null,
+        orderKey: 'a0',
+        content: `const RE = /[[\\]]/g\nsee [[foo]] and ((${SOME_UUID}))`,
+        properties: {types: [EXTENSION_TYPE]},
+      }),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await flush()
+
+    expect(JSON.parse((await env.read('ext'))!.references_json)).toEqual([])
+    expect(await env.read(aliasId('foo'))).toBeNull()
+  })
+
+  // The convergence path for source blocks that ALREADY minted seats:
+  // nothing rewrites their content, so the drop has to come from the
+  // re-parse that the type write itself triggers (`properties` is
+  // watched). Priming the positive case first is what makes the
+  // `toEqual([])` below evidence rather than a first-render artifact.
+  it('drops content refs already recorded when the type arrives', async () => {
+    await env.repo.tx(
+      tx => tx.create({
+        id: 'ext',
+        workspaceId: WS,
+        parentId: null,
+        orderKey: 'a0',
+        content: 'see [[foo]]',
+      }),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await flush()
+    expect(JSON.parse((await env.read('ext'))!.references_json))
+      .toEqual([{id: aliasId('foo'), alias: 'foo'}])
+
+    await env.repo.tx(
+      tx => tx.update('ext', {properties: {types: [EXTENSION_TYPE]}}),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await flush()
+    expect(JSON.parse((await env.read('ext'))!.references_json)).toEqual([])
+  })
+
+  // Direct unit test, because this is unpinnable through the public
+  // path: the kernel's same-tx `core.blockTypeTypeify` decodes `types`
+  // on every changed row and throws first, so a malformed value never
+  // reaches the read phase via `repo.tx`. See `isExtensionSource`'s
+  // declaration — the point is that it must stay TOTAL, and a future
+  // "simplify it to hasBlockType" would reintroduce a throw in a
+  // post-commit read phase, where the user's write has already landed.
+  describe('isExtensionSource is total', () => {
+    it.each([
+      ['a scalar', 'extension'],
+      ['an array with a non-string element', ['page', 42]],
+      ['an object', {0: 'extension'}],
+      ['null', null],
+    ])('reads %s as not-an-extension instead of throwing', (_label, types) => {
+      const source = {properties: {types}} as unknown as Parameters<typeof isExtensionSource>[0]
+      expect(isExtensionSource(source)).toBe(false)
+    })
+
+    it('still recognises a well-formed extension block', () => {
+      expect(isExtensionSource({properties: {types: [EXTENSION_TYPE]}})).toBe(true)
+    })
+
+    // Deliberate, and the direction matters. The codec would call this
+    // whole value malformed, but the row DOES claim the extension type,
+    // and the two readings fail very differently: honouring the claim
+    // skips parsing a source blob (worst case, an extension block's refs
+    // aren't derived — recoverable, invisible); rejecting it scans 1.7 MB
+    // of bundled JS and mints phantom pages, which is the bug this gate
+    // exists to stop. Membership wins over element-wise validity on
+    // purpose (declined Codex suggestion, PR #540).
+    it('honours an extension claim even in an otherwise malformed array', () => {
+      expect(isExtensionSource({properties: {types: [EXTENSION_TYPE, 42]}})).toBe(true)
+    })
+  })
+
+  // Scope check: the gate is on the CONTENT grammars only. An extension
+  // block carries ref-typed properties like any other block (its own
+  // `extension:name` today, anything a schema declares tomorrow), and
+  // silently dropping those would be a second, quieter version of the
+  // bug this fixes.
+  describe('ref-typed properties still project', () => {
+    const reviewerProp = refTestSeed('reviewer', 'ref')
+
+    beforeEach(async () => {
+      await env.h.cleanup()
+      env = await setup([definitionSeedsFacet.of(reviewerProp, {source: 'test'})])
+    })
+
+    it('projects a ref property on an extension-typed block', async () => {
+      await env.repo.tx(
+        tx => tx.create({
+          id: 'ext',
+          workspaceId: WS,
+          parentId: null,
+          orderKey: 'a0',
+          content: 'see [[foo]]',
+          properties: {types: [EXTENSION_TYPE], reviewer: 'target-a'},
+        }),
+        {scope: ChangeScope.BlockDefault},
+      )
+      await flush()
+
+      expect(JSON.parse((await env.read('ext'))!.references_json))
+        .toEqual([{id: 'target-a', alias: 'target-a', sourceField: 'reviewer'}])
+    })
+  })
+})
+
 describe('parseReferences — schema-swap reprojection', () => {
-  const reviewerProp = defineProperty<string>('reviewer', {
-    codec: codecs.ref(),
-    defaultValue: '',
-    changeScope: ChangeScope.BlockDefault,
-  })
-  const approverProp = defineProperty<string>('approver', {
-    codec: codecs.ref(),
-    defaultValue: '',
-    changeScope: ChangeScope.BlockDefault,
-  })
-  // `reviewer` redefined with a NON-ref codec — the real "stopped being
+  const reviewerProp = refTestSeed('reviewer', 'ref')
+  const approverProp = refTestSeed('approver', 'ref')
+  // `reviewer` redefined with a NON-ref preset — the real "stopped being
   // ref-typed" transition (e.g. a user changes the property's preset from a
   // ref type to text). Distinct from `runtimeWithoutReviewer`, where the
-  // schema is *absent* (a load-transient that must NOT strip refs).
-  const reviewerStringProp = defineProperty<string>('reviewer', {
-    codec: codecs.string,
-    defaultValue: '',
+  // schema is *absent* (a load-transient that must NOT strip refs). A distinct
+  // seedKey under the same name models a genuinely different definition, so this
+  // one stays an explicit seedProperty (refTestSeed derives the key from name).
+  const reviewerStringProp = seedProperty({
+    seedKey: 'test:references/property/reviewer-string',
+    revision: 1,
+    name: 'reviewer',
+    preset: 'string',
     changeScope: ChangeScope.BlockDefault,
   })
   const runtimeWithReviewer = () => resolveFacetRuntimeSync([
     kernelDataExtension,
     dailyNotesDataExtension,
     referencesDataExtension,
-    propertySchemasFacet.of(reviewerProp, {source: 'test'}),
+    definitionSeedsFacet.of(reviewerProp, {source: 'test'}),
   ])
   const runtimeWithReviewerAsString = () => resolveFacetRuntimeSync([
     kernelDataExtension,
     dailyNotesDataExtension,
     referencesDataExtension,
-    propertySchemasFacet.of(reviewerStringProp, {source: 'test'}),
+    definitionSeedsFacet.of(reviewerStringProp, {source: 'test'}),
   ])
   const runtimeWithReviewerAndApprover = () => resolveFacetRuntimeSync([
     kernelDataExtension,
     dailyNotesDataExtension,
     referencesDataExtension,
-    propertySchemasFacet.of(reviewerProp, {source: 'test'}),
-    propertySchemasFacet.of(approverProp, {source: 'test'}),
+    definitionSeedsFacet.of(reviewerProp, {source: 'test'}),
+    definitionSeedsFacet.of(approverProp, {source: 'test'}),
   ])
   const runtimeWithoutReviewer = () => resolveFacetRuntimeSync([
     kernelDataExtension,
@@ -327,18 +460,23 @@ describe('parseReferences — schema-swap reprojection', () => {
   })
 
   it('preserves references committed after the schema-swap scan starts', async () => {
+    // The concurrent write must be INPUT-BACKED (here: an absent-schema
+    // property value, the retainable shape): since the parser started
+    // watching `references`, a raw entry with no backing input is
+    // re-derived away on the spot — the derived-column model working,
+    // not the reprojection clobber this test guards against.
     await env.repo.tx(
       tx => tx.create({
         id: 'src',
         workspaceId: WS,
         parentId: null,
         orderKey: 'a0',
-        properties: {reviewer: 'target-a'},
+        properties: {reviewer: 'target-a', 'other-prop': 'target-b'},
       }),
       {scope: ChangeScope.BlockDefault},
     )
     await flush()
-    const liveReference: BlockReference = {id: 'live-content', alias: 'live-content'}
+    const liveReference: BlockReference = {id: 'target-b', alias: 'target-b', sourceField: 'other-prop'}
     const originalGetAll = env.h.db.getAll.bind(env.h.db)
     let intercepted = false
     const getAllSpy = vi.spyOn(env.h.db, 'getAll').mockImplementation(async <T,>(
@@ -508,13 +646,15 @@ describe('parseReferences — schema-swap reprojection', () => {
     )).toBeNull()
   })
 
-  it('uses the scheduled schema, not the live registry, when the workspace switched after scheduling', async () => {
+  it('skips the deferred scan for a workspace the user has left (isolation gate)', async () => {
     // A reprojection captures (names, scheduled schemas, workspaceId) atomically
-    // and runs deferred. If the user switches workspace before it fires,
-    // `this._propertySchemas` now reflects the OTHER workspace — reconciling the
-    // scan against it would let the other workspace's schema set strip refs from
-    // the captured workspace's blocks. The scan must fall back to its scheduled
-    // snapshot in that case.
+    // and runs deferred. If the user switches workspace before it fires, the scan
+    // must NOT touch the workspace they've left: reprojecting a non-active
+    // workspace's blocks — even correctly, from the frozen snapshot — violates
+    // workspace isolation. The scan skips instead (the runner's active gate),
+    // deferring WS's backfill to its next open. Skipping ALSO subsumes the older
+    // concern this test guarded — the other workspace's registry can't strip the
+    // captured workspace's refs, because the scan doesn't run at all.
     await env.repo.tx(
       tx => tx.create({
         id: 'src', workspaceId: WS, parentId: null, orderKey: 'a0',
@@ -532,11 +672,9 @@ describe('parseReferences — schema-swap reprojection', () => {
     env.repo.setFacetRuntime(runtimeWithoutReviewer())
     await flush()
 
-    // The WS-scheduled scan still projects reviewer from its own snapshot — it
-    // does NOT read ws-2's empty registry and strip the ref.
-    expect(JSON.parse((await env.read('src'))!.references_json)).toEqual([
-      {id: 'target-a', alias: 'target-a', sourceField: 'reviewer'},
-    ])
+    // The WS-scheduled scan skipped (WS is no longer active): `src` is neither
+    // backfilled (its ref waits for WS's next open) nor stripped.
+    expect(JSON.parse((await env.read('src'))!.references_json)).toEqual([])
   })
 
   it('does not add a ref for a parked ref-typed backfill after the property is redefined non-ref', async () => {
@@ -849,10 +987,8 @@ describe('parseReferences — schema-swap reprojection', () => {
     // The merged schema map is kernel→merged-with-reviewer, which would
     // normally re-scan every block. The persisted marker should make
     // this a no-op.
-    const cache2 = new BlockCache()
-    const repo2 = new Repo({
+    const { repo: repo2 } = createTestRepo({
       db: env.h.db,
-      cache: cache2,
       user: {id: 'user-1'},
     })
     repo2.setActiveWorkspaceId(WS)
@@ -865,6 +1001,449 @@ describe('parseReferences — schema-swap reprojection', () => {
     const m = repo2.metrics()
     expect(m.reprojection.calls).toBe(0)
     expect(m.reprojection.rowsScanned).toBe(0)
+  })
+})
+
+describe('parseReferences — stale-plan guard covers references-only writers', () => {
+  it('does not clobber a references-only write landing between plan build and apply', async () => {
+    // The race (Codex review on PR #371): a parse plan is built from the
+    // content edit's event row; before it applies, a references-ONLY
+    // writer (the ref-backfill reprojection on schema load, simulated
+    // here with a raw update) adds an entry the parse cannot re-derive
+    // (absent schema) but must retain (value unchanged). Pre-fix the
+    // plan's basis checked only content/properties, so the stale plan
+    // applied and silently dropped the entry — and with `references`
+    // unwatched, nothing ever re-derived it. The fix is both halves:
+    // the plan carries a references basis (stale plan skipped) and the
+    // processor watches `references` (the skipped work is rebuilt from
+    // the fresh row, retention keeping the foreign entry).
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'ref-target', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'target'})
+      await tx.create({
+        id: 'ref-src', workspaceId: WS, parentId: null, orderKey: 'a1', content: 'plain',
+        // Value present with NO schema loaded for the field — the shape
+        // isRetainableAbsentRef protects (referenceProjection.ts:69-80).
+        properties: {'fuzz:reviewer': 'ref-target'},
+      })
+    }, {scope: ChangeScope.BlockDefault})
+    await flush()
+
+    // Park the parse read phase at its alias lookup so the content
+    // edit's plan is built but applies only after the concurrent
+    // references-only write lands.
+    let release!: () => void
+    const gate = new Promise<void>(resolve => { release = resolve })
+    // `repo.query` is a name-dispatch Proxy (repo.ts), so spyOn can't
+    // patch a method on it — swap the whole facade for a gating wrapper.
+    const realQuery = env.repo.query
+    const gatedQuery = new Proxy(realQuery, {
+      get(target, prop, receiver) {
+        if (prop !== 'aliasLookup') return Reflect.get(target, prop, receiver)
+        return (args: {workspaceId: string; alias: string}) => {
+          const handle = target.aliasLookup(args)
+          return {
+            ...handle,
+            load: async () => {
+              await gate
+              return handle.load()
+            },
+          }
+        }
+      },
+    })
+    ;(env.repo as {query: typeof realQuery}).query = gatedQuery
+    try {
+      await env.repo.tx(
+        tx => tx.update('ref-src', {content: 'see [[StaleGuardAlias]]'}),
+        {scope: ChangeScope.BlockDefault},
+      )
+      // While the plan is parked: the references-only write.
+      await env.repo.tx(
+        tx => tx.update(
+          'ref-src',
+          {references: [{id: 'ref-target', alias: 'ref-target', sourceField: 'fuzz:reviewer'}]},
+          {skipMetadata: true},
+        ),
+        {scope: ChangeScope.References},
+      )
+      release()
+    } finally {
+      ;(env.repo as {query: typeof realQuery}).query = realQuery
+    }
+    await flush()
+
+    const row = await env.read('ref-src')
+    const refs = JSON.parse(row!.references_json) as BlockReference[]
+    expect(
+      refs.some(ref => ref.sourceField === 'fuzz:reviewer' && ref.id === 'ref-target'),
+      `retained property entry survives the parse plan (refs: ${row!.references_json})`,
+    ).toBe(true)
+    expect(refs.some(ref => ref.alias === 'StaleGuardAlias'), 'content link parsed').toBe(true)
+  })
+})
+
+describe('parseReferences — alias claimed between plan build and apply (write-phase lookup-first)', () => {
+  // The race (found by referencesRecompute.fuzz.test.ts once its ops
+  // batched before a flush): the read phase's aliasLookup misses, so the
+  // plan predicts a fresh deterministic seat — but before the write
+  // phase runs, an unrelated commit claims the alias on a different
+  // block. The interfering write touches the CLAIMANT row, not the
+  // source, so no watched field re-fires the source: the stale-plan
+  // guard can't help here. Pre-fix the write phase minted the seat
+  // anyway, tripped the alias-uniqueness trigger, and the processor tx
+  // rolled back whole — leaving the source permanently carrying the
+  // mark with no derived ref. The fix is lookup-first INSIDE the write
+  // tx (ensureAliasTarget / ensureDailyNoteTarget) plus retargeting the
+  // plan's predicted seat id to the claimant, converging to exactly
+  // what a fresh re-parse would produce.
+  const parkLookupOf = (alias: string) => {
+    let release!: () => void
+    const gate = new Promise<void>(resolve => { release = resolve })
+    const realQuery = env.repo.query
+    // `repo.query` is a name-dispatch Proxy (repo.ts), so spyOn can't
+    // patch a method on it — swap the whole facade for a gating wrapper.
+    const gatedQuery = new Proxy(realQuery, {
+      get(target, prop, receiver) {
+        if (prop !== 'aliasLookup') return Reflect.get(target, prop, receiver)
+        return (args: {workspaceId: string; alias: string}) => {
+          const handle = target.aliasLookup(args)
+          if (args.alias !== alias) return handle
+          return {
+            ...handle,
+            load: async () => {
+              await gate
+              return handle.load()
+            },
+          }
+        }
+      },
+    })
+    ;(env.repo as {query: typeof realQuery}).query = gatedQuery
+    return {
+      release,
+      restore: () => { ;(env.repo as {query: typeof realQuery}).query = realQuery },
+    }
+  }
+
+  it('binds a plain alias mark to the block that claimed the alias mid-plan instead of stripping', async () => {
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'claimant', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'C'})
+    }, {scope: ChangeScope.BlockDefault})
+    await flush()
+
+    // The source's SECOND mark ([[ParkZ]]) parks the read phase after
+    // [[RacedAlias]] has already been resolved (lookup miss → seat
+    // prediction), so the claim below lands in the read→write gap.
+    const park = parkLookupOf('ParkZ')
+    try {
+      await env.repo.tx(
+        tx => tx.create({
+          id: 'race-src', workspaceId: WS, parentId: null, orderKey: 'a1',
+          content: 'see [[RacedAlias]] and [[ParkZ]]',
+        }),
+        {scope: ChangeScope.BlockDefault},
+      )
+      await env.repo.tx(
+        tx => tx.setProperty('claimant', aliasesProp, ['RacedAlias']),
+        {scope: ChangeScope.BlockDefault},
+      )
+      park.release()
+    } finally {
+      park.restore()
+    }
+    await flush()
+
+    const row = await env.read('race-src')
+    const refs = JSON.parse(row!.references_json) as BlockReference[]
+    expect(
+      refs.some(ref => ref.alias === 'RacedAlias' && ref.id === 'claimant'),
+      `raced alias binds to the claimant, not stripped/dangling (refs: ${row!.references_json})`,
+    ).toBe(true)
+    expect(refs.some(ref => ref.alias === 'ParkZ'), 'unraced mark still derived').toBe(true)
+    // The predicted seat must NOT have been minted — the claimant owns
+    // the alias.
+    const seat = await env.read(computeAliasSeatId('RacedAlias', WS))
+    expect(seat, 'no seat row minted for a claimed alias').toBeNull()
+  })
+
+  it('binds a date mark to the block that claimed the ISO alias mid-plan instead of stripping', async () => {
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'date-claimant', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'D'})
+    }, {scope: ChangeScope.BlockDefault})
+    await flush()
+
+    const park = parkLookupOf('ParkZ')
+    try {
+      await env.repo.tx(
+        tx => tx.create({
+          id: 'date-race-src', workspaceId: WS, parentId: null, orderKey: 'a1',
+          content: 'due [[2026-02-03]] and [[ParkZ]]',
+        }),
+        {scope: ChangeScope.BlockDefault},
+      )
+      await env.repo.tx(
+        tx => tx.setProperty('date-claimant', aliasesProp, ['2026-02-03']),
+        {scope: ChangeScope.BlockDefault},
+      )
+      park.release()
+    } finally {
+      park.restore()
+    }
+    await flush()
+
+    const row = await env.read('date-race-src')
+    const refs = JSON.parse(row!.references_json) as BlockReference[]
+    expect(
+      refs.some(ref => ref.alias === '2026-02-03' && ref.id === 'date-claimant'),
+      `raced date alias binds to the claimant (refs: ${row!.references_json})`,
+    ).toBe(true)
+    const seat = await env.read(dailyNoteBlockId(WS, '2026-02-03'))
+    expect(seat, 'no daily seat minted for a claimed date alias').toBeNull()
+  })
+
+  it('binds a LONG-FORM date mark to the block that claimed the literal alias mid-plan', async () => {
+    // ensureDailyNoteTarget's internal lookup-first only rechecks the
+    // ISO; the mark's literal alias ("February 3rd, 2026") is a distinct
+    // claimable name, so the write phase must recheck it per mark
+    // (Codex review on PR #371). Pre-fix this didn't strip — the seat
+    // mint doesn't collide — but the ref bound to the daily seat where
+    // a fresh parse would bind the claimant, with nothing to re-fire.
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'lf-claimant', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'LF'})
+    }, {scope: ChangeScope.BlockDefault})
+    await flush()
+
+    const park = parkLookupOf('ParkZ')
+    try {
+      await env.repo.tx(
+        tx => tx.create({
+          id: 'lf-race-src', workspaceId: WS, parentId: null, orderKey: 'a1',
+          content: 'due [[February 3rd, 2026]] and [[ParkZ]]',
+        }),
+        {scope: ChangeScope.BlockDefault},
+      )
+      await env.repo.tx(
+        tx => tx.setProperty('lf-claimant', aliasesProp, ['February 3rd, 2026']),
+        {scope: ChangeScope.BlockDefault},
+      )
+      park.release()
+    } finally {
+      park.restore()
+    }
+    await flush()
+
+    const row = await env.read('lf-race-src')
+    const refs = JSON.parse(row!.references_json) as BlockReference[]
+    expect(
+      refs.some(ref => ref.alias === 'February 3rd, 2026' && ref.id === 'lf-claimant'),
+      `long-form date mark binds to the claimant (refs: ${row!.references_json})`,
+    ).toBe(true)
+    const seat = await env.read(dailyNoteBlockId(WS, '2026-02-03'))
+    expect(seat, 'no daily seat minted when the literal alias is claimed').toBeNull()
+  })
+
+  it('restores a merged-away daily seat whose tombstone carries a stale alias claim', async () => {
+    // A tombstoned seat's stored bag can hold an alias that now belongs
+    // to someone else: overwrite the seat's alias, merge the seat away
+    // (merge hands the alias to the target and tombstones the seat with
+    // its bag intact), then re-reference the date. Pre-fix the restore
+    // resurrected the stale claim, tripped the alias-uniqueness trigger
+    // against the merge target, and rolled back the whole parse tx —
+    // permanently stripped refs for the new source (found by
+    // referencesRecompute.fuzz.test.ts, seed -453708417). The restore
+    // now strips the aliases key in the same UPDATE and the callback
+    // re-writes the correct one.
+    const seatId = dailyNoteBlockId(WS, '2026-01-05')
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'src-a', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'on [[2026-01-05]]'})
+      await tx.create({id: 'absorber', workspaceId: WS, parentId: null, orderKey: 'a1', content: 'B'})
+    }, {scope: ChangeScope.BlockDefault})
+    await flush()
+    expect(await env.read(seatId), 'daily seat materialized').not.toBeNull()
+
+    await env.repo.tx(
+      tx => tx.setProperty(seatId, aliasesProp, ['zz-stale']),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await flush()
+    await env.repo.mutate.merge({intoId: 'absorber', fromId: seatId})
+    await flush()
+
+    await env.repo.tx(
+      tx => tx.create({id: 'src-b', workspaceId: WS, parentId: null, orderKey: 'a2', content: 'also [[2026-01-05]]'}),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await flush()
+
+    const row = await env.read('src-b')
+    const refs = JSON.parse(row!.references_json) as BlockReference[]
+    expect(
+      refs.some(ref => ref.alias === '2026-01-05' && ref.id === seatId),
+      `date ref derived, not stripped (refs: ${row!.references_json})`,
+    ).toBe(true)
+    const seat = await env.read(seatId)
+    expect(seat!.deleted).toBe(0)
+    expect(JSON.parse(seat!.properties_json)[aliasesProp.name]).toEqual(['2026-01-05'])
+    const absorber = await env.read('absorber')
+    expect(JSON.parse(absorber!.properties_json)[aliasesProp.name]).toEqual(['zz-stale'])
+  })
+
+  it('date-ensure divergence must not hijack a lookup-bound entry sharing the seat id', async () => {
+    // Static state, no race: the daily seat was renamed (claims only
+    // "Foo") and another page claims the freed ISO. A source citing
+    // BOTH [[Foo]] and the long-form date binds Foo→seat by lookup and
+    // routes the date through the ensure, which resolves to the ISO
+    // claimant. Pre-fix the ensure's retarget was NOT alias-filtered,
+    // so it rewrote every entry carrying the seat id — hijacking the
+    // Foo binding — and the wrong state was STABLE (every re-parse
+    // recomputed and re-retargeted identically, so referencesChanged
+    // saw no delta). Round-2 adversarial review, verified repro.
+    const seatId = dailyNoteBlockId(WS, '2026-05-20')
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'seed-src', workspaceId: WS, parentId: null, orderKey: 'a0', content: '[[2026-05-20]]'})
+      await tx.create({id: 'iso-claimant', workspaceId: WS, parentId: null, orderKey: 'a1', content: 'C'})
+    }, {scope: ChangeScope.BlockDefault})
+    await flush()
+    expect(await env.read(seatId), 'daily seat materialized').not.toBeNull()
+
+    await env.repo.tx(async tx => {
+      await tx.setProperty(seatId, aliasesProp, ['Foo'])
+      await tx.setProperty('iso-claimant', aliasesProp, ['2026-05-20'])
+    }, {scope: ChangeScope.BlockDefault})
+    await flush()
+
+    await env.repo.tx(
+      tx => tx.create({
+        id: 'hijack-src', workspaceId: WS, parentId: null, orderKey: 'a2',
+        content: 'see [[Foo]] and [[May 20th, 2026]]',
+      }),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await flush()
+
+    const row = await env.read('hijack-src')
+    const refs = JSON.parse(row!.references_json) as BlockReference[]
+    expect(
+      refs.some(ref => ref.alias === 'Foo' && ref.id === seatId),
+      `lookup-bound [[Foo]] stays on the renamed seat (refs: ${row!.references_json})`,
+    ).toBe(true)
+    expect(
+      refs.some(ref => ref.alias === 'May 20th, 2026' && ref.id === 'iso-claimant'),
+      'date mark binds to the ISO claimant via the ensure',
+    ).toBe(true)
+  })
+
+  it('claiming a long-form literal on the target is a bookkeeping write (no user-edit stamp)', async () => {
+    // claimLiteralDateAliases appends the literal spelling to the
+    // target's alias list from a background re-parse of some OTHER
+    // block. That write must ride skipMetadata like the processor's
+    // references write: bumping userUpdatedAt/updatedBy here would make
+    // the target page float to the top of last-edited views because a
+    // different block mentioned it (Codex review on PR #384).
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'iso-claimant', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'C'})
+      await tx.setProperty('iso-claimant', aliasesProp, ['2026-06-10'])
+    }, {scope: ChangeScope.BlockDefault})
+    await flush()
+    const before = await env.h.db.getOptional<{user_updated_at: number | null; updated_by: string | null}>(
+      'SELECT user_updated_at, updated_by FROM blocks WHERE id = ?', ['iso-claimant'],
+    )
+
+    await env.repo.tx(
+      tx => tx.create({id: 'src', workspaceId: WS, parentId: null, orderKey: 'a1', content: 'see [[June 10th, 2026]]'}),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await flush()
+
+    const claimant = await env.read('iso-claimant')
+    expect(
+      JSON.parse(claimant!.properties_json)[aliasesProp.name],
+      'literal spelling claimed alongside the ISO',
+    ).toEqual(['2026-06-10', 'June 10th, 2026'])
+    const after = await env.h.db.getOptional<{user_updated_at: number | null; updated_by: string | null}>(
+      'SELECT user_updated_at, updated_by FROM blocks WHERE id = ?', ['iso-claimant'],
+    )
+    expect(after, 'claim write must not stamp user-edit metadata').toEqual(before)
+  })
+
+  it('skips the literal claim when the target alias property cannot be decoded', async () => {
+    // Legacy/raw data can hold a malformed alias array (e.g.
+    // ["2026-06-11", 1]) whose STRING entries the block_aliases trigger
+    // still indexes — so the ISO keeps resolving to this block. The
+    // claim's append is decode→rewrite; on decode failure it must skip
+    // rather than replace the list with just the literal, which would
+    // un-claim the ISO and re-point future [[2026-06-11]] links (Codex
+    // review on PR #384).
+    await env.repo.tx(
+      tx => tx.create({id: 'legacy', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'L'}),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await flush()
+    // Malformed shape can't be written through the codec — plant it raw.
+    // The UPDATE fires blocks_alias_update, which indexes the string
+    // entry and skips the number (typeof(je.value) = 'text' guard).
+    await env.h.db.execute(
+      `UPDATE blocks SET properties_json = json_set(properties_json, '$.alias', json('["2026-06-11", 1]')) WHERE id = ?`,
+      ['legacy'],
+    )
+
+    await env.repo.tx(
+      tx => tx.create({id: 'src', workspaceId: WS, parentId: null, orderKey: 'a1', content: 'see [[June 11th, 2026]]'}),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await flush()
+
+    const refs = JSON.parse((await env.read('src'))!.references_json) as BlockReference[]
+    expect(
+      refs.some(ref => ref.alias === 'June 11th, 2026' && ref.id === 'legacy'),
+      'long-form still binds to the indexed ISO claimant',
+    ).toBe(true)
+    expect(
+      JSON.parse((await env.read('legacy'))!.properties_json)[aliasesProp.name],
+      'undecodable alias list left untouched — ISO claim preserved',
+    ).toEqual(['2026-06-11', 1])
+  })
+
+  it('a latent duplicate alias on the target must not abort the parse batch via the claim', async () => {
+    // Cross-client dupes are a standing V1 condition: sync-apply skips
+    // the uniqueness trigger (tx_context.source IS NULL), so two devices
+    // claiming the same alias offline both keep it. The claim write
+    // re-inserts ALL of the target's aliases (blocks_alias_update
+    // deletes+re-inserts), so the PRE-EXISTING duped alias would RAISE —
+    // pre-fix that rolled back the whole parse tx: references for the
+    // source were permanently dropped and re-aborted on every re-edit
+    // (adversarial review on PR #384).
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'older', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'O'})
+      await tx.setProperty('older', aliasesProp, ['2026-06-12'])
+      await tx.create({id: 'newer', workspaceId: WS, parentId: null, orderKey: 'a1', content: 'N'})
+    }, {scope: ChangeScope.BlockDefault})
+    await flush()
+    // Plant the dupe the way sync-apply would: raw write outside a repo
+    // tx, so tx_context.source is NULL and the uniqueness trigger skips.
+    await env.h.db.execute(
+      `UPDATE blocks SET properties_json = json_set(properties_json, '$.alias', json('["2026-06-12"]')) WHERE id = ?`,
+      ['newer'],
+    )
+
+    await env.repo.tx(
+      tx => tx.create({id: 'src', workspaceId: WS, parentId: null, orderKey: 'a2', content: 'see [[June 12th, 2026]]'}),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await flush()
+
+    // The batch survived: the source's references landed (bound to the
+    // oldest claimant per lookup semantics)...
+    const refs = JSON.parse((await env.read('src'))!.references_json) as BlockReference[]
+    expect(
+      refs.some(ref => ref.alias === 'June 12th, 2026' && ref.id === 'older'),
+      `references written despite the latent dupe (refs: ${JSON.stringify(refs)})`,
+    ).toBe(true)
+    // ...and the claim itself was skipped, leaving the target untouched.
+    expect(
+      JSON.parse((await env.read('older'))!.properties_json)[aliasesProp.name],
+      'claim skipped on the dupe-carrying target',
+    ).toEqual(['2026-06-12'])
   })
 })
 
@@ -951,6 +1530,31 @@ describe('parseReferences — daily-note routing (§7.6)', () => {
     expect(await env.read(aliasId(longForm))).toBeNull()
   })
 
+  // Regression (found by referencesRecompute.fuzz.test.ts): when a live
+  // NON-seat block already owns the date-shaped alias, minting the
+  // deterministic seat would set the same alias on it, trip the
+  // alias-uniqueness trigger, and roll back the whole processor tx —
+  // permanently stripped references for the source. The daily branch now
+  // does lookup-first like the non-date branch (§7.5).
+  it('[[YYYY-MM-DD]] binds to an existing live owner of that alias instead of minting a colliding seat', async () => {
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'owner', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'my imported daily page'})
+      await tx.setProperty('owner', aliasesProp, ['2026-03-15'])
+    }, {scope: ChangeScope.BlockDefault})
+    await flush()
+
+    await env.repo.tx(
+      tx => tx.create({id: 'src', workspaceId: WS, parentId: null, orderKey: 'a1', content: 'see [[2026-03-15]]'}),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await flush()
+
+    const refs = JSON.parse((await env.read('src'))!.references_json) as BlockReference[]
+    expect(refs).toEqual([{id: 'owner', alias: '2026-03-15'}])
+    // No seat was minted alongside the owner.
+    expect(await env.read(dailyId('2026-03-15'))).toBeNull()
+  })
+
   it('[[today]] stays an ordinary alias page, not a daily-note reference', async () => {
     await env.repo.tx(
       tx => tx.create({id: 'src', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'see [[today]]'}),
@@ -1003,8 +1607,251 @@ describe('parseReferences — daily-note routing (§7.6)', () => {
   })
 })
 
+describe('references.reapOrphanAliasSeats — reference-drop reaping (#402)', () => {
+  it('a rewrite (not a clear) that drops the last mark reaps the seat — the rename-window shape', async () => {
+    await env.repo.tx(
+      tx => tx.create({id: 'src', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'see [[foo]]'}),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await flush()
+    expect((await env.read(aliasId('foo')))!.deleted).toBe(0)
+
+    // The reference-dropping rewrite (what renameBacklinks produces for a
+    // source bound under the removed name): the mint-time 4s check already
+    // ran and skipped, so only the drop transition can collect this seat.
+    await env.repo.mutate.setContent({id: 'src', content: 'see nothing now'})
+    await flush()
+    expect((await env.read(aliasId('foo')))!.deleted).toBe(1)
+  })
+
+  it('soft-deleting the last referrer releases its refs and reaps the seat', async () => {
+    await env.repo.tx(
+      tx => tx.create({id: 'src', workspaceId: WS, parentId: null, orderKey: 'a0', content: '[[bar]]'}),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await flush()
+    expect((await env.read(aliasId('bar')))!.deleted).toBe(0)
+
+    await env.repo.tx(tx => tx.delete('src'), {scope: ChangeScope.BlockDefault})
+    await flush()
+    expect((await env.read(aliasId('bar')))!.deleted).toBe(1)
+  })
+
+  it('NEVER collects a user-created page, even one byte-identical to the seat seed shape', async () => {
+    // quick-find's create-page writes exactly the seat seed shape
+    // (content + alias + PAGE_TYPE) — at a RANDOM id. The seat-slot id
+    // gate is the machine-mint discriminator, so build the strongest
+    // possible impostor: the literal seed shape on a non-slot id.
+    const seed = aliasSeatSeed('realpage')
+    await env.repo.tx(
+      tx => tx.create({
+        id: 'user-made-page', workspaceId: WS, parentId: null, orderKey: 'a0',
+        content: seed.content, properties: {...seed.properties},
+      }),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await env.repo.tx(
+      tx => tx.create({id: 'src', workspaceId: WS, parentId: null, orderKey: 'a1', content: '[[realpage]]'}),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await flush()
+    const refs = JSON.parse((await env.read('src'))!.references_json)
+    expect(refs).toEqual([{id: 'user-made-page', alias: 'realpage'}])
+
+    // Drop the page's last backlink — the reaper must skip it.
+    await env.repo.mutate.setContent({id: 'src', content: ''})
+    await flush(5000)
+    expect((await env.read('user-made-page'))!.deleted).toBe(0)
+  })
+
+  it('keeps a seat with ANY live child in an un-flipped workspace (generated-row tolerance is flip-gated)', async () => {
+    // In an un-flipped workspace nothing generates property children, so
+    // a child under a seat is user-authored by construction — even one
+    // whose content block-refs the alias field DEFINITION id (the
+    // impostor shape). reapSeatsInTx wouldn't sweep it (flip-gated), so
+    // collecting the seat would strand the child live under a tombstone
+    // (Codex review on PR #428).
+    await env.repo.tx(
+      tx => tx.create({id: 'src', workspaceId: WS, parentId: null, orderKey: 'a0', content: '[[kid]]'}),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await flush()
+    const seatId = aliasId('kid')
+    expect((await env.read(seatId))!.deleted).toBe(0)
+    await env.repo.tx(
+      tx => tx.create({
+        id: 'user-child', workspaceId: WS, parentId: seatId, orderKey: 'a0',
+        content: 'a note the user wrote under the page',
+      }),
+      {scope: ChangeScope.BlockDefault},
+    )
+
+    await env.repo.mutate.setContent({id: 'src', content: ''})
+    await flush(5000)
+    expect((await env.read(seatId))!.deleted).toBe(0)
+    expect((await env.read('user-child'))!.deleted).toBe(0)
+  })
+
+  it('reaps a seat in a child-backed workspace, sweeping its generated field rows', async () => {
+    // In a flipped workspace every seat has GENERATED property children
+    // (alias / types field rows) from the moment it is minted — the
+    // reaper's children gate must tolerate exactly those and nothing
+    // else, or it could never collect a seat there.
+    await sharedDb.db.execute(
+      `INSERT INTO workspaces
+         (id, name, owner_user_id, create_time, update_time, encryption_mode, wk_canary, properties_migration)
+       VALUES (?, ?, ?, 1, 1, 'none', NULL, 'children')`,
+      [WS, 'test ws', 'user-1'],
+    )
+    await env.repo.tx(
+      tx => tx.create({id: 'src', workspaceId: WS, parentId: null, orderKey: 'a0', content: '[[qux]]'}),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await flush()
+    const seatId = aliasId('qux')
+    expect((await env.read(seatId))!.deleted).toBe(0)
+    // Sanity: the seat's properties materialized as live generated children.
+    const childrenBefore = await sharedDb.db.getAll<{id: string}>(
+      'SELECT id FROM blocks WHERE parent_id = ? AND deleted = 0', [seatId],
+    )
+    expect(childrenBefore.length).toBeGreaterThan(0)
+
+    await env.repo.mutate.setContent({id: 'src', content: ''})
+    await flush()
+    expect((await env.read(seatId))!.deleted).toBe(1)
+    // The generated field rows went with it — nothing dangles live under
+    // the tombstone.
+    const childrenAfter = await sharedDb.db.getAll<{id: string}>(
+      'SELECT id FROM blocks WHERE parent_id = ? AND deleted = 0', [seatId],
+    )
+    expect(childrenAfter).toEqual([])
+  })
+
+  it('keeps a seat that a concurrent re-reference rescues (still referenced at check time)', async () => {
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'src', workspaceId: WS, parentId: null, orderKey: 'a0', content: '[[baz]]'})
+      await tx.create({id: 'other', workspaceId: WS, parentId: null, orderKey: 'a1', content: 'also [[baz]]'})
+    }, {scope: ChangeScope.BlockDefault})
+    await flush()
+
+    await env.repo.mutate.setContent({id: 'src', content: ''})
+    await flush(5000)
+    expect((await env.read(aliasId('baz')))!.deleted).toBe(0)
+  })
+
+  it('keeps a seat the user ADOPTED between the orphan check and the reap tx (in-tx shape re-check)', async () => {
+    // The reap gates run on committed state OUTSIDE the write tx; a user
+    // tx that adopts the seat can land in between (PR #428 adversarial
+    // review). Deterministic stand-in for that race: the MINT-TIME
+    // cleanup's read phase probes only referrers — no shape gates — so a
+    // seat renamed before its 4s check reaches `reapSeatsInTx` exactly
+    // like a seat adopted mid-race, and only the in-tx re-check
+    // (seed shape + slot id against the row's CURRENT content) stands
+    // between the rename and a wrong tombstone of the user's page.
+    await env.repo.tx(
+      tx => tx.create({id: 'src', workspaceId: WS, parentId: null, orderKey: 'a0', content: '[[adoptme]]'}),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await flush()
+    const seatId = aliasId('adoptme')
+    expect((await env.read(seatId))!.deleted).toBe(0)
+
+    // The user adopts the page: rename moves its content off the slot-id
+    // namespace (alias.sync keeps the alias in step, so the shape stays
+    // byte-identical to `aliasSeatSeed('My Real Page')` — the slot-id
+    // check is what must catch this).
+    await env.repo.mutate.setContent({id: seatId, content: 'My Real Page'})
+    // Drop the reference so the pending 4s mint check sees an orphan.
+    await env.repo.mutate.setContent({id: 'src', content: ''})
+    await flush(5000)
+
+    const seat = await env.read(seatId)
+    expect(seat!.deleted).toBe(0)
+    expect(seat!.content).toBe('My Real Page')
+  })
+
+  it('keeps a child-backed seat when user content is nested INSIDE a generated field row subtree', async () => {
+    // §9 keeps value children visible, so a comment thread under a
+    // property VALUE child is reachable user content. The direct-children
+    // gate sees only generated field rows and passes — the deep guard in
+    // `reapSeatsInTx` must catch the nested comment, or the
+    // deleteSubtreeInTx sweep takes it with the machinery (PR #428
+    // adversarial review).
+    await sharedDb.db.execute(
+      `INSERT INTO workspaces
+         (id, name, owner_user_id, create_time, update_time, encryption_mode, wk_canary, properties_migration)
+       VALUES (?, ?, ?, 1, 1, 'none', NULL, 'children')`,
+      [WS, 'test ws', 'user-1'],
+    )
+    await env.repo.tx(
+      tx => tx.create({id: 'src', workspaceId: WS, parentId: null, orderKey: 'a0', content: '[[nest]]'}),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await flush()
+    const seatId = aliasId('nest')
+    const [fieldRow] = await sharedDb.db.getAll<{id: string}>(
+      'SELECT id FROM blocks WHERE parent_id = ? AND deleted = 0', [seatId],
+    )
+    expect(fieldRow).toBeDefined()
+    const [valueChild] = await sharedDb.db.getAll<{id: string}>(
+      'SELECT id FROM blocks WHERE parent_id = ? AND deleted = 0', [fieldRow!.id],
+    )
+    expect(valueChild).toBeDefined()
+    await env.repo.tx(
+      tx => tx.create({
+        id: 'nested-comment', workspaceId: WS, parentId: valueChild!.id, orderKey: 'a0',
+        content: 'a comment the user nested under the value',
+      }),
+      {scope: ChangeScope.BlockDefault},
+    )
+
+    await env.repo.mutate.setContent({id: 'src', content: ''})
+    await flush(5000)
+    expect((await env.read(seatId))!.deleted).toBe(0)
+    expect((await env.read('nested-comment'))!.deleted).toBe(0)
+  })
+
+  it('keeps a child-backed seat when a LEAF user note sits directly under a generated field row', async () => {
+    // One level shallower than the nested-comment case (round-2
+    // adversarial review): a childless note dropped BESIDE the value
+    // child passes a has-children-only guard, so the deep guard must
+    // bound the machine subtree by shape — a generated field row is
+    // sweepable only with at most one leaf child. The late orderKey
+    // keeps the cell projection (first parseable value) unchanged, so
+    // the seed-shape gate alone can't catch this.
+    await sharedDb.db.execute(
+      `INSERT INTO workspaces
+         (id, name, owner_user_id, create_time, update_time, encryption_mode, wk_canary, properties_migration)
+       VALUES (?, ?, ?, 1, 1, 'none', NULL, 'children')`,
+      [WS, 'test ws', 'user-1'],
+    )
+    await env.repo.tx(
+      tx => tx.create({id: 'src', workspaceId: WS, parentId: null, orderKey: 'a0', content: '[[leafnest]]'}),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await flush()
+    const seatId = aliasId('leafnest')
+    const [fieldRow] = await sharedDb.db.getAll<{id: string}>(
+      'SELECT id FROM blocks WHERE parent_id = ? AND deleted = 0', [seatId],
+    )
+    expect(fieldRow).toBeDefined()
+    await env.repo.tx(
+      tx => tx.create({
+        id: 'leaf-note', workspaceId: WS, parentId: fieldRow!.id, orderKey: 'zz',
+        content: 'remember: check this page later',
+      }),
+      {scope: ChangeScope.BlockDefault},
+    )
+
+    await env.repo.mutate.setContent({id: 'src', content: ''})
+    await flush(5000)
+    expect((await env.read(seatId))!.deleted).toBe(0)
+    expect((await env.read('leaf-note'))!.deleted).toBe(0)
+  })
+})
+
 describe('parseReferences — orphan cleanup (§7.5)', () => {
-  it('typing [[foo]] then deleting the text within 4s → cleanup soft-deletes the orphan', async () => {
+  it('typing [[foo]] then deleting the text → the reference drop reaps the orphan seat', async () => {
     await env.repo.tx(
       tx => tx.create({id: 'src', workspaceId: WS, parentId: null, orderKey: 'a0', content: '[[foo]]'}),
       {scope: ChangeScope.BlockDefault},
@@ -1012,13 +1859,12 @@ describe('parseReferences — orphan cleanup (§7.5)', () => {
     await flush()
     expect((await env.read(aliasId('foo')))!.deleted).toBe(0)
     // Clear the text — references go to []; foo's target now has no
-    // referrer.
+    // referrer. references.reapOrphanAliasSeats (#402) observes the drop
+    // in the parse tx's own dispatch and reaps promptly — no reliance on
+    // the mint-time 4s check, which ran while `src` still referenced the
+    // seat, skipped it, and would never have re-enqueued it.
     await env.repo.mutate.setContent({id: 'src', content: ''})
     await flush()
-    // Cleanup hasn't fired yet — still scheduled for 4s.
-    expect((await env.read(aliasId('foo')))!.deleted).toBe(0)
-    // Advance timers past the 4s mark.
-    await flush(4000)
     expect((await env.read(aliasId('foo')))!.deleted).toBe(1)
   })
 
@@ -1151,5 +1997,166 @@ describe('cleanupOrphanAliases — schema validation at enqueue', () => {
     }, {scope: ChangeScope.BlockDefault})).rejects.toThrow()
     // The tx rolled back — src-bad doesn't exist.
     expect(await env.read('src-bad')).toBeNull()
+  })
+})
+
+describe('parseReferences — workspace-switch reprojection', () => {
+  const reviewerProp = refTestSeed('reviewer', 'ref')
+
+  beforeEach(async () => {
+    await env.h.cleanup()
+    // `reviewer` is a seed contributed to the runtime → ref-typed in EVERY
+    // workspace, so switching between two workspaces produces an empty
+    // ref-ness diff.
+    env = await setup([definitionSeedsFacet.of(reviewerProp, {source: 'test'})])
+  })
+
+  it('backfills a newly-opened workspace sharing a ref-typed name with the prior one', async () => {
+    // `ws-1` (the setup default) is the previously-active workspace. Create a
+    // `ws-b` row with a ref value while `ws-b` is inactive, then blank its
+    // derived references to model a row synced from another device that never
+    // ran this client's per-write references processor.
+    await env.repo.tx(
+      tx => tx.create({
+        id: 'srcB',
+        workspaceId: 'ws-b',
+        parentId: null,
+        orderKey: 'a0',
+        properties: {reviewer: 'target-a'},
+      }),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await flush()
+    await env.h.db.execute(`UPDATE blocks SET references_json = '[]' WHERE id = ?`, ['srcB'])
+    expect(JSON.parse((await env.read('srcB'))!.references_json)).toEqual([])
+
+    // Open `ws-b`: bootstrap pins it, then schedules the once-per-workspace ref
+    // backfill. `reviewer` is ref-typed in both `ws-1` and `ws-b`, so the
+    // prev-vs-new diff is empty — only this workspace-open scan reaches srcB.
+    env.repo.setActiveWorkspaceId('ws-b')
+    env.repo.scheduleWorkspaceRefBackfill('ws-b')
+    await flush()
+
+    expect(JSON.parse((await env.read('srcB'))!.references_json)).toEqual([
+      {id: 'target-a', alias: 'target-a', sourceField: 'reviewer'},
+    ])
+  })
+})
+
+describe('parseReferences — property field rows reference their definition, never mint a phantom page (§9, PR #386 review)', () => {
+  // A flipped (child-backed) workspace: `setProperty` dual-writes a field row
+  // whose content is `((fieldId))` — a by-id ref to the property DEFINITION.
+  // It parses like any other block ref, so the field row carries a reference
+  // to its definition: the "used by" edge (a definition's backlinks become
+  // every block that uses the property — desirable, and it keeps field rows
+  // in `block_references` so definition merge/rename retarget reaches them).
+  // Because the content is `((id))`, not `[[name]]`, it can never mint a
+  // user-visible alias page — that guarantee is the id-addressing FORM, not
+  // any parse-level suppression. (The former `isPropertyMachineryRow` was
+  // dropped: recognition-based suppression is unnecessary here and its
+  // per-workspace resolver failed closed in background workspaces — #389 B.)
+  // A real fieldId is the definition block's UUID; `((uuid))` is what
+  // parseBlockRefs recognizes (a non-UUID synthetic id would never parse into
+  // a block ref, masking the un-suppressed behavior this test asserts).
+  const FIELD_ID = '0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d'
+  const statusSchema = defineProperty('status', {
+    codec: codecs.string,
+    defaultValue: '',
+    changeScope: ChangeScope.BlockDefault,
+  })
+
+  beforeEach(async () => {
+    await sharedDb.db.execute(
+      `INSERT INTO workspaces
+         (id, name, owner_user_id, create_time, update_time, encryption_mode, wk_canary, properties_migration)
+       VALUES (?, 'ws', 'user-1', 1, 1, 'none', NULL, 'children')`,
+      [WS],
+    )
+    env.repo.setRuntimeContributions(
+      projectedPropertyDefinitionsFacet,
+      'test-status-definition',
+      [{
+        metadata: {
+          fieldId: FIELD_ID,
+          workspaceId: WS,
+          createdAt: 1,
+          name: statusSchema.name,
+          changeScope: statusSchema.changeScope,
+          hidden: false,
+          origin: 'user' as const,
+        },
+        schema: statusSchema,
+      }],
+      {workspaceId: WS},
+    )
+  })
+
+  it('setProperty creates a field row that references its definition; no phantom alias page is minted', async () => {
+    // Guard against a swallowed `[processorRunner] processor "..." failed`
+    // making this pass vacuously: spy on console.error so a processor crash
+    // fails the test loudly instead.
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'host', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'host'})
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.tx(
+      tx => tx.setProperty('host', statusSchema, 'done'),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await flush(4000)
+
+    expect(errorSpy, `processor crashed: ${errorSpy.mock.calls.map(c => c.join(' ')).join('; ')}`)
+      .not.toHaveBeenCalled()
+    errorSpy.mockRestore()
+
+    // No alias-target page named "status" — the `((fieldId))` content is a
+    // by-id ref, so it can never mint a page (the guarantee is the addressing
+    // form, not parse suppression).
+    expect(await env.read(aliasId('status'))).toBeNull()
+
+    // The field row now carries a reference to its definition — the "used by"
+    // edge (under the dropped isPropertyMachineryRow this was suppressed to []).
+    const field = await env.h.db.getOptional<{id: string; references_json: string}>(
+      `SELECT id, references_json FROM blocks
+        WHERE parent_id = 'host' AND reference_target_id = ? AND deleted = 0`,
+      [FIELD_ID],
+    )
+    expect(field).not.toBeNull()
+    const refs = JSON.parse(field!.references_json) as Array<{id: string}>
+    expect(refs.map(r => r.id)).toEqual([FIELD_ID])
+  })
+
+  it('a ROOT row with content [[status]] is parsed as a normal wikilink (user content, not machinery)', async () => {
+    // A workspace-root row (parentId === null) is never a field row (§9 root
+    // half), so its `[[status]]` content is ordinary user content: a normal
+    // alias target IS minted and the row gets a normal alias backlink — even
+    // though "status" is a property schema name in this flipped workspace.
+    // (Held under the dropped isPropertyMachineryRow via its root exemption,
+    // and still holds now that parse suppression is gone entirely.)
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    await env.repo.tx(
+      tx => tx.create({id: 'root-status', workspaceId: WS, parentId: null, orderKey: 'a0', content: '[[status]]'}),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await flush(4000)
+
+    expect(errorSpy, `processor crashed: ${errorSpy.mock.calls.map(c => c.join(' ')).join('; ')}`)
+      .not.toHaveBeenCalled()
+    errorSpy.mockRestore()
+
+    // A normal alias-target page named "status" WAS created — root position
+    // exempts the row from isPropertyMachineryRow's suppression even though
+    // "status" is a property schema name in this flipped workspace.
+    const target = await env.read(aliasId('status'))
+    expect(target).not.toBeNull()
+    expect(target!.deleted).toBe(0)
+    const aliases = JSON.parse(target!.properties_json).alias as string[]
+    expect(aliases).toEqual(['status'])
+
+    // ...and the root row carries a normal alias backlink/reference to it.
+    const refs = JSON.parse((await env.read('root-status'))!.references_json)
+    expect(refs).toEqual([{id: aliasId('status'), alias: 'status'}])
   })
 })

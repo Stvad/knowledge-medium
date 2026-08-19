@@ -3,13 +3,14 @@ import { Block } from '../data/block'
 import {
   editorSelection,
   editorFocusRequestProp,
+  exitEditModeForBlock,
   isFocusedBlock,
   type EditorSelectionState,
 } from '@/data/properties.js'
-import { useRef, useEffect, useCallback, useMemo, useState, type Ref } from 'react'
+import { useRef, useEffect, useLayoutEffect, useCallback, useMemo, useState, type Ref } from 'react'
 import { useInEditMode, useIsEditing, useUIStateBlock } from '@/data/globalState'
 import { debounce } from 'lodash-es'
-import { placeCursorAtX, placeCursorAtCoords } from '@/utils/codemirror.js'
+import { clampSelectionToLength, placeCursorAtX, placeCursorAtCoords } from '@/utils/codemirror.js'
 import { useContentRevision, usePropertyValue } from '@/hooks/block.js'
 import { shouldExitEditModeAfterBlur } from '@/utils/dom.js'
 import { EditorView } from '@codemirror/view'
@@ -17,34 +18,13 @@ import { EditorSelection, type Extension } from '@codemirror/state'
 import { keyboardAwareScroll } from '@/utils/keyboardAwareScroll.js'
 import { useShortcutSurfaceActivations } from '@/extensions/useShortcutSurfaceActivations.js'
 import { useBlockContext } from '@/context/block.js'
+import { resolveEditModeKeepalive } from '@/components/editModeKeepalive.js'
+import { notifyBlockEditResumed, notifyBlockEditSettled } from '@/editor/editSettleSignal.js'
+import { editorContentFlushFacet } from '@/editor/contentFlush.js'
 
 interface BlockEditorProps extends Omit<ReactCodeMirrorProps, 'value' | 'onChange' | 'onUpdate' | 'onBlur' | 'ref'> {
   block: Block
   ref?: Ref<ReactCodeMirrorRef>
-}
-
-/** Module-level latch read by BlockEditor's onBlur. While > 0, the
- *  editor's blur handler refuses to exit edit mode — instead it
- *  re-focuses the contenteditable so the user stays editing. The
- *  mobile keyboard toolbar acquires a hold around each structural
- *  action (reorder / indent / etc.) whose React commit reparents the
- *  editor's DOM node, dropping native focus and otherwise tripping
- *  the exit-on-blur path. The counter (rather than a boolean) means
- *  overlapping taps don't release each other's window. */
-let blurExitSuppressionCount = 0
-
-/** Acquire one hold on the suppression. Returns the release fn;
- *  callers MUST schedule the release on their own timer or via finally.
- *  Idempotent — the returned fn is safe to call more than once but
- *  only decrements the count once. */
-export const acquireBlurExitSuppression = (): (() => void) => {
-  blurExitSuppressionCount++
-  let released = false
-  return () => {
-    if (released) return
-    released = true
-    blurExitSuppressionCount--
-  }
 }
 
 export const BlockEditor = ({
@@ -57,7 +37,7 @@ export const BlockEditor = ({
   const cm = useRef<ReactCodeMirrorRef>(null)
   const [editorView, setEditorView] = useState<EditorView | null>(null)
 
-  const [isEditing, setIsEditing] = useIsEditing()
+  const [isEditing] = useIsEditing()
   const inEditMode = useInEditMode(block.id)
   const blockContext = useBlockContext()
   const renderScopeId = typeof blockContext.renderScopeId === 'string'
@@ -123,7 +103,27 @@ export const BlockEditor = ({
     pushSelection.flush()
   }, [pushChange, pushSelection])
 
-  useEffect(() => flushDebouncers, [flushDebouncers])
+  // Layout (not passive) effect: layout cleanups run BEFORE React
+  // detaches the host nodes, so by the time anyone observes the editor
+  // DOM as disconnected, the pending content/selection writes are
+  // already enqueued ahead of them on the FIFO write lock. The
+  // supertags failure-restore path relies on exactly this ordering —
+  // with a passive cleanup there is a one-frame window where the view
+  // is detached but the deletion never persisted, and a
+  // restore-vs-flush race can drop the user's text.
+  useLayoutEffect(() => flushDebouncers, [flushDebouncers])
+
+  // Leaving this block's editor (unmount / block switch) is the "done
+  // editing" signal — consumers like watch-events short-circuit their
+  // settle window on it. The debounced content commit above may still
+  // be in flight when this fires; subscribers re-check after a beat.
+  useEffect(() => {
+    // Mounting means the user is editing (again): revoke whatever the
+    // last settled signal implied — e.g. a lingering blur exemption
+    // must not vouch for a block being retyped right now.
+    notifyBlockEditResumed(block.id)
+    return () => notifyBlockEditSettled(block.id)
+  }, [block.id])
 
   useEffect(() => {
     if (!blockEditData || !editorView) return
@@ -157,23 +157,14 @@ export const BlockEditor = ({
     // would discard those characters. Skip; the user's next debounced
     // commit will catch the editor up.
     if (live !== lastCommittedContent.current) return
-    // Clamp the existing selection to the new doc length before dispatch.
-    // An external change can shorten the doc below the cursor; passing the
-    // raw selection then trips CodeMirror's "Selection points outside of
-    // document" check. Omitting selection isn't an option either — the
-    // cursor sits inside the replaced range [0, live.length], so default
-    // mapping collapses it to 0.
-    const newLength = incoming.length
-    const oldSelection = editorView.state.selection
-    const clampedSelection = EditorSelection.create(
-      oldSelection.ranges.map(r =>
-        EditorSelection.range(Math.min(r.anchor, newLength), Math.min(r.head, newLength)),
-      ),
-      oldSelection.mainIndex,
-    )
+    // Clamp the existing selection to the new doc length before dispatch —
+    // an external change can shorten the doc below the cursor (see
+    // clampSelectionToLength; omitting the selection instead would let
+    // default mapping collapse the cursor to 0, since it sits inside the
+    // replaced range [0, live.length]).
     editorView.dispatch({
       changes: {from: 0, to: live.length, insert: incoming},
-      selection: clampedSelection,
+      selection: clampSelectionToLength(editorView.state.selection, incoming.length),
     })
     // Cancel any pushChange pending from the user's pre-adoption typing,
     // and the one that the dispatch above just queued via onChange. The
@@ -212,8 +203,15 @@ export const BlockEditor = ({
         } else if (selection.x !== undefined) {
           placeCursorAtX(editorView, selection.x, selection.line === 'last')
         } else if (selection.start !== undefined) {
-          const end = selection.end ?? selection.start
-          editorView.dispatch({selection: {anchor: selection.start, head: end}})
+          // The stored selection is debounce-persisted and can outlive
+          // a doc-shrinking dispatch (e.g. the supertags `#`
+          // autocomplete deleting its trigger text) — clamp it (see
+          // clampSelectionToLength, shared with the adoption path
+          // above).
+          editorView.dispatch({selection: clampSelectionToLength(
+            EditorSelection.single(selection.start, selection.end ?? selection.start),
+            editorView.state.doc.length,
+          )})
         }
       }
 
@@ -249,8 +247,20 @@ export const BlockEditor = ({
   // a caller-supplied extension can still override anything if it needs to.
   const {extensions: providedExtensions, ...restCodeMirrorProps} = codeMirrorProps
   const mergedExtensions = useMemo<Extension[]>(
-    () => [keyboardAwareScroll(), ...(providedExtensions ?? [])],
-    [providedExtensions],
+    // Publish this editor's content flush into the view so completion
+    // sources can persist pending keystrokes at accept time (see
+    // contentFlush.ts). `flushDebouncers` is a stable ref-backed
+    // callback, so this doesn't churn the config.
+    () => [
+      keyboardAwareScroll(),
+      // The facet only STORES the flush callback for completion sources
+      // to invoke later — it isn't called during render. `flushDebouncers`
+      // is a stable ref-backed callback (same identity across renders).
+      // eslint-disable-next-line react-hooks/refs -- facet stores, never calls during render
+      editorContentFlushFacet.of(flushDebouncers),
+      ...(providedExtensions ?? []),
+    ],
+    [providedExtensions, flushDebouncers],
   )
 
   if (!blockEditData) return null
@@ -299,16 +309,24 @@ export const BlockEditor = ({
         flushDebouncers()
         requestAnimationFrame(() => {
           if (!document.hasFocus() || !shouldExitEditModeAfterBlur(document.activeElement)) return
-          // Suppression hold (acquired by the mobile keyboard toolbar
-          // around structural actions whose React commit reparents
-          // this DOM node) — instead of exiting edit mode, snap focus
-          // back so the user keeps editing. The acquirer releases on
-          // its own timer; we just honor the count here.
-          if (blurExitSuppressionCount > 0) {
+          // A keepalive hold (mobile toolbar around structural actions /
+          // the file picker, or the command palette while open) means a
+          // surface pulled focus without intending to end editing. Honor
+          // it instead of exiting: 'refocus' snaps focus back to the
+          // editor (the focus loss was incidental), 'yield' leaves focus
+          // alone (a surface owns it and refocuses us on close). See
+          // editModeKeepalive.
+          const keepalive = resolveEditModeKeepalive()
+          if (keepalive === 'refocus') {
             cm.current?.view?.focus()
             return
           }
-          setIsEditing(false)
+          if (keepalive === 'yield') return
+          // Clear edit mode only if THIS block still owns it. A block→block
+          // tap may have already handed edit mode to the tapped block; an
+          // unconditional clear would race that handoff and drop it (the
+          // "keyboard hides / needs a second tap" bug). See exitEditModeForBlock.
+          void exitEditModeForBlock(uiStateBlock, block.id, renderScopeId)
         })
       }}
       extensions={mergedExtensions}

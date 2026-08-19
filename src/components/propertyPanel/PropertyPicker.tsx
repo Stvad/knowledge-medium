@@ -18,19 +18,26 @@ import {
 } from 'react'
 import { Input } from '@/components/ui/input'
 import { useAppRuntime } from '@/extensions/runtimeContext.js'
-import { propertyEditorOverridesFacet, valuePresetsFacet } from '@/data/facets.js'
+import { propertyEditorOverridesFacet } from '@/data/facets.js'
+import {readValuePresets} from '@/data/valuePresetRegistry'
 import { selectablePresets } from '@/components/propertyEditors/selectablePresets.js'
 import { usePropertySchemas } from '@/hooks/propertySchemas.js'
 import type {
   AnyPropertyEditorOverride,
   AnyPropertySchema,
-  AnyValuePreset,
+  AnyJoinedValuePreset,
 } from '@/data/api'
 import { FloatingListbox } from '@/components/ui/floating-listbox.js'
+import { useAutocompleteListbox } from '@/hooks/useAutocompleteListbox.js'
 import { PropertyShapeGlyph, PropertyShapeButton } from './shapeUi'
 import { propertyShapeLabel } from './shapes'
-import { usePropertyEditingActivation } from './usePropertyEditingActivation'
+import { dismissOnFieldEscape, usePropertyEditingActivation } from './usePropertyEditingActivation'
 import type { Block } from '@/data/block'
+import {
+  resolveEditorOverride,
+  type PropertyDefinitionRegistrySnapshot,
+} from '@/data/propertyDefinitionRegistry'
+import {isPropertyPanelHiddenProperty} from './visibility'
 
 export const DEFAULT_PRESET_ID = 'ref'
 export const FALLBACK_PRESET_ID = 'string'
@@ -52,23 +59,23 @@ export interface ConfigureNewSchemaArgs {
 
 interface NameSuggestion {
   schema: AnyPropertySchema
-  preset?: AnyValuePreset
+  preset?: AnyJoinedValuePreset
 }
 
 const filterSuggestions = (
   query: string,
   schemas: ReadonlyMap<string, AnyPropertySchema>,
   uis: ReadonlyMap<string, AnyPropertyEditorOverride>,
-  presets: ReadonlyMap<string, AnyValuePreset>,
+  presets: ReadonlyMap<string, AnyJoinedValuePreset>,
   excludedNames: ReadonlySet<string>,
   filterSchema: ((schema: AnyPropertySchema) => boolean) | undefined,
+  definitions: PropertyDefinitionRegistrySnapshot | null,
 ): readonly NameSuggestion[] => {
   const q = query.trim().toLowerCase()
   const out: NameSuggestion[] = []
   for (const schema of schemas.values()) {
     if (excludedNames.has(schema.name)) continue
-    const ui = uis.get(schema.name)
-    if (ui?.hidden) continue
+    if (isPropertyPanelHiddenProperty(schema.name, schemas, uis, definitions)) continue
     if (q !== '' && !schema.name.toLowerCase().includes(q)) continue
     if (filterSchema && !filterSchema(schema)) continue
     out.push({schema, preset: presets.get(schema.codec.type)})
@@ -126,9 +133,10 @@ export function PropertyPicker({
 }: PropertyPickerProps) {
   const propertyEditingFocus = usePropertyEditingActivation(block)
   const runtime = useAppRuntime()
-  const presets = runtime.read(valuePresetsFacet)
+  const presets = readValuePresets(runtime)
   const uis = runtime.read(propertyEditorOverridesFacet)
   const schemas = usePropertySchemas()
+  const propertyDefinitions = block.repo.propertyDefinitions
 
   const presetEntries = useMemo(() => selectablePresets(presets), [presets])
   const initialPresetId = useMemo(() => {
@@ -140,11 +148,13 @@ export function PropertyPicker({
   const [propertyName, setPropertyName] = useState(initialName)
   const [presetId, setPresetId] = useState<string>(initialPresetId)
   const [suggestionsOpen, setSuggestionsOpen] = useState(false)
-  const [activeSuggestion, setActiveSuggestion] = useState(0)
   const [submitting, setSubmitting] = useState(false)
   const localInputRef = useRef<HTMLInputElement | null>(null)
   const [nameInputEl, setNameInputEl] = useState<HTMLInputElement | null>(null)
   const listboxId = useId()
+  // reset() (declared above the listbox hook) clears the highlighted suggestion
+  // through this ref, kept pointed at the hook's stable setter below.
+  const resetActiveIndexRef = useRef<() => void>(() => {})
 
   const excludedNamesSet = useMemo(
     () => new Set(excludedNames ?? []),
@@ -167,20 +177,33 @@ export function PropertyPicker({
   }, [autoFocus, focusNameInput])
 
   const suggestions = useMemo(
-    () => filterSuggestions(propertyName, schemas, uis, presets, excludedNamesSet, filterSchema),
-    [propertyName, schemas, uis, presets, excludedNamesSet, filterSchema],
+    () => filterSuggestions(
+      propertyName,
+      schemas,
+      uis,
+      presets,
+      excludedNamesSet,
+      filterSchema,
+      propertyDefinitions,
+    ),
+    [propertyName, schemas, uis, presets, excludedNamesSet, filterSchema, propertyDefinitions],
   )
 
   const reset = useCallback(() => {
     setPropertyName('')
     setPresetId(initialPresetId)
     setSuggestionsOpen(false)
-    setActiveSuggestion(0)
+    // Clear the highlighted suggestion too. This picker stays mounted after
+    // submit() (e.g. in BlockTypeBlockRenderer), so a leftover activeIndex
+    // would make the next property's Enter/arrow start from a stale row.
+    // Routed through a ref because the listbox setter is declared below.
+    resetActiveIndexRef.current()
   }, [initialPresetId])
 
   const submit = useCallback(async (adopted?: AnyPropertySchema) => {
     const name = (adopted?.name ?? propertyName).trim()
     if (!name || submitting) return
+    if (isPropertyPanelHiddenProperty(name, schemas, uis, propertyDefinitions)) return
     setSubmitting(true)
     try {
       await onAdd(adopted
@@ -191,7 +214,7 @@ export function PropertyPicker({
     } finally {
       setSubmitting(false)
     }
-  }, [onAdd, presetId, propertyName, reset, submitting])
+  }, [onAdd, presetId, propertyDefinitions, propertyName, reset, schemas, submitting, uis])
 
   const handleGlyphClick = useCallback(async () => {
     const name = propertyName.trim()
@@ -200,12 +223,43 @@ export function PropertyPicker({
       return
     }
     if (submitting) return
+    if (isPropertyPanelHiddenProperty(name, schemas, uis, propertyDefinitions)) return
     const schema = await onConfigureNewSchema({name, presetId})
     if (!schema) return
     void submit(schema)
-  }, [focusNameInput, onConfigureNewSchema, presetId, propertyName, submit, submitting])
+  }, [
+    focusNameInput,
+    onConfigureNewSchema,
+    presetId,
+    propertyDefinitions,
+    propertyName,
+    schemas,
+    submit,
+    submitting,
+    uis,
+  ])
 
   const showSuggestions = suggestionsOpen && suggestions.length > 0
+
+  const { activeIndex, setActiveIndex, activeDescendantId, onKeyDown, getOptionProps } =
+    useAutocompleteListbox({
+      itemCount: suggestions.length,
+      setOpen: setSuggestionsOpen,
+      commitOnTab: true,
+      listboxId,
+      onCommit: index => {
+        // With no visible suggestions, Enter/Tab materializes the typed
+        // name as a new field (submit(undefined)); otherwise it adopts the
+        // chosen suggestion.
+        const picked = showSuggestions ? suggestions[index] : undefined
+        void submit(picked?.schema)
+        return true
+      },
+    })
+
+  useEffect(() => {
+    resetActiveIndexRef.current = () => setActiveIndex(0)
+  })
 
   return (
     <>
@@ -227,7 +281,7 @@ export function PropertyPicker({
           onChange={(event) => {
             setPropertyName(event.target.value)
             setSuggestionsOpen(true)
-            setActiveSuggestion(0)
+            setActiveIndex(0)
           }}
           onFocus={(event) => {
             propertyEditingFocus.onFocus(event)
@@ -238,32 +292,23 @@ export function PropertyPicker({
             setTimeout(() => setSuggestionsOpen(false), 100)
           }}
           aria-controls={showSuggestions ? listboxId : undefined}
-          aria-activedescendant={
-            showSuggestions ? `${listboxId}-${activeSuggestion}` : undefined
-          }
+          aria-activedescendant={showSuggestions ? activeDescendantId : undefined}
           className={inputClassName ?? 'h-7 min-w-0 border-transparent bg-transparent px-0 text-sm shadow-none placeholder:text-muted-foreground/60 focus-visible:border-transparent focus-visible:ring-0'}
           onKeyDown={(event) => {
-            if (event.key === 'ArrowDown' && showSuggestions) {
-              event.preventDefault()
-              setActiveSuggestion(i => Math.min(suggestions.length - 1, i + 1))
-              return
-            }
-            if (event.key === 'ArrowUp' && showSuggestions) {
-              event.preventDefault()
-              setActiveSuggestion(i => Math.max(0, i - 1))
-              return
-            }
-            if ((event.key === 'Enter' || event.key === 'Tab')) {
-              event.preventDefault()
-              const picked = showSuggestions ? suggestions[activeSuggestion] : undefined
-              void submit(picked?.schema)
-              return
-            }
             if (event.key === 'Escape') {
-              event.preventDefault()
-              if (suggestionsOpen) { setSuggestionsOpen(false); return }
-              onEscape?.()
+              // Dismiss the innermost thing that's actually up, and claim the
+              // key only then — with nothing to dismiss the event falls
+              // through to `exit_property_editing`, which blurs the field.
+              // Keyed on `showSuggestions`, not `suggestionsOpen`: focus opens
+              // the list eagerly, so a zero-suggestion `suggestionsOpen` would
+              // swallow the first Escape on an invisible dismiss.
+              dismissOnFieldEscape(
+                event,
+                showSuggestions ? () => setSuggestionsOpen(false) : onEscape,
+              )
+              return
             }
+            onKeyDown(event)
           }}
         />
         <FloatingListbox
@@ -276,18 +321,14 @@ export function PropertyPicker({
             <button
               key={s.schema.name}
               type="button"
-              role="option"
-              id={`${listboxId}-${i}`}
-              aria-selected={i === activeSuggestion}
-              onMouseDown={(e) => e.preventDefault()}
-              onClick={() => { void submit(s.schema) }}
+              {...getOptionProps(i)}
               className={`flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-sm hover:bg-muted ${
-                i === activeSuggestion ? 'bg-muted' : ''
+                i === activeIndex ? 'bg-muted' : ''
               }`}
             >
               <PropertyShapeGlyph
                 shape={s.schema.codec.type}
-                Glyph={uis.get(s.schema.name)?.Glyph ?? s.preset?.Glyph}
+                Glyph={resolveEditorOverride(s.schema.name, propertyDefinitions, uis, s.schema)?.Glyph ?? s.preset?.Glyph}
                 className="text-muted-foreground"
               />
               <span className="flex-1 truncate">{s.schema.name}</span>
