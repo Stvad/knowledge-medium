@@ -484,6 +484,9 @@ export const ensurePromotedPropertySchemas = async (
 
   // The plan/normalize helpers read only `.id` and `.properties`, so a caller
   // can hand over its own in-flight tree rather than synthesizing rows.
+  const names = new Set<string>()
+  for (const bag of bags) for (const key of Object.keys(bag.properties ?? {})) names.add(key)
+
   const asBlocks = bags as unknown as ReadonlyArray<BlockData>
   const {toRegister, diagnostics} = collectSchemaReconciliationPlan(asBlocks, repo)
   const notes = [...diagnostics]
@@ -554,6 +557,31 @@ export const ensurePromotedPropertySchemas = async (
   }
   normalizeStringPropertyValues(asBlocks, stringNames)
   normalizeListPropertyValues(asBlocks, listNames)
+
+  // Postcondition check, reported rather than enforced. A registration can
+  // still fail for a reason the caller's own workspace check cannot see —
+  // `addSchema` also compares the projector GENERATION, so an A→B→A switch
+  // throws while `activeWorkspaceId` matches again — and a key left
+  // unregistered here becomes a definition-less cell, which property
+  // migration skips.
+  //
+  // Deliberately NOT escalated to a refusal or a deferral. Blocking the write
+  // trades a recoverable state for an unrecoverable one: a caller that defers
+  // on this stalls forever if the failure is persistent (matrix ingest would
+  // stop advancing its sync cursor entirely), whereas a definition-less cell
+  // is exactly the pre-existing condition this helper reduces, is reported by
+  // `kmagent audit-properties`, and is swept by §9's orphan synthesis, which
+  // has to run before any workspace flips regardless. So: name it loudly and
+  // let the caller proceed.
+  const stillUnregistered = [...names].filter(name => !repo.propertySchemas.get(name))
+  if (stillUnregistered.length > 0) {
+    notes.push(
+      `${stillUnregistered.length} promoted key(s) remain WITHOUT a definition and will be `
+      + `skipped by property migration: ${stillUnregistered.map(n => JSON.stringify(n)).join(', ')}. `
+      + 'Re-run once the workspace settles, or let §9 orphan synthesis pick them up; '
+      + '`kmagent audit-properties` lists them.',
+    )
+  }
 
   return notes
 }

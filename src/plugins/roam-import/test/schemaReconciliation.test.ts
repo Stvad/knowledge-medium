@@ -549,6 +549,26 @@ describe('ensurePromotedPropertySchemas', () => {
     expect(notes.join(' ')).toMatch(/active workspace changed/i)
   })
 
+  it('names every key still lacking a definition, so a swallowed failure is not silent', async () => {
+    // addSchema can fail for reasons a caller's workspace check cannot see
+    // (it also compares the projector generation, so A->B->A throws while
+    // activeWorkspaceId matches again). Such a key becomes a definition-less
+    // cell — reported loudly rather than blocking the write, since deferring
+    // on a persistent failure would stall the caller forever.
+    const realAddSchema = env.repo.userSchemas.addSchema.bind(env.repo.userSchemas)
+    ;(env.repo.userSchemas as {addSchema: typeof realAddSchema}).addSchema = async () => {
+      throw new Error('[addSchema] active workspace generation changed before schema creation')
+    }
+
+    const notes = await ensurePromotedPropertySchemas(env.repo, [
+      block('a', {'matrix:doomed': 'x'}),
+    ])
+
+    ;(env.repo.userSchemas as {addSchema: typeof realAddSchema}).addSchema = realAddSchema
+    expect(notes.join(' ')).toMatch(/matrix:doomed/)
+    expect(notes.join(' ')).toMatch(/WITHOUT a definition/)
+  })
+
   it('leaves an already-declared key on its existing schema', async () => {
     await env.repo.userSchemas.addSchema({name: 'matrix:refined', presetId: 'string'})
 
