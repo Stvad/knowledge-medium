@@ -1,0 +1,2 @@
+import{MIGRATIONS_PAGE_TYPE as e}from"./blockTypes.js";import{getOrCreateKernelPage as t,kernelPageBlockId as n}from"./kernelPage.js";var r=`f1c0a7e2-5b3d-4a8e-9c1f-2d6b8e4a0c73`,i=`System Migrations (km)`,a=e=>n(e,r),o=(n,a)=>t(n,a,{namespace:r,alias:i,markerType:e});export{o as getOrCreateMigrationsPage,a as migrationsPageBlockId};
+//# sourceMappingURL=migrationsPage.js.map
