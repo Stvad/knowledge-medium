@@ -82,10 +82,9 @@ describe('pasteMultilineText', () => {
   })
 
   it('keeps a paste contiguous when a blank target WITH children absorbs the first root', async () => {
-    // The pasted run stays together: the slot immediately after an expanded
-    // block IS its first-child slot, so Beta lands there rather than past the
-    // whole existing subtree. Deliberate — a paste must not be split around
-    // content the user already had.
+    // A FLAT clipboard comes out NESTED here: Beta lands as Alpha's child,
+    // because the blank target absorbed Alpha. Accepted — keeping the pasted
+    // run together beats preserving its flatness.
     await createBlock('root', 'Root', null, 'a0')
     await createBlock('empty', '', 'root', 'a1')
     await createBlock('kid', 'Kid', 'empty', 'a0')
@@ -370,29 +369,10 @@ describe('pasteEditModeMultilineText', () => {
     expect(result?.focusBlock.peek()?.content).toBe('Sibling')
   })
 
-  it('keeps a paste contiguous when the edited block has children (matches the shell)', async () => {
-    // The editor surface used to force `sibling` placement, so Beta landed
-    // AFTER the whole existing subtree — the same clipboard produced a
-    // different tree depending only on which surface pasted it. Both now
-    // follow outline navigation: the slot after an expanded block is its
-    // first-child slot.
-    await createBlock('root', 'Root', null, 'a0')
-    await createBlock('empty', '', 'root', 'a1')
-    await createBlock('kid', 'Kid', 'empty', 'a0')
-    await createBlock('next', 'Next', 'root', 'a2')
-
-    const plan = planEditModeMultilinePaste('Alpha\nBeta', '', {from: 0, to: 0})
-
-    await pasteEditModeMultilineText(plan!, env.repo.block('empty'), env.repo, {scopeRootId: 'root'})
-
-    expect(env.repo.block('empty').peek()?.content).toBe('Alpha')
-    expect(await childContents('empty')).toEqual(['Beta', 'Kid'])
-    expect(await childContents('root')).toEqual(['Alpha', 'Next'])
-  })
-
-  it('lands the remainder as first children when editing a NON-blank block with children', async () => {
-    // Same rule with no absorption in play: the caret split's tail follows the
-    // edited line instead of jumping past the subtree.
+  it('lands a FLAT paste as first children when the edited block has children', async () => {
+    // The caret split's tail follows the edited line instead of jumping past
+    // its subtree. Safe to nest here because the absorbed root is childless,
+    // so nothing else is competing for the first-child slot.
     await createBlock('root', 'Root', null, 'a0')
     await createBlock('target', 'hello world', 'root', 'a1')
     await createBlock('kid', 'Kid', 'target', 'a0')
@@ -408,6 +388,28 @@ describe('pasteEditModeMultilineText', () => {
     expect(env.repo.block('target').peek()?.content).toBe('hello alpha')
     expect(await childContents('target')).toEqual(['betaworld', 'Kid'])
     expect(await childContents('root')).toEqual(['hello alpha', 'Next'])
+  })
+
+  it('keeps a NESTED paste at its clipboard depth when the edited block has children', async () => {
+    // The absorbed root owns the first-child slot, so `Notes` — a peer of
+    // `Project` in the clipboard — must stay a peer of the edited block, not
+    // join `Project`'s task list where nothing distinguishes it from a task.
+    await createBlock('root', 'Root', null, 'a0')
+    await createBlock('target', 'Header ', 'root', 'a1')
+    await createBlock('kid', 'Kid', 'target', 'a0')
+    await createBlock('next', 'Next', 'root', 'a2')
+
+    const plan = planEditModeMultilinePaste(
+      '- Project\n  - Task 1\n  - Task 2\n- Notes',
+      'Header ',
+      {from: 'Header '.length, to: 'Header '.length},
+    )
+
+    await pasteEditModeMultilineText(plan!, env.repo.block('target'), env.repo, {scopeRootId: 'root'})
+
+    expect(env.repo.block('target').peek()?.content).toBe('Header Project')
+    expect(await childContents('target')).toEqual(['Task 1', 'Task 2', 'Kid'])
+    expect(await childContents('root')).toEqual(['Header Project', 'Notes', 'Next'])
   })
 
   it('keeps remaining lines visible when editing the zoomed top-level block', async () => {

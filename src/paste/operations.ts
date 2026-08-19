@@ -20,9 +20,10 @@ interface PasteOptions {
    *  `BlockContextType.scopeRootId`). Paste uses this to avoid creating
    *  siblings outside the visible scope. */
   scopeRootId?: string
-  /** `visible` follows outline navigation semantics; `sibling` keeps
-   *  range paste before/after the selected range unless that would
-   *  leave the visible subtree. */
+  /** Only consulted for `position: 'after'`. `visible` (the default) follows
+   *  outline navigation — "after" an expanded block IS its first-child slot.
+   *  `sibling` keeps a range paste beside the selected range rather than
+   *  inside it (multi-select `paste_*_selection`, the only consumer). */
   placement?: PastePlacement
   /** Treat the whole clipboard text as one block's content (newlines
    *  kept) instead of parsing markdown into a tree. Used by the block-
@@ -373,15 +374,21 @@ export async function pasteEditModeMultilineText(
     const target = await tx.get(pasteTarget.id)
     if (!target) return
 
-    // `visible`, not `sibling`: the slot immediately after a block IS its
-    // first-child slot once it has visible children, so the rest of the paste
-    // stays contiguous with the line it was split from instead of landing past
-    // the whole existing subtree. Matches the block-shell paste — the two
-    // surfaces place a multi-root paste identically.
+    // `visible` puts the remaining roots in the slot right after the edited
+    // line — which, once the block has visible children, is its FIRST-CHILD
+    // slot, so the paste stays contiguous with the line it was split from.
+    // But the target absorbed root #1, so that slot already belongs to root
+    // #1's own children: send both there and the clipboard's top two levels
+    // merge, leaving a peer of root #1 indistinguishable from its children.
+    // A childless absorbed root has no such collision, which is why the flat
+    // case gets contiguity for free.
+    const absorbedRootHasChildren = plan.parsed.some(
+      block => block.parentId === plan.absorbedRoot.id,
+    )
     const destination = await resolveRootDestination(tx, target, {
       position: 'after',
       scopeRootId: options.scopeRootId,
-      placement: 'visible',
+      placement: absorbedRootHasChildren ? 'sibling' : 'visible',
     })
 
     await tx.update(target.id, {content: plan.targetContent})
