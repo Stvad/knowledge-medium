@@ -16,9 +16,27 @@
             "command": "node \"$CLAUDE_PROJECT_DIR/scripts/check-env-read.mjs\"",
             "statusMessage": "Checking for secret-file reads…",
             "type": "command"
+          },
+          {
+            "command": "node \"$CLAUDE_PROJECT_DIR/scripts/bd-github-sync.mjs\" --hook-pre-pr",
+            "statusMessage": "Syncing beads↔GitHub before publishing…",
+            "timeout": 180,
+            "type": "command"
           }
         ],
         "matcher": "Bash"
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "command": "node \"$CLAUDE_PROJECT_DIR/scripts/bd-github-sync.mjs\" --quiet",
+            "timeout": 300,
+            "type": "command"
+          }
+        ],
+        "matcher": ""
       }
     ],
     "SessionStart": [
