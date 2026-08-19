@@ -77,7 +77,7 @@ const vimKeys = {
   panelHop: '`h` to the panel on the left, `l` to the right (or arrow keys)',
   firstLast: '`gg` jumps to the top of the panel, `Shift+G` to the last block in it',
   jumpMany: '`Ctrl+d` / `Ctrl+u` jump down / up by ~8 bullets',
-  moveBlock: 'focus it and press `Cmd+Shift+K` / `Cmd+Shift+J` (or `Cmd+Shift+↑` / `Cmd+Shift+↓`)',
+  moveBlock: 'focus it and press `Cmd+Shift+K` / `Cmd+Shift+J` (or `Cmd+Shift+↑` / `Cmd+Shift+↓`; `Ctrl` instead of `Cmd` on Linux/Windows)',
   startSelect: 'press `Space` (or `v`) to select the focused bullet; `Shift+J` / `Shift+K` then grow the selection down / up — the first press selects the current block, each next press adds the neighbour',
   delete: 'press `d d`, `Delete`, or `Backspace`; to remove several at once, select them first (see the **Multi-select** section) and press `Delete`',
   properties: 'press `t` on the focused block',
@@ -114,7 +114,7 @@ const defaultKeys: typeof vimKeys = {
   panelHop: 'click into the panel you want (keyboard panel-hop needs vim mode)',
   firstLast: '',
   jumpMany: '',
-  moveBlock: 'select it first (see the **Multi-select** section), then `Cmd+Shift+↑` / `Cmd+Shift+↓`',
+  moveBlock: 'select it first (see the **Multi-select** section), then `Cmd+Shift+↑` / `Cmd+Shift+↓` (`Ctrl+Shift+↑` / `Ctrl+Shift+↓` on Linux/Windows)',
   startSelect: 'while editing, `Shift+↓` / `Shift+↑` at a block edge first select the current block, then extend the selection down / up with each further press',
   delete: 'select it (or several — see the **Multi-select** section) and press `Delete`; `Backspace` at the start of an empty block removes it, and at the start of a non-empty one merges its text into the block above',
   // NOT the command palette: with vim off, NORMAL_MODE never activates, so
@@ -204,7 +204,7 @@ export const tutorialOutline = (variant: TutorialVariant): TutorialNode[] => {
         ],
       },
       `Edit a block: ${km.edit}.${km.exitEdit ? ` Exit editing: ${km.exitEdit}.` : ''}`,
-      `Move a block up / down among its siblings: ${km.moveBlock}.`,
+      `Move a block one step up / down through the outline (it keeps its depth, hopping into the neighbouring parent at an edge): ${km.moveBlock}.`,
       `Delete a block: ${km.delete}.`,
     ]),
 
@@ -230,7 +230,7 @@ export const tutorialOutline = (variant: TutorialVariant): TutorialNode[] => {
 
     advancedSect('Multi-select', [
       `${cap(km.startSelect)}.`,
-      'Once a selection exists, the block keys act on all of it — vim or not: `Tab` / `Shift+Tab` indent, `z` folds, `t` toggles properties, `y` (or `Cmd+C`) copies, `d` (or `Cmd+X`) cuts, `Delete` deletes, `p` / `Shift+P` paste after / before, and `Cmd+Shift+↑` / `Cmd+Shift+↓` move the whole selection.',
+      'Once a selection exists, the block keys act on all of it — vim or not: `Tab` / `Shift+Tab` indent, `z` folds, `t` toggles properties, `y` (or `Cmd+C`) copies, `d` (or `Cmd+X`) cuts, `Delete` deletes, `p` / `Shift+P` paste after / before, and `Cmd+Shift+↑` / `Cmd+Shift+↓` (`Ctrl` on Linux/Windows) move the whole selection.',
       'Send blocks somewhere else entirely: **Move block(s) to…** — in the command palette while a selection is active, or right-click any bullet for the single-block version. A destination picker opens; the whole move is one undo step.',
       'Press `Esc` to clear the selection.',
     ]),
@@ -377,11 +377,11 @@ export const tutorialOutline = (variant: TutorialVariant): TutorialNode[] => {
       `Undo: ${km.undo}. Redo: ${km.redo}.`,
       `Copy a block ref / embed: ${km.copyRef}. (See "Pages & links" above for what those are.)`,
       `Paste blocks: ${km.paste}.`,
-      'Pasting multi-line text splits it into an outline of blocks by default; `Cmd+Shift+V` pastes it as one block instead.',
+      'While editing, pasting multi-line text splits it into an outline of blocks; `Cmd+Shift+V` there pastes it as one block instead.',
     ]),
 
     advancedSect('Images & files', [
-      'Paste an image (or any file) straight into your notes — it uploads into the workspace and appears inline as its own media block, so you can move it, link it, and embed it elsewhere like any other block.',
+      'Paste an image (or any file) straight into your notes — it\'s captured into the workspace as a reusable media asset, and a reference to it lands at your caret, rendering the media inline. Copy that reference anywhere else to show the same asset there.',
       'On a phone, the keyboard toolbar has an **Insert image** button. If an upload fails (offline, say), run **Retry failed media uploads** from the command palette once you\'re back.',
     ]),
 
