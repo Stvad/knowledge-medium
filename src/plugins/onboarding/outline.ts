@@ -128,7 +128,7 @@ const defaultKeys: typeof vimKeys = {
   panelKeysNote: ' Without vim mode these chords fire while you\'re editing a block.',
   srsGrade: 'press `Ctrl+Shift+1`–`4` (Again / Hard / Good / Easy) while editing the block',
   dateScrub: '**Scrub a date in place** — nudge a dated block\'s date forward or back without retyping it. This one\'s a vim-mode perk: tick **Vim normal mode** in **Manage extensions**, then focus the date and **hold `s`**, moving by day (`j` / `k`) or week (`h` / `l`). On a phone, a two-finger horizontal drag does it with no vim needed.',
-  extractTypePath: 'it needs vim mode\'s block palette on desktop, or the swipe menu\'s **Commands** on touch',
+  extractTypePath: 'it\'s a vim-mode command — with vim on, press `Cmd+K` on the focused block (desktop) or use the swipe menu\'s **Commands** (touch)',
   refDemoCopy: 'right-click my bullet → **Copy Block Ref** / **Copy Block Embed**',
   colemakNote: '',
 }
@@ -189,6 +189,7 @@ export const tutorialOutline = (variant: TutorialVariant): TutorialNode[] => {
       'Bullets are blocks. Bullets nest. Everything else builds on that.',
       "Don't just read — try the keys/clicks on each bullet as you go. Edit anything; this tutorial is just blocks in your workspace.",
       'The first few sections cover the essentials; the deeper ones below start **folded** to keep this scannable — expand any that interest you (that fold/unfold is itself a core gesture you\'ll use everywhere).',
+      'Shortcuts here are written Mac-style: on Linux/Windows, read `Cmd` as `Ctrl`. (Chords shown with an explicit `Ctrl` are `Ctrl` on every platform.)',
     ]),
 
     sect('Try the basics', [
@@ -395,7 +396,7 @@ export const tutorialOutline = (variant: TutorialVariant): TutorialNode[] => {
       'On a phone-sized screen the app swaps in touch affordances:',
       'A **bottom navigation bar** gives one-tap access to the sidebar, a new block, append-to-today, today\'s daily note, search, the command palette, and undo.',
       'While editing, a **keyboard toolbar** floats above the on-screen keyboard with indent / outdent, move up / down, `[[` page-reference and `((` block-reference inserts, an insert-image button, undo / redo, and a Done button to dismiss the keyboard.',
-      '**Swipe a block** to reveal its quick-actions menu — Copy, Copy Ref / Embed, Open in panel, Properties, Collapse, Zoom in, Delete — plus items other features contribute: **Commands** (a command palette scoped to that block), **Reschedule** for dated blocks, and the SRS grades. This is the touch route to per-block actions; vim binds many of the same ones to keys (`z`, `t`, `y r`, …), while desktop\'s bullet right-click menu carries a smaller set (copy ref / embed, zoom, properties).',
+      '**Swipe a block** to reveal its quick-actions menu — Copy, Copy Ref / Embed, Open in panel, Properties, Collapse, Zoom in, Delete — plus items other features contribute: **Reschedule** for dated blocks, the SRS grades, and — with vim mode on — **Commands**, a command palette scoped to that block. This is the touch route to per-block actions; vim binds many of the same ones to keys (`z`, `t`, `y r`, …), while desktop\'s bullet right-click menu carries a smaller set (copy ref / embed, zoom, properties).',
       'Swipe a block to the right to cycle its todo / done state.',
       'Scrub a date: drag a **dated** block sideways with **two fingers** — right moves the date forward, left back, with an overlay previewing the new date as you drag. Two fingers so it never clashes with one-finger scroll or the swipe menu. For a bigger jump, the swipe menu has a **Reschedule** sheet.',
     ]),
@@ -484,7 +485,7 @@ export const extensionsPageOutline = (): TutorialNode[] => [
   { content: "Author one: create a block, give it `types = ['extension']`, paste the source, then run **Manage extensions** from the command palette and tick the row to enable it." },
   { content: 'User extensions start **disabled**. The **Manage extensions** tree lets you toggle each row; the choice syncs to your other devices and persists across reloads.' },
   { content: "After editing an extension's source, run **Reload extensions** from the command palette to pick up your changes." },
-  { content: 'Re-insert these examples under a block of your choice via **Insert example extensions under current block** — run it from `Cmd+K` while editing the block (or with it focused, in vim normal mode), or from the swipe menu\'s **Commands** on touch.' },
+  { content: 'Re-insert these examples under a block of your choice via **Insert example extensions under current block** — run it from `Cmd+K` while editing the block; with vim mode on it also works from the focused block (`Cmd+K` on desktop, the swipe menu\'s **Commands** on touch).' },
   ...exampleExtensions.map(exampleSection),
 ]
 
