@@ -491,7 +491,7 @@
 	//#endregion
 	//#region src/sw/sw.ts
 	var sw = createServiceWorker({
-		buildId: "12e1a8c3fa70",
+		buildId: "1ff2f083118b",
 		scopeURL: new URL(self.registration.scope),
 		keepGenerations: 3,
 		staleScopeMs: 336 * 60 * 60 * 1e3,
