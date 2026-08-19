@@ -13,11 +13,12 @@ const numberSchema: Schema<number> = {
 }
 
 /** Backlink *count* for the inline badge — the cardinality of the unfiltered
- *  `backlinks.forBlock` set without materialising the id list. Drives through
- *  the same indexed `block_references` candidate set via `core.typedBlockCount`,
- *  so its membership and invalidation match `backlinks.forBlock` exactly, and
- *  excludes the self-reference in SQL with a self-scope `exclude` predicate —
- *  the SQL analogue of `forBlock`'s `ids.filter(s => s !== id)`.
+ *  `backlinks.forBlock` set, obtained by resolving that query and taking its
+ *  length, so membership and invalidation match it by construction.
+ *
+ *  It used to aggregate in SQL (`core.typedBlockCount`) without materialising
+ *  the id list, which is cheaper and cannot be made to agree: see the
+ *  property-machinery paragraph below.
  *
  *  Intentionally unfiltered with respect to the USER filter, even though the
  *  expanded `LinkedReferences` may apply a page / daily-note backlink filter
@@ -29,9 +30,8 @@ const numberSchema: Schema<number> = {
  *  is source de-duplication, not a user filter, so a hidden value row's
  *  `[[Target]]` must not inflate the badge past the list the user gets on
  *  expand. That exclusion is a post-filter on ids, so counting it means
- *  materialising them — which is exactly what this query exists to avoid.
- *  So it always defers to `backlinks.forBlock` and takes its length, making
- *  badge and list agree by construction. There used to be a second path — the
+ *  materialising them — which is why the SQL aggregate is gone rather than
+ *  kept behind a condition. There used to be a second path — the
  *  pure `core.typedBlockCount` aggregate for un-flipped workspaces, on the
  *  premise that they hold no machinery. The cell->children backfill mints it
  *  before the flip, and the badge then counted a hidden value row the expanded

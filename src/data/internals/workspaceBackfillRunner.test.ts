@@ -313,6 +313,39 @@ describe('workspace backfill runner — sync gating', () => {
     expect((await repo.load('target'))?.properties['probe:mark']).toBe('backfilled')
   })
 
+  it('defers ONCE for the whole device, not once per backfill', async () => {
+    // The gap is a property of the device, so every remaining pass would defer
+    // identically — and `arm()` only de-dupes a PARKED gate, which this path's
+    // is not (it is settled by construction). Continuing the loop instead of
+    // returning therefore schedules N jobs, each of which re-runs all N
+    // passes: measured as a runaway that trips vitest's 10k-timer guard.
+    const g = controllableGate()
+    const deferrals: string[] = []
+    const warn = vi.spyOn(console, 'warn').mockImplementation((...args) => {
+      const line = args.map(String).join(' ')
+      if (line.includes('deferred')) deferrals.push(line)
+    })
+    try {
+      const repo = makeRepo(probeBackfill([]), g.gate)
+      repo.setRuntimeContributions(workspaceBackfillsFacet, 'test-backfills', [
+        probeBackfill([]),
+        {...probeBackfill([]), id: 'probe-backfill-v2'},
+        {...probeBackfill([]), id: 'probe-backfill-v3'},
+      ])
+      await seedTarget(repo)
+      await sharedDb.db.execute(
+        "INSERT INTO blocks_synced_changes (id, op) VALUES ('draining', 'upsert')",
+      )
+
+      g.open()
+      await drain(repo)
+
+      expect(deferrals).toHaveLength(1)
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
   it('takes no claim at all while rows are staged, because tryClaim itself writes', async () => {
     // `tryClaim` ensures the Migrations page and creates the claim row, so
     // reaching it from a stale view queues a create AND the tombstone of its

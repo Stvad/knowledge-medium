@@ -31,6 +31,8 @@ import { aliasesProp } from '@/data/properties'
 import { seedProperty } from '@/data/propertySeeds'
 import { Repo } from '@/data/repo'
 import { aliasSeatSeed, computeAliasSeatId } from '@/data/targets'
+import { propertyDefinitionBlockId } from '@/data/definitionSeeds'
+import { propertyFieldContent } from '@/data/propertyChildren'
 import { dailyNoteBlockId, dailyNotesDataExtension } from '@/plugins/daily-notes'
 import { definitionSeedsFacet, projectedPropertyDefinitionsFacet } from '@/data/facets.js'
 import { resolveFacetRuntimeSync, type AppExtension } from '@/facets/facet.js'
@@ -1664,13 +1666,11 @@ describe('references.reapOrphanAliasSeats — reference-drop reaping (#402)', ()
     expect((await env.read('user-made-page'))!.deleted).toBe(0)
   })
 
-  it('keeps a seat with ANY live child in an un-flipped workspace (generated-row tolerance is flip-gated)', async () => {
-    // In an un-flipped workspace nothing generates property children, so
-    // a child under a seat is user-authored by construction — even one
-    // whose content block-refs the alias field DEFINITION id (the
-    // impostor shape). reapSeatsInTx wouldn't sweep it (flip-gated), so
-    // collecting the seat would strand the child live under a tombstone
-    // (Codex review on PR #428).
+  it('keeps a seat with a live USER child in an un-flipped workspace', async () => {
+    // A user note under a seat blocks the reap because collecting the seat
+    // would strand it live under a tombstone (Codex review on PR #428) — not
+    // because the workspace is un-flipped. The generated-row tolerance below
+    // is data-keyed, so the two cases are told apart by the `::` bit.
     await env.repo.tx(
       tx => tx.create({id: 'src', workspaceId: WS, parentId: null, orderKey: 'a0', content: '[[kid]]'}),
       {scope: ChangeScope.BlockDefault},
@@ -1725,6 +1725,65 @@ describe('references.reapOrphanAliasSeats — reference-drop reaping (#402)', ()
       'SELECT id FROM blocks WHERE parent_id = ? AND deleted = 0', [seatId],
     )
     expect(childrenAfter).toEqual([])
+  })
+
+  it('reaps an UN-flipped seat whose only children are backfilled field rows', async () => {
+    // The backfill mints a field row under EVERY live seat — the seed cell
+    // carries `aliases` + `types`, so every seat matches its candidate
+    // predicate. While the tolerance was flip-gated, that silently stopped
+    // orphan-seat reaping in every un-flipped workspace, i.e. all of prod for
+    // the whole verify window. Built by hand because the dual-write
+    // processors are dormant pre-flip, which is exactly why only the backfill
+    // produces this shape here.
+    await env.repo.tx(
+      tx => tx.create({id: 'src', workspaceId: WS, parentId: null, orderKey: 'a0', content: '[[grue]]'}),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await flush()
+    const seatId = aliasId('grue')
+    expect((await env.read(seatId))!.deleted).toBe(0)
+
+    const aliasesFieldId = propertyDefinitionBlockId(WS, aliasesProp.seedKey)
+    await env.repo.tx(async tx => {
+      const fieldRowId = await tx.create({
+        workspaceId: WS, parentId: seatId, orderKey: 'a0',
+        content: propertyFieldContent(aliasesFieldId),
+        referenceTargetId: aliasesFieldId, isFieldForm: true,
+      })
+      await tx.create({
+        workspaceId: WS, parentId: fieldRowId, orderKey: 'a0', content: 'grue',
+      })
+    }, {scope: ChangeScope.BlockDefault})
+
+    await env.repo.mutate.setContent({id: 'src', content: ''})
+    await flush(5000)
+    expect((await env.read(seatId))!.deleted).toBe(1)
+  })
+
+  it('keeps a seat whose child merely REFERENCES the aliases definition, unmarked', async () => {
+    // `reference_target_id` is a bare content stamp: any whole-block ref
+    // carries one, so matching on the generated id alone would read a user's
+    // link to the aliases definition as the seat's own machinery and sweep it
+    // with the seat. The `::` bit is what separates them.
+    await env.repo.tx(
+      tx => tx.create({id: 'src', workspaceId: WS, parentId: null, orderKey: 'a0', content: '[[zork]]'}),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await flush()
+    const seatId = aliasId('zork')
+    const aliasesFieldId = propertyDefinitionBlockId(WS, aliasesProp.seedKey)
+    await env.repo.tx(
+      tx => tx.create({
+        id: 'user-link', workspaceId: WS, parentId: seatId, orderKey: 'a0',
+        content: `((${aliasesFieldId}))`, referenceTargetId: aliasesFieldId,
+      }),
+      {scope: ChangeScope.BlockDefault},
+    )
+
+    await env.repo.mutate.setContent({id: 'src', content: ''})
+    await flush(5000)
+    expect((await env.read(seatId))!.deleted).toBe(0)
+    expect((await env.read('user-link'))!.deleted).toBe(0)
   })
 
   it('keeps a seat that a concurrent re-reference rescues (still referenced at check time)', async () => {

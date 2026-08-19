@@ -62,7 +62,7 @@ const MACHINERY_SOURCE_CHUNK = 500
 export const propertyMachinerySourceIds = async (
   db: { getAll<T>(sql: string, params?: unknown[]): Promise<T[]> },
   sourceIds: readonly string[],
-  seedParams: readonly [string, string] = ['[]', ''],
+  seedParams: readonly [string, string],
   chunkSize: number = MACHINERY_SOURCE_CHUNK,
 ): Promise<Set<string>> => {
   const machinery = new Set<string>()

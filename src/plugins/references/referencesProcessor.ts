@@ -83,7 +83,6 @@ import {
   ensureDailyNoteTarget,
 } from '@/plugins/daily-notes/dailyNotes.js'
 import { parseLiteralDailyPageTitle } from '@/utils/relativeDate.js'
-import { readIsChildBackedWorkspace } from '@/data/workspaceSchema'
 
 export const PARSE_REFERENCES_PROCESSOR = 'references.parseReferences'
 export const CLEANUP_ORPHAN_ALIASES_PROCESSOR = 'references.cleanupOrphanAliases'
@@ -663,6 +662,16 @@ export const cleanupOrphanAliasesProcessor = definePostCommitProcessor<CleanupAr
  *  child-backed workspaces — in an un-flipped one, a column match under
  *  a seat is by construction user-authored content, never machinery's
  *  to delete. */
+/** Is `child` a field row this workspace's own seat machinery generated?
+ *  The `::` bit AND the generated id — see `reapSeatsInTx`. */
+const isGeneratedSeatFieldRow = (
+  child: {referenceTargetId?: string | null; isFieldForm?: boolean},
+  generatedFieldIds: ReadonlySet<string>,
+): boolean =>
+  child.isFieldForm === true
+  && child.referenceTargetId != null
+  && generatedFieldIds.has(child.referenceTargetId)
+
 const reapSeatsInTx = async (
   ctx: ProcessorCtx,
   workspaceId: string,
@@ -670,7 +679,6 @@ const reapSeatsInTx = async (
   processorName: string,
 ): Promise<void> => {
   await ctx.repo.tx(async tx => {
-    const sweepGeneratedFieldRows = await tx.isPropertyChildBackedWorkspace(workspaceId)
     const generatedFieldIds = generatedSeatFieldIds(workspaceId)
     for (const id of ids) {
       // Re-read in-tx: a racer may have deleted (or hard-removed) the
@@ -699,13 +707,16 @@ const reapSeatsInTx = async (
       // mint-time 4s window too, which predates the reaper), and
       // tombstoning its parent would strand it live under a tombstone.
       // Skipping the whole seat is the safe miss.
+      // Data-keyed, not flip-gated: the cell→children backfill mints a field
+      // row under EVERY live seat (the seed cell carries `aliases` + `types`),
+      // so a flip-gated tolerance stops reaping every orphan seat in the whole
+      // pre-flip window. The `::` bit is what makes a child the seat's own
+      // machinery — `reference_target_id` alone is a bare content stamp that an
+      // ordinary `((fieldId))` child carries too, which would have let a user's
+      // link to a generated definition pass as machinery and be swept.
       const children = await tx.childrenOf(id, undefined)
-      const blockingChildren = sweepGeneratedFieldRows
-        ? children.filter(child => {
-            const target = child.referenceTargetId ?? null
-            return target === null || !generatedFieldIds.has(target)
-          })
-        : children
+      const blockingChildren = children.filter(child =>
+        !isGeneratedSeatFieldRow(child, generatedFieldIds))
       if (blockingChildren.length > 0) continue
       // Deep guard (PR #428 adversarial review, both rounds): the
       // direct-children gate can't see user content nested INSIDE a
@@ -844,7 +855,6 @@ export const reapOrphanAliasSeatsProcessor = definePostCommitProcessor({
 
     const workspaceId = event.workspaceId
     const readSeat = aliasSeatReaderFromDb(ctx.db)
-    const isChildBacked = await readIsChildBackedWorkspace(ctx.db, workspaceId)
     const generatedFieldIds = generatedSeatFieldIds(workspaceId)
     const candidates: string[] = []
     for (const id of dropped) {
@@ -855,15 +865,16 @@ export const reapOrphanAliasSeatsProcessor = definePostCommitProcessor({
       if (!matchesAliasSeatSeed(seat)) continue
       if (!isAliasSeatSlotId(id, seat.content, workspaceId)) continue
       if (seat.hasLiveChildren) {
-        // Generated-machinery tolerance is flip-gated — see the gate list
-        // in the docblock.
-        if (!isChildBacked) continue
-        const children = await ctx.db.getAll<{reference_target_id: string | null}>(
-          'SELECT reference_target_id FROM blocks WHERE parent_id = ? AND deleted = 0',
+        // See `reapSeatsInTx`: data-keyed, and the bit is load-bearing.
+        const children = await ctx.db.getAll<{
+          reference_target_id: string | null; is_field_form: number | null
+        }>(
+          'SELECT reference_target_id, is_field_form FROM blocks WHERE parent_id = ? AND deleted = 0',
           [id],
         )
         const onlyGeneratedChildren = children.every(child =>
-          child.reference_target_id !== null
+          child.is_field_form === 1
+          && child.reference_target_id !== null
           && generatedFieldIds.has(child.reference_target_id))
         if (!onlyGeneratedChildren) continue
       }

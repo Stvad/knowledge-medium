@@ -339,10 +339,12 @@ export const matchesAliasSeatSeed = (
  *
  *  That makes a bare "has live children?" test invert after the flip: it
  *  stops meaning "a user touched this" and starts meaning "this is a
- *  seat". Every caller gating on children has to subtract these ids
- *  first — and only when the workspace is actually flipped, because in an
- *  un-flipped one a column match under a seat is by construction
- *  user-authored content, not machinery's to ignore. */
+ *  seat". Every caller gating on children has to subtract these ids first.
+ *  NOT only when flipped: the cell→children backfill mints a field row under
+ *  every live seat (the seed cell carries `aliases` + `types`), so a
+ *  flip-gated subtraction stops reaping orphan seats for the whole pre-flip
+ *  window. Subtract on the `::` bit AND the id — a bare column match is a
+ *  content stamp an ordinary `((fieldId))` child carries too. */
 export const generatedSeatFieldIds = (workspaceId: string): ReadonlySet<string> => new Set([
   propertyDefinitionBlockId(workspaceId, aliasesProp.seedKey),
   propertyDefinitionBlockId(workspaceId, typesProp.seedKey),

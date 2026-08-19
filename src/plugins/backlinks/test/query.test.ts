@@ -413,7 +413,7 @@ describe('backlinksDataExtension query', () => {
       await sharedDb.db.execute(cyclicPair, ['cy', FLIP_WS, 'cx'])
       await createIn({id: 'under-cycle', parentId: 'cx'})
 
-      const machinery = await propertyMachinerySourceIds(env.h.db, ['under-cycle'])
+      const machinery = await propertyMachinerySourceIds(env.h.db, ['under-cycle'], ['[]', ''])
       expect(machinery.size).toBe(0)
     })
 

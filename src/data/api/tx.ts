@@ -274,10 +274,10 @@ export interface Tx {
    *  This is the structural view: the actual tree, no hidden rows, so a
    *  traversal can never silently miss machinery it needs to carry (delete
    *  cascade, copy, merge). The display-visible view — which excludes
-   *  recognized property field rows in a child-backed workspace (PR #288
-   *  §9) — is opt-IN via `{hidePropertyChildren: true}`. In an un-flipped
-   *  workspace nothing is recognized, so `hidePropertyChildren` is a no-op
-   *  (dormant).
+   *  recognized property field rows (PR #288 §9) — is opt-IN via
+   *  `{hidePropertyChildren: true}`. Recognition is data-keyed, not
+   *  flip-gated, so it prunes in every workspace: the cell→children backfill
+   *  mints field rows while the workspace still reads cells.
    *
    *  Pass `null` to enumerate workspace-root rows (rows with
    *  `parent_id IS NULL`); the result is scoped to a workspace by

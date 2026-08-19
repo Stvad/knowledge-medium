@@ -167,36 +167,62 @@ export const decideStagingRow = (
  * Rows held by I1's sibling `hasPendingUpload` skip are NOT excluded — that
  * would mean reading `ps_crud` per call, and over-reporting is the safe
  * direction for a predicate whose callers refuse on it.
+ *
+ * SCOPE — this reads the QUEUE, so it cannot see `observer.materializeWorkspace`,
+ * which rewrites `blocks` straight from `blocks_synced` and stages nothing
+ * (`clientSchema.ts`: "that is the BIG path… every cheap probe for 'still
+ * materializing' is wrong"). A null answer means no QUEUED work, not that
+ * `blocks` is at rest. Threading the observer's in-flight state in is the
+ * standing fix for that, and is not done here.
+ *
+ * ONE statement, not two, and the depth arm comes FIRST. Two statements are
+ * two read snapshots: a drain window committing between them lets rows the
+ * first arm never reached slip under the second arm's offset, and the pair
+ * then reports no gap while genuinely-gapped rows are still staged (measured).
+ * Depth first also means the deep case never pays for the joined scan, which
+ * is the one case where the scan cannot short-circuit.
+ *
+ * Bind `[STAGED_SCAN_LIMIT, STAGED_SCAN_LIMIT]`; the result's `why` names
+ * which arm fired.
  */
-export const STAGED_GAP_WITHIN_SCAN_SQL = `
-  SELECT 1 AS one
-    FROM (SELECT seq, id, op FROM blocks_synced_changes ORDER BY seq LIMIT ?) c
-    LEFT JOIN blocks_synced s ON s.id = c.id
-    LEFT JOIN blocks b ON b.id = c.id
-   WHERE c.op = 'delete'
-      OR s.id IS NULL
-      OR b.id IS NULL
-      OR b.updated_at = 0
-      OR b.updated_at <> s.updated_at
-   LIMIT 1`
-
-/** Rows past {@link STAGED_SCAN_LIMIT}. No joins — a rowid walk, ~an order of
- *  magnitude cheaper per row than the probe above. */
-export const STAGED_DEEPER_THAN_SCAN_SQL = 'SELECT 1 AS one FROM blocks_synced_changes LIMIT 1 OFFSET ?'
+export const STAGED_VIEW_GAP_SQL = `
+  SELECT why FROM (
+    SELECT 'deep' AS why FROM (SELECT 1 FROM blocks_synced_changes LIMIT 1 OFFSET ?)
+    UNION ALL
+    SELECT 'draining' AS why
+      FROM (SELECT seq, id, op FROM blocks_synced_changes ORDER BY seq LIMIT ?) c
+      LEFT JOIN blocks_synced s ON s.id = c.id
+      LEFT JOIN blocks b ON b.id = c.id
+     WHERE c.op = 'delete'
+        OR s.id IS NULL
+        OR b.id IS NULL
+        OR b.updated_at = 0
+        OR b.updated_at <> s.updated_at
+  ) LIMIT 1`
 
 /** How many staged rows the benign-echo probe will examine per call.
  *
  *  The probe runs INSIDE the backfill's write transaction, and the echo case
  *  it exists for is precisely the one where no row qualifies — so `LIMIT 1`
- *  never short-circuits and the scan runs to the end. Measured: ~4.5us/row, so
- *  an unbounded scan of a 200k-row queue costs ~900ms per batch, against the
- *  ~430ms whole-batch budget `TARGET_INSERT_ROWS` exists to protect. The
- *  bigger the backlog the narrowing is meant to tolerate, the more the
- *  tolerating costs.
+ *  never short-circuits and the scan runs to the end. Measured at 0.7us/row
+ *  under `@powersync/node` and ~4.5us/row under a plain sqlite3 build, so an
+ *  unbounded scan of a 200k-row queue costs somewhere between 150ms and 900ms
+ *  per batch against the ~430ms whole-batch budget `TARGET_INSERT_ROWS` exists
+ *  to protect — and the browser's wa-sqlite/OPFS, the substrate that actually
+ *  matters, is measured by neither. Revisit the bound only with a number from
+ *  the environment you are bounding. The bigger the backlog the narrowing is
+ *  meant to tolerate, the more the tolerating costs.
  *
  *  Past the bound we report a gap rather than scanning on. That is not a
  *  fallback to the old bug: ~10 drain windows' worth of undrained rows means
  *  this device has a real materialization backlog, and yielding so the drain
  *  can catch up is the correct answer — the pass resumes on the next attempt,
- *  which is cheap because its progress is derived from the data. */
+ *  which is cheap because its progress is derived from the data.
+ *
+ *  For an OPERATOR pass that attempt is a person clicking again, not a
+ *  re-arm: `scheduleWorkspaceBackfills` filters operator triggers out, by
+ *  design (the deliberate act is the point). A long uploading pass can put
+ *  itself over this bound with its own echoes, so that is a real ending an
+ *  operator can hit — they are told what happened and that re-running
+ *  continues, which is the whole contract of a resumable pass. */
 export const STAGED_SCAN_LIMIT = 10_000

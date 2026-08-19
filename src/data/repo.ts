@@ -93,9 +93,8 @@ import {
   type BlocksSyncedObserverArgs,
 } from '@/data/internals/syncObserver/observer'
 import {
-  STAGED_DEEPER_THAN_SCAN_SQL,
-  STAGED_GAP_WITHIN_SCAN_SQL,
   STAGED_SCAN_LIMIT,
+  STAGED_VIEW_GAP_SQL,
 } from '@/data/internals/syncObserver/reconcile'
 import type { MaterializeDeps } from '@/data/internals/syncObserver/materialize'
 import type { Materializability } from '@/sync/transform'
@@ -2809,19 +2808,21 @@ export class Repo {
    * between the backfill runner (which must not write from a stale view) and
    * `audit-properties` (which reports it) — one predicate, because a rule
    * added to one of two copies is how these diverge.
+   *
+   * NOT complete, and the staged-rows half is the incomplete part: it reads
+   * the QUEUE, so it is blind to `observer.materializeWorkspace`, which
+   * rewrites `blocks` straight from `blocks_synced` and stages nothing. Null
+   * means "no QUEUED work", not "`blocks` is at rest" (km-fsxp).
    */
   async syncViewGap(): Promise<string | null> {
-    const staged = await this.db.getOptional<{one: number}>(
-      STAGED_GAP_WITHIN_SCAN_SQL, [STAGED_SCAN_LIMIT],
+    const staged = await this.db.getOptional<{why: string}>(
+      STAGED_VIEW_GAP_SQL, [STAGED_SCAN_LIMIT, STAGED_SCAN_LIMIT],
     )
-    if (staged !== null) return 'synced rows are still draining into `blocks`'
-    const deeper = await this.db.getOptional<{one: number}>(
-      STAGED_DEEPER_THAN_SCAN_SQL, [STAGED_SCAN_LIMIT],
-    )
-    if (deeper !== null) {
+    if (staged?.why === 'deep') {
       return `more than ${STAGED_SCAN_LIMIT.toLocaleString()} synced rows are staged, `
         + 'so this device is behind on materializing them into `blocks`'
     }
+    if (staged !== null) return 'synced rows are still draining into `blocks`'
     if (!this.backfillSyncSettledNow()) {
       return 'this device is not caught up with the server '
         + '(still downloading, disconnected, or a download error)'

@@ -936,10 +936,11 @@ export class TxImpl implements Tx {
       data = rows.map(parseBlockRow)
     }
     // Default returns EVERY child (structural view). The display-visible
-    // view — excluding recognized property field rows in a flipped
-    // workspace (§9) — is opt-in via `hidePropertyChildren`. Cheap
-    // short-circuits first — un-flipped workspaces (dormant) and listings
-    // with no marked rows pay only the (per-tx-cached) flip read. The flat
+    // view — excluding recognized property field rows (§9) — is opt-in via
+    // `hidePropertyChildren`. Not flip-gated: this is the in-transaction twin
+    // of VISIBLE_CHILDREN_SQL and must answer the same question, and the
+    // backfill mints field rows before the flip. A listing with no marked
+    // rows short-circuits on the bit alone. The flat
     // predicate needs no ancestry exemption: only `::` rows can classify,
     // so a ref-typed VALUE pointing at a definition is never misread — and
     // a marked row inside a property subtree IS machinery (its parent's own
