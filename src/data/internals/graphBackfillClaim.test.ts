@@ -58,7 +58,7 @@ describe('a claim that arrives between the read and the transaction', () => {
       db: {getOptional: async () => null},
       // In-tx: the peer's claim is already there.
       tx: async <R,>(fn: (tx: never) => Promise<R>): Promise<R> => fn({
-        get: async () => ({deleted: false, properties: peerClaim}),
+        get: async () => ({workspaceId: 'ws', deleted: false, properties: peerClaim}),
         create: async () => 'unused',
         update: async () => undefined,
         delete: async () => undefined,
@@ -69,5 +69,29 @@ describe('a claim that arrives between the read and the transaction', () => {
     } as unknown as Parameters<typeof createGraphBackfillClaim>[0])
 
     expect(await claim.tryClaim('ws', 'race-v1')).toBe(false)
+  })
+})
+
+describe('a foreign block sitting at the claim id', () => {
+  const foreignRow = {id: 'x', workspaceId: 'other-ws', deleted: false, properties: {}}
+
+  it('is refused, not updated — a deterministic id is not a licence to write', async () => {
+    // `tx.get` selects on id alone, and the branches below rewrite properties
+    // and restore tombstones. On another workspace's block that is a
+    // cross-workspace write.
+    const claim = createGraphBackfillClaim({
+      db: {getOptional: async () => null},
+      tx: async <R,>(fn: (tx: never) => Promise<R>): Promise<R> => fn({
+        get: async () => foreignRow,
+        create: async () => 'unused',
+        update: async () => { throw new Error('must not write to a foreign row') },
+        restore: async () => { throw new Error('must not restore a foreign row') },
+        delete: async () => undefined,
+      } as never),
+      claimantId: 'device-a',
+      ensureHome: async () => undefined,
+    } as unknown as Parameters<typeof createGraphBackfillClaim>[0])
+
+    await expect(claim.tryClaim('ws', 'foreign-v1')).rejects.toThrow(/workspace/i)
   })
 })

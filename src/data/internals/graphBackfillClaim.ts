@@ -48,7 +48,8 @@ import { ChangeScope, type Tx } from '@/data/api'
 import type { BackfillCompletionClaim } from '@/data/facets'
 import { keyAtStart } from '@/data/orderKey'
 import { MIGRATION_CLAIM_TYPE } from '@/data/blockTypes'
-import { stateChildBlockId } from '@/data/derivedIds'
+import { classifyOccupant, stateChildBlockId } from '@/data/derivedIds'
+import { DeterministicIdCrossWorkspaceError } from '@/data/api/errors'
 import { migrationsPageBlockId } from '@/data/migrationsPage'
 import {
   addBlockTypeToProperties,
@@ -131,9 +132,18 @@ export const claimFromProperties = (
 export const readGraphBackfillClaim = async (
   db: {getOptional<T>(sql: string, params?: unknown[]): Promise<T | null>},
   claimId: string,
+  workspaceId: string,
 ): Promise<GraphBackfillClaim | null> => {
+  // Workspace-SCOPED, though the id is derived from the workspace. A row can
+  // still arrive at this id owned by another workspace — an import that keeps
+  // its ids is the realistic route — and reading it unscoped would let a
+  // foreign block suppress this workspace's migration, or send the write
+  // branches below at someone else's data. `classifyOccupant` exists because
+  // this exact omission was found three times in three copies of the same
+  // predicate.
   const row = await db.getOptional<{properties_json: string}>(
-    'SELECT properties_json FROM blocks WHERE id = ? AND deleted = 0', [claimId],
+    'SELECT properties_json FROM blocks WHERE id = ? AND workspace_id = ? AND deleted = 0',
+    [claimId, workspaceId],
   )
   if (!row) return null
   try {
@@ -172,7 +182,7 @@ export const createGraphBackfillClaim = (
     // which is the one outcome that turns this into a duplicated pass.
     await deps.ensureHome(workspaceId)
 
-    const first = decideClaim(await readGraphBackfillClaim(deps.db, claimId), deps.claimantId)
+    const first = decideClaim(await readGraphBackfillClaim(deps.db, claimId, workspaceId), deps.claimantId)
     if (first === 'already-complete' || first === 'back-off') return false
     // `proceed` means a claim here already names us — normally our own from a
     // previous operator run of the same pass. Taken at face value: there is
@@ -201,6 +211,16 @@ export const createGraphBackfillClaim = (
       // Re-checked inside the WRITING tx against this row: the read above
       // happened outside it, and a peer's claim can arrive in between.
       const existing = await tx.get(claimId)
+      // Refuse a foreign row rather than updating or resurrecting it. `tx.get`
+      // selects on id alone, and the branches below rewrite properties and
+      // restore tombstones — on another workspace's block that is a
+      // cross-workspace write, which is the one thing a deterministic-id
+      // caller must never do.
+      if (classifyOccupant(existing ?? null, {workspaceId}).verdict === 'foreign') {
+        throw new DeterministicIdCrossWorkspaceError(
+          claimId, existing!.workspaceId, workspaceId,
+        )
+      }
       if (existing && !existing.deleted) {
         // Yield only to a row that actually decodes AS a claim. A live row
         // whose bookkeeping is missing or malformed reads as UNCLAIMED to

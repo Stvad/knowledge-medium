@@ -2962,11 +2962,16 @@ export class Repo {
         // for a pass that threw or was aborted by a precondition, telling an
         // operator the migration is done when it is not and costing them the
         // retry.
-        completed.add(backfill.id)
         // Record the marker only after a clean run — a thrown backfill leaves
         // it unset so the next open retries (backfills are written idempotent
         // via a per-row recheck, so a retry is cheap).
         await claim.markComplete(workspaceId, backfill.id)
+        // Added only once completion is RECORDED. Adding it before
+        // `markComplete` meant a throw there — the catch releases the claim —
+        // still reported "ran", telling the operator the migration is durably
+        // done when its per-graph record was just removed and the next
+        // invocation will repeat it.
+        completed.add(backfill.id)
       } catch (err) {
         const reason = err instanceof Error ? err.message : String(err)
         // Claimed but didn't finish — hand it back either way, or this pass is
