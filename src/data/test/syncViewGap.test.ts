@@ -47,6 +47,18 @@ const makeRepo = () => {
 const deliver = (d: BlockData) =>
   sharedDb.db.execute(BLOCKS_SYNCED_RAW_TABLE.put.sql, blockToSyncedRowParams(d))
 
+/** A local `blocks` row with no processor run and no synced counterpart —
+ *  the shape a row has mid-drain, and the only way to exercise one staged
+ *  clause without a sibling clause firing first. */
+const seedLocal = (id: string, updatedAt: number) =>
+  sharedDb.db.writeTransaction(async tx => {
+    await tx.execute(
+      `INSERT INTO blocks (id, workspace_id, parent_id, order_key, content, properties_json,
+         created_at, updated_at, user_updated_at, created_by, updated_by, deleted)
+       VALUES (?, ?, NULL, 'a0', 'v', '{}', 1, ?, ?, 'u', 'u', 0)`,
+      [id, WS, updatedAt, updatedAt])
+  })
+
 const localStamp = async (id: string): Promise<number> =>
   (await sharedDb.db.getOptional<{updated_at: number}>(
     'SELECT updated_at FROM blocks WHERE id = ?', [id],
@@ -97,6 +109,33 @@ describe('Repo.syncViewGap', () => {
          VALUES ('minted', ?, NULL, 'a0', 'v', '{}', 0, 0, 0, 'u', 'u', 0)`, [WS])
     })
     await deliver(syncedRow({id: 'minted', updatedAt: 0}))
+    expect(await repo.syncViewGap()).toMatch(/draining/)
+  })
+
+  it('reports a gap for a staged upsert with no synced row, which proves nothing', async () => {
+    // Isolates the `s.id IS NULL` clause: the local row exists and is NOT
+    // 0-stamped, so every sibling clause is quiet and only this one can fire.
+    // Unprovable is treated as a gap on purpose — over-reporting is the safe
+    // direction for a predicate whose callers refuse on it.
+    const repo = makeRepo()
+    await seedLocal('half-staged', 7)
+    await sharedDb.db.execute(
+      "INSERT INTO blocks_synced_changes (id, op) VALUES ('half-staged', 'upsert')",
+    )
+    expect(await repo.syncViewGap()).toMatch(/draining/)
+  })
+
+  it('reports a gap for a staged delete whose row still matches stamp-for-stamp', async () => {
+    // Isolates the `c.op = 'delete'` clause: synced row present, local row
+    // present, stamps equal — I1 would call this identical content and skip.
+    // A delete is not a content change, so the stamp cannot speak for it.
+    const repo = makeRepo()
+    await deliver(syncedRow({id: 'doomed', updatedAt: 9}))
+    await seedLocal('doomed', 9)
+    await sharedDb.db.execute('DELETE FROM blocks_synced_changes')
+    await sharedDb.db.execute(
+      "INSERT INTO blocks_synced_changes (id, op) VALUES ('doomed', 'delete')",
+    )
     expect(await repo.syncViewGap()).toMatch(/draining/)
   })
 
