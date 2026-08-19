@@ -6,7 +6,7 @@
 // graph, which is where a key nobody owns shows up — and those are exactly
 // the keys `materializePropertyChildrenForExistingRow` skips.
 
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChangeScope, seedProperty, seedType } from '@/data/api'
 import type { BlockProperties } from '@/types.js'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
@@ -44,6 +44,13 @@ let context: AgentRuntimeContext
 
 beforeAll(async () => { sharedDb = await createTestDb() })
 afterAll(async () => { await sharedDb.cleanup() })
+// `repo` is rebuilt per test, but the db is shared for the whole file, so
+// anything installed ON the db outlives the test that installed it. Two
+// mechanisms, and `restoreAllMocks` only knows about the first.
+afterEach(() => {
+  vi.restoreAllMocks()
+  Reflect.deleteProperty(sharedDb.db, 'currentStatus')
+})
 
 /** Rebuild the repo under test, optionally with a sync gate that says this
  *  device is behind. The gate is the only injectable half of `syncViewGap`,
@@ -245,14 +252,25 @@ describe('auditPropertyRegistration', () => {
       .rejects.toThrow(/registry/i)
   })
 
-  it('waits for the definition projector before classifying anything', async () => {
+  it('waits for the definition projector before CAPTURING the resolver', async () => {
     // The registry is derived from definition blocks by an async projector, so
     // a snapshot read mid-rebuild calls a key whose definition already landed
     // "broken" and sends the operator to repair a definition that is fine.
+    //
+    // The capture is what has to come after the wait, not the scans: the
+    // resolver holds its snapshot BY VALUE, so classification is fixed the
+    // instant it is taken and no later await can refresh it. Probing only the
+    // queries would leave `capture; await; scan` passing — the original bug,
+    // and the shape an editor reaching for "capture early" writes.
     await create({id: 'b1', properties: {[declaredProp.name]: 'v'}})
     const order: string[] = []
     vi.spyOn(repo, 'whenPropertyDefinitionsReady').mockImplementation(async () => {
       order.push('waited')
+    })
+    const resolverFor = repo.propertySchemaResolverFor.bind(repo)
+    vi.spyOn(repo, 'propertySchemaResolverFor').mockImplementation(ws => {
+      order.push('captured')
+      return resolverFor(ws)
     })
     const getAll = sharedDb.db.getAll.bind(sharedDb.db)
     vi.spyOn(sharedDb.db, 'getAll').mockImplementation(async (sql: string, params?: unknown[]) => {
@@ -262,7 +280,7 @@ describe('auditPropertyRegistration', () => {
 
     await auditPropertyRegistration(repo, WS)
 
-    expect(order[0]).toBe('waited')
+    expect(order.slice(0, 3)).toEqual(['waited', 'captured', 'scanned'])
   })
 
   it('totals cover every key, not just the unregistered ones', async () => {
@@ -380,6 +398,24 @@ describe('audit-properties scan coverage', () => {
     await create({id: 'b1', properties: {'demo:undeclared': 'x'}})
 
     expect((await auditPropertyRegistration(repo, WS)).syncGap).toBeNull()
+  })
+
+  it('reports the last completed sync as the basis of the scan', async () => {
+    // `lastSyncedAt` is read through a structural cast, so nothing in the type
+    // system connects this field to PowerSync. A rename there degrades to
+    // `undefined` -> null, which reads to the operator as "never synced" on a
+    // graph that is in fact current.
+    await create({id: 'b1', properties: {'demo:undeclared': 'x'}})
+    Object.assign(sharedDb.db, {currentStatus: {lastSyncedAt: new Date('2026-01-02T03:04:05Z')}})
+
+    expect((await auditPropertyRegistration(repo, WS)).syncedThrough)
+      .toBe('2026-01-02T03:04:05.000Z')
+  })
+
+  it('reports a null basis when this device has never synced', async () => {
+    await create({id: 'b1', properties: {'demo:undeclared': 'x'}})
+
+    expect((await auditPropertyRegistration(repo, WS)).syncedThrough).toBeNull()
   })
 })
 
