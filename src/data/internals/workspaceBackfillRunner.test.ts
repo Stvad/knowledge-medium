@@ -313,6 +313,40 @@ describe('workspace backfill runner — sync gating', () => {
     expect((await repo.load('target'))?.properties['probe:mark']).toBe('backfilled')
   })
 
+  it('takes no claim at all while rows are staged, because tryClaim itself writes', async () => {
+    // `tryClaim` ensures the Migrations page and creates the claim row, so
+    // reaching it from a stale view queues a create AND the tombstone of its
+    // release — on reconnect the create can conflict with an unseen server
+    // completion while the tombstone frees later operators to repeat the
+    // migration. The gate has to sample BOTH ways of being behind, not just
+    // whether the device is caught up.
+    const g = controllableGate()
+    const claimAttempts: string[] = []
+    const {repo} = createTestRepo({
+      db: sharedDb.db,
+      user: {id: 'user-1'},
+      backfillSyncGate: g.gate,
+      backfillCompletionClaim: {
+        tryClaim: async (_ws, id) => { claimAttempts.push(id); return true },
+        markComplete: async () => {},
+        releaseClaim: async () => {},
+      },
+    })
+    repo.setActiveWorkspaceId(WS)
+    const runs: string[] = []
+    repo.setRuntimeContributions(workspaceBackfillsFacet, 'test-backfills', [probeBackfill(runs)])
+    await seedTarget(repo)
+    await sharedDb.db.execute(
+      "INSERT INTO blocks_synced_changes (id, op) VALUES ('draining', 'upsert')",
+    )
+
+    g.open()
+    await drain(repo)
+
+    expect(claimAttempts).toEqual([])
+    expect(runs).toEqual([])
+  })
+
   it('releases the claim when a run aborts, so it is not blocked forever', async () => {
     // A claimed-but-unfinished pass must hand the claim back: otherwise one
     // device's transient bad moment blocks the migration for the whole graph.
@@ -338,11 +372,21 @@ describe('workspace backfill runner — sync gating', () => {
       },
     })
     repo.setActiveWorkspaceId(WS)
-    repo.setRuntimeContributions(workspaceBackfillsFacet, 'test-backfills', [probeBackfill([])])
+    // Staged AFTER the claim, from inside the run: rows staged up front no
+    // longer reach `tryClaim` at all (see the test below), so a pass that
+    // aborts while HOLDING a claim is the only shape that still exercises the
+    // hand-back this test exists for.
+    repo.setRuntimeContributions(workspaceBackfillsFacet, 'test-backfills', [{
+      id: 'probe-backfill-v1',
+      trigger: 'workspace-open' as const,
+      run: async ({tx}) => {
+        await sharedDb.db.execute(
+          "INSERT INTO blocks_synced_changes (id, op) VALUES ('late-row', 'upsert')",
+        )
+        await tx(async () => {}, {description: 'batch after staging began'})
+      },
+    }])
     await seedTarget(repo)
-    await sharedDb.db.execute(
-      "INSERT INTO blocks_synced_changes (id, op) VALUES ('draining', 'upsert')",
-    )
 
     g.open()
     await drain(repo)
@@ -601,7 +645,8 @@ describe('workspace backfill runner — operator outcomes', () => {
     expect(await repo.runWorkspaceBackfillNow(WS, 'operator-sync-v1')).toEqual({
       outcome: 'deferred',
       undoHistoryCleared: false,
-      reason: 'this device is not caught up with the server',
+      reason: 'this device is not caught up with the server '
+        + '(still downloading, disconnected, or a download error)',
     })
     expect(claimAttempts).toEqual([])
     expect(runs).toEqual([])
