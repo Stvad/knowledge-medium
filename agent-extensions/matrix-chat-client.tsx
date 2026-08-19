@@ -696,9 +696,16 @@ const ensureMatrixTagBlock = async (
   return id
 }
 
-const appendMatrixMessage = async (repo: any, config: MatrixConfig, event: any, matrixClient: any): Promise<void> => {
+/** `'deferred'` means nothing was written and the caller MUST NOT advance the
+ *  sync cursor — Matrix only offers an event once, so treating a deferral as
+ *  handled loses the message permanently. `'done'` covers both a successful
+ *  ingest and a deliberate skip (no event id, already ingested). */
+type IngestOutcome = 'done' | 'deferred'
+
+const appendMatrixMessage = async (repo: any, config: MatrixConfig, event: any, matrixClient: any): Promise<IngestOutcome> => {
   const eventId = typeof event.event_id === 'string' ? event.event_id : null
-  if (!eventId) return
+  // Unprocessable forever, not deferrable — must not hold the cursor.
+  if (!eventId) return 'done'
 
   const workspaceId = repo.activeWorkspaceId
   if (!workspaceId) throw new Error('Matrix message ingest requires an active workspace')
@@ -719,10 +726,10 @@ const appendMatrixMessage = async (repo: any, config: MatrixConfig, event: any, 
   // write the message into the old one — polluting one and leaving the other
   // definition-less. Ingest is idempotent (deterministic message ids), so
   // bailing here just defers this event to the next poll.
-  if (repo.activeWorkspaceId !== workspaceId) return
+  if (repo.activeWorkspaceId !== workspaceId) return 'deferred'
   const promotionNotes = await ensurePromotedPropertySchemas(repo, flattenBlockDefs(messageTree))
   for (const note of promotionNotes) console.warn('[matrix] promoted property:', note)
-  if (repo.activeWorkspaceId !== workspaceId) return
+  if (repo.activeWorkspaceId !== workspaceId) return 'deferred'
 
   await repo.tx(async (tx: any) => {
     const tagBlockId = await ensureMatrixTagBlock(tx, workspaceId, dailyId, iso)
@@ -757,6 +764,7 @@ const appendMatrixMessage = async (repo: any, config: MatrixConfig, event: any, 
       },
     )
   }, {scope: ChangeScope.BlockDefault, description: 'matrix message ingest'})
+  return 'done'
 }
 
 // ---------------------------------------------------------------------------
@@ -886,12 +894,27 @@ const pollLoop = async (repo: any, config: MatrixConfig, signal: AbortSignal, ma
       const syncBody = await fetchMatrixSync(config, nextBatch, signal, matrixClient)
       const events = nextBatch ? roomEventsFromSync(syncBody, config.roomId) : []
 
+      // A deferral must STOP the batch and leave the cursor where it is.
+      // `next_batch` is saved below for the whole batch, and Matrix offers an
+      // event exactly once — so advancing past a message we chose not to
+      // write loses it permanently rather than retrying it.
+      let deferred = false
       for (const event of events) {
         if (event?.type !== 'm.room.message') continue
-        await appendMatrixMessage(repo, config, event, matrixClient)
+        if (await appendMatrixMessage(repo, config, event, matrixClient) === 'deferred') {
+          deferred = true
+          break
+        }
       }
 
       const newBatch = syncBody?.next_batch
+      if (deferred) {
+        // Back off rather than re-fetching the same batch immediately — the
+        // condition that deferred us (a workspace switch) is user-paced.
+        console.warn('[matrix-messages] deferring batch; sync cursor held')
+        await sleep(POLL_ERROR_DELAY_MS, signal).catch(() => undefined)
+        continue
+      }
       if (typeof newBatch === 'string') {
         nextBatch = newBatch
         saveNextBatch(config, newBatch)
