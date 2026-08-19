@@ -1,7 +1,7 @@
 import { createContext, ReactNode, use, useCallback, useContext, useRef, useSyncExternalStore } from 'react'
-import { v4 as uuidv4 } from 'uuid'
-import { createGraphBackfillClaim, resolveClaimantId } from '@/data/internals/graphBackfillClaim'
+import { createGraphBackfillClaim } from '@/data/internals/graphBackfillClaim'
 import { getOrCreateMigrationsPage } from '@/data/migrationsPage'
+import { getClientId } from '@/utils/clientId'
 import { PowerSyncContext } from '@powersync/react'
 import type { AbstractPowerSyncDatabase } from '@powersync/common'
 import { Repo } from '../data/repo'
@@ -40,9 +40,8 @@ const initRepo = memoize(
       get db() { return requireRepo().db },
       // Load-bearing, not diagnostic: `decideClaim` proceeds only when a live
       // claim names US, so this has to survive a reload or a crashed tab —
-      // otherwise the device that started a pass can never resume it. See
-      // `resolveClaimantId`.
-      claimantId: resolveClaimantId(globalThis.localStorage, uuidv4),
+      // otherwise the device that started a pass can never resume it.
+      claimantId: getClientId(),
       tx: (fn, opts) => requireRepo().tx(fn, opts),
       ensureHome: (workspaceId) => getOrCreateMigrationsPage(requireRepo(), workspaceId),
     })

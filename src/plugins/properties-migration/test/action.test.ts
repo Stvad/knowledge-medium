@@ -10,17 +10,24 @@ const openDialog = vi.fn()
 const progressHandle = {update: vi.fn(), done: vi.fn(), fail: vi.fn()}
 
 vi.mock('@/utils/dialogs.js', () => ({openDialog: (...args: unknown[]) => openDialog(...args)}))
-vi.mock('@/utils/toast.js', () => ({showProgress: () => progressHandle}))
+const showInfo = vi.fn()
+vi.mock('@/utils/toast.js', () => ({
+  showProgress: () => progressHandle,
+  showInfo: (...args: unknown[]) => showInfo(...args),
+}))
 vi.mock('../ConfirmMigrationDialog.tsx', () => ({ConfirmMigrationDialog: () => null}))
 
 import type { OperatorBackfillResult, Repo } from '@/data/repo'
 import { migratePropertiesToBlocksAction } from '../action.ts'
 
-const makeRepo = (result: OperatorBackfillResult) => {
+const makeRepo = (result: OperatorBackfillResult, {flipped = false} = {}) => {
   const runWorkspaceBackfillNow = vi.fn(async () => result)
   const repo = {
     activeWorkspaceId: 'ws-1',
-    db: {getAll: async () => [{n: 7}]},
+    db: {
+      getAll: async () => [{n: 7}],
+      getOptional: async () => ({properties_migration: flipped ? 'children' : 'cell'}),
+    },
     runWorkspaceBackfillNow,
   } as unknown as Repo
   return {repo, runWorkspaceBackfillNow}
@@ -38,6 +45,7 @@ const invoke = (repo: Repo) =>
 
 afterEach(() => {
   openDialog.mockReset()
+  showInfo.mockReset()
   progressHandle.update.mockReset()
   progressHandle.done.mockReset()
   progressHandle.fail.mockReset()
@@ -54,6 +62,21 @@ describe('migrate_properties_to_blocks action', () => {
 
     await invoke(repo)
 
+    expect(runWorkspaceBackfillNow).not.toHaveBeenCalled()
+  })
+
+  it('refuses a flipped workspace before the scan and the confirmation', async () => {
+    // Past the flip the pass can never run. Reaching the first batch
+    // transaction to find that out spends a full workspace scan and a
+    // user-length pause, and reports an internal error that says to try again.
+    openDialog.mockResolvedValue(true)
+    const {repo, runWorkspaceBackfillNow} = makeRepo(
+      {outcome: 'ran', undoHistoryCleared: false}, {flipped: true},
+    )
+
+    await invoke(repo)
+
+    expect(openDialog).not.toHaveBeenCalled()
     expect(runWorkspaceBackfillNow).not.toHaveBeenCalled()
   })
 

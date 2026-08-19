@@ -189,39 +189,6 @@ const refuseForeignOccupant = (
   throw new DeterministicIdCrossWorkspaceError(claimId, row!.workspaceId, workspaceId)
 }
 
-/** localStorage key for this browser profile's claimant identity. */
-const CLAIMANT_STORAGE_KEY = 'km:migration-claimant'
-
-/**
- * A claimant id that survives a reload.
- *
- * It is not diagnostic: `decideClaim` returns `proceed` only when a live claim
- * names US. With a fresh id per session, a tab that closed or crashed mid-pass
- * left a claim nobody could ever match again — the migration was wedged for
- * the whole graph until someone deleted the claim block by hand, which is not
- * an instruction a user can follow. Persisted per browser profile, the same
- * device just picks its own claim back up and carries on.
- *
- * Falls back to a per-session id when storage is unavailable (private mode, a
- * blocked origin). That is the old behaviour and it degrades the same way:
- * recovery needs the claim deleted. It does not degrade CORRECTNESS — two
- * devices still cannot both hold a claim.
- */
-export const resolveClaimantId = (
-  storage: Pick<Storage, 'getItem' | 'setItem'> | undefined,
-  newId: () => string,
-): string => {
-  try {
-    const stored = storage?.getItem(CLAIMANT_STORAGE_KEY)
-    if (stored) return stored
-    const minted = newId()
-    storage?.setItem(CLAIMANT_STORAGE_KEY, minted)
-    return minted
-  } catch {
-    return newId()
-  }
-}
-
 export const createGraphBackfillClaim = (
   deps: GraphBackfillClaimDeps,
 ): BackfillCompletionClaim => ({
@@ -275,23 +242,19 @@ export const createGraphBackfillClaim = (
       const existing = await tx.get(claimId)
       refuseForeignOccupant(existing, workspaceId, claimId)
       if (existing && !existing.deleted) {
-        // Yield only to a row that actually decodes AS a claim. A live row
-        // whose bookkeeping is missing or malformed reads as UNCLAIMED to
-        // every reader, so returning on mere existence left the post-settle
-        // read unclaimed too — `tryClaim` returned false, and every later
-        // open took the identical path. The migration could never run again.
-        // The id is machinery-owned, so overwriting a non-claim there is
-        // repair, not data loss.
-        // A valid claim arrived between the read above and this transaction.
-        // It is authoritative — and the caller must be TOLD, or it runs a
-        // migration it just watched someone else take.
+        // Yield only to a row that DECODES as a claim, and tell the caller —
+        // a claim that arrived since the read above is authoritative, and a
+        // caller not told runs a migration it just watched someone else take.
+        // A live row whose bookkeeping is malformed reads as unclaimed to
+        // every reader, so yielding on mere existence wedged the migration
+        // shut for good; the id is machinery-owned, so overwriting a non-claim
+        // there is repair.
         //
-        // Except a COMPLETED one under `reclaimCompleted`: that names no
-        // running pass, only a finished one, and an operator asking again is
-        // asking on purpose. Overwriting it with a fresh claim is the point —
-        // leaving the completion stamp in place would make `markComplete`
-        // re-stamp a record of a run that is not this one. An in-flight claim
-        // still refuses here, which is the mutual exclusion this seam
+        // Except a COMPLETED claim under `reclaimCompleted`: it names a
+        // finished pass, and an operator asking again is asking on purpose.
+        // The overwrite is the point — leaving the completion stamp would make
+        // `markComplete` re-stamp a record of someone else's run. An in-flight
+        // claim still refuses, which is the mutual exclusion this seam
         // actually provides.
         const live = claimFromProperties(existing.properties)
         if (live !== null
@@ -390,6 +353,13 @@ export const createGraphBackfillClaim = (
       refuseForeignOccupant(row, workspaceId, claimId)
       if (!row || row.deleted) return
       if (decideClaim(claimFromProperties(row.properties), deps.claimantId) !== 'proceed') return
+      // ACCEPTED: when this claim came from an operator RECLAIM, deleting it
+      // also drops the graph's record that the pass ever completed, so the
+      // graph reads as never-migrated. Nothing consumes that record except
+      // `tryClaim`, and an operator run reclaims a completed claim anyway, so
+      // today the difference is unobservable. Preserving it needs a second
+      // key carried through the reclaim — worth it only once something reads
+      // "was this graph migrated" as durable state (km-bmka).
       await tx.delete(claimId)
     }, {scope: ChangeScope.BlockDefault, skipUndo: true,
         description: `release backfill claim ${backfillId}`})

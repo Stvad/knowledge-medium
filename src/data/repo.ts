@@ -469,7 +469,7 @@ interface ReferenceTargetStampContext {
 export interface OperatorBackfillResult {
   outcome:
     | 'ran'
-    | 'already-done-or-held'
+    | 'held-by-peer'
     | 'already-running'
     | 'deferred'
     | 'failed'
@@ -477,10 +477,10 @@ export interface OperatorBackfillResult {
     | 'read-only'
   undoHistoryCleared: boolean
   /** Why a `deferred` pass did not start, or why a `failed` one stopped. Both
-   *  are split out from `already-done-or-held` because they call for the
-   *  opposite response: retry — soon, or after fixing something — versus stop
-   *  asking. A pass that aborted partway is what most needs the distinction,
-   *  since some of its batches committed. */
+   *  are split out from `held-by-peer` because they call for the opposite
+   *  response: retry — soon, or after fixing something — versus stop asking. A
+   *  pass that aborted partway is what most needs the distinction, since some
+   *  of its batches committed. */
   reason?: string
 }
 
@@ -2857,21 +2857,18 @@ export class Repo {
       const {completed, undoHistoryCleared, deferred, failed} = await this.runWorkspaceBackfills(
         workspaceId, [backfill], this.workspaceGeneration,
       )
-    // The fix for the shared-counter bug is that `completed` is LOCAL to this
-    // invocation: a repo-wide counter could not say which call finished, so
-    // two overlapping operator calls — or an automatic workspace-open pass in
-    // the same window — let one report "ran" on the strength of another's
-    // success.
-    //
-    // Keying on this id as well is defence in depth, not load-bearing: the
-    // call above passes a single-element array, so the set can only contain
-    // this backfill. Deleting the key fails no test. It is written this way
-    // so that a future caller passing more than one is correct by
-    // construction rather than by that argument.
+      // `completed` is LOCAL to this invocation. Keying on this id as well is
+      // defence in depth, not load-bearing: the call above passes a
+      // single-element array, so the set can only contain this backfill, and
+      // deleting the key fails no test. Written this way so a future caller
+      // passing more than one is correct by construction.
       if (completed.has(backfill.id)) return {outcome: 'ran', undoHistoryCleared}
       if (failed !== null) return {outcome: 'failed', undoHistoryCleared, reason: failed}
       if (deferred !== null) return {outcome: 'deferred', undoHistoryCleared, reason: deferred}
-      return {outcome: 'already-done-or-held', undoHistoryCleared}
+      // Nothing else is left. An operator run RECLAIMS a completed claim, so
+      // "already migrated" cannot land here — only a claim another device is
+      // holding, which includes one it took and never released.
+      return {outcome: 'held-by-peer', undoHistoryCleared}
     } finally {
       this.inFlightOperatorBackfills.delete(flightKey)
     }
@@ -3029,20 +3026,14 @@ export class Repo {
         await this.assertBackfillMayWrite(workspaceId, backfill.id, generation)
         await backfill.run(ctx)
         await this.assertBackfillMayWrite(workspaceId, backfill.id, generation)
-        // Counted after the pass RETURNED and its post-conditions held.
-        // Incrementing on entry made `runWorkspaceBackfillNow` report "ran"
-        // for a pass that threw or was aborted by a precondition, telling an
-        // operator the migration is done when it is not and costing them the
-        // retry.
-        // Record the marker only after a clean run — a thrown backfill leaves
-        // it unset so the next open retries (backfills are written idempotent
-        // via a per-row recheck, so a retry is cheap).
+        // Only after a clean run — a thrown backfill leaves the claim unset so
+        // the next attempt retries (passes are idempotent per row).
         await claim.markComplete(workspaceId, backfill.id)
-        // Added only once completion is RECORDED. Adding it before
-        // `markComplete` meant a throw there — the catch releases the claim —
-        // still reported "ran", telling the operator the migration is durably
-        // done when its per-graph record was just removed and the next
-        // invocation will repeat it.
+        // And only once completion is RECORDED. Counted any earlier — on
+        // entry, or before `markComplete` whose throw the catch answers by
+        // RELEASING the claim — this reports "ran" for a migration whose
+        // per-graph record does not exist, so the operator is told it is
+        // durably done and the next invocation repeats it.
         completed.add(backfill.id)
       } catch (err) {
         const reason = err instanceof Error ? err.message : String(err)

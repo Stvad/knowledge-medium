@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { describe, expect, it } from 'vitest'
-import { claimFromProperties, createGraphBackfillClaim, decideClaim, resolveClaimantId, type GraphBackfillClaim } from './graphBackfillClaim'
+import { claimFromProperties, createGraphBackfillClaim, decideClaim, type GraphBackfillClaim } from './graphBackfillClaim'
 
 const ME = 'device-a'
 const THEM = 'device-b'
@@ -72,49 +72,21 @@ describe('a claim that arrives between the read and the transaction', () => {
   })
 })
 
-describe('the claimant identity', () => {
-  const fakeStorage = (initial: Record<string, string> = {}) => {
-    const store = {...initial}
-    return {
-      getItem: (k: string) => store[k] ?? null,
-      setItem: (k: string, v: string) => { store[k] = v },
-      store,
-    }
-  }
-
-  it('survives a reload, so the device that started a pass can resume it', () => {
-    // `decideClaim` proceeds only when a live claim names US. A per-session id
-    // meant a closed or crashed tab left a claim nobody could match again, and
-    // the migration was wedged for the whole graph until someone deleted the
-    // block by hand.
-    const storage = fakeStorage()
-    let n = 0
-    const first = resolveClaimantId(storage, () => `id-${++n}`)
-    const second = resolveClaimantId(storage, () => `id-${++n}`)
-
-    expect(second).toBe(first)
-  })
-
-  it('still yields an id when storage is unavailable', () => {
-    const blocked = {
-      getItem: () => { throw new Error('denied') },
-      setItem: () => { throw new Error('denied') },
-    }
-    expect(resolveClaimantId(blocked, () => 'fallback')).toBe('fallback')
-    expect(resolveClaimantId(undefined, () => 'fallback')).toBe('fallback')
-  })
-})
-
 describe('an operator reclaiming a completed pass', () => {
-  /** A claim row as the DB holds it, with whatever bookkeeping is passed. */
-  const claimWith = (properties: Record<string, unknown>) => {
+  /** A claim row as the DB holds it, with whatever bookkeeping is passed.
+   *  `inTx` differs from `properties` only for the interleaving where a peer
+   *  claims between the pre-read and the writing transaction. */
+  const claimWith = (
+    properties: Record<string, unknown>,
+    inTx: Record<string, unknown> = properties,
+  ) => {
     const updates: Record<string, unknown>[] = []
     const claim = createGraphBackfillClaim({
       db: {getOptional: async () => ({
         id: 'c', workspace_id: 'ws', deleted: 0, properties_json: JSON.stringify(properties),
       })},
       tx: async <R,>(fn: (tx: never) => Promise<R>): Promise<R> => fn({
-        get: async () => ({workspaceId: 'ws', deleted: false, properties}),
+        get: async () => ({workspaceId: 'ws', deleted: false, properties: inTx}),
         create: async () => 'unused',
         update: async (_id: string, patch: {properties?: Record<string, unknown>}) => {
           if (patch.properties) updates.push(patch.properties)
@@ -154,6 +126,19 @@ describe('an operator reclaiming a completed pass', () => {
     // the flag overrides: a pass in flight elsewhere must not gain a second
     // writer.
     const {claim, updates} = claimWith(running)
+
+    expect(await claim.tryClaim('ws', 'pass-v1', {reclaimCompleted: true})).toBe(false)
+    expect(updates).toEqual([])
+  })
+
+  it('refuses a peer claim that landed between the pre-read and the transaction', async () => {
+    // The one path where the flag reaches the in-tx guard AND must not win:
+    // the pre-read saw a completed pass, so the reclaim proceeds — but by the
+    // time the tx holds the row a peer has started a run. Overwriting there
+    // would give a live pass a second writer, which is the mutual exclusion
+    // this seam actually provides. The refusal above cannot reach this: its
+    // pre-read already sees the running claim and backs off outside the tx.
+    const {claim, updates} = claimWith(completed, running)
 
     expect(await claim.tryClaim('ws', 'pass-v1', {reclaimCompleted: true})).toBe(false)
     expect(updates).toEqual([])

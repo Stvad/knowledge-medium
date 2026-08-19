@@ -25,7 +25,7 @@ export interface ConfirmMigrationDialogProps {
  *
  *  "On this device" in the interruption line is precise, not filler. Resuming
  *  works because the claimant id is persisted per browser profile
- *  (`resolveClaimantId`), so an interrupted pass is one this device can pick
+ *  (`getClientId`), so an interrupted pass is one this device can pick
  *  back up; another device sees a claim it does not own and correctly declines
  *  rather than running a second writer. */
 export const ConfirmMigrationDialog = ({
