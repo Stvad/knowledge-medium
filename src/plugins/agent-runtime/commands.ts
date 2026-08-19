@@ -65,6 +65,10 @@ import {
   pingRuntime,
 } from './describeRuntime.ts'
 import type {KnownAgentCommand} from '@knowledge-medium/agent-cli/protocol'
+import {
+  PROPERTY_CELL_BACKFILL_ID,
+  takeLastPropertyCellBackfillRun,
+} from '@/data/internals/propertyCellBackfill'
 import type {
   AgentRuntimeBridgeOptions,
   AgentRuntimeContext,
@@ -81,6 +85,7 @@ import type {
   MoveBlockInput,
   MoveBlockPosition,
   RestoreBlockInput,
+  RunBackfillResult,
   SetExtensionEnabledInput,
   SetExtensionEnabledResult,
   SqlMode,
@@ -418,6 +423,67 @@ const auditRuntimeProperties = async (
     repo,
     assertedWorkspaceOverride(input.workspaceId) ?? resolveWorkspaceId(repo),
   )
+}
+
+/** Run one `operator`-triggered workspace backfill — the properties
+ *  cell → children migration and anything later on that seam.
+ *
+ *  This is the whole operator surface for a pass that is deliberately NOT
+ *  scheduled: exactly-once across a fleet is not reachable over a
+ *  last-write-wins sync layer, so it is reached by a person running it in one
+ *  place while the others receive the rows. The outcome is returned rather
+ *  than logged so the caller can tell whether it ran, was already done, or
+ *  refused — and whether it dropped the workspace's undo history. */
+const runRuntimeBackfill = async (
+  repo: Repo,
+  input: {backfillId: string; workspaceId?: string},
+): Promise<RunBackfillResult> => {
+  // Same rule as `audit-properties`: `--workspace "$UNSET"` must fail rather
+  // than fall back to the active workspace. It matters more here — this one
+  // WRITES, and a migration run against a graph the operator did not name is
+  // not something a retry undoes.
+  if (input.workspaceId !== undefined && input.workspaceId.trim() === '') {
+    throw new Error(
+      'run-backfill: --workspace was given an empty value. It asserts which workspace ' +
+      'the pass writes to, so an empty expansion must fail rather than fall back to ' +
+      'the active one. Pass a real workspace id, or omit the option entirely.',
+    )
+  }
+  const workspaceId = input.workspaceId?.trim() || resolveWorkspaceId(repo)
+  // Refused HERE, before the runner. A backfill for a non-active workspace
+  // aborts on its own per-transaction check — but only AFTER `tryClaim` has
+  // already written: it ensures a Migrations page and creates a claim row, so
+  // a mistyped assertion leaves two blocks in a graph the operator never meant
+  // to touch and reports nothing more alarming than "already done".
+  if (workspaceId !== repo.activeWorkspaceId) {
+    throw new Error(
+      `run-backfill: --workspace ${workspaceId} is not the active workspace ` +
+      `(${repo.activeWorkspaceId ?? 'none'}). The pass writes to the workspace this ` +
+      'client has open, so the option is an assertion, not a target — open that ' +
+      'workspace and re-run.',
+    )
+  }
+  const result = await repo.runWorkspaceBackfillNow(workspaceId, input.backfillId)
+  // Only an outcome where the pass was actually ENTERED can wear its run
+  // detail — 'ran', or 'failed' (a throw partway still ran, and its partial
+  // counts are the most useful thing to hand the operator). Every other
+  // outcome never called the pass, so a `lastRun` left over from an earlier
+  // invocation must not decorate this response. Allow-listing the outcomes
+  // that ran (rather than deny-listing the ones that didn't) fails closed if
+  // the outcome union gains or renames a member.
+  const passWasEntered = result.outcome === 'ran' || result.outcome === 'failed'
+  return {
+    backfillId: input.backfillId,
+    workspaceId,
+    ...result,
+    // The seam hands back nothing (an unattended pass has no one to tell), so
+    // the detail an operator acts on is collected from the pass itself — only
+    // when THIS request is the one that ran it, or a `not-found` for some other
+    // id would come back wearing the last migration's counts.
+    ...(passWasEntered && input.backfillId === PROPERTY_CELL_BACKFILL_ID
+      ? takeLastPropertyCellBackfillRun(workspaceId) ?? {}
+      : {}),
+  }
 }
 
 const mapPosition = (
@@ -1586,6 +1652,7 @@ export const createAgentRuntimeContext = ({
     uninstallExtension: input => uninstallRuntimeExtension(repo, input),
     auditExtension: input => auditRuntimeExtension(repo, input),
     auditProperties: input => auditRuntimeProperties(repo, input),
+    runBackfill: input => runRuntimeBackfill(repo, input),
     actions: readRuntimeActions(runtime),
     renderers: runtime.read(blockRenderersFacet),
     refreshAppRuntime,
@@ -1773,6 +1840,14 @@ export const executeCommand = async (
 
     case 'audit-properties':
       return context.auditProperties({
+        workspaceId: command.workspaceId === undefined
+          ? undefined
+          : requireString(command.workspaceId, 'workspaceId'),
+      })
+
+    case 'run-backfill':
+      return context.runBackfill({
+        backfillId: requireString(command.backfillId, 'backfillId'),
         workspaceId: command.workspaceId === undefined
           ? undefined
           : requireString(command.workspaceId, 'workspaceId'),

@@ -72,6 +72,85 @@ describe('a claim that arrives between the read and the transaction', () => {
   })
 })
 
+describe('an operator reclaiming a completed pass', () => {
+  /** A claim row as the DB holds it, with whatever bookkeeping is passed.
+   *  `inTx` differs from `properties` only for the interleaving where a peer
+   *  claims between the pre-read and the writing transaction. */
+  const claimWith = (
+    properties: Record<string, unknown>,
+    inTx: Record<string, unknown> = properties,
+  ) => {
+    const updates: Record<string, unknown>[] = []
+    const claim = createGraphBackfillClaim({
+      db: {getOptional: async () => ({
+        id: 'c', workspace_id: 'ws', deleted: 0, properties_json: JSON.stringify(properties),
+      })},
+      tx: async <R,>(fn: (tx: never) => Promise<R>): Promise<R> => fn({
+        get: async () => ({workspaceId: 'ws', deleted: false, properties: inTx}),
+        create: async () => 'unused',
+        update: async (_id: string, patch: {properties?: Record<string, unknown>}) => {
+          if (patch.properties) updates.push(patch.properties)
+        },
+        delete: async () => undefined,
+        restore: async () => undefined,
+      } as never),
+      claimantId: 'device-a',
+      ensureHome: async () => undefined,
+    } as unknown as Parameters<typeof createGraphBackfillClaim>[0])
+    return {claim, updates}
+  }
+
+  const completed = {
+    'migration:claimant': 'device-b',
+    'migration:claimed-at': 1000,
+    'migration:completed-at': 2000,
+  }
+  const running = {'migration:claimant': 'device-b', 'migration:claimed-at': 1000}
+
+  it('replaces the completion stamp with a fresh claim', async () => {
+    // Without the overwrite the reclaim is a NO-OP that still reports success
+    // to nobody: the completed row decodes as a valid claim, so the in-tx
+    // guard returns false and the operator is told "already done" — the exact
+    // outcome `reclaimCompleted` exists to prevent. Asserted against the real
+    // claim rather than the test-repo stub, which cannot model this.
+    const {claim, updates} = claimWith(completed)
+
+    expect(await claim.tryClaim('ws', 'pass-v1', {reclaimCompleted: true})).toBe(true)
+    expect(updates).toHaveLength(1)
+    expect(updates[0]!['migration:claimant']).toBe('device-a')
+    expect(updates[0]!['migration:completed-at']).toBeUndefined()
+  })
+
+  it('still refuses a claim someone is holding right now', async () => {
+    // Mutual exclusion is the claim's real safety property and is NOT what
+    // the flag overrides: a pass in flight elsewhere must not gain a second
+    // writer.
+    const {claim, updates} = claimWith(running)
+
+    expect(await claim.tryClaim('ws', 'pass-v1', {reclaimCompleted: true})).toBe(false)
+    expect(updates).toEqual([])
+  })
+
+  it('refuses a peer claim that landed between the pre-read and the transaction', async () => {
+    // The one path where the flag reaches the in-tx guard AND must not win:
+    // the pre-read saw a completed pass, so the reclaim proceeds — but by the
+    // time the tx holds the row a peer has started a run. Overwriting there
+    // would give a live pass a second writer, which is the mutual exclusion
+    // this seam actually provides. The refusal above cannot reach this: its
+    // pre-read already sees the running claim and backs off outside the tx.
+    const {claim, updates} = claimWith(completed, running)
+
+    expect(await claim.tryClaim('ws', 'pass-v1', {reclaimCompleted: true})).toBe(false)
+    expect(updates).toEqual([])
+  })
+
+  it('leaves a completed pass alone when nobody asked to re-run it', async () => {
+    const {claim} = claimWith(completed)
+
+    expect(await claim.tryClaim('ws', 'pass-v1')).toBe(false)
+  })
+})
+
 describe('a foreign block sitting at the claim id', () => {
   const foreignRow = {id: 'x', workspaceId: 'other-ws', deleted: false, properties: {}}
 

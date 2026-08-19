@@ -417,21 +417,17 @@ describe('workspace backfill runner — sync gating', () => {
 
 describe('workspace backfill runner — undo', () => {
   it('keeps its writes off the user’s undo stack', async () => {
-    // The pass fires ~10-30s after workspace open, i.e. while the user is
-    // already editing. As its own entry it would be TOP of the stack, so their
-    // next cmd-Z reverts the backfill instead of their own edit — and the
-    // marker is recorded, so it never comes back.
+    // The pass fires while the user is already editing. As its own entry it
+    // would be TOP of the stack, so their next cmd-Z reverts the backfill
+    // instead of their own edit — and the marker is recorded, so it never
+    // comes back. `skipUndo` is what keeps it off; this asserts nothing the
+    // pass wrote is reachable by undo afterwards.
     const runs: string[] = []
     const repo = makeRepo(probeBackfill(runs))
     await seedTarget(repo)
-    // The user edits a DIFFERENT block, so their entry doesn't overlap the
-    // backfill's row — the ordinary case, and the one this fix is for.
     await repo.tx(async tx => {
       await tx.create({id: 'elsewhere', workspaceId: WS, parentId: null, orderKey: 'a1', content: 'before'})
     }, {scope: ChangeScope.BlockDefault, description: 'seed elsewhere'})
-    await repo.tx(async tx => {
-      await tx.update('elsewhere', {content: 'user edit'})
-    }, {scope: ChangeScope.BlockDefault, description: 'user edit'})
 
     await drain(repo)
     expect(runs).toEqual([WS])
@@ -439,21 +435,17 @@ describe('workspace backfill runner — undo', () => {
 
     await repo.undo(ChangeScope.BlockDefault)
 
-    // cmd-Z landed on the user's edit, and the backfill's write survived.
-    expect((await repo.load('elsewhere'))?.content).toBe('before')
     expect((await repo.load('target'))?.properties['probe:mark']).toBe('backfilled')
   })
 
-  it('is still reverted by an undo entry that already covers the same row', async () => {
-    // KNOWN LIMITATION, recorded rather than hidden. Undo replay restores an
-    // entry's whole `before` row snapshot, not a field delta — so when the user
-    // edited the very row a later backfill touches, their cmd-Z takes the
-    // backfill's write with it, and the completion marker makes that permanent.
-    // `skipUndo` cannot fix this: the damage comes from the USER's entry, which
-    // must stay undoable. Pre-existing — before `skipUndo` the same cmd-Z
-    // reverted the backfill directly, as its own top-of-stack entry. Closing it
-    // means rebasing or invalidating overlapping history, which is undo-internals
-    // surgery and a separate decision.
+  it('clears the undo history it would otherwise be reverted by', async () => {
+    // Undo replay restores an entry's whole `before` row snapshot, not a field
+    // delta — so an entry recorded BEFORE the pass, for a row the pass then
+    // rewrote, takes the migration's write with it when the user hits cmd-Z
+    // for their own edit, permanently (completion is already recorded).
+    // `skipUndo` cannot reach that entry: the damage comes from the USER's,
+    // which is legitimately undoable. So the pass drops the stack instead —
+    // the entries at risk are exactly the ones unsafe to replay.
     const repo = makeRepo(probeBackfill([]))
     await seedTarget(repo)
     await repo.tx(async tx => {
@@ -465,8 +457,56 @@ describe('workspace backfill runner — undo', () => {
 
     await repo.undo(ChangeScope.BlockDefault)
 
+    // Nothing to undo: the user's edit stands and the migration survives.
+    expect((await repo.load('target'))?.content).toBe('user edit')
+    expect((await repo.load('target'))?.properties['probe:mark']).toBe('backfilled')
+  })
+
+  it('clears the stack with the FIRST batch, not when the whole pass returns', async () => {
+    // A chunked pass runs for minutes. Clearing at the end leaves every one of
+    // those minutes as a window in which cmd-Z replays a pre-pass row snapshot
+    // over a batch that has already committed — and the pass then records
+    // completion over the reverted rows.
+    let depthAfterFirstBatch = -1
+    const repo = makeRepo({
+      id: 'probe-backfill-v1',
+      trigger: 'workspace-open' as const,
+      run: async ({tx}) => {
+        await tx(async t => { await t.update('target', {content: 'batch one'}) },
+          {description: 'batch one'})
+        depthAfterFirstBatch = repo.undoManager.depths(ChangeScope.BlockDefault).undo
+        await tx(async t => { await t.update('target', {content: 'batch two'}) },
+          {description: 'batch two'})
+      },
+    })
+    await seedTarget(repo)
+    await repo.tx(async tx => {
+      await tx.update('target', {content: 'user edit'})
+    }, {scope: ChangeScope.BlockDefault, description: 'user edit'})
+    expect(repo.undoManager.depths(ChangeScope.BlockDefault).undo).toBeGreaterThan(0)
+
+    await drain(repo)
+
+    expect(depthAfterFirstBatch).toBe(0)
+  })
+
+  it('leaves undo history alone when the pass writes nothing', async () => {
+    // Clearing is a real cost to the user, so it is owed only when the pass
+    // actually committed something that history could be replayed over.
+    const repo = makeRepo({
+      id: 'probe-backfill-v1',
+      trigger: 'workspace-open' as const,
+      run: async () => {},
+    })
+    await seedTarget(repo)
+    await repo.tx(async tx => {
+      await tx.update('target', {content: 'user edit'})
+    }, {scope: ChangeScope.BlockDefault, description: 'user edit'})
+
+    await drain(repo)
+    await repo.undo(ChangeScope.BlockDefault)
+
     expect((await repo.load('target'))?.content).toBe('original')
-    expect((await repo.load('target'))?.properties['probe:mark']).toBeUndefined()
   })
 
   it('still uploads — suppressing undo must not make it a local-only write', async () => {
@@ -510,7 +550,7 @@ describe('workspace backfill runner — operator trigger', () => {
     const repo = makeRepo(operatorBackfill(runs))
     await seedTarget(repo)
 
-    expect(await repo.runWorkspaceBackfillNow(WS, 'operator-probe-v1')).toBe('ran')
+    expect((await repo.runWorkspaceBackfillNow(WS, 'operator-probe-v1')).outcome).toBe('ran')
     expect(runs).toEqual([WS])
   })
 
@@ -521,8 +561,8 @@ describe('workspace backfill runner — operator trigger', () => {
 
     // `probe-backfill-v1` is `workspace-open`; asking for it by name must not
     // hand the operator an automatic pass through the manual door.
-    expect(await repo.runWorkspaceBackfillNow(WS, 'probe-backfill-v1')).toBe('not-found')
-    expect(await repo.runWorkspaceBackfillNow(WS, 'no-such-pass')).toBe('not-found')
+    expect((await repo.runWorkspaceBackfillNow(WS, 'probe-backfill-v1')).outcome).toBe('not-found')
+    expect((await repo.runWorkspaceBackfillNow(WS, 'no-such-pass')).outcome).toBe('not-found')
     expect(runs).toEqual([])
   })
 })
@@ -555,7 +595,14 @@ describe('workspace backfill runner — operator outcomes', () => {
     }])
     await seedTarget(repo)
 
-    expect(await repo.runWorkspaceBackfillNow(WS, 'operator-sync-v1')).toBe('already-done-or-held')
+    // `deferred`, not `held-by-peer`: the two call for opposite
+    // responses, and an operator told "already done" here would stop retrying
+    // a migration that has not started.
+    expect(await repo.runWorkspaceBackfillNow(WS, 'operator-sync-v1')).toEqual({
+      outcome: 'deferred',
+      undoHistoryCleared: false,
+      reason: 'this device is not caught up with the server',
+    })
     expect(claimAttempts).toEqual([])
     expect(runs).toEqual([])
   })
@@ -581,7 +628,12 @@ describe('workspace backfill runner — operator outcomes', () => {
     await seedTarget(repo)
     vi.spyOn(console, 'error').mockImplementation(() => {})
 
-    expect(await repo.runWorkspaceBackfillNow(WS, 'operator-throws-v1')).toBe('already-done-or-held')
+    // `failed`, not `held-by-peer`: a pass that threw may have
+    // committed some batches, and the operator is the only one who can decide
+    // to re-run. Told "already done", they never learn it is incomplete.
+    const result = await repo.runWorkspaceBackfillNow(WS, 'operator-throws-v1')
+    expect(result.outcome).toBe('failed')
+    expect(result.reason).toMatch(/pass exploded/i)
   })
 })
 
@@ -618,10 +670,10 @@ describe('workspace backfill runner — concurrent operator invocations', () => 
     await vi.waitFor(() => { expect(started).toHaveLength(1) })
 
     // Second invocation while the first is still inside `run`.
-    expect(await repo.runWorkspaceBackfillNow(WS, 'operator-slow-v1')).toBe('already-running')
+    expect((await repo.runWorkspaceBackfillNow(WS, 'operator-slow-v1')).outcome).toBe('already-running')
     expect(started).toHaveLength(1)
 
     release()
-    expect(await first).toBe('ran')
+    expect((await first).outcome).toBe('ran')
   })
 })

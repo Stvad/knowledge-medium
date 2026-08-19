@@ -109,8 +109,19 @@ const isLocalSchemaContribution = (value: unknown): value is LocalSchemaContribu
  *      usually yes; the cost is the stale-bag exposure, not corruption. */
 export interface BackfillCompletionClaim {
   /** Claim the right to run this pass for this workspace. `false` means
-   *  someone else has it or it is already complete — skip, don't run. */
-  tryClaim(workspaceId: string, backfillId: string): Promise<boolean>
+   *  someone else has it or it is already complete — skip, don't run.
+   *
+   *  `reclaimCompleted` overrides only the second of those, and only the
+   *  `operator` trigger passes it: a human asking for a pass that has already
+   *  been recorded as done is asking on purpose, usually because something was
+   *  missed or repaired since. Passes on this seam are idempotent per row, so
+   *  the redundant run is a scan. Mutual exclusion is NOT overridable — a
+   *  claim someone else holds still refuses. */
+  tryClaim(
+    workspaceId: string,
+    backfillId: string,
+    opts?: {reclaimCompleted?: boolean},
+  ): Promise<boolean>
   /** The claimed run finished. Record completion where every device sees it. */
   markComplete(workspaceId: string, backfillId: string): Promise<void>
   /** The claimed run aborted without finishing (a transient precondition, a
@@ -177,6 +188,12 @@ export interface WorkspaceBackfillContext {
    *  deliberately leaves in the cell (`pnpm agent audit-properties` reports
    *  the set). */
   resolveNameSchema: (name: string) => ResolvedPropertySchema<unknown> | undefined
+  /** Resolve a property FIELD id — the other direction, for a pass that has to
+   *  reason about existing field rows rather than only about cell keys. The
+   *  cell → children pass needs it to notice a key that was DELETED: the
+   *  materializer removes a key's children when it is asked about a name the
+   *  bag no longer has, and nothing else can name it. */
+  resolveFieldSchema: (fieldId: string) => ResolvedPropertySchema<unknown> | undefined
 }
 
 const isWorkspaceBackfill = (value: unknown): value is WorkspaceBackfill =>

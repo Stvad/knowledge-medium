@@ -178,6 +178,24 @@ export const CREATE_BLOCKS_WORKSPACE_ACTIVE_INDEX_SQL = `
   WHERE deleted = 0
 `
 
+/** Serves the properties cell → children backfill's candidate scan, which
+ *  walks every property-carrying block of a workspace in id order.
+ *
+ *  `idx_blocks_workspace_active` cannot: the app ANALYZEs with
+ *  `analysis_limit=400`, which records ~401 rows per `workspace_id`, so the
+ *  planner picks it, reads the whole workspace and sorts into a temp B-tree —
+ *  once per batch. Measured on a 1M-row workspace: 92s of scanning per sweep
+ *  against 0.06s with this index.
+ *
+ *  A query only gets it by carrying the literal `properties_json <> '{}'`
+ *  term: SQLite cannot prove `json_type(...) = 'object' AND EXISTS(json_each
+ *  (...))` implies non-empty, so the predicate has to say so itself. */
+export const CREATE_BLOCKS_WORKSPACE_NONEMPTY_PROPERTIES_INDEX_SQL = `
+  CREATE INDEX IF NOT EXISTS idx_blocks_workspace_nonempty_properties
+  ON blocks (workspace_id, id)
+  WHERE deleted = 0 AND properties_json <> '{}'
+`
+
 /** Partial index over the local derived column: field-row recognition and
  *  "rows referencing target X" scans (rename retitle, projection walks) hit
  *  `(workspace_id, reference_target_id, parent_id)`; the `IS NOT NULL`

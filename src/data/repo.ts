@@ -462,6 +462,28 @@ interface ReferenceTargetStampContext {
   readonly resolver: PropertySchemaResolver
 }
 
+/** What an operator-triggered backfill did, for a caller that has a human to
+ *  report to. `undoHistoryCleared` is not incidental detail: the pass drops
+ *  the workspace's undo stack whenever it writes, and a user who is not told
+ *  finds their history silently gone. */
+export interface OperatorBackfillResult {
+  outcome:
+    | 'ran'
+    | 'held-by-peer'
+    | 'already-running'
+    | 'deferred'
+    | 'failed'
+    | 'not-found'
+    | 'read-only'
+  undoHistoryCleared: boolean
+  /** Why a `deferred` pass did not start, or why a `failed` one stopped. Both
+   *  are split out from `held-by-peer` because they call for the opposite
+   *  response: retry — soon, or after fixing something — versus stop asking. A
+   *  pass that aborted partway is what most needs the distinction, since some
+   *  of its batches committed. */
+  reason?: string
+}
+
 export class Repo {
   readonly db: PowerSyncDb
   readonly cache: BlockCache
@@ -2844,12 +2866,12 @@ export class Repo {
   async runWorkspaceBackfillNow(
     workspaceId: string,
     backfillId: string,
-  ): Promise<'ran' | 'already-done-or-held' | 'already-running' | 'not-found' | 'read-only'> {
-    if (this.isReadOnly) return 'read-only'
+  ): Promise<OperatorBackfillResult> {
+    if (this.isReadOnly) return {outcome: 'read-only', undoHistoryCleared: false}
     const backfill = this._workspaceBackfills.find(
       b => b.id === backfillId && b.trigger === 'operator',
     )
-    if (!backfill) return 'not-found'
+    if (!backfill) return {outcome: 'not-found', undoHistoryCleared: false}
     // Single-flight per (workspace, backfill). Two invocations in ONE Repo —
     // an operator double-clicking, or clicking again during a long pass —
     // share a claimant, so the second would read the first's claim as its own
@@ -2859,38 +2881,54 @@ export class Repo {
     // operator repeats the whole migration. The claim cannot see this, since
     // both invocations are legitimately the same claimant.
     const flightKey = `${workspaceId}:${backfillId}`
-    if (this.inFlightOperatorBackfills.has(flightKey)) return 'already-running'
+    if (this.inFlightOperatorBackfills.has(flightKey)) {
+      return {outcome: 'already-running', undoHistoryCleared: false}
+    }
     this.inFlightOperatorBackfills.add(flightKey)
     try {
-      const completed = await this.runWorkspaceBackfills(
+      const {completed, undoHistoryCleared, deferred, failed} = await this.runWorkspaceBackfills(
         workspaceId, [backfill], this.workspaceGeneration,
       )
-    // The fix for the shared-counter bug is that `completed` is LOCAL to this
-    // invocation: a repo-wide counter could not say which call finished, so
-    // two overlapping operator calls — or an automatic workspace-open pass in
-    // the same window — let one report "ran" on the strength of another's
-    // success.
-    //
-    // Keying on this id as well is defence in depth, not load-bearing: the
-    // call above passes a single-element array, so the set can only contain
-    // this backfill. Deleting the key fails no test. It is written this way
-    // so that a future caller passing more than one is correct by
-    // construction rather than by that argument.
-      return completed.has(backfill.id) ? 'ran' : 'already-done-or-held'
+      // `completed` is LOCAL to this invocation. Keying on this id as well is
+      // defence in depth, not load-bearing: the call above passes a
+      // single-element array, so the set can only contain this backfill, and
+      // deleting the key fails no test. Written this way so a future caller
+      // passing more than one is correct by construction.
+      if (completed.has(backfill.id)) return {outcome: 'ran', undoHistoryCleared}
+      if (failed !== null) return {outcome: 'failed', undoHistoryCleared, reason: failed}
+      if (deferred !== null) return {outcome: 'deferred', undoHistoryCleared, reason: deferred}
+      // Nothing else is left. An operator run RECLAIMS a completed claim, so
+      // "already migrated" cannot land here — only a claim another device is
+      // holding, which includes one it took and never released.
+      return {outcome: 'held-by-peer', undoHistoryCleared}
     } finally {
       this.inFlightOperatorBackfills.delete(flightKey)
     }
   }
 
-  /** Returns the ids that RAN TO COMPLETION — not merely those attempted, so
-   *  a caller can report an outcome tied to its own request rather than to
-   *  whatever else happened to finish. */
+  /** `completed` is the ids that RAN TO COMPLETION — not merely those
+   *  attempted, so a caller can report an outcome tied to its own request
+   *  rather than to whatever else happened to finish. */
   private async runWorkspaceBackfills(
     workspaceId: string,
     backfills: readonly WorkspaceBackfill[],
     generation: number,
-  ): Promise<ReadonlySet<string>> {
+  ): Promise<{
+    completed: ReadonlySet<string>
+    undoHistoryCleared: boolean
+    deferred: string | null
+    failed: string | null
+  }> {
     const completed = new Set<string>()
+    let undoHistoryCleared = false
+    // Set at each precondition that makes a pass skip WITHOUT the claim having
+    // refused it, so an operator hears "not yet, retry" rather than "already
+    // done" — the same string an unattended run only logs.
+    let deferred: string | null = null
+    /** Why a pass THREW. Distinct from `deferred`: waiting will not clear it,
+     *  so an operator told "already done" would never learn the migration is
+     *  incomplete — with some of its batches already committed. */
+    let failed: string | null = null
     const claim = this.backfillCompletionClaim
     if (!claim) {
       // Refuse rather than fall back to the local marker. Every pass here
@@ -2902,16 +2940,20 @@ export class Repo {
         `${workspaceId}: no BackfillCompletionClaim is configured, so completion ` +
         `cannot be recorded once per graph.`,
       )
-      return completed
+      // Reported as a FAILURE, not left to the fallthrough — which now means
+      // "a peer holds the claim" and tells the operator to go delete a claim
+      // block that in this configuration does not exist.
+      failed = 'no BackfillCompletionClaim is configured, so completion cannot be recorded'
+      return {completed, undoHistoryCleared, deferred, failed}
     }
     for (const backfill of backfills) {
       // A role flip to read-only during the deferral window must stop further
       // writes — re-check per backfill (the loop can span several txs).
-      if (this.isReadOnly) return completed
+      if (this.isReadOnly) return {completed, undoHistoryCleared, deferred, failed}
       // Don't even START a pass whose workspace has been re-opened since it was
       // scheduled. `assertBackfillMayWrite` catches this per transaction, but
       // that is one tx too late to avoid the scan a backfill does first.
-      if (this.workspaceGeneration !== generation) return completed
+      if (this.workspaceGeneration !== generation) return {completed, undoHistoryCleared, deferred, failed}
       // BEFORE claiming: an unprimed registry makes the whole graph look like
       // it has zero registered properties, so a pass would find no candidates,
       // write nothing, and then record a PERMANENT per-graph completion — the
@@ -2919,6 +2961,7 @@ export class Repo {
       // forever. Checked here rather than only inside the writes because a run
       // that finds no candidates never opens a transaction at all.
       if (!this.propertyRegistryReadyFor(workspaceId)) {
+        deferred = `workspace ${workspaceId}'s property registry is not primed yet`
         console.warn(
           `[workspaceBackfills] "${backfill.id}" deferred: workspace ${workspaceId}'s ` +
           `property registry is not primed, so a scan would see no registered ` +
@@ -2934,14 +2977,18 @@ export class Repo {
       // an unseen server completion while the following `deleted=1` patch
       // tombstoned it, freeing later operators to repeat the migration.
       if (!this.backfillSyncSettledNow()) {
+        deferred = 'this device is not caught up with the server'
         console.warn(
           `[workspaceBackfills] "${backfill.id}" deferred: this device is not caught ` +
           `up with the server, so claiming would write from a stale view.`,
         )
         continue
       }
-      if (!(await claim.tryClaim(workspaceId, backfill.id))) continue
+      if (!(await claim.tryClaim(workspaceId, backfill.id, {
+        reclaimCompleted: backfill.trigger === 'operator',
+      }))) continue
       const resolver = this.propertySchemaResolverFor(workspaceId)
+      let wrote = false
       const ctx: WorkspaceBackfillContext = {
         workspaceId,
         // One resolver for the whole run, through the canonical factory: the
@@ -2950,6 +2997,10 @@ export class Repo {
         // previous-registry fallback every other site gets.
         resolveNameSchema: (name) => {
           const resolution = resolver.resolve(name)
+          return resolution.status === 'resolved' ? resolution.schema : undefined
+        },
+        resolveFieldSchema: (fieldId) => {
+          const resolution = resolver.resolveField(fieldId)
           return resolution.status === 'resolved' ? resolution.schema : undefined
         },
         getAll: <T>(sql: string, params?: readonly unknown[]) =>
@@ -2970,7 +3021,7 @@ export class Repo {
           // definition readiness and the write lock, so a check before it can
           // go stale before `fn` reads a row. Throwing here aborts the tx and
           // the run with no marker recorded, so the next open retries.
-          return this.tx(async t => {
+          const result = await this.tx(async t => {
             await this.assertBackfillMayWrite(workspaceId, backfill.id, generation)
             return fn(t)
           }, {
@@ -2978,6 +3029,28 @@ export class Repo {
             description: opts.description,
             skipUndo: true,
           })
+          // Only once a batch COMMITTED. An aborted one rolled its writes
+          // back, so it leaves nothing on the undo stack to be reverted onto.
+          // Still an over-approximation in one direction — a committed batch
+          // that happened to write nothing counts — which errs toward
+          // clearing, the safe side.
+          //
+          // Cleared HERE rather than after the pass returns: a chunked pass
+          // runs for minutes, and every one of them is a minute in which a
+          // cmd-Z can replay a pre-pass row snapshot over a batch that has
+          // already committed. The window has to close with the FIRST batch,
+          // not with the last.
+          if (!wrote) {
+            wrote = true
+            this.undoManagerFor(workspaceId).clear()
+            undoHistoryCleared = true
+            console.warn(
+              `[workspaceBackfills] "${backfill.id}" is writing to workspace ` +
+              `${workspaceId}, so its undo history was cleared — replaying an entry ` +
+              `from before the pass would revert it.`,
+            )
+          }
+          return result
         },
       }
       try {
@@ -2989,20 +3062,14 @@ export class Repo {
         await this.assertBackfillMayWrite(workspaceId, backfill.id, generation)
         await backfill.run(ctx)
         await this.assertBackfillMayWrite(workspaceId, backfill.id, generation)
-        // Counted after the pass RETURNED and its post-conditions held.
-        // Incrementing on entry made `runWorkspaceBackfillNow` report "ran"
-        // for a pass that threw or was aborted by a precondition, telling an
-        // operator the migration is done when it is not and costing them the
-        // retry.
-        // Record the marker only after a clean run — a thrown backfill leaves
-        // it unset so the next open retries (backfills are written idempotent
-        // via a per-row recheck, so a retry is cheap).
+        // Only after a clean run — a thrown backfill leaves the claim unset so
+        // the next attempt retries (passes are idempotent per row).
         await claim.markComplete(workspaceId, backfill.id)
-        // Added only once completion is RECORDED. Adding it before
-        // `markComplete` meant a throw there — the catch releases the claim —
-        // still reported "ran", telling the operator the migration is durably
-        // done when its per-graph record was just removed and the next
-        // invocation will repeat it.
+        // And only once completion is RECORDED. Counted any earlier — on
+        // entry, or before `markComplete` whose throw the catch answers by
+        // RELEASING the claim — this reports "ran" for a migration whose
+        // per-graph record does not exist, so the operator is told it is
+        // durably done and the next invocation repeats it.
         completed.add(backfill.id)
       } catch (err) {
         const reason = err instanceof Error ? err.message : String(err)
@@ -3010,20 +3077,26 @@ export class Repo {
         // blocked for the whole graph by one device's bad moment.
         await claim.releaseClaim(workspaceId, backfill.id).catch(() => {})
         if ((err as {kind?: string} | null)?.kind === Repo.TRANSIENT) {
+          // The operator path has no other way to learn this: the re-arm below
+          // only helps `workspace-open` passes (`scheduleWorkspaceBackfills`
+          // filters operator ones out), and without a reason here the caller
+          // reports "already done" for a pass that aborted partway through.
+          deferred = reason
           // These clear on their own — the download finishes, the queue drains.
           // Logging and walking away would leave the pass undone for the whole
           // session even though its blocker is momentary, so re-arm and let the
           // gate + deep-idle deferral bound the retry.
           console.warn(`[workspaceBackfills] ${reason} — will retry when it clears`)
           this.scheduleWorkspaceBackfills(workspaceId)
-          return completed
+          return {completed, undoHistoryCleared, deferred, failed}
         }
+        failed = reason
         console.error(
           `[workspaceBackfills] "${backfill.id}" failed for workspace ${workspaceId}: ${reason}`,
         )
       }
     }
-    return completed
+    return {completed, undoHistoryCleared, deferred, failed}
   }
 
   /**

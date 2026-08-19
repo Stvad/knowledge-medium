@@ -43,6 +43,7 @@ import {
   CREATE_BLOCKS_REFERENCE_TARGET_PARENT_INDEX_SQL,
   CREATE_BLOCKS_TABLE_SQL,
   CREATE_BLOCKS_WORKSPACE_ACTIVE_INDEX_SQL,
+  CREATE_BLOCKS_WORKSPACE_NONEMPTY_PROPERTIES_INDEX_SQL,
   ensureBlockLocalColumns,
 } from '@/data/blockSchema'
 import {
@@ -111,6 +112,7 @@ const initializeTestDb = async (dbDir: string): Promise<PowerSyncDatabase> => {
   await db.execute(CREATE_BLOCKS_SYNCED_TABLE_SQL)
   await db.execute(CREATE_BLOCKS_PARENT_ORDER_INDEX_SQL)
   await db.execute(CREATE_BLOCKS_WORKSPACE_ACTIVE_INDEX_SQL)
+  await db.execute(CREATE_BLOCKS_WORKSPACE_NONEMPTY_PROPERTIES_INDEX_SQL)
   // No-op on a fresh table (CREATE carries the local columns) — mirrors the
   // production upgrade ordering so the harness exercises the same path.
   await ensureBlockLocalColumns(db)
@@ -164,6 +166,8 @@ const getTemplateFingerprint = (): string => {
   hash.update(CREATE_BLOCKS_PARENT_ORDER_INDEX_SQL)
   hash.update('\0')
   hash.update(CREATE_BLOCKS_WORKSPACE_ACTIVE_INDEX_SQL)
+  hash.update('\0')
+  hash.update(CREATE_BLOCKS_WORKSPACE_NONEMPTY_PROPERTIES_INDEX_SQL)
   hash.update('\0')
   hash.update(CREATE_BLOCKS_REFERENCE_TARGET_PARENT_INDEX_SQL)
   hash.update('\0')

@@ -1,7 +1,8 @@
 import type React from 'react'
 import type ReactDOM from 'react-dom'
 import type { Block } from '@/data/block'
-import type { Repo } from '@/data/repo'
+import type { OperatorBackfillResult, Repo } from '@/data/repo'
+import type { PropertyCellBackfillProgress } from '@/data/internals/propertyCellBackfill'
 import type { BlockData, SubtreeRow } from '@/data/api'
 import type { FacetRuntime } from '@/facets/facet.js'
 import type { blockRenderersFacet } from '@/extensions/core.js'
@@ -220,6 +221,25 @@ export interface AuditExtensionResult {
   lint: ExtensionLintWarning[]
 }
 
+export interface RunBackfillInput {
+  backfillId: string
+  workspaceId?: string
+}
+
+/** Present when the pass that ran reports per-run detail. The properties
+ *  migration does: how much it swept, and every block whose legacy cell value
+ *  its codec rejected — which an operator has to see, since those keys stay
+ *  cell-only until the values are repaired and the pass re-run.
+ *
+ *  Declared off the pass's own progress type rather than re-listed: the
+ *  hand-written copy had already fallen behind it by two fields, and both of
+ *  them — the exact failure count and whether the workspace was being edited —
+ *  are ones the operator acts on. */
+export type RunBackfillResult =
+  OperatorBackfillResult
+  & {backfillId: string; workspaceId: string}
+  & Partial<PropertyCellBackfillProgress>
+
 export interface AuditPropertiesInput {
   /** Workspace to audit. Defaults to, and in practice must be, the ACTIVE
    *  one: classification runs on `repo.propertyDefinitions`, which is the
@@ -255,6 +275,7 @@ export interface AgentRuntimeContext {
   uninstallExtension: (input: UninstallExtensionInput) => Promise<UninstallExtensionResult>
   auditExtension: (input: AuditExtensionInput) => Promise<AuditExtensionResult>
   auditProperties: (input: AuditPropertiesInput) => Promise<PropertyRegistrationAudit>
+  runBackfill: (input: RunBackfillInput) => Promise<RunBackfillResult>
   actions: readonly ActionConfig[]
   renderers: ReturnType<typeof blockRenderersFacet.empty>
   refreshAppRuntime: typeof refreshAppRuntime

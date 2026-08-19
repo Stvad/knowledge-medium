@@ -125,9 +125,15 @@ export const createTestRepo = (opts: CreateTestRepoOptions): TestRepo => {
     // `in` rather than `??` so a test can pass `undefined` to mean "none
     // configured" and exercise the refusal, instead of silently getting the stub.
     backfillCompletionClaim: 'backfillCompletionClaim' in opts ? opts.backfillCompletionClaim : {
-      tryClaim: async (ws: string, id: string) => (await opts.db.getOptional<{key: string}>(
-        'SELECT key FROM client_schema_state WHERE key = ?', [`workspace_backfill:${ws}:${id}`],
-      )) === null,
+      // `reclaimCompleted` mirrors the production claim: a recorded completion
+      // stops an unattended pass, never a human who asked for one. A stub that
+      // ignored it made every operator re-run read as "already done", which is
+      // the behaviour under test for anything the pass can miss.
+      tryClaim: async (ws: string, id: string, claimOpts?: {reclaimCompleted?: boolean}) =>
+        claimOpts?.reclaimCompleted === true
+        || (await opts.db.getOptional<{key: string}>(
+          'SELECT key FROM client_schema_state WHERE key = ?', [`workspace_backfill:${ws}:${id}`],
+        )) === null,
       markComplete: async (ws: string, id: string) => {
         // `client_schema_state` is (key, completed_at) — there is no `value`
         // column, and writing one threw on every call. It went unnoticed

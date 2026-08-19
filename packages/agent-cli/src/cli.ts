@@ -945,6 +945,48 @@ cli
     })
   })
 
+// A full properties migration is hundreds of thousands of writes; measured
+// runs land near 8 minutes on a fast native engine and a browser is a
+// multiple of that. Set one minute under the server's inFlightCommandTtlMs
+// (60 min, server.ts) rather than equal to it: at an exact match, the
+// bridge can reap the in-flight command in the same instant this timeout
+// elapses, and the next poll would surface "Unknown command" instead of
+// the CLI's own clear timeout message.
+const runBackfillDefaultWaitSeconds = 3540
+
+cli
+  .command('run-backfill <backfillId>', wireDescription('run-backfill'))
+  .option('--workspace <id>', 'Assert the workspace the pass writes to (defaults to the active one)')
+  .option('--wait <seconds>', `How long to wait for the pass to finish (default ${runBackfillDefaultWaitSeconds}). A full properties migration is hundreds of thousands of writes and runs for minutes; the default command timeout would give up while the app is still working, reporting a timeout for a run that is in fact progressing.`, {default: runBackfillDefaultWaitSeconds})
+  .action(async (backfillId: string, options: {workspace?: string | number; wait?: string | number}) => {
+    // Same 0-for-empty artifact CAC produces for `--workspace ""` as in
+    // `audit-properties`; normalize it back so the command layer's purpose-built
+    // refusal is what the operator sees.
+    const asserted = options.workspace === undefined
+      ? undefined
+      : options.workspace === 0 ? '' : String(options.workspace)
+    await ensureBridgeRunning()
+    const value = await client().runCommand({
+      type: 'run-backfill',
+      backfillId,
+      ...(asserted !== undefined ? {workspaceId: asserted} : {}),
+    }, {timeoutMs: Math.max(1, Number(options.wait) || runBackfillDefaultWaitSeconds) * 1000})
+      .catch((cause: unknown) => {
+        // Giving up WAITING is not the pass giving up: it keeps running in the
+        // app, will record its per-graph completion, and its failure list —
+        // the thing an operator needs — is consumed by whichever call collects
+        // the result, so after a timeout it exists only in the app console.
+        if (!(cause instanceof Error) || !/timed out/i.test(cause.message)) throw cause
+        throw new Error(
+          `${cause.message}\nThe pass is still running in the app — this only stopped ` +
+          'waiting for it. Re-running is safe (it is single-flighted and resumes from ' +
+          'whatever is left), but the list of values it could not migrate is in the app ' +
+          'console, not here.',
+        )
+      })
+    process.stdout.write(`${JSON.stringify(value, null, 2)}\n`)
+  })
+
 cli
   .command('run-action <id> [depsJson]', wireDescription('run-action'))
   .action(async (id: string, depsJson: string | undefined) => {
