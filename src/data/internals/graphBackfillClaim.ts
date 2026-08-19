@@ -252,7 +252,19 @@ export const createGraphBackfillClaim = (
         // A valid claim arrived between the read above and this transaction.
         // It is authoritative — and the caller must be TOLD, or it runs a
         // migration it just watched someone else take.
-        if (claimFromProperties(existing.properties) !== null) return false
+        //
+        // Except a COMPLETED one under `reclaimCompleted`: that names no
+        // running pass, only a finished one, and an operator asking again is
+        // asking on purpose. Overwriting it with a fresh claim is the point —
+        // leaving the completion stamp in place would make `markComplete`
+        // re-stamp a record of a run that is not this one. An in-flight claim
+        // still refuses here, which is the mutual exclusion this seam
+        // actually provides.
+        const live = claimFromProperties(existing.properties)
+        if (live !== null
+            && !(opts?.reclaimCompleted === true && live.completedAt !== undefined)) {
+          return false
+        }
         await tx.update(claimId, {properties: claimProperties})
         return true
       }
