@@ -47,27 +47,62 @@ export const MAX_PATCHES_PER_SUPABASE_RPC = 500
  *  uploading once). `withUploadTimeout` below races every request against this
  *  budget so the call always settles one way or the other.
  *
- *  Value is chosen ABOVE the server's `statement_timeout` for these RPCs, not
- *  below it — aborting the client fetch does NOT roll back the server
- *  transaction, so a client timeout shorter than the server's would abandon
- *  work that then lands anyway and gets retried (see `withUploadTimeout`'s doc
- *  comment for why that retry is itself safe). Neither `apply_block_patches`
- *  nor `apply_block_creates` sets its own `statement_timeout` — the only
- *  per-function override anywhere in the migrations is `delete_workspace`'s
- *  5min (20260513205724_extend_delete_workspace_timeout.sql) — so both RPCs
- *  run under the `authenticated` role's Supabase-platform default of 8s
- *  (https://supabase.com/docs/guides/database/postgres/timeouts; confirmed via
- *  the platform docs, not present in this repo's migrations). 60s leaves
- *  ~7.5x headroom over that 8s ceiling: for a full 500-row batch
- *  (MAX_CREATES_PER_SUPABASE_RPC / MAX_PATCHES_PER_SUPABASE_RPC), most of the
- *  budget is there to cover request/response transfer time on a slow mobile
- *  link, not server execution — the 500-row cap itself exists specifically to
- *  keep server execution well under the 8s statement_timeout (see that
- *  constant's comment above). If the live project's configured default is
- *  ever raised above 8s, this still holds: 60s only needs to exceed whatever
- *  ceiling is actually in effect, and a stale assumption here fails safe
- *  (worst case, an occasional legitimate-but-slow request gets retried). */
-export const UPLOAD_RPC_TIMEOUT_MS = 60_000
+ *  The failure this targets is "never settles" — not "slow". That distinction
+ *  drives the value, and is also why an EARLIER version of this comment sized
+ *  it wrong (see the correction below): the timeout error classifies
+ *  `transient` (see `uploadErrorClassifier.ts`), so a timeout makes PowerSync
+ *  re-throw and retry the WHOLE batch from zero — a request that genuinely
+ *  cannot finish inside the budget can therefore NEVER finish, on any retry.
+ *  Worse, aborting the client fetch does NOT roll back a request that already
+ *  committed server-side: `apply_block_creates` is insert-or-TOUCH (safe to
+ *  repeat) and a DELETE-of-already-deleted is a no-op, but `apply_block_patches`
+ *  bumps `drift` on every accepted PATCH whose base doesn't match the current
+ *  row — see `supabase/migrations/20260803000000_add_patch_base_version_drift_bump.sql`
+ *  (~lines 40-52), which explicitly costs that bump "absent retries". A budget
+ *  a real request can exceed makes retries the steady state: every timeout
+ *  interval, a fleet could pay a forced re-materialization plus a
+ *  `blocks_history` row per patch row, indefinitely, over the same slow link
+ *  that caused the timeout in the first place — worse than the stall being
+ *  fixed.
+ *
+ *  So the budget is generous, sized against "how long could a legitimate
+ *  request plausibly take" — NOT against the server's `statement_timeout`,
+ *  which is what an earlier version of this constant compared against (~7.5x
+ *  headroom over an assumed 8s default). That was the WRONG comparison:
+ *  `statement_timeout` bounds SERVER EXECUTION only. What can actually exceed
+ *  a short client budget is total wall-clock time including request/response
+ *  BODY TRANSFER on a slow mobile link, which nothing server-side bounds —
+ *  and which `MAX_CREATES_PER_SUPABASE_RPC` / `MAX_PATCHES_PER_SUPABASE_RPC`
+ *  don't bound either, since they cap ROWS (500), not bytes, and each row
+ *  carries `content` + `properties_json` + `references_json`.
+ *
+ *  5 minutes is a floor chosen to sit comfortably above any realistic
+ *  single-request transfer time for a full 500-row batch even on a poor
+ *  connection, while converting the original failure mode (indefinite — 16.3
+ *  HOURS in the incident, not minutes) into a bounded one. It's deliberately
+ *  NOT tuned tighter than that: tightening it trades toward the exact
+ *  amplification problem above, and the primitive this change also adds
+ *  (`reconnectPowerSync`, see `repoProvider.ts`) is the intended lever for a
+ *  session that's ACTUALLY stuck — not a shorter upload timeout.
+ *
+ *  This is a WALL-CLOCK budget (time-to-settle from request start), not an
+ *  inactivity budget (time since last byte received). An inactivity budget
+ *  would be strictly better — it'd let a slow-but-progressing transfer keep
+ *  going indefinitely while still catching a truly-dead connection fast — but
+ *  postgrest-js's `.abortSignal(...)` (the mechanism this file relies on)
+ *  gives no hook into response byte-progress; getting one would mean
+ *  replacing the Supabase client's `fetch` with a custom streaming-aware
+ *  wrapper at every upload call site. Judged too invasive for this change;
+ *  noted here as a follow-up, not implemented.
+ *
+ *  Chunk size is likewise NOT reduced after a timeout (halving
+ *  `MAX_CREATES_PER_SUPABASE_RPC` / `MAX_PATCHES_PER_SUPABASE_RPC` for the
+ *  next attempt would make a retry cheaper than the attempt that failed).
+ *  Also left as a follow-up: it needs mutable per-connector state that
+ *  survives across `uploadData` invocations (like `ambiguousAttempts` below),
+ *  threaded through both chunking call sites, plus a decision on when/whether
+ *  it ever recovers back up — more than fits cleanly alongside this fix. */
+export const UPLOAD_RPC_TIMEOUT_MS = 300_000
 
 export const hasPowerSyncServiceConfig = Boolean(powerSyncUrl)
 export const hasRemoteSyncConfig = hasSupabaseAuthConfig && hasPowerSyncServiceConfig

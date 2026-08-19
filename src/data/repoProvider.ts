@@ -184,8 +184,108 @@ const waitForConnected = (db: ReconnectStatusDb, timeoutMs: number): Promise<boo
     dispose = db.registerListener!({
       statusChanged: status => { if (status.connected) finish(true) },
     })
+    // Defence in depth, deliberately untested: `dispose` is assigned only
+    // AFTER registerListener returns, so a listener that fired SYNCHRONOUSLY
+    // during registration would have run `finish` while `dispose` was still
+    // null and leaked the listener. PowerSync's registerListener doesn't
+    // dispatch synchronously today, so nothing exercises this — it's here so
+    // the ordering can't become load-bearing later, not because it fires.
+    if (settled) dispose()
   })
 }
+
+/** Bounds how long {@link reconnectPowerSync} waits for `db.disconnect()`
+ *  and, separately, for the subsequent `db.connect()` to settle, before
+ *  giving up on waiting for either and moving on.
+ *
+ *  BOTH calls need a bound, not just `disconnect()` — traced directly in the
+ *  pinned SDK source (`node_modules/.pnpm/@powersync+common@1.55.0/…`), not
+ *  assumed:
+ *
+ *   - `AbstractStreamingSyncImplementation.disconnect()`
+ *     (`client/sync/stream/AbstractStreamingSyncImplementation.ts`) aborts
+ *     its internal signal, then `await this.streamingSyncPromise` — i.e.
+ *     `Promise.all([crudUploadLoop(signal), streamingSync(signal, …)])`.
+ *     `crudUploadLoop` → `_uploadAllCrud` does `await this.options.uploadCrud()`
+ *     WITHOUT threading that abort signal into it, so a hung `uploadData()`
+ *     call — the exact failure `UPLOAD_RPC_TIMEOUT_MS` in powersync.ts
+ *     targets, and note that budget still doesn't cover every await inside
+ *     `uploadData` (`getCrudTransactions`, `transaction.complete()`, the
+ *     rejection-table `writeTransaction`, the `getCek` IndexedDB read) — takes
+ *     `disconnect()` down with it.
+ *   - A hung `disconnect()` does NOT make a later `connect()` safe to await
+ *     unbounded either. `ConnectionManager.connect()` (`client/ConnectionManager.ts`)
+ *     → `connectInternal()`'s very FIRST line is `await this.disconnectInternal()`,
+ *     and `disconnectInternal()` short-circuits to `return this.disconnectingPromise`
+ *     whenever one is already in flight — so `connect()` re-awaits the SAME
+ *     wedged promise a stuck `disconnect()` left behind, and hangs too.
+ *     (`connectingPromise` reuse only dedupes CONCURRENT `connect()` calls;
+ *     it does nothing for a wedged `disconnectingPromise`, which is the
+ *     actual hazard here — confirmed by reading both methods, not assumed.)
+ *
+ *  So both awaits below are individually raced against this bound. Racing
+ *  (not cancelling — the SDK exposes no way to cancel either promise) means
+ *  an abandoned call keeps running in the background indefinitely if it's
+ *  genuinely wedged; what this buys is that `reconnectPowerSync` itself — and
+ *  the `connectChain` it's serialized through, and the sync-health sample
+ *  chain that awaits it — always settles, honestly, in bounded time instead
+ *  of hanging right along with the SDK internals. When `connect()` also times
+ *  out (which it will, whenever the PRECEDING `disconnect()` was the one that
+ *  hung), the whole `reconnectPowerSync` call rejects rather than resolves —
+ *  never silently reports success for an attempt that did nothing, same
+ *  principle as {@link RECONNECT_CONNECTED_TIMEOUT_MS} below.
+ *
+ *  A real disconnect/connect makes no network request for the disconnect leg
+ *  and is normally sub-second, so this only needs to be generous enough that
+ *  a legitimately slow-but-alive teardown isn't cut off — not long enough to
+ *  cover a genuinely wedged upload (no client-side bound can fix that without
+ *  the SDK exposing real cancellation; see `UPLOAD_RPC_TIMEOUT_MS` for the
+ *  budget that bounds the upload itself). 20s leaves ample headroom for the
+ *  former while keeping every caller of this primitive — the command
+ *  palette, the agent-bridge action, and the automatic stall watchdog —
+ *  bounded to a reasonable wait rather than an indefinite one. */
+export const RECONNECT_TEARDOWN_TIMEOUT_MS = 20_000
+
+type TeardownOutcome<T> =
+  | { ok: true; value: T }
+  | { ok: false; timedOut: true }
+  | { ok: false; timedOut: false; error: unknown }
+
+/** Waits for `promise` up to `ms`, resolving to a discriminated outcome
+ *  instead of throwing or hanging past the bound. `promise` itself is NOT
+ *  cancelled on timeout — nothing in the PowerSync SDK allows that — it's
+ *  abandoned in the background; both branches of the internal `.then` are
+ *  attached directly to it (never a separate dangling `.catch`), so an
+ *  eventual rejection is always handled and never surfaces as an unhandled
+ *  rejection later. */
+const withTeardownBound = <T,>(promise: Promise<T>, ms: number): Promise<TeardownOutcome<T>> =>
+  new Promise(resolve => {
+    let settled = false
+    const timer = setTimeout(() => {
+      if (settled) return
+      settled = true
+      resolve({ ok: false, timedOut: true })
+    }, ms)
+    promise.then(
+      value => {
+        if (settled) return
+        settled = true
+        clearTimeout(timer)
+        resolve({ ok: true, value })
+      },
+      error => {
+        if (settled) return
+        settled = true
+        clearTimeout(timer)
+        resolve({ ok: false, timedOut: false, error })
+      },
+    )
+  })
+
+const describeTeardownFailure = (outcome: Extract<TeardownOutcome<unknown>, { ok: false }>): string =>
+  outcome.timedOut
+    ? 'did not settle within the teardown bound'
+    : `failed: ${outcome.error instanceof Error ? outcome.error.message : String(outcome.error)}`
 
 /**
  * Force a fresh PowerSync connection for `userId` — `disconnect()` then
@@ -212,18 +312,29 @@ const waitForConnected = (db: ReconnectStatusDb, timeoutMs: number): Promise<boo
  * `AbstractPowerSyncDatabase.disconnect`/`disconnectAndClear` and
  * `ConnectionManager.disconnect` in `@powersync/common`.
  *
- * No-ops (after taking its turn on the chain) when `userId` isn't the
- * active, remote-syncing session — e.g. called for a local-only session,
- * where issuing `connect()` would make the FIRST Supabase/PowerSync request
- * of that session, violating the "local-only makes no remote request"
- * invariant this module upholds elsewhere (`isRemoteSyncActive`).
+ * Both `disconnect()` and `connect()` are raced against
+ * {@link RECONNECT_TEARDOWN_TIMEOUT_MS} — see that constant's doc for why
+ * BOTH need the bound: `disconnect()` is the call this primitive exists to
+ * recover from a hang in, and a hung `disconnect()` makes a naively-unbounded
+ * `connect()` hang right along with it.
  *
- * REJECTS if `connect()` resolves but the connection never reaches
- * `connected: true` within {@link RECONNECT_CONNECTED_TIMEOUT_MS} — see that
- * constant's doc for why `connect()` resolving alone can't be trusted. This
- * makes failure honest for every caller: the command-palette / agent-bridge
- * action (`src/plugins/sync-recovery/action.ts`) surfaces a real error
- * instead of reporting success for an attempt that did nothing, and the
+ * REJECTS — never silently resolves — in three cases, so a caller can always
+ * tell "reconnected" from "did nothing" or "failed":
+ *  - `userId` isn't the active, remote-syncing session (e.g. a local-only
+ *    session, where issuing `connect()` would make the FIRST Supabase/
+ *    PowerSync request of that session, violating the "local-only makes no
+ *    remote request" invariant this module upholds elsewhere —
+ *    `isRemoteSyncActive`).
+ *  - `connect()` doesn't settle within {@link RECONNECT_TEARDOWN_TIMEOUT_MS}
+ *    (a `disconnect()` timeout alone is logged and NOT fatal — `connect()`
+ *    still gets a chance, since a hung disconnect doesn't always mean the
+ *    connection manager is unrecoverable; see that constant's doc).
+ *  - `connect()` resolves but the connection never reaches `connected: true`
+ *    within {@link RECONNECT_CONNECTED_TIMEOUT_MS} — see that constant's doc
+ *    for why `connect()` resolving alone can't be trusted.
+ * This makes failure honest for every caller: the command-palette /
+ * agent-bridge action (`src/plugins/sync-recovery/action.ts`) surfaces a real
+ * error instead of reporting success for an attempt that did nothing, and the
  * reconnect watchdog's own `try`/`catch` (dbForensicsHooks.ts
  * `runReconnectWatchdog`) already treats a rejection here as best-effort —
  * nothing there needed to change for this to be safe.
@@ -231,18 +342,43 @@ const waitForConnected = (db: ReconnectStatusDb, timeoutMs: number): Promise<boo
 export const reconnectPowerSync = (userId: string): Promise<void> =>
   enqueueOnConnectChain(async () => {
     if (activeUserId !== userId || !activeRemoteSync) {
-      console.warn(`[sync] reconnect skipped for ${userId}: not the active remote-sync session`)
-      return
+      const reason = activeUserId === userId
+        ? 'local-only session (remote sync is not active)'
+        : 'not the active session'
+      console.warn(`[sync] reconnect skipped for ${userId}: ${reason}`)
+      const error = new Error(`[sync] reconnect for ${userId}: skipped — ${reason}`)
+      error.name = 'SyncReconnectSkipped'
+      throw error
     }
     const db = dbsByUser.get(userId)
-    if (!db) return // defensive: activeUserId===userId is only ever set right after the db is created
+    if (!db) {
+      // Defensive: activeUserId===userId is only ever set right after the db
+      // is created, so this should be unreachable — but reject rather than
+      // silently no-op if it ever is, for the same reason as the branch above.
+      const error = new Error(`[sync] reconnect for ${userId}: no PowerSync database is open for this user`)
+      error.name = 'SyncReconnectSkipped'
+      throw error
+    }
 
-    await db.disconnect()
+    const disconnectOutcome = await withTeardownBound(db.disconnect(), RECONNECT_TEARDOWN_TIMEOUT_MS)
+    if (!disconnectOutcome.ok) {
+      console.warn(
+        `[sync] reconnect for ${userId}: disconnect() ${describeTeardownFailure(disconnectOutcome)} — ` +
+        'proceeding to connect() anyway',
+      )
+    }
+
     const resolver = resolverForUser(userId)
-    await db.connect(createPowerSyncConnector({
-      getWorkspaceMode: resolver.getMode,
-      getCek: resolver.getCek,
-    }))
+    const connectOutcome = await withTeardownBound(
+      db.connect(createPowerSyncConnector({
+        getWorkspaceMode: resolver.getMode,
+        getCek: resolver.getCek,
+      })),
+      RECONNECT_TEARDOWN_TIMEOUT_MS,
+    )
+    if (!connectOutcome.ok) {
+      throw new Error(`[sync] reconnect for ${userId}: connect() ${describeTeardownFailure(connectOutcome)}`)
+    }
 
     const connected = await waitForConnected(db, RECONNECT_CONNECTED_TIMEOUT_MS)
     if (!connected) {
@@ -445,7 +581,21 @@ export const ensurePowerSyncReady = async (
       if (previousUserId && previousUserId !== userId) {
         const previousDb = dbsByUser.get(previousUserId)
         if (previousDb) {
-          await previousDb.disconnect()
+          // Bounded for the same reason `reconnectPowerSync`'s own
+          // `disconnect()` is (see `RECONNECT_TEARDOWN_TIMEOUT_MS`'s doc): an
+          // unbounded disconnect() here would wedge THIS shared
+          // `connectChain` forever on an account switch away from a session
+          // whose upload was stuck — and `reconnectPowerSync` is serialized
+          // through this exact same chain (`enqueueOnConnectChain`), so a
+          // wedge here would silently defeat that fix too, from a different
+          // entry point into the identical hazard.
+          const outcome = await withTeardownBound(previousDb.disconnect(), RECONNECT_TEARDOWN_TIMEOUT_MS)
+          if (!outcome.ok) {
+            console.warn(
+              `PowerSync background connect: disconnecting the previous session (${previousUserId}) ` +
+              `${describeTeardownFailure(outcome)} — proceeding to connect ${userId} anyway`,
+            )
+          }
         }
       }
       // Encrypt-on-upload (§9.2): bind the connector's mode/key lookups to this

@@ -140,7 +140,16 @@ const messageOf = (error: unknown): string => {
 // wa-sqlite worker's `powersync_control`) is exactly this shape. Reading its
 // string `.message` (instead of `String(obj)` → "[object Object]") is what lets
 // the runtime-corruption routing match at all.
-const messageChainOf = (error: unknown, depth = 5): string => {
+//
+// Exported for reuse: dbForensicsHooks.ts used to hand-roll a weaker
+// top-level-only `messageOf` (no cause walk, no `safeGet`/`safeString`
+// totality guards), which meant a sync-loop error rethrown as
+// `new Error('sync iteration failed', {cause: <the real one>})` recorded the
+// generic wrapper and silently discarded the actual reason — exactly the
+// class of bug this module exists to fix, one level down. There is now
+// exactly one hardened implementation; every caller in this codebase should
+// use this one rather than a local copy.
+export const messageChainOf = (error: unknown, depth = 5): string => {
   if (depth <= 0 || error === null || error === undefined) return ''
   if (safeInstanceOf(error, Error)) {
     const err = error as Error

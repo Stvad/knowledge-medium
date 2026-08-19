@@ -1109,6 +1109,38 @@ describe('applyBlockPatchesRpc — client-side upload timeout', () => {
     expect(abortSignalSpy).toHaveBeenCalledTimes(1)
     expect(abortSignalSpy.mock.calls[0]?.[0]).toBeInstanceOf(AbortSignal)
   })
+
+  it('aborts the SAME signal handed to postgrest once the timeout fires — not an unrelated one', async () => {
+    // Mutation-proof for the "wires a real AbortSignal" tests in this file:
+    // those only assert `toBeInstanceOf(AbortSignal)`, which ANY signal
+    // satisfies — including a fresh, never-aborted `new AbortController().signal`
+    // swapped in for the timeout controller's own. That regression would leak
+    // the underlying fetch past the timeout (defeating the whole point of this
+    // change) while every existing assertion kept passing. This test captures
+    // the actual signal `withUploadTimeout` hands to `run` and asserts THAT
+    // signal is the one that gets aborted, with the synthesized TimeoutError
+    // as its reason — not just that `run` received *some* AbortSignal.
+    vi.useFakeTimers()
+    let capturedSignal: AbortSignal | undefined
+    supabaseRef.rpc.mockReturnValueOnce({
+      abortSignal: (signal: AbortSignal) => {
+        capturedSignal = signal
+        return chainable(hangingResponse())
+      },
+    })
+
+    const outcome = __applyBlockPatchesRpcForTest([
+      {id: 'block-a', payload: {content: 'A'}},
+    ]).catch((err: unknown) => err)
+
+    await vi.advanceTimersByTimeAsync(UPLOAD_RPC_TIMEOUT_MS)
+    const thrown = await outcome
+
+    expect(capturedSignal).toBeInstanceOf(AbortSignal)
+    expect(capturedSignal!.aborted).toBe(true)
+    expect(capturedSignal!.reason).toBe(thrown)
+    expect((capturedSignal!.reason as Error).name).toBe('TimeoutError')
+  })
 })
 
 // ===========================================================================

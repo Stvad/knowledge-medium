@@ -147,11 +147,15 @@ export interface SyncHealthSample {
   pendingRows: number | null
   /** Distinct blocks queued for upload — matches what the status chip shows. Null if the count query failed. */
   pendingBlocks: number | null
-  /** Epoch ms the CURRENT unbroken run of `pendingBlocks > 0` began, or null
-   *  when the queue is empty (or its count is unknown — see the caller's
-   *  handling in dbForensicsHooks.ts). IS part of the coalescing key: it stays
-   *  constant for the life of one pending-queue episode, so a change (queue
-   *  drained and refilled, or an unknown→known transition) correctly starts a
+  /** Epoch ms the CURRENT unbroken run of the queue (as tracked by `ps_crud`'s
+   *  `MIN(id)` boundary — see dbForensicsHooks.ts `computeSyncStall`) being
+   *  non-empty began, or null when the queue is empty. NOT null merely
+   *  because a sample's count query failed: a transient query failure
+   *  RETAINS the previous value (both this field and the `stall` verdict
+   *  below) rather than resetting it — an unknown count must not be able to
+   *  fabricate a resolution by masquerading as an empty queue. IS part of
+   *  the coalescing key: it stays constant for the life of one pending-queue
+   *  episode, so a change (queue drained and refilled) correctly starts a
    *  new ring entry instead of silently extending the wrong episode. */
   pendingSinceT: number | null
   rejected: number | null
@@ -162,8 +166,26 @@ export interface SyncHealthSample {
    *  in a while OR the queue itself has been non-empty for a while). The
    *  second disjunct is what catches a wedged-upload/healthy-download split —
    *  `lastSyncedAt` alone advances on every download and would stay "fresh"
-   *  through exactly that failure mode. */
+   *  through exactly that failure mode. Driven off `ps_crud`'s exact
+   *  `MIN(id)` boundary, NOT off `pendingBlocks` (which is capped and purely
+   *  for display — see dbForensicsHooks.ts). `stall:true` does NOT imply
+   *  `pendingBlocks` is non-null: on a sample whose count query failed, the
+   *  verdict is RETAINED from the last known-good sample while `pendingBlocks`
+   *  itself reads null for that one sample — `{stall: true, pendingBlocks:
+   *  null}` is a real, representable combination, not a bug. */
   stall: boolean
+  /** Ring-entry-only: the smallest `pendingBlocks` observed across every
+   *  sample coalesced into this entry. Undefined on a freshly-opened stall
+   *  episode (which stores one raw sample, not a coalesced ring entry) —
+   *  only {@link DbForensics.recordSyncSample} populates this. */
+  minPendingBlocks?: number | null
+  /** Same as {@link minPendingBlocks}, but the largest observed. Together
+   *  these are what let a coalesced ring entry answer "how deep did the
+   *  queue get during this run" even though the entry's own `pendingBlocks`
+   *  is no longer part of the coalescing key (see `sameSyncState` — an
+   *  actively-edited client's queue depth churns constantly, and requiring
+   *  an exact match would defeat coalescing almost entirely). */
+  maxPendingBlocks?: number | null
 }
 
 interface SyncHealthRing {
@@ -183,20 +205,86 @@ export const MAX_STALL_EPISODES = 10
  * patched exactly once more (the `cleared*` fields) on stalled→not-stalled,
  * and otherwise untouched — so it survives however long the ring itself
  * churns past it.
+ *
+ * Inherits `uploadingSeen`/`downloadingSeen` from {@link SyncHealthSample}.
+ * Unlike the ring (where coalescing ORs a run of samples together
+ * automatically), an episode is normally a single written-once-then-patched
+ * record — so without {@link DbForensics.recordStallSeenFlags} these two
+ * fields would freeze at their ONSET value for the episode's whole
+ * lifetime, and a reader would see `uploadingSeen: false` on a 16-hour
+ * episode and wrongly conclude the upload loop never even tried.
+ * `recordStallSeenFlags` is called on every sample while the episode is
+ * open (dbForensicsHooks.ts `sampleSyncHealth`) specifically to OR the
+ * latest observation in, the same way the ring does — so these two fields
+ * mean the same thing on an episode as they do on a ring entry: "seen at
+ * ANY point across the whole span," not just at onset.
  */
 export interface StallEpisode extends Omit<SyncHealthSample, 'lastT' | 'count'> {
   /** Set once the stall clears (stalled→not-stalled transition). Absent while
    *  the episode is still open — an open entry in the dump means the stall
-   *  was never observed to resolve (e.g. the tab was closed mid-stall). */
+   *  was never observed to resolve (e.g. the tab was closed mid-stall).
+   *  CLOSING is keyed on the queue actually draining to empty (`ps_crud`'s
+   *  `MIN(id)` boundary going null — see dbForensicsHooks.ts
+   *  `computeSyncStall`), never merely on the `stall` verdict flipping false:
+   *  a dribbling queue (one block draining every ~11min) can make `stall`
+   *  read false for a sample or two — via `pendingSince` resetting on
+   *  progress — while the queue is still very much non-empty, and closing on
+   *  that would fabricate a resolution per dribble (the 2026-08-13 incident's
+   *  own proven failure mode: 6 fake close/reopen cycles that evicted the
+   *  real onset and reset `reconnectAttempts` each time). Progress observed
+   *  while still open is recorded via {@link DbForensics.recordStallProgress}
+   *  instead — see `progressCount`/`lastProgressAt` below. */
   clearedAt?: number
   /** State AS OF the clearing sample — HOW the stall resolved. This was the
    *  single most informative fact missing from the 2026-08-13 incident: the
    *  queue flushed unattended at 20:13:28 and nothing recorded why (Did the
    *  connection recover first? Did the queue just... drain? Was it a
-   *  foreground transition?). */
+   *  foreground transition?). `clearedRejected`/`clearedUploadError`/
+   *  `clearedDownloadError` exist because a queue reaching empty is
+   *  AMBIGUOUS on its own: rows can leave `ps_crud` either by uploading
+   *  successfully OR by PowerSync giving up and quarantining them into
+   *  `ps_crud_rejected` — the latter looks identical to a real recovery
+   *  (queue empty, `stall` false) unless the rejection count at clearing time
+   *  is recorded alongside it. */
   clearedConnected?: boolean
   clearedLastSyncedAt?: number | null
   clearedPendingBlocks?: number | null
+  clearedRejected?: number | null
+  clearedPendingRows?: number | null
+  clearedUploadError?: string | null
+  clearedDownloadError?: string | null
+  /** How many times the queue's `MIN(id)` boundary was observed to ADVANCE
+   *  (a batch drained) while this episode was open and the queue was STILL
+   *  non-empty — i.e. real forward progress that did not (yet) empty the
+   *  queue, so the episode stayed open rather than closing. Set via
+   *  {@link DbForensics.recordStallProgress}. Absent means no such progress
+   *  was observed before the episode closed (or is still open with none
+   *  yet) — this is what separates "wedged, never moving" from "draining
+   *  unattended, just slower than the stall threshold" in the dump, without
+   *  needing to reopen a fresh episode per batch the way the pre-fix
+   *  close-on-any-dip behavior did. */
+  progressCount?: number
+  /** Epoch ms of the most recently observed progress event (see
+   *  `progressCount`). */
+  lastProgressAt?: number
+  /** `pendingBlocks` (the display count) AS OF the most recent progress
+   *  event — lets a reader see the queue shrinking over the episode's
+   *  lifetime without needing the ring (which may have evicted this time
+   *  range by the time anyone looks). */
+  lastProgressPendingBlocks?: number | null
+  /** How many times the reconnect watchdog's conditions were met to fire
+   *  `sync.reconnect` against this episode while
+   *  `RECONNECT_WATCHDOG_ENABLED` was `false` — i.e. what an ENABLED
+   *  watchdog would have done. Set via
+   *  {@link DbForensics.recordStallReconnectWouldHaveFired}. Exists
+   *  specifically so the dump still shows watchdog behavior while the real
+   *  reconnect stays off by default (see dbForensicsHooks.ts) — a session
+   *  normally populates either this pair or `reconnectAttempts`/
+   *  `lastReconnectAttemptAt`, never both, but both fields exist
+   *  independently so a reader never has to infer which regime produced the
+   *  recorded counts. */
+  reconnectWouldHaveFiredCount?: number
+  lastReconnectWouldHaveFiredAt?: number
   /** How many times the reconnect watchdog (dbForensicsHooks.ts
    *  `runReconnectWatchdog`) has fired `sync.reconnect` against THIS
    *  episode. Absent means the watchdog never attempted — e.g. it wasn't
@@ -421,10 +509,24 @@ export class DbForensics {
             // from "is it trying RIGHT NOW" (the latter is `uploading` above).
             last.uploadingSeen = last.uploadingSeen || sample.uploadingSeen
             last.downloadingSeen = last.downloadingSeen || sample.downloadingSeen
+            // pendingBlocks/pendingRows churn just as much as the fields
+            // above on an actively-edited client (that's WHY they're not
+            // part of the coalescing key — see sameSyncState) but still need
+            // refreshing to "as of lastT", same reasoning as lastSyncedAt.
+            last.pendingBlocks = sample.pendingBlocks
+            last.pendingRows = sample.pendingRows
+            last.minPendingBlocks = minIgnoringNull(last.minPendingBlocks, sample.pendingBlocks)
+            last.maxPendingBlocks = maxIgnoringNull(last.maxPendingBlocks, sample.pendingBlocks)
           } else {
             ring.samples = appendCapped(
               ring.samples,
-              { ...sample, lastT: sample.t, count: 1 },
+              {
+                ...sample,
+                lastT: sample.t,
+                count: 1,
+                minPendingBlocks: sample.pendingBlocks,
+                maxPendingBlocks: sample.pendingBlocks,
+              },
               MAX_SYNC_SAMPLES,
             )
           }
@@ -464,10 +566,26 @@ export class DbForensics {
    * Patch a previously-opened stall episode with how it resolved. No-op if
    * `key` is null (the open-call failed, or there's nothing to close) or the
    * episode was already trimmed out of the log. Best-effort: never throws.
+   *
+   * `rejected`/`pendingRows`/`uploadError`/`downloadError` are here (not just
+   * `connected`/`lastSyncedAt`/`pendingBlocks`) because an empty queue is
+   * AMBIGUOUS on its own — rows leave `ps_crud` either by uploading
+   * successfully or by being quarantined into `ps_crud_rejected`, and those
+   * two outcomes look identical (`pendingBlocks: 0`) unless the rejection
+   * count at clearing time is captured alongside it.
    */
   closeStallEpisode(
     key: string | null,
-    clearing: { clearedAt: number; connected: boolean; lastSyncedAt: number | null; pendingBlocks: number | null },
+    clearing: {
+      clearedAt: number
+      connected: boolean
+      lastSyncedAt: number | null
+      pendingBlocks: number | null
+      rejected: number | null
+      pendingRows: number | null
+      uploadError: string | null
+      downloadError: string | null
+    },
   ): Promise<void> {
     return this.enqueueSync(async () => {
       if (!key) return
@@ -478,9 +596,95 @@ export class DbForensics {
         episode.clearedConnected = clearing.connected
         episode.clearedLastSyncedAt = clearing.lastSyncedAt
         episode.clearedPendingBlocks = clearing.pendingBlocks
+        episode.clearedRejected = clearing.rejected
+        episode.clearedPendingRows = clearing.pendingRows
+        episode.clearedUploadError = clearing.uploadError
+        episode.clearedDownloadError = clearing.downloadError
         await this.put(key, episode)
       } catch (err) {
         warn('closeStallEpisode failed', err)
+      }
+    })
+  }
+
+  /**
+   * Record one observed PROGRESS event (the queue's `MIN(id)` boundary
+   * advancing — a batch drained) against the CURRENTLY OPEN stall episode,
+   * while the queue is STILL non-empty — see {@link StallEpisode}'s doc on
+   * why this does NOT close the episode. Increments `progressCount`, stamps
+   * `lastProgressAt`, and records `pendingBlocks` as of this observation.
+   * Same no-op/best-effort contract as {@link recordStallReconnectAttempt}.
+   */
+  recordStallProgress(
+    key: string | null,
+    progress: { at: number; pendingBlocks: number | null },
+  ): Promise<void> {
+    return this.enqueueSync(async () => {
+      if (!key) return
+      try {
+        const episode = await this.get<StallEpisode>(key)
+        if (!episode) return
+        episode.progressCount = (episode.progressCount ?? 0) + 1
+        episode.lastProgressAt = progress.at
+        episode.lastProgressPendingBlocks = progress.pendingBlocks
+        await this.put(key, episode)
+      } catch (err) {
+        warn('recordStallProgress failed', err)
+      }
+    })
+  }
+
+  /**
+   * OR `uploadingSeen`/`downloadingSeen` into the CURRENTLY OPEN stall
+   * episode — called on every sample while an episode is open (see
+   * {@link StallEpisode}'s doc for why: without this the episode would
+   * freeze at its ONSET value for these two fields, same class of bug as
+   * the ring not coalescing them). Skips the read/write entirely when both
+   * incoming flags are false (nothing to OR in). No-op on a null/trimmed
+   * key; best-effort, never throws.
+   */
+  recordStallSeenFlags(
+    key: string | null,
+    uploadingSeen: boolean,
+    downloadingSeen: boolean,
+  ): Promise<void> {
+    return this.enqueueSync(async () => {
+      if (!key || (!uploadingSeen && !downloadingSeen)) return
+      try {
+        const episode = await this.get<StallEpisode>(key)
+        if (!episode) return
+        const nextUploadingSeen = episode.uploadingSeen || uploadingSeen
+        const nextDownloadingSeen = episode.downloadingSeen || downloadingSeen
+        if (nextUploadingSeen === episode.uploadingSeen && nextDownloadingSeen === episode.downloadingSeen) {
+          return // already recorded — avoid a no-op write
+        }
+        episode.uploadingSeen = nextUploadingSeen
+        episode.downloadingSeen = nextDownloadingSeen
+        await this.put(key, episode)
+      } catch (err) {
+        warn('recordStallSeenFlags failed', err)
+      }
+    })
+  }
+
+  /**
+   * Record that the reconnect watchdog's conditions were met to fire against
+   * this episode while `RECONNECT_WATCHDOG_ENABLED` was `false` — i.e. what
+   * an ENABLED watchdog would have done. Increments
+   * `reconnectWouldHaveFiredCount`, stamps `lastReconnectWouldHaveFiredAt`.
+   * Same no-op/best-effort contract as {@link recordStallReconnectAttempt}.
+   */
+  recordStallReconnectWouldHaveFired(key: string | null, at: number): Promise<void> {
+    return this.enqueueSync(async () => {
+      if (!key) return
+      try {
+        const episode = await this.get<StallEpisode>(key)
+        if (!episode) return
+        episode.reconnectWouldHaveFiredCount = (episode.reconnectWouldHaveFiredCount ?? 0) + 1
+        episode.lastReconnectWouldHaveFiredAt = at
+        await this.put(key, episode)
+      } catch (err) {
+        warn('recordStallReconnectWouldHaveFired failed', err)
       }
     })
   }
@@ -679,22 +883,49 @@ const appendCapped = <T>(arr: T[], item: T, cap = MAX_SESSION_EVENTS): T[] => {
   return next.length > cap ? next.slice(next.length - cap) : next
 }
 
-// Every field except t/lastT/count — the coalescing test for recordSyncSample.
-// Deliberately EXCLUDES lastSyncedAt/uploading/downloading/uploadingSeen/
-// downloadingSeen: the first three churn on every checkpoint even on an
-// otherwise-unchanging healthy connection, so including them would fragment
-// the ring into a few minutes of history instead of real state transitions
-// (a coalesced entry still tracks their newest value — see the update in
-// recordSyncSample — it just isn't part of what decides whether to
-// coalesce); uploadingSeen/downloadingSeen are the STICKY aggregate of
-// uploading/downloading and would defeat their own purpose if they were part
-// of the key (a false→true flip would fragment the ring right at the moment
-// the sticky flag is meant to survive past). `pendingSinceT` IS included:
-// it's constant for the life of one pending-queue episode, so a change
-// (drained and refilled) correctly starts a new entry. `userId` IS included:
-// two different users' otherwise-identical states must never coalesce into
-// one entry attributed to neither (see the field's own doc on
-// SyncHealthSample).
+// Coarse bucket for pendingBlocks/pendingRows in the coalescing key: "is the
+// queue empty, non-empty, or unknown" — NOT the exact count. On an
+// actively-edited client the exact distinct-block/row counts churn on every
+// keystroke (~30 upload cycles' worth for one edit session), so keying on the
+// exact value would defeat coalescing almost entirely — the same client would
+// look "different" every sample despite being in the same coarse state the
+// whole time. `queueDepthBucket` is what makes "fields that churn on a
+// healthy connection are excluded [from the key]" actually true for these two
+// fields, not just for lastSyncedAt/uploading/downloading.
+type QueueDepthBucket = 'unknown' | 'empty' | 'nonempty'
+const queueDepthBucket = (pendingBlocks: number | null): QueueDepthBucket =>
+  pendingBlocks === null ? 'unknown' : pendingBlocks === 0 ? 'empty' : 'nonempty'
+
+const minIgnoringNull = (a: number | null | undefined, b: number | null): number | null => {
+  if (b === null) return a ?? null
+  if (a === null || a === undefined) return b
+  return Math.min(a, b)
+}
+const maxIgnoringNull = (a: number | null | undefined, b: number | null): number | null => {
+  if (b === null) return a ?? null
+  if (a === null || a === undefined) return b
+  return Math.max(a, b)
+}
+
+// Every field except t/lastT/count/minPendingBlocks/maxPendingBlocks — the
+// coalescing test for recordSyncSample. Deliberately EXCLUDES
+// lastSyncedAt/uploading/downloading/uploadingSeen/downloadingSeen: the first
+// three churn on every checkpoint even on an otherwise-unchanging healthy
+// connection, so including them would fragment the ring into a few minutes of
+// history instead of real state transitions (a coalesced entry still tracks
+// their newest value — see the update in recordSyncSample — it just isn't
+// part of what decides whether to coalesce); uploadingSeen/downloadingSeen are
+// the STICKY aggregate of uploading/downloading and would defeat their own
+// purpose if they were part of the key (a false→true flip would fragment the
+// ring right at the moment the sticky flag is meant to survive past).
+// pendingRows/pendingBlocks are compared via `queueDepthBucket`, NOT exact
+// equality — see that helper's doc; the exact values are still tracked (as
+// "latest" and as min/max — see recordSyncSample) but no longer gate
+// coalescing. `pendingSinceT` IS included: it's constant for the life of one
+// pending-queue episode, so a change (drained and refilled) correctly starts
+// a new entry. `userId` IS included: two different users' otherwise-identical
+// states must never coalesce into one entry attributed to neither (see the
+// field's own doc on SyncHealthSample).
 const sameSyncState = (
   a: SyncHealthSample,
   b: Omit<SyncHealthSample, 'lastT' | 'count'>,
@@ -703,8 +934,8 @@ const sameSyncState = (
   a.connected === b.connected &&
   a.connecting === b.connecting &&
   a.hasSynced === b.hasSynced &&
-  a.pendingRows === b.pendingRows &&
-  a.pendingBlocks === b.pendingBlocks &&
+  queueDepthBucket(a.pendingRows) === queueDepthBucket(b.pendingRows) &&
+  queueDepthBucket(a.pendingBlocks) === queueDepthBucket(b.pendingBlocks) &&
   a.pendingSinceT === b.pendingSinceT &&
   a.rejected === b.rejected &&
   a.materializing === b.materializing &&

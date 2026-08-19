@@ -246,9 +246,11 @@ describe('DbForensics — sync-health sample ring', () => {
   it('ring caps at MAX_SYNC_SAMPLES, dropping the oldest entries', async () => {
     const f = freshForensics()
     for (let i = 0; i < MAX_SYNC_SAMPLES + 5; i++) {
-      // Each sample differs from its predecessor (pendingRows increments) so
-      // every call appends rather than coalescing.
-      await f.recordSyncSample(baseSyncSample({ t: i, pendingRows: i }))
+      // Each sample differs from its predecessor (pendingSinceT increments —
+      // pendingRows/pendingBlocks alone would NOT do this: the coalescing key
+      // only sees their coarse empty/non-empty bucket, not the exact value)
+      // so every call appends rather than coalescing.
+      await f.recordSyncSample(baseSyncSample({ t: i, pendingSinceT: i }))
     }
     const all = await f.exportAll()
     const ring = all['sync:current'] as { samples: SyncHealthSample[] }
@@ -467,8 +469,11 @@ describe('DbForensics — sync-health sample ring', () => {
     const tabB = new DbForensics(new IdbKeyedStore(dbName, 'forensics'))
 
     await Promise.all([
-      tabA.recordSyncSample(baseSyncSample({ t: 1000, pendingBlocks: 1 })),
-      tabB.recordSyncSample(baseSyncSample({ t: 2000, pendingBlocks: 2 })),
+      // pendingSinceT (not pendingBlocks) is what forces these two apart in
+      // the coalescing key now — pendingBlocks alone would only be compared
+      // via its coarse empty/non-empty bucket, and 1/2 are both "nonempty".
+      tabA.recordSyncSample(baseSyncSample({ t: 1000, pendingBlocks: 1, pendingSinceT: 1000 })),
+      tabB.recordSyncSample(baseSyncSample({ t: 2000, pendingBlocks: 2, pendingSinceT: 2000 })),
     ])
 
     const all = await tabA.exportAll()
@@ -480,6 +485,44 @@ describe('DbForensics — sync-health sample ring', () => {
     // B's write with stale data read before B ever wrote).
     expect(ring.samples).toHaveLength(2)
     expect(ring.samples.map(s => s.pendingBlocks).sort()).toEqual([1, 2])
+  })
+
+  it('a churning but always-nonempty queue depth (pendingBlocks/pendingRows) still coalesces into one entry, tracking min/max and the latest value', async () => {
+    const f = freshForensics()
+    await f.recordSyncSample(baseSyncSample({ t: 1000, pendingBlocks: 5, pendingRows: 50 }))
+    await f.recordSyncSample(baseSyncSample({ t: 2000, pendingBlocks: 8, pendingRows: 80 }))
+    await f.recordSyncSample(baseSyncSample({ t: 3000, pendingBlocks: 3, pendingRows: 30 }))
+
+    const all = await f.exportAll()
+    const ring = all['sync:current'] as { samples: SyncHealthSample[] }
+    // Coalesces (queue never crossed the empty/non-empty boundary) even
+    // though the exact depth churned on every sample — this is exactly the
+    // "actively-edited client" case the coarse bucket exists for.
+    expect(ring.samples).toHaveLength(1)
+    expect(ring.samples[0]).toMatchObject({
+      t: 1000, lastT: 3000, count: 3,
+      pendingBlocks: 3, pendingRows: 30, // latest, same convention as lastSyncedAt
+      minPendingBlocks: 3, maxPendingBlocks: 8,
+    })
+  })
+
+  it('a transition across the empty/non-empty boundary still starts a new ring entry', async () => {
+    const f = freshForensics()
+    await f.recordSyncSample(baseSyncSample({ t: 1000, pendingBlocks: 0, pendingRows: 0 }))
+    await f.recordSyncSample(baseSyncSample({ t: 2000, pendingBlocks: 5, pendingRows: 5 }))
+
+    const all = await f.exportAll()
+    const ring = all['sync:current'] as { samples: SyncHealthSample[] }
+    expect(ring.samples).toHaveLength(2)
+  })
+
+  it('a freshly-appended (non-coalesced) entry starts minPendingBlocks/maxPendingBlocks at its own value', async () => {
+    const f = freshForensics()
+    await f.recordSyncSample(baseSyncSample({ t: 1000, pendingBlocks: 7 }))
+
+    const all = await f.exportAll()
+    const ring = all['sync:current'] as { samples: SyncHealthSample[] }
+    expect(ring.samples[0]).toMatchObject({ minPendingBlocks: 7, maxPendingBlocks: 7 })
   })
 })
 
@@ -497,7 +540,10 @@ describe('DbForensics — stall episodes', () => {
   it('closeStallEpisode patches how the stall resolved, without touching the opening fields', async () => {
     const f = freshForensics()
     const key = await f.recordStallEpisode(baseSyncSample({ t: 1000, pendingBlocks: 22, connected: false }))
-    await f.closeStallEpisode(key, { clearedAt: 5000, connected: true, lastSyncedAt: 5000, pendingBlocks: 0 })
+    await f.closeStallEpisode(key, {
+      clearedAt: 5000, connected: true, lastSyncedAt: 5000, pendingBlocks: 0,
+      rejected: 0, pendingRows: 0, uploadError: null, downloadError: null,
+    })
 
     const all = await f.exportAll()
     expect(all[key as string]).toMatchObject({
@@ -506,10 +552,31 @@ describe('DbForensics — stall episodes', () => {
     })
   })
 
+  it('closeStallEpisode records rejected/pendingRows/uploadError/downloadError, so a queue emptied by quarantine reads differently from a real upload', async () => {
+    const f = freshForensics()
+    const key = await f.recordStallEpisode(baseSyncSample({ t: 1000, pendingBlocks: 22, connected: false }))
+    // The queue emptied (pendingBlocks: 0) but ONLY because the rows got
+    // quarantined into ps_crud_rejected, not because they uploaded.
+    await f.closeStallEpisode(key, {
+      clearedAt: 5000, connected: true, lastSyncedAt: 5000, pendingBlocks: 0,
+      rejected: 22, pendingRows: 0, uploadError: 'HTTP 422: validation failed', downloadError: null,
+    })
+
+    const all = await f.exportAll()
+    expect(all[key as string]).toMatchObject({
+      clearedPendingBlocks: 0,
+      clearedRejected: 22,
+      clearedUploadError: 'HTTP 422: validation failed',
+    })
+  })
+
   it('closeStallEpisode is a no-op when key is null', async () => {
     const f = freshForensics()
     await expect(
-      f.closeStallEpisode(null, { clearedAt: 1, connected: true, lastSyncedAt: null, pendingBlocks: 0 }),
+      f.closeStallEpisode(null, {
+        clearedAt: 1, connected: true, lastSyncedAt: null, pendingBlocks: 0,
+        rejected: 0, pendingRows: 0, uploadError: null, downloadError: null,
+      }),
     ).resolves.toBeUndefined()
     expect(await f.exportAll()).toEqual({})
   })
@@ -532,7 +599,10 @@ describe('DbForensics — stall episodes', () => {
     const f = new DbForensics(throwingStore)
     await expect(f.recordStallEpisode(baseSyncSample())).resolves.toBeNull()
     await expect(
-      f.closeStallEpisode('stall:1', { clearedAt: 1, connected: true, lastSyncedAt: null, pendingBlocks: 0 }),
+      f.closeStallEpisode('stall:1', {
+        clearedAt: 1, connected: true, lastSyncedAt: null, pendingBlocks: 0,
+        rejected: 0, pendingRows: 0, uploadError: null, downloadError: null,
+      }),
     ).resolves.toBeUndefined()
   })
 
@@ -575,6 +645,95 @@ describe('DbForensics — stall episodes', () => {
       } as unknown as IdbKeyedStore
       const f = new DbForensics(throwingStore)
       await expect(f.recordStallReconnectAttempt('stall:1', 1)).resolves.toBeUndefined()
+    })
+  })
+
+  describe('recordStallProgress', () => {
+    it('increments progressCount and stamps lastProgressAt/lastProgressPendingBlocks, without closing the episode', async () => {
+      const f = freshForensics()
+      const key = await f.recordStallEpisode(baseSyncSample({ t: 1000, pendingBlocks: 22, connected: false }))
+
+      await f.recordStallProgress(key, { at: 2000, pendingBlocks: 15 })
+
+      const all = await f.exportAll()
+      expect(all[key as string]).toMatchObject({
+        t: 1000, pendingBlocks: 22, // opening state, unchanged
+        progressCount: 1, lastProgressAt: 2000, lastProgressPendingBlocks: 15,
+      })
+      expect(all[key as string]).not.toHaveProperty('clearedAt') // NOT a resolution
+    })
+
+    it('accumulates across repeated progress events', async () => {
+      const f = freshForensics()
+      const key = await f.recordStallEpisode(baseSyncSample({ t: 1000, pendingBlocks: 22 }))
+
+      await f.recordStallProgress(key, { at: 2000, pendingBlocks: 15 })
+      await f.recordStallProgress(key, { at: 3000, pendingBlocks: 10 })
+
+      const all = await f.exportAll()
+      expect(all[key as string]).toMatchObject({
+        progressCount: 2, lastProgressAt: 3000, lastProgressPendingBlocks: 10,
+      })
+    })
+
+    it('is a no-op when key is null', async () => {
+      const f = freshForensics()
+      await expect(f.recordStallProgress(null, { at: 1, pendingBlocks: 1 })).resolves.toBeUndefined()
+      expect(await f.exportAll()).toEqual({})
+    })
+  })
+
+  describe('recordStallSeenFlags', () => {
+    it('ORs uploadingSeen/downloadingSeen into an open episode across multiple calls — not frozen at the onset value', async () => {
+      const f = freshForensics()
+      const key = await f.recordStallEpisode(
+        baseSyncSample({ t: 1000, pendingBlocks: 22, uploadingSeen: false, downloadingSeen: false }),
+      )
+
+      await f.recordStallSeenFlags(key, true, false)
+      await f.recordStallSeenFlags(key, false, true)
+
+      const all = await f.exportAll()
+      expect(all[key as string]).toMatchObject({ uploadingSeen: true, downloadingSeen: true })
+    })
+
+    it('never clears a flag that is already true', async () => {
+      const f = freshForensics()
+      const key = await f.recordStallEpisode(
+        baseSyncSample({ t: 1000, pendingBlocks: 22, uploadingSeen: true, downloadingSeen: false }),
+      )
+
+      await f.recordStallSeenFlags(key, false, false)
+
+      const all = await f.exportAll()
+      expect(all[key as string]).toMatchObject({ uploadingSeen: true, downloadingSeen: false })
+    })
+
+    it('is a no-op when key is null', async () => {
+      const f = freshForensics()
+      await expect(f.recordStallSeenFlags(null, true, true)).resolves.toBeUndefined()
+      expect(await f.exportAll()).toEqual({})
+    })
+  })
+
+  describe('recordStallReconnectWouldHaveFired', () => {
+    it('increments the count and stamps the timestamp, leaving the opening fields untouched', async () => {
+      const f = freshForensics()
+      const key = await f.recordStallEpisode(baseSyncSample({ t: 1000, pendingBlocks: 22, connected: false }))
+
+      await f.recordStallReconnectWouldHaveFired(key, 2000)
+
+      const all = await f.exportAll()
+      expect(all[key as string]).toMatchObject({
+        t: 1000, pendingBlocks: 22, connected: false,
+        reconnectWouldHaveFiredCount: 1, lastReconnectWouldHaveFiredAt: 2000,
+      })
+    })
+
+    it('is a no-op when key is null', async () => {
+      const f = freshForensics()
+      await expect(f.recordStallReconnectWouldHaveFired(null, 1)).resolves.toBeUndefined()
+      expect(await f.exportAll()).toEqual({})
     })
   })
 })

@@ -8,6 +8,7 @@ import {
 import { SystemStatusHeaderItem } from '../SystemStatusHeaderItem.tsx'
 import {
   materializeQueueCountSql,
+  rejectedQueueCountSql,
   uploadQueueCountCap,
   uploadQueueExactCountSql,
   uploadQueuePreviewCountSql,
@@ -104,8 +105,6 @@ vi.mock('@/extensions/runtimeContext.js', async () => {
   }
 })
 
-const rejectedCountSql = 'SELECT COUNT(*) AS count FROM ps_crud_rejected'
-
 const defaultStatus = () => ({
   connected: true,
   connecting: false,
@@ -134,7 +133,7 @@ describe('SystemStatusHeaderItem', () => {
     setDeviceOnline(true)
     resetConsistencyAuditStore()
     mocks.queryResponses = new Map([
-      [rejectedCountSql, {data: [{count: 0}]}],
+      [rejectedQueueCountSql, {data: [{count: 0}]}],
       [uploadQueuePreviewCountSql, {data: [{count: uploadQueueCountCap + 1}]}],
       [uploadQueueExactCountSql, {data: [{count: 1032688}]}],
     ])
@@ -144,6 +143,19 @@ describe('SystemStatusHeaderItem', () => {
     cleanup()
     setDeviceOnline(true)
     resetConsistencyAuditStore()
+  })
+
+  it('shows the rejected-changes count sourced from the shared rejectedQueueCountSql query', async () => {
+    // Pins that the chip's rejected-count query is the SAME `rejectedQueueCountSql`
+    // constant `src/data/syncQueueSql.ts` exports (also consumed by
+    // dbForensicsHooks.ts) rather than a component-local copy of the SQL text
+    // that could silently drift from it.
+    mocks.queryResponses.set(rejectedQueueCountSql, {data: [{count: 3}]})
+
+    render(<SystemStatusHeaderItem/>)
+    fireEvent.pointerDown(screen.getByRole('button'))
+
+    expect(await screen.findByText("3 changes couldn't sync")).toBeInTheDocument()
   })
 
   it('uses the capped queue count for the always-mounted remote indicator', () => {

@@ -49,3 +49,26 @@ export const rejectedQueueCountSql =
 // `pendingBlocks` stays small.
 export const uploadQueueRowCountSql =
   `SELECT COUNT(*) AS count FROM (SELECT 1 FROM ps_crud LIMIT ${uploadQueueCountCap + 1})`
+
+// The exact, uncapped queue-progress signal. `ps_crud.id` is the table's
+// rowid, and PowerSync drains a completed upload batch with
+// `DELETE FROM ps_crud WHERE id <= ?` (verified in `@powersync/common`
+// `SqliteBucketStorage.ts:155`) — so `MIN(id)` only ever moves UP as batches
+// land, and `lo` advancing between two samples is exactly "the upload loop
+// completed a batch since the last observation," with no cap and no
+// json_extract/DISTINCT scan: each of the two subqueries is a single b-tree
+// edge probe. `lo IS NULL` (both aggregates are, since SQLite's MIN/MAX
+// return NULL over zero rows) means the queue is empty. `hi` (MAX(id)) is
+// carried alongside for a cheap depth-in-ids sanity check but isn't required
+// by the progress signal itself, which only needs `lo`.
+//
+// This replaces the old decrease-in-capped-counts heuristic
+// (uploadQueuePreviewCountSql/uploadQueueRowCountSql going down) as the
+// signal that DRIVES the sync-health stall verdict — see
+// `computeSyncStall` in dbForensicsHooks.ts. Those two capped counts are
+// still queried and kept in the recorded sample as the human-legible
+// "depth" (what the status chip shows), but they no longer decide the
+// verdict, so the cap no longer limits how deep a genuinely-draining
+// backlog can be told apart from a wedged one.
+export const uploadQueueEdgeSql =
+  'SELECT (SELECT MIN(id) FROM ps_crud) AS lo, (SELECT MAX(id) FROM ps_crud) AS hi'

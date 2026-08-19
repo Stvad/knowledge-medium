@@ -24,6 +24,7 @@ import {
 } from './model.ts'
 import {
   materializeQueueCountSql,
+  rejectedQueueCountSql,
   uploadQueueCountCap,
   uploadQueueExactCountSql,
   uploadQueuePreviewCountSql,
@@ -38,7 +39,6 @@ interface UploadQueueCountRow {
 }
 
 const uploadQueuePreviewThrottleMs = 1_000
-const rejectedCountSql = 'SELECT COUNT(*) AS count FROM ps_crud_rejected'
 
 // Network sync errors are noisy: a dropped connection or a token refresh
 // caught mid-flight surfaces an error for a second or two before PowerSync
@@ -159,7 +159,7 @@ export function SystemStatusHeaderItem() {
   const localOnly = useIsLocalOnly()
   const status = useStatus()
   const rejected = useQuery<UploadQueueCountRow>(
-    rejectedCountSql,
+    rejectedQueueCountSql,
     [],
     {reportFetching: false},
   )
