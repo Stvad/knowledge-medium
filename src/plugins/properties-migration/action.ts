@@ -19,6 +19,19 @@ import { ConfirmMigrationDialog } from './ConfirmMigrationDialog.tsx'
  *  sticky toast rather than appended here, because the banner's completion
  *  message clears in a couple of seconds and this pass runs for minutes —
  *  long enough that nobody is still watching when it lands. */
+/** The runner's reasons come from several places and only some end in a
+ *  period, which is how "…partially materialized graph.. Try again" happened. */
+const withPeriod = (reason: string | undefined): string =>
+  reason === undefined ? '' : /[.!?]$/.test(reason) ? reason : `${reason}.`
+
+/** Appended to EVERY outcome that could have written. The pass clears the
+ *  workspace's undo stack on its first committed batch, and an operator who is
+ *  not told finds their history silently gone — which the `ran` branch said
+ *  and the abort branches, the ones that actually strand a half-done run,
+ *  did not. */
+const undoNote = (result: OperatorBackfillResult): string =>
+  result.undoHistoryCleared ? ' Undo history for this workspace was cleared.' : ''
+
 export const describeOutcome = (
   result: OperatorBackfillResult,
   blocksMaterialized: number,
@@ -41,23 +54,35 @@ export const describeOutcome = (
             ? ' The workspace was edited while it ran, so some values may already be behind —' +
               ' run this again before flipping.'
             : '') +
-          (result.undoHistoryCleared ? ' Undo history for this workspace was cleared.' : ''),
+          undoNote(result),
         // Surfaced through `done`, not `fail`: the pass DID complete, and
         // saying otherwise would send an operator looking for a broken run
         // rather than for the handful of values named in the console.
         failed: false,
         followUp: unmigrated > 0
           ? `${unmigrated.toLocaleString()} property value(s) could not be migrated and kept ` +
-            'their cell value — see the console for which. Repair them and run this again ' +
-            'before flipping the workspace.'
+            'their cell value — see the console for which (first 50 shown). Repair them and ' +
+            'run this again before flipping the workspace.'
           : undefined,
       }
     case 'deferred':
-      return {message: `Not started — ${result.reason}. Try again shortly.`, failed: true}
+      // "Not started" only if it really did not: the per-transaction
+      // preconditions abort mid-run too, and on a connected device that is the
+      // EXPECTED ending (km-gwam) — after the pass has written a large part of
+      // the graph and cleared the undo history on its first committed batch.
+      return {
+        message: (result.undoHistoryCleared
+          ? `Stopped before finishing — ${withPeriod(result.reason)} Already-migrated blocks ` +
+            'are skipped, so run it again.'
+          : `Not started — ${withPeriod(result.reason)} Try again shortly.`) + undoNote(result),
+        failed: true,
+      }
     case 'failed':
       return {
-        message: `Stopped partway — ${result.reason} Run it again; ` +
-          'already-migrated blocks are skipped.',
+        // No blanket "run it again": true for the give-up and for an
+        // unexpected throw, false for the flip refusal and for a missing claim
+        // seam, which fail identically every time. Each reason carries its own.
+        message: `Stopped partway — ${withPeriod(result.reason)}${undoNote(result)}`,
         failed: true,
       }
     case 'held-by-peer':

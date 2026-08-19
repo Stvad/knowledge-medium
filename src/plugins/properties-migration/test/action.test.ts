@@ -144,3 +144,26 @@ describe('what a completed run tells the operator', () => {
     expect(describeOutcome(ran, 100, 0, false).message).not.toMatch(/run this again/i)
   })
 })
+
+describe('what an aborted run tells the operator', () => {
+  it('does not say "Not started" for a run that wrote and dropped the undo stack', async () => {
+    // The per-transaction preconditions abort MID-run, and on a connected
+    // device that is the expected ending — after a large part of the graph is
+    // already written.
+    const {message} = describeOutcome(
+      {outcome: 'deferred', undoHistoryCleared: true, reason: 'synced rows are still draining'},
+      0, 0, false,
+    )
+
+    expect(message).not.toMatch(/not started/i)
+    expect(message).toMatch(/undo history/i)
+  })
+
+  it('tells a failed run its undo history is gone too', async () => {
+    const {message} = describeOutcome(
+      {outcome: 'failed', undoHistoryCleared: true, reason: 'the pass gave up.'}, 0, 0, false,
+    )
+
+    expect(message).toMatch(/undo history/i)
+  })
+})
