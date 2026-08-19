@@ -6,7 +6,7 @@
 // graph, which is where a key nobody owns shows up — and those are exactly
 // the keys `materializePropertyChildrenForExistingRow` skips.
 
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChangeScope, seedProperty, seedType } from '@/data/api'
 import type { BlockProperties } from '@/types.js'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
@@ -347,6 +347,30 @@ describe('audit-properties scan coverage', () => {
     await create({id: 'b1', properties: {'demo:undeclared': 'x'}})
 
     await expect(auditPropertyRegistration(repo, WS)).rejects.toThrow(/not caught up/i)
+  })
+
+  it('discards a scan a whole sync cycle completed under, which no sample can see', async () => {
+    // "Is sync work outstanding" reads false both BEFORE an arrival and AFTER
+    // it drained, so a download that starts and finishes between the opening
+    // and closing checks is invisible to both. The monotone arrival mark is
+    // what catches it: rows staged mid-scan stay counted once the queue is
+    // empty again. Staged and drained for real here, right after the opening
+    // mark is taken.
+    await create({id: 'b1', properties: {'demo:undeclared': 'x'}})
+    const realMark = repo.stagedArrivalMark.bind(repo)
+    let staged = false
+    vi.spyOn(repo, 'stagedArrivalMark').mockImplementation(async () => {
+      const mark = await realMark()
+      if (!staged) {
+        staged = true
+        await sharedDb.db.execute(
+          `INSERT INTO blocks_synced_changes (id, op) VALUES (?, 'upsert')`, ['arrived'])
+        await sharedDb.db.execute('DELETE FROM blocks_synced_changes')
+      }
+      return mark
+    })
+
+    await expect(auditPropertyRegistration(repo, WS)).rejects.toThrow(/arrived from sync/i)
   })
 
   it('refuses a scan that starts behind even when the device catches up before it ends', async () => {

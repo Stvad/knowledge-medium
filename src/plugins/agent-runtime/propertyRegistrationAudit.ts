@@ -104,6 +104,14 @@ export interface UnregisteredProperty {
  *  definitions), so skew is self-correcting on the next run. */
 export interface PropertyRegistrationAudit {
   workspaceId: string
+  /** When this device last completed a sync, or null if it never has (or there
+   *  is no sync layer). The report's BASIS, stated rather than assumed: the
+   *  guards above prove no sync work was outstanding or landed during the
+   *  scan, which is not the same as proving the server has nothing this device
+   *  has not been told about — no local signal can establish that. A
+   *  `syncedThrough` from days ago on a connected client is the reader's cue
+   *  that the scan ran over stale rows. */
+  syncedThrough: string | null
   distinctProperties: number
   /** Total (block, key) pairs — the size of the cell-era property surface. */
   propertyCells: number
@@ -254,10 +262,11 @@ const parseTypes = (json: string | null): string[] => {
 const keyOf = (raw: string | null): string => typeof raw === 'string' ? raw : String(raw ?? '')
 
 /**
- * Refuse to produce a report from an incomplete view of the graph.
+ * Refuse to produce a report from an incomplete view of the graph, and return
+ * the arrival mark to compare the other side of the scan against.
  *
- * The scan below enumerates the keys present in `blocks`. Rows this device
- * has not downloaded, or has downloaded but not yet drained out of
+ * The scan below enumerates the keys present in `blocks`. Rows this device has
+ * not downloaded, or has downloaded but not yet drained out of
  * `blocks_synced_changes`, are simply not there — so the audit under-reports
  * silently, and an empty `unregistered` list is indistinguishable from a
  * complete one. That matters more here than for a normal stale read because
@@ -265,27 +274,34 @@ const keyOf = (raw: string | null): string => typeof raw === 'string' ? raw : St
  * ACTED ON, and the keys hiding in the un-arrived rows stay cell-only forever
  * once a workspace flips (`propertyChildrenProcessor` skips unregistered keys).
  *
- * Checked on both sides of the scan, not just before it: a drain that starts
- * mid-scan leaves the histogram short while the final read looks settled. A
- * refusal costs the operator a retry; a wrong all-clear costs data.
+ * TWO SAMPLES ARE NOT ENOUGH, which is what the mark is for. "Is sync work
+ * outstanding" reads false both before an arrival and after it has drained, so
+ * a whole download-and-drain cycle can complete between the opening and
+ * closing checks with neither seeing it. `stagedArrivalMark` is monotone, so
+ * comparing it across the scan catches an arrival whether or not it is still
+ * in flight when we look.
+ *
+ * A refusal costs the operator a retry; a wrong all-clear costs data.
  */
 const assertCompleteView = async (
   repo: Repo,
   workspaceId: string,
   phase: 'before' | 'during',
-): Promise<void> => {
+): Promise<number> => {
   const gap = await repo.syncViewGap()
-  if (gap === null) return
-  throw new Error(
-    phase === 'before'
-      ? `Cannot audit ${workspaceId}: ${gap}. Rows that have not landed are not ` +
-        'scanned, so the report would under-count the keys a flip cannot carry and ' +
-        'an incomplete scan would read as "nothing to fix". Wait for sync to settle ' +
-        'and re-run.'
-      : `Discarding the audit of ${workspaceId}: ${gap} while the scan ran, so rows ` +
-        'that arrived mid-scan are missing from it. The counts would be short by an ' +
-        'unknown amount. Re-run once sync has settled.',
-  )
+  if (gap !== null) {
+    throw new Error(
+      phase === 'before'
+        ? `Cannot audit ${workspaceId}: ${gap}. Rows that have not landed are not ` +
+          'scanned, so the report would under-count the keys a flip cannot carry and ' +
+          'an incomplete scan would read as "nothing to fix". Wait for sync to settle ' +
+          'and re-run.'
+        : `Discarding the audit of ${workspaceId}: ${gap} while the scan ran, so rows ` +
+          'that arrived mid-scan are missing from it. The counts would be short by an ' +
+          'unknown amount. Re-run once sync has settled.',
+    )
+  }
+  return repo.stagedArrivalMark()
 }
 
 /** Enumerate every property key in the workspace's live blocks and classify
@@ -317,7 +333,7 @@ export const auditPropertyRegistration = async (
   }
   const resolver = repo.propertySchemaResolverFor(workspaceId)
 
-  await assertCompleteView(repo, workspaceId, 'before')
+  const arrivalsAtStart = await assertCompleteView(repo, workspaceId, 'before')
 
   const histogram = await repo.db.getAll<HistogramRow>(
     `SELECT j.key AS property, COUNT(*) AS cells
@@ -415,10 +431,19 @@ export const auditPropertyRegistration = async (
     blocksPerKey: Math.max(1, Math.floor(limits.blocksPerKey ?? PROVENANCE_BLOCKS_PER_KEY)),
   })
 
-  await assertCompleteView(repo, workspaceId, 'during')
+  const arrivalsAtEnd = await assertCompleteView(repo, workspaceId, 'during')
+  if (arrivalsAtEnd !== arrivalsAtStart) {
+    throw new Error(
+      `Discarding the audit of ${workspaceId}: ` +
+      `${arrivalsAtEnd - arrivalsAtStart} row(s) arrived from sync while the scan ran, ` +
+      'so the key counts are short by however many landed after each pass read. ' +
+      'Re-run — nothing was written.',
+    )
+  }
 
   return {
     workspaceId,
+    syncedThrough: repo.lastSyncedAt?.toISOString() ?? null,
     distinctProperties: histogram.length,
     propertyCells,
     registeredProperties,

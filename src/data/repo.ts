@@ -2772,6 +2772,33 @@ export class Repo {
    * so reads as "nothing to fix" when rows are missing) — one predicate,
    * because a rule added to one of two copies is how these diverge.
    */
+  /** Monotone count of rows EVER staged into `blocks_synced_changes` — the
+   *  table's `AUTOINCREMENT` high-water mark, which SQLite keeps in
+   *  `sqlite_sequence` across drains. A reader that wants "did any sync work
+   *  land while I was scanning" cannot get it from the queue's depth, which is
+   *  zero both before an arrival and after it drained; this changes and stays
+   *  changed.
+   *
+   *  Zero before the first arrival (SQLite creates the row lazily), which is
+   *  indistinguishable from "no arrivals yet" — correct either way, since the
+   *  value is only ever compared with an earlier reading of itself. */
+  async stagedArrivalMark(): Promise<number> {
+    const row = await this.db.getOptional<{seq: number}>(
+      `SELECT seq FROM sqlite_sequence WHERE name = 'blocks_synced_changes'`,
+    )
+    return row?.seq ?? 0
+  }
+
+  /** When this device last COMPLETED a sync, or undefined if it never has (or
+   *  there is no sync layer). Persisted by PowerSync across sessions, so on a
+   *  warm client it is last session's — which is exactly why it is worth
+   *  reporting: it says how current the local rows a full-graph read scanned
+   *  actually are. Measured NOT to advance on an idle connected client, so it
+   *  is a basis to state, never a freshness gate to refuse on. */
+  get lastSyncedAt(): Date | undefined {
+    return (this.db as {currentStatus?: {lastSyncedAt?: Date}}).currentStatus?.lastSyncedAt
+  }
+
   async syncViewGap(): Promise<string | null> {
     const staged = await this.db.getOptional<{one: number}>(
       'SELECT 1 AS one FROM blocks_synced_changes LIMIT 1',
