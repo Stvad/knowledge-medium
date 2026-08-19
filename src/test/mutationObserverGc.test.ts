@@ -35,8 +35,11 @@ it('keeps delivering mutation records after a GC', async () => {
   gc()
   expect(collectable.deref(), 'GC premise no longer holds — this test proves nothing').toBeUndefined()
 
+  // Counted after the collection, so this asserts POST-GC delivery rather
+  // than "something fired at some point".
+  const firedBeforeMutation = fired
   target.appendChild(document.createElement('span'))
-  await vi.waitFor(() => { expect(fired).toBeGreaterThan(0) })
+  await vi.waitFor(() => { expect(fired).toBeGreaterThan(firedBeforeMutation) })
 
   observer.disconnect()
   target.remove()
