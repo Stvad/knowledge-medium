@@ -50,12 +50,9 @@ describe('limitOption', () => {
     expect(() => limitOption(parsed as number)).toThrow(/positive integer/i)
   })
 
-  it.each([['0', 0], ['-1', -1], ['1.5', 1.5], ['abc', 'abc']] as const)(
-    'refuses a non-positive-integer --limit (%s)',
-    (_label, value) => {
-      expect(() => limitOption(value)).toThrow(/positive integer/i)
-    },
-  )
+  it.each([0, -1, 1.5, 'abc'] as const)('refuses a non-positive-integer --limit (%s)', value => {
+    expect(() => limitOption(value)).toThrow(/positive integer/i)
+  })
 
   it('omits the field entirely when the option is absent', () => {
     expect(parseOption('limit', ['page', 'x'])).toBeUndefined()

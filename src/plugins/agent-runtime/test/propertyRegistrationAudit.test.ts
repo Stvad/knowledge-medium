@@ -340,10 +340,10 @@ describe('audit-properties command', () => {
 })
 
 describe('shared workspace resolution', () => {
-  // Verbs, then values. page/search/daily-note resolve through
-  // `commandWorkspaceId`; the backlinks verbs resolve through
-  // `resolveBlockWorkspaceId`; audit-properties checks its own input. Each
-  // needs a row or one guard stays unpinned.
+  // Verbs, then values. Three resolvers reach `assertedWorkspaceOverride`:
+  // `commandWorkspaceId` (page/search/daily-note), `resolveBlockWorkspaceId`
+  // (the backlinks verbs), and audit-properties' own call. The remaining rows
+  // pin per-verb dispatch — that each verb reaches a resolver at all.
   //
   // Both values are load-bearing and neither subsumes the other. '' is the
   // only one the CLI can emit (cac turns `--workspace ""` into 0, which the
@@ -367,6 +367,18 @@ describe('shared workspace resolution', () => {
       )).rejects.toThrow(/empty value/i)
     },
   )
+
+  // A padded expansion used to mean two different things: audit-properties
+  // trimmed, the read verbs passed ' ws-1 ' through to the lookup and
+  // answered "no such page" for a workspace that exists.
+  it('trims a padded assertion rather than resolving it as a literal id', async () => {
+    const result = await executeCommand(
+      {commandId: 'w-2', type: 'page', name: 'x', workspaceId: `  ${WS}  `},
+      context,
+    ) as {workspaceId: string}
+
+    expect(result.workspaceId).toBe(WS)
+  })
 })
 
 describe('describeUnregisteredProperty', () => {

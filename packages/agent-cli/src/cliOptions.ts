@@ -30,9 +30,10 @@ export const limitOption = (limit: string | number | undefined): {limit?: number
   const parsed = Number(limit)
   if (!Number.isInteger(parsed) || parsed < 1) {
     throw new Error(
-      `--limit expects a positive integer; got ${JSON.stringify(limit)}. An empty value `
-      + '(a shell expanding an unset variable) arrives as 0, which would run the query '
-      + 'with LIMIT 0. Omit the option to take the default.',
+      `--limit expects a positive integer; got ${JSON.stringify(limit)}.`
+      // The user typed `--limit ""` but the message can only show them the 0 CAC
+      // handed us, so name the expansion or it reads as someone else's bug.
+      + (parsed === 0 ? ' An empty value (a shell expanding an unset variable) arrives as 0.' : ''),
     )
   }
   return {limit: parsed}
