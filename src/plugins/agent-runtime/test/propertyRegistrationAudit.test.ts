@@ -42,14 +42,21 @@ let sharedDb: TestDb
 let repo: Repo
 let context: AgentRuntimeContext
 
-beforeAll(async () => { sharedDb = await createTestDb() })
+let realSyncStatus: unknown
+beforeAll(async () => {
+  sharedDb = await createTestDb()
+  realSyncStatus = (sharedDb.db as {currentStatus?: unknown}).currentStatus
+})
 afterAll(async () => { await sharedDb.cleanup() })
 // `repo` is rebuilt per test, but the db is shared for the whole file, so
 // anything installed ON the db outlives the test that installed it. Two
-// mechanisms, and `restoreAllMocks` only knows about the first.
+// mechanisms, and `restoreAllMocks` only knows about the first: `currentStatus`
+// is a plain own field on the real PowerSync db, so a stub assigned over it has
+// to be put BACK. Deleting it instead would strip the genuine SyncStatus from
+// every later test, silently disabling anything that reads sync state.
 afterEach(() => {
   vi.restoreAllMocks()
-  Reflect.deleteProperty(sharedDb.db, 'currentStatus')
+  ;(sharedDb.db as {currentStatus?: unknown}).currentStatus = realSyncStatus
 })
 
 /** Rebuild the repo under test, optionally with a sync gate that says this
@@ -154,12 +161,11 @@ describe('auditPropertyRegistration', () => {
   // `definitionsByFieldId` lookup in `auditPropertyRegistration`; its
   // rationale is recorded there.
 
-  // NOTE: the "resolver is captured before any await" property (so a live
-  // workspace switch mid-audit can't void the classification) is NOT pinned
-  // by a test. Intercepting it needs a spy on `repo.db`, which is the shared
-  // test database, and every shape of that spy recursed. A flaky test in the
-  // gate is worse than none; the invariant is a statement-order comment at
-  // the capture site in `auditPropertyRegistration`.
+  // NOTE: what remains unpinned is a workspace switch landing mid-audit for
+  // real. `waits for the definition projector…` below pins the STATEMENT ORDER
+  // that closes the window (every await resolves before the capture), which is
+  // what an edit would actually break; driving a live switch between two
+  // statements needs a seam this harness does not have.
 
   it('excludes a non-object properties_json instead of inventing a phantom empty key', async () => {
     // A corrupt scalar cell: `json_each('5')` yields one row whose key is
@@ -252,20 +258,32 @@ describe('auditPropertyRegistration', () => {
       .rejects.toThrow(/registry/i)
   })
 
-  it('waits for the definition projector before CAPTURING the resolver', async () => {
-    // The registry is derived from definition blocks by an async projector, so
-    // a snapshot read mid-rebuild calls a key whose definition already landed
-    // "broken" and sends the operator to repair a definition that is fine.
+  it('waits for the definition projector, and captures after every await', async () => {
+    // Two properties, one sequence, because they fail the same way — a resolver
+    // frozen while the registry is still rebuilding calls a key whose
+    // definition has already landed "broken".
     //
-    // The capture is what has to come after the wait, not the scans: the
-    // resolver holds its snapshot BY VALUE, so classification is fixed the
-    // instant it is taken and no later await can refresh it. Probing only the
-    // queries would leave `capture; await; scan` passing — the original bug,
-    // and the shape an editor reaching for "capture early" writes.
+    // The wait must RESOLVE, not merely be called: dropping the `await` keyword
+    // alone reintroduces the bug, and nothing else in the gate catches it
+    // (there is no no-floating-promises rule). Hence the deferred promise — a
+    // spy that records at call time cannot tell the two apart.
+    //
+    // And the capture must follow EVERY await. `syncViewGap` is sampled above
+    // it for that reason; moved back below, the capture would again sit on the
+    // near side of a suspension point.
     await create({id: 'b1', properties: {[declaredProp.name]: 'v'}})
     const order: string[] = []
-    vi.spyOn(repo, 'whenPropertyDefinitionsReady').mockImplementation(async () => {
+    let releaseProjector!: () => void
+    vi.spyOn(repo, 'whenPropertyDefinitionsReady').mockImplementation(() => {
       order.push('waited')
+      return new Promise<void>(resolve => {
+        releaseProjector = () => { order.push('released'); resolve() }
+      })
+    })
+    const syncViewGap = repo.syncViewGap.bind(repo)
+    vi.spyOn(repo, 'syncViewGap').mockImplementation(() => {
+      order.push('gap')
+      return syncViewGap()
     })
     const resolverFor = repo.propertySchemaResolverFor.bind(repo)
     vi.spyOn(repo, 'propertySchemaResolverFor').mockImplementation(ws => {
@@ -278,9 +296,12 @@ describe('auditPropertyRegistration', () => {
       return getAll(sql, params as never[])
     })
 
-    await auditPropertyRegistration(repo, WS)
+    const running = auditPropertyRegistration(repo, WS)
+    await vi.waitFor(() => { expect(order).toContain('waited') })
+    releaseProjector()
+    await running
 
-    expect(order.slice(0, 3)).toEqual(['waited', 'captured', 'scanned'])
+    expect(order.slice(0, 5)).toEqual(['waited', 'released', 'gap', 'captured', 'scanned'])
   })
 
   it('totals cover every key, not just the unregistered ones', async () => {

@@ -117,9 +117,10 @@ export interface PropertyRegistrationAudit {
   /** When this device last completed a sync, or null if it never has (or there
    *  is no sync layer). The rest of the report's basis, and the part no check
    *  can establish: `syncGap` being null says nothing is outstanding LOCALLY,
-   *  never that the server has nothing this device has not been told about. A
-   *  `syncedThrough` from days ago on a connected client is the cue that the
-   *  scan ran over stale rows. */
+   *  never that the server has nothing this device has not been told about.
+   *  Record it beside the counts rather than judging it — it does not advance
+   *  on a connected idle graph, so a current device on a quiet graph and a
+   *  stale one look identical here. */
   syncedThrough: string | null
   distinctProperties: number
   /** Total (block, key) pairs — the size of the cell-era property surface. */
@@ -299,20 +300,25 @@ export const auditPropertyRegistration = async (
   // direction: a false positive the operator investigates, unlike an all-clear
   // built from missing rows.
   await repo.whenPropertyDefinitionsReady(workspaceId)
-  // Defence in depth; no test pins it. A workspace switch across the await
-  // would leave `registry` belonging to another workspace, silently degrading
-  // the effective-name rewrite below to stored names. Classification itself is
-  // safe either way — `propertySchemaResolverFor` re-checks and fails closed.
-  const registry = requireRegistry()
-  // Fails CLOSED for a workspace that is neither active nor immediately
-  // previous, so a switch during the queries below would report the whole graph
-  // as unregistered — a false list that reads authoritative and could talk
-  // someone into synthesizing definitions for keys that already have them.
-  // Holds its snapshot by value, so capturing here makes classification immune.
-  // Same rule as `schedulePropertyDefinitionMigrations` in `repo.ts`.
-  const resolver = repo.propertySchemaResolverFor(workspaceId)
-
+  // Sampled here, above the capture, so that EVERY await in this function is
+  // behind us before the resolver is frozen. Keeping it below would leave a
+  // suspension point between the capture and the scans, which is the window
+  // the capture exists to close.
   const syncGap = await repo.syncViewGap()
+  // Defence in depth; no test pins it. A workspace switch across the awaits
+  // would leave `registry` belonging to another workspace, silently degrading
+  // the effective-name rewrite below to stored names. It also converts the
+  // two-switch case into a loud error: past the previous-workspace fallback
+  // `propertySchemaResolverFor` fails CLOSED, which here is the HAZARD, not
+  // safety — every key resolves identity-unavailable and the audit reports the
+  // whole graph as unregistered.
+  const registry = requireRegistry()
+  // Nothing may await between this line and the scans. The resolver holds its
+  // snapshot by value, so classification is fixed the instant it is taken; a
+  // workspace switch across a later suspension point would otherwise leave the
+  // scans reading rows this snapshot cannot classify. Same rule as
+  // `schedulePropertyDefinitionMigrations` in `repo.ts`.
+  const resolver = repo.propertySchemaResolverFor(workspaceId)
 
   const histogram = await repo.db.getAll<HistogramRow>(
     `SELECT j.key AS property, COUNT(*) AS cells
