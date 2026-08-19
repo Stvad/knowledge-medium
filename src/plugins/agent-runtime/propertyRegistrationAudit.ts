@@ -274,34 +274,41 @@ const keyOf = (raw: string | null): string => typeof raw === 'string' ? raw : St
  * ACTED ON, and the keys hiding in the un-arrived rows stay cell-only forever
  * once a workspace flips (`propertyChildrenProcessor` skips unregistered keys).
  *
- * TWO SAMPLES ARE NOT ENOUGH, which is what the mark is for. "Is sync work
- * outstanding" reads false both before an arrival and after it has drained, so
- * a whole download-and-drain cycle can complete between the opening and
- * closing checks with neither seeing it. `stagedArrivalMark` is monotone, so
- * comparing it across the scan catches an arrival whether or not it is still
- * in flight when we look.
+ * TWO SAMPLES ARE NOT ENOUGH, which is what the arrival mark is for. "Is sync
+ * work outstanding" reads false both before an arrival and after it has
+ * drained, so a whole download-and-drain cycle can complete between the
+ * opening and closing checks with neither seeing it. `stagedArrivalMark` is
+ * monotone, so comparing it across the scan catches an arrival whether or not
+ * it is still in flight when we look.
+ *
+ * THE MARK BRACKET MUST CONTAIN THE QUEUE CHECKS, not sit inside them — the
+ * whole guarantee turns on that ordering. Read the opening mark AFTER the
+ * opening queue check and a row staged in between is already counted in it;
+ * if that row then drains before the closing checks, both queue checks pass,
+ * both marks agree, and the scan that missed it reports clean. Opening mark
+ * first, closing mark last: then every arrival is either still queued when a
+ * check looks (refused there) or lands after the opening mark (refused by the
+ * comparison).
  *
  * A refusal costs the operator a retry; a wrong all-clear costs data.
  */
-const assertCompleteView = async (
+const assertNoOutstandingSync = async (
   repo: Repo,
   workspaceId: string,
   phase: 'before' | 'during',
-): Promise<number> => {
+): Promise<void> => {
   const gap = await repo.syncViewGap()
-  if (gap !== null) {
-    throw new Error(
-      phase === 'before'
-        ? `Cannot audit ${workspaceId}: ${gap}. Rows that have not landed are not ` +
-          'scanned, so the report would under-count the keys a flip cannot carry and ' +
-          'an incomplete scan would read as "nothing to fix". Wait for sync to settle ' +
-          'and re-run.'
-        : `Discarding the audit of ${workspaceId}: ${gap} while the scan ran, so rows ` +
-          'that arrived mid-scan are missing from it. The counts would be short by an ' +
-          'unknown amount. Re-run once sync has settled.',
-    )
-  }
-  return repo.stagedArrivalMark()
+  if (gap === null) return
+  throw new Error(
+    phase === 'before'
+      ? `Cannot audit ${workspaceId}: ${gap}. Rows that have not landed are not ` +
+        'scanned, so the report would under-count the keys a flip cannot carry and ' +
+        'an incomplete scan would read as "nothing to fix". Wait for sync to settle ' +
+        'and re-run.'
+      : `Discarding the audit of ${workspaceId}: ${gap} while the scan ran, so rows ` +
+        'that arrived mid-scan are missing from it. The counts would be short by an ' +
+        'unknown amount. Re-run once sync has settled.',
+  )
 }
 
 /** Enumerate every property key in the workspace's live blocks and classify
@@ -333,7 +340,9 @@ export const auditPropertyRegistration = async (
   }
   const resolver = repo.propertySchemaResolverFor(workspaceId)
 
-  const arrivalsAtStart = await assertCompleteView(repo, workspaceId, 'before')
+  // Mark FIRST — see the bracket rule on `assertNoOutstandingSync`.
+  const arrivalsAtStart = await repo.stagedArrivalMark()
+  await assertNoOutstandingSync(repo, workspaceId, 'before')
 
   const histogram = await repo.db.getAll<HistogramRow>(
     `SELECT j.key AS property, COUNT(*) AS cells
@@ -431,7 +440,9 @@ export const auditPropertyRegistration = async (
     blocksPerKey: Math.max(1, Math.floor(limits.blocksPerKey ?? PROVENANCE_BLOCKS_PER_KEY)),
   })
 
-  const arrivalsAtEnd = await assertCompleteView(repo, workspaceId, 'during')
+  await assertNoOutstandingSync(repo, workspaceId, 'during')
+  // Mark LAST, so the bracket covers the closing check too.
+  const arrivalsAtEnd = await repo.stagedArrivalMark()
   if (arrivalsAtEnd !== arrivalsAtStart) {
     throw new Error(
       `Discarding the audit of ${workspaceId}: ` +

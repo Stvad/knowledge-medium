@@ -373,6 +373,29 @@ describe('audit-properties scan coverage', () => {
     await expect(auditPropertyRegistration(repo, WS)).rejects.toThrow(/arrived from sync/i)
   })
 
+  it('brackets the queue check with the mark, so an arrival between them is caught', async () => {
+    // Ordering, not sampling: read the opening mark AFTER the opening queue
+    // check and a row staged in that gap is already counted in it — so if the
+    // row drains before the closing checks, both checks pass, both marks
+    // agree, and a scan that never saw the row reports clean. Staged here at
+    // exactly that moment: after the opening check returns.
+    await create({id: 'b1', properties: {'demo:undeclared': 'x'}})
+    const realGap = repo.syncViewGap.bind(repo)
+    let arrived = false
+    vi.spyOn(repo, 'syncViewGap').mockImplementation(async () => {
+      const gap = await realGap()
+      if (!arrived) {
+        arrived = true
+        await sharedDb.db.execute(
+          `INSERT INTO blocks_synced_changes (id, op) VALUES (?, 'upsert')`, ['between'])
+        await sharedDb.db.execute('DELETE FROM blocks_synced_changes')
+      }
+      return gap
+    })
+
+    await expect(auditPropertyRegistration(repo, WS)).rejects.toThrow(/arrived from sync/i)
+  })
+
   it('refuses a scan that starts behind even when the device catches up before it ends', async () => {
     // The mirror of the case below, and the reason the check is on BOTH
     // sides. A view that is incomplete at the start and complete at the end
