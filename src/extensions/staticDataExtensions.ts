@@ -12,6 +12,7 @@ import { groupedBacklinksDataExtension } from '@/plugins/grouped-backlinks/dataE
 import { referencesDataExtension } from '@/plugins/references/dataExtension.js'
 import { srsReschedulingDataExtension } from '@/plugins/srs-rescheduling/dataExtension.js'
 import { todoDataExtension } from '@/plugins/todo/dataExtension.js'
+import { webArchiveDataExtension } from '@/plugins/web-archive/dataExtension.js'
 
 /** Static data facets that must be available before the React app runtime
  *  resolves. Keep this list UI-free so repo bootstrap can install plugin
@@ -35,4 +36,5 @@ export const staticDataExtensions: AppExtension[] = [
   geoDataExtension,
   agentDispatchCompanionDataExtension,
   agentRuntimeDataExtension,
+  webArchiveDataExtension,
 ]
