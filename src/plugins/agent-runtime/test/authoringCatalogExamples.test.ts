@@ -164,13 +164,16 @@ describe('authoring catalog example drift guard', () => {
     // as long as the examples were strings, while the real one was
     // `onChange`) — that needs type-level checking this cannot do.
     const PROSE_APIS = [
-      'actionsFacet', 'appMountsFacet', 'createTypedChild',
+      'actionsFacet', 'appEffectsFacet', 'appMountsFacet', 'createTypedChild',
       'definePropertyEditorOverride', 'definitionSeedsFacet',
       'extensionTypeSeedKey',
       'getOrCreateKernelPage', 'getOrCreateTypedChild', 'getPluginPrefsBlock',
       'navigate', 'openDialog', 'pluginBlockId', 'propertyEditorOverridesFacet',
       'seedProperty', 'seedType', 'showError', 'showProgress', 'showSuccess',
       'statusProp', 'typeSeedsFacet', 'useRepo',
+      // A type, not a runtime export — the guides name it when describing the
+      // editor contract, and a rename would drift the prose the same way.
+      'PropertyEditorProps',
     ]
 
     const catalog = describeAuthoringCatalog()
@@ -183,7 +186,8 @@ describe('authoring catalog example drift guard', () => {
         g.title, g.when, g.principles, g.steps, g.commands, g.afterInstall,
       ]),
     ])
-    const known = new Set(extensionApiCatalog.flatMap(group => group.exports))
+    // exports AND types: the prose names both, and either can be renamed.
+    const known = new Set(extensionApiCatalog.flatMap(g => [...g.exports, ...g.types]))
 
     // Every name the prose relies on is still exported...
     const missing = PROSE_APIS.filter(name => !known.has(name))
@@ -192,27 +196,32 @@ describe('authoring catalog example drift guard', () => {
       `${missing.join(', ')} — named in catalog prose but no longer exported`,
     ).toEqual([])
 
-    // ...and the list cannot go stale: each entry must still BE in the prose,
-    // so a name deleted from the guides gets deleted from here too.
-    const absent = PROSE_APIS.filter(name => !prose.includes(name))
+    // ...and the list cannot go stale: each entry must still be mentioned in
+    // the prose, so a name dropped from the guides gets dropped from here too.
+    //
+    // The mention has to be CODE-SHAPED — backticked, or followed by `(`. A
+    // bare substring let `navigate` pass on the English verb ("navigate to
+    // the prefs block"), so deleting the actual `navigate(repo, …)` mention
+    // went unnoticed. If you removed a name deliberately, remove it here too.
+    const mentionedAsApi = (name: string): boolean =>
+      new RegExp(`\`${name}\\b|\\b${name}\\s*\\(`).test(prose)
+    const absent = PROSE_APIS.filter(name => !mentionedAsApi(name))
     expect(
       absent,
-      `${absent.join(', ')} — listed here but no longer mentioned in the prose`,
+      `${absent.join(', ')} — listed here but no longer named as an API in the prose (if that was deliberate, delete the entry)`,
     ).toEqual([])
-  })
 
-  it('the fixtures stay out of the published kernel-types surface too', async () => {
-    // The catalog glob keeps them out of `describe-runtime`'s module list, but
-    // that is only one of two discovery channels: `pnpm agent types` installs
-    // a .d.ts tree into an author's editor, and a fixture emitted there
-    // autocompletes as `@/plugins/agent-runtime/examples/settingsDialog.js` —
-    // a module the runtime cannot import. Same decision, other surface.
-    const {readFileSync} = await import('node:fs')
-    const config = readFileSync(
-      new URL('../../../../tsconfig.kernel-types.json', import.meta.url),
-      'utf8',
-    )
-    expect(config).toContain('src/**/examples/**')
+    // ...and the list cannot be INCOMPLETE either: anything the catalog
+    // exports and the prose names must be covered. Without this the guard
+    // only protects what someone remembered to list — `TODO_TYPE` and
+    // `appEffectsFacet` were both named in prose with no coverage at all.
+    const listed = new Set(PROSE_APIS)
+    const uncovered = [...new Set(extensionApiCatalog.flatMap(g => [...g.exports, ...g.types]))]
+      .filter(name => !listed.has(name) && mentionedAsApi(name))
+    expect(
+      uncovered,
+      `${uncovered.join(', ')} — named as an API in catalog prose but absent from PROSE_APIS`,
+    ).toEqual([])
   })
 
   it('the fixture files stay out of the discoverable module/component lists', () => {

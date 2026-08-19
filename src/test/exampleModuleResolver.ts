@@ -117,6 +117,19 @@ export const unknownCatalogImports = (source: string): Array<{specifier: string,
     return known ? !known.has(name) : false
   })
 
+/** The specifier of an `import()` / `require()` argument. A no-expression
+ *  template literal is a specifier too — reading only StringLiteral reopened
+ *  the traversal hole one quote character over. A COMPUTED argument cannot be
+ *  checked at all, so it is reported as unusable rather than ignored. */
+const callSpecifier = (argument: unknown): string => {
+  const node = argument as {type?: string, value?: unknown, expressions?: unknown[], quasis?: Array<{value?: {cooked?: string}}>} | undefined
+  if (node?.type === 'StringLiteral' && typeof node.value === 'string') return node.value
+  if (node?.type === 'TemplateLiteral' && (node.expressions?.length ?? 0) === 0) {
+    return node.quasis?.[0]?.value?.cooked ?? '<computed>'
+  }
+  return '<computed>'
+}
+
 /** Every module specifier a source imports, from the PARSED module — static
  *  imports, `export … from`, dynamic `import()` and `require()`.
  *
@@ -125,11 +138,18 @@ export const unknownCatalogImports = (source: string): Array<{specifier: string,
  *  because the pattern could not span a newline. Five real imports in the
  *  fixtures went unchecked. Parsing removes that whole class — and the
  *  prose false positives with it, since a comment is not an import node. */
-export const importedSpecifiers = (source: string): string[] => {
-  const ast = Babel.packages.parser.parse(source, {
+const parseFixture = (source: string, path: string) =>
+  Babel.packages.parser.parse(source, {
     sourceType: 'module',
-    plugins: ['typescript', 'jsx'],
+    // Derived from the extension, as Babel.transform does: an angle-bracket
+    // type assertion is legal in .ts and a parse error under the jsx plugin,
+    // so a blanket ['typescript','jsx'] crashed on source the transform,
+    // tsgo and eslint all accept.
+    plugins: path.endsWith('.tsx') ? ['typescript', 'jsx'] : ['typescript'],
   })
+
+export const importedSpecifiers = (source: string, path = 'fixture.tsx'): string[] => {
+  const ast = parseFixture(source, path)
   const found: string[] = []
   const visit = (node: unknown): void => {
     if (!node || typeof node !== 'object') return
@@ -145,9 +165,13 @@ export const importedSpecifiers = (source: string): string[] => {
     if (candidate.type === 'CallExpression') {
       const isDynamic = candidate.callee?.type === 'Import'
       const isRequire = candidate.callee?.type === 'Identifier' && candidate.callee.name === 'require'
-      const first = candidate.arguments?.[0] as {type?: string, value?: unknown} | undefined
-      if ((isDynamic || isRequire) && first?.type === 'StringLiteral' && typeof first.value === 'string') {
-        found.push(first.value)
+      if (isDynamic || isRequire) found.push(callSpecifier(candidate.arguments?.[0]))
+    }
+    // `import x = require('…')` — neither an ImportDeclaration nor a call.
+    if (candidate.type === 'TSImportEqualsDeclaration') {
+      const reference = (candidate as {moduleReference?: {type?: string, expression?: unknown}}).moduleReference
+      if (reference?.type === 'TSExternalModuleReference') {
+        found.push(callSpecifier(reference.expression))
       }
     }
     for (const value of Object.values(node as Record<string, unknown>)) {
@@ -163,13 +187,8 @@ export const importedSpecifiers = (source: string): string[] => {
  *  written — including `{/* @ts-expect-error *\/}` in JSX children and a
  *  `*`-prefixed continuation line inside a block comment, both of which a
  *  line-anchored regex missed. */
-const commentTexts = (source: string): string[] => {
-  const ast = Babel.packages.parser.parse(source, {
-    sourceType: 'module',
-    plugins: ['typescript', 'jsx'],
-  })
-  return (ast.comments ?? []).map(comment => comment.value)
-}
+const commentTexts = (source: string, path: string): string[] =>
+  (parseFixture(source, path).comments ?? []).map(comment => comment.value)
 
 /** The ONE form the extension runtime accepts. `@/` is an importmap prefix
  *  mapping to ./src/, and the loader instantiates from a `blob:` URL — so a
@@ -179,12 +198,14 @@ const commentTexts = (source: string): string[] => {
  *  (`react/jsx-runtime`, `react-dom/client`). Backtracking above the `@/`
  *  prefix is rejected by the import-maps spec even though it typechecks. */
 const runnableSpecifier = (specifier: string): boolean => {
-  // Backtracking is rejected on EVERY branch: `react/../../evil.js` used to
-  // pass because the react check returned before the `../` test was reached.
-  if (specifier.includes('../')) return false
+  // Backtracking rejected on EVERY branch, as a path SEGMENT: `react/..` and
+  // `react/a/..` carry no `../` substring yet the import-maps prefix rule
+  // rejects them for the same reason `react/../../evil.js` is rejected.
+  if (specifier.split('/').includes('..')) return false
+  if (specifier === '<computed>') return false
   if (specifier === 'react' || specifier === 'react-dom') return true
   if (specifier.startsWith('react/') || specifier.startsWith('react-dom/')) return true
-  return /^@\/[\w./-]+\.js$/.test(specifier)
+  return /^@\/[\w][\w./-]*\.js$/.test(specifier)
 }
 
 // Anchored to a comment opener: these files legitimately DISCUSS suppressions
@@ -196,7 +217,7 @@ const runnableSpecifier = (specifier: string): boolean => {
  *  continuation inside a block comment and the JSX `{/* … *\/}` form. */
 const isSuppressionComment = (text: string): boolean =>
   text.split('\n').some(line =>
-    /^\*?\s*(@ts-(nocheck|ignore|expect-error)\b|eslint-disable)/.test(line.trim()))
+    /^\*?\s*(@ts-(nocheck|ignore|expect-error)\b|eslint\b)/.test(line.trim()))
 
 /**
  * Shared hygiene checks for compiled example fixtures. Both example families
@@ -211,13 +232,22 @@ export const fixtureHygieneProblems = (
   const badSpecifiers: string[] = []
   const badSuppressions: string[] = []
   for (const [path, source] of Object.entries(fixtureSources)) {
-    for (const specifier of importedSpecifiers(source)) {
+    let specifiers: string[]
+    try {
+      specifiers = importedSpecifiers(source, path)
+    } catch (error) {
+      // A parse failure is a finding about THIS fixture, not a stack into
+      // Babel internals with no filename attached.
+      badSpecifiers.push(`${path}: parse failed — ${(error as Error).message}`)
+      continue
+    }
+    for (const specifier of specifiers) {
       if (!runnableSpecifier(specifier)) badSpecifiers.push(`${path}: ${specifier}`)
     }
     // Comment TEXT, not the raw source: prose that merely discusses a
     // suppression ("never reach for @ts-expect-error here") lives in a
     // comment too, so the check is that no comment IS one.
-    if (commentTexts(source).some(isSuppressionComment)) badSuppressions.push(path)
+    if (commentTexts(source, path).some(isSuppressionComment)) badSuppressions.push(path)
   }
   return {badSpecifiers, badSuppressions}
 }
