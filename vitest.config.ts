@@ -31,7 +31,9 @@ export default defineConfig({
     // node's webstorage in the worker processes makes every node version
     // behave like node 24, where jsdom's storage wins. Node ≥22 accepts the
     // flag, so this is a no-op on versions without the new globals.
-    execArgv: ['--no-experimental-webstorage'],
+    // `--expose-gc` is for `src/test/mutationObserverGc.test.ts`, which pins a
+    // happy-dom regression that a GC makes invisible; see its header.
+    execArgv: ['--no-experimental-webstorage', '--expose-gc'],
     // node_modules + dist are vitest defaults; .claude/worktrees and
     // .codex/worktrees hold full repo copies from agent runs (Claude Code and
     // Codex respectively) whose tests we don't want to re-execute here.

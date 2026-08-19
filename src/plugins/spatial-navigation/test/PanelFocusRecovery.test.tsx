@@ -3,17 +3,16 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, render, waitFor } from '@testing-library/react'
 import { ChangeScope, type User } from '@/data/api'
-import type { Block } from '@/data/block'
 import { Repo } from '@/data/repo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import {
   focusedBlockLocationProp,
   peekFocusedBlockLocation,
-  type FocusedBlockLocation,
 } from '@/data/properties'
 import { PanelFocusRecovery } from '../PanelFocusRecovery.tsx'
 import { __resetSpatialNavigationForTesting, findRecoveryAnchor } from '../walker.ts'
+import { resolveSpatialNavExclusions } from '../exclusionsFacet.ts'
 
 const WS = 'ws-1'
 const USER: User = {id: 'user-1'}
@@ -24,13 +23,13 @@ const PANEL_ID = 'panel'
 // timers in the no-fire tests below.
 const DEBOUNCE_SETTLE_MS = 350
 
-// A recovery costs the 250ms debounce plus a repo write; the tests that
-// await one measure ~330-460ms in isolation. AGENTS.md budgets ~6x for
-// full-gate contention, which puts the p99.9 estimate within ~10% of the
-// 3000ms global Testing Library default — so the recovery waits carry their
-// own budget, strictly below the enclosing test timeout.
-const RECOVERY_WAIT_MS = 10_000
-const TEST_TIMEOUT_MS = 20_000
+// A recovery costs the 250ms debounce plus a repo write, measured ~330-460ms
+// in isolation; 6s is ~2x the ~6x full-gate stretch AGENTS.md budgets for.
+// The last test awaits BOTH waits, so their sum must stay under the test
+// timeout — otherwise the test timeout reports first and names no assertion.
+const HINT_WAIT_MS = 2_000
+const RECOVERY_WAIT_MS = 6_000
+const TEST_TIMEOUT_MS = 15_000
 
 interface Harness {
   h: TestDb
@@ -94,34 +93,37 @@ const setFocused = async (blockId: string, renderScopeId = `i-${blockId}`): Prom
 }
 
 /** Wait for the watchdog's debounced recovery write to land on `blockId`. */
-const expectRecoveredFocus = async (panelBlock: Block, blockId: string): Promise<void> => {
+const expectRecoveredFocus = async (blockId: string): Promise<void> => {
   await waitFor(
-    () => { expect(peekFocusedBlockLocation(panelBlock)?.blockId).toBe(blockId) },
+    () => { expect(peekFocusedBlockLocation(env.repo.block(PANEL_ID))?.blockId).toBe(blockId) },
     {timeout: RECOVERY_WAIT_MS},
   )
 }
 
 /**
- * The precondition a yank depends on: the watchdog has adopted `location`
- * as the current block, i.e. a React commit of the focus property re-ran its
- * layout effect and refreshed the stored hint. Without that hint a
- * disappearing instance doesn't read as "the focused block vanished", no
- * recovery is armed, and the yank is one-shot — nothing downstream recovers
- * it. A non-null anchor is exactly the hint-matches-`location` condition
- * `findRecoveryAnchor` gates recovery on.
+ * Fence a post-mount yank on the watchdog having adopted `blockId`: with no
+ * stored hint for it the disappearance doesn't read as "the focused block
+ * vanished", no recovery is armed, and the yank is one-shot. A non-null anchor
+ * says the hint matches — not that the anchor is the right one, which only
+ * the recovery assertion downstream pins.
  *
- * Measured: satisfied on the first check, because the focus write's own
- * awaits outlast React's commit. Shaped as a wait rather than a bare
- * assertion so a slower commit under load blocks instead of failing.
- *
- * Only needed when focus moves AFTER mount: a write made before `render()`
- * is already in the block cache, so the first layout effect's
- * `peekFocusedBlockLocation` fallback stores the hint synchronously.
+ * Satisfied on the first check today (the focus write's own awaits outlast
+ * React's commit), so this is defence in depth; kept as a wait so a slower
+ * commit under load blocks instead of failing. A focus write made BEFORE
+ * `render()` needs no fence — it is already in the block cache, so the first
+ * layout effect's `peekFocusedBlockLocation` fallback stores the hint
+ * synchronously.
  */
-const waitForRecoveryHint = async (location: FocusedBlockLocation): Promise<void> => {
+const waitForRecoveryHint = async (blockId: string): Promise<void> => {
   await waitFor(
-    () => { expect(findRecoveryAnchor(PANEL_ID, location)).not.toBeNull() },
-    {timeout: RECOVERY_WAIT_MS},
+    () => {
+      expect(findRecoveryAnchor(
+        PANEL_ID,
+        focusedLocation(blockId),
+        resolveSpatialNavExclusions(env.repo.facetRuntime),
+      )).not.toBeNull()
+    },
+    {timeout: HINT_WAIT_MS},
   )
 }
 
@@ -175,7 +177,7 @@ describe('PanelFocusRecovery', {timeout: TEST_TIMEOUT_MS}, () => {
 
     // Watchdog walks the sibling map — `last` was previously below
     // `middle`, so focus lands there.
-    await expectRecoveredFocus(panelBlock, 'last')
+    await expectRecoveredFocus('last')
   })
 
   it("falls to 'previously above' when the disappeared block was first in the panel", async () => {
@@ -194,7 +196,7 @@ describe('PanelFocusRecovery', {timeout: TEST_TIMEOUT_MS}, () => {
     // to the next-sibling tier — landing on `middle`.
     panel.querySelector('[data-block-id="first"]')!.remove()
 
-    await expectRecoveredFocus(panelBlock, 'middle')
+    await expectRecoveredFocus('middle')
   })
 
   it("focuses the parent on collapse (every child of the focused's parent unmounts together)", async () => {
@@ -228,7 +230,7 @@ describe('PanelFocusRecovery', {timeout: TEST_TIMEOUT_MS}, () => {
       panel.querySelector(`[data-block-id="${blockId}"]`)!.remove()
     }
 
-    await expectRecoveredFocus(panelBlock, 'parent')
+    await expectRecoveredFocus('parent')
   })
 
   it('does not misfire when the focused block was never mounted in this panel', async () => {
@@ -306,7 +308,7 @@ describe('PanelFocusRecovery', {timeout: TEST_TIMEOUT_MS}, () => {
     // Delete `parent` and its subtree.
     panel.querySelector('[data-block-id="parent"]')!.remove()
 
-    await expectRecoveredFocus(panelBlock, 'below')
+    await expectRecoveredFocus('below')
   })
 
   it("collapsing a parent with an only child lands focus on the parent (consistent with multi-child collapse)", async () => {
@@ -348,7 +350,7 @@ describe('PanelFocusRecovery', {timeout: TEST_TIMEOUT_MS}, () => {
     // Collapse: X unmounts, parent stays.
     panel.querySelector('[data-block-id="X"]')!.remove()
 
-    await expectRecoveredFocus(panelBlock, 'parent')
+    await expectRecoveredFocus('parent')
   })
 
   it("does not recover when the focused block briefly leaves the DOM and returns (tab/shift-tab move)", async () => {
@@ -405,11 +407,11 @@ describe('PanelFocusRecovery', {timeout: TEST_TIMEOUT_MS}, () => {
     // the "current" block for recovery purposes.
     await panelBlock.set(focusedBlockLocationProp, focusedLocation('last'))
 
-    await waitForRecoveryHint(focusedLocation('last'))
+    await waitForRecoveryHint('last')
 
     // Yank `last`. Expected recovery target: `middle` (block above).
     panel.querySelector('[data-block-id="last"]')!.remove()
 
-    await expectRecoveredFocus(panelBlock, 'middle')
+    await expectRecoveredFocus('middle')
   })
 })
