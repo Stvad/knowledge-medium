@@ -192,7 +192,7 @@ const refuseForeignOccupant = (
 export const createGraphBackfillClaim = (
   deps: GraphBackfillClaimDeps,
 ): BackfillCompletionClaim => ({
-  async tryClaim(workspaceId, backfillId) {
+  async tryClaim(workspaceId, backfillId, opts) {
     const claimId = graphBackfillClaimBlockId(workspaceId, backfillId)
     // Ensure our own parent rather than trusting bootstrap ordering: a claim
     // that silently fails to write reads as "unclaimed" on every device,
@@ -200,7 +200,15 @@ export const createGraphBackfillClaim = (
     await deps.ensureHome(workspaceId)
 
     const first = decideClaim(await readGraphBackfillClaim(deps.db, claimId, workspaceId), deps.claimantId)
-    if (first === 'already-complete' || first === 'back-off') return false
+    if (first === 'back-off') return false
+    // A recorded completion stops an UNATTENDED pass, which is its job. It
+    // must not stop a human who deliberately asked for one: this seam's passes
+    // are idempotent per row, so a redundant run is a scan and no writes, while
+    // refusing means anything the previous run missed — a block edited behind
+    // its cursor, a legacy value repaired since — is unmigrated forever. The
+    // claim's safety property is mutual exclusion (`back-off`, above), and
+    // that still holds.
+    if (first === 'already-complete' && !opts?.reclaimCompleted) return false
     // `proceed` means a claim here already names us — normally our own from a
     // previous operator run of the same pass. Taken at face value: there is
     // nothing to wait for, because nothing arbitrates (see the module header).
@@ -224,7 +232,11 @@ export const createGraphBackfillClaim = (
       [migrationClaimantProp.name]: deps.claimantId,
       [migrationClaimedAtProp.name]: Date.now(),
     }, MIGRATION_CLAIM_TYPE)
-    const won = first !== 'claim' ? true : await deps.tx(async tx => {
+    // `already-complete` under `reclaimCompleted` takes the writing path too:
+    // the row exists and carries a completion stamp, which has to be replaced
+    // by a fresh claim or `markComplete` would be re-stamping someone else's
+    // record of a run that is not this one.
+    const won = first === 'proceed' ? true : await deps.tx(async tx => {
       // Re-checked inside the WRITING tx against this row: the read above
       // happened outside it, and a peer's claim can arrive in between.
       const existing = await tx.get(claimId)

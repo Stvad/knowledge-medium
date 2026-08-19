@@ -228,6 +228,14 @@ export interface RunBackfillInput {
 export interface RunBackfillResult extends OperatorBackfillResult {
   backfillId: string
   workspaceId: string
+  /** Present when the pass that ran reports per-run detail. The properties
+   *  migration does: how much it swept, and every block whose legacy cell
+   *  value its codec rejected — which an operator has to see, since those keys
+   *  stay cell-only until the values are repaired and the pass re-run. */
+  blocksScanned?: number
+  blocksMaterialized?: number
+  sweeps?: number
+  failures?: {blockId: string; reason: string}[]
 }
 
 export interface AuditPropertiesInput {

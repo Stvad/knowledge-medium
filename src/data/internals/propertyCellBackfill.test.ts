@@ -13,7 +13,9 @@ import { resolveFacetRuntimeSync } from '@/facets/facet'
 import type { Repo } from '@/data/repo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
-import { PROPERTY_CELL_BACKFILL_ID } from './propertyCellBackfill'
+import { ChangeScope as Scope } from '@/data/api'
+import type { WorkspaceBackfillContext } from '@/data/facets'
+import { PROPERTY_CELL_BACKFILL_ID, runPropertyCellBackfill } from './propertyCellBackfill'
 
 const WS = 'ws-cell-backfill'
 
@@ -21,6 +23,15 @@ const noteProp = seedProperty({
   seedKey: 'test/property/note',
   revision: 1,
   name: 'demo:note',
+  preset: 'optional-string',
+  defaultValue: undefined,
+  changeScope: ChangeScope.BlockDefault,
+})
+
+const extraProp = seedProperty({
+  seedKey: 'test/property/extra',
+  revision: 1,
+  name: 'demo:extra',
   preset: 'optional-string',
   defaultValue: undefined,
   changeScope: ChangeScope.BlockDefault,
@@ -39,6 +50,7 @@ beforeEach(async () => {
   repo.setFacetRuntime(resolveFacetRuntimeSync([
     kernelDataExtension,
     definitionSeedsFacet.of(noteProp, {source: 'test'}),
+    definitionSeedsFacet.of(extraProp, {source: 'test'}),
   ], {repo, workspaceId: WS, safeMode: false}))
 })
 
@@ -54,6 +66,22 @@ const create = async (
 }
 
 const run = async () => repo.runWorkspaceBackfillNow(WS, PROPERTY_CELL_BACKFILL_ID)
+
+/** The runner's context, rebuilt for tests that need to act BETWEEN batches.
+ *  Same shape the runner passes, minus its per-transaction preconditions —
+ *  those are the runner's own tests. */
+const makeCtx = (): WorkspaceBackfillContext => {
+  const resolver = repo.propertySchemaResolverFor(WS)
+  return {
+    workspaceId: WS,
+    getAll: (sql, params) => repo.db.getAll(sql, params as unknown[] | undefined),
+    tx: (fn, opts) => repo.tx(fn, {scope: Scope.BlockDefault, skipUndo: true, ...opts}),
+    resolveNameSchema: name => {
+      const resolution = resolver.resolve(name)
+      return resolution.status === 'resolved' ? resolution.schema : undefined
+    },
+  }
+}
 
 /** Field rows under `parentId`, with the value rows beneath each. */
 const fieldRowsOf = async (parentId: string) => {
@@ -109,9 +137,6 @@ describe('property cell → children backfill', () => {
     await run()
     const after = await fieldRowCount()
 
-    // The completion claim would normally stop a re-run; this asserts the pass
-    // itself is idempotent, which is what makes a killed run safe to repeat.
-    await repo.db.execute('DELETE FROM client_schema_state')
     expect((await run()).outcome).toBe('ran')
 
     expect(await fieldRowCount()).toBe(after)
@@ -125,7 +150,6 @@ describe('property cell → children backfill', () => {
     await create('b1', {'demo:note': 'one'})
     await create('b2', {'demo:note': 'two'})
     await run()
-    await repo.db.execute('DELETE FROM client_schema_state')
 
     // A third block appears after the "crash" — the resumed run has to find it
     // without re-materializing the first two.
@@ -166,6 +190,85 @@ describe('property cell → children backfill', () => {
 
     expect((await fieldRowsOf('alsogood'))[0]!.values).toEqual(['also fine'])
     expect(await fieldRowsOf('good')).toEqual([])
+  })
+
+  it('revisits a block edited behind the cursor, which one sweep can never see', async () => {
+    // The cursor only moves forward, so a property written to an
+    // already-visited block mid-pass is invisible to the rest of that sweep —
+    // and completion is recorded once per graph, so "invisible" would mean
+    // "never". A second sweep is what makes the pass a fixpoint rather than a
+    // single ordered walk. Driven directly so the concurrent edit lands at a
+    // known point: after the first committed batch.
+    const ids = Array.from({length: 150}, (_, i) => `b${String(i).padStart(4, '0')}`)
+    for (const id of ids) await create(id, {'demo:note': id})
+
+    let edited = false
+    const progress = await runPropertyCellBackfill(makeCtx(), async () => {
+      if (edited) return
+      edited = true
+      await repo.tx(async tx => {
+        await tx.update(ids[0]!, {properties: {'demo:note': ids[0], 'demo:extra': 'added'}})
+      }, {scope: ChangeScope.BlockDefault, description: 'concurrent user edit'})
+    })
+
+    expect(edited).toBe(true)
+    expect(progress.sweeps).toBeGreaterThan(1)
+    expect(await fieldRowsOf(ids[0]!)).toHaveLength(2)
+  })
+
+  it('migrates an owner whose existing field row belongs to a different property', async () => {
+    // The predicate this replaced compared key COUNT against field-row count,
+    // which is not an over-approximation: one cell key plus one unrelated
+    // field row cancel out, and the owner drops out of the candidate set with
+    // its key still unmigrated — permanently, once completion is recorded.
+    await create('b1', {'demo:note': 'mine'})
+    await repo.tx(async tx => {
+      await tx.create({
+        id: 'stray-field', workspaceId: WS, parentId: 'b1', orderKey: 'a0',
+        content: '::((00000000-0000-4000-8000-000000000000))',
+        referenceTargetId: '00000000-0000-4000-8000-000000000000',
+        isFieldForm: true,
+      })
+    }, {scope: ChangeScope.BlockDefault, description: 'unrelated field row'})
+
+    expect((await run()).outcome).toBe('ran')
+
+    const values = (await fieldRowsOf('b1')).flatMap(field => field.values)
+    expect(values).toContain('mine')
+  })
+
+  it('refuses to run against a workspace that has already flipped', async () => {
+    // Past the flip the CHILDREN are authoritative and the cell is a derived
+    // read surface, so this direction would overwrite real value rows from a
+    // stale bag. Checked inside the writing transaction because the flip is a
+    // synced column that can arrive between batches.
+    await create('b1', {'demo:note': 'hello'})
+    await sharedDb.db.execute(
+      `INSERT INTO workspaces
+         (id, name, owner_user_id, create_time, update_time, encryption_mode, wk_canary,
+          properties_migration)
+       VALUES (?, ?, ?, 1, 1, 'none', NULL, 'children')`,
+      [WS, 'flipped ws', 'user-1'])
+
+    const result = await run()
+
+    expect(result.outcome).toBe('failed')
+    expect(result.reason).toMatch(/child-backed/i)
+    expect(await fieldRowsOf('b1')).toEqual([])
+  })
+
+  it('lets an operator run again after completion, so a straggler is not stranded', async () => {
+    // Everything the pass can miss — a block edited behind the cursor, a
+    // legacy value repaired since, a property written between the last sweep
+    // and the flip — is only recoverable if the operator can ask again. A
+    // recorded completion stops the UNATTENDED path; it must not stop a human.
+    await create('b1', {'demo:note': 'first'})
+    expect((await run()).outcome).toBe('ran')
+
+    await create('b2', {'demo:note': 'later'})
+    expect((await run()).outcome).toBe('ran')
+
+    expect((await fieldRowsOf('b2'))[0]!.values).toEqual(['later'])
   })
 
   it('clears the undo history it wrote past, and says so', async () => {

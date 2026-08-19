@@ -16,16 +16,30 @@ import { ConfirmMigrationDialog } from './ConfirmMigrationDialog.tsx'
 const describeOutcome = (
   result: OperatorBackfillResult,
   blocksMaterialized: number,
+  unmigrated: number,
 ): {message: string; failed: boolean} => {
   switch (result.outcome) {
     case 'ran':
       return {
         message: `Migrated properties on ${blocksMaterialized.toLocaleString()} blocks.` +
+          (unmigrated > 0
+            ? ` ${unmigrated.toLocaleString()} could not be migrated and kept cell-only ` +
+              'values — see the console for which. Repair them and run this again.'
+            : '') +
           (result.undoHistoryCleared ? ' Undo history for this workspace was cleared.' : ''),
+        // Surfaced through `done`, not `fail`: the pass DID complete, and
+        // saying otherwise would send an operator looking for a broken run
+        // rather than for the handful of blocks named in the console.
         failed: false,
       }
     case 'deferred':
       return {message: `Not started — ${result.reason}. Try again shortly.`, failed: true}
+    case 'failed':
+      return {
+        message: `Stopped partway — ${result.reason} Run it again; ` +
+          'already-migrated blocks are skipped.',
+        failed: true,
+      }
     case 'already-done-or-held':
       return {
         message: 'Nothing to do: this workspace is already migrated, or another device is ' +
@@ -68,8 +82,10 @@ export const migratePropertiesToBlocksAction = ({repo}: {repo: Repo}): ActionCon
     // Subscribed for the whole run, not just started with it: the pass reports
     // per committed batch, and a run of several minutes with a silent toast is
     // indistinguishable from a hung one.
+    let unmigrated = 0
     const unsubscribe = onPropertyCellBackfillProgress(progress => {
       materialized = progress.blocksMaterialized
+      unmigrated = progress.failures.length
       banner.update(
         `Migrating properties to blocks… ${progress.blocksScanned.toLocaleString()}/` +
         `${Math.max(blockCount, progress.blocksScanned).toLocaleString()}`,
@@ -77,7 +93,7 @@ export const migratePropertiesToBlocksAction = ({repo}: {repo: Repo}): ActionCon
     })
     try {
       const result = await repo.runWorkspaceBackfillNow(workspaceId, PROPERTY_CELL_BACKFILL_ID)
-      const {message, failed} = describeOutcome(result, materialized)
+      const {message, failed} = describeOutcome(result, materialized, unmigrated)
       if (failed) banner.fail(message)
       else banner.done(message)
     } catch (err) {

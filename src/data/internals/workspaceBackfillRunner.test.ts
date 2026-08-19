@@ -462,6 +462,34 @@ describe('workspace backfill runner — undo', () => {
     expect((await repo.load('target'))?.properties['probe:mark']).toBe('backfilled')
   })
 
+  it('clears the stack with the FIRST batch, not when the whole pass returns', async () => {
+    // A chunked pass runs for minutes. Clearing at the end leaves every one of
+    // those minutes as a window in which cmd-Z replays a pre-pass row snapshot
+    // over a batch that has already committed — and the pass then records
+    // completion over the reverted rows.
+    let depthAfterFirstBatch = -1
+    const repo = makeRepo({
+      id: 'probe-backfill-v1',
+      trigger: 'workspace-open' as const,
+      run: async ({tx}) => {
+        await tx(async t => { await t.update('target', {content: 'batch one'}) },
+          {description: 'batch one'})
+        depthAfterFirstBatch = repo.undoManager.depths(ChangeScope.BlockDefault).undo
+        await tx(async t => { await t.update('target', {content: 'batch two'}) },
+          {description: 'batch two'})
+      },
+    })
+    await seedTarget(repo)
+    await repo.tx(async tx => {
+      await tx.update('target', {content: 'user edit'})
+    }, {scope: ChangeScope.BlockDefault, description: 'user edit'})
+    expect(repo.undoManager.depths(ChangeScope.BlockDefault).undo).toBeGreaterThan(0)
+
+    await drain(repo)
+
+    expect(depthAfterFirstBatch).toBe(0)
+  })
+
   it('leaves undo history alone when the pass writes nothing', async () => {
     // Clearing is a real cost to the user, so it is owed only when the pass
     // actually committed something that history could be replayed over.
@@ -600,7 +628,12 @@ describe('workspace backfill runner — operator outcomes', () => {
     await seedTarget(repo)
     vi.spyOn(console, 'error').mockImplementation(() => {})
 
-    expect((await repo.runWorkspaceBackfillNow(WS, 'operator-throws-v1')).outcome).toBe('already-done-or-held')
+    // `failed`, not `already-done-or-held`: a pass that threw may have
+    // committed some batches, and the operator is the only one who can decide
+    // to re-run. Told "already done", they never learn it is incomplete.
+    const result = await repo.runWorkspaceBackfillNow(WS, 'operator-throws-v1')
+    expect(result.outcome).toBe('failed')
+    expect(result.reason).toMatch(/pass exploded/i)
   })
 })
 

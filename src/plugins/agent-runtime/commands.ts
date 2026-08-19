@@ -65,6 +65,7 @@ import {
   pingRuntime,
 } from './describeRuntime.ts'
 import type {KnownAgentCommand} from '@knowledge-medium/agent-cli/protocol'
+import { takeLastPropertyCellBackfillRun } from '@/data/internals/propertyCellBackfill'
 import type {
   AgentRuntimeBridgeOptions,
   AgentRuntimeContext,
@@ -455,8 +456,28 @@ const runRuntimeBackfill = async (
     )
   }
   const workspaceId = input.workspaceId?.trim() || resolveWorkspaceId(repo)
+  // Refused HERE, before the runner. A backfill for a non-active workspace
+  // aborts on its own per-transaction check — but only AFTER `tryClaim` has
+  // already written: it ensures a Migrations page and creates a claim row, so
+  // a mistyped assertion leaves two blocks in a graph the operator never meant
+  // to touch and reports nothing more alarming than "already done".
+  if (workspaceId !== repo.activeWorkspaceId) {
+    throw new Error(
+      `run-backfill: --workspace ${workspaceId} is not the active workspace ` +
+      `(${repo.activeWorkspaceId ?? 'none'}). The pass writes to the workspace this ` +
+      'client has open, so the option is an assertion, not a target — open that ' +
+      'workspace and re-run.',
+    )
+  }
   const result = await repo.runWorkspaceBackfillNow(workspaceId, input.backfillId)
-  return {backfillId: input.backfillId, workspaceId, ...result}
+  return {
+    backfillId: input.backfillId,
+    workspaceId,
+    ...result,
+    // The seam hands back nothing (an unattended pass has no one to tell), so
+    // the detail an operator acts on is collected from the pass itself.
+    ...(takeLastPropertyCellBackfillRun() ?? {}),
+  }
 }
 
 const mapPosition = (

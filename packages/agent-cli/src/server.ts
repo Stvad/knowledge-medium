@@ -29,6 +29,12 @@ if ((host === '0.0.0.0' || host === '::') && process.env.AGENT_RUNTIME_ALLOW_NET
   throw new Error('Refusing to expose agent runtime bridge on the network without AGENT_RUNTIME_ALLOW_NETWORK=true')
 }
 const commandTtlMs = 10 * 60 * 1000
+/** A `delivered` command is IN FLIGHT, not garbage — the app is still working
+ *  on it. Reaping it on the same clock as a finished one deleted the record
+ *  out from under a long operator pass (the properties migration runs for
+ *  minutes), so the CLI's next poll got `Unknown command` while the app kept
+ *  going. Still bounded, so a tab that dies mid-command cannot leak forever. */
+const inFlightCommandTtlMs = 60 * 60 * 1000
 const clientTtlMs = 60_000
 const unknownTokenMessage = [
   'Agent token is not registered with the local bridge.',
@@ -356,10 +362,11 @@ const dropClient = (clientId: ClientId): void => {
 
 const cleanup = () => {
   const commandExpiry = now() - commandTtlMs
+  const inFlightExpiry = now() - inFlightCommandTtlMs
   for (const [id, command] of commands) {
-    if (command.createdAt < commandExpiry && command.status !== 'pending') {
-      commands.delete(id)
-    }
+    if (command.status === 'pending') continue
+    const expiry = command.status === 'delivered' ? inFlightExpiry : commandExpiry
+    if (command.createdAt < expiry) commands.delete(id)
   }
 
   const clientExpiry = now() - clientTtlMs
