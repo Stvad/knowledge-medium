@@ -42,7 +42,6 @@ import {
 import { getOrCreatePropertiesPage } from '@/data/propertiesPage'
 import { getOrCreateTypesPage } from '@/data/typesPage'
 import { getOrCreateRecentsPage } from '@/data/recentsPage'
-import { getOrCreateMigrationsPage } from './migrationsPage'
 import { KERNEL_MUTATORS } from './mutators'
 import { KERNEL_PROCESSORS } from './internals/kernelProcessors'
 import { KERNEL_SAME_TX_PROCESSORS } from './internals/normalizeReferencesProcessor'
@@ -82,7 +81,6 @@ export const kernelDataExtension: AppExtension = systemToggle({
   systemPagesFacet.of({id: 'kernel:properties', ensure: getOrCreatePropertiesPage}, {source: 'kernel'}),
   systemPagesFacet.of({id: 'kernel:types', ensure: getOrCreateTypesPage}, {source: 'kernel'}),
   systemPagesFacet.of({id: 'kernel:recents', ensure: getOrCreateRecentsPage}, {source: 'kernel'}),
-  systemPagesFacet.of({id: 'kernel:migrations', ensure: getOrCreateMigrationsPage}, {source: 'kernel'}),
   // Definition-block projectors (issue #90): user-defined property
   // schemas and block types mirror into their facets' user-data buckets
   // through the shared `ProjectorRuntime`. Registered schemas-before-

@@ -1,5 +1,15 @@
 /** Migrations-page bootstrap. Thin wrapper around `getOrCreateKernelPage`,
- *  same shape as the Properties and Types pages.
+ *  same shape as the Properties and Types pages — but deliberately NOT
+ *  registered on `systemPagesFacet`.
+ *
+ *  Created lazily, by the first claim that needs it (`tryClaim` ensures its
+ *  own parent). Two reasons, both worth keeping:
+ *   - a workspace that never runs a migration never grows an empty page it
+ *     has no use for;
+ *   - `ensureSystemPages` is on the uncaught bootstrap path, so an eager
+ *     registration puts this page's alias claim there too, where a collision
+ *     stops the workspace opening. Created from inside an operator-triggered
+ *     migration instead, a collision fails that migration and says so.
  *
  *  Each WORKSPACE has one, and workspace-scoped is the whole point: it hosts
  *  the `per-graph` backfill claims, which must be visible to every device in
