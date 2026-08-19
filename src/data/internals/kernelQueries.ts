@@ -35,6 +35,8 @@ import { SELECT_BLOCK_COLUMNS_SQL, buildQualifiedBlockColumnsSql, type BlockRow 
 import { SYSTEM_BLOCK_TYPES, USER_TYPE } from '@/data/blockTypes'
 import { userStateRootBlockIds } from '@/data/derivedIds'
 import { seedKeyProp } from '@/data/properties'
+import { propertyDefinitionBlockId } from '@/data/definitionSeeds'
+import type { Repo } from '@/data/repo'
 import {
   ANCESTORS_SQL,
   CHILDREN_IDS_SQL,
@@ -645,7 +647,7 @@ export const subtreeQuery = defineQuery<
     ctx.depend({kind: 'row', id})
     ctx.depend({kind: 'parent-edge', parentId: id})
     const rows = hidePropertyChildren
-      ? await ctx.db.getAll<BlockRow & {depth: number}>(VISIBLE_SUBTREE_SQL, [id])
+      ? await ctx.db.getAll<BlockRow & {depth: number}>(VISIBLE_SUBTREE_SQL, [id, ...registrySeedParams(ctx.repo)])
       : await ctx.db.getAll<BlockRow & {depth: number}>(SUBTREE_SQL, [id])
     const out = ctx.hydrateBlocks(asBlockRows(rows))
     // SUBTREE_SQL already computes depth (0 at the root, +1 per level) and
@@ -734,6 +736,41 @@ export const manyAncestorsQuery = defineQuery<
  *  workspace (PR #288 §9; dormant no-op while un-flipped) — is opt-in via
  *  `hidePropertyChildren: true` (the outline hooks pass it), the same option
  *  `tx.childrenOf` takes. */
+/** The registry half of the visible-children predicate (#389 item 7): the
+ *  seed-definition ids the REGISTRY knows, which `block_types` may not carry
+ *  yet, plus the workspace they belong to.
+ *
+ *  Pure — seed definition ids are uuidv5 over `workspaceId:seedKey`, so this
+ *  is a computation over the loaded declarations with no DB read. It closes
+ *  the window where a field row arrives over sync ahead of its definition
+ *  block on a warm device, and the SQL view showed a row the tx-layer
+ *  recognizer hid.
+ *
+ *  MEMOIZED on snapshot identity, and not as a micro-optimisation: these SQL
+ *  constants back `core.children` / `childIds` / `subtree`, which the outline
+ *  resolves once per rendered block, and the set is ~100 SHA-1 hashes plus a
+ *  multi-KB JSON string. Recomputing it per resolve cost tens of
+ *  milliseconds per page render for a value that only changes when the
+ *  registry is REPLACED — which is exactly what a WeakMap key expresses.
+ *
+ *  Returns `['[]', '']` when no registry is primed, which is precisely the
+ *  pre-existing `block_types`-only behaviour. */
+const seedParamsBySnapshot = new WeakMap<object, readonly [string, string]>()
+
+const registrySeedParams = (repo: Repo): readonly [string, string] => {
+  const registry = repo.propertyDefinitions
+  if (!registry) return ['[]', '']
+  const cached = seedParamsBySnapshot.get(registry)
+  if (cached) return cached
+  const ids: string[] = []
+  for (const seedKey of registry.seedsByKey.keys()) {
+    ids.push(propertyDefinitionBlockId(registry.workspaceId, seedKey))
+  }
+  const params = [JSON.stringify(ids), registry.workspaceId] as const
+  seedParamsBySnapshot.set(registry, params)
+  return params
+}
+
 export const childrenQuery = defineQuery<
   {id: string; hidePropertyChildren?: boolean},
   BlockData[]
@@ -744,7 +781,7 @@ export const childrenQuery = defineQuery<
   resolve: async ({id, hidePropertyChildren = false}, ctx) => {
     ctx.depend({kind: 'parent-edge', parentId: id})
     const rows = hidePropertyChildren
-      ? await ctx.db.getAll<BlockRow>(VISIBLE_CHILDREN_SQL, [id])
+      ? await ctx.db.getAll<BlockRow>(VISIBLE_CHILDREN_SQL, [id, ...registrySeedParams(ctx.repo)])
       : await ctx.db.getAll<BlockRow>(CHILDREN_SQL, [id])
     return ctx.hydrateBlocks(asBlockRows(rows))
   },
@@ -770,12 +807,12 @@ export const childIdsQuery = defineQuery<
     ctx.depend({kind: 'parent-edge', parentId: id})
     if (!hydrate) {
       const rows = hidePropertyChildren
-        ? await ctx.db.getAll<{id: string}>(VISIBLE_CHILDREN_IDS_SQL, [id])
+        ? await ctx.db.getAll<{id: string}>(VISIBLE_CHILDREN_IDS_SQL, [id, ...registrySeedParams(ctx.repo)])
         : await ctx.db.getAll<{id: string}>(CHILDREN_IDS_SQL, [id])
       return rows.map(r => r.id)
     }
     const rows = hidePropertyChildren
-      ? await ctx.db.getAll<BlockRow>(VISIBLE_CHILDREN_SQL, [id])
+      ? await ctx.db.getAll<BlockRow>(VISIBLE_CHILDREN_SQL, [id, ...registrySeedParams(ctx.repo)])
       : await ctx.db.getAll<BlockRow>(CHILDREN_SQL, [id])
     // declareRowDeps:false — result is the id list; per-row deps would
     // wake the handle on content/property edits that can't change the

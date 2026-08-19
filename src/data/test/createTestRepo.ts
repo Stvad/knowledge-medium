@@ -129,9 +129,13 @@ export const createTestRepo = (opts: CreateTestRepoOptions): TestRepo => {
         'SELECT key FROM client_schema_state WHERE key = ?', [`workspace_backfill:${ws}:${id}`],
       )) === null,
       markComplete: async (ws: string, id: string) => {
+        // `client_schema_state` is (key, completed_at) — there is no `value`
+        // column, and writing one threw on every call. It went unnoticed
+        // because the runner recorded its outcome BEFORE this ran, so a
+        // completion that always failed still reported success.
         await opts.db.execute(
-          'INSERT OR REPLACE INTO client_schema_state (key, value) VALUES (?, ?)',
-          [`workspace_backfill:${ws}:${id}`, '1'],
+          'INSERT OR REPLACE INTO client_schema_state (key, completed_at) VALUES (?, ?)',
+          [`workspace_backfill:${ws}:${id}`, Date.now()],
         )
       },
       releaseClaim: async () => {},

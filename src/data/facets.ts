@@ -9,6 +9,7 @@
  */
 
 import { defineFacet, keyedMapFacet } from '@/facets/facet'
+import type { ResolvedPropertySchema } from '@/data/api/propertySchema'
 import type {
   AnyMutator,
   AnyPostCommitProcessor,
@@ -117,10 +118,28 @@ export interface BackfillCompletionClaim {
   releaseClaim(workspaceId: string, backfillId: string): Promise<void>
 }
 
+/** When a backfill is allowed to start.
+ *
+ *  - `workspace-open`: scheduled automatically, deferred to idle, once per
+ *    open. Right for a small repair that any device may safely attempt.
+ *  - `operator`: never scheduled automatically. A human runs it, on one
+ *    device, deliberately — which is the ONLY thing that makes a
+ *    once-per-graph pass actually once. The completion claim RECORDS that
+ *    run so other devices skip it; it cannot arbitrate a race, because
+ *    exactly-once across N devices over a last-write-wins layer with no
+ *    server arbitration is not reachable (see `graphBackfillClaim.ts`).
+ *
+ *  Required, with no default, for the same reason `completion` was: a pass
+ *  that uploads source-of-truth rows and quietly ran itself on every device
+ *  is the failure mode this seam exists to prevent, and the wrong answer is
+ *  invisible at the call site. */
+export type WorkspaceBackfillTrigger = 'workspace-open' | 'operator'
+
 export interface WorkspaceBackfill {
   /** Stable id; doubles as the per-workspace completion-marker suffix. Change
    *  it to force a re-run on every workspace. */
   readonly id: string
+  readonly trigger: WorkspaceBackfillTrigger
   run: (ctx: WorkspaceBackfillContext) => Promise<void>
 }
 
@@ -146,10 +165,23 @@ export interface WorkspaceBackfillContext {
     fn: (tx: Tx) => Promise<R>,
     opts: {description?: string},
   ) => Promise<R>
+  /** Resolve a property NAME to its winning schema for this workspace.
+   *
+   *  On the context rather than on `Tx` because the pass this seam exists for
+   *  reads cell KEYS, which are names, while `Tx` resolves by fieldId. Bound
+   *  to this run's workspace for the same reason every other member is: a
+   *  backfill must not be able to reach another workspace's registry.
+   *
+   *  `undefined` for a name no definition claims. That is not an error and
+   *  must not abort the pass — an unregistered key is data property migration
+   *  deliberately leaves in the cell (`pnpm agent audit-properties` reports
+   *  the set). */
+  resolveNameSchema: (name: string) => ResolvedPropertySchema<unknown> | undefined
 }
 
 const isWorkspaceBackfill = (value: unknown): value is WorkspaceBackfill =>
-  isRecord(value) && typeof value.id === 'string' && typeof value.run === 'function'
+  isRecord(value) && typeof value.id === 'string' && typeof value.run === 'function' &&
+  (value.trigger === 'workspace-open' || value.trigger === 'operator')
 
 const isInvalidationRule = (value: unknown): value is InvalidationRule =>
   isRecord(value) &&

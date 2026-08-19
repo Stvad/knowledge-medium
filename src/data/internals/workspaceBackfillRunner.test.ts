@@ -20,6 +20,7 @@ let sharedDb: TestDb
  *  observable through undo. */
 const probeBackfill = (runs: string[]): WorkspaceBackfill => ({
   id: 'probe-backfill-v1',
+  trigger: 'workspace-open',
   run: async ({workspaceId, tx}) => {
     runs.push(workspaceId)
     const targetId = workspaceId === WS ? 'target' : `target-${workspaceId}`
@@ -135,6 +136,7 @@ describe('workspace backfill runner — sync gating', () => {
     const batches: number[] = []
     const chunked: WorkspaceBackfill = {
       id: 'chunked-probe-v1',
+      trigger: 'workspace-open',
       run: async ({tx}) => {
         for (let i = 0; i < 3; i++) {
           if (i === 1) g.close()          // a fresh download starts mid-run
@@ -161,6 +163,7 @@ describe('workspace backfill runner — sync gating', () => {
     const batches: number[] = []
     const chunked: WorkspaceBackfill = {
       id: 'chunked-probe-v1',
+      trigger: 'workspace-open',
       run: async ({tx}) => {
         for (let i = 0; i < 3; i++) {
           if (i === 1) repo.setActiveWorkspaceId(OTHER_WS)
@@ -204,6 +207,7 @@ describe('workspace backfill runner — sync gating', () => {
     const batches: number[] = []
     const chunked: WorkspaceBackfill = {
       id: 'chunked-staging-v1',
+      trigger: 'workspace-open',
       run: async ({tx}) => {
         for (let i = 0; i < 3; i++) {
           if (i === 1) {
@@ -237,6 +241,7 @@ describe('workspace backfill runner — sync gating', () => {
     const ran: string[] = []
     const findsNothing: WorkspaceBackfill = {
       id: 'finds-nothing-v1',
+      trigger: 'workspace-open',
       run: async ({workspaceId}) => { ran.push(workspaceId) },   // never calls tx
     }
     const repo = makeRepo(findsNothing, g.gate)
@@ -263,6 +268,7 @@ describe('workspace backfill runner — sync gating', () => {
     const g = controllableGate()
     const late: WorkspaceBackfill = {
       id: 'stages-after-write-v1',
+      trigger: 'workspace-open',
       run: async ({tx}) => {
         await tx(async () => {}, {description: 'the only batch'})
         await sharedDb.db.execute(
@@ -476,5 +482,146 @@ describe('workspace backfill runner — undo', () => {
       .map(r => JSON.parse(r.data) as {id: string})
       .filter(e => e.id === 'target')
     expect(ops.length).toBeGreaterThan(0)
+  })
+})
+
+describe('workspace backfill runner — operator trigger', () => {
+  const operatorBackfill = (runs: string[]): WorkspaceBackfill => ({
+    id: 'operator-probe-v1',
+    trigger: 'operator',
+    run: async ({workspaceId}) => { runs.push(workspaceId) },
+  })
+
+  it('is never started by opening the workspace', async () => {
+    // The whole basis of exactly-once for a once-per-graph pass: nothing
+    // automatic starts it, so two devices opening the same workspace cannot
+    // both begin uploading source-of-truth rows.
+    const runs: string[] = []
+    const repo = makeRepo(operatorBackfill(runs))
+    await seedTarget(repo)
+
+    await drain(repo)
+
+    expect(runs).toEqual([])
+  })
+
+  it('runs when an operator asks, and reports what happened', async () => {
+    const runs: string[] = []
+    const repo = makeRepo(operatorBackfill(runs))
+    await seedTarget(repo)
+
+    expect(await repo.runWorkspaceBackfillNow(WS, 'operator-probe-v1')).toBe('ran')
+    expect(runs).toEqual([WS])
+  })
+
+  it('refuses an id that is not an operator pass, rather than running the wrong thing', async () => {
+    const runs: string[] = []
+    const repo = makeRepo(probeBackfill(runs))
+    await seedTarget(repo)
+
+    // `probe-backfill-v1` is `workspace-open`; asking for it by name must not
+    // hand the operator an automatic pass through the manual door.
+    expect(await repo.runWorkspaceBackfillNow(WS, 'probe-backfill-v1')).toBe('not-found')
+    expect(await repo.runWorkspaceBackfillNow(WS, 'no-such-pass')).toBe('not-found')
+    expect(runs).toEqual([])
+  })
+})
+
+describe('workspace backfill runner — operator outcomes', () => {
+  it('does not claim while this device is behind the server', async () => {
+    // `tryClaim` WRITES (the Migrations page, then the claim row). Claiming
+    // first and discovering staleness inside the pass leaves both that create
+    // and its release queued — on reconnect they can tombstone a completion
+    // this device never saw, freeing later operators to repeat the migration.
+    const runs: string[] = []
+    const claimAttempts: string[] = []
+    // A gate that never fires = this device is behind and stays behind.
+    const neverSettles = () => () => {}
+    const {repo} = createTestRepo({
+      db: sharedDb.db,
+      user: {id: 'user-1'},
+      backfillSyncGate: neverSettles,
+      backfillCompletionClaim: {
+        tryClaim: async (_ws, id) => { claimAttempts.push(id); return true },
+        markComplete: async () => {},
+        releaseClaim: async () => {},
+      },
+    })
+    repo.setActiveWorkspaceId(WS)
+    repo.setRuntimeContributions(workspaceBackfillsFacet, 'test-backfills', [{
+      id: 'operator-sync-v1',
+      trigger: 'operator' as const,
+      run: async ({workspaceId}) => { runs.push(workspaceId) },
+    }])
+    await seedTarget(repo)
+
+    expect(await repo.runWorkspaceBackfillNow(WS, 'operator-sync-v1')).toBe('already-done-or-held')
+    expect(claimAttempts).toEqual([])
+    expect(runs).toEqual([])
+  })
+
+  it('reports failure, not success, when the pass throws', async () => {
+    // Reporting "ran" for a pass that died tells the operator the migration is
+    // done when it is not, and costs them the retry.
+    const {repo} = createTestRepo({
+      db: sharedDb.db,
+      user: {id: 'user-1'},
+      backfillCompletionClaim: {
+        tryClaim: async () => true,
+        markComplete: async () => {},
+        releaseClaim: async () => {},
+      },
+    })
+    repo.setActiveWorkspaceId(WS)
+    repo.setRuntimeContributions(workspaceBackfillsFacet, 'test-backfills', [{
+      id: 'operator-throws-v1',
+      trigger: 'operator' as const,
+      run: async () => { throw new Error('pass exploded') },
+    }])
+    await seedTarget(repo)
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    expect(await repo.runWorkspaceBackfillNow(WS, 'operator-throws-v1')).toBe('already-done-or-held')
+  })
+})
+
+describe('workspace backfill runner — concurrent operator invocations', () => {
+  it('single-flights the same pass instead of running it twice', async () => {
+    // Two invocations in one Repo share a claimant, so the claim reads the
+    // second as the same owner and would let it proceed. Then either one
+    // aborting releases the claim they SHARE while the other still writes,
+    // and the survivor's markComplete stamps a tombstone — completion goes
+    // invisible and the next operator repeats the migration.
+    let release!: () => void
+    const started: string[] = []
+    const {repo} = createTestRepo({
+      db: sharedDb.db,
+      user: {id: 'user-1'},
+      backfillCompletionClaim: {
+        tryClaim: async () => true,
+        markComplete: async () => {},
+        releaseClaim: async () => {},
+      },
+    })
+    repo.setActiveWorkspaceId(WS)
+    repo.setRuntimeContributions(workspaceBackfillsFacet, 'test-backfills', [{
+      id: 'operator-slow-v1',
+      trigger: 'operator' as const,
+      run: async ({workspaceId}) => {
+        started.push(workspaceId)
+        await new Promise<void>(resolve => { release = resolve })
+      },
+    }])
+    await seedTarget(repo)
+
+    const first = repo.runWorkspaceBackfillNow(WS, 'operator-slow-v1')
+    await vi.waitFor(() => { expect(started).toHaveLength(1) })
+
+    // Second invocation while the first is still inside `run`.
+    expect(await repo.runWorkspaceBackfillNow(WS, 'operator-slow-v1')).toBe('already-running')
+    expect(started).toHaveLength(1)
+
+    release()
+    expect(await first).toBe('ran')
   })
 })

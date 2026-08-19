@@ -1009,6 +1009,73 @@ describe('merge integration (§9, slice B3)', () => {
   })
 })
 
+describe('pre-backfill window: merging into a cell-only target (§5, #389 item 9)', () => {
+  /** The flip is an operator UPDATE of the workspace row; between it and the
+   *  backfill reaching a block, that block has a full cell and zero field
+   *  rows. Same shape as any row that arrives by sync after the flip. */
+  const flipToChildren = async (): Promise<void> => {
+    await sharedDb.db.execute(
+      'UPDATE workspaces SET properties_migration = ? WHERE id = ?', ['children', WS],
+    )
+  }
+
+  it('keeps the target-wins value when `into` is cell-only and `from` is child-backed', async () => {
+    await seedWorkspace('cell')
+    const repo = setup()
+    await createBlock(repo, 'into')
+    await repo.tx(tx => tx.setProperty('into', statusSchema, 'target-value'),
+      {scope: ChangeScope.BlockDefault})
+    // The precondition the whole case rests on: a cell with nothing behind it.
+    expect(await cellValue('into')).toBe('target-value')
+    expect(await liveFieldRows('into')).toEqual([])
+
+    await flipToChildren()
+
+    await createBlock(repo, 'from')
+    await repo.tx(tx => tx.setProperty('from', statusSchema, 'source-value'),
+      {scope: ChangeScope.BlockDefault})
+    expect((await liveFieldRows('from')).length).toBe(1)
+
+    await repo.tx(async tx => {
+      const into = await tx.get('into')
+      const from = await tx.get('from')
+      await mergeBlocksInTx(tx, {into: into!, from: from!})
+    }, {scope: ChangeScope.BlockDefault})
+
+    // `mergeProperties` rule 4 is target-wins, and a merge must not invert it
+    // just because the target's value had not been materialized yet.
+    expect(await cellValue('into')).toBe('target-value')
+    // …and the source's divergent value is kept as a peer, not dropped —
+    // §9 union-with-dedupe, identical to merging two child-backed blocks.
+    const [intoField] = await liveFieldRows('into')
+    const values = (await childrenRows(intoField!.id)).filter(v => v.deleted === 0)
+    expect(values.map(v => v.content)).toEqual(['target-value', 'source-value'])
+  })
+
+  it('control: the same merge with `into` already child-backed', async () => {
+    await seedWorkspace('children')
+    const repo = setup()
+    await createBlock(repo, 'into')
+    await repo.tx(tx => tx.setProperty('into', statusSchema, 'target-value'),
+      {scope: ChangeScope.BlockDefault})
+    await createBlock(repo, 'from')
+    await repo.tx(tx => tx.setProperty('from', statusSchema, 'source-value'),
+      {scope: ChangeScope.BlockDefault})
+
+    await repo.tx(async tx => {
+      const into = await tx.get('into')
+      const from = await tx.get('from')
+      await mergeBlocksInTx(tx, {into: into!, from: from!})
+    }, {scope: ChangeScope.BlockDefault})
+
+    // The shape the pre-backfill case above must reproduce exactly.
+    expect(await cellValue('into')).toBe('target-value')
+    const [intoField] = await liveFieldRows('into')
+    const values = (await childrenRows(intoField!.id)).filter(v => v.deleted === 0)
+    expect(values.map(v => v.content)).toEqual(['target-value', 'source-value'])
+  })
+})
+
 describe('duplicate collapse preservation (§9, slice B3)', () => {
   it('keeps a divergent losing value as a sibling (with its comments) instead of deleting', async () => {
     await seedWorkspace('children')

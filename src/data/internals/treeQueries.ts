@@ -271,9 +271,24 @@ export const CHILDREN_IDS_SQL = `
  * predicate; slice D reuses that mechanism for the hidden-tier set).
  *
  * An un-flipped workspace short-circuits on the `workspaces` probe
- * (dormant: today's behavior, zero rows filtered). No extra parameters —
- * the flat predicate is fully expressed over the candidate row's own
- * columns, which is what deleting the positional walk buys.
+ * (dormant: today's behavior, zero rows filtered).
+ *
+ * ONE bound parameter: a JSON array of definition ids the registry knows
+ * but `block_types` may not carry yet (#389 item 7). Property seed
+ * definition ids are deterministic — `propertyDefinitionBlockId` is
+ * uuidv5 over `workspaceId:seedKey` — so the set is a pure computation
+ * over the loaded declarations, needing no DB state and nothing to
+ * invalidate; a newly loaded plugin's seeds are simply known to the next
+ * query. Binding it rather than storing it is what keeps `block_types`
+ * derived-from-`blocks` by trigger alone.
+ *
+ * Workspace-guarded like the `block_types` leg beside it, and for the reason
+ * that leg states: a foreign workspace's definition id must degrade to a
+ * VISIBLE "unknown field" row per §9. Salting alone does not give that —
+ * it stops workspace B's own ids from matching, but a row IN B whose
+ * `reference_target_id` names the ACTIVE workspace's seed (a cross-workspace
+ * copy) would otherwise match and be hidden. Pass `'[]', ''` when no registry
+ * is reachable.
  *
  * NULL-SAFETY is load-bearing (§9's recorded failure mode, caught by this
  * file's own tests): the bit is NULL on every unmarked row, and this
@@ -290,11 +305,18 @@ const recognizedFieldRowSql = (rowRef: string): string => `
         WHERE w.id = ${rowRef}.workspace_id
           AND w.properties_migration IN ('children', 'cell-off')
      )
-     AND EXISTS (
-       SELECT 1 FROM block_types bt
-        WHERE bt.block_id = ${rowRef}.reference_target_id
-          AND bt.type = 'property-schema'
-          AND bt.workspace_id = ${rowRef}.workspace_id
+     AND (
+       EXISTS (
+         SELECT 1 FROM block_types bt
+          WHERE bt.block_id = ${rowRef}.reference_target_id
+            AND bt.type = 'property-schema'
+            AND bt.workspace_id = ${rowRef}.workspace_id
+       )
+       OR EXISTS (
+         SELECT 1 FROM json_each(?) seed
+          WHERE seed.value = ${rowRef}.reference_target_id
+            AND ${rowRef}.workspace_id = ?
+       )
      )
 `
 
@@ -305,7 +327,11 @@ ${recognizedFieldRowSql('blocks')}
 `
 
 /** Outline form of {@link CHILDREN_SQL}: excludes recognized field rows in
- *  a flipped workspace. Bind `[parentId]`. */
+ *  a flipped workspace. Bind `[parentId, seedDefinitionIdsJson, seedWorkspaceId]`
+ *  — the registry's set and the workspace it belongs to; pass `'[]', ''` for
+ *  none. Omitting them binds NULL, which `json_each` reads as zero rows, so a
+ *  caller that forgets silently gets the pre-#389 answer rather than an
+ *  error. */
 export const VISIBLE_CHILDREN_SQL = `
   SELECT * FROM blocks
    WHERE parent_id = ? AND deleted = 0
@@ -313,7 +339,9 @@ ${VISIBLE_CHILD_PREDICATE_SQL}
    ORDER BY order_key, id
 `
 
-/** Outline form of {@link CHILDREN_IDS_SQL}. Bind `[parentId]`. */
+/** Outline form of {@link CHILDREN_IDS_SQL}. Bind
+ *  `[parentId, seedDefinitionIdsJson, seedWorkspaceId]` — see
+ *  {@link VISIBLE_CHILDREN_SQL}. */
 export const VISIBLE_CHILDREN_IDS_SQL = `
   SELECT id FROM blocks
    WHERE parent_id = ? AND deleted = 0
@@ -340,7 +368,9 @@ ${VISIBLE_CHILD_PREDICATE_SQL}
  * ref-typed VALUE deeper in a property subtree is unmarked and never
  * pruned, which is all the exemption existed to protect).
  *
- * Bind `[rootId]`. Same selected columns + depth semantics as SUBTREE_SQL;
+ * Bind `[rootId, seedDefinitionIdsJson, seedWorkspaceId]` (see
+ * {@link VISIBLE_CHILDREN_SQL}); the trailing two sit inside the recursive
+ * term and are bound once for the statement. Same selected columns + depth semantics as SUBTREE_SQL;
  * the `INDEXED BY` planner-pin note there applies here too. An un-flipped
  * workspace short-circuits on the `workspaces` probe exactly like
  * VISIBLE_CHILD_PREDICATE_SQL (dormant: zero rows pruned).
