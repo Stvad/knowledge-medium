@@ -2756,8 +2756,9 @@ export class Repo {
    *  there is no sync layer). Persisted by PowerSync across sessions, so on a
    *  warm client it is last session's — which is exactly why it is worth
    *  reporting: it says how current the local rows a full-graph read scanned
-   *  actually are. Measured NOT to advance on an idle connected client, so it
-   *  is a basis to state, never a freshness gate to refuse on. */
+   *  actually are. A basis to state, never a freshness gate: it does not
+   *  advance on a connected idle graph, so refusing on its staleness would
+   *  make a pre-flip audit unusable on exactly the quiet graph you audit. */
   get lastSyncedAt(): Date | undefined {
     return (this.db as {currentStatus?: {lastSyncedAt?: Date}}).currentStatus?.lastSyncedAt
   }
@@ -2771,23 +2772,26 @@ export class Repo {
    *     windows, so the status reads settled while rows are still queued;
    *   - the device is behind the server, with rows not yet downloaded at all.
    *
-   * A local-only session has no sync layer and is complete by construction:
-   * `backfillSyncGate` is injected to fire immediately there
-   * (`src/context/repo.tsx`), so this returns null rather than refusing
-   * forever on a device that will never connect.
+   * A local-only session still gets a real PowerSyncDatabase and simply never
+   * connects, so the default gate (connected && !downloading) would never
+   * open. `backfillSyncGate` is injected to fire immediately there
+   * (`src/context/repo.tsx`) — that injection is load-bearing, not redundant:
+   * without it this refuses forever on a device that will never connect.
    *
    * The text is the CAUSE only; callers state their own consequence. Shared
    * between the backfill runner (which must not write from a stale view) and
-   * `audit-properties` (whose whole output is an enumeration over rows, and
-   * so reads as "nothing to fix" when rows are missing) — one predicate,
-   * because a rule added to one of two copies is how these diverge.
+   * `audit-properties` (which reports it) — one predicate, because a rule
+   * added to one of two copies is how these diverge.
    */
   async syncViewGap(): Promise<string | null> {
     const staged = await this.db.getOptional<{one: number}>(
       'SELECT 1 AS one FROM blocks_synced_changes LIMIT 1',
     )
     if (staged !== null) return 'synced rows are still draining into `blocks`'
-    if (!this.backfillSyncSettledNow()) return 'this device is not caught up with the server'
+    if (!this.backfillSyncSettledNow()) {
+      return 'this device is not caught up with the server '
+        + '(still downloading, disconnected, or a download error)'
+    }
     return null
   }
 
@@ -2809,13 +2813,15 @@ export class Repo {
         `longer active. Its writes would land under the current session's access state.`,
       ), {kind: Repo.TRANSIENT})
     }
-    // Sampled from INSIDE the write transaction — a drain can otherwise land
-    // between an outside check and lock acquisition.
+    // Re-sampled per transaction while the write lock is held, so a drain
+    // cannot commit between this check and the write. Reading through
+    // `this.db` rather than the tx handle is deliberate: the drain is excluded
+    // by the lock, not by read isolation.
     const gap = await this.syncViewGap()
     if (gap !== null) {
       throw Object.assign(new Error(
-        `[workspaceBackfills] "${backfillId}" aborted: ${gap}. This pass would scan a ` +
-        `partially materialized graph and upload a properties bag built from it.`,
+        `[workspaceBackfills] "${backfillId}" aborted: ${gap}. This pass would scan an ` +
+        `incomplete view of the graph and upload a properties bag built from it.`,
       ), {kind: Repo.TRANSIENT})
     }
   }
