@@ -228,7 +228,7 @@ export const tutorialOutline = (variant: TutorialVariant): TutorialNode[] => {
       ...(km.jumpMany ? [km.jumpMany] : []),
       `Zoom into a block (treat it as the new root of the view): ${sharedKeys.zoomIn}. Zoom back out: ${sharedKeys.zoomOut}.${km.zoomNote}`,
       `Back / forward through your navigation history: ${sharedKeys.back}.`,
-      'The **left sidebar** (panel icon in the header; first button in the bottom nav on a phone) keeps your anchors in reach: core pages plus a **Shortcuts** section you curate — it starts with [[Journal]].',
+      'The **left sidebar** (panel icon in the header; first button in the bottom nav on a phone) keeps your anchors in reach: **Jump to…** and **Today** controls plus a **Shortcuts** section you curate — it starts with [[Journal]].',
       'What did I touch recently? Run **Open Recents** from the command palette (or click the clock icon in the header) — the [[Recents]] page is a feed of recently edited blocks, grouped into activity entries.',
     ]),
 
@@ -244,9 +244,9 @@ export const tutorialOutline = (variant: TutorialVariant): TutorialNode[] => {
 
     sect('Pages & links', [
       'Wiki links — text wrapped in double square brackets becomes a clickable link to (or creates) a page with that name. Try the link on the next bullet: [[extensions]] takes you to the extensions page (one of the other seeded pages in this workspace).',
-      'Typing `[[` opens page autocomplete. Matching is forgiving — word-prefix chains like `[[meetnotes` find "Meeting Notes" — and each candidate shows its type.',
+      'Typing `[[` opens page autocomplete. Matching is forgiving — word-prefix chains like `[[meetnotes` find "Meeting Notes" — and a candidate with a distinguishing type (beyond plain page) shows it beside the name.',
       'You can spot pages anywhere in the outline: a page\'s bullet is drawn as a **ring** instead of a solid dot.',
-      `Find or create any page: ${sharedKeys.quickFind}. Type to filter — results show their types and where they live; pressing Enter on a missing name creates it. Date phrases work too: \`tomorrow\` or \`last friday\` jumps to that daily note.`,
+      `Find or create any page: ${sharedKeys.quickFind}. Type to filter — block results show where they live, and typed results their type; pressing Enter on a missing name creates it. Date phrases work too: \`tomorrow\` or \`last friday\` jumps to that daily note.`,
       `Command palette: ${sharedKeys.commandPalette}. **Every** action available right now is searchable here with its key shown — use this when you forget a shortcut, or to find actions that have no default binding.`,
       {
         content: 'Block refs and embeds — wiki links point at a *page* (resolved by name). A block ref `((block-id))` points at one specific block anywhere in your workspace; an embed `!((block-id))` renders the target block inline instead of as a link.',
@@ -280,7 +280,7 @@ export const tutorialOutline = (variant: TutorialVariant): TutorialNode[] => {
     ]),
 
     advancedSect('Search', [
-      `QuickFind (${sharedKeys.quickFind}) searches page aliases first, then block content. Press Enter to open the selected result; if the name is missing, QuickFind can create a new page for it. (Content search needs at least 3 characters — shorter queries match page names only.)`,
+      `QuickFind (${sharedKeys.quickFind}) searches page aliases first, then block content. Press Enter to open the selected result; if the name is missing, QuickFind can create a new page for it. (Content search needs at least 3 characters — shorter queries still match page names and date phrases.)`,
       'When you search for several words, all of them must appear, in any order: `project notes` matches blocks that contain both `project` and `notes`.',
       'Wrap text in quotes for an exact phrase: `"project notes"` only matches that contiguous text.',
       'Use uppercase `OR` for alternatives: `project OR meeting` finds either term.',
@@ -393,7 +393,7 @@ export const tutorialOutline = (variant: TutorialVariant): TutorialNode[] => {
       'Remap any shortcut: run **Customize keyboard shortcuts** from the command palette. It lists every action grouped by context — click a binding and press the new keys to rebind it, or reset / disable it; conflicts are flagged, and your overrides sync to your other devices.',
       'See every shortcut that applies right now: press `?` (outside of editing; `Cmd+/` works anywhere) — an overlay lists the active bindings grouped by context, and pressing a chord while it\'s open shows what it would run.',
       'Change the look: each theme has its own command — run **Theme: <name>** from the command palette to apply it directly (e.g. `Theme: Solarized Dark`). Eight ship built-in — light and dark variants of Sunset Warm, Indigo, and Solarized, plus a plain Light and Dark — and extensions can register their own.',
-      "Run **Manage extensions** from the command palette to open the extensions tree — every extension can be toggled on or off there, and the toggle syncs to your other devices. Vim mode itself is an extension (`system:vim-normal-mode`); it's off by default. Tick it to get vim normal-mode keys (and switch this tutorial to the vim variant); untick it for the default click-to-edit experience." + km.colemakNote,
+      "Run **Manage extensions** from the command palette to open the extensions tree — extensions can be toggled on or off there (a few core ones are essential and locked on), and the toggle syncs to your other devices. Vim mode itself is an extension (`system:vim-normal-mode`); it's off by default. Tick it to get vim normal-mode keys — the tutorial written for them is [[Tutorial (vim)]] — or untick it for the default click-to-edit experience." + km.colemakNote,
       'Coming from Roam? Run **Import Roam JSON export** from the command palette to bring a graph in.',
     ]),
 
