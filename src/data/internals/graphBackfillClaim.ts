@@ -172,6 +172,23 @@ export interface GraphBackfillClaimDeps {
   ensureHome(workspaceId: string): Promise<unknown>
 }
 
+/** Refuse a row at the claim id that belongs to ANOTHER workspace.
+ *
+ *  Every write path here reaches its row through `tx.get`, which selects on
+ *  id alone, and then rewrites properties or restores a tombstone. On a
+ *  foreign block that is a cross-workspace write — the one thing a
+ *  deterministic-id caller must never do. Extracted rather than repeated
+ *  because it was written in `tryClaim` and forgotten in `markComplete`,
+ *  which is how the three earlier copies of this predicate diverged. */
+const refuseForeignOccupant = (
+  row: {workspaceId: string; deleted: boolean} | null | undefined,
+  workspaceId: string,
+  claimId: string,
+): void => {
+  if (classifyOccupant((row ?? null) as never, {workspaceId}).verdict !== 'foreign') return
+  throw new DeterministicIdCrossWorkspaceError(claimId, row!.workspaceId, workspaceId)
+}
+
 export const createGraphBackfillClaim = (
   deps: GraphBackfillClaimDeps,
 ): BackfillCompletionClaim => ({
@@ -211,16 +228,7 @@ export const createGraphBackfillClaim = (
       // Re-checked inside the WRITING tx against this row: the read above
       // happened outside it, and a peer's claim can arrive in between.
       const existing = await tx.get(claimId)
-      // Refuse a foreign row rather than updating or resurrecting it. `tx.get`
-      // selects on id alone, and the branches below rewrite properties and
-      // restore tombstones — on another workspace's block that is a
-      // cross-workspace write, which is the one thing a deterministic-id
-      // caller must never do.
-      if (classifyOccupant(existing ?? null, {workspaceId}).verdict === 'foreign') {
-        throw new DeterministicIdCrossWorkspaceError(
-          claimId, existing!.workspaceId, workspaceId,
-        )
-      }
+      refuseForeignOccupant(existing, workspaceId, claimId)
       if (existing && !existing.deleted) {
         // Yield only to a row that actually decodes AS a claim. A live row
         // whose bookkeeping is missing or malformed reads as UNCLAIMED to
@@ -290,6 +298,7 @@ export const createGraphBackfillClaim = (
     const claimId = graphBackfillClaimBlockId(workspaceId, backfillId)
     await deps.tx(async tx => {
       const row = await tx.get(claimId)
+      refuseForeignOccupant(row, workspaceId, claimId)
       if (!row) {
         throw new Error(
           `[graphBackfillClaim] cannot record completion of "${backfillId}": its claim ` +
@@ -321,6 +330,7 @@ export const createGraphBackfillClaim = (
       // would remove a PEER's live claim — freeing a second device to start
       // the same source-of-truth pass while the winner is still running.
       const row = await tx.get(claimId)
+      refuseForeignOccupant(row, workspaceId, claimId)
       if (!row || row.deleted) return
       if (decideClaim(claimFromProperties(row.properties), deps.claimantId) !== 'proceed') return
       await tx.delete(claimId)

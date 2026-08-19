@@ -75,6 +75,32 @@ describe('a claim that arrives between the read and the transaction', () => {
 describe('a foreign block sitting at the claim id', () => {
   const foreignRow = {id: 'x', workspaceId: 'other-ws', deleted: false, properties: {}}
 
+  /** Every write path reaches its row through `tx.get`, which selects on id
+   *  alone. All three must refuse a foreign occupant, not just the one that
+   *  happened to be written first. */
+  const claimOverForeignRow = () => createGraphBackfillClaim({
+    db: {getOptional: async () => null},
+    tx: async <R,>(fn: (tx: never) => Promise<R>): Promise<R> => fn({
+      get: async () => foreignRow,
+      create: async () => 'unused',
+      update: async () => { throw new Error('must not write to a foreign row') },
+      restore: async () => { throw new Error('must not restore a foreign row') },
+      delete: async () => { throw new Error('must not delete a foreign row') },
+    } as never),
+    claimantId: 'device-a',
+    ensureHome: async () => undefined,
+  } as unknown as Parameters<typeof createGraphBackfillClaim>[0])
+
+  it('markComplete refuses it — the pass ran, but not into someone else\'s data', async () => {
+    await expect(claimOverForeignRow().markComplete('ws', 'foreign-v1'))
+      .rejects.toThrow(/workspace/i)
+  })
+
+  it('releaseClaim refuses it', async () => {
+    await expect(claimOverForeignRow().releaseClaim('ws', 'foreign-v1'))
+      .rejects.toThrow(/workspace/i)
+  })
+
   it('is refused, not updated — a deterministic id is not a licence to write', async () => {
     // `tx.get` selects on id alone, and the branches below rewrite properties
     // and restore tombstones. On another workspace's block that is a
