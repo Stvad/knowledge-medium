@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { describe, expect, it } from 'vitest'
-import { claimFromProperties, createGraphBackfillClaim, decideClaim, type GraphBackfillClaim } from './graphBackfillClaim'
+import { claimFromProperties, createGraphBackfillClaim, decideClaim, resolveClaimantId, type GraphBackfillClaim } from './graphBackfillClaim'
 
 const ME = 'device-a'
 const THEM = 'device-b'
@@ -69,6 +69,39 @@ describe('a claim that arrives between the read and the transaction', () => {
     } as unknown as Parameters<typeof createGraphBackfillClaim>[0])
 
     expect(await claim.tryClaim('ws', 'race-v1')).toBe(false)
+  })
+})
+
+describe('the claimant identity', () => {
+  const fakeStorage = (initial: Record<string, string> = {}) => {
+    const store = {...initial}
+    return {
+      getItem: (k: string) => store[k] ?? null,
+      setItem: (k: string, v: string) => { store[k] = v },
+      store,
+    }
+  }
+
+  it('survives a reload, so the device that started a pass can resume it', () => {
+    // `decideClaim` proceeds only when a live claim names US. A per-session id
+    // meant a closed or crashed tab left a claim nobody could match again, and
+    // the migration was wedged for the whole graph until someone deleted the
+    // block by hand.
+    const storage = fakeStorage()
+    let n = 0
+    const first = resolveClaimantId(storage, () => `id-${++n}`)
+    const second = resolveClaimantId(storage, () => `id-${++n}`)
+
+    expect(second).toBe(first)
+  })
+
+  it('still yields an id when storage is unavailable', () => {
+    const blocked = {
+      getItem: () => { throw new Error('denied') },
+      setItem: () => { throw new Error('denied') },
+    }
+    expect(resolveClaimantId(blocked, () => 'fallback')).toBe('fallback')
+    expect(resolveClaimantId(undefined, () => 'fallback')).toBe('fallback')
   })
 })
 

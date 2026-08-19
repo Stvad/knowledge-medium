@@ -65,7 +65,10 @@ import {
   pingRuntime,
 } from './describeRuntime.ts'
 import type {KnownAgentCommand} from '@knowledge-medium/agent-cli/protocol'
-import { takeLastPropertyCellBackfillRun } from '@/data/internals/propertyCellBackfill'
+import {
+  PROPERTY_CELL_BACKFILL_ID,
+  takeLastPropertyCellBackfillRun,
+} from '@/data/internals/propertyCellBackfill'
 import type {
   AgentRuntimeBridgeOptions,
   AgentRuntimeContext,
@@ -475,8 +478,12 @@ const runRuntimeBackfill = async (
     workspaceId,
     ...result,
     // The seam hands back nothing (an unattended pass has no one to tell), so
-    // the detail an operator acts on is collected from the pass itself.
-    ...(takeLastPropertyCellBackfillRun() ?? {}),
+    // the detail an operator acts on is collected from the pass itself — only
+    // when THIS request is the one that ran it, or a `not-found` for some other
+    // id would come back wearing the last migration's counts.
+    ...(input.backfillId === PROPERTY_CELL_BACKFILL_ID
+      ? takeLastPropertyCellBackfillRun(workspaceId) ?? {}
+      : {}),
   }
 }
 

@@ -189,6 +189,39 @@ const refuseForeignOccupant = (
   throw new DeterministicIdCrossWorkspaceError(claimId, row!.workspaceId, workspaceId)
 }
 
+/** localStorage key for this browser profile's claimant identity. */
+const CLAIMANT_STORAGE_KEY = 'km:migration-claimant'
+
+/**
+ * A claimant id that survives a reload.
+ *
+ * It is not diagnostic: `decideClaim` returns `proceed` only when a live claim
+ * names US. With a fresh id per session, a tab that closed or crashed mid-pass
+ * left a claim nobody could ever match again — the migration was wedged for
+ * the whole graph until someone deleted the claim block by hand, which is not
+ * an instruction a user can follow. Persisted per browser profile, the same
+ * device just picks its own claim back up and carries on.
+ *
+ * Falls back to a per-session id when storage is unavailable (private mode, a
+ * blocked origin). That is the old behaviour and it degrades the same way:
+ * recovery needs the claim deleted. It does not degrade CORRECTNESS — two
+ * devices still cannot both hold a claim.
+ */
+export const resolveClaimantId = (
+  storage: Pick<Storage, 'getItem' | 'setItem'> | undefined,
+  newId: () => string,
+): string => {
+  try {
+    const stored = storage?.getItem(CLAIMANT_STORAGE_KEY)
+    if (stored) return stored
+    const minted = newId()
+    storage?.setItem(CLAIMANT_STORAGE_KEY, minted)
+    return minted
+  } catch {
+    return newId()
+  }
+}
+
 export const createGraphBackfillClaim = (
   deps: GraphBackfillClaimDeps,
 ): BackfillCompletionClaim => ({

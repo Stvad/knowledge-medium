@@ -80,6 +80,10 @@ const makeCtx = (): WorkspaceBackfillContext => {
       const resolution = resolver.resolve(name)
       return resolution.status === 'resolved' ? resolution.schema : undefined
     },
+    resolveFieldSchema: fieldId => {
+      const resolution = resolver.resolveField(fieldId)
+      return resolution.status === 'resolved' ? resolution.schema : undefined
+    },
   }
 }
 
@@ -235,6 +239,45 @@ describe('property cell → children backfill', () => {
 
     const values = (await fieldRowsOf('b1')).flatMap(field => field.values)
     expect(values).toContain('mine')
+  })
+
+  it('removes the children of a key deleted while the pass was running', async () => {
+    // Pre-flip nothing else deletes them — the live processor is dormant — so
+    // children left behind become authoritative at the flip and RESURRECT a
+    // property the user removed. The materializer can delete them, but only
+    // if the pass names the key, and the cell no longer does.
+    await create('b1', {'demo:note': 'gone soon'})
+    await runPropertyCellBackfill(makeCtx())
+    expect(await fieldRowsOf('b1')).toHaveLength(1)
+
+    await repo.tx(async tx => {
+      await tx.update('b1', {properties: {'demo:extra': 'still here'}})
+    }, {scope: ChangeScope.BlockDefault, description: 'user deletes a property'})
+
+    await runPropertyCellBackfill(makeCtx())
+
+    const fields = await fieldRowsOf('b1')
+    expect(fields.flatMap(f => f.values)).toEqual(['still here'])
+  })
+
+  it('repairs a value edited behind the cursor, not just a key added there', async () => {
+    // The behind-cursor case for an EXISTING key: the block was visited, then
+    // its value changed. Post-flip the child is what the cell gets rebuilt
+    // from, so a stale child is the user's edit being reverted.
+    const ids = Array.from({length: 150}, (_, i) => `b${String(i).padStart(4, '0')}`)
+    for (const id of ids) await create(id, {'demo:note': id})
+
+    let edited = false
+    const progress = await runPropertyCellBackfill(makeCtx(), async () => {
+      if (edited) return
+      edited = true
+      await repo.tx(async tx => {
+        await tx.update(ids[0]!, {properties: {'demo:note': 'edited after the visit'}})
+      }, {scope: ChangeScope.BlockDefault, description: 'concurrent value edit'})
+    })
+
+    expect(progress.sweeps).toBeGreaterThan(1)
+    expect((await fieldRowsOf(ids[0]!))[0]!.values).toEqual(['edited after the visit'])
   })
 
   it('refuses to run against a workspace that has already flipped', async () => {

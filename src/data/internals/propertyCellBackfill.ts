@@ -23,6 +23,7 @@
  * `materializePropertyChildrenForExistingRow` is idempotent per row.
  */
 
+import type { BlockData, Tx } from '@/data/api'
 import type { WorkspaceBackfill, WorkspaceBackfillContext } from '@/data/facets'
 import { CallbackSet } from '@/utils/callbackSet'
 import { materializePropertyChildrenForExistingRow } from './propertyChildrenProcessor'
@@ -65,9 +66,25 @@ const CANDIDATE_SQL = `
    ORDER BY b.id
    LIMIT ?`
 
-const FIELD_ROW_COUNT_SQL = `
-  SELECT COUNT(*) AS n FROM blocks
-   WHERE workspace_id = ? AND deleted = 0 AND is_field_form = 1`
+/** The convergence signal: what the property-child rows of this workspace look
+ *  like right now. COUNT moves on a create or a delete — the structural
+ *  changes, and what actually drives the loop.
+ *
+ *  MAX(updated_at) is DEFENCE IN DEPTH and is not pinned by any test: deleting
+ *  it fails nothing. It moves when a sweep rewrote an existing value child,
+ *  i.e. when a cell changed under the pass without adding or removing a key,
+ *  and buys one more sweep in that case. It cannot see a cell edit the pass
+ *  has not processed yet — nothing local can, which is the same pre-flip
+ *  window the flip's own catch-up owns (#389). Kept because it makes the
+ *  signal symmetric across create/update/delete for one cheap column. */
+const CHILD_STATE_SQL = `
+  SELECT COUNT(*) AS n, COALESCE(MAX(b.updated_at), 0) AS t
+    FROM blocks b
+   WHERE b.workspace_id = ? AND b.deleted = 0
+     AND (b.is_field_form = 1
+          OR EXISTS (SELECT 1 FROM blocks f
+                      WHERE f.id = b.parent_id AND f.is_field_form = 1
+                        AND f.workspace_id = b.workspace_id))`
 
 /** How much there is to visit, for a confirmation prompt. Same predicate as
  *  the pass, so the number the user is shown is the number of blocks it will
@@ -127,6 +144,34 @@ const MAX_SWEEPS = 4
 
 class UnconvergedError extends Error {}
 
+/**
+ * Which property names this row has to be reconciled against — the cell's
+ * current keys UNION the ones its existing field rows stand for.
+ *
+ * The default (current keys only) cannot express a DELETION. If an earlier
+ * batch materialized key A and the user then removed A from the cell, a later
+ * sweep asks the materializer about the remaining keys, A is never mentioned,
+ * and its children survive. Pre-flip nothing else deletes them — the live
+ * processor is dormant — so the flip would make those children authoritative
+ * and resurrect the property the user deleted. Naming A puts it on the
+ * materializer's list, which removes the children of a name the bag no longer
+ * has.
+ */
+const namesToReconcile = async (
+  tx: Tx,
+  ctx: WorkspaceBackfillContext,
+  row: BlockData,
+): Promise<string[]> => {
+  const names = new Set(Object.keys(row.properties))
+  for (const child of await tx.childrenOf(row.id, undefined)) {
+    const fieldId = child.referenceTargetId
+    if (!child.isFieldForm || !fieldId) continue
+    const schema = ctx.resolveFieldSchema(fieldId)
+    if (schema) names.add(schema.name)
+  }
+  return [...names]
+}
+
 /** One pass over every property-carrying block, cursor-paginated. */
 const sweep = async (
   ctx: WorkspaceBackfillContext,
@@ -168,6 +213,7 @@ const sweep = async (
         try {
           await materializePropertyChildrenForExistingRow(
             tx, row, {resolveNameSchema: ctx.resolveNameSchema},
+            await namesToReconcile(tx, ctx, row),
           )
           progress.blocksMaterialized += 1
         } catch (cause) {
@@ -204,11 +250,11 @@ const sweep = async (
  * graph, so "never" means never. The live cell → children processor cannot
  * cover for it either, being dormant until the workspace flips.
  *
- * Convergence is measured on the workspace's field-row count rather than on
- * anything the sweep reports about itself, so it cannot be fooled by a sweep
- * that thinks it succeeded. A value-row content update does not move that
- * count, which is fine: those are idempotent, so there is nothing left to do
- * once one has happened.
+ * Convergence is measured on the workspace's property-child rows rather than
+ * on anything the sweep reports about itself, so it cannot be fooled by a
+ * sweep that thinks it succeeded. Every sweep re-reads every property-carrying
+ * block, so a sweep repairs whatever changed during the one before it; the
+ * signal only decides whether another is owed.
  *
  * Still open by construction, and NOT closable here: a property written after
  * the last sweep but before the flip. Nothing local makes the final scan and
@@ -225,16 +271,16 @@ export const runPropertyCellBackfill = async (
   }
   const failureCount = {value: 0}
 
-  const fieldRows = async (): Promise<number> => {
-    const rows = await ctx.getAll<{n: number}>(FIELD_ROW_COUNT_SQL, [ctx.workspaceId])
-    return rows[0]?.n ?? 0
+  const childState = async (): Promise<string> => {
+    const rows = await ctx.getAll<{n: number; t: number}>(CHILD_STATE_SQL, [ctx.workspaceId])
+    return `${rows[0]?.n ?? 0}:${rows[0]?.t ?? 0}`
   }
 
   for (;;) {
-    const before = await fieldRows()
+    const before = await childState()
     progress.sweeps += 1
     await sweep(ctx, progress, failureCount, async () => { await onProgress?.(progress) })
-    if (await fieldRows() === before) break
+    if (await childState() === before) break
     if (progress.sweeps >= MAX_SWEEPS) {
       throw new UnconvergedError(
         `[${PROPERTY_CELL_BACKFILL_ID}] gave up after ${MAX_SWEEPS} sweeps: blocks kept ` +
@@ -258,13 +304,21 @@ export const runPropertyCellBackfill = async (
 /** The last run's outcome, for the operator surface. The `WorkspaceBackfill`
  *  seam returns nothing — an unattended pass has no one to tell — so the
  *  detail a human needs (what could not be migrated) is parked here for the
- *  caller that asked for the run to pick up. */
-let lastRun: PropertyCellBackfillProgress | null = null
+ *  caller that asked for the run to pick it up.
+ *
+ *  Keyed by workspace, and taken only by a caller naming the same one: a
+ *  module global that any caller could take handed a later, unrelated request
+ *  the previous migration's counts, so `run-backfill no-such-pass` came back
+ *  decorated with someone else's scan. */
+let lastRun: {workspaceId: string; progress: PropertyCellBackfillProgress} | null = null
 
-export const takeLastPropertyCellBackfillRun = (): PropertyCellBackfillProgress | null => {
-  const run = lastRun
+export const takeLastPropertyCellBackfillRun = (
+  workspaceId: string,
+): PropertyCellBackfillProgress | null => {
+  if (lastRun?.workspaceId !== workspaceId) return null
+  const {progress} = lastRun
   lastRun = null
-  return run
+  return progress
 }
 
 export const propertyCellBackfill: WorkspaceBackfill = {
@@ -279,7 +333,7 @@ export const propertyCellBackfill: WorkspaceBackfill = {
       )
       progressListeners.notify(p)
     })
-    lastRun = progress
+    lastRun = {workspaceId: ctx.workspaceId, progress}
     if (progress.failures.length > 0) {
       console.warn(
         `[${PROPERTY_CELL_BACKFILL_ID}] ${progress.failures.length} block(s) could not ` +

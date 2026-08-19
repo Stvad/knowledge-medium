@@ -76,6 +76,12 @@ export const migratePropertiesToBlocksAction = ({repo}: {repo: Repo}): ActionCon
       (sql, params) => repo.db.getAll(sql, params as unknown[] | undefined), workspaceId,
     )
     if (!await openDialog(ConfirmMigrationDialog, {blockCount})) return
+    // Re-read AFTER the dialog. A confirmation is a user-length pause, and the
+    // workspace pinned before it may not be the open one now — the runner's
+    // own active-workspace check happens only after `tryClaim` has written a
+    // Migrations page and a claim row, so the wrong graph would be touched
+    // before anything refused.
+    if (repo.activeWorkspaceId !== workspaceId) return
 
     const banner = showProgress('Migrating properties to blocks…')
     let materialized = 0

@@ -26,6 +26,13 @@ const makeRepo = (result: OperatorBackfillResult) => {
   return {repo, runWorkspaceBackfillNow}
 }
 
+/** The dialog is a user-length pause; this is the seam for what happens during
+ *  it. */
+const dialogThatSwitchesWorkspace = (repo: Repo) => async () => {
+  ;(repo as unknown as {activeWorkspaceId: string}).activeWorkspaceId = 'ws-2'
+  return true
+}
+
 const invoke = (repo: Repo) =>
   migratePropertiesToBlocksAction({repo}).handler({} as never, {} as never)
 
@@ -44,6 +51,18 @@ describe('migrate_properties_to_blocks action', () => {
     const {repo, runWorkspaceBackfillNow} = makeRepo(
       {outcome: 'ran', undoHistoryCleared: true},
     )
+
+    await invoke(repo)
+
+    expect(runWorkspaceBackfillNow).not.toHaveBeenCalled()
+  })
+
+  it('does not run against a workspace the user left while confirming', async () => {
+    // The runner's own active-workspace check runs only AFTER `tryClaim` has
+    // written a Migrations page and a claim row, so a stale pin means two
+    // blocks land in a graph the user never meant to touch.
+    const {repo, runWorkspaceBackfillNow} = makeRepo({outcome: 'ran', undoHistoryCleared: true})
+    openDialog.mockImplementation(dialogThatSwitchesWorkspace(repo))
 
     await invoke(repo)
 

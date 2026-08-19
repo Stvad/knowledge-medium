@@ -1,6 +1,6 @@
 import { createContext, ReactNode, use, useCallback, useContext, useRef, useSyncExternalStore } from 'react'
 import { v4 as uuidv4 } from 'uuid'
-import { createGraphBackfillClaim } from '@/data/internals/graphBackfillClaim'
+import { createGraphBackfillClaim, resolveClaimantId } from '@/data/internals/graphBackfillClaim'
 import { getOrCreateMigrationsPage } from '@/data/migrationsPage'
 import { PowerSyncContext } from '@powersync/react'
 import type { AbstractPowerSyncDatabase } from '@powersync/common'
@@ -38,9 +38,11 @@ const initRepo = memoize(
     }
     const backfillCompletionClaim = createGraphBackfillClaim({
       get db() { return requireRepo().db },
-      // Identifies which client left an in-flight claim behind. Diagnostic
-      // only — nothing branches on exclusivity.
-      claimantId: uuidv4(),
+      // Load-bearing, not diagnostic: `decideClaim` proceeds only when a live
+      // claim names US, so this has to survive a reload or a crashed tab —
+      // otherwise the device that started a pass can never resume it. See
+      // `resolveClaimantId`.
+      claimantId: resolveClaimantId(globalThis.localStorage, uuidv4),
       tx: (fn, opts) => requireRepo().tx(fn, opts),
       ensureHome: (workspaceId) => getOrCreateMigrationsPage(requireRepo(), workspaceId),
     })

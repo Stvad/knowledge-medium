@@ -21,7 +21,13 @@ export interface ConfirmMigrationDialogProps {
  *  a while, and it drops this workspace's undo history. The undo line is the
  *  load-bearing one — clearing it silently is its own surprise, and the
  *  alternative (leaving history that reverts the migration on the next cmd-Z)
- *  is worse. */
+ *  is worse.
+ *
+ *  "On this device" in the interruption line is precise, not filler. Resuming
+ *  works because the claimant id is persisted per browser profile
+ *  (`resolveClaimantId`), so an interrupted pass is one this device can pick
+ *  back up; another device sees a claim it does not own and correctly declines
+ *  rather than running a second writer. */
 export const ConfirmMigrationDialog = ({
   blockCount,
   resolve,
@@ -41,7 +47,8 @@ export const ConfirmMigrationDialog = ({
         <p>
           This runs on this device only — your other devices receive the result
           through sync, so run it in one place. It can take several minutes.
-          Interrupting it is safe: it picks up where it stopped.
+          Interrupting it is safe: reload or close the tab, then run it again
+          <em> on this device</em> and it picks up where it stopped.
         </p>
         <p className="text-destructive">
           Undo history for this workspace will be cleared. Undoing an edit made
