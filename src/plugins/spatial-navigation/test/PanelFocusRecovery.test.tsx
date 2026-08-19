@@ -3,15 +3,17 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, render, waitFor } from '@testing-library/react'
 import { ChangeScope, type User } from '@/data/api'
+import type { Block } from '@/data/block'
 import { Repo } from '@/data/repo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import {
   focusedBlockLocationProp,
   peekFocusedBlockLocation,
+  type FocusedBlockLocation,
 } from '@/data/properties'
 import { PanelFocusRecovery } from '../PanelFocusRecovery.tsx'
-import { __resetSpatialNavigationForTesting } from '../walker.ts'
+import { __resetSpatialNavigationForTesting, findRecoveryAnchor } from '../walker.ts'
 
 const WS = 'ws-1'
 const USER: User = {id: 'user-1'}
@@ -21,6 +23,14 @@ const PANEL_ID = 'panel'
 // pending recovery would have fired if one were armed. Used with fake
 // timers in the no-fire tests below.
 const DEBOUNCE_SETTLE_MS = 350
+
+// A recovery costs the 250ms debounce plus a repo write; the tests that
+// await one measure ~330-460ms in isolation. AGENTS.md budgets ~6x for
+// full-gate contention, which puts the p99.9 estimate within ~10% of the
+// 3000ms global Testing Library default — so the recovery waits carry their
+// own budget, strictly below the enclosing test timeout.
+const RECOVERY_WAIT_MS = 10_000
+const TEST_TIMEOUT_MS = 20_000
 
 interface Harness {
   h: TestDb
@@ -83,6 +93,38 @@ const setFocused = async (blockId: string, renderScopeId = `i-${blockId}`): Prom
   await env.repo.block(PANEL_ID).set(focusedBlockLocationProp, focusedLocation(blockId, renderScopeId))
 }
 
+/** Wait for the watchdog's debounced recovery write to land on `blockId`. */
+const expectRecoveredFocus = async (panelBlock: Block, blockId: string): Promise<void> => {
+  await waitFor(
+    () => { expect(peekFocusedBlockLocation(panelBlock)?.blockId).toBe(blockId) },
+    {timeout: RECOVERY_WAIT_MS},
+  )
+}
+
+/**
+ * The precondition a yank depends on: the watchdog has adopted `location`
+ * as the current block, i.e. a React commit of the focus property re-ran its
+ * layout effect and refreshed the stored hint. Without that hint a
+ * disappearing instance doesn't read as "the focused block vanished", no
+ * recovery is armed, and the yank is one-shot — nothing downstream recovers
+ * it. A non-null anchor is exactly the hint-matches-`location` condition
+ * `findRecoveryAnchor` gates recovery on.
+ *
+ * Measured: satisfied on the first check, because the focus write's own
+ * awaits outlast React's commit. Shaped as a wait rather than a bare
+ * assertion so a slower commit under load blocks instead of failing.
+ *
+ * Only needed when focus moves AFTER mount: a write made before `render()`
+ * is already in the block cache, so the first layout effect's
+ * `peekFocusedBlockLocation` fallback stores the hint synchronously.
+ */
+const waitForRecoveryHint = async (location: FocusedBlockLocation): Promise<void> => {
+  await waitFor(
+    () => { expect(findRecoveryAnchor(PANEL_ID, location)).not.toBeNull() },
+    {timeout: RECOVERY_WAIT_MS},
+  )
+}
+
 let sharedDb: TestDb
 let env: Harness
 beforeAll(async () => { sharedDb = await createTestDb() })
@@ -114,7 +156,7 @@ afterEach(async () => {
   document.body.innerHTML = ''
 })
 
-describe('PanelFocusRecovery', () => {
+describe('PanelFocusRecovery', {timeout: TEST_TIMEOUT_MS}, () => {
   it("recovers to 'block previously below' when the focused block disappears", async () => {
     const panel = buildPanelDom(PANEL_ID, [
       {blockId: 'first', instance: 'i-first'},
@@ -133,9 +175,7 @@ describe('PanelFocusRecovery', () => {
 
     // Watchdog walks the sibling map — `last` was previously below
     // `middle`, so focus lands there.
-    await waitFor(() => {
-      expect(peekFocusedBlockLocation(panelBlock)?.blockId).toBe('last')
-    })
+    await expectRecoveredFocus(panelBlock, 'last')
   })
 
   it("falls to 'previously above' when the disappeared block was first in the panel", async () => {
@@ -154,9 +194,7 @@ describe('PanelFocusRecovery', () => {
     // to the next-sibling tier — landing on `middle`.
     panel.querySelector('[data-block-id="first"]')!.remove()
 
-    await waitFor(() => {
-      expect(peekFocusedBlockLocation(panelBlock)?.blockId).toBe('middle')
-    })
+    await expectRecoveredFocus(panelBlock, 'middle')
   })
 
   it("focuses the parent on collapse (every child of the focused's parent unmounts together)", async () => {
@@ -190,9 +228,7 @@ describe('PanelFocusRecovery', () => {
       panel.querySelector(`[data-block-id="${blockId}"]`)!.remove()
     }
 
-    await waitFor(() => {
-      expect(peekFocusedBlockLocation(panelBlock)?.blockId).toBe('parent')
-    })
+    await expectRecoveredFocus(panelBlock, 'parent')
   })
 
   it('does not misfire when the focused block was never mounted in this panel', async () => {
@@ -270,9 +306,7 @@ describe('PanelFocusRecovery', () => {
     // Delete `parent` and its subtree.
     panel.querySelector('[data-block-id="parent"]')!.remove()
 
-    await waitFor(() => {
-      expect(peekFocusedBlockLocation(panelBlock)?.blockId).toBe('below')
-    })
+    await expectRecoveredFocus(panelBlock, 'below')
   })
 
   it("collapsing a parent with an only child lands focus on the parent (consistent with multi-child collapse)", async () => {
@@ -314,9 +348,7 @@ describe('PanelFocusRecovery', () => {
     // Collapse: X unmounts, parent stays.
     panel.querySelector('[data-block-id="X"]')!.remove()
 
-    await waitFor(() => {
-      expect(peekFocusedBlockLocation(panelBlock)?.blockId).toBe('parent')
-    })
+    await expectRecoveredFocus(panelBlock, 'parent')
   })
 
   it("does not recover when the focused block briefly leaves the DOM and returns (tab/shift-tab move)", async () => {
@@ -373,13 +405,11 @@ describe('PanelFocusRecovery', () => {
     // the "current" block for recovery purposes.
     await panelBlock.set(focusedBlockLocationProp, focusedLocation('last'))
 
-    // Yank `last`. Expected recovery target: `middle` (block above).
-    await waitFor(() => {
-      panel.querySelector('[data-block-id="last"]')?.remove()
-    })
+    await waitForRecoveryHint(focusedLocation('last'))
 
-    await waitFor(() => {
-      expect(peekFocusedBlockLocation(panelBlock)?.blockId).toBe('middle')
-    })
+    // Yank `last`. Expected recovery target: `middle` (block above).
+    panel.querySelector('[data-block-id="last"]')!.remove()
+
+    await expectRecoveredFocus(panelBlock, 'middle')
   })
 })
