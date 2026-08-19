@@ -2752,6 +2752,35 @@ export class Repo {
     return settled
   }
 
+  /**
+   * Why this device's view of the graph is INCOMPLETE right now, or null when
+   * nothing is outstanding. There are two independent ways to be behind and a
+   * full-graph read is only trustworthy when NEITHER holds:
+   *   - "downloaded" is not "materialized" — the sync observer stages arrivals
+   *     in `blocks_synced_changes` and drains them into `blocks` in throttled
+   *     windows, so the status reads settled while rows are still queued;
+   *   - the device is behind the server, with rows not yet downloaded at all.
+   *
+   * A local-only session has no sync layer and is complete by construction:
+   * `backfillSyncGate` is injected to fire immediately there
+   * (`src/context/repo.tsx`), so this returns null rather than refusing
+   * forever on a device that will never connect.
+   *
+   * The text is the CAUSE only; callers state their own consequence. Shared
+   * between the backfill runner (which must not write from a stale view) and
+   * `audit-properties` (whose whole output is an enumeration over rows, and
+   * so reads as "nothing to fix" when rows are missing) — one predicate,
+   * because a rule added to one of two copies is how these diverge.
+   */
+  async syncViewGap(): Promise<string | null> {
+    const staged = await this.db.getOptional<{one: number}>(
+      'SELECT 1 AS one FROM blocks_synced_changes LIMIT 1',
+    )
+    if (staged !== null) return 'synced rows are still draining into `blocks`'
+    if (!this.backfillSyncSettledNow()) return 'this device is not caught up with the server'
+    return null
+  }
+
   private async assertBackfillMayWrite(
     workspaceId: string,
     backfillId: string,
@@ -2770,26 +2799,13 @@ export class Repo {
         `longer active. Its writes would land under the current session's access state.`,
       ), {kind: Repo.TRANSIENT})
     }
-    // "Downloaded" is not "materialized": the sync observer stages arrivals in
-    // `blocks_synced_changes` and drains them into `blocks` in throttled
-    // windows, so the status can read settled while rows this pass will scan
-    // are still queued. Read from INSIDE the write transaction — staging can
-    // otherwise land between an outside check and lock acquisition.
-    const staged = await this.db.getOptional<{one: number}>(
-      'SELECT 1 AS one FROM blocks_synced_changes LIMIT 1',
-    )
-    if (staged !== null) {
+    // Sampled from INSIDE the write transaction — a drain can otherwise land
+    // between an outside check and lock acquisition.
+    const gap = await this.syncViewGap()
+    if (gap !== null) {
       throw Object.assign(new Error(
-        `[workspaceBackfills] "${backfillId}" aborted: synced rows are still draining ` +
-        `into blocks. Reading now would scan a partially materialized graph.`,
-      ), {kind: Repo.TRANSIENT})
-    }
-    let settled = false
-    this.backfillSyncGate(() => { settled = true })()
-    if (!settled) {
-      throw Object.assign(new Error(
-        `[workspaceBackfills] "${backfillId}" aborted: this device fell behind the ` +
-        `server mid-run. Writing now would upload a stale properties bag.`,
+        `[workspaceBackfills] "${backfillId}" aborted: ${gap}. This pass would scan a ` +
+        `partially materialized graph and upload a properties bag built from it.`,
       ), {kind: Repo.TRANSIENT})
     }
   }

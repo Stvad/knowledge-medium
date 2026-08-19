@@ -253,6 +253,41 @@ const parseTypes = (json: string | null): string[] => {
  *  pretending the fallback carries meaning. */
 const keyOf = (raw: string | null): string => typeof raw === 'string' ? raw : String(raw ?? '')
 
+/**
+ * Refuse to produce a report from an incomplete view of the graph.
+ *
+ * The scan below enumerates the keys present in `blocks`. Rows this device
+ * has not downloaded, or has downloaded but not yet drained out of
+ * `blocks_synced_changes`, are simply not there — so the audit under-reports
+ * silently, and an empty `unregistered` list is indistinguishable from a
+ * complete one. That matters more here than for a normal stale read because
+ * this verb is the advertised pre-flip check (AGENTS.md): a clean report is
+ * ACTED ON, and the keys hiding in the un-arrived rows stay cell-only forever
+ * once a workspace flips (`propertyChildrenProcessor` skips unregistered keys).
+ *
+ * Checked on both sides of the scan, not just before it: a drain that starts
+ * mid-scan leaves the histogram short while the final read looks settled. A
+ * refusal costs the operator a retry; a wrong all-clear costs data.
+ */
+const assertCompleteView = async (
+  repo: Repo,
+  workspaceId: string,
+  phase: 'before' | 'during',
+): Promise<void> => {
+  const gap = await repo.syncViewGap()
+  if (gap === null) return
+  throw new Error(
+    phase === 'before'
+      ? `Cannot audit ${workspaceId}: ${gap}. Rows that have not landed are not ` +
+        'scanned, so the report would under-count the keys a flip cannot carry and ' +
+        'an incomplete scan would read as "nothing to fix". Wait for sync to settle ' +
+        'and re-run.'
+      : `Discarding the audit of ${workspaceId}: ${gap} while the scan ran, so rows ` +
+        'that arrived mid-scan are missing from it. The counts would be short by an ' +
+        'unknown amount. Re-run once sync has settled.',
+  )
+}
+
 /** Enumerate every property key in the workspace's live blocks and classify
  *  each against the same resolver the migration uses. */
 export const auditPropertyRegistration = async (
@@ -281,6 +316,8 @@ export const auditPropertyRegistration = async (
     )
   }
   const resolver = repo.propertySchemaResolverFor(workspaceId)
+
+  await assertCompleteView(repo, workspaceId, 'before')
 
   const histogram = await repo.db.getAll<HistogramRow>(
     `SELECT j.key AS property, COUNT(*) AS cells
@@ -377,6 +414,8 @@ export const auditPropertyRegistration = async (
     keys: Math.max(0, Math.floor(limits.keys ?? PROVENANCE_KEY_LIMIT)),
     blocksPerKey: Math.max(1, Math.floor(limits.blocksPerKey ?? PROVENANCE_BLOCKS_PER_KEY)),
   })
+
+  await assertCompleteView(repo, workspaceId, 'during')
 
   return {
     workspaceId,

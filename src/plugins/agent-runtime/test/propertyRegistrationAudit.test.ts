@@ -45,9 +45,15 @@ let context: AgentRuntimeContext
 beforeAll(async () => { sharedDb = await createTestDb() })
 afterAll(async () => { await sharedDb.cleanup() })
 
-beforeEach(async () => {
-  await resetTestDb(sharedDb.db)
-  repo = createTestRepo({db: sharedDb.db, user: {id: 'user-1'}}).repo
+/** Rebuild the repo under test, optionally with a sync gate that says this
+ *  device is behind. The audit refuses to report from an incomplete view, and
+ *  the gate is the only injectable half of that predicate. */
+const installRepo = (backfillSyncGate?: (cb: () => void) => () => void) => {
+  repo = createTestRepo({
+    db: sharedDb.db,
+    user: {id: 'user-1'},
+    ...(backfillSyncGate ? {backfillSyncGate} : {}),
+  }).repo
   repo.setActiveWorkspaceId(WS)
   const runtime = resolveFacetRuntimeSync([
     kernelDataExtension,
@@ -56,6 +62,11 @@ beforeEach(async () => {
   ], {repo, workspaceId: WS, safeMode: false})
   repo.setFacetRuntime(runtime)
   context = createAgentRuntimeContext({repo, runtime, safeMode: false})
+}
+
+beforeEach(async () => {
+  await resetTestDb(sharedDb.db)
+  installRepo()
 })
 
 const create = async (args: {id: string; workspaceId?: string; properties?: BlockProperties}) => {
@@ -315,6 +326,44 @@ describe('auditPropertyRegistration', () => {
     expect(entry.cells).toBe(3)
     // Type counts are over the SAMPLE, which is why the field says so.
     expect(entry.types).toEqual([{type: 'demo-thing', sampledBlocks: 2}])
+  })
+})
+
+describe('audit-properties scan coverage', () => {
+  // The report's job is to enumerate the keys a flip cannot carry, so a scan
+  // over a partial `blocks` is worse than no scan: an under-count reads as
+  // "nothing to fix" and is acted on.
+
+  it('refuses to report while downloaded rows are still draining into blocks', async () => {
+    await create({id: 'b1', properties: {'demo:undeclared': 'x'}})
+    await sharedDb.db.execute(
+      `INSERT INTO blocks_synced_changes (id, op) VALUES (?, 'upsert')`, ['not-yet-applied'])
+
+    await expect(auditPropertyRegistration(repo, WS)).rejects.toThrow(/draining/i)
+  })
+
+  it('refuses to report while this device is behind the server', async () => {
+    installRepo(() => () => {})
+    await create({id: 'b1', properties: {'demo:undeclared': 'x'}})
+
+    await expect(auditPropertyRegistration(repo, WS)).rejects.toThrow(/not caught up/i)
+  })
+
+  it('discards a scan a drain started underneath, not only one that began behind', async () => {
+    // The window a single up-front check leaves open: the view is complete
+    // when the scan starts and not when it ends, so the histogram is short by
+    // whatever landed in between while every later read looks settled.
+    // Budget is reset after setup so this pins the audit's own samples
+    // regardless of how many the repo consumed being built.
+    let settlesLeft = 0
+    installRepo(cb => {
+      if (settlesLeft > 0) { settlesLeft -= 1; cb() }
+      return () => {}
+    })
+    await create({id: 'b1', properties: {'demo:undeclared': 'x'}})
+    settlesLeft = 1
+
+    await expect(auditPropertyRegistration(repo, WS)).rejects.toThrow(/mid-scan/i)
   })
 })
 
