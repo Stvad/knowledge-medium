@@ -14,6 +14,22 @@ import {
 const TRIGGER_PREFIX = FIELD_FORM_MARKER.slice(0, -1)
 const TRIGGER_KEY = FIELD_FORM_MARKER.slice(-1)
 
+/** The document state this gesture owns: exactly the marker's pending prefix,
+ *  caret at its end. Checked at keydown AND again once the eligibility query
+ *  has awaited — the user keeps typing through that window, and every branch
+ *  past it either clears the document or writes into it. */
+const isTriggerState = (view: EditorView): boolean => {
+  const selection = view.state.selection.main
+  return (
+    // Defence in depth, not load-bearing: a range starting at the doc's end
+    // (the offset clause) cannot also extend past it, so no reachable
+    // non-empty selection survives the other two clauses.
+    selection.empty &&
+    selection.from === TRIGGER_PREFIX.length &&
+    view.state.doc.toString() === TRIGGER_PREFIX
+  )
+}
+
 /** The `::` field-creation shortcut for CodeMirrorContentRenderer: completing a
  *  `::` in an otherwise-empty child block converts it into a property field.
  *  Guarded so it never hijacks an ordinary `::` — a doc holding anything but the
@@ -38,17 +54,7 @@ export const handleFieldCreationKeydown = (
     return false
   }
 
-  const selection = view.state.selection.main
-  if (
-    // Defence in depth, not load-bearing: a range that starts at the doc's end
-    // (the offset clause below) cannot also extend past it, so no reachable
-    // non-empty selection survives the other two clauses.
-    !selection.empty ||
-    selection.from !== TRIGGER_PREFIX.length ||
-    view.state.doc.toString() !== TRIGGER_PREFIX
-  ) {
-    return false
-  }
+  if (!isTriggerState(view)) return false
   if (!block.peek()?.parentId) return false
 
   event.preventDefault()
@@ -66,11 +72,27 @@ const createFieldFromTrigger = async (
   block: BlockRendererProps['block'],
   repo: Repo,
 ): Promise<void> => {
-  // Decide BEFORE touching the live doc. Everything dispatched here is
+  // Decide BEFORE touching the live doc: everything dispatched below is
   // persisted by the editor's own debounced commit, so a refusal discovered
-  // after the dispatch cannot undo it; refusing here instead leaves the colon
-  // the user actually typed exactly where it is.
-  if (!await canConvertEmptyChildBlockToProperty(block, repo)) return
+  // afterwards could not take it back.
+  const eligible = await canConvertEmptyChildBlockToProperty(block, repo)
+
+  // That query awaited, and the keystrokes kept coming. Re-read the LIVE doc
+  // rather than trusting the keydown's snapshot: once it holds anything but
+  // the bare trigger the user has typed on past the gesture, and both branches
+  // below would write over that — the clear by wiping the doc whole, the
+  // restore by splicing a colon into the middle of new text.
+  if (!isTriggerState(view)) return
+
+  if (!eligible) {
+    // Put back the colon the keydown suppressed. The gesture declined, so the
+    // block is left holding exactly what was typed rather than half of it.
+    view.dispatch({
+      changes: {from: TRIGGER_PREFIX.length, insert: TRIGGER_KEY},
+      selection: {anchor: FIELD_FORM_MARKER.length},
+    })
+    return
+  }
 
   // Drop the pending first colon and commit that now: the debounce is holding
   // it, and `tx.update` writes tombstones happily, so an unflushed `":"` would

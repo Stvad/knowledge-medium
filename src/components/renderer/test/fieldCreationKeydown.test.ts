@@ -49,15 +49,20 @@ interface Opts {
 }
 
 interface Harness {
-  handled: boolean
+  fire: (eventInit?: KeyboardEventInit) => boolean
+  /** Type into the live doc at the caret, as the user would mid-gesture. */
+  type: (text: string) => void
   doc: () => string
+  caret: () => number
   dispatched: () => number
   flushed: () => number
 }
 
 /** A view stand-in with a real EditorState (so the facet lookup in
- *  `flushEditorContent` is the real one) and a dispatch that applies changes. */
-const fire = (opts: Opts = {}, eventInit: KeyboardEventInit = {}): Harness => {
+ *  `flushEditorContent` is the real one) and a dispatch that applies changes.
+ *  Built separately from `.fire()` so a test can drive the doc from inside the
+ *  eligibility query's await, the way a fast typist does. */
+const mount = (opts: Opts = {}): Harness => {
   const doc = opts.doc ?? ':'
   const flush = vi.fn()
   let state = EditorState.create({
@@ -77,15 +82,28 @@ const fire = (opts: Opts = {}, eventInit: KeyboardEventInit = {}): Harness => {
   } as unknown as BlockRendererProps['block']
   const repo = {isReadOnly: opts.readOnly ?? false} as unknown as Repo
   const view = {get state() { return state }, dispatch} as unknown as EditorView
-  const event = new KeyboardEvent('keydown', {key: ':', cancelable: true, ...eventInit})
-  if (opts.preventDefaulted) event.preventDefault()
 
   return {
-    handled: handleFieldCreationKeydown(event, view, block, repo),
+    fire: (eventInit: KeyboardEventInit = {}) => {
+      const event = new KeyboardEvent('keydown', {key: ':', cancelable: true, ...eventInit})
+      if (opts.preventDefaulted) event.preventDefault()
+      return handleFieldCreationKeydown(event, view, block, repo)
+    },
+    // Bypasses `dispatch` so it doesn't pollute the dispatch-count assertions.
+    type: text => {
+      const at = state.selection.main.from
+      state = state.update({changes: {from: at, insert: text}, selection: {anchor: at + text.length}}).state
+    },
     doc: () => state.doc.toString(),
+    caret: () => state.selection.main.from,
     dispatched: () => dispatch.mock.calls.length,
     flushed: () => flush.mock.calls.length,
   }
+}
+
+const fire = (opts: Opts = {}, eventInit: KeyboardEventInit = {}) => {
+  const h = mount(opts)
+  return {...h, handled: h.fire(eventInit)}
 }
 
 /** Drain the handler's async tail. The accepting test asserts the effects DID
@@ -129,18 +147,44 @@ describe('handleFieldCreationKeydown', () => {
     expect(h.flushed()).toBe(1)
   })
 
-  it('leaves the typed ":" alone when the conversion is refused', async () => {
-    // Refuse BEFORE dispatching: the editor's debounced commit persists a
-    // dispatch on its own, so a late refusal could not take it back.
+  it('restores the suppressed colon when the conversion is refused', async () => {
+    // Refuse BEFORE clearing: the editor's debounced commit persists a dispatch
+    // on its own, so a late refusal could not take it back. The block is left
+    // holding the whole `::` the user typed, not half of it.
     canConvertMock.mockResolvedValue(null as never)
     const h = fire()
     expect(h.handled).toBe(true)
     await settle()
     expect(convertMock).not.toHaveBeenCalled()
-    expect(h.dispatched()).toBe(0)
     expect(h.flushed()).toBe(0)
-    expect(h.doc()).toBe(':')
+    expect(h.doc()).toBe('::')
+    expect(h.caret()).toBe(2)
   })
+
+  it.each([true, false])(
+    'abandons the gesture when the user types on mid-query (eligible=%s)',
+    async eligible => {
+      // The eligibility query awaits; a fast typist gets characters in before
+      // it resolves. Neither branch may act on the keydown's stale snapshot —
+      // clearing would wipe the new text, restoring would splice a colon into
+      // the middle of it, and converting would delete a block that now has
+      // content the debounce has not persisted yet.
+      const h = mount()
+      canConvertMock.mockImplementation(async () => {
+        h.type('abc')
+        return (eligible ? {parentId: 'parent-1'} : null) as never
+      })
+
+      expect(h.fire()).toBe(true)
+      await settle()
+
+      expect(canConvertMock).toHaveBeenCalledTimes(1)
+      expect(convertMock).not.toHaveBeenCalled()
+      expect(h.dispatched()).toBe(0)
+      expect(h.flushed()).toBe(0)
+      expect(h.doc()).toBe(':abc')
+    },
+  )
 
   it('falls through on the FIRST colon (empty doc), so it inserts normally', () => {
     expect(fire({doc: ''}).handled).toBe(false)
