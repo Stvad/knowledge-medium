@@ -355,11 +355,53 @@ describe('describeRuntime', () => {
     expect(description.authoring.storage.patterns.length).toBeGreaterThan(0)
     expect(description.apiSurface.modules.length).toBeGreaterThan(0)
 
-    // Whole brief-mode response should be small — the whole point. The
-    // budget tracks apiSurface growth (brief mode keeps it): raised
-    // 40k → 41k when the layoutWsContext catalog entry landed with the
-    // headroom already consumed.
-    expect(JSON.stringify(description).length).toBeLessThan(41_000)
+    // Storage worked sources reduce to a pointer — they were most of the
+    // payload and are for patterns the caller didn't ask about.
+    for (const pattern of description.authoring.storage.patterns) {
+      if (pattern.example) {
+        expect(pattern.example.code, pattern.id).toContain('omitted in --brief')
+      }
+    }
+    // ...but the guide they DID ask for keeps its own examples in full.
+    const syncGuide = description.authoring.guides.find(g => g.id === 'external-sync-plugin')
+    expect(syncGuide?.examples?.length).toBeGreaterThan(0)
+    for (const guideExample of syncGuide?.examples ?? []) {
+      expect(guideExample.code).not.toContain('omitted in --brief')
+      expect(guideExample.code).toContain('import ')
+    }
+
+    // Whole brief-mode response should be small — the whole point. Was ~40k
+    // against a 41k ceiling; reducing the storage sources to pointers took it
+    // to ~30k, so the budget tightens to match. A ceiling with 10k of slack
+    // stops being a guard.
+    expect(JSON.stringify(description).length).toBeLessThan(34_000)
+  })
+
+  it('the brief-mode pointer names a command that actually returns the source', async () => {
+    // A pointer is worse than nothing if it is a lie. `--brief --storage` is
+    // what the pointer text tells the agent to run, so it has to come back
+    // with the worked sources — and still without the glob dumps brief mode
+    // exists to suppress.
+    const runtime = await resolveFacetRuntime([])
+    const briefOnly = await describeRuntime({
+      repo: fakeRepo, runtime, safeMode: false, actions: [], renderers: {},
+    }, {brief: true})
+    const briefWithStorage = await describeRuntime({
+      repo: fakeRepo, runtime, safeMode: false, actions: [], renderers: {},
+    }, {brief: true, storage: true})
+
+    const pointer = briefOnly.authoring.storage.patterns.find(p => p.example)?.example?.code
+    expect(pointer).toContain('describe-runtime --brief --storage')
+
+    const withSource = briefWithStorage.authoring.storage.patterns.filter(p => p.example)
+    expect(withSource.length).toBeGreaterThan(0)
+    for (const pattern of withSource) {
+      expect(pattern.example!.code, pattern.id).not.toContain('omitted in --brief')
+      expect(pattern.example!.code, pattern.id).toContain('import ')
+    }
+    // The other half of brief mode still holds.
+    expect(briefWithStorage.authoring.modules).toEqual([])
+    expect(briefWithStorage.authoring.components).toEqual([])
   })
 
   it('exposes the authoring primitives plugins reach for first', () => {
