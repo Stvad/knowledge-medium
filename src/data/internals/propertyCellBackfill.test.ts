@@ -183,7 +183,12 @@ describe('property cell → children backfill', () => {
     expect((await run()).outcome).toBe('ran')
 
     expect(await fieldRowCount()).toBe(ids.length)
-  })
+    // 250 sequential creates plus the sweep: ~450ms on an idle machine, but
+    // measured at 2.8-3.4s while anything else is running, and the gate runs
+    // one worker per core. Against the 5000ms default that timed out on
+    // roughly a third of local runs (on master, unrelated to any one change).
+    // Explicit budget rather than a global raise, per AGENTS.md.
+  }, 20_000)
 
   it('reports a block whose cell value cannot be decoded and migrates the rest', async () => {
     // A legacy raw `tx.update({properties})` can leave a value the schema's
