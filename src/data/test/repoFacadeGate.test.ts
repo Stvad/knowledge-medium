@@ -88,6 +88,10 @@ const SAFE_VIA_PROTOTYPE: Record<string, string> = {
   whenPropertyDefinitionsReady: 'waits on the constructor-bound projector service; assigns no Repo fields',
   load: 'read + shared BlockCache mutation (object-interior, reached via chain)',
   undoManagerFor: 'mints UndoManager into the shared map, but UndoManager captures no repo',
+  assertBackfillMayWrite: 'read — throws or returns; assigns no Repo fields',
+  backfillSyncSettledNow: 'read — samples the injected gate; assigns no Repo fields',
+  syncViewGap: 'read — one query plus a gate sample; assigns no Repo fields',
+  lastSyncedAt: 'getter read (delegates to the PowerSync status)',
 
   // ── writes into a caller-provided tx (grouping follows the caller) ──
   addTypeInTx: 'writes into the caller tx',
@@ -139,6 +143,8 @@ const SAFE_VIA_PROTOTYPE: Record<string, string> = {
   runReferenceTargetDerivePass: 'private; jobs are enqueued via the DELEGATED schedule* overrides',
   drainNameRederives: 'private; jobs are enqueued via the facetBridge-bound schedule',
   runWorkspaceBackfills: 'private; jobs are enqueued via the DELEGATED schedule* overrides',
+  runWorkspaceBackfillNow: 'operator entry point; runs through the same private runner, writes only via the DELEGATED tx',
+  propertyRegistryReadyFor: 'read — inspects the registry snapshots; assigns nothing',
   workspaceSeeds: 'private read; reached only via the DELEGATED schedule/run seed-materialization members',
   scheduleReprojection: 'private; invoked by constructor-bound facetBridge',
   schedulePropertyDefinitionMigrations: 'invoked by constructor-bound facetBridge',
@@ -171,6 +177,7 @@ const SAFE_VIA_PROTOTYPE: Record<string, string> = {
  *  `(x as any).field =` dynamic write would escape the inventory —
  *  don't introduce either on Repo. */
 const SAFE_INSTANCE_FIELDS: Record<string, string> = {
+  inFlightOperatorBackfills: 'data field — a Set of in-flight keys; holds no reference to the Repo',
   _propertyDefinitionRegistry: 'data field',
   _previousPropertyDefinitionRegistry: 'data field',
   _typeDefinitionRegistry: 'data field',
@@ -221,7 +228,10 @@ const SAFE_INSTANCE_FIELDS: Record<string, string> = {
   userSchemas: 'stateful service constructor-bound to the real repo — documented group-escaping',
   userTypes: 'stateful service constructor-bound to the real repo — documented group-escaping',
   workspaceBackfillJobs: 'shared job queue (facade never enqueues — schedule* overrides)',
-  workspaceBackfillMarkers: 'shared object',
+  backfillSyncGate: 'injected function, captures no repo (default closes over this.db only)',
+  backfillCompletionClaim: 'injected object or undefined; captures no repo',
+  workspaceGeneration: 'counter bumped on workspace change; read-compared by backfill jobs',
+  disposeBackfillSyncGate: 'disposer for the armed gate; reassigned only by scheduleWorkspaceBackfills, which the facade overrides',
   referenceTargetDeriveJobs: 'shared job queue (facade never enqueues — schedule* overrides)',
   referenceTargetSweepDone: 'shared Set (session bookkeeping)',
   pendingNameRederives: 'shared Map (session bookkeeping)',

@@ -15,6 +15,11 @@ import {
   typesProp,
 } from '@/data/properties'
 import { BLOCK_TYPE_TYPE, PAGE_TYPE } from '@/data/blockTypes'
+import {
+  GrammarShapedLabelError,
+  LossyLabelError,
+  MAX_ALIAS_LENGTH,
+} from '@/data/referenceBlock'
 import { getOrCreatePropertiesPage } from '@/data/propertiesPage'
 import { getOrCreateTypesPage, typesPageBlockId } from '@/data/typesPage'
 import { Repo } from '@/data/repo'
@@ -299,6 +304,66 @@ describe('block-type typeify processor', () => {
     // `[[Book]]` resolves to this block, not a duplicate seat.
     const resolved = await env.repo.query.aliasLookup({workspaceId: WS, alias: 'Book'}).load()
     expect(resolved?.id).toBe(id)
+  })
+
+  // This processor adopts whatever content the block already had as the
+  // type's name and claims it as an alias, and it fires on ANY path that
+  // adds `block-type` — including the agent bridge's raw properties bag,
+  // which validates nothing. A type whose name can't be written as
+  // `[[name]]` is broken in the way that matters (nothing can link to
+  // it), so the tagging is REFUSED rather than quietly producing one.
+  it.each([
+    ['`]]`-lossy', 'Book]]Club', LossyLabelError],
+    ['past the alias cap', 'a'.repeat(MAX_ALIAS_LENGTH + 1), LossyLabelError],
+    ['grammar-shaped', `((${'1'.repeat(8)}-1111-4111-8111-111111111111))`, GrammarShapedLabelError],
+  ])('refuses to type-tag a block whose name is %s', async (_label, content, errorType) => {
+    env = await setup()
+    await expect(tagBlockType(env, content)).rejects.toThrow(errorType)
+  })
+
+  // An EXPLICIT label short-circuits `name`, so the checks above never see
+  // the content — which then stays exactly as it was. Grammar-shaped
+  // content is the dangerous residue: `core.deriveReferenceTarget` stamps
+  // the row as a field form, and on a child-backed page the finished type
+  // projects as property machinery instead of appearing in the outline.
+  // Only the grammar-shape check applies here; the content is not claimed
+  // as an alias when a label is supplied, so round-tripping is moot.
+  it('refuses when an explicit label hides grammar-shaped content', async () => {
+    env = await setup()
+    await expect(tagBlockType(env, '::((11111111-1111-4111-8111-111111111111))', {
+      [blockTypeLabelProp.name]: 'Book',
+    })).rejects.toThrow(GrammarShapedLabelError)
+  })
+
+  it('accepts an explicit label over ordinary prose content', async () => {
+    env = await setup()
+    const id = await tagBlockType(env, 'notes about books', {
+      [blockTypeLabelProp.name]: 'Book',
+    })
+    const row = await env.repo.load(id)
+    expect(row!.properties[blockTypeLabelProp.name]).toBe('Book')
+    // Content is left alone — only the adopted-name path rewrites it.
+    expect(row!.content).toBe('notes about books')
+  })
+
+  // The refusal is atomic: the tag doesn't half-apply. Same-tx, so the
+  // PAGE_TYPE / label writes above the assert roll back with it.
+  it('leaves the block untouched when the name is refused', async () => {
+    env = await setup()
+    const id = await env.repo.mutate.createChild({parentId: env.repo.typesPageId!})
+    await env.repo.tx(
+      tx => tx.update(id, {content: 'Book]]Club'}),
+      {scope: ChangeScope.BlockDefault},
+    )
+
+    await expect(env.repo.tx(async tx => {
+      await env.repo.addTypeInTx(tx, id, BLOCK_TYPE_TYPE, {}, env.repo.snapshotTypeRegistries())
+    }, {scope: ChangeScope.BlockDefault})).rejects.toThrow(LossyLabelError)
+
+    const row = await env.repo.load(id)
+    expect(getBlockTypes(row!)).not.toContain(BLOCK_TYPE_TYPE)
+    expect(getBlockTypes(row!)).not.toContain(PAGE_TYPE)
+    expect(row!.properties[aliasesProp.name] ?? []).toEqual([])
   })
 
   it('trims whitespace-padded adopted content so a later rename replaces the alias', async () => {

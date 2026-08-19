@@ -36,7 +36,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore
 import type { RefCallback, RefObject } from 'react'
 import { defineFacet, isFunction } from '@/facets/facet.js'
 import { useAppRuntime } from '@/extensions/runtimeContext.js'
-import type { BlockResolveContext } from '@/extensions/blockInteraction.js'
+import { ownsGestureTarget, type BlockResolveContext } from '@/extensions/blockInteraction.js'
 import type { ActionTrigger, BaseShortcutDependencies } from '@/shortcuts/types.js'
 import {
   dispatchGesture as defaultDispatchGesture,
@@ -445,6 +445,10 @@ export const createBlockGestureController = ({
 
   return {
     handlePointerDown(sample) {
+      // A pointer that went down on a NESTED block's surface belongs to that
+      // block (see `ownsGestureTarget`). Never registering it is what drops the
+      // rest of its session: every later phase is gated on `pointers`.
+      if (!ownsGestureTarget(element, sample.target)) return false
       pointers.set(sample.pointerId, toPointer(sample))
       return run('down', sample)
     },
@@ -455,6 +459,9 @@ export const createBlockGestureController = ({
       return run('move', sample)
     },
     handlePointerUp(sample) {
+      // An up for a pointer we never took (a nested block's, or one that went
+      // down before these listeners existed) is not part of any session here.
+      if (!pointers.has(sample.pointerId)) return false
       // Run BEFORE removing the pointer so the session still includes it.
       const prevent = run('up', sample)
       pointers.delete(sample.pointerId)
@@ -462,6 +469,7 @@ export const createBlockGestureController = ({
       return prevent
     },
     handlePointerCancel(sample) {
+      if (!pointers.has(sample.pointerId)) return
       const changed = toPointer(sample)
       const session = sessionWith(changed)
       const ctx: GestureEventContext = {element, event: sample.event}

@@ -56,6 +56,7 @@ import { storagePersistencePlugin } from '@/plugins/storage-persistence'
 import { dataIntegrityPlugin } from '@/plugins/data-integrity'
 import { dbMaintenancePlugin } from '@/plugins/db-maintenance'
 import { syncRecoveryPlugin } from '@/plugins/sync-recovery'
+import { propertiesMigrationPlugin } from '@/plugins/properties-migration'
 import { startupMetricsPlugin } from '@/plugins/startup-metrics'
 import { extensionsSettingsPlugin } from '@/plugins/extensions-settings'
 import { keybindingsSettingsPlugin } from '@/plugins/keybindings-settings'
@@ -153,6 +154,7 @@ export const staticAppExtensions = ({repo}: {repo: Repo}): AppExtension[] => [
   dataIntegrityPlugin({repo}),
   dbMaintenancePlugin({repo}),
   syncRecoveryPlugin,
+  propertiesMigrationPlugin({repo}),
   startupMetricsPlugin,
   updateIndicatorPlugin,
   blockInfoPlugin,

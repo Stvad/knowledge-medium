@@ -52,6 +52,7 @@ import {
 import { findExtensionBlock } from '@/extensions/extensionLookup.js'
 import { lintExtensionSource } from './extensionLint.ts'
 import { auditExtensionData, writeWarnings, type GrainWarning } from './grainAudit.ts'
+import { auditPropertyRegistration, type PropertyRegistrationAudit } from './propertyRegistrationAudit.ts'
 import { getPluginPrefsBlock } from '@/data/stateBlocks.js'
 import {
   extensionsOverridesProp,
@@ -64,6 +65,10 @@ import {
   pingRuntime,
 } from './describeRuntime.ts'
 import type {KnownAgentCommand} from '@knowledge-medium/agent-cli/protocol'
+import {
+  PROPERTY_CELL_BACKFILL_ID,
+  takeLastPropertyCellBackfillRun,
+} from '@/data/internals/propertyCellBackfill'
 import type {
   AgentRuntimeBridgeOptions,
   AgentRuntimeContext,
@@ -80,6 +85,7 @@ import type {
   MoveBlockInput,
   MoveBlockPosition,
   RestoreBlockInput,
+  RunBackfillResult,
   SetExtensionEnabledInput,
   SetExtensionEnabledResult,
   SqlMode,
@@ -404,6 +410,79 @@ const auditRuntimeExtension = async (
     ...runState,
     ...audit,
     lint: lintExtensionSource(found.block.content ?? ''),
+  }
+}
+
+/** Workspace-wide counterpart to `audit-extension`'s `unknown-property`
+ *  rule: every key in the data, not just the ones on one extension's types. */
+const auditRuntimeProperties = async (
+  repo: Repo,
+  input: {workspaceId?: string},
+): Promise<PropertyRegistrationAudit> => {
+  return auditPropertyRegistration(
+    repo,
+    assertedWorkspaceOverride(input.workspaceId) ?? resolveWorkspaceId(repo),
+  )
+}
+
+/** Run one `operator`-triggered workspace backfill — the properties
+ *  cell → children migration and anything later on that seam.
+ *
+ *  This is the whole operator surface for a pass that is deliberately NOT
+ *  scheduled: exactly-once across a fleet is not reachable over a
+ *  last-write-wins sync layer, so it is reached by a person running it in one
+ *  place while the others receive the rows. The outcome is returned rather
+ *  than logged so the caller can tell whether it ran, was already done, or
+ *  refused — and whether it dropped the workspace's undo history. */
+const runRuntimeBackfill = async (
+  repo: Repo,
+  input: {backfillId: string; workspaceId?: string},
+): Promise<RunBackfillResult> => {
+  // Same rule as `audit-properties`: `--workspace "$UNSET"` must fail rather
+  // than fall back to the active workspace. It matters more here — this one
+  // WRITES, and a migration run against a graph the operator did not name is
+  // not something a retry undoes.
+  if (input.workspaceId !== undefined && input.workspaceId.trim() === '') {
+    throw new Error(
+      'run-backfill: --workspace was given an empty value. It asserts which workspace ' +
+      'the pass writes to, so an empty expansion must fail rather than fall back to ' +
+      'the active one. Pass a real workspace id, or omit the option entirely.',
+    )
+  }
+  const workspaceId = input.workspaceId?.trim() || resolveWorkspaceId(repo)
+  // Refused HERE, before the runner. A backfill for a non-active workspace
+  // aborts on its own per-transaction check — but only AFTER `tryClaim` has
+  // already written: it ensures a Migrations page and creates a claim row, so
+  // a mistyped assertion leaves two blocks in a graph the operator never meant
+  // to touch and reports nothing more alarming than "already done".
+  if (workspaceId !== repo.activeWorkspaceId) {
+    throw new Error(
+      `run-backfill: --workspace ${workspaceId} is not the active workspace ` +
+      `(${repo.activeWorkspaceId ?? 'none'}). The pass writes to the workspace this ` +
+      'client has open, so the option is an assertion, not a target — open that ' +
+      'workspace and re-run.',
+    )
+  }
+  const result = await repo.runWorkspaceBackfillNow(workspaceId, input.backfillId)
+  // Only an outcome where the pass was actually ENTERED can wear its run
+  // detail — 'ran', or 'failed' (a throw partway still ran, and its partial
+  // counts are the most useful thing to hand the operator). Every other
+  // outcome never called the pass, so a `lastRun` left over from an earlier
+  // invocation must not decorate this response. Allow-listing the outcomes
+  // that ran (rather than deny-listing the ones that didn't) fails closed if
+  // the outcome union gains or renames a member.
+  const passWasEntered = result.outcome === 'ran' || result.outcome === 'failed'
+  return {
+    backfillId: input.backfillId,
+    workspaceId,
+    ...result,
+    // The seam hands back nothing (an unattended pass has no one to tell), so
+    // the detail an operator acts on is collected from the pass itself — only
+    // when THIS request is the one that ran it, or a `not-found` for some other
+    // id would come back wearing the last migration's counts.
+    ...(passWasEntered && input.backfillId === PROPERTY_CELL_BACKFILL_ID
+      ? takeLastPropertyCellBackfillRun(workspaceId) ?? {}
+      : {}),
   }
 }
 
@@ -768,7 +847,9 @@ const extensionBlockProperties = (
 
 const resolveWorkspaceId = (repo: Repo): string => {
   if (repo.activeWorkspaceId) return repo.activeWorkspaceId
-  throw new Error('install-extension requires an active workspace')
+  // Shared by the extension verbs and the property audit — keep the message
+  // verb-agnostic rather than naming whichever caller came first.
+  throw new Error('this command requires an active workspace')
 }
 
 const installRuntimeExtension = async (
@@ -1220,7 +1301,8 @@ const resolveBlockWorkspaceId = async (
   blockId: string,
   override: unknown,
 ): Promise<string> => {
-  if (isString(override) && override) return override
+  const asserted = assertedWorkspaceOverride(override)
+  if (asserted) return asserted
   const data = await repo.load(blockId)
   if (data?.workspaceId) return data.workspaceId
   if (repo.activeWorkspaceId) return repo.activeWorkspaceId
@@ -1358,8 +1440,26 @@ const hydrateData = (data: BlockData): HydratedBlockRef => ({
   deepLink: deepLinkFor(data.workspaceId, data.id),
 })
 
+/** The one place a `workspaceId` override becomes a usable id: trims, and
+ *  refuses a blank one. Returns rather than asserting beside the value, so no
+ *  consumer re-decides whether to trim and none has to be sequenced above its
+ *  own `override && return override` — which whitespace passes. */
+const assertedWorkspaceOverride = (override: unknown): string | undefined => {
+  if (!isString(override)) return undefined
+  const asserted = override.trim()
+  if (asserted === '') {
+    throw new Error(
+      'workspaceId (--workspace) was given an empty value. It asserts which workspace to '
+      + 'use, so an empty expansion must fail rather than fall back to the active one. '
+      + 'Pass a real workspace id, or omit it entirely.',
+    )
+  }
+  return asserted
+}
+
 const commandWorkspaceId = (repo: Repo, override: unknown): string => {
-  if (isString(override) && override) return override
+  const asserted = assertedWorkspaceOverride(override)
+  if (asserted) return asserted
   if (repo.activeWorkspaceId) return repo.activeWorkspaceId
   throw new Error('No active workspace; pass workspaceId')
 }
@@ -1551,6 +1651,8 @@ export const createAgentRuntimeContext = ({
     setExtensionEnabled: input => setExtensionEnabled(repo, input),
     uninstallExtension: input => uninstallRuntimeExtension(repo, input),
     auditExtension: input => auditRuntimeExtension(repo, input),
+    auditProperties: input => auditRuntimeProperties(repo, input),
+    runBackfill: input => runRuntimeBackfill(repo, input),
     actions: readRuntimeActions(runtime),
     renderers: runtime.read(blockRenderersFacet),
     refreshAppRuntime,
@@ -1734,6 +1836,21 @@ export const executeCommand = async (
       return context.auditExtension({
         id: command.id === undefined ? undefined : requireString(command.id, 'id'),
         label: command.label === undefined ? undefined : requireString(command.label, 'label'),
+      })
+
+    case 'audit-properties':
+      return context.auditProperties({
+        workspaceId: command.workspaceId === undefined
+          ? undefined
+          : requireString(command.workspaceId, 'workspaceId'),
+      })
+
+    case 'run-backfill':
+      return context.runBackfill({
+        backfillId: requireString(command.backfillId, 'backfillId'),
+        workspaceId: command.workspaceId === undefined
+          ? undefined
+          : requireString(command.workspaceId, 'workspaceId'),
       })
 
     case 'run-action':

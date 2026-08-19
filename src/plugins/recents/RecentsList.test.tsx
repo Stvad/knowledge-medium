@@ -1,0 +1,135 @@
+// @vitest-environment happy-dom
+/** Wiring test for the Recents feed: that it reads the user-authored
+ *  activity query, and that one activity entry renders as one row with
+ *  its members collapsed. The grouping itself is covered by
+ *  `grouping.test.ts`. */
+
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import type { BlockData } from '@/data/api'
+import type { RecentActivityEntry } from '@/data/internals/kernelQueries'
+
+interface StubHandle { value: unknown }
+
+const state = vi.hoisted(() => ({
+  activityArgs: undefined as Record<string, unknown> | undefined,
+  /** `undefined` models the handle before it resolves. */
+  entries: undefined as unknown,
+}))
+
+vi.mock('@/context/repo.js', () => ({
+  useRepo: () => ({
+    query: {
+      // Only this query is stubbed on purpose: reaching for the
+      // unfiltered `recentBlocks` would throw rather than quietly show
+      // panels and preferences in the feed.
+      recentActivity: (args: Record<string, unknown>): StubHandle => {
+        state.activityArgs = args
+        return {value: state.entries}
+      },
+    },
+  }),
+}))
+
+vi.mock('@/hooks/block.js', () => ({
+  useHandle: (handle: StubHandle, opts: {selector: (v: unknown) => unknown}) =>
+    opts.selector(handle.value),
+}))
+
+vi.mock('@/hooks/useMinuteClock.js', () => ({useMinuteClock: () => T0}))
+
+// The real ones need a block-render tree / an IntersectionObserver; this
+// test is about which rows the feed produces, not how they mount.
+vi.mock('@/components/util/LazyViewportMount.js', () => ({
+  LazyViewportMount: ({children}: {children: React.ReactNode}) => <div>{children}</div>,
+}))
+vi.mock('@/components/references/BlockRef.js', () => ({
+  BlockRef: ({blockId}: {blockId: string}) => <span>{blockId}</span>,
+}))
+
+const T0 = 1_700_000_000_000
+
+const block = (id: string, parentId: string | null, agoMs: number, page = false): BlockData => ({
+  id,
+  workspaceId: 'ws',
+  parentId,
+  orderKey: 'a0',
+  content: id,
+  properties: page ? {types: ['page']} : {},
+  references: [],
+  createdAt: T0,
+  updatedAt: T0 - agoMs,
+  userUpdatedAt: T0 - agoMs,
+  createdBy: 'u',
+  updatedBy: 'u',
+  deleted: false,
+} as BlockData)
+
+const entry = (block: BlockData, ancestors: BlockData[] = []): RecentActivityEntry =>
+  ({block, ancestors})
+
+afterEach(() => {
+  state.activityArgs = undefined
+  state.entries = undefined
+  cleanup()
+})
+
+// Imported after the mocks so the component picks them up.
+const { RecentsList } = await import('./RecentsPageBlockRenderer.tsx')
+
+describe('RecentsList', () => {
+  it('reads the activity query for the workspace', () => {
+    state.entries = []
+    render(<RecentsList workspaceId="ws"/>)
+    expect(state.activityArgs).toMatchObject({workspaceId: 'ws', limit: 200})
+  })
+
+  it('renders one row per activity entry, with members collapsed behind "+N more"', () => {
+    const page = block('page', null, 0, true)
+    const members = ['m1', 'm2', 'm3', 'm4', 'm5'].map((id, i) => block(id, 'page', i * 1000))
+    state.entries = members.map(m => entry(m, [page]))
+
+    render(<RecentsList workspaceId="ws"/>)
+
+    // One entry: the page, with all five edits under it.
+    expect(screen.getByRole('list', {name: 'Recent activity'}).children).toHaveLength(1)
+    expect(screen.getByText('page')).toBeInTheDocument()
+    expect(screen.getByText('5 blocks changed')).toBeInTheDocument()
+    expect(screen.getByText('m1')).toBeInTheDocument()
+    expect(screen.queryByText('m4')).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', {name: '+2 more'}))
+    expect(screen.getByText('m4')).toBeInTheDocument()
+    expect(screen.getByText('m5')).toBeInTheDocument()
+  })
+
+  it('offers a wider window when one entry swallows the whole page of rows', () => {
+    const root = block('tree-root', null, 0)
+    // A full window: 200 rows, all one imported tree, so grouping yields
+    // a single entry. Without the extension every older entry would be
+    // unreachable until 200 newer edits pushed this import out.
+    const rows = [root, ...Array.from({length: 199}, (_, i) => block(`n${i}`, 'tree-root', i))]
+    state.entries = rows.map(r => entry(r, r.id === 'tree-root' ? [] : [root]))
+
+    render(<RecentsList workspaceId="ws"/>)
+
+    expect(screen.getByRole('list', {name: 'Recent activity'}).children).toHaveLength(1)
+    expect(state.activityArgs).toMatchObject({limit: 200})
+
+    fireEvent.click(screen.getByRole('button', {name: 'Show older activity'}))
+    expect(state.activityArgs).toMatchObject({limit: 400})
+  })
+
+  it('renders nothing until the window resolves — an unresolved feed is not an empty one', () => {
+    render(<RecentsList workspaceId="ws"/>)
+
+    expect(screen.queryByRole('list', {name: 'Recent activity'})).not.toBeInTheDocument()
+    expect(screen.queryByText(/No recent edits yet/)).not.toBeInTheDocument()
+  })
+
+  it('shows the empty state when nothing recent survives the filter', () => {
+    state.entries = []
+    render(<RecentsList workspaceId="ws"/>)
+    expect(screen.getByText(/No recent edits yet/)).toBeInTheDocument()
+  })
+})

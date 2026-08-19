@@ -5,6 +5,7 @@ import remarkGfm from 'remark-gfm'
 import { visit } from 'unist-util-visit'
 import type { Root, RootContent } from 'mdast'
 import { remarkWikilinks } from '../remark-wikilinks.ts'
+import { MAX_ALIAS_LENGTH, parseReferences } from '../../../referenceParser.ts'
 import { remarkBlockrefs } from '../../blockrefs/remark-blockrefs.ts'
 
 interface WikilinkNode {
@@ -168,6 +169,20 @@ describe('remarkWikilinks', () => {
       const links = collectWikilinks(tree)
       expect(links[0].data.hProperties.alias).toBe('Foo Bar')
       expect(wikilinkChildText(links[0])).toBe('docs')
+    })
+
+    it('keeps the display text when the alias ends in its own bracket', () => {
+      // The wrapper pass used to match with a regex whose alias class excluded
+      // `[`/`]`, narrower than what the scanner accepts. Once an alias could
+      // close its own bracket (`closingDelimiterFor`), this shape stopped
+      // being recognized and rendered as literal markup with `short` lost.
+      const tree = transform('see [short]([[Book of [x]]]) here', {'Book of [x]': 'bx'})
+      const links = collectWikilinks(tree)
+      expect(links).toHaveLength(1)
+      expect(links[0].data.hProperties.alias).toBe('Book of [x]')
+      expect(links[0].data.hProperties.blockId).toBe('bx')
+      expect(wikilinkChildText(links[0])).toBe('short')
+      expect(collectText(tree)).not.toContain('[short](')
     })
 
     it('does not mangle adjacent bare links sharing a paragraph with a spaced one', () => {
@@ -435,6 +450,138 @@ describe('rewriting a [display]([[alias]]) wikilink, end to end', () => {
     expect(links).toHaveLength(1)
     expect(links[0].data.hProperties.alias).toBe('New')
     expect(wikilinkChildText(links[0])).toBe('label')
+  })
+})
+
+// The cap must hold for EVERY shape this plugin recognises, not just the
+// bare scan. Passes 1 and 2 match the `[display]([[alias]])` wrapper with
+// their own regexes and never call `parseOutermostReferences`, so without
+// an explicit re-check they would render a live link for a span the
+// reference index treats as literal text (Codex on PR #540).
+const inlineValue = (node: unknown): string => {
+  const n = node as {value?: string; children?: unknown[]}
+  if (typeof n.value === 'string') return n.value
+  return (n.children ?? []).map(inlineValue).join('')
+}
+
+describe('MAX_ALIAS_LENGTH holds across all four passes', () => {
+  // Bracket- and newline-free, so it can reach every pass. Kept just over
+  // and just under the cap so each pair isolates the length rule alone —
+  // the under-cap half is what distinguishes "capped" from "broken".
+  const over = 'a'.repeat(MAX_ALIAS_LENGTH + 1)
+  const under = 'a'.repeat(MAX_ALIAS_LENGTH)
+  // Spaces force remark to leave the wrapper as raw text, which is what
+  // routes it to pass 2 (LINK_FORM_RE) instead of pass 1 (LINK_URL_RE).
+  const spaced = (n: number) => 'ab '.repeat(Math.ceil(n / 3)).slice(0, n).trim()
+
+  it('pass 3 (bare span) drops an over-cap alias and keeps the text literal', () => {
+    const tree = transform(`see [[${over}]] here`)
+    expect(collectWikilinks(tree)).toEqual([])
+    expect(collectText(tree).join('')).toBe(`see [[${over}]] here`)
+  })
+
+  it('pass 1 (link destination) drops an over-cap alias', () => {
+    expect(collectWikilinks(transform(`[display]([[${over}]])`))).toEqual([])
+    const kept = collectWikilinks(transform(`[display]([[${under}]])`))
+    expect(kept).toHaveLength(1)
+    expect(kept[0].data.hProperties.alias).toBe(under)
+    expect(wikilinkChildText(kept[0])).toBe('display')
+  })
+
+  // Declining is not enough on this path. remark has ALREADY made the
+  // wrapper a `link` node before the visitor runs, so leaving it alone
+  // renders `<a href="[[…]]">display</a>` — the app's anchor component
+  // only special-cases external hrefs, and react-markdown's default
+  // urlTransform passes a colon-less string through, so a click is a
+  // relative navigation away from the page. Assert on the surviving NODE,
+  // not just on the absence of a wikilink: "no wikilink" was true of the
+  // clickable-anchor bug too (Codex on PR #540).
+  it('pass 1 leaves no navigable link node behind for a rejected alias', () => {
+    const tree = transform(`[display]([[${over}]])`)
+    const links: string[] = []
+    visit(tree, 'link', (node) => { links.push(node.url) })
+    expect(links).toEqual([])
+    expect(collectText(tree).join('')).toBe(`[display]([[${over}]])`)
+  })
+
+  it('pass 2 (text-form wrapper) drops an over-cap alias', () => {
+    const overSpaced = spaced(MAX_ALIAS_LENGTH + 30)
+    const underSpaced = spaced(MAX_ALIAS_LENGTH - 30)
+    expect(overSpaced.length).toBeGreaterThan(MAX_ALIAS_LENGTH)
+    expect(underSpaced.length).toBeLessThanOrEqual(MAX_ALIAS_LENGTH)
+
+    expect(collectWikilinks(transform(`[display]([[${overSpaced}]])`))).toEqual([])
+    const kept = collectWikilinks(transform(`[display]([[${underSpaced}]])`))
+    expect(kept).toHaveLength(1)
+    expect(kept[0].data.hProperties.alias).toBe(underSpaced)
+    expect(wikilinkChildText(kept[0])).toBe('display')
+  })
+
+  // Known divergence, pinned so it is visible rather than folklore. The
+  // index parses RAW content; this plugin parses what remark produced,
+  // with backslash escapes already resolved. So the two sides measure —
+  // and name — different strings whenever escapes are present. That is a
+  // property of the alias VALUE at every length (`[[a\.b]]` is stored as
+  // `a\.b` and rendered as `a.b`), predates the cap, and is already
+  // documented at `faithfulWikilinkReplacement`. Tracked in #542; closing
+  // it means parsing the index side through markdown too. Update this
+  // test deliberately when that lands — do not "fix" it in passing.
+  it('measures the DECODED alias, which an escaped span makes shorter than raw', () => {
+    const escaped = '\\.'.repeat(MAX_ALIAS_LENGTH / 2 + 50)
+    expect(escaped.length).toBeGreaterThan(MAX_ALIAS_LENGTH)
+
+    // Raw is over the cap, so the index stores nothing for this span.
+    expect(parseReferences(`[[${escaped}]]`)).toEqual([])
+
+    // Decoded is under it, so the renderer still emits a wikilink — one
+    // that resolves to nothing, exactly as it did before the cap existed
+    // (the index never held this decoded name either way). The cap's
+    // effect here is that no phantom page gets minted for the raw form.
+    const links = collectWikilinks(transform(`[[${escaped}]]`))
+    expect(links).toHaveLength(1)
+    expect(links[0].data.hProperties.alias).toBe('.'.repeat(escaped.length / 2))
+    expect(links[0].data.hProperties.blockId).toBe('')
+  })
+
+  // Degrading must not eat the display content. Flattening children to a
+  // string dropped any leaf carrying neither `value` nor `children` — an
+  // `image` is exactly that — so `[![alt](pic.png)]([[…]])` came out as
+  // `[]([[…]])`, losing the picture (Codex on PR #540).
+  it('keeps an image in the display of a rejected link', () => {
+    const tree = transform(`[![alt text](pic.png)]([[${over}]])`)
+    expect(collectWikilinks(tree)).toEqual([])
+
+    const images: Array<{url: string; alt: string | null | undefined}> = []
+    visit(tree, 'image', (node) => { images.push({url: node.url, alt: node.alt}) })
+    expect(images).toEqual([{url: 'pic.png', alt: 'alt text'}])
+
+    // …and no navigable link survives alongside it.
+    const links: string[] = []
+    visit(tree, 'link', (node) => { links.push(node.url) })
+    expect(links).toEqual([])
+  })
+
+  it('keeps a link title when degrading a rejected link', () => {
+    const tree = transform(`[display]([[${over}]] "tooltip")`)
+    expect(collectWikilinks(tree)).toEqual([])
+    expect(collectText(tree).join('')).toBe(`[display]([[${over}]] "tooltip")`)
+  })
+
+  it('keeps emphasis in the display of a rejected link', () => {
+    const tree = transform(`[*em*]([[${over}]])`)
+    const emphasised: string[] = []
+    visit(tree, 'emphasis', (node) => { emphasised.push(inlineValue(node)) })
+    expect(emphasised).toEqual(['em'])
+  })
+
+  it('pass 4 (cross-node reassembly) drops an over-cap alias', () => {
+    // GFM splits the email into its own link node mid-span, so the bare
+    // scan can't see it and the reassembly pass owns this text.
+    const filler = 'a'.repeat(MAX_ALIAS_LENGTH)
+    expect(collectWikilinks(transformWithGfm(`[[${filler} user@example.com]]`))).toEqual([])
+    const short = collectWikilinks(transformWithGfm('[[note user@example.com]]'))
+    expect(short).toHaveLength(1)
+    expect(short[0].data.hProperties.alias).toBe('note user@example.com')
   })
 })
 

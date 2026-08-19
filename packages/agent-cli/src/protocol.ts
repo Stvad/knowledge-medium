@@ -259,6 +259,19 @@ export const auditExtensionCommandSchema = z.looseObject({
   ...commandIdField,
 })
 
+export const auditPropertiesCommandSchema = z.looseObject({
+  type: z.literal('audit-properties'),
+  workspaceId: z.string().optional(),
+  ...commandIdField,
+})
+
+export const runBackfillCommandSchema = z.looseObject({
+  type: z.literal('run-backfill'),
+  backfillId: z.string(),
+  workspaceId: z.string().optional(),
+  ...commandIdField,
+})
+
 export const runActionCommandSchema = z.looseObject({
   type: z.literal('run-action'),
   id: z.string(),
@@ -324,7 +337,7 @@ export const pageCommandSchema = z.looseObject({
   type: z.literal('page'),
   name: z.string(),
   workspaceId: z.string().optional(),
-  limit: z.number().optional(),
+  limit: z.number().int().positive().optional(),
   ...commandIdField,
 })
 
@@ -343,7 +356,7 @@ export const searchCommandSchema = z.looseObject({
   type: z.literal('search'),
   query: z.string(),
   workspaceId: z.string().optional(),
-  limit: z.number().optional(),
+  limit: z.number().int().positive().optional(),
   ...commandIdField,
 })
 
@@ -481,6 +494,8 @@ export const knownCommandSchema = z.discriminatedUnion('type', [
   disableExtensionCommandSchema,
   uninstallExtensionCommandSchema,
   auditExtensionCommandSchema,
+  auditPropertiesCommandSchema,
+  runBackfillCommandSchema,
   runActionCommandSchema,
   evalCommandSchema,
   backlinksCommandSchema,
@@ -523,6 +538,8 @@ export const knownAgentCommandSchema = z.discriminatedUnion('type', [
   setExtensionEnabledCommandSchema,
   uninstallExtensionCommandSchema,
   auditExtensionCommandSchema,
+  auditPropertiesCommandSchema,
+  runBackfillCommandSchema,
   runActionCommandSchema,
   actionCommandSchema,
   evalCommandSchema,
@@ -671,6 +688,16 @@ export const knownCommandRegistry: Record<KnownCommandType, KnownCommandMeta> = 
     // profile that has never had one. That is a write, so this verb is not
     // classified read-only rather than quietly breaking a read-only token's
     // contract.
+    readOnly: false,
+  },
+  'audit-properties': {
+    usage: 'kmagent audit-properties [--workspace <id>]',
+    description: 'List every property key present in the workspace\'s live blocks that the registry does NOT resolve — the keys property migration skips silently (propertyChildrenProcessor: no schema → `continue`), so they are the only property data a child-backed workspace cannot carry. Per key: exact cell count, the resolver\'s own reason (nothing declares it, or a definition block exists but is broken), the fix in the order §9 requires, plus sampled blocks and the types they carry (which extension wrote it). Audits the ACTIVE workspace; it refuses one whose registry is not loaded rather than reporting every key as unregistered. Reports its own basis — `syncGap` (rows staged and not drained, or the sync layer not settled: downloading, disconnected, or a download error — so the counts are short) and `syncedThrough` (this device\'s last completed sync); an empty list under a non-null `syncGap` means nothing, and a null `syncGap` only rules out work outstanding LOCALLY. Does NOT detect shadowed definitions or seed-name collisions — those still resolve, so no key is listed. Workspace-wide counterpart to `audit-extension`, which only sees blocks carrying one extension\'s declared types.',
+    readOnly: true,
+  },
+  'run-backfill': {
+    usage: 'kmagent run-backfill <backfillId> [--workspace <id>] [--wait <seconds>]',
+    description: 'Run one operator-triggered workspace backfill (currently `properties:cell-to-children`, the properties-as-blocks migration: every registered property cell gains the field and value CHILD blocks it implies, cells untouched). Deliberately not scheduled — the pass uploads source-of-truth rows, so ONE device runs it and every other receives them; a completion claim in synced data records that. Returns `outcome` — the runner\'s own result code; see `OperatorBackfillResult` in src/data/repo.ts for the current set and what each means, rather than a copy here that can drift — plus `undoHistoryCleared`: the pass drops the workspace undo stack whenever it writes, because replaying an entry recorded before it would revert the migration. Refuses to write (outcome `deferred`) while this device is behind the server or still draining synced rows; retry once sync settles. Safe to re-run: it is idempotent per row and resumes from whatever is left to do, so an interrupted run needs no repair.',
     readOnly: false,
   },
   'run-action': {

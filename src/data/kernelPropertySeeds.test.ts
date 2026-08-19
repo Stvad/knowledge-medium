@@ -15,6 +15,9 @@ import {ChangeScope} from './api/changeScope'
 
 const hiddenKernelPropertyNames = new Set([
   'createdAt',
+  'migration:claimant',
+  'migration:claimed-at',
+  'migration:completed-at',
   'editorFocusRequest',
   'editorSelection',
   'focusedBlockLocation',
@@ -32,14 +35,14 @@ const hiddenKernelPropertyNames = new Set([
 const uiStatePropertyNames = new Set([
   'system:showProperties', 'isEditing', 'topLevelBlockId',
   'focusedBlockLocation', 'activePanelId', 'scrollTop', 'panelViewMode',
-  'editorSelection', 'editorFocusRequest', 'blockSelectionState',
+  'panelMaximized', 'editorSelection', 'editorFocusRequest', 'blockSelectionState',
 ])
 
 describe('kernel property seed conversion', () => {
-  it('defines all 35 kernel properties as valid, unique seeds', () => {
+  it('defines all 39 kernel properties as valid, unique seeds', () => {
     const seeds = KERNEL_PROPERTY_SEEDS
 
-    expect(seeds).toHaveLength(35)
+    expect(seeds).toHaveLength(39)
     expect(new Set(seeds.map(seed => seed.seedKey))).toHaveLength(seeds.length)
     expect(new Set(seeds.map(seed => seed.name))).toHaveLength(seeds.length)
     expect(seeds.every(isPropertySeedDeclaration)).toBe(true)

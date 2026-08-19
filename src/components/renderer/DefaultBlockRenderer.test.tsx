@@ -15,6 +15,7 @@ import { Repo } from '@/data/repo'
 import { typeSeedsFacet } from '@/data/facets'
 import { usePropertyValue } from '@/hooks/block'
 import { aliasPageBulletContribution, aliasPageStylingContribution } from '@/plugins/alias/pageStyling'
+import { aliasDataExtension } from '@/plugins/alias/dataExtension'
 import { aliasesProp, focusedBlockLocationProp, isCollapsedProp, showPropertiesProp, topLevelBlockIdProp } from '@/data/properties'
 import { outlineRenderScopeId } from '@/utils/renderScope'
 import { kernelPropertyUiExtension } from '@/components/propertyEditors/typesPropertyUi'
@@ -24,6 +25,7 @@ import { BlockContextProvider } from '@/context/block'
 import { blockContentRendererFacet, blockLayoutFacet, type BlockLayout } from '@/extensions/blockInteraction'
 import { defineVariant } from '@/facets/variantFacet'
 import { defaultEditorInteractionExtension } from '@/editor/defaultInteractions'
+import { plainOutlinerPlugin } from '@/plugins/plain-outliner'
 import { type FacetRuntime } from '@/facets/facet'
 import { ActiveContextsProvider } from '@/shortcuts/ActiveContexts'
 import type { Block } from '@/data/block'
@@ -327,6 +329,10 @@ describe('DefaultBlockRenderer slot identity', () => {
       newId: () => crypto.randomUUID(),
       extensions: [
         defaultEditorInteractionExtension,
+        // The real alias sync processor: a content edit on an aliased block
+        // rewrites its `alias` property in the SAME tx, which is what makes
+        // the page case below a live-data scenario and not a synthetic one.
+        aliasDataExtension,
         blockLayoutFacet.of(
           () => ({id: 'content-shell', label: 'Content + shell', render: ContentShellLayout}),
           {source: 'test'},
@@ -340,6 +346,14 @@ describe('DefaultBlockRenderer slot identity', () => {
     await repo.tx(async tx => {
       await tx.create({id: 'root', workspaceId: 'ws-1', parentId: null, orderKey: 'a0', content: 'Root'})
       await tx.create({id: 'block-1', workspaceId: 'ws-1', parentId: 'root', orderKey: 'a0', content: 'Block'})
+      await tx.create({
+        id: 'page-1',
+        workspaceId: 'ws-1',
+        parentId: 'root',
+        orderKey: 'a1',
+        content: 'Page',
+        properties: {[aliasesProp.name]: aliasesProp.codec.encode(['Page'])},
+      })
       await tx.create({
         id: 'ui-state', workspaceId: 'ws-1', parentId: null, orderKey: 'a1',
         properties: {[topLevelBlockIdProp.name]: topLevelBlockIdProp.codec.encode('root')},
@@ -376,6 +390,38 @@ describe('DefaultBlockRenderer slot identity', () => {
 
     await waitFor(() =>
       expect(document.querySelector('[data-collapsed="true"]')).toBeTruthy(),
+    )
+    expect(contentMountCount).toBe(1)
+  })
+
+  // A page's title edit rewrites its own `alias` in the same tx (alias.sync),
+  // so `aliases` — which the resolve context carries for the alias plugin's
+  // page styling — changes on EVERY debounced keystroke commit. If that churns
+  // the content slot's identity, the editor is torn down and rebuilt mid-typing:
+  // the caret jumps, an open autocomplete dies, and characters typed since the
+  // commit are lost to the remount's `initialContent` snapshot.
+  it('does not remount the content subtree when a title edit rewrites the block alias', async () => {
+    render(
+      <AppRuntimeContextProvider value={runtime}>
+        <BlockContextProvider initialValue={{scopeRootId: 'root'}}>
+          <ActiveContextsProvider>
+            <DefaultBlockRenderer block={repo.block('page-1')} ContentRenderer={CountingContentRenderer} />
+          </ActiveContextsProvider>
+        </BlockContextProvider>
+      </AppRuntimeContextProvider>,
+    )
+
+    await screen.findByText('page-1')
+    await waitFor(() => expect(contentMountCount).toBe(1))
+
+    await act(async () => {
+      await repo.block('page-1').setContent('Page renamed')
+    })
+
+    // Precondition: the edit really did move the alias — otherwise this test
+    // would pass without ever reaching the case it is about.
+    await waitFor(() =>
+      expect(repo.block('page-1').peekProperty(aliasesProp)).toEqual(['Page renamed']),
     )
     expect(contentMountCount).toBe(1)
   })
@@ -681,5 +727,329 @@ describe('title typography', () => {
     expect(title?.textContent).toBe('Page title')
     // …and stops there: the list beside it is body text.
     expect(title?.contains(document.querySelector('.composed-surface'))).toBe(false)
+  })
+})
+
+/** A layout that mounts `Shell` and then ignores its props — the mistake the
+ *  dev-time check exists to make loud. */
+const DroppedShellLayout: BlockLayout = ({Content, Shell}) => (
+  <Shell>{() => <div className="dropped-shell"><Content /></div>}</Shell>
+)
+
+/** The same, but saying it is deliberate — the video-notes shape, where the
+ *  body is a composed pane rather than the block. */
+const ShortcutsOnlyLayout: BlockLayout = ({Content, Shell}) => (
+  <Shell shortcutsOnly>{() => <div className="dropped-shell"><Content /></div>}</Shell>
+)
+
+/** A surface that fills the slot with other blocks' rows — the
+ *  backlog/deck/recents shape. It declares nothing itself; whoever chooses it
+ *  does. */
+const ViewSurfaceRenderer = ({block}: BlockRendererProps) =>
+  <div className="view-surface">{block.id}</div>
+
+// Whether a content slot is filled with other blocks' rows or draws the block
+// itself. The renderer declares it, the slot records it, and callers reasoning
+// about a row's geometry read it off the DOM rather than inferring it from what
+// happens to be mounted inside.
+describe('content-view marking', () => {
+  let repo: Repo
+  let runtime: FacetRuntime
+  /** The same fixture with the REAL plain-outliner plugin mounted, which is
+   *  what the app runs — its editing dispatcher stands between the slot and
+   *  both text renderers. */
+  let outlinerRuntime: FacetRuntime
+  /** A facet override that REPLACES whatever the block composed, and says
+   *  nothing about itself — an extension's renderer, contributed after the
+   *  static plugins. */
+  let overrideRuntime: FacetRuntime
+
+  beforeEach(async () => {
+    await resetTestDb(sharedDb.db)
+    repo = createTestRepo({
+      db: sharedDb.db,
+      user: {id: 'user-1'},
+      newId: () => crypto.randomUUID(),
+      extensions: [
+        defaultEditorInteractionExtension,
+        blockContentRendererFacet.of(
+          ctx => ctx.block.id === 'view-root'
+            ? {...defineVariant('test.view', 'View', ViewSurfaceRenderer), showsOtherBlocks: true}
+            : null,
+          {source: 'test'},
+        ),
+      ],
+    }).repo
+    runtime = repo.facetRuntime!
+    outlinerRuntime = createTestRepo({
+      db: sharedDb.db,
+      user: {id: 'user-1'},
+      newId: () => crypto.randomUUID(),
+      extensions: [defaultEditorInteractionExtension, plainOutlinerPlugin],
+    }).repo.facetRuntime!
+    overrideRuntime = createTestRepo({
+      db: sharedDb.db,
+      user: {id: 'user-1'},
+      newId: () => crypto.randomUUID(),
+      extensions: [
+        defaultEditorInteractionExtension,
+        blockContentRendererFacet.of(
+          () => defineVariant('test.override', 'Override', FacetSurfaceRenderer),
+          {source: 'test'},
+        ),
+      ],
+    }).repo.facetRuntime!
+    repo.setActiveWorkspaceId('ws-1')
+    repoRef.current = repo
+
+    await repo.tx(async tx => {
+      await tx.create({id: 'root', workspaceId: 'ws-1', parentId: null, orderKey: 'a0', content: 'Page title'})
+      await tx.create({id: 'view-root', workspaceId: 'ws-1', parentId: null, orderKey: 'a2', content: 'View page'})
+      await tx.create({
+        id: 'ui-state', workspaceId: 'ws-1', parentId: null, orderKey: 'a1',
+        properties: {[topLevelBlockIdProp.name]: topLevelBlockIdProp.codec.encode('root')},
+      })
+    }, {scope: ChangeScope.BlockDefault, description: 'content-view fixture'})
+    uiStateBlockRef.current = repo.block('ui-state')
+  })
+
+  afterEach(() => {
+    cleanup()
+    repoRef.current = undefined
+    uiStateBlockRef.current = undefined
+  })
+
+  const renderBlock = (
+    id: string,
+    ContentRenderer?: typeof FacetSurfaceRenderer,
+    contentShowsOtherBlocks?: boolean,
+  ) =>
+    render(
+      <AppRuntimeContextProvider value={runtime}>
+        <BlockContextProvider initialValue={{scopeRootId: id}}>
+          <ActiveContextsProvider>
+            <DefaultBlockRenderer
+              block={repo.block(id)}
+              ContentRenderer={ContentRenderer}
+              contentShowsOtherBlocks={contentShowsOtherBlocks}
+            />
+          </ActiveContextsProvider>
+        </BlockContextProvider>
+      </AppRuntimeContextProvider>,
+    )
+
+  const renderWithPlainOutliner = (
+    id: string,
+    ContentRenderer?: typeof ViewSurfaceRenderer,
+    contentShowsOtherBlocks?: boolean,
+  ) =>
+    render(
+      <AppRuntimeContextProvider value={outlinerRuntime}>
+        <BlockContextProvider initialValue={{scopeRootId: id}}>
+          <ActiveContextsProvider>
+            <DefaultBlockRenderer
+              block={repo.block(id)}
+              ContentRenderer={ContentRenderer}
+              contentShowsOtherBlocks={contentShowsOtherBlocks}
+            />
+          </ActiveContextsProvider>
+        </BlockContextProvider>
+      </AppRuntimeContextProvider>,
+    )
+
+  const marked = () => document.querySelector('.block-content')?.hasAttribute('data-block-content-view')
+
+  it('marks the shell element as the block boundary', async () => {
+    // The outer half of the pair. It travels with `shellProps` rather than the
+    // default layout's class so a layout styling its own wrapper still
+    // declares it — which is exactly what the SRS review card does.
+    renderBlock('root')
+
+    await screen.findByText('Page title')
+    const shell = document.querySelector('[data-block-shell]')
+    expect(shell?.getAttribute('data-block-id')).toBe('root')
+  })
+
+  it('marks a slot whose view came as the ContentRenderer prop', async () => {
+    renderBlock('root', ViewSurfaceRenderer, true)
+
+    await waitFor(() => expect(document.querySelector('.view-surface')).not.toBeNull())
+    expect(marked()).toBe(true)
+  })
+
+  it('marks a slot whose view won the facet', async () => {
+    // The half a check on the prop cannot see: the caller passes nothing.
+    renderBlock('view-root')
+
+    await waitFor(() => expect(document.querySelector('.view-surface')).not.toBeNull())
+    expect(marked()).toBe(true)
+  })
+
+  it('leaves an ordinary block showing its own text unmarked', async () => {
+    renderBlock('root')
+
+    // Proven present before asserting the attribute is absent, so this cannot
+    // pass on a slot that simply had not rendered yet.
+    await screen.findByText('Page title')
+    expect(marked()).toBe(false)
+  })
+
+  // Renderers that draw their own block — media, a video player, a type editor,
+  // an extension's source — are the majority and declare nothing. Treating that
+  // silence as "a view" made every one of them responsible for a flag it had no
+  // reason to know about, and each miss stopped that block's row being a row.
+  it('leaves a custom renderer that draws its own block unmarked', async () => {
+    renderBlock('root', FacetSurfaceRenderer)
+
+    await waitFor(() => expect(document.querySelector('.facet-surface')).not.toBeNull())
+    expect(marked()).toBe(false)
+  })
+
+  // The plugin that is actually mounted in the app wraps the content renderer
+  // in a generated dispatcher, so the slot never sees the real one directly. A
+  // fixture without the plugin cannot see what that does to either answer,
+  // which is precisely why these two mount the real one.
+  it('leaves an ordinary block unmarked through the real editing dispatcher', async () => {
+    renderWithPlainOutliner('root')
+
+    await screen.findByText('Page title')
+    expect(marked()).toBe(false)
+  })
+
+  // An override renders its OWN content, so the displaced view's answer stops
+  // describing what is on screen. Silence from a variant has to mean "not a
+  // view" rather than "ask whoever I displaced" — only a variant that renders
+  // what the block composed may defer, and it says so.
+  it('does not inherit the composed view\'s answer when a variant replaces it', async () => {
+    render(
+      <AppRuntimeContextProvider value={overrideRuntime}>
+        <BlockContextProvider initialValue={{scopeRootId: 'root'}}>
+          <ActiveContextsProvider>
+            <DefaultBlockRenderer
+              block={repo.block('root')}
+              ContentRenderer={ViewSurfaceRenderer}
+              contentShowsOtherBlocks
+            />
+          </ActiveContextsProvider>
+        </BlockContextProvider>
+      </AppRuntimeContextProvider>,
+    )
+
+    // The override won — the composed view is not what rendered.
+    await waitFor(() => expect(document.querySelector('.facet-surface')).not.toBeNull())
+    expect(document.querySelector('.view-surface')).toBeNull()
+    expect(marked()).toBe(false)
+  })
+
+  it('still marks a view through the real editing dispatcher', async () => {
+    // The dispatcher is what the slot resolves to, for every block in the app.
+    // Reading the answer off it — rather than off whoever chose the renderer —
+    // is how a view behind it comes out looking like an ordinary block.
+    renderWithPlainOutliner('root', ViewSurfaceRenderer, true)
+
+    await waitFor(() => expect(document.querySelector('.view-surface')).not.toBeNull())
+    expect(marked()).toBe(true)
+  })
+
+  it('marks a view that composes the text renderer', async () => {
+    // The recents shape: a real title above a list of other blocks' rows. It
+    // declares itself a view — its row spans the list, which is what geometry
+    // callers are asking about — even though a title renders through it.
+    renderBlock('root', TitlePlusSurfaceRenderer, true)
+
+    await screen.findByText('Page title')
+    expect(marked()).toBe(true)
+  })
+})
+
+describe('a layout that drops shellProps', () => {
+  let repo: Repo
+  let runtime: FacetRuntime
+  let shortcutsOnlyRuntime: FacetRuntime
+
+  beforeEach(async () => {
+    await resetTestDb(sharedDb.db)
+    repo = createTestRepo({
+      db: sharedDb.db,
+      user: {id: 'user-1'},
+      newId: () => crypto.randomUUID(),
+      extensions: [
+        defaultEditorInteractionExtension,
+        blockLayoutFacet.of(
+          () => ({id: 'dropped', label: 'Dropped shell', render: DroppedShellLayout}),
+          {source: 'test'},
+        ),
+      ],
+    }).repo
+    runtime = repo.facetRuntime!
+    shortcutsOnlyRuntime = createTestRepo({
+      db: sharedDb.db,
+      user: {id: 'user-1'},
+      newId: () => crypto.randomUUID(),
+      extensions: [
+        defaultEditorInteractionExtension,
+        blockLayoutFacet.of(
+          () => ({id: 'shortcuts-only', label: 'Shortcuts only', render: ShortcutsOnlyLayout}),
+          {source: 'test'},
+        ),
+      ],
+    }).repo.facetRuntime!
+    repo.setActiveWorkspaceId('ws-1')
+    repoRef.current = repo
+    await repo.tx(async tx => {
+      await tx.create({id: 'root', workspaceId: 'ws-1', parentId: null, orderKey: 'a0', content: 'Page title'})
+      await tx.create({id: 'ui-state', workspaceId: 'ws-1', parentId: null, orderKey: 'a1'})
+    }, {scope: ChangeScope.BlockDefault, description: 'dropped shell fixture'})
+    uiStateBlockRef.current = repo.block('ui-state')
+  })
+
+  afterEach(() => {
+    cleanup()
+    repoRef.current = undefined
+    uiStateBlockRef.current = undefined
+  })
+
+  // Silent is the failure mode worth pinning: the block simply has no identity
+  // in the DOM, and every consumer resolves to an ancestor instead — nothing
+  // throws, so only the report says anything at all.
+  it('is reported, rather than silently losing the block\'s identity', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    render(
+      <AppRuntimeContextProvider value={runtime}>
+        <BlockContextProvider initialValue={{scopeRootId: 'root'}}>
+          <ActiveContextsProvider>
+            <DefaultBlockRenderer block={repo.block('root')} />
+          </ActiveContextsProvider>
+        </BlockContextProvider>
+      </AppRuntimeContextProvider>,
+    )
+
+    await waitFor(() => expect(document.querySelector('.dropped-shell')).not.toBeNull())
+    expect(document.querySelector('[data-block-shell]')).toBeNull()
+    expect(error).toHaveBeenCalledWith(expect.stringContaining('without spreading shellProps'))
+    error.mockRestore()
+  })
+
+  // Not every Shell consumer is making an element the block's surface: a
+  // layout whose body is a composed pane wants the shortcut surface and
+  // nothing else. Reporting those too would make the check noise, and noise is
+  // how a real drop goes unnoticed.
+  it('is silent when the layout says the drop is deliberate', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    render(
+      <AppRuntimeContextProvider value={shortcutsOnlyRuntime}>
+        <BlockContextProvider initialValue={{scopeRootId: 'root'}}>
+          <ActiveContextsProvider>
+            <DefaultBlockRenderer block={repo.block('root')} />
+          </ActiveContextsProvider>
+        </BlockContextProvider>
+      </AppRuntimeContextProvider>,
+    )
+
+    await waitFor(() => expect(document.querySelector('.dropped-shell')).not.toBeNull())
+    expect(error).not.toHaveBeenCalled()
+    error.mockRestore()
   })
 })

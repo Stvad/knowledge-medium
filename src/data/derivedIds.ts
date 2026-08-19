@@ -75,6 +75,7 @@
 
 import { v5 as uuidv5 } from 'uuid'
 import type { BlockData } from './api'
+import { USER_STATE_ROOT_PATHS } from './userPrefs'
 
 /**
  * What makes a block THIS one and not another.
@@ -95,6 +96,27 @@ export interface DerivedIdentity {
  *  reference to what that device happens to hold. */
 export const derivedBlockId = (identity: DerivedIdentity): string =>
   uuidv5(identity.key, identity.namespace)
+
+// Per-(parent, content) state child — user-prefs, ui-state, panels,
+// per-plugin state, and everything else `ensureStateChild` materializes,
+// so each name resolves to the same block id across clients. Lives here
+// rather than in `stateBlocks.ts` (which owns the writes) so a caller
+// that only needs the ID — the Recents filter walking down from the
+// state roots — can derive it without importing the write path.
+const STATE_CHILD_NS = '8f6c2c84-1c12-4e4a-8b9e-9b0f87a7e1d2'
+
+/** Deterministic id of a named state child under `parentId`. Every user
+ *  preference, ui-state row, panel and per-plugin prefs block hangs off
+ *  one of these, so a change to the key or the namespace orphans all of
+ *  them at once (pinned in `derivedIds.test.ts`). */
+export const stateChildBlockId = (parentId: string, content: string): string =>
+  derivedBlockId({namespace: STATE_CHILD_NS, key: `${parentId}:${content}`})
+
+/** The state roots under one user page — what a reader must walk down
+ *  from to recognize app-owned state, and the reason the list of paths
+ *  is declared next to nothing else. */
+export const userStateRootBlockIds = (userPageId: string): string[] =>
+  USER_STATE_ROOT_PATHS.map(path => stateChildBlockId(userPageId, path))
 
 /**
  * What is sitting at a derived id, as one caller sees it.

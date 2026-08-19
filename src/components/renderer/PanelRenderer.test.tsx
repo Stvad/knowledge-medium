@@ -10,6 +10,7 @@ import { createTestRepo } from '@/data/test/createTestRepo'
 import { Repo } from '@/data/repo'
 import {
   activePanelIdProp,
+  panelMaximizedProp,
   focusedBlockLocationProp,
   panelViewModeProp,
   peekFocusedBlockLocation,
@@ -207,7 +208,7 @@ describe('PanelRenderer', () => {
 
   const renderPanelInLayoutSession = async (
     activePanelId: string,
-    options: {canClosePanel?: boolean; trackPanelFocus?: boolean} = {},
+    options: {canClosePanel?: boolean; canMaximizePanel?: boolean; trackPanelFocus?: boolean} = {},
   ) => {
     await env.repo.block('layout-session').set(activePanelIdProp, activePanelId)
 
@@ -219,6 +220,7 @@ describe('PanelRenderer', () => {
             layoutSessionBlockId: 'layout-session',
             panelId: env.panel.id,
             canClosePanel: options.canClosePanel,
+            canMaximizePanel: options.canMaximizePanel,
             trackPanelFocus: options.trackPanelFocus,
           }}
         >
@@ -278,6 +280,26 @@ describe('PanelRenderer', () => {
     await vi.waitFor(() => {
       expect(sessionBlock.peekProperty(activePanelIdProp)).toBe(env.panel.id)
     })
+  })
+
+  // `canMaximizePanel` goes false the moment maximizing would be pointless —
+  // mobile, or the siblings closed down to one. A pane already carrying the
+  // flag must keep its restore affordance across that transition, or the state
+  // is unclearable from the pane that has it.
+  it('keeps the restore affordance on a flagged pane after maximizing stops being offered', async () => {
+    await env.panel.set(panelMaximizedProp, true)
+
+    await renderPanelInLayoutSession('panel-b', {canMaximizePanel: false})
+
+    expect(await screen.findByLabelText('Restore panel')).toBeTruthy()
+  })
+
+  it('offers no maximize affordance on an unflagged pane when maximizing is not available', async () => {
+    await renderPanelInLayoutSession('panel-b', {canMaximizePanel: false})
+
+    await screen.findByLabelText('Back') // chrome is mounted
+    expect(screen.queryByLabelText('Maximize panel')).toBeNull()
+    expect(screen.queryByLabelText('Restore panel')).toBeNull()
   })
 
   it('does not activate the panel from close pointer events', async () => {

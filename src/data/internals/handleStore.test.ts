@@ -271,11 +271,199 @@ describe('LoaderHandle structural diffing (§9.4)', () => {
 })
 
 describe('LoaderHandle GC', () => {
-  it('read() on a disposed handle throws an Error, not a retry promise', async () => {
-    // Falling through to the promise path would hand a Suspense boundary a
-    // fresh rejected promise on every attempt — render, throw, reject,
-    // re-render, forever, with nothing surfacing. An Error reaches the
-    // nearest error boundary instead.
+  it('a disposed handle forwards peek/status to the live replacement', async () => {
+    // Render-path reads: they must see the replacement's data WITHOUT
+    // creating anything (peek/status run during render).
+    const store = makeStore(1000)
+    const { loader } = collectingLoader([7, 8])
+    const dead = store.getOrCreate('fwd', () => new LoaderHandle({ store, key: 'fwd', loader }))
+    dead.dispose()
+    expect(dead.status()).toBe('disposed')
+    expect(dead.peek()).toBeUndefined()
+
+    const live = store.getOrCreate('fwd', () => new LoaderHandle({ store, key: 'fwd', loader }))
+    await live.load()
+
+    expect(dead.status()).toBe('ready')
+    expect(dead.peek()).toEqual([7, 8])
+    expect(store.size()).toBe(1)
+  })
+
+  it('loadFresh() through a disposed handle resolves instead of throwing', async () => {
+    // loadFresh settles against `inflight`/`stale`/`value`, all of which
+    // disposal cleared — forwarding only the inner load() would throw
+    // "completed without a value" despite the replacement loading fine.
+    const store = makeStore(1000)
+    const { loader } = collectingLoader([9])
+    const dead = store.getOrCreate('fresh', () => new LoaderHandle({ store, key: 'fresh', loader }))
+    dead.dispose()
+    // A replacement already exists, so this is the ADOPTION path — but the
+    // vacant-key path would pin the same thing: either way `this` stays
+    // disposed with its value cleared, so a forward of only the inner `load()`
+    // leaves the loop reading a corpse.
+    store.getOrCreate('fresh', () => new LoaderHandle({ store, key: 'fresh', loader }))
+
+    await expect(dead.loadFresh()).resolves.toEqual([9])
+  })
+
+  it('loadFresh() through a disposed handle keeps its completeness boundary', async () => {
+    // The test above only pins "does not throw", which a forward to plain
+    // `load()` also satisfies — and that forward would silently downgrade the
+    // guarantee projector priming depends on: `loadFresh` must not return a
+    // value that was already invalidated while its loader ran. Here the
+    // replacement's first run is invalidated mid-flight, so `load()` would
+    // hand back the suspect [1] and only `loadFresh` waits for the clean [2].
+    const store = makeStore(1000)
+    const dep: Dependency = { kind: 'row', id: 'r' }
+    let runs = 0
+    let releaseFirst: ((v: number[]) => void) | undefined
+    const loader = async (ctx: { depend: (d: Dependency) => void }) => {
+      runs++
+      ctx.depend(dep)
+      if (runs === 1) return new Promise<number[]>(r => { releaseFirst = r })
+      return [runs]
+    }
+    const dead = store.getOrCreate('boundary', () =>
+      new LoaderHandle({ store, key: 'boundary', loader }),
+    )
+    dead.dispose()
+    const live = store.getOrCreate('boundary', () =>
+      new LoaderHandle({ store, key: 'boundary', loader }),
+    )
+
+    const settled = dead.loadFresh()
+    // The loader runs synchronously up to its first await, so the first run is
+    // already in flight here — no yield needed before invalidating it.
+    expect(releaseFirst).toBeDefined()
+    live.invalidate()
+    releaseFirst!([1])
+
+    await expect(settled).resolves.toEqual([2])
+  })
+
+  it('loadFresh() keeps its boundary across a disposal that lands mid-flight', async () => {
+    // The two tests above enter loadFresh already disposed, which any check
+    // placed at entry would also catch. This one disposes it MID-loop, and
+    // loadFresh is the only method on this class that awaits between deciding
+    // "am I disposed" and reading the state that answer governs: `load()`
+    // settles by running LISTENER code, and a listener may dispose the handle
+    // (`store.clear()` is public API — the same reachability the mid-load
+    // guard accepts, and it ignores the ref-count loadFresh holds). So the
+    // check has to sit after the awaits and before the state reads, and it has
+    // to forward the whole operation.
+    //
+    // Run 1 settles and its notify disposes the handle. Run 2 (the sibling's)
+    // is invalidated while in flight, so it is suspect. Only run 3 is clean.
+    // The single assertion below separates all three failure
+    // modes: no re-check at all (or one placed before the awaits) throws
+    // "completed without a value" off the cleared corpse; a re-check that
+    // forwards plain `load()` returns the suspect [2]; correct is [3].
+    const store = makeStore(1000)
+    const dep: Dependency = { kind: 'row', id: 'lfr' }
+    let runs = 0
+    let releaseSecond: ((v: number[]) => void) | undefined
+    const loader = async (ctx: { depend: (d: Dependency) => void }) => {
+      runs++
+      ctx.depend(dep)
+      if (runs === 2) return new Promise<number[]>(r => { releaseSecond = r })
+      return [runs]
+    }
+    const h = store.getOrCreate('lf-mid', () =>
+      new LoaderHandle({ store, key: 'lf-mid', loader }),
+    )
+    let armed = true
+    h.subscribe(() => {
+      if (!armed) return
+      armed = false
+      store.clear()
+    })
+
+    const settled = h.loadFresh()
+    await vi.waitFor(() => expect(releaseSecond).toBeDefined())
+    // Through the store, not `h.invalidate()`: this also pins that the sibling
+    // was registered, since an unregistered handle is never walked.
+    store.invalidate({ rowIds: ['lfr'] })
+    releaseSecond!([2])
+
+    await expect(settled).resolves.toEqual([3])
+  })
+
+  it('loadFresh() holds a ref, so a self-disposing lap cannot spin', async () => {
+    // `gcTimeMs: 0` is the synchronous-dispose config the class documents.
+    // Without loadFresh's own retain, the inflight load's `release()` on settle
+    // drains the last ref and disposes the handle IN the lap that just loaded
+    // it; the check above then forwards to a fresh sibling, whose loadFresh
+    // does exactly the same. The loop never terminates — and because it is a
+    // microtask chain, it starves timers too, so the failure is a hung event
+    // loop rather than a slow test. The loader aborts after 5 runs so a
+    // regression here reports instead of hanging the suite.
+    const store = makeStore(0)
+    let runs = 0
+    const loader = async () => {
+      runs++
+      if (runs > 5) throw new Error(`loadFresh re-ran the loader ${runs} times`)
+      return [runs]
+    }
+    const h = store.getOrCreate('lf-selfgc', () =>
+      new LoaderHandle({ store, key: 'lf-selfgc', loader }),
+    )
+
+    await expect(h.loadFresh()).resolves.toEqual([1])
+    expect(runs).toBe(1)
+    // The retain is given back: the handle still collects on the same lap it
+    // would have without it, so this buys termination and nothing else.
+    expect(h.status()).toBe('disposed')
+    expect(store.size()).toBe(0)
+  })
+
+  it('load() through a disposed handle resolves instead of rejecting', async () => {
+    // The imperative path: a caller holding a stale handle (memoized, or kept
+    // across a hide) awaits load() without ever subscribing.
+    const store = makeStore(1000)
+    const { loader } = collectingLoader([4, 5, 6])
+    const dead = store.getOrCreate('imperative', () =>
+      new LoaderHandle({ store, key: 'imperative', loader }),
+    )
+    dead.dispose()
+
+    await expect(dead.load()).resolves.toEqual([4, 5, 6])
+    expect(store.size()).toBe(1)
+  })
+
+  it('subscribing through a disposed handle delivers the replacement events', async () => {
+    // A holder that cannot re-acquire (a memoized handle) still has to receive
+    // invalidations, so subscribe resolves rather than attaching to a corpse.
+    const store = makeStore(1000)
+    // A CHANGING value: the store skips notifying when the reloaded value is
+    // structurally equal, so a constant loader would make the second
+    // invalidation look like a lost event.
+    let tick = 0
+    const loader = async () => [++tick]
+    const dead = store.getOrCreate('sub', () => new LoaderHandle({ store, key: 'sub', loader }))
+    dead.dispose()
+    const live = store.getOrCreate('sub', () => new LoaderHandle({ store, key: 'sub', loader }))
+    await live.load()
+
+    const seen: unknown[] = []
+    dead.subscribe(v => seen.push(v))
+    live.invalidate()
+    await vi.waitFor(() => expect(seen.length).toBeGreaterThan(0))
+
+    // Adoption, not a duplicate: exactly one handle owns the key, and the
+    // events came from THAT handle. Without these the test passes even if the
+    // corpse mints a rival alongside the replacement.
+    expect(store.size()).toBe(1)
+    expect(store.peekHandle('sub')).toBe(live)
+
+    // …and it keeps delivering, not just the first time.
+    const before = seen.length
+    live.invalidate()
+    await vi.waitFor(() => expect(seen.length).toBeGreaterThan(before))
+  })
+
+  it('a disposed handle resolves to the live one at its key', async () => {
+    // The holder cannot always re-acquire — React Compiler output memoizes
+    // the factory call — so the handle resolves itself instead of dead-ending.
     const sched = manualScheduler()
     const store = new HandleStore({ gcTimeMs: 100, schedule: sched.schedule })
     const { loader } = collectingLoader([1, 2, 3])
@@ -285,13 +473,169 @@ describe('LoaderHandle GC', () => {
     await h.load()
     sched.flush(100)
     expect(h.status()).toBe('disposed')
-    expect(() => h.read()).toThrow(/has been disposed/)
-    try {
-      h.read()
-    } catch (thrown) {
-      expect(thrown).toBeInstanceOf(Error)
-      expect(thrown).not.toBeInstanceOf(Promise)
+
+    // A replacement minted by anyone else is adopted, not rivalled.
+    const replacement = store.getOrCreate('read:disposed', () =>
+      new LoaderHandle({ store, key: 'read:disposed', loader }),
+    )
+    await replacement.load()
+    expect(h.status()).toBe('ready')
+    expect(h.peek()).toEqual([1, 2, 3])
+    expect(h.read()).toEqual([1, 2, 3])
+
+    // …and with the key vacant, subscribing mints a SIBLING and forwards to
+    // it, rather than no-oping — and `h` itself stays dead. That last part is
+    // the whole point of the shape: `disposed` never flips back, so every site
+    // reading it as "this run was cancelled" keeps its meaning.
+    replacement.dispose()
+    const seen: unknown[] = []
+    h.subscribe(v => seen.push(v))
+    await vi.waitFor(() => expect(h.status()).toBe('ready'))
+    expect(store.size()).toBe(1)
+    const sibling = store.peekHandle('read:disposed')
+    expect(sibling).toBeDefined()
+    expect(sibling).not.toBe(h)
+    expect(sibling).not.toBe(replacement)
+  })
+
+  it('the sibling minted for a disposed handle receives store-driven invalidations', async () => {
+    // `store.size()` pins that the sibling is registered; this pins WHY that
+    // matters. The store only walks handles in its map, so a sibling minted
+    // outside `getOrCreate` would load once, render, and then never update
+    // again — a revealed subtree frozen at the value it woke up with, with no
+    // error anywhere. Driven through `store.invalidate` (the real commit path)
+    // rather than `handle.invalidate` so the map walk is what is under test.
+    const store = makeStore(1000)
+    const dep: Dependency = { kind: 'row', id: 'x' }
+    let n = 0
+    const loader = async (ctx: { depend: (d: Dependency) => void }) => {
+      ctx.depend(dep)
+      return [++n]
     }
+    const h = store.getOrCreate('revived', () =>
+      new LoaderHandle({ store, key: 'revived', loader }),
+    )
+    h.dispose()
+
+    const seen: unknown[] = []
+    h.subscribe(v => seen.push(v))
+    await vi.waitFor(() => expect(h.peek()).toEqual([1]))
+
+    store.invalidate({ rowIds: ['x'] })
+    await vi.waitFor(() => expect(seen).toEqual([[1], [2]]))
+  })
+
+  it('a load in flight at disposal cannot settle onto the sibling that replaced it', async () => {
+    // The mid-load guard. The sibling shape does most of this structurally —
+    // the pre-disposal run writes to `this`, and `this` is a different object
+    // from the sibling every holder now talks through — so what the guard
+    // still owns on its own is the AWAITER's answer: without it that run
+    // resolves with the value it read and the caller never learns the handle
+    // it awaited did not adopt it. The sibling assertions pin the structural
+    // half, so a future shape that reintroduces cross-talk fails here: fresh
+    // value, fresh deps (a rollback would make later invalidations match the
+    // wrong rows), and a ref-count the dead run never spent.
+    const sched = manualScheduler()
+    const store = makeStore(100, sched)
+    let releaseFirst: ((v: number[]) => void) | undefined
+    let runs = 0
+    const loader = async (ctx: { depend: (d: Dependency) => void }) => {
+      runs++
+      const id = `dep-${runs}`
+      ctx.depend({ kind: 'row', id })
+      return runs === 1 ? new Promise<number[]>(r => { releaseFirst = r }) : [99]
+    }
+    const h = store.getOrCreate('mid', () => new LoaderHandle({ store, key: 'mid', loader }))
+    const first = h.load()
+    expect(releaseFirst).toBeDefined()
+
+    // Disposal while that load is in flight. Only `HandleStore.clear()`
+    // reaches this today (a load holds a ref-count, so GC can't), but clear()
+    // is public API and the handle must not depend on who called it.
+    store.clear()
+    const seen: unknown[] = []
+    h.subscribe(v => seen.push(v))
+    await vi.waitFor(() => expect(h.peek()).toEqual([99]))
+    const live = store.peekHandle('mid') as unknown as LoaderHandle<number[]>
+    expect(live).not.toBe(h)
+
+    releaseFirst!([1, 2, 3])
+    await expect(first).rejects.toThrow(/disposed mid-load/)
+    await Promise.resolve()
+
+    expect(live.peek()).toEqual([99])
+    expect(seen).toEqual([[99]])
+    expect(live.__depsForTest()).toEqual([{ kind: 'row', id: 'dep-2' }])
+    // The subscriber's ref-count survived, so the GC sweep is a no-op.
+    sched.flush(1000)
+    expect(live.status()).toBe('ready')
+    expect(store.size()).toBe(1)
+  })
+
+  it('a batch member that disposes mid-load still releases its slot', async () => {
+    // Pre-existing, and load-bearing for everyone else in the batch: a throw
+    // from a `then`'s FULFILLED handler rejects the returned promise, it does
+    // not route to the rejection handler beside it — so the disposed-mid-load
+    // path had to release the slot itself. Left leaking, the barrier never
+    // closes and every OTHER matched handle's notify is dropped on the floor.
+    const store = makeStore(1000)
+    const dep: Dependency = { kind: 'row', id: 'shared' }
+    let releaseSlow: ((v: number[]) => void) | undefined
+    let slowRuns = 0
+    const slowLoader = async (ctx: { depend: (d: Dependency) => void }) => {
+      ctx.depend(dep)
+      slowRuns++
+      // Second run (the batched one) hangs until we say so.
+      if (slowRuns === 1) return [0]
+      return new Promise<number[]>(r => { releaseSlow = r })
+    }
+    let n = 0
+    // A CHANGING value: an equal reload is deduped by the structural diff and
+    // would look like a swallowed notify.
+    const fastLoader = async (ctx: { depend: (d: Dependency) => void }) => {
+      ctx.depend(dep)
+      return [++n]
+    }
+    const slow = store.getOrCreate('slow', () => new LoaderHandle({ store, key: 'slow', loader: slowLoader }))
+    const fast = store.getOrCreate('fast', () => new LoaderHandle({ store, key: 'fast', loader: fastLoader }))
+    const fastSeen: unknown[] = []
+    fast.subscribe(v => fastSeen.push(v))
+    slow.subscribe(() => {})
+    await vi.waitFor(() => expect(fastSeen).toEqual([[1]]))
+
+    // Both declare the same dep, so this opens a real batch (the store skips
+    // the barrier for a single match — with one member there is nothing for a
+    // leaked slot to strand).
+    store.invalidate({ rowIds: ['shared'] })
+    expect(slowRuns).toBe(2)
+    expect(releaseSlow).toBeDefined()
+    slow.dispose()
+    releaseSlow!([0])
+
+    // fast's notify was queued behind the barrier; it only lands if slow's
+    // vanished slot was released.
+    await vi.waitFor(() => expect(fastSeen).toEqual([[1], [2]]))
+  })
+
+  it('a disposed handle that is still registered at its own key mints a sibling', async () => {
+    // `liveAtKey` excludes `this` from "what is live at my key", and
+    // `resolveLive` evicts a corpse the store is still pointing at. Without
+    // BOTH, a disposed handle that IS the registered one (a factory handing
+    // `getOrCreate` a cached corpse) resolves to itself and every entry point
+    // recurses until the stack blows.
+    const store = makeStore(1000)
+    const { loader } = collectingLoader([5])
+    const h = new LoaderHandle({ store, key: 'self', loader })
+    h.dispose()
+    store.getOrCreate('self', () => h)
+    expect(store.peekHandle('self')).toBe(h)
+
+    expect(h.peek()).toBeUndefined()
+    await expect(h.load()).resolves.toEqual([5])
+    expect(h.status()).toBe('ready')
+    // The corpse was evicted for a sibling rather than revived in place.
+    expect(store.peekHandle('self')).not.toBe(h)
+    expect(store.size()).toBe(1)
   })
 
   it('disposes after gcTimeMs once subscribers drain', async () => {
@@ -714,6 +1058,311 @@ describe('Batched notify across multiple matching handles', () => {
     subValue = 'sub-2'
     store.invalidate({ parentIds: ['p'] })
     await vi.waitFor(() => expect(subscribedFired).toEqual(['sub-1', 'sub-2']))
+  })
+
+  it('never delivers a value older than one a listener already saw (superseded slot dropped)', async () => {
+    // The barrier can stay open across a LATER invalidation of one of its
+    // members. That second reload is not part of the open batch, so it
+    // notifies immediately — and then the barrier flushes a thunk that was
+    // queued with the value the FIRST reload settled with. A listener that
+    // reads the pushed argument sees v2 then v1: an older value after a
+    // newer one, with nothing to correct it until the next invalidation.
+    const store = makeStore(60_000)
+
+    // `fast` declares a private row dep alongside the shared table dep, so
+    // a second change can target it alone (matched.length === 1 → no batch).
+    const fastValues = ['v0', 'v1', 'v2']
+    let fastCall = 0
+    const fast = store.getOrCreate('fast', () =>
+      new LoaderHandle<string>({
+        store, key: 'fast',
+        loader: async (ctx) => {
+          ctx.depend({ kind: 'row', id: 'fast-only' })
+          ctx.depend({ kind: 'table', table: 'blocks' })
+          return fastValues[Math.min(fastCall++, fastValues.length - 1)]
+        },
+      }),
+    )
+
+    let releaseSlow!: (v: string) => void
+    let slowPromise = Promise.resolve('slow-0')
+    const slow = store.getOrCreate('slow', () =>
+      new LoaderHandle<string>({
+        store, key: 'slow',
+        loader: async (ctx) => {
+          ctx.depend({ kind: 'table', table: 'blocks' })
+          return slowPromise
+        },
+      }),
+    )
+
+    const fired: string[] = []
+    const slowFired: string[] = []
+    fast.subscribe(v => fired.push(v))
+    slow.subscribe(v => slowFired.push(v))
+    await vi.waitFor(() => expect(fired).toEqual(['v0']))
+    slowFired.length = 0
+    fired.length = 0
+
+    // Change 1 matches both → batch. `fast` settles with 'v1' and queues its
+    // notify behind the barrier; `slow` is gated open.
+    slowPromise = new Promise<string>(r => { releaseSlow = r })
+    store.invalidate({ tables: ['blocks'] })
+    await Promise.resolve()
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(fired).toEqual([])          // held by the barrier
+    expect(fast.peek()).toBe('v1')
+
+    // Change 2 matches ONLY `fast` → no batch → notifies as soon as it settles.
+    store.invalidate({ rowIds: ['fast-only'] })
+    await vi.waitFor(() => expect(fired).toEqual(['v2']))
+    expect(fast.peek()).toBe('v2')
+
+    // Releasing the slow loader closes the barrier and drains its queue.
+    // FIFO fence rather than a microtask count: the queue drains in FINISH
+    // order and `slow` is the member being released, so its thunk is last.
+    // Seeing slow's delivery proves fast's queued thunk has already had its
+    // turn — without it, the assertions below would be checking for an
+    // absence before the thing that produces it could have run.
+    releaseSlow('slow-1')
+    await vi.waitFor(() => expect(slowFired).toEqual(['slow-1']))
+
+    // 'v1' was superseded before it was ever published; publishing it now
+    // would walk a listener backwards. And 'v2' is already what the listener
+    // last saw, so the barrier has nothing left to say — `Handle.subscribe`
+    // fires on structural change only.
+    expect(fired).toEqual(['v2'])
+    expect(fast.peek()).toBe('v2')
+  })
+
+  it('two overlapping barriers: the outer flush drops its superseded slot', async () => {
+    // Same hazard without any unbatched notify in the mix: a SECOND
+    // multi-handle invalidation lands while the first barrier is still open,
+    // so the same handle has a thunk queued in two batches at once. The inner
+    // batch closes first and publishes a2; the outer must not then republish
+    // the a1 it was queued with.
+    const store = makeStore(60_000)
+
+    const aValues = ['a0', 'a1', 'a2']
+    let aCall = 0
+    const a = store.getOrCreate('a', () =>
+      new LoaderHandle<string>({
+        store, key: 'a',
+        loader: async (ctx) => {
+          ctx.depend({ kind: 'table', table: 'blocks' })
+          return aValues[Math.min(aCall++, aValues.length - 1)]
+        },
+      }),
+    )
+
+    // Two gated siblings so the SECOND invalidate still matches >1 handle
+    // (and therefore opens its own batch) while the first barrier is open.
+    const gated = (key: string, initial: string) => {
+      let release!: (v: string) => void
+      let promise = Promise.resolve(initial)
+      const handle = store.getOrCreate(key, () =>
+        new LoaderHandle<string>({
+          store, key,
+          loader: async (ctx) => { ctx.depend({ kind: 'table', table: 'blocks' }); return promise },
+        }),
+      )
+      return {
+        handle,
+        gate() { promise = new Promise<string>(r => { release = r }) },
+        release(v: string) { release(v) },
+      }
+    }
+    const b = gated('b', 'b0')
+    const c = gated('c', 'c0')
+
+    const aFired: string[] = []
+    const cFired: string[] = []
+    a.subscribe(v => aFired.push(v))
+    b.handle.subscribe(() => {})
+    c.handle.subscribe(v => cFired.push(v))
+    await vi.waitFor(() => expect(aFired).toEqual(['a0']))
+    aFired.length = 0
+    cFired.length = 0
+
+    // Invalidate 1 → batch1 over {a, b, c}. `a` settles a1 and queues; b/c gated.
+    b.gate()
+    c.gate()
+    store.invalidate({ tables: ['blocks'] })
+    await vi.waitFor(() => expect(a.peek()).toBe('a1'))
+    expect(aFired).toEqual([])
+
+    // Invalidate 2 while batch1 is open → batch2 over the same three. b/c are
+    // mid-load and release their slots; `a` re-runs into batch2 and settles a2.
+    store.invalidate({ tables: ['blocks'] })
+    await vi.waitFor(() => expect(aFired).toEqual(['a2']))
+
+    // Close batch1. Its queued `a` thunk is the stale one.
+    c.release('c1')
+    b.release('b1')
+    await vi.waitFor(() => expect(cFired).toEqual(['c1']))
+
+    expect(aFired).toEqual(['a2'])
+    expect(a.peek()).toBe('a2')
+  })
+
+  it('an older barrier does not publish a settle the loader path suppressed as dirty', async () => {
+    const store = makeStore(60_000)
+
+    // `a` snapshots the world at loader START — the way a SQL read
+    // snapshots state before a later commit lands — so a run that is
+    // invalidated mid-flight settles with provably pre-change data.
+    let world = 'w0'
+    let aRun = 0
+    const gates: Array<Promise<void> | undefined> = []
+    const releases: Array<(() => void) | undefined> = []
+    const gate = (run: number) => {
+      gates[run] = new Promise<void>(r => { releases[run] = r })
+    }
+    const a = store.getOrCreate('a', () =>
+      new LoaderHandle<string>({
+        store, key: 'a',
+        loader: async (ctx) => {
+          const run = aRun++
+          ctx.depend({ kind: 'row', id: 'a-only' })
+          ctx.depend({ kind: 'table', table: 'blocks' })
+          const snapshot = world
+          const g = gates[run]
+          if (g) await g
+          return snapshot
+        },
+      }),
+    )
+
+    let releaseSlow!: (v: string) => void
+    let slowPromise = Promise.resolve('slow-0')
+    const slow = store.getOrCreate('slow', () =>
+      new LoaderHandle<string>({
+        store, key: 'slow',
+        loader: async (ctx) => {
+          ctx.depend({ kind: 'table', table: 'blocks' })
+          return slowPromise
+        },
+      }),
+    )
+
+    const fired: string[] = []
+    const slowFired: string[] = []
+    a.subscribe(v => fired.push(v))
+    slow.subscribe(v => slowFired.push(v))
+    await vi.waitFor(() => expect(fired).toEqual(['w0']))
+    fired.length = 0
+    slowFired.length = 0
+
+    // Change 1 matches both → batch1. `a` settles 'w1' and queues behind
+    // the barrier; `slow` holds it open.
+    world = 'w1'
+    slowPromise = new Promise<string>(r => { releaseSlow = r })
+    store.invalidate({ tables: ['blocks'] })
+    await vi.waitFor(() => expect(a.peek()).toBe('w1'))
+    expect(fired).toEqual([])
+
+    // Change 2 targets `a` alone (row dep → matched.length === 1, no batch).
+    // Gate that run so change 3 can land while it is in flight.
+    gate(2)
+    world = 'w2'
+    store.invalidate({ rowIds: ['a-only'] })
+    await vi.waitFor(() => expect(a.status()).toBe('ready')) // still 'ready', loading in place
+
+    // Change 3 lands mid-load → pendingReinvalidate. Run 2's 'w2' is now
+    // known suspect: the world already moved to 'w3'.
+    world = 'w3'
+    store.invalidate({ rowIds: ['a-only'] })
+
+    // Let run 2 settle dirty. It writes this.value='w2' but deliberately
+    // does NOT notify, and queues a clean rerun (run 3) — which we gate so
+    // the older barrier gets to flush first.
+    gate(3)
+    releases[2]!()
+    await vi.waitFor(() => expect(a.peek()).toBe('w2'))
+    await vi.waitFor(() => expect(aRun).toBe(4)) // rerun started, gated
+
+    // Close batch1. `slow`'s own delivery is the FIFO fence: the queue
+    // drains in finish order, so seeing it proves `a`'s thunk already ran.
+    releaseSlow('slow-1')
+    await vi.waitFor(() => expect(slowFired).toEqual(['slow-1']))
+
+    // 'w2' is the snapshot the settle path hid. Publishing it hands the
+    // direct-value consumers a rebuild from data already known wrong.
+    // The metric proves the slot EXISTED and was dropped, rather than the
+    // barrier never having held one.
+    expect(fired).toEqual([])
+    expect(store.metrics.snapshot().notifiesSupersededInBatch).toBe(1)
+
+    releases[3]!()
+    await vi.waitFor(() => expect(fired).toEqual(['w3']))
+  })
+
+  it('an older barrier defers a value a newer, still-open barrier owns', async () => {
+    const store = makeStore(60_000)
+
+    // Overlapping dep sets: change 1 → {a, b}, change 2 → {a, c}.
+    const order: string[] = []
+    let aWorld = 'a0'
+    const a = store.getOrCreate('a', () =>
+      new LoaderHandle<string>({
+        store, key: 'a',
+        loader: async (ctx) => {
+          ctx.depend({ kind: 'row', id: 's1' })
+          ctx.depend({ kind: 'row', id: 's2' })
+          return aWorld
+        },
+      }),
+    )
+    const gated = (key: string, dep: string, initial: string) => {
+      let release!: (v: string) => void
+      let promise = Promise.resolve(initial)
+      const handle = store.getOrCreate(key, () =>
+        new LoaderHandle<string>({
+          store, key,
+          loader: async (ctx) => { ctx.depend({ kind: 'row', id: dep }); return promise },
+        }),
+      )
+      return {
+        handle,
+        gate() { promise = new Promise<string>(r => { release = r }) },
+        release(v: string) { release(v) },
+      }
+    }
+    const b = gated('b', 's1', 'b0')
+    const c = gated('c', 's2', 'c0')
+
+    a.subscribe(v => order.push(`a:${v}`))
+    b.handle.subscribe(v => order.push(`b:${v}`))
+    c.handle.subscribe(v => order.push(`c:${v}`))
+    await vi.waitFor(() => expect(order).toHaveLength(3))
+    order.length = 0
+
+    // Invalidate 1 → batch1 over {a, b}. `a` settles a1 and queues; b gated.
+    b.gate()
+    aWorld = 'a1'
+    store.invalidate({ rowIds: ['s1'] })
+    await vi.waitFor(() => expect(a.peek()).toBe('a1'))
+    expect(order).toEqual([])
+
+    // Invalidate 2 → batch2 over {a, c}, while batch1 is still open.
+    // `a` re-runs into batch2 and settles a2; c gated.
+    c.gate()
+    aWorld = 'a2'
+    store.invalidate({ rowIds: ['s2'] })
+    await vi.waitFor(() => expect(a.peek()).toBe('a2'))
+
+    // Close batch1 (b settles). Only b belongs to this invalidation — a2 is
+    // still owned by the open batch2 and must not be split out of it.
+    b.release('b1')
+    await vi.waitFor(() => expect(order).toContain('b:b1'))
+    expect(order).toEqual(['b:b1'])
+    expect(store.metrics.snapshot().notifiesSupersededInBatch).toBe(1)
+
+    // Close batch2: a2 and c1 land together, one commit for one invalidation.
+    c.release('c1')
+    await vi.waitFor(() => expect(order).toContain('c:c1'))
+    expect(order).toEqual(['b:b1', 'a:a2', 'c:c1'])
   })
 })
 
@@ -1277,6 +1926,7 @@ describe('HandleStore metrics counters', () => {
       midLoadInvalidations: 0,
       reloadsAfterSettle: 0,
       notifiesSkippedByDiff: 0,
+      notifiesSupersededInBatch: 0,
       notifiesFired: 0,
       loaderInvalidationsDeferred: 0,
       depsDeduplicatedAtRegistration: 0,

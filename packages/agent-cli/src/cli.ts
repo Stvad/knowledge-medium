@@ -41,6 +41,7 @@ import {
   renderKernelTypesInstallSummary,
 } from './kernelDts.js'
 import {renderSubtreeOutline} from './subtreeOutline.js'
+import {limitOption, workspaceAssertion} from './cliOptions.js'
 import {extensionScaffold, slugify, titleize} from './scaffold.js'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
@@ -570,10 +571,17 @@ cli
   })
 
 cli
-  .command('pair-url', 'Print the current app pairing URL')
-  .action(async () => {
+  .command('pair-url', 'Print the current app pairing URL (bridge approval only)')
+  // The bare URL approves the bridge endpoint but does not open the token
+  // dialog, so on its own it never yields a token to paste back — `connect`
+  // is the command that does both. `--tokens` adds the open-tokens param for
+  // the case where you want to drive the token step by hand (e.g. opening the
+  // URL on another device, or re-generating a token for an already-paired tab).
+  .option('--tokens', 'Also open the token dialog in the app (as `connect` does)')
+  .action(async (options: {tokens?: boolean}) => {
     await ensureBridgeRunning()
-    process.stdout.write(`${await pairingUrl()}\n`)
+    const url = await pairingUrl(bridgeUrl, {openTokensDialog: Boolean(options.tokens)})
+    process.stdout.write(`${url}\n`)
   })
 
 cli
@@ -731,13 +739,13 @@ cli
   .command('backlinks <blockId>', wireDescription('backlinks'))
   .option('--filter <spec>', 'none|stored|effective, or inline JSON BacklinksFilter (default: none)')
   .option('--workspace <id>', "Workspace id (defaults to the block's workspace, then the active one)")
-  .action(async (blockId: string, options: {filter?: string, workspace?: string}) => {
+  .action(async (blockId: string, options: {filter?: string, workspace?: unknown}) => {
     const filter = parseSpecArg(options.filter, ['none', 'stored', 'effective'], '--filter')
     await runAndPrint({
       type: 'backlinks',
       id: blockId,
       ...(filter !== undefined ? {filter} : {}),
-      ...(options.workspace ? {workspaceId: options.workspace} : {}),
+      ...workspaceAssertion(options.workspace),
     })
   })
 
@@ -748,7 +756,7 @@ cli
   .option('--workspace <id>', "Workspace id (defaults to the block's workspace, then the active one)")
   .action(async (
     blockId: string,
-    options: {filter?: string, grouping?: string, workspace?: string},
+    options: {filter?: string, grouping?: string, workspace?: unknown},
   ) => {
     const filter = parseSpecArg(options.filter, ['none', 'stored', 'effective'], '--filter')
     const grouping = parseSpecArg(options.grouping, ['user', 'none'], '--grouping')
@@ -757,7 +765,7 @@ cli
       id: blockId,
       ...(filter !== undefined ? {filter} : {}),
       ...(grouping !== undefined ? {grouping} : {}),
-      ...(options.workspace ? {workspaceId: options.workspace} : {}),
+      ...workspaceAssertion(options.workspace),
     })
   })
 
@@ -777,27 +785,27 @@ cli
   .command('page [...name]', wireDescription('page'))
   .option('--workspace <id>', 'Workspace id (defaults to the active one)')
   .option('--limit <n>', 'Max substring candidates (default 20)')
-  .action(async (name: unknown, options: {workspace?: string, limit?: string}) => {
+  .action(async (name: unknown, options: {workspace?: unknown, limit?: unknown}) => {
     const text = toStringArray(name).join(' ').trim()
     if (!text) throw new Error('page requires a <name> (e.g. `kmagent page "Project Alpha"`)')
     await runAndPrint({
       type: 'page',
       name: text,
-      ...(options.workspace ? {workspaceId: options.workspace} : {}),
-      ...(options.limit !== undefined ? {limit: Number(options.limit)} : {}),
+      ...workspaceAssertion(options.workspace),
+      ...limitOption(options.limit),
     })
   })
 
 cli
   .command('daily-note [...date]', wireDescription('daily-note'))
   .option('--workspace <id>', 'Workspace id (defaults to the active one)')
-  .action(async (date: unknown, options: {workspace?: string}) => {
+  .action(async (date: unknown, options: {workspace?: unknown}) => {
     const text = toStringArray(date).join(' ').trim()
     if (!text) throw new Error('daily-note requires a <date> (e.g. `kmagent daily-note yesterday`)')
     await runAndPrint({
       type: 'daily-note',
       date: text,
-      ...(options.workspace ? {workspaceId: options.workspace} : {}),
+      ...workspaceAssertion(options.workspace),
     })
   })
 
@@ -805,14 +813,14 @@ cli
   .command('search [...query]', wireDescription('search'))
   .option('--workspace <id>', 'Workspace id (defaults to the active one)')
   .option('--limit <n>', 'Max results (default 50)')
-  .action(async (query: unknown, options: {workspace?: string, limit?: string}) => {
+  .action(async (query: unknown, options: {workspace?: unknown, limit?: unknown}) => {
     const text = toStringArray(query).join(' ').trim()
     if (!text) throw new Error('search requires a <query>')
     await runAndPrint({
       type: 'search',
       query: text,
-      ...(options.workspace ? {workspaceId: options.workspace} : {}),
-      ...(options.limit !== undefined ? {limit: Number(options.limit)} : {}),
+      ...workspaceAssertion(options.workspace),
+      ...limitOption(options.limit),
     })
   })
 
@@ -925,6 +933,58 @@ cli
   .command('audit-extension <handle>', wireDescription('audit-extension'))
   .action(async (handle: string) => {
     await runAndPrint({type: 'audit-extension', ...extensionHandle(handle)})
+  })
+
+cli
+  .command('audit-properties', wireDescription('audit-properties'))
+  .option('--workspace <id>', 'Assert the workspace being audited (defaults to the active one; a workspace whose definition registry is not loaded is refused, not reported on)')
+  .action(async (options: {workspace?: unknown}) => {
+    await runAndPrint({
+      type: 'audit-properties',
+      ...workspaceAssertion(options.workspace),
+    })
+  })
+
+// A full properties migration is hundreds of thousands of writes; measured
+// runs land near 8 minutes on a fast native engine and a browser is a
+// multiple of that. Set one minute under the server's inFlightCommandTtlMs
+// (60 min, server.ts) rather than equal to it: at an exact match, the
+// bridge can reap the in-flight command in the same instant this timeout
+// elapses, and the next poll would surface "Unknown command" instead of
+// the CLI's own clear timeout message.
+const runBackfillDefaultWaitSeconds = 3540
+
+cli
+  .command('run-backfill <backfillId>', wireDescription('run-backfill'))
+  .option('--workspace <id>', 'Assert the workspace the pass writes to (defaults to the active one)')
+  .option('--wait <seconds>', `How long to wait for the pass to finish (default ${runBackfillDefaultWaitSeconds}). A full properties migration is hundreds of thousands of writes and runs for minutes; the default command timeout would give up while the app is still working, reporting a timeout for a run that is in fact progressing.`, {default: runBackfillDefaultWaitSeconds})
+  .action(async (backfillId: string, options: {workspace?: string | number; wait?: string | number}) => {
+    // Same 0-for-empty artifact CAC produces for `--workspace ""` as in
+    // `audit-properties`; normalize it back so the command layer's purpose-built
+    // refusal is what the operator sees.
+    const asserted = options.workspace === undefined
+      ? undefined
+      : options.workspace === 0 ? '' : String(options.workspace)
+    await ensureBridgeRunning()
+    const value = await client().runCommand({
+      type: 'run-backfill',
+      backfillId,
+      ...(asserted !== undefined ? {workspaceId: asserted} : {}),
+    }, {timeoutMs: Math.max(1, Number(options.wait) || runBackfillDefaultWaitSeconds) * 1000})
+      .catch((cause: unknown) => {
+        // Giving up WAITING is not the pass giving up: it keeps running in the
+        // app, will record its per-graph completion, and its failure list —
+        // the thing an operator needs — is consumed by whichever call collects
+        // the result, so after a timeout it exists only in the app console.
+        if (!(cause instanceof Error) || !/timed out/i.test(cause.message)) throw cause
+        throw new Error(
+          `${cause.message}\nThe pass is still running in the app — this only stopped ` +
+          'waiting for it. Re-running is safe (it is single-flighted and resumes from ' +
+          'whatever is left), but the list of values it could not migrate is in the app ' +
+          'console, not here.',
+        )
+      })
+    process.stdout.write(`${JSON.stringify(value, null, 2)}\n`)
   })
 
 cli

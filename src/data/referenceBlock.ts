@@ -19,15 +19,64 @@ export type ExactReferenceBlockContent =
 // canonicalizes any case), while a stricter consumer can anchor the bare
 // source without it to require lowercase.
 export const UUID_RE_SOURCE = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
+
+/** Longest alias a `[[…]]` span may carry and still be read as a
+ *  reference — by ANY reader of this text.
+ *
+ *  A runaway guard: nothing in the grammar bounds how far a `[[` may
+ *  reach for its `]]`, and text carrying code supplies unbalanced openers
+ *  for free (a regex character class opening `/[[`, a nested array
+ *  literal). 4096 sits far above anything human-authored — the longest
+ *  real alias measured across a ~31k-alias workspace was 322 chars — so it
+ *  bounds a runaway without being a judgement about page names.
+ *
+ *  In core, not the plugin: both readers of this grammar must agree on
+ *  what counts as a reference, and core cannot import the plugin — so the
+ *  plugin re-exports this rather than declaring its own copy. */
+export const MAX_ALIAS_LENGTH = 4096
+/** Id class the WHOLE-BLOCK reading accepts inside `((…))` — any run
+ *  without parens or whitespace, so a field row can address a block whose
+ *  id came from a caller rather than being generated. The inline reading
+ *  narrows this deliberately; see {@link blockRefSpanSource}. */
+export const BROAD_BLOCK_REF_ID_SOURCE = '[^()\\s]+'
+
+/** ──── Span shapes, shared by BOTH readers of this grammar ────
+ *
+ *  This module reads WHOLE-BLOCK content (one span, or nothing);
+ *  `@/plugins/references/referenceParser` scans INLINE spans out of prose.
+ *  The shapes must not drift, or a span is a reference to one reader and
+ *  prose to the other — so they live here once, and each reader anchors
+ *  and flags them for its own job.
+ *
+ *  Three divergences ARE deliberate, hence parameters rather than
+ *  accidents:
+ *   - the id class inside `((…))` — broad whole-block (above), UUID-only
+ *     inline so prose like "((not an id))" never becomes a backlink;
+ *   - trimming — whole-block trims its alias, inline takes the span
+ *     verbatim (both bound by `MAX_ALIAS_LENGTH`, measured pre-trim so
+ *     the two agree at the boundary);
+ *   - nesting — inline emits nested spans, whole-block has none to emit.
+ */
+export const blockRefSpanSource = (idSource: string): string =>
+  `\\(\\((${idSource})\\)\\)`
+
+/** `[label](((id)))`. The label class excludes `]` and newlines, which is
+ *  what makes the form unambiguous — `renderAliasedBlockref` strips both
+ *  for exactly this reason. */
+export const aliasedBlockRefSpanSource = (idSource: string): string =>
+  `\\[([^\\]\\n]*)\\]\\(\\(\\((${idSource})\\)\\)\\)`
+
 const UUID_RE = new RegExp(`^${UUID_RE_SOURCE}$`, 'i')
-const EXACT_BLOCK_REF_RE = /^\(\(([^()\s]+)\)\)$/
+const EXACT_BLOCK_REF_RE = new RegExp(
+  `^${blockRefSpanSource(BROAD_BLOCK_REF_ID_SOURCE)}$`,
+)
 const EXACT_ALIASED_BLOCK_REF_RE = new RegExp(
-  `^\\[([^\\]\\n]*)\\]\\(\\(\\((${UUID_RE_SOURCE})\\)\\)\\)$`, 'i',
+  `^${aliasedBlockRefSpanSource(UUID_RE_SOURCE)}$`, 'i',
 )
 
 /** The ids `((id))` content can actually round-trip — the same character class
  *  {@link EXACT_BLOCK_REF_RE} accepts inside the parens. */
-const RENDERABLE_BLOCK_REF_ID_RE = /^[^()\s]+$/
+const RENDERABLE_BLOCK_REF_ID_RE = new RegExp(`^${BROAD_BLOCK_REF_ID_SOURCE}$`)
 
 /** The `::` field marker (properties-as-blocks §7 grammar box): trimmed
  *  content = `::` + one whole-block reference span, NO space between marker
@@ -57,10 +106,36 @@ const parseReferenceSpan = (
   }
 
   if (!span.startsWith('[[') || !span.endsWith(']]')) return null
-  const alias = span.slice(2, -2).trim()
+  // Measured BEFORE the trim, because that is the string the inline
+  // parser sees for the same text — capping the trimmed value instead
+  // would leave a hairline disagreement (`[[<cap a's> ]]` is at the cap
+  // trimmed, one over untrimmed) exactly where the two readings must
+  // agree.
+  const raw = span.slice(2, -2)
+  if (raw.length > MAX_ALIAS_LENGTH) return null
+  const alias = raw.trim()
   if (!alias || alias.includes('[[') || alias.includes(']]')) return null
   return {kind: 'alias', alias, fieldForm}
 }
+
+/** The ID-CARRYING kinds: the span names a block id outright, so it
+ *  resolves TEXTUALLY with no name lookup, no alias index, and no seat
+ *  minting. `alias` is the odd one out — it names a NAME, and what that
+ *  name resolves to is a fact about the workspace rather than about the
+ *  text.
+ *
+ *  A named fragment because two sites branch on exactly this distinction
+ *  and mean different things by it — `deriveReferenceColumns` takes the
+ *  textual shortcut for these and falls through to the alias lookup
+ *  otherwise; the ref-value decode ACCEPTS only these, because a ref
+ *  property stores identity and must not follow a name (§9 value
+ *  decoding). Neither is an exhaustive `switch`, so a fourth id-carrying
+ *  variant added to {@link ExactReferenceBlockContent} would silently
+ *  miss both call sites; here it's one line to update. */
+export const isIdCarryingReference = (
+  parsed: ExactReferenceBlockContent | null,
+): parsed is Extract<ExactReferenceBlockContent, {kind: 'blockRef' | 'aliasedBlockRef'}> =>
+  parsed !== null && (parsed.kind === 'blockRef' || parsed.kind === 'aliasedBlockRef')
 
 /** Parse whole-block reference content: one reference span — exact ref
  *  `((id))` (broad-id grammar), wikilink `[[alias]]`, or aliased blockref
@@ -180,10 +255,18 @@ export const isRoundTrippableReferenceLabel = (label: string): boolean => {
 export const isGrammarShapedLabel = (label: string): boolean =>
   parseExactReferenceBlockContent(label) !== null
 
-/** A label that would read back as a reference span rather than a name.
- *  Typed so a UI caller can tell a refused rename from a failed write and
- *  revert the field, rather than reporting an opaque error. */
-export class GrammarShapedLabelError extends Error {
+/** A label a name-mirroring flow refuses to store.
+ *
+ *  A BASE class, not a marker: UI callers catch this to tell a refused
+ *  rename from a failed write and revert the field, and catching the base
+ *  means a new refusal reason is handled the moment it is added rather
+ *  than after someone remembers to widen an `instanceof` chain. Two
+ *  reasons exist today — grammar-shaped and non-round-trippable — and
+ *  they were added a round apart, which is the argument for the base. */
+export abstract class UnwritableLabelError extends Error {}
+
+/** A label that would read back as a reference span rather than a name. */
+export class GrammarShapedLabelError extends UnwritableLabelError {
   constructor(public readonly label: string, context: string) {
     super(
       `${context}: ${JSON.stringify(label)} reads as a block reference, not a name. `
@@ -200,4 +283,38 @@ export class GrammarShapedLabelError extends Error {
  *  their own copy. `context` names the caller for the message. */
 export const assertNotGrammarShapedLabel = (label: string, context: string): void => {
   if (isGrammarShapedLabel(label)) throw new GrammarShapedLabelError(label, context)
+}
+
+/** A label that cannot be written as a clean `[[label]]` and read back as
+ *  itself — `]]`-lossy, or longer than `MAX_ALIAS_LENGTH`. */
+export class LossyLabelError extends UnwritableLabelError {
+  constructor(public readonly label: string, context: string) {
+    super(
+      `${context}: ${JSON.stringify(label)} cannot be written as a "[[name]]" reference `
+      + 'and read back unchanged, so anything that links to it by name would resolve '
+      + `somewhere else or not at all. Names containing "]]" render lossily, and names `
+      + `longer than ${MAX_ALIAS_LENGTH} characters are not read as references at all.`,
+    )
+    this.name = 'LossyLabelError'
+  }
+}
+
+/** Throwing form of {@link isRoundTrippableReferenceLabel}, for the flows
+ *  whose label DOUBLES as a `[[label]]` page — a type definition, a
+ *  property schema. For those the name is not an arbitrary string: it is
+ *  also the only way to address the block by name, so one that can't be
+ *  expressed as a wikilink leaves the thing unlinkable.
+ *
+ *  The grammar-shaped check is NOT a substitute and the two are always
+ *  applied together: `((id))` round-trips perfectly while reading as a
+ *  reference, and `foo]]bar` is unmistakably a name while rendering
+ *  lossily. Property names already ran both; type labels ran only the
+ *  first, so a `]]`-bearing type label claimed an alias nothing could
+ *  link to — a gap that predates the length cap and that the cap widened
+ *  (Codex on PR #540). */
+export const assertRoundTrippableReferenceLabel = (
+  label: string,
+  context: string,
+): void => {
+  if (!isRoundTrippableReferenceLabel(label)) throw new LossyLabelError(label, context)
 }

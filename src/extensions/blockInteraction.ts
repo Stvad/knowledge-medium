@@ -45,22 +45,37 @@ export interface BlockContentRendererSlot {
  * facet resolver and reswap every decorator/layout/slot identity on
  * each focus toggle.
  *
+ * "Reswap every slot identity" is not a performance note, it is data
+ * loss. `DefaultBlockRenderer` builds each layout slot as a `useMemo`
+ * over this object, so a new identity is a new React element TYPE:
+ * React unmounts the old subtree and mounts a fresh one. For `Content`
+ * and `Shell` that subtree is the live CodeMirror editor, and a remount
+ * mid-typing rebuilds it from the last COMMITTED content — dropping the
+ * characters typed since, killing an open autocomplete, and moving the
+ * caret. So a field belongs here only if it is stable across ordinary
+ * editing; anything a keystroke can change does not. `aliases` was on
+ * this context for exactly one release and broke page-title editing that
+ * way: `alias.sync` mirrors a page's content into its own `alias`
+ * property in the same tx, so every debounced commit churned it. It is
+ * gone rather than narrowed — page-ness reaches the surfaces that style it
+ * through `blockTextClassFacet` / `blockBulletClassFacet`, whose calling
+ * hooks feed them `useBlockAliases(block)` reactively, and any other
+ * contribution that must FOLLOW naming reads the same hook inside its own
+ * rendered component.
+ *
  * Contributions that need reactive state read it inside their rendered
  * components via `useInFocus(block.id)` / `useInEditMode(block.id)` /
- * `useIsSelected(block.id)`, or at fire time via snapshot helpers.
+ * `useIsSelected(block.id)`, or at fire time via snapshot helpers. Facets
+ * whose contributions are pure functions (no component to hold a hook)
+ * declare their own context type and let the calling HOOK feed the
+ * reactive read — see `blockTextClassFacet` / `blockBulletClassFacet`,
+ * which is how page-ness reaches the alias plugin's styling.
  */
 export interface BlockResolveContext {
   block: Block
   repo: Repo
   uiStateBlock: Block
   types: readonly string[]
-  /** The block's page names (`[[Inbox]]`), or `[]`. Reactive, like `types`:
-   *  populated by the renderer from the block's `alias` property so a
-   *  contribution that keys on "is this a page" re-resolves when one is
-   *  added or removed, instead of freezing at the value it had when the
-   *  contribution set was first resolved. Decoded tolerantly — a malformed
-   *  stored value reads as no aliases rather than throwing. */
-  aliases: readonly string[]
   topLevelBlockId?: string
   /** Root of the visible subtree this mount renders (see
    *  `BlockContextType.scopeRootId`). Equals `topLevelBlockId` on the
@@ -219,7 +234,22 @@ export type BlockBulletHoverResolver =
 // layout (a block reference) simply doesn't render `Shell`, so it pays for
 // none of that — the lazy-slot equivalent of "don't allocate what you don't
 // use".
+/** Marks the element a layout spreads `shellProps` onto as this block's shell —
+ *  the outer half of a block's DOM boundary (`.block-content` is the inner
+ *  half). Travels with the props rather than with the default layout's class so
+ *  a layout that styles its own wrapper still declares the boundary, and any
+ *  handler resolving ownership can ask one question of both halves. */
+export const BLOCK_SHELL_ATTRIBUTE = 'data-block-shell'
+
+/** Marks a content slot that holds a VIEW — a review backlog, a review deck, a
+ *  recents list — rather than the block's own text. Written by the slot, which
+ *  is the only place that knows: it resolved the renderer. Callers reasoning
+ *  about a row's GEOMETRY need it, because such a row's rect describes
+ *  everything it shows rather than the block itself. */
+export const BLOCK_CONTENT_VIEW_ATTRIBUTE = 'data-block-content-view'
+
 export interface BlockShellProps {
+  'data-block-shell': 'true'
   'data-block-id': string
   'data-render-scope-id'?: string
   'data-editing': 'true' | 'false'
@@ -265,6 +295,20 @@ export type BlockShellRender = (shellProps: BlockShellProps) => ReactNode
 
 export interface BlockShellSlotProps {
   children: BlockShellRender
+  /**
+   * This layout wants the shell's shortcut surface and decorators but is NOT
+   * making an element the block's own surface, so it deliberately ignores
+   * `shellProps`. Say so, and the dev-time check that catches an accidental
+   * drop stays useful.
+   *
+   * Legitimate: a layout whose body is a composed pane rather than the block
+   * (video-notes puts the block's children in an aside; putting the props on
+   * that pane would make the whole thing focusable and click-to-edit). NOT
+   * legitimate for a layout that renders the block itself — dropping them
+   * there costs the block its identity, and every consumer then resolves to an
+   * ancestor.
+   */
+  shortcutsOnly?: boolean
 }
 
 /** Opt-in interactive block surface. Rendering it runs the shell decorators
@@ -670,6 +714,44 @@ export const isInteractiveContentEvent = (event: { target: EventTarget | null })
     ? target as Element
     : target.parentElement
   return Boolean(element?.closest(interactiveContentSelector))
+}
+
+/**
+ * Where one block's DOM ends and another's begins: a content surface
+ * (`DefaultBlockRenderer`'s content slot) or a block shell. Walking up from an
+ * event target, the first of these decides which block the target belongs to.
+ *
+ * BOTH are needed. A shell holds more than its content slot — the bullet, the
+ * property panel, a breadcrumb chain, whatever chrome a surface adds — and a
+ * target there has no `.block-content` above it until the CONTAINER's, which
+ * would read as the container's own. Neither marker alone spans a block.
+ *
+ * The shell half is an attribute carried by `shellProps`, not the default
+ * layout's class: a layout is free to style its own wrapper, and one that does
+ * must still be recognisable as a block.
+ */
+const BLOCK_BOUNDARY_SELECTOR = `.block-content, [${BLOCK_SHELL_ATTRIBUTE}]`
+
+/**
+ * Is this event's target on OUR surface, rather than on a nested block's?
+ *
+ * Innermost wins unconditionally, whether or not the nested block handles that
+ * gesture: an ancestor must not inherit a gesture the block under the pointer
+ * declined (a nested block in edit mode disables its swipe, and "swipe the
+ * container instead" is never the right reading of that).
+ *
+ * Propagation cannot stand in for this. A renderer that fills a content slot
+ * with real block rows puts one surface inside another, and then each phase
+ * fails its own way: bubbling lets the container act LAST and overwrite,
+ * capturing lets it act FIRST and consume. Ordinary outline children sit
+ * outside their parent's content slot, which is why only such surfaces are
+ * affected — and why testing this needs one of them.
+ */
+export const ownsGestureTarget = (element: HTMLElement, target: EventTarget | null): boolean => {
+  if (typeof Node === 'undefined' || !(target instanceof Node)) return true
+  const start = target.nodeType === Node.ELEMENT_NODE ? (target as Element) : target.parentElement
+  const boundary = start?.closest(BLOCK_BOUNDARY_SELECTOR)
+  return !boundary || boundary === element
 }
 
 /**

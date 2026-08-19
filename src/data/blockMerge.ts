@@ -1,13 +1,17 @@
 import {
   CORE_BLOCK_MERGED_EVENT,
   MergeIntoDescendantError,
+  type AnyPropertySchema,
   type BlockData,
   type BlockMergeAliasRewrite,
   type Tx,
 } from '@/data/api'
 import { keysBetween } from './orderKey'
 import { getPropertyFieldTargetId } from './propertyChildren'
-import { collapseDuplicateFieldRow } from './internals/propertyChildrenProcessor'
+import {
+  collapseDuplicateFieldRow,
+  materializePropertyChildrenForExistingRow,
+} from './internals/propertyChildrenProcessor'
 import { mergeProperties } from './mergeProperties'
 import { deleteSubtreeInTx } from './subtreeDelete'
 
@@ -140,13 +144,62 @@ export const mergeBlocksInTx = async (
   // adopted field row, so it wants the last physical sibling, hidden or not.
   const intoFieldByFieldId = new Map<string, BlockData>()
   let intoAnchor: string | null = null
-  for (const child of await tx.childrenOf(into.id, undefined)) {
-    intoAnchor = child.orderKey
-    if (intoChildren.some(visible => visible.id === child.id)) continue
-    const fieldId = getPropertyFieldTargetId(child)
-    if (fieldId !== undefined && !intoFieldByFieldId.has(fieldId)) {
-      intoFieldByFieldId.set(fieldId, child)
+  const scanIntoChildren = async (): Promise<void> => {
+    intoFieldByFieldId.clear()
+    intoAnchor = null
+    for (const child of await tx.childrenOf(into.id, undefined)) {
+      intoAnchor = child.orderKey
+      if (intoChildren.some(visible => visible.id === child.id)) continue
+      const fieldId = getPropertyFieldTargetId(child)
+      if (fieldId !== undefined && !intoFieldByFieldId.has(fieldId)) {
+        intoFieldByFieldId.set(fieldId, child)
+      }
     }
+  }
+  await scanIntoChildren()
+
+  // Pre-backfill catch-up (§5, #389 item 9). Between a workspace flipping and
+  // the backfill reaching `into`, `into` holds a full cell and zero field
+  // rows — the same shape as any row that arrives by sync after the flip.
+  // Without this, a key BOTH blocks hold takes the adopt branch below, and
+  // since target-wins makes the merged bag a no-op for that key, MATERIALIZE
+  // has no change to reconcile — so PROJECT rebuilds the cell from the only
+  // field row present, `from`'s, and the target's value is gone. Silent, from
+  // a plain backspace-at-start, and it uploads.
+  //
+  // Materializing `into`'s own row first restores the precondition the
+  // adopt/collapse split assumes, so the ordinary `collapseDuplicateFieldRow`
+  // path runs and the result matches a merge of two child-backed blocks:
+  // target's value wins the cell, `from`'s divergent value survives as a peer.
+  //
+  // Must run BEFORE the adopt loop, not after: once `from`'s row is adopted,
+  // `into` HAS a field row for that fieldId and the catch-up no longer fires.
+  //
+  // The `has(fieldId)` clause is the condition for needing catch-up at all —
+  // a key `into` already has a row for takes the collapse branch and wants
+  // nothing. It doubles as defence in depth against a find-or-create letting
+  // the cell overwrite children, but that direction needs cell/child
+  // divergence, which nothing can produce until the §5 arrival reconcile
+  // lands; deleting the clause today fails no test.
+  const pendingByName = new Map<string, AnyPropertySchema & {fieldId: string}>()
+  for (const fromField of fromPropertyChildren) {
+    const fieldId = getPropertyFieldTargetId(fromField)
+    if (fieldId === undefined || intoFieldByFieldId.has(fieldId)) continue
+    const schema = tx.resolvePropertyFieldSchema(into.workspaceId, fieldId)
+    if (schema === null || !Object.hasOwn(into.properties, schema.name)) continue
+    pendingByName.set(schema.name, {...schema, fieldId})
+  }
+  if (pendingByName.size > 0) {
+    await materializePropertyChildrenForExistingRow(
+      tx,
+      into,
+      // The names this call is about, resolved by the fieldId they came from —
+      // narrower than a workspace resolver by construction, so it cannot
+      // materialize a key the merge did not ask for.
+      {resolveNameSchema: name => pendingByName.get(name)},
+      [...pendingByName.keys()],
+    )
+    await scanIntoChildren()
   }
   for (const fromField of fromPropertyChildren) {
     const fieldId = getPropertyFieldTargetId(fromField)

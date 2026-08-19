@@ -84,6 +84,30 @@ describe('data-integrity audit runner + cadence (schedule.ts)', () => {
     expect(mirror.orphanSourceRows).toBe(1)
   })
 
+  // `json_valid('null')` is TRUE, so the malformed count cannot see this, and
+  // `json_each` yields nothing for it so every mirror direction reads as
+  // consistent. Workspace-wide, and deliberately on a block with NO reference
+  // syntax — the content-link recompute never selects such a row, so this is
+  // the only place the damage is visible.
+  it('flags reference storage that is valid JSON but not an array', async () => {
+    await sharedDb.db.execute(
+      `INSERT INTO blocks (id, workspace_id, parent_id, order_key, content,
+                           properties_json, references_json, created_at, updated_at,
+                           user_updated_at, created_by, updated_by, deleted)
+       VALUES ('shape-1', 'ws-5', NULL, 'a0', 'plain prose, no marks',
+               '{}', 'null', 1, 1, 1, 'u', 'u', 0)`,
+    )
+
+    const result = await runConsistencyAuditNow(env.repo, 'ws-5')
+
+    const mirror = result.checks.references_index_mirror
+    expect(mirror.status).toBe('anomaly')
+    expect(mirror.malformedRefsShape).toBe(1)
+    // NOT counted as unparseable — that number keeps its own meaning.
+    expect(mirror.malformedJson).toBe(0)
+    expect(mirror.samples).toContain('shape-1')
+  })
+
   it('cadence gate: a workspace is not due right after a run, due again after reset', async () => {
     expect(isAuditDue('ws-3', Date.now())).toBe(true) // never run this session
     await runConsistencyAuditNow(env.repo, 'ws-3')
@@ -494,6 +518,23 @@ describe('runConsistencyAudit — full (on-demand) deep checks', () => {
     const r = await runConsistencyAudit(sharedDb.db, WS, 0, { full: FULL })
     const check = r.checks.content_link_recompute
     expect(check.status).toBe('anomaly')
+    expect(check.strippedBlocks).toBe(1)
+  })
+
+  // `null` and `{}` parse fine, so a successful `JSON.parse` says nothing
+  // about the shape — both throw on the filter, aborting the check to
+  // `error` and hiding every row it had left.
+  it('content_link_recompute keeps scanning past a non-array references_json', async () => {
+    await ins({ id: 'bad', content: '[[Foo]]', references: [] })
+    await ins({ id: 'good', content: '[[Bar]]', references: [] })
+    await sharedDb.db.execute(
+      `UPDATE blocks SET references_json = 'null' WHERE id = 'bad'`,
+    )
+
+    const r = await runConsistencyAudit(sharedDb.db, WS, 0, { full: FULL })
+    const check = r.checks.content_link_recompute
+    expect(check.status).not.toBe('error')
+    // Scanning continued — the healthy row is still scored on its own axis.
     expect(check.strippedBlocks).toBe(1)
   })
 

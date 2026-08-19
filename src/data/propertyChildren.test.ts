@@ -609,6 +609,35 @@ describe('flipped workspace — ref-typed property values are editable `((id))` 
     expect(survivor?.reference_target_id).toBeNull()
   })
 
+  // #443 group 3: the projection's ref decode gates on the content's FORM, not
+  // on `reference_target_id` being non-null. End-to-end because the column read
+  // was defensible in isolation and only wrong once you see what DERIVE
+  // actually stamps: a whole-block `[[alias]]` resolves through the live alias
+  // index, so the column is populated with a REAL, WRONG block id. Before the
+  // fix this test measured `cell === 'mary-page'` — the property silently
+  // followed a name the user typed over the id it held.
+  it('a wikilink typed into a ref value unsets the cell — never re-points it', async () => {
+    const repo = await setupWithRef()
+    await createBlock(repo, 'p')
+    await createBlock(repo, 'mary-page')
+    await repo.tx(tx => tx.update('mary-page', {properties: {[aliasesProp.name]: ['Mary']}}),
+      {scope: ChangeScope.BlockDefault})
+    await repo.tx(tx => tx.setProperty('p', relatedSchema, 'target-xyz'),
+      {scope: ChangeScope.BlockDefault})
+    const value = await relatedValueChild('p')
+
+    await repo.tx(tx => tx.update(value!.id, {content: '[[Mary]]'}),
+      {scope: ChangeScope.BlockDefault})
+
+    expect(await relatedCell('p')).toBeUndefined()
+    const survivor = await relatedValueChild('p')
+    // The row keeps the user's text and stays visible/fixable in the tree...
+    expect(survivor?.content).toBe('[[Mary]]')
+    // ...and the derived column is still stamped, which is the whole point:
+    // it resolves, so the OLD decode would have coerced this into a ref value.
+    expect(survivor?.reference_target_id).toBe('mary-page')
+  })
+
   it('a merge-losing ref value keeps its stamp (no unsound stamp-clear) — #19', async () => {
     // #19: the old merge relocated a divergent losing value to ORDINARY
     // content and had to null a definition-shaped `reference_target_id` so it
@@ -977,6 +1006,73 @@ describe('merge integration (§9, slice B3)', () => {
     )
     expect(fromValueRow.deleted).toBe(0)
     expect(fromValueRow.parent_id).toBe(fromField!.id)
+  })
+})
+
+describe('pre-backfill window: merging into a cell-only target (§5, #389 item 9)', () => {
+  /** The flip is an operator UPDATE of the workspace row; between it and the
+   *  backfill reaching a block, that block has a full cell and zero field
+   *  rows. Same shape as any row that arrives by sync after the flip. */
+  const flipToChildren = async (): Promise<void> => {
+    await sharedDb.db.execute(
+      'UPDATE workspaces SET properties_migration = ? WHERE id = ?', ['children', WS],
+    )
+  }
+
+  it('keeps the target-wins value when `into` is cell-only and `from` is child-backed', async () => {
+    await seedWorkspace('cell')
+    const repo = setup()
+    await createBlock(repo, 'into')
+    await repo.tx(tx => tx.setProperty('into', statusSchema, 'target-value'),
+      {scope: ChangeScope.BlockDefault})
+    // The precondition the whole case rests on: a cell with nothing behind it.
+    expect(await cellValue('into')).toBe('target-value')
+    expect(await liveFieldRows('into')).toEqual([])
+
+    await flipToChildren()
+
+    await createBlock(repo, 'from')
+    await repo.tx(tx => tx.setProperty('from', statusSchema, 'source-value'),
+      {scope: ChangeScope.BlockDefault})
+    expect((await liveFieldRows('from')).length).toBe(1)
+
+    await repo.tx(async tx => {
+      const into = await tx.get('into')
+      const from = await tx.get('from')
+      await mergeBlocksInTx(tx, {into: into!, from: from!})
+    }, {scope: ChangeScope.BlockDefault})
+
+    // `mergeProperties` rule 4 is target-wins, and a merge must not invert it
+    // just because the target's value had not been materialized yet.
+    expect(await cellValue('into')).toBe('target-value')
+    // …and the source's divergent value is kept as a peer, not dropped —
+    // §9 union-with-dedupe, identical to merging two child-backed blocks.
+    const [intoField] = await liveFieldRows('into')
+    const values = (await childrenRows(intoField!.id)).filter(v => v.deleted === 0)
+    expect(values.map(v => v.content)).toEqual(['target-value', 'source-value'])
+  })
+
+  it('control: the same merge with `into` already child-backed', async () => {
+    await seedWorkspace('children')
+    const repo = setup()
+    await createBlock(repo, 'into')
+    await repo.tx(tx => tx.setProperty('into', statusSchema, 'target-value'),
+      {scope: ChangeScope.BlockDefault})
+    await createBlock(repo, 'from')
+    await repo.tx(tx => tx.setProperty('from', statusSchema, 'source-value'),
+      {scope: ChangeScope.BlockDefault})
+
+    await repo.tx(async tx => {
+      const into = await tx.get('into')
+      const from = await tx.get('from')
+      await mergeBlocksInTx(tx, {into: into!, from: from!})
+    }, {scope: ChangeScope.BlockDefault})
+
+    // The shape the pre-backfill case above must reproduce exactly.
+    expect(await cellValue('into')).toBe('target-value')
+    const [intoField] = await liveFieldRows('into')
+    const values = (await childrenRows(intoField!.id)).filter(v => v.deleted === 0)
+    expect(values.map(v => v.content)).toEqual(['target-value', 'source-value'])
   })
 })
 
@@ -1568,14 +1664,14 @@ describe('content <-> value codecs: "null"-collision escaping (PR #386 review fi
   })
 })
 
-describe('content <-> value codecs: ref values are `((id))`, read via reference_target_id', () => {
+describe('content <-> value codecs: ref values decode from the id-carrying span', () => {
   // A ref value child holds the reference in EDITABLE `((id))` form (the same
   // affordance as any block reference), while the cell keeps a bare id. The
-  // read side does NOT re-parse the content — `core.deriveReferenceTarget`
-  // already parsed it and stored the result in `reference_target_id`, keeping
-  // the invariant "column is null iff content isn't a resolvable exact ref".
-  // So the codec reads the column: content is the edit affordance, the column
-  // is the truth.
+  // read side parses the id out of the span, and accepts the ID-CARRYING forms
+  // ONLY (§9; #443 group 3). It used to read `reference_target_id` instead, on
+  // a stated invariant — "column is null iff content isn't a resolvable exact
+  // ref" — that was false: the derive stamps that column for a whole-block
+  // `[[alias]]` too, minting a seat when nothing claims it.
   const refSchema = defineProperty<string>('related', {
     codec: codecs.ref(),
     defaultValue: '',
@@ -1608,36 +1704,63 @@ describe('content <-> value codecs: ref values are `((id))`, read via reference_
     expect(() => encodedPropertyValueToChildContent(refSchema, '   ')).toThrow()
   })
 
-  it('reads the ref back from the column (the bare id lands in the cell)', () => {
+  it('reads the bare id back out of the `((id))` span', () => {
     const content = propertyValueToChildContent(refSchema, 'block-abc')
-    // The derived column DERIVE would have stamped for `((block-abc))`.
-    expect(propertyChildContentToEncodedValue(refSchema, content, 'block-abc')).toBe('block-abc')
+    expect(propertyChildContentToEncodedValue(refSchema, content)).toBe('block-abc')
   })
 
-  it('rejects prose typed into a ref value (column NULL) instead of coercing it', () => {
-    // "people will type text into ref properties, like logs" — DERIVE clears
-    // the column for non-ref content, so the codec throws → the projection
-    // skips it → the cell key reads unset while the row text is preserved.
+  it('accepts the aliased blockref form, keeping the id and dropping the label', () => {
+    // `[label](((uuid)))` is the other id-carrying form — the one a rename or
+    // merge rewrite pins a span to. A ref VALUE written that way still names
+    // an id, so it decodes; the label is display text the cell has no room for.
+    const uuid = '0123abcd-4567-89ef-0123-456789abcdef'
+    expect(propertyChildContentToEncodedValue(refSchema, `[Mary](((${uuid})))`)).toBe(uuid)
+  })
+
+  it('rejects prose typed into a ref value instead of coercing it', () => {
+    // "people will type text into ref properties, like logs" — the codec
+    // throws → the projection skips it → the cell key reads unset while the
+    // row text is preserved.
     expect(() =>
-      propertyChildContentToEncodedValue(refSchema, 'saw a bug in prod today', null),
+      propertyChildContentToEncodedValue(refSchema, 'saw a bug in prod today'),
     ).toThrow()
   })
 
-  it('rejects a `((id))` whose target never resolved (column still NULL)', () => {
-    // A dangling/unresolved ref: content looks ref-shaped but nothing stamped
-    // it (e.g. an as-yet-unresolvable alias). Unparseable until it resolves.
-    expect(() =>
-      propertyChildContentToEncodedValue(refSchema, '[[Not Yet A Page]]', null),
-    ).toThrow()
+  // The case the column read got WRONG, and the reason this decode moved to a
+  // form check: in a real workspace this content has a non-null
+  // `reference_target_id`, so a column-trusting decode wrote a live block id
+  // into the cell. The end-to-end test above is the one that proves the column
+  // really is populated; here it's the form alone that decides.
+  it('rejects a whole-block wikilink', () => {
+    expect(() => propertyChildContentToEncodedValue(refSchema, '[[Mary]]')).toThrow()
   })
 
-  it('an optional ref preserves an explicit null (sentinel wins over the column read)', () => {
+  // ...and it must be THIS clause doing the refusing, not a downstream codec.
+  // For a required ref `codecs.ref().decode(undefined)` throws anyway, so the
+  // required case can't tell the two apart. `optionalRef` can: its
+  // `decode(undefined)` returns undefined without throwing, which
+  // `firstProjectedFieldValue` reads as "nothing parsed" — so a weakened
+  // clause here would stop the value scan on a wikilink row and skip a later
+  // sibling that does name an id.
+  it('rejects a wikilink in an OPTIONAL ref too, where no codec catches it', () => {
+    expect(() => propertyChildContentToEncodedValue(optionalRefSchema, '[[Mary]]')).toThrow()
+  })
+
+  it('rejects the MARKED id-carrying form — `::((id))` is a field row, not a value', () => {
+    // §7: the marker makes the row machinery. Load-bearing through
+    // find-replace, whose guard asks this function about PROPOSED content.
+    expect(() => propertyChildContentToEncodedValue(refSchema, `::((${STATUS_FIELD_ID}))`))
+      .toThrow()
+  })
+
+  it('an optional ref preserves an explicit null (sentinel wins over the form check)', () => {
     const content = encodedPropertyValueToChildContent(optionalRefSchema, null)
     expect(content).toBe('null')
-    // Must NOT throw despite a null column — the generic null sentinel runs
-    // first, so an intentionally-unset optional ref decodes to its unset form
-    // (encoded as null, like every other null-accepting codec).
-    expect(propertyChildContentToEncodedValue(optionalRefSchema, content, null)).toBeNull()
+    // Must NOT throw despite `null` being no reference form at all — the
+    // generic null sentinel runs first, so an intentionally-unset optional ref
+    // decodes to its unset form (encoded as null, like every other
+    // null-accepting codec).
+    expect(propertyChildContentToEncodedValue(optionalRefSchema, content)).toBeNull()
   })
 })
 

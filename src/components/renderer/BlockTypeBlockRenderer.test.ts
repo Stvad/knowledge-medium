@@ -1,21 +1,24 @@
 // @vitest-environment node
 
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { ChangeScope } from '@/data/api'
 import { BLOCK_TYPE_TYPE } from '@/data/blockTypes'
 import { aliasesProp, blockTypeLabelProp } from '@/data/properties'
 import type { Repo } from '@/data/repo'
-import { createTestDb, type TestDb } from '@/data/test/createTestDb'
+import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { writeBlockTypeLabel } from './BlockTypeBlockRenderer'
 
-describe('writeBlockTypeLabel', () => {
-  let h: TestDb | undefined
+// One DB for the FILE — both suites below share it, reset between tests. The
+// repo is still built fresh per test: these exercise processor-driven alias
+// writes, so they want their own registry and id sequence, just not their own
+// database.
+let h: TestDb
+beforeAll(async () => { h = await createTestDb() })
+afterAll(async () => { await h.cleanup() })
+beforeEach(async () => { await resetTestDb(h.db) })
 
-  afterEach(async () => {
-    await h?.cleanup()
-    h = undefined
-  })
+describe('writeBlockTypeLabel', () => {
 
   /** Fresh repo + one alias-less `block-type` block (`type-1`), mirroring
    *  the Types-page "New type" button: created with an empty label and no
@@ -24,7 +27,6 @@ describe('writeBlockTypeLabel', () => {
   const setupTypeBlock = async (
     initial: { label?: string; content?: string; alias?: string } = {},
   ): Promise<Repo> => {
-    h = await createTestDb()
     let idSeq = 0
     const { repo } = createTestRepo({
       db: h.db,
@@ -100,6 +102,30 @@ describe('writeBlockTypeLabel', () => {
 
     expect(block.peekProperty(blockTypeLabelProp)).toBe('Writer')
     expect(block.peekProperty(aliasesProp)).toEqual(['Author'])
+  })
+
+  // The editor captured `Author` when it rendered; a rename — remote, or from
+  // a second view — advanced the stored label, content and alias to `Editor`
+  // before this commit landed. Releasing the CAPTURED name drops nothing and
+  // leaves `[[Editor]]` claimed by a now-typeless block; blanking empties
+  // `content` too, so `aliasSyncProcessor`'s blank-content guard will not
+  // come back for it either.
+  it('releases the label as stored, not as captured, when a rename landed first', async () => {
+    const repo = await setupTypeBlock({ label: 'Author', content: 'Author', alias: 'Author' })
+    const block = repo.block('type-1')
+    await repo.tx(async tx => {
+      await tx.setProperty('type-1', blockTypeLabelProp, 'Editor')
+      await tx.update('type-1', { content: 'Editor' })
+      await tx.setProperty('type-1', aliasesProp, ['Editor'])
+    }, { scope: ChangeScope.BlockDefault, description: 'rename from elsewhere' })
+
+    await writeBlockTypeLabel(block, 'Author', 'Author', '')
+
+    expect(block.peekProperty(aliasesProp)).toEqual([])
+    const resolved = await repo.query
+      .aliasLookup({ workspaceId: 'ws-1', alias: 'Editor' })
+      .load()
+    expect(resolved).toBeNull()
   })
 
   it('releases the name alias when the label is blanked (so the name can be re-created)', async () => {

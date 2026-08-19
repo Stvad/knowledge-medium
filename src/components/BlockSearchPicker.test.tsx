@@ -47,7 +47,7 @@ describe('BlockSearchPicker', () => {
     mocks.searchLinkTargets.mockReset()
     mocks.searchLinkTargets.mockResolvedValue({
       aliases: [{blockId: 'page-1', alias: 'Project Alpha', content: 'Project Alpha'}],
-      blocks: [{blockId: 'block-1', content: 'Sync notes', label: 'Sync notes'}],
+      blocks: [{blockId: 'block-1', content: 'Sync notes', label: 'Sync notes', parentId: null, typeIds: []}],
     })
   })
 

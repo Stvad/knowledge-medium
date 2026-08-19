@@ -42,6 +42,7 @@
 
 import type { User } from '@/data/api/user.js'
 import { BlockCache } from '@/data/blockCache'
+import type { BackfillCompletionClaim } from '@/data/facets'
 import { kernelDataExtension } from '@/data/kernelDataExtension.js'
 import { Repo, type RepoOptions } from '@/data/repo'
 import { resolveFacetRuntimeSync, type AppExtension } from '@/facets/facet.js'
@@ -60,6 +61,12 @@ export interface CreateTestRepoOptions {
   startSyncObserver?: boolean
   /** Forward Repo's construction-time kernel runtime install. Default true. */
   installKernelRuntime?: boolean
+  /** Override the workspace-backfill sync gate (default: opens immediately). */
+  backfillSyncGate?: (cb: () => void) => () => void
+  /** Override the migration-completion claim (default: a local stand-in that
+   *  writes the same `client_schema_state` keys the marker store used, so tests
+   *  can assert on completion without a synced implementation existing). */
+  backfillCompletionClaim?: BackfillCompletionClaim
   /** Reject `BlockDefault` / `References` writes (read-only mode). Default false. */
   isReadOnly?: boolean
   /** Override the deterministic generators. Defaults are monotonic counters so
@@ -106,6 +113,39 @@ export const createTestRepo = (opts: CreateTestRepoOptions): TestRepo => {
     isReadOnly: opts.isReadOnly,
     startSyncObserver: opts.startSyncObserver ?? false,
     installKernelRuntime: opts.installKernelRuntime,
+    // `createTestDb` opens a real PowerSyncDatabase with no backend
+    // connector, so the production gate (connected && !downloading) would
+    // never open and every backfill would hang. Default to an immediate
+    // gate; tests that exercise the gating itself inject their own.
+    backfillSyncGate: opts.backfillSyncGate ?? ((cb) => { cb(); return () => {} }),
+    // Production REFUSES without a claim (completion must be recorded once per
+    // graph, and no synced store exists yet). Tests get a local stand-in so the
+    // runner's own machinery stays exercised; it deliberately does NOT model
+    // cross-device visibility, which is the part slice C has to build.
+    // `in` rather than `??` so a test can pass `undefined` to mean "none
+    // configured" and exercise the refusal, instead of silently getting the stub.
+    backfillCompletionClaim: 'backfillCompletionClaim' in opts ? opts.backfillCompletionClaim : {
+      // `reclaimCompleted` mirrors the production claim: a recorded completion
+      // stops an unattended pass, never a human who asked for one. A stub that
+      // ignored it made every operator re-run read as "already done", which is
+      // the behaviour under test for anything the pass can miss.
+      tryClaim: async (ws: string, id: string, claimOpts?: {reclaimCompleted?: boolean}) =>
+        claimOpts?.reclaimCompleted === true
+        || (await opts.db.getOptional<{key: string}>(
+          'SELECT key FROM client_schema_state WHERE key = ?', [`workspace_backfill:${ws}:${id}`],
+        )) === null,
+      markComplete: async (ws: string, id: string) => {
+        // `client_schema_state` is (key, completed_at) — there is no `value`
+        // column, and writing one threw on every call. It went unnoticed
+        // because the runner recorded its outcome BEFORE this ran, so a
+        // completion that always failed still reported success.
+        await opts.db.execute(
+          'INSERT OR REPLACE INTO client_schema_state (key, completed_at) VALUES (?, ?)',
+          [`workspace_backfill:${ws}:${id}`, Date.now()],
+        )
+      },
+      releaseClaim: async () => {},
+    },
   })
   if (opts.extensions?.length) {
     repo.setFacetRuntime(resolveFacetRuntimeSync([kernelDataExtension, ...opts.extensions]))

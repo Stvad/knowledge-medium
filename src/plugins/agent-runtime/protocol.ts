@@ -1,7 +1,8 @@
 import type React from 'react'
 import type ReactDOM from 'react-dom'
 import type { Block } from '@/data/block'
-import type { Repo } from '@/data/repo'
+import type { OperatorBackfillResult, Repo } from '@/data/repo'
+import type { PropertyCellBackfillProgress } from '@/data/internals/propertyCellBackfill'
 import type { BlockData, SubtreeRow } from '@/data/api'
 import type { FacetRuntime } from '@/facets/facet.js'
 import type { blockRenderersFacet } from '@/extensions/core.js'
@@ -9,6 +10,7 @@ import type { ActionConfig } from '@/shortcuts/types.js'
 import type { BlockProperties } from '@/types.js'
 import type { refreshAppRuntime } from '@/facets/runtimeEvents.js'
 import type { GrainWarning, TypeAuditSummary } from './grainAudit.ts'
+import type { PropertyRegistrationAudit } from './propertyRegistrationAudit.ts'
 
 export type SqlMode = 'all' | 'get' | 'optional' | 'execute'
 export type BlockPosition = 'first' | 'last' | number
@@ -219,6 +221,37 @@ export interface AuditExtensionResult {
   lint: ExtensionLintWarning[]
 }
 
+export interface RunBackfillInput {
+  backfillId: string
+  workspaceId?: string
+}
+
+/** Present when the pass that ran reports per-run detail. The properties
+ *  migration does: how much it swept, and every block whose legacy cell value
+ *  its codec rejected — which an operator has to see, since those keys stay
+ *  cell-only until the values are repaired and the pass re-run.
+ *
+ *  Declared off the pass's own progress type rather than re-listed: the
+ *  hand-written copy had already fallen behind it by two fields, and both of
+ *  them — the exact failure count and whether the workspace was being edited —
+ *  are ones the operator acts on. */
+export type RunBackfillResult =
+  OperatorBackfillResult
+  & {backfillId: string; workspaceId: string}
+  & Partial<PropertyCellBackfillProgress>
+
+export interface AuditPropertiesInput {
+  /** Workspace to audit. Defaults to, and in practice must be, the ACTIVE
+   *  one: classification runs on `repo.propertyDefinitions`, which is the
+   *  active workspace's registry only. (The resolver itself would also serve
+   *  the immediately-previous workspace, but that snapshot isn't reachable
+   *  through a public getter, so the audit doesn't claim to cover it.)
+   *  Anything else is refused rather than answered with a report that calls
+   *  every key unregistered.
+   *  Useful as an assertion when a script must not audit the wrong graph. */
+  workspaceId?: string
+}
+
 export interface AgentRuntimeContext {
   repo: Repo
   db: Repo['db']
@@ -241,6 +274,8 @@ export interface AgentRuntimeContext {
   setExtensionEnabled: (input: SetExtensionEnabledInput) => Promise<SetExtensionEnabledResult>
   uninstallExtension: (input: UninstallExtensionInput) => Promise<UninstallExtensionResult>
   auditExtension: (input: AuditExtensionInput) => Promise<AuditExtensionResult>
+  auditProperties: (input: AuditPropertiesInput) => Promise<PropertyRegistrationAudit>
+  runBackfill: (input: RunBackfillInput) => Promise<RunBackfillResult>
   actions: readonly ActionConfig[]
   renderers: ReturnType<typeof blockRenderersFacet.empty>
   refreshAppRuntime: typeof refreshAppRuntime

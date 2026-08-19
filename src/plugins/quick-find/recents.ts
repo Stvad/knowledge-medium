@@ -1,7 +1,9 @@
 import type { Block } from '@/data/block'
+import type { BlockData } from '@/data/api'
 import type { Repo } from '@/data/repo'
 import { ChangeScope, seedType, seedProperty, type PropertySeedDeclaration } from '@/data/api'
 import { getPluginUIStateBlock } from '@/data/stateBlocks.js'
+import { labelForBlockData, readTypeIds } from '@/utils/linkTargetAutocomplete.js'
 
 export const RECENT_BLOCKS_LIMIT = 10
 
@@ -36,6 +38,34 @@ export const pushRecentBlockId = (uiStateBlock: Block, blockId: string): void =>
   const next = [blockId, ...current.filter(id => id !== blockId)].slice(0, RECENT_BLOCKS_LIMIT)
   void uiStateBlock.set(recentBlockIdsProp, next)
 }
+
+export interface RecentItem {
+  blockId: string
+  label: string
+  /** Needed to tell a top-level block from one whose parent is gone when
+   *  the ancestor walk comes back empty — see `crumbsFromAncestors`. */
+  parentId: string | null
+  typeIds: readonly string[]
+}
+
+/** One "Recent" row's display shape, from the block it points at.
+ *
+ *  Pure, and separate from the loading effect that calls it, so what a
+ *  row actually derives is testable without mounting the dialog.
+ *
+ *  Shares `labelForBlockData` with the search rows rather than reaching
+ *  for `aliases[0]`: that helper skips blank and non-string entries, so
+ *  a block whose first alias is `''` (reachable through a raw
+ *  properties-bag write) falls through to its content instead of
+ *  rendering a Recent row with no visible label. `parentId` and the
+ *  types both ride along on `BlockData` already — neither costs a
+ *  query. */
+export const recentItemFromBlockData = (blockId: string, data: BlockData): RecentItem => ({
+  blockId,
+  label: labelForBlockData(data, blockId),
+  parentId: data.parentId,
+  typeIds: readTypeIds(data),
+})
 
 /** Read the MRU from anywhere with a `Repo` — autocomplete sources
  *  (editor extensions, link-target searches) live outside the QuickFind

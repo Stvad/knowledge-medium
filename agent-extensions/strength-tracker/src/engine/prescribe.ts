@@ -48,7 +48,17 @@ const repsFor = (
 ): {repMin?: number; repMax?: number} => {
   const tier = reentry?.tier
   if (tier?.repMin !== undefined || tier?.repMax !== undefined) {
-    return {repMin: tier.repMin ?? config.repMin, repMax: tier.repMax ?? config.repMax}
+    const mixed = {repMin: tier.repMin ?? config.repMin, repMax: tier.repMax ?? config.repMax}
+    // The tier may state only ONE end, and the other then comes from the
+    // lift — so a window that is rising on both sides separately can still
+    // invert once mixed (a tier's `repMin: 12` over a lift capped at 10).
+    // The parser cannot catch this one: it depends on which exercise the
+    // tier lands on. An inverted window reaches `setsFor`, which stamps
+    // `repMax ?? repMin` and quietly prescribes the lower number while the
+    // range claims the higher — so keep the lift's own window instead.
+    if (mixed.repMin === undefined || mixed.repMax === undefined || mixed.repMin < mixed.repMax) {
+      return mixed
+    }
   }
   return {repMin: config.repMin, repMax: config.repMax}
 }

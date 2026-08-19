@@ -40,6 +40,7 @@
 import { useCallback, type MouseEvent } from 'react'
 import type { Block } from '@/data/block'
 import type { Repo } from '@/data/repo'
+import type { BlockData } from '@/data/api'
 import { defineVerbFacet } from '@/facets/verbFacet'
 import { useRepo } from '@/context/repo'
 import { useBlockContext } from '@/context/block'
@@ -51,7 +52,8 @@ import { isMobileViewport } from '@/utils/viewport'
 import {
   insertPanelRow,
   insertSidebarStackedPanel,
-  panelRowsInLayoutOrder,
+  allPanelRowsInLayoutOrder,
+  visiblePanelRows,
 } from '@/utils/panelLayoutProjection'
 
 export type NavigateInput =
@@ -156,17 +158,42 @@ const setActivePanel = async (
 
 const panelRowsForLayoutSession = async (
   layoutSessionBlock: Block,
-) => panelRowsInLayoutOrder(
+) => allPanelRowsInLayoutOrder(
   layoutSessionBlock.id,
   await layoutSessionBlock.repo.query.subtree({id: layoutSessionBlock.id, hidePropertyChildren: true}).load(),
 )
 
-const resolveActivePanelRow = async (
+/** The panel rows the user can actually SEE — never index raw row order, which
+ *  stopped meaning "visible order" once a pane could be flagged away. The rule
+ *  itself lives in `soloPanelRow`; this only supplies the session's pointer and
+ *  this device's viewport. */
+const visiblePanelRowsForLayoutSession = async (
+  layoutSessionBlock: Block,
+): Promise<readonly BlockData[]> => {
+  await layoutSessionBlock.load()
+  return visiblePanelRows(await panelRowsForLayoutSession(layoutSessionBlock), {
+    activePanelId: layoutSessionBlock.peekProperty(activePanelIdProp),
+    canRenderSplit: !isMobileViewport(),
+  })
+}
+
+/** The panel row a global command should act on: the active pane, narrowed to
+ *  what is actually rendered first.
+ *
+ *  Exported because a second caller needs the identical rule —
+ *  `createNodeInActivePanelFromGlobalContext` (defaultShortcuts) CREATES a
+ *  block in the pane this picks, so a hand-rolled copy that drifts writes a
+ *  block into a pane the user cannot see. It carried exactly that copy. */
+export const resolveActivePanelRow = async (
   layoutSessionBlock: Block,
 ) => {
-  await layoutSessionBlock.load()
-  const panelRows = await panelRowsForLayoutSession(layoutSessionBlock)
+  const panelRows = await visiblePanelRowsForLayoutSession(layoutSessionBlock)
   const activePanelId = layoutSessionBlock.peekProperty(activePanelIdProp)
+  // The `find` miss is load-bearing here, not just a guard: an inbound `;max`
+  // link sets the flag and leaves the pointer alone, and the coercion that
+  // repairs it is a render effect — so the pointer legitimately names a hidden
+  // pane for a window, and narrowing first makes the fallback land on the
+  // visible one instead of `at(-1)`.
   return panelRows.find(row => row.id === activePanelId) ?? panelRows.at(-1) ?? null
 }
 
@@ -202,7 +229,7 @@ const resolveDestination = async (
         : null
     case 'main': {
       const ls = await resolveLayoutSessionBlock(repo, workspaceId)
-      const panels = await panelRowsForLayoutSession(ls)
+      const panels = await visiblePanelRowsForLayoutSession(ls)
       return panels[0]
         ? {kind: 'panel', workspaceId, panelId: panels[0].id}
         : {kind: 'create-row', workspaceId}

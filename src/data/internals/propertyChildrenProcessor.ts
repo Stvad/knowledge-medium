@@ -54,6 +54,7 @@ import { keyAtStart, keysBetween } from '@/data/orderKey'
 import {
   encodedPropertyValueToChildContent,
   getPropertyFieldTargetId,
+  fieldValueChildren,
   isFieldValueChild,
   propertiesEqual,
   propertyFieldContent,
@@ -81,6 +82,12 @@ interface PropertyChildrenLookups {
  *  (`Repo.stampReferenceTargets`) re-project owner cells without a
  *  materialize direction to feed. */
 export type ProjectionLookups = Pick<PropertyChildrenLookups, 'resolveFieldSchema'>
+
+/** The materialize direction's half. Cell keys are name-keyed, so this
+ *  direction never resolves a fieldId — which lets a caller that already
+ *  knows which schemas it is materializing supply just those, instead of a
+ *  whole workspace resolver (`mergeBlocksInTx`'s pre-backfill catch-up). */
+export type MaterializeLookups = Pick<PropertyChildrenLookups, 'resolveNameSchema'>
 
 /** The fields the projection direction reads off a changed row. Narrower
  *  than `BlockData` so a repair path can retain a few columns per stamped
@@ -194,12 +201,10 @@ const firstProjectedFieldValue = async (
     // §9 value set: `is_field_form IS NOT 1` children only — a nested marked
     // row materialized under the field row is its own machinery, never a
     // value candidate.
-    const values = (await tx.childrenOf(fieldRow.id, undefined)).filter(isFieldValueChild)
+    const values = await fieldValueChildren(tx, fieldRow.id)
     for (const value of values) {
       try {
-        return propertyChildContentToEncodedValue(
-          schema, value.content, value.referenceTargetId ?? null,
-        )
+        return propertyChildContentToEncodedValue(schema, value.content)
       } catch {
         // Invalid child text should not preserve a stale parent cell
         // projection. Skip it; if no child under this field parses, the
@@ -330,7 +335,7 @@ const changedPropertyNames = (
 export const materializePropertyChildrenForExistingRow = async (
   tx: Tx,
   row: BlockData,
-  lookups: PropertyChildrenLookups,
+  lookups: MaterializeLookups,
   names: readonly string[] = Object.keys(row.properties),
 ): Promise<void> => {
   if (row.deleted) return
@@ -401,7 +406,7 @@ export const materializePropertyChildrenForExistingRow = async (
         await tx.update(primary.id, {content: fieldContent})
       }
       // §9 value set: bit-filtered — nested marked rows are machinery.
-      const values = (await tx.childrenOf(primary.id, undefined)).filter(isFieldValueChild)
+      const values = await fieldValueChildren(tx, primary.id)
       const [primaryValue, ...duplicateValues] = values
       if (primaryValue) {
         if (primaryValue.content !== content) {

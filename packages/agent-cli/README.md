@@ -61,6 +61,7 @@ The CLI exposes both *local* commands (pairing, profile management) and *bridge*
 | `kmagent install-extension <file> [label]` | Install a JS extension; reports whether it is actually `running` here. `--verify` reports what it contributed, plus data-model lint warnings. |
 | `kmagent enable-extension <handle>` | Enable / `disable-extension`, `uninstall-extension`. |
 | `kmagent audit-extension <handle>` | Audit the data an extension wrote: block ids in non-ref properties, records buried in JSON cells, properties with no registered schema, declared types nothing carries. |
+| `kmagent audit-properties [--workspace <id>]` | Every property key in the workspace's data the registry does not resolve — the keys property migration skips silently. Per key: exact cell count, why it doesn't resolve, the fix — plus sampled blocks and the types they carry. Active workspace only; refuses rather than mis-reporting. |
 | `kmagent run-action <id> [depsJson]` | Run a registered action by id. |
 | `kmagent eval [--raw] [--file <path>] [--data <path> \| --data-json <json>] <code>` | Run JS in the app (use `return …` to print a value). See [Eval execution scope](#eval-execution-scope) for the bindings available inside the code. |
 | `kmagent reload` | Hard-reload the app tab and wait for it to reconnect. |
@@ -153,6 +154,14 @@ kmagent --profile chrome-dev ping
 # Or set the default profile for a shell:
 export AGENT_RUNTIME_PROFILE=chrome-dev
 ```
+
+A local dev server is its own origin, so it needs its own pairing and its own profile — point `AGENT_RUNTIME_APP_URL` at it when connecting:
+
+```bash
+AGENT_RUNTIME_APP_URL=http://localhost:<port>/ kmagent --profile localdev connect
+```
+
+Only `connect` / `pair-url` read `AGENT_RUNTIME_APP_URL` (it decides which URL is printed); later commands use the saved token. Loopback origins are always accepted by the bridge, so no `AGENT_RUNTIME_ALLOWED_ORIGINS` is needed.
 
 ## Type-vending for extension authors
 

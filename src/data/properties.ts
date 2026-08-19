@@ -23,6 +23,7 @@ import {
   type AnyPropertySeedDeclaration,
   type PropertySeedDeclaration,
 } from './propertySeeds'
+import { safeDecodeRowProperty } from './rowProperty'
 import { outlineRenderScopeId, panelRenderScopeId } from '@/utils/renderScope'
 
 // ──── UI-state schemas (changeScope: UiState) ────
@@ -97,6 +98,55 @@ export const panelViewModeProp = seedProperty({
   preset: 'optional-string',
   changeScope: ChangeScope.UiState,
 })
+
+/** Per-panel maximize flag, persisted on the panel row. The layout URL
+ *  grammar's valueless `max` slot-context key (`src/utils/routing.ts`) maps
+ *  to this prop. A maximized visible leaf renders ALONE on desktop; siblings
+ *  are untouched in the substrate, so un-maximizing restores the exact
+ *  arrangement.
+ *
+ *  At most one maximized leaf per layout session. Every GESTURE that sets the
+ *  flag makes this true by clearing the others in the same pass —
+ *  `togglePanelMaximized` directly, the video-notes enter via
+ *  `prepareExclusiveMaximize` — and opening a pane clears it outright
+ *  (`clearMaximizedPanelsInTx`). It is enforced, not assumed: `LayoutRenderer`
+ *  ignores the flag entirely on a narrow viewport, so "the maximized pane
+ *  renders alone" is NOT a premise you may reason from — a window under 768px
+ *  leaves every pane reachable with flags able to accumulate.
+ *
+ *  Inbound reconcile is the one deliberate exception: it writes whatever the
+ *  hash says, so a hand-crafted multi-`max` URL round-trips instead of being
+ *  silently rewritten. `LayoutRenderer` tolerates that by rendering the FIRST
+ *  maximized row, and the next toggle repairs it.
+ *
+ *  A ROW prop, not a layout-session pointer like `activePanelIdProp`: the
+ *  flag dies with its row, so nothing needs the remap-on-delete machinery
+ *  (`activePanelIdAfterReconcile`, `nextActivePanelAfterClose`) that the
+ *  session-level pointer needs. */
+export const panelMaximizedProp = seedProperty({
+  seedKey: 'system:kernel-data/property/panel-maximized',
+  revision: 1,
+  name: 'panelMaximized',
+  preset: 'boolean',
+  changeScope: ChangeScope.UiState,
+})
+
+/** Absent ≡ false (the prop's own `defaultValue`), so no pane needs the
+ *  property materialized to be un-maximized.
+ *
+ *  `safeDecodeRowProperty`, not the strict twin: this is arrangement chrome.
+ *  It is read inside `layoutSlotsFromRows`, which every projection pass runs,
+ *  and on the video-notes enter/close path. A malformed value arriving from
+ *  sync or a raw bridge write should cost that pane its flag, not throw the
+ *  whole layout projection or wedge a gesture.
+ *
+ *  Lives HERE, beside the property and `normalizeViewMode`, rather than in
+ *  `panelLayoutProjection` where it started: `panelHistory` needs the same
+ *  interpretation and sits BELOW that module, so the import would cycle. Two
+ *  decodes of one flag is how the strict/lenient split got in — the gesture
+ *  path threw on a value the renderer was quietly degrading. */
+export const isPanelRowMaximized = (row: Pick<BlockData, 'properties'>): boolean =>
+  safeDecodeRowProperty(row, panelMaximizedProp)
 
 /** '' ≡ absent, canonically: the URL grammar drops an empty `view=` value,
  *  so every reader/writer of a panel view mode folds '' to undefined through
@@ -435,6 +485,38 @@ export const userIdProp = seedProperty({
 // The shared string-list core exposes readonly values, while its decoder
 // returns a fresh mutable array. Preserve aliasesProp's historical string[]
 // handle contract without widening the public seedProperty overloads.
+/** Fields of a `per-graph` backfill claim (see
+ *  `internals/graphBackfillClaim.ts`). Declared as seeds rather than written
+ *  as raw keys because an unregistered key is exactly what property
+ *  migration skips silently — a migration's own bookkeeping must not be the
+ *  thing a migration cannot carry. Hidden: this is machinery, not content. */
+export const migrationClaimantProp = seedProperty({
+  seedKey: 'system:kernel-data/property/migration-claimant',
+  revision: 1,
+  name: 'migration:claimant',
+  preset: 'string',
+  changeScope: ChangeScope.BlockDefault,
+  hidden: true,
+})
+
+export const migrationClaimedAtProp = seedProperty({
+  seedKey: 'system:kernel-data/property/migration-claimed-at',
+  revision: 1,
+  name: 'migration:claimed-at',
+  preset: 'number',
+  changeScope: ChangeScope.BlockDefault,
+  hidden: true,
+})
+
+export const migrationCompletedAtProp = seedProperty({
+  seedKey: 'system:kernel-data/property/migration-completed-at',
+  revision: 1,
+  name: 'migration:completed-at',
+  preset: 'optional-number',
+  changeScope: ChangeScope.BlockDefault,
+  hidden: true,
+})
+
 export const aliasesProp = seedProperty({
   seedKey: 'system:kernel-data/property/alias',
   revision: 1,
@@ -666,6 +748,7 @@ export const KERNEL_PROPERTY_SEEDS: readonly AnyPropertySeedDeclaration[] = [
   activePanelIdProp,
   scrollTopProp,
   panelViewModeProp,
+  panelMaximizedProp,
   editorSelection,
   editorFocusRequestProp,
   selectionStateProp,
@@ -677,6 +760,9 @@ export const KERNEL_PROPERTY_SEEDS: readonly AnyPropertySeedDeclaration[] = [
   createdAtProp,
   sourceBlockIdProp,
   aliasesProp,
+  migrationClaimantProp,
+  migrationClaimedAtProp,
+  migrationCompletedAtProp,
   // extension block fields
   extensionNameProp,
   extensionDescriptionProp,

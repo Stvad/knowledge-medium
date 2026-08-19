@@ -142,6 +142,11 @@ export interface BlockContextType {
      *  whole layout surface while constraining its document content inside
      *  the panel renderer. */
     wideScrollSurface?: boolean
+    /** Whether maximizing this pane would do anything, declared by the layout
+     *  that owns the maximize rendering rule: false with a single pane
+     *  (nothing to hide) and on mobile (`LayoutRenderer` already renders one
+     *  pane at a time and ignores `panelMaximizedProp` there). */
+    canMaximizePanel?: boolean
     /** Whether focus entering the panel body should mark this panel active.
      *  Desktop tracks focus for keyboard ownership; mobile renders only the
      *  active panel, so pointer activation is enough there. */

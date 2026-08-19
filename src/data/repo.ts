@@ -56,6 +56,7 @@ import {
   refTypedSchemaNames,
 } from './internals/refProjection'
 import { runTx, type PowerSyncDb } from './internals/commitPipeline'
+import { onSyncSettled } from './internals/firstSync'
 import { devAssertionsEnabled } from './internals/devAssertions'
 import type { BlockCache } from '@/data/blockCache'
 import {
@@ -68,6 +69,7 @@ import { kernelDataExtension } from './kernelDataExtension'
 import {
   systemPagesFacet,
   type WorkspaceBackfill,
+  type BackfillCompletionClaim,
   type WorkspaceBackfillContext,
 } from './facets'
 import { ProcessorRunner } from './internals/processorRunner'
@@ -97,9 +99,6 @@ import {
   RECORD_REPROJECT_REF_MARKER_SQL,
   REPROJECT_REF_MARKER_PREFIX,
   SELECT_REPROJECT_REF_MARKERS_SQL,
-  RECORD_WORKSPACE_BACKFILL_MARKER_SQL,
-  WORKSPACE_BACKFILL_MARKER_PREFIX,
-  SELECT_WORKSPACE_BACKFILL_MARKERS_SQL,
   RECONCILE_RESCAN_MARKER_PREFIX,
   SELECT_RECONCILE_RESCAN_MARKER_SQL,
   RECORD_RECONCILE_RESCAN_MARKER_SQL,
@@ -274,8 +273,6 @@ const reprojectionMarkerKey = (workspaceId: string, name: string): string =>
 /** Suffix (after the `workspace_backfill:` prefix) of a per-workspace
  *  workspace-backfill completion marker — `<workspaceId>:<backfillId>`. Same
  *  shape/rationale as `reprojectionMarkerKey`. */
-const workspaceBackfillMarkerKey = (workspaceId: string, id: string): string =>
-  `${workspaceId}:${id}`
 
 /** Equal iff `a` and `b` have the same key set AND `eq` holds for every shared
  *  key's values. An absent map is the empty map; the default `eq` compares keys
@@ -392,6 +389,23 @@ export interface RepoOptions {
    *  pass `false` and call `setFacetRuntime` themselves, or just call
    *  `setFacetRuntime` (it REPLACES the kernel install). */
   installKernelRuntime?: boolean
+  /** Gate for one-shot `WorkspaceBackfill` passes: arms `cb` for when this
+   *  device is no longer behind the server, and returns a disposer. Default
+   *  `onSyncSettled(db)` — connected with no download in flight.
+   *
+   *  Injected because the default would never open under test: `createTestDb`
+   *  opens a real `PowerSyncDatabase` with no backend connector, so it reports
+   *  `connected: false` forever and every backfill would hang rather than fail
+   *  visibly. Tests pass an immediate gate; `onSyncSettled` itself is covered
+   *  directly in `firstSync.test.ts`. */
+  backfillSyncGate?: (cb: () => void) => () => void
+  /** Records migration completion in SYNCED data, so a repair that uploads
+   *  happens once per graph. Without one, `runWorkspaceBackfills` refuses every
+   *  registration rather than falling back to the per-device marker — which
+   *  would have every device attempt the repair independently. No production
+   *  implementation exists yet; slice C of the properties-as-blocks migration
+   *  owns building it. */
+  backfillCompletionClaim?: BackfillCompletionClaim
   /** When true (default), the Layout B sync observer is started at
    *  construction time so sync-applied writes — staged into `blocks_synced`
    *  — materialize into the app-visible `blocks` table and invalidate
@@ -446,6 +460,28 @@ interface ReferenceTargetStamp {
 interface ReferenceTargetStampContext {
   readonly workspaceId: string
   readonly resolver: PropertySchemaResolver
+}
+
+/** What an operator-triggered backfill did, for a caller that has a human to
+ *  report to. `undoHistoryCleared` is not incidental detail: the pass drops
+ *  the workspace's undo stack whenever it writes, and a user who is not told
+ *  finds their history silently gone. */
+export interface OperatorBackfillResult {
+  outcome:
+    | 'ran'
+    | 'held-by-peer'
+    | 'already-running'
+    | 'deferred'
+    | 'failed'
+    | 'not-found'
+    | 'read-only'
+  undoHistoryCleared: boolean
+  /** Why a `deferred` pass did not start, or why a `failed` one stopped. Both
+   *  are split out from `held-by-peer` because they call for the opposite
+   *  response: retry — soon, or after fixing something — versus stop asking. A
+   *  pass that aborted partway is what most needs the distinction, since some
+   *  of its batches committed. */
+  reason?: string
 }
 
 export class Repo {
@@ -628,14 +664,27 @@ export class Repo {
    *  refreshed by the `workspaceBackfills` rebuild step). Run once per
    *  workspace by `scheduleWorkspaceBackfills`. */
   private _workspaceBackfills: readonly WorkspaceBackfill[] = []
-  /** Lazy in-memory mirror of the workspace-backfill completion markers in
-   *  `client_schema_state` (rows keyed `workspace_backfill:<ws>:<id>`), same
-   *  pattern as `reprojectionMarkers`. Constructed in the constructor. */
-  private readonly workspaceBackfillMarkers: MarkerStore
   /** In-flight workspace-backfill runs whose deferral timer has fired —
    *  drained by `awaitWorkspaceBackfills()` for deterministic test quiescence,
    *  mirroring `reprojectionJobs`. */
   private readonly workspaceBackfillJobs = new PendingIdleJobs((fn) => scheduleDeepIdle(fn, CATCHUP_DEEP_IDLE))
+  /** Arms a callback for when this device is no longer behind the server
+   *  (`RepoOptions.backfillSyncGate`). */
+  private readonly backfillSyncGate: (cb: () => void) => () => void
+  /** See `RepoOptions.backfillCompletionClaim`. Absent ⇒ backfills refuse. */
+  /** `workspaceId:backfillId` of operator passes running right now. Two
+   *  invocations in one Repo share a claimant, so the CLAIM cannot separate
+   *  them — this can. */
+  private readonly inFlightOperatorBackfills = new Set<string>()
+  private readonly backfillCompletionClaim: BackfillCompletionClaim | undefined
+  /** Disposer for a gate armed but not yet opened, so a workspace switch or
+   *  repo teardown doesn't leave a status listener attached. */
+  private disposeBackfillSyncGate: (() => void) | undefined
+  /** Bumped on every workspace CHANGE. A backfill job captures it and compares
+   *  at write time: comparing workspace ids alone accepts a stale job from an
+   *  earlier visit once the user returns (A -> B -> A), which is a different
+   *  open with a different registry and access state. */
+  private workspaceGeneration = 0
   /** In-flight one-time reconcile-rescan runs — drained by
    *  `awaitReconcileRescans()`, same pattern. */
   private readonly reconcileRescanJobs = new PendingIdleJobs((fn) => scheduleDeepIdle(fn, CATCHUP_DEEP_IDLE))
@@ -886,12 +935,9 @@ export class Repo {
       RECORD_REPROJECT_REF_MARKER_SQL,
       CLEAR_REPROJECT_REF_MARKER_SQL,
     )
-    this.workspaceBackfillMarkers = new MarkerStore(
-      this.db,
-      WORKSPACE_BACKFILL_MARKER_PREFIX,
-      SELECT_WORKSPACE_BACKFILL_MARKERS_SQL,
-      RECORD_WORKSPACE_BACKFILL_MARKER_SQL,
-    )
+    this.backfillCompletionClaim = opts.backfillCompletionClaim
+    this.backfillSyncGate = opts.backfillSyncGate
+      ?? ((cb) => onSyncSettled(this.db as unknown as Parameters<typeof onSyncSettled>[0], cb))
     this.syncObserverDeps = opts.syncObserverDeps
     this.cache = opts.cache
     this._client = new ClientContext({user: opts.user})
@@ -1104,7 +1150,8 @@ export class Repo {
    *      `handlesWalked`, `handlesMatched`) and per-LoaderHandle
    *      lifecycle (`loaderInvalidations`, `loaderRuns`,
    *      `midLoadInvalidations`, `reloadsAfterSettle`,
-   *      `notifiesFired`, `notifiesSkippedByDiff`).
+   *      `notifiesFired`, `notifiesSkippedByDiff`,
+   *      `notifiesSupersededInBatch`).
    *    - `blockCache` — write/notify activity
    *      (`setSnapshotCalls`, `setSnapshotDedupHits/Misses`,
    *      `applyIfNewerSyncCalls`/`Rejected` for row_events-tail
@@ -1342,6 +1389,15 @@ export class Repo {
       // one (a same-workspace projector re-pin keeps the current generation).
       this.seedMaterializationGeneration.abort()
       this.seedMaterializationGeneration = new AbortController()
+      this.workspaceGeneration++
+      // Same for a backfill gate still armed for the departed workspace. It
+      // captures that workspace id, and `scheduleWorkspaceBackfills` only
+      // disposes a stale gate when it is reached again — which the read-only /
+      // no-backfills early returns can skip entirely. Left armed, a status
+      // change later fires it and writes the departed workspace under the
+      // current session's access state.
+      this.disposeBackfillSyncGate?.()
+      this.disposeBackfillSyncGate = undefined
     }
     this.facetBridge.setActiveWorkspaceId(workspaceId)
     try {
@@ -1360,7 +1416,13 @@ export class Repo {
       // aborted parked pass isn't stranded until the next seed change (a no-op
       // if the pinned registry isn't the restored workspace's).
       this.seedMaterializationGeneration = new AbortController()
-      if (restoredWorkspaceId) this.scheduleWorkspaceSeedMaterialization(restoredWorkspaceId, false)
+      if (restoredWorkspaceId) {
+        this.scheduleWorkspaceSeedMaterialization(restoredWorkspaceId, false)
+        // The switch path above already disposed this workspace's gate on the
+        // way out. Nothing else re-arms it, so without this the restored
+        // workspace silently never backfills for the rest of the session.
+        this.scheduleWorkspaceBackfills(restoredWorkspaceId)
+      }
       throw error
     }
   }
@@ -1473,7 +1535,7 @@ export class Repo {
     // scopes are filtered inside `record`; zero-write txs have no pinned
     // workspace (null) and nothing to undo, so skip them here. Replays go
     // through `_replay`, not here, so they don't add new history.
-    if (result.workspaceId !== null) {
+    if (result.workspaceId !== null && !opts.skipUndo) {
       this.undoManagerFor(result.workspaceId).record({
         scope: opts.scope,
         txId: result.txId,
@@ -2482,11 +2544,41 @@ export class Repo {
    * returns immediately; tests drain via `awaitWorkspaceBackfills()`.
    */
   scheduleWorkspaceBackfills(workspaceId: string): void {
-    if (this.isReadOnly || !workspaceId || this._workspaceBackfills.length === 0) return
-    const backfills = this._workspaceBackfills
-    this.workspaceBackfillJobs.schedule(() =>
-      this.runWorkspaceBackfills(workspaceId, backfills),
-    )
+    if (this.isReadOnly || !workspaceId) return
+    // `operator` passes are excluded HERE rather than inside the runner, so
+    // that "nothing automatic starts one" is true of the scheduler itself and
+    // not a condition some later caller of `runWorkspaceBackfills` could
+    // forget. `runWorkspaceBackfillNow` is their only entry point.
+    const backfills = this._workspaceBackfills.filter(b => b.trigger === 'workspace-open')
+    if (backfills.length === 0) return
+    const generation = this.workspaceGeneration
+    {
+      // A backfill must not write while this device is behind the server: its
+      // writes upload a whole `properties_json` bag, so a stale row drops
+      // concurrent edits from elsewhere (#237), and its one-shot marker makes a
+      // half-scanned run permanent.
+      //
+      // NOT `onFirstSync` — `hasSynced` persists across sessions, so it fires
+      // synchronously on every warm client and gates nothing.
+      //
+      // Gate FIRST, then defer to idle: an idle job that awaited the gate from
+      // inside would never settle on a device that never connects, parking a
+      // promise in the drain set forever and hanging
+      // `awaitWorkspaceBackfills`. A session that never catches up therefore
+      // schedules nothing, which is correct for catch-up work.
+      const arm = (): void => {
+        this.disposeBackfillSyncGate?.()
+        this.disposeBackfillSyncGate = this.backfillSyncGate(() => {
+          this.disposeBackfillSyncGate = undefined
+          this.workspaceBackfillJobs.schedule(async () => {
+            // The automatic path discards the outcome — nobody is waiting to
+            // be told. Only the operator entry point reads it.
+            await this.runWorkspaceBackfills(workspaceId, backfills, generation)
+          })
+        })
+      }
+      arm()
+    }
   }
 
   /**
@@ -2641,36 +2733,370 @@ export class Repo {
     await this.seedMaterializationJobs.drain()
   }
 
+  /** Thrown when a precondition that can CLEAR ON ITS OWN blocks the pass —
+   *  the device fell behind, rows are staging, the workspace changed. Typed so
+   *  the runner can re-arm instead of writing the pass off for the session. */
+  private static readonly TRANSIENT = 'backfill-precondition'
+
+  /** Preconditions every backfill transaction must still satisfy. Separate
+   *  from the scheduling gate because scheduling proves a fact at one instant
+   *  and a chunked pass writes over many. */
+  /** Is this workspace's property registry primed?
+   *
+   *  `propertySchemaResolverForWorkspace` falls back to a resolver that
+   *  answers `identity-unavailable` for EVERY name when the snapshot is null
+   *  or belongs to another workspace. That is indistinguishable, at the call
+   *  site, from "this key genuinely has no definition" — and a backfill that
+   *  reads it as the latter concludes there is nothing to migrate, writes
+   *  nothing, and then records a PERMANENT per-graph completion.
+   *
+   *  UNPINNED BY A TEST, and labelled so rather than left looking covered.
+   *  Reaching an unprimed registry from a constructed Repo is a race: the
+   *  runtime primes one asynchronously, so a test that leaves it absent (or
+   *  sets it for another workspace) is green or red depending on which side
+   *  of that priming the deferred job lands — measured, twice, as green
+   *  locally and red on CI. Pinning it wants a Repo whose priming is
+   *  injectable, which does not exist yet. */
+  private propertyRegistryReadyFor(workspaceId: string): boolean {
+    return registryForWorkspace(
+      this._propertyDefinitionRegistry,
+      this._previousPropertyDefinitionRegistry,
+      workspaceId,
+    ) !== null
+  }
+
+  /** Is this device caught up right now? Same predicate the scheduler gates
+   *  on, sampled synchronously — `backfillSyncGate` fires its callback
+   *  immediately when settled, so an unfired callback means "not settled". */
+  private backfillSyncSettledNow(): boolean {
+    let settled = false
+    this.backfillSyncGate(() => { settled = true })()
+    return settled
+  }
+
+  /** When this device last COMPLETED a sync, or undefined if it never has (or
+   *  there is no sync layer). Persisted by PowerSync across sessions, so on a
+   *  warm client it is last session's — which is exactly why it is worth
+   *  reporting: it says how current the local rows a full-graph read scanned
+   *  actually are. A basis to state, never a freshness gate: it does not
+   *  advance on a connected idle graph, so refusing on its staleness would
+   *  make a pre-flip audit unusable on exactly the quiet graph you audit. */
+  get lastSyncedAt(): Date | undefined {
+    return (this.db as {currentStatus?: {lastSyncedAt?: Date}}).currentStatus?.lastSyncedAt
+  }
+
+  /**
+   * Why this device's view of the graph is INCOMPLETE right now, or null when
+   * nothing is outstanding. There are two independent ways to be behind and a
+   * full-graph read is only trustworthy when NEITHER holds:
+   *   - "downloaded" is not "materialized" — the sync observer stages arrivals
+   *     in `blocks_synced_changes` and drains them into `blocks` in throttled
+   *     windows, so the status reads settled while rows are still queued;
+   *   - the device is behind the server, with rows not yet downloaded at all.
+   *
+   * A local-only session still gets a real PowerSyncDatabase and simply never
+   * connects, so the default gate (connected && !downloading) would never
+   * open. `backfillSyncGate` is injected to fire immediately there
+   * (`src/context/repo.tsx`) — that injection is load-bearing, not redundant:
+   * without it this refuses forever on a device that will never connect.
+   *
+   * The text is the CAUSE only; callers state their own consequence. Shared
+   * between the backfill runner (which must not write from a stale view) and
+   * `audit-properties` (which reports it) — one predicate, because a rule
+   * added to one of two copies is how these diverge.
+   */
+  async syncViewGap(): Promise<string | null> {
+    const staged = await this.db.getOptional<{one: number}>(
+      'SELECT 1 AS one FROM blocks_synced_changes LIMIT 1',
+    )
+    if (staged !== null) return 'synced rows are still draining into `blocks`'
+    if (!this.backfillSyncSettledNow()) {
+      return 'this device is not caught up with the server '
+        + '(still downloading, disconnected, or a download error)'
+    }
+    return null
+  }
+
+  private async assertBackfillMayWrite(
+    workspaceId: string,
+    backfillId: string,
+    generation: number,
+  ): Promise<void> {
+    if (this.workspaceGeneration !== generation) {
+      throw Object.assign(new Error(
+        `[workspaceBackfills] "${backfillId}" aborted: workspace ${workspaceId} was ` +
+        `re-opened since this pass was scheduled. The earlier visit's job must not ` +
+        `write into the new one.`,
+      ), {kind: Repo.TRANSIENT})
+    }
+    if (this._client.activeWorkspaceId !== workspaceId) {
+      throw Object.assign(new Error(
+        `[workspaceBackfills] "${backfillId}" aborted: workspace ${workspaceId} is no ` +
+        `longer active. Its writes would land under the current session's access state.`,
+      ), {kind: Repo.TRANSIENT})
+    }
+    // Re-sampled per transaction while the write lock is held, so a drain
+    // cannot commit between this check and the write. Reading through
+    // `this.db` rather than the tx handle is deliberate: the drain is excluded
+    // by the lock, not by read isolation.
+    const gap = await this.syncViewGap()
+    if (gap !== null) {
+      throw Object.assign(new Error(
+        `[workspaceBackfills] "${backfillId}" aborted: ${gap}. This pass would scan an ` +
+        `incomplete view of the graph and upload a properties bag built from it.`,
+      ), {kind: Repo.TRANSIENT})
+    }
+  }
+
+  /**
+   * Run ONE `operator`-triggered backfill now, because a human asked.
+   *
+   * The deliberate act is the point: a once-per-graph pass that uploads
+   * source-of-truth rows cannot be made exactly-once by machinery over a
+   * last-write-wins sync layer, so it is made exactly-once by a person
+   * running it in one place. The completion claim then records it so other
+   * devices skip — recording needs no arbitration, since a duplicate "done"
+   * is harmless.
+   *
+   * Everything else is the automatic path's: sync gating, the per-transaction
+   * preconditions, `BlockDefault` scope, `skipUndo`, and the claim. Returns
+   * what happened so a caller can tell the operator, rather than logging into
+   * the void.
+   */
+  async runWorkspaceBackfillNow(
+    workspaceId: string,
+    backfillId: string,
+  ): Promise<OperatorBackfillResult> {
+    if (this.isReadOnly) return {outcome: 'read-only', undoHistoryCleared: false}
+    const backfill = this._workspaceBackfills.find(
+      b => b.id === backfillId && b.trigger === 'operator',
+    )
+    if (!backfill) return {outcome: 'not-found', undoHistoryCleared: false}
+    // Single-flight per (workspace, backfill). Two invocations in ONE Repo —
+    // an operator double-clicking, or clicking again during a long pass —
+    // share a claimant, so the second would read the first's claim as its own
+    // and proceed. Then either one aborting releases the claim they SHARE
+    // while the other is still writing, and the survivor's `markComplete`
+    // stamps a tombstone: the completion becomes invisible and the next
+    // operator repeats the whole migration. The claim cannot see this, since
+    // both invocations are legitimately the same claimant.
+    const flightKey = `${workspaceId}:${backfillId}`
+    if (this.inFlightOperatorBackfills.has(flightKey)) {
+      return {outcome: 'already-running', undoHistoryCleared: false}
+    }
+    this.inFlightOperatorBackfills.add(flightKey)
+    try {
+      const {completed, undoHistoryCleared, deferred, failed} = await this.runWorkspaceBackfills(
+        workspaceId, [backfill], this.workspaceGeneration,
+      )
+      // `completed` is LOCAL to this invocation. Keying on this id as well is
+      // defence in depth, not load-bearing: the call above passes a
+      // single-element array, so the set can only contain this backfill, and
+      // deleting the key fails no test. Written this way so a future caller
+      // passing more than one is correct by construction.
+      if (completed.has(backfill.id)) return {outcome: 'ran', undoHistoryCleared}
+      if (failed !== null) return {outcome: 'failed', undoHistoryCleared, reason: failed}
+      if (deferred !== null) return {outcome: 'deferred', undoHistoryCleared, reason: deferred}
+      // Nothing else is left. An operator run RECLAIMS a completed claim, so
+      // "already migrated" cannot land here — only a claim another device is
+      // holding, which includes one it took and never released.
+      return {outcome: 'held-by-peer', undoHistoryCleared}
+    } finally {
+      this.inFlightOperatorBackfills.delete(flightKey)
+    }
+  }
+
+  /** `completed` is the ids that RAN TO COMPLETION — not merely those
+   *  attempted, so a caller can report an outcome tied to its own request
+   *  rather than to whatever else happened to finish. */
   private async runWorkspaceBackfills(
     workspaceId: string,
     backfills: readonly WorkspaceBackfill[],
-  ): Promise<void> {
-    const markers = await this.workspaceBackfillMarkers.load()
+    generation: number,
+  ): Promise<{
+    completed: ReadonlySet<string>
+    undoHistoryCleared: boolean
+    deferred: string | null
+    failed: string | null
+  }> {
+    const completed = new Set<string>()
+    let undoHistoryCleared = false
+    // Set at each precondition that makes a pass skip WITHOUT the claim having
+    // refused it, so an operator hears "not yet, retry" rather than "already
+    // done" — the same string an unattended run only logs.
+    let deferred: string | null = null
+    /** Why a pass THREW. Distinct from `deferred`: waiting will not clear it,
+     *  so an operator told "already done" would never learn the migration is
+     *  incomplete — with some of its batches already committed. */
+    let failed: string | null = null
+    const claim = this.backfillCompletionClaim
+    if (!claim) {
+      // Refuse rather than fall back to the local marker. Every pass here
+      // uploads, so "done" has to be recorded where every device sees it;
+      // a per-device marker would have each one attempt the repair
+      // independently, which is the stale-write hazard itself.
+      console.error(
+        `[workspaceBackfills] skipping ${backfills.length} backfill(s) for workspace ` +
+        `${workspaceId}: no BackfillCompletionClaim is configured, so completion ` +
+        `cannot be recorded once per graph.`,
+      )
+      // Reported as a FAILURE, not left to the fallthrough — which now means
+      // "a peer holds the claim" and tells the operator to go delete a claim
+      // block that in this configuration does not exist.
+      failed = 'no BackfillCompletionClaim is configured, so completion cannot be recorded'
+      return {completed, undoHistoryCleared, deferred, failed}
+    }
     for (const backfill of backfills) {
       // A role flip to read-only during the deferral window must stop further
       // writes — re-check per backfill (the loop can span several txs).
-      if (this.isReadOnly) return
-      if (markers.has(workspaceBackfillMarkerKey(workspaceId, backfill.id))) continue
+      if (this.isReadOnly) return {completed, undoHistoryCleared, deferred, failed}
+      // Don't even START a pass whose workspace has been re-opened since it was
+      // scheduled. `assertBackfillMayWrite` catches this per transaction, but
+      // that is one tx too late to avoid the scan a backfill does first.
+      if (this.workspaceGeneration !== generation) return {completed, undoHistoryCleared, deferred, failed}
+      // BEFORE claiming: an unprimed registry makes the whole graph look like
+      // it has zero registered properties, so a pass would find no candidates,
+      // write nothing, and then record a PERMANENT per-graph completion — the
+      // migration marked done without migrating anything, on every device
+      // forever. Checked here rather than only inside the writes because a run
+      // that finds no candidates never opens a transaction at all.
+      if (!this.propertyRegistryReadyFor(workspaceId)) {
+        deferred = `workspace ${workspaceId}'s property registry is not primed yet`
+        console.warn(
+          `[workspaceBackfills] "${backfill.id}" deferred: workspace ${workspaceId}'s ` +
+          `property registry is not primed, so a scan would see no registered ` +
+          `properties and complete vacuously. Retrying on the next open.`,
+        )
+        continue
+      }
+      // BEFORE claiming, not only before writing. `tryClaim` itself WRITES —
+      // it ensures the Migrations page and creates the claim row — so on a
+      // disconnected or stale device the old order wrote a claim, hit the
+      // in-transaction sync assertion, and released it. Both writes then sat
+      // in the upload queue, and on reconnect the create could conflict with
+      // an unseen server completion while the following `deleted=1` patch
+      // tombstoned it, freeing later operators to repeat the migration.
+      if (!this.backfillSyncSettledNow()) {
+        deferred = 'this device is not caught up with the server'
+        console.warn(
+          `[workspaceBackfills] "${backfill.id}" deferred: this device is not caught ` +
+          `up with the server, so claiming would write from a stale view.`,
+        )
+        continue
+      }
+      if (!(await claim.tryClaim(workspaceId, backfill.id, {
+        reclaimCompleted: backfill.trigger === 'operator',
+      }))) continue
+      const resolver = this.propertySchemaResolverFor(workspaceId)
+      let wrote = false
       const ctx: WorkspaceBackfillContext = {
         workspaceId,
+        // One resolver for the whole run, through the canonical factory: the
+        // per-call version built a fresh one for every cell key (a pass over
+        // ~650k rows resolves that many times) and bypassed the
+        // previous-registry fallback every other site gets.
+        resolveNameSchema: (name) => {
+          const resolution = resolver.resolve(name)
+          return resolution.status === 'resolved' ? resolution.schema : undefined
+        },
+        resolveFieldSchema: (fieldId) => {
+          const resolution = resolver.resolveField(fieldId)
+          return resolution.status === 'resolved' ? resolution.schema : undefined
+        },
         getAll: <T>(sql: string, params?: readonly unknown[]) =>
           this.db.getAll<T>(sql, params as unknown[] | undefined),
-        tx: <R>(fn: (tx: Tx) => Promise<R>, opts: {scope: ChangeScope; description?: string}) =>
-          this.tx(fn, opts),
+        // Scope and undo-recording are NOT the backfill's to choose. The scope
+        // stays `BlockDefault` — these ARE document edits and must keep the
+        // read-only gate and the seed-definition guard, both of which key off
+        // it — but the undo entry is suppressed: the pass fires seconds after
+        // workspace open, so on the stack it means a cmd-Z aimed at the user's
+        // own edit reverts the whole batch, permanently (the completion marker
+        // is already recorded).
+        tx: async <R>(fn: (tx: Tx) => Promise<R>, opts: {description?: string}): Promise<R> => {
+          // Checked per transaction and INSIDE it, after acquisition — not once
+          // before the run, and not just before `repo.tx`. Two separate reasons:
+          // a pass can be chunked across minutes (the properties-as-blocks
+          // cell->children migration is ~650k creates), so a pre-run check only
+          // ever covered the first batch; and `repo.tx` itself awaits
+          // definition readiness and the write lock, so a check before it can
+          // go stale before `fn` reads a row. Throwing here aborts the tx and
+          // the run with no marker recorded, so the next open retries.
+          const result = await this.tx(async t => {
+            await this.assertBackfillMayWrite(workspaceId, backfill.id, generation)
+            return fn(t)
+          }, {
+            scope: ChangeScope.BlockDefault,
+            description: opts.description,
+            skipUndo: true,
+          })
+          // Only once a batch COMMITTED. An aborted one rolled its writes
+          // back, so it leaves nothing on the undo stack to be reverted onto.
+          // Still an over-approximation in one direction — a committed batch
+          // that happened to write nothing counts — which errs toward
+          // clearing, the safe side.
+          //
+          // Cleared HERE rather than after the pass returns: a chunked pass
+          // runs for minutes, and every one of them is a minute in which a
+          // cmd-Z can replay a pre-pass row snapshot over a batch that has
+          // already committed. The window has to close with the FIRST batch,
+          // not with the last.
+          if (!wrote) {
+            wrote = true
+            this.undoManagerFor(workspaceId).clear()
+            undoHistoryCleared = true
+            console.warn(
+              `[workspaceBackfills] "${backfill.id}" is writing to workspace ` +
+              `${workspaceId}, so its undo history was cleared — replaying an entry ` +
+              `from before the pass would revert it.`,
+            )
+          }
+          return result
+        },
       }
       try {
+        // Before the scan, and again before claiming completion. The
+        // per-transaction check only fires when a pass WRITES: a run that finds
+        // no candidates — precisely what a partially materialized graph looks
+        // like, since the rows are staged and not yet in `blocks` — would
+        // otherwise sail through and record its one-shot marker as done.
+        await this.assertBackfillMayWrite(workspaceId, backfill.id, generation)
         await backfill.run(ctx)
-        // Record the marker only after a clean run — a thrown backfill leaves
-        // it unset so the next open retries (backfills are written idempotent
-        // via a per-row recheck, so a retry is cheap).
-        await this.workspaceBackfillMarkers.set(workspaceBackfillMarkerKey(workspaceId, backfill.id))
+        await this.assertBackfillMayWrite(workspaceId, backfill.id, generation)
+        // Only after a clean run — a thrown backfill leaves the claim unset so
+        // the next attempt retries (passes are idempotent per row).
+        await claim.markComplete(workspaceId, backfill.id)
+        // And only once completion is RECORDED. Counted any earlier — on
+        // entry, or before `markComplete` whose throw the catch answers by
+        // RELEASING the claim — this reports "ran" for a migration whose
+        // per-graph record does not exist, so the operator is told it is
+        // durably done and the next invocation repeats it.
+        completed.add(backfill.id)
       } catch (err) {
         const reason = err instanceof Error ? err.message : String(err)
+        // Claimed but didn't finish — hand it back either way, or this pass is
+        // blocked for the whole graph by one device's bad moment.
+        await claim.releaseClaim(workspaceId, backfill.id).catch(() => {})
+        if ((err as {kind?: string} | null)?.kind === Repo.TRANSIENT) {
+          // The operator path has no other way to learn this: the re-arm below
+          // only helps `workspace-open` passes (`scheduleWorkspaceBackfills`
+          // filters operator ones out), and without a reason here the caller
+          // reports "already done" for a pass that aborted partway through.
+          deferred = reason
+          // These clear on their own — the download finishes, the queue drains.
+          // Logging and walking away would leave the pass undone for the whole
+          // session even though its blocker is momentary, so re-arm and let the
+          // gate + deep-idle deferral bound the retry.
+          console.warn(`[workspaceBackfills] ${reason} — will retry when it clears`)
+          this.scheduleWorkspaceBackfills(workspaceId)
+          return {completed, undoHistoryCleared, deferred, failed}
+        }
+        failed = reason
         console.error(
           `[workspaceBackfills] "${backfill.id}" failed for workspace ${workspaceId}: ${reason}`,
         )
       }
     }
+    return {completed, undoHistoryCleared, deferred, failed}
   }
 
   /**
@@ -3283,9 +3709,7 @@ export class Repo {
                     .filter(isFieldValueChild)
                   for (const value of values) {
                     try {
-                      const encoded = propertyChildContentToEncodedValue(
-                        schema, value.content, value.referenceTargetId ?? null,
-                      )
+                      const encoded = propertyChildContentToEncodedValue(schema, value.content)
                       if (!hasProjection) {
                         projected = encoded
                         hasProjection = true

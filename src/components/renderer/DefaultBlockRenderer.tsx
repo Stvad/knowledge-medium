@@ -16,7 +16,7 @@ import { CodeMirrorContentRenderer } from '@/components/renderer/CodeMirrorConte
 import { BulletHoverCard, useBulletHover } from '@/components/renderer/BulletHoverCard.js'
 import { BlockInfoDialog } from '@/components/renderer/BlockInfoDialog.js'
 import { openDialog } from '@/utils/dialogs.js'
-import { useRef, useMemo } from 'react'
+import { useRef, useMemo, useEffect } from 'react'
 import { Block } from '../../data/block'
 import {
   useUIStateProperty,
@@ -51,6 +51,7 @@ import {
   blockClickHandlersFacet,
   blockContentDecoratorsFacet,
   blockContentRendererFacet,
+  BLOCK_CONTENT_VIEW_ATTRIBUTE,
   blockContentSurfacePropsFacet,
   blockContextMenuItemsFacet,
   blockHeaderFacet,
@@ -72,6 +73,10 @@ import { useContinuousGestures } from '@/extensions/continuousGestures.js'
 interface DefaultBlockRendererProps extends BlockRendererProps {
   ContentRenderer?: BlockRenderer;
   EditContentRenderer?: BlockRenderer;
+  /** Declares that the `ContentRenderer` composed here fills the slot with
+   *  OTHER blocks' rows — see `Variant.showsOtherBlocks`, which says the same
+   *  thing for a renderer that arrives through the facet instead. */
+  contentShowsOtherBlocks?: boolean;
 }
 
 /** Todo plausibly the following 2 things should be "actions" too
@@ -522,6 +527,7 @@ function BlockShell({
   // selection/focus), so paste composes with the rest of the shell decorators
   // rather than being hardcoded on the wrapper.
   const shellProps = useMemo<BlockShellProps>(() => ({
+    'data-block-shell': 'true',
     'data-block-id': block.id,
     'data-render-scope-id': typeof blockContext.renderScopeId === 'string'
       ? blockContext.renderScopeId
@@ -533,6 +539,7 @@ function BlockShell({
       ? (event) => { void handleBlockClick(event) }
       : undefined,
   }), [block.id, blockContext.renderScopeId, inEditMode, handleBlockClick, shellRef])
+
 
   const resolveBlockShellDecorators = runtime.read(blockShellDecoratorsFacet)
   const shellDecorators = useMemo(
@@ -568,6 +575,7 @@ export function DefaultBlockRenderer(
     block,
     ContentRenderer: DefaultContentRenderer = MarkdownContentRenderer,
     EditContentRenderer = CodeMirrorContentRenderer,
+    contentShowsOtherBlocks,
   }: DefaultBlockRendererProps,
 ) {
   const repo = useRepo()
@@ -581,11 +589,6 @@ export function DefaultBlockRenderer(
   const shellRef = useRef<HTMLDivElement | null>(null)
   const contentContainerRef = useRef<HTMLDivElement | null>(null)
   const isTopLevel = useIsFocalRender(block)
-  // The block's page names, surfaced on the resolve context so plugins can key
-  // on "is this a page" (see `aliases` on BlockResolveContext). Core reports the
-  // fact and takes no view on what it should look like — the alias plugin owns
-  // that, via `blockContentSurfacePropsFacet`.
-  const aliases = useBlockAliases(block)
 
   // The block's READ content, bare: the per-type read renderer in an error
   // boundary, no editable `block-content` wrapper, surface props, or gesture ref.
@@ -614,14 +617,17 @@ export function DefaultBlockRenderer(
   // Stable per-block resolver context — doesn't change on focus/edit/
   // selection toggles, so facet resolvers and the components they
   // produce keep stable identity. This is what stops UpdateIndicator
-  // (and any other content decorator) from remounting on every click.
+  // (and any other content decorator) from remounting on every click,
+  // and — because every slot below is a `useMemo` over this object, i.e.
+  // a React element TYPE — what stops the live editor being torn down and
+  // rebuilt from stale content mid-keystroke. Nothing an ordinary edit can
+  // change may be added here; see the invariant on `BlockResolveContext`.
   const scopeRootId = blockContext.scopeRootId
   const resolveContext = useMemo<BlockResolveContext>(() => ({
     block,
     repo,
     uiStateBlock,
     types,
-    aliases,
     topLevelBlockId,
     scopeRootId,
     isTopLevel,
@@ -645,7 +651,6 @@ export function DefaultBlockRenderer(
     repo,
     uiStateBlock,
     types,
-    aliases,
     topLevelBlockId,
     scopeRootId,
     isTopLevel,
@@ -682,10 +687,27 @@ export function DefaultBlockRenderer(
       // component each call (e.g. plain-outliner's edit-mode dispatcher) don't
       // hand back a new identity every render and remount the content subtree.
       const resolveBlockContentRenderer = runtime.read(blockContentRendererFacet)
-      const baseContentRenderer = useMemo(
-        () => resolveBlockContentRenderer(resolveContext).last?.render ?? DefaultContentRenderer,
+      const contentVariant = useMemo(
+        () => resolveBlockContentRenderer(resolveContext).last,
         [resolveBlockContentRenderer],
       )
+      const baseContentRenderer = contentVariant?.render ?? DefaultContentRenderer
+      // Is this slot filled with other blocks' rows (a review backlog, a deck,
+      // a recents list) rather than the block itself? Read from whoever CHOSE
+      // the renderer, never from the resolved component — that is a wrapper as
+      // often as not, and the editing dispatcher wraps every block's content
+      // renderer in the app.
+      //
+      // A contributed variant answers for itself, EXCEPT the deferring kind
+      // that renders what the block composed. Silence from a variant means
+      // "not a view", not "ask whoever I displaced": an override draws its own
+      // content, so inheriting the displaced view's answer would mark a row
+      // that no longer shows other blocks.
+      const showsOtherBlocks = contentVariant
+        ? (contentVariant.showsOtherBlocks === 'as-composed'
+            ? contentShowsOtherBlocks === true
+            : contentVariant.showsOtherBlocks === true)
+        : contentShowsOtherBlocks === true
       const decorateContent = runtime.read(blockContentDecoratorsFacet)
       const ContentRenderer = useMemo(
         () => decorateContent(resolveContext, baseContentRenderer),
@@ -711,6 +733,7 @@ export function DefaultBlockRenderer(
         <div
           {...contentSurfaceProps}
           data-block-visibility-target="true"
+          {...(showsOtherBlocks ? {[BLOCK_CONTENT_VIEW_ATTRIBUTE]: 'true'} : {})}
           className={`block-content${topLevelClass}${contentSurfaceProps.className ? ` ${contentSurfaceProps.className}` : ''}`}
           ref={contentGestureRef}
         >
@@ -722,7 +745,7 @@ export function DefaultBlockRenderer(
     }
   }, [
     block, resolveContext, runtime, isTopLevel,
-    DefaultContentRenderer, contentContainerRef,
+    DefaultContentRenderer, contentShowsOtherBlocks, contentContainerRef,
   ])
 
   const PropertiesSlot = useMemo<ComponentType | null>(() => {
@@ -808,7 +831,19 @@ export function DefaultBlockRenderer(
   // to become focusable/editable; the shell's machinery (paste/click, shell
   // decorators, shortcut activations) only runs when mounted — see `BlockShell`.
   const ShellSlot = useMemo<BlockShellSlot>(() => {
-    return function BlockShellSlot({children}: BlockShellSlotProps) {
+    return function BlockShellSlot({children, shortcutsOnly}: BlockShellSlotProps) {
+      // Dropping `shellProps` costs the block its identity in the DOM — its
+      // boundary, focus and edit tagging, the shell click, and (through `ref`)
+      // the spatial-nav row. Consumers then resolve to an ancestor instead,
+      // and nothing says so. `ref` is the detector: it can only stay null if no
+      // element received the props.
+      useEffect(() => {
+        if (!import.meta.env.DEV || shortcutsOnly || shellRef.current) return
+        console.error(
+          `Block ${resolveContext.block.id}: its layout mounted Shell without spreading shellProps. ` +
+          'Pass shortcutsOnly if that is deliberate.',
+        )
+      }, [shortcutsOnly])
       return (
         <BlockShell
           resolveContext={resolveContext}

@@ -75,7 +75,8 @@ import {
   matchesAliasSeatSeed,
   resolveAliasSeatId,
 } from '@/data/targets'
-import { aliasesProp } from '@/data/properties'
+import { EXTENSION_TYPE } from '@/data/blockTypes'
+import { aliasesProp, typesProp } from '@/data/properties'
 import { deleteSubtreeInTx } from '@/data/subtreeDelete'
 import {
   dailyNoteBlockId,
@@ -116,6 +117,33 @@ const hasLiveReferrer = async (
  *  check. Adding a new parse-relevant column is a single-edit change here. */
 const planBasisOf = (row: BlockData): string =>
   JSON.stringify([row.content, row.properties, row.references])
+
+/** Is this row an installed extension's SOURCE block?
+ *
+ *  A raw-array read rather than `hasBlockType`, which decodes through the
+ *  `string-list` codec and THROWS a `CodecError` on a malformed `types`
+ *  value — a non-array, or an array holding a non-string. A throw in this
+ *  processor's read phase would land AFTER the user's write committed and
+ *  abort the whole `apply`, freezing references for its own row and every
+ *  other row in the same event.
+ *
+ *  DEFENCE IN DEPTH, not a load-bearing guard: that scenario is currently
+ *  unreachable through a local write, because the kernel's SAME-TX
+ *  `core.blockTypeTypeify` calls `addedTypes` → `getBlockTypes` on every
+ *  changed row first and throws there instead — which rolls the write
+ *  back rather than corrupting derived state (verified by writing both
+ *  malformed shapes through `repo.tx`; the tx rejects). So this is
+ *  unpinnable through the public path and is unit-tested directly
+ *  instead. It stays because the total read costs nothing, and because a
+ *  wrong-shaped value reading as "not an extension" is the right answer
+ *  anyway — the block gets parsed like ordinary content, exactly as
+ *  before this gate existed. Same shape as `MediaBlockRenderer.canRender`,
+ *  which documents the identical `getBlockTypes` hazard on the render
+ *  side. */
+export const isExtensionSource = (source: Pick<BlockData, 'properties'>): boolean => {
+  const types = source.properties[typesProp.name]
+  return Array.isArray(types) && types.includes(EXTENSION_TYPE)
+}
 
 /** Per-source plan built during the read phase. The write phase consumes
  *  this and issues all writes in a single tx. */
@@ -173,8 +201,32 @@ const buildSourcePlan = async (
   source: BlockData,
   before: BlockData | null,
 ): Promise<SourcePlan> => {
-  const aliasMarks = parseAliasMarks(source.content)
-  const blockRefMarks = parseBlockRefs(source.content)
+  // An installed extension's SOURCE is stored in `blocks.content`, and
+  // running the wikilink / blockref grammars over code is a category
+  // error: a regex character class whose first member is a literal `[`
+  // (`/[[\]{}()*+?.\\^$|\s]/`) is a `[[` opener, and so is a nested array
+  // literal. The scanner pairs one with whatever `]]` comes next — in a
+  // 1.7 MB bundle that was 205 KB downstream — and this processor then
+  // mints a page NAMED after the span. One installed extension produced
+  // three such pages before this gate.
+  //
+  // Nothing displayed is lost by skipping. An extension-typed block never
+  // reaches the markdown pipeline: `CodeMirrorExtensionBlockRenderer`
+  // claims every one of them (`canRender` → `hasBlockType(data,
+  // EXTENSION_TYPE)`) and shows the source in a code editor, so there is
+  // no rendered wikilink here whose reference we would be dropping.
+  //
+  // Content grammars ONLY. Property refs still project below — an
+  // extension block carries typed properties like any other block, and
+  // dropping those would be a quieter version of the same bug.
+  //
+  // Existing extension blocks converge lazily rather than by a sweep:
+  // `properties` and `content` are both watched, so the next write to one
+  // re-parses under this gate, drops the stale refs, and lets
+  // `reapOrphanAliasSeats` collect the seats they were holding open.
+  const scanContent = !isExtensionSource(source)
+  const aliasMarks = scanContent ? parseAliasMarks(source.content) : []
+  const blockRefMarks = scanContent ? parseBlockRefs(source.content) : []
 
   const aliasRefs: BlockReference[] = []
   const dateRefs: BlockReference[] = []

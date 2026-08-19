@@ -1,5 +1,6 @@
 import { clamp } from 'lodash-es'
 import { isElementProperlyVisible } from '@/utils/dom.js'
+import { BLOCK_CONTENT_VIEW_ATTRIBUTE } from '@/extensions/blockInteraction.js'
 import {
   type FocusedBlockLocation,
   sameFocusedBlockLocation,
@@ -112,6 +113,21 @@ const surfaceOf = (el: HTMLElement): string | undefined =>
  *  a caller pick a row the decorator will then agree needs no scrolling. */
 export const visibilityTargetFor = (el: HTMLElement): HTMLElement =>
   el.querySelector<HTMLElement>(VISIBILITY_TARGET_SELECTOR) ?? el
+
+/** Does this row show a VIEW rather than the block's own text?
+ *
+ *  A renderer may fill a content slot with a review backlog, a review deck, a
+ *  recents list. That row's rect then describes everything it shows instead of
+ *  the block — so it reads as on screen at every scroll position, and comes
+ *  first in document order. Callers picking a row BY GEOMETRY need to tell it
+ *  from an ordinary row; walking (j/k) does not, and still treats it as one.
+ *
+ *  Read from what the content slot DECLARED (`BLOCK_CONTENT_VIEW_ATTRIBUTE`),
+ *  never inferred from the DOM underneath. "Holds other blocks' rows" is the
+ *  inference, and it is wrong both ways: also true of a paragraph containing an
+ *  embed, and false for a backlog whose rows are all still lazy placeholders. */
+export const isRowAContentView = (el: HTMLElement): boolean =>
+  visibilityTargetFor(el).hasAttribute(BLOCK_CONTENT_VIEW_ATTRIBUTE)
 
 const isRecoveryTargetVisible = (el: HTMLElement): boolean =>
   isElementProperlyVisible(visibilityTargetFor(el))

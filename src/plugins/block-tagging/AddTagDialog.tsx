@@ -14,8 +14,10 @@ import {
   blockTaggingPrefsType,
   blockTagsConfigProp,
   isValidTagName,
-  normalizeBlockTagsConfig,
+  selectableTagNames,
+  tagNameIssue,
 } from './config.ts'
+import { MAX_ALIAS_LENGTH } from '@/plugins/references/referenceParser'
 
 export interface AddTagDialogResult {
   tagName: string
@@ -32,7 +34,9 @@ export const AddTagDialog = ({
   cancel,
 }: DialogContextProps<AddTagDialogResult>) => {
   const [storedTags] = usePluginPrefsProperty(blockTaggingPrefsType, blockTagsConfigProp)
-  const tags = useMemo(() => normalizeBlockTagsConfig(storedTags), [storedTags])
+  // Only tags this build can actually apply — see `selectableTagNames`
+  // for why stored prefs can contain ones it can't.
+  const tags = useMemo(() => selectableTagNames(storedTags), [storedTags])
   const [query, setQuery] = useState('')
   const filteredTags = useMemo(() => filterTags(tags, query), [tags, query])
   const inputRef = useRef<HTMLInputElement>(null)
@@ -44,8 +48,10 @@ export const AddTagDialog = ({
   const trimmedQuery = query.trim()
   const exactQueryMatch = trimmedQuery.length > 0
     && tags.some(tag => tag.toLowerCase() === trimmedQuery.toLowerCase())
-  const queryInvalid = trimmedQuery.length > 0 && !isValidTagName(trimmedQuery)
-  const canCreateCustom = trimmedQuery.length > 0 && !exactQueryMatch && !queryInvalid
+  // `null` when valid; 'empty' can't surface here (guarded by the length
+  // check) so the two rendered branches below cover every visible case.
+  const queryIssue = trimmedQuery.length > 0 ? tagNameIssue(trimmedQuery) : null
+  const canCreateCustom = trimmedQuery.length > 0 && !exactQueryMatch && queryIssue === null
 
   const submitTag = (tagName: string): void => {
     const next = tagName.trim()
@@ -89,9 +95,14 @@ export const AddTagDialog = ({
               defaults under the user-prefs &quot;Block tags&quot; entry.
             </p>
           )}
-          {queryInvalid && (
+          {queryIssue === 'delimiters' && (
             <p className="text-xs text-destructive">
               Tag names can&apos;t contain <code>[[</code> or <code>]]</code>.
+            </p>
+          )}
+          {queryIssue === 'too-long' && (
+            <p className="text-xs text-destructive">
+              Tag names must be under {MAX_ALIAS_LENGTH} characters.
             </p>
           )}
           {filteredTags.length > 0 && (

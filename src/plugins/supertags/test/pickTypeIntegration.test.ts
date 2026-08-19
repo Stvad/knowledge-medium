@@ -17,6 +17,7 @@ import { getOrCreateTypesPage } from '@/data/typesPage'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import type { Repo } from '@/data/repo'
+import * as toast from '@/utils/toast'
 import { buildTypeTagSource } from '../codeMirrorExtensions'
 
 const WS = 'ws-supertags-pick'
@@ -55,15 +56,19 @@ const makeBlock = async (repo: Repo, content: string): Promise<string> => {
   return id
 }
 
-/** Drive the source at end-of-doc and apply the option with the given
- *  label; waits for the block to end up tagged before returning.
- *  `applyTag` persists the stripped view content itself (in the tag's
- *  undo group), so a plain view is enough — no editor flush needed. */
-const pickAt = async (
+/** Drive the source at end-of-doc, apply the option with the given label,
+ *  then wait on `fence` — the caller's observable signal that the pick has
+ *  finished. `apply` returns void and the source swallows the async
+ *  outcome, so there is nothing to await directly.
+ *
+ *  `applyTag` persists the stripped view content itself (in the tag's undo
+ *  group), so a plain view is enough — no editor flush needed. */
+const drivePick = async (
   repo: Repo,
   blockId: string,
   doc: string,
   optionLabel: string,
+  fence: () => Promise<void>,
 ): Promise<void> => {
   const block = repo.block(blockId)
   await block.load()
@@ -76,14 +81,22 @@ const pickAt = async (
     expect(option, `expected "${optionLabel}" among: ${result!.options.map(o => o.label).join(', ')}`).toBeDefined()
     const apply = option!.apply as (v: EditorView, c: unknown, from: number, to: number) => void
     apply(view, option, result!.from, doc.length)
-    await vi.waitFor(async () => {
-      const data = await repo.load(blockId)
-      expect(getBlockTypes(data!).length).toBeGreaterThan(0)
-    }, {timeout: TIMEOUT_MS})
+    await fence()
   } finally {
     view.destroy()
   }
 }
+
+/** The success fence: the block ends up tagged. */
+const pickAt = (
+  repo: Repo,
+  blockId: string,
+  doc: string,
+  optionLabel: string,
+): Promise<void> => drivePick(repo, blockId, doc, optionLabel, () => vi.waitFor(async () => {
+  const data = await repo.load(blockId)
+  expect(getBlockTypes(data!).length).toBeGreaterThan(0)
+}, {timeout: TIMEOUT_MS}))
 
 describe('supertags pick integration', () => {
   it('tags the block and (via the editor flush) strips the command span from stored content', async () => {
@@ -112,6 +125,48 @@ describe('supertags pick integration', () => {
     const resolved = await env.repo.query.aliasLookup({workspaceId: WS, alias: 'Book'}).load()
     expect(resolved?.id).toBe(blockId)
   })
+
+  // The discoverable way to reach the typeify name check: `#type` on a
+  // block whose EXISTING content can't be written as `[[name]]`. The
+  // create flow validates before opening a tx, so this pick is the entry
+  // point that actually exercises the throw.
+  //
+  // Fences on the error TOAST, not on the tag failing to arrive. `apply`
+  // returns void and the source swallows the async rejection, so waiting
+  // for an absent tag can only ever end in a timeout — which is green for
+  // any unrelated hang, and (measured at 3.0s) has no headroom under load.
+  // Asserting the MESSAGE is what makes it specific: the generic
+  // "Couldn't tag" toast would not match.
+  it.each([
+    ['`]]`-lossy content', 'Book]]Club #type', 'Book]]Club',
+      'cannot be written as a "[[name]]" reference'],
+    ['grammar-shaped content', '((11111111-1111-4111-8111-111111111111)) #type',
+      '((11111111-1111-4111-8111-111111111111))',
+      'reads as a block reference, not a name'],
+  ])('#type on %s refuses the tag, says why, and leaves the block untyped',
+    async (_l, text, stripped, reason) => {
+      env = await setup()
+      const blockId = await makeBlock(env.repo, text)
+      const showError = vi.spyOn(toast, 'showError').mockReturnValue('')
+      try {
+        await drivePick(env.repo, blockId, text, 'Type',
+          () => vi.waitFor(() => { expect(showError).toHaveBeenCalled() }))
+
+        const message = String(showError.mock.calls[0][0])
+        expect(message).toContain('Block type label')
+        expect(message).toContain(reason)
+
+        const data = await env.repo.load(blockId)
+        expect(getBlockTypes(data!)).not.toContain('block-type')
+        expect(getBlockTypes(data!)).not.toContain('page')
+        expect(data!.properties.alias ?? []).toEqual([])
+        // The tag tx rolled back; the command-span strip that preceded it in
+        // the undo group is a separate tx and stands.
+        expect(data!.content).toBe(stripped)
+      } finally {
+        showError.mockRestore()
+      }
+    })
 
   it('create pick mints a registered type, tags the block, and strips the trigger', async () => {
     env = await setup()

@@ -12,10 +12,6 @@ import {
   kernelContentKey,
 } from '@/data/invalidation'
 import {
-  deriveReferenceColumns,
-  sameTxReferenceTargetLookups,
-} from '@/data/internals/referenceTargetProcessor'
-import {
   propertyChildContentToEncodedValue,
   resolvePropertyValueFieldSchema,
 } from '@/data/propertyChildren'
@@ -231,18 +227,19 @@ export const applyContentReplaceMutator = defineMutator<
       // this whole section is a no-op there.
       const schema = await resolvePropertyValueFieldSchema(tx, current)
       if (schema !== null && !force) {
-        // Ref-typed values are validated against the target the PROPOSED
-        // content would derive (not the stale pre-replace column) — same-tx
-        // `core.deriveReferenceTarget` hasn't run yet at this point in the
-        // pipeline, so the column still reflects the OLD content.
-        const projectedTargetId = schema.codec.type === 'ref'
-          ? (await deriveReferenceColumns(
-              replaced.content, current.workspaceId, sameTxReferenceTargetLookups(tx),
-            )).targetId ?? null
-          : current.referenceTargetId ?? null
+        // The check is on the PROPOSED content, and asking it takes nothing
+        // but that string: `propertyChildContentToEncodedValue` decodes a ref
+        // value by parsing the id out of its id-carrying span, so there is no
+        // derived column to project first (#443 group 3). It used to resolve
+        // `deriveReferenceColumns` here — an async alias lookup per candidate
+        // row — precisely because the decode trusted the column, and that
+        // made the guard agree with a decode that was itself wrong: a replace
+        // turning `((id))` into `[[SomeName]]` resolved to a non-null target,
+        // passed the guard, and PROJECT then wrote the WRONG id into the
+        // owner's cell. Now it reads as unparseable and is reported as a skip.
         const breaksCodec = (() => {
           try {
-            propertyChildContentToEncodedValue(schema, replaced.content, projectedTargetId)
+            propertyChildContentToEncodedValue(schema, replaced.content)
             return false
           } catch {
             return true

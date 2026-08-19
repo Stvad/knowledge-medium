@@ -23,9 +23,10 @@
 //           later (inbound URLs degrade them to stacks meanwhile)
 // layout := column ('/' column)*           the grammar inside a paren cell
 // slot   := blockId (';' entry)*           matrix-style per-slot context:
-//           `;view=<value>` (percent-encoded viewMode), `;active` /
-//           `;active=true` / `;active=false`, any other well-formed `key`/`key=value`
-//           preserved verbatim as an opaque context entry (see REST_ENTRY_RE)
+//           `;view=<value>` (percent-encoded viewMode), the valueless flags
+//           `;active` and `;max` (also `;<flag>=true` / `;<flag>=false`),
+//           any other well-formed `key`/`key=value` preserved verbatim as an
+//           opaque context entry (see REST_ENTRY_RE)
 //
 // Malformed input follows two rules: OUTSIDE parens, salvage what you can
 // (invalid cells/columns are dropped individually, the rest of the layout
@@ -61,7 +62,14 @@ export interface AppLayoutRoute {
 }
 
 export type LayoutSlot =
-  | {kind: 'leaf'; blockId: string; viewMode?: string; active?: boolean; rest?: string[]}
+  | {
+      kind: 'leaf'
+      blockId: string
+      viewMode?: string
+      active?: boolean
+      maximized?: boolean
+      rest?: string[]
+    }
   | {kind: 'stack'; children: LayoutSlot[]}
   // Each sublayout column is represented exactly like a top-level column:
   // a leaf, or a stack when the column has multiple cells.
@@ -158,11 +166,11 @@ const byEntryKey = (a: {key: string}, b: {key: string}): number =>
 // Shared rest-entry collection: validate REST_ENTRY_RE, first-VALID-wins
 // dedup by key (a Set, so a later malformed entry never evicts an earlier
 // valid one and vice versa), key-sort. Used by both parseContextEntries'
-// unknown-key handling (below, with 'view'/'active' excluded via `isReserved`
-// since those two keys take their own single-value branches) and
+// unknown-key handling (below, with the reserved keys excluded via
+// `isReserved` since each of those takes its own single-value branch) and
 // canonicalWsContextEntries (no reserved keys at all — every ws-token entry
 // is opaque). Splitting this out of a single per-key branch into an
-// independent pass over `segments` is behavior-preserving: 'view'/'active'
+// independent pass over `segments` is behavior-preserving: reserved keys
 // and rest keys are mutually exclusive by construction (a given key string
 // is always classified the same way), so the two passes' dedup sets never
 // need to interact.
@@ -196,14 +204,53 @@ const decodeContextValue = (raw: string): string | null => {
   }
 }
 
-type SlotContext = {viewMode?: string; active?: boolean; rest?: string[]}
+type SlotContext = {viewMode?: string; active?: boolean; maximized?: boolean; rest?: string[]}
 
-const isReservedSlotContextKey = (key: string): boolean => key === 'view' || key === 'active'
+/** Valueless boolean slot-context keys, url key → `LayoutSlot` field: `;flag`
+ *  ≡ `;flag=true`, `;flag=false` is an explicit absent, anything else is
+ *  malformed. The SINGLE registration point — parse, build, and the reserved-
+ *  key set all derive from it, so a third flag is one entry here plus its
+ *  field on `LayoutSlot`. */
+const FLAG_SLOT_CONTEXT_KEYS = {active: 'active', max: 'maximized'} as const
+type FlagSlotContextKey = keyof typeof FLAG_SLOT_CONTEXT_KEYS
+type FlagSlotContext = Partial<Record<(typeof FLAG_SLOT_CONTEXT_KEYS)[FlagSlotContextKey], true>>
+const FLAG_SLOT_CONTEXT_ENTRIES = Object.entries(FLAG_SLOT_CONTEXT_KEYS) as
+  [FlagSlotContextKey, (typeof FLAG_SLOT_CONTEXT_KEYS)[FlagSlotContextKey]][]
+
+const isFlagSlotContextKey = (key: string): key is FlagSlotContextKey =>
+  Object.hasOwn(FLAG_SLOT_CONTEXT_KEYS, key)
+
+/** The one single-valued reserved key (`;view=<percent-encoded>`), as opposed
+ *  to the valueless FLAG_SLOT_CONTEXT_KEYS. */
+const VIEW_SLOT_CONTEXT_KEY = 'view'
+
+/** Registration DATA for the keys that can never be an opaque `rest` entry —
+ *  each has a dedicated parse branch and is stripped from `rest` on build.
+ *  Exported so tests derive their exclusion set from the registration rather
+ *  than re-listing it by hand (a hand-copied list stops matching the moment a
+ *  flag is added, and nothing fails until a deep fuzz run happens to generate
+ *  the new key).
+ *
+ *  Deliberately a SEPARATE expression from `isReservedSlotContextKey`, not its
+ *  implementation and not implemented in terms of it: collapsing the two makes
+ *  the fuzz generator exclude exactly what the predicate claims, so a predicate
+ *  that drifts into reserving an ORDINARY key would strip that key from `rest`
+ *  and simultaneously stop it being generated — silent data loss, green suite.
+ *  Two expressions over the same registration keeps the round-trip property an
+ *  independent check on the predicate. */
+export const RESERVED_SLOT_CONTEXT_KEYS: readonly string[] = [
+  VIEW_SLOT_CONTEXT_KEY,
+  ...Object.keys(FLAG_SLOT_CONTEXT_KEYS),
+]
+
+const isReservedSlotContextKey = (key: string): boolean =>
+  key === VIEW_SLOT_CONTEXT_KEY || isFlagSlotContextKey(key)
 
 const parseContextEntries = (segments: readonly string[]): SlotContext => {
   const seen = new Set<string>()
   let viewMode: string | undefined
-  let active = false
+  // Only ever assigned `true`, so it spreads straight into the result.
+  const flags: FlagSlotContext = {}
 
   for (const raw of segments) {
     const match = CONTEXT_ENTRY_RE.exec(raw)
@@ -214,7 +261,7 @@ const parseContextEntries = (segments: readonly string[]): SlotContext => {
     const hasValue = match[2] !== undefined
     const value = match[3] ?? ''
 
-    if (key === 'view') {
+    if (key === VIEW_SLOT_CONTEXT_KEY) {
       if (!hasValue) continue
       const decoded = decodeContextValue(value)
       // local '' ≡ absent fold — see normalizeViewMode (properties.ts);
@@ -222,9 +269,9 @@ const parseContextEntries = (segments: readonly string[]): SlotContext => {
       if (!decoded) continue
       viewMode = decoded
       seen.add(key)
-    } else {
+    } else if (isFlagSlotContextKey(key)) {
       if (!hasValue || value === 'true') {
-        active = true
+        flags[FLAG_SLOT_CONTEXT_KEYS[key]] = true
         seen.add(key)
       } else if (value === 'false') {
         seen.add(key)
@@ -236,7 +283,7 @@ const parseContextEntries = (segments: readonly string[]): SlotContext => {
 
   return {
     ...(viewMode !== undefined ? {viewMode} : {}),
-    ...(active ? {active: true} : {}),
+    ...flags,
     ...(rest.length > 0 ? {rest} : {}),
   }
 }
@@ -323,17 +370,24 @@ const encodeContextValue = (value: string): string =>
 
 const buildContextSuffix = (slot: SlotContext): string => {
   const entries: {key: string; text: string}[] = []
-  if (slot.active) entries.push({key: 'active', text: 'active'})
+  for (const [key, field] of FLAG_SLOT_CONTEXT_ENTRIES) {
+    if (slot[field]) entries.push({key, text: key})
+  }
   // local '' ≡ absent fold — see normalizeViewMode (properties.ts).
-  if (slot.viewMode) entries.push({key: 'view', text: `view=${encodeContextValue(slot.viewMode)}`})
+  if (slot.viewMode) {
+    entries.push({
+      key: VIEW_SLOT_CONTEXT_KEY,
+      text: `${VIEW_SLOT_CONTEXT_KEY}=${encodeContextValue(slot.viewMode)}`,
+    })
+  }
   for (const raw of slot.rest ?? []) {
     // Guard programmatically constructed slots: drop malformed entries
     // (REST_ENTRY_RE, same rule as parse) and entries squatting on the
-    // reserved keys — viewMode/active own those; a rest duplicate would
-    // emit the key twice.
+    // reserved keys — viewMode/active/maximized own those; a rest duplicate
+    // would emit the key twice.
     if (!REST_ENTRY_RE.test(raw)) continue
     const key = CONTEXT_ENTRY_RE.exec(raw)![1]  // REST_ENTRY_RE-validated above, so the key group always matches
-    if (key === 'view' || key === 'active') continue
+    if (isReservedSlotContextKey(key)) continue
     entries.push({key, text: raw})
   }
   entries.sort(byEntryKey)
