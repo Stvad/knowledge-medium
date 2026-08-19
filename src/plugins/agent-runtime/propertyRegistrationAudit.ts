@@ -104,6 +104,24 @@ export interface UnregisteredProperty {
  *  definitions), so skew is self-correcting on the next run. */
 export interface PropertyRegistrationAudit {
   workspaceId: string
+  /** Non-null when this device could not vouch for its view of `blocks` when
+   *  the scan started — rows staged and not yet drained, or the sync layer not
+   *  settled (downloading, disconnected, or a download error). The scan
+   *  happened anyway; the counts are then short by an unknown amount, and an
+   *  empty `unregistered` list means nothing.
+   *
+   *  Reported rather than refused: this verb reads, and the flip is what acts
+   *  on what it says. Guarding the irreversible step is worth machinery;
+   *  guarding a report an operator chose to run is worth a sentence. */
+  syncGap: string | null
+  /** When this device last completed a sync, or null if it never has (or there
+   *  is no sync layer). The rest of the report's basis, and the part no check
+   *  can establish: `syncGap` being null says nothing is outstanding LOCALLY,
+   *  never that the server has nothing this device has not been told about.
+   *  Record it beside the counts rather than judging it — it does not advance
+   *  on a connected idle graph, so a current device on a quiet graph and a
+   *  stale one look identical here. */
+  syncedThrough: string | null
   distinctProperties: number
   /** Total (block, key) pairs — the size of the cell-era property surface. */
   propertyCells: number
@@ -260,26 +278,46 @@ export const auditPropertyRegistration = async (
   workspaceId: string,
   limits: {keys?: number; blocksPerKey?: number} = {},
 ): Promise<PropertyRegistrationAudit> => {
-  // Capture the registry AND the resolver up front, before any `await`.
-  //
-  // Two reasons. (1) `propertySchemaResolverFor` fails CLOSED for a workspace
-  // that is neither active nor immediately-previous — every name resolves to
-  // identity-unavailable, so auditing through it would report the whole graph
-  // as unregistered: a false list that reads authoritative and could talk
-  // someone into synthesizing definitions for keys that already have them.
-  // (2) This runs against the LIVE client, where the user can switch
-  // workspaces during the queries below; the resolver holds its snapshot by
-  // value, so taking it here makes the classification immune to that. Same
-  // rule as `schedulePropertyDefinitionMigrations` in `repo.ts` — resolve
-  // now, not when the later work runs.
-  const registry = repo.propertyDefinitions
-  if (!registry || registry.workspaceId !== workspaceId) {
-    throw new Error(
-      `Cannot audit ${workspaceId}: its property-definition registry is not loaded ` +
-      `(loaded: ${registry?.workspaceId ?? 'none'}). Classification would read every key ` +
-      'as unregistered. Open that workspace in the app and re-run.',
-    )
+  const requireRegistry = () => {
+    const loaded = repo.propertyDefinitions
+    if (!loaded || loaded.workspaceId !== workspaceId) {
+      throw new Error(
+        `Cannot audit ${workspaceId}: its property-definition registry is not loaded ` +
+        `(loaded: ${loaded?.workspaceId ?? 'none'}). Classification would read every key ` +
+        'as unregistered. Open that workspace in the app and re-run.',
+      )
+    }
+    return loaded
   }
+  // Validate BEFORE the wait, not after: `whenPropertyDefinitionsReady` refuses
+  // a non-active workspace with a message that names no fix. This one does.
+  requireRegistry()
+  // The registry is DERIVED from definition blocks, so a snapshot taken
+  // mid-rebuild calls a key whose definition has already landed "broken". This
+  // has to precede the CAPTURE, not merely the queries — the resolver freezes
+  // classification by value, so a later await cannot refresh it. Not a proof (a
+  // definition arriving after this still lags), but that error runs in the cheap
+  // direction: a false positive the operator investigates, unlike an all-clear
+  // built from missing rows.
+  await repo.whenPropertyDefinitionsReady(workspaceId)
+  // Sampled here, above the capture, so that EVERY await in this function is
+  // behind us before the resolver is frozen. Keeping it below would leave a
+  // suspension point between the capture and the scans, which is the window
+  // the capture exists to close.
+  const syncGap = await repo.syncViewGap()
+  // Defence in depth; no test pins it. A workspace switch across the awaits
+  // would leave `registry` belonging to another workspace, silently degrading
+  // the effective-name rewrite below to stored names. It also converts the
+  // two-switch case into a loud error: past the previous-workspace fallback
+  // `propertySchemaResolverFor` fails CLOSED, which here is the HAZARD, not
+  // safety — every key resolves identity-unavailable and the audit reports the
+  // whole graph as unregistered.
+  const registry = requireRegistry()
+  // Nothing may await between this line and the scans. The resolver holds its
+  // snapshot by value, so classification is fixed the instant it is taken; a
+  // workspace switch across a later suspension point would otherwise leave the
+  // scans reading rows this snapshot cannot classify. Same rule as
+  // `schedulePropertyDefinitionMigrations` in `repo.ts`.
   const resolver = repo.propertySchemaResolverFor(workspaceId)
 
   const histogram = await repo.db.getAll<HistogramRow>(
@@ -380,6 +418,8 @@ export const auditPropertyRegistration = async (
 
   return {
     workspaceId,
+    syncGap,
+    syncedThrough: repo.lastSyncedAt?.toISOString() ?? null,
     distinctProperties: histogram.length,
     propertyCells,
     registeredProperties,
