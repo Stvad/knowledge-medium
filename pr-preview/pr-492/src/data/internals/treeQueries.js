@@ -107,11 +107,18 @@ var e=`
         WHERE w.id = ${e}.workspace_id
           AND w.properties_migration IN ('children', 'cell-off')
      )
-     AND EXISTS (
-       SELECT 1 FROM block_types bt
-        WHERE bt.block_id = ${e}.reference_target_id
-          AND bt.type = 'property-schema'
-          AND bt.workspace_id = ${e}.workspace_id
+     AND (
+       EXISTS (
+         SELECT 1 FROM block_types bt
+          WHERE bt.block_id = ${e}.reference_target_id
+            AND bt.type = 'property-schema'
+            AND bt.workspace_id = ${e}.workspace_id
+       )
+       OR EXISTS (
+         SELECT 1 FROM json_each(?) seed
+          WHERE seed.value = ${e}.reference_target_id
+            AND ${e}.workspace_id = ?
+       )
      )
 `,c=`
    AND NOT (
