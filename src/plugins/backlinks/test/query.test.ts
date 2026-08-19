@@ -417,7 +417,7 @@ describe('backlinksDataExtension query', () => {
       expect(machinery.size).toBe(0)
     })
 
-    it('does not filter in an un-flipped workspace (no machinery exists)', async () => {
+    it('leaves an ordinary source alone when there is no machinery at all', async () => {
       await create({id: 'Foo2', workspaceId: WS})
       await create({id: 'src', workspaceId: WS, references: [{id: 'Foo2', alias: 'Foo2'}]})
       const out = asIds(await env.repo.query[BACKLINKS_FOR_BLOCK_QUERY](

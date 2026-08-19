@@ -321,8 +321,8 @@ const propertiesMatchSeed = (
  *  drifted (a rename, a user-added property, or an extra alias all break
  *  the match). Liveness/children checks are the caller's: the tombstone
  *  predicate below wants no live children at all, while the reaper
- *  additionally tolerates the seat's own GENERATED property children in
- *  a child-backed workspace. */
+ *  additionally tolerates the seat's own GENERATED property children — in
+ *  any workspace, since the backfill mints them before the flip. */
 export const matchesAliasSeatSeed = (
   row: Pick<AliasSeatRow, 'content' | 'properties'>,
 ): boolean => {

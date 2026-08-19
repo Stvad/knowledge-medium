@@ -175,12 +175,19 @@ export const decideStagingRow = (
  * `blocks` is at rest. Threading the observer's in-flight state in is the
  * standing fix for that, and is not done here.
  *
- * ONE statement, not two, and the depth arm comes FIRST. Two statements are
- * two read snapshots: a drain window committing between them lets rows the
- * first arm never reached slip under the second arm's offset, and the pair
- * then reports no gap while genuinely-gapped rows are still staged (measured).
- * Depth first also means the deep case never pays for the joined scan, which
- * is the one case where the scan cannot short-circuit.
+ * ONE statement, not two. Two are two read snapshots: a drain window
+ * committing between them lets rows the first arm never reached slip under
+ * the second arm's offset, and the pair then reports no gap while
+ * genuinely-gapped rows are still staged (measured). That part is
+ * correctness.
+ *
+ * The depth arm coming first is NOT: when both would fire, either answer is a
+ * gap and every caller defers the same way. It buys the better message and
+ * lets `LIMIT 1` skip the joined scan in the one case where that scan cannot
+ * short-circuit (measured 0.001s vs 0.013s on a 200k queue). It also rests on
+ * SQLite evaluating UNION ALL arms in order, which is observed rather than
+ * promised — fine for a preference, which is why nothing correctness-bearing
+ * is built on it.
  *
  * Bind `[STAGED_SCAN_LIMIT, STAGED_SCAN_LIMIT]`; the result's `why` names
  * which arm fired.

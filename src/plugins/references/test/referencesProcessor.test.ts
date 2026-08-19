@@ -1786,6 +1786,37 @@ describe('references.reapOrphanAliasSeats — reference-drop reaping (#402)', ()
     expect((await env.read('user-link'))!.deleted).toBe(0)
   })
 
+  it('keeps a seat carrying a marked field row for some OTHER definition', async () => {
+    // The generated-id check is the other half of the pair. Without it a `::`
+    // field row for any definition reads as the seat's own machinery, and the
+    // seat is tombstoned while that row and its value stay LIVE underneath —
+    // the delete sweep only takes rows matching the generated ids. Reachable
+    // pre-flip, where the projection processor is dormant so the seat's cell
+    // stays pristine and still matches the seed.
+    await env.repo.tx(
+      tx => tx.create({id: 'src', workspaceId: WS, parentId: null, orderKey: 'a0', content: '[[plugh]]'}),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await flush()
+    const seatId = aliasId('plugh')
+    const otherFieldId = '00000000-0000-4000-8000-00000000beef'
+    await env.repo.tx(async tx => {
+      const fieldRowId = await tx.create({
+        id: 'other-field', workspaceId: WS, parentId: seatId, orderKey: 'a0',
+        content: propertyFieldContent(otherFieldId),
+        referenceTargetId: otherFieldId, isFieldForm: true,
+      })
+      await tx.create({
+        id: 'other-value', workspaceId: WS, parentId: fieldRowId, orderKey: 'a0', content: 'kept',
+      })
+    }, {scope: ChangeScope.BlockDefault})
+
+    await env.repo.mutate.setContent({id: 'src', content: ''})
+    await flush(5000)
+    expect((await env.read(seatId))!.deleted).toBe(0)
+    expect((await env.read('other-value'))!.deleted).toBe(0)
+  })
+
   it('keeps a seat that a concurrent re-reference rescues (still referenced at check time)', async () => {
     await env.repo.tx(async tx => {
       await tx.create({id: 'src', workspaceId: WS, parentId: null, orderKey: 'a0', content: '[[baz]]'})

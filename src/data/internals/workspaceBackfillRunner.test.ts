@@ -313,25 +313,28 @@ describe('workspace backfill runner — sync gating', () => {
     expect((await repo.load('target'))?.properties['probe:mark']).toBe('backfilled')
   })
 
-  it('defers ONCE for the whole device, not once per backfill', async () => {
+  it('defers per DEVICE, not per backfill', async () => {
     // The gap is a property of the device, so every remaining pass would defer
     // identically — and `arm()` only de-dupes a PARKED gate, which this path's
     // is not (it is settled by construction). Continuing the loop instead of
     // returning therefore schedules N jobs, each of which re-runs all N
-    // passes: measured as a runaway that trips vitest's 10k-timer guard.
-    const g = controllableGate()
-    const deferrals: string[] = []
+    // passes, and the deferrals multiply.
+    //
+    // Asserted on the DISTINCT ids that deferred, not on a count: how many
+    // idle cycles one drain gets through is load-dependent, and extra cycles
+    // only repeat the same id — but one-deferral-per-backfill names all three.
+    const deferred = new Set<string>()
     const warn = vi.spyOn(console, 'warn').mockImplementation((...args) => {
-      const line = args.map(String).join(' ')
-      if (line.includes('deferred')) deferrals.push(line)
+      const m = /"([^"]+)" deferred/.exec(args.map(String).join(' '))
+      if (m) deferred.add(m[1]!)
     })
     try {
+      const g = controllableGate()
       const repo = makeRepo(probeBackfill([]), g.gate)
-      repo.setRuntimeContributions(workspaceBackfillsFacet, 'test-backfills', [
-        probeBackfill([]),
-        {...probeBackfill([]), id: 'probe-backfill-v2'},
-        {...probeBackfill([]), id: 'probe-backfill-v3'},
-      ])
+      repo.setRuntimeContributions(workspaceBackfillsFacet, 'test-backfills',
+        Array.from({length: 3}, (_, i) => ({
+          ...probeBackfill([]), id: `probe-backfill-v${i + 1}`,
+        })))
       await seedTarget(repo)
       await sharedDb.db.execute(
         "INSERT INTO blocks_synced_changes (id, op) VALUES ('draining', 'upsert')",
@@ -340,11 +343,11 @@ describe('workspace backfill runner — sync gating', () => {
       g.open()
       await drain(repo)
 
-      expect(deferrals).toHaveLength(1)
+      expect([...deferred]).toEqual(['probe-backfill-v1'])
     } finally {
       warn.mockRestore()
     }
-  })
+  }, 20_000)
 
   it('takes no claim at all while rows are staged, because tryClaim itself writes', async () => {
     // `tryClaim` ensures the Migrations page and creates the claim row, so

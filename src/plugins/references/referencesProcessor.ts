@@ -652,18 +652,15 @@ export const cleanupOrphanAliasesProcessor = definePostCommitProcessor<CleanupAr
   },
 })
 
-/** Soft-delete orphaned seats in one tx (shared by the mint-time cleanup
- *  above and the reference-drop reaper below). In a child-backed
- *  workspace a seat's OWN generated properties (alias / types)
- *  materialize as hidden field rows (PR #288 §9) — delete those
- *  alongside the seat or they dangle live under the tombstone. Only
- *  machinery-generated field rows go; user content under a seat is left
- *  alone. Flip-gated (§9): generated field rows exist only in
- *  child-backed workspaces — in an un-flipped one, a column match under
- *  a seat is by construction user-authored content, never machinery's
- *  to delete. */
 /** Is `child` a field row this workspace's own seat machinery generated?
- *  The `::` bit AND the generated id — see `reapSeatsInTx`. */
+ *
+ *  BOTH terms are load-bearing, and each fails a different way. Without the
+ *  `::` bit an ordinary `((aliasesFieldId))` child — a user linking to the
+ *  definition — reads as machinery and is swept with the seat. Without the id
+ *  check a `::` field row for ANY OTHER definition reads as machinery, and
+ *  then the seat is tombstoned while that row and its value stay live
+ *  underneath it, because the delete sweep still filters on the generated
+ *  ids. */
 const isGeneratedSeatFieldRow = (
   child: {referenceTargetId?: string | null; isFieldForm?: boolean},
   generatedFieldIds: ReadonlySet<string>,
@@ -672,6 +669,14 @@ const isGeneratedSeatFieldRow = (
   && child.referenceTargetId != null
   && generatedFieldIds.has(child.referenceTargetId)
 
+/** Soft-delete orphaned seats in one tx (shared by the mint-time cleanup
+ *  above and the reference-drop reaper below). A seat's OWN generated
+ *  properties (alias / types) materialize as hidden field rows (PR #288 §9) —
+ *  delete those alongside the seat or they dangle live under the tombstone.
+ *  Only machinery-generated field rows go; user content under a seat is left
+ *  alone. NOT flip-gated: the cell→children backfill mints those field rows
+ *  before the workspace reads them, so a flip-gated tolerance stops reaping
+ *  orphan seats for the whole pre-flip window. */
 const reapSeatsInTx = async (
   ctx: ProcessorCtx,
   workspaceId: string,
@@ -804,12 +809,11 @@ const liveReferenceTargetIds = (row: BlockData | null): ReadonlySet<string> =>
  *     never the uuidv5 slot id);
  *   - not date-shaped (§7.6 daily-note exemption — belt on top of the
  *     id gate, which already excludes the daily namespace);
- *   - no live children AT ALL in an un-flipped workspace; in a
- *     child-backed one, none beyond the seat's own generated field
- *     rows (which only machinery mints there — in an un-flipped
- *     workspace a column match under a seat is by construction
- *     user-authored, and `reapSeatsInTx` wouldn't sweep it, so it
- *     would strand live under the tombstone; Codex review on PR #428).
+ *   - no live children beyond the seat's own generated field rows, in any
+ *     workspace (`isGeneratedSeatFieldRow` — the `::` bit AND the generated
+ *     id). Anything else would strand live under the tombstone, since the
+ *     delete sweep takes only what that predicate matches; Codex review on
+ *     PR #428.
  *  A wrongly-skipped seat is the safe miss (it just keeps squatting
  *  until the alias is re-typed and re-dropped); a wrong DELETE of a
  *  user page is the failure this gate stack exists to make unreachable.
@@ -865,7 +869,12 @@ export const reapOrphanAliasSeatsProcessor = definePostCommitProcessor({
       if (!matchesAliasSeatSeed(seat)) continue
       if (!isAliasSeatSlotId(id, seat.content, workspaceId)) continue
       if (seat.hasLiveChildren) {
-        // See `reapSeatsInTx`: data-keyed, and the bit is load-bearing.
+        // DEFENCE IN DEPTH, not load-bearing: `reapSeatsInTx` re-reads the
+        // children in-tx and applies the same predicate, so replacing this
+        // whole branch with `true` fails nothing. It exists to keep an
+        // obviously-blocked seat out of the write path.
+        // Raw-row twin of `isGeneratedSeatFieldRow`: `is_field_form` is 1 or
+        // NULL here, never 0 (see BLOCK_LOCAL_COLUMNS).
         const children = await ctx.db.getAll<{
           reference_target_id: string | null; is_field_form: number | null
         }>(
