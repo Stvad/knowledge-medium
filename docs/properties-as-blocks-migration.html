@@ -342,11 +342,15 @@
   against the pre-implementation snapshots this banner cites further down for
   the document's original authorship. Everything NOT marked landed remains at
   its original verification state, which for most of the document is the
-  2026-07-01 rewrite: planning prose, not a description of shipped code. In
-  particular the migration is still <em>dark</em> &mdash;
-  <code>workspaces.properties_migration</code> is <code>'cell'</code>
-  everywhere, no slice-C backfill exists, and nothing here should be read as
-  describing behaviour a user can observe today.
+  2026-07-01 rewrite: planning prose, not a description of shipped code.
+  Update 2026-08-19: the slice-C backfill and its operator trigger now
+  <strong>exist on master</strong> (<code>propertyCellBackfill.ts</code> +
+  the <code>properties-migration</code> palette action / <code>kmagent
+  run-backfill</code>, landed 2026-08-18) &mdash; but the migration remains
+  <em>dark</em> until an operator advances a workspace's
+  <code>workspaces.properties_migration</code> column (client writes are
+  trigger-rejected; the column defaults to <code>'cell'</code>), so nothing
+  here should be read as behaviour a user can observe today.
   The rename-rewrite requirements in §9 were reconciled 2026-07-30 against
   <a href="https://github.com/Stvad/knowledge-medium/issues/461">#461</a>
   (<code>references.renameBacklinks</code> moved post-commit &rarr; same-tx):
