@@ -1,3 +1,8 @@
+import { spawnSync } from 'node:child_process'
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import {
   allowsBeadIds,
@@ -62,7 +67,14 @@ describe('matchesPrCommand', () => {
     'gh release create v1 --notes "x"',
     'GITHUB_TOKEN=x gh pr create --fill',
     'foo; gh issue create -t t',
+    // command substitutions execute even inside double quotes
     'echo "$(gh pr create --fill)"',
+    'x=`gh issue create -t t`',
+    // wrapper commands and path-qualified gh still publish
+    'env gh pr create --body x',
+    'xargs gh issue close',
+    '/usr/local/bin/gh pr create --fill',
+    'VAR="a b" gh pr edit 1 --body x',
   ])('matches publishing command: %s', cmd => {
     expect(matchesPrCommand(cmd)).toBe(true)
   })
@@ -78,6 +90,10 @@ describe('matchesPrCommand', () => {
     'git commit -m "docs: gh pr comment flow"',
     'git log --grep "gh issue create"',
     'echo "run gh pr create later"',
+    // quoted prose with fake segment starts must not fake command position
+    'git commit -m "fix parser; gh pr comment is the follow-up"',
+    'git commit -m "fix x\ngh pr comment next\nrefs the tracker"',
+    "echo 'single quotes never execute $(gh pr create)'",
   ])('ignores non-publishing command: %s', cmd => {
     expect(matchesPrCommand(cmd)).toBe(false)
   })
@@ -92,6 +108,9 @@ describe('allowsBeadIds', () => {
 
   it('ignores the marker quoted inside an argument (it would be published)', () => {
     expect(allowsBeadIds('gh pr create --body "mentions KM_ALLOW_BEAD_IDS=1 in prose"')).toBe(false)
+    // quoted prose with a fake segment start must not smuggle the marker in
+    expect(allowsBeadIds('gh pr create --body "prose; KM_ALLOW_BEAD_IDS=1 more"')).toBe(false)
+    expect(allowsBeadIds('gh pr create --body "line one\nKM_ALLOW_BEAD_IDS=1 line two"')).toBe(false)
   })
 })
 
@@ -245,5 +264,58 @@ describe('buildDenyMessage', () => {
     expect(msg).toContain('issues/12')
     expect(msg).toContain('km-zz')
     expect(msg).toContain('KM_ALLOW_BEAD_IDS=1')
+  })
+})
+
+// Process-level pins for hookPrePr's composition — the ordering and gating
+// that unit tests on the pure functions cannot see. Runs the real entry point
+// in a scratch git repo with NO .beads/embeddeddolt and a PATH-fronted `bd`
+// shim that logs every invocation: the fresh-clone invariant is exactly "no
+// bd process is ever spawned there" (the first bd command would create an
+// empty DB that then refuses to pull).
+// Measured ~150ms per spawn solo; budgeted for the 6x load stretch.
+describe('hookPrePr process behavior', { timeout: 20_000 }, () => {
+  const script = fileURLToPath(new URL('./bd-github-sync.mjs', import.meta.url))
+
+  const makeRepo = (opts: { dbReady: boolean }) => {
+    const repo = mkdtempSync(join(tmpdir(), 'bd-sync-hook-'))
+    spawnSync('git', ['init', '-q'], { cwd: repo })
+    mkdirSync(join(repo, '.beads'))
+    if (opts.dbReady) mkdirSync(join(repo, '.beads', 'embeddeddolt'))
+    const shimDir = join(repo, 'shim')
+    mkdirSync(shimDir)
+    const shimLog = join(repo, 'bd-shim.log')
+    writeFileSync(shimLog, '')
+    writeFileSync(join(shimDir, 'bd'), `#!/bin/sh\necho "bd $@" >> "${shimLog}"\nexit 0\n`)
+    chmodSync(join(shimDir, 'bd'), 0o755)
+    const env = { ...process.env, PATH: `${shimDir}:${process.env.PATH}`, BD_GITHUB_SYNC_DRY: '1' }
+    const hook = (command: string) => {
+      const payload = JSON.stringify({ tool_name: 'Bash', cwd: repo, tool_input: { command } })
+      return spawnSync('node', [script, '--hook-pre-pr'], { cwd: repo, env, input: payload, encoding: 'utf8' })
+    }
+    return { hook, shimCalls: () => readFileSync(shimLog, 'utf8') }
+  }
+
+  it('blocks a bead-id publish in a DB-less clone WITHOUT ever spawning bd', () => {
+    const { hook, shimCalls } = makeRepo({ dbReady: false })
+    const r = hook('gh pr create --title t --body "tracks km-zzzz"')
+    expect(r.status).toBe(2)
+    expect(r.stderr).toContain('km-zzzz')
+    expect(r.stderr).toContain('No GitHub issue found')
+    expect(shimCalls()).toBe('')
+  })
+
+  it('honors the escape hatch BEFORE any lookup or mint (DB-ready repo, zero bd calls)', () => {
+    const { hook, shimCalls } = makeRepo({ dbReady: true })
+    const r = hook('KM_ALLOW_BEAD_IDS=1 gh pr create --body "km-zzzz deliberately"')
+    expect(r.status).toBe(0)
+    expect(shimCalls()).toBe('')
+  })
+
+  it('lets a quoted mention of a publishing command pass end-to-end', () => {
+    const { hook, shimCalls } = makeRepo({ dbReady: false })
+    const r = hook('git commit -m "fix parser; gh pr comment is the follow-up\nrefs km-zzzz"')
+    expect(r.status).toBe(0)
+    expect(shimCalls()).toBe('')
   })
 })
