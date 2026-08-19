@@ -11,8 +11,12 @@
  *    the flattened value get their priority re-derived from the label and
  *    pushed back.
  * 3. A bead closed BEFORE its first sync stays closed locally but its issue is
- *    minted OPEN. So after syncing, closed beads whose issue is open get a
- *    selective close-push (which does carry CLOSED once the link exists).
+ *    minted OPEN. So after syncing, closed beads whose issue is open get the
+ *    issue closed via gh — NOT via a selective bd push, which applies the
+ *    last_sync watermark and silently skips any bead updated before it
+ *    (observed live: a day-old close never pushed). gh-closing is safe in
+ *    exactly this direction because the bead is already closed: the states
+ *    agree afterwards, so the next sync has nothing to revert.
  *    Note the deliberate asymmetry with (1): GitHub-side CLOSES are adopted
  *    (they come from PR merges), GitHub-side REOPENS do not stick (beads is
  *    the source of truth; reopen the bead instead).
@@ -266,11 +270,15 @@ const runSync = ({ quiet = false, dryRun = false } = {}) => {
     }
     if (fixes.length && !dryRun) run('bd', ['github', 'sync', '--push-only', '--issues', fixes.map(f => f.id).join(',')], { env })
 
-    // 4. Carry pre-first-sync bead closes out to their just-minted issues.
+    // 4. Carry bead closes out to issues still open (see header: via gh, not
+    // a selective bd push, whose watermark silently skips older closes).
     const closePushes = planClosePushes(listBeads(['closed']), issues)
-    for (const { id, number } of closePushes) report.push(`pushing close of ${id} to open issue #${number}`)
-    if (closePushes.length && !dryRun)
-      run('bd', ['github', 'sync', '--push-only', '--issues', closePushes.map(c => c.id).join(',')], { env })
+    for (const { id, number } of closePushes) {
+      // tryRun: the map can be stale (issue closed since the fetch) and gh
+      // errors on an already-closed issue — converged is not a failure.
+      if (!dryRun) tryRun('gh', ['issue', 'close', String(number), '--repo', REPO, '--reason', 'completed'], { env })
+      report.push(`closed issue #${number} to match closed bead ${id}`)
+    }
 
     const changed = closes.length + fixes.length + closePushes.length > 0 || syncSummary.some(l => /[1-9]/.test(l))
     if (!quiet || changed) console.log(['bd-github-sync:', ...report].join('\n  '))
