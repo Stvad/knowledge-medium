@@ -11,7 +11,7 @@ import { evaluateExampleModule, fixtureHygieneProblems, unknownCatalogImports } 
  *  inlining exampleExtensions.ts itself uses, resolved independently so the
  *  two can be compared. */
 const fixtureSources = import.meta.glob(
-  '/src/extensions/examples/*.{ts,tsx}',
+  '/src/extensions/examples/**/*.{ts,tsx}',
   {query: '?raw', import: 'default', eager: true},
 ) as Record<string, string>
 

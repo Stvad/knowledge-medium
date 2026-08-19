@@ -117,17 +117,58 @@ export const unknownCatalogImports = (source: string): Array<{specifier: string,
     return known ? !known.has(name) : false
   })
 
-/** Every module specifier a source imports, across ALL import forms: the
- *  `from '…'` clause, a bare side-effect `import '…'`, and dynamic
- *  `import('…')`. Scoped to import STATEMENTS — a `\bfrom` scan over the whole
- *  file also matches English prose, and these fixtures are teaching material
- *  full of comments. */
+/** Every module specifier a source imports, from the PARSED module — static
+ *  imports, `export … from`, dynamic `import()` and `require()`.
+ *
+ *  This was a regex over the source text and it silently missed the most
+ *  common shape in these files: a multiline `import {\n  a,\n} from '…'`,
+ *  because the pattern could not span a newline. Five real imports in the
+ *  fixtures went unchecked. Parsing removes that whole class — and the
+ *  prose false positives with it, since a comment is not an import node. */
 export const importedSpecifiers = (source: string): string[] => {
-  const pattern
-    = /(?:^|\n)\s*(?:import|export)\b[^;\n]*?\bfrom\s*['"]([^'"]+)['"]|(?:^|\n)\s*import\s*['"]([^'"]+)['"]|\bimport\(\s*['"]([^'"]+)['"]/g
-  return [...source.matchAll(pattern)]
-    .map(match => match[1] ?? match[2] ?? match[3])
-    .filter((specifier): specifier is string => Boolean(specifier))
+  const ast = Babel.packages.parser.parse(source, {
+    sourceType: 'module',
+    plugins: ['typescript', 'jsx'],
+  })
+  const found: string[] = []
+  const visit = (node: unknown): void => {
+    if (!node || typeof node !== 'object') return
+    const candidate = node as {type?: string, source?: {value?: unknown}, callee?: {type?: string, name?: string}, arguments?: unknown[]}
+    if (
+      (candidate.type === 'ImportDeclaration'
+        || candidate.type === 'ExportNamedDeclaration'
+        || candidate.type === 'ExportAllDeclaration')
+      && typeof candidate.source?.value === 'string'
+    ) {
+      found.push(candidate.source.value)
+    }
+    if (candidate.type === 'CallExpression') {
+      const isDynamic = candidate.callee?.type === 'Import'
+      const isRequire = candidate.callee?.type === 'Identifier' && candidate.callee.name === 'require'
+      const first = candidate.arguments?.[0] as {type?: string, value?: unknown} | undefined
+      if ((isDynamic || isRequire) && first?.type === 'StringLiteral' && typeof first.value === 'string') {
+        found.push(first.value)
+      }
+    }
+    for (const value of Object.values(node as Record<string, unknown>)) {
+      if (Array.isArray(value)) value.forEach(visit)
+      else if (value && typeof value === 'object') visit(value)
+    }
+  }
+  visit(ast.program)
+  return found
+}
+
+/** Comments the parser found, so a suppression is detected wherever it is
+ *  written — including `{/* @ts-expect-error *\/}` in JSX children and a
+ *  `*`-prefixed continuation line inside a block comment, both of which a
+ *  line-anchored regex missed. */
+const commentTexts = (source: string): string[] => {
+  const ast = Babel.packages.parser.parse(source, {
+    sourceType: 'module',
+    plugins: ['typescript', 'jsx'],
+  })
+  return (ast.comments ?? []).map(comment => comment.value)
 }
 
 /** The ONE form the extension runtime accepts. `@/` is an importmap prefix
@@ -138,15 +179,24 @@ export const importedSpecifiers = (source: string): string[] => {
  *  (`react/jsx-runtime`, `react-dom/client`). Backtracking above the `@/`
  *  prefix is rejected by the import-maps spec even though it typechecks. */
 const runnableSpecifier = (specifier: string): boolean => {
+  // Backtracking is rejected on EVERY branch: `react/../../evil.js` used to
+  // pass because the react check returned before the `../` test was reached.
+  if (specifier.includes('../')) return false
   if (specifier === 'react' || specifier === 'react-dom') return true
   if (specifier.startsWith('react/') || specifier.startsWith('react-dom/')) return true
-  return /^@\/[\w./-]+\.js$/.test(specifier) && !specifier.includes('../')
+  return /^@\/[\w./-]+\.js$/.test(specifier)
 }
 
 // Anchored to a comment opener: these files legitimately DISCUSS suppressions
 // in prose ("never reach for @ts-expect-error here"), which a bare substring
 // search bans along with the real thing.
-const SUPPRESSION = /(^|\s)(\/\/|\/\*)\s*(@ts-(nocheck|ignore|expect-error)|eslint-disable)/m
+/** A comment IS a suppression when a line of it STARTS with the directive.
+ *  Anchoring per line keeps prose that merely discusses one ("never reach for
+ *  @ts-expect-error here") legal, while catching the `*`-prefixed
+ *  continuation inside a block comment and the JSX `{/* … *\/}` form. */
+const isSuppressionComment = (text: string): boolean =>
+  text.split('\n').some(line =>
+    /^\*?\s*(@ts-(nocheck|ignore|expect-error)\b|eslint-disable)/.test(line.trim()))
 
 /**
  * Shared hygiene checks for compiled example fixtures. Both example families
@@ -164,23 +214,10 @@ export const fixtureHygieneProblems = (
     for (const specifier of importedSpecifiers(source)) {
       if (!runnableSpecifier(specifier)) badSpecifiers.push(`${path}: ${specifier}`)
     }
-    if (SUPPRESSION.test(source)) badSuppressions.push(path)
+    // Comment TEXT, not the raw source: prose that merely discusses a
+    // suppression ("never reach for @ts-expect-error here") lives in a
+    // comment too, so the check is that no comment IS one.
+    if (commentTexts(source).some(isSuppressionComment)) badSuppressions.push(path)
   }
   return {badSpecifiers, badSuppressions}
-}
-
-/** Identifiers written as a call in backticked PROSE — `seedType({…})`,
- *  `getPluginPrefsBlock(repo, …)`. The catalog's guide text is full of these
- *  and nothing compiles it, which is the same hole the worked examples used
- *  to have: a rename leaves the prose describing an API that is gone. (It
- *  already happened — the prose advertised a `set` prop on
- *  PropertyEditorProps long after the real one was `onChange`.)
- *
- *  Member calls (`repo.tx(`, `block.set(`) are skipped: they are methods, not
- *  module exports, and the catalog does not claim to list them. */
-export const proseCallIdentifiers = (text: string): string[] => {
-  const calls = [...text.matchAll(/`([^`]*)`/g)]
-    .flatMap(match => [...match[1].matchAll(/(^|[^.\w])([A-Za-z_$][\w$]*)\s*\(/g)])
-    .map(match => match[2])
-  return [...new Set(calls)]
 }

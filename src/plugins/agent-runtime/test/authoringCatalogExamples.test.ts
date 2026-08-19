@@ -8,7 +8,6 @@ import {
   evaluateExampleModule,
   parseNamedImports,
   fixtureHygieneProblems,
-  proseCallIdentifiers,
   unknownCatalogImports,
 } from '@/test/exampleModuleResolver'
 import {
@@ -47,7 +46,7 @@ import {
 /** The example fixture files, as source text — the same `?raw` inlining the
  *  catalog itself uses, resolved independently so the two can be compared. */
 const fixtureSources = import.meta.glob(
-  '/src/plugins/agent-runtime/examples/*.{ts,tsx}',
+  '/src/plugins/agent-runtime/examples/**/*.{ts,tsx}',
   {query: '?raw', import: 'default', eager: true},
 ) as Record<string, string>
 
@@ -147,34 +146,73 @@ describe('authoring catalog example drift guard', () => {
     expect(config).toContain('src/**/examples/**')
   })
 
-  it('every API the guide PROSE names in a call still exists', () => {
-    // The worked examples compile now; the prose around them does not. It
-    // carries ~10 API-shaped snippets with real signatures, and a rename
-    // drifts them silently — which is not hypothetical: the prose advertised
-    // `PropertyEditorProps.set` for as long as the examples were strings,
-    // while the real prop was `onChange`. Same failure mode, one field over.
+  it('every API the guide PROSE names still exists', () => {
+    // The worked examples compile; the prose around them does not, and it
+    // names real APIs an author is told to use. A rename drifts them
+    // silently — the same hole the examples used to have, one field over.
+    //
+    // An explicit list rather than a scan. The scan only saw call-SHAPED
+    // mentions, which was 10 of the 21 names actually referenced: every
+    // `getOrCreateTypedChild` or `typeSeedsFacet` written in backticks
+    // without parens was invisible, and those are the helpers the guides
+    // push hardest. It also needed an allowlist of React hooks and JS
+    // builtins that would break the gate the day someone wrote `useRef(` in
+    // a sentence.
+    //
+    // NOTE this checks module EXPORTS only. It does not cover member names
+    // like `PropertyEditorProps.set` (the prose advertised a `set` prop for
+    // as long as the examples were strings, while the real one was
+    // `onChange`) — that needs type-level checking this cannot do.
+    const PROSE_APIS = [
+      'actionsFacet', 'appMountsFacet', 'createTypedChild',
+      'definePropertyEditorOverride', 'definitionSeedsFacet',
+      'extensionTypeSeedKey',
+      'getOrCreateKernelPage', 'getOrCreateTypedChild', 'getPluginPrefsBlock',
+      'navigate', 'openDialog', 'pluginBlockId', 'propertyEditorOverridesFacet',
+      'seedProperty', 'seedType', 'showError', 'showProgress', 'showSuccess',
+      'statusProp', 'typeSeedsFacet', 'useRepo',
+    ]
+
     const catalog = describeAuthoringCatalog()
     const prose = JSON.stringify([
       catalog.storage.principles,
       catalog.storage.patterns.map(p => [p.when, p.use, p.modules]),
       catalog.storage.credentials.rule,
       catalog.storage.credentials.currentAffordance,
-      catalog.guides.map(g => [g.principles, g.steps, g.commands, g.afterInstall]),
+      catalog.guides.map(g => [
+        g.title, g.when, g.principles, g.steps, g.commands, g.afterInstall,
+      ]),
     ])
-    const known = new Set(extensionApiCatalog.flatMap(g => [...g.exports, ...g.types]))
-    // Not module exports: React's own hooks, and the shell/JS builtins the
-    // command lines and prose legitimately mention.
-    const notOurs = new Set([
-      'useState', 'useSyncExternalStore', 'useEffect', 'useMemo', 'useCallback',
-      'require', 'fetch', 'Set', 'Map', 'Promise', 'JSON', 'Object', 'Array',
-      'if', 'for', 'while', 'switch', 'catch', 'function', 'return', 'typeof',
-    ])
-    const missing = proseCallIdentifiers(prose)
-      .filter(name => !known.has(name) && !notOurs.has(name))
+    const known = new Set(extensionApiCatalog.flatMap(group => group.exports))
+
+    // Every name the prose relies on is still exported...
+    const missing = PROSE_APIS.filter(name => !known.has(name))
     expect(
       missing,
-      `${missing.join(', ')} — named as a call in catalog prose but not on the curated API surface`,
+      `${missing.join(', ')} — named in catalog prose but no longer exported`,
     ).toEqual([])
+
+    // ...and the list cannot go stale: each entry must still BE in the prose,
+    // so a name deleted from the guides gets deleted from here too.
+    const absent = PROSE_APIS.filter(name => !prose.includes(name))
+    expect(
+      absent,
+      `${absent.join(', ')} — listed here but no longer mentioned in the prose`,
+    ).toEqual([])
+  })
+
+  it('the fixtures stay out of the published kernel-types surface too', async () => {
+    // The catalog glob keeps them out of `describe-runtime`'s module list, but
+    // that is only one of two discovery channels: `pnpm agent types` installs
+    // a .d.ts tree into an author's editor, and a fixture emitted there
+    // autocompletes as `@/plugins/agent-runtime/examples/settingsDialog.js` —
+    // a module the runtime cannot import. Same decision, other surface.
+    const {readFileSync} = await import('node:fs')
+    const config = readFileSync(
+      new URL('../../../../tsconfig.kernel-types.json', import.meta.url),
+      'utf8',
+    )
+    expect(config).toContain('src/**/examples/**')
   })
 
   it('the fixture files stay out of the discoverable module/component lists', () => {
