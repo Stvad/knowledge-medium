@@ -283,6 +283,10 @@ export const auditPropertyRegistration = async (
   // `whenPropertyDefinitionsReady` refuses a workspace that is not active with
   // its own message, which names no fix. This one does.
   //
+  // The SECOND is defence in depth and no test pins it: the await is a
+  // suspension point, so a workspace switch across it would otherwise capture
+  // another workspace's registry and classify this graph against it.
+  //
   // The wait: the registry is DERIVED from definition blocks, so a snapshot
   // taken mid-rebuild calls a key whose definition has already landed
   // "broken". Not a proof — a definition arriving later still lags — but that
