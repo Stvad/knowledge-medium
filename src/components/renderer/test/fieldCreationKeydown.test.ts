@@ -49,6 +49,8 @@ interface Opts {
   parentId?: string | null
   /** Simulate another handler having already claimed the keystroke. */
   preventDefaulted?: boolean
+  /** Dispatch applies its change and then throws, as a failing render does. */
+  throwAfterDispatch?: boolean
 }
 
 interface Harness {
@@ -78,6 +80,9 @@ const mount = (opts: Opts = {}): Harness => {
   })
   const dispatch = vi.fn((spec: Parameters<EditorState['update']>[0]) => {
     state = state.update(spec).state
+    // CodeMirror commits `view.state` before its DOM-render step, so a render
+    // that throws leaves the change applied. `throwAfterDispatch` reproduces it.
+    if (opts.throwAfterDispatch) throw new Error('render failed')
   })
   const block = {
     id: 'b1',
@@ -185,6 +190,31 @@ describe('handleFieldCreationKeydown', () => {
     expect(h.fire()).toBe(true)
     await settle()
     expect(h.doc()).toBe('hi')
+  })
+
+  it('does not overwrite text the user typed when the failure arrives', async () => {
+    // Reading the live doc is only safe while it is constrained to the two
+    // states this gesture can leave behind — unconstrained, the restore would
+    // replace whatever the user had typed with a bare `::`.
+    const h = mount()
+    canConvertMock.mockImplementation(async () => {
+      h.type('abc')
+      throw new Error('db unavailable')
+    })
+
+    expect(h.fire()).toBe(true)
+    await settle()
+    expect(h.doc()).toBe(':abc')
+  })
+
+  it('reads the document, not a remembered value, when the clear dispatch throws', async () => {
+    // The change is committed before the throw, so the doc is already ''. A
+    // restore keyed on what the gesture *meant* to leave there would look for
+    // ':' , find '', and silently give up.
+    const h = fire({throwAfterDispatch: true})
+    await settle()
+    expect(convertMock).not.toHaveBeenCalled()
+    expect(h.doc()).toBe('::')
   })
 
   it('hands the marker back when the eligibility query THROWS', async () => {

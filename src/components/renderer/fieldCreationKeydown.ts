@@ -22,9 +22,7 @@ const TRIGGER_KEY = FIELD_FORM_MARKER.slice(-1)
 const docIsExactly = (view: EditorView, expected: string): boolean => {
   const selection = view.state.selection.main
   return (
-    // Defence in depth, not load-bearing: a range starting at the doc's end
-    // (the offset clause) cannot also extend past it, so no reachable
-    // non-empty selection survives the other two clauses.
+    // Implied by the two checks below; kept as defence in depth.
     selection.empty &&
     selection.from === expected.length &&
     view.state.doc.toString() === expected
@@ -52,11 +50,9 @@ const restoreTypedMarker = (view: EditorView, left: string): void => {
 
 /** The `::` field-creation shortcut for CodeMirrorContentRenderer: completing a
  *  `::` in an otherwise-empty child block converts it into a property field.
- *  Guarded so it never hijacks an ordinary `::` — a doc holding anything but the
- *  pending first colon, a caret elsewhere, a modifier chord, a read-only repo,
- *  or a parentless/root block all fall through, returning false so CodeMirror
- *  inserts the character. The effect itself
- *  (`convertEmptyChildBlockToProperty`) is covered separately. */
+ *  Every fall-through returns false, leaving CodeMirror to insert the
+ *  character. The effect itself (`convertEmptyChildBlockToProperty`) is
+ *  covered separately. */
 export const handleFieldCreationKeydown = (
   event: KeyboardEvent,
   view: EditorView,
@@ -92,20 +88,15 @@ const createFieldFromTrigger = async (
   block: BlockRendererProps['block'],
   repo: Repo,
 ): Promise<void> => {
-  // What this gesture last put in the document, i.e. what it owes back if it
-  // does not go through. A THROWN failure owes it just as much as a refusal
-  // does — neither leaves the user's text where they typed it.
-  let left = TRIGGER_PREFIX
   try {
     // Decide BEFORE touching the live doc: everything dispatched below is
     // persisted by the editor's own debounced commit, so a refusal discovered
     // afterwards could not take it back.
     const eligible = await canConvertEmptyChildBlockToProperty(block, repo)
-    if (!eligible) return restoreTypedMarker(view, left)
+    if (!eligible) return restoreTypedMarker(view, TRIGGER_PREFIX)
 
-    // That query awaited, and the keystrokes kept coming — so re-read the live
-    // document instead of trusting the keydown's snapshot. Anything but the
-    // bare trigger means the block holds content the clear below would wipe.
+    // Re-check: the user keeps typing through the await above, and the clear
+    // below would wipe whatever they added.
     if (!isTriggerState(view)) return
 
     // Drop the pending first colon and commit that now: the debounce is
@@ -113,15 +104,19 @@ const createFieldFromTrigger = async (
     // `":"` would land on the block the conversion is about to delete.
     view.dispatch({changes: {from: 0, to: view.state.doc.length, insert: ''}})
     flushEditorContent(view)
-    left = ''
 
     // The conversion re-checks eligibility against its own row before deleting
     // (which is what makes it safe), and this document was already cleared on
     // the strength of the earlier answer — so its refusal owes the text back
     // just as much as the first one did.
-    if (!await convertEmptyChildBlockToProperty(block, repo)) restoreTypedMarker(view, left)
+    if (!await convertEmptyChildBlockToProperty(block, repo)) restoreTypedMarker(view, '')
   } catch (error) {
-    restoreTypedMarker(view, left)
+    // A failure owes the text back exactly as a refusal does. Which state the
+    // gesture left behind has to be READ, not remembered: a dispatch that
+    // throws mid-render has already committed its change, so a variable
+    // assigned after it describes the document one statement too late.
+    const left = view.state.doc.toString()
+    if (left === TRIGGER_PREFIX || left === '') restoreTypedMarker(view, left)
     throw error
   }
 }
