@@ -449,11 +449,9 @@ export const isRegistrablePropertyName = (name: string): boolean => {
  *  the one class of property data a child-backed workspace cannot carry, and
  *  §9 requires every key to resolve a definition before a workspace flips.
  *
- *  Preset choice is PER KEY, from the values in hand. Promoted keys are
- *  homogeneous in practice — a given attribute is a scalar everywhere or a
- *  list everywhere — so inference lands the useful type (a `string` stays a
- *  string rather than being widened into a one-item list) and two devices
- *  observing the same key almost always infer the same thing.
+ *  Preset choice is PER KEY, from the values in hand: promoted attributes are
+ *  homogeneous in practice, so inference lands the useful type rather than
+ *  widening every scalar into a one-item list.
  *
  *  Two known limits, both deliberate:
  *
@@ -498,6 +496,7 @@ export const ensurePromotedPropertySchemas = async (
   // than half-landed somewhere else. Checking only around the whole call is
   // not enough; the window is between the keys.
   const pinnedWorkspaceId = repo.activeWorkspaceId
+  const registeredNow = new Map<string, string>()
   for (const entry of toRegister) {
     if (repo.activeWorkspaceId !== pinnedWorkspaceId) {
       notes.push(
@@ -513,6 +512,7 @@ export const ensurePromotedPropertySchemas = async (
     try {
       await repo.userSchemas.addSchema(
         config ? {name: entry.name, presetId, config} : {name: entry.name, presetId})
+      registeredNow.set(entry.name, presetId)
     } catch (err) {
       notes.push(
         `Could not register promoted property ${JSON.stringify(entry.name)} `
@@ -521,65 +521,57 @@ export const ensurePromotedPropertySchemas = async (
     }
   }
 
-  // Driven by the EFFECTIVE registry, not by what this call registered: a key
-  // an earlier batch registered as `list` still needs this batch's scalar
-  // widened, or it lands undecodable under that existing schema.
-  const schemas = repo.propertySchemas
+  // Normalize ONLY what this call registered. Those presets were classified
+  // from these very values, so reshaping them is ours to do and is close to a
+  // no-op. A schema chosen by anyone else — a hand-made definition, or one
+  // this helper registered in an earlier batch — is left strictly alone:
+  // silently rewriting a value to fit a codec we did not choose is how a
+  // consumer reading the raw property breaks (an array JSON-encoded into a
+  // string stops matching, for instance).
   const stringNames = new Set<string>()
   const listNames = new Set<string>()
-  for (const bag of bags) {
-    for (const name of Object.keys(bag.properties ?? {})) {
-      const codecType = schemas.get(name)?.codec.type
-      if (codecType === 'string') stringNames.add(name)
-      else if (codecType === 'list') listNames.add(name)
-    }
-  }
-  // ACCEPTED LIMITATION, reported rather than silently applied. If a key was
-  // first seen as a scalar it registered `string`, and a later batch carrying
-  // repeated values gets JSON-encoded into that string
-  // (`normalizeStringPropertyValues`) so it still decodes — readable, but a
-  // list editor and queries see one opaque value. Promoted keys are
-  // homogeneous in practice (production: matrix:timestamp 100% scalar over
-  // 316 cells, matrix:url 100% array over 174), and the alternatives are
-  // worse: widening the schema strands the scalars already stored under it,
-  // and registering everything as json throws away the useful typing for
-  // every key to serve a case that does not occur. So it is named here, and
-  // named in the diagnostics when it actually happens, so the fix (widen that
-  // one definition by hand) is obvious.
-  for (const name of stringNames) {
-    const widened = bags.some(bag => Array.isArray(bag.properties?.[name]))
-    if (!widened) continue
-    notes.push(
-      `Promoted property ${JSON.stringify(name)} is registered as a string but this batch `
-      + 'carries repeated values; they are stored JSON-encoded. Change that definition to '
-      + 'the list preset if the key is meant to be multi-valued.',
-    )
+  for (const [name, presetId] of registeredNow) {
+    if (presetId === 'string') stringNames.add(name)
+    else if (presetId === 'list') listNames.add(name)
   }
   normalizeStringPropertyValues(asBlocks, stringNames)
   normalizeListPropertyValues(asBlocks, listNames)
 
-  // Postcondition check, reported rather than enforced. A registration can
-  // still fail for a reason the caller's own workspace check cannot see —
-  // `addSchema` also compares the projector GENERATION, so an A→B→A switch
-  // throws while `activeWorkspaceId` matches again — and a key left
-  // unregistered here becomes a definition-less cell, which property
-  // migration skips.
-  //
-  // Deliberately NOT escalated to a refusal or a deferral. Blocking the write
-  // trades a recoverable state for an unrecoverable one: a caller that defers
-  // on this stalls forever if the failure is persistent (matrix ingest would
-  // stop advancing its sync cursor entirely), whereas a definition-less cell
-  // is exactly the pre-existing condition this helper reduces, is reported by
-  // `kmagent audit-properties`, and is swept by §9's orphan synthesis, which
-  // has to run before any workspace flips regardless. So: name it loudly and
-  // let the caller proceed.
-  const stillUnregistered = [...names].filter(name => !repo.propertySchemas.get(name))
-  if (stillUnregistered.length > 0) {
+  // One postcondition covering both ways a key can still be un-carryable:
+  // no definition at all, or a value that will not decode under the
+  // definition it has. Reported, never enforced — see the note on this
+  // helper: refusing the write trades a recoverable state for a stalled
+  // caller, and both cases are swept by §9 orphan synthesis before any flip.
+  const missing: string[] = []
+  const undecodable: string[] = []
+  for (const name of names) {
+    const schema = repo.propertySchemas.get(name)
+    if (!schema) { missing.push(name); continue }
+    for (const bag of bags) {
+      const properties = bag.properties
+      if (!properties || !(name in properties)) continue
+      try {
+        schema.codec.decode(properties[name])
+      } catch {
+        undecodable.push(name)
+        break
+      }
+    }
+  }
+  if (missing.length > 0) {
     notes.push(
-      `${stillUnregistered.length} promoted key(s) remain WITHOUT a definition and will be `
-      + `skipped by property migration: ${stillUnregistered.map(n => JSON.stringify(n)).join(', ')}. `
+      `${missing.length} promoted key(s) have NO definition and will be skipped by property `
+      + `migration: ${missing.map(n => JSON.stringify(n)).join(', ')}. `
       + 'Re-run once the workspace settles, or let §9 orphan synthesis pick them up; '
       + '`kmagent audit-properties` lists them.',
+    )
+  }
+  if (undecodable.length > 0) {
+    notes.push(
+      `${undecodable.length} promoted key(s) carry a value that does not decode under their `
+      + `existing definition: ${undecodable.map(n => JSON.stringify(n)).join(', ')}. `
+      + 'The value is stored as-is rather than reshaped to fit a schema this did not choose; '
+      + 'widen that definition if the key is genuinely multi-shaped.',
     )
   }
 

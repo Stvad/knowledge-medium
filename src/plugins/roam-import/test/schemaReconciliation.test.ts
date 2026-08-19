@@ -485,17 +485,19 @@ describe('ensurePromotedPropertySchemas', () => {
     expect(() => codec.decode(blocks[0]!.properties['matrix:topic'])).not.toThrow()
   })
 
-  it('normalizes a later scalar under a list schema an earlier batch registered', async () => {
-    await ensurePromotedPropertySchemas(env.repo, [
+  it('normalizes a mixed batch to match the preset it just registered', async () => {
+    // Classification samples the whole batch, so a key that is scalar on one
+    // block and a list on another registers `list` — the scalar then has to
+    // be widened or it would not decode under the schema this call chose.
+    const blocks = [
       block('a', {'matrix:tag': ['one', 'two']}),
-      block('b', {'matrix:tag': ['three']}),
-    ])
+      block('b', {'matrix:tag': 'solo'}),
+    ]
+
+    await ensurePromotedPropertySchemas(env.repo, blocks)
+
     expect(env.repo.propertySchemas.get('matrix:tag')?.codec.type).toBe('list')
-
-    const laterBatch = [block('c', {'matrix:tag': 'solo'})]
-    await ensurePromotedPropertySchemas(env.repo, laterBatch)
-
-    expect(laterBatch[0]!.properties['matrix:tag']).toEqual(['solo'])
+    expect(blocks[1]!.properties['matrix:tag']).toEqual(['solo'])
   })
 
   it('never deletes a key it could not register — the caller may have dropped the source block', async () => {
@@ -511,22 +513,19 @@ describe('ensurePromotedPropertySchemas', () => {
     expect(notes.length).toBeGreaterThan(0)
   })
 
-  it('reports when repeated values land under a scalar-first string schema', async () => {
-    // Registration order decides the preset, so a key first seen as a scalar
-    // registers `string`; a later batch of repeated values is then JSON-
-    // encoded to stay decodable. Accepted (promoted keys are homogeneous in
-    // practice) but never silent — the diagnostic names the key and the fix.
-    await ensurePromotedPropertySchemas(env.repo, [block('a', {'matrix:topic': 'solo'})])
-    expect(env.repo.propertySchemas.get('matrix:topic')?.codec.type).toBe('string')
+  it('leaves a value alone under a schema it did not choose, and reports the mismatch', async () => {
+    // Reshaping data to fit someone else's codec is how a consumer reading
+    // the raw property breaks (an array JSON-encoded into a string stops
+    // matching). So a pre-existing schema is left strictly alone; the
+    // mismatch is named instead.
+    await env.repo.userSchemas.addSchema({name: 'matrix:topic', presetId: 'string'})
 
     const later = [block('b', {'matrix:topic': ['one', 'two']})]
     const notes = await ensurePromotedPropertySchemas(env.repo, later)
 
+    expect(later[0]!.properties['matrix:topic']).toEqual(['one', 'two'])
     expect(notes.join(' ')).toMatch(/matrix:topic/)
-    expect(notes.join(' ')).toMatch(/list preset/i)
-    // Still decodable — degraded, not lost.
-    expect(() => env.repo.propertySchemas.get('matrix:topic')!.codec.decode(
-      later[0]!.properties['matrix:topic'])).not.toThrow()
+    expect(notes.join(' ')).toMatch(/does not decode/i)
   })
 
   it('abandons the batch when the active workspace changes mid-registration', async () => {
@@ -566,7 +565,7 @@ describe('ensurePromotedPropertySchemas', () => {
 
     ;(env.repo.userSchemas as {addSchema: typeof realAddSchema}).addSchema = realAddSchema
     expect(notes.join(' ')).toMatch(/matrix:doomed/)
-    expect(notes.join(' ')).toMatch(/WITHOUT a definition/)
+    expect(notes.join(' ')).toMatch(/NO definition/)
   })
 
   it('leaves an already-declared key on its existing schema', async () => {
