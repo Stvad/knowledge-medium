@@ -521,18 +521,23 @@ export const ensurePromotedPropertySchemas = async (
     }
   }
 
-  // Normalize ONLY what this call registered. Those presets were classified
-  // from these very values, so reshaping them is ours to do and is close to a
-  // no-op. A schema chosen by anyone else — a hand-made definition, or one
-  // this helper registered in an earlier batch — is left strictly alone:
-  // silently rewriting a value to fit a codec we did not choose is how a
-  // consumer reading the raw property breaks (an array JSON-encoded into a
-  // string stops matching, for instance).
+  // Normalize against the EFFECTIVE registry, not just what this call
+  // registered. A value that does not decode under its key's schema is not a
+  // cosmetic problem: post-flip `MATERIALIZE_PROPERTY_CHILDREN_PROCESSOR`
+  // decodes during the write and THROWS, which rolls back the whole
+  // transaction — for a poll-driven caller that holds its cursor on failure
+  // (matrix ingest) that is an infinite retry on the same event, i.e. ingest
+  // stops permanently. Reshaping the value is the lesser evil.
+  //
+  // Scoping this to freshly-registered keys was tried and reverted: it was
+  // meant to protect consumers that read the raw property, but the only such
+  // consumer reads a `url`-preset key, which normalization never touches.
   const stringNames = new Set<string>()
   const listNames = new Set<string>()
-  for (const [name, presetId] of registeredNow) {
-    if (presetId === 'string') stringNames.add(name)
-    else if (presetId === 'list') listNames.add(name)
+  for (const name of names) {
+    const codecType = repo.propertySchemas.get(name)?.codec.type
+    if (codecType === 'string') stringNames.add(name)
+    else if (codecType === 'list') listNames.add(name)
   }
   normalizeStringPropertyValues(asBlocks, stringNames)
   normalizeListPropertyValues(asBlocks, listNames)
@@ -567,11 +572,18 @@ export const ensurePromotedPropertySchemas = async (
     )
   }
   if (undecodable.length > 0) {
+    // Normalization only covers `string` and `list`. A key whose existing
+    // schema is narrower (url, number, boolean, date…) can still receive
+    // arbitrary promoted text that no reshaping fixes — and post-flip that
+    // aborts the writing transaction. Tracked in #594; reported loudly here
+    // because the caller cannot otherwise tell it is about to write a value
+    // its own schema rejects.
     notes.push(
       `${undecodable.length} promoted key(s) carry a value that does not decode under their `
       + `existing definition: ${undecodable.map(n => JSON.stringify(n)).join(', ')}. `
-      + 'The value is stored as-is rather than reshaped to fit a schema this did not choose; '
-      + 'widen that definition if the key is genuinely multi-shaped.',
+      + 'This value cannot be made to fit by reshaping; widen or correct that definition. '
+      + 'In a child-backed workspace a write like this is REJECTED by the materialize '
+      + 'processor, so it must be resolved before that workspace flips.',
     )
   }
 

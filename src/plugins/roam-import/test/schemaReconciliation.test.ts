@@ -513,18 +513,30 @@ describe('ensurePromotedPropertySchemas', () => {
     expect(notes.length).toBeGreaterThan(0)
   })
 
-  it('leaves a value alone under a schema it did not choose, and reports the mismatch', async () => {
-    // Reshaping data to fit someone else's codec is how a consumer reading
-    // the raw property breaks (an array JSON-encoded into a string stops
-    // matching). So a pre-existing schema is left strictly alone; the
-    // mismatch is named instead.
+  it('reshapes a value to fit a pre-existing schema rather than writing one that will not decode', async () => {
+    // Post-flip the materialize processor decodes during the write and
+    // THROWS, rolling back the transaction — for a poll-driven caller that
+    // holds its cursor on failure that is an infinite retry, i.e. ingest
+    // stops permanently. Reshaping is the lesser evil.
     await env.repo.userSchemas.addSchema({name: 'matrix:topic', presetId: 'string'})
+    const schema = env.repo.propertySchemas.get('matrix:topic')!
 
     const later = [block('b', {'matrix:topic': ['one', 'two']})]
-    const notes = await ensurePromotedPropertySchemas(env.repo, later)
+    await ensurePromotedPropertySchemas(env.repo, later)
 
-    expect(later[0]!.properties['matrix:topic']).toEqual(['one', 'two'])
-    expect(notes.join(' ')).toMatch(/matrix:topic/)
+    expect(() => schema.codec.decode(later[0]!.properties['matrix:topic'])).not.toThrow()
+  })
+
+  it('reports a value no reshaping can fix, since post-flip that write is rejected', async () => {
+    // Normalization only covers string and list; a narrower pre-existing
+    // schema can still receive text that cannot be made to fit (#594).
+    await env.repo.userSchemas.addSchema({name: 'matrix:count', presetId: 'number'})
+
+    const notes = await ensurePromotedPropertySchemas(env.repo, [
+      block('a', {'matrix:count': 'not-a-number'}),
+    ])
+
+    expect(notes.join(' ')).toMatch(/matrix:count/)
     expect(notes.join(' ')).toMatch(/does not decode/i)
   })
 
