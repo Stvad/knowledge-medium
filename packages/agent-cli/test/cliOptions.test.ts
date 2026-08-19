@@ -22,9 +22,6 @@ const parseWorkspaceOption = (argv: string[]): unknown => parseOption('workspace
 
 describe('workspaceAssertion', () => {
   it('keeps an EMPTY --workspace as an assertion so the command layer can refuse it', () => {
-    // The whole bug: a shell expanding an unset variable yields `--workspace
-    // ""`, CAC turns that into the number 0, and a truthiness test drops it —
-    // silently answering about the active workspace instead of the named one.
     const parsed = parseWorkspaceOption(['page', 'x', '--workspace', ''])
     expect(parsed).toBe(0)
 

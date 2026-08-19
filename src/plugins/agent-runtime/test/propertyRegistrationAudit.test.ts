@@ -331,6 +331,15 @@ describe('audit-properties command', () => {
     expect(result.unregistered.map(entry => entry.property)).toContain('demo:undeclared')
   })
 
+  it('refuses an explicit workspace whose registry is not loaded', async () => {
+    await expect(executeCommand(
+      {commandId: 'a-2', type: 'audit-properties', workspaceId: 'ws-unloaded'},
+      context,
+    )).rejects.toThrow(/registry/i)
+  })
+})
+
+describe('shared workspace resolution', () => {
   // Verbs, then values. page/search/daily-note resolve through
   // `commandWorkspaceId`; the backlinks verbs resolve through
   // `resolveBlockWorkspaceId`; audit-properties checks its own input. Each
@@ -358,13 +367,6 @@ describe('audit-properties command', () => {
       )).rejects.toThrow(/empty value/i)
     },
   )
-
-  it('refuses an explicit workspace whose registry is not loaded', async () => {
-    await expect(executeCommand(
-      {commandId: 'a-2', type: 'audit-properties', workspaceId: 'ws-unloaded'},
-      context,
-    )).rejects.toThrow(/registry/i)
-  })
 })
 
 describe('describeUnregisteredProperty', () => {

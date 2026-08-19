@@ -414,18 +414,7 @@ const auditRuntimeProperties = async (
   repo: Repo,
   input: {workspaceId?: string},
 ): Promise<PropertyRegistrationAudit> => {
-  // An EMPTY assertion is not the same as no assertion. `--workspace` exists
-  // to pin which graph is being audited, so a shell expanding an unset
-  // variable (`--workspace "$WS"`) must fail loudly rather than quietly
-  // auditing the active workspace and handing back a remediation list for
-  // the wrong graph.
-  if (input.workspaceId !== undefined && input.workspaceId.trim() === '') {
-    throw new Error(
-      'audit-properties: --workspace was given an empty value. It asserts which ' +
-      'workspace is audited, so an empty expansion must fail rather than fall back ' +
-      'to the active one. Pass a real workspace id, or omit the option entirely.',
-    )
-  }
+  assertNonEmptyWorkspaceOverride(input.workspaceId)
   return auditPropertyRegistration(repo, input.workspaceId?.trim() || resolveWorkspaceId(repo))
 }
 
@@ -1383,16 +1372,14 @@ const hydrateData = (data: BlockData): HydratedBlockRef => ({
   deepLink: deepLinkFor(data.workspaceId, data.id),
 })
 
-/** An EMPTY override is not the same as no override. A caller that passed
- *  `workspaceId` is ASSERTING which graph to answer about — usually a script
- *  whose `--workspace "$WS"` expanded an unset variable — so falling back to
- *  the active workspace would answer about a graph it never named. Refuse. */
+/** Must run BEFORE each resolver's `override && return override`: a
+ *  whitespace-only override is truthy and would be used as a literal id. */
 const assertNonEmptyWorkspaceOverride = (override: unknown): void => {
   if (isString(override) && override.trim() === '') {
     throw new Error(
-      'workspaceId was given an empty value. It asserts which workspace to use, so an '
-      + 'empty expansion must fail rather than fall back to the active one. Pass a real '
-      + 'workspace id, or omit it entirely.',
+      'workspaceId (--workspace) was given an empty value. It asserts which workspace to '
+      + 'use, so an empty expansion must fail rather than fall back to the active one. '
+      + 'Pass a real workspace id, or omit it entirely.',
     )
   }
 }

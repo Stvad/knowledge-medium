@@ -739,7 +739,7 @@ cli
   .command('backlinks <blockId>', wireDescription('backlinks'))
   .option('--filter <spec>', 'none|stored|effective, or inline JSON BacklinksFilter (default: none)')
   .option('--workspace <id>', "Workspace id (defaults to the block's workspace, then the active one)")
-  .action(async (blockId: string, options: {filter?: string, workspace?: string}) => {
+  .action(async (blockId: string, options: {filter?: string, workspace?: string | number}) => {
     const filter = parseSpecArg(options.filter, ['none', 'stored', 'effective'], '--filter')
     await runAndPrint({
       type: 'backlinks',
@@ -756,7 +756,7 @@ cli
   .option('--workspace <id>', "Workspace id (defaults to the block's workspace, then the active one)")
   .action(async (
     blockId: string,
-    options: {filter?: string, grouping?: string, workspace?: string},
+    options: {filter?: string, grouping?: string, workspace?: string | number},
   ) => {
     const filter = parseSpecArg(options.filter, ['none', 'stored', 'effective'], '--filter')
     const grouping = parseSpecArg(options.grouping, ['user', 'none'], '--grouping')
@@ -785,7 +785,7 @@ cli
   .command('page [...name]', wireDescription('page'))
   .option('--workspace <id>', 'Workspace id (defaults to the active one)')
   .option('--limit <n>', 'Max substring candidates (default 20)')
-  .action(async (name: unknown, options: {workspace?: string, limit?: string}) => {
+  .action(async (name: unknown, options: {workspace?: string | number, limit?: string | number}) => {
     const text = toStringArray(name).join(' ').trim()
     if (!text) throw new Error('page requires a <name> (e.g. `kmagent page "Project Alpha"`)')
     await runAndPrint({
@@ -799,7 +799,7 @@ cli
 cli
   .command('daily-note [...date]', wireDescription('daily-note'))
   .option('--workspace <id>', 'Workspace id (defaults to the active one)')
-  .action(async (date: unknown, options: {workspace?: string}) => {
+  .action(async (date: unknown, options: {workspace?: string | number}) => {
     const text = toStringArray(date).join(' ').trim()
     if (!text) throw new Error('daily-note requires a <date> (e.g. `kmagent daily-note yesterday`)')
     await runAndPrint({
@@ -813,7 +813,7 @@ cli
   .command('search [...query]', wireDescription('search'))
   .option('--workspace <id>', 'Workspace id (defaults to the active one)')
   .option('--limit <n>', 'Max results (default 50)')
-  .action(async (query: unknown, options: {workspace?: string, limit?: string}) => {
+  .action(async (query: unknown, options: {workspace?: string | number, limit?: string | number}) => {
     const text = toStringArray(query).join(' ').trim()
     if (!text) throw new Error('search requires a <query>')
     await runAndPrint({
@@ -939,19 +939,9 @@ cli
   .command('audit-properties', wireDescription('audit-properties'))
   .option('--workspace <id>', 'Assert the workspace being audited (defaults to the active one; a workspace whose definition registry is not loaded is refused, not reported on)')
   .action(async (options: {workspace?: string | number}) => {
-    // Test PRESENCE, not truthiness. CAC parses `--workspace ""` (a shell
-    // expanding an unset variable) into the NUMBER 0 — falsy but present — so
-    // a truthiness check drops the assertion here and the command layer's
-    // empty-value rejection never runs, silently auditing the ACTIVE
-    // workspace. That is precisely the wrong-graph outcome this option exists
-    // to prevent. Normalize the 0 artifact back to an empty string so the
-    // purpose-built error is what the user actually sees.
-    const asserted = options.workspace === undefined
-      ? undefined
-      : options.workspace === 0 ? '' : String(options.workspace)
     await runAndPrint({
       type: 'audit-properties',
-      ...(asserted !== undefined ? {workspaceId: asserted} : {}),
+      ...workspaceAssertion(options.workspace),
     })
   })
 
