@@ -88,12 +88,12 @@ const SAFE_VIA_PROTOTYPE: Record<string, string> = {
   whenPropertyDefinitionsReady: 'waits on the constructor-bound projector service; assigns no Repo fields',
   load: 'read + shared BlockCache mutation (object-interior, reached via chain)',
   undoManagerFor: 'mints UndoManager into the shared map, but UndoManager captures no repo',
-
-  // ── writes into a caller-provided tx (grouping follows the caller) ──
   assertBackfillMayWrite: 'read — throws or returns; assigns no Repo fields',
   backfillSyncSettledNow: 'read — samples the injected gate; assigns no Repo fields',
   syncViewGap: 'read — one query plus a gate sample; assigns no Repo fields',
   lastSyncedAt: 'getter read (delegates to the PowerSync status)',
+
+  // ── writes into a caller-provided tx (grouping follows the caller) ──
   addTypeInTx: 'writes into the caller tx',
   addTypeInTxLenient: 'writes into the caller tx',
   removeTypeInTx: 'writes into the caller tx',
