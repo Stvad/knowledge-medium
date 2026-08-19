@@ -15,10 +15,12 @@
 // so every key/command named here is documentation that can silently rot.
 // When editing, verify the binding in `src/shortcuts/defaultShortcuts.ts`
 // (or the owning plugin) first — and remember the ⌘K palette only lists
-// actions whose CONTEXT is active: NORMAL_MODE actions are unreachable
-// from it with vim off, so the default variant must never route through
-// the palette for block-scoped actions (the bullet's right-click menu and
-// the multi-select keys are the non-vim paths).
+// actions whose CONTEXT is active. With vim off NORMAL_MODE never
+// activates, so the default variant must not route NORMAL_MODE-bound
+// actions through the palette (the bullet's right-click menu and the
+// multi-select keys are the non-vim paths). Other contexts are fine:
+// MULTI_SELECT_MODE works without vim, and its actions do appear in the
+// palette while a selection is active.
 
 import { v4 as uuidv4 } from 'uuid'
 import {
@@ -265,7 +267,7 @@ export const tutorialOutline = (variant: TutorialVariant): TutorialNode[] => {
 
     sect('Backlinks', [
       'Links are two-way. Open a page (or zoom into any block) and a **Linked References** section appears below its content, listing every block elsewhere that links here — so a page accretes context from everywhere it\'s mentioned without you maintaining it.',
-      'Any block that others link *to* shows a small **reference-count badge**; click it to unfold those incoming references inline, right where you are, without navigating away. Click again to collapse.',
+      'Out in the outline, a block that others link *to* shows a small **reference-count badge**; click it to unfold those incoming references inline, right where you are, without navigating away. Click again to collapse. (The block you\'ve zoomed into doesn\'t need one — it gets the full Linked References section below.)',
       'The Linked References header has a Flat / Grouped switcher. Flat is one plain list; Grouped clusters the references by a shared key — e.g. the page each one lives on, or a type/attribute they share — so related mentions sit together. Regular pages default to Flat; daily notes default to Grouped.',
       'The funnel icon in the same header filters the references — by page, daily note, or property values — and the header count then reads matched / total.',
       'See it live: open [[extensions]] and scroll to its **Linked References** — this tutorial links there from several bullets, so they all show up listed under that page.',
@@ -379,7 +381,7 @@ export const tutorialOutline = (variant: TutorialVariant): TutorialNode[] => {
     ]),
 
     advancedSect('Images & files', [
-      'Paste or drop an image (or any file) straight into your notes — it uploads into the workspace and appears inline as its own media block, so you can move it, link it, and embed it elsewhere like any other block.',
+      'Paste an image (or any file) straight into your notes — it uploads into the workspace and appears inline as its own media block, so you can move it, link it, and embed it elsewhere like any other block.',
       'On a phone, the keyboard toolbar has an **Insert image** button. If an upload fails (offline, say), run **Retry failed media uploads** from the command palette once you\'re back.',
     ]),
 
@@ -396,7 +398,7 @@ export const tutorialOutline = (variant: TutorialVariant): TutorialNode[] => {
       'On a phone-sized screen the app swaps in touch affordances:',
       'A **bottom navigation bar** gives one-tap access to the sidebar, a new block, append-to-today, today\'s daily note, search, the command palette, and undo.',
       'While editing, a **keyboard toolbar** floats above the on-screen keyboard with indent / outdent, move up / down, `[[` page-reference and `((` block-reference inserts, an insert-image button, undo / redo, and a Done button to dismiss the keyboard.',
-      '**Swipe a block** to reveal its quick-actions menu — Copy, Copy Ref / Embed, Open in panel, Properties, Collapse, Zoom in, Delete — plus items other features contribute: **Commands** (a command palette scoped to that block), **Reschedule** for dated blocks, and the SRS grades. This is how you reach per-block actions on touch — the same ones vim binds to keys (`z`, `t`, `y r`, …) and desktop puts on the bullet\'s right-click menu.',
+      '**Swipe a block** to reveal its quick-actions menu — Copy, Copy Ref / Embed, Open in panel, Properties, Collapse, Zoom in, Delete — plus items other features contribute: **Commands** (a command palette scoped to that block), **Reschedule** for dated blocks, and the SRS grades. This is the touch route to per-block actions; vim binds many of the same ones to keys (`z`, `t`, `y r`, …), while desktop\'s bullet right-click menu carries a smaller set (copy ref / embed, zoom, properties).',
       'Swipe a block to the right to cycle its todo / done state.',
       'Scrub a date: drag a **dated** block sideways with **two fingers** — right moves the date forward, left back, with an overlay previewing the new date as you drag. Two fingers so it never clashes with one-finger scroll or the swipe menu. For a bigger jump, the swipe menu has a **Reschedule** sheet.',
     ]),
