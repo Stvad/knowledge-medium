@@ -350,104 +350,36 @@ describe('auditPropertyRegistration', () => {
 })
 
 describe('audit-properties scan coverage', () => {
-  // The report's job is to enumerate the keys a flip cannot carry, so a scan
-  // over a partial `blocks` is worse than no scan: an under-count reads as
-  // "nothing to fix" and is acted on.
+  // The report READS; the flip is what acts on it. So an incomplete view is
+  // stated, not refused — and the statement has to be there, because an empty
+  // `unregistered` list from a half-materialized graph is indistinguishable
+  // from a clean one.
 
-  it('refuses to report while downloaded rows are still draining into blocks', async () => {
+  it('says so when downloaded rows are still draining into blocks', async () => {
     await create({id: 'b1', properties: {'demo:undeclared': 'x'}})
     await sharedDb.db.execute(
       `INSERT INTO blocks_synced_changes (id, op) VALUES (?, 'upsert')`, ['not-yet-applied'])
 
-    await expect(auditPropertyRegistration(repo, WS)).rejects.toThrow(/draining/i)
+    const audit = await auditPropertyRegistration(repo, WS)
+
+    expect(audit.syncGap).toMatch(/draining/i)
   })
 
-  it('refuses to report while this device is behind the server', async () => {
+  it('says so when this device is behind the server', async () => {
     installRepo(() => () => {})
     await create({id: 'b1', properties: {'demo:undeclared': 'x'}})
 
-    await expect(auditPropertyRegistration(repo, WS)).rejects.toThrow(/not caught up/i)
+    const audit = await auditPropertyRegistration(repo, WS)
+
+    expect(audit.syncGap).toMatch(/not caught up/i)
   })
 
-  it('discards a scan a whole sync cycle completed under, which no sample can see', async () => {
-    // "Is sync work outstanding" reads false both BEFORE an arrival and AFTER
-    // it drained, so a download that starts and finishes between the opening
-    // and closing checks is invisible to both. The monotone arrival mark is
-    // what catches it: rows staged mid-scan stay counted once the queue is
-    // empty again. Staged and drained for real here, right after the opening
-    // mark is taken.
+  it('reports no gap when nothing is outstanding', async () => {
+    // The negative case is what makes the field readable: always-non-null
+    // would be noise, and always-null would be a lie.
     await create({id: 'b1', properties: {'demo:undeclared': 'x'}})
-    const realMark = repo.stagedArrivalMark.bind(repo)
-    let staged = false
-    vi.spyOn(repo, 'stagedArrivalMark').mockImplementation(async () => {
-      const mark = await realMark()
-      if (!staged) {
-        staged = true
-        await sharedDb.db.execute(
-          `INSERT INTO blocks_synced_changes (id, op) VALUES (?, 'upsert')`, ['arrived'])
-        await sharedDb.db.execute('DELETE FROM blocks_synced_changes')
-      }
-      return mark
-    })
 
-    await expect(auditPropertyRegistration(repo, WS)).rejects.toThrow(/arrived from sync/i)
-  })
-
-  it('brackets the queue check with the mark, so an arrival between them is caught', async () => {
-    // Ordering, not sampling: read the opening mark AFTER the opening queue
-    // check and a row staged in that gap is already counted in it — so if the
-    // row drains before the closing checks, both checks pass, both marks
-    // agree, and a scan that never saw the row reports clean. Staged here at
-    // exactly that moment: after the opening check returns.
-    await create({id: 'b1', properties: {'demo:undeclared': 'x'}})
-    const realGap = repo.syncViewGap.bind(repo)
-    let arrived = false
-    vi.spyOn(repo, 'syncViewGap').mockImplementation(async () => {
-      const gap = await realGap()
-      if (!arrived) {
-        arrived = true
-        await sharedDb.db.execute(
-          `INSERT INTO blocks_synced_changes (id, op) VALUES (?, 'upsert')`, ['between'])
-        await sharedDb.db.execute('DELETE FROM blocks_synced_changes')
-      }
-      return gap
-    })
-
-    await expect(auditPropertyRegistration(repo, WS)).rejects.toThrow(/arrived from sync/i)
-  })
-
-  it('refuses a scan that starts behind even when the device catches up before it ends', async () => {
-    // The mirror of the case below, and the reason the check is on BOTH
-    // sides. A view that is incomplete at the start and complete at the end
-    // leaves the histogram short by everything that landed after it ran,
-    // while the closing read reports all clear.
-    let behindSamples = 1
-    installRepo(cb => {
-      if (behindSamples > 0) behindSamples -= 1
-      else cb()
-      return () => {}
-    })
-    await create({id: 'b1', properties: {'demo:undeclared': 'x'}})
-    behindSamples = 1
-
-    await expect(auditPropertyRegistration(repo, WS)).rejects.toThrow(/Cannot audit/i)
-  })
-
-  it('discards a scan a drain started underneath, not only one that began behind', async () => {
-    // The window a single up-front check leaves open: the view is complete
-    // when the scan starts and not when it ends, so the histogram is short by
-    // whatever landed in between while every later read looks settled.
-    // Budget is reset after setup so this pins the audit's own samples
-    // regardless of how many the repo consumed being built.
-    let settlesLeft = 0
-    installRepo(cb => {
-      if (settlesLeft > 0) { settlesLeft -= 1; cb() }
-      return () => {}
-    })
-    await create({id: 'b1', properties: {'demo:undeclared': 'x'}})
-    settlesLeft = 1
-
-    await expect(auditPropertyRegistration(repo, WS)).rejects.toThrow(/mid-scan/i)
+    expect((await auditPropertyRegistration(repo, WS)).syncGap).toBeNull()
   })
 })
 

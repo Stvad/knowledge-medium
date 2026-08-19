@@ -104,13 +104,21 @@ export interface UnregisteredProperty {
  *  definitions), so skew is self-correcting on the next run. */
 export interface PropertyRegistrationAudit {
   workspaceId: string
+  /** Non-null when this device's view of `blocks` was already incomplete when
+   *  the scan started — still downloading, or rows staged and not yet drained.
+   *  The scan happened anyway; the counts are then short by an unknown amount,
+   *  and an empty `unregistered` list means nothing.
+   *
+   *  Reported rather than refused: this verb reads, and the flip is what acts
+   *  on what it says. Guarding the irreversible step is worth machinery;
+   *  guarding a report an operator chose to run is worth a sentence. */
+  syncGap: string | null
   /** When this device last completed a sync, or null if it never has (or there
-   *  is no sync layer). The report's BASIS, stated rather than assumed: the
-   *  guards above prove no sync work was outstanding or landed during the
-   *  scan, which is not the same as proving the server has nothing this device
-   *  has not been told about — no local signal can establish that. A
-   *  `syncedThrough` from days ago on a connected client is the reader's cue
-   *  that the scan ran over stale rows. */
+   *  is no sync layer). The rest of the report's basis, and the part no check
+   *  can establish: `syncGap` being null says nothing is outstanding LOCALLY,
+   *  never that the server has nothing this device has not been told about. A
+   *  `syncedThrough` from days ago on a connected client is the cue that the
+   *  scan ran over stale rows. */
   syncedThrough: string | null
   distinctProperties: number
   /** Total (block, key) pairs — the size of the cell-era property surface. */
@@ -261,40 +269,6 @@ const parseTypes = (json: string | null): string[] => {
  *  pretending the fallback carries meaning. */
 const keyOf = (raw: string | null): string => typeof raw === 'string' ? raw : String(raw ?? '')
 
-/**
- * Refuse to report from an incomplete view. Rows this device has not
- * downloaded, or has not yet drained out of `blocks_synced_changes`, are not
- * in `blocks`, so an under-count reads as "nothing to fix" — and this verb is
- * the advertised pre-flip check, so a clean report gets acted on.
- *
- * Two rules, each easy to undo by accident:
- *  - the queue check alone is not enough. It reads false both before an
- *    arrival and after it drains, so a whole cycle can pass between two checks
- *    unseen; the monotone `stagedArrivalMark` is what sees it.
- *  - the mark bracket must CONTAIN the checks — opening mark first, closing
- *    mark last. Read the opening mark after the opening check and a row staged
- *    in between is already counted in it, so a drain before the close leaves
- *    both marks equal and the scan that missed the row reports clean.
- */
-const assertNoOutstandingSync = async (
-  repo: Repo,
-  workspaceId: string,
-  phase: 'before' | 'during',
-): Promise<void> => {
-  const gap = await repo.syncViewGap()
-  if (gap === null) return
-  throw new Error(
-    phase === 'before'
-      ? `Cannot audit ${workspaceId}: ${gap}. Rows that have not landed are not ` +
-        'scanned, so the report would under-count the keys a flip cannot carry and ' +
-        'an incomplete scan would read as "nothing to fix". Wait for sync to settle ' +
-        'and re-run.'
-      : `Discarding the audit of ${workspaceId}: ${gap} while the scan ran, so rows ` +
-        'that arrived mid-scan are missing from it. The counts would be short by an ' +
-        'unknown amount. Re-run once sync has settled.',
-  )
-}
-
 /** Enumerate every property key in the workspace's live blocks and classify
  *  each against the same resolver the migration uses. */
 export const auditPropertyRegistration = async (
@@ -338,9 +312,11 @@ export const auditPropertyRegistration = async (
   const registry = requireRegistry()
   const resolver = repo.propertySchemaResolverFor(workspaceId)
 
-  // Mark FIRST — see the bracket rule on `assertNoOutstandingSync`.
-  const arrivalsAtStart = await repo.stagedArrivalMark()
-  await assertNoOutstandingSync(repo, workspaceId, 'before')
+  // Sampled, not enforced. This verb READS; it is the flip that acts on what
+  // it says, and a refusal belongs on the irreversible step rather than on the
+  // report. So the scan runs and states its basis: an operator who sees rows
+  // still draining knows the counts are short and re-runs.
+  const syncGap = await repo.syncViewGap()
 
   const histogram = await repo.db.getAll<HistogramRow>(
     `SELECT j.key AS property, COUNT(*) AS cells
@@ -438,20 +414,9 @@ export const auditPropertyRegistration = async (
     blocksPerKey: Math.max(1, Math.floor(limits.blocksPerKey ?? PROVENANCE_BLOCKS_PER_KEY)),
   })
 
-  await assertNoOutstandingSync(repo, workspaceId, 'during')
-  // Mark LAST, so the bracket covers the closing check too.
-  const arrivalsAtEnd = await repo.stagedArrivalMark()
-  if (arrivalsAtEnd !== arrivalsAtStart) {
-    throw new Error(
-      `Discarding the audit of ${workspaceId}: ` +
-      `${arrivalsAtEnd - arrivalsAtStart} row(s) arrived from sync while the scan ran, ` +
-      'so the key counts are short by however many landed after each pass read. ' +
-      'Re-run — nothing was written.',
-    )
-  }
-
   return {
     workspaceId,
+    syncGap,
     syncedThrough: repo.lastSyncedAt?.toISOString() ?? null,
     distinctProperties: histogram.length,
     propertyCells,

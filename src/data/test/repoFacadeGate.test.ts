@@ -93,7 +93,6 @@ const SAFE_VIA_PROTOTYPE: Record<string, string> = {
   assertBackfillMayWrite: 'read — throws or returns; assigns no Repo fields',
   backfillSyncSettledNow: 'read — samples the injected gate; assigns no Repo fields',
   syncViewGap: 'read — one query plus a gate sample; assigns no Repo fields',
-  stagedArrivalMark: 'read — one query; assigns no Repo fields',
   lastSyncedAt: 'getter read (delegates to the PowerSync status)',
   addTypeInTx: 'writes into the caller tx',
   addTypeInTxLenient: 'writes into the caller tx',
