@@ -391,6 +391,8 @@ export const findRecoveryAnchor = (
   const panel = panelById(panelId)
   if (!panel) return null
   const instances = panelInstances(panel, excludedSurfaces)
+  // Defence in depth: the `candidates` check below already covers an empty
+  // panel, so no test can distinguish this early return from that one.
   if (instances.length === 0) return null
 
   const hint = lastPositionByPanel.get(panelId)

@@ -491,6 +491,9 @@ describe('findRecoveryAnchor (proactive disappear-handler)', () => {
     ])
     // No prior rememberInstancePosition — proactive recovery should
     // stay quiet rather than steal focus to whatever rendered first.
+    // Visible for the same reason as the sibling test below: an off-screen
+    // candidate would be vetoed before the missing hint is ever consulted.
+    setTestVisible(findInstance('p1:B'), true)
     expect(findRecoveryAnchor('p1', p1Location('A'))).toBeNull()
   })
 
@@ -502,8 +505,8 @@ describe('findRecoveryAnchor (proactive disappear-handler)', () => {
       ]}},
     ])
     rememberInstancePosition('p1', findInstance('p1:A'))
-    // Visible on purpose: with the default off-screen rect every tier fails
-    // the viewport check anyway, so the null would prove nothing about the
+    // Visible on purpose: with the default off-screen rect the viewport check
+    // vetoes every tier first, so the null would prove nothing about the
     // location-match guard this test is here to pin.
     setTestVisible(findInstance('p1:B'), true)
     expect(findRecoveryAnchor('p1', p1Location('never-mounted'))).toBeNull()

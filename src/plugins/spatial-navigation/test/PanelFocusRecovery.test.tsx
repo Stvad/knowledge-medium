@@ -108,11 +108,12 @@ const expectRecoveredFocus = async (blockId: string): Promise<void> => {
  * the recovery assertion downstream pins.
  *
  * Satisfied on the first check today (the focus write's own awaits outlast
- * React's commit), so this is defence in depth; kept as a wait so a slower
- * commit under load blocks instead of failing. A focus write made BEFORE
- * `render()` needs no fence — it is already in the block cache, so the first
- * layout effect's `peekFocusedBlockLocation` fallback stores the hint
- * synchronously.
+ * React's commit), so this is defence in depth for the PASS — but it is what
+ * makes a broken hint refresh fail HERE, naming the cause, instead of six
+ * seconds later on the recovery assertion. A focus write made BEFORE
+ * `render()` needs no fence: it is already in the block cache, so the first
+ * render's `usePropertyValue` returns it and the layout effect stores the
+ * hint synchronously.
  */
 const waitForRecoveryHint = async (blockId: string): Promise<void> => {
   await waitFor(
@@ -245,16 +246,22 @@ describe('PanelFocusRecovery', {timeout: TEST_TIMEOUT_MS}, () => {
 
     const panelBlock = env.repo.block(PANEL_ID)
 
-    // The recovery path early-exits (no stored hint for an id that was
-    // never mounted) without scheduling a timer or writing to the DB, so
-    // we can drive the full debounce window on fake timers instead of
-    // sleeping for real.
+    // A recovery is `void focusBlock(...)` — an unawaited tx — so the focus
+    // VALUE can't have changed yet by the time this test's last statement
+    // runs, and asserting on it would pass with the whole watchdog deleted.
+    // The write attempt is what's observable synchronously: `focusBlock` is
+    // the only thing opening a tx from here.
+    const txSpy = vi.spyOn(env.repo, 'tx')
     vi.useFakeTimers()
     try {
       render(<PanelFocusRecovery block={panelBlock}/>)
       await act(async () => { await vi.advanceTimersByTimeAsync(DEBOUNCE_SETTLE_MS) })
+      // Before `mockRestore()` — restoring a spy also clears its recorded
+      // calls, so this assertion passes vacuously from the `finally` onwards.
+      expect(txSpy).not.toHaveBeenCalled()
     } finally {
       vi.useRealTimers()
+      txSpy.mockRestore()
     }
 
     expect(peekFocusedBlockLocation(panelBlock)?.blockId).toBe('never-mounted')
@@ -362,9 +369,11 @@ describe('PanelFocusRecovery', {timeout: TEST_TIMEOUT_MS}, () => {
 
     const panelBlock = env.repo.block(PANEL_ID)
 
-    // Fake timers drive the debounce deterministically. The block leaves
-    // and returns inside the window, so the recovery cancels itself and
-    // never writes — no DB I/O on this path, so faking time is safe.
+    // Fake timers drive the debounce deterministically; nothing on this path
+    // reaches the DB, so faking time is safe. The tx spy is what proves it:
+    // a recovery write is unawaited, so the focus value alone would still
+    // read 'middle' here even if one had fired.
+    const txSpy = vi.spyOn(env.repo, 'tx')
     vi.useFakeTimers()
     try {
       render(<PanelFocusRecovery block={panelBlock}/>)
@@ -387,9 +396,11 @@ describe('PanelFocusRecovery', {timeout: TEST_TIMEOUT_MS}, () => {
         await vi.advanceTimersByTimeAsync(DEBOUNCE_SETTLE_MS)
       })
 
+      expect(txSpy).not.toHaveBeenCalled()
       expect(peekFocusedBlockLocation(panelBlock)?.blockId).toBe('middle')
     } finally {
       vi.useRealTimers()
+      txSpy.mockRestore()
     }
   })
 

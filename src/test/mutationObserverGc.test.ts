@@ -3,22 +3,17 @@
 /**
  * happy-dom 20.11.0 held a MutationObserver's per-target callback in a
  * `WeakRef` whose only referent was an inline closure, so the first GC after
- * the observing job collected it: `Node[reportMutation]` then spliced the
- * listener out and that observer never fired again. Every DOM test whose
- * subject uses a MutationObserver was a coin flip, and the failure reads as a
- * timeout on a stale value rather than as a dead observer — it cost two wrong
- * diagnoses before the cause was found (PR #635).
- *
- * A strongly-held callback cannot be collected, so this test is deterministic
- * in the passing direction: it can only redden if the hazard comes back via
- * the `^20.x` range. `--expose-gc` is wired in `vitest.config.ts`.
+ * the observing job collected it: `Node[reportMutation]` spliced the listener
+ * out and the observer never fired again. It presents as a DOM test timing out
+ * on a stale value, not as a dead observer (PR #635). `^20.x` admits it coming
+ * back; a strongly-held callback cannot be collected, so this only reddens if
+ * it does.
  */
 import { expect, it, vi } from 'vitest'
 
 it('keeps delivering mutation records after a GC', async () => {
   const gc = (globalThis as {gc?: () => void}).gc
-  expect(gc, 'no globalThis.gc — is --expose-gc still in vitest.config.ts execArgv?')
-    .toBeTypeOf('function')
+  if (!gc) throw new Error('no globalThis.gc — is --expose-gc still in vitest.config.ts execArgv?')
 
   const target = document.createElement('div')
   document.body.appendChild(target)
@@ -26,17 +21,23 @@ it('keeps delivering mutation records after a GC', async () => {
   const observer = new MutationObserver(() => { fired++ })
   observer.observe(target, {childList: true, subtree: true})
 
-  try {
-    // The closure only becomes collectable once the job that created it has
-    // ended, so yield before collecting — a same-job gc() does not reproduce.
-    await new Promise(resolve => setImmediate(resolve))
-    gc!()
-    gc!()
+  // Control: a closure held ONLY by a WeakRef, collected the same way the
+  // 20.11.0 callback was. Without it this test cannot tell "the callback
+  // survived" from "nothing was collected at all", and would go green
+  // forever the day the collection premise stops holding.
+  const collectable = new WeakRef(() => target)
 
-    target.appendChild(document.createElement('span'))
-    await vi.waitFor(() => { expect(fired).toBe(1) })
-  } finally {
-    observer.disconnect()
-    target.remove()
-  }
+  // The closure only becomes collectable once the job that created it has
+  // ended, so yield first — a same-job gc() does not reproduce. Twice because
+  // one cycle leaves the WeakRef intact often enough to matter.
+  await new Promise(resolve => setImmediate(resolve))
+  gc()
+  gc()
+  expect(collectable.deref(), 'GC premise no longer holds — this test proves nothing').toBeUndefined()
+
+  target.appendChild(document.createElement('span'))
+  await vi.waitFor(() => { expect(fired).toBeGreaterThan(0) })
+
+  observer.disconnect()
+  target.remove()
 })
