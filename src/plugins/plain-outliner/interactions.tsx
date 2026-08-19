@@ -1,5 +1,5 @@
 import {
-  BlockContentRendererContribution,
+  BlockContentRendererRegistration,
   getBlockContentRendererSlot,
 } from '@/extensions/blockInteraction.js'
 import { useInEditMode } from '@/data/globalState.js'
@@ -15,29 +15,31 @@ import type { BlockRenderer } from '@/types.js'
 // DefaultBlockRenderer picks `last`, so this single variant wins
 // whenever it's contributed (same semantics as the legacy last-wins
 // facet — see commit migrating to defineVariantFacet).
-export const blockEditingContentRenderer: BlockContentRendererContribution = context => {
-  const Primary = getBlockContentRendererSlot(context, 'primary')
-  if (!Primary) return null
-  const Secondary = getBlockContentRendererSlot(context, 'secondary') ?? Primary
+export const blockEditingContentRenderer: BlockContentRendererRegistration = {
+  id: 'plain-outliner.editing-dispatcher',
+  label: 'Editing dispatcher',
+  resolve: context => {
+    const Primary = getBlockContentRendererSlot(context, 'primary')
+    if (!Primary) return null
+    const Secondary = getBlockContentRendererSlot(context, 'secondary') ?? Primary
 
-  const renderer: BlockRenderer = Primary === Secondary
-    ? Primary
-    : (() => {
-      const Dispatcher: BlockRenderer = (props) => {
-        const inEditMode = useInEditMode(props.block.id)
-        const Renderer = inEditMode ? Secondary : Primary
-        return <Renderer {...props}/>
-      }
-      Dispatcher.displayName = 'BlockEditingDispatcher'
-      return Dispatcher
-    })()
+    const renderer: BlockRenderer = Primary === Secondary
+      ? Primary
+      : (() => {
+        const Dispatcher: BlockRenderer = (props) => {
+          const inEditMode = useInEditMode(props.block.id)
+          const Renderer = inEditMode ? Secondary : Primary
+          return <Renderer {...props}/>
+        }
+        Dispatcher.displayName = 'BlockEditingDispatcher'
+        return Dispatcher
+      })()
 
-  return {
-    id: 'plain-outliner.editing-dispatcher',
-    label: 'Editing dispatcher',
-    render: renderer,
-    // This renders the block's own slots rather than replacing them, so
-    // whatever the block composed still describes what the slot shows.
-    showsOtherBlocks: 'as-composed',
-  }
+    return {
+      render: renderer,
+      // This renders the block's own slots rather than replacing them, so
+      // whatever the block composed still describes what the slot shows.
+      showsOtherBlocks: 'as-composed',
+    }
+  },
 }

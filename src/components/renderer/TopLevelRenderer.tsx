@@ -6,6 +6,7 @@ import { useActionContext } from '@/shortcuts/useActionContext.js'
 import { ActionContextTypes } from '@/shortcuts/types.js'
 import { outlineRenderScopeId } from '@/utils/renderScope.js'
 import { usePanelLayoutProjection } from '@/hooks/usePanelLayoutProjection.js'
+import type { BlockRendererRegistration } from '@/extensions/blockInteraction.js'
 
 export function TopLevelRenderer({block}: BlockRendererProps) {
   /**
@@ -29,12 +30,12 @@ export function TopLevelRenderer({block}: BlockRendererProps) {
   // extension can take over the root instead of TopLevelRenderer — both
   // BYPASS this component, so whichever one is used MUST call
   // usePanelLayoutProjection itself, or the URL⇄layout sync silently dies:
-  //   1. Register a higher-priority renderer for `layoutBoundary && !panelId`
-  //      (useRenderer's canRender/priority resolution, @/hooks/useRendererRegistry).
+  //   1. Register a renderer that claims `layoutBoundary && !panelId` at a
+  //      precedence above this one's (blockRendererFacet, @/hooks/useRendererRegistry).
   //   2. Set a `renderer` property (rendererProp) directly on the
-  //      layout-session block — useRenderer checks that BEFORE canRender/
-  //      priority, so it wins over TopLevelRenderer even without a
-  //      higher-priority registration.
+  //      layout-session block — useRenderer resolves that by id BEFORE
+  //      consulting what claims the block, so it wins over TopLevelRenderer
+  //      at any precedence.
   usePanelLayoutProjection(block)
 
   return (
@@ -71,5 +72,11 @@ export function TopLevelRenderer({block}: BlockRendererProps) {
   )
 }
 
-TopLevelRenderer.canRender = ({context}: BlockRendererProps) => !!(context && context.layoutBoundary && !context.panelId)
-TopLevelRenderer.priority = () => 20
+export const topLevelRendererRegistration: BlockRendererRegistration = {
+  id: 'topLevel',
+  label: 'Top level',
+  resolve: ctx =>
+    ctx.blockContext?.layoutBoundary && !ctx.blockContext.panelId
+      ? {render: TopLevelRenderer}
+      : null,
+}

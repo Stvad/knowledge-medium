@@ -15,6 +15,7 @@ import {
   sessionActivePanelId,
   soloPanelRow,
 } from '@/utils/panelLayoutProjection.js'
+import type { BlockRendererRegistration } from '@/extensions/blockInteraction.js'
 
 type RenderSlot =
   | {kind: 'panel'; id: string; maximized: boolean}
@@ -309,6 +310,11 @@ export function LayoutRenderer({block}: BlockRendererProps) {
   </div>
 }
 
-LayoutRenderer.canRender = ({context}: BlockRendererProps) =>
-  !!(context && !context.layoutBoundary && !context.panelId)
-LayoutRenderer.priority = () => 20
+export const layoutRendererRegistration: BlockRendererRegistration = {
+  id: 'layout',
+  label: 'Panel layout',
+  resolve: ctx =>
+    ctx.blockContext && !ctx.blockContext.layoutBoundary && !ctx.blockContext.panelId
+      ? {render: LayoutRenderer}
+      : null,
+}

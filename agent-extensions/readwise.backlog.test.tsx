@@ -13,12 +13,11 @@ import type { BlockData } from '@/data/api'
 import type { Repo } from '@/data/repo.js'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb.js'
 import { createTestRepo } from '@/data/test/createTestRepo.js'
-import { blockRenderersFacet } from '@/extensions/core.js'
-import { typesProp } from '@/data/properties.js'
+import { blockRendererFacet } from '@/extensions/blockInteraction.js'
+import { getBlockTypes, typesProp } from '@/data/properties.js'
 import type { AppExtension } from '@/facets/facet.js'
 import { dailyNotesDataExtension } from '@/plugins/daily-notes/dataExtension.js'
 import { getOrCreateDailyNote } from '@/plugins/daily-notes/dailyNotes.js'
-import type { BlockRendererProps } from '@/types.js'
 
 import readwiseContributions, {
   buildUnreviewedHighlightsQuery,
@@ -331,16 +330,8 @@ describe('sticky ids', () => {
 })
 
 describe('backlog page renderer', () => {
-  const backlogRenderer = () => {
-    const {runtime} = setup()
-    const registry = runtime.read(blockRenderersFacet)
-    const renderer = registry['readwiseReviewBacklog']
-    expect(renderer, 'backlog renderer not registered').toBeDefined()
-    return renderer!
-  }
-
   it('claims a block carrying the backlog marker type, and nothing else', async () => {
-    const {repo} = setup()
+    const {repo, runtime} = setup()
     const snapshot = repo.snapshotTypeRegistries()
     await repo.tx(async tx => {
       await tx.create({id: 'page', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'x'})
@@ -350,11 +341,14 @@ describe('backlog page renderer', () => {
     await repo.block('page').load()
     await repo.block('other').load()
 
-    const renderer = backlogRenderer()
-    const claims = (id: string) =>
-      renderer.canRender!({block: repo.block(id)} as BlockRendererProps)
+    const resolve = runtime.read(blockRendererFacet)
+    const claimedBy = (id: string) => resolve({
+      block: repo.block(id),
+      repo,
+      types: getBlockTypes(repo.block(id).peek()!),
+    }).last?.id
 
-    expect(claims('page')).toBe(true)
-    expect(claims('other')).toBe(false)
+    expect(claimedBy('page')).toBe('readwiseReviewBacklog')
+    expect(claimedBy('other')).not.toBe('readwiseReviewBacklog')
   })
 })

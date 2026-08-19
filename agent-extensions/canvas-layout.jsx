@@ -1,4 +1,5 @@
-import { blockRenderersFacet, actionsFacet } from '@/extensions/core.js'
+import { actionsFacet } from '@/extensions/core.js'
+import { blockRendererFacet } from '@/extensions/blockInteraction.js'
 import { definitionSeedsFacet } from '@/data/facets.js'
 import { ActionContextTypes } from '@/shortcuts/types.js'
 import { seedProperty, ChangeScope } from '@/data/api/index.js'
@@ -387,10 +388,19 @@ export default [
   definitionSeedsFacet.of(canvasYProp),
   definitionSeedsFacet.of(canvasWProp),
   definitionSeedsFacet.of(canvasHProp),
-  blockRenderersFacet.of({
+  // Same id as the host's layout renderer, at the precedence the host holds
+  // (an equal precedence goes to whoever registered later, and extensions
+  // register after core) — that is what makes this a replacement rather than
+  // a namesake that loses. The gate has to come along too: a registration
+  // with a bare `render` and no `resolve` claims EVERY block.
+  blockRendererFacet.of({
     id: 'layout',
-    renderer: CanvasLayoutRenderer,
-  }),
+    label: 'Canvas layout',
+    resolve: ctx =>
+      ctx.blockContext && !ctx.blockContext.layoutBoundary && !ctx.blockContext.panelId
+        ? { render: CanvasLayoutRenderer }
+        : null,
+  }, { precedence: 20 }),
   actionsFacet.of(toggleCanvasLayoutAction),
   actionsFacet.of(enableCanvasLayoutAction),
   actionsFacet.of(disableCanvasLayoutAction),

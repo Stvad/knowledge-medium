@@ -1,18 +1,32 @@
 import {
   defineFacet,
-  isFunction,
   type Facet,
 } from './facet.ts'
 
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null
+
 /**
- * A named alternative for a slot — something a user (or a programmatic
- * gate) can pick between. Variants share a `Render` shape (a renderer,
- * a layout, a configuration object…); the picker UI uses `id` + `label`.
+ * What a variant IS for a given block — everything except which variant
+ * it is. Split from the identity above it because identity is a fact
+ * about the REGISTRATION (there before any block exists, which is what
+ * lets tooling enumerate what is installed) while these are facts about
+ * this block: which component draws it, whether it takes the slot, what
+ * the resulting row shows.
  */
-export interface Variant<Render> {
-  id: string
-  label: string
+export interface VariantFacts<Render> {
   render: Render
+  /**
+   * Take this slot when nothing else is chosen. Default true — a
+   * registration that resolves at all normally wants the slot.
+   *
+   * `false` offers the variant without claiming it: it stays in `all`
+   * for a picker and stays reachable by `byId` for an explicit
+   * per-block override, but never wins on its own. That is the
+   * difference between "I can draw this block if asked" and "this block
+   * is mine", which a gate that only answers yes/no cannot express.
+   */
+  claims?: boolean
   /**
    * Does this fill a block's content slot with OTHER blocks' rows — a review
    * backlog, a review deck, a recents list — rather than drawing the block it
@@ -37,13 +51,32 @@ export interface Variant<Render> {
 }
 
 /**
- * Per-variant contribution. Like other block-interaction contributions,
- * returning `null`/`undefined`/`false` means "this variant does not
- * apply for this context" — useful when a variant is only meaningful
- * for some blocks (e.g. video-player layout only for video blocks).
+ * A named alternative for a slot, resolved for one block — something a
+ * user (or a programmatic gate) can pick between. Variants share a
+ * `Render` shape (a renderer, a layout, a configuration object…); the
+ * picker UI uses `id` + `label`.
  */
-export type VariantContribution<Context, Render> =
-  (context: Context) => Variant<Render> | null | undefined | false
+export type Variant<Render> = {
+  id: string
+  label: string
+} & VariantFacts<Render>
+
+/**
+ * What a plugin registers: a stable identity plus its facts — either
+ * inline (`{id, label, render}`, applies everywhere) or computed per
+ * block by `resolve`. Supply exactly one; a registration with neither is
+ * rejected by `validate`, and `resolve` wins if both are present.
+ *
+ * `resolve` returning `null`/`undefined`/`false` means "this variant does
+ * not apply here at all" — it drops out of the picker as well as the
+ * running. To apply but not take the slot, return facts with
+ * `claims: false`.
+ */
+export interface VariantRegistration<Context, Render> extends Partial<VariantFacts<Render>> {
+  id: string
+  label: string
+  resolve?: (context: Context) => VariantFacts<Render> | null | undefined | false
+}
 
 /**
  * What `runtime.read(variantFacet)` resolves to — a function from
@@ -54,20 +87,23 @@ export type VariantContribution<Context, Render> =
  * facet's cached `combine` step.
  */
 export interface VariantSelection<Render> {
-  /** All variants that contributed for this context, in precedence
-   *  order (lowest precedence first — same order facet contributions
-   *  are visited generally). */
+  /** Every variant that applies to this context, in precedence order
+   *  (lowest precedence first — same order facet contributions are
+   *  visited generally). Includes variants that declined to claim the
+   *  slot: this is the picker's menu, not the running. */
   all: readonly Variant<Render>[]
-  /** Last variant in precedence order. Equivalent to the legacy
+  /** Last CLAIMING variant in precedence order. Equivalent to the legacy
    *  `combineLastContributionResult` semantics — the right pick for
    *  facets where contributions self-gate by context. */
   last: Variant<Render> | undefined
-  /** First variant in precedence order. Useful as a fallback when no
-   *  user-driven selection has been made yet. */
+  /** First claiming variant in precedence order. Useful as a fallback
+   *  when no user-driven selection has been made yet. */
   first: Variant<Render> | undefined
-  /** Look up a specific variant by id. Returns `undefined` if no
-   *  contribution registered that id (e.g. the user's saved
-   *  preference points at a removed plugin). */
+  /** Look up a specific variant by id, claiming or not — this is how an
+   *  explicit per-block override reaches a variant that would not have
+   *  taken the slot by itself. Returns `undefined` if no contribution
+   *  registered that id (e.g. the user's saved preference points at a
+   *  removed plugin). */
   byId: (id: string | null | undefined) => Variant<Render> | undefined
 }
 
@@ -83,12 +119,58 @@ const emptySelection = <Render>(): VariantSelection<Render> => ({
   byId: () => undefined,
 })
 
+const isVariantRegistration = <Context, Render>(
+  value: unknown,
+): value is VariantRegistration<Context, Render> =>
+  isRecord(value) &&
+  typeof value.id === 'string' &&
+  typeof value.label === 'string' &&
+  (typeof value.resolve === 'function' || value.render !== undefined)
+
+const factsFor = <Context, Render>(
+  registration: VariantRegistration<Context, Render>,
+  context: Context,
+): VariantFacts<Render> | null => {
+  if (registration.resolve) return registration.resolve(context) || null
+  return registration.render === undefined ? null : (registration as VariantFacts<Render>)
+}
+
+/**
+ * Collapse same-id registrations to the one that wins. Same id = same
+ * variant, so only one survives: the strongest. That is how an extension
+ * overrides a built-in — register `{id: 'layout', …}` at the precedence
+ * the built-in holds (a later registration takes an equal one) or above,
+ * and yours is the layout variant.
+ *
+ * Takes registrations ALREADY sorted ascending by precedence, which is
+ * what `combine` receives (`FacetRuntime.read` sorts before combining, so
+ * registration order is gone by then) — the survivor is simply the LAST
+ * namesake. Anything enumerating the same set from raw contributions must
+ * sort the same way FIRST or it will collapse to a different winner than
+ * the live resolver.
+ *
+ * The survivor keeps the last one's POSITION as well as its value: a
+ * plain `Map.set` keeps the first insertion's position, which would seat
+ * an override below variants it outranks and hand `last` to one of them.
+ * Delete-then-set moves it to the end.
+ */
+export const dedupeVariantRegistrations = <Context, Render>(
+  registrations: readonly VariantRegistration<Context, Render>[],
+): VariantRegistration<Context, Render>[] => {
+  const byId = new Map<string, VariantRegistration<Context, Render>>()
+  for (const registration of registrations) {
+    byId.delete(registration.id)
+    byId.set(registration.id, registration)
+  }
+  return [...byId.values()]
+}
+
 /**
  * Define a facet whose contributions register named alternatives
- * (variants) for a slot. The resolved value enumerates the registered
- * variants and offers convenience pickers (`last`, `first`, `byId`);
- * the consumer decides which one to render — typically by reading a
- * user preference reactively at render time.
+ * (variants) for a slot. The resolved value enumerates the variants that
+ * apply to a block and offers convenience pickers (`last`, `first`,
+ * `byId`); the consumer decides which one to render — typically by
+ * reading a user preference reactively at render time.
  *
  * Why selection lives in the consumer: most useful selections want to
  * react to a property/preference change (re-render when the user picks
@@ -102,41 +184,47 @@ export function defineVariantFacet<Context, Render>({
   id,
 }: {
   id: string
-}): Facet<VariantContribution<Context, Render>, VariantResolver<Context, Render>> {
+}): Facet<VariantRegistration<Context, Render>, VariantResolver<Context, Render>> {
   return defineFacet<
-    VariantContribution<Context, Render>,
+    VariantRegistration<Context, Render>,
     VariantResolver<Context, Render>
   >({
     id,
-    combine: contributions => context => {
-      const all: Variant<Render>[] = []
-      for (const contribution of contributions) {
-        const variant = contribution(context)
-        if (variant) all.push(variant)
-      }
-      if (all.length === 0) return emptySelection<Render>()
-      const byIdMap = new Map<string, Variant<Render>>()
-      for (const variant of all) byIdMap.set(variant.id, variant)
-      return {
-        all,
-        first: all[0],
-        last: all[all.length - 1],
-        byId: (lookup) => (lookup == null ? undefined : byIdMap.get(lookup)),
+    combine: registrations => {
+      const deduped = dedupeVariantRegistrations(registrations)
+
+      return context => {
+        const all: Variant<Render>[] = []
+        for (const registration of deduped) {
+          const facts = factsFor(registration, context)
+          if (facts) all.push({...facts, id: registration.id, label: registration.label})
+        }
+        if (all.length === 0) return emptySelection<Render>()
+        const resolvedById = new Map<string, Variant<Render>>()
+        for (const variant of all) resolvedById.set(variant.id, variant)
+        const claiming = all.filter(variant => variant.claims !== false)
+        return {
+          all,
+          first: claiming[0],
+          last: claiming[claiming.length - 1],
+          byId: (lookup) => (lookup == null ? undefined : resolvedById.get(lookup)),
+        }
       }
     },
     empty: () => () => emptySelection<Render>(),
-    validate: isFunction<VariantContribution<Context, Render>>,
+    validate: isVariantRegistration,
   })
 }
 
 /**
- * Construct a Variant in a single expression. Sugar for plugins that
- * register a single variant inline (e.g. `defineVariant('flat',
- * 'Flat', LinkedReferences)` reads more naturally than building the
- * object literal). Functionally identical to `{id, label, render}`.
+ * Construct a static registration in a single expression. Sugar for
+ * plugins whose variant applies to every block and needs no per-block
+ * facts (e.g. `defineVariant('flat', 'Flat', LinkedReferences)` reads
+ * more naturally than the object literal). Functionally identical to
+ * `{id, label, render}`.
  */
 export const defineVariant = <Render>(
   id: string,
   label: string,
   render: Render,
-): Variant<Render> => ({ id, label, render })
+): VariantRegistration<unknown, Render> => ({ id, label, render })

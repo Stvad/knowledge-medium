@@ -12,6 +12,7 @@ import { PanelRightOpen } from 'lucide-react'
 import { registerVideoPlayer } from './registry.ts'
 import { enterVideoNotesView } from './notes.ts'
 import { VIDEO_NOTES_VIEW_MODE } from './view.ts'
+import type { BlockRendererRegistration } from '@/extensions/blockInteraction.js'
 
 const URL_ONLY_WHITESPACE_RE = /\s/
 
@@ -171,6 +172,11 @@ export const VideoPlayerRenderer: BlockRenderer = (props: BlockRendererProps) =>
     />
   </NestedBlockContextProvider>
 
-VideoPlayerRenderer.canRender = ({block}: BlockRendererProps) => isPlayableVideoBlock(block)
-
-VideoPlayerRenderer.priority = () => 5
+export const videoPlayerRendererRegistration: BlockRendererRegistration = {
+  id: 'videoPlayer',
+  label: 'Video player',
+  // Offered for any block, claims only playable ones — see the extension
+  // renderer's registration for why the gate is `claims` rather than a null
+  // return.
+  resolve: ctx => ({render: VideoPlayerRenderer, claims: isPlayableVideoBlock(ctx.block)}),
+}

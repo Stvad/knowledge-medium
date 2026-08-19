@@ -1,6 +1,6 @@
 import { codeMirrorExtensionsFacet } from '@/editor/codeMirrorExtensions.js'
 import { blockLayoutFacet } from '@/extensions/blockInteraction.js'
-import { referenceLayoutContribution } from '@/components/references/referenceLayout.js'
+import { referenceLayoutRegistration } from '@/components/references/referenceLayout.js'
 import type { AppExtension } from '@/facets/facet.js'
 import { systemToggle } from '@/facets/togglable.js'
 import { markdownExtensionsFacet } from '@/markdown/extensions.js'
@@ -17,6 +17,6 @@ export const referencesPlugin: AppExtension = systemToggle({
   referencesDataExtension,
   markdownExtensionsFacet.of(wikilinkMarkdownExtension, {source: 'references'}),
   markdownExtensionsFacet.of(blockrefMarkdownExtension, {source: 'references'}),
-  blockLayoutFacet.of(referenceLayoutContribution, {source: 'references'}),
+  blockLayoutFacet.of(referenceLayoutRegistration, {source: 'references'}),
   codeMirrorExtensionsFacet.of(referencesCodeMirrorExtensions, {source: 'references'}),
 ])

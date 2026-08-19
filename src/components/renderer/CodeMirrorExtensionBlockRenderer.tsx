@@ -7,7 +7,7 @@ import { createTypeScriptConfig } from '@/utils/codemirror.js'
 import { useExtensionLoadError } from '@/extensions/extensionLoadErrors.js'
 import { useContent } from '@/hooks/block.js'
 import { EXTENSION_TYPE } from '@/data/blockTypes'
-import { hasBlockType } from '@/data/properties'
+import type { BlockRendererRegistration } from '@/extensions/blockInteraction.js'
 
 const extensionFrameClass = 'border rounded-md overflow-hidden'
 const extensionTheme = 'dark'
@@ -78,8 +78,15 @@ export const CodeMirrorExtensionBlockRenderer: BlockRenderer = (props: BlockRend
     EditContentRenderer={ExtensionEditor}
   />
 
-CodeMirrorExtensionBlockRenderer.canRender = ({block}: BlockRendererProps) => {
-  const data = block.peek()
-  return data ? hasBlockType(data, EXTENSION_TYPE) : false
+export const codeMirrorExtensionRendererRegistration: BlockRendererRegistration = {
+  id: 'extension',
+  label: 'Extension source',
+  // Offered for any block, claims only extension blocks. "Edit this as
+  // source" is a thing to ask a block for, and asking is what a `renderer`
+  // property IS — declining outright would make a stored `renderer:
+  // extension` on an ordinary block silently do nothing.
+  resolve: ctx => ({
+    render: CodeMirrorExtensionBlockRenderer,
+    claims: ctx.types.includes(EXTENSION_TYPE),
+  }),
 }
-CodeMirrorExtensionBlockRenderer.priority = () => 5

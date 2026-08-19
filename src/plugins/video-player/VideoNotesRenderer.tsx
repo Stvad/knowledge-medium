@@ -8,13 +8,14 @@ import { useUIStateBlock } from '@/data/globalState.js'
 import { useRepo } from '@/context/repo.js'
 import { Button } from '@/components/ui/button.js'
 import { PanelRightClose } from 'lucide-react'
-import type { BlockLayout, BlockLayoutContribution } from '@/extensions/blockInteraction.js'
+import type { BlockLayout, BlockLayoutRegistration } from '@/extensions/blockInteraction.js'
 import {
   isPlayableVideoBlock,
   VideoPlayerContentRenderer,
 } from './VideoPlayerRenderer.tsx'
 import { closeVideoNotesView, ensureEditableVideoNoteChild } from './notes.ts'
 import { videoNotesPaneRatioProp, VIDEO_NOTES_VIEW_MODE } from './view.ts'
+import type { BlockRendererRegistration } from '@/extensions/blockInteraction.js'
 
 const MIN_VIDEO_NOTES_PANE_RATIO = 0.28
 const MAX_VIDEO_NOTES_PANE_RATIO = 0.9
@@ -274,18 +275,18 @@ export const VideoNotesLayout: BlockLayout = (slots) => {
 /** Layout gate: the video block itself, rendered as a pane top-level in
  *  video-notes mode. Children keep their default layouts (they see the
  *  mode CLEARED, and their block id differs from videoPlayerBlockId). */
-export const videoNotesLayoutContribution: BlockLayoutContribution = ctx => {
-  if (ctx.blockContext?.panelViewMode !== VIDEO_NOTES_VIEW_MODE) return null
-  if (ctx.blockContext?.videoPlayerBlockId !== ctx.block.id) return null
-  // Same top-level guard as canRender: plain VideoPlayerRenderer also sets
-  // videoPlayerBlockId, so a nested inline player under a moded pane would
-  // otherwise pull this layout.
-  if (!isPaneTopLevelRender({block: ctx.block, context: ctx.blockContext})) return null
-  return {
-    id: 'video-notes',
-    label: 'Video notes',
-    render: VideoNotesLayout,
-  }
+export const videoNotesLayoutRegistration: BlockLayoutRegistration = {
+  id: 'video-notes',
+  label: 'Video notes',
+  resolve: ctx => {
+    if (ctx.blockContext?.panelViewMode !== VIDEO_NOTES_VIEW_MODE) return null
+    if (ctx.blockContext?.videoPlayerBlockId !== ctx.block.id) return null
+    // Same top-level guard as the renderer's own: plain VideoPlayerRenderer
+    // also sets videoPlayerBlockId, so a nested inline player under a moded
+    // pane would otherwise pull this layout.
+    if (!isPaneTopLevelRender({block: ctx.block, context: ctx.blockContext})) return null
+    return {render: VideoNotesLayout}
+  },
 }
 
 /**
@@ -294,7 +295,7 @@ export const videoNotesLayoutContribution: BlockLayoutContribution = ctx => {
  * DefaultBlockRenderer keeps the block shell, shortcut surfaces, and the
  * player-handle registry working; `videoPlayerBlockId` marks the subtree
  * for the video shortcut activation; the split itself comes from
- * `videoNotesLayoutContribution` above. The MODE stays visible in context
+ * `videoNotesLayoutRegistration` above. The MODE stays visible in context
  * here (the layout gate and the video region's styling read it); it is
  * cleared around the NOTES region inside the layout.
  */
@@ -314,10 +315,13 @@ export const VideoNotesRenderer: BlockRenderer = (props: BlockRendererProps) =>
 const isPaneTopLevelRender = ({block, context}: BlockRendererProps): boolean =>
   context?.scopeRootId === block.id && !context?.isNestedSurface
 
-VideoNotesRenderer.canRender = (props: BlockRendererProps) =>
-  props.context?.panelViewMode === VIDEO_NOTES_VIEW_MODE &&
-  isPaneTopLevelRender(props) &&
-  isPlayableVideoBlock(props.block)
-
-// Above VideoPlayerRenderer (5): in the mode, the notes arrangement wins.
-VideoNotesRenderer.priority = () => 10
+export const videoNotesRendererRegistration: BlockRendererRegistration = {
+  id: 'videoNotes',
+  label: 'Video notes',
+  resolve: ctx =>
+    ctx.blockContext?.panelViewMode === VIDEO_NOTES_VIEW_MODE &&
+    isPaneTopLevelRender({block: ctx.block, context: ctx.blockContext}) &&
+    isPlayableVideoBlock(ctx.block)
+      ? {render: VideoNotesRenderer}
+      : null,
+}

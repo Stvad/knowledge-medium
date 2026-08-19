@@ -8,8 +8,7 @@ import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { makeBlockData } from '@/data/test/factories.js'
 import { BlockContextProvider, useBlockContext } from '@/context/block'
-import type { BlockLayoutSlots } from '@/extensions/blockInteraction.js'
-import type { BlockRendererProps } from '@/types'
+import type { BlockLayoutSlots, BlockRendererContext } from '@/extensions/blockInteraction.js'
 
 const repoRef = vi.hoisted(() => ({current: undefined as Repo | undefined}))
 const uiStateBlockRef = vi.hoisted(() => ({current: undefined as Block | undefined}))
@@ -54,8 +53,13 @@ vi.mock('@/data/globalState.ts', async () => {
   }
 })
 
-import { VideoNotesLayout, VideoNotesRenderer, videoNotesLayoutContribution } from '../VideoNotesRenderer.tsx'
-import { VideoPlayerContentRenderer, VideoPlayerRenderer } from '../VideoPlayerRenderer.tsx'
+import {
+  VideoNotesLayout,
+  VideoNotesRenderer,
+  videoNotesLayoutRegistration,
+  videoNotesRendererRegistration,
+} from '../VideoNotesRenderer.tsx'
+import { VideoPlayerContentRenderer, VideoPlayerRenderer, videoPlayerRendererRegistration } from '../VideoPlayerRenderer.tsx'
 import { VIDEO_NOTES_VIEW_MODE } from '../view.ts'
 import { editorFocusRequestProp, focusedBlockLocationProp, panelViewModeProp, topLevelBlockIdProp } from '@/data/properties'
 import { panelRenderScopeId } from '@/utils/renderScope'
@@ -154,7 +158,7 @@ const renderLayout = (contextOverrides: object = {}) => {
   )
 }
 
-describe('VideoNotesRenderer.canRender', () => {
+describe('videoNotesRendererRegistration.resolve', () => {
   const playable = {
     id: VIDEO,
     peek: () => makeBlockData({id: VIDEO, workspaceId: WS, content: 'https://example.com/video.mp4'}),
@@ -166,37 +170,39 @@ describe('VideoNotesRenderer.canRender', () => {
 
   const paneTopContext = {panelViewMode: VIDEO_NOTES_VIEW_MODE, scopeRootId: VIDEO}
 
-  it('selects for a playable pane top-level in video-notes mode, above videoPlayer', () => {
-    const props = {block: playable, context: paneTopContext} as BlockRendererProps
-    expect(VideoNotesRenderer.canRender?.(props)).toBe(true)
-    expect((VideoNotesRenderer.priority?.(props) ?? 0) > (VideoPlayerRenderer.priority?.(props) ?? 0)).toBe(true)
+  const ctxFor = (block: Block, blockContext: object): BlockRendererContext =>
+    ({block, repo: {} as Repo, types: [], blockContext} as unknown as BlockRendererContext)
+
+  it('selects for a playable pane top-level in video-notes mode', () => {
+    expect(videoNotesRendererRegistration.resolve?.(ctxFor(playable, paneTopContext)))
+      .toEqual({render: VideoNotesRenderer})
+    // The relative precedence over videoPlayer (10 > 5) is data at the
+    // registration site (`src/plugins/video-player/index.ts`), not a fact
+    // either standalone registration carries — nothing here to assert on
+    // directly without duplicating that call site's numbers.
   })
 
   it('does not select for a non-video block even in mode', () => {
-    expect(VideoNotesRenderer.canRender?.({
-      block: nonVideo,
-      context: paneTopContext,
-    } as BlockRendererProps)).toBe(false)
+    expect(videoNotesRendererRegistration.resolve?.(ctxFor(nonVideo, paneTopContext))).toBeNull()
   })
 
   it('does not select without the mode (videoPlayer keeps winning)', () => {
-    expect(VideoNotesRenderer.canRender?.({block: playable, context: {scopeRootId: VIDEO}} as BlockRendererProps)).toBe(false)
-    expect(VideoPlayerRenderer.canRender?.({block: playable} as BlockRendererProps)).toBe(true)
+    expect(videoNotesRendererRegistration.resolve?.(ctxFor(playable, {scopeRootId: VIDEO}))).toBeNull()
+    expect(videoPlayerRendererRegistration.resolve?.(ctxFor(playable, {})))
+      .toEqual({render: VideoPlayerRenderer, claims: true})
   })
 
   it('does not let a NESTED playable block claim the mode (non-video top-level pane)', () => {
     // scopeRootId still points at the pane's (non-video) top-level.
-    expect(VideoNotesRenderer.canRender?.({
-      block: playable,
-      context: {panelViewMode: VIDEO_NOTES_VIEW_MODE, scopeRootId: 'page-top'},
-    } as BlockRendererProps)).toBe(false)
+    expect(videoNotesRendererRegistration.resolve?.(ctxFor(playable, {
+      panelViewMode: VIDEO_NOTES_VIEW_MODE, scopeRootId: 'page-top',
+    }))).toBeNull()
   })
 
   it('does not let an EMBED of the video claim the mode (scope root re-pointed + nested surface)', () => {
-    expect(VideoNotesRenderer.canRender?.({
-      block: playable,
-      context: {panelViewMode: VIDEO_NOTES_VIEW_MODE, scopeRootId: VIDEO, isNestedSurface: true},
-    } as BlockRendererProps)).toBe(false)
+    expect(videoNotesRendererRegistration.resolve?.(ctxFor(playable, {
+      panelViewMode: VIDEO_NOTES_VIEW_MODE, scopeRootId: VIDEO, isNestedSurface: true,
+    }))).toBeNull()
   })
 
   it('the layout gate applies the same top-level guard', () => {
@@ -207,13 +213,13 @@ describe('VideoNotesRenderer.canRender', () => {
         videoPlayerBlockId: VIDEO,
         scopeRootId: VIDEO,
       },
-    } as unknown as Parameters<typeof videoNotesLayoutContribution>[0]
-    expect(videoNotesLayoutContribution(base)).not.toBeNull()
-    expect(videoNotesLayoutContribution({
+    } as unknown as Parameters<NonNullable<typeof videoNotesLayoutRegistration.resolve>>[0]
+    expect(videoNotesLayoutRegistration.resolve?.(base)).not.toBeNull()
+    expect(videoNotesLayoutRegistration.resolve?.({
       ...base,
       blockContext: {...base.blockContext, scopeRootId: 'page-top'},
     })).toBeNull()
-    expect(videoNotesLayoutContribution({
+    expect(videoNotesLayoutRegistration.resolve?.({
       ...base,
       blockContext: {...base.blockContext, isNestedSurface: true},
     })).toBeNull()

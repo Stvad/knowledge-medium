@@ -5,7 +5,7 @@ import { cleanup, render, screen } from '@testing-library/react'
 import type { Block } from '@/data/block'
 import type { BlockLayoutSlots, BlockResolveContext, BlockShellProps } from '@/extensions/blockInteraction'
 import {
-  srsReviewCardLayoutContribution,
+  srsReviewCardLayoutRegistration,
   SRS_REVIEW_CARD_ID,
   SRS_REVIEW_REVEALED,
 } from '../reviewCardLayout.tsx'
@@ -31,7 +31,7 @@ const slots = (): BlockLayoutSlots => ({
 } as unknown as BlockLayoutSlots)
 
 const layoutFor = (revealed: boolean) => {
-  const variant = srsReviewCardLayoutContribution({
+  const variant = srsReviewCardLayoutRegistration.resolve?.({
     block: {id: 'card'},
     blockContext: {
       [SRS_REVIEW_CARD_ID]: 'card',

@@ -11,7 +11,8 @@ import { staticDataExtensions } from '@/extensions/staticDataExtensions'
 import { extensionsDataExtension } from '@/plugins/extensions-settings/dataExtension'
 import { resolveFacetRuntimeSync } from '@/facets/facet'
 import { __setCompileImplForTest, readApproval } from '@/extensions/compileExtensionModule'
-import { actionsFacet, appMountsFacet, blockRenderersFacet } from '@/extensions/core'
+import { actionsFacet, appMountsFacet } from '@/extensions/core'
+import { blockRendererFacet } from '@/extensions/blockInteraction'
 import { ActionContextTypes } from '@/shortcuts/types'
 import { createAgentRuntimeContext, executeCommand } from '../commands'
 import type { AgentRuntimeContext, InstallExtensionResult } from '../protocol'
@@ -515,7 +516,7 @@ describe('agent runtime commands', () => {
     const Component = () => null
     const restore = __setCompileImplForTest(async () => ({
       default: [
-        blockRenderersFacet.of({id: 'demo-renderer', renderer}),
+        blockRendererFacet.of({id: 'demo-renderer', label: 'Demo renderer', render: renderer}),
         appMountsFacet.of({id: 'demo-mount', component: Component}),
       ],
     }))

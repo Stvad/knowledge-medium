@@ -39,6 +39,7 @@ import {
 import type { BlockRenderer, BlockRendererProps } from '@/types.js'
 import { DefaultBlockRenderer } from './DefaultBlockRenderer.tsx'
 import { deleteBlockThroughUi } from '@/utils/deleteBlockThroughUi.js'
+import type { BlockRendererRegistration } from '@/extensions/blockInteraction.js'
 
 export const writeBlockTypeLabel = async (
   block: Block,
@@ -404,25 +405,17 @@ BlockTypeContentRenderer.displayName = 'BlockTypeContentRenderer'
 /** Outer wrapper: keeps the default block layout (children,
  *  indentation, drag handle, focus chrome) and swaps in the
  *  type-editing content renderer. */
-export const BlockTypeBlockRenderer: BlockRenderer = Object.assign(
-  (props: BlockRendererProps) => (
-    <DefaultBlockRenderer
-      {...props}
-      ContentRenderer={BlockTypeContentRenderer}
-      EditContentRenderer={BlockTypeContentRenderer}
-    />
-  ),
-  {
-    canRender: ({block}: BlockRendererProps): boolean => {
-      // Mirrors PropertySchemaBlockRenderer.canRender — peek may be null
-      // on the very first render; useRenderer will rerun once the block
-      // hydrates.
-      const data = block.peek()
-      if (!data) return false
-      const types = data.properties.types
-      return Array.isArray(types) && types.includes('block-type')
-    },
-    priority: () => 100,
-  },
+export const BlockTypeBlockRenderer: BlockRenderer = (props: BlockRendererProps) => (
+  <DefaultBlockRenderer
+    {...props}
+    ContentRenderer={BlockTypeContentRenderer}
+    EditContentRenderer={BlockTypeContentRenderer}
+  />
 )
 BlockTypeBlockRenderer.displayName = 'BlockTypeBlockRenderer'
+
+export const blockTypeRendererRegistration: BlockRendererRegistration = {
+  id: 'blockType',
+  label: 'Block type editor',
+  resolve: ctx => ctx.types.includes('block-type') ? {render: BlockTypeBlockRenderer} : null,
+}

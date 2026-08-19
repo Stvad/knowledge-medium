@@ -22,12 +22,13 @@ import { defaultRenderersExtension } from '@/extensions/defaultRenderers'
 import { plainOutlinerPlugin } from '@/plugins/plain-outliner'
 import {
   blockLayoutFacet,
+  blockRendererFacet,
   blockShellDecoratorsFacet,
   shortcutSurfaceActivationsFacet,
+  type BlockRendererRegistration,
   type BlockShellDecoratorProps,
 } from '@/extensions/blockInteraction'
-import { referenceLayoutContribution } from '@/components/references/referenceLayout'
-import { blockRenderersFacet } from '@/extensions/core'
+import { referenceLayoutRegistration } from '@/components/references/referenceLayout'
 import { DefaultBlockRenderer } from '@/components/renderer/DefaultBlockRenderer'
 import { type FacetRuntime } from '@/facets/facet'
 import { ActiveContextsProvider } from '@/shortcuts/ActiveContexts'
@@ -102,8 +103,11 @@ const MarkerContentRenderer = ({block}: BlockRendererProps) => (
 const MarkerRenderer: BlockRenderer = (props: BlockRendererProps) => (
   <DefaultBlockRenderer {...props} ContentRenderer={MarkerContentRenderer} />
 )
-MarkerRenderer.canRender = ({block}: BlockRendererProps) => block.id === 'marker-target'
-MarkerRenderer.priority = () => 100
+const markerRendererRegistration: BlockRendererRegistration = {
+  id: 'marker',
+  label: 'Marker',
+  resolve: ({block}) => block.id === 'marker-target' ? {render: MarkerRenderer} : null,
+}
 
 const extensions = [
   kernelPropertyUiExtension,
@@ -111,13 +115,13 @@ const extensions = [
   defaultEditorInteractionExtension,
   defaultRenderersExtension,
   plainOutlinerPlugin,
-  blockLayoutFacet.of(referenceLayoutContribution, {source: 'references'}),
+  blockLayoutFacet.of(referenceLayoutRegistration, {source: 'references'}),
   blockShellDecoratorsFacet.of(() => SpyShellDecorator, {source: 'test-spy'}),
   shortcutSurfaceActivationsFacet.of((ctx) => {
     shortcutActivationRuns.push(ctx.block.id)
     return null
   }, {source: 'test-spy'}),
-  blockRenderersFacet.of({id: 'marker', renderer: MarkerRenderer}, {source: 'test-spy'}),
+  blockRendererFacet.of(markerRendererRegistration, {precedence: 100, source: 'test-spy'}),
 ]
 
 describe('block reference / embed rendering through the unified pipeline', () => {

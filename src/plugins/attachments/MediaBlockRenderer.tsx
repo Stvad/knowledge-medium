@@ -40,6 +40,7 @@ import {
 import { pickMediaViewer } from './mediaViewers.js'
 import { mediaViewersFacet } from './mediaViewersFacet.js'
 import { useAssetObjectUrl } from './useAssetObjectUrl.js'
+import type { BlockRendererRegistration } from '@/extensions/blockInteraction.js'
 
 export const MediaContentRenderer = ({ block }: BlockRendererProps) => {
   const [hash] = usePropertyValue(block, mediaHashProp)
@@ -110,16 +111,11 @@ export const MediaBlockRenderer: BlockRenderer = (props: BlockRendererProps) => 
   <DefaultBlockRenderer {...props} ContentRenderer={MediaContentRenderer} />
 )
 
-// Gate on a LOADED snapshot, read THROW-FREE — exactly as the other peek()-based
-// renderers do (PropertySchema / BlockType / TypesPage). `useRenderer` runs every
-// renderer's canRender for every block during its loading window, ABOVE the
-// BlockComponent ErrorBoundary, so canRender must never throw: `block.hasType()`
-// throws on a not-yet-loaded / missing row, and even `getBlockTypes` throws a
-// CodecError on a malformed `types` value (a non-array, or a non-string element)
-// that the cache boundary doesn't validate. Reading `properties.types` raw +
-// `Array.isArray` is total: undefined / wrong-shape → false, never a throw.
-MediaBlockRenderer.canRender = ({ block }: BlockRendererProps) => {
-  const types = block.peek()?.properties.types
-  return Array.isArray(types) && types.includes(MEDIA_TYPE)
+export const mediaRendererRegistration: BlockRendererRegistration = {
+  id: 'media',
+  label: 'Media',
+  // Offered for any block, claims only media blocks — see the extension
+  // renderer's registration for why the gate is `claims` rather than a null
+  // return.
+  resolve: ctx => ({render: MediaBlockRenderer, claims: ctx.types.includes(MEDIA_TYPE)}),
 }
-MediaBlockRenderer.priority = () => 5

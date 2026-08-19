@@ -25,6 +25,7 @@ import type { LazyViewportPlaceholderProps } from '@/components/util/LazyViewpor
 import type { BlockRenderer, BlockRendererProps } from '@/types.js'
 import { formatRelativeTime } from '@/utils/relativeTime.js'
 import { groupRecentActivity, type RecentActivityGroup } from './grouping.js'
+import type { BlockRendererRegistration } from '@/extensions/blockInteraction.js'
 
 /** Rows scanned per page of the feed. Sized in ROWS, not entries,
  *  because one entry can absorb a whole imported tree — which is also
@@ -190,22 +191,18 @@ const RecentsPageContentRenderer: BlockRenderer = (props: BlockRendererProps) =>
 }
 RecentsPageContentRenderer.displayName = 'RecentsPageContentRenderer'
 
-export const RecentsPageBlockRenderer: BlockRenderer = Object.assign(
-  (props: BlockRendererProps) => (
-    <DefaultBlockRenderer
-      {...props}
-      ContentRenderer={RecentsPageContentRenderer}
-      contentShowsOtherBlocks
-    />
-  ),
-  {
-    canRender: ({block}: BlockRendererProps): boolean => {
-      const data = block.peek()
-      if (!data) return false
-      const types = data.properties.types
-      return Array.isArray(types) && types.includes(RECENTS_PAGE_TYPE)
-    },
-    priority: () => 100,
-  },
+export const RecentsPageBlockRenderer: BlockRenderer = (props: BlockRendererProps) => (
+  <DefaultBlockRenderer
+    {...props}
+    ContentRenderer={RecentsPageContentRenderer}
+    contentShowsOtherBlocks
+  />
 )
 RecentsPageBlockRenderer.displayName = 'RecentsPageBlockRenderer'
+
+export const recentsPageRendererRegistration: BlockRendererRegistration = {
+  id: 'recentsPage',
+  label: 'Recents page',
+  resolve: ctx =>
+    ctx.types.includes(RECENTS_PAGE_TYPE) ? {render: RecentsPageBlockRenderer} : null,
+}
