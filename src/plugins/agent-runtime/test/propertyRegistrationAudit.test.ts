@@ -343,11 +343,17 @@ describe('audit-properties command', () => {
     )).rejects.toThrow(/empty value/i)
   })
 
+  // page/search/daily-note go through `commandWorkspaceId`; the backlinks
+  // verbs go through `resolveBlockWorkspaceId` instead, so both resolvers
+  // need a case or one guard stays unpinned.
   it.each([
     ['page', {type: 'page', name: 'x'}],
     ['search', {type: 'search', query: 'x'}],
     ['daily-note', {type: 'daily-note', date: '2026-08-18'}],
+    ['backlinks', {type: 'backlinks', blockId: 'b1'}],
+    ['grouped-backlinks', {type: 'grouped-backlinks', blockId: 'b1'}],
   ] as const)('rejects an EMPTY workspace assertion on %s instead of answering about the active one', async (_label, base) => {
+    await create({id: 'b1', properties: {'demo:undeclared': 'x'}})
     // CAC turns `--workspace ""` into the number 0, which the CLI normalizes
     // to ''. Both shared resolvers used to treat that as "no override" and
     // fall back — answering about a graph the caller never named.

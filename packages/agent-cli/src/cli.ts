@@ -41,6 +41,7 @@ import {
   renderKernelTypesInstallSummary,
 } from './kernelDts.js'
 import {renderSubtreeOutline} from './subtreeOutline.js'
+import {workspaceAssertion} from './cliOptions.js'
 import {extensionScaffold, slugify, titleize} from './scaffold.js'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
@@ -521,17 +522,6 @@ const wireDescription = (type: KnownCommandType): string =>
 cli.option('--profile, -p <name>', 'Saved CLI token profile to use')
 
 // ----- Local / bridge-management commands ---------------------------
-
-/** Test PRESENCE, not truthiness. CAC parses `--workspace ""` (a shell
- *  expanding an unset variable) into the NUMBER 0 — falsy but present — so a
- *  truthiness check silently drops the assertion and the command answers
- *  about the ACTIVE workspace instead of the one the caller named. Normalize
- *  that artifact back to an empty string so the command layer's purpose-built
- *  rejection is what surfaces. */
-const workspaceAssertion = (workspace: string | number | undefined): {workspaceId?: string} => {
-  if (workspace === undefined) return {}
-  return {workspaceId: workspace === 0 ? '' : String(workspace)}
-}
 
 cli
   .command('connect [token]', 'Pair the agent CLI with the app (or save a token directly)')
