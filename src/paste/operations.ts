@@ -373,10 +373,15 @@ export async function pasteEditModeMultilineText(
     const target = await tx.get(pasteTarget.id)
     if (!target) return
 
+    // `visible`, not `sibling`: the slot immediately after a block IS its
+    // first-child slot once it has visible children, so the rest of the paste
+    // stays contiguous with the line it was split from instead of landing past
+    // the whole existing subtree. Matches the block-shell paste — the two
+    // surfaces place a multi-root paste identically.
     const destination = await resolveRootDestination(tx, target, {
       position: 'after',
       scopeRootId: options.scopeRootId,
-      placement: 'sibling',
+      placement: 'visible',
     })
 
     await tx.update(target.id, {content: plan.targetContent})

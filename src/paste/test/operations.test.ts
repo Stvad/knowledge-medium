@@ -81,6 +81,23 @@ describe('pasteMultilineText', () => {
     expect(await childContents('root')).toEqual(['Alpha', 'Beta', 'Next'])
   })
 
+  it('keeps a paste contiguous when a blank target WITH children absorbs the first root', async () => {
+    // The pasted run stays together: the slot immediately after an expanded
+    // block IS its first-child slot, so Beta lands there rather than past the
+    // whole existing subtree. Deliberate — a paste must not be split around
+    // content the user already had.
+    await createBlock('root', 'Root', null, 'a0')
+    await createBlock('empty', '', 'root', 'a1')
+    await createBlock('kid', 'Kid', 'empty', 'a0')
+    await createBlock('next', 'Next', 'root', 'a2')
+
+    await pasteMultilineText('Alpha\nBeta', env.repo.block('empty'), env.repo, {scopeRootId: 'root'})
+
+    expect(env.repo.block('empty').peek()?.content).toBe('Alpha')
+    expect(await childContents('empty')).toEqual(['Beta', 'Kid'])
+    expect(await childContents('root')).toEqual(['Alpha', 'Next'])
+  })
+
   it('inserts a multi-block paste between tied siblings without losing content (#198)', async () => {
     // The insertion neighbours (the target and its next sibling) share an
     // order_key. The old keysBetween(lower, upper) threw "<key> >= <key>" on the
@@ -351,6 +368,46 @@ describe('pasteEditModeMultilineText', () => {
     expect(await childContents('target')).toEqual(['Child'])
     expect(await childContents('root')).toEqual(['prefix Parent', 'Sibling', 'Next'])
     expect(result?.focusBlock.peek()?.content).toBe('Sibling')
+  })
+
+  it('keeps a paste contiguous when the edited block has children (matches the shell)', async () => {
+    // The editor surface used to force `sibling` placement, so Beta landed
+    // AFTER the whole existing subtree — the same clipboard produced a
+    // different tree depending only on which surface pasted it. Both now
+    // follow outline navigation: the slot after an expanded block is its
+    // first-child slot.
+    await createBlock('root', 'Root', null, 'a0')
+    await createBlock('empty', '', 'root', 'a1')
+    await createBlock('kid', 'Kid', 'empty', 'a0')
+    await createBlock('next', 'Next', 'root', 'a2')
+
+    const plan = planEditModeMultilinePaste('Alpha\nBeta', '', {from: 0, to: 0})
+
+    await pasteEditModeMultilineText(plan!, env.repo.block('empty'), env.repo, {scopeRootId: 'root'})
+
+    expect(env.repo.block('empty').peek()?.content).toBe('Alpha')
+    expect(await childContents('empty')).toEqual(['Beta', 'Kid'])
+    expect(await childContents('root')).toEqual(['Alpha', 'Next'])
+  })
+
+  it('lands the remainder as first children when editing a NON-blank block with children', async () => {
+    // Same rule with no absorption in play: the caret split's tail follows the
+    // edited line instead of jumping past the subtree.
+    await createBlock('root', 'Root', null, 'a0')
+    await createBlock('target', 'hello world', 'root', 'a1')
+    await createBlock('kid', 'Kid', 'target', 'a0')
+    await createBlock('next', 'Next', 'root', 'a2')
+
+    const plan = planEditModeMultilinePaste('alpha\nbeta', 'hello world', {
+      from: 'hello '.length,
+      to: 'hello '.length,
+    })
+
+    await pasteEditModeMultilineText(plan!, env.repo.block('target'), env.repo, {scopeRootId: 'root'})
+
+    expect(env.repo.block('target').peek()?.content).toBe('hello alpha')
+    expect(await childContents('target')).toEqual(['betaworld', 'Kid'])
+    expect(await childContents('root')).toEqual(['hello alpha', 'Next'])
   })
 
   it('keeps remaining lines visible when editing the zoomed top-level block', async () => {
