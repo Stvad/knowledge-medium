@@ -18,19 +18,20 @@ vi.mock('@/utils/toast.js', () => ({
 vi.mock('../ConfirmMigrationDialog.tsx', () => ({ConfirmMigrationDialog: () => null}))
 
 import type { OperatorBackfillResult, Repo } from '@/data/repo'
-import { migratePropertiesToBlocksAction } from '../action.ts'
+import { describeOutcome, migratePropertiesToBlocksAction } from '../action.ts'
 
 const makeRepo = (result: OperatorBackfillResult, {flipped = false} = {}) => {
   const runWorkspaceBackfillNow = vi.fn(async () => result)
+  const getAll = vi.fn(async () => [{n: 7}])
   const repo = {
     activeWorkspaceId: 'ws-1',
     db: {
-      getAll: async () => [{n: 7}],
+      getAll,
       getOptional: async () => ({properties_migration: flipped ? 'children' : 'cell'}),
     },
     runWorkspaceBackfillNow,
   } as unknown as Repo
-  return {repo, runWorkspaceBackfillNow}
+  return {repo, runWorkspaceBackfillNow, getAll}
 }
 
 /** The dialog is a user-length pause; this is the seam for what happens during
@@ -70,12 +71,15 @@ describe('migrate_properties_to_blocks action', () => {
     // transaction to find that out spends a full workspace scan and a
     // user-length pause, and reports an internal error that says to try again.
     openDialog.mockResolvedValue(true)
-    const {repo, runWorkspaceBackfillNow} = makeRepo(
+    const {repo, runWorkspaceBackfillNow, getAll} = makeRepo(
       {outcome: 'ran', undoHistoryCleared: false}, {flipped: true},
     )
 
     await invoke(repo)
 
+    // Before the SCAN as well as before the dialog: counting candidates is an
+    // unbounded json_each walk of the workspace on the UI thread.
+    expect(getAll).not.toHaveBeenCalled()
     expect(openDialog).not.toHaveBeenCalled()
     expect(runWorkspaceBackfillNow).not.toHaveBeenCalled()
   })
@@ -116,5 +120,27 @@ describe('migrate_properties_to_blocks action', () => {
 
     expect(progressHandle.done).not.toHaveBeenCalled()
     expect(progressHandle.fail).toHaveBeenCalledWith(expect.stringMatching(/not caught up/))
+  })
+})
+
+describe('what a completed run tells the operator', () => {
+  const ran = {outcome: 'ran', undoHistoryCleared: false} as const
+
+  it('calls a run that migrated nothing a failure, not a green "0 blocks"', async () => {
+    // Failures are per-value by design, so a systematic problem — a codec
+    // rejecting everything, storage refusing writes — otherwise came back as
+    // a success banner reading "Migrated properties on 0 blocks."
+    const {message, failed} = describeOutcome(ran, 0, 12, false)
+
+    expect(failed).toBe(true)
+    expect(message).toMatch(/systematic/i)
+  })
+
+  it('says to run again when the workspace was edited under the pass', async () => {
+    // Convergence deliberately does not loop on rewritten values, so this
+    // sentence is the only thing that tells an operator the children it just
+    // built may already be behind the cells.
+    expect(describeOutcome(ran, 100, 0, true).message).toMatch(/run this again before flipping/i)
+    expect(describeOutcome(ran, 100, 0, false).message).not.toMatch(/run this again/i)
   })
 })

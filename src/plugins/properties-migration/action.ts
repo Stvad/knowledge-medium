@@ -19,15 +19,28 @@ import { ConfirmMigrationDialog } from './ConfirmMigrationDialog.tsx'
  *  sticky toast rather than appended here, because the banner's completion
  *  message clears in a couple of seconds and this pass runs for minutes —
  *  long enough that nobody is still watching when it lands. */
-const describeOutcome = (
+export const describeOutcome = (
   result: OperatorBackfillResult,
   blocksMaterialized: number,
   unmigrated: number,
+  editedUnderPass: boolean,
 ): {message: string; failed: boolean; followUp?: string} => {
   switch (result.outcome) {
     case 'ran':
+      if (blocksMaterialized === 0 && unmigrated > 0) {
+        return {
+          message: `Nothing was migrated — all ${unmigrated.toLocaleString()} property ` +
+            'value(s) failed. That is a systematic problem, not a handful of bad values; ' +
+            'see the console before running this again.',
+          failed: true,
+        }
+      }
       return {
         message: `Migrated properties on ${blocksMaterialized.toLocaleString()} blocks.` +
+          (editedUnderPass
+            ? ' The workspace was edited while it ran, so some values may already be behind —' +
+              ' run this again before flipping.'
+            : '') +
           (result.undoHistoryCleared ? ' Undo history for this workspace was cleared.' : ''),
         // Surfaced through `done`, not `fail`: the pass DID complete, and
         // saying otherwise would send an operator looking for a broken run
@@ -53,9 +66,9 @@ const describeOutcome = (
         // so this outcome only ever means another device holds the claim —
         // including one that took it and never came back, which no timeout
         // clears. Naming where the claim lives is the whole recovery.
-        message: 'Another device holds this migration. Wait for it to finish — or, if that ' +
-          'device is gone, delete the claim block on the "System Migrations (km)" page and ' +
-          'run this again.',
+        message: 'Another client holds this migration — another device, or another tab of ' +
+          'this browser. Wait for it to finish; if nothing is running, check the claim ' +
+          'block on the "System Migrations (km)" page and delete it to release the pass.',
         failed: true,
       }
     case 'already-running':
@@ -111,9 +124,11 @@ export const migratePropertiesToBlocksAction = ({repo}: {repo: Repo}): ActionCon
     // per committed batch, and a run of several minutes with a silent toast is
     // indistinguishable from a hung one.
     let unmigrated = 0
+    let editedUnderPass = false
     const unsubscribe = onPropertyCellBackfillProgress(progress => {
       materialized = progress.blocksMaterialized
       unmigrated = progress.failureCount
+      editedUnderPass = progress.editedUnderPass
       // Counts are per-sweep, and the sweep number is shown because a second
       // pass over the same blocks is normal — without it the bar restarts from
       // zero for no reason the operator can see.
@@ -125,10 +140,18 @@ export const migratePropertiesToBlocksAction = ({repo}: {repo: Repo}): ActionCon
     })
     try {
       const result = await repo.runWorkspaceBackfillNow(workspaceId, PROPERTY_CELL_BACKFILL_ID)
-      const {message, failed, followUp} = describeOutcome(result, materialized, unmigrated)
+      const {message, failed, followUp} = describeOutcome(
+        result, materialized, unmigrated, editedUnderPass,
+      )
       if (failed) banner.fail(message)
       else banner.done(message)
-      if (followUp) showInfo(followUp, {duration: Number.POSITIVE_INFINITY})
+      // A stable id: the follow-up tells the operator to run this again, and
+      // without one the next run stacks a second sticky toast beside the
+      // first, identical apart from a count that is now wrong.
+      if (followUp) {
+        showInfo(followUp, {id: 'properties-migration-worklist',
+                            duration: Number.POSITIVE_INFINITY})
+      }
     } catch (err) {
       console.error('[properties-migration] failed:', err)
       banner.fail(`Migration failed: ${err instanceof Error ? err.message : String(err)}`)

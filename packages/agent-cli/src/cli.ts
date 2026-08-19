@@ -956,9 +956,12 @@ cli
 
 // A full properties migration is hundreds of thousands of writes; measured
 // runs land near 8 minutes on a fast native engine and a browser is a
-// multiple of that. Matches the server's inFlightCommandTtlMs (server.ts)
-// so the CLI doesn't give up on a run the bridge is still willing to track.
-const runBackfillDefaultWaitSeconds = 3600
+// multiple of that. Set one minute under the server's inFlightCommandTtlMs
+// (60 min, server.ts) rather than equal to it: at an exact match, the
+// bridge can reap the in-flight command in the same instant this timeout
+// elapses, and the next poll would surface "Unknown command" instead of
+// the CLI's own clear timeout message.
+const runBackfillDefaultWaitSeconds = 3540
 
 cli
   .command('run-backfill <backfillId>', wireDescription('run-backfill'))

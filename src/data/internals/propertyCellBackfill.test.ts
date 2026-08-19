@@ -136,6 +136,13 @@ describe('property cell → children backfill', () => {
     expect((await repo.load('b1'))?.properties['demo:nobody-declares-this']).toBe('x')
   })
 
+  it('reports an idle workspace as caught up, not merely converged', async () => {
+    await create('b1', {'demo:note': 'hello'})
+    await runPropertyCellBackfill(makeCtx())
+
+    expect((await runPropertyCellBackfill(makeCtx())).editedUnderPass).toBe(false)
+  })
+
   it('is a fixpoint — a second sweep of an already-migrated graph writes nothing', async () => {
     await create('b1', {'demo:note': 'hello'})
     await run()
@@ -349,6 +356,26 @@ describe('property cell → children backfill', () => {
     // repair worklist names it once: counts are the CURRENT sweep's.
     expect(progress.sweeps).toBe(2)
     expect(progress.failureCount).toBe(1)
+    expect(progress.failures).toHaveLength(1)
+  })
+
+  it('removes the children of a block whose LAST property was deleted', async () => {
+    // The candidate scan selects on a NON-EMPTY bag, so an owner that loses
+    // its final property drops out of it entirely — and the deletion path,
+    // which only runs for owners the scan visits, could never reach it. Its
+    // field row survived every re-run, and the flip would make it
+    // authoritative, resurrecting the property.
+    await create('b1', {'demo:note': 'gone soon'})
+    await runPropertyCellBackfill(makeCtx())
+    expect(await fieldRowsOf('b1')).toHaveLength(1)
+
+    await repo.tx(async tx => {
+      await tx.update('b1', {properties: {}})
+    }, {scope: ChangeScope.BlockDefault, description: 'user deletes the last property'})
+
+    await runPropertyCellBackfill(makeCtx())
+
+    expect(await fieldRowsOf('b1')).toEqual([])
   })
 
   it('converges while a property is rewritten under it, as an open editor does', async () => {
@@ -369,6 +396,10 @@ describe('property cell → children backfill', () => {
     })
 
     expect(progress.sweeps).toBe(2)
+    // Converging is not the same as being caught up: the sweep that converged
+    // was still rewriting value children, so the operator is told to run again
+    // rather than left to assume the children match the cells.
+    expect(progress.editedUnderPass).toBe(true)
   })
 
   it('migrates a block carrying more keys than one transaction budgets for', async () => {

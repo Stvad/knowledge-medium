@@ -2,7 +2,7 @@
  *  as a child process on a random port and exercise it over the wire:
  *  token auth, per-client queues, and client-gone failure modes. */
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
-import { spawn, ChildProcess } from 'node:child_process'
+import { spawn } from 'node:child_process'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import net from 'node:net'
@@ -36,7 +36,7 @@ const waitForReady = async (port: number, attempts = 50) => {
   throw new Error(`Bridge server failed to start on port ${port}`)
 }
 
-let server: ChildProcess
+let sharedServer: {baseUrl: string, stop: () => Promise<void>}
 let baseUrl: string
 const bridgeSecret = 'BRIDGE-SECRET'
 const bridgeHeaders = {'x-agent-runtime-secret': bridgeSecret}
@@ -49,28 +49,18 @@ const unknownTokenMessage =
 // secret-gated reset route (enabled by AGENT_RUNTIME_TEST_RESET) instead
 // of paying a fresh spawn + port-bind per case — which also removes the
 // pick-port/spawn TOCTOU race from every-test down to a single occurrence.
+// `spawnBridgeServer` is defined further below, but the reference is safe:
+// vitest doesn't invoke a `beforeAll` callback until the module has fully
+// evaluated, by which point the const is initialized.
 beforeAll(async () => {
-  const port = await pickPort()
-  baseUrl = `http://127.0.0.1:${port}`
-  server = spawn('node', [serverScript], {
-    env: {
-      ...process.env,
-      AGENT_RUNTIME_PORT: String(port),
-      AGENT_RUNTIME_HOST: '127.0.0.1',
-      AGENT_RUNTIME_BRIDGE_SECRET: bridgeSecret,
-      AGENT_RUNTIME_TEST_RESET: 'true',
-    },
-    stdio: ['ignore', 'ignore', 'pipe'],
+  sharedServer = await spawnBridgeServer({
+    AGENT_RUNTIME_BRIDGE_SECRET: bridgeSecret,
+    AGENT_RUNTIME_TEST_RESET: 'true',
   })
-  await waitForReady(port)
+  baseUrl = sharedServer.baseUrl
 })
 
-afterAll(async () => {
-  if (server && !server.killed) {
-    server.kill('SIGKILL')
-    await new Promise(resolve => server.once('exit', resolve))
-  }
-})
+afterAll(() => sharedServer.stop())
 
 beforeEach(async () => {
   const response = await fetch(`${baseUrl}/runtime/test/reset`, {
@@ -89,9 +79,10 @@ const registerClient = async (clientId: string, body: object) => {
   expect(response.ok).toBe(true)
 }
 
-/** Spin up a dedicated server process with its own env — for tests that
- *  need a TTL override the shared per-file server (started once in
- *  beforeAll) can't apply without a restart. */
+/** Spawn the bridge server on a free port, wait for /health, and return a
+ *  stop() to kill it. Backs both the shared per-file server (beforeAll
+ *  above) and tests that need their own env — e.g. a TTL override the
+ *  shared server's fixed-at-startup env can't apply without a restart. */
 const spawnBridgeServer = async (
   env: Record<string, string>,
 ): Promise<{baseUrl: string, stop: () => Promise<void>}> => {
@@ -387,6 +378,18 @@ describe('agent runtime bridge', () => {
       const body = await status.json()
       expect(body.status).toBe('completed')
       expect(body.result.value).toBe('pong')
+
+      // Negative control: prove the shrunk TTL is actually in effect. Without
+      // this, a broken envDurationMsOverride would silently fall back to the
+      // real 10-minute default, every command would stay readable, and the
+      // assertions above would pass without pinning anything. Age the same
+      // command past commandTtlMs (1s) from completion and confirm it IS
+      // reaped.
+      await new Promise(resolve => setTimeout(resolve, 1500))
+      const expired = await fetch(`${ttlBaseUrl}/runtime/commands/${id}`, {
+        headers: {authorization: 'Bearer TOKEN-A'},
+      })
+      expect(expired.status).toBe(404)
     } finally {
       await stop()
     }

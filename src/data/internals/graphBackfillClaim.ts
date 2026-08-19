@@ -165,9 +165,11 @@ export interface GraphBackfillClaimDeps {
     fn: (tx: Tx) => Promise<R>,
     opts: {scope: ChangeScope; skipUndo?: boolean; description?: string},
   ): Promise<R>
-  /** Who holds the claim. Diagnostic rather than load-bearing now: nothing
-   *  branches on exclusivity, so this only has to be specific enough to tell
-   *  an operator WHICH client left an in-flight claim behind. */
+  /** Who holds the claim. LOAD-BEARING: `decideClaim` returns `proceed` only
+   *  when a live claim names this id, and `releaseClaim` refuses unless it
+   *  does — so a value that does not survive a reload leaves a claim nobody
+   *  can ever match and wedges the pass for the whole graph. Per browser
+   *  PROFILE, not per tab: two tabs of one browser share it. */
   readonly claimantId: string
   ensureHome(workspaceId: string): Promise<unknown>
 }

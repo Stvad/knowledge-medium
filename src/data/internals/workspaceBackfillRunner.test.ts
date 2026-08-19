@@ -595,7 +595,7 @@ describe('workspace backfill runner — operator outcomes', () => {
     }])
     await seedTarget(repo)
 
-    // `deferred`, not `already-done-or-held`: the two call for opposite
+    // `deferred`, not `held-by-peer`: the two call for opposite
     // responses, and an operator told "already done" here would stop retrying
     // a migration that has not started.
     expect(await repo.runWorkspaceBackfillNow(WS, 'operator-sync-v1')).toEqual({
@@ -628,7 +628,7 @@ describe('workspace backfill runner — operator outcomes', () => {
     await seedTarget(repo)
     vi.spyOn(console, 'error').mockImplementation(() => {})
 
-    // `failed`, not `already-done-or-held`: a pass that threw may have
+    // `failed`, not `held-by-peer`: a pass that threw may have
     // committed some batches, and the operator is the only one who can decide
     // to re-run. Told "already done", they never learn it is incomplete.
     const result = await repo.runWorkspaceBackfillNow(WS, 'operator-throws-v1')

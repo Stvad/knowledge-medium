@@ -48,6 +48,19 @@ const ROWS_PER_KEY = 2
  *  long it holds the writer. */
 const SCAN_PAGE = 500
 
+/** What "carries a property" means, for a block aliased `b`. Written once
+ *  because the pass needs it in three places and the third is its NEGATION:
+ *  the orphan leg below has to select exactly the owners this one cannot see.
+ *
+ *  `properties_json <> '{}'` is the term that makes it servable by
+ *  `idx_blocks_workspace_nonempty_properties` — see that index's comment in
+ *  `blockSchema.ts` for why SQLite needs it spelled out. */
+const CARRIES_A_PROPERTY = `
+     b.properties_json <> '{}'
+     AND json_valid(b.properties_json)
+     AND json_type(b.properties_json) = 'object'
+     AND EXISTS (SELECT 1 FROM json_each(b.properties_json))`
+
 /**
  * Blocks carrying any property, oldest id first, with the key count the write
  * budget is drawn against.
@@ -61,12 +74,6 @@ const SCAN_PAGE = 500
  * `materializePropertyChildrenForExistingRow` is the exact test. A visited row
  * with nothing to do costs one read and no write.
  *
- * `properties_json <> '{}'` is what makes this servable by
- * `idx_blocks_workspace_nonempty_properties`. The json_each EXISTS cannot be,
- * and SQLite will not infer the one from the other — without the literal term
- * the planner reads the whole workspace and sorts it into a temp B-tree once
- * per batch (92s per sweep on a 1M-row workspace, against 0.06s indexed).
- *
  * `id > ?` paginates rather than `OFFSET`, which would re-walk the prefix per
  * batch. The pass's own creates (field and value rows) carry no properties, so
  * they never enter this result and the scan cannot feed itself.
@@ -77,27 +84,57 @@ export const CANDIDATE_SQL = `
     FROM blocks b
    WHERE b.workspace_id = ?
      AND b.deleted = 0
-     AND b.properties_json <> '{}'
      AND b.id > ?
-     AND json_valid(b.properties_json)
-     AND json_type(b.properties_json) = 'object'
-     AND EXISTS (SELECT 1 FROM json_each(b.properties_json))
+     AND ${CARRIES_A_PROPERTY}
    ORDER BY b.id
    LIMIT ?`
 
-/** The convergence signal: how many property-child rows the workspace has
- *  right now. It moves on a create or a delete — the structural changes, and
- *  the only ones that mean another sweep is owed.
+/**
+ * The complement: owners that still have field rows but no longer satisfy
+ * {@link CARRIES_A_PROPERTY}.
  *
- *  Deliberately blind to UPDATES. A sweep that only rewrote the CONTENT of an
- *  existing value child has already applied that change, and asking for
- *  another sweep on the strength of it makes the pass diverge on any workspace
- *  someone is looking at: `editorSelection` and `isEditing` are registered
- *  properties on the panel block, so every caret movement rewrites one. Four
- *  caret movements across four multi-minute sweeps and the run ends
- *  unconverged, having already written every row. */
+ * `namesToReconcile` can only delete the children of a name the OWNER is
+ * visited for, and the scan above visits an owner only while its bag still
+ * holds something. So removing a block's LAST property left its field row and
+ * value row untouched, and no re-run could reach them — the one case the
+ * deletion path exists for that it could not see. Post-flip PROJECT rebuilds
+ * the cell from those children and the deleted property comes back.
+ *
+ * Driven off `idx_blocks_field_form`, whose `(workspace_id, parent_id)` prefix
+ * makes the GROUP BY and the cursor an ordered index walk. `keys` is the
+ * owner's field-row count — these rows only delete, and it keeps a block with
+ * hundreds of them from landing in one transaction with everything else.
+ */
+const ORPHANED_OWNER_SQL = `
+  SELECT f.parent_id AS id, COUNT(*) AS keys
+    FROM blocks f
+    JOIN blocks b ON b.id = f.parent_id
+   WHERE f.workspace_id = ?
+     AND f.deleted = 0
+     AND f.is_field_form = 1
+     AND f.parent_id > ?
+     AND b.deleted = 0
+     AND NOT (${CARRIES_A_PROPERTY})
+   GROUP BY f.parent_id
+   ORDER BY f.parent_id
+   LIMIT ?`
+
+/** How many property-child rows the workspace has, and when one last changed.
+ *
+ *  ONLY `n` decides convergence: it moves on a create or a delete, the
+ *  structural changes, and the only ones that mean another sweep is owed.
+ *  Looping on `t` as well makes the pass diverge on any workspace someone is
+ *  looking at — `editorSelection` and `isEditing` are registered properties on
+ *  the panel block, so every caret movement rewrites a value child, and four
+ *  of them across four multi-minute sweeps end the run unconverged with every
+ *  row already written.
+ *
+ *  `t` is still read, for `editedUnderPass`: moving during the sweep that
+ *  converged says the pass was rewriting children from cells that were
+ *  changing under it, which the operator needs told even though it must not
+ *  buy another sweep. */
 const CHILD_STATE_SQL = `
-  SELECT COUNT(*) AS n
+  SELECT COUNT(*) AS n, COALESCE(MAX(b.updated_at), 0) AS t
     FROM blocks b
    WHERE b.workspace_id = ? AND b.deleted = 0
      AND (b.is_field_form = 1
@@ -114,12 +151,14 @@ export const countPropertyCellBackfillCandidates = async (
   workspaceId: string,
 ): Promise<number> => {
   const rows = await getAll<{n: number}>(
-    `SELECT COUNT(*) AS n FROM blocks b
+    // INDEXED BY, unlike the pass's own scan: with no cursor to anchor it the
+    // planner picks `idx_blocks_workspace_active` at realistic property
+    // densities and reads `properties_json` off every row in the workspace.
+    // This runs before the confirmation dialog, on the UI thread.
+    `SELECT COUNT(*) AS n
+       FROM blocks b INDEXED BY idx_blocks_workspace_nonempty_properties
       WHERE b.workspace_id = ? AND b.deleted = 0
-        AND b.properties_json <> '{}'
-        AND json_valid(b.properties_json)
-        AND json_type(b.properties_json) = 'object'
-        AND EXISTS (SELECT 1 FROM json_each(b.properties_json))`,
+        AND ${CARRIES_A_PROPERTY}`,
     [workspaceId],
   )
   return rows[0]?.n ?? 0
@@ -158,8 +197,21 @@ export interface PropertyCellBackfillProgress {
    *  reason. Reported, never fatal — see {@link materializeRow}. Capped at
    *  {@link MAX_REPORTED_FAILURES}. */
   failures: {blockId: string; reason: string}[]
-  /** Failures this sweep, including any past the cap. */
+  /** Failures this sweep, including any past the cap. Paired with
+   *  `blocksMaterialized === 0` it is the signal that the run hit something
+   *  SYSTEMATIC — a codec rejecting everything, storage refusing writes —
+   *  rather than a handful of bad values, and the operator must be told that
+   *  rather than shown "migrated 0 blocks" in green. Deliberately not a throw:
+   *  `blocksMaterialized` counts blocks accepted IN FULL, so one junk key on
+   *  every block would abort a migration that in fact wrote most of it. */
   failureCount: number
+  /** The final sweep still had to rewrite value children — i.e. cells were
+   *  changing while the pass ran, and the children it just built are behind
+   *  by however much landed after it visited each block. Convergence
+   *  deliberately does not loop on this (see {@link CHILD_STATE_SQL}), so
+   *  reporting it is the only thing that tells an operator to run again
+   *  before flipping. */
+  editedUnderPass: boolean
 }
 
 /** Cap on retained failure detail. `failureCount` stays exact; this only
@@ -239,9 +291,11 @@ const materializeRow = async (
   }
 }
 
-/** One pass over every property-carrying block, cursor-paginated. */
+/** One cursor-paginated walk of `candidateSql`, which must return `id` and
+ *  `keys` and take (workspaceId, cursor, limit). */
 const sweep = async (
   ctx: WorkspaceBackfillContext,
+  candidateSql: string,
   progress: PropertyCellBackfillProgress,
   onBatch: () => void | Promise<void>,
 ): Promise<void> => {
@@ -260,14 +314,16 @@ const sweep = async (
   for (;;) {
     if (queued.length === 0) {
       queued = await ctx.getAll<{id: string; keys: number}>(
-        CANDIDATE_SQL, [ctx.workspaceId, cursor, SCAN_PAGE],
+        candidateSql, [ctx.workspaceId, cursor, SCAN_PAGE],
       )
       if (queued.length === 0) return
       cursor = queued[queued.length - 1]!.id
     }
 
     // Take as many blocks as the insert budget allows, and always at least
-    // one, so a block with more keys than the whole budget still gets a turn.
+    // one: a block heavier than the entire budget would otherwise admit
+    // nothing, and the drain loop would spin forever committing empty
+    // transactions rather than merely skipping it.
     const batch: {id: string}[] = []
     let budget = 0
     while (queued.length > 0 && (batch.length === 0
@@ -340,11 +396,12 @@ export const runPropertyCellBackfill = async (
 ): Promise<PropertyCellBackfillProgress> => {
   const progress: PropertyCellBackfillProgress = {
     blocksScanned: 0, blocksMaterialized: 0, sweeps: 0, failures: [], failureCount: 0,
+    editedUnderPass: false,
   }
 
-  const childState = async (): Promise<number> => {
-    const rows = await ctx.getAll<{n: number}>(CHILD_STATE_SQL, [ctx.workspaceId])
-    return rows[0]?.n ?? 0
+  const childState = async (): Promise<{n: number; t: number}> => {
+    const rows = await ctx.getAll<{n: number; t: number}>(CHILD_STATE_SQL, [ctx.workspaceId])
+    return {n: rows[0]?.n ?? 0, t: rows[0]?.t ?? 0}
   }
 
   for (;;) {
@@ -354,13 +411,23 @@ export const runPropertyCellBackfill = async (
     progress.blocksMaterialized = 0
     progress.failures = []
     progress.failureCount = 0
-    await sweep(ctx, progress, async () => { await onProgress?.(progress) })
-    if (await childState() === before) break
+    const notify = async () => { await onProgress?.(progress) }
+    await sweep(ctx, CANDIDATE_SQL, progress, notify)
+    await sweep(ctx, ORPHANED_OWNER_SQL, progress, notify)
+    const after = await childState()
+    if (after.n === before.n) {
+      // Structurally converged. The timestamp is not part of that decision —
+      // looping on it never terminates against a live editor — but if it moved
+      // during the sweep that converged, this sweep was still rewriting value
+      // children from cells that were changing under it.
+      progress.editedUnderPass = after.t !== before.t
+      break
+    }
     if (progress.sweeps >= MAX_SWEEPS) {
       throw new Error(
-        `[${PROPERTY_CELL_BACKFILL_ID}] gave up after ${MAX_SWEEPS} sweeps: blocks kept ` +
-        'gaining property children, which means the workspace is being edited faster ' +
-        'than the pass runs. Nothing is lost — run it again when the workspace is idle. ' +
+        `[${PROPERTY_CELL_BACKFILL_ID}] gave up after ${MAX_SWEEPS} sweeps: the workspace's ` +
+        'property children kept changing, which means it is being edited faster than the ' +
+        'pass runs. Nothing is lost — run it again when the workspace is idle. ' +
         'Completion was NOT recorded.',
       )
     }
@@ -394,14 +461,27 @@ export const propertyCellBackfill: WorkspaceBackfill = {
   trigger: 'operator',
   run: async ctx => {
     lastRun = null
-    const progress = await runPropertyCellBackfill(ctx, p => {
-      console.info(
-        `[${PROPERTY_CELL_BACKFILL_ID}] sweep ${p.sweeps}: ` +
-        `${p.blocksMaterialized}/${p.blocksScanned} blocks`,
-      )
-      progressListeners.notify(p)
-    })
-    lastRun = {workspaceId: ctx.workspaceId, progress}
+    // Parked in a `finally`: the run an operator most needs the failure list
+    // for is the one that THREW — the give-up above, or the every-block-failed
+    // floor — and the CLI has no progress listener, so this is its only
+    // channel. `progress` is the same object throughout, so it carries the
+    // last sweep's counts either way.
+    const progress: PropertyCellBackfillProgress = {
+      blocksScanned: 0, blocksMaterialized: 0, sweeps: 0, failures: [], failureCount: 0,
+      editedUnderPass: false,
+    }
+    try {
+      Object.assign(progress, await runPropertyCellBackfill(ctx, p => {
+        Object.assign(progress, p)
+        console.info(
+          `[${PROPERTY_CELL_BACKFILL_ID}] sweep ${p.sweeps}: ` +
+          `${p.blocksMaterialized}/${p.blocksScanned} blocks`,
+        )
+        progressListeners.notify(p)
+      }))
+    } finally {
+      lastRun = {workspaceId: ctx.workspaceId, progress}
+    }
     if (progress.failureCount > 0) {
       console.warn(
         `[${PROPERTY_CELL_BACKFILL_ID}] ${progress.failureCount} property value(s) could ` +

@@ -2908,6 +2908,10 @@ export class Repo {
         `${workspaceId}: no BackfillCompletionClaim is configured, so completion ` +
         `cannot be recorded once per graph.`,
       )
+      // Reported as a FAILURE, not left to the fallthrough — which now means
+      // "a peer holds the claim" and tells the operator to go delete a claim
+      // block that in this configuration does not exist.
+      failed = 'no BackfillCompletionClaim is configured, so completion cannot be recorded'
       return {completed, undoHistoryCleared, deferred, failed}
     }
     for (const backfill of backfills) {
