@@ -19,7 +19,7 @@
           },
           {
             "command": "node \"$CLAUDE_PROJECT_DIR/scripts/bd-github-sync.mjs\" --hook-pre-pr",
-            "statusMessage": "Syncing beads↔GitHub before publishing…",
+            "statusMessage": "Checking for publishable bead ids…",
             "timeout": 180,
             "type": "command"
           }
