@@ -125,34 +125,63 @@ describe('migrate_properties_to_blocks action', () => {
 
 describe('what a completed run tells the operator', () => {
   const ran = {outcome: 'ran', undoHistoryCleared: false} as const
+  const counts = (blocks: number) =>
+    ({blocksMaterialized: blocks, valuesMaterialized: blocks, unmigrated: 0, orphanedOwnersSwept: 0})
 
   it('calls a run that migrated nothing a failure, not a green "0 blocks"', async () => {
     // Failures are per-value by design, so a systematic problem — a codec
     // rejecting everything, storage refusing writes — otherwise came back as
     // a success banner reading "Migrated properties on 0 blocks."
-    const {message, failed} = describeOutcome(ran, 0, 12, false)
+    const {message, failed} = describeOutcome(ran, {blocksMaterialized: 0, valuesMaterialized: 0, unmigrated: 12, orphanedOwnersSwept: 0}, false)
 
     expect(failed).toBe(true)
     expect(message).toMatch(/systematic/i)
+  })
+
+  it('reports what it DELETED, which nothing else does', async () => {
+    // The sweep that removes stale children is by construction never the one
+    // that converges, and every other count is per-sweep — so a run whose only
+    // effect was deletion otherwise reads "Migrated properties on 0 blocks."
+    const {message} = describeOutcome(
+      ran,
+      {blocksMaterialized: 0, valuesMaterialized: 0, unmigrated: 0, orphanedOwnersSwept: 4},
+      false,
+    )
+
+    expect(message).toMatch(/removed the property children of 4/i)
+  })
+
+  it('is not "systematic" when one bad key per block hid a mostly-good run', async () => {
+    // `blocksMaterialized` counts blocks accepted in FULL, so it reads zero for
+    // a run that wrote every other key on every block. Branching on it told the
+    // operator nothing was migrated while tens of thousands of rows were.
+    const {failed} = describeOutcome(
+      ran, {blocksMaterialized: 0, valuesMaterialized: 40, unmigrated: 20, orphanedOwnersSwept: 0}, false,
+    )
+
+    expect(failed).toBe(false)
   })
 
   it('says to run again when the workspace was edited under the pass', async () => {
     // Convergence deliberately does not loop on rewritten values, so this
     // sentence is the only thing that tells an operator the children it just
     // built may already be behind the cells.
-    expect(describeOutcome(ran, 100, 0, true).message).toMatch(/run this again before flipping/i)
-    expect(describeOutcome(ran, 100, 0, false).message).not.toMatch(/run this again/i)
+    expect(describeOutcome(ran, counts(100), true).message).toMatch(/run this again before flipping/i)
+    expect(describeOutcome(ran, counts(100), false).message).not.toMatch(/run this again/i)
   })
 })
 
 describe('what an aborted run tells the operator', () => {
+  const counts = (blocks: number) =>
+    ({blocksMaterialized: blocks, valuesMaterialized: blocks, unmigrated: 0, orphanedOwnersSwept: 0})
+
   it('does not say "Not started" for a run that wrote and dropped the undo stack', async () => {
     // The per-transaction preconditions abort MID-run, and on a connected
     // device that is the expected ending — after a large part of the graph is
     // already written.
     const {message} = describeOutcome(
       {outcome: 'deferred', undoHistoryCleared: true, reason: 'synced rows are still draining'},
-      0, 0, false,
+      counts(0), false,
     )
 
     expect(message).not.toMatch(/not started/i)
@@ -161,7 +190,7 @@ describe('what an aborted run tells the operator', () => {
 
   it('tells a failed run its undo history is gone too', async () => {
     const {message} = describeOutcome(
-      {outcome: 'failed', undoHistoryCleared: true, reason: 'the pass gave up.'}, 0, 0, false,
+      {outcome: 'failed', undoHistoryCleared: true, reason: 'the pass gave up.'}, counts(0), false,
     )
 
     expect(message).toMatch(/undo history/i)

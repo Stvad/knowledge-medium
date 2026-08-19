@@ -54,7 +54,13 @@ const SCAN_PAGE = 500
  *
  *  `properties_json <> '{}'` is the term that makes it servable by
  *  `idx_blocks_workspace_nonempty_properties` — see that index's comment in
- *  `blockSchema.ts` for why SQLite needs it spelled out. */
+ *  `blockSchema.ts` for why SQLite needs it spelled out.
+ *
+ *  The trailing EXISTS is not redundant with it: under the NEGATION below,
+ *  a NULL bag makes the first two terms NULL and `NOT (NULL)` is NULL, so the
+ *  row would fall out of BOTH legs. EXISTS returns a definite 0 and pulls the
+ *  whole conjunction false. The column is NOT NULL today, which makes this
+ *  belt-and-braces — but it is why the term must not be "simplified" away. */
 const CARRIES_A_PROPERTY = `
      b.properties_json <> '{}'
      AND json_valid(b.properties_json)
@@ -100,10 +106,28 @@ export const CANDIDATE_SQL = `
  * deletion path exists for that it could not see. Post-flip PROJECT rebuilds
  * the cell from those children and the deleted property comes back.
  *
+ * Of its narrowing terms only the workspace pair is behaviourally load-bearing
+ * (and tested). `is_field_form = 1` and the two `deleted = 0` terms are COST
+ * guards: without them the leg selects the parent of nearly every block, and
+ * every extra row is then dropped anyway — by `tx.get` for a tombstone, or by
+ * `namesToReconcile` finding no field rows. Deleting them fails no test, and
+ * should not.
+ *
  * Driven off `idx_blocks_field_form`, whose `(workspace_id, parent_id)` prefix
  * makes the GROUP BY and the cursor an ordered index walk. `keys` is the
  * owner's field-row count — these rows only delete, and it keeps a block with
  * hundreds of them from landing in one transaction with everything else.
+ *
+ * `b.workspace_id = f.workspace_id` is not implied by the parent link: sync
+ * arrivals write `blocks` without the tx layer's `requireParentInWorkspace`,
+ * so one bad `parent_id` from the server is all it takes. Free — measured
+ * within noise.
+ *
+ * The owner lookup is nested in the field-row loop, so it runs once per FIELD
+ * ROW rather than once per owner — measured 297ms against leg one's 129ms on a
+ * 1M-row graph, per sweep. Restructuring it (group in a subquery, join once)
+ * measured 149ms and needs the leg to carry its own parameter list; declined
+ * against a run of minutes, where `CHILD_STATE_SQL` alone costs twice as much.
  */
 const ORPHANED_OWNER_SQL = `
   SELECT f.parent_id AS id, COUNT(*) AS keys
@@ -113,6 +137,7 @@ const ORPHANED_OWNER_SQL = `
      AND f.deleted = 0
      AND f.is_field_form = 1
      AND f.parent_id > ?
+     AND b.workspace_id = f.workspace_id
      AND b.deleted = 0
      AND NOT (${CARRIES_A_PROPERTY})
    GROUP BY f.parent_id
@@ -132,7 +157,13 @@ const ORPHANED_OWNER_SQL = `
  *  `t` is still read, for `editedUnderPass`: moving during the sweep that
  *  converged says the pass was rewriting children from cells that were
  *  changing under it, which the operator needs told even though it must not
- *  buy another sweep. */
+ *  buy another sweep. It also backstops the one way `n` alone can mislead — a
+ *  sweep whose creates and deletes exactly cancel converges without a
+ *  verifying sweep, and a create always moves `t`.
+ *
+ *  `MAX` is not a general change detector: a rewrite stamped below a
+ *  future-stamped peer row leaves it flat. That degeneracy needs clock skew
+ *  across devices and only costs a warning, so it is labelled, not guarded. */
 const CHILD_STATE_SQL = `
   SELECT COUNT(*) AS n, COALESCE(MAX(b.updated_at), 0) AS t
     FROM blocks b
@@ -188,8 +219,14 @@ export interface PropertyCellBackfillProgress {
   blocksScanned: number
   /** Blocks the materializer accepted in full this sweep. Not "blocks
    *  changed" — a block that already had its children is accepted and written
-   *  to zero times. */
+   *  to zero times. NOT a proxy for "anything happened": one junk key on every
+   *  block leaves this at zero for a run that migrated all the others, which
+   *  is what `valuesMaterialized` is for. */
   blocksMaterialized: number
+  /** Property values reconciled this sweep, counting the ones on a block that
+   *  also had a failure. Paired with `failureCount` it is what distinguishes a
+   *  systematic failure from a handful of bad values. */
+  valuesMaterialized: number
   /** Full passes over the workspace. More than two means blocks kept changing
    *  under the pass. */
   sweeps: number
@@ -197,6 +234,12 @@ export interface PropertyCellBackfillProgress {
    *  reason. Reported, never fatal — see {@link materializeRow}. Capped at
    *  {@link MAX_REPORTED_FAILURES}. */
   failures: {blockId: string; reason: string}[]
+  /** Owners the orphan leg swept, for the WHOLE run rather than the current
+   *  sweep — deliberately: it is the only place the pass reports that it
+   *  DELETED anything, and the sweep that deletes is by construction never the
+   *  one that converges. An operator who is told nothing about a run whose
+   *  only effect was removing children has no way to check it was right. */
+  orphanedOwnersSwept: number
   /** Failures this sweep, including any past the cap. Paired with
    *  `blocksMaterialized === 0` it is the signal that the run hit something
    *  SYSTEMATIC — a codec rejecting everything, storage refusing writes —
@@ -274,15 +317,18 @@ const materializeRow = async (
   row: BlockData,
   names: readonly string[],
   onFailure: (blockId: string, cause: unknown) => void,
+  onMaterialized: (values: number) => void,
 ): Promise<boolean> => {
   const lookups = {resolveNameSchema: ctx.resolveNameSchema}
   try {
     await materializePropertyChildrenForExistingRow(tx, row, lookups, names)
+    onMaterialized(names.length)
     return true
   } catch {
     for (const name of names) {
       try {
         await materializePropertyChildrenForExistingRow(tx, row, lookups, [name])
+        onMaterialized(1)
       } catch (cause) {
         onFailure(row.id, cause)
       }
@@ -357,9 +403,9 @@ const sweep = async (
         const row = await tx.get(id)
         if (row === null || row.deleted) continue
         const names = await namesToReconcile(tx, ctx, row)
-        if (await materializeRow(tx, ctx, row, names, recordFailure)) {
-          progress.blocksMaterialized += 1
-        }
+        const ok = await materializeRow(tx, ctx, row, names, recordFailure,
+          values => { progress.valuesMaterialized += values })
+        if (ok) progress.blocksMaterialized += 1
       }
     }, {description: 'Migrate properties to child blocks'})
 
@@ -395,8 +441,8 @@ export const runPropertyCellBackfill = async (
   onProgress?: (progress: PropertyCellBackfillProgress) => void | Promise<void>,
 ): Promise<PropertyCellBackfillProgress> => {
   const progress: PropertyCellBackfillProgress = {
-    blocksScanned: 0, blocksMaterialized: 0, sweeps: 0, failures: [], failureCount: 0,
-    editedUnderPass: false,
+    blocksScanned: 0, blocksMaterialized: 0, valuesMaterialized: 0, sweeps: 0,
+    orphanedOwnersSwept: 0, failures: [], failureCount: 0, editedUnderPass: false,
   }
 
   const childState = async (): Promise<{n: number; t: number}> => {
@@ -409,11 +455,14 @@ export const runPropertyCellBackfill = async (
     progress.sweeps += 1
     progress.blocksScanned = 0
     progress.blocksMaterialized = 0
+    progress.valuesMaterialized = 0
     progress.failures = []
     progress.failureCount = 0
     const notify = async () => { await onProgress?.(progress) }
     await sweep(ctx, CANDIDATE_SQL, progress, notify)
+    const beforeOrphans = progress.blocksScanned
     await sweep(ctx, ORPHANED_OWNER_SQL, progress, notify)
+    progress.orphanedOwnersSwept += progress.blocksScanned - beforeOrphans
     const after = await childState()
     if (after.n === before.n) {
       // Structurally converged. The timestamp is not part of that decision —
@@ -421,6 +470,12 @@ export const runPropertyCellBackfill = async (
       // during the sweep that converged, this sweep was still rewriting value
       // children from cells that were changing under it.
       progress.editedUnderPass = after.t !== before.t
+      // One last notification, AFTER the flag is set. Everything a subscriber
+      // knows arrives through `onProgress`, which otherwise fires only from
+      // inside a batch — so the palette, which is the surface an operator
+      // actually uses, saw every count from the converging sweep except the
+      // one thing it is supposed to act on.
+      await onProgress?.(progress)
       break
     }
     if (progress.sweeps >= MAX_SWEEPS) {
@@ -467,8 +522,8 @@ export const propertyCellBackfill: WorkspaceBackfill = {
     // channel. `progress` is the same object throughout, so it carries the
     // last sweep's counts either way.
     const progress: PropertyCellBackfillProgress = {
-      blocksScanned: 0, blocksMaterialized: 0, sweeps: 0, failures: [], failureCount: 0,
-      editedUnderPass: false,
+      blocksScanned: 0, blocksMaterialized: 0, valuesMaterialized: 0, sweeps: 0,
+      orphanedOwnersSwept: 0, failures: [], failureCount: 0, editedUnderPass: false,
     }
     try {
       Object.assign(progress, await runPropertyCellBackfill(ctx, p => {

@@ -40,9 +40,11 @@ export const ConfirmMigrationDialog = ({
       </DialogHeader>
       <div className="space-y-3 text-sm">
         <p>
-          Every property on {blockCount.toLocaleString()} block
+          Every <em>registered</em> property on {blockCount.toLocaleString()} block
           {blockCount === 1 ? '' : 's'} will also be stored as child blocks.
-          Existing values are not changed or moved.
+          Existing values are not changed or moved. A key no schema declares is
+          skipped and stays cell-only — run <code>audit-properties</code> to find
+          those before flipping the workspace.
         </p>
         <p>
           This runs on this device only — your other devices receive the result

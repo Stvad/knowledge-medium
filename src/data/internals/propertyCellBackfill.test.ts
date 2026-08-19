@@ -373,9 +373,13 @@ describe('property cell → children backfill', () => {
       await tx.update('b1', {properties: {}})
     }, {scope: ChangeScope.BlockDefault, description: 'user deletes the last property'})
 
-    await runPropertyCellBackfill(makeCtx())
+    const progress = await runPropertyCellBackfill(makeCtx())
 
     expect(await fieldRowsOf('b1')).toEqual([])
+    // A run total, not the converging sweep's: the sweep that deletes is never
+    // the one that converges, so a per-sweep count reports zero for a run whose
+    // only effect was removing children.
+    expect(progress.orphanedOwnersSwept).toBe(1)
   })
 
   it('converges while a property is rewritten under it, as an open editor does', async () => {
@@ -388,7 +392,9 @@ describe('property cell → children backfill', () => {
     for (const id of ids) await create(id, {'demo:note': id})
 
     let caret = 0
-    const progress = await runPropertyCellBackfill(makeCtx(), async () => {
+    const reported: boolean[] = []
+    const progress = await runPropertyCellBackfill(makeCtx(), async p => {
+      reported.push(p.editedUnderPass)
       caret += 1
       await repo.tx(async tx => {
         await tx.update(ids[0]!, {properties: {'demo:note': `caret-${caret}`}})
@@ -396,10 +402,39 @@ describe('property cell → children backfill', () => {
     })
 
     expect(progress.sweeps).toBe(2)
+    // Subscribers learn everything through onProgress, which otherwise fires
+    // only from inside a batch — so without a final notification the palette
+    // saw every count except the one thing it has to act on.
+    expect(reported.at(-1)).toBe(true)
     // Converging is not the same as being caught up: the sweep that converged
     // was still rewriting value children, so the operator is told to run again
     // rather than left to assume the children match the cells.
     expect(progress.editedUnderPass).toBe(true)
+  })
+
+  it('will not follow a field row into another workspace to delete its owner', async () => {
+    // The orphan leg reaches an owner through its FIELD ROWS, and `tx.get`
+    // selects on id alone — nothing downstream re-checks the workspace. The
+    // parent link is not proof of one either: sync arrivals write `blocks`
+    // without the tx layer's parent check, so one bad `parent_id` from the
+    // server is all it takes to point a local field row at a foreign block.
+    await create('b1', {'demo:note': 'mine'})
+    await runPropertyCellBackfill(makeCtx())
+    const fieldRow = (await repo.db.getAll<{id: string}>(
+      `SELECT id FROM blocks WHERE parent_id = ? AND is_field_form = 1`, ['b1'],
+    ))[0]!.id
+    // The owner is now foreign; its field row still looks local. Raw, because
+    // this is the shape a sync-applied row has and no processor produces it.
+    await sharedDb.db.execute(
+      `UPDATE blocks SET workspace_id = ?, properties_json = '{}' WHERE id = ?`,
+      ['other-ws', 'b1'],
+    )
+
+    await runPropertyCellBackfill(makeCtx())
+
+    expect((await repo.db.get<{n: number}>(
+      `SELECT COUNT(*) AS n FROM blocks WHERE id = ? AND deleted = 0`, [fieldRow],
+    ))!.n).toBe(1)
   })
 
   it('migrates a block carrying more keys than one transaction budgets for', async () => {
