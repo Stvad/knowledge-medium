@@ -462,6 +462,15 @@ interface ReferenceTargetStampContext {
   readonly resolver: PropertySchemaResolver
 }
 
+/** What an operator-triggered backfill did, for a caller that has a human to
+ *  report to. `undoHistoryCleared` is not incidental detail: the pass drops
+ *  the workspace's undo stack whenever it writes, and a user who is not told
+ *  finds their history silently gone. */
+export interface OperatorBackfillResult {
+  outcome: 'ran' | 'already-done-or-held' | 'already-running' | 'not-found' | 'read-only'
+  undoHistoryCleared: boolean
+}
+
 export class Repo {
   readonly db: PowerSyncDb
   readonly cache: BlockCache
@@ -2812,12 +2821,12 @@ export class Repo {
   async runWorkspaceBackfillNow(
     workspaceId: string,
     backfillId: string,
-  ): Promise<'ran' | 'already-done-or-held' | 'already-running' | 'not-found' | 'read-only'> {
-    if (this.isReadOnly) return 'read-only'
+  ): Promise<OperatorBackfillResult> {
+    if (this.isReadOnly) return {outcome: 'read-only', undoHistoryCleared: false}
     const backfill = this._workspaceBackfills.find(
       b => b.id === backfillId && b.trigger === 'operator',
     )
-    if (!backfill) return 'not-found'
+    if (!backfill) return {outcome: 'not-found', undoHistoryCleared: false}
     // Single-flight per (workspace, backfill). Two invocations in ONE Repo —
     // an operator double-clicking, or clicking again during a long pass —
     // share a claimant, so the second would read the first's claim as its own
@@ -2827,10 +2836,12 @@ export class Repo {
     // operator repeats the whole migration. The claim cannot see this, since
     // both invocations are legitimately the same claimant.
     const flightKey = `${workspaceId}:${backfillId}`
-    if (this.inFlightOperatorBackfills.has(flightKey)) return 'already-running'
+    if (this.inFlightOperatorBackfills.has(flightKey)) {
+      return {outcome: 'already-running', undoHistoryCleared: false}
+    }
     this.inFlightOperatorBackfills.add(flightKey)
     try {
-      const completed = await this.runWorkspaceBackfills(
+      const {completed, undoHistoryCleared} = await this.runWorkspaceBackfills(
         workspaceId, [backfill], this.workspaceGeneration,
       )
     // The fix for the shared-counter bug is that `completed` is LOCAL to this
@@ -2844,21 +2855,25 @@ export class Repo {
     // this backfill. Deleting the key fails no test. It is written this way
     // so that a future caller passing more than one is correct by
     // construction rather than by that argument.
-      return completed.has(backfill.id) ? 'ran' : 'already-done-or-held'
+      return {
+        outcome: completed.has(backfill.id) ? 'ran' : 'already-done-or-held',
+        undoHistoryCleared,
+      }
     } finally {
       this.inFlightOperatorBackfills.delete(flightKey)
     }
   }
 
-  /** Returns the ids that RAN TO COMPLETION — not merely those attempted, so
-   *  a caller can report an outcome tied to its own request rather than to
-   *  whatever else happened to finish. */
+  /** `completed` is the ids that RAN TO COMPLETION — not merely those
+   *  attempted, so a caller can report an outcome tied to its own request
+   *  rather than to whatever else happened to finish. */
   private async runWorkspaceBackfills(
     workspaceId: string,
     backfills: readonly WorkspaceBackfill[],
     generation: number,
-  ): Promise<ReadonlySet<string>> {
+  ): Promise<{completed: ReadonlySet<string>; undoHistoryCleared: boolean}> {
     const completed = new Set<string>()
+    let undoHistoryCleared = false
     const claim = this.backfillCompletionClaim
     if (!claim) {
       // Refuse rather than fall back to the local marker. Every pass here
@@ -2870,16 +2885,16 @@ export class Repo {
         `${workspaceId}: no BackfillCompletionClaim is configured, so completion ` +
         `cannot be recorded once per graph.`,
       )
-      return completed
+      return {completed, undoHistoryCleared}
     }
     for (const backfill of backfills) {
       // A role flip to read-only during the deferral window must stop further
       // writes — re-check per backfill (the loop can span several txs).
-      if (this.isReadOnly) return completed
+      if (this.isReadOnly) return {completed, undoHistoryCleared}
       // Don't even START a pass whose workspace has been re-opened since it was
       // scheduled. `assertBackfillMayWrite` catches this per transaction, but
       // that is one tx too late to avoid the scan a backfill does first.
-      if (this.workspaceGeneration !== generation) return completed
+      if (this.workspaceGeneration !== generation) return {completed, undoHistoryCleared}
       // BEFORE claiming: an unprimed registry makes the whole graph look like
       // it has zero registered properties, so a pass would find no candidates,
       // write nothing, and then record a PERMANENT per-graph completion — the
@@ -2910,6 +2925,7 @@ export class Repo {
       }
       if (!(await claim.tryClaim(workspaceId, backfill.id))) continue
       const resolver = this.propertySchemaResolverFor(workspaceId)
+      let wrote = false
       const ctx: WorkspaceBackfillContext = {
         workspaceId,
         // One resolver for the whole run, through the canonical factory: the
@@ -2938,7 +2954,7 @@ export class Repo {
           // definition readiness and the write lock, so a check before it can
           // go stale before `fn` reads a row. Throwing here aborts the tx and
           // the run with no marker recorded, so the next open retries.
-          return this.tx(async t => {
+          const result = await this.tx(async t => {
             await this.assertBackfillMayWrite(workspaceId, backfill.id, generation)
             return fn(t)
           }, {
@@ -2946,6 +2962,13 @@ export class Repo {
             description: opts.description,
             skipUndo: true,
           })
+          // Only once a batch COMMITTED. An aborted one rolled its writes
+          // back, so it leaves nothing on the undo stack to be reverted onto.
+          // Still an over-approximation in one direction — a committed batch
+          // that happened to write nothing counts — which errs toward
+          // clearing, the safe side.
+          wrote = true
+          return result
         },
       }
       try {
@@ -2984,14 +3007,36 @@ export class Repo {
           // gate + deep-idle deferral bound the retry.
           console.warn(`[workspaceBackfills] ${reason} — will retry when it clears`)
           this.scheduleWorkspaceBackfills(workspaceId)
-          return completed
+          return {completed, undoHistoryCleared}
         }
         console.error(
           `[workspaceBackfills] "${backfill.id}" failed for workspace ${workspaceId}: ${reason}`,
         )
+      } finally {
+        // A migration's writes cannot coexist with the undo entries that
+        // predate them. Undo replay restores an entry's whole `before` row
+        // snapshot rather than a field delta, so an entry recorded before this
+        // pass, for a row the pass rewrote, reverts the migration the moment
+        // the user hits cmd-Z for their own unrelated edit — permanently, once
+        // completion is recorded. `skipUndo` keeps the pass's own writes off
+        // the stack but cannot reach what is already on it, so the entries at
+        // risk have to go.
+        //
+        // In the `finally`, not the success path: a run that aborted midway
+        // still committed the batches before it, and those are exactly as
+        // unsafe to replay over.
+        if (wrote) {
+          this.undoManagerFor(workspaceId).clear()
+          undoHistoryCleared = true
+          console.warn(
+            `[workspaceBackfills] "${backfill.id}" wrote to workspace ${workspaceId}, ` +
+            `so its undo history was cleared — replaying an entry from before the ` +
+            `pass would revert it.`,
+          )
+        }
       }
     }
-    return completed
+    return {completed, undoHistoryCleared}
   }
 
   /**
