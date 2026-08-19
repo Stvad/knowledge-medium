@@ -372,18 +372,9 @@ describe('PanelFocusRecovery', () => {
     // Move focus to `last` — the watchdog should now consider `last`
     // the "current" block for recovery purposes.
     await panelBlock.set(focusedBlockLocationProp, focusedLocation('last'))
-    // Fence on the watchdog having OBSERVED that move before yanking the node.
-    // `set` resolves when the write commits; the subscription -> re-render ->
-    // observer update is a separate hop. Remove `last` before that lands and
-    // the watchdog never knew it was current, so there is nothing to recover
-    // from and focus stays on `last` — which is what this test saw under the
-    // full suite's load while passing in isolation.
-    await act(async () => {})
 
     // Yank `last`. Expected recovery target: `middle` (block above).
-    // `act`, not `waitFor`: the removal is a one-shot DOM mutation, not a
-    // condition to poll for, and it needs its observer callback flushed.
-    await act(async () => {
+    await waitFor(() => {
       panel.querySelector('[data-block-id="last"]')?.remove()
     })
 
