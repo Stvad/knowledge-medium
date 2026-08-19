@@ -14,20 +14,40 @@ import {
 const TRIGGER_PREFIX = FIELD_FORM_MARKER.slice(0, -1)
 const TRIGGER_KEY = FIELD_FORM_MARKER.slice(-1)
 
-/** The document state this gesture owns: exactly the marker's pending prefix,
- *  caret at its end. Checked at keydown AND again once the eligibility query
- *  has awaited — the user keeps typing through that window, and every branch
- *  past it either clears the document or writes into it. */
-const isTriggerState = (view: EditorView): boolean => {
+/** Whether the document is exactly `expected` with the caret at its end — i.e.
+ *  still precisely what this gesture put there, with nothing typed since. */
+const docIsExactly = (view: EditorView, expected: string): boolean => {
   const selection = view.state.selection.main
   return (
     // Defence in depth, not load-bearing: a range starting at the doc's end
     // (the offset clause) cannot also extend past it, so no reachable
     // non-empty selection survives the other two clauses.
     selection.empty &&
-    selection.from === TRIGGER_PREFIX.length &&
-    view.state.doc.toString() === TRIGGER_PREFIX
+    selection.from === expected.length &&
+    view.state.doc.toString() === expected
   )
+}
+
+/** The document state this gesture owns at keydown: the marker's pending
+ *  prefix, caret at its end. Re-checked once the eligibility query has
+ *  awaited, because the user keeps typing through that window. */
+const isTriggerState = (view: EditorView): boolean => docIsExactly(view, TRIGGER_PREFIX)
+
+/** Hand back the whole marker the keydown suppressed half of, when the gesture
+ *  declines. `left` is what this gesture last put in the document; anything
+ *  else means the user typed on and the text is theirs, not ours.
+ *
+ *  Best effort by nature: a dispatch onto an editor that has already unmounted
+ *  reaches no update listener, so a gesture abandoned in that sub-frame window
+ *  keeps whatever the unmount flush persisted. Costs one character, and the
+ *  alternative — writing through the repo behind the editor's back — is a
+ *  second persistence path racing that same flush. */
+const restoreTypedMarker = (view: EditorView, left: string): void => {
+  if (!docIsExactly(view, left)) return
+  view.dispatch({
+    changes: {from: 0, to: left.length, insert: FIELD_FORM_MARKER},
+    selection: {anchor: FIELD_FORM_MARKER.length},
+  })
 }
 
 /** The `::` field-creation shortcut for CodeMirrorContentRenderer: completing a
@@ -76,23 +96,12 @@ const createFieldFromTrigger = async (
   // persisted by the editor's own debounced commit, so a refusal discovered
   // afterwards could not take it back.
   const eligible = await canConvertEmptyChildBlockToProperty(block, repo)
+  if (!eligible) return restoreTypedMarker(view, TRIGGER_PREFIX)
 
-  // That query awaited, and the keystrokes kept coming. Re-read the LIVE doc
-  // rather than trusting the keydown's snapshot: once it holds anything but
-  // the bare trigger the user has typed on past the gesture, and both branches
-  // below would write over that — the clear by wiping the doc whole, the
-  // restore by splicing a colon into the middle of new text.
+  // That query awaited, and the keystrokes kept coming — so re-read the live
+  // document instead of trusting the keydown's snapshot. Anything but the bare
+  // trigger means the block now holds content the clear below would wipe.
   if (!isTriggerState(view)) return
-
-  if (!eligible) {
-    // Put back the colon the keydown suppressed. The gesture declined, so the
-    // block is left holding exactly what was typed rather than half of it.
-    view.dispatch({
-      changes: {from: TRIGGER_PREFIX.length, insert: TRIGGER_KEY},
-      selection: {anchor: FIELD_FORM_MARKER.length},
-    })
-    return
-  }
 
   // Drop the pending first colon and commit that now: the debounce is holding
   // it, and `tx.update` writes tombstones happily, so an unflushed `":"` would
@@ -100,7 +109,11 @@ const createFieldFromTrigger = async (
   view.dispatch({changes: {from: 0, to: view.state.doc.length, insert: ''}})
   flushEditorContent(view)
 
-  await convertEmptyChildBlockToProperty(block, repo)
+  // The conversion re-checks eligibility against its own row before deleting
+  // (which is what makes it safe), and this document was already cleared on
+  // the strength of the earlier answer — so its refusal owes the text back
+  // just as much as the first one did.
+  if (!await convertEmptyChildBlockToProperty(block, repo)) restoreTypedMarker(view, '')
 }
 
 export const createFieldCreationKeydownExtension = (

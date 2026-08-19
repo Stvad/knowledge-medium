@@ -18,7 +18,7 @@
  *
  * `src/utils/test/propertyCreation.test.ts` pins one fixed example per
  * fix. This suite sweeps the full lattice the guard's own two checks
- * define (propertyCreation.ts:29-35):
+ * define (`canConvertEmptyChildBlockToProperty`):
  *   convert  ⟺  structural childIds EMPTY  ∧  cell (`data.properties`) EMPTY
  * across {cell state} × {structural-child-row state} × {workspace flip
  * state} — the flip axis matters because it's what makes the diverged

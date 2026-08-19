@@ -106,12 +106,12 @@ const fire = (opts: Opts = {}, eventInit: KeyboardEventInit = {}) => {
   return {...h, handled: h.fire(eventInit)}
 }
 
-/** Drain the handler's async tail. The accepting test asserts the effects DID
- *  land through this same settle, so it fences the negative assertions below:
- *  add an `await` to the tail and that test fails first. */
-const settle = async () => {
-  for (let i = 0; i < 5; i++) await Promise.resolve()
-}
+/** Drain the handler's async tail. A macrotask boundary flushes the WHOLE
+ *  microtask queue, so this holds however many awaits the tail grows — unlike a
+ *  fixed number of `Promise.resolve()` hops, which silently accumulates slack
+ *  and stops fencing the negative assertions below. The tail awaits only mocked
+ *  promises here, so there is nothing slower to wait on. */
+const settle = () => new Promise(resolve => setTimeout(resolve, 0))
 
 afterEach(() => {
   canConvertMock.mockClear()
@@ -159,6 +159,29 @@ describe('handleFieldCreationKeydown', () => {
     expect(h.flushed()).toBe(0)
     expect(h.doc()).toBe('::')
     expect(h.caret()).toBe(2)
+  })
+
+  it('hands the marker back when the conversion itself refuses after the clear', async () => {
+    // The conversion re-checks against its own row and can refuse after the
+    // doc was already cleared on the earlier answer. Without a restore the
+    // block would silently keep '' and no field would exist.
+    convertMock.mockResolvedValue(false)
+    const h = fire()
+    await settle()
+    expect(convertMock).toHaveBeenCalledTimes(1)
+    expect(h.doc()).toBe('::')
+    expect(h.caret()).toBe(2)
+  })
+
+  it('leaves the block alone when the user types into it after the clear', async () => {
+    const h = mount()
+    convertMock.mockImplementation(async () => {
+      h.type('hi')
+      return false
+    })
+    expect(h.fire()).toBe(true)
+    await settle()
+    expect(h.doc()).toBe('hi')
   })
 
   it.each([true, false])(

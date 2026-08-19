@@ -5,7 +5,10 @@ import { createTestRepo } from '@/data/test/createTestRepo'
 import { Repo } from '@/data/repo'
 import { showPropertiesProp } from '@/data/properties'
 import { consumePendingPropertyCreateRequest } from '@/utils/propertyNavigation'
-import { convertEmptyChildBlockToProperty } from '@/utils/propertyCreation'
+import {
+  canConvertEmptyChildBlockToProperty,
+  convertEmptyChildBlockToProperty,
+} from '@/utils/propertyCreation'
 
 describe('convertEmptyChildBlockToProperty', () => {
   let sharedDb: TestDb
@@ -56,6 +59,16 @@ describe('convertEmptyChildBlockToProperty', () => {
     })
     expect(repo.block('child').peek()).toBeNull()
     expect(repo.block('child').peekRaw()?.deleted).toBe(true)
+  })
+
+  it('refuses on a read-only repo', async () => {
+    // The keydown guard checks this too, but the predicate is exported and the
+    // conversion is destructive, so it owes its own refusal.
+    const readOnly = {...repo, isReadOnly: true} as unknown as Repo
+
+    expect(await canConvertEmptyChildBlockToProperty(repo.block('child'), readOnly)).toBeNull()
+    expect(await convertEmptyChildBlockToProperty(repo.block('child'), readOnly)).toBe(false)
+    expect(repo.block('child').peek()?.deleted).toBe(false)
   })
 
   it('does not convert a block that owns child content', async () => {
