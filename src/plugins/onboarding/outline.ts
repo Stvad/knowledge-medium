@@ -68,7 +68,7 @@ export const EXTENSIONS_PAGE_TITLE = 'extensions'
 // and default modes. Shortcuts that are global (Cmd+K, Cmd+., etc.)
 // live in `sharedKeys` below and are reused across variants.
 const vimKeys = {
-  fold: 'press `z` (or `Shift+Z` to collapse the current block into its parent and jump up to it)',
+  fold: 'with the block focused, press `z` (or `Shift+Z` to collapse the current block into its parent and jump up to it)',
   edit: 'press `i` (or `a` to enter at end of line, or double-click / tap the block)',
   exitEdit: 'press `Esc`',
   newBelow: 'press `o` (or `Shift+O` to create above; when the block\'s children are showing, the new block lands as its first child)',
@@ -114,7 +114,7 @@ const defaultKeys: typeof vimKeys = {
   panelHop: 'click into the panel you want (keyboard panel-hop needs vim mode)',
   firstLast: '',
   jumpMany: '',
-  moveBlock: 'select it first (see the **Multi-select** section), then `Cmd+Shift+↑` / `Cmd+Shift+↓` (`Ctrl+Shift+↑` / `Ctrl+Shift+↓` on Linux/Windows)',
+  moveBlock: 'while editing, `Cmd+Shift+↑` / `Cmd+Shift+↓` (`Ctrl` on Linux/Windows; with several blocks selected, the same chord moves the whole selection)',
   startSelect: 'while editing, `Shift+↓` / `Shift+↑` at a block edge first select the current block, then extend the selection down / up with each further press',
   delete: 'select it (or several — see the **Multi-select** section) and press `Delete`; `Backspace` at the start of an empty block removes it, and at the start of a non-empty one merges its text into the block above',
   // NOT the command palette: with vim off, NORMAL_MODE never activates, so
@@ -128,7 +128,7 @@ const defaultKeys: typeof vimKeys = {
   undo: '`Cmd+Z`',
   redo: '`Cmd+Shift+Z`',
   zoomNote: ' Without vim mode these chords fire while editing — from anywhere, clicking a block\'s bullet zooms into it (or right-click the bullet → **Zoom In**).',
-  panelKeysNote: ' (without vim mode these chords fire while you\'re editing a block)',
+  panelKeysNote: ' Without vim mode these chords fire while you\'re editing a block.',
   srsGrade: 'press `Ctrl+Shift+1`–`4` (Again / Hard / Good / Easy) while editing the block',
 }
 
@@ -144,7 +144,10 @@ const sharedKeys = {
   back: '`Cmd+[` / `Cmd+]` (`Ctrl+[` / `Ctrl+]`)',
   // Daily-note shortcuts use literal Ctrl on every platform (not $mod) so
   // they don't clash with the browser's Cmd+Shift+[/] tab switching.
-  today: '`Ctrl+Shift+`` ` (every platform)',
+  // Double-backtick delimiters with inner spaces — the only form that
+  // renders a code span containing a lone backtick (a 1-backtick opener
+  // can't close over it and eats the next span instead).
+  today: '`` Ctrl+Shift+` `` (every platform)',
   prevNextDay: '`Ctrl+Shift+[` / `Ctrl+Shift+]`',
   appendToday: '`Ctrl+Shift+N`',
 }
@@ -197,7 +200,7 @@ export const tutorialOutline = (variant: TutorialVariant): TutorialNode[] => {
       'Press `Tab` to indent me under the bullet above (`Shift+Tab` to outdent). Try it now.',
       `New block: ${km.newBelow}${km.enterCreates ? ' ' + km.enterCreates : ''}.`,
       {
-        content: `Fold a block's children: ${km.fold} with that block focused. Try folding the bullet below.`,
+        content: `Fold a block's children: ${km.fold}. Try folding the bullet below.`,
         children: [
           { content: "I'll vanish when my parent is folded. Fold the parent again to bring me back." },
           { content: 'A folded parent shows a halo around its bullet so you can spot it from a distance.' },
@@ -214,14 +217,14 @@ export const tutorialOutline = (variant: TutorialVariant): TutorialNode[] => {
       ...(km.jumpMany ? [km.jumpMany] : []),
       `Zoom into a block (treat it as the new root of the view): ${sharedKeys.zoomIn}. Zoom back out: ${sharedKeys.zoomOut}.${km.zoomNote}`,
       `Back / forward through your navigation history: ${sharedKeys.back}.`,
-      'The **left sidebar** (panel icon in the header) keeps your anchors in reach: core pages plus a **Shortcuts** section you curate — it starts with [[Journal]].',
+      'The **left sidebar** (panel icon in the header; first button in the bottom nav on a phone) keeps your anchors in reach: core pages plus a **Shortcuts** section you curate — it starts with [[Journal]].',
       'What did I touch recently? Run **Open Recents** from the command palette (or click the clock icon in the header) — the [[Recents]] page is a feed of recently edited blocks, grouped into activity entries.',
     ]),
 
     sect('Side panels', [
       'Panels sit side by side. Each panel has its own focused block, its own zoom level, and its own edit state — opening something in a new panel means you keep what you were looking at.',
       `Open the focused block in a new side panel: ${sharedKeys.openInPanel}. Close the current panel: ${sharedKeys.closePanel}.${km.panelKeysNote}`,
-      `Need the whole window for one panel? ${sharedKeys.maximizePanel} toggles maximize — the other panels are kept and come back when you toggle again (going Back un-maximizes too).`,
+      `Need the whole window for one panel? With more than one open, ${sharedKeys.maximizePanel} (or the maximize button in the panel's corner) toggles maximize — the other panels are kept and come back when you toggle again (going Back un-maximizes too).${km.panelKeysNote}`,
       `Move between panels: ${km.panelHop}.`,
       'Wiki-link / block-ref clicks pick a destination based on modifiers. Try them on this link → [[extensions]]: plain click replaces the current panel, `Shift+Alt+Click` opens it in a brand new side panel, `Shift+Click` puts it in a vertical sidebar stack, `Alt+Click` opens it in the main panel. (Plain `Cmd+Click` / `Ctrl+Click` falls through to a browser new-tab as usual.)',
       `In quick-find (${sharedKeys.quickFind}) the same modifiers apply to \`Enter\`: \`Shift+Alt+Enter\` opens the selected page in a brand-new side panel, \`Shift+Enter\` (or \`Cmd+Enter\` / \`Ctrl+Enter\`) in the sidebar stack.`,
@@ -231,7 +234,7 @@ export const tutorialOutline = (variant: TutorialVariant): TutorialNode[] => {
     advancedSect('Multi-select', [
       `${cap(km.startSelect)}.`,
       'Once a selection exists, the block keys act on all of it — vim or not: `Tab` / `Shift+Tab` indent, `z` folds, `t` toggles properties, `y` (or `Cmd+C`) copies, `d` (or `Cmd+X`) cuts, `Delete` deletes, `p` / `Shift+P` paste after / before, and `Cmd+Shift+↑` / `Cmd+Shift+↓` (`Ctrl` on Linux/Windows) move the whole selection.',
-      'Send blocks somewhere else entirely: **Move block(s) to…** — in the command palette while a selection is active, or right-click any bullet for the single-block version. A destination picker opens; the whole move is one undo step.',
+      'Send blocks somewhere else entirely: **Move selected blocks to…** in the command palette while a selection is active, or right-click any bullet → **Move to…** for the single-block version. A destination picker opens; the whole move is one undo step.',
       'Press `Esc` to clear the selection.',
     ]),
 
@@ -240,7 +243,7 @@ export const tutorialOutline = (variant: TutorialVariant): TutorialNode[] => {
       'Typing `[[` opens page autocomplete. Matching is forgiving — word-prefix chains like `[[meetnotes` find "Meeting Notes" — and each candidate shows its type.',
       'You can spot pages anywhere in the outline: a page\'s bullet is drawn as a **ring** instead of a solid dot.',
       `Find or create any page: ${sharedKeys.quickFind}. Type to filter — results show their types and where they live; pressing Enter on a missing name creates it. Date phrases work too: \`tomorrow\` or \`last friday\` jumps to that daily note.`,
-      `Command palette: ${sharedKeys.commandPalette}. **Every** global action is searchable here with its key shown — use this when you forget a shortcut, or to find actions that have no default binding.`,
+      `Command palette: ${sharedKeys.commandPalette}. **Every** action available right now is searchable here with its key shown — use this when you forget a shortcut, or to find actions that have no default binding.`,
       `Find and replace across the workspace: ${sharedKeys.findReplace}.`,
       {
         content: 'Block refs and embeds — wiki links point at a *page* (resolved by name). A block ref `((block-id))` points at one specific block anywhere in your workspace; an embed `!((block-id))` renders the target block inline instead of as a link.',
@@ -286,7 +289,7 @@ export const tutorialOutline = (variant: TutorialVariant): TutorialNode[] => {
     advancedSect('Properties & types', [
       `Properties are typed key/value pairs attached to any block. To open the properties panel: ${km.properties}.`,
       'Try giving me a property — e.g. `priority: high`. It will appear under my content.',
-      'The quickest way to give a block a **type**: type `#` in its text and pick from the autocomplete — `#todo` turns the block into a todo on the spot, and **Create type** mints a brand-new type. A block\'s types render as removable `#name` chips after its content.',
+      'The quickest way to give a block a **type**: type `#` in its text and pick from the autocomplete — `#todo` turns the block into a todo on the spot, and **Create type** mints a brand-new type. Most types render as removable `#name` chips after the content (todo skips the chip — its checkbox is the display).',
       "Under the hood, types live in the special `types` property. The `page` type carries an `aliases` list — those names are what wiki links resolve to, wherever the block lives in the tree. `types = ['extension']` makes a block an extension — see below.",
       'Aliases (a list property on a page) let you reach the page from multiple names — including ones with spaces or different casing. Wiki links resolve through aliases.',
       `Grown a de-facto schema by hand? **Extract type from this block** turns a prototype block into a named type — pick which of its properties belong to the type, then retag the blocks that match. (Run it on a focused block: ${variant === 'vim' ? 'press `Cmd+K` with the block focused' : 'it needs vim mode\'s block palette on desktop, or the swipe menu\'s **Commands** on touch'}.)`,
@@ -345,12 +348,12 @@ export const tutorialOutline = (variant: TutorialVariant): TutorialNode[] => {
     // Kept expanded (carries the live map demo) — see note on Typed blocks.
     sect('Places & maps', [
       'Real-world locations are first-class. Every place — a Google POI, a friend\'s neighborhood, a coordinate pin on a hike — becomes a typed **Place** block carrying `place:lat`, `place:lng`, `place:address`, and `place:googlePlaceId`.',
-      'Type `@` at the start of a block or after whitespace to open the **place picker**. It searches your existing Places first, then offers Google Places matches; picking either inserts `[[Place Name]]` as a wikilink and creates the Place page if it didn\'t exist yet.',
+      'Type `@` at the start of a block or after whitespace to open the **place picker**. It searches your existing Places first, then offers Google Places matches; picking either inserts a wikilink with the place\'s name and creates the Place page if it didn\'t exist yet.',
       '`@` with no query (or `@here`) surfaces a **Use current location** option — pulls nearby POIs from browser geolocation, plus "Drop pin at exact location" and "Create named place here…" fallbacks for ad-hoc spots.',
       `Give any block a **location property**: open properties (${km.properties}) and add a \`location\` field — its value is a ref to a Place page. Many notes can share one Place (the coords live in exactly one block, so editing the Place updates every reference).`,
       'The [[Locations]] page at the workspace root holds every Place. Open it to see a **map of every Place** in your workspace; click a marker for an info card with name/address and a jump-to link.',
       {
-        content: 'Make any block its own map: add `map` to its `types`. The block then renders an inline map above its children showing every Place reachable in its subtree — descendants with a `location` prop AND descendants that link to a `[[Place]]` (wikilink or block ref). A trip page tagged `map` becomes a map of the trip; a project page tagged `map` becomes a map of the project. Live demo (a `map`-tagged block over two Places):',
+        content: 'Make any block its own map: add `map` to its `types`. The block then renders an inline map above its children showing every Place reachable in its subtree — descendants with a `location` prop AND descendants that link to a Place (wikilink or block ref). A trip page tagged `map` becomes a map of the trip; a project page tagged `map` becomes a map of the project. Live demo (a `map`-tagged block over two Places):',
         type: MAP_TYPE,
         children: [
           // Place blocks pin at their own lat/lng. `place:*` are type-lifted
@@ -491,9 +494,9 @@ export const extensionsPageOutline = (): TutorialNode[] => [
   { content: '**Anything** in this app is an extension — the default block renderer, the vim plugin, daily notes, find-and-replace. The host loads core ones at startup; the rest are blocks like the ones below.' },
   { content: "An extension block is a block with `types = ['extension']`. Its content is a TS/JSX module whose `default` export is an `AppExtension` — a `FacetContribution`, an array of them, or a function returning one. Imports resolve through the page-global importmap, so importing a symbol from its real module (e.g. `@/extensions/core.js`) returns the same module instance the running app uses." },
   { content: "Author one: create a block, give it `types = ['extension']`, paste the source, then run **Manage extensions** from the command palette and tick the row to enable it." },
-  { content: 'User extensions start **disabled**. The **Manage extensions** tree lets you toggle each row; the override is per-device and persists across reloads.' },
+  { content: 'User extensions start **disabled**. The **Manage extensions** tree lets you toggle each row; the choice syncs to your other devices and persists across reloads.' },
   { content: "After editing an extension's source, run **Reload extensions** from the command palette to pick up your changes." },
-  { content: 'Re-insert these examples under a block of your choice via **Insert example extensions under current block** — run it from `Cmd+K` with the block focused (vim mode), or from the swipe menu\'s **Commands** on touch.' },
+  { content: 'Re-insert these examples under a block of your choice via **Insert example extensions under current block** — run it from `Cmd+K` while editing the block (or with it focused, in vim normal mode), or from the swipe menu\'s **Commands** on touch.' },
   ...exampleExtensions.map(ex => exampleSection(ex.id)),
 ]
 
