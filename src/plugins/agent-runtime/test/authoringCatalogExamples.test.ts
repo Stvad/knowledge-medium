@@ -113,6 +113,69 @@ describe('authoring catalog example drift guard', () => {
       [...byText.values()].filter(path => !used.has(path)),
       'fixture file compiled but never surfaced by the catalog',
     ).toEqual([])
+    // Byte-identical fixtures would collide in the text-keyed map above, so
+    // one could sit unreferenced while its twin covers for it.
+    expect(byText.size, 'two fixture files have identical text').toBe(
+      Object.keys(fixtureSources).length,
+    )
+
+    // The runtime accepts ONLY `@/dir/name.js` — the importmap maps `@/` to
+    // ./src/ and the loader instantiates from a blob: URL, against which a
+    // relative specifier can never resolve. tsconfig's bundler resolution is
+    // far laxer (`@/data/api`, `@/data/api/index.ts`, `../../data/api.js` all
+    // typecheck), and moving these into real files newly exposed the
+    // specifiers to IDE renames and codemods. Nothing else pins the FORM.
+    const badSpecifiers: string[] = []
+    const badSuppressions: string[] = []
+    for (const [path, source] of Object.entries(fixtureSources)) {
+      for (const match of source.matchAll(/\bfrom\s*['"]([^'"]+)['"]/g)) {
+        const specifier = match[1]
+        if (specifier === 'react' || specifier === 'react-dom') continue
+        if (!/^@\/[\w./-]+\.js$/.test(specifier)) badSpecifiers.push(`${path}: ${specifier}`)
+      }
+      // A suppression turns a compiled fixture back into an unchecked string —
+      // the exact state this whole change exists to leave behind.
+      if (/@ts-(nocheck|ignore|expect-error)|eslint-disable/.test(source)) {
+        badSuppressions.push(path)
+      }
+    }
+    expect(badSpecifiers, badSpecifiers.join('\n')).toEqual([])
+    expect(badSuppressions, `${badSuppressions.join(', ')} — a fixture must not suppress the checks`).toEqual([])
+  })
+
+  it('the brief-mode pointer only names flags describe-runtime actually registers', async () => {
+    // The pointer tells an agent to run a COMMAND. Asserting the API contract
+    // (`{brief: true, storage: true}` returns the sources) does not prove the
+    // command line exists — and once it did not: the text named `--brief`
+    // while the released cli had no such flag. cac REJECTS an unknown option
+    // (`Unknown option --brief`, exit 1, nothing sent on the wire), so an
+    // author following the pointer got a hard failure, not a degraded result.
+    //
+    // Scoped to describe-runtime's own registered options: a flag mentioned in
+    // some other option's DESCRIPTION text used to satisfy a substring search.
+    const {readFileSync} = await import('node:fs')
+    const pattern = describeAuthoringCatalog({brief: true}).storage.patterns.find(p => p.example)
+    const pointer = pattern?.example?.code ?? ''
+    const flags = [...pointer.matchAll(/--[a-z][a-z-]*/g)].map(match => match[0])
+    expect(flags.length, 'pointer should name at least one flag').toBeGreaterThan(0)
+
+    const cliSource = readFileSync(
+      new URL('../../../../packages/agent-cli/src/cli.ts', import.meta.url),
+      'utf8',
+    )
+    const start = cliSource.indexOf("command('describe-runtime'")
+    expect(start, 'describe-runtime command should exist').toBeGreaterThan(-1)
+    const next = cliSource.indexOf('.command(', start + 1)
+    const block = cliSource.slice(start, next === -1 ? undefined : next)
+
+    const registered = new Set(
+      [...block.matchAll(/\.option\(\s*'([^']+)'/g)]
+        .flatMap(match => match[1].split(',').map(part => part.trim().split(/[ <[]/)[0]))
+        .filter(Boolean),
+    )
+    for (const flag of flags) {
+      expect([...registered], `${flag} is named by the brief-mode pointer`).toContain(flag)
+    }
   })
 
   it('the fixture files stay out of the discoverable module/component lists', () => {

@@ -38,9 +38,15 @@ const ReactionsRow = ({ reactions }: { reactions: readonly string[] }) => (
 )
 
 const cycleReaction = async (block: Block): Promise<void> => {
-  const current = block.peekProperty(reactionsProp) ?? []
-  const nextEmoji = EMOJI_OPTIONS[current.length % EMOJI_OPTIONS.length]
-  await block.set(reactionsProp, [...current, nextEmoji])
+  // The UPDATER overload, not peek-then-set. `peekProperty` reads the shared
+  // pre-transaction cache, so two quick presses — or a peer's reaction syncing
+  // in between the read and the write — both compute from the same stale list
+  // and the second write drops the first. The updater runs inside the
+  // serialized write transaction, against the committed value.
+  await block.set(reactionsProp, current => {
+    const list = current ?? []
+    return [...list, EMOJI_OPTIONS[list.length % EMOJI_OPTIONS.length]]
+  })
 }
 
 const addReactionAction: ActionConfig<typeof ActionContextTypes.NORMAL_MODE> = {

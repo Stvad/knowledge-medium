@@ -147,9 +147,16 @@ const eagerUiModules = import.meta.glob('/src/components/ui/*.{ts,tsx}', {
 const example = (label: string, source: string): AuthoringExample =>
   ({label, code: source.trimEnd()})
 
+// Names only flags the RELEASED cli accepts. `--guide <id> --storage` already
+// yields brief output WITH the worked sources (brief is inferred from --guide,
+// and --storage is not a heavy filter), so the pointer needs no new flag —
+// which matters because the kernel deploys on its own while `kmagent` is
+// installed separately, and cac rejects an unknown flag outright (exit 1)
+// rather than ignoring it. Keeping --guide also makes the follow-up call
+// cheap instead of pulling every guide's sources.
 const BRIEF_EXAMPLE_POINTER = [
-  '// Worked source omitted in --brief. Fetch it with:',
-  '//   pnpm agent describe-runtime --brief --storage',
+  '// Worked source omitted here. Fetch it with:',
+  '//   pnpm agent describe-runtime --guide <the guide you are reading> --storage',
 ].join('\n')
 
 /** Keep the label (so the agent knows the example exists and what it shows)
@@ -157,14 +164,29 @@ const BRIEF_EXAMPLE_POINTER = [
 const examplePointer = (source: AuthoringExample): AuthoringExample =>
   ({label: source.label, code: BRIEF_EXAMPLE_POINTER})
 
-const briefStorage = (guide: AuthoringStorageGuide): AuthoringStorageGuide => ({
+/** Pattern ids the returned guides actually name in their prose. Brief mode
+ *  keeps THOSE sources in full: eliding the pattern a guide tells you to
+ *  prefer — while shipping the shape it tells you to avoid — inverts the
+ *  guide. Derived by scanning rather than hand-listed so it cannot go stale;
+ *  the ids are distinctive slugs, so a scan is exact. */
+const patternsNamedBy = (guides: AuthoringGuide[]): Set<string> => {
+  const prose = JSON.stringify(guides)
+  return new Set(
+    storageGuide.patterns.map(pattern => pattern.id).filter(id => prose.includes(id)),
+  )
+}
+
+const briefStorage = (
+  guide: AuthoringStorageGuide,
+  keep: Set<string>,
+): AuthoringStorageGuide => ({
   ...guide,
-  patterns: guide.patterns.map(pattern => pattern.example
+  patterns: guide.patterns.map(pattern => pattern.example && !keep.has(pattern.id)
     ? {...pattern, example: examplePointer(pattern.example)}
     : pattern),
-  credentials: guide.credentials.example
-    ? {...guide.credentials, example: examplePointer(guide.credentials.example)}
-    : guide.credentials,
+  // Credentials stay in full — 632 bytes, and every sync guide's principles
+  // are about them, so this is the one source brief mode must never hide.
+  credentials: guide.credentials,
 })
 
 const storageGuide: AuthoringStorageGuide = {
@@ -199,7 +221,7 @@ const storageGuide: AuthoringStorageGuide = {
     {
       id: 'settings-via-property-editor-override',
       when: 'Settings / configuration UI for a plugin — what a user sees when they want to change how the plugin behaves. Preferred over a modal dialog: configuration belongs *with* the block whose properties it edits, syncs naturally, and is browsable / scriptable like any other block.',
-      use: 'Define a custom property editor with `definePropertyEditorOverride(propHandle, {label, Editor})` (pass the seed handle it presents) and register it via `propertyEditorOverridesFacet`. The Editor receives `PropertyEditorProps<T>` (`value`, `set`, `block`, etc.). To "open settings" from the command palette or a header item, navigate to the prefs block with `navigate(repo, {target: \'new-panel\', blockId: prefsBlock.id, workspaceId})` — the property panel renders your custom Editor inline. Reserve modal dialogs — `openDialog(Component)`, or `appMountsFacet` + a `useSyncExternalStore` visibility store — for *interactive* flows (search, picker), not for configuration.',
+      use: 'Define a custom property editor with `definePropertyEditorOverride(propHandle, {label, Editor})` (pass the seed handle it presents) and register it via `propertyEditorOverridesFacet`. The Editor receives `PropertyEditorProps<T>` (`value`, `onChange`, `block`, `schema`). To "open settings" from the command palette or a header item, navigate to the prefs block with `navigate(repo, {target: \'new-panel\', blockId: prefsBlock.id, workspaceId})` — the property panel renders your custom Editor inline. Reserve modal dialogs — `openDialog(Component)`, or `appMountsFacet` + a `useSyncExternalStore` visibility store — for *interactive* flows (search, picker), not for configuration.',
       modules: [
         '@/extensions/core.js', '@/shortcuts/types.js', '@/data/api/index.js',
         '@/data/facets.js', '@/extensions/dynamicExtensionSeeds.js',
@@ -210,7 +232,7 @@ const storageGuide: AuthoringStorageGuide = {
     {
       id: 'imported-record-blocks',
       when: 'External records such as Readwise books/highlights that should be queryable and editable as blocks.',
-      use: 'Define source-id properties (`readwise:user_book_id`, `readwise:highlight_id`, …), then let `getOrCreateTypedChild` own the write: give it a `{namespace, key}` built from the external id and it creates on the first sync and adopts on every one after, so re-syncing updates the existing block instead of duplicating it. Do NOT pin a derived id onto a bare `tx.create` — that throws `DuplicateIdError` the second time round and takes the whole transaction with it.',
+      use: 'Define source-id properties (`readwise:userBookId`, `readwise:highlightId`, …), then let `getOrCreateTypedChild` own the write: give it a `{namespace, key}` built from the external id and it creates on the first sync and adopts on every one after, so re-syncing lands on the existing block instead of duplicating it. Adopt does NOT update it: content, properties and position are deliberately left alone so a user\'s own edits survive, which means the fields your SOURCE owns are yours to write after the call — and on every outcome, not just the created one. Do NOT pin a derived id onto a bare `tx.create` — that throws `DuplicateIdError` the second time round and takes the whole transaction with it.',
       modules: ['@/data/api/index.js', '@/data/kernelPage.js', '@/data/typedRecords.js'],
       example: example('Idempotent record sync', importedRecordSyncSource),
     },
@@ -380,7 +402,7 @@ const guides: AuthoringGuide[] = [
     ],
     relatedFacets: ['data.definition-seeds', 'data.types'],
     commands: [
-      'pnpm agent describe-runtime --storage',
+      'pnpm agent describe-runtime --guide block-backed-config --storage',
       'pnpm agent describe-runtime --facets data.definition-seeds',
       'pnpm agent types agent-extensions/kernel-types',
       'pnpm agent types --module "@/data/api/index.js"',
@@ -707,12 +729,14 @@ export const describeAuthoringCatalog = (
       matchesTerms(filters.components, component.name, component.importPath, component.category, component.description, component.exports),
     )
 
+  const matchedGuides = guides.filter(guide =>
+    matchesTerms(filters.guides, guide.id, guide.title, guide.when, guide.relatedFacets),
+  )
+
   return {
-    guides: guides.filter(guide =>
-      matchesTerms(filters.guides, guide.id, guide.title, guide.when, guide.relatedFacets),
-    ),
+    guides: matchedGuides,
     storage: filters.brief && !filters.storage
-      ? briefStorage(storageGuide)
+      ? briefStorage(storageGuide, patternsNamedBy(matchedGuides))
       : storageGuide,
     modules,
     components,

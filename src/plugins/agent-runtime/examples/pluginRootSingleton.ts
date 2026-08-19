@@ -1,4 +1,4 @@
-import { ChangeScope, propertyValue, seedProperty, seedType } from '@/data/api/index.js'
+import { ChangeScope, seedProperty, seedType } from '@/data/api/index.js'
 import { definitionSeedsFacet, typeSeedsFacet } from '@/data/facets.js'
 import { extensionPropertySeedKey, extensionTypeSeedKey } from '@/extensions/dynamicExtensionSeeds.js'
 import { getOrCreateKernelPage } from '@/data/kernelPage.js'
@@ -86,7 +86,6 @@ export const syncBooks = async (
         parentId: root.id,
         content: book.title,
         types: [bookType.id],
-        properties: [propertyValue(bookIdProp, book.userBookId)],
       })
       // Fields the SOURCE owns get written on both outcomes. 'adopted' means
       // the block was already there and this call did not touch its content or
@@ -95,6 +94,10 @@ export const syncBooks = async (
       // happened to re-fetch it, which an incremental sync never does.
       // 'taken' wrote nothing at all, so there is no id of yours to write to.
       if (outcome.status !== 'taken') {
+        // Both source-owned fields are written HERE rather than via the spec's
+        // `properties`, which is applied on CREATE only — passing the external
+        // id that way means an adopted record never receives it.
+        await tx.setProperty(outcome.id, bookIdProp, book.userBookId)
         await tx.setProperty(outcome.id, progressProp, book.progress)
       }
     }

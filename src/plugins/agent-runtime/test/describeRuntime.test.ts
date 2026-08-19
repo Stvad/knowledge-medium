@@ -357,24 +357,41 @@ describe('describeRuntime', () => {
 
     // Storage worked sources reduce to a pointer — they were most of the
     // payload and are for patterns the caller didn't ask about.
-    for (const pattern of description.authoring.storage.patterns) {
-      if (pattern.example) {
-        expect(pattern.example.code, pattern.id).toContain('omitted in --brief')
-      }
+    const guideProse = JSON.stringify(description.authoring.guides)
+    const elided = description.authoring.storage.patterns
+      .filter(p => p.example && !guideProse.includes(p.id))
+    expect(elided.length, 'some pattern should be elided').toBeGreaterThan(0)
+    for (const pattern of elided) {
+      expect(pattern.example!.code, pattern.id).toContain('Fetch it with')
+    }
+    // Credentials are never pointered: 632 bytes, and the sync guides'
+    // principles are all about them.
+    expect(description.authoring.storage.credentials.example?.code)
+      .not.toContain('Fetch it with')
+    // Neither are the patterns this guide actually names — eliding the pattern
+    // a guide tells you to prefer inverts the guide.
+    const named = description.authoring.storage.patterns
+      .filter(p => JSON.stringify(description.authoring.guides).includes(p.id))
+    expect(named.length).toBeGreaterThan(0)
+    for (const pattern of named) {
+      expect(pattern.example?.code ?? '', pattern.id).not.toContain('Fetch it with')
     }
     // ...but the guide they DID ask for keeps its own examples in full.
     const syncGuide = description.authoring.guides.find(g => g.id === 'external-sync-plugin')
     expect(syncGuide?.examples?.length).toBeGreaterThan(0)
     for (const guideExample of syncGuide?.examples ?? []) {
-      expect(guideExample.code).not.toContain('omitted in --brief')
+      expect(guideExample.code).not.toContain('Fetch it with')
       expect(guideExample.code).toContain('import ')
     }
 
     // Whole brief-mode response should be small — the whole point. Was ~40k
-    // against a 41k ceiling; reducing the storage sources to pointers took it
-    // to ~30k, so the budget tightens to match. A ceiling with 10k of slack
-    // stops being a guard.
-    expect(JSON.stringify(description).length).toBeLessThan(34_000)
+    // against a 41k ceiling. Pointering the storage sources took it to ~30k;
+    // then keeping the sources this guide actually NAMES (plus credentials)
+    // gave ~5k back, because a brief that hides the pattern its own guide
+    // tells you to prefer is smaller and worse. ~35k measured, so 37k — still
+    // a real tightening on the 41k it replaces, not a ceiling with 10k of
+    // slack that guards nothing.
+    expect(JSON.stringify(description).length).toBeLessThan(37_000)
   })
 
   it('the brief-mode pointer names a command that actually returns the source', async () => {
@@ -391,12 +408,13 @@ describe('describeRuntime', () => {
     }, {brief: true, storage: true})
 
     const pointer = briefOnly.authoring.storage.patterns.find(p => p.example)?.example?.code
-    expect(pointer).toContain('describe-runtime --brief --storage')
+    expect(pointer).toContain('describe-runtime --guide')
+    expect(pointer).toContain('--storage')
 
     const withSource = briefWithStorage.authoring.storage.patterns.filter(p => p.example)
     expect(withSource.length).toBeGreaterThan(0)
     for (const pattern of withSource) {
-      expect(pattern.example!.code, pattern.id).not.toContain('omitted in --brief')
+      expect(pattern.example!.code, pattern.id).not.toContain('Fetch it with')
       expect(pattern.example!.code, pattern.id).toContain('import ')
     }
     // The other half of brief mode still holds.

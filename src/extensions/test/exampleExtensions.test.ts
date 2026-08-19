@@ -20,7 +20,9 @@ const fixtureSources = import.meta.glob(
  *  module namespace would fail for correct code. */
 const runtimeNamedImports = (source: string): Array<{specifier: string, name: string}> => {
   const out: Array<{specifier: string, name: string}> = []
-  const statement = /import\s+(type\s+)?\{([^}]*)\}\s*from\s*['"]([^'"]+)['"]/g
+  // Optional default clause: `import React, {useState} from 'react'` was
+  // skipped entirely by the brace-immediately-after-import form.
+  const statement = /import\s+(type\s+)?(?:[A-Za-z_$][\w$]*\s*,\s*)?\{([^}]*)\}\s*from\s*['"]([^'"]+)['"]/g
   for (const match of source.matchAll(statement)) {
     if (match[1]) continue                       // `import type { … }` — all erased
     for (const raw of (match[2] ?? '').split(',')) {
@@ -69,6 +71,34 @@ describe('exampleExtensions — templated sources', () => {
       [...byText.values()].filter(path => !used.has(path)),
       'fixture file compiled but never surfaced by exampleExtensions',
     ).toEqual([])
+    // Byte-identical fixtures would collide in the text-keyed map above, so
+    // one could sit unreferenced while its twin covers for it.
+    expect(byText.size, 'two fixture files have identical text').toBe(
+      Object.keys(fixtureSources).length,
+    )
+
+    // The runtime accepts ONLY `@/dir/name.js` — the importmap maps `@/` to
+    // ./src/ and the loader instantiates from a blob: URL, against which a
+    // relative specifier can never resolve. tsconfig's bundler resolution is
+    // far laxer (`@/data/api`, `@/data/api/index.ts`, `../../data/api.js` all
+    // typecheck), and moving these into real files newly exposed the
+    // specifiers to IDE renames and codemods. Nothing else pins the FORM.
+    const badSpecifiers: string[] = []
+    const badSuppressions: string[] = []
+    for (const [path, source] of Object.entries(fixtureSources)) {
+      for (const match of source.matchAll(/\bfrom\s*['"]([^'"]+)['"]/g)) {
+        const specifier = match[1]
+        if (specifier === 'react' || specifier === 'react-dom') continue
+        if (!/^@\/[\w./-]+\.js$/.test(specifier)) badSpecifiers.push(`${path}: ${specifier}`)
+      }
+      // A suppression turns a compiled fixture back into an unchecked string —
+      // the exact state this whole change exists to leave behind.
+      if (/@ts-(nocheck|ignore|expect-error)|eslint-disable/.test(source)) {
+        badSuppressions.push(path)
+      }
+    }
+    expect(badSpecifiers, badSpecifiers.join('\n')).toEqual([])
+    expect(badSuppressions, `${badSuppressions.join(', ')} — a fixture must not suppress the checks`).toEqual([])
   })
 
   it('the fixture files stay out of the discoverable module/component lists', () => {
