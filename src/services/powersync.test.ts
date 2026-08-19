@@ -1,5 +1,5 @@
 import { CrudEntry, UpdateType, type CrudTransaction, type AbstractPowerSyncDatabase } from '@powersync/common'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const supabaseRef = vi.hoisted(() => ({
   rpc: vi.fn(),
@@ -15,6 +15,7 @@ import {
   AMBIGUOUS_RETRY_BUDGET,
   MAX_PATCHES_PER_SUPABASE_RPC,
   MAX_CREATES_PER_SUPABASE_RPC,
+  UPLOAD_RPC_TIMEOUT_MS,
   __applyBlockPatchesRpcForTest,
   __applyBlockCreatesForTest,
   __applyCompactedBlockOperationsForTest,
@@ -49,6 +50,28 @@ const patch = (
 
 const del = (clientId: number, id: string, txId = 1) =>
   new CrudEntry(clientId, UpdateType.DELETE, 'blocks', id, txId)
+
+/** Wraps a value (or an already-pending promise) so it behaves like the
+ *  postgrest-js builder the production code now calls: chainable via
+ *  `.abortSignal(signal)` (a no-op here — the fake client doesn't need to
+ *  honor the signal itself for most tests, since `withUploadTimeout`'s own
+ *  race is what guarantees the call settles) and awaitable directly, since
+ *  the real `PostgrestBuilder` only implements `.then()`, not a full Promise.
+ *  A `hangingResponse()` (a promise that never settles) run through this is
+ *  the fake-client shape the timeout tests use to simulate the incident: a
+ *  fetch that never resolves or rejects on its own. */
+const chainable = <T>(value: T | PromiseLike<T>) => ({
+  abortSignal: () => chainable(value),
+  then: <TResult1 = T, TResult2 = never>(
+    onfulfilled?: ((value: T) => TResult1 | PromiseLike<TResult1>) | null,
+    onrejected?: ((reason: unknown) => TResult2 | PromiseLike<TResult2>) | null,
+  ) => Promise.resolve(value).then(onfulfilled, onrejected),
+})
+
+/** A promise that never settles — the fake-client shape for the incident this
+ *  change fixes: "a fetch that never settles". Used only under fake timers so
+ *  the test doesn't itself hang on real wall-clock time. */
+const hangingResponse = <T>(): Promise<T> => new Promise<T>(() => {})
 
 describe('PowerSync upload compaction', () => {
   it('fuses same-tx PUT + PATCH into a single create with merged columns', () => {
@@ -740,7 +763,7 @@ describe('defaultBlockUploadSink.applyPatches — RPC contract', () => {
     // {id, ...payload} entry in the patches array. The server-side
     // function destructures `id` for the WHERE clause and treats every
     // other key as a column to write.
-    supabaseRef.rpc.mockResolvedValueOnce({data: null, error: null})
+    supabaseRef.rpc.mockReturnValueOnce(chainable({data: null, error: null}))
 
     await __applyBlockPatchesRpcForTest([
       {id: 'block-a', payload: {content: 'new', updated_at: 7, updated_by: 'u1'}},
@@ -755,7 +778,7 @@ describe('defaultBlockUploadSink.applyPatches — RPC contract', () => {
   it('packs a multi-patch batch into a single RPC call with N items', async () => {
     // The whole point of the RPC: N patches → one HTTP. Pre-batching,
     // this was N PostgREST round trips.
-    supabaseRef.rpc.mockResolvedValueOnce({data: null, error: null})
+    supabaseRef.rpc.mockReturnValueOnce(chainable({data: null, error: null}))
 
     await __applyBlockPatchesRpcForTest([
       {id: 'block-a', payload: {content: 'A2'}},
@@ -784,7 +807,7 @@ describe('defaultBlockUploadSink.applyPatches — RPC contract', () => {
     // drains. Cap the per-RPC size so each call stays well under the timeout;
     // the patches are column-narrow and idempotent, so splitting them across
     // separate RPC transactions is safe. Fixing commit: 9fc1b8729 (issue #459).
-    supabaseRef.rpc.mockResolvedValue({data: null, error: null})
+    supabaseRef.rpc.mockReturnValue(chainable({data: null, error: null}))
     const total = MAX_PATCHES_PER_SUPABASE_RPC * 2 + 1
     const patches = Array.from({length: total}, (_, i) => ({
       id: `block-${i}`,
@@ -817,7 +840,7 @@ describe('defaultBlockUploadSink.applyPatches — RPC contract', () => {
       new Error('apply_block_patches: missing block ids: block-a,block-c'),
       {code: 'P0002'},
     )
-    supabaseRef.rpc.mockResolvedValueOnce({data: null, error: missingRowError})
+    supabaseRef.rpc.mockReturnValueOnce(chainable({data: null, error: missingRowError}))
 
     await expect(
       __applyBlockPatchesRpcForTest([
@@ -836,7 +859,7 @@ describe('defaultBlockUploadSink.applyPatches — RPC contract', () => {
     // must reach the orchestrator with its `code`/`message` intact —
     // those are the inputs classifyUploadError keys off.
     const rlsError = Object.assign(new Error('row-level security'), {code: '42501'})
-    supabaseRef.rpc.mockResolvedValueOnce({data: null, error: rlsError})
+    supabaseRef.rpc.mockReturnValueOnce(chainable({data: null, error: rlsError}))
 
     await expect(
       __applyBlockPatchesRpcForTest([{id: 'block-a', payload: {content: 'A2'}}]),
@@ -855,7 +878,7 @@ describe('defaultBlockUploadSink.applyPatches — RPC contract', () => {
     // standalone classifier tests, this error carries no `.status` of its own —
     // it gets one only because the sink threads it (the production shape).
     // Fixing commit: 71bd72efe (issue #459).
-    supabaseRef.rpc.mockResolvedValueOnce({data: null, error: {message: 'Bad Request'}, status: 400})
+    supabaseRef.rpc.mockReturnValueOnce(chainable({data: null, error: {message: 'Bad Request'}, status: 400}))
 
     const thrown = await __applyBlockPatchesRpcForTest([
       {id: 'block-a', payload: {content: 'B'}},
@@ -873,7 +896,7 @@ describe('defaultBlockUploadSink.applyPatches — RPC contract', () => {
     // forever. The shared `attempts` map models the per-connector counter that
     // survives across passes; each call here is one PowerSync upload pass over
     // the same still-queued tx.
-    supabaseRef.rpc.mockResolvedValue({data: null, error: {message: 'Bad Request'}, status: 400})
+    supabaseRef.rpc.mockReturnValue(chainable({data: null, error: {message: 'Bad Request'}, status: 400}))
     const attempts = new Map<number, number>()
     const recordRejection = vi.fn<UploadDeps['recordRejection']>().mockResolvedValue(undefined)
     const deps: UploadDeps = {
@@ -925,14 +948,14 @@ describe('defaultBlockUploadSink.applyPatches — RPC contract', () => {
     }
 
     // Two ambiguous passes — the counter climbs to 2, short of the budget.
-    supabaseRef.rpc.mockResolvedValue({data: null, error: {message: 'Bad Request'}, status: 400})
+    supabaseRef.rpc.mockReturnValue(chainable({data: null, error: {message: 'Bad Request'}, status: 400}))
     for (let i = 0; i < 2; i++) {
       await expect(onePass().run).rejects.toMatchObject({status: 400})
     }
     expect(attempts.get(9)).toBe(2)
 
     // A successful pass clears the counter.
-    supabaseRef.rpc.mockResolvedValue({data: null, error: null})
+    supabaseRef.rpc.mockReturnValue(chainable({data: null, error: null}))
     const recovered = onePass()
     await recovered.run
     expect(recovered.tx.completed).toBe(true)
@@ -940,7 +963,7 @@ describe('defaultBlockUploadSink.applyPatches — RPC contract', () => {
 
     // Ambiguous again → fresh budget: the first failure re-throws (count back to
     // 1) and does NOT quarantine off the old near-exhausted count.
-    supabaseRef.rpc.mockResolvedValue({data: null, error: {message: 'Bad Request'}, status: 400})
+    supabaseRef.rpc.mockReturnValue(chainable({data: null, error: {message: 'Bad Request'}, status: 400}))
     const reflapped = onePass()
     await expect(reflapped.run).rejects.toMatchObject({status: 400})
     expect(recordRejection).not.toHaveBeenCalled()
@@ -956,7 +979,7 @@ describe('defaultBlockUploadSink.applyPatches — RPC contract', () => {
     // recorded nor completed. Dropping it would lose a valid edit over a
     // transient credentials problem, the exact silent-data-loss the classifier
     // is built to avoid.
-    supabaseRef.rpc.mockResolvedValue({data: null, error: {message: 'JWT expired'}, status: 401})
+    supabaseRef.rpc.mockReturnValue(chainable({data: null, error: {message: 'JWT expired'}, status: 401}))
     const tx = fakeTx(1, [new CrudEntry(1, UpdateType.PATCH, 'blocks', 'block-a', 1, {content: 'B'})])
     const recordRejection = vi.fn<UploadDeps['recordRejection']>().mockResolvedValue(undefined)
 
@@ -985,6 +1008,142 @@ describe('defaultBlockUploadSink.applyPatches — RPC contract', () => {
 })
 
 // ===========================================================================
+// Client-side upload timeout (issue: 2026-08-13 iPad incident).
+//
+// A fetch that never settles — plausible around an iOS background/foreground
+// transition — used to leave `applyBlockPatchesRpc`'s `await client.rpc(...)`
+// pending forever: no error, no rejection, no retry. `withUploadTimeout` races
+// every upload request against `UPLOAD_RPC_TIMEOUT_MS` so the call always
+// settles. These tests exercise that through `applyBlockPatchesRpc`; the
+// `applyBlockCreates` / DELETE sink tests below each carry one smoke test
+// confirming the same wrapper is wired at their call sites too — the
+// settle-or-reject mechanics themselves are only proven once here to avoid
+// re-testing `withUploadTimeout` three times over.
+// ===========================================================================
+
+describe('applyBlockPatchesRpc — client-side upload timeout', () => {
+  beforeEach(() => {
+    supabaseRef.rpc.mockReset()
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('rejects instead of hanging forever when the RPC fetch never settles', async () => {
+    vi.useFakeTimers()
+    supabaseRef.rpc.mockReturnValueOnce(chainable(hangingResponse()))
+
+    let settled = false
+    const outcome = __applyBlockPatchesRpcForTest([
+      {id: 'block-a', payload: {content: 'A'}},
+    ]).catch((err: unknown) => {
+      settled = true
+      throw err
+    })
+    // Attach the rejection handler BEFORE advancing time, so `outcome` never
+    // has an instant where vitest/Node sees it as an unhandled rejection.
+    const assertion = expect(outcome).rejects.toThrow()
+
+    // Advancing exactly to the budget must be enough to flip `settled` — if
+    // the timeout wrapper were removed, nothing here would ever fire
+    // `setTimeout`, so this assertion (not a hang) is what catches that: see
+    // the mutation-testing note below.
+    await vi.advanceTimersByTimeAsync(UPLOAD_RPC_TIMEOUT_MS)
+    expect(settled).toBe(true)
+
+    await assertion
+  })
+
+  it('classifies the timeout abort as transient, so PowerSync retries instead of quarantining', async () => {
+    // THE critical correctness constraint for this whole change: `transient`
+    // re-throws so PowerSync retries and the queue survives. `permanent` or
+    // `ambiguous`-to-exhaustion would instead quarantine the tx to
+    // ps_crud_rejected — converting a silent hang into lost user edits, which
+    // is strictly worse than the bug being fixed.
+    //
+    // No classifier change was needed for this: `withUploadTimeout` throws a
+    // plain `Error` (`name: 'TimeoutError'`, no `code`/`status` fields), and
+    // `classifyUploadError`'s existing fallthrough — "No code we recognise
+    // and no 4xx... All retry forever" — already routes that shape to
+    // `transient`. This test pins that outcome directly.
+    vi.useFakeTimers()
+    supabaseRef.rpc.mockReturnValueOnce(chainable(hangingResponse()))
+
+    let settled = false
+    let thrown: unknown
+    const outcome = __applyBlockPatchesRpcForTest([
+      {id: 'block-a', payload: {content: 'A'}},
+    ]).catch((err: unknown) => {
+      settled = true
+      thrown = err
+      throw err
+    })
+    const assertion = expect(outcome).rejects.toThrow()
+
+    // Same fast-fail shape as the previous test: if the wrapper were gone,
+    // nothing would ever settle `outcome`, and `await assertion` next would
+    // hang to vitest's own test timeout rather than reporting a real
+    // assertion failure — this line converts that into an immediate,
+    // deterministic failure instead.
+    await vi.advanceTimersByTimeAsync(UPLOAD_RPC_TIMEOUT_MS)
+    expect(settled).toBe(true)
+    await assertion
+
+    expect(thrown).toBeInstanceOf(Error)
+    expect(classifyUploadError(thrown)).toBe('transient')
+  })
+
+  it('does not delay a normal fast call, and wires a real AbortSignal onto the request', async () => {
+    // Pins that the timeout is attached via `.abortSignal(...)` (confirmed
+    // present on the pinned postgrest-js version) rather than some other
+    // mechanism, and that a call which resolves promptly is not held up by
+    // the timeout machinery (no timer advance needed for this to resolve).
+    const abortSignalSpy = vi.fn<(signal: AbortSignal) => PromiseLike<{data: null; error: null}>>(
+      () => chainable({data: null, error: null}),
+    )
+    supabaseRef.rpc.mockReturnValueOnce({abortSignal: abortSignalSpy})
+
+    await __applyBlockPatchesRpcForTest([{id: 'block-a', payload: {content: 'A'}}])
+
+    expect(abortSignalSpy).toHaveBeenCalledTimes(1)
+    expect(abortSignalSpy.mock.calls[0]?.[0]).toBeInstanceOf(AbortSignal)
+  })
+
+  it('aborts the SAME signal handed to postgrest once the timeout fires — not an unrelated one', async () => {
+    // Mutation-proof for the "wires a real AbortSignal" tests in this file:
+    // those only assert `toBeInstanceOf(AbortSignal)`, which ANY signal
+    // satisfies — including a fresh, never-aborted `new AbortController().signal`
+    // swapped in for the timeout controller's own. That regression would leak
+    // the underlying fetch past the timeout (defeating the whole point of this
+    // change) while every existing assertion kept passing. This test captures
+    // the actual signal `withUploadTimeout` hands to `run` and asserts THAT
+    // signal is the one that gets aborted, with the synthesized TimeoutError
+    // as its reason — not just that `run` received *some* AbortSignal.
+    vi.useFakeTimers()
+    let capturedSignal: AbortSignal | undefined
+    supabaseRef.rpc.mockReturnValueOnce({
+      abortSignal: (signal: AbortSignal) => {
+        capturedSignal = signal
+        return chainable(hangingResponse())
+      },
+    })
+
+    const outcome = __applyBlockPatchesRpcForTest([
+      {id: 'block-a', payload: {content: 'A'}},
+    ]).catch((err: unknown) => err)
+
+    await vi.advanceTimersByTimeAsync(UPLOAD_RPC_TIMEOUT_MS)
+    const thrown = await outcome
+
+    expect(capturedSignal).toBeInstanceOf(AbortSignal)
+    expect(capturedSignal!.aborted).toBe(true)
+    expect(capturedSignal!.reason).toBe(thrown)
+    expect((capturedSignal!.reason as Error).name).toBe('TimeoutError')
+  })
+})
+
+// ===========================================================================
 // applyBlockCreates — insert-or-touch RPC wire shape + chunking.
 //
 // CREATEs ship via `apply_block_creates` (ON CONFLICT DO UPDATE SET updated_at =
@@ -1000,7 +1159,7 @@ describe('applyBlockCreates — RPC wire + chunking', () => {
   })
 
   it('ships a batch as one rpc("apply_block_creates", {creates}) call', async () => {
-    supabaseRef.rpc.mockResolvedValueOnce({data: null, error: null})
+    supabaseRef.rpc.mockReturnValueOnce(chainable({data: null, error: null}))
 
     await __applyBlockCreatesForTest([
       {id: 'block-a', workspace_id: 'w', content: 'A'},
@@ -1020,7 +1179,7 @@ describe('applyBlockCreates — RPC wire + chunking', () => {
     // orderedBlockUpserts runs before chunk(), so a parent never lands in a later
     // chunk than its child — each chunk is a separate RPC = separate transaction,
     // and the parent self-FK is only DEFERRABLE within one transaction.
-    supabaseRef.rpc.mockResolvedValue({data: null, error: null})
+    supabaseRef.rpc.mockReturnValue(chainable({data: null, error: null}))
     const total = MAX_CREATES_PER_SUPABASE_RPC * 2 + 1
     const rows = Array.from({length: total}, (_, i) => ({
       id: `block-${i}`, workspace_id: 'w', parent_id: null, content: `c${i}`,
@@ -1046,6 +1205,22 @@ describe('applyBlockCreates — RPC wire + chunking', () => {
     await __applyBlockCreatesForTest([])
     expect(supabaseRef.rpc).not.toHaveBeenCalled()
   })
+
+  it('wires the same client-side upload timeout as apply_block_patches (smoke test)', async () => {
+    // The settle-or-reject / transient-classification mechanics of
+    // `withUploadTimeout` are proven exhaustively against `applyBlockPatchesRpc`
+    // above (same shared helper) — this just pins that `apply_block_creates`
+    // is actually wired to it, via the same `.abortSignal(AbortSignal)` shape.
+    const abortSignalSpy = vi.fn<(signal: AbortSignal) => PromiseLike<{data: null; error: null}>>(
+      () => chainable({data: null, error: null}),
+    )
+    supabaseRef.rpc.mockReturnValueOnce({abortSignal: abortSignalSpy})
+
+    await __applyBlockCreatesForTest([{id: 'block-a', workspace_id: 'w', content: 'A'}])
+
+    expect(abortSignalSpy).toHaveBeenCalledTimes(1)
+    expect(abortSignalSpy.mock.calls[0]?.[0]).toBeInstanceOf(AbortSignal)
+  })
 })
 
 // ===========================================================================
@@ -1067,7 +1242,7 @@ describe('defaultBlockUploadSink create/delete — status threading', () => {
 
   it('threads the response HTTP status onto a codeless 4xx from the CREATE sink', async () => {
     // Fixing commit: 71bd72efe (issue #459).
-    supabaseRef.rpc.mockResolvedValue({data: null, error: {message: 'Bad Request'}, status: 400})
+    supabaseRef.rpc.mockReturnValue(chainable({data: null, error: {message: 'Bad Request'}, status: 400}))
 
     const thrown = await __applyCompactedBlockOperationsForTest(
       fakeDatabase,
@@ -1083,7 +1258,7 @@ describe('defaultBlockUploadSink create/delete — status threading', () => {
 
   it('threads the response HTTP status onto a codeless 4xx from the DELETE sink', async () => {
     // Fixing commit: 71bd72efe (issue #459).
-    const eq = vi.fn().mockResolvedValue({data: null, error: {message: 'Bad Request'}, status: 400})
+    const eq = vi.fn().mockReturnValue(chainable({data: null, error: {message: 'Bad Request'}, status: 400}))
     const del = vi.fn().mockReturnValue({eq})
     supabaseRef.from.mockReturnValue({delete: del})
 
@@ -1094,6 +1269,25 @@ describe('defaultBlockUploadSink create/delete — status threading', () => {
 
     expect(thrown).toMatchObject({status: 400, message: 'Bad Request'})
     expect(classifyUploadError(thrown)).toBe('ambiguous')
+  })
+
+  it('wires the same client-side upload timeout onto the DELETE request (smoke test)', async () => {
+    // Same rationale as the CREATE smoke test above — mechanics are proven
+    // once against `applyBlockPatchesRpc`, this just pins the wiring here.
+    const abortSignalSpy = vi.fn<(signal: AbortSignal) => PromiseLike<{data: null; error: null}>>(
+      () => chainable({data: null, error: null}),
+    )
+    const eq = vi.fn().mockReturnValue({abortSignal: abortSignalSpy})
+    const del = vi.fn().mockReturnValue({eq})
+    supabaseRef.from.mockReturnValue({delete: del})
+
+    await __applyCompactedBlockOperationsForTest(
+      fakeDatabase,
+      [{kind: 'delete', id: 'block-a', order: 0}],
+    )
+
+    expect(abortSignalSpy).toHaveBeenCalledTimes(1)
+    expect(abortSignalSpy.mock.calls[0]?.[0]).toBeInstanceOf(AbortSignal)
   })
 })
 

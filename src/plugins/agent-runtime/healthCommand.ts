@@ -3,14 +3,14 @@ import {
   materializeQueueCountSql,
   uploadQueueCountCap,
   uploadQueuePreviewCountSql,
-} from '@/plugins/system-status/queueCounts'
+} from '@/data/syncQueueSql'
 
 /**
  * Layout B sync-health snapshot — the numbers needed to triage a stuck or
  * unsynced client in one read, instead of running the four counts by hand.
  *
  * All counts reuse the canonical SQL the in-app sync indicator uses
- * (queueCounts.ts): in particular the upload queue is DISTINCT blocks, NOT raw
+ * (@/data/syncQueueSql.ts): in particular the upload queue is DISTINCT blocks, NOT raw
  * `ps_crud` rows (a single edit burst fans out to many rows, so a raw count
  * balloons into a meaningless number).
  */

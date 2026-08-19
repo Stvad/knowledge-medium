@@ -130,5 +130,11 @@ export const classifyUploadError = (err: unknown): UploadErrorClass => {
   // 3. No code we recognise and no 4xx: network/offline (a thrown fetch error,
   //    or postgrest-js's `status: 0`), a 5xx, or a shape we've never seen. All
   //    retry forever — never quarantine a write over infrastructure being down.
+  //    This is also where `withUploadTimeout`'s (powersync.ts) client-side
+  //    upload-timeout abort lands: a plain `Error` with no `code`/`status`.
+  //    That's load-bearing (a stuck-forever fetch must retry, never
+  //    quarantine — see the 2026-08-13 iPad incident in powersync.ts), pinned
+  //    directly by a test in powersync.test.ts rather than by a dedicated
+  //    branch here, since this fallthrough already covers it.
   return 'transient'
 }

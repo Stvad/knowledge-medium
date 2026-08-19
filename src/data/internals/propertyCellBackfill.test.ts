@@ -183,7 +183,11 @@ describe('property cell → children backfill', () => {
     expect((await run()).outcome).toBe('ran')
 
     expect(await fieldRowCount()).toBe(ids.length)
-  })
+    // 250 sequential `create`s put this at ~3-5s ALONE, which is no headroom
+    // under vitest's 5000ms default — the gate runs one worker per core, so a
+    // test at that cost times out in whichever PR happens to run next (it did:
+    // 5023ms). Explicit budget, same as the sibling case below.
+  }, 30_000)
 
   it('reports a block whose cell value cannot be decoded and migrates the rest', async () => {
     // A legacy raw `tx.update({properties})` can leave a value the schema's
