@@ -3,7 +3,9 @@
 export declare const REPO: string
 export declare const extractBeadIds: (text: string) => string[]
 export declare const matchesPrCommand: (cmd: string) => boolean
+export declare const allowsBeadIds: (cmd: string) => boolean
 export declare const bodyFilePaths: (cmd: string) => string[]
+export declare const resolveBodyPath: (p: string, cwd: string, home: string) => string
 export declare const deriveLabelPriority: (labels: string[]) => number | null
 export declare const issueNumberFromRef: (ref: string | null | undefined) => number | null
 
@@ -21,14 +23,16 @@ export declare const planCloseReconciliation: (
   beads: BeadRow[],
   issueByNumber: Map<number, IssueInfo>,
 ) => { id: string; number: number }[]
-export declare const planPriorityFixes: (
+export declare const planClosePushes: (
   beads: BeadRow[],
   issueByNumber: Map<number, IssueInfo>,
-) => { id: string; to: number }[]
-export declare const planClosePushes: (
-  closedBeads: BeadRow[],
-  issueByNumber: Map<number, IssueInfo>,
+  maxKnownIssueNumber: number,
 ) => { id: string; number: number }[]
+export declare const planPriorityFixes: (
+  preById: Map<string, BeadRow>,
+  postBeads: BeadRow[],
+  issueByNumber: Map<number, IssueInfo>,
+) => { id: string; to: number }[]
 export declare const buildDenyMessage: (
   mapped: { id: string; number: number }[],
   unmapped: string[],

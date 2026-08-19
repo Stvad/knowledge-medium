@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  allowsBeadIds,
   bodyFilePaths,
   buildDenyMessage,
   deriveLabelPriority,
@@ -9,18 +10,22 @@ import {
   planClosePushes,
   planCloseReconciliation,
   planPriorityFixes,
+  REPO,
+  resolveBodyPath,
   type BeadRow,
   type IssueInfo,
 } from './bd-github-sync.mjs'
 
+const ref = (n: number) => `https://github.com/${REPO}/issues/${n}`
 const issues = (entries: [number, IssueInfo][]) => new Map<number, IssueInfo>(entries)
 const bead = (over: Partial<BeadRow>): BeadRow => ({
   id: 'km-x',
   status: 'open',
   priority: 2,
-  external_ref: 'https://github.com/Stvad/knowledge-medium/issues/1',
+  external_ref: ref(1),
   ...over,
 })
+const byId = (beads: BeadRow[]) => new Map(beads.map(b => [b.id, b]))
 
 describe('extractBeadIds', () => {
   it('finds short and long-form ids, deduplicated, in order', () => {
@@ -48,20 +53,49 @@ describe('matchesPrCommand', () => {
     'cd /repo && gh pr create -F body.md',
     'gh pr edit 12 --body "x"',
     'gh pr comment 12 --body "x"',
+    'gh pr review 5 --body "looks wrong"',
+    'gh pr merge 5 --body "merge text"',
+    'gh issue create --title t --body b',
+    'gh issue edit 9 --body "x"',
+    'gh issue close 9 --comment "done"',
     'gh issue comment 34 --body-file /tmp/c.md',
+    'gh release create v1 --notes "x"',
+    'GITHUB_TOKEN=x gh pr create --fill',
+    'foo; gh issue create -t t',
+    'echo "$(gh pr create --fill)"',
   ])('matches publishing command: %s', cmd => {
     expect(matchesPrCommand(cmd)).toBe(true)
   })
 
-  it.each(['gh pr view 12', 'gh pr list', 'gh issue list', 'git commit -m "gh pr createish"', 'echo hello'])(
-    'ignores non-publishing command: %s',
-    cmd => {
-      expect(matchesPrCommand(cmd)).toBe(false)
-    },
-  )
+  it.each([
+    'gh pr view 12',
+    'gh pr list',
+    'gh issue list',
+    'gh issue view 9',
+    'echo hello',
+    // gh not in command position: text that merely MENTIONS a publishing
+    // command must not trip the gate (it could mint issues as a side effect).
+    'git commit -m "docs: gh pr comment flow"',
+    'git log --grep "gh issue create"',
+    'echo "run gh pr create later"',
+  ])('ignores non-publishing command: %s', cmd => {
+    expect(matchesPrCommand(cmd)).toBe(false)
+  })
 })
 
-describe('bodyFilePaths', () => {
+describe('allowsBeadIds', () => {
+  it('honors the marker in command-prefix position', () => {
+    expect(allowsBeadIds('KM_ALLOW_BEAD_IDS=1 gh pr create --body "km-abc"')).toBe(true)
+    expect(allowsBeadIds('cd /r && KM_ALLOW_BEAD_IDS=1 gh pr edit 1 --body x')).toBe(true)
+    expect(allowsBeadIds('FOO=bar KM_ALLOW_BEAD_IDS=1 gh pr create')).toBe(true)
+  })
+
+  it('ignores the marker quoted inside an argument (it would be published)', () => {
+    expect(allowsBeadIds('gh pr create --body "mentions KM_ALLOW_BEAD_IDS=1 in prose"')).toBe(false)
+  })
+})
+
+describe('bodyFilePaths / resolveBodyPath', () => {
   it('extracts plain, =-joined, and quoted paths from --body-file and -F', () => {
     expect(bodyFilePaths('gh pr create --body-file /tmp/a.md')).toEqual(['/tmp/a.md'])
     expect(bodyFilePaths('gh pr create --body-file=/tmp/b.md')).toEqual(['/tmp/b.md'])
@@ -73,6 +107,12 @@ describe('bodyFilePaths', () => {
 
   it('skips the stdin sentinel', () => {
     expect(bodyFilePaths('gh pr create -F -')).toEqual([])
+  })
+
+  it('resolves ~, absolute, and relative paths like the shell would have', () => {
+    expect(resolveBodyPath('~/b.md', '/cwd', '/home/u')).toBe('/home/u/b.md')
+    expect(resolveBodyPath('/abs/b.md', '/cwd', '/home/u')).toBe('/abs/b.md')
+    expect(resolveBodyPath('rel/b.md', '/cwd', '/home/u')).toBe('/cwd/rel/b.md')
   })
 })
 
@@ -92,28 +132,33 @@ describe('deriveLabelPriority', () => {
 })
 
 describe('issueNumberFromRef', () => {
-  it('parses the trailing issue number', () => {
-    expect(issueNumberFromRef('https://github.com/Stvad/knowledge-medium/issues/600')).toBe(600)
+  it('parses the trailing issue number of a ref into THIS repo', () => {
+    expect(issueNumberFromRef(ref(600))).toBe(600)
   })
-  it('returns null for absent or non-issue refs', () => {
+
+  it('returns null for absent, non-issue, or FOREIGN refs', () => {
     expect(issueNumberFromRef(null)).toBeNull()
-    expect(issueNumberFromRef('https://github.com/Stvad/knowledge-medium/pull/600')).toBeNull()
+    expect(issueNumberFromRef(`https://github.com/${REPO}/pull/600`)).toBeNull()
+    // A number collision on another repo's issues must never close ours.
+    expect(issueNumberFromRef('https://github.com/gastownhall/beads/issues/42')).toBeNull()
   })
 })
 
 describe('planCloseReconciliation', () => {
-  it('closes only non-closed beads whose GitHub issue is closed', () => {
+  it('closes only non-closed beads whose GitHub issue is closed — deferred included', () => {
     const plan = planCloseReconciliation(
       [
-        bead({ id: 'km-a', external_ref: 'https://x/issues/1' }),
-        bead({ id: 'km-b', status: 'in_progress', external_ref: 'https://x/issues/2' }),
-        bead({ id: 'km-c', status: 'closed', external_ref: 'https://x/issues/3' }),
+        bead({ id: 'km-a', external_ref: ref(1) }),
+        bead({ id: 'km-b', status: 'in_progress', external_ref: ref(2) }),
+        bead({ id: 'km-f', status: 'deferred', external_ref: ref(6) }),
+        bead({ id: 'km-c', status: 'closed', external_ref: ref(3) }),
         bead({ id: 'km-d', external_ref: null }),
-        bead({ id: 'km-e', external_ref: 'https://x/issues/5' }),
+        bead({ id: 'km-e', external_ref: ref(5) }),
       ],
       issues([
         [1, { state: 'CLOSED', labels: [] }],
         [2, { state: 'CLOSED', labels: [] }],
+        [6, { state: 'CLOSED', labels: [] }],
         [3, { state: 'CLOSED', labels: [] }],
         [5, { state: 'OPEN', labels: [] }],
       ]),
@@ -121,50 +166,74 @@ describe('planCloseReconciliation', () => {
     expect(plan).toEqual([
       { id: 'km-a', number: 1 },
       { id: 'km-b', number: 2 },
+      { id: 'km-f', number: 6 },
     ])
   })
 })
 
-describe('planPriorityFixes', () => {
-  it('re-derives only beads at the flattened default whose label disagrees', () => {
-    const plan = planPriorityFixes(
-      [
-        bead({ id: 'km-flat', external_ref: 'https://x/issues/1' }), // P2 + label P1 → fix
-        bead({ id: 'km-agrees', external_ref: 'https://x/issues/2' }), // P2 + label P2 → leave
-        bead({ id: 'km-deliberate', priority: 1, external_ref: 'https://x/issues/3' }), // not flattened → leave
-        bead({ id: 'km-nolabel', external_ref: 'https://x/issues/4' }),
-        bead({ id: 'km-noissue', external_ref: null }),
-      ],
-      issues([
-        [1, { state: 'OPEN', labels: ['P1'] }],
-        [2, { state: 'OPEN', labels: ['P2'] }],
-        [3, { state: 'OPEN', labels: ['P4'] }],
-        [4, { state: 'OPEN', labels: ['bug'] }],
-      ]),
-    )
-    expect(plan).toEqual([{ id: 'km-flat', to: 1 }])
-  })
-})
-
 describe('planClosePushes', () => {
-  it('pushes closes for closed beads whose issue is open — or absent from the pre-sync map', () => {
+  it('pushes closes for closed beads whose issue is open — or minted beyond the fetched range', () => {
     const plan = planClosePushes(
       [
-        bead({ id: 'km-a', status: 'closed', external_ref: 'https://x/issues/1' }), // open issue → push
-        bead({ id: 'km-b', status: 'closed', external_ref: 'https://x/issues/2' }), // closed issue → converged
-        bead({ id: 'km-c', status: 'closed', external_ref: 'https://x/issues/3' }), // minted during this run → push
+        bead({ id: 'km-a', status: 'closed', external_ref: ref(1) }), // open issue → push
+        bead({ id: 'km-b', status: 'closed', external_ref: ref(2) }), // closed issue → converged
+        bead({ id: 'km-c', status: 'closed', external_ref: ref(700) }), // minted during this run (beyond max) → push
+        bead({ id: 'km-g', status: 'closed', external_ref: ref(4) }), // absent WITHIN range → deleted/transferred, leave
         bead({ id: 'km-d', status: 'closed', external_ref: null }), // never synced → nothing to push to
-        bead({ id: 'km-e', status: 'open', external_ref: 'https://x/issues/5' }), // not closed → not ours
+        bead({ id: 'km-e', status: 'open', external_ref: ref(5) }), // not closed → not ours
       ],
       issues([
         [1, { state: 'OPEN', labels: [] }],
         [2, { state: 'CLOSED', labels: [] }],
         [5, { state: 'OPEN', labels: [] }],
       ]),
+      5,
     )
     expect(plan).toEqual([
       { id: 'km-a', number: 1 },
-      { id: 'km-c', number: 3 },
+      { id: 'km-c', number: 700 },
+    ])
+  })
+})
+
+describe('planPriorityFixes', () => {
+  it('restores beads this run flattened (pre ≠2 → post 2) to their pre-sync value', () => {
+    const pre = byId([bead({ id: 'km-flat', priority: 1 }), bead({ id: 'km-was2', priority: 2 })])
+    const post = [
+      bead({ id: 'km-flat', priority: 2 }), // flattened by this run → restore 1
+      bead({ id: 'km-was2', priority: 2 }), // was already 2 → possibly deliberate → untouched
+    ]
+    expect(planPriorityFixes(pre, post, issues([]))).toEqual([{ id: 'km-flat', to: 1 }])
+  })
+
+  it('does not fight a deliberate P2 even when a stale hand label disagrees', () => {
+    const pre = byId([bead({ id: 'km-deliberate', priority: 2, external_ref: ref(1) })])
+    const post = [bead({ id: 'km-deliberate', priority: 2, external_ref: ref(1) })]
+    expect(planPriorityFixes(pre, post, issues([[1, { state: 'OPEN', labels: ['P1'] }]]))).toEqual([])
+  })
+
+  it('derives from labels only for beads NEW this run', () => {
+    const post = [
+      bead({ id: 'km-new-hand', priority: 2, external_ref: ref(1) }), // new + hand label → derive
+      bead({ id: 'km-new-machine', priority: 2, external_ref: ref(2) }), // new + machine label → derive
+      bead({ id: 'km-new-none', priority: 2, external_ref: ref(3) }), // new, no label → leave
+      bead({ id: 'km-new-p2', priority: 2, external_ref: ref(4) }), // new, label agrees → leave
+      bead({ id: 'km-closed', status: 'closed', priority: 2, external_ref: ref(1) }), // closed → not ours
+    ]
+    expect(
+      planPriorityFixes(
+        byId([]),
+        post,
+        issues([
+          [1, { state: 'OPEN', labels: ['P1'] }],
+          [2, { state: 'OPEN', labels: ['priority::high'] }],
+          [3, { state: 'OPEN', labels: ['bug'] }],
+          [4, { state: 'OPEN', labels: ['P2'] }],
+        ]),
+      ),
+    ).toEqual([
+      { id: 'km-new-hand', to: 1 },
+      { id: 'km-new-machine', to: 1 },
     ])
   })
 })
