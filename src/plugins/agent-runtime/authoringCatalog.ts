@@ -132,6 +132,10 @@ const internalModuleIndex = import.meta.glob([
   // extension should import. Without this they'd also show up as importable
   // authoring modules — and as `.tsx` "components" in the component list.
   '!/src/plugins/agent-runtime/examples/**',
+  // Same reasoning for the example-EXTENSION fixtures under
+  // src/extensions/examples/ (exampleExtensions.ts) — seeded-workspace
+  // tutorials, not an API surface to import.
+  '!/src/extensions/examples/**',
 ])
 
 const eagerUiModules = import.meta.glob('/src/components/ui/*.{ts,tsx}', {
