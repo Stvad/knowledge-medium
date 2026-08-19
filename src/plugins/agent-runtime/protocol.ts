@@ -1,7 +1,7 @@
 import type React from 'react'
 import type ReactDOM from 'react-dom'
 import type { Block } from '@/data/block'
-import type { Repo } from '@/data/repo'
+import type { OperatorBackfillResult, Repo } from '@/data/repo'
 import type { BlockData, SubtreeRow } from '@/data/api'
 import type { FacetRuntime } from '@/facets/facet.js'
 import type { blockRenderersFacet } from '@/extensions/core.js'
@@ -220,6 +220,16 @@ export interface AuditExtensionResult {
   lint: ExtensionLintWarning[]
 }
 
+export interface RunBackfillInput {
+  backfillId: string
+  workspaceId?: string
+}
+
+export interface RunBackfillResult extends OperatorBackfillResult {
+  backfillId: string
+  workspaceId: string
+}
+
 export interface AuditPropertiesInput {
   /** Workspace to audit. Defaults to, and in practice must be, the ACTIVE
    *  one: classification runs on `repo.propertyDefinitions`, which is the
@@ -255,6 +265,7 @@ export interface AgentRuntimeContext {
   uninstallExtension: (input: UninstallExtensionInput) => Promise<UninstallExtensionResult>
   auditExtension: (input: AuditExtensionInput) => Promise<AuditExtensionResult>
   auditProperties: (input: AuditPropertiesInput) => Promise<PropertyRegistrationAudit>
+  runBackfill: (input: RunBackfillInput) => Promise<RunBackfillResult>
   actions: readonly ActionConfig[]
   renderers: ReturnType<typeof blockRenderersFacet.empty>
   refreshAppRuntime: typeof refreshAppRuntime

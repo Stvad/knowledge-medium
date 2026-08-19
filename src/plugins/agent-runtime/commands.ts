@@ -81,6 +81,7 @@ import type {
   MoveBlockInput,
   MoveBlockPosition,
   RestoreBlockInput,
+  RunBackfillResult,
   SetExtensionEnabledInput,
   SetExtensionEnabledResult,
   SqlMode,
@@ -427,6 +428,35 @@ const auditRuntimeProperties = async (
     )
   }
   return auditPropertyRegistration(repo, input.workspaceId?.trim() || resolveWorkspaceId(repo))
+}
+
+/** Run one `operator`-triggered workspace backfill — the properties
+ *  cell → children migration and anything later on that seam.
+ *
+ *  This is the whole operator surface for a pass that is deliberately NOT
+ *  scheduled: exactly-once across a fleet is not reachable over a
+ *  last-write-wins sync layer, so it is reached by a person running it in one
+ *  place while the others receive the rows. The outcome is returned rather
+ *  than logged so the caller can tell whether it ran, was already done, or
+ *  refused — and whether it dropped the workspace's undo history. */
+const runRuntimeBackfill = async (
+  repo: Repo,
+  input: {backfillId: string; workspaceId?: string},
+): Promise<RunBackfillResult> => {
+  // Same rule as `audit-properties`: `--workspace "$UNSET"` must fail rather
+  // than fall back to the active workspace. It matters more here — this one
+  // WRITES, and a migration run against a graph the operator did not name is
+  // not something a retry undoes.
+  if (input.workspaceId !== undefined && input.workspaceId.trim() === '') {
+    throw new Error(
+      'run-backfill: --workspace was given an empty value. It asserts which workspace ' +
+      'the pass writes to, so an empty expansion must fail rather than fall back to ' +
+      'the active one. Pass a real workspace id, or omit the option entirely.',
+    )
+  }
+  const workspaceId = input.workspaceId?.trim() || resolveWorkspaceId(repo)
+  const result = await repo.runWorkspaceBackfillNow(workspaceId, input.backfillId)
+  return {backfillId: input.backfillId, workspaceId, ...result}
 }
 
 const mapPosition = (
@@ -1576,6 +1606,7 @@ export const createAgentRuntimeContext = ({
     uninstallExtension: input => uninstallRuntimeExtension(repo, input),
     auditExtension: input => auditRuntimeExtension(repo, input),
     auditProperties: input => auditRuntimeProperties(repo, input),
+    runBackfill: input => runRuntimeBackfill(repo, input),
     actions: readRuntimeActions(runtime),
     renderers: runtime.read(blockRenderersFacet),
     refreshAppRuntime,
@@ -1763,6 +1794,14 @@ export const executeCommand = async (
 
     case 'audit-properties':
       return context.auditProperties({
+        workspaceId: command.workspaceId === undefined
+          ? undefined
+          : requireString(command.workspaceId, 'workspaceId'),
+      })
+
+    case 'run-backfill':
+      return context.runBackfill({
+        backfillId: requireString(command.backfillId, 'backfillId'),
         workspaceId: command.workspaceId === undefined
           ? undefined
           : requireString(command.workspaceId, 'workspaceId'),
