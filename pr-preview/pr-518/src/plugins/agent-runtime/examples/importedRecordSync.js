@@ -1,4 +1,4 @@
-var e=`import { ChangeScope, propertyValue, seedProperty, seedType } from '@/data/api/index.js'
+var e=`import { ChangeScope, seedProperty, seedType } from '@/data/api/index.js'
 import { definitionSeedsFacet, typeSeedsFacet } from '@/data/facets.js'
 import { extensionPropertySeedKey, extensionTypeSeedKey } from '@/extensions/dynamicExtensionSeeds.js'
 import { getOrCreateKernelPage } from '@/data/kernelPage.js'
@@ -9,6 +9,9 @@ import type { Repo } from '@/data/repo.js'
 // One namespace per KIND — the root page and the highlights are two kinds, so
 // they get two. (They key differently too: a kernel page's key is the
 // workspace id alone.)
+// Generate your OWN namespace UUIDs and never change them (\`crypto.randomUUID()\`
+// in any browser console) — copying these verbatim makes two extensions share
+// one root page.
 const READWISE_ROOT_NS = '7c4b1e93-6a25-4d8f-b013-9e2a5c7f4d61'
 const READWISE_HL_NS = '2f68d0a5-4c19-4b73-8e5a-6d1b3f9c8074'
 
@@ -86,7 +89,6 @@ export const syncHighlights = async (
         parentId: root.id,          // appended last; no order-key maths
         content: hl.text,
         types: [highlightType.id],
-        properties: [propertyValue(highlightIdProp, hl.id)],
       })
 
       // 'created' → written from the spec above.
@@ -101,7 +103,15 @@ export const syncHighlights = async (
       // them on 'adopted' alone leaves every first-seen record without them
       // until something re-fetches it — which a checkpointed incremental sync
       // never does.
-      if (outcome.status !== 'taken' && hl.note) {
+      if (outcome.status !== 'taken') {
+        // NOT in the spec above: \`properties\` there is applied on CREATE only,
+        // so anything passed that way never reaches an adopted record — and
+        // the external id is the most source-owned field there is. Write them
+        // here, where both outcomes go through.
+        await tx.setProperty(outcome.id, highlightIdProp, hl.id)
+        // No \`&& hl.note\`: a guard on the value writes it but never CLEARS it,
+        // so a note the user deleted upstream sticks forever. The prop is
+        // \`optional-string\` precisely so \`undefined\` is a legal write.
         await tx.setProperty(outcome.id, noteProp, hl.note)
       }
     }

@@ -28,16 +28,26 @@ const definitionProp = seedProperty({
   changeScope: ChangeScope.BlockDefault,
 })
 
+const repsProp = seedProperty({
+  seedKey: extensionPropertySeedKey('set-reps'),
+  revision: 1,
+  name: 'strength:reps',
+  preset: 'number',
+  defaultValue: 0,
+  changeScope: ChangeScope.BlockDefault,
+})
+
 const setType = seedType({
   seedKey: extensionTypeSeedKey('set'),
   revision: 1,
   id: SET_TYPE,
   label: 'Set',
-  properties: [weightProp, definitionProp],
+  properties: [weightProp, repsProp, definitionProp],
 })
 
 export default [
   definitionSeedsFacet.of(weightProp, {source: 'strength'}),
+  definitionSeedsFacet.of(repsProp, {source: 'strength'}),
   definitionSeedsFacet.of(definitionProp, {source: 'strength'}),
   typeSeedsFacet.of(setType, {source: 'strength'}),
 ]
@@ -65,6 +75,10 @@ export const logSets = async (
         types: [SET_TYPE, TODO_TYPE],                // compose: done-ness belongs to todo
         properties: [
           propertyValue(weightProp, set.weight),
+          // \`reps\` is a scalar fact ABOUT the set, so it is a property. Left
+          // only in the content string it would be a string-parse away from
+          // any "how many reps last month" query.
+          propertyValue(repsProp, set.reps),
           propertyValue(definitionProp, definitionId),
           propertyValue(todoStatusProp, set.done ? 'done' : 'open'),
         ],
