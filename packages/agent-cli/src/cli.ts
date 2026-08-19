@@ -980,6 +980,19 @@ cli
       backfillId,
       ...(asserted !== undefined ? {workspaceId: asserted} : {}),
     }, {timeoutMs: Math.max(1, Number(options.wait) || runBackfillDefaultWaitSeconds) * 1000})
+      .catch((cause: unknown) => {
+        // Giving up WAITING is not the pass giving up: it keeps running in the
+        // app, will record its per-graph completion, and its failure list —
+        // the thing an operator needs — is consumed by whichever call collects
+        // the result, so after a timeout it exists only in the app console.
+        if (!(cause instanceof Error) || !/timed out/i.test(cause.message)) throw cause
+        throw new Error(
+          `${cause.message}\nThe pass is still running in the app — this only stopped ` +
+          'waiting for it. Re-running is safe (it is single-flighted and resumes from ' +
+          'whatever is left), but the list of values it could not migrate is in the app ' +
+          'console, not here.',
+        )
+      })
     process.stdout.write(`${JSON.stringify(value, null, 2)}\n`)
   })
 

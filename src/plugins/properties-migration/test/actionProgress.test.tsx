@@ -14,10 +14,10 @@ const progressHandle = {update: vi.fn(), done: vi.fn(), fail: vi.fn()}
 const showInfo = vi.fn()
 let emit: ((progress: PropertyCellBackfillProgress) => void) | null = null
 
-vi.mock('@/utils/dialogs.js', () => ({openDialog: (...a: unknown[]) => openDialog(...a)}))
+vi.mock('@/utils/dialogs.js', () => ({openDialog: () => openDialog()}))
 vi.mock('@/utils/toast.js', () => ({
   showProgress: () => progressHandle,
-  showInfo: (...a: unknown[]) => showInfo(...a),
+  showInfo: (message: string, opts?: unknown) => showInfo(message, opts),
 }))
 vi.mock('../ConfirmMigrationDialog.tsx', () => ({ConfirmMigrationDialog: () => null}))
 vi.mock('@/data/internals/propertyCellBackfill', () => ({
@@ -32,8 +32,10 @@ vi.mock('@/data/internals/propertyCellBackfill', () => ({
 import type { Repo } from '@/data/repo'
 import { migratePropertiesToBlocksAction } from '../action.ts'
 
-const progress = (over: Partial<PropertyCellBackfillProgress> = {}): PropertyCellBackfillProgress =>
-  ({blocksScanned: 7, blocksMaterialized: 7, sweeps: 2, failures: [], failureCount: 0, ...over})
+const progress = (over: Partial<PropertyCellBackfillProgress> = {}): PropertyCellBackfillProgress => ({
+  blocksScanned: 7, blocksMaterialized: 7, sweeps: 2, failures: [], failureCount: 0,
+  editedUnderPass: false, ...over,
+})
 
 /** Emits `reported` from inside the run, the way the pass notifies. */
 const runReporting = async (reported: PropertyCellBackfillProgress) => {
