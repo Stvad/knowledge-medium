@@ -102,11 +102,6 @@ var e=`
 `,s=e=>`
      COALESCE(${e}.is_field_form, 0) = 1
      AND ${e}.parent_id IS NOT NULL
-     AND EXISTS (
-       SELECT 1 FROM workspaces w
-        WHERE w.id = ${e}.workspace_id
-          AND w.properties_migration IN ('children', 'cell-off')
-     )
      AND (
        EXISTS (
          SELECT 1 FROM block_types bt
