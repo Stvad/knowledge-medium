@@ -349,6 +349,23 @@ describe('audit-properties scan coverage', () => {
     await expect(auditPropertyRegistration(repo, WS)).rejects.toThrow(/not caught up/i)
   })
 
+  it('refuses a scan that starts behind even when the device catches up before it ends', async () => {
+    // The mirror of the case below, and the reason the check is on BOTH
+    // sides. A view that is incomplete at the start and complete at the end
+    // leaves the histogram short by everything that landed after it ran,
+    // while the closing read reports all clear.
+    let behindSamples = 1
+    installRepo(cb => {
+      if (behindSamples > 0) behindSamples -= 1
+      else cb()
+      return () => {}
+    })
+    await create({id: 'b1', properties: {'demo:undeclared': 'x'}})
+    behindSamples = 1
+
+    await expect(auditPropertyRegistration(repo, WS)).rejects.toThrow(/Cannot audit/i)
+  })
+
   it('discards a scan a drain started underneath, not only one that began behind', async () => {
     // The window a single up-front check leaves open: the view is complete
     // when the scan starts and not when it ends, so the histogram is short by
