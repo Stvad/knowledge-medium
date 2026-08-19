@@ -423,9 +423,31 @@ export interface PromotedPropertyBag {
   properties?: Record<string, unknown>
 }
 
+/** Promoted keys are registered under ONE fixed preset, never an inferred
+ *  one. Three things fall out of that, and all three are the reason:
+ *
+ *  - **Cross-device convergence.** This runs per device on locally-observed
+ *    messages. Two devices that ingest the same new key before syncing would
+ *    each infer from their own sample — one sees a scalar and picks `string`,
+ *    the other sees repeats and picks `list` — and after sync the registry
+ *    keeps one definition per name, so the winner's codec cannot decode the
+ *    loser device's stored values. A fixed preset has nothing to diverge on.
+ *  - **Registration is RETROACTIVE.** A definition applies to cells that are
+ *    already stored, which this helper never sees and cannot normalize. Any
+ *    narrowing preset can therefore strand existing data (registering
+ *    `list` over 258 stored scalars makes all 258 undecodable).
+ *  - **Promotion has no single shape.** The same key is a scalar on one
+ *    message and an array on the next, by construction.
+ *
+ *  `optional-json` is an identity codec, so it decodes every one of those
+ *  cases as-written. It is deliberately the WEAKEST useful definition: the
+ *  point is that the key resolves one at all, so property migration can carry
+ *  it. A user refining it later in the UI is expected and fine — an existing
+ *  schema always wins here. */
+const PROMOTED_PRESET_ID = 'optional-json'
+
 /** Register a definition for every promoted `key:: value` attribute a
- *  consumer is about to write, and normalize the values so the codec it
- *  registered can actually decode them.
+ *  consumer is about to write.
  *
  *  Content promotion INVENTS property names from block text, so no code seed
  *  can declare them ahead of time — the definition has to be minted at write
@@ -437,58 +459,58 @@ export interface PromotedPropertyBag {
  *  key-minting path that maintains that invariant; a promotion consumer that
  *  skips it violates the invariant by construction.
  *
- *  This is the STREAMING counterpart to the importer's phase 4, which plans
- *  over a whole graph at once. Two differences fall out of that, both
- *  load-bearing:
+ *  This is the STREAMING counterpart to the importer's phase 4. It does NOT
+ *  reuse that classifier: the importer plans over a whole graph at once and
+ *  pairs a narrow classification with normalization passes over every planned
+ *  block (`normalizeRefPropertyValues` and friends), which a per-message
+ *  consumer cannot do. See `PROMOTED_PRESET_ID`.
  *
- *  - **refList is downgraded to `list`.** The importer pairs a refList
- *    classification with `normalizeRefPropertyValues`, which rewrites
- *    `[[X]]` tokens to ids via an `aliasIdMap` it builds during the import.
- *    A streaming consumer has no such map, so registering refList would
- *    store token strings under a codec that rejects them on first read —
- *    an undecodable cell, which is worse than an unregistered key (it leaves
- *    the cell and its value child permanently divergent).
+ *  POSTCONDITION: every key remaining in `bags` resolves a definition. A key
+ *  that cannot be registered is REMOVED from the bag rather than written
+ *  without one — `addSchema` rejects a name that cannot round-trip as a
+ *  `[[wikilink]]`, which the `[[Page]]:: value` attribute form produces, and
+ *  writing it anyway would leave exactly the definition-less cell this
+ *  exists to prevent. Nothing is lost by dropping it: promotion is purely
+ *  additive, so the source block carrying the text survives as a child.
  *
- *  - **Normalization is driven by the EFFECTIVE registry, not by what this
- *    call registered.** A key registered as `list` by an earlier batch still
- *    needs this batch's scalar value widened; keying off `toRegister` alone
- *    would write an undecodable scalar under the previous batch's schema.
- *
- *  `bags` is mutated in place (the normalizers do), so pass the blocks you
- *  are about to write. Returns diagnostics worth logging; it never throws for
- *  a single unregistrable name — that one key stays unregistered and the
- *  audit (`kmagent audit-properties`) will report it. */
+ *  `bags` is mutated in place, so pass the blocks you are about to write.
+ *  Returns diagnostics worth logging. */
 export const ensurePromotedPropertySchemas = async (
   repo: Repo,
   bags: ReadonlyArray<PromotedPropertyBag>,
 ): Promise<ReadonlyArray<string>> => {
   if (bags.length === 0) return []
 
-  // The plan/normalize helpers below read only `.id` and `.properties`, so a
-  // caller can hand over its own in-flight block tree (an extension building
-  // one to write has no BlockData rows yet) instead of synthesizing rows.
-  const asBlocks = bags as unknown as ReadonlyArray<BlockData>
-  const {toRegister, diagnostics} = collectSchemaReconciliationPlan(asBlocks, repo)
-  const notes = [...diagnostics]
+  const names = new Set<string>()
+  for (const bag of bags) for (const name of Object.keys(bag.properties ?? {})) names.add(name)
+  if (names.size === 0) return []
 
-  const registrable = toRegister.map(entry => entry.presetId === 'refList'
-    ? {name: entry.name, presetId: 'list' as const}
-    : entry)
-  await applySchemaReconciliation(registrable, repo, notes)
+  const notes: string[] = []
+  const unregistrable = new Set<string>()
 
-  // Post-registration so freshly-added contributions are visible here too.
-  const schemas = repo.propertySchemas
-  const stringNames = new Set<string>()
-  const listNames = new Set<string>()
-  for (const bag of bags) {
-    for (const name of Object.keys(bag.properties ?? {})) {
-      const codecType = schemas.get(name)?.codec.type
-      if (codecType === 'string') stringNames.add(name)
-      else if (codecType === 'list') listNames.add(name)
+  for (const name of names) {
+    // An existing schema always wins — kernel, plugin, or a user who already
+    // refined this key. Re-registering would collide, and narrowing someone
+    // else's choice is not this helper's business.
+    if (repo.propertySchemas.get(name)) continue
+    try {
+      await repo.userSchemas.addSchema({name, presetId: PROMOTED_PRESET_ID})
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      notes.push(
+        `Dropped promoted property ${JSON.stringify(name)}: no definition could be ` +
+        `registered for it (${message}). The text stays on its own block.`,
+      )
+      unregistrable.add(name)
     }
   }
-  normalizeStringPropertyValues(asBlocks, stringNames)
-  normalizeListPropertyValues(asBlocks, listNames)
+
+  if (unregistrable.size > 0) {
+    for (const bag of bags) {
+      if (!bag.properties) continue
+      for (const name of unregistrable) delete bag.properties[name]
+    }
+  }
 
   return notes
 }

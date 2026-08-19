@@ -459,51 +459,61 @@ describe('ensurePromotedPropertySchemas', () => {
     expect(env.repo.propertySchemas.get('matrix:timestamp')).toBeDefined()
   })
 
-  it('downgrades a refList classification to list, so page tokens stay decodable', async () => {
-    // The importer pairs refList with normalizeRefPropertyValues + an
-    // aliasIdMap it builds during import. A streaming consumer has neither,
-    // so registering refList here would store `[[X]]` token strings under a
-    // codec that rejects them on read — an undecodable cell, which is worse
-    // than leaving the key unregistered.
-    const blocks = [
-      block('a', {'matrix:topic': ['[[Alpha]]', '[[Beta]]']}),
-      block('b', {'matrix:topic': ['[[Gamma]]']}),
-    ]
+  it('registers one fixed preset regardless of the observed shape, so two devices cannot diverge', async () => {
+    // Per-device inference is the bug: two devices ingesting the same new key
+    // before syncing would infer from their own samples, and after sync the
+    // registry keeps ONE definition per name — so the winner's codec could
+    // not decode the loser's stored values.
+    await ensurePromotedPropertySchemas(env.repo, [block('a', {'matrix:one': 'scalar'})])
+    await ensurePromotedPropertySchemas(env.repo, [block('b', {'matrix:many': ['x', 'y']})])
+
+    const scalarCodec = env.repo.propertySchemas.get('matrix:one')?.codec.type
+    expect(env.repo.propertySchemas.get('matrix:many')?.codec.type).toBe(scalarCodec)
+  })
+
+  it('registers a codec that decodes both a scalar and an array of the same key', async () => {
+    // Promotion emits a scalar on one message and an array on the next by
+    // construction, and registration is retroactive over cells already
+    // stored that this helper never sees — so a narrowing preset would
+    // strand data it cannot normalize.
+    await ensurePromotedPropertySchemas(env.repo, [block('a', {'matrix:mixed': 'solo'})])
+    const codec = env.repo.propertySchemas.get('matrix:mixed')!.codec
+
+    expect(() => codec.decode('solo')).not.toThrow()
+    expect(() => codec.decode(['a', 'b'])).not.toThrow()
+    expect(() => codec.decode(42)).not.toThrow()
+  })
+
+  it('drops a key it cannot register rather than writing a definition-less cell', async () => {
+    // The `[[Page]]:: value` attribute form promotes to a name containing
+    // `]]`, which addSchema refuses (it cannot round-trip as a [[wikilink]]).
+    // Writing it anyway would leave exactly the definition-less cell this
+    // helper exists to prevent.
+    const blocks = [block('a', {'matrix:[[status]]': 'done', 'matrix:ok': 'kept'})]
+
+    const notes = await ensurePromotedPropertySchemas(env.repo, blocks)
+
+    expect(blocks[0]!.properties).not.toHaveProperty('matrix:[[status]]')
+    expect(blocks[0]!.properties['matrix:ok']).toBe('kept')
+    expect(notes.join(' ')).toMatch(/\[\[status\]\]/)
+  })
+
+  it('postcondition: every key still in the bag resolves a definition', async () => {
+    const blocks = [block('a', {'matrix:[[bad]]': 'x', 'matrix:good': 'y', 'matrix:also': ['z']})]
 
     await ensurePromotedPropertySchemas(env.repo, blocks)
 
-    const codecType = env.repo.propertySchemas.get('matrix:topic')?.codec.type
-    expect(codecType).not.toBe('refList')
-    expect(codecType).toBe('list')
-    // And what it registered must decode what is actually stored.
-    expect(() => env.repo.propertySchemas.get('matrix:topic')!.codec.decode(
-      blocks[0]!.properties['matrix:topic'])).not.toThrow()
-  })
-
-  it('normalizes a later scalar under a list schema an earlier batch registered', async () => {
-    // Keying normalization off this call's registrations alone would leave
-    // batch two writing a bare scalar under batch one's list codec.
-    await ensurePromotedPropertySchemas(env.repo, [
-      block('a', {'matrix:tag': ['one', 'two']}),
-      block('b', {'matrix:tag': ['three']}),
-    ])
-    expect(env.repo.propertySchemas.get('matrix:tag')?.codec.type).toBe('list')
-
-    const laterBatch = [block('c', {'matrix:tag': 'solo'})]
-    await ensurePromotedPropertySchemas(env.repo, laterBatch)
-
-    expect(laterBatch[0]!.properties['matrix:tag']).toEqual(['solo'])
-    expect(() => env.repo.propertySchemas.get('matrix:tag')!.codec.decode(
-      laterBatch[0]!.properties['matrix:tag'])).not.toThrow()
+    for (const name of Object.keys(blocks[0]!.properties)) {
+      expect(env.repo.propertySchemas.get(name), name).toBeDefined()
+    }
   })
 
   it('leaves an already-declared key on its existing schema', async () => {
-    await ensurePromotedPropertySchemas(env.repo, [block('a', {'matrix:note': 'hello'})])
-    const first = env.repo.propertySchemas.get('matrix:note')
+    await env.repo.userSchemas.addSchema({name: 'matrix:refined', presetId: 'string'})
 
-    await ensurePromotedPropertySchemas(env.repo, [block('b', {'matrix:note': 'again'})])
+    await ensurePromotedPropertySchemas(env.repo, [block('a', {'matrix:refined': 'hello'})])
 
-    expect(env.repo.propertySchemas.get('matrix:note')?.codec.type).toBe(first?.codec.type)
+    expect(env.repo.propertySchemas.get('matrix:refined')?.codec.type).toBe('string')
   })
 
   it('is a no-op for an empty batch', async () => {

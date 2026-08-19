@@ -59,7 +59,8 @@ export {
 // Re-exported alongside promotion deliberately: promoting a `key:: value`
 // attribute without registering a definition for the key it invents is the
 // footgun this pairs with (issue #501). A consumer that finds one should
-// find the other.
+// find the other. Note it MUTATES the bags it is given (it drops keys it
+// cannot register), so pass the blocks you are about to write.
 export { ensurePromotedPropertySchemas, type PromotedPropertyBag } from './schemaReconciliation'
 export {
   type PreparedRoamMemoEntry,
