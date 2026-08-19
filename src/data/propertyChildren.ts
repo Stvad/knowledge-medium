@@ -12,8 +12,12 @@
  * Recognition (§9) is FLAT — a column read plus context, never a content
  * parse and never an ancestry walk: `is_field_form = 1` (the marker matched)
  * ∧ non-null parent ∧ `reference_target_id` resolves a definition
- * (fieldId-keyed, shadow-tolerant) ∧ the WORKSPACE is flipped
- * (`properties_migration` at or past 'children'). Content-intrinsic and
+ * (fieldId-keyed, shadow-tolerant). It is NOT gated on the workspace flip:
+ * the cell→children backfill mints field and value rows while the workspace
+ * still reads cells, so a flip-gated recognition renders its whole output as
+ * ordinary outline rows until the flip lands. What the flip column governs is
+ * the READ/WRITE direction (the processors, dormant pre-flip), not whether a
+ * row IS machinery. Content-intrinsic and
  * identical at every depth: a `::` child of ANY block — value rows included —
  * is that block's field row, and an unmarked ref targeting a definition is a
  * plain reference block, full stop (the bit is what makes ref-typed values

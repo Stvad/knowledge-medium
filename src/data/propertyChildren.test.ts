@@ -1405,22 +1405,6 @@ describe('merge keeps a ref-typed losing value interior, stamp intact (#19)', ()
   })
 })
 
-describe('flip predicate / SQL gate lock (§6)', () => {
-  it('the SQL IN-list matches the TS at-or-past-children predicate exactly', async () => {
-    // The TS predicate and the SQL literal must move together: a future
-    // state added to one but not the other would silently un-recognize (or
-    // over-recognize) every field row on one read surface.
-    const {isChildBackedPropertiesWorkspace} = await import('@/types')
-    const {VISIBLE_CHILDREN_SQL} = await import('./internals/treeQueries')
-    const {PROPERTIES_MIGRATION_STATES} = await import('./workspaceSchema')
-    const flipped = PROPERTIES_MIGRATION_STATES.filter(isChildBackedPropertiesWorkspace)
-    expect(flipped).toEqual(['children', 'cell-off'])
-    expect(VISIBLE_CHILDREN_SQL).toContain(
-      `properties_migration IN (${flipped.map(s => `'${s}'`).join(', ')})`,
-    )
-  })
-})
-
 describe('query-layer twin (core.childIds / core.children)', () => {
   it('default includes field rows in a flipped workspace; visible view opts out', async () => {
     await seedWorkspace('children')
@@ -1444,7 +1428,7 @@ describe('query-layer twin (core.childIds / core.children)', () => {
     expect(visible.map(c => c.id)).toEqual(['content-child'])
   })
 
-  it('is dormant in an un-flipped workspace', async () => {
+  it('leaves an UNMARKED look-alike visible in an un-flipped workspace', async () => {
     await seedWorkspace('cell')
     const repo = setup()
     await seedDefinitionBlock(repo)
@@ -1456,9 +1440,10 @@ describe('query-layer twin (core.childIds / core.children)', () => {
       })
     }, {scope: ChangeScope.BlockDefault})
 
-    // Exercise the visible view: the reactive query's flip gate
-    // (VISIBLE_CHILD_PREDICATE_SQL's `properties_migration IN (...)` branch)
-    // must leave the field-row-shaped child visible in an un-flipped workspace.
+    // The child is field-row-SHAPED but UNMARKED (`[[status]]`, no `::`), so
+    // `is_field_form` is not stamped and it is an ordinary reference block.
+    // Only marked rows classify — which is the whole reason recognition no
+    // longer needs to ask whether the workspace is flipped.
     const ids = await repo.runQuery('core.childIds', {id: 'p', hidePropertyChildren: true})
     expect(ids).toEqual(['ref-child'])
   })

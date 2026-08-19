@@ -11,7 +11,6 @@ import {
   TYPED_BLOCKS_STRUCTURE_CHANNEL,
   typedBlocksStructureKey,
 } from '@/data/invalidation'
-import { readIsChildBackedWorkspace } from '@/data/workspaceSchema'
 
 export const BACKLINKS_FOR_BLOCK_QUERY = 'backlinks.forBlock'
 
@@ -23,9 +22,17 @@ const MACHINERY_SOURCE_CHUNK = 500
 
 /** Which of `sourceIds` are property-subtree INTERIOR machinery — a value child,
  *  or a row deeper inside a property subtree, whose parent chain passes through
- *  a §9 field row. Same recognition as `VISIBLE_CHILD_PREDICATE_SQL`: a
- *  workspace-scoped `block_types = 'property-schema'` probe on a non-null
- *  `reference_target_id`, root rows exempt via `parent_id IS NOT NULL`.
+ *  a §9 field row. Same recognition as `VISIBLE_CHILD_PREDICATE_SQL`, which
+ *  means all THREE of its terms: the `::` bit (`is_field_form`, NULL on every
+ *  unmarked row so COALESCE pins the three-valued logic), a workspace-scoped
+ *  `block_types = 'property-schema'` probe on a non-null
+ *  `reference_target_id`, and root rows exempt via `parent_id IS NOT NULL`.
+ *
+ *  The bit was missing here while the doc already claimed parity, so ANY
+ *  descendant of ANY row that merely referenced a definition counted as
+ *  machinery — an ordinary child of a block linking to the `status` property
+ *  page silently lost its backlink. Root ancestors were exempt, which is why
+ *  the obvious one-level fixture never caught it.
  *
  *  STRICTLY INTERIOR (`depth > 0`): the field row ITSELF is deliberately NOT
  *  matched. The de-dup this filter exists for only applies to interiors — a
@@ -37,12 +44,12 @@ const MACHINERY_SOURCE_CHUNK = 500
  *  property definition's backlinks empty — the opposite of why field rows were
  *  put in `block_references` in the first place.
  *
- *  PRECONDITION — the caller MUST flip-gate this. There is no internal
- *  `properties_migration` check (unlike `VISIBLE_CHILD_PREDICATE_SQL`, which
- *  embeds one), because `reference_target_id` derivation and `property-schema`
- *  types both exist independent of the flip. Calling it for an UN-flipped
- *  workspace would misclassify an ordinary `((definitionId))` reference as
- *  machinery and silently drop a real backlink.
+ *  NOT flip-gated, and callers must not gate it either. `reference_target_id`
+ *  derivation and `property-schema` types both exist independent of the flip,
+ *  and so — since the cell→children backfill — do the field and value rows
+ *  themselves. The `::` bit is what disambiguates machinery from an ordinary
+ *  `((definitionId))` reference; the flip column never did, it only deferred
+ *  the question to a moment when field rows were known to exist.
  *
  *  The `up` walk carries the same per-seed `path` visited-guard as
  *  `manyAncestorsSql` (treeQueries.ts) — issue #404 item 8b: without it a
@@ -59,13 +66,13 @@ export const propertyMachinerySourceIds = async (
     const chunk = sourceIds.slice(i, i + chunkSize)
     const placeholders = chunk.map(() => '?').join(', ')
     const rows = await db.getAll<{ id: string }>(
-      `WITH RECURSIVE up(start_id, id, reference_target_id, parent_id, workspace_id, path, depth) AS (
-         SELECT id, id, reference_target_id, parent_id, workspace_id,
+      `WITH RECURSIVE up(start_id, id, reference_target_id, is_field_form, parent_id, workspace_id, path, depth) AS (
+         SELECT id, id, reference_target_id, is_field_form, parent_id, workspace_id,
                 '!' || hex(id) || '/',
                 0
            FROM blocks WHERE id IN (${placeholders})
          UNION ALL
-         SELECT up.start_id, b.id, b.reference_target_id, b.parent_id, b.workspace_id,
+         SELECT up.start_id, b.id, b.reference_target_id, b.is_field_form, b.parent_id, b.workspace_id,
                 up.path || '!' || hex(b.id) || '/',
                 up.depth + 1
            FROM blocks AS b JOIN up ON b.id = up.parent_id
@@ -75,6 +82,7 @@ export const propertyMachinerySourceIds = async (
        SELECT DISTINCT up.start_id AS id
          FROM up
         WHERE up.depth > 0
+          AND COALESCE(up.is_field_form, 0) = 1
           AND up.reference_target_id IS NOT NULL
           AND up.parent_id IS NOT NULL
           AND EXISTS (
@@ -205,11 +213,12 @@ export const backlinksForBlockQuery: Query<
       exclude: normalized.exclude,
       order: 'created-desc',
     })).filter(sourceId => sourceId !== id)
-    // Machinery-source exclusion is flip-gated: an un-flipped workspace (all of
-    // prod) has no property value children, so there is nothing to exclude and
-    // this pays only the cached flip read.
+    // NOT flip-gated. The gate's premise — an un-flipped workspace has no
+    // property value children — is what the cell→children backfill breaks: it
+    // mints them while the workspace still reads cells, and a ref-typed value
+    // row's `[[X]]` then duplicates the owner's projected property edge on a
+    // surface that had stopped filtering.
     if (rawSources || ids.length === 0) return ids
-    if (!(await readIsChildBackedWorkspace(ctx.db, workspaceId))) return ids
     const machinery = await propertyMachinerySourceIds(ctx.db, ids)
     return machinery.size === 0 ? ids : ids.filter(sourceId => !machinery.has(sourceId))
   },

@@ -234,7 +234,7 @@ describe('backlinks.countForBlock — handle behaviour', () => {
     )
     await createIn({ id: 'Target' })
     await createIn({ id: 'O' })
-    await createIn({ id: 'F', parentId: 'O', content: '((D))', referenceTargetId: 'D' })
+    await createIn({ id: 'F', parentId: 'O', content: '::((D))', referenceTargetId: 'D' })
     // Hidden value row pointing at Target — the owning block's reprojection
     // already carries this backlink, so the list drops it and so must the badge.
     await createIn({ id: 'V', parentId: 'F', references: [{ id: 'Target', alias: 'T' }] })

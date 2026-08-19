@@ -1167,7 +1167,7 @@ describe('groupedBacklinksDataExtension query', () => {
       await env.repo.tx(async tx => {
         await tx.create({
           id: 'field', workspaceId: WS, parentId: 'owner', orderKey: 'a0',
-          content: '((defn))', referenceTargetId: 'defn',
+          content: '::((defn))', referenceTargetId: 'defn',
         })
         await tx.create({
           id: 'value', workspaceId: WS, parentId: 'field', orderKey: 'a0',
@@ -1197,7 +1197,11 @@ describe('groupedBacklinksDataExtension query', () => {
       expect(sorted(out.unfilteredSourceIds)).toEqual(['ordinary'])
     })
 
-    it('is dormant in an un-flipped workspace', async () => {
+    it('drops it in an un-flipped workspace too, where the backfill mints it', async () => {
+      // Was asserted dormant, on the premise that an un-flipped workspace has
+      // no value rows. The cell->children backfill mints them before the flip,
+      // so the un-gated case is now the one that actually occurs — and a value
+      // row surfacing here duplicates the owner's projected property edge.
       await seedDefinitionAndFieldRow()
 
       const out = await env.repo.query[GROUPED_BACKLINKS_FOR_BLOCK_QUERY]({
@@ -1205,7 +1209,7 @@ describe('groupedBacklinksDataExtension query', () => {
         id: 'target',
       }).load()
 
-      expect(sorted(out.unfilteredSourceIds)).toEqual(['ordinary', 'value'])
+      expect(sorted(out.unfilteredSourceIds)).toEqual(['ordinary'])
     })
   })
 })
