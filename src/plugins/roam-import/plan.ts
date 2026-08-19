@@ -61,7 +61,11 @@ export {
 // footgun this pairs with (issue #501). A consumer that finds one should
 // find the other. Note it MUTATES the bags it is given (it drops keys it
 // cannot register), so pass the blocks you are about to write.
-export { ensurePromotedPropertySchemas, type PromotedPropertyBag } from './schemaReconciliation'
+export {
+  ensurePromotedPropertySchemas,
+  isRegistrablePropertyName,
+  type PromotedPropertyBag,
+} from './schemaReconciliation'
 export {
   type PreparedRoamMemoEntry,
   type PreparedRoamMemoSnapshot,

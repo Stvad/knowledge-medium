@@ -10,6 +10,7 @@ import { Repo } from '@/data/repo'
 import {
   applySchemaReconciliation,
   ensurePromotedPropertySchemas,
+  isRegistrablePropertyName,
   collectSchemaReconciliationPlan,
   normalizeListPropertyValues,
   normalizeRefPropertyValues,
@@ -459,53 +460,55 @@ describe('ensurePromotedPropertySchemas', () => {
     expect(env.repo.propertySchemas.get('matrix:timestamp')).toBeDefined()
   })
 
-  it('registers one fixed preset regardless of the observed shape, so two devices cannot diverge', async () => {
-    // Per-device inference is the bug: two devices ingesting the same new key
-    // before syncing would infer from their own samples, and after sync the
-    // registry keeps ONE definition per name — so the winner's codec could
-    // not decode the loser's stored values.
-    await ensurePromotedPropertySchemas(env.repo, [block('a', {'matrix:one': 'scalar'})])
-    await ensurePromotedPropertySchemas(env.repo, [block('b', {'matrix:many': ['x', 'y']})])
+  it('keeps a scalar key a string instead of widening it into a one-item list', async () => {
+    // Promoted keys are homogeneous in practice, so per-key inference lands
+    // the useful type. Verified against production: matrix:timestamp is 100%
+    // scalar over 316 cells, matrix:url 100% array over 174.
+    await ensurePromotedPropertySchemas(env.repo, [
+      block('a', {'matrix:when': 'yesterday'}),
+      block('b', {'matrix:when': 'today'}),
+    ])
 
-    const scalarCodec = env.repo.propertySchemas.get('matrix:one')?.codec.type
-    expect(env.repo.propertySchemas.get('matrix:many')?.codec.type).toBe(scalarCodec)
+    expect(env.repo.propertySchemas.get('matrix:when')?.codec.type).toBe('string')
   })
 
-  it('registers a codec that decodes both a scalar and an array of the same key', async () => {
-    // Promotion emits a scalar on one message and an array on the next by
-    // construction, and registration is retroactive over cells already
-    // stored that this helper never sees — so a narrowing preset would
-    // strand data it cannot normalize.
-    await ensurePromotedPropertySchemas(env.repo, [block('a', {'matrix:mixed': 'solo'})])
-    const codec = env.repo.propertySchemas.get('matrix:mixed')!.codec
-
-    expect(() => codec.decode('solo')).not.toThrow()
-    expect(() => codec.decode(['a', 'b'])).not.toThrow()
-    expect(() => codec.decode(42)).not.toThrow()
-  })
-
-  it('drops a key it cannot register rather than writing a definition-less cell', async () => {
-    // The `[[Page]]:: value` attribute form promotes to a name containing
-    // `]]`, which addSchema refuses (it cannot round-trip as a [[wikilink]]).
-    // Writing it anyway would leave exactly the definition-less cell this
-    // helper exists to prevent.
-    const blocks = [block('a', {'matrix:[[status]]': 'done', 'matrix:ok': 'kept'})]
-
-    const notes = await ensurePromotedPropertySchemas(env.repo, blocks)
-
-    expect(blocks[0]!.properties).not.toHaveProperty('matrix:[[status]]')
-    expect(blocks[0]!.properties['matrix:ok']).toBe('kept')
-    expect(notes.join(' ')).toMatch(/\[\[status\]\]/)
-  })
-
-  it('postcondition: every key still in the bag resolves a definition', async () => {
-    const blocks = [block('a', {'matrix:[[bad]]': 'x', 'matrix:good': 'y', 'matrix:also': ['z']})]
+  it('downgrades refList to list, so page tokens stay decodable without an aliasIdMap', async () => {
+    const blocks = [
+      block('a', {'matrix:topic': ['[[Alpha]]', '[[Beta]]']}),
+      block('b', {'matrix:topic': ['[[Gamma]]']}),
+    ]
 
     await ensurePromotedPropertySchemas(env.repo, blocks)
 
-    for (const name of Object.keys(blocks[0]!.properties)) {
-      expect(env.repo.propertySchemas.get(name), name).toBeDefined()
-    }
+    const codec = env.repo.propertySchemas.get('matrix:topic')!.codec
+    expect(codec.type).not.toBe('refList')
+    expect(() => codec.decode(blocks[0]!.properties['matrix:topic'])).not.toThrow()
+  })
+
+  it('normalizes a later scalar under a list schema an earlier batch registered', async () => {
+    await ensurePromotedPropertySchemas(env.repo, [
+      block('a', {'matrix:tag': ['one', 'two']}),
+      block('b', {'matrix:tag': ['three']}),
+    ])
+    expect(env.repo.propertySchemas.get('matrix:tag')?.codec.type).toBe('list')
+
+    const laterBatch = [block('c', {'matrix:tag': 'solo'})]
+    await ensurePromotedPropertySchemas(env.repo, laterBatch)
+
+    expect(laterBatch[0]!.properties['matrix:tag']).toEqual(['solo'])
+  })
+
+  it('never deletes a key it could not register — the caller may have dropped the source block', async () => {
+    // A subtractive consumer (matrix ingest) has already removed the bullet by
+    // this point, so deleting the property here would destroy the only
+    // remaining copy of the user's text. Such keys are declined UPSTREAM via
+    // isRegistrablePropertyName instead.
+    const blocks = [block('a', {'matrix:[[status]]': 'done'})]
+
+    const notes = await ensurePromotedPropertySchemas(env.repo, blocks)
+
+    expect(blocks[0]!.properties['matrix:[[status]]']).toBe('done')
+    expect(notes.length).toBeGreaterThan(0)
   })
 
   it('leaves an already-declared key on its existing schema', async () => {
@@ -518,5 +521,18 @@ describe('ensurePromotedPropertySchemas', () => {
 
   it('is a no-op for an empty batch', async () => {
     await expect(ensurePromotedPropertySchemas(env.repo, [])).resolves.toEqual([])
+  })
+})
+
+describe('isRegistrablePropertyName', () => {
+  it('rejects exactly the names addSchema refuses, so promotion can decline them first', async () => {
+    expect(isRegistrablePropertyName('matrix:status')).toBe(true)
+    expect(isRegistrablePropertyName('matrix:[[status]]')).toBe(false)
+    expect(isRegistrablePropertyName('   ')).toBe(false)
+
+    // Pin it against the real thing rather than restating the predicate.
+    await expect(env.repo.userSchemas.addSchema({
+      name: 'matrix:[[status]]', presetId: 'string',
+    })).rejects.toThrow()
   })
 })

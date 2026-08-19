@@ -27,7 +27,11 @@ import { keyAtEnd, keysBetween } from '@/data/orderKey.js'
 import { createOrRestoreTargetBlock } from '@/data/targets.js'
 import { addBlockTypeToProperties, showPropertiesProp } from '@/data/properties.js'
 import { dailyNoteBlockId, getOrCreateDailyNote, todayIso } from '@/plugins/daily-notes/index.js'
-import { computePromotedFromChildren, ensurePromotedPropertySchemas } from '@/plugins/roam-import/plan.js'
+import {
+  computePromotedFromChildren,
+  ensurePromotedPropertySchemas,
+  isRegistrablePropertyName,
+} from '@/plugins/roam-import/plan.js'
 import { navigate } from '@/utils/navigation.js'
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
@@ -516,6 +520,13 @@ const matrixEventUrl = (roomId: string, eventId: string) => `https://matrix.to/#
 const matrixPromotionOptions = {
   namespacePrefix: 'matrix',
   transformKey: (key: string) => key.toLowerCase(),
+  // Ingest promotes SUBTRACTIVELY (the bullet is dropped once hoisted), so a
+  // key that can never get a definition must be declined HERE — before
+  // bubbling — or the text is lost outright: the bullet is gone and the
+  // property would have to be dropped for lacking a definition. Declining
+  // leaves the bullet exactly as the user wrote it. `[[Page]]:: value` is the
+  // form that hits this (the name would contain `]]`).
+  acceptKey: isRegistrablePropertyName,
 }
 
 const propertyValues = (value: unknown): unknown[] => Array.isArray(value) ? value : [value]
@@ -702,8 +713,16 @@ const appendMatrixMessage = async (repo: any, config: MatrixConfig, event: any, 
   // key that lands definition-less is skipped by property migration forever
   // (#501). Built out here so the same tree is registered and then written.
   const messageTree = createBlocksFromEvent(event, matrixClient)
+  // `addSchema` targets whatever workspace is ACTIVE, while the write below
+  // targets the `workspaceId` captured above. A switch during the awaits
+  // already behind us would register these names into the new workspace and
+  // write the message into the old one — polluting one and leaving the other
+  // definition-less. Ingest is idempotent (deterministic message ids), so
+  // bailing here just defers this event to the next poll.
+  if (repo.activeWorkspaceId !== workspaceId) return
   const promotionNotes = await ensurePromotedPropertySchemas(repo, flattenBlockDefs(messageTree))
   for (const note of promotionNotes) console.warn('[matrix] promoted property:', note)
+  if (repo.activeWorkspaceId !== workspaceId) return
 
   await repo.tx(async (tx: any) => {
     const tagBlockId = await ensureMatrixTagBlock(tx, workspaceId, dailyId, iso)
