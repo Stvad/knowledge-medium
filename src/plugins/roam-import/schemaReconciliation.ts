@@ -18,7 +18,6 @@
 
 import type { BlockData } from '@/data/api'
 import type { Repo } from '@/data/repo'
-import { isGrammarShapedLabel, isRoundTrippableReferenceLabel } from '@/data/referenceBlock'
 import { resolveEditorOverride } from '@/data/propertyDefinitionRegistry'
 import {
   ROAM_PAGE_ALIAS_PROP,
@@ -424,19 +423,11 @@ export interface PromotedPropertyBag {
   properties?: Record<string, unknown>
 }
 
-/** Can `addSchema` accept this name at all? Mirrors its two name-hygiene
- *  rules, synchronously, so a promotion consumer can DECLINE a key before it
- *  hoists anything — see `PromotionOptions.acceptKey`. The `[[Page]]:: value`
- *  attribute form produces a name containing `]]`, which cannot round-trip as
- *  a `[[wikilink]]`; promoting it anyway would strand a definition-less cell,
- *  and dropping the property after the fact destroys the text outright for a
- *  consumer that promotes subtractively. */
-export const isRegistrablePropertyName = (name: string): boolean => {
-  const trimmed = name.trim()
-  if (!trimmed) return false
-  if (!isRoundTrippableReferenceLabel(trimmed)) return false
-  return !isGrammarShapedLabel(trimmed)
-}
+/** Re-exported from the data layer so a promotion consumer has it to hand.
+ *  It is the SAME function `addSchema` gates on, deliberately — a mirror here
+ *  could drift and let a name through that registration then rejects, after
+ *  a subtractive consumer had already dropped the source bullet. */
+export { isRegistrablePropertyName } from '@/data/userSchemasService'
 
 /** Register a definition for every promoted `key:: value` attribute a
  *  consumer is about to write, and normalize the values so the codec it
@@ -521,17 +512,12 @@ export const ensurePromotedPropertySchemas = async (
     }
   }
 
-  // Normalize against the EFFECTIVE registry, not just what this call
-  // registered. A value that does not decode under its key's schema is not a
-  // cosmetic problem: post-flip `MATERIALIZE_PROPERTY_CHILDREN_PROCESSOR`
-  // decodes during the write and THROWS, which rolls back the whole
-  // transaction — for a poll-driven caller that holds its cursor on failure
-  // (matrix ingest) that is an infinite retry on the same event, i.e. ingest
-  // stops permanently. Reshaping the value is the lesser evil.
-  //
-  // Scoping this to freshly-registered keys was tried and reverted: it was
-  // meant to protect consumers that read the raw property, but the only such
-  // consumer reads a `url`-preset key, which normalization never touches.
+  // Normalize against the EFFECTIVE registry, not merely what this call
+  // registered. A value that does not decode under its key's schema is not
+  // cosmetic: post-flip `MATERIALIZE_PROPERTY_CHILDREN_PROCESSOR` decodes
+  // during the write and THROWS, rolling the whole transaction back — and a
+  // poll-driven caller that holds its cursor on failure then retries the same
+  // event forever. Reshaping the value is the lesser evil.
   const stringNames = new Set<string>()
   const listNames = new Set<string>()
   for (const name of names) {
