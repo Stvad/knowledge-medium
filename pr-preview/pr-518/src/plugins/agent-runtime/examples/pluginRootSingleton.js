@@ -28,10 +28,8 @@ const progressProp = seedProperty({
   changeScope: ChangeScope.BlockDefault,
 })
 
-// Every type id you tag must be REGISTERED first — tagging an unknown one
-// throws and rolls the transaction back. Declare each with seedType and
-// contribute it through typeSeedsFacet, which is what this default export is:
-// nothing below runs until the runtime has resolved it.
+// Tagging an unregistered type id throws and rolls the tx back. Declaring
+// and contributing them IS this default export.
 const libraryType = seedType({
   seedKey: extensionTypeSeedKey('library'),
   revision: 1,
@@ -65,9 +63,9 @@ export const syncBooks = async (
   workspaceId: string,
   books: readonly Book[],
 ): Promise<void> => {
-  // The root page: id = uuidv5(workspaceId, NS) — the workspace is the WHOLE
-  // key, so there is one per workspace. Also repairs a row that lost its alias
-  // or type, and restores one that was deleted.
+  // id = uuidv5(workspaceId, NS): the workspace is the WHOLE key, so one per
+  // workspace. Repairs a row that lost its alias or type, restores a deleted
+  // one. These two examples are one fictional plugin, hence the shared NS.
   const root = await getOrCreateKernelPage(repo, workspaceId, {
     namespace: READWISE_ROOT_NS,
     alias: 'Readwise Library',
@@ -87,16 +85,13 @@ export const syncBooks = async (
         content: book.title,
         types: [bookType.id],
       })
-      // Fields the SOURCE owns get written on both outcomes. 'adopted' means
-      // the block was already there and this call did not touch its content or
-      // properties — not that there is nothing to write. Skipping the create
-      // would leave a first-seen book with no progress until something
-      // happened to re-fetch it, which an incremental sync never does.
-      // 'taken' wrote nothing at all, so there is no id of yours to write to.
+      // Written on 'created' AND 'adopted': adopted means the block was
+      // already there and this call left its content and properties alone,
+      // not that there is nothing to write. 'taken' wrote nothing and its id
+      // is not yours.
       if (outcome.status !== 'taken') {
-        // Both source-owned fields are written HERE rather than via the spec's
-        // \`properties\`, which is applied on CREATE only — passing the external
-        // id that way means an adopted record never receives it.
+        // Here rather than via the spec's \`properties\`, which is applied on
+        // CREATE only — an adopted record would never receive the id.
         await tx.setProperty(outcome.id, bookIdProp, book.userBookId)
         await tx.setProperty(outcome.id, progressProp, book.progress)
       }
