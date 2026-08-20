@@ -6,6 +6,7 @@ import {
   onPropertyCellBackfillProgress,
 } from '@/data/internals/propertyCellBackfill'
 import { readIsChildBackedWorkspace } from '@/data/workspaceSchema'
+import { flipWorkspaceToChildBackedProperties } from '@/data/workspaces'
 import { ActionConfig, ActionContextTypes } from '@/shortcuts/types.js'
 import { openDialog } from '@/utils/dialogs.js'
 import { showInfo, showProgress } from '@/utils/toast.js'
@@ -137,12 +138,11 @@ export const migratePropertiesToBlocksAction = ({repo}: {repo: Repo}): ActionCon
   handler: async () => {
     const workspaceId = repo.activeWorkspaceId
     if (!workspaceId) return
-    // NOT a refusal, which is what this used to be. Flip THEN backfill is the
-    // runbook — the flip turns the live maintainers on and this pass fills in
-    // the history they were not there for — so "already child-backed" is the
-    // normal case, not a dead end. It is a materially smaller job (create-only,
-    // §5's pending-materialization set), and the confirmation is where an
-    // operator finds that out.
+    // Decides which HALVES of the gesture run, and it used to end it outright
+    // ("already child-backed — nothing left to do"). Un-flipped means flip and
+    // then backfill; already-flipped means backfill alone, doing the materially
+    // smaller create-only job. The confirmation is where an operator finds out
+    // which of the two they are starting.
     const childBacked = await readIsChildBackedWorkspace(repo.db, workspaceId)
     const blockCount = await countPropertyCellBackfillCandidates(
       (sql, params) => repo.db.getAll(sql, params as unknown[] | undefined), workspaceId,
@@ -156,6 +156,26 @@ export const migratePropertiesToBlocksAction = ({repo}: {repo: Repo}): ActionCon
     if (repo.activeWorkspaceId !== workspaceId) return
 
     const banner = showProgress('Migrating properties to blocks…')
+    if (!childBacked) {
+      // FIRST, and that ordering is the whole point. The flip is what turns the
+      // live maintainers on, so a workspace flipped with zero children keeps
+      // reading cells (§5's pending-materialization fallback) while every new
+      // write starts growing children — and the pass below only has history
+      // left to fill in. Backfilling first instead opens a window where
+      // machinery exists that nothing recognizes and nothing maintains.
+      banner.update('Switching this workspace to property blocks…')
+      try {
+        await flipWorkspaceToChildBackedProperties(repo, workspaceId)
+      } catch (err) {
+        console.error('[properties-migration] flip failed:', err)
+        // "Nothing was migrated" is the load-bearing half: the flip is the
+        // gesture's first write, so a refusal leaves the graph untouched and
+        // the operator is owed that rather than left guessing what landed.
+        banner.fail('Could not switch this workspace to property blocks, so nothing ' +
+          `was migrated: ${err instanceof Error ? err.message : String(err)}`)
+        return
+      }
+    }
     let materialized = 0
     // Subscribed for the whole run, not just started with it: the pass reports
     // per committed batch, and a run of several minutes with a silent toast is

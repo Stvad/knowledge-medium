@@ -20,6 +20,13 @@ vi.mock('@/utils/toast.js', () => ({
   showInfo: (message: string, opts?: unknown) => showInfo(message, opts),
 }))
 vi.mock('../ConfirmMigrationDialog.tsx', () => ({ConfirmMigrationDialog: () => null}))
+// The gesture flips before it backfills, and the fixture below starts at
+// 'cell'. Faked here rather than pre-flipping the fixture, because a
+// pre-flipped workspace takes the create-only path and this file is about what
+// the operator sees during the FULL pass.
+vi.mock('@/data/workspaces', () => ({
+  flipWorkspaceToChildBackedProperties: async () => {},
+}))
 vi.mock('@/data/internals/propertyCellBackfill', () => ({
   PROPERTY_CELL_BACKFILL_ID: 'properties:cell-to-children',
   countPropertyCellBackfillCandidates: async () => 7,

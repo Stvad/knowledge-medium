@@ -16,6 +16,11 @@ vi.mock('@/utils/toast.js', () => ({
   showInfo: (...args: unknown[]) => showInfo(...args),
 }))
 vi.mock('../ConfirmMigrationDialog.tsx', () => ({ConfirmMigrationDialog: () => null}))
+const flipWorkspace = vi.fn<(repo: unknown, workspaceId: string) => Promise<void>>()
+vi.mock('@/data/workspaces', () => ({
+  flipWorkspaceToChildBackedProperties: (repo: unknown, workspaceId: string) =>
+    flipWorkspace(repo, workspaceId),
+}))
 
 import type { OperatorBackfillResult, Repo } from '@/data/repo'
 import { describeOutcome, migratePropertiesToBlocksAction } from '../action.ts'
@@ -46,6 +51,8 @@ const invoke = (repo: Repo) =>
 
 afterEach(() => {
   openDialog.mockReset()
+  flipWorkspace.mockReset()
+  flipWorkspace.mockResolvedValue(undefined)
   showInfo.mockReset()
   progressHandle.update.mockReset()
   progressHandle.done.mockReset()
@@ -63,7 +70,60 @@ describe('migrate_properties_to_blocks action', () => {
 
     await invoke(repo)
 
+    // The FLIP as well as the pass: it is the gesture's first write now, and
+    // it is the one the trigger will not let anyone take back.
+    expect(flipWorkspace).not.toHaveBeenCalled()
     expect(runWorkspaceBackfillNow).not.toHaveBeenCalled()
+  })
+
+  it('flips the workspace before running the pass, not after', async () => {
+    // The whole runbook in one assertion. The flip turns the live maintainers
+    // on, so a workspace flipped with zero children starts growing them from
+    // the next write while reads keep coming from the cell; backfilling first
+    // leaves a window where machinery exists that nothing recognizes and
+    // nothing maintains.
+    openDialog.mockResolvedValue(true)
+    const order: string[] = []
+    flipWorkspace.mockImplementation(async () => { order.push('flip') })
+    const {repo, runWorkspaceBackfillNow} = makeRepo({outcome: 'ran', undoHistoryCleared: false})
+    runWorkspaceBackfillNow.mockImplementation(async () => {
+      order.push('backfill')
+      return {outcome: 'ran', undoHistoryCleared: false} as OperatorBackfillResult
+    })
+
+    await invoke(repo)
+
+    expect(order).toEqual(['flip', 'backfill'])
+  })
+
+  it('migrates nothing when the flip is refused, and says so', async () => {
+    // The trigger refuses a non-owner, an e2ee workspace and any step other
+    // than cell -> children. The flip is the gesture's FIRST write, so a
+    // refusal leaves the graph untouched — which is the part an operator needs
+    // told, rather than being left to wonder what landed.
+    openDialog.mockResolvedValue(true)
+    flipWorkspace.mockRejectedValue(new Error('workspaces.properties_migration is writable by the workspace owner'))
+    const {repo, runWorkspaceBackfillNow} = makeRepo({outcome: 'ran', undoHistoryCleared: false})
+
+    await invoke(repo)
+
+    expect(runWorkspaceBackfillNow).not.toHaveBeenCalled()
+    expect(progressHandle.fail).toHaveBeenCalledWith(expect.stringMatching(/nothing was migrated/i))
+  })
+
+  it('does not re-flip a workspace that is already child-backed', async () => {
+    // Forward-only, and the trigger refuses cell-off -> children outright, so
+    // a second flip is at best a no-op write and at worst an error on the one
+    // gesture an operator repeats to catch stragglers.
+    openDialog.mockResolvedValue(true)
+    const {repo, runWorkspaceBackfillNow} = makeRepo(
+      {outcome: 'ran', undoHistoryCleared: false}, {flipped: true},
+    )
+
+    await invoke(repo)
+
+    expect(flipWorkspace).not.toHaveBeenCalled()
+    expect(runWorkspaceBackfillNow).toHaveBeenCalled()
   })
 
   it('runs against a flipped workspace, telling the operator it fills gaps', async () => {
@@ -105,6 +165,9 @@ describe('migrate_properties_to_blocks action', () => {
 
     await invoke(repo)
 
+    // Flipping the wrong graph is the worse half: forward-only by trigger, so
+    // unlike a stray Migrations page it cannot be undone by a column write.
+    expect(flipWorkspace).not.toHaveBeenCalled()
     expect(runWorkspaceBackfillNow).not.toHaveBeenCalled()
   })
 

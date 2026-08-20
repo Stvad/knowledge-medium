@@ -12,11 +12,11 @@ export interface ConfirmMigrationDialogProps {
   /** Blocks the pass will visit — the same over-approximating predicate the
    *  pass uses, hence "check" rather than "change". */
   blockCount: number
-  /** The workspace already reads properties from child blocks, so the pass
-   *  does the strictly smaller create-only job: it fills in keys with no child
-   *  blocks yet and touches nothing that already has them. Worth its own
-   *  sentence — an operator who has flipped is otherwise told a run that
-   *  rewrites nothing "will store every property as child blocks". */
+  /** The workspace already reads properties from child blocks. That decides
+   *  which halves of the gesture run — un-flipped means switch it over and then
+   *  backfill, already-flipped means backfill alone, doing the strictly smaller
+   *  create-only job. Two materially different things to consent to, and this
+   *  is where an operator finds out which one they are starting. */
   childBacked: boolean
 }
 
@@ -53,13 +53,17 @@ export const ConfirmMigrationDialog = ({
                 across {blockCount.toLocaleString()} block
                 {blockCount === 1 ? '' : 's'}, and leaves every value already
                 stored as a block exactly as it is.</>
-            : <>Every <em>registered</em> property on {blockCount.toLocaleString()} block
-                {blockCount === 1 ? '' : 's'} will also be stored as child blocks.
-                Existing values are not changed or moved.</>}
+            : <>This switches the workspace over to storing properties as child
+                blocks, then gives every <em>registered</em> property on{' '}
+                {blockCount.toLocaleString()} block{blockCount === 1 ? '' : 's'}{' '}
+                the blocks it implies. Existing values are not changed or moved,
+                and a property with no blocks yet keeps being read from where it
+                is now — so the switch itself changes nothing you can see.</>}
           {' '}A key no schema declares is skipped and stays cell-only — run{' '}
           <code>audit-properties</code> to find those.
         </p>
         <p>
+          {childBacked ? '' : 'The switch applies to everyone in the workspace. '}
           This runs on this device only — your other devices receive the result
           through sync, so run it in one place. It can take several minutes.
           Interrupting it is safe: reload or close the tab, then run it again

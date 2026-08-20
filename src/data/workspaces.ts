@@ -266,6 +266,45 @@ export const renameWorkspace = async (workspaceId: string, name: string): Promis
   if (error) throw error
 }
 
+/**
+ * Advance a workspace to child-backed properties, then stamp the local replica
+ * so the caller can act on it without waiting for sync to bring it back.
+ *
+ * A direct UPDATE, like `renameWorkspace`: `workspaces_update` RLS admits
+ * writers, and the properties_migration trigger is what narrows this to the
+ * OWNER, to the 'cell' -> 'children' step, and away from e2ee workspaces. That
+ * makes the server the authority — a local stamp taken first would be a guess
+ * at what the trigger will allow.
+ *
+ * `.select().single()` is not decoration. An UPDATE that RLS filters to zero
+ * rows SUCCEEDS, so without reading the row back a refusal we are not a writer
+ * for would be indistinguishable from a completed flip.
+ *
+ * Stamping local SQLite afterwards is the optimistic prime `primeLocalWorkspace`
+ * already does after `create_workspace`, for the same reason and with the same
+ * safety: the raw `workspaces` table has no powersync_crud trigger, so this is
+ * local-only and cannot re-upload the column, and PowerSync replays the
+ * identical value when it replicates. Without it the operator gesture would have
+ * to sit and wait for a round trip before the pass could read its own flip.
+ */
+export const flipWorkspaceToChildBackedProperties = async (
+  repo: Repo,
+  workspaceId: string,
+): Promise<void> => {
+  const client = assertSupabase()
+  const {data, error} = await client
+    .from('workspaces')
+    .update({properties_migration: 'children', update_time: Date.now()})
+    .eq('id', workspaceId)
+    .select('properties_migration, update_time')
+    .single()
+  if (error) throw error
+  await repo.db.execute(
+    `UPDATE workspaces SET properties_migration = ?, update_time = ? WHERE id = ?`,
+    [data.properties_migration, toNumber(data.update_time), workspaceId],
+  )
+}
+
 export const updateWorkspaceMemberRole = async (
   workspaceId: string,
   userId: string,

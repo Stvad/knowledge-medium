@@ -345,8 +345,11 @@
   2026-07-01 rewrite: planning prose, not a description of shipped code. In
   particular the migration is still <em>dark</em> &mdash;
   <code>workspaces.properties_migration</code> is <code>'cell'</code>
-  everywhere, no slice-C backfill exists, and nothing here should be read as
-  describing behaviour a user can observe today.
+  everywhere, and nothing here should be read as describing behaviour a user can
+  observe today. The slice-C backfill DOES now exist
+  (<code>src/data/internals/propertyCellBackfill.ts</code>, reachable from the
+  command palette), and the <strong>2026-08-20 revision</strong> below inverts the
+  runbook this document describes &mdash; read that entry before §11's ordering.
   The rename-rewrite requirements in §9 were reconciled 2026-07-30 against
   <a href="https://github.com/Stvad/knowledge-medium/issues/461">#461</a>
   (<code>references.renameBacklinks</code> moved post-commit &rarr; same-tx):
@@ -696,6 +699,46 @@
       (<a href="#s9">§9</a>).</li>
     <li>Ship as master-first slices extracted from the spike; dormant-flag landing is
       the fallback; PR #285 is the reference implementation (<a href="#s11">§11</a>).</li>
+  </ul>
+  <strong>Revised 2026-08-20 (owner decision &mdash; the runbook inverts to
+  flip-then-backfill):</strong> the order in <a href="#s11">§11</a> is now
+  <em>flip, then backfill</em>, and the operator gesture does both. At
+  <code>'children'</code> the cell is still dual-written and still the synchronous
+  read surface (<code>'cell-off'</code> is where it stops being a fallback), so
+  flipping a workspace with zero children hides nothing: reads keep coming from
+  cells under §5's pending-materialization rule, new writes start growing children,
+  and the backfill fills in history. It also deletes a whole class of problem the
+  old order created &mdash; a window in which machinery exists that nothing
+  recognizes and nothing maintains, which is what made every pre-flip machinery
+  rule guesswork. Three consequences for text above:
+  <ul>
+    <li>The cell &rarr; children pass no longer refuses a flipped workspace. Past
+      the flip it runs <em>create-only</em> &mdash; cell keys with no field row of
+      their own, the pending-materialization set &mdash; because there the children
+      are the property truth and the cell is a local derived surface; its deletion
+      halves (the reconcile union and the orphan-owner leg) are exactly what must
+      not run.</li>
+    <li><strong>&ldquo;No attestation RPC; the runbook is the gate&rdquo;
+      (<a href="#s6">§6</a>) is narrowed, not kept.</strong> That reasoning was
+      written when the flip was the <em>last</em> step; under flip-first it is the
+      first step of a gesture that otherwise runs entirely in the client, and a step
+      needing service-role credentials cannot be part of one. The successor migration
+      lets the workspace <em>owner</em> advance <code>'cell'</code> &rarr;
+      <code>'children'</code> and nothing else: <code>'children'</code> &rarr;
+      <code>'cell-off'</code> stays service-role (it retires the cell as a synced
+      fallback, safe only once every device has migrated &mdash; not a fact any
+      single client can attest to), forward-only still applies to everyone, and the
+      e2ee refusal is untouched. What makes the relaxation cheap is flip-first
+      itself: an accidental flip is now the designed first step rather than a
+      half-built tree being read.</li>
+    <li><a href="#s8">§8</a>'s e2ee gate is <em>not</em> e2ee-specific work. The
+      privacy concern was a synced plaintext <code>reference_target_id</code>, and
+      that was closed for every workspace by making the column local. Option 2 needs
+      the two pieces that must run client-side because the server cannot read e2ee
+      keys: the one-time backfill, which exists and now runs on both sides of the
+      flip, and orphan-definition synthesis, which does not exist for <em>any</em>
+      workspace. E2EE is waiting on the same missing piece plaintext workspaces
+      are.</li>
   </ul>
 </div>
 
