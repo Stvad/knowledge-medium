@@ -1,20 +1,19 @@
 // @vitest-environment happy-dom
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Session } from '@supabase/supabase-js'
 
-// Importing the module BUILDS a real supabase client (`persistSession` +
-// `detectSessionInUrl`), so auth-js resolves the stored session / callback URL
-// in the background — a live request to the placeholder host that nothing here
-// awaits, and that therefore outlives the test that triggered it. A 4xx body is
-// what auth-js gives up on; a transport error it retries with backoff. Deleting
-// this fails nothing — the leak surfaces only as stray stderr, misattributed to
-// whatever the reporter prints next — so it is unpinned by construction.
-beforeAll(() => {
-  vi.stubGlobal('fetch', async () => new Response(
-    JSON.stringify({error: 'invalid_request', error_description: 'no network in unit tests'}),
-    {status: 400, headers: {'content-type': 'application/json'}},
-  ))
-})
+// Importing the module builds a REAL supabase client, so auth-js works the
+// stored session / callback URL in the background with nothing awaiting it.
+// Answering that with a stubbed `fetch` is a trap: any 4xx is fatal to auth-js,
+// and its failure path calls `_removeSession()` — deleting the very key
+// `readPersistedSession` is asserted to return. Nothing here needs a client.
+vi.mock('@supabase/supabase-js', () => ({createClient: () => ({auth: {}})}))
+
+// Pins the mock: without it the background refresh fires. Throwing rather than
+// passing through keeps a regression off the network instead of just reporting it.
+const fetchSpy = vi.fn(() => { throw new Error('unit tests must not reach the network') })
+vi.stubGlobal('fetch', fetchSpy)
+afterAll(() => { expect(fetchSpy).not.toHaveBeenCalled() })
 
 // readPersistedSession is the load-bearing piece of the offline-boot fix:
 // it recovers the last Supabase session straight from storage so the app
