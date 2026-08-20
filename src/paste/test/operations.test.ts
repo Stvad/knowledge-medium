@@ -274,6 +274,110 @@ describe('pasteMultilineText', () => {
     expect(await childContents('root')).toEqual(['- Alpha\n- Beta', 'Next'])
   })
 
+  describe("position: 'before'", () => {
+    const abcWithBlankB = async (): Promise<void> => {
+      await createBlock('root', 'Root', null, 'a0')
+      await createBlock('a', 'A', 'root', 'a0')
+      await createBlock('b', '', 'root', 'a1')
+      await createBlock('c', 'C', 'root', 'a2')
+    }
+
+    it('keeps a multi-root paste in clipboard order onto a blank target (#497)', async () => {
+      // The target absorbs a root but its order key does NOT move, so absorbing
+      // the FIRST root put it after roots #2..N — the run came out reversed.
+      await abcWithBlankB()
+
+      await pasteMultilineText(
+        'Alpha\nBeta\nGamma',
+        env.repo.block('b'),
+        env.repo,
+        {position: 'before', scopeRootId: 'root'},
+      )
+
+      expect(await childContents('root')).toEqual(['A', 'Alpha', 'Beta', 'Gamma', 'C'])
+      expect(env.repo.block('b').peek()?.content).toBe('Gamma')
+    })
+
+    it('returns the pasted roots in clipboard order, absorbed root included', async () => {
+      // Callers focus `pasted[0]` (vim Shift+P, paste_before_selection), so the
+      // absorbed root must appear at ITS position in the run, not first.
+      await abcWithBlankB()
+
+      const pasted = await pasteMultilineText(
+        'Alpha\nBeta\nGamma',
+        env.repo.block('b'),
+        env.repo,
+        {position: 'before', scopeRootId: 'root'},
+      )
+
+      expect(pasted.map(block => block.peek()?.content)).toEqual(['Alpha', 'Beta', 'Gamma'])
+      expect(pasted.at(-1)?.id).toBe('b')
+    })
+
+    it('reparents the absorbed root\'s children onto the target', async () => {
+      await abcWithBlankB()
+
+      await pasteMultilineText(
+        '- Alpha\n  - A1\n- Gamma\n  - G1',
+        env.repo.block('b'),
+        env.repo,
+        {position: 'before', scopeRootId: 'root'},
+      )
+
+      expect(await childContents('root')).toEqual(['A', 'Alpha', 'Gamma', 'C'])
+      expect(await childContents('b')).toEqual(['G1'])
+    })
+
+    it('inserts before a non-blank target without absorbing', async () => {
+      await createBlock('root', 'Root', null, 'a0')
+      await createBlock('a', 'A', 'root', 'a0')
+      await createBlock('b', 'B', 'root', 'a1')
+
+      await pasteMultilineText(
+        'Alpha\nBeta',
+        env.repo.block('b'),
+        env.repo,
+        {position: 'before', scopeRootId: 'root'},
+      )
+
+      expect(await childContents('root')).toEqual(['A', 'Alpha', 'Beta', 'B'])
+    })
+
+    it('absorbs the FIRST root on a blank scope root, whose run lands inside it', async () => {
+      // No sibling slot, so the roots become first CHILDREN — after the target
+      // whatever `position` says. Taking the last root there would invert it.
+      await createBlock('root', 'Root', null, 'a0')
+      await createBlock('sr', '', 'root', 'a0')
+      await createBlock('existing', 'Existing', 'sr', 'a0')
+
+      await pasteMultilineText(
+        'Alpha\nBeta\nGamma',
+        env.repo.block('sr'),
+        env.repo,
+        {position: 'before', scopeRootId: 'sr'},
+      )
+
+      expect(env.repo.block('sr').peek()?.content).toBe('Alpha')
+      expect(await childContents('sr')).toEqual(['Beta', 'Gamma', 'Existing'])
+    })
+
+    it('breaks a tie below the target when pasting before it', async () => {
+      await createBlock('root', 'Root', null, 'a0')
+      await createBlock('a', 'A', 'root', 'a1')
+      await createBlock('b', '', 'root', 'a1') // tied with A
+      await createBlock('c', 'C', 'root', 'a2')
+
+      await pasteMultilineText(
+        'Alpha\nBeta',
+        env.repo.block('b'),
+        env.repo,
+        {position: 'before', scopeRootId: 'root'},
+      )
+
+      expect(await childContents('root')).toEqual(['A', 'Alpha', 'Beta', 'C'])
+    })
+  })
+
   it('no-ops an asSingleBlock paste of blank text (matches the parse path)', async () => {
     await createBlock('root', 'Root', null, 'a0')
     await createBlock('target', 'Target', 'root', 'a0')
