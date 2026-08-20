@@ -216,11 +216,12 @@
 <aside class="doc-status">
   <strong>Status: proposed design (this PR — no implementation).</strong>
   Grounded against master <code>b581e60b</code>, re-verified at
-  <code>10079dc1</code> (master merged into this branch 2026-07-15); every code
-  claim carries a file:line reference verified at those commits. The companion constraint record
-  lives in <code>docs/properties-as-blocks-migration.html</code> §12 (PR #288
-  branch <code>claude/properties-as-blocks-migration-4b60xg</code>, verified at
-  <code>a6407ed4</code>) — this doc is the "dedicated design task" that bullet
+  <code>10079dc1</code> (2026-07-15), and re-verified again after rebasing this
+  branch onto master <code>b1f266203</code> (2026-08-20); every code
+  claim carries a file:line reference current at that last commit. The companion constraint record
+  lives in <code>docs/properties-as-blocks-migration.html</code> §12 (PR #288,
+  merged to master 2026-07-21; its implementation has since landed too — §11) —
+  this doc is the "dedicated design task" that bullet
   names. It <strong>no longer gates</strong> #288's slice C: deleting the
   <code>history_mode</code> skip removed the only thing slice C needed from here,
   so the two are decoupled and unordered (§11, revised 2026-07-17).
@@ -258,19 +259,28 @@
   across live/soft/hard-deleted blocks, retiring the three-source enumeration, the
   delete-surviving side index, and the delete-event watermark. One design decision
   is open — <a href="#s16">O7</a> (undo-boundary durability when a user prunes an
-  <em>undoable</em> block; recommendation is four durable per-tx columns on
+  <em>undoable</em> block; recommendation is three durable per-tx columns on
   <code>command_events</code> — a SQLite-allocated sequence, <code>group_id</code>,
-  a wrote-a-row flag, and <code>is_replay</code> — keeping the [1000] affordance).
+  and a <code>stacked</code> flag mirroring the live recording predicate —
+  keeping the [1000] affordance).
   A second decision now sits beside it: how B1 identifies dedicated UI-state
   storage at all (§13's open problem).
   §12's arithmetic was re-grounded 2026-07-15 against live measurements of two
   client instances of the same workspace via the agent bridge (a 63-day dev
   profile, 1.94M events, and a 23-day prod profile, 401k events); measured
   numbers are labeled as such.
-  <strong>Last verified against code:</strong> 2026-07-18
-  (<code>withTriggerSuspended</code> is single-site + metadata-only, git-confirmed
-  across all history — the basis for I9; <code>command_events</code> lacks a
-  durable monotonic order and logs zero-write txs — the basis for O7;
+  <strong>Last verified against code:</strong> 2026-08-20, master
+  <code>b1f266203</code>, after ~5 weeks of mainline drift (1,222 commits). What
+  the re-verification changed: O7(a)'s persisted values generalize to a single
+  <code>stacked</code> flag — master's new <code>skipUndo</code> (data
+  migrations) falsified the four-column <code>is_replay</code> formulation
+  (§10/§16); undo stacks are per-<em>workspace</em> managers, not just
+  per-scope; the agent-bridge raw SQL path gained a synced-write guard (§2.1,
+  §6.2); <code>row_events</code>/<code>command_events</code> schemas, the
+  trigger bodies, and I9's single-suspend-site precondition are all unchanged.
+  Still true: <code>withTriggerSuspended</code> is single-site + metadata-only
+  (the basis for I9); <code>command_events</code> lacks a
+  durable monotonic order and any stack-membership signal — the basis for O7;
   <code>ensureStateChild</code> shared with <code>UserPrefs</code>;
   <code>UiState</code> uploads with <code>readOnly:'allow'</code>. Earlier:
   panel blocks 857/857 on prod, <code>workspace_id</code> immutable,
@@ -344,10 +354,10 @@
 <p>
 <code>row_events</code> is the client-side per-row audit log: three triggers on
 <code>blocks</code> write one event per row write, for local and sync-applied
-writes alike (<code>src/data/internals/clientSchema.ts:370-381</code>). Updates
+writes alike (<code>src/data/internals/clientSchema.ts:383-394</code>). Updates
 store <em>two full row snapshots</em> — before and after — including the whole
 <code>properties_json</code> and <code>references_json</code> columns
-(<code>blockJsonObjectSql</code>, <code>clientSchema.ts:386-402</code>). Nothing
+(<code>blockJsonObjectSql</code>, <code>clientSchema.ts:399-417</code>). Nothing
 reads the table at runtime (<code>clientSchema.ts:63-65</code>); it is
 intentionally unbounded and never trimmed (<code>clientSchema.ts:67-69</code>),
 and there is no client-side VACUUM anywhere in <code>src/</code>, so even a
@@ -363,7 +373,7 @@ future deletion would not return OPFS bytes.
     for a ~345k-block workspace — history bytes exceeding live-data bytes, on
     devices where OPFS quota is finite. (The earlier
     ~1.17M&nbsp;&times;&nbsp;~2&nbsp;KB figure from
-    <code>docs/row-events-retention.md:4</code> had grown ~65% by measurement
+    <code>docs/row-events-retention.md:14</code> had grown ~65% by measurement
     time.)</li>
   <li><strong>PR #288 multiplies it.</strong> The properties-as-blocks backfill
     creates ~650k rows through <code>repo.tx</code> per workspace (its §12 and
@@ -378,7 +388,7 @@ future deletion would not return OPFS bytes.
     by waiting is the cheaper per-event encoding, not a prerequisite.</li>
   <li><strong>Every fresh device pays on first sync.</strong> The observer
     materializes each downloaded block into <code>blocks</code>
-    (<code>materialize.ts:365</code>), firing the INSERT trigger once per block:
+    (<code>materialize.ts:395</code>), firing the INSERT trigger once per block:
     ~345k full-snapshot <code>create</code> events (~205&nbsp;MB measured on
     the fresh prod instance, §12) per device, recording rows the server
     already has. (§6 keeps these — an accepted cost
@@ -397,7 +407,7 @@ format — the design is judged by what those readers need (<a href="#s10">§10<
 not by compatibility.
 </p>
 
-<h2 id="s2">2. Ground truth (verified 2026-07-15, master <code>b581e60b</code>)</h2>
+<h2 id="s2">2. Ground truth (verified 2026-08-20, master <code>b1f266203</code>)</h2>
 
 <h3>2.1 The table and its writers</h3>
 
@@ -408,9 +418,9 @@ after_json TEXT, source TEXT NOT NULL, created_at INTEGER NOT NULL, group_id
 TEXT</code>. Indexes (<code>:84-97</code>): <code>(tx_id)</code>,
 <code>(block_id, created_at DESC)</code>, <code>(created_at DESC)</code>.
 Payload shapes per kind: <code>create</code> → after only
-(<code>:427-444</code>); <code>update</code>/<code>soft-delete</code> → both
-full sides (<code>:446-466</code>); <code>delete</code> (hard purge) → before
-only (<code>:471-488</code>). There is no identical-update gate: a same-values
+(<code>:442-459</code>); <code>update</code>/<code>soft-delete</code> → both
+full sides (<code>:461-481</code>); <code>delete</code> (hard purge) → before
+only (<code>:486-503</code>). There is no identical-update gate: a same-values
 UPDATE still logs two full snapshots.
 </p>
 
@@ -422,10 +432,11 @@ UPDATE still logs two full snapshots.
   <tbody>
     <tr>
       <td>All <code>repo.tx</code> writes — mutators, same-tx processors, undo/redo
-        replay via <code>applyRaw</code></td>
-      <td><code>commitPipeline.ts:255-385</code> (context set <code>:261-265</code>,
-        cleared <code>:375-383</code>; replay is a normal tx with
-        <code>isReplay</code>, <code>:166-176</code>)</td>
+        replay via <code>applyRaw</code>, and (since 2026-07-30) data-migration
+        passes committed with <code>skipUndo</code> (§10)</td>
+      <td><code>commitPipeline.ts:365-764</code> (context set <code>:461-469</code>,
+        cleared <code>:721-729</code>; replay is a normal tx with
+        <code>isReplay</code>, <code>:305-315</code>)</td>
       <td><code>'user'</code> — the only assignable value
         (<code>changeScope.ts:37-42</code>)</td>
       <td><code>source='user'</code>, <code>tx_id</code>/<code>group_id</code>
@@ -433,31 +444,37 @@ UPDATE still logs two full snapshots.
     </tr>
     <tr>
       <td>Sync-apply: observer materialize UPSERT / stream-exit DELETE</td>
-      <td><code>syncObserver/materialize.ts:344</code> (explicit
-        <code>source = NULL</code> bracket), writes at <code>:365</code>,
-        <code>:395</code></td>
+      <td><code>syncObserver/materialize.ts:371-374</code> (explicit
+        <code>source = NULL</code> bracket), writes at <code>:395</code>,
+        <code>:463</code></td>
       <td>NULL</td>
       <td><code>source='sync'</code>, <code>tx_id=NULL</code> via COALESCE/CASE
-        (<code>clientSchema.ts:412-422</code>)</td>
+        (<code>clientSchema.ts:427-437</code>)</td>
     </tr>
     <tr>
       <td>Bootstrap column backfills</td>
-      <td><code>clientSchema.ts:1364-1373</code>, bracketed by
-        <code>withTriggerSuspended</code> (<code>:1187-1200</code>)</td>
+      <td><code>clientSchema.ts:1488-1495</code>, bracketed by
+        <code>withTriggerSuspended</code> (<code>:1309-1321</code>)</td>
       <td>NULL</td>
       <td><em>No event</em> — trigger deliberately dropped for the bracket
         (bootstrap-only; safe because no other write is served in that window)</td>
     </tr>
     <tr>
       <td>Raw out-of-band SQL (agent bridge <code>sql execute</code>, dev tools)</td>
-      <td>a live, unguarded path (review finding — this row previously
-        overclaimed "forbidden"): <code>guardSyncedTableWrites</code> wraps only
-        the LocalSchema backfill execute (<code>repoProvider.ts:390-397</code>);
-        the agent bridge calls <code>repo.db.execute</code> directly
-        (<code>src/plugins/agent-runtime/commands.ts:172</code>). Such writes
-        also never upload — the upload triggers gate on
-        <code>source IS NOT NULL</code> (<code>clientSchema.ts:575</code>,
-        <code>:592</code>) — so their row_event is the only record of them
+      <td>a live path, now gated (updated 2026-08-20 — an earlier revision said
+        "unguarded", and before that overclaimed "forbidden"): every bridge SQL
+        mode funnels through <code>runSql</code>
+        (<code>src/plugins/agent-runtime/commands.ts:204-216</code>), which
+        throws on a write to <code>blocks</code>/<code>workspaces</code>/<code>workspace_members</code>
+        via <code>assertSyncedTableWriteAllowed</code> (<code>:187-202</code>,
+        the same recognizer <code>guardSyncedTableWrites</code> uses on the
+        LocalSchema backfill execute, <code>repoProvider.ts:415-422</code>)
+        unless the caller passes <code>allowSyncedWrite: true</code> (CLI
+        <code>--allow-synced-write</code>, <code>protocol.ts:119</code>). So the
+        raw class still exists — as a deliberate opt-in, plus dev tools outside
+        the bridge. Such writes also never upload — the upload triggers gate on
+        <code>source IS NOT NULL</code> (<code>clientSchema.ts:613</code>,
+        <code>:630</code>) — so their row_event is the only record of them
         <em>anywhere</em>, local or server.</td>
       <td>NULL</td>
       <td><code>source='sync'</code> (the COALESCE catch-all — logged,
@@ -470,7 +487,7 @@ UPDATE still logs two full snapshots.
 
 <p>
 PowerSync's own CRUD-apply never touches <code>blocks</code> — it writes the
-<code>blocks_synced</code> staging table (<code>blockSchema.ts:112-131</code>),
+<code>blocks_synced</code> staging table (<code>blockSchema.ts:152-163</code>),
 which has no row_events triggers. Only the observer moves data into
 <code>blocks</code>.
 </p>
@@ -486,10 +503,10 @@ which has no row_events triggers. Only the observer moves data into
     <code>block.ts:118</code>).</li>
   <li><strong>Trigger bodies self-upgrade.</strong> Every boot re-applies
     <code>DROP TRIGGER</code> + <code>CREATE TRIGGER</code> from source
-    (<code>withTriggerRecreate</code>, <code>clientSchema.ts:1170-1175</code>) —
+    (<code>withTriggerRecreate</code>, <code>clientSchema.ts:1292-1296</code>) —
     a trigger-body change ships fleet-wide with no per-change migration.</li>
   <li><strong>ALTER-based column adds have precedent and a footgun.</strong>
-    <code>ensureUndoGroupIdColumns</code> (<code>clientSchema.ts:1375-1410</code>)
+    <code>ensureUndoGroupIdColumns</code> (<code>clientSchema.ts:1499-1533</code>)
     added <code>group_id</code> to <code>row_events</code> and documents the
     ordering constraint: the ALTER must run before any trigger re-creation
     references the new column.</li>
@@ -497,17 +514,19 @@ which has no row_events triggers. Only the observer moves data into
     (<code>clientSchema.ts:99-113</code>) records one row per
     <code>repo.tx</code> — scope, description, <code>mutator_calls</code> —
     keyed by the same <code>tx_id</code> the events carry
-    (<code>commitPipeline.ts:348-368</code>). It is small (one row per tx) and
+    (<code>commitPipeline.ts:697-719</code>). It is small (one row per tx) and
     also unbounded; out of scope here beyond this note.</li>
   <li><strong>Idle machinery exists.</strong> Marker-gated one-shot jobs
     (<code>client_schema_state</code>, <code>clientSchema.ts:182-187</code>),
     <code>MarkerStore</code>/<code>PendingIdleJobs</code>
     (<code>idleMarkerJobs.ts</code>), deep-idle scheduling
     (<code>scheduleIdle.ts</code>), and the idle ANALYZE pattern
-    (<code>repoProvider.ts:412-431</code>).</li>
+    (<code>repoProvider.ts:440-471</code> — since re-verification it defers via
+    <code>scheduleDeepIdle</code> and delegates staleness to
+    <code>PRAGMA optimize</code> rather than a hand-rolled drift check).</li>
   <li><strong>DB config that matters for §9:</strong> rollback journal, not WAL
-    (<code>repoProvider.ts:312-316</code>); <code>temp_store = MEMORY</code> and a
-    256&nbsp;MiB page cache (<code>:338-339</code>); single SQLite worker.</li>
+    (<code>repoProvider.ts:322-326</code>); <code>temp_store = MEMORY</code> and a
+    256&nbsp;MiB page cache (<code>:348-349</code>); single SQLite worker.</li>
   <li><strong><code>docs/row-events-retention.md</code> is stale</strong>: it
     cites the deleted <code>rowEventsTail.ts</code> drain, a
     <code>local-ephemeral</code> source that no longer exists, and a prune design
@@ -563,7 +582,7 @@ trigger-recreation ordering):
         almost always. <strong>A workspace move records on both sides without a
         special case</strong> (review finding): a block cannot change workspace
         in place — no code path does it (a local cross-workspace write throws
-        <code>DeterministicIdCrossWorkspaceError</code>, <code>txEngine.ts:842</code>;
+        <code>DeterministicIdCrossWorkspaceError</code>, <code>txEngine.ts:494-500</code>;
         no server RPC or migration moves one; 0 in the measured stock), and even
         if one is introduced, blocks are workspace-bucketed in sync
         (<code>WHERE workspace_id IN user_workspaces</code>,
@@ -608,9 +627,9 @@ trigger-recreation ordering):
       <td><code>scope TEXT</code></td>
       <td>The writing tx's <code>ChangeScope</code>, copied from
         <code>tx_context.scope</code> (already populated per tx,
-        <code>commitPipeline.ts:263-264</code>) — <strong>through the same
+        <code>commitPipeline.ts:467-468</code>) — <strong>through the same
         source-gated projection the existing ctx columns use</strong>
-        (<code>triggerCtxColumnSql</code>, <code>clientSchema.ts:404-418</code>:
+        (<code>triggerCtxColumnSql</code>, <code>clientSchema.ts:419-433</code>:
         <code>CASE WHEN (SELECT source …) IS NULL THEN NULL</code>), so it is
         NULL for sync-applied and raw writes <em>even if</em> a raw writer
         left <code>tx_context.scope</code> poisoned — per the code's own
@@ -705,25 +724,26 @@ and <code>command_events</code> <code>tx_id</code>/<code>scope</code>/<code>user
 (§10's undo reader leans on <code>command_events.scope</code> being
 <code>NOT NULL</code>.) <strong><code>mutator_calls</code> is <em>not</em> a
 write signal</strong> (review finding — an earlier draft of this note claimed it
-was): <code>commitPipeline.ts:351-368</code> serializes the <code>tx.run</code>
+was): <code>commitPipeline.ts:701-719</code> serializes the <code>tx.run</code>
 <em>call list</em>, not whether any row was written, so a mutator invoked to no
 effect looks like a writing tx, while a raw <code>repo.tx</code> that wrote
 without <code>tx.run</code> records <code>'[]'</code> exactly like a zero-write
 tx. An undo-boundary reader keying on it would both split harmless zero-write txs
 and drop fully-pruned writing txs — which is precisely why O7(a) calls for a
-<em>separate persisted</em> wrote-a-row flag/count rather than reusing this column.
+<em>separate persisted</em> <code>stacked</code> flag (write-ness is one of its
+inputs) rather than anything derived from this column.
 </p>
 
 <p>
 Change detection compares storage columns
 (<code>OLD.x IS NOT NEW.x</code> — the exact predicate the upload trigger
-already uses, <code>clientSchema.ts:542-544</code>) but emits domain keys.
+already uses, <code>clientSchema.ts:557-559</code>) but emits domain keys.
 Column-granular only: a changed <code>properties_json</code> stores the whole
 new cell value, not a sub-key diff — see §15 for why, and note the
 props-as-blocks migration shrinks that very column structurally.
 One v1 nuance carries over with a v2-specific consequence (review finding):
 <code>userUpdatedAt</code> is serialized as
-<code>coalesce(user_updated_at, updated_at)</code> (<code>clientSchema.ts:397</code>),
+<code>coalesce(user_updated_at, updated_at)</code> (<code>clientSchema.ts:412</code>),
 and <strong>for a projected field the diff must be projected too</strong> —
 when <code>user_updated_at</code> is NULL, an update that changes only
 <code>updated_at</code> changes the domain value while the storage column is
@@ -993,7 +1013,7 @@ events" at byte cost that is noise against the creates dominating §12. Rarer
 is defensible (1/128 → p99 ≈ 590, still microseconds to walk, still bounded
 per block by its create); denser buys only checkpoint granularity. The
 constant lives in the trigger SQL, re-installed every boot
-(<code>clientSchema.ts:1170-1175</code>); mixed rates coexist freely since
+(<code>clientSchema.ts:1292-1296</code>); mixed rates coexist freely since
 readers key on <code>full</code>, never on cadence. Revisit with history-UI
 telemetry — observed walk lengths are the one number that settles this
 empirically.
@@ -1046,7 +1066,7 @@ in the history log? Options considered:
       is the record convergence debugging needs — with one honest limit on
       granularity. No new provenance column: every local event already carries
       <code>tx_id</code>, and <code>command_events</code> (scope, description,
-      <code>mutator_calls</code>; <code>commitPipeline.ts:348-368</code>)
+      <code>mutator_calls</code>; <code>commitPipeline.ts:697-719</code>)
       identifies the writing <em>tx</em> and the <code>tx.run</code> mutators it
       invoked — provenance is a join, and a later compaction pass could target it
       by that join if the volume ever warrants. What the join does <em>not</em>
@@ -1102,7 +1122,7 @@ in the history log? Options considered:
 With no exemption gate, the trigger WHEN clauses lose their
 <code>history_mode</code> condition entirely — the only remaining
 bootstrap-scoped silence is the existing <code>withTriggerSuspended</code>
-bracket (<code>clientSchema.ts:1187-1200</code>), which stays bootstrap-only
+bracket (<code>clientSchema.ts:1309-1321</code>), which stays bootstrap-only
 because dropping a trigger is DB-global and would also unlog concurrent
 writers mid-session. Invariant <a href="#invariants">I4</a> (exemption by
 provenance, never by column) survives as a standing review rule rather than a
@@ -1132,12 +1152,12 @@ whole design. By <strong>provenance</strong>: these writes go through
 <code>repo.tx</code> under <code>ChangeScope.UiState = 'local-ui'</code>
 ("Selection / focus / chrome state", explicitly <em>not undoable</em> —
 <code>changeScope.ts</code>), and <code>tx_context.scope</code> is populated per
-tx (<code>commitPipeline.ts:263-264</code>). And by <strong>the block
+tx (<code>commitPipeline.ts:467-468</code>). And by <strong>the block
 itself</strong>: UiState writes land on a small, known set of view-state blocks —
 panels and panel-stacks (<code>panelLayoutProjection.ts</code>), but also the
 user-level <code>ui-state</code> child outside a panel
-(<code>getUIStateBlock</code>, <code>stateBlocks.ts:344-362</code>) and
-plugin-specific UI-state blocks (<code>stateBlocks.ts:376-397</code>; e.g.
+(<code>getUIStateBlock</code>, <code>stateBlocks.ts:344-365</code>) and
+plugin-specific UI-state blocks (<code>stateBlocks.ts:431-456</code>; e.g.
 QuickFind's <code>quick-find-ui-state</code>) — each created by the UI-state
 machinery, not by the user (review finding: it is <em>not</em> panels only).
 The difference is decisive: scope is per-tx and lives in
@@ -1178,7 +1198,7 @@ just panels.
     root <code>ui-state</code> child via <code>getUIStateBlock</code> /
     <code>ensureUiChild</code>, the <em>plugin</em> UI-state children via
     <code>getPluginUIStateBlock</code> / <code>ensureStateChild</code>
-    (<code>stateBlocks.ts:376-397</code> — a distinct seam, easy to miss), and
+    (<code>stateBlocks.ts:431-456</code> — a distinct seam, easy to miss), and
     panels via <code>panelLayoutProjection</code>, and <em>panel-stack</em> rows
     via <code>createPanelStackRowInTx</code> (<code>tx.create</code> +
     <code>addTypeInTx</code> directly, <em>not</em> through
@@ -1219,13 +1239,17 @@ just panels.
     single-root walk never sees. Enumeration is cheap and needs no traversal
     because the roots are computable: <code>userPageBlockId(workspaceId, userId)</code>
     for each member, then <code>stateChildBlockId(userPage, 'ui-state')</code>
-    (<code>stateBlocks.ts:54-58</code>) — not an enumerated by-kind list (panels only)
+    (<code>stateBlocks.ts:55-58</code>; the derivation itself now lives in
+    <code>derivedIds.ts:97-113</code>, and <code>userStateRootBlockIds</code>
+    there derives exactly this root-id set as code) — not an
+    enumerated by-kind list (panels only)
     that a review finding showed misses the <code>layout-sessions</code> children
     and their descendants: <code>getLayoutSessionBlock</code> creates
     <code>ui-state/layout-sessions/{id}</code> through the <em>same</em>
-    <code>ensureUiChild</code> primitive (<code>stateBlocks.ts:368-374</code>) and
+    <code>ensureUiChild</code> primitive (<code>stateBlocks.ts:423-430</code>) and
     hot-activation writes land selection/history events on those blocks
-    (<code>panelLayoutProjection.ts:605-620</code>). Walking the subtree is how
+    (<code>activatePanelRowInTx</code>,
+    <code>panelLayoutProjection.ts:682-719</code>). Walking the subtree is how
     candidates are <em>found</em>; what gets <em>tagged</em> is only those the
     authorization rule above admits — provenance or identity-confirmed — with
     ambiguous descendants reported instead (review finding: "tag every descendant"
@@ -1277,7 +1301,7 @@ just panels.
     synced type — no device needs to run the backfill itself.
     <strong>But nothing guarantees any upgraded device ever opens it</strong>
     (review finding): PowerSync downloads every block for all
-    <code>user_workspaces</code> (<code>sync-config.yaml:64-76</code>), so a legacy
+    <code>user_workspaces</code> (<code>sync-config.yaml:60-76</code>), so a legacy
     collaborator's UI-state churn materializes into <em>this</em> DB — and grows
     here — for a workspace this client never activates and therefore never tags.
     The resolution turns on a distinction the "don't touch unopened workspaces"
@@ -1388,7 +1412,9 @@ just panels.
         never appears in the scan at all — the status fallback can't rescue a block
         it never discovered. So discovery is the flag partition <strong>∪ the live
         <code>block_types</code> lookup for <code>type = 'no-history'</code></strong>
-        (already indexed, <code>clientSchema.ts:861-865</code>). The two are
+        (already indexed — <code>idx_block_types_type_workspace</code>,
+        <code>clientSchema.ts:225-228</code>; an earlier draft mis-cited the
+        insert-select tail here). The two are
         complementary and each is a cheap indexed read: <code>block_types</code>
         covers live tagged blocks whatever their events look like, the flag
         partition covers deleted ones (which <code>block_types</code> drops). This
@@ -1411,7 +1437,7 @@ just panels.
         trigger-version guard before slice B only binds clients that <em>have</em>
         the guard. A client older than that release runs the unconditional
         <code>DROP</code>+<code>CREATE</code> expansion
-        (<code>clientSchema.ts:1168-1175</code>) and will never consult a body-version
+        (<code>clientSchema.ts:1292-1296</code>) and will never consult a body-version
         marker — you cannot retroactively make old code check something. The
         surviving failure is narrow but real: a block tagged <em>while a stale body
         is installed</em> (so none of its events carry the flag) that is then
@@ -1437,7 +1463,7 @@ just panels.
         <strong>Soft-deleted stale-body blocks fall between both paths</strong>
         (review finding): <code>block_types</code> is <em>not</em> a live+soft
         index — its update trigger deletes a block's entries and reinserts only
-        when <code>NEW.deleted = 0</code> (<code>clientSchema.ts:881-885</code>) —
+        when <code>NEW.deleted = 0</code> (<code>clientSchema.ts:921-925</code>) —
         and a stale body wrote no <code>no_history</code> flags, so the partial
         index is empty for that block too. The block still <em>exists</em>, so the
         hard-tombstone scan does not enumerate it either. A user-tagged block
@@ -1460,7 +1486,7 @@ just panels.
         schema bootstrap recreates triggers</strong> (review finding) — that
         bootstrap expands to <code>DROP TRIGGER IF EXISTS</code> +
         <code>CREATE TRIGGER</code> unconditionally on every boot
-        (<code>clientSchema.ts:1170-1174</code>), so recreating first would
+        (<code>clientSchema.ts:1292-1296</code>), so recreating first would
         <em>overwrite the very evidence</em> the probe looks for: the client would
         see a current body, conclude nothing happened, skip the reconciliation, and
         leave the tombstone undiscoverable. Probe, then recreate.
@@ -1544,7 +1570,7 @@ just panels.
         is the hazard — boot-time <code>withTriggerRecreate</code> reinstalls every
         body from <em>whichever client booted last</em>, so an older tab rebooting
         after slice B can reinstall a body with no <code>no_history</code> in its
-        <code>INSERT</code> list (<code>clientSchema.ts:450-463</code>), defaulting
+        <code>INSERT</code> list (<code>clientSchema.ts:465-478</code>), defaulting
         the flag to 0 on a tagged panel. Worse, a <em>slice-A</em> body writes
         <code>v = 2</code> rows that still predate the column, so even "the latest
         <code>v = 2</code> event" is not a capability test (review finding) — the
@@ -1636,9 +1662,9 @@ just panels.
     same-millisecond boundary tx can be misplaced and cause a wrong <em>merge</em>)
     and can't distinguish a fully-pruned <em>writing</em> tx from a harmless
     zero-write one. Closing it needs durable per-tx state (persisted
-    four columns on <code>command_events</code>: a SQLite-allocated sequence —
+    three columns on <code>command_events</code>: a SQLite-allocated sequence —
     <em>not</em> the session-seeded <code>tx_seq</code> — plus
-    <code>group_id</code>, a wrote-a-row flag, and <code>is_replay</code>) —
+    <code>group_id</code> and a <code>stacked</code> flag, §10) —
     provisioning an unbuilt reader (I6) — <em>or</em> restricting what the sweeper
     will act on to dedicated non-undoable storage (a sweeper-side check, not a
     scope filter and not a tagging policy — §16 O7(b)), <em>or</em> deferring §10's
@@ -1666,7 +1692,7 @@ just panels.
     some UiState writes land on ordinary content blocks, not on dedicated
     UI-state storage. Toggling the properties panel writes
     <code>showProperties</code> — a <code>ChangeScope.UiState</code> property
-    (<code>properties.ts:30-35</code>) — straight onto the target content block
+    (<code>properties.ts:29-38</code>) — straight onto the target content block
     (<code>blockActions.ts:321-322</code>). Whole-block <code>no-history</code>
     <strong>cannot</strong> prune these: the block also holds real content history,
     and the sweeper only ever deletes a block's <em>whole</em> oldest prefix, never
@@ -1713,12 +1739,14 @@ records those changes. Read against
     design (<code>:18-24</code>). ✅</li>
   <li><strong>Granularity caveat</strong> — resolution is per <em>uploaded</em>
     write, and the client compacts per-id before upload
-    (<code>compactBlockCrudEntries</code>, <code>src/services/powersync.ts:211</code>,
-    used at <code>:638</code>/<code>:672</code>; the migration's own header says
+    (<code>compactBlockCrudEntries</code>, <code>src/services/powersync.ts:250</code>,
+    used at <code>:686</code>/<code>:720</code>; the migration's own header says
     so, <code>:5-10</code>). But the local <code>source='sync'</code> events are
     <em>also</em> collapsed — PowerSync delivers checkpoint states, and the
     observer additionally skips no-op re-deliveries
-    (<code>materialize.ts:56-60</code>). Server history is at least as fine as
+    (<code>materialize.ts:63-67</code>; the gate itself is
+    <code>decideStagingRow</code>'s <code>skip-stale</code> outcome,
+    <code>reconcile.ts:86</code>, <code>:122</code>). Server history is at least as fine as
     what any receiving device could log. ✅ (Per-edit fidelity exists only in the
     authoring device's <code>source='user'</code> events — unaffected by this
     section.)</li>
@@ -1792,7 +1820,7 @@ draft are all deleted from the design. What survives is the marker that
 distinguishes sync-apply from the <em>other</em> NULL-source writers (the raw
 path, §2.1) — now purely for truthful attribution, no longer load-bearing for
 any gate: the materializer's Phase-2 bracket, which today sets
-<code>source = NULL</code> (<code>materialize.ts:344</code>), additionally sets
+<code>source = NULL</code> (<code>materialize.ts:374</code>), additionally sets
 a new nullable <code>tx_context.apply_kind</code> column — added by an
 idempotent <code>ALTER TABLE</code> ensure-migration ordered before any writer
 touches it, <em>not</em> merely an edit to the <code>CREATE TABLE IF NOT
@@ -1810,7 +1838,7 @@ pins this). The upload and workspace-invariant trigger gates key on
 <code>source</code> and are untouched (they must keep skipping sync-apply);
 only the row_events triggers' <em>label projection</em> reads
 <code>apply_kind</code>: the v1 <code>COALESCE(source, 'sync')</code>
-(<code>clientSchema.ts:422</code>) retires in favor of a truthful three-way
+(<code>clientSchema.ts:437</code>) retires in favor of a truthful three-way
 <code>source</code> tag — <code>'user'</code> (repo.tx),
 <code>'raw'</code> (<em>positive</em> <code>apply_kind = 'raw'</code> marker — the
 unguarded paths, always logged, I3), and <code>'sync'</code> for
@@ -1824,7 +1852,7 @@ implementer copying that phrasing would mislabel every old-client server change.
 <code>'raw'</code></strong> (review finding): in a mixed-version session a B
 client installs this trigger while an older tab still runs the current
 materializer, which sets only <code>source = NULL</code> and never
-<code>apply_kind</code> (<code>materialize.ts:341-345</code>). Falling through to
+<code>apply_kind</code> (<code>materialize.ts:371-374</code>). Falling through to
 <code>'raw'</code> would permanently mislabel <em>every</em> materialized server
 change until the last writer upgrades — the common case losing to the rare one.
 So <code>'raw'</code> requires <em>positive</em> evidence (a marker written by a
@@ -1832,8 +1860,9 @@ raw path), and an unmarked NULL-source write keeps the historical
 <code>'sync'</code> reading.
 <strong>Which means the raw paths must actually set that marker, or the
 <code>'raw'</code> label never appears</strong> (review finding): the known raw
-writer is a direct <code>repo.db.execute</code>
-(<code>agent-runtime/commands.ts:170-172</code>), and with the default flipped to
+writer is the bridge's <code>runSql</code>, a direct
+<code>repo.db.execute</code>/<code>get</code>/<code>getAll</code> dispatcher
+(<code>agent-runtime/commands.ts:204-216</code>), and with the default flipped to
 <code>'sync'</code> an unbracketed raw write is now <em>indistinguishable from a
 sync apply</em> — the I3 promise that raw writes are labeled truthfully would be
 vacuous. Slice B therefore brackets those paths with
@@ -1841,15 +1870,21 @@ vacuous. Slice B therefore brackets those paths with
 cleared in the same transaction, so a crash can't leave it sticky).
 <strong>Bracket every mutating SQL <em>mode</em>, not just <code>execute</code></strong>
 (review finding): the bridge exposes <code>all|get|optional|execute</code>
-(<code>agent-cli/src/protocol.ts:106</code>) and dispatches the non-<code>execute</code>
-modes to <code>repo.db.get</code>/<code>getAll</code>
-(<code>agent-runtime/commands.ts:168-173</code>) — its own read-only classifier
+(<code>agent-cli/src/protocol.ts:106</code>) and dispatches every mode through
+the one <code>runSql</code> function
+(<code>agent-runtime/commands.ts:212-215</code>) — its own read-only classifier
 already treats a mutating statement in those modes as a write
-(<code>agent-cli/src/server.ts:304-310</code>). So
+(<code>agent-cli/src/server.ts:313-335</code>). So
 <code>sql all "UPDATE … RETURNING"</code> is a raw block write that a
 <code>execute</code>-only bracket would miss, leaving it mislabeled
-<code>'sync'</code>. Bracket on <em>mutation</em>, not on mode name — or restrict
-mutations to <code>execute</code> and reject them elsewhere. The set is
+<code>'sync'</code>. Master has since made this finding easier to honor, not
+moot (re-verified 2026-08-20): all four modes now funnel through
+<code>runSql</code>, and a synced-table write there throws unless the caller
+opts in with <code>allowSyncedWrite: true</code>
+(<code>assertSyncedTableWriteAllowed</code>, <code>commands.ts:187-202</code>,
+guard call <code>:211</code>) — so slice B has a single choke point to bracket,
+and the opt-in flag is a ready-made signal for where the marker belongs.
+Bracket on <em>mutation</em>, not on mode name. The set is
 small and enumerable, which is what makes this tractable; any <em>new</em> raw
 path must bracket itself, and that is the I3 review rule. Residual, named: during that window a genuine raw
 write from a pre-B client reads as <code>'sync'</code>. That is provenance
@@ -1873,7 +1908,7 @@ NULL, and a NULL WHEN silently skips the INSERT, i.e. silently drops history
 (hence <code>IS</code> / <code>COALESCE</code>, as §5.1 already does) — and
 <strong>row references are per-trigger</strong>:
 <code>blocks_row_event_delete</code> is <code>AFTER DELETE</code>
-(<code>clientSchema.ts:471-488</code>) and has no NEW row, so any predicate
+(<code>clientSchema.ts:486-503</code>) and has no NEW row, so any predicate
 shared across the three triggers must read NEW in insert/update and OLD in
 delete.
 </p>
@@ -1884,7 +1919,7 @@ delete.
 Both serious candidates were examined honestly — the app layer is more capable
 than it first looks, since <em>both</em> major writers already hold before/after
 snapshots in JS (<code>repo.tx</code>'s snapshots map, the observer's
-<code>SyncSnapshot</code> map, <code>materialize.ts:110-113</code>) and both hold
+<code>SyncSnapshot</code> map, <code>materialize.ts:134-146</code>) and both hold
 an open write tx, so an app-layer event writer could be atomic. What decides it:
 </p>
 
@@ -1893,8 +1928,8 @@ an open write tx, so an app-layer event writer could be atomic. What decides it:
   <thead><tr><th></th><th>Triggers (chosen)</th><th>App layer</th></tr></thead>
   <tbody>
     <tr><td>Coverage</td><td><strong>Catch-all</strong>: every writer including raw paths and any future one; a write cannot dodge history silently — and "who wrote this without going through the API" is itself the forensic question</td><td>Two parallel writers to build and keep in lockstep (tx engine + observer); raw paths uncovered; a forgotten future path = silent gap</td></tr>
-    <tr><td>Diff verbosity</td><td>Per-column CASE — <strong>already proven in-tree</strong>: the upload PATCH trigger builds changed-columns-only JSON in pure SQLite (<code>blockUploadPatchJsonSql</code>, <code>clientSchema.ts:552-563</code>, <code>json_set</code>/CASE/<code>json_remove('$.__noop')</code>)</td><td>Simpler TS diff, easier unit tests</td></tr>
-    <tr><td>Upgrades</td><td>Free fleet-wide via boot-time recreation (<code>:1170-1175</code>)</td><td>Ordinary code deploy (also fine)</td></tr>
+    <tr><td>Diff verbosity</td><td>Per-column CASE — <strong>already proven in-tree</strong>: the upload PATCH trigger builds changed-columns-only JSON in pure SQLite (<code>blockUploadPatchJsonSql</code>, <code>clientSchema.ts:589-601</code>, <code>json_set</code>/CASE/<code>json_remove('$.__noop')</code>; since issue #381 it also stamps one unconditional key, <code>$.base_updated_at</code> at <code>:594</code> — the mechanism generalizes regardless)</td><td>Simpler TS diff, easier unit tests</td></tr>
+    <tr><td>Upgrades</td><td>Free fleet-wide via boot-time recreation (<code>:1292-1296</code>)</td><td>Ordinary code deploy (also fine)</td></tr>
     <tr><td>Anchor sampling</td><td>One in-trigger <code>random()</code> — no history reads</td><td>Same coin from JS</td></tr>
   </tbody>
 </table>
@@ -1905,7 +1940,7 @@ an open write tx, so an app-layer event writer could be atomic. What decides it:
   verbosity once instead of thrice, the implementation generates the v2 trigger
   bodies from a single column-spec array shared with
   <code>blockJsonObjectSql</code> (<code>:386-402</code>) and
-  <code>BLOCK_UPLOAD_COLUMNS</code> (<code>:518-534</code>) — which also
+  <code>BLOCK_UPLOAD_COLUMNS</code> (<code>:533-549</code>) — which also
   discharges PR #288's slice-A warning that the row_events serialization is a
   hand-maintained parallel of <code>BLOCK_STORAGE_COLUMNS</code> that must be
   extended in lockstep (its §11 slice A, "history/undo seam").
@@ -2084,7 +2119,7 @@ block with any <code>v IS NULL</code> event:
     creates on the prod instance) and a hard delete no <code>after_json</code>
     (§4.3). The two sides can never disagree where both exist, because
     <code>workspace_id</code> is immutable by contract
-    (<code>txEngine.ts:842</code>; a cross-workspace write throws
+    (<code>txEngine.ts:494-500</code>; a cross-workspace write throws
     <code>DeterministicIdCrossWorkspaceError</code>), so the COALESCE resolves an
     absence, never a conflict. This is not optional bookkeeping:
     <code>ALTER TABLE … ADD COLUMN workspace_id</code> initialises the entire v1
@@ -2102,7 +2137,7 @@ block with any <code>v IS NULL</code> event:
     <code>tx_id</code> joins <code>command_events</code> backfills scope from
     it (<code>command_events</code> has carried <code>scope</code> NOT NULL
     keyed by tx_id since before both measured instances' DBs;
-    <code>commitPipeline.ts:348-368</code>; no delete path exists). Key on
+    <code>commitPipeline.ts:697-719</code>; no delete path exists). Key on
     the join, <em>not</em> on <code>source = 'user'</code> — v1 source labels
     are an open set. Sync-applied events carry no <code>tx_id</code> and correctly
     stay NULL. This is provenance backfill only — v1 UI-state rows are
@@ -2160,7 +2195,8 @@ block with any <code>v IS NULL</code> event:
     completion, gating the §9 VACUUM and any §3 index revisit.</li>
   <li><strong>Chunking:</strong> a few hundred blocks (or ~2–5k events) per write
     tx, scheduled via <code>PendingIdleJobs</code> +
-    <code>scheduleDeepIdle</code> (<code>idleMarkerJobs.ts</code>) like the other
+    <code>scheduleDeepIdle</code> (<code>idleMarkerJobs.ts:39</code>,
+    <code>scheduleIdle.ts:80</code>) like the other
     catch-up passes — never on the boot or first-paint path. Each chunk holds
     the single writer briefly; live writes queue behind it, as they do behind
     any tx.</li>
@@ -2170,7 +2206,7 @@ block with any <code>v IS NULL</code> event:
     <code>stateAt</code> for every event, so a reader walking across the v1/v2
     boundary mid-migration stays sound. Do <em>not</em> assume v1 events stop
     at slice A: trigger bodies are shared DB state recreated at every boot
-    from the booting code's constants (<code>clientSchema.ts:1170-1175</code>),
+    from the booting code's constants (<code>clientSchema.ts:1292-1296</code>),
     so a stale tab on old code that re-boots reinstalls v1 bodies until the
     next new-code boot — v1 and v2 events can interleave within a block. The
     mechanism doesn't care (each v1 event rewrites from its own before/after,
@@ -2196,15 +2232,19 @@ block with any <code>v IS NULL</code> event:
   <li><strong>Ordering with the ALTERs:</strong> the column adds run in
     <code>initializePowerSyncDb</code> before the <code>CLIENT_SCHEMA_STATEMENTS</code>
     loop recreates triggers referencing them — same constraint and same slot as
-    <code>ensureUndoGroupIdColumns</code> (<code>repoProvider.ts:352-357</code>
-    area; documented footgun at <code>clientSchema.ts:1384-1391</code>).</li>
+    <code>ensureUndoGroupIdColumns</code> (<code>repoProvider.ts:372-381</code>
+    area; documented footgun at <code>clientSchema.ts:1508-1515</code>).</li>
   <li><strong>One explicit <code>ANALYZE</code> after the rewrite
     completes</strong> (the <code>(block_id, id)</code> add lands in this
     same slice — §3/§13; <code>(block_id, created_at DESC)</code> is retained
-    per §3 — any measurement-driven revisit also lands here): the automatic drift check
-    keys on <code>blocks</code> counts only (<code>analyzeIsWarranted</code>,
-    <code>clientSchema.ts:1438-1455</code>) and would never notice
-    row_events index changes.</li>
+    per §3 — any measurement-driven revisit also lands here): the automatic path
+    now delegates staleness to <code>PRAGMA optimize</code>
+    (<code>runAnalyzeIfStale</code>, <code>clientSchema.ts:1634-1657</code>; the
+    old hand-rolled <code>blocks</code>-count drift check is deleted), but its
+    arming probes name four tables and <code>row_events</code> is not among
+    them (<code>ANALYZE_ARMING_PROBES</code>, <code>:1174-1180</code>), and its
+    sample cap (<code>:1122</code>) is tuned for steady state — so a one-shot
+    explicit ANALYZE after a full-table rewrite still earns its place.</li>
 </ul>
 
 <h2 id="s9">9. VACUUM: making the bytes come back</h2>
@@ -2223,7 +2263,7 @@ tool.
   <strong>Two wa-sqlite/OPFS-specific hazards to design around:</strong>
   <ul>
     <li><strong><code>temp_store = MEMORY</code></strong>
-      (<code>repoProvider.ts:339</code>): SQLite's VACUUM builds the rebuilt
+      (<code>repoProvider.ts:349</code>): SQLite's VACUUM builds the rebuilt
       database in its temp store — with MEMORY that means holding a multi-GB
       rebuild in RAM. Bracket the VACUUM with
       <code>PRAGMA temp_store = FILE</code> (restore after), and <em>verify at
@@ -2245,7 +2285,7 @@ tool.
       <code>VACUUM INTO</code> route below — it needs only ~the compacted size
       and never journals the live file. (Rollback-journal mode makes an
       interrupted VACUUM roll back safely either way,
-      <code>repoProvider.ts:312-316</code>.)</li>
+      <code>repoProvider.ts:322-326</code>.)</li>
   </ul>
 </div>
 
@@ -2331,7 +2371,9 @@ wasteful, swap immediately after <code>INTO</code> under a quiesced writer
         moved away or been deleted; then per-member state at T; per-block
         time-seek (latest event ≤ T)</td>
       <td>Structure is <code>parentId</code> + <code>orderKey</code>
-        (<code>blockJsonObjectSql</code>, <code>clientSchema.ts:390-391</code> —
+        (<code>blockJsonObjectSql</code>, <code>clientSchema.ts:403</code>,
+        <code>:406</code> — no longer adjacent since the projection gained
+        <code>referenceTargetId</code>/<code>isFieldForm</code> between them;
         there is no childIds column), so child-set-at-T is an inverse question
         the per-block log answers but cannot enumerate cheaply. The format
         keeps it answerable: every parentId transition is logged
@@ -2344,7 +2386,7 @@ wasteful, swap immediately after <code>INTO</code> under a quiesced writer
         diff, <strong>but only when <code>after_json.deleted</code> is false</strong>
         (review finding): a create can arrive already-deleted. The sync rule selects
         <code>blocks_synced.deleted</code> with no <code>deleted = 0</code> filter
-        (<code>sync-config.yaml:64-76</code>, verified), so an
+        (<code>sync-config.yaml:60-76</code>, verified), so an
         already-soft-deleted server row materializes locally as a first-time UPSERT
         and the INSERT trigger records it as <code>kind='create'</code> carrying
         <code>deleted = 1</code>. Opening an interval on it would place a block that
@@ -2479,44 +2521,61 @@ wasteful, swap immediately after <code>INTO</code> under a quiesced writer
         non-null id. Collect via that id, <strong>but only the contiguous
         run</strong>:
         merging targets the top-of-stack entry only
-        (<code>undoManager.ts:107</code>), so a foreign tx landing mid-group
+        (<code>undoManager.ts:106-107</code>), so a foreign tx landing mid-group
         <em>splits</em> the group rather than letting undo reorder history —
         leaving two stack entries that share one <code>group_id</code>. A reader
         that took every event <code>WHERE group_id = ?</code> would re-merge
         across that split and swallow the interloper's neighbours into one undo.
         But <em>foreign</em> is much narrower than "a different
-        <code>tx_id</code>", and the difference is not cosmetic: the stacks are
-        <strong>per scope</strong> (<code>peekUndo(entry.scope)</code>), and a tx
-        is recorded at all only if its scope is undoable and it actually wrote
-        (<code>undoManager.ts:103-104</code>). So a <code>UiState</code> or
-        <code>UserPrefs</code> tx (<code>undoable: false</code>,
-        <code>changeScope.ts:61-75</code>), a sync-applied or raw event, a
-        zero-write tx, or an undoable tx on a <em>different</em> scope's stack
-        all interleave without splitting anything. A reader that stopped at any
+        <code>tx_id</code>", and the difference is not cosmetic: managers are
+        <strong>per pinned workspace</strong> (issue #186 —
+        <code>undoManagerFor(result.workspaceId)</code>,
+        <code>repo.ts:1536-1553</code>) with stacks <strong>per scope</strong>
+        within one (<code>peekUndo(entry.scope)</code>), and a tx is recorded at
+        all only if it has a pinned workspace, was not committed with
+        <code>skipUndo</code> (the data-migration opt-out added 2026-07-30,
+        <code>a4bbe6702</code>), its scope is undoable and it actually wrote
+        (<code>repo.ts:1542</code>, <code>undoManager.ts:103-104</code>). So a
+        <code>UiState</code> or <code>UserPrefs</code> tx
+        (<code>undoable: false</code>, <code>changeScope.ts:61-70</code>), a
+        sync-applied or raw event, a zero-write tx, a <code>skipUndo</code>
+        migration pass, or an undoable tx on a <em>different</em> workspace's or
+        scope's stack all interleave without splitting anything. A reader that stopped at any
         foreign <code>tx_id</code> would shatter a grouped action that today
         takes one undo — and panel churn landing between two grouped edits is the
-        everyday case, not a corner. The boundary is an <strong>undoable,
-        writing tx on the same scope's stack carrying a different
+        everyday case, not a corner. The boundary is a <strong>stacked tx on the
+        same workspace-and-scope stack carrying a different
         <code>group_id</code></strong>. <strong>Contiguity is over the whole
-        scope's tx order, not one block's events</strong> (review finding): the
-        split happens on the <em>stack</em>, which is per scope and spans every
+        stack's tx order, not one block's events</strong> (review finding): the
+        split happens on the <em>stack</em>, which is per workspace and scope and
+        spans every
         block, so a group of edits to block A separated by a same-scope undoable
         tx that wrote only block B <em>is</em> split — even though B's tx never
         touched A. The <em>intent</em>: over commit order, take the sequence of
-        <em>undoable, writing, non-replay txs in the selection's scope</em>; from
+        <em>txs live undo would have recorded — stacked txs — in the selection's
+        workspace and scope</em>; from
         the selected tx extend across adjacent such txs while their
         <code>group_id</code> equals the selection's, stopping at the first that
-        differs; <strong>replay txs must be excluded and cannot be today</strong>
+        differs; <strong>non-stacking txs must be excluded and cannot be
+        today</strong>
         (review finding): undo/redo application runs through the same commit
         pipeline and therefore <em>does</em> insert a <code>command_events</code>
         row, but is deliberately never pushed onto the live undo stack
-        (<code>repo.ts:1423</code> — <code>runTx</code> "records on undo stack",
-        <code>_replay</code> "does not"). A reader building the run from every
-        undoable writing tx in the ledger would count those replay writes as stack
-        entries or boundaries and diverge from cmd-Z behaviour. The
-        <code>isReplay</code> flag exists at commit time
-        (<code>commitPipeline.ts:177</code>, threaded from
-        <code>repo.ts:1440</code>) but is <em>not persisted</em>, so it must be
+        (<code>repo.ts:1770-1771</code> — <code>tx</code> "records on undo stack",
+        <code>_replay</code> "does not"); and since 2026-07-30 the same holds for
+        any tx committed with <code>skipUndo</code> — a <em>writing,
+        undoable-scope, non-replay</em> tx that live undo nonetheless never
+        records (<code>repo.ts:1542</code>), which is exactly what a
+        data-migration pass is. A reader building the run from every
+        undoable writing tx in the ledger would count replay or migration writes
+        as stack entries or boundaries and diverge from cmd-Z behaviour (note a
+        migration landing between two grouped edits does not even split the group
+        live: merge checks only top-of-stack, and the migration never lands
+        there). The stack-membership decision is fully determined at commit time
+        but <em>none of it is persisted</em> (<code>isReplay</code>:
+        <code>commitPipeline.ts:305-315</code>, threaded from
+        <code>repo.ts:1788</code>; <code>skipUndo</code>: consumed only in
+        <code>repo.ts:1542</code>), so it must be
         stamped onto <code>command_events</code> alongside the other per-tx state
         below;
         <code>group_id</code> and per-field diffs join from <code>row_events</code>
@@ -2524,12 +2583,12 @@ wasteful, swap immediately after <code>INTO</code> under a quiesced writer
         rather than hiding it</strong> (review findings): a <code>no-history</code>
         prune (§5.1) can delete a tx's <code>row_events</code> out from under it,
         and <code>command_events</code> — the only per-tx ledger that survives the
-        prune — <strong>cannot reconstruct this sequence on its own</strong>, two
+        prune — <strong>cannot reconstruct this sequence on its own</strong>, three
         ways.
         <em>(1) No durable order.</em> <code>command_events</code> carries only a
         millisecond <code>created_at</code> and a session-seeded, non-persisted
         <code>tx_seq</code> (<code>let seq = Date.now(); () =&gt; ++seq</code>,
-        <code>repo.ts:751-756</code>) — neither a DB-wide monotonic key like
+        <code>repo.ts:959-964</code>) — neither a DB-wide monotonic key like
         <code>row_events.id</code>. When A(g), B(other group, only a pruned
         <code>no-history</code> block), C(g) commit in one millisecond, B can be
         placed <em>outside</em> A–C, so A and C look adjacent and same-group and
@@ -2537,7 +2596,7 @@ wasteful, swap immediately after <code>INTO</code> under a quiesced writer
         the "extra split" an earlier draft wrongly claimed.
         <em>(2) No write signal.</em> <code>command_events</code> inserts a row for
         <em>every</em> <code>repo.tx</code> including zero-write ones
-        (<code>commitPipeline.ts:351-368</code>), which live undo ignores
+        (<code>commitPipeline.ts:701-719</code>), which live undo ignores
         (<code>undoManager.ts:102-104</code>); so "a tx with no surviving
         <code>row_events</code> is a boundary" also fires for a harmless zero-write
         tx and splits a group live-undo keeps, while filtering to
@@ -2551,20 +2610,37 @@ wasteful, swap immediately after <code>INTO</code> under a quiesced writer
         So "unprovable ⇒ boundary" is not a safe default either: it over-splits as
         readily as the alternative under-splits.
         The honest fix is <strong>durable per-tx state that survives the prune</strong>
-        — on <code>command_events</code>, all <strong>four</strong> values already
+        — on <code>command_events</code>, <strong>three</strong> values already
         computed at commit time: a <em>real</em> DB-wide monotonic tx sequence, the
-        <code>group_id</code>, a wrote-a-row flag/count, and
-        <strong><code>is_replay</code></strong> (review finding — an earlier draft
-        listed only the first three, even though this same contract had just
-        established that replay txs must be excluded and that <code>isReplay</code>
-        is not persisted today; an implementation following the three-column list
-        would let undo/redo replay commits appear as ordinary undoable writing txs,
-        becoming false stack entries or group boundaries). With those, order,
-        membership, write-ness, and replay status all reconstruct with no surviving
-        <code>row_events</code> at all. Note the existing
+        <code>group_id</code>, and <strong><code>stacked</code></strong> — a flag
+        mirroring the live recording predicate exactly (pinned workspace present,
+        not <code>skipUndo</code>, not replay, undoable scope, wrote rows —
+        <code>repo.ts:1542</code> + <code>undoManager.ts:103-104</code>; every
+        input is fixed by the time step 4 writes the <code>command_events</code>
+        row, so the flag is computable inside the same commit). Two earlier
+        drafts arrived here the hard way (review findings): the first listed
+        sequence + <code>group_id</code> + a wrote-a-row flag and forgot replay
+        exclusion; the second added <code>is_replay</code> as a fourth column —
+        correct against the code it was verified on, then falsified within weeks
+        when master added <code>skipUndo</code> (2026-07-30), a second class of
+        writing, undoable-scope, non-replay txs that never stack. An
+        implementation following the four-column list would count every
+        data-migration pass as stack entries and group boundaries.
+        <code>stacked</code> is the form that cannot rot this way: it persists
+        the recording <em>decision</em>, not the inputs the decision happens to
+        have today. With it, order, membership,
+        and stack status all reconstruct with no surviving
+        <code>row_events</code> at all — <code>workspace_id</code>, the remaining
+        partition key, already persists as the pinned value
+        (<code>commitPipeline.ts:697-719</code>). (Live stacks can also be
+        wholesale-<em>cleared</em>: a data migration must call
+        <code>UndoManager.clear()</code> and say so, per the migration-runner
+        contract, <code>repo.ts:3105-3120</code>. Ledger reconstruction still
+        yields boundaries for entries live undo has discarded — correct, because
+        the reader reconstructs grouping, not current availability.) Note the existing
         <code>tx_context.tx_seq</code> is <em>not</em> that sequence (review
         finding): it is seeded from <code>Date.now()</code> per <code>Repo</code>
-        and incremented in-memory (<code>repo.ts:751-756</code>), so a clock
+        and incremented in-memory (<code>repo.ts:959-964</code>), so a clock
         rollback or a second session can place a later tx below an earlier one —
         persisting it would not give a total order. (a) needs a SQLite-allocated
         monotonic value, the way <code>row_events.id</code> is DB-wide monotonic —
@@ -2594,8 +2670,8 @@ wasteful, swap immediately after <code>INTO</code> under a quiesced writer
         pruned block), C(g) case, B has no surviving <code>row_events</code> to join,
         so its membership is lost and the fold diverges from live undo despite the
         durable columns being present. So under O7(a), <code>command_events</code>
-        supplies the tx sequence, <code>scope</code>, <code>group_id</code>,
-        write-ness and <code>is_replay</code>, and <code>row_events</code> supplies
+        supplies the tx sequence, <code>scope</code>, <code>workspace_id</code>,
+        <code>group_id</code> and <code>stacked</code>, and <code>row_events</code> supplies
         only the surviving per-field diffs. (Under O7(b) the question does not arise:
         no undoable tx is ever pruned, so every tx still has its events.)
         Two per-kind carve-outs: a <code>create</code>
@@ -2604,7 +2680,7 @@ wasteful, swap immediately after <code>INTO</code> under a quiesced writer
         after state — not the create's own <code>after_json</code></strong>: a tx
         that creates a block and then writes it again (QuickFind's create-page
         does <code>tx.create</code> then <code>repo.addTypeInTx</code>,
-        <code>QuickFind.tsx:534-543</code>) leaves the create's snapshot holding
+        <code>QuickFind.tsx:550-557</code>) leaves the create's snapshot holding
         only the bare row, so redoing from it would silently drop the type and
         aliases the same action added — the fold rule above already yields the
         right state, and the carve-out is only about <em>where undo stops</em>
@@ -2616,13 +2692,14 @@ wasteful, swap immediately after <code>INTO</code> under a quiesced writer
         fields get clobbered or counted as drift. Drift check = my (changed)
         after vs live <code>blocks</code> row. Two more constraints a
         row_events-backed undo must carry from the live engine, or it corrupts
-        (review findings): <strong>(1) engine metadata is excluded from the
+        (review findings; (3) re-verified 2026-08-20): <strong>(1) engine
+        metadata is excluded from the
         un-apply and the drift check.</strong> A compact event's changed-field
         set includes <code>updatedAt</code> / <code>userUpdatedAt</code> /
         <code>updatedBy</code> because <code>metadataPatch</code> advances them on
-        every write (<code>txEngine.ts:906-927</code>), but replay deliberately
+        every write (<code>txEngine.ts:1231-1253</code>), but replay deliberately
         <em>stamps</em> replay-time metadata rather than restoring the old
-        author/time (<code>txEngine.ts:770-772</code>, <code>:846-854</code>).
+        author/time (<code>txEngine.ts:1079-1081</code>, <code>:1165-1173</code>).
         Un-applying those <code>before</code> values verbatim would regress the
         row version and attribution, and drift-checking them would report drift on
         any block touched since — so the reader restores content/structure fields
@@ -2637,7 +2714,17 @@ wasteful, swap immediately after <code>INTO</code> under a quiesced writer
         under a still-tombstoned parent and abort the undo (the
         <code>core.merge</code> case that rule was written for). The reader folds
         by <code>id</code> for the per-field before/after values, then applies in
-        <code>replayApplicationOrder</code>, not id order.</td>
+        <code>replayApplicationOrder</code>, not id order.
+        <strong>(3) Topological order alone is not enough — rejected rows
+        retry.</strong> The live <code>_replay</code> worklist-defers any row a
+        row-level trigger rejects (alias collision, parent-deleted) and re-applies
+        it after the rest, rethrowing only on a zero-progress pass
+        (<code>repo.ts:1934-1952</code>): the sort cannot express resource
+        constraints <em>between equal-depth rows</em> — undoing a merge must
+        release the target's alias before the source re-claims it. A
+        row_events-backed reader restoring a folded multi-row target inherits the
+        same obligation; a single-pass applier aborts on states the live engine
+        replays fine.</td>
     </tr>
     <tr>
       <td>Forensics / incident recovery (backlink-wipe class)</td>
@@ -2666,6 +2753,20 @@ wasteful, swap immediately after <code>INTO</code> under a quiesced writer
 deleted (§5), this section stops being a gate. #288's slice C no longer needs
 anything from this project — it logs its burst like any other writer, and the
 former G1/G2 negotiation is moot.</em></p>
+
+<p><em>Revision note (2026-08-20): #288 merged 2026-07-21, and its
+implementation has since landed on master — the cell→children pass runs from
+the command palette through <code>repo.tx</code> mutators
+(<code>apply_block_patches</code>), gated on a <strong>synced</strong>
+completion claim (<code>workspaces.properties_migration</code>, still
+<code>'cell'</code> on the live workspaces as of this date — the burst has not
+hit any log yet), committed with <code>skipUndo</code>, and required to clear
+the workspace's undo stacks. Three consequences here: G1–G5 stand unchanged
+(the pass is an ordinary <code>repo.tx</code> writer, §2.1 row 1); G5's
+"waiting buys only the cheaper encoding" is now the live trade, since the
+runnable migration predates slice A and logs v1 full snapshots if run first;
+and its <code>skipUndo</code> txs are precisely the class §10's
+<code>stacked</code> flag exists to exclude.</em></p>
 
 <p>What this design now says to the props migration, in its §12 terms:</p>
 
@@ -2704,7 +2805,10 @@ former G1/G2 negotiation is moot.</em></p>
 
 <p>
 Measured live 2026-07-15 via the agent bridge, on two client instances of the
-same ~345k-block workspace. Byte figures are payload bytes —
+same ~345k-block workspace. (Re-checked 2026-08-20 on the prod instance:
+477,766 events — +77k over 36 days, all organic; no migration burst, the
+properties claim is still <code>'cell'</code>, §11. The dated figures below
+stand.) Byte figures are payload bytes —
 <code>coalesce(length(before_json),0)+coalesce(length(after_json),0)</code>; the
 bare <code>length(a)+length(b)</code> is NULL for creates and hard deletes
 (one NULL side each) and so silently drops exactly the full-by-nature rows that
@@ -2838,7 +2942,7 @@ into is smaller).
         <strong>transactional trigger recreation</strong> — wrap each
         <code>withTriggerRecreate</code> DROP+CREATE pair and the
         <code>withTriggerSuspended</code> bracket in a write transaction
-        (<code>clientSchema.ts:1170-1175</code>) so the swap is atomic to every
+        (<code>clientSchema.ts:1292-1296</code>) so the swap is atomic to every
         connection (review finding: without it a multi-tab boot can write
         <code>blocks</code> while the row-event trigger is absent, creating exactly
         the content gap the no-wall reconstruction design assumes cannot happen —
@@ -2957,14 +3061,15 @@ into is smaller).
         subtree membership</strong> (review finding): descendant membership is
         mutable block structure — the <code>ui-state</code> root is an ordinary
         child of the user's page and <code>tx.move</code> permits re-parenting any
-        block under any non-deleted parent (<code>txEngine.ts:486-506</code>), so a
+        block under any non-deleted parent (<code>txEngine.ts:640-695</code>), so a
         user or plugin could move an undoable content block under the subtree,
         apply the visible type, and B1 would "structurally confirm" it and prune
         undoable history — the gate defeating itself. The sound test is that these
         blocks have <strong>computable ids</strong>:
         <code>userPageBlockId = uuidv5(workspaceId:userId)</code> and
         <code>stateChildBlockId = uuidv5(parentId:namespace)</code>
-        (<code>stateBlocks.ts:54-58</code>). A <em>moved</em> content block cannot
+        (<code>stateBlocks.ts:55-58</code>, derivation in
+        <code>derivedIds.ts:97-113</code>). A <em>moved</em> content block cannot
         acquire one of those ids — they are already occupied by the real state
         blocks — so this is strictly stronger than parentage.
         <strong>But only the fixed-namespace links are derivable offline</strong>
@@ -2976,7 +3081,7 @@ into is smaller).
         session keys on a <code>layoutSessionId</code> minted from browser storage
         (<code>layoutSessionId.ts:60-72</code>) and a plugin child on a
         caller-supplied key (<code>getPluginUIStateChild</code>,
-        <code>stateBlocks.ts:403-410</code>). Neither is derivable from anything
+        <code>stateBlocks.ts:463-472</code>). Neither is derivable from anything
         this device holds, so another device's untyped layout-session or plugin
         child in a synced-but-unopened workspace would simply never appear in a
         computed set. Those are found by <em>traversing</em> the children of the
@@ -3005,7 +3110,7 @@ into is smaller).
           <strong>And computed identity is not unforgeable either</strong> (review
           finding, which removes the last candidate signal): <code>tx.create</code>
           accepts a caller-supplied id (<code>const id = data.id ?? newId()</code>,
-          <code>txEngine.ts:340-344</code>), and raw SQL can insert any id, so a
+          <code>txEngine.ts:460-464</code>), and raw SQL can insert any id, so a
           plugin can <em>squat</em> a computed UI-state id <em>before</em> the real
           state block is lazily created — <code>DuplicateIdError</code> only
           prevents colliding with one that already exists. A content block with real
@@ -3027,7 +3132,7 @@ into is smaller).
               flag</strong> (review finding), which is what actually sets this
               option's price: a panel created on device A arrives on device B
               through the <code>blocks</code> sync projection, which carries only
-              the existing columns (<code>sync-config.yaml:64-76</code>). A
+              the existing columns (<code>sync-config.yaml:60-76</code>). A
               local-only creation flag would therefore be absent on every receiving
               device — and since type, parentage and computed id have all just been
               ruled out, B would have no sound fallback and would either skip
@@ -3037,7 +3142,12 @@ into is smaller).
               change, a <code>sync-config.yaml</code> change, and a PowerSync
               deploy — not merely a code change in the creation path. That is a
               materially bigger step than this option looked at first, and it is
-              the honest comparison point for (ii) and (iii).
+              the honest comparison point for (ii) and (iii). (Since verified in
+              practice, 2026-08-20: master shipped exactly this shape for the
+              properties-migration claim — a new synced
+              <code>workspaces.properties_migration</code> column, regenerated
+              sync-config, PowerSync deploy. So (i)'s price is a known, practiced
+              recipe now — still a schema+deploy step, no longer a novel one.)
               <strong>But a creation-time flag does not exist on the stock</strong>
               (review finding), including the 14.7k-event panel that motivates the
               whole project, and the only signals available to backfill it are the
@@ -3066,7 +3176,7 @@ into is smaller).
           <em>And the deferral is not free either</em> (review finding): B1-era tags
           on ordinary content produce histories that, if B2 later enables the
           affordance under O7(a), lack the durable
-          <code>tx_seq</code>/<code>group_id</code>/write-count/<code>is_replay</code>
+          tx-sequence/<code>group_id</code>/<code>stacked</code>
           state O7(a) requires — and for hard-deleted ones only
           <code>row_events</code> ever carried that boundary data. So B2 must
           first backfill or <em>exclude</em> pre-O7 tagged content histories, or
@@ -3121,8 +3231,8 @@ into is smaller).
 fast-check fuzz suites</strong>, following <code>docs/fuzzing.md</code>
 conventions and the shared harness from the fuzzing-infrastructure work
 (<code>fuzzKernelHarness</code>/<code>statefulFuzzGuard</code>; fixed-seed
-smoke tier inside <code>yarn run check</code>, random-seed deep runs via
-<code>yarn fuzz</code> + the nightly workflow, repro via
+smoke tier inside <code>pnpm run check</code>, random-seed deep runs via
+<code>pnpm fuzz</code> + the nightly workflow, repro via
 <code>FUZZ_SEED</code>/<code>FUZZ_PATH</code>). Slice A: a stateful suite
 drives random edit sequences (create / update / no-op update / soft-delete /
 restore / hard-delete, projected-field edits) against a model oracle —
@@ -3314,7 +3424,7 @@ generator, which is how both were found.
         (review finding): <code>userUpdatedAt</code> is part of the serialized row
         state (<code>blockJsonObjectSql</code>), and the trigger-suspended
         <code>user_updated_at</code> backfill changes it with no event
-        (<code>clientSchema.ts:1364-1369</code>). Since §8.1 now rewrites a
+        (<code>clientSchema.ts:1490-1495</code>). Since §8.1 now rewrites a
         <code>before_json ≠ runningState</code> seam as an ordinary compact event
         (no marker — I9), a reader reconstructing a <em>pre</em>-gap event from a
         newer-side base picks up the <em>post</em>-backfill metadata, so
@@ -3722,30 +3832,38 @@ generator, which is how both were found.
     future undo-from-history reader (§10) unable to reconstruct the tx boundary:
     <code>command_events</code> survives the prune but has no DB-wide monotonic
     order (only ms <code>created_at</code> + a session-seeded, non-persisted
-    <code>tx_seq</code>) and no wrote-a-row signal (it logs zero-write txs too), so
+    <code>tx_seq</code>) and no stack-membership signal (it logs zero-write txs,
+    replays, and — since master added <code>skipUndo</code>, 2026-07-30 —
+    data-migration txs identically), so
     a same-millisecond boundary tx can be misplaced into a wrong <em>merge</em>,
     and a fully-pruned writing tx is indistinguishable from a zero-write one. Three
     candidate resolutions, none yet chosen:
     <ul>
       <li><em>(a) Provision durable per-tx state now</em> — on
-        <code>command_events</code>, four values all already computed at commit
+        <code>command_events</code>, three values all already computed at commit
         time: a <strong>SQLite-allocated</strong> DB-wide monotonic tx sequence
         (monotonic the way <code>row_events.id</code> is — but <em>not</em> a plain
         <code>AUTOINCREMENT</code> column added to <code>command_events</code>,
         which its <code>tx_id TEXT PRIMARY KEY</code> forecloses; a side sequence
         table or a rowid-making rebuild, per §10), the
-        <strong><code>group_id</code></strong>, a <strong>wrote-a-row
-        flag/count</strong>, and <strong><code>is_replay</code></strong>. All four
-        are load-bearing, each for a distinct failure the review surfaced:
+        <strong><code>group_id</code></strong>, and
+        <strong><code>stacked</code></strong> — a flag persisting the live
+        recording decision itself (pinned workspace, not <code>skipUndo</code>,
+        not replay, undoable scope, wrote rows — <code>repo.ts:1542</code>).
+        Each is load-bearing for a distinct failure the review surfaced:
         without the sequence there is no durable order (the existing
         <code>tx_context.tx_seq</code> is <code>Date.now()</code>-seeded per session,
-        <code>repo.ts:751-756</code>, so persisting it gives no total order);
+        <code>repo.ts:959-964</code>, so persisting it gives no total order);
         without <code>group_id</code> a fully-pruned same-group tx can't be shown to
         belong to the group and <em>over-splits</em> an action live undo merges;
-        without the write flag a zero-write tx is indistinguishable from a pruned
-        writing one (and <code>mutator_calls</code> can't substitute — §3); without
-        <code>is_replay</code> undo/redo replays are counted as stack entries
-        (<code>repo.ts:1423</code>). Closes O7 exactly, and the columns sit on the
+        without <code>stacked</code> a pruned writing tx is indistinguishable
+        from a zero-write one (and <code>mutator_calls</code> can't substitute —
+        §3), and replay or <code>skipUndo</code>-migration txs are counted as
+        stack entries. An earlier revision specified separate wrote-a-row and
+        <code>is_replay</code> columns instead; master's <code>skipUndo</code>
+        falsified that within weeks of its verification (§10) —
+        <code>stacked</code> persists the decision, not its current inputs, and
+        cannot rot that way. Closes O7 exactly, and the columns sit on the
         low-volume per-tx table — but it is persisted state provisioned for a reader
         that does not exist yet (I6).</li>
       <li><em>(b) Restrict what the <strong>sweeper will act on</strong> —
