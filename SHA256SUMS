@@ -1729,7 +1729,7 @@ a4b29da45b71646760ea11229b8b6e46a7866453446de4638cdad117d9e9ebcb  ./src/App.js
 39808076fb3f1d8e9d016a11e4bcf0d52b4b7cac48154d753e23b687058e605c  ./src/App.js.map
 0b6cdff83c4e2e654daed8de1db8c4dca693242715e28de06767a51c7c78de15  ./src/appUpdate.js
 90769c02d289c099463e0237f99fa41a7d0faec88ff0ec0c7261af894a4fb1b9  ./src/appUpdate.js.map
-d22fa48994bf187b29cd8017a7ff3ff338f37154c189b72da064c6a4163ee776  ./src/appVersion.js
+9244a5ed49ca12c6af2833227c80df8802a2ebb8d5200d86e9edcf39a83fdd43  ./src/appVersion.js
 76bd53c764d4393e8e6411205df2c6642a2c684e22691666337476b2a22938a5  ./src/appVersion.js.map
 fea5c9bcdb0b19b9e7a2c87061e8af20afffcb227e47dba1dada4088258e6f93  ./src/bootstrap/resolveWorkspace.js
 c357de0c880a035b6a5fc81aa7642f7adc3c69f64384e749738c74fb09afa57e  ./src/bootstrap/resolveWorkspace.js.map
@@ -2978,8 +2978,8 @@ fe80785fdb6e725a761c2231e621dad2c196b4de68a209c550acb636c321ddcc  ./src/plugins/
 346dc1565036eda6c9be10de3b8fa256ec8ccf6678126164ff20eccc7174311b  ./src/plugins/spatial-navigation/shell.js.map
 f7c3b1648c4ebc044625e67daaa95c2a1fd2689c45c8644038de0a49ba590fdd  ./src/plugins/spatial-navigation/surface.js
 73ca2d4bab1f343202bef7f239594746c45472e850f1337755933075c7a1519e  ./src/plugins/spatial-navigation/surface.js.map
-c7dc8bc56c85e3e8d0211fbf5623efc29652ec63e0febbc29b4021009eaa2446  ./src/plugins/spatial-navigation/walker.js
-61a8c10a706eedcc1748f0bc75bc0efca1d1918aea1bff23c25d69396a35a807  ./src/plugins/spatial-navigation/walker.js.map
+7cb82bd36e44d5988146ec601147bdd2214d70dbb2c24aa9a83fde4dcc5f63cc  ./src/plugins/spatial-navigation/walker.js
+a75dab22ac7e772fc9ab4573d48dddbf658e2d42f0d3a26bbdbc77e463ee02db  ./src/plugins/spatial-navigation/walker.js.map
 23a56900aefc6a415e38eb832b5b60d3381a7fd7660659efa86ce174fd4fd2d8  ./src/plugins/srs-rescheduling/RescheduleToast.js
 fc64caa697a209f4993ec5a23bf9046f53f9689ef592a2df1774eb8ae7f6c15b  ./src/plugins/srs-rescheduling/RescheduleToast.js.map
 4c6cb84c8f7d516a0d8be1dc2922a7772a39e041728f102ae03c0b5c952c42ba  ./src/plugins/srs-rescheduling/dataExtension.js
@@ -3348,8 +3348,8 @@ ea7891e59b3608440c35c38901ebf443535471174fcbae950c1c74f2885c571a  ./src/utils/vi
 69754adc2a0ce8f9699da30476838e93fd95bd4b61eda37060f239224bc9b656  ./src/utils/viewTransition.js.map
 eda7cd6e992fb9f7324505e9817253123005c192d80e9c52ac4b14967936955c  ./src/utils/viewport.js
 a2bcdb138bcf84f7f3f9fc982c821e724fe578c3ea7971a890ea1ea9bc4c837f  ./src/utils/viewport.js.map
-bd816899e02e991f3c79f54ebce0673f478f91b3f73a9deed6867353b052b05d  ./sw.js
-d1d6f4bba0a81062c12d5d37e938f16b5423474a155e2367051dd16cb061f15a  ./version.json
+f20d9e9c81e92f57432abace71a1e908300a4f623c952f96f87bc678782d8269  ./sw.js
+e28a24eeca246da497ca7b42643afa9f20a79ab0842737aeca1f0bf88ec6df75  ./version.json
 4a748afd443918bb16591c834c401dae33e87861ab5dbad0811c3a3b4a9214fb  ./vite.svg
 643714fb239b199a921024c34f82d13697a3803c91c97ff8da10455a09249406  ./wa-sqlite-async.wasm
 d167becf5a6949b1f31b1d026dc15e138b2b34b12fc44b71c56164392900b3b8  ./wa-sqlite.wasm
