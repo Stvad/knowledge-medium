@@ -58,6 +58,10 @@ export declare const planMintedNonOpen: (
   preBeads: BeadRow[],
   freshBeads: BeadRow[],
 ) => { id: string; number: number }[]
+export declare const planReopenedClosed: (
+  beads: BeadRow[],
+  issueByNumber: Map<number, IssueInfo>,
+) => { id: string; number: number }[]
 export declare const planLocalWins: (
   beads: BeadRow[],
   issueByNumber: Map<number, IssueInfo>,

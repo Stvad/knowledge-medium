@@ -22,6 +22,7 @@ import {
   planCloseReconciliation,
   planLocalWins,
   planMintedNonOpen,
+  planReopenedClosed,
   planPriorityFixes,
   planRestoreArgs,
   REPO,
@@ -149,6 +150,17 @@ describe('bodyFilePaths / resolveBodyPath', () => {
 
   it('skips the stdin sentinel', () => {
     expect(bodyFilePaths('gh pr create -F -')).toEqual([])
+  })
+
+  it('extracts release notes files', () => {
+    expect(bodyFilePaths('gh release create v1 --notes-file notes.md')).toEqual(['notes.md'])
+  })
+
+  // Hit live: a commit message PROSE-mentioning --notes-file was read as a
+  // file reference and the fail-closed missing-file check blocked the commit.
+  it('ignores body-file flags that appear only inside quoted prose', () => {
+    expect(bodyFilePaths('git commit -m "gh release --notes-file joins body-file extraction"')).toEqual([])
+    expect(bodyFilePaths('gh pr comment 5 --body "try --body-file x.md next time"')).toEqual([])
   })
 
   it('resolves ~, absolute, and relative paths like the shell would have', () => {
@@ -359,7 +371,34 @@ describe('buildIssueRefsMessage', () => {
     expect(msg).toContain('close keyword targets a PR')
     expect(msg).toContain('close keyword on an already-closed issue')
     expect(msg).toContain('#42 → COULD NOT VERIFY')
+    // a failed lookup suppresses the bypass footer: offering it there would
+    // invite bypassing a reference no one has read
+    expect(msg).not.toContain('KM_ISSUE_REFS_OK=1')
+    expect(msg).toContain('lookups FAILED')
+  })
+
+  it('offers the bypass only when every lookup resolved', () => {
+    const msg = buildIssueRefsMessage(
+      [{ number: 653, info: { title: 'Real title', state: 'open', isPr: false } }],
+      new Set<number>(),
+    )
     expect(msg).toContain('KM_ISSUE_REFS_OK=1')
+  })
+})
+
+describe('planReopenedClosed', () => {
+  it('flags a closed bead whose linked issue is open (GitHub-side reopen)', () => {
+    const beads = [bead({ id: 'km-a', status: 'closed', external_ref: ref(9) })]
+    expect(planReopenedClosed(beads, issues([[9, { state: 'OPEN', labels: [] }]]))).toEqual([
+      { id: 'km-a', number: 9 },
+    ])
+  })
+
+  it('ignores open beads, closed issues, and unlinked beads', () => {
+    const map = issues([[9, { state: 'CLOSED', labels: [] }]])
+    expect(planReopenedClosed([bead({ id: 'km-a', status: 'closed', external_ref: ref(9) })], map)).toEqual([])
+    expect(planReopenedClosed([bead({ id: 'km-a', status: 'open', external_ref: ref(9) })], issues([[9, { state: 'OPEN', labels: [] }]]))).toEqual([])
+    expect(planReopenedClosed([bead({ id: 'km-a', status: 'closed', external_ref: null })], map)).toEqual([])
   })
 })
 
@@ -720,6 +759,25 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     expect(r.stdout).toContain('restored km-tC')
     expect(shimCalls()).toContain('bd close km-tC -r done')
     expect(shimCalls()).toContain('--issues km-tC')
+  })
+
+  // The documented asymmetry, enforced: a GitHub-side reopen bumps the issue
+  // timestamp, so the newer-local test cannot flag the closed bead — the
+  // reopened-closed plan must snapshot it so the restore closes the bead
+  // again and the push-back re-closes the issue.
+  it('undoes a GitHub-side reopen of a closed bead', () => {
+    const closedRow = { id: 'km-tD', status: 'closed', priority: 1, title: 'T', description: 'D', external_ref: ref(14), updated_at: '2026-08-19T00:00:00Z' }
+    const revertedRow = { ...closedRow, status: 'open' }
+    const { run, shimCalls } = makeSyncRepo({
+      issues: [{ number: 14, state: 'OPEN', labels: [{ name: 'priority::high' }], updatedAt: '2026-08-20T05:00:00Z' }],
+      lists: [[closedRow], [closedRow], [revertedRow]],
+      shows: [[{ ...closedRow, close_reason: 'done' }], [revertedRow]],
+    })
+    const r = run()
+    expect(r.status).toBe(0)
+    expect(r.stdout).toContain('restored km-tD')
+    expect(shimCalls()).toContain('bd close km-tD -r done')
+    expect(shimCalls()).toContain('--issues km-tD')
   })
 
   // bd's partial-output shape: found rows on stdout, `Error…` for the rest,

@@ -198,11 +198,16 @@ export const buildIssueRefsMessage = (refs, closeNums) => {
     ]
     return `  #${number} → "${info.title}" (${kind}, ${info.state})${warns.length ? ` ${warns.join(' ')}` : ''}`
   })
+  // The bypass footer appears only when every lookup resolved: advertising
+  // it under a gh outage would invite bypassing without a title ever read.
+  const anyUnresolved = refs.some(({ info }) => info === null)
   return [
     'Issue-reference check — verify each number against its real title before publishing:',
     ...lines,
-    'If every reference above is the one you mean, re-run with KM_ISSUE_REFS_OK=1 prefixed.',
-    'If not, fix the numbers first: `bd show <bead-id>` → External:, or `gh issue list --search "<words>"`. Never write a number you have not read this session.',
+    ...(anyUnresolved
+      ? ['Some lookups FAILED — fix gh/network and re-run so every title can be shown; do not bypass unverified references.']
+      : ['If every reference above is the one you mean, re-run with KM_ISSUE_REFS_OK=1 prefixed.']),
+    'If the numbers are wrong, fix them first: `bd show <bead-id>` → External:, or `gh issue list --search "<words>"`. Never write a number you have not read this session.',
   ].join('\n')
 }
 
@@ -212,10 +217,18 @@ export const buildIssueRefsMessage = (refs, closeNums) => {
  * skipped. Handles plain, "double-" and 'single-'quoted paths; not full shell
  * parsing — this is a guard against the common shapes, not a sandbox.
  */
-export const bodyFilePaths = cmd =>
-  [...cmd.matchAll(/(?:--body-file|--file|-F)(?:=|\s+)("[^"]*"|'[^']*'|[^\s'"]+)/g)]
+export const bodyFilePaths = cmd => {
+  // A real flag sits OUTSIDE quotes, so it survives into the skeleton; a
+  // quoted mention ("use --body-file x next time" in a message) is prose and
+  // must not be read as a file — with the fail-closed missing-file check, a
+  // prose mention would otherwise block the command outright. Values are
+  // still extracted from the raw text (quoted paths are blanked in the
+  // skeleton).
+  if (!/(?:--body-file|--notes-file|--file|-F)(?:=|\s)/.test(commandSkeleton(cmd))) return []
+  return [...cmd.matchAll(/(?:--body-file|--notes-file|--file|-F)(?:=|\s+)("[^"]*"|'[^']*'|[^\s'"]+)/g)]
     .map(m => m[1].replace(/^(["'])(.*)\1$/, '$2'))
     .filter(p => p !== '-')
+}
 
 /** Resolve a body-file path the way the shell would have: ~, then cwd. */
 export const resolveBodyPath = (p, cwd, home) =>
@@ -292,6 +305,19 @@ export const planMintedNonOpen = (preBeads, freshBeads) => {
     return b.status !== 'open' && number !== null && preRefs.get(b.id) === null ? [{ id: b.id, number }] : []
   })
 }
+
+// Closed beads whose linked issue is OPEN after close-adoption ran: that is a
+// GitHub-side REOPEN, which per the documented asymmetry must not stick —
+// beads is the source of truth; reopen the bead instead. The reopen bumps the
+// issue timestamp, so the newer-local test below structurally cannot flag
+// these; snapshotting them lets the restore + push-back undo the reopen on
+// both sides.
+export const planReopenedClosed = (beads, issueByNumber) =>
+  beads.flatMap(b => {
+    const number = issueNumberFromRef(b.external_ref)
+    const issue = number === null ? undefined : issueByNumber.get(number)
+    return b.status === 'closed' && issue?.state === 'OPEN' ? [{ id: b.id, number }] : []
+  })
 
 // Beads whose local row is strictly newer than their GitHub copy. bd's pull
 // applies GitHub state over these despite the documented prefer-newer default
@@ -566,7 +592,15 @@ const runSync = ({ quiet = false, dryRun = false } = {}) => {
     // spawn, not run(): `bd show` output is pretty-printed JSON, and a
     // description line starting with "Error" would trip run()'s bd check.
     const freshBeads = dryRun ? preBeads : listAllBeads()
-    const suspects = [...planLocalWins(freshBeads, issueByNumber), ...planMintedNonOpen(preBeads, freshBeads)]
+    const suspects = [
+      ...new Map(
+        [
+          ...planLocalWins(freshBeads, issueByNumber),
+          ...planMintedNonOpen(preBeads, freshBeads),
+          ...planReopenedClosed(freshBeads, issueByNumber),
+        ].map(s => [s.id, s]),
+      ).values(),
+    ]
     // Tolerant multi-id show: parse stdout directly — `bd show` output is
     // pretty-printed JSON, and a description line starting with "Error" would
     // trip run()'s bd check. Returns null on any shortfall, including bd's
