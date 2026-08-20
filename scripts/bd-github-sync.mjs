@@ -529,6 +529,18 @@ const runSync = ({ quiet = false, dryRun = false } = {}) => {
     // 2.5 Restore local rows the pull reverted anyway (#647 — the watermark
     // kept them out of 1.5's push). The restore bumps updated_at, so the
     // push-back below carries them out and the next pull leaves them alone.
+    //
+    // ACCEPTED residuals (reviewed 2026-08-20; each is a failure INSIDE this
+    // fallback, needs a mid-run bd failure or a seconds-wide race, and ends
+    // in a report line naming the bead for hand-recovery — do not add
+    // machinery for them here, it recreates transactions over a store that
+    // has none; the class ends upstream when bd's pull honors prefer-newer):
+    // a close restore whose second step fails leaves the row open with the
+    // reason only in the FAILED line; a concurrent edit from another
+    // worktree during the pull window can be read as a revert and lose the
+    // seconds-wide delta between two local edits (no compare-and-swap verb
+    // exists to close this); the conservative no-post path cannot compute
+    // label REMOVALS, so a pulled-back stale label survives until edited.
     const postBeads = dryRun ? preBeads : listAllBeads()
     // Post-pull state for the suspects comes from `bd show`, not the list:
     // list rows lack assignee, so a list-based comparison would miss
