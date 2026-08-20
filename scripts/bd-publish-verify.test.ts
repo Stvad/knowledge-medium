@@ -201,6 +201,24 @@ describe('bd-publish-verify process behavior', { timeout: 30_000 }, () => {
     expect(shimCalls()).toBe('')
   })
 
+  // Pins the publish-command gate SPECIFICALLY: this output is exactly what
+  // the api-mode branch accepts (top-level html_url JSON), so without the
+  // gate a plain file dump would trigger fetch-and-rewrite of a published
+  // object. The `gh pr view` case above cannot pin this — its URL output
+  // already dies in the api-mode JSON parse one layer later.
+  it('ignores non-publish commands even when their output is an html_url object', () => {
+    const { hook, shimCalls } = makeRepo({
+      fixtures: {
+        'repos/Stvad/knowledge-medium/pulls/652': { html_url: url('pull/652'), title: 'T', body: 'tracks km-abc' },
+      },
+      shows: [[{ id: 'km-abc', external_ref: url('issues/12') }]],
+    })
+    const r = hook('cat notes.json', JSON.stringify({ html_url: url('pull/652'), body: 'tracks km-abc' }))
+    expect(r.status).toBe(0)
+    expect(r.stdout).toBe('')
+    expect(shimCalls()).toBe('')
+  })
+
   it('stays silent when the published body is clean', () => {
     const { hook } = makeRepo({
       fixtures: { 'repos/Stvad/knowledge-medium/pulls/652': { html_url: url('pull/652'), title: 'T', body: 'clean' } },
@@ -292,6 +310,24 @@ describe('bd-publish-verify process behavior', { timeout: 30_000 }, () => {
     expect(context(r)).toContain('would rewrite km-abc → #12')
     expect(existsSync(join(repo, patchName('repos/Stvad/knowledge-medium/pulls/652')))).toBe(false)
     expect(shimCalls()).not.toContain('bd github sync')
+  })
+
+  // Pins the dry gate on the MINT specifically: the bead is unmapped, so
+  // without the gate the mint branch would run (`bd github sync` in the
+  // shim log). The mapped-bead dry test above cannot pin this — its
+  // `missing` list is empty and the branch never executes there.
+  it('suppresses the mint itself under BD_GITHUB_SYNC_DRY=1', () => {
+    const { hook, shimCalls } = makeRepo({
+      dry: true,
+      fixtures: {
+        'repos/Stvad/knowledge-medium/pulls/652': { html_url: url('pull/652'), title: 'T', body: 'tracks km-zzzz' },
+      },
+      shows: [[{ id: 'km-zzzz', external_ref: null }]],
+    })
+    const r = hook(PR_CREATE, url('pull/652'))
+    expect(r.status).toBe(0)
+    expect(shimCalls()).not.toContain('bd github sync')
+    expect(context(r)).toContain('mint suppressed')
   })
 
   it('reports an unmapped bead id it could not mint instead of failing', () => {
