@@ -157,8 +157,9 @@ describe('bodyFilePaths / resolveBodyPath', () => {
     expect(bodyFilePaths('gh pr create -F -')).toEqual([])
   })
 
-  it('extracts release notes files', () => {
+  it('extracts release notes and PR template files', () => {
     expect(bodyFilePaths('gh release create v1 --notes-file notes.md')).toEqual(['notes.md'])
+    expect(bodyFilePaths('gh pr create --template body.md --title t')).toEqual(['body.md'])
   })
 
   // Hit live: a commit message PROSE-mentioning --notes-file was read as a
@@ -358,6 +359,11 @@ describe('publishTargetRepo', () => {
     expect(publishTargetRepo(`gh --repo 'other/repo' pr create --fill`)).toBe('other/repo')
   })
 
+  it('treats an expansion-built target as unresolvable, not foreign', () => {
+    expect(publishTargetRepo('gh -R "$repo" pr create -b "x"')).toBeNull()
+    expect(publishTargetRepo('gh --repo "$(pick-repo)" pr create -b "x"')).toBeNull()
+  })
+
   it('prefers the REPO-equal match when raw matches disagree (fails toward gating)', () => {
     // the prose mention comes FIRST in the raw text, so first-match-wins
     // would pick the foreign value and switch the gate off
@@ -376,6 +382,8 @@ describe('hasDynamicBody', () => {
     expect(hasDynamicBody('gh pr comment 1 --body "$(cat body.md)"')).toBe(true)
     expect(hasDynamicBody('gh pr comment 1 -b "$BODY"')).toBe(true)
     expect(hasDynamicBody('gh release create v1 --notes "`gen-notes`"')).toBe(true)
+    expect(hasDynamicBody('gh pr merge 1 --subject "$(cat subject.md)"')).toBe(true)
+    expect(hasDynamicBody('gh pr create -t "$TITLE" -b b')).toBe(true)
     expect(hasDynamicBody('gh pr comment 1 --body "plain #12 text"')).toBe(false)
     expect(hasDynamicBody("gh pr comment 1 --body '$(literal, single quotes)'")).toBe(false)
     expect(hasDynamicBody('git commit -m "escape \\$PATH handling"')).toBe(false)
@@ -429,18 +437,21 @@ describe('buildIssueRefsMessage', () => {
     expect(msg).toContain('close keyword targets a PR')
     expect(msg).toContain('close keyword on an already-closed issue')
     expect(msg).toContain('#42 → COULD NOT VERIFY')
-    // a failed lookup suppresses the bypass footer: offering it there would
-    // invite bypassing a reference no one has read
+    // an unresolved reference suppresses the bypass footer: offering it
+    // there would invite bypassing a reference no one has read
     expect(msg).not.toContain('KM_ISSUE_REFS_OK=1')
-    expect(msg).toContain('lookups FAILED')
+    expect(msg).toContain('could not be verified')
   })
 
-  it('offers the bypass only when every lookup resolved', () => {
+  it('offers the bypass only when every reference resolved to a real title', () => {
     const msg = buildIssueRefsMessage(
       [{ number: 653, info: { title: 'Real title', state: 'open', isPr: false } }],
       new Set<number>(),
     )
     expect(msg).toContain('KM_ISSUE_REFS_OK=1')
+    // a nonexistent number has no title anyone could have verified
+    const notFound = buildIssueRefsMessage([{ number: 999, info: 'not-found' }], new Set<number>())
+    expect(notFound).not.toContain('KM_ISSUE_REFS_OK=1')
   })
 })
 
@@ -946,7 +957,10 @@ describe('hookPrePr process behavior', { timeout: 20_000 }, () => {
     expect(r.status).toBe(2)
     expect(r.stderr).toContain('#653 → "Real GC failure" (issue, open)')
     expect(r.stderr).toContain('#999 → NO SUCH ISSUE OR PR')
-    expect(r.stderr).toContain('KM_ISSUE_REFS_OK=1')
+    // the nonexistent number suppresses the bypass offer for the whole round
+    expect(r.stderr).not.toContain('KM_ISSUE_REFS_OK=1')
+    const resolved = hook('gh pr create --title t --body "relates to #653"')
+    expect(resolved.stderr).toContain('KM_ISSUE_REFS_OK=1')
   })
 
   it('honors KM_ISSUE_REFS_OK before any lookup (zero gh calls)', () => {

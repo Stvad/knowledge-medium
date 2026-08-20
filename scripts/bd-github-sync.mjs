@@ -173,7 +173,9 @@ export const publishTargetRepo = cmd => {
   const values = [...cmd.matchAll(/(?:^|\s)(?:-R|--repo)(?:=|\s+)("[^"]*"|'[^']*'|[^\s'"]+)/g)]
     .map(m => m[1].replace(/^(["'])(.*)\1$/, '$2'))
     .map(v => v.replace(/^(?:https?:\/\/)?github\.com\//i, '').replace(/\/$/, ''))
-    .filter(Boolean)
+    // an expansion ("$repo") is not a literal foreign name — unresolvable
+    // targets must fall through to null so the gate RUNS
+    .filter(v => v && !/[$`]/.test(v))
   if (values.length === 0) return null
   return values.find(v => v.toLowerCase() === REPO.toLowerCase()) ?? values[0]
 }
@@ -183,7 +185,7 @@ export const publishTargetRepo = cmd => {
 // exempt (prose dollars are common there, and expansion-built commit
 // messages fall under the out-of-visibility residual already on record).
 export const hasDynamicBody = cmd =>
-  /(?:^|\s)(?:--body|--notes|-[bn])(?:=|\s+)(?:"[^"]*[$`][^"]*"|[^\s'"]*[$`]\S*)/.test(cmd)
+  /(?:^|\s)(?:--body|--notes|--subject|--title|-[bnt])(?:=|\s+)(?:"[^"]*[$`][^"]*"|[^\s'"]*[$`]\S*)/.test(cmd)
 
 // The escape hatch must also be in command-prefix position of the SKELETON —
 // honored from quoted prose, a PR body QUOTING it would both bypass the gate
@@ -241,14 +243,15 @@ export const buildIssueRefsMessage = (refs, closeNums) => {
     ]
     return `  #${number} → "${info.title}" (${kind}, ${info.state})${warns.length ? ` ${warns.join(' ')}` : ''}`
   })
-  // The bypass footer appears only when every lookup resolved: advertising
-  // it under a gh outage would invite bypassing without a title ever read.
-  const anyUnresolved = refs.some(({ info }) => info === null)
+  // The bypass footer appears only when every reference resolved to a real
+  // title: advertising it over a failed lookup or a nonexistent number would
+  // invite bypassing a reference no one has read.
+  const anyUnresolved = refs.some(({ info }) => info === null || info === 'not-found')
   return [
     'Issue-reference check — verify each number against its real title before publishing:',
     ...lines,
     ...(anyUnresolved
-      ? ['Some lookups FAILED — fix gh/network and re-run so every title can be shown; do not bypass unverified references.']
+      ? ['Some references could not be verified (failed lookups or nonexistent numbers) — fix them and re-run; do not bypass unverified references.']
       : ['If every reference above is the one you mean, re-run with KM_ISSUE_REFS_OK=1 prefixed.']),
     'If the numbers are wrong, fix them first: `bd show <bead-id>` → External:, or `gh issue list --search "<words>"`. Never write a number you have not read this session.',
   ].join('\n')
@@ -267,8 +270,8 @@ export const bodyFilePaths = cmd => {
   // prose mention would otherwise block the command outright. Values are
   // still extracted from the raw text (quoted paths are blanked in the
   // skeleton).
-  if (!/(?:--body-file|--notes-file|--file|-F)(?:=|\s)/.test(commandSkeleton(cmd))) return []
-  return [...cmd.matchAll(/(?:--body-file|--notes-file|--file|-F)(?:=|\s+)("[^"]*"|'[^']*'|[^\s'"]+)/g)]
+  if (!/(?:--body-file|--notes-file|--template|--file|-F|-T)(?:=|\s)/.test(commandSkeleton(cmd))) return []
+  return [...cmd.matchAll(/(?:--body-file|--notes-file|--template|--file|-F|-T)(?:=|\s+)("[^"]*"|'[^']*'|[^\s'"]+)/g)]
     .map(m => m[1].replace(/^(["'])(.*)\1$/, '$2'))
     .filter(p => p !== '-')
 }
@@ -827,7 +830,7 @@ const hookPrePr = () => {
   // `cd` chain inside the command, a typo) would publish its references
   // unverified if silently skipped.
   const readBodies = () => {
-    const stdinBody = /(?:--body-file|--notes-file|--file|-F)(?:=|\s+)-(?:\s|$)/.test(commandSkeleton(cmd))
+    const stdinBody = /(?:--body-file|--notes-file|--template|--file|-F|-T)(?:=|\s+)-(?:\s|$)/.test(commandSkeleton(cmd))
     if (stdinBody && !cmd.includes('<<') && !allowsIssueRefs(cmd)) {
       console.error(
         'This command feeds its published body from stdin, which this gate cannot inspect. Use a heredoc (scanned), a file, or an inline --body — or, after verifying the references yourself, re-run with KM_ISSUE_REFS_OK=1 prefixed.',
