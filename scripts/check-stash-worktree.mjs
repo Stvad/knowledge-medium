@@ -167,8 +167,8 @@ export const amendInvocations = cmd =>
         all = true
         continue
       }
-      if (t === '--include') {
-        include = true
+      if (t === '--include' || t === '--patch' || t === '--interactive') {
+        include = true // add-to-index modes: pathspecs do not replace the index
         continue
       }
       if (t.startsWith('--')) {
@@ -178,7 +178,7 @@ export const amendInvocations = cmd =>
       if (t.startsWith('-') && t.length > 1) {
         for (let k = 1; k < t.length; k++) {
           if (t[k] === 'a') all = true
-          if (t[k] === 'i') include = true
+          if (t[k] === 'i' || t[k] === 'p') include = true
           if (COMMIT_VALUE_SHORT.includes(t[k])) {
             if (k === t.length - 1) i++ // value is the next token
             break // in-token remainder is the attached value
@@ -491,10 +491,10 @@ const main = () => {
       // (the named files themselves stay exempt below).
       if (inv.paths.length && !inv.include) continue
       const { cwd, exact } = effectiveCwd(payloadCwd, inv.cdPath)
-      if (!exact) {
+      if (!exact || inv.cArgs.some(a => a.includes('$'))) {
         process.stderr.write(
-          `BLOCKED: the cd target before this --amend is not a literal path, so the guard ` +
-            `cannot check which worktree's index the amend would commit. AMEND_OK=1 ` +
+          `BLOCKED: the cd/-C target before this --amend is not a literal path, so the ` +
+            `guard cannot check which worktree's index the amend would commit. AMEND_OK=1 ` +
             `prefixed to the command skips this check.\n`,
         )
         process.exit(2)

@@ -170,6 +170,12 @@ describe('amendInvocations', () => {
     expect(amendInvocations('git commit --amend -m x f.txt')[0].include).toBe(false)
   })
 
+  it('treats patch/interactive as add-to-index modes too', () => {
+    expect(amendInvocations('git commit --amend --patch f.txt')[0].include).toBe(true)
+    expect(amendInvocations('git commit --amend -p f.txt')[0].include).toBe(true)
+    expect(amendInvocations('git commit --amend --interactive f.txt')[0].include).toBe(true)
+  })
+
   it('records the AMEND_OK=1 opt-out only as the invocation prefix', () => {
     expect(amendInvocations('AMEND_OK=1 git commit --amend -m x')[0].optOut).toBe(true)
     expect(amendInvocations('echo "AMEND_OK=1"; git commit --amend -m x')[0].optOut).toBe(false)
@@ -550,6 +556,8 @@ describe('hook end-to-end', { timeout: 30_000 }, () => {
     expect(r.status).toBe(2)
     expect(r.stderr).toContain('foreign.txt')
     expect(r.stderr).not.toContain('f2.txt')
+    // patch mode with a pathspec keeps the index in the commit as well
+    expect(hook('git commit --amend --patch f2.txt', amendGrow).status).toBe(2)
   })
 
   it('spares an include-named file that is already staged and new to the commit', () => {
@@ -569,6 +577,10 @@ describe('hook end-to-end', { timeout: 30_000 }, () => {
     const r = hook('cd "$WT" && git commit --amend --no-edit', amendGrow)
     expect(r.status).toBe(2)
     expect(r.stderr).toContain('not a literal path')
+    // the -C spelling of the same escape hatch fails closed too
+    const rc = hook('git -C "$WT" commit --amend --no-edit', amendGrow)
+    expect(rc.status).toBe(2)
+    expect(rc.stderr).toContain('not a literal path')
     // resolvable cd: judged from the clean target repo, not the dirty cwd
     expect(hook(`cd ${amendSame} && git commit --amend -m x`, amendGrow).status).toBe(0)
   })
