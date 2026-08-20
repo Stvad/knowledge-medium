@@ -19,7 +19,6 @@ import {
   matchesCommitCommand,
   hasDynamicBody,
   matchesPrCommand,
-  publishTargetRepo,
   planClosePushes,
   planCloseReconciliation,
   planLocalWins,
@@ -94,6 +93,7 @@ describe('matchesPrCommand', () => {
     'x=`gh issue create -t t`',
     // wrapper commands and path-qualified gh still publish
     'env gh pr create --body x',
+    'env -u GH_HOST gh pr create --body x',
     'xargs gh issue close',
     '/usr/local/bin/gh pr create --fill',
     'VAR="a b" gh pr edit 1 --body x',
@@ -344,45 +344,14 @@ describe('allowsIssueRefs', () => {
   })
 })
 
-describe('publishTargetRepo', () => {
-  it('reads -R/--repo in its forms, normalizing URL prefixes', () => {
-    expect(publishTargetRepo('gh -R Stvad/knowledge-medium pr comment 1 -b x')).toBe('Stvad/knowledge-medium')
-    expect(publishTargetRepo('gh pr create --repo other/repo --fill')).toBe('other/repo')
-    expect(publishTargetRepo('gh pr create --repo=github.com/other/repo')).toBe('other/repo')
-    expect(publishTargetRepo('gh pr create --fill')).toBeNull()
-    // quoted prose must not fake a target
-    expect(publishTargetRepo('gh pr comment 1 -b "use --repo other/repo next"')).toBeNull()
-  })
-
-  it('reads a QUOTED target from the raw text — a blanked value must not read as foreign', () => {
-    expect(publishTargetRepo('gh -R "Stvad/knowledge-medium" pr comment 1 -b "x"')).toBe('Stvad/knowledge-medium')
-    expect(publishTargetRepo(`gh --repo 'other/repo' pr create --fill`)).toBe('other/repo')
-  })
-
-  it('treats an expansion-built target as unresolvable, not foreign', () => {
-    expect(publishTargetRepo('gh -R "$repo" pr create -b "x"')).toBeNull()
-    expect(publishTargetRepo('gh --repo "$(pick-repo)" pr create -b "x"')).toBeNull()
-  })
-
-  it('prefers the REPO-equal match when raw matches disagree (fails toward gating)', () => {
-    // the prose mention comes FIRST in the raw text, so first-match-wins
-    // would pick the foreign value and switch the gate off
-    expect(
-      publishTargetRepo('gh pr comment 1 -b "mentions --repo other/x in prose" -R Stvad/knowledge-medium'),
-    ).toBe('Stvad/knowledge-medium')
-  })
-
-  it('returns null, never an empty string, for a blank value (empty must not read as foreign)', () => {
-    expect(publishTargetRepo('gh -R "" pr comment 1 -b x')).toBeNull()
-  })
-})
-
 describe('hasDynamicBody', () => {
   it('flags expansion-built bodies, leaves literal and single-quoted ones alone', () => {
     expect(hasDynamicBody('gh pr comment 1 --body "$(cat body.md)"')).toBe(true)
     expect(hasDynamicBody('gh pr comment 1 -b "$BODY"')).toBe(true)
     expect(hasDynamicBody('gh release create v1 --notes "`gen-notes`"')).toBe(true)
     expect(hasDynamicBody('gh pr merge 1 --subject "$(cat subject.md)"')).toBe(true)
+    expect(hasDynamicBody('gh issue close 1 -c "$(cat message.txt)"')).toBe(true)
+    expect(hasDynamicBody('gh pr reopen 1 --comment "$MESSAGE"')).toBe(true)
     expect(hasDynamicBody('gh pr create -t "$TITLE" -b b')).toBe(true)
     expect(hasDynamicBody('gh pr comment 1 --body "plain #12 text"')).toBe(false)
     expect(hasDynamicBody("gh pr comment 1 --body '$(literal, single quotes)'")).toBe(false)
@@ -1015,13 +984,15 @@ describe('hookPrePr process behavior', { timeout: 20_000 }, () => {
     expect(shimCalls()).toBe('')
   })
 
-  it('lets a foreign-repo publish pass and gates the same-repo -R form', () => {
-    const { hook, shimCalls } = makeRepo({ dbReady: true, ghIssues: { 653: { title: 'Real GC failure', state: 'open' } } })
-    expect(hook('gh --repo other/repo pr comment 12 -b "Fixes #653"').status).toBe(0)
-    expect(shimCalls()).not.toContain('gh api')
-    const r = hook('gh -R Stvad/knowledge-medium pr comment 12 -b "relates to #653"')
-    expect(r.status).toBe(2)
-    expect(r.stderr).toContain('Real GC failure')
+  // No foreign-repo shortcut: three rounds of target-parse bypasses retired
+  // it. Every publish runs the gate, -R or not — including the multi-segment
+  // payload where a foreign first segment used to bypass a same-repo second.
+  it('gates every publish regardless of -R, including multi-segment payloads', () => {
+    const { hook } = makeRepo({ dbReady: true, ghIssues: { 653: { title: 'Real GC failure', state: 'open' } } })
+    expect(hook('gh --repo other/repo pr comment 12 -b "relates to #653"').status).toBe(2)
+    const multi = hook('gh -R owner/other issue comment 1 -b ok; gh pr create -b "relates to #653"')
+    expect(multi.status).toBe(2)
+    expect(multi.stderr).toContain('Real GC failure')
   })
 
   // A quoted -R value is blanked by the skeleton; if that read as a foreign

@@ -11,7 +11,6 @@ export declare const issueNumberFromRef: (ref: string | null | undefined) => num
 export declare const initializedDbRoot: () => string | null
 export declare const extractIssueRefs: (text: string) => number[]
 export declare const matchesCommitCommand: (cmd: string) => boolean
-export declare const publishTargetRepo: (cmd: string) => string | null
 export declare const hasDynamicBody: (cmd: string) => boolean
 export declare const closeKeywordRefs: (text: string) => number[]
 export declare const allowsIssueRefs: (cmd: string) => boolean

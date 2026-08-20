@@ -128,8 +128,10 @@ const commandSkeleton = cmd => {
 }
 
 const SEGMENT_START = String.raw`(?:^|[;&|(]\s*)`
-// VAR=val assignments and common wrapper commands may precede the real verb.
-const COMMAND_PREFIXES = String.raw`(?:(?:command|env|nohup|time|xargs)\s+|[A-Za-z_]\w*=\S*\s+)*`
+// VAR=val assignments and common wrapper commands may precede the real verb;
+// wrappers take options of their own (env -u NAME, xargs -0), skipped with
+// the value-optional branch that harmlessly over-matches.
+const COMMAND_PREFIXES = String.raw`(?:(?:command|env|nohup|time|xargs)\s+(?:-\S+\s+(?:[^-\s]\S*\s+)?)*|[A-Za-z_]\w*=\S*\s+)*`
 // Global options (-R/--repo, --hostname) may sit between `gh` and the
 // subcommand, same shape as git's (the value-optional branch over-matches
 // harmlessly).
@@ -160,32 +162,20 @@ const GIT_COMMIT = new RegExp(
 )
 export const matchesCommitCommand = cmd => GIT_COMMIT.test(commandSkeleton(cmd))
 
-// The explicit publish target, when the command names one (-R/--repo). A
-// publish aimed at a FOREIGN repo is out of this gate's scope: bead ids
-// don't map there and #N would verify against the wrong issue space.
-// The flag must sit outside quotes (skeleton), but the VALUE is read from
-// the raw text — the skeleton blanks quoted values, and an empty target
-// must never read as "foreign" (that would turn the gate off). When raw
-// matches disagree (a prose mention plus the real flag), any match equal to
-// REPO wins: the failure direction must be "gate runs", not "gate skipped".
-export const publishTargetRepo = cmd => {
-  if (!/(?:^|\s)(?:-R|--repo)(?:=|\s)/.test(commandSkeleton(cmd))) return null
-  const values = [...cmd.matchAll(/(?:^|\s)(?:-R|--repo)(?:=|\s+)("[^"]*"|'[^']*'|[^\s'"]+)/g)]
-    .map(m => m[1].replace(/^(["'])(.*)\1$/, '$2'))
-    .map(v => v.replace(/^(?:https?:\/\/)?github\.com\//i, '').replace(/\/$/, ''))
-    // an expansion ("$repo") is not a literal foreign name — unresolvable
-    // targets must fall through to null so the gate RUNS
-    .filter(v => v && !/[$`]/.test(v))
-  if (values.length === 0) return null
-  return values.find(v => v.toLowerCase() === REPO.toLowerCase()) ?? values[0]
-}
+// There is deliberately NO foreign-repo (-R/--repo) shortcut: three review
+// rounds each found a way to make its target parse lie (quoted values,
+// expansions, multi-segment payloads), and every miss switched the gate OFF.
+// A publish aimed at another repo simply runs the gate against this repo's
+// issue space — its refs come back not-found and the escape hatch covers the
+// (essentially unused) case. A never-exercised convenience is not worth a
+// recurring bypass surface.
 
 // A body built by shell expansion cannot be inspected before it publishes.
 // Single-quoted values never expand and stay out; commit -m is deliberately
 // exempt (prose dollars are common there, and expansion-built commit
 // messages fall under the out-of-visibility residual already on record).
 export const hasDynamicBody = cmd =>
-  /(?:^|\s)(?:--body|--notes|--subject|--title|-[bnt])(?:=|\s+)(?:"[^"]*[$`][^"]*"|[^\s'"]*[$`]\S*)/.test(cmd)
+  /(?:^|\s)(?:--body|--notes|--subject|--title|--comment|-[bntc])(?:=|\s+)(?:"[^"]*[$`][^"]*"|[^\s'"]*[$`]\S*)/.test(cmd)
 
 // The escape hatch must also be in command-prefix position of the SKELETON —
 // honored from quoted prose, a PR body QUOTING it would both bypass the gate
@@ -858,11 +848,6 @@ const hookPrePr = () => {
     if (commitRefs.length === 0) allow()
     return echoIssueRefs(commitText, commitRefs)
   }
-
-  // A publish explicitly aimed at a foreign repo is out of scope — bead ids
-  // don't map there, and #N verifies against the wrong issue space.
-  const target = publishTargetRepo(cmd)
-  if (target && target.toLowerCase() !== REPO.toLowerCase()) allow()
 
   if (hasDynamicBody(cmd) && !allowsIssueRefs(cmd)) {
     console.error(
