@@ -259,6 +259,20 @@ export interface Tx {
    *  reads as un-flipped ('cell'). */
   isPropertyChildBackedWorkspace(workspaceId: string): Promise<boolean>
 
+  /** The fieldIds `parentId` holds a TOMBSTONED field row for.
+   *
+   *  The one thing that separates "a cell key was never materialized" from "the
+   *  property was DELETED through its children and this device's cell has not
+   *  caught up" — the cell backfill's create-only path needs it before it may
+   *  treat a key as history. On Tx rather than read alongside the candidate scan
+   *  because the answer has to be taken under the same write lock as the
+   *  materialization it gates: a tombstone arriving while the batch waits for the
+   *  writer would otherwise be missed, and the pass would recreate the property
+   *  and upload it.
+   *
+   *  Deleted rows only, since `childrenOf` already covers the live ones. */
+  reapedPropertyFieldTargets(parentId: string): Promise<Set<string>>
+
   // ──── Composition ────
 
   /** Compose another mutator. Sub-mutator's writes go through immediately;

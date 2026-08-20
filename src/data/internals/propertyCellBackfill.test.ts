@@ -486,6 +486,21 @@ describe('property cell → children backfill', {timeout: 30_000}, () => {
       expect(await fieldRowsOf('b1')).toEqual([])
     })
 
+    it('converges on a workspace holding a key no schema declares', async () => {
+      // An unregistered key can never get a field row, so it stays in the pending
+      // set for every sweep. If that counts as work, the "materialized nothing"
+      // convergence test never succeeds and the run ends in a give-up — on the
+      // very graphs audit-properties exists to find, and after the flip landed.
+      await create('b1', {'demo:note': 'fine', 'demo:nobody-declares-this': 'x'})
+      await flip()
+
+      const progress = await runPropertyCellBackfill(makeCtx())
+
+      expect((await fieldRowsOf('b1'))[0]!.values).toEqual(['fine'])
+      expect((await repo.load('b1'))?.properties['demo:nobody-declares-this']).toBe('x')
+      expect(progress.sweeps).toBeLessThan(4)
+    })
+
     it('does not sweep an owner whose cell has emptied out', async () => {
       // The orphan leg exists to delete, and only to delete: its owners are
       // the ones whose bag no longer holds anything. Post-flip an empty bag is

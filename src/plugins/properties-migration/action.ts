@@ -179,6 +179,13 @@ export const migratePropertiesToBlocksAction = ({repo}: {repo: Repo}): ActionCon
     // Supabase request, against a workspace id the server has never seen. Refused
     // before the dialog rather than after it on a PostgREST string. An
     // already-flipped workspace still backfills here: that half is local.
+    //
+    // Deliberately a refusal and not a local-only flip (review suggested one).
+    // Local-only is a session choice, not a property of the workspace, so the
+    // same graph may well exist on the server — and a locally-written column
+    // would be overwritten the next time that account syncs, leaving a workspace
+    // that reads un-flipped over children the backfill had already built. For a
+    // genuinely local dev graph the escape hatch is `pnpm agent sql execute`.
     if (!childBacked && !isRemoteSyncActive()) {
       showInfo('This session is local-only, so the workspace cannot be switched to ' +
         'property blocks — that step needs remote sync.')

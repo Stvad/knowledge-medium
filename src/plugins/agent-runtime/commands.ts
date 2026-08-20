@@ -69,6 +69,7 @@ import {
   PROPERTY_CELL_BACKFILL_ID,
   takeLastPropertyCellBackfillRun,
 } from '@/data/internals/propertyCellBackfill'
+import {readIsChildBackedWorkspace} from '@/data/workspaceSchema'
 import type {
   AgentRuntimeBridgeOptions,
   AgentRuntimeContext,
@@ -461,6 +462,21 @@ const runRuntimeBackfill = async (
       `(${repo.activeWorkspaceId ?? 'none'}). The pass writes to the workspace this ` +
       'client has open, so the option is an assertion, not a target — open that ' +
       'workspace and re-run.',
+    )
+  }
+  // The properties migration is flip-THEN-backfill, and only the palette entry
+  // does both. Run through this generic verb on an un-flipped workspace it would
+  // do the old order — build machinery nothing recognizes or maintains, then
+  // report success — which is precisely the window flip-first exists to delete.
+  // Refused rather than routed: `run-backfill <id>` is generic over backfill ids
+  // and has no business owning one pass's runbook.
+  if (input.backfillId === PROPERTY_CELL_BACKFILL_ID
+      && !await readIsChildBackedWorkspace(repo.db, workspaceId)) {
+    throw new Error(
+      `run-backfill: ${PROPERTY_CELL_BACKFILL_ID} needs the workspace switched to ` +
+      'property blocks first, and this verb only runs the backfill half. Use the ' +
+      '"Migrate properties to child blocks" command in the palette, which does both ' +
+      'in the right order; this verb then fills in any stragglers.',
     )
   }
   const result = await repo.runWorkspaceBackfillNow(workspaceId, input.backfillId)

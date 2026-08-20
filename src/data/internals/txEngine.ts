@@ -416,6 +416,16 @@ export class TxImpl implements Tx {
     return flipped
   }
 
+  async reapedPropertyFieldTargets(parentId: string): Promise<Set<string>> {
+    const rows = await this.ctx.txDb.getAll<{reference_target_id: string}>(
+      `SELECT reference_target_id FROM blocks
+        WHERE parent_id = ? AND is_field_form = 1 AND deleted = 1
+          AND reference_target_id IS NOT NULL`,
+      [parentId],
+    )
+    return new Set(rows.map(row => row.reference_target_id))
+  }
+
   /** §9 recognition, fieldId half: does this id name a definition the
    *  workspace's registry can resolve? Shadowed losers COUNT — their field
    *  rows keep classifying (excluded only from the name map / projection). */
