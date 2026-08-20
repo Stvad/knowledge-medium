@@ -17,7 +17,8 @@ import {
   extractBeadIds,
   issueNumberFromRef,
   matchesCommitCommand,
-  matchesMergeCommand,
+  matchesGraphqlMutation,
+  matchesUnrepairableCommand,
   hasStdinBody,
   matchesPrCommand,
   planClosePushes,
@@ -150,9 +151,10 @@ describe('allowsBeadIds', () => {
 })
 
 describe('bodyFilePaths / resolveBodyPath', () => {
-  it('extracts plain, =-joined, and quoted message-file paths from -F and --file', () => {
+  it('extracts plain, =-joined, and quoted message-file paths from -F, --file and --body-file', () => {
     expect(bodyFilePaths('git commit -F /tmp/a.txt')).toEqual(['/tmp/a.txt'])
     expect(bodyFilePaths('git commit --file=/tmp/b.txt')).toEqual(['/tmp/b.txt'])
+    expect(bodyFilePaths('gh pr merge 12 --body-file /tmp/m.txt')).toEqual(['/tmp/m.txt'])
     expect(bodyFilePaths(`git commit -F "/tmp/with space.txt" -F '/tmp/q.txt'`)).toEqual([
       '/tmp/with space.txt',
       '/tmp/q.txt',
@@ -362,17 +364,27 @@ describe('allowsIssueRefs', () => {
   })
 })
 
-describe('matchesMergeCommand', () => {
-  it('matches gh pr merge in command position, with global options and wrappers', () => {
-    expect(matchesMergeCommand('gh pr merge 652 --merge')).toBe(true)
-    expect(matchesMergeCommand('env GH_PAGER= gh -R Stvad/knowledge-medium pr merge 652')).toBe(true)
-    expect(matchesMergeCommand('git pull && gh pr merge 652 --squash --body "Fixes #1"')).toBe(true)
+describe('matchesUnrepairableCommand', () => {
+  it('matches gh pr merge and gh pr review in command position, with global options and wrappers', () => {
+    expect(matchesUnrepairableCommand('gh pr merge 652 --merge')).toBe(true)
+    expect(matchesUnrepairableCommand('env GH_PAGER= gh -R Stvad/knowledge-medium pr merge 652')).toBe(true)
+    expect(matchesUnrepairableCommand('git pull && gh pr merge 652 --squash --body "Fixes #1"')).toBe(true)
+    expect(matchesUnrepairableCommand('gh pr review 5 --comment -b "looks wrong"')).toBe(true)
   })
 
   it('ignores other publishes and quoted prose', () => {
-    expect(matchesMergeCommand('gh pr create --title t --body b')).toBe(false)
-    expect(matchesMergeCommand('gh pr comment 652 --body "will gh pr merge later"')).toBe(false)
-    expect(matchesMergeCommand('git commit -m "gh pr merge 652 was the fix"')).toBe(false)
+    expect(matchesUnrepairableCommand('gh pr create --title t --body b')).toBe(false)
+    expect(matchesUnrepairableCommand('gh pr comment 652 --body "will gh pr merge later"')).toBe(false)
+    expect(matchesUnrepairableCommand('git commit -m "gh pr merge 652 was the fix"')).toBe(false)
+  })
+})
+
+describe('matchesGraphqlMutation', () => {
+  it('matches gh api graphql carrying a mutation, not reads or prose', () => {
+    expect(matchesGraphqlMutation(`gh api graphql -f query='mutation { addComment(input: {}) { x } }'`)).toBe(true)
+    expect(matchesGraphqlMutation(`gh api graphql -f query='query { repository { id } }'`)).toBe(false)
+    expect(matchesGraphqlMutation('gh api repos/Stvad/knowledge-medium/issues/1/comments -f body=x')).toBe(false)
+    expect(matchesGraphqlMutation('git commit -m "gh api graphql mutation notes"')).toBe(false)
   })
 })
 
@@ -967,7 +979,12 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
 describe('hookPrePr process behavior', { timeout: 20_000 }, () => {
   const script = fileURLToPath(new URL('./bd-github-sync.mjs', import.meta.url))
 
-  const makeRepo = (opts: { dbReady: boolean; ghIssues?: Record<number, object> }) => {
+  const makeRepo = (opts: {
+    dbReady: boolean
+    ghIssues?: Record<number, object>
+    shows?: object[][]
+    dry?: boolean
+  }) => {
     const repo = mkdtempSync(join(tmpdir(), 'bd-sync-hook-'))
     spawnSync('git', ['init', '-q'], { cwd: repo })
     mkdirSync(join(repo, '.beads'))
@@ -976,10 +993,29 @@ describe('hookPrePr process behavior', { timeout: 20_000 }, () => {
     mkdirSync(shimDir)
     const shimLog = join(repo, 'bd-shim.log')
     writeFileSync(shimLog, '')
+    const shows = opts.shows ?? [[]]
+    shows.forEach((rows, i) => writeFileSync(join(repo, `show-${i + 1}.json`), JSON.stringify(rows)))
+    writeFileSync(join(repo, 'show-last.json'), JSON.stringify(shows[shows.length - 1]))
     // The shim answers --version with real text: initializedDbRoot treats
     // empty stdout as "bd missing", which would silently turn dbReady repos
     // DB-less and make the zero-calls assertions vacuous.
-    writeFileSync(join(shimDir, 'bd'), `#!/bin/sh\necho "bd $@" >> "${shimLog}"\necho "bd-shim 0.0.0"\nexit 0\n`)
+    writeFileSync(
+      join(shimDir, 'bd'),
+      [
+        '#!/bin/sh',
+        `echo "bd $@" >> "${shimLog}"`,
+        'case "$1" in',
+        '  --version) echo "bd-shim 0.0.0";;',
+        '  show)',
+        `    m=$(cat "${repo}/show-count" 2>/dev/null || echo 0)`,
+        `    m=$((m+1)); echo $m > "${repo}/show-count"`,
+        `    if [ -f "${repo}/show-$m.json" ]; then cat "${repo}/show-$m.json"; else cat "${repo}/show-last.json"; fi;;`,
+        '  github) echo "Pushed 1 issues";;',
+        '  *) echo ok;;',
+        'esac',
+        'exit 0',
+      ].join('\n') + '\n',
+    )
     chmodSync(join(shimDir, 'bd'), 0o755)
     for (const [n, body] of Object.entries(opts.ghIssues ?? {}))
       writeFileSync(join(repo, `gh-issue-${n}.json`), JSON.stringify(body))
@@ -988,6 +1024,7 @@ describe('hookPrePr process behavior', { timeout: 20_000 }, () => {
       [
         '#!/bin/sh',
         `echo "gh $@" >> "${shimLog}"`,
+        'if [ "$1" = "auth" ]; then echo shim-token; exit 0; fi',
         'if [ "$1" = "api" ]; then',
         '  n=$(basename "$2")',
         `  if [ -f "${repo}/gh-issue-$n.json" ]; then cat "${repo}/gh-issue-$n.json"; exit 0; fi`,
@@ -997,7 +1034,16 @@ describe('hookPrePr process behavior', { timeout: 20_000 }, () => {
       ].join('\n') + '\n',
     )
     chmodSync(join(shimDir, 'gh'), 0o755)
-    const env = { ...process.env, PATH: `${shimDir}:${process.env.PATH}`, BD_GITHUB_SYNC_DRY: '1' }
+    // GH_TOKEN/GH_HOST: if a shim ever breaks, PATH search must not fall
+    // through to the real gh with live credentials.
+    const env: Record<string, string | undefined> = {
+      ...process.env,
+      PATH: `${shimDir}:${process.env.PATH}`,
+      GH_TOKEN: '',
+      GH_HOST: '127.0.0.1',
+      BD_GITHUB_SYNC_DRY: '1',
+    }
+    if (opts.dry === false) delete env.BD_GITHUB_SYNC_DRY
     const hook = (command: string) => {
       const payload = JSON.stringify({ tool_name: 'Bash', cwd: repo, tool_input: { command } })
       return spawnSync('node', [script, '--hook-pre-pr'], { cwd: repo, env, input: payload, encoding: 'utf8' })
@@ -1066,6 +1112,102 @@ describe('hookPrePr process behavior', { timeout: 20_000 }, () => {
     expect(r.status).toBe(2)
     expect(r.stderr).toContain('km-zzzz')
     expect(r.stderr).toContain('#653 → "Real GC failure" (issue, open)')
+  })
+
+  // The legs are INDEPENDENT: a publish verb in the same invocation must not
+  // swallow the commit check (shipped exactly that — the mixed command below
+  // exited 0 while its close keyword rode to the default branch unchecked).
+  it('gates commit close keywords even when the invocation also publishes', () => {
+    const { hook } = makeRepo({ dbReady: true, ghIssues: { 700: { title: 'Some PR', state: 'open', pull_request: {} } } })
+    const r = hook('git commit -m "land it\n\nFixes #700" && gh pr comment 12 --body "posted"')
+    expect(r.status).toBe(2)
+    expect(r.stderr).toContain('close keyword targets a PR')
+  })
+
+  // Merge and review bodies may be file-fed; the file lands where no
+  // post-publication repair reaches, so the unrepairable leg reads it with
+  // the same fail-closed rules as the commit leg.
+  it('scans file-backed merge bodies and fails closed on unreadable or stdin-fed ones', () => {
+    const { hook, repo } = makeRepo({ dbReady: true, ghIssues: { 700: { title: 'Some PR', state: 'open', pull_request: {} } } })
+    writeFileSync(join(repo, 'merge-msg.txt'), 'ship it\n\nFixes #700\n')
+    const fromFile = hook(`gh pr merge 12 --squash -F ${join(repo, 'merge-msg.txt')}`)
+    expect(fromFile.status).toBe(2)
+    expect(fromFile.stderr).toContain('close keyword targets a PR')
+    const missing = hook('cd subdir && gh pr merge 12 --body-file msg.txt')
+    expect(missing.status).toBe(2)
+    expect(missing.stderr).toContain('Cannot read message file')
+    const piped = hook('cat msg.txt | gh pr merge 12 -F -')
+    expect(piped.status).toBe(2)
+    expect(piped.stderr).toContain('stdin')
+  })
+
+  // gh pr review output names no URL, so the verifier cannot find the
+  // review — its refs stay pre-gated.
+  it('echoes issue references on gh pr review and passes clean reviews', () => {
+    const { hook } = makeRepo({ dbReady: true, ghIssues: { 653: { title: 'Real GC failure', state: 'open' } } })
+    const r = hook('gh pr review 5 --comment -b "relates to #653"')
+    expect(r.status).toBe(2)
+    expect(r.stderr).toContain('#653 → "Real GC failure" (issue, open)')
+    expect(hook('gh pr review 5 --approve').status).toBe(0)
+  })
+
+  // GraphQL mutations publish through a response envelope the verifier
+  // cannot safely resolve; their inline query text sits in the raw command.
+  it('gates refs and bead ids in graphql mutations, ignoring graphql reads', () => {
+    const { hook } = makeRepo({ dbReady: true, ghIssues: { 653: { title: 'Real GC failure', state: 'open' } } })
+    const r = hook(`gh api graphql -f query='mutation { addComment(input: {body: "see #653"}) { x } }'`)
+    expect(r.status).toBe(2)
+    expect(r.stderr).toContain('Real GC failure')
+    const beads = hook(`gh api graphql -f query='mutation { addComment(input: {body: "tracks km-zzzz"}) { x } }'`)
+    expect(beads.status).toBe(2)
+    expect(beads.stderr).toContain('km-zzzz')
+    expect(hook(`gh api graphql -f query='query { repository(name: "x") { id } }'`).status).toBe(0)
+  })
+
+  // A --silent api mutation is invisible to the verifier — the one shape
+  // with no checkpoint anywhere; it fails closed here.
+  it('fails closed on --silent api mutations, with the escape honored', () => {
+    const { hook } = makeRepo({ dbReady: true })
+    const r = hook('gh api --silent repos/Stvad/knowledge-medium/issues/1/comments -f body=done')
+    expect(r.status).toBe(2)
+    expect(r.stderr).toContain('--silent')
+    expect(hook('KM_ISSUE_REFS_OK=1 gh api --silent repos/Stvad/knowledge-medium/issues/1/comments -f body=done').status).toBe(0)
+  })
+
+  // Position pin: the escape must be honored BEFORE the commit leg's
+  // fail-closed blocks — both block messages advertise the KM_ISSUE_REFS_OK
+  // re-run, which would otherwise block again forever.
+  it('honors KM_ISSUE_REFS_OK ahead of the stdin and missing-file blocks', () => {
+    const { hook } = makeRepo({ dbReady: true })
+    expect(hook('KM_ISSUE_REFS_OK=1 cat msg | git commit -F -').status).toBe(0)
+    expect(hook('KM_ISSUE_REFS_OK=1 cd subdir && git commit -F msg.txt').status).toBe(0)
+  })
+
+  // The mint itself, pinned end-to-end: dry unset, a token-answering gh
+  // shim, and per-call bd show fixtures — without these the mint branch is
+  // structurally unreachable in this harness and could break with a green
+  // gate (found by mutation).
+  it('mints an issue for an unmapped bead and denies with the fresh number', () => {
+    const { hook, shimCalls } = makeRepo({
+      dbReady: true,
+      dry: false,
+      shows: [[{ id: 'km-zzzz', external_ref: null }], [{ id: 'km-zzzz', external_ref: ref(88) }]],
+    })
+    const r = hook('gh pr create --title t --body "tracks km-zzzz"')
+    expect(r.status).toBe(2)
+    expect(shimCalls()).toContain('bd github sync --push-only --issues km-zzzz')
+    expect(r.stderr).toContain('#88')
+  })
+
+  it('suppresses the pre-gate mint under BD_GITHUB_SYNC_DRY=1', () => {
+    const { hook, shimCalls } = makeRepo({
+      dbReady: true,
+      shows: [[{ id: 'km-zzzz', external_ref: null }]],
+    })
+    const r = hook('gh pr create --title t --body "tracks km-zzzz"')
+    expect(r.status).toBe(2)
+    expect(shimCalls()).toContain('bd show km-zzzz')
+    expect(shimCalls()).not.toContain('bd github sync')
   })
 
   // Everything the publish leg used to fail closed on — file bodies, stdin
@@ -1165,8 +1307,12 @@ describe('hookPrePr process behavior', { timeout: 20_000 }, () => {
     expect(inBody.status).toBe(2)
     expect(inBody.stderr).toContain('Real GC failure')
     // quoted prose that merely RESEMBLES a positional target keeps its refs:
-    // the strip applies only when the skeleton confirms an unquoted target
-    const prose = hook(`gh pr merge 12 --body "instruction: pr comment https://github.com/Stvad/knowledge-medium/issues/653"`)
+    // the strip applies only when the skeleton confirms an unquoted target.
+    // The prose must spell the FULL `gh pr comment <url>` shape — anything
+    // less never matches the strip regex at all and pins nothing (found by
+    // mutation: with a gh-less prose body, deleting the skeleton-confirm
+    // guard failed no test while stripping refs out of real merge bodies).
+    const prose = hook(`gh pr merge 12 --body "as gh pr comment https://github.com/Stvad/knowledge-medium/issues/653 said"`)
     expect(prose.status).toBe(2)
     expect(prose.stderr).toContain('Real GC failure')
   })
