@@ -315,6 +315,7 @@ describe('detectReverts', () => {
       { description: 'D-old' },
       { title: 'T-old' },
       { priority: 2 },
+      { issue_type: 'task' },
     ] satisfies Partial<BeadRow>[]) {
       expect(detectReverts([snap], byId([{ ...snap, ...change }]))).toEqual([snap])
     }
@@ -328,9 +329,9 @@ describe('detectReverts', () => {
 
 describe('planRestoreArgs', () => {
   it('restores an open-lifecycle row with one update carrying the status', () => {
-    const row = bead({ id: 'km-a', status: 'in_progress', priority: 1, title: 'T', description: 'D', assignee: 'V' })
+    const row = bead({ id: 'km-a', status: 'in_progress', priority: 1, title: 'T', description: 'D', assignee: 'V', issue_type: 'bug' })
     expect(planRestoreArgs(row)).toEqual([
-      ['update', 'km-a', '--title', 'T', '-d', 'D', '-p', '1', '-a', 'V', '-s', 'in_progress'],
+      ['update', 'km-a', '--title', 'T', '-d', 'D', '-p', '1', '-t', 'bug', '-a', 'V', '-s', 'in_progress'],
     ])
   })
 
@@ -351,7 +352,7 @@ describe('planRestoreArgs', () => {
 describe('runSync process behavior', { timeout: 20_000 }, () => {
   const script = fileURLToPath(new URL('./bd-github-sync.mjs', import.meta.url))
 
-  const makeSyncRepo = (opts: { issues: object[]; lists: object[][]; show?: object[] }) => {
+  const makeSyncRepo = (opts: { issues: object[]; lists: object[][]; show?: object[] | string; failCloseId?: string }) => {
     const repo = mkdtempSync(join(tmpdir(), 'bd-sync-run-'))
     spawnSync('git', ['init', '-q'], { cwd: repo })
     mkdirSync(join(repo, '.beads', 'embeddeddolt'), { recursive: true })
@@ -362,7 +363,7 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     writeFileSync(join(repo, 'gh-issues.json'), JSON.stringify(opts.issues))
     opts.lists.forEach((rows, i) => writeFileSync(join(repo, `list-${i + 1}.json`), JSON.stringify(rows)))
     writeFileSync(join(repo, 'list-last.json'), JSON.stringify(opts.lists[opts.lists.length - 1]))
-    writeFileSync(join(repo, 'show.json'), JSON.stringify(opts.show ?? [], null, 2))
+    writeFileSync(join(repo, 'show.json'), typeof opts.show === 'string' ? opts.show : JSON.stringify(opts.show ?? [], null, 2))
     writeFileSync(
       join(shimDir, 'bd'),
       [
@@ -376,6 +377,9 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
         `    if [ -f "${repo}/list-$n.json" ]; then cat "${repo}/list-$n.json"; else cat "${repo}/list-last.json"; fi;;`,
         `  show) cat "${repo}/show.json";;`,
         '  github) echo "Pushed 0 issues";;',
+        ...(opts.failCloseId
+          ? [`  close) if [ "$2" = "${opts.failCloseId}" ]; then echo "Error: cannot close"; else echo ok; fi;;`]
+          : []),
         '  *) echo ok;;',
         'esac',
         'exit 0',
@@ -397,7 +401,7 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     chmodSync(join(shimDir, 'bd'), 0o755)
     chmodSync(join(shimDir, 'gh'), 0o755)
     const env = { ...process.env, PATH: `${shimDir}:${process.env.PATH}` }
-    const run = () => spawnSync('node', [script], { cwd: repo, env, encoding: 'utf8' })
+    const run = (...args: string[]) => spawnSync('node', [script, ...args], { cwd: repo, env, encoding: 'utf8' })
     return { run, shimCalls: () => readFileSync(shimLog, 'utf8') }
   }
 
@@ -461,6 +465,66 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     expect(log).toContain('bd show km-t2 --json')
     expect(log).toContain('bd update km-t2 --title T -d D-new -p 1 -a Vlad -s in_progress')
     expect(log).toContain('bd github sync --push-only --issues km-t2')
+  })
+
+  // A half-restored row must NOT be pushed: publishing it would stamp GitHub
+  // newer and bury the loss, while leaving GitHub older keeps the row a
+  // suspect so the next sync retries the restore.
+  it('keeps a failed restore out of the push-back', () => {
+    const closedLocal = { id: 'km-t4', status: 'closed', priority: 1, title: 'T', description: 'D', external_ref: ref(4), updated_at: '2026-08-20T02:00:00Z' }
+    const revertedRow = { ...closedLocal, status: 'open' }
+    const { run, shimCalls } = makeSyncRepo({
+      issues: [ghIssue(4, '2026-08-20T01:00:00Z')],
+      lists: [[closedLocal], [closedLocal], [revertedRow]],
+      show: [{ ...closedLocal, close_reason: 'done' }],
+      failCloseId: 'km-t4',
+    })
+    const r = run()
+    expect(r.status).toBe(0)
+    expect(r.stdout).toContain('FAILED to restore')
+    expect(shimCalls()).not.toContain('--issues km-t4')
+  })
+
+  // Same reasoning as the close-adoption abort: pulling with the snapshot
+  // missing is exactly the undetectable loss the guard exists to prevent.
+  it('aborts before the pull when the suspect snapshot cannot be read', () => {
+    const newer = { id: 'km-t5', status: 'open', priority: 1, title: 'T', description: 'D-new', external_ref: ref(5), updated_at: '2026-08-20T02:00:00Z' }
+    const { run, shimCalls } = makeSyncRepo({
+      issues: [ghIssue(5, '2026-08-20T01:00:00Z')],
+      lists: [[newer], [newer], [newer]],
+      show: 'Error fetching km-t5: dolt exploded',
+    })
+    const r = run()
+    expect(r.status).toBe(1)
+    expect(r.stderr).toContain('could not snapshot km-t5')
+    expect(shimCalls()).not.toContain('bd github sync\n')
+  })
+
+  // bd's partial-output shape: found rows on stdout, `Error…` for the rest,
+  // exit 0 — valid JSON that silently covers only some suspects.
+  it('aborts when the snapshot covers only part of the suspect set', () => {
+    const a = { id: 'km-t7', status: 'open', priority: 1, title: 'T', description: 'D', external_ref: ref(7), updated_at: '2026-08-20T02:00:00Z' }
+    const b = { ...a, id: 'km-t8', external_ref: ref(8) }
+    const { run, shimCalls } = makeSyncRepo({
+      issues: [ghIssue(7, '2026-08-20T01:00:00Z'), ghIssue(8, '2026-08-20T01:00:00Z')],
+      lists: [[a, b], [a, b], [a, b]],
+      show: [a],
+    })
+    const r = run()
+    expect(r.status).toBe(1)
+    expect(r.stderr).toContain('could not snapshot')
+    expect(shimCalls()).not.toContain('bd github sync\n')
+  })
+
+  it('stays silent under --quiet when a converged run changed nothing', () => {
+    const row = { id: 'km-t6', status: 'open', priority: 1, title: 'T', description: 'D', external_ref: ref(6), updated_at: '2026-08-19T00:00:00Z' }
+    const { run } = makeSyncRepo({
+      issues: [ghIssue(6, '2026-08-20T00:00:00Z')],
+      lists: [[row], [row], [row]],
+    })
+    const r = run('--quiet')
+    expect(r.status).toBe(0)
+    expect(r.stdout).toBe('')
   })
 })
 

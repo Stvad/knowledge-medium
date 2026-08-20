@@ -232,7 +232,7 @@ export const planLocalWins = (beads, issueByNumber) =>
 
 // Detection compares only fields `bd list` rows carry; the restore then
 // replays the fuller `bd show` snapshot (assignee, close reason included).
-const REVERT_FIELDS = ['title', 'description', 'status', 'priority']
+const REVERT_FIELDS = ['title', 'description', 'status', 'priority', 'issue_type']
 export const detectReverts = (snapshotRows, postById) =>
   snapshotRows.filter(s => {
     const post = postById.get(s.id)
@@ -243,6 +243,7 @@ export const detectReverts = (snapshotRows, postById) =>
 // its own verb and carries the reason. Everything else is one update.
 export const planRestoreArgs = row => {
   const update = ['update', row.id, '--title', row.title ?? '', '-d', row.description ?? '', '-p', String(row.priority)]
+  if (row.issue_type) update.push('-t', row.issue_type)
   if (row.assignee) update.push('-a', row.assignee)
   if (row.status === 'closed')
     return [update, ['close', row.id, '-r', row.close_reason || 'restored by bd-github-sync after a pull revert (#647)']]
@@ -464,7 +465,9 @@ const runSync = ({ quiet = false, dryRun = false } = {}) => {
       report.push('[dry-run] would push local state out before the pull')
     } else {
       const pushOut = run('bd', ['github', 'sync', '--push-only'], { env })
-      report.push(...pushOut.split('\n').filter(l => /Pushed|Created|Updated/.test(l)).map(l => `pre-pull: ${l.trim()}`))
+      // Zero-count lines stay out of the report: they would flip `changed`
+      // below and un-quiet every converged SessionEnd run.
+      report.push(...pushOut.split('\n').filter(l => /Pushed|Created|Updated/.test(l) && /[1-9]/.test(l)).map(l => `pre-pull: ${l.trim()}`))
     }
 
     // 1.6 The push's watermark silently skips older local edits, so snapshot
@@ -481,8 +484,16 @@ const runSync = ({ quiet = false, dryRun = false } = {}) => {
       try {
         snapshot = JSON.parse(shown.stdout)
       } catch {
-        report.push(`FAILED to snapshot ${suspects.map(s => s.id).join(', ')} — pull-revert protection is off this run`)
+        snapshot = null
       }
+      // Abort rather than pull unprotected — same reasoning as the
+      // close-adoption abort: proceeding is the exact loss this guard
+      // prevents. The length check also catches bd's partial-output shape
+      // (found rows on stdout, `Error…` for the rest, exit 0).
+      if (!Array.isArray(snapshot) || snapshot.length !== suspects.length)
+        throw new Error(
+          `aborting before pull: could not snapshot ${suspects.map(s => s.id).join(', ')} — the pull could revert these newer local rows undetected (#647)`,
+        )
     }
 
     // 2. The sync itself.
@@ -499,14 +510,22 @@ const runSync = ({ quiet = false, dryRun = false } = {}) => {
     const postBeads = dryRun ? preBeads : listAllBeads()
     const postById = new Map(postBeads.map(b => [b.id, b]))
     const reverted = dryRun ? [] : detectReverts(snapshot, postById)
+    const restoredOk = []
     const restoreFailures = []
     for (const row of reverted) {
       const ok = planRestoreArgs(row).every(args => tryRun('bd', args, { env }) !== null)
-      if (ok) report.push(`restored ${row.id} — the pull reverted a newer local row (#647)`)
-      else restoreFailures.push(row.id)
+      if (ok) {
+        restoredOk.push(row.id)
+        report.push(`restored ${row.id} — the pull reverted a newer local row (#647)`)
+      } else {
+        restoreFailures.push(row.id)
+      }
     }
+    // Failed restores stay OUT of the push-back: pushing a half-restored row
+    // would stamp GitHub newer and bury the loss, while leaving GitHub older
+    // keeps the row a suspect so the next sync retries the restore.
     if (restoreFailures.length)
-      report.push(`FAILED to restore after a pull revert: ${restoreFailures.join(', ')} — check them by hand (bd show)`)
+      report.push(`FAILED to restore after a pull revert: ${restoreFailures.join(', ')} — left un-pushed so the next sync retries; check them by hand (bd show)`)
 
     // 3. Un-flatten priorities (pre/post comparison — see header), push back
     // together with the restored rows.
@@ -517,7 +536,7 @@ const runSync = ({ quiet = false, dryRun = false } = {}) => {
       if (!dryRun) run('bd', ['update', id, '-p', String(to)], { env })
       report.push(`priority ${id} → ${to} (re-derived after pull-flattening)`)
     }
-    const pushBack = [...new Set([...fixes.map(f => f.id), ...reverted.map(r => r.id)])]
+    const pushBack = [...new Set([...fixes.map(f => f.id), ...restoredOk])]
     if (pushBack.length && !dryRun) run('bd', ['github', 'sync', '--push-only', '--issues', pushBack.join(',')], { env })
 
     // 4. Carry bead closes out to issues still open (see header: via gh, not

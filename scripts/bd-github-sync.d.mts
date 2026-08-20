@@ -20,6 +20,7 @@ export interface BeadRow {
   description?: string
   assignee?: string
   close_reason?: string
+  issue_type?: string
 }
 export interface IssueInfo {
   state: 'OPEN' | 'CLOSED'
