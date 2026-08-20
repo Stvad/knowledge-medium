@@ -671,6 +671,15 @@ const runSync = ({ quiet = false, dryRun = false } = {}) => {
     // spawn, not run(): `bd show` output is pretty-printed JSON, and a
     // description line starting with "Error" would trip run()'s bd check.
     const freshBeads = dryRun ? preBeads : listAllBeads()
+    // Print the km→#N mapping for every issue the pre-pull push just minted —
+    // IMMEDIATELY, not via the end-of-run report: any later step failing
+    // (snapshot abort, the pull itself) would swallow the report, and by the
+    // next run the bead already carries its ref, so the mapping would never
+    // be printed at all. The mapping is knowable only by lookup; surfacing
+    // it the moment it exists is what lets later text READ the number
+    // instead of guessing it (AGENTS.md: never write an unread #N).
+    for (const { id, number } of planMintedRefs(preBeads, freshBeads))
+      console.log(`bd-github-sync: minted: ${id} → #${number}`)
     const suspects = [
       ...new Map(
         [
@@ -730,12 +739,6 @@ const runSync = ({ quiet = false, dryRun = false } = {}) => {
     // exists to close this); the conservative no-post path cannot compute
     // label REMOVALS, so a pulled-back stale label survives until edited.
     const postBeads = dryRun ? preBeads : listAllBeads()
-    // Print the km→#N mapping for every issue this run minted: the mapping is
-    // knowable only by lookup, and surfacing it the moment it exists is what
-    // lets later text READ the number instead of guessing it (AGENTS.md:
-    // never write an unread #N).
-    for (const { id, number } of planMintedRefs(preBeads, postBeads))
-      report.push(`minted: ${id} → #${number}`)
     // Post-pull state for the suspects comes from `bd show`, not the list:
     // list rows lack assignee, so a list-based comparison would miss
     // assignment-only reverts (and false-positive every assigned suspect).

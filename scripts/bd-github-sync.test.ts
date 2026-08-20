@@ -639,7 +639,13 @@ describe('planRestoreArgs', () => {
 describe('runSync process behavior', { timeout: 20_000 }, () => {
   const script = fileURLToPath(new URL('./bd-github-sync.mjs', import.meta.url))
 
-  const makeSyncRepo = (opts: { issues: object[]; lists: object[][]; shows?: (object[] | string)[]; failCloseId?: string }) => {
+  const makeSyncRepo = (opts: {
+    issues: object[]
+    lists: object[][]
+    shows?: (object[] | string)[]
+    failCloseId?: string
+    failFullSync?: boolean
+  }) => {
     const repo = mkdtempSync(join(tmpdir(), 'bd-sync-run-'))
     spawnSync('git', ['init', '-q'], { cwd: repo })
     mkdirSync(join(repo, '.beads', 'embeddeddolt'), { recursive: true })
@@ -671,7 +677,9 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
         `    m=$(cat "${repo}/show-count" 2>/dev/null || echo 0)`,
         `    m=$((m+1)); echo $m > "${repo}/show-count"`,
         `    if [ -f "${repo}/show-$m.json" ]; then cat "${repo}/show-$m.json"; else cat "${repo}/show-last.json"; fi;;`,
-        '  github) echo "Pushed 0 issues";;',
+        ...(opts.failFullSync
+          ? ['  github) case "$*" in *--push-only*) echo "Pushed 1 issues";; *) echo "Error: pull exploded";; esac;;']
+          : ['  github) echo "Pushed 0 issues";;']),
         ...(opts.failCloseId
           ? [`  close) if [ "$2" = "${opts.failCloseId}" ]; then echo "Error: cannot close"; else echo ok; fi;;`]
           : []),
@@ -753,6 +761,24 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     })
     const r = run()
     expect(r.status).toBe(0)
+    expect(r.stdout).toContain('minted: km-t5 → #5')
+  })
+
+  // The mapping must survive a mid-run failure: it is emitted directly, right
+  // after the first post-push listing — the end-of-run report never prints
+  // when a later step throws, and by the NEXT run the bead already carries
+  // its ref, so a swallowed mapping would never be printed at all.
+  it('prints the minted mapping even when a later sync step fails', () => {
+    const unminted = { id: 'km-t5', status: 'open', priority: 1, title: 'T', description: 'D', external_ref: null, updated_at: '2026-08-19T00:00:00Z' }
+    const minted = { ...unminted, external_ref: ref(5) }
+    const { run } = makeSyncRepo({
+      issues: [ghIssue(5, '2026-08-20T00:00:00Z')],
+      lists: [[unminted], [minted], [minted]],
+      failFullSync: true,
+    })
+    const r = run()
+    expect(r.status).toBe(1)
+    expect(r.stderr).toContain('bd-github-sync: failed')
     expect(r.stdout).toContain('minted: km-t5 → #5')
   })
 
