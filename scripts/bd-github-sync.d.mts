@@ -15,10 +15,16 @@ export interface BeadRow {
   status: string
   priority: number
   external_ref?: string | null
+  updated_at?: string
+  title?: string
+  description?: string
+  assignee?: string
+  close_reason?: string
 }
 export interface IssueInfo {
   state: 'OPEN' | 'CLOSED'
   labels: string[]
+  updatedAt?: string
 }
 export declare const planCloseReconciliation: (
   beads: BeadRow[],
@@ -38,3 +44,9 @@ export declare const buildDenyMessage: (
   mapped: { id: string; number: number }[],
   unmapped: string[],
 ) => string
+export declare const planLocalWins: (
+  beads: BeadRow[],
+  issueByNumber: Map<number, IssueInfo>,
+) => { id: string; number: number }[]
+export declare const detectReverts: (snapshotRows: BeadRow[], postById: Map<string, BeadRow>) => BeadRow[]
+export declare const planRestoreArgs: (row: BeadRow) => string[][]

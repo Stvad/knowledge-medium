@@ -9,12 +9,15 @@ import {
   bodyFilePaths,
   buildDenyMessage,
   deriveLabelPriority,
+  detectReverts,
   extractBeadIds,
   issueNumberFromRef,
   matchesPrCommand,
   planClosePushes,
   planCloseReconciliation,
+  planLocalWins,
   planPriorityFixes,
+  planRestoreArgs,
   REPO,
   resolveBodyPath,
   type BeadRow,
@@ -271,6 +274,193 @@ describe('buildDenyMessage', () => {
     expect(msg).toContain('issues/12')
     expect(msg).toContain('km-zz')
     expect(msg).toContain('KM_ALLOW_BEAD_IDS=1')
+  })
+})
+
+describe('planLocalWins', () => {
+  it('flags a bead whose local row is strictly newer than its GitHub copy', () => {
+    const beads = [bead({ id: 'km-a', external_ref: ref(1), updated_at: '2026-08-20T02:00:00Z' })]
+    const map = issues([[1, { state: 'OPEN', labels: [], updatedAt: '2026-08-20T01:00:00Z' }]])
+    expect(planLocalWins(beads, map)).toEqual([{ id: 'km-a', number: 1 }])
+  })
+
+  it('does not flag older-or-equal local rows, unmapped beads, or missing timestamps', () => {
+    const map = issues([[1, { state: 'OPEN', labels: [], updatedAt: '2026-08-20T01:00:00Z' }]])
+    expect(planLocalWins([bead({ external_ref: ref(1), updated_at: '2026-08-20T00:59:00Z' })], map)).toEqual([])
+    expect(planLocalWins([bead({ external_ref: ref(1), updated_at: '2026-08-20T01:00:00Z' })], map)).toEqual([])
+    expect(planLocalWins([bead({ external_ref: null, updated_at: '2026-08-20T02:00:00Z' })], map)).toEqual([])
+    expect(planLocalWins([bead({ external_ref: ref(1) })], map)).toEqual([])
+    expect(
+      planLocalWins(
+        [bead({ external_ref: ref(2), updated_at: '2026-08-20T02:00:00Z' })],
+        issues([[2, { state: 'OPEN', labels: [] }]]),
+      ),
+    ).toEqual([])
+  })
+})
+
+describe('detectReverts', () => {
+  const snap = bead({
+    id: 'km-a',
+    status: 'in_progress',
+    priority: 1,
+    title: 'T',
+    description: 'D-new',
+    updated_at: '2026-08-20T02:00:00Z',
+  })
+
+  it('reports a snapshot row whose issue-backed fields changed', () => {
+    for (const change of [
+      { status: 'open' },
+      { description: 'D-old' },
+      { title: 'T-old' },
+      { priority: 2 },
+    ] satisfies Partial<BeadRow>[]) {
+      expect(detectReverts([snap], byId([{ ...snap, ...change }]))).toEqual([snap])
+    }
+  })
+
+  it('stays quiet when nothing changed or the row vanished', () => {
+    expect(detectReverts([snap], byId([{ ...snap }]))).toEqual([])
+    expect(detectReverts([snap], byId([]))).toEqual([])
+  })
+})
+
+describe('planRestoreArgs', () => {
+  it('restores an open-lifecycle row with one update carrying the status', () => {
+    const row = bead({ id: 'km-a', status: 'in_progress', priority: 1, title: 'T', description: 'D', assignee: 'V' })
+    expect(planRestoreArgs(row)).toEqual([
+      ['update', 'km-a', '--title', 'T', '-d', 'D', '-p', '1', '-a', 'V', '-s', 'in_progress'],
+    ])
+  })
+
+  it('restores a closed row via close, carrying the original reason', () => {
+    const row = bead({ id: 'km-a', status: 'closed', priority: 2, title: 'T', description: 'D', close_reason: 'done' })
+    expect(planRestoreArgs(row)).toEqual([
+      ['update', 'km-a', '--title', 'T', '-d', 'D', '-p', '2'],
+      ['close', 'km-a', '-r', 'done'],
+    ])
+  })
+})
+
+// Process-level pins for runSync's #647 guards: the push-before-pull ordering
+// and the snapshot→restore→push-back net, which unit tests on the plan
+// functions cannot see. bd and gh are PATH-fronted shims; the bd shim serves
+// a different `bd list` fixture per call so the post-pull list can show a
+// revert. Measured ~150ms per spawn solo; budgeted for the 6x load stretch.
+describe('runSync process behavior', { timeout: 20_000 }, () => {
+  const script = fileURLToPath(new URL('./bd-github-sync.mjs', import.meta.url))
+
+  const makeSyncRepo = (opts: { issues: object[]; lists: object[][]; show?: object[] }) => {
+    const repo = mkdtempSync(join(tmpdir(), 'bd-sync-run-'))
+    spawnSync('git', ['init', '-q'], { cwd: repo })
+    mkdirSync(join(repo, '.beads', 'embeddeddolt'), { recursive: true })
+    const shimDir = join(repo, 'shim')
+    mkdirSync(shimDir)
+    const shimLog = join(repo, 'shim.log')
+    writeFileSync(shimLog, '')
+    writeFileSync(join(repo, 'gh-issues.json'), JSON.stringify(opts.issues))
+    opts.lists.forEach((rows, i) => writeFileSync(join(repo, `list-${i + 1}.json`), JSON.stringify(rows)))
+    writeFileSync(join(repo, 'list-last.json'), JSON.stringify(opts.lists[opts.lists.length - 1]))
+    writeFileSync(join(repo, 'show.json'), JSON.stringify(opts.show ?? [], null, 2))
+    writeFileSync(
+      join(shimDir, 'bd'),
+      [
+        '#!/bin/sh',
+        `echo "bd $@" >> "${shimLog}"`,
+        'case "$1" in',
+        '  --version) echo "bd-shim 0.0.0";;',
+        '  list)',
+        `    n=$(cat "${repo}/list-count" 2>/dev/null || echo 0)`,
+        `    n=$((n+1)); echo $n > "${repo}/list-count"`,
+        `    if [ -f "${repo}/list-$n.json" ]; then cat "${repo}/list-$n.json"; else cat "${repo}/list-last.json"; fi;;`,
+        `  show) cat "${repo}/show.json";;`,
+        '  github) echo "Pushed 0 issues";;',
+        '  *) echo ok;;',
+        'esac',
+        'exit 0',
+      ].join('\n') + '\n',
+    )
+    writeFileSync(
+      join(shimDir, 'gh'),
+      [
+        '#!/bin/sh',
+        `echo "gh $@" >> "${shimLog}"`,
+        'case "$1 $2" in',
+        '  "auth token") echo shim-token;;',
+        `  "issue list") cat "${repo}/gh-issues.json";;`,
+        '  *) echo null;;',
+        'esac',
+        'exit 0',
+      ].join('\n') + '\n',
+    )
+    chmodSync(join(shimDir, 'bd'), 0o755)
+    chmodSync(join(shimDir, 'gh'), 0o755)
+    const env = { ...process.env, PATH: `${shimDir}:${process.env.PATH}` }
+    const run = () => spawnSync('node', [script], { cwd: repo, env, encoding: 'utf8' })
+    return { run, shimCalls: () => readFileSync(shimLog, 'utf8') }
+  }
+
+  const ghIssue = (number: number, updatedAt: string) => ({
+    number,
+    state: 'OPEN',
+    labels: [{ name: 'priority::high' }],
+    updatedAt,
+  })
+
+  it('pushes local state out BEFORE the pull, and stays quiet with no suspects', () => {
+    const row = { id: 'km-t1', status: 'open', priority: 1, title: 'T', description: 'D', external_ref: ref(1), updated_at: '2026-08-19T00:00:00Z' }
+    const { run, shimCalls } = makeSyncRepo({
+      issues: [ghIssue(1, '2026-08-20T00:00:00Z')],
+      lists: [[row], [row], [row]],
+    })
+    const r = run()
+    expect(r.status).toBe(0)
+    const log = shimCalls()
+    const pushOnly = log.indexOf('bd github sync --push-only')
+    const bare = log.indexOf('bd github sync\n')
+    expect(pushOnly).toBeGreaterThan(-1)
+    expect(bare).toBeGreaterThan(-1)
+    expect(pushOnly).toBeLessThan(bare)
+    expect(log).not.toContain('bd show')
+    expect(log).not.toContain('bd update')
+    expect(log).not.toContain('bd close')
+  })
+
+  // Position pin: the pre-pull push must run AFTER close-adoption — swapped,
+  // a still-open bead's push would re-open its GitHub-closed issue (trap 1).
+  it('adopts GitHub-side closes BEFORE the pre-pull push', () => {
+    const row = { id: 'km-t3', status: 'open', priority: 1, title: 'T', description: 'D', external_ref: ref(3), updated_at: '2026-08-19T00:00:00Z' }
+    const { run, shimCalls } = makeSyncRepo({
+      issues: [{ number: 3, state: 'CLOSED', labels: [{ name: 'priority::high' }], updatedAt: '2026-08-20T00:00:00Z' }],
+      lists: [[row], [{ ...row, status: 'closed' }], [{ ...row, status: 'closed' }]],
+    })
+    const r = run()
+    expect(r.status).toBe(0)
+    const log = shimCalls()
+    const close = log.indexOf('bd close km-t3')
+    const pushOnly = log.indexOf('bd github sync --push-only')
+    expect(close).toBeGreaterThan(-1)
+    expect(pushOnly).toBeGreaterThan(-1)
+    expect(close).toBeLessThan(pushOnly)
+  })
+
+  it('restores a newer local row the pull reverted, then pushes it back out', () => {
+    const newer = { id: 'km-t2', status: 'in_progress', priority: 1, title: 'T', description: 'D-new', external_ref: ref(2), updated_at: '2026-08-20T02:00:00Z' }
+    const revertedRow = { ...newer, status: 'open', description: 'D-old' }
+    const snapshot = { ...newer, assignee: 'Vlad' }
+    const { run, shimCalls } = makeSyncRepo({
+      issues: [ghIssue(2, '2026-08-20T01:00:00Z')],
+      lists: [[newer], [newer], [revertedRow]],
+      show: [snapshot],
+    })
+    const r = run()
+    expect(r.status).toBe(0)
+    expect(r.stdout).toContain('restored km-t2')
+    const log = shimCalls()
+    expect(log).toContain('bd show km-t2 --json')
+    expect(log).toContain('bd update km-t2 --title T -d D-new -p 1 -a Vlad -s in_progress')
+    expect(log).toContain('bd github sync --push-only --issues km-t2')
   })
 })
 

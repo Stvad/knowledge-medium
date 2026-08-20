@@ -25,6 +25,14 @@
  *    Note the deliberate asymmetry with (1): GitHub-side CLOSES are adopted
  *    (they come from PR merges), GitHub-side REOPENS do not stick (beads is
  *    the source of truth; reopen the bead instead).
+ * 4. The pull applies a strictly OLDER GitHub copy over newer local rows —
+ *    text edits, claims and closes alike — despite the documented
+ *    prefer-newer default (#647; measured live). Guarded twice: local state
+ *    is pushed out BEFORE the pull (after close-adoption, so an un-adopted
+ *    open bead cannot re-open its issue), and beads whose local row is still
+ *    newer than their GitHub copy — the push watermark skips older edits —
+ *    are snapshotted before the pull and restored + re-pushed if it reverted
+ *    them.
  *
  * Accepted race: an issue closed on GitHub DURING the sync window can be
  * re-opened by the in-flight push, and because the reopen is then the state
@@ -210,6 +218,37 @@ export const planClosePushes = (beads, issueByNumber, maxKnownIssueNumber) =>
  * bead new this run at 2 takes the label-derived value if one exists. A bead
  * already at 2 before the run is untouched — 2 may be deliberate.
  */
+// Beads whose local row is strictly newer than their GitHub copy. bd's pull
+// applies GitHub state over these despite the documented prefer-newer default
+// (#647), so they are exactly the rows a pull can revert. Missing timestamps
+// on either side mean "cannot claim local is newer" — not a suspect.
+export const planLocalWins = (beads, issueByNumber) =>
+  beads.flatMap(b => {
+    const number = issueNumberFromRef(b.external_ref)
+    const issue = number === null ? undefined : issueByNumber.get(number)
+    if (!issue?.updatedAt || !b.updated_at) return []
+    return Date.parse(b.updated_at) > Date.parse(issue.updatedAt) ? [{ id: b.id, number }] : []
+  })
+
+// Detection compares only fields `bd list` rows carry; the restore then
+// replays the fuller `bd show` snapshot (assignee, close reason included).
+const REVERT_FIELDS = ['title', 'description', 'status', 'priority']
+export const detectReverts = (snapshotRows, postById) =>
+  snapshotRows.filter(s => {
+    const post = postById.get(s.id)
+    return post && REVERT_FIELDS.some(f => (s[f] ?? null) !== (post[f] ?? null))
+  })
+
+// A closed bead cannot be restored by `bd update -s closed` alone: close is
+// its own verb and carries the reason. Everything else is one update.
+export const planRestoreArgs = row => {
+  const update = ['update', row.id, '--title', row.title ?? '', '-d', row.description ?? '', '-p', String(row.priority)]
+  if (row.assignee) update.push('-a', row.assignee)
+  if (row.status === 'closed')
+    return [update, ['close', row.id, '-r', row.close_reason || 'restored by bd-github-sync after a pull revert (#647)']]
+  return [[...update, '-s', row.status]]
+}
+
 export const planPriorityFixes = (preById, postBeads, issueByNumber) =>
   postBeads
     .filter(b => b.status !== 'closed' && b.priority === 2)
@@ -363,7 +402,7 @@ const listAllBeads = () =>
 const FETCH_LIMIT = 5000
 const fetchIssues = () => {
   const rows = JSON.parse(
-    run('gh', ['issue', 'list', '--repo', REPO, '--state', 'all', '--json', 'number,state,labels', '--limit', String(FETCH_LIMIT)]),
+    run('gh', ['issue', 'list', '--repo', REPO, '--state', 'all', '--json', 'number,state,labels,updatedAt', '--limit', String(FETCH_LIMIT)]),
   )
   if (rows.length >= FETCH_LIMIT)
     throw new Error(`issue list hit the ${FETCH_LIMIT} fetch limit — raise it before trusting absence-based decisions`)
@@ -373,7 +412,7 @@ const fetchIssues = () => {
   // would all be wrong at once.
   if (rows.length === 0) throw new Error('issue list came back empty — refusing absence-based decisions')
   return {
-    issueByNumber: new Map(rows.map(i => [i.number, { state: i.state, labels: i.labels.map(l => l.name) }])),
+    issueByNumber: new Map(rows.map(i => [i.number, { state: i.state, labels: i.labels.map(l => l.name), updatedAt: i.updatedAt }])),
     maxKnownIssueNumber: rows.reduce((max, i) => Math.max(max, i.number), 0),
   }
 }
@@ -415,6 +454,37 @@ const runSync = ({ quiet = false, dryRun = false } = {}) => {
           (report.length ? ` (already applied: ${report.join('; ')})` : ''),
       )
 
+    // 1.5 Push local state out BEFORE anything pulls. bd's pull applies a
+    // strictly OLDER GitHub copy over newer local rows (#647) — closes and
+    // edits included — so the pull must never see a GitHub copy that lags
+    // local. Runs after close-adoption (an un-adopted open bead would
+    // re-open its GitHub-closed issue) and skips content-identical beads,
+    // which cannot revert anything.
+    if (dryRun) {
+      report.push('[dry-run] would push local state out before the pull')
+    } else {
+      const pushOut = run('bd', ['github', 'sync', '--push-only'], { env })
+      report.push(...pushOut.split('\n').filter(l => /Pushed|Created|Updated/.test(l)).map(l => `pre-pull: ${l.trim()}`))
+    }
+
+    // 1.6 The push's watermark silently skips older local edits, so snapshot
+    // every bead whose local row is STILL newer than its GitHub copy — the
+    // pull may revert exactly those; step 2.5 restores any it does. Fresh
+    // list: close-adoption just changed local rows. Snapshot via a direct
+    // spawn, not run(): `bd show` output is pretty-printed JSON, and a
+    // description line starting with "Error" would trip run()'s bd check.
+    const freshBeads = dryRun ? preBeads : listAllBeads()
+    const suspects = planLocalWins(freshBeads, issueByNumber)
+    let snapshot = []
+    if (suspects.length && !dryRun) {
+      const shown = spawnSync('bd', ['show', ...suspects.map(s => s.id), '--json'], { encoding: 'utf8', env })
+      try {
+        snapshot = JSON.parse(shown.stdout)
+      } catch {
+        report.push(`FAILED to snapshot ${suspects.map(s => s.id).join(', ')} — pull-revert protection is off this run`)
+      }
+    }
+
     // 2. The sync itself.
     const syncOut = run('bd', ['github', 'sync', ...(dryRun ? ['--dry-run'] : [])], { env })
     const syncSummary = syncOut
@@ -423,16 +493,32 @@ const runSync = ({ quiet = false, dryRun = false } = {}) => {
       .map(l => l.trim())
     report.push(...syncSummary)
 
-    // 3. Un-flatten priorities (pre/post comparison — see header), push back.
-    const preById = new Map(preBeads.map(b => [b.id, b]))
+    // 2.5 Restore local rows the pull reverted anyway (#647 — the watermark
+    // kept them out of 1.5's push). The restore bumps updated_at, so the
+    // push-back below carries them out and the next pull leaves them alone.
     const postBeads = dryRun ? preBeads : listAllBeads()
+    const postById = new Map(postBeads.map(b => [b.id, b]))
+    const reverted = dryRun ? [] : detectReverts(snapshot, postById)
+    const restoreFailures = []
+    for (const row of reverted) {
+      const ok = planRestoreArgs(row).every(args => tryRun('bd', args, { env }) !== null)
+      if (ok) report.push(`restored ${row.id} — the pull reverted a newer local row (#647)`)
+      else restoreFailures.push(row.id)
+    }
+    if (restoreFailures.length)
+      report.push(`FAILED to restore after a pull revert: ${restoreFailures.join(', ')} — check them by hand (bd show)`)
+
+    // 3. Un-flatten priorities (pre/post comparison — see header), push back
+    // together with the restored rows.
+    const preById = new Map(preBeads.map(b => [b.id, b]))
     if (dryRun) report.push('[dry-run] priority un-flattening not simulated — it needs the post-sync state')
     const fixes = planPriorityFixes(preById, postBeads, issueByNumber)
     for (const { id, to } of fixes) {
       if (!dryRun) run('bd', ['update', id, '-p', String(to)], { env })
       report.push(`priority ${id} → ${to} (re-derived after pull-flattening)`)
     }
-    if (fixes.length && !dryRun) run('bd', ['github', 'sync', '--push-only', '--issues', fixes.map(f => f.id).join(',')], { env })
+    const pushBack = [...new Set([...fixes.map(f => f.id), ...reverted.map(r => r.id)])]
+    if (pushBack.length && !dryRun) run('bd', ['github', 'sync', '--push-only', '--issues', pushBack.join(',')], { env })
 
     // 4. Carry bead closes out to issues still open (see header: via gh, not
     // a selective bd push, whose watermark silently skips older closes).
