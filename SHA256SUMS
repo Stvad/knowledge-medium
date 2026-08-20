@@ -1729,7 +1729,7 @@ a4b29da45b71646760ea11229b8b6e46a7866453446de4638cdad117d9e9ebcb  ./src/App.js
 39808076fb3f1d8e9d016a11e4bcf0d52b4b7cac48154d753e23b687058e605c  ./src/App.js.map
 0b6cdff83c4e2e654daed8de1db8c4dca693242715e28de06767a51c7c78de15  ./src/appUpdate.js
 90769c02d289c099463e0237f99fa41a7d0faec88ff0ec0c7261af894a4fb1b9  ./src/appUpdate.js.map
-e6a4ee7601d46819c0360c2d8c97168de6f0cf8e4b4d02acb636b6487732cf4b  ./src/appVersion.js
+d5c78a1f5719382d6138e7ea672f26372bbca92d399c75a2c9367905ac6f9e46  ./src/appVersion.js
 76bd53c764d4393e8e6411205df2c6642a2c684e22691666337476b2a22938a5  ./src/appVersion.js.map
 fea5c9bcdb0b19b9e7a2c87061e8af20afffcb227e47dba1dada4088258e6f93  ./src/bootstrap/resolveWorkspace.js
 c357de0c880a035b6a5fc81aa7642f7adc3c69f64384e749738c74fb09afa57e  ./src/bootstrap/resolveWorkspace.js.map
@@ -2294,8 +2294,8 @@ cbd1f16606eb7a4b25fa281aca932e640a264c2f9746c9b6d8d9985bc0e169c8  ./src/markdown
 e2959d96e1fe5539a14a0522f1e90d2c01123be087d69ffe3b575697b34c083f  ./src/paste/captureMediaVerb.js.map
 063686703665bb1546222efa84e1fba11e261c91a78624610f0b99cab8adc5e0  ./src/paste/decision.js
 9540096130ade4a7c27c6b302d7d9a4ad85f05bb51dde9445c72da8d7fbc87f4  ./src/paste/decision.js.map
-822bcb67e5a950ccf85e7ff7f82bc9f8beee413b51770411e5035a02fdeb24e6  ./src/paste/operations.js
-5c878eeab5603511da7677ac35b256fd09420eec16f11196395694e000d622cb  ./src/paste/operations.js.map
+72ff85b8a7653c5a30efae31750fe91e9f28bd35a4288e165fd89cfea381bc53  ./src/paste/operations.js
+04be5615fbcd2a1f13c2879806f35773993acf5cf8c0786c9fde752f004ee4aa  ./src/paste/operations.js.map
 10b0fe7e8e4f457221c4d8a6d9435c0197423ce4a67e53d825ae050dbb388df7  ./src/plugins/account-header/AccountHeaderItem.js
 0fc86609d290bad1da9e060869a19f5075ce63d2491bc4d62798b512035f1ec1  ./src/plugins/account-header/AccountHeaderItem.js.map
 e0502f780b6db5820688f7050680040488f19e245ab2ce3f4009895e383cdfd9  ./src/plugins/account-header/index.js
@@ -3378,8 +3378,8 @@ ea7891e59b3608440c35c38901ebf443535471174fcbae950c1c74f2885c571a  ./src/utils/vi
 69754adc2a0ce8f9699da30476838e93fd95bd4b61eda37060f239224bc9b656  ./src/utils/viewTransition.js.map
 eda7cd6e992fb9f7324505e9817253123005c192d80e9c52ac4b14967936955c  ./src/utils/viewport.js
 a2bcdb138bcf84f7f3f9fc982c821e724fe578c3ea7971a890ea1ea9bc4c837f  ./src/utils/viewport.js.map
-716b6a90a21bcee0205678de4768c257dc5dd3db76e723f09a58ead65de013e3  ./sw.js
-8164befc29ebf1a829996fd9427b59aa95a78e75d61aaa80b2e58abe746fa017  ./version.json
+ccfd4506a0d91c75cca97b74e0e777d790d24d6f8047f10003d7163bc6526d81  ./sw.js
+2d21c232950273bacfced37cdc14514f769dc339fad4612853cad961a6745388  ./version.json
 4a748afd443918bb16591c834c401dae33e87861ab5dbad0811c3a3b4a9214fb  ./vite.svg
 643714fb239b199a921024c34f82d13697a3803c91c97ff8da10455a09249406  ./wa-sqlite-async.wasm
 d167becf5a6949b1f31b1d026dc15e138b2b34b12fc44b71c56164392900b3b8  ./wa-sqlite.wasm
