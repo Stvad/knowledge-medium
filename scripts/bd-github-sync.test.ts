@@ -75,6 +75,10 @@ describe('matchesPrCommand', () => {
     'gh pr close 12 --comment "see the tracker"',
     'gh pr reopen 12 -c "reopening"',
     'gh issue reopen 9 -c "still broken"',
+    // documented builtin aliases (gh <cmd> create --help, ALIASES section)
+    'gh pr new --title t --body b',
+    'gh issue new --body "text"',
+    'gh release new v2 --notes n',
     'gh issue comment 34 --body-file /tmp/c.md',
     'gh release create v1 --notes "x"',
     'GITHUB_TOKEN=x gh pr create --fill',

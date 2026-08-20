@@ -133,7 +133,7 @@ const COMMAND_PREFIXES = String.raw`(?:(?:command|env|nohup|time|xargs)\s+|[A-Za
 const GH_PUBLISH = new RegExp(
   SEGMENT_START +
     COMMAND_PREFIXES +
-    String.raw`(?:\S*\/)?gh\s+(?:pr\s+(?:create|edit|comment|review|merge|close|reopen)|issue\s+(?:create|edit|comment|close|reopen)|release\s+(?:create|edit))\b`,
+    String.raw`(?:\S*\/)?gh\s+(?:pr\s+(?:create|new|edit|comment|review|merge|close|reopen)|issue\s+(?:create|new|edit|comment|close|reopen)|release\s+(?:create|new|edit))\b`,
   'm',
 )
 
