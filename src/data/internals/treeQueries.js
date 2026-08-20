@@ -102,11 +102,6 @@ var e=`
 `,s=e=>`
      COALESCE(${e}.is_field_form, 0) = 1
      AND ${e}.parent_id IS NOT NULL
-     AND EXISTS (
-       SELECT 1 FROM workspaces w
-        WHERE w.id = ${e}.workspace_id
-          AND w.properties_migration IN ('children', 'cell-off')
-     )
      AND (
        EXISTS (
          SELECT 1 FROM block_types bt
@@ -157,5 +152,5 @@ ${s(`child`)}
        )
   )
   SELECT * FROM subtree ORDER BY path
-`;export{t as ANCESTORS_SQL,o as CHILDREN_IDS_SQL,a as CHILDREN_SQL,r as IS_DESCENDANT_OF_SQL,e as SUBTREE_SQL,u as VISIBLE_CHILDREN_IDS_SQL,l as VISIBLE_CHILDREN_SQL,d as VISIBLE_SUBTREE_SQL,i as cycleScanSql,n as manyAncestorsSql};
+`;export{t as ANCESTORS_SQL,o as CHILDREN_IDS_SQL,a as CHILDREN_SQL,r as IS_DESCENDANT_OF_SQL,e as SUBTREE_SQL,u as VISIBLE_CHILDREN_IDS_SQL,l as VISIBLE_CHILDREN_SQL,d as VISIBLE_SUBTREE_SQL,i as cycleScanSql,n as manyAncestorsSql,s as recognizedFieldRowSql};
 //# sourceMappingURL=treeQueries.js.map
