@@ -82,8 +82,9 @@
   now has per-workspace opt-in end-to-end encryption. 2026-06-21.</p>
 
 <aside class="doc-status" style="border:1px solid var(--line); border-left:3px solid var(--info); background:var(--info-soft); border-radius:0 6px 6px 0; padding:8px 14px; margin:12px 0 18px; font-size:0.9em;">
-<strong>Status:</strong> partially implemented — phases 1–6, plus the inline-audio and inline-PDF increments (§15), have landed on branch
-<code>feat/media-attachments</code>. Phase 1 = the byte-crypto seam (§5/§5.1:
+<strong>Status:</strong> partially implemented — phases 1–6, plus the inline-audio and inline-PDF increments (§15), have landed on
+<strong>master</strong> (merged 2026-06-27→29 via PRs #265/#269/#273; this banner previously named the since-merged
+<code>feat/media-attachments</code> branch). Phase 1 = the byte-crypto seam (§5/§5.1:
 the <code>encb:v1:</code> binary envelope, <code>encodeBytes</code>/<code>decodeBytes</code>, the
 read-side content-hash verify) in <code>src/sync/</code>. Phase 2 = the <code>attachments</code> bucket
 + RLS migration (read by member, <strong>insert/delete by writer</strong>, no update = immutability), and
