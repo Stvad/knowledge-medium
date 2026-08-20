@@ -1,6 +1,6 @@
 ---
 name: local-dev-loop
-description: Run the app from the working tree (`pnpm dev`) and drive that tab with the agent bridge, so a `src/` change is verifiable in seconds instead of merge → Pages deploy → CDN → reload. Use when you need to see a core change actually running — pairing a `localdev` CLI profile, choosing which account the dev tab is signed into, or testing service-worker / PWA / base-path behaviour with a real build. NOT needed for pure logic changes a vitest run already covers.
+description: Run the app from the working tree (`pnpm dev`) and drive that tab with the agent bridge, so a `src/` change is verifiable in seconds instead of merge → Pages deploy → CDN → reload. Use when you need to see a core change actually running — pairing a `localdev` CLI profile, choosing which account the dev tab is signed into, or testing service-worker / PWA / base-path behaviour with a real build. Also use when a `src/` edit you already reloaded seems to have no effect — a provider doesn't work, a context is null, state stopped syncing — since that can be an HMR module-identity split, not a bug in your change. NOT needed for pure logic changes a vitest run already covers.
 ---
 
 # Local dev loop for core (`src/`) changes
@@ -88,51 +88,24 @@ always propagates. Changes under `vite-plugins/` or to `vite.config.ts` need a
 dev-server **restart** (Vite does not auto-restart for them), and a restart
 drops the page's HMR socket — reload the tab afterwards.
 
-### Kernel/extension module identity split after a hot update
+## Kernel/extension module identity split after a hot update
 
-Unlike the `vite-plugins/`/`vite.config.ts` case above, this one throws **no
-error** — the symptom is state that silently doesn't cross the kernel/
-extension boundary, which reads as "my change has no effect," not as a bug.
-
-`unifySrcJsUrls.ts` makes the kernel's static graph and an extension's
-importmap-resolved `import()` fetch the same `/src/x.js` URL for a given
-module, so singletons (a `createContext()` result, a store) stay one
-instance. That unification is **server-state, not just a browser cache**,
-and it breaks per-module: editing an already-loaded module whose exports
-aren't 100% React components (so Fast Refresh can't self-accept it — e.g.
-`src/context/repo.tsx`, which exports `RepoContext` and hooks alongside the
-`RepoProvider` component) makes Vite serve every KERNEL importer of that
-module a `?t=<timestamp>`-suffixed specifier from then on, baked into the
-dev server's in-memory module graph. Confirmed live: after one such edit,
-`curl localhost:<port>/src/App.js` permanently shows
-`from "/src/context/repo.js?t=1787186099060"`. A fresh `import()` of the
-plain `/src/context/repo.js` — what an extension's importmap always
-resolves to — is a *different* module-map entry holding the pre-edit
-`RepoContext` object; reproduced directly as
-`useRepo must be used within a RepoContext` thrown by an already-installed
-extension.
-
-None of these clear it, all confirmed by hand:
-- a plain tab reload (the poisoned specifier is re-served fresh from the
-  still-running dev server, not read from any browser cache)
-- reverting the source edit, with or without a reload after
-- re-editing the importer (`App.tsx`) itself
-- editing the target module again (the timestamp doesn't bump or reset)
-
-Only a dev-server **restart** clears it — the timestamp lives in the
-running process's module graph, so nothing short of a new process resets
-it. (One round of testing; narrower or wider triggers than "edit an
-already-loaded, non-pure-component shared module" are plausible but
-unconfirmed — e.g. a brand-new file or a pure-component file may behave
-differently.)
+Unlike the `vite-plugins/`/`vite.config.ts` case above, this throws **no
+error** — state silently stops crossing the kernel/extension boundary (a
+provider/context reads as `null`, a store looks reset, sync "stops
+working"), reading as "my change has no effect," and can also surface later
+as a thrown `useRepo must be used within a RepoContext`.
 
 Detect from eval before chasing a phantom bug — compare a **known singleton
-export**, not the bare namespace object (two different URLs always produce
-two distinct namespace-object wrappers, even when unaffected):
+export**, not the bare namespace object (two URLs always produce two distinct
+namespace wrappers, even when unaffected). This probes one importer/module
+pair only — swap in the module path and a known importer of it to check a
+different pair; an untested edge can be split while this reports `false`.
+(`import.meta` isn't available in eval scope, hence `fetch`-and-regex below
+instead of reading `import.meta.hot` directly.)
 
 ```js
-// adapt the module path + a known importer of it (any kernel file that
-// statically imports the module you suspect is split)
+// adapt the module path + a known importer of it
 const importerSrc = await (await fetch('/src/App.js')).text()
 const stamped = importerSrc.match(/\/src\/context\/repo\.js(\?t=\d+)?/)[0]
 const [ext, kernel] = await Promise.all([
@@ -142,9 +115,26 @@ const [ext, kernel] = await Promise.all([
 return {split: ext.RepoContext !== kernel.RepoContext, stamped}
 ```
 
-`import.meta` isn't available in eval scope (user code there runs inside a
-`new AsyncFunction`, not a real ES module — `src/plugins/agent-runtime/commands.ts:executeArbitraryCode`),
-hence the `fetch`-and-regex instead of reading `import.meta.hot` state directly.
+Same fix as the `vite-plugins/`/`vite.config.ts` case above — a dev-server
+**restart**, but with no error telling you one's needed. Reloading,
+reverting the edit, or re-editing either module again all fail — the
+stamped specifier lives in the process's in-memory graph; only a new
+process resets it.
+
+**Mechanism**: `unifySrcJsUrls.ts` keeps kernel and extension imports of a
+module on one URL so singletons stay one instance (see "Module graph"
+below for what it does). Editing ANY already-loaded `src/` module reachable
+from the kernel's static import graph stamps every kernel importer's
+specifier `?t=<timestamp>` from then on — regardless of export shape:
+confirmed on a component-only module Fast Refresh *did* self-accept
+(`src/components/BlockComponent.tsx`) and a pure-function module with no JSX
+(`src/utils/routing.ts`), both splitting identically. The timestamp itself keeps changing on further
+edits — the only load-bearing fact is that it never cleans until restart.
+Export shape instead gates whether the split is *observable*: it surfaces as
+a bug only when something compares identity across the boundary
+(`createContext()`, a singleton store/Map, `instanceof`), never for
+pure-function/component-only exports, since nothing compares those with
+`===`. (One round of testing; untested: new-file, delete, rename cases.)
 
 ## What does NOT match production
 
