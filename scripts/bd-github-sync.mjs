@@ -130,10 +130,16 @@ const commandSkeleton = cmd => {
 const SEGMENT_START = String.raw`(?:^|[;&|(]\s*)`
 // VAR=val assignments and common wrapper commands may precede the real verb.
 const COMMAND_PREFIXES = String.raw`(?:(?:command|env|nohup|time|xargs)\s+|[A-Za-z_]\w*=\S*\s+)*`
+// Global options (-R/--repo, --hostname) may sit between `gh` and the
+// subcommand, same shape as git's (the value-optional branch over-matches
+// harmlessly).
+const GH_GLOBAL_OPTS = String.raw`(?:-\S+\s+(?:[^-\s]\S*\s+)?)*`
 const GH_PUBLISH = new RegExp(
   SEGMENT_START +
     COMMAND_PREFIXES +
-    String.raw`(?:\S*\/)?gh\s+(?:pr\s+(?:create|new|edit|comment|review|merge|close|reopen)|issue\s+(?:create|new|edit|comment|close|reopen)|release\s+(?:create|new|edit))\b`,
+    String.raw`(?:\S*\/)?gh\s+` +
+    GH_GLOBAL_OPTS +
+    String.raw`(?:pr\s+(?:create|new|edit|comment|review|merge|close|reopen)|issue\s+(?:create|new|edit|comment|close|reopen)|release\s+(?:create|new|edit))\b`,
   'm',
 )
 
@@ -154,6 +160,15 @@ const GIT_COMMIT = new RegExp(
 )
 export const matchesCommitCommand = cmd => GIT_COMMIT.test(commandSkeleton(cmd))
 
+// The explicit publish target, when the command names one (-R/--repo). A
+// publish aimed at a FOREIGN repo is out of this gate's scope: bead ids
+// don't map there and #N would verify against the wrong issue space.
+export const publishTargetRepo = cmd => {
+  const m = /(?:^|\s)(?:-R|--repo)(?:=|\s+)(\S+)/.exec(commandSkeleton(cmd))
+  if (!m) return null
+  return m[1].replace(/^(?:https?:\/\/)?github\.com\//i, '').replace(/\/$/, '')
+}
+
 // The escape hatch must also be in command-prefix position of the SKELETON —
 // honored from quoted prose, a PR body QUOTING it would both bypass the gate
 // and publish the marker.
@@ -171,12 +186,24 @@ export const allowsBeadIds = cmd => ALLOW_MARKER.test(commandSkeleton(cmd))
 // magnitude away from #100000. A 3-digit shorthand color (#123) stays
 // ambiguous and costs one confirm round — accepted.
 const ISSUE_MENTION = /(?<![&\w#])#(\d{1,5})(?!\w)/g
-export const extractIssueRefs = text => [...new Set([...text.matchAll(ISSUE_MENTION)].map(m => Number(m[1])))]
+// GitHub's qualified closing forms for THIS repo — `owner/repo#N` and full
+// issue/PR URLs — normalize to #N so both extractors see them; qualified
+// refs into foreign repos stay out (they cannot be verified in our issue
+// space and our close keywords cannot act on them from here anyway).
+const QUALIFIED_REF = new RegExp(
+  String.raw`(?:https?:\/\/)?github\.com\/${REPO.replace('/', '\\/')}\/(?:issues|pull)\/(\d{1,5})\b|` +
+    String.raw`(?<![\w\/])${REPO.replace('/', '\\/')}#(\d{1,5})(?!\w)`,
+  'gi',
+)
+const normalizeQualifiedRefs = text => text.replace(QUALIFIED_REF, (_, a, b) => `#${a ?? b}`)
+export const extractIssueRefs = text =>
+  [...new Set([...normalizeQualifiedRefs(text).matchAll(ISSUE_MENTION)].map(m => Number(m[1])))]
 
 // GitHub's auto-close keywords: a wrong number here CLOSES an unrelated
 // issue on merge, so these references get the loudest warnings.
 const CLOSE_KEYWORD = /\b(?:fix(?:es|ed)?|close[sd]?|resolve[sd]?):?\s+#(\d{1,5})(?!\w)/gi
-export const closeKeywordRefs = text => [...new Set([...text.matchAll(CLOSE_KEYWORD)].map(m => Number(m[1])))]
+export const closeKeywordRefs = text =>
+  [...new Set([...normalizeQualifiedRefs(text).matchAll(CLOSE_KEYWORD)].map(m => Number(m[1])))]
 
 const ISSUE_REFS_OK = new RegExp(SEGMENT_START + COMMAND_PREFIXES + String.raw`KM_ISSUE_REFS_OK=1\s`, 'm')
 export const allowsIssueRefs = cmd => ISSUE_REFS_OK.test(commandSkeleton(cmd))
@@ -776,10 +803,21 @@ const hookPrePr = () => {
   const cmd = payload?.tool_input?.command ?? ''
   if (!cmd) allow()
   const cwd = payload?.cwd ?? process.cwd()
-  // Fail closed on a referenced body file this hook cannot read (a `cd` chain
-  // inside the command, a typo): silently skipping it would publish whatever
-  // references it holds unverified. Cheaper than simulating the shell.
+  // Fail closed on body text this hook cannot inspect (only publish/commit
+  // legs call this, so ordinary commands like `grep -F -` are untouched):
+  // a stdin-fed body (`cat x | gh … -F -`) would need pipeline simulation —
+  // heredoc-fed stdin passes, its content sits in the raw command which both
+  // extractors already scan — and a referenced file that cannot be read (a
+  // `cd` chain inside the command, a typo) would publish its references
+  // unverified if silently skipped.
   const readBodies = () => {
+    const stdinBody = /(?:--body-file|--notes-file|--file|-F)(?:=|\s+)-(?:\s|$)/.test(commandSkeleton(cmd))
+    if (stdinBody && !cmd.includes('<<') && !allowsIssueRefs(cmd)) {
+      console.error(
+        'This command feeds its published body from stdin, which this gate cannot inspect. Use a heredoc (scanned), a file, or an inline --body — or, after verifying the references yourself, re-run with KM_ISSUE_REFS_OK=1 prefixed.',
+      )
+      process.exit(2)
+    }
     const paths = bodyFilePaths(cmd).map(p => resolveBodyPath(p, cwd, homedir()))
     const missing = paths.filter(p => !existsSync(p))
     if (missing.length && !allowsIssueRefs(cmd)) {
@@ -801,6 +839,11 @@ const hookPrePr = () => {
     if (commitRefs.length === 0) allow()
     return echoIssueRefs(commitText, commitRefs)
   }
+
+  // A publish explicitly aimed at a foreign repo is out of scope — bead ids
+  // don't map there, and #N verifies against the wrong issue space.
+  const target = publishTargetRepo(cmd)
+  if (target && target.toLowerCase() !== REPO.toLowerCase()) allow()
 
   const bodies = readBodies()
   const text = [cmd, ...bodies].join('\n')

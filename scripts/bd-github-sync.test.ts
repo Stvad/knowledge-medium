@@ -18,6 +18,7 @@ import {
   issueNumberFromRef,
   matchesCommitCommand,
   matchesPrCommand,
+  publishTargetRepo,
   planClosePushes,
   planCloseReconciliation,
   planLocalWins,
@@ -80,6 +81,9 @@ describe('matchesPrCommand', () => {
     'gh pr new --title t --body b',
     'gh issue new --body "text"',
     'gh release new v2 --notes n',
+    // gh global options before the subcommand
+    'gh -R Stvad/knowledge-medium pr comment 12 -b "text"',
+    'gh --repo other/repo issue create -t t',
     'gh issue comment 34 --body-file /tmp/c.md',
     'gh release create v1 --notes "x"',
     'GITHUB_TOKEN=x gh pr create --fill',
@@ -335,6 +339,31 @@ describe('allowsIssueRefs', () => {
   it('honors the escape in command position, not in quoted prose', () => {
     expect(allowsIssueRefs('KM_ISSUE_REFS_OK=1 gh pr create --body "see #12"')).toBe(true)
     expect(allowsIssueRefs('gh pr create --body "run with KM_ISSUE_REFS_OK=1 next time"')).toBe(false)
+  })
+})
+
+describe('publishTargetRepo', () => {
+  it('reads -R/--repo in its forms, normalizing URL prefixes', () => {
+    expect(publishTargetRepo('gh -R Stvad/knowledge-medium pr comment 1 -b x')).toBe('Stvad/knowledge-medium')
+    expect(publishTargetRepo('gh pr create --repo other/repo --fill')).toBe('other/repo')
+    expect(publishTargetRepo('gh pr create --repo=github.com/other/repo')).toBe('other/repo')
+    expect(publishTargetRepo('gh pr create --fill')).toBeNull()
+    // quoted prose must not fake a target
+    expect(publishTargetRepo('gh pr comment 1 -b "use --repo other/repo next"')).toBeNull()
+  })
+})
+
+describe('qualified issue references', () => {
+  it('normalizes owner/repo#N and issue URLs for THIS repo', () => {
+    expect(extractIssueRefs(`Fixes ${REPO}#123`)).toEqual([123])
+    expect(extractIssueRefs(`see https://github.com/${REPO}/issues/456 and github.com/${REPO}/pull/789`)).toEqual([456, 789])
+    expect(closeKeywordRefs(`Fixes ${REPO}#123`)).toEqual([123])
+    expect(closeKeywordRefs(`resolves https://github.com/${REPO}/issues/456`)).toEqual([456])
+  })
+
+  it('leaves foreign-repo qualified refs alone', () => {
+    expect(extractIssueRefs('Fixes gastownhall/beads#42')).toEqual([])
+    expect(extractIssueRefs('see https://github.com/gastownhall/beads/issues/42')).toEqual([])
   })
 })
 
@@ -941,6 +970,25 @@ describe('hookPrePr process behavior', { timeout: 20_000 }, () => {
     expect(r.status).toBe(2)
     expect(r.stderr).toContain('Cannot read body file')
     expect(shimCalls()).toBe('')
+  })
+
+  it('lets a foreign-repo publish pass and gates the same-repo -R form', () => {
+    const { hook, shimCalls } = makeRepo({ dbReady: true, ghIssues: { 653: { title: 'Real GC failure', state: 'open' } } })
+    expect(hook('gh --repo other/repo pr comment 12 -b "Fixes #653"').status).toBe(0)
+    expect(shimCalls()).not.toContain('gh api')
+    const r = hook('gh -R Stvad/knowledge-medium pr comment 12 -b "relates to #653"')
+    expect(r.status).toBe(2)
+    expect(r.stderr).toContain('Real GC failure')
+  })
+
+  it('fails closed on a pipe-fed stdin body but lets heredoc stdin through', () => {
+    const { hook } = makeRepo({ dbReady: true, ghIssues: { 653: { title: 'Real GC failure', state: 'open' } } })
+    const piped = hook('cat body.md | gh pr comment 12 -F -')
+    expect(piped.status).toBe(2)
+    expect(piped.stderr).toContain('stdin')
+    const heredoc = hook('gh pr comment 12 -F - <<EOF\nrelates to #653\nEOF')
+    expect(heredoc.status).toBe(2)
+    expect(heredoc.stderr).toContain('Real GC failure')
   })
 
   it('scans file-backed commit messages (-F) for close keywords', () => {
