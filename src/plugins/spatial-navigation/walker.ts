@@ -268,6 +268,8 @@ const collectAncestorLocations = (
   let el = closestBlockAncestor(instanceEl, panel)
   while (el) {
     const location = locationOf(el)
+    // Defence in depth: `findByLocation` treats a missing location as no
+    // match anyway, so a pushed null would change nothing.
     if (location) ancestors.push(location)
     el = closestBlockAncestor(el, panel)
   }
@@ -297,6 +299,8 @@ const findSameDepthSibling = (
   direction: 'prev' | 'next',
 ): FocusedBlockLocation | undefined => {
   const idx = instances.indexOf(instanceEl)
+  // Defence in depth: the only caller already returned if `indexOf` on this
+  // same array was negative.
   if (idx < 0) return undefined
   const own = closestBlockAncestor(instanceEl, panel)
   if (direction === 'prev') {
@@ -317,9 +321,9 @@ const findSameDepthSibling = (
 
 /**
  * Record the focused instance's neighborhood (siblings + ancestors +
- * positional index) inside its panel. Called whenever spatial
- * navigation (or the proactive focus-recovery watcher) confirms that
- * the focused block has a live DOM instance. The hint is consumed by
+ * positional index) inside its panel. Called by the proactive focus-recovery
+ * watcher whenever it confirms that the focused block has a live DOM
+ * instance. The hint is consumed by
  * `findRecoveryAnchor` (and `locateInstance`'s positional tier) when
  * that block later disappears.
  */
@@ -332,6 +336,11 @@ export const rememberInstancePosition = (
   if (!panel) return
   const instances = panelInstances(panel, excludedSurfaces)
   const idx = instances.indexOf(instanceEl)
+  // Defence in depth, unreached by any test: every in-repo caller passes an
+  // element it just found in this panel. `index.ts` re-exports this, so an
+  // extension is the real blast radius — without the guard a hint lands with
+  // BOTH indexes at -1, which either clamp reads as 0: a wrong recovery
+  // target, not none.
   if (idx < 0) return
   const location = locationOf(instanceEl)
   if (!location) return
@@ -394,7 +403,6 @@ export const findRecoveryAnchor = (
   const hint = lastPositionByPanel.get(panelId)
   if (!hint || !sameFocusedBlockLocation(hint.location, forLocation)) return null
   const candidates = sameSurfaceInstances(instances, hint.surface)
-  if (candidates.length === 0) return null
 
   const findByLocation = (location: FocusedBlockLocation | undefined): HTMLElement | undefined =>
     location
@@ -417,8 +425,7 @@ export const findRecoveryAnchor = (
     if (ancestor) return ancestor
   }
 
-  const positionalIndex = hint.surfaceIndex >= 0 ? hint.surfaceIndex : hint.index
-  const positionalChoice = candidates[clamp(positionalIndex, 0, candidates.length - 1)] ?? null
+  const positionalChoice = candidates[clamp(hint.surfaceIndex, 0, candidates.length - 1)] ?? null
   return pickViewportFallback(candidates, positionalChoice)
 }
 
