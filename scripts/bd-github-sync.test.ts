@@ -514,16 +514,22 @@ describe('planMintedRefs', () => {
     ])
   })
 
-  it('ignores pre-existing refs, still-unminted beads, and beads the pull created', () => {
+  it('ignores pre-existing refs and still-unminted beads', () => {
     expect(
       planMintedRefs([bead({ id: 'km-a', external_ref: ref(12) })], [bead({ id: 'km-a', external_ref: ref(12) })]),
     ).toEqual([])
     expect(
       planMintedRefs([bead({ id: 'km-a', external_ref: null })], [bead({ id: 'km-a', external_ref: null })]),
     ).toEqual([])
-    // absent from the pre listing = created by the pull from a GitHub-side
-    // issue, not minted by this run
-    expect(planMintedRefs([], [bead({ id: 'km-a', external_ref: ref(12) })])).toEqual([])
+  })
+
+  // No pull runs between the two listings at either call site, so a
+  // fresh-only row is a concurrent creation from another worktree — its mint
+  // must still be reported, or the mapping is lost forever.
+  it('includes beads that first appear in the post listing already mapped', () => {
+    expect(planMintedRefs([], [bead({ id: 'km-a', external_ref: ref(12) })])).toEqual([
+      { id: 'km-a', number: 12 },
+    ])
   })
 })
 
@@ -542,7 +548,7 @@ describe('planMintedNonOpen', () => {
     }
   })
 
-  it('ignores open mints, pre-existing refs, and beads new in fresh', () => {
+  it('ignores open mints and pre-existing refs; a fresh-only non-open bead IS a suspect', () => {
     expect(
       planMintedNonOpen(
         [bead({ id: 'km-a', status: 'open', external_ref: null })],
@@ -555,7 +561,9 @@ describe('planMintedNonOpen', () => {
         [bead({ id: 'km-a', status: 'closed', external_ref: ref(12) })],
       ),
     ).toEqual([])
-    expect(planMintedNonOpen([], [bead({ id: 'km-a', status: 'closed', external_ref: ref(12) })])).toEqual([])
+    expect(planMintedNonOpen([], [bead({ id: 'km-a', status: 'closed', external_ref: ref(12) })])).toEqual([
+      { id: 'km-a', number: 12 },
+    ])
   })
 })
 
@@ -780,6 +788,25 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     expect(r.status).toBe(1)
     expect(r.stderr).toContain('bd-github-sync: failed')
     expect(r.stdout).toContain('minted: km-t5 → #5')
+  })
+
+  // Position pin: the print must sit ABOVE the snapshot-abort. A minted
+  // CLOSED bead is itself a snapshot suspect (planMintedNonOpen), so a bd
+  // show failure aborts the run right after the mint — below the abort, the
+  // mapping would be swallowed in exactly that case (the failFullSync test
+  // cannot catch this: it mints an OPEN bead, which is never a suspect).
+  it('prints the minted mapping even when the suspect snapshot aborts the run', () => {
+    const unminted = { id: 'km-t6', status: 'closed', priority: 1, title: 'T', description: 'D', external_ref: null, updated_at: '2026-08-19T00:00:00Z' }
+    const minted = { ...unminted, external_ref: ref(6) }
+    const { run } = makeSyncRepo({
+      issues: [ghIssue(6, '2026-08-20T00:00:00Z')],
+      lists: [[unminted], [minted], [minted]],
+      shows: ['not json — snapshot read fails'],
+    })
+    const r = run()
+    expect(r.status).toBe(1)
+    expect(r.stderr).toContain('aborting before pull')
+    expect(r.stdout).toContain('minted: km-t6 → #6')
   })
 
   it('restores a newer local row the pull reverted, then pushes it back out', () => {

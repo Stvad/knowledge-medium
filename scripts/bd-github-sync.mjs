@@ -364,13 +364,16 @@ export const planClosePushes = (beads, issueByNumber, maxKnownIssueNumber) =>
  * already at 2 before the run is untouched — 2 may be deliberate.
  */
 // Beads whose FIRST issue this run minted: external_ref appearing between two
-// listings. `preRefs.get(...) === null` requires presence in the pre listing —
-// a bead the pull created from a GitHub-side issue was not minted by us.
+// listings. A row ABSENT from the pre listing counts too: no pull runs
+// between the two listings at either call site, so a fresh-only row is a
+// concurrent local creation (worktrees share the DB) whose issue this push
+// may still have minted — excluding it loses the mapping forever, while
+// including it costs at most a redundant line or snapshot suspect.
 export const planMintedRefs = (preBeads, postBeads) => {
   const preRefs = new Map(preBeads.map(b => [b.id, b.external_ref ?? null]))
   return postBeads.flatMap(b => {
     const number = issueNumberFromRef(b.external_ref)
-    return number !== null && preRefs.get(b.id) === null ? [{ id: b.id, number }] : []
+    return number !== null && (preRefs.get(b.id) ?? null) === null ? [{ id: b.id, number }] : []
   })
 }
 
