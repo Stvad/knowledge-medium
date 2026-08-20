@@ -1252,9 +1252,13 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
       : null
     const focusTarget = after && !selectedIds.has(after.id) ? after : null
 
+    // One gesture, one undo entry — the N per-block deletes share a group
+    // token and merge at record time (docs/undo-grouping.md). Grouping is not
+    // atomicity: a tx-layer refusal partway through still leaves the prefix
+    // tombstoned, but the user can take that prefix back in one cmd-Z.
     let deleted = false
     await withMoveTransition(async () => {
-      deleted = await deleteBlocksThroughUi(blocks)
+      deleted = await repo.undoGroup(async repo => deleteBlocksThroughUi(blocks, repo))
     })
     if (!deleted) return
     await uiStateBlock.set(selectionStateProp, selectionStateProp.defaultValue)

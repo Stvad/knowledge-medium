@@ -151,30 +151,42 @@ export const applyToAllBlocksInSelection = <T extends ActionContextType>(
     const blocks = applyInReverseOrder ? selectedBlocks.toReversed() : selectedBlocks
     console.log(`[makeMultiSelect] Running action for ${blocks.length} blocks`)
 
-    // todo Wrap all per-block actions into a single repo.tx so undo
-    // collapses the bulk action into one entry; today each per-block
-    // action commits its own tx and is its own undo step.
-
     // Route each per-block sub-invocation through the dispatch choke so the
     // action-dispatch middleware (telemetry, guards, redirects) covers the
     // multi-select fan-out the same as a single dispatch. `repo.facetRuntime`
     // is the live runtime; the early-boot / minimal-harness path with no
     // runtime falls back to calling the handler directly.
     const runtime = uiStateBlock.repo.facetRuntime
-    await withMoveTransition(async () => {
-      // Process blocks sequentially, awaiting each one before proceeding
-      for (const block of blocks) {
-        // Convert dependencies to match the original action's context
-        const originalDeps = {
-          block,
-          uiStateBlock,
-          scopeRootId,
-        } as ShortcutDependenciesMap[T]
 
-        await (runtime
-          ? invokeAction(runtime, {action: actionConfig as ActionConfig, deps: originalDeps, trigger})
-          : actionConfig.handler(originalDeps, trigger))
-      }
+    // One gesture, one undo entry. Each per-block action still commits its own
+    // tx — grouping is not atomicity (docs/undo-grouping.md) — but they carry
+    // a shared token and merge at record time, so a 5-block indent takes one
+    // cmd-Z instead of five. Handlers opt in by writing through
+    // `deps.writeRepo` (see `writeRepo` in blockActions.ts); one that writes
+    // via `block.set` / the ambient repo lands as a foreign tx and merely
+    // SPLITS the group, which is a safe degradation rather than a wrong undo.
+    //
+    // The facade is passed down as a dep and used within the loop, never
+    // stored — the leak `undoGroup` warns about is a facade reaching shared
+    // repo state (identity map, handle store, job queue), not one crossing a
+    // call boundary.
+    await uiStateBlock.repo.undoGroup(async repo => {
+      await withMoveTransition(async () => {
+        // Process blocks sequentially, awaiting each one before proceeding
+        for (const block of blocks) {
+          // Convert dependencies to match the original action's context
+          const originalDeps = {
+            block,
+            uiStateBlock,
+            scopeRootId,
+            writeRepo: repo,
+          } as ShortcutDependenciesMap[T]
+
+          await (runtime
+            ? invokeAction(runtime, {action: actionConfig as ActionConfig, deps: originalDeps, trigger})
+            : actionConfig.handler(originalDeps, trigger))
+        }
+      })
     })
   }
 
