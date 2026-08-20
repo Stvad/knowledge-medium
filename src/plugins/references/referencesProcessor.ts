@@ -675,9 +675,14 @@ const isGeneratedSeatFieldRow = (
  *  properties (alias / types) materialize as hidden field rows (PR #288 §9) —
  *  delete those alongside the seat or they dangle live under the tombstone.
  *  Only machinery-generated field rows go; user content under a seat is left
- *  alone. NOT flip-gated: the cell→children backfill mints those field rows
- *  before the workspace reads them, so a flip-gated tolerance stops reaping
- *  orphan seats for the whole pre-flip window. */
+ *  alone.
+ *
+ *  FLIP-GATED, and that is the data-loss guard — do not "fix" it to match the
+ *  data-keyed recognition everywhere else in this file. Post-flip an edit to a
+ *  generated value row reprojects into the seat's cell, so `matchesAliasSeatSeed`
+ *  sees the drift; pre-flip the projection is dormant and nothing can vouch for
+ *  the subtree, so ANY child blocks. The full reasoning, and why a
+ *  per-attribute guard is the wrong answer, is at the gate itself. */
 const reapSeatsInTx = async (
   ctx: ProcessorCtx,
   workspaceId: string,
@@ -821,11 +826,13 @@ const liveReferenceTargetIds = (row: BlockData | null): ReadonlySet<string> =>
  *     never the uuidv5 slot id);
  *   - not date-shaped (§7.6 daily-note exemption — belt on top of the
  *     id gate, which already excludes the daily namespace);
- *   - no live children beyond the seat's own generated field rows, in any
- *     workspace (`isGeneratedSeatFieldRow` — the `::` bit AND the generated
- *     id). Anything else would strand live under the tombstone, since the
- *     delete sweep takes only what that predicate matches; Codex review on
- *     PR #428.
+ *   - no live children at all in an un-flipped workspace; in a child-backed
+ *     one, none beyond the seat's own generated field rows
+ *     (`isGeneratedSeatFieldRow` — the `::` bit AND the generated id).
+ *     Anything else would strand live under the tombstone, since the delete
+ *     sweep takes only what that predicate matches; Codex review on PR #428.
+ *     The un-flipped half is a deliberate data-loss guard, not dormancy —
+ *     see `reapSeatsInTx`.
  *  A wrongly-skipped seat is the safe miss (it just keeps squatting
  *  until the alias is re-typed and re-dropped); a wrong DELETE of a
  *  user page is the failure this gate stack exists to make unreachable.
