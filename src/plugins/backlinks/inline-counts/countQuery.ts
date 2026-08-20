@@ -4,7 +4,7 @@ import {
   TYPED_BLOCKS_STRUCTURE_CHANNEL,
   typedBlocksStructureKey,
 } from '@/data/invalidation'
-import { BACKLINKS_FOR_BLOCK_QUERY } from '../query.ts'
+import { BACKLINKS_FOR_BLOCK_QUERY, workspaceHasPropertyMachinery } from '../query.ts'
 
 export const BACKLINKS_COUNT_FOR_BLOCK_QUERY = 'backlinks.countForBlock'
 
@@ -16,8 +16,8 @@ const numberSchema: Schema<number> = {
  *  `backlinks.forBlock` set, obtained by resolving that query and taking its
  *  length, so membership and invalidation match it by construction.
  *
- *  It used to aggregate in SQL (`core.typedBlockCount`) without materialising
- *  the id list, which is cheaper and cannot be made to agree: see the
+ *  — but only where machinery can exist. Otherwise it aggregates in SQL
+ *  (`core.typedBlockCount`) without materialising the id list at all. See the
  *  property-machinery paragraph below.
  *
  *  Intentionally unfiltered with respect to the USER filter, even though the
@@ -30,13 +30,12 @@ const numberSchema: Schema<number> = {
  *  is source de-duplication, not a user filter, so a hidden value row's
  *  `[[Target]]` must not inflate the badge past the list the user gets on
  *  expand. That exclusion is a post-filter on ids, so counting it means
- *  materialising them — which is why the SQL aggregate is gone rather than
- *  kept behind a condition. There used to be a second path — the
- *  pure `core.typedBlockCount` aggregate for un-flipped workspaces, on the
- *  premise that they hold no machinery. The cell->children backfill mints it
- *  before the flip, and the badge then counted a hidden value row the expanded
- *  list did not: 2 on the badge, 1 in the list, on every page with a ref-typed
- *  property pointing at the target.
+ *  materialising them — which is why the id-list path exists at all. The
+ *  condition it sits behind used to be the workspace flip, on the premise that
+ *  only a flipped workspace holds machinery; the cell->children backfill mints
+ *  it before the flip, and the badge then counted a hidden value row the
+ *  expanded list did not (2 on the badge, 1 in the list). It now asks the
+ *  rows.
  *
  *  Explicit const type (like `backlinksForBlockQuery`) so `typeof` is knowable
  *  without inferring this initializer, which would loop through QueryRegistry
@@ -61,7 +60,24 @@ export const backlinksCountForBlockQuery: Query<
       channel: TYPED_BLOCKS_STRUCTURE_CHANNEL,
       key: typedBlocksStructureKey(workspaceId, id),
     })
-    return (await ctx.run(BACKLINKS_FOR_BLOCK_QUERY, { workspaceId, id })).length
+    // Two paths, keyed on the DATA rather than on the flip. The exclusion is a
+    // post-filter on ids, so a count that applies it has to materialize them —
+    // and badge/list parity is not optional (2 on the badge, 1 in the list, on
+    // every page with a ref-typed property pointing at the target). But with no
+    // machinery in the workspace the filter is provably a no-op, and then the
+    // SQL aggregate is both cheaper and exactly equal.
+    //
+    // The old gate asked `properties_migration`, on the premise that only a
+    // flipped workspace holds machinery. The backfill mints it before the flip,
+    // which is why this asks the rows instead.
+    if (await workspaceHasPropertyMachinery(ctx.db, workspaceId)) {
+      return (await ctx.run(BACKLINKS_FOR_BLOCK_QUERY, { workspaceId, id })).length
+    }
+    return ctx.run('core.typedBlockCount', {
+      workspaceId,
+      referencedBy: { id },
+      exclude: [{ scope: 'self', id }],
+    })
   },
 })
 

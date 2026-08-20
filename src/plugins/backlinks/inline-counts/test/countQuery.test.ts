@@ -207,6 +207,41 @@ describe('backlinks.countForBlock — handle behaviour', () => {
     await vi.waitFor(() => expect(fired).toEqual([0, 1, 0]))
   })
 
+  it('agrees with the list on the aggregate path, where no machinery exists', async () => {
+    // The badge takes a SQL COUNT when the workspace holds no field rows, and
+    // the id-list resolve otherwise. Two paths means two chances to disagree,
+    // and only the id-list one applies the machinery filter — so pin that they
+    // return the SAME number when the fast path is the one taken.
+    const PLAIN_WS = 'ws-no-machinery'
+    await sharedDb.db.execute(
+      `INSERT OR REPLACE INTO workspaces
+         (id, name, owner_user_id, create_time, update_time, encryption_mode, wk_canary, properties_migration)
+       VALUES (?, 'plain ws', 'user-1', 1, 1, 'none', NULL, 'cell')`,
+      [PLAIN_WS],
+    )
+    const mk = (id: string, references: BlockReference[] = []) =>
+      env.repo.tx(tx => tx.create({
+        id, workspaceId: PLAIN_WS, parentId: null, orderKey: `k-${id}`,
+        content: '', references,
+      }), { scope: ChangeScope.BlockDefault })
+    await mk('PTarget')
+    await mk('PA', [{ id: 'PTarget', alias: 'T' }])
+    await mk('PB', [{ id: 'PTarget', alias: 'T' }])
+    // Self-reference: the aggregate excludes it in SQL, the list with .filter —
+    // the one place the two paths could legitimately drift.
+    await env.repo.tx(tx => tx.update('PTarget', {
+      references: [{ id: 'PTarget', alias: 'T' }],
+    }), { scope: ChangeScope.BlockDefault })
+
+    const list = await env.repo.runQuery(BACKLINKS_FOR_BLOCK_QUERY,
+      { workspaceId: PLAIN_WS, id: 'PTarget' }) as string[]
+    const count = await env.repo.runQuery(BACKLINKS_COUNT_FOR_BLOCK_QUERY,
+      { workspaceId: PLAIN_WS, id: 'PTarget' }) as number
+
+    expect([...list].sort()).toEqual(['PA', 'PB'])
+    expect(count).toBe(list.length)
+  })
+
   // The badge must not count sources the expanded list drops, or the user sees
   // a phantom backlink that vanishes on expand.
   // Both states, because the cell->children backfill mints machinery BEFORE

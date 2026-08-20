@@ -22,6 +22,33 @@ export const BACKLINKS_FOR_BLOCK_QUERY = 'backlinks.forBlock'
  *  observer's staging reads use (`materialize.ts`). 500 keeps a wide margin. */
 const MACHINERY_SOURCE_CHUNK = 500
 
+/** Does this workspace hold ANY property machinery at all?
+ *
+ *  Data-keyed, not flip-gated — it asks about the rows that exist, so a
+ *  backfilled pre-flip workspace answers yes and a flipped one that has never
+ *  been backfilled answers no. One indexed probe (`idx_blocks_field_form`,
+ *  partial on exactly this predicate).
+ *
+ *  Its job is to keep the machinery filters from doing work that provably
+ *  finds nothing: the ancestor walk below, and — the expensive one — the
+ *  inline badge's whole id-list resolve. On a graph with no field rows both
+ *  are guaranteed-empty, and every outline render was paying for them.
+ *
+ *  STALENESS: like the filters themselves this declares no dependency, so a
+ *  mounted view can hold the fast path past the moment a workspace first grows
+ *  machinery (km-z2bk). That moment is a backfill writing hundreds of
+ *  thousands of rows, whose invalidation traffic no mounted view outlives —
+ *  and it is the same dependency gap the filters already have, not a new one.
+ */
+export const workspaceHasPropertyMachinery = async (
+  db: { getOptional<T>(sql: string, params?: unknown[]): Promise<T | null> },
+  workspaceId: string,
+): Promise<boolean> => (await db.getOptional(
+  `SELECT 1 AS one FROM blocks
+    WHERE workspace_id = ? AND deleted = 0 AND is_field_form = 1 LIMIT 1`,
+  [workspaceId],
+)) !== null
+
 /** Which of `sourceIds` are property-subtree INTERIOR machinery — a value child,
  *  or a row deeper inside a property subtree, whose parent chain passes through
  *  a §9 field row. Recognition IS `recognizedFieldRowSql`, shared with the
@@ -221,6 +248,7 @@ export const backlinksForBlockQuery: Query<
     // ancestor, and this query is composed by the inline badge on every
     // visible block. km-nc46.
     if (rawSources || ids.length === 0) return ids
+    if (!(await workspaceHasPropertyMachinery(ctx.db, workspaceId))) return ids
     const machinery = await propertyMachinerySourceIds(ctx.db, ids, registrySeedParams(ctx.repo))
     return machinery.size === 0 ? ids : ids.filter(sourceId => !machinery.has(sourceId))
   },
