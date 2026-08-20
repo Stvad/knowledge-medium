@@ -693,6 +693,87 @@ describe('workspace backfill runner — operator outcomes', () => {
     expect(runs).toEqual([])
   })
 
+  // Records attempts so these can assert the runner never reached the claim.
+  const recordingClaim = (attempts: string[]) => ({
+    tryClaim: async (_ws: string, id: string) => { attempts.push(id); return true },
+    markComplete: async () => {},
+    releaseClaim: async () => {},
+  })
+
+  const staleRunRepo = (attempts: string[], id: string) => {
+    const {repo} = createTestRepo({
+      db: sharedDb.db,
+      user: {id: 'user-1'},
+      backfillCompletionClaim: recordingClaim(attempts),
+    })
+    repo.setActiveWorkspaceId(WS)
+    repo.setRuntimeContributions(workspaceBackfillsFacet, 'test-backfills', [{
+      id,
+      trigger: 'operator' as const,
+      run: async () => {},
+    }])
+    return repo
+  }
+
+  it('does not claim into a workspace the user has left', async () => {
+    // `tryClaim` WRITES. A re-arm carrying a departed workspace id reaches it
+    // with a MATCHING generation — `scheduleWorkspaceBackfills` captures the
+    // generation when it is called, not when the run was scheduled — and the
+    // registry check admits it too, since it accepts the previous workspace.
+    const attempts: string[] = []
+    const repo = staleRunRepo(attempts, 'departed-ws-v1')
+    await seedTarget(repo)
+
+    expect(await repo.runWorkspaceBackfillNow('ws-departed', 'departed-ws-v1')).toEqual({
+      outcome: 'deferred',
+      undoHistoryCleared: false,
+      reason: expect.stringContaining('no longer active'),
+    })
+    expect(attempts).toEqual([])
+  })
+
+  it('does not claim when the workspace changes while the sync check is in flight', async () => {
+    // The check before the gap cannot cover this: `syncViewGap` awaits.
+    const attempts: string[] = []
+    const repo = staleRunRepo(attempts, 'switch-midflight-v1')
+    await seedTarget(repo)
+    const realGap = repo.syncViewGap.bind(repo)
+    vi.spyOn(repo, 'syncViewGap').mockImplementation(async () => {
+      const gap = await realGap()
+      repo.setActiveWorkspaceId('ws-elsewhere')
+      return gap
+    })
+
+    expect(await repo.runWorkspaceBackfillNow(WS, 'switch-midflight-v1')).toEqual({
+      outcome: 'deferred',
+      undoHistoryCleared: false,
+      reason: expect.stringContaining('no longer active'),
+    })
+    expect(attempts).toEqual([])
+  })
+
+  it('does not claim when the workspace is re-opened while the sync check is in flight', async () => {
+    // A -> B -> A restores the id, so an identity-only check passes while the
+    // run still belongs to the EARLIER visit. The generation tells them apart.
+    const attempts: string[] = []
+    const repo = staleRunRepo(attempts, 'reopen-midflight-v1')
+    await seedTarget(repo)
+    const realGap = repo.syncViewGap.bind(repo)
+    vi.spyOn(repo, 'syncViewGap').mockImplementation(async () => {
+      const gap = await realGap()
+      repo.setActiveWorkspaceId('ws-elsewhere')
+      repo.setActiveWorkspaceId(WS)
+      return gap
+    })
+
+    expect(await repo.runWorkspaceBackfillNow(WS, 'reopen-midflight-v1')).toEqual({
+      outcome: 'deferred',
+      undoHistoryCleared: false,
+      reason: expect.stringContaining('re-opened'),
+    })
+    expect(attempts).toEqual([])
+  })
+
   it('reports failure, not success, when the pass throws', async () => {
     // Reporting "ran" for a pass that died tells the operator the migration is
     // done when it is not, and costs them the retry.

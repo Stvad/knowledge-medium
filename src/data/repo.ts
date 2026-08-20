@@ -2959,6 +2959,15 @@ export class Repo {
       failed = 'no BackfillCompletionClaim is configured, so completion cannot be recorded'
       return {completed, undoHistoryCleared, deferred, failed}
     }
+    // Stale covers BOTH ways a run can outlive its workspace: switched away (id
+    // differs) and switched away and back (id restored, generation moved).
+    // Identity first, so each case reports its own cause.
+    const runStale = (): string | null =>
+      this.activeWorkspaceId !== workspaceId
+        ? `workspace ${workspaceId} is no longer active`
+        : this.workspaceGeneration !== generation
+          ? `workspace ${workspaceId} was re-opened since this run was scheduled`
+          : null
     for (const backfill of backfills) {
       // A role flip to read-only during the deferral window must stop further
       // writes — re-check per backfill (the loop can span several txs).
@@ -2967,6 +2976,16 @@ export class Repo {
       // scheduled. `assertBackfillMayWrite` catches this per transaction, but
       // that is one tx too late to avoid the scan a backfill does first.
       if (this.workspaceGeneration !== generation) return {completed, undoHistoryCleared, deferred, failed}
+      // The generation check above cannot see an id mismatch on a MATCHING
+      // generation, which is what an operator naming a non-active workspace
+      // produces. `deferred` must be set: an empty result reads as
+      // `held-by-peer`, telling them "already done" about a run that never
+      // started.
+      const stale = runStale()
+      if (stale !== null) {
+        deferred = stale
+        return {completed, undoHistoryCleared, deferred, failed}
+      }
       // BEFORE claiming: an unprimed registry makes the whole graph look like
       // it has zero registered properties, so a pass would find no candidates,
       // write nothing, and then record a PERMANENT per-graph completion — the
@@ -3029,6 +3048,15 @@ export class Repo {
         // `scheduleWorkspaceBackfills` schedules. An `operator` pass defers to
         // its caller, who is a person that can be told to retry.
         this.scheduleWorkspaceBackfills(workspaceId)
+        return {completed, undoHistoryCleared, deferred, failed}
+      }
+      // Re-evaluated: the gap check above AWAITS, and a switch across that await
+      // leaves the earlier evaluation stale — including a switch away and back,
+      // which restores the id and moves only the generation. Last statement
+      // before the claim write, nothing awaited in between.
+      const staleNow = runStale()
+      if (staleNow !== null) {
+        deferred = staleNow
         return {completed, undoHistoryCleared, deferred, failed}
       }
       if (!(await claim.tryClaim(workspaceId, backfill.id, {
