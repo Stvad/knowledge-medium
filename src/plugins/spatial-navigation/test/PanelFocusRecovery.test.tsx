@@ -19,8 +19,8 @@ const USER: User = {id: 'user-1'}
 const PANEL_ID = 'panel'
 
 // Comfortably past the component's RECOVERY_DEBOUNCE_MS (250) so a pending
-// recovery would have fired if one were armed. The two no-fire tests below
-// pair it with a `repo.tx` spy: a recovery is `void focusBlock(...)`, an
+// recovery would have fired if one were armed. The no-fire tests below pair
+// it with a `repo.tx` spy: a recovery is `void focusBlock(...)`, an
 // unawaited tx, so the focus VALUE still reads pre-recovery whatever the
 // component did — asserting on it would pass with the watchdog deleted.
 const DEBOUNCE_SETTLE_MS = 350
@@ -382,13 +382,20 @@ describe('PanelFocusRecovery', {timeout: TEST_TIMEOUT_MS}, () => {
     } finally {
       vi.useRealTimers()
     }
+
+    // The write is unawaited, so it is still in flight here — settle it before
+    // `beforeEach` resets the shared DB under it, and take the chance to check
+    // WHAT it wrote, which the tx count alone doesn't.
+    await expectRecoveredFocus('last')
   })
 
   it('does not recover when the panel element is replaced with the block still in it', async () => {
-    // The watcher's MutationObserver is bound to the panel element it mounted
-    // with, so a panel REMOUNT is the one disappearance it cannot see: no
-    // observer fire means nothing cancels the armed recovery. Only the
-    // re-check at write time notices the block is alive in the new element.
+    // Swapping the element out from under the observer is the mechanical way
+    // to reach the write-time re-check: the observer watches the element
+    // `panelById` resolved at mount, so a block returning in a DIFFERENT
+    // element fires nothing it can see and nothing cancels the armed recovery.
+    // (Not a panel remount — this component mounts inside the panel div, so a
+    // remount unmounts it and the cleanup clears the timer.)
     const panel = buildPanelDom(PANEL_ID, ['first', 'middle', 'last'])
 
     const panelBlock = env.repo.block(PANEL_ID)
@@ -398,13 +405,19 @@ describe('PanelFocusRecovery', {timeout: TEST_TIMEOUT_MS}, () => {
       render(<PanelFocusRecovery block={panelBlock}/>)
       panel.querySelector('[data-block-id="middle"]')!.remove()
       await act(async () => { await vi.advanceTimersByTimeAsync(20) })
+      // Without this the assertion below passes for a panel that never armed
+      // a recovery at all.
+      expect(findRecoveryAnchor(
+        PANEL_ID,
+        focusedLocation('middle'),
+        resolveSpatialNavExclusions(env.repo.facetRuntime),
+      )).not.toBeNull()
 
       panel.remove()
       buildPanelDom(PANEL_ID, ['first', 'middle', 'last'])
 
       await act(async () => { await vi.advanceTimersByTimeAsync(DEBOUNCE_SETTLE_MS) })
       expect(txSpy).not.toHaveBeenCalled()
-      expect(peekFocusedBlockLocation(panelBlock)?.blockId).toBe('middle')
     } finally {
       vi.useRealTimers()
     }

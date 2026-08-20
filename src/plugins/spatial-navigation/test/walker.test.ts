@@ -482,6 +482,7 @@ describe('findRecoveryAnchor (proactive disappear-handler)', () => {
     // sibling survives but the parent itself does.
     buildBarePanel({panelId: 'p1', instances: [
       p1Instance('parent', ['c1', 'X', 'c3'].map(id => p1Instance(id))),
+      p1Instance('after'),
     ]})
 
     rememberInstancePosition('p1', findInstance('p1:X'))
@@ -490,6 +491,11 @@ describe('findRecoveryAnchor (proactive disappear-handler)', () => {
     for (const c of ['c1', 'X', 'c3']) findInstance(`p1:${c}`).remove()
 
     setTestVisible(findInstance('p1:parent'), true)
+    // `after` exists and is visible so the positional clamp — X's index, past
+    // the surviving candidates — lands THERE. Without it the clamp answers
+    // `parent` too and this test cannot tell the ancestor tier from the
+    // fallback.
+    setTestVisible(findInstance('p1:after'), true)
     expect(findRecoveryAnchor('p1', p1Location('X'))?.dataset.blockId).toBe('parent')
   })
 
@@ -583,6 +589,10 @@ describe('findRecoveryAnchor (proactive disappear-handler)', () => {
     findInstance('p1:X').remove()
 
     setTestVisible(findInstance('p1:parent'), true)
+    // Visible so the positional clamp resolves to `below` rather than being
+    // vetoed back onto `parent` — otherwise the fallback answers this test
+    // correctly and the ancestor tier goes unpinned.
+    setTestVisible(findInstance('p1:below'), true)
     expect(findRecoveryAnchor('p1', p1Location('X'))?.dataset.blockId).toBe('parent')
   })
 

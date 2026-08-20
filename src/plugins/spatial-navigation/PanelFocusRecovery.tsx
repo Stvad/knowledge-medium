@@ -180,21 +180,23 @@ const runRecoveryCheck = (
 
   pendingTimerRef.current = setTimeout(() => {
     pendingTimerRef.current = null
-    // Re-verify at the moment of write. The instance re-check earns its
-    // place on the one disappearance the observer cannot see: replacing the
-    // panel ELEMENT fires no mutation inside the observed subtree, so nothing
-    // cancelled this timer and the block is alive in the new element. The
-    // focus-identity check below it is defence in depth — an in-process focus
-    // change re-enters `runRecoveryCheck` and cancels above, so it has no
-    // reachable case today. Exclusions are re-resolved rather than closed
-    // over, in case a facet runtime swap landed mid-debounce.
+    // Defence in depth: a focus change re-enters `runRecoveryCheck` and
+    // cancels this timer once its re-render commits. What's left is the window
+    // where that commit lands after the debounce has already expired — no test
+    // reaches it, so don't read the green suite as "this is dead".
     const stillFocused = peekFocusedBlockLocation(block)
     if (
       !stillFocused ||
       stillFocused.blockId !== focusedLocation.blockId ||
       stillFocused.renderScopeId !== focusedLocation.renderScopeId
     ) return
+    // Re-resolved rather than closed over: a facet runtime swap can land
+    // mid-debounce.
     const excludedSurfaces = resolveSpatialNavExclusions(block.repo.facetRuntime)
+    // Load-bearing. The observer watches the element `panelById` resolved at
+    // mount, and `panelById` is a document-wide first match — so if that id
+    // comes to resolve elsewhere, the block can return with no mutation the
+    // observer can see and nothing cancels this timer.
     if (instanceAt(block.id, focusedLocation, excludedSurfaces)) return
     const anchor = findRecoveryAnchor(block.id, focusedLocation, excludedSurfaces)
     const recoveryLocation = anchor ? locationOf(anchor) : null
