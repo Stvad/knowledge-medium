@@ -7,7 +7,7 @@ import type { Session } from '@supabase/supabase-js'
 // Answering that with a stubbed `fetch` is a trap: any 4xx is fatal to auth-js,
 // and its failure path calls `_removeSession()` — deleting the very key
 // `readPersistedSession` is asserted to return. Nothing here needs a client.
-vi.mock('@supabase/supabase-js', () => ({createClient: () => ({})}))
+vi.mock('@supabase/supabase-js', async orig => ({...await orig(), createClient: () => ({})}))
 
 // Guards the mock. The throw alone reports nothing — the client's work is
 // unawaited, so auth-js swallows it as a retryable transport error and only the

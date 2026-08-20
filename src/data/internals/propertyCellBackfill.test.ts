@@ -16,7 +16,7 @@ import { createTestRepo } from '@/data/test/createTestRepo'
 import type { WorkspaceBackfillContext } from '@/data/facets'
 import {
   CANDIDATE_SQL, PROPERTY_CELL_BACKFILL_ID, ROWS_PER_KEY, TARGET_INSERT_ROWS,
-  runPropertyCellBackfill,
+  onPropertyCellBackfillProgress, runPropertyCellBackfill,
 } from './propertyCellBackfill'
 
 const WS = 'ws-cell-backfill'
@@ -131,12 +131,12 @@ const fieldRowCount = async (): Promise<number> => (await repo.db.get<{n: number
     WHERE workspace_id = ? AND deleted = 0 AND is_field_form = 1`, [WS],
 ))!.n
 
-// The four `seedNotes` tests are the only slow ones here — the other 17 are
-// sub-100ms. They measure 0.2-0.9s alone and clear the 5000ms default on an idle
-// gate, but the gate runs a worker per core and their cost moves several-fold
-// with ambient load: overshooting it under load is #633 and #639. So the budget
-// is set well above any single measurement rather than tuned to one — figures
-// taken on a busy machine vary too much between runs to be worth pinning here.
+// The four `seedNotes` tests dominate this file; the rest are milliseconds. They
+// clear vitest's 5000ms default on an idle machine and overshoot it on a loaded
+// one, which is what #633 and #639 are. No per-test figures here on purpose:
+// the cost moves several-fold with ambient load, so any number written down is
+// wrong under some other load, and sizing the budget from one is how it ends up
+// too tight again.
 describe('property cell → children backfill', {timeout: 30_000}, () => {
   it('gives a registered cell key its field row and value row', async () => {
     await create('b1', {'demo:note': 'hello'})
@@ -207,10 +207,19 @@ describe('property cell → children backfill', {timeout: 30_000}, () => {
     // the claim would then record the migration as complete. A whole SCAN_PAGE
     // still fits here, so cursor resume ACROSS pages is not exercised.
     const ids = await seedNotes(TWO_BATCHES)
+    const batchSizes: number[] = []
+    const off = onPropertyCellBackfillProgress(p => batchSizes.push(p.blocksScanned))
 
-    expect((await run()).outcome).toBe('ran')
+    const result = await run()
+    off()
 
+    expect(result.outcome).toBe('ran')
     expect(await fieldRowCount()).toBe(ids.length)
+    // TWO_BATCHES follows the budget's VALUE; this pins the batching RULE it
+    // assumes. Drop the ROWS_PER_KEY factor from the drain loop — a real bug,
+    // doubling every transaction — and the fixture collapses to one batch: this
+    // test stops crossing a boundary, and the whole file still passes.
+    expect(batchSizes[0]).toBeLessThan(ids.length)
   })
 
   it('reports a block whose cell value cannot be decoded and migrates the rest', async () => {
