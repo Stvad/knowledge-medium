@@ -133,7 +133,7 @@ const COMMAND_PREFIXES = String.raw`(?:(?:command|env|nohup|time|xargs)\s+|[A-Za
 const GH_PUBLISH = new RegExp(
   SEGMENT_START +
     COMMAND_PREFIXES +
-    String.raw`(?:\S*\/)?gh\s+(?:pr\s+(?:create|edit|comment|review|merge)|issue\s+(?:create|edit|comment|close)|release\s+(?:create|edit))\b`,
+    String.raw`(?:\S*\/)?gh\s+(?:pr\s+(?:create|edit|comment|review|merge|close|reopen)|issue\s+(?:create|edit|comment|close|reopen)|release\s+(?:create|edit))\b`,
   'm',
 )
 
@@ -145,7 +145,13 @@ export const matchesPrCommand = cmd => GH_PUBLISH.test(commandSkeleton(cmd))
 // reference gate: close-keyword refs only, scanned from the raw command
 // (the message lives inside quotes the skeleton blanks). Plain mentions and
 // ordinary commits pass untouched — zero subprocesses.
-const GIT_COMMIT = new RegExp(SEGMENT_START + COMMAND_PREFIXES + String.raw`(?:\S*\/)?git\s+commit\b`, 'm')
+// Git global options (-C <path>, -c k=v, --git-dir=…) may sit between `git`
+// and the subcommand; the value-optional branch over-matches harmlessly —
+// a false positive only costs a zero-subprocess keyword scan.
+const GIT_COMMIT = new RegExp(
+  SEGMENT_START + COMMAND_PREFIXES + String.raw`(?:\S*\/)?git\s+(?:-\S+\s+(?:[^-\s]\S*\s+)?)*commit\b`,
+  'm',
+)
 export const matchesCommitCommand = cmd => GIT_COMMIT.test(commandSkeleton(cmd))
 
 // The escape hatch must also be in command-prefix position of the SKELETON —
@@ -272,17 +278,18 @@ export const planClosePushes = (beads, issueByNumber, maxKnownIssueNumber) =>
  * bead new this run at 2 takes the label-derived value if one exists. A bead
  * already at 2 before the run is untouched — 2 may be deliberate.
  */
-// Closed beads whose FIRST issue the pre-pull push just minted: the mint
-// creates the issue OPEN with a fresh timestamp, so the timestamp-based
-// suspect test above can never flag them, yet the pull can apply that OPEN
-// copy over the local close (trap 3's population, re-exposed by pushing
-// before the pull). Detected as external_ref appearing between the pre-push
+// Beads in any non-open status whose FIRST issue the pre-pull push just
+// minted: the mint creates the issue OPEN with a fresh timestamp, so the
+// timestamp-based suspect test above can never flag them, yet the pull can
+// apply that OPEN copy over the local lifecycle state — closes (trap 3's
+// population, re-exposed by pushing before the pull), claims, blocks and
+// deferrals alike. Detected as external_ref appearing between the pre-push
 // and post-push listings.
-export const planMintedClosed = (preBeads, freshBeads) => {
+export const planMintedNonOpen = (preBeads, freshBeads) => {
   const preRefs = new Map(preBeads.map(b => [b.id, b.external_ref ?? null]))
   return freshBeads.flatMap(b => {
     const number = issueNumberFromRef(b.external_ref)
-    return b.status === 'closed' && number !== null && preRefs.get(b.id) === null ? [{ id: b.id, number }] : []
+    return b.status !== 'open' && number !== null && preRefs.get(b.id) === null ? [{ id: b.id, number }] : []
   })
 }
 
@@ -559,7 +566,7 @@ const runSync = ({ quiet = false, dryRun = false } = {}) => {
     // spawn, not run(): `bd show` output is pretty-printed JSON, and a
     // description line starting with "Error" would trip run()'s bd check.
     const freshBeads = dryRun ? preBeads : listAllBeads()
-    const suspects = [...planLocalWins(freshBeads, issueByNumber), ...planMintedClosed(preBeads, freshBeads)]
+    const suspects = [...planLocalWins(freshBeads, issueByNumber), ...planMintedNonOpen(preBeads, freshBeads)]
     // Tolerant multi-id show: parse stdout directly — `bd show` output is
     // pretty-printed JSON, and a description line starting with "Error" would
     // trip run()'s bd check. Returns null on any shortfall, including bd's
@@ -735,11 +742,21 @@ const hookPrePr = () => {
   const cmd = payload?.tool_input?.command ?? ''
   if (!cmd) allow()
   const cwd = payload?.cwd ?? process.cwd()
-  const readBodies = () =>
-    bodyFilePaths(cmd)
-      .map(p => resolveBodyPath(p, cwd, homedir()))
-      .filter(p => existsSync(p))
-      .map(p => readFileSync(p, 'utf8'))
+  // Fail closed on a referenced body file this hook cannot read (a `cd` chain
+  // inside the command, a typo): silently skipping it would publish whatever
+  // references it holds unverified. Cheaper than simulating the shell.
+  const readBodies = () => {
+    const paths = bodyFilePaths(cmd).map(p => resolveBodyPath(p, cwd, homedir()))
+    const missing = paths.filter(p => !existsSync(p))
+    if (missing.length && !allowsIssueRefs(cmd)) {
+      console.error(
+        `Cannot read body file(s) referenced by this command: ${missing.join(', ')} (resolved from ${cwd}; cd chains inside the command are not followed).\n` +
+          'Run from the directory the paths are relative to, inline the body, or — after verifying the references yourself — re-run with KM_ISSUE_REFS_OK=1 prefixed.',
+      )
+      process.exit(2)
+    }
+    return paths.filter(p => existsSync(p)).map(p => readFileSync(p, 'utf8'))
+  }
   if (!matchesPrCommand(cmd)) {
     // The commit leg: only a close keyword aimed at a #N warrants a round.
     // The message may be file-backed (git commit -F/--file), so scan those

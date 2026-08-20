@@ -21,7 +21,7 @@ import {
   planClosePushes,
   planCloseReconciliation,
   planLocalWins,
-  planMintedClosed,
+  planMintedNonOpen,
   planPriorityFixes,
   planRestoreArgs,
   REPO,
@@ -72,6 +72,9 @@ describe('matchesPrCommand', () => {
     'gh issue create --title t --body b',
     'gh issue edit 9 --body "x"',
     'gh issue close 9 --comment "done"',
+    'gh pr close 12 --comment "see the tracker"',
+    'gh pr reopen 12 -c "reopening"',
+    'gh issue reopen 9 -c "still broken"',
     'gh issue comment 34 --body-file /tmp/c.md',
     'gh release create v1 --notes "x"',
     'GITHUB_TOKEN=x gh pr create --fill',
@@ -326,6 +329,13 @@ describe('matchesCommitCommand', () => {
     expect(matchesCommitCommand('echo "git commit is next"')).toBe(false)
     expect(matchesCommitCommand('git log')).toBe(false)
   })
+
+  it('sees through git global options before the subcommand', () => {
+    expect(matchesCommitCommand('git -C /workspace/repo commit -m m')).toBe(true)
+    expect(matchesCommitCommand('git -c user.name=x commit -m m')).toBe(true)
+    expect(matchesCommitCommand('git --git-dir=/r/.git commit -m m')).toBe(true)
+    expect(matchesCommitCommand('git push origin commit')).toBe(false)
+  })
 })
 
 describe('buildIssueRefsMessage', () => {
@@ -371,27 +381,35 @@ describe('planLocalWins', () => {
   })
 })
 
-describe('planMintedClosed', () => {
-  it('flags a closed bead whose first issue the pre-push just minted', () => {
+describe('planMintedNonOpen', () => {
+  it('flags a non-open bead whose first issue the pre-push just minted', () => {
     const pre = [bead({ id: 'km-a', status: 'closed', external_ref: null })]
     const fresh = [bead({ id: 'km-a', status: 'closed', external_ref: ref(12) })]
-    expect(planMintedClosed(pre, fresh)).toEqual([{ id: 'km-a', number: 12 }])
+    expect(planMintedNonOpen(pre, fresh)).toEqual([{ id: 'km-a', number: 12 }])
+  })
+
+  it('covers every lifecycle status GitHub OPEN cannot represent', () => {
+    for (const status of ['in_progress', 'blocked', 'deferred']) {
+      const pre = [bead({ id: 'km-a', status, external_ref: null })]
+      const fresh = [bead({ id: 'km-a', status, external_ref: ref(12) })]
+      expect(planMintedNonOpen(pre, fresh)).toEqual([{ id: 'km-a', number: 12 }])
+    }
   })
 
   it('ignores open mints, pre-existing refs, and beads new in fresh', () => {
     expect(
-      planMintedClosed(
+      planMintedNonOpen(
         [bead({ id: 'km-a', status: 'open', external_ref: null })],
         [bead({ id: 'km-a', status: 'open', external_ref: ref(12) })],
       ),
     ).toEqual([])
     expect(
-      planMintedClosed(
+      planMintedNonOpen(
         [bead({ id: 'km-a', status: 'closed', external_ref: ref(12) })],
         [bead({ id: 'km-a', status: 'closed', external_ref: ref(12) })],
       ),
     ).toEqual([])
-    expect(planMintedClosed([], [bead({ id: 'km-a', status: 'closed', external_ref: ref(12) })])).toEqual([])
+    expect(planMintedNonOpen([], [bead({ id: 'km-a', status: 'closed', external_ref: ref(12) })])).toEqual([])
   })
 })
 
@@ -844,6 +862,23 @@ describe('hookPrePr process behavior', { timeout: 20_000 }, () => {
     const r = hook('git commit -m "land the fix\n\nFixes #700"')
     expect(r.status).toBe(2)
     expect(r.stderr).toContain('close keyword targets a PR')
+  })
+
+  it('gates a close keyword behind git global options (git -C … commit)', () => {
+    const { hook, repo } = makeRepo({ dbReady: true, ghIssues: { 700: { title: 'Some PR', state: 'open', pull_request: {} } } })
+    const r = hook(`git -C ${repo} commit -m "Fixes #700"`)
+    expect(r.status).toBe(2)
+    expect(r.stderr).toContain('close keyword targets a PR')
+  })
+
+  // A referenced body file the hook cannot read fails CLOSED: silently
+  // skipping it would publish whatever references it holds unverified.
+  it('blocks a publish whose body file cannot be resolved', () => {
+    const { hook, shimCalls } = makeRepo({ dbReady: true })
+    const r = hook('cd subdir && gh pr create -F body.md')
+    expect(r.status).toBe(2)
+    expect(r.stderr).toContain('Cannot read body file')
+    expect(shimCalls()).toBe('')
   })
 
   it('scans file-backed commit messages (-F) for close keywords', () => {
