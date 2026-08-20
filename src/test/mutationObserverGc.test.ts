@@ -9,7 +9,12 @@
  * back; a strongly-held callback cannot be collected, so this only reddens if
  * it does.
  */
+import { createRequire } from 'node:module'
 import { expect, it, vi } from 'vitest'
+
+// The version LOADED, not the one package.json asks for — a node_modules older
+// than the lockfile is how this test reddens in practice.
+const happyDom = (createRequire(import.meta.url)('happy-dom/package.json') as {version: string}).version
 
 it('keeps delivering mutation records after a GC', async () => {
   const gc = (globalThis as {gc?: () => void}).gc
@@ -20,6 +25,13 @@ it('keeps delivering mutation records after a GC', async () => {
   let fired = 0
   const observer = new MutationObserver(() => { fired++ })
   observer.observe(target, {childList: true, subtree: true})
+
+  // Delivery BEFORE the collection, so a red below can only mean the GC took
+  // the callback — never that observation was broken here to begin with.
+  target.appendChild(document.createElement('span'))
+  await vi.waitFor(() => {
+    expect(fired, `happy-dom ${happyDom} never delivered a mutation record at all`).toBeGreaterThan(0)
+  })
 
   // Control: a closure held ONLY by a WeakRef, collected the same way the
   // 20.11.0 callback was. Without it this test cannot tell "the callback
@@ -39,7 +51,12 @@ it('keeps delivering mutation records after a GC', async () => {
   // than "something fired at some point".
   const firedBeforeMutation = fired
   target.appendChild(document.createElement('span'))
-  await vi.waitFor(() => { expect(fired).toBeGreaterThan(firedBeforeMutation) })
+  await vi.waitFor(() => {
+    expect(
+      fired,
+      `happy-dom ${happyDom} lost the observer to a GC. Below 20.11.2 that is the known WeakRef bug and node_modules is stale — run pnpm install. At 20.11.2 or above it has come back.`,
+    ).toBeGreaterThan(firedBeforeMutation)
+  })
 
   observer.disconnect()
   target.remove()
