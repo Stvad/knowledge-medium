@@ -306,18 +306,22 @@ export const flipWorkspaceToChildBackedProperties = async (
     .select('properties_migration, update_time')
     .single()
   if (error) throw error
+  // Everything past the PATCH is inside the catch, the READBACK included: the
+  // flip has committed by now, so no local failure may surface as a rejection —
+  // the caller reads that as "the flip failed" and reports a graph it has not
+  // touched, skipping the recovery this return value exists to trigger.
   try {
     await repo.db.execute(
       `UPDATE workspaces SET properties_migration = ?, update_time = ? WHERE id = ?`,
       [data.properties_migration, toNumber(data.update_time), workspaceId],
     )
+    // Read back rather than trusting `rowsAffected`, which PowerSync documents
+    // as possibly 0 for a successful UPDATE under its view system.
+    return {localApplied: await readIsChildBackedWorkspace(repo.db, workspaceId)}
   } catch (cause) {
     console.error('[workspaces] flip landed on the server but the local stamp failed:', cause)
     return {localApplied: false}
   }
-  // Read back rather than trusting `rowsAffected`, which PowerSync documents as
-  // possibly 0 for a successful UPDATE under its view system.
-  return {localApplied: await readIsChildBackedWorkspace(repo.db, workspaceId)}
 }
 
 export const updateWorkspaceMemberRole = async (

@@ -246,10 +246,32 @@ export const CREATE_BLOCKS_ANY_FIELD_FORM_INDEX_SQL = `
   WHERE is_field_form = 1
 `
 
-/** Paired with the statement above — see its DROP note. */
-export const DROP_STALE_ANY_FIELD_FORM_INDEX_SQL = `
+/** Paired with the statement above — see its DROP note.
+ *
+ *  Guarded by {@link dropStaleAnyFieldFormIndex} rather than run unconditionally:
+ *  schema init runs on every app open, so a bare DROP + CREATE rebuilds the
+ *  index every launch, and on the workspaces this migration targets that is a
+ *  full index build in the startup path forever, to fix a shape once. */
+const DROP_STALE_ANY_FIELD_FORM_INDEX_SQL = `
   DROP INDEX IF EXISTS idx_blocks_any_field_form
 `
+
+/** Reshape `idx_blocks_any_field_form` only when it is actually the old
+ *  single-column form. `CREATE INDEX IF NOT EXISTS` will not reshape an index
+ *  that already exists, so the DROP is required on upgrading devices — and only
+ *  on those. Reads the stored DDL rather than `PRAGMA index_info`, which is a
+ *  plain SELECT through any db handle. */
+export const dropStaleAnyFieldFormIndex = async (db: {
+  getOptional<T>(sql: string, params?: unknown[]): Promise<T | null>
+  execute(sql: string, params?: unknown[]): Promise<unknown>
+}): Promise<void> => {
+  const existing = await db.getOptional<{sql: string | null}>(
+    `SELECT sql FROM sqlite_master WHERE type = 'index' AND name = 'idx_blocks_any_field_form'`,
+  )
+  if (existing === null) return
+  if (existing.sql?.includes('parent_id') === true) return
+  await db.execute(DROP_STALE_ANY_FIELD_FORM_INDEX_SQL)
+}
 
 const powerSyncParamForColumn = (columnName: BlockColumnName): PendingStatementParameter =>
   columnName === 'id' ? 'Id' : {Column: columnName}

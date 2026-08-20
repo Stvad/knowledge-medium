@@ -195,6 +195,21 @@ describe('migrate_properties_to_blocks action', () => {
     expect(clearUndo).not.toHaveBeenCalled()
   })
 
+  it('names both irreversible effects when the runner throws outright', async () => {
+    // A rejection skips describeOutcome entirely, which is what otherwise
+    // carries them — and by then the flip has committed and undo is gone.
+    openDialog.mockResolvedValue(true)
+    const {repo, runWorkspaceBackfillNow} = makeRepo({outcome: 'ran', undoHistoryCleared: false})
+    runWorkspaceBackfillNow.mockRejectedValue(new Error('claim write blew up'))
+
+    await invoke(repo)
+
+    expect(progressHandle.fail).toHaveBeenCalledWith(
+      expect.stringMatching(/switched to property blocks/i))
+    expect(progressHandle.fail).toHaveBeenCalledWith(
+      expect.stringMatching(/undo history for this workspace was cleared/i))
+  })
+
   it('flips the workspace before running the pass, not after', async () => {
     // The whole runbook in one assertion. The flip turns the live maintainers
     // on, so a workspace flipped with zero children starts growing them from

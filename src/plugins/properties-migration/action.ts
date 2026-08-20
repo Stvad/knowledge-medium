@@ -313,7 +313,13 @@ export const migratePropertiesToBlocksAction = ({repo}: {repo: Repo}): ActionCon
       }
     } catch (err) {
       console.error('[properties-migration] failed:', err)
-      banner.fail(`Migration failed: ${err instanceof Error ? err.message : String(err)}`)
+      // The runner can REJECT rather than return an outcome (a claim write that
+      // throws before its own pass-level catch), and describeOutcome — which is
+      // what otherwise carries these two sentences — never runs on that path. By
+      // then the flip has committed and the undo stack is gone.
+      banner.fail((undoClearedByFlip ? `${FLIP_LANDED} ` : '') +
+        `Migration failed: ${err instanceof Error ? err.message : String(err)}` +
+        (undoClearedByFlip ? ' Undo history for this workspace was cleared.' : ''))
     } finally {
       unsubscribe()
     }
