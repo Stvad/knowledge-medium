@@ -110,7 +110,15 @@ const fieldRowCount = async (): Promise<number> => (await repo.db.get<{n: number
     WHERE workspace_id = ? AND deleted = 0 AND is_field_form = 1`, [WS],
 ))!.n
 
-describe('property cell → children backfill', () => {
+// One write transaction per seeded block — 250 of them in the batch-boundary
+// test — makes this file disk-bound, and the gate runs a worker process per
+// core. Measured: the four multi-hundred-block tests cost 450/310/265/260ms
+// alone but 6.8/2.5/2.2/2.1s once the enclosing directory runs — an 8-15x
+// stretch, not the ~6x a CPU-bound test sees, which is why the 5000ms default
+// was not enough (#633, #639). Budgeted per suite rather than by raising
+// testTimeout: the tail is this file, and a global raise would make every
+// genuine hang anywhere cost 30s before reporting.
+describe('property cell → children backfill', {timeout: 30_000}, () => {
   it('gives a registered cell key its field row and value row', async () => {
     await create('b1', {'demo:note': 'hello'})
 
@@ -456,7 +464,7 @@ describe('property cell → children backfill', () => {
 
     expect(await fieldRowsOf('fat')).toHaveLength(many.length)
     expect(progress.failureCount).toBe(0)
-  }, 30_000)
+  })
 
   it('scans candidates through the non-empty properties index', async () => {
     // The index is only reachable because the predicate carries the literal
