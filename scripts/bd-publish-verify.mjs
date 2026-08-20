@@ -1,50 +1,58 @@
 #!/usr/bin/env node
 /**
- * PostToolUse(Bash) hook: verify what a publishing command ACTUALLY published
- * (issue #672). The PreToolUse gate inspects command STRINGS, which means
- * reconstructing shell semantics — an unbounded input space (quoting,
- * expansion, stdin, stale body files: each shipped a real bypass). Published
- * text exists exactly once, in the GitHub object after gh composes it; this
- * hook reads THAT back and acts on ground truth, with no shell parsing:
+ * PostToolUse/PostToolUseFailure(Bash) hook: verify what a publishing command
+ * ACTUALLY published (issue #672). Published text exists exactly once — in
+ * the GitHub object after gh composes it — so this hook reads THAT back and
+ * acts on ground truth instead of reconstructing shell semantics:
  *
  *   - bead ids (km-…) in a published body/title are rewritten to their issue
  *     numbers in place, minting the issue first when the bead has none —
- *     GitHub readers cannot resolve a bead id;
+ *     GitHub readers cannot resolve a bead id. Skipped when the command
+ *     carried KM_ALLOW_BEAD_IDS=1: the pre-gate's escape marks the mention
+ *     as a deliberate literal, and rewriting it would corrupt intended text.
  *   - every #N in the published text is echoed back with its real
  *     title/state/kind as additionalContext, so a guessed number is visible
  *     in-context immediately after publishing. Close keywords only ACT at
- *     merge, so fixing a body after publication loses nothing — except on
- *     `gh pr merge`, whose text lands in the merge commit; the PreToolUse
- *     gate remains the only cover there.
+ *     merge, so fixing a body after publication loses nothing — the paths
+ *     where repair CANNOT reach (gh pr merge / gh pr review text, GraphQL
+ *     mutations, --silent api calls, git commit messages) keep their
+ *     pre-publish checks in bd-github-sync.mjs instead.
  *
- * Coverage is exactly the objects the command's OUTPUT names: the URL gh
+ * Coverage is exactly the objects the command's OUTPUT names: the URLs gh
  * prints for CLI publishes, the top-level html_url of a `gh api` mutation's
- * response. A publish whose output names neither (gh pr review, gh api with
- * --template) is not verified here — the PreToolUse gate still scans its raw
- * command text.
+ * response. The write path is bounded twice more, because the Bash tool
+ * merges the whole invocation's output: CLI targets are filtered to the
+ * kinds this command's verbs can produce (repairableKinds), and a rewrite
+ * runs only when the output names exactly ONE object of that kind — a
+ * sibling command's printed URL must never be repaired. Accepted residuals:
+ * truncated tool output that cuts inside an id resolves to a wrong (then
+ * merely echoed, kind- and uniqueness-gated) object, and in a compound that
+ * mixes `gh api` with CLI publishes the api-published object goes
+ * unverified.
  *
  * Blocking here would be pointless (the publish already happened), so this
- * hook never does: any internal failure exits 0 silently, and a repair that
- * fails is reported for hand-fixing, not retried.
+ * hook never does: any internal failure exits 0 silently, a failed repair is
+ * reported for hand-fixing, and every subprocess carries a timeout so a
+ * killable hook cannot be caught mid-rewrite with its report unemitted.
  *
  * BD_GITHUB_SYNC_DRY=1 in the environment suppresses the writes (mint +
  * body PATCH) — the same pipe-test valve the sibling hooks use.
  */
 
 import { readFileSync } from 'node:fs'
-import { resolve } from 'node:path'
-import { fileURLToPath } from 'node:url'
 import {
   BEAD_ID,
   REPO,
-  beadIssueLookup,
+  allowsBeadIds,
+  beadIssueLookupWithMint,
   extractBeadIds,
   extractIssueRefs,
-  initializedDbRoot,
+  fetchIssueInfo,
+  isMainModule,
   issueRefsTable,
   matchesApiPublish,
   matchesPrCommand,
-  preconditions,
+  repairableKinds,
   tryRun,
 } from './bd-github-sync.mjs'
 
@@ -52,47 +60,70 @@ import {
 // Pure logic (unit-tested in bd-publish-verify.test.ts)
 // ---------------------------------------------------------------------------
 
-// Fragments before path groups: an #issuecomment URL also contains /pull/N,
-// and the comment is the object this command touched, not its parent.
+// Fragments before path groups: a fragment URL also contains /pull/N, and
+// the fragment's object is what this command touched, not its parent.
 const TARGET_URL = () =>
   new RegExp(
-    String.raw`https://github\.com/${REPO}/(?:pull/(\d+)|issues/(\d+)|releases/tag/([^\s"'\\<>)\]]+))(?:#issuecomment-(\d+)|#discussion_r(\d+))?`,
+    String.raw`https://github\.com/${REPO}/(?:pull/(\d+)|issues/(\d+)|releases/tag/([^\s"'\\<>)\]]+))(?:#issuecomment-(\d+)|#discussion_r(\d+)|#pullrequestreview-(\d+))?`,
     'g',
   )
 
-const classify = (pr, issue, tag, commentId, reviewCommentId) =>
+const classify = (pr, issue, tag, commentId, reviewCommentId, reviewId) =>
   commentId
     ? { kind: 'comment', id: Number(commentId) }
     : reviewCommentId
       ? { kind: 'review-comment', id: Number(reviewCommentId) }
-      : tag
-        ? { kind: 'release', tag }
-        : pr
-          ? { kind: 'pr', number: Number(pr) }
-          : { kind: 'issue', number: Number(issue) }
+      : reviewId
+        ? { kind: 'review', pr: Number(pr), id: Number(reviewId) }
+        : tag
+          ? { kind: 'release', tag }
+          : pr
+            ? { kind: 'pr', number: Number(pr) }
+            : { kind: 'issue', number: Number(issue) }
+
+// gh api prints its JSON on one line, but the Bash tool merges stderr into
+// the same stream — an update notice must not turn a verifiable publish into
+// a silent skip, so fall back to the first line that parses to an object
+// with a top-level html_url.
+const topLevelUrl = output => {
+  const urlOf = s => {
+    try {
+      const j = JSON.parse(s)
+      return j && typeof j === 'object' && typeof j.html_url === 'string' ? j.html_url : null
+    } catch {
+      return null
+    }
+  }
+  const whole = urlOf(output)
+  if (whole) return whole
+  for (const line of output.split('\n')) {
+    const url = urlOf(line.trim())
+    if (url) return url
+  }
+  return ''
+}
 
 /**
- * The objects this command published, from its output. For CLI publishes the
- * whole output is scanned — gh prints the target's URL and never echoes
- * bodies. A `gh api` mutation's output IS the mutated object, and its body
- * can QUOTE foreign URLs (a comment quoting another PR), so there only the
- * top-level html_url names what the command touched — anything else would
- * make this hook fetch, echo, and potentially REWRITE an object the command
- * never edited. Unparseable api output yields no targets (fail-open).
+ * The objects this command published, from its output. A `gh api` mutation's
+ * output IS the mutated object, and its body can QUOTE foreign URLs (a
+ * comment quoting another PR), so there only the top-level html_url names
+ * what the command touched. CLI publish output never echoes bodies — gh
+ * prints the target's URL — but sibling commands in the same invocation can
+ * print anything, so CLI targets are limited to the kinds this command's
+ * publish verbs produce.
  */
 export const publishedTargets = (cmd, output) => {
   let scanText = output
-  if (!matchesPrCommand(cmd)) {
-    try {
-      const url = JSON.parse(output)?.html_url
-      scanText = typeof url === 'string' ? url : ''
-    } catch {
-      return []
-    }
+  let kinds = null
+  if (matchesPrCommand(cmd)) {
+    kinds = repairableKinds(cmd)
+  } else {
+    scanText = topLevelUrl(output)
   }
   const seen = new Map()
   for (const m of scanText.matchAll(TARGET_URL())) {
     const t = classify(...m.slice(1))
+    if (kinds && !kinds.has(t.kind)) continue
     seen.set(JSON.stringify(t), t)
   }
   return [...seen.values()]
@@ -107,7 +138,9 @@ export const apiPathFor = t =>
         ? `repos/${REPO}/issues/comments/${t.id}`
         : t.kind === 'review-comment'
           ? `repos/${REPO}/pulls/comments/${t.id}`
-          : `repos/${REPO}/releases/tags/${t.tag}`
+          : t.kind === 'review'
+            ? `repos/${REPO}/pulls/${t.pr}/reviews/${t.id}`
+            : `repos/${REPO}/releases/tags/${t.tag}`
 
 /** Substitute every mappable bead id with its #N; report both outcomes. */
 export const planBeadIdRewrite = (text, byId) => {
@@ -143,89 +176,115 @@ export const clipContext = (s, max = 9_000) =>
 // ---------------------------------------------------------------------------
 
 const MAX_TARGETS = 5
+const REFS_CAP = 15
+const GH_TIMEOUT = 10_000
 
 const ghJson = args => {
   try {
-    return JSON.parse(tryRun('gh', args) ?? 'null')
+    return JSON.parse(tryRun('gh', args, { timeout: GH_TIMEOUT }) ?? 'null')
   } catch {
     return null
   }
 }
 
-const lookupWithMint = (ids, dry) => {
-  // No bd call of any kind before the DB-exists gate (the first bd command in
-  // a fresh clone creates an empty DB that then refuses to pull).
-  const dbRoot = initializedDbRoot()
-  if (!dbRoot) return new Map()
-  let byId = beadIssueLookup(ids)
-  const missing = ids.filter(id => !byId.get(id))
-  if (missing.length && !dry) {
-    const pre = preconditions(dbRoot)
-    if (pre.ok) {
-      // Mint issues for published beads that have none — selective push, seconds.
-      tryRun('bd', ['github', 'sync', '--push-only', '--issues', missing.join(',')], { env: pre.env })
-      byId = beadIssueLookup(ids)
-    }
-  }
-  return byId
-}
+// Which PATCH/PUT field carries the object's "title" text, when it has one.
+const TITLE_FIELD = { pr: 'title', issue: 'title', release: 'name' }
 
 const patchTarget = (t, fetched, fields) => {
-  // Releases PATCH by numeric id, not tag.
+  // Releases PATCH by numeric id, not tag; review bodies update via PUT.
   const path = t.kind === 'release' ? `repos/${REPO}/releases/${fetched.id}` : apiPathFor(t)
+  const method = t.kind === 'review' ? 'PUT' : 'PATCH'
   // stdio[0] must be pipe: run()'s 'ignore' default silently discards `input`.
   return (
-    tryRun('gh', ['api', '-X', 'PATCH', path, '--input', '-'], {
+    tryRun('gh', ['api', '-X', method, path, '--input', '-'], {
       input: JSON.stringify(fields),
       stdio: ['pipe', 'pipe', 'pipe'],
+      timeout: GH_TIMEOUT,
     }) !== null
   )
 }
 
-const verifyTarget = (t, dry) => {
+const titleOf = (t, obj) => {
+  const field = TITLE_FIELD[t.kind]
+  return field && typeof obj?.[field] === 'string' ? obj[field] : ''
+}
+
+const unmappedNote = (ids, label, dry) =>
+  `${ids.join(', ')} in ${label} ${ids.length > 1 ? 'have' : 'has'} no GitHub issue` +
+  `${dry ? ' (mint suppressed by BD_GITHUB_SYNC_DRY)' : ' and minting failed here'} — run pnpm bd:sync, then fix the published text`
+
+const verifyTarget = (t, { dry, allowRepair, rewriteAllowed }) => {
   const notes = []
   const fetched = ghJson(['api', apiPathFor(t)])
   if (!fetched || typeof fetched !== 'object') return notes
   const label = typeof fetched.html_url === 'string' ? fetched.html_url : apiPathFor(t)
-  const title = typeof fetched.title === 'string' ? fetched.title : ''
-  const body = typeof fetched.body === 'string' ? fetched.body : ''
-  let finalTitle = title
-  let finalBody = body
+  let finalTitle = titleOf(t, fetched)
+  let finalBody = typeof fetched.body === 'string' ? fetched.body : ''
 
-  const ids = extractBeadIds(`${title}\n${body}`)
+  const ids = rewriteAllowed ? extractBeadIds(`${finalTitle}\n${finalBody}`) : []
   if (ids.length) {
-    const byId = lookupWithMint(ids, dry)
-    const bodyPlan = planBeadIdRewrite(body, byId)
-    const titlePlan = planBeadIdRewrite(title, byId)
-    const rewrites = [...new Map([...titlePlan.rewrites, ...bodyPlan.rewrites].map(r => [r.id, r])).values()]
-    const unmapped = [...new Set([...titlePlan.unmapped, ...bodyPlan.unmapped])]
-    if (rewrites.length) {
-      const subs = rewrites.map(r => `${r.id} → #${r.number}`).join(', ')
-      if (dry) {
-        notes.push(`[dry-run] would rewrite ${subs} in ${label}`)
-      } else if (
-        patchTarget(t, fetched, {
-          body: bodyPlan.newText,
-          // Comments and releases have no PATCHable title.
-          ...(t.kind === 'pr' || t.kind === 'issue' ? { title: titlePlan.newText } : {}),
-        })
-      ) {
-        notes.push(`rewrote ${subs} in ${label} — bead ids are opaque to GitHub readers`)
-        finalTitle = titlePlan.newText
-        finalBody = bodyPlan.newText
-      } else {
-        notes.push(`FAILED to rewrite ${subs} in ${label} — edit it by hand; bead ids are opaque to GitHub readers`)
+    const byId = beadIssueLookupWithMint(ids, { dry })
+    // A stale external_ref (deleted or transferred issue) must not be
+    // written into public text — rewrite only mappings whose issue resolves.
+    const stale = []
+    for (const [id, number] of [...byId]) {
+      if (number && typeof fetchIssueInfo(number) !== 'object') {
+        byId.delete(id)
+        stale.push(`${id} → #${number}`)
       }
     }
-    if (unmapped.length)
+    if (stale.length)
       notes.push(
-        `${unmapped.join(', ')} in ${label} ${unmapped.length > 1 ? 'have' : 'has'} no GitHub issue` +
-          `${dry ? ' (mint suppressed by BD_GITHUB_SYNC_DRY)' : ' and minting failed here'} — run pnpm bd:sync, then fix the published text`,
+        `left ${stale.join(', ')} alone in ${label} — the mapped issue does not resolve (stale sync state?); fix by hand`,
       )
+    if (![...byId.values()].some(Boolean)) {
+      notes.push(unmappedNote(ids.filter(id => !byId.get(id)), label, dry))
+    } else {
+      // The mint above can take seconds — re-read the object and rewrite the
+      // FRESH text, or a concurrent edit would be overwritten with this
+      // hook's stale copy.
+      const fresh = dry ? fetched : ghJson(['api', apiPathFor(t)])
+      if (!fresh || typeof fresh !== 'object') {
+        notes.push(`did NOT rewrite bead ids in ${label} — could not re-read it before writing; fix by hand`)
+      } else {
+        const freshTitle = titleOf(t, fresh)
+        const freshBody = typeof fresh.body === 'string' ? fresh.body : ''
+        const titlePlan = planBeadIdRewrite(freshTitle, byId)
+        const bodyPlan = planBeadIdRewrite(freshBody, byId)
+        const rewrites = [...new Map([...titlePlan.rewrites, ...bodyPlan.rewrites].map(r => [r.id, r])).values()]
+        const unmapped = [...new Set([...titlePlan.unmapped, ...bodyPlan.unmapped])]
+        if (rewrites.length) {
+          const subs = rewrites.map(r => `${r.id} → #${r.number}`).join(', ')
+          const titleField = TITLE_FIELD[t.kind]
+          const fields = {
+            ...(bodyPlan.newText !== freshBody ? { body: bodyPlan.newText } : {}),
+            ...(titleField && titlePlan.newText !== freshTitle ? { [titleField]: titlePlan.newText } : {}),
+          }
+          if (dry) {
+            notes.push(`[dry-run] would rewrite ${subs} in ${label}`)
+          } else if (!allowRepair) {
+            notes.push(
+              `NOT auto-rewriting ${subs} in ${label} — the output names more than one ${t.kind}, so this hook cannot tell which the command published; fix by hand`,
+            )
+          } else if (patchTarget(t, fresh, fields)) {
+            notes.push(`rewrote ${subs} in ${label} — bead ids are opaque to GitHub readers`)
+            finalTitle = titlePlan.newText
+            finalBody = bodyPlan.newText
+          } else {
+            notes.push(`FAILED to rewrite ${subs} in ${label} — edit it by hand; bead ids are opaque to GitHub readers`)
+          }
+        }
+        if (unmapped.length) notes.push(unmappedNote(unmapped, label, dry))
+      }
+    }
   }
 
-  const refs = extractIssueRefs(`${finalTitle}\n${finalBody}`)
-  if (refs.length) notes.push(`${label}\n${issueRefsTable(`${finalTitle}\n${finalBody}`, refs, 'post')}`)
+  const finalText = `${finalTitle}\n${finalBody}`
+  const refs = extractIssueRefs(finalText)
+  if (refs.length) {
+    const capNote = refs.length > REFS_CAP ? `\n  …and ${refs.length - REFS_CAP} more references not echoed` : ''
+    notes.push(`${label}\n${issueRefsTable(finalText, refs.slice(0, REFS_CAP), 'post')}${capNote}`)
+  }
   return notes
 }
 
@@ -237,29 +296,43 @@ const hookPostPublish = () => {
     return
   }
   const cmd = payload?.tool_input?.command ?? ''
-  // The Bash tool merges stderr into tool_response.stdout (measured 2026-08-20).
-  const out = payload?.tool_response?.stdout ?? ''
+  // The Bash tool merges stderr into tool_response.stdout; on
+  // PostToolUseFailure there is NO tool_response and the output rides inside
+  // the `error` string (both measured 2026-08-20).
+  const out =
+    typeof payload?.tool_response?.stdout === 'string' && payload.tool_response.stdout
+      ? payload.tool_response.stdout
+      : typeof payload?.error === 'string'
+        ? payload.error
+        : ''
   if (!cmd || !out) return
   if (!matchesPrCommand(cmd) && !matchesApiPublish(cmd)) return
   const all = publishedTargets(cmd, out)
   if (!all.length) return
   const targets = all.slice(0, MAX_TARGETS)
   const dry = process.env.BD_GITHUB_SYNC_DRY === '1'
+  const rewriteAllowed = !allowsBeadIds(cmd)
+  const apiOnly = !matchesPrCommand(cmd)
+  const kindCount = new Map()
+  for (const t of all) kindCount.set(t.kind, (kindCount.get(t.kind) ?? 0) + 1)
   const notes = []
   if (all.length > targets.length)
     notes.push(`only the first ${MAX_TARGETS} of ${all.length} published objects named in the output were verified`)
   for (const t of targets) {
     try {
-      notes.push(...verifyTarget(t, dry))
+      notes.push(...verifyTarget(t, { dry, allowRepair: apiOnly || kindCount.get(t.kind) === 1, rewriteAllowed }))
     } catch {
-      // fail-open per target: a verification failure must not break the turn
+      // Defence in depth, not currently reachable: every failure inside
+      // verifyTarget already resolves to a note or a silent skip. A future
+      // edit that can throw must not kill the remaining targets' sweep.
     }
   }
+  const eventName = payload?.hook_event_name === 'PostToolUseFailure' ? 'PostToolUseFailure' : 'PostToolUse'
   if (notes.length)
     console.log(
       JSON.stringify({
         hookSpecificOutput: {
-          hookEventName: 'PostToolUse',
+          hookEventName: eventName,
           additionalContext: clipContext(
             `bd-publish-verify (ground truth read back from the GitHub API):\n${notes.join('\n')}`,
           ),
@@ -268,9 +341,7 @@ const hookPostPublish = () => {
     )
 }
 
-// Exact-path comparison — same reasoning as bd-github-sync.mjs.
-const isMain = process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])
-if (isMain) {
+if (isMainModule(import.meta.url)) {
   try {
     hookPostPublish()
   } catch {

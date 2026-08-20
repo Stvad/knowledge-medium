@@ -71,7 +71,7 @@
  */
 
 import { spawnSync } from 'node:child_process'
-import { existsSync, readFileSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync, realpathSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -163,11 +163,38 @@ const GH_API = new RegExp(
 )
 export const matchesApiPublish = cmd => {
   const sk = commandSkeleton(cmd)
+  if (!GH_API.test(sk)) return false
+  // An explicit GET/HEAD is a read no matter what fields ride along — gh
+  // sends them as the query string (gh api --help). Checked on the raw text
+  // too: a quoted method value ("GET") is blanked out of the skeleton.
+  const explicitRead = /(?<![\w-])(?:-X|--method)(?:=|\s+)?['"]?(?:GET|HEAD)\b/i
+  if (explicitRead.test(sk) || explicitRead.test(cmd)) return false
   return (
-    GH_API.test(sk) &&
-    (/(?<![\w-])(?:-X|--method)(?:=|\s+)?(?:POST|PATCH|PUT)\b/i.test(sk) ||
-      /(?<![\w-])(?:-f|-F|--raw-field|--field|--input)(?:=|\s)/.test(sk))
+    /(?<![\w-])(?:-X|--method)(?:=|\s+)?(?:POST|PATCH|PUT)\b/i.test(sk) ||
+    /(?<![\w-])(?:--raw-field|--field|--input)(?:=|\s)/.test(sk) ||
+    // field short flags accept ATTACHED key=value forms: -fbody=…, -Fbody=…
+    /(?<![\w-])-[fF](?:=|\s|[A-Za-z_])/.test(sk)
   )
+}
+
+/**
+ * Which target kinds this command's CLI publish verbs can have produced.
+ * Bounds the post-publish verifier's surface: the Bash tool merges the whole
+ * invocation's output, so a compound command can print URLs of objects it
+ * never touched — a kind no verb here produces must not even be fetched.
+ * (gh api mutations are not consulted: their output names the exact object.)
+ */
+export const repairableKinds = cmd => {
+  const sk = commandSkeleton(cmd)
+  const kinds = new Set()
+  if (/\bpr\s+(?:create|new|edit|merge)\b/.test(sk)) kinds.add('pr')
+  if (/\bpr\s+(?:close|reopen)\b/.test(sk)) kinds.add('pr').add('comment')
+  if (/\bissue\s+(?:create|new|edit)\b/.test(sk)) kinds.add('issue')
+  if (/\bissue\s+(?:close|reopen)\b/.test(sk)) kinds.add('issue').add('comment')
+  if (/\b(?:pr|issue)\s+comment\b/.test(sk)) kinds.add('comment')
+  if (/\bpr\s+review\b/.test(sk)) kinds.add('review').add('review-comment')
+  if (/\brelease\s+(?:create|new|edit)\b/.test(sk)) kinds.add('release')
+  return kinds
 }
 
 // Commit messages become public and their close keywords act when the commit
@@ -525,20 +552,50 @@ export const tryRun = (file, args, opts) => {
 }
 
 /**
- * km-id → issue number for each bead that has an External link. Callers must
- * hold the DB-exists gate (initializedDbRoot) first — see header. Multi-id
- * `bd show` reports unknown ids as `Error fetching …` on stderr while still
- * printing the found beads' JSON on stdout, exit 0 — a PARTIAL result.
- * run()'s error-text check would read it as total failure and poison the
- * whole mapping table, so parse the stdout directly.
+ * Multi-id `bd show`, parsed from stdout DIRECTLY: unknown ids go to stderr
+ * as `Error fetching …` while found rows still print as JSON, exit 0 — a
+ * PARTIAL result run()'s error-text check would read as total failure.
+ * Returns the rows, or null when stdout is not a JSON array. Callers must
+ * hold the DB-exists gate (initializedDbRoot) first — see header.
  */
-export const beadIssueLookup = ids => {
-  const r = spawnSync('bd', ['show', ...ids, '--json'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+export const bdShowRows = (ids, opts = {}) => {
+  const r = spawnSync('bd', ['show', ...ids, '--json'], {
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+    timeout: 15_000,
+    ...opts,
+  })
   try {
-    return new Map(JSON.parse(r.stdout ?? '[]').map(b => [b.id, issueNumberFromRef(b.external_ref)]))
+    const rows = JSON.parse(r.stdout ?? '')
+    return Array.isArray(rows) ? rows : null
   } catch {
-    return new Map()
+    return null
   }
+}
+
+/** km-id → issue number for each bead that has an External link. */
+export const beadIssueLookup = ids => new Map((bdShowRows(ids) ?? []).map(b => [b.id, issueNumberFromRef(b.external_ref)]))
+
+/**
+ * beadIssueLookup, minting issues first for beads that have none (selective
+ * --issues push, seconds). The shared write path of the pre-gate and the
+ * post-publish verifier. `dry` (the BD_GITHUB_SYNC_DRY valve) suppresses the
+ * mint; a missing DB or gh token yields the plain (possibly empty) lookup.
+ */
+export const beadIssueLookupWithMint = (ids, { dry = process.env.BD_GITHUB_SYNC_DRY === '1' } = {}) => {
+  // No bd call of any kind before the DB-exists gate — see header.
+  const dbRoot = initializedDbRoot()
+  if (!dbRoot) return new Map()
+  let byId = beadIssueLookup(ids)
+  const missing = ids.filter(id => !byId.get(id))
+  if (missing.length && !dry) {
+    const pre = preconditions(dbRoot)
+    if (pre.ok) {
+      tryRun('bd', ['github', 'sync', '--push-only', '--issues', missing.join(',')], { env: pre.env, timeout: 60_000 })
+      byId = beadIssueLookup(ids)
+    }
+  }
+  return byId
 }
 
 const mainRepoRoot = () => {
@@ -736,19 +793,11 @@ const runSync = ({ quiet = false, dryRun = false } = {}) => {
         ].map(s => [s.id, s]),
       ).values(),
     ]
-    // Tolerant multi-id show: parse stdout directly — `bd show` output is
-    // pretty-printed JSON, and a description line starting with "Error" would
-    // trip run()'s bd check. Returns null on any shortfall, including bd's
-    // partial-output shape (found rows on stdout, `Error…` for the rest,
-    // exit 0), which the length check catches.
+    // The length check catches bd's partial-output shape (see bdShowRows):
+    // a snapshot missing any suspect is no snapshot at all.
     const showSuspects = () => {
-      const shown = spawnSync('bd', ['show', ...suspects.map(s => s.id), '--json'], { encoding: 'utf8', env })
-      try {
-        const rows = JSON.parse(shown.stdout)
-        return Array.isArray(rows) && rows.length === suspects.length ? rows : null
-      } catch {
-        return null
-      }
+      const rows = bdShowRows(suspects.map(s => s.id), { env })
+      return rows && rows.length === suspects.length ? rows : null
     }
     let snapshot = []
     if (suspects.length && !dryRun) {
@@ -879,23 +928,42 @@ const runSync = ({ quiet = false, dryRun = false } = {}) => {
 
 const allow = () => process.exit(0)
 
-// The #N leg of the gate: echo every referenced number's ground truth;
-// KM_ISSUE_REFS_OK=1 on the re-run confirms. Verification is a per-number
-// gh GET — tolerant, distinguishing "not found" from "gh broke". Also used
-// by bd-publish-verify.mjs (mode 'post', where the text already published).
-export const issueRefsTable = (text, refs, mode = 'pre') => {
-  const fetchInfo = number => {
-    const r = spawnSync('gh', ['api', `repos/${REPO}/issues/${number}`], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
-    try {
-      const j = JSON.parse(r.stdout)
-      if (r.status !== 0) return /not found/i.test(j?.message ?? '') ? 'not-found' : null
-      return { title: j.title ?? '', state: j.state ?? '', isPr: Boolean(j.pull_request) }
-    } catch {
-      return null
-    }
+/**
+ * One issue/PR's ground truth, memoized per process — tolerant, and
+ * distinguishing 'not-found' from null (gh itself broke). The memo matters
+ * to the post-publish verifier, which may look the same numbers up for
+ * mapping validation and again for the echo table, across several targets,
+ * inside a killable hook timeout. Only definite answers are cached.
+ */
+const issueInfoCache = new Map()
+export const fetchIssueInfo = number => {
+  if (issueInfoCache.has(number)) return issueInfoCache.get(number)
+  const r = spawnSync('gh', ['api', `repos/${REPO}/issues/${number}`], {
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+    timeout: 10_000,
+  })
+  let info = null
+  try {
+    const j = JSON.parse(r.stdout)
+    info =
+      r.status !== 0
+        ? /not found/i.test(j?.message ?? '')
+          ? 'not-found'
+          : null
+        : { title: j.title ?? '', state: j.state ?? '', isPr: Boolean(j.pull_request) }
+  } catch {
+    info = null
   }
-  return buildIssueRefsMessage(refs.map(number => ({ number, info: fetchInfo(number) })), new Set(closeKeywordRefs(text)), mode)
+  if (info !== null) issueInfoCache.set(number, info)
+  return info
 }
+
+// The #N leg of the gate: echo every referenced number's ground truth;
+// KM_ISSUE_REFS_OK=1 on the re-run confirms. Also used by
+// bd-publish-verify.mjs (mode 'post', where the text already published).
+export const issueRefsTable = (text, refs, mode = 'pre') =>
+  buildIssueRefsMessage(refs.map(number => ({ number, info: fetchIssueInfo(number) })), new Set(closeKeywordRefs(text)), mode)
 
 const echoIssueRefs = (text, refs) => {
   console.error(issueRefsTable(text, refs))
@@ -983,19 +1051,7 @@ const hookPrePr = () => {
   if (ids.length === 0 && refs.length === 0) allow()
   if (ids.length === 0) return echoIssueRefs(text, refs)
 
-  // No bd call of any kind before the DB-exists gate — see header.
-  const dbRoot = initializedDbRoot()
-  const lookup = () => (dbRoot ? beadIssueLookup(ids) : new Map())
-
-  let byId = lookup()
-  const missing = ids.filter(id => !byId.get(id))
-  const pre = missing.length ? preconditions(dbRoot) : { ok: false }
-  if (pre.ok && process.env.BD_GITHUB_SYNC_DRY !== '1') {
-    // Mint issues for referenced beads that have none — selective push, seconds.
-    tryRun('bd', ['github', 'sync', '--push-only', '--issues', missing.join(',')], { env: pre.env })
-    byId = lookup()
-  }
-
+  const byId = beadIssueLookupWithMint(ids)
   const mapped = ids.filter(id => byId.get(id)).map(id => ({ id, number: byId.get(id) }))
   const unmapped = ids.filter(id => !byId.get(id))
   // The deny message licenses a KM_ISSUE_REFS_OK=1 re-run, so any #N already
@@ -1009,10 +1065,23 @@ const hookPrePr = () => {
 
 // ---------------------------------------------------------------------------
 
-// Exact-path comparison: a suffix match would run a live sync at import time
-// from any future sibling whose name this file's happens to end with.
-const isMain = process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])
-if (isMain) {
+/**
+ * Exact-path comparison: a suffix match would run a live sync at import time
+ * from any future sibling whose name this file's happens to end with. Both
+ * sides realpathed: node resolves the ESM entry through symlinks while argv
+ * keeps the literal path, and a mismatch silently disables the hook. Shared
+ * by every hook script in scripts/.
+ */
+export const isMainModule = metaUrl => {
+  if (!process.argv[1]) return false
+  try {
+    return realpathSync(fileURLToPath(metaUrl)) === realpathSync(resolve(process.argv[1]))
+  } catch {
+    return fileURLToPath(metaUrl) === resolve(process.argv[1])
+  }
+}
+
+if (isMainModule(import.meta.url)) {
   const args = new Set(process.argv.slice(2))
   if (args.has('--hook-pre-pr')) {
     hookPrePr()

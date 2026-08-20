@@ -14,9 +14,7 @@
 // unparseable output — exits 0; a DB-less clone must not spawn bd at all
 // (the first bd command would create an empty DB that then refuses to pull).
 import { spawnSync } from 'node:child_process'
-import { resolve } from 'node:path'
-import { fileURLToPath } from 'node:url'
-import { initializedDbRoot } from './bd-github-sync.mjs'
+import { initializedDbRoot, isMainModule } from './bd-github-sync.mjs'
 
 // Just under the measured 10,000-char inline limit; the margin absorbs a
 // wrapper-side format tweak without re-measuring the host.
@@ -106,9 +104,7 @@ export const transformHookStdout = raw => {
   })
 }
 
-const isMain = process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])
-
-if (isMain) {
+if (isMainModule(import.meta.url)) {
   try {
     if (initializedDbRoot()) {
       const r = spawnSync('bd', ['prime', '--hook-json', '--mcp'], {

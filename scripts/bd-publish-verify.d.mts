@@ -5,6 +5,7 @@ export type PublishTarget =
   | { kind: 'issue'; number: number }
   | { kind: 'comment'; id: number }
   | { kind: 'review-comment'; id: number }
+  | { kind: 'review'; pr: number; id: number }
   | { kind: 'release'; tag: string }
 
 export declare const publishedTargets: (cmd: string, output: string) => PublishTarget[]
