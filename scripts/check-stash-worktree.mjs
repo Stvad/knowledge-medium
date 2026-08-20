@@ -19,11 +19,18 @@
  *    checked against the stack as it is NOW, and the first renumbers the
  *    entries the later ones name
  *
- * Reads the hook payload (JSON) on stdin; only an actual `git stash …`
- * invocation (verb position, quote-aware) is inspected — prose that mentions
- * stash is not. Exit 2 → block; exit 0 → allow. Opt-out: STASH_OK=1 as the
- * whole command's prefix or the stash invocation's own prefix — the string
- * inside quoted prose elsewhere does not count.
+ * Second, unrelated rule (same hook, different root cause — deliberately NOT
+ * generalized into one "shared git state" guard): `git commit --amend` commits
+ * whatever the INDEX holds, and multiple agents share one worktree directory's
+ * index. An amend whose staged file set grows beyond the commit being amended
+ * is nearly always absorbing another session's staged work — blocked in every
+ * repo, single-worktree included. Opt-out: AMEND_OK=1.
+ *
+ * Reads the hook payload (JSON) on stdin; only an actual `git stash …` /
+ * `git commit --amend` invocation (verb position, quote-aware) is inspected —
+ * prose that mentions them is not. Exit 2 → block; exit 0 → allow. Opt-outs
+ * (STASH_OK=1 / AMEND_OK=1) count as the whole command's prefix or the
+ * invocation's own prefix — the string inside quoted prose elsewhere does not.
  */
 
 import { execFileSync } from 'node:child_process'
@@ -41,15 +48,13 @@ const SUBCOMMANDS = new Set([
 ])
 
 /**
- * Find actual `git stash …` invocations in a command string.
- * Returns {sub, args, cArgs, cdPath, optOut}: sub is the stash subcommand
- * (null for a bare/flags-only `git stash`), cArgs are repo-locating git
- * globals (-C, --git-dir, --work-tree) to replay on state queries, cdPath is
- * the target of the last plain `cd` still in scope (a cd inside `(…)` or
- * `$(…)` dies with that subshell), optOut marks a STASH_OK=1 assignment
- * prefixing this invocation itself.
+ * Walk a command string and yield each git invocation with its shell context:
+ * word (the token after git's global flags), rest (tokens after it), cArgs
+ * (repo-locating globals to replay on state queries), cdPath (last in-scope
+ * plain `cd` target — one inside `(…)`/`$(…)` dies with that subshell), and
+ * assigns (leading VAR= tokens, for per-invocation opt-outs).
  */
-export const stashInvocations = cmd => {
+const gitInvocations = cmd => {
   const out = []
   let cdPath = null
   const outerCd = [] // saved cdPath per enclosing subshell scope
@@ -68,11 +73,11 @@ export const stashInvocations = cmd => {
       continue
     }
     let i = 0
-    let optOut = false
-    // Skip VAR= assignments, wrapper commands, and (past position 0) wrapper
-    // flags, so `env -i git stash …` is still seen. A wrapper flag that takes
-    // an operand (`sudo -u alice git …`) still hides git — accidents, not
-    // adversaries.
+    const assigns = []
+    // Skip VAR= assignments, wrapper commands, shell reserved words, and (past
+    // position 0) wrapper flags, so `env -i git stash …` and `if git stash …`
+    // are seen. A wrapper flag that takes an operand (`sudo -u alice git …`)
+    // still hides git — accidents, not adversaries.
     while (
       i < tokens.length &&
       (/^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[i]) ||
@@ -80,7 +85,7 @@ export const stashInvocations = cmd => {
         RESERVED.has(tokens[i]) ||
         (i > 0 && tokens[i].startsWith('-')))
     ) {
-      if (tokens[i] === 'STASH_OK=1') optOut = true
+      if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[i])) assigns.push(tokens[i])
       i++
     }
     if ((tokens[i] || '').replace(/.*\//, '') !== 'git') continue
@@ -100,19 +105,86 @@ export const stashInvocations = cmd => {
         i++ // other global flag (--no-pager, -P, …)
       }
     }
-    if (tokens[i] !== 'stash') continue
-    i++
-    let sub = null
-    if (i < tokens.length && !tokens[i].startsWith('-') && SUBCOMMANDS.has(tokens[i])) {
-      sub = tokens[i]
-      i++
-    } else if (i < tokens.length && !tokens[i].startsWith('-')) {
-      continue // unknown word after `stash` — git itself rejects it
-    }
-    out.push({ sub, args: tokens.slice(i), cArgs, cdPath, optOut })
+    if (tokens[i] === undefined) continue
+    out.push({ word: tokens[i], rest: tokens.slice(i + 1), cArgs, cdPath, assigns })
   }
   return out
 }
+
+/**
+ * `git stash …` invocations: sub is the stash subcommand (null for a bare or
+ * flags-only `git stash`), optOut marks a STASH_OK=1 prefixing the invocation.
+ */
+export const stashInvocations = cmd =>
+  gitInvocations(cmd).flatMap(g => {
+    if (g.word !== 'stash') return []
+    let sub = null
+    let j = 0
+    if (g.rest.length && !g.rest[0].startsWith('-')) {
+      if (!SUBCOMMANDS.has(g.rest[0])) return [] // unknown word — git rejects it itself
+      sub = g.rest[0]
+      j = 1
+    }
+    return [
+      {
+        sub,
+        args: g.rest.slice(j),
+        cArgs: g.cArgs,
+        cdPath: g.cdPath,
+        optOut: g.assigns.includes('STASH_OK=1'),
+      },
+    ]
+  })
+
+// commit options that take a separate value token — their value must not be
+// read as a pathspec (a `-m` message would otherwise disable the amend rule).
+const COMMIT_VALUE_LONG = new Set([
+  '--message', '--file', '--reuse-message', '--reedit-message', '--template',
+  '--author', '--date', '--fixup', '--squash', '--trailer', '--pathspec-from-file',
+  '--cleanup',
+])
+const COMMIT_VALUE_SHORT = 'mFCct'
+
+/**
+ * `git commit --amend` invocations: paths are explicit pathspecs (an amend
+ * that names its files is deliberate scope), all marks -a/--all, optOut an
+ * AMEND_OK=1 prefixing the invocation.
+ */
+export const amendInvocations = cmd =>
+  gitInvocations(cmd).flatMap(g => {
+    if (g.word !== 'commit' || !g.rest.includes('--amend')) return []
+    let all = false
+    const paths = []
+    for (let i = 0; i < g.rest.length; i++) {
+      const t = g.rest[i]
+      if (t === '--') {
+        paths.push(...g.rest.slice(i + 1))
+        break
+      }
+      if (t === '--all') {
+        all = true
+        continue
+      }
+      if (t.startsWith('--')) {
+        if (!t.includes('=') && COMMIT_VALUE_LONG.has(t)) i++
+        continue
+      }
+      if (t.startsWith('-') && t.length > 1) {
+        for (let k = 1; k < t.length; k++) {
+          if (t[k] === 'a') all = true
+          if (COMMIT_VALUE_SHORT.includes(t[k])) {
+            if (k === t.length - 1) i++ // value is the next token
+            break // in-token remainder is the attached value
+          }
+        }
+        continue
+      }
+      paths.push(t)
+    }
+    return [
+      { all, paths, cArgs: g.cArgs, cdPath: g.cdPath, optOut: g.assigns.includes('AMEND_OK=1') },
+    ]
+  })
 
 /** First argument that names a stash entry: `stash@{…}` or a bare index. */
 export const explicitEntry = args => {
@@ -286,6 +358,32 @@ const gitState = (cwd, cArgs) => {
   return { worktrees, branch, stashes }
 }
 
+/**
+ * Path sets for the amend rule: prev = files in the commit being amended,
+ * staged = what the amend would commit (the index; with -a, all tracked
+ * changes). null → could not read (no repo / unborn HEAD) — git errors itself.
+ */
+const amendState = (cwd, cArgs, all) => {
+  const run = args =>
+    execFileSync('git', [...cArgs, '--no-pager', ...args], {
+      cwd,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    }).trim()
+  try {
+    const prev = run(['show', '--name-only', '--format=', 'HEAD'])
+    const staged = run(
+      all ? ['diff', '--name-only', 'HEAD'] : ['diff', '--name-only', '--cached'],
+    )
+    return {
+      prev: new Set(prev ? prev.split('\n') : []),
+      staged: staged ? staged.split('\n') : [],
+    }
+  } catch {
+    return null
+  }
+}
+
 const effectiveCwd = (payloadCwd, cdPath) => {
   if (!cdPath) return { cwd: payloadCwd, exact: true }
   if (cdPath.includes('$')) return { cwd: payloadCwd, exact: false } // unexpanded variable
@@ -319,39 +417,64 @@ const main = () => {
   }
   const cmd = payload?.tool_input?.command ?? ''
   if (!cmd) allow()
-  if (/^\s*STASH_OK=1\s/.test(cmd)) allow() // whole-command opt-out prefix
-  if (!/\bstash\b/i.test(cmd)) allow() // cheap prefilter before tokenizing
-
-  const all = stashInvocations(cmd)
-  // An opted-out invocation skips its own decision but still renumbers the
-  // stack, so it stays in the compound-mutation count.
-  const invocations = all.filter(inv => !inv.optOut)
-  if (invocations.length === 0) allow()
-
   const payloadCwd = payload?.cwd || process.cwd()
-  const cache = new Map()
 
-  const mutating = all.filter(mutatesStack)
-  if (mutating.length > 1 && invocations.some(mutatesStack)) {
-    const st = stateFor(mutating[0], payloadCwd, cache)
-    if (st && st.worktrees > 1) {
-      process.stderr.write(
-        `BLOCKED: ${mutating.length} stash operations in one command. The guard checks ` +
-          `each against the stack as it is NOW, but every push/pop/drop renumbers the ` +
-          `entries the later ones name — and ${st.worktrees} worktrees share this stack. ` +
-          `Run them as separate commands. STASH_OK=1 prefixed skips this guard.\n`,
-      )
-      process.exit(2)
+  // -- stash rules (shared refs/stash across worktrees) --
+  const stashOk = /^\s*STASH_OK=1\s/.test(cmd) // whole-command opt-out prefix
+  if (!stashOk && /\bstash\b/i.test(cmd)) {
+    const all = stashInvocations(cmd)
+    // An opted-out invocation skips its own decision but still renumbers the
+    // stack, so it stays in the compound-mutation count.
+    const invocations = all.filter(inv => !inv.optOut)
+    const cache = new Map()
+
+    const mutating = all.filter(mutatesStack)
+    if (mutating.length > 1 && invocations.some(mutatesStack)) {
+      const st = stateFor(mutating[0], payloadCwd, cache)
+      if (st && st.worktrees > 1) {
+        process.stderr.write(
+          `BLOCKED: ${mutating.length} stash operations in one command. The guard checks ` +
+            `each against the stack as it is NOW, but every push/pop/drop renumbers the ` +
+            `entries the later ones name — and ${st.worktrees} worktrees share this stack. ` +
+            `Run them as separate commands. STASH_OK=1 prefixed skips this guard.\n`,
+        )
+        process.exit(2)
+      }
+    }
+
+    for (const inv of invocations) {
+      const reason = decide(inv, stateFor(inv, payloadCwd, cache))
+      if (reason) {
+        process.stderr.write(reason + '\n')
+        process.exit(2)
+      }
     }
   }
 
-  for (const inv of invocations) {
-    const reason = decide(inv, stateFor(inv, payloadCwd, cache))
-    if (reason) {
-      process.stderr.write(reason + '\n')
-      process.exit(2)
+  // -- amend rule (one worktree directory, many agents, one index) --
+  if (!/^\s*AMEND_OK=1\s/.test(cmd) && /--amend/.test(cmd)) {
+    for (const inv of amendInvocations(cmd)) {
+      if (inv.optOut) continue
+      if (inv.paths.length) continue // explicit pathspec — deliberate scope
+      const { cwd } = effectiveCwd(payloadCwd, inv.cdPath)
+      const st = amendState(cwd, inv.cArgs, inv.all)
+      if (!st) continue
+      const grown = st.staged.filter(p => !st.prev.has(p))
+      if (grown.length) {
+        const shown = grown.slice(0, 10).join('\n  ')
+        const more = grown.length > 10 ? `\n  …and ${grown.length - 10} more` : ''
+        process.stderr.write(
+          `BLOCKED: this --amend would add files the commit being amended does not touch:\n` +
+            `  ${shown}${more}\n` +
+            `The index is shared by every agent working in this directory, and --amend ` +
+            `commits whatever is staged, not what you changed. AMEND_OK=1 prefixed to the ` +
+            `command skips this check.\n`,
+        )
+        process.exit(2)
+      }
     }
   }
+
   allow()
 }
 

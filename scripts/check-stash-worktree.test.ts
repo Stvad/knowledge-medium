@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import {
+  amendInvocations,
   baseBranch,
   decide,
   explicitEntry,
@@ -112,6 +113,37 @@ describe('stashInvocations', () => {
     expect(stashInvocations('git commit -m "later: git stash pop; cleanup"')).toEqual([])
     expect(stashInvocations('git stashx pop')).toEqual([])
     expect(stashInvocations('git stash bogus-subcommand')).toEqual([]) // git rejects it itself
+  })
+})
+
+describe('amendInvocations', () => {
+  it('finds only commit invocations carrying --amend', () => {
+    expect(amendInvocations('git commit --amend -m x')).toHaveLength(1)
+    expect(amendInvocations('git commit -m x')).toEqual([])
+    expect(amendInvocations('git stash pop stash@{0}')).toEqual([])
+    expect(amendInvocations('echo "git commit --amend"')).toEqual([])
+  })
+
+  it('does not read a -m message value as a pathspec', () => {
+    expect(amendInvocations('git commit --amend -m "fix things"')[0].paths).toEqual([])
+    expect(amendInvocations('git commit --amend --message "fix things"')[0].paths).toEqual([])
+    expect(amendInvocations('git commit --amend -am "fix things"')[0]).toMatchObject({
+      all: true,
+      paths: [],
+    })
+  })
+
+  it('collects explicit pathspecs, before and after --', () => {
+    expect(amendInvocations('git commit --amend -m x f.txt')[0].paths).toEqual(['f.txt'])
+    expect(amendInvocations('git commit --amend -m x -- a.txt b.txt')[0].paths).toEqual([
+      'a.txt',
+      'b.txt',
+    ])
+  })
+
+  it('records the AMEND_OK=1 opt-out only as the invocation prefix', () => {
+    expect(amendInvocations('AMEND_OK=1 git commit --amend -m x')[0].optOut).toBe(true)
+    expect(amendInvocations('echo "AMEND_OK=1"; git commit --amend -m x')[0].optOut).toBe(false)
   })
 })
 
@@ -416,6 +448,56 @@ describe('hook end-to-end', { timeout: 30_000 }, () => {
     expect(r.status).toBe(2)
     expect(r.stderr).toContain("'other'")
     expect(hook('git stash pop stash@{0}', rwt).status).toBe(0)
+  })
+
+  // Amend-rule fixtures. The hazard is same-DIRECTORY concurrency (one index,
+  // many agents), so unlike the stash rules these repos are single-worktree on
+  // purpose: the rule must apply there too.
+  const amendGrow = makeRepo('amend-guard-grow-') // HEAD: base commit (f.txt)
+  writeFileSync(join(amendGrow, 'f2.txt'), 'x\n')
+  git(amendGrow, ['add', 'f2.txt'])
+  git(amendGrow, ['commit', '-qm', 'second']) // commit being amended touches only f2.txt
+  writeFileSync(join(amendGrow, 'foreign.txt'), 'y\n')
+  git(amendGrow, ['add', 'foreign.txt']) // another session's staged work
+
+  const amendSame = makeRepo('amend-guard-same-')
+  writeFileSync(join(amendSame, 'f2.txt'), 'x\n')
+  git(amendSame, ['add', 'f2.txt'])
+  git(amendSame, ['commit', '-qm', 'second'])
+  writeFileSync(join(amendSame, 'f2.txt'), 'x2\n')
+  git(amendSame, ['add', 'f2.txt']) // re-staged file already in the commit
+
+  const amendAll = makeRepo('amend-guard-all-')
+  writeFileSync(join(amendAll, 'f2.txt'), 'x\n')
+  git(amendAll, ['add', 'f2.txt'])
+  git(amendAll, ['commit', '-qm', 'second'])
+  writeFileSync(join(amendAll, 'f.txt'), 'drift\n') // tracked, modified, UNSTAGED
+
+  it('blocks an amend that grows the file set beyond the amended commit', () => {
+    const r = hook('git commit --amend -m reworded', amendGrow)
+    expect(r.status).toBe(2)
+    expect(r.stderr).toContain('foreign.txt')
+  })
+
+  it('allows an amend whose staged files are all in the amended commit', () => {
+    expect(hook('git commit --amend -m reworded', amendSame).status).toBe(0)
+    expect(hook('git commit --amend --no-edit', single).status).toBe(0) // nothing staged
+  })
+
+  it('includes unstaged tracked changes when the amend uses -a', () => {
+    expect(hook('git commit --amend -m reworded', amendAll).status).toBe(0)
+    const r = hook('git commit --amend -am reworded', amendAll)
+    expect(r.status).toBe(2)
+    expect(r.stderr).toContain('f.txt')
+  })
+
+  it('lets an explicit pathspec or AMEND_OK=1 through, and plain commits alone', () => {
+    expect(hook('git commit --amend -m x -- f2.txt', amendGrow).status).toBe(0)
+    expect(hook('AMEND_OK=1 git commit --amend -m x', amendGrow).status).toBe(0)
+    // …in both spellings: whole-command prefix and invocation-local prefix.
+    expect(hook('AMEND_OK=1 true; git commit --amend -m x', amendGrow).status).toBe(0)
+    expect(hook('true && AMEND_OK=1 git commit --amend -m x', amendGrow).status).toBe(0)
+    expect(hook('git commit -m "new commit"', amendGrow).status).toBe(0)
   })
 
   it('stays out of the way outside a repo or on a garbled payload', () => {

@@ -16,7 +16,15 @@ export interface RepoStashState {
   branch: string | null
   stashes: StashEntry[]
 }
+export interface AmendInvocation {
+  all: boolean
+  paths: string[]
+  cArgs: string[]
+  cdPath: string | null
+  optOut: boolean
+}
 export declare const stashInvocations: (cmd: string) => StashInvocation[]
+export declare const amendInvocations: (cmd: string) => AmendInvocation[]
 export declare const explicitEntry: (args: string[]) => string | null
 export declare const hasMessage: (sub: string | null, args: string[]) => boolean
 export declare const mutatesStack: (inv: Pick<StashInvocation, 'sub'>) => boolean

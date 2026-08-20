@@ -18,7 +18,7 @@
           },
           {
             "command": "node \"$CLAUDE_PROJECT_DIR/scripts/check-stash-worktree.mjs\"",
-            "statusMessage": "Checking for cross-worktree stash hazards…",
+            "statusMessage": "Checking for stash/amend hazards…",
             "type": "command"
           },
           {
