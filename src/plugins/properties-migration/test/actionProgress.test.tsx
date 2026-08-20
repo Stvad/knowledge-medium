@@ -41,7 +41,8 @@ import type { Repo } from '@/data/repo'
 import { migratePropertiesToBlocksAction } from '../action.ts'
 
 const progress = (over: Partial<PropertyCellBackfillProgress> = {}): PropertyCellBackfillProgress => ({
-  blocksScanned: 7, blocksMaterialized: 7, valuesMaterialized: 7, sweeps: 2,
+  blocksScanned: 7, blocksMaterialized: 7, valuesMaterialized: 7,
+  valuesMaterializedTotal: 7, sweeps: 2,
   orphanedOwnersSwept: 0, failures: [], failureCount: 0, editedUnderPass: false, ...over,
 })
 

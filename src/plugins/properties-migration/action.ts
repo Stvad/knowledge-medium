@@ -47,7 +47,7 @@ export const describeOutcome = (
   result: OperatorBackfillResult,
   counts: {
     blocksMaterialized: number
-    valuesMaterialized: number
+    valuesMaterializedTotal: number
     unmigrated: number
     orphanedOwnersSwept: number
   },
@@ -62,21 +62,22 @@ const describePassOutcome = (
   result: OperatorBackfillResult,
   counts: {
     blocksMaterialized: number
-    valuesMaterialized: number
+    valuesMaterializedTotal: number
     unmigrated: number
     orphanedOwnersSwept: number
   },
   editedUnderPass: boolean,
   flipped: boolean,
 ): {message: string; failed: boolean; followUp?: string} => {
-  const {blocksMaterialized, valuesMaterialized, unmigrated, orphanedOwnersSwept} = counts
+  const {blocksMaterialized, valuesMaterializedTotal, unmigrated, orphanedOwnersSwept} = counts
   switch (result.outcome) {
     case 'ran':
-      // On VALUES, not on blocks. `blocksMaterialized` counts blocks accepted
-      // in FULL, so one junk key on every block reads as zero for a run that
-      // wrote all the other keys — and this branch would then tell the
-      // operator nothing was migrated while tens of thousands of rows were.
-      if (valuesMaterialized === 0 && unmigrated > 0) {
+      // On VALUES, not on blocks: `blocksMaterialized` counts blocks accepted in
+      // FULL, so one junk key on every block reads as zero for a run that wrote
+      // all the other keys. And on the RUN's total, not the last sweep's — past
+      // the flip the converging sweep is by definition the one that found nothing
+      // left pending, so a per-sweep zero is how every successful run ends.
+      if (valuesMaterializedTotal === 0 && unmigrated > 0) {
         return {
           message: `Nothing was migrated — all ${unmigrated.toLocaleString()} property ` +
             'value(s) failed. That is a systematic problem, not a handful of bad values; ' +
@@ -242,12 +243,12 @@ export const migratePropertiesToBlocksAction = ({repo}: {repo: Repo}): ActionCon
     // per committed batch, and a run of several minutes with a silent toast is
     // indistinguishable from a hung one.
     let unmigrated = 0
-    let valuesMaterialized = 0
+    let valuesMaterializedTotal = 0
     let orphanedOwnersSwept = 0
     let editedUnderPass = false
     const unsubscribe = onPropertyCellBackfillProgress(progress => {
       materialized = progress.blocksMaterialized
-      valuesMaterialized = progress.valuesMaterialized
+      valuesMaterializedTotal = progress.valuesMaterializedTotal
       orphanedOwnersSwept = progress.orphanedOwnersSwept
       unmigrated = progress.failureCount
       editedUnderPass = progress.editedUnderPass
@@ -264,7 +265,7 @@ export const migratePropertiesToBlocksAction = ({repo}: {repo: Repo}): ActionCon
       const result = await repo.runWorkspaceBackfillNow(workspaceId, PROPERTY_CELL_BACKFILL_ID)
       const {message, failed, followUp} = describeOutcome(
         result,
-        {blocksMaterialized: materialized, valuesMaterialized, unmigrated, orphanedOwnersSwept},
+        {blocksMaterialized: materialized, valuesMaterializedTotal, unmigrated, orphanedOwnersSwept},
         editedUnderPass,
         {flipped: !childBacked},
       )

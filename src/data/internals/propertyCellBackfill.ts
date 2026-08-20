@@ -231,9 +231,16 @@ export interface PropertyCellBackfillProgress {
    *  is what `valuesMaterialized` is for. */
   blocksMaterialized: number
   /** Property values reconciled this sweep, counting the ones on a block that
-   *  also had a failure. Paired with `failureCount` it is what distinguishes a
-   *  systematic failure from a handful of bad values. */
+   *  also had a failure. */
   valuesMaterialized: number
+  /** The same, for the WHOLE run. This is the one that distinguishes a
+   *  systematic failure from a handful of bad values, and the per-sweep count
+   *  cannot: post-flip the converging sweep is BY DEFINITION the one that found
+   *  nothing left pending, so its zero is the normal ending. Testing the
+   *  per-sweep count reported a run that migrated everything as "nothing was
+   *  migrated — that is a systematic problem", and suppressed the repair
+   *  worklist naming the values that actually failed. */
+  valuesMaterializedTotal: number
   /** Full passes over the workspace. More than two means blocks kept changing
    *  under the pass. */
   sweeps: number
@@ -255,9 +262,12 @@ export interface PropertyCellBackfillProgress {
    *  `blocksMaterialized` counts blocks accepted IN FULL, so one junk key on
    *  every block would abort a migration that in fact wrote most of it. */
   failureCount: number
-  /** The final sweep still had to rewrite value children — i.e. cells were
-   *  changing while the pass ran, and the children it just built are behind
-   *  by however much landed after it visited each block. Convergence
+  /** PRE-FLIP ONLY. The final sweep still had to rewrite value children — i.e.
+   *  cells were changing while the pass ran, and the children it just built are
+   *  behind by however much landed after it visited each block. Create-only
+   *  rewrites nothing, so past the flip this can only mean "someone touched a
+   *  property", which the dual-write already handled — and the re-run it advises
+   *  would do nothing and report the same thing. Convergence
    *  deliberately does not loop on this (see {@link CHILD_STATE_SQL}), so
    *  reporting it is the only thing that tells an operator to run it
    *  again. */
@@ -386,14 +396,19 @@ const materializeRow = async (
  *
  *  `deletesOnly` marks a leg every write of which is a deletion, so that past
  *  the flip it has nothing left it is allowed to do — see
- *  {@link namesPendingMaterialization}. */
+ *  {@link namesPendingMaterialization}.
+ *
+ *  Reports whether any batch ran against a child-backed workspace, because the
+ *  caller's convergence rule differs by mode and the flip is read per batch —
+ *  down here — rather than once per run. */
 const sweep = async (
   ctx: WorkspaceBackfillContext,
   candidateSql: string,
   progress: PropertyCellBackfillProgress,
   onBatch: () => void | Promise<void>,
   {deletesOnly}: {deletesOnly: boolean},
-): Promise<void> => {
+): Promise<{sawChildBacked: boolean}> => {
+  let sawChildBacked = false
   const recordFailure = (blockId: string, cause: unknown) => {
     progress.failureCount += 1
     if (progress.failures.length < MAX_REPORTED_FAILURES) {
@@ -411,7 +426,7 @@ const sweep = async (
       queued = await ctx.getAll<{id: string; keys: number}>(
         candidateSql, [ctx.workspaceId, cursor, SCAN_PAGE],
       )
-      if (queued.length === 0) return
+      if (queued.length === 0) return {sawChildBacked}
       cursor = queued[queued.length - 1]!.id
     }
 
@@ -434,6 +449,7 @@ const sweep = async (
       // is a synced column: it can arrive from another device mid-run, and a
       // check taken before the run would not see it.
       const childBacked = await tx.isPropertyChildBackedWorkspace(ctx.workspaceId)
+      if (childBacked) sawChildBacked = true
       if (childBacked && deletesOnly) {
         abandoned = true
         return
@@ -452,7 +468,10 @@ const sweep = async (
           ? await namesPendingMaterialization(tx, ctx, row)
           : await namesToReconcile(tx, ctx, row)
         const ok = await materializeRow(tx, ctx, row, names, recordFailure,
-          values => { progress.valuesMaterialized += values })
+          values => {
+            progress.valuesMaterialized += values
+            progress.valuesMaterializedTotal += values
+          })
         if (ok) progress.blocksMaterialized += 1
       }
     }, {description: 'Migrate properties to child blocks'})
@@ -460,7 +479,7 @@ const sweep = async (
     // every later batch would abandon too. Deleting it fails no test; it just
     // pages through the whole workspace committing empty transactions and
     // reporting progress for them.
-    if (abandoned) return
+    if (abandoned) return {sawChildBacked}
 
     // Awaited so a caller can do real work between batches — the seam a test
     // uses to land a concurrent edit at a known point.
@@ -495,7 +514,8 @@ export const runPropertyCellBackfill = async (
   onProgress?: (progress: PropertyCellBackfillProgress) => void | Promise<void>,
 ): Promise<PropertyCellBackfillProgress> => {
   const progress: PropertyCellBackfillProgress = {
-    blocksScanned: 0, blocksMaterialized: 0, valuesMaterialized: 0, sweeps: 0,
+    blocksScanned: 0, blocksMaterialized: 0, valuesMaterialized: 0,
+    valuesMaterializedTotal: 0, sweeps: 0,
     orphanedOwnersSwept: 0, failures: [], failureCount: 0, editedUnderPass: false,
   }
 
@@ -513,24 +533,40 @@ export const runPropertyCellBackfill = async (
     progress.failures = []
     progress.failureCount = 0
     const notify = async () => { await onProgress?.(progress) }
-    await sweep(ctx, CANDIDATE_SQL, progress, notify, {deletesOnly: false})
+    const {sawChildBacked} = await sweep(
+      ctx, CANDIDATE_SQL, progress, notify, {deletesOnly: false})
     const beforeOrphans = progress.blocksScanned
     await sweep(ctx, ORPHANED_OWNER_SQL, progress, notify, {deletesOnly: true})
     progress.orphanedOwnersSwept += progress.blocksScanned - beforeOrphans
-    const after = await childState()
-    if (after.n === before.n) {
-      // Structurally converged. The timestamp is not part of that decision —
-      // looping on it never terminates against a live editor — but if it moved
-      // during the sweep that converged, this sweep was still rewriting value
-      // children from cells that were changing under it.
-      progress.editedUnderPass = after.t !== before.t
-      // One last notification, AFTER the flag is set. Everything a subscriber
-      // knows arrives through `onProgress`, which otherwise fires only from
-      // inside a batch — so the palette, which is the surface an operator
-      // actually uses, saw every count from the converging sweep except the
-      // one thing it is supposed to act on.
-      await onProgress?.(progress)
-      break
+    if (sawChildBacked) {
+      // Past the flip the pending set only SHRINKS: every live write puts the
+      // cell and its children in one transaction, so nothing BECOMES pending and
+      // a sweep that materialized nothing has nothing left to find. The row count
+      // is not a signal this pass owns there — the live maintainers move it too,
+      // so a block gaining a property while the pass ran read as "not converged",
+      // and four sweeps of ordinary editing ended the run with a give-up on a
+      // workspace that was already complete. `editedUnderPass` stays false for
+      // the same reason: create-only rewrites nothing.
+      if (progress.valuesMaterialized === 0) {
+        await onProgress?.(progress)
+        break
+      }
+    } else {
+      const after = await childState()
+      if (after.n === before.n) {
+        // Structurally converged. The timestamp is not part of that decision —
+        // looping on it never terminates against a live editor — but if it moved
+        // during the sweep that converged, this sweep was still rewriting value
+        // children from cells that were changing under it.
+        progress.editedUnderPass = after.t !== before.t
+        // One last notification, AFTER the flag is set. Everything a subscriber
+        // knows arrives through `onProgress`, which otherwise fires only from
+        // inside a batch — so the palette, which is the surface an operator
+        // actually uses, saw every count from the converging sweep except the
+        // one thing it is supposed to act on.
+        await onProgress?.(progress)
+        break
+      }
     }
     if (progress.sweeps >= MAX_SWEEPS) {
       throw new Error(
@@ -576,7 +612,8 @@ export const propertyCellBackfill: WorkspaceBackfill = {
     // channel. `progress` is the same object throughout, so it carries the
     // last sweep's counts either way.
     const progress: PropertyCellBackfillProgress = {
-      blocksScanned: 0, blocksMaterialized: 0, valuesMaterialized: 0, sweeps: 0,
+      blocksScanned: 0, blocksMaterialized: 0, valuesMaterialized: 0,
+      valuesMaterializedTotal: 0, sweeps: 0,
       orphanedOwnersSwept: 0, failures: [], failureCount: 0, editedUnderPass: false,
     }
     try {

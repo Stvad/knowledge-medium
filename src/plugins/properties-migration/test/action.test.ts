@@ -289,13 +289,13 @@ describe('migrate_properties_to_blocks action', () => {
 describe('what a completed run tells the operator', () => {
   const ran = {outcome: 'ran', undoHistoryCleared: false} as const
   const counts = (blocks: number) =>
-    ({blocksMaterialized: blocks, valuesMaterialized: blocks, unmigrated: 0, orphanedOwnersSwept: 0})
+    ({blocksMaterialized: blocks, valuesMaterializedTotal: blocks, unmigrated: 0, orphanedOwnersSwept: 0})
 
   it('calls a run that migrated nothing a failure, not a green "0 blocks"', async () => {
     // Failures are per-value by design, so a systematic problem — a codec
     // rejecting everything, storage refusing writes — otherwise came back as
     // a success banner reading "Migrated properties on 0 blocks."
-    const {message, failed} = describeOutcome(ran, {blocksMaterialized: 0, valuesMaterialized: 0, unmigrated: 12, orphanedOwnersSwept: 0}, false)
+    const {message, failed} = describeOutcome(ran, {blocksMaterialized: 0, valuesMaterializedTotal: 0, unmigrated: 12, orphanedOwnersSwept: 0}, false)
 
     expect(failed).toBe(true)
     expect(message).toMatch(/systematic/i)
@@ -307,7 +307,7 @@ describe('what a completed run tells the operator', () => {
     // effect was deletion otherwise reads "Migrated properties on 0 blocks."
     const {message} = describeOutcome(
       ran,
-      {blocksMaterialized: 0, valuesMaterialized: 0, unmigrated: 0, orphanedOwnersSwept: 4},
+      {blocksMaterialized: 0, valuesMaterializedTotal: 0, unmigrated: 0, orphanedOwnersSwept: 4},
       false,
     )
 
@@ -319,7 +319,7 @@ describe('what a completed run tells the operator', () => {
     // a run that wrote every other key on every block. Branching on it told the
     // operator nothing was migrated while tens of thousands of rows were.
     const {failed} = describeOutcome(
-      ran, {blocksMaterialized: 0, valuesMaterialized: 40, unmigrated: 20, orphanedOwnersSwept: 0}, false,
+      ran, {blocksMaterialized: 0, valuesMaterializedTotal: 40, unmigrated: 20, orphanedOwnersSwept: 0}, false,
     )
 
     expect(failed).toBe(false)
@@ -362,7 +362,7 @@ describe('what a completed run tells the operator', () => {
 
 describe('what an aborted run tells the operator', () => {
   const counts = (blocks: number) =>
-    ({blocksMaterialized: blocks, valuesMaterialized: blocks, unmigrated: 0, orphanedOwnersSwept: 0})
+    ({blocksMaterialized: blocks, valuesMaterializedTotal: blocks, unmigrated: 0, orphanedOwnersSwept: 0})
 
   it('does not say "Not started" for a run that wrote and dropped the undo stack', async () => {
     // The per-transaction preconditions abort MID-run, and on a connected

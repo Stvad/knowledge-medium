@@ -396,6 +396,75 @@ describe('property cell → children backfill', {timeout: 30_000}, () => {
       expect(await fieldRowsOf('b1')).toHaveLength(2)
     })
 
+    it('converges while ordinary editing creates property children under it', async () => {
+      // Pre-flip this pass is the ONLY writer of property-child rows, which is
+      // what makes "the row count stopped moving" mean "converged". Post-flip the
+      // live maintainers are on, so every new property key creates its own field
+      // and value rows — work the pass never did and has nothing to redo. Counting
+      // that as unconverged burned all four sweeps and gave up on a workspace that
+      // was already complete, AFTER the flip had landed.
+      await create('b1', {'demo:note': 'done'})
+      await runPropertyCellBackfill(makeCtx())
+      await flip()
+
+      let n = 0
+      const progress = await runPropertyCellBackfill(makeCtx(), async () => {
+        n += 1
+        await create(`live-${n}`, {'demo:note': `written while it ran ${n}`})
+      })
+
+      expect(progress.sweeps).toBeLessThan(4)
+    })
+
+    it('does not report a run that migrated everything as a total failure', async () => {
+      // The systematic-failure banner keys on "nothing was materialized". Per
+      // sweep, post-flip, that is ALWAYS true of the converging sweep — it is the
+      // one that found nothing pending — while failures keep being counted every
+      // sweep. So the first post-flip run of any workspace holding one undecodable
+      // cell value reported "Nothing was migrated" over a run that migrated the
+      // rest, and suppressed the repair worklist it exists to show.
+      await create('b1', {'demo:note': 'migrates fine'})
+      await create('b2', {})
+      await flip()
+      // Raw, so no processor normalizes it — the shape legacy junk has.
+      await sharedDb.db.execute(`UPDATE blocks SET properties_json = ? WHERE id = ?`,
+        [JSON.stringify({'demo:extra': {not: 'a string'}}), 'b2'])
+
+      const progress = await runPropertyCellBackfill(makeCtx())
+
+      expect(progress.failureCount).toBe(1)
+      expect((await fieldRowsOf('b1'))[0]!.values).toEqual(['migrates fine'])
+      // The per-sweep count is zero on the converging sweep and that is CORRECT;
+      // the run-scoped total is what says whether anything worked.
+      expect(progress.valuesMaterializedTotal).toBeGreaterThan(0)
+    })
+
+    it('does not tell the operator to re-run because someone typed', async () => {
+      // `editedUnderPass` means "the pass rewrote value children from cells that
+      // were changing under it". Create-only rewrites nothing, so post-flip it can
+      // only mean "someone touched a property" — which the dual-write already
+      // handled. The advice it triggers ("run this again") is then a no-op loop,
+      // and near-permanently on: editorSelection and isEditing are registered
+      // properties, so a caret move is a property write.
+      await create('b1', {'demo:note': 'done'})
+      await runPropertyCellBackfill(makeCtx())
+      await flip()
+
+      let n = 0
+      const progress = await runPropertyCellBackfill(makeCtx(), async () => {
+        n += 1
+        // A PROPERTY write, which is what moves the child rows' timestamp — a
+        // content edit would leave the flag clear for the wrong reason.
+        await repo.tx(async tx => { await tx.setProperty('b1', noteProp, `typed ${n}`) },
+          {scope: ChangeScope.BlockDefault, description: 'live edit'})
+      })
+
+      // The dual-write already put that value in the child, so there is nothing
+      // for the operator to re-run.
+      expect((await fieldRowsOf('b1'))[0]!.values).toEqual([`typed ${n}`])
+      expect(progress.editedUnderPass).toBe(false)
+    })
+
     it('does not sweep an owner whose cell has emptied out', async () => {
       // The orphan leg exists to delete, and only to delete: its owners are
       // the ones whose bag no longer holds anything. Post-flip an empty bag is
