@@ -12,6 +12,12 @@ export interface ConfirmMigrationDialogProps {
   /** Blocks the pass will visit — the same over-approximating predicate the
    *  pass uses, hence "check" rather than "change". */
   blockCount: number
+  /** The workspace already reads properties from child blocks, so the pass
+   *  does the strictly smaller create-only job: it fills in keys with no child
+   *  blocks yet and touches nothing that already has them. Worth its own
+   *  sentence — an operator who has flipped is otherwise told a run that
+   *  rewrites nothing "will store every property as child blocks". */
+  childBacked: boolean
 }
 
 /** Confirmation for the one-time properties migration.
@@ -30,6 +36,7 @@ export interface ConfirmMigrationDialogProps {
  *  rather than running a second writer. */
 export const ConfirmMigrationDialog = ({
   blockCount,
+  childBacked,
   resolve,
   cancel,
 }: ConfirmMigrationDialogProps & DialogContextProps<true>) => (
@@ -40,11 +47,17 @@ export const ConfirmMigrationDialog = ({
       </DialogHeader>
       <div className="space-y-3 text-sm">
         <p>
-          Every <em>registered</em> property on {blockCount.toLocaleString()} block
-          {blockCount === 1 ? '' : 's'} will also be stored as child blocks.
-          Existing values are not changed or moved. A key no schema declares is
-          skipped and stays cell-only — run <code>audit-properties</code> to find
-          those before flipping the workspace.
+          {childBacked
+            ? <>This workspace already reads properties from child blocks.
+                Properties written before that have none yet; this fills them in
+                across {blockCount.toLocaleString()} block
+                {blockCount === 1 ? '' : 's'}, and leaves every value already
+                stored as a block exactly as it is.</>
+            : <>Every <em>registered</em> property on {blockCount.toLocaleString()} block
+                {blockCount === 1 ? '' : 's'} will also be stored as child blocks.
+                Existing values are not changed or moved.</>}
+          {' '}A key no schema declares is skipped and stays cell-only — run{' '}
+          <code>audit-properties</code> to find those.
         </p>
         <p>
           This runs on this device only — your other devices receive the result

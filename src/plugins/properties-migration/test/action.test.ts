@@ -66,22 +66,34 @@ describe('migrate_properties_to_blocks action', () => {
     expect(runWorkspaceBackfillNow).not.toHaveBeenCalled()
   })
 
-  it('refuses a flipped workspace before the scan and the confirmation', async () => {
-    // Past the flip the pass can never run. Reaching the first batch
-    // transaction to find that out spends a full workspace scan and a
-    // user-length pause, and reports an internal error that says to try again.
+  it('runs against a flipped workspace, telling the operator it fills gaps', async () => {
+    // Flip THEN backfill is the runbook: the flip turns the live maintainers
+    // on, and this pass fills in the history they were not there for. Refusing
+    // here — which is what "the migration has nothing left to do" did — left an
+    // operator who had already flipped with no way to run it at all.
     openDialog.mockResolvedValue(true)
-    const {repo, runWorkspaceBackfillNow, getAll} = makeRepo(
+    const {repo, runWorkspaceBackfillNow} = makeRepo(
       {outcome: 'ran', undoHistoryCleared: false}, {flipped: true},
     )
 
     await invoke(repo)
 
-    // Before the SCAN as well as before the dialog: counting candidates is an
-    // unbounded json_each walk of the workspace on the UI thread.
-    expect(getAll).not.toHaveBeenCalled()
-    expect(openDialog).not.toHaveBeenCalled()
-    expect(runWorkspaceBackfillNow).not.toHaveBeenCalled()
+    expect(openDialog).toHaveBeenCalledWith(
+      expect.anything(), expect.objectContaining({childBacked: true}))
+    expect(runWorkspaceBackfillNow).toHaveBeenCalled()
+  })
+
+  it('tells the confirmation an un-flipped workspace is getting the full pass', async () => {
+    // The two runs do different jobs — reconcile versus create-only — and the
+    // confirmation is the only place the operator finds out which one they are
+    // about to start.
+    openDialog.mockResolvedValue(true)
+    const {repo} = makeRepo({outcome: 'ran', undoHistoryCleared: false})
+
+    await invoke(repo)
+
+    expect(openDialog).toHaveBeenCalledWith(
+      expect.anything(), expect.objectContaining({childBacked: false}))
   })
 
   it('does not run against a workspace the user left while confirming', async () => {
@@ -166,7 +178,7 @@ describe('what a completed run tells the operator', () => {
     // Convergence deliberately does not loop on rewritten values, so this
     // sentence is the only thing that tells an operator the children it just
     // built may already be behind the cells.
-    expect(describeOutcome(ran, counts(100), true).message).toMatch(/run this again before flipping/i)
+    expect(describeOutcome(ran, counts(100), true).message).toMatch(/run this again/i)
     expect(describeOutcome(ran, counts(100), false).message).not.toMatch(/run this again/i)
   })
 })

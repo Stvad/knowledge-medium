@@ -66,7 +66,8 @@ describe('the migration progress path', () => {
     // handed, which nothing else in the suite exercises.
     await runReporting(progress({editedUnderPass: true}))
 
-    expect(progressHandle.done).toHaveBeenCalledWith(expect.stringMatching(/before flipping/i))
+    expect(progressHandle.done).toHaveBeenCalledWith(
+      expect.stringMatching(/may already be behind/i))
   })
 
   it('gives the repair worklist a stable toast id, so a re-run replaces it', async () => {

@@ -4,12 +4,19 @@
  * Every block whose `properties_json` holds a registered key gets the field
  * and value CHILD rows that key implies, built by the same helper the live
  * dual-write uses (`materializePropertyChildrenForExistingRow`). Cells are
- * left exactly as they are: this pass ADDS the child representation, and the
- * workspace only starts reading it when `properties_migration` flips to
- * `'children'`. Run it BEFORE that flip — a flipped workspace whose blocks
- * have no children yet falls back to the cell (§5's pending-materialization
- * rule), but every device would then be reading a half-built tree for as long
- * as the pass takes.
+ * left exactly as they are: this pass ADDS the child representation.
+ *
+ * IT RUNS ON EITHER SIDE OF THE FLIP, and does a different job on each. Before
+ * `properties_migration` reaches `'children'` nothing else maintains the
+ * children at all — the live processors are dormant — so the pass RECONCILES:
+ * it writes what the cell says and removes what the cell no longer has. After
+ * the flip those maintainers are on and the children are the property truth,
+ * so the only work left is GAPS, and the pass becomes CREATE-ONLY (see
+ * {@link namesPendingMaterialization}). The runbook is flip THEN backfill:
+ * flipping a workspace with no children hides nothing, because at `'children'`
+ * the cell is still dual-written and still the synchronous read surface, while
+ * running the pass first leaves a window in which new machinery is unrecognized
+ * and visible.
  *
  * `operator` trigger, so nothing schedules it. Its writes upload — that is the
  * point, one device builds the rows and every other device receives them —
@@ -252,8 +259,8 @@ export interface PropertyCellBackfillProgress {
    *  changing while the pass ran, and the children it just built are behind
    *  by however much landed after it visited each block. Convergence
    *  deliberately does not loop on this (see {@link CHILD_STATE_SQL}), so
-   *  reporting it is the only thing that tells an operator to run again
-   *  before flipping. */
+   *  reporting it is the only thing that tells an operator to run it
+   *  again. */
   editedUnderPass: boolean
 }
 
@@ -449,9 +456,10 @@ const sweep = async (
         if (ok) progress.blocksMaterialized += 1
       }
     }, {description: 'Migrate properties to child blocks'})
-    // Nothing this leg could do is still permitted, and the flip only moves
-    // forward — so stop the walk rather than paging through the rest of the
-    // workspace to commit empty transactions.
+    // COST, not correctness — nothing this leg could still do is permitted, so
+    // every later batch would abandon too. Deleting it fails no test; it just
+    // pages through the whole workspace committing empty transactions and
+    // reporting progress for them.
     if (abandoned) return
 
     // Awaited so a caller can do real work between batches — the seam a test
@@ -475,11 +483,12 @@ const sweep = async (
  * block, so a sweep repairs whatever changed during the one before it; the
  * signal only decides whether another is owed.
  *
- * Still open by construction, and NOT closable here: a property written after
- * the last sweep but before the flip. Nothing local makes the final scan and
- * the flip atomic against a live user — the flip's own materialize catch-up is
- * what covers that window (issue #389), and re-running this pass before
- * flipping covers it in the meantime.
+ * PRE-FLIP ONLY, and NOT closable here: a property written after the last
+ * sweep. Nothing local makes the final scan and the flip atomic against a live
+ * user, so those keys reach the flip with no children. Flipping FIRST is what
+ * closes it — past the flip the live maintainers own every new write and this
+ * pass only ever has history to fill in; the flip's own materialize catch-up
+ * (issue #389) is the equivalent cover for a pre-flip run.
  */
 export const runPropertyCellBackfill = async (
   ctx: WorkspaceBackfillContext,

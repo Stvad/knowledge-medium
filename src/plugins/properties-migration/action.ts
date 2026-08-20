@@ -67,7 +67,7 @@ export const describeOutcome = (
             : '') +
           (editedUnderPass
             ? ' The workspace was edited while it ran, so some values may already be behind —' +
-              ' run this again before flipping.'
+              ' run this again.'
             : '') +
           undoNote(result),
         // Surfaced through `done`, not `fail`: the pass DID complete, and
@@ -77,7 +77,7 @@ export const describeOutcome = (
         followUp: unmigrated > 0
           ? `${unmigrated.toLocaleString()} property value(s) could not be migrated and kept ` +
             'their cell value — see the console for which (first 50 shown). Repair them and ' +
-            'run this again before flipping the workspace.'
+            'run this again.'
           : undefined,
       }
     case 'deferred':
@@ -95,8 +95,8 @@ export const describeOutcome = (
     case 'failed':
       return {
         // No blanket "run it again": true for the give-up and for an
-        // unexpected throw, false for the flip refusal and for a missing claim
-        // seam, which fail identically every time. Each reason carries its own.
+        // unexpected throw, false for a missing claim seam, which fails
+        // identically every time. Each reason carries its own.
         message: `Stopped partway — ${withPeriod(result.reason)}${undoNote(result)}`,
         failed: true,
       }
@@ -137,20 +137,17 @@ export const migratePropertiesToBlocksAction = ({repo}: {repo: Repo}): ActionCon
   handler: async () => {
     const workspaceId = repo.activeWorkspaceId
     if (!workspaceId) return
-    // Before the full-workspace scan and the confirmation, not inside the
-    // first batch transaction. Past the flip this pass can never run, so the
-    // refusal owes the operator a sentence — and letting it reach the tx
-    // instead spent a workspace scan and a user-length pause to produce an
-    // internal error saying it "stopped partway" and to try again.
-    if (await readIsChildBackedWorkspace(repo.db, workspaceId)) {
-      showInfo('This workspace already reads properties from child blocks — ' +
-        'the migration has nothing left to do.')
-      return
-    }
+    // NOT a refusal, which is what this used to be. Flip THEN backfill is the
+    // runbook — the flip turns the live maintainers on and this pass fills in
+    // the history they were not there for — so "already child-backed" is the
+    // normal case, not a dead end. It is a materially smaller job (create-only,
+    // §5's pending-materialization set), and the confirmation is where an
+    // operator finds that out.
+    const childBacked = await readIsChildBackedWorkspace(repo.db, workspaceId)
     const blockCount = await countPropertyCellBackfillCandidates(
       (sql, params) => repo.db.getAll(sql, params as unknown[] | undefined), workspaceId,
     )
-    if (!await openDialog(ConfirmMigrationDialog, {blockCount})) return
+    if (!await openDialog(ConfirmMigrationDialog, {blockCount, childBacked})) return
     // Re-read AFTER the dialog. A confirmation is a user-length pause, and the
     // workspace pinned before it may not be the open one now — the runner's
     // own active-workspace check happens only after `tryClaim` has written a
