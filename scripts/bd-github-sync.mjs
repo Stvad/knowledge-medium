@@ -253,17 +253,30 @@ export const buildIssueRefsMessage = (refs, closeNums) => {
  * skipped. Handles plain, "double-" and 'single-'quoted paths; not full shell
  * parsing — this is a guard against the common shapes, not a sandbox.
  */
+// Stdin in disguise: the hook reading these would consume its OWN stdin (an
+// empty, already-drained stream), not what the shell pipes to gh.
+const STDIN_PATH = /^(?:-|\/dev\/stdin|\/dev\/fd\/\d+|\/proc\/self\/fd\/\d+)$/
 export const bodyFilePaths = cmd => {
   // A real flag sits OUTSIDE quotes, so it survives into the skeleton; a
   // quoted mention ("use --body-file x next time" in a message) is prose and
   // must not be read as a file — with the fail-closed missing-file check, a
   // prose mention would otherwise block the command outright. Values are
   // still extracted from the raw text (quoted paths are blanked in the
-  // skeleton).
-  if (!/(?:--body-file|--notes-file|--template|--file|-F|-T)(?:=|\s)/.test(commandSkeleton(cmd))) return []
-  return [...cmd.matchAll(/(?:--body-file|--notes-file|--template|--file|-F|-T)(?:=|\s+)("[^"]*"|'[^']*'|[^\s'"]+)/g)]
+  // skeleton). `--template`/`-T` is a FILE only on `gh pr create`; on
+  // `gh issue create` it names a repository template and must not be
+  // resolved locally (the missing-file check would block a legitimate name).
+  const skeleton = commandSkeleton(cmd)
+  const templateIsFile = /pr\s+(?:create|new)\b/.test(skeleton)
+  const flagTest = templateIsFile
+    ? /(?:--body-file|--notes-file|--template|--file|-F|-T)(?:=|\s)/
+    : /(?:--body-file|--notes-file|--file|-F)(?:=|\s)/
+  const flagCapture = templateIsFile
+    ? /(?:--body-file|--notes-file|--template|--file|-F|-T)(?:=|\s+)("[^"]*"|'[^']*'|[^\s'"]+)/g
+    : /(?:--body-file|--notes-file|--file|-F)(?:=|\s+)("[^"]*"|'[^']*'|[^\s'"]+)/g
+  if (!flagTest.test(skeleton)) return []
+  return [...cmd.matchAll(flagCapture)]
     .map(m => m[1].replace(/^(["'])(.*)\1$/, '$2'))
-    .filter(p => p !== '-')
+    .filter(p => !STDIN_PATH.test(p))
 }
 
 /** Resolve a body-file path the way the shell would have: ~, then cwd. */
@@ -820,7 +833,7 @@ const hookPrePr = () => {
   // `cd` chain inside the command, a typo) would publish its references
   // unverified if silently skipped.
   const readBodies = () => {
-    const stdinBody = /(?:--body-file|--notes-file|--template|--file|-F|-T)(?:=|\s+)-(?:\s|$)/.test(commandSkeleton(cmd))
+    const stdinBody = /(?:--body-file|--notes-file|--template|--file|-F|-T)(?:=|\s+)(?:-(?:\s|$)|\/dev\/stdin|\/dev\/fd\/\d+|\/proc\/self\/fd\/\d+)/.test(commandSkeleton(cmd))
     if (stdinBody && !cmd.includes('<<') && !allowsIssueRefs(cmd)) {
       console.error(
         'This command feeds its published body from stdin, which this gate cannot inspect. Use a heredoc (scanned), a file, or an inline --body — or, after verifying the references yourself, re-run with KM_ISSUE_REFS_OK=1 prefixed.',
@@ -857,7 +870,10 @@ const hookPrePr = () => {
   }
 
   const bodies = readBodies()
-  const text = [cmd, ...bodies].join('\n')
+  // A positional target URL (`gh pr comment <url> --body …`) is the command's
+  // addressee, not published text — stripped so it does not cost a
+  // title-confirmation round. URLs inside quoted bodies stay and verify.
+  const text = [cmd.replace(/((?:pr|issue)\s+\w+\s+)https?:\/\/\S+/g, '$1'), ...bodies].join('\n')
   // The two escapes are independent: a command allowed to mention bead ids
   // can still carry a hallucinated issue number, and vice versa.
   const ids = allowsBeadIds(cmd) ? [] : extractBeadIds(text)

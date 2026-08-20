@@ -153,13 +153,22 @@ describe('bodyFilePaths / resolveBodyPath', () => {
     ])
   })
 
-  it('skips the stdin sentinel', () => {
+  it('skips the stdin sentinel and its device-path disguises', () => {
     expect(bodyFilePaths('gh pr create -F -')).toEqual([])
+    expect(bodyFilePaths('gh pr comment 1 -F /dev/stdin')).toEqual([])
+    expect(bodyFilePaths('gh pr comment 1 --body-file /dev/fd/3')).toEqual([])
   })
 
   it('extracts release notes and PR template files', () => {
     expect(bodyFilePaths('gh release create v1 --notes-file notes.md')).toEqual(['notes.md'])
     expect(bodyFilePaths('gh pr create --template body.md --title t')).toEqual(['body.md'])
+  })
+
+  // gh issue create's --template names a REPOSITORY template, not a file —
+  // resolving it locally made the fail-closed missing-file check block a
+  // legitimate command (reproduced by review).
+  it('does not read issue-create template names as local files', () => {
+    expect(bodyFilePaths('gh issue create --template "Bug Report" --title t')).toEqual([])
   })
 
   // Hit live: a commit message PROSE-mentioning --notes-file was read as a
@@ -1017,9 +1026,27 @@ describe('hookPrePr process behavior', { timeout: 20_000 }, () => {
     const piped = hook('cat body.md | gh pr comment 12 -F -')
     expect(piped.status).toBe(2)
     expect(piped.stderr).toContain('stdin')
+    // /dev/stdin is stdin in disguise: reading it in the hook scans the
+    // hook's own drained stream while gh publishes the piped file
+    const device = hook('cat body.md | gh pr comment 12 -F /dev/stdin')
+    expect(device.status).toBe(2)
+    expect(device.stderr).toContain('stdin')
     const heredoc = hook('gh pr comment 12 -F - <<EOF\nrelates to #653\nEOF')
     expect(heredoc.status).toBe(2)
     expect(heredoc.stderr).toContain('Real GC failure')
+  })
+
+  // The command's addressee is not published text: a positional target URL
+  // must not cost a confirmation round, while the same URL inside a quoted
+  // body is publication text and still verifies.
+  it('ignores positional target URLs but verifies URLs inside bodies', () => {
+    const { hook, shimCalls } = makeRepo({ dbReady: true, ghIssues: { 653: { title: 'Real GC failure', state: 'open' } } })
+    const target = hook(`gh pr comment https://github.com/Stvad/knowledge-medium/pull/653 --body "looks good"`)
+    expect(target.status).toBe(0)
+    expect(shimCalls()).not.toContain('gh api')
+    const inBody = hook(`gh pr comment 12 --body "see https://github.com/Stvad/knowledge-medium/issues/653"`)
+    expect(inBody.status).toBe(2)
+    expect(inBody.stderr).toContain('Real GC failure')
   })
 
   it('scans file-backed commit messages (-F) for close keywords', () => {
