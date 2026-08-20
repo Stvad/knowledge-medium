@@ -343,8 +343,17 @@ const materializedFieldIds = async (tx: Tx, row: BlockData): Promise<Set<string>
  * post-flip that projects as "key unset" (§9), which is what deleting the
  * value row means, and re-adding it from the cell would undo the user's edit.
  *
- * A TOMBSTONED field row gets the same treatment. "No live field row" has two
- * causes — history, and a property DELETED through its
+ * A TOMBSTONED field row gets the same treatment, with one ACCEPTED false
+ * positive: a key deleted and then re-added to the cell BEFORE the flip keeps
+ * its old tombstone, so it is vetoed here and never becomes child-backed. It
+ * keeps working — a cell key with no children is exactly what the
+ * pending-materialization rule goes on reading from the cell — and producing
+ * that tombstone at all takes a pre-flip backfill run, which the runbook this
+ * pass now serves does not have (the palette flips first, the CLI refuses an
+ * un-flipped workspace). Telling the two apart would mean asking whether a
+ * tombstone predates the flip, which nothing local records.
+ *
+ * "No live field row" has two causes — history, and a property DELETED through its
  * children on a peer whose owner row has not reached this device — and only the
  * tombstone tells them apart. Without it the pass recreates the property and
  * UPLOADS it, undoing the delete for the fleet. Genuine history carries no
