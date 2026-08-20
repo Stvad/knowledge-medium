@@ -54,6 +54,10 @@ export declare const buildDenyMessage: (
   mapped: { id: string; number: number }[],
   unmapped: string[],
 ) => string
+export declare const planMintedClosed: (
+  preBeads: BeadRow[],
+  freshBeads: BeadRow[],
+) => { id: string; number: number }[]
 export declare const planLocalWins: (
   beads: BeadRow[],
   issueByNumber: Map<number, IssueInfo>,

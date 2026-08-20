@@ -207,7 +207,7 @@ export const buildIssueRefsMessage = (refs, closeNums) => {
  * parsing — this is a guard against the common shapes, not a sandbox.
  */
 export const bodyFilePaths = cmd =>
-  [...cmd.matchAll(/(?:--body-file|-F)(?:=|\s+)("[^"]*"|'[^']*'|[^\s'"]+)/g)]
+  [...cmd.matchAll(/(?:--body-file|--file|-F)(?:=|\s+)("[^"]*"|'[^']*'|[^\s'"]+)/g)]
     .map(m => m[1].replace(/^(["'])(.*)\1$/, '$2'))
     .filter(p => p !== '-')
 
@@ -272,6 +272,20 @@ export const planClosePushes = (beads, issueByNumber, maxKnownIssueNumber) =>
  * bead new this run at 2 takes the label-derived value if one exists. A bead
  * already at 2 before the run is untouched — 2 may be deliberate.
  */
+// Closed beads whose FIRST issue the pre-pull push just minted: the mint
+// creates the issue OPEN with a fresh timestamp, so the timestamp-based
+// suspect test above can never flag them, yet the pull can apply that OPEN
+// copy over the local close (trap 3's population, re-exposed by pushing
+// before the pull). Detected as external_ref appearing between the pre-push
+// and post-push listings.
+export const planMintedClosed = (preBeads, freshBeads) => {
+  const preRefs = new Map(preBeads.map(b => [b.id, b.external_ref ?? null]))
+  return freshBeads.flatMap(b => {
+    const number = issueNumberFromRef(b.external_ref)
+    return b.status === 'closed' && number !== null && preRefs.get(b.id) === null ? [{ id: b.id, number }] : []
+  })
+}
+
 // Beads whose local row is strictly newer than their GitHub copy. bd's pull
 // applies GitHub state over these despite the documented prefer-newer default
 // (#647), so they are exactly the rows a pull can revert. Missing timestamps
@@ -545,7 +559,7 @@ const runSync = ({ quiet = false, dryRun = false } = {}) => {
     // spawn, not run(): `bd show` output is pretty-printed JSON, and a
     // description line starting with "Error" would trip run()'s bd check.
     const freshBeads = dryRun ? preBeads : listAllBeads()
-    const suspects = planLocalWins(freshBeads, issueByNumber)
+    const suspects = [...planLocalWins(freshBeads, issueByNumber), ...planMintedClosed(preBeads, freshBeads)]
     // Tolerant multi-id show: parse stdout directly — `bd show` output is
     // pretty-printed JSON, and a description line starting with "Error" would
     // trip run()'s bd check. Returns null on any shortfall, including bd's
@@ -720,19 +734,24 @@ const hookPrePr = () => {
   }
   const cmd = payload?.tool_input?.command ?? ''
   if (!cmd) allow()
+  const cwd = payload?.cwd ?? process.cwd()
+  const readBodies = () =>
+    bodyFilePaths(cmd)
+      .map(p => resolveBodyPath(p, cwd, homedir()))
+      .filter(p => existsSync(p))
+      .map(p => readFileSync(p, 'utf8'))
   if (!matchesPrCommand(cmd)) {
     // The commit leg: only a close keyword aimed at a #N warrants a round.
+    // The message may be file-backed (git commit -F/--file), so scan those
+    // too; `-F -` (stdin/heredoc) bodies already sit in the raw command.
     if (!matchesCommitCommand(cmd) || allowsIssueRefs(cmd)) allow()
-    const commitRefs = closeKeywordRefs(cmd)
+    const commitText = [cmd, ...readBodies()].join('\n')
+    const commitRefs = closeKeywordRefs(commitText)
     if (commitRefs.length === 0) allow()
-    return echoIssueRefs(cmd, commitRefs)
+    return echoIssueRefs(commitText, commitRefs)
   }
 
-  const cwd = payload?.cwd ?? process.cwd()
-  const bodies = bodyFilePaths(cmd)
-    .map(p => resolveBodyPath(p, cwd, homedir()))
-    .filter(p => existsSync(p))
-    .map(p => readFileSync(p, 'utf8'))
+  const bodies = readBodies()
   const text = [cmd, ...bodies].join('\n')
   // The two escapes are independent: a command allowed to mention bead ids
   // can still carry a hallucinated issue number, and vice versa.

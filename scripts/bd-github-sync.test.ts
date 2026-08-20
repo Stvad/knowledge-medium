@@ -21,6 +21,7 @@ import {
   planClosePushes,
   planCloseReconciliation,
   planLocalWins,
+  planMintedClosed,
   planPriorityFixes,
   planRestoreArgs,
   REPO,
@@ -370,6 +371,30 @@ describe('planLocalWins', () => {
   })
 })
 
+describe('planMintedClosed', () => {
+  it('flags a closed bead whose first issue the pre-push just minted', () => {
+    const pre = [bead({ id: 'km-a', status: 'closed', external_ref: null })]
+    const fresh = [bead({ id: 'km-a', status: 'closed', external_ref: ref(12) })]
+    expect(planMintedClosed(pre, fresh)).toEqual([{ id: 'km-a', number: 12 }])
+  })
+
+  it('ignores open mints, pre-existing refs, and beads new in fresh', () => {
+    expect(
+      planMintedClosed(
+        [bead({ id: 'km-a', status: 'open', external_ref: null })],
+        [bead({ id: 'km-a', status: 'open', external_ref: ref(12) })],
+      ),
+    ).toEqual([])
+    expect(
+      planMintedClosed(
+        [bead({ id: 'km-a', status: 'closed', external_ref: ref(12) })],
+        [bead({ id: 'km-a', status: 'closed', external_ref: ref(12) })],
+      ),
+    ).toEqual([])
+    expect(planMintedClosed([], [bead({ id: 'km-a', status: 'closed', external_ref: ref(12) })])).toEqual([])
+  })
+})
+
 describe('detectReverts', () => {
   const snap = bead({
     id: 'km-a',
@@ -656,6 +681,25 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     expect(shimCalls()).toContain('bd update km-tB --title T -d D-new -p 1 -a  -s open')
   })
 
+  // Trap 3 meets the pre-push: the mint creates the issue OPEN with a fresh
+  // timestamp, so the timestamp suspect test can never flag the closed bead
+  // — the minted-closed plan must snapshot it or the pull loses the close.
+  it('snapshots and restores a closed bead whose first issue the pre-push minted', () => {
+    const preRow = { id: 'km-tC', status: 'closed', priority: 1, title: 'T', description: 'D', updated_at: '2026-08-19T00:00:00Z' }
+    const minted = { ...preRow, external_ref: ref(12) }
+    const revertedRow = { ...minted, status: 'open' }
+    const { run, shimCalls } = makeSyncRepo({
+      issues: [ghIssue(1, '2026-08-20T00:00:00Z')],
+      lists: [[preRow], [minted], [revertedRow]],
+      shows: [[{ ...minted, close_reason: 'done' }], [revertedRow]],
+    })
+    const r = run()
+    expect(r.status).toBe(0)
+    expect(r.stdout).toContain('restored km-tC')
+    expect(shimCalls()).toContain('bd close km-tC -r done')
+    expect(shimCalls()).toContain('--issues km-tC')
+  })
+
   // bd's partial-output shape: found rows on stdout, `Error…` for the rest,
   // exit 0 — valid JSON that silently covers only some suspects.
   it('aborts when the snapshot covers only part of the suspect set', () => {
@@ -729,7 +773,7 @@ describe('hookPrePr process behavior', { timeout: 20_000 }, () => {
       const payload = JSON.stringify({ tool_name: 'Bash', cwd: repo, tool_input: { command } })
       return spawnSync('node', [script, '--hook-pre-pr'], { cwd: repo, env, input: payload, encoding: 'utf8' })
     }
-    return { hook, shimCalls: () => readFileSync(shimLog, 'utf8') }
+    return { hook, repo, shimCalls: () => readFileSync(shimLog, 'utf8') }
   }
 
   it('blocks a bead-id publish in a DB-less clone WITHOUT ever spawning bd', () => {
@@ -798,6 +842,14 @@ describe('hookPrePr process behavior', { timeout: 20_000 }, () => {
   it('gates close-keyword refs in git commit messages', () => {
     const { hook } = makeRepo({ dbReady: true, ghIssues: { 700: { title: 'Some PR', state: 'open', pull_request: {} } } })
     const r = hook('git commit -m "land the fix\n\nFixes #700"')
+    expect(r.status).toBe(2)
+    expect(r.stderr).toContain('close keyword targets a PR')
+  })
+
+  it('scans file-backed commit messages (-F) for close keywords', () => {
+    const { hook, repo } = makeRepo({ dbReady: true, ghIssues: { 700: { title: 'Some PR', state: 'open', pull_request: {} } } })
+    writeFileSync(join(repo, 'msg.txt'), 'land the fix\n\nFixes #700\n')
+    const r = hook(`git commit -F ${join(repo, 'msg.txt')}`)
     expect(r.status).toBe(2)
     expect(r.stderr).toContain('close keyword targets a PR')
   })
