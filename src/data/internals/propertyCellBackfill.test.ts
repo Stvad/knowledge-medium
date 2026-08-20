@@ -110,11 +110,12 @@ const fieldRowCount = async (): Promise<number> => (await repo.db.get<{n: number
     WHERE workspace_id = ? AND deleted = 0 AND is_field_form = 1`, [WS],
 ))!.n
 
-// Four of these run multi-sweep convergence loops and measure 636/444/364/356 ms
-// alone. The gate runs one worker per core, where a test's wall clock stretches
-// ~6x at p99.9 — so against vitest's 5000 ms default they intermittently redden
-// an unrelated PR's gate. Explicit budgets rather than a global raise, which
-// would make every genuine hang in this file cost 20 s before reporting.
+// Four tests here carry an explicit 20s budget. They measure 636/444/364/356 ms
+// alone, but the gate runs one worker per core: the batch-boundary one was
+// measured at 2.8-3.4s under contention and timed out on roughly a third of
+// local runs on master, unrelated to any one change. Per-test budgets rather
+// than a global raise, which would make every genuine hang in this file cost
+// 20s before reporting.
 describe('property cell → children backfill', () => {
   it('gives a registered cell key its field row and value row', async () => {
     await create('b1', {'demo:note': 'hello'})

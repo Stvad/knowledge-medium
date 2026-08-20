@@ -391,8 +391,6 @@ export const findRecoveryAnchor = (
   const panel = panelById(panelId)
   if (!panel) return null
   const instances = panelInstances(panel, excludedSurfaces)
-  if (instances.length === 0) return null
-
   const hint = lastPositionByPanel.get(panelId)
   if (!hint || !sameFocusedBlockLocation(hint.location, forLocation)) return null
   const candidates = sameSurfaceInstances(instances, hint.surface)

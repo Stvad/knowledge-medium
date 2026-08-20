@@ -491,6 +491,9 @@ describe('findRecoveryAnchor (proactive disappear-handler)', () => {
     ])
     // No prior rememberInstancePosition — proactive recovery should
     // stay quiet rather than steal focus to whatever rendered first.
+    // Visible on purpose: the viewport check vetoes every tier before the
+    // guard under test is reached, so an off-screen null proves nothing.
+    setTestVisible(findInstance('p1:B'), true)
     expect(findRecoveryAnchor('p1', p1Location('A'))).toBeNull()
   })
 
@@ -502,6 +505,9 @@ describe('findRecoveryAnchor (proactive disappear-handler)', () => {
       ]}},
     ])
     rememberInstancePosition('p1', findInstance('p1:A'))
+    // Visible on purpose: the viewport check vetoes every tier before the
+    // location-match guard is reached, so an off-screen null proves nothing.
+    setTestVisible(findInstance('p1:B'), true)
     expect(findRecoveryAnchor('p1', p1Location('never-mounted'))).toBeNull()
   })
 
