@@ -56,6 +56,10 @@ export declare const buildDenyMessage: (
   mapped: { id: string; number: number }[],
   unmapped: string[],
 ) => string
+export declare const planMintedRefs: (
+  preBeads: BeadRow[],
+  postBeads: BeadRow[],
+) => { id: string; number: number }[]
 export declare const planMintedNonOpen: (
   preBeads: BeadRow[],
   freshBeads: BeadRow[],

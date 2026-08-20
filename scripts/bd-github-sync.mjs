@@ -363,19 +363,29 @@ export const planClosePushes = (beads, issueByNumber, maxKnownIssueNumber) =>
  * bead new this run at 2 takes the label-derived value if one exists. A bead
  * already at 2 before the run is untouched — 2 may be deliberate.
  */
+// Beads whose FIRST issue this run minted: external_ref appearing between two
+// listings. A row ABSENT from the pre listing counts too: no pull runs
+// between the two listings at either call site, so a fresh-only row is a
+// concurrent local creation (worktrees share the DB) whose issue this push
+// may still have minted — excluding it loses the mapping forever, while
+// including it costs at most a redundant line or snapshot suspect.
+export const planMintedRefs = (preBeads, postBeads) => {
+  const preRefs = new Map(preBeads.map(b => [b.id, b.external_ref ?? null]))
+  return postBeads.flatMap(b => {
+    const number = issueNumberFromRef(b.external_ref)
+    return number !== null && (preRefs.get(b.id) ?? null) === null ? [{ id: b.id, number }] : []
+  })
+}
+
 // Beads in any non-open status whose FIRST issue the pre-pull push just
 // minted: the mint creates the issue OPEN with a fresh timestamp, so the
 // timestamp-based suspect test above can never flag them, yet the pull can
 // apply that OPEN copy over the local lifecycle state — closes (trap 3's
 // population, re-exposed by pushing before the pull), claims, blocks and
-// deferrals alike. Detected as external_ref appearing between the pre-push
-// and post-push listings.
+// deferrals alike.
 export const planMintedNonOpen = (preBeads, freshBeads) => {
-  const preRefs = new Map(preBeads.map(b => [b.id, b.external_ref ?? null]))
-  return freshBeads.flatMap(b => {
-    const number = issueNumberFromRef(b.external_ref)
-    return b.status !== 'open' && number !== null && preRefs.get(b.id) === null ? [{ id: b.id, number }] : []
-  })
+  const nonOpen = new Set(freshBeads.filter(b => b.status !== 'open').map(b => b.id))
+  return planMintedRefs(preBeads, freshBeads).filter(m => nonOpen.has(m.id))
 }
 
 // Closed beads whose linked issue is OPEN after close-adoption ran: that is a
@@ -664,6 +674,15 @@ const runSync = ({ quiet = false, dryRun = false } = {}) => {
     // spawn, not run(): `bd show` output is pretty-printed JSON, and a
     // description line starting with "Error" would trip run()'s bd check.
     const freshBeads = dryRun ? preBeads : listAllBeads()
+    // Print the km→#N mapping for every issue the pre-pull push just minted —
+    // IMMEDIATELY, not via the end-of-run report: any later step failing
+    // (snapshot abort, the pull itself) would swallow the report, and by the
+    // next run the bead already carries its ref, so the mapping would never
+    // be printed at all. The mapping is knowable only by lookup; surfacing
+    // it the moment it exists is what lets later text READ the number
+    // instead of guessing it (AGENTS.md: never write an unread #N).
+    for (const { id, number } of planMintedRefs(preBeads, freshBeads))
+      console.log(`bd-github-sync: minted: ${id} → #${number}`)
     const suspects = [
       ...new Map(
         [

@@ -24,6 +24,7 @@ import {
   planCloseReconciliation,
   planLocalWins,
   planMintedNonOpen,
+  planMintedRefs,
   planReopenedClosed,
   planPriorityFixes,
   planRestoreArgs,
@@ -497,6 +498,41 @@ describe('planLocalWins', () => {
   })
 })
 
+describe('planMintedRefs', () => {
+  it('reports every ref that appeared between the listings, open beads included', () => {
+    const pre = [
+      bead({ id: 'km-a', status: 'open', external_ref: null }),
+      bead({ id: 'km-b', status: 'closed', external_ref: null }),
+    ]
+    const post = [
+      bead({ id: 'km-a', status: 'open', external_ref: ref(12) }),
+      bead({ id: 'km-b', status: 'closed', external_ref: ref(13) }),
+    ]
+    expect(planMintedRefs(pre, post)).toEqual([
+      { id: 'km-a', number: 12 },
+      { id: 'km-b', number: 13 },
+    ])
+  })
+
+  it('ignores pre-existing refs and still-unminted beads', () => {
+    expect(
+      planMintedRefs([bead({ id: 'km-a', external_ref: ref(12) })], [bead({ id: 'km-a', external_ref: ref(12) })]),
+    ).toEqual([])
+    expect(
+      planMintedRefs([bead({ id: 'km-a', external_ref: null })], [bead({ id: 'km-a', external_ref: null })]),
+    ).toEqual([])
+  })
+
+  // No pull runs between the two listings at either call site, so a
+  // fresh-only row is a concurrent creation from another worktree — its mint
+  // must still be reported, or the mapping is lost forever.
+  it('includes beads that first appear in the post listing already mapped', () => {
+    expect(planMintedRefs([], [bead({ id: 'km-a', external_ref: ref(12) })])).toEqual([
+      { id: 'km-a', number: 12 },
+    ])
+  })
+})
+
 describe('planMintedNonOpen', () => {
   it('flags a non-open bead whose first issue the pre-push just minted', () => {
     const pre = [bead({ id: 'km-a', status: 'closed', external_ref: null })]
@@ -512,7 +548,7 @@ describe('planMintedNonOpen', () => {
     }
   })
 
-  it('ignores open mints, pre-existing refs, and beads new in fresh', () => {
+  it('ignores open mints and pre-existing refs; a fresh-only non-open bead IS a suspect', () => {
     expect(
       planMintedNonOpen(
         [bead({ id: 'km-a', status: 'open', external_ref: null })],
@@ -525,7 +561,9 @@ describe('planMintedNonOpen', () => {
         [bead({ id: 'km-a', status: 'closed', external_ref: ref(12) })],
       ),
     ).toEqual([])
-    expect(planMintedNonOpen([], [bead({ id: 'km-a', status: 'closed', external_ref: ref(12) })])).toEqual([])
+    expect(planMintedNonOpen([], [bead({ id: 'km-a', status: 'closed', external_ref: ref(12) })])).toEqual([
+      { id: 'km-a', number: 12 },
+    ])
   })
 })
 
@@ -609,7 +647,13 @@ describe('planRestoreArgs', () => {
 describe('runSync process behavior', { timeout: 20_000 }, () => {
   const script = fileURLToPath(new URL('./bd-github-sync.mjs', import.meta.url))
 
-  const makeSyncRepo = (opts: { issues: object[]; lists: object[][]; shows?: (object[] | string)[]; failCloseId?: string }) => {
+  const makeSyncRepo = (opts: {
+    issues: object[]
+    lists: object[][]
+    shows?: (object[] | string)[]
+    failCloseId?: string
+    failFullSync?: boolean
+  }) => {
     const repo = mkdtempSync(join(tmpdir(), 'bd-sync-run-'))
     spawnSync('git', ['init', '-q'], { cwd: repo })
     mkdirSync(join(repo, '.beads', 'embeddeddolt'), { recursive: true })
@@ -641,7 +685,9 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
         `    m=$(cat "${repo}/show-count" 2>/dev/null || echo 0)`,
         `    m=$((m+1)); echo $m > "${repo}/show-count"`,
         `    if [ -f "${repo}/show-$m.json" ]; then cat "${repo}/show-$m.json"; else cat "${repo}/show-last.json"; fi;;`,
-        '  github) echo "Pushed 0 issues";;',
+        ...(opts.failFullSync
+          ? ['  github) case "$*" in *--push-only*) echo "Pushed 1 issues";; *) echo "Error: pull exploded";; esac;;']
+          : ['  github) echo "Pushed 0 issues";;']),
         ...(opts.failCloseId
           ? [`  close) if [ "$2" = "${opts.failCloseId}" ]; then echo "Error: cannot close"; else echo ok; fi;;`]
           : []),
@@ -712,6 +758,55 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     expect(close).toBeGreaterThan(-1)
     expect(pushOnly).toBeGreaterThan(-1)
     expect(close).toBeLessThan(pushOnly)
+  })
+
+  it('prints the km→#N mapping for an issue this run minted', () => {
+    const unminted = { id: 'km-t5', status: 'open', priority: 1, title: 'T', description: 'D', external_ref: null, updated_at: '2026-08-19T00:00:00Z' }
+    const minted = { ...unminted, external_ref: ref(5) }
+    const { run } = makeSyncRepo({
+      issues: [ghIssue(5, '2026-08-20T00:00:00Z')],
+      lists: [[unminted], [minted], [minted]],
+    })
+    const r = run()
+    expect(r.status).toBe(0)
+    expect(r.stdout).toContain('minted: km-t5 → #5')
+  })
+
+  // The mapping must survive a mid-run failure: it is emitted directly, right
+  // after the first post-push listing — the end-of-run report never prints
+  // when a later step throws, and by the NEXT run the bead already carries
+  // its ref, so a swallowed mapping would never be printed at all.
+  it('prints the minted mapping even when a later sync step fails', () => {
+    const unminted = { id: 'km-t5', status: 'open', priority: 1, title: 'T', description: 'D', external_ref: null, updated_at: '2026-08-19T00:00:00Z' }
+    const minted = { ...unminted, external_ref: ref(5) }
+    const { run } = makeSyncRepo({
+      issues: [ghIssue(5, '2026-08-20T00:00:00Z')],
+      lists: [[unminted], [minted], [minted]],
+      failFullSync: true,
+    })
+    const r = run()
+    expect(r.status).toBe(1)
+    expect(r.stderr).toContain('bd-github-sync: failed')
+    expect(r.stdout).toContain('minted: km-t5 → #5')
+  })
+
+  // Position pin: the print must sit ABOVE the snapshot-abort. A minted
+  // CLOSED bead is itself a snapshot suspect (planMintedNonOpen), so a bd
+  // show failure aborts the run right after the mint — below the abort, the
+  // mapping would be swallowed in exactly that case (the failFullSync test
+  // cannot catch this: it mints an OPEN bead, which is never a suspect).
+  it('prints the minted mapping even when the suspect snapshot aborts the run', () => {
+    const unminted = { id: 'km-t6', status: 'closed', priority: 1, title: 'T', description: 'D', external_ref: null, updated_at: '2026-08-19T00:00:00Z' }
+    const minted = { ...unminted, external_ref: ref(6) }
+    const { run } = makeSyncRepo({
+      issues: [ghIssue(6, '2026-08-20T00:00:00Z')],
+      lists: [[unminted], [minted], [minted]],
+      shows: ['not json — snapshot read fails'],
+    })
+    const r = run()
+    expect(r.status).toBe(1)
+    expect(r.stderr).toContain('aborting before pull')
+    expect(r.stdout).toContain('minted: km-t6 → #6')
   })
 
   it('restores a newer local row the pull reverted, then pushes it back out', () => {
