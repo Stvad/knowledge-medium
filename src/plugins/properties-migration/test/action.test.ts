@@ -16,11 +16,13 @@ vi.mock('@/utils/toast.js', () => ({
   showInfo: (...args: unknown[]) => showInfo(...args),
 }))
 vi.mock('../ConfirmMigrationDialog.tsx', () => ({ConfirmMigrationDialog: () => null}))
-const flipWorkspace = vi.fn<(repo: unknown, workspaceId: string) => Promise<void>>()
+const flipWorkspace = vi.fn<(repo: unknown, workspaceId: string) => Promise<{localApplied: boolean}>>()
 vi.mock('@/data/workspaces', () => ({
   flipWorkspaceToChildBackedProperties: (repo: unknown, workspaceId: string) =>
     flipWorkspace(repo, workspaceId),
 }))
+const remoteSyncActive = vi.fn<() => boolean>()
+vi.mock('@/data/repoProvider', () => ({isRemoteSyncActive: () => remoteSyncActive()}))
 
 import type { OperatorBackfillResult, Repo } from '@/data/repo'
 import { describeOutcome, migratePropertiesToBlocksAction } from '../action.ts'
@@ -34,6 +36,8 @@ const makeRepo = (result: OperatorBackfillResult, {flipped = false} = {}) => {
       getAll,
       getOptional: async () => ({properties_migration: flipped ? 'children' : 'cell'}),
     },
+    isReadOnly: false,
+    syncViewGap: async () => null,
     runWorkspaceBackfillNow,
   } as unknown as Repo
   return {repo, runWorkspaceBackfillNow, getAll}
@@ -52,7 +56,9 @@ const invoke = (repo: Repo) =>
 afterEach(() => {
   openDialog.mockReset()
   flipWorkspace.mockReset()
-  flipWorkspace.mockResolvedValue(undefined)
+  flipWorkspace.mockResolvedValue({localApplied: true})
+  remoteSyncActive.mockReset()
+  remoteSyncActive.mockReturnValue(true)
   showInfo.mockReset()
   progressHandle.update.mockReset()
   progressHandle.done.mockReset()
@@ -76,6 +82,88 @@ describe('migrate_properties_to_blocks action', () => {
     expect(runWorkspaceBackfillNow).not.toHaveBeenCalled()
   })
 
+  it('refuses before the flip when this device is not fit to write', async () => {
+    // The flip is one-way (forward-only by trigger; rollback is a hand-run
+    // migration) and the pass that would follow it is not. Running the runner's
+    // own preconditions AFTER the flip means the irreversible half lands and the
+    // reversible half then declines — on a connected device a staged sync view is
+    // the EXPECTED ending, not a corner case.
+    openDialog.mockResolvedValue(true)
+    const {repo, runWorkspaceBackfillNow} = makeRepo({outcome: 'ran', undoHistoryCleared: false})
+    ;(repo as unknown as {syncViewGap: () => Promise<string | null>}).syncViewGap =
+      async () => 'synced rows are still draining into `blocks`'
+
+    await invoke(repo)
+
+    expect(flipWorkspace).not.toHaveBeenCalled()
+    expect(runWorkspaceBackfillNow).not.toHaveBeenCalled()
+    expect(progressHandle.fail).toHaveBeenCalledWith(expect.stringMatching(/draining/))
+  })
+
+  it('will not flip a workspace this client cannot reach the server for', async () => {
+    // Local-only is a RUNTIME choice; `supabase` is built from build-time env, so
+    // the client is non-null and the PATCH would really be attempted — against a
+    // workspace id that exists nowhere on the server, from a session that has
+    // promised to make no Supabase request. Refuse before the dialog rather than
+    // fail afterwards on a PostgREST string.
+    remoteSyncActive.mockReturnValue(false)
+    openDialog.mockResolvedValue(true)
+    const {repo, runWorkspaceBackfillNow} = makeRepo({outcome: 'ran', undoHistoryCleared: false})
+
+    await invoke(repo)
+
+    expect(openDialog).not.toHaveBeenCalled()
+    expect(flipWorkspace).not.toHaveBeenCalled()
+    expect(runWorkspaceBackfillNow).not.toHaveBeenCalled()
+  })
+
+  it('still backfills a flipped workspace with sync off, since that needs no server', async () => {
+    // The refusal above is about the FLIP, which is a server write. The pass
+    // itself is local, so a workspace already past the flip must stay migratable.
+    remoteSyncActive.mockReturnValue(false)
+    openDialog.mockResolvedValue(true)
+    const {repo, runWorkspaceBackfillNow} = makeRepo(
+      {outcome: 'ran', undoHistoryCleared: false}, {flipped: true},
+    )
+
+    await invoke(repo)
+
+    expect(runWorkspaceBackfillNow).toHaveBeenCalled()
+  })
+
+  it('stops when the flip committed but this device cannot see it', async () => {
+    // A 0-row local UPDATE is not an error, and the local `workspaces` row can be
+    // legitimately absent. Continuing would run the pass against a workspace that
+    // reads 'cell' locally and is in fact flipped — the RECONCILE branch, which
+    // is the one thing create-only exists to prevent.
+    openDialog.mockResolvedValue(true)
+    flipWorkspace.mockResolvedValue({localApplied: false})
+    const {repo, runWorkspaceBackfillNow} = makeRepo({outcome: 'ran', undoHistoryCleared: false})
+
+    await invoke(repo)
+
+    expect(runWorkspaceBackfillNow).not.toHaveBeenCalled()
+    // And it must NOT read as "nothing happened" — the flip is fleet-wide and
+    // one-way, and it landed.
+    expect(progressHandle.fail).toHaveBeenCalledWith(
+      expect.stringMatching(/switched to property blocks/i))
+  })
+
+  it('tells an operator whose flip landed and whose pass then deferred', async () => {
+    // The wiring, not `describeOutcome` in isolation: the handler is what knows a
+    // flip happened, and on a connected device deferring is the expected ending.
+    openDialog.mockResolvedValue(true)
+    const {repo} = makeRepo({
+      outcome: 'deferred', undoHistoryCleared: false, reason: 'this device is not caught up',
+    })
+
+    await invoke(repo)
+
+    expect(progressHandle.fail).toHaveBeenCalledWith(
+      expect.stringMatching(/switched to property blocks/i))
+    expect(progressHandle.fail).not.toHaveBeenCalledWith(expect.stringMatching(/not started/i))
+  })
+
   it('flips the workspace before running the pass, not after', async () => {
     // The whole runbook in one assertion. The flip turns the live maintainers
     // on, so a workspace flipped with zero children starts growing them from
@@ -84,7 +172,7 @@ describe('migrate_properties_to_blocks action', () => {
     // nothing maintains.
     openDialog.mockResolvedValue(true)
     const order: string[] = []
-    flipWorkspace.mockImplementation(async () => { order.push('flip') })
+    flipWorkspace.mockImplementation(async () => { order.push('flip'); return {localApplied: true} })
     const {repo, runWorkspaceBackfillNow} = makeRepo({outcome: 'ran', undoHistoryCleared: false})
     runWorkspaceBackfillNow.mockImplementation(async () => {
       order.push('backfill')
@@ -237,12 +325,38 @@ describe('what a completed run tells the operator', () => {
     expect(failed).toBe(false)
   })
 
+  it('never says a flipped workspace was untouched, whatever the pass did', async () => {
+    // The flip is fleet-wide and one-way, and every non-`ran` outcome was worded
+    // when the gesture's only write was the pass. "Not started" after a committed
+    // flip sends the operator away believing the graph is as they left it.
+    const outcomes: OperatorBackfillResult[] = [
+      {outcome: 'deferred', undoHistoryCleared: false, reason: 'this device is not caught up'},
+      {outcome: 'failed', undoHistoryCleared: false, reason: 'something broke'},
+      {outcome: 'held-by-peer', undoHistoryCleared: false},
+      {outcome: 'already-running', undoHistoryCleared: false},
+    ]
+    for (const result of outcomes) {
+      const {message} = describeOutcome(result, counts(0), false, {flipped: true})
+      expect(message, result.outcome).toMatch(/switched to property blocks/i)
+      expect(message, result.outcome).not.toMatch(/not started/i)
+    }
+  })
+
+  it('says nothing about a flip on a workspace that was already past it', async () => {
+    // The un-flipped runs are the only ones that owe that sentence; adding it to
+    // every run would tell an operator their gesture did something it did not.
+    expect(describeOutcome(
+      {outcome: 'deferred', undoHistoryCleared: false, reason: 'busy'},
+      counts(0), false, {flipped: false},
+    ).message).not.toMatch(/switched to property blocks/i)
+  })
+
   it('says to run again when the workspace was edited under the pass', async () => {
     // Convergence deliberately does not loop on rewritten values, so this
     // sentence is the only thing that tells an operator the children it just
     // built may already be behind the cells.
-    expect(describeOutcome(ran, counts(100), true).message).toMatch(/run this again/i)
-    expect(describeOutcome(ran, counts(100), false).message).not.toMatch(/run this again/i)
+    expect(describeOutcome(ran, counts(100), true, {flipped: false}).message).toMatch(/run this again/i)
+    expect(describeOutcome(ran, counts(100), false, {flipped: false}).message).not.toMatch(/run this again/i)
   })
 })
 

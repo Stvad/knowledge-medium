@@ -25,8 +25,9 @@ vi.mock('../ConfirmMigrationDialog.tsx', () => ({ConfirmMigrationDialog: () => n
 // pre-flipped workspace takes the create-only path and this file is about what
 // the operator sees during the FULL pass.
 vi.mock('@/data/workspaces', () => ({
-  flipWorkspaceToChildBackedProperties: async () => {},
+  flipWorkspaceToChildBackedProperties: async () => ({localApplied: true}),
 }))
+vi.mock('@/data/repoProvider', () => ({isRemoteSyncActive: () => true}))
 vi.mock('@/data/internals/propertyCellBackfill', () => ({
   PROPERTY_CELL_BACKFILL_ID: 'properties:cell-to-children',
   countPropertyCellBackfillCandidates: async () => 7,
@@ -49,6 +50,8 @@ const runReporting = async (reported: PropertyCellBackfillProgress) => {
   const repo = {
     activeWorkspaceId: 'ws-1',
     db: {getAll: async () => [{n: 7}], getOptional: async () => ({properties_migration: 'cell'})},
+    isReadOnly: false,
+    syncViewGap: async () => null,
     runWorkspaceBackfillNow: async () => {
       emit?.(reported)
       return {outcome: 'ran' as const, undoHistoryCleared: false}

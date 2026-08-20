@@ -10,6 +10,7 @@ import type {
 import type { Repo } from './repo'
 import {
   parsePropertiesMigration,
+  readIsChildBackedWorkspace,
   parseWorkspaceMemberRow,
   parseWorkspaceRow,
   type WorkspaceMemberRow,
@@ -281,16 +282,25 @@ export const renameWorkspace = async (workspaceId: string, name: string): Promis
  * for would be indistinguishable from a completed flip.
  *
  * Stamping local SQLite afterwards is the optimistic prime `primeLocalWorkspace`
- * already does after `create_workspace`, for the same reason and with the same
- * safety: the raw `workspaces` table has no powersync_crud trigger, so this is
- * local-only and cannot re-upload the column, and PowerSync replays the
- * identical value when it replicates. Without it the operator gesture would have
- * to sit and wait for a round trip before the pass could read its own flip.
+ * already does after `create_workspace` — see the section banner below for why
+ * that is local-only and cannot re-upload the column.
+ *
+ * `localApplied` is not decoration either. The local `workspaces` row can be
+ * legitimately ABSENT — `resolveWorkspace` admits a URL-hash workspace on the
+ * server's say-so before PowerSync has replicated it — and a 0-row UPDATE is not
+ * an error. Silently, the flip would then be invisible to
+ * `tx.isPropertyChildBackedWorkspace`, and the pass would take its RECONCILE
+ * branch against a workspace that is in fact flipped, which is the one thing the
+ * create-only path exists to prevent. Reported rather than thrown: past the
+ * PostgREST call the flip HAS committed, and a throw here would be caught as
+ * "the flip failed" and reported as "nothing was migrated".
+ *
+ * @returns whether the local replica now reflects the flip.
  */
 export const flipWorkspaceToChildBackedProperties = async (
   repo: Repo,
   workspaceId: string,
-): Promise<void> => {
+): Promise<{localApplied: boolean}> => {
   const client = assertSupabase()
   const {data, error} = await client
     .from('workspaces')
@@ -299,10 +309,18 @@ export const flipWorkspaceToChildBackedProperties = async (
     .select('properties_migration, update_time')
     .single()
   if (error) throw error
-  await repo.db.execute(
-    `UPDATE workspaces SET properties_migration = ?, update_time = ? WHERE id = ?`,
-    [data.properties_migration, toNumber(data.update_time), workspaceId],
-  )
+  try {
+    await repo.db.execute(
+      `UPDATE workspaces SET properties_migration = ?, update_time = ? WHERE id = ?`,
+      [data.properties_migration, toNumber(data.update_time), workspaceId],
+    )
+  } catch (cause) {
+    console.error('[workspaces] flip landed on the server but the local stamp failed:', cause)
+    return {localApplied: false}
+  }
+  // Read back rather than trusting `rowsAffected`, which PowerSync documents as
+  // possibly 0 for a successful UPDATE under its view system.
+  return {localApplied: await readIsChildBackedWorkspace(repo.db, workspaceId)}
 }
 
 export const updateWorkspaceMemberRole = async (

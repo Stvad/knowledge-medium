@@ -70,6 +70,8 @@ export const ConfirmMigrationDialog = ({
           <em> on this device</em> and it picks up where it stopped.
         </p>
         <p className="text-destructive">
+          {!childBacked && <>The switch cannot be undone from the app — it only ever
+            moves forward, and reversing it is a hand-run database migration.{' '}</>}
           Undo history for this workspace will be cleared. Undoing an edit made
           before the migration would revert part of it.
         </p>
