@@ -266,7 +266,8 @@ const mainRepoRoot = () => {
 }
 
 // The DB's PRIOR existence gates every bd invocation — see header.
-const initializedDbRoot = () => {
+// Exported for bd-prime-hook.mjs, which shares the same fresh-clone invariant.
+export const initializedDbRoot = () => {
   const root = mainRepoRoot()
   return root && existsSync(join(root, '.beads', 'embeddeddolt')) && tryRun('bd', ['--version']) ? root : null
 }

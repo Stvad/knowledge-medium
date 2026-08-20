@@ -8,6 +8,7 @@ export declare const bodyFilePaths: (cmd: string) => string[]
 export declare const resolveBodyPath: (p: string, cwd: string, home: string) => string
 export declare const deriveLabelPriority: (labels: string[]) => number | null
 export declare const issueNumberFromRef: (ref: string | null | undefined) => number | null
+export declare const initializedDbRoot: () => string | null
 
 export interface BeadRow {
   id: string
