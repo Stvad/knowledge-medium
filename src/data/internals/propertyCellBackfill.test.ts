@@ -13,9 +13,11 @@ import { resolveFacetRuntimeSync } from '@/facets/facet'
 import type { Repo } from '@/data/repo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
-import { ChangeScope as Scope } from '@/data/api'
 import type { WorkspaceBackfillContext } from '@/data/facets'
-import { CANDIDATE_SQL, PROPERTY_CELL_BACKFILL_ID, runPropertyCellBackfill } from './propertyCellBackfill'
+import {
+  CANDIDATE_SQL, PROPERTY_CELL_BACKFILL_ID, ROWS_PER_KEY, TARGET_INSERT_ROWS,
+  onPropertyCellBackfillProgress, runPropertyCellBackfill,
+} from './propertyCellBackfill'
 
 const WS = 'ws-cell-backfill'
 
@@ -54,15 +56,34 @@ beforeEach(async () => {
   ], {repo, workspaceId: WS, safeMode: false}))
 })
 
-const create = async (
-  id: string, properties: Record<string, unknown>, opts: {content?: string} = {},
-) => {
+const create = async (id: string, properties: Record<string, unknown>) => {
   await repo.tx(async tx => {
     await tx.create({
       id, workspaceId: WS, parentId: null, orderKey: `k-${id}`,
-      content: opts.content ?? id, properties,
+      content: id, properties,
     })
   }, {scope: ChangeScope.BlockDefault, description: 'seed'})
+}
+
+/** Enough blocks to span two write batches, derived from the budget rather than
+ *  written as a literal: a fixed count silently stops crossing a boundary if the
+ *  budget ever moves, and nothing would fail. */
+const TWO_BATCHES = TARGET_INSERT_ROWS / ROWS_PER_KEY + 10
+
+/** `count` blocks, each carrying one registered cell key. One transaction, not
+ *  one per block: the pass batches on inserted ROWS and reads cells off
+ *  `blocks`, so the seed's transaction grain changes nothing here. */
+const seedNotes = async (count: number) => {
+  const ids = Array.from({length: count}, (_, i) => `b${String(i).padStart(4, '0')}`)
+  await repo.tx(async tx => {
+    for (const id of ids) {
+      await tx.create({
+        id, workspaceId: WS, parentId: null, orderKey: `k-${id}`,
+        content: id, properties: {'demo:note': id},
+      })
+    }
+  }, {scope: ChangeScope.BlockDefault, description: 'seed'})
+  return ids
 }
 
 const run = async () => repo.runWorkspaceBackfillNow(WS, PROPERTY_CELL_BACKFILL_ID)
@@ -75,7 +96,7 @@ const makeCtx = (): WorkspaceBackfillContext => {
   return {
     workspaceId: WS,
     getAll: (sql, params) => repo.db.getAll(sql, params as unknown[] | undefined),
-    tx: (fn, opts) => repo.tx(fn, {scope: Scope.BlockDefault, skipUndo: true, ...opts}),
+    tx: (fn, opts) => repo.tx(fn, {scope: ChangeScope.BlockDefault, skipUndo: true, ...opts}),
     resolveNameSchema: name => {
       const resolution = resolver.resolve(name)
       return resolution.status === 'resolved' ? resolution.schema : undefined
@@ -110,7 +131,14 @@ const fieldRowCount = async (): Promise<number> => (await repo.db.get<{n: number
     WHERE workspace_id = ? AND deleted = 0 AND is_field_form = 1`, [WS],
 ))!.n
 
-describe('property cell → children backfill', () => {
+// The four `seedNotes` tests are the only slow ones here; the rest are
+// milliseconds. Measured at load avg ~170 on 12 cores: ~0.3-0.45s solo, 0.4-1.6s
+// under `vitest run src/data/internals/`, 0.6-1.2s under the full gate. Before
+// the seed batching the same four hit 5.2-5.9s on a gate run — over vitest's
+// 5000ms default, which is #633 and #639. Cost tracks ambient load more than the
+// work, so 30s is set well above the range rather than tuned to it; re-measure
+// under a named condition before trusting any single figure here.
+describe('property cell → children backfill', {timeout: 30_000}, () => {
   it('gives a registered cell key its field row and value row', async () => {
     await create('b1', {'demo:note': 'hello'})
 
@@ -174,21 +202,26 @@ describe('property cell → children backfill', () => {
   })
 
   it('migrates past a batch boundary instead of stopping at the first page', async () => {
-    // The cursor is `id > last`, so a batch that does not advance it, or one
-    // that advances it past unvisited rows, silently leaves blocks cell-only —
-    // and the claim would then record the migration as complete.
-    const ids = Array.from({length: 250}, (_, i) => `b${String(i).padStart(4, '0')}`)
-    for (const id of ids) await create(id, {'demo:note': id})
+    // Two write batches, not one: the pass drains a fetched page in
+    // TARGET_INSERT_ROWS-sized chunks, so a chunk that abandons the remainder,
+    // or a cursor advanced past unvisited rows, leaves blocks cell-only — and
+    // the claim would then record the migration as complete. A whole SCAN_PAGE
+    // still fits here, so cursor resume ACROSS pages is not exercised.
+    const ids = await seedNotes(TWO_BATCHES)
+    const batchSizes: number[] = []
+    const off = onPropertyCellBackfillProgress(p => batchSizes.push(p.blocksScanned))
 
-    expect((await run()).outcome).toBe('ran')
+    const result = await run()
+    off()
 
+    expect(result.outcome).toBe('ran')
     expect(await fieldRowCount()).toBe(ids.length)
-    // 250 sequential creates plus the sweep: ~450ms on an idle machine, but
-    // measured at 2.8-3.4s while anything else is running, and the gate runs
-    // one worker per core. Against the 5000ms default that timed out on
-    // roughly a third of local runs (on master, unrelated to any one change).
-    // Explicit budget rather than a global raise, per AGENTS.md.
-  }, 20_000)
+    // TWO_BATCHES follows the budget's VALUE; this pins the batching RULE it
+    // assumes. Drop the ROWS_PER_KEY factor from the drain loop — a real bug,
+    // doubling every transaction — and the fixture collapses to one batch: this
+    // test stops crossing a boundary, and the whole file still passes.
+    expect(batchSizes[0]).toBeLessThan(ids.length)
+  })
 
   it('reports a block whose cell value cannot be decoded and migrates the rest', async () => {
     // A legacy raw `tx.update({properties})` can leave a value the schema's
@@ -215,8 +248,7 @@ describe('property cell → children backfill', () => {
     // "never". A second sweep is what makes the pass a fixpoint rather than a
     // single ordered walk. Driven directly so the concurrent edit lands at a
     // known point: after the first committed batch.
-    const ids = Array.from({length: 150}, (_, i) => `b${String(i).padStart(4, '0')}`)
-    for (const id of ids) await create(id, {'demo:note': id})
+    const ids = await seedNotes(TWO_BATCHES)
 
     let edited = false
     const progress = await runPropertyCellBackfill(makeCtx(), async () => {
@@ -276,8 +308,7 @@ describe('property cell → children backfill', () => {
     // The behind-cursor case for an EXISTING key: the block was visited, then
     // its value changed. Post-flip the child is what the cell gets rebuilt
     // from, so a stale child is the user's edit being reverted.
-    const ids = Array.from({length: 150}, (_, i) => `b${String(i).padStart(4, '0')}`)
-    for (const id of ids) await create(id, {'demo:note': id})
+    const ids = await seedNotes(TWO_BATCHES)
 
     let edited = false
     const progress = await runPropertyCellBackfill(makeCtx(), async () => {
@@ -393,8 +424,7 @@ describe('property cell → children backfill', () => {
     // value child as "not converged yet" bought a full extra sweep for each
     // one, and four of them ended the run unconverged with every row already
     // written and no completion recorded.
-    const ids = Array.from({length: 150}, (_, i) => `b${String(i).padStart(4, '0')}`)
-    for (const id of ids) await create(id, {'demo:note': id})
+    const ids = await seedNotes(TWO_BATCHES)
 
     let caret = 0
     const reported: boolean[] = []
@@ -461,7 +491,7 @@ describe('property cell → children backfill', () => {
 
     expect(await fieldRowsOf('fat')).toHaveLength(many.length)
     expect(progress.failureCount).toBe(0)
-  }, 30_000)
+  })
 
   it('scans candidates through the non-empty properties index', async () => {
     // The index is only reachable because the predicate carries the literal
