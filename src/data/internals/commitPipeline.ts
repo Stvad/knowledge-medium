@@ -3,11 +3,12 @@
  *
  *   1. Validate scope vs. read-only mode.
  *   2. Open `db.writeTransaction(fn)`.
- *      a. Set `tx_context` (tx_id, user_id, scope, source).
+ *      a. Set `tx_context` (tx_id, tx_seq, user_id, scope, source,
+ *         group_id).
  *      b. Construct TxImpl + snapshots map.
  *      c. Run user fn (primitives write through to SQL inline).
  *      d. INSERT command_events row.
- *      e. Clear `tx_context` (all four → NULL).
+ *      e. Clear `tx_context` (all fields → NULL).
  *   3. On COMMIT (post-fn-resolve, before promise resolves):
  *      a. Walk snapshots map: update cache to `after` per id (or evict
  *         on hard-delete).

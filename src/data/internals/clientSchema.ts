@@ -25,7 +25,7 @@ import {
 /** Single-row table. Triggers read it via
  *  `(SELECT … FROM tx_context WHERE id = 1)`. Why not a TEMP table:
  *  triggers in `main` schema cannot reference `temp.X` tables. The
- *  TxEngine sets all five fields at the start of `writeTransaction`
+ *  TxEngine sets all fields at the start of `writeTransaction`
  *  and clears them (back to NULL) at the end.
  *
  *  `tx_seq` is the integer tx-grouping key the upload-routing triggers
