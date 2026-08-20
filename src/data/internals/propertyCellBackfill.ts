@@ -296,6 +296,43 @@ const namesToReconcile = async (
 }
 
 /**
+ * The create-only subset: cell keys with no field row of their own.
+ *
+ * This is the whole post-flip contract. Past the flip the CHILDREN are the
+ * property truth and the cell is a local, derived read surface — a device that
+ * has received value rows from sync and not yet re-projected them holds a
+ * stale bag over live children — so reconciling from the cell overwrites real
+ * values, and {@link namesToReconcile}'s union half tombstones them. A key
+ * with NO field row is the one shape the cell is still authoritative for (§5's
+ * pending-materialization rule), and it is exactly the branch
+ * `materializePropertyChildrenForExistingRow` CREATES rather than reconciles:
+ * filtering to it means the pass can only take that branch.
+ *
+ * A name whose schema does not resolve keeps no fieldId to match on, so it
+ * stays on the list and the materializer skips it — as it does pre-flip.
+ *
+ * A field row with NO value children is deliberately not treated as a gap:
+ * post-flip that projects as "key unset" (§9), which is what deleting the
+ * value row means, and re-adding it from the cell would undo the user's edit.
+ */
+const namesPendingMaterialization = async (
+  tx: Tx,
+  ctx: WorkspaceBackfillContext,
+  row: BlockData,
+): Promise<string[]> => {
+  const materialized = new Set<string>()
+  for (const child of await tx.childrenOf(row.id, undefined)) {
+    if (child.isFieldForm && child.referenceTargetId) {
+      materialized.add(child.referenceTargetId)
+    }
+  }
+  return Object.keys(row.properties).filter(name => {
+    const fieldId = ctx.resolveNameSchema(name)?.fieldId
+    return fieldId === undefined || !materialized.has(fieldId)
+  })
+}
+
+/**
  * Materialize one row, isolating a name whose cell value will not decode.
  *
  * `materializePropertyChildrenForExistingRow` walks `names` and THROWS at the
@@ -338,12 +375,17 @@ const materializeRow = async (
 }
 
 /** One cursor-paginated walk of `candidateSql`, which must return `id` and
- *  `keys` and take (workspaceId, cursor, limit). */
+ *  `keys` and take (workspaceId, cursor, limit).
+ *
+ *  `deletesOnly` marks a leg every write of which is a deletion, so that past
+ *  the flip it has nothing left it is allowed to do — see
+ *  {@link namesPendingMaterialization}. */
 const sweep = async (
   ctx: WorkspaceBackfillContext,
   candidateSql: string,
   progress: PropertyCellBackfillProgress,
   onBatch: () => void | Promise<void>,
+  {deletesOnly}: {deletesOnly: boolean},
 ): Promise<void> => {
   const recordFailure = (blockId: string, cause: unknown) => {
     progress.failureCount += 1
@@ -379,18 +421,15 @@ const sweep = async (
       budget += next.keys * ROWS_PER_KEY
     }
 
+    let abandoned = false
     await ctx.tx(async tx => {
-      // INSIDE the transaction that writes, per batch. Post-flip the children
-      // are authoritative and the cell is a derived read surface, so running
-      // this direction then would take a stale cell and overwrite real value
-      // rows. The flip is a synced column, so it can arrive from another
-      // device between batches — a check before the run would not see it.
-      if (await tx.isPropertyChildBackedWorkspace(ctx.workspaceId)) {
-        throw new Error(
-          `[${PROPERTY_CELL_BACKFILL_ID}] aborting: workspace ${ctx.workspaceId} is ` +
-          'already child-backed. This pass materializes children FROM cells, so past ' +
-          'the flip it would overwrite authoritative value rows with a derived bag.',
-        )
+      // Read INSIDE the transaction that writes, per batch, because the flip
+      // is a synced column: it can arrive from another device mid-run, and a
+      // check taken before the run would not see it.
+      const childBacked = await tx.isPropertyChildBackedWorkspace(ctx.workspaceId)
+      if (childBacked && deletesOnly) {
+        abandoned = true
+        return
       }
       for (const {id} of batch) {
         progress.blocksScanned += 1
@@ -402,12 +441,18 @@ const sweep = async (
         // that are no longer there.
         const row = await tx.get(id)
         if (row === null || row.deleted) continue
-        const names = await namesToReconcile(tx, ctx, row)
+        const names = childBacked
+          ? await namesPendingMaterialization(tx, ctx, row)
+          : await namesToReconcile(tx, ctx, row)
         const ok = await materializeRow(tx, ctx, row, names, recordFailure,
           values => { progress.valuesMaterialized += values })
         if (ok) progress.blocksMaterialized += 1
       }
     }, {description: 'Migrate properties to child blocks'})
+    // Nothing this leg could do is still permitted, and the flip only moves
+    // forward — so stop the walk rather than paging through the rest of the
+    // workspace to commit empty transactions.
+    if (abandoned) return
 
     // Awaited so a caller can do real work between batches — the seam a test
     // uses to land a concurrent edit at a known point.
@@ -459,9 +504,9 @@ export const runPropertyCellBackfill = async (
     progress.failures = []
     progress.failureCount = 0
     const notify = async () => { await onProgress?.(progress) }
-    await sweep(ctx, CANDIDATE_SQL, progress, notify)
+    await sweep(ctx, CANDIDATE_SQL, progress, notify, {deletesOnly: false})
     const beforeOrphans = progress.blocksScanned
-    await sweep(ctx, ORPHANED_OWNER_SQL, progress, notify)
+    await sweep(ctx, ORPHANED_OWNER_SQL, progress, notify, {deletesOnly: true})
     progress.orphanedOwnersSwept += progress.blocksScanned - beforeOrphans
     const after = await childState()
     if (after.n === before.n) {
