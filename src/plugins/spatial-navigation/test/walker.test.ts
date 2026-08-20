@@ -668,6 +668,77 @@ describe('findRecoveryAnchor (proactive disappear-handler)', () => {
     expect(findRecoveryAnchor('p1', p1Location('X'))?.dataset.blockId).toBe('top')
   })
 
+  it('clamps INTO the surviving range when the panel shrank below the stored index', () => {
+    // The bounds are the whole point here: X was fourth, the rebuilt panel has
+    // two rows, and both are visible so `pickViewportFallback`'s first-visible
+    // branch has an answer of its own to give if the clamp stops naming one.
+    buildLayout([
+      {kind: 'panel', columnId: 'c1', panel: {panelId: 'p1', instances: [
+        {blockId: 'a', instance: 'p1:a'},
+        {blockId: 'b', instance: 'p1:b'},
+        {blockId: 'c', instance: 'p1:c'},
+        {blockId: 'X', instance: 'p1:X'},
+      ]}},
+    ])
+    rememberInstancePosition('p1', findInstance('p1:X'))
+
+    document.body.innerHTML = ''
+    buildLayout([
+      {kind: 'panel', columnId: 'c1', panel: {panelId: 'p1', instances: [
+        {blockId: 'f-0', instance: 'p1:f-0'},
+        {blockId: 'f-1', instance: 'p1:f-1'},
+      ]}},
+    ])
+    for (const id of ['f-0', 'f-1']) setTestVisible(findInstance(`p1:${id}`), true)
+
+    // clamp(3, 0, 1) = f-1. Unbounded, `candidates[3]` is undefined and the
+    // viewport fallback answers f-0.
+    expect(findRecoveryAnchor('p1', p1Location('X'))?.dataset.blockId).toBe('f-1')
+  })
+
+  it('walks BACKWARD to a same-depth sibling, not to the deepest row above', () => {
+    // panel > parent > [c1 > [g1], X]. The row directly above X in document
+    // order is the grandchild g1; X's same-depth sibling is c1. Both are
+    // visible, so only the depth check separates them.
+    buildP1Panel([
+      p1Instance('parent', [p1Instance('c1', ['g1']), 'X']),
+    ])
+    rememberInstancePosition('p1', findInstance('p1:X'))
+
+    // X is last, so the next tier misses and prev answers.
+    findInstance('p1:X').remove()
+    setTestVisible(findInstance('p1:c1'), true)
+    setTestVisible(findInstance('p1:g1'), true)
+
+    expect(findRecoveryAnchor('p1', p1Location('X'))?.dataset.blockId).toBe('c1')
+  })
+
+  it('ignores a nav item that carries no render scope', () => {
+    // `data-render-scope-id` is optional on a block shell and ShellDecorator
+    // deletes it, so a scope-less nav item is a real shape. It must not enter
+    // the instance list: sitting between X and B it would be scanned as X's
+    // next sibling, yield no location, and send recovery backward to A.
+    buildLayout([
+      {kind: 'panel', columnId: 'c1', panel: {panelId: 'p1', instances: [
+        {blockId: 'A', instance: 'p1:A'},
+        {blockId: 'X', instance: 'p1:X'},
+        {blockId: 'B', instance: 'p1:B'},
+      ]}},
+    ])
+    const ghost = document.createElement('div')
+    ghost.setAttribute('data-block-nav-item', 'true')
+    ghost.setAttribute('data-block-id', 'ghost')
+    findInstance('p1:X').after(ghost)
+    setTestVisible(ghost, true)
+
+    rememberInstancePosition('p1', findInstance('p1:X'))
+    findInstance('p1:X').remove()
+    setTestVisible(findInstance('p1:A'), true)
+    setTestVisible(findInstance('p1:B'), true)
+
+    expect(findRecoveryAnchor('p1', p1Location('X'))?.dataset.blockId).toBe('B')
+  })
+
   it('clamps by position among SAME-SURFACE peers, not among all instances', () => {
     // Two backlink rows sit above the outline ones, so X's index among all
     // instances (3) and among its own surface (1) differ — the whole point of
