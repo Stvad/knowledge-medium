@@ -227,10 +227,15 @@ export const matchesCommitCommand = cmd => GIT_COMMIT.test(commandSkeleton(cmd))
 
 // Publishes post-publication repair cannot reach, which therefore keep the
 // pre-publish #N echo-gate (and body-file reading): `gh pr merge` text lands
-// in the merge commit, and `gh pr review` output names no URL for the
-// verifier to find the review by.
+// in the merge commit, and review/close/reopen output names `repo#N`, never
+// a URL the verifier could find the review or -c comment by. Comment-less
+// closes pass for free — no refs in the command text, nothing to echo.
 const GH_UNREPAIRABLE = new RegExp(
-  SEGMENT_START + COMMAND_PREFIXES + String.raw`(?:\S*\/)?gh\s+` + GH_GLOBAL_OPTS + String.raw`pr\s+(?:merge|review)\b`,
+  SEGMENT_START +
+    COMMAND_PREFIXES +
+    String.raw`(?:\S*\/)?gh\s+` +
+    GH_GLOBAL_OPTS +
+    String.raw`(?:pr\s+(?:merge|review|close|reopen)|issue\s+(?:close|reopen))\b`,
   'm',
 )
 export const matchesUnrepairableCommand = cmd => GH_UNREPAIRABLE.test(commandSkeleton(cmd))
@@ -1006,7 +1011,8 @@ const hookPrePr = () => {
 
   // A --silent api mutation is invisible to the post-publish verifier too —
   // the one shape with NO checkpoint anywhere; fail closed on the flag.
-  if (matchesApiPublish(cmd) && /(?<![\w-])--silent\b/.test(commandSkeleton(cmd)) && !allowsIssueRefs(cmd)) {
+  const silentApi = matchesApiPublish(cmd) && /(?<![\w-])--silent\b/.test(commandSkeleton(cmd))
+  if (silentApi && !allowsIssueRefs(cmd)) {
     console.error(
       'This gh api mutation is --silent: neither this gate nor the post-publish verifier can see what it publishes. Drop --silent (the printed response is how published text gets verified) — or, after verifying the references yourself, re-run with KM_ISSUE_REFS_OK=1 prefixed.',
     )
@@ -1022,9 +1028,11 @@ const hookPrePr = () => {
   const commitText = matchesCommitCommand(cmd) && !allowsIssueRefs(cmd) ? [cmd, ...guardedBodies()].join('\n') : ''
   const commitRefs = commitText ? closeKeywordRefs(commitText) : []
 
+  // A refs-approved (--silent) api mutation still owes the bead-id leg its
+  // raw-command scan — the verifier will never see this publish.
   const isPublish = matchesPrCommand(cmd)
   const graphqlMutation = matchesGraphqlMutation(cmd)
-  if (!isPublish && !graphqlMutation) {
+  if (!isPublish && !graphqlMutation && !silentApi) {
     if (commitRefs.length === 0) allow()
     return echoIssueRefs(commitText, commitRefs)
   }
@@ -1046,10 +1054,15 @@ const hookPrePr = () => {
   const text = targetUrl().test(commandSkeleton(cmd)) ? cmd.replace(targetUrl(), '$1') : cmd
 
   // #N refs pre-publish ONLY where post-publication repair cannot reach:
-  // merge text lands in the merge commit, review output names no URL for
-  // the verifier to find, and graphql responses hide the mutated object in
-  // an envelope this hook cannot safely resolve.
-  const publishBodies = matchesUnrepairableCommand(cmd) && !allowsIssueRefs(cmd) ? guardedBodies() : []
+  // merge text lands in the merge commit, review/close/reopen output names
+  // no URL for the verifier to find, and graphql responses hide the mutated
+  // object in an envelope this hook cannot safely resolve.
+  //
+  // Body files feed TWO independent checks — #N refs (KM_ISSUE_REFS_OK) and
+  // bead ids (KM_ALLOW_BEAD_IDS) — so they are read unless BOTH escapes are
+  // given; each check then consumes them only under its own escape.
+  const publishBodies =
+    matchesUnrepairableCommand(cmd) && !(allowsIssueRefs(cmd) && allowsBeadIds(cmd)) ? guardedBodies() : []
   const publishText = allowsIssueRefs(cmd)
     ? ''
     : matchesUnrepairableCommand(cmd)

@@ -365,11 +365,15 @@ describe('allowsIssueRefs', () => {
 })
 
 describe('matchesUnrepairableCommand', () => {
-  it('matches gh pr merge and gh pr review in command position, with global options and wrappers', () => {
+  it('matches merge, review, and close/reopen in command position, with global options and wrappers', () => {
     expect(matchesUnrepairableCommand('gh pr merge 652 --merge')).toBe(true)
     expect(matchesUnrepairableCommand('env GH_PAGER= gh -R Stvad/knowledge-medium pr merge 652')).toBe(true)
     expect(matchesUnrepairableCommand('git pull && gh pr merge 652 --squash --body "Fixes #1"')).toBe(true)
     expect(matchesUnrepairableCommand('gh pr review 5 --comment -b "looks wrong"')).toBe(true)
+    // close/reopen success output names repo#N, never a URL — their -c
+    // comments are unfindable post-hoc
+    expect(matchesUnrepairableCommand('gh issue close 12 -c "done"')).toBe(true)
+    expect(matchesUnrepairableCommand('gh pr reopen 12 -c "still broken"')).toBe(true)
   })
 
   it('ignores other publishes and quoted prose', () => {
@@ -1172,6 +1176,44 @@ describe('hookPrePr process behavior', { timeout: 20_000 }, () => {
     expect(r.status).toBe(2)
     expect(r.stderr).toContain('--silent')
     expect(hook('KM_ISSUE_REFS_OK=1 gh api --silent repos/Stvad/knowledge-medium/issues/1/comments -f body=done').status).toBe(0)
+  })
+
+  // Close/reopen comments publish text whose success output names repo#N,
+  // never a URL — the verifier cannot find them, so their refs stay here.
+  it('echoes issue references in close/reopen comments and passes comment-less closes', () => {
+    const { hook } = makeRepo({ dbReady: true, ghIssues: { 653: { title: 'Real GC failure', state: 'open' } } })
+    const r = hook('gh issue close 12 -c "superseded, see #653"')
+    expect(r.status).toBe(2)
+    expect(r.stderr).toContain('#653 → "Real GC failure" (issue, open)')
+    expect(hook('gh issue close 12').status).toBe(0)
+    expect(hook('gh pr close 12').status).toBe(0)
+  })
+
+  // The escapes are INDEPENDENT: approving the #N refs must not switch off
+  // the bead-id scan of the same file-fed body (reproduced by review: the
+  // merge below exited 0, placing an opaque bead id in merge-commit text).
+  it('still scans merge/review body files for bead ids under KM_ISSUE_REFS_OK', () => {
+    const { hook, repo } = makeRepo({ dbReady: true })
+    writeFileSync(join(repo, 'merge-body.txt'), 'ship it\n\ntracks km-zzzz\n')
+    const r = hook(`KM_ISSUE_REFS_OK=1 gh pr merge 12 --squash -F ${join(repo, 'merge-body.txt')}`)
+    expect(r.status).toBe(2)
+    expect(r.stderr).toContain('km-zzzz')
+    const both = hook(`KM_ISSUE_REFS_OK=1 KM_ALLOW_BEAD_IDS=1 gh pr merge 12 --squash -F ${join(repo, 'merge-body.txt')}`)
+    expect(both.status).toBe(0)
+  })
+
+  // Same independence for --silent api mutations: the refs approval unlocks
+  // the silent block, not the bead-id scan of the raw command (reproduced by
+  // review: this exited 0 and published the opaque id unverifiable).
+  it('still scans refs-approved silent api mutations for bead ids', () => {
+    const { hook } = makeRepo({ dbReady: true })
+    const r = hook('KM_ISSUE_REFS_OK=1 gh api --silent repos/Stvad/knowledge-medium/issues/12/comments -f body=km-zzzz')
+    expect(r.status).toBe(2)
+    expect(r.stderr).toContain('km-zzzz')
+    const both = hook(
+      'KM_ISSUE_REFS_OK=1 KM_ALLOW_BEAD_IDS=1 gh api --silent repos/Stvad/knowledge-medium/issues/12/comments -f body=km-zzzz',
+    )
+    expect(both.status).toBe(0)
   })
 
   // Position pin: the escape must be honored BEFORE the commit leg's
