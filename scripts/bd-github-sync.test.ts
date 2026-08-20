@@ -6,8 +6,12 @@ import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import {
   allowsBeadIds,
+  allowsIssueRefs,
   bodyFilePaths,
   buildDenyMessage,
+  buildIssueRefsMessage,
+  closeKeywordRefs,
+  extractIssueRefs,
   deriveLabelPriority,
   detectReverts,
   extractBeadIds,
@@ -274,6 +278,58 @@ describe('buildDenyMessage', () => {
     expect(msg).toContain('issues/12')
     expect(msg).toContain('km-zz')
     expect(msg).toContain('KM_ALLOW_BEAD_IDS=1')
+  })
+})
+
+describe('extractIssueRefs', () => {
+  it('finds and dedups GitHub-style references', () => {
+    expect(extractIssueRefs('Fixes #643 and relates to #652; see #643 again')).toEqual([643, 652])
+  })
+
+  it('ignores hex colors, HTML entities, and glued word chars', () => {
+    expect(extractIssueRefs('color: #652fff; it&#39;s fine; ticket#12x; ###')).toEqual([])
+  })
+
+  it('matches refs embedded in ordinary punctuation', () => {
+    expect(extractIssueRefs('(#12), #34.')).toEqual([12, 34])
+  })
+})
+
+describe('closeKeywordRefs', () => {
+  it('finds the auto-close keyword forms', () => {
+    expect(closeKeywordRefs('Fixes #1, fixed: #2, Closes #3, resolved #4 — and mentions #5')).toEqual([1, 2, 3, 4])
+  })
+
+  it('does not fire inside larger words', () => {
+    expect(closeKeywordRefs('prefixes #6 and affixed #7')).toEqual([])
+  })
+})
+
+describe('allowsIssueRefs', () => {
+  it('honors the escape in command position, not in quoted prose', () => {
+    expect(allowsIssueRefs('KM_ISSUE_REFS_OK=1 gh pr create --body "see #12"')).toBe(true)
+    expect(allowsIssueRefs('gh pr create --body "run with KM_ISSUE_REFS_OK=1 next time"')).toBe(false)
+  })
+})
+
+describe('buildIssueRefsMessage', () => {
+  it('echoes ground truth and flags the dangerous shapes', () => {
+    const msg = buildIssueRefsMessage(
+      [
+        { number: 653, info: { title: 'Real title', state: 'open', isPr: false } },
+        { number: 999, info: 'not-found' },
+        { number: 700, info: { title: 'Some PR', state: 'open', isPr: true } },
+        { number: 500, info: { title: 'Done already', state: 'closed', isPr: false } },
+        { number: 42, info: null },
+      ],
+      new Set([700, 500]),
+    )
+    expect(msg).toContain('#653 → "Real title" (issue, open)')
+    expect(msg).toContain('#999 → NO SUCH ISSUE OR PR')
+    expect(msg).toContain('close keyword targets a PR')
+    expect(msg).toContain('close keyword on an already-closed issue')
+    expect(msg).toContain('#42 → COULD NOT VERIFY')
+    expect(msg).toContain('KM_ISSUE_REFS_OK=1')
   })
 })
 
@@ -623,7 +679,7 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
 describe('hookPrePr process behavior', { timeout: 20_000 }, () => {
   const script = fileURLToPath(new URL('./bd-github-sync.mjs', import.meta.url))
 
-  const makeRepo = (opts: { dbReady: boolean }) => {
+  const makeRepo = (opts: { dbReady: boolean; ghIssues?: Record<number, object> }) => {
     const repo = mkdtempSync(join(tmpdir(), 'bd-sync-hook-'))
     spawnSync('git', ['init', '-q'], { cwd: repo })
     mkdirSync(join(repo, '.beads'))
@@ -637,6 +693,22 @@ describe('hookPrePr process behavior', { timeout: 20_000 }, () => {
     // DB-less and make the zero-calls assertions vacuous.
     writeFileSync(join(shimDir, 'bd'), `#!/bin/sh\necho "bd $@" >> "${shimLog}"\necho "bd-shim 0.0.0"\nexit 0\n`)
     chmodSync(join(shimDir, 'bd'), 0o755)
+    for (const [n, body] of Object.entries(opts.ghIssues ?? {}))
+      writeFileSync(join(repo, `gh-issue-${n}.json`), JSON.stringify(body))
+    writeFileSync(
+      join(shimDir, 'gh'),
+      [
+        '#!/bin/sh',
+        `echo "gh $@" >> "${shimLog}"`,
+        'if [ "$1" = "api" ]; then',
+        '  n=$(basename "$2")',
+        `  if [ -f "${repo}/gh-issue-$n.json" ]; then cat "${repo}/gh-issue-$n.json"; exit 0; fi`,
+        '  echo \'{"message":"Not Found"}\'; exit 1',
+        'fi',
+        'exit 0',
+      ].join('\n') + '\n',
+    )
+    chmodSync(join(shimDir, 'gh'), 0o755)
     const env = { ...process.env, PATH: `${shimDir}:${process.env.PATH}`, BD_GITHUB_SYNC_DRY: '1' }
     const hook = (command: string) => {
       const payload = JSON.stringify({ tool_name: 'Bash', cwd: repo, tool_input: { command } })
@@ -666,6 +738,32 @@ describe('hookPrePr process behavior', { timeout: 20_000 }, () => {
     const r = hook('git commit -m "fix parser; gh pr comment is the follow-up\nrefs km-zzzz"')
     expect(r.status).toBe(0)
     expect(shimCalls()).toBe('')
+  })
+
+  // The #N echo-gate: every issue reference in publish text gets one block
+  // round showing its ground truth — a plausible-but-wrong number is only
+  // catchable by putting the real title in front of the author.
+  it('echoes issue references with their real titles and blocks once', () => {
+    const { hook } = makeRepo({ dbReady: true, ghIssues: { 653: { title: 'Real GC failure', state: 'open' } } })
+    const r = hook('gh pr create --title t --body "relates to #653 and #999"')
+    expect(r.status).toBe(2)
+    expect(r.stderr).toContain('#653 → "Real GC failure" (issue, open)')
+    expect(r.stderr).toContain('#999 → NO SUCH ISSUE OR PR')
+    expect(r.stderr).toContain('KM_ISSUE_REFS_OK=1')
+  })
+
+  it('honors KM_ISSUE_REFS_OK before any lookup (zero gh calls)', () => {
+    const { hook, shimCalls } = makeRepo({ dbReady: true, ghIssues: { 653: { title: 'Real GC failure', state: 'open' } } })
+    const r = hook('KM_ISSUE_REFS_OK=1 gh pr create --title t --body "relates to #653"')
+    expect(r.status).toBe(0)
+    expect(shimCalls()).not.toContain('gh api')
+  })
+
+  it('warns when a close keyword targets a pull request', () => {
+    const { hook } = makeRepo({ dbReady: true, ghIssues: { 700: { title: 'Some PR', state: 'open', pull_request: {} } } })
+    const r = hook('gh pr create --title t --body "Fixes #700"')
+    expect(r.status).toBe(2)
+    expect(r.stderr).toContain('close keyword targets a PR')
   })
 
   // Positive control: the zero-calls assertions above are negative tests, so

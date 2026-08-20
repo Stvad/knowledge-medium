@@ -146,6 +146,48 @@ export const matchesPrCommand = cmd => GH_PUBLISH.test(commandSkeleton(cmd))
 const ALLOW_MARKER = new RegExp(SEGMENT_START + COMMAND_PREFIXES + String.raw`KM_ALLOW_BEAD_IDS=1\s`, 'm')
 export const allowsBeadIds = cmd => ALLOW_MARKER.test(commandSkeleton(cmd))
 
+// GitHub-style issue references in publishable text. Guessed numbers are the
+// top hallucination since the #N-not-bead-id policy: a wrong number usually
+// RESOLVES to a real, unrelated issue and reads as correct to every reviewer,
+// so each reference is echoed back with its actual title once (exit 2) and
+// the re-run confirms with KM_ISSUE_REFS_OK=1. The lookbehind kills HTML
+// entities (&#39;) and glued word chars; the lookahead kills hex colors.
+const ISSUE_MENTION = /(?<![&\w#])#(\d{1,6})(?!\w)/g
+export const extractIssueRefs = text => [...new Set([...text.matchAll(ISSUE_MENTION)].map(m => Number(m[1])))]
+
+// GitHub's auto-close keywords: a wrong number here CLOSES an unrelated
+// issue on merge, so these references get the loudest warnings.
+const CLOSE_KEYWORD = /\b(?:fix(?:es|ed)?|close[sd]?|resolve[sd]?):?\s+#(\d{1,6})(?!\w)/gi
+export const closeKeywordRefs = text => [...new Set([...text.matchAll(CLOSE_KEYWORD)].map(m => Number(m[1])))]
+
+const ISSUE_REFS_OK = new RegExp(SEGMENT_START + COMMAND_PREFIXES + String.raw`KM_ISSUE_REFS_OK=1\s`, 'm')
+export const allowsIssueRefs = cmd => ISSUE_REFS_OK.test(commandSkeleton(cmd))
+
+/**
+ * The echo table: one line of ground truth per referenced number, warnings
+ * on the shapes that are wrong regardless of intent. `refs` is
+ * [{number, info}] where info is {title, state, isPr} | 'not-found' | null
+ * (null = the lookup itself failed).
+ */
+export const buildIssueRefsMessage = (refs, closeNums) => {
+  const lines = refs.map(({ number, info }) => {
+    if (info === 'not-found') return `  #${number} → NO SUCH ISSUE OR PR — a guessed number?`
+    if (!info) return `  #${number} → COULD NOT VERIFY (gh lookup failed)`
+    const kind = info.isPr ? 'PULL REQUEST' : 'issue'
+    const warns = [
+      ...(closeNums.has(number) && info.isPr ? ['⚠ close keyword targets a PR'] : []),
+      ...(closeNums.has(number) && !info.isPr && info.state !== 'open' ? ['⚠ close keyword on an already-closed issue'] : []),
+    ]
+    return `  #${number} → "${info.title}" (${kind}, ${info.state})${warns.length ? ` ${warns.join(' ')}` : ''}`
+  })
+  return [
+    'Issue-reference check — verify each number against its real title before publishing:',
+    ...lines,
+    'If every reference above is the one you mean, re-run with KM_ISSUE_REFS_OK=1 prefixed.',
+    'If not, fix the numbers first: `bd show <bead-id>` → External:, or `gh issue list --search "<words>"`. Never write a number you have not read this session.',
+  ].join('\n')
+}
+
 /**
  * Paths passed via --body-file/-F (the PR body often lives in a temp file, so
  * scanning the command string alone would miss its bead ids). `-` = stdin is
@@ -285,7 +327,7 @@ export const buildDenyMessage = (mapped, unmapped) => {
           `No GitHub issue found for: ${unmapped.join(', ')} — check \`bd show <id>\`. A real bead may have been skipped by the sync watermark (edit it to bump updated_at, then retry); if the sync could not run here, find the issue via \`gh issue list --search\`.`,
         ]
       : []),
-    'Rewrite the references as #N and re-run.',
+    'Rewrite the references as #N and re-run with KM_ISSUE_REFS_OK=1 prefixed — these numbers come from the tracker, so the issue-reference check needs no separate confirmation.',
     'Close keywords ("Fixes #N") are the right pattern: when the PR merges and GitHub closes #N, the next sync\'s reconcile step closes the bead to match. Do not hand-close either side before the merge.',
     'If the bead id mention is deliberate (not an issue reference), re-run with KM_ALLOW_BEAD_IDS=1 prefixed.',
   ]
@@ -635,6 +677,24 @@ const runSync = ({ quiet = false, dryRun = false } = {}) => {
 
 const allow = () => process.exit(0)
 
+// The #N leg of the gate: echo every referenced number's ground truth and
+// block once; KM_ISSUE_REFS_OK=1 on the re-run confirms. Verification is a
+// per-number gh GET — tolerant, distinguishing "not found" from "gh broke".
+const echoIssueRefs = (text, refs) => {
+  const fetchInfo = number => {
+    const r = spawnSync('gh', ['api', `repos/${REPO}/issues/${number}`], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+    try {
+      const j = JSON.parse(r.stdout)
+      if (r.status !== 0) return /not found/i.test(j?.message ?? '') ? 'not-found' : null
+      return { title: j.title ?? '', state: j.state ?? '', isPr: Boolean(j.pull_request) }
+    } catch {
+      return null
+    }
+  }
+  console.error(buildIssueRefsMessage(refs.map(number => ({ number, info: fetchInfo(number) })), new Set(closeKeywordRefs(text))))
+  process.exit(2)
+}
+
 const hookPrePr = () => {
   let payload = {}
   try {
@@ -644,15 +704,19 @@ const hookPrePr = () => {
   }
   const cmd = payload?.tool_input?.command ?? ''
   if (!cmd || !matchesPrCommand(cmd)) allow()
-  if (allowsBeadIds(cmd)) allow()
 
   const cwd = payload?.cwd ?? process.cwd()
   const bodies = bodyFilePaths(cmd)
     .map(p => resolveBodyPath(p, cwd, homedir()))
     .filter(p => existsSync(p))
     .map(p => readFileSync(p, 'utf8'))
-  const ids = extractBeadIds([cmd, ...bodies].join('\n'))
-  if (ids.length === 0) allow()
+  const text = [cmd, ...bodies].join('\n')
+  // The two escapes are independent: a command allowed to mention bead ids
+  // can still carry a hallucinated issue number, and vice versa.
+  const ids = allowsBeadIds(cmd) ? [] : extractBeadIds(text)
+  const refs = allowsIssueRefs(cmd) ? [] : extractIssueRefs(text)
+  if (ids.length === 0 && refs.length === 0) allow()
+  if (ids.length === 0) return echoIssueRefs(text, refs)
 
   // No bd call of any kind before the DB-exists gate — see header.
   const dbRoot = initializedDbRoot()
