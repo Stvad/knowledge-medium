@@ -271,7 +271,7 @@ export interface Tx {
    *  and upload it.
    *
    *  Deleted rows only, since `childrenOf` already covers the live ones. */
-  reapedPropertyFieldTargets(parentId: string): Promise<Set<string>>
+  reapedPropertyFieldTargets(workspaceId: string, parentId: string): Promise<Set<string>>
 
   // ──── Composition ────
 

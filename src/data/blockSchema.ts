@@ -228,11 +228,27 @@ export const CREATE_BLOCKS_FIELD_FORM_INDEX_SQL = `
  *  the filter it guards is then skipped over rows it should have caught.
  *
  *  Still as small as the set of field rows; only the live-row predicate is
- *  dropped, not the `= 1`. */
+ *  dropped, not the `= 1`.
+ *
+ *  `parent_id` is the second column for the other tombstone-inclusive question:
+ *  "which fieldIds does THIS block have a tombstoned field row for?", which the
+ *  cell backfill asks per owner inside its writing transaction. Without it that
+ *  lookup scans every field row in the workspace, once per owner — quadratic on
+ *  the graphs the pass exists for. `workspace_id` alone stays a usable prefix,
+ *  so the existence probe above is unaffected.
+ *
+ *  DROPped first because `CREATE INDEX IF NOT EXISTS` will not RESHAPE an index
+ *  that already exists: every client that ran an earlier build has the
+ *  single-column version, and would silently keep it. */
 export const CREATE_BLOCKS_ANY_FIELD_FORM_INDEX_SQL = `
   CREATE INDEX IF NOT EXISTS idx_blocks_any_field_form
-  ON blocks (workspace_id)
+  ON blocks (workspace_id, parent_id)
   WHERE is_field_form = 1
+`
+
+/** Paired with the statement above — see its DROP note. */
+export const DROP_STALE_ANY_FIELD_FORM_INDEX_SQL = `
+  DROP INDEX IF EXISTS idx_blocks_any_field_form
 `
 
 const powerSyncParamForColumn = (columnName: BlockColumnName): PendingStatementParameter =>
