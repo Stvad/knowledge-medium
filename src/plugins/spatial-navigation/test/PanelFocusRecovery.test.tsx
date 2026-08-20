@@ -37,19 +37,14 @@ const RECOVERY_WAIT_MS = 6_000
 const TEST_TIMEOUT_MS = 15_000
 
 interface Harness {
-  h: TestDb
   repo: Repo
 }
 
 const setup = async (): Promise<Harness> => {
   await resetTestDb(sharedDb.db)
-  const h = sharedDb
-  const { repo } = createTestRepo({
-    db: h.db,
-    user: USER,
-  })
+  const { repo } = createTestRepo({db: sharedDb.db, user: USER})
   repo.setActiveWorkspaceId(WS)
-  return {h, repo}
+  return {repo}
 }
 
 /** A block id, or — when the test needs a subtree — the long form. */
@@ -84,21 +79,24 @@ const visibleRect = () =>
     toJSON: () => ({}),
   }) as DOMRect
 
-const setNavAttrs = (el: HTMLElement, blockId: string, renderScopeId = `i-${blockId}`): void => {
+/** The tests only work because the DOM stamp and the focus location agree. */
+const renderScopeFor = (blockId: string): string => `i-${blockId}`
+
+const setNavAttrs = (el: HTMLElement, blockId: string): void => {
   el.setAttribute('data-block-nav-item', 'true')
   el.setAttribute('data-block-id', blockId)
-  el.setAttribute('data-render-scope-id', renderScopeId)
+  el.setAttribute('data-render-scope-id', renderScopeFor(blockId))
   el.setAttribute('data-block-surface', 'outline')
   el.getBoundingClientRect = visibleRect
 }
 
-const focusedLocation = (blockId: string, renderScopeId = `i-${blockId}`) => ({
+const focusedLocation = (blockId: string) => ({
   blockId,
-  renderScopeId,
+  renderScopeId: renderScopeFor(blockId),
 })
 
-const setFocused = async (blockId: string, renderScopeId = `i-${blockId}`): Promise<void> => {
-  await panelBlock.set(focusedBlockLocationProp, focusedLocation(blockId, renderScopeId))
+const setFocused = async (blockId: string): Promise<void> => {
+  await panelBlock.set(focusedBlockLocationProp, focusedLocation(blockId))
 }
 
 const expectRecoveredFocus = async (blockId: string): Promise<void> => {
@@ -185,15 +183,16 @@ describe('PanelFocusRecovery', {timeout: TEST_TIMEOUT_MS}, () => {
     await expectRecoveredFocus('last')
   })
 
-  it("falls to 'previously above' when the disappeared block was first in the panel", async () => {
+  it("recovers downward when the disappeared block was first (no 'previously above' to fall to)", async () => {
     await setFocused('first')
 
     const panel = buildPanelDom(['first', 'middle', 'last'])
 
     render(<PanelFocusRecovery block={panelBlock}/>)
 
-    // `first` has no "previously above", so the recovery falls through
-    // to the next-sibling tier — landing on `middle`.
+    // `first` has no "previously above", so the recovery falls through to the
+    // next-sibling tier — landing on `middle`. Scenario coverage, not a pin:
+    // `first` is at surfaceIndex 0, so the clamp names `middle` too.
     panel.querySelector('[data-block-id="first"]')!.remove()
 
     await expectRecoveredFocus('middle')
@@ -234,6 +233,9 @@ describe('PanelFocusRecovery', {timeout: TEST_TIMEOUT_MS}, () => {
     const txSpy = vi.spyOn(env.repo, 'tx')
     vi.useFakeTimers()
     render(<PanelFocusRecovery block={panelBlock}/>)
+    // Nothing was even ARMED — the arm-time anchor gate is what this test is
+    // named for, and `txSpy` alone stays green with that gate deleted.
+    expect(vi.getTimerCount()).toBe(0)
     await act(async () => { await vi.advanceTimersByTimeAsync(DEBOUNCE_SETTLE_MS) })
 
     expect(txSpy).not.toHaveBeenCalled()

@@ -20,7 +20,9 @@ import { activeLayoutSessionElement } from '@/utils/layoutSessionDom.js'
 // off-screen. Every tier INCLUDING the positional clamp is viewport-gated, so
 // with no stubbed rect `findRecoveryAnchor` just returns null (see "returns
 // null when no same-surface instance is in the viewport"). `setTestVisible`
-// puts the tier under test on screen — and only it.
+// stubs a row's rect on screen: mark the tier under test's target, PLUS any
+// row a competing tier would answer with — otherwise a fixture where two tiers
+// agree passes for the wrong reason.
 const tallVisibleRect = (top: number) =>
   ({
     top,
@@ -451,6 +453,8 @@ describe('findRecoveryAnchor (proactive disappear-handler)', () => {
     ])
     rememberInstancePosition('p1', findInstance('p1:Y'))
     findInstance('p1:Y').remove()
+    // Scenario coverage, not a pin: Y sat at surfaceIndex 1, so the clamp
+    // names Z as well. `prefers the block previously ABOVE` pins the tiers.
     setTestVisible(findInstance('p1:Z'), true)
     expect(findRecoveryAnchor('p1', p1Location('Y'))?.dataset.blockId).toBe('Z')
   })
@@ -464,7 +468,8 @@ describe('findRecoveryAnchor (proactive disappear-handler)', () => {
     ])
     rememberInstancePosition('p1', findInstance('p1:B'))
     findInstance('p1:B').remove()
-    // B was last — no next sibling — so the recovery target is A.
+    // B was last — no next sibling — so the recovery target is A. Scenario
+    // coverage, not a pin: the clamp names A too.
     setTestVisible(findInstance('p1:A'), true)
     expect(findRecoveryAnchor('p1', p1Location('B'))?.dataset.blockId).toBe('A')
   })
@@ -717,9 +722,9 @@ describe('findRecoveryAnchor: viewport-aware tier 4', () => {
         {blockId: 'fresh-b', instance: 'p1:fresh-b'},
       ]}},
     ])
-    // No neighbour or ancestor survives, so the clamp answers: X was at
-    // surfaceIndex 1, clamp(1, 0, 1) = fresh-b. Visible, so the viewport-aware
-    // branch keeps it rather than falling to the first visible row.
+    // Scenario coverage, not a pin: X was at surfaceIndex 1 so the clamp names
+    // fresh-b — but it is also the only visible row, so the viewport fallback
+    // names it too. `clamps by position among SAME-SURFACE peers` is the pin.
     setTestVisible(findInstance('p1:fresh-b'), true)
 
     expect(findRecoveryAnchor('p1', p1Location('X'))?.dataset.blockId).toBe('fresh-b')
