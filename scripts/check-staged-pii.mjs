@@ -13,7 +13,9 @@
  * exit 0 → allow.
  *
  * Limits: it catches uuids, NOT free-text page titles / note content — those
- * aren't mechanically detectable, so manual scrubbing still matters. Legitimate
+ * aren't mechanically detectable, so manual scrubbing still matters. The
+ * expansion net exempts path-shaped tokens (contain '/', not VAR=…), so a uuid
+ * embedded in a slashed word inside a heredoc body still slips. Legitimate
  * uuids (rare) can be allowed by prefixing the command with `PII_OK=1`.
  */
 
@@ -101,7 +103,13 @@ if (messageArgs.some(text => UUID.test(text))) {
   // this (already commit-gated) command — except path-shaped tokens (contain
   // '/'), the scratchpad-redirect shape that must not block.
   const tokenHit = shellSegments(cmd).some(tokens =>
-    tokens.some(t => !t.includes('/') && UUID.test(t)),
+    tokens.some(t => {
+      // A VAR=value token is potential message content (MSG="fix page/<id>");
+      // scan its value even when a slash makes it look path-like.
+      const m = t.match(/^[A-Za-z_][A-Za-z0-9_]*=([\s\S]*)$/)
+      if (m) return UUID.test(m[1])
+      return !t.includes('/') && UUID.test(t)
+    }),
   )
   if (tokenHit) hits.push('  (command line): contains a uuid outside any path')
 }

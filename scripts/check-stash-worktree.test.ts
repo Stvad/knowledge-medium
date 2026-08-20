@@ -96,6 +96,12 @@ describe('stashInvocations', () => {
     expect(stashInvocations('echo "STASH_OK=1 skips" ; git stash pop')[0].optOut).toBe(false)
   })
 
+  it('sees through shell reserved-word prefixes', () => {
+    expect(stashInvocations('if git stash pop; then echo popped; fi')).toHaveLength(1)
+    expect(stashInvocations('{ git stash pop; }')).toHaveLength(1)
+    expect(stashInvocations('! git stash pop')).toHaveLength(1)
+  })
+
   it('ignores commands that merely mention stash', () => {
     expect(stashInvocations('echo git stash pop')).toEqual([])
     expect(stashInvocations('ls my-stash-dir | grep stash')).toEqual([])
@@ -360,6 +366,10 @@ describe('hook end-to-end', { timeout: 30_000 }, () => {
 
   it('ignores STASH_OK=1 inside quoted prose', () => {
     expect(hook('echo "re-run with STASH_OK=1 prefixed" && git stash pop', multi).status).toBe(2)
+  })
+
+  it('guards an invocation behind a reserved-word prefix', () => {
+    expect(hook('if git stash pop; then true; fi', multi).status).toBe(2)
   })
 
   it('guards an invocation behind wrapper flags', () => {

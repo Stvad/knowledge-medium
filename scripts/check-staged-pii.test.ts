@@ -42,6 +42,12 @@ describe('check-staged-pii end-to-end', { timeout: 30_000 }, () => {
     expect(r.stderr).toContain('(command line)')
   })
 
+  it('blocks a uuid beside a slash in a variable-expanded message', () => {
+    const r = hook(`MSG="fix page/${A_UUID} rendering"; git commit -m "$MSG"`)
+    expect(r.status).toBe(2)
+    expect(r.stderr).toContain('(command line)')
+  })
+
   it('blocks a uuid in a heredoc commit body (the $(cat <<EOF) shape)', () => {
     const cmd = `git commit -m "$(cat <<'EOF'\nfix block ${A_UUID}\nEOF\n)"`
     expect(hook(cmd).status).toBe(2)

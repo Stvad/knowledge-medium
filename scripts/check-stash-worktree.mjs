@@ -34,6 +34,8 @@ import { fileURLToPath } from 'node:url'
 import { shellSegmentsWithDepth } from './shell-segments.mjs'
 
 const WRAPPERS = new Set(['sudo', 'command', 'time', 'env', 'nice', 'nohup', 'xargs'])
+// Shell reserved words that can precede a simple command in the same segment.
+const RESERVED = new Set(['{', '}', '!', 'if', 'then', 'elif', 'else', 'fi', 'while', 'until', 'do', 'done'])
 const SUBCOMMANDS = new Set([
   'push', 'save', 'pop', 'apply', 'drop', 'clear', 'list', 'show', 'branch', 'create', 'store',
 ])
@@ -75,6 +77,7 @@ export const stashInvocations = cmd => {
       i < tokens.length &&
       (/^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[i]) ||
         WRAPPERS.has(tokens[i]) ||
+        RESERVED.has(tokens[i]) ||
         (i > 0 && tokens[i].startsWith('-')))
     ) {
       if (tokens[i] === 'STASH_OK=1') optOut = true
