@@ -1004,35 +1004,28 @@ const buildReparentMap = (recons: PageReconciliation[]): Map<string, string> => 
 }
 
 /** Re-point `iso`'s daily-page reconciliations at the id
- *  `getOrCreateDailyNote` ACTUALLY resolved, correcting
- *  `reconcilePages`' prediction where the two disagree.
+ *  `getOrCreateDailyNote` ACTUALLY resolved, correcting `reconcilePages`'
+ *  prediction where the two disagree.
  *
- *  The prediction is taken during the reconcile read phase; the world can move
- *  before step 4 runs (a sync-applied write claims or frees the date's alias),
- *  and the adoption guard can refuse a claimant the plain alias lookup would
- *  have accepted. Both leave `finalId` naming a row step 4 never materialised —
- *  which is exactly the silent triple-loss the alias-first prediction exists to
- *  prevent, so re-assert it against ground truth rather than trusting the
- *  prediction.
+ *  The prediction is read before step 4 writes, so it can be stale (a
+ *  sync-applied write claims or frees the date's alias) or refused by the
+ *  adoption guard. Either way `finalId` names a row nothing materialised, and
+ *  the page's aliases, promoted attributes and descendants are silently lost —
+ *  so re-assert against ground truth instead of trusting the prediction.
  *
- *  Only the daily reconciliations themselves need updating, with no walk over
- *  their `rootTitle` group: `skipDailyAliasMerge` refuses every `page_alias::`
- *  merge that touches a daily page, so a daily page is never the root of a
- *  merge group and never holds members whose `finalId` copies its own (pinned
- *  by the "does not merge daily pages through page_alias properties" test).
+ *  No walk over the `rootTitle` group is needed: `skipDailyAliasMerge` refuses
+ *  every `page_alias::` merge touching a daily page, so a daily page never
+ *  roots a merge group (pinned by the "does not merge daily pages through
+ *  page_alias properties" test).
  *
  *  Must run before the reparent map is built and before the write phase.
  *
- *  Does NOT repair `references[]`, which step 3 already patched from
- *  `resolveAliases`' own independent prediction — so on a divergence, imported
- *  wikilinks to this date stay bound to whichever block that prediction picked
- *  while the page's aliases/attrs/descendants move to the real note. That is a
- *  gap, not an impossibility: descendants aren't written until 5d, so a repatch
- *  here is reachable — it needs `aliasIdMap` updated for the date's aliases and
- *  a REWRITE (not `patchAliasReferences`' append) of the already-patched refs on
- *  every planned block. Left for a follow-up rather than bolted on here, since
- *  "rewrite an existing derived ref" is a decision with its own blast radius;
- *  the diagnostic names the divergence in the meantime. */
+ *  KNOWN LIMIT: does not repair `references[]`, already patched in step 3 from
+ *  an independent prediction, so on a divergence imported wikilinks to this
+ *  date stay bound to the block that prediction picked. Reachable to fix —
+ *  descendants aren't written until 5d — but it needs a REWRITE of existing
+ *  refs, not `patchAliasReferences`' append. Tracked in #470; the diagnostic
+ *  below names the divergence meanwhile. */
 const retargetDailyReconciliations = (
   recons: PageReconciliation[],
   iso: string,
