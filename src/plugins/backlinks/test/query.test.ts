@@ -307,6 +307,49 @@ describe('backlinksDataExtension query', () => {
       expect(out).toEqual(['UQ'])
     })
 
+    it('still filters when the only field ancestor is TOMBSTONED', async () => {
+      // Sync-apply permits a live child under a tombstoned parent, and the
+      // ancestry walk never filters `deleted`, so such a value row is still
+      // machinery. The fast-path probe has to see that field row too — probing
+      // live rows only answers "no machinery in this workspace" and skips the
+      // filter over exactly the rows it exists to catch.
+      const TOMB_WS = 'ws-tombstoned-field'
+      await sharedDb.db.execute(
+        `INSERT OR REPLACE INTO workspaces
+           (id, name, owner_user_id, create_time, update_time, encryption_mode, wk_canary, properties_migration)
+         VALUES (?, 'tomb ws', 'user-1', 1, 1, 'none', NULL, 'children')`,
+        [TOMB_WS],
+      )
+      const mk = (args: {
+        id: string; parentId?: string | null; content?: string
+        referenceTargetId?: string | null; references?: BlockReference[]
+      }) => env.repo.tx(tx => tx.create({
+        id: args.id, workspaceId: TOMB_WS, parentId: args.parentId ?? null,
+        orderKey: `k-${args.id}`, content: args.content ?? '',
+        referenceTargetId: args.referenceTargetId, references: args.references ?? [],
+      }), {scope: ChangeScope.BlockDefault})
+
+      await mk({id: 'TD', content: 'status'})
+      await sharedDb.db.execute(
+        `INSERT OR IGNORE INTO block_types (block_id, workspace_id, type) VALUES ('TD', ?, 'property-schema')`,
+        [TOMB_WS],
+      )
+      await mk({id: 'TFoo'})
+      await mk({id: 'TO'})
+      await mk({id: 'TF', parentId: 'TO', content: '::((TD))', referenceTargetId: 'TD'})
+      await mk({id: 'TV', parentId: 'TF', references: [{id: 'TFoo', alias: 'TFoo'}]})
+      await mk({id: 'TQ', references: [{id: 'TFoo', alias: 'TFoo'}]})
+      // Tombstone the field row ALONE, leaving its value child live — the
+      // shape sync-apply allows. A raw write so no processor repairs it.
+      await sharedDb.db.writeTransaction(async tx => {
+        await tx.execute('UPDATE blocks SET deleted = 1 WHERE id = ?', ['TF'])
+      })
+
+      const out = asIds(await env.repo.query[BACKLINKS_FOR_BLOCK_QUERY](
+        {workspaceId: TOMB_WS, id: 'TFoo'}).load())
+      expect(out).toEqual(['TQ'])
+    })
+
     it('keeps a backlink whose ancestor merely REFERENCES a definition, unmarked', async () => {
       // The walk must key on the `::` bit, not on "an ancestor points at a
       // definition". `R` is an ordinary block linking to the `status` property

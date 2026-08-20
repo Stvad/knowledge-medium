@@ -26,8 +26,15 @@ const MACHINERY_SOURCE_CHUNK = 500
  *
  *  Data-keyed, not flip-gated — it asks about the rows that exist, so a
  *  backfilled pre-flip workspace answers yes and a flipped one that has never
- *  been backfilled answers no. One indexed probe (`idx_blocks_field_form`,
- *  partial on exactly this predicate).
+ *  been backfilled answers no. One indexed probe (`idx_blocks_any_field_form`).
+ *
+ *  TOMBSTONES COUNT, which is why it is not the live `idx_blocks_field_form`.
+ *  Recognition never filters `deleted` — descent is structural, and sync-apply
+ *  permits a live child under a tombstoned parent — so a value row whose only
+ *  field ancestor is tombstoned IS machinery to the walk. Probing live rows
+ *  only would answer "nothing here" for that workspace and skip the filter
+ *  over the very rows it exists to catch. A fast path must never be able to
+ *  say no where the slow path would have said yes.
  *
  *  Its job is to keep the machinery filters from doing work that provably
  *  finds nothing: the ancestor walk below, and — the expensive one — the
@@ -45,7 +52,7 @@ export const workspaceHasPropertyMachinery = async (
   workspaceId: string,
 ): Promise<boolean> => (await db.getOptional(
   `SELECT 1 AS one FROM blocks
-    WHERE workspace_id = ? AND deleted = 0 AND is_field_form = 1 LIMIT 1`,
+    WHERE workspace_id = ? AND is_field_form = 1 LIMIT 1`,
   [workspaceId],
 )) !== null
 
