@@ -16,14 +16,10 @@ import {
 } from '@/plugins/spatial-navigation/walker.js'
 import { activeLayoutSessionElement } from '@/utils/layoutSessionDom.js'
 
-// Make `isElementProperlyVisible` produce sensible answers under jsdom:
-// real browser rects come from layout, but jsdom never lays out, so
-// every element looks "off-screen" by default. Tests opt instances into
-// the viewport by tagging them with data-test-visible="true" and rely
-// on this mock to translate that hint into a tall rect that the
-// production helper recognises as visible. Without the mock, every
-// element would read as not-visible and the viewport-aware branch
-// would silently fall back to the positional clamp.
+// happy-dom never lays out, so every rect is zero and every instance reads as
+// off-screen — which would silently route every viewport-aware tier to the
+// positional clamp. `setTestVisible` stubs the rect so the tier under test is
+// the one that answers.
 const tallVisibleRect = (top: number) =>
   ({
     top,
@@ -39,10 +35,8 @@ const tallVisibleRect = (top: number) =>
 
 const setTestVisible = (el: HTMLElement, visible: boolean): void => {
   if (visible) {
-    el.dataset.testVisible = 'true'
     el.getBoundingClientRect = () => tallVisibleRect(50)
   } else {
-    delete el.dataset.testVisible
     el.getBoundingClientRect = () =>
       ({
         top: 2000,
@@ -548,6 +542,11 @@ describe('findRecoveryAnchor (proactive disappear-handler)', () => {
     // (the first descendant) which also disappears, falling back to
     // `above` (prev). With same-depth siblings, `parent.next = below`
     // (the next child of `top`), so recovery picks that directly.
+    //
+    // Scenario coverage, not a pin: deleting a node takes its whole subtree
+    // with it, so the same-depth next sibling and the positional clamp target
+    // the same element by construction and this fixture cannot tell them
+    // apart. `only-child collapse` below is where that tier actually fails.
     buildP1Panel([
       p1Instance('top', ['above', p1Instance('parent', ['child', 'c2']), 'below']),
     ])
@@ -641,6 +640,38 @@ describe('findRecoveryAnchor (proactive disappear-handler)', () => {
     // X was at idx 1; clamp(1, 0, 1) = 1 = fresh-b.
     setTestVisible(findInstance('p1:fresh-b'), true)
     expect(findRecoveryAnchor('p1', p1Location('X'))?.dataset.blockId).toBe('fresh-b')
+  })
+
+  it('clamps by position among SAME-SURFACE peers, not among all instances', () => {
+    // Two backlink rows sit above the outline ones, so X's index among all
+    // instances (3) and among its own surface (1) differ — the whole point of
+    // storing `surfaceIndex` next to `index`.
+    buildLayout([
+      {kind: 'panel', columnId: 'c1', panel: {panelId: 'p1', instances: [
+        {blockId: 'bl-1', instance: 'p1:bl-1', surface: 'backlink'},
+        {blockId: 'bl-2', instance: 'p1:bl-2', surface: 'backlink'},
+        {blockId: 'o-1', instance: 'p1:o-1', surface: 'outline'},
+        {blockId: 'X', instance: 'p1:X', surface: 'outline'},
+      ]}},
+    ])
+    rememberInstancePosition('p1', findInstance('p1:X'))
+
+    // Swap in four fresh outline rows: no neighbor or ancestor survives, so
+    // the clamp answers, and the panel is now long enough for the two indices
+    // to name different rows.
+    document.body.innerHTML = ''
+    buildLayout([
+      {kind: 'panel', columnId: 'c1', panel: {panelId: 'p1', instances: [
+        {blockId: 'f-0', instance: 'p1:f-0', surface: 'outline'},
+        {blockId: 'f-1', instance: 'p1:f-1', surface: 'outline'},
+        {blockId: 'f-2', instance: 'p1:f-2', surface: 'outline'},
+        {blockId: 'f-3', instance: 'p1:f-3', surface: 'outline'},
+      ]}},
+    ])
+
+    // surfaceIndex 1 → f-1. The all-instances index would be 3 → f-3.
+    for (const id of ['f-1', 'f-3']) setTestVisible(findInstance(`p1:${id}`), true)
+    expect(findRecoveryAnchor('p1', p1Location('X'))?.dataset.blockId).toBe('f-1')
   })
 })
 

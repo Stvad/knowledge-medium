@@ -332,6 +332,9 @@ export const rememberInstancePosition = (
   if (!panel) return
   const instances = panelInstances(panel, excludedSurfaces)
   const idx = instances.indexOf(instanceEl)
+  // Defence in depth, unreached by any test: callers pass an element they just
+  // found in this panel. Without it a hint lands with `index: -1`, which the
+  // clamp reads as 0 — a wrong recovery target rather than none.
   if (idx < 0) return
   const location = locationOf(instanceEl)
   if (!location) return
@@ -344,6 +347,9 @@ export const rememberInstancePosition = (
     surface,
     prevLocation: findSameDepthSibling(instanceEl, instances, panel, 'prev'),
     nextLocation: findSameDepthSibling(instanceEl, instances, panel, 'next'),
+    // Only the CLOSEST ancestor is exercised — no fixture nests a focused
+    // block two levels under a surviving one, so the walk past the first hit
+    // is defence in depth.
     ancestorLocations: collectAncestorLocations(instanceEl, panel),
   })
 }
@@ -394,7 +400,6 @@ export const findRecoveryAnchor = (
   const hint = lastPositionByPanel.get(panelId)
   if (!hint || !sameFocusedBlockLocation(hint.location, forLocation)) return null
   const candidates = sameSurfaceInstances(instances, hint.surface)
-  if (candidates.length === 0) return null
 
   const findByLocation = (location: FocusedBlockLocation | undefined): HTMLElement | undefined =>
     location

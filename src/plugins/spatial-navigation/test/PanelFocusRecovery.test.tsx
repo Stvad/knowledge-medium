@@ -21,9 +21,11 @@ const PANEL_ID = 'panel'
 
 // Comfortably past the component's RECOVERY_DEBOUNCE_MS (250) so a pending
 // recovery would have fired if one were armed. The no-fire tests below pair
-// it with a `repo.tx` spy: a recovery is `void focusBlock(...)`, an
-// unawaited tx, so the focus VALUE still reads pre-recovery whatever the
-// component did — asserting on it would pass with the watchdog deleted.
+// it with a `repo.tx` spy — `focusBlock` is the only thing on this path that
+// opens one, and it is never restored because `beforeEach` mints a fresh Repo.
+// A recovery is `void focusBlock(...)`, an unawaited tx, so the focus VALUE
+// still reads pre-recovery whatever the component did: asserting on it would
+// pass with the watchdog deleted.
 const DEBOUNCE_SETTLE_MS = 350
 
 // A recovery costs the 250ms debounce plus a repo write, measured ~330-460ms
@@ -50,18 +52,15 @@ const setup = async (): Promise<Harness> => {
   return {h, repo}
 }
 
-interface InstanceSpec {blockId: string; instance?: string; children?: NodeSpec[]}
-/** A block id — or, when the test needs a non-default render scope or a
- *  subtree, the long form. `setNavAttrs` defaults the scope to `i-<blockId>`. */
-type NodeSpec = string | InstanceSpec
+/** A block id, or — when the test needs a subtree — the long form. */
+type NodeSpec = string | {blockId: string; children: NodeSpec[]}
 
 const appendInstance = (parent: HTMLElement, spec: NodeSpec): void => {
-  const {blockId, instance, children}: InstanceSpec =
-    typeof spec === 'string' ? {blockId: spec} : spec
+  const {blockId, children} = typeof spec === 'string' ? {blockId: spec, children: []} : spec
   const el = document.createElement('div')
-  setNavAttrs(el, blockId, instance)
+  setNavAttrs(el, blockId)
   parent.appendChild(el)
-  for (const child of children ?? []) appendInstance(el, child)
+  for (const child of children) appendInstance(el, child)
 }
 
 const buildPanelDom = (blocks: NodeSpec[]): HTMLElement => {
@@ -99,12 +98,12 @@ const focusedLocation = (blockId: string, renderScopeId = `i-${blockId}`) => ({
 })
 
 const setFocused = async (blockId: string, renderScopeId = `i-${blockId}`): Promise<void> => {
-  await env.repo.block(PANEL_ID).set(focusedBlockLocationProp, focusedLocation(blockId, renderScopeId))
+  await panelBlock.set(focusedBlockLocationProp, focusedLocation(blockId, renderScopeId))
 }
 
 const expectRecoveredFocus = async (blockId: string): Promise<void> => {
   await waitFor(
-    () => { expect(peekFocusedBlockLocation(env.repo.block(PANEL_ID))?.blockId).toBe(blockId) },
+    () => { expect(peekFocusedBlockLocation(panelBlock)?.blockId).toBe(blockId) },
     {timeout: RECOVERY_WAIT_MS},
   )
 }
@@ -144,8 +143,6 @@ beforeAll(async () => { sharedDb = await createTestDb() })
 afterAll(async () => { await sharedDb.cleanup() })
 
 beforeEach(async () => {
-  __resetSpatialNavigationForTesting()
-  document.body.innerHTML = ''
   env = await setup()
   await env.repo.tx(async tx => {
     await tx.create({
@@ -165,7 +162,6 @@ beforeEach(async () => {
 })
 
 afterEach(async () => {
-  // Before `cleanup()`, which is where the per-test `finally` used to leave it.
   vi.useRealTimers()
   cleanup()
   __resetSpatialNavigationForTesting()
@@ -235,10 +231,6 @@ describe('PanelFocusRecovery', {timeout: TEST_TIMEOUT_MS}, () => {
 
     buildPanelDom(['first', 'middle'])
 
-
-    // `focusBlock` is the only thing that opens a tx from here, so no tx is
-    // "no recovery was attempted". Not restored: `beforeEach` mints a fresh
-    // Repo, and `mockRestore` also clears the recorded calls this asserts on.
     const txSpy = vi.spyOn(env.repo, 'tx')
     vi.useFakeTimers()
     render(<PanelFocusRecovery block={panelBlock}/>)
@@ -266,7 +258,7 @@ describe('PanelFocusRecovery', {timeout: TEST_TIMEOUT_MS}, () => {
     await setFocused('parent')
 
     const panel = buildPanelDom([
-      {blockId: 'topLevel', instance: 'i-top', children: [
+      {blockId: 'topLevel', children: [
         'above',
         {blockId: 'parent', children: ['child', 'c2']},
         'below',
@@ -314,7 +306,6 @@ describe('PanelFocusRecovery', {timeout: TEST_TIMEOUT_MS}, () => {
   it("does not recover when the focused block briefly leaves the DOM and returns (tab/shift-tab move)", async () => {
     const panel = buildPanelDom(['first', 'middle', 'last'])
 
-
     // Fake timers drive the debounce deterministically; nothing on this path
     // reaches the DB, so faking time is safe.
     const txSpy = vi.spyOn(env.repo, 'tx')
@@ -340,7 +331,6 @@ describe('PanelFocusRecovery', {timeout: TEST_TIMEOUT_MS}, () => {
     })
 
     expect(txSpy).not.toHaveBeenCalled()
-    expect(peekFocusedBlockLocation(panelBlock)?.blockId).toBe('middle')
   })
 
   it('keeps extending the debounce while the panel churns, then writes once it settles', async () => {
@@ -390,13 +380,11 @@ describe('PanelFocusRecovery', {timeout: TEST_TIMEOUT_MS}, () => {
     render(<PanelFocusRecovery block={panelBlock}/>)
     panel.querySelector('[data-block-id="middle"]')!.remove()
     await act(async () => { await vi.advanceTimersByTimeAsync(20) })
-    // Without this the assertion below passes for a panel that never armed
-    // a recovery at all.
-    expect(findRecoveryAnchor(
-      PANEL_ID,
-      focusedLocation('middle'),
-      resolveSpatialNavExclusions(env.repo.facetRuntime),
-    )).not.toBeNull()
+    // A pending fake timer here IS the armed recovery, which is what the
+    // assertion below claims did not fire. `findRecoveryAnchor` would NOT do:
+    // it is a pure read over the hint map and the DOM, so it stays non-null
+    // even with the observer wiring deleted.
+    expect(vi.getTimerCount()).toBe(1)
 
     panel.remove()
     buildPanelDom(['first', 'middle', 'last'])
@@ -412,7 +400,7 @@ describe('PanelFocusRecovery', {timeout: TEST_TIMEOUT_MS}, () => {
 
     // Move focus to `last` — the watchdog should now consider `last`
     // the "current" block for recovery purposes.
-    await panelBlock.set(focusedBlockLocationProp, focusedLocation('last'))
+    await setFocused('last')
 
     await waitForRecoveryHint('last')
 
