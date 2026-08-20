@@ -1,8 +1,14 @@
 // Hand-written declarations for bd-github-sync.mjs (runtime must stay plain
 // node-runnable JS — it is invoked as a Claude Code hook with no loader).
 export declare const REPO: string
+export declare const BEAD_ID: RegExp
 export declare const extractBeadIds: (text: string) => string[]
 export declare const matchesPrCommand: (cmd: string) => boolean
+export declare const matchesApiPublish: (cmd: string) => boolean
+export declare const tryRun: (file: string, args: string[], opts?: object) => string | null
+export declare const preconditions: (root?: string | null) => { ok: boolean; reason?: string; root?: string; env?: Record<string, string | undefined> }
+export declare const beadIssueLookup: (ids: string[]) => Map<string, number | null>
+export declare const issueRefsTable: (text: string, refs: number[], mode?: 'pre' | 'post') => string
 export declare const allowsBeadIds: (cmd: string) => boolean
 export declare const bodyFilePaths: (cmd: string) => string[]
 export declare const resolveBodyPath: (p: string, cwd: string, home: string) => string
@@ -18,6 +24,7 @@ export declare const allowsIssueRefs: (cmd: string) => boolean
 export declare const buildIssueRefsMessage: (
   refs: { number: number; info: { title: string; state: string; isPr: boolean } | 'not-found' | null }[],
   closeNums: Set<number>,
+  mode?: 'pre' | 'post',
 ) => string
 
 export interface BeadRow {

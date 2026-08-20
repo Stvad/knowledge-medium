@@ -82,7 +82,7 @@ export const REPO = 'Stvad/knowledge-medium'
 // Pure logic (unit-tested in bd-github-sync.test.ts)
 // ---------------------------------------------------------------------------
 
-const BEAD_ID = /(?<![\w-])km-[a-z0-9]+(?:-[a-z0-9]+)*(?![\w-])/g
+export const BEAD_ID = /(?<![\w-])km-[a-z0-9]+(?:-[a-z0-9]+)*(?![\w-])/g
 
 /** Unique bead ids referenced in a blob of text, in first-seen order. */
 export const extractBeadIds = text => [...new Set(text.match(BEAD_ID) ?? [])]
@@ -150,6 +150,25 @@ const GH_PUBLISH = new RegExp(
 
 /** Does this shell command publish PR/issue/release text on GitHub? */
 export const matchesPrCommand = cmd => GH_PUBLISH.test(commandSkeleton(cmd))
+
+// `gh api` mutations (explicit -X/--method POST|PATCH|PUT, or field/input
+// flags, which make gh default to POST) — the channel review replies actually
+// go out through, which the publish matcher above cannot see. No endpoint
+// filter: the post-publish verifier's URL extraction is the real filter, and
+// a mutation aimed at a text-free endpoint just yields no target. Plain GETs
+// stay out so the verifier does not fetch-and-echo after every read.
+const GH_API = new RegExp(
+  SEGMENT_START + COMMAND_PREFIXES + String.raw`(?:\S*\/)?gh\s+` + GH_GLOBAL_OPTS + String.raw`api\s`,
+  'm',
+)
+export const matchesApiPublish = cmd => {
+  const sk = commandSkeleton(cmd)
+  return (
+    GH_API.test(sk) &&
+    (/(?<![\w-])(?:-X|--method)(?:=|\s+)?(?:POST|PATCH|PUT)\b/i.test(sk) ||
+      /(?<![\w-])(?:-f|-F|--raw-field|--field|--input)(?:=|\s)/.test(sk))
+  )
+}
 
 // Commit messages become public and their close keywords act when the commit
 // reaches the default branch, so `git commit` gets the narrow leg of the
@@ -235,7 +254,7 @@ export const allowsIssueRefs = cmd => ISSUE_REFS_OK.test(commandSkeleton(cmd))
  * [{number, info}] where info is {title, state, isPr} | 'not-found' | null
  * (null = the lookup itself failed).
  */
-export const buildIssueRefsMessage = (refs, closeNums) => {
+export const buildIssueRefsMessage = (refs, closeNums, mode = 'pre') => {
   const lines = refs.map(({ number, info }) => {
     if (info === 'not-found') return `  #${number} → NO SUCH ISSUE OR PR — a guessed number?`
     if (!info) return `  #${number} → COULD NOT VERIFY (gh lookup failed)`
@@ -250,12 +269,20 @@ export const buildIssueRefsMessage = (refs, closeNums) => {
   // title: advertising it over a failed lookup or a nonexistent number would
   // invite bypassing a reference no one has read.
   const anyUnresolved = refs.some(({ info }) => info === null || info === 'not-found')
+  const footer =
+    mode === 'post'
+      ? anyUnresolved
+        ? 'Some references could not be verified — a number that does not resolve in PUBLISHED text is almost certainly a guess; fix the published body now.'
+        : 'This text is already published — if any reference above is not the one you meant, fix it now (gh pr edit / gh issue edit / gh api PATCH).'
+      : anyUnresolved
+        ? 'Some references could not be verified (failed lookups or nonexistent numbers) — fix them and re-run; do not bypass unverified references.'
+        : 'If every reference above is the one you mean, re-run with KM_ISSUE_REFS_OK=1 prefixed.'
   return [
-    'Issue-reference check — verify each number against its real title before publishing:',
+    mode === 'post'
+      ? 'Issue references in the published text — check each against the issue you meant:'
+      : 'Issue-reference check — verify each number against its real title before publishing:',
     ...lines,
-    ...(anyUnresolved
-      ? ['Some references could not be verified (failed lookups or nonexistent numbers) — fix them and re-run; do not bypass unverified references.']
-      : ['If every reference above is the one you mean, re-run with KM_ISSUE_REFS_OK=1 prefixed.']),
+    footer,
     'If the numbers are wrong, fix them first: `bd show <bead-id>` → External:, or `gh issue list --search "<words>"`. Never write a number you have not read this session.',
   ].join('\n')
 }
@@ -489,11 +516,28 @@ const run = (file, args, opts = {}) => {
   return r.stdout ?? ''
 }
 
-const tryRun = (file, args, opts) => {
+export const tryRun = (file, args, opts) => {
   try {
     return run(file, args, opts)
   } catch {
     return null
+  }
+}
+
+/**
+ * km-id → issue number for each bead that has an External link. Callers must
+ * hold the DB-exists gate (initializedDbRoot) first — see header. Multi-id
+ * `bd show` reports unknown ids as `Error fetching …` on stderr while still
+ * printing the found beads' JSON on stdout, exit 0 — a PARTIAL result.
+ * run()'s error-text check would read it as total failure and poison the
+ * whole mapping table, so parse the stdout directly.
+ */
+export const beadIssueLookup = ids => {
+  const r = spawnSync('bd', ['show', ...ids, '--json'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+  try {
+    return new Map(JSON.parse(r.stdout ?? '[]').map(b => [b.id, issueNumberFromRef(b.external_ref)]))
+  } catch {
+    return new Map()
   }
 }
 
@@ -509,7 +553,7 @@ export const initializedDbRoot = () => {
   return root && existsSync(join(root, '.beads', 'embeddeddolt')) && tryRun('bd', ['--version']) ? root : null
 }
 
-const preconditions = (root = initializedDbRoot()) => {
+export const preconditions = (root = initializedDbRoot()) => {
   if (!root) return { ok: false, reason: 'no initialized beads DB (or bd not on PATH)' }
   const token = tryRun('gh', ['auth', 'token'])?.trim()
   if (!token) return { ok: false, reason: 'no gh token' }
@@ -837,8 +881,9 @@ const allow = () => process.exit(0)
 
 // The #N leg of the gate: echo every referenced number's ground truth;
 // KM_ISSUE_REFS_OK=1 on the re-run confirms. Verification is a per-number
-// gh GET — tolerant, distinguishing "not found" from "gh broke".
-const issueRefsTable = (text, refs) => {
+// gh GET — tolerant, distinguishing "not found" from "gh broke". Also used
+// by bd-publish-verify.mjs (mode 'post', where the text already published).
+export const issueRefsTable = (text, refs, mode = 'pre') => {
   const fetchInfo = number => {
     const r = spawnSync('gh', ['api', `repos/${REPO}/issues/${number}`], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
     try {
@@ -849,7 +894,7 @@ const issueRefsTable = (text, refs) => {
       return null
     }
   }
-  return buildIssueRefsMessage(refs.map(number => ({ number, info: fetchInfo(number) })), new Set(closeKeywordRefs(text)))
+  return buildIssueRefsMessage(refs.map(number => ({ number, info: fetchInfo(number) })), new Set(closeKeywordRefs(text)), mode)
 }
 
 const echoIssueRefs = (text, refs) => {
@@ -940,19 +985,7 @@ const hookPrePr = () => {
 
   // No bd call of any kind before the DB-exists gate — see header.
   const dbRoot = initializedDbRoot()
-  const lookup = () => {
-    if (!dbRoot) return new Map()
-    // Multi-id `bd show` reports unknown ids as `Error fetching …` on stderr
-    // while still printing the found beads' JSON on stdout, exit 0 — a
-    // PARTIAL result. run()'s error-text check would read it as total failure
-    // and poison the whole mapping table, so parse the stdout directly.
-    const r = spawnSync('bd', ['show', ...ids, '--json'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
-    try {
-      return new Map(JSON.parse(r.stdout ?? '[]').map(b => [b.id, issueNumberFromRef(b.external_ref)]))
-    } catch {
-      return new Map()
-    }
-  }
+  const lookup = () => (dbRoot ? beadIssueLookup(ids) : new Map())
 
   let byId = lookup()
   const missing = ids.filter(id => !byId.get(id))

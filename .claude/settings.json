@@ -31,6 +31,19 @@
         "matcher": "Bash"
       }
     ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "command": "node \"$CLAUDE_PROJECT_DIR/scripts/bd-publish-verify.mjs\"",
+            "statusMessage": "Verifying published references…",
+            "timeout": 120,
+            "type": "command"
+          }
+        ],
+        "matcher": "Bash"
+      }
+    ],
     "SessionEnd": [
       {
         "hooks": [
