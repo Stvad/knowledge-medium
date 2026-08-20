@@ -397,6 +397,33 @@ describe('PanelFocusRecovery', {timeout: TEST_TIMEOUT_MS}, () => {
     expect(txSpy).not.toHaveBeenCalled()
   })
 
+  it('takes its armed recovery and its observer with it when the panel unmounts', async () => {
+    // Both halves of the effect cleanup, which nothing else covers: an armed
+    // timer that outlives the unmount writes focus for a panel that is gone,
+    // and an observer that outlives it re-arms from DOM churn the watchdog no
+    // longer watches.
+    const panel = buildPanelDom(['first', 'middle', 'last'])
+
+    const txSpy = vi.spyOn(env.repo, 'tx')
+    vi.useFakeTimers()
+    render(<PanelFocusRecovery block={panelBlock}/>)
+    panel.querySelector('[data-block-id="middle"]')!.remove()
+    await act(async () => { await vi.advanceTimersByTimeAsync(20) })
+    expect(vi.getTimerCount()).toBe(1)
+
+    cleanup()
+    expect(vi.getTimerCount()).toBe(0)
+
+    // Churn the panel the unmounted watchdog used to watch: a surviving
+    // observer would re-enter the check here and arm a fresh recovery.
+    await act(async () => {
+      panel.appendChild(document.createElement('div'))
+      await vi.advanceTimersByTimeAsync(DEBOUNCE_SETTLE_MS)
+    })
+    expect(vi.getTimerCount()).toBe(0)
+    expect(txSpy).not.toHaveBeenCalled()
+  })
+
   it('refreshes the positional hint as the user navigates between blocks', async () => {
     const panel = buildPanelDom(['first', 'middle', 'last'])
 
