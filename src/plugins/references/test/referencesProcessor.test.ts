@@ -1727,14 +1727,16 @@ describe('references.reapOrphanAliasSeats — reference-drop reaping (#402)', ()
     expect(childrenAfter).toEqual([])
   })
 
-  it('reaps an UN-flipped seat whose only children are backfilled field rows', async () => {
-    // The backfill mints a field row under EVERY live seat — the seed cell
-    // carries `aliases` + `types`, so every seat matches its candidate
-    // predicate. While the tolerance was flip-gated, that silently stopped
-    // orphan-seat reaping in every un-flipped workspace, i.e. all of prod for
-    // the whole verify window. Built by hand because the dual-write
-    // processors are dormant pre-flip, which is exactly why only the backfill
-    // produces this shape here.
+  it('does NOT reap an un-flipped seat whose children are backfilled field rows', async () => {
+    // The safe miss, chosen deliberately. Pre-flip the projection processor is
+    // dormant, so the seat's cell cannot vouch for its subtree: an edit to a
+    // generated value row leaves the cell pristine and the shape unchanged.
+    // Tolerating machine children here means enumerating every way a user
+    // could have touched them, and two review rounds found two holes in that
+    // enumeration, each a silent soft-delete of a user's edit. The seat squats
+    // until the alias is re-typed and re-dropped, and reaping resumes at the
+    // flip. Built by hand because the dual-write processors are dormant
+    // pre-flip, which is exactly why only the backfill produces this shape.
     await env.repo.tx(
       tx => tx.create({id: 'src', workspaceId: WS, parentId: null, orderKey: 'a0', content: '[[grue]]'}),
       {scope: ChangeScope.BlockDefault},
@@ -1763,14 +1765,23 @@ describe('references.reapOrphanAliasSeats — reference-drop reaping (#402)', ()
 
     await env.repo.mutate.setContent({id: 'src', content: ''})
     await flush(5000)
-    expect((await env.read(seatId))!.deleted).toBe(1)
+    expect((await env.read(seatId))!.deleted).toBe(0)
   })
 
-  it('keeps a seat whose child merely REFERENCES the aliases definition, unmarked', async () => {
+  it('keeps a CHILD-BACKED seat whose child merely REFERENCES the aliases definition', async () => {
+    // Flipped, because that is where the tolerance runs at all — un-flipped,
+    // any child blocks the reap and the bit never gets a say.
+    //
     // `reference_target_id` is a bare content stamp: any whole-block ref
     // carries one, so matching on the generated id alone would read a user's
     // link to the aliases definition as the seat's own machinery and sweep it
     // with the seat. The `::` bit is what separates them.
+    await sharedDb.db.execute(
+      `INSERT OR REPLACE INTO workspaces
+         (id, name, owner_user_id, create_time, update_time, encryption_mode, wk_canary, properties_migration)
+       VALUES (?, ?, ?, 1, 1, 'none', NULL, 'children')`,
+      [WS, 'test ws', 'user-1'],
+    )
     await env.repo.tx(
       tx => tx.create({id: 'src', workspaceId: WS, parentId: null, orderKey: 'a0', content: '[[zork]]'}),
       {scope: ChangeScope.BlockDefault},

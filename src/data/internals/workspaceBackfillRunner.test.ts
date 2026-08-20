@@ -347,7 +347,12 @@ describe('workspace backfill runner — sync gating', () => {
     } finally {
       warn.mockRestore()
     }
-  }, 20_000)
+    // 52ms measured solo — no explicit budget, because at the ~6x p99.9
+    // stretch a full gate run adds that is still an order of magnitude under
+    // vitest's 5000ms default. A budget here would only delay reporting a
+    // genuine hang, which is exactly what this test would catch: un-gating the
+    // re-arm turns the loop into a runaway.
+  })
 
   it('takes no claim at all while rows are staged, because tryClaim itself writes', async () => {
     // `tryClaim` ensures the Migrations page and creates the claim row, so

@@ -51,7 +51,6 @@ import {
   derivedRefKey,
   normalizeReferences,
   reconcileDerived,
-  type AnyPropertySchema,
   type BlockData,
   type BlockReference,
   type AnyPostCommitProcessor,
@@ -72,13 +71,12 @@ import {
   aliasSeatReaderFromDb,
   ensureAliasTarget,
   generatedSeatFieldIds,
-  generatedSeatFieldSchemas,
   isAliasSeatSlotId,
   matchesAliasSeatSeed,
   resolveAliasSeatId,
 } from '@/data/targets'
 import { EXTENSION_TYPE } from '@/data/blockTypes'
-import { encodedPropertyValueToChildContent } from '@/data/propertyChildren'
+import { readIsChildBackedWorkspace } from '@/data/workspaceSchema'
 import { aliasesProp, typesProp } from '@/data/properties'
 import { deleteSubtreeInTx } from '@/data/subtreeDelete'
 import {
@@ -672,37 +670,6 @@ const isGeneratedSeatFieldRow = (
   && child.referenceTargetId != null
   && generatedFieldIds.has(child.referenceTargetId)
 
-/** The value-row content a PRISTINE seat's own machinery carries for `fieldId`,
- *  derived from the seat's cell — which `matchesAliasSeatSeed` has already
- *  verified is byte-identical to the seed.
- *
- *  Post-flip an edit to a value row reprojects into the cell, so the seed match
- *  above catches the drift. Pre-flip the projection processor is dormant: the
- *  cell stays pristine while the value row has moved, and shape alone cannot
- *  tell an edited value row from a generated one.
- *
- *  `undefined` means "cannot prove it is machinery" and blocks the reap. The
- *  MISSING-SCHEMA arm of that is defence in depth and unpinnable: the caller
- *  has already filtered on `generatedSeatFieldIds`, which is derived from the
- *  keys of this same map, so the lookup cannot miss. The missing-KEY arm is
- *  reachable — a seat whose cell lost a seed key fails `matchesAliasSeatSeed`
- *  first today, so it too is belt-and-braces. */
-const generatedSeatValueContent = (
-  seat: BlockData,
-  fieldId: string,
-  schemas: ReadonlyMap<string, AnyPropertySchema>,
-): string | undefined => {
-  const schema = schemas.get(fieldId)
-  if (schema === undefined) return undefined
-  const encoded = seat.properties[schema.name]
-  if (encoded === undefined) return undefined
-  try {
-    return encodedPropertyValueToChildContent(schema, encoded)
-  } catch {
-    return undefined
-  }
-}
-
 /** Soft-delete orphaned seats in one tx (shared by the mint-time cleanup
  *  above and the reference-drop reaper below). A seat's OWN generated
  *  properties (alias / types) materialize as hidden field rows (PR #288 §9) —
@@ -746,16 +713,27 @@ const reapSeatsInTx = async (
       // mint-time 4s window too, which predates the reaper), and
       // tombstoning its parent would strand it live under a tombstone.
       // Skipping the whole seat is the safe miss.
-      // Data-keyed, not flip-gated: the cell→children backfill mints a field
-      // row under EVERY live seat (the seed cell carries `aliases` + `types`),
-      // so a flip-gated tolerance stops reaping every orphan seat in the whole
-      // pre-flip window. The `::` bit is what makes a child the seat's own
-      // machinery — `reference_target_id` alone is a bare content stamp that an
-      // ordinary `((fieldId))` child carries too, which would have let a user's
-      // link to a generated definition pass as machinery and be swept.
+      // FLIP-GATED, deliberately, and this is the one place in this branch
+      // where the backfill's pre-flip rows are NOT treated like post-flip ones.
+      //
+      // Post-flip, an edit to a generated value row reprojects into the seat's
+      // cell, so `matchesAliasSeatSeed` above sees the drift and refuses. That
+      // is what makes tolerating machine children safe there. Pre-flip the
+      // projection processor is dormant, so the cell cannot speak for the
+      // subtree and the only alternative is to enumerate every way a user
+      // could have touched it — shape, then content, then the property bag,
+      // then whatever the next round finds. Two rounds of review found two
+      // such holes, each a silent soft-delete of a user's edit.
+      //
+      // Not reaping is the documented SAFE MISS (see the gate list below): the
+      // seat squats until the alias is re-typed and re-dropped, and normal
+      // reaping resumes the moment the workspace flips. Bounded cost, no
+      // data-loss surface, nothing to keep exhaustive. km-mzsv.
+      const sweepGeneratedFieldRows = await tx.isPropertyChildBackedWorkspace(workspaceId)
       const children = await tx.childrenOf(id, undefined)
-      const blockingChildren = children.filter(child =>
-        !isGeneratedSeatFieldRow(child, generatedFieldIds))
+      const blockingChildren = sweepGeneratedFieldRows
+        ? children.filter(child => !isGeneratedSeatFieldRow(child, generatedFieldIds))
+        : children
       if (blockingChildren.length > 0) continue
       // Deep guard (PR #428 adversarial review, both rounds): the
       // direct-children gate can't see user content nested INSIDE a
@@ -771,7 +749,6 @@ const reapSeatsInTx = async (
       // least one side), and a grandchild with live children of its
       // own is a nested comment thread. Zero grandchildren stays
       // sweepable — a childless field row is pure machinery.
-      const generatedFieldSchemas = generatedSeatFieldSchemas(workspaceId)
       let deepUserContent = false
       for (const child of children) {
         const target = child.referenceTargetId ?? null
@@ -781,19 +758,12 @@ const reapSeatsInTx = async (
           deepUserContent = true
           break
         }
-        if (grandchildren.length === 1) {
-          if ((await tx.childrenOf(grandchildren[0]!.id, undefined)).length > 0) {
-            deepUserContent = true
-            break
-          }
-          // Shape is not enough: an EDITED value row has the same shape as a
-          // generated one, and pre-flip nothing reprojects the edit into the
-          // cell for the seed match to catch.
-          if (grandchildren[0]!.content
-              !== generatedSeatValueContent(current, target, generatedFieldSchemas)) {
-            deepUserContent = true
-            break
-          }
+        if (
+          grandchildren.length === 1
+          && (await tx.childrenOf(grandchildren[0]!.id, undefined)).length > 0
+        ) {
+          deepUserContent = true
+          break
         }
       }
       if (deepUserContent) continue
@@ -901,6 +871,7 @@ export const reapOrphanAliasSeatsProcessor = definePostCommitProcessor({
 
     const workspaceId = event.workspaceId
     const readSeat = aliasSeatReaderFromDb(ctx.db)
+    const isChildBacked = await readIsChildBackedWorkspace(ctx.db, workspaceId)
     const generatedFieldIds = generatedSeatFieldIds(workspaceId)
     const candidates: string[] = []
     for (const id of dropped) {
@@ -912,9 +883,11 @@ export const reapOrphanAliasSeatsProcessor = definePostCommitProcessor({
       if (!isAliasSeatSlotId(id, seat.content, workspaceId)) continue
       if (seat.hasLiveChildren) {
         // DEFENCE IN DEPTH, not load-bearing: `reapSeatsInTx` re-reads the
-        // children in-tx and applies the same predicate, so replacing this
-        // whole branch with `true` fails nothing. It exists to keep an
-        // obviously-blocked seat out of the write path.
+        // children in-tx and applies the same rule, so replacing this whole
+        // branch with `true` fails nothing. It exists to keep an obviously-
+        // blocked seat out of the write path — and it must agree with that
+        // rule, including its flip gate (see the long note there).
+        if (!isChildBacked) continue
         // Raw-row twin of `isGeneratedSeatFieldRow`: `is_field_form` is 1 or
         // NULL here, never 0 (see BLOCK_LOCAL_COLUMNS).
         const children = await ctx.db.getAll<{

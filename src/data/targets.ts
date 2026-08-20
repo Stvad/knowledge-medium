@@ -56,7 +56,6 @@ import {
 import { derivedBlockId } from '@/data/derivedIds'
 import type { Repo } from '@/data/repo'
 import { keyAtEnd } from './orderKey'
-import type { AnyPropertySchema } from '@/data/api'
 import { aliasesProp, addBlockTypeToProperties, typesProp } from './properties'
 import { propertyDefinitionBlockId } from './definitionSeeds'
 import { PAGE_TYPE } from './blockTypes'
@@ -340,22 +339,17 @@ export const matchesAliasSeatSeed = (
  *
  *  That makes a bare "has live children?" test invert after the flip: it
  *  stops meaning "a user touched this" and starts meaning "this is a
- *  seat". Every caller gating on children has to subtract these ids first.
- *  NOT only when flipped: the cell→children backfill mints a field row under
- *  every live seat (the seed cell carries `aliases` + `types`), so a
- *  flip-gated subtraction stops reaping orphan seats for the whole pre-flip
- *  window. Subtract on the `::` bit AND the id — a bare column match is a
- *  content stamp an ordinary `((fieldId))` child carries too. */
-export const generatedSeatFieldSchemas = (
-  workspaceId: string,
-): ReadonlyMap<string, AnyPropertySchema> => new Map([
-  [propertyDefinitionBlockId(workspaceId, aliasesProp.seedKey), aliasesProp as AnyPropertySchema],
-  [propertyDefinitionBlockId(workspaceId, typesProp.seedKey), typesProp as AnyPropertySchema],
+ *  seat". Every caller gating on children has to subtract these ids first,
+ *  and only when the workspace is FLIPPED: there an edit to a generated value
+ *  row reprojects into the cell, so the seed match can still see drift. The
+ *  backfill mints these rows pre-flip too, but the projection is dormant
+ *  there, so nothing can vouch for the subtree and the caller must not
+ *  subtract (km-mzsv). Subtract on the `::` bit AND the id — a bare column
+ *  match is a content stamp an ordinary `((fieldId))` child carries too. */
+export const generatedSeatFieldIds = (workspaceId: string): ReadonlySet<string> => new Set([
+  propertyDefinitionBlockId(workspaceId, aliasesProp.seedKey),
+  propertyDefinitionBlockId(workspaceId, typesProp.seedKey),
 ])
-
-/** Just the ids, derived from the map above so the pair has ONE source. */
-export const generatedSeatFieldIds = (workspaceId: string): ReadonlySet<string> =>
-  new Set(generatedSeatFieldSchemas(workspaceId).keys())
 
 /** Predicate: this tombstoned slot was created by `ensureAliasTarget`
  *  for `alias` and was never touched before cleanup tombstoned it — i.e.
