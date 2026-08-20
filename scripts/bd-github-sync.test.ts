@@ -96,6 +96,10 @@ describe('matchesPrCommand', () => {
     'env gh pr create --body x',
     'env -u GH_HOST gh pr create --body x',
     'xargs gh issue close',
+    // shell control keywords open command positions too
+    'if gh pr create --body "text"; then echo ok; fi',
+    'if true; then gh pr create --body "text"; fi',
+    'while true; do gh pr comment 1 -b x; done',
     '/usr/local/bin/gh pr create --fill',
     'VAR="a b" gh pr edit 1 --body x',
     // apostrophes inside double-quoted args must not bridge spans and
@@ -378,6 +382,9 @@ describe('hasDynamicBody', () => {
     // attached short-option values are CLI-supported: -t"$(…)" and -tfoo
     expect(hasDynamicBody('gh pr merge 1 -t"$(cat subject.md)"')).toBe(true)
     expect(hasDynamicBody('gh pr comment 1 -b"$MESSAGE"')).toBe(true)
+    // shell word concatenation forms ONE argument across quote boundaries
+    expect(hasDynamicBody('gh pr comment 1 --body prefix"$(cat message.txt)"')).toBe(true)
+    expect(hasDynamicBody(`gh pr comment 1 --body prefix'$(literal single quotes)'`)).toBe(false)
     expect(hasDynamicBody('gh issue close 1 -c "$(cat message.txt)"')).toBe(true)
     expect(hasDynamicBody('gh pr reopen 1 --comment "$MESSAGE"')).toBe(true)
     expect(hasDynamicBody('gh pr create -t "$TITLE" -b b')).toBe(true)

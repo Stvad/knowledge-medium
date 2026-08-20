@@ -127,7 +127,10 @@ const commandSkeleton = cmd => {
   return [skeleton, ...lifted].join('\n')
 }
 
-const SEGMENT_START = String.raw`(?:^|[;&|(]\s*)`
+// A command position opens at the string start, after a separator, or after
+// one of the shell's control keywords — a FINITE set, unlike wrapper
+// commands, so listing it is complete rather than an enumeration.
+const SEGMENT_START = String.raw`(?:^|[;&|({]\s*|\b(?:if|then|elif|else|do|until|while)\s+)`
 // VAR=val assignments and common wrapper commands may precede the real verb;
 // wrappers take options of their own (env -u NAME, xargs -0), skipped with
 // the value-optional branch that harmlessly over-matches.
@@ -174,10 +177,18 @@ export const matchesCommitCommand = cmd => GIT_COMMIT.test(commandSkeleton(cmd))
 // Single-quoted values never expand and stay out; commit -m is deliberately
 // exempt (prose dollars are common there, and expansion-built commit
 // messages fall under the out-of-visibility residual already on record).
-// The separator is optional: the CLI accepts ATTACHED short-option values
-// (-t"$(…)", -tfoo), and requiring whitespace or = would let those through.
-export const hasDynamicBody = cmd =>
-  /(?:^|\s)(?:--body|--notes|--subject|--title|--comment|-[bntc])(?:=|\s+)?(?:"[^"]*[$`][^"]*"|[^\s'"]*[$`]\S*)/.test(cmd)
+// The separator is optional (the CLI accepts ATTACHED short-option values:
+// -t"$(…)", -tfoo), and the value is matched as a full shell WORD — quoted
+// and unquoted segments concatenated (prefix"$(cat x)") form ONE argument.
+// Single-quoted segments never expand and are stripped before the test.
+export const hasDynamicBody = cmd => {
+  for (const m of cmd.matchAll(
+    /(?<![\w-])(?:--body|--notes|--subject|--title|--comment|-[bntc])(?:=|\s+)?((?:"[^"]*"|'[^']*'|[^\s'"])+)/g,
+  )) {
+    if (/[$`]/.test(m[1].replace(/'[^']*'/g, ''))) return true
+  }
+  return false
+}
 
 // The escape hatch must also be in command-prefix position of the SKELETON —
 // honored from quoted prose, a PR body QUOTING it would both bypass the gate
