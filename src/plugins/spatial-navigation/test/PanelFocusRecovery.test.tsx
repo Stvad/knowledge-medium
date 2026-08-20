@@ -3,6 +3,7 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, render, waitFor } from '@testing-library/react'
 import { ChangeScope, type User } from '@/data/api'
+import type { Block } from '@/data/block'
 import { Repo } from '@/data/repo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
@@ -63,9 +64,9 @@ const appendInstance = (parent: HTMLElement, spec: NodeSpec): void => {
   for (const child of children ?? []) appendInstance(el, child)
 }
 
-const buildPanelDom = (panelId: string, blocks: NodeSpec[]): HTMLElement => {
+const buildPanelDom = (blocks: NodeSpec[]): HTMLElement => {
   const panel = document.createElement('div')
-  panel.setAttribute('data-panel-id', panelId)
+  panel.setAttribute('data-panel-id', PANEL_ID)
   for (const spec of blocks) appendInstance(panel, spec)
   document.body.appendChild(panel)
   return panel
@@ -138,6 +139,7 @@ const waitForRecoveryHint = async (blockId: string): Promise<void> => {
 
 let sharedDb: TestDb
 let env: Harness
+let panelBlock: Block
 beforeAll(async () => { sharedDb = await createTestDb() })
 afterAll(async () => { await sharedDb.cleanup() })
 
@@ -159,9 +161,12 @@ beforeEach(async () => {
     await tx.create({id: 'middle', workspaceId: WS, parentId: null, orderKey: 'b1', content: 'middle'})
     await tx.create({id: 'last', workspaceId: WS, parentId: null, orderKey: 'b2', content: 'last'})
   }, {scope: ChangeScope.UiState})
+  panelBlock = env.repo.block(PANEL_ID)
 })
 
 afterEach(async () => {
+  // Before `cleanup()`, which is where the per-test `finally` used to leave it.
+  vi.useRealTimers()
   cleanup()
   __resetSpatialNavigationForTesting()
   document.body.innerHTML = ''
@@ -169,9 +174,8 @@ afterEach(async () => {
 
 describe('PanelFocusRecovery', {timeout: TEST_TIMEOUT_MS}, () => {
   it("recovers to 'block previously below' when the focused block disappears", async () => {
-    const panel = buildPanelDom(PANEL_ID, ['first', 'middle', 'last'])
+    const panel = buildPanelDom(['first', 'middle', 'last'])
 
-    const panelBlock = env.repo.block(PANEL_ID)
     render(<PanelFocusRecovery block={panelBlock}/>)
 
     // Sanity: focus is already on 'middle' and the instance is present.
@@ -188,9 +192,8 @@ describe('PanelFocusRecovery', {timeout: TEST_TIMEOUT_MS}, () => {
   it("falls to 'previously above' when the disappeared block was first in the panel", async () => {
     await setFocused('first')
 
-    const panel = buildPanelDom(PANEL_ID, ['first', 'middle', 'last'])
+    const panel = buildPanelDom(['first', 'middle', 'last'])
 
-    const panelBlock = env.repo.block(PANEL_ID)
     render(<PanelFocusRecovery block={panelBlock}/>)
 
     // `first` has no "previously above", so the recovery falls through
@@ -211,11 +214,10 @@ describe('PanelFocusRecovery', {timeout: TEST_TIMEOUT_MS}, () => {
     }, {scope: ChangeScope.UiState})
     await setFocused('middle')
 
-    const panel = buildPanelDom(PANEL_ID, [
+    const panel = buildPanelDom([
       {blockId: 'parent', children: ['c1', 'middle', 'c3']},
     ])
 
-    const panelBlock = env.repo.block(PANEL_ID)
     render(<PanelFocusRecovery block={panelBlock}/>)
 
     // Collapse the parent: every child unmounts but parent stays.
@@ -231,21 +233,16 @@ describe('PanelFocusRecovery', {timeout: TEST_TIMEOUT_MS}, () => {
     // hint stored, location-match guard rejects fallback recovery, so no recovery.
     await setFocused('never-mounted')
 
-    buildPanelDom(PANEL_ID, ['first', 'middle'])
+    buildPanelDom(['first', 'middle'])
 
-    const panelBlock = env.repo.block(PANEL_ID)
 
     // `focusBlock` is the only thing that opens a tx from here, so no tx is
     // "no recovery was attempted". Not restored: `beforeEach` mints a fresh
     // Repo, and `mockRestore` also clears the recorded calls this asserts on.
     const txSpy = vi.spyOn(env.repo, 'tx')
     vi.useFakeTimers()
-    try {
-      render(<PanelFocusRecovery block={panelBlock}/>)
-      await act(async () => { await vi.advanceTimersByTimeAsync(DEBOUNCE_SETTLE_MS) })
-    } finally {
-      vi.useRealTimers()
-    }
+    render(<PanelFocusRecovery block={panelBlock}/>)
+    await act(async () => { await vi.advanceTimersByTimeAsync(DEBOUNCE_SETTLE_MS) })
 
     expect(txSpy).not.toHaveBeenCalled()
     expect(peekFocusedBlockLocation(panelBlock)?.blockId).toBe('never-mounted')
@@ -268,7 +265,7 @@ describe('PanelFocusRecovery', {timeout: TEST_TIMEOUT_MS}, () => {
     }, {scope: ChangeScope.UiState})
     await setFocused('parent')
 
-    const panel = buildPanelDom(PANEL_ID, [
+    const panel = buildPanelDom([
       {blockId: 'topLevel', instance: 'i-top', children: [
         'above',
         {blockId: 'parent', children: ['child', 'c2']},
@@ -276,7 +273,6 @@ describe('PanelFocusRecovery', {timeout: TEST_TIMEOUT_MS}, () => {
       ]},
     ])
 
-    const panelBlock = env.repo.block(PANEL_ID)
     render(<PanelFocusRecovery block={panelBlock}/>)
 
     // Delete `parent` and its subtree.
@@ -299,7 +295,7 @@ describe('PanelFocusRecovery', {timeout: TEST_TIMEOUT_MS}, () => {
     }, {scope: ChangeScope.UiState})
     await setFocused('X')
 
-    const panel = buildPanelDom(PANEL_ID, [
+    const panel = buildPanelDom([
       {blockId: 'topLevel', children: [
         'above',
         {blockId: 'parent', children: ['X']},
@@ -307,7 +303,6 @@ describe('PanelFocusRecovery', {timeout: TEST_TIMEOUT_MS}, () => {
       ]},
     ])
 
-    const panelBlock = env.repo.block(PANEL_ID)
     render(<PanelFocusRecovery block={panelBlock}/>)
 
     // Collapse: X unmounts, parent stays.
@@ -317,75 +312,67 @@ describe('PanelFocusRecovery', {timeout: TEST_TIMEOUT_MS}, () => {
   })
 
   it("does not recover when the focused block briefly leaves the DOM and returns (tab/shift-tab move)", async () => {
-    const panel = buildPanelDom(PANEL_ID, ['first', 'middle', 'last'])
+    const panel = buildPanelDom(['first', 'middle', 'last'])
 
-    const panelBlock = env.repo.block(PANEL_ID)
 
     // Fake timers drive the debounce deterministically; nothing on this path
     // reaches the DB, so faking time is safe.
     const txSpy = vi.spyOn(env.repo, 'tx')
     vi.useFakeTimers()
-    try {
-      render(<PanelFocusRecovery block={panelBlock}/>)
-      expect(peekFocusedBlockLocation(panelBlock)?.blockId).toBe('middle')
+    render(<PanelFocusRecovery block={panelBlock}/>)
+    expect(peekFocusedBlockLocation(panelBlock)?.blockId).toBe('middle')
 
-      // Simulate a tab move: the block briefly unmounts and remounts
-      // under the same render scope well inside the debounce window. The
-      // remove fire arms the debounce; advancing 20ms stays inside it.
-      await act(async () => {
-        panel.querySelector('[data-block-id="middle"]')!.remove()
-        await vi.advanceTimersByTimeAsync(20)
-      })
+    // Simulate a tab move: the block briefly unmounts and remounts
+    // under the same render scope well inside the debounce window. The
+    // remove fire arms the debounce; advancing 20ms stays inside it.
+    await act(async () => {
+      panel.querySelector('[data-block-id="middle"]')!.remove()
+      await vi.advanceTimersByTimeAsync(20)
+    })
 
-      // The remount's observer fire cancels the pending recovery; then
-      // run past the full window to prove nothing fires.
-      const replacement = document.createElement('div')
-      setNavAttrs(replacement, 'middle')
-      await act(async () => {
-        panel.appendChild(replacement)
-        await vi.advanceTimersByTimeAsync(DEBOUNCE_SETTLE_MS)
-      })
+    // The remount's observer fire cancels the pending recovery; then
+    // run past the full window to prove nothing fires.
+    const replacement = document.createElement('div')
+    setNavAttrs(replacement, 'middle')
+    await act(async () => {
+      panel.appendChild(replacement)
+      await vi.advanceTimersByTimeAsync(DEBOUNCE_SETTLE_MS)
+    })
 
-      expect(txSpy).not.toHaveBeenCalled()
-      expect(peekFocusedBlockLocation(panelBlock)?.blockId).toBe('middle')
-    } finally {
-      vi.useRealTimers()
-    }
+    expect(txSpy).not.toHaveBeenCalled()
+    expect(peekFocusedBlockLocation(panelBlock)?.blockId).toBe('middle')
   })
 
   it('keeps extending the debounce while the panel churns, then writes once it settles', async () => {
     // The component's contract for a re-render storm: every check cancels the
     // pending recovery and re-arms, so a steady stream of mutations pushes the
     // write out rather than letting it land on a half-settled layout.
-    const panel = buildPanelDom(PANEL_ID, ['first', 'middle', 'last'])
+    const panel = buildPanelDom(['first', 'middle', 'last'])
 
-    const panelBlock = env.repo.block(PANEL_ID)
     const txSpy = vi.spyOn(env.repo, 'tx')
     vi.useFakeTimers()
-    try {
-      render(<PanelFocusRecovery block={panelBlock}/>)
-      panel.querySelector('[data-block-id="middle"]')!.remove()
+    render(<PanelFocusRecovery block={panelBlock}/>)
+    panel.querySelector('[data-block-id="middle"]')!.remove()
 
-      // Three bursts, each inside the 250ms window but summing well past it.
-      // A non-instance node is enough: the watcher keys off DOM churn in the
-      // panel, not off what the churn contains.
-      for (let burst = 0; burst < 3; burst++) {
-        await act(async () => {
-          await vi.advanceTimersByTimeAsync(200)
-          panel.appendChild(document.createElement('div'))
-        })
-      }
-      expect(txSpy).not.toHaveBeenCalled()
-
-      await act(async () => { await vi.advanceTimersByTimeAsync(DEBOUNCE_SETTLE_MS) })
-      expect(txSpy).toHaveBeenCalledTimes(1)
-    } finally {
-      vi.useRealTimers()
+    // Three bursts, each inside the 250ms window but summing well past it.
+    // A non-instance node is enough: the watcher keys off DOM churn in the
+    // panel, not off what the churn contains.
+    for (let burst = 0; burst < 3; burst++) {
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(200)
+        panel.appendChild(document.createElement('div'))
+      })
     }
+    expect(txSpy).not.toHaveBeenCalled()
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(DEBOUNCE_SETTLE_MS) })
+    expect(txSpy).toHaveBeenCalledTimes(1)
 
     // The write is unawaited, so it is still in flight here — settle it before
     // `beforeEach` resets the shared DB under it, and take the chance to check
-    // WHAT it wrote, which the tx count alone doesn't.
+    // WHAT it wrote, which the tx count alone doesn't. Real timers first: the
+    // settle is the one thing in these tests that waits on wall clock.
+    vi.useRealTimers()
     await expectRecoveredFocus('last')
   })
 
@@ -396,37 +383,31 @@ describe('PanelFocusRecovery', {timeout: TEST_TIMEOUT_MS}, () => {
     // element fires nothing it can see and nothing cancels the armed recovery.
     // (Not a panel remount — this component mounts inside the panel div, so a
     // remount unmounts it and the cleanup clears the timer.)
-    const panel = buildPanelDom(PANEL_ID, ['first', 'middle', 'last'])
+    const panel = buildPanelDom(['first', 'middle', 'last'])
 
-    const panelBlock = env.repo.block(PANEL_ID)
     const txSpy = vi.spyOn(env.repo, 'tx')
     vi.useFakeTimers()
-    try {
-      render(<PanelFocusRecovery block={panelBlock}/>)
-      panel.querySelector('[data-block-id="middle"]')!.remove()
-      await act(async () => { await vi.advanceTimersByTimeAsync(20) })
-      // Without this the assertion below passes for a panel that never armed
-      // a recovery at all.
-      expect(findRecoveryAnchor(
-        PANEL_ID,
-        focusedLocation('middle'),
-        resolveSpatialNavExclusions(env.repo.facetRuntime),
-      )).not.toBeNull()
+    render(<PanelFocusRecovery block={panelBlock}/>)
+    panel.querySelector('[data-block-id="middle"]')!.remove()
+    await act(async () => { await vi.advanceTimersByTimeAsync(20) })
+    // Without this the assertion below passes for a panel that never armed
+    // a recovery at all.
+    expect(findRecoveryAnchor(
+      PANEL_ID,
+      focusedLocation('middle'),
+      resolveSpatialNavExclusions(env.repo.facetRuntime),
+    )).not.toBeNull()
 
-      panel.remove()
-      buildPanelDom(PANEL_ID, ['first', 'middle', 'last'])
+    panel.remove()
+    buildPanelDom(['first', 'middle', 'last'])
 
-      await act(async () => { await vi.advanceTimersByTimeAsync(DEBOUNCE_SETTLE_MS) })
-      expect(txSpy).not.toHaveBeenCalled()
-    } finally {
-      vi.useRealTimers()
-    }
+    await act(async () => { await vi.advanceTimersByTimeAsync(DEBOUNCE_SETTLE_MS) })
+    expect(txSpy).not.toHaveBeenCalled()
   })
 
   it('refreshes the positional hint as the user navigates between blocks', async () => {
-    const panel = buildPanelDom(PANEL_ID, ['first', 'middle', 'last'])
+    const panel = buildPanelDom(['first', 'middle', 'last'])
 
-    const panelBlock = env.repo.block(PANEL_ID)
     render(<PanelFocusRecovery block={panelBlock}/>)
 
     // Move focus to `last` — the watchdog should now consider `last`
