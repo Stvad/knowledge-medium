@@ -130,7 +130,8 @@ const resolveBacklinkSourceIds = async (
   // disappears from Linked References and the inline count but still shows up
   // here — duplicating the owner's projected property backlink on the one
   // surface that didn't filter. Un-gated for the reason given there: the
-  // backfill mints value rows before the flip.
+  // backfill mints value rows before the flip. It carries that filter's
+  // undeclared-ancestry-dependency residual too (km-nc46).
   if (ids.length === 0) return ids
   const machinery = await propertyMachinerySourceIds(ctx.db, ids, registrySeedParams(ctx.repo))
   return machinery.size === 0 ? ids : ids.filter(sourceId => !machinery.has(sourceId))

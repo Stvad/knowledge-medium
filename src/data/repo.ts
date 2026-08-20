@@ -2991,9 +2991,22 @@ export class Repo {
       // tombstoned it, freeing later operators to repeat the migration.
       // The SAME predicate the writes assert on, not just its caught-up half:
       // a device can also be behind with rows staged and undrained, and that
-      // half reached `tryClaim` unchecked — writing the claim, then aborting
-      // on the assertion, then releasing it, which is the exact create +
-      // tombstone pair this ordering exists to prevent.
+      // half reached `tryClaim` unchecked.
+      //
+      // What this closes is the STALE-DEVICE case — a device disconnected or
+      // catching up, whose claim create and release tombstone both sit in the
+      // upload queue and land later, out of order, against a completion it
+      // never saw. It does NOT make the claim atomic: rows can stage in the
+      // window between this check and `tryClaim`'s transaction, and a peer's
+      // claim that is staged-but-undrained is invisible to the in-tx re-read
+      // there. That residual is accepted, not overlooked — closing it means
+      // arbitration, which `graphBackfillClaim`'s header forbids by name and
+      // for a recorded reason (an earlier revision tried; the regress had no
+      // fixed point). Exactly-once here is a person running it in one place.
+      //
+      // Note the create+tombstone pair is ROUTINE, not exceptional: every
+      // mid-run abort releases the claim. Its being queued while stale is the
+      // problem, not its existence.
       const gap = await this.syncViewGap()
       if (gap !== null) {
         deferred = gap

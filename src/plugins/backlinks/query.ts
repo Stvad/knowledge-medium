@@ -214,6 +214,16 @@ export const backlinksForBlockQuery: Query<
     // mints them while the workspace still reads cells, and a ref-typed value
     // row's `[[X]]` then duplicates the owner's projected property edge on a
     // surface that had stopped filtering.
+    //
+    // KNOWN, pre-existing: this post-filter walks each SOURCE's ancestry, but
+    // the only structural dep declared above is the TARGET's. Moving a source
+    // out from under a field row — or editing an ancestor between `((D))` and
+    // `::((D))` — changes membership with nothing to invalidate on, so the
+    // list stays stale until the next reference change or a reload. Un-gating
+    // makes it reachable in every workspace rather than only flipped ones.
+    // Not fixed here: the honest fix is a dep per candidate source and walked
+    // ancestor, and this query is composed by the inline badge on every
+    // visible block. km-nc46.
     if (rawSources || ids.length === 0) return ids
     const machinery = await propertyMachinerySourceIds(ctx.db, ids, registrySeedParams(ctx.repo))
     return machinery.size === 0 ? ids : ids.filter(sourceId => !machinery.has(sourceId))
