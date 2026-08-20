@@ -25,7 +25,6 @@ export const singleParsedBlock = (content: string): ParsedBlock => ({
 export function parseMarkdownToBlocks(text: string): ParsedBlock[] {
   const lines = text.split('\n');
   const parsedBlocks: { content: string; level: number; id: string }[] = [];
-  let baseIndent = -1;
 
   interface ContextNode {
     level: number;
@@ -110,10 +109,6 @@ export function parseMarkdownToBlocks(text: string): ParsedBlock[] {
       currentLineType = lineParts.type;
       processedContent = lineParts.content;
       idx++;
-    }
-
-    if (baseIndent === -1) {
-      baseIndent = currentLineRawIndent;
     }
 
     // Implement/Refine Nuanced Context Stack Popping Logic
@@ -207,11 +202,23 @@ export function parseMarkdownToBlocks(text: string): ParsedBlock[] {
   return blocks;
 }
 
+/** Column a tab advances to, per CommonMark's tab-stop rule. Only the
+ *  RELATIVE indent of two lines is ever compared, so any positive width
+ *  nests a pure-tab outline correctly; the width decides where a tab
+ *  lands when tabs and spaces are mixed. */
+const TAB_STOP = 4;
+
 function getIndentationLevel(line: string): number {
-  // Base indentation on leading spaces/tabs
-  const indentMatch = line.match(/^[\s\t]*/)?.[0] || '';
-   // 2 spaces = 1 level
-  return Math.floor(indentMatch.length / 2);
+  // Measure the visual COLUMN of the first non-whitespace char, not the
+  // character count: counting characters reads one tab as zero indent
+  // (floor(1/2)) and flattens tab-indented outlines, which is the shape
+  // most editors and outliner exports emit. 2 columns = 1 level.
+  const indent = line.match(/^\s*/)?.[0] ?? '';
+  let column = 0;
+  for (const char of indent) {
+    column = char === '\t' ? (Math.floor(column / TAB_STOP) + 1) * TAB_STOP : column + 1;
+  }
+  return Math.floor(column / 2);
 }
 
 // cleanLine is not used in the provided code, can be removed if not needed elsewhere.

@@ -94,23 +94,28 @@ describe('parseMarkdownToBlocks: adversarial soup', () => {
 // `- content`, i.e. type 'ul-item', so only Case A / B3 / Case C of the
 // context-stack popping logic apply — markdownParser.ts:125,136-139,143):
 //
+// Write I(d) for the indent `getIndentationLevel` measures on a line the
+// generator renders at outline depth d, i.e. on `unit.repeat(d)`. I is
+// strictly increasing in d for every unit the generator picks, since each
+// further unit advances the column by at least one. That is all this
+// argument needs — never I(d) === d — which is what lets the property run
+// over tab units as well as space ones.
+//
 // By induction, after processing outline entry i-1, the context stack
-// holds root plus exactly one node per level 0..depth[i-1], with
-// rawIndent === level at every node (each push uses
-// rawIndent = currentLineRawIndent = depth, level = parent.level + 1,
-// and depth only ever grows by exactly 1 per step here). For entry i:
+// holds root plus exactly one node per level 0..depth[i-1], the node at
+// level d carrying rawIndent = I(d). For entry i:
 //   - depth[i] = depth[i-1] + 1: current indent > stack-top indent →
 //     Case A, break immediately → level = depth[i-1] + 1 = depth[i].
 //   - depth[i] <= depth[i-1]: same/less indent pops (B3 for ties, Case C
-//     for outdents) until the stack top has rawIndent = depth[i] - 1 (or
-//     just root, for depth[i] = 0) — which exists by the contiguous-stack
-//     invariant → level = depth[i].
+//     for outdents) until the stack top has rawIndent = I(depth[i] - 1) —
+//     the deepest node still shallower than I(depth[i]), since I is
+//     strictly increasing — or just root, for depth[i] = 0 → level = depth[i].
 // So the first-pass `level` sequence equals the input `depth` sequence
 // exactly. The second pass (markdownParser.ts:180-205) walks that same
 // kind of depth-like sequence with an analogous parentStack, so the
 // parent-child shape it builds mirrors it 1:1.
 //
-// Content: rendering `'  '.repeat(depth) + '- ' + content` means
+// Content: rendering `unit.repeat(depth) + '- ' + content` means
 // `trimmedLine === '-' + ' ' + content` exactly (indentation is pure
 // leading whitespace, content has no leading/trailing whitespace or `\n`
 // per the generator below), so the ul-item regex captures `content` back
@@ -142,10 +147,16 @@ const depthSequenceArb = fc
     return depths
   })
 
+/** Whitespace rendering ONE outline level. Tab units are the point: the
+ *  parser used to measure indentation in characters, so a tab-indented
+ *  outline parsed as an all-roots flat list (#644). */
+const indentUnitArb = fc.constantFrom('  ', '    ', '\t', '\t\t')
+
 const outlineArb = depthSequenceArb.chain(depths =>
   fc.tuple(
     fc.constant(depths),
     fc.array(outlineContentArb, {minLength: depths.length, maxLength: depths.length}),
+    indentUnitArb,
   ),
 )
 
@@ -165,8 +176,8 @@ const depthOf = (block: ParsedBlock, byId: Map<string, ParsedBlock>): number => 
 describe('parseMarkdownToBlocks: bullet-outline round-trip', () => {
   it('recovers the exact (depth, content) sequence for a well-formed outline', () => {
     fc.assert(
-      fc.property(outlineArb, ([depths, contents]) => {
-        const lines = depths.map((d, i) => '  '.repeat(d) + '- ' + contents[i])
+      fc.property(outlineArb, ([depths, contents, unit]) => {
+        const lines = depths.map((d, i) => unit.repeat(d) + '- ' + contents[i])
         const blocks = parseMarkdownToBlocks(lines.join('\n'))
 
         expect(blocks).toHaveLength(depths.length)
