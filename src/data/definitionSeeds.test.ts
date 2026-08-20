@@ -43,6 +43,10 @@ import type {Repo} from '@/data/repo'
 
 const WS = 'ws-seeds'
 const OTHER_WS = 'ws-other'
+// Stand-in "user page that claimed the system page's alias" rows for the
+// issue-#378 adoption tests below.
+const PROPERTIES_CLAIMANT = '11111111-1111-4111-8111-111111111111'
+const TYPES_CLAIMANT = '22222222-2222-4222-8222-222222222222'
 const seed = seedProperty({
   seedKey: 'system:test/property/title',
   revision: 2,
@@ -470,6 +474,27 @@ describe('materializePropertySeeds', () => {
       'SELECT parent_id FROM blocks WHERE id = ?',
       [propertyDefinitionBlockId(freshWs, seed.seedKey)])
     expect(row.parent_id).toBe(propertiesPageBlockId(freshWs))
+  })
+
+  it('parents property seeds under an ADOPTED Properties page, not the dead deterministic id (issue #378)', async () => {
+    // Twin of the type-side test in `type definition materialization` — see
+    // its comment for the failure shape. Both kinds route through the one
+    // `materializeSeeds`, so this pins the property pass to the same rule.
+    const rawPropertiesPageId = propertiesPageBlockId(WS)
+    await repo.tx(tx => tx.delete(rawPropertiesPageId), {scope: ChangeScope.BlockDefault})
+    await repo.tx(async tx => {
+      await tx.create({
+        id: PROPERTIES_CLAIMANT, workspaceId: WS, parentId: null, orderKey: 'z0', content: 'My Properties',
+      })
+      await tx.setProperty(PROPERTIES_CLAIMANT, aliasesProp, ['Properties'])
+    }, {scope: ChangeScope.BlockDefault})
+
+    expect(await materializePropertySeeds(repo, WS, [seed]))
+      .toEqual({created: 1, restored: 0, skippedReadOnly: false})
+
+    const row = await sharedDb.db.get<{parent_id: string}>(
+      'SELECT parent_id FROM blocks WHERE id = ?', [propertyDefinitionBlockId(WS, seed.seedKey)])
+    expect(row.parent_id).toBe(PROPERTIES_CLAIMANT)
   })
 })
 
@@ -1324,6 +1349,38 @@ describe('type definition materialization', () => {
       'SELECT parent_id FROM blocks WHERE id = ?',
       [typeDefinitionBlockId(freshWs, typeSeed.seedKey)])
     expect(row.parent_id).toBe(typesPageBlockId(freshWs))
+  })
+
+  it('parents type seeds under an ADOPTED Types page, not the dead deterministic id (issue #378)', async () => {
+    // `getOrCreateTypesPage` resolves alias-first as of #378: if the canonical
+    // row is deleted and a DIFFERENT live block claims 'Types', that block IS
+    // the Types page from then on. `materializeSeeds` used to discard
+    // `ensureParent`'s returned Block and recompute `typesPageBlockId(ws)` as
+    // the parent — which after an adoption is a TOMBSTONE. The parent-deleted
+    // trigger then rejects the create and aborts the WHOLE pass with
+    // `ParentDeletedError`, so NO type (or property — same shared pass)
+    // definition ever materialized in that workspace again: the definition
+    // registries stay permanently empty, and every re-run fails identically.
+    const rawTypesPageId = typesPageBlockId(WS)
+    await repo.tx(tx => tx.delete(rawTypesPageId), {scope: ChangeScope.BlockDefault})
+    await repo.tx(async tx => {
+      await tx.create({
+        id: TYPES_CLAIMANT, workspaceId: WS, parentId: null, orderKey: 'z0', content: 'My Types',
+      })
+      await tx.setProperty(TYPES_CLAIMANT, aliasesProp, ['Types'])
+    }, {scope: ChangeScope.BlockDefault})
+
+    expect(await materializeTypeSeeds(repo, WS, [typeSeed]))
+      .toEqual({created: 1, restored: 0, skippedReadOnly: false})
+
+    const row = await sharedDb.db.get<{parent_id: string}>(
+      'SELECT parent_id FROM blocks WHERE id = ?', [typeDefinitionBlockId(WS, typeSeed.seedKey)])
+    expect(row.parent_id).toBe(TYPES_CLAIMANT)
+    // Control: the tombstoned deterministic row is still dead — nothing
+    // re-minted it, so parenting there really would have been an orphan.
+    const raw = await sharedDb.db.get<{deleted: number}>(
+      'SELECT deleted FROM blocks WHERE id = ?', [rawTypesPageId])
+    expect(raw.deleted).toBe(1)
   })
 
   it('skips the seed write when the generation aborts during the parent-page ensure', async () => {
