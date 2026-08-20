@@ -45,6 +45,10 @@ describe('shellSegments', () => {
     expect(shellSegments('echo a\\;b')).toEqual([['echo', 'a;b']])
   })
 
+  it('drops a backslash-newline as a line continuation', () => {
+    expect(shellSegments('git \\\nstash pop')).toEqual([['git', 'stash', 'pop']])
+  })
+
   it('annotates each segment with its subshell depth', () => {
     expect(shellSegmentsWithDepth('(cd /x && true); ls')).toEqual([
       { tokens: ['cd', '/x'], depth: 1 },
@@ -347,6 +351,22 @@ describe('hook end-to-end', { timeout: 30_000 }, () => {
     expect(r.stderr).toContain('separate commands')
     expect(hook('git stash push -m mine && git stash pop stash@{1}', single).status).toBe(0)
     expect(hook('git stash list && git stash pop stash@{1}', multi).status).toBe(0)
+  })
+
+  it('sees through a backslash-newline line continuation', () => {
+    expect(hook('git \\\nstash pop', multi).status).toBe(2)
+  })
+
+  it('counts an opted-out mutation in the compound rule', () => {
+    // The blessed push still renumbers what the unblessed pop names.
+    const r = hook('true && STASH_OK=1 git stash push -m mine && git stash pop stash@{1}', multi)
+    expect(r.status).toBe(2)
+    expect(r.stderr).toContain('separate commands')
+    // …but a compound where every mutation is blessed passes.
+    expect(
+      hook('true && STASH_OK=1 git stash push -m a && STASH_OK=1 git stash pop stash@{1}', multi)
+        .status,
+    ).toBe(0)
   })
 
   it('blocks clear while the shared stack has entries', () => {

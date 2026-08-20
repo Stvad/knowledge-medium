@@ -8,7 +8,6 @@
         "hooks": [
           {
             "command": "node \"$CLAUDE_PROJECT_DIR/scripts/check-staged-pii.mjs\"",
-            "if": "Bash(git *)",
             "statusMessage": "Scanning staged changes for PII…",
             "type": "command"
           },

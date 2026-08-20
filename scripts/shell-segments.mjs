@@ -41,9 +41,10 @@ export const shellSegmentsWithDepth = cmd => {
   for (let i = 0; i < cmd.length; i++) {
     const ch = cmd[i]
     if (escaped) {
+      escaped = false
+      if (ch === '\n') continue // \<newline> is a continuation — bash drops it
       cur += ch
       started = true
-      escaped = false
       continue
     }
     if (quote === "'") {

@@ -322,14 +322,17 @@ const main = () => {
   if (/^\s*STASH_OK=1\s/.test(cmd)) allow() // whole-command opt-out prefix
   if (!/\bstash\b/i.test(cmd)) allow() // cheap prefilter before tokenizing
 
-  const invocations = stashInvocations(cmd).filter(inv => !inv.optOut)
+  const all = stashInvocations(cmd)
+  // An opted-out invocation skips its own decision but still renumbers the
+  // stack, so it stays in the compound-mutation count.
+  const invocations = all.filter(inv => !inv.optOut)
   if (invocations.length === 0) allow()
 
   const payloadCwd = payload?.cwd || process.cwd()
   const cache = new Map()
 
-  const mutating = invocations.filter(mutatesStack)
-  if (mutating.length > 1) {
+  const mutating = all.filter(mutatesStack)
+  if (mutating.length > 1 && invocations.some(mutatesStack)) {
     const st = stateFor(mutating[0], payloadCwd, cache)
     if (st && st.worktrees > 1) {
       process.stderr.write(
