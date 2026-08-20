@@ -36,6 +36,17 @@ describe('check-staged-pii end-to-end', { timeout: 30_000 }, () => {
     expect(hook(`git commit -m "clean message" > /tmp/claude-1/${A_UUID}/scratchpad/out.log`).status).toBe(0)
   })
 
+  it('blocks a uuid smuggled through a variable expansion', () => {
+    const r = hook(`MSG="touch block ${A_UUID}"; git commit -m "$MSG"`)
+    expect(r.status).toBe(2)
+    expect(r.stderr).toContain('(command line)')
+  })
+
+  it('blocks a uuid in a heredoc commit body (the $(cat <<EOF) shape)', () => {
+    const cmd = `git commit -m "$(cat <<'EOF'\nfix block ${A_UUID}\nEOF\n)"`
+    expect(hook(cmd).status).toBe(2)
+  })
+
   it('still blocks a staged uuid regardless of the command line', () => {
     writeFileSync(join(repo, 'g.txt'), `id: ${A_UUID}\n`)
     git(repo, ['add', 'g.txt'])

@@ -9,10 +9,11 @@ import {
   decide,
   explicitEntry,
   hasMessage,
+  mutatesStack,
   stashInvocations,
   type RepoStashState,
 } from './check-stash-worktree.mjs'
-import { shellSegments } from './shell-segments.mjs'
+import { shellSegments, shellSegmentsWithDepth } from './shell-segments.mjs'
 
 describe('shellSegments', () => {
   it('splits on unquoted separators and strips quotes', () => {
@@ -43,25 +44,56 @@ describe('shellSegments', () => {
   it('honors backslash escapes outside single quotes', () => {
     expect(shellSegments('echo a\\;b')).toEqual([['echo', 'a;b']])
   })
+
+  it('annotates each segment with its subshell depth', () => {
+    expect(shellSegmentsWithDepth('(cd /x && true); ls')).toEqual([
+      { tokens: ['cd', '/x'], depth: 1 },
+      { tokens: ['true'], depth: 1 },
+      { tokens: ['ls'], depth: 0 },
+    ])
+    expect(shellSegmentsWithDepth('echo "$(cd /y && true)" && ls')).toEqual([
+      { tokens: ['echo', ''], depth: 0 },
+      { tokens: ['cd', '/y'], depth: 1 },
+      { tokens: ['true'], depth: 1 },
+      { tokens: ['ls'], depth: 0 },
+    ])
+  })
 })
 
 describe('stashInvocations', () => {
   it('finds bare, subcommand, and wrapped invocations', () => {
     expect(stashInvocations('git stash')).toEqual([
-      { sub: null, args: [], cArgs: [], cdPath: null },
+      { sub: null, args: [], cArgs: [], cdPath: null, optOut: false },
     ])
     expect(stashInvocations('cd /wt && env git stash pop stash@{2}')).toEqual([
-      { sub: 'pop', args: ['stash@{2}'], cArgs: [], cdPath: '/wt' },
+      { sub: 'pop', args: ['stash@{2}'], cArgs: [], cdPath: '/wt', optOut: false },
     ])
     expect(stashInvocations('git -C /repo stash drop 1')).toEqual([
-      { sub: 'drop', args: ['1'], cArgs: ['-C', '/repo'], cdPath: null },
+      { sub: 'drop', args: ['1'], cArgs: ['-C', '/repo'], cdPath: null, optOut: false },
     ])
   })
 
   it('treats a flags-only tail as an implicit push', () => {
     expect(stashInvocations('git stash -u')).toEqual([
-      { sub: null, args: ['-u'], cArgs: [], cdPath: null },
+      { sub: null, args: ['-u'], cArgs: [], cdPath: null, optOut: false },
     ])
+  })
+
+  it('sees through wrapper flags (env -i)', () => {
+    expect(stashInvocations('env -i git stash pop')).toHaveLength(1)
+  })
+
+  it('scopes a subshell cd to its subshell', () => {
+    expect(stashInvocations('(cd /wt && true); git stash pop stash@{0}')).toEqual([
+      { sub: 'pop', args: ['stash@{0}'], cArgs: [], cdPath: null, optOut: false },
+    ])
+    expect(stashInvocations('(cd /wt && git stash pop stash@{0})')[0].cdPath).toBe('/wt')
+    expect(stashInvocations('echo "$(cd /wt && true)"; git stash drop 0')[0].cdPath).toBeNull()
+  })
+
+  it('records the opt-out only as the invocation own prefix, not quoted prose', () => {
+    expect(stashInvocations('STASH_OK=1 git stash pop')[0].optOut).toBe(true)
+    expect(stashInvocations('echo "STASH_OK=1 skips" ; git stash pop')[0].optOut).toBe(false)
   })
 
   it('ignores commands that merely mention stash', () => {
@@ -73,7 +105,7 @@ describe('stashInvocations', () => {
   })
 })
 
-describe('explicitEntry / hasMessage / baseBranch', () => {
+describe('explicitEntry / hasMessage / mutatesStack / baseBranch', () => {
   it('recognizes stash@{N} and bare-index entries, skipping flags', () => {
     expect(explicitEntry(['--index', 'stash@{3}'])).toBe('stash@{3}')
     expect(explicitEntry(['2'])).toBe('2')
@@ -89,6 +121,19 @@ describe('explicitEntry / hasMessage / baseBranch', () => {
     expect(hasMessage('push', ['-u'])).toBe(false)
     expect(hasMessage('save', ['my', 'message'])).toBe(true)
     expect(hasMessage('save', ['-u'])).toBe(false)
+  })
+
+  it('stops option scanning at the pathspec delimiter', () => {
+    expect(hasMessage('push', ['--', '-m'])).toBe(false) // -m here is a pathspec
+    expect(hasMessage('push', ['-m', 'x', '--', 'f.txt'])).toBe(true)
+  })
+
+  it('classifies stack mutation by subcommand', () => {
+    expect(mutatesStack({ sub: null })).toBe(true)
+    expect(mutatesStack({ sub: 'pop' })).toBe(true)
+    expect(mutatesStack({ sub: 'push' })).toBe(true)
+    expect(mutatesStack({ sub: 'list' })).toBe(false)
+    expect(mutatesStack({ sub: 'show' })).toBe(false)
   })
 
   it('parses the base branch from both stash subject shapes', () => {
@@ -123,6 +168,12 @@ describe('decide', () => {
     for (const sub of ['pop', 'apply', 'drop', 'branch']) {
       expect(decide(inv(sub, sub === 'branch' ? ['newb'] : []), state())).toMatch(/names no entry/)
     }
+  })
+
+  it('does not read a numeric branch name as a stash selector', () => {
+    // `git stash branch 1` names branch "1"; git itself would use stash@{0}.
+    expect(decide(inv('branch', ['1']), state())).toMatch(/names no entry/)
+    expect(decide(inv('branch', ['newb', '1']), state())).toBeNull()
   })
 
   it('allows an explicit entry based on the current branch, either spelling', () => {
@@ -266,12 +317,30 @@ describe('hook end-to-end', { timeout: 30_000 }, () => {
     expect(hook(`git -C ${multi} stash pop stash@{1}`, wt2).status).toBe(0)
   })
 
+  it('does not let a subshell cd relocate a later pop', () => {
+    // The subshell's cd does not survive its close-paren: the pop runs in wt2
+    // (on wt2branch), so popping main's stash@{1} must still be blocked.
+    const r = hook(`(cd ${multi} && true); git stash pop stash@{1}`, wt2)
+    expect(r.status).toBe(2)
+    expect(r.stderr).toContain("'main'")
+    // …and the mirror direction stays allowed.
+    expect(hook(`(cd ${wt2} && true); git stash pop stash@{1}`, multi).status).toBe(0)
+  })
+
   it('blocks an unlabeled push but allows -m / save with message', () => {
     expect(hook('git stash', multi).status).toBe(2)
     expect(hook('git stash', multi).stderr).toContain('unlabeled')
     expect(hook('git stash push -m "wip: thing"', multi).status).toBe(0)
     expect(hook('git stash save "wip thing"', multi).status).toBe(0)
     expect(hook('git stash save', multi).status).toBe(2)
+  })
+
+  it('blocks two stack-mutating stash operations in one command', () => {
+    const r = hook('git stash push -m mine && git stash pop stash@{1}', multi)
+    expect(r.status).toBe(2)
+    expect(r.stderr).toContain('separate commands')
+    expect(hook('git stash push -m mine && git stash pop stash@{1}', single).status).toBe(0)
+    expect(hook('git stash list && git stash pop stash@{1}', multi).status).toBe(0)
   })
 
   it('blocks clear while the shared stack has entries', () => {
@@ -284,8 +353,17 @@ describe('hook end-to-end', { timeout: 30_000 }, () => {
     expect(hook('git stash', emptyStack).status).toBe(2)
   })
 
-  it('honors the STASH_OK=1 opt-out', () => {
+  it('honors the STASH_OK=1 opt-out as a command or invocation prefix', () => {
     expect(hook('STASH_OK=1 git stash pop', multi).status).toBe(0)
+    expect(hook('git fetch && STASH_OK=1 git stash pop', multi).status).toBe(0)
+  })
+
+  it('ignores STASH_OK=1 inside quoted prose', () => {
+    expect(hook('echo "re-run with STASH_OK=1 prefixed" && git stash pop', multi).status).toBe(2)
+  })
+
+  it('guards an invocation behind wrapper flags', () => {
+    expect(hook('env -i git stash pop', multi).status).toBe(2)
   })
 
   it('lets non-stash commands mentioning stash through', () => {

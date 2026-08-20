@@ -15,11 +15,15 @@
  *    worktree's branch (the shape of the real incidents)
  *  - push (bare `git stash`, `push`, `save`) with no message
  *  - `git stash clear` while the shared stack has entries
+ *  - two stack-touching stash operations in one compound command — each is
+ *    checked against the stack as it is NOW, and the first renumbers the
+ *    entries the later ones name
  *
  * Reads the hook payload (JSON) on stdin; only an actual `git stash …`
  * invocation (verb position, quote-aware) is inspected — prose that mentions
- * stash is not. Exit 2 → block; exit 0 → allow. Opt-out: prefix the command
- * with STASH_OK=1.
+ * stash is not. Exit 2 → block; exit 0 → allow. Opt-out: STASH_OK=1 as the
+ * whole command's prefix or the stash invocation's own prefix — the string
+ * inside quoted prose elsewhere does not count.
  */
 
 import { execFileSync } from 'node:child_process'
@@ -27,7 +31,7 @@ import { readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { shellSegments } from './shell-segments.mjs'
+import { shellSegmentsWithDepth } from './shell-segments.mjs'
 
 const WRAPPERS = new Set(['sudo', 'command', 'time', 'env', 'nice', 'nohup', 'xargs'])
 const SUBCOMMANDS = new Set([
@@ -36,25 +40,44 @@ const SUBCOMMANDS = new Set([
 
 /**
  * Find actual `git stash …` invocations in a command string.
- * Returns {sub, args, cArgs, cdPath}: sub is the stash subcommand (null for a
- * bare/flags-only `git stash`), cArgs are repo-locating git globals (-C,
- * --git-dir, --work-tree) to replay on state queries, cdPath is the target of
- * the last plain `cd` seen before the invocation (so `cd <worktree> && git
- * stash pop` is judged from that worktree).
+ * Returns {sub, args, cArgs, cdPath, optOut}: sub is the stash subcommand
+ * (null for a bare/flags-only `git stash`), cArgs are repo-locating git
+ * globals (-C, --git-dir, --work-tree) to replay on state queries, cdPath is
+ * the target of the last plain `cd` still in scope (a cd inside `(…)` or
+ * `$(…)` dies with that subshell), optOut marks a STASH_OK=1 assignment
+ * prefixing this invocation itself.
  */
 export const stashInvocations = cmd => {
   const out = []
   let cdPath = null
-  for (const tokens of shellSegments(cmd)) {
+  const outerCd = [] // saved cdPath per enclosing subshell scope
+  let depth = 0
+  for (const { tokens, depth: d } of shellSegmentsWithDepth(cmd)) {
+    while (depth < d) {
+      outerCd.push(cdPath)
+      depth++
+    }
+    while (depth > d) {
+      cdPath = outerCd.pop()
+      depth--
+    }
     if (tokens[0] === 'cd' && tokens.length > 1) {
       cdPath = tokens[1]
       continue
     }
     let i = 0
+    let optOut = false
+    // Skip VAR= assignments, wrapper commands, and (past position 0) wrapper
+    // flags, so `env -i git stash …` is still seen. A wrapper flag that takes
+    // an operand (`sudo -u alice git …`) still hides git — accidents, not
+    // adversaries.
     while (
       i < tokens.length &&
-      (/^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[i]) || WRAPPERS.has(tokens[i]))
+      (/^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[i]) ||
+        WRAPPERS.has(tokens[i]) ||
+        (i > 0 && tokens[i].startsWith('-')))
     ) {
+      if (tokens[i] === 'STASH_OK=1') optOut = true
       i++
     }
     if ((tokens[i] || '').replace(/.*\//, '') !== 'git') continue
@@ -83,7 +106,7 @@ export const stashInvocations = cmd => {
     } else if (i < tokens.length && !tokens[i].startsWith('-')) {
       continue // unknown word after `stash` — git itself rejects it
     }
-    out.push({ sub, args: tokens.slice(i), cArgs, cdPath })
+    out.push({ sub, args: tokens.slice(i), cArgs, cdPath, optOut })
   }
   return out
 }
@@ -100,7 +123,9 @@ export const explicitEntry = args => {
 /** Does this push-shaped invocation carry a message? (`save` takes it positionally.) */
 export const hasMessage = (sub, args) => {
   if (sub === 'save') return args.some(a => !a.startsWith('-'))
-  return args.some(
+  const cut = args.indexOf('--') // past --, tokens are pathspecs, not options
+  const opts = cut === -1 ? args : args.slice(0, cut)
+  return opts.some(
     a =>
       a === '-m' ||
       a === '--message' ||
@@ -109,6 +134,11 @@ export const hasMessage = (sub, args) => {
       /^-m./.test(a), // attached form (-mWIP)
   )
 }
+
+// Everything but a pure read either renumbers the shared stack (push/save/
+// pop/drop/clear/branch/store) or consumes an entry from it (apply).
+const READ_ONLY = new Set(['list', 'show', 'create'])
+export const mutatesStack = inv => inv.sub === null || !READ_ONLY.has(inv.sub)
 
 /** Base branch recorded in a stash entry's subject ("WIP on X: …" / "On X: …"). */
 export const baseBranch = subject => {
@@ -128,7 +158,14 @@ export const decide = (inv, state) => {
 
   if (sub === 'pop' || sub === 'apply' || sub === 'drop' || sub === 'branch') {
     if (state.stashes.length === 0) return null // git errors on its own
-    const raw = explicitEntry(args)
+    // `branch` takes <branchname> first and only then an optional selector —
+    // a numeric branch name must not read as stash@{N} (git uses stash@{0}).
+    let selArgs = args
+    if (sub === 'branch') {
+      const name = args.findIndex(a => !a.startsWith('-'))
+      selArgs = name === -1 ? [] : args.slice(name + 1)
+    }
+    const raw = explicitEntry(selArgs)
     if (!raw) {
       return (
         `BLOCKED: \`git stash ${sub}\` names no entry. refs/stash is ONE stack shared by all ` +
@@ -255,7 +292,7 @@ const effectiveCwd = (payloadCwd, cdPath) => {
 }
 
 const stateFor = (inv, payloadCwd, cache) => {
-  const key = `${inv.cdPath ?? ''} ${inv.cArgs.join(' ')}`
+  const key = `${inv.cdPath ?? ''} ${inv.cArgs.join(' ')}`
   if (cache.has(key)) return cache.get(key)
   const { cwd, exact } = effectiveCwd(payloadCwd, inv.cdPath)
   let state = gitState(cwd, inv.cArgs)
@@ -279,14 +316,29 @@ const main = () => {
   }
   const cmd = payload?.tool_input?.command ?? ''
   if (!cmd) allow()
-  if (/\bSTASH_OK=1\b/.test(cmd)) allow() // explicit opt-out
+  if (/^\s*STASH_OK=1\s/.test(cmd)) allow() // whole-command opt-out prefix
   if (!/\bstash\b/i.test(cmd)) allow() // cheap prefilter before tokenizing
 
-  const invocations = stashInvocations(cmd)
+  const invocations = stashInvocations(cmd).filter(inv => !inv.optOut)
   if (invocations.length === 0) allow()
 
   const payloadCwd = payload?.cwd || process.cwd()
   const cache = new Map()
+
+  const mutating = invocations.filter(mutatesStack)
+  if (mutating.length > 1) {
+    const st = stateFor(mutating[0], payloadCwd, cache)
+    if (st && st.worktrees > 1) {
+      process.stderr.write(
+        `BLOCKED: ${mutating.length} stash operations in one command. The guard checks ` +
+          `each against the stack as it is NOW, but every push/pop/drop renumbers the ` +
+          `entries the later ones name — and ${st.worktrees} worktrees share this stack. ` +
+          `Run them as separate commands. STASH_OK=1 prefixed skips this guard.\n`,
+      )
+      process.exit(2)
+    }
+  }
+
   for (const inv of invocations) {
     const reason = decide(inv, stateFor(inv, payloadCwd, cache))
     if (reason) {

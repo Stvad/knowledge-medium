@@ -5,6 +5,7 @@ export interface StashInvocation {
   args: string[]
   cArgs: string[]
   cdPath: string | null
+  optOut: boolean
 }
 export interface StashEntry {
   ref: string
@@ -18,6 +19,7 @@ export interface RepoStashState {
 export declare const stashInvocations: (cmd: string) => StashInvocation[]
 export declare const explicitEntry: (args: string[]) => string | null
 export declare const hasMessage: (sub: string | null, args: string[]) => boolean
+export declare const mutatesStack: (inv: Pick<StashInvocation, 'sub'>) => boolean
 export declare const baseBranch: (subject: string) => string | null
 export declare const decide: (
   inv: Pick<StashInvocation, 'sub' | 'args'>,

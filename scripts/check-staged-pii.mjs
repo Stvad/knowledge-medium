@@ -95,6 +95,15 @@ for (const tokens of shellSegments(cmd)) {
 }
 if (messageArgs.some(text => UUID.test(text))) {
   hits.push('  (commit message): contains a uuid')
+} else {
+  // Expansions hide the message from the -m scan (MSG=…; git commit -m "$MSG",
+  // heredoc bodies inside $(cat <<EOF…)), so also net a uuid in ANY token of
+  // this (already commit-gated) command — except path-shaped tokens (contain
+  // '/'), the scratchpad-redirect shape that must not block.
+  const tokenHit = shellSegments(cmd).some(tokens =>
+    tokens.some(t => !t.includes('/') && UUID.test(t)),
+  )
+  if (tokenHit) hits.push('  (command line): contains a uuid outside any path')
 }
 
 if (hits.length === 0) allow()
