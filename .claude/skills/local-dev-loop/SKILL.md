@@ -88,6 +88,64 @@ always propagates. Changes under `vite-plugins/` or to `vite.config.ts` need a
 dev-server **restart** (Vite does not auto-restart for them), and a restart
 drops the page's HMR socket — reload the tab afterwards.
 
+### Kernel/extension module identity split after a hot update
+
+Unlike the `vite-plugins/`/`vite.config.ts` case above, this one throws **no
+error** — the symptom is state that silently doesn't cross the kernel/
+extension boundary, which reads as "my change has no effect," not as a bug.
+
+`unifySrcJsUrls.ts` makes the kernel's static graph and an extension's
+importmap-resolved `import()` fetch the same `/src/x.js` URL for a given
+module, so singletons (a `createContext()` result, a store) stay one
+instance. That unification is **server-state, not just a browser cache**,
+and it breaks per-module: editing an already-loaded module whose exports
+aren't 100% React components (so Fast Refresh can't self-accept it — e.g.
+`src/context/repo.tsx`, which exports `RepoContext` and hooks alongside the
+`RepoProvider` component) makes Vite serve every KERNEL importer of that
+module a `?t=<timestamp>`-suffixed specifier from then on, baked into the
+dev server's in-memory module graph. Confirmed live: after one such edit,
+`curl localhost:<port>/src/App.js` permanently shows
+`from "/src/context/repo.js?t=1787186099060"`. A fresh `import()` of the
+plain `/src/context/repo.js` — what an extension's importmap always
+resolves to — is a *different* module-map entry holding the pre-edit
+`RepoContext` object; reproduced directly as
+`useRepo must be used within a RepoContext` thrown by an already-installed
+extension.
+
+None of these clear it, all confirmed by hand:
+- a plain tab reload (the poisoned specifier is re-served fresh from the
+  still-running dev server, not read from any browser cache)
+- reverting the source edit, with or without a reload after
+- re-editing the importer (`App.tsx`) itself
+- editing the target module again (the timestamp doesn't bump or reset)
+
+Only a dev-server **restart** clears it — the timestamp lives in the
+running process's module graph, so nothing short of a new process resets
+it. (One round of testing; narrower or wider triggers than "edit an
+already-loaded, non-pure-component shared module" are plausible but
+unconfirmed — e.g. a brand-new file or a pure-component file may behave
+differently.)
+
+Detect from eval before chasing a phantom bug — compare a **known singleton
+export**, not the bare namespace object (two different URLs always produce
+two distinct namespace-object wrappers, even when unaffected):
+
+```js
+// adapt the module path + a known importer of it (any kernel file that
+// statically imports the module you suspect is split)
+const importerSrc = await (await fetch('/src/App.js')).text()
+const stamped = importerSrc.match(/\/src\/context\/repo\.js(\?t=\d+)?/)[0]
+const [ext, kernel] = await Promise.all([
+  import('/src/context/repo.js'),  // what an extension's importmap resolves to
+  import(stamped),                 // what the kernel graph currently uses
+])
+return {split: ext.RepoContext !== kernel.RepoContext, stamped}
+```
+
+`import.meta` isn't available in eval scope (user code there runs inside a
+`new AsyncFunction`, not a real ES module — `src/plugins/agent-runtime/commands.ts:executeArbitraryCode`),
+hence the `fetch`-and-regex instead of reading `import.meta.hot` state directly.
+
 ## What does NOT match production
 
 Be honest about these before concluding "it works". Each was re-verified
