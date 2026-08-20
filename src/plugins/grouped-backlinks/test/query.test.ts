@@ -1199,9 +1199,9 @@ describe('groupedBacklinksDataExtension query', () => {
 
     it('drops it in an un-flipped workspace too, where the backfill mints it', async () => {
       // Was asserted dormant, on the premise that an un-flipped workspace has
-      // no value rows. The cell->children backfill mints them before the flip,
-      // so the un-gated case is now the one that actually occurs — and a value
-      // row surfacing here duplicates the owner's projected property edge.
+      // no value rows. The backfill mints them before the flip. The exclusion
+      // is de-duplication, not machinery-hygiene: the owner already projects
+      // this edge from its cell, so the value row would state one fact twice.
       await seedDefinitionAndFieldRow()
 
       const out = await env.repo.query[GROUPED_BACKLINKS_FOR_BLOCK_QUERY]({

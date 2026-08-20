@@ -320,10 +320,10 @@ describe('VISIBLE_CHILDREN_SQL / VISIBLE_SUBTREE_SQL — flat §9 recognition', 
   it('filters a marked row in an UN-flipped workspace, where the backfill mints it', async () => {
     // Recognition used to require `properties_migration IN ('children',
     // 'cell-off')`, on the premise that an un-flipped workspace holds no field
-    // rows. The cell->children backfill mints them while the workspace still
-    // reads cells, and the gate then rendered every one as an ordinary outline
-    // child — on a third of the graph, for the whole verify window. Machinery
-    // is machinery from the moment it is written.
+    // rows. The backfill mints them while the workspace still reads cells, so
+    // this must answer the same either side of the flip — otherwise the cell
+    // renders the property through the property UI while the field row shows
+    // it a second time in the outline.
     const UNFLIPPED = 'ws-vis-unflipped'
     await h.db.execute(
       `INSERT INTO workspaces

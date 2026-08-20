@@ -12,9 +12,10 @@ import type { BlockData, Tx } from '@/data/api'
  * list; only HIDDEN-tier rows are filtered, and they rejoin the list for a
  * block that has revealed them. As shipped (slices A/B) this excludes EVERY
  * recognized field row instead, because no tier information is consulted
- * yet — a real simplification with a real cost now that the backfill mints
- * machinery pre-flip, and superseded by the tier-aware predicate that lands
- * with slice D.
+ * yet. That over-filters for real — the backfill mints these rows before the
+ * flip — and is an ACCEPTED interim (Vlad, 2026-08-20: "hiding everything
+ * before we have a coherent opt-in story is fine"), superseded by the
+ * tier-aware predicate that lands with slice D.
  * So read an exclusion here as "machinery, for now", NOT as "property
  * rows are machinery": the end state is that most of them are content.
  *

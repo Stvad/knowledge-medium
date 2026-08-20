@@ -246,11 +246,12 @@ export const CHILDREN_IDS_SQL = `
  * INTERIM, and deliberately so. The settled display model (§10) is two
  * tiers rendered IN PLACE: a NON-hidden property is an ordinary outline
  * child at its true position and must NOT be filtered here; only
- * HIDDEN-tier rows are. Filtering all of them is a simplification with a
- * real cost now that the backfill mints machinery pre-flip — this prunes
- * rows for real, in every workspace. The tier-aware predicate lands with
- * slice D and asks a different question — "is this a HIDDEN-tier
- * definition?" rather than "is this a definition?".
+ * HIDDEN-tier rows are. Filtering all of them prunes rows for real, in every
+ * workspace, and is an ACCEPTED interim (Vlad, 2026-08-20: "hiding everything
+ * before we have a coherent opt-in story is fine") — not a cost still being
+ * weighed. The tier-aware predicate lands with slice D and asks a different
+ * question — "is this a HIDDEN-tier definition?" rather than "is this a
+ * definition?".
  *
  * Definition-ness binds to the `block_types` side index (`type =
  * 'property-schema'`, SAME workspace — a foreign workspace's definition id
@@ -269,17 +270,17 @@ export const CHILDREN_IDS_SQL = `
  * seed ids are computable from the registry and can be bound into this
  * predicate; slice D reuses that mechanism for the hidden-tier set).
  *
- * NOT gated on `properties_migration`. It was until the cell→children
- * backfill shipped, on the premise that an un-flipped workspace holds no
- * field rows so the clause filtered nothing. The backfill breaks exactly that
- * premise: it mints field and value rows while the workspace still reads
- * cells, and the gate then rendered every one of them as an ordinary outline
- * child — on a third of the graph, on every synced device, for as long as the
- * runbook's verify window stays open. Recognition is the mechanism that makes
- * machinery invisible, so keying it on the data (the bit ∧ a resolving
- * definition — §9's own definition of recognition, and the only part of it
- * that was ever content-intrinsic) is what makes the backfill's output
- * machinery from the moment it is written.
+ * NOT gated on `properties_migration`, so this answers the same for a
+ * backfilled pre-flip workspace as for a flipped one. The premise the gate
+ * rested on — an un-flipped workspace holds no field rows, so the clause
+ * filtered nothing — is what the cell→children backfill breaks.
+ *
+ * The reason to hide them pre-flip is DUPLICATION, not machinery-hygiene:
+ * pre-flip the cell is still the property truth and still renders through the
+ * property UI, so a visible field row shows the user the same property a
+ * second time. Being visible is not itself the harm — property children are
+ * ordinary blocks and belong in ordinary listings, which is why exclusion is
+ * opt-IN everywhere and most queries have no such option at all.
  *
  * What stays flip-gated is the READ/WRITE direction, which is the part the
  * column is actually about: the property-children processors are dormant

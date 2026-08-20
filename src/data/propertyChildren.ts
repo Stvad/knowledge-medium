@@ -12,12 +12,19 @@
  * Recognition (§9) is FLAT — a column read plus context, never a content
  * parse and never an ancestry walk: `is_field_form = 1` (the marker matched)
  * ∧ non-null parent ∧ `reference_target_id` resolves a definition
- * (fieldId-keyed, shadow-tolerant). It is NOT gated on the workspace flip:
- * the cell→children backfill mints field and value rows while the workspace
- * still reads cells, so a flip-gated recognition renders its whole output as
- * ordinary outline rows until the flip lands. What the flip column governs is
- * the READ/WRITE direction (the processors, dormant pre-flip), not whether a
- * row IS machinery. Content-intrinsic and
+ * (fieldId-keyed, shadow-tolerant). NOT gated on the workspace flip — the
+ * backfill mints field and value rows while the workspace still reads cells,
+ * so recognition has to answer the same either side of it. What the flip
+ * column governs is the READ/WRITE direction (the processors, dormant
+ * pre-flip), not whether a row IS machinery.
+ *
+ * Recognizing a row is not the same as HIDING it, and this file owns only the
+ * first. Property children are ordinary blocks — that is the point of the
+ * model, not a leak — so listing them is the default and exclusion is opt-IN
+ * (`hidePropertyChildren`), which most queries do not even offer. The one
+ * surface that hides ALL recognized rows today does so as an accepted interim
+ * pending §10's tier-aware predicate; see `visibleChildren.ts`.
+ * Content-intrinsic and
  * identical at every depth: a `::` child of ANY block — value rows included —
  * is that block's field row, and an unmarked ref targeting a definition is a
  * plain reference block, full stop (the bit is what makes ref-typed values
