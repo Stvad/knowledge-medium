@@ -220,6 +220,7 @@ ${M.map(t=>`        '${t.name}', ${t.jsonValue(e)}`).join(`,
         json_set(
           '{}',
           '$.workspace_id', NEW.workspace_id,
+          '$.base_updated_at', OLD.updated_at,
 ${M.filter(e=>e.name!==`workspace_id`).map(e=>`          CASE WHEN OLD.${e.name} IS NOT NEW.${e.name} THEN '$.${e.name}' ELSE '$.__noop' END, ${e.jsonValue(`NEW`)}`).join(`,
 `)}
         ),
