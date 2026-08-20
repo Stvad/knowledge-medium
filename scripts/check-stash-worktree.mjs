@@ -155,6 +155,7 @@ export const amendInvocations = cmd =>
   gitInvocations(cmd).flatMap(g => {
     if (g.word !== 'commit' || !g.rest.includes('--amend')) return []
     let all = false
+    let include = false // -i: pathspecs ADD to the index, they do not replace it
     const paths = []
     for (let i = 0; i < g.rest.length; i++) {
       const t = g.rest[i]
@@ -166,6 +167,10 @@ export const amendInvocations = cmd =>
         all = true
         continue
       }
+      if (t === '--include') {
+        include = true
+        continue
+      }
       if (t.startsWith('--')) {
         if (!t.includes('=') && COMMIT_VALUE_LONG.has(t)) i++
         continue
@@ -173,6 +178,7 @@ export const amendInvocations = cmd =>
       if (t.startsWith('-') && t.length > 1) {
         for (let k = 1; k < t.length; k++) {
           if (t[k] === 'a') all = true
+          if (t[k] === 'i') include = true
           if (COMMIT_VALUE_SHORT.includes(t[k])) {
             if (k === t.length - 1) i++ // value is the next token
             break // in-token remainder is the attached value
@@ -183,7 +189,14 @@ export const amendInvocations = cmd =>
       paths.push(t)
     }
     return [
-      { all, paths, cArgs: g.cArgs, cdPath: g.cdPath, optOut: g.assigns.includes('AMEND_OK=1') },
+      {
+        all,
+        include,
+        paths,
+        cArgs: g.cArgs,
+        cdPath: g.cdPath,
+        optOut: g.assigns.includes('AMEND_OK=1'),
+      },
     ]
   })
 
@@ -379,7 +392,14 @@ const amendState = (cwd, cArgs, all) => {
       stdio: ['ignore', 'pipe', 'pipe'],
     }).trim()
   try {
-    const prev = run(['show', '--name-only', '--format=', 'HEAD'])
+    let prev
+    try {
+      // First-parent delta: `show` on a clean merge presents a combined diff
+      // with no paths, which would flag every staged file as growth.
+      prev = run(['diff', '--name-only', 'HEAD^', 'HEAD'])
+    } catch {
+      prev = run(['show', '--name-only', '--format=', 'HEAD']) // root commit
+    }
     const staged = run(
       all ? ['diff', '--name-only', 'HEAD'] : ['diff', '--name-only', '--cached'],
     )
@@ -466,11 +486,22 @@ const main = () => {
   if (!/^\s*AMEND_OK=1\s/.test(cmd) && /--amend/.test(cmd)) {
     for (const inv of amendInvocations(cmd)) {
       if (inv.optOut) continue
-      if (inv.paths.length) continue // explicit pathspec — deliberate scope
-      const { cwd } = effectiveCwd(payloadCwd, inv.cdPath)
+      // A pathspec without -i commits ONLY the named files — deliberate scope.
+      // With -i/--include the index rides along, so the comparison still runs
+      // (the named files themselves stay exempt below).
+      if (inv.paths.length && !inv.include) continue
+      const { cwd, exact } = effectiveCwd(payloadCwd, inv.cdPath)
+      if (!exact) {
+        process.stderr.write(
+          `BLOCKED: the cd target before this --amend is not a literal path, so the guard ` +
+            `cannot check which worktree's index the amend would commit. AMEND_OK=1 ` +
+            `prefixed to the command skips this check.\n`,
+        )
+        process.exit(2)
+      }
       const st = amendState(cwd, inv.cArgs, inv.all)
       if (!st) continue
-      const grown = st.staged.filter(p => !st.prev.has(p))
+      const grown = st.staged.filter(p => !st.prev.has(p) && !inv.paths.includes(p))
       if (grown.length) {
         const shown = grown.slice(0, 10).join('\n  ')
         const more = grown.length > 10 ? `\n  …and ${grown.length - 10} more` : ''

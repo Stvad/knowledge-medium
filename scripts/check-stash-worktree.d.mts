@@ -25,6 +25,7 @@ export interface GitInvocation {
 }
 export interface AmendInvocation {
   all: boolean
+  include: boolean
   paths: string[]
   cArgs: string[]
   cdPath: string | null

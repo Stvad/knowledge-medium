@@ -163,6 +163,13 @@ describe('amendInvocations', () => {
     ])
   })
 
+  it('marks include-mode, in long, short, and clustered spellings', () => {
+    expect(amendInvocations('git commit --amend --include f.txt')[0].include).toBe(true)
+    expect(amendInvocations('git commit --amend -i f.txt')[0].include).toBe(true)
+    expect(amendInvocations('git commit --amend -im "x" f.txt')[0].include).toBe(true)
+    expect(amendInvocations('git commit --amend -m x f.txt')[0].include).toBe(false)
+  })
+
   it('records the AMEND_OK=1 opt-out only as the invocation prefix', () => {
     expect(amendInvocations('AMEND_OK=1 git commit --amend -m x')[0].optOut).toBe(true)
     expect(amendInvocations('echo "AMEND_OK=1"; git commit --amend -m x')[0].optOut).toBe(false)
@@ -536,6 +543,54 @@ describe('hook end-to-end', { timeout: 30_000 }, () => {
     const r = hook('git commit --amend -am reworded', amendAll)
     expect(r.status).toBe(2)
     expect(r.stderr).toContain('f.txt')
+  })
+
+  it('still compares the index for include-mode amends, sparing the named files', () => {
+    const r = hook('git commit --amend -i -m x f2.txt', amendGrow)
+    expect(r.status).toBe(2)
+    expect(r.stderr).toContain('foreign.txt')
+    expect(r.stderr).not.toContain('f2.txt')
+  })
+
+  it('spares an include-named file that is already staged and new to the commit', () => {
+    const repo = makeRepo('amend-guard-include-')
+    writeFileSync(join(repo, 'f2.txt'), 'x\n')
+    git(repo, ['add', 'f2.txt'])
+    git(repo, ['commit', '-qm', 'second'])
+    writeFileSync(join(repo, 'brandnew.txt'), 'y\n')
+    git(repo, ['add', 'brandnew.txt']) // staged, outside the commit being amended
+    // naming it via -i is deliberate scope for THAT file…
+    expect(hook('git commit --amend -i -m x brandnew.txt', repo).status).toBe(0)
+    // …but an unnamed amend still counts it as growth.
+    expect(hook('git commit --amend -m x', repo).status).toBe(2)
+  })
+
+  it('blocks an amend behind an unresolvable cd target, allows a resolvable one', () => {
+    const r = hook('cd "$WT" && git commit --amend --no-edit', amendGrow)
+    expect(r.status).toBe(2)
+    expect(r.stderr).toContain('not a literal path')
+    // resolvable cd: judged from the clean target repo, not the dirty cwd
+    expect(hook(`cd ${amendSame} && git commit --amend -m x`, amendGrow).status).toBe(0)
+  })
+
+  it('measures a merge commit by its first-parent delta', () => {
+    const merged = makeRepo('amend-guard-merge-')
+    git(merged, ['checkout', '-qb', 'feat'])
+    writeFileSync(join(merged, 'm.txt'), 'feature\n')
+    git(merged, ['add', 'm.txt'])
+    git(merged, ['commit', '-qm', 'feat work'])
+    git(merged, ['checkout', '-q', 'main'])
+    git(merged, ['merge', '-q', '--no-ff', '--no-edit', 'feat'])
+    // m.txt is in the merge's first-parent delta: re-staging it is not growth…
+    writeFileSync(join(merged, 'm.txt'), 'feature v2\n')
+    git(merged, ['add', 'm.txt'])
+    expect(hook('git commit --amend -m reworded', merged).status).toBe(0)
+    // …but a file outside the merge's scope still is.
+    writeFileSync(join(merged, 'other.txt'), 'y\n')
+    git(merged, ['add', 'other.txt'])
+    const r = hook('git commit --amend -m reworded', merged)
+    expect(r.status).toBe(2)
+    expect(r.stderr).toContain('other.txt')
   })
 
   it('lets an explicit pathspec or AMEND_OK=1 through, and plain commits alone', () => {
