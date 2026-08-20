@@ -33,6 +33,7 @@
 import type { BlockData, Tx } from '@/data/api'
 import type { WorkspaceBackfill, WorkspaceBackfillContext } from '@/data/facets'
 import { CallbackSet } from '@/utils/callbackSet'
+import { getPropertyFieldTargetId } from '@/data/propertyChildren'
 import { materializePropertyChildrenForExistingRow } from './propertyChildrenProcessor'
 
 export const PROPERTY_CELL_BACKFILL_ID = 'properties:cell-to-children'
@@ -307,13 +308,26 @@ const namesToReconcile = async (
   row: BlockData,
 ): Promise<string[]> => {
   const names = new Set(Object.keys(row.properties))
-  for (const child of await tx.childrenOf(row.id, undefined)) {
-    const fieldId = child.referenceTargetId
-    if (!child.isFieldForm || !fieldId) continue
+  for (const fieldId of await materializedFieldIds(tx, row)) {
     const schema = ctx.resolveFieldSchema(fieldId)
     if (schema) names.add(schema.name)
   }
   return [...names]
+}
+
+/** The fieldIds this owner already has LIVE field rows for. One definition
+ *  because both name-pickers below need it and §9's named-predicate discipline
+ *  is explicit that hand-rolled restatements are the recorded failure mode —
+ *  two copies here would be free to drift apart. Same `tx.childrenOf` the
+ *  materializer reads, so "already materialized" cannot disagree with the branch
+ *  it will actually take. */
+const materializedFieldIds = async (tx: Tx, row: BlockData): Promise<Set<string>> => {
+  const ids = new Set<string>()
+  for (const child of await tx.childrenOf(row.id, undefined)) {
+    const fieldId = child.isFieldForm ? getPropertyFieldTargetId(child) : undefined
+    if (fieldId !== undefined) ids.add(fieldId)
+  }
+  return ids
 }
 
 /**
@@ -362,9 +376,6 @@ const reapedFieldIdsFor = async (
  * `materializePropertyChildrenForExistingRow` CREATES rather than reconciles:
  * filtering to it means the pass can only take that branch.
  *
- * A name whose schema does not resolve keeps no fieldId to match on, so it
- * stays on the list and the materializer skips it — as it does pre-flip.
- *
  * A field row with NO value children is deliberately not treated as a gap:
  * post-flip that projects as "key unset" (§9), which is what deleting the
  * value row means, and re-adding it from the cell would undo the user's edit.
@@ -384,12 +395,7 @@ const namesPendingMaterialization = async (
   row: BlockData,
   reaped: ReadonlySet<string>,
 ): Promise<string[]> => {
-  const materialized = new Set<string>()
-  for (const child of await tx.childrenOf(row.id, undefined)) {
-    if (child.isFieldForm && child.referenceTargetId) {
-      materialized.add(child.referenceTargetId)
-    }
-  }
+  const materialized = await materializedFieldIds(tx, row)
   return Object.keys(row.properties).filter(name => {
     const fieldId = ctx.resolveNameSchema(name)?.fieldId
     return fieldId === undefined || !(materialized.has(fieldId) || reaped.has(fieldId))
@@ -491,17 +497,13 @@ const sweep = async (
     }
 
     const reaped = await reapedFieldIdsFor(ctx, batch.map(({id}) => id))
-    let abandoned = false
-    await ctx.tx(async tx => {
+    const abandoned = await ctx.tx(async tx => {
       // Read INSIDE the transaction that writes, per batch, because the flip
       // is a synced column: it can arrive from another device mid-run, and a
       // check taken before the run would not see it.
       const childBacked = await tx.isPropertyChildBackedWorkspace(ctx.workspaceId)
       if (childBacked) sawChildBacked = true
-      if (childBacked && deletesOnly) {
-        abandoned = true
-        return
-      }
+      if (childBacked && deletesOnly) return true
       for (const {id} of batch) {
         progress.blocksScanned += 1
         // Re-read INSIDE the transaction rather than carrying the scan's
@@ -522,11 +524,10 @@ const sweep = async (
           })
         if (ok) progress.blocksMaterialized += 1
       }
+      return false
     }, {description: 'Migrate properties to child blocks'})
-    // COST, not correctness — nothing this leg could still do is permitted, so
-    // every later batch would abandon too. Deleting it fails no test; it just
-    // pages through the whole workspace committing empty transactions and
-    // reporting progress for them.
+    // COST, not correctness: every later batch would abandon too, so continuing
+    // just pages the workspace committing empty transactions. Fails no test.
     if (abandoned) return {sawChildBacked}
 
     // Awaited so a caller can do real work between batches — the seam a test
@@ -551,11 +552,10 @@ const sweep = async (
  * signal only decides whether another is owed.
  *
  * PRE-FLIP ONLY, and NOT closable here: a property written after the last
- * sweep. Nothing local makes the final scan and the flip atomic against a live
- * user, so those keys reach the flip with no children. Flipping FIRST is what
- * closes it — past the flip the live maintainers own every new write and this
- * pass only ever has history to fill in; the flip's own materialize catch-up
- * (issue #389) is the equivalent cover for a pre-flip run.
+ * sweep reaches the flip with no children, because nothing local makes the final
+ * scan and the flip atomic against a live user. Flipping FIRST is what closes it
+ * (see the module header); the flip's own materialize catch-up (issue #389) is
+ * the equivalent cover for a pre-flip run.
  */
 export const runPropertyCellBackfill = async (
   ctx: WorkspaceBackfillContext,

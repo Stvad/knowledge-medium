@@ -271,19 +271,16 @@ export const renameWorkspace = async (workspaceId: string, name: string): Promis
  * Advance a workspace to child-backed properties, then stamp the local replica
  * so the caller can act on it without waiting for sync to bring it back.
  *
- * A direct UPDATE, like `renameWorkspace`: `workspaces_update` RLS admits
- * writers, and the properties_migration trigger is what narrows this to the
- * OWNER, to the 'cell' -> 'children' step, and away from e2ee workspaces. That
- * makes the server the authority — a local stamp taken first would be a guess
- * at what the trigger will allow.
+ * A direct UPDATE, like `renameWorkspace`: RLS admits writers and the
+ * properties_migration trigger is what narrows this to the OWNER, to the
+ * 'cell' -> 'children' step, and away from e2ee workspaces.
  *
  * `.select().single()` is not decoration. An UPDATE that RLS filters to zero
  * rows SUCCEEDS, so without reading the row back a refusal we are not a writer
  * for would be indistinguishable from a completed flip.
  *
- * Stamping local SQLite afterwards is the optimistic prime `primeLocalWorkspace`
- * already does after `create_workspace` — see the section banner below for why
- * that is local-only and cannot re-upload the column.
+ * The local stamp is the optimistic prime `primeLocalWorkspace` does after
+ * `create_workspace` (see its section banner for why that is local-only).
  *
  * `localApplied` is not decoration either. The local `workspaces` row can be
  * legitimately ABSENT — `resolveWorkspace` admits a URL-hash workspace on the

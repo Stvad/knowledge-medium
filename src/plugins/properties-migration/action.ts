@@ -221,9 +221,8 @@ export const migratePropertiesToBlocksAction = ({repo}: {repo: Repo}): ActionCon
         ;({localApplied} = await flipWorkspaceToChildBackedProperties(repo, workspaceId))
       } catch (err) {
         console.error('[properties-migration] flip failed:', err)
-        // "Nothing was migrated" is the load-bearing half, and it is only true
-        // because this catch cannot see a committed flip — the server write is
-        // the only thing that throws here (see the flip helper).
+        // "so nothing was migrated" is only true because this catch cannot see a
+        // committed flip: the server write is the only thing that throws here.
         banner.fail('Could not switch this workspace to property blocks, so nothing ' +
           `was migrated: ${err instanceof Error ? err.message : String(err)}`)
         return

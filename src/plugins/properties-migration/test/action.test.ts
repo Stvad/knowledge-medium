@@ -182,6 +182,8 @@ describe('migrate_properties_to_blocks action', () => {
     await invoke(repo)
 
     expect(order).toEqual(['flip', 'backfill'])
+    expect(openDialog).toHaveBeenCalledWith(
+      expect.anything(), expect.objectContaining({childBacked: false}))
   })
 
   it('migrates nothing when the flip is refused, and says so', async () => {
@@ -199,10 +201,11 @@ describe('migrate_properties_to_blocks action', () => {
     expect(progressHandle.fail).toHaveBeenCalledWith(expect.stringMatching(/nothing was migrated/i))
   })
 
-  it('does not re-flip a workspace that is already child-backed', async () => {
-    // Forward-only, and the trigger refuses cell-off -> children outright, so
-    // a second flip is at best a no-op write and at worst an error on the one
-    // gesture an operator repeats to catch stragglers.
+  it('backfills an already-flipped workspace without re-flipping it', async () => {
+    // Refusing here — "the migration has nothing left to do" — left an operator
+    // who had already flipped with no way to run the pass at all. Re-flipping
+    // would be no better: forward-only, so a second flip is at best a no-op
+    // write on the one gesture an operator repeats to catch stragglers.
     openDialog.mockResolvedValue(true)
     const {repo, runWorkspaceBackfillNow} = makeRepo(
       {outcome: 'ran', undoHistoryCleared: false}, {flipped: true},
@@ -212,36 +215,10 @@ describe('migrate_properties_to_blocks action', () => {
 
     expect(flipWorkspace).not.toHaveBeenCalled()
     expect(runWorkspaceBackfillNow).toHaveBeenCalled()
-  })
-
-  it('runs against a flipped workspace, telling the operator it fills gaps', async () => {
-    // Flip THEN backfill is the runbook: the flip turns the live maintainers
-    // on, and this pass fills in the history they were not there for. Refusing
-    // here — which is what "the migration has nothing left to do" did — left an
-    // operator who had already flipped with no way to run it at all.
-    openDialog.mockResolvedValue(true)
-    const {repo, runWorkspaceBackfillNow} = makeRepo(
-      {outcome: 'ran', undoHistoryCleared: false}, {flipped: true},
-    )
-
-    await invoke(repo)
-
+    // The confirmation is the only place an operator finds out which of the two
+    // jobs they are starting.
     expect(openDialog).toHaveBeenCalledWith(
       expect.anything(), expect.objectContaining({childBacked: true}))
-    expect(runWorkspaceBackfillNow).toHaveBeenCalled()
-  })
-
-  it('tells the confirmation an un-flipped workspace is getting the full pass', async () => {
-    // The two runs do different jobs — reconcile versus create-only — and the
-    // confirmation is the only place the operator finds out which one they are
-    // about to start.
-    openDialog.mockResolvedValue(true)
-    const {repo} = makeRepo({outcome: 'ran', undoHistoryCleared: false})
-
-    await invoke(repo)
-
-    expect(openDialog).toHaveBeenCalledWith(
-      expect.anything(), expect.objectContaining({childBacked: false}))
   })
 
   it('does not run against a workspace the user left while confirming', async () => {
