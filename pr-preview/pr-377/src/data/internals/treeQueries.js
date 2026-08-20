@@ -99,5 +99,58 @@ var e=`
   SELECT id FROM blocks
    WHERE parent_id = ? AND deleted = 0
    ORDER BY order_key, id
-`;export{t as ANCESTORS_SQL,o as CHILDREN_IDS_SQL,a as CHILDREN_SQL,r as IS_DESCENDANT_OF_SQL,e as SUBTREE_SQL,i as cycleScanSql,n as manyAncestorsSql};
+`,s=e=>`
+     COALESCE(${e}.is_field_form, 0) = 1
+     AND ${e}.parent_id IS NOT NULL
+     AND (
+       EXISTS (
+         SELECT 1 FROM block_types bt
+          WHERE bt.block_id = ${e}.reference_target_id
+            AND bt.type = 'property-schema'
+            AND bt.workspace_id = ${e}.workspace_id
+       )
+       OR EXISTS (
+         SELECT 1 FROM json_each(?) seed
+          WHERE seed.value = ${e}.reference_target_id
+            AND ${e}.workspace_id = ?
+       )
+     )
+`,c=`
+   AND NOT (
+${s(`blocks`)}
+   )
+`,l=`
+  SELECT * FROM blocks
+   WHERE parent_id = ? AND deleted = 0
+${c}
+   ORDER BY order_key, id
+`,u=`
+  SELECT id FROM blocks
+   WHERE parent_id = ? AND deleted = 0
+${c}
+   ORDER BY order_key, id
+`,d=`
+  WITH RECURSIVE
+  subtree AS (
+    SELECT *,
+           '!' || hex(id) || '/' AS path,
+           0 AS depth
+      FROM blocks
+     WHERE id = ? AND deleted = 0
+    UNION ALL
+    SELECT child.*,
+           subtree.path || child.order_key || '!' || hex(child.id) || '/',
+           subtree.depth + 1
+      FROM subtree
+      JOIN blocks AS child INDEXED BY idx_blocks_parent_order
+        ON child.parent_id = subtree.id
+     WHERE child.deleted = 0
+       AND subtree.depth < 100
+       AND INSTR(subtree.path, '!' || hex(child.id) || '/') = 0
+       AND NOT (
+${s(`child`)}
+       )
+  )
+  SELECT * FROM subtree ORDER BY path
+`;export{t as ANCESTORS_SQL,o as CHILDREN_IDS_SQL,a as CHILDREN_SQL,r as IS_DESCENDANT_OF_SQL,e as SUBTREE_SQL,u as VISIBLE_CHILDREN_IDS_SQL,l as VISIBLE_CHILDREN_SQL,d as VISIBLE_SUBTREE_SQL,i as cycleScanSql,n as manyAncestorsSql,s as recognizedFieldRowSql};
 //# sourceMappingURL=treeQueries.js.map
