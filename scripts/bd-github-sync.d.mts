@@ -10,6 +10,7 @@ export declare const deriveLabelPriority: (labels: string[]) => number | null
 export declare const issueNumberFromRef: (ref: string | null | undefined) => number | null
 export declare const initializedDbRoot: () => string | null
 export declare const extractIssueRefs: (text: string) => number[]
+export declare const matchesCommitCommand: (cmd: string) => boolean
 export declare const closeKeywordRefs: (text: string) => number[]
 export declare const allowsIssueRefs: (cmd: string) => boolean
 export declare const buildIssueRefsMessage: (

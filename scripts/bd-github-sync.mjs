@@ -140,6 +140,14 @@ const GH_PUBLISH = new RegExp(
 /** Does this shell command publish PR/issue/release text on GitHub? */
 export const matchesPrCommand = cmd => GH_PUBLISH.test(commandSkeleton(cmd))
 
+// Commit messages become public and their close keywords act when the commit
+// reaches the default branch, so `git commit` gets the narrow leg of the
+// reference gate: close-keyword refs only, scanned from the raw command
+// (the message lives inside quotes the skeleton blanks). Plain mentions and
+// ordinary commits pass untouched — zero subprocesses.
+const GIT_COMMIT = new RegExp(SEGMENT_START + COMMAND_PREFIXES + String.raw`(?:\S*\/)?git\s+commit\b`, 'm')
+export const matchesCommitCommand = cmd => GIT_COMMIT.test(commandSkeleton(cmd))
+
 // The escape hatch must also be in command-prefix position of the SKELETON —
 // honored from quoted prose, a PR body QUOTING it would both bypass the gate
 // and publish the marker.
@@ -152,12 +160,16 @@ export const allowsBeadIds = cmd => ALLOW_MARKER.test(commandSkeleton(cmd))
 // so each reference is echoed back with its actual title once (exit 2) and
 // the re-run confirms with KM_ISSUE_REFS_OK=1. The lookbehind kills HTML
 // entities (&#39;) and glued word chars; the lookahead kills hex colors.
-const ISSUE_MENTION = /(?<![&\w#])#(\d{1,6})(?!\w)/g
+// Capped at 5 digits: 6-digit all-numeric tokens are far more likely CSS hex
+// colors (#123456, #000000) than issue numbers in a repo three orders of
+// magnitude away from #100000. A 3-digit shorthand color (#123) stays
+// ambiguous and costs one confirm round — accepted.
+const ISSUE_MENTION = /(?<![&\w#])#(\d{1,5})(?!\w)/g
 export const extractIssueRefs = text => [...new Set([...text.matchAll(ISSUE_MENTION)].map(m => Number(m[1])))]
 
 // GitHub's auto-close keywords: a wrong number here CLOSES an unrelated
 // issue on merge, so these references get the loudest warnings.
-const CLOSE_KEYWORD = /\b(?:fix(?:es|ed)?|close[sd]?|resolve[sd]?):?\s+#(\d{1,6})(?!\w)/gi
+const CLOSE_KEYWORD = /\b(?:fix(?:es|ed)?|close[sd]?|resolve[sd]?):?\s+#(\d{1,5})(?!\w)/gi
 export const closeKeywordRefs = text => [...new Set([...text.matchAll(CLOSE_KEYWORD)].map(m => Number(m[1])))]
 
 const ISSUE_REFS_OK = new RegExp(SEGMENT_START + COMMAND_PREFIXES + String.raw`KM_ISSUE_REFS_OK=1\s`, 'm')
@@ -677,10 +689,10 @@ const runSync = ({ quiet = false, dryRun = false } = {}) => {
 
 const allow = () => process.exit(0)
 
-// The #N leg of the gate: echo every referenced number's ground truth and
-// block once; KM_ISSUE_REFS_OK=1 on the re-run confirms. Verification is a
-// per-number gh GET — tolerant, distinguishing "not found" from "gh broke".
-const echoIssueRefs = (text, refs) => {
+// The #N leg of the gate: echo every referenced number's ground truth;
+// KM_ISSUE_REFS_OK=1 on the re-run confirms. Verification is a per-number
+// gh GET — tolerant, distinguishing "not found" from "gh broke".
+const issueRefsTable = (text, refs) => {
   const fetchInfo = number => {
     const r = spawnSync('gh', ['api', `repos/${REPO}/issues/${number}`], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
     try {
@@ -691,7 +703,11 @@ const echoIssueRefs = (text, refs) => {
       return null
     }
   }
-  console.error(buildIssueRefsMessage(refs.map(number => ({ number, info: fetchInfo(number) })), new Set(closeKeywordRefs(text))))
+  return buildIssueRefsMessage(refs.map(number => ({ number, info: fetchInfo(number) })), new Set(closeKeywordRefs(text)))
+}
+
+const echoIssueRefs = (text, refs) => {
+  console.error(issueRefsTable(text, refs))
   process.exit(2)
 }
 
@@ -703,7 +719,14 @@ const hookPrePr = () => {
     allow()
   }
   const cmd = payload?.tool_input?.command ?? ''
-  if (!cmd || !matchesPrCommand(cmd)) allow()
+  if (!cmd) allow()
+  if (!matchesPrCommand(cmd)) {
+    // The commit leg: only a close keyword aimed at a #N warrants a round.
+    if (!matchesCommitCommand(cmd) || allowsIssueRefs(cmd)) allow()
+    const commitRefs = closeKeywordRefs(cmd)
+    if (commitRefs.length === 0) allow()
+    return echoIssueRefs(cmd, commitRefs)
+  }
 
   const cwd = payload?.cwd ?? process.cwd()
   const bodies = bodyFilePaths(cmd)
@@ -745,7 +768,12 @@ const hookPrePr = () => {
 
   const mapped = ids.filter(id => byId.get(id)).map(id => ({ id, number: byId.get(id) }))
   const unmapped = ids.filter(id => !byId.get(id))
-  console.error(buildDenyMessage(mapped, unmapped))
+  // The deny message licenses a KM_ISSUE_REFS_OK=1 re-run, so any #N already
+  // present in the text must have its ground truth shown in THIS round —
+  // otherwise the mixed case would publish unverified numbers under that
+  // licence.
+  const refsSection = refs.length ? `\n\n${issueRefsTable(text, refs)}` : ''
+  console.error(buildDenyMessage(mapped, unmapped) + refsSection)
   process.exit(2)
 }
 

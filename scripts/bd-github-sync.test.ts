@@ -16,6 +16,7 @@ import {
   detectReverts,
   extractBeadIds,
   issueNumberFromRef,
+  matchesCommitCommand,
   matchesPrCommand,
   planClosePushes,
   planCloseReconciliation,
@@ -290,6 +291,11 @@ describe('extractIssueRefs', () => {
     expect(extractIssueRefs('color: #652fff; it&#39;s fine; ticket#12x; ###')).toEqual([])
   })
 
+  it('ignores all-numeric 6-digit hex colors but keeps 5-digit issue numbers', () => {
+    expect(extractIssueRefs('background: #123456 on #000000')).toEqual([])
+    expect(extractIssueRefs('see #12345')).toEqual([12345])
+  })
+
   it('matches refs embedded in ordinary punctuation', () => {
     expect(extractIssueRefs('(#12), #34.')).toEqual([12, 34])
   })
@@ -309,6 +315,15 @@ describe('allowsIssueRefs', () => {
   it('honors the escape in command position, not in quoted prose', () => {
     expect(allowsIssueRefs('KM_ISSUE_REFS_OK=1 gh pr create --body "see #12"')).toBe(true)
     expect(allowsIssueRefs('gh pr create --body "run with KM_ISSUE_REFS_OK=1 next time"')).toBe(false)
+  })
+})
+
+describe('matchesCommitCommand', () => {
+  it('matches git commit in command position, not in quoted prose', () => {
+    expect(matchesCommitCommand('git commit -m "message"')).toBe(true)
+    expect(matchesCommitCommand('/usr/bin/git commit --amend')).toBe(true)
+    expect(matchesCommitCommand('echo "git commit is next"')).toBe(false)
+    expect(matchesCommitCommand('git log')).toBe(false)
   })
 })
 
@@ -764,6 +779,34 @@ describe('hookPrePr process behavior', { timeout: 20_000 }, () => {
     const r = hook('gh pr create --title t --body "Fixes #700"')
     expect(r.status).toBe(2)
     expect(r.stderr).toContain('close keyword targets a PR')
+  })
+
+  // The mixed case: the bead deny licenses a KM_ISSUE_REFS_OK=1 re-run, so
+  // any #N already in the text must be echoed in the SAME round — otherwise
+  // that licence would publish unverified numbers.
+  it('echoes pre-existing issue refs inside the bead-id deny round', () => {
+    const { hook } = makeRepo({ dbReady: true, ghIssues: { 653: { title: 'Real GC failure', state: 'open' } } })
+    const r = hook('gh pr create --title t --body "tracks km-zzzz, relates to #653"')
+    expect(r.status).toBe(2)
+    expect(r.stderr).toContain('km-zzzz')
+    expect(r.stderr).toContain('#653 → "Real GC failure" (issue, open)')
+  })
+
+  // The commit leg: close keywords act when the commit reaches the default
+  // branch, so they get the echo round; plain mentions and ordinary commits
+  // pass with zero subprocesses.
+  it('gates close-keyword refs in git commit messages', () => {
+    const { hook } = makeRepo({ dbReady: true, ghIssues: { 700: { title: 'Some PR', state: 'open', pull_request: {} } } })
+    const r = hook('git commit -m "land the fix\n\nFixes #700"')
+    expect(r.status).toBe(2)
+    expect(r.stderr).toContain('close keyword targets a PR')
+  })
+
+  it('lets plain-mention and escaped commits pass with zero lookups', () => {
+    const { hook, shimCalls } = makeRepo({ dbReady: true, ghIssues: { 653: { title: 'Real GC failure', state: 'open' } } })
+    expect(hook('git commit -m "see #653 for context"').status).toBe(0)
+    expect(hook('KM_ISSUE_REFS_OK=1 git commit -m "Fixes #653"').status).toBe(0)
+    expect(shimCalls()).not.toContain('gh api')
   })
 
   // Positive control: the zero-calls assertions above are negative tests, so
