@@ -65,6 +65,23 @@ const create = async (
   }, {scope: ChangeScope.BlockDefault, description: 'seed'})
 }
 
+/** `count` blocks, each carrying one registered cell key. One transaction, not
+ *  one per block: the pass batches on inserted ROWS and reads the cells back off
+ *  `blocks`, so the seed's transaction grain is not what any caller here
+ *  exercises — it was just the dominant cost. */
+const seedNotes = async (count: number) => {
+  const ids = Array.from({length: count}, (_, i) => `b${String(i).padStart(4, '0')}`)
+  await repo.tx(async tx => {
+    for (const id of ids) {
+      await tx.create({
+        id, workspaceId: WS, parentId: null, orderKey: `k-${id}`,
+        content: id, properties: {'demo:note': id},
+      })
+    }
+  }, {scope: ChangeScope.BlockDefault, description: 'seed'})
+  return ids
+}
+
 const run = async () => repo.runWorkspaceBackfillNow(WS, PROPERTY_CELL_BACKFILL_ID)
 
 /** The runner's context, rebuilt for tests that need to act BETWEEN batches.
@@ -110,14 +127,10 @@ const fieldRowCount = async (): Promise<number> => (await repo.db.get<{n: number
     WHERE workspace_id = ? AND deleted = 0 AND is_field_form = 1`, [WS],
 ))!.n
 
-// One write transaction per seeded block — 250 of them in the batch-boundary
-// test — makes this file disk-bound, and the gate runs a worker process per
-// core. Measured: the four multi-hundred-block tests cost 450/310/265/260ms
-// alone but 6.8/2.5/2.2/2.1s once the enclosing directory runs — an 8-15x
-// stretch, not the ~6x a CPU-bound test sees, which is why the 5000ms default
-// was not enough (#633, #639). Budgeted per suite rather than by raising
-// testTimeout: the tail is this file, and a global raise would make every
-// genuine hang anywhere cost 30s before reporting.
+// The four multi-hundred-block tests measure 0.36/0.27/0.21/0.20s alone and
+// ~1-2s under the full gate, but 5.2/5.9/5.7/5.3s on a gate run with the machine
+// already loaded — all four over vitest's 5000ms default, which is what #633 and
+// #639 hit. The budget is sized for that loaded tail, not for the solo cost.
 describe('property cell → children backfill', {timeout: 30_000}, () => {
   it('gives a registered cell key its field row and value row', async () => {
     await create('b1', {'demo:note': 'hello'})
@@ -185,8 +198,7 @@ describe('property cell → children backfill', {timeout: 30_000}, () => {
     // The cursor is `id > last`, so a batch that does not advance it, or one
     // that advances it past unvisited rows, silently leaves blocks cell-only —
     // and the claim would then record the migration as complete.
-    const ids = Array.from({length: 250}, (_, i) => `b${String(i).padStart(4, '0')}`)
-    for (const id of ids) await create(id, {'demo:note': id})
+    const ids = await seedNotes(250)
 
     expect((await run()).outcome).toBe('ran')
 
@@ -218,8 +230,7 @@ describe('property cell → children backfill', {timeout: 30_000}, () => {
     // "never". A second sweep is what makes the pass a fixpoint rather than a
     // single ordered walk. Driven directly so the concurrent edit lands at a
     // known point: after the first committed batch.
-    const ids = Array.from({length: 150}, (_, i) => `b${String(i).padStart(4, '0')}`)
-    for (const id of ids) await create(id, {'demo:note': id})
+    const ids = await seedNotes(150)
 
     let edited = false
     const progress = await runPropertyCellBackfill(makeCtx(), async () => {
@@ -279,8 +290,7 @@ describe('property cell → children backfill', {timeout: 30_000}, () => {
     // The behind-cursor case for an EXISTING key: the block was visited, then
     // its value changed. Post-flip the child is what the cell gets rebuilt
     // from, so a stale child is the user's edit being reverted.
-    const ids = Array.from({length: 150}, (_, i) => `b${String(i).padStart(4, '0')}`)
-    for (const id of ids) await create(id, {'demo:note': id})
+    const ids = await seedNotes(150)
 
     let edited = false
     const progress = await runPropertyCellBackfill(makeCtx(), async () => {
@@ -396,8 +406,7 @@ describe('property cell → children backfill', {timeout: 30_000}, () => {
     // value child as "not converged yet" bought a full extra sweep for each
     // one, and four of them ended the run unconverged with every row already
     // written and no completion recorded.
-    const ids = Array.from({length: 150}, (_, i) => `b${String(i).padStart(4, '0')}`)
-    for (const id of ids) await create(id, {'demo:note': id})
+    const ids = await seedNotes(150)
 
     let caret = 0
     const reported: boolean[] = []
