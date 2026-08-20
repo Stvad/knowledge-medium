@@ -131,12 +131,13 @@ const fieldRowCount = async (): Promise<number> => (await repo.db.get<{n: number
     WHERE workspace_id = ? AND deleted = 0 AND is_field_form = 1`, [WS],
 ))!.n
 
-// The four `seedNotes` tests dominate this file; the rest are milliseconds. They
-// clear vitest's 5000ms default on an idle machine and overshoot it on a loaded
-// one, which is what #633 and #639 are. No per-test figures here on purpose:
-// the cost moves several-fold with ambient load, so any number written down is
-// wrong under some other load, and sizing the budget from one is how it ends up
-// too tight again.
+// The four `seedNotes` tests are the only slow ones here; the rest are
+// milliseconds. Measured at load avg ~170 on 12 cores: ~0.3-0.45s solo, 0.4-1.6s
+// under `vitest run src/data/internals/`, 0.6-1.2s under the full gate. Before
+// the seed batching the same four hit 5.2-5.9s on a gate run — over vitest's
+// 5000ms default, which is #633 and #639. Cost tracks ambient load more than the
+// work, so 30s is set well above the range rather than tuned to it; re-measure
+// under a named condition before trusting any single figure here.
 describe('property cell → children backfill', {timeout: 30_000}, () => {
   it('gives a registered cell key its field row and value row', async () => {
     await create('b1', {'demo:note': 'hello'})
