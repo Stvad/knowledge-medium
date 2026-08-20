@@ -230,9 +230,10 @@ export const planLocalWins = (beads, issueByNumber) =>
     return Date.parse(b.updated_at) > Date.parse(issue.updatedAt) ? [{ id: b.id, number }] : []
   })
 
-// Detection compares only fields `bd list` rows carry; the restore then
-// replays the fuller `bd show` snapshot (assignee, close reason included).
-const REVERT_FIELDS = ['title', 'description', 'status', 'priority', 'issue_type']
+// Both sides of the comparison are `bd show` rows (list rows lack assignee),
+// so assignment-only reverts are visible too; the restore replays the full
+// snapshot, close reason included.
+const REVERT_FIELDS = ['title', 'description', 'status', 'priority', 'issue_type', 'assignee']
 export const detectReverts = (snapshotRows, postById) =>
   snapshotRows.filter(s => {
     const post = postById.get(s.id)
@@ -244,7 +245,9 @@ export const detectReverts = (snapshotRows, postById) =>
 export const planRestoreArgs = row => {
   const update = ['update', row.id, '--title', row.title ?? '', '-d', row.description ?? '', '-p', String(row.priority)]
   if (row.issue_type) update.push('-t', row.issue_type)
-  if (row.assignee) update.push('-a', row.assignee)
+  // Always passed: `-a ''` CLEARS the assignee (verified against bd 1.2.2),
+  // so an unassigned snapshot can undo a pulled stale assignment.
+  update.push('-a', row.assignee ?? '')
   if (row.status === 'closed')
     return [update, ['close', row.id, '-r', row.close_reason || 'restored by bd-github-sync after a pull revert (#647)']]
   return [[...update, '-s', row.status]]
@@ -478,19 +481,27 @@ const runSync = ({ quiet = false, dryRun = false } = {}) => {
     // description line starting with "Error" would trip run()'s bd check.
     const freshBeads = dryRun ? preBeads : listAllBeads()
     const suspects = planLocalWins(freshBeads, issueByNumber)
-    let snapshot = []
-    if (suspects.length && !dryRun) {
+    // Tolerant multi-id show: parse stdout directly — `bd show` output is
+    // pretty-printed JSON, and a description line starting with "Error" would
+    // trip run()'s bd check. Returns null on any shortfall, including bd's
+    // partial-output shape (found rows on stdout, `Error…` for the rest,
+    // exit 0), which the length check catches.
+    const showSuspects = () => {
       const shown = spawnSync('bd', ['show', ...suspects.map(s => s.id), '--json'], { encoding: 'utf8', env })
       try {
-        snapshot = JSON.parse(shown.stdout)
+        const rows = JSON.parse(shown.stdout)
+        return Array.isArray(rows) && rows.length === suspects.length ? rows : null
       } catch {
-        snapshot = null
+        return null
       }
+    }
+    let snapshot = []
+    if (suspects.length && !dryRun) {
+      snapshot = showSuspects()
       // Abort rather than pull unprotected — same reasoning as the
       // close-adoption abort: proceeding is the exact loss this guard
-      // prevents. The length check also catches bd's partial-output shape
-      // (found rows on stdout, `Error…` for the rest, exit 0).
-      if (!Array.isArray(snapshot) || snapshot.length !== suspects.length)
+      // prevents.
+      if (!snapshot)
         throw new Error(
           `aborting before pull: could not snapshot ${suspects.map(s => s.id).join(', ')} — the pull could revert these newer local rows undetected (#647)`,
         )
@@ -508,7 +519,12 @@ const runSync = ({ quiet = false, dryRun = false } = {}) => {
     // kept them out of 1.5's push). The restore bumps updated_at, so the
     // push-back below carries them out and the next pull leaves them alone.
     const postBeads = dryRun ? preBeads : listAllBeads()
-    const postById = new Map(postBeads.map(b => [b.id, b]))
+    // Post-pull state for the suspects comes from `bd show`, not the list:
+    // list rows lack assignee, so a list-based comparison would miss
+    // assignment-only reverts (and false-positive every assigned suspect).
+    const postSuspects = snapshot.length ? showSuspects() : []
+    if (!postSuspects) report.push(`FAILED to re-read ${suspects.map(s => s.id).join(', ')} after the pull — pull-revert detection is off this run`)
+    const postById = new Map((postSuspects ?? []).map(b => [b.id, b]))
     const reverted = dryRun ? [] : detectReverts(snapshot, postById)
     const restoredOk = []
     const restoreFailures = []
@@ -536,7 +552,11 @@ const runSync = ({ quiet = false, dryRun = false } = {}) => {
       if (!dryRun) run('bd', ['update', id, '-p', String(to)], { env })
       report.push(`priority ${id} → ${to} (re-derived after pull-flattening)`)
     }
-    const pushBack = [...new Set([...fixes.map(f => f.id), ...restoredOk])]
+    // restoreFailures subtracted from the WHOLE union: a half-restored row
+    // can also enter through the priority-fix leg, and pushing it would
+    // stamp GitHub newer and bury the loss (see the restore loop above).
+    const failedRestoreIds = new Set(restoreFailures)
+    const pushBack = [...new Set([...fixes.map(f => f.id), ...restoredOk])].filter(id => !failedRestoreIds.has(id))
     if (pushBack.length && !dryRun) run('bd', ['github', 'sync', '--push-only', '--issues', pushBack.join(',')], { env })
 
     // 4. Carry bead closes out to issues still open (see header: via gh, not

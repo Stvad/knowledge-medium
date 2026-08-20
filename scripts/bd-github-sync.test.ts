@@ -306,6 +306,7 @@ describe('detectReverts', () => {
     priority: 1,
     title: 'T',
     description: 'D-new',
+    assignee: 'V',
     updated_at: '2026-08-20T02:00:00Z',
   })
 
@@ -316,6 +317,7 @@ describe('detectReverts', () => {
       { title: 'T-old' },
       { priority: 2 },
       { issue_type: 'task' },
+      { assignee: undefined },
     ] satisfies Partial<BeadRow>[]) {
       expect(detectReverts([snap], byId([{ ...snap, ...change }]))).toEqual([snap])
     }
@@ -335,10 +337,10 @@ describe('planRestoreArgs', () => {
     ])
   })
 
-  it('restores a closed row via close, carrying the original reason', () => {
+  it('restores a closed row via close, clearing the assignee it never had', () => {
     const row = bead({ id: 'km-a', status: 'closed', priority: 2, title: 'T', description: 'D', close_reason: 'done' })
     expect(planRestoreArgs(row)).toEqual([
-      ['update', 'km-a', '--title', 'T', '-d', 'D', '-p', '2'],
+      ['update', 'km-a', '--title', 'T', '-d', 'D', '-p', '2', '-a', ''],
       ['close', 'km-a', '-r', 'done'],
     ])
   })
@@ -352,7 +354,7 @@ describe('planRestoreArgs', () => {
 describe('runSync process behavior', { timeout: 20_000 }, () => {
   const script = fileURLToPath(new URL('./bd-github-sync.mjs', import.meta.url))
 
-  const makeSyncRepo = (opts: { issues: object[]; lists: object[][]; show?: object[] | string; failCloseId?: string }) => {
+  const makeSyncRepo = (opts: { issues: object[]; lists: object[][]; shows?: (object[] | string)[]; failCloseId?: string }) => {
     const repo = mkdtempSync(join(tmpdir(), 'bd-sync-run-'))
     spawnSync('git', ['init', '-q'], { cwd: repo })
     mkdirSync(join(repo, '.beads', 'embeddeddolt'), { recursive: true })
@@ -363,7 +365,12 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     writeFileSync(join(repo, 'gh-issues.json'), JSON.stringify(opts.issues))
     opts.lists.forEach((rows, i) => writeFileSync(join(repo, `list-${i + 1}.json`), JSON.stringify(rows)))
     writeFileSync(join(repo, 'list-last.json'), JSON.stringify(opts.lists[opts.lists.length - 1]))
-    writeFileSync(join(repo, 'show.json'), typeof opts.show === 'string' ? opts.show : JSON.stringify(opts.show ?? [], null, 2))
+    const shows = opts.shows ?? []
+    shows.forEach((rows, i) =>
+      writeFileSync(join(repo, `show-${i + 1}.json`), typeof rows === 'string' ? rows : JSON.stringify(rows, null, 2)),
+    )
+    const lastShow = shows[shows.length - 1] ?? []
+    writeFileSync(join(repo, 'show-last.json'), typeof lastShow === 'string' ? lastShow : JSON.stringify(lastShow, null, 2))
     writeFileSync(
       join(shimDir, 'bd'),
       [
@@ -375,7 +382,10 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
         `    n=$(cat "${repo}/list-count" 2>/dev/null || echo 0)`,
         `    n=$((n+1)); echo $n > "${repo}/list-count"`,
         `    if [ -f "${repo}/list-$n.json" ]; then cat "${repo}/list-$n.json"; else cat "${repo}/list-last.json"; fi;;`,
-        `  show) cat "${repo}/show.json";;`,
+        '  show)',
+        `    m=$(cat "${repo}/show-count" 2>/dev/null || echo 0)`,
+        `    m=$((m+1)); echo $m > "${repo}/show-count"`,
+        `    if [ -f "${repo}/show-$m.json" ]; then cat "${repo}/show-$m.json"; else cat "${repo}/show-last.json"; fi;;`,
         '  github) echo "Pushed 0 issues";;',
         ...(opts.failCloseId
           ? [`  close) if [ "$2" = "${opts.failCloseId}" ]; then echo "Error: cannot close"; else echo ok; fi;;`]
@@ -456,7 +466,7 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     const { run, shimCalls } = makeSyncRepo({
       issues: [ghIssue(2, '2026-08-20T01:00:00Z')],
       lists: [[newer], [newer], [revertedRow]],
-      show: [snapshot],
+      shows: [[snapshot], [revertedRow]],
     })
     const r = run()
     expect(r.status).toBe(0)
@@ -469,20 +479,39 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
 
   // A half-restored row must NOT be pushed: publishing it would stamp GitHub
   // newer and bury the loss, while leaving GitHub older keeps the row a
-  // suspect so the next sync retries the restore.
-  it('keeps a failed restore out of the push-back', () => {
+  // suspect so the next sync retries the restore. The revert also flattens
+  // priority here, so the id enters through the priority-fix leg too — the
+  // exclusion must hold for the whole union, not just restoredOk.
+  it('keeps a failed restore out of the push-back, including the priority-fix leg', () => {
     const closedLocal = { id: 'km-t4', status: 'closed', priority: 1, title: 'T', description: 'D', external_ref: ref(4), updated_at: '2026-08-20T02:00:00Z' }
-    const revertedRow = { ...closedLocal, status: 'open' }
+    const revertedRow = { ...closedLocal, status: 'open', priority: 2 }
     const { run, shimCalls } = makeSyncRepo({
       issues: [ghIssue(4, '2026-08-20T01:00:00Z')],
       lists: [[closedLocal], [closedLocal], [revertedRow]],
-      show: [{ ...closedLocal, close_reason: 'done' }],
+      shows: [[{ ...closedLocal, close_reason: 'done' }], [revertedRow]],
       failCloseId: 'km-t4',
     })
     const r = run()
     expect(r.status).toBe(0)
     expect(r.stdout).toContain('FAILED to restore')
+    expect(shimCalls()).toContain('bd update km-t4 -p 1')
     expect(shimCalls()).not.toContain('--issues km-t4')
+  })
+
+  // Assignment rides on `bd show` rows (list rows lack the field), and an
+  // unassigned snapshot must CLEAR a pulled stale assignee (-a '' does).
+  it('detects and restores an assignment-only revert', () => {
+    const newer = { id: 'km-t9', status: 'open', priority: 1, title: 'T', description: 'D', external_ref: ref(9), updated_at: '2026-08-20T02:00:00Z' }
+    const { run, shimCalls } = makeSyncRepo({
+      issues: [ghIssue(9, '2026-08-20T01:00:00Z')],
+      lists: [[newer], [newer], [newer]],
+      shows: [[newer], [{ ...newer, assignee: 'stale-import' }]],
+    })
+    const r = run()
+    expect(r.status).toBe(0)
+    expect(r.stdout).toContain('restored km-t9')
+    expect(shimCalls()).toContain('bd update km-t9 --title T -d D -p 1 -a  -s open')
+    expect(shimCalls()).toContain('--issues km-t9')
   })
 
   // Same reasoning as the close-adoption abort: pulling with the snapshot
@@ -492,7 +521,7 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     const { run, shimCalls } = makeSyncRepo({
       issues: [ghIssue(5, '2026-08-20T01:00:00Z')],
       lists: [[newer], [newer], [newer]],
-      show: 'Error fetching km-t5: dolt exploded',
+      shows: ['Error fetching km-t5: dolt exploded'],
     })
     const r = run()
     expect(r.status).toBe(1)
@@ -508,7 +537,7 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     const { run, shimCalls } = makeSyncRepo({
       issues: [ghIssue(7, '2026-08-20T01:00:00Z'), ghIssue(8, '2026-08-20T01:00:00Z')],
       lists: [[a, b], [a, b], [a, b]],
-      show: [a],
+      shows: [[a]],
     })
     const r = run()
     expect(r.status).toBe(1)
