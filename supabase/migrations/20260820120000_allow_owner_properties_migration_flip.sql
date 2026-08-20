@@ -26,9 +26,9 @@
 --   * Members who are not the owner. RLS lets any workspace WRITER update this
 --     table (workspaces_update -> is_workspace_writer), so the owner check has
 --     to live here; flipping changes how the whole workspace stores properties,
---     for everyone in it.
-
-begin;
+--     for everyone in it. That check only means anything because the sibling
+--     migration in this push makes owner_user_id immutable to clients — an
+--     editor could otherwise PATCH themselves into the column it reads.
 
 create or replace function public.workspaces_prevent_properties_migration_change()
     returns trigger
@@ -48,8 +48,11 @@ begin
     -- quarantine instead of retrying forever. Same convention as
     -- workspaces_prevent_e2ee_field_change.
     if current_user not in ('postgres', 'service_role') then
-        -- auth.uid() is NULL outside a JWT session, and `is distinct from`
-        -- makes that a refusal rather than a match.
+        -- Load-bearing precondition: `owner_user_id` is immutable to clients
+        -- (workspaces_prevent_owner_change, same push). Without it this check is
+        -- decorative — RLS admits any workspace WRITER, so an editor would just
+        -- PATCH the column this reads and then flip. auth.uid() is NULL outside a
+        -- JWT session, and `is distinct from` makes that a refusal, not a match.
         if old.owner_user_id is distinct from auth.uid()::text then
             raise exception 'workspaces.properties_migration is writable by the workspace owner (% -> %)',
                 old.properties_migration, new.properties_migration
@@ -90,5 +93,3 @@ begin
     return new;
 end;
 $$;
-
-commit;

@@ -1,12 +1,20 @@
-name: Attachments RLS Contract
+name: Supabase Migration Contracts
 
-# Regression guard for the `attachments` Storage RLS contract (design §10), the
-# allow/deny matrix that scripts/attachments-rls-verify.ts asserts. Storage RLS
-# can't be unit-tested (it needs real gotrue + real Storage), so the contract has
-# NO coverage in `pnpm run check` — a future migration edit that weakens a policy
-# (drops a path guard, loosens the writer gate) would ship silently. This job
-# closes that gap: it stands up a throwaway `supabase start` stack, applies the
-# migrations, and runs the verifier against it.
+# Regression guard for the allow/deny contracts our migrations encode, none of
+# which `pnpm run check` can reach — it never runs SQL, so a future migration edit
+# that weakens a policy or a trigger would ship silently. This job closes that gap
+# for the contracts listed below: it stands up a throwaway `supabase start` stack,
+# applies the migrations, and runs each verifier against it with REAL gotrue users.
+# Real users are the point in both cases — the rules are about WHO is writing, so a
+# stubbed identity would be testing a fiction.
+#
+#   * the `attachments` Storage RLS contract (design §10) —
+#     scripts/attachments-rls-verify.ts. Storage RLS additionally cannot be
+#     unit-tested at all: it needs real gotrue AND real Storage.
+#   * the `workspaces.properties_migration` flip trigger —
+#     scripts/properties-migration-trigger-verify.ts. Who may advance the
+#     properties-as-blocks lever, which steps, and that every refusal carries a
+#     PERMANENT SQLSTATE.
 #
 # This is the REGRESSION guard (does the migration SQL still enforce the
 # contract?) and runs entirely against an EPHEMERAL local stack — zero writes to
@@ -24,6 +32,7 @@ on:
       - 'supabase/migrations/**'
       - 'supabase/config.toml'
       - 'scripts/attachments-rls-verify.ts'
+      - 'scripts/properties-migration-trigger-verify.ts'
       - '.github/workflows/attachments-rls-contract.yml'
   push:
     branches: [master]
@@ -31,6 +40,7 @@ on:
       - 'supabase/migrations/**'
       - 'supabase/config.toml'
       - 'scripts/attachments-rls-verify.ts'
+      - 'scripts/properties-migration-trigger-verify.ts'
       - '.github/workflows/attachments-rls-contract.yml'
   workflow_dispatch:
 
@@ -88,6 +98,16 @@ jobs:
           export ANON_KEY=$(supabase status -o json | jq -r '.ANON_KEY')
           export SUPABASE_SECRET_KEY=$(supabase status -o json | jq -r '.SERVICE_ROLE_KEY')
           pnpm rls:verify-attachments
+
+      # Same ephemeral stack, a different migration's contract. The workspaces
+      # trigger needs no re-apply step (unlike the attachments policies above) —
+      # it is plain DDL on a table that exists at `supabase start`.
+      - name: Verify the properties_migration flip contract
+        run: |
+          export SUPABASE_URL=$(supabase status -o json | jq -r '.API_URL')
+          export ANON_KEY=$(supabase status -o json | jq -r '.ANON_KEY')
+          export SUPABASE_SECRET_KEY=$(supabase status -o json | jq -r '.SERVICE_ROLE_KEY')
+          pnpm rls:verify-properties-flip
 
       - name: Stop Supabase
         if: always()
