@@ -724,11 +724,11 @@ const reapSeatsInTx = async (
       // Post-flip, an edit to a generated value row reprojects into the seat's
       // cell, so `matchesAliasSeatSeed` above sees the drift and refuses. That
       // is what makes tolerating machine children safe there. Pre-flip the
-      // projection processor is dormant, so the cell cannot speak for the
-      // subtree and the only alternative is to enumerate every way a user
-      // could have touched it — shape, then content, then the property bag,
-      // then whatever the next round finds. Two rounds of review found two
-      // such holes, each a silent soft-delete of a user's edit.
+      // projection is dormant, so the cell cannot speak for the subtree, and
+      // the only alternative is to enumerate every way a user could have
+      // touched it — shape, content, the property bag, and so on. Getting that
+      // enumeration wrong is a silent soft-delete of a user's edit, so do not
+      // attempt it: an incomplete guard here is worse than no reaping.
       //
       // Not reaping is the documented SAFE MISS (see the gate list below): the
       // seat squats until the alias is re-typed and re-dropped, and normal
