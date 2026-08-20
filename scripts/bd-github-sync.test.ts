@@ -18,6 +18,7 @@ import {
   issueNumberFromRef,
   matchesCommitCommand,
   hasDynamicBody,
+  hasStdinBody,
   matchesPrCommand,
   planClosePushes,
   planCloseReconciliation,
@@ -162,6 +163,14 @@ describe('bodyFilePaths / resolveBodyPath', () => {
   it('extracts release notes and PR template files', () => {
     expect(bodyFilePaths('gh release create v1 --notes-file notes.md')).toEqual(['notes.md'])
     expect(bodyFilePaths('gh pr create --template body.md --title t')).toEqual(['body.md'])
+  })
+
+  it('classifies stdin bodies from RAW values — quoting the sentinel must not hide it', () => {
+    expect(hasStdinBody('gh pr comment 12 -F "-"')).toBe(true)
+    expect(hasStdinBody('gh pr comment 12 -F "/dev/stdin"')).toBe(true)
+    expect(hasStdinBody('gh pr comment 12 -F -')).toBe(true)
+    expect(hasStdinBody('gh pr comment 12 -F body.md')).toBe(false)
+    expect(hasStdinBody('git commit -m "mentions -F - in prose"')).toBe(false)
   })
 
   // gh issue create's --template names a REPOSITORY template, not a file —
@@ -359,6 +368,9 @@ describe('hasDynamicBody', () => {
     expect(hasDynamicBody('gh pr comment 1 -b "$BODY"')).toBe(true)
     expect(hasDynamicBody('gh release create v1 --notes "`gen-notes`"')).toBe(true)
     expect(hasDynamicBody('gh pr merge 1 --subject "$(cat subject.md)"')).toBe(true)
+    // attached short-option values are CLI-supported: -t"$(…)" and -tfoo
+    expect(hasDynamicBody('gh pr merge 1 -t"$(cat subject.md)"')).toBe(true)
+    expect(hasDynamicBody('gh pr comment 1 -b"$MESSAGE"')).toBe(true)
     expect(hasDynamicBody('gh issue close 1 -c "$(cat message.txt)"')).toBe(true)
     expect(hasDynamicBody('gh pr reopen 1 --comment "$MESSAGE"')).toBe(true)
     expect(hasDynamicBody('gh pr create -t "$TITLE" -b b')).toBe(true)
@@ -1026,6 +1038,10 @@ describe('hookPrePr process behavior', { timeout: 20_000 }, () => {
     const piped = hook('cat body.md | gh pr comment 12 -F -')
     expect(piped.status).toBe(2)
     expect(piped.stderr).toContain('stdin')
+    // quoting the sentinel blanked it in the skeleton and bypassed the rule
+    const quoted = hook('cat body.md | gh pr comment 12 -F "-"')
+    expect(quoted.status).toBe(2)
+    expect(quoted.stderr).toContain('stdin')
     // /dev/stdin is stdin in disguise: reading it in the hook scans the
     // hook's own drained stream while gh publishes the piped file
     const device = hook('cat body.md | gh pr comment 12 -F /dev/stdin')
@@ -1047,6 +1063,25 @@ describe('hookPrePr process behavior', { timeout: 20_000 }, () => {
     const inBody = hook(`gh pr comment 12 --body "see https://github.com/Stvad/knowledge-medium/issues/653"`)
     expect(inBody.status).toBe(2)
     expect(inBody.stderr).toContain('Real GC failure')
+    // quoted prose that merely RESEMBLES a positional target keeps its refs:
+    // the strip applies only when the skeleton confirms an unquoted target
+    const prose = hook(`gh pr comment 12 --body "instruction: pr comment https://github.com/Stvad/knowledge-medium/issues/653"`)
+    expect(prose.status).toBe(2)
+    expect(prose.stderr).toContain('Real GC failure')
+    // even a FULL gh-command spelled out in prose keeps its ref: the strip
+    // runs only when the skeleton confirms an unquoted positional target
+    const fullProse = hook(`gh pr comment 12 --body "run: gh pr comment https://github.com/Stvad/knowledge-medium/issues/653 --body ok"`)
+    expect(fullProse.status).toBe(2)
+    expect(fullProse.stderr).toContain('Real GC failure')
+  })
+
+  // --recover republishes cached input from a failed create — content the
+  // hook never saw; same fail-closed family as stdin pipes and expansions.
+  it('fails closed on recovered publication input', () => {
+    const { hook } = makeRepo({ dbReady: true })
+    const r = hook('gh pr create --recover abc123 --title t')
+    expect(r.status).toBe(2)
+    expect(r.stderr).toContain('recovered input')
   })
 
   it('scans file-backed commit messages (-F) for close keywords', () => {

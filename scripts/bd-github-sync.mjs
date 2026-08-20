@@ -174,8 +174,10 @@ export const matchesCommitCommand = cmd => GIT_COMMIT.test(commandSkeleton(cmd))
 // Single-quoted values never expand and stay out; commit -m is deliberately
 // exempt (prose dollars are common there, and expansion-built commit
 // messages fall under the out-of-visibility residual already on record).
+// The separator is optional: the CLI accepts ATTACHED short-option values
+// (-t"$(…)", -tfoo), and requiring whitespace or = would let those through.
 export const hasDynamicBody = cmd =>
-  /(?:^|\s)(?:--body|--notes|--subject|--title|--comment|-[bntc])(?:=|\s+)(?:"[^"]*[$`][^"]*"|[^\s'"]*[$`]\S*)/.test(cmd)
+  /(?:^|\s)(?:--body|--notes|--subject|--title|--comment|-[bntc])(?:=|\s+)?(?:"[^"]*[$`][^"]*"|[^\s'"]*[$`]\S*)/.test(cmd)
 
 // The escape hatch must also be in command-prefix position of the SKELETON —
 // honored from quoted prose, a PR body QUOTING it would both bypass the gate
@@ -277,6 +279,16 @@ export const bodyFilePaths = cmd => {
   return [...cmd.matchAll(flagCapture)]
     .map(m => m[1].replace(/^(["'])(.*)\1$/, '$2'))
     .filter(p => !STDIN_PATH.test(p))
+}
+
+// Stdin classification reads the RAW values: a quoted sentinel (-F "-") is
+// blanked in the skeleton, and missing it means the hook scans nothing while
+// gh publishes the pipe. The flag must still sit outside quotes.
+export const hasStdinBody = cmd => {
+  if (!/(?:--body-file|--notes-file|--template|--file|-F|-T)(?:=|\s)/.test(commandSkeleton(cmd))) return false
+  return [...cmd.matchAll(/(?:--body-file|--notes-file|--template|--file|-F|-T)(?:=|\s+)("[^"]*"|'[^']*'|[^\s'"]+)/g)]
+    .map(m => m[1].replace(/^(["'])(.*)\1$/, '$2'))
+    .some(p => STDIN_PATH.test(p))
 }
 
 /** Resolve a body-file path the way the shell would have: ~, then cwd. */
@@ -833,8 +845,7 @@ const hookPrePr = () => {
   // `cd` chain inside the command, a typo) would publish its references
   // unverified if silently skipped.
   const readBodies = () => {
-    const stdinBody = /(?:--body-file|--notes-file|--template|--file|-F|-T)(?:=|\s+)(?:-(?:\s|$)|\/dev\/stdin|\/dev\/fd\/\d+|\/proc\/self\/fd\/\d+)/.test(commandSkeleton(cmd))
-    if (stdinBody && !cmd.includes('<<') && !allowsIssueRefs(cmd)) {
+    if (hasStdinBody(cmd) && !cmd.includes('<<') && !allowsIssueRefs(cmd)) {
       console.error(
         'This command feeds its published body from stdin, which this gate cannot inspect. Use a heredoc (scanned), a file, or an inline --body — or, after verifying the references yourself, re-run with KM_ISSUE_REFS_OK=1 prefixed.',
       )
@@ -862,6 +873,15 @@ const hookPrePr = () => {
     return echoIssueRefs(commitText, commitRefs)
   }
 
+  // --recover republishes input cached by a FAILED create run — content this
+  // hook never saw. Same family as stdin pipes and expansions: fail closed.
+  if (/(?:^|\s)--recover(?:=|\s)/.test(commandSkeleton(cmd)) && !allowsIssueRefs(cmd)) {
+    console.error(
+      'This command republishes recovered input from a failed run, which this gate cannot inspect. Re-create the publication with visible text — or, after verifying the recovered content yourself, re-run with KM_ISSUE_REFS_OK=1 prefixed.',
+    )
+    process.exit(2)
+  }
+
   if (hasDynamicBody(cmd) && !allowsIssueRefs(cmd)) {
     console.error(
       'This command builds its published body by shell expansion ($(…), `…` or a variable), which this gate cannot inspect. Publish literal text, a heredoc, or a file — or, after verifying the references yourself, re-run with KM_ISSUE_REFS_OK=1 prefixed.',
@@ -872,8 +892,15 @@ const hookPrePr = () => {
   const bodies = readBodies()
   // A positional target URL (`gh pr comment <url> --body …`) is the command's
   // addressee, not published text — stripped so it does not cost a
-  // title-confirmation round. URLs inside quoted bodies stay and verify.
-  const text = [cmd.replace(/((?:pr|issue)\s+\w+\s+)https?:\/\/\S+/g, '$1'), ...bodies].join('\n')
+  // title-confirmation round. Two guards keep the strip away from published
+  // text: the pattern is anchored on `gh` itself, and it only applies at all
+  // when the SKELETON confirms an unquoted positional target exists — quoted
+  // prose that merely resembles one must keep its refs verified. Residual:
+  // prose spelling out a full `gh … <url>` alongside a real positional
+  // target also gets stripped — accepted over parsing argument positions.
+  const targetUrl = () => /((?:\S*\/)?gh\s+(?:-\S+\s+(?:[^-\s]\S*\s+)?)*(?:pr|issue)\s+\w+\s+)https?:\/\/\S+/g
+  const strippedCmd = targetUrl().test(commandSkeleton(cmd)) ? cmd.replace(targetUrl(), '$1') : cmd
+  const text = [strippedCmd, ...bodies].join('\n')
   // The two escapes are independent: a command allowed to mention bead ids
   // can still carry a hallucinated issue number, and vice versa.
   const ids = allowsBeadIds(cmd) ? [] : extractBeadIds(text)
