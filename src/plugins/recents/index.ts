@@ -9,23 +9,22 @@ import type { AppExtension } from '@/facets/facet.js'
 import { systemToggle } from '@/facets/togglable.js'
 import { ActionContextTypes, type ActionConfig } from '@/shortcuts/types.js'
 import { getOrCreateRecentsPage } from '@/data/recentsPage.js'
-import { navigateFromGlobalCommand } from '@/utils/navigation.js'
+import { navigateAsyncFromGlobalCommand } from '@/utils/navigation.js'
 import type { Repo } from '@/data/repo'
 import { RecentsHeaderItem } from './HeaderItem.tsx'
 import { RecentsPageBlockRenderer } from './RecentsPageBlockRenderer.tsx'
 
 export const OPEN_RECENTS_ACTION_ID = 'open_recents'
 
-// Resolves the LIVE Recents page (issue #378: the raw deterministic id can be
-// a tombstone, e.g. after a live block adopted the canonical alias) rather
-// than navigating straight to `recentsPageBlockId`. Get-or-create both adopts
-// an existing claimant and creates the page if bootstrap never ran, so this
-// can never land on a dead id.
+// Resolved at navigation time, not from `recentsPageBlockId`: the derived id is
+// not the live page and can name a tombstone or nothing. Routed through the
+// async global-command path so the intent policy decides BEFORE the page is
+// materialised — see `navigateAsyncFromGlobalCommand`.
 export const openRecents = async (repo: Repo): Promise<void> => {
-  const workspaceId = repo.activeWorkspaceId
-  if (!workspaceId) return
-  const page = await getOrCreateRecentsPage(repo, workspaceId)
-  navigateFromGlobalCommand(repo, {blockId: page.id, workspaceId})
+  await navigateAsyncFromGlobalCommand(
+    repo,
+    async workspaceId => ({blockId: (await getOrCreateRecentsPage(repo, workspaceId)).id}),
+  )
 }
 
 export const openRecentsAction = (repo: Repo): ActionConfig<typeof ActionContextTypes.GLOBAL> => ({

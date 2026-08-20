@@ -10,6 +10,7 @@ import { getLayoutSessionBlock, getUIStateBlock } from '@/data/stateBlocks'
 import { panelBlockId, allPanelRowsInLayoutOrder } from '@/utils/panelLayoutProjection'
 import { __resetLayoutSessionIdForTesting } from '@/utils/layoutSessionId'
 import { getOrCreateRecentsPage, recentsPageBlockId } from '@/data/recentsPage.ts'
+import { goTo, navigationIntentVerb, type NavigationDecision } from '@/utils/navigation.ts'
 import { openRecents, openRecentsAction } from '../index.ts'
 
 const WS = 'ws-recents'
@@ -89,5 +90,25 @@ describe('recents navigation resolves the live page (issue #378)', () => {
     await vi.waitFor(async () => {
       expect(await currentMainPanelBlockId(env.repo)).toBe(recentsPageBlockId(WS))
     })
+  })
+
+  it('lets an intent policy redirect the command without materialising Recents', async () => {
+    // The policy decides first. A redirected command must not pay for — or be
+    // blocked by — a Recents page it is not going to open, and the resolver is
+    // a get-or-create, so running it would leave a page nobody navigated to.
+    const {repo} = await setup()
+    repo.setRuntimeContributions(navigationIntentVerb.decoratorsFacet, 'test-policy', [
+      next => gesture => {
+        const decision = next(gesture) as NavigationDecision
+        return decision.kind === 'navigate'
+          ? goTo({...decision.input, blockId: 'b-policy-target'})
+          : decision
+      },
+    ])
+
+    await openRecents(repo)
+
+    // No Recents page was minted at all.
+    expect(await repo.load(recentsPageBlockId(WS))).toBeNull()
   })
 })

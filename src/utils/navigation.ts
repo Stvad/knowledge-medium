@@ -819,6 +819,53 @@ export const useBlockOpener = ({plainClick = 'follow-link'}: BlockOpenerOptions 
   )
 }
 
+/** Substitute a resolved target into a decision that still carries the
+ *  placeholder. Shared by the click and global-command async paths so both obey
+ *  the same rule: a policy that already chose a block keeps it. Re-checked here
+ *  rather than assumed, since this is the only writer of the real id. */
+const patchResolvedTarget = (
+  decision: NavigationDecision,
+  target: OpenBlockContext,
+): NavigationDecision => mapNavigate(decision, input => (
+  input.blockId === NAVIGATOR_TARGET_PROBE_BLOCK_ID
+    ? {...input, blockId: target.blockId, workspaceId: target.workspaceId ?? input.workspaceId}
+    : input
+))
+
+/** `navigateFromGlobalCommand` for a target that is only known ASYNCHRONOUSLY —
+ *  a get-or-create page. Resolves the intent FIRST, so a policy that redirects
+ *  navigator commands elsewhere wins without this ever running `resolveTarget`
+ *  — which matters because that resolver may MUTATE (a get-or-create would
+ *  create a page nobody then navigates to), and because awaiting it would let a
+ *  slow or failing materialisation block a navigation that no longer needs it.
+ *  When the decision does still target this surface, the page is materialised in
+ *  the workspace the DECISION names, not the ambient active one.
+ *
+ *  Unlike the click path there is no DOM event, so nothing needs gating and this
+ *  can simply await. */
+export const navigateAsyncFromGlobalCommand = async (
+  repo: Repo,
+  resolveTarget: (workspaceId: string) => Promise<OpenBlockContext>,
+  {workspaceId}: {workspaceId?: string} = {},
+): Promise<NavigationResult | null> => {
+  const resolvedWorkspaceId = workspaceId ?? repo.activeWorkspaceId
+  if (!resolvedWorkspaceId) return null
+  const decision = resolveNavigationIntent(repo, {
+    role: 'navigator',
+    modifiers: PLAIN_PRIMARY_CLICK,
+    blockId: NAVIGATOR_TARGET_PROBE_BLOCK_ID,
+    workspaceId: resolvedWorkspaceId,
+    viewport: currentViewport(),
+  })
+  if (decision.kind !== 'navigate') return null
+  if (decision.input.blockId !== NAVIGATOR_TARGET_PROBE_BLOCK_ID) {
+    return navigate(repo, decision.input)
+  }
+  const target = await resolveTarget(decision.input.workspaceId ?? resolvedWorkspaceId)
+  const resolved = patchResolvedTarget(decision, target)
+  return resolved.kind === 'navigate' ? navigate(repo, resolved.input) : null
+}
+
 /** `openBlockFromEvent` for a surface whose target block id is only known
  *  ASYNCHRONOUSLY — a get-or-create page. The Recents header button is the
  *  motivating case: since issue #378 kernel pages resolve alias-first, so the
@@ -888,14 +935,7 @@ export const openAsyncBlockFromEvent = (
       // would materialise the page in one workspace and navigate its id
       // through another's layout.
       const target = await resolveTarget(decision.input.workspaceId ?? resolvedWorkspaceId)
-      const resolved = mapNavigate(decision, input => (
-        // Re-check rather than assume: `mapNavigate` is the only writer of the
-        // real id, and a decorator could in principle be re-consulted between
-        // the check above and here.
-        input.blockId === NAVIGATOR_TARGET_PROBE_BLOCK_ID
-          ? {...input, blockId: target.blockId, workspaceId: target.workspaceId ?? input.workspaceId}
-          : input
-      ))
+      const resolved = patchResolvedTarget(decision, target)
       if (resolved.kind === 'navigate') await navigate(repo, resolved.input)
     } catch (error) {
       console.error('[navigation] async open target failed', error)
