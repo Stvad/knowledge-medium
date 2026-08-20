@@ -465,6 +465,27 @@ describe('property cell → children backfill', {timeout: 30_000}, () => {
       expect(progress.editedUnderPass).toBe(false)
     })
 
+    it('does not resurrect a property that was deleted through its children', async () => {
+      // "A cell key with no live field row" has TWO causes post-flip: history the
+      // pass exists to materialize, and a property DELETED through the children on
+      // a peer whose owner row has not caught up here. Treating the second as the
+      // first recreates the property AND uploads it, undoing the delete for the
+      // whole fleet.
+      await create('b1', {'demo:note': 'deleted on a peer'})
+      await runPropertyCellBackfill(makeCtx())
+      const fieldRow = (await fieldRowsOf('b1'))[0]!
+      await flip()
+      // Raw, so no processor re-projects the owner cell — the shape a
+      // sync-applied delete has while this device still holds the stale bag.
+      await sharedDb.db.execute(
+        `UPDATE blocks SET deleted = 1 WHERE id = ? OR parent_id = ?`,
+        [fieldRow.id, fieldRow.id])
+
+      await runPropertyCellBackfill(makeCtx())
+
+      expect(await fieldRowsOf('b1')).toEqual([])
+    })
+
     it('does not sweep an owner whose cell has emptied out', async () => {
       // The orphan leg exists to delete, and only to delete: its owners are
       // the ones whose bag no longer holds anything. Post-flip an empty bag is

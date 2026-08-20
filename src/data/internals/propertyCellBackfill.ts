@@ -55,6 +55,10 @@ export const ROWS_PER_KEY = 2
  *  long it holds the writer. */
 const SCAN_PAGE = 500
 
+/** Shared empty set for an owner with no tombstoned field rows — the common
+ *  case, and one allocation per visited block otherwise. */
+const EMPTY_FIELD_IDS: ReadonlySet<string> = new Set()
+
 /** What "carries a property" means, for a block aliased `b`. Written once
  *  because the pass needs it in three places and the third is its NEGATION:
  *  the orphan leg below has to select exactly the owners this one cannot see.
@@ -313,6 +317,39 @@ const namesToReconcile = async (
 }
 
 /**
+ * Owners in this batch that hold a TOMBSTONED field row, mapped to the fieldIds
+ * those rows stood for.
+ *
+ * The evidence that separates the two things "a cell key with no live field row"
+ * can mean past the flip — see {@link namesPendingMaterialization}. One indexed
+ * lookup per batch (served by `idx_blocks_field_form`'s `(workspace_id,
+ * parent_id)` prefix), taken for both modes rather than only when child-backed:
+ * the flip is read per BATCH, inside the writing transaction, so a query that
+ * decided its own necessity from a pre-transaction read would leave the guard
+ * absent for exactly the batch the flip arrived in.
+ */
+const reapedFieldIdsFor = async (
+  ctx: WorkspaceBackfillContext,
+  ownerIds: readonly string[],
+): Promise<Map<string, Set<string>>> => {
+  const rows = await ctx.getAll<{ownerId: string; fieldId: string}>(
+    `SELECT parent_id AS ownerId, reference_target_id AS fieldId
+       FROM blocks
+      WHERE workspace_id = ? AND is_field_form = 1 AND deleted = 1
+        AND reference_target_id IS NOT NULL
+        AND parent_id IN (${ownerIds.map(() => '?').join(',')})`,
+    [ctx.workspaceId, ...ownerIds],
+  )
+  const out = new Map<string, Set<string>>()
+  for (const {ownerId, fieldId} of rows) {
+    const set = out.get(ownerId) ?? new Set<string>()
+    set.add(fieldId)
+    out.set(ownerId, set)
+  }
+  return out
+}
+
+/**
  * The create-only subset: cell keys with no field row of their own.
  *
  * This is the whole post-flip contract. Past the flip the CHILDREN are the
@@ -331,11 +368,21 @@ const namesToReconcile = async (
  * A field row with NO value children is deliberately not treated as a gap:
  * post-flip that projects as "key unset" (§9), which is what deleting the
  * value row means, and re-adding it from the cell would undo the user's edit.
+ *
+ * `reaped` is the same rule for a key whose field row is TOMBSTONED. "No live
+ * field row" has two causes — history, and a property DELETED through its
+ * children on a peer whose owner row has not reached this device — and only the
+ * tombstone tells them apart. Without it the pass recreates the property and
+ * UPLOADS it, undoing the delete for the fleet. Genuine history carries no
+ * tombstone, so this costs the intended path nothing. It does NOT cover an
+ * out-of-band HARD delete of a child, which leaves no tombstone to find and
+ * whose stale cell key is a known permanent orphan (issue #404).
  */
 const namesPendingMaterialization = async (
   tx: Tx,
   ctx: WorkspaceBackfillContext,
   row: BlockData,
+  reaped: ReadonlySet<string>,
 ): Promise<string[]> => {
   const materialized = new Set<string>()
   for (const child of await tx.childrenOf(row.id, undefined)) {
@@ -345,7 +392,7 @@ const namesPendingMaterialization = async (
   }
   return Object.keys(row.properties).filter(name => {
     const fieldId = ctx.resolveNameSchema(name)?.fieldId
-    return fieldId === undefined || !materialized.has(fieldId)
+    return fieldId === undefined || !(materialized.has(fieldId) || reaped.has(fieldId))
   })
 }
 
@@ -443,6 +490,7 @@ const sweep = async (
       budget += next.keys * ROWS_PER_KEY
     }
 
+    const reaped = await reapedFieldIdsFor(ctx, batch.map(({id}) => id))
     let abandoned = false
     await ctx.tx(async tx => {
       // Read INSIDE the transaction that writes, per batch, because the flip
@@ -465,7 +513,7 @@ const sweep = async (
         const row = await tx.get(id)
         if (row === null || row.deleted) continue
         const names = childBacked
-          ? await namesPendingMaterialization(tx, ctx, row)
+          ? await namesPendingMaterialization(tx, ctx, row, reaped.get(id) ?? EMPTY_FIELD_IDS)
           : await namesToReconcile(tx, ctx, row)
         const ok = await materializeRow(tx, ctx, row, names, recordFailure,
           values => {
