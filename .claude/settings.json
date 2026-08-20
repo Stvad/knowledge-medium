@@ -18,6 +18,11 @@
             "type": "command"
           },
           {
+            "command": "node \"$CLAUDE_PROJECT_DIR/scripts/check-stash-worktree.mjs\"",
+            "statusMessage": "Checking for cross-worktree stash hazards…",
+            "type": "command"
+          },
+          {
             "command": "node \"$CLAUDE_PROJECT_DIR/scripts/bd-github-sync.mjs\" --hook-pre-pr",
             "statusMessage": "Checking for publishable bead ids…",
             "timeout": 180,

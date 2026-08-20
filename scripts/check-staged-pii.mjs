@@ -19,6 +19,7 @@
 
 import { readFileSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
+import { shellSegments } from './shell-segments.mjs'
 
 const UUID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i
 
@@ -74,8 +75,27 @@ for (const line of diff.split('\n')) {
     hits.push(`  ${file}: ${line.slice(1).trim().slice(0, 140)}`)
   }
 }
-// The commit message rides in the command itself (-m "…").
-if (UUID.test(cmd)) hits.push('  (commit message): contains a uuid')
+// The commit message rides in the command itself, but ONLY in the -m/--message
+// arguments — a uuid elsewhere on the command line (a scratchpad path in a
+// redirect, a branch name) is not commit content and must not block.
+const messageArgs = []
+for (const tokens of shellSegments(cmd)) {
+  const verb = tokens.findIndex(t => t.replace(/.*\//, '') === 'git')
+  if (verb === -1 || !tokens.includes('commit', verb)) continue
+  for (let i = verb; i < tokens.length; i++) {
+    const t = tokens[i]
+    if (t === '--message' || /^-[a-zA-Z]*m$/.test(t)) {
+      if (tokens[i + 1] !== undefined) messageArgs.push(tokens[i + 1])
+    } else if (t.startsWith('--message=')) {
+      messageArgs.push(t.slice('--message='.length))
+    } else if (/^-m./.test(t)) {
+      messageArgs.push(t.slice(2)) // attached form (-mfix…)
+    }
+  }
+}
+if (messageArgs.some(text => UUID.test(text))) {
+  hits.push('  (commit message): contains a uuid')
+}
 
 if (hits.length === 0) allow()
 
