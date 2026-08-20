@@ -1,0 +1,2 @@
+import{resolveDeletionRefusal as e}from"../extensions/core.js";import{showInfo as t}from"./toast.js";var n=`block-deletion-refused`,r=async e=>i([e]),i=async e=>{if(!await a(e))return!1;for(let t of e)await t.delete();return!0},a=async r=>{await Promise.all(r.map(e=>e.load()));for(let i of r){let r=await e(i.repo,i);if(r)return t(r,{id:n}),!1}return!0};export{r as deleteBlockThroughUi,i as deleteBlocksThroughUi,a as ensureDeletableThroughUi};
+//# sourceMappingURL=deleteBlockThroughUi.js.map
