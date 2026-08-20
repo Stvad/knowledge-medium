@@ -58,6 +58,10 @@ const setTestVisible = (el: HTMLElement, visible: boolean): void => {
   }
 }
 
+/** The row's own content element. Production renders it BEFORE the row's
+ *  children, which is what makes `visibilityTargetFor`'s "first match in
+ *  document order" its own rather than a descendant's — so the builder
+ *  emits it there too. */
 const addVisibilityTarget = (el: HTMLElement): HTMLElement => {
   const target = document.createElement('div')
   target.setAttribute('data-block-visibility-target', 'true')
@@ -70,6 +74,11 @@ interface InstanceSpec {
   instance: string
   surface?: string
   entryId?: string
+  /** Nested instances, for the tests that care about same-depth siblings
+   *  and ancestor walking. */
+  children?: InstanceSpec[]
+  /** Give this row its own content element (see `addVisibilityTarget`). */
+  visibilityTarget?: boolean
 }
 
 interface PanelSpec {
@@ -82,20 +91,39 @@ type LayoutSpec = ReadonlyArray<
   | {kind: 'stack'; columnId: string; panels: PanelSpec[]}
 >
 
+const appendInstance = (parent: HTMLElement, inst: InstanceSpec): void => {
+  const block = document.createElement('div')
+  block.setAttribute('data-block-nav-item', 'true')
+  block.setAttribute('data-block-id', inst.blockId)
+  block.setAttribute('data-render-scope-id', inst.instance)
+  if (inst.surface) block.setAttribute('data-block-surface', inst.surface)
+  if (inst.entryId) block.setAttribute('data-backlink-entry-id', inst.entryId)
+  parent.appendChild(block)
+  if (inst.visibilityTarget) addVisibilityTarget(block)
+  for (const child of inst.children ?? []) appendInstance(block, child)
+}
+
 const buildPanel = (spec: PanelSpec): HTMLElement => {
   const el = document.createElement('div')
   el.setAttribute('data-panel-id', spec.panelId)
-  for (const inst of spec.instances) {
-    const block = document.createElement('div')
-    block.setAttribute('data-block-nav-item', 'true')
-    block.setAttribute('data-block-id', inst.blockId)
-    block.setAttribute('data-render-scope-id', inst.instance)
-    if (inst.surface) block.setAttribute('data-block-surface', inst.surface)
-    if (inst.entryId) block.setAttribute('data-backlink-entry-id', inst.entryId)
-    el.appendChild(block)
-  }
+  for (const inst of spec.instances) appendInstance(el, inst)
   return el
 }
+
+/** For the recovery tests, which want a panel outside the column layout. */
+const buildBarePanel = (spec: PanelSpec): HTMLElement => {
+  const panel = buildPanel(spec)
+  document.body.appendChild(panel)
+  return panel
+}
+
+/** Outline instance under `p1`, with this file's `p1:<id>` scope convention. */
+const p1Instance = (blockId: string, children?: InstanceSpec[]): InstanceSpec => ({
+  blockId,
+  instance: `p1:${blockId}`,
+  surface: 'outline',
+  ...(children ? {children} : {}),
+})
 
 const makeColumn = (columnId: string, panel: HTMLElement): HTMLElement => {
   const column = document.createElement('div')
@@ -452,26 +480,9 @@ describe('findRecoveryAnchor (proactive disappear-handler)', () => {
     // and the parent contains three children (c1, X, c3). When the
     // parent collapses, all three children unmount together; neither
     // sibling survives but the parent itself does.
-    const panel = document.createElement('div')
-    panel.setAttribute('data-panel-id', 'p1')
-
-    const parent = document.createElement('div')
-    parent.setAttribute('data-block-id', 'parent')
-    parent.setAttribute('data-block-nav-item', 'true')
-    parent.setAttribute('data-render-scope-id', 'p1:parent')
-    parent.setAttribute('data-block-surface', 'outline')
-    panel.appendChild(parent)
-
-    for (const blockId of ['c1', 'X', 'c3']) {
-      const child = document.createElement('div')
-      child.setAttribute('data-block-id', blockId)
-      child.setAttribute('data-block-nav-item', 'true')
-      child.setAttribute('data-render-scope-id', `p1:${blockId}`)
-      child.setAttribute('data-block-surface', 'outline')
-      parent.appendChild(child)
-    }
-
-    document.body.appendChild(panel)
+    buildBarePanel({panelId: 'p1', instances: [
+      p1Instance('parent', ['c1', 'X', 'c3'].map(id => p1Instance(id))),
+    ]})
 
     rememberInstancePosition('p1', findInstance('p1:X'))
 
@@ -534,28 +545,13 @@ describe('findRecoveryAnchor (proactive disappear-handler)', () => {
     // (the first descendant) which also disappears, falling back to
     // `above` (prev). With same-depth siblings, `parent.next = below`
     // (the next child of `top`), so recovery picks that directly.
-    const panel = document.createElement('div')
-    panel.setAttribute('data-panel-id', 'p1')
-
-    const mkInstance = (blockId: string): HTMLElement => {
-      const el = document.createElement('div')
-      el.setAttribute('data-block-id', blockId)
-      el.setAttribute('data-block-nav-item', 'true')
-      el.setAttribute('data-render-scope-id', `p1:${blockId}`)
-      el.setAttribute('data-block-surface', 'outline')
-      return el
-    }
-
-    const top = mkInstance('top')
-    panel.appendChild(top)
-    top.appendChild(mkInstance('above'))
-    const parent = mkInstance('parent')
-    top.appendChild(parent)
-    parent.appendChild(mkInstance('child'))
-    parent.appendChild(mkInstance('c2'))
-    top.appendChild(mkInstance('below'))
-
-    document.body.appendChild(panel)
+    buildBarePanel({panelId: 'p1', instances: [
+      p1Instance('top', [
+        p1Instance('above'),
+        p1Instance('parent', [p1Instance('child'), p1Instance('c2')]),
+        p1Instance('below'),
+      ]),
+    ]})
 
     rememberInstancePosition('p1', findInstance('p1:parent'))
     findInstance('p1:parent').remove()
@@ -575,27 +571,13 @@ describe('findRecoveryAnchor (proactive disappear-handler)', () => {
     // wrongly land there. With same-depth: X has no siblings inside
     // parent, so we walk up to parent and focus that — matching the
     // multi-child collapse case.
-    const panel = document.createElement('div')
-    panel.setAttribute('data-panel-id', 'p1')
-
-    const mkInstance = (blockId: string): HTMLElement => {
-      const el = document.createElement('div')
-      el.setAttribute('data-block-id', blockId)
-      el.setAttribute('data-block-nav-item', 'true')
-      el.setAttribute('data-render-scope-id', `p1:${blockId}`)
-      el.setAttribute('data-block-surface', 'outline')
-      return el
-    }
-
-    const top = mkInstance('top')
-    panel.appendChild(top)
-    top.appendChild(mkInstance('above'))
-    const parent = mkInstance('parent')
-    top.appendChild(parent)
-    parent.appendChild(mkInstance('X'))
-    top.appendChild(mkInstance('below'))
-
-    document.body.appendChild(panel)
+    buildBarePanel({panelId: 'p1', instances: [
+      p1Instance('top', [
+        p1Instance('above'),
+        p1Instance('parent', [p1Instance('X')]),
+        p1Instance('below'),
+      ]),
+    ]})
 
     rememberInstancePosition('p1', findInstance('p1:X'))
     findInstance('p1:X').remove()
@@ -605,52 +587,27 @@ describe('findRecoveryAnchor (proactive disappear-handler)', () => {
   })
 
   it('does not recover from a backlink to its enclosing outline DOM ancestor', () => {
-    const panel = document.createElement('div')
-    panel.setAttribute('data-panel-id', 'p1')
-
-    const top = document.createElement('div')
-    top.setAttribute('data-block-id', 'top')
-    top.setAttribute('data-block-nav-item', 'true')
-    top.setAttribute('data-render-scope-id', 'p1:top')
-    top.setAttribute('data-block-surface', 'outline')
-    panel.appendChild(top)
-
-    const backlink = document.createElement('div')
-    backlink.setAttribute('data-block-id', 'X')
-    backlink.setAttribute('data-block-nav-item', 'true')
-    backlink.setAttribute('data-render-scope-id', 'p1:backlink:X')
-    backlink.setAttribute('data-block-surface', 'backlink')
-    top.appendChild(backlink)
-
-    document.body.appendChild(panel)
+    buildBarePanel({panelId: 'p1', instances: [
+      p1Instance('top', [
+        {blockId: 'X', instance: 'p1:backlink:X', surface: 'backlink'},
+      ]),
+    ]})
+    const backlink = findInstance('p1:backlink:X')
 
     rememberInstancePosition('p1', backlink)
     backlink.remove()
-    setTestVisible(top, true)
+    setTestVisible(findInstance('p1:top'), true)
 
     expect(findRecoveryAnchor('p1', {blockId: 'X', renderScopeId: 'p1:backlink:X'})).toBeNull()
   })
 
   it('does not treat a visible ancestor shell as recoverable when its own visibility target is off-screen', () => {
-    const panel = document.createElement('div')
-    panel.setAttribute('data-panel-id', 'p1')
-
-    const parent = document.createElement('div')
-    parent.setAttribute('data-block-id', 'parent')
-    parent.setAttribute('data-block-nav-item', 'true')
-    parent.setAttribute('data-render-scope-id', 'p1:parent')
-    parent.setAttribute('data-block-surface', 'outline')
-    const parentVisibilityTarget = addVisibilityTarget(parent)
-    panel.appendChild(parent)
-
-    const child = document.createElement('div')
-    child.setAttribute('data-block-id', 'X')
-    child.setAttribute('data-block-nav-item', 'true')
-    child.setAttribute('data-render-scope-id', 'p1:X')
-    child.setAttribute('data-block-surface', 'outline')
-    parent.appendChild(child)
-
-    document.body.appendChild(panel)
+    buildBarePanel({panelId: 'p1', instances: [
+      {...p1Instance('parent', [p1Instance('X')]), visibilityTarget: true},
+    ]})
+    const parent = findInstance('p1:parent')
+    const child = findInstance('p1:X')
+    const parentVisibilityTarget = parent.querySelector<HTMLElement>('[data-block-visibility-target]')!
 
     rememberInstancePosition('p1', child)
     child.remove()

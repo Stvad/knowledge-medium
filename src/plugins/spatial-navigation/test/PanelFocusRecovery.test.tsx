@@ -49,17 +49,24 @@ const setup = async (): Promise<Harness> => {
   return {h, repo}
 }
 
-const buildPanelDom = (
-  panelId: string,
-  blocks: Array<{blockId: string; instance: string}>,
-): HTMLElement => {
+interface InstanceSpec {blockId: string; instance?: string; children?: NodeSpec[]}
+/** A block id — or, when the test needs a non-default render scope or a
+ *  subtree, the long form. `setNavAttrs` defaults the scope to `i-<blockId>`. */
+type NodeSpec = string | InstanceSpec
+
+const appendInstance = (parent: HTMLElement, spec: NodeSpec): void => {
+  const {blockId, instance, children}: InstanceSpec =
+    typeof spec === 'string' ? {blockId: spec} : spec
+  const el = document.createElement('div')
+  setNavAttrs(el, blockId, instance)
+  parent.appendChild(el)
+  for (const child of children ?? []) appendInstance(el, child)
+}
+
+const buildPanelDom = (panelId: string, blocks: NodeSpec[]): HTMLElement => {
   const panel = document.createElement('div')
   panel.setAttribute('data-panel-id', panelId)
-  for (const b of blocks) {
-    const inst = document.createElement('div')
-    setNavAttrs(inst, b.blockId, b.instance)
-    panel.appendChild(inst)
-  }
+  for (const spec of blocks) appendInstance(panel, spec)
   document.body.appendChild(panel)
   return panel
 }
@@ -162,11 +169,7 @@ afterEach(async () => {
 
 describe('PanelFocusRecovery', {timeout: TEST_TIMEOUT_MS}, () => {
   it("recovers to 'block previously below' when the focused block disappears", async () => {
-    const panel = buildPanelDom(PANEL_ID, [
-      {blockId: 'first', instance: 'i-first'},
-      {blockId: 'middle', instance: 'i-middle'},
-      {blockId: 'last', instance: 'i-last'},
-    ])
+    const panel = buildPanelDom(PANEL_ID, ['first', 'middle', 'last'])
 
     const panelBlock = env.repo.block(PANEL_ID)
     render(<PanelFocusRecovery block={panelBlock}/>)
@@ -185,11 +188,7 @@ describe('PanelFocusRecovery', {timeout: TEST_TIMEOUT_MS}, () => {
   it("falls to 'previously above' when the disappeared block was first in the panel", async () => {
     await setFocused('first')
 
-    const panel = buildPanelDom(PANEL_ID, [
-      {blockId: 'first', instance: 'i-first'},
-      {blockId: 'middle', instance: 'i-middle'},
-      {blockId: 'last', instance: 'i-last'},
-    ])
+    const panel = buildPanelDom(PANEL_ID, ['first', 'middle', 'last'])
 
     const panelBlock = env.repo.block(PANEL_ID)
     render(<PanelFocusRecovery block={panelBlock}/>)
@@ -212,17 +211,9 @@ describe('PanelFocusRecovery', {timeout: TEST_TIMEOUT_MS}, () => {
     }, {scope: ChangeScope.UiState})
     await setFocused('middle')
 
-    const panel = document.createElement('div')
-    panel.setAttribute('data-panel-id', PANEL_ID)
-    const parent = document.createElement('div')
-    setNavAttrs(parent, 'parent')
-    panel.appendChild(parent)
-    for (const blockId of ['c1', 'middle', 'c3']) {
-      const child = document.createElement('div')
-      setNavAttrs(child, blockId)
-      parent.appendChild(child)
-    }
-    document.body.appendChild(panel)
+    const panel = buildPanelDom(PANEL_ID, [
+      {blockId: 'parent', children: ['c1', 'middle', 'c3']},
+    ])
 
     const panelBlock = env.repo.block(PANEL_ID)
     render(<PanelFocusRecovery block={panelBlock}/>)
@@ -240,10 +231,7 @@ describe('PanelFocusRecovery', {timeout: TEST_TIMEOUT_MS}, () => {
     // hint stored, location-match guard rejects fallback recovery, so no recovery.
     await setFocused('never-mounted')
 
-    buildPanelDom(PANEL_ID, [
-      {blockId: 'first', instance: 'i-first'},
-      {blockId: 'middle', instance: 'i-middle'},
-    ])
+    buildPanelDom(PANEL_ID, ['first', 'middle'])
 
     const panelBlock = env.repo.block(PANEL_ID)
 
@@ -280,30 +268,13 @@ describe('PanelFocusRecovery', {timeout: TEST_TIMEOUT_MS}, () => {
     }, {scope: ChangeScope.UiState})
     await setFocused('parent')
 
-    const panel = document.createElement('div')
-    panel.setAttribute('data-panel-id', PANEL_ID)
-    const top = document.createElement('div')
-    setNavAttrs(top, 'topLevel', 'i-top')
-    panel.appendChild(top)
-
-    const above = document.createElement('div')
-    setNavAttrs(above, 'above')
-    top.appendChild(above)
-
-    const parent = document.createElement('div')
-    setNavAttrs(parent, 'parent')
-    top.appendChild(parent)
-    for (const blockId of ['child', 'c2']) {
-      const child = document.createElement('div')
-      setNavAttrs(child, blockId)
-      parent.appendChild(child)
-    }
-
-    const below = document.createElement('div')
-    setNavAttrs(below, 'below')
-    top.appendChild(below)
-
-    document.body.appendChild(panel)
+    const panel = buildPanelDom(PANEL_ID, [
+      {blockId: 'topLevel', instance: 'i-top', children: [
+        'above',
+        {blockId: 'parent', children: ['child', 'c2']},
+        'below',
+      ]},
+    ])
 
     const panelBlock = env.repo.block(PANEL_ID)
     render(<PanelFocusRecovery block={panelBlock}/>)
@@ -328,24 +299,13 @@ describe('PanelFocusRecovery', {timeout: TEST_TIMEOUT_MS}, () => {
     }, {scope: ChangeScope.UiState})
     await setFocused('X')
 
-    const panel = document.createElement('div')
-    panel.setAttribute('data-panel-id', PANEL_ID)
-
-    const mkInstance = (blockId: string): HTMLElement => {
-      const el = document.createElement('div')
-      setNavAttrs(el, blockId)
-      return el
-    }
-
-    const top = mkInstance('topLevel')
-    panel.appendChild(top)
-    top.appendChild(mkInstance('above'))
-    const parent = mkInstance('parent')
-    top.appendChild(parent)
-    parent.appendChild(mkInstance('X'))
-    top.appendChild(mkInstance('below'))
-
-    document.body.appendChild(panel)
+    const panel = buildPanelDom(PANEL_ID, [
+      {blockId: 'topLevel', children: [
+        'above',
+        {blockId: 'parent', children: ['X']},
+        'below',
+      ]},
+    ])
 
     const panelBlock = env.repo.block(PANEL_ID)
     render(<PanelFocusRecovery block={panelBlock}/>)
@@ -357,11 +317,7 @@ describe('PanelFocusRecovery', {timeout: TEST_TIMEOUT_MS}, () => {
   })
 
   it("does not recover when the focused block briefly leaves the DOM and returns (tab/shift-tab move)", async () => {
-    const panel = buildPanelDom(PANEL_ID, [
-      {blockId: 'first', instance: 'i-first'},
-      {blockId: 'middle', instance: 'i-middle'},
-      {blockId: 'last', instance: 'i-last'},
-    ])
+    const panel = buildPanelDom(PANEL_ID, ['first', 'middle', 'last'])
 
     const panelBlock = env.repo.block(PANEL_ID)
 
@@ -398,11 +354,7 @@ describe('PanelFocusRecovery', {timeout: TEST_TIMEOUT_MS}, () => {
   })
 
   it('refreshes the positional hint as the user navigates between blocks', async () => {
-    const panel = buildPanelDom(PANEL_ID, [
-      {blockId: 'first', instance: 'i-first'},
-      {blockId: 'middle', instance: 'i-middle'},
-      {blockId: 'last', instance: 'i-last'},
-    ])
+    const panel = buildPanelDom(PANEL_ID, ['first', 'middle', 'last'])
 
     const panelBlock = env.repo.block(PANEL_ID)
     render(<PanelFocusRecovery block={panelBlock}/>)
