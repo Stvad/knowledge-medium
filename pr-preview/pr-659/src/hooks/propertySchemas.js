@@ -1,0 +1,2 @@
+import{useRepo as e}from"../context/repo.js";import{useSyncExternalStore as t}from"react";import{c as n}from"react/compiler-runtime";var r=()=>{let r=n(5),i=e(),a;r[0]===i?a=r[1]:(a=e=>i.onPropertySchemasChange(e),r[0]=i,r[1]=a);let o=a,s,c;return r[2]===i.propertySchemas?(s=r[3],c=r[4]):(s=()=>i.propertySchemas,c=()=>i.propertySchemas,r[2]=i.propertySchemas,r[3]=s,r[4]=c),t(o,s,c)};export{r as usePropertySchemas};
+//# sourceMappingURL=propertySchemas.js.map
