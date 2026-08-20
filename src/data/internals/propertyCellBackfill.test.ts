@@ -260,7 +260,10 @@ describe('property cell → children backfill', {timeout: 30_000}, () => {
     })
 
     expect(edited).toBe(true)
-    expect(progress.sweeps).toBeGreaterThan(1)
+    // Three, where an unedited graph of the same size takes two: sweep 1 walks
+    // it, sweep 2 picks up the key added behind the cursor, sweep 3 converges.
+    // `> 1` would hold for any non-empty graph and so says nothing about the edit.
+    expect(progress.sweeps).toBe(3)
     expect(await fieldRowsOf(ids[0]!)).toHaveLength(2)
   })
 
@@ -319,7 +322,11 @@ describe('property cell → children backfill', {timeout: 30_000}, () => {
       }, {scope: ChangeScope.BlockDefault, description: 'concurrent value edit'})
     })
 
-    expect(progress.sweeps).toBeGreaterThan(1)
+    // Two, unlike the added-key case above: a rewritten value changes no child
+    // COUNT, so the sweep that repairs it is also the one that converges.
+    // Counting a rewrite as unconverged is the regression that cost a whole
+    // extra sweep per open editor.
+    expect(progress.sweeps).toBe(2)
     expect((await fieldRowsOf(ids[0]!))[0]!.values).toEqual(['edited after the visit'])
   })
 
