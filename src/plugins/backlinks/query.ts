@@ -28,13 +28,29 @@ const MACHINERY_SOURCE_CHUNK = 500
  *  backfilled pre-flip workspace answers yes and a flipped one that has never
  *  been backfilled answers no. One indexed probe (`idx_blocks_any_field_form`).
  *
- *  TOMBSTONES COUNT, which is why it is not the live `idx_blocks_field_form`.
- *  Recognition never filters `deleted` — descent is structural, and sync-apply
- *  permits a live child under a tombstoned parent — so a value row whose only
- *  field ancestor is tombstoned IS machinery to the walk. Probing live rows
- *  only would answer "nothing here" for that workspace and skip the filter
- *  over the very rows it exists to catch. A fast path must never be able to
- *  say no where the slow path would have said yes.
+ *  THE RULE: a fast path must never be able to say NO where the slow path
+ *  would say YES. Everything below follows from it.
+ *
+ *  So this is deliberately an OVER-approximation — the `::` bit is syntax
+ *  alone, while recognition also wants a non-null parent and a resolving
+ *  definition. A workspace whose only marked row is a hand-authored
+ *  `::((someBlock))` therefore answers yes and gives up the aggregate path it
+ *  could have kept. That is the safe error, and it costs only the optimization
+ *  — the same work every flipped workspace already did before this probe
+ *  existed. Do NOT "tighten" it to full recognition: that makes a second copy
+ *  of a predicate which must never be NARROWER than the first, and a drift in
+ *  that direction silently stops filtering instead of merely costing time.
+ *  (It is also slower, not faster: the partial index requires the WHERE to
+ *  syntactically prove `is_field_form = 1`, which `recognizedFieldRowSql`'s
+ *  NULL-safe `COALESCE(...) = 1` does not, so the exact form drops to a full
+ *  workspace scan — measured 8.3ms against 0.001ms on 200k rows.)
+ *
+ *  TOMBSTONES COUNT for the same rule, which is why this is not the live
+ *  `idx_blocks_field_form`. Recognition never filters `deleted` — descent is
+ *  structural, and sync-apply permits a live child under a tombstoned parent —
+ *  so a value row whose only field ancestor is tombstoned IS machinery to the
+ *  walk, and probing live rows only would answer "nothing here" and skip the
+ *  filter over the very rows it exists to catch.
  *
  *  Its job is to keep the machinery filters from doing work that provably
  *  finds nothing: the ancestor walk below, and — the expensive one — the
