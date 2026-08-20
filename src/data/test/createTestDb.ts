@@ -40,6 +40,7 @@ import {
   CREATE_BLOCKS_PARENT_ORDER_INDEX_SQL,
   CREATE_BLOCKS_SYNCED_TABLE_SQL,
   CREATE_BLOCKS_FIELD_FORM_INDEX_SQL,
+  CREATE_BLOCKS_ANY_FIELD_FORM_INDEX_SQL,
   CREATE_BLOCKS_REFERENCE_TARGET_PARENT_INDEX_SQL,
   CREATE_BLOCKS_TABLE_SQL,
   CREATE_BLOCKS_WORKSPACE_ACTIVE_INDEX_SQL,
@@ -118,6 +119,7 @@ const initializeTestDb = async (dbDir: string): Promise<PowerSyncDatabase> => {
   await ensureBlockLocalColumns(db)
   await db.execute(CREATE_BLOCKS_REFERENCE_TARGET_PARENT_INDEX_SQL)
   await db.execute(CREATE_BLOCKS_FIELD_FORM_INDEX_SQL)
+  await db.execute(CREATE_BLOCKS_ANY_FIELD_FORM_INDEX_SQL)
   await db.execute(CREATE_WORKSPACES_TABLE_SQL)
   await db.execute(CREATE_WORKSPACE_MEMBERS_TABLE_SQL)
   await db.execute(CREATE_WORKSPACE_MEMBERS_INDEX_SQL)
@@ -172,6 +174,8 @@ const getTemplateFingerprint = (): string => {
   hash.update(CREATE_BLOCKS_REFERENCE_TARGET_PARENT_INDEX_SQL)
   hash.update('\0')
   hash.update(CREATE_BLOCKS_FIELD_FORM_INDEX_SQL)
+  hash.update('\0')
+  hash.update(CREATE_BLOCKS_ANY_FIELD_FORM_INDEX_SQL)
   hash.update('\0')
   hash.update(CREATE_WORKSPACES_TABLE_SQL)
   hash.update('\0')

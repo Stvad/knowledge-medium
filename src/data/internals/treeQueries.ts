@@ -235,8 +235,7 @@ export const CHILDREN_IDS_SQL = `
  *
  * FLAT recognition (§9, the `::` grammar): a child is excluded iff it is a
  * recognized field row — `is_field_form = 1` (the marker matched at derive
- * time) ∧ `parent_id IS NOT NULL` (root half) ∧ the workspace is flipped
- * (`properties_migration` at or past 'children', never an equality test) ∧
+ * time) ∧ `parent_id IS NOT NULL` (root half) ∧
  * its `reference_target_id` names a definition block. No ancestry walk
  * exists anymore: only marked rows can classify, so a ref-typed VALUE
  * pointing at a definition is never misread — and a marked row inside a
@@ -247,11 +246,12 @@ export const CHILDREN_IDS_SQL = `
  * INTERIM, and deliberately so. The settled display model (§10) is two
  * tiers rendered IN PLACE: a NON-hidden property is an ordinary outline
  * child at its true position and must NOT be filtered here; only
- * HIDDEN-tier rows are. Filtering all of them is correct only while every
- * workspace reads 'cell' (nothing is child-backed, so this predicate
- * filters zero rows in practice). The tier-aware predicate lands with
- * slice D and asks a different question — "is this a HIDDEN-tier
- * definition?" rather than "is this a definition?".
+ * HIDDEN-tier rows are. Filtering all of them prunes rows for real, in every
+ * workspace, and is an ACCEPTED interim (Vlad, 2026-08-20: "hiding everything
+ * before we have a coherent opt-in story is fine") — not a cost still being
+ * weighed. The tier-aware predicate lands with slice D and asks a different
+ * question — "is this a HIDDEN-tier definition?" rather than "is this a
+ * definition?".
  *
  * Definition-ness binds to the `block_types` side index (`type =
  * 'property-schema'`, SAME workspace — a foreign workspace's definition id
@@ -270,8 +270,22 @@ export const CHILDREN_IDS_SQL = `
  * seed ids are computable from the registry and can be bound into this
  * predicate; slice D reuses that mechanism for the hidden-tier set).
  *
- * An un-flipped workspace short-circuits on the `workspaces` probe
- * (dormant: today's behavior, zero rows filtered).
+ * NOT gated on `properties_migration`, so this answers the same for a
+ * backfilled pre-flip workspace as for a flipped one. The premise the gate
+ * rested on — an un-flipped workspace holds no field rows, so the clause
+ * filtered nothing — is what the cell→children backfill breaks.
+ *
+ * The reason to hide them pre-flip is DUPLICATION, not machinery-hygiene:
+ * pre-flip the cell is still the property truth and still renders through the
+ * property UI, so a visible field row shows the user the same property a
+ * second time. Being visible is not itself the harm — property children are
+ * ordinary blocks and belong in ordinary listings, which is why exclusion is
+ * opt-IN everywhere and most queries have no such option at all.
+ *
+ * What stays flip-gated is the READ/WRITE direction, which is the part the
+ * column is actually about: the property-children processors are dormant
+ * pre-flip, so a hidden field row neither projects into the cell nor is
+ * rebuilt from it. Pre-flip the cell remains the only property truth.
  *
  * ONE bound parameter: a JSON array of definition ids the registry knows
  * but `block_types` may not carry yet (#389 item 7). Property seed
@@ -297,14 +311,9 @@ export const CHILDREN_IDS_SQL = `
  * silently HIDING every ordinary child. COALESCE pins the three-valued
  * logic down.
  */
-const recognizedFieldRowSql = (rowRef: string): string => `
+export const recognizedFieldRowSql = (rowRef: string): string => `
      COALESCE(${rowRef}.is_field_form, 0) = 1
      AND ${rowRef}.parent_id IS NOT NULL
-     AND EXISTS (
-       SELECT 1 FROM workspaces w
-        WHERE w.id = ${rowRef}.workspace_id
-          AND w.properties_migration IN ('children', 'cell-off')
-     )
      AND (
        EXISTS (
          SELECT 1 FROM block_types bt
@@ -326,8 +335,8 @@ ${recognizedFieldRowSql('blocks')}
    )
 `
 
-/** Outline form of {@link CHILDREN_SQL}: excludes recognized field rows in
- *  a flipped workspace. Bind `[parentId, seedDefinitionIdsJson, seedWorkspaceId]`
+/** Outline form of {@link CHILDREN_SQL}: excludes recognized field rows.
+ *  Bind `[parentId, seedDefinitionIdsJson, seedWorkspaceId]`
  *  — the registry's set and the workspace it belongs to; pass `'[]', ''` for
  *  none. Omitting them binds NULL, which `json_each` reads as zero rows, so a
  *  caller that forgets silently gets the pre-#389 answer rather than an
@@ -371,9 +380,8 @@ ${VISIBLE_CHILD_PREDICATE_SQL}
  * Bind `[rootId, seedDefinitionIdsJson, seedWorkspaceId]` (see
  * {@link VISIBLE_CHILDREN_SQL}); the trailing two sit inside the recursive
  * term and are bound once for the statement. Same selected columns + depth semantics as SUBTREE_SQL;
- * the `INDEXED BY` planner-pin note there applies here too. An un-flipped
- * workspace short-circuits on the `workspaces` probe exactly like
- * VISIBLE_CHILD_PREDICATE_SQL (dormant: zero rows pruned).
+ * the `INDEXED BY` planner-pin note there applies here too. Prunes the same
+ * recognized field rows as VISIBLE_CHILD_PREDICATE_SQL, flipped or not.
  */
 export const VISIBLE_SUBTREE_SQL = `
   WITH RECURSIVE

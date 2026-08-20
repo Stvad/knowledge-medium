@@ -31,6 +31,8 @@ import { aliasesProp } from '@/data/properties'
 import { seedProperty } from '@/data/propertySeeds'
 import { Repo } from '@/data/repo'
 import { aliasSeatSeed, computeAliasSeatId } from '@/data/targets'
+import { propertyDefinitionBlockId } from '@/data/definitionSeeds'
+import { encodedPropertyValueToChildContent, propertyFieldContent } from '@/data/propertyChildren'
 import { dailyNoteBlockId, dailyNotesDataExtension } from '@/plugins/daily-notes'
 import { definitionSeedsFacet, projectedPropertyDefinitionsFacet } from '@/data/facets.js'
 import { resolveFacetRuntimeSync, type AppExtension } from '@/facets/facet.js'
@@ -1664,13 +1666,11 @@ describe('references.reapOrphanAliasSeats — reference-drop reaping (#402)', ()
     expect((await env.read('user-made-page'))!.deleted).toBe(0)
   })
 
-  it('keeps a seat with ANY live child in an un-flipped workspace (generated-row tolerance is flip-gated)', async () => {
-    // In an un-flipped workspace nothing generates property children, so
-    // a child under a seat is user-authored by construction — even one
-    // whose content block-refs the alias field DEFINITION id (the
-    // impostor shape). reapSeatsInTx wouldn't sweep it (flip-gated), so
-    // collecting the seat would strand the child live under a tombstone
-    // (Codex review on PR #428).
+  it('keeps a seat with a live USER child in an un-flipped workspace', async () => {
+    // A user note under a seat blocks the reap because collecting the seat
+    // would strand it live under a tombstone (Codex review on PR #428) — not
+    // because the workspace is un-flipped. The generated-row tolerance below
+    // is data-keyed, so the two cases are told apart by the `::` bit.
     await env.repo.tx(
       tx => tx.create({id: 'src', workspaceId: WS, parentId: null, orderKey: 'a0', content: '[[kid]]'}),
       {scope: ChangeScope.BlockDefault},
@@ -1725,6 +1725,145 @@ describe('references.reapOrphanAliasSeats — reference-drop reaping (#402)', ()
       'SELECT id FROM blocks WHERE parent_id = ? AND deleted = 0', [seatId],
     )
     expect(childrenAfter).toEqual([])
+  })
+
+  it('does NOT reap an un-flipped seat whose children are backfilled field rows', async () => {
+    // The safe miss, chosen deliberately. Pre-flip the projection processor is
+    // dormant, so the seat's cell cannot vouch for its subtree: an edit to a
+    // generated value row leaves the cell pristine and the shape unchanged.
+    // Tolerating machine children here means enumerating every way a user
+    // could have touched them, and two review rounds found two holes in that
+    // enumeration, each a silent soft-delete of a user's edit. The seat squats
+    // until the alias is re-typed and re-dropped, and reaping resumes at the
+    // flip. Built by hand because the dual-write processors are dormant
+    // pre-flip, which is exactly why only the backfill produces this shape.
+    await env.repo.tx(
+      tx => tx.create({id: 'src', workspaceId: WS, parentId: null, orderKey: 'a0', content: '[[grue]]'}),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await flush()
+    const seatId = aliasId('grue')
+    expect((await env.read(seatId))!.deleted).toBe(0)
+
+    const aliasesFieldId = propertyDefinitionBlockId(WS, aliasesProp.seedKey)
+    // Projected from the seat's OWN cell, exactly as the backfill does — a
+    // hand-written value is an edited value, which the reap must refuse.
+    const seatRow = (await env.repo.load(seatId))!
+    const generatedValue = encodedPropertyValueToChildContent(
+      aliasesProp, seatRow.properties[aliasesProp.name],
+    )
+    await env.repo.tx(async tx => {
+      const fieldRowId = await tx.create({
+        workspaceId: WS, parentId: seatId, orderKey: 'a0',
+        content: propertyFieldContent(aliasesFieldId),
+        referenceTargetId: aliasesFieldId, isFieldForm: true,
+      })
+      await tx.create({
+        workspaceId: WS, parentId: fieldRowId, orderKey: 'a0', content: generatedValue,
+      })
+    }, {scope: ChangeScope.BlockDefault})
+
+    await env.repo.mutate.setContent({id: 'src', content: ''})
+    await flush(5000)
+    expect((await env.read(seatId))!.deleted).toBe(0)
+  })
+
+  it('keeps a CHILD-BACKED seat whose child merely REFERENCES the aliases definition', async () => {
+    // Flipped, because that is where the tolerance runs at all — un-flipped,
+    // any child blocks the reap and the bit never gets a say.
+    //
+    // `reference_target_id` is a bare content stamp: any whole-block ref
+    // carries one, so matching on the generated id alone would read a user's
+    // link to the aliases definition as the seat's own machinery and sweep it
+    // with the seat. The `::` bit is what separates them.
+    await sharedDb.db.execute(
+      `INSERT OR REPLACE INTO workspaces
+         (id, name, owner_user_id, create_time, update_time, encryption_mode, wk_canary, properties_migration)
+       VALUES (?, ?, ?, 1, 1, 'none', NULL, 'children')`,
+      [WS, 'test ws', 'user-1'],
+    )
+    await env.repo.tx(
+      tx => tx.create({id: 'src', workspaceId: WS, parentId: null, orderKey: 'a0', content: '[[zork]]'}),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await flush()
+    const seatId = aliasId('zork')
+    const aliasesFieldId = propertyDefinitionBlockId(WS, aliasesProp.seedKey)
+    await env.repo.tx(
+      tx => tx.create({
+        id: 'user-link', workspaceId: WS, parentId: seatId, orderKey: 'a0',
+        content: `((${aliasesFieldId}))`, referenceTargetId: aliasesFieldId,
+      }),
+      {scope: ChangeScope.BlockDefault},
+    )
+
+    await env.repo.mutate.setContent({id: 'src', content: ''})
+    await flush(5000)
+    expect((await env.read(seatId))!.deleted).toBe(0)
+    expect((await env.read('user-link'))!.deleted).toBe(0)
+  })
+
+  it('keeps an UN-flipped seat whose generated value row the user edited', async () => {
+    // Post-flip an edit to a value child rewrites the seat's cell, so
+    // `matchesAliasSeatSeed` catches the drift. Pre-flip the projection
+    // processor is dormant: the cell stays pristine, the subtree still has the
+    // accepted field-row -> one-leaf shape, and the reap would soft-delete the
+    // user's edit. The value rows are reachable pre-flip through search and
+    // recents, so this is an edit a user can actually make.
+    await env.repo.tx(
+      tx => tx.create({id: 'src', workspaceId: WS, parentId: null, orderKey: 'a0', content: '[[xyzzy]]'}),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await flush()
+    const seatId = aliasId('xyzzy')
+    const aliasesFieldId = propertyDefinitionBlockId(WS, aliasesProp.seedKey)
+    await env.repo.tx(async tx => {
+      const fieldRowId = await tx.create({
+        id: 'edited-field', workspaceId: WS, parentId: seatId, orderKey: 'a0',
+        content: propertyFieldContent(aliasesFieldId),
+        referenceTargetId: aliasesFieldId, isFieldForm: true,
+      })
+      await tx.create({
+        id: 'edited-value', workspaceId: WS, parentId: fieldRowId, orderKey: 'a0',
+        content: 'the user renamed this alias',
+      })
+    }, {scope: ChangeScope.BlockDefault})
+
+    await env.repo.mutate.setContent({id: 'src', content: ''})
+    await flush(5000)
+    expect((await env.read(seatId))!.deleted).toBe(0)
+    expect((await env.read('edited-value'))!.deleted).toBe(0)
+  })
+
+  it('keeps a seat carrying a marked field row for some OTHER definition', async () => {
+    // The generated-id check is the other half of the pair. Without it a `::`
+    // field row for any definition reads as the seat's own machinery, and the
+    // seat is tombstoned while that row and its value stay LIVE underneath —
+    // the delete sweep only takes rows matching the generated ids. Reachable
+    // pre-flip, where the projection processor is dormant so the seat's cell
+    // stays pristine and still matches the seed.
+    await env.repo.tx(
+      tx => tx.create({id: 'src', workspaceId: WS, parentId: null, orderKey: 'a0', content: '[[plugh]]'}),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await flush()
+    const seatId = aliasId('plugh')
+    const otherFieldId = '00000000-0000-4000-8000-00000000beef'
+    await env.repo.tx(async tx => {
+      const fieldRowId = await tx.create({
+        id: 'other-field', workspaceId: WS, parentId: seatId, orderKey: 'a0',
+        content: propertyFieldContent(otherFieldId),
+        referenceTargetId: otherFieldId, isFieldForm: true,
+      })
+      await tx.create({
+        id: 'other-value', workspaceId: WS, parentId: fieldRowId, orderKey: 'a0', content: 'kept',
+      })
+    }, {scope: ChangeScope.BlockDefault})
+
+    await env.repo.mutate.setContent({id: 'src', content: ''})
+    await flush(5000)
+    expect((await env.read(seatId))!.deleted).toBe(0)
+    expect((await env.read('other-value'))!.deleted).toBe(0)
   })
 
   it('keeps a seat that a concurrent re-reference rescues (still referenced at check time)', async () => {

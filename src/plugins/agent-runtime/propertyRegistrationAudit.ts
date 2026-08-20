@@ -105,10 +105,16 @@ export interface UnregisteredProperty {
 export interface PropertyRegistrationAudit {
   workspaceId: string
   /** Non-null when this device could not vouch for its view of `blocks` when
-   *  the scan started — rows staged and not yet drained, or the sync layer not
-   *  settled (downloading, disconnected, or a download error). The scan
+   *  the scan started — staged rows the drain WOULD apply, or the sync layer
+   *  not settled (downloading, disconnected, or a download error). The scan
    *  happened anyway; the counts are then short by an unknown amount, and an
    *  empty `unregistered` list means nothing.
+   *
+   *  "Staged rows the drain would apply" is narrower than the raw staging
+   *  count `agent health` reports: a device's own upload echoes re-stage
+   *  carrying the stamp they were written with, and the drain discards those
+   *  without touching `blocks`. So a non-zero `materializeBacklog` alongside a
+   *  null `syncGap` is the two numbers agreeing, not contradicting.
    *
    *  Reported rather than refused: this verb reads, and the flip is what acts
    *  on what it says. Guarding the irreversible step is worth machinery;

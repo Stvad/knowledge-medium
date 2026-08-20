@@ -10,10 +10,12 @@ import type { BlockData, Tx } from '@/data/api'
  * IN PLACE: a NON-hidden property renders at its true outline position as
  * a name/value row and behaves as an ordinary child — it belongs in this
  * list; only HIDDEN-tier rows are filtered, and they rejoin the list for a
- * block that has revealed them. As shipped (slices A/B, every workspace
- * dormant at 'cell') this excludes EVERY recognized field row instead,
- * because no tier information is consulted yet — correct while dormant,
- * and superseded by the tier-aware predicate that lands with slice D.
+ * block that has revealed them. As shipped (slices A/B) this excludes EVERY
+ * recognized field row instead, because no tier information is consulted
+ * yet. That over-filters for real — the backfill mints these rows before the
+ * flip — and is an ACCEPTED interim (Vlad, 2026-08-20: "hiding everything
+ * before we have a coherent opt-in story is fine"), superseded by the
+ * tier-aware predicate that lands with slice D.
  * So read an exclusion here as "machinery, for now", NOT as "property
  * rows are machinery": the end state is that most of them are content.
  *

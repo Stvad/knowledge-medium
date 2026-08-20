@@ -625,9 +625,9 @@ const subtreeRowArraySchema: Schema<SubtreeRow[]> = {
  *
  *  Returns the FULL subtree by default (property field/value machinery
  *  included) — the structural view, so a consumer never silently misses
- *  machinery. The display-visible view — excluding recognized machinery in
- *  a child-backed workspace (PR #288 §9 — dormant no-op while un-flipped,
- *  and pruning at every recognized `::` field row, see
+ *  machinery. The display-visible view — excluding recognized machinery
+ *  (PR #288 §9 — data-keyed, not flip-gated, since the backfill mints field
+ *  rows pre-flip; prunes at every recognized `::` field row, see
  *  {@link VISIBLE_SUBTREE_SQL}) — is opt-in via `hidePropertyChildren:
  *  true`, the same option `core.children` / `tx.childrenOf` take. The
  *  outline hooks pass it; structural consumers (copy, navigation) get
@@ -732,8 +732,8 @@ export const manyAncestorsQuery = defineQuery<
 
 /** Direct children of `id`, ordered `(order_key, id)`. Returns EVERY child
  *  by default (property field rows included) — the structural view. The
- *  display-visible view — excluding recognized field rows in a child-backed
- *  workspace (PR #288 §9; dormant no-op while un-flipped) — is opt-in via
+ *  display-visible view — excluding recognized field rows (PR #288 §9;
+ *  data-keyed, not flip-gated) — is opt-in via
  *  `hidePropertyChildren: true` (the outline hooks pass it), the same option
  *  `tx.childrenOf` takes. */
 /** The registry half of the visible-children predicate (#389 item 7): the
@@ -757,7 +757,7 @@ export const manyAncestorsQuery = defineQuery<
  *  pre-existing `block_types`-only behaviour. */
 const seedParamsBySnapshot = new WeakMap<object, readonly [string, string]>()
 
-const registrySeedParams = (repo: Repo): readonly [string, string] => {
+export const registrySeedParams = (repo: Repo): readonly [string, string] => {
   const registry = repo.propertyDefinitions
   if (!registry) return ['[]', '']
   const cached = seedParamsBySnapshot.get(registry)

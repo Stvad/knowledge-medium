@@ -9,9 +9,9 @@ import {
   hasBacklinksFilter,
   normalizeBacklinksFilter,
   propertyMachinerySourceIds,
+  workspaceHasPropertyMachinery,
   type BacklinksFilter,
 } from '@/plugins/backlinks/query.js'
-import { readIsChildBackedWorkspace } from '@/data/workspaceSchema'
 import {
   TYPED_BLOCKS_LABEL_CHANNEL,
   TYPED_BLOCKS_PROPERTY_CHANNEL,
@@ -23,6 +23,7 @@ import {
   typedBlocksStructureKey,
 } from '@/data/invalidation'
 import { typesProp } from '@/data/properties.js'
+import { registrySeedParams } from '@/data/internals/kernelQueries'
 import {
   buildGroupedBacklinks,
   type GroupedBacklinkCandidate,
@@ -124,16 +125,17 @@ const resolveBacklinkSourceIds = async (
     exclude: filter?.exclude,
     order: 'created-desc',
   })).filter(sourceId => sourceId !== id)
-  // Same flip-gated property-machinery exclusion `backlinks.forBlock` applies
-  // (PR #386 review): grouped backlinks resolve their own sources rather than
-  // routing through that query, so without this a hidden value row's
-  // `[[Target]]` disappears from Linked References and the inline count but
-  // still shows up here — duplicating the owner's projected property backlink
-  // on the one surface that didn't filter. Dormant while un-flipped: no
-  // machinery exists to exclude, and this pays only the cached flip read.
+  // Same property-machinery exclusion `backlinks.forBlock` applies (PR #386
+  // review): grouped backlinks resolve their own sources rather than routing
+  // through that query, so without this a hidden value row's `[[Target]]`
+  // disappears from Linked References and the inline count but still shows up
+  // here — duplicating the owner's projected property backlink on the one
+  // surface that didn't filter. Un-gated for the reason given there: the
+  // backfill mints value rows before the flip. It carries that filter's
+  // undeclared-ancestry-dependency residual too (km-nc46).
   if (ids.length === 0) return ids
-  if (!(await readIsChildBackedWorkspace(ctx.db, workspaceId))) return ids
-  const machinery = await propertyMachinerySourceIds(ctx.db, ids)
+  if (!(await workspaceHasPropertyMachinery(ctx.db, workspaceId))) return ids
+  const machinery = await propertyMachinerySourceIds(ctx.db, ids, registrySeedParams(ctx.repo))
   return machinery.size === 0 ? ids : ids.filter(sourceId => !machinery.has(sourceId))
 }
 

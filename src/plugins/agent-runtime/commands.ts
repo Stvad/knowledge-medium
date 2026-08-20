@@ -746,9 +746,9 @@ const reconcileMarkdownSubtree = async (
         // Subtree-delete (not single-row): after foreign content is rescued
         // above, `doomed`'s only remaining descendants are its own property
         // field/value machinery, which must be tombstoned with it rather
-        // than stranded live under the tombstone (§9). In an un-flipped
-        // workspace there is no machinery, so this equals the single-row
-        // delete it replaces.
+        // than stranded live under the tombstone (§9). True pre-flip too:
+        // the backfill mints that machinery before the workspace reads it,
+        // and `hidePropertyChildren` recognizes it on the bit.
         // eslint-disable-next-line no-restricted-syntax -- programmatic delete: agent bridge reconciling a markdown subtree, not a user gesture
         await deleteSubtreeInTx(tx, doomed.id)
       }

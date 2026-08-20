@@ -136,3 +136,100 @@ export const decideStagingRow = (
   // rehydrates from the server-healed disk.)
   return { kind: 'apply', decrypt: materializability === 'decrypt' }
 }
+
+/**
+ * Is any staged row one the drain would actually APPLY?
+ *
+ * `blocks_synced_changes` being non-empty is not the same claim as "my view of
+ * `blocks` is behind". Every local write echoes back down the sync stream and
+ * re-stages itself, so a device that is writing has a near-permanently
+ * non-empty queue built entirely from rows it already has — and a pass that
+ * refuses while rows are staged then refuses because of its own progress.
+ *
+ * The exclusion is not a heuristic about who wrote the row: it is
+ * {@link decideStagingRow}'s invariant I1 — the rule this file exists to
+ * state, which is why the SQL lives beside it rather than at its call site.
+ * Equal NONZERO stamps ⟺ identical content,
+ * because the server strictly advances `updated_at` on any content change, so
+ * such a row resolves `skip-stale` and changes nothing. Counting it as a gap
+ * reports work the drain is about to discard.
+ *
+ * The identity holds only while the client's proposed stamp is at or below
+ * server-now: `blocks_clamp_updated_at` clamps a FUTURE stamp down on insert,
+ * and a create gets no floor to restore it. A device whose clock leads the
+ * server therefore sees its own creates echo back with a LOWER stamp, reads a
+ * genuine gap, and gains nothing here — correctly, since the drain really
+ * would rewrite those rows.
+ *
+ * Everything unproven is a gap, deliberately: a missing synced row, a missing
+ * local row, and I2's `0` sentinel (a speculative deterministic-id mint, where
+ * equal stamps do NOT imply equal content and the local row always yields).
+ * Rows held by I1's sibling `hasPendingUpload` skip are NOT excluded — that
+ * would mean reading `ps_crud` per call, and over-reporting is the safe
+ * direction for a predicate whose callers refuse on it.
+ *
+ * SCOPE — this reads the QUEUE, so it cannot see `observer.materializeWorkspace`,
+ * which rewrites `blocks` straight from `blocks_synced` and stages nothing
+ * (`clientSchema.ts`: "that is the BIG path… every cheap probe for 'still
+ * materializing' is wrong"). A null answer means no QUEUED work, not that
+ * `blocks` is at rest. Threading the observer's in-flight state in is the
+ * standing fix for that, and is not done here.
+ *
+ * ONE statement, not two. Two are two read snapshots: a drain window
+ * committing between them lets rows the first arm never reached slip under
+ * the second arm's offset, and the pair then reports no gap while
+ * genuinely-gapped rows are still staged (measured). That part is
+ * correctness.
+ *
+ * The depth arm coming first is NOT: when both would fire, either answer is a
+ * gap and every caller defers the same way. It buys the better message and
+ * lets `LIMIT 1` skip the joined scan in the one case where that scan cannot
+ * short-circuit (measured 0.001s vs 0.013s on a 200k queue). It also rests on
+ * SQLite evaluating UNION ALL arms in order, which is observed rather than
+ * promised — fine for a preference, which is why nothing correctness-bearing
+ * is built on it.
+ *
+ * Bind `[STAGED_SCAN_LIMIT, STAGED_SCAN_LIMIT]`; the result's `why` names
+ * which arm fired.
+ */
+export const STAGED_VIEW_GAP_SQL = `
+  SELECT why FROM (
+    SELECT 'deep' AS why FROM (SELECT 1 FROM blocks_synced_changes LIMIT 1 OFFSET ?)
+    UNION ALL
+    SELECT 'draining' AS why
+      FROM (SELECT seq, id, op FROM blocks_synced_changes ORDER BY seq LIMIT ?) c
+      LEFT JOIN blocks_synced s ON s.id = c.id
+      LEFT JOIN blocks b ON b.id = c.id
+     WHERE c.op = 'delete'
+        OR s.id IS NULL
+        OR b.id IS NULL
+        OR b.updated_at = 0
+        OR b.updated_at <> s.updated_at
+  ) LIMIT 1`
+
+/** How many staged rows the benign-echo probe will examine per call.
+ *
+ *  The probe runs INSIDE the backfill's write transaction, and the echo case
+ *  it exists for is precisely the one where no row qualifies — so `LIMIT 1`
+ *  never short-circuits and the scan runs to the end. Measured at 0.7us/row
+ *  under `@powersync/node` and ~4.5us/row under a plain sqlite3 build, so an
+ *  unbounded scan of a 200k-row queue costs somewhere between 150ms and 900ms
+ *  per batch against the ~430ms whole-batch budget `TARGET_INSERT_ROWS` exists
+ *  to protect — and the browser's wa-sqlite/OPFS, the substrate that actually
+ *  matters, is measured by neither. Revisit the bound only with a number from
+ *  the environment you are bounding. The bigger the backlog the narrowing is
+ *  meant to tolerate, the more the tolerating costs.
+ *
+ *  Past the bound we report a gap rather than scanning on. That is not a
+ *  fallback to the old bug: ~10 drain windows' worth of undrained rows means
+ *  this device has a real materialization backlog, and yielding so the drain
+ *  can catch up is the correct answer — the pass resumes on the next attempt,
+ *  which is cheap because its progress is derived from the data.
+ *
+ *  For an OPERATOR pass that attempt is a person clicking again, not a
+ *  re-arm: `scheduleWorkspaceBackfills` filters operator triggers out, by
+ *  design (the deliberate act is the point). A long uploading pass can put
+ *  itself over this bound with its own echoes, so that is a real ending an
+ *  operator can hit — they are told what happened and that re-running
+ *  continues, which is the whole contract of a resumable pass. */
+export const STAGED_SCAN_LIMIT = 10_000

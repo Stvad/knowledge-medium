@@ -254,7 +254,7 @@ describe('backlinksDataExtension query', () => {
       )
       await createIn({id: 'Foo'})
       await createIn({id: 'O'})
-      await createIn({id: 'F', parentId: 'O', content: '((D))', referenceTargetId: 'D'})
+      await createIn({id: 'F', parentId: 'O', content: '::((D))', referenceTargetId: 'D'})
       await createIn({id: 'V', parentId: 'F', references: [{id: 'Foo', alias: 'Foo'}]})
       await createIn({id: 'Q', references: [{id: 'Foo', alias: 'Foo'}]})
 
@@ -270,6 +270,109 @@ describe('backlinksDataExtension query', () => {
       expect(filtered).toEqual(['Q'])
     })
 
+    it('excludes a property VALUE source in an UN-flipped workspace too', async () => {
+      // The exclusion used to be flip-gated, on the premise that an un-flipped
+      // workspace has no value rows. The cell->children backfill mints them
+      // before the flip, and `V`'s `[[Foo]]` then duplicates the owner's
+      // projected property edge on every backlink surface.
+      const UNFLIPPED = 'ws-unflipped-backlinks'
+      await sharedDb.db.execute(
+        `INSERT OR REPLACE INTO workspaces
+           (id, name, owner_user_id, create_time, update_time, encryption_mode, wk_canary, properties_migration)
+         VALUES (?, 'unflipped ws', 'user-1', 1, 1, 'none', NULL, 'cell')`,
+        [UNFLIPPED],
+      )
+      const mk = (args: {
+        id: string; parentId?: string | null; content?: string
+        referenceTargetId?: string | null; references?: BlockReference[]
+      }) => env.repo.tx(tx => tx.create({
+        id: args.id, workspaceId: UNFLIPPED, parentId: args.parentId ?? null,
+        orderKey: `k-${args.id}`, content: args.content ?? '',
+        referenceTargetId: args.referenceTargetId, references: args.references ?? [],
+      }), {scope: ChangeScope.BlockDefault})
+
+      await mk({id: 'UD', content: 'status'})
+      await sharedDb.db.execute(
+        `INSERT OR IGNORE INTO block_types (block_id, workspace_id, type) VALUES ('UD', ?, 'property-schema')`,
+        [UNFLIPPED],
+      )
+      await mk({id: 'UFoo'})
+      await mk({id: 'UO'})
+      await mk({id: 'UF', parentId: 'UO', content: '::((UD))', referenceTargetId: 'UD'})
+      await mk({id: 'UV', parentId: 'UF', references: [{id: 'UFoo', alias: 'UFoo'}]})
+      await mk({id: 'UQ', references: [{id: 'UFoo', alias: 'UFoo'}]})
+
+      const out = asIds(await env.repo.query[BACKLINKS_FOR_BLOCK_QUERY](
+        {workspaceId: UNFLIPPED, id: 'UFoo'}).load())
+      expect(out).toEqual(['UQ'])
+    })
+
+    it('still filters when the only field ancestor is TOMBSTONED', async () => {
+      // Sync-apply permits a live child under a tombstoned parent, and the
+      // ancestry walk never filters `deleted`, so such a value row is still
+      // machinery. The fast-path probe has to see that field row too — probing
+      // live rows only answers "no machinery in this workspace" and skips the
+      // filter over exactly the rows it exists to catch.
+      const TOMB_WS = 'ws-tombstoned-field'
+      await sharedDb.db.execute(
+        `INSERT OR REPLACE INTO workspaces
+           (id, name, owner_user_id, create_time, update_time, encryption_mode, wk_canary, properties_migration)
+         VALUES (?, 'tomb ws', 'user-1', 1, 1, 'none', NULL, 'children')`,
+        [TOMB_WS],
+      )
+      const mk = (args: {
+        id: string; parentId?: string | null; content?: string
+        referenceTargetId?: string | null; references?: BlockReference[]
+      }) => env.repo.tx(tx => tx.create({
+        id: args.id, workspaceId: TOMB_WS, parentId: args.parentId ?? null,
+        orderKey: `k-${args.id}`, content: args.content ?? '',
+        referenceTargetId: args.referenceTargetId, references: args.references ?? [],
+      }), {scope: ChangeScope.BlockDefault})
+
+      await mk({id: 'TD', content: 'status'})
+      await sharedDb.db.execute(
+        `INSERT OR IGNORE INTO block_types (block_id, workspace_id, type) VALUES ('TD', ?, 'property-schema')`,
+        [TOMB_WS],
+      )
+      await mk({id: 'TFoo'})
+      await mk({id: 'TO'})
+      await mk({id: 'TF', parentId: 'TO', content: '::((TD))', referenceTargetId: 'TD'})
+      await mk({id: 'TV', parentId: 'TF', references: [{id: 'TFoo', alias: 'TFoo'}]})
+      await mk({id: 'TQ', references: [{id: 'TFoo', alias: 'TFoo'}]})
+      // Tombstone the field row ALONE, leaving its value child live — the
+      // shape sync-apply allows. A raw write so no processor repairs it.
+      await sharedDb.db.writeTransaction(async tx => {
+        await tx.execute('UPDATE blocks SET deleted = 1 WHERE id = ?', ['TF'])
+      })
+
+      const out = asIds(await env.repo.query[BACKLINKS_FOR_BLOCK_QUERY](
+        {workspaceId: TOMB_WS, id: 'TFoo'}).load())
+      expect(out).toEqual(['TQ'])
+    })
+
+    it('keeps a backlink whose ancestor merely REFERENCES a definition, unmarked', async () => {
+      // The walk must key on the `::` bit, not on "an ancestor points at a
+      // definition". `R` is an ordinary block linking to the `status` property
+      // page; `C` is an ordinary child of it. Nothing here is machinery, and
+      // C's `[[Foo]]` is a real backlink nothing else projects.
+      await seedFlipped()
+      await createIn({id: 'D', content: 'status'})
+      await sharedDb.db.execute(
+        `INSERT OR IGNORE INTO block_types (block_id, workspace_id, type) VALUES ('D', ?, 'property-schema')`,
+        [FLIP_WS],
+      )
+      await createIn({id: 'Foo'})
+      await createIn({id: 'P'})
+      // NOT a root: root ancestors are already exempt, so an interior one is
+      // the case that actually exercises the recognition rule.
+      await createIn({id: 'R', parentId: 'P', content: '((D))', referenceTargetId: 'D'})
+      await createIn({id: 'C', parentId: 'R', references: [{id: 'Foo', alias: 'Foo'}]})
+
+      const out = asIds(await env.repo.query[BACKLINKS_FOR_BLOCK_QUERY](
+        {workspaceId: FLIP_WS, id: 'Foo'}).load())
+      expect(out).toEqual(['C'])
+    })
+
     it('keeps a field row as a source for its OWN definition (the "used by" edge)', async () => {
       await seedFlipped()
       await createIn({id: 'D', content: 'status'})
@@ -281,7 +384,7 @@ describe('backlinksDataExtension query', () => {
       // The field row references its own definition — post-suppression-removal
       // this is the edge that answers "which blocks use property `status`?".
       await createIn({
-        id: 'F', parentId: 'O', content: '((D))', referenceTargetId: 'D',
+        id: 'F', parentId: 'O', content: '::((D))', referenceTargetId: 'D',
         references: [{id: 'D', alias: 'D'}],
       })
       // An INTERIOR row that also points at D is still machinery: its backlink
@@ -302,7 +405,7 @@ describe('backlinksDataExtension query', () => {
         [FLIP_WS],
       )
       await createIn({id: 'O'})
-      await createIn({id: 'F', parentId: 'O', content: '((D))', referenceTargetId: 'D'})
+      await createIn({id: 'F', parentId: 'O', content: '::((D))', referenceTargetId: 'D'})
       // Two value children (machinery) and one ordinary block; with chunkSize 1
       // each source is its own query, so a union bug would drop all but the last.
       await createIn({id: 'V1', parentId: 'F'})
@@ -310,9 +413,30 @@ describe('backlinksDataExtension query', () => {
       await createIn({id: 'Q'})
 
       const machinery = await propertyMachinerySourceIds(
-        env.h.db, ['V1', 'Q', 'V2'], 1,
+        env.h.db, ['V1', 'Q', 'V2'], ['[]', ''], 1,
       )
       expect([...machinery].sort()).toEqual(['V1', 'V2'])
+    })
+
+    it('recognizes a field row keyed to a seed definition `block_types` does not carry yet', async () => {
+      // #389 item 7: a code-declared seed the registry knows but
+      // `materializePropertySeeds` has not written. The outline binds these
+      // ids and hides such a row; before the shared fragment the walk did not,
+      // so its value row's `[[Target]]` surfaced as a duplicate of the owner's
+      // projected property edge.
+      await seedFlipped()
+      const SEED = 'seed-def-unmaterialized'
+      await createIn({id: 'Target'})
+      await createIn({id: 'O'})
+      await createIn({id: 'F', parentId: 'O', content: `::((${SEED}))`, referenceTargetId: SEED})
+      await createIn({id: 'V', parentId: 'F', references: [{id: 'Target', alias: 'T'}]})
+
+      // No `block_types` row exists for SEED, so only the bound seed set can
+      // classify it — with an empty set the walk must NOT classify it.
+      expect([...await propertyMachinerySourceIds(env.h.db, ['V'], ['[]', ''])]).toEqual([])
+      expect([...await propertyMachinerySourceIds(
+        env.h.db, ['V'], [JSON.stringify([SEED]), FLIP_WS],
+      )]).toEqual(['V'])
     })
 
     it('converges (does not hang or error) when a source sits under a cyclic, non-matching ancestor chain (issue #404 item 8b)', async () => {
@@ -332,11 +456,11 @@ describe('backlinksDataExtension query', () => {
       await sharedDb.db.execute(cyclicPair, ['cy', FLIP_WS, 'cx'])
       await createIn({id: 'under-cycle', parentId: 'cx'})
 
-      const machinery = await propertyMachinerySourceIds(env.h.db, ['under-cycle'])
+      const machinery = await propertyMachinerySourceIds(env.h.db, ['under-cycle'], ['[]', ''])
       expect(machinery.size).toBe(0)
     })
 
-    it('does not filter in an un-flipped workspace (no machinery exists)', async () => {
+    it('leaves an ordinary source alone when there is no machinery at all', async () => {
       await create({id: 'Foo2', workspaceId: WS})
       await create({id: 'src', workspaceId: WS, references: [{id: 'Foo2', alias: 'Foo2'}]})
       const out = asIds(await env.repo.query[BACKLINKS_FOR_BLOCK_QUERY](

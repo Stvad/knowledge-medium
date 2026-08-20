@@ -216,6 +216,25 @@ export const CREATE_BLOCKS_FIELD_FORM_INDEX_SQL = `
   WHERE deleted = 0 AND is_field_form = 1
 `
 
+/** Sibling of the index above WITHOUT the `deleted` predicate, for the one
+ *  question that must include tombstones: "does this workspace hold any field
+ *  row at all?".
+ *
+ *  Recognition never filters `deleted` — descent is a structural fact about
+ *  `parent_id`, and sync-apply permits a live child under a tombstoned parent
+ *  (see `kernelQueries.ts`), so a value row under a tombstoned field row is
+ *  still machinery. A fast-path probe that asks the live index instead answers
+ *  "no machinery here" for a workspace whose only field row is tombstoned, and
+ *  the filter it guards is then skipped over rows it should have caught.
+ *
+ *  Still as small as the set of field rows; only the live-row predicate is
+ *  dropped, not the `= 1`. */
+export const CREATE_BLOCKS_ANY_FIELD_FORM_INDEX_SQL = `
+  CREATE INDEX IF NOT EXISTS idx_blocks_any_field_form
+  ON blocks (workspace_id)
+  WHERE is_field_form = 1
+`
+
 const powerSyncParamForColumn = (columnName: BlockColumnName): PendingStatementParameter =>
   columnName === 'id' ? 'Id' : {Column: columnName}
 

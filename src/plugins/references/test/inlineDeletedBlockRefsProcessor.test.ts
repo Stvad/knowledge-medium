@@ -394,10 +394,13 @@ describe('property value children keep a dangling ref instead of inlining (#404)
     expect(env.read('comment')!.references).toEqual([])
   })
 
-  // Dormancy: the exemption is flip-gated like every other §9 recognition —
-  // an un-flipped workspace has no property machinery to recognize, so the
-  // same shape inlines as ordinary content.
-  it('is dormant in an un-flipped workspace', async () => {
+  // The exemption is NOT flip-gated: the cell->children backfill mints real
+  // field and value rows while the workspace still reads cells, and inlining
+  // one detaches the property from its owner irreversibly. The fixture below
+  // is a REAL field row (marked `::`), which is what the bit keys on — the
+  // earlier version used an unmarked `((DEF))` and so proved nothing about
+  // the gate it claimed to exercise.
+  it('protects a backfilled field row in an un-flipped workspace', async () => {
     await env.h.db.execute(
       `INSERT INTO workspaces
          (id, name, owner_user_id, create_time, update_time, encryption_mode, wk_canary, properties_migration)
@@ -412,7 +415,7 @@ describe('property value children keep a dangling ref instead of inlining (#404)
       })
       await tx.create({id: D, workspaceId: WS, parentId: null, orderKey: 'a1', content: 'target body'})
       await tx.create({id: 'p', workspaceId: WS, parentId: null, orderKey: 'a2', content: 'owner'})
-      await tx.create({id: 'field', workspaceId: WS, parentId: 'p', orderKey: 'a1', content: `((${DEF}))`})
+      await tx.create({id: 'field', workspaceId: WS, parentId: 'p', orderKey: 'a1', content: `::((${DEF}))`})
       await tx.create({
         id: 'value', workspaceId: WS, parentId: 'field', orderKey: 'a1',
         content: `((${D}))`, references: [{id: D, alias: D}],
@@ -422,7 +425,12 @@ describe('property value children keep a dangling ref instead of inlining (#404)
 
     await env.repo.mutate.delete({id: D})
 
-    expect(env.read('value')!.content).toBe('target body')
-    expect(env.read('value')!.referenceTargetId).toBeNull()
+    // The value row keeps its reference rather than being inlined to text.
+    expect(env.read('value')!.content).toBe(`((${D}))`)
+
+    // And deleting the DEFINITION must not rewrite the field row, which would
+    // strip the `::` marker and detach the property from its owner entirely.
+    await env.repo.mutate.delete({id: DEF})
+    expect(env.read('field')!.content).toBe(`::((${DEF}))`)
   })
 })

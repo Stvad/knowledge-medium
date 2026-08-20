@@ -317,6 +317,42 @@ describe('VISIBLE_CHILDREN_SQL / VISIBLE_SUBTREE_SQL — flat §9 recognition', 
     expect(rows.map(r => r.id)).toEqual(['C', 'L'])
   })
 
+  it('filters a marked row in an UN-flipped workspace, where the backfill mints it', async () => {
+    // Recognition used to require `properties_migration IN ('children',
+    // 'cell-off')`, on the premise that an un-flipped workspace holds no field
+    // rows. The backfill mints them while the workspace still reads cells, so
+    // this must answer the same either side of the flip — otherwise the cell
+    // renders the property through the property UI while the field row shows
+    // it a second time in the outline.
+    const UNFLIPPED = 'ws-vis-unflipped'
+    await h.db.execute(
+      `INSERT INTO workspaces
+         (id, name, owner_user_id, create_time, update_time, encryption_mode, wk_canary, properties_migration)
+       VALUES (?, ?, ?, 1, 1, 'none', NULL, 'cell')`,
+      [UNFLIPPED, 'unflipped ws', 'user-1'],
+    )
+    const DEF_U = 'def-unflipped'
+    await h.db.execute(
+      `INSERT INTO block_types (block_id, workspace_id, type) VALUES (?, ?, 'property-schema')`,
+      [DEF_U, UNFLIPPED],
+    )
+    const insert = (id: string, parent: string | null, ref: string | null,
+                    marked: 1 | null, order: string) =>
+      h.db.execute(
+        `INSERT INTO blocks
+           (id, workspace_id, parent_id, order_key, content, properties_json, references_json,
+            created_at, updated_at, created_by, updated_by, deleted, reference_target_id, is_field_form)
+          VALUES (?, ?, ?, ?, '', '{}', '[]', 0, 0, 'u', 'u', 0, ?, ?)`,
+        [id, UNFLIPPED, parent, order, ref, marked],
+      )
+    await insert('PU', null, null, null, 'b0')
+    await insert('CU', 'PU', null, null, 'a0')
+    await insert('FU', 'PU', DEF_U, 1, 'a1')
+
+    const rows = await h.db.getAll<{id: string}>(VISIBLE_CHILDREN_SQL, ['PU', '[]', ''])
+    expect(rows.map(r => r.id)).toEqual(['CU'])
+  })
+
   it('filters a marked row whose SEED definition has not materialized yet (#389 item 7)', async () => {
     // A code-declared property seed the registry knows but
     // `materializePropertySeeds` has not written to `blocks` yet — so

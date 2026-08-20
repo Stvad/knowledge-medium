@@ -313,6 +313,81 @@ describe('workspace backfill runner — sync gating', () => {
     expect((await repo.load('target'))?.properties['probe:mark']).toBe('backfilled')
   })
 
+  it('defers per DEVICE, not per backfill', async () => {
+    // The gap is a property of the device, so every remaining pass would defer
+    // identically — and `arm()` only de-dupes a PARKED gate, which this path's
+    // is not (it is settled by construction). Continuing the loop instead of
+    // returning therefore schedules N jobs, each of which re-runs all N
+    // passes, and the deferrals multiply.
+    //
+    // Asserted on the DISTINCT ids that deferred, not on a count: how many
+    // idle cycles one drain gets through is load-dependent, and extra cycles
+    // only repeat the same id — but one-deferral-per-backfill names all three.
+    const deferred = new Set<string>()
+    const warn = vi.spyOn(console, 'warn').mockImplementation((...args) => {
+      const m = /"([^"]+)" deferred/.exec(args.map(String).join(' '))
+      if (m) deferred.add(m[1]!)
+    })
+    try {
+      const g = controllableGate()
+      const repo = makeRepo(probeBackfill([]), g.gate)
+      repo.setRuntimeContributions(workspaceBackfillsFacet, 'test-backfills',
+        Array.from({length: 3}, (_, i) => ({
+          ...probeBackfill([]), id: `probe-backfill-v${i + 1}`,
+        })))
+      await seedTarget(repo)
+      await sharedDb.db.execute(
+        "INSERT INTO blocks_synced_changes (id, op) VALUES ('draining', 'upsert')",
+      )
+
+      g.open()
+      await drain(repo)
+
+      expect([...deferred]).toEqual(['probe-backfill-v1'])
+    } finally {
+      warn.mockRestore()
+    }
+    // 52ms measured solo — no explicit budget, because at the ~6x p99.9
+    // stretch a full gate run adds that is still an order of magnitude under
+    // vitest's 5000ms default. A budget here would only delay reporting a
+    // genuine hang, which is exactly what this test would catch: un-gating the
+    // re-arm turns the loop into a runaway.
+  })
+
+  it('takes no claim at all while rows are staged, because tryClaim itself writes', async () => {
+    // `tryClaim` ensures the Migrations page and creates the claim row, so
+    // reaching it from a stale view queues a create AND the tombstone of its
+    // release — on reconnect the create can conflict with an unseen server
+    // completion while the tombstone frees later operators to repeat the
+    // migration. The gate has to sample BOTH ways of being behind, not just
+    // whether the device is caught up.
+    const g = controllableGate()
+    const claimAttempts: string[] = []
+    const {repo} = createTestRepo({
+      db: sharedDb.db,
+      user: {id: 'user-1'},
+      backfillSyncGate: g.gate,
+      backfillCompletionClaim: {
+        tryClaim: async (_ws, id) => { claimAttempts.push(id); return true },
+        markComplete: async () => {},
+        releaseClaim: async () => {},
+      },
+    })
+    repo.setActiveWorkspaceId(WS)
+    const runs: string[] = []
+    repo.setRuntimeContributions(workspaceBackfillsFacet, 'test-backfills', [probeBackfill(runs)])
+    await seedTarget(repo)
+    await sharedDb.db.execute(
+      "INSERT INTO blocks_synced_changes (id, op) VALUES ('draining', 'upsert')",
+    )
+
+    g.open()
+    await drain(repo)
+
+    expect(claimAttempts).toEqual([])
+    expect(runs).toEqual([])
+  })
+
   it('releases the claim when a run aborts, so it is not blocked forever', async () => {
     // A claimed-but-unfinished pass must hand the claim back: otherwise one
     // device's transient bad moment blocks the migration for the whole graph.
@@ -338,11 +413,21 @@ describe('workspace backfill runner — sync gating', () => {
       },
     })
     repo.setActiveWorkspaceId(WS)
-    repo.setRuntimeContributions(workspaceBackfillsFacet, 'test-backfills', [probeBackfill([])])
+    // Staged AFTER the claim, from inside the run: rows staged up front no
+    // longer reach `tryClaim` at all (see the test above), so a pass that
+    // aborts while HOLDING a claim is the only shape that still exercises the
+    // hand-back this test exists for.
+    repo.setRuntimeContributions(workspaceBackfillsFacet, 'test-backfills', [{
+      id: 'probe-backfill-v1',
+      trigger: 'workspace-open' as const,
+      run: async ({tx}) => {
+        await sharedDb.db.execute(
+          "INSERT INTO blocks_synced_changes (id, op) VALUES ('late-row', 'upsert')",
+        )
+        await tx(async () => {}, {description: 'batch after staging began'})
+      },
+    }])
     await seedTarget(repo)
-    await sharedDb.db.execute(
-      "INSERT INTO blocks_synced_changes (id, op) VALUES ('draining', 'upsert')",
-    )
 
     g.open()
     await drain(repo)
@@ -601,7 +686,8 @@ describe('workspace backfill runner — operator outcomes', () => {
     expect(await repo.runWorkspaceBackfillNow(WS, 'operator-sync-v1')).toEqual({
       outcome: 'deferred',
       undoHistoryCleared: false,
-      reason: 'this device is not caught up with the server',
+      reason: 'this device is not caught up with the server '
+        + '(still downloading, disconnected, or a download error)',
     })
     expect(claimAttempts).toEqual([])
     expect(runs).toEqual([])

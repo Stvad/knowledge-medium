@@ -92,6 +92,10 @@ import {
   type BlocksSyncedObserver,
   type BlocksSyncedObserverArgs,
 } from '@/data/internals/syncObserver/observer'
+import {
+  STAGED_SCAN_LIMIT,
+  STAGED_VIEW_GAP_SQL,
+} from '@/data/internals/syncObserver/reconcile'
 import type { MaterializeDeps } from '@/data/internals/syncObserver/materialize'
 import type { Materializability } from '@/sync/transform'
 import {
@@ -2804,11 +2808,20 @@ export class Repo {
    * between the backfill runner (which must not write from a stale view) and
    * `audit-properties` (which reports it) — one predicate, because a rule
    * added to one of two copies is how these diverge.
+   *
+   * NOT complete, and the staged-rows half is the incomplete part: it reads
+   * the QUEUE, so it is blind to `observer.materializeWorkspace`, which
+   * rewrites `blocks` straight from `blocks_synced` and stages nothing. Null
+   * means "no QUEUED work", not "`blocks` is at rest" (km-fsxp).
    */
   async syncViewGap(): Promise<string | null> {
-    const staged = await this.db.getOptional<{one: number}>(
-      'SELECT 1 AS one FROM blocks_synced_changes LIMIT 1',
+    const staged = await this.db.getOptional<{why: string}>(
+      STAGED_VIEW_GAP_SQL, [STAGED_SCAN_LIMIT, STAGED_SCAN_LIMIT],
     )
+    if (staged?.why === 'deep') {
+      return `more than ${STAGED_SCAN_LIMIT.toLocaleString()} synced rows are staged, `
+        + 'so this device is behind on materializing them into `blocks`'
+    }
     if (staged !== null) return 'synced rows are still draining into `blocks`'
     if (!this.backfillSyncSettledNow()) {
       return 'this device is not caught up with the server '
@@ -2976,13 +2989,47 @@ export class Repo {
       // in the upload queue, and on reconnect the create could conflict with
       // an unseen server completion while the following `deleted=1` patch
       // tombstoned it, freeing later operators to repeat the migration.
-      if (!this.backfillSyncSettledNow()) {
-        deferred = 'this device is not caught up with the server'
+      // The SAME predicate the writes assert on, not just its caught-up half:
+      // a device can also be behind with rows staged and undrained, and that
+      // half reached `tryClaim` unchecked.
+      //
+      // What this closes is the STALE-DEVICE case — a device disconnected or
+      // catching up, whose claim create and release tombstone both sit in the
+      // upload queue and land later, out of order, against a completion it
+      // never saw. It does NOT make the claim atomic: rows can stage in the
+      // window between this check and `tryClaim`'s transaction, and a peer's
+      // claim that is staged-but-undrained is invisible to the in-tx re-read
+      // there. That residual is accepted, not overlooked — closing it means
+      // arbitration, which `graphBackfillClaim`'s header forbids by name and
+      // for a recorded reason (an earlier revision tried; the regress had no
+      // fixed point). Exactly-once here is a person running it in one place.
+      //
+      // Note the create+tombstone pair is ROUTINE, not exceptional: every
+      // mid-run abort releases the claim. Its being queued while stale is the
+      // problem, not its existence.
+      const gap = await this.syncViewGap()
+      if (gap !== null) {
+        deferred = gap
         console.warn(
-          `[workspaceBackfills] "${backfill.id}" deferred: this device is not caught ` +
-          `up with the server, so claiming would write from a stale view.`,
+          `[workspaceBackfills] "${backfill.id}" deferred: ${gap}, so claiming would ` +
+          `write from a stale view.`,
         )
-        continue
+        // Re-arm and RETURN, exactly as the TRANSIENT catch below does. The
+        // caught-up half of this gate would self-re-arm through `arm()`'s
+        // parked callback, but the staged-rows half has no gate to park on —
+        // nothing fires when the queue drains, so without this an automatic
+        // pass is written off for the whole session by a blocker that clears
+        // in milliseconds. Returning is what keeps that to ONE re-arm: the gap
+        // is a property of the device, not of a backfill, so every remaining
+        // one would defer identically — and `arm()` only de-dupes a PARKED
+        // gate, so N re-arms here would each schedule their own job and each
+        // job would re-run all N passes.
+        //
+        // Re-arming reaches `workspace-open` passes only, which is all
+        // `scheduleWorkspaceBackfills` schedules. An `operator` pass defers to
+        // its caller, who is a person that can be told to retry.
+        this.scheduleWorkspaceBackfills(workspaceId)
+        return {completed, undoHistoryCleared, deferred, failed}
       }
       if (!(await claim.tryClaim(workspaceId, backfill.id, {
         reclaimCompleted: backfill.trigger === 'operator',

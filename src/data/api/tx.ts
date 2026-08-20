@@ -252,9 +252,10 @@ export interface Tx {
 
   /** The one properties-as-blocks predicate (PR #288 §6): is `workspaceId`
    *  flipped to child-backed properties (`workspaces.properties_migration`
-   *  at or past 'children' — never an equality test)? Shared by
-   *  recognition, the dual-write, and the projection processors; cached
-   *  per tx. Reads the local synced `workspaces` row; a missing row/column
+   *  at or past 'children' — never an equality test)? It governs the
+   *  read/write DIRECTION — the dual-write gate, the projection processors,
+   *  the property-rename processor and the cell backfill — NOT whether a row
+   *  is recognized as machinery, which is data-keyed. Cached per tx. Reads the local synced `workspaces` row; a missing row/column
    *  reads as un-flipped ('cell'). */
   isPropertyChildBackedWorkspace(workspaceId: string): Promise<boolean>
 
@@ -274,10 +275,10 @@ export interface Tx {
    *  This is the structural view: the actual tree, no hidden rows, so a
    *  traversal can never silently miss machinery it needs to carry (delete
    *  cascade, copy, merge). The display-visible view — which excludes
-   *  recognized property field rows in a child-backed workspace (PR #288
-   *  §9) — is opt-IN via `{hidePropertyChildren: true}`. In an un-flipped
-   *  workspace nothing is recognized, so `hidePropertyChildren` is a no-op
-   *  (dormant).
+   *  recognized property field rows (PR #288 §9) — is opt-IN via
+   *  `{hidePropertyChildren: true}`. Recognition is data-keyed, not
+   *  flip-gated, so it prunes in every workspace: the cell→children backfill
+   *  mints field rows while the workspace still reads cells.
    *
    *  Pass `null` to enumerate workspace-root rows (rows with
    *  `parent_id IS NULL`); the result is scoped to a workspace by

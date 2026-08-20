@@ -174,17 +174,19 @@ const SELECT_BACKLINK_SOURCES_SQL = `
  *
  *  Content alone is NOT enough, and asking only it was a bug (Codex on
  *  PR #484). §9 recognition also needs a non-null parent — a workspace-root
- *  `::` row has no owner to be a field OF, so its marker is just text — a
- *  FLIPPED workspace, and a target that resolves to a definition.
+ *  `::` row has no owner to be a field OF, so its marker is just text — and
+ *  a target that resolves to a definition. Not the workspace flip: the
+ *  backfill mints field rows before it (see below).
  *  `isPropertyFieldRow` is that composed predicate, and it is awaited here
  *  rather than restated. Without it a root-level `::[[α]]`, or one pointing
  *  at an ordinary page, took the marked tier and lost the author's visible
  *  label to `::((id))` when it should keep the pinned form.
  *
- *  This is also why the tier is DORMANT today: every workspace is at
- *  `properties_migration = 'cell'`, so the flip probe refuses every row and
- *  the pinned tier handles all of them. That is correct, not a regression —
- *  a `::`-prefixed row in an unflipped workspace really is ordinary content.
+ *  The tier is NOT dormant pre-flip any more: the cell→children backfill
+ *  mints real field rows into a workspace still reading cells, and
+ *  `isPropertyFieldRow` recognizes them on the bit rather than on the flip.
+ *  A `::((id))` row is machinery wherever it is; only an UNMARKED row is
+ *  ordinary content.
  *
  *  Using `exact.alias` for the comparison was wrong, and not merely
  *  conservatively so (Codex on PR #484). The whole-block parser TRIMS its

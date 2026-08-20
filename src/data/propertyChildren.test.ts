@@ -9,6 +9,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { ChangeScope, codecs, defineProperty, propertyValue, type BlockData } from '@/data/api'
 import { keyAtStart } from './orderKey'
+import { propertyFieldContent } from './propertyChildren'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { projectedPropertyDefinitionsFacet } from '@/data/facets'
@@ -731,6 +732,36 @@ describe('childrenOf visible-children exclusion (§9)', () => {
     return repo
   }
 
+  it('excludes them in an UN-flipped workspace too, matching the SQL view', async () => {
+    // `tx.childrenOf(..., hidePropertyChildren)` is the in-transaction twin of
+    // VISIBLE_CHILDREN_SQL and must answer the same question. The backfill
+    // mints field rows before the flip; while this was gated and the SQL was
+    // not, the two disagreed — and `agent-runtime`'s delete path uses THIS one
+    // to decide what is foreign content to rescue, so a hidden field row got
+    // reparented onto the wrong owner.
+    await seedWorkspace('cell')
+    const repo = setup()
+    await seedDefinitionBlock(repo)
+    await createBlock(repo, 'p')
+    await repo.tx(async tx => {
+      await tx.create({
+        id: 'content-child', workspaceId: WS, parentId: 'p', orderKey: 'm', content: 'note',
+      })
+      // Built by hand: the dual-write processors are dormant pre-flip, which
+      // is exactly why only the backfill produces this shape.
+      await tx.create({
+        id: 'field', workspaceId: WS, parentId: 'p', orderKey: 'a',
+        content: propertyFieldContent(STATUS_FIELD_ID), referenceTargetId: STATUS_FIELD_ID,
+      })
+    }, {scope: ChangeScope.BlockDefault})
+
+    await repo.tx(async tx => {
+      const visible = await tx.childrenOf('p', undefined, {hidePropertyChildren: true})
+      expect(visible.map(c => c.id)).toEqual(['content-child'])
+      expect(await tx.childrenOf('p')).toHaveLength(2)
+    }, {scope: ChangeScope.BlockDefault})
+  })
+
   it('default excludes recognized field rows; machinery opts in', async () => {
     const repo = await setupFlipped()
     await repo.tx(async tx => {
@@ -1405,22 +1436,6 @@ describe('merge keeps a ref-typed losing value interior, stamp intact (#19)', ()
   })
 })
 
-describe('flip predicate / SQL gate lock (§6)', () => {
-  it('the SQL IN-list matches the TS at-or-past-children predicate exactly', async () => {
-    // The TS predicate and the SQL literal must move together: a future
-    // state added to one but not the other would silently un-recognize (or
-    // over-recognize) every field row on one read surface.
-    const {isChildBackedPropertiesWorkspace} = await import('@/types')
-    const {VISIBLE_CHILDREN_SQL} = await import('./internals/treeQueries')
-    const {PROPERTIES_MIGRATION_STATES} = await import('./workspaceSchema')
-    const flipped = PROPERTIES_MIGRATION_STATES.filter(isChildBackedPropertiesWorkspace)
-    expect(flipped).toEqual(['children', 'cell-off'])
-    expect(VISIBLE_CHILDREN_SQL).toContain(
-      `properties_migration IN (${flipped.map(s => `'${s}'`).join(', ')})`,
-    )
-  })
-})
-
 describe('query-layer twin (core.childIds / core.children)', () => {
   it('default includes field rows in a flipped workspace; visible view opts out', async () => {
     await seedWorkspace('children')
@@ -1444,7 +1459,7 @@ describe('query-layer twin (core.childIds / core.children)', () => {
     expect(visible.map(c => c.id)).toEqual(['content-child'])
   })
 
-  it('is dormant in an un-flipped workspace', async () => {
+  it('leaves an UNMARKED look-alike visible in an un-flipped workspace', async () => {
     await seedWorkspace('cell')
     const repo = setup()
     await seedDefinitionBlock(repo)
@@ -1456,9 +1471,10 @@ describe('query-layer twin (core.childIds / core.children)', () => {
       })
     }, {scope: ChangeScope.BlockDefault})
 
-    // Exercise the visible view: the reactive query's flip gate
-    // (VISIBLE_CHILD_PREDICATE_SQL's `properties_migration IN (...)` branch)
-    // must leave the field-row-shaped child visible in an un-flipped workspace.
+    // The child is field-row-SHAPED but UNMARKED (`[[status]]`, no `::`), so
+    // `is_field_form` is not stamped and it is an ordinary reference block.
+    // Only marked rows classify — which is the whole reason recognition no
+    // longer needs to ask whether the workspace is flipped.
     const ids = await repo.runQuery('core.childIds', {id: 'p', hidePropertyChildren: true})
     expect(ids).toEqual(['ref-child'])
   })

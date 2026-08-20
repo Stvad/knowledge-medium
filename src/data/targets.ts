@@ -321,8 +321,8 @@ const propertiesMatchSeed = (
  *  drifted (a rename, a user-added property, or an extra alias all break
  *  the match). Liveness/children checks are the caller's: the tombstone
  *  predicate below wants no live children at all, while the reaper
- *  additionally tolerates the seat's own GENERATED property children in
- *  a child-backed workspace. */
+ *  additionally tolerates the seat's own GENERATED property children — in
+ *  any workspace, since the backfill mints them before the flip. */
 export const matchesAliasSeatSeed = (
   row: Pick<AliasSeatRow, 'content' | 'properties'>,
 ): boolean => {
@@ -339,10 +339,13 @@ export const matchesAliasSeatSeed = (
  *
  *  That makes a bare "has live children?" test invert after the flip: it
  *  stops meaning "a user touched this" and starts meaning "this is a
- *  seat". Every caller gating on children has to subtract these ids
- *  first — and only when the workspace is actually flipped, because in an
- *  un-flipped one a column match under a seat is by construction
- *  user-authored content, not machinery's to ignore. */
+ *  seat". Every caller gating on children has to subtract these ids first,
+ *  and only when the workspace is FLIPPED: there an edit to a generated value
+ *  row reprojects into the cell, so the seed match can still see drift. The
+ *  backfill mints these rows pre-flip too, but the projection is dormant
+ *  there, so nothing can vouch for the subtree and the caller must not
+ *  subtract (km-mzsv). Subtract on the `::` bit AND the id — a bare column
+ *  match is a content stamp an ordinary `((fieldId))` child carries too. */
 export const generatedSeatFieldIds = (workspaceId: string): ReadonlySet<string> => new Set([
   propertyDefinitionBlockId(workspaceId, aliasesProp.seedKey),
   propertyDefinitionBlockId(workspaceId, typesProp.seedKey),
