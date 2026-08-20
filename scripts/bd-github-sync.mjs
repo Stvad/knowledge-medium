@@ -164,11 +164,6 @@ const GH_API = new RegExp(
 export const matchesApiPublish = cmd => {
   const sk = commandSkeleton(cmd)
   if (!GH_API.test(sk)) return false
-  // An explicit GET/HEAD is a read no matter what fields ride along — gh
-  // sends them as the query string (gh api --help). Checked on the raw text
-  // too: a quoted method value ("GET") is blanked out of the skeleton.
-  const explicitRead = /(?<![\w-])(?:-X|--method)(?:=|\s+)?['"]?(?:GET|HEAD)\b/i
-  if (explicitRead.test(sk) || explicitRead.test(cmd)) return false
   return (
     /(?<![\w-])(?:-X|--method)(?:=|\s+)?(?:POST|PATCH|PUT)\b/i.test(sk) ||
     /(?<![\w-])(?:--raw-field|--field|--input)(?:=|\s)/.test(sk) ||
@@ -176,6 +171,17 @@ export const matchesApiPublish = cmd => {
     /(?<![\w-])-[fF](?:=|\s|[A-Za-z_])/.test(sk)
   )
 }
+
+// An explicit GET/HEAD is a read no matter what fields ride along — gh sends
+// them as the query string (gh api --help). Deliberately COMMAND-WIDE and
+// veto-only: a compound can mix a GET segment with a mutating one, and any
+// per-segment method attribution is shell parsing this gate refuses to do.
+// So the flag never makes a command invisible (matchesApiPublish above still
+// looks) — it only forbids the verifier's REPAIR, where writing to a merely
+// read object is the risk. Checked on the raw text too: a quoted method
+// value ("GET") is blanked out of the skeleton.
+const EXPLICIT_READ = /(?<![\w-])(?:-X|--method)(?:=|\s+)?['"]?(?:GET|HEAD)\b/i
+export const hasExplicitGetMethod = cmd => EXPLICIT_READ.test(commandSkeleton(cmd)) || EXPLICIT_READ.test(cmd)
 
 /**
  * Which target kinds this command's CLI publish verbs can have produced.
@@ -591,7 +597,7 @@ export const beadIssueLookupWithMint = (ids, { dry = process.env.BD_GITHUB_SYNC_
   if (missing.length && !dry) {
     const pre = preconditions(dbRoot)
     if (pre.ok) {
-      tryRun('bd', ['github', 'sync', '--push-only', '--issues', missing.join(',')], { env: pre.env, timeout: 60_000 })
+      tryRun('bd', ['github', 'sync', '--push-only', '--issues', missing.join(',')], { env: pre.env, timeout: 45_000 })
       byId = beadIssueLookup(ids)
     }
   }

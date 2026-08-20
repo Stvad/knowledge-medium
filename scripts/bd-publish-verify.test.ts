@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
-import { matchesApiPublish, repairableKinds } from './bd-github-sync.mjs'
+import { hasExplicitGetMethod, matchesApiPublish, repairableKinds } from './bd-github-sync.mjs'
 import { apiPathFor, clipContext, planBeadIdRewrite, publishedTargets } from './bd-publish-verify.mjs'
 
 const PR_CREATE = 'gh pr create --title t --body-file /tmp/x.md'
@@ -24,16 +24,27 @@ describe('matchesApiPublish', () => {
     expect(matchesApiPublish('cat x | gh api graphql -f query=@-')).toBe(true)
   })
 
-  it('ignores GETs — including explicit --method GET with field flags, which gh sends as a query string', () => {
+  // Explicit-GET commands still MATCH (a compound can mix a GET segment
+  // with a mutating one, so the look must happen) — the GET is a
+  // command-wide REPAIR veto instead, via hasExplicitGetMethod.
+  it('keeps looking at explicit-GET field commands; only plain no-field reads stay out', () => {
     expect(matchesApiPublish('gh api repos/Stvad/knowledge-medium/issues/652')).toBe(false)
-    expect(matchesApiPublish('gh api --method GET repos/Stvad/knowledge-medium/issues -f state=open')).toBe(false)
-    expect(matchesApiPublish('gh api -XGET repos/Stvad/knowledge-medium/issues -f state=open')).toBe(false)
-    expect(matchesApiPublish('gh api -X "GET" repos/Stvad/knowledge-medium/issues -f state=open')).toBe(false)
+    expect(matchesApiPublish('gh api --method GET repos/Stvad/knowledge-medium/issues -f state=open')).toBe(true)
   })
 
   it('ignores quoted prose and non-api gh commands', () => {
     expect(matchesApiPublish('git commit -m "reply via gh api -X POST later"')).toBe(false)
     expect(matchesApiPublish('gh pr view 652')).toBe(false)
+  })
+})
+
+describe('hasExplicitGetMethod', () => {
+  it('detects explicit GET/HEAD in plain, attached, and quoted forms', () => {
+    expect(hasExplicitGetMethod('gh api --method GET repos/x -f q=1')).toBe(true)
+    expect(hasExplicitGetMethod('gh api -XGET repos/x -f q=1')).toBe(true)
+    expect(hasExplicitGetMethod('gh api -X "GET" repos/x -f q=1')).toBe(true)
+    expect(hasExplicitGetMethod('gh api repos/x -f body=hi')).toBe(false)
+    expect(hasExplicitGetMethod('gh api -X PATCH repos/x --input -')).toBe(false)
   })
 })
 
@@ -118,6 +129,21 @@ describe('publishedTargets', () => {
     const cmd = 'gh api repos/Stvad/knowledge-medium/issues/652/comments -f body=hi'
     expect(publishedTargets(cmd, `posted!\n${url('pull/500')}`)).toEqual([])
     expect(publishedTargets('gh api graphql -f query=@q.graphql', '{"data":{}}')).toEqual([])
+  })
+
+  // A sibling command can print an html_url object of its own; picking one
+  // line would be output→command association. ALL object lines become
+  // candidates, which the single-object repair gate then disqualifies.
+  it('collects every api output line with an html_url, not the first', () => {
+    const cmd = 'gh api repos/Stvad/knowledge-medium/issues/652/comments -f body=hi'
+    const out = [
+      JSON.stringify({ html_url: url('issues/12') }),
+      JSON.stringify({ html_url: url('pull/652#issuecomment-99') }),
+    ].join('\n')
+    expect(publishedTargets(cmd, out)).toEqual([
+      { kind: 'issue', number: 12 },
+      { kind: 'comment', id: 99 },
+    ])
   })
 })
 
@@ -383,6 +409,56 @@ describe('bd-publish-verify process behavior', { timeout: 30_000 }, () => {
     expect(r.status).toBe(0)
     expect(context(r)).toContain('NOT auto-rewriting')
     expect(existsSync(join(repo, patchName('repos/Stvad/knowledge-medium/issues/comments/91')))).toBe(false)
+  })
+
+  // The two round-4 repros: association is unrecoverable, so ONLY the
+  // single-object case may write.
+  it('never rewrites when a sibling command printed its own html_url object (api mode)', () => {
+    const { hook, repo } = makeRepo({
+      fixtures: {
+        'repos/Stvad/knowledge-medium/issues/12': {
+          html_url: url('issues/12'),
+          title: 'Innocent', state: 'open',
+          body: 'tracks km-abc',
+        },
+        'repos/Stvad/knowledge-medium/issues/comments/99': {
+          html_url: url('pull/652#issuecomment-99'),
+          body: 'the real publish',
+        },
+      },
+      shows: [[{ id: 'km-abc', external_ref: url('issues/12') }]],
+    })
+    const cmd = 'printf x; gh api repos/Stvad/knowledge-medium/issues/652/comments -f body=hi'
+    const out = [
+      JSON.stringify({ html_url: url('issues/12'), body: 'tracks km-abc' }),
+      JSON.stringify({ html_url: url('pull/652#issuecomment-99'), body: 'the real publish' }),
+    ].join('\n')
+    const r = hook(cmd, out)
+    expect(r.status).toBe(0)
+    expect(context(r)).toContain('NOT auto-rewriting')
+    expect(existsSync(join(repo, patchName('repos/Stvad/knowledge-medium/issues/12')))).toBe(false)
+  })
+
+  it('echoes but never rewrites when the command carries an explicit GET segment', () => {
+    const { hook, repo } = makeRepo({
+      fixtures: {
+        'repos/Stvad/knowledge-medium/issues/comments/99': {
+          html_url: url('pull/652#issuecomment-99'),
+          body: 'tracks km-abc, relates to #77',
+        },
+        'repos/Stvad/knowledge-medium/issues/77': { title: 'Referenced', state: 'open' },
+        'repos/Stvad/knowledge-medium/issues/12': { title: 'Tracked issue', state: 'open' },
+      },
+      shows: [[{ id: 'km-abc', external_ref: url('issues/12') }]],
+    })
+    const cmd =
+      'gh api --method GET repos/Stvad/knowledge-medium/issues -f state=open; gh api repos/Stvad/knowledge-medium/issues/652/comments -f body=x'
+    const out = JSON.stringify({ html_url: url('pull/652#issuecomment-99') })
+    const r = hook(cmd, out)
+    expect(r.status).toBe(0)
+    expect(context(r)).toContain('explicit GET')
+    expect(context(r)).toContain('#77 → "Referenced" (issue, open)')
+    expect(existsSync(join(repo, patchName('repos/Stvad/knowledge-medium/issues/comments/99')))).toBe(false)
   })
 
   it('echoes the post-mode issue-reference table for published refs, with no PATCH', () => {

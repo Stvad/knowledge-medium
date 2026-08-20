@@ -19,16 +19,19 @@
  *     pre-publish checks in bd-github-sync.mjs instead.
  *
  * Coverage is exactly the objects the command's OUTPUT names: the URLs gh
- * prints for CLI publishes, the top-level html_url of a `gh api` mutation's
- * response. The write path is bounded twice more, because the Bash tool
- * merges the whole invocation's output: CLI targets are filtered to the
- * kinds this command's verbs can produce (repairableKinds), and a rewrite
- * runs only when the output names exactly ONE object of that kind — a
- * sibling command's printed URL must never be repaired. Accepted residuals:
- * truncated tool output that cuts inside an id resolves to a wrong (then
- * merely echoed, kind- and uniqueness-gated) object, and in a compound that
- * mixes `gh api` with CLI publishes the api-published object goes
- * unverified.
+ * prints for CLI publishes, the top-level html_urls of `gh api` response
+ * lines. The Bash tool merges the whole invocation's output with no
+ * output→command attribution, and recovering one would be shell parsing —
+ * so the WRITE path takes only the case that needs no association at all:
+ * the output names exactly ONE object in total (the real publish's URL is
+ * always present, so anything a sibling printed makes two candidates and
+ * disqualifies the write) and the command carries no explicit GET method
+ * (a compound can mix a read segment with the mutation). Everything else is
+ * echo-only. CLI targets are additionally filtered to the kinds the
+ * command's verbs can produce (repairableKinds) as a noise bound. Accepted
+ * residuals: truncated tool output that cuts inside an id resolves to a
+ * wrong — then merely echoed — object, and in a compound that mixes `gh
+ * api` with CLI publishes the api-published object goes unverified.
  *
  * Blocking here would be pointless (the publish already happened), so this
  * hook never does: any internal failure exits 0 silently, a failed repair is
@@ -48,6 +51,7 @@ import {
   extractBeadIds,
   extractIssueRefs,
   fetchIssueInfo,
+  hasExplicitGetMethod,
   isMainModule,
   issueRefsTable,
   matchesApiPublish,
@@ -83,9 +87,12 @@ const classify = (pr, issue, tag, commentId, reviewCommentId, reviewId) =>
 
 // gh api prints its JSON on one line, but the Bash tool merges stderr into
 // the same stream — an update notice must not turn a verifiable publish into
-// a silent skip, so fall back to the first line that parses to an object
-// with a top-level html_url.
-const topLevelUrl = output => {
+// a silent skip, so fall back to per-line parsing. EVERY object line's
+// html_url is collected, not the first: a sibling command can print a JSON
+// object of its own, and picking one would be output→command association
+// this hook cannot do — multiple candidates instead disqualify the repair
+// via the single-object gate below.
+const topLevelUrls = output => {
   const urlOf = s => {
     try {
       const j = JSON.parse(s)
@@ -95,12 +102,11 @@ const topLevelUrl = output => {
     }
   }
   const whole = urlOf(output)
-  if (whole) return whole
-  for (const line of output.split('\n')) {
-    const url = urlOf(line.trim())
-    if (url) return url
-  }
-  return ''
+  if (whole) return [whole]
+  return output
+    .split('\n')
+    .map(line => urlOf(line.trim()))
+    .filter(Boolean)
 }
 
 /**
@@ -118,7 +124,7 @@ export const publishedTargets = (cmd, output) => {
   if (matchesPrCommand(cmd)) {
     kinds = repairableKinds(cmd)
   } else {
-    scanText = topLevelUrl(output)
+    scanText = topLevelUrls(output).join('\n')
   }
   const seen = new Map()
   for (const m of scanText.matchAll(TARGET_URL())) {
@@ -178,6 +184,12 @@ export const clipContext = (s, max = 9_000) =>
 const MAX_TARGETS = 5
 const REFS_CAP = 15
 const GH_TIMEOUT = 10_000
+// Self-imposed budget well under the 120s hook timeout in settings.json:
+// the host's kill must never land after a PATCH but before its report. The
+// worst single overshoot past a deadline check is one fetch + the mint +
+// one re-fetch (≈65s with the per-spawn timeouts), so 50s of headroom
+// covers it; per-target refs echoes size themselves to the time left.
+const DEADLINE_MS = 70_000
 
 const ghJson = args => {
   try {
@@ -213,7 +225,7 @@ const unmappedNote = (ids, label, dry) =>
   `${ids.join(', ')} in ${label} ${ids.length > 1 ? 'have' : 'has'} no GitHub issue` +
   `${dry ? ' (mint suppressed by BD_GITHUB_SYNC_DRY)' : ' and minting failed here'} — run pnpm bd:sync, then fix the published text`
 
-const verifyTarget = (t, { dry, allowRepair, rewriteAllowed }) => {
+const verifyTarget = (t, { dry, repairVeto, rewriteAllowed, deadline }) => {
   const notes = []
   const fetched = ghJson(['api', apiPathFor(t)])
   if (!fetched || typeof fetched !== 'object') return notes
@@ -262,10 +274,8 @@ const verifyTarget = (t, { dry, allowRepair, rewriteAllowed }) => {
           }
           if (dry) {
             notes.push(`[dry-run] would rewrite ${subs} in ${label}`)
-          } else if (!allowRepair) {
-            notes.push(
-              `NOT auto-rewriting ${subs} in ${label} — the output names more than one ${t.kind}, so this hook cannot tell which the command published; fix by hand`,
-            )
+          } else if (repairVeto) {
+            notes.push(`NOT auto-rewriting ${subs} in ${label} — ${repairVeto}; fix by hand`)
           } else if (patchTarget(t, fresh, fields)) {
             notes.push(`rewrote ${subs} in ${label} — bead ids are opaque to GitHub readers`)
             finalTitle = titlePlan.newText
@@ -282,8 +292,15 @@ const verifyTarget = (t, { dry, allowRepair, rewriteAllowed }) => {
   const finalText = `${finalTitle}\n${finalBody}`
   const refs = extractIssueRefs(finalText)
   if (refs.length) {
-    const capNote = refs.length > REFS_CAP ? `\n  …and ${refs.length - REFS_CAP} more references not echoed` : ''
-    notes.push(`${label}\n${issueRefsTable(finalText, refs.slice(0, REFS_CAP), 'post')}${capNote}`)
+    // The echo sizes itself to the time left: each lookup is bounded by
+    // GH_TIMEOUT, so echoing more refs than the remaining budget divides
+    // into could overrun the deadline and cost an already-made repair its
+    // report.
+    const budget = Math.max(0, Math.floor((deadline - Date.now()) / GH_TIMEOUT) - 1)
+    const cap = Math.min(REFS_CAP, budget)
+    const capNote = refs.length > cap ? `\n  …and ${refs.length - cap} more references not echoed` : ''
+    if (cap > 0) notes.push(`${label}\n${issueRefsTable(finalText, refs.slice(0, cap), 'post')}${capNote}`)
+    else notes.push(`${label}: ${refs.length} issue references not echoed (out of time budget) — check them yourself`)
   }
   return notes
 }
@@ -312,15 +329,29 @@ const hookPostPublish = () => {
   const targets = all.slice(0, MAX_TARGETS)
   const dry = process.env.BD_GITHUB_SYNC_DRY === '1'
   const rewriteAllowed = !allowsBeadIds(cmd)
-  const apiOnly = !matchesPrCommand(cmd)
-  const kindCount = new Map()
-  for (const t of all) kindCount.set(t.kind, (kindCount.get(t.kind) ?? 0) + 1)
+  // Repair needs NO output→command association only when the output names
+  // exactly ONE object in total: the real publish's URL is always in the
+  // output, so anything a sibling command printed makes two candidates and
+  // disqualifies the write — for every mode, api included. An explicit GET
+  // anywhere in the command also vetoes: a compound can mix a read segment
+  // with the mutation, and a merely READ object must never be written.
+  const repairVeto =
+    all.length > 1
+      ? 'the output names more than one object, so this hook cannot tell which one the command published'
+      : hasExplicitGetMethod(cmd)
+        ? 'the command carries an explicit GET, and an object a read segment printed must never be written'
+        : null
+  const deadline = Date.now() + DEADLINE_MS
   const notes = []
   if (all.length > targets.length)
     notes.push(`only the first ${MAX_TARGETS} of ${all.length} published objects named in the output were verified`)
-  for (const t of targets) {
+  for (const [i, t] of targets.entries()) {
+    if (Date.now() > deadline) {
+      notes.push(`${targets.length - i} published object(s) not verified (out of time budget) — check them yourself`)
+      break
+    }
     try {
-      notes.push(...verifyTarget(t, { dry, allowRepair: apiOnly || kindCount.get(t.kind) === 1, rewriteAllowed }))
+      notes.push(...verifyTarget(t, { dry, repairVeto, rewriteAllowed, deadline }))
     } catch {
       // Defence in depth, not currently reachable: every failure inside
       // verifyTarget already resolves to a note or a silent skip. A future
