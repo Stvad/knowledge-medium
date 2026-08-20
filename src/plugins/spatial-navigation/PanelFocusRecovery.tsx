@@ -180,10 +180,14 @@ const runRecoveryCheck = (
 
   pendingTimerRef.current = setTimeout(() => {
     pendingTimerRef.current = null
-    // Re-verify at the moment of write — anything could have changed
-    // during the debounce window, including the resolved exclusion set
-    // itself (a facet runtime swap mid-debounce), so re-resolve it here
-    // too rather than close over the value from the start of the check.
+    // Re-verify at the moment of write. The instance re-check earns its
+    // place on the one disappearance the observer cannot see: replacing the
+    // panel ELEMENT fires no mutation inside the observed subtree, so nothing
+    // cancelled this timer and the block is alive in the new element. The
+    // focus-identity check below it is defence in depth — an in-process focus
+    // change re-enters `runRecoveryCheck` and cancels above, so it has no
+    // reachable case today. Exclusions are re-resolved rather than closed
+    // over, in case a facet runtime swap landed mid-debounce.
     const stillFocused = peekFocusedBlockLocation(block)
     if (
       !stillFocused ||

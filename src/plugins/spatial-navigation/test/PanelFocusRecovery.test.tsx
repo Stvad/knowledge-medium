@@ -353,6 +353,63 @@ describe('PanelFocusRecovery', {timeout: TEST_TIMEOUT_MS}, () => {
     }
   })
 
+  it('keeps extending the debounce while the panel churns, then writes once it settles', async () => {
+    // The component's contract for a re-render storm: every check cancels the
+    // pending recovery and re-arms, so a steady stream of mutations pushes the
+    // write out rather than letting it land on a half-settled layout.
+    const panel = buildPanelDom(PANEL_ID, ['first', 'middle', 'last'])
+
+    const panelBlock = env.repo.block(PANEL_ID)
+    const txSpy = vi.spyOn(env.repo, 'tx')
+    vi.useFakeTimers()
+    try {
+      render(<PanelFocusRecovery block={panelBlock}/>)
+      panel.querySelector('[data-block-id="middle"]')!.remove()
+
+      // Three bursts, each inside the 250ms window but summing well past it.
+      // A non-instance node is enough: the watcher keys off DOM churn in the
+      // panel, not off what the churn contains.
+      for (let burst = 0; burst < 3; burst++) {
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(200)
+          panel.appendChild(document.createElement('div'))
+        })
+      }
+      expect(txSpy).not.toHaveBeenCalled()
+
+      await act(async () => { await vi.advanceTimersByTimeAsync(DEBOUNCE_SETTLE_MS) })
+      expect(txSpy).toHaveBeenCalledTimes(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('does not recover when the panel element is replaced with the block still in it', async () => {
+    // The watcher's MutationObserver is bound to the panel element it mounted
+    // with, so a panel REMOUNT is the one disappearance it cannot see: no
+    // observer fire means nothing cancels the armed recovery. Only the
+    // re-check at write time notices the block is alive in the new element.
+    const panel = buildPanelDom(PANEL_ID, ['first', 'middle', 'last'])
+
+    const panelBlock = env.repo.block(PANEL_ID)
+    const txSpy = vi.spyOn(env.repo, 'tx')
+    vi.useFakeTimers()
+    try {
+      render(<PanelFocusRecovery block={panelBlock}/>)
+      panel.querySelector('[data-block-id="middle"]')!.remove()
+      await act(async () => { await vi.advanceTimersByTimeAsync(20) })
+
+      panel.remove()
+      buildPanelDom(PANEL_ID, ['first', 'middle', 'last'])
+
+      await act(async () => { await vi.advanceTimersByTimeAsync(DEBOUNCE_SETTLE_MS) })
+      expect(txSpy).not.toHaveBeenCalled()
+      expect(peekFocusedBlockLocation(panelBlock)?.blockId).toBe('middle')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('refreshes the positional hint as the user navigates between blocks', async () => {
     const panel = buildPanelDom(PANEL_ID, ['first', 'middle', 'last'])
 
