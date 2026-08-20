@@ -15,9 +15,9 @@
  *    worktree's branch (the shape of the real incidents)
  *  - push (bare `git stash`, `push`, `save`) with no message
  *  - `git stash clear` while the shared stack has entries
- *  - two stack-touching stash operations in one compound command — each is
- *    checked against the stack as it is NOW, and the first renumbers the
- *    entries the later ones name
+ *  - a selector-consuming stash operation that follows a renumbering one in
+ *    the same compound command — the selector was checked against entries
+ *    that will have shifted by the time it runs
  *
  * Second, unrelated rule (same hook, different root cause — deliberately NOT
  * generalized into one "shared git state" guard): `git commit --amend` commits
@@ -54,12 +54,12 @@ const SUBCOMMANDS = new Set([
  * plain `cd` target — one inside `(…)`/`$(…)` dies with that subshell), and
  * assigns (leading VAR= tokens, for per-invocation opt-outs).
  */
-const gitInvocations = cmd => {
+export const gitInvocations = cmd => {
   const out = []
   let cdPath = null
   const outerCd = [] // saved cdPath per enclosing subshell scope
   let depth = 0
-  for (const { tokens, depth: d } of shellSegmentsWithDepth(cmd)) {
+  for (const { tokens, depth: d, heredoc } of shellSegmentsWithDepth(cmd)) {
     while (depth < d) {
       outerCd.push(cdPath)
       depth++
@@ -68,10 +68,7 @@ const gitInvocations = cmd => {
       cdPath = outerCd.pop()
       depth--
     }
-    if (tokens[0] === 'cd' && tokens.length > 1) {
-      cdPath = tokens[1]
-      continue
-    }
+    if (heredoc) continue // heredoc body lines are data, not commands
     let i = 0
     const assigns = []
     // Skip VAR= assignments, wrapper commands, shell reserved words, and (past
@@ -87,6 +84,10 @@ const gitInvocations = cmd => {
     ) {
       if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[i])) assigns.push(tokens[i])
       i++
+    }
+    if (tokens[i] === 'cd' && tokens[i + 1] !== undefined) {
+      cdPath = tokens[i + 1] // same prefix skip as for git: `{ cd /x && …` counts
+      continue
     }
     if ((tokens[i] || '').replace(/.*\//, '') !== 'git') continue
     i++
@@ -210,10 +211,10 @@ export const hasMessage = (sub, args) => {
   )
 }
 
-// Everything but a pure read either renumbers the shared stack (push/save/
-// pop/drop/clear/branch/store) or consumes an entry from it (apply).
-const READ_ONLY = new Set(['list', 'show', 'create'])
-export const mutatesStack = inv => inv.sub === null || !READ_ONLY.has(inv.sub)
+// Subcommands that renumber the shared stack. `apply` reads an entry but
+// leaves the numbering intact; list/show/create touch nothing.
+const RENUMBERING = new Set(['push', 'save', 'pop', 'drop', 'clear', 'branch', 'store'])
+export const renumbersStack = inv => inv.sub === null || RENUMBERING.has(inv.sub)
 
 /** Base branch recorded in a stash entry's subject ("WIP on X: …" / "On X: …"). */
 export const baseBranch = subject => {
@@ -231,7 +232,12 @@ export const decide = (inv, state) => {
   const { sub, args } = inv
   const wt = `${state.worktrees} worktrees`
 
+  const unreadable =
+    `BLOCKED: could not read the shared stash list, so \`git stash ${sub}\` cannot be ` +
+    `checked against it (${wt} share this stack). STASH_OK=1 skips this guard.`
+
   if (sub === 'pop' || sub === 'apply' || sub === 'drop' || sub === 'branch') {
+    if (state.stashes === null) return unreadable
     if (state.stashes.length === 0) return null // git errors on its own
     // `branch` takes <branchname> first and only then an optional selector —
     // a numeric branch name must not read as stash@{N} (git uses stash@{0}).
@@ -294,6 +300,7 @@ export const decide = (inv, state) => {
   }
 
   if (sub === 'clear') {
+    if (state.stashes === null) return unreadable
     if (state.stashes.length === 0) return null
     return (
       `BLOCKED: \`git stash clear\` deletes all ${state.stashes.length} entries on the stack ` +
@@ -325,6 +332,7 @@ const gitState = (cwd, cArgs) => {
       cwd,
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'pipe'],
+      maxBuffer: 32 * 1024 * 1024,
     }).trim()
   let worktrees
   try {
@@ -340,7 +348,7 @@ const gitState = (cwd, cArgs) => {
   } catch {
     /* unborn HEAD etc. — leave null */
   }
-  let stashes = []
+  let stashes = null // null = could not read; decide() fails closed on it
   try {
     // %s (the stash COMMIT's subject) not %gs: the reflog message can be
     // overridden by `git stash store -m …` (re-stashed entries), while the
@@ -423,31 +431,34 @@ const main = () => {
   const stashOk = /^\s*STASH_OK=1\s/.test(cmd) // whole-command opt-out prefix
   if (!stashOk && /\bstash\b/i.test(cmd)) {
     const all = stashInvocations(cmd)
-    // An opted-out invocation skips its own decision but still renumbers the
-    // stack, so it stays in the compound-mutation count.
-    const invocations = all.filter(inv => !inv.optOut)
     const cache = new Map()
-
-    const mutating = all.filter(mutatesStack)
-    if (mutating.length > 1 && invocations.some(mutatesStack)) {
-      const st = stateFor(mutating[0], payloadCwd, cache)
-      if (st && st.worktrees > 1) {
-        process.stderr.write(
-          `BLOCKED: ${mutating.length} stash operations in one command. The guard checks ` +
-            `each against the stack as it is NOW, but every push/pop/drop renumbers the ` +
-            `entries the later ones name — and ${st.worktrees} worktrees share this stack. ` +
-            `Run them as separate commands. STASH_OK=1 prefixed skips this guard.\n`,
-        )
-        process.exit(2)
+    // A selector after a renumbering op was validated against entries that
+    // will have shifted by the time it runs. An opted-out invocation skips its
+    // own decision but still renumbers.
+    let renumberSeen = false
+    for (const inv of all) {
+      const consumesSelector =
+        inv.sub === 'pop' || inv.sub === 'apply' || inv.sub === 'drop' || inv.sub === 'branch'
+      if (consumesSelector && renumberSeen && !inv.optOut) {
+        const st = stateFor(inv, payloadCwd, cache)
+        if (st && st.worktrees > 1) {
+          process.stderr.write(
+            `BLOCKED: this \`git stash ${inv.sub}\` follows a stash operation that renumbers ` +
+              `the stack shared by ${st.worktrees} worktrees, so its selector was checked ` +
+              `against entries that will have shifted by the time it runs. ` +
+              `Run them as separate commands. STASH_OK=1 prefixed skips this guard.\n`,
+          )
+          process.exit(2)
+        }
       }
-    }
-
-    for (const inv of invocations) {
-      const reason = decide(inv, stateFor(inv, payloadCwd, cache))
-      if (reason) {
-        process.stderr.write(reason + '\n')
-        process.exit(2)
+      if (!inv.optOut) {
+        const reason = decide(inv, stateFor(inv, payloadCwd, cache))
+        if (reason) {
+          process.stderr.write(reason + '\n')
+          process.exit(2)
+        }
       }
+      if (renumbersStack(inv)) renumberSeen = true
     }
   }
 

@@ -10,7 +10,7 @@ import {
   decide,
   explicitEntry,
   hasMessage,
-  mutatesStack,
+  renumbersStack,
   stashInvocations,
   type RepoStashState,
 } from './check-stash-worktree.mjs'
@@ -50,6 +50,24 @@ describe('shellSegments', () => {
     expect(shellSegments('git \\\nstash pop')).toEqual([['git', 'stash', 'pop']])
   })
 
+  it('returns heredoc bodies as data segments, not command positions', () => {
+    expect(shellSegmentsWithDepth('cat <<EOF > f\ngit stash pop\nEOF\necho done')).toEqual([
+      { tokens: ['cat', '>', 'f'], depth: 0 },
+      { tokens: ['git', 'stash', 'pop'], depth: 0, heredoc: true },
+      { tokens: ['echo', 'done'], depth: 0 },
+    ])
+    // quoted and <<- dash forms; a tab-indented delimiter closes <<-
+    expect(shellSegmentsWithDepth("cat <<'END'\nbody\nEND\nls")).toEqual([
+      { tokens: ['cat'], depth: 0 },
+      { tokens: ['body'], depth: 0, heredoc: true },
+      { tokens: ['ls'], depth: 0 },
+    ])
+    expect(shellSegmentsWithDepth('cat <<-END\nbody\n\tEND\nls').at(-1)).toEqual({
+      tokens: ['ls'],
+      depth: 0,
+    })
+  })
+
   it('annotates each segment with its subshell depth', () => {
     expect(shellSegmentsWithDepth('(cd /x && true); ls')).toEqual([
       { tokens: ['cd', '/x'], depth: 1 },
@@ -86,6 +104,10 @@ describe('stashInvocations', () => {
 
   it('sees through wrapper flags (env -i)', () => {
     expect(stashInvocations('env -i git stash pop')).toHaveLength(1)
+  })
+
+  it('recognizes cd behind a reserved-word prefix', () => {
+    expect(stashInvocations('{ cd /wt && git stash pop stash@{0}; }')[0].cdPath).toBe('/wt')
   })
 
   it('scopes a subshell cd to its subshell', () => {
@@ -170,12 +192,13 @@ describe('explicitEntry / hasMessage / mutatesStack / baseBranch', () => {
     expect(hasMessage('push', ['-m', 'x', '--', 'f.txt'])).toBe(true)
   })
 
-  it('classifies stack mutation by subcommand', () => {
-    expect(mutatesStack({ sub: null })).toBe(true)
-    expect(mutatesStack({ sub: 'pop' })).toBe(true)
-    expect(mutatesStack({ sub: 'push' })).toBe(true)
-    expect(mutatesStack({ sub: 'list' })).toBe(false)
-    expect(mutatesStack({ sub: 'show' })).toBe(false)
+  it('classifies renumbering by subcommand — apply reads without renumbering', () => {
+    expect(renumbersStack({ sub: null })).toBe(true)
+    expect(renumbersStack({ sub: 'pop' })).toBe(true)
+    expect(renumbersStack({ sub: 'push' })).toBe(true)
+    expect(renumbersStack({ sub: 'apply' })).toBe(false)
+    expect(renumbersStack({ sub: 'list' })).toBe(false)
+    expect(renumbersStack({ sub: 'show' })).toBe(false)
   })
 
   it('parses the base branch from both stash subject shapes', () => {
@@ -233,6 +256,11 @@ describe('decide', () => {
   it('allows an out-of-range index but blocks unverifiable selectors', () => {
     expect(decide(inv('pop', ['stash@{9}']), state())).toBeNull()
     expect(decide(inv('pop', ['stash@{2.hours.ago}']), state())).toMatch(/cannot resolve/)
+  })
+
+  it('fails closed when the stash list cannot be read', () => {
+    expect(decide(inv('pop', ['stash@{0}']), state({ stashes: null }))).toMatch(/could not read/)
+    expect(decide(inv('clear'), state({ stashes: null }))).toMatch(/could not read/)
   })
 
   it('blocks when the entry subject records no branch or the worktree branch is unknown', () => {
@@ -346,6 +374,21 @@ describe('hook end-to-end', { timeout: 30_000 }, () => {
     expect(r.stderr).toContain("'main'")
   })
 
+  it('judges a brace-grouped cd-chained pop from the target worktree', () => {
+    // Pre-fix, the '{' prefix hid the cd: the pop was judged from wt2, where
+    // stash@{0}'s base branch matches, and wrongly allowed.
+    const r = hook(`{ cd ${multi} && git stash pop stash@{0}; }`, wt2)
+    expect(r.status).toBe(2)
+    expect(r.stderr).toContain("'wt2branch'")
+  })
+
+  it('does not block heredoc bodies that mention stash, but still guards after them', () => {
+    // the body line must put git in verb position — that is the shape that
+    // would parse as a real invocation if bodies were not skipped
+    expect(hook(`cat > /dev/null <<'DOC'\ngit stash pop\nDOC\necho ok`, multi).status).toBe(0)
+    expect(hook(`cat > /dev/null <<'DOC'\nprose\nDOC\ngit stash pop`, multi).status).toBe(2)
+  })
+
   it('judges a cd-chained pop from the target worktree', () => {
     const r = hook(`cd ${multi} && git stash pop stash@{0}`, wt2)
     expect(r.status).toBe(2)
@@ -377,12 +420,16 @@ describe('hook end-to-end', { timeout: 30_000 }, () => {
     expect(hook('git stash save', multi).status).toBe(2)
   })
 
-  it('blocks two stack-mutating stash operations in one command', () => {
+  it('blocks a selector that follows a renumbering stash operation', () => {
     const r = hook('git stash push -m mine && git stash pop stash@{1}', multi)
     expect(r.status).toBe(2)
     expect(r.stderr).toContain('separate commands')
     expect(hook('git stash push -m mine && git stash pop stash@{1}', single).status).toBe(0)
     expect(hook('git stash list && git stash pop stash@{1}', multi).status).toBe(0)
+  })
+
+  it('allows apply-then-drop of the same explicit entry (apply does not renumber)', () => {
+    expect(hook('git stash apply stash@{1} && git stash drop stash@{1}', multi).status).toBe(0)
   })
 
   it('sees through a backslash-newline line continuation', () => {

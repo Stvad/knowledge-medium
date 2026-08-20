@@ -14,7 +14,14 @@ export interface StashEntry {
 export interface RepoStashState {
   worktrees: number
   branch: string | null
-  stashes: StashEntry[]
+  stashes: StashEntry[] | null
+}
+export interface GitInvocation {
+  word: string
+  rest: string[]
+  cArgs: string[]
+  cdPath: string | null
+  assigns: string[]
 }
 export interface AmendInvocation {
   all: boolean
@@ -27,7 +34,8 @@ export declare const stashInvocations: (cmd: string) => StashInvocation[]
 export declare const amendInvocations: (cmd: string) => AmendInvocation[]
 export declare const explicitEntry: (args: string[]) => string | null
 export declare const hasMessage: (sub: string | null, args: string[]) => boolean
-export declare const mutatesStack: (inv: Pick<StashInvocation, 'sub'>) => boolean
+export declare const renumbersStack: (inv: Pick<StashInvocation, 'sub'>) => boolean
+export declare const gitInvocations: (cmd: string) => GitInvocation[]
 export declare const baseBranch: (subject: string) => string | null
 export declare const decide: (
   inv: Pick<StashInvocation, 'sub' | 'args'>,

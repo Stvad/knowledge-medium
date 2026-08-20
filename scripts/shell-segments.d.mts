@@ -3,6 +3,7 @@
 export interface ShellSegment {
   tokens: string[]
   depth: number
+  heredoc?: boolean
 }
 export declare const shellSegmentsWithDepth: (cmd: string) => ShellSegment[]
 export declare const shellSegments: (cmd: string) => string[][]

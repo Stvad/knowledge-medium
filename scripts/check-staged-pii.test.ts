@@ -53,6 +53,10 @@ describe('check-staged-pii end-to-end', { timeout: 30_000 }, () => {
     expect(hook(cmd).status).toBe(2)
   })
 
+  it('does not block printed prose that mentions git commit beside a uuid', () => {
+    expect(hook(`printf '%s\\n' git commit -m ${A_UUID}`).status).toBe(0)
+  })
+
   it('still blocks a staged uuid regardless of the command line', () => {
     writeFileSync(join(repo, 'g.txt'), `id: ${A_UUID}\n`)
     git(repo, ['add', 'g.txt'])
