@@ -882,7 +882,12 @@ export const openAsyncBlockFromEvent = (
   }
   void (async () => {
     try {
-      const target = await resolveTarget(resolvedWorkspaceId)
+      // Resolve in the workspace the DECISION targets, not the one captured
+      // from the click: a policy may have retargeted it, and the mapper below
+      // keeps that choice — resolving against the active workspace instead
+      // would materialise the page in one workspace and navigate its id
+      // through another's layout.
+      const target = await resolveTarget(decision.input.workspaceId ?? resolvedWorkspaceId)
       const resolved = mapNavigate(decision, input => (
         // Re-check rather than assume: `mapNavigate` is the only writer of the
         // real id, and a decorator could in principle be re-consulted between

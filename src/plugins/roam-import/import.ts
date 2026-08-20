@@ -139,6 +139,19 @@ interface PageReconciliation {
   rootTitle: string
   /** Alias labels that should be present on the final page row. */
   aliasesToApply: string[]
+  /** Set when step 4 could not materialise this daily note. `finalId` is then
+   *  a PREDICTION nothing adopted — very possibly an ordinary user page that
+   *  merely claims the date's alias — so dependent writes are refused rather
+   *  than landing this import's aliases, properties and children on it.
+   *
+   *  Defence in depth, not load-bearing today: every such import also dies on
+   *  the unmaterialised daily row while writing placeholders or descendants,
+   *  which rolls the frontmatter writes back anyway, and an empty daily page
+   *  has nothing to apply. Attempts to construct a reachable case all hit one
+   *  of those. It matters if that ever changes — e.g. if a failed page's
+   *  descendants get dropped so the import can continue, which is the obvious
+   *  next step here and would make these writes commit. */
+  materializationFailed?: boolean
 }
 
 export interface RoamImportOptions {
@@ -415,6 +428,11 @@ export const importRoam = async (
       retargetDailyReconciliations(reconciliations, iso, note.id, plan.diagnostics)
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
+      // The reconciliation still names whatever `reconcilePages` predicted.
+      // Nothing adopted that row, so mark the page and let the write phases
+      // refuse it; descendants then keep their planned parent and fail loudly
+      // in their own chunk instead of silently landing on a stranger's page.
+      markDailyMaterializationFailed(reconciliations, iso, plan.diagnostics)
       plan.diagnostics.push(`Failed to materialise daily note for ${iso}: ${message}`)
       log(`Daily note ${iso} failed: ${message} — continuing`)
     }
@@ -503,6 +521,7 @@ export const importRoam = async (
 
     for (const recon of rootReconciliations) {
       if (recon.page.isDaily) {
+        if (recon.materializationFailed) continue
         await mergePageAliases(tx, recon.finalId, recon.aliasesToApply)
         await applyPromotedAttributes(
           tx,
@@ -534,6 +553,7 @@ export const importRoam = async (
     }
 
     for (const recon of aliasRuleMergedReconciliations) {
+      if (recon.materializationFailed) continue
       if (!recon.page.isDaily) pagesMerged += 1
       await mergePageAliases(tx, recon.finalId, recon.aliasesToApply)
       await applyPromotedAttributes(
@@ -998,6 +1018,7 @@ const reconcilePages = async (
 const buildReparentMap = (recons: PageReconciliation[]): Map<string, string> => {
   const map = new Map<string, string>()
   for (const r of recons) {
+    if (r.materializationFailed) continue
     if (r.plannedId !== r.finalId) map.set(r.plannedId, r.finalId)
   }
   return map
@@ -1041,6 +1062,27 @@ const retargetDailyReconciliations = (
       `point at ${r.finalId}.`,
     )
     r.finalId = resolvedId
+  }
+}
+
+/** Mark `iso`'s daily reconciliations unwritable after `getOrCreateDailyNote`
+ *  failed. Their `finalId` is a prediction nothing adopted — often an ordinary
+ *  user page that merely claims the date's alias — so the write phases must
+ *  refuse it rather than merge this import's aliases, promoted attributes and
+ *  children into someone's unrelated page. */
+const markDailyMaterializationFailed = (
+  recons: PageReconciliation[],
+  iso: string,
+  diagnostics: string[],
+): void => {
+  for (const r of recons) {
+    if (!r.page.isDaily || r.page.iso !== iso || r.materializationFailed) continue
+    r.materializationFailed = true
+    diagnostics.push(
+      `Daily page "${r.page.title}" (${iso}) could not be materialised; skipped its ` +
+      `aliases and promoted attributes rather than writing them to the unadopted ` +
+      `${r.finalId}. Its descendants keep their planned parent and will fail to write.`,
+    )
   }
 }
 

@@ -581,6 +581,17 @@ const materializeSeeds = async <S extends {readonly seedKey: string; readonly re
       const current = currentById.get(id) ?? null
       if (current && !current.deleted) continue
       if (current?.deleted) {
+        // Re-parent BEFORE restoring. A tombstone still stores the parent it
+        // had when it died, which alias-first adoption may since have moved
+        // off; restoring it there puts a live child under a tombstoned page and
+        // the trigger's ParentDeletedError aborts the whole pass — permanently,
+        // since every retry repeats it. The move has to come first: it is legal
+        // while the row is still dead, whereas the restore is what the trigger
+        // rejects. Order key is preserved, and the bag is still left exactly as
+        // found (see the tombstone test).
+        if (current.parentId !== parentId) {
+          await tx.move(id, {parentId, orderKey: current.orderKey}, {skipMetadata: true})
+        }
         await tx.restore(id, undefined, {skipMetadata: true})
         restored += 1
         continue

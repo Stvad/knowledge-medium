@@ -933,6 +933,35 @@ describe('openAsyncBlockFromEvent (useAsyncBlockOpener wiring)', () => {
     expect(resolve).not.toHaveBeenCalled()
   })
 
+  it('resolves the target in the workspace the policy chose, not the captured one', async () => {
+    // A policy may retarget only the workspace. The mapper keeps that choice,
+    // so resolving against the click's active workspace would materialise the
+    // page in one workspace and navigate its id through another's layout.
+    // The resolver throws once it has recorded the workspace, so this observes
+    // the resolve without leaving a navigation in flight past the test.
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      env.repo.setRuntimeContributions(navigationIntentVerb.decoratorsFacet, 'test-policy', [
+        next => gesture => {
+          const decision = next(gesture) as NavigationDecision
+          return decision.kind === 'navigate'
+            ? goTo({...decision.input, workspaceId: 'ws-policy-chose'})
+            : decision
+        },
+      ])
+      const seen: (string | undefined)[] = []
+      const e = fakeMouseEvent()
+      openAsyncBlockFromEvent(
+        env.repo, e as unknown as OpenerEvent,
+        async (ws) => { seen.push(ws); throw new Error('stop here') },
+        {plainClick: 'navigator'},
+      )
+      await vi.waitFor(() => { expect(seen).toEqual(['ws-policy-chose']) })
+    } finally {
+      err.mockRestore()
+    }
+  })
+
   it('a redirected navigation survives a resolver that never settles', async () => {
     // The availability half of the same point: with the policy's target already
     // chosen, a hung resolver must not hold the navigation hostage.

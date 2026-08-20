@@ -496,6 +496,41 @@ describe('materializePropertySeeds', () => {
       'SELECT parent_id FROM blocks WHERE id = ?', [propertyDefinitionBlockId(WS, seed.seedKey)])
     expect(row.parent_id).toBe(PROPERTIES_CLAIMANT)
   })
+
+  it('re-parents a TOMBSTONED seed onto the adopted page instead of restoring it under the dead one', async () => {
+    // The restore branch's twin of the test above. A seed materialized under
+    // the original Properties page, then deleted along with it, keeps that
+    // page in its stored `parentId`. Restoring it unchanged puts a live child
+    // under a tombstoned parent, which the storage trigger rejects with
+    // ParentDeletedError — aborting the whole pass on every retry, so no
+    // definition ever materializes again.
+    const rawPropertiesPageId = propertiesPageBlockId(WS)
+    expect(await materializePropertySeeds(repo, WS, [seed]))
+      .toEqual({created: 1, restored: 0, skippedReadOnly: false})
+    const seedId = propertyDefinitionBlockId(WS, seed.seedKey)
+
+    // The seed tombstone can only come from sync or a legacy client — the tx
+    // guard blocks BlockDefault seed deletes — so use the Automation scope it
+    // is allowed under, same as the tombstone test above. Deleting the page
+    // itself is an ordinary user action.
+    await repo.tx(tx => tx.delete(seedId), {scope: ChangeScope.Automation})
+    await repo.tx(tx => tx.delete(rawPropertiesPageId), {scope: ChangeScope.BlockDefault})
+
+    await repo.tx(async tx => {
+      await tx.create({
+        id: PROPERTIES_CLAIMANT, workspaceId: WS, parentId: null, orderKey: 'z0', content: 'My Properties',
+      })
+      await tx.setProperty(PROPERTIES_CLAIMANT, aliasesProp, ['Properties'])
+    }, {scope: ChangeScope.BlockDefault})
+
+    expect(await materializePropertySeeds(repo, WS, [seed]))
+      .toEqual({created: 0, restored: 1, skippedReadOnly: false})
+
+    const row = await sharedDb.db.get<{parent_id: string, deleted: number}>(
+      'SELECT parent_id, deleted FROM blocks WHERE id = ?', [seedId])
+    expect(row.deleted).toBe(0)
+    expect(row.parent_id).toBe(PROPERTIES_CLAIMANT)
+  })
 })
 
 describe('property seed materialization access', () => {
