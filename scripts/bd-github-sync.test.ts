@@ -17,6 +17,7 @@ import {
   extractBeadIds,
   issueNumberFromRef,
   matchesCommitCommand,
+  hasDynamicBody,
   matchesPrCommand,
   publishTargetRepo,
   planClosePushes,
@@ -350,6 +351,34 @@ describe('publishTargetRepo', () => {
     expect(publishTargetRepo('gh pr create --fill')).toBeNull()
     // quoted prose must not fake a target
     expect(publishTargetRepo('gh pr comment 1 -b "use --repo other/repo next"')).toBeNull()
+  })
+
+  it('reads a QUOTED target from the raw text — a blanked value must not read as foreign', () => {
+    expect(publishTargetRepo('gh -R "Stvad/knowledge-medium" pr comment 1 -b "x"')).toBe('Stvad/knowledge-medium')
+    expect(publishTargetRepo(`gh --repo 'other/repo' pr create --fill`)).toBe('other/repo')
+  })
+
+  it('prefers the REPO-equal match when raw matches disagree (fails toward gating)', () => {
+    // the prose mention comes FIRST in the raw text, so first-match-wins
+    // would pick the foreign value and switch the gate off
+    expect(
+      publishTargetRepo('gh pr comment 1 -b "mentions --repo other/x in prose" -R Stvad/knowledge-medium'),
+    ).toBe('Stvad/knowledge-medium')
+  })
+
+  it('returns null, never an empty string, for a blank value (empty must not read as foreign)', () => {
+    expect(publishTargetRepo('gh -R "" pr comment 1 -b x')).toBeNull()
+  })
+})
+
+describe('hasDynamicBody', () => {
+  it('flags expansion-built bodies, leaves literal and single-quoted ones alone', () => {
+    expect(hasDynamicBody('gh pr comment 1 --body "$(cat body.md)"')).toBe(true)
+    expect(hasDynamicBody('gh pr comment 1 -b "$BODY"')).toBe(true)
+    expect(hasDynamicBody('gh release create v1 --notes "`gen-notes`"')).toBe(true)
+    expect(hasDynamicBody('gh pr comment 1 --body "plain #12 text"')).toBe(false)
+    expect(hasDynamicBody("gh pr comment 1 --body '$(literal, single quotes)'")).toBe(false)
+    expect(hasDynamicBody('git commit -m "escape \\$PATH handling"')).toBe(false)
   })
 })
 
@@ -979,6 +1008,23 @@ describe('hookPrePr process behavior', { timeout: 20_000 }, () => {
     const r = hook('gh -R Stvad/knowledge-medium pr comment 12 -b "relates to #653"')
     expect(r.status).toBe(2)
     expect(r.stderr).toContain('Real GC failure')
+  })
+
+  // A quoted -R value is blanked by the skeleton; if that read as a foreign
+  // target the gate would switch itself off (round-10 regression shape).
+  it('still gates a publish whose same-repo -R value is quoted', () => {
+    const { hook } = makeRepo({ dbReady: true, ghIssues: { 653: { title: 'Real GC failure', state: 'open' } } })
+    const r = hook('gh -R "Stvad/knowledge-medium" pr comment 12 -b "relates to #653"')
+    expect(r.status).toBe(2)
+    expect(r.stderr).toContain('Real GC failure')
+  })
+
+  it('fails closed on an expansion-built body', () => {
+    const { hook, shimCalls } = makeRepo({ dbReady: true })
+    const r = hook('gh pr comment 1 --body "$(cat body.md)"')
+    expect(r.status).toBe(2)
+    expect(r.stderr).toContain('shell expansion')
+    expect(shimCalls()).toBe('')
   })
 
   it('fails closed on a pipe-fed stdin body but lets heredoc stdin through', () => {

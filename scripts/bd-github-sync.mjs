@@ -163,11 +163,27 @@ export const matchesCommitCommand = cmd => GIT_COMMIT.test(commandSkeleton(cmd))
 // The explicit publish target, when the command names one (-R/--repo). A
 // publish aimed at a FOREIGN repo is out of this gate's scope: bead ids
 // don't map there and #N would verify against the wrong issue space.
+// The flag must sit outside quotes (skeleton), but the VALUE is read from
+// the raw text — the skeleton blanks quoted values, and an empty target
+// must never read as "foreign" (that would turn the gate off). When raw
+// matches disagree (a prose mention plus the real flag), any match equal to
+// REPO wins: the failure direction must be "gate runs", not "gate skipped".
 export const publishTargetRepo = cmd => {
-  const m = /(?:^|\s)(?:-R|--repo)(?:=|\s+)(\S+)/.exec(commandSkeleton(cmd))
-  if (!m) return null
-  return m[1].replace(/^(?:https?:\/\/)?github\.com\//i, '').replace(/\/$/, '')
+  if (!/(?:^|\s)(?:-R|--repo)(?:=|\s)/.test(commandSkeleton(cmd))) return null
+  const values = [...cmd.matchAll(/(?:^|\s)(?:-R|--repo)(?:=|\s+)("[^"]*"|'[^']*'|[^\s'"]+)/g)]
+    .map(m => m[1].replace(/^(["'])(.*)\1$/, '$2'))
+    .map(v => v.replace(/^(?:https?:\/\/)?github\.com\//i, '').replace(/\/$/, ''))
+    .filter(Boolean)
+  if (values.length === 0) return null
+  return values.find(v => v.toLowerCase() === REPO.toLowerCase()) ?? values[0]
 }
+
+// A body built by shell expansion cannot be inspected before it publishes.
+// Single-quoted values never expand and stay out; commit -m is deliberately
+// exempt (prose dollars are common there, and expansion-built commit
+// messages fall under the out-of-visibility residual already on record).
+export const hasDynamicBody = cmd =>
+  /(?:^|\s)(?:--body|--notes|-[bn])(?:=|\s+)(?:"[^"]*[$`][^"]*"|[^\s'"]*[$`]\S*)/.test(cmd)
 
 // The escape hatch must also be in command-prefix position of the SKELETON —
 // honored from quoted prose, a PR body QUOTING it would both bypass the gate
@@ -844,6 +860,13 @@ const hookPrePr = () => {
   // don't map there, and #N verifies against the wrong issue space.
   const target = publishTargetRepo(cmd)
   if (target && target.toLowerCase() !== REPO.toLowerCase()) allow()
+
+  if (hasDynamicBody(cmd) && !allowsIssueRefs(cmd)) {
+    console.error(
+      'This command builds its published body by shell expansion ($(…), `…` or a variable), which this gate cannot inspect. Publish literal text, a heredoc, or a file — or, after verifying the references yourself, re-run with KM_ISSUE_REFS_OK=1 prefixed.',
+    )
+    process.exit(2)
+  }
 
   const bodies = readBodies()
   const text = [cmd, ...bodies].join('\n')
