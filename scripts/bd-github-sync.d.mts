@@ -8,16 +8,35 @@ export declare const bodyFilePaths: (cmd: string) => string[]
 export declare const resolveBodyPath: (p: string, cwd: string, home: string) => string
 export declare const deriveLabelPriority: (labels: string[]) => number | null
 export declare const issueNumberFromRef: (ref: string | null | undefined) => number | null
+export declare const initializedDbRoot: () => string | null
+export declare const extractIssueRefs: (text: string) => number[]
+export declare const matchesCommitCommand: (cmd: string) => boolean
+export declare const hasDynamicBody: (cmd: string) => boolean
+export declare const hasStdinBody: (cmd: string) => boolean
+export declare const closeKeywordRefs: (text: string) => number[]
+export declare const allowsIssueRefs: (cmd: string) => boolean
+export declare const buildIssueRefsMessage: (
+  refs: { number: number; info: { title: string; state: string; isPr: boolean } | 'not-found' | null }[],
+  closeNums: Set<number>,
+) => string
 
 export interface BeadRow {
   id: string
   status: string
   priority: number
   external_ref?: string | null
+  updated_at?: string
+  title?: string
+  description?: string
+  assignee?: string
+  close_reason?: string
+  issue_type?: string
+  labels?: string[]
 }
 export interface IssueInfo {
   state: 'OPEN' | 'CLOSED'
   labels: string[]
+  updatedAt?: string
 }
 export declare const planCloseReconciliation: (
   beads: BeadRow[],
@@ -37,3 +56,17 @@ export declare const buildDenyMessage: (
   mapped: { id: string; number: number }[],
   unmapped: string[],
 ) => string
+export declare const planMintedNonOpen: (
+  preBeads: BeadRow[],
+  freshBeads: BeadRow[],
+) => { id: string; number: number }[]
+export declare const planReopenedClosed: (
+  beads: BeadRow[],
+  issueByNumber: Map<number, IssueInfo>,
+) => { id: string; number: number }[]
+export declare const planLocalWins: (
+  beads: BeadRow[],
+  issueByNumber: Map<number, IssueInfo>,
+) => { id: string; number: number }[]
+export declare const detectReverts: (snapshotRows: BeadRow[], postById: Map<string, BeadRow>) => BeadRow[]
+export declare const planRestoreArgs: (row: BeadRow, post?: BeadRow) => string[][]

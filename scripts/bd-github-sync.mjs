@@ -25,6 +25,14 @@
  *    Note the deliberate asymmetry with (1): GitHub-side CLOSES are adopted
  *    (they come from PR merges), GitHub-side REOPENS do not stick (beads is
  *    the source of truth; reopen the bead instead).
+ * 4. The pull applies a strictly OLDER GitHub copy over newer local rows —
+ *    text edits, claims and closes alike — despite the documented
+ *    prefer-newer default (#647; measured live). Guarded twice: local state
+ *    is pushed out BEFORE the pull (after close-adoption, so an un-adopted
+ *    open bead cannot re-open its issue), and beads whose local row is still
+ *    newer than their GitHub copy — the push watermark skips older edits —
+ *    are snapshotted before the pull and restored + re-pushed if it reverted
+ *    them.
  *
  * Accepted race: an issue closed on GitHub DURING the sync window can be
  * re-opened by the in-flight push, and because the reopen is then the state
@@ -119,18 +127,68 @@ const commandSkeleton = cmd => {
   return [skeleton, ...lifted].join('\n')
 }
 
-const SEGMENT_START = String.raw`(?:^|[;&|(]\s*)`
-// VAR=val assignments and common wrapper commands may precede the real verb.
-const COMMAND_PREFIXES = String.raw`(?:(?:command|env|nohup|time|xargs)\s+|[A-Za-z_]\w*=\S*\s+)*`
+// A command position opens at the string start, after a separator, or after
+// one of the shell's control keywords — a FINITE set, unlike wrapper
+// commands, so listing it is complete rather than an enumeration.
+const SEGMENT_START = String.raw`(?:^|[;&|({]\s*|\b(?:if|then|elif|else|do|until|while)\s+)`
+// VAR=val assignments and common wrapper commands may precede the real verb;
+// wrappers take options of their own (env -u NAME, xargs -0), skipped with
+// the value-optional branch that harmlessly over-matches.
+const COMMAND_PREFIXES = String.raw`(?:(?:command|env|nohup|time|xargs)\s+(?:-\S+\s+(?:[^-\s]\S*\s+)?)*|[A-Za-z_]\w*=\S*\s+)*`
+// Global options (-R/--repo, --hostname) may sit between `gh` and the
+// subcommand, same shape as git's (the value-optional branch over-matches
+// harmlessly).
+const GH_GLOBAL_OPTS = String.raw`(?:-\S+\s+(?:[^-\s]\S*\s+)?)*`
 const GH_PUBLISH = new RegExp(
   SEGMENT_START +
     COMMAND_PREFIXES +
-    String.raw`(?:\S*\/)?gh\s+(?:pr\s+(?:create|edit|comment|review|merge)|issue\s+(?:create|edit|comment|close)|release\s+(?:create|edit))\b`,
+    String.raw`(?:\S*\/)?gh\s+` +
+    GH_GLOBAL_OPTS +
+    String.raw`(?:pr\s+(?:create|new|edit|comment|review|merge|close|reopen)|issue\s+(?:create|new|edit|comment|close|reopen)|release\s+(?:create|new|edit))\b`,
   'm',
 )
 
 /** Does this shell command publish PR/issue/release text on GitHub? */
 export const matchesPrCommand = cmd => GH_PUBLISH.test(commandSkeleton(cmd))
+
+// Commit messages become public and their close keywords act when the commit
+// reaches the default branch, so `git commit` gets the narrow leg of the
+// reference gate: close-keyword refs only, scanned from the raw command
+// (the message lives inside quotes the skeleton blanks). Plain mentions and
+// ordinary commits pass untouched — zero subprocesses.
+// Git global options (-C <path>, -c k=v, --git-dir=…) may sit between `git`
+// and the subcommand; the value-optional branch over-matches harmlessly —
+// a false positive only costs a zero-subprocess keyword scan.
+const GIT_COMMIT = new RegExp(
+  SEGMENT_START + COMMAND_PREFIXES + String.raw`(?:\S*\/)?git\s+(?:-\S+\s+(?:[^-\s]\S*\s+)?)*commit\b`,
+  'm',
+)
+export const matchesCommitCommand = cmd => GIT_COMMIT.test(commandSkeleton(cmd))
+
+// There is deliberately NO foreign-repo (-R/--repo) shortcut: three review
+// rounds each found a way to make its target parse lie (quoted values,
+// expansions, multi-segment payloads), and every miss switched the gate OFF.
+// A publish aimed at another repo simply runs the gate against this repo's
+// issue space — its refs come back not-found and the escape hatch covers the
+// (essentially unused) case. A never-exercised convenience is not worth a
+// recurring bypass surface.
+
+// A body built by shell expansion cannot be inspected before it publishes.
+// Single-quoted values never expand and stay out; commit -m is deliberately
+// exempt (prose dollars are common there, and expansion-built commit
+// messages fall under the out-of-visibility residual already on record).
+// The separator is optional (the CLI accepts ATTACHED short-option values:
+// -t"$(…)", -tfoo), and the value is matched as a full shell WORD — quoted
+// and unquoted segments concatenated (prefix"$(cat x)") form ONE argument.
+// Single-quoted segments never expand and are stripped before the test.
+export const hasDynamicBody = cmd => {
+  for (const m of cmd.matchAll(
+    /(?<![\w-])(?:--body|--notes|--subject|--title|--comment|-[bntc])(?:=|\s+)?((?:"[^"]*"|'[^']*'|[^\s'"])+)/g,
+  )) {
+    if (/[$`]/.test(m[1].replace(/'[^']*'/g, ''))) return true
+  }
+  return false
+}
 
 // The escape hatch must also be in command-prefix position of the SKELETON —
 // honored from quoted prose, a PR body QUOTING it would both bypass the gate
@@ -138,16 +196,111 @@ export const matchesPrCommand = cmd => GH_PUBLISH.test(commandSkeleton(cmd))
 const ALLOW_MARKER = new RegExp(SEGMENT_START + COMMAND_PREFIXES + String.raw`KM_ALLOW_BEAD_IDS=1\s`, 'm')
 export const allowsBeadIds = cmd => ALLOW_MARKER.test(commandSkeleton(cmd))
 
+// GitHub-style issue references in publishable text. Guessed numbers are the
+// top hallucination since the #N-not-bead-id policy: a wrong number usually
+// RESOLVES to a real, unrelated issue and reads as correct to every reviewer,
+// so each reference is echoed back with its actual title once (exit 2) and
+// the re-run confirms with KM_ISSUE_REFS_OK=1. The lookbehind kills HTML
+// entities (&#39;) and glued word chars; the lookahead kills hex colors.
+// Capped at 5 digits: 6-digit all-numeric tokens are far more likely CSS hex
+// colors (#123456, #000000) than issue numbers in a repo three orders of
+// magnitude away from #100000. A 3-digit shorthand color (#123) stays
+// ambiguous and costs one confirm round — accepted.
+const ISSUE_MENTION = /(?<![&\w#])#(\d{1,5})(?!\w)/g
+// GitHub's qualified closing forms for THIS repo — `owner/repo#N` and full
+// issue/PR URLs — normalize to #N so both extractors see them; qualified
+// refs into foreign repos stay out (they cannot be verified in our issue
+// space and our close keywords cannot act on them from here anyway).
+const QUALIFIED_REF = new RegExp(
+  String.raw`(?:https?:\/\/)?github\.com\/${REPO.replace('/', '\\/')}\/(?:issues|pull)\/(\d{1,5})\b|` +
+    String.raw`(?<![\w\/])${REPO.replace('/', '\\/')}#(\d{1,5})(?!\w)`,
+  'gi',
+)
+const normalizeQualifiedRefs = text => text.replace(QUALIFIED_REF, (_, a, b) => `#${a ?? b}`)
+export const extractIssueRefs = text =>
+  [...new Set([...normalizeQualifiedRefs(text).matchAll(ISSUE_MENTION)].map(m => Number(m[1])))]
+
+// GitHub's auto-close keywords: a wrong number here CLOSES an unrelated
+// issue on merge, so these references get the loudest warnings.
+const CLOSE_KEYWORD = /\b(?:fix(?:es|ed)?|close[sd]?|resolve[sd]?):?\s+#(\d{1,5})(?!\w)/gi
+export const closeKeywordRefs = text =>
+  [...new Set([...normalizeQualifiedRefs(text).matchAll(CLOSE_KEYWORD)].map(m => Number(m[1])))]
+
+const ISSUE_REFS_OK = new RegExp(SEGMENT_START + COMMAND_PREFIXES + String.raw`KM_ISSUE_REFS_OK=1\s`, 'm')
+export const allowsIssueRefs = cmd => ISSUE_REFS_OK.test(commandSkeleton(cmd))
+
+/**
+ * The echo table: one line of ground truth per referenced number, warnings
+ * on the shapes that are wrong regardless of intent. `refs` is
+ * [{number, info}] where info is {title, state, isPr} | 'not-found' | null
+ * (null = the lookup itself failed).
+ */
+export const buildIssueRefsMessage = (refs, closeNums) => {
+  const lines = refs.map(({ number, info }) => {
+    if (info === 'not-found') return `  #${number} → NO SUCH ISSUE OR PR — a guessed number?`
+    if (!info) return `  #${number} → COULD NOT VERIFY (gh lookup failed)`
+    const kind = info.isPr ? 'PULL REQUEST' : 'issue'
+    const warns = [
+      ...(closeNums.has(number) && info.isPr ? ['⚠ close keyword targets a PR'] : []),
+      ...(closeNums.has(number) && !info.isPr && info.state !== 'open' ? ['⚠ close keyword on an already-closed issue'] : []),
+    ]
+    return `  #${number} → "${info.title}" (${kind}, ${info.state})${warns.length ? ` ${warns.join(' ')}` : ''}`
+  })
+  // The bypass footer appears only when every reference resolved to a real
+  // title: advertising it over a failed lookup or a nonexistent number would
+  // invite bypassing a reference no one has read.
+  const anyUnresolved = refs.some(({ info }) => info === null || info === 'not-found')
+  return [
+    'Issue-reference check — verify each number against its real title before publishing:',
+    ...lines,
+    ...(anyUnresolved
+      ? ['Some references could not be verified (failed lookups or nonexistent numbers) — fix them and re-run; do not bypass unverified references.']
+      : ['If every reference above is the one you mean, re-run with KM_ISSUE_REFS_OK=1 prefixed.']),
+    'If the numbers are wrong, fix them first: `bd show <bead-id>` → External:, or `gh issue list --search "<words>"`. Never write a number you have not read this session.',
+  ].join('\n')
+}
+
 /**
  * Paths passed via --body-file/-F (the PR body often lives in a temp file, so
  * scanning the command string alone would miss its bead ids). `-` = stdin is
  * skipped. Handles plain, "double-" and 'single-'quoted paths; not full shell
  * parsing — this is a guard against the common shapes, not a sandbox.
  */
-export const bodyFilePaths = cmd =>
-  [...cmd.matchAll(/(?:--body-file|-F)(?:=|\s+)("[^"]*"|'[^']*'|[^\s'"]+)/g)]
+// Stdin in disguise: the hook reading these would consume its OWN stdin (an
+// empty, already-drained stream), not what the shell pipes to gh.
+const STDIN_PATH = /^(?:-|\/dev\/stdin|\/dev\/fd\/\d+|\/proc\/self\/fd\/\d+)$/
+export const bodyFilePaths = cmd => {
+  // A real flag sits OUTSIDE quotes, so it survives into the skeleton; a
+  // quoted mention ("use --body-file x next time" in a message) is prose and
+  // must not be read as a file — with the fail-closed missing-file check, a
+  // prose mention would otherwise block the command outright. Values are
+  // still extracted from the raw text (quoted paths are blanked in the
+  // skeleton). `--template`/`-T` is a FILE only on `gh pr create`; on
+  // `gh issue create` it names a repository template and must not be
+  // resolved locally (the missing-file check would block a legitimate name).
+  const skeleton = commandSkeleton(cmd)
+  const templateIsFile = /pr\s+(?:create|new)\b/.test(skeleton)
+  const flagTest = templateIsFile
+    ? /(?<![\w-])(?:--body-file|--notes-file|--template|--file|-F|-T)/
+    : /(?<![\w-])(?:--body-file|--notes-file|--file|-F)/
+  const flagCapture = templateIsFile
+    ? /(?<![\w-])(?:--body-file|--notes-file|--template|--file|-F|-T)(?:=|\s+)?("[^"]*"|'[^']*'|[^\s'"]+)/g
+    : /(?<![\w-])(?:--body-file|--notes-file|--file|-F)(?:=|\s+)?("[^"]*"|'[^']*'|[^\s'"]+)/g
+  if (!flagTest.test(skeleton)) return []
+  return [...cmd.matchAll(flagCapture)]
     .map(m => m[1].replace(/^(["'])(.*)\1$/, '$2'))
-    .filter(p => p !== '-')
+    .filter(p => !STDIN_PATH.test(p))
+}
+
+// Stdin classification reads the RAW values: a quoted sentinel (-F "-") is
+// blanked in the skeleton, and missing it means the hook scans nothing while
+// gh publishes the pipe. The flag must still sit outside quotes.
+export const hasStdinBody = cmd => {
+  if (!/(?<![\w-])(?:--body-file|--notes-file|--template|--file|-F|-T)/.test(commandSkeleton(cmd))) return false
+  return [...cmd.matchAll(/(?<![\w-])(?:--body-file|--notes-file|--template|--file|-F|-T)(?:=|\s+)?("[^"]*"|'[^']*'|[^\s'"]+)/g)]
+    .map(m => m[1].replace(/^(["'])(.*)\1$/, '$2'))
+    .some(p => STDIN_PATH.test(p))
+}
 
 /** Resolve a body-file path the way the shell would have: ~, then cwd. */
 export const resolveBodyPath = (p, cwd, home) =>
@@ -210,6 +363,80 @@ export const planClosePushes = (beads, issueByNumber, maxKnownIssueNumber) =>
  * bead new this run at 2 takes the label-derived value if one exists. A bead
  * already at 2 before the run is untouched — 2 may be deliberate.
  */
+// Beads in any non-open status whose FIRST issue the pre-pull push just
+// minted: the mint creates the issue OPEN with a fresh timestamp, so the
+// timestamp-based suspect test above can never flag them, yet the pull can
+// apply that OPEN copy over the local lifecycle state — closes (trap 3's
+// population, re-exposed by pushing before the pull), claims, blocks and
+// deferrals alike. Detected as external_ref appearing between the pre-push
+// and post-push listings.
+export const planMintedNonOpen = (preBeads, freshBeads) => {
+  const preRefs = new Map(preBeads.map(b => [b.id, b.external_ref ?? null]))
+  return freshBeads.flatMap(b => {
+    const number = issueNumberFromRef(b.external_ref)
+    return b.status !== 'open' && number !== null && preRefs.get(b.id) === null ? [{ id: b.id, number }] : []
+  })
+}
+
+// Closed beads whose linked issue is OPEN after close-adoption ran: that is a
+// GitHub-side REOPEN, which per the documented asymmetry must not stick —
+// beads is the source of truth; reopen the bead instead. The reopen bumps the
+// issue timestamp, so the newer-local test below structurally cannot flag
+// these; snapshotting them lets the restore + push-back undo the reopen on
+// both sides.
+export const planReopenedClosed = (beads, issueByNumber) =>
+  beads.flatMap(b => {
+    const number = issueNumberFromRef(b.external_ref)
+    const issue = number === null ? undefined : issueByNumber.get(number)
+    return b.status === 'closed' && issue?.state === 'OPEN' ? [{ id: b.id, number }] : []
+  })
+
+// Beads whose local row is strictly newer than their GitHub copy. bd's pull
+// applies GitHub state over these despite the documented prefer-newer default
+// (#647), so they are exactly the rows a pull can revert. Missing timestamps
+// on either side mean "cannot claim local is newer" — not a suspect.
+export const planLocalWins = (beads, issueByNumber) =>
+  beads.flatMap(b => {
+    const number = issueNumberFromRef(b.external_ref)
+    const issue = number === null ? undefined : issueByNumber.get(number)
+    if (!issue?.updatedAt || !b.updated_at) return []
+    return Date.parse(b.updated_at) > Date.parse(issue.updatedAt) ? [{ id: b.id, number }] : []
+  })
+
+// Both sides of the comparison are `bd show` rows (list rows lack assignee),
+// so assignment-only reverts are visible too; the restore replays the full
+// snapshot, close reason included. Together with the set-compared labels,
+// this covers every field the pull writes (the issue-backed set) — fields
+// GitHub issues don't carry (notes, design, estimates, deps) cannot be
+// pull-reverted and are deliberately absent.
+const REVERT_FIELDS = ['title', 'description', 'status', 'priority', 'issue_type', 'assignee']
+const labelKey = row => [...(row.labels ?? [])].sort().join('\n')
+export const detectReverts = (snapshotRows, postById) =>
+  snapshotRows.filter(s => {
+    const post = postById.get(s.id)
+    return post && (REVERT_FIELDS.some(f => (s[f] ?? null) !== (post[f] ?? null)) || labelKey(s) !== labelKey(post))
+  })
+
+// A closed bead cannot be restored by `bd update -s closed` alone: close is
+// its own verb and carries the reason. Everything else is one update.
+// `post` is the row's post-pull state, used only to compute the label delta;
+// without it (the conservative path) every snapshot label is re-added —
+// duplicate adds are idempotent — and none removed.
+export const planRestoreArgs = (row, post) => {
+  const update = ['update', row.id, '--title', row.title ?? '', '-d', row.description ?? '', '-p', String(row.priority)]
+  if (row.issue_type) update.push('-t', row.issue_type)
+  // Always passed: `-a ''` CLEARS the assignee (verified against bd 1.2.2),
+  // so an unassigned snapshot can undo a pulled stale assignment.
+  update.push('-a', row.assignee ?? '')
+  const snapLabels = new Set(row.labels ?? [])
+  const postLabels = new Set(post?.labels ?? [])
+  for (const l of snapLabels) if (!postLabels.has(l)) update.push('--add-label', l)
+  for (const l of postLabels) if (!snapLabels.has(l)) update.push('--remove-label', l)
+  if (row.status === 'closed')
+    return [update, ['close', row.id, '-r', row.close_reason || 'restored by bd-github-sync after a pull revert (#647)']]
+  return [[...update, '-s', row.status]]
+}
+
 export const planPriorityFixes = (preById, postBeads, issueByNumber) =>
   postBeads
     .filter(b => b.status !== 'closed' && b.priority === 2)
@@ -231,7 +458,7 @@ export const buildDenyMessage = (mapped, unmapped) => {
           `No GitHub issue found for: ${unmapped.join(', ')} — check \`bd show <id>\`. A real bead may have been skipped by the sync watermark (edit it to bump updated_at, then retry); if the sync could not run here, find the issue via \`gh issue list --search\`.`,
         ]
       : []),
-    'Rewrite the references as #N and re-run.',
+    'Rewrite the references as #N and re-run with KM_ISSUE_REFS_OK=1 prefixed — these numbers come from the tracker, so the issue-reference check needs no separate confirmation.',
     'Close keywords ("Fixes #N") are the right pattern: when the PR merges and GitHub closes #N, the next sync\'s reconcile step closes the bead to match. Do not hand-close either side before the merge.',
     'If the bead id mention is deliberate (not an issue reference), re-run with KM_ALLOW_BEAD_IDS=1 prefixed.',
   ]
@@ -266,7 +493,8 @@ const mainRepoRoot = () => {
 }
 
 // The DB's PRIOR existence gates every bd invocation — see header.
-const initializedDbRoot = () => {
+// Exported for bd-prime-hook.mjs, which shares the same fresh-clone invariant.
+export const initializedDbRoot = () => {
   const root = mainRepoRoot()
   return root && existsSync(join(root, '.beads', 'embeddeddolt')) && tryRun('bd', ['--version']) ? root : null
 }
@@ -362,7 +590,7 @@ const listAllBeads = () =>
 const FETCH_LIMIT = 5000
 const fetchIssues = () => {
   const rows = JSON.parse(
-    run('gh', ['issue', 'list', '--repo', REPO, '--state', 'all', '--json', 'number,state,labels', '--limit', String(FETCH_LIMIT)]),
+    run('gh', ['issue', 'list', '--repo', REPO, '--state', 'all', '--json', 'number,state,labels,updatedAt', '--limit', String(FETCH_LIMIT)]),
   )
   if (rows.length >= FETCH_LIMIT)
     throw new Error(`issue list hit the ${FETCH_LIMIT} fetch limit — raise it before trusting absence-based decisions`)
@@ -372,7 +600,7 @@ const fetchIssues = () => {
   // would all be wrong at once.
   if (rows.length === 0) throw new Error('issue list came back empty — refusing absence-based decisions')
   return {
-    issueByNumber: new Map(rows.map(i => [i.number, { state: i.state, labels: i.labels.map(l => l.name) }])),
+    issueByNumber: new Map(rows.map(i => [i.number, { state: i.state, labels: i.labels.map(l => l.name), updatedAt: i.updatedAt }])),
     maxKnownIssueNumber: rows.reduce((max, i) => Math.max(max, i.number), 0),
   }
 }
@@ -414,6 +642,63 @@ const runSync = ({ quiet = false, dryRun = false } = {}) => {
           (report.length ? ` (already applied: ${report.join('; ')})` : ''),
       )
 
+    // 1.5 Push local state out BEFORE anything pulls. bd's pull applies a
+    // strictly OLDER GitHub copy over newer local rows (#647) — closes and
+    // edits included — so the pull must never see a GitHub copy that lags
+    // local. Runs after close-adoption (an un-adopted open bead would
+    // re-open its GitHub-closed issue) and skips content-identical beads,
+    // which cannot revert anything.
+    if (dryRun) {
+      report.push('[dry-run] would push local state out before the pull')
+    } else {
+      const pushOut = run('bd', ['github', 'sync', '--push-only'], { env })
+      // Zero-count lines stay out of the report: they would flip `changed`
+      // below and un-quiet every converged SessionEnd run.
+      report.push(...pushOut.split('\n').filter(l => /Pushed|Created|Updated/.test(l) && /[1-9]/.test(l)).map(l => `pre-pull: ${l.trim()}`))
+    }
+
+    // 1.6 The push's watermark silently skips older local edits, so snapshot
+    // every bead whose local row is STILL newer than its GitHub copy — the
+    // pull may revert exactly those; step 2.5 restores any it does. Fresh
+    // list: close-adoption just changed local rows. Snapshot via a direct
+    // spawn, not run(): `bd show` output is pretty-printed JSON, and a
+    // description line starting with "Error" would trip run()'s bd check.
+    const freshBeads = dryRun ? preBeads : listAllBeads()
+    const suspects = [
+      ...new Map(
+        [
+          ...planLocalWins(freshBeads, issueByNumber),
+          ...planMintedNonOpen(preBeads, freshBeads),
+          ...planReopenedClosed(freshBeads, issueByNumber),
+        ].map(s => [s.id, s]),
+      ).values(),
+    ]
+    // Tolerant multi-id show: parse stdout directly — `bd show` output is
+    // pretty-printed JSON, and a description line starting with "Error" would
+    // trip run()'s bd check. Returns null on any shortfall, including bd's
+    // partial-output shape (found rows on stdout, `Error…` for the rest,
+    // exit 0), which the length check catches.
+    const showSuspects = () => {
+      const shown = spawnSync('bd', ['show', ...suspects.map(s => s.id), '--json'], { encoding: 'utf8', env })
+      try {
+        const rows = JSON.parse(shown.stdout)
+        return Array.isArray(rows) && rows.length === suspects.length ? rows : null
+      } catch {
+        return null
+      }
+    }
+    let snapshot = []
+    if (suspects.length && !dryRun) {
+      snapshot = showSuspects()
+      // Abort rather than pull unprotected — same reasoning as the
+      // close-adoption abort: proceeding is the exact loss this guard
+      // prevents.
+      if (!snapshot)
+        throw new Error(
+          `aborting before pull: could not snapshot ${suspects.map(s => s.id).join(', ')} — the pull could revert these newer local rows undetected (#647)`,
+        )
+    }
+
     // 2. The sync itself.
     const syncOut = run('bd', ['github', 'sync', ...(dryRun ? ['--dry-run'] : [])], { env })
     const syncSummary = syncOut
@@ -422,16 +707,67 @@ const runSync = ({ quiet = false, dryRun = false } = {}) => {
       .map(l => l.trim())
     report.push(...syncSummary)
 
-    // 3. Un-flatten priorities (pre/post comparison — see header), push back.
-    const preById = new Map(preBeads.map(b => [b.id, b]))
+    // 2.5 Restore local rows the pull reverted anyway (#647 — the watermark
+    // kept them out of 1.5's push). The restore bumps updated_at, so the
+    // push-back below carries them out and the next pull leaves them alone.
+    //
+    // ACCEPTED residuals (reviewed 2026-08-20; each is a failure INSIDE this
+    // fallback, needs a mid-run bd failure or a seconds-wide race, and ends
+    // in a report line naming the bead for hand-recovery — do not add
+    // machinery for them here, it recreates transactions over a store that
+    // has none; the class ends upstream when bd's pull honors prefer-newer):
+    // a close restore whose second step fails leaves the row open with the
+    // reason only in the FAILED line; a concurrent edit from another
+    // worktree during the pull window can be read as a revert and lose the
+    // seconds-wide delta between two local edits (no compare-and-swap verb
+    // exists to close this); the conservative no-post path cannot compute
+    // label REMOVALS, so a pulled-back stale label survives until edited.
     const postBeads = dryRun ? preBeads : listAllBeads()
+    // Post-pull state for the suspects comes from `bd show`, not the list:
+    // list rows lack assignee, so a list-based comparison would miss
+    // assignment-only reverts (and false-positive every assigned suspect).
+    const postSuspects = snapshot.length ? showSuspects() : []
+    const postById = new Map((postSuspects ?? []).map(b => [b.id, b]))
+    // A failed post-read must not discard the snapshot: the DB may already
+    // hold the reverted row, and the next sync's snapshot would capture THAT
+    // — the newer local edit would be gone for good. Conservatively restore
+    // every snapshotted suspect instead; for an untouched row that rewrites
+    // identical content, which the push-back then skips.
+    const reverted = dryRun ? [] : postSuspects ? detectReverts(snapshot, postById) : snapshot
+    if (!postSuspects)
+      report.push(`FAILED to re-read ${suspects.map(s => s.id).join(', ')} after the pull — conservatively restoring every snapshotted suspect`)
+    const restoredOk = []
+    const restoreFailures = []
+    for (const row of reverted) {
+      const ok = planRestoreArgs(row, postById.get(row.id)).every(args => tryRun('bd', args, { env }) !== null)
+      if (ok) {
+        restoredOk.push(row.id)
+        report.push(`restored ${row.id} — the pull reverted a newer local row (#647)`)
+      } else {
+        restoreFailures.push(row.id)
+      }
+    }
+    // Failed restores stay OUT of the push-back: pushing a half-restored row
+    // would stamp GitHub newer and bury the loss, while leaving GitHub older
+    // keeps the row a suspect so the next sync retries the restore.
+    if (restoreFailures.length)
+      report.push(`FAILED to restore after a pull revert: ${restoreFailures.join(', ')} — left un-pushed so the next sync retries; check them by hand (bd show)`)
+
+    // 3. Un-flatten priorities (pre/post comparison — see header), push back
+    // together with the restored rows.
+    const preById = new Map(preBeads.map(b => [b.id, b]))
     if (dryRun) report.push('[dry-run] priority un-flattening not simulated — it needs the post-sync state')
     const fixes = planPriorityFixes(preById, postBeads, issueByNumber)
     for (const { id, to } of fixes) {
       if (!dryRun) run('bd', ['update', id, '-p', String(to)], { env })
       report.push(`priority ${id} → ${to} (re-derived after pull-flattening)`)
     }
-    if (fixes.length && !dryRun) run('bd', ['github', 'sync', '--push-only', '--issues', fixes.map(f => f.id).join(',')], { env })
+    // restoreFailures subtracted from the WHOLE union: a half-restored row
+    // can also enter through the priority-fix leg, and pushing it would
+    // stamp GitHub newer and bury the loss (see the restore loop above).
+    const failedRestoreIds = new Set(restoreFailures)
+    const pushBack = [...new Set([...fixes.map(f => f.id), ...restoredOk])].filter(id => !failedRestoreIds.has(id))
+    if (pushBack.length && !dryRun) run('bd', ['github', 'sync', '--push-only', '--issues', pushBack.join(',')], { env })
 
     // 4. Carry bead closes out to issues still open (see header: via gh, not
     // a selective bd push, whose watermark silently skips older closes).
@@ -480,6 +816,28 @@ const runSync = ({ quiet = false, dryRun = false } = {}) => {
 
 const allow = () => process.exit(0)
 
+// The #N leg of the gate: echo every referenced number's ground truth;
+// KM_ISSUE_REFS_OK=1 on the re-run confirms. Verification is a per-number
+// gh GET — tolerant, distinguishing "not found" from "gh broke".
+const issueRefsTable = (text, refs) => {
+  const fetchInfo = number => {
+    const r = spawnSync('gh', ['api', `repos/${REPO}/issues/${number}`], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+    try {
+      const j = JSON.parse(r.stdout)
+      if (r.status !== 0) return /not found/i.test(j?.message ?? '') ? 'not-found' : null
+      return { title: j.title ?? '', state: j.state ?? '', isPr: Boolean(j.pull_request) }
+    } catch {
+      return null
+    }
+  }
+  return buildIssueRefsMessage(refs.map(number => ({ number, info: fetchInfo(number) })), new Set(closeKeywordRefs(text)))
+}
+
+const echoIssueRefs = (text, refs) => {
+  console.error(issueRefsTable(text, refs))
+  process.exit(2)
+}
+
 const hookPrePr = () => {
   let payload = {}
   try {
@@ -488,16 +846,78 @@ const hookPrePr = () => {
     allow()
   }
   const cmd = payload?.tool_input?.command ?? ''
-  if (!cmd || !matchesPrCommand(cmd)) allow()
-  if (allowsBeadIds(cmd)) allow()
-
+  if (!cmd) allow()
   const cwd = payload?.cwd ?? process.cwd()
-  const bodies = bodyFilePaths(cmd)
-    .map(p => resolveBodyPath(p, cwd, homedir()))
-    .filter(p => existsSync(p))
-    .map(p => readFileSync(p, 'utf8'))
-  const ids = extractBeadIds([cmd, ...bodies].join('\n'))
-  if (ids.length === 0) allow()
+  // Fail closed on body text this hook cannot inspect (only publish/commit
+  // legs call this, so ordinary commands like `grep -F -` are untouched):
+  // a stdin-fed body (`cat x | gh … -F -`) would need pipeline simulation —
+  // heredoc-fed stdin passes, its content sits in the raw command which both
+  // extractors already scan — and a referenced file that cannot be read (a
+  // `cd` chain inside the command, a typo) would publish its references
+  // unverified if silently skipped.
+  const readBodies = () => {
+    if (hasStdinBody(cmd) && !cmd.includes('<<') && !allowsIssueRefs(cmd)) {
+      console.error(
+        'This command feeds its published body from stdin, which this gate cannot inspect. Use a heredoc (scanned), a file, or an inline --body — or, after verifying the references yourself, re-run with KM_ISSUE_REFS_OK=1 prefixed.',
+      )
+      process.exit(2)
+    }
+    const paths = bodyFilePaths(cmd).map(p => resolveBodyPath(p, cwd, homedir()))
+    const missing = paths.filter(p => !existsSync(p))
+    if (missing.length && !allowsIssueRefs(cmd)) {
+      console.error(
+        `Cannot read body file(s) referenced by this command: ${missing.join(', ')} (resolved from ${cwd}; cd chains inside the command are not followed).\n` +
+          'Run from the directory the paths are relative to, inline the body, or — after verifying the references yourself — re-run with KM_ISSUE_REFS_OK=1 prefixed.',
+      )
+      process.exit(2)
+    }
+    return paths.filter(p => existsSync(p)).map(p => readFileSync(p, 'utf8'))
+  }
+  if (!matchesPrCommand(cmd)) {
+    // The commit leg: only a close keyword aimed at a #N warrants a round.
+    // The message may be file-backed (git commit -F/--file), so scan those
+    // too; `-F -` (stdin/heredoc) bodies already sit in the raw command.
+    if (!matchesCommitCommand(cmd) || allowsIssueRefs(cmd)) allow()
+    const commitText = [cmd, ...readBodies()].join('\n')
+    const commitRefs = closeKeywordRefs(commitText)
+    if (commitRefs.length === 0) allow()
+    return echoIssueRefs(commitText, commitRefs)
+  }
+
+  // --recover republishes input cached by a FAILED create run — content this
+  // hook never saw. Same family as stdin pipes and expansions: fail closed.
+  if (/(?:^|\s)--recover(?:=|\s)/.test(commandSkeleton(cmd)) && !allowsIssueRefs(cmd)) {
+    console.error(
+      'This command republishes recovered input from a failed run, which this gate cannot inspect. Re-create the publication with visible text — or, after verifying the recovered content yourself, re-run with KM_ISSUE_REFS_OK=1 prefixed.',
+    )
+    process.exit(2)
+  }
+
+  if (hasDynamicBody(cmd) && !allowsIssueRefs(cmd)) {
+    console.error(
+      'This command builds its published body by shell expansion ($(…), `…` or a variable), which this gate cannot inspect. Publish literal text, a heredoc, or a file — or, after verifying the references yourself, re-run with KM_ISSUE_REFS_OK=1 prefixed.',
+    )
+    process.exit(2)
+  }
+
+  const bodies = readBodies()
+  // A positional target URL (`gh pr comment <url> --body …`) is the command's
+  // addressee, not published text — stripped so it does not cost a
+  // title-confirmation round. Two guards keep the strip away from published
+  // text: the pattern is anchored on `gh` itself, and it only applies at all
+  // when the SKELETON confirms an unquoted positional target exists — quoted
+  // prose that merely resembles one must keep its refs verified. Residual:
+  // prose spelling out a full `gh … <url>` alongside a real positional
+  // target also gets stripped — accepted over parsing argument positions.
+  const targetUrl = () => /((?:\S*\/)?gh\s+(?:-\S+\s+(?:[^-\s]\S*\s+)?)*(?:pr|issue)\s+\w+\s+)https?:\/\/\S+/g
+  const strippedCmd = targetUrl().test(commandSkeleton(cmd)) ? cmd.replace(targetUrl(), '$1') : cmd
+  const text = [strippedCmd, ...bodies].join('\n')
+  // The two escapes are independent: a command allowed to mention bead ids
+  // can still carry a hallucinated issue number, and vice versa.
+  const ids = allowsBeadIds(cmd) ? [] : extractBeadIds(text)
+  const refs = allowsIssueRefs(cmd) ? [] : extractIssueRefs(text)
+  if (ids.length === 0 && refs.length === 0) allow()
+  if (ids.length === 0) return echoIssueRefs(text, refs)
 
   // No bd call of any kind before the DB-exists gate — see header.
   const dbRoot = initializedDbRoot()
@@ -526,7 +946,12 @@ const hookPrePr = () => {
 
   const mapped = ids.filter(id => byId.get(id)).map(id => ({ id, number: byId.get(id) }))
   const unmapped = ids.filter(id => !byId.get(id))
-  console.error(buildDenyMessage(mapped, unmapped))
+  // The deny message licenses a KM_ISSUE_REFS_OK=1 re-run, so any #N already
+  // present in the text must have its ground truth shown in THIS round —
+  // otherwise the mixed case would publish unverified numbers under that
+  // licence.
+  const refsSection = refs.length ? `\n\n${issueRefsTable(text, refs)}` : ''
+  console.error(buildDenyMessage(mapped, unmapped) + refsSection)
   process.exit(2)
 }
 

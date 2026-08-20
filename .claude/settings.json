@@ -43,7 +43,8 @@
       {
         "hooks": [
           {
-            "command": "bd prime --hook-json --mcp",
+            "command": "node \"$CLAUDE_PROJECT_DIR/scripts/bd-prime-hook.mjs\"",
+            "statusMessage": "Loading beads memory index…",
             "type": "command"
           }
         ],
