@@ -5,13 +5,8 @@ import { getOrCreateRecentsPage } from '@/data/recentsPage.js'
 
 export function RecentsHeaderItem() {
   const repo = useRepo()
-  // Async opener because the Recents page id is only known after resolving
-  // live state: since issue #378 kernel pages resolve alias-first, so the raw
-  // `recentsPageBlockId` can be a tombstone (a live block adopted the
-  // 'Recents' alias) or absent (bootstrap never ran). Get-or-create both
-  // adopts an existing claimant and creates the page, so this can't land on a
-  // dead id. The hook keeps the click's modifier semantics intact — see
-  // `openAsyncBlockFromEvent`.
+  // Async because the target must be resolved at click time: `recentsPageBlockId`
+  // is a derived id, not the live page, and can name a tombstone or nothing.
   const openBlock = useAsyncBlockOpener({plainClick: 'navigator'})
 
   return (

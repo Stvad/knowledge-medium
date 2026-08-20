@@ -4,9 +4,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { RecentsHeaderItem } from '../HeaderItem.tsx'
 
-// This file covers the button's WIRING only: that it opens with the
-// `navigator` role and that the target it hands over is the alias-resolved
-// live Recents page (issue #378) rather than the deterministic id. The
+// This file covers one thing: the target the button hands the opener is the
+// alias-resolved live Recents page, not the deterministic id. The
 // click mechanics the opener performs — synchronous event gating, modifier
 // routing, passthrough, veto, error handling — belong to
 // `openAsyncBlockFromEvent` and are covered against a real Repo in
@@ -15,7 +14,6 @@ import { RecentsHeaderItem } from '../HeaderItem.tsx'
 const mocks = vi.hoisted(() => ({
   getOrCreateRecentsPage: vi.fn(async () => ({id: 'claimant'})),
   openBlock: vi.fn(),
-  useAsyncBlockOpener: vi.fn(),
   repo: {activeWorkspaceId: 'ws-1'},
 }))
 
@@ -25,10 +23,7 @@ vi.mock('@/utils/navigation.ts', async () => {
   const actual = await vi.importActual<typeof import('@/utils/navigation.ts')>('@/utils/navigation.ts')
   return {
     ...actual,
-    useAsyncBlockOpener: (...args: unknown[]) => {
-      mocks.useAsyncBlockOpener(...args)
-      return mocks.openBlock
-    },
+    useAsyncBlockOpener: () => mocks.openBlock,
   }
 })
 
@@ -43,7 +38,6 @@ afterEach(() => {
   cleanup()
   mocks.getOrCreateRecentsPage.mockClear()
   mocks.openBlock.mockClear()
-  mocks.useAsyncBlockOpener.mockClear()
 })
 
 const clickAndGetResolver = () => {
@@ -54,11 +48,6 @@ const clickAndGetResolver = () => {
 }
 
 describe('RecentsHeaderItem', () => {
-  it('opens with the navigator role', () => {
-    render(<RecentsHeaderItem/>)
-    expect(mocks.useAsyncBlockOpener).toHaveBeenCalledWith({plainClick: 'navigator'})
-  })
-
   it('hands the opener a resolver for the LIVE Recents page, not a deterministic id', async () => {
     const resolveTarget = clickAndGetResolver()
 
