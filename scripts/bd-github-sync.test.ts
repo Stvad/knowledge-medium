@@ -327,6 +327,15 @@ describe('detectReverts', () => {
     expect(detectReverts([snap], byId([{ ...snap }]))).toEqual([])
     expect(detectReverts([snap], byId([]))).toEqual([])
   })
+
+  it('compares labels as a set — order-insensitive, content-sensitive', () => {
+    const labelled = { ...snap, labels: ['ui', 'bug'] }
+    expect(detectReverts([labelled], byId([{ ...labelled, labels: ['bug', 'ui'] }]))).toEqual([])
+    expect(detectReverts([labelled], byId([{ ...labelled, labels: ['bug'] }]))).toEqual([labelled])
+    expect(detectReverts([{ ...snap, labels: [] }], byId([{ ...snap, labels: ['stale'] }]))).toEqual([
+      { ...snap, labels: [] },
+    ])
+  })
 })
 
 describe('planRestoreArgs', () => {
@@ -343,6 +352,22 @@ describe('planRestoreArgs', () => {
       ['update', 'km-a', '--title', 'T', '-d', 'D', '-p', '2', '-a', ''],
       ['close', 'km-a', '-r', 'done'],
     ])
+  })
+
+  it('replays the label delta against the post-pull row', () => {
+    const row = bead({ id: 'km-a', status: 'open', priority: 2, title: 'T', description: 'D', labels: ['ui', 'keep'] })
+    const post = bead({ ...row, labels: ['keep', 'stale'] })
+    expect(planRestoreArgs(row, post)[0]).toEqual([
+      'update', 'km-a', '--title', 'T', '-d', 'D', '-p', '2', '-a', '', '--add-label', 'ui', '--remove-label', 'stale', '-s', 'open',
+    ])
+  })
+
+  it('re-adds every snapshot label when the post row is unknown (conservative path)', () => {
+    const row = bead({ id: 'km-a', status: 'open', priority: 2, title: 'T', description: 'D', labels: ['ui'] })
+    const [update] = planRestoreArgs(row)
+    expect(update).toContain('--add-label')
+    expect(update).toContain('ui')
+    expect(update).not.toContain('--remove-label')
   })
 })
 
@@ -527,6 +552,37 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     expect(r.status).toBe(1)
     expect(r.stderr).toContain('could not snapshot km-t5')
     expect(shimCalls()).not.toContain('bd github sync\n')
+  })
+
+  it('restores a labels-only revert via the label delta', () => {
+    const newer = { id: 'km-tA', status: 'open', priority: 1, title: 'T', description: 'D', external_ref: ref(10), updated_at: '2026-08-20T02:00:00Z', labels: ['ui'] }
+    const { run, shimCalls } = makeSyncRepo({
+      issues: [ghIssue(10, '2026-08-20T01:00:00Z')],
+      lists: [[newer], [newer], [newer]],
+      shows: [[newer], [{ ...newer, labels: [] }]],
+    })
+    const r = run()
+    expect(r.status).toBe(0)
+    expect(r.stdout).toContain('restored km-tA')
+    expect(shimCalls()).toContain('--add-label ui')
+    expect(shimCalls()).toContain('--issues km-tA')
+  })
+
+  // A failed post-pull read must not discard the snapshot — the DB may
+  // already hold the reverted row, and the next sync's snapshot would
+  // capture that, losing the newer local edit for good.
+  it('conservatively restores every suspect when the post-pull read fails', () => {
+    const newer = { id: 'km-tB', status: 'open', priority: 1, title: 'T', description: 'D-new', external_ref: ref(11), updated_at: '2026-08-20T02:00:00Z' }
+    const { run, shimCalls } = makeSyncRepo({
+      issues: [ghIssue(11, '2026-08-20T01:00:00Z')],
+      lists: [[newer], [newer], [newer]],
+      shows: [[newer], 'Error fetching km-tB: transient'],
+    })
+    const r = run()
+    expect(r.status).toBe(0)
+    expect(r.stdout).toContain('conservatively restoring')
+    expect(r.stdout).toContain('restored km-tB')
+    expect(shimCalls()).toContain('bd update km-tB --title T -d D-new -p 1 -a  -s open')
   })
 
   // bd's partial-output shape: found rows on stdout, `Error…` for the rest,

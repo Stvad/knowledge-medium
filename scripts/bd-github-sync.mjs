@@ -232,22 +232,33 @@ export const planLocalWins = (beads, issueByNumber) =>
 
 // Both sides of the comparison are `bd show` rows (list rows lack assignee),
 // so assignment-only reverts are visible too; the restore replays the full
-// snapshot, close reason included.
+// snapshot, close reason included. Together with the set-compared labels,
+// this covers every field the pull writes (the issue-backed set) — fields
+// GitHub issues don't carry (notes, design, estimates, deps) cannot be
+// pull-reverted and are deliberately absent.
 const REVERT_FIELDS = ['title', 'description', 'status', 'priority', 'issue_type', 'assignee']
+const labelKey = row => [...(row.labels ?? [])].sort().join('\n')
 export const detectReverts = (snapshotRows, postById) =>
   snapshotRows.filter(s => {
     const post = postById.get(s.id)
-    return post && REVERT_FIELDS.some(f => (s[f] ?? null) !== (post[f] ?? null))
+    return post && (REVERT_FIELDS.some(f => (s[f] ?? null) !== (post[f] ?? null)) || labelKey(s) !== labelKey(post))
   })
 
 // A closed bead cannot be restored by `bd update -s closed` alone: close is
 // its own verb and carries the reason. Everything else is one update.
-export const planRestoreArgs = row => {
+// `post` is the row's post-pull state, used only to compute the label delta;
+// without it (the conservative path) every snapshot label is re-added —
+// duplicate adds are idempotent — and none removed.
+export const planRestoreArgs = (row, post) => {
   const update = ['update', row.id, '--title', row.title ?? '', '-d', row.description ?? '', '-p', String(row.priority)]
   if (row.issue_type) update.push('-t', row.issue_type)
   // Always passed: `-a ''` CLEARS the assignee (verified against bd 1.2.2),
   // so an unassigned snapshot can undo a pulled stale assignment.
   update.push('-a', row.assignee ?? '')
+  const snapLabels = new Set(row.labels ?? [])
+  const postLabels = new Set(post?.labels ?? [])
+  for (const l of snapLabels) if (!postLabels.has(l)) update.push('--add-label', l)
+  for (const l of postLabels) if (!snapLabels.has(l)) update.push('--remove-label', l)
   if (row.status === 'closed')
     return [update, ['close', row.id, '-r', row.close_reason || 'restored by bd-github-sync after a pull revert (#647)']]
   return [[...update, '-s', row.status]]
@@ -523,13 +534,19 @@ const runSync = ({ quiet = false, dryRun = false } = {}) => {
     // list rows lack assignee, so a list-based comparison would miss
     // assignment-only reverts (and false-positive every assigned suspect).
     const postSuspects = snapshot.length ? showSuspects() : []
-    if (!postSuspects) report.push(`FAILED to re-read ${suspects.map(s => s.id).join(', ')} after the pull — pull-revert detection is off this run`)
     const postById = new Map((postSuspects ?? []).map(b => [b.id, b]))
-    const reverted = dryRun ? [] : detectReverts(snapshot, postById)
+    // A failed post-read must not discard the snapshot: the DB may already
+    // hold the reverted row, and the next sync's snapshot would capture THAT
+    // — the newer local edit would be gone for good. Conservatively restore
+    // every snapshotted suspect instead; for an untouched row that rewrites
+    // identical content, which the push-back then skips.
+    const reverted = dryRun ? [] : postSuspects ? detectReverts(snapshot, postById) : snapshot
+    if (!postSuspects)
+      report.push(`FAILED to re-read ${suspects.map(s => s.id).join(', ')} after the pull — conservatively restoring every snapshotted suspect`)
     const restoredOk = []
     const restoreFailures = []
     for (const row of reverted) {
-      const ok = planRestoreArgs(row).every(args => tryRun('bd', args, { env }) !== null)
+      const ok = planRestoreArgs(row, postById.get(row.id)).every(args => tryRun('bd', args, { env }) !== null)
       if (ok) {
         restoredOk.push(row.id)
         report.push(`restored ${row.id} — the pull reverted a newer local row (#647)`)
