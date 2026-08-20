@@ -17,9 +17,10 @@ import {
 import { activeLayoutSessionElement } from '@/utils/layoutSessionDom.js'
 
 // happy-dom never lays out, so every rect is zero and every instance reads as
-// off-screen — which would silently route every viewport-aware tier to the
-// positional clamp. `setTestVisible` stubs the rect so the tier under test is
-// the one that answers.
+// off-screen. Every tier INCLUDING the positional clamp is viewport-gated, so
+// with no stubbed rect `findRecoveryAnchor` just returns null (see "returns
+// null when no same-surface instance is in the viewport"). `setTestVisible`
+// puts the tier under test on screen — and only it.
 const tallVisibleRect = (top: number) =>
   ({
     top,
@@ -98,7 +99,9 @@ const buildPanel = (spec: PanelSpec): HTMLElement => {
   return el
 }
 
-/** `p1` outside the column layout, which the recovery tests want. */
+/** `p1` with no column wrapper, for the fixtures that build a tree. Nothing on
+ *  the recovery path reads columns — `panelById` queries the document and
+ *  `panelInstances` scopes by the nearest panel. */
 const buildP1Panel = (instances: InstanceSpec[]): HTMLElement => {
   const panel = buildPanel({panelId: 'p1', instances})
   document.body.appendChild(panel)
@@ -546,7 +549,8 @@ describe('findRecoveryAnchor (proactive disappear-handler)', () => {
     // Scenario coverage, not a pin: deleting a node takes its whole subtree
     // with it, so the same-depth next sibling and the positional clamp target
     // the same element by construction and this fixture cannot tell them
-    // apart. `only-child collapse` below is where that tier actually fails.
+    // apart. `only-child collapse` below is where same-depth semantics and
+    // DOM-flat order actually diverge.
     buildP1Panel([
       p1Instance('top', ['above', p1Instance('parent', ['child', 'c2']), 'below']),
     ])
@@ -613,33 +617,50 @@ describe('findRecoveryAnchor (proactive disappear-handler)', () => {
     expect(findRecoveryAnchor('p1', p1Location('X'))).toBeNull()
   })
 
-  it('falls back to positional clamp when neighbors and ancestors are all gone', () => {
-    // Edge case: build a scenario where prev/next/ancestor are all
-    // missing but a positional fallback can still land somewhere.
-    // We achieve this by remembering position with one DOM, then
-    // swapping the panel to a completely different set of blocks.
+  it('prefers the block previously ABOVE when the one below is gone too', () => {
+    // prev and the clamp must name different rows or this pins nothing: X sits
+    // at surfaceIndex 2, and the rebuild puts two fresh rows above the
+    // survivors, so the clamp lands on A while prev names B.
     buildLayout([
       {kind: 'panel', columnId: 'c1', panel: {panelId: 'p1', instances: [
-        {blockId: 'before', instance: 'p1:before'},
+        {blockId: 'A', instance: 'p1:A'},
+        {blockId: 'B', instance: 'p1:B'},
         {blockId: 'X', instance: 'p1:X'},
-        {blockId: 'after', instance: 'p1:after'},
+        {blockId: 'C', instance: 'p1:C'},
       ]}},
     ])
     rememberInstancePosition('p1', findInstance('p1:X'))
 
-    // Replace the panel's contents — none of the original neighbors
-    // survive, but the panel itself still has instances.
     document.body.innerHTML = ''
     buildLayout([
       {kind: 'panel', columnId: 'c1', panel: {panelId: 'p1', instances: [
-        {blockId: 'fresh-a', instance: 'p1:fresh-a'},
-        {blockId: 'fresh-b', instance: 'p1:fresh-b'},
+        {blockId: 'n1', instance: 'p1:n1'},
+        {blockId: 'n2', instance: 'p1:n2'},
+        {blockId: 'A', instance: 'p1:A'},
+        {blockId: 'B', instance: 'p1:B'},
       ]}},
     ])
+    for (const id of ['n1', 'n2', 'A', 'B']) setTestVisible(findInstance(`p1:${id}`), true)
 
-    // X was at idx 1; clamp(1, 0, 1) = 1 = fresh-b.
-    setTestVisible(findInstance('p1:fresh-b'), true)
-    expect(findRecoveryAnchor('p1', p1Location('X'))?.dataset.blockId).toBe('fresh-b')
+    expect(findRecoveryAnchor('p1', p1Location('X'))?.dataset.blockId).toBe('B')
+  })
+
+  it('climbs PAST a collapsed ancestor to the next surviving one', () => {
+    // Collapsing a grandparent takes the closest ancestor with it, so only the
+    // walk past the first hit finds a live one. `tail2` is visible so the
+    // clamp has an answer of its own and cannot stand in for the walk.
+    buildP1Panel([
+      p1Instance('top', [p1Instance('parent', ['X'])]),
+      p1Instance('tail1'),
+      p1Instance('tail2'),
+    ])
+    rememberInstancePosition('p1', findInstance('p1:X'))
+
+    findInstance('p1:parent').remove()
+    setTestVisible(findInstance('p1:top'), true)
+    setTestVisible(findInstance('p1:tail2'), true)
+
+    expect(findRecoveryAnchor('p1', p1Location('X'))?.dataset.blockId).toBe('top')
   })
 
   it('clamps by position among SAME-SURFACE peers, not among all instances', () => {
@@ -669,8 +690,11 @@ describe('findRecoveryAnchor (proactive disappear-handler)', () => {
       ]}},
     ])
 
-    // surfaceIndex 1 → f-1. The all-instances index would be 3 → f-3.
-    for (const id of ['f-1', 'f-3']) setTestVisible(findInstance(`p1:${id}`), true)
+    // surfaceIndex 1 → f-1. The all-instances index would be 3 → f-3, and
+    // f-0 is visible so `pickViewportFallback`'s first-visible branch would
+    // answer f-0 — i.e. this fails for the clamp being gone as well as for it
+    // reading the wrong index.
+    for (const id of ['f-0', 'f-1', 'f-3']) setTestVisible(findInstance(`p1:${id}`), true)
     expect(findRecoveryAnchor('p1', p1Location('X'))?.dataset.blockId).toBe('f-1')
   })
 })
@@ -693,10 +717,10 @@ describe('findRecoveryAnchor: viewport-aware tier 4', () => {
         {blockId: 'fresh-b', instance: 'p1:fresh-b'},
       ]}},
     ])
-    // Position clamp lands on fresh-b (idx 1 → clamp(1,0,1)=1). Mark
-    // it visible so the viewport-aware branch keeps it.
+    // No neighbour or ancestor survives, so the clamp answers: X was at
+    // surfaceIndex 1, clamp(1, 0, 1) = fresh-b. Visible, so the viewport-aware
+    // branch keeps it rather than falling to the first visible row.
     setTestVisible(findInstance('p1:fresh-b'), true)
-    setTestVisible(findInstance('p1:fresh-a'), false)
 
     expect(findRecoveryAnchor('p1', p1Location('X'))?.dataset.blockId).toBe('fresh-b')
   })
@@ -748,7 +772,7 @@ describe('findRecoveryAnchor: viewport-aware tier 4', () => {
         {blockId: 'fresh-b', instance: 'p1:fresh-b'},
       ]}},
     ])
-    // No element opted into visibility; default jsdom-zero rects keep
+    // No element opted into visibility; the default zero rects keep
     // them all "not visible". Recovery must stay quiet rather than
     // selecting an off-screen target that would trigger scrollIntoView.
     expect(findRecoveryAnchor('p1', p1Location('X'))).toBeNull()

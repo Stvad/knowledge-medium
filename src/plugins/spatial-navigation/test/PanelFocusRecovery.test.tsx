@@ -320,16 +320,18 @@ describe('PanelFocusRecovery', {timeout: TEST_TIMEOUT_MS}, () => {
       panel.querySelector('[data-block-id="middle"]')!.remove()
       await vi.advanceTimersByTimeAsync(20)
     })
+    // A recovery IS armed — without this the assertions below hold for a
+    // watchdog that never noticed the removal at all.
+    expect(vi.getTimerCount()).toBe(1)
 
-    // The remount's observer fire cancels the pending recovery; then
-    // run past the full window to prove nothing fires.
     const replacement = document.createElement('div')
     setNavAttrs(replacement, 'middle')
-    await act(async () => {
-      panel.appendChild(replacement)
-      await vi.advanceTimersByTimeAsync(DEBOUNCE_SETTLE_MS)
-    })
+    await act(async () => { panel.appendChild(replacement) })
+    // The cancel is what this test is named for, so assert it rather than
+    // inferring it from a write that doesn't happen.
+    expect(vi.getTimerCount()).toBe(0)
 
+    await act(async () => { await vi.advanceTimersByTimeAsync(DEBOUNCE_SETTLE_MS) })
     expect(txSpy).not.toHaveBeenCalled()
   })
 
