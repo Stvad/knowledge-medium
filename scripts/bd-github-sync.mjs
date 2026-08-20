@@ -363,19 +363,26 @@ export const planClosePushes = (beads, issueByNumber, maxKnownIssueNumber) =>
  * bead new this run at 2 takes the label-derived value if one exists. A bead
  * already at 2 before the run is untouched — 2 may be deliberate.
  */
+// Beads whose FIRST issue this run minted: external_ref appearing between two
+// listings. `preRefs.get(...) === null` requires presence in the pre listing —
+// a bead the pull created from a GitHub-side issue was not minted by us.
+export const planMintedRefs = (preBeads, postBeads) => {
+  const preRefs = new Map(preBeads.map(b => [b.id, b.external_ref ?? null]))
+  return postBeads.flatMap(b => {
+    const number = issueNumberFromRef(b.external_ref)
+    return number !== null && preRefs.get(b.id) === null ? [{ id: b.id, number }] : []
+  })
+}
+
 // Beads in any non-open status whose FIRST issue the pre-pull push just
 // minted: the mint creates the issue OPEN with a fresh timestamp, so the
 // timestamp-based suspect test above can never flag them, yet the pull can
 // apply that OPEN copy over the local lifecycle state — closes (trap 3's
 // population, re-exposed by pushing before the pull), claims, blocks and
-// deferrals alike. Detected as external_ref appearing between the pre-push
-// and post-push listings.
+// deferrals alike.
 export const planMintedNonOpen = (preBeads, freshBeads) => {
-  const preRefs = new Map(preBeads.map(b => [b.id, b.external_ref ?? null]))
-  return freshBeads.flatMap(b => {
-    const number = issueNumberFromRef(b.external_ref)
-    return b.status !== 'open' && number !== null && preRefs.get(b.id) === null ? [{ id: b.id, number }] : []
-  })
+  const nonOpen = new Set(freshBeads.filter(b => b.status !== 'open').map(b => b.id))
+  return planMintedRefs(preBeads, freshBeads).filter(m => nonOpen.has(m.id))
 }
 
 // Closed beads whose linked issue is OPEN after close-adoption ran: that is a
@@ -723,6 +730,12 @@ const runSync = ({ quiet = false, dryRun = false } = {}) => {
     // exists to close this); the conservative no-post path cannot compute
     // label REMOVALS, so a pulled-back stale label survives until edited.
     const postBeads = dryRun ? preBeads : listAllBeads()
+    // Print the km→#N mapping for every issue this run minted: the mapping is
+    // knowable only by lookup, and surfacing it the moment it exists is what
+    // lets later text READ the number instead of guessing it (AGENTS.md:
+    // never write an unread #N).
+    for (const { id, number } of planMintedRefs(preBeads, postBeads))
+      report.push(`minted: ${id} → #${number}`)
     // Post-pull state for the suspects comes from `bd show`, not the list:
     // list rows lack assignee, so a list-based comparison would miss
     // assignment-only reverts (and false-positive every assigned suspect).

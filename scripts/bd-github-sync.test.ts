@@ -24,6 +24,7 @@ import {
   planCloseReconciliation,
   planLocalWins,
   planMintedNonOpen,
+  planMintedRefs,
   planReopenedClosed,
   planPriorityFixes,
   planRestoreArgs,
@@ -497,6 +498,35 @@ describe('planLocalWins', () => {
   })
 })
 
+describe('planMintedRefs', () => {
+  it('reports every ref that appeared between the listings, open beads included', () => {
+    const pre = [
+      bead({ id: 'km-a', status: 'open', external_ref: null }),
+      bead({ id: 'km-b', status: 'closed', external_ref: null }),
+    ]
+    const post = [
+      bead({ id: 'km-a', status: 'open', external_ref: ref(12) }),
+      bead({ id: 'km-b', status: 'closed', external_ref: ref(13) }),
+    ]
+    expect(planMintedRefs(pre, post)).toEqual([
+      { id: 'km-a', number: 12 },
+      { id: 'km-b', number: 13 },
+    ])
+  })
+
+  it('ignores pre-existing refs, still-unminted beads, and beads the pull created', () => {
+    expect(
+      planMintedRefs([bead({ id: 'km-a', external_ref: ref(12) })], [bead({ id: 'km-a', external_ref: ref(12) })]),
+    ).toEqual([])
+    expect(
+      planMintedRefs([bead({ id: 'km-a', external_ref: null })], [bead({ id: 'km-a', external_ref: null })]),
+    ).toEqual([])
+    // absent from the pre listing = created by the pull from a GitHub-side
+    // issue, not minted by this run
+    expect(planMintedRefs([], [bead({ id: 'km-a', external_ref: ref(12) })])).toEqual([])
+  })
+})
+
 describe('planMintedNonOpen', () => {
   it('flags a non-open bead whose first issue the pre-push just minted', () => {
     const pre = [bead({ id: 'km-a', status: 'closed', external_ref: null })]
@@ -712,6 +742,18 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     expect(close).toBeGreaterThan(-1)
     expect(pushOnly).toBeGreaterThan(-1)
     expect(close).toBeLessThan(pushOnly)
+  })
+
+  it('prints the km→#N mapping for an issue this run minted', () => {
+    const unminted = { id: 'km-t5', status: 'open', priority: 1, title: 'T', description: 'D', external_ref: null, updated_at: '2026-08-19T00:00:00Z' }
+    const minted = { ...unminted, external_ref: ref(5) }
+    const { run } = makeSyncRepo({
+      issues: [ghIssue(5, '2026-08-20T00:00:00Z')],
+      lists: [[unminted], [minted], [minted]],
+    })
+    const r = run()
+    expect(r.status).toBe(0)
+    expect(r.stdout).toContain('minted: km-t5 → #5')
   })
 
   it('restores a newer local row the pull reverted, then pushes it back out', () => {
