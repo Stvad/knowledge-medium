@@ -26,13 +26,17 @@ import { ConfirmMigrationDialog } from './ConfirmMigrationDialog.tsx'
 const withPeriod = (reason: string | undefined): string =>
   reason === undefined ? '' : /[.!?]$/.test(reason) ? reason : `${reason}.`
 
-/** Appended to EVERY outcome that could have written. The pass clears the
+/** Appended to EVERY outcome, not only the ones that could have written: past
+ *  the flip the gesture clears the stack ITSELF, before it knows how the pass
+ *  will end, so even "another client holds this migration" happens with the
+ *  history already gone. The pass clears the
  *  workspace's undo stack on its first committed batch, and an operator who is
  *  not told finds their history silently gone — which the `ran` branch said
  *  and the abort branches, the ones that actually strand a half-done run,
  *  did not. */
-const undoNote = (result: OperatorBackfillResult): string =>
-  result.undoHistoryCleared ? ' Undo history for this workspace was cleared.' : ''
+const undoNote = (result: OperatorBackfillResult, alsoCleared = false): string =>
+  result.undoHistoryCleared || alsoCleared
+    ? ' Undo history for this workspace was cleared.' : ''
 
 /** Prepended to EVERY outcome of a run that flipped, because the flip is
  *  fleet-wide and ONE-WAY while the pass is neither. Without it an operator whose
@@ -97,7 +101,7 @@ const describePassOutcome = (
             ? ' The workspace was edited while it ran, so some values may already be behind —' +
               ' run this again.'
             : '') +
-          undoNote(result),
+          undoNote(result, flipped),
         // Surfaced through `done`, not `fail`: the pass DID complete, and
         // saying otherwise would send an operator looking for a broken run
         // rather than for the handful of values named in the console.
@@ -119,7 +123,7 @@ const describePassOutcome = (
         message: (result.undoHistoryCleared || flipped
           ? `Stopped before finishing — ${withPeriod(result.reason)} Already-migrated blocks ` +
             'are skipped, so run it again.'
-          : `Not started — ${withPeriod(result.reason)} Try again shortly.`) + undoNote(result),
+          : `Not started — ${withPeriod(result.reason)} Try again shortly.`) + undoNote(result, flipped),
         failed: true,
       }
     case 'failed':
@@ -127,7 +131,7 @@ const describePassOutcome = (
         // No blanket "run it again": true for the give-up and for an
         // unexpected throw, false for a missing claim seam, which fails
         // identically every time. Each reason carries its own.
-        message: `Stopped partway — ${withPeriod(result.reason)}${undoNote(result)}`,
+        message: `Stopped partway — ${withPeriod(result.reason)}${undoNote(result, flipped)}`,
         failed: true,
       }
     case 'held-by-peer':
@@ -138,15 +142,27 @@ const describePassOutcome = (
         // clears. Naming where the claim lives is the whole recovery.
         message: 'Another client holds this migration — another device, or another tab of ' +
           'this browser. Wait for it to finish; if nothing is running, check the claim ' +
-          'block on the "System Migrations (km)" page and delete it to release the pass.',
+          'block on the "System Migrations (km)" page and delete it to release the pass.' +
+          undoNote(result, flipped),
         failed: true,
       }
     case 'already-running':
-      return {message: 'The migration is already running on this device.', failed: false}
+      return {
+        message: 'The migration is already running on this device.' + undoNote(result, flipped),
+        failed: false,
+      }
     case 'read-only':
-      return {message: 'This workspace is read-only, so the migration cannot write.', failed: true}
+      return {
+        message: 'This workspace is read-only, so the migration cannot write.'
+          + undoNote(result, flipped),
+        failed: true,
+      }
     case 'not-found':
-      return {message: `No migration is registered under "${PROPERTY_CELL_BACKFILL_ID}".`, failed: true}
+      return {
+        message: `No migration is registered under "${PROPERTY_CELL_BACKFILL_ID}".`
+          + undoNote(result, flipped),
+        failed: true,
+      }
   }
 }
 
@@ -203,6 +219,7 @@ export const migratePropertiesToBlocksAction = ({repo}: {repo: Repo}): ActionCon
     if (repo.activeWorkspaceId !== workspaceId) return
 
     const banner = showProgress('Migrating properties to blocks…')
+    let undoClearedByFlip = false
     if (!childBacked) {
       // FIRST, and that ordering is the whole point. The flip is what turns the
       // live maintainers on, so a workspace flipped with zero children keeps
@@ -234,13 +251,23 @@ export const migratePropertiesToBlocksAction = ({repo}: {repo: Repo}): ActionCon
           `was migrated: ${err instanceof Error ? err.message : String(err)}`)
         return
       }
+      // Immediately, not by waiting for the pass's first committed batch. Undo
+      // replay drives each row to a whole restored snapshot and SKIPS the same-tx
+      // processors (`isReplay`), so a cmd-Z of a pre-flip edit puts a cell back
+      // without the materializer syncing its children — and past the flip the
+      // children are the truth, so the two just diverge. Every way the run can
+      // end after this point without writing a batch (a peer holds the claim, the
+      // runner defers, there is nothing left to migrate) leaves that window open.
+      repo.undoManagerFor(workspaceId).clear()
+      undoClearedByFlip = true
       if (!localApplied) {
         // The flip COMMITTED; this device just has no local `workspaces` row to
         // stamp yet, so the pass would read 'cell' and take the reconcile branch
         // on a workspace that is in fact flipped. Stop instead, and do not say
         // nothing happened.
         banner.fail(`${FLIP_LANDED} This device has not received the workspace row yet, ` +
-          'so the migration could not run here — run this again once sync catches up.')
+          'so the migration could not run here — run this again once sync catches up.' +
+          ' Undo history for this workspace was cleared.')
         return
       }
     }
@@ -273,7 +300,7 @@ export const migratePropertiesToBlocksAction = ({repo}: {repo: Repo}): ActionCon
         result,
         {blocksMaterialized: materialized, valuesMaterializedTotal, unmigrated, orphanedOwnersSwept},
         editedUnderPass,
-        {flipped: !childBacked},
+        {flipped: undoClearedByFlip},
       )
       if (failed) banner.fail(message)
       else banner.done(message)

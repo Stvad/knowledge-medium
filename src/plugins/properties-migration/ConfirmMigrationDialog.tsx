@@ -61,7 +61,11 @@ export const ConfirmMigrationDialog = ({
           <code>audit-properties</code> to find those.
         </p>
         <p>
-          {!childBacked && 'The switch applies to everyone in the workspace. '}
+          {!childBacked && <>The switch applies to everyone in the workspace, so
+            every device should be online and caught up before you start — a
+            device that is offline with an unsent property edit uploads it into a
+            workspace that has moved on, and that edit is lost. Nothing here can
+            check that for you.{' '}</>}
           This runs on this device only — your other devices receive the result
           through sync, so run it in one place. It can take several minutes.
           Interrupting it is safe: reload or close the tab, then run it again

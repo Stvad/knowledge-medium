@@ -27,6 +27,7 @@ vi.mock('@/data/repoProvider', () => ({isRemoteSyncActive: () => remoteSyncActiv
 import type { OperatorBackfillResult, Repo } from '@/data/repo'
 import { describeOutcome, migratePropertiesToBlocksAction } from '../action.ts'
 
+const clearUndo = vi.fn()
 const makeRepo = (result: OperatorBackfillResult, {flipped = false} = {}) => {
   const runWorkspaceBackfillNow = vi.fn(async () => result)
   const getAll = vi.fn(async () => [{n: 7}])
@@ -38,6 +39,7 @@ const makeRepo = (result: OperatorBackfillResult, {flipped = false} = {}) => {
     },
     isReadOnly: false,
     syncViewGap: async () => null,
+    undoManagerFor: () => ({clear: clearUndo}),
     runWorkspaceBackfillNow,
   } as unknown as Repo
   return {repo, runWorkspaceBackfillNow, getAll}
@@ -59,6 +61,7 @@ afterEach(() => {
   flipWorkspace.mockResolvedValue({localApplied: true})
   remoteSyncActive.mockReset()
   remoteSyncActive.mockReturnValue(true)
+  clearUndo.mockReset()
   showInfo.mockReset()
   progressHandle.update.mockReset()
   progressHandle.done.mockReset()
@@ -162,6 +165,34 @@ describe('migrate_properties_to_blocks action', () => {
     expect(progressHandle.fail).toHaveBeenCalledWith(
       expect.stringMatching(/switched to property blocks/i))
     expect(progressHandle.fail).not.toHaveBeenCalledWith(expect.stringMatching(/not started/i))
+  })
+
+  it('clears undo when the flip commits, not when the pass first writes', async () => {
+    // Undo replay drives each row to a whole restored snapshot and SKIPS the
+    // same-tx processors, so a cmd-Z of a pre-flip edit restores a cell without
+    // the materializer syncing its children — and past the flip the children are
+    // the truth. Every way the run can end after the flip WITHOUT writing a batch
+    // (a peer holds the claim, the runner defers, nothing left to migrate) leaves
+    // that window open if the clear waits for the pass.
+    openDialog.mockResolvedValue(true)
+    const {repo} = makeRepo({outcome: 'held-by-peer', undoHistoryCleared: false})
+
+    await invoke(repo)
+
+    expect(clearUndo).toHaveBeenCalled()
+    expect(progressHandle.fail).toHaveBeenCalledWith(
+      expect.stringMatching(/undo history for this workspace was cleared/i))
+  })
+
+  it('does not touch undo history for a workspace that was already flipped', async () => {
+    // Nothing irreversible happens on that path until the pass itself writes,
+    // and the runner clears on its first committed batch.
+    openDialog.mockResolvedValue(true)
+    const {repo} = makeRepo({outcome: 'ran', undoHistoryCleared: false}, {flipped: true})
+
+    await invoke(repo)
+
+    expect(clearUndo).not.toHaveBeenCalled()
   })
 
   it('flips the workspace before running the pass, not after', async () => {
