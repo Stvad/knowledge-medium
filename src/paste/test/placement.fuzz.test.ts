@@ -2,12 +2,10 @@
 /**
  * Stateful fuzz suite for `pasteMultilineText`'s PLACEMENT — the half of
  * `src/paste/operations.ts` that writes to the DB. Its sibling
- * `operations.fuzz.test.ts` covers only the pure planners, so nothing here
- * was reachable from a property before: the paste-before order inversion
- * (#497), the top-two-levels merge (#491) and the zoomed-target merge (#645)
- * all live in this code path. See `src/test/fuzz.ts` for the smoke/deep tier
- * mechanics and `docs/fuzzing.md` §6 for the shared-DB interrupt hazard
- * `statefulFuzzGuard` guards.
+ * `operations.fuzz.test.ts` owns the pure planners; a property about where
+ * pasted blocks LAND belongs here, where there is a DB to land them in. See
+ * `src/test/fuzz.ts` for the smoke/deep tier mechanics and `docs/fuzzing.md`
+ * §6 for the shared-DB interrupt hazard `statefulFuzzGuard` guards.
  *
  * ──── What is NOT asserted, and why ────
  *
@@ -15,15 +13,14 @@
  * own children and the clipboard's roots #2..N can end up sharing a child
  * list — a flat clipboard comes out nested, and a nested one comes out one
  * level shallower on a zoomed target. Both are accepted behaviour with
- * example tests spelling them out (`operations.test.ts`), so a depth oracle
- * would encode the bug we know about rather than a contract.
+ * example tests spelling them out (`operations.test.ts`) and an open issue
+ * (#645), so a depth oracle would pin that rather than a contract.
  *
  * CONTIGUITY is absent for the same reason: the target's own pre-existing
  * children sit between the absorbed root's subtree and roots #2..N, so the
  * pasted blocks are not a contiguous pre-order run.
  *
- * What survives that is the part every branch does agree on, and it is
- * exactly what #497 broke:
+ * What survives is the part every branch does agree on:
  *
  * 1. ORDER + CONSERVATION — each clipboard line appears exactly once in the
  *    tree afterwards, and the pasted lines' relative pre-order is the
