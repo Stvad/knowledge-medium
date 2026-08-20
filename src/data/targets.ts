@@ -56,6 +56,7 @@ import {
 import { derivedBlockId } from '@/data/derivedIds'
 import type { Repo } from '@/data/repo'
 import { keyAtEnd } from './orderKey'
+import type { AnyPropertySchema } from '@/data/api'
 import { aliasesProp, addBlockTypeToProperties, typesProp } from './properties'
 import { propertyDefinitionBlockId } from './definitionSeeds'
 import { PAGE_TYPE } from './blockTypes'
@@ -345,10 +346,16 @@ export const matchesAliasSeatSeed = (
  *  flip-gated subtraction stops reaping orphan seats for the whole pre-flip
  *  window. Subtract on the `::` bit AND the id — a bare column match is a
  *  content stamp an ordinary `((fieldId))` child carries too. */
-export const generatedSeatFieldIds = (workspaceId: string): ReadonlySet<string> => new Set([
-  propertyDefinitionBlockId(workspaceId, aliasesProp.seedKey),
-  propertyDefinitionBlockId(workspaceId, typesProp.seedKey),
+export const generatedSeatFieldSchemas = (
+  workspaceId: string,
+): ReadonlyMap<string, AnyPropertySchema> => new Map([
+  [propertyDefinitionBlockId(workspaceId, aliasesProp.seedKey), aliasesProp as AnyPropertySchema],
+  [propertyDefinitionBlockId(workspaceId, typesProp.seedKey), typesProp as AnyPropertySchema],
 ])
+
+/** Just the ids, derived from the map above so the pair has ONE source. */
+export const generatedSeatFieldIds = (workspaceId: string): ReadonlySet<string> =>
+  new Set(generatedSeatFieldSchemas(workspaceId).keys())
 
 /** Predicate: this tombstoned slot was created by `ensureAliasTarget`
  *  for `alias` and was never touched before cleanup tombstoned it — i.e.

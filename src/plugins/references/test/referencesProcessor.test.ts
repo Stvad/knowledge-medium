@@ -32,7 +32,7 @@ import { seedProperty } from '@/data/propertySeeds'
 import { Repo } from '@/data/repo'
 import { aliasSeatSeed, computeAliasSeatId } from '@/data/targets'
 import { propertyDefinitionBlockId } from '@/data/definitionSeeds'
-import { propertyFieldContent } from '@/data/propertyChildren'
+import { encodedPropertyValueToChildContent, propertyFieldContent } from '@/data/propertyChildren'
 import { dailyNoteBlockId, dailyNotesDataExtension } from '@/plugins/daily-notes'
 import { definitionSeedsFacet, projectedPropertyDefinitionsFacet } from '@/data/facets.js'
 import { resolveFacetRuntimeSync, type AppExtension } from '@/facets/facet.js'
@@ -1744,6 +1744,12 @@ describe('references.reapOrphanAliasSeats — reference-drop reaping (#402)', ()
     expect((await env.read(seatId))!.deleted).toBe(0)
 
     const aliasesFieldId = propertyDefinitionBlockId(WS, aliasesProp.seedKey)
+    // Projected from the seat's OWN cell, exactly as the backfill does — a
+    // hand-written value is an edited value, which the reap must refuse.
+    const seatRow = (await env.repo.load(seatId))!
+    const generatedValue = encodedPropertyValueToChildContent(
+      aliasesProp, seatRow.properties[aliasesProp.name],
+    )
     await env.repo.tx(async tx => {
       const fieldRowId = await tx.create({
         workspaceId: WS, parentId: seatId, orderKey: 'a0',
@@ -1751,7 +1757,7 @@ describe('references.reapOrphanAliasSeats — reference-drop reaping (#402)', ()
         referenceTargetId: aliasesFieldId, isFieldForm: true,
       })
       await tx.create({
-        workspaceId: WS, parentId: fieldRowId, orderKey: 'a0', content: 'grue',
+        workspaceId: WS, parentId: fieldRowId, orderKey: 'a0', content: generatedValue,
       })
     }, {scope: ChangeScope.BlockDefault})
 
@@ -1784,6 +1790,38 @@ describe('references.reapOrphanAliasSeats — reference-drop reaping (#402)', ()
     await flush(5000)
     expect((await env.read(seatId))!.deleted).toBe(0)
     expect((await env.read('user-link'))!.deleted).toBe(0)
+  })
+
+  it('keeps an UN-flipped seat whose generated value row the user edited', async () => {
+    // Post-flip an edit to a value child rewrites the seat's cell, so
+    // `matchesAliasSeatSeed` catches the drift. Pre-flip the projection
+    // processor is dormant: the cell stays pristine, the subtree still has the
+    // accepted field-row -> one-leaf shape, and the reap would soft-delete the
+    // user's edit. The value rows are reachable pre-flip through search and
+    // recents, so this is an edit a user can actually make.
+    await env.repo.tx(
+      tx => tx.create({id: 'src', workspaceId: WS, parentId: null, orderKey: 'a0', content: '[[xyzzy]]'}),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await flush()
+    const seatId = aliasId('xyzzy')
+    const aliasesFieldId = propertyDefinitionBlockId(WS, aliasesProp.seedKey)
+    await env.repo.tx(async tx => {
+      const fieldRowId = await tx.create({
+        id: 'edited-field', workspaceId: WS, parentId: seatId, orderKey: 'a0',
+        content: propertyFieldContent(aliasesFieldId),
+        referenceTargetId: aliasesFieldId, isFieldForm: true,
+      })
+      await tx.create({
+        id: 'edited-value', workspaceId: WS, parentId: fieldRowId, orderKey: 'a0',
+        content: 'the user renamed this alias',
+      })
+    }, {scope: ChangeScope.BlockDefault})
+
+    await env.repo.mutate.setContent({id: 'src', content: ''})
+    await flush(5000)
+    expect((await env.read(seatId))!.deleted).toBe(0)
+    expect((await env.read('edited-value'))!.deleted).toBe(0)
   })
 
   it('keeps a seat carrying a marked field row for some OTHER definition', async () => {

@@ -25,14 +25,10 @@ const MACHINERY_SOURCE_CHUNK = 500
 /** Which of `sourceIds` are property-subtree INTERIOR machinery — a value child,
  *  or a row deeper inside a property subtree, whose parent chain passes through
  *  a §9 field row. Recognition IS `recognizedFieldRowSql`, shared with the
- *  outline rather than restated: the walk hoists the four columns it reads
- *  under the names it expects, so parity is structural instead of a claim in
- *  a comment. It was a claim in a comment, and it was wrong in both
- *  directions — the `::` bit was missing (so any descendant of a row that
- *  merely REFERENCED a definition counted as machinery, losing real
- *  backlinks) and so was the seed-definition leg (so a field row keyed to a
- *  code-declared seed `materializePropertySeeds` had not written yet was
- *  machinery to the outline and not to backlinks).
+ *  outline rather than restated: the walk hoists the four columns the fragment
+ *  reads under the names it expects, so parity is structural. Do not inline a
+ *  copy here — the two predicates disagreeing is silent in both directions,
+ *  dropping real backlinks or leaking duplicate ones.
  *
  *  Bind `[...sourceIdChunk, seedDefinitionIdsJson, seedWorkspaceId]`: the
  *  fragment's two parameters sit textually after the chunk placeholders.

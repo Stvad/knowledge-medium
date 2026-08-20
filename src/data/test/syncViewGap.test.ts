@@ -159,10 +159,15 @@ describe('Repo.syncViewGap', () => {
     // short-circuit on an all-echo queue, so it is bounded. Past the bound we
     // report rather than scan on: that much undrained material IS a real
     // materialization backlog, and yielding lets the drain catch up.
+    //
+    // 10k rows sounds slow and is not: 147-158ms measured solo, seeding
+    // included, which keeps ~5x headroom under the 5000ms default even at the
+    // ~6x p99.9 stretch a full gate run adds. No explicit budget, so a genuine
+    // hang here still reports in 5s rather than 30.
     const repo = makeRepo()
     await seedBenignBacklog(10_001)
     expect(await repo.syncViewGap()).toMatch(/behind on materializing/)
-  }, 30_000)
+  })
 
   it('reports a gap for a staged upsert with no synced row, which proves nothing', async () => {
     // Isolates the `s.id IS NULL` clause: the local row exists and is NOT

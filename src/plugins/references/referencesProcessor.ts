@@ -51,6 +51,7 @@ import {
   derivedRefKey,
   normalizeReferences,
   reconcileDerived,
+  type AnyPropertySchema,
   type BlockData,
   type BlockReference,
   type AnyPostCommitProcessor,
@@ -71,11 +72,13 @@ import {
   aliasSeatReaderFromDb,
   ensureAliasTarget,
   generatedSeatFieldIds,
+  generatedSeatFieldSchemas,
   isAliasSeatSlotId,
   matchesAliasSeatSeed,
   resolveAliasSeatId,
 } from '@/data/targets'
 import { EXTENSION_TYPE } from '@/data/blockTypes'
+import { encodedPropertyValueToChildContent } from '@/data/propertyChildren'
 import { aliasesProp, typesProp } from '@/data/properties'
 import { deleteSubtreeInTx } from '@/data/subtreeDelete'
 import {
@@ -669,6 +672,37 @@ const isGeneratedSeatFieldRow = (
   && child.referenceTargetId != null
   && generatedFieldIds.has(child.referenceTargetId)
 
+/** The value-row content a PRISTINE seat's own machinery carries for `fieldId`,
+ *  derived from the seat's cell — which `matchesAliasSeatSeed` has already
+ *  verified is byte-identical to the seed.
+ *
+ *  Post-flip an edit to a value row reprojects into the cell, so the seed match
+ *  above catches the drift. Pre-flip the projection processor is dormant: the
+ *  cell stays pristine while the value row has moved, and shape alone cannot
+ *  tell an edited value row from a generated one.
+ *
+ *  `undefined` means "cannot prove it is machinery" and blocks the reap. The
+ *  MISSING-SCHEMA arm of that is defence in depth and unpinnable: the caller
+ *  has already filtered on `generatedSeatFieldIds`, which is derived from the
+ *  keys of this same map, so the lookup cannot miss. The missing-KEY arm is
+ *  reachable — a seat whose cell lost a seed key fails `matchesAliasSeatSeed`
+ *  first today, so it too is belt-and-braces. */
+const generatedSeatValueContent = (
+  seat: BlockData,
+  fieldId: string,
+  schemas: ReadonlyMap<string, AnyPropertySchema>,
+): string | undefined => {
+  const schema = schemas.get(fieldId)
+  if (schema === undefined) return undefined
+  const encoded = seat.properties[schema.name]
+  if (encoded === undefined) return undefined
+  try {
+    return encodedPropertyValueToChildContent(schema, encoded)
+  } catch {
+    return undefined
+  }
+}
+
 /** Soft-delete orphaned seats in one tx (shared by the mint-time cleanup
  *  above and the reference-drop reaper below). A seat's OWN generated
  *  properties (alias / types) materialize as hidden field rows (PR #288 §9) —
@@ -737,6 +771,7 @@ const reapSeatsInTx = async (
       // least one side), and a grandchild with live children of its
       // own is a nested comment thread. Zero grandchildren stays
       // sweepable — a childless field row is pure machinery.
+      const generatedFieldSchemas = generatedSeatFieldSchemas(workspaceId)
       let deepUserContent = false
       for (const child of children) {
         const target = child.referenceTargetId ?? null
@@ -746,12 +781,19 @@ const reapSeatsInTx = async (
           deepUserContent = true
           break
         }
-        if (
-          grandchildren.length === 1
-          && (await tx.childrenOf(grandchildren[0]!.id, undefined)).length > 0
-        ) {
-          deepUserContent = true
-          break
+        if (grandchildren.length === 1) {
+          if ((await tx.childrenOf(grandchildren[0]!.id, undefined)).length > 0) {
+            deepUserContent = true
+            break
+          }
+          // Shape is not enough: an EDITED value row has the same shape as a
+          // generated one, and pre-flip nothing reprojects the edit into the
+          // cell for the seed match to catch.
+          if (grandchildren[0]!.content
+              !== generatedSeatValueContent(current, target, generatedFieldSchemas)) {
+            deepUserContent = true
+            break
+          }
         }
       }
       if (deepUserContent) continue
