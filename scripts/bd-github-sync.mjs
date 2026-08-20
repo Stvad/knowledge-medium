@@ -270,11 +270,11 @@ export const bodyFilePaths = cmd => {
   const skeleton = commandSkeleton(cmd)
   const templateIsFile = /pr\s+(?:create|new)\b/.test(skeleton)
   const flagTest = templateIsFile
-    ? /(?:--body-file|--notes-file|--template|--file|-F|-T)(?:=|\s)/
-    : /(?:--body-file|--notes-file|--file|-F)(?:=|\s)/
+    ? /(?<![\w-])(?:--body-file|--notes-file|--template|--file|-F|-T)/
+    : /(?<![\w-])(?:--body-file|--notes-file|--file|-F)/
   const flagCapture = templateIsFile
-    ? /(?:--body-file|--notes-file|--template|--file|-F|-T)(?:=|\s+)("[^"]*"|'[^']*'|[^\s'"]+)/g
-    : /(?:--body-file|--notes-file|--file|-F)(?:=|\s+)("[^"]*"|'[^']*'|[^\s'"]+)/g
+    ? /(?<![\w-])(?:--body-file|--notes-file|--template|--file|-F|-T)(?:=|\s+)?("[^"]*"|'[^']*'|[^\s'"]+)/g
+    : /(?<![\w-])(?:--body-file|--notes-file|--file|-F)(?:=|\s+)?("[^"]*"|'[^']*'|[^\s'"]+)/g
   if (!flagTest.test(skeleton)) return []
   return [...cmd.matchAll(flagCapture)]
     .map(m => m[1].replace(/^(["'])(.*)\1$/, '$2'))
@@ -285,8 +285,8 @@ export const bodyFilePaths = cmd => {
 // blanked in the skeleton, and missing it means the hook scans nothing while
 // gh publishes the pipe. The flag must still sit outside quotes.
 export const hasStdinBody = cmd => {
-  if (!/(?:--body-file|--notes-file|--template|--file|-F|-T)(?:=|\s)/.test(commandSkeleton(cmd))) return false
-  return [...cmd.matchAll(/(?:--body-file|--notes-file|--template|--file|-F|-T)(?:=|\s+)("[^"]*"|'[^']*'|[^\s'"]+)/g)]
+  if (!/(?<![\w-])(?:--body-file|--notes-file|--template|--file|-F|-T)/.test(commandSkeleton(cmd))) return false
+  return [...cmd.matchAll(/(?<![\w-])(?:--body-file|--notes-file|--template|--file|-F|-T)(?:=|\s+)?("[^"]*"|'[^']*'|[^\s'"]+)/g)]
     .map(m => m[1].replace(/^(["'])(.*)\1$/, '$2'))
     .some(p => STDIN_PATH.test(p))
 }

@@ -165,6 +165,13 @@ describe('bodyFilePaths / resolveBodyPath', () => {
     expect(bodyFilePaths('gh pr create --template body.md --title t')).toEqual(['body.md'])
   })
 
+  it('handles ATTACHED short-option values without capturing mid-word', () => {
+    expect(bodyFilePaths('gh pr create -Fbody.md --title t')).toEqual(['body.md'])
+    expect(hasStdinBody('cat x | gh pr comment 1 -F-')).toBe(true)
+    // "-F" inside an ordinary word must not start a capture
+    expect(bodyFilePaths('gh pr comment 1 --body x-File.md')).toEqual([])
+  })
+
   it('classifies stdin bodies from RAW values — quoting the sentinel must not hide it', () => {
     expect(hasStdinBody('gh pr comment 12 -F "-"')).toBe(true)
     expect(hasStdinBody('gh pr comment 12 -F "/dev/stdin"')).toBe(true)
