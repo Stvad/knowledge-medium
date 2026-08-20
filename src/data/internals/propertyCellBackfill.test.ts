@@ -13,9 +13,11 @@ import { resolveFacetRuntimeSync } from '@/facets/facet'
 import type { Repo } from '@/data/repo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
-import { ChangeScope as Scope } from '@/data/api'
 import type { WorkspaceBackfillContext } from '@/data/facets'
-import { CANDIDATE_SQL, PROPERTY_CELL_BACKFILL_ID, runPropertyCellBackfill } from './propertyCellBackfill'
+import {
+  CANDIDATE_SQL, PROPERTY_CELL_BACKFILL_ID, ROWS_PER_KEY, TARGET_INSERT_ROWS,
+  runPropertyCellBackfill,
+} from './propertyCellBackfill'
 
 const WS = 'ws-cell-backfill'
 
@@ -54,21 +56,23 @@ beforeEach(async () => {
   ], {repo, workspaceId: WS, safeMode: false}))
 })
 
-const create = async (
-  id: string, properties: Record<string, unknown>, opts: {content?: string} = {},
-) => {
+const create = async (id: string, properties: Record<string, unknown>) => {
   await repo.tx(async tx => {
     await tx.create({
       id, workspaceId: WS, parentId: null, orderKey: `k-${id}`,
-      content: opts.content ?? id, properties,
+      content: id, properties,
     })
   }, {scope: ChangeScope.BlockDefault, description: 'seed'})
 }
 
+/** Enough blocks to span two write batches, derived from the budget rather than
+ *  written as a literal: a fixed count silently stops crossing a boundary if the
+ *  budget ever moves, and nothing would fail. */
+const TWO_BATCHES = TARGET_INSERT_ROWS / ROWS_PER_KEY + 10
+
 /** `count` blocks, each carrying one registered cell key. One transaction, not
- *  one per block: the pass batches on inserted ROWS and reads the cells back off
- *  `blocks`, so the seed's transaction grain is not what any caller here
- *  exercises — it was just the dominant cost. */
+ *  one per block: the pass batches on inserted ROWS and reads cells off
+ *  `blocks`, so the seed's transaction grain changes nothing here. */
 const seedNotes = async (count: number) => {
   const ids = Array.from({length: count}, (_, i) => `b${String(i).padStart(4, '0')}`)
   await repo.tx(async tx => {
@@ -92,7 +96,7 @@ const makeCtx = (): WorkspaceBackfillContext => {
   return {
     workspaceId: WS,
     getAll: (sql, params) => repo.db.getAll(sql, params as unknown[] | undefined),
-    tx: (fn, opts) => repo.tx(fn, {scope: Scope.BlockDefault, skipUndo: true, ...opts}),
+    tx: (fn, opts) => repo.tx(fn, {scope: ChangeScope.BlockDefault, skipUndo: true, ...opts}),
     resolveNameSchema: name => {
       const resolution = resolver.resolve(name)
       return resolution.status === 'resolved' ? resolution.schema : undefined
@@ -127,10 +131,12 @@ const fieldRowCount = async (): Promise<number> => (await repo.db.get<{n: number
     WHERE workspace_id = ? AND deleted = 0 AND is_field_form = 1`, [WS],
 ))!.n
 
-// The four multi-hundred-block tests measure 0.36/0.27/0.21/0.20s alone and
-// ~1-2s under the full gate, but 5.2/5.9/5.7/5.3s on a gate run with the machine
-// already loaded — all four over vitest's 5000ms default, which is what #633 and
-// #639 hit. The budget is sized for that loaded tail, not for the solo cost.
+// The four `seedNotes` tests are the only slow ones here — the other 17 are
+// sub-100ms. They measure 0.2-0.9s alone and clear the 5000ms default on an idle
+// gate, but the gate runs a worker per core and their cost moves several-fold
+// with ambient load: overshooting it under load is #633 and #639. So the budget
+// is set well above any single measurement rather than tuned to one — figures
+// taken on a busy machine vary too much between runs to be worth pinning here.
 describe('property cell → children backfill', {timeout: 30_000}, () => {
   it('gives a registered cell key its field row and value row', async () => {
     await create('b1', {'demo:note': 'hello'})
@@ -195,10 +201,12 @@ describe('property cell → children backfill', {timeout: 30_000}, () => {
   })
 
   it('migrates past a batch boundary instead of stopping at the first page', async () => {
-    // The cursor is `id > last`, so a batch that does not advance it, or one
-    // that advances it past unvisited rows, silently leaves blocks cell-only —
-    // and the claim would then record the migration as complete.
-    const ids = await seedNotes(250)
+    // Two write batches, not one: the pass drains a fetched page in
+    // TARGET_INSERT_ROWS-sized chunks, so a chunk that abandons the remainder,
+    // or a cursor advanced past unvisited rows, leaves blocks cell-only — and
+    // the claim would then record the migration as complete. A whole SCAN_PAGE
+    // still fits here, so cursor resume ACROSS pages is not exercised.
+    const ids = await seedNotes(TWO_BATCHES)
 
     expect((await run()).outcome).toBe('ran')
 
@@ -230,7 +238,7 @@ describe('property cell → children backfill', {timeout: 30_000}, () => {
     // "never". A second sweep is what makes the pass a fixpoint rather than a
     // single ordered walk. Driven directly so the concurrent edit lands at a
     // known point: after the first committed batch.
-    const ids = await seedNotes(150)
+    const ids = await seedNotes(TWO_BATCHES)
 
     let edited = false
     const progress = await runPropertyCellBackfill(makeCtx(), async () => {
@@ -290,7 +298,7 @@ describe('property cell → children backfill', {timeout: 30_000}, () => {
     // The behind-cursor case for an EXISTING key: the block was visited, then
     // its value changed. Post-flip the child is what the cell gets rebuilt
     // from, so a stale child is the user's edit being reverted.
-    const ids = await seedNotes(150)
+    const ids = await seedNotes(TWO_BATCHES)
 
     let edited = false
     const progress = await runPropertyCellBackfill(makeCtx(), async () => {
@@ -406,7 +414,7 @@ describe('property cell → children backfill', {timeout: 30_000}, () => {
     // value child as "not converged yet" bought a full extra sweep for each
     // one, and four of them ended the run unconverged with every row already
     // written and no completion recorded.
-    const ids = await seedNotes(150)
+    const ids = await seedNotes(TWO_BATCHES)
 
     let caret = 0
     const reported: boolean[] = []

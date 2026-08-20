@@ -7,10 +7,14 @@ import type { Session } from '@supabase/supabase-js'
 // Answering that with a stubbed `fetch` is a trap: any 4xx is fatal to auth-js,
 // and its failure path calls `_removeSession()` — deleting the very key
 // `readPersistedSession` is asserted to return. Nothing here needs a client.
-vi.mock('@supabase/supabase-js', () => ({createClient: () => ({auth: {}})}))
+vi.mock('@supabase/supabase-js', () => ({createClient: () => ({})}))
 
-// Pins the mock: without it the background refresh fires. Throwing rather than
-// passing through keeps a regression off the network instead of just reporting it.
+// Guards the mock. The throw alone reports nothing — the client's work is
+// unawaited, so auth-js swallows it as a retryable transport error and only the
+// afterAll surfaces it; throwing anyway keeps a regression off the network
+// rather than merely logging it. Best-effort: a leaked call is only caught if it
+// lands within the file's own runtime. Deliberately never unstubbed — the stub
+// has to outlive every test here, and the worker process dies with the file.
 const fetchSpy = vi.fn(() => { throw new Error('unit tests must not reach the network') })
 vi.stubGlobal('fetch', fetchSpy)
 afterAll(() => { expect(fetchSpy).not.toHaveBeenCalled() })

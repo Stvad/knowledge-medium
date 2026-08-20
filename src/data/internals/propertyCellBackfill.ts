@@ -36,12 +36,12 @@ export const PROPERTY_CELL_BACKFILL_ID = 'properties:cell-to-children'
  *  SQLite writer for ~430ms — with every user write and the sync drain queued
  *  behind it, for the length of the run. The spike bisected the same budget
  *  down to 190 and this pass inherits the number. */
-const TARGET_INSERT_ROWS = 190
+export const TARGET_INSERT_ROWS = 190
 
 /** A registered key costs a field row and its value row. Over-counts a key
  *  that is unregistered or already materialized, which errs toward smaller
  *  transactions. */
-const ROWS_PER_KEY = 2
+export const ROWS_PER_KEY = 2
 
 /** Candidates fetched per scan query. Independent of the write budget: this
  *  bounds how often the pass pays for a cursor seek, the budget bounds how
