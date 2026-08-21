@@ -104,19 +104,20 @@ export const synthesizedPropertyDefinitionBlockId = (
 export type SynthesizedPresetId = 'boolean' | 'number' | 'string' | 'raw-json'
 
 /** Tried narrowest-first; the first that carries every stored value wins.
- *  `raw-json` is last and is the identity codec, so it is the answer whenever
- *  nothing narrower is provable — including for a key too large to check. */
+ *  `raw-json` is last and is the widest, but it is not a catch-all: it cannot
+ *  express a non-finite number, and it is only ever selected by the same proof
+ *  as the rest. */
 const PRESET_LADDER: readonly SynthesizedPresetId[] =
   ['boolean', 'number', 'string', 'raw-json']
 
 /** Distinct values we will read per key to prove a preset.
  *
  *  Not a sampling cap — sampling would put the guessing back. A key with more
- *  distinct values than this is not CHECKED, it is answered `raw-json`, which
- *  is exact for every JSON value. Measured on a ~360k-cell production graph the
- *  heaviest key of any kind has ~26k distinct values and the unregistered ones
- *  had 23 between them, so this bounds a case that does not arise rather than
- *  trimming one that does. */
+ *  distinct values than this is not checked and so is not proven, which makes
+ *  it a blocker: this module hands out no codec it has not run. Measured on a
+ *  ~360k-cell production graph the heaviest key of any kind has ~26k distinct
+ *  values and the unregistered ones had 23 between them, so this bounds a case
+ *  that does not arise rather than trimming one that does. */
 export const PROVE_DISTINCT_VALUE_LIMIT = 10_000
 
 /**
@@ -127,10 +128,10 @@ export const PROVE_DISTINCT_VALUE_LIMIT = 10_000
  * the definition is applied retroactively, and past the flip the cell is
  * re-derived from the children, so a lossy round trip rewrites the user's data.
  *
- * Do NOT replace this with a histogram of JSON types — four review rounds each
- * found a value shape inference could not see. `date` needs no special case
- * here: it simply fails, because `codecs.date` re-encodes `"2026-08-20"` as
- * `"2026-08-20T00:00:00.000Z"`.
+ * Do NOT replace this with a histogram of JSON types: what breaks a round trip
+ * is not something a value LOOKS like. `date` needs no special case here, for
+ * instance — it simply fails, because `codecs.date` re-encodes `"2026-08-20"`
+ * as `"2026-08-20T00:00:00.000Z"`.
  *
  * WHAT THIS DOES NOT PROVE: only the JS half. Content that survives here can
  * still be transformed at the database text boundary or by a processor —
@@ -153,27 +154,53 @@ export const provePresetId = (
   return undefined
 }
 
-/** The ladder entries that still MEAN what the proof runs against.
+/** Does this preset id still MEAN the kernel core this pass reasons about?
  *
  *  `valuePresetCoresFacet` is last-wins, so an extension contributing `string`
- *  would leave the projector rebuilding a synthesized definition with its codec
- *  rather than the kernel one the values were checked against. Such an id is
- *  dropped from the ladder rather than refused workspace-wide: an override of a
- *  preset no candidate selects is nobody's problem, and gating the whole
- *  gesture on it stopped clean workspaces migrating — my own regression, caught
- *  in review one round after I added it. */
+ *  leaves the projector rebuilding a definition row with ITS codec — while
+ *  everything here, from the round-trip proof to the schema it publishes, is
+ *  built from the kernel core. Both the mint path and the converged path have
+ *  to ask, so they ask the same question here. */
+const isKernelPreset = (repo: Repo, id: string): boolean =>
+  repo.valuePresetCores.get(id) ===
+    (kernelValuePresetCoresById as Record<string, AnyValuePresetCore>)[id]
+
+/** The ladder entries that still mean what the proof runs against. An
+ *  overridden id is dropped from the ladder rather than refused
+ *  workspace-wide: an override of a preset no candidate selects is nobody's
+ *  problem, and gating the whole gesture on it stopped clean workspaces
+ *  migrating. */
 const usablePresets = (repo: Repo): SynthesizedPresetId[] =>
-  PRESET_LADDER.filter(id => repo.valuePresetCores.get(id) === kernelValuePresetCoresById[id])
+  PRESET_LADDER.filter(id => isKernelPreset(repo, id))
+
+/** Is there a non-finite number ANYWHERE in this value?
+ *
+ *  The proof's own blind spot, so it is asked before the proof runs.
+ *  `jsonValuesEqual` compares canonical JSON, in which `Infinity` and `null`
+ *  are both "null" — so a value carrying one certifies a round trip that in
+ *  fact replaces it with null, the comparison agreeing with itself. `1e400`
+ *  parses to `Infinity` at every boundary that reaches us, SQLite's and
+ *  `JSON.parse`'s alike, and no codec here carries one.
+ *
+ *  Recursive because nesting is not a special case of the same bug, it IS the
+ *  same bug: `{"n": 1e400}` re-encodes as `{"n": null}` and compares equal.
+ *
+ *  `-0` is deliberately NOT rejected, though it round trips to `0` by the same
+ *  mechanism: the two are `===`, render identically, and no property means one
+ *  and not the other — blocking the key would cost more than the change does. */
+const containsNonFinite = (value: unknown): boolean => {
+  if (typeof value === 'number') return !Number.isFinite(value)
+  if (Array.isArray(value)) return value.some(containsNonFinite)
+  if (typeof value === 'object' && value !== null) {
+    return Object.values(value).some(containsNonFinite)
+  }
+  return false
+}
 
 /** Does one stored value come back byte-identical through the child machinery
  *  this preset would use? */
 const survivesChildRoundTrip = (schema: AnyPropertySchema, encoded: unknown): boolean => {
-  // `jsonValuesEqual` compares canonical JSON, where `Infinity` and `null` are
-  // both "null" — so a non-finite number (SQLite hands `1e400` back as
-  // `Infinity`) would certify a round trip that actually replaces the stored
-  // value with null. No codec here carries one, so say so rather than let the
-  // comparison agree with itself.
-  if (typeof encoded === 'number' && !Number.isFinite(encoded)) return false
+  if (containsNonFinite(encoded)) return false
   try {
     const content = encodedPropertyValueToChildContent(schema, encoded)
     return jsonValuesEqual(propertyChildContentToEncodedValue(schema, content), encoded)
@@ -403,13 +430,20 @@ export const planPropertyDefinitionSynthesis = async (
   const candidates: SynthesisCandidate[] = []
   for (const entry of mintable) {
     const values = valuesByKey.get(entry.property)
-    // No entry means the key had too many distinct values to read, so nothing
-    // was proven about it: `raw-json` is exact for every JSON value, which is
-    // the conservative answer rather than a sampled guess — but only if it is
-    // still the kernel codec.
-    const presetId = values === undefined
-      ? (usable.includes('raw-json') ? 'raw-json' as const : undefined)
-      : provePresetId(values, usable)
+    if (values === undefined) {
+      // Too many distinct values to read, so nothing was PROVEN about this key.
+      // `raw-json` used to be handed out here as "exact for every JSON value",
+      // which is both untrue (it cannot express a non-finite number) and
+      // unfalsifiable, since the values were never looked at. An unproven key
+      // is a blocker like any other; declaring the property by hand is the
+      // recovery, and it is the right one for a key someone clearly uses.
+      blockers.push({key: entry.property, cells: entry.cells,
+                     reason: `holds more than ${PROVE_DISTINCT_VALUE_LIMIT.toLocaleString()} `
+                       + 'distinct values, too many to check one at a time — create a '
+                       + 'property definition for it by hand instead'})
+      continue
+    }
+    const presetId = provePresetId(values, usable)
     if (presetId === undefined) {
       blockers.push({key: entry.property, cells: entry.cells,
                      reason: 'no value type available on this device carries every value this '
@@ -513,12 +547,14 @@ export interface SynthesisResult {
  *  the same transaction — and for `ref`/`refList` silently drops the stored
  *  target types. A definition on one of those is a definition this pass cannot
  *  republish; skipping it costs a re-run once the projector catches up, which
- *  is the cheap half of the trade. */
-const storedPresetCore = (block: BlockData): AnyValuePresetCore | undefined => {
+ *  is the cheap half of the trade. An id an extension has REPLACED is the same
+ *  situation for a different reason — see {@link isKernelPreset}. */
+const storedPresetCore = (block: BlockData, repo: Repo): AnyValuePresetCore | undefined => {
   const raw = block.properties[presetIdProp.name]
   if (typeof raw !== 'string') return undefined
   const core = (kernelValuePresetCoresById as Record<string, AnyValuePresetCore>)[raw]
-  return core?.configCodec === undefined ? core : undefined
+  if (core === undefined || core.configCodec !== undefined) return undefined
+  return isKernelPreset(repo, raw) ? core : undefined
 }
 
 /** The definition block's own stored default, decoded through the preset it
@@ -736,32 +772,28 @@ export const applyPropertyDefinitionSynthesis = async (
       // (`brokenDefinitions`) deliberately does not: a broken definition the
       // operator saw counted in the dialog is one they consented to migrate
       // around; one that arrived after they confirmed is not.
-      // Compared under the registry's EFFECTIVE name, exactly as the plan's
-      // scan is: `buildPropertyDefinitionRegistry` rewrites a seed-backed row's
-      // name to the seed's DECLARED one when the stored value has drifted, so a
-      // healthy seed row can sit in `blocks` under a stale spelling. Trusting
-      // the raw name would read it as a rival for that stale key — which the
-      // scan correctly calls definition-less — and block the flip forever. A
-      // row the registry cannot parse keeps its raw name, which is why that
-      // fallback exists on both sides.
       //
-      // UNPINNED, and not for want of trying: seed names are non-renamable
-      // through the API, so drift arrives only by raw write or sync, and
-      // neither reaches the test harness's projector — the registry never
-      // learns the row exists, so the scenario cannot be built. The rule is the
-      // scan's, stated at `propertyKeyScan`'s `definitionBlocksByName`; this is
-      // the same rule applied at the second site that needed it.
+      // The seed rewrite is why the stored name is not the last word, and that
+      // branch is UNPINNED. `buildPropertyDefinitionRegistry` gives a seed-backed
+      // row the seed's DECLARED name once the stored one has drifted, so a
+      // healthy seed row can sit in `blocks` under a stale spelling this would
+      // otherwise read as a rival for — blocking the flip forever. Seed names
+      // are non-renamable through the API, so the drift arrives only by raw
+      // write or sync, and neither reaches the test harness's projector.
       const rivals: string[] = []
       for (const other of liveDefinitionNames.get(candidate.key) ?? []) {
         if (other === id) continue
         const row = await tx.get(other)
-        // Asked of the row, through the one rule, for the same reason the
-        // converged check is: the registry can be a tick behind in EITHER
-        // direction — stale-old for a row just renamed onto this key, and
-        // stale-new for a seed row whose stored name has drifted off it.
-        if (row !== null && effectiveDefinitionName(row, registry) === candidate.key) {
-          rivals.push(other)
-        }
+        if (row === null) continue
+        // The query already established that this LIVE, TYPED row stores our
+        // candidate's name, so the row is a rival unless the seed rewrite moves
+        // it off that name — and only a KNOWN other name does that. An
+        // unparseable row keeps the name it stores; ignoring it because its
+        // metadata will not parse mints a second definition beside it, and
+        // repairing the older row later can then make it win on creation time
+        // and strand every field already backfilled onto the synthesized one.
+        const effective = effectiveDefinitionName(row, registry)
+        if (effective === undefined || effective === candidate.key) rivals.push(other)
       }
       if (rivals.length > 0) {
         skipped.push({key: candidate.key,
@@ -800,7 +832,7 @@ export const applyPropertyDefinitionSynthesis = async (
         // preset is not one this pass can reproduce, skip rather than guess —
         // the flip then refuses and a re-run picks it up once the projector has
         // caught up.
-        const storedPreset = storedPresetCore(occupancy.block)
+        const storedPreset = storedPresetCore(occupancy.block, repo)
         const storedMetadata = parsePropertyDefinitionMetadata(occupancy.block)
         if (!storedPreset || !storedMetadata) {
           skipped.push({key: candidate.key,

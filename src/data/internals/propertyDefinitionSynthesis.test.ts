@@ -23,6 +23,7 @@ import { PROPERTY_CELL_BACKFILL_ID } from './propertyCellBackfill'
 import {
   applyPropertyDefinitionSynthesis,
   flipBlockedBySynthesis,
+  PROVE_DISTINCT_VALUE_LIMIT,
   provePresetId,
   propertySynthesisWorkspaceRefusal,
   planPropertyDefinitionSynthesis,
@@ -145,6 +146,24 @@ describe('provePresetId', () => {
     // of proving rather than inferring.
     expect(provePresetId(['2026-08-20'])).toBe('string')
     expect(provePresetId(['2026-08-20T00:00:00.000Z'])).toBe('string')
+  })
+
+  it('rejects a non-finite number wherever in the value it sits', () => {
+    // The one thing canonical-JSON equality cannot see: `Infinity` and `null`
+    // both stringify to "null", so the round trip certifies itself. Nesting is
+    // not a milder version of that — `{n: Infinity}` re-encodes to `{"n":null}`
+    // and compares equal in exactly the same way.
+    expect(provePresetId([Infinity])).toBeUndefined()
+    expect(provePresetId([{n: Infinity}])).toBeUndefined()
+    expect(provePresetId([[1, -Infinity]])).toBeUndefined()
+    expect(provePresetId([{a: {b: [Infinity]}}])).toBeUndefined()
+  })
+
+  it('accepts -0, which the same mechanism turns into 0', () => {
+    // Deliberately not rejected: -0 and 0 are `===`, render identically, and no
+    // property means one and not the other, so blocking the key would cost more
+    // than the change does.
+    expect(provePresetId([-0])).toBe('number')
   })
 
   it('survives the awkward string values the escape machinery exists for', () => {
@@ -308,6 +327,40 @@ describe('planPropertyDefinitionSynthesis', () => {
     expect(plan.candidates.map(c => c.key)).not.toContain('demo:huge')
     expect(plan.blockers.map(b => b.key)).toContain('demo:huge')
   })
+
+  it('sees a non-finite number nested inside a stored value, not only at the top', async () => {
+    await rawCell('b1', {'demo:nested': 1})
+    await sharedDb.db.execute(
+      `UPDATE blocks SET properties_json = '{"demo:nested":{"n":1e400}}' WHERE id = 'b1'`)
+
+    const plan = await planFor()
+
+    expect(plan.candidates.map(c => c.key)).not.toContain('demo:nested')
+    expect(plan.blockers.map(b => b.key)).toContain('demo:nested')
+  })
+
+  it('blocks a key with too many distinct values to check, rather than guessing one', async () => {
+    // The proof is the design, so a key it cannot be run against gets no codec.
+    // `raw-json` used to be handed out here on the claim that it carries every
+    // JSON value — untrue for a non-finite number, and unfalsifiable anyway,
+    // since on this path the values are never read.
+    await sharedDb.db.execute(
+      `WITH RECURSIVE seq(n) AS (
+         SELECT 1 UNION ALL SELECT n + 1 FROM seq WHERE n < ${PROVE_DISTINCT_VALUE_LIMIT + 1}
+       )
+       INSERT INTO blocks (id, workspace_id, parent_id, order_key, content,
+                           properties_json, created_at, updated_at, created_by, updated_by)
+       SELECT 'bulk-' || n, ?, NULL, 'k' || n, '',
+              json_object('demo:many', 'v' || n), 0, 0, 'test', 'test'
+         FROM seq`,
+      [WS])
+
+    const plan = await planFor()
+
+    expect(plan.candidates.map(c => c.key)).not.toContain('demo:many')
+    expect(plan.blockers.find(b => b.key === 'demo:many')?.reason)
+      .toMatch(/distinct values/)
+  }, 30_000)
 
   it('refuses a workspace this device has not confirmed unencrypted', async () => {
     // The authority is the mode pin, not the server column — and note the row
@@ -587,6 +640,26 @@ describe('applyPropertyDefinitionSynthesis: the id is occupied, or the key stopp
     expect(definitions[0]!.n).toBe(1)
   })
 
+  it('treats a definition it cannot parse as holding the name, rather than minting beside it', async () => {
+    // A raw or imported definition arriving after the plan, with metadata that
+    // does not parse. It is live, typed, and stores this exact name, so it
+    // occupies the name whatever its effective name reads as — mint beside it
+    // and repairing the older row later makes it win on creation time,
+    // stranding every field already bound to the synthesized loser.
+    await rawCell('b1', {'demo:orphan': 'hello'})
+    const plan = await planFor()
+    await rawCell('defn', {
+      types: ['property-schema'],
+      'property-schema:name': 'demo:orphan',
+      'property-schema:change-scope': 'not-a-real-scope',
+    })
+
+    const result = await applyPropertyDefinitionSynthesis(repo, plan)
+
+    expect(result).toMatchObject({created: 0, converged: 0})
+    expect(result.skipped.map(s => s.key)).toEqual(['demo:orphan'])
+  })
+
   it('skips a key whose definition the user deleted, rather than resurrecting it', async () => {
     // Deliberate: a deletion is an instruction. Restoring it silently undid the
     // user's action, and doing it faithfully needed three separate mechanisms
@@ -644,6 +717,24 @@ describe('applyPropertyDefinitionSynthesis: the id is occupied, or the key stopp
 
     expect(publish).toHaveBeenCalledWith(
       expect.objectContaining({codec: expect.objectContaining({type: 'object'})}), id, WS)
+  })
+
+  it('skips a converged definition whose preset an extension has replaced', async () => {
+    // The projector will rebuild this row with the EXTENSION's codec, so
+    // publishing the kernel one — and backfilling every existing cell under it
+    // — would encode the children under behaviour the definition does not mean.
+    // Same question the mint ladder asks, asked on the other path.
+    await rawCell('b1', {'demo:orphan': 'hello'})
+    const plan = await planFor()
+    await applyPropertyDefinitionSynthesis(repo, plan)
+    vi.spyOn(repo, 'valuePresetCores', 'get').mockReturnValue(
+      new Map([...repo.valuePresetCores, ['string', {...repo.valuePresetCores.get('string')!}]]))
+    blindTheProjections()
+
+    const result = await applyPropertyDefinitionSynthesis(repo, plan)
+
+    expect(result).toMatchObject({created: 0, converged: 0})
+    expect(result.skipped.map(s => s.key)).toEqual(['demo:orphan'])
   })
 
   it('skips a converged definition whose preset carries config, instead of throwing', async () => {

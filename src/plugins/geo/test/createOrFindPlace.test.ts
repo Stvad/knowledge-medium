@@ -239,6 +239,8 @@ describe('undo grouping (issue #306)', () => {
 
     expect(await env.repo.undo()).toBe(true)
     expect(await isBlockDeleted(env.repo, block.id)).toBe(true)
-    expect(await isBlockDeleted(env.repo, locationsPageBlockId(WS))).toBe(true)
+    // The Locations page itself SURVIVES: it is kernel machinery, bootstrapped
+    // non-undoably, and every other place hangs under it.
+    expect(await isBlockDeleted(env.repo, locationsPageBlockId(WS))).toBe(false)
   })
 })

@@ -16,7 +16,7 @@ import { flipWorkspaceToChildBackedProperties } from '@/data/workspaces'
 import { isRemoteSyncActive } from '@/data/repoProvider'
 import { ActionConfig, ActionContextTypes } from '@/shortcuts/types.js'
 import { openDialog } from '@/utils/dialogs.js'
-import { showInfo, showProgress } from '@/utils/toast.js'
+import { dismissToast, showInfo, showProgress } from '@/utils/toast.js'
 import { ConfirmMigrationDialog } from './ConfirmMigrationDialog.tsx'
 
 /** What to tell the user, per outcome. `deferred` and `held-by-peer` are
@@ -40,9 +40,6 @@ const withPeriod = (reason: string | undefined): string =>
 const undoNote = (cleared: boolean): string =>
   cleared ? ' Undo history for this workspace was cleared.' : ''
 
-/** Why this device must not start the pass right now, or null. The runner takes
- *  the same two checks itself — but only after the claim, and in the flip case
- *  only after an irreversible server write. */
 /** The one wording for "a precondition said no and nothing has been written".
  *  Two sinks use it — `showInfo` before the banner exists, `banner.fail` after
  *  — and they must not drift, because which one fires is an implementation
@@ -50,6 +47,9 @@ const undoNote = (cleared: boolean): string =>
 const notStarted = (reason: string): string =>
   `Not started — ${withPeriod(reason)} Nothing was changed; try again shortly.`
 
+/** Why this device must not start the pass right now, or null. The runner takes
+ *  these checks itself — but only after the claim, and in the flip case only
+ *  after an irreversible server write. */
 const passIsUnfit = async (
   repo: Repo,
   {workspaceId, needsFlip}: {workspaceId: string; needsFlip: boolean},
@@ -97,10 +97,8 @@ export const describeOutcome = (
     = {flipped: false, undoCleared: false},
 ): {message: string; failed: boolean; followUp?: string} => {
   const described = describePassOutcome(result, counts, editedUnderPass, undoCleared)
-  // Both tails appended HERE, not inside the switch. Four separate omissions of
-  // the undo sentence were found one review round at a time, each in a branch
-  // that had simply forgotten to add it — which is the shape of a rule kept by
-  // repetition. A branch cannot forget a suffix it does not apply.
+  // Both tails appended HERE, not inside the switch: a branch cannot forget a
+  // suffix it does not apply, and every branch needs both.
   const cleared = result.undoHistoryCleared || undoCleared
   return {
     ...described,
@@ -272,6 +270,12 @@ export const migratePropertiesToBlocksAction = ({repo}: {repo: Repo}): ActionCon
       // the post-synthesis report it was dropped whenever there was nothing to
       // mint, which is exactly the unreadable-bag shape.
       if (!childBacked) return
+    } else {
+      // Sticky and stable-id, so an advisory from an earlier run outlives the
+      // problem it named: this plan says the problem is gone, and leaving a
+      // "cannot migrate" banner on screen through a migration that then
+      // succeeds is worse than never having shown it.
+      dismissToast(SYNTHESIS_TOAST.id)
     }
     // A refused workspace (e2ee) reaches here only when the flip is not at
     // stake. Its candidates are then keys that stay cell-only, NOT keys about
@@ -297,7 +301,19 @@ export const migratePropertiesToBlocksAction = ({repo}: {repo: Repo}): ActionCon
     const banner = showProgress('Migrating properties to blocks…')
     // ABOVE the synthesis block, not below it: below, the "Nothing was changed"
     // this prints is false the moment synthesis commits.
-    const unfit = await passIsUnfit(repo, {workspaceId, needsFlip: !childBacked})
+    //
+    // Caught, because these are database reads: the banner has no duration and
+    // nothing else is watching this await, so a transient failure here would
+    // leave "Migrating properties to blocks…" spinning forever over a pass that
+    // never started.
+    let unfit: string | null
+    try {
+      unfit = await passIsUnfit(repo, {workspaceId, needsFlip: !childBacked})
+    } catch (err) {
+      console.error('[properties-migration] could not re-check eligibility:', err)
+      unfit = `this device could not check whether the pass may run (${
+        err instanceof Error ? err.message : String(err)})`
+    }
     if (unfit !== null) {
       banner.fail(notStarted(unfit))
       return
@@ -318,11 +334,13 @@ export const migratePropertiesToBlocksAction = ({repo}: {repo: Repo}): ActionCon
       try {
         const result = await applyPropertyDefinitionSynthesis(repo, plan)
         synthesized = result.created
-        // `skipUndo` keeps this write OFF the stack; it does not remove what
-        // is already on it. A RESTORE sits directly on the user's own delete,
-        // and undo replays a whole snapshot with same-tx processors skipped —
-        // one cmd-Z reinstates the pre-deletion preset this pass re-asserted,
-        // and the backfill then reads every existing cell under it.
+        // Not about synthesis's own writes — those are `skipUndo`, and its
+        // Properties-page bootstrap is too (`getOrCreateKernelPage`). It is
+        // about the entries ALREADY on the stack: a key with no definition was
+        // a key nothing materialized, so on a child-backed workspace a replayed
+        // pre-synthesis snapshot writes a cell for a key that now has children
+        // — undo skips same-tx processors (`isReplay`), so nothing reconciles
+        // them. Minting is what makes those entries unsafe, hence the trigger.
         if (synthesized > 0) {
           repo.undoManagerFor(workspaceId).clear()
           undoCleared = true

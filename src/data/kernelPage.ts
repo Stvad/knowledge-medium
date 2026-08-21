@@ -101,7 +101,15 @@ export const kernelPageBlockId = (workspaceId: string, namespace: string): strin
  *
  *  It belongs here rather than in each surface because every one of them —
  *  daily notes, SRS review, locations, media capture, the Readwise backlog —
- *  reaches the same throw through this one function. */
+ *  reaches the same throw through this one function.
+ *
+ *  NOT UNDOABLE, though the scope stays `BlockDefault` for the read-only gating
+ *  above. Bootstrapping a kernel page is machinery, never a user edit: the row
+ *  is system-minted at a derived id and get-or-created by everything that needs
+ *  it, so an undo entry for it is only ever a trap — one cmd-Z aimed at the
+ *  user's own edit soft-deletes the page their content hangs under. It also
+ *  leaves a caller that writes with `skipUndo` of its own (the properties
+ *  migration) holding one undo entry it never made. */
 export const getOrCreateKernelPage = async (
   repo: Repo,
   workspaceId: string,
@@ -192,7 +200,7 @@ export const getOrCreateKernelPage = async (
         await tx.setProperty(id, aliasesProp, mergeStrings([...aliases, ...txAliases]))
       }
       await tagTypes(tx, typeSnapshot)
-    }, {scope: ChangeScope.BlockDefault})
+    }, {scope: ChangeScope.BlockDefault, skipUndo: true})
     return repo.block(id)
   }
 
@@ -215,7 +223,7 @@ export const getOrCreateKernelPage = async (
       content: spec.alias,
     }, {systemMint: true})
     await tagTypes(tx, typeSnapshot)
-  }, {scope: ChangeScope.BlockDefault})
+  }, {scope: ChangeScope.BlockDefault, skipUndo: true})
 
   return repo.block(id)
 }

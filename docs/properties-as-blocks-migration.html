@@ -766,15 +766,22 @@
       not see (dates canonicalising, oversized integers, &hellip;) &mdash; every fix one
       more term in a proxy. Synthesis now READS the distinct values of each candidate key
       and runs the actual child round trip, taking the narrowest preset that carries all
-      of them and <code>raw-json</code> (the identity codec) when none does.
+      of them. <code>raw-json</code> is the widest rung of that ladder, not a catch-all
+      beneath it: a key no rung carries is a <strong>blocker</strong>, because
+      <code>raw-json</code> cannot express a non-finite number either &mdash; SQLite hands
+      <code>1e400</code> back as <code>Infinity</code>, which serialises to
+      <code>null</code>, which canonical-JSON equality then certifies as a clean round
+      trip against itself, at any depth of nesting.
       <code>date</code> needs no special case: it simply fails, because
       <code>codecs.date</code> re-encodes <code>"2026-08-20"</code> as
       <code>"2026-08-20T00:00:00.000Z"</code>. Sized against production before choosing
       this: ~360k property cells across 559 keys, of which <strong>8 were unregistered,
       covering 32 cells and 23 distinct values between them</strong>; the heaviest key of
       any kind has ~26k distinct values. A key past
-      <code>PROVE_DISTINCT_VALUE_LIMIT</code> is answered <code>raw-json</code> rather
-      than sampled &mdash; sampling would put the guessing back.
+      <code>PROVE_DISTINCT_VALUE_LIMIT</code> is a blocker as well: sampling would put the
+      guessing back, and handing a codec to a key whose values were never read is the same
+      guess with no evidence at all. Declaring that property by hand is the recovery, and
+      the right one for a key that large.
       <em>What this does not prove</em> is the half below JavaScript: content can still be
       transformed at the database text boundary or by a processor (issue #688), which
       stays tracked rather than papered over here.</li>

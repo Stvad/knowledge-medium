@@ -11,9 +11,11 @@ const progressHandle = {update: vi.fn(), done: vi.fn(), fail: vi.fn()}
 
 vi.mock('@/utils/dialogs.js', () => ({openDialog: (...args: unknown[]) => openDialog(...args)}))
 const showInfo = vi.fn()
+const dismissToast = vi.fn()
 vi.mock('@/utils/toast.js', () => ({
   showProgress: () => progressHandle,
   showInfo: (...args: unknown[]) => showInfo(...args),
+  dismissToast: (...args: unknown[]) => dismissToast(...args),
 }))
 vi.mock('../ConfirmMigrationDialog.tsx', () => ({ConfirmMigrationDialog: () => null}))
 const flipWorkspace = vi.fn<(repo: unknown, workspaceId: string) => Promise<{localApplied: boolean}>>()
@@ -96,6 +98,7 @@ const invoke = (repo: Repo) =>
 afterEach(() => {
   clearUndo.mockReset()
   showInfo.mockReset()
+  dismissToast.mockReset()
   progressHandle.update.mockReset()
   progressHandle.done.mockReset()
   progressHandle.fail.mockReset()
@@ -122,6 +125,42 @@ beforeEach(() => {
 })
 
 describe('migrate_properties_to_blocks action', () => {
+  it('takes the synthesis advisory down once a re-run comes back clean', async () => {
+    // It has no duration and a stable id, so it outlives the problem it named:
+    // without this the operator repairs the definitions, re-runs, and reads a
+    // "cannot migrate" banner through a migration that is succeeding.
+    const {repo} = makeRepo({outcome: 'ran', undoHistoryCleared: false}, {flipped: true})
+    flipBlocked.mockReturnValue('two keys can never be migrated')
+    openDialog.mockResolvedValue(true)
+    await invoke(repo)
+    // Read off the advisory rather than written down here, so the two cannot
+    // drift onto different toasts and still pass.
+    const advisory = (showInfo.mock.calls[0]![1] as {id: string}).id
+    expect(advisory).toBeTruthy()
+
+    showInfo.mockReset()
+    dismissToast.mockReset()
+    flipBlocked.mockReturnValue(null)
+    await invoke(repo)
+
+    expect(dismissToast).toHaveBeenCalledWith(advisory)
+  })
+
+  it('fails the banner when the post-dialog eligibility read throws', async () => {
+    // The banner is up by then and has no duration, and nothing else is
+    // watching this await — a rejection would leave "Migrating properties to
+    // blocks…" on screen forever over a pass that never started.
+    const {repo, runWorkspaceBackfillNow} = makeRepo({outcome: 'ran', undoHistoryCleared: false})
+    ;(repo as unknown as {syncViewGap: () => Promise<string | null>}).syncViewGap =
+      vi.fn().mockResolvedValueOnce(null).mockRejectedValueOnce(new Error('db is gone'))
+    openDialog.mockResolvedValue(true)
+
+    await invoke(repo)
+
+    expect(progressHandle.fail).toHaveBeenCalledWith(expect.stringContaining('Not started'))
+    expect(runWorkspaceBackfillNow).not.toHaveBeenCalled()
+  })
+
   it('writes nothing when the user cancels the confirmation', async () => {
     // The confirmation is the whole guard on a pass that uploads hundreds of
     // thousands of rows and drops the workspace's undo history.
