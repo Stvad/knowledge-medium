@@ -125,4 +125,22 @@ describe('alias.mergeCollision', () => {
       'Other',
     ])
   })
+
+  it('transfers the contested name when the target does not already own it', async () => {
+    // The canonical direction: a system page reclaiming its own name from a
+    // squatter. The target holds no alias at all, so the collision alias must
+    // move across — dropping it (correct when the target already owns it)
+    // would destroy the name instead of transferring it.
+    await createBlock('canonical', 'Journal', [], 'a0')
+    await createBlock('squatter', 'My journal', ['Journal', 'Notes'], 'a1')
+
+    await env.repo.run(ALIAS_COLLISION_MERGE_MUTATOR, {
+      intoId: 'canonical',
+      fromId: 'squatter',
+      collisionAlias: 'Journal',
+    })
+
+    expect(env.read('squatter')!.deleted).toBe(true)
+    expect(env.read('canonical')!.properties[aliasesProp.name]).toEqual(['Journal', 'Notes'])
+  })
 })

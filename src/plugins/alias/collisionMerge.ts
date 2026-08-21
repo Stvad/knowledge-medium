@@ -54,8 +54,15 @@ const collisionAwarePropertyMerge = (
   const merged = mergeProperties(into.properties, from.properties)
   const drop = new Set(dropSourceAliases)
   const intoAliases = decodeAliases(into)
+  // The collision alias is dropped from the source only when the TARGET
+  // already holds it — the original direction, where the rejected block was
+  // merging into the block that owned the name. Merging the other way (a
+  // system page reclaiming its own name from a squatter) the target holds
+  // nothing, so dropping it here would destroy the name outright rather than
+  // transfer it.
+  const intoOwnsCollisionAlias = intoAliases.includes(collisionAlias)
   const keptFromAliases = decodeAliases(from)
-    .filter(alias => alias !== collisionAlias && !drop.has(alias))
+    .filter(alias => !drop.has(alias) && !(intoOwnsCollisionAlias && alias === collisionAlias))
   merged[aliasesProp.name] = aliasesProp.codec.encode(union([
     ...intoAliases,
     ...keptFromAliases,
