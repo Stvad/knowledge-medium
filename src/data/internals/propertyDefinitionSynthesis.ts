@@ -403,13 +403,22 @@ const storedDefinitionName = (block: BlockData): string | undefined => {
 }
 
 /** The kernel preset core a live definition block stores, when it is one this
- *  pass can reproduce faithfully. Undefined for anything else — an extension
- *  preset, a config-carrying one, or a missing/garbled id — because the point
- *  of reading it is to publish the block's OWN behavior rather than a guess. */
+ *  pass can reproduce faithfully. Undefined for anything else, because the
+ *  point of reading it is to publish the block's OWN behavior rather than a
+ *  guess — and a guess is all we could offer for the rest.
+ *
+ *  CONFIG-LESS ONLY, and that is the load-bearing clause: {@link schemaFor}
+ *  builds with `build(undefined)`, which for `enum`/`strict-enum` dereferences
+ *  `config.options` and THROWS — rolling back every other key's definition in
+ *  the same transaction — and for `ref`/`refList` silently drops the stored
+ *  target types. A definition on one of those is a definition this pass cannot
+ *  republish; skipping it costs a re-run once the projector catches up, which
+ *  is the cheap half of the trade. */
 const storedPresetCore = (block: BlockData): AnyValuePresetCore | undefined => {
   const raw = block.properties[presetIdProp.name]
   if (typeof raw !== 'string') return undefined
-  return (kernelValuePresetCoresById as Record<string, AnyValuePresetCore>)[raw]
+  const core = (kernelValuePresetCoresById as Record<string, AnyValuePresetCore>)[raw]
+  return core?.configCodec === undefined ? core : undefined
 }
 
 /** A live definition block already serving as `key`'s definition — the only

@@ -452,6 +452,29 @@ describe('applyPropertyDefinitionSynthesis: the id is occupied, or the key stopp
       expect.objectContaining({codec: expect.objectContaining({type: 'object'})}), id, WS)
   })
 
+  it('skips a converged definition whose preset carries config, instead of throwing', async () => {
+    // `schemaFor` builds with `build(undefined)`; for `enum` that dereferences
+    // `config.options` and throws, which would roll back every OTHER key's
+    // definition in the same transaction. Skipping costs a re-run once the
+    // projector catches up.
+    await rawCell('b1', {'demo:orphan': 'hello'})
+    const plan = await planFor()
+    await applyPropertyDefinitionSynthesis(repo, plan)
+    const id = synthesizedPropertyDefinitionBlockId(WS, 'demo:orphan')
+    await repo.tx(async tx => { await tx.setProperty(id, presetIdProp, 'enum') },
+                  {scope: ChangeScope.BlockDefault, description: 'retype'})
+    vi.spyOn(repo, 'propertySchemaResolverFor').mockReturnValue({
+      resolve: () => ({status: 'identity-unavailable', reason: 'definition-unavailable'}),
+      resolveField: () => ({status: 'identity-unavailable', reason: 'definition-unavailable'}),
+      resolveBoundary: () => ({status: 'identity-unavailable', reason: 'definition-unavailable'}),
+    } as unknown as ReturnType<typeof repo.propertySchemaResolverFor>)
+
+    const result = await applyPropertyDefinitionSynthesis(repo, plan)
+
+    expect(result).toMatchObject({created: 0, converged: 0})
+    expect(result.skipped[0]!.reason).toMatch(/cannot reproduce/)
+  })
+
   it('publishes a converged definition too, not just one it created', async () => {
     await rawCell('b1', {'demo:orphan': 'hello'})
     const plan = await planFor()
