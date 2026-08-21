@@ -788,6 +788,43 @@
   Still missing from &sect;9: the <em>sweep</em>-side synthesis (&ldquo;repaired by the
   sweep, which synthesizes on encountering a definition-less key from a raw writer or
   import&rdquo;). What exists is the operator gesture only.
+  <p><strong>Review round (PR #686):</strong> the first revision asked two questions
+  separately that turn out to be one &mdash; &ldquo;is this key still orphaned?&rdquo;
+  (from a pre-confirmation snapshot) and &ldquo;is this deterministic id vacant?&rdquo;
+  (from the row). Three reproduced failures came out of that gap, and they are worth
+  recording because each is a shape the rest of this design has to keep in mind:</p>
+  <ul>
+    <li><strong>A rival definition for a name that gained one during the dialog.</strong>
+      The trigger is the runbook itself &mdash; &sect;9 tells the operator to enable a
+      key's owning extension FIRST, and doing that in another tab is exactly the write
+      that lands in the window a confirmation holds open. The id being vacant proves
+      nothing: it is vacant no matter who else claimed the NAME. Re-resolved inside the
+      writing transaction now, the way <code>addSchema</code> has always done it.</li>
+    <li><strong>The flip stepping over keys synthesis could not define.</strong> The
+      backfill excludes unregistered keys from its work list, so such a key produces a
+      run that reports <code>ran</code> with ZERO failures over data it silently could
+      not migrate &mdash; the most dangerous possible shape for a one-way step. The flip
+      gate is now asked a second time, with the write's outcome rather than its
+      forecast.</li>
+    <li><strong>A blind tombstone restore.</strong> Bringing back the stored bag meant a
+      definition whose preset had been switched to <code>date</code> came back as
+      <code>date</code> and rewrote every value of its key on the next backfill &mdash;
+      the exact retroactive rewrite the codec-selection rule above exists to prevent,
+      performed by the same module. Restores now re-assert the fields, MERGED over the
+      stored bag (the patch replaces it wholesale, so building it from the owned fields
+      alone would drop <code>types</code> and un-type the definition).</li>
+  </ul>
+  <p>Two further corrections worth carrying: the e2ee gate reads the durable
+  <strong>mode pin</strong>, never <code>workspaces.encryption_mode</code> &mdash;
+  &sect;6 rule 1 already says the column is an untrusted server hint, and it is
+  <code>NOT NULL DEFAULT 'none'</code> locally, so an upgrading device reads a
+  genuinely-encrypted workspace as plaintext until PowerSync replays the real value. It
+  is an ALLOWLIST: only an affirmative plaintext pin proceeds. And an unreadable
+  property bag now BLOCKS the flip, because it is a hole in the survey the decision is
+  made from &mdash; the invariant is unverified rather than satisfied. A
+  <em>broken</em> definition deliberately does not block: it is usually a preset from an
+  extension not loaded on this device, it is repairable, and at
+  <code>'children'</code> the cell still carries the value.</p>
 </div>
 
 <h2 id="s1">1. Why move</h2>
