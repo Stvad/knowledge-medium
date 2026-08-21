@@ -1188,6 +1188,8 @@ describe('hookPrePr process behavior', { timeout: 20_000 }, () => {
       // the read-back is pinned to this repo
       'gh -R owner/other pr edit 12 --body="Fixes #700"',
       'gh --repo=owner/other pr edit 12 --body="Fixes #700"',
+      // gh takes the attached form too — nothing would check this publish
+      'gh -Rowner/other pr edit 12 --body="Fixes #700"',
     ])
       expect(hook(cmd).status, cmd).toBe(2)
     // the covered shape itself passes: one command, no operator, this repo
@@ -1206,8 +1208,12 @@ describe('hookPrePr process behavior', { timeout: 20_000 }, () => {
   // field value is not a path, and a publish body-file is the verifier's).
   it('does not misread publish file flags as commit-message files in compounds', () => {
     const { hook } = makeRepo({ dbReady: true })
-    // an api field value is not a path: nothing to read, nothing to block
-    expect(hook('git commit -m ok && gh api repos/Stvad/knowledge-medium/issues/1/comments -F body=hello').status).toBe(0)
+    // the compound attests under the coarse rule, but on the PUBLISH's
+    // flags — the commit leg must never report an unreadable message file
+    const api = hook('git commit -m ok && gh api repos/Stvad/knowledge-medium/issues/1/comments -F body=hello')
+    expect(api.status).toBe(2)
+    expect(api.stderr).toContain('post-publication read-back covers')
+    expect(api.stderr).not.toContain('Run from the directory')
     // the body-file belongs to the publish, so the compound attests under the
     // coarse rule — it must never fail closed on an unreadable COMMIT message
     const r = hook('git commit -m ok && gh pr create --title t --body-file missing.md')
@@ -1250,10 +1256,14 @@ describe('hookPrePr process behavior', { timeout: 20_000 }, () => {
     const jq = hook('gh api repos/Stvad/knowledge-medium/issues/1/comments -f body="tracks km-zzzz" --jq .id')
     expect(jq.status).toBe(2)
     expect(jq.stderr).toContain('km-zzzz')
-    // clean readable text has nothing to confirm — no blanket block; -F on
-    // gh api is an inline typed FIELD, a file only via @ (which signals)
+    // clean readable text has nothing to confirm — no blanket block
     expect(hook('gh api --silent repos/Stvad/knowledge-medium/issues/1/comments -f body=done').status).toBe(0)
-    expect(hook('gh api --silent repos/Stvad/knowledge-medium/issues/1/comments -F body=done').status).toBe(0)
+    // -F attests even inline. On gh api it is a typed FIELD, not a file, but
+    // an INLINE api publish is covered and never reaches this branch — so
+    // telling the two apart would only ever matter for a command already
+    // attesting, and the split is what made a mixed compound read the wrong
+    // signal. Over-blocking here costs one attested re-run.
+    expect(hook('gh api --silent repos/Stvad/knowledge-medium/issues/1/comments -F body=done').status).toBe(2)
     expect(hook('gh api --silent repos/Stvad/knowledge-medium/issues/1/comments -F body=@notes.md').status).toBe(2)
     expect(hook('gh api --silent --method GET repos/Stvad/knowledge-medium/issues -f state=open').status).toBe(0)
   })

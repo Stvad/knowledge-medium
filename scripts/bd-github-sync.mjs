@@ -1029,7 +1029,10 @@ const hookPrePr = () => {
   const graphqlApi = apiPublish && (/\bgraphql\b/.test(sk) || /\bgraphql\b/.test(cmd))
   const opaqueRe = /(?<![\w-])--(?:silent|jq|template)\b/
   const opaqueApi = apiPublish && (opaqueRe.test(sk) || opaqueRe.test(cmd))
-  const foreignRepo = /(?<![\w-])(?:-R|--repo)(?:=|\s)/.test(sk)
+  // No separator required: gh takes the attached form (-Rowner/repo) too,
+  // and in a whitelist an over-match costs an attested re-run while an
+  // under-match is a foreign publish nothing checks at all.
+  const foreignRepo = /(?<![\w-])(?:-R|--repo)/.test(sk)
 
   // Close keywords in commit messages act when the commit reaches the
   // default branch, and commit text never becomes a GitHub object — but the
@@ -1095,13 +1098,15 @@ const hookPrePr = () => {
   const blind = !postVerified
   if (blind && !(allowsIssueRefs(cmd) && allowsBeadIds(cmd))) {
     // Any *file long flag (body-file, file, notes-file, …), --template and
-    // --input carry text this gate cannot read. Short -F/-T are file flags
-    // only OUTSIDE api commands (matched bare — the CLI accepts ATTACHED
-    // values like -Fmsgfile); on gh api, -F is an inline typed FIELD and
-    // only its @<path>/@- values read externally, which the @ signal covers.
-    const textOutsideCommand =
-      /(?<![\w-])--(?:[a-z-]*file|input|template)\b|[$`]/.test(cmd) ||
-      (matchesApiPublish(cmd) ? /@/.test(cmd) : /(?<![\w-])-[FT]/.test(cmd))
+    // --input carry text this gate cannot read, as do -F/-T (matched bare —
+    // the CLI accepts ATTACHED values like -Fmsgfile) and an api @<path>.
+    // All of them tested unconditionally: on `gh api` a -F is an inline
+    // typed field rather than a file, but an inline api publish is COVERED
+    // and never reaches this branch, so telling the two apart would only
+    // matter for commands that are already attesting. Splitting them by
+    // command kind is what let a compound mixing api with CLI read the
+    // wrong signal.
+    const textOutsideCommand = /(?<![\w-])--(?:[a-z-]*file|input|template)\b|[$`@]|(?<![\w-])-[FT]/.test(cmd)
     if (textOutsideCommand) {
       console.error(
         'This publish is not one the post-publication read-back covers (it must be a single gh command, with no shell operator, aimed at this repo, whose verb and flags leave a fetchable URL in the output) — and it carries text this gate cannot read from the command either: a file or payload flag, an @-reference, or shell expansion. Publish literal inline text so this gate can read it (a COVERED publish — a single create/edit/comment command with no shell operator — may use --body-file freely, since the read-back checks what it shipped) — or, after checking every reference and bead id in it yourself, re-run with KM_ISSUE_REFS_OK=1 KM_ALLOW_BEAD_IDS=1 prefixed.',
