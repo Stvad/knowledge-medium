@@ -45,7 +45,11 @@ export const DuplicateNameBanner: BlockRenderer = ({block}) => {
   // the old name — clicking it would fold a page in over a name this page no
   // longer has. Narrow hooks rather than the whole row, per
   // `block/no-broad-block-subscriptions`.
-  const name = useContent(block).trim()
+  // EXACT content, not trimmed: aliases are exact, and the parser trims only
+  // the wikilink label — so " Foo " and "Foo" are different names. Trimming
+  // here would look up an alias this page does not claim and offer to absorb
+  // whichever unrelated page owns it.
+  const name = useContent(block)
   const workspaceId = useWorkspaceId(block)
   // Unconditional so the hook order is stable; an empty alias simply misses.
   // The selector narrows the subscription to the one thing that matters — a
@@ -55,7 +59,7 @@ export const DuplicateNameBanner: BlockRenderer = ({block}) => {
   })
   // A viewer cannot write, so the merge is guaranteed to be rejected. Offering
   // it would only produce a failure toast and an action that never works.
-  if (name === '' || workspaceId === '' || !duplicateId || repo.isReadOnly) return null
+  if (name.trim() === '' || workspaceId === '' || !duplicateId || repo.isReadOnly) return null
 
   const merge = async (): Promise<void> => {
     setMerging(true)

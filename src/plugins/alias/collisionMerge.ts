@@ -76,8 +76,8 @@ const collisionAwarePropertyMerge = (
   // rule would have done had the content changed instead. Not done in the
   // rejection direction, where the source is mid-rename and dropping its old
   // title is the point.
-  const fromTitle = from.content.trim()
-  const keepTitle = keepSourceTitle && fromTitle !== '' && !drop.has(fromTitle)
+  const fromTitle = from.content
+  const keepTitle = keepSourceTitle && fromTitle.trim() !== '' && !drop.has(fromTitle)
   // Title goes LAST: the first entry reads as the page's primary name, and
   // that should stay the canonical one, not the absorbed page's.
   merged[aliasesProp.name] = aliasesProp.codec.encode(union([
@@ -96,6 +96,7 @@ export const aliasCollisionMerge = defineMutator<AliasCollisionMergeArgs, void>(
   apply: async (tx, {
     intoId, fromId, collisionAlias, dropSourceAliases = [], sourceIsAliasOwner = false,
   }) => {
+    const keepSourceTitle = sourceIsAliasOwner
     const into = await tx.get(intoId)
     const from = await tx.get(fromId)
     if (into === null) throw new Error(`alias.mergeCollision: target ${intoId} not found`)
@@ -122,12 +123,24 @@ export const aliasCollisionMerge = defineMutator<AliasCollisionMergeArgs, void>(
       if (into.deleted) {
         throw new Error(`alias.mergeCollision: target ${intoId} is deleted`)
       }
-      if (into.content.trim() !== collisionAlias) {
+      if (into.content !== collisionAlias) {
         throw new Error(
           `alias.mergeCollision: target ${intoId} is no longer named "${collisionAlias}"`,
         )
       }
     }
+
+    // Only carry the source's title over if it is actually free. A page can
+    // hold a title that is not among its own aliases (alias sync skips freshly
+    // inserted rows), and if some THIRD page owns that name, adding it here
+    // trips the uniqueness trigger and rolls back the whole merge — which would
+    // make the collision the banner exists for permanently unresolvable.
+    const titleOwner = keepSourceTitle
+      ? await tx.aliasLookup(from.content, into.workspaceId)
+      : null
+    const titleIsFree = titleOwner === null
+      || titleOwner.id === from.id
+      || titleOwner.id === into.id
 
     await mergeBlocksInTx(tx, {
       into,
@@ -138,7 +151,7 @@ export const aliasCollisionMerge = defineMutator<AliasCollisionMergeArgs, void>(
           {...into, properties: intoProps},
           {...from, properties: fromProps},
           dropSourceAliases,
-          sourceIsAliasOwner,
+          keepSourceTitle && titleIsFree,
         ),
       aliasRewrites: dropSourceAliases.map(fromAlias => ({
         fromAlias,

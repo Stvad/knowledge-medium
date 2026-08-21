@@ -144,6 +144,30 @@ describe('alias.mergeCollision', () => {
     expect(env.read('canonical')!.properties[aliasesProp.name]).toEqual(['Journal', 'Notes'])
   })
 
+  it('completes when the source title is owned by a third page, without claiming it', async () => {
+    // The source can hold a title that is not among its own aliases. If some
+    // third page owns that name, carrying it over would trip the uniqueness
+    // trigger and roll back the whole merge — turning the collision this flow
+    // exists to resolve into one it cannot.
+    await createBlock('canonical', 'Journal', [], 'a0')
+    await createBlock('squatter', 'Daily Log', ['Journal'], 'a1')
+    await createBlock('third', 'Something', ['Daily Log'], 'a2')
+
+    await env.repo.run(ALIAS_COLLISION_MERGE_MUTATOR, {
+      intoId: 'canonical',
+      fromId: 'squatter',
+      collisionAlias: 'Journal',
+      sourceIsAliasOwner: true,
+    })
+
+    // Merge went through and the name came back; the third page keeps its own.
+    expect((await env.repo.load('canonical'))?.properties[aliasesProp.name])
+      .toEqual(aliasesProp.codec.encode(['Journal']))
+    expect(await env.repo.load('squatter')).toBeNull()
+    expect((await env.repo.load('third'))?.properties[aliasesProp.name])
+      .toEqual(aliasesProp.codec.encode(['Daily Log']))
+  })
+
   it('refuses when the target was renamed away from the contested name', async () => {
     // The other half of the same race: the banner offered "reclaim Journal for
     // this page", then this page was renamed. Absorbing the alias owner into it
