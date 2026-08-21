@@ -753,13 +753,51 @@ export const applyPropertyDefinitionSynthesis = async (
       // metadata since). Located by FIELD ID and judged by EFFECTIVE name so a
       // seed-backed row whose stored name has drifted is still found and still
       // recognised as serving this key.
+      // Every row that currently HOLDS this name, minus the ones the caller
+      // already accounts for. Asked of the DATABASE (the registry lags a
+      // sync-applied definition until the projector ticks — see
+      // `Tx.livePropertyDefinitionNames`), so it also catches a definition that
+      // PARSED but supplies no behaviour: absent from `schemas`, real in
+      // `blocks`.
+      //
+      // `effective` is the seed-rewrite rule from `effectiveDefinitionName`
+      // above — without it a healthy seed row sitting under a drifted stored
+      // name would read as a rival and block the flip forever. UNPINNED for the
+      // same reason as there: the drift path (raw write or sync) never reaches
+      // the test harness's projector.
+      const liveRivals = async (...accounted: string[]): Promise<string[]> => {
+        const found: string[] = []
+        for (const other of liveDefinitionNames.get(candidate.key) ?? []) {
+          if (accounted.includes(other)) continue
+          const row = await tx.get(other)
+          if (row === null) continue
+          const effective = effectiveDefinitionName(row, registry)
+          if (effective === undefined || effective === candidate.key) found.push(other)
+        }
+        return found
+      }
+
       const resolution = resolver.resolve(candidate.key)
       if (resolution.status === 'resolved') {
         const selected = await tx.get(resolution.schema.fieldId)
         if (selected !== null
             && effectiveDefinitionName(selected, registry) === candidate.key
             && providesSchema(selected, repo)) {
-          converged += 1
+          // Converged only if the row the projection picked is the ONLY one
+          // holding the name. The winner is decided by creation time, so a
+          // second row the projector has not reached yet can take the name on
+          // the next rebuild — and the backfill is about to bind field rows to
+          // whichever fieldId is published NOW. Vouching here strands them on
+          // the loser; deferring costs a re-run once the projector catches up.
+          const contenders = await liveRivals(id, resolution.schema.fieldId)
+          if (contenders.length === 0) {
+            converged += 1
+            continue
+          }
+          skipped.push({key: candidate.key,
+                        reason: `more than one definition block holds this name (${
+                          [resolution.schema.fieldId, ...contenders].join(', ')}); the winner is `
+                          + 'decided by creation time, so resolve the duplicate before migrating'})
           continue
         }
       }
@@ -777,37 +815,11 @@ export const applyPropertyDefinitionSynthesis = async (
         continue
       }
 
-      // Asked of the DATABASE (the registry lags a sync-applied definition
-      // until the projector ticks — see `Tx.livePropertyDefinitionNames`), with
-      // our OWN id excluded so this stays "does anything else hold this name?"
-      // separate from the occupancy switch's "is this id ours?". Also catches a
-      // definition that PARSED but supplies no behavior — absent from
-      // `schemas`, yet real in `blocks`.
-      //
       // Skipping here BLOCKS the flip, where the plan-time equivalent
       // (`brokenDefinitions`) deliberately does not: a broken definition the
       // operator saw and consented to in the dialog is different from one that
       // arrived after they confirmed.
-      //
-      // `effective` is the seed-rewrite rule from `effectiveDefinitionName`
-      // above — without it a healthy seed row sitting under a drifted stored
-      // name would read as a rival here and block the flip forever. UNPINNED
-      // for the same reason as there: the drift path (raw write or sync) never
-      // reaches the test harness's projector.
-      const rivals: string[] = []
-      for (const other of liveDefinitionNames.get(candidate.key) ?? []) {
-        if (other === id) continue
-        const row = await tx.get(other)
-        if (row === null) continue
-        // Established LIVE and TYPED, storing our candidate's name — a rival
-        // unless the seed rewrite moves it off that name (only a KNOWN other
-        // name does). An unparseable row keeps its stored name: ignoring it
-        // mints a second definition beside it, and a later repair of the older
-        // row can then win on creation time and strand fields already
-        // backfilled onto the synthesized one.
-        const effective = effectiveDefinitionName(row, registry)
-        if (effective === undefined || effective === candidate.key) rivals.push(other)
-      }
+      const rivals = await liveRivals(id)
       if (rivals.length > 0) {
         skipped.push({key: candidate.key,
                       reason: 'a definition block for this name already exists and supplies '

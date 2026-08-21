@@ -597,6 +597,33 @@ describe('applyPropertyDefinitionSynthesis: the id is occupied, or the key stopp
     expect(await countDefinitionsNamed('demo:orphan')).toBe(1)
   })
 
+  it('does not call a key converged when a second row also holds the name', async () => {
+    // The projector reached one of them; `blocks` holds both. The registry
+    // decides the winner by creation time, so the row the projection picked can
+    // lose the next rebuild — while the backfill is binding field rows to it
+    // right now. Vouching here strands them on the loser.
+    await rawCell('b1', {'demo:orphan': 'hello'})
+    const plan = await planFor()
+    await getOrCreatePropertiesPage(repo, WS)
+    await repo.userSchemas.addSchema({name: 'demo:orphan', presetId: 'string'})
+    // RAW, so the projector never learns about it — which is exactly the shape
+    // a sync-applied duplicate has, and why the DB has to be asked.
+    await rawCell('rival', {
+      types: ['property-schema'],
+      'property-schema:name': 'demo:orphan',
+      'property-schema:preset-id': 'string',
+      'property-schema:change-scope': 'block-default',
+    })
+    // The precondition this test turns on: the projection still resolves.
+    expect(repo.propertySchemaResolverFor(WS).resolve('demo:orphan').status).toBe('resolved')
+
+    const result = await applyPropertyDefinitionSynthesis(repo, plan)
+
+    expect(result).toMatchObject({created: 0, converged: 0})
+    expect(result.skipped[0]!.reason).toMatch(/more than one definition block holds this name/)
+    expect(flipBlockedBySynthesis(plan, result)).toMatch(/still have no definition/)
+  })
+
   it('does not call a key converged when the definition the resolver picked is gone', async () => {
     // The resolver is a projection: a definition deleted after its creation
     // tick but before its deletion tick still reads `resolved`. Counting that
