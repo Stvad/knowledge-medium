@@ -27,7 +27,11 @@
  *    THROWING. `allowUnregisteredPlainSchemas` admits its writes while nothing
  *    claims the name; once a definition exists, `resolveBoundary` finds a winner
  *    that is not the caller's schema and every write fails `shadowed`. Measured,
- *    not theorised. Same instruction, very different symptom to recognise.
+ *    not theorised. AND ENABLING IT FIRST DOES NOT HELP: `resolveName` sees only
+ *    definition blocks and seeds, so a live plain schema is invisible here and
+ *    the key stays a candidate either way. There is no registry of plain-schema
+ *    owners to consult — that is what makes them plain. The gap is tracked
+ *    separately; the instruction above is honest only for SEED owners.
  *
  * `audit-properties` names the owner where it can.
  */

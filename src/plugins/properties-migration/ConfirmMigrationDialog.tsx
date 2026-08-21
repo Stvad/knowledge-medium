@@ -85,7 +85,8 @@ export const ConfirmMigrationDialog = ({
           check the guess. Nothing you can see changes; without it those
           properties could never move.{' '}
           <strong>If a plugin or extension owns any of them, install or enable it before you
-          run this.</strong> Creating a definition here claims the name: re-enabling the owner
+          run this</strong> — though that only helps for an owner that declares the property
+          as a schema block; one declaring it in code alone stays invisible here. Creating a definition here claims the name: re-enabling the owner
           afterwards leaves two definitions competing, or — for an extension that declares
           properties in code rather than as blocks — makes its writes start failing. Run{' '}
           <code>audit-properties</code> first if you are not sure who wrote them.

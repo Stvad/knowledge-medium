@@ -121,7 +121,9 @@ const undeclaredFix =
   'migration skips it (propertyChildrenProcessor.ts: `resolveNameSchema` → `continue`) ' +
   'and it is the one class of property data a flipped workspace cannot make ' +
   'child-backed. Fix IN THIS ORDER: (1) if an extension owns the key, install / ' +
-  'enable it so its seed materializes the definition; (2) only then run "Migrate ' +
+  'enable it so its SEED materializes the definition — note this does nothing for an ' +
+  'owner using a bare `defineProperty`, which name resolution cannot see at all; ' +
+  '(2) only then run "Migrate ' +
   'properties to child blocks" from the palette, whose §9 orphan synthesis mints a ' +
   'user-origin definition with a preset inferred from the stored values, VISIBLE in the ' +
   'property panel so the guess can be checked. ' +
