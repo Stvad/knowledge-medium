@@ -1,17 +1,12 @@
 -- E2EE workspaces may flip to child-backed properties (issue #690).
 --
--- PR #386 refused them outright and the flip-then-backfill migration filed
--- under issue #671 kept that refusal, both for the same stated reason: "§8's
--- option 2 needs two client-side pieces because the server cannot read e2ee
--- keys — the one-time backfill and orphan-definition synthesis — and only the
--- first exists".
---
--- Both exist now. Synthesis (#679) shipped; this push makes its block ids safe
--- for an encrypted workspace by deriving their uuidv5 NAMESPACE from `K_id`,
--- the per-workspace HMAC subkey only that workspace's devices hold, instead of
--- from a constant in the public client repo. The id was the whole objection —
--- block ids sync in the clear, so a name-derived one let the server confirm a
--- guessed property name — and it is gone.
+-- WHY THE REFUSAL EXISTED, and why it can go: block ids sync in the CLEAR, and a
+-- synthesized property definition's id was a uuidv5 of the property NAME under a
+-- namespace constant in the public client repo — so the server could hash a
+-- guessed name and probe for the row. An encrypted workspace now derives that
+-- namespace from `K_id`, a per-workspace HMAC subkey only its own devices hold,
+-- and the id is no longer a value the server can recompute. That was the whole
+-- objection; nothing else about an e2ee flip was ever in question.
 --
 -- WHAT RELAXES: `encryption_mode = 'e2ee'` is no longer, by itself, a reason to
 -- refuse a `properties_migration` transition.
