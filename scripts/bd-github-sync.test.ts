@@ -179,6 +179,15 @@ describe('carriesPublishableText', () => {
     expect(carriesPublishableText("gh api -X PUT repos/Stvad/knowledge-medium/contents/x --raw-field message='m'")).toBe(true)
     expect(carriesPublishableText('gh api repos/Stvad/knowledge-medium/issues/1/comments --field body=hi')).toBe(true)
     expect(carriesPublishableText('gh api -X PUT repos/Stvad/knowledge-medium/pulls/652/merge -f merge_method=squash')).toBe(false)
+    // compound field names carry text as much as `body` does, and the merge
+    // endpoint's keywords act the moment it answers — an exact-name list
+    // would have to grow once per endpoint to keep up
+    expect(
+      carriesPublishableText("gh api -X PUT repos/Stvad/knowledge-medium/pulls/652/merge -f commit_title='t'"),
+    ).toBe(true)
+    expect(
+      carriesPublishableText("gh api -X PUT repos/Stvad/knowledge-medium/pulls/652/merge -f commit_message='m'"),
+    ).toBe(true)
     expect(carriesPublishableText('gh api repos/Stvad/knowledge-medium/issues/1/comments -F body=hi')).toBe(true)
     expect(carriesPublishableText('gh pr comment 652 -F notes.md')).toBe(true)
     expect(carriesPublishableText('gh pr comment 652 --body hi')).toBe(true)
@@ -249,14 +258,19 @@ describe('detectors see the verb wherever it sits', () => {
 })
 
 describe('bodyFilePaths / resolveBodyPath', () => {
-  it('extracts plain, =-joined, and quoted message-file paths from -F, --file and --body-file', () => {
+  it('extracts plain, =-joined and quoted paths from git-s own message-file flags', () => {
     expect(bodyFilePaths('git commit -F /tmp/a.txt')).toEqual(['/tmp/a.txt'])
     expect(bodyFilePaths('git commit --file=/tmp/b.txt')).toEqual(['/tmp/b.txt'])
-    expect(bodyFilePaths('gh pr merge 12 --body-file /tmp/m.txt')).toEqual(['/tmp/m.txt'])
     expect(bodyFilePaths(`git commit -F "/tmp/with space.txt" -F '/tmp/q.txt'`)).toEqual([
       '/tmp/with space.txt',
       '/tmp/q.txt',
     ])
+    // gh's own --body-file is NOT git's: matching it is what forced the commit
+    // leg to stand down whenever the invocation also published, and that
+    // coupling then failed open on a verb sitting in ordinary argv
+    expect(bodyFilePaths('gh pr merge 12 --body-file /tmp/m.txt')).toEqual([])
+    // and a typed api field is not a path, though it wears -F like one
+    expect(bodyFilePaths('gh api repos/o/r/issues/1/comments -F body=hello')).toEqual([])
   })
 
   it('skips the stdin sentinel and its device-path disguises', () => {
@@ -1421,6 +1435,33 @@ describe('hookPrePr process behavior', { timeout: 20_000 }, () => {
     const { hook } = makeRepo({ dbReady: true })
     expect(hook('KM_ISSUE_REFS_OK=1 cat msg | git commit -F -').status).toBe(0)
     expect(hook('KM_ISSUE_REFS_OK=1 cd subdir && git commit -F msg.txt').status).toBe(0)
+  })
+
+  // The commit leg reads its OWN message file, and no longer stands down when
+  // the invocation is also read as publishing. Nothing observable changes for
+  // the compound below — a commit file flag always trips the coarse rule, so
+  // it was blocked before this too — but the leg no longer depends on a
+  // detector that deliberately over-matches, and the file is read for the
+  // reason it should be rather than by luck of a second guard.
+  it('reads the commit message file, and blocks a compound either way', () => {
+    const { hook, repo } = makeRepo({
+      dbReady: true,
+      ghIssues: { 700: { title: 'Some PR', state: 'open', pull_request: {} } },
+    })
+    writeFileSync(join(repo, 'msg.txt'), 'land it\n\nFixes #700\n')
+    // alone: the file is read and its close keyword checked against reality
+    const alone = hook(`git commit -F ${join(repo, 'msg.txt')}`)
+    expect(alone.status).toBe(2)
+    expect(alone.stderr).toContain('close keyword targets a PR')
+    // beside a verb in argv: still blocked, nothing slips through
+    const verb = ['gh', 'pr', 'create'].join(' ')
+    expect(hook(`git commit -F ${join(repo, 'msg.txt')}; printf '%s' ${verb}`).status).toBe(2)
+  })
+
+  // A path is not glued to the separator that follows it.
+  it('does not swallow a separator into a message-file path', () => {
+    expect(bodyFilePaths('git commit -F /tmp/a.txt; echo done')).toEqual(['/tmp/a.txt'])
+    expect(bodyFilePaths('git commit -F /tmp/a.txt && echo done')).toEqual(['/tmp/a.txt'])
   })
 
   // The gate LOOKS UP but never MINTS. The detectors deliberately over-match,

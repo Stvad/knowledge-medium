@@ -322,7 +322,13 @@ const TEXT_FLAG = /(?<![\w-])(?:--(?:body|title|notes|message)(?:-file)?\b|--inp
 // than add one, the direction that actually hurts. What the field CARRIES is
 // decided by its name.
 const FIELD_ANY = /(?<![\w-])(?:-[fF]|--(?:raw-)?field)(?:=|\s+)?['"]?([A-Za-z_][\w.[\]-]*)=/g
-const TEXT_FIELD_NAME = /^(?:body|title|name|description|message)$/
+// Matched as a SUBSTRING, not an exact name: the api's compound fields
+// (commit_title, commit_message on the merge endpoint) carry text every bit
+// as much as `body` does, and an exact list would have to grow once per
+// endpoint. Over-matching a field name adds a warning; missing one suppresses
+// the warning entirely, which is how an unchecked close keyword reaches a
+// merge commit that acts on it immediately.
+const TEXT_FIELD_NAME = /body|title|message|name|description|text|note|comment/i
 
 /** Whether this command carries text that could contain a reference at all. */
 export const carriesPublishableText = cmd => {
@@ -469,10 +475,23 @@ export const buildIssueRefsMessage = (refs, closeNums, mode = 'pre') => {
  * parsing.
  */
 const messageFileValues = cmd => {
-  if (!/(?<![\w-])(?:--body-file|--file|-F)/.test(commandSkeleton(cmd))) return []
-  return [...cmd.matchAll(/(?<![\w-])(?:--body-file|--file|-F)(?:=|\s+)?("[^"]*"|'[^']*'|[^\s'"]+)/g)].map(m =>
-    m[1].replace(/^(["'])(.*)\1$/, '$2'),
-  )
+  // GIT's own message-file flags only. `--body-file` is gh's, and matching it
+  // here is what forced the commit leg to stand down whenever the invocation
+  // also published — a coupling that then failed OPEN, because the publish
+  // DETECTORS deliberately over-match and a verb sitting in ordinary argv was
+  // enough to suppress the commit's own file inspection.
+  //
+  // `-F` is both (git's --file, gh's --body-file), so a gh body file can
+  // still be read here. That direction is harmless: its text gets scanned for
+  // close keywords it does not have, costing at most one confirmation round.
+  if (!/(?<![\w-])(?:--file|-F)/.test(commandSkeleton(cmd))) return []
+  return [...cmd.matchAll(/(?<![\w-])(?:--file|-F)(?:=|\s+)?("[^"]*"|'[^']*'|[^\s'";&|<>]+)/g)]
+    .map(m => m[1].replace(/^(["'])(.*)\1$/, '$2'))
+    // `-F` is git's --file AND gh api's typed field, so `-F body=hello` lands
+    // here looking like a path. A value carrying its own `=` is a field, not
+    // a filename; the `--file=path` form has already had its `=` consumed by
+    // the flag above, so nothing legitimate is dropped.
+    .filter(v => !v.includes('='))
 }
 
 // Stdin in disguise: the hook reading these would consume its OWN stdin (an
@@ -1154,7 +1173,7 @@ const hookPrePr = () => {
   // keyword-unchecked.
   const commitText =
     matchesCommitCommand(cmd) && !allowsIssueRefs(cmd)
-      ? [cmd, ...(publishes ? [] : guardedBodies())].join('\n')
+      ? [cmd, ...guardedBodies()].join('\n')
       : ''
   const commitRefs = commitText ? closeKeywordRefs(commitText) : []
 
