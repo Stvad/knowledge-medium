@@ -54,8 +54,11 @@
  *       and deliberately does NOT chase stdin/expansion/--recover bodies;
  *       its parsing surface is FROZEN (#672 — decline coverage findings
  *       here). Bead ids (km-…) BLOCK (exit 2) with the km→#N substitution
- *       table, minting issues for unmapped beads first — the number should
- *       be in hand BEFORE the text ships. The #N echo-gate stays
+ *       table, looked up but never MINTED — the detectors deliberately
+ *       over-match, so a verb sitting in ordinary argv reads as a publish,
+ *       and a mint there would create a public issue for a command that is
+ *       about to be blocked and never runs. The block names `pnpm bd:sync`
+ *       for an id with no issue yet. The #N echo-gate stays
  *       pre-publish for publishes the read-back does NOT cover, decided by
  *       a WHITELIST: one gh command with no shell operator in its skeleton,
  *       aimed at this repo, whose verb and flags leave a fetchable URL in
@@ -73,9 +76,8 @@
  *       Escape hatches: KM_ALLOW_BEAD_IDS=1 / KM_ISSUE_REFS_OK=1 prefixes.
  *       The FULL sync does not run here: converged it still costs ~60s (a GET
  *       compare per issue), which is too slow to sit in front of every PR.
- *       SessionEnd and manual runs carry it.
- *       BD_GITHUB_SYNC_DRY=1 in the ENVIRONMENT suppresses the mint — the
- *       valve every pipe-test of the hook uses.
+ *       SessionEnd and manual runs carry it. This mode writes NOTHING, so
+ *       it needs no dry-run valve: it reads, and it blocks or allows.
  *
  * Every path no-ops silently when bd, the beads DB, or a gh token is missing
  * (cloud sessions) — and no bd command runs before the DB's existence is

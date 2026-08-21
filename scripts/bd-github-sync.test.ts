@@ -1096,7 +1096,6 @@ describe('hookPrePr process behavior', { timeout: 20_000 }, () => {
     dbReady: boolean
     ghIssues?: Record<number, object>
     shows?: object[][]
-    dry?: boolean
   }) => {
     const repo = mkdtempSync(join(tmpdir(), 'bd-sync-hook-'))
     spawnSync('git', ['init', '-q'], { cwd: repo })
@@ -1156,7 +1155,6 @@ describe('hookPrePr process behavior', { timeout: 20_000 }, () => {
       GH_HOST: '127.0.0.1',
       BD_GITHUB_SYNC_DRY: '1',
     }
-    if (opts.dry === false) delete env.BD_GITHUB_SYNC_DRY
     const hook = (command: string) => {
       const payload = JSON.stringify({ tool_name: 'Bash', cwd: repo, tool_input: { command } })
       return spawnSync('node', [script, '--hook-pre-pr'], { cwd: repo, env, input: payload, encoding: 'utf8' })
@@ -1479,7 +1477,6 @@ describe('hookPrePr process behavior', { timeout: 20_000 }, () => {
   it('never mints an issue, even for a real unmapped bead in a real publish', () => {
     const { hook, shimCalls } = makeRepo({
       dbReady: true,
-      dry: false,
       shows: [[{ id: 'km-zzzz', external_ref: null }]],
     })
     const r = hook('gh pr create --title t --body "tracks km-zzzz"')
@@ -1492,7 +1489,7 @@ describe('hookPrePr process behavior', { timeout: 20_000 }, () => {
   // The same, through the shape that made this urgent: a verb in argv, where
   // blanking quoted spans protects nothing.
   it('does not spawn a sync for a bead id in a non-publishing command', () => {
-    const { hook, shimCalls } = makeRepo({ dbReady: true, dry: false, shows: [[{ id: 'km-new', external_ref: null }]] })
+    const { hook, shimCalls } = makeRepo({ dbReady: true, shows: [[{ id: 'km-new', external_ref: null }]] })
     const verb = ['gh', 'pr', 'create'].join(' ')
     const r = hook(`printf '%s' ${verb} km-new`)
     expect(shimCalls()).not.toContain('bd github sync')
