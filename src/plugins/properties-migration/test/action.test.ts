@@ -432,6 +432,62 @@ describe('the orphan-definition step', () => {
     expect(runWorkspaceBackfillNow).toHaveBeenCalled()
   })
 
+  it('clears the undo stack as soon as synthesis writes, not only at the flip', async () => {
+    // `skipUndo` keeps the synthesis write off the stack; it does not remove
+    // what is already on it. A RESTORE sits directly on the user's own delete,
+    // and undo replays a whole snapshot with same-tx processors skipped — one
+    // cmd-Z reinstates the pre-deletion preset this pass re-asserted, and the
+    // backfill then reads every existing cell under it.
+    planSynthesis.mockResolvedValue(plan(1))
+    applySynthesis.mockResolvedValue({created: 0, restored: 1, converged: 0, skipped: []})
+    flipBlocked.mockImplementation(() => flipBlockedCalls++ === 0 ? null : 'still orphaned')
+    openDialog.mockResolvedValue(true)
+    // Already flipped, so nothing downstream would clear it.
+    const {repo} = makeRepo({outcome: 'ran', undoHistoryCleared: false}, {flipped: true})
+
+    await invoke(repo)
+
+    expect(clearUndo).toHaveBeenCalled()
+    // And the abort path says so, rather than leaving the operator to discover it.
+    expect(showInfo).toHaveBeenCalledWith(
+      expect.stringMatching(/still orphaned/), expect.anything())
+  })
+
+  it('says the stack was cleared when it refuses the flip after writing', async () => {
+    // The refusal ends the run with definitions already committed and the
+    // history already gone; leaving that unsaid is the same lie the flip-failure
+    // branch goes out of its way to avoid.
+    planSynthesis.mockResolvedValue(plan(2))
+    applySynthesis.mockResolvedValue({created: 1, restored: 0, converged: 0,
+                                      skipped: [{key: 'demo:orphan', reason: 'occupied'}]})
+    flipBlocked.mockImplementation(() => flipBlockedCalls++ === 0 ? null : 'still orphaned')
+    openDialog.mockResolvedValue(true)
+    const {repo} = makeRepo({outcome: 'ran', undoHistoryCleared: false})
+
+    await invoke(repo)
+
+    expect(progressHandle.fail).toHaveBeenCalledWith(
+      expect.stringMatching(/Undo history for this workspace was cleared/))
+  })
+
+  it('does not announce a flip on a run where only synthesis wrote', async () => {
+    // The two facts are separate: the flip makes the workspace child-backed for
+    // everyone; clearing the stack follows from any write. Driving the flip
+    // banner off the undo flag made an already-flipped run claim a flip.
+    planSynthesis.mockResolvedValue(plan(1))
+    applySynthesis.mockResolvedValue({created: 1, restored: 0, converged: 0, skipped: []})
+    openDialog.mockResolvedValue(true)
+    const {repo} = makeRepo({outcome: 'ran', undoHistoryCleared: false}, {flipped: true})
+
+    await invoke(repo)
+
+    expect(clearUndo).toHaveBeenCalled()
+    expect(progressHandle.done).toHaveBeenCalledWith(
+      expect.stringMatching(/Undo history for this workspace was cleared/))
+    expect(progressHandle.done).not.toHaveBeenCalledWith(
+      expect.stringMatching(/switched to property blocks/i))
+  })
+
   it('mints the missing definitions BEFORE it flips', async () => {
     // The §9 runbook order. A definition is a dormant block at 'cell', so
     // minting early is free; minting after the flip leaves a window in which
@@ -634,7 +690,8 @@ describe('what a completed run tells the operator', () => {
       {outcome: 'already-running', undoHistoryCleared: false},
     ]
     for (const result of outcomes) {
-      const {message} = describeOutcome(result, counts(0), false, {flipped: true})
+      const {message} = describeOutcome(result, counts(0), false,
+                                        {flipped: true, undoCleared: true})
       expect(message, result.outcome).toMatch(/switched to property blocks/i)
       expect(message, result.outcome).not.toMatch(/not started/i)
     }
@@ -645,7 +702,7 @@ describe('what a completed run tells the operator', () => {
     // every run would tell an operator their gesture did something it did not.
     expect(describeOutcome(
       {outcome: 'deferred', undoHistoryCleared: false, reason: 'busy'},
-      counts(0), false, {flipped: false},
+      counts(0), false, {flipped: false, undoCleared: false},
     ).message).not.toMatch(/switched to property blocks/i)
   })
 
@@ -653,8 +710,8 @@ describe('what a completed run tells the operator', () => {
     // Convergence deliberately does not loop on rewritten values, so this
     // sentence is the only thing that tells an operator the children it just
     // built may already be behind the cells.
-    expect(describeOutcome(ran, counts(100), true, {flipped: false}).message).toMatch(/run this again/i)
-    expect(describeOutcome(ran, counts(100), false, {flipped: false}).message).not.toMatch(/run this again/i)
+    expect(describeOutcome(ran, counts(100), true, {flipped: false, undoCleared: false}).message).toMatch(/run this again/i)
+    expect(describeOutcome(ran, counts(100), false, {flipped: false, undoCleared: false}).message).not.toMatch(/run this again/i)
   })
 })
 

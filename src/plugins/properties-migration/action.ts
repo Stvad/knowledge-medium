@@ -55,6 +55,12 @@ const passIsUnfit = async (repo: Repo): Promise<string | null> =>
  *  pass then deferred read "Not started" and walked away believing the graph was
  *  as they left it — and on a connected device deferring is the expected ending,
  *  not a corner case. */
+/** Appended to any message on a path that has already cleared the stack. The
+ *  branches that clear it are several and each of them can end the run, so the
+ *  sentence lives in one place rather than being remembered at each. */
+const undoClearedNote = (cleared: boolean): string =>
+  cleared ? ' Undo history for this workspace was cleared.' : ''
+
 const FLIP_LANDED =
   'This workspace was switched to property blocks — that part is done, and it ' +
   'applies to everyone in the workspace.'
@@ -68,9 +74,10 @@ export const describeOutcome = (
     orphanedOwnersSwept: number
   },
   editedUnderPass: boolean,
-  {flipped}: {flipped: boolean} = {flipped: false},
+  {flipped, undoCleared}: {flipped: boolean; undoCleared: boolean}
+    = {flipped: false, undoCleared: false},
 ): {message: string; failed: boolean; followUp?: string} => {
-  const described = describePassOutcome(result, counts, editedUnderPass, flipped)
+  const described = describePassOutcome(result, counts, editedUnderPass, undoCleared)
   return flipped ? {...described, message: `${FLIP_LANDED} ${described.message}`} : described
 }
 
@@ -83,7 +90,7 @@ const describePassOutcome = (
     orphanedOwnersSwept: number
   },
   editedUnderPass: boolean,
-  flipped: boolean,
+  undoCleared: boolean,
 ): {message: string; failed: boolean; followUp?: string} => {
   const {blocksMaterialized, valuesMaterializedTotal, unmigrated, orphanedOwnersSwept} = counts
   switch (result.outcome) {
@@ -113,7 +120,7 @@ const describePassOutcome = (
             ? ' The workspace was edited while it ran, so some values may already be behind —' +
               ' run this again.'
             : '') +
-          undoNote(result, flipped),
+          undoNote(result, undoCleared),
         // Surfaced through `done`, not `fail`: the pass DID complete, and
         // saying otherwise would send an operator looking for a broken run
         // rather than for the handful of values named in the console.
@@ -132,10 +139,10 @@ const describePassOutcome = (
       return {
         // "Not started" only if NOTHING did: the pass aborts mid-run too, and a
         // run that flipped has already made its one irreversible change.
-        message: (result.undoHistoryCleared || flipped
+        message: (result.undoHistoryCleared || undoCleared
           ? `Stopped before finishing — ${withPeriod(result.reason)} Already-migrated blocks ` +
             'are skipped, so run it again.'
-          : `Not started — ${withPeriod(result.reason)} Try again shortly.`) + undoNote(result, flipped),
+          : `Not started — ${withPeriod(result.reason)} Try again shortly.`) + undoNote(result, undoCleared),
         failed: true,
       }
     case 'failed':
@@ -143,7 +150,7 @@ const describePassOutcome = (
         // No blanket "run it again": true for the give-up and for an
         // unexpected throw, false for a missing claim seam, which fails
         // identically every time. Each reason carries its own.
-        message: `Stopped partway — ${withPeriod(result.reason)}${undoNote(result, flipped)}`,
+        message: `Stopped partway — ${withPeriod(result.reason)}${undoNote(result, undoCleared)}`,
         failed: true,
       }
     case 'held-by-peer':
@@ -155,24 +162,24 @@ const describePassOutcome = (
         message: 'Another client holds this migration — another device, or another tab of ' +
           'this browser. Wait for it to finish; if nothing is running, check the claim ' +
           'block on the "System Migrations (km)" page and delete it to release the pass.' +
-          undoNote(result, flipped),
+          undoNote(result, undoCleared),
         failed: true,
       }
     case 'already-running':
       return {
-        message: 'The migration is already running on this device.' + undoNote(result, flipped),
+        message: 'The migration is already running on this device.' + undoNote(result, undoCleared),
         failed: false,
       }
     case 'read-only':
       return {
         message: 'This workspace is read-only, so the migration cannot write.'
-          + undoNote(result, flipped),
+          + undoNote(result, undoCleared),
         failed: true,
       }
     case 'not-found':
       return {
         message: `No migration is registered under "${PROPERTY_CELL_BACKFILL_ID}".`
-          + undoNote(result, flipped),
+          + undoNote(result, undoCleared),
         failed: true,
       }
   }
@@ -299,11 +306,31 @@ export const migratePropertiesToBlocksAction = ({repo}: {repo: Repo}): ActionCon
     // would leave a window in which the pass skips those keys and reports
     // success over them.
     let synthesized = 0
+    // TWO flags, not one. The flip is what makes the workspace child-backed for
+    // everyone; clearing the stack is a consequence of any write this gesture
+    // commits, synthesis included. Collapsing them made an already-flipped run
+    // that only synthesized announce a flip that never happened.
+    let undoCleared = false
+    let flipLanded = false
     if (willSynthesize > 0) {
       banner.update('Adding definitions for properties that have none…')
       try {
         const result = await applyPropertyDefinitionSynthesis(repo, plan)
         synthesized = result.created + result.restored
+        // The moment anything landed, and for the same reason the flip clears
+        // it below: `skipUndo` keeps this write OFF the stack, it does not
+        // remove what is already on it. A RESTORE in particular sits directly
+        // on top of the user's own delete, and undo replays a whole snapshot
+        // with the same-tx processors skipped — so one cmd-Z reinstates the
+        // pre-deletion preset this pass deliberately re-asserted, and the
+        // backfill then reads every existing cell under it. Every way the run
+        // can end after this without reaching the flip or a committed batch
+        // (a skipped key, a failed flip, a peer holding the claim) leaves that
+        // window open, which is why it is cleared here rather than there.
+        if (synthesized > 0) {
+          repo.undoManagerFor(workspaceId).clear()
+          undoCleared = true
+        }
         // Asked AGAIN, with the OUTCOME. The pre-mint answer was about what we
         // expected to be able to do; this is about what actually happened, and
         // a key that came back skipped still has no definition. The backfill
@@ -312,7 +339,7 @@ export const migratePropertiesToBlocksAction = ({repo}: {repo: Repo}): ActionCon
         // it silently could not migrate.
         const stillBlocked = flipBlockedBySynthesis(plan, result)
         if (!childBacked && stillBlocked !== null) {
-          banner.fail(stillBlocked)
+          banner.fail(stillBlocked + undoClearedNote(undoCleared))
           return
         }
         if (stillBlocked !== null) showInfo(stillBlocked, {
@@ -321,11 +348,11 @@ export const migratePropertiesToBlocksAction = ({repo}: {repo: Repo}): ActionCon
       } catch (err) {
         console.error('[properties-migration] definition synthesis failed:', err)
         banner.fail('Could not add definitions for the properties that have none, so ' +
-          `nothing was migrated: ${err instanceof Error ? err.message : String(err)}`)
+          `nothing was migrated: ${err instanceof Error ? err.message : String(err)}` +
+          undoClearedNote(undoCleared))
         return
       }
     }
-    let undoClearedByFlip = false
     if (!childBacked) {
       // FIRST, and that ordering is the whole point. The flip is what turns the
       // live maintainers on, so a workspace flipped with zero children keeps
@@ -365,7 +392,8 @@ export const migratePropertiesToBlocksAction = ({repo}: {repo: Repo}): ActionCon
       // end after this point without writing a batch (a peer holds the claim, the
       // runner defers, there is nothing left to migrate) leaves that window open.
       repo.undoManagerFor(workspaceId).clear()
-      undoClearedByFlip = true
+      undoCleared = true
+      flipLanded = true
       if (!localApplied) {
         // The flip COMMITTED; this device just has no local `workspaces` row to
         // stamp yet, so the pass would read 'cell' and take the reconcile branch
@@ -406,7 +434,7 @@ export const migratePropertiesToBlocksAction = ({repo}: {repo: Repo}): ActionCon
         result,
         {blocksMaterialized: materialized, valuesMaterializedTotal, unmigrated, orphanedOwnersSwept},
         editedUnderPass,
-        {flipped: undoClearedByFlip},
+        {flipped: flipLanded, undoCleared},
       )
       if (failed) banner.fail(message)
       else banner.done(message)
@@ -423,9 +451,9 @@ export const migratePropertiesToBlocksAction = ({repo}: {repo: Repo}): ActionCon
       // throws before its own pass-level catch), and describeOutcome — which is
       // what otherwise carries these two sentences — never runs on that path. By
       // then the flip has committed and the undo stack is gone.
-      banner.fail((undoClearedByFlip ? `${FLIP_LANDED} ` : '') +
+      banner.fail((flipLanded ? `${FLIP_LANDED} ` : '') +
         `Migration failed: ${err instanceof Error ? err.message : String(err)}` +
-        (undoClearedByFlip ? ' Undo history for this workspace was cleared.' : ''))
+        undoClearedNote(undoCleared))
     } finally {
       unsubscribe()
     }
