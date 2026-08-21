@@ -247,6 +247,12 @@ export interface PropertyDefinitionSynthesisPlan {
    *  not read their keys. NOT a count of bad data — a measure of how much of
    *  this plan is UNKNOWN. */
   unreadableBlocks: number
+  /** Set when rows were still waiting to be materialized WHEN THE SCAN RAN, so
+   *  the key survey was taken over a partial graph. The same kind of hole as
+   *  {@link unreadableBlocks}, and it needs its own field because the gap can
+   *  open and drain between the caller's eligibility checks — leaving both of
+   *  those clean either side of a plan that never saw the arriving keys. */
+  scanSyncGap: string | null
   candidates: SynthesisCandidate[]
   blockers: SynthesisBlocker[]
   /** Unresolved keys that DO have a definition block — broken, not missing.
@@ -472,7 +478,8 @@ export const planPropertyDefinitionSynthesis = async (
     candidates.push({key: entry.property, cells: entry.cells, presetId})
   }
 
-  return {workspaceId, refusal, unreadableBlocks: scan.unreadableBlocks, candidates,
+  return {workspaceId, refusal, unreadableBlocks: scan.unreadableBlocks,
+          scanSyncGap: scan.syncGap, candidates,
           blockers, brokenDefinitions}
 }
 
@@ -506,6 +513,15 @@ export const flipBlockedBySynthesis = (
     return `${plan.unreadableBlocks} block(s) have a property bag this device cannot read, so ` +
       'their property keys are invisible here and this check cannot vouch for them. That ' +
       'means local database corruption — investigate before migrating anything.'
+  }
+  // The same hole from the other direction: rows still staged when the survey
+  // ran are keys it could not see. Read off the PLAN rather than asked again
+  // here, because a gap that has since drained is exactly the dangerous case —
+  // the caller's checks either side of the plan both come back clean while the
+  // plan itself was built without the keys that arrived.
+  if (plan.scanSyncGap !== null) {
+    return `The property survey ran while this device was still catching up (${plan.scanSyncGap}), `
+      + 'so keys that arrived during it are missing from it. Run this again once sync is idle.'
   }
   if (plan.blockers.length > 0) {
     const named = plan.blockers.map(b => `${JSON.stringify(b.key)} (${b.reason})`).join('; ')

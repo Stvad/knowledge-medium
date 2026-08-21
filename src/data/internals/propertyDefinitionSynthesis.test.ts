@@ -392,6 +392,20 @@ describe('planPropertyDefinitionSynthesis', () => {
       .toMatch(/distinct values/)
   }, 30_000)
 
+  it('refuses the flip when the survey itself ran over a partial graph', async () => {
+    // The dangerous shape is a gap that OPENS and DRAINS around the plan: the
+    // caller's eligibility checks either side of it both come back clean, while
+    // the plan was built without the keys that arrived in between. So the gap
+    // has to be recorded by the scan and read off the plan, not asked again.
+    await rawCell('b1', {'demo:orphan': 'hello'})
+    vi.spyOn(repo, 'syncViewGap').mockResolvedValue('12 row(s) still materializing')
+
+    const plan = await planFor()
+
+    expect(plan.scanSyncGap).toBe('12 row(s) still materializing')
+    expect(flipBlockedBySynthesis(plan)).toMatch(/still catching up/)
+  })
+
   it('refuses a workspace this device has not confirmed unencrypted', async () => {
     // The authority is the mode pin, not the server column — and note the row
     // here says 'none', so a denylist on the column would wave this through.
