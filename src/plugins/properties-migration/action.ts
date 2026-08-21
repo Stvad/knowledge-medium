@@ -317,7 +317,7 @@ export const migratePropertiesToBlocksAction = ({repo}: {repo: Repo}): ActionCon
       banner.update('Adding definitions for properties that have none…')
       try {
         const result = await applyPropertyDefinitionSynthesis(repo, plan)
-        synthesized = result.created + result.restored
+        synthesized = result.created
         // `skipUndo` keeps this write OFF the stack; it does not remove what
         // is already on it. A RESTORE sits directly on the user's own delete,
         // and undo replays a whole snapshot with same-tx processors skipped —

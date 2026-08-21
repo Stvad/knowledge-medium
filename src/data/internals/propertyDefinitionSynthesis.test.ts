@@ -8,7 +8,6 @@
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChangeScope, seedProperty } from '@/data/api'
-import { PROPERTY_SCHEMA_TYPE } from '@/data/blockTypes'
 import {
   presetIdProp, propertyChangeScopeProp, propertyDefaultProp, propertyNameProp,
 } from '@/data/properties'
@@ -429,22 +428,8 @@ describe('applyPropertyDefinitionSynthesis', () => {
     const second = await planFor()
     expect(second.candidates).toEqual([])
     expect(await applyPropertyDefinitionSynthesis(repo, second))
-      .toEqual({created: 0, restored: 0, converged: 0, skipped: []})
+      .toEqual({created: 0, converged: 0, skipped: []})
   })
-
-  it('restores a synthesized definition someone deleted, rather than minting a rival', async () => {
-    await rawCell('b1', {'demo:orphan': 'hello'})
-    await applyPropertyDefinitionSynthesis(repo, await planFor())
-    const id = synthesizedPropertyDefinitionBlockId(WS, 'demo:orphan')
-    await repo.tx(async tx => { await tx.delete(id) },
-                  {scope: ChangeScope.BlockDefault, description: 'delete definition'})
-    await untilKeyUnresolved('demo:orphan')
-
-    const plan = await planFor()
-    expect(plan.candidates.map(c => c.key)).toEqual(['demo:orphan'])
-    expect(await applyPropertyDefinitionSynthesis(repo, plan))
-      .toMatchObject({created: 0, restored: 1})
-  }, 30_000)
 
   it('still mints the keys it can when another key is a hard blocker', async () => {
     // The blocker blocks the FLIP, not the minting: the other key's definition
@@ -566,7 +551,7 @@ describe('applyPropertyDefinitionSynthesis: the id is occupied, or the key stopp
     // The SAME plan again — the stale-plan shape, and what a second device sees.
     const again = await applyPropertyDefinitionSynthesis(repo, plan)
 
-    expect(again).toMatchObject({created: 0, restored: 0, converged: 1, skipped: []})
+    expect(again).toMatchObject({created: 0, converged: 1, skipped: []})
   })
 
   it('sees a definition the projection has not caught up with, and does not rival it', async () => {
@@ -602,6 +587,25 @@ describe('applyPropertyDefinitionSynthesis: the id is occupied, or the key stopp
     expect(definitions[0]!.n).toBe(1)
   })
 
+  it('skips a key whose definition the user deleted, rather than resurrecting it', async () => {
+    // Deliberate: a deletion is an instruction. Restoring it silently undid the
+    // user's action, and doing it faithfully needed three separate mechanisms
+    // guarding one rare case — the flip refuses instead and says what to do.
+    await rawCell('b1', {'demo:orphan': 'hello'})
+    await applyPropertyDefinitionSynthesis(repo, await planFor())
+    const id = synthesizedPropertyDefinitionBlockId(WS, 'demo:orphan')
+    await repo.tx(async tx => { await tx.delete(id) },
+                  {scope: ChangeScope.BlockDefault, description: 'delete'})
+    await untilKeyUnresolved('demo:orphan')
+
+    const plan = await planFor()
+    const result = await applyPropertyDefinitionSynthesis(repo, plan)
+
+    expect(result).toMatchObject({created: 0, converged: 0})
+    expect(result.skipped[0]!.reason).toMatch(/was deleted/)
+    expect(flipBlockedBySynthesis(plan, result)).toMatch(/still have no definition/)
+  }, 30_000)
+
   it('skips a key whose deterministic id stopped being its definition', async () => {
     await rawCell('b1', {'demo:orphan': 'hello'})
     await applyPropertyDefinitionSynthesis(repo, await planFor())
@@ -616,49 +620,11 @@ describe('applyPropertyDefinitionSynthesis: the id is occupied, or the key stopp
     expect(plan.candidates.map(c => c.key)).toEqual(['demo:orphan'])
     const result = await applyPropertyDefinitionSynthesis(repo, plan)
 
-    expect(result).toMatchObject({created: 0, restored: 0, converged: 0})
+    expect(result).toMatchObject({created: 0, converged: 0})
     expect(result.skipped.map(s => s.key)).toEqual(['demo:orphan'])
     // And the flip must not step over it — the backfill excludes unregistered
     // keys from its work list, so it would report `ran` with zero failures.
     expect(flipBlockedBySynthesis(plan, result)).toMatch(/still have no definition/)
-  }, 30_000)
-
-  it('restores a tombstone under the key it is for, re-asserting the preset', async () => {
-    // `tx.restore` alone brings back the STORED bag: a preset the operator had
-    // switched to `date` came back as `date` and rewrote every value of the key.
-    await rawCell('b1', {'demo:orphan': 'hello'})
-    await applyPropertyDefinitionSynthesis(repo, await planFor())
-    const id = synthesizedPropertyDefinitionBlockId(WS, 'demo:orphan')
-    await repo.tx(async tx => { await tx.setProperty(id, presetIdProp, 'date') },
-                  {scope: ChangeScope.BlockDefault, description: 'switch preset'})
-    await sharedDb.db.execute(
-      `UPDATE blocks SET properties_json =
-         json_set(properties_json, '$."property-schema:default"', 'kept') WHERE id = ?`,
-      [id])
-    await repo.tx(async tx => { await tx.delete(id) },
-                  {scope: ChangeScope.BlockDefault, description: 'delete'})
-    await untilKeyUnresolved('demo:orphan')
-
-    // Spied rather than inferred from the resolver: the projector's tick often
-    // wins the race on its own, so asserting the OUTCOME would pass with the
-    // synchronous publish deleted. The publish is the guarantee — the backfill
-    // freezes one resolver for a multi-minute run a few awaits later.
-    const publish = vi.spyOn(repo.userSchemas, 'appendUserSchema')
-
-    const result = await applyPropertyDefinitionSynthesis(repo, await planFor())
-
-    expect(result).toMatchObject({restored: 1})
-    expect(publish).toHaveBeenCalledWith(
-      expect.objectContaining({name: 'demo:orphan'}), id, WS)
-    // The patch MERGES over the stored bag: it re-asserts the four fields this
-    // pass owns and keeps everything else the definition carried. Building it
-    // from the owned fields alone would silently drop a configured default.
-    expect(repo.block(id).peek()!.properties['property-schema:default']).toBe('kept')
-    const row = repo.block(id).peek()!
-    expect(row.properties['property-schema:preset']).toBe('string')
-    // The type membership survives the restore patch — building the patch from
-    // the four owned fields alone would drop `types` and un-type the definition.
-    expect(repo.propertySchemaResolverFor(WS).resolve('demo:orphan').status).toBe('resolved')
   }, 30_000)
 
   it('publishes a converged definition with the BLOCK\'s preset, not the plan\'s guess', async () => {
@@ -756,30 +722,6 @@ describe('applyPropertyDefinitionSynthesis: the id is occupied, or the key stopp
       expect.objectContaining({name: 'demo:orphan'}), id, WS)
   })
 
-  it('repairs a tombstone whose property-schema type was stripped before deletion', async () => {
-    // The name check reads the bag directly, so it passes for a row whose type
-    // was removed. Restoring that verbatim commits a live row the metadata
-    // parser rejects — `appendUserSchema` throws after the tx, and every later
-    // run reads the occupant as `rejected`. Stuck until repaired by hand.
-    await rawCell('b1', {'demo:orphan': 'hello'})
-    await applyPropertyDefinitionSynthesis(repo, await planFor())
-    const id = synthesizedPropertyDefinitionBlockId(WS, 'demo:orphan')
-    // Through the type API, not raw SQL. Raw SQL desynchronises `block_types`
-    // from the bag and leaves the projector's own notification in question —
-    // which is how this test spent 10s in CI waiting for a registry rebuild
-    // that had nothing to deliver. The API path is also the case the code
-    // comment names first, so this models it rather than approximating it.
-    await repo.removeType(id, PROPERTY_SCHEMA_TYPE)
-    await repo.tx(async tx => { await tx.delete(id) },
-                  {scope: ChangeScope.BlockDefault, description: 'delete'})
-    await untilKeyUnresolved('demo:orphan')
-
-    const result = await applyPropertyDefinitionSynthesis(repo, await planFor())
-
-    expect(result).toMatchObject({restored: 1})
-    expect(repo.propertySchemaResolverFor(WS).resolve('demo:orphan').status).toBe('resolved')
-  }, 30_000)
-
   it('treats a user definition renamed onto the key as a rival, though the registry lags', async () => {
     // The registry files that row under its OLD name until the tick, so
     // normalising every id through the registry discarded a real rival and
@@ -803,75 +745,6 @@ describe('applyPropertyDefinitionSynthesis: the id is occupied, or the key stopp
     const result = await applyPropertyDefinitionSynthesis(repo, plan)
 
     expect(result.created).toBe(0)
-    expect(result.skipped.map(s => s.key)).toEqual(['demo:orphan'])
-  }, 30_000)
-
-  it('does not restore a tombstone when a rival definition arrived for the same name', async () => {
-    // The window the live-name check exists for, reached through the RESTORE
-    // path rather than the mint: the check used to sit below the occupancy
-    // switch, which `continue`s, so a tombstoned id plus a definition arriving
-    // between plan and apply restored — leaving two definition blocks for one
-    // name, the exact rival the check was added to prevent.
-    await rawCell('b1', {'demo:orphan': 'hello'})
-    await applyPropertyDefinitionSynthesis(repo, await planFor())
-    const id = synthesizedPropertyDefinitionBlockId(WS, 'demo:orphan')
-    await repo.tx(async tx => { await tx.delete(id) },
-                  {scope: ChangeScope.BlockDefault, description: 'delete'})
-    await untilKeyUnresolved('demo:orphan')
-    const plan = await planFor()
-    // A rival lands after the plan. Its metadata PARSES — so it occupies the
-    // name in `definitionsByName` and can win by creation time — while its
-    // preset is unregistered, so it supplies no schema and the resolver check
-    // above cannot see it. (A rival whose metadata does NOT parse is a
-    // different case: it occupies nothing, and restoring over it is correct.)
-    await rawCell('rival', {
-      types: ['property-schema'],
-      'property-schema:name': 'demo:orphan',
-      'property-schema:preset': 'no-such-preset',
-    })
-
-    const result = await applyPropertyDefinitionSynthesis(repo, plan)
-
-    expect(result).toMatchObject({created: 0, restored: 0})
-    expect(result.skipped.map(s => s.key)).toEqual(['demo:orphan'])
-  }, 30_000)
-
-  it('repairs a tombstone whose change-scope was corrupted before deletion', async () => {
-    // The second required field found a round apart from the first, which is
-    // why the restore now asserts the parser's verdict rather than listing
-    // fields: a corrupt change-scope is exactly as fatal as a missing type.
-    await rawCell('b1', {'demo:orphan': 'hello'})
-    await applyPropertyDefinitionSynthesis(repo, await planFor())
-    const id = synthesizedPropertyDefinitionBlockId(WS, 'demo:orphan')
-    await sharedDb.db.execute(
-      `UPDATE blocks SET properties_json =
-         json_set(properties_json, '$."property-schema:change-scope"', 'not-a-real-scope')
-       WHERE id = ?`, [id])
-    await repo.tx(async tx => { await tx.delete(id) },
-                  {scope: ChangeScope.BlockDefault, description: 'delete'})
-    await untilKeyUnresolved('demo:orphan')
-
-    const result = await applyPropertyDefinitionSynthesis(repo, await planFor())
-
-    expect(result).toMatchObject({restored: 1})
-    expect(repo.propertySchemaResolverFor(WS).resolve('demo:orphan').status).toBe('resolved')
-  }, 30_000)
-
-  it('refuses to restore a tombstone that is no longer this key\'s definition', async () => {
-    await rawCell('b1', {'demo:orphan': 'hello'})
-    await applyPropertyDefinitionSynthesis(repo, await planFor())
-    const id = synthesizedPropertyDefinitionBlockId(WS, 'demo:orphan')
-    await repo.tx(async tx => { await tx.setProperty(id, propertyNameProp, 'demo:renamed') },
-                  {scope: ChangeScope.BlockDefault, description: 'rename'})
-    await repo.tx(async tx => { await tx.delete(id) },
-                  {scope: ChangeScope.BlockDefault, description: 'delete'})
-    await untilKeyUnresolved('demo:orphan')
-
-    const result = await applyPropertyDefinitionSynthesis(repo, await planFor())
-
-    // Resurrecting a block the user deleted, under a name they chose, and
-    // counting it as a definition added for a key that still has none.
-    expect(result).toMatchObject({created: 0, restored: 0})
     expect(result.skipped.map(s => s.key)).toEqual(['demo:orphan'])
   }, 30_000)
 

@@ -46,10 +46,8 @@ import { kernelValuePresetCoresById } from '@/data/kernelValuePresetCores'
 import { orderKeyForInsert } from '@/data/mutators'
 import { parsePropertyDefinitionMetadata } from '@/data/propertyDefinitionMetadata'
 import {
-  addBlockTypeToProperties,
   presetConfigProp,
   presetIdProp,
-  propertyChangeScopeProp,
   propertyDefaultProp,
   propertyHiddenProp,
   propertyNameProp,
@@ -477,38 +475,6 @@ export const flipBlockedBySynthesis = (
   return null
 }
 
-/** Restore patch for a tombstoned definition: the four fields this pass owns,
- *  re-asserted OVER the row's stored bag.
- *
- *  MERGED, not replaced — `tx.restore`'s `properties` patch overwrites the
- *  whole bag (`txEngine.ts`), so building it from the four fields alone would
- *  drop the `types` entry and un-type the definition, leaving
- *  `parsePropertyDefinitionMetadata` with nothing to parse and the key orphaned
- *  by the very write meant to fix it.
- *
- *  Re-asserted rather than trusted, because the stored copy is whatever the row
- *  had when it was deleted: a preset the operator had switched to `date` came
- *  back as `date` and rewrote every value of the key on the next backfill. */
-const restoredDefinitionProperties = (
-  stored: Readonly<Record<string, unknown>>,
-  candidate: SynthesisCandidate,
-): {properties: Record<string, unknown>} => ({
-  properties: addBlockTypeToProperties({
-    ...stored,
-    [propertyNameProp.name]: propertyNameProp.codec.encode(candidate.key),
-    [presetIdProp.name]: presetIdProp.codec.encode(candidate.presetId),
-    [presetConfigProp.name]: presetConfigProp.codec.encode({}),
-    [propertyHiddenProp.name]: propertyHiddenProp.codec.encode(false),
-    // EVERY field the metadata parser requires, including the ones a
-    // synthesized definition never sets deliberately. A stored change-scope a
-    // raw write corrupted is exactly as fatal as a missing type: the row
-    // restores, `parsePropertyDefinitionMetadata` rejects it, and the publish
-    // throws after the transaction has already committed.
-    [propertyChangeScopeProp.name]:
-      propertyChangeScopeProp.codec.encode(ChangeScope.BlockDefault),
-  }, PROPERTY_SCHEMA_TYPE),
-})
-
 /** The runtime schema for a synthesized definition, for the synchronous
  *  registry publish. Every inferrable preset is config-less
  *  (`kernelValuePresetCores.ts`), so `build` takes nothing. */
@@ -521,7 +487,6 @@ const schemaFor = (key: string, preset: AnyValuePresetCore): AnyPropertySchema =
 
 export interface SynthesisResult {
   created: number
-  restored: number
   /** Already this key's definition when we got here — another device, or an
    *  earlier run. Converged, not a problem; re-registered all the same. */
   converged: number
@@ -535,21 +500,6 @@ export interface SynthesisResult {
    *  id is occupied by something we will not write through, or the name was
    *  claimed by someone else between the plan and the write. */
   skipped: Array<{key: string; reason: string}>
-}
-
-/** The definition name stored on a row, live or tombstoned.
- *
- *  `parsePropertyDefinitionMetadata` returns null for a DELETED row, so the
- *  restore path — which by definition looks at a tombstone — has to read the
- *  bag directly. Returns undefined when the row carries no readable name. */
-const storedDefinitionName = (block: BlockData): string | undefined => {
-  const raw = block.properties[propertyNameProp.name]
-  if (raw === undefined) return undefined
-  try {
-    return propertyNameProp.codec.decode(raw)
-  } catch {
-    return undefined
-  }
 }
 
 /** The kernel preset core a live definition block stores, when it is one this
@@ -679,7 +629,7 @@ export const applyPropertyDefinitionSynthesis = async (
   // point the same way — toward minting.
   requirePropertyRegistryFor(repo, workspaceId)
   const skipped: SynthesisResult['skipped'] = []
-  if (plan.candidates.length === 0) return {created: 0, restored: 0, converged: 0, skipped}
+  if (plan.candidates.length === 0) return {created: 0, converged: 0, skipped}
   // Defence in depth, and labelled as such: `repo.tx` re-reads `isReadOnly` at
   // commit time and rejects `ChangeScope.BlockDefault` there
   // (`commitPipeline.ts`), so a role change mid-flight is already caught. This
@@ -713,7 +663,6 @@ export const applyPropertyDefinitionSynthesis = async (
   const parentId = propertiesPageBlockId(workspaceId)
 
   let created = 0
-  let restored = 0
   let converged = 0
   const registrations: Array<{schema: AnyPropertySchema; blockId: string}> = []
 
@@ -872,46 +821,17 @@ export const applyPropertyDefinitionSynthesis = async (
         continue
       }
       if (occupancy.verdict === 'tombstoned') {
-        // The name is checked HERE, not by `adoptable`: `classifyOccupant`
-        // ranks `tombstoned` above it on purpose, so the predicate is never
-        // asked about a tombstone. Without this check a definition renamed and
-        // then deleted came back resurrected under the name the user chose, was
-        // counted as a definition added, and left the original key with none.
-        if (storedDefinitionName(occupancy.block) !== candidate.key) {
-          skipped.push({key: candidate.key,
-                        reason: `deleted block ${id} is a definition for a different name`})
-          continue
-        }
-        // Restore rather than mint a rival at a fresh id, and check the patch
-        // against the parser BEFORE writing it: a tombstone's bag is whatever
-        // its last writer left, and a row that restores but fails to parse
-        // throws in `appendUserSchema` AFTER the tx has committed — every later
-        // run then reads the now-live occupant as `rejected`. Stuck, and
-        // unreachable by re-run.
-        //
-        // DEFENCE IN DEPTH and unpinned by design: `restoredDefinitionProperties`
-        // already satisfies every requirement the parser has today. This is for
-        // the one it gains tomorrow.
-        const patch = restoredDefinitionProperties(occupancy.block.properties, candidate)
-        const restoredMetadata = parsePropertyDefinitionMetadata(
-          {...occupancy.block, deleted: false, properties: patch.properties},
-        )
-        if (restoredMetadata?.name !== candidate.key) {
-          skipped.push({key: candidate.key,
-                        reason: `deleted block ${id} cannot be restored into a usable `
-                          + 'definition for this key; repair or remove it'})
-          continue
-        }
-        // No `addTypeInTx` after this: the patch already carries the type, so
-        // the tagger would find nothing to change and write nothing — and
-        // `block_types` is rebuilt by the UPDATE trigger, which `restore` fires
-        // by touching `properties_json` and `deleted`.
-        await tx.restore(id, patch)
-        restored += 1
-        registrations.push({blockId: id, schema: schemaFor(candidate.key, preset)})
+        // Deliberately NOT restored. Resurrecting a definition the user deleted
+        // silently undoes their deletion — and doing it faithfully turned out to
+        // mean re-asserting every field the metadata parser needs, checking the
+        // name the tombstone still carries, and restoring the definition's own
+        // property children: three mechanisms and a filed bug, all guarding one
+        // rare operator action whose manual answer is obvious.
+        skipped.push({key: candidate.key,
+                      reason: `a definition for this key was deleted (block ${id}); undo that `
+                        + 'deletion, or delete the key, then run this again'})
         continue
       }
-      // `createOrGet` + `systemMint`, like every other deterministic-id creator
       // in `src/` — `createChild` cannot pass `systemMint`
       // (`mutators.ts`), and without it two devices minting this id in the same
       // millisecond write equal nonzero stamps from different writes and the
@@ -963,6 +883,6 @@ export const applyPropertyDefinitionSynthesis = async (
     repo.userSchemas.appendUserSchema(schema, blockId, workspaceId)
   }
 
-  return {created, restored, converged, skipped}
+  return {created, converged, skipped}
 }
 

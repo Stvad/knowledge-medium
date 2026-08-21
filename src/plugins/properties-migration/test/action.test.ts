@@ -116,7 +116,7 @@ beforeEach(() => {
   remoteSyncActive.mockReset()
   remoteSyncActive.mockReturnValue(true)
   planSynthesis.mockResolvedValue(plan())
-  applySynthesis.mockResolvedValue({created: 0, restored: 0, converged: 0, skipped: []})
+  applySynthesis.mockResolvedValue({created: 0, converged: 0, skipped: []})
   flipBlocked.mockReturnValue(null)
   flipBlockedCalls = 0
 })
@@ -449,12 +449,12 @@ describe('the orphan-definition step', () => {
 
   it('clears the undo stack as soon as synthesis writes, not only at the flip', async () => {
     // `skipUndo` keeps the synthesis write off the stack; it does not remove
-    // what is already on it. A RESTORE sits directly on the user's own delete,
-    // and undo replays a whole snapshot with same-tx processors skipped — one
-    // cmd-Z reinstates the pre-deletion preset this pass re-asserted, and the
-    // backfill then reads every existing cell under it.
+    // what is already on it. Undo replays a whole snapshot with the same-tx
+    // processors skipped, so one cmd-Z after synthesis commits reverts a
+    // pre-migration edit without the materializer syncing its children — and
+    // past the flip the children are the truth, so the two just diverge.
     planSynthesis.mockResolvedValue(plan(1))
-    applySynthesis.mockResolvedValue({created: 0, restored: 1, converged: 0, skipped: []})
+    applySynthesis.mockResolvedValue({created: 1, converged: 0, skipped: []})
     flipBlocked.mockImplementation(() => flipBlockedCalls++ === 0 ? null : 'still orphaned')
     openDialog.mockResolvedValue(true)
     // Already flipped, so nothing downstream would clear it.
@@ -473,7 +473,7 @@ describe('the orphan-definition step', () => {
     // history already gone; leaving that unsaid is the same lie the flip-failure
     // branch goes out of its way to avoid.
     planSynthesis.mockResolvedValue(plan(2))
-    applySynthesis.mockResolvedValue({created: 1, restored: 0, converged: 0,
+    applySynthesis.mockResolvedValue({created: 1, converged: 0,
                                       skipped: [{key: 'demo:orphan', reason: 'occupied'}]})
     flipBlocked.mockImplementation(() => flipBlockedCalls++ === 0 ? null : 'still orphaned')
     openDialog.mockResolvedValue(true)
@@ -490,7 +490,7 @@ describe('the orphan-definition step', () => {
     // everyone; clearing the stack follows from any write. Driving the flip
     // banner off the undo flag made an already-flipped run claim a flip.
     planSynthesis.mockResolvedValue(plan(1))
-    applySynthesis.mockResolvedValue({created: 1, restored: 0, converged: 0, skipped: []})
+    applySynthesis.mockResolvedValue({created: 1, converged: 0, skipped: []})
     openDialog.mockResolvedValue(true)
     const {repo} = makeRepo({outcome: 'ran', undoHistoryCleared: false}, {flipped: true})
 
@@ -597,7 +597,7 @@ describe('the orphan-definition step', () => {
     // They are inert at 'cell' and a re-run reuses them, but they show up on
     // the Properties page, so "nothing was migrated" alone would be a small lie.
     planSynthesis.mockResolvedValue(plan(3))
-    applySynthesis.mockResolvedValue({created: 3, restored: 0, skipped: []})
+    applySynthesis.mockResolvedValue({created: 3, skipped: []})
     flipWorkspace.mockRejectedValue(new Error('server said no'))
     openDialog.mockResolvedValue(true)
     const {repo} = makeRepo({outcome: 'ran', undoHistoryCleared: false})
@@ -672,7 +672,7 @@ describe('the orphan-definition step', () => {
     // backfill excludes unregistered keys from its work list, so without the
     // second ask the flip lands and the pass reports success over it.
     planSynthesis.mockResolvedValue(plan(2))
-    applySynthesis.mockResolvedValue({created: 1, restored: 0, converged: 0,
+    applySynthesis.mockResolvedValue({created: 1, converged: 0,
                                       skipped: [{key: 'demo:orphan', reason: 'occupied'}]})
     flipBlocked.mockImplementation(() => flipBlockedCalls++ === 0 ? null : 'still have no definition')
     openDialog.mockResolvedValue(true)
@@ -687,7 +687,7 @@ describe('the orphan-definition step', () => {
 
   it('backfills anyway on an already-flipped workspace, and says what was left out', async () => {
     planSynthesis.mockResolvedValue(plan(2))
-    applySynthesis.mockResolvedValue({created: 1, restored: 0, converged: 0,
+    applySynthesis.mockResolvedValue({created: 1, converged: 0,
                                       skipped: [{key: 'demo:orphan', reason: 'occupied'}]})
     flipBlocked.mockImplementation(() => flipBlockedCalls++ === 0 ? null : 'still have no definition')
     openDialog.mockResolvedValue(true)
