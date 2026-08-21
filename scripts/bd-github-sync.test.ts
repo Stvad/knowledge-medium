@@ -1380,6 +1380,17 @@ describe('hookPrePr process behavior', { timeout: 20_000 }, () => {
       expect(hook(cmd).status, cmd).toBe(2)
   })
 
+  // With its flags expanded, an api mutation shows no literal mutation flag
+  // — neither this gate nor the read-back would otherwise look at it.
+  it('treats an expansion-flagged api call as a publish', () => {
+    const { hook } = makeRepo({ dbReady: true })
+    const r = hook('gh api $FLAGS repos/Stvad/knowledge-medium/issues/1/comments')
+    expect(r.status).toBe(2)
+    expect(r.stderr).toContain('post-publication read-back covers')
+    // a literal read stays out of the publish path entirely
+    expect(hook('gh api repos/Stvad/knowledge-medium/issues/1').status).toBe(0)
+  })
+
   // Repair used to catch a bead id that reached a published api body; with
   // the verifier read-only, the gate takes the case it can see for free —
   // an id in the raw command blocks whether or not the publish is covered.

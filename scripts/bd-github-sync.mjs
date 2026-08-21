@@ -1016,7 +1016,11 @@ const hookPrePr = () => {
   // match must not swallow the commit check.
 
   const isPublish = matchesPrCommand(cmd)
-  const apiPublish = matchesApiPublish(cmd)
+  // A `gh api` whose flags arrive by expansion shows no mutation flag to
+  // match, so neither this gate nor the read-back would look at it. Counting
+  // any expansion-bearing api call as a publish closes that: expansion is
+  // uncovered anyway, so the cost is an attested re-run.
+  const apiPublish = matchesApiPublish(cmd) || (GH_API.test(commandSkeleton(cmd)) && /[$`]/.test(cmd))
   // gh's own flag vocabulary decides whether a response names a fetchable
   // object: graphql answers with an envelope, and the output-hiding flags
   // print nothing to find the object by. A CLOSED, documented set — one
