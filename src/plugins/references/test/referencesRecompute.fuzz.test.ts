@@ -880,6 +880,53 @@ describe('references pipeline sequences', () => {
     }
   })
 
+  // Restore-then-delete in one batch (no flush between): the processor's
+  // read phase has already collected the referrers when the row goes back
+  // to a tombstone, so without an in-tx lifecycle re-check the rebind moves
+  // a tombstone-bound entry — the class this deliberately leaves alone.
+  it('a restore undone before the rebind lands leaves the binding on the tombstone', async () => {
+    await guard.barrier()
+    vi.useFakeTimers({shouldAdvanceTime: true})
+    try {
+      const {repo, flush} = await buildEnv()
+      const ALIAS = 'Inbox'
+      const seat0 = computeAliasSeatId(ALIAS, WS)
+      const referrer = await repo.mutate.createChild({
+        parentId: ROOT, position: {kind: 'last'}, content: `see [[${ALIAS}]]`,
+      })
+      await flush()
+
+      await repo.mutate.delete({id: seat0})
+      await flush()
+      await repo.mutate.setContent({id: seat0, content: 'drifted'})
+      await repo.mutate.setProperty({id: seat0, schema: aliasesProp, value: ['ax']})
+      await flush()
+      await repo.mutate.createChild({
+        parentId: ROOT, position: {kind: 'last'}, content: `also [[${ALIAS}]]`,
+      })
+      await flush()
+
+      // Both land before the drain — the restore's rebind runs against a row
+      // that is a tombstone again by the time it holds the write lock.
+      await repo.mutate.restore({id: seat0})
+      await repo.mutate.delete({id: seat0})
+      await flush()
+
+      const seat0Row = await sharedDb.db.getOptional<{deleted: number}>(
+        'SELECT deleted FROM blocks WHERE id = ?', [seat0])
+      expect(seat0Row?.deleted, 'seat is a tombstone again').toBe(1)
+      const refs = JSON.parse(
+        (await sharedDb.db.getOptional<{references_json: string}>(
+          'SELECT references_json FROM blocks WHERE id = ?', [referrer]))!.references_json,
+      ) as Array<{id: string; alias: string}>
+      expect(refs.find(r => r.alias === ALIAS)?.id, 'tombstone-bound entry left alone')
+        .toBe(seat0)
+    } finally {
+      vi.clearAllTimers()
+      vi.useRealTimers()
+    }
+  })
+
   // The counterexample's own shape (seed 1264869285), and what pins the
   // rebind's POSITION: here the claimant does not exist until the restore
   // re-parses the restored block's OWN drifted content and mints it, so a

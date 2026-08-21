@@ -571,6 +571,12 @@ const rebindStrandedReferrers = async (
   workspaceId: string,
   referrerIds: readonly string[],
 ): Promise<void> => {
+  // In-tx lifecycle re-check, like `applySourcePlan`'s stale-plan guard and
+  // `reapSeatsInTx`: the row can be deleted again between the read phase and
+  // this write lock (undoing a restore). Rebinding then would move a
+  // tombstone-bound entry, which this deliberately leaves alone.
+  const restored = await tx.get(restoredId)
+  if (restored === null || restored.deleted) return
   for (const referrerId of referrerIds) {
     const referrer = await tx.get(referrerId)
     if (referrer === null || referrer.deleted) continue
