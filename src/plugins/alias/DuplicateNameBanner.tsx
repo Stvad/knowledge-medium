@@ -47,7 +47,7 @@ import { ALIAS_COLLISION_MERGE_MUTATOR } from './collisionMerge.ts'
 /** Every wording here has to be TRUE of the state that produced it. When this
  *  page still claims the name, "links to it go there" is false — links land
  *  here, and the problem is that nothing guarantees they keep doing so. */
-export const duplicateNameMessage = (
+const duplicateNameMessage = (
   name: string, rivals: number, sharesTheName: boolean,
 ): string => {
   const subject = rivals === 1 ? 'Another page is' : `${rivals} other pages are`
@@ -141,9 +141,9 @@ export const DuplicateNameBanner: BlockRenderer = ({block}) => {
       >
         Open it
       </Button>
-      {/* The explanation and "Open it" still matter to a viewer — links really
-          do resolve to the other page — but the merge is a write they cannot
-          make, so only that action goes. */}
+      {/* The explanation and "Open it" still matter to a viewer — the name does
+          not identify one page, whichever way the links currently fall — but
+          the merge is a write they cannot make, so only that action goes. */}
       {!repo.isReadOnly && (
         <Button size="sm" className="h-7" disabled={merging} onClick={() => { void merge() }}>
           <Merge className="mr-1 h-3.5 w-3.5"/>
