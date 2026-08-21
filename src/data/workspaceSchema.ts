@@ -144,46 +144,51 @@ export const parsePropertiesMigration = (
  *  any per-tx / per-call caching (see `TxImpl.isPropertyChildBackedWorkspace`'s
  *  `childBackedWorkspaceCache`). */
 export const readIsChildBackedWorkspace = async (
-  db: {getOptional<T>(sql: string, params?: unknown[]): Promise<T | null>},
+  db: WorkspaceColumnReader,
   workspaceId: string,
-): Promise<boolean> => {
-  const row = await db.getOptional<{properties_migration: string | null}>(
-    'SELECT properties_migration FROM workspaces WHERE id = ?',
+): Promise<boolean> =>
+  isChildBackedPropertiesWorkspace(parsePropertiesMigration(
+    await readWorkspaceColumn(db, workspaceId, 'properties_migration')))
+
+/** The minimal read surface the tx engine (`TxDb`) and `Repo` (`PowerSyncDb`)
+ *  both already satisfy. */
+type WorkspaceColumnReader = {
+  getOptional<T>(sql: string, params?: unknown[]): Promise<T | null>
+}
+
+/** One column of one workspace row, or null when this device has no local row
+ *  for it yet. The column name is interpolated, so it must be a literal from
+ *  this module and never caller input. */
+const readWorkspaceColumn = async (
+  db: WorkspaceColumnReader,
+  workspaceId: string,
+  column: 'properties_migration' | 'encryption_mode' | 'owner_user_id',
+): Promise<string | null> => {
+  const row = await db.getOptional<Record<string, string | null>>(
+    `SELECT ${column} FROM workspaces WHERE id = ?`,
     [workspaceId],
   )
-  return isChildBackedPropertiesWorkspace(parsePropertiesMigration(row?.properties_migration))
+  return row?.[column] ?? null
 }
 
 /** The workspace's `encryption_mode`, or null when this device has no local
  *  `workspaces` row for it yet. Callers that gate on e2ee must treat the null
  *  as "unknown, assume the stricter answer" rather than as "not encrypted" —
  *  a device can be asked to act on a workspace whose row has not synced. */
-export const readWorkspaceEncryptionMode = async (
-  db: {getOptional<T>(sql: string, params?: unknown[]): Promise<T | null>},
+export const readWorkspaceEncryptionMode = (
+  db: WorkspaceColumnReader,
   workspaceId: string,
-): Promise<string | null> => {
-  const row = await db.getOptional<{encryption_mode: string | null}>(
-    'SELECT encryption_mode FROM workspaces WHERE id = ?',
-    [workspaceId],
-  )
-  return row?.encryption_mode ?? null
-}
+): Promise<string | null> => readWorkspaceColumn(db, workspaceId, 'encryption_mode')
 
 /** The workspace's `owner_user_id`, or null when this device has no local row
  *  for it. Only the OWNER may advance `properties_migration` — the server
  *  trigger refuses everyone else — so a caller about to do work that only
  *  matters if the flip lands should ask first. Null means unknown, which for
  *  that question is the same answer as "not you". */
-export const readWorkspaceOwnerId = async (
-  db: {getOptional<T>(sql: string, params?: unknown[]): Promise<T | null>},
+export const readWorkspaceOwnerId = (
+  db: WorkspaceColumnReader,
   workspaceId: string,
-): Promise<string | null> => {
-  const row = await db.getOptional<{owner_user_id: string | null}>(
-    'SELECT owner_user_id FROM workspaces WHERE id = ?',
-    [workspaceId],
-  )
-  return row?.owner_user_id ?? null
-}
+): Promise<string | null> => readWorkspaceColumn(db, workspaceId, 'owner_user_id')
 
 export const parseWorkspaceRow = (row: WorkspaceRow): Workspace => ({
   id: row.id,

@@ -42,7 +42,7 @@ import type { Repo } from '@/data/repo'
  *      compiles to a real jump over the second call.
  *  So hoisting this predicate into a `SELECT` list, or dropping the `CASE`
  *  to "simplify", silently reintroduces the abort this guard prevents. */
-const IS_OBJECT_BAG =
+export const IS_OBJECT_BAG =
   `json_valid(b.properties_json) AND json_type(b.properties_json) = 'object'`
 export const OBJECT_BAG =
   `CASE WHEN ${IS_OBJECT_BAG} THEN b.properties_json ELSE '{}' END`
@@ -136,29 +136,24 @@ export const scanPropertyKeys = async (
   // a non-active workspace with a message that names no fix. This one does.
   requirePropertyRegistryFor(repo, workspaceId)
   // The registry is DERIVED from definition blocks, so a snapshot taken
-  // mid-rebuild calls a key whose definition has already landed "broken". This
-  // has to precede the CAPTURE, not merely the queries — the resolver freezes
-  // classification by value, so a later await cannot refresh it. Not a proof (a
-  // definition arriving after this still lags), but that error runs in the cheap
-  // direction: a false positive the operator investigates, unlike an all-clear
-  // built from missing rows.
+  // mid-rebuild calls a key whose definition has already landed "broken". Not
+  // a proof (a definition arriving after this still lags), but that error runs
+  // in the cheap direction: a false positive the operator investigates, unlike
+  // an all-clear built from missing rows.
   await repo.whenPropertyDefinitionsReady(workspaceId)
-  // Sampled here, above the capture, so that EVERY await in this function is
-  // behind us before the resolver is frozen. Keeping it below would leave a
-  // suspension point between the capture and the scans, which is the window
-  // the capture exists to close.
+  // Sampled here, above the registry capture below, so every await in this
+  // function is behind us before the resolver freezes.
   const syncGap = await repo.syncViewGap()
   // Defence in depth; no test pins it. A workspace switch across the awaits
-  // would leave `registry` belonging to another workspace, silently degrading
-  // the effective-name rewrite below to stored names. It also converts the
-  // two-switch case into a loud error: past the previous-workspace fallback
-  // `propertySchemaResolverFor` fails CLOSED, which here is the HAZARD, not
-  // safety — every key resolves identity-unavailable and the whole graph reads
-  // as unregistered.
+  // above would leave `registry` belonging to another workspace, silently
+  // degrading the effective-name rewrite below to stored names — or, past the
+  // previous-workspace fallback, make `propertySchemaResolverFor` fail CLOSED,
+  // which here is the HAZARD: every key resolves identity-unavailable and the
+  // whole graph reads as unregistered.
   const registry = requirePropertyRegistryFor(repo, workspaceId)
-  // Nothing may await between this line and the scans. The resolver holds its
-  // snapshot by value, so classification is fixed the instant it is taken; a
-  // workspace switch across a later suspension point would otherwise leave the
+  // NOTHING MAY AWAIT between this line and the scans below: the resolver
+  // holds its snapshot by value, so classification is fixed the instant it's
+  // taken, and a suspension point here would let a workspace switch leave the
   // scans reading rows this snapshot cannot classify. Same rule as
   // `schedulePropertyDefinitionMigrations` in `repo.ts`.
   const resolver = repo.propertySchemaResolverFor(workspaceId)
@@ -183,19 +178,17 @@ export const scanPropertyKeys = async (
   // change-scope, or any decode throw) contributes NO registry entry, so the
   // registry would report zero and send the caller to synthesis — creating a
   // colliding second definition.
-  // Same object guard as the histogram. `json_extract` RAISES on malformed
-  // JSON, which would abort the whole scan — and the one time you most want
-  // this is while investigating corruption, so it must degrade into
-  // an incomplete result (with `unreadableBlocks` non-zero) rather than die.
+  // Same object guard as the histogram — `json_extract` RAISES on malformed
+  // JSON (which would abort mid-investigation-of-corruption), so this must
+  // degrade into an incomplete result (`unreadableBlocks` non-zero) rather
+  // than die.
   //
-  // Defence in depth for the malformed case specifically, not a live path:
-  // the `blocks` update triggers run `json_each(NEW.properties_json, ...)`
-  // themselves (`clientSchema.ts`), so SQLite rejects a malformed write
-  // before it lands and no SQL path can create such a row. Only disk-level
-  // corruption (issue #284), which never runs the triggers, can — and it can
-  // leave a stale `block_types` entry pointing at the corrupt row, which is
-  // what would drag it into this join. The valid-but-non-object case IS
-  // reachable and is what the guard handles day to day.
+  // Defence in depth for the malformed case, not a live path: the `blocks`
+  // update triggers already run `json_each` themselves (`clientSchema.ts`), so
+  // no SQL path can create such a row — only disk-level corruption (#284,
+  // which skips the triggers) can, and it can leave a stale `block_types`
+  // entry pointing at the corrupt row. The valid-but-non-object case IS
+  // reachable day to day; that's what the guard actually handles.
   const definitionRows = await repo.db.getAll<{id: string; name: string | null}>(
     // The LAST occurrence, not `json_extract`'s first. A stored bag can repeat
     // a key — `JSON.stringify` cannot produce one but a raw SQL write can, and
@@ -214,15 +207,12 @@ export const scanPropertyKeys = async (
       WHERE t.type = ? AND b.workspace_id = ? AND b.deleted = 0`,
     [propertyNameProp.name, PROPERTY_SCHEMA_TYPE, workspaceId],
   )
-  // Count each definition under its EFFECTIVE name, which is not always the
-  // stored one. `buildPropertyDefinitionRegistry` rewrites a seed-backed
-  // row's name to the seed's DECLARED name when the stored value has drifted
-  // (older client, import, sync). Counting the raw column would credit such a
-  // block to the stale key, so a cell still using that key — genuinely
-  // orphaned — would be told to "repair the definition" and steered away from
-  // the synthesis it actually needs, while the definition is in fact fine.
-  // Rows the registry doesn't know (metadata that fails to parse) fall back
-  // to the stored name, which is the whole reason this reads `blocks` at all.
+  // Counted under each definition's EFFECTIVE name (the seed-rewrite rule —
+  // see `effectiveDefinitionName` in propertyDefinitionSynthesis.ts), not the
+  // stored one: crediting the raw column would point a genuinely orphaned key
+  // at "repair the definition" instead of the synthesis it actually needs.
+  // Rows the registry doesn't know (metadata that fails to parse) fall back to
+  // the stored name, which is the whole reason this reads `blocks` at all.
   const definitionBlocksByName = new Map<string, number>()
   for (const row of definitionRows) {
     const effectiveName = registry.definitionsByFieldId.get(row.id)?.name

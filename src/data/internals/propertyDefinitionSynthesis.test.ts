@@ -94,6 +94,22 @@ const rawCell = async (
 
 const planFor = () => planPropertyDefinitionSynthesis(repo, WS)
 
+/** Builds the resolver mock `propertySchemaResolverFor` is stubbed to return:
+ *  only `resolve` is caller-supplied, `resolveField`/`resolveBoundary` always
+ *  report identity-unavailable. */
+const mockResolver = (resolve: () => unknown) => ({
+  resolve,
+  resolveField: () => ({status: 'identity-unavailable', reason: 'definition-unavailable'}),
+  resolveBoundary: () => ({status: 'identity-unavailable', reason: 'definition-unavailable'}),
+} as unknown as ReturnType<typeof repo.propertySchemaResolverFor>)
+
+/** Make both projections report nothing, so only a DATABASE read can see a
+ *  definition — the state between a sync-applied write and the projector tick. */
+const blindTheProjections = () => {
+  vi.spyOn(repo, 'propertySchemaResolverFor').mockReturnValue(
+    mockResolver(() => ({status: 'identity-unavailable', reason: 'definition-unavailable'})))
+}
+
 /** Fence on the registry having caught up with a definition write.
  *
  *  The property-definition registry is a projector-driven projection of the
@@ -107,16 +123,6 @@ const planFor = () => planPropertyDefinitionSynthesis(repo, WS)
  *  one worker per core, where the same wait stretches several-fold. Kept well
  *  under the 30s timeout its callers carry, so a genuine hang reports as this
  *  assertion rather than as an opaque "test timed out". */
-/** Make both projections report nothing, so only a DATABASE read can see a
- *  definition — the state between a sync-applied write and the projector tick. */
-const blindTheProjections = () => {
-  vi.spyOn(repo, 'propertySchemaResolverFor').mockReturnValue({
-    resolve: () => ({status: 'identity-unavailable', reason: 'definition-unavailable'}),
-    resolveField: () => ({status: 'identity-unavailable', reason: 'definition-unavailable'}),
-    resolveBoundary: () => ({status: 'identity-unavailable', reason: 'definition-unavailable'}),
-  } as unknown as ReturnType<typeof repo.propertySchemaResolverFor>)
-}
-
 const untilKeyUnresolved = (key: string) => vi.waitFor(
   () => expect(repo.propertySchemaResolverFor(WS).resolve(key).status).not.toBe('resolved'),
   {timeout: 10_000, interval: 25},
@@ -124,6 +130,31 @@ const untilKeyUnresolved = (key: string) => vi.waitFor(
 
 const candidateFor = async (key: string) =>
   (await planFor()).candidates.find(c => c.key === key)
+
+/** Mints a definition for 'demo:orphan' via the full plan-then-apply cycle. */
+const mintedOrphan = async () => {
+  await rawCell('b1', {'demo:orphan': 'hello'})
+  const plan = await planFor()
+  await applyPropertyDefinitionSynthesis(repo, plan)
+  const id = synthesizedPropertyDefinitionBlockId(WS, 'demo:orphan')
+  return {plan, id}
+}
+
+const countDefinitionsNamed = async (name: string): Promise<number> => {
+  const definitions = await repo.db.getAll<{n: number}>(
+    `SELECT COUNT(*) AS n FROM blocks b JOIN block_types t ON t.block_id = b.id
+      WHERE t.type = 'property-schema' AND b.workspace_id = ? AND b.deleted = 0
+        AND json_extract(b.properties_json, '$."property-schema:name"') = ?`,
+    [WS, name])
+  return definitions[0]!.n
+}
+
+/** Models an extension contributing its own `string` value preset, which
+ *  replaces the kernel core by identity. */
+const replaceStringPreset = () => {
+  vi.spyOn(repo, 'valuePresetCores', 'get').mockReturnValue(
+    new Map([...repo.valuePresetCores, ['string', {...repo.valuePresetCores.get('string')!}]]))
+}
 
 describe('provePresetId', () => {
   it('picks the narrowest preset that carries every value unchanged', () => {
@@ -300,8 +331,7 @@ describe('planPropertyDefinitionSynthesis', () => {
     // this) stopped clean workspaces migrating because of an extension no
     // candidate depends on. The id is dropped from the ladder instead.
     await rawCell('b1', {'demo:orphan': 'hello', 'demo:flag': true})
-    vi.spyOn(repo, 'valuePresetCores', 'get').mockReturnValue(
-      new Map([...repo.valuePresetCores, ['string', {...repo.valuePresetCores.get('string')!}]]))
+    replaceStringPreset()
 
     const plan = await planFor()
 
@@ -455,6 +485,24 @@ describe('applyPropertyDefinitionSynthesis', () => {
     expect(repo.block(id).peek()?.properties['property-schema:name']).toBe(' padded ')
   })
 
+  it('reports a definition that was written but could not be published', async () => {
+    // Publication runs AFTER the transaction commits, so throwing from it would
+    // lose an outcome that is already durable: the caller would see nothing
+    // created, clear no undo with definitions live, and report that nothing was
+    // migrated. It has to come back as a skip instead.
+    await rawCell('b1', {'demo:orphan': 'hello'})
+    vi.spyOn(repo.userSchemas, 'appendUserSchema').mockImplementation(() => {
+      throw new Error('block vanished before publication')
+    })
+
+    const result = await applyPropertyDefinitionSynthesis(repo, await planFor())
+
+    expect(result.created).toBe(1)
+    expect(result.skipped.map(s => s.key)).toEqual(['demo:orphan'])
+    // And the flip must refuse: the key has a block but nothing resolves it.
+    expect(await countDefinitionsNamed('demo:orphan')).toBe(1)
+  })
+
   it('mints it visible, at the deterministic id, with no seed provenance', async () => {
     await rawCell('b1', {'demo:orphan': 'hello'})
     await applyPropertyDefinitionSynthesis(repo, await planFor())
@@ -532,12 +580,7 @@ describe('applyPropertyDefinitionSynthesis: the id is occupied, or the key stopp
     expect(result).toMatchObject({created: 0, converged: 1, skipped: []})
     // One definition for the name, not two: a rival strands whatever field rows
     // bind to the loser's fieldId.
-    const definitions = await repo.db.getAll<{n: number}>(
-      `SELECT COUNT(*) AS n FROM blocks b JOIN block_types t ON t.block_id = b.id
-        WHERE t.type = 'property-schema' AND b.workspace_id = ? AND b.deleted = 0
-          AND json_extract(b.properties_json, '$."property-schema:name"') = 'demo:orphan'`,
-      [WS])
-    expect(definitions[0]!.n).toBe(1)
+    expect(await countDefinitionsNamed('demo:orphan')).toBe(1)
   })
 
   it('does not call a key converged when the definition the resolver picked is gone', async () => {
@@ -554,11 +597,8 @@ describe('applyPropertyDefinitionSynthesis: the id is occupied, or the key stopp
     // The projection still reports it — which is the whole point of the test,
     // so assert that precondition rather than assuming it.
     expect(schema.name).toBe('demo:orphan')
-    vi.spyOn(repo, 'propertySchemaResolverFor').mockReturnValue({
-      resolve: () => ({status: 'resolved', schema: {...schema, fieldId, workspaceId: WS}}),
-      resolveField: () => ({status: 'identity-unavailable', reason: 'definition-unavailable'}),
-      resolveBoundary: () => ({status: 'identity-unavailable', reason: 'definition-unavailable'}),
-    } as unknown as ReturnType<typeof repo.propertySchemaResolverFor>)
+    vi.spyOn(repo, 'propertySchemaResolverFor').mockReturnValue(
+      mockResolver(() => ({status: 'resolved', schema: {...schema, fieldId, workspaceId: WS}})))
 
     const result = await applyPropertyDefinitionSynthesis(repo, plan)
 
@@ -571,21 +611,14 @@ describe('applyPropertyDefinitionSynthesis: the id is occupied, or the key stopp
     // tick behind a RENAME too, and a row that no longer answers to this key is
     // not convergence — it is a key with no definition, and the flip must not
     // step over it.
-    await rawCell('b1', {'demo:orphan': 'hello'})
-    const plan = await planFor()
-    await applyPropertyDefinitionSynthesis(repo, plan)
-    const id = synthesizedPropertyDefinitionBlockId(WS, 'demo:orphan')
+    const {plan, id} = await mintedOrphan()
     const stale = repo.propertySchemaResolverFor(WS).resolve('demo:orphan')
     expect(stale.status).toBe('resolved')
     await repo.tx(async tx => { await tx.setProperty(id, propertyNameProp, 'demo:renamed') },
                   {scope: ChangeScope.BlockDefault, description: 'rename'})
     // Freeze the projection at its pre-rename answer, which is the state this
     // guard exists for.
-    vi.spyOn(repo, 'propertySchemaResolverFor').mockReturnValue({
-      resolve: () => stale,
-      resolveField: () => ({status: 'identity-unavailable', reason: 'definition-unavailable'}),
-      resolveBoundary: () => ({status: 'identity-unavailable', reason: 'definition-unavailable'}),
-    } as unknown as ReturnType<typeof repo.propertySchemaResolverFor>)
+    vi.spyOn(repo, 'propertySchemaResolverFor').mockReturnValue(mockResolver(() => stale))
 
     const result = await applyPropertyDefinitionSynthesis(repo, plan)
 
@@ -597,18 +630,11 @@ describe('applyPropertyDefinitionSynthesis: the id is occupied, or the key stopp
     // Metadata parses without ever consulting the preset registry, so a row
     // with an unregistered preset looks like a valid definition and resolves
     // nothing. Occupying the name and serving it are different facts.
-    await rawCell('b1', {'demo:orphan': 'hello'})
-    const plan = await planFor()
-    await applyPropertyDefinitionSynthesis(repo, plan)
-    const id = synthesizedPropertyDefinitionBlockId(WS, 'demo:orphan')
+    const {plan, id} = await mintedOrphan()
     const stale = repo.propertySchemaResolverFor(WS).resolve('demo:orphan')
     await repo.tx(async tx => { await tx.setProperty(id, presetIdProp, 'no-such-preset') },
                   {scope: ChangeScope.BlockDefault, description: 'unregister the preset'})
-    vi.spyOn(repo, 'propertySchemaResolverFor').mockReturnValue({
-      resolve: () => stale,
-      resolveField: () => ({status: 'identity-unavailable', reason: 'definition-unavailable'}),
-      resolveBoundary: () => ({status: 'identity-unavailable', reason: 'definition-unavailable'}),
-    } as unknown as ReturnType<typeof repo.propertySchemaResolverFor>)
+    vi.spyOn(repo, 'propertySchemaResolverFor').mockReturnValue(mockResolver(() => stale))
 
     const result = await applyPropertyDefinitionSynthesis(repo, plan)
 
@@ -652,12 +678,7 @@ describe('applyPropertyDefinitionSynthesis: the id is occupied, or the key stopp
 
     expect(result).toMatchObject({created: 0})
     expect(result.skipped.map(s => s.key)).toEqual(['demo:orphan'])
-    const definitions = await repo.db.getAll<{n: number}>(
-      `SELECT COUNT(*) AS n FROM blocks b JOIN block_types t ON t.block_id = b.id
-        WHERE t.type = 'property-schema' AND b.workspace_id = ? AND b.deleted = 0
-          AND json_extract(b.properties_json, '$."property-schema:name"') = 'demo:orphan'`,
-      [WS])
-    expect(definitions[0]!.n).toBe(1)
+    expect(await countDefinitionsNamed('demo:orphan')).toBe(1)
   })
 
   it('treats a definition it cannot parse as holding the name, rather than minting beside it', async () => {
@@ -684,9 +705,7 @@ describe('applyPropertyDefinitionSynthesis: the id is occupied, or the key stopp
     // Deliberate: a deletion is an instruction. Restoring it silently undid the
     // user's action, and doing it faithfully needed three separate mechanisms
     // guarding one rare case — the flip refuses instead and says what to do.
-    await rawCell('b1', {'demo:orphan': 'hello'})
-    await applyPropertyDefinitionSynthesis(repo, await planFor())
-    const id = synthesizedPropertyDefinitionBlockId(WS, 'demo:orphan')
+    const {id} = await mintedOrphan()
     await repo.tx(async tx => { await tx.delete(id) },
                   {scope: ChangeScope.BlockDefault, description: 'delete'})
     await untilKeyUnresolved('demo:orphan')
@@ -700,9 +719,7 @@ describe('applyPropertyDefinitionSynthesis: the id is occupied, or the key stopp
   }, 30_000)
 
   it('skips a key whose deterministic id stopped being its definition', async () => {
-    await rawCell('b1', {'demo:orphan': 'hello'})
-    await applyPropertyDefinitionSynthesis(repo, await planFor())
-    const id = synthesizedPropertyDefinitionBlockId(WS, 'demo:orphan')
+    const {id} = await mintedOrphan()
     // The definition is minted HIDDEN precisely to invite this look, and the
     // rename processor is flip-gated, so pre-flip the cell keeps the old key.
     await repo.tx(async tx => { await tx.setProperty(id, propertyNameProp, 'demo:renamed') },
@@ -724,10 +741,7 @@ describe('applyPropertyDefinitionSynthesis: the id is occupied, or the key stopp
     // The block is live and may have been retyped deliberately. Publishing the
     // plan's inferred preset would have the backfill read historical values
     // under one codec and the projector replace it with another moments later.
-    await rawCell('b1', {'demo:orphan': 'hello'})
-    const plan = await planFor()
-    await applyPropertyDefinitionSynthesis(repo, plan)
-    const id = synthesizedPropertyDefinitionBlockId(WS, 'demo:orphan')
+    const {plan, id} = await mintedOrphan()
     await repo.tx(async tx => { await tx.setProperty(id, presetIdProp, 'raw-json') },
                   {scope: ChangeScope.BlockDefault, description: 'retype'})
     const publish = vi.spyOn(repo.userSchemas, 'appendUserSchema')
@@ -747,8 +761,7 @@ describe('applyPropertyDefinitionSynthesis: the id is occupied, or the key stopp
     await rawCell('b1', {'demo:orphan': 'hello'})
     const plan = await planFor()
     expect(plan.candidates[0]!.presetId).toBe('string')
-    vi.spyOn(repo, 'valuePresetCores', 'get').mockReturnValue(
-      new Map([...repo.valuePresetCores, ['string', {...repo.valuePresetCores.get('string')!}]]))
+    replaceStringPreset()
 
     const result = await applyPropertyDefinitionSynthesis(repo, plan)
 
@@ -765,8 +778,7 @@ describe('applyPropertyDefinitionSynthesis: the id is occupied, or the key stopp
     await rawCell('b1', {'demo:orphan': 'hello'})
     const plan = await planFor()
     await applyPropertyDefinitionSynthesis(repo, plan)
-    vi.spyOn(repo, 'valuePresetCores', 'get').mockReturnValue(
-      new Map([...repo.valuePresetCores, ['string', {...repo.valuePresetCores.get('string')!}]]))
+    replaceStringPreset()
 
     const again = await applyPropertyDefinitionSynthesis(repo, plan)
 
@@ -781,8 +793,7 @@ describe('applyPropertyDefinitionSynthesis: the id is occupied, or the key stopp
     await rawCell('b1', {'demo:orphan': 'hello'})
     const plan = await planFor()
     await applyPropertyDefinitionSynthesis(repo, plan)
-    vi.spyOn(repo, 'valuePresetCores', 'get').mockReturnValue(
-      new Map([...repo.valuePresetCores, ['string', {...repo.valuePresetCores.get('string')!}]]))
+    replaceStringPreset()
     blindTheProjections()
 
     const result = await applyPropertyDefinitionSynthesis(repo, plan)
@@ -796,10 +807,7 @@ describe('applyPropertyDefinitionSynthesis: the id is occupied, or the key stopp
     // `config.options` and throws, which would roll back every OTHER key's
     // definition in the same transaction. Skipping costs a re-run once the
     // projector catches up.
-    await rawCell('b1', {'demo:orphan': 'hello'})
-    const plan = await planFor()
-    await applyPropertyDefinitionSynthesis(repo, plan)
-    const id = synthesizedPropertyDefinitionBlockId(WS, 'demo:orphan')
+    const {plan, id} = await mintedOrphan()
     await repo.tx(async tx => { await tx.setProperty(id, presetIdProp, 'enum') },
                   {scope: ChangeScope.BlockDefault, description: 'retype'})
     blindTheProjections()
@@ -814,10 +822,7 @@ describe('applyPropertyDefinitionSynthesis: the id is occupied, or the key stopp
     // Between the publish and the projector tick this schema IS the behaviour
     // the app uses, so a hardcoded BlockDefault would route a UiState
     // property's writes to sync and apply the wrong undo policy.
-    await rawCell('b1', {'demo:orphan': 'hello'})
-    const plan = await planFor()
-    await applyPropertyDefinitionSynthesis(repo, plan)
-    const id = synthesizedPropertyDefinitionBlockId(WS, 'demo:orphan')
+    const {plan, id} = await mintedOrphan()
     await repo.tx(async tx => {
       await tx.setProperty(id, propertyChangeScopeProp, ChangeScope.UiState)
     }, {scope: ChangeScope.BlockDefault, description: 'rescope'})
@@ -834,10 +839,7 @@ describe('applyPropertyDefinitionSynthesis: the id is occupied, or the key stopp
     // Same window, same reason: this schema is what the app reads until the
     // projector replaces it, so a definition carrying its own default must not
     // be published with the preset's.
-    await rawCell('b1', {'demo:orphan': 'hello'})
-    const plan = await planFor()
-    await applyPropertyDefinitionSynthesis(repo, plan)
-    const id = synthesizedPropertyDefinitionBlockId(WS, 'demo:orphan')
+    const {plan, id} = await mintedOrphan()
     await repo.tx(async tx => {
       await tx.setProperty(id, propertyDefaultProp, 'stored')
     }, {scope: ChangeScope.BlockDefault, description: 'set a default'})
@@ -851,13 +853,10 @@ describe('applyPropertyDefinitionSynthesis: the id is occupied, or the key stopp
   })
 
   it('publishes a converged definition too, not just one it created', async () => {
-    await rawCell('b1', {'demo:orphan': 'hello'})
-    const plan = await planFor()
-    await applyPropertyDefinitionSynthesis(repo, plan)
+    const {plan, id} = await mintedOrphan()
+    const publish = vi.spyOn(repo.userSchemas, 'appendUserSchema')
     // Force the registry back to not knowing it, so the `ours` branch — "the
     // block is here, the projection has not caught up" — is the one taken.
-    const id = synthesizedPropertyDefinitionBlockId(WS, 'demo:orphan')
-    const publish = vi.spyOn(repo.userSchemas, 'appendUserSchema')
     blindTheProjections()
 
     const again = await applyPropertyDefinitionSynthesis(repo, plan)

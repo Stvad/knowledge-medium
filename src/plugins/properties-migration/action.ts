@@ -19,14 +19,6 @@ import { openDialog } from '@/utils/dialogs.js'
 import { dismissToast, showInfo, showProgress } from '@/utils/toast.js'
 import { ConfirmMigrationDialog } from './ConfirmMigrationDialog.tsx'
 
-/** What to tell the user, per outcome. `deferred` and `held-by-peer` are
- *  deliberately separate sentences: one means "retry in a moment", the other
- *  means "another device owns this run".
- *
- *  `followUp` is the part the operator has to ACT on. It is shown as its own
- *  sticky toast rather than appended here, because the banner's completion
- *  message clears in a couple of seconds and this pass runs for minutes —
- *  long enough that nobody is still watching when it lands. */
 /** The runner's reasons come from several places and only some end in a
  *  period, which is how "…partially materialized graph.. Try again" happened. */
 const withPeriod = (reason: string | undefined): string =>
@@ -96,16 +88,24 @@ export const describeOutcome = (
   {flipped, undoCleared}: {flipped: boolean; undoCleared: boolean}
     = {flipped: false, undoCleared: false},
 ): {message: string; failed: boolean; followUp?: string} => {
-  const described = describePassOutcome(result, counts, editedUnderPass, undoCleared)
+  const cleared = result.undoHistoryCleared || undoCleared
+  const described = describePassOutcome(result, counts, editedUnderPass, cleared)
   // Both tails appended HERE, not inside the switch: a branch cannot forget a
   // suffix it does not apply, and every branch needs both.
-  const cleared = result.undoHistoryCleared || undoCleared
   return {
     ...described,
     message: (flipped ? `${FLIP_LANDED} ` : '') + described.message + undoNote(cleared),
   }
 }
 
+/** What to tell the user, per outcome. `deferred` and `held-by-peer` are
+ *  deliberately separate sentences: one means "retry in a moment", the other
+ *  means "another device owns this run".
+ *
+ *  `followUp` is the part the operator has to ACT on. Shown as its own sticky
+ *  toast rather than appended here: the banner's completion message clears in a
+ *  couple of seconds and this pass runs for minutes, so nobody is still
+ *  watching when it lands. */
 const describePassOutcome = (
   result: OperatorBackfillResult,
   counts: {
@@ -115,7 +115,8 @@ const describePassOutcome = (
     orphanedOwnersSwept: number
   },
   editedUnderPass: boolean,
-  undoCleared: boolean,
+  /** Already folded by the caller — the pass's own clear OR the gesture's. */
+  cleared: boolean,
 ): {message: string; failed: boolean; followUp?: string} => {
   const {blocksMaterialized, valuesMaterializedTotal, unmigrated, orphanedOwnersSwept} = counts
   switch (result.outcome) {
@@ -156,14 +157,10 @@ const describePassOutcome = (
           : undefined,
       }
     case 'deferred':
-      // "Not started" only if it really did not: the per-transaction
-      // preconditions abort mid-run too, and on a connected device that is the
-      // EXPECTED ending (km-gwam) — after the pass has written a large part of
-      // the graph and cleared the undo history on its first committed batch.
       return {
         // "Not started" only if NOTHING did: the pass aborts mid-run too, and a
         // run that flipped has already made its one irreversible change.
-        message: (result.undoHistoryCleared || undoCleared
+        message: (cleared
           ? `Stopped before finishing — ${withPeriod(result.reason)} Already-migrated blocks ` +
             'are skipped, so run it again.'
           : `Not started — ${withPeriod(result.reason)} Try again shortly.`),
@@ -195,14 +192,12 @@ const describePassOutcome = (
       }
     case 'read-only':
       return {
-        message: 'This workspace is read-only, so the migration cannot write.'
-         ,
+        message: 'This workspace is read-only, so the migration cannot write.',
         failed: true,
       }
     case 'not-found':
       return {
-        message: `No migration is registered under "${PROPERTY_CELL_BACKFILL_ID}".`
-         ,
+        message: `No migration is registered under "${PROPERTY_CELL_BACKFILL_ID}".`,
         failed: true,
       }
   }
@@ -214,8 +209,10 @@ const describePassOutcome = (
  * The palette is the surface on purpose: the pass is never scheduled — it
  * uploads source-of-truth rows, so ONE device runs it and the rest receive
  * them — and "open the palette and run this" is an instruction that can be
- * given to any user. The CLI verb (`kmagent run-backfill`) is the same call
- * for an operator already at a terminal.
+ * given to any user. NOT reachable through `kmagent run-backfill`, which
+ * refuses this backfill id on an un-flipped workspace: that verb is generic
+ * over backfill ids and runs only the backfill half, so it would rebuild the
+ * old backfill-then-flip order this gesture exists to delete.
  */
 export const migratePropertiesToBlocksAction = ({repo}: {repo: Repo}): ActionConfig => ({
   id: 'migrate_properties_to_blocks',
@@ -334,20 +331,15 @@ export const migratePropertiesToBlocksAction = ({repo}: {repo: Repo}): ActionCon
       try {
         const result = await applyPropertyDefinitionSynthesis(repo, plan)
         synthesized = result.created
-        // Not about synthesis's OWN writes: the definitions transaction is
-        // `skipUndo`, and the Properties-page bootstrap above it is a no-op on
-        // every reachable path (`kernel:properties` is a `systemPagesFacet`
-        // entry, so `ensureSystemPages` has already created the page before the
-        // palette this gesture is invoked from exists).
-        //
-        // It is about the entries ALREADY on the stack. A key with no
+        // About the entries ALREADY on the stack, not synthesis's own writes
+        // (its transaction is `skipUndo`, and its Properties-page bootstrap is
+        // a no-op — `kernel:properties` is a `systemPagesFacet` entry, so the
+        // page exists before this gesture can be invoked). A key with no
         // definition was a key nothing materialized, so once one is MINTED a
         // replayed pre-synthesis snapshot writes a cell for a key that now has
-        // children — undo skips same-tx processors (`isReplay`), so nothing
-        // reconciles them. Minting is what makes those entries unsafe, which is
-        // why `created` and not "did this run at all" is the trigger: a run that
-        // converged changed nothing, and taking the user's history for that
-        // would be a cost with no hazard behind it.
+        // children. Hence `created`, not "did this run": a run that only
+        // converged changed nothing, and clearing then costs the user history
+        // for no hazard.
         if (synthesized > 0) {
           repo.undoManagerFor(workspaceId).clear()
           undoCleared = true
@@ -381,15 +373,13 @@ export const migratePropertiesToBlocksAction = ({repo}: {repo: Repo}): ActionCon
       // Assumes no workspace has run an earlier build's pass, so none holds
       // stale property machinery. Owner's call not to carry a check for a state
       // that cannot exist.
-      // The LAST check before the one-way half, and the second of exactly two —
-      // NOT a rule applied at every await. Each guards a step whose cost the
-      // user cannot take back: the post-dialog one because a confirmation is a
-      // user-length pause, this one because the flip is fleet-wide and
-      // irreversible and the operator should be watching it land. Synthesis
-      // deliberately has no such check: it writes dormant blocks derived from,
-      // and scoped to, the workspace named here, which is the workspace the
-      // user consented for — navigating away does not withdraw that, and the
-      // data layer has no business reading navigation state to find out.
+      // The second of exactly TWO active-workspace checks, not a rule applied
+      // at every await. Each guards a step the user cannot take back: the
+      // post-dialog one because a confirmation is a user-length pause, this one
+      // because the flip is fleet-wide and irreversible. Synthesis deliberately
+      // has neither — it writes dormant blocks scoped to the workspace named in
+      // its own argument, so navigating away withdraws nothing. Do not add a
+      // third.
       if (repo.activeWorkspaceId !== workspaceId) {
         banner.fail('Stopped before switching this workspace over: a different workspace ' +
           'is open now. Nothing was switched.' + undoNote(undoCleared))
@@ -432,7 +422,7 @@ export const migratePropertiesToBlocksAction = ({repo}: {repo: Repo}): ActionCon
         // nothing happened.
         banner.fail(`${FLIP_LANDED} This device has not received the workspace row yet, ` +
           'so the migration could not run here — run this again once sync catches up.' +
-          ' Undo history for this workspace was cleared.')
+          undoNote(undoCleared))
         return
       }
     }

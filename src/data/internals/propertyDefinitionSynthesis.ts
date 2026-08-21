@@ -7,31 +7,28 @@
  * unification's cutover, a dormant dynamic extension, a raw bag writer — is
  * the one class of property data a flipped workspace cannot make
  * child-backed: `materializePropertyChildrenForExistingRow` resolves the name,
- * gets nothing, and skips the cell (correctly; inventing a definition there
- * would be the migration making up data). Left alone such a key rides the
- * cell forever, which is what the §11 column drop cannot allow.
+ * gets nothing, and correctly skips the cell rather than inventing data. Left
+ * alone the key rides the cell forever, which the §11 column drop can't allow.
  *
  * So the minting happens HERE instead, as an explicit operator step before
  * the flip — where it can refuse the keys it must not mint for, report the
  * ones it fudged, and be looked at before anything irreversible happens.
  *
  * ORDER MATTERS, and it is the operator's to get right: if an EXTENSION owns a
- * key, install/enable it first so its seed materializes the definition. Doing it
- * the other way round breaks in two different ways depending on what the owner
- * uses, and only the first is about rival definitions:
+ * key, install/enable it first so its seed materializes the definition — for a
+ * SEED owner. Doing it the other way round leaves two definitions in the
+ * winner machinery, with field rows stranded on the loser's fieldId.
  *
- *  - a SEED owner ends up with two definitions in the winner machinery, and
- *    field rows stranded on the loser's fieldId;
- *  - a `defineProperty` owner (a plain schema, no definition block — one of the
- *    exact shapes that produces an orphan key in the first place) starts
- *    THROWING. `allowUnregisteredPlainSchemas` admits its writes while nothing
- *    claims the name; once a definition exists, `resolveBoundary` finds a winner
- *    that is not the caller's schema and every write fails `shadowed`. Measured,
- *    not theorised. AND ENABLING IT FIRST DOES NOT HELP: `resolveName` sees only
- *    definition blocks and seeds, so a live plain schema is invisible here and
- *    the key stays a candidate either way. There is no registry of plain-schema
- *    owners to consult — that is what makes them plain. The gap is tracked
- *    separately; the instruction above is honest only for SEED owners.
+ * A `defineProperty` owner (a plain schema with no definition block — one of
+ * the exact shapes that produces an orphan key) is different: `allowUnregisteredPlainSchemas`
+ * admits its writes while nothing claims the name, but once a definition
+ * exists `resolveBoundary` finds a winner that isn't the caller's schema and
+ * every write starts failing `shadowed`. Enabling it first does NOT help here:
+ * `resolveName` sees only definition blocks and seeds, so a live plain schema
+ * stays invisible and the key stays a candidate either way — there is no
+ * registry of plain-schema owners to consult, that being what makes them
+ * plain. The gap is tracked separately; the ordering advice above is honest
+ * only for SEED owners.
  *
  * `audit-properties` names the owner where it can.
  */
@@ -43,7 +40,7 @@ import {
 import { PROPERTY_SCHEMA_TYPE } from '@/data/blockTypes'
 import { classifyOccupant, derivedBlockId } from '@/data/derivedIds'
 import { kernelValuePresetCoresById } from '@/data/kernelValuePresetCores'
-import { orderKeyForInsert } from '@/data/mutators'
+import { keyAtEnd } from '@/data/orderKey'
 import { parsePropertyDefinitionMetadata } from '@/data/propertyDefinitionMetadata'
 import {
   presetConfigProp,
@@ -53,6 +50,7 @@ import {
   propertyNameProp,
 } from '@/data/properties'
 import { getOrCreatePropertiesPage, propertiesPageBlockId } from '@/data/propertiesPage'
+import { peekRowProperty } from '@/data/rowProperty'
 import { isGrammarShapedLabel } from '@/data/referenceBlock'
 import type { PropertyDefinitionRegistrySnapshot } from '@/data/propertyDefinitionRegistry'
 import type { Repo } from '@/data/repo'
@@ -95,7 +93,7 @@ export const synthesizedPropertyDefinitionBlockId = (
 
 /** The presets synthesis will pick — chosen because each round-trips a stored
  *  value unchanged through `encodedValueToContent` → `contentToEncodedValue`;
- *  see {@link inferPresetId} for why that is the selection criterion.
+ *  see {@link provePresetId} for why that is the selection criterion.
  *
  *  One exception, tracked in #688 and not this module's to fix: a `string`
  *  value that is itself field-form content round-trips to nothing. Synthesis
@@ -143,14 +141,12 @@ export const PROVE_DISTINCT_VALUE_LIMIT = 10_000
  * invisible to the rest of the app, which reads the same cells through the same
  * boundary. Measured: a stored `9007199254740993` arrives from both `json_each`
  * and `json_extract` as `9007199254740992`, so no reader can tell the two
- * apart, and only a raw `CAST(… AS TEXT)` recovers the digits. Reproducing that
- * distinction here would mean parsing numeric tokens out of the raw JSON text,
- * to refuse a key over a difference nothing in this app can observe. Accepted
- * deliberately, tracked as #712. Do not add a fourth value-shape special case
- * without first asking which side of this line it falls on: `Infinity` and
- * nested `Infinity` are on the visible side and ARE rejected, `-0` is visible
- * but semantically identical and is accepted, and precision already lost at
- * parse time is not a fact about this module at all.
+ * apart. Reproducing that distinction here would mean parsing numeric tokens
+ * out of the raw JSON text, to refuse a key over a difference nothing in this
+ * app can observe. Accepted deliberately, tracked as #712. Do not add a fourth
+ * value-shape special case without checking which side of this line it falls
+ * on — see `containsNonFinite` and its `-0` note below for where that line
+ * runs today.
  */
 export const provePresetId = (
   values: readonly unknown[],
@@ -189,15 +185,13 @@ const usablePresets = (repo: Repo): SynthesizedPresetId[] =>
 
 /** Is there a non-finite number ANYWHERE in this value?
  *
- *  The proof's own blind spot, so it is asked before the proof runs.
- *  `jsonValuesEqual` compares canonical JSON, in which `Infinity` and `null`
- *  are both "null" — so a value carrying one certifies a round trip that in
- *  fact replaces it with null, the comparison agreeing with itself. `1e400`
- *  parses to `Infinity` at every boundary that reaches us, SQLite's and
- *  `JSON.parse`'s alike, and no codec here carries one.
- *
- *  Recursive because nesting is not a special case of the same bug, it IS the
- *  same bug: `{"n": 1e400}` re-encodes as `{"n": null}` and compares equal.
+ *  The proof's own blind spot, asked before the proof runs. `jsonValuesEqual`
+ *  compares canonical JSON, where `Infinity` and `null` both read as "null" —
+ *  so a value carrying one certifies a round trip that actually replaced it
+ *  with null. `1e400` parses to `Infinity` at every boundary that reaches us
+ *  (SQLite's and `JSON.parse`'s alike), and no codec here carries one.
+ *  Recursive because nesting is the same bug, not a special case of it:
+ *  `{"n": 1e400}` re-encodes as `{"n": null}` and compares equal too.
  *
  *  `-0` is deliberately NOT rejected, though it round trips to `0` by the same
  *  mechanism: the two are `===`, render identically, and no property means one
@@ -264,18 +258,18 @@ export interface PropertyDefinitionSynthesisPlan {
 /**
  * Why this WORKSPACE cannot be synthesized into, or null.
  *
- * E2EE, and about the ID rather than the content: block ids sync in PLAINTEXT,
- * so `uuidv5("<workspaceId>:<key>")` under a namespace constant in this repo
- * lets a server confirm a guessed private property name by recomputing the
- * hash. §8's answer is a namespace derived from workspace key material.
+ * E2EE, about the ID not the content: block ids sync in PLAINTEXT, so
+ * `uuidv5("<workspaceId>:<key>")` under a namespace constant here lets a
+ * server confirm a guessed private property name by recomputing the hash.
+ * §8's answer is a namespace derived from workspace key material.
  *
  * Two rules that look like belt-and-braces and are not:
- *  - ASK THE MODE PIN, never `workspaces.encryption_mode`. That column is the
- *    server's; `modePin.ts` exists so it cannot silently downgrade a pinned
- *    workspace, and it is `NOT NULL DEFAULT 'none'` locally, so an upgrading
- *    device reads a genuinely encrypted workspace as plaintext.
- *  - ALLOWLIST, not denylist: a missing pin, an unknown mode and an absent row
- *    must each refuse. Costs nothing real — `workspaceAccess.ts` pins every
+ *  - ASK THE MODE PIN, never `workspaces.encryption_mode` — that column is the
+ *    server's, is `NOT NULL DEFAULT 'none'` locally, and `modePin.ts` exists so
+ *    it can't silently downgrade a pinned workspace (an upgrading device would
+ *    else read a genuinely encrypted one as plaintext).
+ *  - ALLOWLIST, not denylist: a missing pin, unknown mode, or absent row must
+ *    each refuse. Costs nothing real — `workspaceAccess.ts` pins every
  *    workspace at first encounter.
  */
 export const propertySynthesisWorkspaceRefusal = async (
@@ -306,34 +300,28 @@ export const propertySynthesisWorkspaceRefusal = async (
  *  `audit-properties` marks it `blocksFlip` — three surfaces that must never
  *  disagree about which keys are hopeless.
  *
- *  DELIBERATELY NOT `propertySchemaNameRejection`, though two of its three
- *  rules are repeated below. That function judges a name a human is CHOOSING,
- *  and can send them back to pick another; a cell key is a fact already in the
- *  data, and the only thing refusing it achieves is a workspace that can never
- *  satisfy the flip gate. So its `isRoundTrippableReferenceLabel` rule is left
- *  out on purpose. Measured, and worse than the `]]` it advertises: that rule
- *  also rejects any leading or trailing whitespace (`" padded "` fails it, and
- *  is told to "rename without \"]]\""), which would make a padded import key a
- *  permanent blocker. What it buys is bounded — the name cannot be written as a
- *  clean `[[name]]` in the surfaces that address a definition by name, while
- *  field rows themselves have been id-addressed since §7.
- *
- *  Nor can this simply CALL it and mint the trimmed name instead: `addSchema`
+ *  DELIBERATELY NOT `propertySchemaNameRejection`: it judges a name a human is
+ *  CHOOSING and can send back for another pick, but a cell key is already in
+ *  the data — refusing it only makes the workspace permanently unable to
+ *  flip. Its `isRoundTrippableReferenceLabel` rule is dropped for that reason:
+ *  it also rejects any padding (`" padded "` fails it, told to "rename without
+ *  \"]]\""), which would turn a padded import key into a permanent blocker for
+ *  a benefit that's already bounded (field rows have been id-addressed since
+ *  §7). Minting the trimmed name instead doesn't fix it either — `addSchema`
  *  trims, so it would define `"padded"` and leave the cell key `" padded "`
- *  still definition-less — the same unsatisfiable state by a longer route. */
+ *  still definition-less, the same unsatisfiable state by a longer route. */
 export const keyCannotBeDefined = (key: string): string | null => {
   if (key === '') {
     return 'the empty property key: a definition with no name is unusable ' +
       '(`parsePropertyDefinitionMetadata` rejects it), so no definition can ever back it'
   }
-  // The key as SQLite handed it back is not the key the data holds. A property
-  // key containing a lone UTF-16 surrogate is emitted by `json_each` as
-  // ill-formed UTF-8 and arrives here as replacement characters (measured:
-  // `"\ud800"` comes back as three U+FFFD). Minting for the mangled spelling
-  // would leave the real key orphaned while the flip gate counted it covered —
-  // so the safe reading is that any key carrying U+FFFD is one this pass cannot
-  // identify. A key that genuinely contains U+FFFD is itself corruption, and
-  // refusing it is the same right answer.
+  // The key as SQLite handed it back may not be the key the data holds: a lone
+  // UTF-16 surrogate is emitted by `json_each` as ill-formed UTF-8 and arrives
+  // here as replacement characters (measured: `"\ud800"` → three U+FFFD).
+  // Minting for the mangled spelling would leave the real key orphaned while
+  // the flip gate counted it covered, so any key carrying U+FFFD is one this
+  // pass cannot identify — and a key that genuinely contains U+FFFD is itself
+  // corruption, so refusing it either way is the right answer.
   if (key.includes('\uFFFD')) {
     return 'this key contains a Unicode replacement character, so what the database ' +
       'returned may not be the key the data actually holds (a lone surrogate reads back ' +
@@ -462,12 +450,11 @@ export const planPropertyDefinitionSynthesis = async (
   for (const entry of mintable) {
     const values = valuesByKey.get(entry.property)
     if (values === undefined) {
-      // Too many distinct values to read, so nothing was PROVEN about this key.
-      // `raw-json` used to be handed out here as "exact for every JSON value",
-      // which is both untrue (it cannot express a non-finite number) and
-      // unfalsifiable, since the values were never looked at. An unproven key
-      // is a blocker like any other; declaring the property by hand is the
-      // recovery, and it is the right one for a key someone clearly uses.
+      // Too many distinct values to read, so nothing was PROVEN about this
+      // key — and an unproven key is a blocker like any other. `raw-json` is
+      // not the answer here: it cannot express a non-finite number, and on this
+      // path the values were never looked at, so the claim would be
+      // unfalsifiable too. Declaring the property by hand is the recovery.
       blockers.push({key: entry.property, cells: entry.cells,
                      reason: `holds more than ${PROVE_DISTINCT_VALUE_LIMIT.toLocaleString()} `
                        + 'distinct values, too many to check one at a time — create a '
@@ -526,12 +513,11 @@ export const flipBlockedBySynthesis = (
       `workspace can never finish the migration while they exist: ${named}. Delete or ` +
       'remap them, then run this again.'
   }
-  // Whether or not there is anything to mint. The refusal means this device
-  // cannot vouch that a flip here is safe — and for the case it exists for,
-  // e2ee, the server trigger refuses every flip outright, so proceeding buys a
-  // confirmation dialog and a PATCH that can only fail. An earlier revision
-  // gated this on `candidates.length`, which conflated "is there something to
-  // synthesize" with "may this workspace flip at all".
+  // Whether or not there is anything to mint: "is there something to
+  // synthesize" and "may this workspace flip at all" are different questions.
+  // The refusal means this device cannot vouch that a flip here is safe — and
+  // for the case it exists for, e2ee, the server trigger refuses every flip
+  // outright, so proceeding buys a dialog and a PATCH that can only fail.
   if (plan.refusal !== null) {
     return plan.candidates.length > 0
       ? `${plan.candidates.length} property key(s) have no definition, and ${plan.refusal}.`
@@ -568,20 +554,17 @@ export interface SynthesisResult {
 }
 
 /** The kernel preset core a live definition block stores, when it is one this
- *  pass can reproduce faithfully. Undefined for anything else, because the
- *  point of reading it is to publish the block's OWN behavior rather than a
- *  guess — and a guess is all we could offer for the rest.
+ *  pass can reproduce faithfully — undefined otherwise, since the point of
+ *  reading it is to publish the block's OWN behavior, not a guess.
  *
- *  CONFIG-LESS ONLY, and that is the load-bearing clause: {@link schemaFor}
- *  builds with `build(undefined)`, which for `enum`/`strict-enum` dereferences
- *  `config.options` and THROWS — rolling back every other key's definition in
- *  the same transaction — and for `ref`/`refList` silently drops the stored
- *  target types. A definition on one of those is a definition this pass cannot
- *  republish; skipping it costs a re-run once the projector catches up, which
- *  is the cheap half of the trade. An id an extension has REPLACED is the same
- *  situation for a different reason — see {@link isKernelPreset}. */
+ *  CONFIG-LESS ONLY — the load-bearing clause: {@link schemaFor} builds with
+ *  `build(undefined)`, which THROWS for `enum`/`strict-enum` (dereferences
+ *  `config.options`, rolling back every other key's definition in the same
+ *  transaction) and silently drops target types for `ref`/`refList`. Skipping
+ *  such a definition costs only a re-run once the projector catches up. An id
+ *  an extension has REPLACED is the same situation — see {@link isKernelPreset}. */
 const storedPresetCore = (block: BlockData, repo: Repo): AnyValuePresetCore | undefined => {
-  const raw = block.properties[presetIdProp.name]
+  const raw = peekRowProperty(block, presetIdProp)
   if (typeof raw !== 'string') return undefined
   const core = (kernelValuePresetCoresById as Record<string, AnyValuePresetCore>)[raw]
   if (core === undefined || core.configCodec !== undefined) return undefined
@@ -612,11 +595,11 @@ const storedDefaultValue = (block: BlockData, preset: AnyValuePresetCore): unkno
  *  `buildPropertyDefinitionRegistry` computes it: a valid seed row answers to
  *  the seed's DECLARED name, everyone else to their stored one.
  *
- *  Read from the ROW rather than from the registry, because the caller is
- *  checking a fact the registry may be stale about — but through the same rule,
- *  or a seed row whose stored name has drifted would read as serving a name
- *  nothing uses. Undefined when the row is no longer a usable definition at all
- *  (deleted, un-typed, metadata that stopped parsing).
+ *  Read from the ROW, not the registry — the caller is checking a fact the
+ *  registry may be stale about — but through the SAME rule, or a seed row
+ *  whose stored name has drifted would read as serving a name nothing uses.
+ *  Undefined when the row is no longer a usable definition at all (deleted,
+ *  un-typed, metadata that stopped parsing).
  *
  *  The seed branch is UNPINNED, for the same reason as the rival filter's:
  *  seed names are non-renamable through the API, so drift arrives only by raw
@@ -648,7 +631,7 @@ const effectiveDefinitionName = (
  *  still OCCUPIES its name (so it is a rival) but does not SERVE it (so it is
  *  not convergence). */
 const providesSchema = (block: BlockData, repo: Repo): boolean => {
-  const presetId = block.properties[presetIdProp.name]
+  const presetId = peekRowProperty(block, presetIdProp)
   return typeof presetId === 'string' && repo.valuePresetCores.has(presetId)
 }
 
@@ -657,14 +640,10 @@ const providesSchema = (block: BlockData, repo: Repo): boolean => {
  *
  *  Without this, `classifyOccupant` answers a question one step too shallow:
  *  the deterministic id is "ours and live" whatever the block has since
- *  BECOME. Measured consequences of the shallower check: a synthesized
- *  definition the user renamed was reported identically to a genuinely
- *  converged one, both invisibly.
+ *  BECOME — so a synthesized definition the user had renamed read as converged.
  *
- *  Note this predicate covers the LIVE row only — `classifyOccupant` ranks
- *  `tombstoned` above `adoptable` deliberately ("`adoptable` runs last, so it
- *  is never asked about a tombstone"), so the restore path checks the name
- *  itself. */
+ *  LIVE rows only. `classifyOccupant` ranks `tombstoned` above `adoptable`, so
+ *  this is never asked about a tombstone. */
 const servesAsDefinitionFor = (key: string) => (block: BlockData): boolean =>
   parsePropertyDefinitionMetadata(block)?.name === key
 
@@ -672,15 +651,11 @@ const servesAsDefinitionFor = (key: string) => (block: BlockData): boolean =>
  * Mint the planned definitions. One transaction, so the workspace either has
  * every definition this plan promised or none of them.
  *
- * THE PLAN IS A SNAPSHOT AND THIS IS THE WRITE, so every decision that depends
- * on live state is taken again HERE, inside the tx: whether the key is still
- * orphaned, and whether the deterministic id is still ours to write through.
- * Those two are one question — "does this key have a definition?" — and asking
- * them separately is what let an earlier revision mint a rival for a name that
- * had gained a definition while the confirmation dialog was open. That is not a
- * corner case: the runbook this migration prints tells the operator to enable a
- * key's owning extension FIRST, which is exactly the write that lands in that
- * window.
+ * THE PLAN IS A SNAPSHOT AND THIS IS THE WRITE, so "is the key still orphaned"
+ * and "is the deterministic id still ours to write through" are re-asked HERE,
+ * inside the tx, as one question — asking them separately mints a rival for a
+ * name that gained a definition while the dialog was open. Not a corner case:
+ * see the file header's ORDER MATTERS note for exactly how that window opens.
  *
  * Deliberately says nothing about `plan.blockers` — {@link flipBlockedBySynthesis}
  * owns that decision.
@@ -697,12 +672,11 @@ export const applyPropertyDefinitionSynthesis = async (
   requirePropertyRegistryFor(repo, workspaceId)
   const skipped: SynthesisResult['skipped'] = []
   if (plan.candidates.length === 0) return {created: 0, converged: 0, skipped}
-  // Defence in depth, and labelled as such: `repo.tx` re-reads `isReadOnly` at
+  // Defence in depth, labelled as such: `repo.tx` re-reads `isReadOnly` at
   // commit time and rejects `ChangeScope.BlockDefault` there
-  // (`commitPipeline.ts`), so a role change mid-flight is already caught. This
-  // only turns it into a message that names the workspace instead of a
-  // scope-rejection from the engine. Below the empty-plan return so an empty
-  // plan is a no-op rather than a throw.
+  // (`commitPipeline.ts`) regardless — this only turns that into a message
+  // naming the workspace. Below the empty-plan return, so an empty plan is
+  // a no-op rather than a throw.
   if (repo.isReadOnly) {
     throw new Error('[propertyDefinitionSynthesis] this workspace is read-only')
   }
@@ -732,13 +706,16 @@ export const applyPropertyDefinitionSynthesis = async (
   let created = 0
   let converged = 0
   const registrations: Array<{schema: AnyPropertySchema; blockId: string}> = []
+  let lastOrderKey: string | null = null
 
   await repo.tx(async tx => {
     // Taken INSIDE the tx, once: the registry is a lagging projection of the
     // definition blocks, and the plan's copy is a dialog older still.
     const registry = requirePropertyRegistryFor(repo, workspaceId)
     const resolver = repo.propertySchemaResolverFor(workspaceId)
-    // One read for the whole batch, inside the lock — see the mint site below.
+    // Read once, inside the lock, and chained forward per candidate rather
+    // than re-derived — see the mint site below for why.
+    lastOrderKey = (await tx.childrenOf(parentId, workspaceId)).at(-1)?.orderKey ?? null
     const liveDefinitionNames = await tx.livePropertyDefinitionNames(
       workspaceId, plan.candidates.map(candidate => candidate.key),
     )
@@ -752,20 +729,14 @@ export const applyPropertyDefinitionSynthesis = async (
       const preset = kernelValuePresetCoresById[candidate.presetId]
       const id = synthesizedPropertyDefinitionBlockId(workspaceId, candidate.key)
 
-      // Has the key gained a definition since the plan was taken? Whose it is
-      // does not matter — the invariant is "this key resolves a definition",
-      // and minting a second one for a name that already has one is the rival
-      // this whole re-check exists to prevent. Not answerable from
-      // `tx.get(id)`: OUR id is vacant no matter who else claimed the name.
-      // Converged only if the definition the resolver SELECTED still answers to
-      // this key IN THE DATABASE. The resolver is a projection, so everything
-      // it says about that row may be one tick out of date — the row may have
-      // been deleted, renamed, un-typed, or had its metadata broken since. A
-      // tombstone check alone covers only the first of those.
-      //
-      // Located by FIELD ID, not by name, so a seed-backed row whose stored
-      // name has drifted is still found; judged by EFFECTIVE name, so that same
-      // row is still recognised as serving the key it actually resolves.
+      // Has the key gained a definition since the plan was taken (whoever's)?
+      // Not answerable from `tx.get(id)`: OUR id is vacant no matter who else
+      // claimed the name. So resolve by NAME, then re-verify the resolver's
+      // answer against the row directly — the resolver is a projection and may
+      // be one tick out of date (deleted, renamed, un-typed, or broken
+      // metadata since). Located by FIELD ID and judged by EFFECTIVE name so a
+      // seed-backed row whose stored name has drifted is still found and still
+      // recognised as serving this key.
       const resolution = resolver.resolve(candidate.key)
       if (resolution.status === 'resolved') {
         const selected = await tx.get(resolution.schema.fieldId)
@@ -776,14 +747,13 @@ export const applyPropertyDefinitionSynthesis = async (
           continue
         }
       }
-      // DEFENCE IN DEPTH — no test pins it, because the resolve check above
-      // catches every seed whose own definition is healthy. What is left is the
-      // narrow case where a kept seed HOLDS the name but publishes no schema
-      // (its preset comes from an extension that is not loaded here — the
-      // situation `audit-properties` calls out as the common one): the name
-      // then resolves nothing, while `buildPropertyDefinitionRegistry` still
-      // excludes any user definition that collides with it. Minting there
-      // reports success over a key that can never resolve.
+      // DEFENCE IN DEPTH — no test pins it; the resolve check above already
+      // catches every seed whose own definition is healthy. What's left is a
+      // kept seed that HOLDS the name but publishes no schema (its preset comes
+      // from an extension not loaded here, per `audit-properties`'s common
+      // case): the name resolves nothing, yet `buildPropertyDefinitionRegistry`
+      // still excludes any user definition colliding with it — minting there
+      // would report success over a key that can never resolve.
       if (registry.seedsByName.has(candidate.key)) {
         skipped.push({key: candidate.key,
                       reason: 'a code seed declares this name, so a user definition for it can '
@@ -791,38 +761,34 @@ export const applyPropertyDefinitionSynthesis = async (
         continue
       }
 
-      // Asked of the DATABASE, because the registry lags a sync-applied
-      // definition until the projector ticks (see `Tx.livePropertyDefinitionNames`).
-      // Our OWN id is excluded, so this stays the "does anything else already
-      // hold this name?" question and the occupancy switch below stays the
-      // separate "is this id ours to write through?" one. It also catches a
-      // definition that PARSED but supplies no behavior: absent from `schemas`,
-      // so the resolver said nothing, yet real in `blocks`.
+      // Asked of the DATABASE (the registry lags a sync-applied definition
+      // until the projector ticks — see `Tx.livePropertyDefinitionNames`), with
+      // our OWN id excluded so this stays "does anything else hold this name?"
+      // separate from the occupancy switch's "is this id ours?". Also catches a
+      // definition that PARSED but supplies no behavior — absent from
+      // `schemas`, yet real in `blocks`.
       //
       // Skipping here BLOCKS the flip, where the plan-time equivalent
       // (`brokenDefinitions`) deliberately does not: a broken definition the
-      // operator saw counted in the dialog is one they consented to migrate
-      // around; one that arrived after they confirmed is not.
+      // operator saw and consented to in the dialog is different from one that
+      // arrived after they confirmed.
       //
-      // The seed rewrite is why the stored name is not the last word, and that
-      // branch is UNPINNED. `buildPropertyDefinitionRegistry` gives a seed-backed
-      // row the seed's DECLARED name once the stored one has drifted, so a
-      // healthy seed row can sit in `blocks` under a stale spelling this would
-      // otherwise read as a rival for — blocking the flip forever. Seed names
-      // are non-renamable through the API, so the drift arrives only by raw
-      // write or sync, and neither reaches the test harness's projector.
+      // `effective` is the seed-rewrite rule from `effectiveDefinitionName`
+      // above — without it a healthy seed row sitting under a drifted stored
+      // name would read as a rival here and block the flip forever. UNPINNED
+      // for the same reason as there: the drift path (raw write or sync) never
+      // reaches the test harness's projector.
       const rivals: string[] = []
       for (const other of liveDefinitionNames.get(candidate.key) ?? []) {
         if (other === id) continue
         const row = await tx.get(other)
         if (row === null) continue
-        // The query already established that this LIVE, TYPED row stores our
-        // candidate's name, so the row is a rival unless the seed rewrite moves
-        // it off that name — and only a KNOWN other name does that. An
-        // unparseable row keeps the name it stores; ignoring it because its
-        // metadata will not parse mints a second definition beside it, and
-        // repairing the older row later can then make it win on creation time
-        // and strand every field already backfilled onto the synthesized one.
+        // Established LIVE and TYPED, storing our candidate's name — a rival
+        // unless the seed rewrite moves it off that name (only a KNOWN other
+        // name does). An unparseable row keeps its stored name: ignoring it
+        // mints a second definition beside it, and a later repair of the older
+        // row can then win on creation time and strand fields already
+        // backfilled onto the synthesized one.
         const effective = effectiveDefinitionName(row, registry)
         if (effective === undefined || effective === candidate.key) rivals.push(other)
       }
@@ -850,19 +816,17 @@ export const applyPropertyDefinitionSynthesis = async (
         continue
       }
       if (occupancy.verdict === 'ours') {
-        // The definition block is already here and carries this key's name, yet
-        // the name did not resolve above — the registry is a projection and has
-        // not caught up (another device's row just arrived, or an earlier run of
-        // this gesture). Nothing to write; publishing is the whole fix, and the
-        // caller's next step reads the registry rather than the database.
+        // Already here and carries this key's name, yet didn't resolve above —
+        // the registry is a projection that hasn't caught up (another device's
+        // row just arrived, or an earlier run of this gesture). Nothing to
+        // write; publishing is the whole fix.
         //
-        // Published from the BLOCK's preset, never the plan's inferred one. The
-        // block is live and may have been retyped deliberately; publishing the
-        // plan's guess would have the backfill read historical values under one
-        // codec and the projector replace it with another moments later. If its
-        // preset is not one this pass can reproduce, skip rather than guess —
-        // the flip then refuses and a re-run picks it up once the projector has
-        // caught up.
+        // Published from the BLOCK's own preset, never the plan's inferred one:
+        // the block may have been retyped deliberately, and publishing the
+        // plan's guess would have the backfill read history under one codec
+        // while the projector replaces it with another moments later. If the
+        // stored preset isn't one this pass can reproduce, skip rather than
+        // guess — the flip refuses and a re-run picks it up once caught up.
         const storedPreset = storedPresetCore(occupancy.block, repo)
         const storedMetadata = parsePropertyDefinitionMetadata(occupancy.block)
         if (!storedPreset || !storedMetadata) {
@@ -884,24 +848,20 @@ export const applyPropertyDefinitionSynthesis = async (
         continue
       }
       if (occupancy.verdict === 'tombstoned') {
-        // Deliberately NOT restored. Resurrecting a definition the user deleted
-        // silently undoes their deletion — and doing it faithfully turned out to
-        // mean re-asserting every field the metadata parser needs, checking the
-        // name the tombstone still carries, and restoring the definition's own
-        // property children: three mechanisms and a filed bug, all guarding one
-        // rare operator action whose manual answer is obvious.
+        // Deliberately NOT restored: a deletion is an instruction, and
+        // resurrecting it silently undoes what the user did. (Why the faithful
+        // restore was abandoned rather than fixed is in the migration doc.)
         skipped.push({key: candidate.key,
                       reason: `a definition for this key was deleted (block ${id}); undo that `
                         + 'deletion, or delete the key, then run this again'})
         continue
       }
-      // Asked AGAIN here, of the runtime, because the plan's answer is a
-      // pre-dialog one: `usablePresets` filtered this ladder before a
-      // user-length pause during which an extension can load — enabled by the
-      // operator on the dialog's own advice, or arriving over sync — and
+      // Asked AGAIN, of the runtime: `usablePresets` filtered this ladder
+      // pre-dialog, and a user-length pause is enough for an extension to load
+      // (the dialog itself may have told the operator to enable one) and
       // replace the core behind this id. Minting anyway persists an id whose
       // codec the projector will rebuild from the extension while the backfill
-      // encodes every historical value with the kernel one.
+      // encodes history with the kernel one.
       //
       // POSITION IS LOAD-BEARING: below the converged and occupancy checks, not
       // above them. Convergence does not depend on this pass's chosen preset at
@@ -914,16 +874,21 @@ export const applyPropertyDefinitionSynthesis = async (
                         + 'values against what that type does now'})
         continue
       }
-      // in `src/` — `createChild` cannot pass `systemMint`
-      // (`mutators.ts`), and without it two devices minting this id in the same
-      // millisecond write equal nonzero stamps from different writes and the
-      // loser strands. The follow-up shaping writes hold `updated_at` at 0, so
-      // the whole mint uploads as one pristine default.
+      // Raw `tx.createOrGet`, not the `createChild` mutator, which can't pass
+      // `systemMint` (`mutators.ts`): without it, two devices minting this id
+      // in the same millisecond write equal nonzero stamps and the loser
+      // strands. The follow-up shaping writes hold `updated_at` at 0, so the
+      // mint uploads as one pristine default. Chained locally, not re-derived
+      // per candidate: the parent (the Properties page) holds EVERY definition
+      // in the workspace, and `orderKeyForInsert` re-reads and re-parses all
+      // of its children per call — minting N keys would cost N scans of a
+      // list this pass is itself growing.
+      lastOrderKey = keyAtEnd(lastOrderKey)
       await tx.createOrGet({
         id,
         workspaceId,
         parentId,
-        orderKey: await orderKeyForInsert(tx, parentId, workspaceId, {kind: 'last'}),
+        orderKey: lastOrderKey,
         // Content stays EMPTY, matching `addSchema` — a definition's name lives
         // in `property:name`, never in its content; only code SEEDS mirror the
         // two, and a synthesized definition is user-origin.
@@ -949,20 +914,32 @@ export const applyPropertyDefinitionSynthesis = async (
   }, {
     scope: ChangeScope.BlockDefault,
     description: 'synthesize property definitions',
-    // The gesture clears the workspace's undo stack at the flip, and on the
-    // already-flipped path the backfill clears it on its first batch — but a
-    // run can end between the two (a peer holds the claim, the pass defers),
-    // leaving these as the only committed write with a live undo entry. A
-    // cmd-Z would then delete definitions whose keys are already migrating.
+    // The gesture clears the undo stack at the flip (or, already-flipped, the
+    // backfill clears it on its first batch) — but a run can end between the
+    // two (peer holds the claim, pass defers), leaving these as the only
+    // committed write with a live undo entry that cmd-Z would delete.
     skipUndo: true,
   })
 
-  // Publish synchronously, the same reason `addSchema` does: the caller's very
-  // next step is the backfill, which freezes ONE resolver for the whole
-  // multi-minute run. Waiting for the projector's subscription tick would let
-  // that pass skip every key this one just fixed and report success.
+  // Publish synchronously, same reason as `addSchema`: the caller's next step
+  // is the backfill, which freezes ONE resolver for the whole multi-minute
+  // run — waiting for the projector would let it skip every key just fixed.
+  //
+  // Caught and reported as a SKIP, not thrown: the transaction already
+  // committed, so throwing here would lose a durable outcome and tell the
+  // user nothing was migrated, when the flip-refusal path already exists for
+  // exactly "this key did not end up resolvable". Per registration, not
+  // around the loop, so one failure doesn't cost the others their publish.
   for (const {schema, blockId} of registrations) {
-    repo.userSchemas.appendUserSchema(schema, blockId, workspaceId)
+    try {
+      repo.userSchemas.appendUserSchema(schema, blockId, workspaceId)
+    } catch (err) {
+      console.error('[propertyDefinitionSynthesis] could not publish', schema.name, err)
+      skipped.push({key: schema.name,
+                    reason: `its definition block was written (${blockId}) but could not be `
+                      + 'registered on this device; run this again once the projector has '
+                      + 'caught up'})
+    }
   }
 
   return {created, converged, skipped}

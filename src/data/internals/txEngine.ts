@@ -86,6 +86,7 @@ import {
   type PropertySchemaResolver,
 } from './propertySchemaResolution'
 import { readIsChildBackedWorkspace } from '@/data/workspaceSchema'
+import { IS_OBJECT_BAG } from '@/data/internals/propertyKeyScan'
 import { PROPERTY_SCHEMA_TYPE } from '@/data/blockTypes'
 import { propertyNameProp } from '@/data/properties'
 import { keyAtStart } from '@/data/orderKey'
@@ -450,8 +451,7 @@ export class TxImpl implements Tx {
          FROM blocks b
          JOIN block_types t ON t.block_id = b.id AND t.workspace_id = b.workspace_id
         WHERE t.type = ? AND b.workspace_id = ? AND b.deleted = 0
-          AND json_valid(b.properties_json)
-          AND json_type(b.properties_json) = 'object'`,
+          AND ${IS_OBJECT_BAG}`,
       [propertyNameProp.name, PROPERTY_SCHEMA_TYPE, workspaceId],
     )
     const wanted = new Set(names)

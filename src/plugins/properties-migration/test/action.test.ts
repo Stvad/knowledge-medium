@@ -31,9 +31,6 @@ vi.mock('@/data/repoProvider', () => ({isRemoteSyncActive: () => remoteSyncActiv
 const planSynthesis = vi.fn()
 const applySynthesis = vi.fn()
 const flipBlocked = vi.fn<() => string | null>()
-/** `flipBlockedBySynthesis` is asked twice — before minting and again with the
- *  outcome — so tests that care about the difference count the calls. */
-let flipBlockedCalls = 0
 vi.mock('@/data/internals/propertyDefinitionSynthesis', () => ({
   planPropertyDefinitionSynthesis: () => planSynthesis(),
   applyPropertyDefinitionSynthesis: (...args: unknown[]) => applySynthesis(...args),
@@ -55,28 +52,29 @@ import { describeOutcome, migratePropertiesToBlocksAction } from '../action.ts'
 const clearUndo = vi.fn()
 const USER = 'user-1'
 
+const RAN = {outcome: 'ran', undoHistoryCleared: false} as OperatorBackfillResult
+
 const makeRepo = (
-  result: OperatorBackfillResult,
+  result: OperatorBackfillResult = RAN,
   {flipped = false, owner = USER}: {flipped?: boolean; owner?: string} = {},
 ) => {
   const runWorkspaceBackfillNow = vi.fn(async () => result)
   const getAll = vi.fn(async () => [{n: 7}])
+  const syncViewGap = vi.fn(async (): Promise<string | null> => null)
+  // Two readers of the `workspaces` row now — the flip state and the owner.
+  const getOptional = vi.fn(async (sql: string) => sql.includes('owner_user_id')
+    ? {owner_user_id: owner}
+    : {properties_migration: flipped ? 'children' : 'cell'})
   const repo = {
     activeWorkspaceId: 'ws-1',
     user: {id: USER},
-    db: {
-      getAll,
-      // Two readers of the `workspaces` row now — the flip state and the owner.
-      getOptional: async (sql: string) => sql.includes('owner_user_id')
-        ? {owner_user_id: owner}
-        : {properties_migration: flipped ? 'children' : 'cell'},
-    },
+    db: {getAll, getOptional},
     isReadOnly: false,
-    syncViewGap: async () => null,
+    syncViewGap,
     undoManagerFor: () => ({clear: clearUndo}),
     runWorkspaceBackfillNow,
   } as unknown as Repo
-  return {repo, runWorkspaceBackfillNow, getAll}
+  return {repo, runWorkspaceBackfillNow, getAll, syncViewGap, getOptional}
 }
 
 /** The dialog is a user-length pause; this is the seam for what happens during
@@ -114,6 +112,7 @@ afterEach(() => {
 // against unarmed mocks, which silently took the local-only branch.
 beforeEach(() => {
   openDialog.mockReset()
+  openDialog.mockResolvedValue(true)
   flipWorkspace.mockReset()
   flipWorkspace.mockResolvedValue({localApplied: true})
   remoteSyncActive.mockReset()
@@ -121,7 +120,6 @@ beforeEach(() => {
   planSynthesis.mockResolvedValue(plan())
   applySynthesis.mockResolvedValue({created: 0, converged: 0, skipped: []})
   flipBlocked.mockReturnValue(null)
-  flipBlockedCalls = 0
 })
 
 describe('migrate_properties_to_blocks action', () => {
@@ -129,9 +127,8 @@ describe('migrate_properties_to_blocks action', () => {
     // It has no duration and a stable id, so it outlives the problem it named:
     // without this the operator repairs the definitions, re-runs, and reads a
     // "cannot migrate" banner through a migration that is succeeding.
-    const {repo} = makeRepo({outcome: 'ran', undoHistoryCleared: false}, {flipped: true})
+    const {repo} = makeRepo(RAN, {flipped: true})
     flipBlocked.mockReturnValue('two keys can never be migrated')
-    openDialog.mockResolvedValue(true)
     await invoke(repo)
     // Read off the advisory rather than written down here, so the two cannot
     // drift onto different toasts and still pass.
@@ -150,10 +147,8 @@ describe('migrate_properties_to_blocks action', () => {
     // The banner is up by then and has no duration, and nothing else is
     // watching this await — a rejection would leave "Migrating properties to
     // blocks…" on screen forever over a pass that never started.
-    const {repo, runWorkspaceBackfillNow} = makeRepo({outcome: 'ran', undoHistoryCleared: false})
-    ;(repo as unknown as {syncViewGap: () => Promise<string | null>}).syncViewGap =
-      vi.fn().mockResolvedValueOnce(null).mockRejectedValueOnce(new Error('db is gone'))
-    openDialog.mockResolvedValue(true)
+    const {repo, runWorkspaceBackfillNow, syncViewGap} = makeRepo()
+    syncViewGap.mockResolvedValueOnce(null).mockRejectedValueOnce(new Error('db is gone'))
 
     await invoke(repo)
 
@@ -181,12 +176,8 @@ describe('migrate_properties_to_blocks action', () => {
     // No flip on this path, so nothing irreversible — but the candidate count is
     // an unbounded json_each walk on the UI thread and the dialog would ask for
     // consent to a run the runner is about to refuse.
-    openDialog.mockResolvedValue(true)
-    const {repo, runWorkspaceBackfillNow, getAll} = makeRepo(
-      {outcome: 'ran', undoHistoryCleared: false}, {flipped: true},
-    )
-    ;(repo as unknown as {syncViewGap: () => Promise<string | null>}).syncViewGap =
-      async () => 'synced rows are still draining into `blocks`'
+    const {repo, runWorkspaceBackfillNow, getAll, syncViewGap} = makeRepo(RAN, {flipped: true})
+    syncViewGap.mockResolvedValue('synced rows are still draining into `blocks`')
 
     await invoke(repo)
 
@@ -200,10 +191,9 @@ describe('migrate_properties_to_blocks action', () => {
     // the operator is reading it would otherwise be carried straight into the
     // irreversible write — the same reason the active-workspace check is taken
     // twice.
-    const {repo, runWorkspaceBackfillNow} = makeRepo({outcome: 'ran', undoHistoryCleared: false})
+    const {repo, runWorkspaceBackfillNow, syncViewGap} = makeRepo()
     openDialog.mockImplementation(async () => {
-      ;(repo as unknown as {syncViewGap: () => Promise<string | null>}).syncViewGap =
-        async () => 'synced rows are still draining into `blocks`'
+      syncViewGap.mockResolvedValue('synced rows are still draining into `blocks`')
       return true
     })
 
@@ -220,10 +210,8 @@ describe('migrate_properties_to_blocks action', () => {
     // own preconditions AFTER the flip means the irreversible half lands and the
     // reversible half then declines — on a connected device a staged sync view is
     // the EXPECTED ending, not a corner case.
-    openDialog.mockResolvedValue(true)
-    const {repo, runWorkspaceBackfillNow} = makeRepo({outcome: 'ran', undoHistoryCleared: false})
-    ;(repo as unknown as {syncViewGap: () => Promise<string | null>}).syncViewGap =
-      async () => 'synced rows are still draining into `blocks`'
+    const {repo, runWorkspaceBackfillNow, syncViewGap} = makeRepo()
+    syncViewGap.mockResolvedValue('synced rows are still draining into `blocks`')
 
     await invoke(repo)
 
@@ -239,8 +227,7 @@ describe('migrate_properties_to_blocks action', () => {
     // promised to make no Supabase request. Refuse before the dialog rather than
     // fail afterwards on a PostgREST string.
     remoteSyncActive.mockReturnValue(false)
-    openDialog.mockResolvedValue(true)
-    const {repo, runWorkspaceBackfillNow} = makeRepo({outcome: 'ran', undoHistoryCleared: false})
+    const {repo, runWorkspaceBackfillNow} = makeRepo()
 
     await invoke(repo)
 
@@ -253,9 +240,8 @@ describe('migrate_properties_to_blocks action', () => {
     // The refusal above is about the FLIP, which is a server write. The pass
     // itself is local, so a workspace already past the flip must stay migratable.
     remoteSyncActive.mockReturnValue(false)
-    openDialog.mockResolvedValue(true)
     const {repo, runWorkspaceBackfillNow} = makeRepo(
-      {outcome: 'ran', undoHistoryCleared: false}, {flipped: true},
+      RAN, {flipped: true},
     )
 
     await invoke(repo)
@@ -268,9 +254,8 @@ describe('migrate_properties_to_blocks action', () => {
     // legitimately absent. Continuing would run the pass against a workspace that
     // reads 'cell' locally and is in fact flipped — the RECONCILE branch, which
     // is the one thing create-only exists to prevent.
-    openDialog.mockResolvedValue(true)
     flipWorkspace.mockResolvedValue({localApplied: false})
-    const {repo, runWorkspaceBackfillNow} = makeRepo({outcome: 'ran', undoHistoryCleared: false})
+    const {repo, runWorkspaceBackfillNow} = makeRepo()
 
     await invoke(repo)
 
@@ -284,7 +269,6 @@ describe('migrate_properties_to_blocks action', () => {
   it('tells an operator whose flip landed and whose pass then deferred', async () => {
     // The wiring, not `describeOutcome` in isolation: the handler is what knows a
     // flip happened, and on a connected device deferring is the expected ending.
-    openDialog.mockResolvedValue(true)
     const {repo} = makeRepo({
       outcome: 'deferred', undoHistoryCleared: false, reason: 'this device is not caught up',
     })
@@ -303,7 +287,6 @@ describe('migrate_properties_to_blocks action', () => {
     // the truth. Every way the run can end after the flip WITHOUT writing a batch
     // (a peer holds the claim, the runner defers, nothing left to migrate) leaves
     // that window open if the clear waits for the pass.
-    openDialog.mockResolvedValue(true)
     const {repo} = makeRepo({outcome: 'held-by-peer', undoHistoryCleared: false})
 
     await invoke(repo)
@@ -316,8 +299,7 @@ describe('migrate_properties_to_blocks action', () => {
   it('does not touch undo history for a workspace that was already flipped', async () => {
     // Nothing irreversible happens on that path until the pass itself writes,
     // and the runner clears on its first committed batch.
-    openDialog.mockResolvedValue(true)
-    const {repo} = makeRepo({outcome: 'ran', undoHistoryCleared: false}, {flipped: true})
+    const {repo} = makeRepo(RAN, {flipped: true})
 
     await invoke(repo)
 
@@ -327,8 +309,7 @@ describe('migrate_properties_to_blocks action', () => {
   it('names both irreversible effects when the runner throws outright', async () => {
     // A rejection skips describeOutcome entirely, which is what otherwise
     // carries them — and by then the flip has committed and undo is gone.
-    openDialog.mockResolvedValue(true)
-    const {repo, runWorkspaceBackfillNow} = makeRepo({outcome: 'ran', undoHistoryCleared: false})
+    const {repo, runWorkspaceBackfillNow} = makeRepo()
     runWorkspaceBackfillNow.mockRejectedValue(new Error('claim write blew up'))
 
     await invoke(repo)
@@ -345,13 +326,12 @@ describe('migrate_properties_to_blocks action', () => {
     // the next write while reads keep coming from the cell; backfilling first
     // leaves a window where machinery exists that nothing recognizes and
     // nothing maintains.
-    openDialog.mockResolvedValue(true)
     const order: string[] = []
     flipWorkspace.mockImplementation(async () => { order.push('flip'); return {localApplied: true} })
-    const {repo, runWorkspaceBackfillNow} = makeRepo({outcome: 'ran', undoHistoryCleared: false})
+    const {repo, runWorkspaceBackfillNow} = makeRepo()
     runWorkspaceBackfillNow.mockImplementation(async () => {
       order.push('backfill')
-      return {outcome: 'ran', undoHistoryCleared: false} as OperatorBackfillResult
+      return RAN
     })
 
     await invoke(repo)
@@ -366,9 +346,8 @@ describe('migrate_properties_to_blocks action', () => {
     // than cell -> children. The flip is the gesture's FIRST write, so a
     // refusal leaves the graph untouched — which is the part an operator needs
     // told, rather than being left to wonder what landed.
-    openDialog.mockResolvedValue(true)
     flipWorkspace.mockRejectedValue(new Error('workspaces.properties_migration is writable by the workspace owner'))
-    const {repo, runWorkspaceBackfillNow} = makeRepo({outcome: 'ran', undoHistoryCleared: false})
+    const {repo, runWorkspaceBackfillNow} = makeRepo()
 
     await invoke(repo)
 
@@ -381,9 +360,8 @@ describe('migrate_properties_to_blocks action', () => {
     // who had already flipped with no way to run the pass at all. Re-flipping
     // would be no better: forward-only, so a second flip is at best a no-op
     // write on the one gesture an operator repeats to catch stragglers.
-    openDialog.mockResolvedValue(true)
     const {repo, runWorkspaceBackfillNow} = makeRepo(
-      {outcome: 'ran', undoHistoryCleared: false}, {flipped: true},
+      RAN, {flipped: true},
     )
 
     await invoke(repo)
@@ -412,7 +390,6 @@ describe('migrate_properties_to_blocks action', () => {
   })
 
   it('tells the user their undo history went with it', async () => {
-    openDialog.mockResolvedValue(true)
     const {repo} = makeRepo({outcome: 'ran', undoHistoryCleared: true})
 
     await invoke(repo)
@@ -424,7 +401,6 @@ describe('migrate_properties_to_blocks action', () => {
     // `deferred` means a precondition that clears on its own. Reporting it
     // through `done` would read as "migration complete" to the one person who
     // needs to come back and re-run it.
-    openDialog.mockResolvedValue(true)
     const {repo} = makeRepo({
       outcome: 'deferred',
       undoHistoryCleared: false,
@@ -444,7 +420,7 @@ describe('the orphan-definition step', () => {
     // unsatisfiable forever, and the flip is one-way. Refusing after the flip
     // would be refusing after the damage.
     flipBlocked.mockReturnValue('2 property key(s) cannot be given a definition')
-    const {repo, runWorkspaceBackfillNow, getAll} = makeRepo({outcome: 'ran', undoHistoryCleared: false})
+    const {repo, runWorkspaceBackfillNow, getAll} = makeRepo()
 
     await invoke(repo)
 
@@ -461,9 +437,8 @@ describe('the orphan-definition step', () => {
     // never migrate would be the worse trade — and no irreversible step
     // remains on this path.
     flipBlocked.mockReturnValue('2 property key(s) cannot be given a definition')
-    openDialog.mockResolvedValue(true)
     const {repo, runWorkspaceBackfillNow} = makeRepo(
-      {outcome: 'ran', undoHistoryCleared: false}, {flipped: true})
+      RAN, {flipped: true})
 
     await invoke(repo)
 
@@ -475,9 +450,8 @@ describe('the orphan-definition step', () => {
     // the unreadable-bag warning is computed and then dropped — a run that
     // reports plain success over rows it could not inspect.
     flipBlocked.mockReturnValue('3 block(s) have a property bag this device cannot read')
-    openDialog.mockResolvedValue(true)
     const {repo, runWorkspaceBackfillNow} = makeRepo(
-      {outcome: 'ran', undoHistoryCleared: false}, {flipped: true})
+      RAN, {flipped: true})
 
     await invoke(repo)
 
@@ -494,10 +468,9 @@ describe('the orphan-definition step', () => {
     // past the flip the children are the truth, so the two just diverge.
     planSynthesis.mockResolvedValue(plan(1))
     applySynthesis.mockResolvedValue({created: 1, converged: 0, skipped: []})
-    flipBlocked.mockImplementation(() => flipBlockedCalls++ === 0 ? null : 'still orphaned')
-    openDialog.mockResolvedValue(true)
+    flipBlocked.mockReturnValueOnce(null).mockReturnValue('still orphaned')
     // Already flipped, so nothing downstream would clear it.
-    const {repo} = makeRepo({outcome: 'ran', undoHistoryCleared: false}, {flipped: true})
+    const {repo} = makeRepo(RAN, {flipped: true})
 
     await invoke(repo)
 
@@ -514,9 +487,8 @@ describe('the orphan-definition step', () => {
     planSynthesis.mockResolvedValue(plan(2))
     applySynthesis.mockResolvedValue({created: 1, converged: 0,
                                       skipped: [{key: 'demo:orphan', reason: 'occupied'}]})
-    flipBlocked.mockImplementation(() => flipBlockedCalls++ === 0 ? null : 'still orphaned')
-    openDialog.mockResolvedValue(true)
-    const {repo} = makeRepo({outcome: 'ran', undoHistoryCleared: false})
+    flipBlocked.mockReturnValueOnce(null).mockReturnValue('still orphaned')
+    const {repo} = makeRepo()
 
     await invoke(repo)
 
@@ -530,8 +502,7 @@ describe('the orphan-definition step', () => {
     // banner off the undo flag made an already-flipped run claim a flip.
     planSynthesis.mockResolvedValue(plan(1))
     applySynthesis.mockResolvedValue({created: 1, converged: 0, skipped: []})
-    openDialog.mockResolvedValue(true)
-    const {repo} = makeRepo({outcome: 'ran', undoHistoryCleared: false}, {flipped: true})
+    const {repo} = makeRepo(RAN, {flipped: true})
 
     await invoke(repo)
 
@@ -548,7 +519,7 @@ describe('the orphan-definition step', () => {
     // property names, clears the workspace's undo history — and only then finds
     // out the flip was never available to them.
     const {repo, runWorkspaceBackfillNow, getAll} = makeRepo(
-      {outcome: 'ran', undoHistoryCleared: false}, {owner: 'someone-else'})
+      RAN, {owner: 'someone-else'})
 
     await invoke(repo)
 
@@ -565,13 +536,11 @@ describe('the orphan-definition step', () => {
     // replica during the dialog. It is re-taken because it lives in
     // `passIsUnfit`, which is re-taken — the whole point of putting it there.
     planSynthesis.mockResolvedValue(plan(2))
-    openDialog.mockResolvedValue(true)
-    const {repo, runWorkspaceBackfillNow} = makeRepo({outcome: 'ran', undoHistoryCleared: false})
+    const {repo, runWorkspaceBackfillNow, getOptional} = makeRepo()
     let reads = 0
-    ;(repo as unknown as {db: {getOptional: (sql: string) => Promise<unknown>}}).db.getOptional =
-      async (sql: string) => sql.includes('owner_user_id')
-        ? {owner_user_id: ++reads === 1 ? USER : 'someone-else'}
-        : {properties_migration: 'cell'}
+    getOptional.mockImplementation(async (sql: string) => sql.includes('owner_user_id')
+      ? {owner_user_id: ++reads === 1 ? USER : 'someone-else'}
+      : {properties_migration: 'cell'})
 
     await invoke(repo)
 
@@ -584,9 +553,8 @@ describe('the orphan-definition step', () => {
 
   it('lets a non-owner backfill a workspace that is already flipped', async () => {
     // Nothing on that path needs the server, so ownership is irrelevant there.
-    openDialog.mockResolvedValue(true)
     const {repo, runWorkspaceBackfillNow} = makeRepo(
-      {outcome: 'ran', undoHistoryCleared: false}, {flipped: true, owner: 'someone-else'})
+      RAN, {flipped: true, owner: 'someone-else'})
 
     await invoke(repo)
 
@@ -598,16 +566,15 @@ describe('the orphan-definition step', () => {
     // synthesis write. This gesture's standing rule is that it does not act on
     // a workspace that is no longer open, and the flip is the one step that
     // cannot be taken back.
-    openDialog.mockResolvedValue(true)
-    const {repo, runWorkspaceBackfillNow} = makeRepo({outcome: 'ran', undoHistoryCleared: false})
+    const {repo, runWorkspaceBackfillNow, syncViewGap} = makeRepo()
     // On the SECOND fitness read — the one after the confirmation — so the
     // switch lands past the post-dialog check and the flip is the next thing
     // that would act.
     let reads = 0
-    ;(repo as unknown as {syncViewGap: () => Promise<string | null>}).syncViewGap = async () => {
+    syncViewGap.mockImplementation(async () => {
       if (++reads === 2) (repo as unknown as {activeWorkspaceId: string}).activeWorkspaceId = 'ws-2'
       return null
-    }
+    })
 
     await invoke(repo)
 
@@ -622,8 +589,7 @@ describe('the orphan-definition step', () => {
     // minting early is free; minting after the flip leaves a window in which
     // the pass skips those keys and reports success over them.
     planSynthesis.mockResolvedValue(plan(3))
-    openDialog.mockResolvedValue(true)
-    const {repo} = makeRepo({outcome: 'ran', undoHistoryCleared: false})
+    const {repo} = makeRepo()
 
     await invoke(repo)
 
@@ -638,8 +604,7 @@ describe('the orphan-definition step', () => {
     planSynthesis.mockResolvedValue(plan(3))
     applySynthesis.mockResolvedValue({created: 3, skipped: []})
     flipWorkspace.mockRejectedValue(new Error('server said no'))
-    openDialog.mockResolvedValue(true)
-    const {repo} = makeRepo({outcome: 'ran', undoHistoryCleared: false})
+    const {repo} = makeRepo()
 
     await invoke(repo)
 
@@ -654,8 +619,7 @@ describe('the orphan-definition step', () => {
   it('does not flip when the definitions could not be minted', async () => {
     planSynthesis.mockResolvedValue(plan(3))
     applySynthesis.mockRejectedValue(new Error('nope'))
-    openDialog.mockResolvedValue(true)
-    const {repo, runWorkspaceBackfillNow} = makeRepo({outcome: 'ran', undoHistoryCleared: false})
+    const {repo, runWorkspaceBackfillNow} = makeRepo()
 
     await invoke(repo)
 
@@ -668,8 +632,7 @@ describe('the orphan-definition step', () => {
     // e2ee today. `flipBlockedBySynthesis` is what decides whether that stops
     // the gesture; what must not happen either way is writing anyway.
     planSynthesis.mockResolvedValue({...plan(2), refusal: 'this workspace is encrypted'})
-    openDialog.mockResolvedValue(true)
-    const {repo} = makeRepo({outcome: 'ran', undoHistoryCleared: false}, {flipped: true})
+    const {repo} = makeRepo(RAN, {flipped: true})
 
     await invoke(repo)
 
@@ -684,7 +647,7 @@ describe('the orphan-definition step', () => {
     // write definitions into the graph they just left — the same reason the
     // flip takes that check twice.
     planSynthesis.mockResolvedValue(plan(3))
-    const {repo} = makeRepo({outcome: 'ran', undoHistoryCleared: false})
+    const {repo} = makeRepo()
     openDialog.mockImplementation(dialogThatSwitchesWorkspace(repo))
 
     await invoke(repo)
@@ -697,8 +660,7 @@ describe('the orphan-definition step', () => {
     // how the one cheap moment to repair it is missed. Usually it is just an
     // extension that is not enabled on this device.
     planSynthesis.mockResolvedValue({...plan(), brokenDefinitions: [{key: 'demo:b', cells: 3}]})
-    openDialog.mockResolvedValue(true)
-    const {repo} = makeRepo({outcome: 'ran', undoHistoryCleared: false}, {flipped: true})
+    const {repo} = makeRepo(RAN, {flipped: true})
 
     await invoke(repo)
 
@@ -713,9 +675,8 @@ describe('the orphan-definition step', () => {
     planSynthesis.mockResolvedValue(plan(2))
     applySynthesis.mockResolvedValue({created: 1, converged: 0,
                                       skipped: [{key: 'demo:orphan', reason: 'occupied'}]})
-    flipBlocked.mockImplementation(() => flipBlockedCalls++ === 0 ? null : 'still have no definition')
-    openDialog.mockResolvedValue(true)
-    const {repo, runWorkspaceBackfillNow} = makeRepo({outcome: 'ran', undoHistoryCleared: false})
+    flipBlocked.mockReturnValueOnce(null).mockReturnValue('still have no definition')
+    const {repo, runWorkspaceBackfillNow} = makeRepo()
 
     await invoke(repo)
 
@@ -728,10 +689,8 @@ describe('the orphan-definition step', () => {
     planSynthesis.mockResolvedValue(plan(2))
     applySynthesis.mockResolvedValue({created: 1, converged: 0,
                                       skipped: [{key: 'demo:orphan', reason: 'occupied'}]})
-    flipBlocked.mockImplementation(() => flipBlockedCalls++ === 0 ? null : 'still have no definition')
-    openDialog.mockResolvedValue(true)
-    const {repo, runWorkspaceBackfillNow} = makeRepo(
-      {outcome: 'ran', undoHistoryCleared: false}, {flipped: true})
+    flipBlocked.mockReturnValueOnce(null).mockReturnValue('still have no definition')
+    const {repo, runWorkspaceBackfillNow} = makeRepo(RAN, {flipped: true})
 
     await invoke(repo)
 
@@ -745,13 +704,12 @@ describe('the orphan-definition step', () => {
     // commits — the same lie the flip-failure branch goes out of its way to
     // avoid one step later.
     planSynthesis.mockResolvedValue(plan(3))
-    openDialog.mockResolvedValue(true)
-    const {repo} = makeRepo({outcome: 'ran', undoHistoryCleared: false})
+    const {repo, syncViewGap} = makeRepo()
     // Clean at the pre-dialog check, behind by the time the operator confirms —
     // the window that makes the SECOND check the load-bearing one.
     let gapChecks = 0
-    ;(repo as unknown as {syncViewGap: () => Promise<string | null>}).syncViewGap =
-      async () => gapChecks++ === 0 ? null : 'synced rows are still draining into `blocks`'
+    syncViewGap.mockImplementation(
+      async () => gapChecks++ === 0 ? null : 'synced rows are still draining into `blocks`')
 
     await invoke(repo)
 
@@ -762,7 +720,7 @@ describe('the orphan-definition step', () => {
 
   it('stops without writing when the plan itself cannot be built', async () => {
     planSynthesis.mockRejectedValue(new Error('registry is not loaded'))
-    const {repo, runWorkspaceBackfillNow} = makeRepo({outcome: 'ran', undoHistoryCleared: false})
+    const {repo, runWorkspaceBackfillNow} = makeRepo()
 
     await invoke(repo)
 
@@ -774,12 +732,11 @@ describe('the orphan-definition step', () => {
 })
 
 describe('what a completed run tells the operator', () => {
-  const ran = {outcome: 'ran', undoHistoryCleared: false} as const
   it('calls a run that migrated nothing a failure, not a green "0 blocks"', async () => {
     // Failures are per-value by design, so a systematic problem — a codec
     // rejecting everything, storage refusing writes — otherwise came back as
     // a success banner reading "Migrated properties on 0 blocks."
-    const {message, failed} = describeOutcome(ran, {blocksMaterialized: 0, valuesMaterializedTotal: 0, unmigrated: 12, orphanedOwnersSwept: 0}, false)
+    const {message, failed} = describeOutcome(RAN, {blocksMaterialized: 0, valuesMaterializedTotal: 0, unmigrated: 12, orphanedOwnersSwept: 0}, false)
 
     expect(failed).toBe(true)
     expect(message).toMatch(/systematic/i)
@@ -790,7 +747,7 @@ describe('what a completed run tells the operator', () => {
     // that converges, and every other count is per-sweep — so a run whose only
     // effect was deletion otherwise reads "Migrated properties on 0 blocks."
     const {message} = describeOutcome(
-      ran,
+      RAN,
       {blocksMaterialized: 0, valuesMaterializedTotal: 0, unmigrated: 0, orphanedOwnersSwept: 4},
       false,
     )
@@ -803,7 +760,7 @@ describe('what a completed run tells the operator', () => {
     // a run that wrote every other key on every block. Branching on it told the
     // operator nothing was migrated while tens of thousands of rows were.
     const {failed} = describeOutcome(
-      ran, {blocksMaterialized: 0, valuesMaterializedTotal: 40, unmigrated: 20, orphanedOwnersSwept: 0}, false,
+      RAN, {blocksMaterialized: 0, valuesMaterializedTotal: 40, unmigrated: 20, orphanedOwnersSwept: 0}, false,
     )
 
     expect(failed).toBe(false)
@@ -840,8 +797,8 @@ describe('what a completed run tells the operator', () => {
     // Convergence deliberately does not loop on rewritten values, so this
     // sentence is the only thing that tells an operator the children it just
     // built may already be behind the cells.
-    expect(describeOutcome(ran, counts(100), true, {flipped: false, undoCleared: false}).message).toMatch(/run this again/i)
-    expect(describeOutcome(ran, counts(100), false, {flipped: false, undoCleared: false}).message).not.toMatch(/run this again/i)
+    expect(describeOutcome(RAN, counts(100), true, {flipped: false, undoCleared: false}).message).toMatch(/run this again/i)
+    expect(describeOutcome(RAN, counts(100), false, {flipped: false, undoCleared: false}).message).not.toMatch(/run this again/i)
   })
 })
 
@@ -850,7 +807,7 @@ describe('every outcome says whether the history is gone', () => {
   // time. It is appended once at the wrapper now, so this walks the whole
   // outcome union rather than the branch that happened to be reported.
   const outcomes: OperatorBackfillResult[] = [
-    {outcome: 'ran', undoHistoryCleared: false},
+    RAN,
     {outcome: 'deferred', undoHistoryCleared: false, reason: 'a reason'},
     {outcome: 'failed', undoHistoryCleared: false, reason: 'a reason'},
     {outcome: 'held-by-peer', undoHistoryCleared: false},
@@ -877,7 +834,7 @@ describe('every outcome says whether the history is gone', () => {
 
   it('covers the all-values-failed branch, which returns before the common tail', () => {
     const {message} = describeOutcome(
-      {outcome: 'ran', undoHistoryCleared: false},
+      RAN,
       {blocksMaterialized: 0, valuesMaterializedTotal: 0, unmigrated: 5, orphanedOwnersSwept: 0},
       false, {flipped: false, undoCleared: true})
     expect(message).toMatch(/all 5 property value\(s\) failed/)
