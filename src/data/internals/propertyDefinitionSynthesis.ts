@@ -135,20 +135,43 @@ export const PROVE_DISTINCT_VALUE_LIMIT = 10_000
  * see #688 — which is why that stays tracked separately rather than papered
  * over here.
  */
-export const provePresetId = (values: readonly unknown[]): SynthesizedPresetId => {
-  for (const presetId of PRESET_LADDER) {
+export const provePresetId = (
+  values: readonly unknown[],
+  usable: readonly SynthesizedPresetId[] = PRESET_LADDER,
+): SynthesizedPresetId | undefined => {
+  for (const presetId of usable) {
     // The name is irrelevant here: the child round trip keys on `codec.type`.
     const schema = schemaFor('probe', kernelValuePresetCoresById[presetId])
     if (values.every(value => survivesChildRoundTrip(schema, value))) return presetId
   }
-  // `raw-json` is `JSON.stringify`/`JSON.parse`, so reaching here means a value
-  // no codec in this app can carry.
-  return 'raw-json'
+  // Undefined, NOT a `raw-json` fallback. `raw-json` is `JSON.stringify` /
+  // `JSON.parse`, so reaching here means no codec in this app carries these
+  // values — a key whose only honest answer is that it cannot be migrated
+  // faithfully, not one to hand a codec that will quietly change it.
+  return undefined
 }
+
+/** The ladder entries that still MEAN what the proof runs against.
+ *
+ *  `valuePresetCoresFacet` is last-wins, so an extension contributing `string`
+ *  would leave the projector rebuilding a synthesized definition with its codec
+ *  rather than the kernel one the values were checked against. Such an id is
+ *  dropped from the ladder rather than refused workspace-wide: an override of a
+ *  preset no candidate selects is nobody's problem, and gating the whole
+ *  gesture on it stopped clean workspaces migrating — my own regression, caught
+ *  in review one round after I added it. */
+const usablePresets = (repo: Repo): SynthesizedPresetId[] =>
+  PRESET_LADDER.filter(id => repo.valuePresetCores.get(id) === kernelValuePresetCoresById[id])
 
 /** Does one stored value come back byte-identical through the child machinery
  *  this preset would use? */
 const survivesChildRoundTrip = (schema: AnyPropertySchema, encoded: unknown): boolean => {
+  // `jsonValuesEqual` compares canonical JSON, where `Infinity` and `null` are
+  // both "null" — so a non-finite number (SQLite hands `1e400` back as
+  // `Infinity`) would certify a round trip that actually replaces the stored
+  // value with null. No codec here carries one, so say so rather than let the
+  // comparison agree with itself.
+  if (typeof encoded === 'number' && !Number.isFinite(encoded)) return false
   try {
     const content = encodedPropertyValueToChildContent(schema, encoded)
     return jsonValuesEqual(propertyChildContentToEncodedValue(schema, content), encoded)
@@ -216,23 +239,6 @@ export const propertySynthesisWorkspaceRefusal = async (
   repo: Repo,
   workspaceId: string,
 ): Promise<string | null> => {
-  // The proof is only worth as much as the id it persists. `provePresetId` runs
-  // the round trip against the KERNEL core, but the definition stores a preset
-  // ID, and `valuePresetCoresFacet` is last-wins — so an extension contributing
-  // `string` would have the projector rebuild every synthesized definition with
-  // its codec instead of the one the values were proven against, reinterpreting
-  // or rewriting the children just backfilled. Refuse rather than persist a
-  // reference whose meaning we did not verify. (The general hazard — a
-  // definition's durable behaviour hanging off an overrideable id — is not
-  // synthesis's to fix and is tracked separately; what IS synthesis's is not
-  // claiming a proof it cannot keep.)
-  const overridden = PRESET_LADDER.filter(
-    id => repo.valuePresetCores.get(id) !== kernelValuePresetCoresById[id])
-  if (overridden.length > 0) {
-    return `an extension has replaced the ${overridden.map(id => `"${id}"`).join(', ')} ` +
-      'value preset(s) on this device, so a definition minted here would not behave the ' +
-      'way its values were checked against — disable it and re-run'
-  }
   if (getModePin(repo.user.id, workspaceId) !== 'plaintext') {
     return 'this device has not confirmed the workspace is unencrypted, and an ' +
       'end-to-end encrypted one cannot synthesize definitions yet: the deterministic id ' +
@@ -391,15 +397,26 @@ export const planPropertyDefinitionSynthesis = async (
 
   const valuesByKey = await distinctValuesByKey(repo, workspaceId,
                                                 mintable.map(entry => entry.property))
-  const candidates: SynthesisCandidate[] = mintable.map(entry => ({
-    key: entry.property,
-    cells: entry.cells,
+  const usable = usablePresets(repo)
+  const candidates: SynthesisCandidate[] = []
+  for (const entry of mintable) {
+    const values = valuesByKey.get(entry.property)
     // No entry means the key had too many distinct values to read, so nothing
     // was proven about it: `raw-json` is exact for every JSON value, which is
-    // the conservative answer rather than a sampled guess.
-    presetId: (values => values === undefined ? 'raw-json' : provePresetId(values))(
-      valuesByKey.get(entry.property)),
-  }))
+    // the conservative answer rather than a sampled guess — but only if it is
+    // still the kernel codec.
+    const presetId = values === undefined
+      ? (usable.includes('raw-json') ? 'raw-json' as const : undefined)
+      : provePresetId(values, usable)
+    if (presetId === undefined) {
+      blockers.push({key: entry.property, cells: entry.cells,
+                     reason: 'no value type available on this device carries every value this '
+                       + 'key already holds without changing it — an unrepresentable number, or '
+                       + 'an extension has replaced the preset that would have carried it'})
+      continue
+    }
+    candidates.push({key: entry.property, cells: entry.cells, presetId})
+  }
 
   return {workspaceId, refusal, unreadableBlocks: scan.unreadableBlocks, candidates,
           blockers, brokenDefinitions}

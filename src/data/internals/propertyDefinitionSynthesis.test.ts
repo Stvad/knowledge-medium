@@ -275,16 +275,39 @@ describe('planPropertyDefinitionSynthesis', () => {
     expect(plan.blockers[0]!.reason).toMatch(/replacement character/)
   })
 
-  it('refuses while an extension has replaced a preset the proof runs against', async () => {
-    // `provePresetId` proves against the KERNEL core but the definition stores
-    // a preset ID, and the preset facet is last-wins — so a replaced `string`
-    // would have the projector rebuild every synthesized definition with a
-    // codec the values were never checked against.
-    await rawCell('b1', {'demo:orphan': 'x'})
+  it('drops a replaced preset from the ladder rather than refusing the workspace', async () => {
+    // The proof runs against the KERNEL core while the definition stores an id,
+    // and the preset facet is last-wins — so a replaced `string` must not be
+    // persisted. But refusing the whole gesture over it (my first attempt at
+    // this) stopped clean workspaces migrating because of an extension no
+    // candidate depends on. The id is dropped from the ladder instead.
+    await rawCell('b1', {'demo:orphan': 'hello', 'demo:flag': true})
     vi.spyOn(repo, 'valuePresetCores', 'get').mockReturnValue(
       new Map([...repo.valuePresetCores, ['string', {...repo.valuePresetCores.get('string')!}]]))
 
-    expect(await propertySynthesisWorkspaceRefusal(repo, WS)).toMatch(/replaced the "string"/)
+    const plan = await planFor()
+
+    // The boolean key is untouched by a `string` override.
+    expect(plan.candidates.find(c => c.key === 'demo:flag')?.presetId).toBe('boolean')
+    // The string key falls through to the next ladder entry that still means
+    // what it says, rather than persisting an id resolving to someone else's codec.
+    expect(plan.candidates.find(c => c.key === 'demo:orphan')?.presetId).toBe('raw-json')
+  })
+
+  it('calls a key nothing can carry a blocker, rather than handing it raw-json', async () => {
+    // SQLite returns a JSON number outside JS's finite range as `Infinity`, and
+    // `raw-json` serialises that to `null` — which canonical-JSON equality then
+    // certifies as a clean round trip, because both stringify to "null". No
+    // codec here carries it, so the honest answer is that the key cannot be
+    // migrated faithfully.
+    await rawCell('b1', {'demo:huge': 1})
+    await sharedDb.db.execute(
+      `UPDATE blocks SET properties_json = '{"demo:huge":1e400}' WHERE id = 'b1'`)
+
+    const plan = await planFor()
+
+    expect(plan.candidates.map(c => c.key)).not.toContain('demo:huge')
+    expect(plan.blockers.map(b => b.key)).toContain('demo:huge')
   })
 
   it('refuses a workspace this device has not confirmed unencrypted', async () => {
