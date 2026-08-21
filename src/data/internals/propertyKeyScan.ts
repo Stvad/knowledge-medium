@@ -195,11 +195,22 @@ export const scanPropertyKeys = async (
   // what would drag it into this join. The valid-but-non-object case IS
   // reachable and is what the guard handles day to day.
   const definitionRows = await repo.db.getAll<{id: string; name: string | null}>(
-    `SELECT b.id AS id, json_extract(${OBJECT_BAG}, ?) AS name
+    // The LAST occurrence, not `json_extract`'s first. A stored bag can repeat
+    // a key — `JSON.stringify` cannot produce one but a raw SQL write can, and
+    // the types trigger sees only one row so nothing rejects it — and SQLite
+    // and JavaScript then disagree about what the bag says: `json_extract`
+    // yields the first, `JSON.parse` the last (verified against sqlite3 3.51).
+    // This fallback exists precisely for rows the RUNTIME could not parse, so
+    // it has to read them the way the runtime would, or it credits a broken
+    // definition to a name nothing uses and mis-buckets the orphan that shares
+    // the other spelling. `json_each.id` is document order.
+    `SELECT b.id AS id,
+            (SELECT j.value FROM json_each(${OBJECT_BAG}) j
+              WHERE j.key = ? ORDER BY j.id DESC LIMIT 1) AS name
        FROM blocks b
        JOIN block_types t ON t.block_id = b.id AND t.workspace_id = b.workspace_id
       WHERE t.type = ? AND b.workspace_id = ? AND b.deleted = 0`,
-    [`$."${propertyNameProp.name}"`, PROPERTY_SCHEMA_TYPE, workspaceId],
+    [propertyNameProp.name, PROPERTY_SCHEMA_TYPE, workspaceId],
   )
   // Count each definition under its EFFECTIVE name, which is not always the
   // stored one. `buildPropertyDefinitionRegistry` rewrites a seed-backed

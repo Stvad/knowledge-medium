@@ -246,10 +246,20 @@ export const migratePropertiesToBlocksAction = ({repo}: {repo: Repo}): ActionCon
     // Only on the way IN to the flip. An already-flipped workspace has no
     // irreversible step left to guard, and refusing there would withhold the
     // backfill from every OTHER key over a handful this can never carry.
-    if (!childBacked && flipBlocked !== null) {
+    if (flipBlocked !== null) {
+      if (!childBacked) {
+        showInfo(flipBlocked, {id: 'properties-migration-synthesis',
+                               duration: Number.POSITIVE_INFINITY})
+        return
+      }
+      // Already flipped: advisory, not a refusal — but SAID, and said here
+      // rather than after the pass. Left to the post-synthesis report it was
+      // skipped entirely whenever there was nothing to mint, which is exactly
+      // the shape of the unreadable-bag warning: no candidates, real local
+      // corruption, and a run that would otherwise report plain success over
+      // rows it could not inspect.
       showInfo(flipBlocked, {id: 'properties-migration-synthesis',
                              duration: Number.POSITIVE_INFINITY})
-      return
     }
     // A refused workspace (e2ee) reaches here only when the flip is not at
     // stake. Its candidates are then keys that stay cell-only, NOT keys about

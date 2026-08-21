@@ -416,6 +416,22 @@ describe('the orphan-definition step', () => {
     expect(runWorkspaceBackfillNow).toHaveBeenCalled()
   })
 
+  it('says so when an already-flipped workspace has nothing to mint but real corruption', async () => {
+    // No candidates means the post-synthesis report never runs, so without this
+    // the unreadable-bag warning is computed and then dropped — a run that
+    // reports plain success over rows it could not inspect.
+    flipBlocked.mockReturnValue('3 block(s) have a property bag this device cannot read')
+    openDialog.mockResolvedValue(true)
+    const {repo, runWorkspaceBackfillNow} = makeRepo(
+      {outcome: 'ran', undoHistoryCleared: false}, {flipped: true})
+
+    await invoke(repo)
+
+    expect(showInfo).toHaveBeenCalledWith(
+      expect.stringMatching(/cannot read/), expect.anything())
+    expect(runWorkspaceBackfillNow).toHaveBeenCalled()
+  })
+
   it('mints the missing definitions BEFORE it flips', async () => {
     // The §9 runbook order. A definition is a dormant block at 'cell', so
     // minting early is free; minting after the flip leaves a window in which

@@ -189,6 +189,25 @@ describe('planPropertyDefinitionSynthesis', () => {
     expect(plan.brokenDefinitions).toContainEqual({key: 'demo:broken', cells: 1})
   })
 
+  it('reads a duplicated definition name the way the runtime does', async () => {
+    // A raw SQL write can repeat a key; SQLite's json_extract yields the FIRST
+    // occurrence and JSON.parse the LAST. This fallback exists for rows the
+    // runtime could not parse, so reading it SQLite's way would credit the
+    // broken definition to 'demo:first' and bucket that orphan as repairable —
+    // while the runtime, and the user, see 'demo:last'.
+    await rawCell('defn', {types: ['property-schema'], 'property-schema:change-scope': 'nope'})
+    await sharedDb.db.execute(
+      `UPDATE blocks SET properties_json =
+         '{"types":["property-schema"],"property-schema:change-scope":"nope",` +
+      `"property-schema:name":"demo:first","property-schema:name":"demo:last"}'
+       WHERE id = 'defn'`)
+    await rawCell('b1', {'demo:first': 'x', 'demo:last': 'y'})
+
+    const plan = await planFor()
+    expect(plan.brokenDefinitions.map(b => b.key)).toEqual(['demo:last'])
+    expect(plan.candidates.map(c => c.key)).toEqual(['demo:first'])
+  })
+
   it('refuses the empty key and a name that reads as a reference', async () => {
     await rawCell('b1', {'': 'x', '::((11111111-1111-4111-8111-111111111111))': 'y'})
 
