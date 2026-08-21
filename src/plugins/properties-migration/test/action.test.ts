@@ -425,6 +425,21 @@ describe('the orphan-definition step', () => {
       .toBeLessThan(flipWorkspace.mock.invocationCallOrder[0]!)
   })
 
+  it('does not claim nothing happened when the flip fails after minting definitions', async () => {
+    // They are inert at 'cell' and a re-run reuses them, but they show up on
+    // the Properties page, so "nothing was migrated" alone would be a small lie.
+    planSynthesis.mockResolvedValue(plan(3))
+    applySynthesis.mockResolvedValue({created: 3, restored: 0, skipped: []})
+    flipWorkspace.mockRejectedValue(new Error('server said no'))
+    openDialog.mockResolvedValue(true)
+    const {repo} = makeRepo({outcome: 'ran', undoHistoryCleared: false})
+
+    await invoke(repo)
+
+    expect(progressHandle.fail).toHaveBeenCalledWith(
+      expect.stringMatching(/3 definition\(s\) added just before it are still there/))
+  })
+
   it('does not flip when the definitions could not be minted', async () => {
     planSynthesis.mockResolvedValue(plan(3))
     applySynthesis.mockRejectedValue(new Error('nope'))

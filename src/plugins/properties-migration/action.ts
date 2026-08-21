@@ -278,10 +278,12 @@ export const migratePropertiesToBlocksAction = ({repo}: {repo: Repo}): ActionCon
     // block at 'cell', so minting one early is free; minting one AFTER the flip
     // would leave a window in which the pass skips those keys and reports
     // success over them.
+    let synthesized = 0
     if (willSynthesize > 0) {
       banner.update('Adding definitions for properties that have none…')
       try {
-        await applyPropertyDefinitionSynthesis(repo, plan)
+        const result = await applyPropertyDefinitionSynthesis(repo, plan)
+        synthesized = result.created + result.restored
       } catch (err) {
         console.error('[properties-migration] definition synthesis failed:', err)
         banner.fail('Could not add definitions for the properties that have none, so ' +
@@ -320,8 +322,15 @@ export const migratePropertiesToBlocksAction = ({repo}: {repo: Repo}): ActionCon
         console.error('[properties-migration] flip failed:', err)
         // "so nothing was migrated" is only true because this catch cannot see a
         // committed flip: the server write is the only thing that throws here.
+        // The definitions minted a moment ago DID land, though — they are inert
+        // at 'cell' and a re-run reuses them, but saying "nothing" would be a
+        // small lie about a write that shows up on the Properties page.
         banner.fail('Could not switch this workspace to property blocks, so nothing ' +
-          `was migrated: ${err instanceof Error ? err.message : String(err)}`)
+          `was migrated: ${err instanceof Error ? err.message : String(err)}` +
+          (synthesized > 0
+            ? ` The ${synthesized.toLocaleString()} definition(s) added just before it ` +
+              'are still there, and do nothing until this runs again.'
+            : ''))
         return
       }
       // Immediately, not by waiting for the pass's first committed batch. Undo
