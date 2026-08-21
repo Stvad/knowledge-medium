@@ -1465,6 +1465,14 @@ describe('hookPrePr process behavior', { timeout: 20_000 }, () => {
     expect(dir.status).toBe(2)
     expect(dir.stderr).toContain('Cannot read message file')
     expect(dir.stderr).not.toContain('at readFileSync')
+    // and a payload the hook cannot make sense of at all allows explicitly,
+    // rather than throwing its way to the same outcome with a stack trace
+    const malformed = spawnSync('node', [script, '--hook-pre-pr'], {
+      input: JSON.stringify({ tool_name: 'Bash', cwd: repo, tool_input: { command: 42 } }),
+      encoding: 'utf8',
+    })
+    expect(malformed.status).toBe(0)
+    expect(malformed.stderr).toBe('')
   })
 
   // The gh-vocabulary layer: flags and selectors that leave the read-back
