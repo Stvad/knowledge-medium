@@ -85,6 +85,43 @@ describe('migrate_properties_to_blocks action', () => {
     expect(runWorkspaceBackfillNow).not.toHaveBeenCalled()
   })
 
+  it('refuses an already-flipped workspace before the workspace-wide scan', async () => {
+    // No flip on this path, so nothing irreversible — but the candidate count is
+    // an unbounded json_each walk on the UI thread and the dialog would ask for
+    // consent to a run the runner is about to refuse.
+    openDialog.mockResolvedValue(true)
+    const {repo, runWorkspaceBackfillNow, getAll} = makeRepo(
+      {outcome: 'ran', undoHistoryCleared: false}, {flipped: true},
+    )
+    ;(repo as unknown as {syncViewGap: () => Promise<string | null>}).syncViewGap =
+      async () => 'synced rows are still draining into `blocks`'
+
+    await invoke(repo)
+
+    expect(getAll).not.toHaveBeenCalled()
+    expect(openDialog).not.toHaveBeenCalled()
+    expect(runWorkspaceBackfillNow).not.toHaveBeenCalled()
+  })
+
+  it('re-checks fitness after the confirmation, which is a user-length pause', async () => {
+    // The early exit above runs BEFORE the dialog. A sync gap that opens while
+    // the operator is reading it would otherwise be carried straight into the
+    // irreversible write — the same reason the active-workspace check is taken
+    // twice.
+    const {repo, runWorkspaceBackfillNow} = makeRepo({outcome: 'ran', undoHistoryCleared: false})
+    openDialog.mockImplementation(async () => {
+      ;(repo as unknown as {syncViewGap: () => Promise<string | null>}).syncViewGap =
+        async () => 'synced rows are still draining into `blocks`'
+      return true
+    })
+
+    await invoke(repo)
+
+    expect(flipWorkspace).not.toHaveBeenCalled()
+    expect(runWorkspaceBackfillNow).not.toHaveBeenCalled()
+    expect(progressHandle.fail).toHaveBeenCalledWith(expect.stringMatching(/draining/))
+  })
+
   it('refuses before the flip when this device is not fit to write', async () => {
     // The flip is one-way (forward-only by trigger; rollback is a hand-run
     // migration) and the pass that would follow it is not. Running the runner's
@@ -100,7 +137,7 @@ describe('migrate_properties_to_blocks action', () => {
 
     expect(flipWorkspace).not.toHaveBeenCalled()
     expect(runWorkspaceBackfillNow).not.toHaveBeenCalled()
-    expect(progressHandle.fail).toHaveBeenCalledWith(expect.stringMatching(/draining/))
+    expect(showInfo).toHaveBeenCalledWith(expect.stringMatching(/draining/))
   })
 
   it('will not flip a workspace this client cannot reach the server for', async () => {

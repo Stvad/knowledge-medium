@@ -335,21 +335,27 @@
 </nav>
 
 <aside class="doc-status">
-  <strong>Status: current (planning), with one §9 correction.</strong>
-  <strong>Last verified against code: 2026-08-17, master <code>26416b5</code>.</strong>
+  <strong>Status: current (planning), with one §9 correction — and slice C is no
+  longer planning.</strong>
+  <strong>Last verified against code: 2026-08-20, branch
+  <code>claude/flip-then-backfill</code>.</strong>
   That verification covers the entries marked <strong>landed</strong> below
   &mdash; each was checked against the implementation on this branch, not
   against the pre-implementation snapshots this banner cites further down for
   the document's original authorship. Everything NOT marked landed remains at
   its original verification state, which for most of the document is the
   2026-07-01 rewrite: planning prose, not a description of shipped code. In
-  particular the migration is still <em>dark</em> &mdash;
-  <code>workspaces.properties_migration</code> is <code>'cell'</code>
-  everywhere, and nothing here should be read as describing behaviour a user can
-  observe today. The slice-C backfill DOES now exist
-  (<code>src/data/internals/propertyCellBackfill.ts</code>, reachable from the
-  command palette), and the <strong>2026-08-20 revision</strong> below inverts the
-  runbook this document describes &mdash; read that entry before §11's ordering.
+  particular most of it describes machinery that is dormant in every workspace
+  today. <strong>Slice C is the exception, and it is now REACHABLE:</strong> the
+  cell &rarr; children pass exists
+  (<code>src/data/internals/propertyCellBackfill.ts</code>) and the command
+  palette's &ldquo;Migrate properties to child blocks&rdquo; both advances a
+  workspace to <code>'children'</code> and runs it. So the migration is no longer
+  <em>dark</em> in the sense this banner used to mean &mdash; what is still true is
+  that <code>workspaces.properties_migration</code> is <code>'cell'</code> on every
+  workspace, because nobody has run it. The <strong>2026-08-20 revision</strong>
+  below also inverts the runbook this document describes &mdash; read that entry
+  before §11's ordering.
   The rename-rewrite requirements in §9 were reconciled 2026-07-30 against
   <a href="https://github.com/Stvad/knowledge-medium/issues/461">#461</a>
   (<code>references.renameBacklinks</code> moved post-commit &rarr; same-tx):

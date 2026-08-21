@@ -95,6 +95,16 @@ const advance = async (client: SupabaseClient, id: string, to: string) => {
   return {code: error?.code ?? null, message: error?.message ?? '', stored: await stateOf(id)}
 }
 
+/** The same, as the SERVICE ROLE. Separate because the two rules the operator
+ *  path must still obey — forward-only and the e2ee refusal — are the ones a
+ *  careless narrowing would move inside the client branch, and every assertion
+ *  below driven through `owner.client` would stay green if it did. */
+const advanceAsAdmin = async (id: string, to: string) => {
+  const {error} = await admin.from('workspaces')
+    .update({properties_migration: to}).eq('id', id)
+  return {code: error?.code ?? null, stored: await stateOf(id)}
+}
+
 /** A refusal is: an error, carrying 23514, with the stored value unmoved. */
 const denied = (r: {code: string | null; stored: string | null}, from: string) =>
   r.code === '23514' && r.stored === from
@@ -200,6 +210,23 @@ async function run() {
   const e2eeFlip = await advance(owner.client, e2ee, 'children')
   check('owner cannot flip an e2ee workspace', denied(e2eeFlip, 'cell'),
     `code ${e2eeFlip.code ?? 'none'}, stored ${e2eeFlip.stored}`)
+
+  console.log('\n— the operator path obeys the rules that are not client-only —')
+  // The service role is what the runbook uses, so these two are the invariants
+  // that outlive any client gate. Driven through `admin`, not `owner.client`.
+  const adminBack = await advanceAsAdmin(children, 'cell')
+  check('service role cannot go backwards', denied(adminBack, 'children'),
+    `code ${adminBack.code ?? 'none'}, stored ${adminBack.stored}`)
+  const adminE2ee = await advanceAsAdmin(e2ee, 'children')
+  check('service role cannot flip an e2ee workspace', denied(adminE2ee, 'cell'),
+    `code ${adminE2ee.code ?? 'none'}, stored ${adminE2ee.stored}`)
+  // And the step a client may NOT take, the operator may — otherwise the two
+  // assertions above would pass against a trigger that refused the service role
+  // outright, which would break the runbook rather than protect it.
+  const adminOff = await advanceAsAdmin(children, 'cell-off')
+  check('service role advances children -> cell-off',
+    adminOff.code === null && adminOff.stored === 'cell-off',
+    `code ${adminOff.code ?? 'none'}, stored ${adminOff.stored}`)
 
   console.log('\n— the trigger does not fire on an unrelated write —')
   // The early return. Without it a rename would carry the whole rule, and an e2ee

@@ -38,6 +38,12 @@ const undoNote = (result: OperatorBackfillResult, alsoCleared = false): string =
   result.undoHistoryCleared || alsoCleared
     ? ' Undo history for this workspace was cleared.' : ''
 
+/** Why this device must not start the pass right now, or null. The runner takes
+ *  the same two checks itself — but only after the claim, and in the flip case
+ *  only after an irreversible server write. */
+const passIsUnfit = async (repo: Repo): Promise<string | null> =>
+  repo.isReadOnly ? 'this workspace is read-only' : repo.syncViewGap()
+
 /** Prepended to EVERY outcome of a run that flipped, because the flip is
  *  fleet-wide and ONE-WAY while the pass is neither. Without it an operator whose
  *  pass then deferred read "Not started" and walked away believing the graph was
@@ -207,6 +213,17 @@ export const migratePropertiesToBlocksAction = ({repo}: {repo: Repo}): ActionCon
         'property blocks — that step needs remote sync.')
       return
     }
+    // Eligibility BEFORE the workspace-wide count and the confirmation, on BOTH
+    // paths. The count is an unbounded json_each walk on the UI thread, and the
+    // dialog asks an operator to consent to something the runner is about to
+    // refuse anyway. Re-checked after the dialog (a user-length pause) and again
+    // per transaction inside the pass — this is the cheap early exit, not the
+    // guard.
+    const ineligible = await passIsUnfit(repo)
+    if (ineligible !== null) {
+      showInfo(`Not started — ${withPeriod(ineligible)} Nothing was changed; try again shortly.`)
+      return
+    }
     const blockCount = await countPropertyCellBackfillCandidates(
       (sql, params) => repo.db.getAll(sql, params as unknown[] | undefined), workspaceId,
     )
@@ -232,9 +249,7 @@ export const migratePropertiesToBlocksAction = ({repo}: {repo: Repo}): ActionCon
       // once the flip has already landed — and then decline, which on a connected
       // device is the EXPECTED ending. The runner re-checks both; what this adds
       // is the ORDER.
-      const unfit = repo.isReadOnly
-        ? 'this workspace is read-only'
-        : await repo.syncViewGap()
+      const unfit = await passIsUnfit(repo)
       if (unfit !== null) {
         banner.fail(`Not started — ${withPeriod(unfit)} Nothing was changed; try again shortly.`)
         return
