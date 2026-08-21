@@ -97,9 +97,17 @@ const planFor = () => planPropertyDefinitionSynthesis(repo, WS)
  *  definition BLOCKS, and `whenPropertyDefinitionsReady` awaits only the
  *  initial prime, not catch-up. Planning straight after a write therefore reads
  *  the pre-write world — which made one of these tests fail about 1 run in 25
- *  before this existed. */
-const untilKeyUnresolved = (key: string) => vi.waitFor(() =>
-  expect(repo.propertySchemaResolverFor(WS).resolve(key).status).not.toBe('resolved'))
+ *  before this existed.
+ *
+ *  BUDGETED, because the fence itself then failed in CI on `vi.waitFor`'s
+ *  1000ms default: the tick is fast when this file runs alone and the gate runs
+ *  one worker per core, where the same wait stretches several-fold. Kept well
+ *  under the 30s timeout its callers carry, so a genuine hang reports as this
+ *  assertion rather than as an opaque "test timed out". */
+const untilKeyUnresolved = (key: string) => vi.waitFor(
+  () => expect(repo.propertySchemaResolverFor(WS).resolve(key).status).not.toBe('resolved'),
+  {timeout: 10_000, interval: 25},
+)
 
 const candidateFor = async (key: string) =>
   (await planFor()).candidates.find(c => c.key === key)
@@ -388,7 +396,7 @@ describe('applyPropertyDefinitionSynthesis', () => {
     expect(plan.candidates.map(c => c.key)).toEqual(['demo:orphan'])
     expect(await applyPropertyDefinitionSynthesis(repo, plan))
       .toMatchObject({created: 0, restored: 1})
-  })
+  }, 30_000)
 
   it('still mints the keys it can when another key is a hard blocker', async () => {
     // The blocker blocks the FLIP, not the minting: the other key's definition
@@ -456,7 +464,7 @@ describe('applyPropertyDefinitionSynthesis: the id is occupied, or the key stopp
     // And the flip must not step over it — the backfill excludes unregistered
     // keys from its work list, so it would report `ran` with zero failures.
     expect(flipBlockedBySynthesis(plan, result)).toMatch(/still have no definition/)
-  })
+  }, 30_000)
 
   it('restores a tombstone under the key it is for, re-asserting the preset', async () => {
     // `tx.restore` alone brings back the STORED bag: a preset the operator had
@@ -486,7 +494,7 @@ describe('applyPropertyDefinitionSynthesis: the id is occupied, or the key stopp
     // The type membership survives the restore patch — building the patch from
     // the four owned fields alone would drop `types` and un-type the definition.
     expect(repo.propertySchemaResolverFor(WS).resolve('demo:orphan').status).toBe('resolved')
-  })
+  }, 30_000)
 
   it('publishes a converged definition with the BLOCK\'s preset, not the plan\'s guess', async () => {
     // The block is live and may have been retyped deliberately. Publishing the
@@ -575,7 +583,7 @@ describe('applyPropertyDefinitionSynthesis: the id is occupied, or the key stopp
 
     expect(result).toMatchObject({restored: 1})
     expect(repo.propertySchemaResolverFor(WS).resolve('demo:orphan').status).toBe('resolved')
-  })
+  }, 30_000)
 
   it('repairs a tombstone whose change-scope was corrupted before deletion', async () => {
     // The second required field found a round apart from the first, which is
@@ -596,7 +604,7 @@ describe('applyPropertyDefinitionSynthesis: the id is occupied, or the key stopp
 
     expect(result).toMatchObject({restored: 1})
     expect(repo.propertySchemaResolverFor(WS).resolve('demo:orphan').status).toBe('resolved')
-  })
+  }, 30_000)
 
   it('refuses to restore a tombstone that is no longer this key\'s definition', async () => {
     await rawCell('b1', {'demo:orphan': 'hello'})
@@ -614,7 +622,7 @@ describe('applyPropertyDefinitionSynthesis: the id is occupied, or the key stopp
     // counting it as a definition added for a key that still has none.
     expect(result).toMatchObject({created: 0, restored: 0})
     expect(result.skipped.map(s => s.key)).toEqual(['demo:orphan'])
-  })
+  }, 30_000)
 
   it('skips a foreign occupant rather than aborting the whole mint', async () => {
     // Unreachable while workspace ids are UUIDs, so it is defence in depth —
