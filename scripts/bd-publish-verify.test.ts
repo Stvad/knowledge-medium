@@ -579,7 +579,9 @@ describe('bd-publish-verify process behavior', { timeout: 30_000 }, () => {
   // thing this report has.
   it('stays silent for an explicit GET carrying field flags', () => {
     const { hook } = makeRepo({ fixtures: {} })
-    const r = hook('gh api --method GET repos/Stvad/knowledge-medium/issues -f state=open', '[]')
+    // a text-ish field name, so the check above passes it and the GET test is
+    // the thing actually doing the work
+    const r = hook('gh api --method GET repos/Stvad/knowledge-medium/actions/artifacts -f name=foo', '[]')
     expect(r.status).toBe(0)
     expect(r.stdout).toBe('')
   })
