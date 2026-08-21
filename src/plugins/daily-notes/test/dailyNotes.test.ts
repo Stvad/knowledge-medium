@@ -474,8 +474,8 @@ describe('undo grouping (issue #306)', () => {
     const iso = '2026-04-28'
     const note = await getOrCreateDailyNote(repo, WS, iso)
 
-    // Fresh workspace: journal bootstrap + note creation are two txs —
-    // merged into a single entry, so one cmd-Z removes both.
+    // Fresh workspace: journal bootstrap + note creation are separate txs, and
+    // #306 is that one cmd-Z undoes opening the day — so, one entry.
     expect(repo.undoManager.depths(ChangeScope.BlockDefault)).toEqual({undo: 1, redo: 0})
 
     expect(await repo.undo()).toBe(true)

@@ -18,6 +18,7 @@ vi.mock('@/utils/dialogs.js', () => ({openDialog: () => openDialog()}))
 vi.mock('@/utils/toast.js', () => ({
   showProgress: () => progressHandle,
   showInfo: (message: string, opts?: unknown) => showInfo(message, opts),
+  dismissToast: vi.fn(),
 }))
 vi.mock('../ConfirmMigrationDialog.tsx', () => ({ConfirmMigrationDialog: () => null}))
 // The gesture flips before it backfills, and the fixture below starts at
@@ -28,6 +29,16 @@ vi.mock('@/data/workspaces', () => ({
   flipWorkspaceToChildBackedProperties: async () => ({localApplied: true}),
 }))
 vi.mock('@/data/repoProvider', () => ({isRemoteSyncActive: () => true}))
+// The synthesis half has its own file; here it must simply not refuse, so the
+// gesture reaches the pass.
+vi.mock('@/data/internals/propertyDefinitionSynthesis', () => ({
+  planPropertyDefinitionSynthesis: async () => ({
+    workspaceId: 'ws-1', refusal: null, syncGap: null,
+    candidates: [], blockers: [], brokenDefinitions: [],
+  }),
+  applyPropertyDefinitionSynthesis: async () => ({created: 0, restored: 0, skipped: []}),
+  flipBlockedBySynthesis: () => null,
+}))
 vi.mock('@/data/internals/propertyCellBackfill', () => ({
   PROPERTY_CELL_BACKFILL_ID: 'properties:cell-to-children',
   countPropertyCellBackfillCandidates: async () => 7,
@@ -50,7 +61,13 @@ const progress = (over: Partial<PropertyCellBackfillProgress> = {}): PropertyCel
 const runReporting = async (reported: PropertyCellBackfillProgress) => {
   const repo = {
     activeWorkspaceId: 'ws-1',
-    db: {getAll: async () => [{n: 7}], getOptional: async () => ({properties_migration: 'cell'})},
+    user: {id: 'user-1'},
+    db: {
+      getAll: async () => [{n: 7}],
+      getOptional: async (sql: string) => sql.includes('owner_user_id')
+        ? {owner_user_id: 'user-1'}
+        : {properties_migration: 'cell'},
+    },
     isReadOnly: false,
     syncViewGap: async () => null,
     undoManagerFor: () => ({clear: () => {}}),

@@ -746,6 +746,111 @@
       workspace. E2EE is waiting on the same missing piece plaintext workspaces
       are.</li>
   </ul>
+  <strong>Revised 2026-08-21 (orphan-definition synthesis, PR #686):</strong> the
+  synthesis half of &sect;9 now exists, as part of the same operator gesture:
+  <code>planPropertyDefinitionSynthesis</code> /
+  <code>applyPropertyDefinitionSynthesis</code>
+  (<code>src/data/internals/propertyDefinitionSynthesis.ts</code>) mint a
+  user-origin definition per definition-less cell key, at a deterministic id, in
+  one transaction, before the flip. Four divergences from the text in
+  <a href="#s7">&sect;7</a> and <a href="#s8">&sect;8</a>, recorded here rather
+  than edited into them:
+  <ul>
+    <li><strong>The preset is PROVEN, not inferred</strong> (owner decision, after two
+      revisions of inference). The criterion was always &ldquo;which codec reads every
+      stored value back out <em>unchanged</em>&rdquo; &mdash; a synthesized definition is
+      applied retroactively to values written before it existed, and past the flip the
+      cell is re-derived from the children, so a codec whose round trip rewrites a value
+      silently rewrites the user's data. The first cut approximated that from a histogram
+      of JSON types, and successive review rounds each found a shape the histogram could
+      not see (dates canonicalising, oversized integers, &hellip;) &mdash; every fix one
+      more term in a proxy. Synthesis now READS the distinct values of each candidate key
+      and runs the actual child round trip, taking the narrowest preset that carries all
+      of them. <code>raw-json</code> is the widest rung of that ladder, not a catch-all
+      beneath it: a key no rung carries is a <strong>blocker</strong>, because
+      <code>raw-json</code> cannot express a non-finite number either &mdash; SQLite hands
+      <code>1e400</code> back as <code>Infinity</code>, which serialises to
+      <code>null</code>, which canonical-JSON equality then certifies as a clean round
+      trip against itself, at any depth of nesting.
+      <code>date</code> needs no special case: it simply fails, because
+      <code>codecs.date</code> re-encodes <code>"2026-08-20"</code> as
+      <code>"2026-08-20T00:00:00.000Z"</code>. Sized against production before choosing
+      this: ~360k property cells across 559 keys, of which <strong>8 were unregistered,
+      covering 32 cells and 23 distinct values between them</strong>; the heaviest key of
+      any kind has ~26k distinct values. A key past
+      <code>PROVE_DISTINCT_VALUE_LIMIT</code> is a blocker as well: sampling would put the
+      guessing back, and handing a codec to a key whose values were never read is the same
+      guess with no evidence at all. Declaring that property by hand is the recovery, and
+      the right one for a key that large.
+      <em>What this does not prove</em> is the half below JavaScript: content can still be
+      transformed at the database text boundary or by a processor (issue #688), which
+      stays tracked rather than papered over here.</li>
+    <li><strong>The grammar-shaped-name blocker stands, for a different
+      reason.</strong> &sect;7 justifies it by the B2 name&rarr;content mirror. That
+      mirror is a <em>seed</em> behavior (<code>contentFor: seed =&gt; seed.name</code>);
+      <code>addSchema</code> leaves a user definition's content empty and synthesis
+      matches it, so nothing classifies. The refusal survives on
+      <code>propertySchemaNameRejection</code>'s other rule &mdash; the name is
+      rendered as <code>[[name]]</code> wherever a definition is addressed by name, and
+      one shaped like <code>((id))</code> reads as a reference to another block.</li>
+    <li><strong>Minted VISIBLE, where &sect;9 says <code>hidden</code> by default until
+      triaged</strong> (owner decision, and it reverses the first cut of this PR too).
+      The reasoning ran backwards: a definition nobody chose exists precisely so a human
+      looks at it, and a hidden property is one nobody is ever prompted to look at.
+      &sect;9's line at &ldquo;hidden by default until triaged&rdquo; is superseded by
+      this entry, not by an edit there.</li>
+    <li><strong>E2EE is refused outright rather than given an HMAC namespace.</strong>
+      &sect;8 calls for deriving the namespace from workspace secret key material. Until
+      that exists, synthesis declines the workspace, which costs nothing today because
+      the server trigger refuses an e2ee flip anyway &mdash; and an <em>absent</em>
+      local <code>workspaces</code> row declines too, rather than reading as
+      &ldquo;not encrypted&rdquo; and failing open on a privacy question.</li>
+  </ul>
+  Still missing from &sect;9: the <em>sweep</em>-side synthesis (&ldquo;repaired by the
+  sweep, which synthesizes on encountering a definition-less key from a raw writer or
+  import&rdquo;). What exists is the operator gesture only.
+  <p><strong>Review round (PR #686):</strong> the first revision asked two questions
+  separately that turn out to be one &mdash; &ldquo;is this key still orphaned?&rdquo;
+  (from a pre-confirmation snapshot) and &ldquo;is this deterministic id vacant?&rdquo;
+  (from the row). Three reproduced failures came out of that gap, and they are worth
+  recording because each is a shape the rest of this design has to keep in mind:</p>
+  <ul>
+    <li><strong>A rival definition for a name that gained one during the dialog.</strong>
+      The trigger is the runbook itself &mdash; &sect;9 tells the operator to enable a
+      key's owning extension FIRST, and doing that in another tab is exactly the write
+      that lands in the window a confirmation holds open. The id being vacant proves
+      nothing: it is vacant no matter who else claimed the NAME. Re-resolved inside the
+      writing transaction now, the way <code>addSchema</code> has always done it.</li>
+    <li><strong>The flip stepping over keys synthesis could not define.</strong> The
+      backfill excludes unregistered keys from its work list, so such a key produces a
+      run that reports <code>ran</code> with ZERO failures over data it silently could
+      not migrate &mdash; the most dangerous possible shape for a one-way step. The flip
+      gate is now asked a second time, with the write's outcome rather than its
+      forecast.</li>
+    <li><strong>Tombstoned definitions are NOT restored</strong> (reversing this PR's
+      own first cut). A blind restore brought the stored bag back, so a definition whose
+      preset had been switched to <code>date</code> came back as <code>date</code> and
+      rewrote every value of its key on the next backfill &mdash; the exact retroactive
+      rewrite the codec-selection rule above exists to prevent, performed by the same
+      module. Restoring it <em>faithfully</em> then needed three mechanisms arriving a
+      review round apart (re-assert the parser's required fields, merge over the stored
+      bag rather than replace it, restore the definition's own property children) to
+      guard one rare operator action. A deletion is an instruction: synthesis now skips
+      the key, names the block, and the flip refuses until the operator undoes the
+      deletion or deletes the key. That closed the children-left-tombstoned bug by
+      construction rather than fixing it.</li>
+  </ul>
+  <p>Two further corrections worth carrying: the e2ee gate reads the durable
+  <strong>mode pin</strong>, never <code>workspaces.encryption_mode</code> &mdash;
+  &sect;6 rule 1 already says the column is an untrusted server hint, and it is
+  <code>NOT NULL DEFAULT 'none'</code> locally, so an upgrading device reads a
+  genuinely-encrypted workspace as plaintext until PowerSync replays the real value. It
+  is an ALLOWLIST: only an affirmative plaintext pin proceeds. And an unreadable
+  property bag now BLOCKS the flip, because it is a hole in the survey the decision is
+  made from &mdash; the invariant is unverified rather than satisfied. A
+  <em>broken</em> definition deliberately does not block: it is usually a preset from an
+  extension not loaded on this device, it is repairable, and at
+  <code>'children'</code> the cell still carries the value.</p>
 </div>
 
 <h2 id="s1">1. Why move</h2>

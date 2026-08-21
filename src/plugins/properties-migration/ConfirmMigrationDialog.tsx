@@ -7,6 +7,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import type { DialogContextProps } from '@/utils/dialogs.js'
+import { agree, pluralize } from '@/utils/pluralize'
 
 export interface ConfirmMigrationDialogProps {
   /** Blocks the pass will visit — the same over-approximating predicate the
@@ -16,6 +17,21 @@ export interface ConfirmMigrationDialogProps {
    *  instead of switching the workspace over first — two materially different
    *  things to consent to. */
   childBacked: boolean
+  /** Keys nothing declares, which the gesture will give a definition before it
+   *  migrates anything (§9). Named here because it is the one part that
+   *  invents something rather than moving what is already there. */
+  synthesizedKeys: number
+  /** Keys no definition can ever carry, or that this device will not mint for.
+   *  On an un-flipped workspace the gesture refuses before reaching the dialog,
+   *  so seeing a number here means the workspace is already flipped. */
+  unfixableKeys: number
+  /** Keys whose definition block exists but is BROKEN — usually a preset from
+   *  an extension that is not loaded on this device, in which case the
+   *  definition is fine and enabling the provider fixes it. Kept separate from
+   *  `unfixableKeys` because calling a repairable problem permanent on a
+   *  one-way consent screen is how the one cheap moment to repair it is
+   *  missed. */
+  repairableKeys: number
 }
 
 /** Confirmation for the one-time properties migration.
@@ -35,10 +51,14 @@ export interface ConfirmMigrationDialogProps {
 export const ConfirmMigrationDialog = ({
   blockCount,
   childBacked,
+  synthesizedKeys,
+  unfixableKeys,
+  repairableKeys,
   resolve,
   cancel,
 }: ConfirmMigrationDialogProps & DialogContextProps<true>) => {
-  const blocks = `${blockCount.toLocaleString()} block${blockCount === 1 ? '' : 's'}`
+  const blocks = pluralize(blockCount, 'block')
+  const properties = (n: number) => pluralize(n, 'property', 'properties')
   return (
   <Dialog open onOpenChange={next => { if (!next) cancel() }}>
     <DialogContent className="max-w-md">
@@ -57,9 +77,34 @@ export const ConfirmMigrationDialog = ({
                 {' '}the blocks it implies. Existing values are not changed or moved,
                 and a property with no blocks yet keeps being read from where it
                 is now — so the switch itself changes nothing you can see.</>}
-          {' '}A key no schema declares is skipped and stays cell-only — run{' '}
-          <code>audit-properties</code> to find those.
         </p>
+        {synthesizedKeys > 0 && <p>
+          {properties(synthesizedKeys)} in this workspace {agree(synthesizedKeys, 'has', 'have')}
+          {' '}no definition — written by an importer, a raw write, or a plugin that is no
+          longer installed. They get one created for them first, with a type guessed
+          from the values already stored, and it shows up in the property panel so you can
+          check the guess. Nothing you can see changes; without it those
+          properties could never move.{' '}
+          <strong>If a plugin or extension owns any of them, install or enable it before you
+          run this</strong> — though that only helps for an owner that declares the property
+          as a schema block; one declaring it in code alone stays invisible here. Creating a definition here claims the name: re-enabling the owner
+          afterwards leaves two definitions competing, or — for an extension that declares
+          properties in code rather than as blocks — makes its writes start failing. Run{' '}
+          <code>audit-properties</code> first if you are not sure who wrote them.
+        </p>}
+        {repairableKeys > 0 && <p className="text-destructive">
+          {properties(repairableKeys)} {agree(repairableKeys, 'has', 'have')} a definition
+          this device cannot read — most often one whose type comes from an extension that
+          is not enabled here, in which case enabling it is the whole fix. Repair
+          {' '}{agree(repairableKeys, 'it', 'them')} first if you can: migrating now leaves
+          {' '}{agree(repairableKeys, 'it', 'them')} behind, and this is the cheap moment.
+          Run <code>audit-properties</code> to see which.
+        </p>}
+        {unfixableKeys > 0 && <p>
+          {properties(unfixableKeys)} cannot be given a definition at all and will stay as
+          {' '}{agree(unfixableKeys, 'it is', 'they are')}. Run{' '}
+          <code>audit-properties</code> to see which and why.
+        </p>}
         <p>
           {!childBacked && <>The switch applies to everyone in the workspace, so
             every device should be online and caught up before you start — a

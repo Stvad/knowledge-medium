@@ -143,6 +143,7 @@ describe('getOrCreateKernelPage', () => {
     })
   })
 
+
   describe('on a read-only workspace', () => {
     const readOnlyRepo = () => {
       const { repo } = createTestRepo({

@@ -34,20 +34,24 @@
  *     before the snapshot is built, so the surviving seed resolves the name
  *     normally. The only signal is its `console.error` at registry build.
  *
- * COST. Uncapped by design: one full pass over the workspace's live blocks
- * for the key histogram (json_each-expanding every property bag) plus a
- * second for the unreadable count. The sibling `grainAudit` caps its scan
- * (`AUDIT_BLOCK_LIMIT`) because sampling a type characterises it; here a cap
- * would make the coverage list INCOMPLETE, which is exactly the failure this
- * verb exists to fix — a partial list reading as "all clear" is worse than
- * no list. Measured at ~356k cells / ~55k blocks this is a few hundred ms of
- * native SQLite and more under wa-sqlite/OPFS, on an explicit operator-run
- * command. Only the provenance pass is sampled, and it says so.
+ * The scan itself — every key, its cell count, and whether the registry
+ * resolves it — is `scanPropertyKeys` (`@/data/internals/propertyKeyScan`),
+ * shared with §9's orphan-definition synthesis so the report and the writer
+ * can never disagree about which keys are orphaned. This file adds the two
+ * things only an operator report needs: the prose fix per key, and a sampled
+ * provenance pass. The sibling `grainAudit` caps its scan
+ * (`AUDIT_BLOCK_LIMIT`) because sampling a type characterises it; the shared
+ * scan deliberately does not, because a partial coverage list reading as
+ * "all clear" is worse than no list. Only the provenance pass is sampled,
+ * and it says so.
  */
 
 import type { PropertySchemaIdentityUnavailableReason } from '@/data/api'
-import { PROPERTY_SCHEMA_TYPE } from '@/data/blockTypes'
-import { propertyNameProp } from '@/data/properties'
+import { keyCannotBeDefined } from '@/data/internals/propertyDefinitionSynthesis'
+import {
+  OBJECT_BAG, keyOf, scanPropertyKeys,
+  type PropertyKeyScan, type UnresolvedPropertyKey,
+} from '@/data/internals/propertyKeyScan'
 import type { Repo } from '@/data/repo'
 
 export interface UnregisteredPropertyTypeUsage {
@@ -59,28 +63,12 @@ export interface UnregisteredPropertyTypeUsage {
   sampledBlocks: number
 }
 
-export interface UnregisteredProperty {
-  property: string
-  /** Occurrences of the key across live blocks. One per (block, key), so it
-   *  equals the block count for any bag written through the normal path —
-   *  only a hand-crafted `properties_json` with a duplicated key could make
-   *  it exceed that. */
-  cells: number
-  /** The resolver's own verdict, so this report and the migration cannot
-   *  disagree about what is registered. In practice a NAME lookup only ever
-   *  yields `definition-unavailable` — see `describeUnregisteredProperty`. */
-  reason: PropertySchemaIdentityUnavailableReason
-  /** Live `property-schema` blocks in this workspace whose stored name is
-   *  this key. Non-zero with an unresolved name means a BROKEN definition,
-   *  not a missing one — a different fix, so this is counted from `blocks`
-   *  rather than from the registry (a definition whose metadata fails to
-   *  parse is absent from the registry entirely, which would otherwise read
-   *  as "nothing declares this name" and invite a colliding second one). */
-  definitionBlocks: number
+export interface UnregisteredProperty extends UnresolvedPropertyKey {
   /** What to do about it, in the order §9 requires. */
   fix: string
   /** Set when no definition can ever back the key, so the flip must not
-   *  proceed until it is remapped or deleted. */
+   *  proceed until it is remapped or deleted. The same verdict the migration
+   *  command refuses on (`keyCannotBeDefined`). */
   blocksFlip?: true
   /** Types carried by a SAMPLE of the blocks holding the key — the
    *  machine-readable hint about which extension wrote it. Blocks with no
@@ -102,24 +90,8 @@ export interface UnregisteredProperty {
  *  read-only contract to tidy an advisory report that is re-run for free.
  *  The counts describe a slow-moving property of the graph (which keys have
  *  definitions), so skew is self-correcting on the next run. */
-export interface PropertyRegistrationAudit {
-  workspaceId: string
-  /** Non-null when this device could not vouch for its view of `blocks` when
-   *  the scan started — staged rows the drain WOULD apply, or the sync layer
-   *  not settled (downloading, disconnected, or a download error). The scan
-   *  happened anyway; the counts are then short by an unknown amount, and an
-   *  empty `unregistered` list means nothing.
-   *
-   *  "Staged rows the drain would apply" is narrower than the raw staging
-   *  count `agent health` reports: a device's own upload echoes re-stage
-   *  carrying the stamp they were written with, and the drain discards those
-   *  without touching `blocks`. So a non-zero `materializeBacklog` alongside a
-   *  null `syncGap` is the two numbers agreeing, not contradicting.
-   *
-   *  Reported rather than refused: this verb reads, and the flip is what acts
-   *  on what it says. Guarding the irreversible step is worth machinery;
-   *  guarding a report an operator chose to run is worth a sentence. */
-  syncGap: string | null
+export interface PropertyRegistrationAudit
+  extends Omit<PropertyKeyScan, 'unresolved'> {
   /** When this device last completed a sync, or null if it never has (or there
    *  is no sync layer). The rest of the report's basis, and the part no check
    *  can establish: `syncGap` being null says nothing is outstanding LOCALLY,
@@ -128,25 +100,8 @@ export interface PropertyRegistrationAudit {
    *  on a connected idle graph, so a current device on a quiet graph and a
    *  stale one look identical here. */
   syncedThrough: string | null
-  distinctProperties: number
-  /** Total (block, key) pairs — the size of the cell-era property surface. */
-  propertyCells: number
-  registeredProperties: number
   unregistered: UnregisteredProperty[]
   unregisteredCells: number
-  /** Live blocks whose `properties_json` is not a JSON object, so their keys
-   *  are invisible to this audit — the report is INCOMPLETE by that many
-   *  blocks rather than clean.
-   *
-   *  This means LOCAL CORRUPTION. It is specifically not an e2ee artifact:
-   *  ciphertext only ever lives in the `blocks_synced` staging table (which
-   *  is "never read by app queries", `src/data/blockSchema.ts`) and an
-   *  undecryptable row is quarantined there rather than materialized, so a
-   *  row in `blocks` is always plaintext. Do not wave a non-zero count off.
-   *  (A locked or still-draining e2ee workspace is a different kind of
-   *  incompleteness — those blocks are ABSENT from `blocks`, so nothing
-   *  here can see them.) */
-  unreadableBlocks: number
 }
 
 /** Keys we read provenance (types + samples) for, highest cell count first.
@@ -161,39 +116,20 @@ export const PROVENANCE_BLOCKS_PER_KEY = 25
 /** Sample block ids kept per key — enough to open one and see the shape. */
 const SAMPLES_PER_KEY = 3
 
-/** `json_each` raises on malformed JSON and invents keys for valid non-object
- *  JSON (integer indices for an array, a single NULL key for a scalar), so it
- *  is guarded on BOTH validity and object-ness. Without the object test, a
- *  corrupt scalar cell would surface as a phantom empty-string key and be
- *  reported as a hard flip blocker.
- *
- *  KEEP THE `CASE`, and keep the `NOT_` twin a `WHERE` conjunct. Whether
- *  SQLite short-circuits this `AND` depends on the CONTEXT, which is easy to
- *  break by accident (all verified against sqlite3 3.51):
- *    - in a `WHERE` clause it does — the row is filtered, nothing raises;
- *    - in a value-producing position (a `SELECT` list item, a computed
- *      column) it does NOT — both function opcodes run and `json_type`
- *      raises `malformed JSON`;
- *    - inside `CASE WHEN … THEN … ELSE … END` it does, because the `CASE`
- *      compiles to a real jump over the second call.
- *  So hoisting this predicate into a `SELECT` list, or dropping the `CASE`
- *  to "simplify", silently reintroduces the abort this guard prevents. */
-const IS_OBJECT_BAG =
-  `json_valid(b.properties_json) AND json_type(b.properties_json) = 'object'`
-const OBJECT_BAG = `CASE WHEN ${IS_OBJECT_BAG} THEN b.properties_json ELSE '{}' END`
-/** Exact logical complement, derived from the same source so the two can
- *  never drift into disagreeing about which rows the histogram skipped. */
-const NOT_OBJECT_BAG = `NOT (${IS_OBJECT_BAG})`
-
 const undeclaredFix =
   'Nothing declares this name — no definition block, no code seed — so property ' +
   'migration skips it (propertyChildrenProcessor.ts: `resolveNameSchema` → `continue`) ' +
   'and it is the one class of property data a flipped workspace cannot make ' +
   'child-backed. Fix IN THIS ORDER: (1) if an extension owns the key, install / ' +
-  'enable it so its seed materializes the definition; (2) only then let §9 orphan ' +
-  'synthesis mint a user-origin definition. Synthesizing first and enabling the ' +
-  'owner later collides in the winner machinery and strands field rows on the ' +
-  "loser's fieldId. Registering is additive — no cell value is rewritten."
+  'enable it so its SEED materializes the definition — note this does nothing for an ' +
+  'owner using a bare `defineProperty`, which name resolution cannot see at all; ' +
+  '(2) only then run "Migrate ' +
+  'properties to child blocks" from the palette, whose §9 orphan synthesis mints a ' +
+  'user-origin definition with a preset inferred from the stored values, VISIBLE in the ' +
+  'property panel so the guess can be checked. ' +
+  'Synthesizing first and enabling the owner later collides in the winner machinery ' +
+  "and strands field rows on the loser's fieldId. Registering is additive — no cell " +
+  'value is rewritten.'
 
 const brokenDefinitionFix =
   'A definition block exists for this name but the workspace cannot build behavior ' +
@@ -206,9 +142,13 @@ const brokenDefinitionFix =
   'fails to parse). Either way do not add a second definition for this name — it ' +
   'would collide.'
 
-const emptyKeyFix =
-  'The empty property key is a hard flip blocker: no definition can ever back it. ' +
-  'Delete or remap it before any workspace flips to child-backed properties (§9).'
+/** A key `keyCannotBeDefined` rejects. Its own reason carries the WHY; this
+ *  adds the consequence, which is the same for every such key. */
+const hopelessKeyFix = (reason: string): string =>
+  `Hard flip blocker — ${reason}. Since no definition can back it, "every cell key ` +
+  'resolves a definition" can never hold while it exists: the migration command refuses ' +
+  'to switch this workspace over until it is deleted or its value is remapped under a ' +
+  'named key (§9).'
 
 /** Reason → what to do.
  *
@@ -233,7 +173,10 @@ export const describeUnregisteredProperty = (
     definitionBlocks: number
   },
 ): {fix: string; blocksFlip?: true} => {
-  if (entry.property === '') return {fix: emptyKeyFix, blocksFlip: true}
+  // The same predicate synthesis and the flip gate use, so this report cannot
+  // call a key fixable that the migration will refuse to proceed past.
+  const hopeless = keyCannotBeDefined(entry.property)
+  if (hopeless !== null) return {fix: hopelessKeyFix(hopeless), blocksFlip: true}
   if (entry.reason === 'ambiguous') {
     return {fix:
       'Unreachable via a name lookup (see describeUnregisteredProperty). Two code ' +
@@ -249,11 +192,6 @@ export const describeUnregisteredProperty = (
   // 'registry-not-workspace-keyed' is ruled out by the caller's guard, which
   // refuses a workspace whose registry isn't loaded; treat it as unbuildable.
   return {fix: entry.definitionBlocks > 0 ? brokenDefinitionFix : undeclaredFix}
-}
-
-interface HistogramRow {
-  property: string | null
-  cells: number
 }
 
 interface ProvenanceRow {
@@ -272,145 +210,21 @@ const parseTypes = (json: string | null): string[] => {
   }
 }
 
-/** SQLite yields a non-string key only for a non-object bag, which
- *  `OBJECT_BAG` already excludes; this keeps the type honest without
- *  pretending the fallback carries meaning. */
-const keyOf = (raw: string | null): string => typeof raw === 'string' ? raw : String(raw ?? '')
-
-/** Enumerate every property key in the workspace's live blocks and classify
- *  each against the same resolver the migration uses. */
+/** The shared scan (`scanPropertyKeys`) plus the two operator-report layers:
+ *  a prose fix per unresolved key, and sampled provenance for the top ones. */
 export const auditPropertyRegistration = async (
   repo: Repo,
   workspaceId: string,
   limits: {keys?: number; blocksPerKey?: number} = {},
 ): Promise<PropertyRegistrationAudit> => {
-  const requireRegistry = () => {
-    const loaded = repo.propertyDefinitions
-    if (!loaded || loaded.workspaceId !== workspaceId) {
-      throw new Error(
-        `Cannot audit ${workspaceId}: its property-definition registry is not loaded ` +
-        `(loaded: ${loaded?.workspaceId ?? 'none'}). Classification would read every key ` +
-        'as unregistered. Open that workspace in the app and re-run.',
-      )
-    }
-    return loaded
-  }
-  // Validate BEFORE the wait, not after: `whenPropertyDefinitionsReady` refuses
-  // a non-active workspace with a message that names no fix. This one does.
-  requireRegistry()
-  // The registry is DERIVED from definition blocks, so a snapshot taken
-  // mid-rebuild calls a key whose definition has already landed "broken". This
-  // has to precede the CAPTURE, not merely the queries — the resolver freezes
-  // classification by value, so a later await cannot refresh it. Not a proof (a
-  // definition arriving after this still lags), but that error runs in the cheap
-  // direction: a false positive the operator investigates, unlike an all-clear
-  // built from missing rows.
-  await repo.whenPropertyDefinitionsReady(workspaceId)
-  // Sampled here, above the capture, so that EVERY await in this function is
-  // behind us before the resolver is frozen. Keeping it below would leave a
-  // suspension point between the capture and the scans, which is the window
-  // the capture exists to close.
-  const syncGap = await repo.syncViewGap()
-  // Defence in depth; no test pins it. A workspace switch across the awaits
-  // would leave `registry` belonging to another workspace, silently degrading
-  // the effective-name rewrite below to stored names. It also converts the
-  // two-switch case into a loud error: past the previous-workspace fallback
-  // `propertySchemaResolverFor` fails CLOSED, which here is the HAZARD, not
-  // safety — every key resolves identity-unavailable and the audit reports the
-  // whole graph as unregistered.
-  const registry = requireRegistry()
-  // Nothing may await between this line and the scans. The resolver holds its
-  // snapshot by value, so classification is fixed the instant it is taken; a
-  // workspace switch across a later suspension point would otherwise leave the
-  // scans reading rows this snapshot cannot classify. Same rule as
-  // `schedulePropertyDefinitionMigrations` in `repo.ts`.
-  const resolver = repo.propertySchemaResolverFor(workspaceId)
+  const scan = await scanPropertyKeys(repo, workspaceId)
 
-  const histogram = await repo.db.getAll<HistogramRow>(
-    `SELECT j.key AS property, COUNT(*) AS cells
-       FROM blocks b, json_each(${OBJECT_BAG}) j
-      WHERE b.workspace_id = ? AND b.deleted = 0
-      GROUP BY j.key`,
-    [workspaceId],
-  )
-
-  const unreadable = await repo.db.get<{n: number}>(
-    `SELECT COUNT(*) AS n FROM blocks b
-      WHERE b.workspace_id = ? AND b.deleted = 0 AND ${NOT_OBJECT_BAG}`,
-    [workspaceId],
-  )
-
-  // Ground truth for "does a definition block exist for this name", read from
-  // `blocks` rather than the registry: a definition whose metadata fails to
-  // parse (`parsePropertyDefinitionMetadata` returns null on a bad
-  // change-scope, or any decode throw) contributes NO registry entry, so the
-  // registry would report zero and send the operator to synthesis — creating
-  // the colliding second definition `brokenDefinitionFix` warns about.
-  // Same object guard as the histogram. `json_extract` RAISES on malformed
-  // JSON, which would abort the whole audit — and the one time you most want
-  // this report is while investigating corruption, so it must degrade into an
-  // incomplete report (with `unreadableBlocks` non-zero) rather than die.
-  //
-  // Defence in depth for the malformed case specifically, not a live path:
-  // the `blocks` update triggers run `json_each(NEW.properties_json, ...)`
-  // themselves (`clientSchema.ts`), so SQLite rejects a malformed write
-  // before it lands and no SQL path can create such a row. Only disk-level
-  // corruption (issue #284), which never runs the triggers, can — and it can
-  // leave a stale `block_types` entry pointing at the corrupt row, which is
-  // what would drag it into this join. The valid-but-non-object case IS
-  // reachable and is what the guard handles day to day.
-  const definitionRows = await repo.db.getAll<{id: string; name: string | null}>(
-    `SELECT b.id AS id, json_extract(${OBJECT_BAG}, ?) AS name
-       FROM blocks b
-       JOIN block_types t ON t.block_id = b.id AND t.workspace_id = b.workspace_id
-      WHERE t.type = ? AND b.workspace_id = ? AND b.deleted = 0`,
-    [`$."${propertyNameProp.name}"`, PROPERTY_SCHEMA_TYPE, workspaceId],
-  )
-  // Count each definition under its EFFECTIVE name, which is not always the
-  // stored one. `buildPropertyDefinitionRegistry` rewrites a seed-backed
-  // row's name to the seed's DECLARED name when the stored value has drifted
-  // (older client, import, sync). Counting the raw column would credit such a
-  // block to the stale key, so a cell still using that key — genuinely
-  // orphaned — would be told to "repair the definition" and steered away from
-  // the synthesis it actually needs, while the definition is in fact fine.
-  // Rows the registry doesn't know (metadata that fails to parse) fall back
-  // to the stored name, which is the whole reason this reads `blocks` at all.
-  const definitionBlocksByName = new Map<string, number>()
-  for (const row of definitionRows) {
-    const effectiveName = registry.definitionsByFieldId.get(row.id)?.name
-      ?? (typeof row.name === 'string' ? row.name : undefined)
-    if (effectiveName === undefined) continue
-    definitionBlocksByName.set(effectiveName, (definitionBlocksByName.get(effectiveName) ?? 0) + 1)
-  }
-
-  const unregistered: UnregisteredProperty[] = []
-  let registeredProperties = 0
-  let propertyCells = 0
-
-  for (const row of histogram) {
-    const property = keyOf(row.property)
-    propertyCells += row.cells
-
-    const resolution = resolver.resolve(property)
-    if (resolution.status === 'resolved') {
-      registeredProperties += 1
-      continue
-    }
-
-    const definitionBlocks = definitionBlocksByName.get(property) ?? 0
-    unregistered.push({
-      property,
-      cells: row.cells,
-      reason: resolution.reason,
-      definitionBlocks,
-      ...describeUnregisteredProperty({property, reason: resolution.reason, definitionBlocks}),
-      types: [],
-      sampleBlockIds: [],
-    })
-  }
-
-  unregistered.sort((left, right) =>
-    right.cells - left.cells || left.property.localeCompare(right.property))
+  const unregistered: UnregisteredProperty[] = scan.unresolved.map(entry => ({
+    ...entry,
+    ...describeUnregisteredProperty(entry),
+    types: [],
+    sampleBlockIds: [],
+  }))
 
   // Clamp rather than trust. `rn` starts at 1, so `blocksPerKey: 0` would
   // filter EVERY provenance row while leaving `provenanceOmitted` unset —
@@ -422,16 +236,20 @@ export const auditPropertyRegistration = async (
     blocksPerKey: Math.max(1, Math.floor(limits.blocksPerKey ?? PROVENANCE_BLOCKS_PER_KEY)),
   })
 
+  // Spelled out rather than spread: `unresolved` is the one field this report
+  // replaces, and listing the rest means a new field on the scan surfaces as a
+  // compile error here — a decision about whether the report wants it — instead
+  // of appearing in the output unannounced.
   return {
-    workspaceId,
-    syncGap,
+    workspaceId: scan.workspaceId,
+    syncGap: scan.syncGap,
+    distinctProperties: scan.distinctProperties,
+    propertyCells: scan.propertyCells,
+    registeredProperties: scan.registeredProperties,
+    unreadableBlocks: scan.unreadableBlocks,
     syncedThrough: repo.lastSyncedAt?.toISOString() ?? null,
-    distinctProperties: histogram.length,
-    propertyCells,
-    registeredProperties,
     unregistered,
     unregisteredCells: unregistered.reduce((sum, entry) => sum + entry.cells, 0),
-    unreadableBlocks: unreadable?.n ?? 0,
   }
 }
 

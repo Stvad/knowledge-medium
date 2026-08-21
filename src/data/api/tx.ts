@@ -273,6 +273,38 @@ export interface Tx {
    *  Deleted rows only, since `childrenOf` already covers the live ones. */
   reapedPropertyFieldTargets(workspaceId: string, parentId: string): Promise<Set<string>>
 
+  /** For each of `names` that has a LIVE `property-schema` block in this
+   *  workspace, the ids of those blocks — read inside the transaction.
+   *
+   *  Ids rather than a bare name set so a caller can tell the holders apart —
+   *  de-duplicate against the row its own projection selected, and name the
+   *  others when it has to report a collision.
+   *
+   *  DO NOT exclude your own deterministic id from this answer when the
+   *  question is "who holds this name". That exclusion is only meaningful where
+   *  the id is about to be WRITTEN, and as an answer about a NAME it hides the
+   *  one holder guaranteed to win: a `systemMint` row is born at `createdAt` 0
+   *  and `buildPropertyDefinitionRegistry` sorts ascending, so an unprojected
+   *  copy at that id takes the name on the next rebuild while the caller
+   *  backfills against whatever its projection picked. Keep "is this id mine to
+   *  write through?" as its own question — `classifyOccupant` answers it.
+   *
+   *  Exists because the property-definition registry is a projector-driven
+   *  PROJECTION: a definition applied by sync commits in its own transaction
+   *  and is invisible to the registry until the projector ticks. A caller about
+   *  to mint a definition cannot ask the registry whether the name is taken —
+   *  it would mint a rival, and the loser of the winner machinery strands every
+   *  field row bound to its fieldId. Inside the write lock no other writer can
+   *  commit, so this answer holds for the rest of the transaction.
+   *
+   *  Reads the LAST occurrence of the name key, matching `JSON.parse` rather
+   *  than `json_extract` — a raw write can produce a bag with a repeated key,
+   *  and SQLite and JavaScript disagree about which one wins. */
+  livePropertyDefinitionNames(
+    workspaceId: string,
+    names: readonly string[],
+  ): Promise<Map<string, string[]>>
+
   // ──── Composition ────
 
   /** Compose another mutator. Sub-mutator's writes go through immediately;

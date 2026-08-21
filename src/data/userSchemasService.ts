@@ -108,11 +108,16 @@ const decodeStoredDefault = (
 }
 
 /** Builds optional local behavior for already-validated definition metadata.
- *  Missing presets and invalid configs return null with a diagnostic. The block stays in the database
+ *  Missing presets and invalid configs return null with a diagnostic.
+ *
+ *  Exported because the properties migration republishes converged definitions
+ *  and must produce the SAME schema the projector will a tick later — building
+ *  a second one beside this was how a config-carrying preset ended up skipped
+ *  and an extension-replaced one ended up published under the kernel codec. The block stays in the database
  *  untouched; a fix re-runs this on the next subscription tick (or the
  *  `onValuePresetsChange` re-resolve when a missing preset's plugin
  *  loads). */
-const tryBuildSchema = (
+export const tryBuildSchema = (
   row: BlockData,
   presets: ReadonlyMap<string, AnyValuePresetCore>,
   metadata: PropertyDefinitionMetadata,

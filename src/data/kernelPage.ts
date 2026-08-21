@@ -102,7 +102,15 @@ export const kernelPageBlockId = (workspaceId: string, namespace: string): strin
  *
  *  It belongs here rather than in each surface because every one of them —
  *  daily notes, SRS review, locations, media capture, the Readwise backlog —
- *  reaches the same throw through this one function. */
+ *  reaches the same throw through this one function.
+ *
+ *  UNDOABLE, deliberately. Every caller bootstraps inside a `repo.undoGroup`
+ *  alongside the action that needed the page (`getOrCreateDailyNote`,
+ *  `createOrFindPlace`, media capture), so the create merges into that
+ *  operation's entry and is reverted only by reverting the operation — which is
+ *  what undo should do. A caller that writes with `skipUndo` and does NOT group
+ *  leaves this create alone on the stack; that is the caller's to account for,
+ *  not a reason to make the bootstrap invisible to undo for everyone. */
 export const getOrCreateKernelPage = async (
   repo: Repo,
   workspaceId: string,
