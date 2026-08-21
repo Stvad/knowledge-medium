@@ -15,8 +15,16 @@
  *     KM_ALLOW_BEAD_IDS=1, whose escape marks the mention as deliberate.
  *   - a MERGED PR additionally gets its merge commit read back (detected
  *     from gh's own "Merged pull request #N" line): its close keywords have
- *     already acted, so the echo names what was closed while reopening a
- *     wrong one is still cheap — covering merge text no pre-gate could read.
+ *     already acted — when it landed on the DEFAULT branch, the only place
+ *     GitHub applies them — so the echo names what was closed while
+ *     reopening a wrong one is still cheap. Covers merge text no pre-gate
+ *     could read.
+ *   - a publish the PRE-GATE treated as covered, whose output then named no
+ *     object, is REPORTED as such. That promise is the whole basis on which
+ *     the gate let the text through unchecked, so a promise it could not
+ *     keep has to be visible rather than a silent return — it is what keeps
+ *     a gap in the gate's gh-vocabulary list from costing anything worse
+ *     than one manual check.
  *
  * This hook READS ONLY. It once rewrote bead ids in place, which required
  * knowing that a URL in the output belonged to THIS command — an association
@@ -52,9 +60,12 @@ import {
   closeKeywordRefs,
   extractBeadIds,
   extractIssueRefs,
+  fetchIssueInfo,
   initializedDbRoot,
   isMainModule,
+  isPostVerifiable,
   issueRefsTable,
+  matchesAnyPublish,
   matchesApiPublish,
   matchesPrCommand,
   publishableKinds,
@@ -153,6 +164,20 @@ export const mergedPrNumbers = output =>
     [...output.matchAll(MERGED_PR())].filter(m => m[1] === '' || m[1] === REPO).map(m => Number(m[2])),
   )]
 
+// A tag may contain `/` (release/1.0 is a valid ref), which must travel as
+// ONE path parameter — concatenated, it addresses a different endpoint and
+// the read misses silently. Decoded first so a capture that already carried
+// percent-escapes is not encoded twice.
+const encodeTag = tag => {
+  let raw = tag
+  try {
+    raw = decodeURIComponent(tag)
+  } catch {
+    // malformed percent-escape: encode what was actually captured
+  }
+  return encodeURIComponent(raw)
+}
+
 export const apiPathFor = t =>
   t.kind === 'pr'
     ? `repos/${REPO}/pulls/${t.number}`
@@ -164,7 +189,7 @@ export const apiPathFor = t =>
           ? `repos/${REPO}/pulls/comments/${t.id}`
           : t.kind === 'review'
             ? `repos/${REPO}/pulls/${t.pr}/reviews/${t.id}`
-            : `repos/${REPO}/releases/tags/${t.tag}`
+            : `repos/${REPO}/releases/tags/${encodeTag(t.tag)}`
 
 // additionalContext shares the host's ~10K inline budget with every other
 // hook on the event (measured for SessionStart in issue #643; assume the
@@ -217,11 +242,24 @@ const verifyTarget = (t, { reportIds, deadline }) => {
   // No bd call of any kind before the DB-exists gate: in a clone without a
   // beads DB, any bd command CREATES an empty one that then refuses to pull.
   const byId = ids.length && initializedDbRoot() ? beadIssueLookup(ids) : new Map()
-  if (ids.length)
+  if (ids.length) {
+    // Every number is CONFIRMED before it is recommended. A bead's External:
+    // field can point at an issue since deleted or transferred, and this line
+    // is an instruction an agent can act on without reading the table below —
+    // recommending an unread number is the failure this hook exists to catch.
+    const shown = ids.map(id => {
+      const n = byId.get(id)
+      if (!n) return `${id} → no GitHub issue yet; run pnpm bd:sync`
+      const info = Date.now() < deadline ? fetchIssueInfo(n) : null
+      return info && typeof info === 'object'
+        ? `${id} → #${n} ("${info.title}")`
+        : `${id} → #${n} DID NOT RESOLVE — do not publish this number; check the bead's External: field`
+    })
     notes.push(
-      `${label} publishes bead ids, which are opaque to GitHub readers — replace them now (gh pr edit / gh issue edit / gh api PATCH): ` +
-        ids.map(id => (byId.get(id) ? `${id} → #${byId.get(id)}` : `${id} → no GitHub issue yet; run pnpm bd:sync`)).join(', '),
+      `${label} publishes bead ids, which are opaque to GitHub readers — replace each confirmed one (gh pr edit / gh issue edit / gh api PATCH): ` +
+        shown.join(', '),
     )
+  }
 
   const refs = [...new Set([...extractIssueRefs(text), ...[...byId.values()].filter(Boolean)])]
   if (refs.length) {
@@ -274,13 +312,23 @@ const verifyMergeCommit = (n, deadline) => {
   // not prompt a reopen.
   const headCloses = closeKeywordRefs(headMsg).filter(r => r !== n)
   const commitCloses = closeKeywordRefs(commitMsgs.join('\n')).filter(r => r !== n && !headCloses.includes(r))
-  const warn =
-    (headCloses.length
-      ? `\n  ⚠ close keywords in the merge commit have ALREADY acted — if an issue above was closed wrongly, reopen it now (gh issue reopen <n>)`
-      : '') +
-    (commitCloses.length
-      ? `\n  (close keywords in the PR's own commits acted only if this was a merge or rebase — a squash with custom text did not land them)`
-      : '')
+  // GitHub applies closing keywords only when the merge lands on the DEFAULT
+  // branch. Merged into a release branch — or into the branch below it in a
+  // stack — nothing was closed, and telling the agent to reopen would send it
+  // after an issue that is still open. Both fields ride on the PR already
+  // fetched above, so the check costs no extra request.
+  const base = typeof pr?.base?.ref === 'string' ? pr.base.ref : ''
+  const landedOnDefault = Boolean(base) && base === pr?.base?.repo?.default_branch
+  const warn = !landedOnDefault
+    ? headCloses.length || commitCloses.length
+      ? `\n  close keywords here have NOT acted: this merged into ${base || 'another branch'}, and GitHub applies them only on the default branch. They act when this reaches it.`
+      : ''
+    : (headCloses.length
+        ? `\n  ⚠ close keywords in the merge commit have ALREADY acted — if an issue above was closed wrongly, reopen it now (gh issue reopen <n>)`
+        : '') +
+      (commitCloses.length
+        ? `\n  (close keywords in the PR's own commits acted only if this was a merge or rebase — a squash with custom text did not land them)`
+        : '')
   const capNote = refs.length > cap ? `\n  …and ${refs.length - cap} more references not echoed` : ''
   return [`merge commit ${pr.merge_commit_sha.slice(0, 9)} of #${n}:\n${issueRefsTable(message, refs.slice(0, cap), 'post')}${capNote}${pageNote}${warn}`]
 }
@@ -291,6 +339,20 @@ const hookPostPublish = () => {
     payload = JSON.parse(readFileSync(0, 'utf8'))
   } catch {
     return
+  }
+  const emit = notes => {
+    if (!notes.length) return
+    const hookEventName = payload?.hook_event_name === 'PostToolUseFailure' ? 'PostToolUseFailure' : 'PostToolUse'
+    console.log(
+      JSON.stringify({
+        hookSpecificOutput: {
+          hookEventName,
+          additionalContext: clipContext(
+            `bd-publish-verify (ground truth read back from the GitHub API):\n${notes.join('\n')}`,
+          ),
+        },
+      }),
+    )
   }
   const cmd = payload?.tool_input?.command ?? ''
   // The Bash tool merges stderr into tool_response.stdout; on
@@ -303,11 +365,22 @@ const hookPostPublish = () => {
         ? payload.error
         : ''
   if (!cmd || !out) return
-  if (!matchesPrCommand(cmd) && !matchesApiPublish(cmd)) return
+  if (!matchesAnyPublish(cmd)) return
   const all = publishedTargets(cmd, out)
   const allMerged = matchesPrCommand(cmd) ? mergedPrNumbers(out) : []
   const mergedPrs = allMerged.slice(0, 2)
-  if (!all.length && !mergedPrs.length) return
+  // The pre-gate let this through on the promise that THIS hook would check
+  // it. When that promise cannot be kept — a response with no object URL, a
+  // templated or foreign or otherwise unreadable output — say so, rather
+  // than returning silently and leaving the text checked by nobody. This is
+  // what keeps a gap in the gate's gh-vocabulary list from being silent: it
+  // surfaces here instead of having to have been enumerated there.
+  if (!all.length && !mergedPrs.length) {
+    if (!isPostVerifiable(cmd)) return
+    return emit([
+      'this publish was treated as covered by the pre-publish gate, but its output named no object to read back — nothing has checked the references in what it published. Verify them yourself now (gh issue view <n>), and if this shape recurs, the gate should stop treating it as covered.',
+    ])
+  }
   const targets = all.slice(0, MAX_TARGETS)
   const reportIds = !allowsBeadIds(cmd)
   const deadline = Date.now() + DEADLINE_MS
@@ -340,18 +413,7 @@ const hookPostPublish = () => {
       // same defence-in-depth contract as the targets loop above
     }
   }
-  const eventName = payload?.hook_event_name === 'PostToolUseFailure' ? 'PostToolUseFailure' : 'PostToolUse'
-  if (notes.length)
-    console.log(
-      JSON.stringify({
-        hookSpecificOutput: {
-          hookEventName: eventName,
-          additionalContext: clipContext(
-            `bd-publish-verify (ground truth read back from the GitHub API):\n${notes.join('\n')}`,
-          ),
-        },
-      }),
-    )
+  emit(notes)
 }
 
 if (isMainModule(import.meta.url)) {

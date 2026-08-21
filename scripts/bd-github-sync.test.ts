@@ -1379,6 +1379,40 @@ describe('hookPrePr process behavior', { timeout: 20_000 }, () => {
       expect(hook(cmd).status, cmd).toBe(2)
   })
 
+  // The gh-vocabulary layer: flags and selectors that leave the read-back
+  // nothing to fetch. A gap here is bounded by one tool's manual — and no
+  // longer silent, since bd-publish-verify reports a coverage claim it
+  // could not honour.
+  it('treats response-hiding flags and foreign selectors as uncovered', () => {
+    const { hook } = makeRepo({ dbReady: true, ghIssues: { 700: { title: 'Some PR', state: 'open', pull_request: {} } } })
+    for (const cmd of [
+      // -t is --template's short form; on gh api it formats the response away
+      'gh api -X PATCH repos/Stvad/knowledge-medium/pulls/12 -f body="Fixes #700" -t \'{{.id}}\'',
+      'gh api -X PATCH repos/Stvad/knowledge-medium/pulls/12 -f body="Fixes #700" --template \'{{.id}}\'',
+      // GH_REPO selects the repository the way -R does, and the read-back's
+      // URL pattern is pinned to this one
+      'GH_REPO=owner/other gh pr edit 12 --body="Fixes #700"',
+    ])
+      expect(hook(cmd).status, cmd).toBe(2)
+    // -t on a CLI verb is --title, not a template: still covered
+    expect(hook('gh pr create -t "a title" --body "relates to #700"').status).toBe(0)
+  })
+
+  // The two signals must be read off the SAME string. Testing expansion on
+  // the raw command while testing operators on the skeleton — which blanks a
+  // QUOTED expansion — let a command be a publish and post-verified at once.
+  it('treats a quoted flag expansion as uncovered, not just an unquoted one', () => {
+    const { hook } = makeRepo({ dbReady: true })
+    for (const cmd of [
+      'gh api "${FLAGS:---input=payload.json}" repos/Stvad/knowledge-medium/issues/1/comments',
+      'gh api $FLAGS repos/Stvad/knowledge-medium/issues/1/comments',
+    ]) {
+      const r = hook(cmd)
+      expect(r.status, cmd).toBe(2)
+      expect(r.stderr).toContain('post-publication read-back covers')
+    }
+  })
+
   // With its flags expanded, an api mutation shows no literal mutation flag
   // — neither this gate nor the read-back would otherwise look at it.
   it('treats an expansion-flagged api call as a publish', () => {

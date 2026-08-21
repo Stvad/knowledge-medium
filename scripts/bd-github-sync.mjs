@@ -249,6 +249,66 @@ const GH_UNVERIFIABLE = new RegExp(
 )
 export const matchesUnverifiableCommand = cmd => GH_UNVERIFIABLE.test(commandSkeleton(cmd))
 
+// Expansion is checked against the RAW command: commandSkeleton blanks a
+// QUOTED expansion, and reading this signal off a different string than the
+// operator test below is what once let a command be a publish and be
+// post-verified at the same time.
+const EXPANSION = /[$`]/
+// Every shell operator in one character class — pipes, redirects,
+// substitutions, separators, multi-line — so there is no per-operator
+// spelling to keep complete and no positional heuristic to defeat.
+const SHELL_OPERATOR = /[|;&<>$`\n]/
+// Repository selection away from this one, by flag or by environment. The
+// read-back's URL pattern is pinned to this repo, so a foreign publish has
+// no post-check at all. No separator required: gh takes -Rowner/repo.
+const FOREIGN_TARGET = /(?<![\w-])(?:-R|--repo)|\bGH_REPO=/
+// Flags that leave no fetchable object in the output. `-t` is --template's
+// short form; consulted only for `gh api`, where it formats the response,
+// never for `gh pr create -t <title>`.
+const OPAQUE_OUTPUT = /(?<![\w-])(?:--(?:silent|jq|template)\b|-t)/
+
+/**
+ * Any command that may publish text on GitHub — including one whose mutation
+ * flags arrive by expansion, where no literal flag is left to match and a
+ * narrower test would leave the command inspected by NEITHER hook.
+ */
+export const matchesAnyPublish = cmd =>
+  matchesPrCommand(cmd) || matchesApiPublish(cmd) || (GH_API.test(commandSkeleton(cmd)) && EXPANSION.test(cmd))
+
+/**
+ * Whether the post-publication read-back covers this publish. A WHITELIST:
+ * recognize the covered shape and treat everything else as uncovered, so a
+ * command this gate fails to recognize costs an attested re-run instead of
+ * passing unchecked. Enumerating the ways output escapes the hook would have
+ * to be COMPLETE over shell syntax to be correct, and cannot be.
+ *
+ * Two layers, different in kind on purpose:
+ *  - SHELL: the skeleton must hold no operator at all, and the raw text no
+ *    expansion.
+ *  - GH: a closed, documented vocabulary — the verbs whose output names no
+ *    URL, foreign targets, graphql, response-hiding flags. A gap here is
+ *    bounded by one tool's manual rather than by the shell's grammar, and
+ *    bd-publish-verify reports a coverage claim it could not honour, so a
+ *    gap surfaces instead of passing silently.
+ *
+ * Membership words are tested on the raw text too: a quoted "--silent" or
+ * "graphql" still reaches gh unquoted. Prose hits cost one echo round.
+ *
+ * A heredoc carries `<` and so attests. That is the deliberate cost of not
+ * parsing heredocs (see commandSkeleton): write the body to a file and
+ * publish it with --body-file, which is a single covered command.
+ */
+export const isPostVerifiable = cmd => {
+  if (!matchesAnyPublish(cmd)) return false
+  const sk = commandSkeleton(cmd)
+  if (SHELL_OPERATOR.test(sk) || EXPANSION.test(cmd)) return false
+  if (FOREIGN_TARGET.test(sk)) return false
+  const api = matchesApiPublish(cmd)
+  if (api && (/\bgraphql\b/.test(sk) || /\bgraphql\b/.test(cmd))) return false
+  if (api && (OPAQUE_OUTPUT.test(sk) || OPAQUE_OUTPUT.test(cmd))) return false
+  return api || !matchesUnverifiableCommand(cmd)
+}
+
 
 // The escape hatch must also be in command-prefix position of the SKELETON —
 // honored from quoted prose, a PR body QUOTING it would both bypass the gate
@@ -1016,27 +1076,7 @@ const hookPrePr = () => {
   // match must not swallow the commit check.
 
   const isPublish = matchesPrCommand(cmd)
-  // A `gh api` whose flags arrive by expansion shows no mutation flag to
-  // match, so neither this gate nor the read-back would look at it. Counting
-  // any expansion-bearing api call as a publish closes that: expansion is
-  // uncovered anyway, so the cost is an attested re-run.
-  const apiPublish = matchesApiPublish(cmd) || (GH_API.test(commandSkeleton(cmd)) && /[$`]/.test(cmd))
-  // gh's own flag vocabulary decides whether a response names a fetchable
-  // object: graphql answers with an envelope, and the output-hiding flags
-  // print nothing to find the object by. A CLOSED, documented set — one
-  // tool's manual — so membership, not enumeration. (-q, the short form of
-  // --jq, is a residual: a command-wide scan would trip on `grep -q`.)
-  // Membership words are tested on the raw text too: a quoted "--silent" or
-  // "graphql" reaches gh unquoted, but the skeleton blanks it. Prose hits
-  // cost at most an extra readable-text echo round.
-  const sk = commandSkeleton(cmd)
-  const graphqlApi = apiPublish && (/\bgraphql\b/.test(sk) || /\bgraphql\b/.test(cmd))
-  const opaqueRe = /(?<![\w-])--(?:silent|jq|template)\b/
-  const opaqueApi = apiPublish && (opaqueRe.test(sk) || opaqueRe.test(cmd))
-  // No separator required: gh takes the attached form (-Rowner/repo) too,
-  // and in a whitelist an over-match costs an attested re-run while an
-  // under-match is a foreign publish nothing checks at all.
-  const foreignRepo = /(?<![\w-])(?:-R|--repo)/.test(sk)
+  const apiPublish = matchesAnyPublish(cmd) && !isPublish
 
   // Close keywords in commit messages act when the commit reaches the
   // default branch, and commit text never becomes a GitHub object — but the
@@ -1068,35 +1108,12 @@ const hookPrePr = () => {
   const targetUrl = () => /((?:\S*\/)?gh\s+(?:-\S+\s+(?:[^-\s]\S*\s+)?)*(?:pr|issue)\s+\w+\s+)https?:\/\/\S+/g
   const text = targetUrl().test(commandSkeleton(cmd)) ? cmd.replace(targetUrl(), '$1') : cmd
 
-  // Does the post-publication read-back cover this publish? A WHITELIST:
-  // recognize the covered shape and treat everything else as uncovered, so a
-  // command this gate fails to recognize costs an attested re-run instead of
-  // passing unchecked. Enumerating the ways output escapes the hook would
-  // have to be COMPLETE over shell syntax to be correct, and cannot be.
-  //
-  // Two layers, different in kind on purpose:
-  //  - SHELL: the skeleton must contain no operator at all. One test for
-  //    pipes, redirects, substitutions, separators and multi-line commands
-  //    together — no per-operator spelling, no positional heuristics.
-  //  - GH: a closed, documented vocabulary — the verbs whose output names
-  //    no URL, foreign -R targets, graphql, response-hiding flags. A gap
-  //    here is bounded by one tool's manual, not by the shell's grammar.
-  //
-  // A heredoc carries `<` and so attests. That is the deliberate cost of
-  // not parsing heredocs (see commandSkeleton): write the body to a file
-  // and publish it with --body-file, which is a single covered command.
-  const SHELL_OPERATOR = /[|;&<>$`\n]/
-  const postVerified =
-    !SHELL_OPERATOR.test(sk) &&
-    !foreignRepo &&
-    !graphqlApi &&
-    !opaqueApi &&
-    (apiPublish || !matchesUnverifiableCommand(cmd))
   // Uncovered publishes keep the pre-publish checks: readable text gets the
   // refs/ids tables below, text living OUTSIDE the command blocks outright
   // (#683). The merge COMMIT of a merged PR is read back post-merge by
-  // bd-publish-verify regardless.
-  const blind = !postVerified
+  // bd-publish-verify regardless. The coverage test itself is shared with
+  // that hook (isPostVerifiable), which reports any claim it cannot honour.
+  const blind = !isPostVerifiable(cmd)
   if (blind && !(allowsIssueRefs(cmd) && allowsBeadIds(cmd))) {
     // Any *file long flag (body-file, file, notes-file, …), --template and
     // --input carry text this gate cannot read, as do -F/-T (matched bare —

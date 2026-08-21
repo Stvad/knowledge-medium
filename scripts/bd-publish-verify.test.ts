@@ -154,6 +154,18 @@ describe('publishedTargets', () => {
   })
 })
 
+describe('apiPathFor tag encoding', () => {
+  it('sends a slashed release tag as one path parameter', () => {
+    expect(apiPathFor({ kind: 'release', tag: 'release/1.0' })).toBe(
+      'repos/Stvad/knowledge-medium/releases/tags/release%2F1.0',
+    )
+    // an already-encoded capture must not be encoded twice
+    expect(apiPathFor({ kind: 'release', tag: 'release%2F1.0' })).toBe(
+      'repos/Stvad/knowledge-medium/releases/tags/release%2F1.0',
+    )
+  })
+})
+
 describe('mergedPrNumbers', () => {
   it('reads PR numbers from gh merge success lines only', () => {
     expect(mergedPrNumbers('✓ Merged pull request #652 (feat x)\n✓ Deleted branch')).toEqual([652])
@@ -380,7 +392,12 @@ describe('bd-publish-verify process behavior', { timeout: 30_000 }, () => {
     const sha = 'abc123def4567890abc123def4567890abc123de'
     const { hook } = makeRepo({
       fixtures: {
-        'repos/Stvad/knowledge-medium/pulls/652': { html_url: url('pull/652'), merged: true, merge_commit_sha: sha },
+        'repos/Stvad/knowledge-medium/pulls/652': {
+          html_url: url('pull/652'),
+          merged: true,
+          merge_commit_sha: sha,
+          base: { ref: 'master', repo: { default_branch: 'master' } },
+        },
         [`repos/Stvad/knowledge-medium/commits/${sha}`]: { commit: { message: 'stack tip (#652)\n\nFixes #700' } },
         'repos/Stvad/knowledge-medium/issues/700': { title: 'Closed by merge', state: 'closed' },
       },
@@ -392,6 +409,68 @@ describe('bd-publish-verify process behavior', { timeout: 30_000 }, () => {
     expect(context(r)).toContain('ALREADY acted')
     // the PR's own number is noise, not a reference
     expect(context(r)).not.toContain('#652 →')
+  })
+
+  // GitHub applies closing keywords only on the default branch. Merged into
+  // the branch below it in a stack, nothing was closed — advising a reopen
+  // would send the agent after an issue that is still open.
+  it('does not claim close keywords acted when the merge landed off the default branch', () => {
+    const sha = 'dd11ee22ff3344556677889900aabbccddeeff00'
+    const { hook } = makeRepo({
+      fixtures: {
+        'repos/Stvad/knowledge-medium/pulls/652': {
+          html_url: url('pull/652'),
+          merged: true,
+          merge_commit_sha: sha,
+          base: { ref: 'claude/lower-of-the-stack', repo: { default_branch: 'master' } },
+        },
+        [`repos/Stvad/knowledge-medium/commits/${sha}`]: { commit: { message: 'upper of the stack (#652)\n\nFixes #700' } },
+        'repos/Stvad/knowledge-medium/issues/700': { title: 'Still open', state: 'open' },
+      },
+    })
+    const r = hook('gh pr merge 652 --merge', '✓ Merged pull request #652 (upper of the stack)')
+    expect(r.status).toBe(0)
+    expect(context(r)).toContain('#700 → "Still open"')
+    expect(context(r)).toContain('have NOT acted')
+    expect(context(r)).toContain('claude/lower-of-the-stack')
+    expect(context(r)).not.toContain('ALREADY acted')
+    expect(context(r)).not.toContain('reopen it now')
+  })
+
+  // The gate let this through on the promise that this hook would check it.
+  // When the output names no object, that promise cannot be kept — say so
+  // rather than returning silently and leaving the text checked by nobody.
+  it('reports a covered publish whose output named no object', () => {
+    const { hook } = makeRepo({ fixtures: {} })
+    const r = hook(PR_CREATE, 'Creating pull request for x into master\nsomething went to a template')
+    expect(r.status).toBe(0)
+    expect(context(r)).toContain('treated as covered by the pre-publish gate')
+    expect(context(r)).toContain('nothing has checked the references')
+  })
+
+  // An uncovered publish was already checked BEFORE it shipped, so the same
+  // empty read-back there is expected, not a surprise.
+  it('stays silent when an uncovered publish names no object', () => {
+    const { hook } = makeRepo({ fixtures: {} })
+    const r = hook('gh pr merge 652 --squash', 'merged, no url printed')
+    expect(r.status).toBe(0)
+    expect(r.stdout).toBe('')
+  })
+
+  // The substitution line is an instruction an agent can act on without
+  // reading the table below it, so the number on it must be confirmed.
+  it('refuses to recommend a bead mapping whose issue does not resolve', () => {
+    const { hook } = makeRepo({
+      fixtures: {
+        'repos/Stvad/knowledge-medium/pulls/652': { html_url: url('pull/652'), title: 'T', body: 'tracks km-abc' },
+        // no fixture for issues/12: the mapped issue 404s
+      },
+      shows: [[{ id: 'km-abc', external_ref: url('issues/12') }]],
+    })
+    const r = hook(PR_CREATE, url('pull/652'))
+    expect(r.status).toBe(0)
+    expect(context(r)).toContain('DID NOT RESOLVE')
+    expect(context(r)).toContain('do not publish this number')
   })
 
   it('echoes the post-mode issue-reference table for published refs', () => {
@@ -523,7 +602,12 @@ describe('bd-publish-verify process behavior', { timeout: 30_000 }, () => {
     const sha = 'def4567890def4567890def4567890def4567890'
     const { hook } = makeRepo({
       fixtures: {
-        'repos/Stvad/knowledge-medium/pulls/652': { html_url: url('pull/652'), merged: true, merge_commit_sha: sha },
+        'repos/Stvad/knowledge-medium/pulls/652': {
+          html_url: url('pull/652'),
+          merged: true,
+          merge_commit_sha: sha,
+          base: { ref: 'master', repo: { default_branch: 'master' } },
+        },
         [`repos/Stvad/knowledge-medium/commits/${sha}`]: { commit: { message: 'feat B (#652)' } },
         'repos/Stvad/knowledge-medium/pulls/652/commits?per_page=100': [
           { commit: { message: 'feat A\n\nCloses #701' } },
