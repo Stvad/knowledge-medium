@@ -67,7 +67,10 @@ export const DuplicateNameBanner: BlockRenderer = ({block}) => {
   }
 
   return (
-    <div className="mb-2 flex flex-wrap items-center gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm">
+    // `pr-14` keeps the copy clear of the panel's back/forward controls, which
+    // are positioned over this row's right edge and overlap the text at narrow
+    // widths.
+    <div className="mb-2 flex flex-wrap items-center gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 py-2 pl-3 pr-14 text-sm">
       <span className="text-muted-foreground">
         Another page is named “{truncate(name, 40)}”, so links to it go there.
       </span>
