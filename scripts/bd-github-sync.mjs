@@ -272,8 +272,15 @@ const OPAQUE_OUTPUT = /(?<![\w-])(?:--(?:silent|jq|template)\b|-t)/
  * flags arrive by expansion, where no literal flag is left to match and a
  * narrower test would leave the command inspected by NEITHER hook.
  */
+// Modes that print or hand off instead of creating anything: --dry-run
+// shows what would be sent, --web opens the browser. Read off the SKELETON,
+// never the raw text — a body that merely MENTIONS --dry-run would otherwise
+// exempt a real publish from every check, turning a noise fix into a hole.
+const NON_PUBLISHING_MODE = /(?<![\w-])--(?:dry-run|web)\b/
+
 export const matchesAnyPublish = cmd =>
-  matchesPrCommand(cmd) || matchesApiPublish(cmd) || (GH_API.test(commandSkeleton(cmd)) && EXPANSION.test(cmd))
+  !NON_PUBLISHING_MODE.test(commandSkeleton(cmd)) &&
+  (matchesPrCommand(cmd) || matchesApiPublish(cmd) || (GH_API.test(commandSkeleton(cmd)) && EXPANSION.test(cmd)))
 
 /**
  * Whether the post-publication read-back covers this publish. A WHITELIST:
@@ -1075,8 +1082,9 @@ const hookPrePr = () => {
   // publish (`git commit -m "Fixes #N" && gh pr comment …`), and a publish
   // match must not swallow the commit check.
 
-  const isPublish = matchesPrCommand(cmd)
-  const apiPublish = matchesAnyPublish(cmd) && !isPublish
+  const publishes = matchesAnyPublish(cmd)
+  const isPublish = publishes && matchesPrCommand(cmd)
+  const apiPublish = publishes && !isPublish
 
   // Close keywords in commit messages act when the commit reaches the
   // default branch, and commit text never becomes a GitHub object — but the

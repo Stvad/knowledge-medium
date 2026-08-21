@@ -458,6 +458,16 @@ describe('bd-publish-verify process behavior', { timeout: 30_000 }, () => {
     expect(context(r)).toContain('treated as covered by the pre-publish gate')
   })
 
+  // A --dry-run creates nothing, so a read-back that finds nothing is correct
+  // rather than a broken promise. Warning here would train the agent to
+  // ignore the warning, which is the only thing making it worth having.
+  it('stays silent for a dry-run that published nothing', () => {
+    const { hook } = makeRepo({ fixtures: {} })
+    const r = hook('gh pr create --title t --body-file /tmp/x.md --dry-run', 'Would have created a Pull Request with:\ntitle\tt')
+    expect(r.status).toBe(0)
+    expect(r.stdout).toBe('')
+  })
+
   // An uncovered publish was already checked BEFORE it shipped, so the same
   // empty read-back there is expected, not a surprise.
   it('stays silent when an uncovered publish names no object', () => {

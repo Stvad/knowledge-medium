@@ -1379,6 +1379,20 @@ describe('hookPrePr process behavior', { timeout: 20_000 }, () => {
       expect(hook(cmd).status, cmd).toBe(2)
   })
 
+  // A mode that prints or hands off creates nothing, so there is no text to
+  // check and — more importantly — nothing for the read-back to fail to find.
+  // The mention form must NOT be exempt: reading this off the raw command
+  // would turn a noise fix into a hole in every check.
+  it('treats --dry-run and --web as non-publishing, but not a mention of them', () => {
+    const { hook } = makeRepo({ dbReady: true, ghIssues: { 700: { title: 'Some PR', state: 'open', pull_request: {} } } })
+    expect(hook('gh pr create --title t --body "Fixes #700" --dry-run').status).toBe(0)
+    expect(hook('gh pr create --title t --body "Fixes #700" --web').status).toBe(0)
+    // a real publish whose BODY mentions the flag is still fully checked
+    const r = hook('gh pr merge 12 --squash --body "run it with --dry-run first, Fixes #700"')
+    expect(r.status).toBe(2)
+    expect(r.stderr).toContain('close keyword targets a PR')
+  })
+
   // The gh-vocabulary layer: flags and selectors that leave the read-back
   // nothing to fetch. A gap here is bounded by one tool's manual — and no
   // longer silent, since bd-publish-verify reports a coverage claim it
