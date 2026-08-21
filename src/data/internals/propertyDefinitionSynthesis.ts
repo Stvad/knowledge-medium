@@ -375,15 +375,27 @@ const distinctValuesByKey = async (
   const out = new Map<string, unknown[]>()
   if (keys.length === 0) return out
   const keysJson = JSON.stringify(keys)
+  // ONE value per (block, key) — the LAST occurrence, which is what the app
+  // reads. A raw or imported bag can repeat a key; `json_each` yields every
+  // occurrence while `JSON.parse` keeps only the last, so proving against all
+  // of them judges values nothing can observe: `{"k":"obsolete","k":42}` is a
+  // number at runtime but would be proven as `raw-json`, and enough dead
+  // occurrences could push a key past the limit and block the flip outright.
+  // Same rule, same reason, as `Tx.livePropertyDefinitionNames` and the scan.
+  const lastPerBlock = `
+    SELECT b.id AS block, j.key AS property, j.type AS type, j.value AS value,
+           ROW_NUMBER() OVER (PARTITION BY b.id, j.key ORDER BY j.id DESC) AS occurrence
+      FROM blocks b, json_each(${OBJECT_BAG}) j
+     WHERE b.workspace_id = ? AND b.deleted = 0
+       AND j.key IN (SELECT value FROM json_each(?))`
   // Counted first so an oversized key is never READ. A LIMIT on the value
   // query instead would silently truncate one key's values and prove a preset
   // against a subset, which is the guessing this replaced.
   const counts = await repo.db.getAll<{property: string | null; distinctValues: number}>(
-    `SELECT j.key AS property, COUNT(DISTINCT j.value) AS distinctValues
-       FROM blocks b, json_each(${OBJECT_BAG}) j
-      WHERE b.workspace_id = ? AND b.deleted = 0
-        AND j.key IN (SELECT value FROM json_each(?))
-      GROUP BY j.key`,
+    `WITH live AS (${lastPerBlock})
+     SELECT property, COUNT(DISTINCT value) AS distinctValues
+       FROM live WHERE occurrence = 1
+      GROUP BY property`,
     [workspaceId, keysJson],
   )
   const provable = counts
@@ -392,11 +404,9 @@ const distinctValuesByKey = async (
   if (provable.length === 0) return out
 
   const rows = await repo.db.getAll<DistinctValueRow>(
-    `SELECT j.key AS property, j.type AS type, j.value AS value
-       FROM blocks b, json_each(${OBJECT_BAG}) j
-      WHERE b.workspace_id = ? AND b.deleted = 0
-        AND j.key IN (SELECT value FROM json_each(?))
-      GROUP BY j.key, j.type, j.value`,
+    `WITH live AS (${lastPerBlock})
+     SELECT property, type, value FROM live WHERE occurrence = 1
+      GROUP BY property, type, value`,
     [workspaceId, JSON.stringify(provable)],
   )
   for (const row of rows) {
@@ -591,9 +601,7 @@ export interface SynthesisResult {
  *
  *  Read from the ROW rather than the registry — the caller is checking a fact
  *  the registry may be stale about — but through the registry's OWN rule, so
- *  the two cannot disagree. They did: this used to read a dropped duplicate
- *  seed's row as having no name, where the registry gives it its stored one,
- *  which made a live rival invisible to the check whose job is finding rivals. */
+ *  the two cannot disagree about which name a row answers to. */
 const effectiveDefinitionName = (
   block: BlockData,
   registry: PropertyDefinitionRegistrySnapshot,
@@ -677,6 +685,21 @@ export const applyPropertyDefinitionSynthesis = async (
   let lastOrderKey: string | null = null
 
   await repo.tx(async tx => {
+    // INSIDE the write lock, immediately before the first write, because that
+    // is the only place the answer cannot go stale under us: the checks above
+    // are separated from this transaction by the Properties-page bootstrap and
+    // by the lock wait, and the workspace's real row can arrive from sync in
+    // between. Minting is not undoable in the way that matters here — every id
+    // is derived from a property NAME, so writing one into a workspace that
+    // turns out to be encrypted lets the server confirm a guessed name.
+    //
+    // Read through `repo.db` rather than a tx handle, deliberately and for the
+    // same reason `assertBackfillMayWrite` does: a concurrent drain is excluded
+    // by the write lock, not by read isolation.
+    const lateRefusal = await propertySynthesisWorkspaceRefusal(repo, workspaceId)
+    if (lateRefusal !== null) {
+      throw new Error(`[propertyDefinitionSynthesis] ${lateRefusal}`)
+    }
     // Taken INSIDE the tx, once: the registry is a lagging projection of the
     // definition blocks, and the plan's copy is a dialog older still.
     const registry = requirePropertyRegistryFor(repo, workspaceId)

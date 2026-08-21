@@ -358,6 +358,20 @@ describe('planPropertyDefinitionSynthesis', () => {
     expect(plan.blockers.map(b => b.key)).toContain('demo:huge')
   })
 
+  it('proves against the duplicate the runtime reads, not the ones it ignores', async () => {
+    // `json_each` yields every occurrence of a repeated key; `JSON.parse` keeps
+    // only the last, and that is the value the app renders and migrates. Proving
+    // against both would call this key `raw-json` for a value nothing observes.
+    await rawCell('b1', {'demo:dup': 1})
+    await sharedDb.db.execute(
+      `UPDATE blocks SET properties_json = '{"demo:dup":"obsolete","demo:dup":42}'
+        WHERE id = 'b1'`)
+
+    const plan = await planFor()
+
+    expect(plan.candidates.find(c => c.key === 'demo:dup')?.presetId).toBe('number')
+  })
+
   it('sees a non-finite number nested inside a stored value, not only at the top', async () => {
     await rawCell('b1', {'demo:nested': 1})
     await sharedDb.db.execute(
@@ -404,6 +418,29 @@ describe('planPropertyDefinitionSynthesis', () => {
 
     expect(plan.scanSyncGap).toBe('12 row(s) still materializing')
     expect(flipBlockedBySynthesis(plan)).toMatch(/still catching up/)
+  })
+
+  it('refuses when the workspace turns out encrypted AFTER the pre-flight check', async () => {
+    // The pre-flight check and the write are separated by the Properties-page
+    // bootstrap and by the wait for the write lock, and the workspace's real
+    // row can arrive from sync in between. Every id this would mint is derived
+    // from a property NAME, so writing one into an encrypted workspace lets the
+    // server confirm a guessed name — it has to fail closed at the write.
+    await rawCell('b1', {'demo:orphan': 'hello'})
+    const plan = await planFor()
+    const realTx = repo.tx.bind(repo)
+    vi.spyOn(repo, 'tx').mockImplementation(async (fn, opts) => {
+      // Lands after `applyPropertyDefinitionSynthesis` has already taken its
+      // pre-flight answer, which is the window under test.
+      await sharedDb.db.execute(
+        `UPDATE workspaces SET encryption_mode = 'e2ee' WHERE id = ?`, [WS])
+      return realTx(fn, opts)
+    })
+
+    await expect(applyPropertyDefinitionSynthesis(repo, plan)).rejects.toThrow(/e2ee/)
+
+    const minted = await countDefinitionsNamed('demo:orphan')
+    expect(minted).toBe(0)
   })
 
   it('refuses a workspace this device has not confirmed unencrypted', async () => {
