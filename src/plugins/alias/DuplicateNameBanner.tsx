@@ -57,9 +57,7 @@ export const DuplicateNameBanner: BlockRenderer = ({block}) => {
   const duplicateId = useHandle(repo.query.aliasLookup({workspaceId, alias: name}), {
     selector: owner => (owner && owner.id !== block.id ? owner.id : null),
   })
-  // A viewer cannot write, so the merge is guaranteed to be rejected. Offering
-  // it would only produce a failure toast and an action that never works.
-  if (name.trim() === '' || workspaceId === '' || !duplicateId || repo.isReadOnly) return null
+  if (name.trim() === '' || workspaceId === '' || !duplicateId) return null
 
   const merge = async (): Promise<void> => {
     setMerging(true)
@@ -119,10 +117,15 @@ export const DuplicateNameBanner: BlockRenderer = ({block}) => {
       >
         Open it
       </Button>
-      <Button size="sm" className="h-7" disabled={merging} onClick={() => { void merge() }}>
-        <Merge className="mr-1 h-3.5 w-3.5"/>
-        Merge into this page
-      </Button>
+      {/* The explanation and "Open it" still matter to a viewer — links really
+          do resolve to the other page — but the merge is a write they cannot
+          make, so only that action goes. */}
+      {!repo.isReadOnly && (
+        <Button size="sm" className="h-7" disabled={merging} onClick={() => { void merge() }}>
+          <Merge className="mr-1 h-3.5 w-3.5"/>
+          Merge into this page
+        </Button>
+      )}
     </div>
   )
 }

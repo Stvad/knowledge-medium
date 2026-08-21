@@ -6,7 +6,7 @@
  */
 import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChangeScope, type User } from '@/data/api'
 import { aliasesProp } from '@/data/properties'
 import { PAGE_TYPE } from '@/data/blockTypes'
@@ -84,5 +84,18 @@ describe('DuplicateNameBanner', () => {
     // The other page's content came across, and it is gone.
     expect((await repo.load('kid'))?.parentId).toBe('canonical')
     expect(await repo.load('squatter')).toBeNull()
+  })
+
+  it('still explains the collision to a viewer, without offering the write', async () => {
+    // Links really do resolve to the other page, so a viewer needs to know.
+    // Only the merge disappears — it is a write they cannot make.
+    await page('canonical', 'Journal', [])
+    await page('squatter', 'My journal', ['Journal'])
+    vi.spyOn(repo, 'isReadOnly', 'get').mockReturnValue(true)
+    await renderBanner('canonical')
+
+    expect(await screen.findByText(/Another page is named/)).toBeTruthy()
+    expect(screen.queryByRole('button', {name: /merge into this page/i})).toBeNull()
+    expect(screen.getByRole('button', {name: /open it/i})).toBeTruthy()
   })
 })
