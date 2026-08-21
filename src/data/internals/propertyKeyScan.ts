@@ -74,6 +74,13 @@ export interface UnresolvedPropertyKey {
 
 export interface PropertyKeyScan {
   workspaceId: string
+  /** SCOPED TO LIVE ROWS. A key carried only by tombstones is invisible here,
+   *  so it is neither a candidate nor a blocker — and a block restored after
+   *  the flip comes back carrying a cell key nothing will promote. Accepted
+   *  rather than fixed: counting tombstoned occurrences would mint definitions
+   *  for keys that may never return, and the repair (re-run the gesture) is the
+   *  same one a post-flip raw writer needs. Stated so it is a known scope
+   *  rather than an assumed completeness. */
   /** Non-null when this device could not vouch for its view of `blocks` when
    *  the scan started. The scan happened anyway; the counts are then short by
    *  an unknown amount, and an empty `unresolved` list means nothing. */

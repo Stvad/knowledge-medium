@@ -27,6 +27,7 @@ import { propertiesPageBlockId } from './propertiesPage'
 import { typesPageBlockId } from './typesPage'
 import { recentsPageBlockId } from './recentsPage'
 import { propertyDefinitionBlockId, typeDefinitionBlockId } from './definitionSeeds'
+import { synthesizedPropertyDefinitionBlockId } from './internals/propertyDefinitionSynthesis'
 import { computeAliasSeatId } from './targets'
 import { stateChildBlockId, userPageBlockId } from './stateBlocks'
 import { locationsPageBlockId } from '@/plugins/geo/locationsPage'
@@ -128,6 +129,14 @@ describe('the ids live rows are already at', () => {
       .toBe(uuidv5(`${WS}:${seedKey}`, '737c2e9d-f3e9-4c99-94ef-e1cbec920e30'))
   })
 
+  it('synthesized property definitions (§9 orphan synthesis)', () => {
+    // A SEPARATE namespace from the seed one above: a synthesized key is a raw
+    // cell key with no grammar at all, so one literally spelled
+    // `system:todo/property/done` would otherwise land on that seed's id.
+    expect(synthesizedPropertyDefinitionBlockId(WS, 'demo:orphan'))
+      .toBe(uuidv5(`${WS}:demo%3Aorphan`, 'b1d6b0c7-6a2a-4c1e-9a19-2f0f7b6b3c41'))
+  })
+
   it('type definition seeds (same namespace as property seeds; disjoint grammars)', () => {
     const seedKey = 'system:kernel-data/type/page'
     expect(typeDefinitionBlockId(WS, seedKey))
@@ -194,5 +203,7 @@ describe('workspace scoping', () => {
       .not.toBe(computeAliasSeatId('Some Page', OTHER_WS))
     expect(propertyDefinitionBlockId(WS, 'system:kernel-data/property/show-properties'))
       .not.toBe(propertyDefinitionBlockId(OTHER_WS, 'system:kernel-data/property/show-properties'))
+    expect(synthesizedPropertyDefinitionBlockId(WS, 'demo:orphan'))
+      .not.toBe(synthesizedPropertyDefinitionBlockId(OTHER_WS, 'demo:orphan'))
   })
 })

@@ -20,10 +20,17 @@ export interface ConfirmMigrationDialogProps {
    *  migrates anything (§9). Named here because it is the one part that
    *  invents something rather than moving what is already there. */
   synthesizedKeys: number
-  /** Keys it cannot fix either way — one no name can carry, or one whose
-   *  definition is broken rather than missing. On an already-flipped workspace
-   *  these stay cell-only; on an un-flipped one the gesture never got here. */
+  /** Keys no definition can ever carry, or that this device will not mint for.
+   *  On an un-flipped workspace the gesture refuses before reaching the dialog,
+   *  so seeing a number here means the workspace is already flipped. */
   unfixableKeys: number
+  /** Keys whose definition block exists but is BROKEN — usually a preset from
+   *  an extension that is not loaded on this device, in which case the
+   *  definition is fine and enabling the provider fixes it. Kept separate from
+   *  `unfixableKeys` because calling a repairable problem permanent on a
+   *  one-way consent screen is how the one cheap moment to repair it is
+   *  missed. */
+  repairableKeys: number
 }
 
 /** Confirmation for the one-time properties migration.
@@ -45,6 +52,7 @@ export const ConfirmMigrationDialog = ({
   childBacked,
   synthesizedKeys,
   unfixableKeys,
+  repairableKeys,
   resolve,
   cancel,
 }: ConfirmMigrationDialogProps & DialogContextProps<true>) => {
@@ -75,6 +83,14 @@ export const ConfirmMigrationDialog = ({
           longer installed. They get one created for them first, hidden, with a type guessed
           from the values already stored. Nothing you can see changes; without it those
           properties could never move.
+        </p>}
+        {repairableKeys > 0 && <p className="text-destructive">
+          {properties(repairableKeys)} {repairableKeys === 1 ? 'has' : 'have'} a definition
+          this device cannot read — most often one whose type comes from an extension that
+          is not enabled here, in which case enabling it is the whole fix. Repair
+          {' '}{repairableKeys === 1 ? 'it' : 'them'} first if you can: migrating now leaves
+          {' '}{repairableKeys === 1 ? 'it' : 'them'} behind, and this is the cheap moment.
+          Run <code>audit-properties</code> to see which.
         </p>}
         {unfixableKeys > 0 && <p>
           {properties(unfixableKeys)} cannot be given a definition at all and will stay as

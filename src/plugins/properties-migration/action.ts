@@ -249,7 +249,8 @@ export const migratePropertiesToBlocksAction = ({repo}: {repo: Repo}): ActionCon
     // irreversible step left to guard, and refusing there would withhold the
     // backfill from every OTHER key over a handful this can never carry.
     if (!childBacked && flipBlocked !== null) {
-      showInfo(flipBlocked, {duration: Number.POSITIVE_INFINITY})
+      showInfo(flipBlocked, {id: 'properties-migration-synthesis',
+                             duration: Number.POSITIVE_INFINITY})
       return
     }
     // A refused workspace (e2ee) reaches here only when the flip is not at
@@ -263,8 +264,8 @@ export const migratePropertiesToBlocksAction = ({repo}: {repo: Repo}): ActionCon
     if (!await openDialog(ConfirmMigrationDialog, {
       blockCount, childBacked,
       synthesizedKeys: willSynthesize,
-      unfixableKeys: plan.candidates.length - willSynthesize
-        + plan.blockers.length + plan.brokenDefinitions.length,
+      unfixableKeys: plan.candidates.length - willSynthesize + plan.blockers.length,
+      repairableKeys: plan.brokenDefinitions.length,
     })) return
     // Re-read AFTER the dialog. A confirmation is a user-length pause, and the
     // workspace pinned before it may not be the open one now — the runner's
@@ -274,6 +275,17 @@ export const migratePropertiesToBlocksAction = ({repo}: {repo: Repo}): ActionCon
     if (repo.activeWorkspaceId !== workspaceId) return
 
     const banner = showProgress('Migrating properties to blocks…')
+    // The runner's own preconditions, re-taken after the confirmation and
+    // BEFORE the first write of any kind. They otherwise run inside
+    // `runWorkspaceBackfillNow`, i.e. once definitions have been minted and the
+    // flip has landed — and then decline, which on a connected device is the
+    // EXPECTED ending. Above the synthesis block, not below it: below, the
+    // "Nothing was changed" this prints is false the moment synthesis commits.
+    const unfit = await passIsUnfit(repo)
+    if (unfit !== null) {
+      banner.fail(`Not started — ${withPeriod(unfit)} Nothing was changed; try again shortly.`)
+      return
+    }
     // BEFORE the flip, per the §9 runbook. A definition is an ordinary dormant
     // block at 'cell', so minting one early is free; minting one AFTER the flip
     // would leave a window in which the pass skips those keys and reports
@@ -284,6 +296,20 @@ export const migratePropertiesToBlocksAction = ({repo}: {repo: Repo}): ActionCon
       try {
         const result = await applyPropertyDefinitionSynthesis(repo, plan)
         synthesized = result.created + result.restored
+        // Asked AGAIN, with the OUTCOME. The pre-mint answer was about what we
+        // expected to be able to do; this is about what actually happened, and
+        // a key that came back skipped still has no definition. The backfill
+        // excludes unregistered keys from its work list, so without this the
+        // flip lands and the pass reports success with zero failures over a key
+        // it silently could not migrate.
+        const stillBlocked = flipBlockedBySynthesis(plan, result)
+        if (!childBacked && stillBlocked !== null) {
+          banner.fail(stillBlocked)
+          return
+        }
+        if (stillBlocked !== null) showInfo(stillBlocked, {
+          id: 'properties-migration-synthesis', duration: Number.POSITIVE_INFINITY,
+        })
       } catch (err) {
         console.error('[properties-migration] definition synthesis failed:', err)
         banner.fail('Could not add definitions for the properties that have none, so ' +
@@ -299,16 +325,6 @@ export const migratePropertiesToBlocksAction = ({repo}: {repo: Repo}): ActionCon
       // write starts growing children — and the pass below only has history
       // left to fill in. Backfilling first instead opens a window where
       // machinery exists that nothing recognizes and nothing maintains.
-      // The runner's own preconditions, taken BEFORE the one-way half rather
-      // than after it. They otherwise run inside `runWorkspaceBackfillNow`, i.e.
-      // once the flip has already landed — and then decline, which on a connected
-      // device is the EXPECTED ending. The runner re-checks both; what this adds
-      // is the ORDER.
-      const unfit = await passIsUnfit(repo)
-      if (unfit !== null) {
-        banner.fail(`Not started — ${withPeriod(unfit)} Nothing was changed; try again shortly.`)
-        return
-      }
       // Assumes the workspace holds no property machinery yet. One that ran an
       // earlier build's pass would need reconciling from its cells FIRST — the
       // processors are dormant at 'cell', so those children went stale on every

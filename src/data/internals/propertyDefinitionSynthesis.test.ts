@@ -8,22 +8,30 @@
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChangeScope, seedProperty } from '@/data/api'
+import { presetIdProp, propertyNameProp } from '@/data/properties'
+import { getOrCreatePropertiesPage } from '@/data/propertiesPage'
 import { definitionSeedsFacet } from '@/data/facets'
 import { kernelDataExtension } from '@/data/kernelDataExtension'
 import { resolveFacetRuntimeSync } from '@/facets/facet'
 import type { Repo } from '@/data/repo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
+import { confirmPlaintextForSession } from '@/sync/keys/modePin'
 import { PROPERTY_CELL_BACKFILL_ID } from './propertyCellBackfill'
 import {
   applyPropertyDefinitionSynthesis,
   flipBlockedBySynthesis,
   inferPresetId,
+  propertySynthesisWorkspaceRefusal,
   planPropertyDefinitionSynthesis,
   synthesizedPropertyDefinitionBlockId,
 } from './propertyDefinitionSynthesis'
 
 const WS = 'ws-synthesis'
+/** Never confirmed plaintext, so `getModePin` reports null for it — the shape
+ *  of an e2ee workspace, and of any workspace this device has not resolved. */
+const UNPINNED_WS = 'ws-synthesis-unpinned'
+const USER = 'user-1'
 
 const declaredProp = seedProperty({
   seedKey: 'test/property/declared',
@@ -43,32 +51,38 @@ afterEach(() => { vi.restoreAllMocks() })
 
 /** The workspace row synthesis reads its encryption mode from. Raw, because
  *  that is how the row arrives — server-written and synced. */
-const seedWorkspaceRow = async (encryptionMode = 'none', migration = 'cell') => {
+const seedWorkspaceRow = async (encryptionMode = 'none', workspaceId = WS) => {
   await sharedDb.db.execute(
     `INSERT OR REPLACE INTO workspaces
        (id, name, owner_user_id, create_time, update_time, encryption_mode, wk_canary,
         properties_migration)
-     VALUES (?, ?, ?, 1, 1, ?, NULL, ?)`,
-    [WS, 'ws', 'user-1', encryptionMode, migration])
+     VALUES (?, ?, ?, 1, 1, ?, NULL, 'cell')`,
+    [workspaceId, 'ws', USER, encryptionMode])
 }
 
 beforeEach(async () => {
   await resetTestDb(sharedDb.db)
-  repo = createTestRepo({db: sharedDb.db, user: {id: 'user-1'}}).repo
+  repo = createTestRepo({db: sharedDb.db, user: {id: USER}}).repo
   repo.setActiveWorkspaceId(WS)
   repo.setFacetRuntime(resolveFacetRuntimeSync([
     kernelDataExtension,
     definitionSeedsFacet.of(declaredProp, {source: 'test'}),
   ], {repo, workspaceId: WS, safeMode: false}))
   await seedWorkspaceRow()
+  // The real pin, not a mock: `workspaceAccess.ts` puts every unpinned
+  // workspace through the first-encounter gate and confirming plaintext there
+  // pins it, so this is the state any workspace an operator has open is in.
+  confirmPlaintextForSession(USER, WS)
 })
 
 /** A cell written WITHOUT the tx layer — the shape a raw bag writer or an
  *  import leaves, and the only way to store a key no schema declares
  *  (`tx.setProperty` resolves the name and would refuse). */
-const rawCell = async (id: string, properties: Record<string, unknown>) => {
+const rawCell = async (
+  id: string, properties: Record<string, unknown>, workspaceId = WS,
+) => {
   await repo.tx(async tx => {
-    await tx.create({id, workspaceId: WS, parentId: null, orderKey: `k-${id}`, content: id})
+    await tx.create({id, workspaceId, parentId: null, orderKey: `k-${id}`, content: id})
   }, {scope: ChangeScope.BlockDefault, description: 'seed'})
   await sharedDb.db.execute(
     `UPDATE blocks SET properties_json = ? WHERE id = ?`,
@@ -76,6 +90,16 @@ const rawCell = async (id: string, properties: Record<string, unknown>) => {
 }
 
 const planFor = () => planPropertyDefinitionSynthesis(repo, WS)
+
+/** Fence on the registry having caught up with a definition write.
+ *
+ *  The property-definition registry is a projector-driven projection of the
+ *  definition BLOCKS, and `whenPropertyDefinitionsReady` awaits only the
+ *  initial prime, not catch-up. Planning straight after a write therefore reads
+ *  the pre-write world — which made one of these tests fail about 1 run in 25
+ *  before this existed. */
+const untilKeyUnresolved = (key: string) => vi.waitFor(() =>
+  expect(repo.propertySchemaResolverFor(WS).resolve(key).status).not.toBe('resolved'))
 
 const candidateFor = async (key: string) =>
   (await planFor()).candidates.find(c => c.key === key)
@@ -147,15 +171,34 @@ describe('planPropertyDefinitionSynthesis', () => {
     expect(bracket?.notes.join(' ')).toMatch(/\[\[name\]\]/)
   })
 
-  it('refuses an e2ee workspace, while still saying what it would have minted', async () => {
+  it('refuses a workspace this device has not confirmed unencrypted', async () => {
+    // The authority is the mode pin, not the server column — and note the row
+    // here says 'none', so a denylist on the column would wave this through.
+    await seedWorkspaceRow('none', UNPINNED_WS)
+
+    expect(await propertySynthesisWorkspaceRefusal(repo, UNPINNED_WS))
+      .toMatch(/has not confirmed/)
+  })
+
+  it('still says what it would have minted when the workspace is refused', async () => {
+    // Not short-circuited to nothing: "refused with no orphans" and "refused
+    // with twelve" are different situations, and only the second blocks
+    // anything.
     await seedWorkspaceRow('e2ee')
     await rawCell('b1', {'demo:orphan': 'x'})
 
     const plan = await planFor()
-    expect(plan.refusal).toMatch(/end-to-end encrypted/)
-    // Not short-circuited to nothing: "e2ee with no orphans" and "e2ee with
-    // twelve" are different situations and only the second blocks anything.
+    expect(plan.refusal).not.toBeNull()
     expect(plan.candidates.map(c => c.key)).toEqual(['demo:orphan'])
+  })
+
+  it('refuses when the pin says plaintext but the row says otherwise', async () => {
+    // A contradiction, and on a privacy question a contradiction resolves
+    // closed rather than picking the friendlier answer.
+    await seedWorkspaceRow('e2ee')
+    await rawCell('b1', {'demo:orphan': 'x'})
+
+    expect((await planFor()).refusal).toMatch(/pinned as unencrypted but its row reads/)
   })
 
   it('refuses to WRITE once this device has fallen behind, even with a clean plan', async () => {
@@ -164,7 +207,6 @@ describe('planPropertyDefinitionSynthesis', () => {
     // loser strands every field row that bound to it.
     await rawCell('b1', {'demo:orphan': 'x'})
     const plan = await planFor()
-    expect(plan.syncGap).toBeNull()
     vi.spyOn(repo, 'syncViewGap').mockResolvedValue('this device is not caught up')
 
     await expect(applyPropertyDefinitionSynthesis(repo, plan))
@@ -173,20 +215,20 @@ describe('planPropertyDefinitionSynthesis', () => {
       .toBeUndefined()
   })
 
-  it('refuses to WRITE to an e2ee workspace even when handed a plan', async () => {
+  it('refuses to WRITE once the workspace stops reading as plaintext, even with a clean plan', async () => {
     await rawCell('b1', {'demo:orphan': 'x'})
     const plan = await planFor()
     await seedWorkspaceRow('e2ee')
 
     await expect(applyPropertyDefinitionSynthesis(repo, plan))
-      .rejects.toThrow(/end-to-end encrypted/)
+      .rejects.toThrow(/pinned as unencrypted but its row reads/)
   })
 
   it('refuses when this device has no workspace row, rather than assuming plaintext', async () => {
     await sharedDb.db.execute('DELETE FROM workspaces WHERE id = ?', [WS])
     await rawCell('b1', {'demo:orphan': 'x'})
 
-    expect((await planFor()).refusal).toMatch(/encryption mode is unknown/)
+    expect((await planFor()).refusal).toMatch(/its row reads null/)
   })
 })
 
@@ -246,7 +288,7 @@ describe('applyPropertyDefinitionSynthesis', () => {
     const second = await planFor()
     expect(second.candidates).toEqual([])
     expect(await applyPropertyDefinitionSynthesis(repo, second))
-      .toEqual({created: 0, restored: 0, skipped: []})
+      .toEqual({created: 0, restored: 0, converged: 0, skipped: []})
   })
 
   it('restores a synthesized definition someone deleted, rather than minting a rival', async () => {
@@ -255,6 +297,7 @@ describe('applyPropertyDefinitionSynthesis', () => {
     const id = synthesizedPropertyDefinitionBlockId(WS, 'demo:orphan')
     await repo.tx(async tx => { await tx.delete(id) },
                   {scope: ChangeScope.BlockDefault, description: 'delete definition'})
+    await untilKeyUnresolved('demo:orphan')
 
     const plan = await planFor()
     expect(plan.candidates.map(c => c.key)).toEqual(['demo:orphan'])
@@ -273,19 +316,148 @@ describe('applyPropertyDefinitionSynthesis', () => {
   })
 })
 
+describe('applyPropertyDefinitionSynthesis: the id is occupied, or the key stopped being orphaned', () => {
+  it('skips a key that gained a definition while the plan was on screen, rather than minting a rival', async () => {
+    // The runbook this migration prints tells the operator to enable a key's
+    // owning extension FIRST — which is exactly the write that lands in the
+    // window the confirmation dialog holds open.
+    await rawCell('b1', {'demo:orphan': 'hello'})
+    const plan = await planFor()
+    await getOrCreatePropertiesPage(repo, WS)
+    await repo.userSchemas.addSchema({name: 'demo:orphan', presetId: 'string'})
+
+    const result = await applyPropertyDefinitionSynthesis(repo, plan)
+
+    // Converged, not skipped: the key HAS a definition now, which is the
+    // invariant. Whose it is doesn't matter.
+    expect(result).toMatchObject({created: 0, converged: 1, skipped: []})
+    // One definition for the name, not two: a rival strands whatever field rows
+    // bind to the loser's fieldId.
+    const definitions = await repo.db.getAll<{n: number}>(
+      `SELECT COUNT(*) AS n FROM blocks b JOIN block_types t ON t.block_id = b.id
+        WHERE t.type = 'property-schema' AND b.workspace_id = ? AND b.deleted = 0
+          AND json_extract(b.properties_json, '$."property-schema:name"') = 'demo:orphan'`,
+      [WS])
+    expect(definitions[0]!.n).toBe(1)
+  })
+
+  it('reports an already-defined key as converged rather than minting again', async () => {
+    await rawCell('b1', {'demo:orphan': 'hello'})
+    const plan = await planFor()
+    await applyPropertyDefinitionSynthesis(repo, plan)
+
+    // The SAME plan again — the stale-plan shape, and what a second device sees.
+    const again = await applyPropertyDefinitionSynthesis(repo, plan)
+
+    expect(again).toMatchObject({created: 0, restored: 0, converged: 1, skipped: []})
+  })
+
+  it('skips a key whose deterministic id stopped being its definition', async () => {
+    await rawCell('b1', {'demo:orphan': 'hello'})
+    await applyPropertyDefinitionSynthesis(repo, await planFor())
+    const id = synthesizedPropertyDefinitionBlockId(WS, 'demo:orphan')
+    // The definition is minted HIDDEN precisely to invite this look, and the
+    // rename processor is flip-gated, so pre-flip the cell keeps the old key.
+    await repo.tx(async tx => { await tx.setProperty(id, propertyNameProp, 'demo:renamed') },
+                  {scope: ChangeScope.BlockDefault, description: 'rename'})
+    await untilKeyUnresolved('demo:orphan')
+
+    const plan = await planFor()
+    expect(plan.candidates.map(c => c.key)).toEqual(['demo:orphan'])
+    const result = await applyPropertyDefinitionSynthesis(repo, plan)
+
+    expect(result).toMatchObject({created: 0, restored: 0, converged: 0})
+    expect(result.skipped.map(s => s.key)).toEqual(['demo:orphan'])
+    // And the flip must not step over it — the backfill excludes unregistered
+    // keys from its work list, so it would report `ran` with zero failures.
+    expect(flipBlockedBySynthesis(plan, result)).toMatch(/still have no definition/)
+  })
+
+  it('restores a tombstone under the key it is for, re-asserting the preset', async () => {
+    // `tx.restore` alone brings back the STORED bag: a preset the operator had
+    // switched to `date` came back as `date` and rewrote every value of the key.
+    await rawCell('b1', {'demo:orphan': 'hello'})
+    await applyPropertyDefinitionSynthesis(repo, await planFor())
+    const id = synthesizedPropertyDefinitionBlockId(WS, 'demo:orphan')
+    await repo.tx(async tx => { await tx.setProperty(id, presetIdProp, 'date') },
+                  {scope: ChangeScope.BlockDefault, description: 'switch preset'})
+    await repo.tx(async tx => { await tx.delete(id) },
+                  {scope: ChangeScope.BlockDefault, description: 'delete'})
+    await untilKeyUnresolved('demo:orphan')
+
+    const result = await applyPropertyDefinitionSynthesis(repo, await planFor())
+
+    expect(result).toMatchObject({restored: 1})
+    const row = repo.block(id).peek()!
+    expect(row.properties['property-schema:preset']).toBe('string')
+    // The type membership survives the restore patch — building the patch from
+    // the four owned fields alone would drop `types` and un-type the definition.
+    expect(repo.propertySchemaResolverFor(WS).resolve('demo:orphan').status).toBe('resolved')
+  })
+
+  it('refuses to restore a tombstone that is no longer this key\'s definition', async () => {
+    await rawCell('b1', {'demo:orphan': 'hello'})
+    await applyPropertyDefinitionSynthesis(repo, await planFor())
+    const id = synthesizedPropertyDefinitionBlockId(WS, 'demo:orphan')
+    await repo.tx(async tx => { await tx.setProperty(id, propertyNameProp, 'demo:renamed') },
+                  {scope: ChangeScope.BlockDefault, description: 'rename'})
+    await repo.tx(async tx => { await tx.delete(id) },
+                  {scope: ChangeScope.BlockDefault, description: 'delete'})
+    await untilKeyUnresolved('demo:orphan')
+
+    const result = await applyPropertyDefinitionSynthesis(repo, await planFor())
+
+    // Resurrecting a block the user deleted, under a name they chose, and
+    // counting it as a definition added for a key that still has none.
+    expect(result).toMatchObject({created: 0, restored: 0})
+    expect(result.skipped.map(s => s.key)).toEqual(['demo:orphan'])
+  })
+
+  it('skips a foreign occupant rather than aborting the whole mint', async () => {
+    // Unreachable while workspace ids are UUIDs, so it is defence in depth —
+    // but the alternative is a DuplicateIdError out of the insert that takes
+    // every other key's definition down with it.
+    await rawCell('b1', {'demo:orphan': 'hello'})
+    const id = synthesizedPropertyDefinitionBlockId(WS, 'demo:orphan')
+    await repo.tx(async tx => {
+      await tx.create({id, workspaceId: 'some-other-ws', parentId: null,
+                       orderKey: 'a0', content: 'squatter'})
+    }, {scope: ChangeScope.BlockDefault, description: 'squat'})
+
+    const result = await applyPropertyDefinitionSynthesis(repo, await planFor())
+    expect(result.skipped[0]!.reason).toMatch(/another workspace/)
+  })
+
+  it('does not leave the synthesis write on the undo stack', async () => {
+    // The gesture clears the stack at the flip and the backfill clears it on
+    // its first batch, but a run can end between the two — leaving these as the
+    // only committed write with a live undo entry, one cmd-Z from deleting
+    // definitions whose keys are already migrating.
+    await rawCell('b1', {'demo:orphan': 'hello'})
+    // Created up front so its own (undoable) transaction is not what this
+    // measures — `getOrCreatePropertiesPage` is a separate commit.
+    await getOrCreatePropertiesPage(repo, WS)
+    const before = repo.undoManagerFor(WS).peekUndo(ChangeScope.BlockDefault)
+
+    await applyPropertyDefinitionSynthesis(repo, await planFor())
+
+    expect(repo.undoManagerFor(WS).peekUndo(ChangeScope.BlockDefault)).toEqual(before)
+  })
+})
+
 describe('flipBlockedBySynthesis', () => {
   it('blocks on a key no definition can ever back, naming it', async () => {
     await rawCell('b1', {'': 'y'})
     expect(flipBlockedBySynthesis(await planFor())).toMatch(/empty property key/)
   })
 
-  it('blocks an e2ee workspace that has orphan keys', async () => {
+  it('blocks a refused workspace that has orphan keys', async () => {
     await seedWorkspaceRow('e2ee')
     await rawCell('b1', {'demo:orphan': 'x'})
-    expect(flipBlockedBySynthesis(await planFor())).toMatch(/end-to-end encrypted/)
+    expect(flipBlockedBySynthesis(await planFor())).toMatch(/have no definition/)
   })
 
-  it('lets an e2ee workspace with nothing to mint through', async () => {
+  it('lets a refused workspace with nothing to mint through', async () => {
     // The refusal is about MINTING a dictionary-testable id. With no orphan
     // keys there is nothing to mint, so the invariant already holds.
     await seedWorkspaceRow('e2ee')

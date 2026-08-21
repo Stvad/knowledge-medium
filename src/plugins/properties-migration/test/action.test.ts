@@ -29,6 +29,9 @@ vi.mock('@/data/repoProvider', () => ({isRemoteSyncActive: () => remoteSyncActiv
 const planSynthesis = vi.fn()
 const applySynthesis = vi.fn()
 const flipBlocked = vi.fn<() => string | null>()
+/** `flipBlockedBySynthesis` is asked twice — before minting and again with the
+ *  outcome — so tests that care about the difference count the calls. */
+let flipBlockedCalls = 0
 vi.mock('@/data/internals/propertyDefinitionSynthesis', () => ({
   planPropertyDefinitionSynthesis: () => planSynthesis(),
   applyPropertyDefinitionSynthesis: (...args: unknown[]) => applySynthesis(...args),
@@ -37,7 +40,7 @@ vi.mock('@/data/internals/propertyDefinitionSynthesis', () => ({
 
 /** A plan with `n` keys to mint and nothing wrong. */
 const plan = (candidates = 0) => ({
-  workspaceId: 'ws-1', refusal: null, syncGap: null,
+  workspaceId: 'ws-1', refusal: null, unreadableBlocks: 0,
   candidates: Array.from({length: candidates}, (_, i) => ({
     key: `demo:orphan${i}`, cells: 1, presetId: 'string' as const, notes: [],
   })),
@@ -76,11 +79,6 @@ const invoke = (repo: Repo) =>
   migratePropertiesToBlocksAction({repo}).handler({} as never, {} as never)
 
 afterEach(() => {
-  openDialog.mockReset()
-  flipWorkspace.mockReset()
-  flipWorkspace.mockResolvedValue({localApplied: true})
-  remoteSyncActive.mockReset()
-  remoteSyncActive.mockReturnValue(true)
   clearUndo.mockReset()
   showInfo.mockReset()
   progressHandle.update.mockReset()
@@ -89,15 +87,23 @@ afterEach(() => {
   planSynthesis.mockReset()
   planSynthesis.mockResolvedValue(plan())
   applySynthesis.mockReset()
-  applySynthesis.mockResolvedValue({created: 0, restored: 0, skipped: []})
+  applySynthesis.mockReset()
   flipBlocked.mockReset()
-  flipBlocked.mockReturnValue(null)
 })
 
+// Every default lives HERE, not split with `afterEach`: arming in `afterEach`
+// alone leaves the first test of a run — and any `vitest -t "<name>"` — running
+// against unarmed mocks, which silently took the local-only branch.
 beforeEach(() => {
+  openDialog.mockReset()
+  flipWorkspace.mockReset()
+  flipWorkspace.mockResolvedValue({localApplied: true})
+  remoteSyncActive.mockReset()
+  remoteSyncActive.mockReturnValue(true)
   planSynthesis.mockResolvedValue(plan())
-  applySynthesis.mockResolvedValue({created: 0, restored: 0, skipped: []})
+  applySynthesis.mockResolvedValue({created: 0, restored: 0, converged: 0, skipped: []})
   flipBlocked.mockReturnValue(null)
+  flipBlockedCalls = 0
 })
 
 describe('migrate_properties_to_blocks action', () => {
@@ -479,6 +485,74 @@ describe('the orphan-definition step', () => {
     await invoke(repo)
 
     expect(applySynthesis).not.toHaveBeenCalled()
+  })
+
+  it('tells the operator a broken definition is REPAIRABLE, not permanent', async () => {
+    // On a one-way consent screen, calling a repairable problem permanent is
+    // how the one cheap moment to repair it is missed. Usually it is just an
+    // extension that is not enabled on this device.
+    planSynthesis.mockResolvedValue({...plan(), brokenDefinitions: [{key: 'demo:b', cells: 3}]})
+    openDialog.mockResolvedValue(true)
+    const {repo} = makeRepo({outcome: 'ran', undoHistoryCleared: false}, {flipped: true})
+
+    await invoke(repo)
+
+    expect(openDialog).toHaveBeenCalledWith(expect.anything(),
+      expect.objectContaining({repairableKeys: 1, unfixableKeys: 0}))
+  })
+
+  it('does not flip when a key came back with no definition, even though minting succeeded', async () => {
+    // The pre-mint gate said go; the OUTCOME says a key is still orphaned. The
+    // backfill excludes unregistered keys from its work list, so without the
+    // second ask the flip lands and the pass reports success over it.
+    planSynthesis.mockResolvedValue(plan(2))
+    applySynthesis.mockResolvedValue({created: 1, restored: 0, converged: 0,
+                                      skipped: [{key: 'demo:orphan', reason: 'occupied'}]})
+    flipBlocked.mockImplementation(() => flipBlockedCalls++ === 0 ? null : 'still have no definition')
+    openDialog.mockResolvedValue(true)
+    const {repo, runWorkspaceBackfillNow} = makeRepo({outcome: 'ran', undoHistoryCleared: false})
+
+    await invoke(repo)
+
+    expect(flipWorkspace).not.toHaveBeenCalled()
+    expect(runWorkspaceBackfillNow).not.toHaveBeenCalled()
+    expect(progressHandle.fail).toHaveBeenCalledWith(expect.stringMatching(/still have no definition/))
+  })
+
+  it('backfills anyway on an already-flipped workspace, and says what was left out', async () => {
+    planSynthesis.mockResolvedValue(plan(2))
+    applySynthesis.mockResolvedValue({created: 1, restored: 0, converged: 0,
+                                      skipped: [{key: 'demo:orphan', reason: 'occupied'}]})
+    flipBlocked.mockImplementation(() => flipBlockedCalls++ === 0 ? null : 'still have no definition')
+    openDialog.mockResolvedValue(true)
+    const {repo, runWorkspaceBackfillNow} = makeRepo(
+      {outcome: 'ran', undoHistoryCleared: false}, {flipped: true})
+
+    await invoke(repo)
+
+    expect(runWorkspaceBackfillNow).toHaveBeenCalled()
+    expect(showInfo).toHaveBeenCalledWith(
+      expect.stringMatching(/still have no definition/), expect.anything())
+  })
+
+  it('takes the fitness check BEFORE minting, so "nothing was changed" stays true', async () => {
+    // Below the synthesis block this message is false the moment a definition
+    // commits — the same lie the flip-failure branch goes out of its way to
+    // avoid one step later.
+    planSynthesis.mockResolvedValue(plan(3))
+    openDialog.mockResolvedValue(true)
+    const {repo} = makeRepo({outcome: 'ran', undoHistoryCleared: false})
+    // Clean at the pre-dialog check, behind by the time the operator confirms —
+    // the window that makes the SECOND check the load-bearing one.
+    let gapChecks = 0
+    ;(repo as unknown as {syncViewGap: () => Promise<string | null>}).syncViewGap =
+      async () => gapChecks++ === 0 ? null : 'synced rows are still draining into `blocks`'
+
+    await invoke(repo)
+
+    expect(applySynthesis).not.toHaveBeenCalled()
+    expect(progressHandle.fail).toHaveBeenCalledWith(
+      expect.stringMatching(/Nothing was changed/))
   })
 
   it('stops without writing when the plan itself cannot be built', async () => {
