@@ -48,7 +48,10 @@
 
 import type { PropertySchemaIdentityUnavailableReason } from '@/data/api'
 import { keyCannotBeDefined } from '@/data/internals/propertyDefinitionSynthesis'
-import { OBJECT_BAG, keyOf, scanPropertyKeys } from '@/data/internals/propertyKeyScan'
+import {
+  OBJECT_BAG, keyOf, scanPropertyKeys,
+  type PropertyKeyScan, type UnresolvedPropertyKey,
+} from '@/data/internals/propertyKeyScan'
 import type { Repo } from '@/data/repo'
 
 export interface UnregisteredPropertyTypeUsage {
@@ -60,28 +63,12 @@ export interface UnregisteredPropertyTypeUsage {
   sampledBlocks: number
 }
 
-export interface UnregisteredProperty {
-  property: string
-  /** Occurrences of the key across live blocks. One per (block, key), so it
-   *  equals the block count for any bag written through the normal path —
-   *  only a hand-crafted `properties_json` with a duplicated key could make
-   *  it exceed that. */
-  cells: number
-  /** The resolver's own verdict, so this report and the migration cannot
-   *  disagree about what is registered. In practice a NAME lookup only ever
-   *  yields `definition-unavailable` — see `describeUnregisteredProperty`. */
-  reason: PropertySchemaIdentityUnavailableReason
-  /** Live `property-schema` blocks in this workspace whose stored name is
-   *  this key. Non-zero with an unresolved name means a BROKEN definition,
-   *  not a missing one — a different fix, so this is counted from `blocks`
-   *  rather than from the registry (a definition whose metadata fails to
-   *  parse is absent from the registry entirely, which would otherwise read
-   *  as "nothing declares this name" and invite a colliding second one). */
-  definitionBlocks: number
+export interface UnregisteredProperty extends UnresolvedPropertyKey {
   /** What to do about it, in the order §9 requires. */
   fix: string
   /** Set when no definition can ever back the key, so the flip must not
-   *  proceed until it is remapped or deleted. */
+   *  proceed until it is remapped or deleted. The same verdict the migration
+   *  command refuses on (`keyCannotBeDefined`). */
   blocksFlip?: true
   /** Types carried by a SAMPLE of the blocks holding the key — the
    *  machine-readable hint about which extension wrote it. Blocks with no
@@ -103,24 +90,8 @@ export interface UnregisteredProperty {
  *  read-only contract to tidy an advisory report that is re-run for free.
  *  The counts describe a slow-moving property of the graph (which keys have
  *  definitions), so skew is self-correcting on the next run. */
-export interface PropertyRegistrationAudit {
-  workspaceId: string
-  /** Non-null when this device could not vouch for its view of `blocks` when
-   *  the scan started — staged rows the drain WOULD apply, or the sync layer
-   *  not settled (downloading, disconnected, or a download error). The scan
-   *  happened anyway; the counts are then short by an unknown amount, and an
-   *  empty `unregistered` list means nothing.
-   *
-   *  "Staged rows the drain would apply" is narrower than the raw staging
-   *  count `agent health` reports: a device's own upload echoes re-stage
-   *  carrying the stamp they were written with, and the drain discards those
-   *  without touching `blocks`. So a non-zero `materializeBacklog` alongside a
-   *  null `syncGap` is the two numbers agreeing, not contradicting.
-   *
-   *  Reported rather than refused: this verb reads, and the flip is what acts
-   *  on what it says. Guarding the irreversible step is worth machinery;
-   *  guarding a report an operator chose to run is worth a sentence. */
-  syncGap: string | null
+export interface PropertyRegistrationAudit
+  extends Omit<PropertyKeyScan, 'unresolved'> {
   /** When this device last completed a sync, or null if it never has (or there
    *  is no sync layer). The rest of the report's basis, and the part no check
    *  can establish: `syncGap` being null says nothing is outstanding LOCALLY,
@@ -129,25 +100,8 @@ export interface PropertyRegistrationAudit {
    *  on a connected idle graph, so a current device on a quiet graph and a
    *  stale one look identical here. */
   syncedThrough: string | null
-  distinctProperties: number
-  /** Total (block, key) pairs — the size of the cell-era property surface. */
-  propertyCells: number
-  registeredProperties: number
   unregistered: UnregisteredProperty[]
   unregisteredCells: number
-  /** Live blocks whose `properties_json` is not a JSON object, so their keys
-   *  are invisible to this audit — the report is INCOMPLETE by that many
-   *  blocks rather than clean.
-   *
-   *  This means LOCAL CORRUPTION. It is specifically not an e2ee artifact:
-   *  ciphertext only ever lives in the `blocks_synced` staging table (which
-   *  is "never read by app queries", `src/data/blockSchema.ts`) and an
-   *  undecryptable row is quarantined there rather than materialized, so a
-   *  row in `blocks` is always plaintext. Do not wave a non-zero count off.
-   *  (A locked or still-draining e2ee workspace is a different kind of
-   *  incompleteness — those blocks are ABSENT from `blocks`, so nothing
-   *  here can see them.) */
-  unreadableBlocks: number
 }
 
 /** Keys we read provenance (types + samples) for, highest cell count first.
@@ -279,16 +233,20 @@ export const auditPropertyRegistration = async (
     blocksPerKey: Math.max(1, Math.floor(limits.blocksPerKey ?? PROVENANCE_BLOCKS_PER_KEY)),
   })
 
+  // Spelled out rather than spread: `unresolved` is the one field this report
+  // replaces, and listing the rest means a new field on the scan surfaces as a
+  // compile error here — a decision about whether the report wants it — instead
+  // of appearing in the output unannounced.
   return {
-    workspaceId,
+    workspaceId: scan.workspaceId,
     syncGap: scan.syncGap,
-    syncedThrough: repo.lastSyncedAt?.toISOString() ?? null,
     distinctProperties: scan.distinctProperties,
     propertyCells: scan.propertyCells,
     registeredProperties: scan.registeredProperties,
+    unreadableBlocks: scan.unreadableBlocks,
+    syncedThrough: repo.lastSyncedAt?.toISOString() ?? null,
     unregistered,
     unregisteredCells: unregistered.reduce((sum, entry) => sum + entry.cells, 0),
-    unreadableBlocks: scan.unreadableBlocks,
   }
 }
 

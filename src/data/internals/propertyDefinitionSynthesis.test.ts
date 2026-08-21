@@ -126,7 +126,7 @@ describe('planPropertyDefinitionSynthesis', () => {
     await rawCell('b2', {'demo:orphan': 'world'})
 
     const candidate = await candidateFor('demo:orphan')
-    expect(candidate).toEqual({key: 'demo:orphan', cells: 2, presetId: 'string', notes: []})
+    expect(candidate).toEqual({key: 'demo:orphan', cells: 2, presetId: 'string'})
   })
 
   it('says nothing about a key a seed already declares', async () => {
@@ -160,15 +160,15 @@ describe('planPropertyDefinitionSynthesis', () => {
       .toEqual(['', '::((11111111-1111-4111-8111-111111111111))'])
   })
 
-  it('keeps an awkward-but-storable name verbatim and says what is awkward about it', async () => {
+  it('keeps an awkward-but-storable name verbatim rather than trimming it', async () => {
+    // `addSchema` is not the path here precisely because it trims: it would
+    // mint "padded" for the cell key " padded " and leave the original still
+    // definition-less, which is unsatisfiable against the flip gate.
     await rawCell('b1', {' padded ': 'x', 'has]]bracket': 'y'})
 
     const plan = await planFor()
     expect(plan.blockers).toEqual([])
-    const padded = plan.candidates.find(c => c.key === ' padded ')
-    expect(padded?.notes.join(' ')).toMatch(/whitespace/)
-    const bracket = plan.candidates.find(c => c.key === 'has]]bracket')
-    expect(bracket?.notes.join(' ')).toMatch(/\[\[name\]\]/)
+    expect(plan.candidates.map(c => c.key).sort()).toEqual([' padded ', 'has]]bracket'])
   })
 
   it('refuses a workspace this device has not confirmed unencrypted', async () => {
@@ -385,14 +385,43 @@ describe('applyPropertyDefinitionSynthesis: the id is occupied, or the key stopp
                   {scope: ChangeScope.BlockDefault, description: 'delete'})
     await untilKeyUnresolved('demo:orphan')
 
+    // Spied rather than inferred from the resolver: the projector's tick often
+    // wins the race on its own, so asserting the OUTCOME would pass with the
+    // synchronous publish deleted. The publish is the guarantee — the backfill
+    // freezes one resolver for a multi-minute run a few awaits later.
+    const publish = vi.spyOn(repo.userSchemas, 'appendUserSchema')
+
     const result = await applyPropertyDefinitionSynthesis(repo, await planFor())
 
     expect(result).toMatchObject({restored: 1})
+    expect(publish).toHaveBeenCalledWith(
+      expect.objectContaining({name: 'demo:orphan'}), id, WS)
     const row = repo.block(id).peek()!
     expect(row.properties['property-schema:preset']).toBe('string')
     // The type membership survives the restore patch — building the patch from
     // the four owned fields alone would drop `types` and un-type the definition.
     expect(repo.propertySchemaResolverFor(WS).resolve('demo:orphan').status).toBe('resolved')
+  })
+
+  it('publishes a converged definition too, not just one it created', async () => {
+    await rawCell('b1', {'demo:orphan': 'hello'})
+    const plan = await planFor()
+    await applyPropertyDefinitionSynthesis(repo, plan)
+    // Force the registry back to not knowing it, so the `ours` branch — "the
+    // block is here, the projection has not caught up" — is the one taken.
+    const id = synthesizedPropertyDefinitionBlockId(WS, 'demo:orphan')
+    const publish = vi.spyOn(repo.userSchemas, 'appendUserSchema')
+    vi.spyOn(repo, 'propertySchemaResolverFor').mockReturnValue({
+      resolve: () => ({status: 'identity-unavailable', reason: 'definition-unavailable'}),
+      resolveField: () => ({status: 'identity-unavailable', reason: 'definition-unavailable'}),
+      resolveBoundary: () => ({status: 'identity-unavailable', reason: 'definition-unavailable'}),
+    } as unknown as ReturnType<typeof repo.propertySchemaResolverFor>)
+
+    const again = await applyPropertyDefinitionSynthesis(repo, plan)
+
+    expect(again).toMatchObject({created: 0, converged: 1})
+    expect(publish).toHaveBeenCalledWith(
+      expect.objectContaining({name: 'demo:orphan'}), id, WS)
   })
 
   it('refuses to restore a tombstone that is no longer this key\'s definition', async () => {
@@ -463,6 +492,20 @@ describe('flipBlockedBySynthesis', () => {
     await seedWorkspaceRow('e2ee')
     await rawCell('b1', {[declaredProp.name]: 'x'})
     expect(flipBlockedBySynthesis(await planFor())).toBeNull()
+  })
+
+  it('blocks while any block has a property bag this device cannot read', async () => {
+    // Not "some bad data over there" — a hole in the very scan this decision is
+    // made from, so the invariant is UNVERIFIED rather than satisfied.
+    await rawCell('b1', {'demo:orphan': 'x'})
+    await applyPropertyDefinitionSynthesis(repo, await planFor())
+    await rawCell('corrupt', {})
+    await sharedDb.db.execute(
+      `UPDATE blocks SET properties_json = '42' WHERE id = 'corrupt'`)
+
+    const plan = await planFor()
+    expect(plan.unreadableBlocks).toBe(1)
+    expect(flipBlockedBySynthesis(plan)).toMatch(/cannot read/)
   })
 
   it('lets a clean workspace through', async () => {

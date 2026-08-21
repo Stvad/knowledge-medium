@@ -45,11 +45,13 @@ import {
   propertyNameProp,
 } from '@/data/properties'
 import { getOrCreatePropertiesPage, propertiesPageBlockId } from '@/data/propertiesPage'
-import { isGrammarShapedLabel, isRoundTrippableReferenceLabel } from '@/data/referenceBlock'
+import { isGrammarShapedLabel } from '@/data/referenceBlock'
 import type { Repo } from '@/data/repo'
 import { readWorkspaceEncryptionMode } from '@/data/workspaceSchema'
 import { getModePin } from '@/sync/keys/modePin'
-import { OBJECT_BAG, keyOf, scanPropertyKeys } from './propertyKeyScan'
+import {
+  scanPropertyKeys, type UnresolvedPropertyKey, type ValueTypeCounts,
+} from './propertyKeyScan'
 
 /** Namespace for synthesized property definitions. Deliberately NOT
  *  `DEFINITION_SEED_NS`: that one hashes `${workspaceId}:${seedKey}` and its
@@ -87,15 +89,6 @@ export const synthesizedPropertyDefinitionBlockId = (
  *  vetted. */
 export type SynthesizedPresetId = 'boolean' | 'number' | 'string' | 'raw-json'
 
-/** Per-key tally of what JSON types the cells actually hold. */
-export interface ValueTypeCounts {
-  booleans: number
-  numbers: number
-  texts: number
-  /** null, array, object — everything a scalar preset cannot carry. */
-  others: number
-}
-
 /**
  * Which preset can carry every value this key already holds?
  *
@@ -130,12 +123,15 @@ export interface SynthesisCandidate {
   key: string
   cells: number
   presetId: SynthesizedPresetId
-  /** Storable as-is, but worth an operator's eye. Never a refusal. */
-  notes: string[]
 }
 
-/** A key no definition can ever back, so the workspace must not flip until it
- *  is deleted or remapped. */
+/** A key no definition can ever back.
+ *
+ *  The consequence, stated once here rather than at every site that reads this:
+ *  such a key makes "every cell key resolves a definition" unsatisfiable
+ *  FOREVER, and at `cell-off` the column drop would take the value's only
+ *  carrier with it. So it blocks the flip, and only the flip — minting the
+ *  other keys' definitions is useful either way. */
 export interface SynthesisBlocker {
   key: string
   cells: number
@@ -229,69 +225,10 @@ export const keyCannotBeDefined = (key: string): string | null => {
   return null
 }
 
-/** Things about the name an operator may want to fix later. Deliberately not
- *  refusals: field rows are `::((fieldId))`, so a name that fails the wikilink
- *  round trip is still a perfectly good definition name and cell key — it
- *  merely cannot gain the `[[name]]` affordance. The name is kept VERBATIM
- *  for the same reason `addSchema` is not the path here: it trims, which would
- *  mint `"foo"` for the cell key `" foo "` and leave the original still
- *  definition-less. */
-const nameNotes = (key: string): string[] => {
-  const notes: string[] = []
-  if (key !== key.trim()) {
-    notes.push('has leading or trailing whitespace, kept verbatim so it still matches the cell key')
-  }
-  if (!isRoundTrippableReferenceLabel(key.trim())) {
-    notes.push('cannot be written as a `[[name]]` link (a `]]` is lossy there)')
-  }
-  return notes
-}
-
-interface ValueTypeRow {
-  property: string | null
-  booleans: number
-  numbers: number
-  texts: number
-  others: number
-}
-
-/** What JSON types each of `keys` is stored as, across the workspace's live
- *  blocks. Restricted to the candidate keys rather than grouping the whole
- *  graph: the key list is already known and the tally is only needed for the
- *  handful being minted. */
-const valueTypeCounts = async (
-  repo: Repo,
-  workspaceId: string,
-  keys: readonly string[],
-): Promise<Map<string, ValueTypeCounts>> => {
-  if (keys.length === 0) return new Map()
-  const rows = await repo.db.getAll<ValueTypeRow>(
-    `SELECT j.key AS property,
-            SUM(j.type IN ('true','false')) AS booleans,
-            SUM(j.type IN ('integer','real')) AS numbers,
-            SUM(j.type = 'text') AS texts,
-            SUM(j.type NOT IN ('true','false','integer','real','text')) AS others
-       FROM blocks b, json_each(${OBJECT_BAG}) j
-      WHERE b.workspace_id = ? AND b.deleted = 0
-        AND j.key IN (SELECT value FROM json_each(?))
-      GROUP BY j.key`,
-    [workspaceId, JSON.stringify(keys)],
-  )
-  return new Map(rows.map(row => [keyOf(row.property), {
-    booleans: row.booleans,
-    numbers: row.numbers,
-    texts: row.texts,
-    others: row.others,
-  }] as const))
-}
-
 /**
  * What synthesis would do to this workspace. Reads only.
  *
- * Separate from the write so the operator gesture can refuse on the blockers
- * BEFORE it flips anything — a blocker makes the "no definition-less keys"
- * gate unsatisfiable forever, and past `cell-off` the column drop would take
- * the value's only carrier with it.
+ * Separate from the write so the gesture can refuse BEFORE it flips anything.
  */
 export const planPropertyDefinitionSynthesis = async (
   repo: Repo,
@@ -305,7 +242,7 @@ export const planPropertyDefinitionSynthesis = async (
 
   const blockers: SynthesisBlocker[] = []
   const brokenDefinitions: Array<{key: string; cells: number}> = []
-  const mintable: Array<{key: string; cells: number}> = []
+  const mintable: UnresolvedPropertyKey[] = []
 
   for (const entry of scan.unresolved) {
     // A definition block already exists for this name and still doesn't
@@ -321,19 +258,13 @@ export const planPropertyDefinitionSynthesis = async (
       blockers.push({key: entry.property, cells: entry.cells, reason})
       continue
     }
-    mintable.push({key: entry.property, cells: entry.cells})
+    mintable.push(entry)
   }
 
-  const counts = await valueTypeCounts(repo, workspaceId, mintable.map(e => e.key))
   const candidates: SynthesisCandidate[] = mintable.map(entry => ({
-    key: entry.key,
+    key: entry.property,
     cells: entry.cells,
-    // A key present in the scan always has at least one cell, so a missing
-    // tally means the two reads disagree (a concurrent delete between them).
-    // `raw-json` is the answer that cannot be wrong about data it did not see.
-    presetId: inferPresetId(counts.get(entry.key)
-      ?? {booleans: 0, numbers: 0, texts: 0, others: 0}),
-    notes: nameNotes(entry.key),
+    presetId: inferPresetId(entry.valueTypes),
   }))
 
   return {workspaceId, refusal, unreadableBlocks: scan.unreadableBlocks, candidates,
@@ -342,16 +273,11 @@ export const planPropertyDefinitionSynthesis = async (
 
 /**
  * Why this workspace must not be flipped to child-backed properties yet, or
- * null.
+ * null. See {@link SynthesisBlocker} for what makes a key hopeless.
  *
- * A blocker is a key no definition can EVER back, so it makes the "every cell
- * key resolves a definition" invariant unsatisfiable forever — and past
- * `cell-off` the column drop would take the value's only carrier with it. A
- * workspace refusal (e2ee) blocks only when there is actually something to
- * mint; otherwise the invariant already holds.
- *
- * Advisory for an ALREADY-flipped workspace, where there is no irreversible
- * step left to guard — the backfill should still fill in everything else.
+ * A workspace refusal (e2ee) blocks only when there is something to mint;
+ * otherwise the invariant already holds. Advisory for an ALREADY-flipped
+ * workspace, where no irreversible step is left to guard.
  */
 export const flipBlockedBySynthesis = (
   plan: PropertyDefinitionSynthesisPlan,
@@ -486,11 +412,8 @@ const servesAsDefinitionFor = (key: string) => (block: BlockData): boolean =>
  * key's owning extension FIRST, which is exactly the write that lands in that
  * window.
  *
- * Deliberately says nothing about `plan.blockers`. A blocker blocks the FLIP —
- * it is a key no definition can ever back — and minting the OTHER keys'
- * definitions is useful either way, including on a workspace that is already
- * flipped and has no irreversible step left to guard.
- * {@link flipBlockedBySynthesis} is where that decision lives.
+ * Deliberately says nothing about `plan.blockers` — {@link flipBlockedBySynthesis}
+ * owns that decision.
  */
 export const applyPropertyDefinitionSynthesis = async (
   repo: Repo,

@@ -230,11 +230,9 @@ export const migratePropertiesToBlocksAction = ({repo}: {repo: Repo}): ActionCon
       showInfo(`Not started — ${withPeriod(ineligible)} Nothing was changed; try again shortly.`)
       return
     }
-    // §9 orphan synthesis, planned BEFORE the block count and before the
-    // confirmation. Both are unbounded workspace scans, and this is the one
-    // that can REFUSE — so paying the other first would buy nothing on the
-    // path where the gesture ends here. Asking an operator to consent to a
-    // migration that is then declined is the same mistake one step later.
+    // §9 orphan synthesis, planned before the confirmation because this is the
+    // step that can REFUSE — consent must not be asked for a migration that is
+    // then declined.
     let plan: PropertyDefinitionSynthesisPlan
     try {
       plan = await planPropertyDefinitionSynthesis(repo, workspaceId)
