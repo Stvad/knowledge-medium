@@ -435,6 +435,26 @@ describe('applyPropertyDefinitionSynthesis', () => {
     expect(repo.propertySchemaResolverFor(WS).resolve('demo:orphan').status).toBe('resolved')
   })
 
+  it('mints a working definition for a name `addSchema` would refuse', async () => {
+    // The justification for diverging from `propertySchemaNameRejection` is
+    // that these keys END UP MIGRATABLE, so assert that rather than assert the
+    // divergence. A padded key is the common case in imported data; the `]]`
+    // one is what that rule advertises. Both are facts already in the data, and
+    // refusing either only makes the flip gate unsatisfiable.
+    await rawCell('b1', {' padded ': 'x', 'has]]bracket': 'y'})
+
+    const result = await applyPropertyDefinitionSynthesis(repo, await planFor())
+
+    expect(result.created).toBe(2)
+    const resolver = repo.propertySchemaResolverFor(WS)
+    expect(resolver.resolve(' padded ').status).toBe('resolved')
+    expect(resolver.resolve('has]]bracket').status).toBe('resolved')
+    // Verbatim, not trimmed — `addSchema` would have defined "padded" and left
+    // the cell key " padded " orphaned.
+    const id = synthesizedPropertyDefinitionBlockId(WS, ' padded ')
+    expect(repo.block(id).peek()?.properties['property-schema:name']).toBe(' padded ')
+  })
+
   it('mints it visible, at the deterministic id, with no seed provenance', async () => {
     await rawCell('b1', {'demo:orphan': 'hello'})
     await applyPropertyDefinitionSynthesis(repo, await planFor())

@@ -304,7 +304,23 @@ export const propertySynthesisWorkspaceRefusal = async (
  *  The single authority on that question: synthesis refuses to mint for such a
  *  key, `flipBlockedBySynthesis` refuses the flip over it, and
  *  `audit-properties` marks it `blocksFlip` — three surfaces that must never
- *  disagree about which keys are hopeless. */
+ *  disagree about which keys are hopeless.
+ *
+ *  DELIBERATELY NOT `propertySchemaNameRejection`, though two of its three
+ *  rules are repeated below. That function judges a name a human is CHOOSING,
+ *  and can send them back to pick another; a cell key is a fact already in the
+ *  data, and the only thing refusing it achieves is a workspace that can never
+ *  satisfy the flip gate. So its `isRoundTrippableReferenceLabel` rule is left
+ *  out on purpose. Measured, and worse than the `]]` it advertises: that rule
+ *  also rejects any leading or trailing whitespace (`" padded "` fails it, and
+ *  is told to "rename without \"]]\""), which would make a padded import key a
+ *  permanent blocker. What it buys is bounded — the name cannot be written as a
+ *  clean `[[name]]` in the surfaces that address a definition by name, while
+ *  field rows themselves have been id-addressed since §7.
+ *
+ *  Nor can this simply CALL it and mint the trimmed name instead: `addSchema`
+ *  trims, so it would define `"padded"` and leave the cell key `" padded "`
+ *  still definition-less — the same unsatisfiable state by a longer route. */
 export const keyCannotBeDefined = (key: string): string | null => {
   if (key === '') {
     return 'the empty property key: a definition with no name is unusable ' +
