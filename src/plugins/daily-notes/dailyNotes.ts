@@ -357,6 +357,40 @@ export const getOrCreateDailyNote = async (
     }
   }
 
+  /** Bring the deterministic daily row to life at `id` — create, or restore a
+   *  tombstone and re-parent it under the journal. Shared with the repair tx,
+   *  which falls back here when the claimant it meant to repair is gone by the
+   *  time that tx opens. */
+  const materializeFallback = async (tx: Tx, journalId: string, typeSnapshot: TypeRegistrySnapshot): Promise<void> => {
+    const existing = await tx.get(id)
+    if (existing) refuseForeign(existing)
+    if (existing && !existing.deleted) return
+    if (existing && existing.deleted) {
+      // The tombstone's bag can hold an EXTRA claim some live block took while
+      // the note was dead (the CANONICAL aliases being taken is the adoption
+      // case, handled by the caller). Re-inserting it would abort the tx; the
+      // setProperty below re-claims exactly long-form + ISO.
+      const restoredProperties = await restorePropertiesStrippingAliases(tx, id)
+      await tx.restore(id, {content: longLabel, properties: restoredProperties})
+      await tx.setProperty(id, aliasesProp, dailyAliases)
+      await repo.addTypeInTx(tx, id, PAGE_TYPE, {[aliasesProp.name]: dailyAliases}, typeSnapshot)
+      await repo.addTypeInTx(
+        tx, id, DAILY_NOTE_TYPE, {[dailyNoteDateProp.name]: dateValue}, typeSnapshot,
+      )
+      // Re-parent in case the tombstoned row had drifted. tx.move sets
+      // parent_id + order_key in one primitive.
+      await tx.move(id, {parentId: journalId, orderKey}, {skipMetadata: true})
+      return
+    }
+    await tx.create({
+      id, workspaceId, parentId: journalId, orderKey, content: longLabel,
+    }, {systemMint: true})
+    await repo.addTypeInTx(tx, id, PAGE_TYPE, {[aliasesProp.name]: dailyAliases}, typeSnapshot)
+    await repo.addTypeInTx(
+      tx, id, DAILY_NOTE_TYPE, {[dailyNoteDateProp.name]: dateValue}, typeSnapshot,
+    )
+  }
+
   const predicted = await resolveCanonicalAliasOwner(
     canonicalAliasReaderFromRepo(repo), dailyAliases, workspaceId, id, guard,
   )
@@ -385,7 +419,15 @@ export const getOrCreateDailyNote = async (
       )
       finalId = resolved.id
       const current = await tx.get(resolved.id)
-      if (!current || current.deleted) return
+      if (!current || current.deleted) {
+        // Predicted claimant gone (deleted, or it released the alias) and
+        // resolution fell back to the deterministic id, which is itself absent
+        // or tombstoned. Returning here hands back a handle to a row that does
+        // not exist — silently, which is worse than throwing.
+        finalId = id
+        await materializeFallback(tx, journal.id, typeSnapshot)
+        return
+      }
       refuseForeign(current)
       await applyDailyNoteShape(
         tx, repo, current, journal.id, orderKey, dailyAliases, dateValue, typeSnapshot,
@@ -416,45 +458,7 @@ export const getOrCreateDailyNote = async (
       return
     }
     finalId = id
-    const existing = await tx.get(id)
-    if (existing) refuseForeign(existing)
-    if (existing && !existing.deleted) return
-    if (existing && existing.deleted) {
-      // The tombstone's stored alias bag can hold an EXTRA entry a
-      // different live block claimed while the daily note was dead — as
-      // opposed to the CANONICAL long-form/ISO aliases themselves,
-      // handled above via `resolved.adopted`. Restoring the bag as-is
-      // would re-insert that stale extra claim and abort the whole tx.
-      // Strip it here; the setProperty below re-claims exactly the
-      // canonical long-form + ISO aliases.
-      const restoredProperties = await restorePropertiesStrippingAliases(tx, id)
-      await tx.restore(id, {content: longLabel, properties: restoredProperties})
-      await tx.setProperty(id, aliasesProp, dailyAliases)
-      await repo.addTypeInTx(tx, id, PAGE_TYPE, {[aliasesProp.name]: dailyAliases}, typeSnapshot)
-      await repo.addTypeInTx(
-        tx, id, DAILY_NOTE_TYPE,
-        {[dailyNoteDateProp.name]: dateValue},
-        typeSnapshot,
-      )
-      // Re-parent under the journal in case the prior tombstoned row
-      // had drifted. tx.move sets parent_id + order_key in one
-      // primitive (with engine cycle check on parent_id mutation).
-      await tx.move(id, {parentId: journal.id, orderKey}, {skipMetadata: true})
-      return
-    }
-    await tx.create({
-      id,
-      workspaceId,
-      parentId: journal.id,
-      orderKey,
-      content: longLabel,
-    }, {systemMint: true})
-    await repo.addTypeInTx(tx, id, PAGE_TYPE, {[aliasesProp.name]: dailyAliases}, typeSnapshot)
-    await repo.addTypeInTx(
-      tx, id, DAILY_NOTE_TYPE,
-      {[dailyNoteDateProp.name]: dateValue},
-      typeSnapshot,
-    )
+    await materializeFallback(tx, journal.id, typeSnapshot)
   }, {scope: ChangeScope.BlockDefault})
 
   return repo.block(finalId)

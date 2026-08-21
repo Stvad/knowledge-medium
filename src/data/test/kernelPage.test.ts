@@ -439,4 +439,38 @@ describe('getOrCreateKernelPage', () => {
     expect(await isBlockDeleted(repo, page.id)).toBe(true)
     expect(repo.block('claimant').peekProperty(typesProp)).toEqual([OTHER_TYPE])
   })
+
+  it('materialises the fallback when the claimant it meant to repair vanishes mid-flight', async () => {
+    // The claimant is live and needs repair at prediction time, then is gone by
+    // the time the write tx opens. In-tx resolution falls back to the
+    // deterministic id, which nothing has ever created — so the repair tx has
+    // no row to repair. It used to return there, handing the caller a handle to
+    // a block that does not exist, with no error at all.
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'claimant', workspaceId: WS, parentId: null, orderKey: 'z0', content: 'Claimant'})
+      await tx.setProperty('claimant', aliasesProp, ['Foo'])
+    }, {scope: ChangeScope.BlockDefault})
+
+    // Delete the claimant during the prediction→tx window: `repo.tx` is the
+    // first await after the prediction read.
+    const realTx = env.repo.tx.bind(env.repo)
+    const txSpy = vi.spyOn(env.repo, 'tx').mockImplementationOnce(async (fn, opts) => {
+      await realTx(async tx => { await tx.delete('claimant') }, {scope: ChangeScope.BlockDefault})
+      return realTx(fn, opts)
+    })
+
+    const page = await getOrCreateKernelPage(env.repo, WS, {
+      namespace: FOO_PAGE_NS,
+      alias: 'Foo',
+      markerType: FOO_PAGE_TYPE,
+    })
+    txSpy.mockRestore()
+
+    // The returned handle must name a block that actually exists.
+    expect(page.id).toBe(kernelPageBlockId(WS, FOO_PAGE_NS))
+    const stored = await env.repo.load(page.id)
+    expect(stored).not.toBeNull()
+    expect(stored?.deleted).toBe(false)
+    expect(page.peekProperty(aliasesProp)).toEqual(['Foo'])
+  })
 })

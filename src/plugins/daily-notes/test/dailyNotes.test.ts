@@ -385,6 +385,37 @@ describe('getOrCreateDailyNote', () => {
     expect(again.id).toBe('claimant')
   })
 
+  it('materialises the fallback when the claimant it meant to repair vanishes mid-flight', async () => {
+    // Claimant is live and needs repair when predicted, then gone by the time
+    // the write tx opens. In-tx resolution falls back to the deterministic id,
+    // which nothing ever created — so the repair tx has no row to repair. It
+    // used to return there and hand back a handle to a block that does not
+    // exist, silently.
+    const ISO_V = '2026-05-05'
+    // Warm the journal first: the repair path awaits `getOrCreateJournalBlock`
+    // before opening its own tx, and a cold journal would consume the spy.
+    await getOrCreateJournalBlock(env.repo, WS)
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'vanisher', workspaceId: WS, parentId: null, orderKey: 'z0', content: 'Notes'})
+      await tx.setProperty('vanisher', aliasesProp, [ISO_V])
+    }, {scope: ChangeScope.BlockDefault})
+
+    const realTx = env.repo.tx.bind(env.repo)
+    const txSpy = vi.spyOn(env.repo, 'tx').mockImplementationOnce(async (fn, opts) => {
+      await realTx(async tx => { await tx.delete('vanisher') }, {scope: ChangeScope.BlockDefault})
+      return realTx(fn, opts)
+    })
+
+    const note = await getOrCreateDailyNote(env.repo, WS, ISO_V)
+    txSpy.mockRestore()
+
+    expect(note.id).toBe(dailyNoteBlockId(WS, ISO_V))
+    const stored = await env.repo.load(note.id)
+    expect(stored).not.toBeNull()
+    expect(stored?.deleted).toBe(false)
+    expect(note.peekProperty(dailyNoteDateProp)).toBeInstanceOf(Date)
+  })
+
   it('refuses to adopt when the two canonical aliases resolve to different live blocks (ambiguous, issue #378)', async () => {
     // The long-form and ISO aliases for the same day claimed by two
     // DIFFERENT live pages — genuinely ambiguous, per issue #378's "two

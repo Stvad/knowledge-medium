@@ -173,6 +173,36 @@ export const getOrCreateKernelPage = async (
   // page back on the derived id it had already moved off.
   const guard = refuseTypedClaimant(types)
 
+  /** Bring the deterministic row to life at `id` — create, or restore a
+   *  tombstone. Callable from either tx below: the cold path lands here
+   *  normally, and the repair path falls back to it when the claimant it was
+   *  about to repair is gone by the time the tx opens. */
+  const materializeFallback = async (tx: Tx, typeSnapshot: TypeRegistrySnapshot): Promise<void> => {
+    const existing = await tx.get(id)
+    if (existing) refuseForeign(existing)
+    if (existing && !existing.deleted) return
+    if (existing && existing.deleted) {
+      // The tombstone's stored alias bag can hold an entry a different live
+      // block claimed while this page was dead — restoring it as-is would
+      // re-insert that stale claim and abort the whole tx. The setProperty
+      // below re-claims exactly the canonical set, and callers only reach here
+      // when nobody else claims it, so that reclaim is safe.
+      const restoredProperties = await restorePropertiesStrippingAliases(tx, id)
+      await tx.restore(id, {content: spec.alias, properties: restoredProperties})
+      await tx.setProperty(id, aliasesProp, [...aliases])
+      await tagTypes(tx, id, typeSnapshot)
+      return
+    }
+    await tx.create({
+      id,
+      workspaceId,
+      parentId: null,
+      orderKey,
+      content: spec.alias,
+    }, {systemMint: true})
+    await tagTypes(tx, id, typeSnapshot)
+  }
+
   const predicted = await resolveCanonicalAliasOwner(
     canonicalAliasReaderFromRepo(repo), aliases, workspaceId, id, guard,
   )
@@ -216,7 +246,16 @@ export const getOrCreateKernelPage = async (
       )
       finalId = resolved.id
       const current = await tx.get(resolved.id)
-      if (!current || current.deleted) return
+      if (!current || current.deleted) {
+        // The claimant we predicted has gone (deleted, or it released the
+        // alias) and resolution fell back to the deterministic id, which is
+        // itself absent or tombstoned. Returning here would hand the caller a
+        // handle to a row that does not exist — bootstrap callers then work
+        // against nothing, with no error. Materialise the fallback instead.
+        finalId = id
+        await materializeFallback(tx, typeSnapshot)
+        return
+      }
       refuseForeign(current)
       const txAliases = stringListProperty(current.properties[aliasesProp.name])
       if (!includesAll(txAliases, aliases)) {
@@ -243,32 +282,7 @@ export const getOrCreateKernelPage = async (
       return
     }
     finalId = id
-    const existing = await tx.get(id)
-    if (existing) refuseForeign(existing)
-    if (existing && !existing.deleted) return
-    if (existing && existing.deleted) {
-      // The tombstone's stored alias bag can hold an entry a different
-      // live block claimed while this page was dead (issue #378) —
-      // restoring it as-is would re-insert that stale claim and abort
-      // the whole tx. Strip it here; the setProperty below re-claims
-      // exactly the canonical alias set. (The CANONICAL alias itself
-      // being squatted is handled above via `resolved.adopted` — this
-      // branch only runs when nobody claims it, so the reclaim below is
-      // safe.)
-      const restoredProperties = await restorePropertiesStrippingAliases(tx, id)
-      await tx.restore(id, {content: spec.alias, properties: restoredProperties})
-      await tx.setProperty(id, aliasesProp, [...aliases])
-      await tagTypes(tx, id, typeSnapshot)
-      return
-    }
-    await tx.create({
-      id,
-      workspaceId,
-      parentId: null,
-      orderKey,
-      content: spec.alias,
-    }, {systemMint: true})
-    await tagTypes(tx, id, typeSnapshot)
+    await materializeFallback(tx, typeSnapshot)
   }, {scope: ChangeScope.BlockDefault})
 
   return repo.block(finalId)
