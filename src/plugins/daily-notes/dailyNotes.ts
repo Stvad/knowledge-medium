@@ -13,6 +13,7 @@ import {
   canonicalAliasReaderFromTx,
   createOrRestoreTargetBlock,
   resolveCanonicalAliasOwner,
+  type CanonicalAliasOwnerResolution,
   restorePropertiesStrippingAliases,
 } from '@/data/targets'
 import { parseAliasCollisionError } from '@/data/internals/raiseProtocol.js'
@@ -208,6 +209,25 @@ const dailyNoteAdoptionGuard = (dateValue: Date): CanonicalAdoptionGuard => clai
     ? null
     : `claimant ${claimant.id} is itself a daily note for a different date — ambiguous identity, left unchanged pending an owner decision (issue #378)`
 }
+
+/** Which block currently owns `iso`'s daily-note identity, read-only. The
+ *  prediction half of `getOrCreateDailyNote`, extracted so read-only callers
+ *  (the agent `daily-note` command) answer with the SAME aliases and the SAME
+ *  date-aware guard rather than rebuilding both — rebuilding them is how the
+ *  command came to use the plain `refuseTypedClaimant`, which rejects every
+ *  adopted note because an adopted note necessarily carries `DAILY_NOTE_TYPE`.
+ *  Not authoritative for writes: a writer must re-resolve inside its tx. */
+export const resolveDailyNoteOwner = (
+  repo: Repo,
+  workspaceId: string,
+  iso: string,
+): Promise<CanonicalAliasOwnerResolution> => resolveCanonicalAliasOwner(
+  canonicalAliasReaderFromRepo(repo),
+  dailyNoteAliasesFor(iso),
+  workspaceId,
+  dailyNoteBlockId(workspaceId, iso),
+  dailyNoteAdoptionGuard(dailyNoteDateValue(iso)),
+)
 
 /** Apply the daily-note's full canonical shape — both aliases (added to,
  *  never replacing, whatever the target already has), `PAGE_TYPE` +

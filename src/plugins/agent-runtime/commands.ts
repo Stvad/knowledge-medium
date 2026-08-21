@@ -19,8 +19,7 @@ import type { GroupedBacklinksConfig } from '@/plugins/grouped-backlinks/config.
 import { parseRelativeDate } from '@/utils/relativeDate.js'
 import { searchBlocksAcrossSources } from '@/utils/linkTargetAutocomplete.js'
 import { formatRoamDate } from '@/utils/dailyPage.js'
-import { dailyNoteAliasesFor, dailyNoteBlockId } from '@/plugins/daily-notes/dailyNotes.js'
-import { canonicalAliasReaderFromRepo, resolveCanonicalAliasOwner } from '@/data/targets.js'
+import { resolveDailyNoteOwner } from '@/plugins/daily-notes/dailyNotes.js'
 import { assertCanonicalBlockId } from '@/data/blockId.js'
 import { DATA_MODEL_GUIDE } from './dataModelGuide.ts'
 import { runHealthCommand } from './healthCommand.ts'
@@ -1520,18 +1519,10 @@ const runDailyNoteCommand = async (
     )
   }
 
-  // Daily-note ids are deterministic (uuidv5 of workspace+ISO), so the id
-  // is PREDICTABLE whether or not the note has been created yet — but
-  // it's not necessarily where the note currently lives: issue #378's
-  // alias-first resolution can ADOPT a live claimant of the date's
-  // aliases at a different id (getOrCreateDailyNote would resolve there,
-  // not mint at the deterministic id). Resolve the same way so this
-  // diagnostic reports what the app would actually show, not a
-  // false-negative "doesn't exist" for an adopted day.
-  const deterministicId = dailyNoteBlockId(workspaceId, parsed.iso)
-  const resolved = await resolveCanonicalAliasOwner(
-    canonicalAliasReaderFromRepo(repo), dailyNoteAliasesFor(parsed.iso), workspaceId, deterministicId,
-  )
+  // Resolve exactly as `getOrCreateDailyNote` does — same aliases, same
+  // date-aware guard — so this reports where the note actually lives rather
+  // than the deterministic id it would only sometimes occupy.
+  const resolved = await resolveDailyNoteOwner(repo, workspaceId, parsed.iso)
   const blockId = resolved.id
   const data = await repo.load(blockId)
 

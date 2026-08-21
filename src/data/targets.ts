@@ -321,19 +321,24 @@ export const resolveCanonicalAliasOwner = async (
     const claimant = await read(alias, workspaceId)
     if (claimant !== null) claimants.set(claimant.id, claimant)
   }
-  const others = [...claimants.values()].filter(c => c.id !== fallbackId)
-  if (others.length === 0) {
-    return {id: fallbackId, adopted: false, claimant: null, refusalReason: null}
-  }
-  if (others.length > 1) {
+  // Count the fallback among the claimants. Excluding it first hides the case
+  // where it still owns one canonical alias while a rival owns the other: that
+  // reads as a single clean claimant, and adopting the rival then tries to move
+  // an alias the fallback still holds — the very collision this check exists to
+  // prevent.
+  if (claimants.size > 1) {
     return {
       id: fallbackId,
       adopted: false,
       claimant: null,
       refusalReason:
-        `canonical aliases resolve to different live blocks (${others.map(c => c.id).join(', ')}) `
+        `canonical aliases resolve to different live blocks (${[...claimants.keys()].join(', ')}) `
         + '— ambiguous, left unchanged pending an owner decision (issue #378)',
     }
+  }
+  const others = [...claimants.values()].filter(c => c.id !== fallbackId)
+  if (others.length === 0) {
+    return {id: fallbackId, adopted: false, claimant: null, refusalReason: null}
   }
   const [claimant] = others
   const refusalReason = guard(claimant)

@@ -21,7 +21,9 @@ import { resolveFacetRuntimeSync } from '@/facets/facet'
 import { kernelDataExtension } from '@/data/kernelDataExtension'
 import { backlinksDataExtension } from '@/plugins/backlinks/dataExtension'
 import { groupedBacklinksDataExtension } from '@/plugins/grouped-backlinks/dataExtension'
-import { dailyNoteBlockId } from '@/plugins/daily-notes/dailyNotes'
+import { dailyNoteAliasesFor, dailyNoteBlockId, dailyNoteDateValue } from '@/plugins/daily-notes/dailyNotes'
+import { DAILY_NOTE_TYPE, dailyNoteDateProp } from '@/plugins/daily-notes/schema'
+import { addBlockTypeToProperties } from '@/data/properties'
 import { aliasesProp } from '@/data/properties.js'
 import { keyAtEnd } from '@/data/orderKey'
 import { createAgentRuntimeContext, executeCommand } from '../commands'
@@ -304,6 +306,61 @@ describe('daily-note command', () => {
     expect(result.blockId).not.toBe(deterministicId)
     expect(result.exists).toBe(true)
     expect(result.block?.id).toBe('claimant')
+  })
+
+  it('reports an ADOPTED note rather than refusing it for carrying the daily-note type', async () => {
+    // An adopted note necessarily gains DAILY_NOTE_TYPE. Resolving with the
+    // plain type guard refuses exactly that, so the command fell back to the
+    // deterministic id nothing was ever created at and reported the day as
+    // absent — the false negative this path exists to avoid.
+    const iso = '2026-06-21'
+    // The shape a previous adoption leaves behind: the day's alias, plus the
+    // daily-note type and matching date. Built directly — this suite's repo
+    // has no daily-note type registration to run the real get-or-create.
+    await create({
+      id: 'adopt-me',
+      content: 'Standup notes',
+      properties: addBlockTypeToProperties({
+        [aliasesProp.name]: aliasesProp.codec.encode([iso]),
+        [dailyNoteDateProp.name]: dailyNoteDateProp.codec.encode(dailyNoteDateValue(iso)),
+      }, DAILY_NOTE_TYPE),
+    })
+
+    const result = await executeCommand(
+      {commandId: 'dn-4', type: 'daily-note', date: iso},
+      context,
+    ) as {blockId: string, exists: boolean}
+
+    expect(result.blockId).toBe('adopt-me')
+    expect(result.exists).toBe(true)
+  })
+
+  it('refuses when the deterministic note owns one canonical alias and a rival owns the other', async () => {
+    // Genuinely ambiguous: two distinct live blocks hold the day's two
+    // aliases. Counting only NON-fallback claimants reads this as one clean
+    // claimant and adopts the rival, so the command reported the rival as the
+    // day's note. The deterministic row is the honest answer here.
+    const iso = '2026-06-22'
+    const deterministicId = dailyNoteBlockId(WS, iso)
+    const [longLabel] = dailyNoteAliasesFor(iso)
+    await create({
+      id: deterministicId,
+      content: 'The real day',
+      properties: {[aliasesProp.name]: aliasesProp.codec.encode([iso])},
+    })
+    await create({
+      id: 'rival',
+      content: 'Long-form squatter',
+      properties: {[aliasesProp.name]: aliasesProp.codec.encode([longLabel])},
+    })
+
+    const result = await executeCommand(
+      {commandId: 'dn-5', type: 'daily-note', date: iso},
+      context,
+    ) as {blockId: string}
+
+    expect(result.blockId).toBe(deterministicId)
+    expect(result.blockId).not.toBe('rival')
   })
 })
 
