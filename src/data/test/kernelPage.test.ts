@@ -1,7 +1,7 @@
 // @vitest-environment node
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import { ChangeScope, seedType } from '@/data/api'
+import { ChangeScope, ProcessorRejection, seedType } from '@/data/api'
 import { DeterministicIdCrossWorkspaceError } from '@/data/api/errors'
 import { PAGE_TYPE } from '@/data/blockTypes'
 import { aliasesProp, typesProp } from '@/data/properties'
@@ -222,6 +222,31 @@ describe('getOrCreateKernelPage', () => {
       } as unknown as Parameters<typeof getOrCreateKernelPage>[2]))
         .rejects.toThrow(/markerType is required/)
     })
+  })
+
+  /** The failure mode this file existed without a case for. `aliasesProp` is
+   *  unique per workspace (the `block_aliases_workspace_alias_unique` trigger),
+   *  and a kernel page's alias is an ordinary English word — "Properties",
+   *  "Types", "Recents" — that a user's own page can plausibly already hold.
+   *  The claim is therefore refused for a reason the caller cannot fix, which
+   *  is why `Repo.ensureSystemPages` must not let it be fatal. */
+  it('is refused when another live block in this workspace already holds the alias', async () => {
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'rival', workspaceId: WS, parentId: null, orderKey: 'a1', content: 'Foo'})
+      await tx.setProperty('rival', aliasesProp, ['Foo'])
+    }, {scope: ChangeScope.BlockDefault})
+
+    const caught = await getOrCreateKernelPage(env.repo, WS, {
+      namespace: FOO_PAGE_NS, alias: 'Foo', markerType: FOO_PAGE_TYPE,
+    }).catch((error: unknown) => error)
+
+    expect(caught).toBeInstanceOf(ProcessorRejection)
+    expect((caught as ProcessorRejection).code).toBe('alias.collision')
+    // The whole tx rolled back, so there is no half-made page at the derived
+    // id — the retry on the next bootstrap starts from nothing.
+    expect(await env.repo.load(kernelPageBlockId(WS, FOO_PAGE_NS))).toBeNull()
+    // And the user's own block kept the name.
+    expect((await env.repo.load('rival'))?.properties[aliasesProp.name]).toEqual(['Foo'])
   })
 
   it('rejects an omitted markerType by name, rather than failing at the tagger', async () => {

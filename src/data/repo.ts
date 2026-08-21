@@ -2525,11 +2525,60 @@ export class Repo {
    * contributions installed at construction (`staticDataExtensions`) — so no
    * separate runtime resolution is needed. Awaited (not deferred): the pages
    * must exist before the seed's references parse.
+   *
+   * On an EXISTING workspace a failing `ensure` is logged and skipped, and this
+   * resolves regardless — `bootstrapWorkspace` awaits it with no catch, so a
+   * throw there does not degrade a feature, it stops the app coming up. No page
+   * is worth that: the realistic failure is a reserved alias a user's own block
+   * already holds ("Properties" is an ordinary English word), whose remedy —
+   * rename that block — needs the app running.
+   *
+   * On a FRESHLY CREATED one the same failure is fatal, and must stay fatal.
+   * The workspace has no blocks yet, so no alias can be taken and the failure is
+   * transient or a bug — while the first-run seed that follows publishes
+   * `[[Properties]]`, `[[Types]]`, `[[Locations]]` and `[[Journal]]` into the
+   * tutorial. With no page holding those names the references processor mints a
+   * rival at an alias-seat id for each, and the canonical page can never be
+   * created afterwards. Failing here leaves the workspace unseeded and the retry
+   * able to succeed; swallowing converts a transient failure into permanent
+   * conflicting data. The two cases cannot overlap, which is why this is a
+   * branch and not a judgement call.
+   *
+   * Deliberately no user-facing notice: the case with a remedy the user can act
+   * on (`alias.collision`) is already announced by the `repo.tx` that raised it,
+   * and the rest — a transient failure, a contributor's bug — have no user
+   * action behind them. Console is the right audience for those.
    */
-  async ensureSystemPages(workspaceId: string): Promise<void> {
+  async ensureSystemPages(
+    workspaceId: string,
+    {freshlyCreated = false}: {freshlyCreated?: boolean} = {},
+  ): Promise<void> {
     if (!workspaceId) return
     const pages = this.facetRuntime?.read(systemPagesFacet) ?? []
-    await Promise.all(pages.map(page => page.ensure(this, workspaceId)))
+    // `allSettled`, not `all`: `all` rejects the instant one ensure does while
+    // its siblings keep writing, so the throw below would hand control back to a
+    // caller that tears down — or reloads — with page creates still in flight.
+    //
+    // The `async` wrapper is load-bearing: `allSettled` only settles what the
+    // array already holds, so a contributor that throws SYNCHRONOUSLY would
+    // escape from `map` before it is ever called. A dynamic extension is
+    // transpiled, not typechecked, and `never` satisfies the `Promise` return
+    // type — so an ordinary bug on the first line arrives that way.
+    const outcomes = await Promise.allSettled(
+      pages.map(async page => page.ensure(this, workspaceId)),
+    )
+    const failures = outcomes.flatMap((outcome, i) =>
+      outcome.status === 'rejected' ? [{pageId: pages[i].id, reason: outcome.reason}] : [])
+    // Before the log, whose "will retry on the next workspace open" is false once
+    // this stops bootstrap.
+    if (freshlyCreated && failures.length > 0) throw failures[0].reason
+    for (const {pageId, reason} of failures) {
+      const detail = reason instanceof Error ? reason.message : String(reason)
+      console.error(
+        `[ensureSystemPages] ${pageId} unavailable in workspace ${workspaceId} `
+        + `(will retry on the next workspace open): ${detail}`,
+      )
+    }
   }
 
   /**
