@@ -183,6 +183,20 @@ export const matchesApiPublish = cmd => {
 const EXPLICIT_READ = /(?<![\w-])(?:-X|--method)(?:=|\s+)?['"]?(?:GET|HEAD)\b/i
 export const hasExplicitGetMethod = cmd => EXPLICIT_READ.test(commandSkeleton(cmd)) || EXPLICIT_READ.test(cmd)
 
+// Anything that would make more than one command run — separators, pipes,
+// newlines, or substitutions (which execute a command of their own) —
+// checked with every quoted span blanked so prose cannot fake it. The
+// verifier refuses api-mode repair on compounds: an implicit-read sibling's
+// response can be the only html_url in the merged output, and attributing
+// the response to the mutating segment would be shell parsing.
+export const isCompoundCommand = cmd => {
+  // Substitutions execute even inside double quotes, so only single-quoted
+  // spans (which never execute) are blanked before the $/backtick test;
+  // separators are tested with ALL quoted spans blanked.
+  const noSingles = cmd.replace(/'[^']*'/g, "''")
+  return /[;&|\n]/.test(noSingles.replace(/"(?:\\.|[^"\\])*"/g, '""')) || /[$`]/.test(noSingles)
+}
+
 /**
  * Which target kinds this command's CLI publish verbs can have produced.
  * Bounds the post-publish verifier's surface: the Bash tool merges the whole

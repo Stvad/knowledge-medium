@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
-import { hasExplicitGetMethod, matchesApiPublish, repairableKinds } from './bd-github-sync.mjs'
+import { hasExplicitGetMethod, isCompoundCommand, matchesApiPublish, repairableKinds } from './bd-github-sync.mjs'
 import { apiPathFor, clipContext, mergedPrNumbers, planBeadIdRewrite, publishedTargets } from './bd-publish-verify.mjs'
 
 const PR_CREATE = 'gh pr create --title t --body-file /tmp/x.md'
@@ -45,6 +45,18 @@ describe('hasExplicitGetMethod', () => {
     expect(hasExplicitGetMethod('gh api -X "GET" repos/x -f q=1')).toBe(true)
     expect(hasExplicitGetMethod('gh api repos/x -f body=hi')).toBe(false)
     expect(hasExplicitGetMethod('gh api -X PATCH repos/x --input -')).toBe(false)
+  })
+})
+
+describe('isCompoundCommand', () => {
+  it('detects separators, pipes, newlines and substitutions outside quotes', () => {
+    expect(isCompoundCommand('gh api repos/x -f body=hi; true')).toBe(true)
+    expect(isCompoundCommand('true && gh api repos/x -f body=hi')).toBe(true)
+    expect(isCompoundCommand('gh api repos/x -f body=hi | tee log')).toBe(true)
+    expect(isCompoundCommand('gh api repos/x -f body="$(cat msg)"')).toBe(true)
+    expect(isCompoundCommand('gh api repos/x -f body=hi')).toBe(false)
+    // quoted prose must not fake a compound
+    expect(isCompoundCommand('gh api repos/x -f body="a; b | c && d"')).toBe(false)
   })
 })
 
@@ -211,6 +223,7 @@ describe('bd-publish-verify process behavior', { timeout: 30_000 }, () => {
     fixtures?: Record<string, object>
     shows?: object[][]
     dry?: boolean
+    budgetMs?: number
   }) => {
     const repo = mkdtempSync(join(tmpdir(), 'bd-publish-verify-'))
     spawnSync('git', ['init', '-q'], { cwd: repo })
@@ -273,6 +286,7 @@ describe('bd-publish-verify process behavior', { timeout: 30_000 }, () => {
     }
     delete env.BD_GITHUB_SYNC_DRY
     if (opts.dry) env.BD_GITHUB_SYNC_DRY = '1'
+    if (opts.budgetMs !== undefined) env.BD_PUBLISH_VERIFY_BUDGET_MS = String(opts.budgetMs)
     const hook = (command: string, stdout: string | null, extra: object = {}) => {
       const payload = JSON.stringify({
         tool_name: 'Bash',
@@ -621,6 +635,42 @@ describe('bd-publish-verify process behavior', { timeout: 30_000 }, () => {
     expect(r.status).toBe(0)
     expect(context(r)).toContain('only the first 5 of 6')
     expect(shimCalls().match(/issues\/comments\//g)?.length).toBe(5)
+  })
+
+  // The implicit-read compound: a sibling read's response can be the ONLY
+  // html_url in the merged output when the mutation itself prints none
+  // (dispatches, --silent siblings) — no explicit GET to veto on, so the
+  // compound itself must. Reading issue 12 is not publishing it.
+  it('never repairs in api mode when the command is a compound', () => {
+    const { hook, repo, shimCalls } = makeRepo({
+      fixtures: {
+        'repos/Stvad/knowledge-medium/issues/12': {
+          html_url: url('issues/12'),
+          title: 'Innocent',
+          body: 'tracks km-abc',
+        },
+      },
+      shows: [[{ id: 'km-abc', external_ref: url('issues/12') }]],
+    })
+    const cmd = 'gh api repos/Stvad/knowledge-medium/issues/12; gh api repos/Stvad/knowledge-medium/dispatches -f event_type=build'
+    const r = hook(cmd, JSON.stringify({ html_url: url('issues/12'), body: 'tracks km-abc' }))
+    expect(r.status).toBe(0)
+    expect(context(r)).toContain('cannot be attributed')
+    expect(shimCalls()).not.toContain('bd github sync')
+    expect(existsSync(join(repo, patchName('repos/Stvad/knowledge-medium/issues/12')))).toBe(false)
+  })
+
+  // Pins the whole deadline plumbing: with a zero budget every fetch is
+  // skipped and the hook says so instead of dying mid-flight.
+  it('skips all verification work when the time budget is exhausted', () => {
+    const { hook, shimCalls } = makeRepo({
+      budgetMs: 0,
+      fixtures: { 'repos/Stvad/knowledge-medium/pulls/652': { html_url: url('pull/652'), title: 'T', body: 'clean' } },
+    })
+    const r = hook(PR_CREATE, url('pull/652'))
+    expect(r.status).toBe(0)
+    expect(context(r)).toContain('out of time budget')
+    expect(shimCalls()).not.toContain('gh api')
   })
 
   it('suppresses writes under BD_GITHUB_SYNC_DRY=1 but still reports what it would do', () => {

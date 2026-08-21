@@ -34,8 +34,10 @@
  * echo-only. CLI targets are additionally filtered to the kinds the
  * command's verbs can produce (repairableKinds) as a noise bound. Accepted
  * residuals: truncated tool output that cuts inside an id resolves to a
- * wrong — then merely echoed — object, and in a compound that mixes `gh
- * api` with CLI publishes the api-published object goes unverified.
+ * wrong — then merely echoed — object; in a compound that mixes `gh
+ * api` with CLI publishes the api-published object goes unverified; and an
+ * api-created review's inline comments[].body ride outside the review
+ * object this hook fetches, so they are neither echoed nor repaired.
  *
  * Blocking here would be pointless (the publish already happened), so this
  * hook never does: any internal failure exits 0 silently, a failed repair is
@@ -57,6 +59,7 @@ import {
   extractIssueRefs,
   fetchIssueInfo,
   hasExplicitGetMethod,
+  isCompoundCommand,
   isMainModule,
   issueRefsTable,
   matchesApiPublish,
@@ -201,7 +204,7 @@ const GH_TIMEOUT = 10_000
 // worst single overshoot past a deadline check is one fetch + the mint +
 // one re-fetch (≈65s with the per-spawn timeouts), so 50s of headroom
 // covers it; per-target refs echoes size themselves to the time left.
-const DEADLINE_MS = 70_000
+const DEADLINE_MS = Number(process.env.BD_PUBLISH_VERIFY_BUDGET_MS ?? 70_000)
 
 const ghJson = args => {
   try {
@@ -256,6 +259,15 @@ const verifyTarget = (t, { dry, repairVeto, rewriteAllowed, deadline }) => {
     // written into public text — rewrite only mappings whose issue resolves.
     const stale = []
     for (const [id, number] of [...byId]) {
+      // Each validation is one bounded gh GET, but there is no bound on how
+      // many mapped ids a body carries — past the deadline the remaining
+      // mappings are dropped (ids left alone) rather than risking the host
+      // kill landing after a PATCH with the report unemitted.
+      if (Date.now() >= deadline) {
+        byId.delete(id)
+        notes.push(`did NOT validate or rewrite ${id} in ${label} — out of time budget; fix by hand`)
+        continue
+      }
       if (number && typeof fetchIssueInfo(number) !== 'object') {
         byId.delete(id)
         stale.push(`${id} → #${number}`)
@@ -385,13 +397,15 @@ const hookPostPublish = () => {
       ? 'the output names more than one object, so this hook cannot tell which one the command published'
       : hasExplicitGetMethod(cmd)
         ? 'the command carries an explicit GET, and an object a read segment printed must never be written'
-        : null
+        : !matchesPrCommand(cmd) && isCompoundCommand(cmd)
+          ? 'the api response cannot be attributed to a single segment of a compound command'
+          : null
   const deadline = Date.now() + DEADLINE_MS
   const notes = []
   if (all.length > targets.length)
     notes.push(`only the first ${MAX_TARGETS} of ${all.length} published objects named in the output were verified`)
   for (const [i, t] of targets.entries()) {
-    if (Date.now() > deadline) {
+    if (Date.now() >= deadline) {
       notes.push(`${targets.length - i} published object(s) not verified (out of time budget) — check them yourself`)
       break
     }
@@ -404,7 +418,7 @@ const hookPostPublish = () => {
     }
   }
   for (const n of mergedPrs) {
-    if (Date.now() > deadline) break
+    if (Date.now() >= deadline) break
     try {
       notes.push(...verifyMergeCommit(n, deadline))
     } catch {
