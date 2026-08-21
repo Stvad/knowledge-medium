@@ -14,7 +14,8 @@ import {
   getBlockTypes,
   typesProp,
 } from '@/data/properties'
-import { BLOCK_TYPE_TYPE, PAGE_TYPE } from '@/data/blockTypes'
+import { BLOCK_TYPE_TYPE, PAGE_TYPE, TYPES_PAGE_TYPE } from '@/data/blockTypes'
+import { hasBlockType } from '@/data/properties'
 import {
   GrammarShapedLabelError,
   LossyLabelError,
@@ -299,6 +300,13 @@ describe('createTypeBlock', () => {
     const row = await env.repo.db.get<{parent_id: string}>(
       'SELECT parent_id FROM blocks WHERE id = ?', [typeId])
     expect(row.parent_id).toBe(TYPES_CLAIMANT)
+
+    // And the claimant is now actually the Types page. Asserting the parent
+    // alone passed while the definition sat under an untyped user block that
+    // no TYPES_PAGE_TYPE query would ever return.
+    const adopted = await env.repo.load(TYPES_CLAIMANT)
+    expect(hasBlockType(adopted!, TYPES_PAGE_TYPE)).toBe(true)
+    expect(hasBlockType(adopted!, PAGE_TYPE)).toBe(true)
   })
 })
 

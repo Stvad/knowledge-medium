@@ -51,6 +51,7 @@ import {
 } from '@/data/referenceBlock'
 import { pickLeastUsedTypeColor } from '@/data/typeColors'
 import { resolveTypesPageId } from '@/data/typesPage'
+import { TYPES_PAGE_TYPE } from '@/data/blockTypes'
 
 // ──── Error classes ─────────────────────────────────────────────────
 
@@ -257,6 +258,34 @@ export async function createTypeBlock(
       }
       if (!hasBlockType(row, PROPERTY_SCHEMA_TYPE)) {
         throw new Error(`createTypeBlock: schema block ${schemaId} no longer carries ${PROPERTY_SCHEMA_TYPE}`)
+      }
+    }
+
+    // Adopt the parent before filing anything under it. `resolveTypesPageId`
+    // deliberately writes nothing, so an untyped user page that claims 'Types'
+    // arrives here as the Types page in every respect EXCEPT its type tags —
+    // and a definition parented under a page nothing recognises as the Types
+    // page is invisible to every `TYPES_PAGE_TYPE` query. That tagging is the
+    // load-bearing part below.
+    //
+    // The two throws are defence in depth, matching the schema re-checks above:
+    // they cover a sync-applied delete or move landing between the pre-tx load
+    // and this tx, and no test drives that window. Deleting either fails
+    // nothing today.
+    const parentRow = await tx.get(typesPageId)
+    if (!parentRow || parentRow.deleted) {
+      throw new Error(
+        `createTypeBlock: Types page ${typesPageId} is gone as of this transaction`,
+      )
+    }
+    if (parentRow.workspaceId !== args.workspaceId) {
+      throw new Error(
+        `createTypeBlock: Types page ${typesPageId} belongs to workspace ${parentRow.workspaceId}`,
+      )
+    }
+    for (const pageType of [PAGE_TYPE, TYPES_PAGE_TYPE]) {
+      if (!hasBlockType(parentRow, pageType)) {
+        await repo.addTypeInTx(tx, typesPageId, pageType, {}, typeSnapshot)
       }
     }
 
