@@ -424,8 +424,16 @@ export const flipBlockedBySynthesis = (
       `workspace can never finish the migration while they exist: ${named}. Delete or ` +
       'remap them, then run this again.'
   }
-  if (plan.refusal !== null && plan.candidates.length > 0) {
-    return `${plan.candidates.length} property key(s) have no definition, and ${plan.refusal}.`
+  // Whether or not there is anything to mint. The refusal means this device
+  // cannot vouch that a flip here is safe — and for the case it exists for,
+  // e2ee, the server trigger refuses every flip outright, so proceeding buys a
+  // confirmation dialog and a PATCH that can only fail. An earlier revision
+  // gated this on `candidates.length`, which conflated "is there something to
+  // synthesize" with "may this workspace flip at all".
+  if (plan.refusal !== null) {
+    return plan.candidates.length > 0
+      ? `${plan.candidates.length} property key(s) have no definition, and ${plan.refusal}.`
+      : `This workspace cannot be switched to property blocks: ${plan.refusal}.`
   }
   return null
 }
@@ -650,9 +658,20 @@ export const applyPropertyDefinitionSynthesis = async (
       // and minting a second one for a name that already has one is the rival
       // this whole re-check exists to prevent. Not answerable from
       // `tx.get(id)`: OUR id is vacant no matter who else claimed the name.
-      if (resolver.resolve(candidate.key).status === 'resolved') {
-        converged += 1
-        continue
+      // Converged only if the definition the resolver SELECTED is still live.
+      // The resolver is a projection: a definition created after the plan and
+      // deleted again before the deletion tick still reads `resolved`, and
+      // counting that as converged permits the flip with the key genuinely
+      // orphaned. Checked by field id rather than by name, so a seed-backed row
+      // whose stored name has drifted — which resolves under its DECLARED name
+      // and would be invisible to a name lookup here — is still recognised.
+      const resolution = resolver.resolve(candidate.key)
+      if (resolution.status === 'resolved') {
+        const selected = await tx.get(resolution.schema.fieldId)
+        if (selected !== null && !selected.deleted) {
+          converged += 1
+          continue
+        }
       }
       // DEFENCE IN DEPTH — no test pins it, because the resolve check above
       // catches every seed whose own definition is healthy. What is left is the

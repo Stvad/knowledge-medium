@@ -447,6 +447,32 @@ describe('applyPropertyDefinitionSynthesis: the id is occupied, or the key stopp
     expect(definitions[0]!.n).toBe(1)
   })
 
+  it('does not call a key converged when the definition the resolver picked is gone', async () => {
+    // The resolver is a projection: a definition deleted after its creation
+    // tick but before its deletion tick still reads `resolved`. Counting that
+    // as converged permits the flip with the key genuinely orphaned.
+    await rawCell('b1', {'demo:orphan': 'hello'})
+    const plan = await planFor()
+    await getOrCreatePropertiesPage(repo, WS)
+    const schema = await repo.userSchemas.addSchema({name: 'demo:orphan', presetId: 'string'})
+    const fieldId = repo.propertyDefinitions!.definitionsByName.get('demo:orphan')![0]!.fieldId
+    await repo.tx(async tx => { await tx.delete(fieldId) },
+                  {scope: ChangeScope.BlockDefault, description: 'delete'})
+    // The projection still reports it — which is the whole point of the test,
+    // so assert that precondition rather than assuming it.
+    expect(schema.name).toBe('demo:orphan')
+    vi.spyOn(repo, 'propertySchemaResolverFor').mockReturnValue({
+      resolve: () => ({status: 'resolved', schema: {...schema, fieldId, workspaceId: WS}}),
+      resolveField: () => ({status: 'identity-unavailable', reason: 'definition-unavailable'}),
+      resolveBoundary: () => ({status: 'identity-unavailable', reason: 'definition-unavailable'}),
+    } as unknown as ReturnType<typeof repo.propertySchemaResolverFor>)
+
+    const result = await applyPropertyDefinitionSynthesis(repo, plan)
+
+    expect(result.converged).toBe(0)
+    expect(result.created).toBe(1)
+  }, 30_000)
+
   it('reports an already-defined key as converged rather than minting again', async () => {
     await rawCell('b1', {'demo:orphan': 'hello'})
     const plan = await planFor()
@@ -779,12 +805,15 @@ describe('flipBlockedBySynthesis', () => {
     expect(flipBlockedBySynthesis(await planFor())).toMatch(/have no definition/)
   })
 
-  it('lets a refused workspace with nothing to mint through', async () => {
-    // The refusal is about MINTING a dictionary-testable id. With no orphan
-    // keys there is nothing to mint, so the invariant already holds.
+  it('blocks a refused workspace even with nothing to mint', async () => {
+    // An earlier revision let this through, reasoning that the refusal is about
+    // minting a dictionary-testable id and there is nothing to mint. That
+    // conflated two questions: the server trigger refuses every e2ee flip
+    // outright, so proceeding buys a confirmation dialog and a PATCH that can
+    // only fail.
     await seedWorkspaceRow('e2ee')
     await rawCell('b1', {[declaredProp.name]: 'x'})
-    expect(flipBlockedBySynthesis(await planFor())).toBeNull()
+    expect(flipBlockedBySynthesis(await planFor())).toMatch(/cannot be switched/)
   })
 
   it('blocks while any block has a property bag this device cannot read', async () => {
