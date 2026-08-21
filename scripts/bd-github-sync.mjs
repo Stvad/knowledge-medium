@@ -142,7 +142,14 @@ const commandSkeleton = cmd => {
     }
     return "''"
   })
-  return [skeleton, ...lifted].join('\n')
+  // A trailing `#` comment is text bash never runs. It has to go BEFORE any
+  // detector sees it: the detectors no longer require a command position, so
+  // a commented-out verb would otherwise read as a real publish — and the
+  // commit leg skips its file inspection when the invocation also publishes,
+  // so over-matching here fails OPEN rather than merely costing a round.
+  // `#` only opens a comment at a word boundary, which leaves a positional
+  // URL fragment (…#issuecomment-1) alone.
+  return [skeleton, ...lifted].join('\n').replace(/(^|\s)#[^\n]*/g, '$1')
 }
 
 // The DETECTORS below scan the skeleton for their verb wherever it occurs.
@@ -291,6 +298,25 @@ const NON_PUBLISHING_MODE = /(?<![\w-])--(?:dry-run|web)\b/
 
 export const matchesAnyPublish = cmd =>
   matchesPrCommand(cmd) || matchesApiPublish(cmd) || (GH_API.test(commandSkeleton(cmd)) && EXPANSION.test(expandable(cmd)))
+
+// Text-bearing flags and api fields. A publish with none of them — a label
+// change, a reaction, a comment DELETION, a merge-method call — has no
+// reference to check, so a read-back that finds nothing there is not a broken
+// promise and must not be reported as one.
+//
+// This is the same shape as the flag allowlist that once vetoed the deleted
+// repair path, and it is safe HERE for the reason it was not there: it
+// decides only whether to WARN. Being wrong costs a missing or an extra note,
+// never a wrong write. Missing a spelling is therefore the cheap direction,
+// which is why it is written as a small list rather than defended as one.
+const TEXT_FLAG = /(?<![\w-])(?:--(?:body|title|notes|message)(?:-file)?\b|--input\b|-[btmF](?=[\s=]|$))/
+const TEXT_FIELD = /(?<![\w-])-[fF]\s*['"]?(?:body|title|name|description|message)=/
+
+/** Whether this command carries text that could contain a reference at all. */
+export const carriesPublishableText = cmd => {
+  const sk = commandSkeleton(cmd)
+  return TEXT_FLAG.test(sk) || TEXT_FIELD.test(sk)
+}
 
 /**
  * Whether the post-publication read-back covers this publish. A WHITELIST:

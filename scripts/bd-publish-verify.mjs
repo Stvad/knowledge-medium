@@ -63,6 +63,7 @@ import {
   fetchIssueInfo,
   initializedDbRoot,
   isMainModule,
+  carriesPublishableText,
   isPostVerifiable,
   issueRefsTable,
   matchesAnyPublish,
@@ -415,6 +416,9 @@ const hookPostPublish = () => {
   // surfaces here instead of having to have been enumerated there.
   if (!all.length && !mergedPrs.length) {
     if (!isPostVerifiable(cmd)) return
+    // Nothing to check means nothing to warn about: a command that publishes
+    // no TEXT has no reference the read-back could have verified.
+    if (!carriesPublishableText(cmd)) return
     // A command the tool reports as FAILED published nothing, so there is no
     // unkept promise to report. This is read from the payload rather than
     // inferred — the one innocent cause of "no target" the hook is actually
@@ -436,7 +440,7 @@ const hookPostPublish = () => {
   // agent to edit a stranger's object.
   if (failedEvent && targets.length)
     notes.push(
-      `the command FAILED, so the object(s) below were only NAMED in its output — they are not established to be its work; read, do not edit`,
+      `the command FAILED, so attribution of the object(s) below is UNKNOWN — an earlier segment may really have published one, and gh also prints EXISTING objects in its error text ("a pull request … already exists: <url>"). Confirm which before editing anything`,
     )
   if (all.length > targets.length)
     notes.push(`only the first ${MAX_TARGETS} of ${all.length} published objects named in the output were verified`)

@@ -494,9 +494,12 @@ describe('bd-publish-verify process behavior', { timeout: 30_000 }, () => {
   })
 
   // gh prints EXISTING objects in its error text ("a pull request for branch
-  // X already exists: <url>"), so on a failure event attribution is unknown —
+  // X already exists: <url>"), so on a failure event attribution is UNKNOWN —
   // the per-target notes must not read as "you published this, go fix it".
-  it('says objects were only named when the command failed', () => {
+  // Unknown is as far as it goes: an earlier segment of a failed compound
+  // really can have published the object named, so claiming it did NOT would
+  // be the same over-claim in the other direction.
+  it('says attribution is unknown when the command failed', () => {
     const { hook } = makeRepo({
       fixtures: {
         'repos/Stvad/knowledge-medium/pulls/652': { html_url: url('pull/652'), title: 'T', body: 'relates to #12' },
@@ -508,8 +511,8 @@ describe('bd-publish-verify process behavior', { timeout: 30_000 }, () => {
       error: `a pull request for branch "x" already exists:\n${url('pull/652')}`,
     })
     expect(r.status).toBe(0)
-    expect(context(r)).toContain('only NAMED in its output')
-    expect(context(r)).toContain('read, do not edit')
+    expect(context(r)).toContain('attribution of the object(s) below is UNKNOWN')
+    expect(context(r)).toContain('Confirm which before editing')
   })
 
   // An unreadable base branch must not be reported as "merged off the default
@@ -550,6 +553,25 @@ describe('bd-publish-verify process behavior', { timeout: 30_000 }, () => {
     expect(r.status).toBe(0)
     expect(context(r)).toContain('#12 → "Tracked issue" (issue, open)')
     expect(context(r)).not.toContain('out of time budget')
+  })
+
+  // A publish carrying no TEXT has no reference the read-back could have
+  // verified, so an empty result there is not a broken promise. Without this
+  // the warning fires on label changes, reactions, merge-method calls and
+  // comment deletions — and it is worth having only while it is trusted.
+  it('stays silent for a covered publish that carries no text', () => {
+    const { hook } = makeRepo({ fixtures: {} })
+    for (const cmd of [
+      'gh pr comment 652 --delete-last',
+      'gh api repos/Stvad/knowledge-medium/issues/652/labels -f labels[]=bug',
+      'gh api -X PUT repos/Stvad/knowledge-medium/pulls/652/merge -f merge_method=squash',
+    ]) {
+      const r = hook(cmd, 'done, no url printed')
+      expect(r.status, cmd).toBe(0)
+      expect(r.stdout, cmd).toBe('')
+    }
+    // a text-bearing publish with the same empty output still reports
+    expect(context(hook(PR_CREATE, 'created, no url printed'))).toContain('treated as covered')
   })
 
   // An uncovered publish was already checked BEFORE it shipped, so the same

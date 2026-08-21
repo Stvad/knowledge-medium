@@ -178,6 +178,18 @@ describe('detectors see the verb wherever it sits', () => {
     expect(matchesCommitCommand('  git commit -m x')).toBe(true)
   })
 
+  // A shell COMMENT is text bash never runs. This matters more than it looks:
+  // the commit leg skips its message-file inspection when the invocation also
+  // publishes, so a commented-out verb reading as a real publish would let a
+  // close keyword inside that file through unchecked — over-matching fails
+  // OPEN here rather than costing a round.
+  it('does not read a commented-out verb as a publish', () => {
+    expect(matchesAnyPublish('git commit -F msg # later: gh pr create')).toBe(false)
+    expect(matchesAnyPublish('gh pr create --title t # not gh pr merge')).toBe(true)
+    // a positional URL fragment is not a comment
+    expect(matchesAnyPublish('gh pr comment https://github.com/o/r/pull/1#issuecomment-2 --body x')).toBe(true)
+  })
+
   // What keeps prose out is commandSkeleton blanking quoted spans, not the
   // position test — so dropping the position test costs nothing here.
   it('still ignores a verb that only appears inside quoted prose', () => {
