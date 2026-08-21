@@ -146,6 +146,12 @@ describe('publishedTargets', () => {
   // A sibling command can print an html_url object of its own; picking one
   // line would be output→command association. ALL object lines become
   // candidates, which the single-object repair gate then disqualifies.
+  it('unwraps --slurp/--paginate array responses', () => {
+    const cmd = 'gh api repos/Stvad/knowledge-medium/issues/652/comments -f body=hi --paginate --slurp'
+    const out = JSON.stringify([{ html_url: url('pull/652#issuecomment-99') }])
+    expect(publishedTargets(cmd, out)).toEqual([{ kind: 'comment', id: 99 }])
+  })
+
   it('collects every api output line with an html_url, not the first', () => {
     const cmd = 'gh api repos/Stvad/knowledge-medium/issues/652/comments -f body=hi'
     const out = [
@@ -274,6 +280,7 @@ describe('bd-publish-verify process behavior', { timeout: 30_000 }, () => {
         `  name=$(echo "$2" | tr '/' '_')`,
         `  cnt=$(cat "${repo}/getcount-$name" 2>/dev/null || echo 0); cnt=$((cnt+1)); echo $cnt > "${repo}/getcount-$name"`,
         `  if [ -f "${repo}/fixture-$name.$cnt.json" ]; then cat "${repo}/fixture-$name.$cnt.json"; exit 0; fi`,
+        `  if [ -f "${repo}/fixture-$name.fail.json" ]; then cat "${repo}/fixture-$name.fail.json"; exit 1; fi`,
         `  f="${repo}/fixture-$name.json"`,
         '  if [ -f "$f" ]; then cat "$f"; exit 0; fi',
         '  echo \'{"message":"Not Found"}\'; exit 1',
@@ -812,6 +819,53 @@ describe('bd-publish-verify process behavior', { timeout: 30_000 }, () => {
     expect(r.status).toBe(0)
     expect(context(r)).toContain('not enough time budget')
     expect(shimCalls()).not.toContain('bd ')
+  })
+
+  // typeof null is 'object': a FAILED validation lookup must drop the
+  // mapping — a rewrite may never publish a number nothing read.
+  it('drops a mapping whose validation lookup fails transiently', () => {
+    const { hook, repo } = makeRepo({
+      fixtures: {
+        'repos/Stvad/knowledge-medium/pulls/652': { html_url: url('pull/652'), title: 'T', body: 'tracks km-abc' },
+        'repos/Stvad/knowledge-medium/issues/12#fail': { message: 'Server Error' },
+      },
+      shows: [[{ id: 'km-abc', external_ref: url('issues/12') }]],
+    })
+    const r = hook(PR_CREATE, url('pull/652'))
+    expect(r.status).toBe(0)
+    expect(context(r)).toContain('could not be verified')
+    expect(existsSync(join(repo, patchName('repos/Stvad/knowledge-medium/pulls/652')))).toBe(false)
+  })
+
+  // An api PATCH that carries no text field never touched the body it
+  // fetched — same veto as metadata-only CLI edits.
+  it('keeps metadata-only api mutations echo-only, text-bearing ones repairable', () => {
+    const { hook, repo } = makeRepo({
+      fixtures: {
+        'repos/Stvad/knowledge-medium/issues/12': { html_url: url('issues/12'), title: 'T', body: 'literal km-abc' },
+      },
+      shows: [[{ id: 'km-abc', external_ref: url('issues/12') }]],
+    })
+    const r = hook('gh api -X PATCH repos/Stvad/knowledge-medium/issues/12 -f state=closed', JSON.stringify({ html_url: url('issues/12') }))
+    expect(r.status).toBe(0)
+    expect(context(r)).toContain('historical text')
+    expect(existsSync(join(repo, patchName('repos/Stvad/knowledge-medium/issues/12')))).toBe(false)
+  })
+
+  // A --dry-run preview creates nothing — a same-repo URL quoted in its
+  // output must never become a repair target.
+  it('keeps dry-run previews echo-only', () => {
+    const { hook, repo } = makeRepo({
+      fixtures: {
+        'repos/Stvad/knowledge-medium/pulls/652': { html_url: url('pull/652'), title: 'T', body: 'tracks km-abc' },
+        'repos/Stvad/knowledge-medium/issues/12': { title: 'Tracked issue', state: 'open' },
+      },
+      shows: [[{ id: 'km-abc', external_ref: url('issues/12') }]],
+    })
+    const r = hook('gh pr create --dry-run --title t --body-file /tmp/x.md', `Would have created a Pull Request with:\nsee ${url('pull/652')}`)
+    expect(r.status).toBe(0)
+    expect(context(r)).toContain('--dry-run previews without publishing')
+    expect(existsSync(join(repo, patchName('repos/Stvad/knowledge-medium/pulls/652')))).toBe(false)
   })
 
   it('suppresses writes under BD_GITHUB_SYNC_DRY=1 but still reports what it would do', () => {

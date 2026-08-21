@@ -199,13 +199,17 @@ const GH_EDIT = new RegExp(
   'm',
 )
 export const matchesTextlessEdit = cmd => {
-  if (!GH_EDIT.test(commandSkeleton(cmd))) return false
-  // The text-flag test GRANTS repair, so it must not read prose: quoted
+  // The text-flag tests GRANT repair, so they must not read prose: quoted
   // values are blanked by the skeleton, and shell comments are stripped —
   // `--add-label bug # no --body change` stays textless. Attached unquoted
-  // forms (-bfoo) survive the skeleton and still count.
+  // forms (-bfoo, -fbody=) survive the skeleton and still count.
   const sk = commandSkeleton(cmd).replace(/(^|\s)#[^\n]*/g, '$1')
-  return !/(?<![\w-])(?:--body|--title|--body-file|--notes|--notes-file|-[btFT])/.test(sk)
+  if (GH_EDIT.test(sk)) return !/(?<![\w-])(?:--body|--title|--body-file|--notes|--notes-file|-[btFT])/.test(sk)
+  // An api PATCH/PUT that carries no text-bearing field (state flips,
+  // labels) never touched the body it fetched either.
+  if (matchesApiPublish(cmd) && /(?<![\w-])(?:-X|--method)(?:=|\s+)?['"]?(?:PATCH|PUT)\b/i.test(sk))
+    return !/\b(?:body|title|name|description)=|--input\b/.test(sk)
+  return false
 }
 
 export const isCompoundCommand = cmd => {

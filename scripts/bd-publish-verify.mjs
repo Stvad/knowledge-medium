@@ -107,20 +107,23 @@ const classify = (pr, issue, tag, commentId, reviewCommentId, reviewId) =>
 // this hook cannot do — multiple candidates instead disqualify the repair
 // via the single-object gate below.
 const topLevelUrls = output => {
-  const urlOf = s => {
+  const urlsOf = s => {
     try {
       const j = JSON.parse(s)
-      return j && typeof j === 'object' && typeof j.html_url === 'string' ? j.html_url : null
+      // --slurp (and --paginate) wrap responses in an array — every
+      // element's top-level html_url counts, same as multi-line output.
+      const objs = Array.isArray(j) ? j : [j]
+      const urls = objs.map(o => (o && typeof o === 'object' && typeof o.html_url === 'string' ? o.html_url : null)).filter(Boolean)
+      return urls.length ? urls : null
     } catch {
       return null
     }
   }
-  const whole = urlOf(output)
-  if (whole) return [whole]
+  const whole = urlsOf(output)
+  if (whole) return whole
   return output
     .split('\n')
-    .map(line => urlOf(line.trim()))
-    .filter(Boolean)
+    .flatMap(line => urlsOf(line.trim()) ?? [])
 }
 
 /**
@@ -284,14 +287,17 @@ const verifyTarget = (t, { dry, repairVeto, rewriteAllowed, deadline }) => {
         notes.push(`did NOT validate or rewrite ${id} in ${label} — out of time budget; fix by hand`)
         continue
       }
-      if (number && typeof fetchIssueInfo(number) !== 'object') {
+      // typeof null is 'object' — a FAILED lookup must drop the mapping
+      // too, or the rewrite would publish a number nothing ever read.
+      const info = number ? fetchIssueInfo(number) : null
+      if (number && (info === null || typeof info !== 'object')) {
         byId.delete(id)
         stale.push(`${id} → #${number}`)
       }
     }
     if (stale.length)
       notes.push(
-        `left ${stale.join(', ')} alone in ${label} — the mapped issue does not resolve (stale sync state?); fix by hand`,
+        `left ${stale.join(', ')} alone in ${label} — the mapped issue does not resolve or could not be verified; fix by hand`,
       )
     if (![...byId.values()].some(Boolean)) {
       notes.push(unmappedNote(ids.filter(id => !byId.get(id)), label, mintSkipReason))
@@ -437,6 +443,8 @@ const hookPostPublish = () => {
   const repairVeto =
     payload?.hook_event_name === 'PostToolUseFailure'
       ? 'the command failed — objects named in its error output are echoed, never written'
+      : /(?<![\w-])--dry-run\b/.test(cmd)
+      ? 'a --dry-run previews without publishing — nothing this output names was created by this command'
       : matchesTextlessEdit(cmd)
         ? 'this edit changed no text field — the fetched body is historical text this command never touched'
         : all.length > 1
