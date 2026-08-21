@@ -556,8 +556,16 @@ export const runPropertyCellBackfill = async (
     return {n: rows[0]?.n ?? 0, t: rows[0]?.t ?? 0}
   }
 
+  // Sticky, because the flip is forward-only: once a batch has seen the
+  // workspace child-backed, no later sweep can be pre-flip. It is what lets the
+  // pre-flip-only work below be skipped rather than run and discarded.
+  let childBacked = false
   for (;;) {
-    const before = await childState()
+    // COST, not correctness — it scans every active block in the workspace and
+    // past the flip its answer is not part of the convergence decision, so
+    // skipping it fails no test. The palette reruns this pass after every flip,
+    // which is what makes the waste worth removing.
+    const before = childBacked ? null : await childState()
     progress.sweeps += 1
     progress.blocksScanned = 0
     progress.blocksMaterialized = 0
@@ -567,10 +575,15 @@ export const runPropertyCellBackfill = async (
     const notify = async () => { await onProgress?.(progress) }
     const {sawChildBacked} = await sweep(
       ctx, CANDIDATE_SQL, progress, notify, {deletesOnly: false})
-    const beforeOrphans = progress.blocksScanned
-    await sweep(ctx, ORPHANED_OWNER_SQL, progress, notify, {deletesOnly: true})
-    progress.orphanedOwnersSwept += progress.blocksScanned - beforeOrphans
-    if (sawChildBacked) {
+    childBacked ||= sawChildBacked
+    if (!childBacked) {
+      // Its first transaction would abandon anyway (deletion is all it does, and
+      // none of it is permitted past the flip), but only after paying the scan.
+      const beforeOrphans = progress.blocksScanned
+      await sweep(ctx, ORPHANED_OWNER_SQL, progress, notify, {deletesOnly: true})
+      progress.orphanedOwnersSwept += progress.blocksScanned - beforeOrphans
+    }
+    if (childBacked) {
       // Past the flip the pending set only SHRINKS: every live write puts the
       // cell and its children in one transaction, so nothing BECOMES pending and
       // a sweep that materialized nothing has nothing left to find. The row count
@@ -585,12 +598,12 @@ export const runPropertyCellBackfill = async (
       }
     } else {
       const after = await childState()
-      if (after.n === before.n) {
+      if (after.n === before!.n) {
         // Structurally converged. The timestamp is not part of that decision —
         // looping on it never terminates against a live editor — but if it moved
         // during the sweep that converged, this sweep was still rewriting value
         // children from cells that were changing under it.
-        progress.editedUnderPass = after.t !== before.t
+        progress.editedUnderPass = after.t !== before!.t
         // One last notification, AFTER the flag is set. Everything a subscriber
         // knows arrives through `onProgress`, which otherwise fires only from
         // inside a batch — so the palette, which is the surface an operator

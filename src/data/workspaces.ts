@@ -305,7 +305,22 @@ export const flipWorkspaceToChildBackedProperties = async (
     .eq('id', workspaceId)
     .select('properties_migration, update_time')
     .single()
-  if (error) throw error
+  let row = data
+  if (error) {
+    // A lost RESPONSE is not a lost WRITE. Throwing here tells the caller the
+    // flip did not happen, which it turns into "nothing was migrated" — and
+    // skips the committed-flip recovery, undo clear included — while the server
+    // may in fact have applied it. Ask before asserting; if the read fails too
+    // the original error stands, which is the honest ending.
+    const {data: reread} = await client
+      .from('workspaces')
+      .select('properties_migration, update_time')
+      .eq('id', workspaceId)
+      .maybeSingle()
+    if (reread === null || reread.properties_migration !== 'children') throw error
+    row = reread
+  }
+  if (row === null) throw new Error('flip: no workspace row came back')
   // Everything past the PATCH is inside the catch, the READBACK included: the
   // flip has committed by now, so no local failure may surface as a rejection —
   // the caller reads that as "the flip failed" and reports a graph it has not
@@ -313,7 +328,7 @@ export const flipWorkspaceToChildBackedProperties = async (
   try {
     await repo.db.execute(
       `UPDATE workspaces SET properties_migration = ?, update_time = ? WHERE id = ?`,
-      [data.properties_migration, toNumber(data.update_time), workspaceId],
+      [row.properties_migration, toNumber(row.update_time), workspaceId],
     )
     // Read back rather than trusting `rowsAffected`, which PowerSync documents
     // as possibly 0 for a successful UPDATE under its view system.
