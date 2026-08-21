@@ -275,10 +275,10 @@ export const migratePropertiesToBlocksAction = ({repo}: {repo: Repo}): ActionCon
       // succeeds is worse than never having shown it.
       dismissToast(SYNTHESIS_TOAST.id)
     }
-    // A refused workspace (e2ee) reaches here only when the flip is not at
-    // stake. Its candidates are then keys that stay cell-only, NOT keys about
-    // to be given a definition — counting them as the latter would have the
-    // dialog promise something the gesture then skips.
+    // A refused workspace reaches here only when the flip is not at stake. Its
+    // candidates are then keys that stay cell-only, NOT keys about to be given
+    // a definition — counting them as the latter would have the dialog promise
+    // something the gesture then skips.
     const willSynthesize = plan.refusal === null ? plan.candidates.length : 0
     const blockCount = await countPropertyCellBackfillCandidates(
       (sql, params) => repo.db.getAll(sql, params as unknown[] | undefined), workspaceId,
