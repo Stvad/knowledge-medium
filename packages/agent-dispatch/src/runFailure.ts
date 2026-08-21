@@ -119,7 +119,16 @@ export const classifyRunFailure = (signals: RunFailureSignals): RunFailureClass 
   // it always has been. Retrying would just burn the same timeoutMs again.
   if (signals.timedOut) return {kind: 'task', retryable: false, label: RUN_FAILURE_LABELS.task}
 
-  const text = `${signals.stderr}\n${signals.failureText}`
+  // The STRUCTURED cause wins outright when there is one. Concatenating
+  // stderr gave unrelated noise equal authority, and codexRunner PUTS noise
+  // there on purpose — it folds the real message in front of a stderr that
+  // "often carries unrelated warnings/update notices". So a genuine task
+  // failure ("file does not exist") arriving beside an update-check's
+  // "network error" classified as retryable, and a task that can only ever
+  // fail then deferred, refunded and re-ran forever. stderr is the fallback
+  // for runs that produce no structured message at all: a process that dies
+  // before emitting one, and the spawn-error throws.
+  const text = signals.failureText.trim() || signals.stderr
   for (const {kind, pattern} of RETRYABLE_SIGNALS) {
     if (pattern.test(text)) return {kind, retryable: true, label: RUN_FAILURE_LABELS[kind]}
   }

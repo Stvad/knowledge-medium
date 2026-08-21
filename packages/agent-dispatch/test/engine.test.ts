@@ -1547,6 +1547,44 @@ describe('channel delivery (experimental)', () => {
     expect(replies).toEqual([])
   })
 
+  it('backs off instead of re-POSTing every tick while the listener is down', async () => {
+    // A query+channel failure throws to the tick's per-watcher catch, which
+    // correctly leaves the cursor unadvanced — but armed nothing, so the
+    // same rows went out again at every poll (5s by default) for the whole
+    // outage: a retry storm exactly where the backoff was meant to apply.
+    const {graph} = fakeGraph()
+    graph.sqlAll = vi.fn(async () => [{id: 'a'}])
+    const state = memoryState()
+    state.cursors.set('inbox', [])
+    let nowMs = NOW
+    const time = {now: () => nowMs, advance: (ms: number) => { nowMs += ms }}
+    const deliverToChannel = vi.fn(async () => { throw new Error('connection refused') })
+    const engine = engineWith({
+      graph, state, deliverToChannel, now: time.now,
+      config: parseConfig({
+        watchers: [{kind: 'query', name: 'inbox', sql: 'SELECT id FROM blocks', delivery: 'channel'}],
+      }),
+    })
+
+    await engine.tick()
+    await engine.drain()
+    expect(deliverToChannel).toHaveBeenCalledTimes(1)
+
+    // Three more ticks inside the backoff window deliver nothing.
+    for (let round = 0; round < 3; round += 1) {
+      await engine.tick()
+      await engine.drain()
+    }
+    expect(deliverToChannel).toHaveBeenCalledTimes(1)
+    // The rows are still pending — holding them, not dropping them.
+    expect(state.cursors.get('inbox')).toEqual([])
+
+    time.advance(10 * 60_000)
+    await engine.tick()
+    await engine.drain()
+    expect(deliverToChannel).toHaveBeenCalledTimes(2)
+  })
+
   it('reopens the channel lane once a delivery lands again', async () => {
     // The channel branch returns before the spawn success path, so nothing
     // else clears its cooldown: a recovered listener would stay throttled to
@@ -2275,6 +2313,73 @@ describe('retryable infrastructure failures (out of credits, expired login, netw
       parentId: 'b-1', replyKey: 'reply:b-1:1', shape: 'block', final: true,
       markdown: expect.stringContaining('stopped retrying'),
     })
+  })
+
+  it('finds an explicit retry that sorts AFTER a source the cooldown blocks', async () => {
+    // The cooldown decision is per-source now that an explicit retry can
+    // pass one its neighbour cannot. Ending the sweep at the first blocked
+    // source made "Retry now" depend on scan order — a newer pending
+    // mention scanned first hid the retried task until the window lapsed.
+    const {graph, blocks} = fakeGraph({
+      backlinks: [{id: 'b-blocker'}, {id: 'b-retried'}],
+      blocks: {
+        'b-blocker': {content: '[[claude]] blocked by the cooldown'},
+        'b-retried': {content: '[[claude]] explicitly retried'},
+      },
+    })
+    const time = clock()
+    const runTask = vi.fn(async () => outOfCreditsRun())
+    const engine = engineWith({
+      graph, runTask, now: time.now,
+      config: mentionConfig({maxConcurrent: 1, runsPerHour: 100}),
+    })
+
+    await engine.tick()          // b-blocker runs out of credits, arming the lane
+    await engine.drain()
+    expect(runTask).toHaveBeenCalledTimes(1)
+
+    // A fresh mention on b-blocker keeps it PENDING and scanned first, while
+    // the user explicitly retries the later one.
+    time.advance(1_000)
+    blocks.get('b-blocker')!.properties = {}
+    blocks.get('b-blocker')!.editedAtMs = time.now()
+    blocks.get('b-retried')!.properties = {[PROPS.askedAt]: time.now()}
+    blocks.get('b-retried')!.editedAtMs = time.now()
+
+    await engine.tick()
+    await engine.drain()
+
+    // The explicit retry got the probe; the blocked neighbour did not.
+    expect(blocks.get('b-retried')?.properties?.[PROPS.status]).toBeDefined()
+    expect(blocks.get('b-blocker')?.properties).toEqual({})
+  })
+
+  it('clears the deferral reason when the retry finally succeeds', async () => {
+    // agent:error is meaningful only for `error` and a deferred `queued`. A
+    // merged terminal write left the outage reason on a task that had since
+    // finished, so synced data said "done" and "out of credits" at once.
+    const {graph, blocks} = fakeGraph({
+      backlinks: [{id: 'b-1'}],
+      blocks: {'b-1': {content: '[[claude]] summarize inbox'}},
+    })
+    const time = clock()
+    let credits = false
+    const engine = engineWith({
+      graph, now: time.now, config: mentionConfig({runsPerHour: 100}),
+      runTask: vi.fn(async () => (credits ? okRun() : outOfCreditsRun())),
+    })
+
+    await engine.tick()
+    await engine.drain()
+    expect(blocks.get('b-1')?.properties?.[PROPS.error]).toContain('out of credits')
+
+    credits = true
+    time.advance(10 * 60_000)
+    await engine.tick()
+    await engine.drain()
+
+    expect(blocks.get('b-1')?.properties?.[PROPS.status]).toBe('done')
+    expect(blocks.get('b-1')?.properties?.[PROPS.error]).toBe('')
   })
 
   it('a genuine run failure still parks the task and does not arm a cooldown', async () => {

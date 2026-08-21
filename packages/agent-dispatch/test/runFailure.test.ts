@@ -84,6 +84,23 @@ describe('classifyRunFailure', () => {
       .toMatchObject({kind: 'rate-limit', retryable: true})
   })
 
+  it('lets the structured cause overrule unrelated stderr noise', () => {
+    // codexRunner folds its real message in FRONT of a stderr it documents
+    // as carrying update notices. Classifying the concatenation let an
+    // updater's "network error" upgrade a permanent task failure to
+    // retryable — and a task that can only ever fail then re-ran forever.
+    expect(classifyRunFailure(signals({
+      failureText: 'file does not exist: /tmp/nope',
+      stderr: 'file does not exist: /tmp/nope\nupdate check failed: network error',
+    }))).toMatchObject({kind: 'task', retryable: false})
+  })
+
+  it('still falls back to stderr when the run produced no structured message', () => {
+    // A process that dies before emitting one, and the spawn-error throws.
+    expect(classifyRunFailure(signals({failureText: '', stderr: 'spawn claude ENOENT'})))
+      .toMatchObject({kind: 'executor', retryable: true})
+  })
+
   it('reads the bridge\'s disconnected-client wording', () => {
     // The bridge answers 503 with this body when the paired app tab drops,
     // and the client throws the body alone — the status is gone by the time

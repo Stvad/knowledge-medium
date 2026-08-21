@@ -689,6 +689,13 @@ export const createEngine = (deps: EngineDeps) => {
           resumeOptions: resumeOptionsForSession(result.sessionId),
           activity: null,
           cancel: null,
+          // Cleared alongside retryAfter: a task that got here by way of a
+          // deferral still carries that deferral's `agent:error` ("out of
+          // credits — waiting to retry"), and a merged write leaves it
+          // there. `agent:error` is meaningful only for `error` and a
+          // deferred `queued`, so a `done` task holding one contradicts
+          // itself for every SQL/API consumer that reads it.
+          error: null,
           retryAfter: null,
           nowMs: now(),
         })
@@ -922,7 +929,14 @@ export const createEngine = (deps: EngineDeps) => {
       // suppresses the non-launching work above (clearing an inert cancel,
       // parking an exhausted task) — it only stops NEW runs. `view` rides
       // along so a task the user explicitly re-queued gets to be the probe.
-      if (inInfraCooldown(laneOf(watcher), view)) return
+      //
+      // `continue`, not `return`: the decision is PER SOURCE now that an
+      // explicit retry can pass a cooldown the source beside it cannot.
+      // Returning made that depend on scan order — a newer pending mention
+      // scanned first would end the sweep before an older, explicitly
+      // retried task was ever looked at. (The capacity and budget gates
+      // above still return: those are genuinely global.)
+      if (inInfraCooldown(laneOf(watcher), view)) continue
       if (!spendBudgetLeft()) {
         log(`[${watcher.name}] runsPerHour budget (${config.runsPerHour}) exhausted — deferring ${source.id}`)
         return
@@ -988,12 +1002,22 @@ export const createEngine = (deps: EngineDeps) => {
       // bills nothing, and counting it would let a down listener drain
       // the hourly budget in ten polls and defer the rows even once
       // it's back up.
-      await deliverToChannel({content: prompt, meta: {watcher: watcher.name}})
-      // Defence in depth, not this path's own recovery: a query+channel
-      // outage throws out of the tick (caught per-watcher) and leaves the
-      // cursor unadvanced, so it never arms the lane. The clear matters when
-      // a MENTION watcher on the same lane armed it and this delivery is the
-      // proof the listener is back.
+      try {
+        await deliverToChannel({content: prompt, meta: {watcher: watcher.name}})
+      } catch (error) {
+        // Letting this reach the tick's per-watcher catch leaves the cursor
+        // unadvanced — correct — but arms nothing, so the same rows are
+        // re-POSTed at every poll (5s by default) for as long as the
+        // listener is down: a retry storm precisely where the backoff was
+        // supposed to apply. Classified like every other delivery failure;
+        // an unrecognised one still propagates and is merely logged.
+        const reason = truncate(errorMessage(error))
+        const failure = classifyRunFailure({stderr: reason, failureText: '', exitCode: null, timedOut: false})
+        if (failure.retryable) noteInfraFailure(laneOf(watcher), failure, watcher.name)
+        throw error
+      }
+      // A delivery that lands proves the listener is back, and this path
+      // returns before the spawn success branch that would otherwise clear it.
       clearInfraCooldown(laneOf(watcher))
       recordLaunch()
       await state.setCursor(watcher.name, diff.seenIds)
