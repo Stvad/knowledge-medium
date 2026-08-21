@@ -16,6 +16,14 @@ export interface ConfirmMigrationDialogProps {
    *  instead of switching the workspace over first — two materially different
    *  things to consent to. */
   childBacked: boolean
+  /** Keys nothing declares, which the gesture will give a definition before it
+   *  migrates anything (§9). Named here because it is the one part that
+   *  invents something rather than moving what is already there. */
+  synthesizedKeys: number
+  /** Keys it cannot fix either way — one no name can carry, or one whose
+   *  definition is broken rather than missing. On an already-flipped workspace
+   *  these stay cell-only; on an un-flipped one the gesture never got here. */
+  unfixableKeys: number
 }
 
 /** Confirmation for the one-time properties migration.
@@ -35,10 +43,13 @@ export interface ConfirmMigrationDialogProps {
 export const ConfirmMigrationDialog = ({
   blockCount,
   childBacked,
+  synthesizedKeys,
+  unfixableKeys,
   resolve,
   cancel,
 }: ConfirmMigrationDialogProps & DialogContextProps<true>) => {
   const blocks = `${blockCount.toLocaleString()} block${blockCount === 1 ? '' : 's'}`
+  const properties = (n: number) => `${n.toLocaleString()} propert${n === 1 ? 'y' : 'ies'}`
   return (
   <Dialog open onOpenChange={next => { if (!next) cancel() }}>
     <DialogContent className="max-w-md">
@@ -57,9 +68,19 @@ export const ConfirmMigrationDialog = ({
                 {' '}the blocks it implies. Existing values are not changed or moved,
                 and a property with no blocks yet keeps being read from where it
                 is now — so the switch itself changes nothing you can see.</>}
-          {' '}A key no schema declares is skipped and stays cell-only — run{' '}
-          <code>audit-properties</code> to find those.
         </p>
+        {synthesizedKeys > 0 && <p>
+          {properties(synthesizedKeys)} in this workspace {synthesizedKeys === 1 ? 'has' : 'have'}
+          {' '}no definition — written by an importer, a raw write, or a plugin that is no
+          longer installed. They get one created for them first, hidden, with a type guessed
+          from the values already stored. Nothing you can see changes; without it those
+          properties could never move.
+        </p>}
+        {unfixableKeys > 0 && <p>
+          {properties(unfixableKeys)} cannot be given a definition at all and will stay as
+          {' '}{unfixableKeys === 1 ? 'it is' : 'they are'}. Run{' '}
+          <code>audit-properties</code> to see which and why.
+        </p>}
         <p>
           {!childBacked && <>The switch applies to everyone in the workspace, so
             every device should be online and caught up before you start — a

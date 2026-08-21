@@ -5,6 +5,12 @@ import {
   countPropertyCellBackfillCandidates,
   onPropertyCellBackfillProgress,
 } from '@/data/internals/propertyCellBackfill'
+import {
+  applyPropertyDefinitionSynthesis,
+  flipBlockedBySynthesis,
+  planPropertyDefinitionSynthesis,
+  type PropertyDefinitionSynthesisPlan,
+} from '@/data/internals/propertyDefinitionSynthesis'
 import { readIsChildBackedWorkspace } from '@/data/workspaceSchema'
 import { flipWorkspaceToChildBackedProperties } from '@/data/workspaces'
 import { isRemoteSyncActive } from '@/data/repoProvider'
@@ -224,10 +230,42 @@ export const migratePropertiesToBlocksAction = ({repo}: {repo: Repo}): ActionCon
       showInfo(`Not started — ${withPeriod(ineligible)} Nothing was changed; try again shortly.`)
       return
     }
+    // §9 orphan synthesis, planned BEFORE the block count and before the
+    // confirmation. Both are unbounded workspace scans, and this is the one
+    // that can REFUSE — so paying the other first would buy nothing on the
+    // path where the gesture ends here. Asking an operator to consent to a
+    // migration that is then declined is the same mistake one step later.
+    let plan: PropertyDefinitionSynthesisPlan
+    try {
+      plan = await planPropertyDefinitionSynthesis(repo, workspaceId)
+    } catch (err) {
+      console.error('[properties-migration] could not plan definition synthesis:', err)
+      showInfo('Could not check which properties still need a definition, so nothing was ' +
+        `changed: ${err instanceof Error ? err.message : String(err)}`)
+      return
+    }
+    const flipBlocked = flipBlockedBySynthesis(plan)
+    // Only on the way IN to the flip. An already-flipped workspace has no
+    // irreversible step left to guard, and refusing there would withhold the
+    // backfill from every OTHER key over a handful this can never carry.
+    if (!childBacked && flipBlocked !== null) {
+      showInfo(flipBlocked, {duration: Number.POSITIVE_INFINITY})
+      return
+    }
+    // A refused workspace (e2ee) reaches here only when the flip is not at
+    // stake. Its candidates are then keys that stay cell-only, NOT keys about
+    // to be given a definition — counting them as the latter would have the
+    // dialog promise something the gesture then skips.
+    const willSynthesize = plan.refusal === null ? plan.candidates.length : 0
     const blockCount = await countPropertyCellBackfillCandidates(
       (sql, params) => repo.db.getAll(sql, params as unknown[] | undefined), workspaceId,
     )
-    if (!await openDialog(ConfirmMigrationDialog, {blockCount, childBacked})) return
+    if (!await openDialog(ConfirmMigrationDialog, {
+      blockCount, childBacked,
+      synthesizedKeys: willSynthesize,
+      unfixableKeys: plan.candidates.length - willSynthesize
+        + plan.blockers.length + plan.brokenDefinitions.length,
+    })) return
     // Re-read AFTER the dialog. A confirmation is a user-length pause, and the
     // workspace pinned before it may not be the open one now — the runner's
     // own active-workspace check happens only after `tryClaim` has written a
@@ -236,6 +274,21 @@ export const migratePropertiesToBlocksAction = ({repo}: {repo: Repo}): ActionCon
     if (repo.activeWorkspaceId !== workspaceId) return
 
     const banner = showProgress('Migrating properties to blocks…')
+    // BEFORE the flip, per the §9 runbook. A definition is an ordinary dormant
+    // block at 'cell', so minting one early is free; minting one AFTER the flip
+    // would leave a window in which the pass skips those keys and reports
+    // success over them.
+    if (willSynthesize > 0) {
+      banner.update('Adding definitions for properties that have none…')
+      try {
+        await applyPropertyDefinitionSynthesis(repo, plan)
+      } catch (err) {
+        console.error('[properties-migration] definition synthesis failed:', err)
+        banner.fail('Could not add definitions for the properties that have none, so ' +
+          `nothing was migrated: ${err instanceof Error ? err.message : String(err)}`)
+        return
+      }
+    }
     let undoClearedByFlip = false
     if (!childBacked) {
       // FIRST, and that ordering is the whole point. The flip is what turns the

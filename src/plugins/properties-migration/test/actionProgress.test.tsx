@@ -28,6 +28,16 @@ vi.mock('@/data/workspaces', () => ({
   flipWorkspaceToChildBackedProperties: async () => ({localApplied: true}),
 }))
 vi.mock('@/data/repoProvider', () => ({isRemoteSyncActive: () => true}))
+// The synthesis half has its own file; here it must simply not refuse, so the
+// gesture reaches the pass.
+vi.mock('@/data/internals/propertyDefinitionSynthesis', () => ({
+  planPropertyDefinitionSynthesis: async () => ({
+    workspaceId: 'ws-1', refusal: null, syncGap: null,
+    candidates: [], blockers: [], brokenDefinitions: [],
+  }),
+  applyPropertyDefinitionSynthesis: async () => ({created: 0, restored: 0, skipped: []}),
+  flipBlockedBySynthesis: () => null,
+}))
 vi.mock('@/data/internals/propertyCellBackfill', () => ({
   PROPERTY_CELL_BACKFILL_ID: 'properties:cell-to-children',
   countPropertyCellBackfillCandidates: async () => 7,

@@ -4,7 +4,7 @@
  * is the gesture's guard and what the user is told afterwards — the pass
  * itself is covered in `propertyCellBackfill.test.ts`.
  */
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const openDialog = vi.fn()
 const progressHandle = {update: vi.fn(), done: vi.fn(), fail: vi.fn()}
@@ -23,6 +23,26 @@ vi.mock('@/data/workspaces', () => ({
 }))
 const remoteSyncActive = vi.fn<() => boolean>()
 vi.mock('@/data/repoProvider', () => ({isRemoteSyncActive: () => remoteSyncActive()}))
+// §9 synthesis. Faked here so this file stays about the gesture's ORDER —
+// what the plan says, and what the gesture does about it. What the plan means
+// is `propertyDefinitionSynthesis.test.ts`.
+const planSynthesis = vi.fn()
+const applySynthesis = vi.fn()
+const flipBlocked = vi.fn<() => string | null>()
+vi.mock('@/data/internals/propertyDefinitionSynthesis', () => ({
+  planPropertyDefinitionSynthesis: () => planSynthesis(),
+  applyPropertyDefinitionSynthesis: (...args: unknown[]) => applySynthesis(...args),
+  flipBlockedBySynthesis: () => flipBlocked(),
+}))
+
+/** A plan with `n` keys to mint and nothing wrong. */
+const plan = (candidates = 0) => ({
+  workspaceId: 'ws-1', refusal: null, syncGap: null,
+  candidates: Array.from({length: candidates}, (_, i) => ({
+    key: `demo:orphan${i}`, cells: 1, presetId: 'string' as const, notes: [],
+  })),
+  blockers: [], brokenDefinitions: [],
+})
 
 import type { OperatorBackfillResult, Repo } from '@/data/repo'
 import { describeOutcome, migratePropertiesToBlocksAction } from '../action.ts'
@@ -66,6 +86,18 @@ afterEach(() => {
   progressHandle.update.mockReset()
   progressHandle.done.mockReset()
   progressHandle.fail.mockReset()
+  planSynthesis.mockReset()
+  planSynthesis.mockResolvedValue(plan())
+  applySynthesis.mockReset()
+  applySynthesis.mockResolvedValue({created: 0, restored: 0, skipped: []})
+  flipBlocked.mockReset()
+  flipBlocked.mockReturnValue(null)
+})
+
+beforeEach(() => {
+  planSynthesis.mockResolvedValue(plan())
+  applySynthesis.mockResolvedValue({created: 0, restored: 0, skipped: []})
+  flipBlocked.mockReturnValue(null)
 })
 
 describe('migrate_properties_to_blocks action', () => {
@@ -343,6 +375,94 @@ describe('migrate_properties_to_blocks action', () => {
 
     expect(progressHandle.done).not.toHaveBeenCalled()
     expect(progressHandle.fail).toHaveBeenCalledWith(expect.stringMatching(/not caught up/))
+  })
+})
+
+describe('the orphan-definition step', () => {
+  it('refuses the flip when a key can never have a definition, before anything is scanned', async () => {
+    // The hard case: such a key makes "every cell key resolves a definition"
+    // unsatisfiable forever, and the flip is one-way. Refusing after the flip
+    // would be refusing after the damage.
+    flipBlocked.mockReturnValue('2 property key(s) cannot be given a definition')
+    const {repo, runWorkspaceBackfillNow, getAll} = makeRepo({outcome: 'ran', undoHistoryCleared: false})
+
+    await invoke(repo)
+
+    expect(showInfo).toHaveBeenCalledWith(
+      expect.stringMatching(/cannot be given a definition/), expect.anything())
+    expect(getAll).not.toHaveBeenCalled()
+    expect(openDialog).not.toHaveBeenCalled()
+    expect(flipWorkspace).not.toHaveBeenCalled()
+    expect(runWorkspaceBackfillNow).not.toHaveBeenCalled()
+  })
+
+  it('lets an already-flipped workspace run anyway, because there is nothing left to guard', async () => {
+    // Withholding the backfill from every OTHER key over a handful that can
+    // never migrate would be the worse trade — and no irreversible step
+    // remains on this path.
+    flipBlocked.mockReturnValue('2 property key(s) cannot be given a definition')
+    openDialog.mockResolvedValue(true)
+    const {repo, runWorkspaceBackfillNow} = makeRepo(
+      {outcome: 'ran', undoHistoryCleared: false}, {flipped: true})
+
+    await invoke(repo)
+
+    expect(runWorkspaceBackfillNow).toHaveBeenCalled()
+  })
+
+  it('mints the missing definitions BEFORE it flips', async () => {
+    // The §9 runbook order. A definition is a dormant block at 'cell', so
+    // minting early is free; minting after the flip leaves a window in which
+    // the pass skips those keys and reports success over them.
+    planSynthesis.mockResolvedValue(plan(3))
+    openDialog.mockResolvedValue(true)
+    const {repo} = makeRepo({outcome: 'ran', undoHistoryCleared: false})
+
+    await invoke(repo)
+
+    expect(applySynthesis).toHaveBeenCalled()
+    expect(applySynthesis.mock.invocationCallOrder[0]!)
+      .toBeLessThan(flipWorkspace.mock.invocationCallOrder[0]!)
+  })
+
+  it('does not flip when the definitions could not be minted', async () => {
+    planSynthesis.mockResolvedValue(plan(3))
+    applySynthesis.mockRejectedValue(new Error('nope'))
+    openDialog.mockResolvedValue(true)
+    const {repo, runWorkspaceBackfillNow} = makeRepo({outcome: 'ran', undoHistoryCleared: false})
+
+    await invoke(repo)
+
+    expect(flipWorkspace).not.toHaveBeenCalled()
+    expect(runWorkspaceBackfillNow).not.toHaveBeenCalled()
+    expect(progressHandle.fail).toHaveBeenCalledWith(expect.stringMatching(/nothing was migrated/))
+  })
+
+  it('does not mint into a workspace the plan refused', async () => {
+    // e2ee today. `flipBlockedBySynthesis` is what decides whether that stops
+    // the gesture; what must not happen either way is writing anyway.
+    planSynthesis.mockResolvedValue({...plan(2), refusal: 'this workspace is encrypted'})
+    openDialog.mockResolvedValue(true)
+    const {repo} = makeRepo({outcome: 'ran', undoHistoryCleared: false}, {flipped: true})
+
+    await invoke(repo)
+
+    expect(applySynthesis).not.toHaveBeenCalled()
+    // And the dialog does not promise the minting it is about to skip.
+    expect(openDialog).toHaveBeenCalledWith(expect.anything(),
+      expect.objectContaining({synthesizedKeys: 0, unfixableKeys: 2}))
+  })
+
+  it('stops without writing when the plan itself cannot be built', async () => {
+    planSynthesis.mockRejectedValue(new Error('registry is not loaded'))
+    const {repo, runWorkspaceBackfillNow} = makeRepo({outcome: 'ran', undoHistoryCleared: false})
+
+    await invoke(repo)
+
+    expect(showInfo).toHaveBeenCalledWith(expect.stringMatching(/registry is not loaded/))
+    expect(openDialog).not.toHaveBeenCalled()
+    expect(flipWorkspace).not.toHaveBeenCalled()
+    expect(runWorkspaceBackfillNow).not.toHaveBeenCalled()
   })
 })
 
