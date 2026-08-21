@@ -39,7 +39,10 @@
  * api-created review's inline comments[].body ride outside the review
  * object this hook fetches, so they are neither echoed nor repaired; and
  * commit-comment URLs (/commit/<sha>#commitcomment-N) are not classified —
- * nothing in this repo's flows publishes them.
+ * nothing in this repo's flows publishes them; queued/--auto merges land
+ * later with no success line, so their commits are not read back; and bead
+ * ids inside landed commit MESSAGES are not scanned (commit text is echo-
+ * only territory and the refs echo is the load-bearing part).
  *
  * Blocking here would be pointless (the publish already happened), so this
  * hook never does: any internal failure exits 0 silently, a failed repair is
@@ -374,7 +377,8 @@ const verifyMergeCommit = (n, deadline) => {
   const warn = closes.length
     ? `\n  ⚠ close keywords in a merge commit have ALREADY acted — if an issue above was closed wrongly, reopen it now (gh issue reopen <n>)`
     : ''
-  return [`merge commit ${pr.merge_commit_sha.slice(0, 9)} of #${n}:\n${issueRefsTable(message, refs.slice(0, cap), 'post')}${warn}`]
+  const capNote = refs.length > cap ? `\n  …and ${refs.length - cap} more references not echoed` : ''
+  return [`merge commit ${pr.merge_commit_sha.slice(0, 9)} of #${n}:\n${issueRefsTable(message, refs.slice(0, cap), 'post')}${capNote}${warn}`]
 }
 
 const hookPostPublish = () => {
