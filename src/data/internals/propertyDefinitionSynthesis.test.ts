@@ -694,6 +694,33 @@ describe('applyPropertyDefinitionSynthesis: the id is occupied, or the key stopp
     expect(result.skipped.map(s => s.key)).toEqual(['demo:orphan'])
   }, 30_000)
 
+  it('loses only the candidate whose preset build throws, not the whole run', async () => {
+    // `preset.build()` is extension code. Uncaught it aborts the transaction,
+    // so one bad preset would cost every unrelated orphan its definition — the
+    // projector wraps the same call for the same reason.
+    await rawCell('b1', {'demo:orphan': 'hello', 'demo:flag': true})
+    // Taken BEFORE the projection is blinded — a plan built after would read
+    // every key in the workspace as orphaned.
+    const plan = await planFor()
+    expect(plan.candidates.map(c => c.key).sort()).toEqual(['demo:flag', 'demo:orphan'])
+    await applyPropertyDefinitionSynthesis(repo, plan)
+    const kernel = repo.valuePresetCores.get('string')!
+    vi.spyOn(repo, 'valuePresetCores', 'get').mockReturnValue(
+      new Map([...repo.valuePresetCores,
+               ['string', {...kernel, build: () => { throw new Error('extension bug') }} as never]]))
+    // Force the held path for both: the projection is blind, so each key's own
+    // block is read from the database.
+    blindTheProjections()
+
+    const result = await applyPropertyDefinitionSynthesis(repo, plan)
+
+    // Only the string-backed one is lost; the boolean-backed key beside it is
+    // published from its own block exactly as it would have been.
+    expect(result.skipped.map(s => s.key)).toEqual(['demo:orphan'])
+    expect(result.skipped[0]!.reason).toMatch(/cannot build/)
+    expect(result.converged).toBe(1)
+  })
+
   it('does not call a key converged when the picked row stopped PARSING', async () => {
     // The row still holds the name and its preset is still registered, so the
     // weaker "does it have a registered preset?" question says yes — and the

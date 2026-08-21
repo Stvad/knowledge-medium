@@ -738,9 +738,17 @@ export const applyPropertyDefinitionSynthesis = async (
       // name), and would then be called converged purely because the stale
       // resolver still points at it.
       const metadata = parsePropertyDefinitionMetadata(block)
-      const schema = metadata === null
-        ? null
-        : tryBuildSchema(block, repo.valuePresetCores, metadata)
+      let schema: AnyPropertySchema | null = null
+      try {
+        if (metadata !== null) schema = tryBuildSchema(block, repo.valuePresetCores, metadata)
+      } catch (err) {
+        // `preset.build()` is extension code and can throw. The projector wraps
+        // this same call for the same reason and publishes metadata-only; here
+        // the row is simply not buildable, which this pass already knows how to
+        // report. Uncaught it would abort the whole transaction and cost every
+        // UNRELATED candidate its definition over one bad preset.
+        console.warn(`[propertyDefinitionSynthesis] preset build failed for ${block.id}`, err)
+      }
       return {kind: 'held', fieldId, block, schema,
               resolvable: fieldId === selected && schema !== null}
     }
