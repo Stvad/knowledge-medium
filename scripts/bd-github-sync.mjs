@@ -1068,14 +1068,11 @@ const hookPrePr = () => {
   const targetUrl = () => /((?:\S*\/)?gh\s+(?:-\S+\s+(?:[^-\s]\S*\s+)?)*(?:pr|issue)\s+\w+\s+)https?:\/\/\S+/g
   const text = targetUrl().test(commandSkeleton(cmd)) ? cmd.replace(targetUrl(), '$1') : cmd
 
-  // Does the post-publication read-back cover this publish? A WHITELIST.
-  // The previous shape enumerated the ways a command's output escapes the
-  // hook — redirects, pipes, substitutions, foreign repos — and a missed
-  // spelling was a SILENT gap, so every review round found another one
-  // (attached -Rowner/repo, a pipe positional test beaten by later literal
-  // text, a compound mixing api with CLI). Recognizing the covered shape
-  // instead inverts the failure: an unrecognized command falls out as
-  // uncovered and costs an attested re-run, never a gap.
+  // Does the post-publication read-back cover this publish? A WHITELIST:
+  // recognize the covered shape and treat everything else as uncovered, so a
+  // command this gate fails to recognize costs an attested re-run instead of
+  // passing unchecked. Enumerating the ways output escapes the hook would
+  // have to be COMPLETE over shell syntax to be correct, and cannot be.
   //
   // Two layers, different in kind on purpose:
   //  - SHELL: the skeleton must contain no operator at all. One test for

@@ -181,9 +181,8 @@ describe('bodyFilePaths / resolveBodyPath', () => {
     expect(hasStdinBody('git commit -m "mentions -F - in prose"')).toBe(false)
   })
 
-  // Hit live (as --notes-file, pre-shrink): a commit message PROSE-mentioning
-  // a file flag was read as a file reference and the fail-closed missing-file
-  // check blocked the commit. The flag must sit outside quotes.
+  // A real flag sits outside quotes: read a prose mention as a file
+  // reference and the fail-closed missing-file check blocks the commit.
   it('ignores message-file flags that appear only inside quoted prose', () => {
     expect(bodyFilePaths('git commit -m "use -F msg.txt or --file x next time"')).toEqual([])
   })
