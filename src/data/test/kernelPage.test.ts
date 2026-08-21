@@ -325,19 +325,9 @@ describe('getOrCreateKernelPage', () => {
   })
 
   it('restores a tombstone whose stored alias bag was squatted while it was dead (issue #378)', async () => {
-    // Mirrors the `createOrRestoreTargetBlock` regression test (PR #371,
-    // referencesProcessor.test.ts: "restores a merged-away daily seat
-    // whose tombstone carries a stale alias claim"): the tombstoned row's
-    // stored `aliases` bag can hold an entry that now belongs to a
-    // DIFFERENT live block. Raw `tx.restore(id, {content: spec.alias})`
-    // (no `properties` patch) re-inserts that stale bag as-is through
-    // `blocks_alias_update` on the `deleted` flip, trips
-    // `block_aliases_workspace_alias_unique` against the squatter, and
-    // rolls back the WHOLE tx — the kernel page stays a tombstone forever
-    // (issue #378). The bag here carries an EXTRA alias beyond the
-    // canonical `spec.alias` (e.g. a stray manual edit) — not a collision
-    // on `spec.alias` itself, which is a separate, undecided case (see
-    // the issue).
+    // The bag carries an EXTRA alias beyond the canonical `spec.alias` —
+    // a collision on `spec.alias` itself is a separate, undecided case
+    // (issue #378).
     const page = await getOrCreateKernelPage(env.repo, WS, {
       namespace: FOO_PAGE_NS,
       alias: 'Foo',

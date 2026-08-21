@@ -128,13 +128,7 @@ describe('getOrCreateJournalBlock', () => {
   })
 
   it('restores a tombstone whose stored alias bag was squatted while it was dead (issue #378)', async () => {
-    // Same shape as the kernelPage.test.ts regression: the tombstone's
-    // stored `aliases` bag can carry an EXTRA entry (beyond the
-    // canonical 'Journal') that a different live block claimed while the
-    // journal was dead. Raw `tx.restore(id, {content: JOURNAL_ALIAS})`
-    // (no properties patch) re-inserts that stale bag as-is on the
-    // `deleted` flip, collides with the squatter, and aborts the whole
-    // tx — the journal is stuck as an unrestorable tombstone.
+    // `stale-extra` is deliberately beyond the canonical 'Journal' alias.
     const journal = await getOrCreateJournalBlock(env.repo, WS)
     await env.repo.tx(async tx => {
       await tx.setProperty(journal.id, aliasesProp, ['Journal', 'stale-extra'])
@@ -263,14 +257,8 @@ describe('getOrCreateDailyNote', () => {
   })
 
   it('restores a tombstone whose stored alias bag was squatted while it was dead (issue #378)', async () => {
-    // Same shape as the journal/kernelPage regressions: the tombstone's
-    // stored `aliases` bag can carry an EXTRA entry (beyond the
-    // canonical long-form + ISO pair) that a different live block
-    // claimed while the daily note was dead. Raw
-    // `tx.restore(id, {content: longLabel})` (no properties patch)
-    // re-inserts that stale bag as-is on the `deleted` flip, collides
-    // with the squatter, and aborts the whole tx — the day stays
-    // persistently unopenable (issue #378's exact repro shape).
+    // The generated stale alias is deliberately extra to the canonical
+    // long-form + ISO pair.
     const note = await getOrCreateDailyNote(env.repo, WS, ISO)
     const canonicalAliases = note.peekProperty(aliasesProp) ?? []
     await env.repo.tx(async tx => {

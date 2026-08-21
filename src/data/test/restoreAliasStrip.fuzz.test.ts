@@ -1,45 +1,21 @@
 // @vitest-environment node
 /**
  * Fuzz suite for issue #378: raw `tx.restore` call sites
- * (`getOrCreateKernelPage` src/data/kernelPage.ts, `getOrCreateJournalBlock`
- * + `getOrCreateDailyNote` src/plugins/daily-notes/dailyNotes.ts) must not
- * resurrect a tombstone's stale alias claim.
+ * (`getOrCreateKernelPage`, `getOrCreateJournalBlock`,
+ * `getOrCreateDailyNote`) must not resurrect a tombstone's stale alias
+ * claim when a different live block has since claimed it.
  *
- * Mechanism under test (cited from the code): `blocks_alias_update`
- * (clientSchema.ts:778-788) fires on the `deleted` flip and re-inserts
- * every alias in the row's CURRENT `properties_json.alias` bag. A raw
- * `tx.restore(id, {content})` with no `properties` patch leaves that bag
- * untouched, so a tombstoned row whose bag still lists an alias a
- * DIFFERENT live block has since claimed trips
- * `block_aliases_workspace_alias_unique` (clientSchema.ts:837-846) and
- * aborts the WHOLE calling tx (repo.ts:2099-2130 →
- * `ProcessorRejection('alias.collision')`) — the row is stuck as an
- * unrestorable tombstone (exactly issue #378's "day is persistently
- * unopenable" repro). `restorePropertiesStrippingAliases` (targets.ts)
- * strips the bag's `aliases` key in the same restore UPDATE; each site's
- * own follow-up `tx.setProperty` then re-claims exactly its canonical
- * alias set. The three example regressions (kernelPage.test.ts,
- * dailyNotes.test.ts ×2) pin one hand-picked scenario per site each; this
- * suite is the general sweep — a RANDOM extra-alias bag on the tombstone,
- * a squatter claiming a random SUBSET of it, over all three call sites.
- *
- * Scope note: the squatter here only ever claims EXTRA aliases, never a
- * site's own canonical alias ('Foo' / 'Journal' / the daily-note's
- * ISO-or-long-form label) — a live block squatting the CANONICAL alias
- * itself is a genuine, separate, unresolved design question (issue #378's
- * body: "a bag-strip alone does NOT fully fix these entry points: their
- * follow-up setProperty(aliases, …) ... still unconditionally claim the
- * aliases and would collide with the squatter. Needs a domain decision
- * ... bind to the claimant / skip the contested alias / surface the
- * existing alias-collision-merge flow") that this fix deliberately leaves
- * alone — the follow-up setProperty in THAT case still throws today.
+ * The squatter here only ever claims EXTRA aliases, never a site's own
+ * canonical alias ('Foo' / 'Journal' / the daily-note's ISO-or-long-form
+ * label) — a live block squatting the CANONICAL alias itself is a
+ * separate, unresolved case this fix doesn't cover, so the arbitrary
+ * excludes it to keep the oracle honest.
  *
  * Oracle: driving any of the three get-or-create flows against a
- * tombstoned target with a squatted extra alias must not throw, and the
+ * tombstoned target with a squatted extra alias must not throw, the
  * restored block must never end up claiming an alias the squatter
- * currently holds — "a restore never resurrects an alias currently
- * claimed by a live block" — while its own canonical alias set is still
- * fully bound.
+ * currently holds, and its own canonical alias set must still be fully
+ * bound.
  *
  * Shared-DB discipline (docs/fuzzing.md §6): one `createTestDb()` for the
  * file, `resetTestDb` + a fresh `Repo` per case inside `runCase`.
