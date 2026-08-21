@@ -47,6 +47,7 @@
  */
 
 import type { PropertySchemaIdentityUnavailableReason } from '@/data/api'
+import { keyCannotBeDefined } from '@/data/internals/propertyDefinitionSynthesis'
 import { OBJECT_BAG, keyOf, scanPropertyKeys } from '@/data/internals/propertyKeyScan'
 import type { Repo } from '@/data/repo'
 
@@ -166,10 +167,12 @@ const undeclaredFix =
   'migration skips it (propertyChildrenProcessor.ts: `resolveNameSchema` → `continue`) ' +
   'and it is the one class of property data a flipped workspace cannot make ' +
   'child-backed. Fix IN THIS ORDER: (1) if an extension owns the key, install / ' +
-  'enable it so its seed materializes the definition; (2) only then let §9 orphan ' +
-  'synthesis mint a user-origin definition. Synthesizing first and enabling the ' +
-  'owner later collides in the winner machinery and strands field rows on the ' +
-  "loser's fieldId. Registering is additive — no cell value is rewritten."
+  'enable it so its seed materializes the definition; (2) only then run "Migrate ' +
+  'properties to child blocks" from the palette, whose §9 orphan synthesis mints a ' +
+  'hidden user-origin definition with a preset inferred from the stored values. ' +
+  'Synthesizing first and enabling the owner later collides in the winner machinery ' +
+  "and strands field rows on the loser's fieldId. Registering is additive — no cell " +
+  'value is rewritten.'
 
 const brokenDefinitionFix =
   'A definition block exists for this name but the workspace cannot build behavior ' +
@@ -182,9 +185,13 @@ const brokenDefinitionFix =
   'fails to parse). Either way do not add a second definition for this name — it ' +
   'would collide.'
 
-const emptyKeyFix =
-  'The empty property key is a hard flip blocker: no definition can ever back it. ' +
-  'Delete or remap it before any workspace flips to child-backed properties (§9).'
+/** A key `keyCannotBeDefined` rejects. Its own reason carries the WHY; this
+ *  adds the consequence, which is the same for every such key. */
+const hopelessKeyFix = (reason: string): string =>
+  `Hard flip blocker — ${reason}. Since no definition can back it, "every cell key ` +
+  'resolves a definition" can never hold while it exists: the migration command refuses ' +
+  'to switch this workspace over until it is deleted or its value is remapped under a ' +
+  'named key (§9).'
 
 /** Reason → what to do.
  *
@@ -209,7 +216,10 @@ export const describeUnregisteredProperty = (
     definitionBlocks: number
   },
 ): {fix: string; blocksFlip?: true} => {
-  if (entry.property === '') return {fix: emptyKeyFix, blocksFlip: true}
+  // The same predicate synthesis and the flip gate use, so this report cannot
+  // call a key fixable that the migration will refuse to proceed past.
+  const hopeless = keyCannotBeDefined(entry.property)
+  if (hopeless !== null) return {fix: hopelessKeyFix(hopeless), blocksFlip: true}
   if (entry.reason === 'ambiguous') {
     return {fix:
       'Unreachable via a name lookup (see describeUnregisteredProperty). Two code ' +

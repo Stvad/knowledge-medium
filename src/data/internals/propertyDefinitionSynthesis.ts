@@ -171,8 +171,13 @@ export const propertySynthesisWorkspaceRefusal = async (
   return null
 }
 
-/** Why this key cannot be given a definition, or null. */
-const blockerReason = (key: string): string | null => {
+/** Why this key can never have a definition of any kind, or null.
+ *
+ *  The single authority on that question: synthesis refuses to mint for such a
+ *  key, `flipBlockedBySynthesis` refuses the flip over it, and
+ *  `audit-properties` marks it `blocksFlip` — three surfaces that must never
+ *  disagree about which keys are hopeless. */
+export const keyCannotBeDefined = (key: string): string | null => {
   if (key === '') {
     return 'the empty property key: a definition with no name is unusable ' +
       '(`parsePropertyDefinitionMetadata` rejects it), so no definition can ever back it'
@@ -272,7 +277,7 @@ export const planPropertyDefinitionSynthesis = async (
       brokenDefinitions.push({key: entry.property, cells: entry.cells})
       continue
     }
-    const reason = blockerReason(entry.property)
+    const reason = keyCannotBeDefined(entry.property)
     if (reason !== null) {
       blockers.push({key: entry.property, cells: entry.cells, reason})
       continue

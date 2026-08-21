@@ -453,6 +453,19 @@ describe('the orphan-definition step', () => {
       expect.objectContaining({synthesizedKeys: 0, unfixableKeys: 2}))
   })
 
+  it('does not mint into a workspace the operator navigated away from', async () => {
+    // The confirmation is a user-length pause. Minting past the re-check would
+    // write definitions into the graph they just left — the same reason the
+    // flip takes that check twice.
+    planSynthesis.mockResolvedValue(plan(3))
+    const {repo} = makeRepo({outcome: 'ran', undoHistoryCleared: false})
+    openDialog.mockImplementation(dialogThatSwitchesWorkspace(repo))
+
+    await invoke(repo)
+
+    expect(applySynthesis).not.toHaveBeenCalled()
+  })
+
   it('stops without writing when the plan itself cannot be built', async () => {
     planSynthesis.mockRejectedValue(new Error('registry is not loaded'))
     const {repo, runWorkspaceBackfillNow} = makeRepo({outcome: 'ran', undoHistoryCleared: false})

@@ -6,7 +6,7 @@
  * unchanged.
  */
 
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChangeScope, seedProperty } from '@/data/api'
 import { definitionSeedsFacet } from '@/data/facets'
 import { kernelDataExtension } from '@/data/kernelDataExtension'
@@ -39,6 +39,7 @@ let repo: Repo
 
 beforeAll(async () => { sharedDb = await createTestDb() })
 afterAll(async () => { await sharedDb.cleanup() })
+afterEach(() => { vi.restoreAllMocks() })
 
 /** The workspace row synthesis reads its encryption mode from. Raw, because
  *  that is how the row arrives — server-written and synced. */
@@ -155,6 +156,21 @@ describe('planPropertyDefinitionSynthesis', () => {
     // Not short-circuited to nothing: "e2ee with no orphans" and "e2ee with
     // twelve" are different situations and only the second blocks anything.
     expect(plan.candidates.map(c => c.key)).toEqual(['demo:orphan'])
+  })
+
+  it('refuses to WRITE once this device has fallen behind, even with a clean plan', async () => {
+    // The gap can open while the operator reads the confirmation. A device that
+    // has not received a definition yet would mint a RIVAL for it, and the
+    // loser strands every field row that bound to it.
+    await rawCell('b1', {'demo:orphan': 'x'})
+    const plan = await planFor()
+    expect(plan.syncGap).toBeNull()
+    vi.spyOn(repo, 'syncViewGap').mockResolvedValue('this device is not caught up')
+
+    await expect(applyPropertyDefinitionSynthesis(repo, plan))
+      .rejects.toThrow(/not caught up/)
+    expect(repo.block(synthesizedPropertyDefinitionBlockId(WS, 'demo:orphan')).peek())
+      .toBeUndefined()
   })
 
   it('refuses to WRITE to an e2ee workspace even when handed a plan', async () => {

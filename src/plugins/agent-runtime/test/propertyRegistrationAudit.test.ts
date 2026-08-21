@@ -543,6 +543,20 @@ describe('describeUnregisteredProperty', () => {
     expect(fix).toMatch(/flip blocker/i)
   })
 
+  it('calls a reference-shaped key a hard flip blocker too, agreeing with the migration', () => {
+    // Same predicate the migration command refuses on
+    // (`keyCannotBeDefined`). A report that called this fixable while the
+    // gesture declined to proceed past it would send an operator looking for
+    // a problem the report says is not there.
+    const {fix, blocksFlip} = describeUnregisteredProperty({
+      property: '((11111111-1111-4111-8111-111111111111))',
+      reason: 'definition-unavailable', definitionBlocks: 0,
+    })
+    expect(blocksFlip).toBe(true)
+    expect(fix).toMatch(/flip blocker/i)
+    expect(fix).toMatch(/block reference/i)
+  })
+
   // `ambiguous` and `shadowed` cannot come back from a NAME lookup, which is
   // the only call this module makes (see the function's own comment). These
   // pin that the enum is covered — defence in depth against a future resolver
