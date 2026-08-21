@@ -122,7 +122,8 @@ export interface SynthesisBlocker {
 export interface PropertyDefinitionSynthesisPlan {
   workspaceId: string
   /** Non-null when this workspace must not be synthesized into at all — see
-   *  {@link propertySynthesisWorkspaceRefusal}. `candidates` is then empty. */
+   *  {@link propertySynthesisWorkspaceRefusal}. `candidates` is still filled
+   *  in, because a refusal only matters when there is something to mint. */
   refusal: string | null
   /** Non-null means this device could not vouch for its view of the graph.
    *  Synthesis WRITES, and a device that has not seen a definition yet would
@@ -252,11 +253,10 @@ export const planPropertyDefinitionSynthesis = async (
   repo: Repo,
   workspaceId: string,
 ): Promise<PropertyDefinitionSynthesisPlan> => {
+  // Scanned even when the workspace is refused: "e2ee, and it has no orphan
+  // keys anyway" and "e2ee, and it has twelve" are different situations, and
+  // only the second one blocks anything.
   const refusal = await propertySynthesisWorkspaceRefusal(repo, workspaceId)
-  if (refusal !== null) {
-    return {workspaceId, refusal, syncGap: null, candidates: [], blockers: [],
-            brokenDefinitions: []}
-  }
   const scan = await scanPropertyKeys(repo, workspaceId)
 
   const blockers: SynthesisBlocker[] = []
@@ -292,8 +292,36 @@ export const planPropertyDefinitionSynthesis = async (
     notes: nameNotes(entry.key),
   }))
 
-  return {workspaceId, refusal: null, syncGap: scan.syncGap, candidates, blockers,
+  return {workspaceId, refusal, syncGap: scan.syncGap, candidates, blockers,
           brokenDefinitions}
+}
+
+/**
+ * Why this workspace must not be flipped to child-backed properties yet, or
+ * null.
+ *
+ * A blocker is a key no definition can EVER back, so it makes the "every cell
+ * key resolves a definition" invariant unsatisfiable forever — and past
+ * `cell-off` the column drop would take the value's only carrier with it. A
+ * workspace refusal (e2ee) blocks only when there is actually something to
+ * mint; otherwise the invariant already holds.
+ *
+ * Advisory for an ALREADY-flipped workspace, where there is no irreversible
+ * step left to guard — the backfill should still fill in everything else.
+ */
+export const flipBlockedBySynthesis = (
+  plan: PropertyDefinitionSynthesisPlan,
+): string | null => {
+  if (plan.blockers.length > 0) {
+    const named = plan.blockers.map(b => `${JSON.stringify(b.key)} (${b.reason})`).join('; ')
+    return `${plan.blockers.length} property key(s) cannot be given a definition, so this ` +
+      `workspace can never finish the migration while they exist: ${named}. Delete or ` +
+      'remap them, then run this again.'
+  }
+  if (plan.refusal !== null && plan.candidates.length > 0) {
+    return `${plan.candidates.length} property key(s) have no definition, and ${plan.refusal}.`
+  }
+  return null
 }
 
 export interface SynthesisResult {
@@ -305,23 +333,21 @@ export interface SynthesisResult {
 }
 
 /**
- * Mint the planned definitions. One transaction — the whole point is that a
- * key either has a definition when the flip lands or the flip does not
- * happen, and a partially-synthesized workspace is the state that leaves the
- * gate unsatisfiable with no record of why.
+ * Mint the planned definitions. One transaction, so the workspace either has
+ * every definition this plan promised or none of them.
+ *
+ * Deliberately says nothing about `plan.blockers`. A blocker blocks the FLIP —
+ * it is a key no definition can ever back, so the workspace can never reach
+ * "no definition-less keys" — and minting the OTHER keys' definitions is
+ * useful either way, including on a workspace that is already flipped and has
+ * no irreversible step left to guard. {@link flipBlockedBySynthesis} is where
+ * that decision lives.
  */
 export const applyPropertyDefinitionSynthesis = async (
   repo: Repo,
   plan: PropertyDefinitionSynthesisPlan,
 ): Promise<SynthesisResult> => {
   const {workspaceId} = plan
-  if (plan.blockers.length > 0) {
-    throw new Error(
-      `[propertyDefinitionSynthesis] refusing to write: ${plan.blockers.length} key(s) ` +
-      'cannot be given a definition. Resolve them first — synthesizing around them ' +
-      'would leave the workspace looking migratable when it is not.',
-    )
-  }
   if (repo.isReadOnly) {
     throw new Error('[propertyDefinitionSynthesis] this workspace is read-only')
   }

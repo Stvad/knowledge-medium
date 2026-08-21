@@ -17,6 +17,7 @@ import { createTestRepo } from '@/data/test/createTestRepo'
 import { PROPERTY_CELL_BACKFILL_ID } from './propertyCellBackfill'
 import {
   applyPropertyDefinitionSynthesis,
+  flipBlockedBySynthesis,
   inferPresetId,
   planPropertyDefinitionSynthesis,
   synthesizedPropertyDefinitionBlockId,
@@ -145,13 +146,24 @@ describe('planPropertyDefinitionSynthesis', () => {
     expect(bracket?.notes.join(' ')).toMatch(/\[\[name\]\]/)
   })
 
-  it('refuses an e2ee workspace outright', async () => {
+  it('refuses an e2ee workspace, while still saying what it would have minted', async () => {
     await seedWorkspaceRow('e2ee')
     await rawCell('b1', {'demo:orphan': 'x'})
 
     const plan = await planFor()
     expect(plan.refusal).toMatch(/end-to-end encrypted/)
-    expect(plan.candidates).toEqual([])
+    // Not short-circuited to nothing: "e2ee with no orphans" and "e2ee with
+    // twelve" are different situations and only the second blocks anything.
+    expect(plan.candidates.map(c => c.key)).toEqual(['demo:orphan'])
+  })
+
+  it('refuses to WRITE to an e2ee workspace even when handed a plan', async () => {
+    await rawCell('b1', {'demo:orphan': 'x'})
+    const plan = await planFor()
+    await seedWorkspaceRow('e2ee')
+
+    await expect(applyPropertyDefinitionSynthesis(repo, plan))
+      .rejects.toThrow(/end-to-end encrypted/)
   })
 
   it('refuses when this device has no workspace row, rather than assuming plaintext', async () => {
@@ -234,15 +246,40 @@ describe('applyPropertyDefinitionSynthesis', () => {
       .toMatchObject({created: 0, restored: 1})
   })
 
-  it('writes nothing at all when any key is a hard blocker', async () => {
+  it('still mints the keys it can when another key is a hard blocker', async () => {
+    // The blocker blocks the FLIP, not the minting: the other key's definition
+    // is useful either way, and `flipBlockedBySynthesis` is what refuses.
     await rawCell('b1', {'demo:orphan': 'x', '': 'y'})
 
     const plan = await planFor()
     expect(plan.candidates.map(c => c.key)).toEqual(['demo:orphan'])
-    await expect(applyPropertyDefinitionSynthesis(repo, plan)).rejects.toThrow(/cannot be given/)
-    // Not "all but the blocked one": a workspace that looks migratable but is
-    // not is the state this refusal exists to prevent.
-    expect(repo.block(synthesizedPropertyDefinitionBlockId(WS, 'demo:orphan')).peek())
-      .toBeUndefined()
+    expect(await applyPropertyDefinitionSynthesis(repo, plan)).toMatchObject({created: 1})
+  })
+})
+
+describe('flipBlockedBySynthesis', () => {
+  it('blocks on a key no definition can ever back, naming it', async () => {
+    await rawCell('b1', {'': 'y'})
+    expect(flipBlockedBySynthesis(await planFor())).toMatch(/empty property key/)
+  })
+
+  it('blocks an e2ee workspace that has orphan keys', async () => {
+    await seedWorkspaceRow('e2ee')
+    await rawCell('b1', {'demo:orphan': 'x'})
+    expect(flipBlockedBySynthesis(await planFor())).toMatch(/end-to-end encrypted/)
+  })
+
+  it('lets an e2ee workspace with nothing to mint through', async () => {
+    // The refusal is about MINTING a dictionary-testable id. With no orphan
+    // keys there is nothing to mint, so the invariant already holds.
+    await seedWorkspaceRow('e2ee')
+    await rawCell('b1', {[declaredProp.name]: 'x'})
+    expect(flipBlockedBySynthesis(await planFor())).toBeNull()
+  })
+
+  it('lets a clean workspace through', async () => {
+    await rawCell('b1', {'demo:orphan': 'x'})
+    await applyPropertyDefinitionSynthesis(repo, await planFor())
+    expect(flipBlockedBySynthesis(await planFor())).toBeNull()
   })
 })
