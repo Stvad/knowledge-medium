@@ -77,24 +77,27 @@ const union = (values: readonly string[]): string[] => {
  *
  *  Only if the name is actually FREE, though. A page can hold a title that is
  *  not among its own aliases (alias sync skips freshly inserted rows), and if
- *  some THIRD page owns that name, adding it here trips the uniqueness trigger
- *  and rolls back the whole merge — which would make the collision this flow
- *  exists to resolve permanently unresolvable. A participant holding it is not
- *  a third page: every source is tombstoned by this same transaction, so its
- *  claim is released before the survivor's bag is written. */
+ *  another page owns that name, adding it here trips the uniqueness trigger and
+ *  rolls back the whole merge — which would make the collision this flow exists
+ *  to resolve permanently unresolvable.
+ *
+ *  Unowned is the whole test, even though a PARTICIPANT's claim is released by
+ *  this same transaction and would be safe to take. Exempting participants adds
+ *  no name: when one of them owns the title, `mergedAliases` already carries it
+ *  — out of the survivor's own bag, or out of that source's aliases. Anything
+ *  that stops the survivor's bag being a union over every participant has to
+ *  revisit this. */
 const claimableTitles = async (
   tx: Tx,
   into: BlockData,
   sources: readonly BlockData[],
   drop: ReadonlySet<string>,
 ): Promise<Set<string>> => {
-  const participants = new Set([into.id, ...sources.map(source => source.id)])
   const claimable = new Set<string>()
   for (const source of sources) {
     const title = source.content
     if (title.trim() === '' || drop.has(title)) continue
-    const owner = await tx.aliasLookup(title, into.workspaceId)
-    if (owner === null || participants.has(owner.id)) claimable.add(source.id)
+    if (await tx.aliasLookup(title, into.workspaceId) === null) claimable.add(source.id)
   }
   return claimable
 }

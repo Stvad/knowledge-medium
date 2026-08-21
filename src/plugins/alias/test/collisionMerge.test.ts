@@ -186,6 +186,26 @@ describe('alias.mergeCollision', () => {
       .toEqual(aliasesProp.codec.encode(['Daily Log']))
   })
 
+  it('carries a source title the survivor already holds, without duplicating it', async () => {
+    // The survivor owns "Daily Log" as an alias; the page being absorbed is
+    // TITLED "Daily Log". The name must not be lost, must not appear twice, and
+    // must not be read as a third page's claim and skipped.
+    await createBlock('canonical', 'Journal', ['Journal', 'Daily Log'], 'a0')
+    // Co-claims 'Journal' — which canonical already holds — so it has to arrive
+    // raw; a local tx would be rejected at setup by the uniqueness trigger.
+    await coClaimRaw('squatter', 'Daily Log', 'Journal', 2_000)
+
+    await expect(env.repo.run(ALIAS_COLLISION_MERGE_MUTATOR, {
+      intoId: 'canonical',
+      fromIds: ['squatter'],
+      collisionAlias: 'Journal',
+      sourceIsAliasOwner: true,
+    })).resolves.toBeUndefined()
+
+    expect((await env.repo.load('canonical'))?.properties[aliasesProp.name])
+      .toEqual(aliasesProp.codec.encode(['Journal', 'Daily Log']))
+  })
+
   it('folds several claimants of one alias in a single transaction', async () => {
     // The state a local tx cannot build: the uniqueness trigger skips
     // sync-apply, so two devices creating the same page offline both keep
@@ -206,6 +226,34 @@ describe('alias.mergeCollision', () => {
       .toEqual(aliasesProp.codec.encode(['Journal', 'First', 'Second']))
     expect(await env.repo.load('rival-a')).toBeNull()
     expect(await env.repo.load('rival-b')).toBeNull()
+  })
+
+  it('keeps each claimant\'s children in order, and after the survivor\'s own', async () => {
+    // Each source's children are appended after the last one already there, so
+    // the anchor has to advance as the fold goes. Against a stale anchor every
+    // source starts from the same place and the two pages' children interleave
+    // — silent, and it scrambles a page the user was reading.
+    await createBlock('canonical', 'Journal', [], 'a0')
+    await coClaimRaw('rival-a', 'First', 'Journal', 1_000)
+    await coClaimRaw('rival-b', 'Second', 'Journal', 2_000)
+    await env.repo.mutate.createChild({parentId: 'canonical', id: 'own', content: 'own'})
+    await env.repo.mutate.createChild({parentId: 'rival-a', id: 'a1', content: 'a1'})
+    await env.repo.mutate.createChild({parentId: 'rival-a', id: 'a2', content: 'a2'})
+    await env.repo.mutate.createChild({parentId: 'rival-b', id: 'b1', content: 'b1'})
+    await env.repo.mutate.createChild({parentId: 'rival-b', id: 'b2', content: 'b2'})
+
+    await env.repo.run(ALIAS_COLLISION_MERGE_MUTATOR, {
+      intoId: 'canonical',
+      fromIds: ['rival-a', 'rival-b'],
+      collisionAlias: 'Journal',
+      sourceIsAliasOwner: true,
+    })
+
+    const rows = await env.h.db.getAll<{id: string}>(
+      'SELECT id FROM blocks WHERE parent_id = ? AND deleted = 0 ORDER BY order_key',
+      ['canonical'],
+    )
+    expect(rows.map(row => row.id)).toEqual(['own', 'a1', 'a2', 'b1', 'b2'])
   })
 
   it('leaves every claimant alone when one of them is refused', async () => {

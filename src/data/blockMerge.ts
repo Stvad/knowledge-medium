@@ -289,8 +289,13 @@ export const foldBlocksInTx = async (
     folded.push(from)
   }
 
-  // Every source was a no-op (self-merge or already tombstoned). Returning
-  // before the write keeps `emitEvent` off a transaction that never wrote.
+  // Every source was a no-op (self-merge or already tombstoned). Defence in
+  // depth as written: the update below is a no-change write that elides, and
+  // events are emitted per folded source, so deleting this line fails nothing
+  // today. It keeps "a no-op merge writes nothing" a property of the control
+  // flow rather than of write-elision — the single-source version needed that,
+  // because it reached `emitEvent` with no prior write and aborted with
+  // WorkspaceNotPinnedError (found by repoMutators.fuzz).
   if (folded.length === 0) return
 
   await tx.update(into.id, {content: mergedContent, properties: mergedProperties})
