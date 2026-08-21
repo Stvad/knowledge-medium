@@ -643,9 +643,9 @@ const gateNavigationEvent = (
   return decision.kind === 'navigate'
 }
 
-/** Apply a resolved decision to the click that produced it — the single place
- *  that maps an intent outcome onto DOM event handling, so no clickable surface
- *  re-implements the native-vs-veto distinction:
+/** Apply a resolved decision to the click that produced it — `gateNavigationEvent`
+ *  plus the navigation, so no clickable surface re-implements the native-vs-veto
+ *  distinction:
  *    - `passthrough` → decline the event; the browser follows the href.
  *    - `navigate` / `suppress` → own the event (`stopPropagation` +
  *      `preventDefault`); `navigate` then fires the in-app navigation,
