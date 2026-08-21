@@ -141,6 +141,17 @@ describe('publishedTargets', () => {
       { kind: 'comment', id: 99 },
     ])
   })
+  // One Bash event can carry both a CLI publisher and an api publisher;
+  // picking a single mode by command kind dropped whichever the other mode
+  // owned.
+  it('keeps both targets when one invocation publishes via CLI and api', () => {
+    const cmd = 'gh pr comment 1 -b hi && gh api repos/Stvad/knowledge-medium/issues/12 -X PATCH -f body=x'
+    const out = [url('pull/652#issuecomment-99'), JSON.stringify({ html_url: url('issues/12') })].join('\n')
+    expect(publishedTargets(cmd, out)).toEqual([
+      { kind: 'comment', id: 99 },
+      { kind: 'issue', number: 12 },
+    ])
+  })
 })
 
 describe('mergedPrNumbers', () => {

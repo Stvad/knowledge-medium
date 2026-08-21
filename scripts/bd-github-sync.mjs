@@ -593,8 +593,13 @@ export const beadIssueLookupWithMint = (ids, { dry = process.env.BD_GITHUB_SYNC_
   return byId
 }
 
+// Both probes are bounded: these run inside hooks, where a stalled `git` or
+// `bd` (a blocked filesystem, a hung binary) would hang the gate in front of
+// the user's command, or burn the verifier's budget before it reports.
+const PROBE_TIMEOUT = 5_000
+
 const mainRepoRoot = () => {
-  const commonDir = tryRun('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'])
+  const commonDir = tryRun('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'], { timeout: PROBE_TIMEOUT })
   return commonDir ? dirname(commonDir.trim()) : null
 }
 
@@ -602,7 +607,9 @@ const mainRepoRoot = () => {
 // Exported for bd-prime-hook.mjs, which shares the same fresh-clone invariant.
 export const initializedDbRoot = () => {
   const root = mainRepoRoot()
-  return root && existsSync(join(root, '.beads', 'embeddeddolt')) && tryRun('bd', ['--version']) ? root : null
+  return root && existsSync(join(root, '.beads', 'embeddeddolt')) && tryRun('bd', ['--version'], { timeout: PROBE_TIMEOUT })
+    ? root
+    : null
 }
 
 export const preconditions = (root = initializedDbRoot()) => {

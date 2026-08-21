@@ -123,19 +123,21 @@ const topLevelUrls = output => {
  * publish verbs produce.
  */
 export const publishedTargets = (cmd, output) => {
-  let scanText = output
-  let kinds = null
-  if (matchesPrCommand(cmd)) {
-    kinds = publishableKinds(cmd)
-  } else {
-    scanText = topLevelUrls(output).join('\n')
-  }
   const seen = new Map()
-  for (const m of scanText.matchAll(TARGET_URL())) {
-    const t = classify(...m.slice(1))
-    if (kinds && !kinds.has(t.kind)) continue
-    seen.set(JSON.stringify(t), t)
+  const collect = (text, kinds) => {
+    for (const m of text.matchAll(TARGET_URL())) {
+      const t = classify(...m.slice(1))
+      if (kinds && !kinds.has(t.kind)) continue
+      seen.set(JSON.stringify(t), t)
+    }
   }
+  // One invocation can do both, so both scans run and their targets union —
+  // selecting a single mode by command kind dropped the api-published object
+  // whenever a CLI publisher rode along. In that mixed case the CLI scan also
+  // sees the api response's body, so a URL quoted there can be reported as
+  // published; with nothing writing any more, that costs an echoed line.
+  if (matchesPrCommand(cmd)) collect(output, publishableKinds(cmd))
+  if (matchesApiPublish(cmd)) collect(topLevelUrls(output).join('\n'), null)
   return [...seen.values()]
 }
 
