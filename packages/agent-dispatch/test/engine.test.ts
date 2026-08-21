@@ -1495,7 +1495,7 @@ describe('channel delivery (experimental)', () => {
     expect(runTask).not.toHaveBeenCalled()
     expect(deliverToChannel).toHaveBeenCalledTimes(1)
     const event = deliverToChannel.mock.calls[0][0] as {content: string, meta: Record<string, string>}
-    expect(event.meta).toEqual({watcher: 'mentions', block_id: 'b-1', attempt: '1', event_id: 'b-1:1'})
+    expect(event.meta).toEqual({watcher: 'mentions', block_id: 'b-1', attempt: '1', event_id: 'b-1:1:0'})
     expect(event.content).toContain('close the task out yourself')
     // Daemon only claims; the ambient session finishes the lifecycle.
     expect(blocks.get('b-1')?.properties?.[PROPS.status]).toBe('running')
@@ -2499,6 +2499,75 @@ describe('retryable infrastructure failures (out of credits, expired login, netw
 
     expect(state.cursors.get('inbox')).toEqual(['a', 'b'])
     expect(state.launches).toHaveLength(1)
+  })
+
+  it('gives an explicitly rerun channel task a FRESH event id, so it is not dropped', async () => {
+    // The listener drops an id it has already dispatched. Deriving that id
+    // from `attempt` alone made a manual Retry — which clears agent:attempts —
+    // reuse the first delivery's id, so the rerun was discarded as a
+    // duplicate and the task sat until the 30-minute stale sweep. Same defect
+    // the reply key had, in a second place; hence one shared derivation.
+    const {graph, blocks} = fakeGraph({
+      backlinks: [{id: 'b-1'}],
+      blocks: {'b-1': {content: '[[claude]] ambient task'}},
+    })
+    const time = clock()
+    const deliverToChannel = vi.fn(async () => {})
+    const engine = engineWith({
+      graph, deliverToChannel, now: time.now,
+      config: parseConfig({
+        runsPerHour: 100,
+        watchers: [{kind: 'backlinks', name: 'ambient', target: 'claude', quietMs: 0, delivery: 'channel'}],
+      }),
+    })
+
+    await engine.tick()
+    await engine.drain()
+
+    // What the app's Retry writes: terminal props dropped, asked-at stamped.
+    time.advance(1_000)
+    blocks.get('b-1')!.properties = {[PROPS.askedAt]: time.now()}
+    blocks.get('b-1')!.editedAtMs = time.now()
+
+    await engine.tick()
+    await engine.drain()
+
+    const ids = deliverToChannel.mock.calls.map(call => (call[0] as {meta: {event_id?: string}}).meta.event_id)
+    expect(ids).toHaveLength(2)
+    expect(ids[0]).toBeTruthy()
+    expect(ids[1]).not.toBe(ids[0])
+  })
+
+  it('refuses to claim a deferred task whose Stop landed after the scan snapshot', async () => {
+    // The tick's stop branch reads a batched snapshot; a Stop arriving after
+    // it is invisible there but visible in the pre-claim re-read. Claiming
+    // anyway spawns the executor and bills work the user explicitly stopped,
+    // which the next sweep can only abort mid-run.
+    const {graph, blocks} = fakeGraph({
+      backlinks: [{id: 'b-1'}],
+      blocks: {
+        'b-1': {
+          content: '[[claude]] deferred task',
+          properties: {[PROPS.status]: 'queued', [PROPS.retryAfter]: NOW - 1_000},
+        },
+      },
+    })
+    // The Stop lands between the batched scan and the pre-claim read.
+    const getBlock = graph.getBlock
+    graph.getBlock = async id => {
+      const target = blocks.get(id)
+      if (target?.properties?.[PROPS.status] === 'queued') {
+        target.properties = {...target.properties, [PROPS.cancel]: NOW}
+      }
+      return getBlock(id)
+    }
+    const runTask = vi.fn(async () => okRun())
+    const engine = engineWith({graph, runTask, config: mentionConfig({runsPerHour: 100})})
+
+    await engine.tick()
+    await engine.drain()
+
+    expect(runTask).not.toHaveBeenCalled()
   })
 
   it('a genuine run failure still parks the task and does not arm a cooldown', async () => {

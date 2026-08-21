@@ -43,25 +43,34 @@ export interface EngineDeps {
 const truncate = (value: string, max = 500): string =>
   value.length > max ? `${value.slice(0, max)}…` : value
 
-/** Identity of the reply subtree ONE run reconciles. Every write of that run
- *  carries it, so the run converges its own blocks in place; a different run
- *  gets a different key and therefore a fresh reply.
+/** Which logical RUN this is — the answer to "is this the same work as
+ *  before, or new work?", which three places have to agree on.
  *
  *  Two components, because the two ways a task re-runs want opposite things:
- *  `attempt` separates successive crashes, and a DEFERRAL rolls it back so
- *  the retry converges its ⏳ note onto the real answer. `agent:asked-at`
- *  separates the runs a PERSON asked for — an explicit Retry resets
- *  `agent:attempts` (that counter is the crash budget), which alone would
- *  hand the retry the first run's key and let it edit, or truncate, the
- *  answer it was meant to supersede. asked-at is written only by the app's
- *  gestures and never by the daemon, so a deferral leaves it untouched.
+ *  `attempt` separates successive crashes, and a DEFERRAL rolls it back so a
+ *  retry counts as the SAME run — that is what lets it converge its ⏳ note
+ *  onto the real answer, and what lets a re-POSTed channel event be
+ *  recognised as the duplicate it is. `agent:asked-at` separates the runs a
+ *  PERSON asked for: an explicit Retry resets `agent:attempts` (that counter
+ *  is the crash budget), so `attempt` alone reports a deliberate rerun as a
+ *  repeat of the first one. asked-at is written only by the app's gestures
+ *  and never by the daemon, so a deferral leaves it untouched.
  *
- *  Derived in ONE place: the Stop-retrying branch has to address the note a
- *  deferred run left behind, and a second copy of this rule would drift. */
-const replyKeyFor = (sourceId: string, block: BlockView | undefined, attempt: number): string => {
+ *  Getting that second component wrong is not cosmetic, and it bit twice in
+ *  the same shape: the reply key let a manual retry EDIT AND TRUNCATE the
+ *  answer it was meant to supersede, and the channel event id made the
+ *  listener drop a manual rerun as a duplicate so it never ran at all.
+ *  Hence one derivation and three call sites, not three derivations. */
+const runIdentity = (sourceId: string, block: BlockView | undefined, attempt: number): string => {
   const askedAt = block?.properties?.[PROPS.askedAt]
-  return `reply:${sourceId}:${attempt}:${typeof askedAt === 'number' ? askedAt : 0}`
+  return `${sourceId}:${attempt}:${typeof askedAt === 'number' ? askedAt : 0}`
 }
+
+/** Identity of the reply subtree ONE run reconciles. Every write of that run
+ *  carries it, so the run converges its own blocks in place; a different run
+ *  gets a different key and therefore a fresh reply. */
+const replyKeyFor = (sourceId: string, block: BlockView | undefined, attempt: number): string =>
+  `reply:${runIdentity(sourceId, block, attempt)}`
 
 /** True for a character safe to write into a plain-text log line — i.e.
  *  not an ASCII/C1 control byte: C0 (0x00–0x1F), DEL (0x7F) and C1
@@ -376,6 +385,22 @@ export const createEngine = (deps: EngineDeps) => {
     if (!block) return refundLaunch(launchStamp)
     const decision = decidePending({source: block, nowMs: now(), quietMs: watcher.quietMs, baselineMs, quietExempt})
     if (!decision.pending) return refundLaunch(launchStamp)
+    // A Stop on a DEFERRED task that landed after the scan's batched snapshot
+    // is invisible to the tick's stop branch but visible HERE, in the fresh
+    // read. Without this the daemon spawns the executor anyway and bills work
+    // the user explicitly stopped — the next sweep only aborts it mid-run.
+    // The tick's branch terminalizes it on the following pass, so refusing is
+    // enough.
+    //
+    // Scoped to `queued` deliberately. A cancel on a block with NO status is
+    // a stale flag no gesture can produce any more, and refusing to claim it
+    // would strand it forever: the tick clears an un-actionable cancel only
+    // for `running`, so nothing else would ever pick that block up. Claiming
+    // it, as before, clears the flag on the terminal write.
+    if (block.properties?.[PROPS.cancel] && block.properties?.[PROPS.status] === 'queued') {
+      log(`[${watcher.name}] not claiming ${sourceId} — a Stop is pending`)
+      return refundLaunch(launchStamp)
+    }
     const ancestorBlocks = await graph.ancestors(sourceId)
 
     // Resolve the thread session BEFORE claiming so two follow-ups in
@@ -592,7 +617,7 @@ export const createEngine = (deps: EngineDeps) => {
           // what lets the listener drop the duplicate (mcp.ts): it starts the
           // ambient session working BEFORE it acknowledges, so a lost ack
           // makes a failure indistinguishable from work already underway.
-          meta: {watcher: watcher.name, block_id: sourceId, attempt: String(attempt), event_id: `${sourceId}:${attempt}`},
+          meta: {watcher: watcher.name, block_id: sourceId, attempt: String(attempt), event_id: runIdentity(sourceId, block, attempt)},
         })
         // A delivery that lands proves the listener is back. This path
         // returns before the spawn success branch, so without clearing here
@@ -933,6 +958,13 @@ export const createEngine = (deps: EngineDeps) => {
         // the lifecycle props and asks for a fresh run. Parking off the stale
         // snapshot would silently revert that gesture to `cancelled`. Same
         // shape as parkExhausted's re-check.
+        //
+        // NARROWS the window rather than closing it: the read and the write
+        // are separate bridge round-trips, so a Retry committing between them
+        // is still reverted. Closing it needs a conditional update the bridge
+        // does not expose, and the residue is one recoverable click on a
+        // gesture the user just contradicted within a few milliseconds —
+        // not worth a new write primitive. Tracked separately.
         const fresh = await graph.getBlock(source.id)
         if (fresh?.properties?.[PROPS.cancel] === undefined
           || !fresh.properties[PROPS.cancel]
