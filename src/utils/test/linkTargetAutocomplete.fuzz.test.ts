@@ -62,7 +62,7 @@ import fc from 'fast-check'
 import { fuzzParams, fuzzTestTimeout } from '@/test/fuzz'
 import type { BlockData } from '@/data/api'
 import type { Repo } from '@/data/repo'
-import type { SearchSourceContribution } from '@/data/facets.js'
+import { searchSourcesFacet, type SearchSourceContribution } from '@/data/facets.js'
 import { searchBlocksAcrossSources } from '../linkTargetAutocomplete.ts'
 
 const WS = 'ws-1'
@@ -190,11 +190,17 @@ const buildSource = (plan: Plan): SearchSourceContribution => ({
   },
 })
 
+/** Answers per FACET, not one map for everything: the merge point also reads
+ *  `searchSourceHealthFacet`, and a stub that returned the sources for that
+ *  too would hand back `SearchSourceContribution`s as reporters and call their
+ *  nonexistent `report`. The merge point isolates reporter throws, so every
+ *  case would quietly run the broken-reporter path instead of the one under
+ *  test — invisible, since this suite mocks `console.error`. */
 const makeRepo = (sources: readonly SearchSourceContribution[]): Repo => {
   const map = new Map(sources.map(s => [s.id, s]))
   return {
     facetRuntime: {
-      read: () => map,
+      read: (facet: {id: string}) => (facet.id === searchSourcesFacet.id ? map : new Map()),
     },
   } as unknown as Repo
 }

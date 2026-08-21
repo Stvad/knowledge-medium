@@ -36,10 +36,15 @@ Reads, issue mutations and `bd remember` all work locally against the cloned DB 
 
 `bd backup` carries everything and costs a private-repo detour. For the common case — a session that filed or updated some issues — `.beads/issues.jsonl` is tracked and not gitignored, so the session's normal `git push` to the main repo carries them:
 
-1. `bd export -o .beads/issues.jsonl` and commit it with your other work,
-2. on any other machine, `git pull` then **`bd import`** with NO arguments — it defaults to that path and upserts (new issues created, existing updated), so a partial or stale file is safe.
+1. **`node scripts/bd-export-public.mjs`** and commit the result with your other work,
+2. on any other machine, `git pull` then **`bd import`** with NO arguments — it defaults to that path and upserts issue fields, so a partial or stale file is safe.
 
-What this does NOT carry: Dolt history and branches, and memories — `bd export` excludes memories by default and MUST keep doing so, since this file lands on the PUBLIC repo (never pass `--all` / `--include-memories` when writing it). Use `bd backup` when history or memories actually need to travel.
+Use the script, not a bare `bd export -o`, for two measured reasons:
+
+- **`bd export` stamps real names and emails** onto `owner` / `created_by` / `updated_by` and onto every comment's `author`. This file is committed to the PUBLIC repo, so that would publish them permanently into git history. The script strips identity keys at every depth — a top-level-only pass silently misses comment authors.
+- **`bd import` INSERTS comments rather than upserting them**, so a file carrying a comment the receiving database already has aborts the ENTIRE import with `duplicate primary key given` — not just that record. Verified by re-importing a full export into its own database. The script drops `comments` for that reason; without them all 211 issues import cleanly.
+
+What this does NOT carry, therefore: comments, Dolt history and branches, and memories (`bd export` excludes memories by default and MUST keep doing so — never pass `--all` / `--include-memories` when writing this file). Use `bd backup` when any of those need to travel.
 
 Do not expect the git hooks to do it for you: `bd hooks run post-merge` does NOT import a changed JSONL. Measured — appended a synthetic record, ran the hook, watched it never reach the DB — so this is one bare command on the receiving side, not zero.
 
