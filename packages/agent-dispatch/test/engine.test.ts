@@ -1525,6 +1525,28 @@ describe('channel delivery (experimental)', () => {
     expect(props[PROPS.attempts]).toBe(0)
   })
 
+  it('posts NO retry note on a deferred channel task — nothing would ever clear it', async () => {
+    // The ambient session owns a channel task's replies and posts its own
+    // blocks, so a daemon-authored keyed note is never reconciled away: the
+    // finished task would keep a child promising a retry that already
+    // happened. The chip carries the deferral instead.
+    const {graph, reconciles, replies} = fakeGraph({
+      backlinks: [{id: 'b-1'}],
+      blocks: {'b-1': {content: '[[claude]] ambient task'}},
+    })
+    const engine = engineWith({
+      graph,
+      deliverToChannel: vi.fn(async () => { throw new Error('connection refused') }),
+      config: channelConfig(),
+    })
+
+    await engine.tick()
+    await engine.drain()
+
+    expect(reconciles).toEqual([])
+    expect(replies).toEqual([])
+  })
+
   it('still parks a task whose failure is not an infrastructure one', async () => {
     const {graph, blocks} = fakeGraph({
       backlinks: [{id: 'b-1'}],
@@ -2100,6 +2122,66 @@ describe('retryable infrastructure failures (out of credits, expired login, netw
     await engine.drain()
 
     expect(state.cursors.get('inbox')).toEqual(['a', 'b'])
+  })
+
+  it('does not clobber a Retry that lands between the scan snapshot and the stop write', async () => {
+    // The Stop-on-deferred branch parks off a batched `blockViews` snapshot
+    // taken at the top of the scan. A "Retry now" in that window clears the
+    // lifecycle props and asks for a fresh run — parking off the stale
+    // snapshot would silently revert the gesture to `cancelled`.
+    const {graph, blocks} = fakeGraph({
+      backlinks: [{id: 'b-1'}],
+      blocks: {
+        'b-1': {
+          content: '[[claude]] deferred task',
+          properties: {[PROPS.status]: 'queued', [PROPS.retryAfter]: NOW + 60_000, [PROPS.cancel]: NOW},
+        },
+      },
+    })
+    // The re-read is where the race is observed: answer it with the state a
+    // concurrent Retry would have left behind.
+    const getBlock = graph.getBlock
+    graph.getBlock = async id => {
+      const target = blocks.get(id)
+      if (target?.properties?.[PROPS.status] === 'queued') target.properties = {[PROPS.askedAt]: NOW}
+      return getBlock(id)
+    }
+    const engine = engineWith({graph, config: mentionConfig({runsPerHour: 100})})
+
+    await engine.tick()
+    await engine.drain()
+
+    // Not parked as cancelled — the retry stands.
+    expect(blocks.get('b-1')?.properties?.[PROPS.error]).not.toBe('cancelled')
+  })
+
+  it('replaces the "retrying automatically" note when the user stops retrying', async () => {
+    // Otherwise a cancelled task keeps a child block promising a retry that
+    // will never come — the chip and the reply say opposite things.
+    const {graph, blocks, reconciles} = fakeGraph({
+      backlinks: [{id: 'b-1'}],
+      blocks: {
+        'b-1': {
+          content: '[[claude]] deferred task',
+          properties: {
+            [PROPS.status]: 'queued', [PROPS.retryAfter]: NOW + 60_000,
+            [PROPS.cancel]: NOW, [PROPS.attempts]: 0,
+          },
+        },
+      },
+    })
+    const engine = engineWith({graph})
+
+    await engine.tick()
+    await engine.drain()
+
+    expect(blocks.get('b-1')?.properties?.[PROPS.error]).toBe('cancelled')
+    // Same key deferForRetry used: it rolled attempts back to attempt-1, so
+    // the note's attempt number is the stored count plus one.
+    expect(reconciles.at(-1)).toMatchObject({
+      parentId: 'b-1', replyKey: 'reply:b-1:1', shape: 'block', final: true,
+      markdown: expect.stringContaining('stopped retrying'),
+    })
   })
 
   it('a genuine run failure still parks the task and does not arm a cooldown', async () => {

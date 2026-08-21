@@ -72,6 +72,22 @@ describe('classifyRunFailure', () => {
     expect(classifyRunFailure(signals({failureText: 'processed 429 rows, then crashed'})))
       .toMatchObject({kind: 'task', retryable: false})
   })
+
+  it('reads the channel wrapper\'s "replied <code>" wording', () => {
+    // A listener that is DOWN says ECONNREFUSED, but one that ANSWERS 429 or
+    // 503 phrases it only as `channel listener replied 503` — which matched
+    // none of the other patterns, so a transient upstream blip parked the
+    // task terminal instead of deferring it.
+    expect(classifyRunFailure(signals({stderr: 'channel listener replied 503 — is the ambient session running?'})))
+      .toMatchObject({kind: 'network', retryable: true})
+    expect(classifyRunFailure(signals({stderr: 'channel listener replied 429'})))
+      .toMatchObject({kind: 'rate-limit', retryable: true})
+  })
+
+  it('keeps a channel 404 terminal — a wrong port is not an outage', () => {
+    expect(classifyRunFailure(signals({stderr: 'channel listener replied 404'})))
+      .toMatchObject({kind: 'task', retryable: false})
+  })
 })
 
 describe('retryBackoffMs', () => {
@@ -85,8 +101,9 @@ describe('retryBackoffMs', () => {
   })
 
   it('caps low enough that a user who tops up credits is not left waiting', () => {
-    // The daemon's cooldown is in-memory, so no app-side gesture can clear
-    // it — the ceiling IS the worst-case wait after the outage lifts.
+    // The ceiling is the worst-case wait for a task nobody asks about; an
+    // explicit Retry bypasses the cooldown (engine.ts), so this bounds the
+    // AUTOMATIC recovery rather than the user-driven one.
     expect(Math.max(...RETRY_BACKOFF_MS)).toBeLessThanOrEqual(5 * 60_000)
   })
 })

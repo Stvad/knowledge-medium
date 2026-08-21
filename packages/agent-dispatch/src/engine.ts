@@ -466,10 +466,18 @@ export const createEngine = (deps: EngineDeps) => {
       // Replaces any streamed placeholder/partial in place (same replyKey,
       // since the attempt number is rolled back too), so the retry's real
       // answer converges onto this block rather than stacking under it.
-      await reconcileReplyWithRetry(
-        partial ? `${partial}\n\n${waitingNote}` : waitingNote,
-        {final: true, shape: 'block'},
-      ).catch(error => log(`[${watcher.name}] could not post the retry note for ${sourceId}: ${errorMessage(error)}`))
+      //
+      // NOT for a channel watcher: there the ambient session owns the reply
+      // and posts its own blocks, so nothing ever reconciles this key away
+      // — the finished task would keep a child promising a retry that
+      // already happened. Its chip still reads "retry in 2m", which is the
+      // surface that carries a deferral for channel tasks.
+      if (watcher.delivery !== 'channel') {
+        await reconcileReplyWithRetry(
+          partial ? `${partial}\n\n${waitingNote}` : waitingNote,
+          {final: true, shape: 'block'},
+        ).catch(error => log(`[${watcher.name}] could not post the retry note for ${sourceId}: ${errorMessage(error)}`))
+      }
       terminalReplyDelivered = true
       await graph.setTaskProps(sourceId, {
         status: 'queued',
@@ -842,14 +850,45 @@ export const createEngine = (deps: EngineDeps) => {
       // means "stop waiting to retry". Honour it as the terminal cancel the
       // running path writes — otherwise the only way out of an automatic
       // retry loop would be deleting the block's agent:* properties.
+      //
+      // ACCEPTED LIMITATION: this only sees blocks still in the watcher's
+      // backlink scan. Delete the mention from a deferred block and its Stop
+      // is never observed (sweepCancellations can't help — a deferred task
+      // holds no abort controller), so the chip reads "retry in 2m" forever.
+      // Left as-is deliberately: the same deletion already stops the task
+      // re-firing, so nothing runs or bills either way, and the fixes cost
+      // more than the stale chip does — a watcher-independent cancel sweep
+      // needs a property query the daemon has nowhere else, and moving the
+      // terminal write into the app takes lifecycle ownership away from the
+      // daemon. Tracked separately.
       if (
         view.properties?.[PROPS.cancel]
         && view.properties?.[PROPS.status] === 'queued'
         && !running.has(source.id)
       ) {
+        // Re-read before writing: `views` is a batched snapshot taken at the
+        // top of this scan, and a "Retry now" landing in that window clears
+        // the lifecycle props and asks for a fresh run. Parking off the stale
+        // snapshot would silently revert that gesture to `cancelled`. Same
+        // shape as parkExhausted's re-check.
+        const fresh = await graph.getBlock(source.id)
+        if (fresh?.properties?.[PROPS.cancel] === undefined
+          || !fresh.properties[PROPS.cancel]
+          || fresh.properties[PROPS.status] !== 'queued') continue
         await graph.setTaskProps(source.id, {
           status: 'error', error: 'cancelled', activity: null, cancel: null, retryAfter: null, nowMs: now(),
         })
+        // Replace the deferral's "retrying automatically" note, which would
+        // otherwise outlive the task it describes. Same key deferForRetry
+        // used: it rolled `agent:attempts` back to attempt-1, so the note's
+        // attempt number is the stored count plus one. Channel watchers get
+        // no such note (the ambient session owns their replies), so
+        // reconciling one there would CREATE the block we are removing.
+        if (watcher.delivery !== 'channel') {
+          await graph.reconcileReplyTree(source.id, '⏹️ agent-dispatch: stopped retrying', {
+            replyKey: `reply:${source.id}:${taskAttempts(fresh) + 1}`, shape: 'block', final: true,
+          }).catch(error => log(`[${watcher.name}] could not clear the retry note for ${source.id}: ${errorMessage(error)}`))
+        }
         log(`[${watcher.name}] stopped retrying ${source.id} (Stop requested while deferred)`)
         continue
       }

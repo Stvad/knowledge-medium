@@ -52,9 +52,15 @@ export const RUN_FAILURE_LABELS: Record<RunFailureKind, string> = {
 }
 
 /** A bare `429` shows up in plenty of unrelated error text, so an HTTP-ish
- *  status only counts when something nearby says it IS a status code. */
+ *  status only counts when something nearby says it IS a status code.
+ *  `replied` is in the list for the channel transport, whose wrapper throws
+ *  `channel listener replied 503` — a listener that is DOWN says ECONNREFUSED
+ *  and matches `network`, but one that ANSWERS 429/503 said nothing the
+ *  other patterns recognise, so the task parked terminal on a transient
+ *  upstream blip. (404 stays terminal: that is a misconfigured port, not an
+ *  outage, and no amount of retrying fixes it.) */
 const statusCode = (codes: string) =>
-  new RegExp(String.raw`(?:status|code|http|error)\D{0,12}\b(?:${codes})\b`, 'i')
+  new RegExp(String.raw`(?:status|code|http|error|replied)\D{0,12}\b(?:${codes})\b`, 'i')
 
 /** Ordered: the first match wins, so the most specific/actionable cause
  *  (which account ran out) is reported ahead of the generic transport
