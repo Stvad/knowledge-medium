@@ -440,6 +440,27 @@ describe('getOrCreateKernelPage', () => {
     expect(repo.block('claimant').peekProperty(typesProp)).toEqual([OTHER_TYPE])
   })
 
+  it('moves an adopted claimant to the workspace root', async () => {
+    // A kernel page belongs at the root. Adopting a NESTED claimant and leaving
+    // it in place buries a system page inside an unrelated subtree: everything
+    // later filed under the page goes there too, and deleting the claimant's
+    // ancestor cascades through all of it.
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'host', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'Host'})
+      await tx.create({id: 'nested', workspaceId: WS, parentId: 'host', orderKey: 'a0', content: 'Mine'})
+      await tx.setProperty('nested', aliasesProp, ['Foo'])
+    }, {scope: ChangeScope.BlockDefault})
+
+    const page = await getOrCreateKernelPage(env.repo, WS, {
+      namespace: FOO_PAGE_NS,
+      alias: 'Foo',
+      markerType: FOO_PAGE_TYPE,
+    })
+
+    expect(page.id).toBe('nested')
+    expect((await env.repo.load('nested'))?.parentId).toBeNull()
+  })
+
   it('materialises the fallback when the claimant it meant to repair vanishes mid-flight', async () => {
     // The claimant is live and needs repair at prediction time, then is gone by
     // the time the write tx opens. In-tx resolution falls back to the

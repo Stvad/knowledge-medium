@@ -58,19 +58,28 @@ const JOURNAL_ALIASES = [JOURNAL_ALIAS]
 export const journalBlockId = (workspaceId: string): string =>
   kernelPageBlockId(workspaceId, JOURNAL_NS)
 
-/** Is `data` the Journal — the canonical row, or a claimant adoption would
- *  take? Claiming the alias is necessary but NOT sufficient: adoption refuses a
- *  claimant carrying any other identity, so a typed block that happens to be
- *  aliased 'Journal' is not the Journal and must not be treated as one. This
- *  mirrors `getOrCreateJournalBlock`'s guard (`refuseTypedClaimant([PAGE_TYPE])`
- *  — the Journal declares no marker type); the two must agree, or the UI guard
- *  below refuses to delete a block the resolver would never adopt.
+/** Is `data` the Journal? Two ways to be, and BOTH are required.
  *
- *  Alias rather than an id comparison against `journalBlockId` because the
- *  latter stops matching once adoption moves the identity elsewhere. */
-export const isJournalBlock = (data: Pick<BlockData, 'properties'>): boolean =>
-  getAliases(data).includes(JOURNAL_ALIAS)
-  && getBlockTypes(data).every(type => type === PAGE_TYPE)
+ *  The canonical row qualifies on id alone, whatever else it carries.
+ *  `resolveCanonicalAliasOwner` applies adoption guards only to NON-fallback
+ *  claimants, so the canonical Journal keeps resolving even after it gains
+ *  another compositional type or loses its alias — and a predicate narrower
+ *  than the resolver lets the UI delete the real Journal, cascading its
+ *  descendants, while the next get-or-create restores only the root.
+ *
+ *  Any other block qualifies by claiming the alias AND being one adoption
+ *  would accept: a typed block merely aliased 'Journal' is not the Journal and
+ *  never will be, so guarding it would refuse a delete the resolver has no
+ *  stake in. That half mirrors `refuseTypedClaimant([PAGE_TYPE])`, the guard
+ *  `getOrCreateJournalBlock` passes. */
+export const isJournalBlock = (
+  data: Pick<BlockData, 'id' | 'workspaceId' | 'properties'>,
+): boolean =>
+  data.id === journalBlockId(data.workspaceId)
+  || (
+    getAliases(data).includes(JOURNAL_ALIAS)
+    && getBlockTypes(data).every(type => type === PAGE_TYPE)
+  )
 
 export const dailyNoteBlockId = (workspaceId: string, iso: string): string =>
   derivedBlockId({namespace: DAILY_NOTE_NS, key: `${workspaceId}:${iso}`})

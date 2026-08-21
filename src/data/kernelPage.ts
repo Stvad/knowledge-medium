@@ -262,6 +262,14 @@ export const getOrCreateKernelPage = async (
         await tx.setProperty(resolved.id, aliasesProp, mergeStrings([...aliases, ...txAliases]))
       }
       await tagTypes(tx, resolved.id, typeSnapshot)
+      // Pull a nested claimant out to the root as part of a repair we are
+      // already doing. Deliberately NOT a repair trigger on its own: once a
+      // page is a proper kernel page, a user who moves it somewhere has said
+      // where they want it, and yanking it back on every get-or-create would
+      // be the app fighting them.
+      if (current.parentId !== null) {
+        await tx.move(resolved.id, {parentId: null, orderKey}, {skipMetadata: true})
+      }
     }, {scope: ChangeScope.BlockDefault})
     return repo.block(finalId)
   }
@@ -273,12 +281,20 @@ export const getOrCreateKernelPage = async (
       canonicalAliasReaderFromTx(tx), aliases, workspaceId, id, guard,
     )
     if (resolved.adopted) {
-      // A live block already owns `spec.alias` — adopt it instead of
-      // minting/restoring the deterministic id (issue #378). The alias
-      // is already theirs (that's how the lookup found them); just apply
-      // the type tags.
+      // A live block already owns `spec.alias` — adopt it rather than
+      // minting/restoring the deterministic id. The alias is already theirs
+      // (that is how the lookup found them), so only the types are missing.
+      //
+      // And the placement: a kernel page lives at the workspace root, so an
+      // adopted claimant is moved there. Leaving it nested keeps a system page
+      // inside an unrelated subtree — every daily note would then be created
+      // under that subtree, and deleting the claimant's ancestor would cascade
+      // through the system page and everything filed in it.
       finalId = resolved.id
       await tagTypes(tx, resolved.id, typeSnapshot)
+      if (resolved.claimant.parentId !== null) {
+        await tx.move(resolved.id, {parentId: null, orderKey}, {skipMetadata: true})
+      }
       return
     }
     finalId = id

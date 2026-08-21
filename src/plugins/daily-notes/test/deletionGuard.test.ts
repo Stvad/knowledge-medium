@@ -64,6 +64,24 @@ describe('dailyNotesDeletionGuard', () => {
     expect(await dailyNotesDeletionGuard(adopted)).toMatch(/Journal/)
   })
 
+  it('still guards the canonical Journal after it gains another type', async () => {
+    // The resolver applies adoption guards only to NON-fallback claimants, so
+    // the canonical row keeps resolving whatever else it carries. A predicate
+    // narrower than the resolver lets the UI delete the real Journal — the
+    // delete cascades through every daily note, and the next get-or-create
+    // restores only the root, so the contents are simply gone.
+    const journal = await getOrCreateJournalBlock(repo, WS)
+    await repo.tx(async tx => {
+      const row = await tx.get(journal.id)
+      await tx.update(journal.id, {
+        properties: addBlockTypeToProperties({...row!.properties}, 'some-composed-identity'),
+      })
+    }, {scope: ChangeScope.BlockDefault})
+    await repo.block(journal.id).load()
+
+    expect(await dailyNotesDeletionGuard(repo.block(journal.id))).toMatch(/Journal/)
+  })
+
   it('allows deleting a typed block that merely claims the Journal alias', async () => {
     // Adoption refuses a claimant carrying another identity, so this block is
     // NOT the Journal and never will be. Recognising it by the alias alone made
