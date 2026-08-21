@@ -46,13 +46,31 @@
  *   node scripts/bd-github-sync.mjs --hook-pre-pr # Claude Code PreToolUse(Bash) hook:
  *       fast-exits unless the command PUBLISHES text on GitHub (gh pr
  *       create/edit/comment/review/merge, gh issue create/edit/comment/close,
- *       gh release create/edit — matched only where gh is in command position,
- *       so a commit message MENTIONING these does not trip it) AND that text
- *       references bead ids (km-…). Then it mints GitHub issues for any
- *       referenced bead that lacks one (selective --issues push, seconds) and
- *       BLOCKS (exit 2) with the km→#N substitution table — public text must
- *       use issue numbers, which GitHub readers can resolve and bead ids are
- *       not. Escape hatch: prefix the command with KM_ALLOW_BEAD_IDS=1.
+ *       gh release create/edit, gh api graphql mutations — matched only where
+ *       gh is in command position, so a commit message MENTIONING these does
+ *       not trip it). Published text is read back after publication by
+ *       bd-publish-verify.mjs (PostToolUse), which echoes the real title of
+ *       every #N it published — so this gate scans the raw command string
+ *       and deliberately does NOT chase stdin/expansion/--recover bodies;
+ *       its parsing surface is FROZEN (#672 — decline coverage findings
+ *       here). Bead ids (km-…) BLOCK (exit 2) with the km→#N substitution
+ *       table, minting issues for unmapped beads first — the number should
+ *       be in hand BEFORE the text ships. The #N echo-gate stays
+ *       pre-publish for publishes the read-back does NOT cover, decided by
+ *       a WHITELIST: one gh command with no shell operator in its skeleton,
+ *       aimed at this repo, whose verb and flags leave a fetchable URL in
+ *       the output. Everything else is uncovered — so a spelling this gate
+ *       fails to recognize costs an attested re-run instead of a silent
+ *       gap, which is the whole reason for the direction. Uncovered
+ *       publishes take ONE coarse rule (#683: B): readable command text
+ *       gets the tables; text living OUTSIDE the command (file/payload
+ *       flags, api @-references, expansion) blocks outright and the escapes
+ *       attest — no file reading, no per-channel detection (which does not
+ *       converge; decision record: #683). Plus git commit close keywords
+ *       (commit text never becomes a GitHub object; the commit leg runs
+ *       INDEPENDENTLY of the publish legs), and the merge COMMIT of a
+ *       merged PR, read back post-merge by bd-publish-verify.
+ *       Escape hatches: KM_ALLOW_BEAD_IDS=1 / KM_ISSUE_REFS_OK=1 prefixes.
  *       The FULL sync does not run here: converged it still costs ~60s (a GET
  *       compare per issue), which is too slow to sit in front of every PR.
  *       SessionEnd and manual runs carry it.
@@ -214,22 +232,23 @@ export const matchesCommitCommand = cmd => GIT_COMMIT.test(commandSkeleton(cmd))
 // (essentially unused) case. A never-exercised convenience is not worth a
 // recurring bypass surface.
 
-// A body built by shell expansion cannot be inspected before it publishes.
-// Single-quoted values never expand and stay out; commit -m is deliberately
-// exempt (prose dollars are common there, and expansion-built commit
-// messages fall under the out-of-visibility residual already on record).
-// The separator is optional (the CLI accepts ATTACHED short-option values:
-// -t"$(…)", -tfoo), and the value is matched as a full shell WORD — quoted
-// and unquoted segments concatenated (prefix"$(cat x)") form ONE argument.
-// Single-quoted segments never expand and are stripped before the test.
-export const hasDynamicBody = cmd => {
-  for (const m of cmd.matchAll(
-    /(?<![\w-])(?:--body|--notes|--subject|--title|--comment|-[bntc])(?:=|\s+)?((?:"[^"]*"|'[^']*'|[^\s'"])+)/g,
-  )) {
-    if (/[$`]/.test(m[1].replace(/'[^']*'/g, ''))) return true
-  }
-  return false
-}
+// The verbs whose output names no URL the read-back could fetch: `gh pr
+// merge` text lands in the merge commit, and review/close/reopen print
+// `repo#N`, never a link to the review or the -c comment. gh's verb table
+// is closed and documented, which is what makes listing it sound where
+// listing shell syntax is not. Their file-fed bodies are NOT read — the
+// coarse rule blocks those until both escapes attest.
+// Comment-less closes pass for free — no refs in the text, nothing to echo.
+const GH_UNVERIFIABLE = new RegExp(
+  SEGMENT_START +
+    COMMAND_PREFIXES +
+    String.raw`(?:\S*\/)?gh\s+` +
+    GH_GLOBAL_OPTS +
+    String.raw`(?:pr\s+(?:merge|review|close|reopen)|issue\s+(?:close|reopen))\b`,
+  'm',
+)
+export const matchesUnverifiableCommand = cmd => GH_UNVERIFIABLE.test(commandSkeleton(cmd))
+
 
 // The escape hatch must also be in command-prefix position of the SKELETON —
 // honored from quoted prose, a PR body QUOTING it would both bypass the gate
@@ -310,46 +329,31 @@ export const buildIssueRefsMessage = (refs, closeNums, mode = 'pre') => {
 }
 
 /**
- * Paths passed via --body-file/-F (the PR body often lives in a temp file, so
- * scanning the command string alone would miss its bead ids). `-` = stdin is
- * skipped. Handles plain, "double-" and 'single-'quoted paths; not full shell
- * parsing — this is a guard against the common shapes, not a sandbox.
+ * Message/body-file values for the ONE leg that still reads files
+ * pre-publish: solo `git commit -F/--file` (commit text never becomes a
+ * GitHub object). Blind publishes never read files — the coarse rule blocks
+ * them until both escapes attest. A real flag sits OUTSIDE quotes,
+ * so it must survive into the skeleton — a quoted mention ("use -F x next
+ * time") is prose, and with the fail-closed missing-file check a prose
+ * mention would block the command outright. Values are still extracted from
+ * the raw text (quoted paths are blanked in the skeleton). Not full shell
+ * parsing.
  */
-// Stdin in disguise: the hook reading these would consume its OWN stdin (an
-// empty, already-drained stream), not what the shell pipes to gh.
-const STDIN_PATH = /^(?:-|\/dev\/stdin|\/dev\/fd\/\d+|\/proc\/self\/fd\/\d+)$/
-export const bodyFilePaths = cmd => {
-  // A real flag sits OUTSIDE quotes, so it survives into the skeleton; a
-  // quoted mention ("use --body-file x next time" in a message) is prose and
-  // must not be read as a file — with the fail-closed missing-file check, a
-  // prose mention would otherwise block the command outright. Values are
-  // still extracted from the raw text (quoted paths are blanked in the
-  // skeleton). `--template`/`-T` is a FILE only on `gh pr create`; on
-  // `gh issue create` it names a repository template and must not be
-  // resolved locally (the missing-file check would block a legitimate name).
-  const skeleton = commandSkeleton(cmd)
-  const templateIsFile = /pr\s+(?:create|new)\b/.test(skeleton)
-  const flagTest = templateIsFile
-    ? /(?<![\w-])(?:--body-file|--notes-file|--template|--file|-F|-T)/
-    : /(?<![\w-])(?:--body-file|--notes-file|--file|-F)/
-  const flagCapture = templateIsFile
-    ? /(?<![\w-])(?:--body-file|--notes-file|--template|--file|-F|-T)(?:=|\s+)?("[^"]*"|'[^']*'|[^\s'"]+)/g
-    : /(?<![\w-])(?:--body-file|--notes-file|--file|-F)(?:=|\s+)?("[^"]*"|'[^']*'|[^\s'"]+)/g
-  if (!flagTest.test(skeleton)) return []
-  return [...cmd.matchAll(flagCapture)]
-    .map(m => m[1].replace(/^(["'])(.*)\1$/, '$2'))
-    .filter(p => !STDIN_PATH.test(p))
+const messageFileValues = cmd => {
+  if (!/(?<![\w-])(?:--body-file|--file|-F)/.test(commandSkeleton(cmd))) return []
+  return [...cmd.matchAll(/(?<![\w-])(?:--body-file|--file|-F)(?:=|\s+)?("[^"]*"|'[^']*'|[^\s'"]+)/g)].map(m =>
+    m[1].replace(/^(["'])(.*)\1$/, '$2'),
+  )
 }
 
-// Stdin classification reads the RAW values: a quoted sentinel (-F "-") is
-// blanked in the skeleton, and missing it means the hook scans nothing while
-// gh publishes the pipe. The flag must still sit outside quotes.
-export const hasStdinBody = cmd => {
-  if (!/(?<![\w-])(?:--body-file|--notes-file|--template|--file|-F|-T)/.test(commandSkeleton(cmd))) return false
-  return [...cmd.matchAll(/(?<![\w-])(?:--body-file|--notes-file|--template|--file|-F|-T)(?:=|\s+)?("[^"]*"|'[^']*'|[^\s'"]+)/g)]
-    .map(m => m[1].replace(/^(["'])(.*)\1$/, '$2'))
-    .some(p => STDIN_PATH.test(p))
-}
+// Stdin in disguise: the hook reading these would consume its OWN stdin (an
+// empty, already-drained stream), not what the shell pipes in. Classified
+// from the RAW values — a quoted sentinel (-F "-") is blanked in the
+// skeleton, and missing it means the hook scans nothing while the pipe
+// carries the text.
+const STDIN_PATH = /^(?:-|\/dev\/stdin|\/dev\/fd\/\d+|\/proc\/self\/fd\/\d+)$/
+export const bodyFilePaths = cmd => messageFileValues(cmd).filter(p => !STDIN_PATH.test(p))
+export const hasStdinBody = cmd => messageFileValues(cmd).some(p => STDIN_PATH.test(p))
 
 /** Resolve a body-file path the way the shell would have: ~, then cwd. */
 export const resolveBodyPath = (p, cwd, home) =>
@@ -781,9 +785,7 @@ const runSync = ({ quiet = false, dryRun = false } = {}) => {
     // IMMEDIATELY, not via the end-of-run report: any later step failing
     // (snapshot abort, the pull itself) would swallow the report, and by the
     // next run the bead already carries its ref, so the mapping would never
-    // be printed at all. The mapping is knowable only by lookup; surfacing
-    // it the moment it exists is what lets later text READ the number
-    // instead of guessing it (AGENTS.md: never write an unread #N).
+    // be printed at all.
     for (const { id, number } of planMintedRefs(preBeads, freshBeads))
       console.log(`bd-github-sync: minted: ${id} → #${number}`)
     const suspects = [
@@ -982,59 +984,79 @@ const hookPrePr = () => {
   const cmd = payload?.tool_input?.command ?? ''
   if (!cmd) allow()
   const cwd = payload?.cwd ?? process.cwd()
-  // Fail closed on body text this hook cannot inspect (only publish/commit
-  // legs call this, so ordinary commands like `grep -F -` are untouched):
-  // a stdin-fed body (`cat x | gh … -F -`) would need pipeline simulation —
-  // heredoc-fed stdin passes, its content sits in the raw command which both
-  // extractors already scan — and a referenced file that cannot be read (a
-  // `cd` chain inside the command, a typo) would publish its references
-  // unverified if silently skipped.
-  const readBodies = () => {
-    if (hasStdinBody(cmd) && !cmd.includes('<<') && !allowsIssueRefs(cmd)) {
+
+  // Message/body files, read at most once, failing CLOSED on text this gate
+  // cannot see: a stdin-fed body would need pipeline simulation (heredoc
+  // stdin passes — its content sits in the raw command), and an unreadable
+  // file would carry its references unverified. Called ONLY by the legs
+  // whose text never reaches the post-publish verifier.
+  let bodiesCache = null
+  const guardedBodies = () => {
+    if (bodiesCache) return bodiesCache
+    if (hasStdinBody(cmd) && !cmd.includes('<<')) {
       console.error(
-        'This command feeds its published body from stdin, which this gate cannot inspect. Use a heredoc (scanned), a file, or an inline --body — or, after verifying the references yourself, re-run with KM_ISSUE_REFS_OK=1 prefixed.',
+        'This command feeds commit or merge/review text from stdin, which this gate cannot inspect. Use a heredoc (scanned), a file, or an inline flag — or, after verifying the references yourself, re-run with KM_ISSUE_REFS_OK=1 prefixed.',
       )
       process.exit(2)
     }
     const paths = bodyFilePaths(cmd).map(p => resolveBodyPath(p, cwd, homedir()))
     const missing = paths.filter(p => !existsSync(p))
-    if (missing.length && !allowsIssueRefs(cmd)) {
+    if (missing.length) {
       console.error(
-        `Cannot read body file(s) referenced by this command: ${missing.join(', ')} (resolved from ${cwd}; cd chains inside the command are not followed).\n` +
-          'Run from the directory the paths are relative to, inline the body, or — after verifying the references yourself — re-run with KM_ISSUE_REFS_OK=1 prefixed.',
+        `Cannot read message file(s) referenced by this command: ${missing.join(', ')} (resolved from ${cwd}; cd chains inside the command are not followed).\n` +
+          'Run from the directory the paths are relative to, inline the text, or — after verifying the references yourself — re-run with KM_ISSUE_REFS_OK=1 prefixed.',
       )
       process.exit(2)
     }
-    return paths.filter(p => existsSync(p)).map(p => readFileSync(p, 'utf8'))
+    return (bodiesCache = paths.map(p => readFileSync(p, 'utf8')))
   }
-  if (!matchesPrCommand(cmd)) {
-    // The commit leg: only a close keyword aimed at a #N warrants a round.
-    // The message may be file-backed (git commit -F/--file), so scan those
-    // too; `-F -` (stdin/heredoc) bodies already sit in the raw command.
-    if (!matchesCommitCommand(cmd) || allowsIssueRefs(cmd)) allow()
-    const commitText = [cmd, ...readBodies()].join('\n')
-    const commitRefs = closeKeywordRefs(commitText)
+
+  // The legs below are INDEPENDENT — one invocation can both commit and
+  // publish (`git commit -m "Fixes #N" && gh pr comment …`), and a publish
+  // match must not swallow the commit check.
+
+  const isPublish = matchesPrCommand(cmd)
+  // A `gh api` whose flags arrive by expansion shows no mutation flag to
+  // match, so neither this gate nor the read-back would look at it. Counting
+  // any expansion-bearing api call as a publish closes that: expansion is
+  // uncovered anyway, so the cost is an attested re-run.
+  const apiPublish = matchesApiPublish(cmd) || (GH_API.test(commandSkeleton(cmd)) && /[$`]/.test(cmd))
+  // gh's own flag vocabulary decides whether a response names a fetchable
+  // object: graphql answers with an envelope, and the output-hiding flags
+  // print nothing to find the object by. A CLOSED, documented set — one
+  // tool's manual — so membership, not enumeration. (-q, the short form of
+  // --jq, is a residual: a command-wide scan would trip on `grep -q`.)
+  // Membership words are tested on the raw text too: a quoted "--silent" or
+  // "graphql" reaches gh unquoted, but the skeleton blanks it. Prose hits
+  // cost at most an extra readable-text echo round.
+  const sk = commandSkeleton(cmd)
+  const graphqlApi = apiPublish && (/\bgraphql\b/.test(sk) || /\bgraphql\b/.test(cmd))
+  const opaqueRe = /(?<![\w-])--(?:silent|jq|template)\b/
+  const opaqueApi = apiPublish && (opaqueRe.test(sk) || opaqueRe.test(cmd))
+  // No separator required: gh takes the attached form (-Rowner/repo) too,
+  // and in a whitelist an over-match costs an attested re-run while an
+  // under-match is a foreign publish nothing checks at all.
+  const foreignRepo = /(?<![\w-])(?:-R|--repo)/.test(sk)
+
+  // Close keywords in commit messages act when the commit reaches the
+  // default branch, and commit text never becomes a GitHub object — but the
+  // file scan is command-wide, so when the invocation ALSO publishes, a
+  // publish flag (an api field or a body-file) would be misread as a
+  // commit-message path. In that case the commit leg scans the raw command
+  // only; the files belong to the publish, which the verifier or the blind
+  // rule owns. Residual: a commit's own -F file in such a compound goes
+  // keyword-unchecked.
+  const commitText =
+    matchesCommitCommand(cmd) && !allowsIssueRefs(cmd)
+      ? [cmd, ...(isPublish || apiPublish ? [] : guardedBodies())].join('\n')
+      : ''
+  const commitRefs = commitText ? closeKeywordRefs(commitText) : []
+
+  if (!isPublish && !apiPublish) {
     if (commitRefs.length === 0) allow()
     return echoIssueRefs(commitText, commitRefs)
   }
 
-  // --recover republishes input cached by a FAILED create run — content this
-  // hook never saw. Same family as stdin pipes and expansions: fail closed.
-  if (/(?:^|\s)--recover(?:=|\s)/.test(commandSkeleton(cmd)) && !allowsIssueRefs(cmd)) {
-    console.error(
-      'This command republishes recovered input from a failed run, which this gate cannot inspect. Re-create the publication with visible text — or, after verifying the recovered content yourself, re-run with KM_ISSUE_REFS_OK=1 prefixed.',
-    )
-    process.exit(2)
-  }
-
-  if (hasDynamicBody(cmd) && !allowsIssueRefs(cmd)) {
-    console.error(
-      'This command builds its published body by shell expansion ($(…), `…` or a variable), which this gate cannot inspect. Publish literal text, a heredoc, or a file — or, after verifying the references yourself, re-run with KM_ISSUE_REFS_OK=1 prefixed.',
-    )
-    process.exit(2)
-  }
-
-  const bodies = readBodies()
   // A positional target URL (`gh pr comment <url> --body …`) is the command's
   // addressee, not published text — stripped so it does not cost a
   // title-confirmation round. Two guards keep the strip away from published
@@ -1044,14 +1066,68 @@ const hookPrePr = () => {
   // prose spelling out a full `gh … <url>` alongside a real positional
   // target also gets stripped — accepted over parsing argument positions.
   const targetUrl = () => /((?:\S*\/)?gh\s+(?:-\S+\s+(?:[^-\s]\S*\s+)?)*(?:pr|issue)\s+\w+\s+)https?:\/\/\S+/g
-  const strippedCmd = targetUrl().test(commandSkeleton(cmd)) ? cmd.replace(targetUrl(), '$1') : cmd
-  const text = [strippedCmd, ...bodies].join('\n')
-  // The two escapes are independent: a command allowed to mention bead ids
+  const text = targetUrl().test(commandSkeleton(cmd)) ? cmd.replace(targetUrl(), '$1') : cmd
+
+  // Does the post-publication read-back cover this publish? A WHITELIST.
+  // The previous shape enumerated the ways a command's output escapes the
+  // hook — redirects, pipes, substitutions, foreign repos — and a missed
+  // spelling was a SILENT gap, so every review round found another one
+  // (attached -Rowner/repo, a pipe positional test beaten by later literal
+  // text, a compound mixing api with CLI). Recognizing the covered shape
+  // instead inverts the failure: an unrecognized command falls out as
+  // uncovered and costs an attested re-run, never a gap.
+  //
+  // Two layers, different in kind on purpose:
+  //  - SHELL: the skeleton must contain no operator at all. One test for
+  //    pipes, redirects, substitutions, separators and multi-line commands
+  //    together — no per-operator spelling, no positional heuristics.
+  //  - GH: a closed, documented vocabulary — the verbs whose output names
+  //    no URL, foreign -R targets, graphql, response-hiding flags. A gap
+  //    here is bounded by one tool's manual, not by the shell's grammar.
+  //
+  // A heredoc carries `<` and so attests. That is the deliberate cost of
+  // not parsing heredocs (see commandSkeleton): write the body to a file
+  // and publish it with --body-file, which is a single covered command.
+  const SHELL_OPERATOR = /[|;&<>$`\n]/
+  const postVerified =
+    !SHELL_OPERATOR.test(sk) &&
+    !foreignRepo &&
+    !graphqlApi &&
+    !opaqueApi &&
+    (apiPublish || !matchesUnverifiableCommand(cmd))
+  // Uncovered publishes keep the pre-publish checks: readable text gets the
+  // refs/ids tables below, text living OUTSIDE the command blocks outright
+  // (#683). The merge COMMIT of a merged PR is read back post-merge by
+  // bd-publish-verify regardless.
+  const blind = !postVerified
+  if (blind && !(allowsIssueRefs(cmd) && allowsBeadIds(cmd))) {
+    // Any *file long flag (body-file, file, notes-file, …), --template and
+    // --input carry text this gate cannot read, as do -F/-T (matched bare —
+    // the CLI accepts ATTACHED values like -Fmsgfile) and an api @<path>.
+    // All of them tested unconditionally: on `gh api` a -F is an inline
+    // typed field rather than a file, but an inline api publish is COVERED
+    // and never reaches this branch, so telling the two apart would only
+    // matter for commands that are already attesting. Splitting them by
+    // command kind is what let a compound mixing api with CLI read the
+    // wrong signal.
+    const textOutsideCommand = /(?<![\w-])--(?:[a-z-]*file|input|template)\b|[$`@]|(?<![\w-])-[FT]/.test(cmd)
+    if (textOutsideCommand) {
+      console.error(
+        'This publish is not one the post-publication read-back covers (it must be a single gh command, with no shell operator, aimed at this repo, whose verb and flags leave a fetchable URL in the output) — and it carries text this gate cannot read from the command either: a file or payload flag, an @-reference, or shell expansion. Publish literal inline text so this gate can read it (a COVERED publish — a single create/edit/comment command with no shell operator — may use --body-file freely, since the read-back checks what it shipped) — or, after checking every reference and bead id in it yourself, re-run with KM_ISSUE_REFS_OK=1 KM_ALLOW_BEAD_IDS=1 prefixed.',
+      )
+      process.exit(2)
+    }
+  }
+
+  // Readable text of blind publishes gets the full pre-publish treatment:
+  // #N refs echoed with their titles, bead ids denied with the km→#N table.
+  // The two escapes stay independent: a command allowed to mention bead ids
   // can still carry a hallucinated issue number, and vice versa.
+  const refs = [...new Set([...commitRefs, ...(blind && !allowsIssueRefs(cmd) ? extractIssueRefs(text) : [])])]
   const ids = allowsBeadIds(cmd) ? [] : extractBeadIds(text)
-  const refs = allowsIssueRefs(cmd) ? [] : extractIssueRefs(text)
   if (ids.length === 0 && refs.length === 0) allow()
-  if (ids.length === 0) return echoIssueRefs(text, refs)
+  const refsText = [blind ? text : '', commitText].filter(Boolean).join('\n') || text
+  if (ids.length === 0) return echoIssueRefs(refsText, refs)
 
   const byId = beadIssueLookupWithMint(ids)
   const mapped = ids.filter(id => byId.get(id)).map(id => ({ id, number: byId.get(id) }))
@@ -1060,7 +1136,7 @@ const hookPrePr = () => {
   // present in the text must have its ground truth shown in THIS round —
   // otherwise the mixed case would publish unverified numbers under that
   // licence.
-  const refsSection = refs.length ? `\n\n${issueRefsTable(text, refs)}` : ''
+  const refsSection = refs.length ? `\n\n${issueRefsTable(refsText, refs)}` : ''
   console.error(buildDenyMessage(mapped, unmapped) + refsSection)
   process.exit(2)
 }
