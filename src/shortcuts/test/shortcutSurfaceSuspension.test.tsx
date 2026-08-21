@@ -13,7 +13,7 @@ import {
   ShortcutSurfaceSuspensionContext,
   ShortcutSurfaceSuspensionProvider,
 } from '@/shortcuts/ShortcutSurfaceSuspension.js'
-import { useActionContextActivations } from '@/shortcuts/useActionContext.js'
+import { useActionContext, useActionContextActivations } from '@/shortcuts/useActionContext.js'
 import type {
   ActionContextConfig,
   ActionContextType,
@@ -168,14 +168,17 @@ describe('shortcut-surface suspension', () => {
     expect(owner(CTX_A)).toBe('a')
   })
 
-  // The ownership property the keep-alive host depends on. `ActiveContexts`
+  // The ownership property the keep-alive host depends on: after a handover,
+  // the ARRIVING subtree owns the contested context.
+  //
+  // It holds today only because the handover is ONE commit. `ActiveContexts`
   // keys one entry per context TYPE and `deactivate` removes it by type with
-  // no ownership check (docs/activeContexts-ownership-bug.md), so when two
-  // mounted subtrees claim the SAME context and swap roles in one commit, the
-  // outcome hangs entirely on effect ordering: React runs every passive-effect
-  // DESTROY in a commit before any CREATE, so the leaver's blind
-  // `deactivate(CONTESTED)` lands first and the arriver's `activate` is last
-  // write. Reverse that order and the context would end up owned by NOBODY.
+  // no ownership check (docs/activeContexts-ownership-bug.md); what saves this
+  // case is React running every passive-effect DESTROY in a commit before any
+  // CREATE, so the leaver's blind `deactivate(CONTESTED)` lands first and the
+  // arriver's `activate` is the last write. That is a property of the
+  // batching, not of the suspension seam — see the `it.fails` case below for
+  // the same handover split across two commits.
   it('hands a contested context to the subtree that unsuspends in the same commit', () => {
     const tree = (leftSuspended: boolean) => (
       <Harness>
@@ -198,5 +201,66 @@ describe('shortcut-surface suspension', () => {
     // And back, to show it isn't an artifact of source order.
     rerender(tree(false))
     expect(owner(CONTESTED)).toBe('left')
+  })
+
+  // KNOWN GAP, asserted as the contract we want rather than the outcome we
+  // get. Split the handover above across two commits — the arriver registers
+  // first, the leaver suspends after — and the leaver's blind
+  // `deactivate(CONTESTED)` is the only effect that re-runs. It deletes the
+  // arriver's live claim, whose own effect deps never moved, so nothing
+  // re-registers and the context ends up owned by NOBODY ('none' today).
+  //
+  // Suspension does not cause this — `deactivate`-by-type does
+  // (docs/activeContexts-ownership-bug.md) — but suspension is what makes it
+  // reachable without an unmount, so it belongs pinned here. Ownership-aware
+  // claims make the release scoped to the claimer and this passes; when that
+  // lands, drop the `.fails`.
+  it.fails('hands a contested context over when the halves land in different commits', () => {
+    const tree = (leftSuspended: boolean, rightMounted: boolean) => (
+      <Harness>
+        <ShortcutSurfaceSuspensionProvider suspended={leftSuspended}>
+          <Registrant context={CONTESTED} marker="left"/>
+        </ShortcutSurfaceSuspensionProvider>
+        {rightMounted ? (
+          <ShortcutSurfaceSuspensionProvider suspended={false}>
+            <Registrant context={CONTESTED} marker="right"/>
+          </ShortcutSurfaceSuspensionProvider>
+        ) : null}
+      </Harness>
+    )
+
+    const {rerender} = render(tree(false, false))
+    expect(owner(CONTESTED)).toBe('left')
+
+    // Commit 1: the arriving lane mounts unsuspended and takes ownership.
+    rerender(tree(false, true))
+    expect(owner(CONTESTED)).toBe('right')
+
+    // Commit 2: the outgoing lane suspends.
+    rerender(tree(true, true))
+    expect(owner(CONTESTED)).toBe('right')
+  })
+
+  // The five cases above drive `useActionContextActivations` directly. The
+  // surfaces that actually exist reach it through the wrappers, so pin that
+  // the gate is inherited rather than re-implemented per entry point.
+  it('suspends a surface registered through the public `useActionContext` wrapper', () => {
+    const WrapperRegistrant = () => {
+      useActionContext(CTX_B, {marker: 'wrapped'} as Record<string, unknown>)
+      return null
+    }
+    const tree = (suspended: boolean) => (
+      <Harness>
+        <ShortcutSurfaceSuspensionProvider suspended={suspended}>
+          <WrapperRegistrant/>
+        </ShortcutSurfaceSuspensionProvider>
+      </Harness>
+    )
+
+    const {rerender} = render(tree(false))
+    expect(owner(CTX_B)).toBe('wrapped')
+
+    rerender(tree(true))
+    expect(owner(CTX_B)).toBe('none')
   })
 })
