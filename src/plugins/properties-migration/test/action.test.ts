@@ -84,6 +84,12 @@ const dialogThatSwitchesWorkspace = (repo: Repo) => async () => {
   return true
 }
 
+/** The counts `describeOutcome` reports on, for a run that migrated `blocks`
+ *  blocks cleanly. Shared by every describe that renders an outcome. */
+const counts = (blocks: number) =>
+  ({blocksMaterialized: blocks, valuesMaterializedTotal: blocks,
+    unmigrated: 0, orphanedOwnersSwept: 0})
+
 const invoke = (repo: Repo) =>
   migratePropertiesToBlocksAction({repo}).handler({} as never, {} as never)
 
@@ -708,9 +714,6 @@ describe('the orphan-definition step', () => {
 
 describe('what a completed run tells the operator', () => {
   const ran = {outcome: 'ran', undoHistoryCleared: false} as const
-  const counts = (blocks: number) =>
-    ({blocksMaterialized: blocks, valuesMaterializedTotal: blocks, unmigrated: 0, orphanedOwnersSwept: 0})
-
   it('calls a run that migrated nothing a failure, not a green "0 blocks"', async () => {
     // Failures are per-value by design, so a systematic problem — a codec
     // rejecting everything, storage refusing writes — otherwise came back as
@@ -781,10 +784,47 @@ describe('what a completed run tells the operator', () => {
   })
 })
 
-describe('what an aborted run tells the operator', () => {
-  const counts = (blocks: number) =>
-    ({blocksMaterialized: blocks, valuesMaterializedTotal: blocks, unmigrated: 0, orphanedOwnersSwept: 0})
+describe('every outcome says whether the history is gone', () => {
+  // Four branches were each found missing this sentence, one review round at a
+  // time. It is appended once at the wrapper now, so this walks the whole
+  // outcome union rather than the branch that happened to be reported.
+  const outcomes: OperatorBackfillResult[] = [
+    {outcome: 'ran', undoHistoryCleared: false},
+    {outcome: 'deferred', undoHistoryCleared: false, reason: 'a reason'},
+    {outcome: 'failed', undoHistoryCleared: false, reason: 'a reason'},
+    {outcome: 'held-by-peer', undoHistoryCleared: false},
+    {outcome: 'already-running', undoHistoryCleared: false},
+    {outcome: 'read-only', undoHistoryCleared: false},
+    {outcome: 'not-found', undoHistoryCleared: false},
+  ]
 
+  it('appends the undo notice to every outcome once the stack has been cleared', () => {
+    for (const result of outcomes) {
+      const {message} = describeOutcome(result, counts(0), false,
+                                        {flipped: false, undoCleared: true})
+      expect(message, result.outcome).toMatch(/Undo history for this workspace was cleared/)
+    }
+  })
+
+  it('says nothing about undo when nothing cleared it', () => {
+    for (const result of outcomes) {
+      const {message} = describeOutcome(result, counts(0), false,
+                                        {flipped: false, undoCleared: false})
+      expect(message, result.outcome).not.toMatch(/Undo history/)
+    }
+  })
+
+  it('covers the all-values-failed branch, which returns before the common tail', () => {
+    const {message} = describeOutcome(
+      {outcome: 'ran', undoHistoryCleared: false},
+      {blocksMaterialized: 0, valuesMaterializedTotal: 0, unmigrated: 5, orphanedOwnersSwept: 0},
+      false, {flipped: false, undoCleared: true})
+    expect(message).toMatch(/all 5 property value\(s\) failed/)
+    expect(message).toMatch(/Undo history for this workspace was cleared/)
+  })
+})
+
+describe('what an aborted run tells the operator', () => {
   it('does not say "Not started" for a run that wrote and dropped the undo stack', async () => {
     // The per-transaction preconditions abort MID-run, and on a connected
     // device that is the expected ending — after a large part of the graph is

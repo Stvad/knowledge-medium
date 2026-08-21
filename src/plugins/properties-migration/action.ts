@@ -81,7 +81,15 @@ export const describeOutcome = (
     = {flipped: false, undoCleared: false},
 ): {message: string; failed: boolean; followUp?: string} => {
   const described = describePassOutcome(result, counts, editedUnderPass, undoCleared)
-  return flipped ? {...described, message: `${FLIP_LANDED} ${described.message}`} : described
+  // Both tails appended HERE, not inside the switch. Four separate omissions of
+  // the undo sentence were found one review round at a time, each in a branch
+  // that had simply forgotten to add it — which is the shape of a rule kept by
+  // repetition. A branch cannot forget a suffix it does not apply.
+  const cleared = result.undoHistoryCleared || undoCleared
+  return {
+    ...described,
+    message: (flipped ? `${FLIP_LANDED} ` : '') + described.message + undoNote(cleared),
+  }
 }
 
 const describePassOutcome = (
@@ -122,8 +130,7 @@ const describePassOutcome = (
           (editedUnderPass
             ? ' The workspace was edited while it ran, so some values may already be behind —' +
               ' run this again.'
-            : '') +
-          undoNote(result.undoHistoryCleared || undoCleared),
+            : ''),
         // Surfaced through `done`, not `fail`: the pass DID complete, and
         // saying otherwise would send an operator looking for a broken run
         // rather than for the handful of values named in the console.
@@ -145,7 +152,7 @@ const describePassOutcome = (
         message: (result.undoHistoryCleared || undoCleared
           ? `Stopped before finishing — ${withPeriod(result.reason)} Already-migrated blocks ` +
             'are skipped, so run it again.'
-          : `Not started — ${withPeriod(result.reason)} Try again shortly.`) + undoNote(result.undoHistoryCleared || undoCleared),
+          : `Not started — ${withPeriod(result.reason)} Try again shortly.`),
         failed: true,
       }
     case 'failed':
@@ -153,7 +160,7 @@ const describePassOutcome = (
         // No blanket "run it again": true for the give-up and for an
         // unexpected throw, false for a missing claim seam, which fails
         // identically every time. Each reason carries its own.
-        message: `Stopped partway — ${withPeriod(result.reason)}${undoNote(result.undoHistoryCleared || undoCleared)}`,
+        message: `Stopped partway — ${withPeriod(result.reason)}`,
         failed: true,
       }
     case 'held-by-peer':
@@ -164,25 +171,24 @@ const describePassOutcome = (
         // clears. Naming where the claim lives is the whole recovery.
         message: 'Another client holds this migration — another device, or another tab of ' +
           'this browser. Wait for it to finish; if nothing is running, check the claim ' +
-          'block on the "System Migrations (km)" page and delete it to release the pass.' +
-          undoNote(result.undoHistoryCleared || undoCleared),
+          'block on the "System Migrations (km)" page and delete it to release the pass.',
         failed: true,
       }
     case 'already-running':
       return {
-        message: 'The migration is already running on this device.' + undoNote(result.undoHistoryCleared || undoCleared),
+        message: 'The migration is already running on this device.',
         failed: false,
       }
     case 'read-only':
       return {
         message: 'This workspace is read-only, so the migration cannot write.'
-          + undoNote(result.undoHistoryCleared || undoCleared),
+         ,
         failed: true,
       }
     case 'not-found':
       return {
         message: `No migration is registered under "${PROPERTY_CELL_BACKFILL_ID}".`
-          + undoNote(result.undoHistoryCleared || undoCleared),
+         ,
         failed: true,
       }
   }
