@@ -171,6 +171,18 @@ describe('planPropertyDefinitionSynthesis', () => {
     expect(plan.candidates.map(c => c.key).sort()).toEqual([' padded ', 'has]]bracket'])
   })
 
+  it('refuses a key the database could not hand back faithfully', async () => {
+    // A lone UTF-16 surrogate in a property key comes back from `json_each` as
+    // replacement characters (measured: three U+FFFD for "\ud800"), so what the
+    // scan sees is not what the data holds. Minting for the mangled spelling
+    // would leave the real key orphaned while the flip gate counted it covered.
+    await rawCell('b1', {'\ud800': 'x'})
+
+    const plan = await planFor()
+    expect(plan.candidates).toEqual([])
+    expect(plan.blockers[0]!.reason).toMatch(/replacement character/)
+  })
+
   it('refuses a workspace this device has not confirmed unencrypted', async () => {
     // The authority is the mode pin, not the server column — and note the row
     // here says 'none', so a denylist on the column would wave this through.
@@ -401,6 +413,29 @@ describe('applyPropertyDefinitionSynthesis: the id is occupied, or the key stopp
     // The type membership survives the restore patch — building the patch from
     // the four owned fields alone would drop `types` and un-type the definition.
     expect(repo.propertySchemaResolverFor(WS).resolve('demo:orphan').status).toBe('resolved')
+  })
+
+  it('publishes a converged definition with the BLOCK\'s preset, not the plan\'s guess', async () => {
+    // The block is live and may have been retyped deliberately. Publishing the
+    // plan's inferred preset would have the backfill read historical values
+    // under one codec and the projector replace it with another moments later.
+    await rawCell('b1', {'demo:orphan': 'hello'})
+    const plan = await planFor()
+    await applyPropertyDefinitionSynthesis(repo, plan)
+    const id = synthesizedPropertyDefinitionBlockId(WS, 'demo:orphan')
+    await repo.tx(async tx => { await tx.setProperty(id, presetIdProp, 'raw-json') },
+                  {scope: ChangeScope.BlockDefault, description: 'retype'})
+    const publish = vi.spyOn(repo.userSchemas, 'appendUserSchema')
+    vi.spyOn(repo, 'propertySchemaResolverFor').mockReturnValue({
+      resolve: () => ({status: 'identity-unavailable', reason: 'definition-unavailable'}),
+      resolveField: () => ({status: 'identity-unavailable', reason: 'definition-unavailable'}),
+      resolveBoundary: () => ({status: 'identity-unavailable', reason: 'definition-unavailable'}),
+    } as unknown as ReturnType<typeof repo.propertySchemaResolverFor>)
+
+    await applyPropertyDefinitionSynthesis(repo, plan)
+
+    expect(publish).toHaveBeenCalledWith(
+      expect.objectContaining({codec: expect.objectContaining({type: 'object'})}), id, WS)
   })
 
   it('publishes a converged definition too, not just one it created', async () => {

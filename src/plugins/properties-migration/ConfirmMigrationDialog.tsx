@@ -82,7 +82,12 @@ export const ConfirmMigrationDialog = ({
           {' '}no definition — written by an importer, a raw write, or a plugin that is no
           longer installed. They get one created for them first, hidden, with a type guessed
           from the values already stored. Nothing you can see changes; without it those
-          properties could never move.
+          properties could never move.{' '}
+          <strong>If a plugin or extension owns any of them, install or enable it before you
+          run this.</strong> Creating a definition here claims the name: re-enabling the owner
+          afterwards leaves two definitions competing, or — for an extension that declares
+          properties in code rather than as blocks — makes its writes start failing. Run{' '}
+          <code>audit-properties</code> first if you are not sure who wrote them.
         </p>}
         {repairableKeys > 0 && <p className="text-destructive">
           {properties(repairableKeys)} {repairableKeys === 1 ? 'has' : 'have'} a definition

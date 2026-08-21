@@ -217,6 +217,19 @@ export const keyCannotBeDefined = (key: string): string | null => {
     return 'the empty property key: a definition with no name is unusable ' +
       '(`parsePropertyDefinitionMetadata` rejects it), so no definition can ever back it'
   }
+  // The key as SQLite handed it back is not the key the data holds. A property
+  // key containing a lone UTF-16 surrogate is emitted by `json_each` as
+  // ill-formed UTF-8 and arrives here as replacement characters (measured:
+  // `"\ud800"` comes back as three U+FFFD). Minting for the mangled spelling
+  // would leave the real key orphaned while the flip gate counted it covered —
+  // so the safe reading is that any key carrying U+FFFD is one this pass cannot
+  // identify. A key that genuinely contains U+FFFD is itself corruption, and
+  // refusing it is the same right answer.
+  if (key.includes('\uFFFD')) {
+    return 'this key contains a Unicode replacement character, so what the database ' +
+      'returned may not be the key the data actually holds (a lone surrogate reads back ' +
+      'this way) — a definition minted for it would leave the real key behind'
+  }
   if (isGrammarShapedLabel(key)) {
     return `${JSON.stringify(key)} reads as a block reference, not a name. A definition is ` +
       'addressed as `[[name]]` wherever it is named, so this one would point at another ' +
@@ -382,6 +395,16 @@ const storedDefinitionName = (block: BlockData): string | undefined => {
   }
 }
 
+/** The kernel preset core a live definition block stores, when it is one this
+ *  pass can reproduce faithfully. Undefined for anything else — an extension
+ *  preset, a config-carrying one, or a missing/garbled id — because the point
+ *  of reading it is to publish the block's OWN behavior rather than a guess. */
+const storedPresetCore = (block: BlockData): AnyValuePresetCore | undefined => {
+  const raw = block.properties[presetIdProp.name]
+  if (typeof raw !== 'string') return undefined
+  return (kernelValuePresetCoresById as Record<string, AnyValuePresetCore>)[raw]
+}
+
 /** A live definition block already serving as `key`'s definition — the only
  *  occupant this pass may adopt.
  *
@@ -522,8 +545,23 @@ export const applyPropertyDefinitionSynthesis = async (
         // not caught up (another device's row just arrived, or an earlier run of
         // this gesture). Nothing to write; publishing is the whole fix, and the
         // caller's next step reads the registry rather than the database.
+        //
+        // Published from the BLOCK's preset, never the plan's inferred one. The
+        // block is live and may have been retyped deliberately; publishing the
+        // plan's guess would have the backfill read historical values under one
+        // codec and the projector replace it with another moments later. If its
+        // preset is not one this pass can reproduce, skip rather than guess —
+        // the flip then refuses and a re-run picks it up once the projector has
+        // caught up.
+        const storedPreset = storedPresetCore(occupancy.block)
+        if (!storedPreset) {
+          skipped.push({key: candidate.key,
+                        reason: `block ${id} defines this key with a preset this pass cannot `
+                          + 'reproduce; re-run once it is registered'})
+          continue
+        }
         converged += 1
-        registrations.push({blockId: id, schema: schemaFor(candidate.key, preset)})
+        registrations.push({blockId: id, schema: schemaFor(candidate.key, storedPreset)})
         continue
       }
       if (occupancy.verdict === 'tombstoned') {
