@@ -679,7 +679,13 @@ export interface NavigationEnsureOptions {
  *  else, and `ensureTarget` MUTATES: running it would create a page nobody then
  *  navigates to, and awaiting it would let a slow or failing create block a
  *  navigation that no longer depends on it. Never rejects, matching the
- *  fire-and-forget contract of every caller. */
+ *  fire-and-forget contract of every caller.
+ *
+ *  The INTENT seam only, deliberately: a `navigationVerb` decorator that
+ *  redirects or vetoes at EXECUTION time sees a target already materialised.
+ *  Moving the ensure inside `applyNavigation` would close that and open a worse
+ *  one — a wholesale `navigationVerb.impl` would then skip it entirely and
+ *  navigate to a page nothing ever created. */
 const navigateEnsuringTarget = async (
   repo: Repo,
   input: NavigateInput,
