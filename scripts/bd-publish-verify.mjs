@@ -327,9 +327,15 @@ const verifyMergeCommit = (n, deadline) => {
   const base = typeof pr?.base?.ref === 'string' ? pr.base.ref : ''
   const landedOnDefault = Boolean(base) && base === pr?.base?.repo?.default_branch
   const warn = !landedOnDefault
-    ? headCloses.length || commitCloses.length
-      ? `\n  close keywords here have NOT acted: this merged into ${base || 'another branch'}, and GitHub applies them only on the default branch. They act when this reaches it.`
-      : ''
+    ? (headCloses.length
+        ? `\n  close keywords in the merge commit have NOT acted: this merged into ${base || 'another branch'}, and GitHub applies them only on the default branch. They act if and when this commit reaches it.`
+        : '') +
+      // The PR's own commits may never reach the default branch at all — a
+      // squash with custom text discards them — so they get no promise of
+      // eventual closure, only of not having closed anything yet.
+      (commitCloses.length
+        ? `\n  (close keywords in the PR's own commits have not acted either, and may never: a squash with custom text does not land them)`
+        : '')
     : (headCloses.length
         ? `\n  ⚠ close keywords in the merge commit have ALREADY acted — if an issue above was closed wrongly, reopen it now (gh issue reopen <n>)`
         : '') +
@@ -389,6 +395,12 @@ const hookPostPublish = () => {
   // surfaces here instead of having to have been enumerated there.
   if (!all.length && !mergedPrs.length) {
     if (!isPostVerifiable(cmd)) return
+    // A command the tool reports as FAILED published nothing, so there is no
+    // unkept promise to report. This is read from the payload rather than
+    // inferred — the one innocent cause of "no target" the hook is actually
+    // told about. A covered command that failed AFTER publishing still has
+    // its URL in the output and never reaches here.
+    if (payload?.hook_event_name === 'PostToolUseFailure') return
     return emit([
       'this publish was treated as covered by the pre-publish gate, but its output named no object to read back — nothing has checked the references in what it published. Verify them yourself now (gh issue view <n>), and if this shape recurs, the gate should stop treating it as covered.',
     ])

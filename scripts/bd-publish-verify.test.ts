@@ -468,6 +468,16 @@ describe('bd-publish-verify process behavior', { timeout: 30_000 }, () => {
     expect(r.stdout).toBe('')
   })
 
+  // A command the tool reports as failed published nothing, so there is no
+  // unkept coverage promise — and telling the agent to go inspect a
+  // nonexistent object is the cry-wolf failure this report cannot afford.
+  it('stays silent when a covered command FAILED before publishing', () => {
+    const { hook } = makeRepo({ fixtures: {} })
+    const r = hook(PR_CREATE, 'HTTP 422: Validation Failed', { hook_event_name: 'PostToolUseFailure' })
+    expect(r.status).toBe(0)
+    expect(r.stdout).toBe('')
+  })
+
   // An uncovered publish was already checked BEFORE it shipped, so the same
   // empty read-back there is expected, not a surprise.
   it('stays silent when an uncovered publish names no object', () => {
@@ -510,6 +520,31 @@ describe('bd-publish-verify process behavior', { timeout: 30_000 }, () => {
     expect(context(r)).toContain('UNCONFIRMED')
     expect(context(r)).toContain('read it yourself before publishing it')
     expect(context(r)).not.toContain('is stale')
+  })
+
+  // Off the default branch nothing has closed yet — but the PR's own commits
+  // may never close anything at all, since a squash with custom text discards
+  // them. Promising eventual closure for those would be a different wrong
+  // answer from the one this branch exists to avoid.
+  it('keeps the squash caveat for the PR-s own commits on an off-default merge', () => {
+    const sha = 'aa11bb22cc3344556677889900aabbccddeeff11'
+    const { hook } = makeRepo({
+      fixtures: {
+        'repos/Stvad/knowledge-medium/pulls/652': {
+          html_url: url('pull/652'),
+          merged: true,
+          merge_commit_sha: sha,
+          base: { ref: 'release/2.0', repo: { default_branch: 'master' } },
+        },
+        [`repos/Stvad/knowledge-medium/commits/${sha}`]: { commit: { message: 'squashed (#652)' } },
+        'repos/Stvad/knowledge-medium/pulls/652/commits?per_page=100': [{ commit: { message: 'work\n\nFixes #700' } }],
+        'repos/Stvad/knowledge-medium/issues/700': { title: 'Still open', state: 'open' },
+      },
+    })
+    const r = hook('gh pr merge 652 --squash', '✓ Merged pull request #652 (squashed)')
+    expect(r.status).toBe(0)
+    expect(context(r)).toContain('may never')
+    expect(context(r)).not.toContain('ALREADY acted')
   })
 
   it('echoes the post-mode issue-reference table for published refs', () => {
