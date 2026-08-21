@@ -2080,7 +2080,7 @@ describe('retryable infrastructure failures (out of credits, expired login, netw
   // re-bill the same task without limit, outside the spend cap entirely.
   // Two independent proofs the model was reached, pinned separately:
   // streamed text, and a result payload on a non-streaming watcher.
-  it('parks a run that STREAMED a billed answer before dying, rather than refunding it', async () => {
+  it('parks a run that STREAMED an answer before dying, rather than replaying it', async () => {
     const {graph, blocks, propWrites, reconciles} = fakeGraph({
       backlinks: [{id: 'b-1'}],
       blocks: {'b-1': {content: '[[claude]] summarize inbox'}},
@@ -2106,7 +2106,7 @@ describe('retryable infrastructure failures (out of credits, expired login, netw
     expect(reconciles.at(-1)?.markdown).toContain('Here is most of the answer')
   })
 
-  it('counts streamed text as billed even when the watcher does not publish it', async () => {
+  it('counts streamed text as work done even when the watcher does not publish it', async () => {
     // streamReply defaults OFF, and it controls PUBLISHING, not observing.
     // If the engine only recorded streamed text for streaming watchers, a
     // default watcher whose run died mid-answer would look like it produced
@@ -2153,7 +2153,7 @@ describe('retryable infrastructure failures (out of credits, expired login, netw
     expect(reconciles.at(-1)?.markdown).toContain('model refused')
   })
 
-  it('parks a run that RETURNED a billed answer before dying (the codex shape)', async () => {
+  it('parks a run that RETURNED an answer before dying (the codex shape)', async () => {
     // codex keeps assistant text in resultText on a failed run and puts its
     // structured error in failureText, so resultText alone is the evidence
     // here. (claude cannot produce this shape — a failed claude envelope
@@ -2212,7 +2212,7 @@ describe('retryable infrastructure failures (out of credits, expired login, netw
     expect(runTask).toHaveBeenCalledTimes(2)
   })
 
-  it('leaves the query cursor advanced when a retryable-looking failure still billed a reply', async () => {
+  it('leaves the query cursor advanced when a retryable-looking failure still produced a reply', async () => {
     // Same "did it reach the model" test the mention path applies: rows
     // whose run produced billed output must not re-fire on the next tick.
     const {graph} = fakeGraph()
@@ -2477,7 +2477,7 @@ describe('retryable infrastructure failures (out of credits, expired login, netw
     expect(ids[0]).toBe(ids[1])   // the deferral rolls `attempt` back, so the id is stable
   })
 
-  it('counts streamed query output as billed, so its rows are not re-fired', async () => {
+  it('counts streamed query output as work done, so its rows are not re-fired', async () => {
     // The query callback recorded only `session` events, so it was blind to
     // the evidence the mention path relies on — and a claude run that
     // streamed a billed reply before a transport error left resultText empty.
@@ -2568,6 +2568,51 @@ describe('retryable infrastructure failures (out of credits, expired login, netw
     await engine.drain()
 
     expect(runTask).not.toHaveBeenCalled()
+  })
+
+  it('counts a TOOL CALL as work done, even with no assistant text', async () => {
+    // The model can request an MCP write with no textual preamble and then
+    // hit its usage limit on the next turn. Judging by text alone read that
+    // as "nothing ran" and replayed it — repeating a graph write, which is
+    // worse than the double-billing the text-only test was written for.
+    const {graph, blocks, propWrites} = fakeGraph({
+      backlinks: [{id: 'b-1'}],
+      blocks: {'b-1': {content: '[[claude]] file the inbox'}},
+    })
+    const state = memoryState()
+    const runTask = vi.fn(async (options: {onEvent?: (event: {kind: string, label?: string}) => void}) => {
+      options.onEvent?.({kind: 'activity', label: 'Updating a block'})   // an MCP write
+      return outOfCreditsRun()
+    })
+    const engine = engineWith({graph, state, runTask})
+
+    await engine.tick()
+    await engine.drain()
+
+    expect(propWrites.map(write => write.status)).toEqual(['running', 'error'])
+    expect(blocks.get('b-1')!.properties![PROPS.attempts]).toBe(1)
+    expect(state.launches).toHaveLength(1)
+  })
+
+  it('counts a tool call on a QUERY run too, so its rows are not re-fired', async () => {
+    const {graph} = fakeGraph()
+    graph.sqlAll = vi.fn(async () => [{id: 'a'}, {id: 'b'}])
+    const state = memoryState()
+    state.cursors.set('inbox', ['a'])
+    const runTask = vi.fn(async (options: {onEvent?: (event: {kind: string, label?: string}) => void}) => {
+      options.onEvent?.({kind: 'activity', label: 'Updating a block'})
+      return outOfCreditsRun()
+    })
+    const engine = engineWith({
+      graph, state, runTask,
+      config: parseConfig({watchers: [{kind: 'query', name: 'inbox', sql: 'SELECT id FROM blocks'}]}),
+    })
+
+    await engine.tick()
+    await engine.drain()
+
+    expect(state.cursors.get('inbox')).toEqual(['a', 'b'])
+    expect(state.launches).toHaveLength(1)
   })
 
   it('a genuine run failure still parks the task and does not arm a cooldown', async () => {

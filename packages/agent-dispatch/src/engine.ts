@@ -43,6 +43,50 @@ export interface EngineDeps {
 const truncate = (value: string, max = 500): string =>
   value.length > max ? `${value.slice(0, max)}…` : value
 
+/** Watches one run for proof the MODEL produced something — assistant text,
+ *  a tool call, or reasoning.
+ *
+ *  Deliberately NOT called "billed". That name asks who paid, which sends
+ *  you looking for output TEXT: a tool call with no textual preamble
+ *  produces none, and a run that made an MCP write and then hit a usage
+ *  limit was therefore replayed as though nothing had happened. It also
+ *  smuggles in a cost model that is not always true — for a local model
+ *  nothing is billed and a retry still repeats the work. The question the
+ *  engine actually asks is whether a retry would REPEAT something: tokens
+ *  spent, or worse, a graph write already made.
+ *
+ *  One definition because two paths ask it. Answering it inline in each is
+ *  how they drifted — the mention path read streamed text, the query path
+ *  read `resultText`, and neither counted a tool call.
+ *
+ *  A session id is NOT proof: the runner emits it on the first line, before
+ *  any model call. Treating it as proof would park every out-of-credits
+ *  run, which is the bug this whole path exists to fix. */
+const createRunWatch = () => {
+  let responded = false
+  let text = ''
+  return {
+    observe: (event: RunEvent) => {
+      if (event.kind === 'text') {
+        responded = true
+        text = event.text
+      } else if (event.kind === 'activity') {
+        // A tool call or a reasoning step: the model produced it, and a tool
+        // call may already have written to the graph.
+        responded = true
+      }
+    },
+    /** The finished result counts too: a transcript whose events the parser
+     *  could not follow still proves the model answered if text came back. */
+    observeResult: (result: AgentRunResult) => {
+      if (result.resultText.trim()) responded = true
+    },
+    get modelResponded(): boolean { return responded },
+    /** Cumulative assistant text, for preserving a partial answer. */
+    get streamedText(): string { return text },
+  }
+}
+
 /** Which logical RUN this is — the answer to "is this the same work as
  *  before, or new work?", which three places have to agree on.
  *
@@ -429,7 +473,7 @@ export const createEngine = (deps: EngineDeps) => {
     // Last cumulative text streamed into the reply — kept so a FAILED run
     // that had already streamed most of its (billed) answer keeps that
     // partial (collapsed to a single note block) instead of discarding it.
-    let lastStreamedText = ''
+    const watch = createRunWatch()
     // Set once the run's LAST reply write has landed (the ok answer, the
     // failure/partial note, or the retry-deferral note). The infra-catch
     // checks it so a transient blip on the *props write* — which lands
@@ -520,7 +564,7 @@ export const createEngine = (deps: EngineDeps) => {
       // budget would defer REAL work for an hour once the outage lifts.
       // (Same reasoning as the pre-claim refunds above.)
       refundLaunch(launchStamp)
-      const partial = lastStreamedText.trim()
+      const partial = watch.streamedText.trim()
       const waitingNote = `⏳ agent-dispatch: ${failure.label} — nothing ran; retrying automatically. (${detail})`
       // Replaces any streamed placeholder/partial in place (same replyKey,
       // since the attempt number is rolled back too), so the retry's real
@@ -657,18 +701,14 @@ export const createEngine = (deps: EngineDeps) => {
           ? resumeOptionsForRun(runOptionsFor(watcher, prompt, sessionId, undefined, abortController.signal))
           : null
       const onEvent = (event: RunEvent) => {
+        watch.observe(event)
         if (event.kind === 'activity') {
           if (event.label === lastActivity) return
           lastActivity = event.label
           queueWrite(() => graph.setActivity(sourceId, event.label))
         } else if (event.kind === 'text') {
-          // Recorded even with streamReply OFF (the default): assistant text
-          // is the only cross-runner evidence that a failed run reached the
-          // model — a claude run that dies mid-stream emits no `result` line
-          // at all, and a failed one's envelope is an error, not an answer.
-          // The terminal-vs-defer decision below depends on it. streamReply
-          // only controls whether it is also PUBLISHED as it arrives.
-          lastStreamedText = event.text
+          // The watch above already recorded it, whatever streamReply says:
+          // that flag controls PUBLISHING, not observing.
           if (!watcher.streamReply) return
           const nowMs = now()
           if (nowMs - lastTextWriteMs < 1_500) return
@@ -717,22 +757,18 @@ export const createEngine = (deps: EngineDeps) => {
       // Why the run ended, for a failure the user did NOT ask for. A
       // cancel is deliberate and terminal, so it's never classified.
       const failure = result.ok || abortController.signal.aborted ? null : classifyRunFailure(result)
-      // A retryable CLASS only means "nothing ran" if nothing ran. A run
-      // can stream a billed answer and THEN die on a transport error
-      // (ECONNRESET mid-stream classifies as `network`): the model was
-      // reached and the tokens are spent, so handing back the spend slot
-      // and the attempt would let a repeating mid-stream disconnect bill
-      // the same task without limit, outside `runsPerHour` entirely.
-      // Assistant text is the proof — a session id is NOT, since the runner
-      // emits it on the first line, before any model call.
+      // A retryable CLASS only means "nothing ran" if nothing ran. A run can
+      // answer — or call a tool — and THEN die on a transport error
+      // (ECONNRESET mid-stream classifies as `network`); handing back the
+      // spend slot and the attempt would replay work that already happened.
       //
       // DEPENDS ON a runner contract: `resultText` is the ANSWER and is
       // empty on a failed run, while the CLI's error goes to `failureText`.
       // runClaude used to put its error envelope in both, which made every
-      // out-of-credits failure read as a billed answer and parked exactly
-      // what this path exists to defer. Pinned by runner.test.ts's
-      // "fails when the envelope reports is_error even with exit 0".
-      const reachedModel = Boolean(lastStreamedText.trim() || result.resultText.trim())
+      // out-of-credits failure read as an answer and parked exactly what
+      // this path exists to defer. Pinned by runner.test.ts's "fails when
+      // the envelope reports is_error even with exit 0".
+      watch.observeResult(result)
 
       if (result.ok) {
         // Deliberately NOT gated on signal.aborted: if the child completed
@@ -766,7 +802,7 @@ export const createEngine = (deps: EngineDeps) => {
         })
         clearInfraCooldown(laneOf(watcher))
         log(`[${watcher.name}] done ${sourceId}${result.sessionId ? ` (session ${result.sessionId})` : ''}`)
-      } else if (failure?.retryable && !reachedModel) {
+      } else if (failure?.retryable && !watch.modelResponded) {
         // NOT a task failure — the run never got to attempt it (out of
         // credits, expired login, rate limited, network down). Parking it
         // `error` here is what turned a single credit outage into a queue
@@ -797,7 +833,7 @@ export const createEngine = (deps: EngineDeps) => {
         // retry recovers it in place. Preserves a streamed partial: a run
         // that died after streaming most of its billed answer keeps that
         // text with the note appended, rather than replacing it.
-        const partial = lastStreamedText.trim()
+        const partial = watch.streamedText.trim()
         await reconcileReplyWithRetry(
           partial ? `${partial}\n\n${failureNote}` : failureNote,
           {final: true, shape: 'block'},
@@ -1129,17 +1165,11 @@ export const createEngine = (deps: EngineDeps) => {
       // live, not just from the terminal line. Query runs aren't threaded,
       // so there's no block to persist it to — the log is the only record.
       let loggedSession: string | null = null
-      // Streamed assistant text, for the same reached-the-model test the
-      // mention path applies. Recording only `session` events left this path
-      // blind: a failed claude envelope carries no answer in `resultText`, so
-      // a run that streamed a billed reply and then hit a transport error
-      // looked like it had produced nothing — and got its slot refunded and
-      // its rows re-fired, billing them again.
-      let streamedText = ''
+      const watch = createRunWatch()
       let result: AgentRunResult
       try {
         result = await runTask(runOptionsFor(watcher, prompt, undefined, event => {
-          if (event.kind === 'text') streamedText = event.text
+          watch.observe(event)
           if (event.kind === 'session' && !loggedSession) {
             loggedSession = event.sessionId
             log(`[${watcher.name}] session ${event.sessionId}`)
@@ -1167,10 +1197,11 @@ export const createEngine = (deps: EngineDeps) => {
         return
       }
       const failure = classifyRunFailure(result)
-      // Same "did it reach the model" test the mention path applies: a run
-      // that streamed a billed answer before dying is not an un-attempt,
-      // so it must not hand its spend slot back or re-fire its rows.
-      if (!failure.retryable || streamedText.trim() || result.resultText.trim()) {
+      watch.observeResult(result)
+      // Same test the mention path applies: a run that answered — or called
+      // a tool — before dying is not an un-attempt, so it must not hand its
+      // spend slot back or re-fire its rows.
+      if (!failure.retryable || watch.modelResponded) {
         clearInfraCooldown(lane)
         log(`[${watcher.name}] FAILED${session ? ` (session ${session})` : ''}: exit ${result.exitCode} ${truncate(result.stderr.trim())}`)
         return
