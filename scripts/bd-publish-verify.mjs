@@ -251,9 +251,16 @@ const verifyTarget = (t, { reportIds, deadline }) => {
       const n = byId.get(id)
       if (!n) return `${id} → no GitHub issue yet; run pnpm bd:sync`
       const info = Date.now() < deadline ? fetchIssueInfo(n) : null
-      return info && typeof info === 'object'
-        ? `${id} → #${n} ("${info.title}")`
-        : `${id} → #${n} DID NOT RESOLVE — do not publish this number; check the bead's External: field`
+      if (info && typeof info === 'object') return `${id} → #${n} ("${info.title}")`
+      // A confirmed 404 and a lookup that did not happen call for different
+      // repairs: one means the bead's link is stale, the other means nothing
+      // about the bead. Reporting a failed lookup as the former sends the
+      // agent to fix a link that may be fine — and the reference table below
+      // retries, so it can contradict this line outright. Neither number is
+      // safe to publish from here, which is what both messages say.
+      return info === 'not-found'
+        ? `${id} → #${n} DOES NOT EXIST — do not publish this number; the bead's External: field is stale`
+        : `${id} → #${n} UNCONFIRMED — could not be checked here; read it yourself before publishing it`
     })
     notes.push(
       `${label} publishes bead ids, which are opaque to GitHub readers — replace each confirmed one (gh pr edit / gh issue edit / gh api PATCH): ` +
@@ -364,7 +371,12 @@ const hookPostPublish = () => {
       : typeof payload?.error === 'string'
         ? payload.error
         : ''
-  if (!cmd || !out) return
+  // Empty output is NOT an early exit: a covered publish that printed
+  // nothing is precisely a coverage claim that cannot be honoured, and the
+  // no-target branch below is what says so. Returning here would make the
+  // report's promise — that an unkeepable claim is always visible — false in
+  // the one case where the hook has least to go on.
+  if (!cmd) return
   if (!matchesAnyPublish(cmd)) return
   const all = publishedTargets(cmd, out)
   const allMerged = matchesPrCommand(cmd) ? mergedPrNumbers(out) : []

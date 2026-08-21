@@ -448,6 +448,16 @@ describe('bd-publish-verify process behavior', { timeout: 30_000 }, () => {
     expect(context(r)).toContain('nothing has checked the references')
   })
 
+  // Empty output is the case with LEAST to go on, so it is the last place the
+  // report may fall silent: the gate skipped this text on the read-back's
+  // promise, and printing nothing does not keep it.
+  it('reports a covered publish that printed nothing at all', () => {
+    const { hook } = makeRepo({ fixtures: {} })
+    const r = hook(PR_CREATE, '')
+    expect(r.status).toBe(0)
+    expect(context(r)).toContain('treated as covered by the pre-publish gate')
+  })
+
   // An uncovered publish was already checked BEFORE it shipped, so the same
   // empty read-back there is expected, not a surprise.
   it('stays silent when an uncovered publish names no object', () => {
@@ -459,7 +469,7 @@ describe('bd-publish-verify process behavior', { timeout: 30_000 }, () => {
 
   // The substitution line is an instruction an agent can act on without
   // reading the table below it, so the number on it must be confirmed.
-  it('refuses to recommend a bead mapping whose issue does not resolve', () => {
+  it('reports a bead mapping whose issue 404s as stale, not as unchecked', () => {
     const { hook } = makeRepo({
       fixtures: {
         'repos/Stvad/knowledge-medium/pulls/652': { html_url: url('pull/652'), title: 'T', body: 'tracks km-abc' },
@@ -469,8 +479,27 @@ describe('bd-publish-verify process behavior', { timeout: 30_000 }, () => {
     })
     const r = hook(PR_CREATE, url('pull/652'))
     expect(r.status).toBe(0)
-    expect(context(r)).toContain('DID NOT RESOLVE')
+    expect(context(r)).toContain('DOES NOT EXIST')
+    expect(context(r)).toContain('External: field is stale')
     expect(context(r)).toContain('do not publish this number')
+  })
+
+  // A lookup that FAILED says nothing about the bead — advising a repair of
+  // its External: field would send the agent after a link that may be fine,
+  // and the reference table retries and can contradict this line outright.
+  it('reports a bead mapping it could not check as unconfirmed, not as stale', () => {
+    const { hook } = makeRepo({
+      fixtures: {
+        'repos/Stvad/knowledge-medium/pulls/652': { html_url: url('pull/652'), title: 'T', body: 'tracks km-abc' },
+        'repos/Stvad/knowledge-medium/issues/12#fail': { message: 'Server Error' },
+      },
+      shows: [[{ id: 'km-abc', external_ref: url('issues/12') }]],
+    })
+    const r = hook(PR_CREATE, url('pull/652'))
+    expect(r.status).toBe(0)
+    expect(context(r)).toContain('UNCONFIRMED')
+    expect(context(r)).toContain('read it yourself before publishing it')
+    expect(context(r)).not.toContain('is stale')
   })
 
   it('echoes the post-mode issue-reference table for published refs', () => {
