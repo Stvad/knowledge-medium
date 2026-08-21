@@ -34,6 +34,7 @@ import {
   todayIso,
 } from '@/plugins/daily-notes'
 import { todayDailyNoteLanding } from '@/plugins/daily-notes/landing.js'
+import { aliasDataExtension } from '@/plugins/alias/dataExtension.js'
 
 const WS = 'ws-1'
 
@@ -50,7 +51,12 @@ const setup = async (): Promise<Harness> => {
   const { repo, cache } = createTestRepo({
     db: h.db,
     user: {id: 'user-1'},
-    extensions: [dailyNotesDataExtension],
+    // `aliasDataExtension` for the processor that reconciles content against
+    // aliases. Nothing here currently depends on it — this is about the next
+    // test written in this file, since without it a daily-note repro runs with
+    // the mechanism it is about switched off and passes for that reason. The
+    // restore-rename bug hid behind exactly that; see restoreCollision.test.ts.
+    extensions: [dailyNotesDataExtension, aliasDataExtension],
   })
   return {h, cache, repo}
 }
