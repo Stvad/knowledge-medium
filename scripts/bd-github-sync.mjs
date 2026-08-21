@@ -1075,20 +1075,32 @@ const hookPrePr = () => {
   // excluded: the Bash tool merges stderr into the captured stdout anyway.
   // A gh call INSIDE a substitution is equally blind — the shell captures
   // its output — while a substitution merely feeding an argument is not.
-  const redirected = /(?<!2)>(?!&2)/.test(sk)
+  // …as is one piped into a consumer, and one aimed at a FOREIGN repo via
+  // -R/--repo: the verifier's URL pattern is pinned to this repo, so a
+  // foreign publish has no post-check — its refs run against OUR issue
+  // space here (mostly not-found, forcing attention), the same
+  // no-target-parsing rule the gate has always used for -R.
+  // A pipe loses the publish's output only when it sits AFTER the gh call —
+  // a pipe INTO gh (stdin-fed publishes) leaves stdout for the verifier and
+  // stays post-owned. Crude positional test, deliberately not a parser.
+  const pipeAfterGh = sk.includes('|') && sk.lastIndexOf('|') > sk.lastIndexOf('gh ')
+  const outputLost = /(?<!2)>(?!&2)/.test(sk) || pipeAfterGh
   const capturedGh = /\$\([^)]*\bgh\s|`[^`]*\bgh\s/.test(cmd)
+  const foreignish = /(?<![\w-])(?:-R|--repo)(?:=|\s)/.test(sk)
   const blind =
     matchesUnrepairableCommand(cmd) ||
     graphqlApi ||
     opaqueApi ||
-    ((isPublish || apiPublish) && (redirected || capturedGh))
+    ((isPublish || apiPublish) && (outputLost || capturedGh || foreignish))
   if (blind && !(allowsIssueRefs(cmd) && allowsBeadIds(cmd))) {
     // Any *file long flag (body-file, file, notes-file, …), --template and
-    // --input carry text this gate cannot read; -F/-T are matched without a
-    // trailing boundary because the CLI accepts ATTACHED values (-Fmsgfile).
+    // --input carry text this gate cannot read. Short -F/-T are file flags
+    // only OUTSIDE api commands (matched bare — the CLI accepts ATTACHED
+    // values like -Fmsgfile); on gh api, -F is an inline typed FIELD and
+    // only its @<path>/@- values read externally, which the @ signal covers.
     const textOutsideCommand =
-      /(?<![\w-])--(?:[a-z-]*file|input|template)\b|(?<![\w-])-[FT]|[$`]/.test(cmd) ||
-      (matchesApiPublish(cmd) && /@/.test(cmd))
+      /(?<![\w-])--(?:[a-z-]*file|input|template)\b|[$`]/.test(cmd) ||
+      (matchesApiPublish(cmd) ? /@/.test(cmd) : /(?<![\w-])-[FT]/.test(cmd))
     if (textOutsideCommand) {
       console.error(
         'This publish (merge/review/close/graphql/hidden-output) carries text this gate cannot fully read from the command — a file or payload flag, an @-reference, or shell expansion — and nothing verifies it after publication either. Publish literal inline text (readable text gets verified and echoed) — or, after checking every reference and bead id in it yourself, re-run with KM_ISSUE_REFS_OK=1 KM_ALLOW_BEAD_IDS=1 prefixed.',

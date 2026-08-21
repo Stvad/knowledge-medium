@@ -1110,8 +1110,7 @@ describe('hookPrePr process behavior', { timeout: 20_000 }, () => {
   })
 
   // The legs are INDEPENDENT: a publish verb in the same invocation must not
-  // swallow the commit check (shipped exactly that — the mixed command below
-  // exited 0 while its close keyword rode to the default branch unchecked).
+  // swallow the commit check.
   it('gates commit close keywords even when the invocation also publishes', () => {
     const { hook } = makeRepo({ dbReady: true, ghIssues: { 700: { title: 'Some PR', state: 'open', pull_request: {} } } })
     const r = hook('git commit -m "land it\n\nFixes #700" && gh pr comment 12 --body "posted"')
@@ -1180,6 +1179,11 @@ describe('hookPrePr process behavior', { timeout: 20_000 }, () => {
     expect(hook('gh pr edit 12 --body "relates to #653" 2>/dev/null').status).toBe(0)
     // command substitution captures the URL the same way a redirect does…
     expect(hook('captured=$(gh pr edit 12 --body="Fixes #700")').status).toBe(2)
+    // …as does a pipe AFTER the publish; a pipe INTO it stays post-owned
+    expect(hook('gh pr edit 12 --body="Fixes #700" | tail -n 0').status).toBe(2)
+    // a foreign -R publish has no post-check (the verifier is repo-pinned) —
+    // its refs run against our space, mostly not-found, forcing attention
+    expect(hook('gh -R owner/other pr edit 12 --body="Fixes #700"').status).toBe(2)
     // …but a substitution merely FEEDING an argument is not a captured publish
     expect(hook('gh pr comment 1 --body "$(cat body.md)"').status).toBe(0)
   })
@@ -1234,8 +1238,11 @@ describe('hookPrePr process behavior', { timeout: 20_000 }, () => {
     const jq = hook('gh api repos/Stvad/knowledge-medium/issues/1/comments -f body="tracks km-zzzz" --jq .id')
     expect(jq.status).toBe(2)
     expect(jq.stderr).toContain('km-zzzz')
-    // clean readable text has nothing to confirm — no blanket block
+    // clean readable text has nothing to confirm — no blanket block; -F on
+    // gh api is an inline typed FIELD, a file only via @ (which signals)
     expect(hook('gh api --silent repos/Stvad/knowledge-medium/issues/1/comments -f body=done').status).toBe(0)
+    expect(hook('gh api --silent repos/Stvad/knowledge-medium/issues/1/comments -F body=done').status).toBe(0)
+    expect(hook('gh api --silent repos/Stvad/knowledge-medium/issues/1/comments -F body=@notes.md').status).toBe(2)
     expect(hook('gh api --silent --method GET repos/Stvad/knowledge-medium/issues -f state=open').status).toBe(0)
   })
 
@@ -1275,8 +1282,7 @@ describe('hookPrePr process behavior', { timeout: 20_000 }, () => {
   })
 
   // Same independence for --silent api mutations: the refs approval unlocks
-  // the silent block, not the bead-id scan of the raw command (reproduced by
-  // review: this exited 0 and published the opaque id unverifiable).
+  // the silent block, never the bead-id scan of the raw command.
   it('still scans refs-approved silent api mutations for bead ids', () => {
     const { hook } = makeRepo({ dbReady: true })
     const r = hook('KM_ISSUE_REFS_OK=1 gh api --silent repos/Stvad/knowledge-medium/issues/12/comments -f body=km-zzzz')
