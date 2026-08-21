@@ -189,6 +189,19 @@ export const hasExplicitGetMethod = cmd => EXPLICIT_READ.test(commandSkeleton(cm
 // verifier refuses api-mode repair on compounds: an implicit-read sibling's
 // response can be the only html_url in the merged output, and attributing
 // the response to the mutating segment would be shell parsing.
+// gh's edit verbs can change ONLY metadata (--add-label and friends);
+// repairing a body such an edit never touched would rewrite historical
+// text — possibly a deliberate, escape-approved literal, since the escape
+// is not stored on the object. The text-bearing flags are the closed set
+// the edit verbs take, tested on the raw text for attached forms.
+const GH_EDIT = new RegExp(
+  SEGMENT_START + COMMAND_PREFIXES + String.raw`(?:\S*\/)?gh\s+` + GH_GLOBAL_OPTS + String.raw`(?:pr|issue|release)\s+edit\b`,
+  'm',
+)
+export const matchesTextlessEdit = cmd =>
+  GH_EDIT.test(commandSkeleton(cmd)) &&
+  !/(?<![\w-])(?:--body|--title|--body-file|--notes|--notes-file|-[btFT])/.test(cmd)
+
 export const isCompoundCommand = cmd => {
   // Substitutions execute even inside double quotes, so only single-quoted
   // spans (which never execute) are blanked before the $/backtick test;

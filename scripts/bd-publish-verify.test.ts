@@ -733,7 +733,11 @@ describe('bd-publish-verify process behavior', { timeout: 30_000 }, () => {
     const r = hook('gh pr merge 652 --rebase', '✓ Merged pull request #652 (feat)')
     expect(r.status).toBe(0)
     expect(context(r)).toContain('#701 → "Closed by rebase"')
-    expect(context(r)).toContain('ALREADY acted')
+    // only the head commit is known landed under every strategy — a squash
+    // with custom text does not land PR commits, so their keywords get the
+    // strategy-conditional line, never the reopen prompt
+    expect(context(r)).not.toContain('ALREADY acted')
+    expect(context(r)).toContain('acted only if this was a merge or rebase')
   })
 
   // A FAILED command published nothing — an object its error output names
@@ -772,6 +776,38 @@ describe('bd-publish-verify process behavior', { timeout: 30_000 }, () => {
     const ctx = JSON.parse(r.stdout).hookSpecificOutput.additionalContext
     expect(ctx).toContain('1 additional merged PR(s) not read back')
     expect(ctx).toContain('only the first 100 landed commits were scanned')
+  })
+
+  // A metadata-only edit never touched the body it fetched — repairing it
+  // would rewrite historical text, possibly a deliberately escaped literal.
+  it('keeps metadata-only edits echo-only', () => {
+    const { hook, repo } = makeRepo({
+      fixtures: {
+        'repos/Stvad/knowledge-medium/pulls/652': { html_url: url('pull/652'), title: 'T', body: 'literal km-abc' },
+        'repos/Stvad/knowledge-medium/issues/12': { title: 'Tracked issue', state: 'open' },
+      },
+      shows: [[{ id: 'km-abc', external_ref: url('issues/12') }]],
+    })
+    const r = hook('gh pr edit 652 --add-label bug', url('pull/652'))
+    expect(r.status).toBe(0)
+    expect(context(r)).toContain('historical text')
+    expect(existsSync(join(repo, patchName('repos/Stvad/knowledge-medium/pulls/652')))).toBe(false)
+  })
+
+  // The mint path can cost ~75s of child timeouts — a late start would
+  // overrun the host kill with the repair unreported.
+  it('skips the bead-id leg when too little budget remains for a mint', () => {
+    const { hook, shimCalls } = makeRepo({
+      budgetMs: 40_000,
+      fixtures: {
+        'repos/Stvad/knowledge-medium/pulls/652': { html_url: url('pull/652'), title: 'T', body: 'tracks km-zzzz' },
+      },
+      shows: [[{ id: 'km-zzzz', external_ref: null }]],
+    })
+    const r = hook(PR_CREATE, url('pull/652'))
+    expect(r.status).toBe(0)
+    expect(context(r)).toContain('not enough time budget')
+    expect(shimCalls()).not.toContain('bd ')
   })
 
   it('suppresses writes under BD_GITHUB_SYNC_DRY=1 but still reports what it would do', () => {

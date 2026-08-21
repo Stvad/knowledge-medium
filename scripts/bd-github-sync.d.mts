@@ -7,6 +7,7 @@ export declare const matchesPrCommand: (cmd: string) => boolean
 export declare const matchesApiPublish: (cmd: string) => boolean
 export declare const hasExplicitGetMethod: (cmd: string) => boolean
 export declare const isCompoundCommand: (cmd: string) => boolean
+export declare const matchesTextlessEdit: (cmd: string) => boolean
 export declare const repairableKinds: (cmd: string) => Set<string>
 export declare const tryRun: (file: string, args: string[], opts?: object) => string | null
 export declare const preconditions: (root?: string | null) => { ok: boolean; reason?: string; root?: string; env?: Record<string, string | undefined> }

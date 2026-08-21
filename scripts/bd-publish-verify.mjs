@@ -69,6 +69,7 @@ import {
   issueRefsTable,
   matchesApiPublish,
   matchesPrCommand,
+  matchesTextlessEdit,
   repairableKinds,
   tryRun,
 } from './bd-github-sync.mjs'
@@ -259,7 +260,12 @@ const verifyTarget = (t, { dry, repairVeto, rewriteAllowed, deadline }) => {
   let finalBody = typeof fetched.body === 'string' ? fetched.body : ''
 
   const ids = rewriteAllowed ? extractBeadIds(`${finalTitle}\n${finalBody}`) : []
-  if (ids.length) {
+  if (ids.length && deadline - Date.now() < 50_000) {
+    // The mint path alone can cost ~75s of child timeouts (bd show 15s +
+    // sync 45s + bd show 15s) — started late it would overrun the host's
+    // 120s kill with the repair unreported.
+    notes.push(`did NOT look up or rewrite bead ids in ${label} — not enough time budget left; run pnpm bd:sync, then fix by hand`)
+  } else if (ids.length) {
     // A vetoed repair must not mint either: reading an object (an explicit
     // GET, or one of several candidates) is no licence to create public
     // issues for the bead ids it happens to mention.
@@ -379,10 +385,19 @@ const verifyMergeCommit = (n, deadline) => {
   const budget = Math.max(0, Math.floor((deadline - Date.now()) / GH_TIMEOUT) - 1)
   const cap = Math.min(REFS_CAP, budget)
   if (cap === 0) return [`merge commit of #${n}: ${refs.length} issue references not echoed (out of time budget) — check them yourself`]
-  const closes = closeKeywordRefs(message).filter(r => r !== n)
-  const warn = closes.length
-    ? `\n  ⚠ close keywords in a merge commit have ALREADY acted — if an issue above was closed wrongly, reopen it now (gh issue reopen <n>)`
-    : ''
+  // Only the HEAD commit's text is known to have landed under every merge
+  // strategy — a squash with custom subject/body does not land the PR's own
+  // commit messages, so their close keywords may never have acted and must
+  // not prompt a reopen.
+  const headCloses = closeKeywordRefs(headMsg).filter(r => r !== n)
+  const commitCloses = closeKeywordRefs(commitMsgs.join('\n')).filter(r => r !== n && !headCloses.includes(r))
+  const warn =
+    (headCloses.length
+      ? `\n  ⚠ close keywords in the merge commit have ALREADY acted — if an issue above was closed wrongly, reopen it now (gh issue reopen <n>)`
+      : '') +
+    (commitCloses.length
+      ? `\n  (close keywords in the PR's own commits acted only if this was a merge or rebase — a squash with custom text did not land them)`
+      : '')
   const capNote = refs.length > cap ? `\n  …and ${refs.length - cap} more references not echoed` : ''
   return [`merge commit ${pr.merge_commit_sha.slice(0, 9)} of #${n}:\n${issueRefsTable(message, refs.slice(0, cap), 'post')}${capNote}${pageNote}${warn}`]
 }
@@ -422,8 +437,10 @@ const hookPostPublish = () => {
   const repairVeto =
     payload?.hook_event_name === 'PostToolUseFailure'
       ? 'the command failed — objects named in its error output are echoed, never written'
-      : all.length > 1
-      ? 'the output names more than one object, so this hook cannot tell which one the command published'
+      : matchesTextlessEdit(cmd)
+        ? 'this edit changed no text field — the fetched body is historical text this command never touched'
+        : all.length > 1
+          ? 'the output names more than one object, so this hook cannot tell which one the command published'
         : hasExplicitGetMethod(cmd)
           ? 'the command carries an explicit GET, and an object a read segment printed must never be written'
           : isCompoundCommand(cmd)
