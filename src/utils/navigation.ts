@@ -628,6 +628,21 @@ const resolveNavigationIntent = (
     : decision
 }
 
+/** The DOM half of `applyNavigationDecision`, split out for the surface that
+ *  can't execute the navigation in the same breath (`ensureTarget` below):
+ *  gating MUST happen synchronously, inside the browser's dispatch phase, since
+ *  after an `await` the ancestor handlers have run and the default action is
+ *  committed. Returns whether an in-app navigation should follow. */
+const gateNavigationEvent = (
+  e: MouseEvent,
+  decision: NavigationDecision,
+): decision is {kind: 'navigate'; input: NavigateInput} => {
+  if (decision.kind === 'passthrough') return false
+  e.stopPropagation()
+  e.preventDefault()
+  return decision.kind === 'navigate'
+}
+
 /** Apply a resolved decision to the click that produced it — the single place
  *  that maps an intent outcome onto DOM event handling, so no clickable surface
  *  re-implements the native-vs-veto distinction:
@@ -640,10 +655,49 @@ export const applyNavigationDecision = (
   e: MouseEvent,
   decision: NavigationDecision,
 ): void => {
-  if (decision.kind === 'passthrough') return
-  e.stopPropagation()
-  e.preventDefault()
-  if (decision.kind === 'navigate') void navigate(repo, decision.input)
+  if (gateNavigationEvent(e, decision)) void navigate(repo, decision.input)
+}
+
+/** Materialise a get-or-create target and return the live block, so the
+ *  navigation lands on a page that exists. For surfaces whose block id is
+ *  *derived* rather than looked up — `recentsPageBlockId` and friends name an id
+ *  the workspace may never have created, or may have deleted since.
+ *
+ *  The navigation goes to the returned block's `id`. Today every kernel page
+ *  resolves to its derived id, so that is the id the caller already passed;
+ *  taking it from the block rather than assuming it keeps the caller correct if
+ *  that ever stops being true. */
+export type EnsureNavigationTarget = (workspaceId: string) => Promise<{id: string}>
+
+export interface NavigationEnsureOptions {
+  ensureTarget?: EnsureNavigationTarget
+}
+
+/** Execute a resolved navigation, materialising the target first — but ONLY
+ *  when the decision still points at the block the caller named. A
+ *  `navigationIntentVerb` policy that retargeted the gesture is going somewhere
+ *  else, and `ensureTarget` MUTATES: running it would create a page nobody then
+ *  navigates to, and awaiting it would let a slow or failing create block a
+ *  navigation that no longer depends on it. Never rejects, matching the
+ *  fire-and-forget contract of every caller. */
+const navigateEnsuringTarget = async (
+  repo: Repo,
+  input: NavigateInput,
+  requested: {blockId: string; workspaceId: string},
+  ensureTarget: EnsureNavigationTarget | undefined,
+): Promise<NavigationResult | null> => {
+  if (!ensureTarget || input.blockId !== requested.blockId) return navigate(repo, input)
+  let ensured: {id: string}
+  try {
+    // In the workspace the DECISION names: a policy may have retargeted only
+    // that, and materialising against the captured one would create the page in
+    // one workspace and navigate its id through another's layout.
+    ensured = await ensureTarget(input.workspaceId ?? requested.workspaceId)
+  } catch (error) {
+    console.error('[navigation] materialising the navigation target failed', error)
+    return null
+  }
+  return navigate(repo, {...input, blockId: ensured.id})
 }
 
 /** Resolve a gesture through the intent policy, then execute it. The single
@@ -655,12 +709,14 @@ export const applyNavigationDecision = (
 export const navigateFromGesture = async (
   repo: Repo,
   gesture: NavigationGesture,
+  {ensureTarget}: NavigationEnsureOptions = {},
 ): Promise<NavigationResult | null> => {
   // Command surfaces have no DOM event to gate, so only the `navigate` decision
   // does anything here; `passthrough` / `suppress` resolve to no navigation.
   // (`resolveNavigationIntent` has already carried the gesture workspace.)
   const decision = resolveNavigationIntent(repo, gesture)
-  return decision.kind === 'navigate' ? navigate(repo, decision.input) : null
+  if (decision.kind !== 'navigate') return null
+  return navigateEnsuringTarget(repo, decision.input, gesture, ensureTarget)
 }
 
 /** Navigate from a global command (command palette, shortcut, navigator-role
@@ -672,6 +728,7 @@ export const navigateFromGesture = async (
 export const navigateFromGlobalCommand = (
   repo: Repo,
   {blockId, workspaceId}: GlobalCommandNavigateInput,
+  options: NavigationEnsureOptions = {},
 ): Promise<NavigationResult | null> => {
   const resolvedWorkspaceId = workspaceId ?? repo.activeWorkspaceId
   if (!resolvedWorkspaceId) return Promise.resolve(null)
@@ -681,7 +738,7 @@ export const navigateFromGlobalCommand = (
     blockId,
     workspaceId: resolvedWorkspaceId,
     viewport: currentViewport(),
-  })
+  }, options)
 }
 
 export const useNavigateFromGlobalCommand = () => {
@@ -758,6 +815,10 @@ export interface BlockOpenerOptions {
   plainClick?: BlockOpenerPlainClick
 }
 
+export interface OpenBlockFromEventOptions extends BlockOpenerOptions, NavigationEnsureOptions {
+  panelId?: string
+}
+
 /** The standard way for plugins and components to wire a clickable surface
  *  that opens a block — links, buttons, map pins, calendar cells, anything.
  *  Returns a modifier-aware onClick handler that resolves the gesture through
@@ -791,18 +852,22 @@ export const openBlockFromEvent = (
   repo: Repo,
   e: MouseEvent,
   {blockId, workspaceId}: OpenBlockContext,
-  {plainClick = 'follow-link', panelId}: {plainClick?: BlockOpenerPlainClick; panelId?: string} = {},
+  {plainClick = 'follow-link', panelId, ensureTarget}: OpenBlockFromEventOptions = {},
 ): void => {
   const resolvedWorkspaceId = workspaceId ?? repo.activeWorkspaceId
   if (!resolvedWorkspaceId) return
-  applyNavigationDecision(repo, e, resolveNavigationIntent(repo, {
+  const decision = resolveNavigationIntent(repo, {
     role: plainClick,
     modifiers: modifiersFromMouseEvent(e),
     panelId,
     blockId,
     workspaceId: resolvedWorkspaceId,
     viewport: currentViewport(),
-  }))
+  })
+  if (!gateNavigationEvent(e, decision)) return
+  void navigateEnsuringTarget(
+    repo, decision.input, {blockId, workspaceId: resolvedWorkspaceId}, ensureTarget,
+  )
 }
 
 /** Returns an opener `(event, {blockId, workspaceId?}) => void` for places
@@ -813,8 +878,8 @@ export const useBlockOpener = ({plainClick = 'follow-link'}: BlockOpenerOptions 
   const repo = useRepo()
   const {panelId} = useBlockContext()
   return useCallback(
-    (e: MouseEvent, target: OpenBlockContext) =>
-      openBlockFromEvent(repo, e, target, {plainClick, panelId}),
+    (e: MouseEvent, target: OpenBlockContext, {ensureTarget}: NavigationEnsureOptions = {}) =>
+      openBlockFromEvent(repo, e, target, {plainClick, panelId, ensureTarget}),
     [repo, panelId, plainClick],
   )
 }

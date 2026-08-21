@@ -1,7 +1,7 @@
 import { Clock } from 'lucide-react'
 import { useRepo } from '@/context/repo.js'
 import { useBlockOpener } from '@/utils/navigation.js'
-import { recentsPageBlockId } from '@/data/recentsPage.js'
+import { getOrCreateRecentsPage, recentsPageBlockId } from '@/data/recentsPage.js'
 
 export function RecentsHeaderItem() {
   const repo = useRepo()
@@ -13,7 +13,10 @@ export function RecentsHeaderItem() {
       onClick={event => {
         const workspaceId = repo.activeWorkspaceId
         if (!workspaceId) return
-        openBlock(event, {blockId: recentsPageBlockId(workspaceId)})
+        // Get-or-create rather than a bare derived id — see `openRecents`.
+        openBlock(event, {blockId: recentsPageBlockId(workspaceId)}, {
+          ensureTarget: ws => getOrCreateRecentsPage(repo, ws),
+        })
       }}
       title="Recently edited blocks"
       aria-label="Open recents"
