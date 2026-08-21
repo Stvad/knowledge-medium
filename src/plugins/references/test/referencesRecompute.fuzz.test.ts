@@ -763,6 +763,263 @@ describe('references pipeline sequences', () => {
     }
   })
 
+  // A tombstone releases its alias claims (`block_aliases` is live-only) and
+  // referrer entries bound to it are deliberately retained, on the grounds
+  // that a restore rebinds them cleanly. It doesn't when the alias moved on
+  // while the row was dead: the row comes back live not claiming it, and the
+  // referrer stays bound to a LIVE non-claimant with nothing to heal it (it
+  // only re-parses on its own row).
+  it('a restore rebinds referrers whose alias moved to another block while it was dead', async () => {
+    await guard.barrier()
+    vi.useFakeTimers({shouldAdvanceTime: true})
+    try {
+      const {repo, flush} = await buildEnv()
+      const ALIAS = 'Inbox'
+      const seat0 = computeAliasSeatId(ALIAS, WS)
+
+      // A referrer mints the seat and binds to it.
+      const referrer = await repo.mutate.createChild({
+        parentId: ROOT, position: {kind: 'last'}, content: `see [[${ALIAS}]]`,
+      })
+      await flush()
+      const refsOf = async (id: string) => JSON.parse(
+        (await sharedDb.db.getOptional<{references_json: string}>(
+          'SELECT references_json FROM blocks WHERE id = ?', [id]))!.references_json,
+      ) as Array<{id: string; alias: string}>
+      expect((await refsOf(referrer)).find(r => r.alias === ALIAS)?.id, 'bound to the seat').toBe(seat0)
+
+      // Kill the seat, then drift its content so the seat probe won't
+      // reuse the tombstone, and rename it so it can come back live
+      // without re-claiming the alias. The drifted content carries no
+      // marks, so the restore's own parse plan needs no write — the
+      // rebind is the only thing that can fire.
+      await repo.mutate.delete({id: seat0})
+      await flush()
+      await repo.mutate.setContent({id: seat0, content: 'drifted'})
+      await repo.mutate.setProperty({id: seat0, schema: aliasesProp, value: ['ax']})
+      await flush()
+
+      // A third block re-types the released alias: it can't reuse the
+      // drifted tombstone, so it mints a second seat — the new claimant.
+      await repo.mutate.createChild({
+        parentId: ROOT, position: {kind: 'last'}, content: `also [[${ALIAS}]]`,
+      })
+      await flush()
+
+      await repo.mutate.restore({id: seat0})
+      await flush()
+      const claimant = await sharedDb.db.getOptional<{block_id: string}>(
+        'SELECT block_id FROM block_aliases WHERE workspace_id = ? AND alias = ?', [WS, ALIAS])
+      expect(claimant?.block_id, 'a different live block claims the alias now').not.toBe(seat0)
+      expect((await refsOf(referrer)).find(r => r.alias === ALIAS)?.id, 'referrer follows the claimant')
+        .toBe(claimant?.block_id)
+
+      await auditOrFail(sharedDb.db, repo)
+      const {inspected} = await sweepAliasBindings(sharedDb.db, WS)
+      expect(inspected, 'sweep inspected the rebound binding').toBeGreaterThan(0)
+    } finally {
+      vi.clearAllTimers()
+      vi.useRealTimers()
+    }
+  })
+
+  // `sourceField` is "empty OR omitted for content refs" (BlockReference),
+  // and a referrer stranded by a restore is by definition one nothing has
+  // re-parsed — so a row predating normalize-on-write still carries `''`
+  // when the rebind reaches it. The raw write is how such a row is shaped
+  // here, and it lands LAST: it maintains the trigger-backed
+  // `block_references` index (so the backlink query still finds the
+  // referrer) but fires no processor, and any earlier re-parse would
+  // normalize the `''` away before the restore.
+  it('rebinds a referrer whose content entry spells sourceField as empty', async () => {
+    await guard.barrier()
+    vi.useFakeTimers({shouldAdvanceTime: true})
+    try {
+      const {repo, flush} = await buildEnv()
+      const ALIAS = 'Inbox'
+      const seat0 = computeAliasSeatId(ALIAS, WS)
+      const referrer = await repo.mutate.createChild({
+        parentId: ROOT, position: {kind: 'last'}, content: `see [[${ALIAS}]]`,
+      })
+      await flush()
+
+      await repo.mutate.delete({id: seat0})
+      await flush()
+      await repo.mutate.setContent({id: seat0, content: 'drifted'})
+      await repo.mutate.setProperty({id: seat0, schema: aliasesProp, value: ['ax']})
+      await flush()
+      await repo.mutate.createChild({
+        parentId: ROOT, position: {kind: 'last'}, content: `also [[${ALIAS}]]`,
+      })
+      await flush()
+
+      await sharedDb.db.writeTransaction(async tx => {
+        await tx.execute(
+          'UPDATE blocks SET references_json = ? WHERE id = ?',
+          [JSON.stringify([{id: seat0, alias: ALIAS, sourceField: ''}]), referrer],
+        )
+      })
+
+      await repo.mutate.restore({id: seat0})
+      await flush()
+      const claimant = await sharedDb.db.getOptional<{block_id: string}>(
+        'SELECT block_id FROM block_aliases WHERE workspace_id = ? AND alias = ?', [WS, ALIAS])
+      expect(claimant?.block_id, 'a different live block claims the alias now').not.toBe(seat0)
+      const refs = JSON.parse(
+        (await sharedDb.db.getOptional<{references_json: string}>(
+          'SELECT references_json FROM blocks WHERE id = ?', [referrer]))!.references_json,
+      ) as Array<{id: string; alias: string}>
+      expect(refs.find(r => r.alias === ALIAS)?.id, 'empty-sourceField entry follows the claimant')
+        .toBe(claimant?.block_id)
+    } finally {
+      vi.clearAllTimers()
+      vi.useRealTimers()
+    }
+  })
+
+  // Restore-then-delete in one batch (no flush between): the processor's
+  // read phase has already collected the referrers when the row goes back
+  // to a tombstone, so without an in-tx lifecycle re-check the rebind moves
+  // a tombstone-bound entry — the class this deliberately leaves alone.
+  it('a restore undone before the rebind lands leaves the binding on the tombstone', async () => {
+    await guard.barrier()
+    vi.useFakeTimers({shouldAdvanceTime: true})
+    try {
+      const {repo, flush} = await buildEnv()
+      const ALIAS = 'Inbox'
+      const seat0 = computeAliasSeatId(ALIAS, WS)
+      const referrer = await repo.mutate.createChild({
+        parentId: ROOT, position: {kind: 'last'}, content: `see [[${ALIAS}]]`,
+      })
+      await flush()
+
+      await repo.mutate.delete({id: seat0})
+      await flush()
+      await repo.mutate.setContent({id: seat0, content: 'drifted'})
+      await repo.mutate.setProperty({id: seat0, schema: aliasesProp, value: ['ax']})
+      await flush()
+      await repo.mutate.createChild({
+        parentId: ROOT, position: {kind: 'last'}, content: `also [[${ALIAS}]]`,
+      })
+      await flush()
+
+      // Both land before the drain — the restore's rebind runs against a row
+      // that is a tombstone again by the time it holds the write lock.
+      await repo.mutate.restore({id: seat0})
+      await repo.mutate.delete({id: seat0})
+      await flush()
+
+      const seat0Row = await sharedDb.db.getOptional<{deleted: number}>(
+        'SELECT deleted FROM blocks WHERE id = ?', [seat0])
+      expect(seat0Row?.deleted, 'seat is a tombstone again').toBe(1)
+      const refs = JSON.parse(
+        (await sharedDb.db.getOptional<{references_json: string}>(
+          'SELECT references_json FROM blocks WHERE id = ?', [referrer]))!.references_json,
+      ) as Array<{id: string; alias: string}>
+      expect(refs.find(r => r.alias === ALIAS)?.id, 'tombstone-bound entry left alone')
+        .toBe(seat0)
+    } finally {
+      vi.clearAllTimers()
+      vi.useRealTimers()
+    }
+  })
+
+  // A whole-block `[[alias]]` row carries the alias's resolution in the
+  // local `reference_target_id` column too, and `core.deriveReferenceTarget`
+  // watches `content` — which a rebind does not touch. Recomputing it here
+  // is the same contract `renameProcessor`, `mergeRetargetProcessor`,
+  // `inlineDeletedBlockRefsProcessor` and `alias.sync` follow for a row they
+  // rewrite; without it the row's two pointers disagree and field-row
+  // recognition keeps reading the non-claimant.
+  it('a rebind restamps the local reference target of a whole-block referrer', async () => {
+    await guard.barrier()
+    vi.useFakeTimers({shouldAdvanceTime: true})
+    try {
+      const {repo, flush} = await buildEnv()
+      const ALIAS = 'Inbox'
+      const seat0 = computeAliasSeatId(ALIAS, WS)
+      // Mint the seat first so the alias resolves when the whole-block row
+      // is written — otherwise the column is never stamped and the
+      // assertion below passes trivially.
+      await repo.mutate.createChild({
+        parentId: ROOT, position: {kind: 'last'}, content: `minter [[${ALIAS}]]`,
+      })
+      await flush()
+      const referrer = await repo.mutate.createChild({
+        parentId: ROOT, position: {kind: 'last'}, content: `[[${ALIAS}]]`,
+      })
+      await flush()
+      const readRow = async () => (await sharedDb.db.getOptional<{
+        reference_target_id: string | null; references_json: string
+      }>('SELECT reference_target_id, references_json FROM blocks WHERE id = ?', [referrer]))!
+      expect((await readRow()).reference_target_id, 'stamped at write time').toBe(seat0)
+
+      await repo.mutate.delete({id: seat0})
+      await flush()
+      await repo.mutate.setContent({id: seat0, content: 'drifted'})
+      await repo.mutate.setProperty({id: seat0, schema: aliasesProp, value: ['ax']})
+      await flush()
+      await repo.mutate.createChild({
+        parentId: ROOT, position: {kind: 'last'}, content: `also [[${ALIAS}]]`,
+      })
+      await flush()
+      await repo.mutate.restore({id: seat0})
+      await flush()
+
+      const claimant = (await sharedDb.db.getOptional<{block_id: string}>(
+        'SELECT block_id FROM block_aliases WHERE workspace_id = ? AND alias = ?', [WS, ALIAS]))!.block_id
+      expect(claimant, 'a different live block claims the alias now').not.toBe(seat0)
+      const row = await readRow()
+      const refs = JSON.parse(row.references_json) as Array<{id: string; alias: string}>
+      expect(refs.find(r => r.alias === ALIAS)?.id, 'entry follows the claimant').toBe(claimant)
+      expect(row.reference_target_id, 'local target follows it too').toBe(claimant)
+    } finally {
+      vi.clearAllTimers()
+      vi.useRealTimers()
+    }
+  })
+
+  // Pins the rebind's POSITION: the claimant does not exist until the
+  // restore re-parses the restored block's OWN drifted content and mints it,
+  // so a rebind running before this tx's plans finds no claimant and does
+  // nothing.
+  it('a restore rebinds referrers against a claimant its own re-parse mints', async () => {
+    await guard.barrier()
+    vi.useFakeTimers({shouldAdvanceTime: true})
+    try {
+      const {repo, flush} = await buildEnv()
+      const ALIAS = 'Inbox'
+      const seat0 = computeAliasSeatId(ALIAS, WS)
+      await repo.mutate.setContent({id: ROOT, content: `[[${ALIAS}]]`})
+      await flush()
+
+      await repo.mutate.delete({id: seat0})
+      await flush()
+      await repo.mutate.setContent({id: seat0, content: `[[${ALIAS}]]`})
+      await repo.mutate.setProperty({id: seat0, schema: aliasesProp, value: ['ax']})
+      await flush()
+
+      await repo.mutate.restore({id: seat0})
+      await flush()
+      const claimant = await sharedDb.db.getOptional<{block_id: string}>(
+        'SELECT block_id FROM block_aliases WHERE workspace_id = ? AND alias = ?', [WS, ALIAS])
+      expect(claimant?.block_id, 'the restore minted a fresh seat for the released alias')
+        .not.toBe(seat0)
+      const rootRefs = JSON.parse(
+        (await sharedDb.db.getOptional<{references_json: string}>(
+          'SELECT references_json FROM blocks WHERE id = ?', [ROOT]))!.references_json,
+      ) as Array<{id: string; alias: string}>
+      expect(rootRefs.find(r => r.alias === ALIAS)?.id, 'referrer follows the claimant')
+        .toBe(claimant?.block_id)
+
+      await auditOrFail(sharedDb.db, repo)
+      await sweepAliasBindings(sharedDb.db, WS)
+    } finally {
+      vi.clearAllTimers()
+      vi.useRealTimers()
+    }
+  })
+
   // Deterministic canary for the ISO/live-hit sibling of the long-form
   // bug above (found by the stable-wrong-binding sweep's deep run, seed
   // -1450147062). A daily-note seat claims its ISO alias only via
