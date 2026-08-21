@@ -789,7 +789,13 @@ export const applyPropertyDefinitionSynthesis = async (
           // the next rebuild — and the backfill is about to bind field rows to
           // whichever fieldId is published NOW. Vouching here strands them on
           // the loser; deferring costs a re-run once the projector catches up.
-          const contenders = await liveRivals(id, resolution.schema.fieldId)
+          //
+          // ONLY the selection is excluded — NOT our deterministic id, which the
+          // mint path below excludes because that is where it is about to write.
+          // Here we write nothing, and a sync-applied row at that id is the one
+          // contender guaranteed to win: `systemMint` births it at `createdAt`
+          // 0 and `buildPropertyDefinitionRegistry` sorts ascending.
+          const contenders = await liveRivals(resolution.schema.fieldId)
           if (contenders.length === 0) {
             converged += 1
             continue

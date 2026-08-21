@@ -624,6 +624,33 @@ describe('applyPropertyDefinitionSynthesis: the id is occupied, or the key stopp
     expect(flipBlockedBySynthesis(plan, result)).toMatch(/still have no definition/)
   })
 
+  it('does not call a key converged when OUR id holds an unprojected rival', async () => {
+    // The one contender guaranteed to win: `systemMint` births the synthesized
+    // row at `createdAt` 0 and the registry sorts ascending, so a sync-applied
+    // copy at our deterministic id takes the name on the next rebuild — while
+    // the backfill binds field rows to whatever the projection picked today.
+    await rawCell('b1', {'demo:orphan': 'hello'})
+    const plan = await planFor()
+    await getOrCreatePropertiesPage(repo, WS)
+    await repo.userSchemas.addSchema({name: 'demo:orphan', presetId: 'string'})
+    const id = synthesizedPropertyDefinitionBlockId(WS, 'demo:orphan')
+    await rawCell(id, {
+      types: ['property-schema'],
+      'property-schema:name': 'demo:orphan',
+      'property-schema:preset-id': 'string',
+      'property-schema:change-scope': 'block-default',
+    })
+    // The precondition: the projection resolves, and to the OTHER row.
+    const picked = repo.propertySchemaResolverFor(WS).resolve('demo:orphan')
+    expect(picked.status).toBe('resolved')
+    expect(picked.status === 'resolved' && picked.schema.fieldId).not.toBe(id)
+
+    const result = await applyPropertyDefinitionSynthesis(repo, plan)
+
+    expect(result).toMatchObject({created: 0, converged: 0})
+    expect(result.skipped[0]!.reason).toMatch(/more than one definition block holds this name/)
+  })
+
   it('does not call a key converged when the definition the resolver picked is gone', async () => {
     // The resolver is a projection: a definition deleted after its creation
     // tick but before its deletion tick still reads `resolved`. Counting that
