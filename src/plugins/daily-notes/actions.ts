@@ -53,10 +53,11 @@ import {
 } from '@/utils/navigation.js'
 import {
   addDaysIso,
-  dailyNoteIsoFromAliases,
+  dailyNoteIso,
   getOrCreateDailyNote,
   todayIso,
 } from './dailyNotes.ts'
+import { dailyNoteDateProp } from './schema.ts'
 
 export const OPEN_TODAY_ACTION_ID = 'open_today'
 export const APPEND_TODAY_DAILY_BLOCK_ACTION_ID = 'append_today_daily_block'
@@ -64,7 +65,10 @@ export const OPEN_PREVIOUS_DAILY_NOTE_ACTION_ID = 'open_previous_daily_note'
 export const OPEN_NEXT_DAILY_NOTE_ACTION_ID = 'open_next_daily_note'
 
 const dailyNoteIsoFromBlock = (block: Block): string | null =>
-  dailyNoteIsoFromAliases(block.peekProperty(aliasesProp) ?? [])
+  dailyNoteIso({
+    date: block.peekProperty(dailyNoteDateProp),
+    aliases: block.peekProperty(aliasesProp) ?? [],
+  })
 
 const findContainingDailyNoteIso = async (
   repo: Repo,

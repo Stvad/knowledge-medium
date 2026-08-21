@@ -23,6 +23,7 @@ import { ChevronLeft, ChevronRight, type LucideIcon } from 'lucide-react'
 import { useBlockContext } from '@/context/block.js'
 import type { Block } from '@/data/block'
 import { aliasesProp } from '@/data/properties.js'
+import { dailyNoteDateProp } from './schema.js'
 import {
   type BlockContentDecorator,
   type BlockContentDecoratorContribution,
@@ -33,7 +34,7 @@ import type { BlockRenderer } from '@/types.js'
 import { navigate } from '@/utils/navigation.js'
 import {
   addDaysIso,
-  dailyNoteIsoFromAliases,
+  dailyNoteIso,
   getOrCreateDailyNote,
 } from './dailyNotes.ts'
 
@@ -71,12 +72,13 @@ interface DateNavDecoratorProps {
 const DateNavDecorator = ({block, Inner}: DateNavDecoratorProps) => {
   const repo = block.repo
   const [aliases] = useProperty(block, aliasesProp)
+  const [date] = useProperty(block, dailyNoteDateProp)
   const {panelId} = useBlockContext()
   // The note's OWN workspace, not `repo.activeWorkspaceId`: the neighbouring
   // day has to be created and opened in the same workspace as the note the
   // arrows are attached to.
   const workspaceId = useWorkspaceId(block)
-  const iso = dailyNoteIsoFromAliases(aliases)
+  const iso = dailyNoteIso({date, aliases})
 
   const openOffset = useCallback((offset: number) => {
     if (!iso || !panelId || !workspaceId) return

@@ -321,11 +321,20 @@ export const isValidDateAlias = (alias: string): boolean => {
   return new Date(ms).toISOString().slice(0, 10) === alias
 }
 
-/** "Which daily note is this?" from a block's alias list — the ISO alias
- *  `getOrCreateDailyNote` writes via `dailyPageAliases`, or `null` for a block
- *  that isn't a daily note. The one definition of that read, shared by the
- *  prev/next keyboard actions (which peek it off a Block) and the title
- *  date-nav arrows (which get it from a reactive `aliases` hook).
+/** "Which daily note is this?", or `null` for a block that isn't one. The one
+ *  definition of that read, shared by the prev/next keyboard actions (which
+ *  peek both values off a Block) and the title date-nav arrows (which take them
+ *  from reactive hooks).
+ *
+ *  The typed `daily-note:date` property first, the ISO alias only as a
+ *  fallback. An alias is user-editable AND withholdable: a day whose ISO name
+ *  another live page already claims yields it rather than fighting for it,
+ *  because claiming it aborts the transaction the page is created in. Reading
+ *  identity out of the alias list then reports that page as not a daily note at
+ *  all — no date arrows, and prev/next stepping from TODAY rather than from the
+ *  day on screen, silently. The property is written on both creation paths
+ *  (`getOrCreateDailyNote` and `ensureDailyNoteTarget`) and backfilled per
+ *  device for older rows, which is what the fallback is still there for.
  *
  *  `isValidDateAlias`, NOT `isDateAlias`: a date-SHAPED alias that isn't a
  *  calendar day (`2026-02-30`) belongs to an ordinary alias-target page — the
@@ -334,14 +343,23 @@ export const isValidDateAlias = (alias: string): boolean => {
  *  block's date hands a normal page the daily-note affordances, and
  *  `addDaysIso` then reads it as March 2nd — so "previous day" lands on
  *  2026-03-01, forward by a month. Callers fall back to today instead, the
- *  same as on any other non-daily page.
+ *  same as on any other non-daily page. The property goes through the same gate
+ *  rather than being trusted: it is a plain date cell a user or an import can
+ *  write anything into.
  *
- *  Deliberately NOT a `DAILY_NOTE_TYPE` check: the ISO alias is the marker
- *  every daily-note writer sets, and gating on the type instead would couple
- *  these read paths to type-tagging having reached every historical row. */
-export const dailyNoteIsoFromAliases = (
-  aliases: readonly string[],
-): string | null => aliases.find(isValidDateAlias) ?? null
+ *  Deliberately NOT a `DAILY_NOTE_TYPE` check: that would couple these read
+ *  paths to type-tagging having reached every historical row. */
+export const dailyNoteIso = (
+  {date, aliases}: {date?: Date | undefined; aliases?: readonly string[]},
+): string | null => {
+  if (date !== undefined && !Number.isNaN(date.getTime())) {
+    // UTC, matching `dailyNoteDateValue`'s midnight-UTC write. Reading it in
+    // local time shifts the day by one for anyone west of Greenwich.
+    const iso = date.toISOString().slice(0, 10)
+    if (isValidDateAlias(iso)) return iso
+  }
+  return aliases?.find(isValidDateAlias) ?? null
+}
 
 /** Ensure a daily-note **target seat** block exists for ISO date `date`
  *  in `workspaceId`. The seat is a reference target materialised at
