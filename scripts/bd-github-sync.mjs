@@ -123,7 +123,7 @@ export const extractBeadIds = text => [...new Set(text.match(BEAD_ID) ?? [])]
 // position and blocks, and the escape hatch covers it; parsing heredocs is
 // more surface than this guard warrants. (Commands arrive from the Bash
 // tool, so quotes are balanced; this is a guard, not a shell parser.)
-export const commandSkeleton = cmd => {
+const commandSkeleton = cmd => {
   const lifted = []
   const liftSubstitutions = span => {
     for (const m of span.matchAll(/\$\(([^)]*)\)/g)) lifted.push(m[1])
@@ -137,7 +137,11 @@ export const commandSkeleton = cmd => {
   // deleted a real publish.
   const skeleton = cmd.replace(/'[^']*'|"(?:\\.|[^"\\])*"|\$\(([^)]*)\)|`([^`]*)`|\\.|(?:^|\s)#[^\n]*/g, (m, dollarBody, tickBody) => {
     if (m.startsWith('\\')) return m
-    if (m.includes('#') && /^(?:^|\s)#/.test(m)) return m.startsWith('#') ? '' : m[0]
+    // Only the comment alternative can start with `#` or whitespace — every
+    // other one starts with its own delimiter — so the first character is an
+    // exact dispatch. A leading space belongs to the argument before it.
+    if (m.startsWith('#')) return ''
+    if (/^\s/.test(m)) return m[0]
     if (dollarBody !== undefined) {
       lifted.push(dollarBody)
       return '$()'
@@ -172,10 +176,12 @@ export const commandSkeleton = cmd => {
 // Global options (-R/--repo, --hostname) may sit between `gh` and the
 // subcommand, same shape as git's (the value-optional branch over-matches
 // harmlessly).
-const GH_GLOBAL_OPTS = String.raw`(?:-\S+\s+(?:[^-\s]\S*\s+)?)*`
+const GLOBAL_OPTS = String.raw`(?:-\S+\s+(?:[^-\s]\S*\s+)?)*`
+// The prefix every gh matcher shares, spelled once: a fix to it cannot land
+// on one matcher and miss the others.
+const GH = String.raw`(?:\S*\/)?\bgh\s+` + GLOBAL_OPTS
 const GH_PUBLISH = new RegExp(
-    String.raw`(?:\S*\/)?\bgh\s+` +
-    GH_GLOBAL_OPTS +
+  GH +
     String.raw`(?:pr\s+(?:create|new|edit|comment|review|merge|close|reopen)|issue\s+(?:create|new|edit|comment|close|reopen)|release\s+(?:create|new|edit))\b`,
   'm',
 )
@@ -189,13 +195,11 @@ export const matchesPrCommand = cmd => GH_PUBLISH.test(commandSkeleton(cmd))
 // filter: the post-publish verifier's URL extraction is the real filter, and
 // a mutation aimed at a text-free endpoint just yields no target. Plain GETs
 // stay out so the verifier does not fetch-and-echo after every read.
-const GH_API = new RegExp(
-  String.raw`(?:\S*\/)?\bgh\s+` + GH_GLOBAL_OPTS + String.raw`api\s`,
-  'm',
-)
+const GH_API = new RegExp(GH + String.raw`api\s`, 'm')
+const isGhApiCall = cmd => GH_API.test(commandSkeleton(cmd))
 export const matchesApiPublish = cmd => {
+  if (!isGhApiCall(cmd)) return false
   const sk = commandSkeleton(cmd)
-  if (!GH_API.test(sk)) return false
   return (
     /(?<![\w-])(?:-X|--method)(?:=|\s+)?(?:POST|PATCH|PUT)\b/i.test(sk) ||
     /(?<![\w-])(?:--raw-field|--field|--input)(?:=|\s)/.test(sk) ||
@@ -232,10 +236,7 @@ export const publishableKinds = cmd => {
 // Git global options (-C <path>, -c k=v, --git-dir=…) may sit between `git`
 // and the subcommand; the value-optional branch over-matches harmlessly —
 // a false positive only costs a zero-subprocess keyword scan.
-const GIT_COMMIT = new RegExp(
-  String.raw`(?:\S*\/)?\bgit\s+(?:-\S+\s+(?:[^-\s]\S*\s+)?)*commit\b`,
-  'm',
-)
+const GIT_COMMIT = new RegExp(String.raw`(?:\S*\/)?\bgit\s+` + GLOBAL_OPTS + String.raw`commit\b`, 'm')
 export const matchesCommitCommand = cmd => GIT_COMMIT.test(commandSkeleton(cmd))
 
 // There is deliberately NO foreign-repo (-R/--repo) shortcut: three review
@@ -254,9 +255,7 @@ export const matchesCommitCommand = cmd => GIT_COMMIT.test(commandSkeleton(cmd))
 // coarse rule blocks those until both escapes attest.
 // Comment-less closes pass for free — no refs in the text, nothing to echo.
 const GH_UNVERIFIABLE = new RegExp(
-    String.raw`(?:\S*\/)?\bgh\s+` +
-    GH_GLOBAL_OPTS +
-    String.raw`(?:pr\s+(?:merge|review|close|reopen)|issue\s+(?:close|reopen))\b`,
+  GH + String.raw`(?:pr\s+(?:merge|review|close|reopen)|issue\s+(?:close|reopen))\b`,
   'm',
 )
 export const matchesUnverifiableCommand = cmd => GH_UNVERIFIABLE.test(commandSkeleton(cmd))
@@ -275,6 +274,11 @@ const EXPANSION = /[$`]/
 // claim their own apostrophes, and returned verbatim, since the shell DOES
 // expand inside them.
 const expandable = cmd => cmd.replace(/'[^']*'|"(?:\\.|[^"\\])*"/g, m => (m.startsWith("'") ? "''" : m))
+// The two above are only ever correct together, so only the pair has a name.
+// Testing EXPANSION against the raw command or against the full skeleton are
+// both wrong (see above), and both spellings have had to be corrected by hand
+// at a call site; there is now no call site to get wrong.
+const hasExpansion = cmd => EXPANSION.test(expandable(cmd))
 // Every shell operator in one character class — pipes, redirects,
 // substitutions, separators, multi-line — so there is no per-operator
 // spelling to keep complete and no positional heuristic to defeat.
@@ -287,6 +291,8 @@ const FOREIGN_TARGET = /(?<![\w-])(?:-R|--repo)|\bGH_REPO=/
 // short form; consulted only for `gh api`, where it formats the response,
 // never for `gh pr create -t <title>`.
 const OPAQUE_OUTPUT = /(?<![\w-])(?:--(?:silent|jq|template)\b|-t)/
+// The api's graphql endpoint answers with no object URL to read back.
+const GRAPHQL = /\bgraphql\b/
 
 /**
  * Any command that may publish text on GitHub — including one whose mutation
@@ -306,7 +312,7 @@ const OPAQUE_OUTPUT = /(?<![\w-])(?:--(?:silent|jq|template)\b|-t)/
 const NON_PUBLISHING_MODE = /(?<![\w-])--(?:dry-run|web)\b/
 
 export const matchesAnyPublish = cmd =>
-  matchesPrCommand(cmd) || matchesApiPublish(cmd) || (GH_API.test(commandSkeleton(cmd)) && EXPANSION.test(expandable(cmd)))
+  matchesPrCommand(cmd) || matchesApiPublish(cmd) || (isGhApiCall(cmd) && hasExpansion(cmd))
 
 // Text-bearing flags and api fields. A publish with none of them — a label
 // change, a reaction, a comment DELETION, a merge-method call — has no
@@ -331,10 +337,17 @@ const FIELD_ANY = /(?<![\w-])(?:-[fF]|--(?:raw-)?field)(?:=|\s+)?['"]?([A-Za-z_]
 // the warning entirely, which is how an unchecked close keyword reaches a
 // merge commit that acts on it immediately.
 const TEXT_FIELD_NAME = /body|title|message|name|description|text|note|comment/i
+// An explicit read verb: `gh api -X GET … -f key=value` sends its fields as
+// query parameters and publishes nothing, so the text it carries is never
+// text it PUBLISHED. Read off the skeleton alone, unlike the membership words
+// of isPostVerifiable: this SUPPRESSES a warning, so it must under-match.
+// The method prefix is shared with matchesApiPublish's POST|PATCH|PUT twin.
+const EXPLICIT_READ = /(?<![\w-])(?:-X|--method)(?:=|\s+)?(?:GET|HEAD)\b/i
 
-/** Whether this command carries text that could contain a reference at all. */
+/** Whether this command publishes text that could contain a reference at all. */
 export const carriesPublishableText = cmd => {
   const sk = commandSkeleton(cmd)
+  if (EXPLICIT_READ.test(sk)) return false
   if (TEXT_FLAG.test(sk)) return true
   // Field names come off the raw command as well as the skeleton: `-f
   // 'commit_title=…'` quotes the WHOLE argument, which the skeleton blanks,
@@ -373,12 +386,13 @@ export const carriesPublishableText = cmd => {
 export const isPostVerifiable = cmd => {
   if (!matchesAnyPublish(cmd)) return false
   const sk = commandSkeleton(cmd)
-  if (SHELL_OPERATOR.test(sk) || EXPANSION.test(expandable(cmd))) return false
-  if (NON_PUBLISHING_MODE.test(sk) || NON_PUBLISHING_MODE.test(cmd)) return false
-  if (FOREIGN_TARGET.test(sk) || FOREIGN_TARGET.test(cmd)) return false
+  // The "raw text too" rule of the docstring, named once instead of spelled
+  // out per membership word.
+  const anywhere = re => re.test(sk) || re.test(cmd)
+  if (SHELL_OPERATOR.test(sk) || hasExpansion(cmd)) return false
+  if (anywhere(NON_PUBLISHING_MODE) || anywhere(FOREIGN_TARGET)) return false
   const api = matchesApiPublish(cmd)
-  if (api && (/\bgraphql\b/.test(sk) || /\bgraphql\b/.test(cmd))) return false
-  if (api && (OPAQUE_OUTPUT.test(sk) || OPAQUE_OUTPUT.test(cmd))) return false
+  if (api && (anywhere(GRAPHQL) || anywhere(OPAQUE_OUTPUT))) return false
   return api || !matchesUnverifiableCommand(cmd)
 }
 
@@ -1130,17 +1144,15 @@ const hookPrePr = () => {
   if (!cmd) allow()
   const cwd = payload?.cwd ?? process.cwd()
 
-  // Message/body files, read at most once, failing CLOSED on text this gate
-  // cannot see: a stdin-fed body would need pipeline simulation (heredoc
-  // stdin passes — its content sits in the raw command), and an unreadable
-  // file would carry its references unverified. Called ONLY by the legs
-  // whose text never reaches the post-publish verifier.
-  let bodiesCache = null
+  // Message/body files, failing CLOSED on text this gate cannot see: a
+  // stdin-fed body would need pipeline simulation (heredoc stdin passes — its
+  // content sits in the raw command), and an unreadable file would carry its
+  // references unverified. Called from ONE place: the commit leg, and only
+  // when the invocation does not also publish.
   const guardedBodies = () => {
-    if (bodiesCache) return bodiesCache
     if (hasStdinBody(cmd) && !cmd.includes('<<')) {
       console.error(
-        'This command feeds commit or merge/review text from stdin, which this gate cannot inspect. Use a heredoc (scanned), a file, or an inline flag — or, after verifying the references yourself, re-run with KM_ISSUE_REFS_OK=1 prefixed.',
+        'This command feeds commit text from stdin, which this gate cannot inspect. Use a heredoc (scanned), a file, or an inline flag — or, after verifying the references yourself, re-run with KM_ISSUE_REFS_OK=1 prefixed.',
       )
       process.exit(2)
     }
@@ -1155,7 +1167,7 @@ const hookPrePr = () => {
       )
       process.exit(2)
     }
-    return (bodiesCache = paths.map(p => readFileSync(p, 'utf8')))
+    return paths.map(p => readFileSync(p, 'utf8'))
   }
 
   // The legs below are INDEPENDENT — one invocation can both commit and
@@ -1214,7 +1226,7 @@ const hookPrePr = () => {
     // command kind is what let a compound mixing api with CLI read the
     // wrong signal.
     const textOutsideCommand =
-      /(?<![\w-])--(?:[a-z-]*file|input|template)\b|@|(?<![\w-])-[FT]/.test(cmd) || EXPANSION.test(expandable(cmd))
+      /(?<![\w-])--(?:[a-z-]*file|input|template)\b|@|(?<![\w-])-[FT]/.test(cmd) || hasExpansion(cmd)
     if (textOutsideCommand) {
       console.error(
         'This publish is not one the post-publication read-back covers (it must be a single gh command, with no shell operator, aimed at this repo, whose verb and flags leave a fetchable URL in the output) — and it carries text this gate cannot read from the command either: a file or payload flag, an @-reference, or shell expansion. Publish literal inline text so this gate can read it (a COVERED publish — a single create/edit/comment command with no shell operator — may use --body-file freely, since the read-back checks what it shipped) — or, after checking every reference and bead id in it yourself, re-run with KM_ISSUE_REFS_OK=1 KM_ALLOW_BEAD_IDS=1 prefixed.',
