@@ -24,12 +24,17 @@ describe('matchesApiPublish', () => {
     expect(matchesApiPublish('cat x | gh api graphql -f query=@-')).toBe(true)
   })
 
-  // Explicit-GET commands still MATCH: a compound can mix a GET segment with
-  // a mutating one, so the look must happen. Reading back an object a GET
-  // merely printed costs one echoed line.
-  it('keeps looking at explicit-GET field commands; only plain no-field reads stay out', () => {
+  // A LONE explicit read publishes nothing — gh sends its fields as a query
+  // string — so its response object was READ, and calling that "published"
+  // sends the agent to edit text it never wrote. A COMPOUND still matches:
+  // the effective method is resolved across the whole skeleton, so exempting
+  // one there would exempt the mutation beside it.
+  it('exempts a lone explicit read, but not one compounded with a mutation', () => {
     expect(matchesApiPublish('gh api repos/Stvad/knowledge-medium/issues/652')).toBe(false)
-    expect(matchesApiPublish('gh api --method GET repos/Stvad/knowledge-medium/issues -f state=open')).toBe(true)
+    expect(matchesApiPublish('gh api --method GET repos/Stvad/knowledge-medium/issues -f state=open')).toBe(false)
+    expect(matchesApiPublish('gh api -X GET repos/Stvad/knowledge-medium/issues/700 -f per_page=1')).toBe(false)
+    const mixed = 'gh api -X POST repos/Stvad/knowledge-medium/issues/1/comments -f body=hi; gh api -X GET repos/Stvad/knowledge-medium/issues -f state=open'
+    expect(matchesApiPublish(mixed)).toBe(true)
   })
 
   it('ignores quoted prose and non-api gh commands', () => {
@@ -87,6 +92,13 @@ describe('publishedTargets', () => {
   it('drops CLI targets whose kind the command cannot have produced', () => {
     const out = `${url('issues/500')}\n${url('pull/652')}`
     expect(publishedTargets(PR_CREATE, out)).toEqual([{ kind: 'pr', number: 652 }])
+  })
+
+  // The harm the exemption prevents: the fetched issue's own html_url used to
+  // come back as something this command PUBLISHED.
+  it('claims no published target for a lone explicit read that returned an object', () => {
+    const cmd = 'gh api -X GET repos/Stvad/knowledge-medium/issues/700 -f per_page=1'
+    expect(publishedTargets(cmd, JSON.stringify({ html_url: url('issues/700') }))).toEqual([])
   })
 
   it('ignores foreign-repo URLs and output with no target', () => {
@@ -477,6 +489,10 @@ describe('bd-publish-verify process behavior', { timeout: 30_000 }, () => {
     expect(r.status).toBe(0)
     expect(context(r)).toContain('treated as covered by the pre-publish gate')
     expect(context(r)).toContain('nothing has checked the references')
+    // this branch has NO target by definition, so it must not name one: the
+    // manual check it asks for has to be one the agent can actually run
+    expect(context(r)).toContain('gh api')
+    expect(context(r)).not.toContain('issue view')
   })
 
   // Empty output is the case with LEAST to go on, so it is the last place the

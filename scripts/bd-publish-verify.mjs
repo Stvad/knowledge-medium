@@ -449,7 +449,7 @@ const hookPostPublish = () => {
     // its URL in the output and never reaches here.
     if (failedEvent) return
     return emit([
-      'this publish was treated as covered by the pre-publish gate, but its output named no object to read back — nothing has checked the references in what it published. Verify them yourself now (gh issue view <n>), and if this shape recurs, the gate should stop treating it as covered.',
+      'this publish was treated as covered by the pre-publish gate, but its output named no object to read back — nothing has checked the references in what it published. Verify them yourself now — read the endpoint this command targeted back with `gh api <path>`, or re-read the text it sent — and if this shape recurs, the gate should stop treating it as covered.',
     ])
   }
   const targets = all.slice(0, MAX_TARGETS)

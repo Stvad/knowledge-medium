@@ -198,9 +198,33 @@ export const matchesPrCommand = cmd => GH_PUBLISH.test(commandSkeleton(cmd))
 // stay out so the verifier does not fetch-and-echo after every read.
 const GH_API = new RegExp(GH + String.raw`api\s`, 'm')
 const isGhApiCall = cmd => GH_API.test(commandSkeleton(cmd))
+// An explicit read verb: `gh api -X GET … -f key=value` sends its fields as
+// query parameters and publishes nothing, so the text it carries is never
+// text it PUBLISHED. Read off the skeleton alone, unlike the membership words
+// of isPostVerifiable: this SUPPRESSES a warning, so it must under-match.
+//
+// The EFFECTIVE method decides it, not any read token present. gh keeps the
+// LAST -X/--method — measured against the installed gh: `-X POST -X GET
+// /rate_limit` answers as a GET, and the reverse order 404s as a POST — so
+// suppressing on the first `GET` seen would silence the warning for a
+// mutation that merely mentions one earlier in its argv.
+const METHOD_FLAG = /(?<![\w-])(?:-X|--method)(?:=|\s+)?([A-Za-z]+)/g
+const effectiveMethod = sk => [...sk.matchAll(METHOD_FLAG)].pop()?.[1]?.toUpperCase()
+const isExplicitRead = sk => effectiveMethod(sk) === 'GET' || effectiveMethod(sk) === 'HEAD'
+// A LONE explicit read publishes nothing: gh sends its fields as a query
+// string, so the object its response names was READ, and reporting that as
+// published sends the agent to edit text it never wrote. Restricted to a
+// single segment because the effective method is resolved across the whole
+// skeleton — in a mutate-then-read compound this would otherwise exempt the
+// mutation too. Multi-segment keeps the old behaviour, so the compound needs
+// no vocabulary of its own.
+const isSoleExplicitRead = (cmd, sk) =>
+  isExplicitRead(sk) && shellSegmentsWithDepth(cmd).filter(s => !s.heredoc).length === 1
+
 export const matchesApiPublish = cmd => {
   if (!isGhApiCall(cmd)) return false
   const sk = commandSkeleton(cmd)
+  if (isSoleExplicitRead(cmd, sk)) return false
   return (
     /(?<![\w-])(?:-X|--method)(?:=|\s+)?(?:POST|PATCH|PUT)\b/i.test(sk) ||
     /(?<![\w-])(?:--raw-field|--field|--input)(?:=|\s)/.test(sk) ||
@@ -402,19 +426,6 @@ const FIELD_ANY = /(?<![\w-])(?:-[fF]|--(?:raw-)?field)(?:=|\s+)?['"]?([A-Za-z_]
 // on gists, the contents API) — FIELD_ANY already captures the bracketed name
 // whole, so only this list had to learn the word.
 const TEXT_FIELD_NAME = /body|title|message|name|description|text|note|comment|content/i
-// An explicit read verb: `gh api -X GET … -f key=value` sends its fields as
-// query parameters and publishes nothing, so the text it carries is never
-// text it PUBLISHED. Read off the skeleton alone, unlike the membership words
-// of isPostVerifiable: this SUPPRESSES a warning, so it must under-match.
-//
-// The EFFECTIVE method decides it, not any read token present. gh keeps the
-// LAST -X/--method — measured against the installed gh: `-X POST -X GET
-// /rate_limit` answers as a GET, and the reverse order 404s as a POST — so
-// suppressing on the first `GET` seen would silence the warning for a
-// mutation that merely mentions one earlier in its argv.
-const METHOD_FLAG = /(?<![\w-])(?:-X|--method)(?:=|\s+)?([A-Za-z]+)/g
-const effectiveMethod = sk => [...sk.matchAll(METHOD_FLAG)].pop()?.[1]?.toUpperCase()
-const isExplicitRead = sk => effectiveMethod(sk) === 'GET' || effectiveMethod(sk) === 'HEAD'
 
 /** Whether this command publishes text that could contain a reference at all. */
 export const carriesPublishableText = cmd => {
