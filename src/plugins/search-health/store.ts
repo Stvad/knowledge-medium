@@ -11,6 +11,13 @@
  * `core.content` is deliberately not special-cased. It reports through the
  * same seam as any plugin source, so if it ever starts failing alongside a
  * working plugin source, that shows up here too.
+ *
+ * ACCEPTED GAP: state only advances when a search runs, so disabling a
+ * failing source without searching again leaves the chip naming it until the
+ * next search. Closing it means subscribing to facet-runtime changes, with the
+ * lifecycle and teardown that implies, to shorten a seconds-long stale window
+ * on an advisory indicator. Declined on #685; reopen it only if the window
+ * turns out to be long in practice.
  */
 import { CallbackSet } from '@/utils/callbackSet.js'
 import type { SearchSourceHealthReport, SearchSourceOutcome } from '@/data/facets.js'
