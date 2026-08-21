@@ -520,6 +520,27 @@ describe('applyPropertyDefinitionSynthesis: the id is occupied, or the key stopp
     expect(repo.propertySchemaResolverFor(WS).resolve('demo:orphan').status).toBe('resolved')
   })
 
+  it('repairs a tombstone whose change-scope was corrupted before deletion', async () => {
+    // The second required field found a round apart from the first, which is
+    // why the restore now asserts the parser's verdict rather than listing
+    // fields: a corrupt change-scope is exactly as fatal as a missing type.
+    await rawCell('b1', {'demo:orphan': 'hello'})
+    await applyPropertyDefinitionSynthesis(repo, await planFor())
+    const id = synthesizedPropertyDefinitionBlockId(WS, 'demo:orphan')
+    await sharedDb.db.execute(
+      `UPDATE blocks SET properties_json =
+         json_set(properties_json, '$."property-schema:change-scope"', 'not-a-real-scope')
+       WHERE id = ?`, [id])
+    await repo.tx(async tx => { await tx.delete(id) },
+                  {scope: ChangeScope.BlockDefault, description: 'delete'})
+    await untilKeyUnresolved('demo:orphan')
+
+    const result = await applyPropertyDefinitionSynthesis(repo, await planFor())
+
+    expect(result).toMatchObject({restored: 1})
+    expect(repo.propertySchemaResolverFor(WS).resolve('demo:orphan').status).toBe('resolved')
+  })
+
   it('refuses to restore a tombstone that is no longer this key\'s definition', async () => {
     await rawCell('b1', {'demo:orphan': 'hello'})
     await applyPropertyDefinitionSynthesis(repo, await planFor())

@@ -39,8 +39,10 @@ import { kernelValuePresetCoresById } from '@/data/kernelValuePresetCores'
 import { orderKeyForInsert } from '@/data/mutators'
 import { parsePropertyDefinitionMetadata } from '@/data/propertyDefinitionMetadata'
 import {
+  addBlockTypeToProperties,
   presetConfigProp,
   presetIdProp,
+  propertyChangeScopeProp,
   propertyHiddenProp,
   propertyNameProp,
 } from '@/data/properties'
@@ -350,13 +352,20 @@ const restoredDefinitionProperties = (
   stored: Readonly<Record<string, unknown>>,
   candidate: SynthesisCandidate,
 ): {properties: Record<string, unknown>} => ({
-  properties: {
+  properties: addBlockTypeToProperties({
     ...stored,
     [propertyNameProp.name]: propertyNameProp.codec.encode(candidate.key),
     [presetIdProp.name]: presetIdProp.codec.encode(candidate.presetId),
     [presetConfigProp.name]: presetConfigProp.codec.encode({}),
     [propertyHiddenProp.name]: propertyHiddenProp.codec.encode(false),
-  },
+    // EVERY field the metadata parser requires, including the ones a
+    // synthesized definition never sets deliberately. A stored change-scope a
+    // raw write corrupted is exactly as fatal as a missing type: the row
+    // restores, `parsePropertyDefinitionMetadata` rejects it, and the publish
+    // throws after the transaction has already committed.
+    [propertyChangeScopeProp.name]:
+      propertyChangeScopeProp.codec.encode(ChangeScope.BlockDefault),
+  }, PROPERTY_SCHEMA_TYPE),
 })
 
 /** The runtime schema for a synthesized definition, for the synchronous
@@ -598,15 +607,38 @@ export const applyPropertyDefinitionSynthesis = async (
         // whose preset had been switched to `date` came back as `date` and
         // rewrote every value of the key on the next backfill, defeating
         // `inferPresetId`'s entire selection criterion.
-        await tx.restore(id, restoredDefinitionProperties(occupancy.block.properties, candidate))
-        // Re-assert TYPE membership as well as the fields. The name check above
-        // reads the bag directly, so it passes for a row whose `property-schema`
-        // type was stripped (the type API, a raw write, an import) before the
-        // delete — and restoring that verbatim commits a live row
-        // `parsePropertyDefinitionMetadata` rejects. `appendUserSchema` then
-        // throws AFTER the transaction, and every later run reads the occupant
-        // as `rejected`: stuck until someone repairs it by hand. Idempotent when
-        // the type is already there, so this is a repair, not a second write.
+        // ASSERT THE OUTCOME, don't enumerate the requirements. Restoring a
+        // tombstone means adopting a bag some other writer last touched, and
+        // any single field the metadata parser needs — the type, a valid
+        // change-scope, whatever it requires next — is equally fatal in the
+        // same way: the row restores, the parser rejects it, `appendUserSchema`
+        // throws AFTER the transaction has committed, and every later run reads
+        // the now-live occupant as `rejected`. Stuck, and unreachable by re-run.
+        //
+        // Two fields of that set were each found and patched a review round
+        // apart, which is the tell that listing them is the wrong shape. So the
+        // patch is also checked against the parser ITSELF before it is written:
+        // if the restored row would not be a usable definition for this key,
+        // skip and let the flip refuse rather than commit a row nothing can fix.
+        //
+        // DEFENCE IN DEPTH, and unpinned by design — deleting this check fails
+        // no test, because the resets above already satisfy every requirement
+        // the parser has TODAY. It exists for the requirement it gains
+        // tomorrow, so that the next such field is a skipped key and a refused
+        // flip instead of a third round of this.
+        const patch = restoredDefinitionProperties(occupancy.block.properties, candidate)
+        const restoredMetadata = parsePropertyDefinitionMetadata(
+          {...occupancy.block, deleted: false, properties: patch.properties},
+        )
+        if (restoredMetadata?.name !== candidate.key) {
+          skipped.push({key: candidate.key,
+                        reason: `deleted block ${id} cannot be restored into a usable `
+                          + 'definition for this key; repair or remove it'})
+          continue
+        }
+        await tx.restore(id, patch)
+        // The bag above carries the type, which is what the parser reads; this
+        // maintains the `block_types` ROW that queries by type read.
         await repo.addTypeInTx(tx, id, PROPERTY_SCHEMA_TYPE, {})
         restored += 1
         registrations.push({blockId: id, schema: schemaFor(candidate.key, preset)})
