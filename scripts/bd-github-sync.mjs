@@ -240,15 +240,23 @@ export const publishableKinds = cmd => {
 const GIT_COMMIT = new RegExp(String.raw`(?:\S*\/)?\bgit\s+` + GLOBAL_OPTS + String.raw`commit\b`, 'm')
 export const matchesCommitCommand = cmd => GIT_COMMIT.test(commandSkeleton(cmd))
 
-// Wrappers and assignments that can precede the real verb, same set the
-// position-anchored matchers used before they were de-anchored.
+// Wrappers and assignments that can precede the real verb. BARE words only —
+// a wrapper carrying options is not skipped past, because its options decide
+// whether it execs at all: `command -v git commit -F x` PRINTS a description
+// and runs nothing, while `env -u FOO git commit -F x` does run. Telling
+// those apart needs a per-flag arity and mode table for every wrapper, which
+// would have to be complete to be correct. Stopping at the first option
+// instead fails the safe way for a check that authorizes a FILE READ: the
+// `-v` form is refused, and the `env` form is an accepted under-match whose
+// only cost is that one message file goes unscanned (the raw command is
+// checked either way).
 const VERB_PREFIX = new Set(['command', 'env', 'nohup', 'time', 'xargs'])
 // git's global options that take a separate value, which would otherwise be
 // mistaken for the subcommand.
 const GIT_OPT_WITH_VALUE = new Set(['-C', '-c', '--git-dir', '--work-tree', '--namespace', '--exec-path'])
 const isGitCommitSegment = tokens => {
   let i = 0
-  while (i < tokens.length && (/^[A-Za-z_]\w*=/.test(tokens[i]) || VERB_PREFIX.has(tokens[i]) || (i > 0 && tokens[i].startsWith('-')))) i++
+  while (i < tokens.length && (/^[A-Za-z_]\w*=/.test(tokens[i]) || VERB_PREFIX.has(tokens[i]))) i++
   if (!/(?:^|\/)git$/.test(tokens[i] ?? '')) return false
   for (let j = i + 1; j < tokens.length; j++) {
     if (tokens[j] === 'commit') return true
@@ -270,12 +278,12 @@ const isGitCommitSegment = tokens => {
  * for close keywords either way — so this stays a plain verb check rather
  * than growing a vocabulary of every way a shell can reach git.
  *
- * ACCEPTED, not overlooked: a wrapper option that takes a SEPARATE value
- * (`env -u FOO git commit -F msg.txt`) stops the prefix skip at the value,
- * so the message file goes unscanned. Closing it means a table of per-flag
- * arities for env/xargs/command/…, which would have to be COMPLETE to be
- * correct and cannot be — the blacklist shape this file rejects everywhere
- * else. Declined 2026-08-21; the inline text is still checked.
+ * ACCEPTED, not overlooked: a wrapper carrying ANY option — `env -u FOO git
+ * commit -F msg.txt`, `xargs -n1 git commit -F msg.txt` — leaves that message
+ * file unscanned, because the skip stops at the first option (see
+ * VERB_PREFIX for why it must). Declined 2026-08-21; the command's own text
+ * is still checked, and the alternative is a per-wrapper flag table that
+ * would have to be COMPLETE to be correct.
  */
 export const commitsInCommandPosition = cmd =>
   shellSegmentsWithDepth(cmd).some(s => !s.heredoc && isGitCommitSegment(s.tokens))
@@ -370,11 +378,15 @@ export const matchesAnyPublish = cmd =>
 // decides only whether to WARN. Being wrong costs a missing or an extra note,
 // never a wrong write. Missing a spelling is therefore the cheap direction,
 // which is why it is written as a small list rather than defended as one.
-// --fill and its variants carry no text in the command: gh derives the title
-// and body from the branch's COMMITS, close keywords included. Text with no
-// flag naming it is still published text.
-const TEXT_FLAG =
-  /(?<![\w-])(?:--(?:body|title|notes|message)(?:-file)?\b|--input\b|--fill(?:-first|-verbose)?\b|-[btm](?=[\s=]|$))/
+const TEXT_FLAG = /(?<![\w-])(?:--(?:body|title|notes|message)(?:-file)?\b|--input\b|-[btm](?=[\s=]|$))/
+// A CREATE always publishes text, so the VERB answers the question and no
+// flag has to. A PR, issue or release cannot exist without a title, and its
+// body may arrive with no flag naming it at all: --fill from the branch's
+// commits, --recover from a failed run, a repository template, $EDITOR, or an
+// interactive prompt. Enumerating those cost one round of review each and the
+// list grows once per gh release; the verb does not. EDIT keeps the flag list
+// — an edit really can carry no text (a label change, a reviewer).
+const GH_CREATE = new RegExp(GH + String.raw`(?:pr|issue|release)\s+(?:create|new)\b`, 'm')
 // Every payload-field spelling gh accepts, so a field is never missed and
 // then read as "carries no text" — which would suppress the warning rather
 // than add one, the direction that actually hurts. What the field CARRIES is
@@ -401,7 +413,7 @@ const EXPLICIT_READ = /(?<![\w-])(?:-X|--method)(?:=|\s+)?(?:GET|HEAD)\b/i
 export const carriesPublishableText = cmd => {
   const sk = commandSkeleton(cmd)
   if (EXPLICIT_READ.test(sk)) return false
-  if (TEXT_FLAG.test(sk)) return true
+  if (GH_CREATE.test(sk) || TEXT_FLAG.test(sk)) return true
   // Field names come off the raw command as well as the skeleton: `-f
   // 'commit_title=…'` quotes the WHOLE argument, which the skeleton blanks,
   // and a field that vanishes reads as "no text published" — suppressing the

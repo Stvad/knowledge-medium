@@ -205,10 +205,14 @@ describe('carriesPublishableText', () => {
     expect(carriesPublishableText('gh pr comment 652 -F notes.md')).toBe(true)
     expect(carriesPublishableText('gh pr comment 652 --body hi')).toBe(true)
     expect(carriesPublishableText('gh pr comment 652 --delete-last')).toBe(false)
-    // --fill names no text in the command; gh derives title and body from the
-    // branch's commits, close keywords included
+    // A create is text-bearing by its VERB, so every way gh can supply the
+    // body with no flag naming it is covered without listing them.
     expect(carriesPublishableText('gh pr create --fill')).toBe(true)
-    expect(carriesPublishableText('gh pr create --fill-first')).toBe(true)
+    expect(carriesPublishableText('gh pr create --recover /tmp/failed.json')).toBe(true)
+    expect(carriesPublishableText('gh issue create')).toBe(true)
+    expect(carriesPublishableText('gh release create v1')).toBe(true)
+    // an EDIT really can carry no text, so it keeps the flag list
+    expect(carriesPublishableText('gh pr edit 652 --add-label ui')).toBe(false)
     // gh documents nested key[subkey]=value fields, and gist file content is
     // its own example; FIELD_ANY captures the bracketed name whole
     expect(carriesPublishableText(`gh api gists -f public=true -f 'files[a.md][content]=Fixes #700'`)).toBe(true)
@@ -582,9 +586,18 @@ describe('commitsInCommandPosition', () => {
     expect(commitsInCommandPosition('/usr/bin/git commit -F m')).toBe(true)
     expect(commitsInCommandPosition('FOO=1 git commit -F m')).toBe(true)
     expect(commitsInCommandPosition('env FOO=1 git commit -F m')).toBe(true)
-    expect(commitsInCommandPosition('xargs -n1 git commit -F m')).toBe(true)
     expect(commitsInCommandPosition('git -C /r commit -F m')).toBe(true)
     expect(commitsInCommandPosition('git log -F x')).toBe(false)
+  })
+
+  // A wrapper's own OPTIONS decide whether it execs at all: `command -v`
+  // prints a description and runs nothing. Since this check authorizes a file
+  // read, the skip stops at the first option — refusing the -v form, and
+  // accepting that a wrapper with options leaves one message file unscanned.
+  it('stops the prefix skip at a wrapper option rather than guessing its arity', () => {
+    expect(commitsInCommandPosition(`command -v git commit -F .env`)).toBe(false)
+    expect(commitsInCommandPosition('env -u FOO git commit -F m')).toBe(false)
+    expect(commitsInCommandPosition('xargs -n1 git commit -F m')).toBe(false)
   })
 
   // A heredoc body sits at a segment boundary but is DATA. It reaches the
