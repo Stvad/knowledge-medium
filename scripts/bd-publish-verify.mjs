@@ -156,7 +156,7 @@ export const publishedTargets = (cmd, output) => {
 // command: the pattern only ever appears in merge output, and it names the
 // PR whose merge COMMIT — the one truly unrepairable text — can then be
 // read back from the API (#683: detection where prevention cannot reach).
-const MERGED_PR = () => /Merged pull request ((?:[\w.-]+\/[\w.-]+)?)#(\d+)/g
+const MERGED_PR = () => /(?:\w+ and )?merged pull request ((?:[\w.-]+\/[\w.-]+)?)#(\d+)/gi
 // A -R merge prints the qualified `owner/repo#N` — a foreign qualifier must
 // not read back OUR PR of that number.
 export const mergedPrNumbers = output =>
@@ -211,7 +211,13 @@ const GH_TIMEOUT = 10_000
 // the host's kill never lands with the report unemitted. Every step is one
 // GH_TIMEOUT-bounded fetch, and per-target refs echoes size themselves to
 // the time left.
-const DEADLINE_MS = Number(process.env.BD_PUBLISH_VERIFY_BUDGET_MS ?? 70_000)
+const DEADLINE_MS = (() => {
+  // A non-numeric override yields NaN, and every `Date.now() >= deadline`
+  // comparison against NaN is false: nothing would ever stop on time while
+  // every echo reported the time budget as the reason it stopped.
+  const v = Number(process.env.BD_PUBLISH_VERIFY_BUDGET_MS)
+  return Number.isFinite(v) && v >= 0 ? v : 70_000
+})()
 
 const ghJson = args => {
   try {
@@ -232,7 +238,13 @@ const titleOf = (t, obj) => {
 const verifyTarget = (t, { reportIds, deadline }) => {
   const notes = []
   const fetched = ghJson(['api', apiPathFor(t)])
-  if (!fetched || typeof fetched !== 'object') return notes
+  // A failed read is the STRONGEST form of an unkeepable coverage claim: an
+  // object is known to have been published and could not be examined. Silence
+  // here would be the same hole the no-target branch exists to close.
+  if (!fetched || typeof fetched !== 'object')
+    return [
+      `could not read back ${apiPathFor(t)} — the references in what it published are unchecked; verify them yourself (gh issue view <n>)`,
+    ]
   const label = typeof fetched.html_url === 'string' ? fetched.html_url : apiPathFor(t)
   const text = `${titleOf(t, fetched)}\n${typeof fetched.body === 'string' ? fetched.body : ''}`
 
@@ -325,8 +337,14 @@ const verifyMergeCommit = (n, deadline) => {
   // after an issue that is still open. Both fields ride on the PR already
   // fetched above, so the check costs no extra request.
   const base = typeof pr?.base?.ref === 'string' ? pr.base.ref : ''
-  const landedOnDefault = Boolean(base) && base === pr?.base?.repo?.default_branch
-  const warn = !landedOnDefault
+  const defaultBranch = typeof pr?.base?.repo?.default_branch === 'string' ? pr.base.repo.default_branch : ''
+  const branchKnown = Boolean(base) && Boolean(defaultBranch)
+  const landedOnDefault = branchKnown && base === defaultBranch
+  const warn = !branchKnown
+    ? headCloses.length || commitCloses.length
+      ? `\n  could not tell which branch this landed on, so whether its close keywords have acted is UNKNOWN — check the issues above directly`
+      : ''
+    : !landedOnDefault
     ? (headCloses.length
         ? `\n  close keywords in the merge commit have NOT acted: this merged into ${base || 'another branch'}, and GitHub applies them only on the default branch. They act if and when this commit reaches it.`
         : '') +
@@ -368,6 +386,7 @@ const hookPostPublish = () => {
     )
   }
   const cmd = payload?.tool_input?.command ?? ''
+  const failedEvent = payload?.hook_event_name === 'PostToolUseFailure'
   // The Bash tool merges stderr into tool_response.stdout; on
   // PostToolUseFailure there is NO tool_response and the output rides inside
   // the `error` string (both measured 2026-08-20).
@@ -400,7 +419,7 @@ const hookPostPublish = () => {
     // inferred — the one innocent cause of "no target" the hook is actually
     // told about. A covered command that failed AFTER publishing still has
     // its URL in the output and never reaches here.
-    if (payload?.hook_event_name === 'PostToolUseFailure') return
+    if (failedEvent) return
     return emit([
       'this publish was treated as covered by the pre-publish gate, but its output named no object to read back — nothing has checked the references in what it published. Verify them yourself now (gh issue view <n>), and if this shape recurs, the gate should stop treating it as covered.',
     ])
@@ -409,6 +428,15 @@ const hookPostPublish = () => {
   const reportIds = !allowsBeadIds(cmd)
   const deadline = Date.now() + DEADLINE_MS
   const notes = []
+  // gh prints existing objects in its ERROR text too ("a pull request for
+  // branch X already exists: <url>"), so on a failure event the objects below
+  // were merely NAMED by the output — attribution is unknown, and the
+  // per-target notes' "already published, fix it now" framing would send the
+  // agent to edit a stranger's object.
+  if (failedEvent && targets.length)
+    notes.push(
+      `the command FAILED, so the object(s) below were only NAMED in its output — they are not established to be its work; read, do not edit`,
+    )
   if (all.length > targets.length)
     notes.push(`only the first ${MAX_TARGETS} of ${all.length} published objects named in the output were verified`)
   if (allMerged.length > mergedPrs.length)

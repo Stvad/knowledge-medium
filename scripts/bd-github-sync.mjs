@@ -89,7 +89,7 @@
  */
 
 import { spawnSync } from 'node:child_process'
-import { existsSync, readFileSync, realpathSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
+import { accessSync, constants, existsSync, readFileSync, realpathSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -145,22 +145,26 @@ const commandSkeleton = cmd => {
   return [skeleton, ...lifted].join('\n')
 }
 
-// A command position opens at the string start, after a separator, or after
-// one of the shell's control keywords — a FINITE set, unlike wrapper
-// commands, so listing it is complete rather than an enumeration.
-const SEGMENT_START = String.raw`(?:^|[;&|({]\s*|\b(?:if|then|elif|else|do|until|while)\s+)`
-// VAR=val assignments and common wrapper commands may precede the real verb;
-// wrappers take options of their own (env -u NAME, xargs -0), skipped with
-// the value-optional branch that harmlessly over-matches.
-const COMMAND_PREFIXES = String.raw`(?:(?:command|env|nohup|time|xargs)\s+(?:-\S+\s+(?:[^-\s]\S*\s+)?)*|[A-Za-z_]\w*=\S*\s+)*`
+// The DETECTORS below scan the skeleton for their verb wherever it occurs.
+// They deliberately do NOT require it to sit at a recognized command
+// position, because that test could only be written as a list — of
+// separators, of control keywords, of wrapper commands (env, xargs, timeout,
+// sudo, …) — and the failure mode of an incomplete list here is the worst one
+// available: an indented, `\`-continued or unlisted-wrapper `gh` matched
+// nothing, so the gate fast-exited AND the read-back skipped it, leaving the
+// publish examined by neither. Over-matching a detector costs one echo round.
+//
+// What kept prose out was never the position test but commandSkeleton, which
+// blanks quoted spans: `git commit -m "gh pr merge was the fix"` has no verb
+// left to find. Heredoc bodies do survive into the skeleton, so a heredoc
+// line CAN trip a detector — an accepted false positive (see
+// commandSkeleton), and the reason the ESCAPES anchor differently below.
 // Global options (-R/--repo, --hostname) may sit between `gh` and the
 // subcommand, same shape as git's (the value-optional branch over-matches
 // harmlessly).
 const GH_GLOBAL_OPTS = String.raw`(?:-\S+\s+(?:[^-\s]\S*\s+)?)*`
 const GH_PUBLISH = new RegExp(
-  SEGMENT_START +
-    COMMAND_PREFIXES +
-    String.raw`(?:\S*\/)?gh\s+` +
+    String.raw`(?:\S*\/)?\bgh\s+` +
     GH_GLOBAL_OPTS +
     String.raw`(?:pr\s+(?:create|new|edit|comment|review|merge|close|reopen)|issue\s+(?:create|new|edit|comment|close|reopen)|release\s+(?:create|new|edit))\b`,
   'm',
@@ -176,7 +180,7 @@ export const matchesPrCommand = cmd => GH_PUBLISH.test(commandSkeleton(cmd))
 // a mutation aimed at a text-free endpoint just yields no target. Plain GETs
 // stay out so the verifier does not fetch-and-echo after every read.
 const GH_API = new RegExp(
-  SEGMENT_START + COMMAND_PREFIXES + String.raw`(?:\S*\/)?gh\s+` + GH_GLOBAL_OPTS + String.raw`api\s`,
+  String.raw`(?:\S*\/)?\bgh\s+` + GH_GLOBAL_OPTS + String.raw`api\s`,
   'm',
 )
 export const matchesApiPublish = cmd => {
@@ -219,7 +223,7 @@ export const publishableKinds = cmd => {
 // and the subcommand; the value-optional branch over-matches harmlessly —
 // a false positive only costs a zero-subprocess keyword scan.
 const GIT_COMMIT = new RegExp(
-  SEGMENT_START + COMMAND_PREFIXES + String.raw`(?:\S*\/)?git\s+(?:-\S+\s+(?:[^-\s]\S*\s+)?)*commit\b`,
+  String.raw`(?:\S*\/)?\bgit\s+(?:-\S+\s+(?:[^-\s]\S*\s+)?)*commit\b`,
   'm',
 )
 export const matchesCommitCommand = cmd => GIT_COMMIT.test(commandSkeleton(cmd))
@@ -240,20 +244,21 @@ export const matchesCommitCommand = cmd => GIT_COMMIT.test(commandSkeleton(cmd))
 // coarse rule blocks those until both escapes attest.
 // Comment-less closes pass for free — no refs in the text, nothing to echo.
 const GH_UNVERIFIABLE = new RegExp(
-  SEGMENT_START +
-    COMMAND_PREFIXES +
-    String.raw`(?:\S*\/)?gh\s+` +
+    String.raw`(?:\S*\/)?\bgh\s+` +
     GH_GLOBAL_OPTS +
     String.raw`(?:pr\s+(?:merge|review|close|reopen)|issue\s+(?:close|reopen))\b`,
   'm',
 )
 export const matchesUnverifiableCommand = cmd => GH_UNVERIFIABLE.test(commandSkeleton(cmd))
 
-// Expansion is checked against the RAW command: commandSkeleton blanks a
-// QUOTED expansion, and reading this signal off a different string than the
-// operator test below is what once let a command be a publish and be
-// post-verified at the same time.
+// Expansion is checked against the command with only SINGLE-quoted spans
+// blanked, which is the exact set the shell never expands. The full skeleton
+// is the wrong string here — it blanks double-quoted spans too, so a real
+// `--body "$(cat notes.md)"` would read as operator-free — and the raw
+// command is equally wrong in the other direction, since a literal `$5` or a
+// markdown code span in a single-quoted body is text, not an argument.
 const EXPANSION = /[$`]/
+const expandable = cmd => cmd.replace(/'[^']*'/g, "''")
 // Every shell operator in one character class — pipes, redirects,
 // substitutions, separators, multi-line — so there is no per-operator
 // spelling to keep complete and no positional heuristic to defeat.
@@ -285,7 +290,7 @@ const OPAQUE_OUTPUT = /(?<![\w-])(?:--(?:silent|jq|template)\b|-t)/
 const NON_PUBLISHING_MODE = /(?<![\w-])--(?:dry-run|web)\b/
 
 export const matchesAnyPublish = cmd =>
-  matchesPrCommand(cmd) || matchesApiPublish(cmd) || (GH_API.test(commandSkeleton(cmd)) && EXPANSION.test(cmd))
+  matchesPrCommand(cmd) || matchesApiPublish(cmd) || (GH_API.test(commandSkeleton(cmd)) && EXPANSION.test(expandable(cmd)))
 
 /**
  * Whether the post-publication read-back covers this publish. A WHITELIST:
@@ -313,9 +318,9 @@ export const matchesAnyPublish = cmd =>
 export const isPostVerifiable = cmd => {
   if (!matchesAnyPublish(cmd)) return false
   const sk = commandSkeleton(cmd)
-  if (SHELL_OPERATOR.test(sk) || EXPANSION.test(cmd)) return false
-  if (NON_PUBLISHING_MODE.test(sk)) return false
-  if (FOREIGN_TARGET.test(sk)) return false
+  if (SHELL_OPERATOR.test(sk) || EXPANSION.test(expandable(cmd))) return false
+  if (NON_PUBLISHING_MODE.test(sk) || NON_PUBLISHING_MODE.test(cmd)) return false
+  if (FOREIGN_TARGET.test(sk) || FOREIGN_TARGET.test(cmd)) return false
   const api = matchesApiPublish(cmd)
   if (api && (/\bgraphql\b/.test(sk) || /\bgraphql\b/.test(cmd))) return false
   if (api && (OPAQUE_OUTPUT.test(sk) || OPAQUE_OUTPUT.test(cmd))) return false
@@ -326,7 +331,15 @@ export const isPostVerifiable = cmd => {
 // The escape hatch must also be in command-prefix position of the SKELETON —
 // honored from quoted prose, a PR body QUOTING it would both bypass the gate
 // and publish the marker.
-const ALLOW_MARKER = new RegExp(SEGMENT_START + COMMAND_PREFIXES + String.raw`KM_ALLOW_BEAD_IDS=1\s`, 'm')
+// Anchored at the invocation start or after an explicit separator — never
+// after a bare NEWLINE, which is exactly what separates heredoc DATA lines.
+// Heredoc bodies survive into the skeleton (see commandSkeleton), so a line
+// of data would otherwise sit at a command position and attest for a real
+// publish later in the same invocation. No `m` flag, so `^` is the string
+// start rather than every line start. Over-matching a detector is cheap;
+// over-matching a bypass is not.
+const ESCAPE_START = String.raw`(?:^|[;&|]\s*)(?:[A-Za-z_]\w*=\S*\s+)*`
+const ALLOW_MARKER = new RegExp(ESCAPE_START + String.raw`KM_ALLOW_BEAD_IDS=1\s`)
 export const allowsBeadIds = cmd => ALLOW_MARKER.test(commandSkeleton(cmd))
 
 // GitHub-style issue references in publishable text. Guessed numbers are the
@@ -359,7 +372,7 @@ const CLOSE_KEYWORD = /\b(?:fix(?:es|ed)?|close[sd]?|resolve[sd]?):?\s+#(\d{1,5}
 export const closeKeywordRefs = text =>
   [...new Set([...normalizeQualifiedRefs(text).matchAll(CLOSE_KEYWORD)].map(m => Number(m[1])))]
 
-const ISSUE_REFS_OK = new RegExp(SEGMENT_START + COMMAND_PREFIXES + String.raw`KM_ISSUE_REFS_OK=1\s`, 'm')
+const ISSUE_REFS_OK = new RegExp(ESCAPE_START + String.raw`KM_ISSUE_REFS_OK=1\s`)
 export const allowsIssueRefs = cmd => ISSUE_REFS_OK.test(commandSkeleton(cmd))
 
 /**
@@ -691,7 +704,7 @@ export const initializedDbRoot = () => {
 
 export const preconditions = (root = initializedDbRoot()) => {
   if (!root) return { ok: false, reason: 'no initialized beads DB (or bd not on PATH)' }
-  const token = tryRun('gh', ['auth', 'token'])?.trim()
+  const token = tryRun('gh', ['auth', 'token'], { timeout: PROBE_TIMEOUT })?.trim()
   if (!token) return { ok: false, reason: 'no gh token' }
   return { ok: true, root, env: { ...process.env, GITHUB_TOKEN: token, BD_NO_REMOTE_ADOPT: '1' } }
 }
@@ -1005,6 +1018,20 @@ const runSync = ({ quiet = false, dryRun = false } = {}) => {
 
 const allow = () => process.exit(0)
 
+// A path whose text this hook can actually read. A directory or an
+// unreadable file must reach the caller's fail-closed branch rather than
+// throwing out of the hook — see the entry point for why a throw here is
+// worse than a block.
+const readableFile = p => {
+  try {
+    if (!statSync(p).isFile()) return false
+    accessSync(p, constants.R_OK)
+    return true
+  } catch {
+    return false
+  }
+}
+
 /**
  * One issue/PR's ground truth, memoized per process — tolerant, and
  * distinguishing 'not-found' from null (gh itself broke). The memo matters
@@ -1073,7 +1100,9 @@ const hookPrePr = () => {
       process.exit(2)
     }
     const paths = bodyFilePaths(cmd).map(p => resolveBodyPath(p, cwd, homedir()))
-    const missing = paths.filter(p => !existsSync(p))
+    // Unreadable counts as missing: a directory or a permission error takes
+    // the fail-closed branch below rather than throwing out of the hook.
+    const missing = paths.filter(p => !readableFile(p))
     if (missing.length) {
       console.error(
         `Cannot read message file(s) referenced by this command: ${missing.join(', ')} (resolved from ${cwd}; cd chains inside the command are not followed).\n` +
@@ -1137,7 +1166,8 @@ const hookPrePr = () => {
     // matter for commands that are already attesting. Splitting them by
     // command kind is what let a compound mixing api with CLI read the
     // wrong signal.
-    const textOutsideCommand = /(?<![\w-])--(?:[a-z-]*file|input|template)\b|[$`@]|(?<![\w-])-[FT]/.test(cmd)
+    const textOutsideCommand =
+      /(?<![\w-])--(?:[a-z-]*file|input|template)\b|@|(?<![\w-])-[FT]/.test(cmd) || EXPANSION.test(expandable(cmd))
     if (textOutsideCommand) {
       console.error(
         'This publish is not one the post-publication read-back covers (it must be a single gh command, with no shell operator, aimed at this repo, whose verb and flags leave a fetchable URL in the output) — and it carries text this gate cannot read from the command either: a file or payload flag, an @-reference, or shell expansion. Publish literal inline text so this gate can read it (a COVERED publish — a single create/edit/comment command with no shell operator — may use --body-file freely, since the read-back checks what it shipped) — or, after checking every reference and bead id in it yourself, re-run with KM_ISSUE_REFS_OK=1 KM_ALLOW_BEAD_IDS=1 prefixed.',
@@ -1189,7 +1219,18 @@ export const isMainModule = metaUrl => {
 if (isMainModule(import.meta.url)) {
   const args = new Set(process.argv.slice(2))
   if (args.has('--hook-pre-pr')) {
-    hookPrePr()
+    try {
+      hookPrePr()
+    } catch {
+      // The gate must never fail on its OWN bug. PreToolUse treats a non-zero
+      // exit it did not ask for as a hook error: it prints the stack trace
+      // into the agent's context and runs the command ANYWAY — so a throw
+      // here is not a safe default, it disables every check while looking
+      // like a problem with the command. Allowing explicitly reaches the same
+      // outcome without the noise or the false impression that the text was
+      // examined. Deliberate blocks exit(2) and never reach this.
+      allow()
+    }
   } else {
     try {
       runSync({ quiet: args.has('--quiet'), dryRun: args.has('--dry-run') })

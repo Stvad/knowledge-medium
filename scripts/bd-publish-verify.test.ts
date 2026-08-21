@@ -154,6 +154,21 @@ describe('publishedTargets', () => {
   })
 })
 
+describe('mergedPrNumbers strategies', () => {
+  // gh prints "Squashed and merged" / "Rebased and merged" for the other two
+  // strategies; matching only "Merged" left the merge-commit read-back dead
+  // for both — and squash is the strategy whose PR body carries the keywords
+  // no pre-gate can read.
+  it('reads the PR number from every merge strategy gh prints', () => {
+    expect(mergedPrNumbers('✓ Merged pull request Stvad/knowledge-medium#652 (T)')).toEqual([652])
+    expect(mergedPrNumbers('✓ Squashed and merged pull request Stvad/knowledge-medium#652 (T)')).toEqual([652])
+    expect(mergedPrNumbers('✓ Rebased and merged pull request Stvad/knowledge-medium#652 (T)')).toEqual([652])
+    // a foreign qualifier is still refused, and git's own subject is not a merge line
+    expect(mergedPrNumbers('✓ Squashed and merged pull request other/repo#652 (T)')).toEqual([])
+    expect(mergedPrNumbers('Merge pull request #652 from a/b')).toEqual([])
+  })
+})
+
 describe('apiPathFor tag encoding', () => {
   it('sends a slashed release tag as one path parameter', () => {
     expect(apiPathFor({ kind: 'release', tag: 'release/1.0' })).toBe(
@@ -478,6 +493,65 @@ describe('bd-publish-verify process behavior', { timeout: 30_000 }, () => {
     expect(r.stdout).toBe('')
   })
 
+  // gh prints EXISTING objects in its error text ("a pull request for branch
+  // X already exists: <url>"), so on a failure event attribution is unknown —
+  // the per-target notes must not read as "you published this, go fix it".
+  it('says objects were only named when the command failed', () => {
+    const { hook } = makeRepo({
+      fixtures: {
+        'repos/Stvad/knowledge-medium/pulls/652': { html_url: url('pull/652'), title: 'T', body: 'relates to #12' },
+        'repos/Stvad/knowledge-medium/issues/12': { title: 'Tracked issue', state: 'open' },
+      },
+    })
+    const r = hook(PR_CREATE, null, {
+      hook_event_name: 'PostToolUseFailure',
+      error: `a pull request for branch "x" already exists:\n${url('pull/652')}`,
+    })
+    expect(r.status).toBe(0)
+    expect(context(r)).toContain('only NAMED in its output')
+    expect(context(r)).toContain('read, do not edit')
+  })
+
+  // An unreadable base branch must not be reported as "merged off the default
+  // branch" — that advice tells the agent NOT to look for a wrongly closed
+  // issue, which is the dangerous direction to be wrong in.
+  it('says UNKNOWN when it cannot tell which branch the merge landed on', () => {
+    const sha = 'bb22cc33dd4455667788990011aabbccddeeff22'
+    const { hook } = makeRepo({
+      fixtures: {
+        'repos/Stvad/knowledge-medium/pulls/652': {
+          html_url: url('pull/652'),
+          merged: true,
+          merge_commit_sha: sha,
+          base: { ref: 'master', repo: {} },
+        },
+        [`repos/Stvad/knowledge-medium/commits/${sha}`]: { commit: { message: 'landed (#652)\n\nFixes #700' } },
+        'repos/Stvad/knowledge-medium/issues/700': { title: 'Some issue', state: 'closed' },
+      },
+    })
+    const r = hook('gh pr merge 652 --merge', '✓ Merged pull request #652 (landed)')
+    expect(r.status).toBe(0)
+    expect(context(r)).toContain('UNKNOWN')
+    expect(context(r)).not.toContain('have NOT acted')
+    expect(context(r)).not.toContain('ALREADY acted')
+  })
+
+  // A non-numeric budget yielded NaN, and every `>= deadline` test against NaN
+  // is false: nothing stopped on time while every echo blamed the budget.
+  it('falls back to the default budget when the override is not a number', () => {
+    const { hook } = makeRepo({
+      fixtures: {
+        'repos/Stvad/knowledge-medium/issues/643': { html_url: url('issues/643'), title: 'T', body: 'relates to #12' },
+        'repos/Stvad/knowledge-medium/issues/12': { title: 'Tracked issue', state: 'open' },
+      },
+      budgetMs: 'not-a-number' as unknown as number,
+    })
+    const r = hook('gh issue edit 643 --body-file /tmp/x.md', url('issues/643'))
+    expect(r.status).toBe(0)
+    expect(context(r)).toContain('#12 → "Tracked issue" (issue, open)')
+    expect(context(r)).not.toContain('out of time budget')
+  })
+
   // An uncovered publish was already checked BEFORE it shipped, so the same
   // empty read-back there is expected, not a surprise.
   it('stays silent when an uncovered publish names no object', () => {
@@ -731,11 +805,16 @@ describe('bd-publish-verify process behavior', { timeout: 30_000 }, () => {
     expect(context(r)).toContain('no GitHub issue')
   })
 
-  it('exits 0 silently when the ground-truth fetch fails', () => {
+  // A failed read-back is the STRONGEST unkeepable coverage claim: the gate
+  // skipped this text on the promise of a read-back, an object is known to
+  // have been published, and it could not be examined. Silence would be the
+  // same hole the no-target branch exists to close.
+  it('reports a covered publish whose read-back fetch fails', () => {
     const { hook } = makeRepo({}) // no fixtures: every gh api GET 404s
     const r = hook(PR_CREATE, url('pull/652'))
     expect(r.status).toBe(0)
-    expect(r.stdout).toBe('')
+    expect(context(r)).toContain('could not read back')
+    expect(context(r)).toContain('references in what it published are unchecked')
   })
 
   it('never spawns bd in a DB-less clone even with bead ids published', () => {

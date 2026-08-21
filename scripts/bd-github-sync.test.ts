@@ -19,6 +19,8 @@ import {
   matchesCommitCommand,
   matchesUnverifiableCommand,
   hasStdinBody,
+  matchesAnyPublish,
+  matchesApiPublish,
   matchesPrCommand,
   planClosePushes,
   planCloseReconciliation,
@@ -141,11 +143,48 @@ describe('allowsBeadIds', () => {
     ).toBe(true)
   })
 
+  // Heredoc bodies survive into the skeleton, so a line of DATA sits where a
+  // command would. A detector may over-match there; a BYPASS may not.
+  it('ignores a marker forged from heredoc data', () => {
+    const forged = 'cat > n.md <<EOF\nKM_ALLOW_BEAD_IDS=1 is the prefix\nEOF\ngh pr merge 1 --body "km-abc"'
+    expect(allowsBeadIds(forged)).toBe(false)
+    expect(allowsIssueRefs(forged.replace('KM_ALLOW_BEAD_IDS', 'KM_ISSUE_REFS_OK'))).toBe(false)
+  })
+
   it('ignores the marker quoted inside an argument (it would be published)', () => {
     expect(allowsBeadIds('gh pr create --body "mentions KM_ALLOW_BEAD_IDS=1 in prose"')).toBe(false)
     // quoted prose with a fake segment start must not smuggle the marker in
     expect(allowsBeadIds('gh pr create --body "prose; KM_ALLOW_BEAD_IDS=1 more"')).toBe(false)
     expect(allowsBeadIds('gh pr create --body "line one\nKM_ALLOW_BEAD_IDS=1 line two"')).toBe(false)
+  })
+})
+
+// A verb the detectors cannot see is the ONE outcome with no backstop: the
+// gate fast-exits and the read-back skips it too, so the text is examined by
+// neither. Requiring a recognized command position could only be written as a
+// list — of separators, keywords, wrapper commands — and an incomplete list
+// fails in exactly that direction.
+describe('detectors see the verb wherever it sits', () => {
+  it('sees indented, continued and wrapper-prefixed publishes', () => {
+    for (const cmd of [
+      '  gh pr create --title t --body b',
+      'git push -u origin HEAD && \\\n  gh pr create --title t',
+      'cd /tmp\n  gh pr create --title t',
+      'timeout 60 gh pr create --title t',
+      'sudo -u someone gh pr create --title t',
+      'nohup gh pr create --title t',
+    ])
+      expect(matchesAnyPublish(cmd), cmd).toBe(true)
+    expect(matchesCommitCommand('  git commit -m x')).toBe(true)
+  })
+
+  // What keeps prose out is commandSkeleton blanking quoted spans, not the
+  // position test — so dropping the position test costs nothing here.
+  it('still ignores a verb that only appears inside quoted prose', () => {
+    expect(matchesUnverifiableCommand('git commit -m "gh pr merge 652 was the fix"')).toBe(false)
+    expect(matchesUnverifiableCommand('gh pr comment 1 --body "will gh pr merge later"')).toBe(false)
+    expect(matchesApiPublish('git commit -m "reply via gh api -X POST later"')).toBe(false)
+    expect(matchesAnyPublish('echo "gh pr create --title t"')).toBe(false)
   })
 })
 
@@ -1400,6 +1439,32 @@ describe('hookPrePr process behavior', { timeout: 20_000 }, () => {
       expect(r.status, cmd).toBe(2)
       expect(r.stderr, cmd).toContain('close keyword targets a PR')
     }
+  })
+
+  // A `$` or backtick inside SINGLE quotes never expands, so it is published
+  // text rather than a hidden argument — an inline markdown code span or a
+  // price must not cost the maximum-friction round. Double-quoted, the shell
+  // WOULD expand it, so that stays uncovered.
+  it('treats single-quoted dollars and backticks as text, not expansion', () => {
+    const { hook } = makeRepo({ dbReady: true })
+    expect(hook("gh pr comment 652 --body 'the `isPostVerifiable` gate'").status).toBe(0)
+    expect(hook("gh pr comment 652 --body 'costs $5 per run'").status).toBe(0)
+    // double quotes DO expand, so the gate still refuses to call it covered
+    expect(hook('gh pr comment 652 --body "see $(cat notes.md)"').status).toBe(2)
+  })
+
+  // The gate must never fail on its OWN bug: PreToolUse treats an unasked-for
+  // non-zero exit as a hook error and runs the command anyway, so a throw
+  // would disable every check while looking like a problem with the command.
+  it('never exits non-zero for its own errors', () => {
+    const { hook, repo } = makeRepo({ dbReady: true })
+    mkdirSync(join(repo, 'a-directory.txt'))
+    // a directory where a message file is expected takes the fail-closed
+    // branch (exit 2 with the block message), not a stack trace
+    const dir = hook(`git commit -F ${join(repo, 'a-directory.txt')} -m x`)
+    expect(dir.status).toBe(2)
+    expect(dir.stderr).toContain('Cannot read message file')
+    expect(dir.stderr).not.toContain('at readFileSync')
   })
 
   // The gh-vocabulary layer: flags and selectors that leave the read-back
