@@ -1,0 +1,2 @@
+var e=new TextEncoder,t=t=>{let n=t.map(t=>e.encode(t)),r=n.reduce((e,t)=>e+4+t.length,0),i=new Uint8Array(r),a=new DataView(i.buffer),o=0;for(let e of n)a.setUint32(o,e.length,!1),o+=4,i.set(e,o),o+=e.length;return i},n=(e,n,r)=>t([e,n,r,`1`]),r=e=>t([e,`canary`,`1`]),i=(e,n)=>t([e,n,`asset-bytes`,`1`]);export{i as assetBytesAad,r as canaryAad,n as contentAad};
+//# sourceMappingURL=aad.js.map
