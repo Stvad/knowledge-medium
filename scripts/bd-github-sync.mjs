@@ -172,54 +172,6 @@ export const matchesApiPublish = cmd => {
   )
 }
 
-// An explicit GET/HEAD is a read no matter what fields ride along — gh sends
-// them as the query string (gh api --help). Deliberately COMMAND-WIDE and
-// veto-only: a compound can mix a GET segment with a mutating one, and any
-// per-segment method attribution is shell parsing this gate refuses to do.
-// So the flag never makes a command invisible (matchesApiPublish above still
-// looks) — it only forbids the verifier's REPAIR, where writing to a merely
-// read object is the risk. Checked on the raw text too: a quoted method
-// value ("GET") is blanked out of the skeleton.
-const EXPLICIT_READ = /(?<![\w-])(?:-X|--method)(?:=|\s+)?['"]?(?:GET|HEAD)\b/i
-export const hasExplicitGetMethod = cmd => EXPLICIT_READ.test(commandSkeleton(cmd)) || EXPLICIT_READ.test(cmd)
-
-// Anything that would make more than one command run — separators, pipes,
-// newlines, or substitutions (which execute a command of their own) —
-// checked with every quoted span blanked so prose cannot fake it. The
-// verifier refuses api-mode repair on compounds: an implicit-read sibling's
-// response can be the only html_url in the merged output, and attributing
-// the response to the mutating segment would be shell parsing.
-// gh's edit verbs can change ONLY metadata (--add-label and friends);
-// repairing a body such an edit never touched would rewrite historical
-// text — possibly a deliberate, escape-approved literal, since the escape
-// is not stored on the object. The text-bearing flags are the closed set
-// the edit verbs take, tested on the raw text for attached forms.
-const GH_EDIT = new RegExp(
-  SEGMENT_START + COMMAND_PREFIXES + String.raw`(?:\S*\/)?gh\s+` + GH_GLOBAL_OPTS + String.raw`(?:pr|issue|release)\s+edit\b`,
-  'm',
-)
-export const matchesTextlessEdit = cmd => {
-  // The text-flag tests GRANT repair, so they must not read prose: quoted
-  // values are blanked by the skeleton, and shell comments are stripped —
-  // `--add-label bug # no --body change` stays textless. Attached unquoted
-  // forms (-bfoo, -fbody=) survive the skeleton and still count.
-  const sk = commandSkeleton(cmd).replace(/(^|\s)#[^\n]*/g, '$1')
-  if (GH_EDIT.test(sk)) return !/(?<![\w-])(?:--body|--title|--body-file|--notes|--notes-file|-[btFT])/.test(sk)
-  // An api PATCH/PUT that carries no text-bearing field (state flips,
-  // labels) never touched the body it fetched either.
-  if (matchesApiPublish(cmd) && /(?<![\w-])(?:-X|--method)(?:=|\s+)?['"]?(?:PATCH|PUT)\b/i.test(sk))
-    return !/\b(?:body|title|name|description)=|--input\b/.test(sk)
-  return false
-}
-
-export const isCompoundCommand = cmd => {
-  // Substitutions execute even inside double quotes, so only single-quoted
-  // spans (which never execute) are blanked before the $/backtick test;
-  // separators are tested with ALL quoted spans blanked.
-  const noSingles = cmd.replace(/'[^']*'/g, "''")
-  return /[;&|\n]/.test(noSingles.replace(/"(?:\\.|[^"\\])*"/g, '""')) || /[$`]/.test(noSingles)
-}
-
 /**
  * Which target kinds this command's CLI publish verbs can have produced.
  * Bounds the post-publish verifier's surface: the Bash tool merges the whole
@@ -227,7 +179,7 @@ export const isCompoundCommand = cmd => {
  * never touched — a kind no verb here produces must not even be fetched.
  * (gh api mutations are not consulted: their output names the exact object.)
  */
-export const repairableKinds = cmd => {
+export const publishableKinds = cmd => {
   const sk = commandSkeleton(cmd)
   const kinds = new Set()
   if (/\bpr\s+(?:create|new|edit|merge)\b/.test(sk)) kinds.add('pr')

@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync, existsSync } from 'node:fs'
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
-import { hasExplicitGetMethod, isCompoundCommand, matchesApiPublish, repairableKinds } from './bd-github-sync.mjs'
-import { apiPathFor, clipContext, mergedPrNumbers, planBeadIdRewrite, publishedTargets } from './bd-publish-verify.mjs'
+import { matchesApiPublish, publishableKinds } from './bd-github-sync.mjs'
+import { apiPathFor, clipContext, mergedPrNumbers, publishedTargets } from './bd-publish-verify.mjs'
 
 const PR_CREATE = 'gh pr create --title t --body-file /tmp/x.md'
 // A compound whose verbs produce every kind — for tests that exercise
@@ -24,9 +24,9 @@ describe('matchesApiPublish', () => {
     expect(matchesApiPublish('cat x | gh api graphql -f query=@-')).toBe(true)
   })
 
-  // Explicit-GET commands still MATCH (a compound can mix a GET segment
-  // with a mutating one, so the look must happen) — the GET is a
-  // command-wide REPAIR veto instead, via hasExplicitGetMethod.
+  // Explicit-GET commands still MATCH: a compound can mix a GET segment with
+  // a mutating one, so the look must happen. Reading back an object a GET
+  // merely printed costs one echoed line.
   it('keeps looking at explicit-GET field commands; only plain no-field reads stay out', () => {
     expect(matchesApiPublish('gh api repos/Stvad/knowledge-medium/issues/652')).toBe(false)
     expect(matchesApiPublish('gh api --method GET repos/Stvad/knowledge-medium/issues -f state=open')).toBe(true)
@@ -38,35 +38,13 @@ describe('matchesApiPublish', () => {
   })
 })
 
-describe('hasExplicitGetMethod', () => {
-  it('detects explicit GET/HEAD in plain, attached, and quoted forms', () => {
-    expect(hasExplicitGetMethod('gh api --method GET repos/x -f q=1')).toBe(true)
-    expect(hasExplicitGetMethod('gh api -XGET repos/x -f q=1')).toBe(true)
-    expect(hasExplicitGetMethod('gh api -X "GET" repos/x -f q=1')).toBe(true)
-    expect(hasExplicitGetMethod('gh api repos/x -f body=hi')).toBe(false)
-    expect(hasExplicitGetMethod('gh api -X PATCH repos/x --input -')).toBe(false)
-  })
-})
-
-describe('isCompoundCommand', () => {
-  it('detects separators, pipes, newlines and substitutions outside quotes', () => {
-    expect(isCompoundCommand('gh api repos/x -f body=hi; true')).toBe(true)
-    expect(isCompoundCommand('true && gh api repos/x -f body=hi')).toBe(true)
-    expect(isCompoundCommand('gh api repos/x -f body=hi | tee log')).toBe(true)
-    expect(isCompoundCommand('gh api repos/x -f body="$(cat msg)"')).toBe(true)
-    expect(isCompoundCommand('gh api repos/x -f body=hi')).toBe(false)
-    // quoted prose must not fake a compound
-    expect(isCompoundCommand('gh api repos/x -f body="a; b | c && d"')).toBe(false)
-  })
-})
-
-describe('repairableKinds', () => {
+describe('publishableKinds', () => {
   it('maps publish verbs to the kinds their output can name', () => {
-    expect([...repairableKinds('gh pr create --title t')]).toEqual(['pr'])
-    expect([...repairableKinds('gh issue close 9 -c done')].sort()).toEqual(['comment', 'issue'])
-    expect([...repairableKinds('gh pr comment 1 -b x')]).toEqual(['comment'])
-    expect([...repairableKinds('gh release create v1 --notes n')]).toEqual(['release'])
-    expect([...repairableKinds(ALL_KINDS_CMD)].sort()).toEqual([
+    expect([...publishableKinds('gh pr create --title t')]).toEqual(['pr'])
+    expect([...publishableKinds('gh issue close 9 -c done')].sort()).toEqual(['comment', 'issue'])
+    expect([...publishableKinds('gh pr comment 1 -b x')]).toEqual(['comment'])
+    expect([...publishableKinds('gh release create v1 --notes n')]).toEqual(['release'])
+    expect([...publishableKinds(ALL_KINDS_CMD)].sort()).toEqual([
       'comment',
       'issue',
       'pr',
@@ -77,7 +55,7 @@ describe('repairableKinds', () => {
   })
 
   it('does not read verbs out of quoted prose', () => {
-    expect([...repairableKinds('gh pr comment 1 -b "later run gh issue edit 2"')]).toEqual(['comment'])
+    expect([...publishableKinds('gh pr comment 1 -b "later run gh issue edit 2"')]).toEqual(['comment'])
   })
 })
 
@@ -118,8 +96,8 @@ describe('publishedTargets', () => {
 
   // The injection pin: a gh api response's body can QUOTE foreign URLs (a
   // comment quoting another PR); only the top-level html_url may become a
-  // target, else the verifier would fetch — and potentially rewrite — an
-  // object this command never touched.
+  // target, else the verifier would fetch and report an object this
+  // command never touched.
   it('takes only the top-level html_url from gh api output, never URLs quoted in the body', () => {
     const cmd = 'gh api repos/Stvad/knowledge-medium/issues/652/comments -f body=hi'
     const out = JSON.stringify({
@@ -144,8 +122,8 @@ describe('publishedTargets', () => {
   })
 
   // A sibling command can print an html_url object of its own; picking one
-  // line would be output→command association. ALL object lines become
-  // candidates, which the single-object repair gate then disqualifies.
+  // line would be output→command association, so ALL object lines are read
+  // back — an extra one costs a line of echo, not a wrong write.
   it('unwraps --slurp/--paginate array responses', () => {
     const cmd = 'gh api repos/Stvad/knowledge-medium/issues/652/comments -f body=hi --paginate --slurp'
     const out = JSON.stringify([{ html_url: url('pull/652#issuecomment-99') }])
@@ -186,24 +164,6 @@ describe('apiPathFor', () => {
   })
 })
 
-describe('planBeadIdRewrite', () => {
-  const map = new Map([
-    ['km-abc', 12],
-    ['km-abc-def', 34],
-  ])
-
-  it('substitutes mapped ids, reports each rewrite once, lists unmapped ids', () => {
-    const { newText, rewrites, unmapped } = planBeadIdRewrite('km-abc then km-abc; also km-zzzz', map)
-    expect(newText).toBe('#12 then #12; also km-zzzz')
-    expect(rewrites).toEqual([{ id: 'km-abc', number: 12 }])
-    expect(unmapped).toEqual(['km-zzzz'])
-  })
-
-  it('matches whole bead ids — a hyphenated suffix is part of the id, not a boundary', () => {
-    expect(planBeadIdRewrite('see km-abc-def now', map).newText).toBe('see #34 now')
-  })
-})
-
 describe('clipContext', () => {
   it('passes short text through and clips long text with a notice', () => {
     expect(clipContext('short')).toBe('short')
@@ -219,17 +179,15 @@ describe('clipContext', () => {
 })
 
 // Process pins: the fail-open contract (exit 0 always, silence unless there
-// is something to say), the read-back-then-repair loop, and the mint path.
+// is something to say) and the read-back loop.
 // Measured ~200ms per spawn solo; budgeted for the 6x load stretch.
 describe('bd-publish-verify process behavior', { timeout: 30_000 }, () => {
   const script = fileURLToPath(new URL('./bd-publish-verify.mjs', import.meta.url))
-  const patchName = (apiPath: string) => `patch-input-${apiPath.replaceAll('/', '_')}.json`
 
   const makeRepo = (opts: {
     dbReady?: boolean
     fixtures?: Record<string, object>
     shows?: object[][]
-    dry?: boolean
     budgetMs?: number
   }) => {
     const repo = mkdtempSync(join(tmpdir(), 'bd-publish-verify-'))
@@ -291,16 +249,13 @@ describe('bd-publish-verify process behavior', { timeout: 30_000 }, () => {
     chmodSync(join(shimDir, 'bd'), 0o755)
     chmodSync(join(shimDir, 'gh'), 0o755)
     // GH_TOKEN/GH_HOST: if a shim ever breaks, PATH search must not fall
-    // through to the REAL gh with live credentials — this suite deliberately
-    // runs with the dry valve off.
+    // through to the REAL gh with live credentials.
     const env: Record<string, string | undefined> = {
       ...process.env,
       PATH: `${shimDir}:${process.env.PATH}`,
       GH_TOKEN: '',
       GH_HOST: '127.0.0.1',
     }
-    delete env.BD_GITHUB_SYNC_DRY
-    if (opts.dry) env.BD_GITHUB_SYNC_DRY = '1'
     if (opts.budgetMs !== undefined) env.BD_PUBLISH_VERIFY_BUDGET_MS = String(opts.budgetMs)
     const hook = (command: string, stdout: string | null, extra: object = {}) => {
       const payload = JSON.stringify({
@@ -328,7 +283,7 @@ describe('bd-publish-verify process behavior', { timeout: 30_000 }, () => {
 
   // Pins the publish-command gate SPECIFICALLY: this output is exactly what
   // the api-mode branch accepts (top-level html_url JSON), so without the
-  // gate a plain file dump would trigger fetch-and-rewrite of a published
+  // gate a plain file dump would trigger a fetch-and-report of a published
   // object. The `gh pr view` case above cannot pin this — its URL output
   // already dies in the api-mode JSON parse one layer later.
   it('ignores non-publish commands even when their output is an html_url object', () => {
@@ -353,8 +308,10 @@ describe('bd-publish-verify process behavior', { timeout: 30_000 }, () => {
     expect(r.stdout).toBe('')
   })
 
-  it('rewrites a mapped bead id in the published body, PATCHing only the changed field', () => {
-    const { hook, repo, shimCalls } = makeRepo({
+  // The mapped number joins the refs echo, so the agent reads its real title
+  // before pasting it into the body by hand.
+  it('reports a published bead id with the mapped number and that number real title', () => {
+    const { hook, shimCalls } = makeRepo({
       fixtures: {
         'repos/Stvad/knowledge-medium/pulls/652': { html_url: url('pull/652'), title: 'T', body: 'tracks km-abc' },
         'repos/Stvad/knowledge-medium/issues/12': { title: 'Tracked issue', state: 'open' },
@@ -363,37 +320,30 @@ describe('bd-publish-verify process behavior', { timeout: 30_000 }, () => {
     })
     const r = hook(PR_CREATE, `some output\n${url('pull/652')}`)
     expect(r.status).toBe(0)
-    expect(context(r)).toContain('rewrote km-abc → #12')
-    const patched = JSON.parse(readFileSync(join(repo, patchName('repos/Stvad/knowledge-medium/pulls/652')), 'utf8'))
-    // the unchanged title must NOT ride along: a concurrent edit between the
-    // fetch and the PATCH would be overwritten by a stale copy
-    expect(patched).toEqual({ body: 'tracks #12' })
-    // the substituted number is then echoed with its ground truth
+    expect(context(r)).toContain('km-abc → #12')
     expect(context(r)).toContain('#12 → "Tracked issue" (issue, open)')
-    expect(shimCalls()).not.toContain('bd github sync')
+    expect(shimCalls()).not.toContain('gh api -X')
   })
 
-  it('mints the issue first when the published bead has none, then rewrites', () => {
-    const { hook, repo, shimCalls } = makeRepo({
+  // Minting is the sync's job, not a read-only hook's: an unmapped id is
+  // reported with the command that fixes it.
+  it('reports an unmapped bead id without minting an issue for it', () => {
+    const { hook, shimCalls } = makeRepo({
       fixtures: {
         'repos/Stvad/knowledge-medium/pulls/652': { html_url: url('pull/652'), title: 'T', body: 'tracks km-zzzz' },
-        'repos/Stvad/knowledge-medium/issues/88': { title: 'Minted issue', state: 'open' },
       },
-      shows: [[{ id: 'km-zzzz', external_ref: null }], [{ id: 'km-zzzz', external_ref: url('issues/88') }]],
+      shows: [[{ id: 'km-zzzz', external_ref: null }]],
     })
     const r = hook(PR_CREATE, url('pull/652'))
     expect(r.status).toBe(0)
-    expect(shimCalls()).toContain('bd github sync --push-only --issues km-zzzz')
-    expect(context(r)).toContain('rewrote km-zzzz → #88')
-    expect(JSON.parse(readFileSync(join(repo, patchName('repos/Stvad/knowledge-medium/pulls/652')), 'utf8')).body).toBe(
-      'tracks #88',
-    )
+    expect(shimCalls()).not.toContain('bd github sync')
+    expect(context(r)).toContain('km-zzzz → no GitHub issue yet')
   })
 
   // The pre-gate's escape marks the mention as a deliberate literal — the
-  // verifier must not "repair" it back into a reference.
-  it('honors KM_ALLOW_BEAD_IDS: no lookup, no rewrite, refs still echoed', () => {
-    const { hook, repo, shimCalls } = makeRepo({
+  // verifier must not report it as a mistake, nor look it up.
+  it('honors KM_ALLOW_BEAD_IDS: no lookup, no bead-id note, refs still echoed', () => {
+    const { hook, shimCalls } = makeRepo({
       fixtures: {
         'repos/Stvad/knowledge-medium/pulls/652': {
           html_url: url('pull/652'),
@@ -407,95 +357,8 @@ describe('bd-publish-verify process behavior', { timeout: 30_000 }, () => {
     const r = hook(`KM_ALLOW_BEAD_IDS=1 ${PR_CREATE}`, url('pull/652'))
     expect(r.status).toBe(0)
     expect(shimCalls()).not.toContain('bd ')
-    expect(existsSync(join(repo, patchName('repos/Stvad/knowledge-medium/pulls/652')))).toBe(false)
-    expect(context(r)).not.toContain('rewrote')
+    expect(context(r)).not.toContain('publishes bead ids')
     expect(context(r)).toContain('#12 → "Tracked issue" (issue, open)')
-  })
-
-  // A stale external_ref (deleted or transferred issue) must not be written
-  // into public text.
-  it('leaves a bead id alone when its mapped issue does not resolve', () => {
-    const { hook, repo } = makeRepo({
-      fixtures: {
-        'repos/Stvad/knowledge-medium/pulls/652': { html_url: url('pull/652'), title: 'T', body: 'tracks km-abc' },
-        // no fixture for issues/12: the mapped issue 404s
-      },
-      shows: [[{ id: 'km-abc', external_ref: url('issues/12') }]],
-    })
-    const r = hook(PR_CREATE, url('pull/652'))
-    expect(r.status).toBe(0)
-    expect(context(r)).toContain('does not resolve')
-    expect(existsSync(join(repo, patchName('repos/Stvad/knowledge-medium/pulls/652')))).toBe(false)
-  })
-
-  // The uniqueness gate: two same-kind URLs in the output mean this hook
-  // cannot tell which one the command published — repair neither.
-  it('does not rewrite when the output names more than one object of the kind', () => {
-    const { hook, repo } = makeRepo({
-      fixtures: {
-        'repos/Stvad/knowledge-medium/issues/comments/91': {
-          html_url: url('pull/1#issuecomment-91'),
-          body: 'tracks km-abc',
-        },
-        'repos/Stvad/knowledge-medium/issues/comments/92': { html_url: url('pull/1#issuecomment-92'), body: 'clean' },
-        'repos/Stvad/knowledge-medium/issues/12': { title: 'Tracked issue', state: 'open' },
-      },
-      shows: [[{ id: 'km-abc', external_ref: url('issues/12') }]],
-    })
-    const r = hook('gh pr comment 1 -F /tmp/x.md', `${url('pull/1#issuecomment-91')}\n${url('pull/1#issuecomment-92')}`)
-    expect(r.status).toBe(0)
-    expect(context(r)).toContain('NOT auto-rewriting')
-    expect(existsSync(join(repo, patchName('repos/Stvad/knowledge-medium/issues/comments/91')))).toBe(false)
-  })
-
-  // The two round-4 repros: association is unrecoverable, so ONLY the
-  // single-object case may write.
-  it('never rewrites when a sibling command printed its own html_url object (api mode)', () => {
-    const { hook, repo } = makeRepo({
-      fixtures: {
-        'repos/Stvad/knowledge-medium/issues/12': {
-          html_url: url('issues/12'),
-          title: 'Innocent', state: 'open',
-          body: 'tracks km-abc',
-        },
-        'repos/Stvad/knowledge-medium/issues/comments/99': {
-          html_url: url('pull/652#issuecomment-99'),
-          body: 'the real publish',
-        },
-      },
-      shows: [[{ id: 'km-abc', external_ref: url('issues/12') }]],
-    })
-    const cmd = 'printf x; gh api repos/Stvad/knowledge-medium/issues/652/comments -f body=hi'
-    const out = [
-      JSON.stringify({ html_url: url('issues/12'), body: 'tracks km-abc' }),
-      JSON.stringify({ html_url: url('pull/652#issuecomment-99'), body: 'the real publish' }),
-    ].join('\n')
-    const r = hook(cmd, out)
-    expect(r.status).toBe(0)
-    expect(context(r)).toContain('NOT auto-rewriting')
-    expect(existsSync(join(repo, patchName('repos/Stvad/knowledge-medium/issues/12')))).toBe(false)
-  })
-
-  it('echoes but never rewrites when the command carries an explicit GET segment', () => {
-    const { hook, repo } = makeRepo({
-      fixtures: {
-        'repos/Stvad/knowledge-medium/issues/comments/99': {
-          html_url: url('pull/652#issuecomment-99'),
-          body: 'tracks km-abc, relates to #77',
-        },
-        'repos/Stvad/knowledge-medium/issues/77': { title: 'Referenced', state: 'open' },
-        'repos/Stvad/knowledge-medium/issues/12': { title: 'Tracked issue', state: 'open' },
-      },
-      shows: [[{ id: 'km-abc', external_ref: url('issues/12') }]],
-    })
-    const cmd =
-      'gh api --method GET repos/Stvad/knowledge-medium/issues -f state=open; gh api repos/Stvad/knowledge-medium/issues/652/comments -f body=x'
-    const out = JSON.stringify({ html_url: url('pull/652#issuecomment-99') })
-    const r = hook(cmd, out)
-    expect(r.status).toBe(0)
-    expect(context(r)).toContain('explicit GET')
-    expect(context(r)).toContain('#77 → "Referenced" (issue, open)')
-    expect(existsSync(join(repo, patchName('repos/Stvad/knowledge-medium/issues/comments/99')))).toBe(false)
   })
 
   // #683 D: the merge commit is the one truly unrepairable text — read it
@@ -520,27 +383,8 @@ describe('bd-publish-verify process behavior', { timeout: 30_000 }, () => {
     expect(context(r)).not.toContain('#652 →')
   })
 
-  // A vetoed repair must not mint either: reading one of several candidate
-  // objects is no licence to create public issues for bead ids it mentions.
-  it('suppresses the mint when repair is vetoed', () => {
-    const { hook, shimCalls } = makeRepo({
-      fixtures: {
-        'repos/Stvad/knowledge-medium/issues/comments/91': {
-          html_url: url('pull/1#issuecomment-91'),
-          body: 'tracks km-zzzz',
-        },
-        'repos/Stvad/knowledge-medium/issues/comments/92': { html_url: url('pull/1#issuecomment-92'), body: 'clean' },
-      },
-      shows: [[]],
-    })
-    const r = hook('gh pr comment 1 -F /tmp/x.md', `${url('pull/1#issuecomment-91')}\n${url('pull/1#issuecomment-92')}`)
-    expect(r.status).toBe(0)
-    expect(shimCalls()).not.toContain('bd github sync')
-    expect(context(r)).toContain('mint suppressed: repair is vetoed')
-  })
-
-  it('echoes the post-mode issue-reference table for published refs, with no PATCH', () => {
-    const { hook, repo } = makeRepo({
+  it('echoes the post-mode issue-reference table for published refs', () => {
+    const { hook } = makeRepo({
       fixtures: {
         'repos/Stvad/knowledge-medium/issues/643': { html_url: url('issues/643'), title: 'T', body: 'relates to #12' },
         'repos/Stvad/knowledge-medium/issues/12': { title: 'Tracked issue', state: 'open' },
@@ -551,7 +395,6 @@ describe('bd-publish-verify process behavior', { timeout: 30_000 }, () => {
     expect(context(r)).toContain('#12 → "Tracked issue" (issue, open)')
     expect(context(r)).toContain('already published')
     expect(context(r)).not.toContain('KM_ISSUE_REFS_OK')
-    expect(existsSync(join(repo, patchName('repos/Stvad/knowledge-medium/issues/643')))).toBe(false)
   })
 
   it('verifies a comment target through the comments API', () => {
@@ -573,10 +416,9 @@ describe('bd-publish-verify process behavior', { timeout: 30_000 }, () => {
   })
 
   // An api-published review's html_url carries the #pullrequestreview
-  // fragment — the REVIEW is the object, not its parent PR, and its body
-  // updates via PUT on the reviews resource.
-  it('verifies and repairs a review target via PUT, never touching the parent PR', () => {
-    const { hook, repo, shimCalls } = makeRepo({
+  // fragment — the REVIEW is the object read back, not its parent PR.
+  it('verifies a review target through the reviews API, never the parent PR', () => {
+    const { hook, shimCalls } = makeRepo({
       fixtures: {
         'repos/Stvad/knowledge-medium/pulls/652/reviews/77': {
           html_url: url('pull/652#pullrequestreview-77'),
@@ -590,22 +432,20 @@ describe('bd-publish-verify process behavior', { timeout: 30_000 }, () => {
     const out = JSON.stringify({ html_url: url('pull/652#pullrequestreview-77'), body: 'tracks km-abc' })
     const r = hook(cmd, out)
     expect(r.status).toBe(0)
-    expect(shimCalls()).toContain('-X PUT repos/Stvad/knowledge-medium/pulls/652/reviews/77')
-    expect(JSON.parse(readFileSync(join(repo, patchName('repos/Stvad/knowledge-medium/pulls/652/reviews/77')), 'utf8'))).toEqual({
-      body: 'tracks #12',
-    })
+    expect(shimCalls()).toContain('gh api repos/Stvad/knowledge-medium/pulls/652/reviews/77')
+    expect(context(r)).toContain('km-abc → #12')
     expect(shimCalls()).not.toContain('gh api repos/Stvad/knowledge-medium/pulls/652 ')
   })
 
-  // Releases carry their title in `name`, and PATCH by numeric id.
-  it('reads and repairs a release name and body through the releases API', () => {
-    const { hook, repo } = makeRepo({
+  // Releases are read by TAG and carry their title in `name`.
+  it('reads a release name and body through the releases API', () => {
+    const { hook } = makeRepo({
       fixtures: {
         'repos/Stvad/knowledge-medium/releases/tags/v1.2.0': {
           id: 9,
           html_url: url('releases/tag/v1.2.0'),
           name: 'km-abc ships',
-          body: 'tracks km-abc',
+          body: 'relates to #12',
         },
         'repos/Stvad/knowledge-medium/issues/12': { title: 'Tracked issue', state: 'open' },
       },
@@ -613,8 +453,9 @@ describe('bd-publish-verify process behavior', { timeout: 30_000 }, () => {
     })
     const r = hook('gh release edit v1.2.0 --notes-file /tmp/x.md', url('releases/tag/v1.2.0'))
     expect(r.status).toBe(0)
-    const patched = JSON.parse(readFileSync(join(repo, patchName('repos/Stvad/knowledge-medium/releases/9')), 'utf8'))
-    expect(patched).toEqual({ body: 'tracks #12', name: '#12 ships' })
+    // the name field is scanned too, not just the body
+    expect(context(r)).toContain('km-abc → #12')
+    expect(context(r)).toContain('#12 → "Tracked issue" (issue, open)')
   })
 
   // PostToolUseFailure delivers the output inside `error`, with no
@@ -652,29 +493,6 @@ describe('bd-publish-verify process behavior', { timeout: 30_000 }, () => {
     expect(shimCalls().match(/issues\/comments\//g)?.length).toBe(5)
   })
 
-  // The implicit-read compound: a sibling read's response can be the ONLY
-  // html_url in the merged output when the mutation itself prints none
-  // (dispatches, --silent siblings) — no explicit GET to veto on, so the
-  // compound itself must. Reading issue 12 is not publishing it.
-  it('never repairs in api mode when the command is a compound', () => {
-    const { hook, repo, shimCalls } = makeRepo({
-      fixtures: {
-        'repos/Stvad/knowledge-medium/issues/12': {
-          html_url: url('issues/12'),
-          title: 'Innocent',
-          body: 'tracks km-abc',
-        },
-      },
-      shows: [[{ id: 'km-abc', external_ref: url('issues/12') }]],
-    })
-    const cmd = 'gh api repos/Stvad/knowledge-medium/issues/12; gh api repos/Stvad/knowledge-medium/dispatches -f event_type=build'
-    const r = hook(cmd, JSON.stringify({ html_url: url('issues/12'), body: 'tracks km-abc' }))
-    expect(r.status).toBe(0)
-    expect(context(r)).toContain('cannot be attributed')
-    expect(shimCalls()).not.toContain('bd github sync')
-    expect(existsSync(join(repo, patchName('repos/Stvad/knowledge-medium/issues/12')))).toBe(false)
-  })
-
   // Pins the whole deadline plumbing: with a zero budget every fetch is
   // skipped and the hook says so instead of dying mid-flight.
   it('skips all verification work when the time budget is exhausted', () => {
@@ -686,40 +504,6 @@ describe('bd-publish-verify process behavior', { timeout: 30_000 }, () => {
     expect(r.status).toBe(0)
     expect(context(r)).toContain('out of time budget')
     expect(shimCalls()).not.toContain('gh api')
-  })
-
-  // A redirected publish can leave a SIBLING's printed URL as the only one
-  // in the output — compound invocations are echo-only in every mode.
-  it('never repairs CLI compounds either — a sibling URL must not become the target', () => {
-    const { hook, repo } = makeRepo({
-      fixtures: {
-        'repos/Stvad/knowledge-medium/issues/12': { html_url: url('issues/12'), title: 'Innocent', body: 'tracks km-abc' },
-      },
-      shows: [[{ id: 'km-abc', external_ref: url('issues/12') }]],
-    })
-    const r = hook('cat /tmp/old-url; gh issue edit 13 --body clean >/dev/null', url('issues/12'))
-    expect(r.status).toBe(0)
-    expect(context(r)).toContain('cannot be attributed')
-    expect(existsSync(join(repo, patchName('repos/Stvad/knowledge-medium/issues/12')))).toBe(false)
-  })
-
-  // The fresh read is authoritative for the ECHO too: a concurrent edit in
-  // the mint window may have replaced the bead id with a new reference, and
-  // the reference table must show the published text, not the stale copy.
-  it('echoes references from the fresh object even when no rewrite applies', () => {
-    const { hook, repo } = makeRepo({
-      fixtures: {
-        'repos/Stvad/knowledge-medium/pulls/652': { html_url: url('pull/652'), title: 'T', body: 'tracks km-abc' },
-        'repos/Stvad/knowledge-medium/pulls/652#2': { html_url: url('pull/652'), title: 'T', body: 'now relates to #77' },
-        'repos/Stvad/knowledge-medium/issues/12': { title: 'Tracked issue', state: 'open' },
-        'repos/Stvad/knowledge-medium/issues/77': { title: 'Concurrent ref', state: 'open' },
-      },
-      shows: [[{ id: 'km-abc', external_ref: url('issues/12') }]],
-    })
-    const r = hook(PR_CREATE, url('pull/652'))
-    expect(r.status).toBe(0)
-    expect(context(r)).toContain('#77 → "Concurrent ref" (issue, open)')
-    expect(existsSync(join(repo, patchName('repos/Stvad/knowledge-medium/pulls/652')))).toBe(false)
   })
 
   // A rebase merge lands each PR commit directly — their messages carry the
@@ -747,26 +531,6 @@ describe('bd-publish-verify process behavior', { timeout: 30_000 }, () => {
     expect(context(r)).toContain('acted only if this was a merge or rebase')
   })
 
-  // A FAILED command published nothing — an object its error output names
-  // is echoed, never minted for or written.
-  it('keeps failure-event targets echo-only', () => {
-    const { hook, repo, shimCalls } = makeRepo({
-      fixtures: {
-        'repos/Stvad/knowledge-medium/pulls/652': { html_url: url('pull/652'), title: 'T', body: 'tracks km-abc' },
-        'repos/Stvad/knowledge-medium/issues/12': { title: 'Tracked issue', state: 'open' },
-      },
-      shows: [[{ id: 'km-abc', external_ref: url('issues/12') }]],
-    })
-    const r = hook('gh pr create --title t --body-file /tmp/x.md; exit 1', null, {
-      hook_event_name: 'PostToolUseFailure',
-      error: `Exit code 1\na pull request for this branch already exists:\n${url('pull/652')}`,
-    })
-    expect(r.status).toBe(0)
-    expect(JSON.parse(r.stdout).hookSpecificOutput.additionalContext).toContain('never written')
-    expect(shimCalls()).not.toContain('bd github sync')
-    expect(existsSync(join(repo, patchName('repos/Stvad/knowledge-medium/pulls/652')))).toBe(false)
-  })
-
   it('reports merged PRs dropped by the read-back cap and the 100-commit page limit', () => {
     const sha = 'aaa1111222233334444555566667777888899990'
     const manyCommits = Array.from({ length: 100 }, (_, i) => ({ commit: { message: `c${i}\n\nrefs #7${i % 10}` } }))
@@ -783,123 +547,6 @@ describe('bd-publish-verify process behavior', { timeout: 30_000 }, () => {
     const ctx = JSON.parse(r.stdout).hookSpecificOutput.additionalContext
     expect(ctx).toContain('1 additional merged PR(s) not read back')
     expect(ctx).toContain('only the first 100 landed commits were scanned')
-  })
-
-  // A metadata-only edit never touched the body it fetched — repairing it
-  // would rewrite historical text, possibly a deliberately escaped literal.
-  it('keeps metadata-only edits echo-only', () => {
-    const { hook, repo } = makeRepo({
-      fixtures: {
-        'repos/Stvad/knowledge-medium/pulls/652': { html_url: url('pull/652'), title: 'T', body: 'literal km-abc' },
-        'repos/Stvad/knowledge-medium/issues/12': { title: 'Tracked issue', state: 'open' },
-      },
-      shows: [[{ id: 'km-abc', external_ref: url('issues/12') }]],
-    })
-    const r = hook('gh pr edit 652 --add-label bug', url('pull/652'))
-    // prose must not re-enable repair: comments and quoted values are not flags
-    const prose = hook('gh pr edit 652 --add-label bug # no --body change', url('pull/652'))
-    expect(prose.status).toBe(0)
-    expect(context(prose)).toContain('historical text')
-    expect(r.status).toBe(0)
-    expect(context(r)).toContain('historical text')
-    expect(existsSync(join(repo, patchName('repos/Stvad/knowledge-medium/pulls/652')))).toBe(false)
-  })
-
-  // The mint path can cost ~75s of child timeouts — a late start would
-  // overrun the host kill with the repair unreported.
-  it('skips the bead-id leg when too little budget remains for a mint', () => {
-    const { hook, shimCalls } = makeRepo({
-      budgetMs: 40_000,
-      fixtures: {
-        'repos/Stvad/knowledge-medium/pulls/652': { html_url: url('pull/652'), title: 'T', body: 'tracks km-zzzz' },
-      },
-      shows: [[{ id: 'km-zzzz', external_ref: null }]],
-    })
-    const r = hook(PR_CREATE, url('pull/652'))
-    expect(r.status).toBe(0)
-    expect(context(r)).toContain('not enough time budget')
-    expect(shimCalls()).not.toContain('bd ')
-  })
-
-  // typeof null is 'object': a FAILED validation lookup must drop the
-  // mapping — a rewrite may never publish a number nothing read.
-  it('drops a mapping whose validation lookup fails transiently', () => {
-    const { hook, repo } = makeRepo({
-      fixtures: {
-        'repos/Stvad/knowledge-medium/pulls/652': { html_url: url('pull/652'), title: 'T', body: 'tracks km-abc' },
-        'repos/Stvad/knowledge-medium/issues/12#fail': { message: 'Server Error' },
-      },
-      shows: [[{ id: 'km-abc', external_ref: url('issues/12') }]],
-    })
-    const r = hook(PR_CREATE, url('pull/652'))
-    expect(r.status).toBe(0)
-    expect(context(r)).toContain('could not be verified')
-    expect(existsSync(join(repo, patchName('repos/Stvad/knowledge-medium/pulls/652')))).toBe(false)
-  })
-
-  // An api PATCH that carries no text field never touched the body it
-  // fetched — same veto as metadata-only CLI edits.
-  it('keeps metadata-only api mutations echo-only, text-bearing ones repairable', () => {
-    const { hook, repo } = makeRepo({
-      fixtures: {
-        'repos/Stvad/knowledge-medium/issues/12': { html_url: url('issues/12'), title: 'T', body: 'literal km-abc' },
-      },
-      shows: [[{ id: 'km-abc', external_ref: url('issues/12') }]],
-    })
-    const r = hook('gh api -X PATCH repos/Stvad/knowledge-medium/issues/12 -f state=closed', JSON.stringify({ html_url: url('issues/12') }))
-    expect(r.status).toBe(0)
-    expect(context(r)).toContain('historical text')
-    expect(existsSync(join(repo, patchName('repos/Stvad/knowledge-medium/issues/12')))).toBe(false)
-  })
-
-  // A --dry-run preview creates nothing — a same-repo URL quoted in its
-  // output must never become a repair target.
-  it('keeps dry-run previews echo-only', () => {
-    const { hook, repo } = makeRepo({
-      fixtures: {
-        'repos/Stvad/knowledge-medium/pulls/652': { html_url: url('pull/652'), title: 'T', body: 'tracks km-abc' },
-        'repos/Stvad/knowledge-medium/issues/12': { title: 'Tracked issue', state: 'open' },
-      },
-      shows: [[{ id: 'km-abc', external_ref: url('issues/12') }]],
-    })
-    const r = hook('gh pr create --dry-run --title t --body-file /tmp/x.md', `Would have created a Pull Request with:\nsee ${url('pull/652')}`)
-    expect(r.status).toBe(0)
-    expect(context(r)).toContain('--dry-run previews without publishing')
-    expect(existsSync(join(repo, patchName('repos/Stvad/knowledge-medium/pulls/652')))).toBe(false)
-  })
-
-  it('suppresses writes under BD_GITHUB_SYNC_DRY=1 but still reports what it would do', () => {
-    const { hook, repo, shimCalls } = makeRepo({
-      dry: true,
-      fixtures: {
-        'repos/Stvad/knowledge-medium/pulls/652': { html_url: url('pull/652'), title: 'T', body: 'tracks km-abc' },
-        'repos/Stvad/knowledge-medium/issues/12': { title: 'Tracked issue', state: 'open' },
-      },
-      shows: [[{ id: 'km-abc', external_ref: url('issues/12') }]],
-    })
-    const r = hook(PR_CREATE, url('pull/652'))
-    expect(r.status).toBe(0)
-    expect(context(r)).toContain('would rewrite km-abc → #12')
-    expect(existsSync(join(repo, patchName('repos/Stvad/knowledge-medium/pulls/652')))).toBe(false)
-    expect(shimCalls()).not.toContain('bd github sync')
-  })
-
-  // Pins the dry gate on the MINT specifically: the bead is unmapped, so
-  // without the gate the mint branch would run (`bd github sync` in the
-  // shim log). The mapped-bead dry test above cannot pin this — its
-  // `missing` list is empty and the branch never executes there.
-  it('suppresses the mint itself under BD_GITHUB_SYNC_DRY=1', () => {
-    const { hook, shimCalls } = makeRepo({
-      dry: true,
-      fixtures: {
-        'repos/Stvad/knowledge-medium/pulls/652': { html_url: url('pull/652'), title: 'T', body: 'tracks km-zzzz' },
-      },
-      shows: [[{ id: 'km-zzzz', external_ref: null }]],
-    })
-    const r = hook(PR_CREATE, url('pull/652'))
-    expect(r.status).toBe(0)
-    expect(shimCalls()).not.toContain('bd github sync')
-    expect(context(r)).toContain('mint suppressed')
   })
 
   it('reports an unmapped bead id it could not mint instead of failing', () => {

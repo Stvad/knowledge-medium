@@ -11,8 +11,4 @@ export type PublishTarget =
 export declare const publishedTargets: (cmd: string, output: string) => PublishTarget[]
 export declare const mergedPrNumbers: (output: string) => number[]
 export declare const apiPathFor: (t: PublishTarget) => string
-export declare const planBeadIdRewrite: (
-  text: string,
-  byId: Map<string, number | null>,
-) => { newText: string; rewrites: { id: string; number: number }[]; unmapped: string[] }
 export declare const clipContext: (s: string, max?: number) => string
