@@ -275,6 +275,18 @@ describe('planPropertyDefinitionSynthesis', () => {
     expect(plan.blockers[0]!.reason).toMatch(/replacement character/)
   })
 
+  it('refuses while an extension has replaced a preset the proof runs against', async () => {
+    // `provePresetId` proves against the KERNEL core but the definition stores
+    // a preset ID, and the preset facet is last-wins — so a replaced `string`
+    // would have the projector rebuild every synthesized definition with a
+    // codec the values were never checked against.
+    await rawCell('b1', {'demo:orphan': 'x'})
+    vi.spyOn(repo, 'valuePresetCores', 'get').mockReturnValue(
+      new Map([...repo.valuePresetCores, ['string', {...repo.valuePresetCores.get('string')!}]]))
+
+    expect(await propertySynthesisWorkspaceRefusal(repo, WS)).toMatch(/replaced the "string"/)
+  })
+
   it('refuses a workspace this device has not confirmed unencrypted', async () => {
     // The authority is the mode pin, not the server column — and note the row
     // here says 'none', so a denylist on the column would wave this through.

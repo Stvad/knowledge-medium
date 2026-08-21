@@ -216,6 +216,23 @@ export const propertySynthesisWorkspaceRefusal = async (
   repo: Repo,
   workspaceId: string,
 ): Promise<string | null> => {
+  // The proof is only worth as much as the id it persists. `provePresetId` runs
+  // the round trip against the KERNEL core, but the definition stores a preset
+  // ID, and `valuePresetCoresFacet` is last-wins — so an extension contributing
+  // `string` would have the projector rebuild every synthesized definition with
+  // its codec instead of the one the values were proven against, reinterpreting
+  // or rewriting the children just backfilled. Refuse rather than persist a
+  // reference whose meaning we did not verify. (The general hazard — a
+  // definition's durable behaviour hanging off an overrideable id — is not
+  // synthesis's to fix and is tracked separately; what IS synthesis's is not
+  // claiming a proof it cannot keep.)
+  const overridden = PRESET_LADDER.filter(
+    id => repo.valuePresetCores.get(id) !== kernelValuePresetCoresById[id])
+  if (overridden.length > 0) {
+    return `an extension has replaced the ${overridden.map(id => `"${id}"`).join(', ')} ` +
+      'value preset(s) on this device, so a definition minted here would not behave the ' +
+      'way its values were checked against — disable it and re-run'
+  }
   if (getModePin(repo.user.id, workspaceId) !== 'plaintext') {
     return 'this device has not confirmed the workspace is unencrypted, and an ' +
       'end-to-end encrypted one cannot synthesize definitions yet: the deterministic id ' +
