@@ -763,6 +763,111 @@ describe('references pipeline sequences', () => {
     }
   })
 
+  // Deterministic canary for the restore-side stranding the sweep's deep
+  // run found (seed 1264869285). A tombstone releases its alias claims
+  // (`block_aliases` is live-only) and referrer entries bound to it are
+  // deliberately retained — the retention's justification is that a
+  // restore rebinds them cleanly. It doesn't when the alias moved on
+  // while the row was dead: the row comes back live not claiming it, and
+  // the referrer stays bound to a LIVE non-claimant with nothing to heal
+  // it (it only re-parses on its own row). Pins that the restore
+  // retargets the referrer to the current claimant.
+  it('a restore rebinds referrers whose alias moved to another block while it was dead', async () => {
+    await guard.barrier()
+    vi.useFakeTimers({shouldAdvanceTime: true})
+    try {
+      const {repo, flush} = await buildEnv()
+      const ALIAS = 'Inbox'
+      const seat0 = computeAliasSeatId(ALIAS, WS)
+
+      // A referrer mints the seat and binds to it.
+      const referrer = await repo.mutate.createChild({
+        parentId: ROOT, position: {kind: 'last'}, content: `see [[${ALIAS}]]`,
+      })
+      await flush()
+      const refsOf = async (id: string) => JSON.parse(
+        (await sharedDb.db.getOptional<{references_json: string}>(
+          'SELECT references_json FROM blocks WHERE id = ?', [id]))!.references_json,
+      ) as Array<{id: string; alias: string}>
+      expect((await refsOf(referrer)).find(r => r.alias === ALIAS)?.id, 'bound to the seat').toBe(seat0)
+
+      // Kill the seat, then drift its content so the seat probe won't
+      // reuse the tombstone, and rename it so it can come back live
+      // without re-claiming the alias. The drifted content carries no
+      // marks, so the restore's own parse plan needs no write — the
+      // rebind is the only thing that can fire.
+      await repo.mutate.delete({id: seat0})
+      await flush()
+      await repo.mutate.setContent({id: seat0, content: 'drifted'})
+      await repo.mutate.setProperty({id: seat0, schema: aliasesProp, value: ['ax']})
+      await flush()
+
+      // A third block re-types the released alias: it can't reuse the
+      // drifted tombstone, so it mints a second seat — the new claimant.
+      await repo.mutate.createChild({
+        parentId: ROOT, position: {kind: 'last'}, content: `also [[${ALIAS}]]`,
+      })
+      await flush()
+
+      await repo.mutate.restore({id: seat0})
+      await flush()
+      const claimant = await sharedDb.db.getOptional<{block_id: string}>(
+        'SELECT block_id FROM block_aliases WHERE workspace_id = ? AND alias = ?', [WS, ALIAS])
+      expect(claimant?.block_id, 'a different live block claims the alias now').not.toBe(seat0)
+      expect((await refsOf(referrer)).find(r => r.alias === ALIAS)?.id, 'referrer follows the claimant')
+        .toBe(claimant?.block_id)
+
+      await auditOrFail(sharedDb.db, repo)
+      const {inspected} = await sweepAliasBindings(sharedDb.db, WS)
+      expect(inspected, 'sweep inspected the rebound binding').toBeGreaterThan(0)
+    } finally {
+      vi.clearAllTimers()
+      vi.useRealTimers()
+    }
+  })
+
+  // The counterexample's own shape (seed 1264869285), and what pins the
+  // rebind's POSITION: here the claimant does not exist until the restore
+  // re-parses the restored block's OWN drifted content and mints it, so a
+  // rebind running before this tx's plans finds no claimant and does
+  // nothing.
+  it('a restore rebinds referrers against a claimant its own re-parse mints', async () => {
+    await guard.barrier()
+    vi.useFakeTimers({shouldAdvanceTime: true})
+    try {
+      const {repo, flush} = await buildEnv()
+      const ALIAS = 'Inbox'
+      const seat0 = computeAliasSeatId(ALIAS, WS)
+      await repo.mutate.setContent({id: ROOT, content: `[[${ALIAS}]]`})
+      await flush()
+
+      await repo.mutate.delete({id: seat0})
+      await flush()
+      await repo.mutate.setContent({id: seat0, content: `[[${ALIAS}]]`})
+      await repo.mutate.setProperty({id: seat0, schema: aliasesProp, value: ['ax']})
+      await flush()
+
+      await repo.mutate.restore({id: seat0})
+      await flush()
+      const claimant = await sharedDb.db.getOptional<{block_id: string}>(
+        'SELECT block_id FROM block_aliases WHERE workspace_id = ? AND alias = ?', [WS, ALIAS])
+      expect(claimant?.block_id, 'the restore minted a fresh seat for the released alias')
+        .not.toBe(seat0)
+      const rootRefs = JSON.parse(
+        (await sharedDb.db.getOptional<{references_json: string}>(
+          'SELECT references_json FROM blocks WHERE id = ?', [ROOT]))!.references_json,
+      ) as Array<{id: string; alias: string}>
+      expect(rootRefs.find(r => r.alias === ALIAS)?.id, 'referrer follows the claimant')
+        .toBe(claimant?.block_id)
+
+      await auditOrFail(sharedDb.db, repo)
+      await sweepAliasBindings(sharedDb.db, WS)
+    } finally {
+      vi.clearAllTimers()
+      vi.useRealTimers()
+    }
+  })
+
   // Deterministic canary for the ISO/live-hit sibling of the long-form
   // bug above (found by the stable-wrong-binding sweep's deep run, seed
   // -1450147062). A daily-note seat claims its ISO alias only via

@@ -98,6 +98,16 @@ const SELECT_LIVE_REFERENCE_SOURCE_SQL = `
   LIMIT 1
 `
 
+const SELECT_LIVE_REFERRER_IDS_SQL = `
+  SELECT DISTINCT br.source_id AS id
+  FROM block_references br
+  JOIN blocks source ON source.id = br.source_id
+  WHERE br.workspace_id = ?
+    AND br.target_id = ?
+    AND source.deleted = 0
+  ORDER BY source.id
+`
+
 /** Committed-state probe: does any LIVE source still reference
  *  `targetId`? Shared by the mint-time orphan cleanup and the
  *  reference-drop reaper. */
@@ -541,6 +551,64 @@ const applySourcePlan = async (
   return newlyInserted
 }
 
+/** Referrers a restore left bound to a block under an alias it no longer
+ *  claims: retarget those entries to the alias's current claimant.
+ *
+ *  `block_aliases` is live-only, so a tombstone releases its claims and
+ *  another block can take them (or the tombstone's own bag can be edited)
+ *  while it is dead. Referrer entries bound to the tombstone are retained
+ *  deliberately — and the retention's justification is that a restore
+ *  rebinds them cleanly. It doesn't when the alias moved: the row comes
+ *  back live not claiming it, and two LIVE blocks then disagree about who
+ *  owns the alias, with nothing to heal it (the referrer only re-parses on
+ *  its OWN row's changes). Found by referencesRecompute.fuzz.test.ts'
+ *  stable-wrong-binding sweep.
+ *
+ *  Must run AFTER this tx's plans: a restored block whose own content
+ *  re-mints the seat for the released alias is the case that creates the
+ *  claimant we retarget to.
+ *
+ *  Entries whose alias has NO live claimant are left alone rather than
+ *  re-parsed: minting a seat for them would make someone else's restore
+ *  create pages. That leaves the tombstone-bound residual class (issue
+ *  #383) exactly as it was.
+ *
+ *  Cost: one `tx.get` per backlink under the write lock, unbounded in
+ *  their number — the same trade `renameProcessor` takes, for a gesture
+ *  that is just as rare. */
+const rebindStrandedReferrers = async (
+  tx: Tx,
+  restoredId: string,
+  workspaceId: string,
+  referrerIds: readonly string[],
+): Promise<void> => {
+  for (const referrerId of referrerIds) {
+    const referrer = await tx.get(referrerId)
+    if (referrer === null || referrer.deleted) continue
+    let changed = false
+    const references: BlockReference[] = []
+    for (const ref of referrer.references) {
+      // Wikilink/date entries only — the pair `retarget` and
+      // `sweepAliasBindings` both use. `alias !== id` alone already covers
+      // property refs (they project `alias === id` too), so the
+      // `sourceField` half is defence in depth: neither conjunct is
+      // independently pinned.
+      if (ref.sourceField === undefined && ref.id === restoredId && ref.alias !== ref.id) {
+        const claimant = await tx.aliasLookup(ref.alias, workspaceId)
+        if (claimant !== null && claimant.id !== ref.id) {
+          references.push({...ref, id: claimant.id})
+          changed = true
+          continue
+        }
+      }
+      references.push(ref)
+    }
+    // No self-loop: the referrer's own re-parse recomputes these same
+    // claimant-bound entries, so its plan comes out idempotent.
+    if (changed) await tx.update(referrerId, {references}, {skipMetadata: true})
+  }
+}
+
 /** True iff this plan needs any write — either a target ensure call
  *  (insert/restore) or a references-column update. Used to skip opening
  *  a tx entirely when the parse came out idempotent. */
@@ -574,14 +642,23 @@ export const parseReferencesProcessor = definePostCommitProcessor({
     // contention. Each plan describes what the write phase needs to do
     // (or nothing, if the parse came out idempotent).
     const plans: SourcePlan[] = []
+    const restored: Array<{id: string; workspaceId: string; referrerIds: string[]}> = []
     for (const row of event.changedRows) {
       // Skip hard-deletes (after === null) — nothing to parse.
       if (row.after === null) continue
       // Skip soft-deletes (after.deleted === true) — same reason.
       if (row.after.deleted) continue
+      if (row.before !== null && row.before.deleted) {
+        const referrerIds = (await ctx.db.getAll<{id: string}>(
+          SELECT_LIVE_REFERRER_IDS_SQL, [row.after.workspaceId, row.after.id],
+        )).map(r => r.id)
+        if (referrerIds.length > 0) {
+          restored.push({id: row.after.id, workspaceId: row.after.workspaceId, referrerIds})
+        }
+      }
       plans.push(await buildSourcePlan(ctx, row.after, row.before))
     }
-    if (!plans.some(planNeedsWrite)) return
+    if (!plans.some(planNeedsWrite) && restored.length === 0) return
 
     // Write phase — single tx, atomic for refs + targets + afterCommit.
     const typeSnapshot = ctx.repo.snapshotTypeRegistries()
@@ -595,6 +672,10 @@ export const parseReferencesProcessor = definePostCommitProcessor({
         // All sources in one tx share a workspace per spec invariant 11
         // — pin the first non-null and use it for cleanup scheduling.
         workspaceForCleanup ??= plan.workspaceId
+      }
+      // After the plans — see rebindStrandedReferrers' docblock.
+      for (const {id, workspaceId, referrerIds} of restored) {
+        await rebindStrandedReferrers(tx, id, workspaceId, referrerIds)
       }
       if (allNewlyInserted.length > 0 && workspaceForCleanup !== null) {
         tx.afterCommit(
