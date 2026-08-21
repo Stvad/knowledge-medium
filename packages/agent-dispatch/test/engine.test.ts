@@ -200,7 +200,7 @@ describe('mention lifecycle', () => {
     // splitReply defaults on: one terminal reconcile of the reply subtree,
     // split along the outline (shape 'outline'), keyed by attempt.
     expect(reconciles).toEqual([
-      {parentId: 'b-1', markdown: 'Reply text', replyKey: 'reply:b-1:1', shape: 'outline', final: true},
+      {parentId: 'b-1', markdown: 'Reply text', replyKey: 'reply:b-1:1:0', shape: 'outline', final: true},
     ])
     expect(replies).toEqual([])
     expect(blocks.get('b-1')?.properties?.[PROPS.session]).toBe('sess-1')
@@ -355,7 +355,7 @@ describe('mention lifecycle', () => {
     expect(blocks.get('b-1')?.properties?.[PROPS.cancel]).toBe('') // flag cleared, won't re-cancel a rerun
     // A cancelled run never splits — the note lands as a single block.
     expect(reconciles).toEqual([
-      {parentId: 'b-1', markdown: '⏹️ agent-dispatch run cancelled', replyKey: 'reply:b-1:1', shape: 'block', final: true},
+      {parentId: 'b-1', markdown: '⏹️ agent-dispatch run cancelled', replyKey: 'reply:b-1:1:0', shape: 'block', final: true},
     ])
     expect(runTask).toHaveBeenCalledTimes(1) // not re-run
   })
@@ -1168,7 +1168,7 @@ describe('live progress streaming', () => {
       {markdown: 'Once upon a time', final: false},
       {markdown: 'Once upon a time, the end.', final: true},
     ])
-    expect(new Set(reconciles.map(r => r.replyKey))).toEqual(new Set(['reply:b-1:1']))
+    expect(new Set(reconciles.map(r => r.replyKey))).toEqual(new Set(['reply:b-1:1:0']))
     expect(reconciles.every(r => r.shape === 'block')).toBe(true)
   })
 
@@ -1190,7 +1190,7 @@ describe('live progress streaming', () => {
     await engine.drain()
 
     expect(reconciles).toEqual([
-      {parentId: 'b-1', markdown: 'final', replyKey: 'reply:b-1:1', shape: 'block', final: true},
+      {parentId: 'b-1', markdown: 'final', replyKey: 'reply:b-1:1:0', shape: 'block', final: true},
     ])
   })
 
@@ -1267,7 +1267,7 @@ describe('live progress streaming', () => {
 
     // Exactly the one terminal reconcile — no infra-error reconcile after it.
     expect(reconciles).toEqual([
-      {parentId: 'b-1', markdown: 'the answer', replyKey: 'reply:b-1:1', shape: 'block', final: true},
+      {parentId: 'b-1', markdown: 'the answer', replyKey: 'reply:b-1:1:0', shape: 'block', final: true},
     ])
   })
 
@@ -1320,7 +1320,7 @@ describe('splitReply (reply as a block hierarchy)', () => {
     // One terminal reconcile of the reply subtree, split along the outline
     // (shape 'outline'). The app parses + reconciles the tree atomically.
     expect(reconciles).toEqual([
-      {parentId: 'b-1', markdown: OUTLINE, replyKey: 'reply:b-1:1', shape: 'outline', final: true},
+      {parentId: 'b-1', markdown: OUTLINE, replyKey: 'reply:b-1:1:0', shape: 'outline', final: true},
     ])
     expect(blocks.get('b-1')?.properties?.[PROPS.status]).toBe('done')
 
@@ -1352,7 +1352,7 @@ describe('splitReply (reply as a block hierarchy)', () => {
     await engine.drain()
 
     expect(reconciles).toEqual([
-      {parentId: 'b-1', markdown: OUTLINE, replyKey: 'reply:b-1:1', shape: 'block', final: true},
+      {parentId: 'b-1', markdown: OUTLINE, replyKey: 'reply:b-1:1:0', shape: 'block', final: true},
     ])
     const prompt = (runTask.mock.calls[0][0] as {prompt: string}).prompt
     expect(prompt).not.toContain('block hierarchy')
@@ -1384,8 +1384,8 @@ describe('splitReply (reply as a block hierarchy)', () => {
     // the streamed placeholder block becomes the reply's first block (no
     // orphaning, no separate rootBlockId dance).
     expect(reconciles).toEqual([
-      {parentId: 'b-1', markdown: '💭 Claude is working…', replyKey: 'reply:b-1:1', shape: 'outline', final: false},
-      {parentId: 'b-1', markdown: OUTLINE, replyKey: 'reply:b-1:1', shape: 'outline', final: true},
+      {parentId: 'b-1', markdown: '💭 Claude is working…', replyKey: 'reply:b-1:1:0', shape: 'outline', final: false},
+      {parentId: 'b-1', markdown: OUTLINE, replyKey: 'reply:b-1:1:0', shape: 'outline', final: true},
     ])
   })
 
@@ -1495,7 +1495,7 @@ describe('channel delivery (experimental)', () => {
     expect(runTask).not.toHaveBeenCalled()
     expect(deliverToChannel).toHaveBeenCalledTimes(1)
     const event = deliverToChannel.mock.calls[0][0] as {content: string, meta: Record<string, string>}
-    expect(event.meta).toEqual({watcher: 'mentions', block_id: 'b-1', attempt: '1'})
+    expect(event.meta).toEqual({watcher: 'mentions', block_id: 'b-1', attempt: '1', event_id: 'b-1:1'})
     expect(event.content).toContain('close the task out yourself')
     // Daemon only claims; the ambient session finishes the lifecycle.
     expect(blocks.get('b-1')?.properties?.[PROPS.status]).toBe('running')
@@ -1887,7 +1887,7 @@ describe('retryable infrastructure failures (out of credits, expired login, netw
     expect(props[PROPS.retryAfter]).toBe(0)   // and the clock is cleared
     // Same reply subtree throughout: the answer REPLACES the waiting note
     // rather than stacking under it.
-    expect(new Set(reconciles.map(reconcile => reconcile.replyKey))).toEqual(new Set(['reply:b-1:1']))
+    expect(new Set(reconciles.map(reconcile => reconcile.replyKey))).toEqual(new Set(['reply:b-1:1:0']))
     expect(reconciles.at(-1)?.markdown).toBe('Reply text')
   })
 
@@ -2310,7 +2310,7 @@ describe('retryable infrastructure failures (out of credits, expired login, netw
     // Same key deferForRetry used: it rolled attempts back to attempt-1, so
     // the note's attempt number is the stored count plus one.
     expect(reconciles.at(-1)).toMatchObject({
-      parentId: 'b-1', replyKey: 'reply:b-1:1', shape: 'block', final: true,
+      parentId: 'b-1', replyKey: 'reply:b-1:1:0', shape: 'block', final: true,
       markdown: expect.stringContaining('stopped retrying'),
     })
   })
@@ -2380,6 +2380,125 @@ describe('retryable infrastructure failures (out of credits, expired login, netw
 
     expect(blocks.get('b-1')?.properties?.[PROPS.status]).toBe('done')
     expect(blocks.get('b-1')?.properties?.[PROPS.error]).toBe('')
+  })
+
+  it('an explicit Retry posts a NEW reply instead of editing the previous answer', async () => {
+    // A Retry clears agent:attempts — that counter is the crash budget and
+    // resetting it is the gesture's point — so the next run recomputed
+    // attempt 1 and reused the FIRST run's reply key. The retry then edited
+    // the earlier answer in place, and a shorter one truncated it. Losing
+    // the reply a retry was meant to supersede is the outcome to prevent.
+    const {graph, blocks, reconciles} = fakeGraph({
+      backlinks: [{id: 'b-1'}],
+      blocks: {'b-1': {content: '[[claude]] summarize inbox'}},
+    })
+    const time = clock()
+    const engine = engineWith({
+      graph, now: time.now, config: mentionConfig({runsPerHour: 100}),
+      runTask: vi.fn(async () => okRun({resultText: 'first answer'})),
+    })
+
+    await engine.tick()
+    await engine.drain()
+    const firstKey = reconciles.at(-1)!.replyKey
+
+    // What the app's Retry writes: terminal props dropped, asked-at stamped.
+    time.advance(1_000)
+    blocks.get('b-1')!.properties = {[PROPS.askedAt]: time.now()}
+    blocks.get('b-1')!.editedAtMs = time.now()
+
+    await engine.tick()
+    await engine.drain()
+
+    expect(reconciles.at(-1)!.replyKey).not.toBe(firstKey)
+  })
+
+  it('a DEFERRED retry still converges onto the note it left', async () => {
+    // The other half of the same key: a deferral is the same attempt trying
+    // again, so its ⏳ note must be replaced by the real answer rather than
+    // sitting beside it. Nothing writes asked-at on that path.
+    const {graph, reconciles} = fakeGraph({
+      backlinks: [{id: 'b-1'}],
+      blocks: {'b-1': {content: '[[claude]] summarize inbox'}},
+    })
+    const time = clock()
+    let credits = false
+    const engine = engineWith({
+      graph, now: time.now, config: mentionConfig({runsPerHour: 100}),
+      runTask: vi.fn(async () => (credits ? okRun() : outOfCreditsRun())),
+    })
+
+    await engine.tick()
+    await engine.drain()
+    credits = true
+    time.advance(10 * 60_000)
+    await engine.tick()
+    await engine.drain()
+
+    expect(new Set(reconciles.map(reconcile => reconcile.replyKey)).size).toBe(1)
+    expect(reconciles.at(-1)?.markdown).toBe('Reply text')
+  })
+
+  it('gives a retried channel delivery the same event id, so the listener can drop it', async () => {
+    // The listener starts the ambient session working BEFORE it acknowledges,
+    // so a lost ack is indistinguishable from "never arrived" and the retry
+    // would duplicate billed, write-capable agent work. A retry carrying the
+    // SAME id is what lets the listener drop it (mcp.ts).
+    const {graph} = fakeGraph({
+      backlinks: [{id: 'b-1'}],
+      blocks: {'b-1': {content: '[[claude]] ambient task'}},
+    })
+    const time = clock()
+    let listenerDown = true
+    const deliverToChannel = vi.fn(async () => {
+      if (listenerDown) throw new Error('connection refused')
+    })
+    const engine = engineWith({
+      graph, deliverToChannel, now: time.now,
+      config: parseConfig({
+        runsPerHour: 100,
+        watchers: [{kind: 'backlinks', name: 'ambient', target: 'claude', quietMs: 0, delivery: 'channel'}],
+      }),
+    })
+
+    await engine.tick()
+    await engine.drain()
+
+    listenerDown = false
+    time.advance(10 * 60_000)
+    await engine.tick()
+    await engine.drain()
+
+    const ids = deliverToChannel.mock.calls.map(call => (call[0] as {meta: {event_id?: string}}).meta.event_id)
+    expect(ids).toHaveLength(2)
+    // Asserted non-empty first: `undefined === undefined` would otherwise
+    // report a missing id as a stable one.
+    expect(ids[0]).toBeTruthy()
+    expect(ids[0]).toBe(ids[1])   // the deferral rolls `attempt` back, so the id is stable
+  })
+
+  it('counts streamed query output as billed, so its rows are not re-fired', async () => {
+    // The query callback recorded only `session` events, so it was blind to
+    // the evidence the mention path relies on — and a claude run that
+    // streamed a billed reply before a transport error left resultText empty.
+    const {graph} = fakeGraph()
+    graph.sqlAll = vi.fn(async () => [{id: 'a'}, {id: 'b'}])
+    const state = memoryState()
+    state.cursors.set('inbox', ['a'])
+    const runTask = vi.fn(async (options: {onEvent?: (event: {kind: string, text?: string}) => void}) => {
+      options.onEvent?.({kind: 'text', text: 'Here is most of the answer'})   // billed
+      return okRun({ok: false, resultText: '', exitCode: 1, stderr: 'ECONNRESET', failureText: ''})
+    })
+    const engine = engineWith({
+      graph, state, runTask,
+      config: parseConfig({watchers: [{kind: 'query', name: 'inbox', sql: 'SELECT id FROM blocks'}]}),
+    })
+
+    await engine.tick()
+    await engine.drain()
+
+    expect(state.cursors.get('inbox')).toEqual(['a', 'b'])
+    expect(state.launches).toHaveLength(1)
   })
 
   it('a genuine run failure still parks the task and does not arm a cooldown', async () => {

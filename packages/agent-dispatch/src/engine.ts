@@ -43,6 +43,26 @@ export interface EngineDeps {
 const truncate = (value: string, max = 500): string =>
   value.length > max ? `${value.slice(0, max)}…` : value
 
+/** Identity of the reply subtree ONE run reconciles. Every write of that run
+ *  carries it, so the run converges its own blocks in place; a different run
+ *  gets a different key and therefore a fresh reply.
+ *
+ *  Two components, because the two ways a task re-runs want opposite things:
+ *  `attempt` separates successive crashes, and a DEFERRAL rolls it back so
+ *  the retry converges its ⏳ note onto the real answer. `agent:asked-at`
+ *  separates the runs a PERSON asked for — an explicit Retry resets
+ *  `agent:attempts` (that counter is the crash budget), which alone would
+ *  hand the retry the first run's key and let it edit, or truncate, the
+ *  answer it was meant to supersede. asked-at is written only by the app's
+ *  gestures and never by the daemon, so a deferral leaves it untouched.
+ *
+ *  Derived in ONE place: the Stop-retrying branch has to address the note a
+ *  deferred run left behind, and a second copy of this rule would drift. */
+const replyKeyFor = (sourceId: string, block: BlockView | undefined, attempt: number): string => {
+  const askedAt = block?.properties?.[PROPS.askedAt]
+  return `reply:${sourceId}:${attempt}:${typeof askedAt === 'number' ? askedAt : 0}`
+}
+
 /** True for a character safe to write into a plain-text log line — i.e.
  *  not an ASCII/C1 control byte: C0 (0x00–0x1F), DEL (0x7F) and C1
  *  (0x80–0x9F) are excluded, since their ANSI/OSC escape sequences could
@@ -441,7 +461,21 @@ export const createEngine = (deps: EngineDeps) => {
     // Fresh reply subtree per attempt (a rerun posts a new reply, never
     // mutating the prior attempt's answer); split unless the watcher opted
     // out. Reconciles within THIS attempt share the key → converge in place.
-    replyKey = `reply:${sourceId}:${attempt}`
+    //
+    // `agent:asked-at` is in the key because `attempt` ALONE cannot keep that
+    // promise: an explicit Retry clears `agent:attempts` (that counter is the
+    // crash budget, and resetting it is the point of the gesture), so the next
+    // run recomputed `attempt = 1` and reused the FIRST run's key — the retry
+    // then edited the previous answer in place, and a shorter one deleted its
+    // trailing blocks. A manual retry destroying the reply it was meant to
+    // supersede is the one outcome this must not have.
+    //
+    // asked-at is written ONLY by the app's Ask/Retry gestures and never by
+    // the daemon, which makes it exactly the right discriminator: a deferral
+    // leaves it alone, so the deferred run still converges its ⏳ note onto
+    // the real answer (the whole reason attempts is rolled back), while a
+    // person asking again starts a new reply.
+    replyKey = replyKeyFor(sourceId, block, attempt)
     replyShape = watcher.splitReply ? 'outline' : 'block'
 
     /** Put the task BACK in the queue instead of parking it as failed:
@@ -552,7 +586,13 @@ export const createEngine = (deps: EngineDeps) => {
         // MAX_ATTEMPTS.
         await deliverToChannel({
           content: prompt,
-          meta: {watcher: watcher.name, block_id: sourceId, attempt: String(attempt)},
+          // Stable across retries of THIS logical delivery and different for
+          // genuinely new work — the deferral rolls `attempt` back, so a
+          // retried delivery carries the id the listener already saw. That is
+          // what lets the listener drop the duplicate (mcp.ts): it starts the
+          // ambient session working BEFORE it acknowledges, so a lost ack
+          // makes a failure indistinguishable from work already underway.
+          meta: {watcher: watcher.name, block_id: sourceId, attempt: String(attempt), event_id: `${sourceId}:${attempt}`},
         })
         // A delivery that lands proves the listener is back. This path
         // returns before the spawn success branch, so without clearing here
@@ -908,7 +948,7 @@ export const createEngine = (deps: EngineDeps) => {
         // reconciling one there would CREATE the block we are removing.
         if (watcher.delivery !== 'channel') {
           await graph.reconcileReplyTree(source.id, '⏹️ agent-dispatch: stopped retrying', {
-            replyKey: `reply:${source.id}:${taskAttempts(fresh) + 1}`, shape: 'block', final: true,
+            replyKey: replyKeyFor(source.id, fresh, taskAttempts(fresh) + 1), shape: 'block', final: true,
           }).catch(error => log(`[${watcher.name}] could not clear the retry note for ${source.id}: ${errorMessage(error)}`))
         }
         log(`[${watcher.name}] stopped retrying ${source.id} (Stop requested while deferred)`)
@@ -1003,7 +1043,12 @@ export const createEngine = (deps: EngineDeps) => {
       // the hourly budget in ten polls and defer the rows even once
       // it's back up.
       try {
-        await deliverToChannel({content: prompt, meta: {watcher: watcher.name}})
+        // Same identity for query rows: the cursor is not advanced on failure,
+      // so a retry re-diffs the SAME row ids and rebuilds the same id.
+      await deliverToChannel({
+        content: prompt,
+        meta: {watcher: watcher.name, event_id: `${watcher.name}:${batch.map(row => row.id).join(',')}`},
+      })
       } catch (error) {
         // Letting this reach the tick's per-watcher catch leaves the cursor
         // unadvanced — correct — but arms nothing, so the same rows are
@@ -1052,9 +1097,17 @@ export const createEngine = (deps: EngineDeps) => {
       // live, not just from the terminal line. Query runs aren't threaded,
       // so there's no block to persist it to — the log is the only record.
       let loggedSession: string | null = null
+      // Streamed assistant text, for the same reached-the-model test the
+      // mention path applies. Recording only `session` events left this path
+      // blind: a failed claude envelope carries no answer in `resultText`, so
+      // a run that streamed a billed reply and then hit a transport error
+      // looked like it had produced nothing — and got its slot refunded and
+      // its rows re-fired, billing them again.
+      let streamedText = ''
       let result: AgentRunResult
       try {
         result = await runTask(runOptionsFor(watcher, prompt, undefined, event => {
+          if (event.kind === 'text') streamedText = event.text
           if (event.kind === 'session' && !loggedSession) {
             loggedSession = event.sessionId
             log(`[${watcher.name}] session ${event.sessionId}`)
@@ -1085,7 +1138,7 @@ export const createEngine = (deps: EngineDeps) => {
       // Same "did it reach the model" test the mention path applies: a run
       // that streamed a billed answer before dying is not an un-attempt,
       // so it must not hand its spend slot back or re-fire its rows.
-      if (!failure.retryable || result.resultText.trim()) {
+      if (!failure.retryable || streamedText.trim() || result.resultText.trim()) {
         clearInfraCooldown(lane)
         log(`[${watcher.name}] FAILED${session ? ` (session ${session})` : ''}: exit ${result.exitCode} ${truncate(result.stderr.trim())}`)
         return

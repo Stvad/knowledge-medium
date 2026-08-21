@@ -37,6 +37,11 @@ await server.connect(new StdioServerTransport())
 if (channelPort) {
   const secret = await loadOrCreateChannelSecret()
 
+  /** Delivery ids already dispatched, so a sender's retry of one we have
+   *  already handed to the session is dropped rather than run twice. */
+  const deliveredIds = new Set<string>()
+  const DELIVERED_IDS_MAX = 500
+
   const listener = http.createServer((request, response) => {
     if (request.method !== 'POST') {
       response.writeHead(405).end()
@@ -63,10 +68,33 @@ if (channelPort) {
                   .filter(([, value]) => typeof value === 'string'),
               ) as Record<string, string>
             : undefined
+          // The notification STARTS the ambient session working, and only
+          // then do we acknowledge — so a lost ack leaves the sender unable
+          // to tell "never arrived" from "already running", and its retry
+          // would duplicate billed, write-capable agent work on the graph.
+          // Dropping a repeat of an id we have already dispatched is what
+          // makes that retry safe.
+          //
+          // Best-effort, not exactly-once: the window is bounded by
+          // DELIVERED_IDS_MAX and a restart of this process forgets
+          // everything. It covers the retry window, which is the case that
+          // actually occurs; a sender with no id is never deduplicated.
+          const eventId = meta?.event_id
+          if (eventId && deliveredIds.has(eventId)) {
+            response.writeHead(200).end('duplicate')
+            return
+          }
           await server.server.notification({
             method: 'notifications/claude/channel',
             params: {content: parsed.content, ...(meta ? {meta} : {})},
           })
+          if (eventId) {
+            deliveredIds.add(eventId)
+            // Oldest-first eviction; Set preserves insertion order.
+            if (deliveredIds.size > DELIVERED_IDS_MAX) {
+              deliveredIds.delete(deliveredIds.values().next().value as string)
+            }
+          }
           response.writeHead(200).end('ok')
         } catch {
           response.writeHead(400).end('expected JSON {content, meta?}')
