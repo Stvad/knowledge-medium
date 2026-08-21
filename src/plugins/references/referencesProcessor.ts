@@ -551,27 +551,16 @@ const applySourcePlan = async (
   return newlyInserted
 }
 
-/** Referrers a restore left bound to a block under an alias it no longer
- *  claims: retarget those entries to the alias's current claimant.
+/** Retarget a restored block's referrers to the current claimant of any
+ *  alias it no longer claims — two LIVE blocks must never disagree about
+ *  who owns an alias, and the referrer only re-parses on its own row.
  *
- *  `block_aliases` is live-only, so a tombstone releases its claims and
- *  another block can take them (or the tombstone's own bag can be edited)
- *  while it is dead. Referrer entries bound to the tombstone are retained
- *  deliberately — and the retention's justification is that a restore
- *  rebinds them cleanly. It doesn't when the alias moved: the row comes
- *  back live not claiming it, and two LIVE blocks then disagree about who
- *  owns the alias, with nothing to heal it (the referrer only re-parses on
- *  its OWN row's changes). Found by referencesRecompute.fuzz.test.ts'
- *  stable-wrong-binding sweep.
+ *  Runs AFTER this tx's plans: the claimant can be the seat the restored
+ *  block's own re-parse just minted.
  *
- *  Must run AFTER this tx's plans: a restored block whose own content
- *  re-mints the seat for the released alias is the case that creates the
- *  claimant we retarget to.
- *
- *  Entries whose alias has NO live claimant are left alone rather than
- *  re-parsed: minting a seat for them would make someone else's restore
- *  create pages. That leaves the tombstone-bound residual class (issue
- *  #383) exactly as it was.
+ *  An alias with NO live claimant is left alone, not re-parsed — a
+ *  re-parse would mint a seat, making one block's restore create pages for
+ *  another block's link. Tombstone-bound entries stay unpoliced (#383).
  *
  *  Cost: one `tx.get` per backlink under the write lock, unbounded in
  *  their number — the same trade `renameProcessor` takes, for a gesture
@@ -588,12 +577,15 @@ const rebindStrandedReferrers = async (
     let changed = false
     const references: BlockReference[] = []
     for (const ref of referrer.references) {
-      // Wikilink/date entries only — the pair `retarget` and
-      // `sweepAliasBindings` both use. `alias !== id` alone already covers
-      // property refs (they project `alias === id` too), so the
-      // `sourceField` half is defence in depth: neither conjunct is
-      // independently pinned.
-      if (ref.sourceField === undefined && ref.id === restoredId && ref.alias !== ref.id) {
+      // Wikilink/date entries only. `sourceField` is "empty OR omitted for
+      // content refs" (BlockReference), and both spellings reach here: a
+      // referrer stranded by a restore is one nothing has re-parsed, so a
+      // row that predates normalize-on-write keeps its `''`. Checking
+      // `=== undefined` would skip exactly those. The conjunct is defence
+      // in depth against a raw-written property ref whose alias isn't its
+      // id — projection mints `alias === id`, which `alias !== ref.id`
+      // already excludes.
+      if ((ref.sourceField ?? '') === '' && ref.id === restoredId && ref.alias !== ref.id) {
         const claimant = await tx.aliasLookup(ref.alias, workspaceId)
         if (claimant !== null && claimant.id !== ref.id) {
           references.push({...ref, id: claimant.id})

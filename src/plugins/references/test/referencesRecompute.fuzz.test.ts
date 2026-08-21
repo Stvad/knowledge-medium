@@ -826,6 +826,60 @@ describe('references pipeline sequences', () => {
     }
   })
 
+  // `sourceField` is "empty OR omitted for content refs" (BlockReference),
+  // and a referrer stranded by a restore is by definition one nothing has
+  // re-parsed — so a row predating normalize-on-write still carries `''`
+  // when the rebind reaches it. The raw write is how such a row is shaped
+  // here, and it lands LAST: it maintains the trigger-backed
+  // `block_references` index (so the backlink query still finds the
+  // referrer) but fires no processor, and any earlier re-parse would
+  // normalize the `''` away before the restore.
+  it('rebinds a referrer whose content entry spells sourceField as empty', async () => {
+    await guard.barrier()
+    vi.useFakeTimers({shouldAdvanceTime: true})
+    try {
+      const {repo, flush} = await buildEnv()
+      const ALIAS = 'Inbox'
+      const seat0 = computeAliasSeatId(ALIAS, WS)
+      const referrer = await repo.mutate.createChild({
+        parentId: ROOT, position: {kind: 'last'}, content: `see [[${ALIAS}]]`,
+      })
+      await flush()
+
+      await repo.mutate.delete({id: seat0})
+      await flush()
+      await repo.mutate.setContent({id: seat0, content: 'drifted'})
+      await repo.mutate.setProperty({id: seat0, schema: aliasesProp, value: ['ax']})
+      await flush()
+      await repo.mutate.createChild({
+        parentId: ROOT, position: {kind: 'last'}, content: `also [[${ALIAS}]]`,
+      })
+      await flush()
+
+      await sharedDb.db.writeTransaction(async tx => {
+        await tx.execute(
+          'UPDATE blocks SET references_json = ? WHERE id = ?',
+          [JSON.stringify([{id: seat0, alias: ALIAS, sourceField: ''}]), referrer],
+        )
+      })
+
+      await repo.mutate.restore({id: seat0})
+      await flush()
+      const claimant = await sharedDb.db.getOptional<{block_id: string}>(
+        'SELECT block_id FROM block_aliases WHERE workspace_id = ? AND alias = ?', [WS, ALIAS])
+      expect(claimant?.block_id, 'a different live block claims the alias now').not.toBe(seat0)
+      const refs = JSON.parse(
+        (await sharedDb.db.getOptional<{references_json: string}>(
+          'SELECT references_json FROM blocks WHERE id = ?', [referrer]))!.references_json,
+      ) as Array<{id: string; alias: string}>
+      expect(refs.find(r => r.alias === ALIAS)?.id, 'empty-sourceField entry follows the claimant')
+        .toBe(claimant?.block_id)
+    } finally {
+      vi.clearAllTimers()
+      vi.useRealTimers()
+    }
+  })
+
   // The counterexample's own shape (seed 1264869285), and what pins the
   // rebind's POSITION: here the claimant does not exist until the restore
   // re-parses the restored block's OWN drifted content and mints it, so a
