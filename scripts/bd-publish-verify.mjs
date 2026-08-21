@@ -465,8 +465,11 @@ const hookPostPublish = () => {
       // edit that can throw must not kill the remaining targets' sweep.
     }
   }
-  for (const n of mergedPrs) {
-    if (Date.now() >= deadline) break
+  for (const [i, n] of mergedPrs.entries()) {
+    if (Date.now() >= deadline) {
+      notes.push(`${mergedPrs.length - i} merged PR(s) not read back (out of time budget) — check their landed commits yourself`)
+      break
+    }
     try {
       notes.push(...verifyMergeCommit(n, deadline))
     } catch {

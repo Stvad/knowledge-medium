@@ -789,6 +789,10 @@ describe('bd-publish-verify process behavior', { timeout: 30_000 }, () => {
       shows: [[{ id: 'km-abc', external_ref: url('issues/12') }]],
     })
     const r = hook('gh pr edit 652 --add-label bug', url('pull/652'))
+    // prose must not re-enable repair: comments and quoted values are not flags
+    const prose = hook('gh pr edit 652 --add-label bug # no --body change', url('pull/652'))
+    expect(prose.status).toBe(0)
+    expect(context(prose)).toContain('historical text')
     expect(r.status).toBe(0)
     expect(context(r)).toContain('historical text')
     expect(existsSync(join(repo, patchName('repos/Stvad/knowledge-medium/pulls/652')))).toBe(false)

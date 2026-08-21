@@ -198,9 +198,15 @@ const GH_EDIT = new RegExp(
   SEGMENT_START + COMMAND_PREFIXES + String.raw`(?:\S*\/)?gh\s+` + GH_GLOBAL_OPTS + String.raw`(?:pr|issue|release)\s+edit\b`,
   'm',
 )
-export const matchesTextlessEdit = cmd =>
-  GH_EDIT.test(commandSkeleton(cmd)) &&
-  !/(?<![\w-])(?:--body|--title|--body-file|--notes|--notes-file|-[btFT])/.test(cmd)
+export const matchesTextlessEdit = cmd => {
+  if (!GH_EDIT.test(commandSkeleton(cmd))) return false
+  // The text-flag test GRANTS repair, so it must not read prose: quoted
+  // values are blanked by the skeleton, and shell comments are stripped —
+  // `--add-label bug # no --body change` stays textless. Attached unquoted
+  // forms (-bfoo) survive the skeleton and still count.
+  const sk = commandSkeleton(cmd).replace(/(^|\s)#[^\n]*/g, '$1')
+  return !/(?<![\w-])(?:--body|--title|--body-file|--notes|--notes-file|-[btFT])/.test(sk)
+}
 
 export const isCompoundCommand = cmd => {
   // Substitutions execute even inside double quotes, so only single-quoted
