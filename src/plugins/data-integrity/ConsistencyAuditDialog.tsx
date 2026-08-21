@@ -36,6 +36,7 @@ import { useNavigate } from '@/utils/navigation.js'
 import { buildAppHash } from '@/utils/routing.js'
 import { useRepo } from '@/context/repo.js'
 import { showError } from '@/utils/toast.js'
+import { writeTextToClipboard } from '@/utils/copy.js'
 import type { DialogContextProps } from '@/utils/dialogs.js'
 import {
   getConsistencyAuditSnapshotFor,
@@ -112,7 +113,11 @@ function SampleRow({ id, onOpen }: { id: string; onOpen: (id: string) => void })
     try {
       // Throws synchronously in an insecure context / older webview where
       // `navigator.clipboard` is undefined — caught below.
-      await navigator.clipboard.writeText(id)
+      // `writeTextToClipboard` (not a raw `navigator.clipboard.writeText`)
+      // also clears any pending cut→move first — this copy puts DIFFERENT
+      // content on the clipboard than whatever was cut, which must
+      // invalidate the move the same way every other clipboard write does.
+      await writeTextToClipboard(id)
       setCopied(true)
       window.setTimeout(() => setCopied(false), 1200)
     } catch (error) {

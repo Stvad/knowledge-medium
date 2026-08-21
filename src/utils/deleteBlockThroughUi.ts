@@ -53,11 +53,12 @@ export const deleteBlockThroughUi = async (block: Block): Promise<boolean> =>
  *  1..K-1 tombstoned. Making that atomic is the same open item as
  *  `applyToAllBlocksInSelection`'s "one tx so undo collapses the batch" todo.
  *
- *  Both multi-block gestures get this. `cut_selected_blocks` passes its whole
- *  selection here directly; `multi_select.delete_block` fans out per block
- *  through `applyToAllBlocksInSelection`, so it runs the same check once over
- *  the selection as that helper's `preflight` before any block is touched.
- *  `Delete` and `d` on the same selection must not disagree. */
+ *  `multi_select.delete_block` (bound to `Delete`) passes its whole selection
+ *  here directly. `cut_selected_blocks` (bound to `$mod+x` / `d`) no longer
+ *  does — since issue "true block move instead of serialize-delete-reparse"
+ *  cut is non-destructive: it puts the blocks' identity on the clipboard and
+ *  a later paste relocates them, so it never reaches this module at all. See
+ *  `@/utils/copy.js`'s `cutBlockIdsToClipboard`. */
 export const deleteBlocksThroughUi = async (blocks: readonly Block[]): Promise<boolean> => {
   if (!await ensureDeletableThroughUi(blocks)) return false
   // eslint-disable-next-line no-restricted-syntax -- this IS the guarded choke point
@@ -66,10 +67,11 @@ export const deleteBlocksThroughUi = async (blocks: readonly Block[]): Promise<b
 }
 
 /**
- * The guard check on its own, toast included. Use this when the gesture has
- * work to do BETWEEN deciding and deleting — `cut_selected_blocks` has to write
- * the clipboard while the blocks still exist, and must not write it at all for
- * a cut the guards will refuse.
+ * The guard check on its own, toast included. Use this when a gesture has
+ * work to do BETWEEN deciding and deleting — `deleteSelectedBlocks` computes
+ * a post-delete focus target from the tree before it's torn down, so it
+ * needs the decision first and the delete second rather than one call
+ * to `deleteBlocksThroughUi`.
  */
 export const ensureDeletableThroughUi = async (blocks: readonly Block[]): Promise<boolean> => {
   await Promise.all(blocks.map(block => block.load()))

@@ -1,6 +1,13 @@
 // @vitest-environment happy-dom
 
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+
+const showInfoMock = vi.hoisted(() => vi.fn())
+vi.mock('@/utils/toast.js', async importOriginal => {
+  const actual = await importOriginal<typeof import('@/utils/toast.js')>()
+  return { ...actual, showInfo: showInfoMock }
+})
+
 import { waitFor } from '@testing-library/react'
 import { EditorView } from '@codemirror/view'
 import { ChangeScope, type User } from '@/data/api'
@@ -44,7 +51,10 @@ import {
 import { createSharedBlockActions } from '@/shortcuts/blockActions'
 import { blockDeletionGuardsFacet } from '@/extensions/core'
 import { kernelDataExtension } from '@/data/kernelDataExtension'
-import { resolveFacetRuntimeSync } from '@/facets/facet'
+import { resolveFacetRuntimeSync, type AppExtension } from '@/facets/facet'
+import { recallPayloadForText, resetRememberedPayloads } from '@/paste/clipboardPayload'
+import { pasteAsMoveVerb } from '@/paste/moveOnPasteVerb'
+import { pasteAsMoveImpl } from '@/plugins/move-blocks/pasteAsMoveImpl'
 
 const WS = 'ws-1'
 const USER: User = {id: 'user-1'}
@@ -203,7 +213,25 @@ afterAll(async () => { await sharedDb.cleanup() })
 beforeEach(async () => {
   __resetLayoutSessionIdForTesting()
   env = await setup()
+  showInfoMock.mockClear()
+  // The remembered-payload table (`@/paste/clipboardPayload`) is a process
+  // global, so a cut left in it by one test would otherwise leak into the
+  // next.
+  resetRememberedPayloads()
 })
+
+/** `env.repo` with the move-blocks plugin's `pasteAsMoveVerb` impl wired in,
+ *  on top of the kernel data extension `setFacetRuntime` always needs. Used
+ *  by the cut→paste-as-move tests, which need `tryPasteAsMove` to actually
+ *  reach `moveBlocksTo` rather than see the seam's "nothing installed"
+ *  default. */
+const withPasteAsMoveInstalled = (extra: readonly AppExtension[] = []): void => {
+  env.repo.setFacetRuntime(resolveFacetRuntimeSync([
+    kernelDataExtension,
+    pasteAsMoveVerb.impl(pasteAsMoveImpl),
+    ...extra,
+  ]))
+}
 
 describe('default CodeMirror shortcuts', () => {
   it('prevents native CodeMirror handling for structural move shortcuts', () => {
@@ -737,10 +765,11 @@ describe('default CodeMirror shortcuts', () => {
     expect(uiStateBlock.peekProperty(selectionStateProp)?.selectedBlockIds).toEqual([])
   })
 
-  it('cut refuses the whole selection when a block is guarded, and writes no clipboard', async () => {
-    // `cut_selected_blocks` is bound to `d` in multi-select. It called
-    // `block.delete()` directly, so `Delete` on a daily note was refused while
-    // `d` on the identical selection destroyed it.
+  it('cut does not delete — it marks the selection as a pending move, even over a block a deletion guard would refuse', async () => {
+    // `cut_selected_blocks` (`d` / `$mod+x` in multi-select) deletes
+    // nothing — the move happens on a LATER paste, via `moveBlocksTo`. So a
+    // deletion guard, which the plugin still has registered for genuine
+    // deletes elsewhere, must not block a cut.
     await env.repo.tx(async tx => {
       await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'r'})
       await tx.create({id: 'ui', workspaceId: WS, parentId: null, orderKey: 'z0'})
@@ -774,20 +803,317 @@ describe('default CodeMirror shortcuts', () => {
       anchorBlock: null,
     } as MultiSelectModeDependencies, {preventDefault: vi.fn()} as unknown as ActionTrigger)
 
-    // All-or-nothing: the unguarded sibling survives too, rather than the
-    // selection being half-cut.
     expect(await isBlockDeleted(env.repo, 'protected')).toBe(false)
     expect(await isBlockDeleted(env.repo, 'ordinary')).toBe(false)
-    // And the guard runs BEFORE the copy: a refused cut must not leave the
-    // user believing the content is on their clipboard. Asserting only that
-    // nothing was deleted can't see this — `deleteBlocksThroughUi` re-checks
-    // the guards itself, so the deletion assertions pass even with the
-    // pre-copy check removed.
-    expect(write).not.toHaveBeenCalled()
-    // The selection survives too, so the user can narrow it and retry.
-    expect(uiStateBlock.peekProperty(selectionStateProp)?.selectedBlockIds)
-      .toEqual(['ordinary', 'protected'])
+    expect(write).toHaveBeenCalledTimes(1)
+    expect(recallPayloadForText('ordinary\nprotected')).toEqual({
+      blockIds: ['ordinary', 'protected'],
+      workspaceId: WS,
+      intent: 'cut',
+      cutId: expect.any(String),
+    })
+    // Successful cut exits multi-select, same as the old destructive cut did.
+    expect(uiStateBlock.peekProperty(selectionStateProp)?.selectedBlockIds).toEqual([])
     vi.unstubAllGlobals()
+  })
+
+  it('does not clear a selection the user made WHILE the cut was in flight', async () => {
+    // The cut resumes after serializing and writing the clipboard — long
+    // enough for the user to have selected something else. Clearing
+    // unconditionally erases that newer gesture, whose blocks this cut
+    // never touched.
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'r'})
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'cut-me', content: 'cut-me'})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'later', content: 'later'})
+    const uiStateBlock = env.repo.block('root')
+    await uiStateBlock.set(selectionStateProp, {
+      anchorBlockId: 'cut-me',
+      selectedBlockIds: ['cut-me'],
+    })
+
+    let releaseWrite = (): void => {}
+    const writeLanded = new Promise<void>(resolve => { releaseWrite = resolve })
+    let writes = 0
+    const write = vi.fn(async () => { writes += 1; await writeLanded })
+    vi.stubGlobal('ClipboardItem', class { })
+    vi.stubGlobal('navigator', {clipboard: {write}})
+
+    const action = findMultiSelectAction(env.repo, 'cut_selected_blocks')
+    const running = action.handler({
+      uiStateBlock,
+      selectedBlocks: [env.repo.block('cut-me')],
+      anchorBlock: null,
+    } as MultiSelectModeDependencies, {preventDefault: vi.fn()} as unknown as ActionTrigger)
+
+    await vi.waitFor(() => { expect(writes).toBe(1) })
+    // The user moves on to a different selection mid-cut.
+    await uiStateBlock.set(selectionStateProp, {
+      anchorBlockId: 'later',
+      selectedBlockIds: ['later'],
+    })
+
+    releaseWrite()
+    await running
+
+    expect(uiStateBlock.peekProperty(selectionStateProp)?.selectedBlockIds).toEqual(['later'])
+    vi.unstubAllGlobals()
+  })
+
+  it('normal-mode cut_block ($mod+x) marks just the focused block, without touching selection state', async () => {
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'r'})
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'solo', content: 'solo'})
+
+    const write = vi.fn(async () => {})
+    vi.stubGlobal('ClipboardItem', class { })
+    vi.stubGlobal('navigator', {clipboard: {write}})
+
+    const action = findNormalModeAction(env.repo, 'cut_block')
+    await action.handler({
+      block: env.repo.block('solo'),
+      uiStateBlock: env.repo.block('root'),
+    } as BlockShortcutDependencies, {preventDefault: vi.fn()} as unknown as ActionTrigger)
+
+    expect(await isBlockDeleted(env.repo, 'solo')).toBe(false)
+    expect(recallPayloadForText('solo')).toEqual({
+      blockIds: ['solo'],
+      workspaceId: WS,
+      intent: 'cut',
+      cutId: expect.any(String),
+    })
+    vi.unstubAllGlobals()
+  })
+
+  describe('paste_after_selection completing a cut as a move', () => {
+    // `cut`/the fallback tests stub `navigator` via `vi.stubGlobal`, which
+    // (unlike `vi.fn()` mocks) persists across tests without
+    // `unstubGlobals: true` in the vitest config — clean up so a stubbed,
+    // clipboard-less `navigator` doesn't leak into later tests in this file.
+    afterEach(() => { vi.unstubAllGlobals() })
+
+    /** Seeds `src/{a,b}` (the blocks to cut) and `dest` (the paste target),
+     *  all under `root`, plus the `ui` multi-select panel block. `ref`
+     *  contains `((a))`, standing in for a real block-ref — since a move
+     *  preserves ids, `ref`'s content is untouched by the move and still
+     *  literally points at a live block afterward, which is the property
+     *  that makes references survive (unlike the old delete-and-reparse
+     *  cut, which minted a new id and left `((a))` pointing at a tombstone). */
+    const seed = async (): Promise<void> => {
+      await env.repo.tx(async tx => {
+        await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0'})
+        await tx.create({id: 'ui', workspaceId: WS, parentId: null, orderKey: 'z0'})
+      }, {scope: ChangeScope.BlockDefault})
+      await env.repo.mutate.createChild({parentId: 'root', id: 'src', content: 'src'})
+      await env.repo.mutate.createChild({parentId: 'src', id: 'a', content: 'a'})
+      await env.repo.mutate.createChild({parentId: 'src', id: 'b', content: 'b'})
+      await env.repo.mutate.createChild({parentId: 'root', id: 'dest', content: 'dest'})
+      await env.repo.mutate.createChild({parentId: 'root', id: 'existing', content: 'existing'})
+      await env.repo.mutate.createChild({parentId: 'root', id: 'ref', content: 'see ((a))'})
+    }
+
+    /** Cuts `blockIds` and leaves `navigator.clipboard` stubbed so a later
+     *  `readText()` (either `tryPasteAsMove`'s check, or the fallback text
+     *  paste re-reading it) returns EXACTLY what was written — a fixed
+     *  snapshot taken right after the cut, captured off the real
+     *  `ClipboardItem` the cut wrote (identity now travels WITH the
+     *  clipboard content, not through a side register — see
+     *  `@/paste/clipboardPayload.js`'s module doc). */
+    const cut = async (blockIds: string[]): Promise<void> => {
+      let clipboardText = ''
+      const write = vi.fn(async (items: ClipboardItem[]) => {
+        for (const item of items) {
+          if (item.types.includes('text/plain')) {
+            clipboardText = await (await item.getType('text/plain')).text()
+          }
+        }
+      })
+      vi.stubGlobal('navigator', {clipboard: {write, readText: vi.fn(async () => '')}})
+      const cutAction = findMultiSelectAction(env.repo, 'cut_selected_blocks')
+      await cutAction.handler({
+        uiStateBlock: env.repo.block('ui'),
+        selectedBlocks: blockIds.map(id => env.repo.block(id)),
+        anchorBlock: null,
+      } as MultiSelectModeDependencies, {preventDefault: vi.fn()} as unknown as ActionTrigger)
+
+      vi.stubGlobal('navigator', {
+        clipboard: {write: vi.fn(async () => {}), readText: vi.fn(async () => clipboardText)},
+      })
+    }
+
+    const pasteAfter = async (targetId: string): Promise<void> => {
+      const pasteAction = findMultiSelectAction(env.repo, 'paste_after_selection')
+      await pasteAction.handler({
+        uiStateBlock: env.repo.block('ui'),
+        selectedBlocks: [env.repo.block(targetId)],
+        anchorBlock: null,
+      } as MultiSelectModeDependencies, {preventDefault: vi.fn()} as unknown as ActionTrigger)
+    }
+
+    it('a REFUSED move leaves the selection alone — the user needs it to retry', async () => {
+      // Pasting inside the block you cut is refused, not performed. The
+      // paste is consumed either way (a text paste there would duplicate
+      // the cut content beside the untouched originals), but nothing
+      // moved, so clearing the selection would take away the range the
+      // user needs in order to aim somewhere valid.
+      await seed()
+      withPasteAsMoveInstalled()
+      await cut(['src'])
+      const uiStateBlock = env.repo.block('ui')
+      await uiStateBlock.set(selectionStateProp, {
+        anchorBlockId: 'a', selectedBlockIds: ['a'],
+      })
+
+      // 'a' is inside 'src', which is the block being moved.
+      await pasteAfter('a')
+
+      expect(env.repo.block('src').peek()?.parentId).toBe('root') // unmoved
+      expect(uiStateBlock.peekProperty(selectionStateProp)?.selectedBlockIds).toEqual(['a'])
+    })
+
+    it('happy path: moves the cut blocks preserving ids, clears the register, and leaves a reference into the moved subtree resolvable', async () => {
+      await seed()
+      withPasteAsMoveInstalled()
+      await cut(['a'])
+
+      await pasteAfter('existing')
+
+      // Same ids — this is the whole point (vs. the old serialize-delete-
+      // reparse, which minted new ones).
+      expect(env.repo.block('a').peek()?.content).toBe('a')
+      expect(env.repo.block('a').peek()?.parentId).toBe('root')
+      expect(await childIds('root')).toEqual(['src', 'dest', 'existing', 'a', 'ref'])
+      // 'a' left 'src'; 'b' (never cut) stayed behind.
+      expect(await childIds('src')).toEqual(['b'])
+      // `ref` was never touched by the move, so its `((a))` still literally
+      // names a live block — the reference resolves.
+      expect(env.repo.block('ref').peek()?.content).toBe('see ((a))')
+      expect(env.repo.block('a').peek()?.deleted).toBe(false)
+    })
+
+    it('multiple cut blocks stay in selection order, chained after the target', async () => {
+      await seed()
+      withPasteAsMoveInstalled()
+      await cut(['a', 'b'])
+
+      await pasteAfter('existing')
+
+      expect(await childIds('root')).toEqual(['src', 'dest', 'existing', 'a', 'b', 'ref'])
+      expect(await childIds('src')).toEqual([])
+    })
+
+    /** Ids added to `root`'s children by the paste, in position order —
+     *  vs. asserting the exact list, this survives not knowing in advance
+     *  how many blocks a given text splits into. */
+    const addedRootChildren = async (before: readonly string[]): Promise<string[]> =>
+      (await childIds('root')).filter(id => !before.includes(id))
+
+    it('falls back to a text paste when the OS clipboard no longer matches the register (a copy happened after the cut)', async () => {
+      await seed()
+      withPasteAsMoveInstalled()
+      await cut(['a'])
+      const before = await childIds('root')
+
+      // Something else got copied after the cut — in-app or from another
+      // app; either way the clipboard text no longer matches the register.
+      const readText = vi.fn(async () => 'unrelated text')
+      vi.stubGlobal('navigator', {
+        clipboard: {
+          write: vi.fn(async () => {}),
+          readText,
+        },
+      })
+
+      await pasteAfter('existing')
+
+      // The fallback actually ran: a NEW block was created from the pasted
+      // text, parented per the ordinary text-paste rules — not a move (the
+      // added id is neither of the cut ones).
+      const added = await addedRootChildren(before)
+      expect(added.map(id => env.repo.block(id).peek()?.content)).toEqual(['unrelated text'])
+      // And the cut block was NOT moved — still exactly where it was.
+      expect(env.repo.block('a').peek()?.parentId).toBe('src')
+      // Exactly ONE clipboard read for the whole handler invocation — the
+      // up-front read is threaded into the fallback's `pasteFromClipboard`
+      // call rather than that function re-reading the clipboard itself.
+      // Two reads could disagree (a second copy landing in between) or
+      // cost a second iOS system-paste prompt.
+      expect(readText).toHaveBeenCalledTimes(1)
+    })
+
+    it('falls back to a text paste when the pending move belongs to a different workspace, and toasts', async () => {
+      await seed()
+      withPasteAsMoveInstalled()
+      await cut(['a'])
+      const before = await childIds('root')
+
+      env.repo.setActiveWorkspaceId('ws-2')
+      // dest/existing/ref live in WS, but the paste action only reads
+      // `selectedBlocks` — reuse the same (now cross-workspace) target ids.
+      await pasteAfter('existing')
+
+      const added = await addedRootChildren(before)
+      expect(added.map(id => env.repo.block(id).peek()?.content)).toEqual(['a'])
+      expect(env.repo.block('a').peek()?.parentId).toBe('src')
+      expect(showInfoMock).toHaveBeenCalledTimes(1)
+    })
+
+    it('a cross-workspace mismatch does not disturb the cut — a later paste back in the original workspace still completes the move', async () => {
+      // Separate from the "falls back... different workspace" test above
+      // (which pastes once, in ws-2): this proves the clipboard payload is
+      // actually usable afterward, not just present. Doesn't itself paste
+      // in ws-2 — just switches there and back — so it can't race the
+      // fallback's fire-and-forget `focusBlock` the way pasting twice
+      // back-to-back across a workspace switch would.
+      await seed()
+      withPasteAsMoveInstalled()
+      await cut(['a'])
+
+      env.repo.setActiveWorkspaceId('ws-2')
+      // still resolvable, just inapplicable here — nothing clears it on a
+      // workspace mismatch, see @/paste/clipboardPayload.js's module doc.
+      expect(recallPayloadForText('a')?.blockIds).toEqual(['a'])
+
+      env.repo.setActiveWorkspaceId(WS)
+      await pasteAfter('existing')
+
+      expect(env.repo.block('a').peek()?.parentId).toBe('root')
+    })
+
+    it('moves the LIVE survivors (not a text-paste duplicate of everything) when a cut block was deleted before the paste', async () => {
+      await seed()
+      withPasteAsMoveInstalled()
+      await cut(['a', 'b'])
+      await env.repo.block('b').delete()
+      const before = await childIds('root')
+
+      await pasteAfter('existing')
+
+      // 'a' (still live) moved with its original id — no new block was
+      // minted for it. 'b' (deleted) was simply skipped, not recreated
+      // from the cut markdown.
+      const added = await addedRootChildren(before)
+      expect(added).toEqual(['a'])
+      expect(env.repo.block('a').peek()?.parentId).toBe('root')
+    })
+
+    it('refuses (no move, no text-paste duplication) when the destination is inside the cut subtree', async () => {
+      await seed()
+      withPasteAsMoveInstalled()
+      await cut(['src']) // src has children a, b — cutting the whole subtree
+
+      // Paste "after a" — a is a child of src, i.e. inside the moving subtree.
+      await pasteAfter('a')
+
+      // Nothing moved...
+      expect(env.repo.block('src').peek()?.parentId).toBe('root')
+      expect(env.repo.block('a').peek()?.parentId).toBe('src')
+      // ...and nothing was duplicated via a fallback text paste either.
+      expect(await childIds('src')).toEqual(['a', 'b'])
+      expect(await childIds('root')).toEqual(['src', 'dest', 'existing', 'ref'])
+    })
   })
 
   it("merges a first child with children into its parent when it is the parent's only child", async () => {

@@ -686,6 +686,36 @@ describe('pasteFromClipboard (shortcut/programmatic paste)', () => {
     // Default shell decision is `split` → markdown parsed, bullets stripped.
     expect(await childContents('root')).toEqual(['Target', 'Alpha', 'Beta'])
   })
+
+  // A caller that already read the clipboard once (to check `tryPasteAsMove`
+  // before falling back here — see `tryPasteAsMoveAt`'s doc) must be able to
+  // thread that SAME text through instead of triggering a second read: two
+  // reads can disagree if something else got copied in between, a second
+  // read can be refused where the first wasn't, and each read can cost a
+  // separate iOS system-paste prompt.
+  it('uses the pre-read clipboardText argument instead of re-reading the clipboard when one is provided', async () => {
+    const readText = vi.fn(async () => 'should never be read')
+    vi.stubGlobal('navigator', {clipboard: {readText}})
+    await createBlock('root', 'Root', null, 'a0')
+    await createBlock('target', 'Target', 'root', 'a0')
+
+    const pasted = await pasteFromClipboard(
+      env.repo.block('target'), env.repo, {scopeRootId: 'root'}, 'pre-read text',
+    )
+
+    expect(readText).not.toHaveBeenCalled()
+    expect(pasted[0]?.peek()?.content).toBe('pre-read text')
+  })
+
+  it('falls back to reading the clipboard itself when no clipboardText argument is given', async () => {
+    stubClipboard('from the clipboard')
+    await createBlock('root', 'Root', null, 'a0')
+    await createBlock('target', 'Target', 'root', 'a0')
+
+    const pasted = await pasteFromClipboard(env.repo.block('target'), env.repo, {scopeRootId: 'root'})
+
+    expect(pasted[0]?.peek()?.content).toBe('from the clipboard')
+  })
 })
 
 describe('resolvePasteWithMediaCapture', () => {
