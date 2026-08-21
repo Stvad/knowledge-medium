@@ -192,7 +192,7 @@ const predictedJournalId = async (repo: Repo, workspaceId: string): Promise<stri
  *  THIS day's note (our own prior adoption / repeat resolution, not a
  *  foreign collision). Any OTHER extra type, or a `DAILY_NOTE_TYPE`
  *  claimant for a mismatched (or unreadable) date, is refused. */
-const dailyNoteAdoptionGuard = (dateValue: Date): CanonicalAdoptionGuard => claimant => {
+export const dailyNoteAdoptionGuard = (dateValue: Date): CanonicalAdoptionGuard => claimant => {
   const extraTypes = getBlockTypes(claimant).filter(t => t !== PAGE_TYPE && t !== DAILY_NOTE_TYPE)
   if (extraTypes.length > 0) {
     return `claimant ${claimant.id} already has type(s) ${extraTypes.join(', ')} — ambiguous identity, left unchanged pending an owner decision (issue #378)`

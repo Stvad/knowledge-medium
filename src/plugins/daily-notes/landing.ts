@@ -22,12 +22,17 @@ import type { WorkspaceLandingResolver } from '@/extensions/core.js'
 import { aliasesProp } from '@/data/properties.js'
 import {
   JOURNAL_ALIAS,
+  dailyNoteAdoptionGuard,
   dailyNoteAliasesFor,
   dailyNoteBlockId,
+  dailyNoteDateValue,
   getOrCreateDailyNote,
   journalBlockId,
   todayIso,
 } from './dailyNotes.ts'
+import { refuseTypedClaimant } from '@/data/targets.js'
+import { PAGE_TYPE } from '@/data/blockTypes.js'
+import type { BlockData } from '@/data/api'
 import { anyBlockTombstoned } from '@/data/blockLiveness.js'
 
 /** Raw, tombstone-tolerant alias read — `properties_json` (and its
@@ -38,10 +43,17 @@ import { anyBlockTombstoned } from '@/data/blockLiveness.js'
  *  after it's been deleted and can no longer be found via
  *  `aliasLookup`. Same "Block facade can't tell deleted from missing"
  *  reasoning as `anyBlockTombstoned` — reads the row directly. */
-const decodeAliases = (propertiesJson: string): readonly string[] => {
+const parseProperties = (propertiesJson: string): Record<string, unknown> => {
   try {
-    const props = JSON.parse(propertiesJson) as Record<string, unknown>
-    const encoded = props[aliasesProp.name]
+    return JSON.parse(propertiesJson) as Record<string, unknown>
+  } catch {
+    return {}
+  }
+}
+
+const decodeAliases = (data: Pick<BlockData, 'properties'>): readonly string[] => {
+  try {
+    const encoded = data.properties[aliasesProp.name]
     return encoded === undefined ? [] : aliasesProp.codec.decode(encoded)
   } catch {
     return []
@@ -61,8 +73,8 @@ const MAX_ANCESTOR_WALK = 64
  *  excluded block reads that as "unrelated page deleted" and mints a fresh
  *  empty note for today — moments after the user deleted the one they were
  *  looking at. */
-const rawAliasesWithAncestors = async (repo: Repo, id: string): Promise<readonly string[]> => {
-  const collected: string[] = []
+const rawPropertyChain = async (repo: Repo, id: string): Promise<BlockData[]> => {
+  const chain: BlockData[] = []
   const seen = new Set<string>()
   let cursor: string | null = id
   for (let depth = 0; cursor !== null && depth < MAX_ANCESTOR_WALK; depth++) {
@@ -73,10 +85,28 @@ const rawAliasesWithAncestors = async (repo: Repo, id: string): Promise<readonly
         'SELECT properties_json, parent_id FROM blocks WHERE id = ?', [cursor],
       )
     if (!row) break
-    collected.push(...decodeAliases(row.properties_json))
+    chain.push({id: cursor, properties: parseProperties(row.properties_json)} as BlockData)
     cursor = row.parent_id
   }
-  return collected
+  return chain
+}
+
+/** Was `excludeBlockId`, or an ancestor of it, the row that WAS this identity —
+ *  i.e. would the resolver have adopted it? Asking the resolver's own guards
+ *  rather than re-deciding here: an alias alone is not adoption, so a typed
+ *  block that merely carried today's date was never the note, and suppressing
+ *  recovery for it would strand the user on a blank screen when
+ *  `getOrCreateDailyNote` would happily have created the real one. */
+const chainHeldCanonicalIdentity = (chain: readonly BlockData[], iso: string): boolean => {
+  const [longLabel, isoLabel] = dailyNoteAliasesFor(iso)
+  const dailyGuard = dailyNoteAdoptionGuard(dailyNoteDateValue(iso))
+  const journalGuard = refuseTypedClaimant([PAGE_TYPE])
+  return chain.some(row => {
+    const aliases = decodeAliases(row)
+    if (aliases.includes(JOURNAL_ALIAS)) return journalGuard(row) === null
+    if (aliases.includes(longLabel) || aliases.includes(isoLabel)) return dailyGuard(row) === null
+    return false
+  })
 }
 
 export const todayDailyNoteLanding: WorkspaceLandingResolver = async ({
@@ -120,13 +150,8 @@ export const todayDailyNoteLanding: WorkspaceLandingResolver = async ({
     // getOrCreateDailyNote can no longer find it as a live claimant, so
     // answering here mints a FRESH row for today right after the user deleted
     // the one they were looking at.
-    const excludedAliases = await rawAliasesWithAncestors(repo, excludeBlockId)
-    const [longLabel, isoLabel] = dailyNoteAliasesFor(iso)
-    if (
-      excludedAliases.includes(longLabel)
-      || excludedAliases.includes(isoLabel)
-      || excludedAliases.includes(JOURNAL_ALIAS)
-    ) return null
+    const chain = await rawPropertyChain(repo, excludeBlockId)
+    if (chainHeldCanonicalIdentity(chain, iso)) return null
   }
   const dailyNote = await getOrCreateDailyNote(repo, workspaceId, iso)
   return dailyNote.id

@@ -16,7 +16,7 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChangeScope } from '@/data/api'
 import { DeterministicIdCrossWorkspaceError } from '@/data/api/errors'
-import { aliasesProp } from '@/data/properties'
+import { addBlockTypeToProperties, aliasesProp } from '@/data/properties'
 import { PAGE_TYPE } from '@/data/blockTypes'
 import { dailyNoteDateProp } from '@/plugins/daily-notes/schema.js'
 import { BlockCache } from '@/data/blockCache'
@@ -585,6 +585,31 @@ describe('todayDailyNoteLanding', () => {
     expect(id).toBeNull()
     expect(await env.repo.load(dailyNoteBlockId(WS, iso))).toBeNull()
     expect(await isBlockDeleted(env.repo, 'claimant')).toBe(true)
+  })
+
+  it('still answers when the deleted block merely CARRIED today\'s alias but was never adoptable', async () => {
+    // A typed block that happens to hold today's date is not the day's note —
+    // the resolver refuses to adopt it. Suppressing recovery for it strands the
+    // user on a blank screen when `getOrCreateDailyNote` would have created the
+    // real note. Eligibility must be decided by the resolver's own guard, not
+    // by the alias alone.
+    const iso = todayIso()
+    await env.repo.tx(async tx => {
+      await tx.create({
+        id: 'typed-squatter', workspaceId: WS, parentId: null, orderKey: 'z0', content: 'a task',
+        properties: addBlockTypeToProperties(
+          {[aliasesProp.name]: aliasesProp.codec.encode([iso])},
+          'some-other-identity',
+        ),
+      })
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.tx(tx => tx.delete('typed-squatter'), {scope: ChangeScope.BlockDefault})
+
+    const id = await todayDailyNoteLanding({
+      repo: env.repo, workspaceId: WS, freshlyCreated: false, excludeBlockId: 'typed-squatter',
+    })
+
+    expect(id).toBe(dailyNoteBlockId(WS, iso))
   })
 
   it('declines when the deleted block was a CHILD of the adopted today-note', async () => {
