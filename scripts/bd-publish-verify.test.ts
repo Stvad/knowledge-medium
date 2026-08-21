@@ -233,8 +233,12 @@ describe('bd-publish-verify process behavior', { timeout: 30_000 }, () => {
     mkdirSync(shimDir)
     const shimLog = join(repo, 'shim.log')
     writeFileSync(shimLog, '')
-    for (const [apiPath, body] of Object.entries(opts.fixtures ?? {}))
-      writeFileSync(join(repo, fixtureName(apiPath)), JSON.stringify(body))
+    for (const [apiPath, body] of Object.entries(opts.fixtures ?? {})) {
+      // 'path#2' writes the fixture served on the SECOND GET of that path
+      const [pth, nth] = apiPath.split('#')
+      const base = `fixture-${pth.replaceAll('/', '_')}${nth ? `.${nth}` : ''}.json`
+      writeFileSync(join(repo, base), JSON.stringify(body))
+    }
     const shows = opts.shows ?? [[]]
     shows.forEach((rows, i) => writeFileSync(join(repo, `show-${i + 1}.json`), JSON.stringify(rows)))
     writeFileSync(join(repo, 'show-last.json'), JSON.stringify(shows[shows.length - 1]))
@@ -266,7 +270,10 @@ describe('bd-publish-verify process behavior', { timeout: 30_000 }, () => {
         `    cat > "${repo}/patch-input-$(echo "$4" | tr '/' '_').json"`,
         "    echo '{}'; exit 0",
         '  fi',
-        `  f="${repo}/fixture-$(echo "$2" | tr '/' '_').json"`,
+        `  name=$(echo "$2" | tr '/' '_')`,
+        `  cnt=$(cat "${repo}/getcount-$name" 2>/dev/null || echo 0); cnt=$((cnt+1)); echo $cnt > "${repo}/getcount-$name"`,
+        `  if [ -f "${repo}/fixture-$name.$cnt.json" ]; then cat "${repo}/fixture-$name.$cnt.json"; exit 0; fi`,
+        `  f="${repo}/fixture-$name.json"`,
         '  if [ -f "$f" ]; then cat "$f"; exit 0; fi',
         '  echo \'{"message":"Not Found"}\'; exit 1',
         'fi',
@@ -671,6 +678,61 @@ describe('bd-publish-verify process behavior', { timeout: 30_000 }, () => {
     expect(r.status).toBe(0)
     expect(context(r)).toContain('out of time budget')
     expect(shimCalls()).not.toContain('gh api')
+  })
+
+  // A redirected publish can leave a SIBLING's printed URL as the only one
+  // in the output — compound invocations are echo-only in every mode.
+  it('never repairs CLI compounds either — a sibling URL must not become the target', () => {
+    const { hook, repo } = makeRepo({
+      fixtures: {
+        'repos/Stvad/knowledge-medium/issues/12': { html_url: url('issues/12'), title: 'Innocent', body: 'tracks km-abc' },
+      },
+      shows: [[{ id: 'km-abc', external_ref: url('issues/12') }]],
+    })
+    const r = hook('cat /tmp/old-url; gh issue edit 13 --body clean >/dev/null', url('issues/12'))
+    expect(r.status).toBe(0)
+    expect(context(r)).toContain('cannot be attributed')
+    expect(existsSync(join(repo, patchName('repos/Stvad/knowledge-medium/issues/12')))).toBe(false)
+  })
+
+  // The fresh read is authoritative for the ECHO too: a concurrent edit in
+  // the mint window may have replaced the bead id with a new reference, and
+  // the reference table must show the published text, not the stale copy.
+  it('echoes references from the fresh object even when no rewrite applies', () => {
+    const { hook, repo } = makeRepo({
+      fixtures: {
+        'repos/Stvad/knowledge-medium/pulls/652': { html_url: url('pull/652'), title: 'T', body: 'tracks km-abc' },
+        'repos/Stvad/knowledge-medium/pulls/652#2': { html_url: url('pull/652'), title: 'T', body: 'now relates to #77' },
+        'repos/Stvad/knowledge-medium/issues/12': { title: 'Tracked issue', state: 'open' },
+        'repos/Stvad/knowledge-medium/issues/77': { title: 'Concurrent ref', state: 'open' },
+      },
+      shows: [[{ id: 'km-abc', external_ref: url('issues/12') }]],
+    })
+    const r = hook(PR_CREATE, url('pull/652'))
+    expect(r.status).toBe(0)
+    expect(context(r)).toContain('#77 → "Concurrent ref" (issue, open)')
+    expect(existsSync(join(repo, patchName('repos/Stvad/knowledge-medium/pulls/652')))).toBe(false)
+  })
+
+  // A rebase merge lands each PR commit directly — their messages carry the
+  // acted close keywords, not merge_commit_sha alone.
+  it('scans the PR commits landed by a rebase merge, not just the head commit', () => {
+    const sha = 'def4567890def4567890def4567890def4567890'
+    const { hook } = makeRepo({
+      fixtures: {
+        'repos/Stvad/knowledge-medium/pulls/652': { html_url: url('pull/652'), merged: true, merge_commit_sha: sha },
+        [`repos/Stvad/knowledge-medium/commits/${sha}`]: { commit: { message: 'feat B (#652)' } },
+        'repos/Stvad/knowledge-medium/pulls/652/commits?per_page=100': [
+          { commit: { message: 'feat A\n\nCloses #701' } },
+          { commit: { message: 'feat B (#652)' } },
+        ],
+        'repos/Stvad/knowledge-medium/issues/701': { title: 'Closed by rebase', state: 'closed' },
+      },
+    })
+    const r = hook('gh pr merge 652 --rebase', '✓ Merged pull request #652 (feat)')
+    expect(r.status).toBe(0)
+    expect(context(r)).toContain('#701 → "Closed by rebase"')
+    expect(context(r)).toContain('ALREADY acted')
   })
 
   it('suppresses writes under BD_GITHUB_SYNC_DRY=1 but still reports what it would do', () => {

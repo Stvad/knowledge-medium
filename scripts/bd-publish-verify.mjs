@@ -37,7 +37,9 @@
  * wrong — then merely echoed — object; in a compound that mixes `gh
  * api` with CLI publishes the api-published object goes unverified; and an
  * api-created review's inline comments[].body ride outside the review
- * object this hook fetches, so they are neither echoed nor repaired.
+ * object this hook fetches, so they are neither echoed nor repaired; and
+ * commit-comment URLs (/commit/<sha>#commitcomment-N) are not classified —
+ * nothing in this repo's flows publishes them.
  *
  * Blocking here would be pointless (the publish already happened), so this
  * hook never does: any internal failure exits 0 silently, a failed repair is
@@ -289,6 +291,11 @@ const verifyTarget = (t, { dry, repairVeto, rewriteAllowed, deadline }) => {
       } else {
         const freshTitle = titleOf(t, fresh)
         const freshBody = typeof fresh.body === 'string' ? fresh.body : ''
+        // The fresh copy is authoritative from here on — a concurrent edit
+        // during the mint window must feed the reference echo below even
+        // when no rewrite ends up applying.
+        finalTitle = freshTitle
+        finalBody = freshBody
         const titlePlan = planBeadIdRewrite(freshTitle, byId)
         const bodyPlan = planBeadIdRewrite(freshBody, byId)
         const rewrites = [...new Map([...titlePlan.rewrites, ...bodyPlan.rewrites].map(r => [r.id, r])).values()]
@@ -345,8 +352,17 @@ const verifyMergeCommit = (n, deadline) => {
   const pr = ghJson(['api', `repos/${REPO}/pulls/${n}`])
   if (!pr?.merged || typeof pr.merge_commit_sha !== 'string') return notes
   const commit = ghJson(['api', `repos/${REPO}/commits/${pr.merge_commit_sha}`])
-  const message = commit?.commit?.message
-  if (typeof message !== 'string') return notes
+  // A rebase merge lands each PR commit directly and merge_commit_sha names
+  // only the rebased head — the PR's own commit messages carry the rest of
+  // the acted close keywords, so they are scanned too (one listing call,
+  // covers every merge strategy).
+  const prCommits = ghJson(['api', `repos/${REPO}/pulls/${n}/commits?per_page=100`])
+  const commitMsgs = Array.isArray(prCommits)
+    ? prCommits.map(c => c?.commit?.message).filter(m => typeof m === 'string')
+    : []
+  const headMsg = typeof commit?.commit?.message === 'string' ? commit.commit.message : ''
+  const message = [headMsg, ...commitMsgs].join('\n')
+  if (!message.trim()) return notes
   // The PR's own number always appears in a merge-commit message — echoing
   // it back would be pure noise.
   const refs = extractIssueRefs(message).filter(r => r !== n)
@@ -397,8 +413,8 @@ const hookPostPublish = () => {
       ? 'the output names more than one object, so this hook cannot tell which one the command published'
       : hasExplicitGetMethod(cmd)
         ? 'the command carries an explicit GET, and an object a read segment printed must never be written'
-        : !matchesPrCommand(cmd) && isCompoundCommand(cmd)
-          ? 'the api response cannot be attributed to a single segment of a compound command'
+        : isCompoundCommand(cmd)
+          ? 'the output cannot be attributed to a single segment of a compound command'
           : null
   const deadline = Date.now() + DEADLINE_MS
   const notes = []
