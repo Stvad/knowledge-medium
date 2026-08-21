@@ -88,9 +88,7 @@ export const DuplicateNameBanner: BlockRenderer = ({block}) => {
       // deletion refusal an explicit delete would — the merge picker does this
       // too. Without it a one-click merge silently deletes a page the app
       // otherwise refuses to let you delete.
-      const sources = rivalIds.map(id => repo.block(id))
-      await Promise.all(sources.map(source => source.load()))
-      if (!await ensureDeletableThroughUi(sources)) return
+      if (!await ensureDeletableThroughUi(rivalIds.map(id => repo.block(id)))) return
 
       await repo.run(ALIAS_COLLISION_MERGE_MUTATOR, {
         intoId: block.id,
