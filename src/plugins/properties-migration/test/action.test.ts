@@ -521,6 +521,28 @@ describe('the orphan-definition step', () => {
     expect(runWorkspaceBackfillNow).not.toHaveBeenCalled()
   })
 
+  it('re-checks ownership after the confirmation, which is a user-length pause', async () => {
+    // Ownership can change out of band, or the change can simply reach this
+    // replica during the dialog. It is re-taken because it lives in
+    // `passIsUnfit`, which is re-taken — the whole point of putting it there.
+    planSynthesis.mockResolvedValue(plan(2))
+    openDialog.mockResolvedValue(true)
+    const {repo, runWorkspaceBackfillNow} = makeRepo({outcome: 'ran', undoHistoryCleared: false})
+    let reads = 0
+    ;(repo as unknown as {db: {getOptional: (sql: string) => Promise<unknown>}}).db.getOptional =
+      async (sql: string) => sql.includes('owner_user_id')
+        ? {owner_user_id: ++reads === 1 ? USER : 'someone-else'}
+        : {properties_migration: 'cell'}
+
+    await invoke(repo)
+
+    expect(applySynthesis).not.toHaveBeenCalled()
+    expect(flipWorkspace).not.toHaveBeenCalled()
+    expect(runWorkspaceBackfillNow).not.toHaveBeenCalled()
+    expect(progressHandle.fail).toHaveBeenCalledWith(
+      expect.stringMatching(/only the workspace owner/i))
+  })
+
   it('lets a non-owner backfill a workspace that is already flipped', async () => {
     // Nothing on that path needs the server, so ownership is irrelevant there.
     openDialog.mockResolvedValue(true)

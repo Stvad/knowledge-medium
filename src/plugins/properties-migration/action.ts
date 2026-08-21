@@ -50,8 +50,24 @@ const undoNote = (cleared: boolean): string =>
 const notStarted = (reason: string): string =>
   `Not started — ${withPeriod(reason)} Nothing was changed; try again shortly.`
 
-const passIsUnfit = async (repo: Repo): Promise<string | null> =>
-  repo.isReadOnly ? 'this workspace is read-only' : repo.syncViewGap()
+const passIsUnfit = async (
+  repo: Repo,
+  {workspaceId, needsFlip}: {workspaceId: string; needsFlip: boolean},
+): Promise<string | null> => {
+  if (repo.isReadOnly) return 'this workspace is read-only'
+  // Ownership lives HERE, with the other preconditions, rather than as its own
+  // check at one point in the sequence: this predicate is re-taken after the
+  // confirmation, and ownership is exactly as capable of changing across that
+  // pause as the sync gap is. A separate check would have to remember to be
+  // re-taken; this one already is.
+  //
+  // Only when the flip is still ahead — an already-flipped workspace needs
+  // nothing from the server, so a non-owner backfilling it is fine.
+  if (needsFlip && await readWorkspaceOwnerId(repo.db, workspaceId) !== repo.user.id) {
+    return 'only the workspace owner can switch this workspace to property blocks'
+  }
+  return repo.syncViewGap()
+}
 
 /** The synthesis advisory is sticky and re-runnable, so it needs a stable id or
  *  a second run stacks an identical toast beside the first. */
@@ -224,25 +240,11 @@ export const migratePropertiesToBlocksAction = ({repo}: {repo: Repo}): ActionCon
         'property blocks — that step needs remote sync.')
       return
     }
-    // Only the OWNER can flip: the server trigger refuses everyone else, and
-    // permanently. Without this an editor runs the whole gesture, mints
-    // definitions that claim shared property names, clears the workspace's undo
-    // history — and only then finds out the flip was never available to them.
-    // Asked before the plan, because everything after it is work done on the
-    // assumption the flip can land. Not asked on the already-flipped path,
-    // where nothing needs the server.
-    if (!childBacked) {
-      const ownerId = await readWorkspaceOwnerId(repo.db, workspaceId)
-      if (ownerId !== repo.user.id) {
-        showInfo('Only the workspace owner can switch this workspace to property blocks. ' +
-          'Nothing was changed — ask them to run it.')
-        return
-      }
-    }
     // Before the count and the confirmation: the dialog must not ask consent
-    // for something the runner is about to refuse. Re-taken after the dialog —
-    // this is the cheap early exit, not the guard.
-    const ineligible = await passIsUnfit(repo)
+    // for something the runner is about to refuse — including asking a
+    // non-owner to consent to a flip the server will never let them make.
+    // Re-taken after the dialog; this is the cheap early exit, not the guard.
+    const ineligible = await passIsUnfit(repo, {workspaceId, needsFlip: !childBacked})
     if (ineligible !== null) {
       showInfo(notStarted(ineligible))
       return
@@ -295,7 +297,7 @@ export const migratePropertiesToBlocksAction = ({repo}: {repo: Repo}): ActionCon
     const banner = showProgress('Migrating properties to blocks…')
     // ABOVE the synthesis block, not below it: below, the "Nothing was changed"
     // this prints is false the moment synthesis commits.
-    const unfit = await passIsUnfit(repo)
+    const unfit = await passIsUnfit(repo, {workspaceId, needsFlip: !childBacked})
     if (unfit !== null) {
       banner.fail(notStarted(unfit))
       return
