@@ -5,54 +5,38 @@
  * mechanics and `docs/fuzzing.md` for suite conventions.
  *
  * ──── Suite 1: `buildFuzzyAliasMatchesSql` exact/prefix match survives
- * the pre-filter LIMIT (:389-414, via `aliasMatchesFuzzyQuery` :1241-1286)
- * ────
+ * the pre-filter LIMIT ────
  *
- * Regression target: 1336fed7f. The alias-autocomplete pre-filter
- * over-fetches `limit`-many rows with a permissive 3-char trigram
- * substring LIKE, then ranks in JS (`fuzzyRank.ts`). Before the fix, the
- * pre-filter's `LIMIT` was UNORDERED, so a busy trigram (many aliases
- * sharing a query token's first 3 chars) could evict the alias the user
- * typed VERBATIM — or as a true prefix — from the candidate pool before
- * the JS ranker (which rewards exact matches) ever saw it. The fix adds
- * an exact-then-prefix `ORDER BY` ahead of the `LIMIT` (:404-411):
- *   CASE WHEN alias_lower = ? THEN 0
- *        WHEN alias_lower LIKE ? || '%' ESCAPE '\' THEN 1
- *        ELSE 2 END, created_at, alias
+ * The alias-autocomplete pre-filter over-fetches with a permissive 3-char
+ * trigram LIKE, then ranks in JS (`fuzzyRank.ts`). Its `LIMIT` must stay
+ * behind an exact-then-prefix `ORDER BY`; unordered, a busy trigram can
+ * evict the alias the user typed verbatim before the ranker ever sees it.
  *
- * Ground truth by construction: every decoy alias's suffix is generated
- * with a reserved leading char ('d') that a true-match suffix ('t') can
- * never share, so a decoy can NEVER equal the query or have it as a
- * prefix — its tier is unconditionally 2, strictly below the true
- * match's tier (0 exact / 1 prefix), regardless of decoy content, count,
- * alphabetical order, or creation order. So an unordered `LIMIT` (the
- * pre-fix bug) could evict the true match, while the ordered one (the
- * fix) can never — the property this suite pins for any `limit >= 1`.
+ * Ground truth by CONSTRUCTION, which is what makes the property sound
+ * without a second implementation to diff against: every decoy suffix is
+ * generated with a reserved leading char ('d') a true-match suffix ('t')
+ * can never share. A decoy therefore can never equal the query nor have
+ * it as a prefix, so its ORDER BY tier is unconditionally 2 — strictly
+ * below the true match's 0 (exact) or 1 (prefix) — whatever its content,
+ * count, alphabetical order or creation order. The true match survives
+ * any `limit >= 1`.
  *
- * ──── Suite 2: `escapeLikePattern` (:270-278) vs real SQLite ────
+ * ──── Suite 2: `escapeLikePattern` vs real SQLite ────
  *
- * Evidence: 2f0e042de fixed four WHERE-clause sites that interpolated an
- * unescaped bound value into a LIKE pattern (`%`/`_` acted as wildcards).
- * This suite runs the actual LIKE/ESCAPE fragment each of those call
- * sites uses — copied verbatim, not re-derived — against a real SQLite
- * connection (no app tables needed; the fragment is a bare `SELECT (...)
- * AS m` scalar expression) for arbitrary needle/haystack pairs biased
- * toward `%`, `_`, `\`, and differentially checks the boolean result
- * against a plain JS containment check, case-folded the same way the
- * call site folds it.
+ * Differential against the engine itself: each call site's actual
+ * LIKE/ESCAPE fragment — copied verbatim, not re-derived, since a
+ * re-derivation would test this suite's reading of the call site rather
+ * than the call site — runs on a real connection and is checked against a
+ * plain JS containment oracle, case-folded the way that site folds.
  *
- * Unicode scoping (deliberate, verified empirically — see the PR
- * description): SQLite's built-in `LOWER()`/case-insensitive `LIKE` only
- * fold ASCII `A-Z`; a non-ASCII cased pair (e.g. `LOWER('É')` stays
- * `'É'`, and `'Émile' LIKE '%émi%'` doesn't match) is a real, PRE-EXISTING
- * limitation of every one of these call sites alike (verified against
- * `aliasesInWorkspace`, which SQL-`LOWER()`s both sides and still misses
- * it) — not something `escapeLikePattern` causes or could fix, and
- * orthogonal to what this suite targets. The generator's unicode bias
- * therefore sticks to CASE-INVARIANT code points (CJK ideographs, emoji,
- * NBSP/ideographic space) plus ASCII letters/digits/symbols, so a
- * property failure here always points at the escaping/LIKE mechanics,
- * never at that separate, out-of-scope gap.
+ * Unicode scoping (deliberate): SQLite's built-in `LOWER()` and
+ * case-insensitive `LIKE` fold ASCII `A-Z` only, so `'Émile' LIKE '%émi%'`
+ * does not match. That is a pre-existing limitation of every one of these
+ * call sites alike, not something `escapeLikePattern` causes or could fix,
+ * and it would otherwise fail this property for an unrelated reason. The
+ * generator's unicode bias therefore sticks to CASE-INVARIANT code points
+ * (CJK, emoji, NBSP/ideographic space) plus ASCII, so a failure here
+ * always points at escaping mechanics.
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import fc from 'fast-check'

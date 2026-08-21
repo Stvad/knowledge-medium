@@ -605,7 +605,11 @@ const offContractCandidateDetail = (
 
 /** Orders health reports so a slow search settling after a faster later one
  *  can't publish stale state. Module-scoped rather than per-repo: it only
- *  has to be monotonic, and reports from two repos never share a consumer. */
+ *  has to be monotonic, and reports from two repos never share a consumer.
+ *
+ *  Claim it when the search STARTS, never when it reports — allocating after
+ *  the barrier numbers reports by completion order, which is the very thing
+ *  the generation exists to see past. */
 let searchHealthGeneration = 0
 
 /** Fan one search's outcomes out to every contributed reporter. Isolated per
@@ -613,11 +617,12 @@ let searchHealthGeneration = 0
  *  only observing, nor the reporters after it. */
 const reportSearchSourceHealth = (
   repo: Repo,
+  generation: number,
   outcomes: readonly SearchSourceOutcome[],
 ): void => {
   const reporters = repo.facetRuntime?.read(searchSourceHealthFacet)
   if (!reporters || reporters.size === 0) return
-  const report: SearchSourceHealthReport = {generation: ++searchHealthGeneration, outcomes}
+  const report: SearchSourceHealthReport = {generation, outcomes}
   for (const reporter of reporters.values()) {
     try {
       reporter.report(report)
@@ -665,25 +670,30 @@ export const searchBlocksAcrossSources = async (
 ): Promise<BlockData[]> => {
   if (args.limit <= 0) return []
 
+  const generation = ++searchHealthGeneration
+
   const sources = repo.facetRuntime?.read(searchSourcesFacet)
   const contributions = sources && sources.size > 0
     ? [...sources.values()]
     : [coreContentSearchSource]
 
   const failures: {index: number; error: unknown}[] = []
-  const outcomes: SearchSourceOutcome[] = []
+  // Written by INDEX, not pushed: a push orders outcomes by settle order, so
+  // two identical searches can produce differently-ordered reports and a
+  // consumer diffing them sees a change that isn't one.
+  const outcomes = new Array<SearchSourceOutcome>(contributions.length)
   const candidateLists = await Promise.all(
     contributions.map(async (source, index) => {
       try {
         const candidates = await source.search(repo, args)
         const detail = offContractCandidateDetail(source.id, candidates)
-        outcomes.push(detail === null
+        outcomes[index] = detail === null
           ? {sourceId: source.id, kind: 'ok'}
-          : {sourceId: source.id, kind: 'malformed-candidate', detail})
+          : {sourceId: source.id, kind: 'malformed-candidate', detail}
         return candidates
       } catch (error) {
         console.error(`[searchBlocksAcrossSources] source "${source.id}" threw`, error)
-        outcomes.push({sourceId: source.id, kind: 'threw', error})
+        outcomes[index] = {sourceId: source.id, kind: 'threw', error}
         failures.push({index, error})
         return []
       }
@@ -693,7 +703,7 @@ export const searchBlocksAcrossSources = async (
   // After the barrier, so the report names exactly the set of sources this
   // search ran — a source that has left the runtime is absent from it, which
   // is how a consumer retires state it could never be told to clear.
-  reportSearchSourceHealth(repo, outcomes)
+  reportSearchSourceHealth(repo, generation, outcomes)
 
   // Every source failed (including the single-source case) — there is
   // nothing to rank, and silently returning [] would hide the failure

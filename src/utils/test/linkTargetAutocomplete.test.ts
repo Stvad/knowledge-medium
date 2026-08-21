@@ -980,4 +980,52 @@ describe('searchBlocksAcrossSources (searchSourcesFacet merge point)', () => {
       kind: 'malformed-candidate',
     }))
   })
+
+  it('numbers reports by when each search STARTED, and orders outcomes by registration', async () => {
+    // Both properties are invisible to a store-level test: they live at the
+    // allocation and assembly sites, not in the consumer. The earlier-started
+    // search settles LAST here, so numbering by completion (the bug this
+    // pins) would hand it the higher generation and let its stale outcome
+    // win. Source order is likewise inverted on settle, so a report built by
+    // push order would come back reversed.
+    await create({id: 'core-hit', content: 'sync notes'})
+    const reports: SearchSourceHealthReport[] = []
+    env.repo.setRuntimeContributions(searchSourceHealthFacet, 'test:reporter', [
+      {id: 'test.reporter', report: (r) => { reports.push(r) }},
+    ])
+
+    let releaseSlow = (): void => {}
+    const slowGate = new Promise<void>((resolve) => { releaseSlow = resolve })
+    let firstCall = true
+    env.repo.setRuntimeContributions(searchSourcesFacet, 'test:slow', [{
+      id: 'test.slow',
+      search: async () => {
+        // Only the FIRST search is held; the second runs straight through, so
+        // search #1 starts first and finishes last.
+        if (firstCall) {
+          firstCall = false
+          await slowGate
+        }
+        return []
+      },
+    }])
+
+    const started = searchBlocksAcrossSources(env.repo, {workspaceId: WS, query: 'sync', limit: 10})
+    const later = await searchBlocksAcrossSources(env.repo, {workspaceId: WS, query: 'sync', limit: 10})
+    expect(later).toBeDefined()
+    expect(reports).toHaveLength(1)
+    releaseSlow()
+    await started
+    expect(reports).toHaveLength(2)
+
+    // reports[0] is the LATER search (it settled first); reports[1] is the
+    // earlier one. Numbering by start order means the late arrival carries the
+    // LOWER generation, which is what lets a consumer discard it.
+    expect(reports[1].generation).toBeLessThan(reports[0].generation)
+
+    // Registration order, not settle order.
+    for (const report of reports) {
+      expect(report.outcomes.map(o => o.sourceId)).toEqual(['core.content', 'test.slow'])
+    }
+  })
 })
