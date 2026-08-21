@@ -121,7 +121,7 @@ export const extractBeadIds = text => [...new Set(text.match(BEAD_ID) ?? [])]
 // position and blocks, and the escape hatch covers it; parsing heredocs is
 // more surface than this guard warrants. (Commands arrive from the Bash
 // tool, so quotes are balanced; this is a guard, not a shell parser.)
-const commandSkeleton = cmd => {
+export const commandSkeleton = cmd => {
   const lifted = []
   const liftSubstitutions = span => {
     for (const m of span.matchAll(/\$\(([^)]*)\)/g)) lifted.push(m[1])

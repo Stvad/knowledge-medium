@@ -584,6 +584,14 @@ describe('bd-publish-verify process behavior', { timeout: 30_000 }, () => {
     const r = hook('gh api --method GET repos/Stvad/knowledge-medium/actions/artifacts -f name=foo', '[]')
     expect(r.status).toBe(0)
     expect(r.stdout).toBe('')
+    // prose inside a field VALUE is payload, not the flag — a suppressor that
+    // believed it would cost the check itself
+    const q = String.fromCharCode(39)
+    const prose = hook(
+      `gh api -X PUT repos/Stvad/knowledge-medium/pulls/652/merge -f ${q}commit_message=mention --method GET${q}`,
+      'no url here',
+    )
+    expect(context(prose)).toContain('treated as covered')
   })
 
   // An uncovered publish was already checked BEFORE it shipped, so the same
