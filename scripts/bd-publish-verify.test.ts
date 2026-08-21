@@ -574,6 +574,16 @@ describe('bd-publish-verify process behavior', { timeout: 30_000 }, () => {
     expect(context(hook(PR_CREATE, 'created, no url printed'))).toContain('treated as covered')
   })
 
+  // `--method GET` sends the field flags as a query string, so a command that
+  // looks like a mutation is an ordinary read. Warning there spends the one
+  // thing this report has.
+  it('stays silent for an explicit GET carrying field flags', () => {
+    const { hook } = makeRepo({ fixtures: {} })
+    const r = hook('gh api --method GET repos/Stvad/knowledge-medium/issues -f state=open', '[]')
+    expect(r.status).toBe(0)
+    expect(r.stdout).toBe('')
+  })
+
   // An uncovered publish was already checked BEFORE it shipped, so the same
   // empty read-back there is expected, not a surprise.
   it('stays silent when an uncovered publish names no object', () => {

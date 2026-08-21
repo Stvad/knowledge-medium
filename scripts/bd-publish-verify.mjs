@@ -211,6 +211,11 @@ export const clipContext = (s, max = 9_000) =>
 // Effects
 // ---------------------------------------------------------------------------
 
+// `--method GET` makes gh send its fields as a query string, so a command
+// carrying field flags can still be an ordinary read. Consulted only to
+// SUPPRESS the coverage warning, never to grant anything.
+const EXPLICIT_READ = /(?<![\w-])(?:-X|--method)(?:=|\s+)?['"]?(?:GET|HEAD)\b/i
+
 const MAX_TARGETS = 5
 const REFS_CAP = 15
 const GH_TIMEOUT = 10_000
@@ -417,8 +422,10 @@ const hookPostPublish = () => {
   if (!all.length && !mergedPrs.length) {
     if (!isPostVerifiable(cmd)) return
     // Nothing to check means nothing to warn about: a command that publishes
-    // no TEXT has no reference the read-back could have verified.
-    if (!carriesPublishableText(cmd)) return
+    // no TEXT has no reference the read-back could have verified, and an
+    // explicit GET published nothing at all — gh sends its fields as a query
+    // string. Both are reads dressed as mutations by the field flags.
+    if (!carriesPublishableText(cmd) || EXPLICIT_READ.test(cmd)) return
     // A command the tool reports as FAILED published nothing, so there is no
     // unkept promise to report. This is read from the payload rather than
     // inferred — the one innocent cause of "no target" the hook is actually

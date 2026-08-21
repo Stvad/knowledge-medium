@@ -334,7 +334,11 @@ const TEXT_FIELD_NAME = /body|title|message|name|description|text|note|comment/i
 export const carriesPublishableText = cmd => {
   const sk = commandSkeleton(cmd)
   if (TEXT_FLAG.test(sk)) return true
-  const fields = [...sk.matchAll(FIELD_ANY)].map(m => m[1])
+  // Field names come off the raw command as well as the skeleton: `-f
+  // 'commit_title=…'` quotes the WHOLE argument, which the skeleton blanks,
+  // and a field that vanishes reads as "no text published" — suppressing the
+  // warning rather than adding one.
+  const fields = [...sk.matchAll(FIELD_ANY), ...cmd.matchAll(FIELD_ANY)].map(m => m[1])
   if (fields.length) return fields.some(name => TEXT_FIELD_NAME.test(name))
   // No payload field at all: a bare `-F` is then a body FILE, which only the
   // CLI has — on the api every `-F` carries a name and was handled above.
@@ -475,23 +479,21 @@ export const buildIssueRefsMessage = (refs, closeNums, mode = 'pre') => {
  * parsing.
  */
 const messageFileValues = cmd => {
-  // GIT's own message-file flags only. `--body-file` is gh's, and matching it
-  // here is what forced the commit leg to stand down whenever the invocation
-  // also published — a coupling that then failed OPEN, because the publish
-  // DETECTORS deliberately over-match and a verb sitting in ordinary argv was
-  // enough to suppress the commit's own file inspection.
-  //
-  // `-F` is both (git's --file, gh's --body-file), so a gh body file can
-  // still be read here. That direction is harmless: its text gets scanned for
-  // close keywords it does not have, costing at most one confirmation round.
-  if (!/(?<![\w-])(?:--file|-F)/.test(commandSkeleton(cmd))) return []
-  return [...cmd.matchAll(/(?<![\w-])(?:--file|-F)(?:=|\s+)?("[^"]*"|'[^']*'|[^\s'";&|<>]+)/g)]
-    .map(m => m[1].replace(/^(["'])(.*)\1$/, '$2'))
-    // `-F` is git's --file AND gh api's typed field, so `-F body=hello` lands
-    // here looking like a path. A value carrying its own `=` is a field, not
-    // a filename; the `--file=path` form has already had its `=` consumed by
-    // the flag above, so nothing legitimate is dropped.
-    .filter(v => !v.includes('='))
+  // Deliberately BROAD, and paired with the caller standing down whenever the
+  // invocation also publishes (see the commit leg). Narrowing this instead —
+  // git's own flags only, minus values holding an `=` — was tried and made
+  // things worse: a filename containing `=` and a process substitution both
+  // stopped being SEEN, turning two fail-closed cases into fail-open ones.
+  // Anything unrecognized here must still resolve to a path that fails to
+  // read, which blocks; a value that silently disappears does not. Only true
+  // separators are kept out of the value, so a trailing `; …` is not glued
+  // onto the filename — `<` is deliberately NOT excluded, so a process
+  // substitution still resolves to an unreadable path and blocks instead of
+  // vanishing.
+  if (!/(?<![\w-])(?:--body-file|--file|-F)/.test(commandSkeleton(cmd))) return []
+  return [...cmd.matchAll(/(?<![\w-])(?:--body-file|--file|-F)(?:=|\s+)?("[^"]*"|'[^']*'|[^\s'";&|]+)/g)].map(m =>
+    m[1].replace(/^(["'])(.*)\1$/, '$2'),
+  )
 }
 
 // Stdin in disguise: the hook reading these would consume its OWN stdin (an
@@ -1173,7 +1175,7 @@ const hookPrePr = () => {
   // keyword-unchecked.
   const commitText =
     matchesCommitCommand(cmd) && !allowsIssueRefs(cmd)
-      ? [cmd, ...guardedBodies()].join('\n')
+      ? [cmd, ...(publishes ? [] : guardedBodies())].join('\n')
       : ''
   const commitRefs = commitText ? closeKeywordRefs(commitText) : []
 

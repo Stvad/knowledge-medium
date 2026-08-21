@@ -188,6 +188,11 @@ describe('carriesPublishableText', () => {
     expect(
       carriesPublishableText("gh api -X PUT repos/Stvad/knowledge-medium/pulls/652/merge -f commit_message='m'"),
     ).toBe(true)
+    // the whole key=value may be quoted, which the skeleton blanks — a field
+    // that VANISHES reads as "no text", suppressing the warning entirely
+    expect(
+      carriesPublishableText(`gh api -X PUT repos/Stvad/knowledge-medium/pulls/652/merge -f 'commit_title=t'`),
+    ).toBe(true)
     expect(carriesPublishableText('gh api repos/Stvad/knowledge-medium/issues/1/comments -F body=hi')).toBe(true)
     expect(carriesPublishableText('gh pr comment 652 -F notes.md')).toBe(true)
     expect(carriesPublishableText('gh pr comment 652 --body hi')).toBe(true)
@@ -258,19 +263,21 @@ describe('detectors see the verb wherever it sits', () => {
 })
 
 describe('bodyFilePaths / resolveBodyPath', () => {
-  it('extracts plain, =-joined and quoted paths from git-s own message-file flags', () => {
+  it('extracts plain, =-joined and quoted message-file paths', () => {
     expect(bodyFilePaths('git commit -F /tmp/a.txt')).toEqual(['/tmp/a.txt'])
     expect(bodyFilePaths('git commit --file=/tmp/b.txt')).toEqual(['/tmp/b.txt'])
     expect(bodyFilePaths(`git commit -F "/tmp/with space.txt" -F '/tmp/q.txt'`)).toEqual([
       '/tmp/with space.txt',
       '/tmp/q.txt',
     ])
-    // gh's own --body-file is NOT git's: matching it is what forced the commit
-    // leg to stand down whenever the invocation also published, and that
-    // coupling then failed open on a verb sitting in ordinary argv
-    expect(bodyFilePaths('gh pr merge 12 --body-file /tmp/m.txt')).toEqual([])
-    // and a typed api field is not a path, though it wears -F like one
-    expect(bodyFilePaths('gh api repos/o/r/issues/1/comments -F body=hello')).toEqual([])
+    // Deliberately broad, with the caller standing down when the invocation
+    // also publishes. Narrowing this instead was tried and lost two
+    // fail-closed cases, so breadth plus the caller's guard wins.
+    expect(bodyFilePaths('gh pr merge 12 --body-file /tmp/m.txt')).toEqual(['/tmp/m.txt'])
+    // a filename may contain `=`, and a process substitution must resolve to
+    // SOMETHING unreadable rather than vanishing
+    expect(bodyFilePaths(`git commit -F 'msg=1.txt'`)).toEqual(['msg=1.txt'])
+    expect(bodyFilePaths('git commit -F <(cat msg.txt)')).toEqual(['<(cat'])
   })
 
   it('skips the stdin sentinel and its device-path disguises', () => {
