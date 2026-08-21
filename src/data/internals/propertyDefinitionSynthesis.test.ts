@@ -8,6 +8,7 @@
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChangeScope, seedProperty } from '@/data/api'
+import { PROPERTY_SCHEMA_TYPE } from '@/data/blockTypes'
 import { presetIdProp, propertyNameProp } from '@/data/properties'
 import { getOrCreatePropertiesPage } from '@/data/propertiesPage'
 import { definitionSeedsFacet } from '@/data/facets'
@@ -610,10 +611,12 @@ describe('applyPropertyDefinitionSynthesis: the id is occupied, or the key stopp
     await rawCell('b1', {'demo:orphan': 'hello'})
     await applyPropertyDefinitionSynthesis(repo, await planFor())
     const id = synthesizedPropertyDefinitionBlockId(WS, 'demo:orphan')
-    await sharedDb.db.execute(
-      `UPDATE blocks SET properties_json = json_remove(properties_json, '$.types') WHERE id = ?`,
-      [id])
-    await sharedDb.db.execute(`DELETE FROM block_types WHERE block_id = ?`, [id])
+    // Through the type API, not raw SQL. Raw SQL desynchronises `block_types`
+    // from the bag and leaves the projector's own notification in question —
+    // which is how this test spent 10s in CI waiting for a registry rebuild
+    // that had nothing to deliver. The API path is also the case the code
+    // comment names first, so this models it rather than approximating it.
+    await repo.removeType(id, PROPERTY_SCHEMA_TYPE)
     await repo.tx(async tx => { await tx.delete(id) },
                   {scope: ChangeScope.BlockDefault, description: 'delete'})
     await untilKeyUnresolved('demo:orphan')

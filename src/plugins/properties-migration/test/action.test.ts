@@ -578,6 +578,10 @@ describe('the orphan-definition step', () => {
 
     expect(progressHandle.fail).toHaveBeenCalledWith(
       expect.stringMatching(/3 definition\(s\) added just before it are still there/))
+    // …and that the history is gone, which is true in exactly this partial
+    // outcome and was the one abort path not saying so.
+    expect(progressHandle.fail).toHaveBeenCalledWith(
+      expect.stringMatching(/Undo history for this workspace was cleared/))
   })
 
   it('does not flip when the definitions could not be minted', async () => {

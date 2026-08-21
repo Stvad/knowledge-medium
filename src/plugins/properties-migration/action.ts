@@ -373,7 +373,8 @@ export const migratePropertiesToBlocksAction = ({repo}: {repo: Repo}): ActionCon
           (synthesized > 0
             ? ` The ${synthesized.toLocaleString()} definition(s) added just before it ` +
               'are still there, and do nothing until this runs again.'
-            : ''))
+            : '') +
+          undoNote(undoCleared))
         return
       }
       // Immediately, not by waiting for the pass's first committed batch. Undo
