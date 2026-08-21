@@ -298,7 +298,10 @@ const rawConfigSchema = z.strictObject({
   runsPerHour: z.number().int().positive().default(10),
   /** Loopback port the dispatch channel MCP listener binds when the
    *  ambient session runs (watchers with delivery: 'channel' post here). */
-  channelPort: z.number().int().positive().default(8790),
+  // Bounded, not merely positive: an out-of-range port makes `fetch` reject
+  // locally on every delivery, which the retry path reads as a transport
+  // outage and defers forever. A typo should fail loudly at load instead.
+  channelPort: z.number().int().min(1).max(65_535).default(8790),
   /** State file for query-watcher cursors (backlink watchers keep
    *  their state as block properties in the graph itself). */
   statePath: z.string().optional(),

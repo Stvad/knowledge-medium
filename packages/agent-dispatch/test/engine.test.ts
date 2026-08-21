@@ -2825,6 +2825,75 @@ describe('retryable infrastructure failures (out of credits, expired login, netw
     expect(blocks.get('b-1')?.properties?.[PROPS.status]).toBe('running')
   })
 
+  it('does not let an older run reopen a lane a newer failure just closed', async () => {
+    // Runs on one lane overlap at maxConcurrent > 1 and finish out of order.
+    // B, launched first, succeeds AFTER A has failed and armed a window; its
+    // success says nothing about the outage A found, and clearing on it lets
+    // the next tick launch straight into that outage.
+    const {graph, blocks} = fakeGraph({
+      backlinks: [{id: 'b-1'}, {id: 'b-2'}, {id: 'b-3'}],
+      blocks: {
+        'b-1': {content: '[[claude]] slow ok'},
+        'b-2': {content: '[[claude]] fast failure'},
+        'b-3': {content: '[[claude]] should not launch'},
+      },
+    })
+    const time = clock()
+    let release: (() => void) | null = null
+    const runTask = vi.fn(async (options: {prompt: string}) => {
+      if (options.prompt.includes('slow ok')) {
+        // B finishes only after A has failed and armed the lane.
+        await new Promise<void>(resolve => { release = resolve })
+        return okRun()
+      }
+      return outOfCreditsRun()
+    })
+    const engine = engineWith({
+      graph, runTask, now: time.now,
+      config: mentionConfig({maxConcurrent: 2, runsPerHour: 100}),
+    })
+
+    await engine.tick()
+    await vi.waitFor(() => expect(blocks.get('b-2')?.properties?.[PROPS.status]).toBe('queued'))
+    release?.()                      // now B succeeds, on a stale generation
+    await engine.drain()
+    expect(blocks.get('b-1')?.properties?.[PROPS.status]).toBe('done')
+
+    // The lane must still be closed: b-3 stays untouched.
+    await engine.tick()
+    await engine.drain()
+    expect(blocks.get('b-3')?.properties).toEqual({})
+  })
+
+  it('writes the durable deferral before the note that depends on it', async () => {
+    // The note is keyed by the attempt number the state write rolls back. If
+    // the note lands and the state does not, the stale sweep's re-run gets a
+    // different key and can never replace the "retrying automatically"
+    // child, which then sits on the block for good.
+    const {graph, reconciles} = fakeGraph({
+      backlinks: [{id: 'b-1'}],
+      blocks: {'b-1': {content: '[[claude]] summarize inbox'}},
+    })
+    const order: string[] = []
+    const realSetTaskProps = graph.setTaskProps
+    graph.setTaskProps = async (id, args) => {
+      if (args.status === 'queued') order.push('state')
+      return realSetTaskProps(id, args)
+    }
+    const realReconcile = graph.reconcileReplyTree
+    graph.reconcileReplyTree = async (parentId, markdown, opts) => {
+      if (markdown.includes('retrying automatically')) order.push('note')
+      return realReconcile(parentId, markdown, opts)
+    }
+    const engine = engineWith({graph, runTask: vi.fn(async () => outOfCreditsRun())})
+
+    await engine.tick()
+    await engine.drain()
+
+    expect(order).toEqual(['state', 'note'])
+    expect(reconciles.at(-1)?.markdown).toContain('retrying automatically')
+  })
+
   it('a genuine run failure still parks the task and does not arm a cooldown', async () => {
     const {graph, blocks} = fakeGraph({
       backlinks: [{id: 'b-1'}, {id: 'b-2'}],

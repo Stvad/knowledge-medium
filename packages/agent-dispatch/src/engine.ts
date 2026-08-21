@@ -238,6 +238,18 @@ export const createEngine = (deps: EngineDeps) => {
     logged: number
   }
   const cooldowns = new Map<string, Cooldown>()
+  /** How many times each lane has been armed, ever. Kept OUTSIDE `cooldowns`
+   *  so it survives a clear, and monotonic so it can order two events that
+   *  overlap in time.
+   *
+   *  Runs on one lane overlap whenever `maxConcurrent > 1` (the default), and
+   *  they finish out of order: run B, launched first, can succeed AFTER run A
+   *  has failed and armed a window. B's success says nothing about the outage
+   *  A found, but an unconditional clear deleted it anyway and let the next
+   *  tick launch into the outage — the one-probe guarantee gone. So a run
+   *  records the generation it launched under and may only clear THAT one. */
+  const laneGeneration = new Map<string, number>()
+  const generationOf = (lane: string): number => laneGeneration.get(lane) ?? 0
 
   /** The failure domain a watcher shares with others: the credential its
    *  spawned runs bill, or the channel its deliveries go to. */
@@ -254,6 +266,7 @@ export const createEngine = (deps: EngineDeps) => {
   }
 
   const noteInfraFailure = (lane: string, failure: RunFailureClass, sourceLabel: string): number => {
+    laneGeneration.set(lane, generationOf(lane) + 1)
     const state = cooldownFor(lane)
     state.consecutiveFailures += 1
     const backoff = retryBackoffMs(state.consecutiveFailures)
@@ -265,8 +278,14 @@ export const createEngine = (deps: EngineDeps) => {
   }
 
   /** Any run that reached the model proves this lane's infrastructure is
-   *  back — including one that failed on its own merits. */
-  const clearInfraCooldown = (lane: string) => {
+   *  back — including one that failed on its own merits.
+   *
+   *  `seenGeneration` is the lane's generation when this run LAUNCHED. A
+   *  newer failure since then means this run's evidence is stale — it
+   *  describes infrastructure that has since gone down — so it must not
+   *  reopen the lane. */
+  const clearInfraCooldown = (lane: string, seenGeneration: number) => {
+    if (generationOf(lane) !== seenGeneration) return
     cooldowns.delete(lane)
   }
 
@@ -423,6 +442,9 @@ export const createEngine = (deps: EngineDeps) => {
     quietExempt: boolean,
   ) => {
     const {runner} = watcher
+    // Captured before anything can fail: a clear from this run is only valid
+    // while the lane has not been armed by a newer one (see clearInfraCooldown).
+    const laneAtLaunch = generationOf(laneOf(watcher))
     // ONE failure boundary over every pre-claim step, and one refund site.
     //
     // The launch slot is charged at the decision, synchronously, so this
@@ -609,7 +631,7 @@ export const createEngine = (deps: EngineDeps) => {
         // reserveProbe armed a window at launch, and leaving it armed
         // throttles unrelated work for a whole backoff interval on the
         // strength of a failure that did not happen.
-        clearInfraCooldown(laneOf(watcher))
+        clearInfraCooldown(laneOf(watcher), laneAtLaunch)
         log(`[${watcher.name}] not deferring ${sourceId} — it finished as ${finishedStatus} while the delivery was failing`)
         return
       }
@@ -619,6 +641,26 @@ export const createEngine = (deps: EngineDeps) => {
       // budget would defer REAL work for an hour once the outage lifts.
       // (Same reasoning as the pre-claim refunds above.)
       refundLaunch(launchStamp)
+      // DURABLE STATE FIRST, note second. The note is keyed by the attempt
+      // number this write rolls back, so if the note lands and this does
+      // not, the task keeps its claimed attempt — and the stale sweep's
+      // re-run then computes a DIFFERENT key and can never replace the
+      // "retrying automatically" child, which stays on the block for good.
+      // Ordering removes that; a failed note afterwards is only cosmetic.
+      await graph.setTaskProps(sourceId, {
+        status: 'queued',
+        error: `${failure.label} — waiting to retry (${detail})`,
+        // Roll the attempt back. Attempts exist to cap a task that keeps
+        // CRASHING; counting an outage against them would park the queue
+        // after three ticks — the very bug this path fixes.
+        attempts: attempt - 1,
+        session: resume.session ?? undefined,
+        resumeOptions: resume.resumeOptions,
+        activity: null,
+        cancel: null,
+        retryAfter,
+        nowMs: now(),
+      })
       const partial = watch.streamedText.trim()
       const waitingNote = `⏳ agent-dispatch: ${failure.label} — nothing ran; retrying automatically. (${detail})`
       // Replaces any streamed placeholder/partial in place (same replyKey,
@@ -637,20 +679,6 @@ export const createEngine = (deps: EngineDeps) => {
         ).catch(error => log(`[${watcher.name}] could not post the retry note for ${sourceId}: ${errorMessage(error)}`))
       }
       terminalReplyDelivered = true
-      await graph.setTaskProps(sourceId, {
-        status: 'queued',
-        error: `${failure.label} — waiting to retry (${detail})`,
-        // Roll the attempt back. Attempts exist to cap a task that keeps
-        // CRASHING; counting an outage against them would park the queue
-        // after three ticks — the very bug this path fixes.
-        attempts: attempt - 1,
-        session: resume.session ?? undefined,
-        resumeOptions: resume.resumeOptions,
-        activity: null,
-        cancel: null,
-        retryAfter,
-        nowMs: now(),
-      })
       log(`[${watcher.name}] DEFERRED ${sourceId}: ${failure.label} (${detail})`)
     }
 
@@ -722,7 +750,7 @@ export const createEngine = (deps: EngineDeps) => {
         // returns before the spawn success branch, so without clearing here
         // a recovered channel lane would stay throttled to one delivery per
         // backoff window forever — nothing else ever reopens it.
-        clearInfraCooldown(laneOf(watcher))
+        clearInfraCooldown(laneOf(watcher), laneAtLaunch)
         log(`[${watcher.name}] delivered ${sourceId} to the ambient channel session (attempt ${attempt})`)
         return
       }
@@ -855,7 +883,7 @@ export const createEngine = (deps: EngineDeps) => {
           retryAfter: null,
           nowMs: now(),
         })
-        clearInfraCooldown(laneOf(watcher))
+        clearInfraCooldown(laneOf(watcher), laneAtLaunch)
         log(`[${watcher.name}] done ${sourceId}${result.sessionId ? ` (session ${result.sessionId})` : ''}`)
       } else if (failure?.retryable && !watch.modelResponded) {
         // NOT a task failure — the run never got to attempt it (out of
@@ -908,7 +936,7 @@ export const createEngine = (deps: EngineDeps) => {
         // the infrastructure is evidently fine — drop any cooldown a
         // previous outage left armed. A cancel proves nothing either way,
         // so it leaves the cooldown alone.
-        if (!cancelled) clearInfraCooldown(laneOf(watcher))
+        if (!cancelled) clearInfraCooldown(laneOf(watcher), laneAtLaunch)
         log(`[${watcher.name}] ${cancelled ? 'CANCELLED' : 'FAILED'} ${sourceId}: ${reason}${result.sessionId ? ` (session ${result.sessionId})` : ''}`)
       }
     } catch (error) {
@@ -1123,6 +1151,7 @@ export const createEngine = (deps: EngineDeps) => {
 
   const tickQueryWatcher = async (watcher: QueryWatcher) => {
     const key = `query:${watcher.name}`
+    const laneAtLaunch = generationOf(laneOf(watcher))
     if (running.has(key)) return
 
     const rows = await graph.sqlAll(watcher.sql, watcher.params)
@@ -1208,7 +1237,7 @@ export const createEngine = (deps: EngineDeps) => {
       }
       // A delivery that lands proves the listener is back, and this path
       // returns before the spawn success branch that would otherwise clear it.
-      clearInfraCooldown(laneOf(watcher))
+      clearInfraCooldown(laneOf(watcher), laneAtLaunch)
       recordLaunch()
       await state.setCursor(watcher.name, diff.seenIds)
       log(`[${watcher.name}] delivered ${batch.length} new row(s) to the ambient channel session`)
@@ -1269,7 +1298,7 @@ export const createEngine = (deps: EngineDeps) => {
       }
       const session = result.sessionId ?? loggedSession
       if (result.ok) {
-        clearInfraCooldown(lane)
+        clearInfraCooldown(lane, laneAtLaunch)
         log(`[${watcher.name}] done${session ? ` (session ${session})` : ''}: ${truncate(result.resultText.trim(), 200)}`)
         return
       }
@@ -1279,7 +1308,7 @@ export const createEngine = (deps: EngineDeps) => {
       // a tool — before dying is not an un-attempt, so it must not hand its
       // spend slot back or re-fire its rows.
       if (!failure.retryable || watch.modelResponded) {
-        clearInfraCooldown(lane)
+        clearInfraCooldown(lane, laneAtLaunch)
         log(`[${watcher.name}] FAILED${session ? ` (session ${session})` : ''}: exit ${result.exitCode} ${truncate(result.stderr.trim())}`)
         return
       }

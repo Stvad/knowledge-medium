@@ -29,12 +29,19 @@ export interface ChannelDeliveryOptions {
   hint: string
 }
 
-export const createChannelDelivery = (options: ChannelDeliveryOptions) =>
-  async (event: ChannelEvent): Promise<void> => {
+export const createChannelDelivery = (options: ChannelDeliveryOptions) => {
+  // Built ONCE, here, and deliberately outside the classified path below: a
+  // URL that cannot be constructed is a configuration error no amount of
+  // retrying fixes, and letting it reject per-delivery would read as a
+  // transport outage and defer every channel task indefinitely. Failing at
+  // wiring time says what is actually wrong. (`config.ts` bounds the port
+  // too, so this is the backstop rather than the first line of defence.)
+  const endpoint = new URL(`http://127.0.0.1:${options.port}/`).toString()
+  return async (event: ChannelEvent): Promise<void> => {
     const send = options.fetchImpl ?? fetch
     let response: Response
     try {
-      response = await send(`http://127.0.0.1:${options.port}/`, {
+      response = await send(endpoint, {
         method: 'POST',
         headers: {
           'content-type': 'application/json',
@@ -60,3 +67,4 @@ export const createChannelDelivery = (options: ChannelDeliveryOptions) =>
       )
     }
   }
+}
