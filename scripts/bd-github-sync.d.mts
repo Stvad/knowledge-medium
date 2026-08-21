@@ -25,7 +25,6 @@ export declare const initializedDbRoot: () => string | null
 export declare const extractIssueRefs: (text: string) => number[]
 export declare const matchesCommitCommand: (cmd: string) => boolean
 export declare const matchesUnrepairableCommand: (cmd: string) => boolean
-export declare const matchesGraphqlMutation: (cmd: string) => boolean
 export declare const hasStdinBody: (cmd: string) => boolean
 export declare const closeKeywordRefs: (text: string) => number[]
 export declare const allowsIssueRefs: (cmd: string) => boolean

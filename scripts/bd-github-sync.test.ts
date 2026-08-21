@@ -17,7 +17,6 @@ import {
   extractBeadIds,
   issueNumberFromRef,
   matchesCommitCommand,
-  matchesGraphqlMutation,
   matchesUnrepairableCommand,
   hasStdinBody,
   matchesPrCommand,
@@ -380,15 +379,6 @@ describe('matchesUnrepairableCommand', () => {
     expect(matchesUnrepairableCommand('gh pr create --title t --body b')).toBe(false)
     expect(matchesUnrepairableCommand('gh pr comment 652 --body "will gh pr merge later"')).toBe(false)
     expect(matchesUnrepairableCommand('git commit -m "gh pr merge 652 was the fix"')).toBe(false)
-  })
-})
-
-describe('matchesGraphqlMutation', () => {
-  it('matches gh api graphql carrying a mutation, not reads or prose', () => {
-    expect(matchesGraphqlMutation(`gh api graphql -f query='mutation { addComment(input: {}) { x } }'`)).toBe(true)
-    expect(matchesGraphqlMutation(`gh api graphql -f query='query { repository { id } }'`)).toBe(false)
-    expect(matchesGraphqlMutation('gh api repos/Stvad/knowledge-medium/issues/1/comments -f body=x')).toBe(false)
-    expect(matchesGraphqlMutation('git commit -m "gh api graphql mutation notes"')).toBe(false)
   })
 })
 
@@ -1141,6 +1131,11 @@ describe('hookPrePr process behavior', { timeout: 20_000 }, () => {
     expect(hook('cat msg.txt | gh pr merge 12 -F -').status).toBe(2)
     expect(hook('gh api --silent repos/Stvad/knowledge-medium/issues/1/comments --input payload.json').status).toBe(2)
     expect(hook(`gh api graphql -f query='mutation { x }' -F vars=@vars.json`).status).toBe(2)
+    // the mutation keyword may live entirely in the external payload — the
+    // graphql endpoint itself is blind-class, so the outside-text signal
+    // still blocks these
+    expect(hook('gh api graphql -F query=@q.graphql').status).toBe(2)
+    expect(hook('gh api graphql -f query="$QUERY"').status).toBe(2)
     expect(hook(`KM_ISSUE_REFS_OK=1 gh pr merge 12 -F ${join(repo, 'merge-msg.txt')}`).status).toBe(2)
     expect(hook(`KM_ISSUE_REFS_OK=1 KM_ALLOW_BEAD_IDS=1 gh pr merge 12 -F ${join(repo, 'merge-msg.txt')}`).status).toBe(0)
   })
@@ -1157,6 +1152,15 @@ describe('hookPrePr process behavior', { timeout: 20_000 }, () => {
     expect(hook('gh pr review 5 -b "$REVIEW_TEXT"').status).toBe(2)
     expect(hook('KM_ISSUE_REFS_OK=1 gh pr merge 12 --body "$(cat msg)"').status).toBe(2)
     expect(hook('KM_ISSUE_REFS_OK=1 KM_ALLOW_BEAD_IDS=1 gh pr merge 12 --body "$(cat msg)"').status).toBe(0)
+  })
+
+  // When the invocation also publishes, the commit leg scans raw text only:
+  // a publish flag must not be misread as a commit-message file (an api
+  // field value is not a path, and a publish body-file is the verifier's).
+  it('does not misread publish file flags as commit-message files in compounds', () => {
+    const { hook } = makeRepo({ dbReady: true })
+    expect(hook('git commit -m ok && gh api repos/Stvad/knowledge-medium/issues/1/comments -F body=hello').status).toBe(0)
+    expect(hook('git commit -m ok && gh pr create --title t --body-file missing.md').status).toBe(0)
   })
 
   // gh pr review output names no URL, so the verifier cannot find the

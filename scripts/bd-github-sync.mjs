@@ -67,7 +67,7 @@
  *       command text gets the tables; text living OUTSIDE the command
  *       (file/payload flags, api @-references, expansion) blocks outright
  *       and the escapes attest — no file reading, no per-channel detection
- *       (review rounds 3–6 proved that enumeration non-convergent).
+ *       (which does not converge; decision record: #683).
  *       Escape hatches: KM_ALLOW_BEAD_IDS=1 / KM_ISSUE_REFS_OK=1 prefixes.
  *       The FULL sync does not run here: converged it still costs ~60s (a GET
  *       compare per issue), which is too slow to sit in front of every PR.
@@ -245,14 +245,6 @@ const GH_UNREPAIRABLE = new RegExp(
 )
 export const matchesUnrepairableCommand = cmd => GH_UNREPAIRABLE.test(commandSkeleton(cmd))
 
-// GraphQL mutations publish through a response envelope the verifier cannot
-// safely resolve (requested body fields quote foreign URLs), so their text
-// is checked pre-publish, from the raw command — inline queries sit in it
-// whole; a query=@file body is an accepted residual. The \bmutation\b test
-// runs on the RAW text (the query is quoted, so the skeleton blanks it);
-// prose containing the word costs one echo round, covered by the escape.
-export const matchesGraphqlMutation = cmd =>
-  matchesApiPublish(cmd) && /\bgraphql\b/.test(commandSkeleton(cmd)) && /\bmutation\b/.test(cmd)
 
 // The escape hatch must also be in command-prefix position of the SKELETON —
 // honored from quoted prose, a PR body QUOTING it would both bypass the gate
@@ -1018,19 +1010,33 @@ const hookPrePr = () => {
   // publish (`git commit -m "Fixes #N" && gh pr comment …`), and a publish
   // match must not swallow the commit check.
 
+  const isPublish = matchesPrCommand(cmd)
+  const apiPublish = matchesApiPublish(cmd)
+  // Any graphql operation is blind-class: the mutation may live entirely in
+  // an external payload, and the response envelope gives the verifier
+  // nothing either way. Inline reads pass for free — clean text has nothing
+  // to echo. Output-hiding flags make a REST mutation equally invisible — a
+  // CLOSED set on one tool, so membership, not enumeration. (-q, the short
+  // form of --jq, is a residual: a command-wide scan would trip on
+  // `grep -q` in compounds.)
+  const graphqlApi = apiPublish && /\bgraphql\b/.test(commandSkeleton(cmd))
+  const opaqueApi = apiPublish && /(?<![\w-])--(?:silent|jq|template)\b/.test(commandSkeleton(cmd))
+
   // Close keywords in commit messages act when the commit reaches the
-  // default branch, and commit text never becomes a GitHub object.
-  const commitText = matchesCommitCommand(cmd) && !allowsIssueRefs(cmd) ? [cmd, ...guardedBodies()].join('\n') : ''
+  // default branch, and commit text never becomes a GitHub object — but the
+  // file scan is command-wide, so when the invocation ALSO publishes, a
+  // publish flag (an api field or a body-file) would be misread as a
+  // commit-message path. In that case the commit leg scans the raw command
+  // only; the files belong to the publish, which the verifier or the blind
+  // rule owns. Residual: a commit's own -F file in such a compound goes
+  // keyword-unchecked.
+  const commitText =
+    matchesCommitCommand(cmd) && !allowsIssueRefs(cmd)
+      ? [cmd, ...(isPublish || apiPublish ? [] : guardedBodies())].join('\n')
+      : ''
   const commitRefs = commitText ? closeKeywordRefs(commitText) : []
 
-  const isPublish = matchesPrCommand(cmd)
-  const graphqlMutation = matchesGraphqlMutation(cmd)
-  // Output-hiding flags make an api mutation invisible to the post-publish
-  // verifier — a CLOSED set on one tool, so membership, not enumeration.
-  // (-q, the short form of --jq, is a residual: a command-wide scan would
-  // trip on `grep -q` in compounds.)
-  const opaqueApi = matchesApiPublish(cmd) && /(?<![\w-])--(?:silent|jq|template)\b/.test(commandSkeleton(cmd))
-  if (!isPublish && !graphqlMutation && !opaqueApi) {
+  if (!isPublish && !graphqlApi && !opaqueApi) {
     if (commitRefs.length === 0) allow()
     return echoIssueRefs(commitText, commitRefs)
   }
@@ -1048,17 +1054,16 @@ const hookPrePr = () => {
 
   // The verifier-blind class: merge text lands in the merge commit,
   // review/close/reopen output names no URL for the verifier to find, and
-  // graphql/opaque api responses give it nothing to read back. For these,
-  // ONE coarse rule (#683: B) replaces the per-channel detection review
-  // rounds 3–6 proved non-convergent: text that lives OUTSIDE the raw
-  // command (file or payload flags, api @-references, shell expansion) is
-  // blocked outright — no file reading, no expansion grammar, no payload
-  // chasing — and the escapes attest instead. Deliberately DUMB: a `$5` in
-  // quoted prose trips it and costs one attested re-run; dumb-and-closed
-  // beats accurate-and-unbounded here. Readable blind text (inline bodies,
-  // inline graphql queries) flows to the refs/ids tables below instead, and
-  // the merge COMMIT itself is read back post-merge by bd-publish-verify.
-  const blind = matchesUnrepairableCommand(cmd) || graphqlMutation || opaqueApi
+  // graphql/opaque api responses give it nothing to read back. ONE coarse
+  // rule for all of it (#683): text that lives OUTSIDE the raw command
+  // (file or payload flags, api @-references, shell expansion) blocks
+  // outright and the escapes attest — never per-channel detection, which
+  // does not converge. Deliberately DUMB: a `$5` in quoted prose trips it
+  // and costs one attested re-run; dumb-and-closed beats
+  // accurate-and-unbounded here. Readable blind text (inline bodies, inline
+  // graphql queries) flows to the refs/ids tables below instead, and the
+  // merge COMMIT itself is read back post-merge by bd-publish-verify.
+  const blind = matchesUnrepairableCommand(cmd) || graphqlApi || opaqueApi
   if (blind && !(allowsIssueRefs(cmd) && allowsBeadIds(cmd))) {
     const textOutsideCommand =
       /(?<![\w-])(?:--body-file|--file|--input|-F)\b|[$`]/.test(cmd) || (matchesApiPublish(cmd) && /@/.test(cmd))
