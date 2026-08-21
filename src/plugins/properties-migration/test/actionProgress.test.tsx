@@ -60,7 +60,13 @@ const progress = (over: Partial<PropertyCellBackfillProgress> = {}): PropertyCel
 const runReporting = async (reported: PropertyCellBackfillProgress) => {
   const repo = {
     activeWorkspaceId: 'ws-1',
-    db: {getAll: async () => [{n: 7}], getOptional: async () => ({properties_migration: 'cell'})},
+    user: {id: 'user-1'},
+    db: {
+      getAll: async () => [{n: 7}],
+      getOptional: async (sql: string) => sql.includes('owner_user_id')
+        ? {owner_user_id: 'user-1'}
+        : {properties_migration: 'cell'},
+    },
     isReadOnly: false,
     syncViewGap: async () => null,
     undoManagerFor: () => ({clear: () => {}}),

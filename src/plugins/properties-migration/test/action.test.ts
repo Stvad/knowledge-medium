@@ -51,14 +51,23 @@ import type { OperatorBackfillResult, Repo } from '@/data/repo'
 import { describeOutcome, migratePropertiesToBlocksAction } from '../action.ts'
 
 const clearUndo = vi.fn()
-const makeRepo = (result: OperatorBackfillResult, {flipped = false} = {}) => {
+const USER = 'user-1'
+
+const makeRepo = (
+  result: OperatorBackfillResult,
+  {flipped = false, owner = USER}: {flipped?: boolean; owner?: string} = {},
+) => {
   const runWorkspaceBackfillNow = vi.fn(async () => result)
   const getAll = vi.fn(async () => [{n: 7}])
   const repo = {
     activeWorkspaceId: 'ws-1',
+    user: {id: USER},
     db: {
       getAll,
-      getOptional: async () => ({properties_migration: flipped ? 'children' : 'cell'}),
+      // Two readers of the `workspaces` row now — the flip state and the owner.
+      getOptional: async (sql: string) => sql.includes('owner_user_id')
+        ? {owner_user_id: owner}
+        : {properties_migration: flipped ? 'children' : 'cell'},
     },
     isReadOnly: false,
     syncViewGap: async () => null,
@@ -486,6 +495,59 @@ describe('the orphan-definition step', () => {
       expect.stringMatching(/Undo history for this workspace was cleared/))
     expect(progressHandle.done).not.toHaveBeenCalledWith(
       expect.stringMatching(/switched to property blocks/i))
+  })
+
+  it('refuses a non-owner before planning, since only the owner can ever flip', async () => {
+    // The server trigger refuses everyone else, permanently. Without this an
+    // editor runs the whole gesture, mints definitions that claim shared
+    // property names, clears the workspace's undo history — and only then finds
+    // out the flip was never available to them.
+    const {repo, runWorkspaceBackfillNow, getAll} = makeRepo(
+      {outcome: 'ran', undoHistoryCleared: false}, {owner: 'someone-else'})
+
+    await invoke(repo)
+
+    expect(showInfo).toHaveBeenCalledWith(expect.stringMatching(/only the workspace owner/i))
+    expect(planSynthesis).not.toHaveBeenCalled()
+    expect(getAll).not.toHaveBeenCalled()
+    expect(openDialog).not.toHaveBeenCalled()
+    expect(flipWorkspace).not.toHaveBeenCalled()
+    expect(runWorkspaceBackfillNow).not.toHaveBeenCalled()
+  })
+
+  it('lets a non-owner backfill a workspace that is already flipped', async () => {
+    // Nothing on that path needs the server, so ownership is irrelevant there.
+    openDialog.mockResolvedValue(true)
+    const {repo, runWorkspaceBackfillNow} = makeRepo(
+      {outcome: 'ran', undoHistoryCleared: false}, {flipped: true, owner: 'someone-else'})
+
+    await invoke(repo)
+
+    expect(runWorkspaceBackfillNow).toHaveBeenCalled()
+  })
+
+  it('does not flip a workspace the operator has navigated away from', async () => {
+    // Every check above the flip has an await after it — the fitness read, the
+    // synthesis write. This gesture's standing rule is that it does not act on
+    // a workspace that is no longer open, and the flip is the one step that
+    // cannot be taken back.
+    openDialog.mockResolvedValue(true)
+    const {repo, runWorkspaceBackfillNow} = makeRepo({outcome: 'ran', undoHistoryCleared: false})
+    // On the SECOND fitness read — the one after the confirmation — so the
+    // switch lands past the post-dialog check and the flip is the next thing
+    // that would act.
+    let reads = 0
+    ;(repo as unknown as {syncViewGap: () => Promise<string | null>}).syncViewGap = async () => {
+      if (++reads === 2) (repo as unknown as {activeWorkspaceId: string}).activeWorkspaceId = 'ws-2'
+      return null
+    }
+
+    await invoke(repo)
+
+    expect(flipWorkspace).not.toHaveBeenCalled()
+    expect(runWorkspaceBackfillNow).not.toHaveBeenCalled()
+    expect(progressHandle.fail).toHaveBeenCalledWith(
+      expect.stringMatching(/different workspace is open now/i))
   })
 
   it('mints the missing definitions BEFORE it flips', async () => {

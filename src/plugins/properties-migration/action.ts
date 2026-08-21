@@ -11,7 +11,7 @@ import {
   planPropertyDefinitionSynthesis,
   type PropertyDefinitionSynthesisPlan,
 } from '@/data/internals/propertyDefinitionSynthesis'
-import { readIsChildBackedWorkspace } from '@/data/workspaceSchema'
+import { readIsChildBackedWorkspace, readWorkspaceOwnerId } from '@/data/workspaceSchema'
 import { flipWorkspaceToChildBackedProperties } from '@/data/workspaces'
 import { isRemoteSyncActive } from '@/data/repoProvider'
 import { ActionConfig, ActionContextTypes } from '@/shortcuts/types.js'
@@ -218,6 +218,21 @@ export const migratePropertiesToBlocksAction = ({repo}: {repo: Repo}): ActionCon
         'property blocks — that step needs remote sync.')
       return
     }
+    // Only the OWNER can flip: the server trigger refuses everyone else, and
+    // permanently. Without this an editor runs the whole gesture, mints
+    // definitions that claim shared property names, clears the workspace's undo
+    // history — and only then finds out the flip was never available to them.
+    // Asked before the plan, because everything after it is work done on the
+    // assumption the flip can land. Not asked on the already-flipped path,
+    // where nothing needs the server.
+    if (!childBacked) {
+      const ownerId = await readWorkspaceOwnerId(repo.db, workspaceId)
+      if (ownerId !== repo.user.id) {
+        showInfo('Only the workspace owner can switch this workspace to property blocks. ' +
+          'Nothing was changed — ask them to run it.')
+        return
+      }
+    }
     // Before the count and the confirmation: the dialog must not ask consent
     // for something the runner is about to refuse. Re-taken after the dialog —
     // this is the cheap early exit, not the guard.
@@ -333,6 +348,15 @@ export const migratePropertiesToBlocksAction = ({repo}: {repo: Repo}): ActionCon
       // Assumes no workspace has run an earlier build's pass, so none holds
       // stale property machinery. Owner's call not to carry a check for a state
       // that cannot exist.
+      // The LAST check before the one-way half. Everything above it — the
+      // post-dialog check, the fitness read, synthesis — has an await after it,
+      // and this gesture's standing rule is that it does not act on a workspace
+      // that is no longer open.
+      if (repo.activeWorkspaceId !== workspaceId) {
+        banner.fail('Stopped before switching this workspace over: a different workspace ' +
+          'is open now. Nothing was switched.' + undoNote(undoCleared))
+        return
+      }
       banner.update('Switching this workspace to property blocks…')
       let localApplied: boolean
       try {

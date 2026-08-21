@@ -169,6 +169,22 @@ export const readWorkspaceEncryptionMode = async (
   return row?.encryption_mode ?? null
 }
 
+/** The workspace's `owner_user_id`, or null when this device has no local row
+ *  for it. Only the OWNER may advance `properties_migration` — the server
+ *  trigger refuses everyone else — so a caller about to do work that only
+ *  matters if the flip lands should ask first. Null means unknown, which for
+ *  that question is the same answer as "not you". */
+export const readWorkspaceOwnerId = async (
+  db: {getOptional<T>(sql: string, params?: unknown[]): Promise<T | null>},
+  workspaceId: string,
+): Promise<string | null> => {
+  const row = await db.getOptional<{owner_user_id: string | null}>(
+    'SELECT owner_user_id FROM workspaces WHERE id = ?',
+    [workspaceId],
+  )
+  return row?.owner_user_id ?? null
+}
+
 export const parseWorkspaceRow = (row: WorkspaceRow): Workspace => ({
   id: row.id,
   name: row.name,
