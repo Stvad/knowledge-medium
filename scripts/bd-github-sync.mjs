@@ -1117,8 +1117,10 @@ const hookPrePr = () => {
   // publish (`git commit -m "Fixes #N" && gh pr comment …`), and a publish
   // match must not swallow the commit check.
 
-  const isPublish = matchesPrCommand(cmd)
-  const apiPublish = matchesAnyPublish(cmd) && !isPublish
+  // One flag, not two: every use below recombines them, and matchesPrCommand
+  // is matchesAnyPublish's first disjunct — so splitting the api leg out again
+  // would suggest a distinction the code does not make.
+  const publishes = matchesAnyPublish(cmd)
 
   // Close keywords in commit messages act when the commit reaches the
   // default branch, and commit text never becomes a GitHub object — but the
@@ -1130,11 +1132,11 @@ const hookPrePr = () => {
   // keyword-unchecked.
   const commitText =
     matchesCommitCommand(cmd) && !allowsIssueRefs(cmd)
-      ? [cmd, ...(isPublish || apiPublish ? [] : guardedBodies())].join('\n')
+      ? [cmd, ...(publishes ? [] : guardedBodies())].join('\n')
       : ''
   const commitRefs = commitText ? closeKeywordRefs(commitText) : []
 
-  if (!isPublish && !apiPublish) {
+  if (!publishes) {
     if (commitRefs.length === 0) allow()
     return echoIssueRefs(commitText, commitRefs)
   }

@@ -191,6 +191,12 @@ export const apiPathFor = t =>
             ? `repos/${REPO}/pulls/${t.pr}/reviews/${t.id}`
             : `repos/${REPO}/releases/tags/${encodeTag(t.tag)}`
 
+// The echo sizes itself to the time left: each lookup is bounded by
+// GH_TIMEOUT, so echoing more refs than the remaining budget divides into
+// could overrun the deadline and lose the whole report.
+const refsCap = deadline => Math.min(REFS_CAP, Math.max(0, Math.floor((deadline - Date.now()) / GH_TIMEOUT) - 1))
+const moreRefsNote = (total, cap) => (total > cap ? `\n  …and ${total - cap} more references not echoed` : '')
+
 // additionalContext shares the host's ~10K inline budget with every other
 // hook on the event (measured for SessionStart in issue #643; assume the
 // same order here). The trailing surrogate strip keeps a clipped emoji from
@@ -282,12 +288,8 @@ const verifyTarget = (t, { reportIds, deadline }) => {
 
   const refs = [...new Set([...extractIssueRefs(text), ...[...byId.values()].filter(Boolean)])]
   if (refs.length) {
-    // The echo sizes itself to the time left: each lookup is bounded by
-    // GH_TIMEOUT, so echoing more refs than the remaining budget divides
-    // into could overrun the deadline and lose the whole report.
-    const budget = Math.max(0, Math.floor((deadline - Date.now()) / GH_TIMEOUT) - 1)
-    const cap = Math.min(REFS_CAP, budget)
-    const capNote = refs.length > cap ? `\n  …and ${refs.length - cap} more references not echoed` : ''
+    const cap = refsCap(deadline)
+    const capNote = moreRefsNote(refs.length, cap)
     if (cap > 0) notes.push(`${label}\n${issueRefsTable(text, refs.slice(0, cap), 'post')}${capNote}`)
     else notes.push(`${label}: ${refs.length} issue references not echoed (out of time budget) — check them yourself`)
   }
@@ -322,8 +324,7 @@ const verifyMergeCommit = (n, deadline) => {
   // it back would be pure noise.
   const refs = extractIssueRefs(message).filter(r => r !== n)
   if (!refs.length) return notes
-  const budget = Math.max(0, Math.floor((deadline - Date.now()) / GH_TIMEOUT) - 1)
-  const cap = Math.min(REFS_CAP, budget)
+  const cap = refsCap(deadline)
   if (cap === 0) return [`merge commit of #${n}: ${refs.length} issue references not echoed (out of time budget) — check them yourself`]
   // Only the HEAD commit's text is known to have landed under every merge
   // strategy — a squash with custom subject/body does not land the PR's own
@@ -360,7 +361,7 @@ const verifyMergeCommit = (n, deadline) => {
       (commitCloses.length
         ? `\n  (close keywords in the PR's own commits acted only if this was a merge or rebase — a squash with custom text did not land them)`
         : '')
-  const capNote = refs.length > cap ? `\n  …and ${refs.length - cap} more references not echoed` : ''
+  const capNote = moreRefsNote(refs.length, cap)
   return [`merge commit ${pr.merge_commit_sha.slice(0, 9)} of #${n}:\n${issueRefsTable(message, refs.slice(0, cap), 'post')}${capNote}${pageNote}${warn}`]
 }
 

@@ -1500,8 +1500,9 @@ describe('hookPrePr process behavior', { timeout: 20_000 }, () => {
   it('treats a quoted flag expansion as uncovered, not just an unquoted one', () => {
     const { hook } = makeRepo({ dbReady: true })
     for (const cmd of [
+      // the quoted form is the subject here: the skeleton blanks it, so only
+      // the raw-text read catches it. The unquoted form is pinned separately.
       'gh api "${FLAGS:---input=payload.json}" repos/Stvad/knowledge-medium/issues/1/comments',
-      'gh api $FLAGS repos/Stvad/knowledge-medium/issues/1/comments',
     ]) {
       const r = hook(cmd)
       expect(r.status, cmd).toBe(2)
