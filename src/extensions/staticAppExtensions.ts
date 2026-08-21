@@ -53,6 +53,7 @@ import { srsReviewPlugin } from '@/plugins/srs-review'
 import { todoPlugin } from '@/plugins/todo'
 import { systemStatusPlugin } from '@/plugins/system-status'
 import { storagePersistencePlugin } from '@/plugins/storage-persistence'
+import { searchHealthExtension } from '@/plugins/search-health'
 import { dataIntegrityPlugin } from '@/plugins/data-integrity'
 import { dbMaintenancePlugin } from '@/plugins/db-maintenance'
 import { propertiesMigrationPlugin } from '@/plugins/properties-migration'
@@ -150,6 +151,7 @@ export const staticAppExtensions = ({repo}: {repo: Repo}): AppExtension[] => [
   srsReviewPlugin({repo}),
   systemStatusPlugin,
   storagePersistencePlugin,
+  searchHealthExtension,
   dataIntegrityPlugin({repo}),
   dbMaintenancePlugin({repo}),
   propertiesMigrationPlugin({repo}),

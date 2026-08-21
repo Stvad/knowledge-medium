@@ -1,0 +1,107 @@
+/**
+ * Live health of the contributed search sources, as a diagnostics snapshot.
+ *
+ * The failure this exists for is silent: when one `searchSourcesFacet` source
+ * throws and another succeeds, `searchBlocksAcrossSources` logs, drops that
+ * source's results and returns the rest — so search quietly gets worse and
+ * nothing tells the user. (A TOTAL failure is different: the merge point
+ * rethrows, and the caller surfaces it already.) Core emits a
+ * `SearchSourceHealthReport` per search and this plugin decides what a human
+ * sees.
+ *
+ * `core.content` is deliberately not special-cased. It reports through the
+ * same seam as any plugin source, so if it ever starts failing alongside a
+ * working plugin source, that shows up here too.
+ *
+ * ACCEPTED GAP: state only advances when a search runs, so disabling a
+ * failing source without searching again leaves the chip naming it until the
+ * next search. Closing it means subscribing to facet-runtime changes, with the
+ * lifecycle and teardown that implies, to shorten a seconds-long stale window
+ * on an advisory indicator. Declined on #685; reopen it only if the window
+ * turns out to be long in practice.
+ */
+import { CallbackSet } from '@/utils/callbackSet.js'
+import type { SearchSourceHealthReport, SearchSourceOutcome } from '@/data/facets.js'
+import type { DiagnosticSnapshot } from '@/plugins/diagnostics/facet.js'
+
+let snapshot: DiagnosticSnapshot | null = null
+let latestGeneration = 0
+const listeners = new CallbackSet('search-health')
+
+const describe = (outcome: SearchSourceOutcome): string =>
+  outcome.kind === 'threw'
+    ? `"${outcome.sourceId}" failed`
+    : `"${outcome.sourceId}" returned a malformed result`
+
+/** What the user actually loses, which differs by outcome and so cannot be one
+ *  fixed phrase: a source that THREW contributes nothing, so rows are missing;
+ *  a MALFORMED candidate is still ranked and still shown, but with a payload of
+ *  unknown age, so rows are present and possibly stale. */
+const consequence = (unhealthy: readonly SearchSourceOutcome[]): string => {
+  const threw = unhealthy.some(o => o.kind === 'threw')
+  const malformed = unhealthy.some(o => o.kind === 'malformed-candidate')
+  if (threw && malformed) return 'results may be incomplete or stale'
+  return threw ? 'results may be incomplete' : 'results may be stale'
+}
+
+/** Derive the chip snapshot from every source's last outcome.
+ *
+ *  Severity is `warning`, never `error`: results are degraded, not wrong, and
+ *  the user's own writes are unaffected. Reserving `error` for the states that
+ *  redden the whole chip (sync broken, data inconsistent) keeps this from
+ *  crying wolf over a flaky third-party index. */
+const computeSnapshot = (outcomes: readonly SearchSourceOutcome[]): DiagnosticSnapshot | null => {
+  const unhealthy = outcomes.filter(o => o.kind !== 'ok')
+  if (unhealthy.length === 0) return null
+
+  const summary = unhealthy.length === 1
+    ? `Search source ${describe(unhealthy[0])}`
+    : `${unhealthy.length} search sources are failing`
+  const detail = unhealthy
+    .map(o => (o.detail ? `${o.sourceId}: ${o.detail}` : `${o.sourceId}: search threw`))
+    .join(' · ')
+  return {
+    severity: 'warning',
+    summary: `${summary} — ${consequence(unhealthy)}`,
+    detail,
+    nudge: true,
+  }
+}
+
+const sameSnapshot = (a: DiagnosticSnapshot | null, b: DiagnosticSnapshot | null): boolean => {
+  if (a === b) return true
+  if (!a || !b) return false
+  return a.severity === b.severity && a.summary === b.summary && a.detail === b.detail
+}
+
+/** Replace the health state from one search's report.
+ *
+ *  Whole-set replace, not a merge: a source that has left the runtime is
+ *  absent from `outcomes` and must stop being named, and it can never emit an
+ *  `ok` of its own to say so. Reports older than the newest seen are dropped —
+ *  overlapping searches settle out of order (a slow source under fast typing),
+ *  and without this an older `threw` could land after a newer `ok` and leave a
+ *  warning up once the user stops typing.
+ *
+ *  Runs on every search, so the unchanged case must not wake a subscriber or
+ *  hand `useSyncExternalStore` a new reference. */
+export const recordSearchSourceHealth = (report: SearchSourceHealthReport): void => {
+  if (report.generation <= latestGeneration) return
+  latestGeneration = report.generation
+  const next = computeSnapshot(report.outcomes)
+  if (sameSnapshot(snapshot, next)) return
+  snapshot = next
+  listeners.notify()
+}
+
+export const subscribeSearchSourceHealth = (listener: () => void): (() => void) =>
+  listeners.add(listener)
+
+export const searchSourceHealthSnapshot = (): DiagnosticSnapshot | null => snapshot
+
+/** Test-only reset of the module store (mirrors `resetPersistenceStatus`). */
+export const resetSearchSourceHealth = (): void => {
+  snapshot = null
+  latestGeneration = 0
+  listeners.clear()
+}

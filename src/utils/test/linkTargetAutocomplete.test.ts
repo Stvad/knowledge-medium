@@ -6,7 +6,12 @@ import { aliasesProp, typesProp } from '@/data/properties.js'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { Repo } from '@/data/repo'
-import { searchSourcesFacet, type SearchSourceContribution } from '@/data/facets.js'
+import {
+  searchSourceHealthFacet,
+  searchSourcesFacet,
+  type SearchSourceContribution,
+  type SearchSourceHealthReport,
+} from '@/data/facets.js'
 import {
   completionTypeHint,
   displayableTypes,
@@ -917,5 +922,110 @@ describe('searchBlocksAcrossSources (searchSourcesFacet merge point)', () => {
       query: 'sync',
       limit: 10,
     })).rejects.toThrow('db exploded')
+  })
+
+  it('reports each source\'s outcome to the health seam, including recovery', async () => {
+    // Pins the seam end to end through the REAL merge point: core emits,
+    // a registered reporter receives. The 'ok' events are what let a
+    // health surface clear instead of latching on one transient failure.
+    await create({id: 'core-hit', content: 'sync notes'})
+    const reports: SearchSourceHealthReport[] = []
+    env.repo.setRuntimeContributions(searchSourceHealthFacet, 'test:reporter', [
+      {id: 'test.reporter', report: (r) => { reports.push(r) }},
+    ])
+
+    let broken = true
+    env.repo.setRuntimeContributions(searchSourcesFacet, 'test:flaky', [{
+      id: 'test.flaky',
+      search: async () => {
+        if (broken) throw new Error('index offline')
+        return []
+      },
+    }])
+
+    await searchBlocksAcrossSources(env.repo, {workspaceId: WS, query: 'sync', limit: 10})
+    expect(reports).toHaveLength(1)
+    expect(reports[0].outcomes).toContainEqual(expect.objectContaining({sourceId: 'test.flaky', kind: 'threw'}))
+    expect(reports[0].outcomes).toContainEqual(expect.objectContaining({sourceId: 'core.content', kind: 'ok'}))
+
+    broken = false
+    await searchBlocksAcrossSources(env.repo, {workspaceId: WS, query: 'sync', limit: 10})
+    expect(reports[1].outcomes).toContainEqual(expect.objectContaining({sourceId: 'test.flaky', kind: 'ok'}))
+    // Strictly increasing, so a consumer can drop a superseded search's report.
+    expect(reports[1].generation).toBeGreaterThan(reports[0].generation)
+  })
+
+  it('reports a malformed candidate, and a reporter that throws cannot break search', async () => {
+    await create({id: 'core-hit', content: 'sync notes'})
+    const reports: SearchSourceHealthReport[] = []
+    env.repo.setRuntimeContributions(searchSourceHealthFacet, 'test:reporter', [
+      // The throwing reporter is registered FIRST, so if throws were not
+      // isolated it would also prevent the second one from ever running.
+      {id: 'test.hostile', report: () => { throw new Error('reporter exploded') }},
+      {id: 'test.reporter', report: (r) => { reports.push(r) }},
+    ])
+    env.repo.setRuntimeContributions(searchSourcesFacet, 'test:malformed', [{
+      id: 'test.malformed',
+      search: async () => [{
+        block: {...blockData('ghost', 'no timestamp'), userUpdatedAt: undefined as unknown as number},
+        score: 500,
+      }],
+    }])
+
+    const results = await searchBlocksAcrossSources(env.repo, {workspaceId: WS, query: 'sync', limit: 10})
+
+    expect(results.map(block => block.id)).toContain('ghost')
+    expect(reports[0].outcomes).toContainEqual(expect.objectContaining({
+      sourceId: 'test.malformed',
+      kind: 'malformed-candidate',
+    }))
+  })
+
+  it('numbers reports by when each search STARTED, and orders outcomes by registration', async () => {
+    // Both properties are invisible to a store-level test: they live at the
+    // allocation and assembly sites, not in the consumer. The earlier-started
+    // search settles LAST here, so numbering by completion (the bug this
+    // pins) would hand it the higher generation and let its stale outcome
+    // win. Source order is likewise inverted on settle, so a report built by
+    // push order would come back reversed.
+    await create({id: 'core-hit', content: 'sync notes'})
+    const reports: SearchSourceHealthReport[] = []
+    env.repo.setRuntimeContributions(searchSourceHealthFacet, 'test:reporter', [
+      {id: 'test.reporter', report: (r) => { reports.push(r) }},
+    ])
+
+    let releaseSlow = (): void => {}
+    const slowGate = new Promise<void>((resolve) => { releaseSlow = resolve })
+    let firstCall = true
+    env.repo.setRuntimeContributions(searchSourcesFacet, 'test:slow', [{
+      id: 'test.slow',
+      search: async () => {
+        // Only the FIRST search is held; the second runs straight through, so
+        // search #1 starts first and finishes last.
+        if (firstCall) {
+          firstCall = false
+          await slowGate
+        }
+        return []
+      },
+    }])
+
+    const started = searchBlocksAcrossSources(env.repo, {workspaceId: WS, query: 'sync', limit: 10})
+    const later = await searchBlocksAcrossSources(env.repo, {workspaceId: WS, query: 'sync', limit: 10})
+    expect(later).toBeDefined()
+    expect(reports).toHaveLength(1)
+    releaseSlow()
+    await started
+    expect(reports).toHaveLength(2)
+
+    // reports[0] is the LATER search (it settled first); reports[1] is the
+    // earlier one. Numbering by start order means the late arrival carries the
+    // LOWER generation, which is what lets a consumer discard it.
+    expect(reports[1].generation).toBeLessThan(reports[0].generation)
+
+    // Registration order, not settle order.
+    for (const report of reports) {
+      expect(report.outcomes.map(o => o.sourceId)).toEqual(['core.content', 'test.slow'])
+    }
   })
 })

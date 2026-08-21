@@ -32,6 +32,22 @@ Reads, issue mutations and `bd remember` all work locally against the cloned DB 
 
 `bd backup init` drops `.beads/dolt-backup*.json`, untracked but NOT gitignored — `bd backup remove` when done, and never `git add -A`.
 
+### Prefer the tracked JSONL when only issues need to travel
+
+`bd backup` carries everything and costs a private-repo detour. For the common case — a session that filed or updated some issues — `.beads/issues.jsonl` is tracked and not gitignored, so the session's normal `git push` to the main repo carries them:
+
+1. **`node scripts/bd-export-public.mjs`** and commit the result with your other work,
+2. on any other machine, `git pull` then **`bd import`** with NO arguments — it defaults to that path and upserts issue fields, so a partial or stale file is safe.
+
+Use the script, not a bare `bd export -o`, for two measured reasons:
+
+- **`bd export` stamps real names and emails** onto `owner` / `created_by` / `updated_by` and onto every comment's `author`. This file is committed to the PUBLIC repo, so that would publish them permanently into git history. The script strips identity keys at every depth — a top-level-only pass silently misses comment authors.
+- **`bd import` INSERTS comments rather than upserting them**, so a file carrying a comment the receiving database already has aborts the ENTIRE import with `duplicate primary key given` — not just that record. Verified by re-importing a full export into its own database. The script drops `comments` for that reason; without them all 211 issues import cleanly.
+
+What this does NOT carry, therefore: comments, Dolt history and branches, and memories (`bd export` excludes memories by default and MUST keep doing so — never pass `--all` / `--include-memories` when writing this file). Use `bd backup` when any of those need to travel.
+
+Do not expect the git hooks to do it for you: `bd hooks run post-merge` does NOT import a changed JSONL. Measured — appended a synthetic record, ran the hook, watched it never reach the DB — so this is one bare command on the receiving side, not zero.
+
 ## A push probe proves nothing until you see the pack move
 
 Ref deletion 403s here with or without a PAT and no MCP tool deletes a branch, so the temptation is a throwaway probe made safe with `--atomic` plus a poison-pill refspec. That shape is a TRAP: if the client rejects the poison locally (a non-fast-forward, or any ref whose remote object you lack — "fetch first"), `--atomic` aborts in `send-pack` and **no bytes are ever sent**. It reports `atomic push failed for ref …. status: 5`, which is git's own `REF_STATUS_REJECT_FETCH_FIRST`, not a server reply — so a probe that tested nothing reads exactly like a probe that passed. Always push with `--progress` and require `Writing objects: 100% … done.` before believing any conclusion about what the remote accepts.
