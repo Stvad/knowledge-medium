@@ -51,8 +51,12 @@ import { isGrammarShapedLabel } from '@/data/referenceBlock'
 import type { Repo } from '@/data/repo'
 import { readWorkspaceEncryptionMode } from '@/data/workspaceSchema'
 import { getModePin } from '@/sync/keys/modePin'
+import { jsonValuesEqual } from '@/data/internals/jsonCanonical'
 import {
-  scanPropertyKeys, type UnresolvedPropertyKey, type ValueTypeCounts,
+  encodedPropertyValueToChildContent, propertyChildContentToEncodedValue,
+} from '@/data/propertyChildren'
+import {
+  OBJECT_BAG, keyOf, scanPropertyKeys, type UnresolvedPropertyKey,
 } from './propertyKeyScan'
 
 /** Namespace for synthesized property definitions. Deliberately NOT
@@ -91,33 +95,64 @@ export const synthesizedPropertyDefinitionBlockId = (
  *  vetted. */
 export type SynthesizedPresetId = 'boolean' | 'number' | 'string' | 'raw-json'
 
+/** Tried narrowest-first; the first that carries every stored value wins.
+ *  `raw-json` is last and is the identity codec, so it is the answer whenever
+ *  nothing narrower is provable — including for a key too large to check. */
+const PRESET_LADDER: readonly SynthesizedPresetId[] =
+  ['boolean', 'number', 'string', 'raw-json']
+
+/** Distinct values we will read per key to prove a preset.
+ *
+ *  Not a sampling cap — sampling would put the guessing back. A key with more
+ *  distinct values than this is not CHECKED, it is answered `raw-json`, which
+ *  is exact for every JSON value. Measured on a ~360k-cell production graph the
+ *  heaviest key of any kind has ~26k distinct values and the unregistered ones
+ *  had 23 between them, so this bounds a case that does not arise rather than
+ *  trimming one that does. */
+export const PROVE_DISTINCT_VALUE_LIMIT = 10_000
+
 /**
- * Which preset can carry every value this key already holds?
+ * Which preset can carry every value this key already holds — PROVEN, by
+ * running the round trip, not inferred from what the values look like.
  *
- * The criterion is NOT "what does this data look like" but "which codec can
- * read every stored value back out unchanged". A synthesized definition is
- * applied retroactively to values written before it existed, and once the
- * workspace is flipped the cell is re-derived from the children — so a codec
- * whose round trip rewrites the value silently rewrites the user's data.
+ * The criterion was always "which codec reads every stored value back out
+ * UNCHANGED": a synthesized definition is applied retroactively to values
+ * written before it existed, and once the workspace is flipped the cell is
+ * re-derived from the children, so a codec whose round trip rewrites a value
+ * silently rewrites the user's data. An earlier revision approximated that from
+ * a histogram of JSON types, and every review round found another shape the
+ * histogram could not see — dates canonicalising, oversized integers, and so
+ * on. Each was a real hole and each fix was one more term in a proxy.
  *
- * That is why `date` is not inferred, though the design lists it: `codecs.date`
- * decodes `"2026-08-20"` to a Date and re-encodes it as
- * `"2026-08-20T00:00:00.000Z"`, so every ISO-looking cell in the workspace
- * would be rewritten by a definition nobody asked for — and `new Date()` is
- * lenient enough ("2026", "Sat Aug 20 2026") that the class it would claim is
- * wider than it looks. Date-shaped keys come out as `string`, which is exact;
- * switching the definition's preset afterwards is one click, and the
- * definition is minted VISIBLE precisely so it gets that look.
+ * So the check is the actual round trip. `date` needs no special case now: it
+ * simply fails, because `codecs.date` re-encodes `"2026-08-20"` as
+ * `"2026-08-20T00:00:00.000Z"` — and any future codec that does the same fails
+ * for the same reason without anyone having to notice it first.
  *
- * Mixed and structured values fall to `raw-json` (identity in, identity out).
+ * WHAT THIS DOES NOT PROVE: only the JS half. Content that survives here can
+ * still be transformed at the database text boundary or by a processor —
+ * see #688 — which is why that stays tracked separately rather than papered
+ * over here.
  */
-export const inferPresetId = (counts: ValueTypeCounts): SynthesizedPresetId => {
-  if (counts.others > 0) return 'raw-json'
-  const populated = [counts.booleans, counts.numbers, counts.texts].filter(n => n > 0)
-  if (populated.length !== 1) return 'raw-json'
-  if (counts.booleans > 0) return 'boolean'
-  if (counts.numbers > 0) return 'number'
-  return 'string'
+export const provePresetId = (values: readonly unknown[]): SynthesizedPresetId => {
+  for (const presetId of PRESET_LADDER) {
+    const schema = schemaFor('probe', kernelValuePresetCoresById[presetId])
+    if (values.every(value => survivesChildRoundTrip(schema, value))) return presetId
+  }
+  // `raw-json` is `JSON.stringify`/`JSON.parse`, so reaching here means a value
+  // no codec in this app can carry.
+  return 'raw-json'
+}
+
+/** Does one stored value come back byte-identical through the child machinery
+ *  this preset would use? */
+const survivesChildRoundTrip = (schema: AnyPropertySchema, encoded: unknown): boolean => {
+  try {
+    const content = encodedPropertyValueToChildContent(schema, encoded)
+    return jsonValuesEqual(propertyChildContentToEncodedValue(schema, content), encoded)
+  } catch {
+    return false
+  }
 }
 
 /** A key synthesis will mint a definition for. */
@@ -240,6 +275,70 @@ export const keyCannotBeDefined = (key: string): string | null => {
   return null
 }
 
+interface DistinctValueRow {
+  property: string | null
+  type: string
+  value: unknown
+}
+
+/** Rebuild the stored JSON value from `json_each`'s (type, value) pair.
+ *  `json_each` hands back SQL-typed scalars and JSON TEXT for containers, so
+ *  the type column is what says which of the two this is. */
+const jsonValueOf = (row: DistinctValueRow): unknown => {
+  switch (row.type) {
+    case 'true': return true
+    case 'false': return false
+    case 'null': return null
+    case 'object':
+    case 'array': return JSON.parse(String(row.value))
+    default: return row.value
+  }
+}
+
+/** Every distinct value each candidate key holds, for the keys small enough to
+ *  check. A key over the limit is absent from the map and answered `raw-json`
+ *  rather than sampled — see {@link PROVE_DISTINCT_VALUE_LIMIT}. */
+const distinctValuesByKey = async (
+  repo: Repo,
+  workspaceId: string,
+  keys: readonly string[],
+): Promise<Map<string, unknown[]>> => {
+  const out = new Map<string, unknown[]>()
+  if (keys.length === 0) return out
+  const keysJson = JSON.stringify(keys)
+  // Counted first so an oversized key is never READ. A LIMIT on the value
+  // query instead would silently truncate one key's values and prove a preset
+  // against a subset, which is the guessing this replaced.
+  const counts = await repo.db.getAll<{property: string | null; distinctValues: number}>(
+    `SELECT j.key AS property, COUNT(DISTINCT j.value) AS distinctValues
+       FROM blocks b, json_each(${OBJECT_BAG}) j
+      WHERE b.workspace_id = ? AND b.deleted = 0
+        AND j.key IN (SELECT value FROM json_each(?))
+      GROUP BY j.key`,
+    [workspaceId, keysJson],
+  )
+  const provable = counts
+    .filter(row => row.distinctValues <= PROVE_DISTINCT_VALUE_LIMIT)
+    .map(row => keyOf(row.property))
+  if (provable.length === 0) return out
+
+  const rows = await repo.db.getAll<DistinctValueRow>(
+    `SELECT j.key AS property, j.type AS type, j.value AS value
+       FROM blocks b, json_each(${OBJECT_BAG}) j
+      WHERE b.workspace_id = ? AND b.deleted = 0
+        AND j.key IN (SELECT value FROM json_each(?))
+      GROUP BY j.key, j.type, j.value`,
+    [workspaceId, JSON.stringify(provable)],
+  )
+  for (const row of rows) {
+    const key = keyOf(row.property)
+    const bucket = out.get(key) ?? []
+    bucket.push(jsonValueOf(row))
+    out.set(key, bucket)
+  }
+  return out
+}
+
 /**
  * What synthesis would do to this workspace. Reads only.
  *
@@ -283,10 +382,16 @@ export const planPropertyDefinitionSynthesis = async (
     mintable.push(entry)
   }
 
+  const valuesByKey = await distinctValuesByKey(repo, workspaceId,
+                                                mintable.map(entry => entry.property))
   const candidates: SynthesisCandidate[] = mintable.map(entry => ({
     key: entry.property,
     cells: entry.cells,
-    presetId: inferPresetId(entry.valueTypes),
+    // No entry means the key had too many distinct values to read, so nothing
+    // was proven about it: `raw-json` is exact for every JSON value, which is
+    // the conservative answer rather than a sampled guess.
+    presetId: (values => values === undefined ? 'raw-json' : provePresetId(values))(
+      valuesByKey.get(entry.property)),
   }))
 
   return {workspaceId, refusal, unreadableBlocks: scan.unreadableBlocks, candidates,

@@ -50,15 +50,6 @@ export const OBJECT_BAG =
  *  never drift into disagreeing about which rows the histogram skipped. */
 const NOT_OBJECT_BAG = `NOT (${IS_OBJECT_BAG})`
 
-/** Per-key tally of what JSON types the cells hold. `others` is null, array
- *  and object — everything a scalar preset cannot carry. */
-export interface ValueTypeCounts {
-  booleans: number
-  numbers: number
-  texts: number
-  others: number
-}
-
 /** One key the workspace's registry could not resolve. */
 export interface UnresolvedPropertyKey {
   property: string
@@ -71,12 +62,6 @@ export interface UnresolvedPropertyKey {
    *  disagree about what is registered. In practice a NAME lookup only ever
    *  yields `definition-unavailable`. */
   reason: PropertySchemaIdentityUnavailableReason
-  /** What JSON types this key's cells actually hold, across the same rows
-   *  `cells` counts. Carried by the scan rather than re-queried because a
-   *  second `json_each` pass is a second POINT IN TIME: a key present in one
-   *  and absent from the other has to be handled as skew, and the only honest
-   *  handling is to assume the worst about data you did not see. */
-  valueTypes: ValueTypeCounts
   /** Live `property-schema` blocks in this workspace whose EFFECTIVE name is
    *  this key. Non-zero with an unresolved name means a BROKEN definition,
    *  not a missing one — a different fix, and the one case synthesis must
@@ -117,10 +102,6 @@ export interface PropertyKeyScan {
 interface HistogramRow {
   property: string | null
   cells: number
-  booleans: number
-  numbers: number
-  texts: number
-  others: number
 }
 
 /** SQLite yields a non-string key only for a non-object bag, which
@@ -180,17 +161,8 @@ export const scanPropertyKeys = async (
   // `schedulePropertyDefinitionMigrations` in `repo.ts`.
   const resolver = repo.propertySchemaResolverFor(workspaceId)
 
-  // The type tally rides this pass rather than getting its own. `json_each` is
-  // a table-valued scan driven by `b`, so a second query with a `j.key IN (…)`
-  // filter would re-expand every bag anyway — and it would do it at a different
-  // instant, which is the part that mattered.
   const histogram = await repo.db.getAll<HistogramRow>(
-    `SELECT j.key AS property,
-            COUNT(*) AS cells,
-            SUM(j.type IN ('true','false')) AS booleans,
-            SUM(j.type IN ('integer','real')) AS numbers,
-            SUM(j.type = 'text') AS texts,
-            SUM(j.type NOT IN ('true','false','integer','real','text')) AS others
+    `SELECT j.key AS property, COUNT(*) AS cells
        FROM blocks b, json_each(${OBJECT_BAG}) j
       WHERE b.workspace_id = ? AND b.deleted = 0
       GROUP BY j.key`,
@@ -263,9 +235,6 @@ export const scanPropertyKeys = async (
     unresolved.push({
       property,
       cells: row.cells,
-      valueTypes: {
-        booleans: row.booleans, numbers: row.numbers, texts: row.texts, others: row.others,
-      },
       reason: resolution.reason,
       definitionBlocks: definitionBlocksByName.get(property) ?? 0,
     })

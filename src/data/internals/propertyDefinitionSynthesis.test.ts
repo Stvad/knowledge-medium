@@ -21,7 +21,7 @@ import { PROPERTY_CELL_BACKFILL_ID } from './propertyCellBackfill'
 import {
   applyPropertyDefinitionSynthesis,
   flipBlockedBySynthesis,
-  inferPresetId,
+  provePresetId,
   propertySynthesisWorkspaceRefusal,
   planPropertyDefinitionSynthesis,
   synthesizedPropertyDefinitionBlockId,
@@ -104,19 +104,34 @@ const untilKeyUnresolved = (key: string) => vi.waitFor(() =>
 const candidateFor = async (key: string) =>
   (await planFor()).candidates.find(c => c.key === key)
 
-describe('inferPresetId', () => {
-  it('picks the narrowest preset that can carry every stored value', () => {
-    expect(inferPresetId({booleans: 3, numbers: 0, texts: 0, others: 0})).toBe('boolean')
-    expect(inferPresetId({booleans: 0, numbers: 3, texts: 0, others: 0})).toBe('number')
-    expect(inferPresetId({booleans: 0, numbers: 0, texts: 3, others: 0})).toBe('string')
+describe('provePresetId', () => {
+  it('picks the narrowest preset that carries every value unchanged', () => {
+    expect(provePresetId([true, false])).toBe('boolean')
+    expect(provePresetId([1, 2.5, -3])).toBe('number')
+    expect(provePresetId(['a', 'b'])).toBe('string')
   })
 
-  it('falls back to raw-json for mixed or structured values', () => {
-    expect(inferPresetId({booleans: 1, numbers: 1, texts: 0, others: 0})).toBe('raw-json')
-    expect(inferPresetId({booleans: 0, numbers: 0, texts: 1, others: 1})).toBe('raw-json')
-    // A null cell is not a string, a number or a boolean; only the identity
-    // codec reads it back as itself.
-    expect(inferPresetId({booleans: 0, numbers: 0, texts: 0, others: 2})).toBe('raw-json')
+  it('falls back to raw-json for mixed and structured values', () => {
+    expect(provePresetId([true, 1])).toBe('raw-json')
+    expect(provePresetId(['a', {x: 1}])).toBe('raw-json')
+    expect(provePresetId([null])).toBe('raw-json')
+    expect(provePresetId([[1, 2]])).toBe('raw-json')
+  })
+
+  it('does not pick date for ISO-looking strings, because date rewrites them', () => {
+    // `codecs.date` re-encodes "2026-08-20" as "2026-08-20T00:00:00.000Z", so a
+    // definition on it would rewrite every stored value of the key. Nothing
+    // special-cases `date` — it simply fails the round trip, which is the point
+    // of proving rather than inferring.
+    expect(provePresetId(['2026-08-20'])).toBe('string')
+    expect(provePresetId(['2026-08-20T00:00:00.000Z'])).toBe('string')
+  })
+
+  it('survives the awkward string values the escape machinery exists for', () => {
+    expect(provePresetId(['null'])).toBe('string')
+    expect(provePresetId(['"null"'])).toBe('string')
+    expect(provePresetId([''])).toBe('string')
+    expect(provePresetId(['line\nbreak'])).toBe('string')
   })
 })
 
@@ -127,6 +142,29 @@ describe('planPropertyDefinitionSynthesis', () => {
 
     const candidate = await candidateFor('demo:orphan')
     expect(candidate).toEqual({key: 'demo:orphan', cells: 2, presetId: 'string'})
+  })
+
+  it('proves the preset from the values actually stored, not from their shape', async () => {
+    // Same JSON type (text) on both keys, different verdicts — which is the
+    // whole difference between proving and inferring.
+    await rawCell('b1', {'demo:plain': 'hello', 'demo:mixed': 'x'})
+    await rawCell('b2', {'demo:plain': 'world', 'demo:mixed': 7})
+
+    const plan = await planFor()
+    expect(plan.candidates.find(c => c.key === 'demo:plain')?.presetId).toBe('string')
+    expect(plan.candidates.find(c => c.key === 'demo:mixed')?.presetId).toBe('raw-json')
+  })
+
+  it('reads structured and boolean values back out of the database correctly', async () => {
+    // `json_each` hands back SQL scalars for atoms and JSON text for
+    // containers, so the reader has to reconstruct from the type column.
+    await rawCell('b1', {'demo:flag': true, 'demo:obj': {a: 1}, 'demo:num': 42})
+
+    const plan = await planFor()
+    const preset = (k: string) => plan.candidates.find(c => c.key === k)?.presetId
+    expect(preset('demo:flag')).toBe('boolean')
+    expect(preset('demo:num')).toBe('number')
+    expect(preset('demo:obj')).toBe('raw-json')
   })
 
   it('says nothing about a key a seed already declares', async () => {

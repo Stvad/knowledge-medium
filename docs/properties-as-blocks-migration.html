@@ -750,31 +750,34 @@
   synthesis half of &sect;9 now exists, as part of the same operator gesture:
   <code>planPropertyDefinitionSynthesis</code> /
   <code>applyPropertyDefinitionSynthesis</code>
-  (<code>src/data/internals/propertyDefinitionSynthesis.ts</code>) mint a hidden,
+  (<code>src/data/internals/propertyDefinitionSynthesis.ts</code>) mint a
   user-origin definition per definition-less cell key, at a deterministic id, in
   one transaction, before the flip. Three divergences from the text in
   <a href="#s7">&sect;7</a> and <a href="#s8">&sect;8</a>, recorded here rather
   than edited into them:
   <ul>
-    <li><strong><code>date</code> is not inferred.</strong> The selection criterion
-      turned out not to be &ldquo;what does this data look like&rdquo; but
-      &ldquo;which codec reads every stored value back out <em>unchanged</em>&rdquo;
-      &mdash; a synthesized definition is applied retroactively to values written
-      before it existed, and past the flip the cell is re-derived from the children.
-      <code>codecs.date</code> decodes <code>"2026-08-20"</code> and re-encodes it as
-      <code>"2026-08-20T00:00:00.000Z"</code>, so every ISO-looking cell in the
-      workspace would be rewritten by a definition nobody asked for; and
-      <code>new Date()</code> is lenient enough (<code>"2026"</code>,
-      <code>"Sat Aug 20 2026"</code>) that the class it would claim is wider than it
-      looks. Date-shaped keys come out as <code>string</code>, which is exact, and the
-      definition is visible precisely so someone looks at it.
-      <code>boolean</code>/<code>number</code>/<code>raw-json</code> round-trip exactly.
-      <code>string</code> has one tracked exception (issue #688, not introduced here and
-      not synthesis-specific): a value that is itself field-form content is written into
-      the child verbatim, is classified as a field row, and drops out of its own value
-      set &mdash; so projection reads no value rather than reproducing the string.
-      Synthesis widens the set that can bite, because these keys come from writers
-      nothing vetted.</li>
+    <li><strong>The preset is PROVEN, not inferred</strong> (owner decision, after two
+      revisions of inference). The criterion was always &ldquo;which codec reads every
+      stored value back out <em>unchanged</em>&rdquo; &mdash; a synthesized definition is
+      applied retroactively to values written before it existed, and past the flip the
+      cell is re-derived from the children, so a codec whose round trip rewrites a value
+      silently rewrites the user's data. The first cut approximated that from a histogram
+      of JSON types, and successive review rounds each found a shape the histogram could
+      not see (dates canonicalising, oversized integers, &hellip;) &mdash; every fix one
+      more term in a proxy. Synthesis now READS the distinct values of each candidate key
+      and runs the actual child round trip, taking the narrowest preset that carries all
+      of them and <code>raw-json</code> (the identity codec) when none does.
+      <code>date</code> needs no special case: it simply fails, because
+      <code>codecs.date</code> re-encodes <code>"2026-08-20"</code> as
+      <code>"2026-08-20T00:00:00.000Z"</code>. Sized against production before choosing
+      this: ~360k property cells across 559 keys, of which <strong>8 were unregistered,
+      covering 32 cells and 23 distinct values between them</strong>; the heaviest key of
+      any kind has ~26k distinct values. A key past
+      <code>PROVE_DISTINCT_VALUE_LIMIT</code> is answered <code>raw-json</code> rather
+      than sampled &mdash; sampling would put the guessing back.
+      <em>What this does not prove</em> is the half below JavaScript: content can still be
+      transformed at the database text boundary or by a processor (issue #688), which
+      stays tracked rather than papered over here.</li>
     <li><strong>The grammar-shaped-name blocker stands, for a different
       reason.</strong> &sect;7 justifies it by the B2 name&rarr;content mirror. That
       mirror is a <em>seed</em> behavior (<code>contentFor: seed =&gt; seed.name</code>);
