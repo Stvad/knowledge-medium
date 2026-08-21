@@ -38,18 +38,45 @@ import { anyBlockTombstoned } from '@/data/blockLiveness.js'
  *  after it's been deleted and can no longer be found via
  *  `aliasLookup`. Same "Block facade can't tell deleted from missing"
  *  reasoning as `anyBlockTombstoned` — reads the row directly. */
-const rawAliases = async (repo: Repo, id: string): Promise<readonly string[]> => {
-  const row = await repo.db.getOptional<{properties_json: string}>(
-    'SELECT properties_json FROM blocks WHERE id = ?', [id],
-  )
-  if (!row) return []
+const decodeAliases = (propertiesJson: string): readonly string[] => {
   try {
-    const props = JSON.parse(row.properties_json) as Record<string, unknown>
+    const props = JSON.parse(propertiesJson) as Record<string, unknown>
     const encoded = props[aliasesProp.name]
     return encoded === undefined ? [] : aliasesProp.codec.decode(encoded)
   } catch {
     return []
   }
+}
+
+/** Depth cap for the ancestor walk. Outlines nest, but a daily note's subtree
+ *  is shallow in practice; a cap keeps a cyclic or corrupt parent chain from
+ *  hanging a navigation. */
+const MAX_ANCESTOR_WALK = 64
+
+/** Aliases on `id` AND on every ancestor, tombstones included.
+ *
+ *  The ancestors matter because delete CASCADES: when the adopted note is
+ *  deleted while the pane is zoomed into one of its children, the excluded
+ *  block is that child, whose own alias bag names no date. Checking only the
+ *  excluded block reads that as "unrelated page deleted" and mints a fresh
+ *  empty note for today — moments after the user deleted the one they were
+ *  looking at. */
+const rawAliasesWithAncestors = async (repo: Repo, id: string): Promise<readonly string[]> => {
+  const collected: string[] = []
+  const seen = new Set<string>()
+  let cursor: string | null = id
+  for (let depth = 0; cursor !== null && depth < MAX_ANCESTOR_WALK; depth++) {
+    if (seen.has(cursor)) break
+    seen.add(cursor)
+    const row: {properties_json: string, parent_id: string | null} | null =
+      await repo.db.getOptional<{properties_json: string, parent_id: string | null}>(
+        'SELECT properties_json, parent_id FROM blocks WHERE id = ?', [cursor],
+      )
+    if (!row) break
+    collected.push(...decodeAliases(row.properties_json))
+    cursor = row.parent_id
+  }
+  return collected
 }
 
 export const todayDailyNoteLanding: WorkspaceLandingResolver = async ({
@@ -87,13 +114,13 @@ export const todayDailyNoteLanding: WorkspaceLandingResolver = async ({
     // page to today's date, or to 'Journal', before ever landing here. The
     // two checks above are blind to that (neither `id` nor the Journal's
     // deterministic id was ever created, so neither reads as "tombstoned").
-    // If `excludeBlockId` itself was JUST that adopted claimant (its stored
-    // alias bag — still readable post-delete, see `rawAliases` — still
-    // shows today's date or 'Journal'), decline for the same reason: it was
-    // deleted moments ago, and getOrCreateDailyNote can no longer find it as
-    // a live claimant, so answering here would mint a FRESH row for today
-    // right after the user deleted the one they were looking at.
-    const excludedAliases = await rawAliases(repo, excludeBlockId)
+    // If the adopted claimant was JUST deleted — either `excludeBlockId`
+    // itself, or an ancestor of it, since delete cascades and the pane may
+    // have been zoomed into a child — decline for the same reason:
+    // getOrCreateDailyNote can no longer find it as a live claimant, so
+    // answering here mints a FRESH row for today right after the user deleted
+    // the one they were looking at.
+    const excludedAliases = await rawAliasesWithAncestors(repo, excludeBlockId)
     const [longLabel, isoLabel] = dailyNoteAliasesFor(iso)
     if (
       excludedAliases.includes(longLabel)

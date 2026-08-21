@@ -587,6 +587,29 @@ describe('todayDailyNoteLanding', () => {
     expect(await isBlockDeleted(env.repo, 'claimant')).toBe(true)
   })
 
+  it('declines when the deleted block was a CHILD of the adopted today-note', async () => {
+    // Delete cascades, so a pane zoomed into a child excludes the CHILD, whose
+    // own alias bag names no date. Checking only that block reads this as an
+    // unrelated page being deleted and mints a fresh empty note for today.
+    const iso = todayIso()
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'adopted', workspaceId: WS, parentId: null, orderKey: 'z0', content: 'My today'})
+      await tx.setProperty('adopted', aliasesProp, [iso])
+    }, {scope: ChangeScope.BlockDefault})
+
+    const landedId = await todayDailyNoteLanding({repo: env.repo, workspaceId: WS, freshlyCreated: false})
+    expect(landedId).toBe('adopted')
+    await env.repo.mutate.createChild({parentId: 'adopted', id: 'zoomed-child', content: 'a thought'})
+    await env.repo.tx(tx => tx.delete('adopted'), {scope: ChangeScope.BlockDefault})
+
+    const id = await todayDailyNoteLanding({
+      repo: env.repo, workspaceId: WS, freshlyCreated: false, excludeBlockId: 'zoomed-child',
+    })
+
+    expect(id).toBeNull()
+    expect(await env.repo.load(dailyNoteBlockId(WS, iso))).toBeNull()
+  })
+
   it('still answers when the excluded block is some other page', async () => {
     const id = await todayDailyNoteLanding({
       repo: env.repo, workspaceId: WS, freshlyCreated: false, excludeBlockId: 'unrelated-page',

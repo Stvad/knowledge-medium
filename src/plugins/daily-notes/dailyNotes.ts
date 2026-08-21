@@ -58,18 +58,19 @@ const JOURNAL_ALIASES = [JOURNAL_ALIAS]
 export const journalBlockId = (workspaceId: string): string =>
   kernelPageBlockId(workspaceId, JOURNAL_NS)
 
-/** Is `data` currently the live claimant of the 'Journal' alias?
- *  `block_aliases_workspace_alias_unique` guarantees at most one live
- *  block holds a given alias per workspace, so this is equivalent to "is
- *  this THE Journal" — true for the canonical `journalBlockId(workspaceId)`
- *  row in the common case, and for an ADOPTED claimant at a different id
- *  after issue #378's alias-first resolution moved the identity there.
- *  Callers that only have `Block.peek()`-shaped data (no tx/repo access —
- *  e.g. the UI deletion guard) use this instead of an id comparison
- *  against `journalBlockId`, which silently stops matching once adoption
- *  happens. */
+/** Is `data` the Journal — the canonical row, or a claimant adoption would
+ *  take? Claiming the alias is necessary but NOT sufficient: adoption refuses a
+ *  claimant carrying any other identity, so a typed block that happens to be
+ *  aliased 'Journal' is not the Journal and must not be treated as one. This
+ *  mirrors `getOrCreateJournalBlock`'s guard (`refuseTypedClaimant([PAGE_TYPE])`
+ *  — the Journal declares no marker type); the two must agree, or the UI guard
+ *  below refuses to delete a block the resolver would never adopt.
+ *
+ *  Alias rather than an id comparison against `journalBlockId` because the
+ *  latter stops matching once adoption moves the identity elsewhere. */
 export const isJournalBlock = (data: Pick<BlockData, 'properties'>): boolean =>
   getAliases(data).includes(JOURNAL_ALIAS)
+  && getBlockTypes(data).every(type => type === PAGE_TYPE)
 
 export const dailyNoteBlockId = (workspaceId: string, iso: string): string =>
   derivedBlockId({namespace: DAILY_NOTE_NS, key: `${workspaceId}:${iso}`})

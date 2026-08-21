@@ -6,7 +6,7 @@
  */
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { ChangeScope } from '@/data/api'
-import { aliasesProp } from '@/data/properties'
+import { addBlockTypeToProperties, aliasesProp } from '@/data/properties'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import type { Repo } from '@/data/repo'
@@ -62,6 +62,25 @@ describe('dailyNotesDeletionGuard', () => {
     expect(adopted.id).toBe('claimant')
     expect(adopted.id).not.toBe(journal.id)
     expect(await dailyNotesDeletionGuard(adopted)).toMatch(/Journal/)
+  })
+
+  it('allows deleting a typed block that merely claims the Journal alias', async () => {
+    // Adoption refuses a claimant carrying another identity, so this block is
+    // NOT the Journal and never will be. Recognising it by the alias alone made
+    // the UI refuse the delete and blame the Journal for it — for a block the
+    // resolver would never adopt.
+    await repo.tx(async tx => {
+      await tx.create({
+        id: 'todo-ish', workspaceId: WS, parentId: null, orderKey: 'b0', content: 'Journal',
+        properties: addBlockTypeToProperties(
+          {[aliasesProp.name]: aliasesProp.codec.encode(['Journal'])},
+          'some-other-identity',
+        ),
+      })
+    }, {scope: ChangeScope.BlockDefault})
+    await repo.block('todo-ish').load()
+
+    expect(await dailyNotesDeletionGuard(repo.block('todo-ish'))).toBeNull()
   })
 
   it('allows an ordinary page, including a child of a daily note', async () => {

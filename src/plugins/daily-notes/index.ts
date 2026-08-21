@@ -244,6 +244,7 @@ export {
   isDateAlias,
   isValidDateAlias,
   journalBlockId,
+  resolveDailyNoteOwner,
   todayIso,
 } from './dailyNotes.ts'
 export {

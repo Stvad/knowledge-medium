@@ -496,6 +496,35 @@ describe('importRoam', {timeout: 30_000}, () => {
     expect(claimant?.parent_id).toBe(journalBlockId(WORKSPACE))
   })
 
+  it('resolves a daily [[alias]] through the DATE when the claimant owns only the counterpart spelling', async () => {
+    // The workspace page owns the long-form alias; the import writes the ISO
+    // one. An exact-alias lookup misses it and predicts the deterministic id —
+    // but step 4 checks BOTH canonical aliases, adopts this page, and never
+    // materialises that row, so the reference would dangle. A dangling ref is
+    // stable-wrong: nothing re-parses it, so it never heals.
+    const claimantId = 'owns-long-form-only'
+    await env.repo.tx(async tx => {
+      await tx.create({
+        id: claimantId, workspaceId: WORKSPACE, parentId: null, orderKey: 'a0',
+        content: 'April 28th, 2026',
+      })
+      await tx.setProperty(claimantId, aliasesProp, ['April 28th, 2026'])
+    }, {scope: ChangeScope.BlockDefault})
+
+    await importRoam([
+      {
+        title: 'scratch-counterpart',
+        uid: 'scratchPage3',
+        children: [{string: 'see [[2026-04-28]]', uid: 'linkingBlock3'}],
+      },
+    ], env.repo, {workspaceId: WORKSPACE, currentUserId: USER_ID})
+
+    const linking = await readBlock(roamBlockId(WORKSPACE, 'linkingBlock3'))
+    const refs = JSON.parse(linking!.references_json) as {id: string, alias: string}[]
+    expect(refs).toContainEqual({id: claimantId, alias: '2026-04-28'})
+    expect(await readBlock(dailyNoteBlockId(WORKSPACE, '2026-04-28'))).toBeNull()
+  })
+
   it('resolves [[alias]] references to imported page final ids', async () => {
     await importRoam(minimalExport, env.repo, {
       workspaceId: WORKSPACE,

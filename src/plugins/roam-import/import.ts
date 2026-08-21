@@ -28,7 +28,7 @@ import {
 } from '@/data/api'
 import { addBlockTypeToProperties, aliasesProp, hasBlockType, typesProp } from '@/data/properties'
 import { PAGE_TYPE } from '@/data/blockTypes'
-import { dailyNoteBlockId, getOrCreateDailyNote } from '@/plugins/daily-notes'
+import { getOrCreateDailyNote, resolveDailyNoteOwner } from '@/plugins/daily-notes'
 import {
   roamTodoStateProp,
   statusProp,
@@ -1055,8 +1055,15 @@ const resolveAliases = async (
         // bloat today's backlinks with every block that ever mentioned
         // a relative-time word. Roam's own behavior is that `[[today]]`
         // is a regular page named "today", not the day's daily.
-        const claimed = await repo.query.aliasLookup({workspaceId, alias}).load()
-        aliasIdMap.set(alias, claimed ? claimed.id : dailyNoteBlockId(workspaceId, parsedDate.iso))
+        //
+        // Resolve through the DATE's identity, not the literal spelling we
+        // happened to encounter: a day owns two canonical aliases, and a
+        // claimant holding only the counterpart (the workspace has
+        // "April 28th, 2026"; the import says "[[2026-04-28]]") is invisible
+        // to an exact-alias lookup. Step 4 checks both and would adopt it,
+        // leaving these references on a row it never materialises.
+        const owner = await resolveDailyNoteOwner(repo, workspaceId, parsedDate.iso)
+        aliasIdMap.set(alias, owner.id)
       } else {
         const existing = await repo.query.aliasLookup({workspaceId, alias}).load()
         if (existing) {
