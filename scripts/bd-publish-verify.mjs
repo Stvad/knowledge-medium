@@ -79,11 +79,12 @@ import {
 
 // Fragments before path groups: a fragment URL also contains /pull/N, and
 // the fragment's object is what this command touched, not its parent.
-const TARGET_URL = () =>
-  new RegExp(
-    String.raw`https://github\.com/${REPO}/(?:pull/(\d+)|issues/(\d+)|releases/tag/([^\s"'\\<>)\]]+))(?:#issuecomment-(\d+)|#discussion_r(\d+)|#pullrequestreview-(\d+))?`,
-    'g',
-  )
+// A module-level /g regex is safe here because matchAll clones it and never
+// advances this object's lastIndex — unlike .test, which does.
+const TARGET_URL = new RegExp(
+  String.raw`https://github\.com/${REPO}/(?:pull/(\d+)|issues/(\d+)|releases/tag/([^\s"'\\<>)\]]+))(?:#issuecomment-(\d+)|#discussion_r(\d+)|#pullrequestreview-(\d+))?`,
+  'g',
+)
 
 const classify = (pr, issue, tag, commentId, reviewCommentId, reviewId) =>
   commentId
@@ -137,7 +138,7 @@ const topLevelUrls = output => {
 export const publishedTargets = (cmd, output) => {
   const seen = new Map()
   const collect = (text, kinds) => {
-    for (const m of text.matchAll(TARGET_URL())) {
+    for (const m of text.matchAll(TARGET_URL)) {
       const t = classify(...m.slice(1))
       if (kinds && !kinds.has(t.kind)) continue
       seen.set(JSON.stringify(t), t)
@@ -157,12 +158,12 @@ export const publishedTargets = (cmd, output) => {
 // command: the pattern only ever appears in merge output, and it names the
 // PR whose merge COMMIT — the one truly unrepairable text — can then be
 // read back from the API (#683: detection where prevention cannot reach).
-const MERGED_PR = () => /(?:\w+ and )?merged pull request ((?:[\w.-]+\/[\w.-]+)?)#(\d+)/gi
+const MERGED_PR = /(?:\w+ and )?merged pull request ((?:[\w.-]+\/[\w.-]+)?)#(\d+)/gi
 // A -R merge prints the qualified `owner/repo#N` — a foreign qualifier must
 // not read back OUR PR of that number.
 export const mergedPrNumbers = output =>
   [...new Set(
-    [...output.matchAll(MERGED_PR())].filter(m => m[1] === '' || m[1] === REPO).map(m => Number(m[2])),
+    [...output.matchAll(MERGED_PR)].filter(m => m[1] === '' || m[1] === REPO).map(m => Number(m[2])),
   )]
 
 // A tag may contain `/` (release/1.0 is a valid ref), which must travel as
@@ -211,10 +212,11 @@ export const clipContext = (s, max = 9_000) =>
 // Effects
 // ---------------------------------------------------------------------------
 
-// `--method GET` makes gh send its fields as a query string, so a command
-// carrying field flags can still be an ordinary read.
-//
 const MAX_TARGETS = 5
+const MAX_MERGED_PRS = 2
+// Defence in depth: with the shipped DEADLINE_MS the budget term below caps
+// at 6, and this would need ~160s of remaining budget to bind. It is here so
+// raising the deadline cannot uncap the echo by accident.
 const REFS_CAP = 15
 const GH_TIMEOUT = 10_000
 // Self-imposed budget well under the 120s hook timeout in settings.json, so
@@ -229,12 +231,22 @@ const DEADLINE_MS = (() => {
   return Number.isFinite(v) && v >= 0 ? v : 70_000
 })()
 
+// Memoized for the same reason fetchIssueInfo is: one invocation can name the
+// same object twice — a merge line beside the PR's own URL, a body that
+// references its own issue — and each repeat would spend another GH_TIMEOUT
+// out of the deadline every later step divides.
+const ghJsonCache = new Map()
 const ghJson = args => {
+  const key = args.join(' ')
+  if (ghJsonCache.has(key)) return ghJsonCache.get(key)
+  let value = null
   try {
-    return JSON.parse(tryRun('gh', args, { timeout: GH_TIMEOUT }) ?? 'null')
+    value = JSON.parse(tryRun('gh', args, { timeout: GH_TIMEOUT }) ?? 'null')
   } catch {
-    return null
+    value = null
   }
+  ghJsonCache.set(key, value)
+  return value
 }
 
 // Which field carries the object's "title" text, when it has one.
@@ -378,7 +390,7 @@ const hookPostPublish = () => {
   }
   const emit = notes => {
     if (!notes.length) return
-    const hookEventName = payload?.hook_event_name === 'PostToolUseFailure' ? 'PostToolUseFailure' : 'PostToolUse'
+    const hookEventName = failedEvent ? 'PostToolUseFailure' : 'PostToolUse'
     console.log(
       JSON.stringify({
         hookSpecificOutput: {
@@ -410,7 +422,7 @@ const hookPostPublish = () => {
   if (!matchesAnyPublish(cmd)) return
   const all = publishedTargets(cmd, out)
   const allMerged = matchesPrCommand(cmd) ? mergedPrNumbers(out) : []
-  const mergedPrs = allMerged.slice(0, 2)
+  const mergedPrs = allMerged.slice(0, MAX_MERGED_PRS)
   // The pre-gate let this through on the promise that THIS hook would check
   // it. When that promise cannot be kept — a response with no object URL, a
   // templated or foreign or otherwise unreadable output — say so, rather

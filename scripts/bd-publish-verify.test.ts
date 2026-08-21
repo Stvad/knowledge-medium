@@ -237,9 +237,9 @@ describe('bd-publish-verify process behavior', { timeout: 30_000 }, () => {
     const shimLog = join(repo, 'shim.log')
     writeFileSync(shimLog, '')
     for (const [apiPath, body] of Object.entries(opts.fixtures ?? {})) {
-      // 'path#2' writes the fixture served on the SECOND GET of that path
-      const [pth, nth] = apiPath.split('#')
-      const base = `fixture-${pth.replaceAll('/', '_')}${nth ? `.${nth}` : ''}.json`
+      // 'path#fail' writes the fixture served with a nonzero exit
+      const [pth, mode] = apiPath.split('#')
+      const base = `fixture-${pth.replaceAll('/', '_')}${mode ? `.${mode}` : ''}.json`
       writeFileSync(join(repo, base), JSON.stringify(body))
     }
     const shows = opts.shows ?? [[]]
@@ -274,8 +274,6 @@ describe('bd-publish-verify process behavior', { timeout: 30_000 }, () => {
         "    echo '{}'; exit 0",
         '  fi',
         `  name=$(echo "$2" | tr '/' '_')`,
-        `  cnt=$(cat "${repo}/getcount-$name" 2>/dev/null || echo 0); cnt=$((cnt+1)); echo $cnt > "${repo}/getcount-$name"`,
-        `  if [ -f "${repo}/fixture-$name.$cnt.json" ]; then cat "${repo}/fixture-$name.$cnt.json"; exit 0; fi`,
         `  if [ -f "${repo}/fixture-$name.fail.json" ]; then cat "${repo}/fixture-$name.fail.json"; exit 1; fi`,
         `  f="${repo}/fixture-$name.json"`,
         '  if [ -f "$f" ]; then cat "$f"; exit 0; fi',
@@ -424,6 +422,33 @@ describe('bd-publish-verify process behavior', { timeout: 30_000 }, () => {
     expect(context(r)).toContain('ALREADY acted')
     // the PR's own number is noise, not a reference
     expect(context(r)).not.toContain('#652 →')
+  })
+
+  // One invocation names the same object twice whenever a merge prints both
+  // the PR's URL and its success line: the target scan reads it, then the
+  // merge-commit leg reads it again. Each repeat spends another GH_TIMEOUT
+  // out of the deadline every later step divides into.
+  it('fetches an object named twice in one output only once', () => {
+    const sha = 'bb22cc33dd44ee55ff6677889900aabbccddeeff'
+    const { hook, shimCalls } = makeRepo({
+      fixtures: {
+        'repos/Stvad/knowledge-medium/pulls/652': {
+          html_url: url('pull/652'),
+          title: 'T',
+          body: '',
+          merged: true,
+          merge_commit_sha: sha,
+          base: { ref: 'master', repo: { default_branch: 'master' } },
+        },
+        [`repos/Stvad/knowledge-medium/commits/${sha}`]: { commit: { message: 'tip (#652)' } },
+      },
+    })
+    const r = hook('gh pr merge 652 --squash', `${url('pull/652')}\n✓ Merged pull request #652 (tip)`)
+    expect(r.status).toBe(0)
+    const fetches = shimCalls()
+      .split('\n')
+      .filter(l => l === 'gh api repos/Stvad/knowledge-medium/pulls/652')
+    expect(fetches.length).toBe(1)
   })
 
   // GitHub applies closing keywords only on the default branch. Merged into
