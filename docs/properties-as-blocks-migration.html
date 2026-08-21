@@ -752,7 +752,7 @@
   <code>applyPropertyDefinitionSynthesis</code>
   (<code>src/data/internals/propertyDefinitionSynthesis.ts</code>) mint a
   user-origin definition per definition-less cell key, at a deterministic id, in
-  one transaction, before the flip. Three divergences from the text in
+  one transaction, before the flip. Four divergences from the text in
   <a href="#s7">&sect;7</a> and <a href="#s8">&sect;8</a>, recorded here rather
   than edited into them:
   <ul>
@@ -786,6 +786,12 @@
       <code>propertySchemaNameRejection</code>'s other rule &mdash; the name is
       rendered as <code>[[name]]</code> wherever a definition is addressed by name, and
       one shaped like <code>((id))</code> reads as a reference to another block.</li>
+    <li><strong>Minted VISIBLE, where &sect;9 says <code>hidden</code> by default until
+      triaged</strong> (owner decision, and it reverses the first cut of this PR too).
+      The reasoning ran backwards: a definition nobody chose exists precisely so a human
+      looks at it, and a hidden property is one nobody is ever prompted to look at.
+      &sect;9's line at &ldquo;hidden by default until triaged&rdquo; is superseded by
+      this entry, not by an edit there.</li>
     <li><strong>E2EE is refused outright rather than given an HMAC namespace.</strong>
       &sect;8 calls for deriving the namespace from workspace secret key material. Until
       that exists, synthesis declines the workspace, which costs nothing today because
