@@ -215,7 +215,6 @@ describe('clipContext', () => {
 // Measured ~200ms per spawn solo; budgeted for the 6x load stretch.
 describe('bd-publish-verify process behavior', { timeout: 30_000 }, () => {
   const script = fileURLToPath(new URL('./bd-publish-verify.mjs', import.meta.url))
-  const fixtureName = (apiPath: string) => `fixture-${apiPath.replaceAll('/', '_')}.json`
   const patchName = (apiPath: string) => `patch-input-${apiPath.replaceAll('/', '_')}.json`
 
   const makeRepo = (opts: {
