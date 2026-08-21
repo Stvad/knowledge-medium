@@ -1129,6 +1129,8 @@ describe('hookPrePr process behavior', { timeout: 20_000 }, () => {
     expect(fromFile.status).toBe(2)
     expect(fromFile.stderr).toContain('cannot fully read')
     expect(hook('cat msg.txt | gh pr merge 12 -F -').status).toBe(2)
+    // the CLI accepts the attached value form too
+    expect(hook('gh pr merge 12 --squash -Fmsgfile').status).toBe(2)
     expect(hook('gh api --silent repos/Stvad/knowledge-medium/issues/1/comments --input payload.json').status).toBe(2)
     expect(hook(`gh api graphql -f query='mutation { x }' -F vars=@vars.json`).status).toBe(2)
     // the mutation keyword may live entirely in the external payload — the
@@ -1210,10 +1212,8 @@ describe('hookPrePr process behavior', { timeout: 20_000 }, () => {
   })
 
   // An api mutation with a response-hiding output flag is invisible to the
-  // verifier — its READABLE inline text gets the tables here instead of a
-  // blanket block (a blanket block offered the escape without ever showing
-  // the refs; round-6 finding). (--jq earned its membership live: a reply
-  // posted with `--jq .id` carried a bead id straight past the verifier.)
+  // verifier — its READABLE inline text gets the tables here; a blanket
+  // block would offer the escape without ever showing the refs.
   it('echoes readable text of response-hiding api mutations, passes clean ones', () => {
     const { hook } = makeRepo({ dbReady: true, ghIssues: { 653: { title: 'Real GC failure', state: 'open' } } })
     const r = hook('gh api --silent -X PATCH repos/Stvad/knowledge-medium/pulls/12 -f body="relates to #653"')

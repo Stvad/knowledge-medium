@@ -1076,8 +1076,11 @@ const hookPrePr = () => {
   const redirected = /(?<!2)>(?!&2)/.test(sk)
   const blind = matchesUnrepairableCommand(cmd) || graphqlApi || opaqueApi || ((isPublish || apiPublish) && redirected)
   if (blind && !(allowsIssueRefs(cmd) && allowsBeadIds(cmd))) {
+    // -F is matched without a trailing boundary: the CLI accepts the
+    // ATTACHED value form (-Fmsgfile), which is outside-command text too.
     const textOutsideCommand =
-      /(?<![\w-])(?:--body-file|--file|--input|-F)\b|[$`]/.test(cmd) || (matchesApiPublish(cmd) && /@/.test(cmd))
+      /(?<![\w-])(?:--body-file|--file|--input)\b|(?<![\w-])-F|[$`]/.test(cmd) ||
+      (matchesApiPublish(cmd) && /@/.test(cmd))
     if (textOutsideCommand) {
       console.error(
         'This publish (merge/review/close/graphql/hidden-output) carries text this gate cannot fully read from the command — a file or payload flag, an @-reference, or shell expansion — and nothing verifies it after publication either. Publish literal inline text (readable text gets verified and echoed) — or, after checking every reference and bead id in it yourself, re-run with KM_ISSUE_REFS_OK=1 KM_ALLOW_BEAD_IDS=1 prefixed.',
