@@ -143,6 +143,40 @@ describe('getOrCreateKernelPage', () => {
     })
   })
 
+  /** Bootstrapping a kernel page is machinery, never a user edit — one test per
+   *  writing path, because each passes its own transaction options and losing
+   *  either is invisible to the other. What an undo entry here costs: a cmd-Z
+   *  aimed at the user's own edit soft-deletes the page their content hangs
+   *  under, and a caller that writes with `skipUndo` of its own is left holding
+   *  one entry it never made. */
+  describe('undo', () => {
+    it('records nothing for creating a page', async () => {
+      await getOrCreateKernelPage(env.repo, WS, {
+        namespace: FOO_PAGE_NS, alias: 'Foo', markerType: FOO_PAGE_TYPE,
+      })
+
+      expect(env.repo.undoManager.depths(ChangeScope.BlockDefault))
+        .toEqual({undo: 0, redo: 0})
+    })
+
+    it('records nothing for repairing one', async () => {
+      const id = kernelPageBlockId(WS, FOO_PAGE_NS)
+      const snapshot = env.repo.snapshotTypeRegistries()
+      await env.repo.tx(async tx => {
+        await tx.create({id, workspaceId: WS, parentId: null, orderKey: 'a0', content: 'Foo'})
+        await env.repo.addTypeInTx(tx, id, PAGE_TYPE, {}, snapshot)
+      }, {scope: ChangeScope.BlockDefault})
+      env.repo.undoManager.clear()
+
+      await getOrCreateKernelPage(env.repo, WS, {
+        namespace: FOO_PAGE_NS, alias: 'Foo', markerType: FOO_PAGE_TYPE,
+      })
+
+      expect(env.repo.undoManager.depths(ChangeScope.BlockDefault))
+        .toEqual({undo: 0, redo: 0})
+    })
+  })
+
   describe('on a read-only workspace', () => {
     const readOnlyRepo = () => {
       const { repo } = createTestRepo({
