@@ -11,7 +11,8 @@
  *
  *   SUPABASE_URL=... ANON_KEY=... SUPABASE_SECRET_KEY=... pnpm rls:verify-properties-flip
  *
- * The contract (PR #386's migration as narrowed by the owner-flip successor):
+ * The contract (PR #386's migration, narrowed by the owner-flip successor and
+ * relaxed for e2ee by the namespace-derivation successor):
  *   - the workspace OWNER may advance 'cell' -> 'children', and only that step,
  *     where "owner" is a claim an editor cannot manufacture — see the
  *     self-promotion case, which is the one this contract actually rests on;
@@ -19,7 +20,11 @@
  *     it retires the cell as a synced fallback, safe only once every device has
  *     migrated, which no single client can attest to;
  *   - forward-only for everyone, service role included;
- *   - e2ee workspaces are refused outright, service role included.
+ *   - e2ee workspaces get exactly these rules and no exemption. They were
+ *     refused outright until the namespace derivation landed; the refusal sat
+ *     OUTSIDE the client branch, so its removal is asserted on BOTH paths —
+ *     half of it could otherwise still be there and every owner-driven
+ *     assertion would stay green.
  *
  * TWO THINGS HERE ARE EASY TO GET WRONG AND ARE ASSERTED EXPLICITLY.
  *
@@ -95,10 +100,10 @@ const advance = async (client: SupabaseClient, id: string, to: string) => {
   return {code: error?.code ?? null, message: error?.message ?? '', stored: await stateOf(id)}
 }
 
-/** The same, as the SERVICE ROLE. Separate because the two rules the operator
- *  path must still obey — forward-only and the e2ee refusal — are the ones a
- *  careless narrowing would move inside the client branch, and every assertion
- *  below driven through `owner.client` would stay green if it did. */
+/** The same, as the SERVICE ROLE. Separate because forward-only is a rule the
+ *  operator path must still obey, and a careless narrowing would move it inside
+ *  the client branch — every assertion below driven through `owner.client`
+ *  would stay green if it did. */
 const advanceAsAdmin = async (id: string, to: string) => {
   const {error} = await admin.from('workspaces')
     .update({properties_migration: to}).eq('id', id)
@@ -206,19 +211,37 @@ async function run() {
   check('owner cell-off -> children DENIED (backwards)', denied(backOff, 'cell-off'),
     `code ${backOff.code ?? 'none'}, stored ${backOff.stored}`)
 
-  console.log('\n— e2ee is refused outright —')
+  console.log('\n— e2ee gets the same rules, not an exemption —')
+  // Synthesis derives an encrypted workspace's definition-id namespace from its
+  // own key material now, so a name-derived id is no longer readable by the
+  // server and the blanket refusal is gone. What must NOT have gone with it is
+  // every other rule, so the two client-path refusals are re-asserted here
+  // against an e2ee workspace specifically — a relaxation written as "skip the
+  // checks when encrypted" would pass the positive case alone.
   const e2eeFlip = await advance(owner.client, e2ee, 'children')
-  check('owner cannot flip an e2ee workspace', denied(e2eeFlip, 'cell'),
+  check('owner advances an e2ee workspace cell -> children',
+    e2eeFlip.code === null && e2eeFlip.stored === 'children',
     `code ${e2eeFlip.code ?? 'none'}, stored ${e2eeFlip.stored}`)
+  const e2eeBack = await advance(owner.client, e2ee, 'cell')
+  check('owner e2ee children -> cell DENIED (backwards)', denied(e2eeBack, 'children'),
+    `code ${e2eeBack.code ?? 'none'}, stored ${e2eeBack.stored}`)
+  const e2eeOff = await advance(owner.client, e2ee, 'cell-off')
+  check('owner e2ee children -> cell-off DENIED (still operator-only)',
+    denied(e2eeOff, 'children'), `code ${e2eeOff.code ?? 'none'}, stored ${e2eeOff.stored}`)
 
   console.log('\n— the operator path obeys the rules that are not client-only —')
-  // The service role is what the runbook uses, so these two are the invariants
-  // that outlive any client gate. Driven through `admin`, not `owner.client`.
+  // The service role is what the runbook uses, so these are the invariants that
+  // outlive any client gate. Driven through `admin`, not `owner.client`.
   const adminBack = await advanceAsAdmin(children, 'cell')
   check('service role cannot go backwards', denied(adminBack, 'children'),
     `code ${adminBack.code ?? 'none'}, stored ${adminBack.stored}`)
-  const adminE2ee = await advanceAsAdmin(e2ee, 'children')
-  check('service role cannot flip an e2ee workspace', denied(adminE2ee, 'cell'),
+  // The other half of the removal: the old refusal fired for every role, so a
+  // relaxation narrowed to the client branch would leave the operator stuck.
+  // `e2ee` is at 'children' by now, so this is also the only cell-off assertion
+  // that runs against an encrypted workspace.
+  const adminE2ee = await advanceAsAdmin(e2ee, 'cell-off')
+  check('service role advances an e2ee workspace children -> cell-off',
+    adminE2ee.code === null && adminE2ee.stored === 'cell-off',
     `code ${adminE2ee.code ?? 'none'}, stored ${adminE2ee.stored}`)
   // And the step a client may NOT take, the operator may — otherwise the two
   // assertions above would pass against a trigger that refused the service role
