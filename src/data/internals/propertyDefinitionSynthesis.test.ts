@@ -853,37 +853,47 @@ describe('applyPropertyDefinitionSynthesis: the id is occupied, or the key stopp
     expect(again).toMatchObject({created: 0, converged: 1, skipped: []})
   })
 
-  it('skips a converged definition whose preset an extension has replaced', async () => {
-    // The projector will rebuild this row with the EXTENSION's codec, so
-    // publishing the kernel one — and backfilling every existing cell under it
-    // — would encode the children under behaviour the definition does not mean.
-    // Same question the mint ladder asks, asked on the other path.
-    await rawCell('b1', {'demo:orphan': 'hello'})
-    const plan = await planFor()
-    await applyPropertyDefinitionSynthesis(repo, plan)
-    replaceStringPreset()
+  it('publishes a converged definition with the EXTENSION codec, not the kernel one', async () => {
+    // The projector will rebuild this row with the extension's codec, so
+    // publishing the kernel one is what created the divergence. Building from
+    // the runtime presets makes the two the same by construction — which is why
+    // the converged path no longer has to refuse a replaced preset at all.
+    const {plan, id} = await mintedOrphan()
+    // Observably different, not a shallow copy: a copy shares `build`, so the
+    // codec it produces is identical to the kernel's and the assertion would
+    // hold whichever core was used.
+    const kernel = repo.valuePresetCores.get('string')!
+    const replacement = {...kernel, build: () => ({...kernel.build(undefined as never),
+                                                  extensionMarker: true})}
+    vi.spyOn(repo, 'valuePresetCores', 'get').mockReturnValue(
+      new Map([...repo.valuePresetCores, ['string', replacement as never]]))
+    const publish = vi.spyOn(repo.userSchemas, 'appendUserSchema')
     blindTheProjections()
 
     const result = await applyPropertyDefinitionSynthesis(repo, plan)
 
-    expect(result).toMatchObject({created: 0, converged: 0})
-    expect(result.skipped.map(s => s.key)).toEqual(['demo:orphan'])
+    expect(result).toMatchObject({created: 0, converged: 1, skipped: []})
+    expect(publish).toHaveBeenCalledWith(
+      expect.objectContaining({codec: expect.objectContaining({extensionMarker: true})}), id, WS)
   })
 
-  it('skips a converged definition whose preset carries config, instead of throwing', async () => {
-    // `schemaFor` builds with `build(undefined)`; for `enum` that dereferences
-    // `config.options` and throws, which would roll back every OTHER key's
-    // definition in the same transaction. Skipping costs a re-run once the
-    // projector catches up.
+  it('publishes a converged definition whose preset carries config', async () => {
+    // Built by the same function the projector uses, so a config-carrying
+    // preset is republished faithfully rather than skipped. The earlier
+    // hand-rolled builder called `build(undefined)`, which for `enum`
+    // dereferences `config.options` and throws — so it had to refuse the whole
+    // class to avoid rolling back every other key's definition.
     const {plan, id} = await mintedOrphan()
     await repo.tx(async tx => { await tx.setProperty(id, presetIdProp, 'enum') },
                   {scope: ChangeScope.BlockDefault, description: 'retype'})
+    const publish = vi.spyOn(repo.userSchemas, 'appendUserSchema')
     blindTheProjections()
 
     const result = await applyPropertyDefinitionSynthesis(repo, plan)
 
-    expect(result).toMatchObject({created: 0, converged: 0})
-    expect(result.skipped[0]!.reason).toMatch(/cannot reproduce/)
+    expect(result).toMatchObject({created: 0, converged: 1, skipped: []})
+    expect(publish).toHaveBeenCalledWith(
+      expect.objectContaining({name: 'demo:orphan'}), id, WS)
   })
 
   it('publishes a converged definition with the block\'s own scope, not this pass\'s default', async () => {

@@ -83,6 +83,31 @@ export const buildUnboundPropertySchemas = (
  * explicit during the cutover: block-built behavior replaces transitional
  * direct registrations, then a unique local declaration replaces its block
  * fallback. B2 adds name-winner filtering before boundary use. */
+/**
+ * The name a definition row answers to — the ONE spelling of this rule.
+ *
+ * A row whose `seedKey` is still DECLARED answers to the seed's declared name:
+ * seeds are code-owned and non-renamable, so a stored name that has drifted (an
+ * older client, an import, a sync from such a device) must not be allowed to
+ * desync the indexes built from it.
+ *
+ * Everyone else answers to their stored name — including a DROPPED duplicate
+ * seed's row, whose `seedKey` is absent from `seedsByKey` because `indexSeeds`
+ * kept only the first of two same-name seeds. That row is not a current seed's
+ * row, so it has no declared name to borrow; it keeps the one it stores.
+ *
+ * That last case is why this is shared rather than restated. A hand-rolled copy
+ * in the synthesis pass read it as "no name at all", which made a live rival
+ * invisible to the check that exists to find rivals.
+ */
+export const effectivePropertyDefinitionName = (
+  row: {readonly name: string; readonly seedKey?: string},
+  seedsByKey: ReadonlyMap<string, {readonly name: string}>,
+): string => {
+  const declared = row.seedKey !== undefined ? seedsByKey.get(row.seedKey) : undefined
+  return declared?.name ?? row.name
+}
+
 export const buildPropertyDefinitionRegistry = (
   args: BuildPropertyDefinitionRegistryArgs,
 ): PropertyDefinitionRegistrySnapshot => {
@@ -99,8 +124,8 @@ export const buildPropertyDefinitionRegistry = (
     // (an older client, an import, or a sync from such a device) cannot desync
     // the structural type/alias membership index or drop the field from a
     // static type's panel section.
-    const declared = raw.seedKey ? seedsByKey.get(raw.seedKey) : undefined
-    const definition = declared && declared.name !== raw.name ? {...raw, name: declared.name} : raw
+    const effective = effectivePropertyDefinitionName(raw, seedsByKey)
+    const definition = effective !== raw.name ? {...raw, name: effective} : raw
     definitionsByFieldId.set(definition.fieldId, definition)
     if (projected.schema) schemasByFieldId.set(definition.fieldId, projected.schema)
     // v1: code-owned seeds are unshadowable. A row competes for its name only if

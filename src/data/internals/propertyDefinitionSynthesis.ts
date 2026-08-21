@@ -45,15 +45,18 @@ import { parsePropertyDefinitionMetadata } from '@/data/propertyDefinitionMetada
 import {
   presetConfigProp,
   presetIdProp,
-  propertyDefaultProp,
   propertyHiddenProp,
   propertyNameProp,
 } from '@/data/properties'
 import { getOrCreatePropertiesPage, propertiesPageBlockId } from '@/data/propertiesPage'
 import { peekRowProperty } from '@/data/rowProperty'
 import { isGrammarShapedLabel } from '@/data/referenceBlock'
-import type { PropertyDefinitionRegistrySnapshot } from '@/data/propertyDefinitionRegistry'
+import {
+  effectivePropertyDefinitionName,
+  type PropertyDefinitionRegistrySnapshot,
+} from '@/data/propertyDefinitionRegistry'
 import type { Repo } from '@/data/repo'
+import { tryBuildSchema } from '@/data/userSchemasService'
 import { readWorkspaceEncryptionMode } from '@/data/workspaceSchema'
 import { getModePin } from '@/sync/keys/modePin'
 import { jsonValuesEqual } from '@/data/internals/jsonCanonical'
@@ -552,6 +555,14 @@ const schemaFor = (key: string, preset: AnyValuePresetCore): AnyPropertySchema =
   changeScope: ChangeScope.BlockDefault,
 })
 
+/** The verdict {@link nameHolding} returns — see it for why this is one
+ *  question rather than a check per authority. */
+type NameHolding =
+  | {kind: 'seed-reserved'}
+  | {kind: 'vacant'}
+  | {kind: 'held'; fieldId: string; block: BlockData; resolvable: boolean}
+  | {kind: 'contested'; fieldIds: string[]}
+
 export interface SynthesisResult {
   created: number
   /** Already this key's definition when we got here — another device, or an
@@ -569,72 +580,22 @@ export interface SynthesisResult {
   skipped: Array<{key: string; reason: string}>
 }
 
-/** The kernel preset core a live definition block stores, when it is one this
- *  pass can reproduce faithfully — undefined otherwise, since the point of
- *  reading it is to publish the block's OWN behavior, not a guess.
+/** The name a live definition row currently answers to, or undefined when the
+ *  row is no longer a usable definition at all (un-typed, metadata that stopped
+ *  parsing).
  *
- *  CONFIG-LESS ONLY — the load-bearing clause: {@link schemaFor} builds with
- *  `build(undefined)`, which THROWS for `enum`/`strict-enum` (dereferences
- *  `config.options`, rolling back every other key's definition in the same
- *  transaction) and silently drops target types for `ref`/`refList`. Skipping
- *  such a definition costs only a re-run once the projector catches up. An id
- *  an extension has REPLACED is the same situation — see {@link isKernelPreset}. */
-const storedPresetCore = (block: BlockData, repo: Repo): AnyValuePresetCore | undefined => {
-  const raw = peekRowProperty(block, presetIdProp)
-  if (typeof raw !== 'string') return undefined
-  const core = (kernelValuePresetCoresById as Record<string, AnyValuePresetCore>)[raw]
-  if (core === undefined || core.configCodec !== undefined) return undefined
-  return isKernelPreset(repo, raw) ? core : undefined
-}
-
-/** The definition block's own stored default, decoded through the preset it
- *  declares — or the preset's default when there is none, or when the stored
- *  one no longer fits (a stale value left by a preset change, which is a stale
- *  VALUE rather than a broken definition; `userSchemasService` treats it the
- *  same way). */
-const storedDefaultValue = (block: BlockData, preset: AnyValuePresetCore): unknown => {
-  const raw = block.properties[propertyDefaultProp.name]
-  // Stated rather than left to the catch below, which reaches the same answer
-  // for all four inferrable presets today — three throw on `undefined` and
-  // `raw-json`'s own default IS undefined. Deleting this changes nothing and no
-  // test fails; it is here so "no stored default" reads as a case rather than
-  // as an exception.
-  if (raw === undefined) return preset.defaultValue
-  try {
-    return preset.build(undefined as never).decode(raw)
-  } catch {
-    return preset.defaultValue
-  }
-}
-
-/** The name a live definition row currently answers to, computed the way
- *  `buildPropertyDefinitionRegistry` computes it: a valid seed row answers to
- *  the seed's DECLARED name, everyone else to their stored one.
- *
- *  Read from the ROW, not the registry — the caller is checking a fact the
- *  registry may be stale about — but through the SAME rule, or a seed row
- *  whose stored name has drifted would read as serving a name nothing uses.
- *  Undefined when the row is no longer a usable definition at all (deleted,
- *  un-typed, metadata that stopped parsing).
- *
- *  The seed branch is UNPINNED, for the same reason as the rival filter's:
- *  seed names are non-renamable through the API, so drift arrives only by raw
- *  write or sync and neither reaches the test harness's projector. The rule is
- *  `buildPropertyDefinitionRegistry`'s; this is the third site that needs it. */
+ *  Read from the ROW rather than the registry — the caller is checking a fact
+ *  the registry may be stale about — but through the registry's OWN rule, so
+ *  the two cannot disagree. They did: this used to read a dropped duplicate
+ *  seed's row as having no name, where the registry gives it its stored one,
+ *  which made a live rival invisible to the check whose job is finding rivals. */
 const effectiveDefinitionName = (
   block: BlockData,
   registry: PropertyDefinitionRegistrySnapshot,
 ): string | undefined => {
   const metadata = parsePropertyDefinitionMetadata(block)
   if (metadata === null) return undefined
-  // The rewrite applies to SEED rows only. For an ordinary user definition the
-  // stored name IS the effective one — and it is fresher than the registry's
-  // copy, which is the direction that matters: a user definition renamed TO
-  // this key after the plan is a real rival that the registry still files under
-  // its old name.
-  return metadata.seedKey === undefined
-    ? metadata.name
-    : registry.seedsByKey.get(metadata.seedKey)?.name
+  return effectivePropertyDefinitionName(metadata, registry.seedsByKey)
 }
 
 /** Does this row currently build behaviour, or only metadata?
@@ -735,6 +696,54 @@ export const applyPropertyDefinitionSynthesis = async (
     const liveDefinitionNames = await tx.livePropertyDefinitionNames(
       workspaceId, plan.candidates.map(candidate => candidate.key),
     )
+    /** Who currently holds `name`, and can this pass vouch for that answer?
+     *
+     *  ONE question with ONE answer, asked once per candidate. Four authorities
+     *  disagree about it and each is wrong in a different direction: the
+     *  resolver is a frozen projection that LAGS; the registry lags AND applies
+     *  the seed-name rewrite; `blocks` is current but ignorant of that rewrite;
+     *  and a code seed can hold a name while publishing no schema. Every branch
+     *  below reads this verdict rather than re-deriving from those sources —
+     *  four review rounds' worth of rivals came from derivations that each
+     *  consulted a different subset of them.
+     *
+     *  No id is ever excluded here. The mint path used to drop its own
+     *  deterministic id, which is right only where that id is about to be
+     *  WRITTEN; as a question about who holds a NAME it hid the one contender
+     *  guaranteed to win — `systemMint` births that row at `createdAt` 0 and
+     *  the registry sorts ascending. "Is this id ours to write through?" is a
+     *  different question and stays where it was, in the occupancy switch. */
+    const nameHolding = async (name: string): Promise<NameHolding> => {
+      if (registry.seedsByName.has(name)) return {kind: 'seed-reserved'}
+      const holders = new Map<string, BlockData>()
+      const resolution = resolver.resolve(name)
+      const selected = resolution.status === 'resolved' ? resolution.schema.fieldId : null
+      // The resolver's pick is consulted even when `blocks` does not list it
+      // under this name: a seed row whose STORED name has drifted answers to the
+      // declared one, and only the effective-name rule can see that.
+      if (selected !== null) {
+        const row = await tx.get(selected)
+        if (row !== null && effectiveDefinitionName(row, registry) === name) {
+          holders.set(selected, row)
+        }
+      }
+      for (const other of liveDefinitionNames.get(name) ?? []) {
+        if (holders.has(other)) continue
+        const row = await tx.get(other)
+        if (row === null) continue
+        // The query already established that this live, typed row STORES this
+        // name, so only a known other effective name moves it off — an
+        // unparseable row keeps the name it stores.
+        const effective = effectiveDefinitionName(row, registry)
+        if (effective === undefined || effective === name) holders.set(other, row)
+      }
+      if (holders.size === 0) return {kind: 'vacant'}
+      if (holders.size > 1) return {kind: 'contested', fieldIds: [...holders.keys()]}
+      const [fieldId, block] = [...holders][0]!
+      return {kind: 'held', fieldId, block,
+              resolvable: fieldId === selected && providesSchema(block, repo)}
+    }
+
     for (const candidate of plan.candidates) {
       // The kernel core BY IDENTITY, never `repo.valuePresetCores.get(id)`:
       // that map is a `keyedMapFacet` keyed on preset id, so an extension
@@ -745,91 +754,72 @@ export const applyPropertyDefinitionSynthesis = async (
       const preset = kernelValuePresetCoresById[candidate.presetId]
       const id = synthesizedPropertyDefinitionBlockId(workspaceId, candidate.key)
 
-      // Has the key gained a definition since the plan was taken (whoever's)?
-      // Not answerable from `tx.get(id)`: OUR id is vacant no matter who else
-      // claimed the name. So resolve by NAME, then re-verify the resolver's
-      // answer against the row directly — the resolver is a projection and may
-      // be one tick out of date (deleted, renamed, un-typed, or broken
-      // metadata since). Located by FIELD ID and judged by EFFECTIVE name so a
-      // seed-backed row whose stored name has drifted is still found and still
-      // recognised as serving this key.
-      // Every row that currently HOLDS this name, minus the ones the caller
-      // already accounts for. Asked of the DATABASE (the registry lags a
-      // sync-applied definition until the projector ticks — see
-      // `Tx.livePropertyDefinitionNames`), so it also catches a definition that
-      // PARSED but supplies no behaviour: absent from `schemas`, real in
-      // `blocks`.
-      //
-      // `effective` is the seed-rewrite rule from `effectiveDefinitionName`
-      // above — without it a healthy seed row sitting under a drifted stored
-      // name would read as a rival and block the flip forever. UNPINNED for the
-      // same reason as there: the drift path (raw write or sync) never reaches
-      // the test harness's projector.
-      const liveRivals = async (...accounted: string[]): Promise<string[]> => {
-        const found: string[] = []
-        for (const other of liveDefinitionNames.get(candidate.key) ?? []) {
-          if (accounted.includes(other)) continue
-          const row = await tx.get(other)
-          if (row === null) continue
-          const effective = effectiveDefinitionName(row, registry)
-          if (effective === undefined || effective === candidate.key) found.push(other)
-        }
-        return found
-      }
-
-      const resolution = resolver.resolve(candidate.key)
-      if (resolution.status === 'resolved') {
-        const selected = await tx.get(resolution.schema.fieldId)
-        if (selected !== null
-            && effectiveDefinitionName(selected, registry) === candidate.key
-            && providesSchema(selected, repo)) {
-          // Converged only if the row the projection picked is the ONLY one
-          // holding the name. The winner is decided by creation time, so a
-          // second row the projector has not reached yet can take the name on
-          // the next rebuild — and the backfill is about to bind field rows to
-          // whichever fieldId is published NOW. Vouching here strands them on
-          // the loser; deferring costs a re-run once the projector catches up.
-          //
-          // ONLY the selection is excluded — NOT our deterministic id, which the
-          // mint path below excludes because that is where it is about to write.
-          // Here we write nothing, and a sync-applied row at that id is the one
-          // contender guaranteed to win: `systemMint` births it at `createdAt`
-          // 0 and `buildPropertyDefinitionRegistry` sorts ascending.
-          const contenders = await liveRivals(resolution.schema.fieldId)
-          if (contenders.length === 0) {
-            converged += 1
-            continue
-          }
-          skipped.push({key: candidate.key,
-                        reason: `more than one definition block holds this name (${
-                          [resolution.schema.fieldId, ...contenders].join(', ')}); the winner is `
-                          + 'decided by creation time, so resolve the duplicate before migrating'})
-          continue
-        }
-      }
-      // DEFENCE IN DEPTH — no test pins it; the resolve check above already
-      // catches every seed whose own definition is healthy. What's left is a
-      // kept seed that HOLDS the name but publishes no schema (its preset comes
-      // from an extension not loaded here, per `audit-properties`'s common
-      // case): the name resolves nothing, yet `buildPropertyDefinitionRegistry`
-      // still excludes any user definition colliding with it — minting there
-      // would report success over a key that can never resolve.
-      if (registry.seedsByName.has(candidate.key)) {
+      const holding = await nameHolding(candidate.key)
+      if (holding.kind === 'seed-reserved') {
+        // DEFENCE IN DEPTH — no test pins it, because a seed whose own
+        // definition is healthy resolves and comes back `held`. What is left is
+        // a kept seed that HOLDS the name but publishes no schema (its preset
+        // comes from an extension not loaded here, per `audit-properties`'s
+        // common case): nothing resolves, yet `buildPropertyDefinitionRegistry`
+        // still excludes any user definition colliding with the seed's name, so
+        // minting would report success over a key that can never resolve.
         skipped.push({key: candidate.key,
                       reason: 'a code seed declares this name, so a user definition for it can '
                         + 'never resolve — install or repair the seed\'s own definition instead'})
         continue
       }
-
-      // Skipping here BLOCKS the flip, where the plan-time equivalent
-      // (`brokenDefinitions`) deliberately does not: a broken definition the
-      // operator saw and consented to in the dialog is different from one that
-      // arrived after they confirmed.
-      const rivals = await liveRivals(id)
-      if (rivals.length > 0) {
+      if (holding.kind === 'contested') {
+        // The winner is decided by creation time, and the backfill is about to
+        // bind field rows to whichever fieldId is published NOW — so a second
+        // row the projection has not reached can take the name afterwards and
+        // strand them on the loser.
         skipped.push({key: candidate.key,
-                      reason: 'a definition block for this name already exists and supplies '
-                        + 'no behavior — repair it rather than adding a second'})
+                      reason: `more than one definition block holds this name (${
+                        holding.fieldIds.join(', ')}); the winner is decided by creation time, `
+                        + 'so resolve the duplicate before migrating'})
+        continue
+      }
+      if (holding.kind === 'held') {
+        if (holding.resolvable) {
+          converged += 1
+          continue
+        }
+        // Real in `blocks`, but the projection has not published it — so the
+        // backfill, which freezes one resolver, would skip the key. Only OUR
+        // block can be published from here; anyone else's we cannot reproduce
+        // faithfully, and a second definition would collide rather than repair.
+        if (holding.fieldId !== id) {
+          skipped.push({key: candidate.key,
+                        reason: 'a definition block for this name already exists and supplies '
+                          + 'no behavior — repair it rather than adding a second'})
+          continue
+        }
+        // Built by the SAME function the projector uses, from the RUNTIME
+        // presets — so what this publishes now and what the projector rebuilds
+        // a tick later are the same schema, which is the entire point of
+        // publishing early. Nothing about the block is re-derived here: its
+        // preset, its stored config, its stored default and its change scope
+        // are all the block's own, whatever they are.
+        //
+        // Note the asymmetry with the mint path below, which is deliberate.
+        // There we persist a preset id chosen by proving it against the stored
+        // values, so it must be the kernel core BY IDENTITY. Here the choice
+        // was already made — by the user, or by whichever device wrote this
+        // definition — and our job is to report it faithfully, not to re-judge
+        // it. An extension-provided or config-carrying preset is therefore
+        // published rather than skipped.
+        const storedMetadata = parsePropertyDefinitionMetadata(holding.block)
+        const storedSchema = storedMetadata === null
+          ? null
+          : tryBuildSchema(holding.block, repo.valuePresetCores, storedMetadata)
+        if (storedSchema === null) {
+          skipped.push({key: candidate.key,
+                        reason: `block ${id} defines this key with a preset this device cannot `
+                          + 'build (its plugin may not be loaded); re-run once it is registered'})
+          continue
+        }
+        converged += 1
+        registrations.push({blockId: id, schema: storedSchema})
         continue
       }
 
@@ -847,38 +837,6 @@ export const applyPropertyDefinitionSynthesis = async (
         // whatever it became, and the key genuinely still has nothing.
         skipped.push({key: candidate.key,
                       reason: `block ${id} exists but is no longer this key's definition`})
-        continue
-      }
-      if (occupancy.verdict === 'ours') {
-        // Already here and carries this key's name, yet didn't resolve above —
-        // the registry is a projection that hasn't caught up (another device's
-        // row just arrived, or an earlier run of this gesture). Nothing to
-        // write; publishing is the whole fix.
-        //
-        // Published from the BLOCK's own preset, never the plan's inferred one:
-        // the block may have been retyped deliberately, and publishing the
-        // plan's guess would have the backfill read history under one codec
-        // while the projector replaces it with another moments later. If the
-        // stored preset isn't one this pass can reproduce, skip rather than
-        // guess — the flip refuses and a re-run picks it up once caught up.
-        const storedPreset = storedPresetCore(occupancy.block, repo)
-        const storedMetadata = parsePropertyDefinitionMetadata(occupancy.block)
-        if (!storedPreset || !storedMetadata) {
-          skipped.push({key: candidate.key,
-                        reason: `block ${id} defines this key with a preset this pass cannot `
-                          + 'reproduce; re-run once it is registered'})
-          continue
-        }
-        converged += 1
-        // The block's OWN behavior, not this pass's defaults. Publishing
-        // `BlockDefault` and the preset's default for a definition that stores
-        // `UiState` and a default of its own would route writes to sync and
-        // apply the wrong undo policy until the projector replaces it.
-        registrations.push({blockId: id, schema: {
-          ...schemaFor(candidate.key, storedPreset),
-          changeScope: storedMetadata.changeScope,
-          defaultValue: storedDefaultValue(occupancy.block, storedPreset),
-        }})
         continue
       }
       if (occupancy.verdict === 'tombstoned') {
