@@ -7,7 +7,11 @@ import type { Repo } from '@/data/repo'
 import { aliasesProp, hasBlockType } from '@/data/properties'
 import { PAGE_TYPE } from '@/data/blockTypes'
 import { keyAtEnd } from '@/data/orderKey'
-import { createOrRestoreTargetBlock, restorePropertiesStrippingAliases } from '@/data/targets'
+import {
+  createOrRestoreTargetBlock,
+  partitionClaimableAliases,
+  restorePropertiesStrippingAliases,
+} from '@/data/targets'
 import { parseAliasCollisionError } from '@/data/internals/raiseProtocol.js'
 import { dailyPageAliases, formatIsoDate } from '@/utils/dailyPage'
 import { DAILY_NOTE_TYPE, dailyNoteDateProp } from './schema.ts'
@@ -204,10 +208,16 @@ export const getOrCreateDailyNote = async (
       if (!current || current.deleted) return
       refuseForeign(current)
       const currentAliases = stringListProperty(current.properties[aliasesProp.name])
-      if (!includesAll(currentAliases, dailyAliases)) {
-        await tx.setProperty(id, aliasesProp, mergeStrings([...dailyAliases, ...currentAliases]))
+      const claimable = await partitionClaimableAliases(tx, id, dailyAliases, workspaceId)
+      const merged = mergeStrings([...claimable, ...currentAliases])
+      // Compare against the MERGED set, not the canonical one: while an alias
+      // stays contested `needsRepair` is true on every call, so comparing
+      // against `dailyAliases` would rewrite the same value on every
+      // navigation to the day.
+      if (!includesAll(currentAliases, merged)) {
+        await tx.setProperty(id, aliasesProp, merged)
       }
-      await repo.addTypeInTx(tx, id, PAGE_TYPE, {[aliasesProp.name]: dailyAliases}, typeSnapshot)
+      await repo.addTypeInTx(tx, id, PAGE_TYPE, {[aliasesProp.name]: claimable}, typeSnapshot)
       await repo.addTypeInTx(
         tx, id, DAILY_NOTE_TYPE,
         {[dailyNoteDateProp.name]: dateValue},
@@ -234,9 +244,23 @@ export const getOrCreateDailyNote = async (
       // the whole tx. Strip it here; the setProperty below re-claims
       // exactly the canonical long-form + ISO aliases.
       const restoredProperties = await restorePropertiesStrippingAliases(tx, id)
-      await tx.restore(id, {content: longLabel, properties: restoredProperties})
-      await tx.setProperty(id, aliasesProp, dailyAliases)
-      await repo.addTypeInTx(tx, id, PAGE_TYPE, {[aliasesProp.name]: dailyAliases}, typeSnapshot)
+      // Resurrecting a tombstone must not RENAME it. A seat materialised from a
+      // `[[2026-04-28]]` wikilink has the ISO text as its content, so writing
+      // the long-form label here reads to `alias.sync` as a rename: its rule 1
+      // sees the old content still in the alias list and replaces that entry
+      // with the new content. The day then comes back without the ISO alias it
+      // is addressed by — and if another page owns the long-form name, the
+      // preflight rejects, the whole tx rolls back, the row stays tombstoned,
+      // and every retry repeats. Only an EMPTY title is worth filling in, which
+      // is also what the live-repair branch above does (it never touches
+      // content); promotion to the long-form label is not restore's business.
+      await tx.restore(id, {
+        ...(existing.content === '' ? {content: longLabel} : {}),
+        properties: restoredProperties,
+      })
+      const claimable = await partitionClaimableAliases(tx, id, dailyAliases, workspaceId)
+      await tx.setProperty(id, aliasesProp, claimable)
+      await repo.addTypeInTx(tx, id, PAGE_TYPE, {[aliasesProp.name]: claimable}, typeSnapshot)
       await repo.addTypeInTx(
         tx, id, DAILY_NOTE_TYPE,
         {[dailyNoteDateProp.name]: dateValue},
@@ -255,7 +279,8 @@ export const getOrCreateDailyNote = async (
       orderKey,
       content: longLabel,
     }, {systemMint: true})
-    await repo.addTypeInTx(tx, id, PAGE_TYPE, {[aliasesProp.name]: dailyAliases}, typeSnapshot)
+    const claimable = await partitionClaimableAliases(tx, id, dailyAliases, workspaceId)
+    await repo.addTypeInTx(tx, id, PAGE_TYPE, {[aliasesProp.name]: claimable}, typeSnapshot)
     await repo.addTypeInTx(
       tx, id, DAILY_NOTE_TYPE,
       {[dailyNoteDateProp.name]: dateValue},
