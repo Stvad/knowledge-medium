@@ -768,8 +768,13 @@
       <code>"Sat Aug 20 2026"</code>) that the class it would claim is wider than it
       looks. Date-shaped keys come out as <code>string</code>, which is exact, and the
       definition is hidden precisely so someone looks at it.
-      <code>boolean</code>/<code>number</code>/<code>string</code>/<code>raw-json</code>
-      all round-trip exactly.</li>
+      <code>boolean</code>/<code>number</code>/<code>raw-json</code> round-trip exactly.
+      <code>string</code> has one tracked exception (issue #688, not introduced here and
+      not synthesis-specific): a value that is itself field-form content is written into
+      the child verbatim, is classified as a field row, and drops out of its own value
+      set &mdash; so projection reads no value rather than reproducing the string.
+      Synthesis widens the set that can bite, because these keys come from writers
+      nothing vetted.</li>
     <li><strong>The grammar-shaped-name blocker stands, for a different
       reason.</strong> &sect;7 justifies it by the B2 name&rarr;content mirror. That
       mirror is a <em>seed</em> behavior (<code>contentFor: seed =&gt; seed.name</code>);

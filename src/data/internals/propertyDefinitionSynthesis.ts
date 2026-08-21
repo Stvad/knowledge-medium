@@ -355,7 +355,7 @@ const restoredDefinitionProperties = (
     [propertyNameProp.name]: propertyNameProp.codec.encode(candidate.key),
     [presetIdProp.name]: presetIdProp.codec.encode(candidate.presetId),
     [presetConfigProp.name]: presetConfigProp.codec.encode({}),
-    [propertyHiddenProp.name]: propertyHiddenProp.codec.encode(true),
+    [propertyHiddenProp.name]: propertyHiddenProp.codec.encode(false),
   },
 })
 
@@ -603,6 +603,28 @@ export const applyPropertyDefinitionSynthesis = async (
         registrations.push({blockId: id, schema: schemaFor(candidate.key, preset)})
         continue
       }
+      // ABOUT TO MINT, so this is the last point a rival can be detected. A
+      // definition block for this name may have PARSED while supplying no
+      // behavior — an unknown preset, a config its codec rejects — which leaves
+      // it absent from `schemas` (so the name resolved nothing above) yet
+      // present in `definitionsByName`, where it out-sorts a newcomer by
+      // creation time. Minting against that produces a second definition that
+      // can never win and never resolve, reported as a success. Checked HERE
+      // rather than at the top of the loop because our own converged definition
+      // is in that index too.
+      //
+      // This skips — and so blocks the flip — where the plan-time equivalent
+      // lands in `brokenDefinitions`, which deliberately does not block. The
+      // asymmetry is consent: a broken definition the operator saw counted in
+      // the dialog is one they agreed to migrate around; one that arrived after
+      // they confirmed is not, and re-running shows it to them.
+      if (registry?.workspaceId === workspaceId
+          && registry.definitionsByName.has(candidate.key)) {
+        skipped.push({key: candidate.key,
+                      reason: 'a definition block for this name arrived since the check and '
+                        + 'supplies no behavior — repair it rather than adding a second'})
+        continue
+      }
       // `createOrGet` + `systemMint`, like every other deterministic-id creator
       // in `src/` — `createChild` cannot pass `systemMint`
       // (`mutators.ts`), and without it two devices minting this id in the same
@@ -623,9 +645,13 @@ export const applyPropertyDefinitionSynthesis = async (
       await tx.setProperty(id, propertyNameProp, candidate.key)
       await tx.setProperty(id, presetIdProp, candidate.presetId)
       await tx.setProperty(id, presetConfigProp, {})
-      // Nothing chose these names or these codecs on purpose, so they stay out
-      // of the property panel until someone has looked at them.
-      await tx.setProperty(id, propertyHiddenProp, true)
+      // VISIBLE, deliberately. The first cut minted these hidden on the theory
+      // that nothing chose these names or codecs on purpose so they shouldn't
+      // crowd the panel — which had it backwards (Vlad's call): the whole point
+      // is that a human triages them, and a hidden property is one nobody is
+      // ever prompted to look at. Written explicitly rather than left to the
+      // default so the intent is on the record.
+      await tx.setProperty(id, propertyHiddenProp, false)
       created += 1
       registrations.push({blockId: id, schema: schemaFor(candidate.key, preset)})
     }

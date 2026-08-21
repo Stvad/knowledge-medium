@@ -270,14 +270,16 @@ describe('applyPropertyDefinitionSynthesis', () => {
     expect(repo.propertySchemaResolverFor(WS).resolve('demo:orphan').status).toBe('resolved')
   })
 
-  it('mints it hidden, at the deterministic id, with no seed provenance', async () => {
+  it('mints it visible, at the deterministic id, with no seed provenance', async () => {
     await rawCell('b1', {'demo:orphan': 'hello'})
     await applyPropertyDefinitionSynthesis(repo, await planFor())
 
     const id = synthesizedPropertyDefinitionBlockId(WS, 'demo:orphan')
     const row = repo.block(id).peek()
     expect(row).toBeDefined()
-    expect(row!.properties['property-schema:hidden']).toBe(true)
+    // Visible: a definition nobody chose is exactly the one a human needs to be
+    // prompted to look at, and hiding it guarantees nobody ever is.
+    expect(row!.properties['property-schema:hidden']).toBe(false)
     expect(row!.properties['property-schema:name']).toBe('demo:orphan')
     // User origin, not a code seed: a seeded id would put it in a namespace
     // whose owner is expected to re-materialize it.

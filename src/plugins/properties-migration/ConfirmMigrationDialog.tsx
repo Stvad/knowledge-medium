@@ -80,8 +80,9 @@ export const ConfirmMigrationDialog = ({
         {synthesizedKeys > 0 && <p>
           {properties(synthesizedKeys)} in this workspace {synthesizedKeys === 1 ? 'has' : 'have'}
           {' '}no definition — written by an importer, a raw write, or a plugin that is no
-          longer installed. They get one created for them first, hidden, with a type guessed
-          from the values already stored. Nothing you can see changes; without it those
+          longer installed. They get one created for them first, with a type guessed
+          from the values already stored, and it shows up in the property panel so you can
+          check the guess. Nothing you can see changes; without it those
           properties could never move.{' '}
           <strong>If a plugin or extension owns any of them, install or enable it before you
           run this.</strong> Creating a definition here claims the name: re-enabling the owner
