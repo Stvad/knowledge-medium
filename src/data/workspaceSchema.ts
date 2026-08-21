@@ -154,6 +154,21 @@ export const readIsChildBackedWorkspace = async (
   return isChildBackedPropertiesWorkspace(parsePropertiesMigration(row?.properties_migration))
 }
 
+/** The workspace's `encryption_mode`, or null when this device has no local
+ *  `workspaces` row for it yet. Callers that gate on e2ee must treat the null
+ *  as "unknown, assume the stricter answer" rather than as "not encrypted" —
+ *  a device can be asked to act on a workspace whose row has not synced. */
+export const readWorkspaceEncryptionMode = async (
+  db: {getOptional<T>(sql: string, params?: unknown[]): Promise<T | null>},
+  workspaceId: string,
+): Promise<string | null> => {
+  const row = await db.getOptional<{encryption_mode: string | null}>(
+    'SELECT encryption_mode FROM workspaces WHERE id = ?',
+    [workspaceId],
+  )
+  return row?.encryption_mode ?? null
+}
+
 export const parseWorkspaceRow = (row: WorkspaceRow): Workspace => ({
   id: row.id,
   name: row.name,
