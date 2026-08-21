@@ -7,7 +7,8 @@ import {
   type SearchSourceArgs,
   type SearchSourceCandidate,
   type SearchSourceContribution,
-  type SearchSourceHealthEvent,
+  type SearchSourceHealthReport,
+  type SearchSourceOutcome,
 } from '@/data/facets.js'
 import { buildFilterPrefixes, rankCandidates } from '@/utils/fuzzyRank.js'
 
@@ -537,32 +538,25 @@ export const coreContentSearchSource: SearchSourceContribution = {
  *      `searchBlocksAcrossSources`).
  *   2. Only when NO candidate in the group carries one does score decide.
  *
- *  Why timestamp-less candidates lose rather than sending the whole group
- *  to score (the reading this replaced): `BlockData.userUpdatedAt` is a
- *  REQUIRED number (`src/data/api/blockData.ts`), so a candidate without
- *  one is a source contract violation, not a legitimate competitor —
- *  `searchBlocksAcrossSources` warns about it. Under the old reading one
- *  malformed candidate disabled the anti-staleness guarantee for every
- *  well-formed candidate beside it: given a live core copy and a stale
- *  index copy that scored higher, adding a third source that forgot the
- *  field displayed the STALE copy. That is the same failure the file
- *  already refuses for a source that throws — one bad source degrades
- *  itself, never its neighbours.
+ *  Timestamp-less candidates lose rather than sending the whole group to
+ *  score because `BlockData.userUpdatedAt` is REQUIRED
+ *  (`src/data/api/blockData.ts`), so a candidate without one is a source
+ *  contract violation, not a legitimate competitor. Were it allowed to
+ *  decide, one malformed candidate would disable the anti-staleness
+ *  guarantee for every well-formed candidate beside it — the same failure
+ *  this file already refuses for a source that throws: one bad source
+ *  degrades itself, never its neighbours.
  *
  *  FINITE, not `typeof === 'number'`: `NaN` passes typeof and then loses
- *  every comparison including `NaN !== NaN`, so it would resolve to
- *  whichever candidate a fold happened to hold — order-dependent, the
- *  exact defect this function exists to remove (#450). `Infinity` is
- *  order-independent but wins unconditionally, no better a claim for a
- *  corrupt row. Both count as absent.
+ *  every comparison including `NaN !== NaN`, so the winner would depend on
+ *  fold position; `Infinity` is order-independent but wins
+ *  unconditionally. Both count as absent.
  *
- *  Evaluated over the raw group, never as a pairwise running fold: once
- *  two candidates are folded, the survivor's `score` is the running max
- *  across both, so a later comparison pairs one candidate's timestamp
- *  with a score that may belong to a different, already-eliminated one.
- *  That decoupling is what made payload selection order-dependent in
- *  #450. Here only real candidates' own (timestamp, score) pairs are ever
- *  compared. */
+ *  Must see the raw group, never a pairwise running fold: a fold
+ *  overwrites the survivor's `score` with the running max, so a later
+ *  comparison pairs one candidate's timestamp with a score belonging to a
+ *  different, already-eliminated one. Here only real candidates' own
+ *  (timestamp, score) pairs are ever compared. */
 const freshestCandidatePayload = (
   candidates: readonly SearchSourceCandidate[],
 ): SearchSourceCandidate => {
@@ -578,11 +572,11 @@ const freshestCandidatePayload = (
   })
 }
 
-/** Console-warn once per source per session, alongside the health event.
+/** Console-warn once per source per session, alongside the health report.
  *  Search runs on every keystroke, so an unguarded warning would bury the
- *  one line a plugin author needs under thousands of copies. The health
- *  reporters get EVERY event (they need the repeats to know a source is
- *  still broken); only the console is deduped. */
+ *  one line a plugin author needs under thousands of copies. Reporters
+ *  still see the outcome on every search — they need the repeats to know a
+ *  source is still broken; only the console is deduped. */
 const offContractSourcesWarned = new Set<string>()
 
 /** `BlockData.userUpdatedAt` is a required number, so a candidate without a
@@ -609,18 +603,24 @@ const offContractCandidateDetail = (
   return detail
 }
 
-/** Fan a health event out to every contributed reporter. Isolated per
+/** Orders health reports so a slow search settling after a faster later one
+ *  can't publish stale state. Module-scoped rather than per-repo: it only
+ *  has to be monotonic, and reports from two repos never share a consumer. */
+let searchHealthGeneration = 0
+
+/** Fan one search's outcomes out to every contributed reporter. Isolated per
  *  reporter: a reporter that throws must not take down the search it is
  *  only observing, nor the reporters after it. */
 const reportSearchSourceHealth = (
   repo: Repo,
-  event: SearchSourceHealthEvent,
+  outcomes: readonly SearchSourceOutcome[],
 ): void => {
   const reporters = repo.facetRuntime?.read(searchSourceHealthFacet)
-  if (!reporters) return
+  if (!reporters || reporters.size === 0) return
+  const report: SearchSourceHealthReport = {generation: ++searchHealthGeneration, outcomes}
   for (const reporter of reporters.values()) {
     try {
-      reporter.report(event)
+      reporter.report(report)
     } catch (error) {
       console.error(`[searchBlocksAcrossSources] health reporter "${reporter.id}" threw`, error)
     }
@@ -671,23 +671,29 @@ export const searchBlocksAcrossSources = async (
     : [coreContentSearchSource]
 
   const failures: {index: number; error: unknown}[] = []
+  const outcomes: SearchSourceOutcome[] = []
   const candidateLists = await Promise.all(
     contributions.map(async (source, index) => {
       try {
         const candidates = await source.search(repo, args)
         const detail = offContractCandidateDetail(source.id, candidates)
-        reportSearchSourceHealth(repo, detail === null
+        outcomes.push(detail === null
           ? {sourceId: source.id, kind: 'ok'}
           : {sourceId: source.id, kind: 'malformed-candidate', detail})
         return candidates
       } catch (error) {
         console.error(`[searchBlocksAcrossSources] source "${source.id}" threw`, error)
-        reportSearchSourceHealth(repo, {sourceId: source.id, kind: 'threw', error})
+        outcomes.push({sourceId: source.id, kind: 'threw', error})
         failures.push({index, error})
         return []
       }
     }),
   )
+
+  // After the barrier, so the report names exactly the set of sources this
+  // search ran — a source that has left the runtime is absent from it, which
+  // is how a consumer retires state it could never be told to clear.
+  reportSearchSourceHealth(repo, outcomes)
 
   // Every source failed (including the single-source case) — there is
   // nothing to rank, and silently returning [] would hide the failure

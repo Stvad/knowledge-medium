@@ -22,38 +22,22 @@
  * registration-then-within-source order (:453-465); each group's
  * surviving `score` is the MAX across every duplicate in the group, and
  * its surviving `block` payload is picked by `freshestCandidatePayload`
- * (:328-380) evaluated over the WHOLE group at once, per the contract
- * documented on `SearchSourceContribution` (`src/data/facets.ts:330-346`
- * — quoted verbatim in `freshestCandidatePayload`'s own docblock, the
- * source of truth this suite models against): newest `userUpdatedAt`
- * wins ONLY when every candidate in the group has one (ties broken by
- * higher score); the moment ANY candidate in the group lacks one, the
- * WHOLE group falls back to highest score, timestamps ignored entirely.
- * The result is sorted by score descending and sliced to `limit`
- * (:472-475).
+ * evaluated over the WHOLE group at once, per the contract documented on
+ * `SearchSourceContribution` (`src/data/facets.ts`, the source of truth
+ * this suite models against): candidates carrying a FINITE
+ * `userUpdatedAt` outrank every candidate that does not, and among them
+ * the newest wins (ties broken by higher score); only when NO candidate
+ * in the group carries one does highest score decide. The result is
+ * sorted by score descending and sliced to `limit`.
  *
- * FUZZ-FOUND HISTORY (issue #450): an earlier version of the merge point
- * built each group's winner via a SINGLE-PASS pairwise fold instead of
- * operating on the whole group at once, so the "existing" side of each
- * payload comparison already carried the running MAX score across every
- * prior duplicate rather than that specific candidate's own original
- * score — decoupling payload selection from the (timestamp, score) pair
- * actually being compared, AND silently narrowing the contract's
- * whole-group "missing timestamp → score decides" fallback into a
- * pairwise one. For a 3+-way duplicate-id group with mixed/missing
- * timestamps this made PAYLOAD selection order-dependent (the final
- * `score` was always the true max regardless of order — only the payload
- * pick broke). A fuzz run caught it; the counterexample is pinned as the
- * deterministic canary below and the fold was replaced with the
- * whole-group selection this suite now models and additionally checks
- * for permutation-invariance (below) — see `freshestCandidatePayload`'s
- * docblock in the product file for the fixed algorithm and the
- * counterexample. (An intermediate fix attempt — filter to only the
- * timestamped candidates, then pick the newest among those — was ALSO
- * wrong: it made a timestamp-less candidate unable to win no matter how
- * high its score, contradicting the contract's explicit "missing
- * timestamp" fallback to score. Caught in review before landing; see the
- * corrected rule above and in `freshestCandidatePayload`.)
+ * The merge point once folded each group PAIRWISE, which is
+ * non-associative here — the fold's accumulator carries the running max
+ * score, so a comparison could pair one candidate's timestamp with a
+ * different, already-eliminated candidate's score. That made payload
+ * selection depend on source registration order (issue #450; the final
+ * score was always the true max, only the payload pick broke). This suite
+ * pins the whole-group rule two ways: permutation-invariance over
+ * generated groups, and the deterministic canaries below.
  *
  * ──── Generator design ────
  *

@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import type { SearchSourceOutcome } from '@/data/facets.js'
 import {
   recordSearchSourceHealth,
   resetSearchSourceHealth,
@@ -6,49 +7,84 @@ import {
   subscribeSearchSourceHealth,
 } from '../store.js'
 
+let generation = 0
+/** One search's report. Generation auto-increments, so a test only names it
+ *  when it is deliberately exercising out-of-order delivery. */
+const report = (outcomes: readonly SearchSourceOutcome[], at = ++generation) =>
+  ({generation: at, outcomes})
+
 describe('search-source health store', () => {
   beforeEach(() => {
     resetSearchSourceHealth()
+    generation = 0
   })
 
   it('reports nothing while every source is healthy', () => {
-    recordSearchSourceHealth({sourceId: 'core.content', kind: 'ok'})
-    recordSearchSourceHealth({sourceId: 'semantic', kind: 'ok'})
+    recordSearchSourceHealth(report([
+      {sourceId: 'core.content', kind: 'ok'},
+      {sourceId: 'semantic', kind: 'ok'},
+    ]))
     expect(searchSourceHealthSnapshot()).toBeNull()
   })
 
   it('warns, naming the source, once one starts failing', () => {
-    recordSearchSourceHealth({sourceId: 'core.content', kind: 'ok'})
-    recordSearchSourceHealth({sourceId: 'semantic', kind: 'threw'})
+    recordSearchSourceHealth(report([
+      {sourceId: 'core.content', kind: 'ok'},
+      {sourceId: 'semantic', kind: 'threw'},
+    ]))
     const snapshot = searchSourceHealthSnapshot()
     expect(snapshot?.severity).toBe('warning')
     expect(snapshot?.summary).toContain('semantic')
     expect(snapshot?.summary).toContain('results may be incomplete')
   })
 
-  // The whole point of emitting 'ok' from the merge point: a health surface
-  // that latches on the first transient failure is worse than none, because
-  // the user learns to ignore it.
   it('clears once the failing source recovers', () => {
-    recordSearchSourceHealth({sourceId: 'semantic', kind: 'threw'})
+    recordSearchSourceHealth(report([{sourceId: 'semantic', kind: 'threw'}]))
     expect(searchSourceHealthSnapshot()).not.toBeNull()
-    recordSearchSourceHealth({sourceId: 'semantic', kind: 'ok'})
+    recordSearchSourceHealth(report([{sourceId: 'semantic', kind: 'ok'}]))
+    expect(searchSourceHealthSnapshot()).toBeNull()
+  })
+
+  // A source that is disabled or lost to a runtime swap never gets to report
+  // an `ok` retracting its failure, so anything that merged per-source signals
+  // would name it forever. Absence from the next report is the retraction.
+  it('stops naming a source that has left the runtime', () => {
+    recordSearchSourceHealth(report([
+      {sourceId: 'core.content', kind: 'ok'},
+      {sourceId: 'semantic', kind: 'threw'},
+    ]))
+    expect(searchSourceHealthSnapshot()).not.toBeNull()
+
+    recordSearchSourceHealth(report([{sourceId: 'core.content', kind: 'ok'}]))
+    expect(searchSourceHealthSnapshot()).toBeNull()
+  })
+
+  // Fast typing overlaps searches, and a slow source can settle after a later
+  // one. Without ordering, that older result publishes as current state and
+  // the warning stays up after the user stops typing.
+  it('ignores a report from a search that a later one has already superseded', () => {
+    recordSearchSourceHealth(report([{sourceId: 'semantic', kind: 'ok'}], 2))
+    expect(searchSourceHealthSnapshot()).toBeNull()
+
+    recordSearchSourceHealth(report([{sourceId: 'semantic', kind: 'threw'}], 1))
     expect(searchSourceHealthSnapshot()).toBeNull()
   })
 
   it('carries the malformed-candidate detail through to the dropdown line', () => {
-    recordSearchSourceHealth({
+    recordSearchSourceHealth(report([{
       sourceId: 'legacy-index',
       kind: 'malformed-candidate',
       detail: 'returned block abc with a non-finite userUpdatedAt (undefined).',
-    })
+    }]))
     expect(searchSourceHealthSnapshot()?.detail).toContain('legacy-index')
     expect(searchSourceHealthSnapshot()?.detail).toContain('non-finite userUpdatedAt')
   })
 
   it('summarises rather than enumerates when several sources are down', () => {
-    recordSearchSourceHealth({sourceId: 'a', kind: 'threw'})
-    recordSearchSourceHealth({sourceId: 'b', kind: 'threw'})
+    recordSearchSourceHealth(report([
+      {sourceId: 'a', kind: 'threw'},
+      {sourceId: 'b', kind: 'threw'},
+    ]))
     expect(searchSourceHealthSnapshot()?.summary).toContain('2 search sources')
   })
 
@@ -59,12 +95,12 @@ describe('search-source health store', () => {
     const listener = vi.fn()
     subscribeSearchSourceHealth(listener)
 
-    recordSearchSourceHealth({sourceId: 'semantic', kind: 'threw'})
+    recordSearchSourceHealth(report([{sourceId: 'semantic', kind: 'threw'}]))
     const first = searchSourceHealthSnapshot()
     expect(listener).toHaveBeenCalledTimes(1)
 
-    recordSearchSourceHealth({sourceId: 'semantic', kind: 'threw'})
-    recordSearchSourceHealth({sourceId: 'semantic', kind: 'threw'})
+    recordSearchSourceHealth(report([{sourceId: 'semantic', kind: 'threw'}]))
+    recordSearchSourceHealth(report([{sourceId: 'semantic', kind: 'threw'}]))
     expect(listener).toHaveBeenCalledTimes(1)
     expect(searchSourceHealthSnapshot()).toBe(first)
   })

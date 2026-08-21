@@ -13,22 +13,17 @@
  * working plugin source, that shows up here too.
  */
 import { CallbackSet } from '@/utils/callbackSet.js'
-import type { SearchSourceHealthEvent } from '@/data/facets.js'
+import type { SearchSourceHealthReport, SearchSourceOutcome } from '@/data/facets.js'
 import type { DiagnosticSnapshot } from '@/plugins/diagnostics/facet.js'
 
-interface SourceState {
-  kind: SearchSourceHealthEvent['kind']
-  detail?: string
-}
-
-const states = new Map<string, SourceState>()
 let snapshot: DiagnosticSnapshot | null = null
+let latestGeneration = 0
 const listeners = new CallbackSet('search-health')
 
-const describe = (sourceId: string, state: SourceState): string =>
-  state.kind === 'threw'
-    ? `"${sourceId}" failed`
-    : `"${sourceId}" returned a malformed result`
+const describe = (outcome: SearchSourceOutcome): string =>
+  outcome.kind === 'threw'
+    ? `"${outcome.sourceId}" failed`
+    : `"${outcome.sourceId}" returned a malformed result`
 
 /** Derive the chip snapshot from every source's last outcome.
  *
@@ -36,16 +31,15 @@ const describe = (sourceId: string, state: SourceState): string =>
  *  the user's own writes are unaffected. Reserving `error` for the states that
  *  redden the whole chip (sync broken, data inconsistent) keeps this from
  *  crying wolf over a flaky third-party index. */
-const computeSnapshot = (): DiagnosticSnapshot | null => {
-  const unhealthy = [...states.entries()].filter(([, s]) => s.kind !== 'ok')
+const computeSnapshot = (outcomes: readonly SearchSourceOutcome[]): DiagnosticSnapshot | null => {
+  const unhealthy = outcomes.filter(o => o.kind !== 'ok')
   if (unhealthy.length === 0) return null
 
-  const [firstId, firstState] = unhealthy[0]
   const summary = unhealthy.length === 1
-    ? `Search source ${describe(firstId, firstState)}`
+    ? `Search source ${describe(unhealthy[0])}`
     : `${unhealthy.length} search sources are failing`
   const detail = unhealthy
-    .map(([id, s]) => (s.detail ? `${id}: ${s.detail}` : `${id}: search threw`))
+    .map(o => (o.detail ? `${o.sourceId}: ${o.detail}` : `${o.sourceId}: search threw`))
     .join(' · ')
   return {
     severity: 'warning',
@@ -61,14 +55,21 @@ const sameSnapshot = (a: DiagnosticSnapshot | null, b: DiagnosticSnapshot | null
   return a.severity === b.severity && a.summary === b.summary && a.detail === b.detail
 }
 
-/** Record one source's outcome. Called on EVERY search (so, every keystroke),
- *  hence the early return: the common path is an unchanged `ok` and must not
- *  allocate a snapshot or wake a subscriber. */
-export const recordSearchSourceHealth = (event: SearchSourceHealthEvent): void => {
-  const previous = states.get(event.sourceId)
-  if (previous?.kind === event.kind && previous.detail === event.detail) return
-  states.set(event.sourceId, {kind: event.kind, detail: event.detail})
-  const next = computeSnapshot()
+/** Replace the health state from one search's report.
+ *
+ *  Whole-set replace, not a merge: a source that has left the runtime is
+ *  absent from `outcomes` and must stop being named, and it can never emit an
+ *  `ok` of its own to say so. Reports older than the newest seen are dropped —
+ *  overlapping searches settle out of order (a slow source under fast typing),
+ *  and without this an older `threw` could land after a newer `ok` and leave a
+ *  warning up once the user stops typing.
+ *
+ *  Runs on every search, so the unchanged case must not wake a subscriber or
+ *  hand `useSyncExternalStore` a new reference. */
+export const recordSearchSourceHealth = (report: SearchSourceHealthReport): void => {
+  if (report.generation <= latestGeneration) return
+  latestGeneration = report.generation
+  const next = computeSnapshot(report.outcomes)
   if (sameSnapshot(snapshot, next)) return
   snapshot = next
   listeners.notify()
@@ -81,7 +82,7 @@ export const searchSourceHealthSnapshot = (): DiagnosticSnapshot | null => snaps
 
 /** Test-only reset of the module store (mirrors `resetPersistenceStatus`). */
 export const resetSearchSourceHealth = (): void => {
-  states.clear()
   snapshot = null
+  latestGeneration = 0
   listeners.clear()
 }

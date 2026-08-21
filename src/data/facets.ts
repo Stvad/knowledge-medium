@@ -428,30 +428,26 @@ export interface SearchSourceArgs {
  *  so a stale index copy can't shadow live data just because it scored
  *  higher.
  *
- *  That rule is decided over the duplicate GROUP as a whole, never
- *  pairwise: a pairwise fold of "newest, else higher score" is
- *  non-associative, so the winner depends on the order sources happen to
- *  be registered in (issue #450). Precisely, and prescriptively — this
- *  paragraph is the spec, not a description of the implementation, and
- *  earlier prose here was vague enough to produce three different
- *  implementations:
+ *  This paragraph is the SPEC, not a description of the implementation.
+ *  Decide it over the duplicate GROUP as a whole, never pairwise — a
+ *  pairwise fold of "newest, else higher score" is non-associative, so the
+ *  winner would depend on source registration order:
  *   - duplicates carrying a FINITE `userUpdatedAt` outrank every
  *     duplicate that does not. Among them the newest wins, ties broken by
  *     higher score, then by group order.
  *   - only when NO duplicate in the group carries one does the highest
  *     score win.
  *  Finite, not merely `typeof 'number'` — `NaN` passes typeof and then
- *  loses every comparison including against itself, which brings the
- *  order-dependence straight back, and `Infinity` would win
- *  unconditionally.
+ *  loses every comparison including against itself, which restores the
+ *  order-dependence, and `Infinity` would win unconditionally.
  *
  *  `BlockData.userUpdatedAt` is a required number, so a candidate without
  *  one is a bug in the contributing source; the merge point warns and
  *  keeps its score (ranking is unaffected) but will not display its copy
- *  of the block over a well-formed one. The alternative — letting one
- *  such candidate push its whole group onto the score fallback — meant a
- *  single malformed contribution could surface another source's STALE
- *  copy over live data, which is the failure this rule exists to prevent.
+ *  of the block over a well-formed one. Letting one such candidate push
+ *  its whole group onto the score fallback instead would let a single
+ *  malformed contribution surface another source's STALE copy over live
+ *  data — the failure this rule exists to prevent.
  *  A source that throws is logged and dropped so it can't take
  *  down another source's results — UNLESS every contributed source
  *  throws, in which case the merge point rethrows the first error
@@ -470,9 +466,8 @@ export const searchSourcesFacet = keyedMapFacet<SearchSourceContribution>('data.
 /** What the merge point observed about one source on one search.
  *
  *  `'ok'` matters as much as the failures: without it a health surface
- *  latches on the first transient error and never clears. Every source
- *  that returns reports exactly one of these per search. */
-export interface SearchSourceHealthEvent {
+ *  latches on the first transient error and never clears. */
+export interface SearchSourceOutcome {
   readonly sourceId: string
   readonly kind: 'ok' | 'threw' | 'malformed-candidate'
   /** Present on `'threw'` — whatever the source rejected with. */
@@ -482,20 +477,37 @@ export interface SearchSourceHealthEvent {
   readonly detail?: string
 }
 
+/** Every active source's outcome for ONE search, reported together.
+ *
+ *  A whole-set report rather than per-source events, because a consumer's
+ *  state is the SET, not a running accumulation of individual signals. Two
+ *  things fall out of that which a stream cannot express: a source that has
+ *  left the runtime is simply absent from the next report (it can never emit
+ *  an `'ok'` to retract an earlier failure, so a stream would name a dead
+ *  source forever), and `generation` orders the reports, so an older search
+ *  settling after a newer one cannot overwrite fresher state. A consumer
+ *  replaces its state from `outcomes` and ignores any report whose
+ *  `generation` is not the highest it has seen. */
+export interface SearchSourceHealthReport {
+  /** Monotonic per merge-point call, within one runtime. */
+  readonly generation: number
+  readonly outcomes: readonly SearchSourceOutcome[]
+}
+
 /** An observer of search-source health, called by `searchBlocksAcrossSources`
- *  after every source settles.
+ *  once every search.
  *
  *  This exists because the interesting failure is INVISIBLE: when one source
  *  throws and another succeeds, search quietly returns fewer results and the
  *  user is told nothing (only a total failure reaches them, via the rethrow).
  *  Core cannot surface that itself — an indicator is a plugin concern and core
  *  may not depend on the plugin layer — so core emits and whoever cares
- *  listens. `report` MUST NOT throw and MUST be cheap: it runs inside every
+ *  listens. `report` MUST NOT throw and MUST be cheap: it runs on every
  *  keystroke's search. The merge point isolates throws anyway, so a broken
  *  reporter degrades itself rather than search. */
 export interface SearchSourceHealthReporter {
   readonly id: string
-  report: (event: SearchSourceHealthEvent) => void
+  report: (report: SearchSourceHealthReport) => void
 }
 
 export const searchSourceHealthFacet = keyedMapFacet<SearchSourceHealthReporter>(
