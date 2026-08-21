@@ -15,8 +15,16 @@
  *     KM_ALLOW_BEAD_IDS=1, whose escape marks the mention as deliberate.
  *   - a MERGED PR additionally gets its merge commit read back (detected
  *     from gh's own "Merged pull request #N" line): its close keywords have
- *     already acted, so the echo names what was closed while reopening a
- *     wrong one is still cheap — covering merge text no pre-gate could read.
+ *     already acted — when it landed on the DEFAULT branch, the only place
+ *     GitHub applies them — so the echo names what was closed while
+ *     reopening a wrong one is still cheap. Covers merge text no pre-gate
+ *     could read.
+ *   - a publish the PRE-GATE treated as covered, whose output then named no
+ *     object, is REPORTED as such. That promise is the whole basis on which
+ *     the gate let the text through unchecked, so a promise it could not
+ *     keep has to be visible rather than a silent return — it is what keeps
+ *     a gap in the gate's gh-vocabulary list from costing anything worse
+ *     than one manual check.
  *
  * This hook READS ONLY. It once rewrote bead ids in place, which required
  * knowing that a URL in the output belonged to THIS command — an association
@@ -52,9 +60,13 @@ import {
   closeKeywordRefs,
   extractBeadIds,
   extractIssueRefs,
+  fetchIssueInfo,
   initializedDbRoot,
   isMainModule,
+  carriesPublishableText,
+  isPostVerifiable,
   issueRefsTable,
+  matchesAnyPublish,
   matchesApiPublish,
   matchesPrCommand,
   publishableKinds,
@@ -67,11 +79,12 @@ import {
 
 // Fragments before path groups: a fragment URL also contains /pull/N, and
 // the fragment's object is what this command touched, not its parent.
-const TARGET_URL = () =>
-  new RegExp(
-    String.raw`https://github\.com/${REPO}/(?:pull/(\d+)|issues/(\d+)|releases/tag/([^\s"'\\<>)\]]+))(?:#issuecomment-(\d+)|#discussion_r(\d+)|#pullrequestreview-(\d+))?`,
-    'g',
-  )
+// A module-level /g regex is safe here because matchAll clones it and never
+// advances this object's lastIndex — unlike .test, which does.
+const TARGET_URL = new RegExp(
+  String.raw`https://github\.com/${REPO}/(?:pull/(\d+)|issues/(\d+)|releases/tag/([^\s"'\\<>)\]]+))(?:#issuecomment-(\d+)|#discussion_r(\d+)|#pullrequestreview-(\d+))?`,
+  'g',
+)
 
 const classify = (pr, issue, tag, commentId, reviewCommentId, reviewId) =>
   commentId
@@ -125,7 +138,7 @@ const topLevelUrls = output => {
 export const publishedTargets = (cmd, output) => {
   const seen = new Map()
   const collect = (text, kinds) => {
-    for (const m of text.matchAll(TARGET_URL())) {
+    for (const m of text.matchAll(TARGET_URL)) {
       const t = classify(...m.slice(1))
       if (kinds && !kinds.has(t.kind)) continue
       seen.set(JSON.stringify(t), t)
@@ -145,13 +158,27 @@ export const publishedTargets = (cmd, output) => {
 // command: the pattern only ever appears in merge output, and it names the
 // PR whose merge COMMIT — the one truly unrepairable text — can then be
 // read back from the API (#683: detection where prevention cannot reach).
-const MERGED_PR = () => /Merged pull request ((?:[\w.-]+\/[\w.-]+)?)#(\d+)/g
+const MERGED_PR = /(?:\w+ and )?merged pull request ((?:[\w.-]+\/[\w.-]+)?)#(\d+)/gi
 // A -R merge prints the qualified `owner/repo#N` — a foreign qualifier must
 // not read back OUR PR of that number.
 export const mergedPrNumbers = output =>
   [...new Set(
-    [...output.matchAll(MERGED_PR())].filter(m => m[1] === '' || m[1] === REPO).map(m => Number(m[2])),
+    [...output.matchAll(MERGED_PR)].filter(m => m[1] === '' || m[1] === REPO).map(m => Number(m[2])),
   )]
+
+// A tag may contain `/` (release/1.0 is a valid ref), which must travel as
+// ONE path parameter — concatenated, it addresses a different endpoint and
+// the read misses silently. Decoded first so a capture that already carried
+// percent-escapes is not encoded twice.
+const encodeTag = tag => {
+  let raw = tag
+  try {
+    raw = decodeURIComponent(tag)
+  } catch {
+    // malformed percent-escape: encode what was actually captured
+  }
+  return encodeURIComponent(raw)
+}
 
 export const apiPathFor = t =>
   t.kind === 'pr'
@@ -164,7 +191,13 @@ export const apiPathFor = t =>
           ? `repos/${REPO}/pulls/comments/${t.id}`
           : t.kind === 'review'
             ? `repos/${REPO}/pulls/${t.pr}/reviews/${t.id}`
-            : `repos/${REPO}/releases/tags/${t.tag}`
+            : `repos/${REPO}/releases/tags/${encodeTag(t.tag)}`
+
+// The echo sizes itself to the time left: each lookup is bounded by
+// GH_TIMEOUT, so echoing more refs than the remaining budget divides into
+// could overrun the deadline and lose the whole report.
+const refsCap = deadline => Math.min(REFS_CAP, Math.max(0, Math.floor((deadline - Date.now()) / GH_TIMEOUT) - 1))
+const moreRefsNote = (total, cap) => (total > cap ? `\n  …and ${total - cap} more references not echoed` : '')
 
 // additionalContext shares the host's ~10K inline budget with every other
 // hook on the event (measured for SessionStart in issue #643; assume the
@@ -180,20 +213,40 @@ export const clipContext = (s, max = 9_000) =>
 // ---------------------------------------------------------------------------
 
 const MAX_TARGETS = 5
+const MAX_MERGED_PRS = 2
+// Defence in depth: with the shipped DEADLINE_MS the budget term below caps
+// at 6, and this would need ~160s of remaining budget to bind. It is here so
+// raising the deadline cannot uncap the echo by accident.
 const REFS_CAP = 15
 const GH_TIMEOUT = 10_000
 // Self-imposed budget well under the 120s hook timeout in settings.json, so
 // the host's kill never lands with the report unemitted. Every step is one
 // GH_TIMEOUT-bounded fetch, and per-target refs echoes size themselves to
 // the time left.
-const DEADLINE_MS = Number(process.env.BD_PUBLISH_VERIFY_BUDGET_MS ?? 70_000)
+const DEADLINE_MS = (() => {
+  // A non-numeric override yields NaN, and every `Date.now() >= deadline`
+  // comparison against NaN is false: nothing would ever stop on time while
+  // every echo reported the time budget as the reason it stopped.
+  const v = Number(process.env.BD_PUBLISH_VERIFY_BUDGET_MS)
+  return Number.isFinite(v) && v >= 0 ? v : 70_000
+})()
 
+// Memoized for the same reason fetchIssueInfo is: one invocation can name the
+// same object twice — a merge line beside the PR's own URL, a body that
+// references its own issue — and each repeat would spend another GH_TIMEOUT
+// out of the deadline every later step divides.
+const ghJsonCache = new Map()
 const ghJson = args => {
+  const key = args.join(' ')
+  if (ghJsonCache.has(key)) return ghJsonCache.get(key)
+  let value = null
   try {
-    return JSON.parse(tryRun('gh', args, { timeout: GH_TIMEOUT }) ?? 'null')
+    value = JSON.parse(tryRun('gh', args, { timeout: GH_TIMEOUT }) ?? 'null')
   } catch {
-    return null
+    value = null
   }
+  ghJsonCache.set(key, value)
+  return value
 }
 
 // Which field carries the object's "title" text, when it has one.
@@ -206,9 +259,22 @@ const titleOf = (t, obj) => {
 
 const verifyTarget = (t, { reportIds, deadline }) => {
   const notes = []
-  const fetched = ghJson(['api', apiPathFor(t)])
-  if (!fetched || typeof fetched !== 'object') return notes
-  const label = typeof fetched.html_url === 'string' ? fetched.html_url : apiPathFor(t)
+  const path = apiPathFor(t)
+  const fetched = ghJson(['api', path])
+  // A failed read is the STRONGEST form of an unkeepable coverage claim: an
+  // object is known to have been published and could not be examined. Silence
+  // here would be the same hole the no-target branch exists to close.
+  //
+  // The command handed back is the one this hook just tried, which works for
+  // every kind. `gh issue view <n>` did not: a comment target keeps only the
+  // comment id and a release only its tag, so for four of the six kinds it
+  // named a command that cannot reach the text — at the exact moment the
+  // agent has to go read it by hand.
+  if (!fetched || typeof fetched !== 'object')
+    return [
+      `could not read back ${path} — the references in what it published are unchecked; verify them yourself (gh api ${path})`,
+    ]
+  const label = typeof fetched.html_url === 'string' ? fetched.html_url : path
   const text = `${titleOf(t, fetched)}\n${typeof fetched.body === 'string' ? fetched.body : ''}`
 
   // Bead ids are reported, never substituted: the mapped numbers join the
@@ -217,20 +283,36 @@ const verifyTarget = (t, { reportIds, deadline }) => {
   // No bd call of any kind before the DB-exists gate: in a clone without a
   // beads DB, any bd command CREATES an empty one that then refuses to pull.
   const byId = ids.length && initializedDbRoot() ? beadIssueLookup(ids) : new Map()
-  if (ids.length)
+  if (ids.length) {
+    // Every number is CONFIRMED before it is recommended. A bead's External:
+    // field can point at an issue since deleted or transferred, and this line
+    // is an instruction an agent can act on without reading the table below —
+    // recommending an unread number is the failure this hook exists to catch.
+    const shown = ids.map(id => {
+      const n = byId.get(id)
+      if (!n) return `${id} → no GitHub issue yet; run pnpm bd:sync`
+      const info = Date.now() < deadline ? fetchIssueInfo(n) : null
+      if (info && typeof info === 'object') return `${id} → #${n} ("${info.title}")`
+      // A confirmed 404 and a lookup that did not happen call for different
+      // repairs: one means the bead's link is stale, the other means nothing
+      // about the bead. Reporting a failed lookup as the former sends the
+      // agent to fix a link that may be fine — and the reference table below
+      // retries, so it can contradict this line outright. Neither number is
+      // safe to publish from here, which is what both messages say.
+      return info === 'not-found'
+        ? `${id} → #${n} DOES NOT EXIST — do not publish this number; the bead's External: field is stale`
+        : `${id} → #${n} UNCONFIRMED — could not be checked here; read it yourself before publishing it`
+    })
     notes.push(
-      `${label} publishes bead ids, which are opaque to GitHub readers — replace them now (gh pr edit / gh issue edit / gh api PATCH): ` +
-        ids.map(id => (byId.get(id) ? `${id} → #${byId.get(id)}` : `${id} → no GitHub issue yet; run pnpm bd:sync`)).join(', '),
+      `${label} publishes bead ids, which are opaque to GitHub readers — replace each confirmed one (gh pr edit / gh issue edit / gh api PATCH): ` +
+        shown.join(', '),
     )
+  }
 
   const refs = [...new Set([...extractIssueRefs(text), ...[...byId.values()].filter(Boolean)])]
   if (refs.length) {
-    // The echo sizes itself to the time left: each lookup is bounded by
-    // GH_TIMEOUT, so echoing more refs than the remaining budget divides
-    // into could overrun the deadline and lose the whole report.
-    const budget = Math.max(0, Math.floor((deadline - Date.now()) / GH_TIMEOUT) - 1)
-    const cap = Math.min(REFS_CAP, budget)
-    const capNote = refs.length > cap ? `\n  …and ${refs.length - cap} more references not echoed` : ''
+    const cap = refsCap(deadline)
+    const capNote = moreRefsNote(refs.length, cap)
     if (cap > 0) notes.push(`${label}\n${issueRefsTable(text, refs.slice(0, cap), 'post')}${capNote}`)
     else notes.push(`${label}: ${refs.length} issue references not echoed (out of time budget) — check them yourself`)
   }
@@ -265,8 +347,7 @@ const verifyMergeCommit = (n, deadline) => {
   // it back would be pure noise.
   const refs = extractIssueRefs(message).filter(r => r !== n)
   if (!refs.length) return notes
-  const budget = Math.max(0, Math.floor((deadline - Date.now()) / GH_TIMEOUT) - 1)
-  const cap = Math.min(REFS_CAP, budget)
+  const cap = refsCap(deadline)
   if (cap === 0) return [`merge commit of #${n}: ${refs.length} issue references not echoed (out of time budget) — check them yourself`]
   // Only the HEAD commit's text is known to have landed under every merge
   // strategy — a squash with custom subject/body does not land the PR's own
@@ -274,14 +355,36 @@ const verifyMergeCommit = (n, deadline) => {
   // not prompt a reopen.
   const headCloses = closeKeywordRefs(headMsg).filter(r => r !== n)
   const commitCloses = closeKeywordRefs(commitMsgs.join('\n')).filter(r => r !== n && !headCloses.includes(r))
-  const warn =
-    (headCloses.length
-      ? `\n  ⚠ close keywords in the merge commit have ALREADY acted — if an issue above was closed wrongly, reopen it now (gh issue reopen <n>)`
-      : '') +
-    (commitCloses.length
-      ? `\n  (close keywords in the PR's own commits acted only if this was a merge or rebase — a squash with custom text did not land them)`
-      : '')
-  const capNote = refs.length > cap ? `\n  …and ${refs.length - cap} more references not echoed` : ''
+  // GitHub applies closing keywords only when the merge lands on the DEFAULT
+  // branch. Merged into a release branch — or into the branch below it in a
+  // stack — nothing was closed, and telling the agent to reopen would send it
+  // after an issue that is still open. Both fields ride on the PR already
+  // fetched above, so the check costs no extra request.
+  const base = typeof pr?.base?.ref === 'string' ? pr.base.ref : ''
+  const defaultBranch = typeof pr?.base?.repo?.default_branch === 'string' ? pr.base.repo.default_branch : ''
+  const branchKnown = Boolean(base) && Boolean(defaultBranch)
+  const landedOnDefault = branchKnown && base === defaultBranch
+  const warn = !branchKnown
+    ? headCloses.length || commitCloses.length
+      ? `\n  could not tell which branch this landed on, so whether its close keywords have acted is UNKNOWN — check the issues above directly`
+      : ''
+    : !landedOnDefault
+    ? (headCloses.length
+        ? `\n  close keywords in the merge commit have NOT acted: this merged into ${base || 'another branch'}, and GitHub applies them only on the default branch. They act if and when this commit reaches it.`
+        : '') +
+      // The PR's own commits may never reach the default branch at all — a
+      // squash with custom text discards them — so they get no promise of
+      // eventual closure, only of not having closed anything yet.
+      (commitCloses.length
+        ? `\n  (close keywords in the PR's own commits have not acted either, and may never: a squash with custom text does not land them)`
+        : '')
+    : (headCloses.length
+        ? `\n  ⚠ close keywords in the merge commit have ALREADY acted — if an issue above was closed wrongly, reopen it now (gh issue reopen <n>)`
+        : '') +
+      (commitCloses.length
+        ? `\n  (close keywords in the PR's own commits acted only if this was a merge or rebase — a squash with custom text did not land them)`
+        : '')
+  const capNote = moreRefsNote(refs.length, cap)
   return [`merge commit ${pr.merge_commit_sha.slice(0, 9)} of #${n}:\n${issueRefsTable(message, refs.slice(0, cap), 'post')}${capNote}${pageNote}${warn}`]
 }
 
@@ -292,7 +395,22 @@ const hookPostPublish = () => {
   } catch {
     return
   }
+  const emit = notes => {
+    if (!notes.length) return
+    const hookEventName = failedEvent ? 'PostToolUseFailure' : 'PostToolUse'
+    console.log(
+      JSON.stringify({
+        hookSpecificOutput: {
+          hookEventName,
+          additionalContext: clipContext(
+            `bd-publish-verify (ground truth read back from the GitHub API):\n${notes.join('\n')}`,
+          ),
+        },
+      }),
+    )
+  }
   const cmd = payload?.tool_input?.command ?? ''
+  const failedEvent = payload?.hook_event_name === 'PostToolUseFailure'
   // The Bash tool merges stderr into tool_response.stdout; on
   // PostToolUseFailure there is NO tool_response and the output rides inside
   // the `error` string (both measured 2026-08-20).
@@ -302,16 +420,51 @@ const hookPostPublish = () => {
       : typeof payload?.error === 'string'
         ? payload.error
         : ''
-  if (!cmd || !out) return
-  if (!matchesPrCommand(cmd) && !matchesApiPublish(cmd)) return
+  // Empty output is NOT an early exit: a covered publish that printed
+  // nothing is precisely a coverage claim that cannot be honoured, and the
+  // no-target branch below is what says so. Returning here would make the
+  // report's promise — that an unkeepable claim is always visible — false in
+  // the one case where the hook has least to go on.
+  if (!cmd) return
+  if (!matchesAnyPublish(cmd)) return
   const all = publishedTargets(cmd, out)
   const allMerged = matchesPrCommand(cmd) ? mergedPrNumbers(out) : []
-  const mergedPrs = allMerged.slice(0, 2)
-  if (!all.length && !mergedPrs.length) return
+  const mergedPrs = allMerged.slice(0, MAX_MERGED_PRS)
+  // The pre-gate let this through on the promise that THIS hook would check
+  // it. When that promise cannot be kept — a response with no object URL, a
+  // templated or foreign or otherwise unreadable output — say so, rather
+  // than returning silently and leaving the text checked by nobody. This is
+  // what keeps a gap in the gate's gh-vocabulary list from being silent: it
+  // surfaces here instead of having to have been enumerated there.
+  if (!all.length && !mergedPrs.length) {
+    if (!isPostVerifiable(cmd)) return
+    // Nothing to check means nothing to warn about: a command that publishes
+    // no TEXT has no reference the read-back could have verified. That covers
+    // the explicit GET too — a read dressed as a mutation by its field flags.
+    if (!carriesPublishableText(cmd)) return
+    // A command the tool reports as FAILED published nothing, so there is no
+    // unkept promise to report. This is read from the payload rather than
+    // inferred — the one innocent cause of "no target" the hook is actually
+    // told about. A covered command that failed AFTER publishing still has
+    // its URL in the output and never reaches here.
+    if (failedEvent) return
+    return emit([
+      'this publish was treated as covered by the pre-publish gate, but its output named no object to read back — nothing has checked the references in what it published. Verify them yourself now — read the endpoint this command targeted back with `gh api <path>`, or re-read the text it sent — and if this shape recurs, the gate should stop treating it as covered.',
+    ])
+  }
   const targets = all.slice(0, MAX_TARGETS)
   const reportIds = !allowsBeadIds(cmd)
   const deadline = Date.now() + DEADLINE_MS
   const notes = []
+  // gh prints existing objects in its ERROR text too ("a pull request for
+  // branch X already exists: <url>"), so on a failure event the objects below
+  // were merely NAMED by the output — attribution is unknown, and the
+  // per-target notes' "already published, fix it now" framing would send the
+  // agent to edit a stranger's object.
+  if (failedEvent && targets.length)
+    notes.push(
+      `the command FAILED, so attribution of the object(s) below is UNKNOWN — an earlier segment may really have published one, and gh also prints EXISTING objects in its error text ("a pull request … already exists: <url>"). Confirm which before editing anything`,
+    )
   if (all.length > targets.length)
     notes.push(`only the first ${MAX_TARGETS} of ${all.length} published objects named in the output were verified`)
   if (allMerged.length > mergedPrs.length)
@@ -340,18 +493,7 @@ const hookPostPublish = () => {
       // same defence-in-depth contract as the targets loop above
     }
   }
-  const eventName = payload?.hook_event_name === 'PostToolUseFailure' ? 'PostToolUseFailure' : 'PostToolUse'
-  if (notes.length)
-    console.log(
-      JSON.stringify({
-        hookSpecificOutput: {
-          hookEventName: eventName,
-          additionalContext: clipContext(
-            `bd-publish-verify (ground truth read back from the GitHub API):\n${notes.join('\n')}`,
-          ),
-        },
-      }),
-    )
+  emit(notes)
 }
 
 if (isMainModule(import.meta.url)) {

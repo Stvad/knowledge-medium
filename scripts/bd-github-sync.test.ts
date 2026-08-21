@@ -16,9 +16,14 @@ import {
   detectReverts,
   extractBeadIds,
   issueNumberFromRef,
+  commitsInCommandPosition,
   matchesCommitCommand,
   matchesUnverifiableCommand,
   hasStdinBody,
+  carriesPublishableText,
+  isPostVerifiable,
+  matchesAnyPublish,
+  matchesApiPublish,
   matchesPrCommand,
   planClosePushes,
   planCloseReconciliation,
@@ -44,6 +49,13 @@ const bead = (over: Partial<BeadRow>): BeadRow => ({
   ...over,
 })
 const byId = (beads: BeadRow[]) => new Map(beads.map(b => [b.id, b]))
+
+// The two gh-side fixtures the hook tests reach for. Named because the whole
+// distinction is `pull_request` being present at all — a close keyword aimed
+// at a PR is the case the gate warns about, and spotting that in an inline
+// literal took a second look every time.
+const AN_ISSUE = { title: 'Real GC failure', state: 'open' }
+const A_PR = { title: 'Some PR', state: 'open', pull_request: {} }
 
 describe('extractBeadIds', () => {
   it('finds short and long-form ids, deduplicated, in order', () => {
@@ -141,6 +153,14 @@ describe('allowsBeadIds', () => {
     ).toBe(true)
   })
 
+  // Heredoc bodies survive into the skeleton, so a line of DATA sits where a
+  // command would. A detector may over-match there; a BYPASS may not.
+  it('ignores a marker forged from heredoc data', () => {
+    const forged = 'cat > n.md <<EOF\nKM_ALLOW_BEAD_IDS=1 is the prefix\nEOF\ngh pr merge 1 --body "km-abc"'
+    expect(allowsBeadIds(forged)).toBe(false)
+    expect(allowsIssueRefs(forged.replace('KM_ALLOW_BEAD_IDS', 'KM_ISSUE_REFS_OK'))).toBe(false)
+  })
+
   it('ignores the marker quoted inside an argument (it would be published)', () => {
     expect(allowsBeadIds('gh pr create --body "mentions KM_ALLOW_BEAD_IDS=1 in prose"')).toBe(false)
     // quoted prose with a fake segment start must not smuggle the marker in
@@ -149,15 +169,149 @@ describe('allowsBeadIds', () => {
   })
 })
 
+// A verb the detectors cannot see is the ONE outcome with no backstop: the
+// gate fast-exits and the read-back skips it too, so the text is examined by
+// neither. Requiring a recognized command position could only be written as a
+// list — of separators, keywords, wrapper commands — and an incomplete list
+// fails in exactly that direction.
+describe('carriesPublishableText', () => {
+  // The coverage report is only worth firing for commands that publish TEXT,
+  // and only its NAME says whether an api field carries any. Being wrong here
+  // costs a note either way, never a write — so this is allowed to be a small
+  // list, unlike the tests that decide coverage.
+  it('reads an api field by its name and a CLI -F as a body file', () => {
+    expect(carriesPublishableText('gh api repos/Stvad/knowledge-medium/issues/652/labels -F labels[]=bug')).toBe(false)
+    // every payload-field spelling gh accepts, so a field is never MISSED and
+    // then read as text-free — that suppresses the warning rather than adding
+    // one, which is the direction that actually hurts
+    expect(carriesPublishableText("gh api -X PUT repos/Stvad/knowledge-medium/contents/x --raw-field message='m'")).toBe(true)
+    expect(carriesPublishableText('gh api repos/Stvad/knowledge-medium/issues/1/comments --field body=hi')).toBe(true)
+    expect(carriesPublishableText('gh api -X PUT repos/Stvad/knowledge-medium/pulls/652/merge -f merge_method=squash')).toBe(false)
+    // compound field names carry text as much as `body` does, and the merge
+    // endpoint's keywords act the moment it answers — an exact-name list
+    // would have to grow once per endpoint to keep up
+    expect(
+      carriesPublishableText("gh api -X PUT repos/Stvad/knowledge-medium/pulls/652/merge -f commit_title='t'"),
+    ).toBe(true)
+    expect(
+      carriesPublishableText("gh api -X PUT repos/Stvad/knowledge-medium/pulls/652/merge -f commit_message='m'"),
+    ).toBe(true)
+    // the whole key=value may be quoted, which the skeleton blanks — a field
+    // that VANISHES reads as "no text", suppressing the warning entirely
+    expect(
+      carriesPublishableText(`gh api -X PUT repos/Stvad/knowledge-medium/pulls/652/merge -f 'commit_title=t'`),
+    ).toBe(true)
+    expect(carriesPublishableText('gh api repos/Stvad/knowledge-medium/issues/1/comments -F body=hi')).toBe(true)
+    expect(carriesPublishableText('gh pr comment 652 -F notes.md')).toBe(true)
+    expect(carriesPublishableText('gh pr comment 652 --body hi')).toBe(true)
+    expect(carriesPublishableText('gh pr comment 652 --delete-last')).toBe(false)
+    // A create is text-bearing by its VERB, so every way gh can supply the
+    // body with no flag naming it is covered without listing them.
+    expect(carriesPublishableText('gh pr create --fill')).toBe(true)
+    expect(carriesPublishableText('gh pr create --recover /tmp/failed.json')).toBe(true)
+    expect(carriesPublishableText('gh issue create')).toBe(true)
+    expect(carriesPublishableText('gh release create v1')).toBe(true)
+    // an EDIT really can carry no text, so it keeps the flag list
+    expect(carriesPublishableText('gh pr edit 652 --add-label ui')).toBe(false)
+    // gh keeps the LAST -X/--method (measured: -X POST -X GET answers as a
+    // GET, the reverse 404s as a POST), so a read token earlier in the argv
+    // must not suppress the warning for what is actually a mutation
+    expect(
+      carriesPublishableText(`gh api -X GET -X PUT repos/Stvad/knowledge-medium/pulls/1/merge -f 'commit_title=t'`),
+    ).toBe(true)
+    expect(
+      carriesPublishableText(`gh api -X PUT -X GET repos/Stvad/knowledge-medium/pulls/1/merge -f 'commit_title=t'`),
+    ).toBe(false)
+    // gh documents nested key[subkey]=value fields, and gist file content is
+    // its own example; FIELD_ANY captures the bracketed name whole
+    expect(carriesPublishableText(`gh api gists -f public=true -f 'files[a.md][content]=Fixes #700'`)).toBe(true)
+  })
+})
+
+describe('detectors see the verb wherever it sits', () => {
+  it('sees indented, continued and wrapper-prefixed publishes', () => {
+    for (const cmd of [
+      '  gh pr create --title t --body b',
+      'git push -u origin HEAD && \\\n  gh pr create --title t',
+      'cd /tmp\n  gh pr create --title t',
+      'timeout 60 gh pr create --title t',
+      'sudo -u someone gh pr create --title t',
+      'nohup gh pr create --title t',
+    ])
+      expect(matchesAnyPublish(cmd), cmd).toBe(true)
+    expect(matchesCommitCommand('  git commit -m x')).toBe(true)
+  })
+
+  // An ESCAPED space means the `#` after it is an argument, not a comment, so
+  // bash runs what follows the next separator. Comments are handled in the
+  // same pass as quotes and escapes for exactly this reason — a sweep
+  // afterwards cannot see that the space was spoken for, and deleted a real
+  // publish along with the supposed comment.
+  it('keeps a command that follows escaped hash text', () => {
+    const q = String.fromCharCode(39)
+    expect(matchesAnyPublish(`printf x \\ #literal; gh issue comment 1 --body ${q}hi${q}`)).toBe(true)
+    // a genuine trailing comment still hides its verb
+    expect(matchesAnyPublish('git commit -F msg # later: gh pr create')).toBe(false)
+    // and a `#` inside a quoted body is neither
+    expect(matchesAnyPublish(`gh pr comment 1 --body ${q}see #700${q}`)).toBe(true)
+  })
+
+  // The apostrophe trap commandSkeleton was written to avoid, which a second
+  // naive quote-sweep reintroduced: two double-quoted arguments each holding
+  // an apostrophe let those two pair, swallowing everything between them —
+  // here a real expansion, which then hid the command from BOTH hooks.
+  it('does not let apostrophes inside double-quoted args pair across an expansion', () => {
+    const q = String.fromCharCode(39)
+    const cmd = `gh api -H "X: can${q}t" \${FLAGS:--f body=x} -H "Y: won${q}t" repos/Stvad/knowledge-medium/issues/1/comments`
+    expect(matchesAnyPublish(cmd)).toBe(true)
+    // and it is uncovered, so its text is checked before it ships
+    expect(isPostVerifiable(cmd)).toBe(false)
+  })
+
+  // A shell COMMENT is text bash never runs. This matters more than it looks:
+  // the commit leg skips its message-file inspection when the invocation also
+  // publishes, so a commented-out verb reading as a real publish would let a
+  // close keyword inside that file through unchecked — over-matching fails
+  // OPEN here rather than costing a round.
+  it('does not read a commented-out verb as a publish', () => {
+    expect(matchesAnyPublish('git commit -F msg # later: gh pr create')).toBe(false)
+    expect(matchesAnyPublish('gh pr create --title t # not gh pr merge')).toBe(true)
+    // a positional URL fragment is not a comment
+    expect(matchesAnyPublish('gh pr comment https://github.com/o/r/pull/1#issuecomment-2 --body x')).toBe(true)
+  })
+
+  // What keeps prose out is commandSkeleton blanking quoted spans, not the
+  // position test — so dropping the position test costs nothing here.
+  it('still ignores a verb that only appears inside quoted prose', () => {
+    expect(matchesUnverifiableCommand('git commit -m "gh pr merge 652 was the fix"')).toBe(false)
+    expect(matchesUnverifiableCommand('gh pr comment 1 --body "will gh pr merge later"')).toBe(false)
+    expect(matchesApiPublish('git commit -m "reply via gh api -X POST later"')).toBe(false)
+    expect(matchesAnyPublish('echo "gh pr create --title t"')).toBe(false)
+  })
+})
+
 describe('bodyFilePaths / resolveBodyPath', () => {
-  it('extracts plain, =-joined, and quoted message-file paths from -F, --file and --body-file', () => {
+  // A path is not glued to the separator that follows it.
+  it('does not swallow a separator into a message-file path', () => {
+    expect(bodyFilePaths('git commit -F /tmp/a.txt; echo done')).toEqual(['/tmp/a.txt'])
+    expect(bodyFilePaths('git commit -F /tmp/a.txt && echo done')).toEqual(['/tmp/a.txt'])
+  })
+
+  it('extracts plain, =-joined and quoted message-file paths', () => {
     expect(bodyFilePaths('git commit -F /tmp/a.txt')).toEqual(['/tmp/a.txt'])
     expect(bodyFilePaths('git commit --file=/tmp/b.txt')).toEqual(['/tmp/b.txt'])
-    expect(bodyFilePaths('gh pr merge 12 --body-file /tmp/m.txt')).toEqual(['/tmp/m.txt'])
     expect(bodyFilePaths(`git commit -F "/tmp/with space.txt" -F '/tmp/q.txt'`)).toEqual([
       '/tmp/with space.txt',
       '/tmp/q.txt',
     ])
+    // Deliberately broad, with the caller standing down when the invocation
+    // also publishes. Narrowing this instead was tried and lost two
+    // fail-closed cases, so breadth plus the caller's guard wins.
+    expect(bodyFilePaths('gh pr merge 12 --body-file /tmp/m.txt')).toEqual(['/tmp/m.txt'])
+    // a filename may contain `=`, and a process substitution must resolve to
+    // SOMETHING unreadable rather than vanishing
+    expect(bodyFilePaths(`git commit -F 'msg=1.txt'`)).toEqual(['msg=1.txt'])
+    expect(bodyFilePaths('git commit -F <(cat msg.txt)')).toEqual(['<(cat'])
   })
 
   it('skips the stdin sentinel and its device-path disguises', () => {
@@ -408,6 +562,57 @@ describe('matchesCommitCommand', () => {
     expect(matchesCommitCommand('git -c user.name=x commit -m m')).toBe(true)
     expect(matchesCommitCommand('git --git-dir=/r/.git commit -m m')).toBe(true)
     expect(matchesCommitCommand('git push origin commit')).toBe(false)
+  })
+})
+
+// The detector above over-matches on purpose. This is the evidence the FILE
+// READ needs on top of it, because over-matching there opens a path named in
+// argv rather than costing an echo round.
+// Bash's `!` inverts the pipeline's status, so the tool reports success for a
+// failed publish and failure for a live one — and which post-hook event fires
+// with it. The read-back reasons from that event and cannot check it, so the
+// shape has to stay uncovered and take the pre-publish check instead.
+describe('isPostVerifiable and the negating reserved word', () => {
+  it('treats a negated publish as uncovered, and leaves quoted exclamations alone', () => {
+    expect(isPostVerifiable('! gh pr create --body x')).toBe(false)
+    expect(isPostVerifiable('gh pr create --body x')).toBe(true)
+    // the skeleton blanks quoted spans, so ordinary prose still qualifies
+    expect(isPostVerifiable('gh pr comment 1 --body "Fixed it!"')).toBe(true)
+    expect(isPostVerifiable(`gh pr comment 1 --body 'Nice!'`)).toBe(true)
+  })
+})
+
+describe('commitsInCommandPosition', () => {
+  it('requires git commit to be the segment-s verb, not merely present in argv', () => {
+    expect(commitsInCommandPosition('git commit -F msg.txt')).toBe(true)
+    expect(commitsInCommandPosition('cd repo && git commit -F msg.txt')).toBe(true)
+    // the whole point: these run printf and echo, and name no message file
+    expect(commitsInCommandPosition(`printf '%s' git commit -F .env`)).toBe(false)
+    expect(commitsInCommandPosition('echo git commit -F secrets.txt')).toBe(false)
+  })
+
+  it('sees the real verb through paths, assignments, wrappers and options', () => {
+    expect(commitsInCommandPosition('/usr/bin/git commit -F m')).toBe(true)
+    expect(commitsInCommandPosition('FOO=1 git commit -F m')).toBe(true)
+    expect(commitsInCommandPosition('env FOO=1 git commit -F m')).toBe(true)
+    expect(commitsInCommandPosition('git -C /r commit -F m')).toBe(true)
+    expect(commitsInCommandPosition('git log -F x')).toBe(false)
+  })
+
+  // A wrapper's own OPTIONS decide whether it execs at all: `command -v`
+  // prints a description and runs nothing. Since this check authorizes a file
+  // read, the skip stops at the first option — refusing the -v form, and
+  // accepting that a wrapper with options leaves one message file unscanned.
+  it('stops the prefix skip at a wrapper option rather than guessing its arity', () => {
+    expect(commitsInCommandPosition(`command -v git commit -F .env`)).toBe(false)
+    expect(commitsInCommandPosition('env -u FOO git commit -F m')).toBe(false)
+    expect(commitsInCommandPosition('xargs -n1 git commit -F m')).toBe(false)
+  })
+
+  // A heredoc body sits at a segment boundary but is DATA. It reaches the
+  // skeleton, so the detector sees it; nothing may read a file it names.
+  it('does not accept a heredoc body as a command position', () => {
+    expect(commitsInCommandPosition("cat <<'EOF'\ngit commit -F .env\nEOF")).toBe(false)
   })
 })
 
@@ -702,15 +907,29 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     return { run, shimCalls: () => readFileSync(shimLog, 'utf8') }
   }
 
-  const ghIssue = (number: number, updatedAt: string) => ({
+  const ghIssue = (number: number, updatedAt: string, state = 'OPEN') => ({
     number,
-    state: 'OPEN',
+    state,
     labels: [{ name: 'priority::high' }],
     updatedAt,
   })
 
+  // The wider row shape `bd list --json` emits — the plan functions' BeadRow
+  // is a subset of it. Only the boilerplate lives here: external_ref and
+  // updated_at stay at the call site because half these tests pin an ORDERING
+  // between a local row and its GitHub issue, or the absence of a link, and
+  // neither was readable inside a 160-character literal.
+  const syncRow = <T extends object>(over: T) => ({
+    id: 'km-x',
+    status: 'open',
+    priority: 1,
+    title: 'T',
+    description: 'D',
+    ...over,
+  })
+
   it('pushes local state out BEFORE the pull, and stays quiet with no suspects', () => {
-    const row = { id: 'km-t1', status: 'open', priority: 1, title: 'T', description: 'D', external_ref: ref(1), updated_at: '2026-08-19T00:00:00Z' }
+    const row = syncRow({ id: 'km-t1', external_ref: ref(1), updated_at: '2026-08-19T00:00:00Z' })
     const { run, shimCalls } = makeSyncRepo({
       issues: [ghIssue(1, '2026-08-20T00:00:00Z')],
       lists: [[row], [row], [row]],
@@ -731,9 +950,9 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
   // Position pin: the pre-pull push must run AFTER close-adoption — swapped,
   // a still-open bead's push would re-open its GitHub-closed issue (trap 1).
   it('adopts GitHub-side closes BEFORE the pre-pull push', () => {
-    const row = { id: 'km-t3', status: 'open', priority: 1, title: 'T', description: 'D', external_ref: ref(3), updated_at: '2026-08-19T00:00:00Z' }
+    const row = syncRow({ id: 'km-t3', external_ref: ref(3), updated_at: '2026-08-19T00:00:00Z' })
     const { run, shimCalls } = makeSyncRepo({
-      issues: [{ number: 3, state: 'CLOSED', labels: [{ name: 'priority::high' }], updatedAt: '2026-08-20T00:00:00Z' }],
+      issues: [ghIssue(3, '2026-08-20T00:00:00Z', 'CLOSED')],
       lists: [[row], [{ ...row, status: 'closed' }], [{ ...row, status: 'closed' }]],
     })
     const r = run()
@@ -747,7 +966,7 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
   })
 
   it('prints the km→#N mapping for an issue this run minted', () => {
-    const unminted = { id: 'km-t5', status: 'open', priority: 1, title: 'T', description: 'D', external_ref: null, updated_at: '2026-08-19T00:00:00Z' }
+    const unminted = syncRow({ id: 'km-t5', external_ref: null, updated_at: '2026-08-19T00:00:00Z' })
     const minted = { ...unminted, external_ref: ref(5) }
     const { run } = makeSyncRepo({
       issues: [ghIssue(5, '2026-08-20T00:00:00Z')],
@@ -763,7 +982,7 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
   // when a later step throws, and by the NEXT run the bead already carries
   // its ref, so a swallowed mapping would never be printed at all.
   it('prints the minted mapping even when a later sync step fails', () => {
-    const unminted = { id: 'km-t5', status: 'open', priority: 1, title: 'T', description: 'D', external_ref: null, updated_at: '2026-08-19T00:00:00Z' }
+    const unminted = syncRow({ id: 'km-t5', external_ref: null, updated_at: '2026-08-19T00:00:00Z' })
     const minted = { ...unminted, external_ref: ref(5) }
     const { run } = makeSyncRepo({
       issues: [ghIssue(5, '2026-08-20T00:00:00Z')],
@@ -782,7 +1001,7 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
   // mapping would be swallowed in exactly that case (the failFullSync test
   // cannot catch this: it mints an OPEN bead, which is never a suspect).
   it('prints the minted mapping even when the suspect snapshot aborts the run', () => {
-    const unminted = { id: 'km-t6', status: 'closed', priority: 1, title: 'T', description: 'D', external_ref: null, updated_at: '2026-08-19T00:00:00Z' }
+    const unminted = syncRow({ id: 'km-t6', status: 'closed', external_ref: null, updated_at: '2026-08-19T00:00:00Z' })
     const minted = { ...unminted, external_ref: ref(6) }
     const { run } = makeSyncRepo({
       issues: [ghIssue(6, '2026-08-20T00:00:00Z')],
@@ -819,7 +1038,7 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
   // priority here, so the id enters through the priority-fix leg too — the
   // exclusion must hold for the whole union, not just restoredOk.
   it('keeps a failed restore out of the push-back, including the priority-fix leg', () => {
-    const closedLocal = { id: 'km-t4', status: 'closed', priority: 1, title: 'T', description: 'D', external_ref: ref(4), updated_at: '2026-08-20T02:00:00Z' }
+    const closedLocal = syncRow({ id: 'km-t4', status: 'closed', external_ref: ref(4), updated_at: '2026-08-20T02:00:00Z' })
     const revertedRow = { ...closedLocal, status: 'open', priority: 2 }
     const { run, shimCalls } = makeSyncRepo({
       issues: [ghIssue(4, '2026-08-20T01:00:00Z')],
@@ -837,7 +1056,7 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
   // Assignment rides on `bd show` rows (list rows lack the field), and an
   // unassigned snapshot must CLEAR a pulled stale assignee (-a '' does).
   it('detects and restores an assignment-only revert', () => {
-    const newer = { id: 'km-t9', status: 'open', priority: 1, title: 'T', description: 'D', external_ref: ref(9), updated_at: '2026-08-20T02:00:00Z' }
+    const newer = syncRow({ id: 'km-t9', external_ref: ref(9), updated_at: '2026-08-20T02:00:00Z' })
     const { run, shimCalls } = makeSyncRepo({
       issues: [ghIssue(9, '2026-08-20T01:00:00Z')],
       lists: [[newer], [newer], [newer]],
@@ -866,7 +1085,7 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
   })
 
   it('restores a labels-only revert via the label delta', () => {
-    const newer = { id: 'km-tA', status: 'open', priority: 1, title: 'T', description: 'D', external_ref: ref(10), updated_at: '2026-08-20T02:00:00Z', labels: ['ui'] }
+    const newer = syncRow({ id: 'km-tA', external_ref: ref(10), updated_at: '2026-08-20T02:00:00Z', labels: ['ui'] })
     const { run, shimCalls } = makeSyncRepo({
       issues: [ghIssue(10, '2026-08-20T01:00:00Z')],
       lists: [[newer], [newer], [newer]],
@@ -900,7 +1119,7 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
   // timestamp, so the timestamp suspect test can never flag the closed bead
   // — the minted-closed plan must snapshot it or the pull loses the close.
   it('snapshots and restores a closed bead whose first issue the pre-push minted', () => {
-    const preRow = { id: 'km-tC', status: 'closed', priority: 1, title: 'T', description: 'D', updated_at: '2026-08-19T00:00:00Z' }
+    const preRow = syncRow({ id: 'km-tC', status: 'closed', updated_at: '2026-08-19T00:00:00Z' })
     const minted = { ...preRow, external_ref: ref(12) }
     const revertedRow = { ...minted, status: 'open' }
     const { run, shimCalls } = makeSyncRepo({
@@ -920,10 +1139,10 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
   // reopened-closed plan must snapshot it so the restore closes the bead
   // again and the push-back re-closes the issue.
   it('undoes a GitHub-side reopen of a closed bead', () => {
-    const closedRow = { id: 'km-tD', status: 'closed', priority: 1, title: 'T', description: 'D', external_ref: ref(14), updated_at: '2026-08-19T00:00:00Z' }
+    const closedRow = syncRow({ id: 'km-tD', status: 'closed', external_ref: ref(14), updated_at: '2026-08-19T00:00:00Z' })
     const revertedRow = { ...closedRow, status: 'open' }
     const { run, shimCalls } = makeSyncRepo({
-      issues: [{ number: 14, state: 'OPEN', labels: [{ name: 'priority::high' }], updatedAt: '2026-08-20T05:00:00Z' }],
+      issues: [ghIssue(14, '2026-08-20T05:00:00Z')],
       lists: [[closedRow], [closedRow], [revertedRow]],
       shows: [[{ ...closedRow, close_reason: 'done' }], [revertedRow]],
     })
@@ -937,7 +1156,7 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
   // bd's partial-output shape: found rows on stdout, `Error…` for the rest,
   // exit 0 — valid JSON that silently covers only some suspects.
   it('aborts when the snapshot covers only part of the suspect set', () => {
-    const a = { id: 'km-t7', status: 'open', priority: 1, title: 'T', description: 'D', external_ref: ref(7), updated_at: '2026-08-20T02:00:00Z' }
+    const a = syncRow({ id: 'km-t7', external_ref: ref(7), updated_at: '2026-08-20T02:00:00Z' })
     const b = { ...a, id: 'km-t8', external_ref: ref(8) }
     const { run, shimCalls } = makeSyncRepo({
       issues: [ghIssue(7, '2026-08-20T01:00:00Z'), ghIssue(8, '2026-08-20T01:00:00Z')],
@@ -951,7 +1170,7 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
   })
 
   it('stays silent under --quiet when a converged run changed nothing', () => {
-    const row = { id: 'km-t6', status: 'open', priority: 1, title: 'T', description: 'D', external_ref: ref(6), updated_at: '2026-08-19T00:00:00Z' }
+    const row = syncRow({ id: 'km-t6', external_ref: ref(6), updated_at: '2026-08-19T00:00:00Z' })
     const { run } = makeSyncRepo({
       issues: [ghIssue(6, '2026-08-20T00:00:00Z')],
       lists: [[row], [row], [row]],
@@ -976,7 +1195,6 @@ describe('hookPrePr process behavior', { timeout: 20_000 }, () => {
     dbReady: boolean
     ghIssues?: Record<number, object>
     shows?: object[][]
-    dry?: boolean
   }) => {
     const repo = mkdtempSync(join(tmpdir(), 'bd-sync-hook-'))
     spawnSync('git', ['init', '-q'], { cwd: repo })
@@ -1036,7 +1254,6 @@ describe('hookPrePr process behavior', { timeout: 20_000 }, () => {
       GH_HOST: '127.0.0.1',
       BD_GITHUB_SYNC_DRY: '1',
     }
-    if (opts.dry === false) delete env.BD_GITHUB_SYNC_DRY
     const hook = (command: string) => {
       const payload = JSON.stringify({ tool_name: 'Bash', cwd: repo, tool_input: { command } })
       return spawnSync('node', [script, '--hook-pre-pr'], { cwd: repo, env, input: payload, encoding: 'utf8' })
@@ -1072,7 +1289,7 @@ describe('hookPrePr process behavior', { timeout: 20_000 }, () => {
   // output — each pinned below. Publishes the verifier can read hand their
   // refs to bd-publish-verify.mjs.
   it('echoes issue references on gh pr merge with their real titles and blocks once', () => {
-    const { hook } = makeRepo({ dbReady: true, ghIssues: { 653: { title: 'Real GC failure', state: 'open' } } })
+    const { hook } = makeRepo({ dbReady: true, ghIssues: { 653: AN_ISSUE } })
     const r = hook('gh pr merge 12 --squash --body "relates to #653 and #999"')
     expect(r.status).toBe(2)
     expect(r.stderr).toContain('#653 → "Real GC failure" (issue, open)')
@@ -1084,14 +1301,14 @@ describe('hookPrePr process behavior', { timeout: 20_000 }, () => {
   })
 
   it('honors KM_ISSUE_REFS_OK before any lookup (zero gh calls)', () => {
-    const { hook, shimCalls } = makeRepo({ dbReady: true, ghIssues: { 653: { title: 'Real GC failure', state: 'open' } } })
+    const { hook, shimCalls } = makeRepo({ dbReady: true, ghIssues: { 653: AN_ISSUE } })
     const r = hook('KM_ISSUE_REFS_OK=1 gh pr merge 12 --body "relates to #653"')
     expect(r.status).toBe(0)
     expect(shimCalls()).not.toContain('gh api')
   })
 
   it('warns when a merge close keyword targets a pull request', () => {
-    const { hook } = makeRepo({ dbReady: true, ghIssues: { 700: { title: 'Some PR', state: 'open', pull_request: {} } } })
+    const { hook } = makeRepo({ dbReady: true, ghIssues: { 700: A_PR } })
     const r = hook('gh pr merge 12 --body "Fixes #700"')
     expect(r.status).toBe(2)
     expect(r.stderr).toContain('close keyword targets a PR')
@@ -1101,7 +1318,7 @@ describe('hookPrePr process behavior', { timeout: 20_000 }, () => {
   // any #N already in merge text must be echoed in the SAME round —
   // otherwise that licence would publish unverified numbers.
   it('echoes pre-existing issue refs inside the bead-id deny round on merge', () => {
-    const { hook } = makeRepo({ dbReady: true, ghIssues: { 653: { title: 'Real GC failure', state: 'open' } } })
+    const { hook } = makeRepo({ dbReady: true, ghIssues: { 653: AN_ISSUE } })
     const r = hook('gh pr merge 12 --body "tracks km-zzzz, relates to #653"')
     expect(r.status).toBe(2)
     expect(r.stderr).toContain('km-zzzz')
@@ -1111,7 +1328,7 @@ describe('hookPrePr process behavior', { timeout: 20_000 }, () => {
   // The legs are INDEPENDENT: a publish verb in the same invocation must not
   // swallow the commit check.
   it('gates commit close keywords even when the invocation also publishes', () => {
-    const { hook } = makeRepo({ dbReady: true, ghIssues: { 700: { title: 'Some PR', state: 'open', pull_request: {} } } })
+    const { hook } = makeRepo({ dbReady: true, ghIssues: { 700: A_PR } })
     const r = hook('git commit -m "land it\n\nFixes #700" && gh pr comment 12 --body "posted"')
     expect(r.status).toBe(2)
     expect(r.stderr).toContain('close keyword targets a PR')
@@ -1158,7 +1375,7 @@ describe('hookPrePr process behavior', { timeout: 20_000 }, () => {
   // Quoted membership words reach gh unquoted but are blanked from the
   // skeleton — the raw text answers for them too.
   it('classifies quoted graphql/output-hiding words from the raw command', () => {
-    const { hook } = makeRepo({ dbReady: true, ghIssues: { 653: { title: 'Real GC failure', state: 'open' } } })
+    const { hook } = makeRepo({ dbReady: true, ghIssues: { 653: AN_ISSUE } })
     const r = hook('gh api "--silent" repos/Stvad/knowledge-medium/issues/1/comments -f body="see #653"')
     expect(r.status).toBe(2)
     expect(r.stderr).toContain('#653 → "Real GC failure" (issue, open)')
@@ -1173,7 +1390,7 @@ describe('hookPrePr process behavior', { timeout: 20_000 }, () => {
   // Even `2>` attests, though it leaves stdout intact: carving it out is
   // exactly the special-casing this shape exists to avoid.
   it('pre-echoes refs of any publish carrying a shell operator', () => {
-    const { hook } = makeRepo({ dbReady: true, ghIssues: { 700: { title: 'Some PR', state: 'open', pull_request: {} } } })
+    const { hook } = makeRepo({ dbReady: true, ghIssues: { 700: A_PR } })
     const r = hook('gh pr edit 12 --body="Fixes #700" >/dev/null')
     expect(r.status).toBe(2)
     expect(r.stderr).toContain('close keyword targets a PR')
@@ -1224,7 +1441,7 @@ describe('hookPrePr process behavior', { timeout: 20_000 }, () => {
   // gh pr review output names no URL, so the verifier cannot find the
   // review — its refs stay pre-gated.
   it('echoes issue references on gh pr review and passes clean reviews', () => {
-    const { hook } = makeRepo({ dbReady: true, ghIssues: { 653: { title: 'Real GC failure', state: 'open' } } })
+    const { hook } = makeRepo({ dbReady: true, ghIssues: { 653: AN_ISSUE } })
     const r = hook('gh pr review 5 --comment -b "relates to #653"')
     expect(r.status).toBe(2)
     expect(r.stderr).toContain('#653 → "Real GC failure" (issue, open)')
@@ -1234,7 +1451,7 @@ describe('hookPrePr process behavior', { timeout: 20_000 }, () => {
   // GraphQL mutations publish through a response envelope the verifier
   // cannot safely resolve; their inline query text sits in the raw command.
   it('gates refs and bead ids in graphql mutations, ignoring graphql reads', () => {
-    const { hook } = makeRepo({ dbReady: true, ghIssues: { 653: { title: 'Real GC failure', state: 'open' } } })
+    const { hook } = makeRepo({ dbReady: true, ghIssues: { 653: AN_ISSUE } })
     const r = hook(`gh api graphql -f query='mutation { addComment(input: {body: "see #653"}) { x } }'`)
     expect(r.status).toBe(2)
     expect(r.stderr).toContain('Real GC failure')
@@ -1248,7 +1465,7 @@ describe('hookPrePr process behavior', { timeout: 20_000 }, () => {
   // verifier — its READABLE inline text gets the tables here; a blanket
   // block would offer the escape without ever showing the refs.
   it('echoes readable text of response-hiding api mutations, passes clean ones', () => {
-    const { hook } = makeRepo({ dbReady: true, ghIssues: { 653: { title: 'Real GC failure', state: 'open' } } })
+    const { hook } = makeRepo({ dbReady: true, ghIssues: { 653: AN_ISSUE } })
     const r = hook('gh api --silent -X PATCH repos/Stvad/knowledge-medium/pulls/12 -f body="relates to #653"')
     expect(r.status).toBe(2)
     expect(r.stderr).toContain('#653 → "Real GC failure" (issue, open)')
@@ -1270,7 +1487,7 @@ describe('hookPrePr process behavior', { timeout: 20_000 }, () => {
   // Round-6 pin: a sibling GET segment must not suppress the opaque leg —
   // there is no GET exemption left to suppress.
   it('echoes refs of a silent mutation even when a sibling segment is an explicit GET', () => {
-    const { hook } = makeRepo({ dbReady: true, ghIssues: { 653: { title: 'Real GC failure', state: 'open' } } })
+    const { hook } = makeRepo({ dbReady: true, ghIssues: { 653: AN_ISSUE } })
     const r = hook(
       'gh api -X GET repos/Stvad/knowledge-medium/issues/1 && gh api --silent repos/Stvad/knowledge-medium/issues/1/comments -f body="see #653"',
     )
@@ -1281,7 +1498,7 @@ describe('hookPrePr process behavior', { timeout: 20_000 }, () => {
   // Close/reopen comments publish text whose success output names repo#N,
   // never a URL — the verifier cannot find them, so their refs stay here.
   it('echoes issue references in close/reopen comments and passes comment-less closes', () => {
-    const { hook } = makeRepo({ dbReady: true, ghIssues: { 653: { title: 'Real GC failure', state: 'open' } } })
+    const { hook } = makeRepo({ dbReady: true, ghIssues: { 653: AN_ISSUE } })
     const r = hook('gh issue close 12 -c "superseded, see #653"')
     expect(r.status).toBe(2)
     expect(r.stderr).toContain('#653 → "Real GC failure" (issue, open)')
@@ -1324,23 +1541,33 @@ describe('hookPrePr process behavior', { timeout: 20_000 }, () => {
     expect(hook('KM_ISSUE_REFS_OK=1 cd subdir && git commit -F msg.txt').status).toBe(0)
   })
 
-  // The mint itself, pinned end-to-end: dry unset, a token-answering gh
-  // shim, and per-call bd show fixtures — without these the mint branch is
-  // structurally unreachable in this harness and could break with a green
-  // gate (found by mutation).
-  it('mints an issue for an unmapped bead and denies with the fresh number', () => {
-    const { hook, shimCalls } = makeRepo({
+  // The commit leg reads its OWN message file, and no longer stands down when
+  // the invocation is also read as publishing. Nothing observable changes for
+  // the compound below — a commit file flag always trips the coarse rule, so
+  // it was blocked before this too — but the leg no longer depends on a
+  // detector that deliberately over-matches, and the file is read for the
+  // reason it should be rather than by luck of a second guard.
+  it('reads the commit message file, and blocks a compound either way', () => {
+    const { hook, repo } = makeRepo({
       dbReady: true,
-      dry: false,
-      shows: [[{ id: 'km-zzzz', external_ref: null }], [{ id: 'km-zzzz', external_ref: ref(88) }]],
+      ghIssues: { 700: A_PR },
     })
-    const r = hook('gh pr create --title t --body "tracks km-zzzz"')
-    expect(r.status).toBe(2)
-    expect(shimCalls()).toContain('bd github sync --push-only --issues km-zzzz')
-    expect(r.stderr).toContain('#88')
+    writeFileSync(join(repo, 'msg.txt'), 'land it\n\nFixes #700\n')
+    // alone: the file is read and its close keyword checked against reality
+    const alone = hook(`git commit -F ${join(repo, 'msg.txt')}`)
+    expect(alone.status).toBe(2)
+    expect(alone.stderr).toContain('close keyword targets a PR')
+    // beside a verb in argv: still blocked, nothing slips through
+    const verb = ['gh', 'pr', 'create'].join(' ')
+    expect(hook(`git commit -F ${join(repo, 'msg.txt')}; printf '%s' ${verb}`).status).toBe(2)
   })
 
-  it('suppresses the pre-gate mint under BD_GITHUB_SYNC_DRY=1', () => {
+  // The gate LOOKS UP but never MINTS. The detectors deliberately over-match,
+  // and a verb sitting in ordinary unquoted argv reads as a publish — so a
+  // mint here would create a public issue for a command that is about to be
+  // blocked and never runs. An extra check costs a round; an extra issue does
+  // not come back.
+  it('never mints an issue, even for a real unmapped bead in a real publish', () => {
     const { hook, shimCalls } = makeRepo({
       dbReady: true,
       shows: [[{ id: 'km-zzzz', external_ref: null }]],
@@ -1349,6 +1576,18 @@ describe('hookPrePr process behavior', { timeout: 20_000 }, () => {
     expect(r.status).toBe(2)
     expect(shimCalls()).toContain('bd show km-zzzz')
     expect(shimCalls()).not.toContain('bd github sync')
+    expect(r.stderr).toContain('pnpm bd:sync')
+  })
+
+  // The same, through the shape that made this urgent: a verb in argv, where
+  // blanking quoted spans protects nothing.
+  it('does not spawn a sync for a bead id in a non-publishing command', () => {
+    const { hook, shimCalls } = makeRepo({ dbReady: true, shows: [[{ id: 'km-new', external_ref: null }]] })
+    const verb = ['gh', 'pr', 'create'].join(' ')
+    const r = hook(`printf '%s' ${verb} km-new`)
+    expect(shimCalls()).not.toContain('bd github sync')
+    // the id is still surfaced rather than silently allowed
+    if (r.status === 2) expect(r.stderr).toContain('km-new')
   })
 
   // A COVERED publish gets no body inspection at all: one gh command, no
@@ -1358,7 +1597,7 @@ describe('hookPrePr process behavior', { timeout: 20_000 }, () => {
   // surface from growing back (#672: the pre-gate's surface is frozen;
   // decline coverage findings here).
   it('lets covered publishes through without body inspection (post-publication owns them)', () => {
-    const { hook, shimCalls } = makeRepo({ dbReady: true, ghIssues: { 653: { title: 'Real GC failure', state: 'open' } } })
+    const { hook, shimCalls } = makeRepo({ dbReady: true, ghIssues: { 653: AN_ISSUE } })
     expect(hook('gh pr create --title t --body "relates to #653"').status).toBe(0)
     expect(hook('gh pr create --body-file missing-body.md --title t').status).toBe(0)
     expect(hook('gh pr create --recover abc123 --title t').status).toBe(0)
@@ -1377,6 +1616,94 @@ describe('hookPrePr process behavior', { timeout: 20_000 }, () => {
       'cd subdir && gh pr create --body-file missing-body.md --title t',
     ])
       expect(hook(cmd).status, cmd).toBe(2)
+  })
+
+  // A mode that prints or hands off creates nothing for the read-back to
+  // find, so it is UNCOVERED — never exempt from publishing checks. Exempting
+  // fails open, and the token is command-wide: a dry-run beside a real
+  // publish, or --dry-run=false, would exempt a genuine publish. Uncovered
+  // fails closed in all three, at the cost of one confirmation round.
+  it('makes --dry-run and --web uncovered, never exempt from the checks', () => {
+    const { hook } = makeRepo({ dbReady: true, ghIssues: { 700: A_PR } })
+    for (const cmd of [
+      'gh pr create --title t --body "Fixes #700" --dry-run',
+      'gh pr create --title t --body "Fixes #700" --web',
+      // the disabled form still checks, rather than exempting itself
+      'gh pr create --title t --body "Fixes #700" --dry-run=false',
+      // a dry-run beside a REAL publish must not exempt the real one
+      'gh pr create --title t --dry-run; gh issue comment 1 --body "Fixes #700"',
+      // nor must a body that merely mentions the flag exempt anything
+      'gh pr merge 12 --squash --body "run it with --dry-run first, Fixes #700"',
+    ]) {
+      const r = hook(cmd)
+      expect(r.status, cmd).toBe(2)
+      expect(r.stderr, cmd).toContain('close keyword targets a PR')
+    }
+  })
+
+  // A `$` or backtick inside SINGLE quotes never expands, so it is published
+  // text rather than a hidden argument — an inline markdown code span or a
+  // price must not cost the maximum-friction round. Double-quoted, the shell
+  // WOULD expand it, so that stays uncovered.
+  it('treats single-quoted dollars and backticks as text, not expansion', () => {
+    const { hook } = makeRepo({ dbReady: true })
+    expect(hook("gh pr comment 652 --body 'the `isPostVerifiable` gate'").status).toBe(0)
+    expect(hook("gh pr comment 652 --body 'costs $5 per run'").status).toBe(0)
+    // double quotes DO expand, so the gate still refuses to call it covered
+    expect(hook('gh pr comment 652 --body "see $(cat notes.md)"').status).toBe(2)
+  })
+
+  // The gate must never fail on its OWN bug: PreToolUse treats an unasked-for
+  // non-zero exit as a hook error and runs the command anyway, so a throw
+  // would disable every check while looking like a problem with the command.
+  it('never exits non-zero for its own errors', () => {
+    const { hook, repo } = makeRepo({ dbReady: true })
+    mkdirSync(join(repo, 'a-directory.txt'))
+    // a directory where a message file is expected takes the fail-closed
+    // branch (exit 2 with the block message), not a stack trace
+    const dir = hook(`git commit -F ${join(repo, 'a-directory.txt')} -m x`)
+    expect(dir.status).toBe(2)
+    expect(dir.stderr).toContain('Cannot read message file')
+    expect(dir.stderr).not.toContain('at readFileSync')
+    // and a payload the hook cannot make sense of at all allows explicitly,
+    // rather than throwing its way to the same outcome with a stack trace
+    const malformed = spawnSync('node', [script, '--hook-pre-pr'], {
+      input: JSON.stringify({ tool_name: 'Bash', cwd: repo, tool_input: { command: 42 } }),
+      encoding: 'utf8',
+    })
+    expect(malformed.status).toBe(0)
+    expect(malformed.stderr).toBe('')
+  })
+
+  // The gh-vocabulary layer: flags and selectors that leave the read-back
+  // nothing to fetch. A gap here is bounded by one tool's manual — and no
+  // longer silent, since bd-publish-verify reports a coverage claim it
+  // could not honour.
+  it('treats response-hiding flags and foreign selectors as uncovered', () => {
+    const { hook } = makeRepo({ dbReady: true, ghIssues: { 700: A_PR } })
+    for (const cmd of [
+      // -t is --template's short form; on gh api it formats the response away
+      'gh api -X PATCH repos/Stvad/knowledge-medium/pulls/12 -f body="Fixes #700" -t \'{{.id}}\'',
+      'gh api -X PATCH repos/Stvad/knowledge-medium/pulls/12 -f body="Fixes #700" --template \'{{.id}}\'',
+      // GH_REPO selects the repository the way -R does, and the read-back's
+      // URL pattern is pinned to this one
+      'GH_REPO=owner/other gh pr edit 12 --body="Fixes #700"',
+    ])
+      expect(hook(cmd).status, cmd).toBe(2)
+    // -t on a CLI verb is --title, not a template: still covered
+    expect(hook('gh pr create -t "a title" --body "relates to #700"').status).toBe(0)
+  })
+
+  // The two signals must be read off the SAME string. Testing expansion on
+  // the raw command while testing operators on the skeleton — which blanks a
+  // QUOTED expansion — let a command be a publish and post-verified at once.
+  it('treats a quoted flag expansion as uncovered, not just an unquoted one', () => {
+    const { hook } = makeRepo({ dbReady: true })
+    // the quoted form is the subject here: the skeleton blanks it, so only
+    // the raw-text read catches it. The unquoted form is pinned separately.
+    const r = hook('gh api "${FLAGS:---input=payload.json}" repos/Stvad/knowledge-medium/issues/1/comments')
+    expect(r.status).toBe(2)
+    expect(r.stderr).toContain('post-publication read-back covers')
   })
 
   // With its flags expanded, an api mutation shows no literal mutation flag
@@ -1404,14 +1731,14 @@ describe('hookPrePr process behavior', { timeout: 20_000 }, () => {
   // branch, so they get the echo round; plain mentions and ordinary commits
   // pass with zero subprocesses.
   it('gates close-keyword refs in git commit messages', () => {
-    const { hook } = makeRepo({ dbReady: true, ghIssues: { 700: { title: 'Some PR', state: 'open', pull_request: {} } } })
+    const { hook } = makeRepo({ dbReady: true, ghIssues: { 700: A_PR } })
     const r = hook('git commit -m "land the fix\n\nFixes #700"')
     expect(r.status).toBe(2)
     expect(r.stderr).toContain('close keyword targets a PR')
   })
 
   it('gates a close keyword behind git global options (git -C … commit)', () => {
-    const { hook, repo } = makeRepo({ dbReady: true, ghIssues: { 700: { title: 'Some PR', state: 'open', pull_request: {} } } })
+    const { hook, repo } = makeRepo({ dbReady: true, ghIssues: { 700: A_PR } })
     const r = hook(`git -C ${repo} commit -m "Fixes #700"`)
     expect(r.status).toBe(2)
     expect(r.stderr).toContain('close keyword targets a PR')
@@ -1451,7 +1778,7 @@ describe('hookPrePr process behavior', { timeout: 20_000 }, () => {
   // The commit leg keeps the stdin fail-closed rule: a pipe-fed message is
   // text this gate cannot see and no post-publication pass ever will.
   it('fails closed on a pipe-fed commit message but lets heredoc stdin through', () => {
-    const { hook } = makeRepo({ dbReady: true, ghIssues: { 700: { title: 'Some PR', state: 'open', pull_request: {} } } })
+    const { hook } = makeRepo({ dbReady: true, ghIssues: { 700: A_PR } })
     const piped = hook('cat msg.txt | git commit -F -')
     expect(piped.status).toBe(2)
     expect(piped.stderr).toContain('stdin')
@@ -1473,7 +1800,7 @@ describe('hookPrePr process behavior', { timeout: 20_000 }, () => {
   // on a merge must not cost a confirmation round, while the same URL inside
   // the quoted merge body is merge-commit text and still verifies.
   it('ignores positional target URLs on merge but verifies URLs inside merge bodies', () => {
-    const { hook, shimCalls } = makeRepo({ dbReady: true, ghIssues: { 653: { title: 'Real GC failure', state: 'open' } } })
+    const { hook, shimCalls } = makeRepo({ dbReady: true, ghIssues: { 653: AN_ISSUE } })
     const target = hook(`gh pr merge https://github.com/Stvad/knowledge-medium/pull/653 --body "looks good"`)
     expect(target.status).toBe(0)
     expect(shimCalls()).not.toContain('gh api')
@@ -1491,16 +1818,18 @@ describe('hookPrePr process behavior', { timeout: 20_000 }, () => {
     expect(prose.stderr).toContain('Real GC failure')
   })
 
-  it('scans file-backed commit messages (-F) for close keywords', () => {
-    const { hook, repo } = makeRepo({ dbReady: true, ghIssues: { 700: { title: 'Some PR', state: 'open', pull_request: {} } } })
-    writeFileSync(join(repo, 'msg.txt'), 'land the fix\n\nFixes #700\n')
-    const r = hook(`git commit -F ${join(repo, 'msg.txt')}`)
-    expect(r.status).toBe(2)
-    expect(r.stderr).toContain('close keyword targets a PR')
+  // Argv tokens alone must not make the hook open a file: `printf … git commit -F
+  // <path>` runs printf. Before the position check this blocked, reporting
+  // the path as an unreadable message file — i.e. it had tried to read it.
+  it('does not read a message file for a command that only mentions git commit', () => {
+    const { hook } = makeRepo({ dbReady: true })
+    const r = hook(`printf '%s' git commit -F /nonexistent/secret.env`)
+    expect(r.status).toBe(0)
+    expect(r.stderr).not.toContain('secret.env')
   })
 
   it('lets plain-mention and escaped commits pass with zero lookups', () => {
-    const { hook, shimCalls } = makeRepo({ dbReady: true, ghIssues: { 653: { title: 'Real GC failure', state: 'open' } } })
+    const { hook, shimCalls } = makeRepo({ dbReady: true, ghIssues: { 653: AN_ISSUE } })
     expect(hook('git commit -m "see #653 for context"').status).toBe(0)
     expect(hook('KM_ISSUE_REFS_OK=1 git commit -m "Fixes #653"').status).toBe(0)
     expect(shimCalls()).not.toContain('gh api')
