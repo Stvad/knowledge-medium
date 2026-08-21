@@ -137,6 +137,20 @@ export const PROVE_DISTINCT_VALUE_LIMIT = 10_000
  * still be transformed at the database text boundary or by a processor —
  * see #688 — which is why that stays tracked separately rather than papered
  * over here.
+ *
+ * And it proves things about values AS JAVASCRIPT SEES THEM. Anything the
+ * JSON-to-JS boundary has already collapsed is invisible here — and equally
+ * invisible to the rest of the app, which reads the same cells through the same
+ * boundary. Measured: a stored `9007199254740993` arrives from both `json_each`
+ * and `json_extract` as `9007199254740992`, so no reader can tell the two
+ * apart, and only a raw `CAST(… AS TEXT)` recovers the digits. Reproducing that
+ * distinction here would mean parsing numeric tokens out of the raw JSON text,
+ * to refuse a key over a difference nothing in this app can observe. Accepted
+ * deliberately, tracked as #712. Do not add a fourth value-shape special case
+ * without first asking which side of this line it falls on: `Infinity` and
+ * nested `Infinity` are on the visible side and ARE rejected, `-0` is visible
+ * but semantically identical and is accepted, and precision already lost at
+ * parse time is not a fact about this module at all.
  */
 export const provePresetId = (
   values: readonly unknown[],
