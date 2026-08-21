@@ -171,6 +171,20 @@ describe('planPropertyDefinitionSynthesis', () => {
     expect(plan.candidates.map(c => c.key).sort()).toEqual([' padded ', 'has]]bracket'])
   })
 
+  it('calls a hopeless key a blocker even when a definition block claims its name', async () => {
+    // A `property-schema` row storing an EMPTY name counts as a definition
+    // block for the empty cell key. Classifying by "has a definition block?"
+    // first would file the one key that can never be defined under the bucket
+    // that deliberately does not block the flip.
+    await rawCell('defn', {types: ['property-schema'], 'property-schema:name': ''})
+    await rawCell('b1', {'': 'y'})
+
+    const plan = await planFor()
+    expect(plan.brokenDefinitions.map(b => b.key)).not.toContain('')
+    expect(plan.blockers.map(b => b.key)).toEqual([''])
+    expect(flipBlockedBySynthesis(plan)).toMatch(/empty property key/)
+  })
+
   it('refuses a key the database could not hand back faithfully', async () => {
     // A lone UTF-16 surrogate in a property key comes back from `json_each` as
     // replacement characters (measured: three U+FFFD for "\ud800"), so what the

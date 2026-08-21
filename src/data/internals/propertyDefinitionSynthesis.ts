@@ -258,17 +258,24 @@ export const planPropertyDefinitionSynthesis = async (
   const mintable: UnresolvedPropertyKey[] = []
 
   for (const entry of scan.unresolved) {
+    // HOPELESS FIRST, and the order is the whole point. A key no definition can
+    // ever back is a hard flip blocker; a key whose definition is merely broken
+    // is repairable and deliberately does not block. Asking "is a definition
+    // block present?" first collapses the two: a `property-schema` row storing
+    // an EMPTY name counts as a definition block for the empty cell key, which
+    // would file the one key that can never be defined under the bucket that
+    // waves the flip through.
+    const reason = keyCannotBeDefined(entry.property)
+    if (reason !== null) {
+      blockers.push({key: entry.property, cells: entry.cells, reason})
+      continue
+    }
     // A definition block already exists for this name and still doesn't
     // resolve, so the definition is BROKEN (an unloaded preset provider,
     // metadata that fails to parse). A second one would collide in the winner
     // machinery rather than fix anything.
     if (entry.definitionBlocks > 0) {
       brokenDefinitions.push({key: entry.property, cells: entry.cells})
-      continue
-    }
-    const reason = keyCannotBeDefined(entry.property)
-    if (reason !== null) {
-      blockers.push({key: entry.property, cells: entry.cells, reason})
       continue
     }
     mintable.push(entry)
