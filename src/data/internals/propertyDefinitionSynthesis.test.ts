@@ -9,7 +9,9 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChangeScope, seedProperty } from '@/data/api'
 import { PROPERTY_SCHEMA_TYPE } from '@/data/blockTypes'
-import { presetIdProp, propertyNameProp } from '@/data/properties'
+import {
+  presetIdProp, propertyChangeScopeProp, propertyDefaultProp, propertyNameProp,
+} from '@/data/properties'
 import { getOrCreatePropertiesPage } from '@/data/propertiesPage'
 import { definitionSeedsFacet } from '@/data/facets'
 import { kernelDataExtension } from '@/data/kernelDataExtension'
@@ -584,6 +586,46 @@ describe('applyPropertyDefinitionSynthesis: the id is occupied, or the key stopp
 
     expect(result).toMatchObject({created: 0, converged: 0})
     expect(result.skipped[0]!.reason).toMatch(/cannot reproduce/)
+  })
+
+  it('publishes a converged definition with the block\'s own scope, not this pass\'s default', async () => {
+    // Between the publish and the projector tick this schema IS the behaviour
+    // the app uses, so a hardcoded BlockDefault would route a UiState
+    // property's writes to sync and apply the wrong undo policy.
+    await rawCell('b1', {'demo:orphan': 'hello'})
+    const plan = await planFor()
+    await applyPropertyDefinitionSynthesis(repo, plan)
+    const id = synthesizedPropertyDefinitionBlockId(WS, 'demo:orphan')
+    await repo.tx(async tx => {
+      await tx.setProperty(id, propertyChangeScopeProp, ChangeScope.UiState)
+    }, {scope: ChangeScope.BlockDefault, description: 'rescope'})
+    const publish = vi.spyOn(repo.userSchemas, 'appendUserSchema')
+    blindTheProjections()
+
+    await applyPropertyDefinitionSynthesis(repo, plan)
+
+    expect(publish).toHaveBeenCalledWith(
+      expect.objectContaining({changeScope: ChangeScope.UiState}), id, WS)
+  })
+
+  it('publishes a converged definition\'s own stored default', async () => {
+    // Same window, same reason: this schema is what the app reads until the
+    // projector replaces it, so a definition carrying its own default must not
+    // be published with the preset's.
+    await rawCell('b1', {'demo:orphan': 'hello'})
+    const plan = await planFor()
+    await applyPropertyDefinitionSynthesis(repo, plan)
+    const id = synthesizedPropertyDefinitionBlockId(WS, 'demo:orphan')
+    await repo.tx(async tx => {
+      await tx.setProperty(id, propertyDefaultProp, 'stored')
+    }, {scope: ChangeScope.BlockDefault, description: 'set a default'})
+    const publish = vi.spyOn(repo.userSchemas, 'appendUserSchema')
+    blindTheProjections()
+
+    await applyPropertyDefinitionSynthesis(repo, plan)
+
+    expect(publish).toHaveBeenCalledWith(
+      expect.objectContaining({defaultValue: 'stored'}), id, WS)
   })
 
   it('publishes a converged definition too, not just one it created', async () => {

@@ -46,6 +46,7 @@ import {
   presetConfigProp,
   presetIdProp,
   propertyChangeScopeProp,
+  propertyDefaultProp,
   propertyHiddenProp,
   propertyNameProp,
 } from '@/data/properties'
@@ -523,6 +524,26 @@ const storedPresetCore = (block: BlockData): AnyValuePresetCore | undefined => {
   return core?.configCodec === undefined ? core : undefined
 }
 
+/** The definition block's own stored default, decoded through the preset it
+ *  declares — or the preset's default when there is none, or when the stored
+ *  one no longer fits (a stale value left by a preset change, which is a stale
+ *  VALUE rather than a broken definition; `userSchemasService` treats it the
+ *  same way). */
+const storedDefaultValue = (block: BlockData, preset: AnyValuePresetCore): unknown => {
+  const raw = block.properties[propertyDefaultProp.name]
+  // Stated rather than left to the catch below, which reaches the same answer
+  // for all four inferrable presets today — three throw on `undefined` and
+  // `raw-json`'s own default IS undefined. Deleting this changes nothing and no
+  // test fails; it is here so "no stored default" reads as a case rather than
+  // as an exception.
+  if (raw === undefined) return preset.defaultValue
+  try {
+    return preset.build(undefined as never).decode(raw)
+  } catch {
+    return preset.defaultValue
+  }
+}
+
 /** A live definition block already serving as `key`'s definition — the only
  *  occupant this pass may adopt.
  *
@@ -660,7 +681,27 @@ export const applyPropertyDefinitionSynthesis = async (
       // (`brokenDefinitions`) deliberately does not: a broken definition the
       // operator saw counted in the dialog is one they consented to migrate
       // around; one that arrived after they confirmed is not.
-      if ((liveDefinitionNames.get(candidate.key) ?? []).some(other => other !== id)) {
+      // Compared under the registry's EFFECTIVE name, exactly as the plan's
+      // scan is: `buildPropertyDefinitionRegistry` rewrites a seed-backed row's
+      // name to the seed's DECLARED one when the stored value has drifted, so a
+      // healthy seed row can sit in `blocks` under a stale spelling. Trusting
+      // the raw name would read it as a rival for that stale key — which the
+      // scan correctly calls definition-less — and block the flip forever. A
+      // row the registry cannot parse keeps its raw name, which is why that
+      // fallback exists on both sides.
+      //
+      // UNPINNED, and not for want of trying: seed names are non-renamable
+      // through the API, so drift arrives only by raw write or sync, and
+      // neither reaches the test harness's projector — the registry never
+      // learns the row exists, so the scenario cannot be built. The rule is the
+      // scan's, stated at `propertyKeyScan`'s `definitionBlocksByName`; this is
+      // the same rule applied at the second site that needed it.
+      const rivals = (liveDefinitionNames.get(candidate.key) ?? []).filter(other => {
+        if (other === id) return false
+        const known = registry.definitionsByFieldId.get(other)
+        return known === undefined || known.name === candidate.key
+      })
+      if (rivals.length > 0) {
         skipped.push({key: candidate.key,
                       reason: 'a definition block for this name already exists and supplies '
                         + 'no behavior — repair it rather than adding a second'})
@@ -698,14 +739,23 @@ export const applyPropertyDefinitionSynthesis = async (
         // the flip then refuses and a re-run picks it up once the projector has
         // caught up.
         const storedPreset = storedPresetCore(occupancy.block)
-        if (!storedPreset) {
+        const storedMetadata = parsePropertyDefinitionMetadata(occupancy.block)
+        if (!storedPreset || !storedMetadata) {
           skipped.push({key: candidate.key,
                         reason: `block ${id} defines this key with a preset this pass cannot `
                           + 'reproduce; re-run once it is registered'})
           continue
         }
         converged += 1
-        registrations.push({blockId: id, schema: schemaFor(candidate.key, storedPreset)})
+        // The block's OWN behavior, not this pass's defaults. Publishing
+        // `BlockDefault` and the preset's default for a definition that stores
+        // `UiState` and a default of its own would route writes to sync and
+        // apply the wrong undo policy until the projector replaces it.
+        registrations.push({blockId: id, schema: {
+          ...schemaFor(candidate.key, storedPreset),
+          changeScope: storedMetadata.changeScope,
+          defaultValue: storedDefaultValue(occupancy.block, storedPreset),
+        }})
         continue
       }
       if (occupancy.verdict === 'tombstoned') {
