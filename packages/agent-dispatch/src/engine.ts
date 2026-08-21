@@ -554,6 +554,11 @@ export const createEngine = (deps: EngineDeps) => {
           content: prompt,
           meta: {watcher: watcher.name, block_id: sourceId, attempt: String(attempt)},
         })
+        // A delivery that lands proves the listener is back. This path
+        // returns before the spawn success branch, so without clearing here
+        // a recovered channel lane would stay throttled to one delivery per
+        // backoff window forever — nothing else ever reopens it.
+        clearInfraCooldown(laneOf(watcher))
         log(`[${watcher.name}] delivered ${sourceId} to the ambient channel session (attempt ${attempt})`)
         return
       }
@@ -592,8 +597,14 @@ export const createEngine = (deps: EngineDeps) => {
           lastActivity = event.label
           queueWrite(() => graph.setActivity(sourceId, event.label))
         } else if (event.kind === 'text') {
-          if (!watcher.streamReply) return
+          // Recorded even with streamReply OFF (the default): assistant text
+          // is the only cross-runner evidence that a failed run reached the
+          // model — a claude run that dies mid-stream emits no `result` line
+          // at all, and a failed one's envelope is an error, not an answer.
+          // The terminal-vs-defer decision below depends on it. streamReply
+          // only controls whether it is also PUBLISHED as it arrives.
           lastStreamedText = event.text
+          if (!watcher.streamReply) return
           const nowMs = now()
           if (nowMs - lastTextWriteMs < 1_500) return
           lastTextWriteMs = nowMs
@@ -648,10 +659,14 @@ export const createEngine = (deps: EngineDeps) => {
       // and the attempt would let a repeating mid-stream disconnect bill
       // the same task without limit, outside `runsPerHour` entirely.
       // Assistant text is the proof — a session id is NOT, since the runner
-      // emits it on the first line, before any model call. `resultText`
-      // rather than `lastStreamedText` alone: the latter is only populated
-      // for `streamReply` watchers, so a non-streaming one would look like
-      // it had produced nothing.
+      // emits it on the first line, before any model call.
+      //
+      // DEPENDS ON a runner contract: `resultText` is the ANSWER and is
+      // empty on a failed run, while the CLI's error goes to `failureText`.
+      // runClaude used to put its error envelope in both, which made every
+      // out-of-credits failure read as a billed answer and parked exactly
+      // what this path exists to defer. Pinned by runner.test.ts's
+      // "fails when the envelope reports is_error even with exit 0".
       const reachedModel = Boolean(lastStreamedText.trim() || result.resultText.trim())
 
       if (result.ok) {
@@ -701,7 +716,7 @@ export const createEngine = (deps: EngineDeps) => {
           ? 'cancelled'
           : result.timedOut
             ? `timed out after ${Math.round(runner.timeoutMs / 1000)}s`
-            : `exit ${result.exitCode}: ${truncate(result.stderr.trim() || result.resultText.trim() || 'no output')}`
+            : `exit ${result.exitCode}: ${truncate(result.stderr.trim() || result.failureText.trim() || result.resultText.trim() || 'no output')}`
         const failureNote = cancelled
           ? '⏹️ agent-dispatch run cancelled'
           : `⚠️ agent-dispatch run failed — ${reason}`
@@ -974,6 +989,12 @@ export const createEngine = (deps: EngineDeps) => {
       // the hourly budget in ten polls and defer the rows even once
       // it's back up.
       await deliverToChannel({content: prompt, meta: {watcher: watcher.name}})
+      // Defence in depth, not this path's own recovery: a query+channel
+      // outage throws out of the tick (caught per-watcher) and leaves the
+      // cursor unadvanced, so it never arms the lane. The clear matters when
+      // a MENTION watcher on the same lane armed it and this delivery is the
+      // proof the listener is back.
+      clearInfraCooldown(laneOf(watcher))
       recordLaunch()
       await state.setCursor(watcher.name, diff.seenIds)
       log(`[${watcher.name}] delivered ${batch.length} new row(s) to the ambient channel session`)

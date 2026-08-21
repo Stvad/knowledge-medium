@@ -84,6 +84,14 @@ describe('classifyRunFailure', () => {
       .toMatchObject({kind: 'rate-limit', retryable: true})
   })
 
+  it('reads the bridge\'s disconnected-client wording', () => {
+    // The bridge answers 503 with this body when the paired app tab drops,
+    // and the client throws the body alone — the status is gone by the time
+    // the text reaches the classifier, so the wording is the only handle.
+    expect(classifyRunFailure(signals({stderr: 'Target client is not currently connected.'})))
+      .toMatchObject({kind: 'network', retryable: true})
+  })
+
   it('keeps a channel 404 terminal — a wrong port is not an outage', () => {
     expect(classifyRunFailure(signals({stderr: 'channel listener replied 404'})))
       .toMatchObject({kind: 'task', retryable: false})

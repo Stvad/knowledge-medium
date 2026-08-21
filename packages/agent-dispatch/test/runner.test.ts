@@ -250,7 +250,12 @@ describe('runClaude', () => {
       streamResult({type: 'result', result: 'refused', session_id: null, is_error: true}),
     ))
     expect(result.ok).toBe(false)
-    expect(result.resultText).toBe('refused')
+    // A failed envelope's text is claude's ERROR, so it lands in failureText
+    // only. Leaving it in resultText too makes it indistinguishable from a
+    // billed reply, and the engine reads a non-empty resultText as proof the
+    // run reached the model — which would park every credits failure.
+    expect(result.failureText).toBe('refused')
+    expect(result.resultText).toBe('')
   })
 
   it('kills runs that exceed the timeout', async () => {

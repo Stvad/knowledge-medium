@@ -1547,6 +1547,50 @@ describe('channel delivery (experimental)', () => {
     expect(replies).toEqual([])
   })
 
+  it('reopens the channel lane once a delivery lands again', async () => {
+    // The channel branch returns before the spawn success path, so nothing
+    // else clears its cooldown: a recovered listener would stay throttled to
+    // one delivery per backoff window forever.
+    const {graph, blocks} = fakeGraph({
+      backlinks: [{id: 'b-1'}, {id: 'b-2'}, {id: 'b-3'}],
+      blocks: {
+        'b-1': {content: '[[claude]] one'},
+        'b-2': {content: '[[claude]] two'},
+        'b-3': {content: '[[claude]] three'},
+      },
+    })
+    let nowMs = NOW
+    const time = {now: () => nowMs, advance: (ms: number) => { nowMs += ms }}
+    let listenerDown = true
+    const deliverToChannel = vi.fn(async () => {
+      if (listenerDown) throw new Error('connection refused')
+    })
+    const engine = engineWith({
+      graph, deliverToChannel, now: time.now,
+      config: parseConfig({
+        maxConcurrent: 1,
+        runsPerHour: 100,
+        watchers: [{kind: 'backlinks', name: 'ambient', target: 'claude', quietMs: 0, delivery: 'channel'}],
+      }),
+    })
+
+    await engine.tick()          // b-1 fails — the channel lane cools
+    await engine.drain()
+    expect(blocks.get('b-1')?.properties?.[PROPS.status]).toBe('queued')
+
+    listenerDown = false
+    time.advance(10 * 60_000)    // the window lapses; one probe goes out
+    await engine.tick()
+    await engine.drain()
+
+    // The probe succeeded, so the lane is open: the very next tick claims
+    // again rather than waiting out another backoff window.
+    await engine.tick()
+    await engine.drain()
+    const claimed = ['b-1', 'b-2', 'b-3'].filter(id => blocks.get(id)?.properties?.[PROPS.status] === 'running')
+    expect(claimed.length).toBeGreaterThanOrEqual(2)
+  })
+
   it('still parks a task whose failure is not an infrastructure one', async () => {
     const {graph, blocks} = fakeGraph({
       backlinks: [{id: 'b-1'}],
@@ -2024,7 +2068,58 @@ describe('retryable infrastructure failures (out of credits, expired login, netw
     expect(reconciles.at(-1)?.markdown).toContain('Here is most of the answer')
   })
 
-  it('parks a non-streaming run that RETURNED a billed answer before dying', async () => {
+  it('counts streamed text as billed even when the watcher does not publish it', async () => {
+    // streamReply defaults OFF, and it controls PUBLISHING, not observing.
+    // If the engine only recorded streamed text for streaming watchers, a
+    // default watcher whose run died mid-answer would look like it produced
+    // nothing — and get its attempt and spend slot handed back for a run
+    // that had already billed.
+    const {graph, blocks, propWrites} = fakeGraph({
+      backlinks: [{id: 'b-1'}],
+      blocks: {'b-1': {content: '[[claude]] summarize inbox'}},
+    })
+    const state = memoryState()
+    const runTask = vi.fn(async (options: {onEvent?: (event: {kind: string, text?: string}) => void}) => {
+      options.onEvent?.({kind: 'text', text: 'Here is most of the answer'}) // billed
+      return okRun({ok: false, resultText: '', sessionId: null, exitCode: 1, stderr: 'ECONNRESET', failureText: ''})
+    })
+    const engine = engineWith({graph, state, runTask})   // streamReply off
+
+    await engine.tick()
+    await engine.drain()
+
+    expect(propWrites.map(write => write.status)).toEqual(['running', 'error'])
+    expect(blocks.get('b-1')!.properties![PROPS.attempts]).toBe(1)
+    expect(state.launches).toHaveLength(1)
+  })
+
+  it('shows the CLI\'s own error in the failure note when stderr is empty', async () => {
+    // A failed claude envelope puts its cause in failureText and leaves
+    // resultText empty, so a reason built only from stderr/resultText would
+    // read "no output" for every one of them.
+    const {graph, reconciles} = fakeGraph({
+      backlinks: [{id: 'b-1'}],
+      blocks: {'b-1': {content: '[[claude]] summarize inbox'}},
+    })
+    const engine = engineWith({
+      graph,
+      runTask: vi.fn(async () => okRun({
+        ok: false, resultText: '', sessionId: null, exitCode: 1, stderr: '',
+        failureText: 'Claude Code process exited with code 1: model refused',
+      })),
+    })
+
+    await engine.tick()
+    await engine.drain()
+
+    expect(reconciles.at(-1)?.markdown).toContain('model refused')
+  })
+
+  it('parks a run that RETURNED a billed answer before dying (the codex shape)', async () => {
+    // codex keeps assistant text in resultText on a failed run and puts its
+    // structured error in failureText, so resultText alone is the evidence
+    // here. (claude cannot produce this shape — a failed claude envelope
+    // carries the error and leaves resultText empty; see runner.ts.)
     const {graph, blocks, propWrites} = fakeGraph({
       backlinks: [{id: 'b-1'}],
       blocks: {'b-1': {content: '[[claude]] summarize inbox'}},
@@ -2032,8 +2127,6 @@ describe('retryable infrastructure failures (out of credits, expired login, netw
     const state = memoryState()
     const engine = engineWith({
       graph, state,
-      // streamReply is off by default, so lastStreamedText stays empty and
-      // resultText is the only evidence the run reached the model.
       runTask: vi.fn(async () => okRun({
         ok: false, resultText: 'Here is most of the answer', sessionId: null,
         exitCode: 1, stderr: 'ECONNRESET', failureText: 'ECONNRESET',

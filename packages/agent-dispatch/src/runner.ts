@@ -333,16 +333,18 @@ export const runClaude = async (
 
   return {
     ok,
-    resultText: parsed?.resultText ?? '',
+    // On a FAILED run the `result` line carries claude's own error text
+    // rather than an answer ("Claude AI usage limit reached|…", "Credit
+    // balance is too low", …), so it belongs in `failureText` ONLY.
+    // Putting it in both — as this did — makes it indistinguishable from a
+    // billed reply, and a caller asking "did this run reach the model?"
+    // then reads every credits/auth failure as a delivered answer. codex's
+    // runner already keeps the two apart; this matches it.
+    resultText: ok ? (parsed?.resultText ?? '') : '',
     sessionId: parser.sessionId(),
     exitCode,
     timedOut,
     stderr,
-    // On a FAILED run the `result` line carries claude's own error text
-    // rather than an answer ("Claude AI usage limit reached|…", "Credit
-    // balance is too low", …), which is exactly what the failure
-    // classifier needs. Gated on !ok so a successful reply can never be
-    // mistaken for a CLI error message.
     failureText: ok ? '' : (parsed?.resultText ?? ''),
     raw: parsed?.raw ?? null,
   }

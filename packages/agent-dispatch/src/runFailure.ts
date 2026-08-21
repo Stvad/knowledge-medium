@@ -91,7 +91,12 @@ const RETRYABLE_SIGNALS: ReadonlyArray<{kind: Exclude<RunFailureKind, 'task'>, p
   },
   {
     kind: 'network',
-    pattern: /\b(?:ENOTFOUND|ECONNREFUSED|ECONNRESET|ETIMEDOUT|EAI_AGAIN|EHOSTUNREACH|ENETUNREACH)\b|socket hang up|fetch failed|getaddrinfo|network (?:error|is unreachable)|connection (?:error|refused|reset|timed out)|bad gateway|service unavailable|gateway time-?out|upstream connect error/i,
+    // `target client is not currently connected` is the BRIDGE's 503 body
+    // for "the paired app tab dropped". The HTTP status is discarded before
+    // the text reaches us (the client throws the body alone), so the wording
+    // is the only handle — and a dropped tab is precisely the transient
+    // outage this path defers rather than a task that failed.
+    pattern: /\b(?:ENOTFOUND|ECONNREFUSED|ECONNRESET|ETIMEDOUT|EAI_AGAIN|EHOSTUNREACH|ENETUNREACH)\b|socket hang up|fetch failed|getaddrinfo|network (?:error|is unreachable)|connection (?:error|refused|reset|timed out)|bad gateway|service unavailable|gateway time-?out|upstream connect error|target client is not currently connected/i,
   },
   {
     kind: 'network',
