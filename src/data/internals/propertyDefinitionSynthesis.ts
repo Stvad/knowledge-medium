@@ -59,9 +59,17 @@ export const synthesizedPropertyDefinitionBlockId = (
   key: `${workspaceId}:${key}`,
 })
 
-/** The presets synthesis will pick. Every one of them round-trips a stored
+/** The presets synthesis will pick — chosen because each round-trips a stored
  *  value unchanged through `encodedValueToContent` → `contentToEncodedValue`;
- *  see {@link inferPresetId} for why that is the selection criterion. */
+ *  see {@link inferPresetId} for why that is the selection criterion.
+ *
+ *  One known exception, and it is not this module's to fix: a `string` value
+ *  that is ITSELF field-form content (`::((id))`) is written into the child
+ *  verbatim, gets the `is_field_form` bit, and is then filtered out of its own
+ *  field row's value set — so the owner's key is dropped. That is true of every
+ *  declared string property too, not just synthesized ones; issue #688 tracks
+ *  it. Synthesis widens the set it can bite, since these keys come from writers
+ *  nothing vetted. */
 export type SynthesizedPresetId = 'boolean' | 'number' | 'string' | 'raw-json'
 
 /** Per-key tally of what JSON types the cells actually hold. */
