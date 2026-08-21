@@ -100,6 +100,22 @@ export interface CreateOrRestoreArgs {
   onInsertedOrRestored?: (tx: Tx, id: string) => Promise<void> | void
 }
 
+/** Restore-time `properties` patch with the tombstone's `aliases` dropped.
+ *  Restoring the stored bag verbatim is the obvious simplification and is
+ *  wrong: a tombstone can carry a claim some live block took while it was
+ *  dead, and re-inserting it trips the alias-uniqueness trigger, rolling
+ *  back the CALLER's whole tx. The caller owns the alias write — pass this
+ *  as `tx.restore`'s patch, then re-claim the domain's set in the same tx. */
+export const restorePropertiesStrippingAliases = async (
+  tx: Tx,
+  id: string,
+): Promise<Record<string, unknown>> => {
+  const tombstone = await tx.get(id)
+  const restoredProperties = {...(tombstone?.properties ?? {})}
+  delete restoredProperties[aliasesProp.name]
+  return restoredProperties
+}
+
 /** Shared primitive — see file header. Returns `{id, inserted}`;
  *  `inserted: true` means this tx wrote the row (fresh or restored). */
 export const createOrRestoreTargetBlock = async (
@@ -133,9 +149,7 @@ export const createOrRestoreTargetBlock = async (
       // and why non-alias-owning callers must NOT (a user-set alias on
       // a restored shortcuts/media row must survive).
       if (args.stripAliasesOnRestore) {
-        const tombstone = await tx.get(args.id)
-        const restoredProperties = {...(tombstone?.properties ?? {})}
-        delete restoredProperties[aliasesProp.name]
+        const restoredProperties = await restorePropertiesStrippingAliases(tx, args.id)
         await tx.restore(args.id, {content: args.freshContent, properties: restoredProperties})
       } else {
         await tx.restore(args.id, {content: args.freshContent})

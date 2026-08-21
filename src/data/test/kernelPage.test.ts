@@ -323,4 +323,40 @@ describe('getOrCreateKernelPage', () => {
       expect(row?.properties[aliasesProp.name]).toBeUndefined()
     })
   })
+
+  it('restores a tombstone whose stored alias bag was squatted while it was dead (issue #378)', async () => {
+    // The bag carries an EXTRA alias beyond the canonical `spec.alias` —
+    // a collision on `spec.alias` itself is a separate, undecided case
+    // (issue #378).
+    const page = await getOrCreateKernelPage(env.repo, WS, {
+      namespace: FOO_PAGE_NS,
+      alias: 'Foo',
+      markerType: FOO_PAGE_TYPE,
+    })
+    await env.repo.tx(async tx => {
+      await tx.setProperty(page.id, aliasesProp, ['Foo', 'stale-extra'])
+      await tx.delete(page.id)
+    }, {scope: ChangeScope.BlockDefault})
+
+    // A different live block claims the freed stale alias while the
+    // kernel page is dead.
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'squatter', workspaceId: WS, parentId: null, orderKey: 'z0', content: 'Squatter'})
+      await tx.setProperty('squatter', aliasesProp, ['stale-extra'])
+    }, {scope: ChangeScope.BlockDefault})
+
+    const restored = await getOrCreateKernelPage(env.repo, WS, {
+      namespace: FOO_PAGE_NS,
+      alias: 'Foo',
+      markerType: FOO_PAGE_TYPE,
+    })
+
+    expect(restored.id).toBe(page.id)
+    expect(restored.peek()?.deleted).toBe(false)
+    expect(restored.peekProperty(typesProp)).toEqual([PAGE_TYPE, FOO_PAGE_TYPE])
+    // The restored page reclaims its canonical alias; the stale extra
+    // is NOT resurrected — it stays with the squatter.
+    expect(restored.peekProperty(aliasesProp)).toEqual(['Foo'])
+    expect(env.repo.block('squatter').peekProperty(aliasesProp)).toEqual(['stale-extra'])
+  })
 })

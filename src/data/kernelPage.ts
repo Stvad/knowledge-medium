@@ -24,6 +24,7 @@ import { classifyOccupant, derivedBlockId } from '@/data/derivedIds'
 import type { Repo } from '@/data/repo'
 import { aliasesProp, hasBlockType } from '@/data/properties'
 import { PAGE_TYPE } from '@/data/blockTypes'
+import { restorePropertiesStrippingAliases } from '@/data/targets'
 
 const stringListProperty = (raw: unknown): readonly string[] =>
   Array.isArray(raw) ? raw.filter((v): v is string => typeof v === 'string') : []
@@ -202,7 +203,13 @@ export const getOrCreateKernelPage = async (
     if (existing) refuseForeign(existing)
     if (existing && !existing.deleted) return
     if (existing && existing.deleted) {
-      await tx.restore(id, {content: spec.alias})
+      // The tombstone's stored alias bag can hold an entry a different
+      // live block claimed while this page was dead (issue #378) —
+      // restoring it as-is would re-insert that stale claim and abort
+      // the whole tx. Strip it here; the setProperty below re-claims
+      // exactly the canonical alias set.
+      const restoredProperties = await restorePropertiesStrippingAliases(tx, id)
+      await tx.restore(id, {content: spec.alias, properties: restoredProperties})
       await tx.setProperty(id, aliasesProp, [...aliases])
       await tagTypes(tx, typeSnapshot)
       return
