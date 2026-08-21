@@ -16,6 +16,7 @@ import {
   detectReverts,
   extractBeadIds,
   issueNumberFromRef,
+  commitsInCommandPosition,
   matchesCommitCommand,
   matchesUnverifiableCommand,
   hasStdinBody,
@@ -204,6 +205,9 @@ describe('carriesPublishableText', () => {
     expect(carriesPublishableText('gh pr comment 652 -F notes.md')).toBe(true)
     expect(carriesPublishableText('gh pr comment 652 --body hi')).toBe(true)
     expect(carriesPublishableText('gh pr comment 652 --delete-last')).toBe(false)
+    // gh documents nested key[subkey]=value fields, and gist file content is
+    // its own example; FIELD_ANY captures the bracketed name whole
+    expect(carriesPublishableText(`gh api gists -f public=true -f 'files[a.md][content]=Fixes #700'`)).toBe(true)
   })
 })
 
@@ -541,6 +545,34 @@ describe('matchesCommitCommand', () => {
     expect(matchesCommitCommand('git -c user.name=x commit -m m')).toBe(true)
     expect(matchesCommitCommand('git --git-dir=/r/.git commit -m m')).toBe(true)
     expect(matchesCommitCommand('git push origin commit')).toBe(false)
+  })
+})
+
+// The detector above over-matches on purpose. This is the evidence the FILE
+// READ needs on top of it, because over-matching there opens a path named in
+// argv rather than costing an echo round.
+describe('commitsInCommandPosition', () => {
+  it('requires git commit to be the segment-s verb, not merely present in argv', () => {
+    expect(commitsInCommandPosition('git commit -F msg.txt')).toBe(true)
+    expect(commitsInCommandPosition('cd repo && git commit -F msg.txt')).toBe(true)
+    // the whole point: these run printf and echo, and name no message file
+    expect(commitsInCommandPosition(`printf '%s' git commit -F .env`)).toBe(false)
+    expect(commitsInCommandPosition('echo git commit -F secrets.txt')).toBe(false)
+  })
+
+  it('sees the real verb through paths, assignments, wrappers and options', () => {
+    expect(commitsInCommandPosition('/usr/bin/git commit -F m')).toBe(true)
+    expect(commitsInCommandPosition('FOO=1 git commit -F m')).toBe(true)
+    expect(commitsInCommandPosition('env FOO=1 git commit -F m')).toBe(true)
+    expect(commitsInCommandPosition('xargs -n1 git commit -F m')).toBe(true)
+    expect(commitsInCommandPosition('git -C /r commit -F m')).toBe(true)
+    expect(commitsInCommandPosition('git log -F x')).toBe(false)
+  })
+
+  // A heredoc body sits at a segment boundary but is DATA. It reaches the
+  // skeleton, so the detector sees it; nothing may read a file it names.
+  it('does not accept a heredoc body as a command position', () => {
+    expect(commitsInCommandPosition("cat <<'EOF'\ngit commit -F .env\nEOF")).toBe(false)
   })
 })
 
@@ -1744,6 +1776,16 @@ describe('hookPrePr process behavior', { timeout: 20_000 }, () => {
     const prose = hook(`gh pr merge 12 --body "as gh pr comment https://github.com/Stvad/knowledge-medium/issues/653 said"`)
     expect(prose.status).toBe(2)
     expect(prose.stderr).toContain('Real GC failure')
+  })
+
+  // Argv tokens alone must not make the hook open a file: `printf … git commit -F
+  // <path>` runs printf. Before the position check this blocked, reporting
+  // the path as an unreadable message file — i.e. it had tried to read it.
+  it('does not read a message file for a command that only mentions git commit', () => {
+    const { hook } = makeRepo({ dbReady: true })
+    const r = hook(`printf '%s' git commit -F /nonexistent/secret.env`)
+    expect(r.status).toBe(0)
+    expect(r.stderr).not.toContain('secret.env')
   })
 
   it('lets plain-mention and escaped commits pass with zero lookups', () => {

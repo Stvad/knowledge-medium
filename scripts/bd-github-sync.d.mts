@@ -26,6 +26,7 @@ export declare const issueNumberFromRef: (ref: string | null | undefined) => num
 export declare const initializedDbRoot: () => string | null
 export declare const extractIssueRefs: (text: string) => number[]
 export declare const matchesCommitCommand: (cmd: string) => boolean
+export declare const commitsInCommandPosition: (cmd: string) => boolean
 export declare const matchesUnverifiableCommand: (cmd: string) => boolean
 export declare const hasStdinBody: (cmd: string) => boolean
 export declare const closeKeywordRefs: (text: string) => number[]

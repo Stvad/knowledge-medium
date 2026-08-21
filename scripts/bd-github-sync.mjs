@@ -95,6 +95,7 @@ import { accessSync, constants, existsSync, readFileSync, realpathSync, statSync
 import { homedir } from 'node:os'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { shellSegmentsWithDepth } from './shell-segments.mjs'
 
 export const REPO = 'Stvad/knowledge-medium'
 
@@ -239,6 +240,39 @@ export const publishableKinds = cmd => {
 const GIT_COMMIT = new RegExp(String.raw`(?:\S*\/)?\bgit\s+` + GLOBAL_OPTS + String.raw`commit\b`, 'm')
 export const matchesCommitCommand = cmd => GIT_COMMIT.test(commandSkeleton(cmd))
 
+// Wrappers and assignments that can precede the real verb, same set the
+// position-anchored matchers used before they were de-anchored.
+const VERB_PREFIX = new Set(['command', 'env', 'nohup', 'time', 'xargs'])
+// git's global options that take a separate value, which would otherwise be
+// mistaken for the subcommand.
+const GIT_OPT_WITH_VALUE = new Set(['-C', '-c', '--git-dir', '--work-tree', '--namespace', '--exec-path'])
+const isGitCommitSegment = tokens => {
+  let i = 0
+  while (i < tokens.length && (/^[A-Za-z_]\w*=/.test(tokens[i]) || VERB_PREFIX.has(tokens[i]) || (i > 0 && tokens[i].startsWith('-')))) i++
+  if (!/(?:^|\/)git$/.test(tokens[i] ?? '')) return false
+  for (let j = i + 1; j < tokens.length; j++) {
+    if (tokens[j] === 'commit') return true
+    if (!tokens[j].startsWith('-')) return false
+    if (GIT_OPT_WITH_VALUE.has(tokens[j])) j++
+  }
+  return false
+}
+
+/**
+ * Is `git commit` in an actual command position? The detectors above
+ * deliberately over-match, because over-matching a DETECTOR costs one echo
+ * round — but the commit leg is the one place a match opens a FILE named in
+ * argv, and `printf '%s\n' git commit -F .env` is not a commit. So the file
+ * read gets evidence the scan does not need: real segmentation, which also
+ * keeps a heredoc body from passing for a command position.
+ *
+ * Under-matching here costs only the file scan — the raw command is scanned
+ * for close keywords either way — so this stays a plain verb check rather
+ * than growing a vocabulary of every way a shell can reach git.
+ */
+export const commitsInCommandPosition = cmd =>
+  shellSegmentsWithDepth(cmd).some(s => !s.heredoc && isGitCommitSegment(s.tokens))
+
 // There is deliberately NO foreign-repo (-R/--repo) shortcut: three review
 // rounds each found a way to make its target parse lie (quoted values,
 // expansions, multi-segment payloads), and every miss switched the gate OFF.
@@ -336,7 +370,10 @@ const FIELD_ANY = /(?<![\w-])(?:-[fF]|--(?:raw-)?field)(?:=|\s+)?['"]?([A-Za-z_]
 // endpoint. Over-matching a field name adds a warning; missing one suppresses
 // the warning entirely, which is how an unchecked close keyword reaches a
 // merge commit that acts on it immediately.
-const TEXT_FIELD_NAME = /body|title|message|name|description|text|note|comment/i
+// `content` covers the nested-field forms gh documents (files[a.md][content]
+// on gists, the contents API) — FIELD_ANY already captures the bracketed name
+// whole, so only this list had to learn the word.
+const TEXT_FIELD_NAME = /body|title|message|name|description|text|note|comment|content/i
 // An explicit read verb: `gh api -X GET … -f key=value` sends its fields as
 // query parameters and publishes nothing, so the text it carries is never
 // text it PUBLISHED. Read off the skeleton alone, unlike the membership words
@@ -1189,7 +1226,7 @@ const hookPrePr = () => {
   // keyword-unchecked.
   const commitText =
     matchesCommitCommand(cmd) && !allowsIssueRefs(cmd)
-      ? [cmd, ...(publishes ? [] : guardedBodies())].join('\n')
+      ? [cmd, ...(publishes || !commitsInCommandPosition(cmd) ? [] : guardedBodies())].join('\n')
       : ''
   const commitRefs = commitText ? closeKeywordRefs(commitText) : []
 
