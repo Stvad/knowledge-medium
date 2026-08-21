@@ -746,6 +746,48 @@
       workspace. E2EE is waiting on the same missing piece plaintext workspaces
       are.</li>
   </ul>
+  <strong>Revised 2026-08-21 (orphan-definition synthesis, PR #686):</strong> the
+  synthesis half of &sect;9 now exists, as part of the same operator gesture:
+  <code>planPropertyDefinitionSynthesis</code> /
+  <code>applyPropertyDefinitionSynthesis</code>
+  (<code>src/data/internals/propertyDefinitionSynthesis.ts</code>) mint a hidden,
+  user-origin definition per definition-less cell key, at a deterministic id, in
+  one transaction, before the flip. Three divergences from the text in
+  <a href="#s7">&sect;7</a> and <a href="#s8">&sect;8</a>, recorded here rather
+  than edited into them:
+  <ul>
+    <li><strong><code>date</code> is not inferred.</strong> The selection criterion
+      turned out not to be &ldquo;what does this data look like&rdquo; but
+      &ldquo;which codec reads every stored value back out <em>unchanged</em>&rdquo;
+      &mdash; a synthesized definition is applied retroactively to values written
+      before it existed, and past the flip the cell is re-derived from the children.
+      <code>codecs.date</code> decodes <code>"2026-08-20"</code> and re-encodes it as
+      <code>"2026-08-20T00:00:00.000Z"</code>, so every ISO-looking cell in the
+      workspace would be rewritten by a definition nobody asked for; and
+      <code>new Date()</code> is lenient enough (<code>"2026"</code>,
+      <code>"Sat Aug 20 2026"</code>) that the class it would claim is wider than it
+      looks. Date-shaped keys come out as <code>string</code>, which is exact, and the
+      definition is hidden precisely so someone looks at it.
+      <code>boolean</code>/<code>number</code>/<code>string</code>/<code>raw-json</code>
+      all round-trip exactly.</li>
+    <li><strong>The grammar-shaped-name blocker stands, for a different
+      reason.</strong> &sect;7 justifies it by the B2 name&rarr;content mirror. That
+      mirror is a <em>seed</em> behavior (<code>contentFor: seed =&gt; seed.name</code>);
+      <code>addSchema</code> leaves a user definition's content empty and synthesis
+      matches it, so nothing classifies. The refusal survives on
+      <code>propertySchemaNameRejection</code>'s other rule &mdash; the name is
+      rendered as <code>[[name]]</code> wherever a definition is addressed by name, and
+      one shaped like <code>((id))</code> reads as a reference to another block.</li>
+    <li><strong>E2EE is refused outright rather than given an HMAC namespace.</strong>
+      &sect;8 calls for deriving the namespace from workspace secret key material. Until
+      that exists, synthesis declines the workspace, which costs nothing today because
+      the server trigger refuses an e2ee flip anyway &mdash; and an <em>absent</em>
+      local <code>workspaces</code> row declines too, rather than reading as
+      &ldquo;not encrypted&rdquo; and failing open on a privacy question.</li>
+  </ul>
+  Still missing from &sect;9: the <em>sweep</em>-side synthesis (&ldquo;repaired by the
+  sweep, which synthesizes on encountering a definition-less key from a raw writer or
+  import&rdquo;). What exists is the operator gesture only.
 </div>
 
 <h2 id="s1">1. Why move</h2>
