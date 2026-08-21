@@ -719,6 +719,40 @@ describe('applyPropertyDefinitionSynthesis: the id is occupied, or the key stopp
       expect.objectContaining({codec: expect.objectContaining({type: 'object'})}), id, WS)
   })
 
+  it('skips a mint whose preset an extension replaced while the dialog was open', async () => {
+    // `usablePresets` filtered the ladder before a user-length pause. An
+    // extension loading during it — enabled on the dialog's own advice, or
+    // arrived over sync — leaves the plan naming an id whose codec is no longer
+    // the one the values were proven against.
+    await rawCell('b1', {'demo:orphan': 'hello'})
+    const plan = await planFor()
+    expect(plan.candidates[0]!.presetId).toBe('string')
+    vi.spyOn(repo, 'valuePresetCores', 'get').mockReturnValue(
+      new Map([...repo.valuePresetCores, ['string', {...repo.valuePresetCores.get('string')!}]]))
+
+    const result = await applyPropertyDefinitionSynthesis(repo, plan)
+
+    expect(result).toMatchObject({created: 0, converged: 0})
+    expect(result.skipped[0]!.reason).toMatch(/replaced the 'string' value type/)
+    // And the flip must not step over it.
+    expect(flipBlockedBySynthesis(plan, result)).toMatch(/still have no definition/)
+  })
+
+  it('still converges a key that already has a definition, replaced preset or not', async () => {
+    // The position check: convergence does not depend on the preset THIS pass
+    // would have chosen, so refusing above the occupancy checks would block the
+    // flip over a key that is already fine.
+    await rawCell('b1', {'demo:orphan': 'hello'})
+    const plan = await planFor()
+    await applyPropertyDefinitionSynthesis(repo, plan)
+    vi.spyOn(repo, 'valuePresetCores', 'get').mockReturnValue(
+      new Map([...repo.valuePresetCores, ['string', {...repo.valuePresetCores.get('string')!}]]))
+
+    const again = await applyPropertyDefinitionSynthesis(repo, plan)
+
+    expect(again).toMatchObject({created: 0, converged: 1, skipped: []})
+  })
+
   it('skips a converged definition whose preset an extension has replaced', async () => {
     // The projector will rebuild this row with the EXTENSION's codec, so
     // publishing the kernel one — and backfilling every existing cell under it

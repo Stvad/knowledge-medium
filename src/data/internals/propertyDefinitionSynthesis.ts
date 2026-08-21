@@ -352,8 +352,9 @@ const jsonValueOf = (row: DistinctValueRow): unknown => {
 }
 
 /** Every distinct value each candidate key holds, for the keys small enough to
- *  check. A key over the limit is absent from the map and answered `raw-json`
- *  rather than sampled — see {@link PROVE_DISTINCT_VALUE_LIMIT}. */
+ *  check. A key over the limit is ABSENT from the map, which the caller reads
+ *  as unproven and therefore as a blocker — not as a cue to guess a codec; see
+ *  {@link PROVE_DISTINCT_VALUE_LIMIT}. */
 const distinctValuesByKey = async (
   repo: Repo,
   workspaceId: string,
@@ -728,7 +729,7 @@ export const applyPropertyDefinitionSynthesis = async (
     for (const candidate of plan.candidates) {
       // The kernel core BY IDENTITY, never `repo.valuePresetCores.get(id)`:
       // that map is a `keyedMapFacet` keyed on preset id, so an extension
-      // contributing `string` REPLACES the kernel one. `inferPresetId`'s whole
+      // contributing `string` REPLACES the kernel one. `provePresetId`'s whole
       // criterion is the round-trip behaviour of these four specific codecs —
       // registering a different codec under the id we persist would apply an
       // unvetted one to every historical value of the key.
@@ -876,6 +877,25 @@ export const applyPropertyDefinitionSynthesis = async (
         skipped.push({key: candidate.key,
                       reason: `a definition for this key was deleted (block ${id}); undo that `
                         + 'deletion, or delete the key, then run this again'})
+        continue
+      }
+      // Asked AGAIN here, of the runtime, because the plan's answer is a
+      // pre-dialog one: `usablePresets` filtered this ladder before a
+      // user-length pause during which an extension can load — enabled by the
+      // operator on the dialog's own advice, or arriving over sync — and
+      // replace the core behind this id. Minting anyway persists an id whose
+      // codec the projector will rebuild from the extension while the backfill
+      // encodes every historical value with the kernel one.
+      //
+      // POSITION IS LOAD-BEARING: below the converged and occupancy checks, not
+      // above them. Convergence does not depend on this pass's chosen preset at
+      // all, so refusing earlier would skip a key that already HAS a definition
+      // and block the flip over nothing.
+      if (!isKernelPreset(repo, candidate.presetId)) {
+        skipped.push({key: candidate.key,
+                      reason: `an extension replaced the '${candidate.presetId}' value type `
+                        + 'after this migration was planned; run it again to re-check the '
+                        + 'values against what that type does now'})
         continue
       }
       // in `src/` — `createChild` cannot pass `systemMint`
