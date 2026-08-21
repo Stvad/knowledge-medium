@@ -583,6 +583,22 @@ export const addBlockTypeToProperties = (
   }
 }
 
+/** Raw membership writer that REPLACES the whole list, for callers holding a
+ *  properties bag and no Repo (the merge membership retarget). Unlike
+ *  `TypeTagger.setBlockTypes` it neither validates the tokens against the type
+ *  registry nor seeds a type's initial values — deliberately: a retarget moves
+ *  an EXISTING tag onto a merge survivor whose definition the post-commit
+ *  registry rebuild has not published yet, so registry validation would reject
+ *  the very write that keeps membership alive, and initial-value seeding would
+ *  invent user data during a repair. */
+export const setBlockTypesInProperties = (
+  properties: Record<string, unknown>,
+  typeIds: readonly string[],
+): Record<string, unknown> => ({
+  ...properties,
+  [typesProp.name]: typesProp.codec.encode([...typeIds]),
+})
+
 /** Set the editing flag on the UI-state block. Refuses to enter edit
  *  mode in a read-only repo (workspace viewer) — the wrappers also
  *  short-circuit, but this gate keeps any new caller honest. */
