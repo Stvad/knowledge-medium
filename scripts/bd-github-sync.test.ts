@@ -17,7 +17,7 @@ import {
   extractBeadIds,
   issueNumberFromRef,
   matchesCommitCommand,
-  matchesUnrepairableCommand,
+  matchesUnverifiableCommand,
   hasStdinBody,
   matchesPrCommand,
   planClosePushes,
@@ -363,22 +363,22 @@ describe('allowsIssueRefs', () => {
   })
 })
 
-describe('matchesUnrepairableCommand', () => {
+describe('matchesUnverifiableCommand', () => {
   it('matches merge, review, and close/reopen in command position, with global options and wrappers', () => {
-    expect(matchesUnrepairableCommand('gh pr merge 652 --merge')).toBe(true)
-    expect(matchesUnrepairableCommand('env GH_PAGER= gh -R Stvad/knowledge-medium pr merge 652')).toBe(true)
-    expect(matchesUnrepairableCommand('git pull && gh pr merge 652 --squash --body "Fixes #1"')).toBe(true)
-    expect(matchesUnrepairableCommand('gh pr review 5 --comment -b "looks wrong"')).toBe(true)
+    expect(matchesUnverifiableCommand('gh pr merge 652 --merge')).toBe(true)
+    expect(matchesUnverifiableCommand('env GH_PAGER= gh -R Stvad/knowledge-medium pr merge 652')).toBe(true)
+    expect(matchesUnverifiableCommand('git pull && gh pr merge 652 --squash --body "Fixes #1"')).toBe(true)
+    expect(matchesUnverifiableCommand('gh pr review 5 --comment -b "looks wrong"')).toBe(true)
     // close/reopen success output names repo#N, never a URL — their -c
     // comments are unfindable post-hoc
-    expect(matchesUnrepairableCommand('gh issue close 12 -c "done"')).toBe(true)
-    expect(matchesUnrepairableCommand('gh pr reopen 12 -c "still broken"')).toBe(true)
+    expect(matchesUnverifiableCommand('gh issue close 12 -c "done"')).toBe(true)
+    expect(matchesUnverifiableCommand('gh pr reopen 12 -c "still broken"')).toBe(true)
   })
 
   it('ignores other publishes and quoted prose', () => {
-    expect(matchesUnrepairableCommand('gh pr create --title t --body b')).toBe(false)
-    expect(matchesUnrepairableCommand('gh pr comment 652 --body "will gh pr merge later"')).toBe(false)
-    expect(matchesUnrepairableCommand('git commit -m "gh pr merge 652 was the fix"')).toBe(false)
+    expect(matchesUnverifiableCommand('gh pr create --title t --body b')).toBe(false)
+    expect(matchesUnverifiableCommand('gh pr comment 652 --body "will gh pr merge later"')).toBe(false)
+    expect(matchesUnverifiableCommand('git commit -m "gh pr merge 652 was the fix"')).toBe(false)
   })
 })
 
@@ -1127,7 +1127,7 @@ describe('hookPrePr process behavior', { timeout: 20_000 }, () => {
     writeFileSync(join(repo, 'merge-msg.txt'), 'ship it\n\nFixes #700\n')
     const fromFile = hook(`gh pr merge 12 --squash -F ${join(repo, 'merge-msg.txt')}`)
     expect(fromFile.status).toBe(2)
-    expect(fromFile.stderr).toContain('cannot fully read')
+    expect(fromFile.stderr).toContain('post-publication read-back covers')
     expect(hook('cat msg.txt | gh pr merge 12 -F -').status).toBe(2)
     // the CLI accepts the attached value form too
     expect(hook('gh pr merge 12 --squash -Fmsgfile').status).toBe(2)
@@ -1168,24 +1168,30 @@ describe('hookPrePr process behavior', { timeout: 20_000 }, () => {
     expect(g.stderr).toContain('km-zzzz')
   })
 
-  // An unquoted stdout redirect swallows the URL the verifier needs — the
-  // publish is blind, so its readable refs echo here instead. Stderr-only
-  // redirects keep the captured stdout and stay post-verified.
-  it('pre-echoes refs of publishes whose stdout is redirected away', () => {
+  // The whitelist: a shell operator of ANY kind leaves the covered shape, so
+  // the publish keeps its pre-publish checks. One character class decides it
+  // — no per-operator spelling, which is what previous rounds kept patching.
+  // Even `2>` attests, though it leaves stdout intact: carving it out is
+  // exactly the special-casing this shape exists to avoid.
+  it('pre-echoes refs of any publish carrying a shell operator', () => {
     const { hook } = makeRepo({ dbReady: true, ghIssues: { 700: { title: 'Some PR', state: 'open', pull_request: {} } } })
     const r = hook('gh pr edit 12 --body="Fixes #700" >/dev/null')
     expect(r.status).toBe(2)
     expect(r.stderr).toContain('close keyword targets a PR')
-    expect(hook('gh pr edit 12 --body "relates to #653" 2>/dev/null').status).toBe(0)
-    // command substitution captures the URL the same way a redirect does…
-    expect(hook('captured=$(gh pr edit 12 --body="Fixes #700")').status).toBe(2)
-    // …as does a pipe AFTER the publish; a pipe INTO it stays post-owned
-    expect(hook('gh pr edit 12 --body="Fixes #700" | tail -n 0').status).toBe(2)
-    // a foreign -R publish has no post-check (the verifier is repo-pinned) —
-    // its refs run against our space, mostly not-found, forcing attention
-    expect(hook('gh -R owner/other pr edit 12 --body="Fixes #700"').status).toBe(2)
-    // …but a substitution merely FEEDING an argument is not a captured publish
-    expect(hook('gh pr comment 1 --body "$(cat body.md)"').status).toBe(0)
+    for (const cmd of [
+      'gh pr edit 12 --body="Fixes #700" 2>/dev/null',
+      'captured=$(gh pr edit 12 --body="Fixes #700")',
+      'gh pr edit 12 --body="Fixes #700" | tail -n 0',
+      'cat x | gh pr edit 12 --body="Fixes #700"',
+      'gh pr edit 12 --body="Fixes #700" && echo done',
+      // a foreign -R publish is uncovered by gh vocabulary, not by syntax:
+      // the read-back is pinned to this repo
+      'gh -R owner/other pr edit 12 --body="Fixes #700"',
+      'gh --repo=owner/other pr edit 12 --body="Fixes #700"',
+    ])
+      expect(hook(cmd).status, cmd).toBe(2)
+    // the covered shape itself passes: one command, no operator, this repo
+    expect(hook('gh pr edit 12 --body "relates to #653"').status).toBe(0)
   })
 
   it('treats every body-bearing file flag as outside-command text on blind publishes', () => {
@@ -1200,8 +1206,14 @@ describe('hookPrePr process behavior', { timeout: 20_000 }, () => {
   // field value is not a path, and a publish body-file is the verifier's).
   it('does not misread publish file flags as commit-message files in compounds', () => {
     const { hook } = makeRepo({ dbReady: true })
+    // an api field value is not a path: nothing to read, nothing to block
     expect(hook('git commit -m ok && gh api repos/Stvad/knowledge-medium/issues/1/comments -F body=hello').status).toBe(0)
-    expect(hook('git commit -m ok && gh pr create --title t --body-file missing.md').status).toBe(0)
+    // the body-file belongs to the publish, so the compound attests under the
+    // coarse rule — it must never fail closed on an unreadable COMMIT message
+    const r = hook('git commit -m ok && gh pr create --title t --body-file missing.md')
+    expect(r.status).toBe(2)
+    expect(r.stderr).toContain('post-publication read-back covers')
+    expect(r.stderr).not.toContain('Run from the directory')
   })
 
   // gh pr review output names no URL, so the verifier cannot find the
@@ -1276,7 +1288,7 @@ describe('hookPrePr process behavior', { timeout: 20_000 }, () => {
     writeFileSync(join(repo, 'merge-body.txt'), 'ship it\n\ntracks km-zzzz\n')
     const r = hook(`KM_ISSUE_REFS_OK=1 gh pr merge 12 --squash -F ${join(repo, 'merge-body.txt')}`)
     expect(r.status).toBe(2)
-    expect(r.stderr).toContain('cannot fully read')
+    expect(r.stderr).toContain('post-publication read-back covers')
     const both = hook(`KM_ISSUE_REFS_OK=1 KM_ALLOW_BEAD_IDS=1 gh pr merge 12 --squash -F ${join(repo, 'merge-body.txt')}`)
     expect(both.status).toBe(0)
   })
@@ -1330,20 +1342,42 @@ describe('hookPrePr process behavior', { timeout: 20_000 }, () => {
     expect(shimCalls()).not.toContain('bd github sync')
   })
 
-  // Everything the publish leg used to fail closed on — file bodies, stdin
-  // pipes, expansion-built bodies, --recover, and #N refs on non-merge
-  // publishes — now passes PRE-publish: bd-publish-verify.mjs reads the
-  // PUBLISHED object back and repairs it (see its tests). These pins keep
-  // the deleted parsing surface from growing back (#672: the pre-gate's
-  // surface is frozen; decline coverage findings here).
-  it('lets non-merge publishes through without body inspection (post-publication owns them)', () => {
+  // A COVERED publish gets no body inspection at all: one gh command, no
+  // shell operator, this repo, a verb whose output names a URL. The gate
+  // reads no files and spawns nothing — bd-publish-verify reads the
+  // published object back instead. These pins keep the deleted parsing
+  // surface from growing back (#672: the pre-gate's surface is frozen;
+  // decline coverage findings here).
+  it('lets covered publishes through without body inspection (post-publication owns them)', () => {
     const { hook, shimCalls } = makeRepo({ dbReady: true, ghIssues: { 653: { title: 'Real GC failure', state: 'open' } } })
     expect(hook('gh pr create --title t --body "relates to #653"').status).toBe(0)
-    expect(hook('gh pr comment 1 --body "$(cat body.md)"').status).toBe(0)
-    expect(hook('cat body.md | gh pr comment 12 -F -').status).toBe(0)
-    expect(hook('cd subdir && gh pr create --body-file missing-body.md').status).toBe(0)
+    expect(hook('gh pr create --body-file missing-body.md --title t').status).toBe(0)
     expect(hook('gh pr create --recover abc123 --title t').status).toBe(0)
+    expect(hook('gh api repos/Stvad/knowledge-medium/issues/1/comments -f body=hi').status).toBe(0)
     expect(shimCalls()).toBe('')
+  })
+
+  // The same bodies through an OPERATOR are uncovered, and the ones whose
+  // text the gate cannot read then attest. This is the deliberate cost of
+  // the whitelist — the fix is a single --body-file command, above.
+  it('attests operator-borne bodies the gate cannot read', () => {
+    const { hook } = makeRepo({ dbReady: true })
+    for (const cmd of [
+      'gh pr comment 1 --body "$(cat body.md)"',
+      'cat body.md | gh pr comment 12 -F -',
+      'cd subdir && gh pr create --body-file missing-body.md --title t',
+    ])
+      expect(hook(cmd).status, cmd).toBe(2)
+  })
+
+  // Repair used to catch a bead id that reached a published api body; with
+  // the verifier read-only, the gate takes the case it can see for free —
+  // an id in the raw command blocks whether or not the publish is covered.
+  it('blocks bead ids in a covered api publish', () => {
+    const { hook } = makeRepo({ dbReady: true, shows: [[{ id: 'km-abc', external_ref: 'https://github.com/Stvad/knowledge-medium/issues/12' }]] })
+    const r = hook('gh api repos/Stvad/knowledge-medium/issues/1/comments -f body="tracks km-abc"')
+    expect(r.status).toBe(2)
+    expect(r.stderr).toContain('km-abc')
   })
 
   // The commit leg: close keywords act when the commit reaches the default

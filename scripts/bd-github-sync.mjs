@@ -48,26 +48,28 @@
  *       create/edit/comment/review/merge, gh issue create/edit/comment/close,
  *       gh release create/edit, gh api graphql mutations — matched only where
  *       gh is in command position, so a commit message MENTIONING these does
- *       not trip it). Published text is verified after publication by
- *       bd-publish-verify.mjs (PostToolUse), which reads the GitHub object
- *       back and can repair it — so this gate scans the raw command string
+ *       not trip it). Published text is read back after publication by
+ *       bd-publish-verify.mjs (PostToolUse), which echoes the real title of
+ *       every #N it published — so this gate scans the raw command string
  *       and deliberately does NOT chase stdin/expansion/--recover bodies;
  *       its parsing surface is FROZEN (#672 — decline coverage findings
  *       here). Bead ids (km-…) BLOCK (exit 2) with the km→#N substitution
  *       table, minting issues for unmapped beads first — the number should
- *       be in hand BEFORE the text ships. The #N echo-gate remains
- *       pre-publish ONLY for the verifier-BLIND class — gh pr merge
- *       (merge-commit text; the commit itself is also read back post-merge
- *       by bd-publish-verify), review/close/reopen (output names no URL),
- *       graphql mutations and response-hiding api flags (--silent/--jq/
- *       --template; nothing for the verifier to read back) — plus git
- *       commit close keywords (commit text never becomes a GitHub object;
- *       the commit leg runs INDEPENDENTLY of the publish legs). Blind
- *       publishes are handled by ONE coarse rule (#683: B): readable
- *       command text gets the tables; text living OUTSIDE the command
- *       (file/payload flags, api @-references, expansion) blocks outright
- *       and the escapes attest — no file reading, no per-channel detection
- *       (which does not converge; decision record: #683).
+ *       be in hand BEFORE the text ships. The #N echo-gate stays
+ *       pre-publish for publishes the read-back does NOT cover, decided by
+ *       a WHITELIST: one gh command with no shell operator in its skeleton,
+ *       aimed at this repo, whose verb and flags leave a fetchable URL in
+ *       the output. Everything else is uncovered — so a spelling this gate
+ *       fails to recognize costs an attested re-run instead of a silent
+ *       gap, which is the whole reason for the direction. Uncovered
+ *       publishes take ONE coarse rule (#683: B): readable command text
+ *       gets the tables; text living OUTSIDE the command (file/payload
+ *       flags, api @-references, expansion) blocks outright and the escapes
+ *       attest — no file reading, no per-channel detection (which does not
+ *       converge; decision record: #683). Plus git commit close keywords
+ *       (commit text never becomes a GitHub object; the commit leg runs
+ *       INDEPENDENTLY of the publish legs), and the merge COMMIT of a
+ *       merged PR, read back post-merge by bd-publish-verify.
  *       Escape hatches: KM_ALLOW_BEAD_IDS=1 / KM_ISSUE_REFS_OK=1 prefixes.
  *       The FULL sync does not run here: converged it still costs ~60s (a GET
  *       compare per issue), which is too slow to sit in front of every PR.
@@ -230,13 +232,14 @@ export const matchesCommitCommand = cmd => GIT_COMMIT.test(commandSkeleton(cmd))
 // (essentially unused) case. A never-exercised convenience is not worth a
 // recurring bypass surface.
 
-// Publishes post-publication repair cannot reach, which therefore keep the
-// pre-publish #N echo-gate: `gh pr merge` text lands in the merge commit,
-// and review/close/reopen output names `repo#N`, never a URL the verifier
-// could find the review or -c comment by. Their file-fed bodies are NOT
-// read — the blind-publish rule blocks them until both escapes attest.
+// The verbs whose output names no URL the read-back could fetch: `gh pr
+// merge` text lands in the merge commit, and review/close/reopen print
+// `repo#N`, never a link to the review or the -c comment. gh's verb table
+// is closed and documented, which is what makes listing it sound where
+// listing shell syntax is not. Their file-fed bodies are NOT read — the
+// coarse rule blocks those until both escapes attest.
 // Comment-less closes pass for free — no refs in the text, nothing to echo.
-const GH_UNREPAIRABLE = new RegExp(
+const GH_UNVERIFIABLE = new RegExp(
   SEGMENT_START +
     COMMAND_PREFIXES +
     String.raw`(?:\S*\/)?gh\s+` +
@@ -244,7 +247,7 @@ const GH_UNREPAIRABLE = new RegExp(
     String.raw`(?:pr\s+(?:merge|review|close|reopen)|issue\s+(?:close|reopen))\b`,
   'm',
 )
-export const matchesUnrepairableCommand = cmd => GH_UNREPAIRABLE.test(commandSkeleton(cmd))
+export const matchesUnverifiableCommand = cmd => GH_UNVERIFIABLE.test(commandSkeleton(cmd))
 
 
 // The escape hatch must also be in command-prefix position of the SKELETON —
@@ -1014,13 +1017,11 @@ const hookPrePr = () => {
 
   const isPublish = matchesPrCommand(cmd)
   const apiPublish = matchesApiPublish(cmd)
-  // Any graphql operation is blind-class: the mutation may live entirely in
-  // an external payload, and the response envelope gives the verifier
-  // nothing either way. Inline reads pass for free — clean text has nothing
-  // to echo. Output-hiding flags make a REST mutation equally invisible — a
-  // CLOSED set on one tool, so membership, not enumeration. (-q, the short
-  // form of --jq, is a residual: a command-wide scan would trip on
-  // `grep -q` in compounds.)
+  // gh's own flag vocabulary decides whether a response names a fetchable
+  // object: graphql answers with an envelope, and the output-hiding flags
+  // print nothing to find the object by. A CLOSED, documented set — one
+  // tool's manual — so membership, not enumeration. (-q, the short form of
+  // --jq, is a residual: a command-wide scan would trip on `grep -q`.)
   // Membership words are tested on the raw text too: a quoted "--silent" or
   // "graphql" reaches gh unquoted, but the skeleton blanks it. Prose hits
   // cost at most an extra readable-text echo round.
@@ -1028,6 +1029,7 @@ const hookPrePr = () => {
   const graphqlApi = apiPublish && (/\bgraphql\b/.test(sk) || /\bgraphql\b/.test(cmd))
   const opaqueRe = /(?<![\w-])--(?:silent|jq|template)\b/
   const opaqueApi = apiPublish && (opaqueRe.test(sk) || opaqueRe.test(cmd))
+  const foreignRepo = /(?<![\w-])(?:-R|--repo)(?:=|\s)/.test(sk)
 
   // Close keywords in commit messages act when the commit reaches the
   // default branch, and commit text never becomes a GitHub object — but the
@@ -1043,7 +1045,7 @@ const hookPrePr = () => {
       : ''
   const commitRefs = commitText ? closeKeywordRefs(commitText) : []
 
-  if (!isPublish && !graphqlApi && !opaqueApi) {
+  if (!isPublish && !apiPublish) {
     if (commitRefs.length === 0) allow()
     return echoIssueRefs(commitText, commitRefs)
   }
@@ -1059,39 +1061,38 @@ const hookPrePr = () => {
   const targetUrl = () => /((?:\S*\/)?gh\s+(?:-\S+\s+(?:[^-\s]\S*\s+)?)*(?:pr|issue)\s+\w+\s+)https?:\/\/\S+/g
   const text = targetUrl().test(commandSkeleton(cmd)) ? cmd.replace(targetUrl(), '$1') : cmd
 
-  // The verifier-blind class: merge text lands in the merge commit,
-  // review/close/reopen output names no URL for the verifier to find, and
-  // graphql/opaque api responses give it nothing to read back. ONE coarse
-  // rule for all of it (#683): text that lives OUTSIDE the raw command
-  // (file or payload flags, api @-references, shell expansion) blocks
-  // outright and the escapes attest — never per-channel detection, which
-  // does not converge. Deliberately DUMB: a `$5` in quoted prose trips it
-  // and costs one attested re-run; dumb-and-closed beats
-  // accurate-and-unbounded here. Readable blind text (inline bodies, inline
-  // graphql queries) flows to the refs/ids tables below instead, and the
-  // merge COMMIT itself is read back post-merge by bd-publish-verify.
-  // An unquoted stdout redirect swallows the URL the verifier needs — a
-  // redirected publish is blind no matter the verb. `2>` (stderr-only) is
-  // excluded: the Bash tool merges stderr into the captured stdout anyway.
-  // A gh call INSIDE a substitution is equally blind — the shell captures
-  // its output — while a substitution merely feeding an argument is not.
-  // …as is one piped into a consumer, and one aimed at a FOREIGN repo via
-  // -R/--repo: the verifier's URL pattern is pinned to this repo, so a
-  // foreign publish has no post-check — its refs run against OUR issue
-  // space here (mostly not-found, forcing attention), the same
-  // no-target-parsing rule the gate has always used for -R.
-  // A pipe loses the publish's output only when it sits AFTER the gh call —
-  // a pipe INTO gh (stdin-fed publishes) leaves stdout for the verifier and
-  // stays post-owned. Crude positional test, deliberately not a parser.
-  const pipeAfterGh = sk.includes('|') && sk.lastIndexOf('|') > sk.lastIndexOf('gh ')
-  const outputLost = /(?<!2)>(?!&2)/.test(sk) || pipeAfterGh
-  const capturedGh = /\$\([^)]*\bgh\s|`[^`]*\bgh\s/.test(cmd)
-  const foreignish = /(?<![\w-])(?:-R|--repo)(?:=|\s)/.test(sk)
-  const blind =
-    matchesUnrepairableCommand(cmd) ||
-    graphqlApi ||
-    opaqueApi ||
-    ((isPublish || apiPublish) && (outputLost || capturedGh || foreignish))
+  // Does the post-publication read-back cover this publish? A WHITELIST.
+  // The previous shape enumerated the ways a command's output escapes the
+  // hook — redirects, pipes, substitutions, foreign repos — and a missed
+  // spelling was a SILENT gap, so every review round found another one
+  // (attached -Rowner/repo, a pipe positional test beaten by later literal
+  // text, a compound mixing api with CLI). Recognizing the covered shape
+  // instead inverts the failure: an unrecognized command falls out as
+  // uncovered and costs an attested re-run, never a gap.
+  //
+  // Two layers, different in kind on purpose:
+  //  - SHELL: the skeleton must contain no operator at all. One test for
+  //    pipes, redirects, substitutions, separators and multi-line commands
+  //    together — no per-operator spelling, no positional heuristics.
+  //  - GH: a closed, documented vocabulary — the verbs whose output names
+  //    no URL, foreign -R targets, graphql, response-hiding flags. A gap
+  //    here is bounded by one tool's manual, not by the shell's grammar.
+  //
+  // A heredoc carries `<` and so attests. That is the deliberate cost of
+  // not parsing heredocs (see commandSkeleton): write the body to a file
+  // and publish it with --body-file, which is a single covered command.
+  const SHELL_OPERATOR = /[|;&<>$`\n]/
+  const postVerified =
+    !SHELL_OPERATOR.test(sk) &&
+    !foreignRepo &&
+    !graphqlApi &&
+    !opaqueApi &&
+    (apiPublish || !matchesUnverifiableCommand(cmd))
+  // Uncovered publishes keep the pre-publish checks: readable text gets the
+  // refs/ids tables below, text living OUTSIDE the command blocks outright
+  // (#683). The merge COMMIT of a merged PR is read back post-merge by
+  // bd-publish-verify regardless.
+  const blind = !postVerified
   if (blind && !(allowsIssueRefs(cmd) && allowsBeadIds(cmd))) {
     // Any *file long flag (body-file, file, notes-file, …), --template and
     // --input carry text this gate cannot read. Short -F/-T are file flags
@@ -1103,7 +1104,7 @@ const hookPrePr = () => {
       (matchesApiPublish(cmd) ? /@/.test(cmd) : /(?<![\w-])-[FT]/.test(cmd))
     if (textOutsideCommand) {
       console.error(
-        'This publish (merge/review/close/graphql/hidden-output) carries text this gate cannot fully read from the command — a file or payload flag, an @-reference, or shell expansion — and nothing verifies it after publication either. Publish literal inline text (readable text gets verified and echoed) — or, after checking every reference and bead id in it yourself, re-run with KM_ISSUE_REFS_OK=1 KM_ALLOW_BEAD_IDS=1 prefixed.',
+        'This publish is not one the post-publication read-back covers (it must be a single gh command, with no shell operator, aimed at this repo, whose verb and flags leave a fetchable URL in the output) — and it carries text this gate cannot read from the command either: a file or payload flag, an @-reference, or shell expansion. Publish literal inline text so this gate can read it (a COVERED publish — a single create/edit/comment command with no shell operator — may use --body-file freely, since the read-back checks what it shipped) — or, after checking every reference and bead id in it yourself, re-run with KM_ISSUE_REFS_OK=1 KM_ALLOW_BEAD_IDS=1 prefixed.',
       )
       process.exit(2)
     }
