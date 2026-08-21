@@ -16,7 +16,6 @@ import {
   detectReverts,
   extractBeadIds,
   issueNumberFromRef,
-  hasDynamicBody,
   matchesCommitCommand,
   matchesGraphqlMutation,
   matchesUnrepairableCommand,
@@ -381,20 +380,6 @@ describe('matchesUnrepairableCommand', () => {
     expect(matchesUnrepairableCommand('gh pr create --title t --body b')).toBe(false)
     expect(matchesUnrepairableCommand('gh pr comment 652 --body "will gh pr merge later"')).toBe(false)
     expect(matchesUnrepairableCommand('git commit -m "gh pr merge 652 was the fix"')).toBe(false)
-  })
-})
-
-describe('hasDynamicBody', () => {
-  it('flags expansion-built bodies, leaves literal and single-quoted ones alone', () => {
-    expect(hasDynamicBody('gh pr merge 1 --body "$(cat msg)"')).toBe(true)
-    expect(hasDynamicBody('gh pr merge 1 --subject "$(cat subject.md)"')).toBe(true)
-    expect(hasDynamicBody('gh pr merge 1 -t"$(cat subject.md)"')).toBe(true)
-    expect(hasDynamicBody('gh pr review 1 -b "$REVIEW"')).toBe(true)
-    expect(hasDynamicBody('gh issue close 1 -c "`gen-msg`"')).toBe(true)
-    // shell word concatenation forms ONE argument across quote boundaries
-    expect(hasDynamicBody('gh pr merge 1 --body prefix"$(cat msg)"')).toBe(true)
-    expect(hasDynamicBody('gh pr merge 1 --body "plain #12 text"')).toBe(false)
-    expect(hasDynamicBody("gh pr merge 1 --body '$(literal, single quotes)'")).toBe(false)
   })
 })
 
@@ -1143,21 +1128,21 @@ describe('hookPrePr process behavior', { timeout: 20_000 }, () => {
     expect(r.stderr).toContain('close keyword targets a PR')
   })
 
-  // Merge and review bodies may be file-fed; the file lands where no
-  // post-publication repair reaches, so the unrepairable leg reads it with
-  // the same fail-closed rules as the commit leg.
-  it('scans file-backed merge bodies and fails closed on unreadable or stdin-fed ones', () => {
-    const { hook, repo } = makeRepo({ dbReady: true, ghIssues: { 700: { title: 'Some PR', state: 'open', pull_request: {} } } })
+  // #683 B: blind-publish text that lives OUTSIDE the command (files,
+  // payloads, expansion) is not read — it blocks outright, and BOTH escapes
+  // attest. One rule, no per-channel detection; the merge COMMIT itself is
+  // additionally read back post-merge by bd-publish-verify.
+  it('blocks blind publishes whose text lives outside the command, both escapes to pass', () => {
+    const { hook, repo } = makeRepo({ dbReady: true })
     writeFileSync(join(repo, 'merge-msg.txt'), 'ship it\n\nFixes #700\n')
     const fromFile = hook(`gh pr merge 12 --squash -F ${join(repo, 'merge-msg.txt')}`)
     expect(fromFile.status).toBe(2)
-    expect(fromFile.stderr).toContain('close keyword targets a PR')
-    const missing = hook('cd subdir && gh pr merge 12 --body-file msg.txt')
-    expect(missing.status).toBe(2)
-    expect(missing.stderr).toContain('Cannot read message file')
-    const piped = hook('cat msg.txt | gh pr merge 12 -F -')
-    expect(piped.status).toBe(2)
-    expect(piped.stderr).toContain('stdin')
+    expect(fromFile.stderr).toContain('cannot fully read')
+    expect(hook('cat msg.txt | gh pr merge 12 -F -').status).toBe(2)
+    expect(hook('gh api --silent repos/Stvad/knowledge-medium/issues/1/comments --input payload.json').status).toBe(2)
+    expect(hook(`gh api graphql -f query='mutation { x }' -F vars=@vars.json`).status).toBe(2)
+    expect(hook(`KM_ISSUE_REFS_OK=1 gh pr merge 12 -F ${join(repo, 'merge-msg.txt')}`).status).toBe(2)
+    expect(hook(`KM_ISSUE_REFS_OK=1 KM_ALLOW_BEAD_IDS=1 gh pr merge 12 -F ${join(repo, 'merge-msg.txt')}`).status).toBe(0)
   })
 
   // Expansion-built unrepairable text has no readable form anywhere — the
@@ -1198,19 +1183,32 @@ describe('hookPrePr process behavior', { timeout: 20_000 }, () => {
   })
 
   // An api mutation with a response-hiding output flag is invisible to the
-  // verifier — a closed three-flag set, gated like --silent alone was.
-  // (--jq earned its place live: a decline reply posted with `--jq .id`
-  // carried an unrewritten bead id straight past the verifier.)
-  it('fails closed on response-hiding api mutations (--silent/--jq/--template), escape honored', () => {
-    const { hook } = makeRepo({ dbReady: true })
-    const r = hook('gh api --silent repos/Stvad/knowledge-medium/issues/1/comments -f body=done')
+  // verifier — its READABLE inline text gets the tables here instead of a
+  // blanket block (a blanket block offered the escape without ever showing
+  // the refs; round-6 finding). (--jq earned its membership live: a reply
+  // posted with `--jq .id` carried a bead id straight past the verifier.)
+  it('echoes readable text of response-hiding api mutations, passes clean ones', () => {
+    const { hook } = makeRepo({ dbReady: true, ghIssues: { 653: { title: 'Real GC failure', state: 'open' } } })
+    const r = hook('gh api --silent -X PATCH repos/Stvad/knowledge-medium/pulls/12 -f body="relates to #653"')
     expect(r.status).toBe(2)
-    expect(r.stderr).toContain('--silent')
-    expect(hook('gh api repos/Stvad/knowledge-medium/issues/1/comments -f body=done --jq .id').status).toBe(2)
-    expect(hook('gh api repos/Stvad/knowledge-medium/issues/1/comments -f body=done --template "{{.id}}"').status).toBe(2)
-    expect(hook('KM_ISSUE_REFS_OK=1 gh api --silent repos/Stvad/knowledge-medium/issues/1/comments -f body=done').status).toBe(0)
-    // an explicit-GET with hidden output is a read; blocking it would be a pointless round
+    expect(r.stderr).toContain('#653 → "Real GC failure" (issue, open)')
+    const jq = hook('gh api repos/Stvad/knowledge-medium/issues/1/comments -f body="tracks km-zzzz" --jq .id')
+    expect(jq.status).toBe(2)
+    expect(jq.stderr).toContain('km-zzzz')
+    // clean readable text has nothing to confirm — no blanket block
+    expect(hook('gh api --silent repos/Stvad/knowledge-medium/issues/1/comments -f body=done').status).toBe(0)
     expect(hook('gh api --silent --method GET repos/Stvad/knowledge-medium/issues -f state=open').status).toBe(0)
+  })
+
+  // Round-6 pin: a sibling GET segment must not suppress the opaque leg —
+  // there is no GET exemption left to suppress.
+  it('echoes refs of a silent mutation even when a sibling segment is an explicit GET', () => {
+    const { hook } = makeRepo({ dbReady: true, ghIssues: { 653: { title: 'Real GC failure', state: 'open' } } })
+    const r = hook(
+      'gh api -X GET repos/Stvad/knowledge-medium/issues/1 && gh api --silent repos/Stvad/knowledge-medium/issues/1/comments -f body="see #653"',
+    )
+    expect(r.status).toBe(2)
+    expect(r.stderr).toContain('#653 → "Real GC failure" (issue, open)')
   })
 
   // Close/reopen comments publish text whose success output names repo#N,
@@ -1224,15 +1222,15 @@ describe('hookPrePr process behavior', { timeout: 20_000 }, () => {
     expect(hook('gh pr close 12').status).toBe(0)
   })
 
-  // The escapes are INDEPENDENT: approving the #N refs must not switch off
-  // the bead-id scan of the same file-fed body (reproduced by review: the
-  // merge below exited 0, placing an opaque bead id in merge-commit text).
-  it('still scans merge/review body files for bead ids under KM_ISSUE_REFS_OK', () => {
+  // The escapes are INDEPENDENT: approving the #N refs must not wave a
+  // file-fed body through — under the coarse rule the file is never read,
+  // so a single escape cannot attest for both checks.
+  it('keeps blocking a refs-approved file-fed merge until both escapes attest', () => {
     const { hook, repo } = makeRepo({ dbReady: true })
     writeFileSync(join(repo, 'merge-body.txt'), 'ship it\n\ntracks km-zzzz\n')
     const r = hook(`KM_ISSUE_REFS_OK=1 gh pr merge 12 --squash -F ${join(repo, 'merge-body.txt')}`)
     expect(r.status).toBe(2)
-    expect(r.stderr).toContain('km-zzzz')
+    expect(r.stderr).toContain('cannot fully read')
     const both = hook(`KM_ISSUE_REFS_OK=1 KM_ALLOW_BEAD_IDS=1 gh pr merge 12 --squash -F ${join(repo, 'merge-body.txt')}`)
     expect(both.status).toBe(0)
   })

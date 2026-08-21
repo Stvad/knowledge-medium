@@ -55,21 +55,19 @@
  *       its parsing surface is FROZEN (#672 — decline coverage findings
  *       here). Bead ids (km-…) BLOCK (exit 2) with the km→#N substitution
  *       table, minting issues for unmapped beads first — the number should
- *       be in hand BEFORE the text ships. The #N echo-gate (and body-file
- *       reading) remains pre-publish ONLY where the verifier cannot reach:
- *       gh pr merge (merge-commit text), gh pr review (its output names no
- *       URL), graphql mutations (response envelope unresolvable), api
- *       mutations with response-hiding output flags (--silent/--jq/
- *       --template — fail closed; the response is the verifier's only
- *       eyes), and git commit close keywords (commit text never becomes a
- *       GitHub object). The commit leg runs INDEPENDENTLY of the publish
- *       legs — one invocation can do both.
- *       Unrepairable-verb text built by shell expansion fails closed (the
- *       one guard restored from the pre-shrink gate — no post-hoc read
- *       exists for it). ACCEPTED residual of this leg, declined as
- *       channel-enumeration (round 5 of review; decision record: #683): a
- *       refs-approved opaque mutation's @file/--input payload is not read
- *       for bead ids.
+ *       be in hand BEFORE the text ships. The #N echo-gate remains
+ *       pre-publish ONLY for the verifier-BLIND class — gh pr merge
+ *       (merge-commit text; the commit itself is also read back post-merge
+ *       by bd-publish-verify), review/close/reopen (output names no URL),
+ *       graphql mutations and response-hiding api flags (--silent/--jq/
+ *       --template; nothing for the verifier to read back) — plus git
+ *       commit close keywords (commit text never becomes a GitHub object;
+ *       the commit leg runs INDEPENDENTLY of the publish legs). Blind
+ *       publishes are handled by ONE coarse rule (#683: B): readable
+ *       command text gets the tables; text living OUTSIDE the command
+ *       (file/payload flags, api @-references, expansion) blocks outright
+ *       and the escapes attest — no file reading, no per-channel detection
+ *       (review rounds 3–6 proved that enumeration non-convergent).
  *       Escape hatches: KM_ALLOW_BEAD_IDS=1 / KM_ISSUE_REFS_OK=1 prefixes.
  *       The FULL sync does not run here: converged it still costs ~60s (a GET
  *       compare per issue), which is too slow to sit in front of every PR.
@@ -255,23 +253,6 @@ export const matchesUnrepairableCommand = cmd => GH_UNREPAIRABLE.test(commandSke
 // prose containing the word costs one echo round, covered by the escape.
 export const matchesGraphqlMutation = cmd =>
   matchesApiPublish(cmd) && /\bgraphql\b/.test(commandSkeleton(cmd)) && /\bmutation\b/.test(cmd)
-
-// A body built by shell expansion cannot be inspected before it publishes —
-// and for the unrepairable verbs there is no after, so those keep this
-// fail-closed check (restored from the pre-shrink gate, where it was
-// review-hardened; the shrink deleted it on a rationale that is exactly
-// wrong for this class). Single-quoted values never expand and stay out.
-// The separator is optional (the CLI accepts ATTACHED short-option values:
-// -t"$(…)", -tfoo), and the value is matched as a full shell WORD — quoted
-// and unquoted segments concatenated (prefix"$(cat x)") form ONE argument.
-export const hasDynamicBody = cmd => {
-  for (const m of cmd.matchAll(
-    /(?<![\w-])(?:--body|--notes|--subject|--title|--comment|-[bntc])(?:=|\s+)?((?:"[^"]*"|'[^']*'|[^\s'"])+)/g,
-  )) {
-    if (/[$`]/.test(m[1].replace(/'[^']*'/g, ''))) return true
-  }
-  return false
-}
 
 // The escape hatch must also be in command-prefix position of the SKELETON —
 // honored from quoted prose, a PR body QUOTING it would both bypass the gate
@@ -1033,36 +1014,6 @@ const hookPrePr = () => {
     return (bodiesCache = paths.map(p => readFileSync(p, 'utf8')))
   }
 
-  // An api mutation whose response is hidden or reshaped is invisible to the
-  // post-publish verifier — no html_url ever reaches it. The output-hiding
-  // flags are a CLOSED set on one tool ({--silent, --jq, --template}),
-  // unlike payload channels, so this fails closed rather than enumerating.
-  // (Demonstrated live in the round that added --jq/--template: the decline
-  // reply itself was posted with `--jq .id` and went unverified.) Residual:
-  // -q, the short form of --jq, is skipped — a command-wide scan would trip
-  // on `grep -q` in compounds.
-  const opaqueApi =
-    matchesApiPublish(cmd) &&
-    !hasExplicitGetMethod(cmd) &&
-    /(?<![\w-])--(?:silent|jq|template)\b/.test(commandSkeleton(cmd))
-  if (opaqueApi && !allowsIssueRefs(cmd)) {
-    console.error(
-      'This gh api mutation hides or reshapes its response (--silent/--jq/--template), so neither this gate nor the post-publish verifier can see what it publishes. Drop the output flag (the printed response is how published text gets verified) — or, after verifying the references yourself, re-run with KM_ISSUE_REFS_OK=1 prefixed.',
-    )
-    process.exit(2)
-  }
-
-  // Unrepairable-verb text built by shell expansion has no readable form
-  // ANYWHERE — not here, and never post-publication — so it fails closed.
-  // Both escapes are required: an expanded body can hide refs and bead ids
-  // alike.
-  if (matchesUnrepairableCommand(cmd) && hasDynamicBody(cmd) && !(allowsIssueRefs(cmd) && allowsBeadIds(cmd))) {
-    console.error(
-      'This merge/review/close text is built by shell expansion ($(…), `…` or a variable), which no gate can inspect — and it lands where the post-publish verifier cannot repair. Publish literal text or a file — or, after verifying references AND bead ids yourself, re-run with KM_ISSUE_REFS_OK=1 KM_ALLOW_BEAD_IDS=1 prefixed.',
-    )
-    process.exit(2)
-  }
-
   // The legs below are INDEPENDENT — one invocation can both commit and
   // publish (`git commit -m "Fixes #N" && gh pr comment …`), and a publish
   // match must not swallow the commit check.
@@ -1072,20 +1023,18 @@ const hookPrePr = () => {
   const commitText = matchesCommitCommand(cmd) && !allowsIssueRefs(cmd) ? [cmd, ...guardedBodies()].join('\n') : ''
   const commitRefs = commitText ? closeKeywordRefs(commitText) : []
 
-  // A refs-approved opaque-output api mutation still owes the bead-id leg
-  // its raw-command scan — the verifier will never see this publish.
   const isPublish = matchesPrCommand(cmd)
   const graphqlMutation = matchesGraphqlMutation(cmd)
+  // Output-hiding flags make an api mutation invisible to the post-publish
+  // verifier — a CLOSED set on one tool, so membership, not enumeration.
+  // (-q, the short form of --jq, is a residual: a command-wide scan would
+  // trip on `grep -q` in compounds.)
+  const opaqueApi = matchesApiPublish(cmd) && /(?<![\w-])--(?:silent|jq|template)\b/.test(commandSkeleton(cmd))
   if (!isPublish && !graphqlMutation && !opaqueApi) {
     if (commitRefs.length === 0) allow()
     return echoIssueRefs(commitText, commitRefs)
   }
 
-  // The publish legs inspect the raw command string (plus, for the
-  // unrepairable verbs, their body files). Everything else about published
-  // text is verified AFTER publication by bd-publish-verify.mjs — see the
-  // --hook-pre-pr section of the header; the parsing surface here is FROZEN.
-  //
   // A positional target URL (`gh pr comment <url> --body …`) is the command's
   // addressee, not published text — stripped so it does not cost a
   // title-confirmation round. Two guards keep the strip away from published
@@ -1097,35 +1046,38 @@ const hookPrePr = () => {
   const targetUrl = () => /((?:\S*\/)?gh\s+(?:-\S+\s+(?:[^-\s]\S*\s+)?)*(?:pr|issue)\s+\w+\s+)https?:\/\/\S+/g
   const text = targetUrl().test(commandSkeleton(cmd)) ? cmd.replace(targetUrl(), '$1') : cmd
 
-  // #N refs pre-publish ONLY where post-publication repair cannot reach:
-  // merge text lands in the merge commit, review/close/reopen output names
-  // no URL for the verifier to find, and graphql responses hide the mutated
-  // object in an envelope this hook cannot safely resolve.
-  //
-  // Body files feed TWO independent checks — #N refs (KM_ISSUE_REFS_OK) and
-  // bead ids (KM_ALLOW_BEAD_IDS) — so they are read unless BOTH escapes are
-  // given; each check then consumes them only under its own escape.
-  const publishBodies =
-    matchesUnrepairableCommand(cmd) && !(allowsIssueRefs(cmd) && allowsBeadIds(cmd)) ? guardedBodies() : []
-  const publishText = allowsIssueRefs(cmd)
-    ? ''
-    : matchesUnrepairableCommand(cmd)
-      ? [text, ...publishBodies].join('\n')
-      : graphqlMutation
-        ? cmd
-        : ''
-  const refs = [...new Set([...commitRefs, ...(publishText ? extractIssueRefs(publishText) : [])])]
+  // The verifier-blind class: merge text lands in the merge commit,
+  // review/close/reopen output names no URL for the verifier to find, and
+  // graphql/opaque api responses give it nothing to read back. For these,
+  // ONE coarse rule (#683: B) replaces the per-channel detection review
+  // rounds 3–6 proved non-convergent: text that lives OUTSIDE the raw
+  // command (file or payload flags, api @-references, shell expansion) is
+  // blocked outright — no file reading, no expansion grammar, no payload
+  // chasing — and the escapes attest instead. Deliberately DUMB: a `$5` in
+  // quoted prose trips it and costs one attested re-run; dumb-and-closed
+  // beats accurate-and-unbounded here. Readable blind text (inline bodies,
+  // inline graphql queries) flows to the refs/ids tables below instead, and
+  // the merge COMMIT itself is read back post-merge by bd-publish-verify.
+  const blind = matchesUnrepairableCommand(cmd) || graphqlMutation || opaqueApi
+  if (blind && !(allowsIssueRefs(cmd) && allowsBeadIds(cmd))) {
+    const textOutsideCommand =
+      /(?<![\w-])(?:--body-file|--file|--input|-F)\b|[$`]/.test(cmd) || (matchesApiPublish(cmd) && /@/.test(cmd))
+    if (textOutsideCommand) {
+      console.error(
+        'This publish (merge/review/close/graphql/hidden-output) carries text this gate cannot fully read from the command — a file or payload flag, an @-reference, or shell expansion — and nothing verifies it after publication either. Publish literal inline text (readable text gets verified and echoed) — or, after checking every reference and bead id in it yourself, re-run with KM_ISSUE_REFS_OK=1 KM_ALLOW_BEAD_IDS=1 prefixed.',
+      )
+      process.exit(2)
+    }
+  }
 
-  // The two escapes are independent: a command allowed to mention bead ids
-  // can still carry a hallucinated issue number, and vice versa. Bead ids in
-  // graphql mutations are scanned here because the verifier yields no
-  // targets for them; unrepairable-verb body files ride along when already
-  // read for refs.
-  const ids = allowsBeadIds(cmd)
-    ? []
-    : extractBeadIds([isPublish ? text : cmd, ...publishBodies].join('\n'))
+  // Readable text of blind publishes gets the full pre-publish treatment:
+  // #N refs echoed with their titles, bead ids denied with the km→#N table.
+  // The two escapes stay independent: a command allowed to mention bead ids
+  // can still carry a hallucinated issue number, and vice versa.
+  const refs = [...new Set([...commitRefs, ...(blind && !allowsIssueRefs(cmd) ? extractIssueRefs(text) : [])])]
+  const ids = allowsBeadIds(cmd) ? [] : extractBeadIds(text)
   if (ids.length === 0 && refs.length === 0) allow()
-  const refsText = [publishText, commitText].filter(Boolean).join('\n') || text
+  const refsText = [blind ? text : '', commitText].filter(Boolean).join('\n') || text
   if (ids.length === 0) return echoIssueRefs(refsText, refs)
 
   const byId = beadIssueLookupWithMint(ids)
