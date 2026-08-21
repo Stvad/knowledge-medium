@@ -59,7 +59,8 @@ import { tryBuildSchema } from '@/data/userSchemasService'
 import { readWorkspaceEncryptionMode } from '@/data/workspaceSchema'
 import { deriveWorkspaceIdNamespace } from '@/sync/crypto/derivedIdNamespace'
 import { getWorkspaceKeyStore } from '@/sync/keys/keyStore'
-import { getModePin } from '@/sync/keys/modePin'
+import { getModePin, type ModePin } from '@/sync/keys/modePin'
+import { readContentKeyHmac } from '@/sync/keys/resolver'
 import { jsonValuesEqual } from '@/data/internals/jsonCanonical'
 import {
   encodedPropertyValueToChildContent, propertyChildContentToEncodedValue,
@@ -76,9 +77,9 @@ import {
  *  all — one literally spelled `system:todo/property/done` would land on that
  *  seed's id.
  *
- *  An E2EE workspace derives its own namespace instead (see
- *  {@link resolveSynthesisNamespace}); this constant is public, and the id it
- *  produces is a hash of the property NAME travelling in the clear. */
+ *  Public, so the ids it produces are recomputable by anyone holding the
+ *  workspace id. An E2EE workspace derives its own instead — see
+ *  {@link deriveWorkspaceIdNamespace} for why. */
 const PLAINTEXT_SYNTHESIZED_DEFINITION_NS = 'b1d6b0c7-6a2a-4c1e-9a19-2f0f7b6b3c41'
 
 /** Label domain-separating the E2EE namespace derivation from every other use
@@ -282,10 +283,44 @@ export interface PropertyDefinitionSynthesisPlan {
 }
 
 /** The namespace this workspace's synthesized definition ids are derived
- *  under, or why nothing may be minted here at all. */
+ *  under, or why nothing may be minted here at all. Carries the `mode` it was
+ *  derived for, because that is the half a later re-check has to compare. */
 export type SynthesisNamespace =
   | {kind: 'refused'; reason: string}
-  | {kind: 'ready'; namespace: string}
+  | {kind: 'ready'; mode: ModePin; namespace: string}
+
+/**
+ * Which mode may this workspace be synthesized into, or why none may.
+ *
+ * Split out because it is the half that can GO STALE — a workspace's real row
+ * can arrive from sync mid-gesture — while the key material behind an E2EE
+ * namespace cannot: `K_id` is HKDF of the workspace key, which is immutable
+ * until rotation exists. So the write path re-asks THIS, cheaply, and reuses
+ * the namespace it already resolved.
+ */
+const resolveSynthesisMode = async (
+  repo: Repo,
+  workspaceId: string,
+): Promise<{kind: 'refused'; reason: string} | {kind: 'ready'; mode: ModePin}> => {
+  const pin = getModePin(repo.user.id, workspaceId)
+  if (pin === null) {
+    return {kind: 'refused', reason:
+      'this device has not resolved whether the workspace is end-to-end encrypted; open ' +
+      'the workspace once so the first-encounter gate settles that, then run this again'}
+  }
+  const mode = await readWorkspaceEncryptionMode(repo.db, workspaceId)
+  if (mode === null) {
+    return {kind: 'refused', reason:
+      'this device has no local row for the workspace yet, so its encryption mode cannot ' +
+      'be confirmed — wait for it to sync, then run this again'}
+  }
+  if (mode !== (pin === 'plaintext' ? 'none' : 'e2ee')) {
+    return {kind: 'refused', reason:
+      `this device has the workspace pinned as ${pin} but its row reads ` +
+      `${JSON.stringify(mode)} — resolve that before migrating anything`}
+  }
+  return {kind: 'ready', mode: pin}
+}
 
 /**
  * Under what namespace may this WORKSPACE's synthesized definitions be minted?
@@ -295,13 +330,8 @@ export type SynthesisNamespace =
  * namespace produced for the wrong mode IS the leak. Asking them separately is
  * how a caller ends up vouching for one and using the other.
  *
- * The leak is about the ID, not the content: block ids sync in PLAINTEXT, so
- * `uuidv5("<workspaceId>:<key>")` under a namespace constant in this public
- * repo lets a server confirm a guessed private property name by recomputing
- * the hash. An E2EE workspace therefore derives its namespace from `K_id`, the
- * WK-derived subkey only its own devices hold ({@link deriveWorkspaceIdNamespace}) —
- * same shape §10 uses to stop an asset path being a content oracle, and the
- * reason an encrypted workspace can now do this at all.
+ * The threat the E2EE branch answers is stated once, at
+ * {@link deriveWorkspaceIdNamespace}.
  *
  * Three rules that look like belt-and-braces and are not:
  *  - ASK THE MODE PIN, never `workspaces.encryption_mode` alone — that column
@@ -323,49 +353,20 @@ export const resolveSynthesisNamespace = async (
   repo: Repo,
   workspaceId: string,
 ): Promise<SynthesisNamespace> => {
-  const pin = getModePin(repo.user.id, workspaceId)
-  if (pin === null) {
-    return {kind: 'refused', reason:
-      'this device has not resolved whether the workspace is end-to-end encrypted; open ' +
-      'the workspace once so the first-encounter gate settles that, then run this again'}
+  const resolved = await resolveSynthesisMode(repo, workspaceId)
+  if (resolved.kind === 'refused') return resolved
+  if (resolved.mode === 'plaintext') {
+    return {kind: 'ready', mode: 'plaintext', namespace: PLAINTEXT_SYNTHESIZED_DEFINITION_NS}
   }
-  const mode = await readWorkspaceEncryptionMode(repo.db, workspaceId)
-  if (mode === null) {
-    return {kind: 'refused', reason:
-      'this device has no local row for the workspace yet, so its encryption mode cannot ' +
-      'be confirmed — wait for it to sync, then run this again'}
-  }
-  if (mode !== (pin === 'e2ee' ? 'e2ee' : 'none')) {
-    return {kind: 'refused', reason:
-      `this device has the workspace pinned as ${pin} but its row reads ` +
-      `${JSON.stringify(mode)} — resolve that before migrating anything`}
-  }
-  if (pin === 'plaintext') {
-    return {kind: 'ready', namespace: PLAINTEXT_SYNTHESIZED_DEFINITION_NS}
-  }
-  const contentKeyHmac = await workspaceContentKeyHmac(repo.user.id, workspaceId)
+  const contentKeyHmac = await readContentKeyHmac(
+    getWorkspaceKeyStore(), repo.user.id, workspaceId)
   if (contentKeyHmac === null) {
     return {kind: 'refused', reason:
       'this device holds no content key for the encrypted workspace, so the definition ids ' +
       'it would mint could not be kept private — re-paste the workspace key, then run this again'}
   }
-  return {kind: 'ready', namespace:
+  return {kind: 'ready', mode: 'e2ee', namespace:
     await deriveWorkspaceIdNamespace(contentKeyHmac, SYNTHESIZED_DEFINITION_NS_LABEL)}
-}
-
-/** `K_id` for this (user, workspace), or null. Reads the store directly rather
- *  than through `SyncResolver` to keep the data layer off `repoProvider`; the
- *  fail-safe is the same and matters more here, since every null is a refusal. */
-const workspaceContentKeyHmac = async (
-  userId: string,
-  workspaceId: string,
-): Promise<CryptoKey | null> => {
-  try {
-    return (await getWorkspaceKeyStore().get(userId, workspaceId))?.contentKeyHmac ?? null
-  } catch (err) {
-    console.warn(`[propertyDefinitionSynthesis] key read failed for ${workspaceId}`, err)
-    return null
-  }
 }
 
 /** Why this key can never have a definition of any kind, or null.
@@ -758,20 +759,33 @@ export const applyPropertyDefinitionSynthesis = async (
     // is the only place the answer cannot go stale under us: the checks above
     // are separated from this transaction by the Properties-page bootstrap and
     // by the lock wait, and the workspace's real row can arrive from sync in
-    // between. Minting is not undoable in the way that matters here — an id is
-    // a hash of the property NAME, so minting under the PLAINTEXT namespace for
-    // a workspace that turns out encrypted publishes that name to the server,
-    // and deleting the block afterwards does not unpublish it.
+    // between. Minting under the wrong namespace is not undoable — deleting the
+    // block afterwards does not unpublish the id.
     //
-    // The namespace this returns is then the one every id below is derived
-    // under, so what was vouched for and what gets written cannot diverge.
+    // Only the MODE is re-asked, and that is the whole trick: `K_id` cannot
+    // change under us (it is HKDF of the workspace key, immutable until
+    // rotation exists), so the preflight's namespace stays sound exactly as
+    // long as the mode it was derived for still holds. Re-reading `K_id` here
+    // would put an IndexedDB open inside the SQLite write lock, and
+    // `idbKeyedStore` registers no `onblocked` handler — a wedged store would
+    // hold the app's single writer indefinitely rather than failing.
     //
     // Read through `repo.db` rather than a tx handle, deliberately and for the
     // same reason `assertBackfillMayWrite` does: a concurrent drain is excluded
     // by the write lock, not by read isolation.
-    const resolved = await resolveSynthesisNamespace(repo, workspaceId)
-    if (resolved.kind === 'refused') {
-      throw new Error(`[propertyDefinitionSynthesis] ${resolved.reason}`)
+    const late = await resolveSynthesisMode(repo, workspaceId)
+    if (late.kind === 'refused') {
+      throw new Error(`[propertyDefinitionSynthesis] ${late.reason}`)
+    }
+    // DEFENCE IN DEPTH, and no test pins it: the mode IS the pin, and
+    // `setModePin` is set-once and throws on a change, so the two answers cannot
+    // legitimately differ. It stays because it is what makes reusing the
+    // preflight's namespace checkable HERE — otherwise that reuse rests on an
+    // immutability invariant three modules away, and the failure it would hide
+    // is minting under a namespace derived for the other mode.
+    if (late.mode !== preflight.mode) {
+      throw new Error(`[propertyDefinitionSynthesis] the workspace changed from ${
+        preflight.mode} to ${late.mode} while this was preparing to write`)
     }
     // Taken INSIDE the tx, once: the registry is a lagging projection of the
     // definition blocks, and the plan's copy is a dialog older still.
@@ -793,12 +807,12 @@ export const applyPropertyDefinitionSynthesis = async (
      *  below reads this verdict rather than re-deriving from those sources: a
      *  derivation that consults only some of them produces a rival.
      *
-     *  No id is ever excluded here. The mint path used to drop its own
-     *  deterministic id, which is right only where that id is about to be
-     *  WRITTEN; as a question about who holds a NAME it hid the one contender
-     *  guaranteed to win — `systemMint` births that row at `createdAt` 0 and
-     *  the registry sorts ascending. "Is this id ours to write through?" is a
-     *  different question and stays where it was, in the occupancy switch. */
+     *  No id is ever excluded here, our own deterministic id least of all: a
+     *  row sitting there under this name is the whole answer, and dropping it
+     *  reports `vacant` for a key that already has its definition. Excluding it
+     *  is right only where that id is about to be WRITTEN — "is this id ours to
+     *  write through?" is a different question, and it stays where it was, in
+     *  the occupancy switch. */
     const nameHolding = async (name: string): Promise<NameHolding> => {
       if (registry.seedsByName.has(name)) return {kind: 'seed-reserved'}
       const holders = new Map<string, BlockData>()
@@ -858,7 +872,7 @@ export const applyPropertyDefinitionSynthesis = async (
       // unvetted one to every historical value of the key.
       const preset = kernelValuePresetCoresById[candidate.presetId]
       const id = synthesizedPropertyDefinitionBlockId(
-        resolved.namespace, workspaceId, candidate.key)
+        preflight.namespace, workspaceId, candidate.key)
 
       const holding = await nameHolding(candidate.key)
       if (holding.kind === 'seed-reserved') {

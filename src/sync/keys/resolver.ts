@@ -52,6 +52,27 @@ export interface SyncResolver {
   readonly getMode: (workspaceId: string) => Promise<SyncMode>
 }
 
+/** `K_id` for one (user, workspace), or null — the asset path's content-key
+ *  subkey (§10), also the PRF behind an E2EE workspace's derived-id namespaces.
+ *
+ *  Shared rather than re-read, because the FAIL-SAFE is the contract: an
+ *  unreadable key store (IndexedDB unavailable / corrupt / quota) must answer
+ *  "no `K_id`", never throw. Both callers depend on that and neither can
+ *  tolerate the other's version drifting — media fails closed, and a derived-id
+ *  namespace refuses rather than falling back to a public constant. */
+export const readContentKeyHmac = async (
+  keyStore: WorkspaceKeyStore,
+  userId: string,
+  workspaceId: string,
+): Promise<CryptoKey | null> => {
+  try {
+    return (await keyStore.get(userId, workspaceId))?.contentKeyHmac ?? null
+  } catch (err) {
+    console.warn(`[syncResolver] K_id read failed for ${workspaceId}; treating as absent`, err)
+    return null
+  }
+}
+
 export const createSyncResolver = (
   getUserId: () => string | null,
   keyStore: WorkspaceKeyStore,
@@ -75,14 +96,7 @@ export const createSyncResolver = (
   const getContentKeyHmac = async (workspaceId: string): Promise<CryptoKey | null> => {
     const userId = getUserId()
     if (!userId) return null
-    try {
-      return (await keyStore.get(userId, workspaceId))?.contentKeyHmac ?? null
-    } catch (err) {
-      // Same fail-safe as getCek: an unreadable store yields no K_id, so the
-      // asset resolver fails the media closed rather than throwing.
-      console.warn(`[syncResolver] K_id read failed for ${workspaceId}; treating as absent`, err)
-      return null
-    }
+    return readContentKeyHmac(keyStore, userId, workspaceId)
   }
 
   const getMaterializability: GetMaterializability = async (workspaceId) => {

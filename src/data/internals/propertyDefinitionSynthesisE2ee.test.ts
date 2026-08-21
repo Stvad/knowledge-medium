@@ -15,12 +15,12 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { v5 as uuidv5 } from 'uuid'
 import { ChangeScope } from '@/data/api'
-import { kernelDataExtension } from '@/data/kernelDataExtension'
-import { resolveFacetRuntimeSync } from '@/facets/facet'
 import type { Repo } from '@/data/repo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
+import { propertiesPageBlockId } from '@/data/propertiesPage'
 import { deriveContentKeyHmac } from '@/sync/crypto/contentKey'
+import { deriveWorkspaceIdNamespace } from '@/sync/crypto/derivedIdNamespace'
 import { getWorkspaceKeyStore } from '@/sync/keys/keyStore'
 import { setModePin } from '@/sync/keys/modePin'
 import {
@@ -55,11 +55,11 @@ const stubLocalStorage = () => {
 
 /** Put `K_id` where the pass looks for it: the same per-device store an unlock
  *  flow writes, holding the same subkey the asset path uses. */
-const storeContentKey = async (fill = 7, workspaceId = WS) => {
+const storeContentKey = async (fill = 7) => {
   const contentKeyHmac = await deriveContentKeyHmac(new Uint8Array(32).fill(fill))
   const wk = await crypto.subtle.generateKey(
     {name: 'AES-GCM', length: 256}, false, ['encrypt', 'decrypt'])
-  await getWorkspaceKeyStore().put(USER, workspaceId, {wk, contentKeyHmac})
+  await getWorkspaceKeyStore().put(USER, WS, {wk, contentKeyHmac})
 }
 
 beforeAll(async () => { sharedDb = await createTestDb() })
@@ -74,8 +74,6 @@ beforeEach(async () => {
   stubLocalStorage()
   repo = createTestRepo({db: sharedDb.db, user: {id: USER}}).repo
   repo.setActiveWorkspaceId(WS)
-  repo.setFacetRuntime(resolveFacetRuntimeSync(
-    [kernelDataExtension], {repo, workspaceId: WS, safeMode: false}))
   await sharedDb.db.execute(
     `INSERT OR REPLACE INTO workspaces
        (id, name, owner_user_id, create_time, update_time, encryption_mode, wk_canary,
@@ -108,12 +106,26 @@ describe('resolveSynthesisNamespace on an e2ee workspace', () => {
     expect((await resolveSynthesisNamespace(repo, WS)).kind).toBe('ready')
   })
 
+  // Recomputed INDEPENDENTLY, from the key bytes and the label spelled out here
+  // — not by asking `resolveSynthesisNamespace` what it thinks. Every other
+  // assertion in this file takes its expected id from the code under test, so
+  // without this one the label could be revised, the derivation could move to a
+  // different slice of the MAC, or a per-process salt could creep in, and the
+  // whole suite would stay green while every device minted a different id.
+  it('is exactly HMAC(K_id, the versioned label) — a pure function of key material',
+    async () => {
+      await storeContentKey(7)
+      expect(await readyNamespace()).toBe(await deriveWorkspaceIdNamespace(
+        await deriveContentKeyHmac(new Uint8Array(32).fill(7)),
+        'km/property-definition-ns/v1'))
+    })
+
   it('derives a namespace from the workspace key, not the public constant', async () => {
     await storeContentKey()
     expect(await readyNamespace()).not.toBe(PLAINTEXT_NS)
   })
 
-  it('gives two workspaces with different keys different namespaces', async () => {
+  it('follows the workspace key — a different K_id gives a different namespace', async () => {
     await storeContentKey(7)
     const first = await readyNamespace()
     await storeContentKey(9)
@@ -160,13 +172,18 @@ describe('applyPropertyDefinitionSynthesis on an e2ee workspace', () => {
   it('converges on re-run — the derived namespace is stable for the same key', async () => {
     await storeContentKey()
     await rawCell('b1', {'demo:orphan': 'hello'})
-    await applyPropertyDefinitionSynthesis(
-      repo, await planPropertyDefinitionSynthesis(repo, WS))
+    // The SAME plan twice, deliberately. Re-planning would find no candidate at
+    // all and return early, so `created: 0` would hold for a namespace that
+    // changed on every call — which is the failure this test is named for. Fed
+    // the original plan, the second run has to re-derive the id and find its own
+    // block there, which is what `converged: 1` means.
+    const plan = await planPropertyDefinitionSynthesis(repo, WS)
+    expect(await applyPropertyDefinitionSynthesis(repo, plan))
+      .toEqual({created: 1, converged: 0, skipped: []})
 
-    const again = await applyPropertyDefinitionSynthesis(
-      repo, await planPropertyDefinitionSynthesis(repo, WS))
+    const again = await applyPropertyDefinitionSynthesis(repo, plan)
 
-    expect(again.created).toBe(0)
+    expect(again).toEqual({created: 0, converged: 1, skipped: []})
     const definitions = await repo.db.getAll<{n: number}>(
       `SELECT COUNT(*) AS n FROM blocks b JOIN block_types t ON t.block_id = b.id
         WHERE t.type = 'property-schema' AND b.workspace_id = ? AND b.deleted = 0
@@ -183,5 +200,10 @@ describe('applyPropertyDefinitionSynthesis on an e2ee workspace', () => {
 
     await expect(applyPropertyDefinitionSynthesis(repo, plan))
       .rejects.toThrow(/no content key/)
+    // And it refused BEFORE the Properties-page bootstrap, which commits its own
+    // transaction — the in-transaction re-ask alone would leave that page behind.
+    // Position, not presence, is what this pins.
+    expect(await repo.db.getAll(
+      'SELECT id FROM blocks WHERE id = ?', [propertiesPageBlockId(WS)])).toHaveLength(0)
   })
 })

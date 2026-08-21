@@ -342,8 +342,8 @@ describe('migrate_properties_to_blocks action', () => {
   })
 
   it('migrates nothing when the flip is refused, and says so', async () => {
-    // The trigger refuses a non-owner, an e2ee workspace and any step other
-    // than cell -> children. The flip is the gesture's FIRST write, so a
+    // The trigger refuses a non-owner and any step other than cell -> children.
+    // The flip is the gesture's FIRST write, so a
     // refusal leaves the graph untouched — which is the part an operator needs
     // told, rather than being left to wonder what landed.
     flipWorkspace.mockRejectedValue(new Error('workspaces.properties_migration is writable by the workspace owner'))
@@ -629,9 +629,11 @@ describe('the orphan-definition step', () => {
   })
 
   it('does not mint into a workspace the plan refused', async () => {
-    // e2ee today. `flipBlockedBySynthesis` is what decides whether that stops
-    // the gesture; what must not happen either way is writing anyway.
-    planSynthesis.mockResolvedValue({...plan(2), refusal: 'this workspace is encrypted'})
+    // A device that cannot establish which namespace this workspace's definition
+    // ids belong under. `flipBlockedBySynthesis` decides whether that stops the
+    // gesture; what must not happen either way is writing anyway.
+    planSynthesis.mockResolvedValue(
+      {...plan(2), refusal: 'this device has not resolved whether the workspace is encrypted'})
     const {repo} = makeRepo(RAN, {flipped: true})
 
     await invoke(repo)

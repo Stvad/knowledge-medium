@@ -451,6 +451,15 @@ describe('planPropertyDefinitionSynthesis', () => {
     expect(minted).toBe(0)
   })
 
+  // The literal, because `derivedIds.test.ts` can no longer pin it: the namespace
+  // became a parameter there, so both sides of its equality are test-local and
+  // moving the constant reddens nothing. Moving it re-points every synthesized
+  // definition in every plaintext workspace, so it needs a pin somewhere.
+  it('resolves a plaintext workspace to the public namespace, unmoved', async () => {
+    expect(await resolveSynthesisNamespace(repo, WS)).toEqual(
+      {kind: 'ready', mode: 'plaintext', namespace: 'b1d6b0c7-6a2a-4c1e-9a19-2f0f7b6b3c41'})
+  })
+
   it('refuses a workspace this device has not confirmed unencrypted', async () => {
     // The authority is the mode pin, not the server column — and note the row
     // here says 'none', so a denylist on the column would wave this through.

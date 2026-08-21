@@ -13,9 +13,14 @@ describe('deriveWorkspaceIdNamespace', () => {
     expect(() => uuidv5('demo:orphan', namespace)).not.toThrow()
   })
 
-  it('is deterministic for the same key material and label', async () => {
+  // Against a LITERAL, the way `derivedIds.test.ts` pins every other derived-id
+  // formula: an expected value recomputed by the code under test would hold
+  // just as well if the derivation moved to a different 16 bytes of the MAC, or
+  // to a different label — and either silently re-points every id already
+  // minted. Determinism follows from this; it does not need its own test.
+  it('is HMAC(K_id, label) truncated to the first 16 bytes, and has not moved', async () => {
     expect(await deriveWorkspaceIdNamespace(await kIdFor(1), LABEL))
-      .toBe(await deriveWorkspaceIdNamespace(await kIdFor(1), LABEL))
+      .toBe('897d859e-5508-436c-a9bb-cc4a77b026b5')
   })
 
   it('differs per workspace key — the whole point, so one workspace cannot predict another\'s ids', async () => {
