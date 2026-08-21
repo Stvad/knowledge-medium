@@ -144,6 +144,25 @@ describe('alias.mergeCollision', () => {
     expect(env.read('canonical')!.properties[aliasesProp.name]).toEqual(['Journal', 'Notes'])
   })
 
+  it('refuses when the target was renamed away from the contested name', async () => {
+    // The other half of the same race: the banner offered "reclaim Journal for
+    // this page", then this page was renamed. Absorbing the alias owner into it
+    // now would fold that page into something the user was never looking at.
+    await createBlock('canonical', 'Journal', [], 'a0')
+    await createBlock('squatter', 'Mine', ['Journal'], 'a1')
+    await env.repo.tx(tx => tx.update('canonical', {content: 'Something else'}),
+      {scope: ChangeScope.BlockDefault})
+
+    await expect(env.repo.run(ALIAS_COLLISION_MERGE_MUTATOR, {
+      intoId: 'canonical',
+      fromId: 'squatter',
+      collisionAlias: 'Journal',
+      sourceIsAliasOwner: true,
+    })).rejects.toThrow(/no longer named/)
+
+    expect((await env.repo.load('squatter'))?.deleted).toBe(false)
+  })
+
   it('refuses when the source no longer claims the alias, in the reclaim direction', async () => {
     // A banner can sit on screen while the world moves, and the mutator is
     // exported so an extension can call it with anything. Folding a page that

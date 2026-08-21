@@ -105,10 +105,28 @@ export const aliasCollisionMerge = defineMutator<AliasCollisionMergeArgs, void>(
     // exported, so an extension can call it with anything. Folding a page that
     // does not hold the alias would tombstone it and re-home its children for
     // no reason.
-    if (sourceIsAliasOwner && !decodeAliases(from).includes(collisionAlias)) {
-      throw new Error(
-        `alias.mergeCollision: ${fromId} no longer claims "${collisionAlias}"`,
-      )
+    if (sourceIsAliasOwner) {
+      // Both halves of the premise, re-read here rather than trusted from the
+      // caller's snapshot: a banner can sit on screen while the world moves,
+      // and this mutator is exported so an extension can call it with anything.
+      // Source side — folding a page that no longer holds the name would
+      // tombstone it and re-home its children for nothing.
+      if (!decodeAliases(from).includes(collisionAlias)) {
+        throw new Error(
+          `alias.mergeCollision: ${fromId} no longer claims "${collisionAlias}"`,
+        )
+      }
+      // Target side — if the page doing the reclaiming was deleted or renamed
+      // in the meantime, the alias owner would be absorbed into something that
+      // is no longer the page the user was looking at.
+      if (into.deleted) {
+        throw new Error(`alias.mergeCollision: target ${intoId} is deleted`)
+      }
+      if (into.content.trim() !== collisionAlias) {
+        throw new Error(
+          `alias.mergeCollision: target ${intoId} is no longer named "${collisionAlias}"`,
+        )
+      }
     }
 
     await mergeBlocksInTx(tx, {
