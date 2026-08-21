@@ -16,6 +16,7 @@ import {
   detectReverts,
   extractBeadIds,
   issueNumberFromRef,
+  hasDynamicBody,
   matchesCommitCommand,
   matchesGraphqlMutation,
   matchesUnrepairableCommand,
@@ -380,6 +381,20 @@ describe('matchesUnrepairableCommand', () => {
     expect(matchesUnrepairableCommand('gh pr create --title t --body b')).toBe(false)
     expect(matchesUnrepairableCommand('gh pr comment 652 --body "will gh pr merge later"')).toBe(false)
     expect(matchesUnrepairableCommand('git commit -m "gh pr merge 652 was the fix"')).toBe(false)
+  })
+})
+
+describe('hasDynamicBody', () => {
+  it('flags expansion-built bodies, leaves literal and single-quoted ones alone', () => {
+    expect(hasDynamicBody('gh pr merge 1 --body "$(cat msg)"')).toBe(true)
+    expect(hasDynamicBody('gh pr merge 1 --subject "$(cat subject.md)"')).toBe(true)
+    expect(hasDynamicBody('gh pr merge 1 -t"$(cat subject.md)"')).toBe(true)
+    expect(hasDynamicBody('gh pr review 1 -b "$REVIEW"')).toBe(true)
+    expect(hasDynamicBody('gh issue close 1 -c "`gen-msg`"')).toBe(true)
+    // shell word concatenation forms ONE argument across quote boundaries
+    expect(hasDynamicBody('gh pr merge 1 --body prefix"$(cat msg)"')).toBe(true)
+    expect(hasDynamicBody('gh pr merge 1 --body "plain #12 text"')).toBe(false)
+    expect(hasDynamicBody("gh pr merge 1 --body '$(literal, single quotes)'")).toBe(false)
   })
 })
 
@@ -1143,6 +1158,20 @@ describe('hookPrePr process behavior', { timeout: 20_000 }, () => {
     const piped = hook('cat msg.txt | gh pr merge 12 -F -')
     expect(piped.status).toBe(2)
     expect(piped.stderr).toContain('stdin')
+  })
+
+  // Expansion-built unrepairable text has no readable form anywhere — the
+  // command shows $(…), the merge commit is beyond repair. Non-merge
+  // publishes with expansions stay allowed (the freeze pin below): the
+  // verifier reads THEIR published result.
+  it('fails closed on expansion-built merge/review/close text, both escapes required', () => {
+    const { hook } = makeRepo({ dbReady: true })
+    const r = hook('gh pr merge 12 --squash --body "$(cat msg)"')
+    expect(r.status).toBe(2)
+    expect(r.stderr).toContain('shell expansion')
+    expect(hook('gh pr review 5 -b "$REVIEW_TEXT"').status).toBe(2)
+    expect(hook('KM_ISSUE_REFS_OK=1 gh pr merge 12 --body "$(cat msg)"').status).toBe(2)
+    expect(hook('KM_ISSUE_REFS_OK=1 KM_ALLOW_BEAD_IDS=1 gh pr merge 12 --body "$(cat msg)"').status).toBe(0)
   })
 
   // gh pr review output names no URL, so the verifier cannot find the

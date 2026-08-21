@@ -63,6 +63,13 @@
  *       close keywords (commit text never becomes a GitHub object). The
  *       commit leg runs INDEPENDENTLY of the publish legs — one invocation
  *       can do both.
+ *       Unrepairable-verb text built by shell expansion fails closed (the
+ *       one guard restored from the pre-shrink gate — no post-hoc read
+ *       exists for it). ACCEPTED residuals of this leg, declined as
+ *       channel-enumeration (round 5 of review; the decision record is the
+ *       tracker): api mutations whose --jq/--template output omits html_url
+ *       go unverified, and a refs-approved --silent mutation's @file/--input
+ *       payload is not read for bead ids.
  *       Escape hatches: KM_ALLOW_BEAD_IDS=1 / KM_ISSUE_REFS_OK=1 prefixes.
  *       The FULL sync does not run here: converged it still costs ~60s (a GET
  *       compare per issue), which is too slow to sit in front of every PR.
@@ -248,6 +255,23 @@ export const matchesUnrepairableCommand = cmd => GH_UNREPAIRABLE.test(commandSke
 // prose containing the word costs one echo round, covered by the escape.
 export const matchesGraphqlMutation = cmd =>
   matchesApiPublish(cmd) && /\bgraphql\b/.test(commandSkeleton(cmd)) && /\bmutation\b/.test(cmd)
+
+// A body built by shell expansion cannot be inspected before it publishes —
+// and for the unrepairable verbs there is no after, so those keep this
+// fail-closed check (restored from the pre-shrink gate, where it was
+// review-hardened; the shrink deleted it on a rationale that is exactly
+// wrong for this class). Single-quoted values never expand and stay out.
+// The separator is optional (the CLI accepts ATTACHED short-option values:
+// -t"$(…)", -tfoo), and the value is matched as a full shell WORD — quoted
+// and unquoted segments concatenated (prefix"$(cat x)") form ONE argument.
+export const hasDynamicBody = cmd => {
+  for (const m of cmd.matchAll(
+    /(?<![\w-])(?:--body|--notes|--subject|--title|--comment|-[bntc])(?:=|\s+)?((?:"[^"]*"|'[^']*'|[^\s'"])+)/g,
+  )) {
+    if (/[$`]/.test(m[1].replace(/'[^']*'/g, ''))) return true
+  }
+  return false
+}
 
 // The escape hatch must also be in command-prefix position of the SKELETON —
 // honored from quoted prose, a PR body QUOTING it would both bypass the gate
@@ -1015,6 +1039,17 @@ const hookPrePr = () => {
   if (silentApi && !allowsIssueRefs(cmd)) {
     console.error(
       'This gh api mutation is --silent: neither this gate nor the post-publish verifier can see what it publishes. Drop --silent (the printed response is how published text gets verified) — or, after verifying the references yourself, re-run with KM_ISSUE_REFS_OK=1 prefixed.',
+    )
+    process.exit(2)
+  }
+
+  // Unrepairable-verb text built by shell expansion has no readable form
+  // ANYWHERE — not here, and never post-publication — so it fails closed.
+  // Both escapes are required: an expanded body can hide refs and bead ids
+  // alike.
+  if (matchesUnrepairableCommand(cmd) && hasDynamicBody(cmd) && !(allowsIssueRefs(cmd) && allowsBeadIds(cmd))) {
+    console.error(
+      'This merge/review/close text is built by shell expansion ($(…), `…` or a variable), which no gate can inspect — and it lands where the post-publish verifier cannot repair. Publish literal text or a file — or, after verifying references AND bead ids yourself, re-run with KM_ISSUE_REFS_OK=1 KM_ALLOW_BEAD_IDS=1 prefixed.',
     )
     process.exit(2)
   }
