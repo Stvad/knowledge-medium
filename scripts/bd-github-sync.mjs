@@ -272,15 +272,20 @@ const OPAQUE_OUTPUT = /(?<![\w-])(?:--(?:silent|jq|template)\b|-t)/
  * flags arrive by expansion, where no literal flag is left to match and a
  * narrower test would leave the command inspected by NEITHER hook.
  */
-// Modes that print or hand off instead of creating anything: --dry-run
-// shows what would be sent, --web opens the browser. Read off the SKELETON,
-// never the raw text — a body that merely MENTIONS --dry-run would otherwise
-// exempt a real publish from every check, turning a noise fix into a hole.
+// Modes that print or hand off instead of creating anything: --dry-run shows
+// what would be sent, --web opens the browser. They make a command UNCOVERED
+// rather than not-a-publish, and the difference is the whole point. Exempting
+// the command from publishing entirely fails OPEN — the token is found
+// anywhere in the skeleton, so a dry-run beside a real publish in one
+// invocation ("gh pr create --dry-run; gh issue comment …") would exempt the
+// real one too, and `--dry-run=false` would exempt itself. Uncovered fails
+// CLOSED in every one of those cases: the text is checked before it ships,
+// and the read-back stays quiet because nothing claimed it was covered.
+// Scoping the token to its own segment instead would be shell parsing.
 const NON_PUBLISHING_MODE = /(?<![\w-])--(?:dry-run|web)\b/
 
 export const matchesAnyPublish = cmd =>
-  !NON_PUBLISHING_MODE.test(commandSkeleton(cmd)) &&
-  (matchesPrCommand(cmd) || matchesApiPublish(cmd) || (GH_API.test(commandSkeleton(cmd)) && EXPANSION.test(cmd)))
+  matchesPrCommand(cmd) || matchesApiPublish(cmd) || (GH_API.test(commandSkeleton(cmd)) && EXPANSION.test(cmd))
 
 /**
  * Whether the post-publication read-back covers this publish. A WHITELIST:
@@ -309,6 +314,7 @@ export const isPostVerifiable = cmd => {
   if (!matchesAnyPublish(cmd)) return false
   const sk = commandSkeleton(cmd)
   if (SHELL_OPERATOR.test(sk) || EXPANSION.test(cmd)) return false
+  if (NON_PUBLISHING_MODE.test(sk)) return false
   if (FOREIGN_TARGET.test(sk)) return false
   const api = matchesApiPublish(cmd)
   if (api && (/\bgraphql\b/.test(sk) || /\bgraphql\b/.test(cmd))) return false
@@ -1082,9 +1088,8 @@ const hookPrePr = () => {
   // publish (`git commit -m "Fixes #N" && gh pr comment …`), and a publish
   // match must not swallow the commit check.
 
-  const publishes = matchesAnyPublish(cmd)
-  const isPublish = publishes && matchesPrCommand(cmd)
-  const apiPublish = publishes && !isPublish
+  const isPublish = matchesPrCommand(cmd)
+  const apiPublish = matchesAnyPublish(cmd) && !isPublish
 
   // Close keywords in commit messages act when the commit reaches the
   // default branch, and commit text never becomes a GitHub object — but the
