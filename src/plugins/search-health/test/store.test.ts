@@ -38,6 +38,23 @@ describe('search-source health store', () => {
     expect(snapshot?.summary).toContain('results may be incomplete')
   })
 
+  // The two failures cost the user different things, so one fixed phrase is
+  // wrong for one of them: a throwing source drops rows, while a malformed
+  // candidate is still ranked and still shown — just with a payload whose age
+  // nothing can establish.
+  it('says stale, not incomplete, when nothing was dropped', () => {
+    recordSearchSourceHealth(report([
+      {sourceId: 'legacy-index', kind: 'malformed-candidate', detail: 'no userUpdatedAt'},
+    ]))
+    expect(searchSourceHealthSnapshot()?.summary).toContain('results may be stale')
+
+    recordSearchSourceHealth(report([
+      {sourceId: 'legacy-index', kind: 'malformed-candidate', detail: 'no userUpdatedAt'},
+      {sourceId: 'semantic', kind: 'threw'},
+    ]))
+    expect(searchSourceHealthSnapshot()?.summary).toContain('results may be incomplete or stale')
+  })
+
   it('clears once the failing source recovers', () => {
     recordSearchSourceHealth(report([{sourceId: 'semantic', kind: 'threw'}]))
     expect(searchSourceHealthSnapshot()).not.toBeNull()

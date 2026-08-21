@@ -1,26 +1,19 @@
 #!/usr/bin/env node
 /**
- * Write `.beads/issues.jsonl` with attribution stripped.
+ * Write `.beads/issues.jsonl` for the PUBLIC repo. Why not a bare `bd export`
+ * (see docs/cloud-sessions.md for why the file is tracked at all):
  *
- * That file is tracked on a PUBLIC repo (see docs/cloud-sessions.md for why it
- * is tracked at all), and `bd export` stamps `owner` / `created_by` /
- * `updated_by` / `assignee` onto every record it has them for — real names and
- * email addresses, committed permanently into git history. Nothing downstream
- * needs them: `bd import` upserts only the fields a record carries, so an
- * import of a scrubbed file leaves the receiving database's own attribution
- * intact (verified — importing a record with `owner` removed did not clear it).
- *
- * Comments are dropped, which is a correctness requirement rather than a
- * privacy one: `bd import` INSERTS comments instead of upserting them, so a
- * file carrying a comment the receiving database already has aborts the whole
- * import ("duplicate primary key given"), not just that record. Measured — a
- * full export re-imported into its own database fails on the first commented
- * issue, and the same file with `comments` removed imports all 211 cleanly.
- * Losing comment text is the lesser cost; `bd backup` carries everything when
- * that matters.
- *
- * Memories are excluded by `bd export`'s default and must stay excluded: they
- * sync only to the private Dolt remote. Never add --all / --include-memories.
+ * - ATTRIBUTION must go. `bd export` stamps real names and emails onto
+ *   `owner`/`created_by`/`updated_by`/`assignee` and onto every comment's
+ *   `author`; committing them publishes them permanently. Nothing downstream
+ *   needs them — `bd import` upserts only the fields a record carries, so the
+ *   receiving database keeps its own.
+ * - COMMENTS must go. `bd import` INSERTs them rather than upserting, so a
+ *   comment the receiving database already has aborts the WHOLE import, not
+ *   just that record. Losing comment text is the lesser cost; `bd backup`
+ *   carries everything when that matters.
+ * - MEMORIES must stay out: they sync only to the private Dolt remote, and
+ *   `bd export` omits them by default. Never add --all / --include-memories.
  */
 import { execFileSync } from 'node:child_process'
 import { writeFileSync } from 'node:fs'

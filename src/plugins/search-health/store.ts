@@ -5,8 +5,9 @@
  * throws and another succeeds, `searchBlocksAcrossSources` logs, drops that
  * source's results and returns the rest — so search quietly gets worse and
  * nothing tells the user. (A TOTAL failure is different: the merge point
- * rethrows, and the caller surfaces it already.) Core emits
- * `SearchSourceHealthEvent`s and this plugin decides what a human sees.
+ * rethrows, and the caller surfaces it already.) Core emits a
+ * `SearchSourceHealthReport` per search and this plugin decides what a human
+ * sees.
  *
  * `core.content` is deliberately not special-cased. It reports through the
  * same seam as any plugin source, so if it ever starts failing alongside a
@@ -32,6 +33,17 @@ const describe = (outcome: SearchSourceOutcome): string =>
     ? `"${outcome.sourceId}" failed`
     : `"${outcome.sourceId}" returned a malformed result`
 
+/** What the user actually loses, which differs by outcome and so cannot be one
+ *  fixed phrase: a source that THREW contributes nothing, so rows are missing;
+ *  a MALFORMED candidate is still ranked and still shown, but with a payload of
+ *  unknown age, so rows are present and possibly stale. */
+const consequence = (unhealthy: readonly SearchSourceOutcome[]): string => {
+  const threw = unhealthy.some(o => o.kind === 'threw')
+  const malformed = unhealthy.some(o => o.kind === 'malformed-candidate')
+  if (threw && malformed) return 'results may be incomplete or stale'
+  return threw ? 'results may be incomplete' : 'results may be stale'
+}
+
 /** Derive the chip snapshot from every source's last outcome.
  *
  *  Severity is `warning`, never `error`: results are degraded, not wrong, and
@@ -50,7 +62,7 @@ const computeSnapshot = (outcomes: readonly SearchSourceOutcome[]): DiagnosticSn
     .join(' · ')
   return {
     severity: 'warning',
-    summary: `${summary} — results may be incomplete`,
+    summary: `${summary} — ${consequence(unhealthy)}`,
     detail,
     nudge: true,
   }
