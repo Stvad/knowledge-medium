@@ -154,7 +154,15 @@ describe('publishedTargets', () => {
   })
 })
 
-describe('mergedPrNumbers strategies', () => {
+describe('mergedPrNumbers', () => {
+  it('reads PR numbers from gh merge success lines only', () => {
+    expect(mergedPrNumbers('✓ Merged pull request #652 (feat x)\n✓ Deleted branch')).toEqual([652])
+    expect(mergedPrNumbers('Merged pull request Stvad/knowledge-medium#12 (y)')).toEqual([12])
+    expect(mergedPrNumbers('relates to #700 and pull request #12')).toEqual([])
+    // a -R merge prints a foreign qualifier — never read back OUR PR of that number
+    expect(mergedPrNumbers('Merged pull request other/repo#12 (y)')).toEqual([])
+  })
+
   // gh prints "Squashed and merged" / "Rebased and merged" for the other two
   // strategies; matching only "Merged" left the merge-commit read-back dead
   // for both — and squash is the strategy whose PR body carries the keywords
@@ -169,28 +177,6 @@ describe('mergedPrNumbers strategies', () => {
   })
 })
 
-describe('apiPathFor tag encoding', () => {
-  it('sends a slashed release tag as one path parameter', () => {
-    expect(apiPathFor({ kind: 'release', tag: 'release/1.0' })).toBe(
-      'repos/Stvad/knowledge-medium/releases/tags/release%2F1.0',
-    )
-    // an already-encoded capture must not be encoded twice
-    expect(apiPathFor({ kind: 'release', tag: 'release%2F1.0' })).toBe(
-      'repos/Stvad/knowledge-medium/releases/tags/release%2F1.0',
-    )
-  })
-})
-
-describe('mergedPrNumbers', () => {
-  it('reads PR numbers from gh merge success lines only', () => {
-    expect(mergedPrNumbers('✓ Merged pull request #652 (feat x)\n✓ Deleted branch')).toEqual([652])
-    expect(mergedPrNumbers('Merged pull request Stvad/knowledge-medium#12 (y)')).toEqual([12])
-    expect(mergedPrNumbers('relates to #700 and pull request #12')).toEqual([])
-    // a -R merge prints a foreign qualifier — never read back OUR PR of that number
-    expect(mergedPrNumbers('Merged pull request other/repo#12 (y)')).toEqual([])
-  })
-})
-
 describe('apiPathFor', () => {
   it('maps each target kind to its REST resource', () => {
     expect(apiPathFor({ kind: 'pr', number: 5 })).toBe('repos/Stvad/knowledge-medium/pulls/5')
@@ -199,6 +185,16 @@ describe('apiPathFor', () => {
     expect(apiPathFor({ kind: 'review-comment', id: 7 })).toBe('repos/Stvad/knowledge-medium/pulls/comments/7')
     expect(apiPathFor({ kind: 'review', pr: 5, id: 7 })).toBe('repos/Stvad/knowledge-medium/pulls/5/reviews/7')
     expect(apiPathFor({ kind: 'release', tag: 'v1' })).toBe('repos/Stvad/knowledge-medium/releases/tags/v1')
+  })
+
+  it('sends a slashed release tag as one path parameter', () => {
+    expect(apiPathFor({ kind: 'release', tag: 'release/1.0' })).toBe(
+      'repos/Stvad/knowledge-medium/releases/tags/release%2F1.0',
+    )
+    // an already-encoded capture must not be encoded twice
+    expect(apiPathFor({ kind: 'release', tag: 'release%2F1.0' })).toBe(
+      'repos/Stvad/knowledge-medium/releases/tags/release%2F1.0',
+    )
   })
 })
 
@@ -220,6 +216,21 @@ describe('clipContext', () => {
 // is something to say) and the read-back loop.
 // Measured ~200ms per spawn solo; budgeted for the 6x load stretch.
 describe('bd-publish-verify process behavior', { timeout: 30_000 }, () => {
+  const A_TRACKED_ISSUE = { title: 'Tracked issue', state: 'open' }
+
+  // The merged-PR fixture pair: the PR gh's merge line names, and the commit
+  // it landed as. Covers the ordinary shape only — the two tests that turn on
+  // an ABSENT field (no default_branch, no base at all) keep their literals,
+  // so what makes them the interesting cases stays visible.
+  const mergedPr = (n: number, sha: string, message: string, base = 'master') => ({
+    [`repos/Stvad/knowledge-medium/pulls/${n}`]: {
+      html_url: url(`pull/${n}`),
+      merged: true,
+      merge_commit_sha: sha,
+      base: { ref: base, repo: { default_branch: 'master' } },
+    },
+    [`repos/Stvad/knowledge-medium/commits/${sha}`]: { commit: { message } },
+  })
   const script = fileURLToPath(new URL('./bd-publish-verify.mjs', import.meta.url))
 
   const makeRepo = (opts: {
@@ -350,7 +361,7 @@ describe('bd-publish-verify process behavior', { timeout: 30_000 }, () => {
     const { hook, shimCalls } = makeRepo({
       fixtures: {
         'repos/Stvad/knowledge-medium/pulls/652': { html_url: url('pull/652'), title: 'T', body: 'tracks km-abc' },
-        'repos/Stvad/knowledge-medium/issues/12': { title: 'Tracked issue', state: 'open' },
+        'repos/Stvad/knowledge-medium/issues/12': A_TRACKED_ISSUE,
       },
       shows: [[{ id: 'km-abc', external_ref: url('issues/12') }]],
     })
@@ -386,7 +397,7 @@ describe('bd-publish-verify process behavior', { timeout: 30_000 }, () => {
           title: 'T',
           body: 'literal km-abc, relates to #12',
         },
-        'repos/Stvad/knowledge-medium/issues/12': { title: 'Tracked issue', state: 'open' },
+        'repos/Stvad/knowledge-medium/issues/12': A_TRACKED_ISSUE,
       },
       shows: [[{ id: 'km-abc', external_ref: url('issues/12') }]],
     })
@@ -405,13 +416,7 @@ describe('bd-publish-verify process behavior', { timeout: 30_000 }, () => {
     const sha = 'abc123def4567890abc123def4567890abc123de'
     const { hook } = makeRepo({
       fixtures: {
-        'repos/Stvad/knowledge-medium/pulls/652': {
-          html_url: url('pull/652'),
-          merged: true,
-          merge_commit_sha: sha,
-          base: { ref: 'master', repo: { default_branch: 'master' } },
-        },
-        [`repos/Stvad/knowledge-medium/commits/${sha}`]: { commit: { message: 'stack tip (#652)\n\nFixes #700' } },
+        ...mergedPr(652, sha, 'stack tip (#652)\n\nFixes #700'),
         'repos/Stvad/knowledge-medium/issues/700': { title: 'Closed by merge', state: 'closed' },
       },
     })
@@ -432,15 +437,7 @@ describe('bd-publish-verify process behavior', { timeout: 30_000 }, () => {
     const sha = 'bb22cc33dd44ee55ff6677889900aabbccddeeff'
     const { hook, shimCalls } = makeRepo({
       fixtures: {
-        'repos/Stvad/knowledge-medium/pulls/652': {
-          html_url: url('pull/652'),
-          title: 'T',
-          body: '',
-          merged: true,
-          merge_commit_sha: sha,
-          base: { ref: 'master', repo: { default_branch: 'master' } },
-        },
-        [`repos/Stvad/knowledge-medium/commits/${sha}`]: { commit: { message: 'tip (#652)' } },
+        ...mergedPr(652, sha, 'tip (#652)'),
       },
     })
     const r = hook('gh pr merge 652 --squash', `${url('pull/652')}\n✓ Merged pull request #652 (tip)`)
@@ -458,13 +455,7 @@ describe('bd-publish-verify process behavior', { timeout: 30_000 }, () => {
     const sha = 'dd11ee22ff3344556677889900aabbccddeeff00'
     const { hook } = makeRepo({
       fixtures: {
-        'repos/Stvad/knowledge-medium/pulls/652': {
-          html_url: url('pull/652'),
-          merged: true,
-          merge_commit_sha: sha,
-          base: { ref: 'claude/lower-of-the-stack', repo: { default_branch: 'master' } },
-        },
-        [`repos/Stvad/knowledge-medium/commits/${sha}`]: { commit: { message: 'upper of the stack (#652)\n\nFixes #700' } },
+        ...mergedPr(652, sha, 'upper of the stack (#652)\n\nFixes #700', 'claude/lower-of-the-stack'),
         'repos/Stvad/knowledge-medium/issues/700': { title: 'Still open', state: 'open' },
       },
     })
@@ -528,7 +519,7 @@ describe('bd-publish-verify process behavior', { timeout: 30_000 }, () => {
     const { hook } = makeRepo({
       fixtures: {
         'repos/Stvad/knowledge-medium/pulls/652': { html_url: url('pull/652'), title: 'T', body: 'relates to #12' },
-        'repos/Stvad/knowledge-medium/issues/12': { title: 'Tracked issue', state: 'open' },
+        'repos/Stvad/knowledge-medium/issues/12': A_TRACKED_ISSUE,
       },
     })
     const r = hook(PR_CREATE, null, {
@@ -570,7 +561,7 @@ describe('bd-publish-verify process behavior', { timeout: 30_000 }, () => {
     const { hook } = makeRepo({
       fixtures: {
         'repos/Stvad/knowledge-medium/issues/643': { html_url: url('issues/643'), title: 'T', body: 'relates to #12' },
-        'repos/Stvad/knowledge-medium/issues/12': { title: 'Tracked issue', state: 'open' },
+        'repos/Stvad/knowledge-medium/issues/12': A_TRACKED_ISSUE,
       },
       budgetMs: 'not-a-number' as unknown as number,
     })
@@ -671,13 +662,7 @@ describe('bd-publish-verify process behavior', { timeout: 30_000 }, () => {
     const sha = 'aa11bb22cc3344556677889900aabbccddeeff11'
     const { hook } = makeRepo({
       fixtures: {
-        'repos/Stvad/knowledge-medium/pulls/652': {
-          html_url: url('pull/652'),
-          merged: true,
-          merge_commit_sha: sha,
-          base: { ref: 'release/2.0', repo: { default_branch: 'master' } },
-        },
-        [`repos/Stvad/knowledge-medium/commits/${sha}`]: { commit: { message: 'squashed (#652)' } },
+        ...mergedPr(652, sha, 'squashed (#652)', 'release/2.0'),
         'repos/Stvad/knowledge-medium/pulls/652/commits?per_page=100': [{ commit: { message: 'work\n\nFixes #700' } }],
         'repos/Stvad/knowledge-medium/issues/700': { title: 'Still open', state: 'open' },
       },
@@ -692,7 +677,7 @@ describe('bd-publish-verify process behavior', { timeout: 30_000 }, () => {
     const { hook } = makeRepo({
       fixtures: {
         'repos/Stvad/knowledge-medium/issues/643': { html_url: url('issues/643'), title: 'T', body: 'relates to #12' },
-        'repos/Stvad/knowledge-medium/issues/12': { title: 'Tracked issue', state: 'open' },
+        'repos/Stvad/knowledge-medium/issues/12': A_TRACKED_ISSUE,
       },
     })
     const r = hook('gh issue edit 643 --body-file /tmp/x.md', url('issues/643'))
@@ -729,7 +714,7 @@ describe('bd-publish-verify process behavior', { timeout: 30_000 }, () => {
           html_url: url('pull/652#pullrequestreview-77'),
           body: 'tracks km-abc',
         },
-        'repos/Stvad/knowledge-medium/issues/12': { title: 'Tracked issue', state: 'open' },
+        'repos/Stvad/knowledge-medium/issues/12': A_TRACKED_ISSUE,
       },
       shows: [[{ id: 'km-abc', external_ref: url('issues/12') }]],
     })
@@ -752,7 +737,7 @@ describe('bd-publish-verify process behavior', { timeout: 30_000 }, () => {
           name: 'km-abc ships',
           body: 'relates to #12',
         },
-        'repos/Stvad/knowledge-medium/issues/12': { title: 'Tracked issue', state: 'open' },
+        'repos/Stvad/knowledge-medium/issues/12': A_TRACKED_ISSUE,
       },
       shows: [[{ id: 'km-abc', external_ref: url('issues/12') }]],
     })
@@ -770,7 +755,7 @@ describe('bd-publish-verify process behavior', { timeout: 30_000 }, () => {
     const { hook } = makeRepo({
       fixtures: {
         'repos/Stvad/knowledge-medium/issues/643': { html_url: url('issues/643'), title: 'T', body: 'relates to #12' },
-        'repos/Stvad/knowledge-medium/issues/12': { title: 'Tracked issue', state: 'open' },
+        'repos/Stvad/knowledge-medium/issues/12': A_TRACKED_ISSUE,
       },
     })
     const r = hook('gh issue edit 643 -F /tmp/x.md; false', null, {
@@ -817,13 +802,7 @@ describe('bd-publish-verify process behavior', { timeout: 30_000 }, () => {
     const sha = 'def4567890def4567890def4567890def4567890'
     const { hook } = makeRepo({
       fixtures: {
-        'repos/Stvad/knowledge-medium/pulls/652': {
-          html_url: url('pull/652'),
-          merged: true,
-          merge_commit_sha: sha,
-          base: { ref: 'master', repo: { default_branch: 'master' } },
-        },
-        [`repos/Stvad/knowledge-medium/commits/${sha}`]: { commit: { message: 'feat B (#652)' } },
+        ...mergedPr(652, sha, 'feat B (#652)'),
         'repos/Stvad/knowledge-medium/pulls/652/commits?per_page=100': [
           { commit: { message: 'feat A\n\nCloses #701' } },
           { commit: { message: 'feat B (#652)' } },
