@@ -7,6 +7,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import type { DialogContextProps } from '@/utils/dialogs.js'
+import { agree, pluralize } from '@/utils/pluralize'
 
 export interface ConfirmMigrationDialogProps {
   /** Blocks the pass will visit — the same over-approximating predicate the
@@ -56,8 +57,8 @@ export const ConfirmMigrationDialog = ({
   resolve,
   cancel,
 }: ConfirmMigrationDialogProps & DialogContextProps<true>) => {
-  const blocks = `${blockCount.toLocaleString()} block${blockCount === 1 ? '' : 's'}`
-  const properties = (n: number) => `${n.toLocaleString()} propert${n === 1 ? 'y' : 'ies'}`
+  const blocks = pluralize(blockCount, 'block')
+  const properties = (n: number) => pluralize(n, 'property', 'properties')
   return (
   <Dialog open onOpenChange={next => { if (!next) cancel() }}>
     <DialogContent className="max-w-md">
@@ -78,7 +79,7 @@ export const ConfirmMigrationDialog = ({
                 is now — so the switch itself changes nothing you can see.</>}
         </p>
         {synthesizedKeys > 0 && <p>
-          {properties(synthesizedKeys)} in this workspace {synthesizedKeys === 1 ? 'has' : 'have'}
+          {properties(synthesizedKeys)} in this workspace {agree(synthesizedKeys, 'has', 'have')}
           {' '}no definition — written by an importer, a raw write, or a plugin that is no
           longer installed. They get one created for them first, with a type guessed
           from the values already stored, and it shows up in the property panel so you can
@@ -92,16 +93,16 @@ export const ConfirmMigrationDialog = ({
           <code>audit-properties</code> first if you are not sure who wrote them.
         </p>}
         {repairableKeys > 0 && <p className="text-destructive">
-          {properties(repairableKeys)} {repairableKeys === 1 ? 'has' : 'have'} a definition
+          {properties(repairableKeys)} {agree(repairableKeys, 'has', 'have')} a definition
           this device cannot read — most often one whose type comes from an extension that
           is not enabled here, in which case enabling it is the whole fix. Repair
-          {' '}{repairableKeys === 1 ? 'it' : 'them'} first if you can: migrating now leaves
-          {' '}{repairableKeys === 1 ? 'it' : 'them'} behind, and this is the cheap moment.
+          {' '}{agree(repairableKeys, 'it', 'them')} first if you can: migrating now leaves
+          {' '}{agree(repairableKeys, 'it', 'them')} behind, and this is the cheap moment.
           Run <code>audit-properties</code> to see which.
         </p>}
         {unfixableKeys > 0 && <p>
           {properties(unfixableKeys)} cannot be given a definition at all and will stay as
-          {' '}{unfixableKeys === 1 ? 'it is' : 'they are'}. Run{' '}
+          {' '}{agree(unfixableKeys, 'it is', 'they are')}. Run{' '}
           <code>audit-properties</code> to see which and why.
         </p>}
         <p>

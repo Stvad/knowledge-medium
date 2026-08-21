@@ -33,10 +33,11 @@ const undoNote = (cleared: boolean): string =>
   cleared ? ' Undo history for this workspace was cleared.' : ''
 
 /** The one wording for "a precondition said no and nothing has been written".
- *  Two sinks use it — `showInfo` before the banner exists, `banner.fail` after
- *  — and they must not drift, because which one fires is an implementation
- *  detail of where the check sits. */
-const notStarted = (reason: string): string =>
+ *  Three sinks use it — `showInfo` before the banner exists, `banner.fail`
+ *  after, and the runner's own `deferred` outcome — and they must not drift,
+ *  because which one fires is an implementation detail of where the check
+ *  sits, not something the user can act on differently. */
+const notStarted = (reason: string | undefined): string =>
   `Not started — ${withPeriod(reason)} Nothing was changed; try again shortly.`
 
 /** Why this device must not start the pass right now, or null. The runner takes
@@ -163,7 +164,7 @@ const describePassOutcome = (
         message: (cleared
           ? `Stopped before finishing — ${withPeriod(result.reason)} Already-migrated blocks ` +
             'are skipped, so run it again.'
-          : `Not started — ${withPeriod(result.reason)} Try again shortly.`),
+          : notStarted(result.reason)),
         failed: true,
       }
     case 'failed':
