@@ -580,6 +580,25 @@ export const createEngine = (deps: EngineDeps) => {
       detail: string,
       resume: {session?: string | null, resumeOptions?: AgentResumeOptions | null} = {},
     ) => {
+      // Did someone else FINISH this while we were failing to hear back?
+      // The channel path makes that real: the ambient session owns the run
+      // and writes `done` itself, so a lost acknowledgement — our 10s
+      // timeout on a POST that actually landed — arrives here with the work
+      // already complete. Deferring would overwrite `done` with `queued`,
+      // and the retry then carries the same event id, so the listener drops
+      // it as the duplicate it is and nobody completes the block again: it
+      // sits until the stale sweep re-runs work that was already done.
+      //
+      // Narrows rather than closes — the read and the write are separate
+      // bridge round-trips — but it removes the case that occurs, and an
+      // unreadable block falls through to deferring, which is the safe way
+      // to be wrong.
+      const finished = await graph.getBlock(sourceId).catch(() => null)
+      const finishedStatus = finished?.properties?.[PROPS.status]
+      if (finishedStatus === 'done' || finishedStatus === 'error') {
+        log(`[${watcher.name}] not deferring ${sourceId} — it finished as ${finishedStatus} while the delivery was failing`)
+        return
+      }
       const retryAfter = noteInfraFailure(laneOf(watcher), failure, watcher.name)
       // A run that never reached the model spent nothing, so the
       // runsPerHour slot comes back too — letting doomed attempts eat the
@@ -1137,7 +1156,17 @@ export const createEngine = (deps: EngineDeps) => {
       // so a retry re-diffs the SAME row ids and rebuilds the same id.
       await deliverToChannel({
         content: prompt,
-        meta: {watcher: watcher.name, event_id: `${watcher.name}:${batch.map(row => row.id).join(',')}`},
+        // SORTED: the identity is a property of WHICH rows these are, not of
+        // the order the query happened to return them in. Watcher SQL is not
+        // required to ORDER BY, so an unsorted join produced a different id
+        // for the same rows on a retry — walking straight past the listener's
+        // dedup and running the work twice.
+        //
+        // Residual, and not fixable here: with `maxRowsPerFire` truncating an
+        // unordered query, a retry can select a different SUBSET, which is
+        // genuinely different work and correctly gets a different id. A
+        // watcher that truncates should ORDER BY (README).
+        meta: {watcher: watcher.name, event_id: `${watcher.name}:${batch.map(row => row.id).sort().join(',')}`},
       })
       } catch (error) {
         // Letting this reach the tick's per-watcher catch leaves the cursor

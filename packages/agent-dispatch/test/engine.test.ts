@@ -2667,6 +2667,68 @@ describe('retryable infrastructure failures (out of credits, expired login, netw
     expect(blocks.get('b-1')?.properties?.[PROPS.status]).toBe('queued')
   })
 
+  it('gives the same query rows the same event id whatever order they arrive in', async () => {
+    // Watcher SQL need not ORDER BY, so the same pending rows can come back
+    // in a different order on the retry. Joining them in arrival order made
+    // a different id for identical work, which walks past the listener's
+    // dedup and runs it twice.
+    const {graph} = fakeGraph()
+    const orders = [[{id: 'a'}, {id: 'b'}], [{id: 'b'}, {id: 'a'}]]
+    let call = 0
+    graph.sqlAll = vi.fn(async () => orders[Math.min(call++, 1)])
+    const state = memoryState()
+    state.cursors.set('inbox', [])
+    let nowMs = NOW
+    const time = {now: () => nowMs, advance: (ms: number) => { nowMs += ms }}
+    const deliverToChannel = vi.fn(async () => { throw new Error('connection refused') })
+    const engine = engineWith({
+      graph, state, deliverToChannel, now: time.now,
+      config: parseConfig({
+        watchers: [{kind: 'query', name: 'inbox', sql: 'SELECT id FROM blocks', delivery: 'channel'}],
+      }),
+    })
+
+    await engine.tick()
+    await engine.drain()
+    time.advance(10 * 60_000)          // past the cooldown the failure armed
+    await engine.tick()
+    await engine.drain()
+
+    const ids = deliverToChannel.mock.calls.map(call => (call[0] as {meta: {event_id?: string}}).meta.event_id)
+    expect(ids).toHaveLength(2)
+    expect(ids[0]).toBeTruthy()
+    expect(ids[0]).toBe(ids[1])
+  })
+
+  it('does not resurrect a channel task the ambient session already finished', async () => {
+    // The session owns a channel run and writes `done` itself. Our POST can
+    // land, the work complete, and the ACK still be lost — deferring then
+    // overwrites `done` with `queued`, the same-id retry is dropped as a
+    // duplicate, and nobody completes the block again until the stale sweep
+    // re-runs work that was already done.
+    const {graph, blocks} = fakeGraph({
+      backlinks: [{id: 'b-1'}],
+      blocks: {'b-1': {content: '[[claude]] ambient task'}},
+    })
+    const deliverToChannel = vi.fn(async () => {
+      // The listener notified the session, which finished — then the ack was
+      // lost, so the sender still sees a failure.
+      await graph.setTaskProps('b-1', {status: 'done', nowMs: NOW})
+      throw new Error('connection refused')
+    })
+    const engine = engineWith({
+      graph, deliverToChannel,
+      config: parseConfig({
+        watchers: [{kind: 'backlinks', name: 'ambient', target: 'claude', quietMs: 0, delivery: 'channel'}],
+      }),
+    })
+
+    await engine.tick()
+    await engine.drain()
+
+    expect(blocks.get('b-1')?.properties?.[PROPS.status]).toBe('done')
+  })
+
   it('a genuine run failure still parks the task and does not arm a cooldown', async () => {
     const {graph, blocks} = fakeGraph({
       backlinks: [{id: 'b-1'}, {id: 'b-2'}],

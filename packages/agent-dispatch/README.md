@@ -299,6 +299,8 @@ Registrations are ephemeral tab state: they die with the tab and expire after 10
 
 Rows must select a stable `id` column. First tick establishes a baseline without firing (no backlog replay); afterwards, new ids fire one batched run. Cursors live in `~/.config/knowledge-medium/agent-dispatch-state.json` (alongside the backlink-watcher baselines); the cursor advances **before** the run so a failing prompt can't re-bill every tick (failures are logged, not retried).
 
+**`ORDER BY` if you set `maxRowsPerFire`.** With truncation and no ordering, which rows land in a batch is whatever order SQLite returned — so a retry after an outage can carry a *different subset*, which is genuinely different work. The delivery identity is order-independent (ids are sorted), so the same rows are always recognised as the same delivery; what an unordered query cannot promise is that the same rows are the ones chosen.
+
 ## km MCP server standalone
 
 The same generic graph tools work from any MCP client — e.g. Claude Desktop / interactive Claude Code:
