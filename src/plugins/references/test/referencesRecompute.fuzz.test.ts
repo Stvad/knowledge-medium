@@ -763,15 +763,12 @@ describe('references pipeline sequences', () => {
     }
   })
 
-  // Deterministic canary for the restore-side stranding the sweep's deep
-  // run found (seed 1264869285). A tombstone releases its alias claims
-  // (`block_aliases` is live-only) and referrer entries bound to it are
-  // deliberately retained — the retention's justification is that a
-  // restore rebinds them cleanly. It doesn't when the alias moved on
-  // while the row was dead: the row comes back live not claiming it, and
-  // the referrer stays bound to a LIVE non-claimant with nothing to heal
-  // it (it only re-parses on its own row). Pins that the restore
-  // retargets the referrer to the current claimant.
+  // A tombstone releases its alias claims (`block_aliases` is live-only) and
+  // referrer entries bound to it are deliberately retained, on the grounds
+  // that a restore rebinds them cleanly. It doesn't when the alias moved on
+  // while the row was dead: the row comes back live not claiming it, and the
+  // referrer stays bound to a LIVE non-claimant with nothing to heal it (it
+  // only re-parses on its own row).
   it('a restore rebinds referrers whose alias moved to another block while it was dead', async () => {
     await guard.barrier()
     vi.useFakeTimers({shouldAdvanceTime: true})
@@ -927,10 +924,64 @@ describe('references pipeline sequences', () => {
     }
   })
 
-  // The counterexample's own shape (seed 1264869285), and what pins the
-  // rebind's POSITION: here the claimant does not exist until the restore
-  // re-parses the restored block's OWN drifted content and mints it, so a
-  // rebind running before this tx's plans finds no claimant and does
+  // A whole-block `[[alias]]` row carries the alias's resolution in the
+  // local `reference_target_id` column too, and `core.deriveReferenceTarget`
+  // watches `content` — which a rebind does not touch. Recomputing it here
+  // is the same contract `renameProcessor`, `mergeRetargetProcessor`,
+  // `inlineDeletedBlockRefsProcessor` and `alias.sync` follow for a row they
+  // rewrite; without it the row's two pointers disagree and field-row
+  // recognition keeps reading the non-claimant.
+  it('a rebind restamps the local reference target of a whole-block referrer', async () => {
+    await guard.barrier()
+    vi.useFakeTimers({shouldAdvanceTime: true})
+    try {
+      const {repo, flush} = await buildEnv()
+      const ALIAS = 'Inbox'
+      const seat0 = computeAliasSeatId(ALIAS, WS)
+      // Mint the seat first so the alias resolves when the whole-block row
+      // is written — otherwise the column is never stamped and the
+      // assertion below passes trivially.
+      await repo.mutate.createChild({
+        parentId: ROOT, position: {kind: 'last'}, content: `minter [[${ALIAS}]]`,
+      })
+      await flush()
+      const referrer = await repo.mutate.createChild({
+        parentId: ROOT, position: {kind: 'last'}, content: `[[${ALIAS}]]`,
+      })
+      await flush()
+      const readRow = async () => (await sharedDb.db.getOptional<{
+        reference_target_id: string | null; references_json: string
+      }>('SELECT reference_target_id, references_json FROM blocks WHERE id = ?', [referrer]))!
+      expect((await readRow()).reference_target_id, 'stamped at write time').toBe(seat0)
+
+      await repo.mutate.delete({id: seat0})
+      await flush()
+      await repo.mutate.setContent({id: seat0, content: 'drifted'})
+      await repo.mutate.setProperty({id: seat0, schema: aliasesProp, value: ['ax']})
+      await flush()
+      await repo.mutate.createChild({
+        parentId: ROOT, position: {kind: 'last'}, content: `also [[${ALIAS}]]`,
+      })
+      await flush()
+      await repo.mutate.restore({id: seat0})
+      await flush()
+
+      const claimant = (await sharedDb.db.getOptional<{block_id: string}>(
+        'SELECT block_id FROM block_aliases WHERE workspace_id = ? AND alias = ?', [WS, ALIAS]))!.block_id
+      expect(claimant, 'a different live block claims the alias now').not.toBe(seat0)
+      const row = await readRow()
+      const refs = JSON.parse(row.references_json) as Array<{id: string; alias: string}>
+      expect(refs.find(r => r.alias === ALIAS)?.id, 'entry follows the claimant').toBe(claimant)
+      expect(row.reference_target_id, 'local target follows it too').toBe(claimant)
+    } finally {
+      vi.clearAllTimers()
+      vi.useRealTimers()
+    }
+  })
+
+  // Pins the rebind's POSITION: the claimant does not exist until the
+  // restore re-parses the restored block's OWN drifted content and mints it,
+  // so a rebind running before this tx's plans finds no claimant and does
   // nothing.
   it('a restore rebinds referrers against a claimant its own re-parse mints', async () => {
     await guard.barrier()

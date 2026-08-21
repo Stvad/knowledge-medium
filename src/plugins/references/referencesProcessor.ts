@@ -65,6 +65,10 @@ import {
   parseBlockRefs,
 } from './referenceParser.ts'
 import { isRetainableAbsentRef, projectPropertyReferences } from './referenceProjection.ts'
+import {
+  deriveReferenceColumns,
+  sameTxReferenceTargetLookups,
+} from '@/data/internals/referenceTargetProcessor'
 import { devAssertionsEnabled } from '@/data/internals/devAssertions.js'
 import { parseAliasCollisionError } from '@/data/internals/raiseProtocol.js'
 import {
@@ -98,12 +102,17 @@ const SELECT_LIVE_REFERENCE_SOURCE_SQL = `
   LIMIT 1
 `
 
+// `source_field = ''` is the content-edge half of the projection: property
+// edges can never name an alias binding, and without the predicate every
+// ref/refList edge into the restored block costs a `tx.get` under the write
+// lock. Same filter as renameProcessor's `SELECT_BACKLINK_SOURCES_SQL`.
 const SELECT_LIVE_REFERRER_IDS_SQL = `
   SELECT DISTINCT br.source_id AS id
   FROM block_references br
   JOIN blocks source ON source.id = br.source_id
   WHERE br.workspace_id = ?
     AND br.target_id = ?
+    AND br.source_field = ''
     AND source.deleted = 0
   ORDER BY source.id
 `
@@ -601,9 +610,28 @@ const rebindStrandedReferrers = async (
       }
       references.push(ref)
     }
+    if (!changed) continue
+    // A whole-block `[[alias]]` row also carries the resolution in its local
+    // columns, and `core.deriveReferenceTarget` watches `content`, which we
+    // do not touch — so recompute them here, the same contract every sibling
+    // referrer-rewriter follows. Content is unchanged; what moved is who the
+    // alias resolves TO.
+    const derived = await deriveReferenceColumns(
+      referrer.content, workspaceId, sameTxReferenceTargetLookups(tx),
+    )
+    const patch: Parameters<Tx['update']>[1] = {references}
+    // Always an update of an existing row, so an unresolvable alias clears
+    // the column rather than preserving a caller-provided id.
+    const nextTargetId = derived.targetId ?? null
+    if ((referrer.referenceTargetId ?? null) !== nextTargetId) {
+      patch.referenceTargetId = nextTargetId
+    }
+    if ((referrer.isFieldForm ?? false) !== derived.isFieldForm) {
+      patch.isFieldForm = derived.isFieldForm
+    }
     // No self-loop: the referrer's own re-parse recomputes these same
     // claimant-bound entries, so its plan comes out idempotent.
-    if (changed) await tx.update(referrerId, {references}, {skipMetadata: true})
+    await tx.update(referrerId, patch, {skipMetadata: true})
   }
 }
 
