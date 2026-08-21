@@ -49,7 +49,6 @@ import {
   propertyNameProp,
 } from '@/data/properties'
 import { getOrCreatePropertiesPage, propertiesPageBlockId } from '@/data/propertiesPage'
-import { peekRowProperty } from '@/data/rowProperty'
 import { isGrammarShapedLabel } from '@/data/referenceBlock'
 import {
   effectivePropertyDefinitionName,
@@ -560,7 +559,13 @@ const schemaFor = (key: string, preset: AnyValuePresetCore): AnyPropertySchema =
 type NameHolding =
   | {kind: 'seed-reserved'}
   | {kind: 'vacant'}
-  | {kind: 'held'; fieldId: string; block: BlockData; resolvable: boolean}
+  | {kind: 'held'; fieldId: string; block: BlockData
+     /** What this row builds RIGHT NOW, or null when it cannot — an invalid
+      *  change scope, a config that no longer decodes, a preset whose plugin is
+      *  not loaded here. `resolvable` requires this, so a row the projection
+      *  still points at cannot be called converged once it has stopped being
+      *  buildable. */
+     schema: AnyPropertySchema | null; resolvable: boolean}
   | {kind: 'contested'; fieldIds: string[]}
 
 export interface SynthesisResult {
@@ -596,20 +601,6 @@ const effectiveDefinitionName = (
   const metadata = parsePropertyDefinitionMetadata(block)
   if (metadata === null) return undefined
   return effectivePropertyDefinitionName(metadata, registry.seedsByKey)
-}
-
-/** Does this row currently build behaviour, or only metadata?
- *
- *  A definition whose preset is not registered here parses perfectly well —
- *  `parsePropertyDefinitionMetadata` never consults the preset registry — and
- *  is absent from `schemas`, so the NAME resolves nothing. Separate from
- *  {@link effectiveDefinitionName} because the two questions have different
- *  answers for the same row and different callers need each: a row like that
- *  still OCCUPIES its name (so it is a rival) but does not SERVE it (so it is
- *  not convergence). */
-const providesSchema = (block: BlockData, repo: Repo): boolean => {
-  const presetId = peekRowProperty(block, presetIdProp)
-  return typeof presetId === 'string' && repo.valuePresetCores.has(presetId)
 }
 
 /** A live definition block already serving as `key`'s definition — the only
@@ -703,9 +694,8 @@ export const applyPropertyDefinitionSynthesis = async (
      *  resolver is a frozen projection that LAGS; the registry lags AND applies
      *  the seed-name rewrite; `blocks` is current but ignorant of that rewrite;
      *  and a code seed can hold a name while publishing no schema. Every branch
-     *  below reads this verdict rather than re-deriving from those sources —
-     *  four review rounds' worth of rivals came from derivations that each
-     *  consulted a different subset of them.
+     *  below reads this verdict rather than re-deriving from those sources: a
+     *  derivation that consults only some of them produces a rival.
      *
      *  No id is ever excluded here. The mint path used to drop its own
      *  deterministic id, which is right only where that id is about to be
@@ -740,8 +730,19 @@ export const applyPropertyDefinitionSynthesis = async (
       if (holders.size === 0) return {kind: 'vacant'}
       if (holders.size > 1) return {kind: 'contested', fieldIds: [...holders.keys()]}
       const [fieldId, block] = [...holders][0]!
-      return {kind: 'held', fieldId, block,
-              resolvable: fieldId === selected && providesSchema(block, repo)}
+      // Built ONCE, here, and carried — because "can this row build a schema
+      // right now" is the same question the caller needs when it republishes,
+      // and because it is what `resolvable` has to mean. Asking the weaker
+      // "is its preset registered?" let an unparseable row through: it reaches
+      // the holder set under its STORED name (correctly — it does hold the
+      // name), and would then be called converged purely because the stale
+      // resolver still points at it.
+      const metadata = parsePropertyDefinitionMetadata(block)
+      const schema = metadata === null
+        ? null
+        : tryBuildSchema(block, repo.valuePresetCores, metadata)
+      return {kind: 'held', fieldId, block, schema,
+              resolvable: fieldId === selected && schema !== null}
     }
 
     for (const candidate of plan.candidates) {
@@ -808,18 +809,14 @@ export const applyPropertyDefinitionSynthesis = async (
         // definition — and our job is to report it faithfully, not to re-judge
         // it. An extension-provided or config-carrying preset is therefore
         // published rather than skipped.
-        const storedMetadata = parsePropertyDefinitionMetadata(holding.block)
-        const storedSchema = storedMetadata === null
-          ? null
-          : tryBuildSchema(holding.block, repo.valuePresetCores, storedMetadata)
-        if (storedSchema === null) {
+        if (holding.schema === null) {
           skipped.push({key: candidate.key,
                         reason: `block ${id} defines this key with a preset this device cannot `
                           + 'build (its plugin may not be loaded); re-run once it is registered'})
           continue
         }
         converged += 1
-        registrations.push({blockId: id, schema: storedSchema})
+        registrations.push({blockId: id, schema: holding.schema})
         continue
       }
 

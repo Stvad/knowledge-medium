@@ -694,6 +694,28 @@ describe('applyPropertyDefinitionSynthesis: the id is occupied, or the key stopp
     expect(result.skipped.map(s => s.key)).toEqual(['demo:orphan'])
   }, 30_000)
 
+  it('does not call a key converged when the picked row stopped PARSING', async () => {
+    // The row still holds the name and its preset is still registered, so the
+    // weaker "does it have a registered preset?" question says yes — and the
+    // stale resolver still points at it. But its metadata no longer parses, so
+    // the next projection publishes nothing and the backfill would run against
+    // behaviour that is about to disappear.
+    const {plan, id} = await mintedOrphan()
+    // RAW, so the projector never learns: the resolver stays pointed at it,
+    // which is the whole state under test.
+    await sharedDb.db.execute(
+      `UPDATE blocks SET properties_json = json_set(properties_json,
+         '$."property-schema:change-scope"', 'not-a-real-scope') WHERE id = ?`, [id])
+    const stale = repo.propertySchemaResolverFor(WS).resolve('demo:orphan')
+    expect(stale.status).toBe('resolved')
+    expect(stale.status === 'resolved' && stale.schema.fieldId).toBe(id)
+
+    const result = await applyPropertyDefinitionSynthesis(repo, plan)
+
+    expect(result).toMatchObject({created: 0, converged: 0})
+    expect(result.skipped[0]!.reason).toMatch(/cannot build/)
+  })
+
   it('does not call a key converged when the picked row stopped building behaviour', async () => {
     // Metadata parses without ever consulting the preset registry, so a row
     // with an unregistered preset looks like a valid definition and resolves
