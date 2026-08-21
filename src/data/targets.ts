@@ -100,21 +100,12 @@ export interface CreateOrRestoreArgs {
   onInsertedOrRestored?: (tx: Tx, id: string) => Promise<void> | void
 }
 
-/** Compute the restore-time `properties` patch for a tombstone whose
- *  `aliases` claim must NOT be resurrected as-is — the tombstoned row's
- *  stored bag can carry a stale alias (or extra alias) that a different
- *  live block claimed while this row was dead; restoring it verbatim
- *  would re-insert that alias through `blocks_alias_update`, trip the
- *  `block_aliases_workspace_alias_unique` trigger, and roll back the
- *  WHOLE calling tx (found by referencesRecompute.fuzz.test.ts). Callers
- *  own the alias write: pass the result as `tx.restore`'s `properties`
- *  patch, then re-claim exactly the alias set the domain wants via
- *  `tx.setProperty` (or an `onInsertedOrRestored` callback) in the same
- *  tx. Shared by `createOrRestoreTargetBlock`'s `stripAliasesOnRestore`
- *  branch and by domain helpers that call `tx.restore` directly
- *  (`getOrCreateJournalBlock` / `getOrCreateDailyNote` /
- *  `getOrCreateKernelPage`) — do not reintroduce a second copy of this
- *  logic at a new call site; route through this helper instead. */
+/** Restore-time `properties` patch with the tombstone's `aliases` dropped.
+ *  Restoring the stored bag verbatim is the obvious simplification and is
+ *  wrong: a tombstone can carry a claim some live block took while it was
+ *  dead, and re-inserting it trips the alias-uniqueness trigger, rolling
+ *  back the CALLER's whole tx. The caller owns the alias write — pass this
+ *  as `tx.restore`'s patch, then re-claim the domain's set in the same tx. */
 export const restorePropertiesStrippingAliases = async (
   tx: Tx,
   id: string,
