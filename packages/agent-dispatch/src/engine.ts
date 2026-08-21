@@ -507,6 +507,13 @@ export const createEngine = (deps: EngineDeps) => {
     // (retryable), a throw after is "the answer we already paid for failed
     // to land" (terminal — re-running would re-bill it).
     let runAttempted = false
+    // Set the moment we DECIDE to defer, before any of its writes. If one of
+    // them then fails, the catch below must not undo the decision by parking
+    // the task: a transient bridge blip would turn the outage back into the
+    // dead task this whole path exists to prevent. Leaving the block
+    // `running` instead hands it to the stale sweep, which re-queues it —
+    // the fallback the deferral has always documented.
+    let deferIntended = false
     // Per-run reply identity + shape, set once `attempt` is known (below).
     // Every reconcile of this run tags its blocks with `replyKey`, so it
     // converges the SAME subtree in place; a rerun uses a fresh key and thus
@@ -580,6 +587,7 @@ export const createEngine = (deps: EngineDeps) => {
       detail: string,
       resume: {session?: string | null, resumeOptions?: AgentResumeOptions | null} = {},
     ) => {
+      deferIntended = true
       // Did someone else FINISH this while we were failing to hear back?
       // The channel path makes that real: the ambient session owns the run
       // and writes `done` itself, so a lost acknowledgement — our 10s
@@ -596,6 +604,12 @@ export const createEngine = (deps: EngineDeps) => {
       const finished = await graph.getBlock(sourceId).catch(() => null)
       const finishedStatus = finished?.properties?.[PROPS.status]
       if (finishedStatus === 'done' || finishedStatus === 'error') {
+        // The task got THROUGH — a lost acknowledgement, not a lost
+        // delivery. That is the probe succeeding, so reopen the lane:
+        // reserveProbe armed a window at launch, and leaving it armed
+        // throttles unrelated work for a whole backoff interval on the
+        // strength of a failure that did not happen.
+        clearInfraCooldown(laneOf(watcher))
         log(`[${watcher.name}] not deferring ${sourceId} — it finished as ${finishedStatus} while the delivery was failing`)
         return
       }
@@ -905,6 +919,13 @@ export const createEngine = (deps: EngineDeps) => {
       // Drain any queued progress writes first — a streamed-text write
       // landing after the note would silently replace it.
       await writes.catch(() => {})
+      // A deferral that started and did not finish stays a deferral. Parking
+      // here would convert the outage into exactly the dead task this path
+      // exists to prevent, on nothing worse than a transient write failure.
+      if (deferIntended) {
+        log(`[${watcher.name}] deferral for ${sourceId} did not land (${reason}) — leaving it running for the stale sweep to re-queue`)
+        throw error
+      }
       // A throw BEFORE the run is the same "we couldn't try" case a
       // classified run failure is: `claudeBin` missing from launchd's PATH,
       // the bridge down, the channel listener not up. Parking here kills
@@ -1166,7 +1187,12 @@ export const createEngine = (deps: EngineDeps) => {
         // unordered query, a retry can select a different SUBSET, which is
         // genuinely different work and correctly gets a different id. A
         // watcher that truncates should ORDER BY (README).
-        meta: {watcher: watcher.name, event_id: `${watcher.name}:${batch.map(row => row.id).sort().join(',')}`},
+        // JSON, not a joined string: ids are arbitrary text, so a comma
+        // delimiter makes `['a,b','c']` and `['a','b,c']` the same key — and
+        // the second batch would then be acknowledged as a duplicate and
+        // never run. Sorted for the reason above; encoded so the sort is the
+        // only thing that can make two batches equal.
+        meta: {watcher: watcher.name, event_id: `${watcher.name}:${JSON.stringify(batch.map(row => row.id).sort())}`},
       })
       } catch (error) {
         // Letting this reach the tick's per-watcher catch leaves the cursor

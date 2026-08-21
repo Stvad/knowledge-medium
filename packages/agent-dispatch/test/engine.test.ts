@@ -2729,6 +2729,102 @@ describe('retryable infrastructure failures (out of credits, expired login, netw
     expect(blocks.get('b-1')?.properties?.[PROPS.status]).toBe('done')
   })
 
+  it('reopens the lane when a lost acknowledgement turns out to have delivered', async () => {
+    // A real outage arms the lane; the post-cooldown probe then gets
+    // THROUGH — the session finishes the task and only the acknowledgement
+    // is lost. That is the probe succeeding, so the window reserveProbe
+    // re-armed at launch must not keep throttling unrelated work.
+    const {graph, blocks} = fakeGraph({
+      backlinks: [{id: 'b-1'}, {id: 'b-2'}],
+      blocks: {'b-1': {content: '[[claude]] one'}, 'b-2': {content: '[[claude]] two'}},
+    })
+    const time = clock()
+    let delivery = 0
+    const deliverToChannel = vi.fn(async () => {
+      delivery += 1
+      // First: a genuine outage, which arms the lane.
+      if (delivery === 1) throw new Error('connection refused')
+      // Second: it landed and the session finished it — only the ack is lost.
+      if (delivery === 2) {
+        await graph.setTaskProps('b-1', {status: 'done', nowMs: time.now()})
+        throw new Error('connection refused')
+      }
+      // Anything after: the listener is plainly fine.
+    })
+    const engine = engineWith({
+      graph, deliverToChannel, now: time.now,
+      config: parseConfig({
+        maxConcurrent: 1,
+        runsPerHour: 100,
+        watchers: [{kind: 'backlinks', name: 'ambient', target: 'claude', quietMs: 0, delivery: 'channel'}],
+      }),
+    })
+
+    await engine.tick()                 // b-1 fails — lane armed
+    await engine.drain()
+    expect(blocks.get('b-1')?.properties?.[PROPS.status]).toBe('queued')
+
+    time.advance(10 * 60_000)           // window lapses; the probe re-arms it
+    await engine.tick()
+    await engine.drain()
+    expect(blocks.get('b-1')?.properties?.[PROPS.status]).toBe('done')
+
+    // No clock advance: b-2 moves only if that completion reopened the lane.
+    await engine.tick()
+    await engine.drain()
+    expect(blocks.get('b-2')?.properties?.[PROPS.status]).toBe('running')
+  })
+
+  it('keeps ids with commas from colliding into one delivery key', async () => {
+    // Ids are arbitrary text. A comma delimiter makes ['a,b'] and ['a','b']
+    // the same key, so the second batch is dropped as a duplicate and its
+    // work silently never happens.
+    const {graph} = fakeGraph()
+    const batches = [[{id: 'a,b'}], [{id: 'a,b'}, {id: 'a'}, {id: 'b'}]]
+    let call = 0
+    graph.sqlAll = vi.fn(async () => batches[Math.min(call++, 1)])
+    const state = memoryState()
+    state.cursors.set('inbox', [])
+    const deliverToChannel = vi.fn(async () => {})
+    const engine = engineWith({
+      graph, state, deliverToChannel,
+      config: parseConfig({
+        watchers: [{kind: 'query', name: 'inbox', sql: 'SELECT id FROM blocks', delivery: 'channel'}],
+      }),
+    })
+
+    await engine.tick()
+    await engine.drain()
+    await engine.tick()
+    await engine.drain()
+
+    const ids = deliverToChannel.mock.calls.map(call => (call[0] as {meta: {event_id?: string}}).meta.event_id)
+    expect(ids).toHaveLength(2)
+    expect(ids[0]).not.toBe(ids[1])
+  })
+
+  it('keeps a deferral pending when its own state write fails', async () => {
+    // A transient blip while WRITING the deferral must not convert the
+    // outage into the dead task this path exists to prevent. The block stays
+    // `running` for the stale sweep to re-queue, which is the documented
+    // fallback — what it must not become is a terminal error.
+    const {graph, blocks} = fakeGraph({
+      backlinks: [{id: 'b-1'}],
+      blocks: {'b-1': {content: '[[claude]] summarize inbox'}},
+    })
+    const realSetTaskProps = graph.setTaskProps
+    graph.setTaskProps = async (id, args) => {
+      if (args.status === 'queued') throw new Error('bridge blipped')
+      return realSetTaskProps(id, args)
+    }
+    const engine = engineWith({graph, runTask: vi.fn(async () => outOfCreditsRun())})
+
+    await engine.tick()
+    await engine.drain()
+
+    expect(blocks.get('b-1')?.properties?.[PROPS.status]).toBe('running')
+  })
+
   it('a genuine run failure still parks the task and does not arm a cooldown', async () => {
     const {graph, blocks} = fakeGraph({
       backlinks: [{id: 'b-1'}, {id: 'b-2'}],
