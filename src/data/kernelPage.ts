@@ -103,13 +103,13 @@ export const kernelPageBlockId = (workspaceId: string, namespace: string): strin
  *  daily notes, SRS review, locations, media capture, the Readwise backlog —
  *  reaches the same throw through this one function.
  *
- *  NOT UNDOABLE, though the scope stays `BlockDefault` for the read-only gating
- *  above. Bootstrapping a kernel page is machinery, never a user edit: the row
- *  is system-minted at a derived id and get-or-created by everything that needs
- *  it, so an undo entry for it is only ever a trap — one cmd-Z aimed at the
- *  user's own edit soft-deletes the page their content hangs under. It also
- *  leaves a caller that writes with `skipUndo` of its own (the properties
- *  migration) holding one undo entry it never made. */
+ *  UNDOABLE, deliberately. Every caller bootstraps inside a `repo.undoGroup`
+ *  alongside the action that needed the page (`getOrCreateDailyNote`,
+ *  `createOrFindPlace`, media capture), so the create merges into that
+ *  operation's entry and is reverted only by reverting the operation — which is
+ *  what undo should do. A caller that writes with `skipUndo` and does NOT group
+ *  leaves this create alone on the stack; that is the caller's to account for,
+ *  not a reason to make the bootstrap invisible to undo for everyone. */
 export const getOrCreateKernelPage = async (
   repo: Repo,
   workspaceId: string,
@@ -200,7 +200,7 @@ export const getOrCreateKernelPage = async (
         await tx.setProperty(id, aliasesProp, mergeStrings([...aliases, ...txAliases]))
       }
       await tagTypes(tx, typeSnapshot)
-    }, {scope: ChangeScope.BlockDefault, skipUndo: true})
+    }, {scope: ChangeScope.BlockDefault})
     return repo.block(id)
   }
 
@@ -223,7 +223,7 @@ export const getOrCreateKernelPage = async (
       content: spec.alias,
     }, {systemMint: true})
     await tagTypes(tx, typeSnapshot)
-  }, {scope: ChangeScope.BlockDefault, skipUndo: true})
+  }, {scope: ChangeScope.BlockDefault})
 
   return repo.block(id)
 }

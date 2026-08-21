@@ -427,9 +427,7 @@ describe('undo grouping (issue #306)', () => {
 
     expect(await repo.undo()).toBe(true)
     expect(await isBlockDeleted(repo, note.id)).toBe(true)
-    // The Journal itself SURVIVES: it is kernel machinery, bootstrapped
-    // non-undoably, and every other day hangs under it.
-    expect(await isBlockDeleted(repo, journalBlockId(WS))).toBe(false)
+    expect(await isBlockDeleted(repo, journalBlockId(WS))).toBe(true)
   })
 
   it('warm-path getOrCreateDailyNote (note exists, no repair) records nothing', async () => {

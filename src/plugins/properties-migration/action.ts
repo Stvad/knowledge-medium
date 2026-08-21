@@ -334,13 +334,20 @@ export const migratePropertiesToBlocksAction = ({repo}: {repo: Repo}): ActionCon
       try {
         const result = await applyPropertyDefinitionSynthesis(repo, plan)
         synthesized = result.created
-        // Not about synthesis's own writes — those are `skipUndo`, and its
-        // Properties-page bootstrap is too (`getOrCreateKernelPage`). It is
-        // about the entries ALREADY on the stack: a key with no definition was
-        // a key nothing materialized, so on a child-backed workspace a replayed
-        // pre-synthesis snapshot writes a cell for a key that now has children
-        // — undo skips same-tx processors (`isReplay`), so nothing reconciles
-        // them. Minting is what makes those entries unsafe, hence the trigger.
+        // Not about synthesis's OWN writes: the definitions transaction is
+        // `skipUndo`, and the Properties-page bootstrap above it is a no-op on
+        // every reachable path (`kernel:properties` is a `systemPagesFacet`
+        // entry, so `ensureSystemPages` has already created the page before the
+        // palette this gesture is invoked from exists).
+        //
+        // It is about the entries ALREADY on the stack. A key with no
+        // definition was a key nothing materialized, so once one is MINTED a
+        // replayed pre-synthesis snapshot writes a cell for a key that now has
+        // children — undo skips same-tx processors (`isReplay`), so nothing
+        // reconciles them. Minting is what makes those entries unsafe, which is
+        // why `created` and not "did this run at all" is the trigger: a run that
+        // converged changed nothing, and taking the user's history for that
+        // would be a cost with no hazard behind it.
         if (synthesized > 0) {
           repo.undoManagerFor(workspaceId).clear()
           undoCleared = true
