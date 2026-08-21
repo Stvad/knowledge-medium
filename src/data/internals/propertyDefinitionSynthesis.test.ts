@@ -104,6 +104,16 @@ const planFor = () => planPropertyDefinitionSynthesis(repo, WS)
  *  one worker per core, where the same wait stretches several-fold. Kept well
  *  under the 30s timeout its callers carry, so a genuine hang reports as this
  *  assertion rather than as an opaque "test timed out". */
+/** Make both projections report nothing, so only a DATABASE read can see a
+ *  definition — the state between a sync-applied write and the projector tick. */
+const blindTheProjections = () => {
+  vi.spyOn(repo, 'propertySchemaResolverFor').mockReturnValue({
+    resolve: () => ({status: 'identity-unavailable', reason: 'definition-unavailable'}),
+    resolveField: () => ({status: 'identity-unavailable', reason: 'definition-unavailable'}),
+    resolveBoundary: () => ({status: 'identity-unavailable', reason: 'definition-unavailable'}),
+  } as unknown as ReturnType<typeof repo.propertySchemaResolverFor>)
+}
+
 const untilKeyUnresolved = (key: string) => vi.waitFor(
   () => expect(repo.propertySchemaResolverFor(WS).resolve(key).status).not.toBe('resolved'),
   {timeout: 10_000, interval: 25},
@@ -455,14 +465,16 @@ describe('applyPropertyDefinitionSynthesis: the id is occupied, or the key stopp
     const plan = await planFor()
     await getOrCreatePropertiesPage(repo, WS)
     await repo.userSchemas.addSchema({name: 'demo:orphan', presetId: 'string'})
-    // Blind BOTH projections, so only a database read can see the definition.
-    const blind = {
-      resolve: () => ({status: 'identity-unavailable', reason: 'definition-unavailable'}),
-      resolveField: () => ({status: 'identity-unavailable', reason: 'definition-unavailable'}),
-      resolveBoundary: () => ({status: 'identity-unavailable', reason: 'definition-unavailable'}),
-    } as unknown as ReturnType<typeof repo.propertySchemaResolverFor>
-    vi.spyOn(repo, 'propertySchemaResolverFor').mockReturnValue(blind)
-    vi.spyOn(repo, 'propertyDefinitions', 'get').mockReturnValue(null)
+    blindTheProjections()
+    // An EMPTY registry for this workspace, not a missing one: a missing
+    // registry is now a refusal, and the state being modelled is a loaded
+    // projection that has not seen the new row yet.
+    vi.spyOn(repo, 'propertyDefinitions', 'get').mockReturnValue({
+      ...repo.propertyDefinitions!,
+      definitionsByName: new Map(),
+      seedsByName: new Map(),
+      schemas: new Map(),
+    })
 
     const result = await applyPropertyDefinitionSynthesis(repo, plan)
 
@@ -505,6 +517,10 @@ describe('applyPropertyDefinitionSynthesis: the id is occupied, or the key stopp
     const id = synthesizedPropertyDefinitionBlockId(WS, 'demo:orphan')
     await repo.tx(async tx => { await tx.setProperty(id, presetIdProp, 'date') },
                   {scope: ChangeScope.BlockDefault, description: 'switch preset'})
+    await sharedDb.db.execute(
+      `UPDATE blocks SET properties_json =
+         json_set(properties_json, '$."property-schema:default"', 'kept') WHERE id = ?`,
+      [id])
     await repo.tx(async tx => { await tx.delete(id) },
                   {scope: ChangeScope.BlockDefault, description: 'delete'})
     await untilKeyUnresolved('demo:orphan')
@@ -520,6 +536,10 @@ describe('applyPropertyDefinitionSynthesis: the id is occupied, or the key stopp
     expect(result).toMatchObject({restored: 1})
     expect(publish).toHaveBeenCalledWith(
       expect.objectContaining({name: 'demo:orphan'}), id, WS)
+    // The patch MERGES over the stored bag: it re-asserts the four fields this
+    // pass owns and keeps everything else the definition carried. Building it
+    // from the owned fields alone would silently drop a configured default.
+    expect(repo.block(id).peek()!.properties['property-schema:default']).toBe('kept')
     const row = repo.block(id).peek()!
     expect(row.properties['property-schema:preset']).toBe('string')
     // The type membership survives the restore patch — building the patch from
@@ -538,11 +558,7 @@ describe('applyPropertyDefinitionSynthesis: the id is occupied, or the key stopp
     await repo.tx(async tx => { await tx.setProperty(id, presetIdProp, 'raw-json') },
                   {scope: ChangeScope.BlockDefault, description: 'retype'})
     const publish = vi.spyOn(repo.userSchemas, 'appendUserSchema')
-    vi.spyOn(repo, 'propertySchemaResolverFor').mockReturnValue({
-      resolve: () => ({status: 'identity-unavailable', reason: 'definition-unavailable'}),
-      resolveField: () => ({status: 'identity-unavailable', reason: 'definition-unavailable'}),
-      resolveBoundary: () => ({status: 'identity-unavailable', reason: 'definition-unavailable'}),
-    } as unknown as ReturnType<typeof repo.propertySchemaResolverFor>)
+    blindTheProjections()
 
     await applyPropertyDefinitionSynthesis(repo, plan)
 
@@ -561,11 +577,7 @@ describe('applyPropertyDefinitionSynthesis: the id is occupied, or the key stopp
     const id = synthesizedPropertyDefinitionBlockId(WS, 'demo:orphan')
     await repo.tx(async tx => { await tx.setProperty(id, presetIdProp, 'enum') },
                   {scope: ChangeScope.BlockDefault, description: 'retype'})
-    vi.spyOn(repo, 'propertySchemaResolverFor').mockReturnValue({
-      resolve: () => ({status: 'identity-unavailable', reason: 'definition-unavailable'}),
-      resolveField: () => ({status: 'identity-unavailable', reason: 'definition-unavailable'}),
-      resolveBoundary: () => ({status: 'identity-unavailable', reason: 'definition-unavailable'}),
-    } as unknown as ReturnType<typeof repo.propertySchemaResolverFor>)
+    blindTheProjections()
 
     const result = await applyPropertyDefinitionSynthesis(repo, plan)
 
@@ -581,11 +593,7 @@ describe('applyPropertyDefinitionSynthesis: the id is occupied, or the key stopp
     // block is here, the projection has not caught up" — is the one taken.
     const id = synthesizedPropertyDefinitionBlockId(WS, 'demo:orphan')
     const publish = vi.spyOn(repo.userSchemas, 'appendUserSchema')
-    vi.spyOn(repo, 'propertySchemaResolverFor').mockReturnValue({
-      resolve: () => ({status: 'identity-unavailable', reason: 'definition-unavailable'}),
-      resolveField: () => ({status: 'identity-unavailable', reason: 'definition-unavailable'}),
-      resolveBoundary: () => ({status: 'identity-unavailable', reason: 'definition-unavailable'}),
-    } as unknown as ReturnType<typeof repo.propertySchemaResolverFor>)
+    blindTheProjections()
 
     const again = await applyPropertyDefinitionSynthesis(repo, plan)
 
@@ -614,6 +622,33 @@ describe('applyPropertyDefinitionSynthesis: the id is occupied, or the key stopp
 
     expect(result).toMatchObject({restored: 1})
     expect(repo.propertySchemaResolverFor(WS).resolve('demo:orphan').status).toBe('resolved')
+  }, 30_000)
+
+  it('does not restore a tombstone when a rival definition arrived for the same name', async () => {
+    // The window the live-name check exists for, reached through the RESTORE
+    // path rather than the mint: the check used to sit below the occupancy
+    // switch, which `continue`s, so a tombstoned id plus a definition arriving
+    // between plan and apply restored — leaving two definition blocks for one
+    // name, the exact rival the check was added to prevent.
+    await rawCell('b1', {'demo:orphan': 'hello'})
+    await applyPropertyDefinitionSynthesis(repo, await planFor())
+    const id = synthesizedPropertyDefinitionBlockId(WS, 'demo:orphan')
+    await repo.tx(async tx => { await tx.delete(id) },
+                  {scope: ChangeScope.BlockDefault, description: 'delete'})
+    await untilKeyUnresolved('demo:orphan')
+    const plan = await planFor()
+    // A rival lands after the plan — broken, so it resolves nothing and the
+    // resolver check above cannot see it.
+    await rawCell('rival', {
+      types: ['property-schema'],
+      'property-schema:name': 'demo:orphan',
+      'property-schema:change-scope': 'not-a-real-scope',
+    })
+
+    const result = await applyPropertyDefinitionSynthesis(repo, plan)
+
+    expect(result).toMatchObject({created: 0, restored: 0})
+    expect(result.skipped.map(s => s.key)).toEqual(['demo:orphan'])
   }, 30_000)
 
   it('repairs a tombstone whose change-scope was corrupted before deletion', async () => {

@@ -273,8 +273,12 @@ export interface Tx {
    *  Deleted rows only, since `childrenOf` already covers the live ones. */
   reapedPropertyFieldTargets(workspaceId: string, parentId: string): Promise<Set<string>>
 
-  /** Which of `names` already have a LIVE `property-schema` block in this
-   *  workspace, read inside the transaction.
+  /** For each of `names` that has a LIVE `property-schema` block in this
+   *  workspace, the ids of those blocks — read inside the transaction.
+   *
+   *  Ids rather than a bare name set so a caller minting at a deterministic id
+   *  can exclude its OWN block, and ask "does anything ELSE hold this name?"
+   *  before it looks at what is at its id.
    *
    *  Exists because the property-definition registry is a projector-driven
    *  PROJECTION: a definition applied by sync commits in its own transaction
@@ -290,7 +294,7 @@ export interface Tx {
   livePropertyDefinitionNames(
     workspaceId: string,
     names: readonly string[],
-  ): Promise<Set<string>>
+  ): Promise<Map<string, string[]>>
 
   // ──── Composition ────
 

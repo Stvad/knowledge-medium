@@ -439,12 +439,13 @@ export class TxImpl implements Tx {
   async livePropertyDefinitionNames(
     workspaceId: string,
     names: readonly string[],
-  ): Promise<Set<string>> {
-    if (names.length === 0) return new Set()
-    const rows = await this.ctx.txDb.getAll<{name: string | null}>(
+  ): Promise<Map<string, string[]>> {
+    if (names.length === 0) return new Map()
+    const rows = await this.ctx.txDb.getAll<{id: string; name: string | null}>(
       // The LAST occurrence of the name key, matching `JSON.parse`;
       // `json_extract` would take the first and a raw write can repeat a key.
-      `SELECT (SELECT j.value FROM json_each(b.properties_json) j
+      `SELECT b.id AS id,
+              (SELECT j.value FROM json_each(b.properties_json) j
                 WHERE j.key = ? ORDER BY j.id DESC LIMIT 1) AS name
          FROM blocks b
          JOIN block_types t ON t.block_id = b.id AND t.workspace_id = b.workspace_id
@@ -454,9 +455,12 @@ export class TxImpl implements Tx {
       [propertyNameProp.name, PROPERTY_SCHEMA_TYPE, workspaceId],
     )
     const wanted = new Set(names)
-    const found = new Set<string>()
+    const found = new Map<string, string[]>()
     for (const row of rows) {
-      if (typeof row.name === 'string' && wanted.has(row.name)) found.add(row.name)
+      if (typeof row.name !== 'string' || !wanted.has(row.name)) continue
+      const ids = found.get(row.name) ?? []
+      ids.push(row.id)
+      found.set(row.name, ids)
     }
     return found
   }

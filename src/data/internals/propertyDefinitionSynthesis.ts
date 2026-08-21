@@ -32,7 +32,10 @@
  * `audit-properties` names the owner where it can.
  */
 
-import { ChangeScope, type AnyPropertySchema, type AnyValuePresetCore, type BlockData } from '@/data/api'
+import {
+  ChangeScope, propertyValue,
+  type AnyPropertySchema, type AnyValuePresetCore, type BlockData,
+} from '@/data/api'
 import { PROPERTY_SCHEMA_TYPE } from '@/data/blockTypes'
 import { classifyOccupant, derivedBlockId } from '@/data/derivedIds'
 import { kernelValuePresetCoresById } from '@/data/kernelValuePresetCores'
@@ -56,7 +59,8 @@ import {
   encodedPropertyValueToChildContent, propertyChildContentToEncodedValue,
 } from '@/data/propertyChildren'
 import {
-  OBJECT_BAG, keyOf, scanPropertyKeys, type UnresolvedPropertyKey,
+  OBJECT_BAG, keyOf, requirePropertyRegistryFor, scanPropertyKeys,
+  type UnresolvedPropertyKey,
 } from './propertyKeyScan'
 
 /** Namespace for synthesized property definitions. Deliberately NOT
@@ -115,19 +119,14 @@ export const PROVE_DISTINCT_VALUE_LIMIT = 10_000
  * Which preset can carry every value this key already holds — PROVEN, by
  * running the round trip, not inferred from what the values look like.
  *
- * The criterion was always "which codec reads every stored value back out
- * UNCHANGED": a synthesized definition is applied retroactively to values
- * written before it existed, and once the workspace is flipped the cell is
- * re-derived from the children, so a codec whose round trip rewrites a value
- * silently rewrites the user's data. An earlier revision approximated that from
- * a histogram of JSON types, and every review round found another shape the
- * histogram could not see — dates canonicalising, oversized integers, and so
- * on. Each was a real hole and each fix was one more term in a proxy.
+ * The criterion is "which codec reads every stored value back out UNCHANGED":
+ * the definition is applied retroactively, and past the flip the cell is
+ * re-derived from the children, so a lossy round trip rewrites the user's data.
  *
- * So the check is the actual round trip. `date` needs no special case now: it
- * simply fails, because `codecs.date` re-encodes `"2026-08-20"` as
- * `"2026-08-20T00:00:00.000Z"` — and any future codec that does the same fails
- * for the same reason without anyone having to notice it first.
+ * Do NOT replace this with a histogram of JSON types — four review rounds each
+ * found a value shape inference could not see. `date` needs no special case
+ * here: it simply fails, because `codecs.date` re-encodes `"2026-08-20"` as
+ * `"2026-08-20T00:00:00.000Z"`.
  *
  * WHAT THIS DOES NOT PROVE: only the JS half. Content that survives here can
  * still be transformed at the database text boundary or by a processor —
@@ -136,6 +135,7 @@ export const PROVE_DISTINCT_VALUE_LIMIT = 10_000
  */
 export const provePresetId = (values: readonly unknown[]): SynthesizedPresetId => {
   for (const presetId of PRESET_LADDER) {
+    // The name is irrelevant here: the child round trip keys on `codec.type`.
     const schema = schemaFor('probe', kernelValuePresetCoresById[presetId])
     if (values.every(value => survivesChildRoundTrip(schema, value))) return presetId
   }
@@ -196,31 +196,19 @@ export interface PropertyDefinitionSynthesisPlan {
 /**
  * Why this WORKSPACE cannot be synthesized into, or null.
  *
- * E2EE is the case, and it is about the ID rather than the content:
- * synthesized definition ids are `uuidv5("<workspaceId>:<key>")` under a
- * namespace constant in this repo, and block ids sync in PLAINTEXT — so a
- * server holding one can confirm a guessed private property name (`health`,
- * `client:ssn`) by recomputing the hash, precisely the edge metadata §8
- * encrypts. §8's answer is a namespace derived from workspace key material;
- * until that ships this refuses.
+ * E2EE, and about the ID rather than the content: block ids sync in PLAINTEXT,
+ * so `uuidv5("<workspaceId>:<key>")` under a namespace constant in this repo
+ * lets a server confirm a guessed private property name by recomputing the
+ * hash. §8's answer is a namespace derived from workspace key material.
  *
- * ASKS THE MODE PIN, NOT `workspaces.encryption_mode`. The column is the
- * server's, and this repo treats it as a UX hint that a hostile or buggy server
- * may lie in exactly the dangerous direction: `modePin.ts` exists so "a server
- * that flips its `encryption_mode` flag can't silently downgrade a pinned
- * workspace", and `workspaceAccess.ts` trusts server `'e2ee'` while refusing to
- * trust server `'none'`. The column is also `NOT NULL DEFAULT 'none'` locally,
- * so an upgrading device reads `'none'` for a genuinely encrypted workspace
- * until PowerSync replays the real value — the likeliest way to get this wrong,
- * and it fails in the leaking direction.
- *
- * ALLOWLIST, not a denylist. Only an affirmative "this device confirmed the
- * workspace plaintext" proceeds; a missing pin, an unrecognized mode string, and
- * an absent local row all refuse. A `mode === 'e2ee'` denylist would fail OPEN
- * on every one of those — the same mistake in three new ways. Requiring the pin
- * costs nothing real: `workspaceAccess.ts` puts every unpinned workspace through
- * the first-encounter gate, and confirming plaintext there pins it, so any
- * workspace the operator has open is pinned.
+ * Two rules that look like belt-and-braces and are not:
+ *  - ASK THE MODE PIN, never `workspaces.encryption_mode`. That column is the
+ *    server's; `modePin.ts` exists so it cannot silently downgrade a pinned
+ *    workspace, and it is `NOT NULL DEFAULT 'none'` locally, so an upgrading
+ *    device reads a genuinely encrypted workspace as plaintext.
+ *  - ALLOWLIST, not denylist: a missing pin, an unknown mode and an absent row
+ *    must each refuse. Costs nothing real — `workspaceAccess.ts` pins every
+ *    workspace at first encounter.
  */
 export const propertySynthesisWorkspaceRefusal = async (
   repo: Repo,
@@ -573,6 +561,11 @@ export const applyPropertyDefinitionSynthesis = async (
   plan: PropertyDefinitionSynthesisPlan,
 ): Promise<SynthesisResult> => {
   const {workspaceId} = plan
+  // The same precondition `scanPropertyKeys` opens with, and for a sharper
+  // reason here: a registry belonging to another workspace makes the resolver
+  // report every key unresolved AND makes the seed check fail open. Both errors
+  // point the same way — toward minting.
+  requirePropertyRegistryFor(repo, workspaceId)
   const skipped: SynthesisResult['skipped'] = []
   if (plan.candidates.length === 0) return {created: 0, restored: 0, converged: 0, skipped}
   // Defence in depth, and labelled as such: `repo.tx` re-reads `isReadOnly` at
@@ -615,7 +608,7 @@ export const applyPropertyDefinitionSynthesis = async (
   await repo.tx(async tx => {
     // Taken INSIDE the tx, once: the registry is a lagging projection of the
     // definition blocks, and the plan's copy is a dialog older still.
-    const registry = repo.propertyDefinitions
+    const registry = requirePropertyRegistryFor(repo, workspaceId)
     const resolver = repo.propertySchemaResolverFor(workspaceId)
     // One read for the whole batch, inside the lock — see the mint site below.
     const liveDefinitionNames = await tx.livePropertyDefinitionNames(
@@ -648,12 +641,29 @@ export const applyPropertyDefinitionSynthesis = async (
       // then resolves nothing, while `buildPropertyDefinitionRegistry` still
       // excludes any user definition that collides with it. Minting there
       // reports success over a key that can never resolve.
-      const claimedBySeed = registry?.workspaceId === workspaceId
-        && registry.seedsByName.has(candidate.key)
-      if (claimedBySeed) {
+      if (registry.seedsByName.has(candidate.key)) {
         skipped.push({key: candidate.key,
                       reason: 'a code seed declares this name, so a user definition for it can '
                         + 'never resolve — install or repair the seed\'s own definition instead'})
+        continue
+      }
+
+      // Asked of the DATABASE, because the registry lags a sync-applied
+      // definition until the projector ticks (see `Tx.livePropertyDefinitionNames`).
+      // Our OWN id is excluded, so this stays the "does anything else already
+      // hold this name?" question and the occupancy switch below stays the
+      // separate "is this id ours to write through?" one. It also catches a
+      // definition that PARSED but supplies no behavior: absent from `schemas`,
+      // so the resolver said nothing, yet real in `blocks`.
+      //
+      // Skipping here BLOCKS the flip, where the plan-time equivalent
+      // (`brokenDefinitions`) deliberately does not: a broken definition the
+      // operator saw counted in the dialog is one they consented to migrate
+      // around; one that arrived after they confirmed is not.
+      if ((liveDefinitionNames.get(candidate.key) ?? []).some(other => other !== id)) {
+        skipped.push({key: candidate.key,
+                      reason: 'a definition block for this name already exists and supplies '
+                        + 'no behavior — repair it rather than adding a second'})
         continue
       }
 
@@ -709,32 +719,16 @@ export const applyPropertyDefinitionSynthesis = async (
                         reason: `deleted block ${id} is a definition for a different name`})
           continue
         }
-        // Someone deleted a synthesized definition while its key is still on
-        // live blocks. Restore rather than mint a rival at a fresh id — but
-        // restore-WITH-PATCH, re-asserting every field: `tx.restore(id)` alone
-        // brings back the STORED bag, which measurably meant a definition
-        // whose preset had been switched to `date` came back as `date` and
-        // rewrote every value of the key on the next backfill, defeating
-        // `inferPresetId`'s entire selection criterion.
-        // ASSERT THE OUTCOME, don't enumerate the requirements. Restoring a
-        // tombstone means adopting a bag some other writer last touched, and
-        // any single field the metadata parser needs — the type, a valid
-        // change-scope, whatever it requires next — is equally fatal in the
-        // same way: the row restores, the parser rejects it, `appendUserSchema`
-        // throws AFTER the transaction has committed, and every later run reads
-        // the now-live occupant as `rejected`. Stuck, and unreachable by re-run.
+        // Restore rather than mint a rival at a fresh id, and check the patch
+        // against the parser BEFORE writing it: a tombstone's bag is whatever
+        // its last writer left, and a row that restores but fails to parse
+        // throws in `appendUserSchema` AFTER the tx has committed — every later
+        // run then reads the now-live occupant as `rejected`. Stuck, and
+        // unreachable by re-run.
         //
-        // Two fields of that set were each found and patched a review round
-        // apart, which is the tell that listing them is the wrong shape. So the
-        // patch is also checked against the parser ITSELF before it is written:
-        // if the restored row would not be a usable definition for this key,
-        // skip and let the flip refuse rather than commit a row nothing can fix.
-        //
-        // DEFENCE IN DEPTH, and unpinned by design — deleting this check fails
-        // no test, because the resets above already satisfy every requirement
-        // the parser has TODAY. It exists for the requirement it gains
-        // tomorrow, so that the next such field is a skipped key and a refused
-        // flip instead of a third round of this.
+        // DEFENCE IN DEPTH and unpinned by design: `restoredDefinitionProperties`
+        // already satisfies every requirement the parser has today. This is for
+        // the one it gains tomorrow.
         const patch = restoredDefinitionProperties(occupancy.block.properties, candidate)
         const restoredMetadata = parsePropertyDefinitionMetadata(
           {...occupancy.block, deleted: false, properties: patch.properties},
@@ -745,40 +739,13 @@ export const applyPropertyDefinitionSynthesis = async (
                           + 'definition for this key; repair or remove it'})
           continue
         }
+        // No `addTypeInTx` after this: the patch already carries the type, so
+        // the tagger would find nothing to change and write nothing — and
+        // `block_types` is rebuilt by the UPDATE trigger, which `restore` fires
+        // by touching `properties_json` and `deleted`.
         await tx.restore(id, patch)
-        // The bag above carries the type, which is what the parser reads; this
-        // maintains the `block_types` ROW that queries by type read.
-        await repo.addTypeInTx(tx, id, PROPERTY_SCHEMA_TYPE, {})
         restored += 1
         registrations.push({blockId: id, schema: schemaFor(candidate.key, preset)})
-        continue
-      }
-      // ABOUT TO MINT, so this is the last point a rival can be detected — and
-      // the question is asked of the DATABASE, not the registry. The registry is
-      // a projector-driven projection: a definition applied by sync commits in
-      // its own transaction and is invisible to it until the tick, so both the
-      // resolver above and its name index can miss one that is already there.
-      // Minting then creates a rival, and when the projector catches up the
-      // older row wins by creation time, leaving every field row the backfill
-      // just bound to the loser's fieldId stranded. Inside the write lock no
-      // other writer can commit, so this read holds for the rest of the tx.
-      //
-      // It also catches the definition that PARSED but supplies no behavior (an
-      // unknown preset, a config its codec rejects): absent from `schemas`, so
-      // the name resolved nothing above, yet perfectly real in `blocks`.
-      //
-      // Checked HERE rather than at the top of the loop because our own
-      // converged definition is a live row for this name too.
-      //
-      // This skips — and so blocks the flip — where the plan-time equivalent
-      // lands in `brokenDefinitions`, which deliberately does not block. The
-      // asymmetry is consent: a broken definition the operator saw counted in
-      // the dialog is one they agreed to migrate around; one that arrived after
-      // they confirmed is not, and re-running shows it to them.
-      if (liveDefinitionNames.has(candidate.key)) {
-        skipped.push({key: candidate.key,
-                      reason: 'a definition block for this name already exists and supplies '
-                        + 'no behavior — repair it rather than adding a second'})
         continue
       }
       // `createOrGet` + `systemMint`, like every other deterministic-id creator
@@ -798,16 +765,19 @@ export const applyPropertyDefinitionSynthesis = async (
         content: '',
       }, {systemMint: true})
       await repo.addTypeInTx(tx, id, PROPERTY_SCHEMA_TYPE, {})
-      await tx.setProperty(id, propertyNameProp, candidate.key)
-      await tx.setProperty(id, presetIdProp, candidate.presetId)
-      await tx.setProperty(id, presetConfigProp, {})
-      // VISIBLE, deliberately. The first cut minted these hidden on the theory
-      // that nothing chose these names or codecs on purpose so they shouldn't
-      // crowd the panel — which had it backwards (Vlad's call): the whole point
-      // is that a human triages them, and a hidden property is one nobody is
-      // ever prompted to look at. Written explicitly rather than left to the
-      // default so the intent is on the record.
-      await tx.setProperty(id, propertyHiddenProp, false)
+      // One batched delta rather than four `setProperty` calls: `setProperties`
+      // resolves and scope-checks the whole set up front and rewrites the bag
+      // once, which on an already-flipped workspace is one child reconciliation
+      // instead of four. (`addSchema` still writes these sequentially; this is
+      // the newer primitive its own docs point callers at.)
+      await tx.setProperties(id, {set: [
+        propertyValue(propertyNameProp, candidate.key),
+        propertyValue(presetIdProp, candidate.presetId),
+        propertyValue(presetConfigProp, {}),
+        // VISIBLE, deliberately (owner's call): a hidden property is one nobody
+        // is ever prompted to triage, which is the whole job these exist for.
+        propertyValue(propertyHiddenProp, false),
+      ]})
       created += 1
       registrations.push({blockId: id, schema: schemaFor(candidate.key, preset)})
     }
