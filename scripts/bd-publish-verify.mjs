@@ -259,15 +259,22 @@ const titleOf = (t, obj) => {
 
 const verifyTarget = (t, { reportIds, deadline }) => {
   const notes = []
-  const fetched = ghJson(['api', apiPathFor(t)])
+  const path = apiPathFor(t)
+  const fetched = ghJson(['api', path])
   // A failed read is the STRONGEST form of an unkeepable coverage claim: an
   // object is known to have been published and could not be examined. Silence
   // here would be the same hole the no-target branch exists to close.
+  //
+  // The command handed back is the one this hook just tried, which works for
+  // every kind. `gh issue view <n>` did not: a comment target keeps only the
+  // comment id and a release only its tag, so for four of the six kinds it
+  // named a command that cannot reach the text — at the exact moment the
+  // agent has to go read it by hand.
   if (!fetched || typeof fetched !== 'object')
     return [
-      `could not read back ${apiPathFor(t)} — the references in what it published are unchecked; verify them yourself (gh issue view <n>)`,
+      `could not read back ${path} — the references in what it published are unchecked; verify them yourself (gh api ${path})`,
     ]
-  const label = typeof fetched.html_url === 'string' ? fetched.html_url : apiPathFor(t)
+  const label = typeof fetched.html_url === 'string' ? fetched.html_url : path
   const text = `${titleOf(t, fetched)}\n${typeof fetched.body === 'string' ? fetched.body : ''}`
 
   // Bead ids are reported, never substituted: the mapped numbers join the

@@ -213,6 +213,15 @@ describe('carriesPublishableText', () => {
     expect(carriesPublishableText('gh release create v1')).toBe(true)
     // an EDIT really can carry no text, so it keeps the flag list
     expect(carriesPublishableText('gh pr edit 652 --add-label ui')).toBe(false)
+    // gh keeps the LAST -X/--method (measured: -X POST -X GET answers as a
+    // GET, the reverse 404s as a POST), so a read token earlier in the argv
+    // must not suppress the warning for what is actually a mutation
+    expect(
+      carriesPublishableText(`gh api -X GET -X PUT repos/Stvad/knowledge-medium/pulls/1/merge -f 'commit_title=t'`),
+    ).toBe(true)
+    expect(
+      carriesPublishableText(`gh api -X PUT -X GET repos/Stvad/knowledge-medium/pulls/1/merge -f 'commit_title=t'`),
+    ).toBe(false)
     // gh documents nested key[subkey]=value fields, and gist file content is
     // its own example; FIELD_ANY captures the bracketed name whole
     expect(carriesPublishableText(`gh api gists -f public=true -f 'files[a.md][content]=Fixes #700'`)).toBe(true)

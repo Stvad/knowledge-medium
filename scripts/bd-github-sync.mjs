@@ -406,13 +406,20 @@ const TEXT_FIELD_NAME = /body|title|message|name|description|text|note|comment|c
 // query parameters and publishes nothing, so the text it carries is never
 // text it PUBLISHED. Read off the skeleton alone, unlike the membership words
 // of isPostVerifiable: this SUPPRESSES a warning, so it must under-match.
-// The method prefix is shared with matchesApiPublish's POST|PATCH|PUT twin.
-const EXPLICIT_READ = /(?<![\w-])(?:-X|--method)(?:=|\s+)?(?:GET|HEAD)\b/i
+//
+// The EFFECTIVE method decides it, not any read token present. gh keeps the
+// LAST -X/--method — measured against the installed gh: `-X POST -X GET
+// /rate_limit` answers as a GET, and the reverse order 404s as a POST — so
+// suppressing on the first `GET` seen would silence the warning for a
+// mutation that merely mentions one earlier in its argv.
+const METHOD_FLAG = /(?<![\w-])(?:-X|--method)(?:=|\s+)?([A-Za-z]+)/g
+const effectiveMethod = sk => [...sk.matchAll(METHOD_FLAG)].pop()?.[1]?.toUpperCase()
+const isExplicitRead = sk => effectiveMethod(sk) === 'GET' || effectiveMethod(sk) === 'HEAD'
 
 /** Whether this command publishes text that could contain a reference at all. */
 export const carriesPublishableText = cmd => {
   const sk = commandSkeleton(cmd)
-  if (EXPLICIT_READ.test(sk)) return false
+  if (isExplicitRead(sk)) return false
   if (GH_CREATE.test(sk) || TEXT_FLAG.test(sk)) return true
   // Field names come off the raw command as well as the skeleton: `-f
   // 'commit_title=…'` quotes the WHOLE argument, which the skeleton blanks,

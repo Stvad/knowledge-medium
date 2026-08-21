@@ -861,6 +861,19 @@ describe('bd-publish-verify process behavior', { timeout: 30_000 }, () => {
     expect(r.status).toBe(0)
     expect(context(r)).toContain('could not read back')
     expect(context(r)).toContain('references in what it published are unchecked')
+    // the command handed back must be one that can reach THIS kind
+    expect(context(r)).toContain('gh api repos/Stvad/knowledge-medium/pulls/652')
+    expect(context(r)).not.toContain('gh issue view')
+  })
+
+  // A comment target keeps only the comment id and a release only its tag, so
+  // an issue-shaped suggestion cannot reach their text at all.
+  it('hands back a command that fits a comment target, not an issue view', () => {
+    const { hook } = makeRepo({})
+    const r = hook('gh pr comment 652 --body hi', url('pull/652#issuecomment-99'))
+    expect(r.status).toBe(0)
+    expect(context(r)).toContain('gh api repos/Stvad/knowledge-medium/issues/comments/99')
+    expect(context(r)).not.toContain('gh issue view')
   })
 
   it('never spawns bd in a DB-less clone even with bead ids published', () => {
