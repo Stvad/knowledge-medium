@@ -573,9 +573,28 @@ const effectiveDefinitionName = (
 ): string | undefined => {
   const metadata = parsePropertyDefinitionMetadata(block)
   if (metadata === null) return undefined
+  // The rewrite applies to SEED rows only. For an ordinary user definition the
+  // stored name IS the effective one — and it is fresher than the registry's
+  // copy, which is the direction that matters: a user definition renamed TO
+  // this key after the plan is a real rival that the registry still files under
+  // its old name.
   return metadata.seedKey === undefined
     ? metadata.name
     : registry.seedsByKey.get(metadata.seedKey)?.name
+}
+
+/** Does this row currently build behaviour, or only metadata?
+ *
+ *  A definition whose preset is not registered here parses perfectly well —
+ *  `parsePropertyDefinitionMetadata` never consults the preset registry — and
+ *  is absent from `schemas`, so the NAME resolves nothing. Separate from
+ *  {@link effectiveDefinitionName} because the two questions have different
+ *  answers for the same row and different callers need each: a row like that
+ *  still OCCUPIES its name (so it is a rival) but does not SERVE it (so it is
+ *  not convergence). */
+const providesSchema = (block: BlockData, repo: Repo): boolean => {
+  const presetId = block.properties[presetIdProp.name]
+  return typeof presetId === 'string' && repo.valuePresetCores.has(presetId)
 }
 
 /** A live definition block already serving as `key`'s definition — the only
@@ -696,7 +715,9 @@ export const applyPropertyDefinitionSynthesis = async (
       const resolution = resolver.resolve(candidate.key)
       if (resolution.status === 'resolved') {
         const selected = await tx.get(resolution.schema.fieldId)
-        if (selected !== null && effectiveDefinitionName(selected, registry) === candidate.key) {
+        if (selected !== null
+            && effectiveDefinitionName(selected, registry) === candidate.key
+            && providesSchema(selected, repo)) {
           converged += 1
           continue
         }
@@ -743,11 +764,18 @@ export const applyPropertyDefinitionSynthesis = async (
       // learns the row exists, so the scenario cannot be built. The rule is the
       // scan's, stated at `propertyKeyScan`'s `definitionBlocksByName`; this is
       // the same rule applied at the second site that needed it.
-      const rivals = (liveDefinitionNames.get(candidate.key) ?? []).filter(other => {
-        if (other === id) return false
-        const known = registry.definitionsByFieldId.get(other)
-        return known === undefined || known.name === candidate.key
-      })
+      const rivals: string[] = []
+      for (const other of liveDefinitionNames.get(candidate.key) ?? []) {
+        if (other === id) continue
+        const row = await tx.get(other)
+        // Asked of the row, through the one rule, for the same reason the
+        // converged check is: the registry can be a tick behind in EITHER
+        // direction — stale-old for a row just renamed onto this key, and
+        // stale-new for a seed row whose stored name has drifted off it.
+        if (row !== null && effectiveDefinitionName(row, registry) === candidate.key) {
+          rivals.push(other)
+        }
+      }
       if (rivals.length > 0) {
         skipped.push({key: candidate.key,
                       reason: 'a definition block for this name already exists and supplies '

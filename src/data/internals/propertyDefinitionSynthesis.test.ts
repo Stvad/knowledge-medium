@@ -500,6 +500,29 @@ describe('applyPropertyDefinitionSynthesis: the id is occupied, or the key stopp
     expect(result.skipped.map(s => s.key)).toEqual(['demo:orphan'])
   }, 30_000)
 
+  it('does not call a key converged when the picked row stopped building behaviour', async () => {
+    // Metadata parses without ever consulting the preset registry, so a row
+    // with an unregistered preset looks like a valid definition and resolves
+    // nothing. Occupying the name and serving it are different facts.
+    await rawCell('b1', {'demo:orphan': 'hello'})
+    const plan = await planFor()
+    await applyPropertyDefinitionSynthesis(repo, plan)
+    const id = synthesizedPropertyDefinitionBlockId(WS, 'demo:orphan')
+    const stale = repo.propertySchemaResolverFor(WS).resolve('demo:orphan')
+    await repo.tx(async tx => { await tx.setProperty(id, presetIdProp, 'no-such-preset') },
+                  {scope: ChangeScope.BlockDefault, description: 'unregister the preset'})
+    vi.spyOn(repo, 'propertySchemaResolverFor').mockReturnValue({
+      resolve: () => stale,
+      resolveField: () => ({status: 'identity-unavailable', reason: 'definition-unavailable'}),
+      resolveBoundary: () => ({status: 'identity-unavailable', reason: 'definition-unavailable'}),
+    } as unknown as ReturnType<typeof repo.propertySchemaResolverFor>)
+
+    const result = await applyPropertyDefinitionSynthesis(repo, plan)
+
+    expect(result.converged).toBe(0)
+    expect(result.skipped.map(s => s.key)).toEqual(['demo:orphan'])
+  }, 30_000)
+
   it('reports an already-defined key as converged rather than minting again', async () => {
     await rawCell('b1', {'demo:orphan': 'hello'})
     const plan = await planFor()
@@ -722,6 +745,32 @@ describe('applyPropertyDefinitionSynthesis: the id is occupied, or the key stopp
     expect(repo.propertySchemaResolverFor(WS).resolve('demo:orphan').status).toBe('resolved')
   }, 30_000)
 
+  it('treats a user definition renamed onto the key as a rival, though the registry lags', async () => {
+    // The registry files that row under its OLD name until the tick, so
+    // normalising every id through the registry discarded a real rival and
+    // minted a second definition. For a user row the STORED name is the
+    // effective one, and it is fresher than the projection.
+    await rawCell('b1', {'demo:orphan': 'hello'})
+    const plan = await planFor()
+    await getOrCreatePropertiesPage(repo, WS)
+    await repo.userSchemas.addSchema({name: 'demo:other', presetId: 'string'})
+    const otherId = repo.propertyDefinitions!.definitionsByName.get('demo:other')![0]!.fieldId
+    const beforeRename = repo.propertyDefinitions!
+    await repo.tx(async tx => {
+      await tx.setProperty(otherId, propertyNameProp, 'demo:orphan')
+    }, {scope: ChangeScope.BlockDefault, description: 'rename onto the key'})
+    blindTheProjections()
+    // Freeze the registry at its PRE-rename snapshot, which is the staleness
+    // this guard exists for — the rename above goes through the tx layer, so
+    // the projector otherwise catches up and the test proves nothing.
+    vi.spyOn(repo, 'propertyDefinitions', 'get').mockReturnValue(beforeRename)
+
+    const result = await applyPropertyDefinitionSynthesis(repo, plan)
+
+    expect(result.created).toBe(0)
+    expect(result.skipped.map(s => s.key)).toEqual(['demo:orphan'])
+  }, 30_000)
+
   it('does not restore a tombstone when a rival definition arrived for the same name', async () => {
     // The window the live-name check exists for, reached through the RESTORE
     // path rather than the mint: the check used to sit below the occupancy
@@ -735,12 +784,15 @@ describe('applyPropertyDefinitionSynthesis: the id is occupied, or the key stopp
                   {scope: ChangeScope.BlockDefault, description: 'delete'})
     await untilKeyUnresolved('demo:orphan')
     const plan = await planFor()
-    // A rival lands after the plan — broken, so it resolves nothing and the
-    // resolver check above cannot see it.
+    // A rival lands after the plan. Its metadata PARSES — so it occupies the
+    // name in `definitionsByName` and can win by creation time — while its
+    // preset is unregistered, so it supplies no schema and the resolver check
+    // above cannot see it. (A rival whose metadata does NOT parse is a
+    // different case: it occupies nothing, and restoring over it is correct.)
     await rawCell('rival', {
       types: ['property-schema'],
       'property-schema:name': 'demo:orphan',
-      'property-schema:change-scope': 'not-a-real-scope',
+      'property-schema:preset': 'no-such-preset',
     })
 
     const result = await applyPropertyDefinitionSynthesis(repo, plan)
