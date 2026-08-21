@@ -19,6 +19,8 @@ import {
   matchesCommitCommand,
   matchesUnverifiableCommand,
   hasStdinBody,
+  carriesPublishableText,
+  isPostVerifiable,
   matchesAnyPublish,
   matchesApiPublish,
   matchesPrCommand,
@@ -164,6 +166,20 @@ describe('allowsBeadIds', () => {
 // neither. Requiring a recognized command position could only be written as a
 // list — of separators, keywords, wrapper commands — and an incomplete list
 // fails in exactly that direction.
+describe('carriesPublishableText', () => {
+  // The coverage report is only worth firing for commands that publish TEXT,
+  // and only its NAME says whether an api field carries any. Being wrong here
+  // costs a note either way, never a write — so this is allowed to be a small
+  // list, unlike the tests that decide coverage.
+  it('reads an api field by its name and a CLI -F as a body file', () => {
+    expect(carriesPublishableText('gh api repos/Stvad/knowledge-medium/issues/652/labels -F labels[]=bug')).toBe(false)
+    expect(carriesPublishableText('gh api repos/Stvad/knowledge-medium/issues/1/comments -F body=hi')).toBe(true)
+    expect(carriesPublishableText('gh pr comment 652 -F notes.md')).toBe(true)
+    expect(carriesPublishableText('gh pr comment 652 --body hi')).toBe(true)
+    expect(carriesPublishableText('gh pr comment 652 --delete-last')).toBe(false)
+  })
+})
+
 describe('detectors see the verb wherever it sits', () => {
   it('sees indented, continued and wrapper-prefixed publishes', () => {
     for (const cmd of [
@@ -176,6 +192,18 @@ describe('detectors see the verb wherever it sits', () => {
     ])
       expect(matchesAnyPublish(cmd), cmd).toBe(true)
     expect(matchesCommitCommand('  git commit -m x')).toBe(true)
+  })
+
+  // The apostrophe trap commandSkeleton was written to avoid, which a second
+  // naive quote-sweep reintroduced: two double-quoted arguments each holding
+  // an apostrophe let those two pair, swallowing everything between them —
+  // here a real expansion, which then hid the command from BOTH hooks.
+  it('does not let apostrophes inside double-quoted args pair across an expansion', () => {
+    const q = String.fromCharCode(39)
+    const cmd = `gh api -H "X: can${q}t" \${FLAGS:--f body=x} -H "Y: won${q}t" repos/Stvad/knowledge-medium/issues/1/comments`
+    expect(matchesAnyPublish(cmd)).toBe(true)
+    // and it is uncovered, so its text is checked before it ships
+    expect(isPostVerifiable(cmd)).toBe(false)
   })
 
   // A shell COMMENT is text bash never runs. This matters more than it looks:

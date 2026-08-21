@@ -265,7 +265,13 @@ export const matchesUnverifiableCommand = cmd => GH_UNVERIFIABLE.test(commandSke
 // command is equally wrong in the other direction, since a literal `$5` or a
 // markdown code span in a single-quoted body is text, not an argument.
 const EXPANSION = /[$`]/
-const expandable = cmd => cmd.replace(/'[^']*'/g, "''")
+// ONE left-to-right pass, like commandSkeleton and for the same reason: a
+// naive single-quote sweep lets an apostrophe inside one double-quoted
+// argument pair with one in a later argument and swallow everything between
+// them — including a real expansion. Double-quoted spans are matched so they
+// claim their own apostrophes, and returned verbatim, since the shell DOES
+// expand inside them.
+const expandable = cmd => cmd.replace(/'[^']*'|"(?:\\.|[^"\\])*"/g, m => (m.startsWith("'") ? "''" : m))
 // Every shell operator in one character class — pipes, redirects,
 // substitutions, separators, multi-line — so there is no per-operator
 // spelling to keep complete and no positional heuristic to defeat.
@@ -309,13 +315,19 @@ export const matchesAnyPublish = cmd =>
 // decides only whether to WARN. Being wrong costs a missing or an extra note,
 // never a wrong write. Missing a spelling is therefore the cheap direction,
 // which is why it is written as a small list rather than defended as one.
-const TEXT_FLAG = /(?<![\w-])(?:--(?:body|title|notes|message)(?:-file)?\b|--input\b|-[btmF](?=[\s=]|$))/
+const TEXT_FLAG = /(?<![\w-])(?:--(?:body|title|notes|message)(?:-file)?\b|--input\b|-[btm](?=[\s=]|$))/
 const TEXT_FIELD = /(?<![\w-])-[fF]\s*['"]?(?:body|title|name|description|message)=/
 
 /** Whether this command carries text that could contain a reference at all. */
 export const carriesPublishableText = cmd => {
   const sk = commandSkeleton(cmd)
-  return TEXT_FLAG.test(sk) || TEXT_FIELD.test(sk)
+  if (TEXT_FLAG.test(sk) || TEXT_FIELD.test(sk)) return true
+  // `-F` is a body FILE on the CLI but a typed FIELD on the api, where only
+  // the field's NAME says whether it carries text (TEXT_FIELD above). Reading
+  // it by command kind is sound here specifically: a covered command is a
+  // single one, so there is no compound whose two halves could disagree —
+  // which is what made the same split wrong where it was removed.
+  return !matchesApiPublish(cmd) && /(?<![\w-])-F(?=[\s=]|$)/.test(sk)
 }
 
 /**
