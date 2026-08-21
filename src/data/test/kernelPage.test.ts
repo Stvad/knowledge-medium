@@ -360,4 +360,33 @@ describe('getOrCreateKernelPage', () => {
     expect(restored.peekProperty(aliasesProp)).toEqual(['Foo'])
     expect(env.repo.block('squatter').peekProperty(aliasesProp)).toEqual(['stale-extra'])
   })
+
+  it('stays reachable when a live block already owns its canonical alias (issue #378)', async () => {
+    // The reported repro: canonical page deleted, user aliases a different
+    // page with the same name, app tries to restore and re-claim. The reclaim
+    // trips alias uniqueness, and because the page is minted in that same tx it
+    // dies with the rollback — so every retry repeats it and the page is
+    // permanently uncreatable. Yielding the contested alias keeps it reachable.
+    const page = await getOrCreateKernelPage(env.repo, WS, {
+      namespace: FOO_PAGE_NS, alias: 'Foo', markerType: FOO_PAGE_TYPE,
+    })
+    await env.repo.tx(tx => tx.delete(page.id), {scope: ChangeScope.BlockDefault})
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'squatter', workspaceId: WS, parentId: null, orderKey: 'z0', content: 'Mine'})
+      await tx.setProperty('squatter', aliasesProp, ['Foo'])
+    }, {scope: ChangeScope.BlockDefault})
+
+    const again = await getOrCreateKernelPage(env.repo, WS, {
+      namespace: FOO_PAGE_NS, alias: 'Foo', markerType: FOO_PAGE_TYPE,
+    })
+
+    expect(again.id).toBe(kernelPageBlockId(WS, FOO_PAGE_NS))
+    const restored = await env.repo.load(again.id)
+    expect(restored).not.toBeNull()
+    expect(restored?.deleted).toBe(false)
+    // The alias stays with the squatter until the user merges; identity does not.
+    expect(again.peekProperty(aliasesProp) ?? []).not.toContain('Foo')
+    expect(env.repo.block('squatter').peekProperty(aliasesProp)).toEqual(['Foo'])
+    expect(again.peekProperty(typesProp)).toEqual([PAGE_TYPE, FOO_PAGE_TYPE])
+  })
 })

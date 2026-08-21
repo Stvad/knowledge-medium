@@ -125,4 +125,84 @@ describe('alias.mergeCollision', () => {
       'Other',
     ])
   })
+
+  it('transfers the contested name when the target does not already own it', async () => {
+    // The canonical direction: a system page reclaiming its own name from a
+    // squatter. The target holds no alias at all, so the collision alias must
+    // move across — dropping it (correct when the target already owns it)
+    // would destroy the name instead of transferring it.
+    await createBlock('canonical', 'Journal', [], 'a0')
+    await createBlock('squatter', 'My journal', ['Journal', 'Notes'], 'a1')
+
+    await env.repo.run(ALIAS_COLLISION_MERGE_MUTATOR, {
+      intoId: 'canonical',
+      fromId: 'squatter',
+      collisionAlias: 'Journal',
+    })
+
+    expect(env.read('squatter')!.deleted).toBe(true)
+    expect(env.read('canonical')!.properties[aliasesProp.name]).toEqual(['Journal', 'Notes'])
+  })
+
+  it('completes when the source title is owned by a third page, without claiming it', async () => {
+    // The source can hold a title that is not among its own aliases. If some
+    // third page owns that name, carrying it over would trip the uniqueness
+    // trigger and roll back the whole merge — turning the collision this flow
+    // exists to resolve into one it cannot.
+    await createBlock('canonical', 'Journal', [], 'a0')
+    await createBlock('squatter', 'Daily Log', ['Journal'], 'a1')
+    await createBlock('third', 'Something', ['Daily Log'], 'a2')
+
+    await env.repo.run(ALIAS_COLLISION_MERGE_MUTATOR, {
+      intoId: 'canonical',
+      fromId: 'squatter',
+      collisionAlias: 'Journal',
+      sourceIsAliasOwner: true,
+    })
+
+    // Merge went through and the name came back; the third page keeps its own.
+    expect((await env.repo.load('canonical'))?.properties[aliasesProp.name])
+      .toEqual(aliasesProp.codec.encode(['Journal']))
+    expect(await env.repo.load('squatter')).toBeNull()
+    expect((await env.repo.load('third'))?.properties[aliasesProp.name])
+      .toEqual(aliasesProp.codec.encode(['Daily Log']))
+  })
+
+  it('refuses when the target was renamed away from the contested name', async () => {
+    // The other half of the same race: the banner offered "reclaim Journal for
+    // this page", then this page was renamed. Absorbing the alias owner into it
+    // now would fold that page into something the user was never looking at.
+    await createBlock('canonical', 'Journal', [], 'a0')
+    await createBlock('squatter', 'Mine', ['Journal'], 'a1')
+    await env.repo.tx(tx => tx.update('canonical', {content: 'Something else'}),
+      {scope: ChangeScope.BlockDefault})
+
+    await expect(env.repo.run(ALIAS_COLLISION_MERGE_MUTATOR, {
+      intoId: 'canonical',
+      fromId: 'squatter',
+      collisionAlias: 'Journal',
+      sourceIsAliasOwner: true,
+    })).rejects.toThrow(/no longer named/)
+
+    expect((await env.repo.load('squatter'))?.deleted).toBe(false)
+  })
+
+  it('refuses when the source no longer claims the alias, in the reclaim direction', async () => {
+    // A banner can sit on screen while the world moves, and the mutator is
+    // exported so an extension can call it with anything. Folding a page that
+    // does not hold the name would tombstone it and re-home its children for
+    // nothing. Only checked in the reclaim direction — in the rejection
+    // direction the source never holds the alias, by construction.
+    await createBlock('canonical', 'Journal', [], 'a0')
+    await createBlock('other', 'Unrelated', ['Something else'], 'a1')
+
+    await expect(env.repo.run(ALIAS_COLLISION_MERGE_MUTATOR, {
+      intoId: 'canonical',
+      fromId: 'other',
+      collisionAlias: 'Journal',
+      sourceIsAliasOwner: true,
+    })).rejects.toThrow(/no longer claims/)
+
+    expect((await env.repo.load('other'))?.deleted).toBe(false)
+  })
 })
