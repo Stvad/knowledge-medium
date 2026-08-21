@@ -17,7 +17,12 @@ interface ResolvedActivation {
   dependencies: BaseShortcutDependencies
 }
 
-/** Stable identity, so a suspended subtree's effect doesn't re-run per render. */
+/**
+ * Stable identity so a suspended subtree's effect stops re-running as its
+ * caller's `activations` array churns. Purely an effect-churn saving with no
+ * observable behaviour riding on it — the effect early-returns on an empty
+ * list and registers no cleanup either way — so no test pins it.
+ */
 const NO_ACTIVATIONS: readonly ResolvedActivation[] = []
 
 /**
@@ -33,13 +38,16 @@ const NO_ACTIVATIONS: readonly ResolvedActivation[] = []
  * deps never moved), leaving the context owned by nobody.
  *
  * This is the single funnel for DECLARATIVE activation — `useActionContext`
- * and its per-context wrappers below, `useShortcutSurfaceActivations`, and
- * `ReviewSession` all land here — so it is also where
- * {@link useShortcutSurfacesSuspended} is honoured: a suspended subtree
- * resolves to NO activations, which makes the register/deregister effect
- * below deactivate everything the subtree owns and re-register it when
- * suspension lifts. See `ShortcutSurfaceSuspension.tsx` for why that is a
- * separate context rather than a `blockContext` flag.
+ * and its per-context wrappers below, `useShortcutSurfaceActivations` (and
+ * so every block surface, including `BlockEditor`'s EDIT_MODE_CM),
+ * `PanelRenderer`, `TopLevelRenderer`, `CommandPalette` and `ReviewSession`
+ * all land here — so it is also where {@link useShortcutSurfacesSuspended}
+ * is honoured: a suspended subtree resolves to NO activations, which makes
+ * the register/deregister effect below deactivate everything the subtree
+ * owns and re-register it when suspension lifts. See
+ * `ShortcutSurfaceSuspension.tsx` for why that is a separate context rather
+ * than a `blockContext` flag, and for the one-commit constraint the by-type
+ * `deactivate` imposes on a handover between two mounted subtrees.
  */
 export function useActionContextActivations(
   activations: readonly ActionContextActivation[],
