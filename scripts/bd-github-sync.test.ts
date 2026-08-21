@@ -1197,14 +1197,20 @@ describe('hookPrePr process behavior', { timeout: 20_000 }, () => {
     expect(hook(`gh api graphql -f query='query { repository(name: "x") { id } }'`).status).toBe(0)
   })
 
-  // A --silent api mutation is invisible to the verifier — the one shape
-  // with no checkpoint anywhere; it fails closed here.
-  it('fails closed on --silent api mutations, with the escape honored', () => {
+  // An api mutation with a response-hiding output flag is invisible to the
+  // verifier — a closed three-flag set, gated like --silent alone was.
+  // (--jq earned its place live: a decline reply posted with `--jq .id`
+  // carried an unrewritten bead id straight past the verifier.)
+  it('fails closed on response-hiding api mutations (--silent/--jq/--template), escape honored', () => {
     const { hook } = makeRepo({ dbReady: true })
     const r = hook('gh api --silent repos/Stvad/knowledge-medium/issues/1/comments -f body=done')
     expect(r.status).toBe(2)
     expect(r.stderr).toContain('--silent')
+    expect(hook('gh api repos/Stvad/knowledge-medium/issues/1/comments -f body=done --jq .id').status).toBe(2)
+    expect(hook('gh api repos/Stvad/knowledge-medium/issues/1/comments -f body=done --template "{{.id}}"').status).toBe(2)
     expect(hook('KM_ISSUE_REFS_OK=1 gh api --silent repos/Stvad/knowledge-medium/issues/1/comments -f body=done').status).toBe(0)
+    // an explicit-GET with hidden output is a read; blocking it would be a pointless round
+    expect(hook('gh api --silent --method GET repos/Stvad/knowledge-medium/issues -f state=open').status).toBe(0)
   })
 
   // Close/reopen comments publish text whose success output names repo#N,

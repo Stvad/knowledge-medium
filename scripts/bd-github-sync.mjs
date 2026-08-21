@@ -58,18 +58,18 @@
  *       be in hand BEFORE the text ships. The #N echo-gate (and body-file
  *       reading) remains pre-publish ONLY where the verifier cannot reach:
  *       gh pr merge (merge-commit text), gh pr review (its output names no
- *       URL), graphql mutations (response envelope unresolvable), --silent
- *       api mutations (fail closed — no output at all), and git commit
- *       close keywords (commit text never becomes a GitHub object). The
- *       commit leg runs INDEPENDENTLY of the publish legs — one invocation
- *       can do both.
+ *       URL), graphql mutations (response envelope unresolvable), api
+ *       mutations with response-hiding output flags (--silent/--jq/
+ *       --template — fail closed; the response is the verifier's only
+ *       eyes), and git commit close keywords (commit text never becomes a
+ *       GitHub object). The commit leg runs INDEPENDENTLY of the publish
+ *       legs — one invocation can do both.
  *       Unrepairable-verb text built by shell expansion fails closed (the
  *       one guard restored from the pre-shrink gate — no post-hoc read
- *       exists for it). ACCEPTED residuals of this leg, declined as
- *       channel-enumeration (round 5 of review; the decision record is the
- *       tracker): api mutations whose --jq/--template output omits html_url
- *       go unverified, and a refs-approved --silent mutation's @file/--input
- *       payload is not read for bead ids.
+ *       exists for it). ACCEPTED residual of this leg, declined as
+ *       channel-enumeration (round 5 of review; decision record: #683): a
+ *       refs-approved opaque mutation's @file/--input payload is not read
+ *       for bead ids.
  *       Escape hatches: KM_ALLOW_BEAD_IDS=1 / KM_ISSUE_REFS_OK=1 prefixes.
  *       The FULL sync does not run here: converged it still costs ~60s (a GET
  *       compare per issue), which is too slow to sit in front of every PR.
@@ -1033,12 +1033,21 @@ const hookPrePr = () => {
     return (bodiesCache = paths.map(p => readFileSync(p, 'utf8')))
   }
 
-  // A --silent api mutation is invisible to the post-publish verifier too —
-  // the one shape with NO checkpoint anywhere; fail closed on the flag.
-  const silentApi = matchesApiPublish(cmd) && /(?<![\w-])--silent\b/.test(commandSkeleton(cmd))
-  if (silentApi && !allowsIssueRefs(cmd)) {
+  // An api mutation whose response is hidden or reshaped is invisible to the
+  // post-publish verifier — no html_url ever reaches it. The output-hiding
+  // flags are a CLOSED set on one tool ({--silent, --jq, --template}),
+  // unlike payload channels, so this fails closed rather than enumerating.
+  // (Demonstrated live in the round that added --jq/--template: the decline
+  // reply itself was posted with `--jq .id` and went unverified.) Residual:
+  // -q, the short form of --jq, is skipped — a command-wide scan would trip
+  // on `grep -q` in compounds.
+  const opaqueApi =
+    matchesApiPublish(cmd) &&
+    !hasExplicitGetMethod(cmd) &&
+    /(?<![\w-])--(?:silent|jq|template)\b/.test(commandSkeleton(cmd))
+  if (opaqueApi && !allowsIssueRefs(cmd)) {
     console.error(
-      'This gh api mutation is --silent: neither this gate nor the post-publish verifier can see what it publishes. Drop --silent (the printed response is how published text gets verified) — or, after verifying the references yourself, re-run with KM_ISSUE_REFS_OK=1 prefixed.',
+      'This gh api mutation hides or reshapes its response (--silent/--jq/--template), so neither this gate nor the post-publish verifier can see what it publishes. Drop the output flag (the printed response is how published text gets verified) — or, after verifying the references yourself, re-run with KM_ISSUE_REFS_OK=1 prefixed.',
     )
     process.exit(2)
   }
@@ -1063,11 +1072,11 @@ const hookPrePr = () => {
   const commitText = matchesCommitCommand(cmd) && !allowsIssueRefs(cmd) ? [cmd, ...guardedBodies()].join('\n') : ''
   const commitRefs = commitText ? closeKeywordRefs(commitText) : []
 
-  // A refs-approved (--silent) api mutation still owes the bead-id leg its
-  // raw-command scan — the verifier will never see this publish.
+  // A refs-approved opaque-output api mutation still owes the bead-id leg
+  // its raw-command scan — the verifier will never see this publish.
   const isPublish = matchesPrCommand(cmd)
   const graphqlMutation = matchesGraphqlMutation(cmd)
-  if (!isPublish && !graphqlMutation && !silentApi) {
+  if (!isPublish && !graphqlMutation && !opaqueApi) {
     if (commitRefs.length === 0) allow()
     return echoIssueRefs(commitText, commitRefs)
   }
