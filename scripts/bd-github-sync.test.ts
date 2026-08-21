@@ -173,6 +173,12 @@ describe('carriesPublishableText', () => {
   // list, unlike the tests that decide coverage.
   it('reads an api field by its name and a CLI -F as a body file', () => {
     expect(carriesPublishableText('gh api repos/Stvad/knowledge-medium/issues/652/labels -F labels[]=bug')).toBe(false)
+    // every payload-field spelling gh accepts, so a field is never MISSED and
+    // then read as text-free — that suppresses the warning rather than adding
+    // one, which is the direction that actually hurts
+    expect(carriesPublishableText("gh api -X PUT repos/Stvad/knowledge-medium/contents/x --raw-field message='m'")).toBe(true)
+    expect(carriesPublishableText('gh api repos/Stvad/knowledge-medium/issues/1/comments --field body=hi')).toBe(true)
+    expect(carriesPublishableText('gh api -X PUT repos/Stvad/knowledge-medium/pulls/652/merge -f merge_method=squash')).toBe(false)
     expect(carriesPublishableText('gh api repos/Stvad/knowledge-medium/issues/1/comments -F body=hi')).toBe(true)
     expect(carriesPublishableText('gh pr comment 652 -F notes.md')).toBe(true)
     expect(carriesPublishableText('gh pr comment 652 --body hi')).toBe(true)
@@ -192,6 +198,20 @@ describe('detectors see the verb wherever it sits', () => {
     ])
       expect(matchesAnyPublish(cmd), cmd).toBe(true)
     expect(matchesCommitCommand('  git commit -m x')).toBe(true)
+  })
+
+  // An ESCAPED space means the `#` after it is an argument, not a comment, so
+  // bash runs what follows the next separator. Comments are handled in the
+  // same pass as quotes and escapes for exactly this reason — a sweep
+  // afterwards cannot see that the space was spoken for, and deleted a real
+  // publish along with the supposed comment.
+  it('keeps a command that follows escaped hash text', () => {
+    const q = String.fromCharCode(39)
+    expect(matchesAnyPublish(`printf x \\ #literal; gh issue comment 1 --body ${q}hi${q}`)).toBe(true)
+    // a genuine trailing comment still hides its verb
+    expect(matchesAnyPublish('git commit -F msg # later: gh pr create')).toBe(false)
+    // and a `#` inside a quoted body is neither
+    expect(matchesAnyPublish(`gh pr comment 1 --body ${q}see #700${q}`)).toBe(true)
   })
 
   // The apostrophe trap commandSkeleton was written to avoid, which a second
@@ -1403,31 +1423,33 @@ describe('hookPrePr process behavior', { timeout: 20_000 }, () => {
     expect(hook('KM_ISSUE_REFS_OK=1 cd subdir && git commit -F msg.txt').status).toBe(0)
   })
 
-  // The mint itself, pinned end-to-end: dry unset, a token-answering gh
-  // shim, and per-call bd show fixtures — without these the mint branch is
-  // structurally unreachable in this harness and could break with a green
-  // gate (found by mutation).
-  it('mints an issue for an unmapped bead and denies with the fresh number', () => {
+  // The gate LOOKS UP but never MINTS. The detectors deliberately over-match,
+  // and a verb sitting in ordinary unquoted argv reads as a publish — so a
+  // mint here would create a public issue for a command that is about to be
+  // blocked and never runs. An extra check costs a round; an extra issue does
+  // not come back.
+  it('never mints an issue, even for a real unmapped bead in a real publish', () => {
     const { hook, shimCalls } = makeRepo({
       dbReady: true,
       dry: false,
-      shows: [[{ id: 'km-zzzz', external_ref: null }], [{ id: 'km-zzzz', external_ref: ref(88) }]],
-    })
-    const r = hook('gh pr create --title t --body "tracks km-zzzz"')
-    expect(r.status).toBe(2)
-    expect(shimCalls()).toContain('bd github sync --push-only --issues km-zzzz')
-    expect(r.stderr).toContain('#88')
-  })
-
-  it('suppresses the pre-gate mint under BD_GITHUB_SYNC_DRY=1', () => {
-    const { hook, shimCalls } = makeRepo({
-      dbReady: true,
       shows: [[{ id: 'km-zzzz', external_ref: null }]],
     })
     const r = hook('gh pr create --title t --body "tracks km-zzzz"')
     expect(r.status).toBe(2)
     expect(shimCalls()).toContain('bd show km-zzzz')
     expect(shimCalls()).not.toContain('bd github sync')
+    expect(r.stderr).toContain('pnpm bd:sync')
+  })
+
+  // The same, through the shape that made this urgent: a verb in argv, where
+  // blanking quoted spans protects nothing.
+  it('does not spawn a sync for a bead id in a non-publishing command', () => {
+    const { hook, shimCalls } = makeRepo({ dbReady: true, dry: false, shows: [[{ id: 'km-new', external_ref: null }]] })
+    const verb = ['gh', 'pr', 'create'].join(' ')
+    const r = hook(`printf '%s' ${verb} km-new`)
+    expect(shimCalls()).not.toContain('bd github sync')
+    // the id is still surfaced rather than silently allowed
+    if (r.status === 2) expect(r.stderr).toContain('km-new')
   })
 
   // A COVERED publish gets no body inspection at all: one gh command, no

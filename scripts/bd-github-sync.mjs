@@ -127,7 +127,15 @@ const commandSkeleton = cmd => {
     for (const m of span.matchAll(/\$\(([^)]*)\)/g)) lifted.push(m[1])
     for (const m of span.matchAll(/`([^`]*)`/g)) lifted.push(m[1])
   }
-  const skeleton = cmd.replace(/'[^']*'|"(?:\\.|[^"\\])*"|\$\(([^)]*)\)|`([^`]*)`/g, (m, dollarBody, tickBody) => {
+  // Comments are part of the SAME pass as quotes and substitutions, not a
+  // sweep after it. `\\.` consumes an escaped character as one atom, so the
+  // space in `printf x \\ #literal` is spoken for and the `#` after it is an
+  // argument rather than a comment — a following `; gh …` then survives. A
+  // second pass cannot see that, which is how the sweep this replaces
+  // deleted a real publish.
+  const skeleton = cmd.replace(/'[^']*'|"(?:\\.|[^"\\])*"|\$\(([^)]*)\)|`([^`]*)`|\\.|(?:^|\s)#[^\n]*/g, (m, dollarBody, tickBody) => {
+    if (m.startsWith('\\')) return m
+    if (m.includes('#') && /^(?:^|\s)#/.test(m)) return m.startsWith('#') ? '' : m[0]
     if (dollarBody !== undefined) {
       lifted.push(dollarBody)
       return '$()'
@@ -142,14 +150,7 @@ const commandSkeleton = cmd => {
     }
     return "''"
   })
-  // A trailing `#` comment is text bash never runs. It has to go BEFORE any
-  // detector sees it: the detectors no longer require a command position, so
-  // a commented-out verb would otherwise read as a real publish — and the
-  // commit leg skips its file inspection when the invocation also publishes,
-  // so over-matching here fails OPEN rather than merely costing a round.
-  // `#` only opens a comment at a word boundary, which leaves a positional
-  // URL fragment (…#issuecomment-1) alone.
-  return [skeleton, ...lifted].join('\n').replace(/(^|\s)#[^\n]*/g, '$1')
+  return [skeleton, ...lifted].join('\n')
 }
 
 // The DETECTORS below scan the skeleton for their verb wherever it occurs.
@@ -316,17 +317,21 @@ export const matchesAnyPublish = cmd =>
 // never a wrong write. Missing a spelling is therefore the cheap direction,
 // which is why it is written as a small list rather than defended as one.
 const TEXT_FLAG = /(?<![\w-])(?:--(?:body|title|notes|message)(?:-file)?\b|--input\b|-[btm](?=[\s=]|$))/
-const TEXT_FIELD = /(?<![\w-])-[fF]\s*['"]?(?:body|title|name|description|message)=/
+// Every payload-field spelling gh accepts, so a field is never missed and
+// then read as "carries no text" — which would suppress the warning rather
+// than add one, the direction that actually hurts. What the field CARRIES is
+// decided by its name.
+const FIELD_ANY = /(?<![\w-])(?:-[fF]|--(?:raw-)?field)(?:=|\s+)?['"]?([A-Za-z_][\w.[\]-]*)=/g
+const TEXT_FIELD_NAME = /^(?:body|title|name|description|message)$/
 
 /** Whether this command carries text that could contain a reference at all. */
 export const carriesPublishableText = cmd => {
   const sk = commandSkeleton(cmd)
-  if (TEXT_FLAG.test(sk) || TEXT_FIELD.test(sk)) return true
-  // `-F` is a body FILE on the CLI but a typed FIELD on the api, where only
-  // the field's NAME says whether it carries text (TEXT_FIELD above). Reading
-  // it by command kind is sound here specifically: a covered command is a
-  // single one, so there is no compound whose two halves could disagree —
-  // which is what made the same split wrong where it was removed.
+  if (TEXT_FLAG.test(sk)) return true
+  const fields = [...sk.matchAll(FIELD_ANY)].map(m => m[1])
+  if (fields.length) return fields.some(name => TEXT_FIELD_NAME.test(name))
+  // No payload field at all: a bare `-F` is then a body FILE, which only the
+  // CLI has — on the api every `-F` carries a name and was handled above.
   return !matchesApiPublish(cmd) && /(?<![\w-])-F(?=[\s=]|$)/.test(sk)
 }
 
@@ -642,7 +647,7 @@ export const buildDenyMessage = (mapped, unmapped) => {
     ...mapped.map(({ id, number }) => `  ${id} → #${number} (https://github.com/${REPO}/issues/${number})`),
     ...(unmapped.length
       ? [
-          `No GitHub issue found for: ${unmapped.join(', ')} — check \`bd show <id>\`. A real bead may have been skipped by the sync watermark (edit it to bump updated_at, then retry); if the sync could not run here, find the issue via \`gh issue list --search\`.`,
+          `No GitHub issue found for: ${unmapped.join(', ')} — run \`pnpm bd:sync\` to mint one (it prints the km→#N mapping), or check \`bd show <id>\`. A real bead may have been skipped by the sync watermark (edit it to bump updated_at, then retry); if the sync cannot run here, find the issue via \`gh issue list --search\`.`,
         ]
       : []),
     'Rewrite the references as #N and re-run with KM_ISSUE_REFS_OK=1 prefixed — these numbers come from the tracker, so the issue-reference check needs no separate confirmation.',
@@ -699,27 +704,6 @@ export const bdShowRows = (ids, opts = {}) => {
 /** km-id → issue number for each bead that has an External link. */
 export const beadIssueLookup = ids => new Map((bdShowRows(ids) ?? []).map(b => [b.id, issueNumberFromRef(b.external_ref)]))
 
-/**
- * beadIssueLookup, minting issues first for beads that have none (selective
- * --issues push, seconds). The shared write path of the pre-gate and the
- * post-publish verifier. `dry` (the BD_GITHUB_SYNC_DRY valve) suppresses the
- * mint; a missing DB or gh token yields the plain (possibly empty) lookup.
- */
-export const beadIssueLookupWithMint = (ids, { dry = process.env.BD_GITHUB_SYNC_DRY === '1' } = {}) => {
-  // No bd call of any kind before the DB-exists gate — see header.
-  const dbRoot = initializedDbRoot()
-  if (!dbRoot) return new Map()
-  let byId = beadIssueLookup(ids)
-  const missing = ids.filter(id => !byId.get(id))
-  if (missing.length && !dry) {
-    const pre = preconditions(dbRoot)
-    if (pre.ok) {
-      tryRun('bd', ['github', 'sync', '--push-only', '--issues', missing.join(',')], { env: pre.env, timeout: 45_000 })
-      byId = beadIssueLookup(ids)
-    }
-  }
-  return byId
-}
 
 // Both probes are bounded: these run inside hooks, where a stalled `git` or
 // `bd` (a blocked filesystem, a hung binary) would hang the gate in front of
@@ -1226,7 +1210,13 @@ const hookPrePr = () => {
   const refsText = [blind ? text : '', commitText].filter(Boolean).join('\n') || text
   if (ids.length === 0) return echoIssueRefs(refsText, refs)
 
-  const byId = beadIssueLookupWithMint(ids)
+  // Looked up, never MINTED. The detectors deliberately over-match — a verb
+  // in ordinary unquoted argv (`printf … gh pr create km-new`) reads as a
+  // publish — and while an extra check costs a round, an extra MINT creates a
+  // public issue for a command that is about to be blocked and never runs.
+  // The block below already tells the agent to sync, which is how every bead
+  // in this session got its number anyway.
+  const byId = initializedDbRoot() ? beadIssueLookup(ids) : new Map()
   const mapped = ids.filter(id => byId.get(id)).map(id => ({ id, number: byId.get(id) }))
   const unmapped = ids.filter(id => !byId.get(id))
   // The deny message licenses a KM_ISSUE_REFS_OK=1 re-run, so any #N already
