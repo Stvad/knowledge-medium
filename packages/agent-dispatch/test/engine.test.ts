@@ -5,6 +5,7 @@ import type {BlockData, Graph} from '../src/graph'
 import type {AgentRunResult} from '../src/runner'
 import type {StateStore} from '../src/state'
 import {MAX_ATTEMPTS, MAX_CURSOR_IDS} from '../src/watchers'
+import {withRunFailure} from '../src/runFailure'
 
 const NOW = 1_800_000_000_000
 
@@ -2613,6 +2614,57 @@ describe('retryable infrastructure failures (out of credits, expired login, netw
 
     expect(state.cursors.get('inbox')).toEqual(['a', 'b'])
     expect(state.launches).toHaveLength(1)
+  })
+
+  it('refunds and cools down when pre-claim bridge traffic fails', async () => {
+    // The launch slot is charged at the decision, so a throw between there
+    // and the claim used to leak it: the source stayed pending and repeated
+    // every tick until runsPerHour was gone and real work was deferred for
+    // an hour — by the path meant to prevent exactly that.
+    const {graph} = fakeGraph({
+      backlinks: [{id: 'b-1'}],
+      blocks: {'b-1': {content: '[[claude]] summarize inbox'}},
+    })
+    graph.ancestors = vi.fn(async () => { throw new Error('Target client is not currently connected.') })
+    const state = memoryState()
+    const runTask = vi.fn(async () => okRun())
+    const time = clock()
+    const engine = engineWith({graph, state, runTask, now: time.now, config: mentionConfig({runsPerHour: 2})})
+
+    await engine.tick()
+    await engine.drain()
+
+    expect(runTask).not.toHaveBeenCalled()
+    expect(state.launches).toEqual([])          // slot handed back
+    // And the lane cooled, so the next tick does not immediately repeat it.
+    await engine.tick()
+    await engine.drain()
+    expect(graph.ancestors).toHaveBeenCalledTimes(1)
+  })
+
+  it('believes a cause the thrower stated, over what its message would say', async () => {
+    // The message here matches NO classifier pattern — that is the point.
+    // A delivery failure travels with its cause attached, so the engine
+    // stops depending on having been taught every phrasing in advance.
+    const {graph, blocks} = fakeGraph({
+      backlinks: [{id: 'b-1'}],
+      blocks: {'b-1': {content: '[[claude]] ambient task'}},
+    })
+    const deliverToChannel = vi.fn(async () => {
+      throw withRunFailure('… …', {kind: 'network', retryable: true, label: 'listener is down'})
+    })
+    const engine = engineWith({
+      graph, deliverToChannel,
+      config: parseConfig({
+        watchers: [{kind: 'backlinks', name: 'ambient', target: 'claude', quietMs: 0, delivery: 'channel'}],
+      }),
+    })
+
+    await engine.tick()
+    await engine.drain()
+
+    // Deferred, not parked: the fallback string match would have said `task`.
+    expect(blocks.get('b-1')?.properties?.[PROPS.status]).toBe('queued')
   })
 
   it('a genuine run failure still parks the task and does not arm a cooldown', async () => {

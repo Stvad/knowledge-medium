@@ -147,3 +147,59 @@ export const RETRY_BACKOFF_MS = [30_000, 60_000, 120_000, 300_000] as const
 
 export const retryBackoffMs = (consecutiveFailures: number): number =>
   RETRY_BACKOFF_MS[Math.min(Math.max(consecutiveFailures, 1), RETRY_BACKOFF_MS.length) - 1]
+
+/** A failure whose cause the THROWER already knew.
+ *
+ *  The daemon generates some failures itself — channel delivery, bridge
+ *  calls — and it knows structurally what happened: an HTTP status, an
+ *  abort, a refused connection. Rendering that to a sentence for
+ *  `classifyRunFailure` to re-parse throws the knowledge away, and the
+ *  classifier then has to recognise every phrasing anyone might produce.
+ *  Three separate review findings were exactly that gap — a `503` reply, a
+ *  dropped bridge client, and a fetch timeout, each arriving as an
+ *  unrecognised string in turn. So say it instead of spelling it.
+ *
+ *  Carried as a plain property rather than checked with `instanceof`:
+ *  errors that cross a worker or serialization boundary lose their
+ *  prototype, and a silently-false `instanceof` here would degrade to the
+ *  string matching this exists to replace. */
+const RUN_FAILURE_KEY = '__agentDispatchRunFailure'
+
+export const withRunFailure = (message: string, failure: RunFailureClass): Error =>
+  Object.assign(new Error(message), {[RUN_FAILURE_KEY]: failure})
+
+/** The thrower's own classification, or null when it did not state one. */
+export const statedRunFailure = (error: unknown): RunFailureClass | null => {
+  const stated = (error as Record<string, unknown> | null)?.[RUN_FAILURE_KEY]
+  if (!stated || typeof stated !== 'object') return null
+  const {kind, retryable, label} = stated as Partial<RunFailureClass>
+  return typeof kind === 'string' && typeof retryable === 'boolean' && typeof label === 'string'
+    ? {kind, retryable, label}
+    : null
+}
+
+/** Classify a thrown error: what the thrower stated, else its message. */
+export const classifyThrown = (error: unknown, message: string): RunFailureClass =>
+  statedRunFailure(error)
+  ?? classifyRunFailure({stderr: message, failureText: '', exitCode: null, timedOut: false})
+
+/** The cause of a failed channel POST, from the transport rather than from
+ *  its rendered message. A status the listener CHOSE is authoritative; a
+ *  rejected fetch never got one, and an abort is our own 10s timeout. */
+export const channelFailureFor = (status: number | null, error: unknown): RunFailureClass => {
+  if (status !== null) {
+    if (status === 429 || status === 529) return {kind: 'rate-limit', retryable: true, label: RUN_FAILURE_LABELS['rate-limit']}
+    if (status === 401 || status === 403) return {kind: 'auth', retryable: true, label: RUN_FAILURE_LABELS.auth}
+    if (status >= 500) return {kind: 'network', retryable: true, label: RUN_FAILURE_LABELS.network}
+    // 404/400: the port is wrong or the payload is rejected. Retrying never
+    // fixes either, so this stays a task failure.
+    return {kind: 'task', retryable: false, label: RUN_FAILURE_LABELS.task}
+  }
+  // A timeout is ours (AbortSignal.timeout) and a refused/unreachable
+  // connection is the OS's; both mean the transport, not the task.
+  const name = (error as {name?: unknown} | null)?.name
+  if (name === 'TimeoutError' || name === 'AbortError') {
+    return {kind: 'network', retryable: true, label: RUN_FAILURE_LABELS.network}
+  }
+  return {kind: 'network', retryable: true, label: RUN_FAILURE_LABELS.network}
+}

@@ -13,7 +13,7 @@ import type { Graph } from './graph.js'
 import type { AgentRunOptions, AgentRunResult, RunEvent } from './runner.js'
 import { resumeOptionsForRun, type AgentResumeOptions } from './resumeCommand.js'
 import type { StateStore } from './state.js'
-import { classifyRunFailure, retryBackoffMs, type RunFailureClass } from './runFailure.js'
+import { classifyRunFailure, classifyThrown, retryBackoffMs, type RunFailureClass } from './runFailure.js'
 import { decidePending, diffQueryRows, findThreadSession, MAX_ATTEMPTS, MAX_CURSOR_IDS, taskAttempts, type BlockView } from './watchers.js'
 import { DEFAULT_MENTION_CHANNEL_PROMPT, renderMentionPrompt, renderQueryPrompt } from './prompt.js'
 import { KM_MCP_ALLOWED_TOOLS } from '@knowledge-medium/agent-cli/mcpShared'
@@ -423,29 +423,51 @@ export const createEngine = (deps: EngineDeps) => {
     quietExempt: boolean,
   ) => {
     const {runner} = watcher
-    // Pre-claim bails spawned nothing — refund the budget slot recorded
-    // at the launch decision so phantom launches can't defer real work.
-    const block = await graph.getBlock(sourceId)
-    if (!block) return refundLaunch(launchStamp)
-    const decision = decidePending({source: block, nowMs: now(), quietMs: watcher.quietMs, baselineMs, quietExempt})
-    if (!decision.pending) return refundLaunch(launchStamp)
-    // A Stop on a DEFERRED task that landed after the scan's batched snapshot
-    // is invisible to the tick's stop branch but visible HERE, in the fresh
-    // read. Without this the daemon spawns the executor anyway and bills work
-    // the user explicitly stopped — the next sweep only aborts it mid-run.
-    // The tick's branch terminalizes it on the following pass, so refusing is
-    // enough.
+    // ONE failure boundary over every pre-claim step, and one refund site.
     //
-    // Scoped to `queued` deliberately. A cancel on a block with NO status is
-    // a stale flag no gesture can produce any more, and refusing to claim it
-    // would strand it forever: the tick clears an un-actionable cancel only
-    // for `running`, so nothing else would ever pick that block up. Claiming
-    // it, as before, clears the flag on the terminal write.
-    if (block.properties?.[PROPS.cancel] && block.properties?.[PROPS.status] === 'queued') {
-      log(`[${watcher.name}] not claiming ${sourceId} — a Stop is pending`)
-      return refundLaunch(launchStamp)
-    }
-    const ancestorBlocks = await graph.ancestors(sourceId)
+    // The launch slot is charged at the decision, synchronously, so this
+    // stretch is already spending budget. Its bridge calls used to throw
+    // straight past it into launch()'s catch, which only logs: the slot
+    // stayed spent, no lane cooled, and the still-pending source did it
+    // again on the next tick until runsPerHour was exhausted and real work
+    // was deferred for an hour — the failure this path exists to prevent,
+    // produced by the path itself. Adding a guard per request would have
+    // been the third one; a boundary covers the ones nobody has hit yet.
+    //
+    // Nothing is registered in `running` before this returns, so unwinding
+    // is only: hand the slot back, and cool the lane if the cause warrants.
+    const prepared = await (async () => {
+      const found = await graph.getBlock(sourceId)
+      if (!found) return null
+      const pending = decidePending({source: found, nowMs: now(), quietMs: watcher.quietMs, baselineMs, quietExempt})
+      if (!pending.pending) return null
+      // A Stop on a DEFERRED task that landed after the scan's batched
+      // snapshot is invisible to the tick's stop branch but visible HERE, in
+      // the fresh read. Without this the daemon spawns the executor anyway
+      // and bills work the user explicitly stopped — the next sweep only
+      // aborts it mid-run. The tick's branch terminalizes it on the
+      // following pass, so refusing is enough.
+      //
+      // Scoped to `queued` deliberately. A cancel on a block with NO status
+      // is a stale flag no gesture can produce any more, and refusing to
+      // claim it would strand it forever: the tick clears an un-actionable
+      // cancel only for `running`, so nothing else would ever pick that
+      // block up. Claiming it, as before, clears the flag on the terminal
+      // write.
+      if (found.properties?.[PROPS.cancel] && found.properties?.[PROPS.status] === 'queued') {
+        log(`[${watcher.name}] not claiming ${sourceId} — a Stop is pending`)
+        return null
+      }
+      return {block: found, ancestorBlocks: await graph.ancestors(sourceId), decision: pending}
+    })().catch(error => {
+      const reason = truncate(errorMessage(error))
+      const failure = classifyThrown(error, reason)
+      if (failure.retryable) noteInfraFailure(laneOf(watcher), failure, watcher.name)
+      log(`[${watcher.name}] could not prepare ${sourceId}: ${reason}`)
+      return null
+    })
+    if (!prepared) return refundLaunch(launchStamp)
+    const {block, ancestorBlocks, decision} = prepared
 
     // Resolve the thread session BEFORE claiming so two follow-ups in
     // one thread can't run `--resume <same session>` concurrently.
@@ -872,7 +894,7 @@ export const createEngine = (deps: EngineDeps) => {
       // still parks — a re-run would have to pay for it again.
       const startupFailure = runAttempted || terminalReplyDelivered
         ? null
-        : classifyRunFailure({stderr: reason, failureText: '', exitCode: null, timedOut: false})
+        : classifyThrown(error, reason)
       if (startupFailure?.retryable) {
         // Best-effort: if the defer itself can't be written the block stays
         // `running` and the stale sweep re-queues it, which is the same
@@ -1125,7 +1147,7 @@ export const createEngine = (deps: EngineDeps) => {
         // supposed to apply. Classified like every other delivery failure;
         // an unrecognised one still propagates and is merely logged.
         const reason = truncate(errorMessage(error))
-        const failure = classifyRunFailure({stderr: reason, failureText: '', exitCode: null, timedOut: false})
+        const failure = classifyThrown(error, reason)
         if (failure.retryable) noteInfraFailure(laneOf(watcher), failure, watcher.name)
         throw error
       }
@@ -1186,7 +1208,7 @@ export const createEngine = (deps: EngineDeps) => {
         // re-bill forever — the same degrade-to-today's-behaviour the
         // classifier has everywhere else.
         const reason = truncate(errorMessage(error))
-        const failure = classifyRunFailure({stderr: reason, failureText: '', exitCode: null, timedOut: false})
+        const failure = classifyThrown(error, reason)
         if (failure.retryable) await deferRows(failure)
         throw error
       }

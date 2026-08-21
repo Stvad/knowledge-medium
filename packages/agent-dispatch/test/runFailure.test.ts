@@ -1,5 +1,5 @@
 import {describe, expect, it} from 'vitest'
-import {classifyRunFailure, RETRY_BACKOFF_MS, retryBackoffMs, type RunFailureSignals} from '../src/runFailure'
+import {channelFailureFor, classifyRunFailure, classifyThrown, RETRY_BACKOFF_MS, retryBackoffMs, withRunFailure, type RunFailureSignals} from '../src/runFailure'
 
 const signals = (overrides: Partial<RunFailureSignals> = {}): RunFailureSignals => ({
   stderr: '',
@@ -112,6 +112,47 @@ describe('classifyRunFailure', () => {
   it('keeps a channel 404 terminal — a wrong port is not an outage', () => {
     expect(classifyRunFailure(signals({stderr: 'channel listener replied 404'})))
       .toMatchObject({kind: 'task', retryable: false})
+  })
+})
+
+describe('a thrower that states its own cause', () => {
+  it('is believed over its rendered message', () => {
+    // The whole point: the daemon knows it got a 503 or an abort, so the
+    // engine reads a value instead of matching a sentence. Three review
+    // findings were phrasings this classifier had not been taught.
+    const stated = withRunFailure('anything at all', {kind: 'auth', retryable: true, label: 'nope'})
+    expect(classifyThrown(stated, 'anything at all')).toMatchObject({kind: 'auth', retryable: true})
+  })
+
+  it('falls back to the message when nothing was stated', () => {
+    expect(classifyThrown(new Error('spawn claude ENOENT'), 'spawn claude ENOENT'))
+      .toMatchObject({kind: 'executor', retryable: true})
+  })
+
+  it('ignores a malformed marker rather than trusting it', () => {
+    // A value crossing a serialization boundary can arrive half-shaped;
+    // reading it blind would invent a classification out of junk.
+    const bogus = Object.assign(new Error('spawn claude ENOENT'), {__agentDispatchRunFailure: {kind: 'auth'}})
+    expect(classifyThrown(bogus, 'spawn claude ENOENT')).toMatchObject({kind: 'executor', retryable: true})
+  })
+})
+
+describe('channelFailureFor', () => {
+  it('reads a status the listener chose, without a regex', () => {
+    expect(channelFailureFor(503, null)).toMatchObject({kind: 'network', retryable: true})
+    expect(channelFailureFor(429, null)).toMatchObject({kind: 'rate-limit', retryable: true})
+    expect(channelFailureFor(401, null)).toMatchObject({kind: 'auth', retryable: true})
+  })
+
+  it('keeps a 404 terminal — a wrong port is not an outage', () => {
+    expect(channelFailureFor(404, null)).toMatchObject({kind: 'task', retryable: false})
+  })
+
+  it('treats our own 10s timeout as transport, not as the task failing', () => {
+    // AbortSignal.timeout rejects with a TimeoutError whose MESSAGE the
+    // string matcher never recognised, so a slow delivery parked the task.
+    const timeout = Object.assign(new Error('The operation was aborted due to timeout'), {name: 'TimeoutError'})
+    expect(channelFailureFor(null, timeout)).toMatchObject({kind: 'network', retryable: true})
   })
 })
 
