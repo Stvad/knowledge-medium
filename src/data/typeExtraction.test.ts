@@ -308,6 +308,30 @@ describe('createTypeBlock', () => {
     expect(hasBlockType(adopted!, TYPES_PAGE_TYPE)).toBe(true)
     expect(hasBlockType(adopted!, PAGE_TYPE)).toBe(true)
   })
+
+  it('roots a NESTED Types claimant so its definitions are not inside someone else\'s subtree', async () => {
+    // Tagging alone leaves the Types page — and every definition filed under
+    // it — buried under an unrelated block, where a normal subtree delete of
+    // that ancestor takes the whole thing with it.
+    env = await setup()
+    await env.repo.tx(tx => tx.delete(typesPageBlockId(WS)), {scope: ChangeScope.BlockDefault})
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'host', workspaceId: WS, parentId: null, orderKey: 'y0', content: 'Host'})
+      await tx.create({
+        id: TYPES_CLAIMANT, workspaceId: WS, parentId: 'host', orderKey: 'z0', content: 'My Types',
+      })
+      await tx.setProperty(TYPES_CLAIMANT, aliasesProp, ['Types'])
+    }, {scope: ChangeScope.BlockDefault})
+
+    const typeId = await createTypeBlock(env.repo, {
+      workspaceId: WS, label: 'Task', propertySchemaIds: [],
+    })
+
+    expect((await env.repo.load(TYPES_CLAIMANT))?.parentId).toBeNull()
+    const row = await env.repo.db.get<{parent_id: string}>(
+      'SELECT parent_id FROM blocks WHERE id = ?', [typeId])
+    expect(row.parent_id).toBe(TYPES_CLAIMANT)
+  })
 })
 
 // ──── block-type typeify processor ──────────────────────────────────

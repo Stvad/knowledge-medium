@@ -50,8 +50,7 @@ import {
   assertRoundTrippableReferenceLabel,
 } from '@/data/referenceBlock'
 import { pickLeastUsedTypeColor } from '@/data/typeColors'
-import { resolveTypesPageId } from '@/data/typesPage'
-import { TYPES_PAGE_TYPE } from '@/data/blockTypes'
+import { getOrCreateTypesPage, resolveTypesPageId } from '@/data/typesPage'
 
 // ──── Error classes ─────────────────────────────────────────────────
 
@@ -173,14 +172,21 @@ export async function createTypeBlock(
   // `waitForTypeRegistrationBounded`, which observes `repo.types` — the ACTIVE
   // workspace's registry only — so it could never settle: a 10s hang leaving
   // an orphaned definition block, instead of this immediate error.
-  const typesPageId = await resolveTypesPageId(repo, args.workspaceId)
-  const typesPage = await repo.load(typesPageId)
+  const resolvedTypesPageId = await resolveTypesPageId(repo, args.workspaceId)
+  const typesPage = await repo.load(resolvedTypesPageId)
   if (!typesPage || typesPage.workspaceId !== args.workspaceId) {
     throw new Error(
       `createTypeBlock: no Types page for workspace ${args.workspaceId}. ` +
       `Call getOrCreateTypesPage during workspace bootstrap.`,
     )
   }
+  // The page EXISTS, so this cannot create one — the guard above already
+  // refused that case, which is what keeps a cross-workspace call from
+  // reaching the registration wait. What it does do is finish the adoption:
+  // tag an untyped claimant and move it to the workspace root. Hand-rolling
+  // that here is what left the Types page nested in an unrelated subtree,
+  // where deleting an ancestor takes the page and every definition with it.
+  const typesPageId = (await getOrCreateTypesPage(repo, args.workspaceId)).id
 
   args.signal?.throwIfAborted()
 
@@ -261,17 +267,9 @@ export async function createTypeBlock(
       }
     }
 
-    // Adopt the parent before filing anything under it. `resolveTypesPageId`
-    // deliberately writes nothing, so an untyped user page that claims 'Types'
-    // arrives here as the Types page in every respect EXCEPT its type tags —
-    // and a definition parented under a page nothing recognises as the Types
-    // page is invisible to every `TYPES_PAGE_TYPE` query. That tagging is the
-    // load-bearing part below.
-    //
-    // The two throws are defence in depth, matching the schema re-checks above:
-    // they cover a sync-applied delete or move landing between the pre-tx load
-    // and this tx, and no test drives that window. Deleting either fails
-    // nothing today.
+    // Defence in depth, matching the schema re-checks above: a sync-applied
+    // delete or move landing between the get-or-create and this tx. No test
+    // drives that window; deleting either throw fails nothing today.
     const parentRow = await tx.get(typesPageId)
     if (!parentRow || parentRow.deleted) {
       throw new Error(
@@ -283,12 +281,6 @@ export async function createTypeBlock(
         `createTypeBlock: Types page ${typesPageId} belongs to workspace ${parentRow.workspaceId}`,
       )
     }
-    for (const pageType of [PAGE_TYPE, TYPES_PAGE_TYPE]) {
-      if (!hasBlockType(parentRow, pageType)) {
-        await repo.addTypeInTx(tx, typesPageId, pageType, {}, typeSnapshot)
-      }
-    }
-
     newId = await tx.run(createChild, {
       parentId: typesPageId,
       content: trimmedLabel,
