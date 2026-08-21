@@ -10,6 +10,7 @@ import type {
 import type { Repo } from './repo'
 import {
   parsePropertiesMigration,
+  readIsChildBackedWorkspace,
   parseWorkspaceMemberRow,
   parseWorkspaceRow,
   type WorkspaceMemberRow,
@@ -264,6 +265,78 @@ export const renameWorkspace = async (workspaceId: string, name: string): Promis
     .update({name: trimmed, update_time: Date.now()})
     .eq('id', workspaceId)
   if (error) throw error
+}
+
+/**
+ * Advance a workspace to child-backed properties, then stamp the local replica
+ * so the caller can act on it without waiting for sync to bring it back.
+ *
+ * A direct UPDATE, like `renameWorkspace`: RLS admits writers and the
+ * properties_migration trigger is what narrows this to the OWNER, to the
+ * 'cell' -> 'children' step, and away from e2ee workspaces.
+ *
+ * `.select().single()` is not decoration. An UPDATE that RLS filters to zero
+ * rows SUCCEEDS, so without reading the row back a refusal we are not a writer
+ * for would be indistinguishable from a completed flip.
+ *
+ * The local stamp is the optimistic prime `primeLocalWorkspace` does after
+ * `create_workspace` (see its section banner for why that is local-only).
+ *
+ * `localApplied` is not decoration either. The local `workspaces` row can be
+ * legitimately ABSENT — `resolveWorkspace` admits a URL-hash workspace on the
+ * server's say-so before PowerSync has replicated it — and a 0-row UPDATE is not
+ * an error. Silently, the flip would then be invisible to
+ * `tx.isPropertyChildBackedWorkspace`, and the pass would take its RECONCILE
+ * branch against a workspace that is in fact flipped, which is the one thing the
+ * create-only path exists to prevent. Reported rather than thrown: past the
+ * PostgREST call the flip HAS committed, and a throw here would be caught as
+ * "the flip failed" and reported as "nothing was migrated".
+ *
+ * @returns whether the local replica now reflects the flip.
+ */
+export const flipWorkspaceToChildBackedProperties = async (
+  repo: Repo,
+  workspaceId: string,
+): Promise<{localApplied: boolean}> => {
+  const client = assertSupabase()
+  const {data, error} = await client
+    .from('workspaces')
+    .update({properties_migration: 'children', update_time: Date.now()})
+    .eq('id', workspaceId)
+    .select('properties_migration, update_time')
+    .single()
+  let row = data
+  if (error) {
+    // A lost RESPONSE is not a lost WRITE. Throwing here tells the caller the
+    // flip did not happen, which it turns into "nothing was migrated" — and
+    // skips the committed-flip recovery, undo clear included — while the server
+    // may in fact have applied it. Ask before asserting; if the read fails too
+    // the original error stands, which is the honest ending.
+    const {data: reread} = await client
+      .from('workspaces')
+      .select('properties_migration, update_time')
+      .eq('id', workspaceId)
+      .maybeSingle()
+    if (reread === null || reread.properties_migration !== 'children') throw error
+    row = reread
+  }
+  if (row === null) throw new Error('flip: no workspace row came back')
+  // Everything past the PATCH is inside the catch, the READBACK included: the
+  // flip has committed by now, so no local failure may surface as a rejection —
+  // the caller reads that as "the flip failed" and reports a graph it has not
+  // touched, skipping the recovery this return value exists to trigger.
+  try {
+    await repo.db.execute(
+      `UPDATE workspaces SET properties_migration = ?, update_time = ? WHERE id = ?`,
+      [row.properties_migration, toNumber(row.update_time), workspaceId],
+    )
+    // Read back rather than trusting `rowsAffected`, which PowerSync documents
+    // as possibly 0 for a successful UPDATE under its view system.
+    return {localApplied: await readIsChildBackedWorkspace(repo.db, workspaceId)}
+  } catch (cause) {
+    console.error('[workspaces] flip landed on the server but the local stamp failed:', cause)
+    return {localApplied: false}
+  }
 }
 
 export const updateWorkspaceMemberRole = async (

@@ -228,12 +228,50 @@ export const CREATE_BLOCKS_FIELD_FORM_INDEX_SQL = `
  *  the filter it guards is then skipped over rows it should have caught.
  *
  *  Still as small as the set of field rows; only the live-row predicate is
- *  dropped, not the `= 1`. */
+ *  dropped, not the `= 1`.
+ *
+ *  `parent_id` is the second column for the other tombstone-inclusive question:
+ *  "which fieldIds does THIS block have a tombstoned field row for?", which the
+ *  cell backfill asks per owner inside its writing transaction. Without it that
+ *  lookup scans every field row in the workspace, once per owner — quadratic on
+ *  the graphs the pass exists for. `workspace_id` alone stays a usable prefix,
+ *  so the existence probe above is unaffected.
+ *
+ *  DROPped first because `CREATE INDEX IF NOT EXISTS` will not RESHAPE an index
+ *  that already exists: every client that ran an earlier build has the
+ *  single-column version, and would silently keep it. */
 export const CREATE_BLOCKS_ANY_FIELD_FORM_INDEX_SQL = `
   CREATE INDEX IF NOT EXISTS idx_blocks_any_field_form
-  ON blocks (workspace_id)
+  ON blocks (workspace_id, parent_id)
   WHERE is_field_form = 1
 `
+
+/** Paired with the statement above — see its DROP note.
+ *
+ *  Guarded by {@link dropStaleAnyFieldFormIndex} rather than run unconditionally:
+ *  schema init runs on every app open, so a bare DROP + CREATE rebuilds the
+ *  index every launch, and on the workspaces this migration targets that is a
+ *  full index build in the startup path forever, to fix a shape once. */
+const DROP_STALE_ANY_FIELD_FORM_INDEX_SQL = `
+  DROP INDEX IF EXISTS idx_blocks_any_field_form
+`
+
+/** Reshape `idx_blocks_any_field_form` only when it is actually the old
+ *  single-column form. `CREATE INDEX IF NOT EXISTS` will not reshape an index
+ *  that already exists, so the DROP is required on upgrading devices — and only
+ *  on those. Reads the stored DDL rather than `PRAGMA index_info`, which is a
+ *  plain SELECT through any db handle. */
+export const dropStaleAnyFieldFormIndex = async (db: {
+  getOptional<T>(sql: string, params?: unknown[]): Promise<T | null>
+  execute(sql: string, params?: unknown[]): Promise<unknown>
+}): Promise<void> => {
+  const existing = await db.getOptional<{sql: string | null}>(
+    `SELECT sql FROM sqlite_master WHERE type = 'index' AND name = 'idx_blocks_any_field_form'`,
+  )
+  if (existing === null) return
+  if (existing.sql?.includes('parent_id') === true) return
+  await db.execute(DROP_STALE_ANY_FIELD_FORM_INDEX_SQL)
+}
 
 const powerSyncParamForColumn = (columnName: BlockColumnName): PendingStatementParameter =>
   columnName === 'id' ? 'Id' : {Column: columnName}

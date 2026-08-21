@@ -330,24 +330,192 @@ describe('property cell → children backfill', {timeout: 30_000}, () => {
     expect((await fieldRowsOf(ids[0]!))[0]!.values).toEqual(['edited after the visit'])
   })
 
-  it('refuses to run against a workspace that has already flipped', async () => {
-    // Past the flip the CHILDREN are authoritative and the cell is a derived
-    // read surface, so this direction would overwrite real value rows from a
-    // stale bag. Checked inside the writing transaction because the flip is a
-    // synced column that can arrive between batches.
-    await create('b1', {'demo:note': 'hello'})
-    await sharedDb.db.execute(
-      `INSERT INTO workspaces
-         (id, name, owner_user_id, create_time, update_time, encryption_mode, wk_canary,
-          properties_migration)
-       VALUES (?, ?, ?, 1, 1, 'none', NULL, 'children')`,
-      [WS, 'flipped ws', 'user-1'])
+  describe('past the flip', () => {
+    /** Mark the workspace child-backed. Raw, because that is how the column
+     *  arrives: it is written server-side and synced, never through the tx
+     *  layer — which is also why the pass has to re-read it per batch. */
+    const flip = async () => {
+      await sharedDb.db.execute(
+        `INSERT INTO workspaces
+           (id, name, owner_user_id, create_time, update_time, encryption_mode, wk_canary,
+            properties_migration)
+         VALUES (?, ?, ?, 1, 1, 'none', NULL, 'children')`,
+        [WS, 'flipped ws', 'user-1'])
+    }
 
-    const result = await run()
+    /** Overwrite a cell without going through the tx layer — post-flip a
+     *  `repo.tx` property write dual-writes children, which is the opposite of
+     *  the divergence these tests need. Also the shape a sync arrival has. */
+    const rawCell = async (id: string, properties: Record<string, unknown>) => {
+      await sharedDb.db.execute(
+        `UPDATE blocks SET properties_json = ? WHERE id = ?`,
+        [JSON.stringify(properties), id])
+    }
 
-    expect(result.outcome).toBe('failed')
-    expect(result.reason).toMatch(/child-backed/i)
-    expect(await fieldRowsOf('b1')).toEqual([])
+    it('fills in a cell key that has no field row yet', async () => {
+      // The whole point of flip-then-backfill. Post-flip a cell key with NO
+      // children is the one shape the cell is still the truth for (§5's
+      // pending-materialization rule), so materializing it is exactly what
+      // "backfill the history" means and nothing authoritative is at risk.
+      await create('b1', {'demo:note': 'hello'})
+      await flip()
+
+      expect((await run()).outcome).toBe('ran')
+
+      expect((await fieldRowsOf('b1'))[0]!.values).toEqual(['hello'])
+    })
+
+    it('leaves an existing value row alone when the cell disagrees with it', async () => {
+      // Past the flip the children are the property truth and the cell is a
+      // local derived surface — a device that received value rows from sync
+      // and has not re-projected them holds exactly this shape. Reconciling
+      // from the cell here overwrites a real value with a stale bag.
+      await create('b1', {'demo:note': 'authoritative'})
+      await runPropertyCellBackfill(makeCtx())
+      await flip()
+      await rawCell('b1', {'demo:note': 'stale'})
+
+      await runPropertyCellBackfill(makeCtx())
+
+      expect((await fieldRowsOf('b1'))[0]!.values).toEqual(['authoritative'])
+    })
+
+    it('does not delete the children of a key the cell no longer carries', async () => {
+      // Pre-flip the name list is the cell's keys UNION the ones the existing
+      // field rows stand for, so a key only the CHILDREN have is named and its
+      // children are removed. Post-flip that same union tombstones a value row
+      // the cell simply has not caught up to.
+      await create('b1', {'demo:note': 'kept', 'demo:extra': 'also kept'})
+      await runPropertyCellBackfill(makeCtx())
+      expect(await fieldRowsOf('b1')).toHaveLength(2)
+      await flip()
+      await rawCell('b1', {'demo:note': 'kept'})
+
+      await runPropertyCellBackfill(makeCtx())
+
+      expect(await fieldRowsOf('b1')).toHaveLength(2)
+    })
+
+    it('converges while ordinary editing creates property children under it', async () => {
+      // Pre-flip this pass is the ONLY writer of property-child rows, which is
+      // what makes "the row count stopped moving" mean "converged". Post-flip the
+      // live maintainers are on, so every new property key creates its own field
+      // and value rows — work the pass never did and has nothing to redo. Counting
+      // that as unconverged burned all four sweeps and gave up on a workspace that
+      // was already complete, AFTER the flip had landed.
+      await create('b1', {'demo:note': 'done'})
+      await runPropertyCellBackfill(makeCtx())
+      await flip()
+
+      let n = 0
+      const progress = await runPropertyCellBackfill(makeCtx(), async () => {
+        n += 1
+        await create(`live-${n}`, {'demo:note': `written while it ran ${n}`})
+      })
+
+      expect(progress.sweeps).toBeLessThan(4)
+    })
+
+    it('does not report a run that migrated everything as a total failure', async () => {
+      // The systematic-failure banner keys on "nothing was materialized". Per
+      // sweep, post-flip, that is ALWAYS true of the converging sweep — it is the
+      // one that found nothing pending — while failures keep being counted every
+      // sweep. So the first post-flip run of any workspace holding one undecodable
+      // cell value reported "Nothing was migrated" over a run that migrated the
+      // rest, and suppressed the repair worklist it exists to show.
+      await create('b1', {'demo:note': 'migrates fine'})
+      await create('b2', {})
+      await flip()
+      // Raw, so no processor normalizes it — the shape legacy junk has.
+      await sharedDb.db.execute(`UPDATE blocks SET properties_json = ? WHERE id = ?`,
+        [JSON.stringify({'demo:extra': {not: 'a string'}}), 'b2'])
+
+      const progress = await runPropertyCellBackfill(makeCtx())
+
+      expect(progress.failureCount).toBe(1)
+      expect((await fieldRowsOf('b1'))[0]!.values).toEqual(['migrates fine'])
+      // The per-sweep count is zero on the converging sweep and that is CORRECT;
+      // the run-scoped total is what says whether anything worked.
+      expect(progress.valuesMaterializedTotal).toBeGreaterThan(0)
+    })
+
+    it('does not tell the operator to re-run because someone typed', async () => {
+      // `editedUnderPass` means "the pass rewrote value children from cells that
+      // were changing under it". Create-only rewrites nothing, so post-flip it can
+      // only mean "someone touched a property" — which the dual-write already
+      // handled. The advice it triggers ("run this again") is then a no-op loop,
+      // and near-permanently on: editorSelection and isEditing are registered
+      // properties, so a caret move is a property write.
+      await create('b1', {'demo:note': 'done'})
+      await runPropertyCellBackfill(makeCtx())
+      await flip()
+
+      let n = 0
+      const progress = await runPropertyCellBackfill(makeCtx(), async () => {
+        n += 1
+        // A PROPERTY write, which is what moves the child rows' timestamp — a
+        // content edit would leave the flag clear for the wrong reason.
+        await repo.tx(async tx => { await tx.setProperty('b1', noteProp, `typed ${n}`) },
+          {scope: ChangeScope.BlockDefault, description: 'live edit'})
+      })
+
+      // The dual-write already put that value in the child, so there is nothing
+      // for the operator to re-run.
+      expect((await fieldRowsOf('b1'))[0]!.values).toEqual([`typed ${n}`])
+      expect(progress.editedUnderPass).toBe(false)
+    })
+
+    it('does not resurrect a property that was deleted through its children', async () => {
+      // "A cell key with no live field row" has TWO causes post-flip: history the
+      // pass exists to materialize, and a property DELETED through the children on
+      // a peer whose owner row has not caught up here. Treating the second as the
+      // first recreates the property AND uploads it, undoing the delete for the
+      // whole fleet.
+      await create('b1', {'demo:note': 'deleted on a peer'})
+      await runPropertyCellBackfill(makeCtx())
+      const fieldRow = (await fieldRowsOf('b1'))[0]!
+      await flip()
+      // Raw, so no processor re-projects the owner cell — the shape a
+      // sync-applied delete has while this device still holds the stale bag.
+      await sharedDb.db.execute(
+        `UPDATE blocks SET deleted = 1 WHERE id = ? OR parent_id = ?`,
+        [fieldRow.id, fieldRow.id])
+
+      await runPropertyCellBackfill(makeCtx())
+
+      expect(await fieldRowsOf('b1')).toEqual([])
+    })
+
+    it('converges on a workspace holding a key no schema declares', async () => {
+      // An unregistered key can never get a field row, so it stays in the pending
+      // set for every sweep. If that counts as work, the "materialized nothing"
+      // convergence test never succeeds and the run ends in a give-up — on the
+      // very graphs audit-properties exists to find, and after the flip landed.
+      await create('b1', {'demo:note': 'fine', 'demo:nobody-declares-this': 'x'})
+      await flip()
+
+      const progress = await runPropertyCellBackfill(makeCtx())
+
+      expect((await fieldRowsOf('b1'))[0]!.values).toEqual(['fine'])
+      expect((await repo.load('b1'))?.properties['demo:nobody-declares-this']).toBe('x')
+      expect(progress.sweeps).toBeLessThan(4)
+    })
+
+    it('does not sweep an owner whose cell has emptied out', async () => {
+      // The orphan leg exists to delete, and only to delete: its owners are
+      // the ones whose bag no longer holds anything. Post-flip an empty bag is
+      // not a deleted property, it is an unprojected one, and running the leg
+      // tombstones every value row on the block.
+      await create('b1', {'demo:note': 'kept'})
+      await runPropertyCellBackfill(makeCtx())
+      await flip()
+      await rawCell('b1', {})
+
+      const progress = await runPropertyCellBackfill(makeCtx())
+
+      expect((await fieldRowsOf('b1'))[0]!.values).toEqual(['kept'])
+      expect(progress.orphanedOwnersSwept).toBe(0)
+    })
   })
 
   it('lets an operator run again after completion, so a straggler is not stranded', async () => {

@@ -416,6 +416,24 @@ export class TxImpl implements Tx {
     return flipped
   }
 
+  async reapedPropertyFieldTargets(
+    workspaceId: string,
+    parentId: string,
+  ): Promise<Set<string>> {
+    const rows = await this.ctx.txDb.getAll<{reference_target_id: string}>(
+      // INDEXED BY, and the workspace term exists to reach it: every other
+      // field-row index is `WHERE deleted = 0`, so a tombstone query that let
+      // the planner choose scanned the field rows of the whole DATABASE once
+      // per owner (measured: `SCAN blocks USING INDEX idx_blocks_any_field_form`
+      // as first written). This runs inside the write transaction, per block.
+      `SELECT reference_target_id FROM blocks INDEXED BY idx_blocks_any_field_form
+        WHERE workspace_id = ? AND parent_id = ? AND is_field_form = 1 AND deleted = 1
+          AND reference_target_id IS NOT NULL`,
+      [workspaceId, parentId],
+    )
+    return new Set(rows.map(row => row.reference_target_id))
+  }
+
   /** §9 recognition, fieldId half: does this id name a definition the
    *  workspace's registry can resolve? Shadowed losers COUNT — their field
    *  rows keep classifying (excluded only from the name map / projection). */

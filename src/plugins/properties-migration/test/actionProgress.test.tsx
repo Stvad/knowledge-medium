@@ -20,6 +20,14 @@ vi.mock('@/utils/toast.js', () => ({
   showInfo: (message: string, opts?: unknown) => showInfo(message, opts),
 }))
 vi.mock('../ConfirmMigrationDialog.tsx', () => ({ConfirmMigrationDialog: () => null}))
+// The gesture flips before it backfills, and the fixture below starts at
+// 'cell'. Faked here rather than pre-flipping the fixture, because a
+// pre-flipped workspace takes the create-only path and this file is about what
+// the operator sees during the FULL pass.
+vi.mock('@/data/workspaces', () => ({
+  flipWorkspaceToChildBackedProperties: async () => ({localApplied: true}),
+}))
+vi.mock('@/data/repoProvider', () => ({isRemoteSyncActive: () => true}))
 vi.mock('@/data/internals/propertyCellBackfill', () => ({
   PROPERTY_CELL_BACKFILL_ID: 'properties:cell-to-children',
   countPropertyCellBackfillCandidates: async () => 7,
@@ -33,7 +41,8 @@ import type { Repo } from '@/data/repo'
 import { migratePropertiesToBlocksAction } from '../action.ts'
 
 const progress = (over: Partial<PropertyCellBackfillProgress> = {}): PropertyCellBackfillProgress => ({
-  blocksScanned: 7, blocksMaterialized: 7, valuesMaterialized: 7, sweeps: 2,
+  blocksScanned: 7, blocksMaterialized: 7, valuesMaterialized: 7,
+  valuesMaterializedTotal: 7, sweeps: 2,
   orphanedOwnersSwept: 0, failures: [], failureCount: 0, editedUnderPass: false, ...over,
 })
 
@@ -42,6 +51,9 @@ const runReporting = async (reported: PropertyCellBackfillProgress) => {
   const repo = {
     activeWorkspaceId: 'ws-1',
     db: {getAll: async () => [{n: 7}], getOptional: async () => ({properties_migration: 'cell'})},
+    isReadOnly: false,
+    syncViewGap: async () => null,
+    undoManagerFor: () => ({clear: () => {}}),
     runWorkspaceBackfillNow: async () => {
       emit?.(reported)
       return {outcome: 'ran' as const, undoHistoryCleared: false}
@@ -66,7 +78,8 @@ describe('the migration progress path', () => {
     // handed, which nothing else in the suite exercises.
     await runReporting(progress({editedUnderPass: true}))
 
-    expect(progressHandle.done).toHaveBeenCalledWith(expect.stringMatching(/before flipping/i))
+    expect(progressHandle.done).toHaveBeenCalledWith(
+      expect.stringMatching(/may already be behind/i))
   })
 
   it('gives the repair worklist a stable toast id, so a re-run replaces it', async () => {

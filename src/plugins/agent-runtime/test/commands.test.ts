@@ -679,6 +679,16 @@ describe('agent runtime commands', () => {
   // context — the same seam `repo.runWorkspaceBackfillNow` uses internally,
   // without that race.
   describe('run-backfill run detail', () => {
+    // The properties pass is flip-THEN-backfill, and this verb runs only the
+    // backfill half — so it refuses an un-flipped workspace outright. These
+    // cases are about the run-detail decoration, which lives past that refusal.
+    const flipWorkspace = () => env.repo.db.execute(
+      `INSERT OR REPLACE INTO workspaces
+         (id, name, owner_user_id, create_time, update_time, encryption_mode, wk_canary,
+          properties_migration)
+       VALUES (?, ?, ?, 1, 1, 'none', NULL, 'children')`,
+      [WS, 'flipped', 'user-1'])
+
     const populateLastRun = () => propertyCellBackfill.run({
       workspaceId: WS,
       getAll: (sql, params) => env.repo.db.getAll(sql, params as unknown[] | undefined),
@@ -687,10 +697,20 @@ describe('agent runtime commands', () => {
       resolveFieldSchema: () => undefined,
     })
 
+    it('refuses the properties pass on a workspace that has not been switched over', async () => {
+      // Run in the old order this verb would build machinery nothing recognizes
+      // or maintains and report success — the window flip-first exists to
+      // delete. Refused rather than routed through the flip: `run-backfill <id>`
+      // is generic over backfill ids and has no business owning one runbook.
+      await expect(env.context.runBackfill({backfillId: PROPERTY_CELL_BACKFILL_ID}))
+        .rejects.toThrow(/switched to property blocks first/i)
+    })
+
     it('decorates a `ran` outcome with the pass\'s own counts', async () => {
       // `lastRun` populated for real; this request's own outcome is mocked
       // 'ran' so the decoration condition takes it.
       await populateLastRun()
+      await flipWorkspace()
       const spy = vi.spyOn(env.repo, 'runWorkspaceBackfillNow')
         .mockResolvedValue({outcome: 'ran', undoHistoryCleared: false})
       try {
@@ -708,6 +728,7 @@ describe('agent runtime commands', () => {
       // command-palette's shape, which subscribes to progress and never
       // takes it.
       await populateLastRun()
+      await flipWorkspace()
 
       // This request's own outcome never entered the pass.
       const spy = vi.spyOn(env.repo, 'runWorkspaceBackfillNow')

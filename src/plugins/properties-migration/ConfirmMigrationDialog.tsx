@@ -12,6 +12,10 @@ export interface ConfirmMigrationDialogProps {
   /** Blocks the pass will visit — the same over-approximating predicate the
    *  pass uses, hence "check" rather than "change". */
   blockCount: number
+  /** Already reads properties from child blocks, so the gesture backfills alone
+   *  instead of switching the workspace over first — two materially different
+   *  things to consent to. */
+  childBacked: boolean
 }
 
 /** Confirmation for the one-time properties migration.
@@ -30,9 +34,12 @@ export interface ConfirmMigrationDialogProps {
  *  rather than running a second writer. */
 export const ConfirmMigrationDialog = ({
   blockCount,
+  childBacked,
   resolve,
   cancel,
-}: ConfirmMigrationDialogProps & DialogContextProps<true>) => (
+}: ConfirmMigrationDialogProps & DialogContextProps<true>) => {
+  const blocks = `${blockCount.toLocaleString()} block${blockCount === 1 ? '' : 's'}`
+  return (
   <Dialog open onOpenChange={next => { if (!next) cancel() }}>
     <DialogContent className="max-w-md">
       <DialogHeader>
@@ -40,19 +47,33 @@ export const ConfirmMigrationDialog = ({
       </DialogHeader>
       <div className="space-y-3 text-sm">
         <p>
-          Every <em>registered</em> property on {blockCount.toLocaleString()} block
-          {blockCount === 1 ? '' : 's'} will also be stored as child blocks.
-          Existing values are not changed or moved. A key no schema declares is
-          skipped and stays cell-only — run <code>audit-properties</code> to find
-          those before flipping the workspace.
+          {childBacked
+            ? <>This workspace already reads properties from child blocks.
+                Properties written before that have none yet; this fills them in
+                across {blocks}, and leaves every value already stored as a block
+                exactly as it is.</>
+            : <>This switches the workspace over to storing properties as child
+                blocks, then gives every <em>registered</em> property on {blocks}
+                {' '}the blocks it implies. Existing values are not changed or moved,
+                and a property with no blocks yet keeps being read from where it
+                is now — so the switch itself changes nothing you can see.</>}
+          {' '}A key no schema declares is skipped and stays cell-only — run{' '}
+          <code>audit-properties</code> to find those.
         </p>
         <p>
+          {!childBacked && <>The switch applies to everyone in the workspace, so
+            every device should be online and caught up before you start — a
+            device that is offline with an unsent property edit uploads it into a
+            workspace that has moved on, and that edit is lost. Nothing here can
+            check that for you.{' '}</>}
           This runs on this device only — your other devices receive the result
           through sync, so run it in one place. It can take several minutes.
           Interrupting it is safe: reload or close the tab, then run it again
           <em> on this device</em> and it picks up where it stopped.
         </p>
         <p className="text-destructive">
+          {!childBacked && <>The switch cannot be undone from the app — it only ever
+            moves forward, and reversing it is a hand-run database migration.{' '}</>}
           Undo history for this workspace will be cleared. Undoing an edit made
           before the migration would revert part of it.
         </p>
@@ -63,4 +84,5 @@ export const ConfirmMigrationDialog = ({
       </DialogFooter>
     </DialogContent>
   </Dialog>
-)
+  )
+}
