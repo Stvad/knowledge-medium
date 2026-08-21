@@ -827,13 +827,18 @@
       not migrate &mdash; the most dangerous possible shape for a one-way step. The flip
       gate is now asked a second time, with the write's outcome rather than its
       forecast.</li>
-    <li><strong>A blind tombstone restore.</strong> Bringing back the stored bag meant a
-      definition whose preset had been switched to <code>date</code> came back as
-      <code>date</code> and rewrote every value of its key on the next backfill &mdash;
-      the exact retroactive rewrite the codec-selection rule above exists to prevent,
-      performed by the same module. Restores now re-assert the fields, MERGED over the
-      stored bag (the patch replaces it wholesale, so building it from the owned fields
-      alone would drop <code>types</code> and un-type the definition).</li>
+    <li><strong>Tombstoned definitions are NOT restored</strong> (reversing this PR's
+      own first cut). A blind restore brought the stored bag back, so a definition whose
+      preset had been switched to <code>date</code> came back as <code>date</code> and
+      rewrote every value of its key on the next backfill &mdash; the exact retroactive
+      rewrite the codec-selection rule above exists to prevent, performed by the same
+      module. Restoring it <em>faithfully</em> then needed three mechanisms arriving a
+      review round apart (re-assert the parser's required fields, merge over the stored
+      bag rather than replace it, restore the definition's own property children) to
+      guard one rare operator action. A deletion is an instruction: synthesis now skips
+      the key, names the block, and the flip refuses until the operator undoes the
+      deletion or deletes the key. That closed the children-left-tombstoned bug by
+      construction rather than fixing it.</li>
   </ul>
   <p>Two further corrections worth carrying: the e2ee gate reads the durable
   <strong>mode pin</strong>, never <code>workspaces.encryption_mode</code> &mdash;

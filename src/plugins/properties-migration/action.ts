@@ -374,10 +374,15 @@ export const migratePropertiesToBlocksAction = ({repo}: {repo: Repo}): ActionCon
       // Assumes no workspace has run an earlier build's pass, so none holds
       // stale property machinery. Owner's call not to carry a check for a state
       // that cannot exist.
-      // The LAST check before the one-way half. Everything above it — the
-      // post-dialog check, the fitness read, synthesis — has an await after it,
-      // and this gesture's standing rule is that it does not act on a workspace
-      // that is no longer open.
+      // The LAST check before the one-way half, and the second of exactly two —
+      // NOT a rule applied at every await. Each guards a step whose cost the
+      // user cannot take back: the post-dialog one because a confirmation is a
+      // user-length pause, this one because the flip is fleet-wide and
+      // irreversible and the operator should be watching it land. Synthesis
+      // deliberately has no such check: it writes dormant blocks derived from,
+      // and scoped to, the workspace named here, which is the workspace the
+      // user consented for — navigating away does not withdraw that, and the
+      // data layer has no business reading navigation state to find out.
       if (repo.activeWorkspaceId !== workspaceId) {
         banner.fail('Stopped before switching this workspace over: a different workspace ' +
           'is open now. Nothing was switched.' + undoNote(undoCleared))
