@@ -14,6 +14,9 @@
  *     `block-type:label` makes `UserTypesService.tryBuildType` drop the
  *     type, so `book` tagged `block-type` would otherwise register
  *     nothing;
+ *   - **refuse the tag** when content and an explicit `block-type:label`
+ *     are two different names (`blockType.nameConflict`) — the one shape
+ *     that leaves the alias unreconcilable on a later rename;
  *   - **tag it PAGE_TYPE** so it doubles as a navigable `[[Label]]` page
  *     (matches the `createTypeBlock` "type flow" pattern);
  *   - **ensure its label is in `alias`** so `[[Label]]` resolves to THIS
@@ -37,6 +40,7 @@
  */
 
 import {
+  ProcessorRejection,
   defineSameTxProcessor,
   type AnySameTxProcessor,
 } from '@/data/api'
@@ -57,6 +61,11 @@ import { seededDefinitionKey } from '@/data/definitionSeeds'
 import { isTypeSeedKey } from '@/data/typeSeeds'
 
 export const BLOCK_TYPE_TYPEIFY_PROCESSOR_NAME = 'core.blockTypeTypeify'
+
+/** Refusal code for a tag whose `content` and `block-type:label` are two
+ *  different names. No `rejectionToastFacet` contribution: the generic
+ *  route falls back to the raw message, which already says what to fix. */
+export const BLOCK_TYPE_NAME_CONFLICT = 'blockType.nameConflict'
 
 export const BLOCK_TYPE_TYPEIFY_PROCESSOR = defineSameTxProcessor({
   name: BLOCK_TYPE_TYPEIFY_PROCESSOR_NAME,
@@ -86,7 +95,8 @@ export const BLOCK_TYPE_TYPEIFY_PROCESSOR = defineSameTxProcessor({
 
       const rawLabel = after.properties[blockTypeLabelProp.name]
       const currentLabel = (typeof rawLabel === 'string' ? rawLabel : '').trim()
-      const name = currentLabel || after.content.trim()
+      const trimmedContent = after.content.trim()
+      const name = currentLabel || trimmedContent
 
       // This adopts existing content as the type's name and claims it as
       // an alias, on ANY path that adds `block-type` — so the check has to
@@ -104,17 +114,34 @@ export const BLOCK_TYPE_TYPEIFY_PROCESSOR = defineSameTxProcessor({
         assertRoundTrippableReferenceLabel(name, 'Block type label')
       }
 
-      // An explicit label short-circuits `name`, so the content is neither
-      // adopted nor rewritten below — and the checks above never saw it.
-      // Grammar-shaped content surviving on a type block is the residue
-      // that matters: `core.deriveReferenceTarget` stamps the row as a
-      // field form, and on a child-backed page the finished type projects
-      // as property machinery instead of appearing in the outline.
-      if (currentLabel !== '') {
-        const survivingContent = after.content.trim()
-        if (survivingContent !== '') {
-          assertNotGrammarShapedLabel(survivingContent, 'Block type content')
-        }
+      // `content`, `block-type:label` and the claimed alias are three
+      // spellings of ONE name — a type IS the page its name addresses, and
+      // every other minting path writes them equal. `aliasSyncProcessor`
+      // depends on that: it reconciles a rename by matching the OLD CONTENT,
+      // so an alias tracking the LABEL has no entry to replace — its rule 2
+      // appends the new name and the old one stays claimed forever, leaving
+      // `[[oldName]]` pointed at the renamed type and `alias.collision` on
+      // any later attempt to re-use that name.
+      //
+      // An explicit label short-circuits `name`, making this the only path
+      // that can mint that shape — so it is refused HERE rather than
+      // repaired at rename time, where rule 2's heal is deliberately
+      // additive and a repair could not tell the type's own name claim from
+      // a user-added alias equal to it. Nor is `content` rewritten to match:
+      // in this branch it is text the user typed, not a whitespace variant
+      // of the label.
+      //
+      // Subsumes the grammar-shaped-CONTENT check this replaces — surviving
+      // content is now always the label, which the checks above already ran.
+      if (currentLabel !== '' && trimmedContent !== '' && trimmedContent !== currentLabel) {
+        throw new ProcessorRejection(
+          `Can't make this block a type: its text (${JSON.stringify(trimmedContent)}) and its ` +
+          `${blockTypeLabelProp.name} (${JSON.stringify(currentLabel)}) are different names, but a type ` +
+          `has ONE name — its text is the page title that "[[name]]" resolves to. Clear one of them, ` +
+          `or make them match, and tag it again.`,
+          BLOCK_TYPE_NAME_CONFLICT,
+          {blockId: row.id, content: after.content, label: currentLabel},
+        )
       }
 
       // PAGE_TYPE via the blessed raw membership helper (a full
@@ -126,17 +153,16 @@ export const BLOCK_TYPE_TYPEIFY_PROCESSOR = defineSameTxProcessor({
       }
       if (currentLabel === '' && name !== '') {
         await ctx.tx.setProperty(row.id, blockTypeLabelProp, name)
-        // Trim the block's own content to the clean name too. `name` was
-        // adopted FROM `content` (`content.trim()`), so this only strips
-        // surrounding whitespace — it never clobbers meaningful text. It
-        // keeps content == label == alias, which matters on a LATER
-        // rename: `aliasSyncProcessor` replaces aliases by matching the
-        // OLD content, so a `content` of "  Book" against an alias of
-        // "Book" would leave the stale alias claimed (and `[[Book]]`
-        // resolving to the renamed type) instead of being replaced.
-        if (after.content !== name) {
-          await ctx.tx.update(row.id, {content: name})
-        }
+      }
+      // Store the one name in `content` too, so content == label == alias.
+      // Never lossy by the time it runs: the refusal above leaves only
+      // content that is blank or a whitespace-padded spelling of `name`.
+      // It is what makes a LATER rename replace the alias instead of
+      // appending — `aliasSyncProcessor` matches aliases by OLD content, so
+      // a `content` of "  Book" against an alias of "Book" would strand the
+      // stale alias and keep `[[Book]]` resolving to the renamed type.
+      if (name !== '' && after.content !== name) {
+        await ctx.tx.update(row.id, {content: name})
       }
       if (name !== '') {
         const aliases = getAliases(after)
