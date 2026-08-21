@@ -1002,6 +1002,56 @@ describe('repo.query.blockTypesByIds', () => {
   })
 })
 
+describe('repo.query.aliasClaimants', () => {
+  // Same sync-applied seeding as `aliasClaimantCounts` below, for the same
+  // reason: `repo.tx` cannot produce a co-claim, the uniqueness trigger
+  // rejects it. What this query adds over the counts is the ROWS — a consumer
+  // asking "who else claims my name" needs to identify them, not tally them.
+  const claimRaw = async (id: string, alias: string, opts: {
+    workspaceId?: string; deleted?: number; createdAt?: number
+  } = {}) => {
+    await env.h.db.execute(
+      `INSERT INTO blocks (id, workspace_id, parent_id, order_key, content, properties_json,
+        references_json, created_at, updated_at, user_updated_at, created_by, updated_by, deleted)
+       VALUES (?, ?, NULL, ?, ?, ?, '[]', ?, 1, 1, 'u', 'u', ?)`,
+      [
+        id, opts.workspaceId ?? WS, `k-${id}`, id,
+        JSON.stringify({[aliasesProp.name]: [alias]}),
+        opts.createdAt ?? 1, opts.deleted ?? 0,
+      ],
+    )
+  }
+
+  it('returns every live claimant, oldest first', async () => {
+    await claimRaw('newer', 'Journal', {createdAt: 200})
+    await claimRaw('older', 'Journal', {createdAt: 100})
+    await claimRaw('gone', 'Journal', {createdAt: 50, deleted: 1})
+    await claimRaw('elsewhere', 'Journal', {createdAt: 10, workspaceId: OTHER_WS})
+    await claimRaw('unrelated', 'Other', {createdAt: 20})
+
+    const out = await env.repo.query.aliasClaimants({workspaceId: WS, alias: 'Journal'}).load()
+    expect(out.map(block => block.id)).toEqual(['older', 'newer'])
+  })
+
+  it('returns [] for an unclaimed alias and for blank arguments', async () => {
+    await claimRaw('page', 'Journal')
+    expect(await env.repo.query.aliasClaimants({workspaceId: WS, alias: 'Nobody'}).load()).toEqual([])
+    expect(await env.repo.query.aliasClaimants({workspaceId: WS, alias: ''}).load()).toEqual([])
+    expect(await env.repo.query.aliasClaimants({workspaceId: '', alias: 'Journal'}).load()).toEqual([])
+  })
+
+  it('invalidates when a claimant appears or leaves', async () => {
+    await create({id: 'canonical', aliases: ['Journal']})
+    const handle = env.repo.query.aliasClaimants({workspaceId: WS, alias: 'Journal'})
+    expect((await handle.load()).map(block => block.id)).toEqual(['canonical'])
+
+    await env.repo.tx(tx => tx.delete('canonical'), {scope: ChangeScope.BlockDefault})
+    await vi.waitFor(async () => {
+      expect(await handle.load()).toEqual([])
+    })
+  })
+})
+
 describe('repo.query.aliasClaimantCounts', () => {
   it('counts live claimants per alias, ignoring deleted rows and other workspaces', async () => {
     // Duplicate claims cannot go through `repo.tx` — the alias-uniqueness

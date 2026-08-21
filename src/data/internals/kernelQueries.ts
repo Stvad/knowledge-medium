@@ -1663,6 +1663,40 @@ export const aliasClaimantCountsQuery = defineQuery<
   },
 })
 
+/** Every LIVE claimant of an exact alias in a workspace, oldest first.
+ *
+ *  `aliasLookup` answers "the block named X" and settles ties on
+ *  `created_at`. That is the wrong question for a caller deciding whether a
+ *  name is CONTESTED: the uniqueness trigger skips sync-apply, so two devices
+ *  that create the same page offline both keep their claim, and a page can
+ *  hold its own name and share it at the same time — which a single-row
+ *  lookup reports as "fine, that's you".
+ *
+ *  Rows rather than the `aliasClaimantCounts` tally because the caller has to
+ *  ACT on the others: name them, open them, fold them in. Counts answer "is
+ *  this alias contested" for a list already truncated to a display limit;
+ *  this answers "who, exactly". */
+export const aliasClaimantsQuery = defineQuery<
+  {workspaceId: string; alias: string},
+  BlockData[]
+>({
+  name: 'core.aliasClaimants',
+  argsSchema: z.object({workspaceId: z.string(), alias: z.string()}),
+  resultSchema: blockDataArraySchema,
+  resolve: async ({workspaceId, alias}, ctx) => {
+    if (!workspaceId || !alias) return []
+    ctx.depend({
+      kind: 'plugin',
+      channel: KERNEL_ALIASES_CHANNEL,
+      key: kernelAliasesKey(workspaceId),
+    })
+    const rows = await ctx.db.getAll<BlockRow>(
+      SELECT_BLOCKS_BY_ALIAS_IN_WORKSPACE_SQL, [workspaceId, alias],
+    )
+    return ctx.hydrateBlocks(asBlockRows(rows))
+  },
+})
+
 /** Single-block lookup by exact alias in a workspace. */
 export const aliasLookupQuery = defineQuery<
   {workspaceId: string; alias: string},
@@ -1741,6 +1775,7 @@ export const KERNEL_QUERIES: ReadonlyArray<AnyQuery> = [
   aliasMatchesFuzzyQuery,
   blockTypesByIdsQuery,
   aliasClaimantCountsQuery,
+  aliasClaimantsQuery,
   aliasLookupQuery,
   findExtensionBlocksQuery,
 ]
@@ -1771,6 +1806,7 @@ declare module '@/data/api' {
     'core.aliasMatchesFuzzy': typeof aliasMatchesFuzzyQuery
     'core.blockTypesByIds': typeof blockTypesByIdsQuery
     'core.aliasClaimantCounts': typeof aliasClaimantCountsQuery
+    'core.aliasClaimants': typeof aliasClaimantsQuery
     'core.aliasLookup': typeof aliasLookupQuery
     'core.findExtensionBlocks': typeof findExtensionBlocksQuery
   }

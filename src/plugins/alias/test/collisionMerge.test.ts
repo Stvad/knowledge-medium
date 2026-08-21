@@ -42,6 +42,24 @@ const aliasProperty = (aliases: readonly string[]) => ({
   [aliasesProp.name]: aliasesProp.codec.encode([...aliases]),
 })
 
+/** A second live claimant of a name another block already holds. `repo.tx`
+ *  cannot produce this — the uniqueness trigger rejects it — but sync-apply
+ *  can, because that trigger's `WHEN` guard skips `tx_context.source IS NULL`.
+ *  A raw insert is the same shape and still maintains `block_aliases`. */
+const coClaimRaw = async (
+  id: string,
+  content: string,
+  alias: string,
+  createdAt: number,
+): Promise<void> => {
+  await env.h.db.execute(
+    `INSERT INTO blocks (id, workspace_id, parent_id, order_key, content, properties_json,
+      references_json, created_at, updated_at, user_updated_at, created_by, updated_by, deleted)
+     VALUES (?, ?, NULL, ?, ?, ?, '[]', ?, ?, ?, 'u', 'u', 0)`,
+    [id, WS, `k-${id}`, content, JSON.stringify(aliasProperty([alias])), createdAt, createdAt, createdAt],
+  )
+}
+
 const createBlock = async (
   id: string,
   content: string,
@@ -68,7 +86,7 @@ describe('alias.mergeCollision', () => {
 
     await env.repo.run(ALIAS_COLLISION_MERGE_MUTATOR, {
       intoId: 'target',
-      fromId: 'source',
+      fromIds: ['source'],
       collisionAlias: 'Existing',
       dropSourceAliases: ['Partial'],
     })
@@ -99,7 +117,7 @@ describe('alias.mergeCollision', () => {
 
     await expect(env.repo.run(ALIAS_COLLISION_MERGE_MUTATOR, {
       intoId: 'descendant',
-      fromId: 'ancestor',
+      fromIds: ['ancestor'],
       collisionAlias: 'Descendant',
     })).rejects.toBeInstanceOf(MergeIntoDescendantError)
 
@@ -114,7 +132,7 @@ describe('alias.mergeCollision', () => {
 
     await env.repo.run(ALIAS_COLLISION_MERGE_MUTATOR, {
       intoId: 'target',
-      fromId: 'source',
+      fromIds: ['source'],
       collisionAlias: 'Existing',
     })
 
@@ -136,7 +154,7 @@ describe('alias.mergeCollision', () => {
 
     await env.repo.run(ALIAS_COLLISION_MERGE_MUTATOR, {
       intoId: 'canonical',
-      fromId: 'squatter',
+      fromIds: ['squatter'],
       collisionAlias: 'Journal',
     })
 
@@ -155,7 +173,7 @@ describe('alias.mergeCollision', () => {
 
     await env.repo.run(ALIAS_COLLISION_MERGE_MUTATOR, {
       intoId: 'canonical',
-      fromId: 'squatter',
+      fromIds: ['squatter'],
       collisionAlias: 'Journal',
       sourceIsAliasOwner: true,
     })
@@ -166,6 +184,47 @@ describe('alias.mergeCollision', () => {
     expect(await env.repo.load('squatter')).toBeNull()
     expect((await env.repo.load('third'))?.properties[aliasesProp.name])
       .toEqual(aliasesProp.codec.encode(['Daily Log']))
+  })
+
+  it('folds several claimants of one alias in a single transaction', async () => {
+    // The state a local tx cannot build: the uniqueness trigger skips
+    // sync-apply, so two devices creating the same page offline both keep
+    // their claim. Raw inserts are that arrival shape.
+    await createBlock('canonical', 'Journal', [], 'a0')
+    await coClaimRaw('rival-a', 'First', 'Journal', 1_000)
+    await coClaimRaw('rival-b', 'Second', 'Journal', 2_000)
+
+    await env.repo.run(ALIAS_COLLISION_MERGE_MUTATOR, {
+      intoId: 'canonical',
+      fromIds: ['rival-a', 'rival-b'],
+      collisionAlias: 'Journal',
+      sourceIsAliasOwner: true,
+    })
+
+    // One survivor holding the name, with both absorbed titles preserved.
+    expect((await env.repo.load('canonical'))?.properties[aliasesProp.name])
+      .toEqual(aliasesProp.codec.encode(['Journal', 'First', 'Second']))
+    expect(await env.repo.load('rival-a')).toBeNull()
+    expect(await env.repo.load('rival-b')).toBeNull()
+  })
+
+  it('leaves every claimant alone when one of them is refused', async () => {
+    // Partial folds are the failure mode worth pinning: absorbing one rival and
+    // then rejecting on the next would tombstone a page for a merge that never
+    // completed. One transaction means all or nothing.
+    await createBlock('canonical', 'Journal', [], 'a0')
+    await coClaimRaw('rival-a', 'First', 'Journal', 1_000)
+    await createBlock('unrelated', 'Elsewhere', ['Something else'], 'a3')
+
+    await expect(env.repo.run(ALIAS_COLLISION_MERGE_MUTATOR, {
+      intoId: 'canonical',
+      fromIds: ['rival-a', 'unrelated'],
+      collisionAlias: 'Journal',
+      sourceIsAliasOwner: true,
+    })).rejects.toThrow(/no longer claims/)
+
+    expect((await env.repo.load('rival-a'))?.deleted).toBe(false)
+    expect((await env.repo.load('unrelated'))?.deleted).toBe(false)
   })
 
   it('refuses when the target was renamed away from the contested name', async () => {
@@ -179,7 +238,7 @@ describe('alias.mergeCollision', () => {
 
     await expect(env.repo.run(ALIAS_COLLISION_MERGE_MUTATOR, {
       intoId: 'canonical',
-      fromId: 'squatter',
+      fromIds: ['squatter'],
       collisionAlias: 'Journal',
       sourceIsAliasOwner: true,
     })).rejects.toThrow(/no longer named/)
@@ -198,7 +257,7 @@ describe('alias.mergeCollision', () => {
 
     await expect(env.repo.run(ALIAS_COLLISION_MERGE_MUTATOR, {
       intoId: 'canonical',
-      fromId: 'other',
+      fromIds: ['other'],
       collisionAlias: 'Journal',
       sourceIsAliasOwner: true,
     })).rejects.toThrow(/no longer claims/)
