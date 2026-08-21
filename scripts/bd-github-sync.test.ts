@@ -1068,9 +1068,10 @@ describe('hookPrePr process behavior', { timeout: 20_000 }, () => {
     expect(shimCalls()).toBe('')
   })
 
-  // The #N echo-gate survives pre-publish ONLY for gh pr merge: merge text
-  // lands in the merge commit, which no post-publication repair can edit.
-  // Every other publish hands its refs to bd-publish-verify.mjs.
+  // The #N echo-gate survives pre-publish for the verifier-BLIND class —
+  // merge, review, close/reopen, graphql, response-hiding or captured
+  // output — each pinned below. Publishes the verifier can read hand their
+  // refs to bd-publish-verify.mjs.
   it('echoes issue references on gh pr merge with their real titles and blocks once', () => {
     const { hook } = makeRepo({ dbReady: true, ghIssues: { 653: { title: 'Real GC failure', state: 'open' } } })
     const r = hook('gh pr merge 12 --squash --body "relates to #653 and #999"')
@@ -1177,6 +1178,17 @@ describe('hookPrePr process behavior', { timeout: 20_000 }, () => {
     expect(r.status).toBe(2)
     expect(r.stderr).toContain('close keyword targets a PR')
     expect(hook('gh pr edit 12 --body "relates to #653" 2>/dev/null').status).toBe(0)
+    // command substitution captures the URL the same way a redirect does…
+    expect(hook('captured=$(gh pr edit 12 --body="Fixes #700")').status).toBe(2)
+    // …but a substitution merely FEEDING an argument is not a captured publish
+    expect(hook('gh pr comment 1 --body "$(cat body.md)"').status).toBe(0)
+  })
+
+  it('treats every body-bearing file flag as outside-command text on blind publishes', () => {
+    const { hook } = makeRepo({ dbReady: true })
+    expect(hook('gh release edit v1 --notes-file msg.md >/dev/null').status).toBe(2)
+    expect(hook('gh pr create --template msg.md >/dev/null').status).toBe(2)
+    expect(hook('gh pr create -Tmsg.md >/dev/null').status).toBe(2)
   })
 
   // When the invocation also publishes, the commit leg scans raw text only:

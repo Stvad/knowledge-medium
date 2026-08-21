@@ -1073,13 +1073,21 @@ const hookPrePr = () => {
   // An unquoted stdout redirect swallows the URL the verifier needs — a
   // redirected publish is blind no matter the verb. `2>` (stderr-only) is
   // excluded: the Bash tool merges stderr into the captured stdout anyway.
+  // A gh call INSIDE a substitution is equally blind — the shell captures
+  // its output — while a substitution merely feeding an argument is not.
   const redirected = /(?<!2)>(?!&2)/.test(sk)
-  const blind = matchesUnrepairableCommand(cmd) || graphqlApi || opaqueApi || ((isPublish || apiPublish) && redirected)
+  const capturedGh = /\$\([^)]*\bgh\s|`[^`]*\bgh\s/.test(cmd)
+  const blind =
+    matchesUnrepairableCommand(cmd) ||
+    graphqlApi ||
+    opaqueApi ||
+    ((isPublish || apiPublish) && (redirected || capturedGh))
   if (blind && !(allowsIssueRefs(cmd) && allowsBeadIds(cmd))) {
-    // -F is matched without a trailing boundary: the CLI accepts the
-    // ATTACHED value form (-Fmsgfile), which is outside-command text too.
+    // Any *file long flag (body-file, file, notes-file, …), --template and
+    // --input carry text this gate cannot read; -F/-T are matched without a
+    // trailing boundary because the CLI accepts ATTACHED values (-Fmsgfile).
     const textOutsideCommand =
-      /(?<![\w-])(?:--body-file|--file|--input)\b|(?<![\w-])-F|[$`]/.test(cmd) ||
+      /(?<![\w-])--(?:[a-z-]*file|input|template)\b|(?<![\w-])-[FT]|[$`]/.test(cmd) ||
       (matchesApiPublish(cmd) && /@/.test(cmd))
     if (textOutsideCommand) {
       console.error(
