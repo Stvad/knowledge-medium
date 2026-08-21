@@ -498,6 +498,28 @@ describe('applyPropertyDefinitionSynthesis: the id is occupied, or the key stopp
       expect.objectContaining({name: 'demo:orphan'}), id, WS)
   })
 
+  it('repairs a tombstone whose property-schema type was stripped before deletion', async () => {
+    // The name check reads the bag directly, so it passes for a row whose type
+    // was removed. Restoring that verbatim commits a live row the metadata
+    // parser rejects — `appendUserSchema` throws after the tx, and every later
+    // run reads the occupant as `rejected`. Stuck until repaired by hand.
+    await rawCell('b1', {'demo:orphan': 'hello'})
+    await applyPropertyDefinitionSynthesis(repo, await planFor())
+    const id = synthesizedPropertyDefinitionBlockId(WS, 'demo:orphan')
+    await sharedDb.db.execute(
+      `UPDATE blocks SET properties_json = json_remove(properties_json, '$.types') WHERE id = ?`,
+      [id])
+    await sharedDb.db.execute(`DELETE FROM block_types WHERE block_id = ?`, [id])
+    await repo.tx(async tx => { await tx.delete(id) },
+                  {scope: ChangeScope.BlockDefault, description: 'delete'})
+    await untilKeyUnresolved('demo:orphan')
+
+    const result = await applyPropertyDefinitionSynthesis(repo, await planFor())
+
+    expect(result).toMatchObject({restored: 1})
+    expect(repo.propertySchemaResolverFor(WS).resolve('demo:orphan').status).toBe('resolved')
+  })
+
   it('refuses to restore a tombstone that is no longer this key\'s definition', async () => {
     await rawCell('b1', {'demo:orphan': 'hello'})
     await applyPropertyDefinitionSynthesis(repo, await planFor())

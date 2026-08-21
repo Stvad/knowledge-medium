@@ -767,7 +767,7 @@
       <code>new Date()</code> is lenient enough (<code>"2026"</code>,
       <code>"Sat Aug 20 2026"</code>) that the class it would claim is wider than it
       looks. Date-shaped keys come out as <code>string</code>, which is exact, and the
-      definition is hidden precisely so someone looks at it.
+      definition is visible precisely so someone looks at it.
       <code>boolean</code>/<code>number</code>/<code>raw-json</code> round-trip exactly.
       <code>string</code> has one tracked exception (issue #688, not introduced here and
       not synthesis-specific): a value that is itself field-form content is written into

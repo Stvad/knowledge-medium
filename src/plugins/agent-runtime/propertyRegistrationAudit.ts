@@ -123,7 +123,8 @@ const undeclaredFix =
   'child-backed. Fix IN THIS ORDER: (1) if an extension owns the key, install / ' +
   'enable it so its seed materializes the definition; (2) only then run "Migrate ' +
   'properties to child blocks" from the palette, whose §9 orphan synthesis mints a ' +
-  'hidden user-origin definition with a preset inferred from the stored values. ' +
+  'user-origin definition with a preset inferred from the stored values, VISIBLE in the ' +
+  'property panel so the guess can be checked. ' +
   'Synthesizing first and enabling the owner later collides in the winner machinery ' +
   "and strands field rows on the loser's fieldId. Registering is additive — no cell " +
   'value is rewritten.'

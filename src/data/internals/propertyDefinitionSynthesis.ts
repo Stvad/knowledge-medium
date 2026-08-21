@@ -105,7 +105,7 @@ export type SynthesizedPresetId = 'boolean' | 'number' | 'string' | 'raw-json'
  * lenient enough ("2026", "Sat Aug 20 2026") that the class it would claim is
  * wider than it looks. Date-shaped keys come out as `string`, which is exact;
  * switching the definition's preset afterwards is one click, and the
- * definition is minted hidden precisely so it gets that look.
+ * definition is minted VISIBLE precisely so it gets that look.
  *
  * Mixed and structured values fall to `raw-json` (identity in, identity out).
  */
@@ -599,6 +599,15 @@ export const applyPropertyDefinitionSynthesis = async (
         // rewrote every value of the key on the next backfill, defeating
         // `inferPresetId`'s entire selection criterion.
         await tx.restore(id, restoredDefinitionProperties(occupancy.block.properties, candidate))
+        // Re-assert TYPE membership as well as the fields. The name check above
+        // reads the bag directly, so it passes for a row whose `property-schema`
+        // type was stripped (the type API, a raw write, an import) before the
+        // delete — and restoring that verbatim commits a live row
+        // `parsePropertyDefinitionMetadata` rejects. `appendUserSchema` then
+        // throws AFTER the transaction, and every later run reads the occupant
+        // as `rejected`: stuck until someone repairs it by hand. Idempotent when
+        // the type is already there, so this is a repair, not a second write.
+        await repo.addTypeInTx(tx, id, PROPERTY_SCHEMA_TYPE, {})
         restored += 1
         registrations.push({blockId: id, schema: schemaFor(candidate.key, preset)})
         continue
