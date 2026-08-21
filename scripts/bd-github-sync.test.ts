@@ -1154,6 +1154,29 @@ describe('hookPrePr process behavior', { timeout: 20_000 }, () => {
     expect(hook('KM_ISSUE_REFS_OK=1 KM_ALLOW_BEAD_IDS=1 gh pr merge 12 --body "$(cat msg)"').status).toBe(0)
   })
 
+  // Quoted membership words reach gh unquoted but are blanked from the
+  // skeleton — the raw text answers for them too.
+  it('classifies quoted graphql/output-hiding words from the raw command', () => {
+    const { hook } = makeRepo({ dbReady: true, ghIssues: { 653: { title: 'Real GC failure', state: 'open' } } })
+    const r = hook('gh api "--silent" repos/Stvad/knowledge-medium/issues/1/comments -f body="see #653"')
+    expect(r.status).toBe(2)
+    expect(r.stderr).toContain('#653 → "Real GC failure" (issue, open)')
+    const g = hook(`gh api "graphql" -f query='mutation { addComment(input: {body: "tracks km-zzzz"}) { x } }'`)
+    expect(g.status).toBe(2)
+    expect(g.stderr).toContain('km-zzzz')
+  })
+
+  // An unquoted stdout redirect swallows the URL the verifier needs — the
+  // publish is blind, so its readable refs echo here instead. Stderr-only
+  // redirects keep the captured stdout and stay post-verified.
+  it('pre-echoes refs of publishes whose stdout is redirected away', () => {
+    const { hook } = makeRepo({ dbReady: true, ghIssues: { 700: { title: 'Some PR', state: 'open', pull_request: {} } } })
+    const r = hook('gh pr edit 12 --body="Fixes #700" >/dev/null')
+    expect(r.status).toBe(2)
+    expect(r.stderr).toContain('close keyword targets a PR')
+    expect(hook('gh pr edit 12 --body "relates to #653" 2>/dev/null').status).toBe(0)
+  })
+
   // When the invocation also publishes, the commit leg scans raw text only:
   // a publish flag must not be misread as a commit-message file (an api
   // field value is not a path, and a publish body-file is the verifier's).

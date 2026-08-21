@@ -231,10 +231,11 @@ export const matchesCommitCommand = cmd => GIT_COMMIT.test(commandSkeleton(cmd))
 // recurring bypass surface.
 
 // Publishes post-publication repair cannot reach, which therefore keep the
-// pre-publish #N echo-gate (and body-file reading): `gh pr merge` text lands
-// in the merge commit, and review/close/reopen output names `repo#N`, never
-// a URL the verifier could find the review or -c comment by. Comment-less
-// closes pass for free — no refs in the command text, nothing to echo.
+// pre-publish #N echo-gate: `gh pr merge` text lands in the merge commit,
+// and review/close/reopen output names `repo#N`, never a URL the verifier
+// could find the review or -c comment by. Their file-fed bodies are NOT
+// read — the blind-publish rule blocks them until both escapes attest.
+// Comment-less closes pass for free — no refs in the text, nothing to echo.
 const GH_UNREPAIRABLE = new RegExp(
   SEGMENT_START +
     COMMAND_PREFIXES +
@@ -325,9 +326,10 @@ export const buildIssueRefsMessage = (refs, closeNums, mode = 'pre') => {
 }
 
 /**
- * Message/body-file values on the legs that still read files pre-publish
- * (git commit -F/--file, gh pr merge/review -F/--body-file — text the
- * post-publication verifier can never see). A real flag sits OUTSIDE quotes,
+ * Message/body-file values for the ONE leg that still reads files
+ * pre-publish: solo `git commit -F/--file` (commit text never becomes a
+ * GitHub object). Blind publishes never read files — the coarse rule blocks
+ * them until both escapes attest. A real flag sits OUTSIDE quotes,
  * so it must survive into the skeleton — a quoted mention ("use -F x next
  * time") is prose, and with the fail-closed missing-file check a prose
  * mention would block the command outright. Values are still extracted from
@@ -1019,8 +1021,13 @@ const hookPrePr = () => {
   // CLOSED set on one tool, so membership, not enumeration. (-q, the short
   // form of --jq, is a residual: a command-wide scan would trip on
   // `grep -q` in compounds.)
-  const graphqlApi = apiPublish && /\bgraphql\b/.test(commandSkeleton(cmd))
-  const opaqueApi = apiPublish && /(?<![\w-])--(?:silent|jq|template)\b/.test(commandSkeleton(cmd))
+  // Membership words are tested on the raw text too: a quoted "--silent" or
+  // "graphql" reaches gh unquoted, but the skeleton blanks it. Prose hits
+  // cost at most an extra readable-text echo round.
+  const sk = commandSkeleton(cmd)
+  const graphqlApi = apiPublish && (/\bgraphql\b/.test(sk) || /\bgraphql\b/.test(cmd))
+  const opaqueRe = /(?<![\w-])--(?:silent|jq|template)\b/
+  const opaqueApi = apiPublish && (opaqueRe.test(sk) || opaqueRe.test(cmd))
 
   // Close keywords in commit messages act when the commit reaches the
   // default branch, and commit text never becomes a GitHub object — but the
@@ -1063,7 +1070,11 @@ const hookPrePr = () => {
   // accurate-and-unbounded here. Readable blind text (inline bodies, inline
   // graphql queries) flows to the refs/ids tables below instead, and the
   // merge COMMIT itself is read back post-merge by bd-publish-verify.
-  const blind = matchesUnrepairableCommand(cmd) || graphqlApi || opaqueApi
+  // An unquoted stdout redirect swallows the URL the verifier needs — a
+  // redirected publish is blind no matter the verb. `2>` (stderr-only) is
+  // excluded: the Bash tool merges stderr into the captured stdout anyway.
+  const redirected = /(?<!2)>(?!&2)/.test(sk)
+  const blind = matchesUnrepairableCommand(cmd) || graphqlApi || opaqueApi || ((isPublish || apiPublish) && redirected)
   if (blind && !(allowsIssueRefs(cmd) && allowsBeadIds(cmd))) {
     const textOutsideCommand =
       /(?<![\w-])(?:--body-file|--file|--input|-F)\b|[$`]/.test(cmd) || (matchesApiPublish(cmd) && /@/.test(cmd))
