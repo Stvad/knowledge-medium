@@ -205,6 +205,10 @@ describe('carriesPublishableText', () => {
     expect(carriesPublishableText('gh pr comment 652 -F notes.md')).toBe(true)
     expect(carriesPublishableText('gh pr comment 652 --body hi')).toBe(true)
     expect(carriesPublishableText('gh pr comment 652 --delete-last')).toBe(false)
+    // --fill names no text in the command; gh derives title and body from the
+    // branch's commits, close keywords included
+    expect(carriesPublishableText('gh pr create --fill')).toBe(true)
+    expect(carriesPublishableText('gh pr create --fill-first')).toBe(true)
     // gh documents nested key[subkey]=value fields, and gist file content is
     // its own example; FIELD_ANY captures the bracketed name whole
     expect(carriesPublishableText(`gh api gists -f public=true -f 'files[a.md][content]=Fixes #700'`)).toBe(true)
@@ -551,6 +555,20 @@ describe('matchesCommitCommand', () => {
 // The detector above over-matches on purpose. This is the evidence the FILE
 // READ needs on top of it, because over-matching there opens a path named in
 // argv rather than costing an echo round.
+// Bash's `!` inverts the pipeline's status, so the tool reports success for a
+// failed publish and failure for a live one — and which post-hook event fires
+// with it. The read-back reasons from that event and cannot check it, so the
+// shape has to stay uncovered and take the pre-publish check instead.
+describe('isPostVerifiable and the negating reserved word', () => {
+  it('treats a negated publish as uncovered, and leaves quoted exclamations alone', () => {
+    expect(isPostVerifiable('! gh pr create --body x')).toBe(false)
+    expect(isPostVerifiable('gh pr create --body x')).toBe(true)
+    // the skeleton blanks quoted spans, so ordinary prose still qualifies
+    expect(isPostVerifiable('gh pr comment 1 --body "Fixed it!"')).toBe(true)
+    expect(isPostVerifiable(`gh pr comment 1 --body 'Nice!'`)).toBe(true)
+  })
+})
+
 describe('commitsInCommandPosition', () => {
   it('requires git commit to be the segment-s verb, not merely present in argv', () => {
     expect(commitsInCommandPosition('git commit -F msg.txt')).toBe(true)

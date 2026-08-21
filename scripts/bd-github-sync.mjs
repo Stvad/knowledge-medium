@@ -269,6 +269,13 @@ const isGitCommitSegment = tokens => {
  * Under-matching here costs only the file scan — the raw command is scanned
  * for close keywords either way — so this stays a plain verb check rather
  * than growing a vocabulary of every way a shell can reach git.
+ *
+ * ACCEPTED, not overlooked: a wrapper option that takes a SEPARATE value
+ * (`env -u FOO git commit -F msg.txt`) stops the prefix skip at the value,
+ * so the message file goes unscanned. Closing it means a table of per-flag
+ * arities for env/xargs/command/…, which would have to be COMPLETE to be
+ * correct and cannot be — the blacklist shape this file rejects everywhere
+ * else. Declined 2026-08-21; the inline text is still checked.
  */
 export const commitsInCommandPosition = cmd =>
   shellSegmentsWithDepth(cmd).some(s => !s.heredoc && isGitCommitSegment(s.tokens))
@@ -316,7 +323,12 @@ const hasExpansion = cmd => EXPANSION.test(expandable(cmd))
 // Every shell operator in one character class — pipes, redirects,
 // substitutions, separators, multi-line — so there is no per-operator
 // spelling to keep complete and no positional heuristic to defeat.
-const SHELL_OPERATOR = /[|;&<>$`\n]/
+// `!` is bash's status-negating reserved word, not punctuation: under it the
+// tool's success/failure — and so which post-hook event fires — is INVERTED,
+// which is the one thing the read-back reasons from that it cannot check.
+// Tested on the skeleton, so an exclamation mark in a quoted body is blanked
+// and costs nothing.
+const SHELL_OPERATOR = /[|;&<>$`\n!]/
 // Repository selection away from this one, by flag or by environment. The
 // read-back's URL pattern is pinned to this repo, so a foreign publish has
 // no post-check at all. No separator required: gh takes -Rowner/repo.
@@ -358,7 +370,11 @@ export const matchesAnyPublish = cmd =>
 // decides only whether to WARN. Being wrong costs a missing or an extra note,
 // never a wrong write. Missing a spelling is therefore the cheap direction,
 // which is why it is written as a small list rather than defended as one.
-const TEXT_FLAG = /(?<![\w-])(?:--(?:body|title|notes|message)(?:-file)?\b|--input\b|-[btm](?=[\s=]|$))/
+// --fill and its variants carry no text in the command: gh derives the title
+// and body from the branch's COMMITS, close keywords included. Text with no
+// flag naming it is still published text.
+const TEXT_FLAG =
+  /(?<![\w-])(?:--(?:body|title|notes|message)(?:-file)?\b|--input\b|--fill(?:-first|-verbose)?\b|-[btm](?=[\s=]|$))/
 // Every payload-field spelling gh accepts, so a field is never missed and
 // then read as "carries no text" — which would suppress the warning rather
 // than add one, the direction that actually hurts. What the field CARRIES is
