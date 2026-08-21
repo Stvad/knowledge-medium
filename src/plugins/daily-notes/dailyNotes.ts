@@ -7,7 +7,11 @@ import type { Repo } from '@/data/repo'
 import { aliasesProp, hasBlockType } from '@/data/properties'
 import { PAGE_TYPE } from '@/data/blockTypes'
 import { keyAtEnd } from '@/data/orderKey'
-import { createOrRestoreTargetBlock, restorePropertiesStrippingAliases } from '@/data/targets'
+import {
+  createOrRestoreTargetBlock,
+  partitionClaimableAliases,
+  restorePropertiesStrippingAliases,
+} from '@/data/targets'
 import { parseAliasCollisionError } from '@/data/internals/raiseProtocol.js'
 import { dailyPageAliases, formatIsoDate } from '@/utils/dailyPage'
 import { DAILY_NOTE_TYPE, dailyNoteDateProp } from './schema.ts'
@@ -204,10 +208,14 @@ export const getOrCreateDailyNote = async (
       if (!current || current.deleted) return
       refuseForeign(current)
       const currentAliases = stringListProperty(current.properties[aliasesProp.name])
-      if (!includesAll(currentAliases, dailyAliases)) {
-        await tx.setProperty(id, aliasesProp, mergeStrings([...dailyAliases, ...currentAliases]))
+      const {claimable} = await partitionClaimableAliases(tx, id, dailyAliases, workspaceId)
+      const merged = mergeStrings([...claimable, ...currentAliases])
+      // Guarded: while an alias stays contested `needsRepair` holds on every
+      // call, and an unguarded write would churn on every navigation.
+      if (!includesAll(currentAliases, merged)) {
+        await tx.setProperty(id, aliasesProp, merged)
       }
-      await repo.addTypeInTx(tx, id, PAGE_TYPE, {[aliasesProp.name]: dailyAliases}, typeSnapshot)
+      await repo.addTypeInTx(tx, id, PAGE_TYPE, {[aliasesProp.name]: claimable}, typeSnapshot)
       await repo.addTypeInTx(
         tx, id, DAILY_NOTE_TYPE,
         {[dailyNoteDateProp.name]: dateValue},
@@ -235,8 +243,9 @@ export const getOrCreateDailyNote = async (
       // exactly the canonical long-form + ISO aliases.
       const restoredProperties = await restorePropertiesStrippingAliases(tx, id)
       await tx.restore(id, {content: longLabel, properties: restoredProperties})
-      await tx.setProperty(id, aliasesProp, dailyAliases)
-      await repo.addTypeInTx(tx, id, PAGE_TYPE, {[aliasesProp.name]: dailyAliases}, typeSnapshot)
+      const {claimable} = await partitionClaimableAliases(tx, id, dailyAliases, workspaceId)
+      await tx.setProperty(id, aliasesProp, claimable)
+      await repo.addTypeInTx(tx, id, PAGE_TYPE, {[aliasesProp.name]: claimable}, typeSnapshot)
       await repo.addTypeInTx(
         tx, id, DAILY_NOTE_TYPE,
         {[dailyNoteDateProp.name]: dateValue},
@@ -255,7 +264,8 @@ export const getOrCreateDailyNote = async (
       orderKey,
       content: longLabel,
     }, {systemMint: true})
-    await repo.addTypeInTx(tx, id, PAGE_TYPE, {[aliasesProp.name]: dailyAliases}, typeSnapshot)
+    const {claimable} = await partitionClaimableAliases(tx, id, dailyAliases, workspaceId)
+    await repo.addTypeInTx(tx, id, PAGE_TYPE, {[aliasesProp.name]: claimable}, typeSnapshot)
     await repo.addTypeInTx(
       tx, id, DAILY_NOTE_TYPE,
       {[dailyNoteDateProp.name]: dateValue},

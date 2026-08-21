@@ -116,6 +116,44 @@ export const restorePropertiesStrippingAliases = async (
   return restoredProperties
 }
 
+/** An alias this block wanted but a different live block already owns. */
+export interface AliasCollision {
+  alias: string
+  /** The live block currently holding it. The merge target/source for the
+   *  resolution the user is offered. */
+  ownerId: string
+}
+
+/** Split `aliases` into the ones `id` may claim right now and the ones a
+ *  DIFFERENT live block already holds.
+ *
+ *  Claiming a contested alias trips `block_aliases_workspace_alias_unique`,
+ *  and that rejection rolls back the CALLER's whole transaction. For a
+ *  get-or-create that is fatal rather than partial: the page is minted in the
+ *  same tx, so it dies with the rollback and the next call repeats it — the
+ *  page becomes permanently uncreatable (issue #378). Yielding the contested
+ *  alias instead keeps the page reachable; resolving the duplicate name is a
+ *  separate, user-driven merge.
+ *
+ *  MUST be called with a tx-scoped `tx.aliasLookup` inside the writing
+ *  transaction: an answer read before the tx opened can be stale by the time
+ *  the claim lands, which is the abort this exists to prevent. */
+export const partitionClaimableAliases = async (
+  tx: Tx,
+  id: string,
+  aliases: readonly string[],
+  workspaceId: string,
+): Promise<{claimable: string[]; contested: AliasCollision[]}> => {
+  const claimable: string[] = []
+  const contested: AliasCollision[] = []
+  for (const alias of aliases) {
+    const owner = await tx.aliasLookup(alias, workspaceId)
+    if (owner === null || owner.id === id) claimable.push(alias)
+    else contested.push({alias, ownerId: owner.id})
+  }
+  return {claimable, contested}
+}
+
 /** Shared primitive — see file header. Returns `{id, inserted}`;
  *  `inserted: true` means this tx wrote the row (fresh or restored). */
 export const createOrRestoreTargetBlock = async (

@@ -24,7 +24,7 @@ import { classifyOccupant, derivedBlockId } from '@/data/derivedIds'
 import type { Repo } from '@/data/repo'
 import { aliasesProp, hasBlockType } from '@/data/properties'
 import { PAGE_TYPE } from '@/data/blockTypes'
-import { restorePropertiesStrippingAliases } from '@/data/targets'
+import { partitionClaimableAliases, restorePropertiesStrippingAliases } from '@/data/targets'
 
 const stringListProperty = (raw: unknown): readonly string[] =>
   Array.isArray(raw) ? raw.filter((v): v is string => typeof v === 'string') : []
@@ -124,9 +124,11 @@ export const getOrCreateKernelPage = async (
   const types: readonly string[] =
     spec.markerType === null ? [PAGE_TYPE] : [PAGE_TYPE, spec.markerType]
 
-  const tagTypes = async (tx: Tx, snapshot: TypeRegistrySnapshot): Promise<void> => {
+  const tagTypes = async (
+    tx: Tx, snapshot: TypeRegistrySnapshot, claimAliases: readonly string[],
+  ): Promise<void> => {
     for (const type of types) {
-      await repo.addTypeInTx(tx, id, type, {[aliasesProp.name]: aliases}, snapshot)
+      await repo.addTypeInTx(tx, id, type, {[aliasesProp.name]: claimAliases}, snapshot)
     }
   }
 
@@ -189,10 +191,15 @@ export const getOrCreateKernelPage = async (
       if (!current || current.deleted) return
       refuseForeign(current)
       const txAliases = stringListProperty(current.properties[aliasesProp.name])
-      if (!includesAll(txAliases, aliases)) {
-        await tx.setProperty(id, aliasesProp, mergeStrings([...aliases, ...txAliases]))
+      const {claimable} = await partitionClaimableAliases(tx, id, aliases, workspaceId)
+      const merged = mergeStrings([...claimable, ...txAliases])
+      // Compare rather than write unconditionally: while an alias stays
+      // contested `needsRepair` is true on every call, and an unguarded
+      // setProperty would then write the same value on every navigation.
+      if (!includesAll(txAliases, merged)) {
+        await tx.setProperty(id, aliasesProp, merged)
       }
-      await tagTypes(tx, typeSnapshot)
+      await tagTypes(tx, typeSnapshot, claimable)
     }, {scope: ChangeScope.BlockDefault})
     return repo.block(id)
   }
@@ -210,8 +217,9 @@ export const getOrCreateKernelPage = async (
       // exactly the canonical alias set.
       const restoredProperties = await restorePropertiesStrippingAliases(tx, id)
       await tx.restore(id, {content: spec.alias, properties: restoredProperties})
-      await tx.setProperty(id, aliasesProp, [...aliases])
-      await tagTypes(tx, typeSnapshot)
+      const {claimable} = await partitionClaimableAliases(tx, id, aliases, workspaceId)
+      await tx.setProperty(id, aliasesProp, claimable)
+      await tagTypes(tx, typeSnapshot, claimable)
       return
     }
     await tx.create({
@@ -221,7 +229,8 @@ export const getOrCreateKernelPage = async (
       orderKey,
       content: spec.alias,
     }, {systemMint: true})
-    await tagTypes(tx, typeSnapshot)
+    const {claimable} = await partitionClaimableAliases(tx, id, aliases, workspaceId)
+    await tagTypes(tx, typeSnapshot, claimable)
   }, {scope: ChangeScope.BlockDefault})
 
   return repo.block(id)
