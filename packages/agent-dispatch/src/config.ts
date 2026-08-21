@@ -57,6 +57,12 @@ export const PROPS = {
    *  aborts the run, parks the task `error: cancelled`, and clears this
    *  (written as '') on the terminal write so it never re-cancels a rerun. */
   cancel: 'agent:cancel',
+  /** Epoch-ms of an explicit user re-queue (the companion's Ask/Retry
+   *  actions). READ-ONLY here and never written by the daemon: it is the
+   *  only signal that tells a task the USER just asked for apart from one
+   *  the daemon re-derived on its own, which is what lets an explicit
+   *  Retry through an infrastructure cooldown (engine.ts). */
+  askedAt: 'agent:asked-at',
 } as const
 
 export type TaskStatus = 'queued' | 'running' | 'done' | 'error'

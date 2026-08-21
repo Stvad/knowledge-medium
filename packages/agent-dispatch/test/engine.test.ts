@@ -11,6 +11,11 @@ const NOW = 1_800_000_000_000
 interface FakeGraphSeed {
   pageId?: string
   backlinks?: Array<{id: string, deepLink?: string}>
+  /** Per-TARGET backlinks, for the multi-watcher tests: with this set,
+   *  each watcher's `target` resolves to its own page and sees only its
+   *  own blocks (the flat `backlinks` above hands every watcher the same
+   *  list, which is all a single-watcher test needs). */
+  backlinksByTarget?: Record<string, Array<{id: string, deepLink?: string}>>
   blocks?: Record<string, Partial<BlockData>>
 }
 
@@ -30,9 +35,10 @@ const fakeGraph = (seed: FakeGraphSeed = {}) => {
   const cancelClears: string[] = []
 
   const graph: Graph = {
-    resolvePageId: vi.fn(async () => seed.pageId ?? 'page-claude'),
-    backlinkSources: vi.fn(async () =>
-      (seed.backlinks ?? []).map(({id, deepLink}) => ({
+    resolvePageId: vi.fn(async (target: string) =>
+      seed.backlinksByTarget ? `page:${target}` : (seed.pageId ?? 'page-claude')),
+    backlinkSources: vi.fn(async (pageId: string) =>
+      (seed.backlinksByTarget?.[pageId.replace(/^page:/, '')] ?? seed.backlinks ?? []).map(({id, deepLink}) => ({
         id, content: blocks.get(id)?.content ?? '', types: [], deepLink: deepLink ?? `link:${id}`, sourceFields: ['content'],
       }))),
     getBlock: async id => blocks.get(id) ?? null,
@@ -1818,6 +1824,282 @@ describe('retryable infrastructure failures (out of credits, expired login, netw
     await engine.tick()
     await engine.drain()
     expect(blocks.get('b-2')?.properties?.[PROPS.retryAfter]).toBe(afterReset + 30_000)
+  })
+
+  it('lets exactly ONE probe through a lapsed cooldown, at maxConcurrent > 1', async () => {
+    // The cooldown gate opens for EVERY source in the scan the instant the
+    // window lapses, and nothing re-arms until a run's async result lands
+    // — so without a synchronous reservation the daemon fires a full
+    // concurrency-worth of doomed runs at each lapse instead of one probe.
+    // maxConcurrent defaults to 2, so the default config had this bug.
+    const {graph} = fakeGraph({
+      backlinks: [{id: 'b-1'}, {id: 'b-2'}, {id: 'b-3'}],
+      blocks: {
+        'b-1': {content: '[[claude]] one'},
+        'b-2': {content: '[[claude]] two'},
+        'b-3': {content: '[[claude]] three'},
+      },
+    })
+    const time = clock()
+    const runTask = vi.fn(async () => outOfCreditsRun())
+    const engine = engineWith({
+      graph, runTask, now: time.now,
+      config: mentionConfig({maxConcurrent: 2, runsPerHour: 100}),
+    })
+
+    // No outage known yet, so the first tick uses its full concurrency.
+    await engine.tick()
+    await engine.drain()
+    expect(runTask).toHaveBeenCalledTimes(2)
+
+    time.advance(10 * 60_000)
+    await engine.tick()
+    await engine.drain()
+    // One more, not two: the probe reserves the lane as it launches.
+    expect(runTask).toHaveBeenCalledTimes(3)
+  })
+
+  it('cools down only the FAILING executor, leaving another one working', async () => {
+    // A spent Claude subscription says nothing about a Codex watcher. A
+    // single global window stalls it for up to five minutes.
+    const {graph, blocks} = fakeGraph({
+      backlinksByTarget: {claude: [{id: 'b-1'}], codex: [{id: 'c-1'}]},
+      blocks: {'b-1': {content: '[[claude]] one'}, 'c-1': {content: '[[codex]] one'}},
+    })
+    const time = clock()
+    const runTask = vi.fn(async (options: {executor?: string}) =>
+      options.executor === 'codex' ? okRun() : outOfCreditsRun())
+    const engine = engineWith({
+      graph, runTask, now: time.now,
+      config: parseConfig({
+        // maxConcurrent 1 so the claude run FAILS (arming its lane) before
+        // the codex watcher is ever scanned — the ordering the bug needs.
+        maxConcurrent: 1,
+        runsPerHour: 100,
+        watchers: [
+          {kind: 'backlinks', name: 'claude-mentions', target: 'claude', quietMs: 0},
+          {kind: 'backlinks', name: 'codex-mentions', target: 'codex', quietMs: 0, runner: {executor: 'codex'}},
+        ],
+      }),
+    })
+
+    await engine.tick()
+    await engine.drain()
+    expect(blocks.get('b-1')?.properties?.[PROPS.status]).toBe('queued')
+    expect(blocks.get('c-1')?.properties).toEqual({})
+
+    await engine.tick()
+    await engine.drain()
+    expect(blocks.get('c-1')?.properties?.[PROPS.status]).toBe('done')
+  })
+
+  it('does not let a healthy executor\'s success clear the failing one\'s cooldown', async () => {
+    // The worse half of a global window: the failing lane resumes chewing
+    // its queue because an unrelated watcher happened to succeed.
+    const {graph, blocks} = fakeGraph({
+      backlinksByTarget: {claude: [{id: 'b-1'}, {id: 'b-2'}], codex: [{id: 'c-1'}]},
+      blocks: {
+        'b-1': {content: '[[claude]] one'},
+        'b-2': {content: '[[claude]] two'},
+        'c-1': {content: '[[codex]] one'},
+      },
+    })
+    const time = clock()
+    const runTask = vi.fn(async (options: {executor?: string}) =>
+      options.executor === 'codex' ? okRun() : outOfCreditsRun())
+    const engine = engineWith({
+      graph, runTask, now: time.now,
+      config: parseConfig({
+        maxConcurrent: 1,
+        runsPerHour: 100,
+        watchers: [
+          {kind: 'backlinks', name: 'claude-mentions', target: 'claude', quietMs: 0},
+          {kind: 'backlinks', name: 'codex-mentions', target: 'codex', quietMs: 0, runner: {executor: 'codex'}},
+        ],
+      }),
+    })
+
+    await engine.tick()   // b-1 runs out of credits — the claude lane cools
+    await engine.drain()
+    await engine.tick()   // c-1 succeeds on the codex lane
+    await engine.drain()
+    expect(blocks.get('c-1')?.properties?.[PROPS.status]).toBe('done')
+
+    await engine.tick()
+    await engine.drain()
+    // b-2 is untouched: the codex success proved nothing about credits.
+    expect(blocks.get('b-2')?.properties).toEqual({})
+  })
+
+  it('lets an explicit user retry through the cooldown — but only one of a batch', async () => {
+    // "Retry now" clears the block's durable agent:retry-after, but the
+    // daemon's in-memory cooldown is the other half of the clock: without
+    // a bypass the gesture silently does nothing for up to five minutes.
+    // And a bulk "Retry all failed" must still probe with ONE run, not
+    // fire the whole batch into an outage that may still be on.
+    const {graph, blocks} = fakeGraph({
+      backlinks: [{id: 'b-1'}, {id: 'b-2'}, {id: 'b-3'}],
+      blocks: {
+        'b-1': {content: '[[claude]] one'},
+        'b-2': {content: '[[claude]] two'},
+        'b-3': {content: '[[claude]] three'},
+      },
+    })
+    const time = clock()
+    const runTask = vi.fn(async () => outOfCreditsRun())
+    const engine = engineWith({
+      graph, runTask, now: time.now,
+      config: mentionConfig({maxConcurrent: 2, runsPerHour: 100}),
+    })
+
+    await engine.tick()
+    await engine.drain()
+    expect(runTask).toHaveBeenCalledTimes(2)
+
+    // What the app's Retry writes: terminal props dropped, asked-at stamped.
+    time.advance(1_000)
+    for (const id of ['b-1', 'b-2', 'b-3']) {
+      const target = blocks.get(id)!
+      target.properties = {[PROPS.askedAt]: time.now()}
+      target.editedAtMs = time.now()
+    }
+
+    // Still inside the cooldown window — no clock advance past it.
+    await engine.tick()
+    await engine.drain()
+    expect(runTask).toHaveBeenCalledTimes(3)
+  })
+
+  // A mid-stream ECONNRESET classifies as `network`, but the model was
+  // reached and the tokens are spent. Deferring it would hand back the
+  // attempt AND the runsPerHour slot, so a repeating disconnect could
+  // re-bill the same task without limit, outside the spend cap entirely.
+  // Two independent proofs the model was reached, pinned separately:
+  // streamed text, and a result payload on a non-streaming watcher.
+  it('parks a run that STREAMED a billed answer before dying, rather than refunding it', async () => {
+    const {graph, blocks, propWrites, reconciles} = fakeGraph({
+      backlinks: [{id: 'b-1'}],
+      blocks: {'b-1': {content: '[[claude]] summarize inbox'}},
+    })
+    const state = memoryState()
+    const runTask = vi.fn(async (options: {onEvent?: (event: {kind: string, text?: string}) => void}) => {
+      options.onEvent?.({kind: 'text', text: 'Here is most of the answer'}) // billed
+      return okRun({ok: false, resultText: '', sessionId: null, exitCode: 1, stderr: 'ECONNRESET', failureText: 'ECONNRESET'})
+    })
+    const engine = engineWith({
+      graph, state, runTask,
+      config: parseConfig({watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', quietMs: 0, streamReply: true}]}),
+    })
+
+    await engine.tick()
+    await engine.drain()
+
+    expect(propWrites.map(write => write.status)).toEqual(['running', 'error'])
+    expect(blocks.get('b-1')!.properties![PROPS.attempts]).toBe(1)
+    // The slot stays spent — this run cost real tokens.
+    expect(state.launches).toHaveLength(1)
+    // The billed partial survives, with the failure note appended.
+    expect(reconciles.at(-1)?.markdown).toContain('Here is most of the answer')
+  })
+
+  it('parks a non-streaming run that RETURNED a billed answer before dying', async () => {
+    const {graph, blocks, propWrites} = fakeGraph({
+      backlinks: [{id: 'b-1'}],
+      blocks: {'b-1': {content: '[[claude]] summarize inbox'}},
+    })
+    const state = memoryState()
+    const engine = engineWith({
+      graph, state,
+      // streamReply is off by default, so lastStreamedText stays empty and
+      // resultText is the only evidence the run reached the model.
+      runTask: vi.fn(async () => okRun({
+        ok: false, resultText: 'Here is most of the answer', sessionId: null,
+        exitCode: 1, stderr: 'ECONNRESET', failureText: 'ECONNRESET',
+      })),
+    })
+
+    await engine.tick()
+    await engine.drain()
+
+    expect(propWrites.map(write => write.status)).toEqual(['running', 'error'])
+    expect(blocks.get('b-1')!.properties![PROPS.attempts]).toBe(1)
+    expect(state.launches).toHaveLength(1)
+  })
+
+  it('rolls the query cursor back when the runner REJECTS, not just when it returns a failure', async () => {
+    // The spawn-mode query watcher advances its cursor BEFORE the run, and
+    // has no graph-side task state to sweep. A rejecting runTask (the
+    // executor binary missing from launchd's PATH — the very outage this
+    // path exists for) escaped through launch()'s catch, leaving the
+    // cursor advanced: those rows were dropped permanently.
+    const {graph} = fakeGraph()
+    graph.sqlAll = vi.fn(async () => [{id: 'a'}, {id: 'b'}])
+    const state = memoryState()
+    state.cursors.set('inbox', ['a'])
+    const time = clock()
+    const runTask = vi.fn(async () => { throw new Error('spawn claude ENOENT') })
+    const engine = engineWith({
+      graph, state, runTask, now: time.now,
+      config: parseConfig({watchers: [{kind: 'query', name: 'inbox', sql: 'SELECT id FROM blocks'}]}),
+    })
+
+    await engine.tick()
+    await engine.drain()
+
+    expect(runTask).toHaveBeenCalledTimes(1)
+    // Cursor back at its pre-launch value, so row 'b' re-fires.
+    expect(state.cursors.get('inbox')).toEqual(['a'])
+    // The doomed launch billed nothing, so it must not eat a spend slot.
+    expect(state.launches).toEqual([])
+
+    // And it does re-fire, once the cooldown lapses.
+    time.advance(10 * 60_000)
+    await engine.tick()
+    await engine.drain()
+    expect(runTask).toHaveBeenCalledTimes(2)
+  })
+
+  it('leaves the query cursor advanced when a retryable-looking failure still billed a reply', async () => {
+    // Same "did it reach the model" test the mention path applies: rows
+    // whose run produced billed output must not re-fire on the next tick.
+    const {graph} = fakeGraph()
+    graph.sqlAll = vi.fn(async () => [{id: 'a'}, {id: 'b'}])
+    const state = memoryState()
+    state.cursors.set('inbox', ['a'])
+    const runTask = vi.fn(async () => okRun({
+      ok: false, resultText: 'Here is most of the answer', exitCode: 1,
+      stderr: 'ECONNRESET', failureText: 'ECONNRESET',
+    }))
+    const engine = engineWith({
+      graph, state, runTask,
+      config: parseConfig({watchers: [{kind: 'query', name: 'inbox', sql: 'SELECT id FROM blocks'}]}),
+    })
+
+    await engine.tick()
+    await engine.drain()
+
+    expect(state.cursors.get('inbox')).toEqual(['a', 'b'])
+    expect(state.launches).toHaveLength(1)
+  })
+
+  it('leaves the query cursor advanced when the runner rejects for an UNRECOGNISED reason', async () => {
+    // The other half of the same guard: an unclassifiable crash stays
+    // terminal, so a prompt that kills the runner every time cannot
+    // re-fire and re-bill forever.
+    const {graph} = fakeGraph()
+    graph.sqlAll = vi.fn(async () => [{id: 'a'}, {id: 'b'}])
+    const state = memoryState()
+    state.cursors.set('inbox', ['a'])
+    const runTask = vi.fn(async () => { throw new Error('unparseable transcript') })
+    const engine = engineWith({
+      graph, state, runTask,
+      config: parseConfig({watchers: [{kind: 'query', name: 'inbox', sql: 'SELECT id FROM blocks'}]}),
+    })
+
+    await engine.tick()
+    await engine.drain()
+
+    expect(state.cursors.get('inbox')).toEqual(['a', 'b'])
   })
 
   it('a genuine run failure still parks the task and does not arm a cooldown', async () => {

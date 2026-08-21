@@ -14,7 +14,7 @@ import type { AgentRunOptions, AgentRunResult, RunEvent } from './runner.js'
 import { resumeOptionsForRun, type AgentResumeOptions } from './resumeCommand.js'
 import type { StateStore } from './state.js'
 import { classifyRunFailure, retryBackoffMs, type RunFailureClass } from './runFailure.js'
-import { decidePending, diffQueryRows, findThreadSession, MAX_ATTEMPTS, MAX_CURSOR_IDS, taskAttempts } from './watchers.js'
+import { decidePending, diffQueryRows, findThreadSession, MAX_ATTEMPTS, MAX_CURSOR_IDS, taskAttempts, type BlockView } from './watchers.js'
 import { DEFAULT_MENTION_CHANNEL_PROMPT, renderMentionPrompt, renderQueryPrompt } from './prompt.js'
 import { KM_MCP_ALLOWED_TOOLS } from '@knowledge-medium/agent-cli/mcpShared'
 
@@ -143,36 +143,95 @@ export const createEngine = (deps: EngineDeps) => {
    *  ten, so the daemon stops launching until the cooldown lapses, then
    *  lets exactly one probe through. Deliberately in-memory only: it's an
    *  optimisation over the per-task `agent:retry-after` (which IS durable),
-   *  and a restart re-deriving it costs one extra doomed spawn. */
-  let cooldownUntil = 0
-  let consecutiveInfraFailures = 0
-  let cooldownReason = ''
-  /** The window we last logged, so a cooldown is announced once, not once
-   *  per watcher per tick. */
-  let cooldownLogged = 0
+   *  and a restart re-deriving it costs one extra doomed spawn.
+   *
+   *  Keyed by LANE rather than global. An outage belongs to one credential
+   *  or one transport: a spent Claude subscription says nothing about a
+   *  Codex watcher, and a dead channel listener says nothing about either.
+   *  A single global window both stalls healthy watchers and — the worse
+   *  half — lets a success on a healthy lane clear the failing lane's
+   *  window, so that lane resumes chewing its queue: the exact bug this
+   *  whole path exists to stop. */
+  interface Cooldown {
+    until: number
+    consecutiveFailures: number
+    reason: string
+    /** When the CURRENT window was armed. A task whose `agent:asked-at`
+     *  postdates it was re-queued by the user while we were cooling, which
+     *  is what earns it the probe (see `inInfraCooldown`). */
+    armedAt: number
+    /** The window we last logged, so a cooldown is announced once, not
+     *  once per watcher per tick. */
+    logged: number
+  }
+  const cooldowns = new Map<string, Cooldown>()
 
-  const noteInfraFailure = (failure: RunFailureClass, sourceLabel: string): number => {
-    consecutiveInfraFailures += 1
-    const backoff = retryBackoffMs(consecutiveInfraFailures)
-    cooldownUntil = now() + backoff
-    cooldownReason = failure.label
-    log(`[${sourceLabel}] ${failure.label} — nothing was attempted; pausing new runs for ${Math.round(backoff / 1000)}s (infrastructure failure ${consecutiveInfraFailures} in a row)`)
-    return cooldownUntil
+  /** The failure domain a watcher shares with others: the credential its
+   *  spawned runs bill, or the channel its deliveries go to. */
+  const laneOf = (watcher: Watcher): string =>
+    watcher.delivery === 'channel' ? 'channel' : watcher.runner.executor
+
+  const cooldownFor = (lane: string): Cooldown => {
+    let state = cooldowns.get(lane)
+    if (!state) {
+      state = {until: 0, consecutiveFailures: 0, reason: '', armedAt: 0, logged: 0}
+      cooldowns.set(lane, state)
+    }
+    return state
   }
 
-  /** Any run that reached the model proves the infrastructure is back —
-   *  including one that failed on its own merits. */
-  const clearInfraCooldown = () => {
-    consecutiveInfraFailures = 0
-    cooldownUntil = 0
-    cooldownReason = ''
+  const noteInfraFailure = (lane: string, failure: RunFailureClass, sourceLabel: string): number => {
+    const state = cooldownFor(lane)
+    state.consecutiveFailures += 1
+    const backoff = retryBackoffMs(state.consecutiveFailures)
+    state.until = now() + backoff
+    state.armedAt = now()
+    state.reason = failure.label
+    log(`[${sourceLabel}] ${failure.label} — nothing was attempted; pausing new ${lane} runs for ${Math.round(backoff / 1000)}s (infrastructure failure ${state.consecutiveFailures} in a row)`)
+    return state.until
   }
 
-  const inInfraCooldown = (): boolean => {
-    if (now() >= cooldownUntil) return false
-    if (cooldownLogged !== cooldownUntil) {
-      cooldownLogged = cooldownUntil
-      log(`deferring new runs until ${new Date(cooldownUntil).toISOString()} (${cooldownReason})`)
+  /** Any run that reached the model proves this lane's infrastructure is
+   *  back — including one that failed on its own merits. */
+  const clearInfraCooldown = (lane: string) => {
+    cooldowns.delete(lane)
+  }
+
+  /** Reserve the post-cooldown probe, synchronously, at the launch
+   *  decision. `inInfraCooldown` opens for EVERY source in the scan the
+   *  instant a window lapses and nothing re-arms until a run's async
+   *  result lands — so with `maxConcurrent > 1` a lapsed window launches a
+   *  full concurrency-worth of doomed runs instead of the one probe.
+   *  Re-arming the SAME backoff here holds the rest back until the probe
+   *  answers: its outcome then either clears the lane (it reached the
+   *  model) or extends it (it failed again), and if the outcome touches
+   *  neither, the window still lapses on its own — so this can defer a
+   *  lane but never wedge one.
+   *
+   *  Also what bounds a bulk "Retry all failed": moving `armedAt` forward
+   *  spends the asked-at bypass below for every task but the first. */
+  const reserveProbe = (lane: string) => {
+    const state = cooldowns.get(lane)
+    if (!state || state.consecutiveFailures === 0) return
+    state.until = now() + retryBackoffMs(state.consecutiveFailures)
+    state.armedAt = now()
+  }
+
+  const inInfraCooldown = (lane: string, source?: BlockView): boolean => {
+    const state = cooldowns.get(lane)
+    if (!state || now() >= state.until) return false
+    // An explicit user re-queue (Retry now / Retry all) stamped AFTER this
+    // window was armed is a deliberate probe: the user has just fixed the
+    // cause — topped up credits, re-ran `claude login` — and the durable
+    // `agent:retry-after` their gesture cleared is only half the clock.
+    // Without this, the in-memory half ignores the gesture for up to five
+    // minutes and "Retry now" silently does nothing. Exactly one gets
+    // through: reserveProbe moves `armedAt` past the rest.
+    const askedAt = source?.properties?.[PROPS.askedAt]
+    if (typeof askedAt === 'number' && askedAt > state.armedAt) return false
+    if (state.logged !== state.until) {
+      state.logged = state.until
+      log(`deferring new ${lane} runs until ${new Date(state.until).toISOString()} (${state.reason})`)
     }
     return true
   }
@@ -396,7 +455,7 @@ export const createEngine = (deps: EngineDeps) => {
       detail: string,
       resume: {session?: string | null, resumeOptions?: AgentResumeOptions | null} = {},
     ) => {
-      const retryAfter = noteInfraFailure(failure, watcher.name)
+      const retryAfter = noteInfraFailure(laneOf(watcher), failure, watcher.name)
       // A run that never reached the model spent nothing, so the
       // runsPerHour slot comes back too — letting doomed attempts eat the
       // budget would defer REAL work for an hour once the outage lifts.
@@ -574,6 +633,18 @@ export const createEngine = (deps: EngineDeps) => {
       // Why the run ended, for a failure the user did NOT ask for. A
       // cancel is deliberate and terminal, so it's never classified.
       const failure = result.ok || abortController.signal.aborted ? null : classifyRunFailure(result)
+      // A retryable CLASS only means "nothing ran" if nothing ran. A run
+      // can stream a billed answer and THEN die on a transport error
+      // (ECONNRESET mid-stream classifies as `network`): the model was
+      // reached and the tokens are spent, so handing back the spend slot
+      // and the attempt would let a repeating mid-stream disconnect bill
+      // the same task without limit, outside `runsPerHour` entirely.
+      // Assistant text is the proof — a session id is NOT, since the runner
+      // emits it on the first line, before any model call. `resultText`
+      // rather than `lastStreamedText` alone: the latter is only populated
+      // for `streamReply` watchers, so a non-streaming one would look like
+      // it had produced nothing.
+      const reachedModel = Boolean(lastStreamedText.trim() || result.resultText.trim())
 
       if (result.ok) {
         // Deliberately NOT gated on signal.aborted: if the child completed
@@ -598,9 +669,9 @@ export const createEngine = (deps: EngineDeps) => {
           retryAfter: null,
           nowMs: now(),
         })
-        clearInfraCooldown()
+        clearInfraCooldown(laneOf(watcher))
         log(`[${watcher.name}] done ${sourceId}${result.sessionId ? ` (session ${result.sessionId})` : ''}`)
-      } else if (failure?.retryable) {
+      } else if (failure?.retryable && !reachedModel) {
         // NOT a task failure — the run never got to attempt it (out of
         // credits, expired login, rate limited, network down). Parking it
         // `error` here is what turned a single credit outage into a queue
@@ -651,7 +722,7 @@ export const createEngine = (deps: EngineDeps) => {
         // the infrastructure is evidently fine — drop any cooldown a
         // previous outage left armed. A cancel proves nothing either way,
         // so it leaves the cooldown alone.
-        if (!cancelled) clearInfraCooldown()
+        if (!cancelled) clearInfraCooldown(laneOf(watcher))
         log(`[${watcher.name}] ${cancelled ? 'CANCELLED' : 'FAILED'} ${sourceId}: ${reason}${result.sessionId ? ` (session ${result.sessionId})` : ''}`)
       }
     } catch (error) {
@@ -795,8 +866,9 @@ export const createEngine = (deps: EngineDeps) => {
       if (capacityLeft() <= 0) return
       // Gated HERE rather than at the top of the tick so a cooldown never
       // suppresses the non-launching work above (clearing an inert cancel,
-      // parking an exhausted task) — it only stops NEW runs.
-      if (inInfraCooldown()) return
+      // parking an exhausted task) — it only stops NEW runs. `view` rides
+      // along so a task the user explicitly re-queued gets to be the probe.
+      if (inInfraCooldown(laneOf(watcher), view)) return
       if (!spendBudgetLeft()) {
         log(`[${watcher.name}] runsPerHour budget (${config.runsPerHour}) exhausted — deferring ${source.id}`)
         return
@@ -805,6 +877,7 @@ export const createEngine = (deps: EngineDeps) => {
       // async task body would record too late to gate this same loop.
       // Bails that provably spawned nothing (duplicate session, lost
       // claim, block gone) refund their slot inside processMention.
+      reserveProbe(laneOf(watcher))
       const launchStamp = recordLaunch()
       launch(source.id, () => processMention(watcher, source.id, source.deepLink, baselineMs, launchStamp, quietExempt))
     }
@@ -836,11 +909,15 @@ export const createEngine = (deps: EngineDeps) => {
     // advances before the run, so a doomed launch DROPS them (the rollback
     // below is best-effort). Hold them instead — the cursor stays put and
     // the same rows re-diff once the cooldown lapses.
-    if (inInfraCooldown()) return
+    if (inInfraCooldown(laneOf(watcher))) return
     if (!spendBudgetLeft()) {
       log(`[${watcher.name}] runsPerHour budget (${config.runsPerHour}) exhausted — deferring ${diff.newRows.length} new row(s)`)
       return
     }
+    // One fire per lapsed window here too — this watcher is single-flight
+    // (`running.has(key)`), but a SECOND query watcher on the same lane
+    // would otherwise fire into the same outage in this very tick.
+    reserveProbe(laneOf(watcher))
 
     const batch = diff.newRows.slice(0, watcher.maxRowsPerFire)
     const overflow = diff.newRows.length - batch.length
@@ -869,30 +946,8 @@ export const createEngine = (deps: EngineDeps) => {
     await state.setCursor(watcher.name, diff.seenIds)
     const launchStamp = recordLaunch()
     log(`[${watcher.name}] firing for ${batch.length} new row(s)${overflow > 0 ? ` (+${overflow} truncated)` : ''}`)
+    const lane = laneOf(watcher)
     launch(key, async () => {
-      // Log the session id the instant it streams (same as the mention
-      // path) so a query-triggered run is findable/inspectable while it's
-      // live, not just from the terminal line. Query runs aren't threaded,
-      // so there's no block to persist it to — the log is the only record.
-      let loggedSession: string | null = null
-      const result = await runTask(runOptionsFor(watcher, prompt, undefined, event => {
-        if (event.kind === 'session' && !loggedSession) {
-          loggedSession = event.sessionId
-          log(`[${watcher.name}] session ${event.sessionId}`)
-        }
-      }))
-      const session = result.sessionId ?? loggedSession
-      if (result.ok) {
-        clearInfraCooldown()
-        log(`[${watcher.name}] done${session ? ` (session ${session})` : ''}: ${truncate(result.resultText.trim(), 200)}`)
-        return
-      }
-      const failure = classifyRunFailure(result)
-      if (!failure.retryable) {
-        clearInfraCooldown()
-        log(`[${watcher.name}] FAILED${session ? ` (session ${session})` : ''}: exit ${result.exitCode} ${truncate(result.stderr.trim())}`)
-        return
-      }
       // Nothing was attempted, so put the rows BACK: this watcher has no
       // graph-side task state to sweep, and the cursor was advanced before
       // the run — leaving it advanced would silently drop exactly the rows
@@ -900,11 +955,58 @@ export const createEngine = (deps: EngineDeps) => {
       // re-surfaces rows that appeared during the run, which is the right
       // direction to be wrong in. Safe against a concurrent tick: the
       // `running.has(key)` guard above keeps this watcher single-flight.
-      refundLaunch(launchStamp)
-      noteInfraFailure(failure, watcher.name)
-      await state.setCursor(watcher.name, prev)
-        .then(() => log(`[${watcher.name}] DEFERRED ${batch.length} row(s): ${failure.label} — cursor rolled back, they re-fire after the cooldown`))
-        .catch(error => log(`[${watcher.name}] ${failure.label}, but the cursor rollback FAILED (${errorMessage(error)}) — ${batch.length} row(s) will not re-fire`))
+      const deferRows = async (failure: RunFailureClass) => {
+        refundLaunch(launchStamp)
+        noteInfraFailure(lane, failure, watcher.name)
+        await state.setCursor(watcher.name, prev)
+          .then(() => log(`[${watcher.name}] DEFERRED ${batch.length} row(s): ${failure.label} — cursor rolled back, they re-fire after the cooldown`))
+          .catch(error => log(`[${watcher.name}] ${failure.label}, but the cursor rollback FAILED (${errorMessage(error)}) — ${batch.length} row(s) will not re-fire`))
+      }
+
+      // Log the session id the instant it streams (same as the mention
+      // path) so a query-triggered run is findable/inspectable while it's
+      // live, not just from the terminal line. Query runs aren't threaded,
+      // so there's no block to persist it to — the log is the only record.
+      let loggedSession: string | null = null
+      let result: AgentRunResult
+      try {
+        result = await runTask(runOptionsFor(watcher, prompt, undefined, event => {
+          if (event.kind === 'session' && !loggedSession) {
+            loggedSession = event.sessionId
+            log(`[${watcher.name}] session ${event.sessionId}`)
+          }
+        }))
+      } catch (error) {
+        // runTask REJECTED rather than returning a failed result — the
+        // executor binary is missing, the bridge is down. Classified from
+        // the throw exactly as the mention path's catch does, because the
+        // cursor is already advanced: without this the rows are dropped
+        // permanently by the very outage the rest of this path defers.
+        // An UNRECOGNISED throw stays terminal (cursor left advanced), so
+        // a prompt that crashes the runner every time can't re-fire and
+        // re-bill forever — the same degrade-to-today's-behaviour the
+        // classifier has everywhere else.
+        const reason = truncate(errorMessage(error))
+        const failure = classifyRunFailure({stderr: reason, failureText: '', exitCode: null, timedOut: false})
+        if (failure.retryable) await deferRows(failure)
+        throw error
+      }
+      const session = result.sessionId ?? loggedSession
+      if (result.ok) {
+        clearInfraCooldown(lane)
+        log(`[${watcher.name}] done${session ? ` (session ${session})` : ''}: ${truncate(result.resultText.trim(), 200)}`)
+        return
+      }
+      const failure = classifyRunFailure(result)
+      // Same "did it reach the model" test the mention path applies: a run
+      // that streamed a billed answer before dying is not an un-attempt,
+      // so it must not hand its spend slot back or re-fire its rows.
+      if (!failure.retryable || result.resultText.trim()) {
+        clearInfraCooldown(lane)
+        log(`[${watcher.name}] FAILED${session ? ` (session ${session})` : ''}: exit ${result.exitCode} ${truncate(result.stderr.trim())}`)
+        return
+      }
+      await deferRows(failure)
     })
   }
 
