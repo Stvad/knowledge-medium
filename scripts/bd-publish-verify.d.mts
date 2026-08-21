@@ -9,6 +9,7 @@ export type PublishTarget =
   | { kind: 'release'; tag: string }
 
 export declare const publishedTargets: (cmd: string, output: string) => PublishTarget[]
+export declare const mergedPrNumbers: (output: string) => number[]
 export declare const apiPathFor: (t: PublishTarget) => string
 export declare const planBeadIdRewrite: (
   text: string,

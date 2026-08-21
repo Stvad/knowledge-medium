@@ -17,6 +17,10 @@
  *     where repair CANNOT reach (gh pr merge / gh pr review text, GraphQL
  *     mutations, --silent api calls, git commit messages) keep their
  *     pre-publish checks in bd-github-sync.mjs instead.
+ *   - a MERGED PR additionally gets its merge commit read back (detected
+ *     from gh's own "Merged pull request #N" line): its close keywords have
+ *     already acted, so the echo names what was closed while reopening a
+ *     wrong one is still cheap — covering merge text no pre-gate could read.
  *
  * Coverage is exactly the objects the command's OUTPUT names: the URLs gh
  * prints for CLI publishes, the top-level html_urls of `gh api` response
@@ -48,6 +52,7 @@ import {
   REPO,
   allowsBeadIds,
   beadIssueLookupWithMint,
+  closeKeywordRefs,
   extractBeadIds,
   extractIssueRefs,
   fetchIssueInfo,
@@ -135,6 +140,13 @@ export const publishedTargets = (cmd, output) => {
   return [...seen.values()]
 }
 
+// A merged PR is detected from gh's own success line, not by parsing the
+// command: the pattern only ever appears in merge output, and it names the
+// PR whose merge COMMIT — the one truly unrepairable text — can then be
+// read back from the API (#683: detection where prevention cannot reach).
+const MERGED_PR = () => /Merged pull request (?:[\w./-]+)?#(\d+)/g
+export const mergedPrNumbers = output => [...new Set([...output.matchAll(MERGED_PR())].map(m => Number(m[1])))]
+
 export const apiPathFor = t =>
   t.kind === 'pr'
     ? `repos/${REPO}/pulls/${t.number}`
@@ -221,9 +233,9 @@ const titleOf = (t, obj) => {
   return field && typeof obj?.[field] === 'string' ? obj[field] : ''
 }
 
-const unmappedNote = (ids, label, dry) =>
+const unmappedNote = (ids, label, mintSkipReason) =>
   `${ids.join(', ')} in ${label} ${ids.length > 1 ? 'have' : 'has'} no GitHub issue` +
-  `${dry ? ' (mint suppressed by BD_GITHUB_SYNC_DRY)' : ' and minting failed here'} — run pnpm bd:sync, then fix the published text`
+  `${mintSkipReason ? ` (mint suppressed: ${mintSkipReason})` : ' and minting failed here'} — run pnpm bd:sync, then fix the published text`
 
 const verifyTarget = (t, { dry, repairVeto, rewriteAllowed, deadline }) => {
   const notes = []
@@ -235,7 +247,11 @@ const verifyTarget = (t, { dry, repairVeto, rewriteAllowed, deadline }) => {
 
   const ids = rewriteAllowed ? extractBeadIds(`${finalTitle}\n${finalBody}`) : []
   if (ids.length) {
-    const byId = beadIssueLookupWithMint(ids, { dry })
+    // A vetoed repair must not mint either: reading an object (an explicit
+    // GET, or one of several candidates) is no licence to create public
+    // issues for the bead ids it happens to mention.
+    const mintSkipReason = dry ? 'BD_GITHUB_SYNC_DRY' : repairVeto ? 'repair is vetoed for this output' : ''
+    const byId = beadIssueLookupWithMint(ids, { dry: Boolean(mintSkipReason) })
     // A stale external_ref (deleted or transferred issue) must not be
     // written into public text — rewrite only mappings whose issue resolves.
     const stale = []
@@ -250,7 +266,7 @@ const verifyTarget = (t, { dry, repairVeto, rewriteAllowed, deadline }) => {
         `left ${stale.join(', ')} alone in ${label} — the mapped issue does not resolve (stale sync state?); fix by hand`,
       )
     if (![...byId.values()].some(Boolean)) {
-      notes.push(unmappedNote(ids.filter(id => !byId.get(id)), label, dry))
+      notes.push(unmappedNote(ids.filter(id => !byId.get(id)), label, mintSkipReason))
     } else {
       // The mint above can take seconds — re-read the object and rewrite the
       // FRESH text, or a concurrent edit would be overwritten with this
@@ -284,7 +300,7 @@ const verifyTarget = (t, { dry, repairVeto, rewriteAllowed, deadline }) => {
             notes.push(`FAILED to rewrite ${subs} in ${label} — edit it by hand; bead ids are opaque to GitHub readers`)
           }
         }
-        if (unmapped.length) notes.push(unmappedNote(unmapped, label, dry))
+        if (unmapped.length) notes.push(unmappedNote(unmapped, label, mintSkipReason))
       }
     }
   }
@@ -303,6 +319,34 @@ const verifyTarget = (t, { dry, repairVeto, rewriteAllowed, deadline }) => {
     else notes.push(`${label}: ${refs.length} issue references not echoed (out of time budget) — check them yourself`)
   }
   return notes
+}
+
+// The merge commit's close keywords have ALREADY acted by the time this
+// runs, so this is detection, not prevention (#683: D): read the commit —
+// the ground truth every pre-publish channel guess was trying to predict —
+// and put what it references in front of the agent while reopening a
+// wrongly closed issue is still cheap. Squash merges carry the PR body's
+// keywords into the commit, so this covers file-fed and expanded merge text
+// that no pre-gate could read.
+const verifyMergeCommit = (n, deadline) => {
+  const notes = []
+  const pr = ghJson(['api', `repos/${REPO}/pulls/${n}`])
+  if (!pr?.merged || typeof pr.merge_commit_sha !== 'string') return notes
+  const commit = ghJson(['api', `repos/${REPO}/commits/${pr.merge_commit_sha}`])
+  const message = commit?.commit?.message
+  if (typeof message !== 'string') return notes
+  // The PR's own number always appears in a merge-commit message — echoing
+  // it back would be pure noise.
+  const refs = extractIssueRefs(message).filter(r => r !== n)
+  if (!refs.length) return notes
+  const budget = Math.max(0, Math.floor((deadline - Date.now()) / GH_TIMEOUT) - 1)
+  const cap = Math.min(REFS_CAP, budget)
+  if (cap === 0) return [`merge commit of #${n}: ${refs.length} issue references not echoed (out of time budget) — check them yourself`]
+  const closes = closeKeywordRefs(message).filter(r => r !== n)
+  const warn = closes.length
+    ? `\n  ⚠ close keywords in a merge commit have ALREADY acted — if an issue above was closed wrongly, reopen it now (gh issue reopen <n>)`
+    : ''
+  return [`merge commit ${pr.merge_commit_sha.slice(0, 9)} of #${n}:\n${issueRefsTable(message, refs.slice(0, cap), 'post')}${warn}`]
 }
 
 const hookPostPublish = () => {
@@ -325,7 +369,8 @@ const hookPostPublish = () => {
   if (!cmd || !out) return
   if (!matchesPrCommand(cmd) && !matchesApiPublish(cmd)) return
   const all = publishedTargets(cmd, out)
-  if (!all.length) return
+  const mergedPrs = matchesPrCommand(cmd) ? mergedPrNumbers(out).slice(0, 2) : []
+  if (!all.length && !mergedPrs.length) return
   const targets = all.slice(0, MAX_TARGETS)
   const dry = process.env.BD_GITHUB_SYNC_DRY === '1'
   const rewriteAllowed = !allowsBeadIds(cmd)
@@ -356,6 +401,14 @@ const hookPostPublish = () => {
       // Defence in depth, not currently reachable: every failure inside
       // verifyTarget already resolves to a note or a silent skip. A future
       // edit that can throw must not kill the remaining targets' sweep.
+    }
+  }
+  for (const n of mergedPrs) {
+    if (Date.now() > deadline) break
+    try {
+      notes.push(...verifyMergeCommit(n, deadline))
+    } catch {
+      // same defence-in-depth contract as the targets loop above
     }
   }
   const eventName = payload?.hook_event_name === 'PostToolUseFailure' ? 'PostToolUseFailure' : 'PostToolUse'

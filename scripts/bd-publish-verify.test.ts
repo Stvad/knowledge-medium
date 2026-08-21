@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { hasExplicitGetMethod, matchesApiPublish, repairableKinds } from './bd-github-sync.mjs'
-import { apiPathFor, clipContext, planBeadIdRewrite, publishedTargets } from './bd-publish-verify.mjs'
+import { apiPathFor, clipContext, mergedPrNumbers, planBeadIdRewrite, publishedTargets } from './bd-publish-verify.mjs'
 
 const PR_CREATE = 'gh pr create --title t --body-file /tmp/x.md'
 // A compound whose verbs produce every kind — for tests that exercise
@@ -144,6 +144,14 @@ describe('publishedTargets', () => {
       { kind: 'issue', number: 12 },
       { kind: 'comment', id: 99 },
     ])
+  })
+})
+
+describe('mergedPrNumbers', () => {
+  it('reads PR numbers from gh merge success lines only', () => {
+    expect(mergedPrNumbers('✓ Merged pull request #652 (feat x)\n✓ Deleted branch')).toEqual([652])
+    expect(mergedPrNumbers('Merged pull request Stvad/knowledge-medium#12 (y)')).toEqual([12])
+    expect(mergedPrNumbers('relates to #700 and pull request #12')).toEqual([])
   })
 })
 
@@ -459,6 +467,47 @@ describe('bd-publish-verify process behavior', { timeout: 30_000 }, () => {
     expect(context(r)).toContain('explicit GET')
     expect(context(r)).toContain('#77 → "Referenced" (issue, open)')
     expect(existsSync(join(repo, patchName('repos/Stvad/knowledge-medium/issues/comments/99')))).toBe(false)
+  })
+
+  // #683 D: the merge commit is the one truly unrepairable text — read it
+  // back and echo what it references, because its close keywords have
+  // ALREADY acted. Detected from gh's own success line, so file-fed and
+  // expanded merge bodies are covered without reading any command channel.
+  it('reads the merge commit back after a merge and warns about acted close keywords', () => {
+    const sha = 'abc123def4567890abc123def4567890abc123de'
+    const { hook } = makeRepo({
+      fixtures: {
+        'repos/Stvad/knowledge-medium/pulls/652': { html_url: url('pull/652'), merged: true, merge_commit_sha: sha },
+        [`repos/Stvad/knowledge-medium/commits/${sha}`]: { commit: { message: 'stack tip (#652)\n\nFixes #700' } },
+        'repos/Stvad/knowledge-medium/issues/700': { title: 'Closed by merge', state: 'closed' },
+      },
+    })
+    const r = hook('gh pr merge 652 --squash --delete-branch', '✓ Merged pull request #652 (stack tip)')
+    expect(r.status).toBe(0)
+    expect(context(r)).toContain(`merge commit ${sha.slice(0, 9)} of #652`)
+    expect(context(r)).toContain('#700 → "Closed by merge"')
+    expect(context(r)).toContain('ALREADY acted')
+    // the PR's own number is noise, not a reference
+    expect(context(r)).not.toContain('#652 →')
+  })
+
+  // A vetoed repair must not mint either: reading one of several candidate
+  // objects is no licence to create public issues for bead ids it mentions.
+  it('suppresses the mint when repair is vetoed', () => {
+    const { hook, shimCalls } = makeRepo({
+      fixtures: {
+        'repos/Stvad/knowledge-medium/issues/comments/91': {
+          html_url: url('pull/1#issuecomment-91'),
+          body: 'tracks km-zzzz',
+        },
+        'repos/Stvad/knowledge-medium/issues/comments/92': { html_url: url('pull/1#issuecomment-92'), body: 'clean' },
+      },
+      shows: [[]],
+    })
+    const r = hook('gh pr comment 1 -F /tmp/x.md', `${url('pull/1#issuecomment-91')}\n${url('pull/1#issuecomment-92')}`)
+    expect(r.status).toBe(0)
+    expect(shimCalls()).not.toContain('bd github sync')
+    expect(context(r)).toContain('mint suppressed: repair is vetoed')
   })
 
   it('echoes the post-mode issue-reference table for published refs, with no PATCH', () => {
