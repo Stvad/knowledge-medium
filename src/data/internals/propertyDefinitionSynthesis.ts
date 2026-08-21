@@ -52,6 +52,7 @@ import {
 } from '@/data/properties'
 import { getOrCreatePropertiesPage, propertiesPageBlockId } from '@/data/propertiesPage'
 import { isGrammarShapedLabel } from '@/data/referenceBlock'
+import type { PropertyDefinitionRegistrySnapshot } from '@/data/propertyDefinitionRegistry'
 import type { Repo } from '@/data/repo'
 import { readWorkspaceEncryptionMode } from '@/data/workspaceSchema'
 import { getModePin } from '@/sync/keys/modePin'
@@ -552,6 +553,31 @@ const storedDefaultValue = (block: BlockData, preset: AnyValuePresetCore): unkno
   }
 }
 
+/** The name a live definition row currently answers to, computed the way
+ *  `buildPropertyDefinitionRegistry` computes it: a valid seed row answers to
+ *  the seed's DECLARED name, everyone else to their stored one.
+ *
+ *  Read from the ROW rather than from the registry, because the caller is
+ *  checking a fact the registry may be stale about — but through the same rule,
+ *  or a seed row whose stored name has drifted would read as serving a name
+ *  nothing uses. Undefined when the row is no longer a usable definition at all
+ *  (deleted, un-typed, metadata that stopped parsing).
+ *
+ *  The seed branch is UNPINNED, for the same reason as the rival filter's:
+ *  seed names are non-renamable through the API, so drift arrives only by raw
+ *  write or sync and neither reaches the test harness's projector. The rule is
+ *  `buildPropertyDefinitionRegistry`'s; this is the third site that needs it. */
+const effectiveDefinitionName = (
+  block: BlockData,
+  registry: PropertyDefinitionRegistrySnapshot,
+): string | undefined => {
+  const metadata = parsePropertyDefinitionMetadata(block)
+  if (metadata === null) return undefined
+  return metadata.seedKey === undefined
+    ? metadata.name
+    : registry.seedsByKey.get(metadata.seedKey)?.name
+}
+
 /** A live definition block already serving as `key`'s definition — the only
  *  occupant this pass may adopt.
  *
@@ -658,17 +684,19 @@ export const applyPropertyDefinitionSynthesis = async (
       // and minting a second one for a name that already has one is the rival
       // this whole re-check exists to prevent. Not answerable from
       // `tx.get(id)`: OUR id is vacant no matter who else claimed the name.
-      // Converged only if the definition the resolver SELECTED is still live.
-      // The resolver is a projection: a definition created after the plan and
-      // deleted again before the deletion tick still reads `resolved`, and
-      // counting that as converged permits the flip with the key genuinely
-      // orphaned. Checked by field id rather than by name, so a seed-backed row
-      // whose stored name has drifted — which resolves under its DECLARED name
-      // and would be invisible to a name lookup here — is still recognised.
+      // Converged only if the definition the resolver SELECTED still answers to
+      // this key IN THE DATABASE. The resolver is a projection, so everything
+      // it says about that row may be one tick out of date — the row may have
+      // been deleted, renamed, un-typed, or had its metadata broken since. A
+      // tombstone check alone covers only the first of those.
+      //
+      // Located by FIELD ID, not by name, so a seed-backed row whose stored
+      // name has drifted is still found; judged by EFFECTIVE name, so that same
+      // row is still recognised as serving the key it actually resolves.
       const resolution = resolver.resolve(candidate.key)
       if (resolution.status === 'resolved') {
         const selected = await tx.get(resolution.schema.fieldId)
-        if (selected !== null && !selected.deleted) {
+        if (selected !== null && effectiveDefinitionName(selected, registry) === candidate.key) {
           converged += 1
           continue
         }

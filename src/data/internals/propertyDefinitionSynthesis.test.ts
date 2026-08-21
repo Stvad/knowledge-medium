@@ -473,6 +473,33 @@ describe('applyPropertyDefinitionSynthesis: the id is occupied, or the key stopp
     expect(result.created).toBe(1)
   }, 30_000)
 
+  it('does not call a key converged when the resolver-picked row was renamed', async () => {
+    // A tombstone check alone covers only deletion. The projection can be one
+    // tick behind a RENAME too, and a row that no longer answers to this key is
+    // not convergence — it is a key with no definition, and the flip must not
+    // step over it.
+    await rawCell('b1', {'demo:orphan': 'hello'})
+    const plan = await planFor()
+    await applyPropertyDefinitionSynthesis(repo, plan)
+    const id = synthesizedPropertyDefinitionBlockId(WS, 'demo:orphan')
+    const stale = repo.propertySchemaResolverFor(WS).resolve('demo:orphan')
+    expect(stale.status).toBe('resolved')
+    await repo.tx(async tx => { await tx.setProperty(id, propertyNameProp, 'demo:renamed') },
+                  {scope: ChangeScope.BlockDefault, description: 'rename'})
+    // Freeze the projection at its pre-rename answer, which is the state this
+    // guard exists for.
+    vi.spyOn(repo, 'propertySchemaResolverFor').mockReturnValue({
+      resolve: () => stale,
+      resolveField: () => ({status: 'identity-unavailable', reason: 'definition-unavailable'}),
+      resolveBoundary: () => ({status: 'identity-unavailable', reason: 'definition-unavailable'}),
+    } as unknown as ReturnType<typeof repo.propertySchemaResolverFor>)
+
+    const result = await applyPropertyDefinitionSynthesis(repo, plan)
+
+    expect(result.converged).toBe(0)
+    expect(result.skipped.map(s => s.key)).toEqual(['demo:orphan'])
+  }, 30_000)
+
   it('reports an already-defined key as converged rather than minting again', async () => {
     await rawCell('b1', {'demo:orphan': 'hello'})
     const plan = await planFor()
