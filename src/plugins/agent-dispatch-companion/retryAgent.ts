@@ -32,6 +32,16 @@ import { markAskedAgent } from './askedStore.ts'
 export const RETRY_AGENT_ACTION_ID = 'agent-dispatch.retry'
 export const RETRY_FAILED_AGENT_TASKS_ACTION_ID = 'agent-dispatch.retry-failed'
 
+/** Sentinel `agent:error` value the daemon writes when a Stop request
+ *  aborted the task (both Stop paths park it as `status: error` +
+ *  `error: 'cancelled'` — see cancelAgent.ts). The bulk sweep excludes it:
+ *  a deliberate stop is not a failure to recover from, and resurrecting it
+ *  would re-queue (and re-bill) work the user explicitly stopped, defeating
+ *  Stop's own escape hatch from a retry loop. A single-block Retry may
+ *  still act on one — that gesture is an explicit, unambiguous per-block
+ *  choice — so only the sweep checks this. */
+export const AGENT_CANCELLED_ERROR = 'cancelled'
+
 /** Post-write UI: optimistic chip + the settle signal, so push detection
  *  skips the quiet window and the daemon reacts in bridge-round-trip time
  *  instead of after `quietMs`. */
@@ -70,7 +80,19 @@ export const retryAgentTask = async (block: Block): Promise<boolean> => {
  *  bill) tasks in workspaces the user isn't even looking at. */
 export const retryFailedAgentTasks = async (repo: Repo): Promise<number> => {
   if (repo.isReadOnly) return 0
-  const failed = await repo.queryActiveWorkspace({where: {[AGENT_PROPS.status]: 'error'}})
+  const failed = await repo.queryActiveWorkspace({
+    where: {[AGENT_PROPS.status]: 'error'},
+    // Defence in depth, not the sole guard: the in-tx recheck below is what
+    // actually stops a cancelled task from being requeued (it re-reads fresh
+    // state, so it alone is airtight). This filter's job is to keep a
+    // workspace full of deliberately-stopped tasks out of `failed` and the
+    // tx loop in the first place, rather than fetching and re-skipping each
+    // one every sweep. Excluded rather than matched on a negated
+    // `agent:error`: most failures never set the property to this exact
+    // value, so a negated-equality match would need an operator the query
+    // language doesn't have.
+    exclude: [{where: {[AGENT_PROPS.error]: AGENT_CANCELLED_ERROR}}],
+  })
   if (failed.length === 0) return 0
 
   const requeued: string[] = []
@@ -78,9 +100,11 @@ export const retryFailedAgentTasks = async (repo: Repo): Promise<number> => {
     for (const row of failed) {
       const fresh = await tx.get(row.id)
       if (!fresh) continue
-      // Still failed? The query snapshot predates the tx, and a daemon
-      // that picked the task up in between owns it now.
+      // Still failed, and still not a cancelled task? The query snapshot
+      // predates the tx: a daemon may have claimed it since (owns it now),
+      // or a Stop may have landed since and parked it as cancelled.
       if (fresh.properties[AGENT_PROPS.status] !== 'error') continue
+      if (fresh.properties[AGENT_PROPS.error] === AGENT_CANCELLED_ERROR) continue
       await requeueAgentTask(tx, row.id, {clearTerminalState: true})
       requeued.push(row.id)
     }

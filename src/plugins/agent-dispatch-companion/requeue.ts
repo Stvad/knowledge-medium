@@ -65,11 +65,17 @@ export const requeueAgentTask = async (
 }
 
 /** A task the daemon is done with (or has deferred), i.e. one a retry may
- *  reset. An in-flight claim (`running`) is the daemon already doing what
- *  the gesture asks for — clearing it would orphan the running task.
+ *  reset. Exactly `queued` (deferred), `done`, or `error` — an in-flight
+ *  claim (`running`) is the daemon already doing what the gesture asks
+ *  for (clearing it would orphan the running task), and an absent/unknown
+ *  status means the block was never an agent task at all: Retry is a
+ *  NORMAL_MODE action offered on every block, so this must not treat
+ *  "no status" as retryable, or the gesture would write `agent:asked-at`
+ *  and install a queued chip on an ordinary block that no watcher will
+ *  ever claim.
  *
  *  `queued` IS resettable: the daemon only writes it for a task deferred
  *  behind an infrastructure outage, and resetting that just means "stop
  *  waiting, try now". */
 export const isRequeueableStatus = (status: unknown): boolean =>
-  status !== 'running'
+  status === 'queued' || status === 'done' || status === 'error'

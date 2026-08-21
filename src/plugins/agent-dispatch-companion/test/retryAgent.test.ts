@@ -5,14 +5,14 @@
  * The bulk form matters because an outage produces a BATCH — re-queueing
  * them one at a time is what makes recovery feel impossible.
  */
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChangeScope } from '@/data/api'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { Block } from '@/data/block'
 import type { Repo } from '@/data/repo'
 import { agentDispatchCompanionDataExtension } from '../dataExtension.ts'
-import { retryAgentTask, retryFailedAgentTasks } from '../retryAgent.ts'
+import { AGENT_CANCELLED_ERROR, retryAgentTask, retryFailedAgentTasks } from '../retryAgent.ts'
 import { AGENT_PROPS } from '../chipState.ts'
 
 const WORKSPACE = 'ws-1'
@@ -109,6 +109,18 @@ describe('retryAgentTask', () => {
     expect((await propsOf('live'))[AGENT_PROPS.status]).toBe('running')
   })
 
+  it('refuses an ordinary block with no agent:status — Retry is offered on every block', async () => {
+    // No agent:status means this was never an agent task at all: no
+    // watcher mention, nothing the daemon will ever claim. Acting anyway
+    // would write agent:asked-at and install a chip stuck forever.
+    const block = await createBlock('ordinary', {})
+
+    expect(await retryAgentTask(block)).toBe(false)
+    const props = await propsOf('ordinary')
+    expect(props[AGENT_PROPS.status]).toBeUndefined()
+    expect(props[AGENT_PROPS.askedAt]).toBeUndefined()
+  })
+
   it('does nothing in a read-only repo', async () => {
     const readOnly = createTestRepo({db: sharedDb.db, user: {id: 'user-1'}, isReadOnly: true}).repo
     await createBlock('ro', {[AGENT_PROPS.status]: 'error'})
@@ -152,5 +164,46 @@ describe('retryFailedAgentTasks', () => {
   it('reports zero when there is nothing to retry', async () => {
     await createBlock('done-only', {[AGENT_PROPS.status]: 'done'})
     expect(await retryFailedAgentTasks(repo)).toBe(0)
+  })
+
+  it('excludes a task the user deliberately Stopped end-to-end', async () => {
+    // Both Stop paths park the block as error + error:'cancelled'. The
+    // sweep must not resurrect (and re-bill) work the user explicitly
+    // stopped — that would defeat Stop's own escape hatch from a retry loop.
+    await createBlock('failed', {[AGENT_PROPS.status]: 'error', [AGENT_PROPS.error]: 'boom'})
+    await createBlock('stopped', {[AGENT_PROPS.status]: 'error', [AGENT_PROPS.error]: AGENT_CANCELLED_ERROR})
+
+    expect(await retryFailedAgentTasks(repo)).toBe(1)
+
+    expect((await propsOf('failed'))[AGENT_PROPS.status]).toBeUndefined()
+    expect((await propsOf('stopped'))[AGENT_PROPS.status]).toBe('error')
+    expect((await propsOf('stopped'))[AGENT_PROPS.error]).toBe(AGENT_CANCELLED_ERROR)
+  })
+
+  it('in-tx recheck skips a task that turns cancelled after the query snapshot (racing a Stop)', async () => {
+    const block = await createBlock('racing-stop', {[AGENT_PROPS.status]: 'error', [AGENT_PROPS.error]: 'boom'})
+
+    // The query result predates the tx (same reasoning as the "picked up by
+    // a daemon" recheck above): simulate a Stop landing in that window by
+    // having the query call cancel the block for real before returning its
+    // (now-stale) snapshot. Only the IN-TX recheck can catch this.
+    const originalQuery = repo.queryActiveWorkspace.bind(repo)
+    const querySpy = vi.spyOn(repo, 'queryActiveWorkspace').mockImplementation(async query => {
+      const rows = await originalQuery(query)
+      await repo.tx(
+        tx => tx.update(block.id, {
+          properties: {[AGENT_PROPS.status]: 'error', [AGENT_PROPS.error]: AGENT_CANCELLED_ERROR},
+        }),
+        {scope: ChangeScope.BlockDefault},
+      )
+      return rows
+    })
+
+    expect(await retryFailedAgentTasks(repo)).toBe(0)
+    querySpy.mockRestore()
+
+    const props = await propsOf('racing-stop')
+    expect(props[AGENT_PROPS.status]).toBe('error')
+    expect(props[AGENT_PROPS.error]).toBe(AGENT_CANCELLED_ERROR)
   })
 })
