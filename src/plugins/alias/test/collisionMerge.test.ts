@@ -143,4 +143,23 @@ describe('alias.mergeCollision', () => {
     expect(env.read('squatter')!.deleted).toBe(true)
     expect(env.read('canonical')!.properties[aliasesProp.name]).toEqual(['Journal', 'Notes'])
   })
+
+  it('refuses when the source no longer claims the alias, in the reclaim direction', async () => {
+    // A banner can sit on screen while the world moves, and the mutator is
+    // exported so an extension can call it with anything. Folding a page that
+    // does not hold the name would tombstone it and re-home its children for
+    // nothing. Only checked in the reclaim direction — in the rejection
+    // direction the source never holds the alias, by construction.
+    await createBlock('canonical', 'Journal', [], 'a0')
+    await createBlock('other', 'Unrelated', ['Something else'], 'a1')
+
+    await expect(env.repo.run(ALIAS_COLLISION_MERGE_MUTATOR, {
+      intoId: 'canonical',
+      fromId: 'other',
+      collisionAlias: 'Journal',
+      sourceIsAliasOwner: true,
+    })).rejects.toThrow(/no longer claims/)
+
+    expect((await env.repo.load('other'))?.deleted).toBe(false)
+  })
 })

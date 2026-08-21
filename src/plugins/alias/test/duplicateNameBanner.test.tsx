@@ -75,7 +75,11 @@ describe('DuplicateNameBanner', () => {
     await userEvent.click(await screen.findByRole('button', {name: /merge into this page/i}))
 
     await waitFor(async () => {
-      expect((await repo.load('canonical'))?.properties[aliasesProp.name]).toEqual(['Journal', 'Notes'])
+      // 'My journal' — the squatter's TITLE — survives as an alias. The merge
+      // keeps the target's content, so without this the only name the user
+      // knew that page by would vanish with nothing pointing at it.
+      expect((await repo.load('canonical'))?.properties[aliasesProp.name])
+        .toEqual(['Journal', 'Notes', 'My journal'])
     })
     // The other page's content came across, and it is gone.
     expect((await repo.load('kid'))?.parentId).toBe('canonical')

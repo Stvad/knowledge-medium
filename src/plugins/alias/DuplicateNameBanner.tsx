@@ -28,6 +28,10 @@ import { PAGE_TYPE } from '@/data/blockTypes.js'
 import { MergeIntoDescendantError } from '@/data/api'
 import { showError } from '@/utils/toast.js'
 import { navigateFromGlobalCommand } from '@/utils/navigation.js'
+import { useContent, useWorkspaceId } from '@/hooks/block.js'
+import { ensureDeletableThroughUi } from '@/utils/deleteBlockThroughUi.js'
+import { getLayoutSessionBlock, getUIStateBlock } from '@/data/stateBlocks.js'
+import { retargetPanelBlockIds } from '@/utils/panelLayoutProjection.js'
 import { truncate } from '@/utils/string.js'
 import type { BlockHeaderContribution } from '@/extensions/blockInteraction.js'
 import type { BlockRenderer } from '@/types'
@@ -36,30 +40,59 @@ import { ALIAS_COLLISION_MERGE_MUTATOR } from './collisionMerge.ts'
 export const DuplicateNameBanner: BlockRenderer = ({block}) => {
   const repo = useRepo()
   const [merging, setMerging] = useState(false)
-  const data = block.peek()
-  const name = (data?.content ?? '').trim()
-  const workspaceId = data?.workspaceId ?? ''
+  // Reactive, not `peek()`: the name is what the whole banner keys on, and a
+  // rename while it is on screen would otherwise leave a stale offer wired to
+  // the old name — clicking it would fold a page in over a name this page no
+  // longer has. Narrow hooks rather than the whole row, per
+  // `block/no-broad-block-subscriptions`.
+  const name = useContent(block).trim()
+  const workspaceId = useWorkspaceId(block)
   // Unconditional so the hook order is stable; an empty alias simply misses.
   // The selector narrows the subscription to the one thing that matters — a
   // re-render per edit to the other page would be pure noise.
   const duplicateId = useHandle(repo.query.aliasLookup({workspaceId, alias: name}), {
     selector: owner => (owner && owner.id !== block.id ? owner.id : null),
   })
-  if (name === '' || workspaceId === '' || !duplicateId) return null
+  // A viewer cannot write, so the merge is guaranteed to be rejected. Offering
+  // it would only produce a failure toast and an action that never works.
+  if (name === '' || workspaceId === '' || !duplicateId || repo.isReadOnly) return null
 
   const merge = async (): Promise<void> => {
     setMerging(true)
     try {
+      // Merging soft-deletes the other page, so it goes through the same UI
+      // deletion refusal an explicit delete would — the merge picker does this
+      // too. Without it a one-click merge silently deletes a page the app
+      // otherwise refuses to let you delete.
+      const source = repo.block(duplicateId)
+      await source.load()
+      if (!await ensureDeletableThroughUi([source])) return
+
       await repo.run(ALIAS_COLLISION_MERGE_MUTATOR, {
         intoId: block.id,
         fromId: duplicateId,
         collisionAlias: name,
+        sourceIsAliasOwner: true,
       })
+
+      // Any panel showing the absorbed page now points at a tombstone; move
+      // them to the survivor, as the rejection toast does after the same call.
+      const uiState = await getUIStateBlock(repo, workspaceId, repo.user, {})
+      const layoutSessionBlock = await getLayoutSessionBlock(uiState, repo.activeLayoutSessionId)
+      try {
+        await retargetPanelBlockIds(repo, layoutSessionBlock, duplicateId, block.id)
+      } catch (error) {
+        console.error('[DuplicateNameBanner] Failed to retarget panels after merge', error)
+        showError('Merged, but panel update failed')
+      }
     } catch (error) {
       // The one refusal worth explaining: merging a block into its own
       // descendant can never succeed, and the raw error says nothing useful.
+      // Direction matters in the copy: this error means THIS page sits inside
+      // the other one, so the user has to move this page out — the reverse of
+      // what a naive reading suggests.
       showError(error instanceof MergeIntoDescendantError
-        ? `“${truncate(name, 40)}” is inside this page — move it out before merging.`
+        ? `This page is inside “${truncate(name, 40)}” — move it out before merging.`
         : `Couldn’t merge “${truncate(name, 40)}”.`)
     } finally {
       setMerging(false)

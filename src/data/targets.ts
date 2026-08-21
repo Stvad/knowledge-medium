@@ -116,42 +116,34 @@ export const restorePropertiesStrippingAliases = async (
   return restoredProperties
 }
 
-/** An alias this block wanted but a different live block already owns. */
-export interface AliasCollision {
-  alias: string
-  /** The live block currently holding it. The merge target/source for the
-   *  resolution the user is offered. */
-  ownerId: string
-}
-
-/** Split `aliases` into the ones `id` may claim right now and the ones a
- *  DIFFERENT live block already holds.
+/** The canonical aliases `id` may claim right now: any alias a DIFFERENT live
+ *  block already holds is dropped.
  *
- *  Claiming a contested alias trips `block_aliases_workspace_alias_unique`,
- *  and that rejection rolls back the CALLER's whole transaction. For a
+ *  Claiming a contested alias trips `block_aliases_workspace_alias_unique`, and
+ *  that rejection rolls back the CALLER's whole transaction. For a
  *  get-or-create that is fatal rather than partial: the page is minted in the
  *  same tx, so it dies with the rollback and the next call repeats it — the
  *  page becomes permanently uncreatable (issue #378). Yielding the contested
  *  alias instead keeps the page reachable; resolving the duplicate name is a
  *  separate, user-driven merge.
  *
- *  MUST be called with a tx-scoped `tx.aliasLookup` inside the writing
- *  transaction: an answer read before the tx opened can be stale by the time
- *  the claim lands, which is the abort this exists to prevent. */
+ *  Call inside the writing transaction, so the answer reflects writes this tx
+ *  has already made. That is necessary but NOT sufficient on its own: a
+ *  sync-applied row can co-own an alias (the uniqueness trigger deliberately
+ *  skips sync-apply), and re-writing a row's own alias bag re-inserts every
+ *  entry, so a pre-existing duplicate can still abort the write. */
 export const partitionClaimableAliases = async (
   tx: Tx,
   id: string,
   aliases: readonly string[],
   workspaceId: string,
-): Promise<{claimable: string[]; contested: AliasCollision[]}> => {
+): Promise<string[]> => {
   const claimable: string[] = []
-  const contested: AliasCollision[] = []
   for (const alias of aliases) {
     const owner = await tx.aliasLookup(alias, workspaceId)
     if (owner === null || owner.id === id) claimable.push(alias)
-    else contested.push({alias, ownerId: owner.id})
   }
-  return {claimable, contested}
+  return claimable
 }
 
 /** Shared primitive — see file header. Returns `{id, inserted}`;

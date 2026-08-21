@@ -191,7 +191,7 @@ export const getOrCreateKernelPage = async (
       if (!current || current.deleted) return
       refuseForeign(current)
       const txAliases = stringListProperty(current.properties[aliasesProp.name])
-      const {claimable} = await partitionClaimableAliases(tx, id, aliases, workspaceId)
+      const claimable = await partitionClaimableAliases(tx, id, aliases, workspaceId)
       const merged = mergeStrings([...claimable, ...txAliases])
       // Compare rather than write unconditionally: while an alias stays
       // contested `needsRepair` is true on every call, and an unguarded
@@ -217,7 +217,7 @@ export const getOrCreateKernelPage = async (
       // exactly the canonical alias set.
       const restoredProperties = await restorePropertiesStrippingAliases(tx, id)
       await tx.restore(id, {content: spec.alias, properties: restoredProperties})
-      const {claimable} = await partitionClaimableAliases(tx, id, aliases, workspaceId)
+      const claimable = await partitionClaimableAliases(tx, id, aliases, workspaceId)
       await tx.setProperty(id, aliasesProp, claimable)
       await tagTypes(tx, typeSnapshot, claimable)
       return
@@ -229,7 +229,7 @@ export const getOrCreateKernelPage = async (
       orderKey,
       content: spec.alias,
     }, {systemMint: true})
-    const {claimable} = await partitionClaimableAliases(tx, id, aliases, workspaceId)
+    const claimable = await partitionClaimableAliases(tx, id, aliases, workspaceId)
     await tagTypes(tx, typeSnapshot, claimable)
   }, {scope: ChangeScope.BlockDefault})
 
