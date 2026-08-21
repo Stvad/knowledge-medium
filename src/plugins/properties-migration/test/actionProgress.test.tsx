@@ -31,8 +31,6 @@ vi.mock('@/data/repoProvider', () => ({isRemoteSyncActive: () => true}))
 vi.mock('@/data/internals/propertyCellBackfill', () => ({
   PROPERTY_CELL_BACKFILL_ID: 'properties:cell-to-children',
   countPropertyCellBackfillCandidates: async () => 7,
-  // No earlier run's children here — the reconcile-first path is action.test's.
-  workspaceHasPropertyMachinery: async () => false,
   onPropertyCellBackfillProgress: (listener: (p: PropertyCellBackfillProgress) => void) => {
     emit = listener
     return () => { emit = null }

@@ -203,29 +203,6 @@ export const countPropertyCellBackfillCandidates = async (
   return rows[0]?.n ?? 0
 }
 
-/**
- * Does this workspace already hold property machinery?
- *
- * Only interesting BEFORE a flip, where it means an earlier release's pass ran
- * and the workspace has field rows that may since have gone STALE: the live
- * processors are dormant at 'cell', so every cell edit and deletion after that
- * run left its children behind. Flipping makes those children authoritative in
- * one step, and create-only will not touch a key that already has a live field
- * row — so the edits are silently reverted and the deletions resurrected.
- *
- * Tombstones count: a workspace whose only field rows are deleted still needs
- * the reconciling pass, since the orphan leg is what removes their value rows.
- * Served by `idx_blocks_any_field_form`.
- */
-export const workspaceHasPropertyMachinery = async (
-  getAll: <T>(sql: string, params?: readonly unknown[]) => Promise<T[]>,
-  workspaceId: string,
-): Promise<boolean> => (await getAll<{one: number}>(
-  `SELECT 1 AS one FROM blocks INDEXED BY idx_blocks_any_field_form
-    WHERE workspace_id = ? AND is_field_form = 1 LIMIT 1`,
-  [workspaceId],
-)).length > 0
-
 /** Progress fan-out for a surface that wants to show a running count. The pass
  *  runs inside the backfill runner, which has no channel back to whoever asked
  *  for it, and a module registry is the sanctioned shape for that (AGENTS.md:

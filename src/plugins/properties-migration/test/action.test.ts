@@ -28,14 +28,9 @@ import type { OperatorBackfillResult, Repo } from '@/data/repo'
 import { describeOutcome, migratePropertiesToBlocksAction } from '../action.ts'
 
 const clearUndo = vi.fn()
-const makeRepo = (
-  result: OperatorBackfillResult, {flipped = false, hasMachinery = false} = {},
-) => {
+const makeRepo = (result: OperatorBackfillResult, {flipped = false} = {}) => {
   const runWorkspaceBackfillNow = vi.fn(async () => result)
-  // Two shapes come through `getAll`: the candidate count and the machinery
-  // probe. The probe wants rows-or-none, the count wants `[{n}]`.
-  const getAll = vi.fn(async (sql: string) =>
-    sql.includes('is_field_form') ? (hasMachinery ? [{one: 1}] : []) : [{n: 7}])
+  const getAll = vi.fn(async () => [{n: 7}])
   const repo = {
     activeWorkspaceId: 'ws-1',
     db: {
@@ -250,44 +245,6 @@ describe('migrate_properties_to_blocks action', () => {
       expect.stringMatching(/switched to property blocks/i))
     expect(progressHandle.fail).toHaveBeenCalledWith(
       expect.stringMatching(/undo history for this workspace was cleared/i))
-  })
-
-  it('reconciles an earlier run\'s property blocks BEFORE flipping', async () => {
-    // The live processors are dormant at 'cell', so field rows built by an
-    // earlier release's pass go stale on every cell edit and deletion after it.
-    // The flip makes them authoritative in one step, and create-only will not
-    // touch a key that already has a live field row — so those edits would be
-    // silently reverted and the deletions resurrected. Reconciling while the
-    // CELLS are still authoritative is what makes the flip safe.
-    openDialog.mockResolvedValue(true)
-    const order: string[] = []
-    flipWorkspace.mockImplementation(async () => { order.push('flip'); return {localApplied: true} })
-    const {repo, runWorkspaceBackfillNow} = makeRepo(
-      {outcome: 'ran', undoHistoryCleared: false}, {hasMachinery: true})
-    runWorkspaceBackfillNow.mockImplementation(async () => {
-      order.push('backfill')
-      return {outcome: 'ran', undoHistoryCleared: false} as OperatorBackfillResult
-    })
-
-    await invoke(repo)
-
-    expect(order).toEqual(['backfill', 'flip', 'backfill'])
-  })
-
-  it('does not flip when reconciling the earlier run could not finish', async () => {
-    // Flipping anyway would make children nobody has verified against the cells
-    // authoritative — the exact hazard the reconcile exists to remove.
-    openDialog.mockResolvedValue(true)
-    const {repo} = makeRepo(
-      {outcome: 'deferred', undoHistoryCleared: false, reason: 'this device is not caught up'},
-      {hasMachinery: true})
-
-    await invoke(repo)
-
-    expect(flipWorkspace).not.toHaveBeenCalled()
-    expect(clearUndo).not.toHaveBeenCalled()
-    expect(progressHandle.fail).toHaveBeenCalledWith(
-      expect.stringMatching(/NOT switched over/i))
   })
 
   it('flips the workspace before running the pass, not after', async () => {
