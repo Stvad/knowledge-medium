@@ -164,6 +164,8 @@ describe('mergedPrNumbers', () => {
     expect(mergedPrNumbers('✓ Merged pull request #652 (feat x)\n✓ Deleted branch')).toEqual([652])
     expect(mergedPrNumbers('Merged pull request Stvad/knowledge-medium#12 (y)')).toEqual([12])
     expect(mergedPrNumbers('relates to #700 and pull request #12')).toEqual([])
+    // a -R merge prints a foreign qualifier — never read back OUR PR of that number
+    expect(mergedPrNumbers('Merged pull request other/repo#12 (y)')).toEqual([])
   })
 })
 
@@ -732,6 +734,44 @@ describe('bd-publish-verify process behavior', { timeout: 30_000 }, () => {
     expect(r.status).toBe(0)
     expect(context(r)).toContain('#701 → "Closed by rebase"')
     expect(context(r)).toContain('ALREADY acted')
+  })
+
+  // A FAILED command published nothing — an object its error output names
+  // is echoed, never minted for or written.
+  it('keeps failure-event targets echo-only', () => {
+    const { hook, repo, shimCalls } = makeRepo({
+      fixtures: {
+        'repos/Stvad/knowledge-medium/pulls/652': { html_url: url('pull/652'), title: 'T', body: 'tracks km-abc' },
+        'repos/Stvad/knowledge-medium/issues/12': { title: 'Tracked issue', state: 'open' },
+      },
+      shows: [[{ id: 'km-abc', external_ref: url('issues/12') }]],
+    })
+    const r = hook('gh pr create --title t --body-file /tmp/x.md; exit 1', null, {
+      hook_event_name: 'PostToolUseFailure',
+      error: `Exit code 1\na pull request for this branch already exists:\n${url('pull/652')}`,
+    })
+    expect(r.status).toBe(0)
+    expect(JSON.parse(r.stdout).hookSpecificOutput.additionalContext).toContain('never written')
+    expect(shimCalls()).not.toContain('bd github sync')
+    expect(existsSync(join(repo, patchName('repos/Stvad/knowledge-medium/pulls/652')))).toBe(false)
+  })
+
+  it('reports merged PRs dropped by the read-back cap and the 100-commit page limit', () => {
+    const sha = 'aaa1111222233334444555566667777888899990'
+    const manyCommits = Array.from({ length: 100 }, (_, i) => ({ commit: { message: `c${i}\n\nrefs #7${i % 10}` } }))
+    const { hook } = makeRepo({
+      fixtures: {
+        'repos/Stvad/knowledge-medium/pulls/650': { html_url: url('pull/650'), merged: true, merge_commit_sha: sha },
+        [`repos/Stvad/knowledge-medium/commits/${sha}`]: { commit: { message: 'head (#650)' } },
+        'repos/Stvad/knowledge-medium/pulls/650/commits?per_page=100': manyCommits,
+      },
+    })
+    const out = ['✓ Merged pull request #650 (a)', '✓ Merged pull request #651 (b)', '✓ Merged pull request #653 (c)'].join('\n')
+    const r = hook('gh pr merge 650 --rebase; gh pr merge 651 --rebase; gh pr merge 653 --rebase', out)
+    expect(r.status).toBe(0)
+    const ctx = JSON.parse(r.stdout).hookSpecificOutput.additionalContext
+    expect(ctx).toContain('1 additional merged PR(s) not read back')
+    expect(ctx).toContain('only the first 100 landed commits were scanned')
   })
 
   it('suppresses writes under BD_GITHUB_SYNC_DRY=1 but still reports what it would do', () => {

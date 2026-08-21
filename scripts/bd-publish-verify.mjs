@@ -152,8 +152,13 @@ export const publishedTargets = (cmd, output) => {
 // command: the pattern only ever appears in merge output, and it names the
 // PR whose merge COMMIT — the one truly unrepairable text — can then be
 // read back from the API (#683: detection where prevention cannot reach).
-const MERGED_PR = () => /Merged pull request (?:[\w./-]+)?#(\d+)/g
-export const mergedPrNumbers = output => [...new Set([...output.matchAll(MERGED_PR())].map(m => Number(m[1])))]
+const MERGED_PR = () => /Merged pull request ((?:[\w.-]+\/[\w.-]+)?)#(\d+)/g
+// A -R merge prints the qualified `owner/repo#N` — a foreign qualifier must
+// not read back OUR PR of that number.
+export const mergedPrNumbers = output =>
+  [...new Set(
+    [...output.matchAll(MERGED_PR())].filter(m => m[1] === '' || m[1] === REPO).map(m => Number(m[2])),
+  )]
 
 export const apiPathFor = t =>
   t.kind === 'pr'
@@ -365,6 +370,7 @@ const verifyMergeCommit = (n, deadline) => {
     : []
   const headMsg = typeof commit?.commit?.message === 'string' ? commit.commit.message : ''
   const message = [headMsg, ...commitMsgs].join('\n')
+  const pageNote = commitMsgs.length === 100 ? `\n  …only the first 100 landed commits were scanned` : ''
   if (!message.trim()) return notes
   // The PR's own number always appears in a merge-commit message — echoing
   // it back would be pure noise.
@@ -378,7 +384,7 @@ const verifyMergeCommit = (n, deadline) => {
     ? `\n  ⚠ close keywords in a merge commit have ALREADY acted — if an issue above was closed wrongly, reopen it now (gh issue reopen <n>)`
     : ''
   const capNote = refs.length > cap ? `\n  …and ${refs.length - cap} more references not echoed` : ''
-  return [`merge commit ${pr.merge_commit_sha.slice(0, 9)} of #${n}:\n${issueRefsTable(message, refs.slice(0, cap), 'post')}${capNote}${warn}`]
+  return [`merge commit ${pr.merge_commit_sha.slice(0, 9)} of #${n}:\n${issueRefsTable(message, refs.slice(0, cap), 'post')}${capNote}${pageNote}${warn}`]
 }
 
 const hookPostPublish = () => {
@@ -401,7 +407,8 @@ const hookPostPublish = () => {
   if (!cmd || !out) return
   if (!matchesPrCommand(cmd) && !matchesApiPublish(cmd)) return
   const all = publishedTargets(cmd, out)
-  const mergedPrs = matchesPrCommand(cmd) ? mergedPrNumbers(out).slice(0, 2) : []
+  const allMerged = matchesPrCommand(cmd) ? mergedPrNumbers(out) : []
+  const mergedPrs = allMerged.slice(0, 2)
   if (!all.length && !mergedPrs.length) return
   const targets = all.slice(0, MAX_TARGETS)
   const dry = process.env.BD_GITHUB_SYNC_DRY === '1'
@@ -413,17 +420,21 @@ const hookPostPublish = () => {
   // anywhere in the command also vetoes: a compound can mix a read segment
   // with the mutation, and a merely READ object must never be written.
   const repairVeto =
-    all.length > 1
+    payload?.hook_event_name === 'PostToolUseFailure'
+      ? 'the command failed — objects named in its error output are echoed, never written'
+      : all.length > 1
       ? 'the output names more than one object, so this hook cannot tell which one the command published'
-      : hasExplicitGetMethod(cmd)
-        ? 'the command carries an explicit GET, and an object a read segment printed must never be written'
-        : isCompoundCommand(cmd)
-          ? 'the output cannot be attributed to a single segment of a compound command'
-          : null
+        : hasExplicitGetMethod(cmd)
+          ? 'the command carries an explicit GET, and an object a read segment printed must never be written'
+          : isCompoundCommand(cmd)
+            ? 'the output cannot be attributed to a single segment of a compound command'
+            : null
   const deadline = Date.now() + DEADLINE_MS
   const notes = []
   if (all.length > targets.length)
     notes.push(`only the first ${MAX_TARGETS} of ${all.length} published objects named in the output were verified`)
+  if (allMerged.length > mergedPrs.length)
+    notes.push(`${allMerged.length - mergedPrs.length} additional merged PR(s) not read back — check their landed commits yourself`)
   for (const [i, t] of targets.entries()) {
     if (Date.now() >= deadline) {
       notes.push(`${targets.length - i} published object(s) not verified (out of time budget) — check them yourself`)
