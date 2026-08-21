@@ -4,6 +4,7 @@ import {
   PROPERTY_CELL_BACKFILL_ID,
   countPropertyCellBackfillCandidates,
   onPropertyCellBackfillProgress,
+  workspaceHasPropertyMachinery,
 } from '@/data/internals/propertyCellBackfill'
 import { readIsChildBackedWorkspace } from '@/data/workspaceSchema'
 import { flipWorkspaceToChildBackedProperties } from '@/data/workspaces'
@@ -253,6 +254,28 @@ export const migratePropertiesToBlocksAction = ({repo}: {repo: Repo}): ActionCon
       if (unfit !== null) {
         banner.fail(`Not started — ${withPeriod(unfit)} Nothing was changed; try again shortly.`)
         return
+      }
+      // RECONCILE FIRST when an earlier release's pass already built children.
+      // They may have gone stale — the live processors are dormant at 'cell', so
+      // every cell edit and deletion since that run left its children behind —
+      // and the flip makes them authoritative in one step, after which
+      // create-only will not touch a key that already has a live field row. The
+      // edits would be silently reverted and the deletions resurrected. Running
+      // the pass while the CELLS are still authoritative is what makes the flip
+      // safe; on a workspace with no machinery the probe is a single indexed
+      // lookup and nothing else happens.
+      if (await workspaceHasPropertyMachinery(
+        (sql, params) => repo.db.getAll(sql, params as unknown[] | undefined), workspaceId)) {
+        banner.update('Reconciling property blocks from an earlier run…')
+        const reconciled = await repo.runWorkspaceBackfillNow(workspaceId, PROPERTY_CELL_BACKFILL_ID)
+        if (reconciled.outcome !== 'ran') {
+          const {message} = describeOutcome(
+            reconciled, {blocksMaterialized: 0, valuesMaterializedTotal: 0, unmigrated: 0,
+                        orphanedOwnersSwept: 0}, false)
+          banner.fail(`${message} The workspace was NOT switched over — property blocks from ` +
+            'an earlier run have to be brought up to date with the cells first.')
+          return
+        }
       }
       banner.update('Switching this workspace to property blocks…')
       let localApplied: boolean
