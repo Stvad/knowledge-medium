@@ -617,6 +617,10 @@ export const applyPropertyDefinitionSynthesis = async (
     // definition blocks, and the plan's copy is a dialog older still.
     const registry = repo.propertyDefinitions
     const resolver = repo.propertySchemaResolverFor(workspaceId)
+    // One read for the whole batch, inside the lock — see the mint site below.
+    const liveDefinitionNames = await tx.livePropertyDefinitionNames(
+      workspaceId, plan.candidates.map(candidate => candidate.key),
+    )
     for (const candidate of plan.candidates) {
       // The kernel core BY IDENTITY, never `repo.valuePresetCores.get(id)`:
       // that map is a `keyedMapFacet` keyed on preset id, so an extension
@@ -749,26 +753,32 @@ export const applyPropertyDefinitionSynthesis = async (
         registrations.push({blockId: id, schema: schemaFor(candidate.key, preset)})
         continue
       }
-      // ABOUT TO MINT, so this is the last point a rival can be detected. A
-      // definition block for this name may have PARSED while supplying no
-      // behavior — an unknown preset, a config its codec rejects — which leaves
-      // it absent from `schemas` (so the name resolved nothing above) yet
-      // present in `definitionsByName`, where it out-sorts a newcomer by
-      // creation time. Minting against that produces a second definition that
-      // can never win and never resolve, reported as a success. Checked HERE
-      // rather than at the top of the loop because our own converged definition
-      // is in that index too.
+      // ABOUT TO MINT, so this is the last point a rival can be detected — and
+      // the question is asked of the DATABASE, not the registry. The registry is
+      // a projector-driven projection: a definition applied by sync commits in
+      // its own transaction and is invisible to it until the tick, so both the
+      // resolver above and its name index can miss one that is already there.
+      // Minting then creates a rival, and when the projector catches up the
+      // older row wins by creation time, leaving every field row the backfill
+      // just bound to the loser's fieldId stranded. Inside the write lock no
+      // other writer can commit, so this read holds for the rest of the tx.
+      //
+      // It also catches the definition that PARSED but supplies no behavior (an
+      // unknown preset, a config its codec rejects): absent from `schemas`, so
+      // the name resolved nothing above, yet perfectly real in `blocks`.
+      //
+      // Checked HERE rather than at the top of the loop because our own
+      // converged definition is a live row for this name too.
       //
       // This skips — and so blocks the flip — where the plan-time equivalent
       // lands in `brokenDefinitions`, which deliberately does not block. The
       // asymmetry is consent: a broken definition the operator saw counted in
       // the dialog is one they agreed to migrate around; one that arrived after
       // they confirmed is not, and re-running shows it to them.
-      if (registry?.workspaceId === workspaceId
-          && registry.definitionsByName.has(candidate.key)) {
+      if (liveDefinitionNames.has(candidate.key)) {
         skipped.push({key: candidate.key,
-                      reason: 'a definition block for this name arrived since the check and '
-                        + 'supplies no behavior — repair it rather than adding a second'})
+                      reason: 'a definition block for this name already exists and supplies '
+                        + 'no behavior — repair it rather than adding a second'})
         continue
       }
       // `createOrGet` + `systemMint`, like every other deterministic-id creator

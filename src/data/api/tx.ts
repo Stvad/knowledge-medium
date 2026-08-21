@@ -273,6 +273,25 @@ export interface Tx {
    *  Deleted rows only, since `childrenOf` already covers the live ones. */
   reapedPropertyFieldTargets(workspaceId: string, parentId: string): Promise<Set<string>>
 
+  /** Which of `names` already have a LIVE `property-schema` block in this
+   *  workspace, read inside the transaction.
+   *
+   *  Exists because the property-definition registry is a projector-driven
+   *  PROJECTION: a definition applied by sync commits in its own transaction
+   *  and is invisible to the registry until the projector ticks. A caller about
+   *  to mint a definition cannot ask the registry whether the name is taken —
+   *  it would mint a rival, and the loser of the winner machinery strands every
+   *  field row bound to its fieldId. Inside the write lock no other writer can
+   *  commit, so this answer holds for the rest of the transaction.
+   *
+   *  Reads the LAST occurrence of the name key, matching `JSON.parse` rather
+   *  than `json_extract` — a raw write can produce a bag with a repeated key,
+   *  and SQLite and JavaScript disagree about which one wins. */
+  livePropertyDefinitionNames(
+    workspaceId: string,
+    names: readonly string[],
+  ): Promise<Set<string>>
+
   // ──── Composition ────
 
   /** Compose another mutator. Sub-mutator's writes go through immediately;

@@ -86,6 +86,8 @@ import {
   type PropertySchemaResolver,
 } from './propertySchemaResolution'
 import { readIsChildBackedWorkspace } from '@/data/workspaceSchema'
+import { PROPERTY_SCHEMA_TYPE } from '@/data/blockTypes'
+import { propertyNameProp } from '@/data/properties'
 import { keyAtStart } from '@/data/orderKey'
 import {
   fieldValueChildren,
@@ -432,6 +434,31 @@ export class TxImpl implements Tx {
       [workspaceId, parentId],
     )
     return new Set(rows.map(row => row.reference_target_id))
+  }
+
+  async livePropertyDefinitionNames(
+    workspaceId: string,
+    names: readonly string[],
+  ): Promise<Set<string>> {
+    if (names.length === 0) return new Set()
+    const rows = await this.ctx.txDb.getAll<{name: string | null}>(
+      // The LAST occurrence of the name key, matching `JSON.parse`;
+      // `json_extract` would take the first and a raw write can repeat a key.
+      `SELECT (SELECT j.value FROM json_each(b.properties_json) j
+                WHERE j.key = ? ORDER BY j.id DESC LIMIT 1) AS name
+         FROM blocks b
+         JOIN block_types t ON t.block_id = b.id AND t.workspace_id = b.workspace_id
+        WHERE t.type = ? AND b.workspace_id = ? AND b.deleted = 0
+          AND json_valid(b.properties_json)
+          AND json_type(b.properties_json) = 'object'`,
+      [propertyNameProp.name, PROPERTY_SCHEMA_TYPE, workspaceId],
+    )
+    const wanted = new Set(names)
+    const found = new Set<string>()
+    for (const row of rows) {
+      if (typeof row.name === 'string' && wanted.has(row.name)) found.add(row.name)
+    }
+    return found
   }
 
   /** §9 recognition, fieldId half: does this id name a definition the

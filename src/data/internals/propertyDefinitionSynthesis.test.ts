@@ -445,6 +445,37 @@ describe('applyPropertyDefinitionSynthesis: the id is occupied, or the key stopp
     expect(again).toMatchObject({created: 0, restored: 0, converged: 1, skipped: []})
   })
 
+  it('sees a definition the projection has not caught up with, and does not rival it', async () => {
+    // The shape sync produces: a definition block committed in its own
+    // transaction, real in `blocks`, invisible to the registry until the
+    // projector ticks. Reading the projection here would mint a rival, and when
+    // the tick lands the older row wins by creation time — stranding every
+    // field row the backfill just bound to the loser's fieldId.
+    await rawCell('b1', {'demo:orphan': 'hello'})
+    const plan = await planFor()
+    await getOrCreatePropertiesPage(repo, WS)
+    await repo.userSchemas.addSchema({name: 'demo:orphan', presetId: 'string'})
+    // Blind BOTH projections, so only a database read can see the definition.
+    const blind = {
+      resolve: () => ({status: 'identity-unavailable', reason: 'definition-unavailable'}),
+      resolveField: () => ({status: 'identity-unavailable', reason: 'definition-unavailable'}),
+      resolveBoundary: () => ({status: 'identity-unavailable', reason: 'definition-unavailable'}),
+    } as unknown as ReturnType<typeof repo.propertySchemaResolverFor>
+    vi.spyOn(repo, 'propertySchemaResolverFor').mockReturnValue(blind)
+    vi.spyOn(repo, 'propertyDefinitions', 'get').mockReturnValue(null)
+
+    const result = await applyPropertyDefinitionSynthesis(repo, plan)
+
+    expect(result).toMatchObject({created: 0})
+    expect(result.skipped.map(s => s.key)).toEqual(['demo:orphan'])
+    const definitions = await repo.db.getAll<{n: number}>(
+      `SELECT COUNT(*) AS n FROM blocks b JOIN block_types t ON t.block_id = b.id
+        WHERE t.type = 'property-schema' AND b.workspace_id = ? AND b.deleted = 0
+          AND json_extract(b.properties_json, '$."property-schema:name"') = 'demo:orphan'`,
+      [WS])
+    expect(definitions[0]!.n).toBe(1)
+  })
+
   it('skips a key whose deterministic id stopped being its definition', async () => {
     await rawCell('b1', {'demo:orphan': 'hello'})
     await applyPropertyDefinitionSynthesis(repo, await planFor())
