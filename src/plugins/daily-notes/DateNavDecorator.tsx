@@ -28,7 +28,7 @@ import {
   type BlockContentDecorator,
   type BlockContentDecoratorContribution,
 } from '@/extensions/blockInteraction.js'
-import { useProperty, useWorkspaceId } from '@/hooks/block.js'
+import { useHandle, useProperty, useWorkspaceId } from '@/hooks/block.js'
 import { isFocalRender } from '@/hooks/useIsFocalRender.js'
 import type { BlockRenderer } from '@/types.js'
 import { navigate } from '@/utils/navigation.js'
@@ -72,13 +72,26 @@ interface DateNavDecoratorProps {
 const DateNavDecorator = ({block, Inner}: DateNavDecoratorProps) => {
   const repo = block.repo
   const [aliases] = useProperty(block, aliasesProp)
-  const [date] = useProperty(block, dailyNoteDateProp)
+  // Tolerant: `useProperty` decodes inside the render with no catch, and this
+  // cell is user-editable, so one malformed stored value would throw above the
+  // per-block error boundary and blank the focal page. Same reasoning as
+  // `useBlockAliases`.
+  const date = useHandle(block, {
+    selector: data => {
+      if (!data) return undefined
+      try {
+        return dailyNoteDateProp.codec.decode(data.properties[dailyNoteDateProp.name])
+      } catch {
+        return undefined
+      }
+    },
+  })
   const {panelId} = useBlockContext()
   // The note's OWN workspace, not `repo.activeWorkspaceId`: the neighbouring
   // day has to be created and opened in the same workspace as the note the
   // arrows are attached to.
   const workspaceId = useWorkspaceId(block)
-  const iso = dailyNoteIso({date, aliases})
+  const iso = dailyNoteIso({id: block.id, workspaceId, date, aliases})
 
   const openOffset = useCallback((offset: number) => {
     if (!iso || !panelId || !workspaceId) return

@@ -35,7 +35,7 @@ import { ChangeScope } from '@/data/api'
 import { getLayoutSessionBlock } from '@/data/stateBlocks.js'
 import {
   activePanelIdProp,
-  aliasesProp,
+  getAliases,
   editorSelection,
   isEditingProp,
 } from '@/data/properties.js'
@@ -64,11 +64,23 @@ export const APPEND_TODAY_DAILY_BLOCK_ACTION_ID = 'append_today_daily_block'
 export const OPEN_PREVIOUS_DAILY_NOTE_ACTION_ID = 'open_previous_daily_note'
 export const OPEN_NEXT_DAILY_NOTE_ACTION_ID = 'open_next_daily_note'
 
-const dailyNoteIsoFromBlock = (block: Block): string | null =>
-  dailyNoteIso({
-    date: block.peekProperty(dailyNoteDateProp),
-    aliases: block.peekProperty(aliasesProp) ?? [],
+const dailyNoteIsoFromBlock = (block: Block): string | null => {
+  const data = block.peek()
+  if (!data) return null
+  let date: Date | undefined
+  // Tolerant, for the same reason the decorator is: the cell is user-editable
+  // and this runs mid-walk over a block's ancestors, so a throw here takes out
+  // the whole prev/next gesture.
+  try {
+    date = dailyNoteDateProp.codec.decode(data.properties[dailyNoteDateProp.name])
+  } catch { /* unreadable cell — fall through to the alias */ }
+  return dailyNoteIso({
+    id: data.id,
+    workspaceId: data.workspaceId,
+    date,
+    aliases: getAliases(data),
   })
+}
 
 const findContainingDailyNoteIso = async (
   repo: Repo,

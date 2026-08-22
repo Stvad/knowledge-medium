@@ -24,6 +24,7 @@ import type { BlockRendererProps } from '@/types'
 import { __resetLayoutSessionIdForTesting } from '@/utils/layoutSessionId'
 import { insertPanelRow } from '@/utils/panelLayoutProjection'
 import { aliasDataExtension } from '@/plugins/alias/dataExtension.js'
+import { dailyNoteDateProp } from '../schema.ts'
 import { dateNavDecoratorContribution } from '../DateNavDecorator.tsx'
 import {
   dailyNoteBlockId,
@@ -135,6 +136,27 @@ describe('date-nav arrows', () => {
     // The precondition this whole test is about — without it the case never
     // reaches the code under test and the assertion below passes for free.
     expect(note.peekProperty(aliasesProp) ?? []).not.toContain(TODAY)
+    const panelId = await insertPanelRow(env.repo, env.layoutSession, note.id)
+
+    render(<InPanel panelId={panelId}><Decorated block={note}/></InPanel>)
+    ;(await screen.findByRole('button', {name: 'Open previous daily note'})).click()
+
+    await waitFor(async () => {
+      expect(await topLevelOf(panelId)).toBe(dailyNoteBlockId(WS, YESTERDAY))
+    })
+  }, 20_000)
+
+  it('ignores a date cell that disagrees with the page it is on', async () => {
+    // `daily-note:date` is an ordinary editable cell — the properties panel
+    // offers it — and nothing repairs it: initial values are written
+    // only-if-empty and `needsRepair` never looks at the date. One wrong
+    // keystroke would otherwise redirect this day's arrows permanently, while
+    // the block id and both aliases still say which day it is.
+    const note = await getOrCreateDailyNote(env.repo, WS, TODAY)
+    await note.load()
+    await env.repo.tx(tx => tx.setProperty(
+      note.id, dailyNoteDateProp, new Date('1999-01-01T00:00:00Z'),
+    ), {scope: ChangeScope.BlockDefault})
     const panelId = await insertPanelRow(env.repo, env.layoutSession, note.id)
 
     render(<InPanel panelId={panelId}><Decorated block={note}/></InPanel>)

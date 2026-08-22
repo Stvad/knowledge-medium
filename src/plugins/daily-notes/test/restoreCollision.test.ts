@@ -1,13 +1,14 @@
 // @vitest-environment node
 /**
- * Restoring a tombstoned daily note, with `alias.sync` actually installed.
+ * Opening a day whose name another page already owns, and restoring a
+ * tombstoned one.
  *
- * The rest of `dailyNotes.test.ts` builds its repo with
- * `[dailyNotesDataExtension]` alone, so the same-tx processor that reconciles
- * content against aliases never runs there — and the two bugs below are
- * entirely that processor reacting to the restore branch's content rewrite.
- * A repro against that harness passes with the bugs present, which is why this
- * file exists separately rather than as more cases in it.
+ * Every failure here is `alias.sync` reacting to what the create/restore paths
+ * write, so the repo is built with `aliasDataExtension` installed —
+ * `dailyNotes.test.ts` ran without it until recently, and a repro of the
+ * restore-rename bug PASSES against a repo where that processor is absent.
+ * Kept as its own file because these are all one scenario (a contested name)
+ * rather than more coverage of the get-or-create contract.
  */
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
@@ -103,6 +104,40 @@ describe('opening a day whose name another page owns', () => {
 })
 
 describe('restoring a tombstoned daily-note seat', () => {
+  it('opens a day whose title the user had cleared', async () => {
+    // Filling an EMPTY title is not a rename, and was still fatal: it makes
+    // `alias.sync` rule 2 append the label as a fresh alias, going around the
+    // partition entirely, so a page already holding that name aborts the whole
+    // tx and the day stays tombstoned on every retry. Restore touches content
+    // at all now.
+    const id = dailyNoteBlockId(WS, ISO)
+    await getOrCreateDailyNote(repo, WS, ISO)
+    await repo.tx(tx => tx.update(id, {content: ''}), {scope: ChangeScope.BlockDefault})
+    await repo.tx(tx => tx.delete(id), {scope: ChangeScope.BlockDefault})
+    await squatterOwning(LONG)
+
+    await getOrCreateDailyNote(repo, WS, ISO)
+
+    expect(await repo.load(id)).not.toBeNull()
+    expect(await aliasesOf(id)).toEqual([ISO])
+  })
+
+  it('keeps a title and a custom alias the user gave the day', async () => {
+    // Replacing the alias bag rather than merging it makes the diff a 1-for-1
+    // swap, which `alias.sync` rule 3 reads as a rename and follows by
+    // rewriting content — losing the user's title, their custom name, and
+    // re-keying every `[[Sprint Day]]` link through `renameBacklinks`.
+    const id = dailyNoteBlockId(WS, ISO)
+    await getOrCreateDailyNote(repo, WS, ISO)
+    await repo.tx(tx => tx.update(id, {content: 'Sprint Day'}), {scope: ChangeScope.BlockDefault})
+    await repo.tx(tx => tx.delete(id), {scope: ChangeScope.BlockDefault})
+
+    await getOrCreateDailyNote(repo, WS, ISO)
+
+    expect((await repo.load(id))?.content).toBe('Sprint Day')
+    expect(await aliasesOf(id)).toEqual(expect.arrayContaining(['Sprint Day', ISO, LONG]))
+  })
+
   it('keeps the ISO alias the date is addressed by', async () => {
     // Rewriting content on restore reads to `alias.sync` as a rename: the old
     // content is still in the alias list, so rule 1 replaces that entry with
