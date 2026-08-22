@@ -257,23 +257,15 @@ export const getOrCreateDailyNote = async (
       // the whole tx. Strip it here; the setProperty below re-claims what is
       // free, out of the canonical names AND the row's own.
       const restoredProperties = await restorePropertiesStrippingAliases(tx, id)
-      // Resurrecting a tombstone must not RENAME it, and content is not
-      // touched here at ALL — not even to fill in an empty title. A seat
-      // materialised from a `[[2026-04-28]]` wikilink has the ISO text as its
-      // content, so writing the long-form label reads to `alias.sync` as a
-      // rename and its rule 1 swaps the ISO entry out for the new content.
-      // Filling an EMPTY title is not a rename but is just as fatal: rule 2
-      // (drift-heal) appends the label as a fresh alias, going around the
-      // partition below entirely, so a page already holding that name aborts
-      // the whole tx and the day stays tombstoned on every retry. The
+      // Restore writes NO content, not even into an empty title: every content
+      // write here reaches `alias.sync` as a rename (rule 1) or a drift-heal
+      // (rule 2), and either one claims a name around the partition below. The
       // live-repair branch above never touches content either.
       await tx.restore(id, {properties: restoredProperties})
-      // MERGE the row's own aliases with the canonical ones, don't replace.
-      // Replacing makes the diff a 1-for-1 swap whenever the row had a single
-      // custom name, which `alias.sync` rule 3 reads as a rename and follows
-      // by rewriting content — so a day the user retitled "Sprint Day" came
-      // back as "April 28th, 2026" with the custom name gone and its inbound
-      // `[[Sprint Day]]` links rewritten by `references.renameBacklinks`.
+      // MERGE the row's own names with the canonical ones rather than
+      // replacing: replacing makes the diff a 1-for-1 swap whenever the row
+      // had a single custom name, which rule 3 reads as a rename and follows
+      // by rewriting content and re-keying that name's backlinks.
       const claimable = await partitionClaimableAliases(
         tx, id, mergeStrings([...dailyAliases, ...stringListProperty(existing.properties[aliasesProp.name])]),
         workspaceId,
