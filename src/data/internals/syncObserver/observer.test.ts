@@ -237,6 +237,17 @@ describe('blocksSyncedObserver — the queue-blind rescan is observable', () => 
     expect(observer.isRematerializingWorkspace()).toBe(false)
   })
 
+  it('rejects a rescan the observer was disposed before it ever started', async () => {
+    // Same rule one step earlier: a rescan still waiting its turn on the chain
+    // when the tab closes has materialized nothing, and its awaiter must not be
+    // handed the resolution it writes the recovery marker on.
+    await put(data({ id: 'b1', workspaceId: 'ws', content: 'c1' }))
+    const { observer } = start({ getMaterializability: constMat('copy') })
+    const rescan = observer.drainWorkspace('ws')
+    observer.dispose()
+    await expect(rescan).rejects.toThrow(/disposed/)
+  })
+
   it('rejects a rescan that dispose() cut short, rather than reporting it done', async () => {
     // `runReconcileRescan` writes its once-per-(workspace, client) marker on
     // this promise resolving, and the key gate opens the workspace on it. A tab

@@ -5,6 +5,7 @@ import { ChangeScope } from '@/data/api'
 import { workspaceBackfillsFacet, type WorkspaceBackfill } from '@/data/facets'
 import { Repo } from '@/data/repo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
+import { BLOCKS_SYNCED_RAW_TABLE, blockToSyncedRowParams } from '@/data/blockSchema'
 import { createTestRepo } from '@/data/test/createTestRepo'
 
 /** Properties of the shared `WorkspaceBackfill` runner, independent of any one
@@ -311,6 +312,38 @@ describe('workspace backfill runner — sync gating', () => {
 
     expect(runs).toEqual([WS])
     expect((await repo.load('target'))?.properties['probe:mark']).toBe('backfilled')
+  })
+
+  it('defers a pass whose workspace holds rows that were downloaded and never materialized', async () => {
+    // Distinct from the draining case above, and the reason the pre-claim gate
+    // asks the WORKSPACE-scoped predicate: the drain has already passed over
+    // this row and consumed its queue entry, so nothing is in flight and no
+    // waiting changes that — while the pass would claim, scan a graph it can
+    // only partly see, and upload from it.
+    const runs: string[] = []
+    const repo = makeRepo(probeBackfill(runs))
+    await seedTarget(repo)
+    repo.stopSyncObserver()
+    await sharedDb.db.execute(BLOCKS_SYNCED_RAW_TABLE.put.sql, blockToSyncedRowParams({
+      id: 'never-materialized', workspaceId: WS, parentId: null, orderKey: 'z0',
+      content: 'downloaded, never decoded', properties: {}, references: [],
+      createdAt: 1, updatedAt: 5, userUpdatedAt: 5, createdBy: 'u', updatedBy: 'u',
+      deleted: false,
+    }))
+    await sharedDb.db.execute('DELETE FROM blocks_synced_changes')
+
+    await drain(repo)
+    expect(runs).toEqual([])
+
+    // The positive control, and it is the real recovery gesture: re-run
+    // materialization — what a reload or a re-entered workspace key does — and
+    // the pass goes through. Without it this test would pass just as well
+    // against a runner that never started at all.
+    repo.startSyncObserver()
+    await repo.drainSyncWorkspace(WS)
+    repo.scheduleWorkspaceBackfills(WS)
+    await settleUntil(repo, () => runs.length > 0)
+    expect(runs).toContain(WS)
   })
 
   it('defers per DEVICE, not per backfill', async () => {
