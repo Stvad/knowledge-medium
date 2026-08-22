@@ -98,43 +98,49 @@ const claimableTitles = async (
   return claimable
 }
 
-/** What the alias INDEX believes this row claims.
+/** Every name this row actually claims, bag order first.
  *
- *  Not `getAliases`: the string-list codec throws if ANY entry is not a string
- *  and that read then reports the whole bag as empty, while the trigger indexes
- *  every `$.alias` entry that is `typeof 'text'`. On a sync-applied
- *  `["Journal", "Odd", 7]` the strict read carries neither name across, so
- *  deleting the source releases both and nothing picks them up — `[[Odd]]`
- *  stops resolving anywhere. Matching the trigger's rule also repairs the bag,
- *  since what is written back is re-encoded from this. */
-const indexedAliases = (block: BlockData): string[] => {
+ *  Read from the index rather than decoded from the property, because only the
+ *  index knows what the trigger accepted — it takes text values from a bare
+ *  scalar and from an OBJECT as well as from an array — and a name missed here
+ *  is RELEASED when the row is folded away, taking its links with it. Bag order
+ *  is preserved for the plain string array everything writes, since the first
+ *  entry reads as the page's primary name; anything the index knows beyond that
+ *  is appended, which is also what repairs a malformed bag: what gets written
+ *  back is re-encoded from this. */
+const claimedAliases = async (tx: Tx, block: BlockData): Promise<string[]> => {
+  const indexed = await tx.aliasesOf(block.id)
+  const known = new Set(indexed)
   const raw = block.properties[aliasesProp.name]
-  return Array.isArray(raw) ? raw.filter((value): value is string => typeof value === 'string') : []
+  const inBagOrder = Array.isArray(raw)
+    ? raw.filter((value): value is string => typeof value === 'string' && known.has(value))
+    : []
+  return union([...inBagOrder, ...indexed])
 }
 
 /** The survivor's final alias bag. Precomputed from every participant rather
  *  than accumulated fold-by-fold, because the answer does not depend on the
  *  order the sources are folded in and the bag is written once, at the end. */
 const mergedAliases = (
-  into: BlockData,
+  intoAliases: readonly string[],
   collisionAlias: string,
   collisionIsClaimed: boolean,
-  sources: readonly BlockData[],
+  sources: ReadonlyArray<{block: BlockData; aliases: readonly string[]}>,
   drop: ReadonlySet<string>,
   keepTitles: ReadonlySet<string>,
 ): string[] => union([
-  ...indexedAliases(into),
+  ...intoAliases,
   // Stated outright rather than left to arrive via a participant's bag, but
   // ONLY when a participant still claims it. Stating it unconditionally means a
   // stale rejection toast re-claims a name its target deliberately released
   // since — the merge would hand back a name the user no longer wants there.
   ...(collisionIsClaimed ? [collisionAlias] : []),
-  ...sources.flatMap(source => [
-    ...indexedAliases(source).filter(alias => !drop.has(alias)),
+  ...sources.flatMap(({block, aliases}) => [
+    ...aliases.filter(alias => !drop.has(alias)),
     // A title goes after its own page's aliases, and every source after the
     // survivor's: the first entry reads as the page's primary name, and that
     // should stay the canonical one rather than an absorbed page's.
-    ...(keepTitles.has(source.id) ? [source.content] : []),
+    ...(keepTitles.has(block.id) ? [block.content] : []),
   ]),
 ])
 
@@ -231,7 +237,14 @@ export const aliasCollisionMerge = defineMutator<AliasCollisionMergeArgs, void>(
     const collisionIsClaimed = [into.id, ...sources.map(source => source.id)]
       .some(id => claimantIds.has(id))
     const merged = mergedAliases(
-      into, collisionAlias, collisionIsClaimed, sources, drop, keepTitles,
+      await claimedAliases(tx, into),
+      collisionAlias,
+      collisionIsClaimed,
+      await Promise.all(sources.map(async block => ({
+        block, aliases: await claimedAliases(tx, block),
+      }))),
+      drop,
+      keepTitles,
     )
     await assertNoOutsideClaimant(tx, into, sources, merged)
     const finalAliases = aliasesProp.codec.encode(merged)

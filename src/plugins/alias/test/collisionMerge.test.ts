@@ -322,7 +322,8 @@ describe('alias.mergeCollision', () => {
     // sync-applied `["Journal", "Notes", 7]` claims BOTH names — the banner
     // lists it, and a bag-based read sees an empty list. Refusing on that read
     // dead-ends the merge; folding on it releases "Notes" and hands it to
-    // nobody, so `[[Notes]]` stops resolving anywhere.
+    // nobody, so `[[Notes]]` stops resolving anywhere. Same for the other
+    // shapes `json_each` walks, which is why the read asks the index.
     await createBlock('canonical', 'Journal', [], 'a0')
     await env.h.db.execute(
       `INSERT INTO blocks (id, workspace_id, parent_id, order_key, content, properties_json,
@@ -330,18 +331,30 @@ describe('alias.mergeCollision', () => {
        VALUES ('odd', ?, NULL, 'k-odd', 'Odd', ?, '[]', 5, 5, 5, 'u', 'u', 0)`,
       [WS, JSON.stringify({[aliasesProp.name]: ['Journal', 'Notes', 7]})],
     )
+    // An OBJECT bag: `json_each` yields its values, so the trigger indexes both
+    // of these too. Any shape this read misses is a name released with no new
+    // owner, so the read asks the index rather than re-deriving JSON semantics.
+    await env.h.db.execute(
+      `INSERT INTO blocks (id, workspace_id, parent_id, order_key, content, properties_json,
+        references_json, created_at, updated_at, user_updated_at, created_by, updated_by, deleted)
+       VALUES ('shaped', ?, NULL, 'k-shaped', 'Shaped', ?, '[]', 6, 6, 6, 'u', 'u', 0)`,
+      [WS, JSON.stringify({[aliasesProp.name]: {primary: 'Journal', other: 'Log'}})],
+    )
 
     await env.repo.run(ALIAS_COLLISION_MERGE_MUTATOR, {
       intoId: 'canonical',
-      fromIds: ['odd'],
+      fromIds: ['odd', 'shaped'],
       collisionAlias: 'Journal',
       sourceIsAliasOwner: true,
     })
 
     expect(await env.repo.load('odd')).toBeNull()
-    // Both names came across, and the malformed entry is gone from the bag.
+    // Every indexed name came across, from both bag shapes, and the malformed
+    // entries are gone from what was written back.
     expect((await env.repo.load('canonical'))?.properties[aliasesProp.name])
-      .toEqual(aliasesProp.codec.encode(['Journal', 'Notes', 'Odd']))
+      .toEqual(aliasesProp.codec.encode(
+        ['Journal', 'Notes', 'Odd', 'Log', 'Shaped'],
+      ))
   })
 
   it('does not re-claim a name the target released while the toast was open', async () => {
