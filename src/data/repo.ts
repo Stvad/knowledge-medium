@@ -95,8 +95,8 @@ import {
 import {
   STAGED_SCAN_LIMIT,
   STAGED_VIEW_GAP_SQL,
-  WORKSPACE_MATERIALIZATION_GAP_COUNT_CAP,
-  WORKSPACE_MATERIALIZATION_GAP_SQL,
+  WORKSPACE_UNAPPLIED_COUNT_CAP,
+  WORKSPACE_UNAPPLIED_SQL,
 } from '@/data/internals/syncObserver/reconcile'
 import type { MaterializeDeps } from '@/data/internals/syncObserver/materialize'
 import type { Materializability } from '@/sync/transform'
@@ -2861,13 +2861,14 @@ export class Repo {
    * signal reports and no waiting clears.
    *
    * Supersedes rather than complements `syncViewGap`: it asks that first, so a
-   * caller needs exactly one of the two and the expensive one is never the
-   * incomplete one. Use it ONCE at the top of a pass whose writes cannot be
-   * taken back — a one-way migration, a deterministic-id mint — and leave the
-   * per-transaction re-checks on `syncViewGap`, whose cost is a bounded probe
-   * rather than a scan of every downloaded row (see the SQL's header).
+   * caller with a workspace in hand needs exactly one of the two. Every arm is
+   * cheap — the durable one reads a flag the drain set, off a partial index
+   * holding only unapplied rows — so this is the predicate for BOTH the top of
+   * a one-way pass and its per-transaction re-checks. There is deliberately no
+   * cheaper approximation to reach for in the hot path; that split is what let
+   * the two answers disagree.
    *
-   * The two arms differ in whether WAITING is a remedy, which is why the answer
+   * The arms differ in whether WAITING is a remedy, which is why the answer
    * carries {@link ViewGap.transient} rather than just its text: a caller that
    * re-arms itself must not re-arm on the durable one.
    */
@@ -2889,12 +2890,11 @@ export class Repo {
       }
     }
     const {behind} = await this.db.get<{behind: number}>(
-      WORKSPACE_MATERIALIZATION_GAP_SQL,
-      [workspaceId, WORKSPACE_MATERIALIZATION_GAP_COUNT_CAP],
+      WORKSPACE_UNAPPLIED_SQL, [workspaceId, WORKSPACE_UNAPPLIED_COUNT_CAP],
     )
     if (behind === 0) return null
-    const count = behind >= WORKSPACE_MATERIALIZATION_GAP_COUNT_CAP
-      ? `at least ${WORKSPACE_MATERIALIZATION_GAP_COUNT_CAP.toLocaleString()}`
+    const count = behind >= WORKSPACE_UNAPPLIED_COUNT_CAP
+      ? `at least ${WORKSPACE_UNAPPLIED_COUNT_CAP.toLocaleString()}`
       : `${behind.toLocaleString()}`
     return {
       reason: `${count} synced row(s) of this workspace have not reached \`blocks\` on `
@@ -2904,15 +2904,10 @@ export class Repo {
     }
   }
 
-  /**
-   * @param leftBehindAtStart the pass's `leftBehindEpoch` snapshot — see the
-   *   in-memory arm below.
-   */
   private async assertBackfillMayWrite(
     workspaceId: string,
     backfillId: string,
     generation: number,
-    leftBehindAtStart: number,
   ): Promise<void> {
     if (this.workspaceGeneration !== generation) {
       throw Object.assign(new Error(
@@ -2927,35 +2922,21 @@ export class Repo {
         `longer active. Its writes would land under the current session's access state.`,
       ), {kind: Repo.TRANSIENT})
     }
+    // The SAME predicate the pre-claim gate takes, not a cheaper stand-in for
+    // it: a pass runs for minutes, and a row that becomes unapplicable after
+    // the gate — an evicted key, a delivery that will not decode — is deferred
+    // with its queue entry consumed, so anything that only watches work in
+    // flight reads clear again for every batch that follows.
+    //
     // Re-sampled per transaction while the write lock is held, so a drain
     // cannot commit between this check and the write. Reading through
     // `this.db` rather than the tx handle is deliberate: the drain is excluded
     // by the lock, not by read isolation.
-    const gap = await this.syncViewGap()
+    const gap = await this.workspaceViewGap(workspaceId)
     if (gap !== null) {
       throw Object.assign(new Error(
-        `[workspaceBackfills] "${backfillId}" aborted: ${gap}. This pass would scan an ` +
-        `incomplete view of the graph and upload a properties bag built from it.`,
-      ), {kind: Repo.TRANSIENT})
-    }
-    // The two the QUEUE cannot answer, both free and both about THIS workspace.
-    // The pre-claim gate asked the durable version of the second from disk, but
-    // a pass runs for minutes: a row that becomes unmaterializable after it —
-    // an evicted key, a delivery that will not decode — is deferred, its queue
-    // entry consumed, and the check above reads clear again for every batch
-    // that follows. Re-asking from disk here would put a scan of every
-    // downloaded row inside the write lock, which is what the epoch avoids.
-    if (this.syncObserver?.isRematerializingWorkspace(workspaceId)) {
-      throw Object.assign(new Error(
-        `[workspaceBackfills] "${backfillId}" aborted: workspace ${workspaceId} is being ` +
-        `re-materialized, so \`blocks\` is being rewritten under this pass.`,
-      ), {kind: Repo.TRANSIENT})
-    }
-    if ((this.syncObserver?.leftBehindEpoch(workspaceId) ?? 0) !== leftBehindAtStart) {
-      throw Object.assign(new Error(
-        `[workspaceBackfills] "${backfillId}" aborted: synced rows for workspace ` +
-        `${workspaceId} were left unmaterialized since this pass started, so it would ` +
-        `finish over a graph it can no longer fully see.`,
+        `[workspaceBackfills] "${backfillId}" aborted: ${gap.reason}. This pass would scan ` +
+        `an incomplete view of the graph and upload a properties bag built from it.`,
       ), {kind: Repo.TRANSIENT})
     }
   }
@@ -3037,13 +3018,7 @@ export class Repo {
     // refused it, so an operator hears "not yet, retry" rather than "already
     // done" — the same string an unattended run only logs.
     let deferred: string | null = null
-    /** The workspace view-gap answer for this RUN — see the gate below.
-     *  `undefined` = not asked yet, `null` = asked and clean. */
-    let viewGap: ViewGap | null | undefined
-    /** Snapshotted with it, and the other half of the same question: the gate
-     *  reads what is ALREADY behind, off disk; this counts what the drain falls
-     *  behind on WHILE the pass runs. `assertBackfillMayWrite` compares it. */
-    let leftBehindAtStart = 0
+
     /** Why a pass THREW. Distinct from `deferred`: waiting will not clear it,
      *  so an operator told "already done" would never learn the migration is
      *  incomplete — with some of its batches already committed. */
@@ -3138,15 +3113,7 @@ export class Repo {
       // re-check is `syncViewGap`. Memoized across the loop: the answer is a
       // property of the DEVICE, not of a backfill, and the loop can reach it
       // more than once when an earlier pass loses the claim and continues.
-      if (viewGap === undefined) {
-        // Snapshot BEFORE the scan, not after. The scan reads one DB snapshot;
-        // a window that defers a row while it runs is invisible to that read,
-        // and taken afterwards the baseline would silently absorb the bump the
-        // scan missed — leaving both halves blind to the same row.
-        leftBehindAtStart = this.syncObserver?.leftBehindEpoch(workspaceId) ?? 0
-        viewGap = await this.workspaceViewGap(workspaceId)
-      }
-      const gap = viewGap
+      const gap = await this.workspaceViewGap(workspaceId)
       if (gap !== null) {
         deferred = gap.reason
         console.warn(
@@ -3224,7 +3191,7 @@ export class Repo {
           // go stale before `fn` reads a row. Throwing here aborts the tx and
           // the run with no marker recorded, so the next open retries.
           const result = await this.tx(async t => {
-            await this.assertBackfillMayWrite(workspaceId, backfill.id, generation, leftBehindAtStart)
+            await this.assertBackfillMayWrite(workspaceId, backfill.id, generation)
             return fn(t)
           }, {
             scope: ChangeScope.BlockDefault,
@@ -3261,9 +3228,9 @@ export class Repo {
         // no candidates — precisely what a partially materialized graph looks
         // like, since the rows are staged and not yet in `blocks` — would
         // otherwise sail through and record its one-shot marker as done.
-        await this.assertBackfillMayWrite(workspaceId, backfill.id, generation, leftBehindAtStart)
+        await this.assertBackfillMayWrite(workspaceId, backfill.id, generation)
         await backfill.run(ctx)
-        await this.assertBackfillMayWrite(workspaceId, backfill.id, generation, leftBehindAtStart)
+        await this.assertBackfillMayWrite(workspaceId, backfill.id, generation)
         // Only after a clean run — a thrown backfill leaves the claim unset so
         // the next attempt retries (passes are idempotent per row).
         await claim.markComplete(workspaceId, backfill.id)

@@ -235,7 +235,7 @@ export const STAGED_VIEW_GAP_SQL = `
 export const STAGED_SCAN_LIMIT = 10_000
 
 /**
- * How many of a workspace's downloaded rows has `blocks` not caught up with?
+ * How many of a workspace's downloaded rows has the drain not applied?
  *
  * The durable half of the question {@link STAGED_VIEW_GAP_SQL} asks about work
  * in flight. That one reads the QUEUE, so it sees only rows still waiting to be
@@ -244,60 +244,64 @@ export const STAGED_SCAN_LIMIT = 10_000
  * materializable (no key yet, mode unresolved, a key-store read that failed) or
  * when the ciphertext does not decode, while `drainQueueOnce` deletes the queue
  * rows either way. Nothing is then in progress, so no amount of waiting changes
- * the answer and no in-flight flag can report it.
+ * the answer.
  *
- * Two ways to be behind, and the second is the one an id-only anti-join misses:
- * the row was never materialized at all, or it materialized once and a NEWER
- * delivery was left staged on top of it. The second is the ordinary shape of an
- * e2ee workspace whose key is evicted mid-session — every existing block keeps
- * its stale plaintext row while arrivals pile up unreadable, so presence proves
- * nothing.
+ * It reads the flag the drain itself sets — see `STAGING_NEEDS_APPLY_COLUMN`,
+ * which carries the rule. Deliberately NOT a comparison of staged against live
+ * rows: the drain already makes exactly this decision per row, with inputs
+ * (the upload queue, the decode result) that no query over the two tables can
+ * see, and a second predicate approximating the first from outside is how the
+ * two come to disagree.
  *
- * It cannot distinguish a workspace that is one drain away from complete from
- * one that will never complete, and it does not try: both mean this device
- * cannot see the whole graph, which is the only thing its callers ask. That
- * includes the case where the rows are permanently undecryptable — a one-way
- * pass over a graph with unreadable blocks in it should refuse, and keep
- * refusing, rather than migrate what it happens to be able to read.
- *
- * Deliberately NARROWER than its sibling, because this answer is durable and
- * drives a "waiting will not help" verdict, where over-reporting would be a lie
- * rather than a cheap safety margin. Two conjuncts, and both are needed:
- *
- *   1. `blocks` is BEHIND — missing the row, holding I2's `0` sentinel (a
- *      speculative mint, which always yields), or holding an older stamp. Only
- *      the SERVER being ahead counts, not the sibling's `<>`: a newer local row
- *      is an unsent edit whose own upload echo settles it.
- *   2. and applying it would CHANGE what a live-row scan sees. Every protected
- *      pass reads `deleted = 0`, so a row tombstoned on both sides is invisible
- *      either way — and counted, one corrupt tombstone would block the
- *      workspace forever over something nothing reads. A tombstone whose local
- *      row is still LIVE stays a gap: the passes can see it and the server says
- *      it is gone. `COALESCE(b.deleted, 1)` reads a missing local row as
- *      already-absent, which is what it is.
- *
- * EXPENSIVE, unlike its sibling: `blocks_synced` carries no index but its
- * primary key (a passive landing zone by design), and the healthy answer is
- * zero, so the scan cannot short-circuit and every one of the workspace's
- * downloaded rows is read. That is why it is not folded into the per-
- * transaction predicate — call it ONCE, before a pass, not per batch. What a
- * pass falls behind on WHILE it runs is answered in memory instead, by
- * `BlocksSyncedObserver.leftBehindEpoch`.
+ * CHEAP, unlike the join it replaced: `idx_blocks_synced_needs_apply` holds
+ * only unapplied rows, so the healthy answer is an empty range. That is what
+ * lets every caller ask it at the same altitude — once before a pass AND again
+ * inside each writing transaction — instead of a cheap approximation in the
+ * hot path and an expensive truth at the top.
  *
  * Bind `[workspaceId, cap]`; `cap` bounds only the COUNT (so a wholly
- * unmaterialized workspace stops counting early), never the coverage.
+ * unapplied workspace stops counting early), never the coverage.
  */
-export const WORKSPACE_MATERIALIZATION_GAP_SQL = `
+export const WORKSPACE_UNAPPLIED_SQL = `
   SELECT COUNT(*) AS behind FROM (
-    SELECT 1 FROM blocks_synced s
-      LEFT JOIN blocks b ON b.id = s.id
-     WHERE s.workspace_id = ?
-       AND (b.id IS NULL OR b.updated_at = 0 OR s.updated_at > b.updated_at)
-       AND (s.deleted = 0 OR COALESCE(b.deleted, 1) = 0)
+    SELECT 1 FROM blocks_synced
+     WHERE workspace_id = ? AND needs_apply = 1
      LIMIT ?
   )`
 
-/** Count cap for {@link WORKSPACE_MATERIALIZATION_GAP_SQL}. The number only
- *  shapes the message an operator reads — "some" and "all of them" are
- *  different diagnoses — so it stops where that distinction stops paying. */
-export const WORKSPACE_MATERIALIZATION_GAP_COUNT_CAP = 1_000
+/** Count cap for {@link WORKSPACE_UNAPPLIED_SQL}. The number only shapes the
+ *  message an operator reads — "some" and "all of them" are different
+ *  diagnoses — so it stops where that distinction stops paying. */
+export const WORKSPACE_UNAPPLIED_COUNT_CAP = 1_000
+
+/**
+ * One-time seed for `needs_apply` on a device that already has staged rows.
+ *
+ * The column arrives defaulting to "unapplied", which is right for every future
+ * delivery and wrong for everything already on disk — so this clears it for the
+ * rows a drain demonstrably already handled. Its rule is the same one
+ * {@link decideStagingRow} applies going forward, expressed against what the
+ * two tables can still show after the fact: the live row is at or ahead of the
+ * staged stamp (and is not I2's `0` sentinel, which always yields), or the row
+ * is a tombstone on both sides and so invisible to every reader either way.
+ *
+ * Necessarily an APPROXIMATION — it cannot see the upload queue or a decode
+ * result — and that is tolerable only because it runs ONCE, at the ALTER, and
+ * is dead afterwards. It errs toward leaving the flag SET, which reads as a gap
+ * and refuses, rather than clearing one the drain would not have.
+ */
+export const SEED_STAGING_NEEDS_APPLY_SQL = `
+  UPDATE blocks_synced SET needs_apply = 0
+   WHERE EXISTS (
+           SELECT 1 FROM blocks b
+            WHERE b.id = blocks_synced.id
+              AND b.updated_at <> 0
+              AND b.updated_at >= blocks_synced.updated_at
+         )
+      OR (
+           blocks_synced.deleted = 1
+           AND COALESCE(
+                 (SELECT b.deleted FROM blocks b WHERE b.id = blocks_synced.id), 1
+               ) = 1
+         )
+`

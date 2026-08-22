@@ -17,6 +17,8 @@ import {
   PARENT_DELETED_RAISE_PREFIX,
   RAISE_FIELD_SEP_SQL,
 } from './raiseProtocol'
+import { STAGING_LOCAL_COLUMNS } from '@/data/blockSchema.js'
+import { SEED_STAGING_NEEDS_APPLY_SQL } from './syncObserver/reconcile.js'
 
 // ============================================================================
 // Tables
@@ -1494,6 +1496,36 @@ export const ensureBlockUserUpdatedAtColumn = async (db: {
       },
     )
   }
+}
+
+/**
+ * Idempotent local-schema migration for the staging `needs_apply` flag.
+ *
+ * The column arrives defaulting to "unapplied", which is right for every future
+ * delivery and wrong for every row already staged — so a device that upgrades
+ * mid-life would read its whole workspace as behind. {@link SEED_STAGING_NEEDS_APPLY_SQL}
+ * clears it once for the rows a drain demonstrably already handled; see its
+ * header for why a one-shot approximation is the right tool there and would not
+ * be anywhere else.
+ *
+ * Fresh installs skip both — `CREATE_BLOCKS_SYNCED_TABLE_SQL` carries the
+ * column, so there is nothing to ALTER and nothing staged to seed. Neither
+ * statement fires a trigger: ALTER fires no row triggers, and `blocks_synced`
+ * has no UPDATE trigger.
+ */
+export const ensureStagingNeedsApplyColumn = async (db: {
+  execute: (sql: string) => Promise<unknown>
+  getAll: <T>(sql: string) => Promise<T[]>
+}): Promise<void> => {
+  const columns = await db.getAll<{name: string}>('PRAGMA table_info(blocks_synced)')
+  if (columns.length === 0) return
+  let added = false
+  for (const column of STAGING_LOCAL_COLUMNS) {
+    if (columns.some(c => c.name === column.name)) continue
+    await db.execute(`ALTER TABLE blocks_synced ADD COLUMN ${column.definition}`)
+    added = true
+  }
+  if (added) await db.execute(SEED_STAGING_NEEDS_APPLY_SQL)
 }
 
 /**

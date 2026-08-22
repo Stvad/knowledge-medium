@@ -37,6 +37,14 @@ const e2eeStaging = async (plain: BlockData): Promise<{ getCek: GetCek; params: 
   return { getCek, params: stagingCiphertextParams(plain, wire) }
 }
 
+/** Ids of `workspaceId`'s staging rows the drain has not resolved — the durable
+ *  gap `WORKSPACE_UNAPPLIED_SQL` counts, read directly. */
+const unapplied = async (workspaceId: string): Promise<string[]> =>
+  (await env.db.getAll<{ id: string }>(
+    'SELECT id FROM blocks_synced WHERE workspace_id = ? AND needs_apply = 1 ORDER BY id',
+    [workspaceId],
+  )).map(row => row.id)
+
 const waitFor = async (cond: () => Promise<boolean>, ms = 3000): Promise<void> => {
   const t0 = Date.now()
   while (!(await cond())) {
@@ -240,21 +248,67 @@ describe('blocksSyncedObserver — the queue-blind rescan is observable', () => 
     expect(observer.isRematerializingWorkspace('ws')).toBe(false)
   })
 
-  it('counts windows that left a row of a workspace unmaterialized', async () => {
-    // The in-memory half of the durable question, for the re-ask that happens
-    // inside a write transaction where the disk answer is a full scan.
-    await put(data({ id: 'b1', workspaceId: 'ws', content: 'c1' }))
+  it('clears the staging flag on rows it decided, and leaves it on the rest', async () => {
+    // The durable record of "this device downloaded a row it has not applied",
+    // written by the drain in the transaction that decides it — every one-way
+    // pass reads exactly this. A delivery arrives flagged (the raw put omits
+    // the column, so it takes its default); only a decision clears it.
+    await put(data({ id: 'applied', workspaceId: 'ws', content: 'c1' }))
     let mode: Materializability = 'copy'
     const { observer } = start({ getMaterializability: () => mode })
     await observer.flush()
-    expect(observer.leftBehindEpoch('ws')).toBe(0)
+    expect(await unapplied('ws')).toEqual([])
 
     mode = 'defer'
-    await put(data({ id: 'b2', workspaceId: 'ws', content: 'c2' }))
+    await put(data({ id: 'deferred', workspaceId: 'ws', content: 'c2' }))
+    await observer.flush()
+    expect(await unapplied('ws')).toEqual(['deferred'])
+
+    // And the re-pass that can finally apply it clears it — the flag is state,
+    // not a one-way tripwire.
+    mode = 'copy'
+    await observer.drainWorkspace('ws')
+    expect(await unapplied('ws')).toEqual([])
+  })
+
+  it('clears the flag for its own echo, which no drain will ever apply', async () => {
+    // Every local write comes back down the stream and re-stages carrying the
+    // stamp it was written with, so I1 skip-stales it — no `blocks` write, and
+    // the re-delivery has already reset the flag. Left set, a device that is
+    // merely WRITING reads as permanently behind and refuses every one-way
+    // pass: the refuse-on-your-own-progress bug, back through a new door.
+    await put(data({ id: 'mine', workspaceId: 'ws', content: 'v1', updatedAt: 7 }))
+    const { observer } = start({ getMaterializability: constMat('copy') })
+    await observer.flush()
+    expect(await unapplied('ws')).toEqual([])
+
+    await put(data({ id: 'mine', workspaceId: 'ws', content: 'v1', updatedAt: 7 }))
     await observer.flush()
 
-    expect(observer.leftBehindEpoch('ws')).toBe(1)
-    expect(observer.leftBehindEpoch('ws-other')).toBe(0)
+    expect(await unapplied('ws')).toEqual([])
+  })
+
+  it('clears the flag for a row it cannot apply but nobody can see either', async () => {
+    // A staged tombstone with no local row shows the block to no reader on
+    // either side, and every protected pass scans `deleted = 0`. Left flagged
+    // it would be a gap no drain can clear and no pass can be harmed by — one
+    // corrupt tombstone blocking the workspace forever.
+    await put(data({ id: 'dead', workspaceId: 'ws', content: 'gone', deleted: true }))
+    const { observer } = start({ getMaterializability: constMat('defer') })
+    await observer.flush()
+
+    expect(await unapplied('ws')).toEqual([])
+  })
+
+  it('keeps the flag on a tombstone whose local row is still live', async () => {
+    // The other half of the same rule: this one the passes CAN see, and the
+    // server says it is gone.
+    await seedLocalBlock(data({ id: 'doomed', workspaceId: 'ws', content: 'visible' }))
+    await put(data({ id: 'doomed', workspaceId: 'ws', content: 'gone', deleted: true, updatedAt: 9 }))
+    const { observer } = start({ getMaterializability: constMat('defer') })
+    await observer.flush()
+
+    expect(await unapplied('ws')).toEqual(['doomed'])
   })
 
   it('rejects a rescan the observer was disposed before it ever started', async () => {

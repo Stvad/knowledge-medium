@@ -20,7 +20,8 @@
  */
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
-import { BLOCKS_SYNCED_RAW_TABLE, BLOCK_LOCAL_COLUMNS, blockToSyncedRowParams } from '@/data/blockSchema'
+import { BLOCKS_SYNCED_RAW_TABLE, BLOCK_LOCAL_COLUMNS,
+  STAGING_LOCAL_COLUMNS, blockToSyncedRowParams } from '@/data/blockSchema'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import type { BlockData } from '@/data/api'
 
@@ -68,7 +69,12 @@ describe('blocks_synced staging table', () => {
     expect(staged.length).toBeGreaterThan(0)
     const localNames = new Set(BLOCK_LOCAL_COLUMNS.map(column => column.name as string))
     const storageOnlyBlocks = blocks.filter(column => !localNames.has(column.name))
-    expect(normalize(staged)).toEqual(normalize(storageOnlyBlocks))
+    // Each side carries its own local-only columns now — `blocks_synced` gained
+    // `needs_apply`, the drain's record of what it has applied — so the mirror
+    // is storage-column to storage-column, not table to table.
+    const stagedLocalNames = new Set(STAGING_LOCAL_COLUMNS.map(column => column.name as string))
+    const storageOnlyStaged = staged.filter(column => !stagedLocalNames.has(column.name))
+    expect(normalize(storageOnlyStaged)).toEqual(normalize(storageOnlyBlocks))
   })
 
   it('keeps every local column local-only: present on blocks, absent on blocks_synced', async () => {
@@ -79,6 +85,12 @@ describe('blocks_synced staging table', () => {
     for (const local of BLOCK_LOCAL_COLUMNS) {
       expect(blocks.some(column => column.name === local.name)).toBe(true)
       expect(staged.some(column => column.name === local.name)).toBe(false)
+    }
+    // And the other direction: the drain's own bookkeeping never reaches the
+    // app-visible table, where a `SELECT *` consumer would parse it as a field.
+    for (const local of STAGING_LOCAL_COLUMNS) {
+      expect(staged.some(column => column.name === local.name)).toBe(true)
+      expect(blocks.some(column => column.name === local.name)).toBe(false)
     }
   })
 

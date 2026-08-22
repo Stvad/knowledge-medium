@@ -37,6 +37,7 @@ import type { MaterializeDeps } from '@/data/internals/syncObserver/materialize.
 import {
   BLOCKS_SYNCED_RAW_TABLE,
   CREATE_BLOCKS_PARENT_ORDER_INDEX_SQL,
+  CREATE_BLOCKS_SYNCED_NEEDS_APPLY_INDEX_SQL,
   CREATE_BLOCKS_SYNCED_TABLE_SQL,
   CREATE_BLOCKS_FIELD_FORM_INDEX_SQL,
   CREATE_BLOCKS_ANY_FIELD_FORM_INDEX_SQL,
@@ -62,6 +63,7 @@ import {
   backfillBlocksFtsIfEmpty,
   backfillBlockTypesIfEmpty,
   ensureBlockUserUpdatedAtColumn,
+  ensureStagingNeedsApplyColumn,
   ensureUndoGroupIdColumns,
 } from '@/data/internals/clientSchema'
 import { runAnalyzeIfStale } from '@/data/maintenance'
@@ -357,6 +359,12 @@ const initializePowerSyncDb = async (powerSyncDb: PowerSyncDatabase) => {
   // for the `blocks_synced` sync stream; the Repo's observer materializes it
   // into `blocks`.
   await powerSyncDb.execute(CREATE_BLOCKS_SYNCED_TABLE_SQL)
+  // Idempotent local migration + its index: the LOCAL-only `needs_apply` flag
+  // the drain writes and every one-way pass reads. Before the index, so an
+  // upgrading device's ALTER + seed happen once against an unindexed table
+  // rather than maintaining the index through the seed's full-table update.
+  await ensureStagingNeedsApplyColumn(powerSyncDb)
+  await powerSyncDb.execute(CREATE_BLOCKS_SYNCED_NEEDS_APPLY_INDEX_SQL)
   await powerSyncDb.execute(CREATE_BLOCKS_PARENT_ORDER_INDEX_SQL)
   await powerSyncDb.execute(CREATE_BLOCKS_WORKSPACE_ACTIVE_INDEX_SQL)
   await powerSyncDb.execute(CREATE_BLOCKS_WORKSPACE_NONEMPTY_PROPERTIES_INDEX_SQL)

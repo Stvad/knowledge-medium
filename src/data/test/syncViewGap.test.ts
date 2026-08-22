@@ -22,7 +22,7 @@ import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb
 import { createTestRepo } from '@/data/test/createTestRepo'
 import {
   decideStagingRow,
-  WORKSPACE_MATERIALIZATION_GAP_COUNT_CAP,
+  WORKSPACE_UNAPPLIED_COUNT_CAP,
 } from '@/data/internals/syncObserver/reconcile'
 import { ChangeScope } from '@/data/api'
 import type { BlockData } from '@/data/api'
@@ -202,16 +202,24 @@ describe('Repo.syncViewGap', () => {
 })
 
 /** Staged as a real arrival, then the queue signal consumed — the shape a row
- *  has after a drain that could not materialize it (locked workspace, mode
+ *  has after a drain that could not apply it (locked workspace, mode
  *  unresolved, a key-store read that failed, ciphertext that would not decode).
- *  Nothing is in flight and nothing ever will be. */
+ *  Nothing is in flight and nothing ever will be: a delivery lands with
+ *  `needs_apply` at its default and only the drain clears it. */
 const deliverAndConsumeQueue = async (d: BlockData) => {
   await deliver(d)
   await sharedDb.db.execute('DELETE FROM blocks_synced_changes')
 }
 
+/** What the drain does to a row it decided leaves `blocks` correct. Written
+ *  directly, because THIS file is about the predicate reading the flag — which
+ *  rows earn it is the drain's decision and is pinned where the drain lives
+ *  (`syncObserver/observer.test.ts`). */
+const markApplied = (id: string) =>
+  sharedDb.db.execute('UPDATE blocks_synced SET needs_apply = 0 WHERE id = ?', [id])
+
 describe('Repo.workspaceViewGap', () => {
-  it('reports rows that were downloaded and never materialized, with nothing in flight', async () => {
+  it('reports rows the drain downloaded and never applied, with nothing in flight', async () => {
     const repo = makeRepo()
     await deliverAndConsumeQueue(syncedRow({id: 'never-decoded', updatedAt: 5}))
 
@@ -224,62 +232,28 @@ describe('Repo.workspaceViewGap', () => {
     })
   })
 
-  it('reports a row `blocks` holds at an OLDER version than the staged one', async () => {
-    // Presence proves nothing, and this is the ordinary shape of an e2ee
-    // workspace whose key is evicted mid-session: every block keeps the
-    // plaintext row it materialized with while arrivals pile up unreadable.
-    // `materializeStagingRows` defers or quarantines them without writing, and
-    // `drainQueueOnce` eats the queue entry regardless.
-    const repo = makeRepo()
-    await seedLocal('gone-stale', 4)
-    await deliverAndConsumeQueue(syncedRow({id: 'gone-stale', updatedAt: 9}))
-    expect((await repo.workspaceViewGap(WS))?.transient).toBe(false)
-  })
-
-  it('ignores a row whose LOCAL copy is newer — an unsent edit settles itself', async () => {
-    // The one place this is deliberately narrower than the queue probe, which
-    // reports both directions because over-reporting costs it nothing. Here it
-    // would mean telling a caller that waiting cannot help, about an edit whose
-    // own upload echo clears it.
-    const repo = makeRepo()
-    await seedLocal('my-unsent-edit', 9)
-    await deliverAndConsumeQueue(syncedRow({id: 'my-unsent-edit', updatedAt: 4}))
-    expect(await repo.workspaceViewGap(WS)).toBeNull()
-  })
-
-  it('ignores a staged tombstone that never materialized', async () => {
-    // No pass can see the block either way — every one of them scans live rows.
-    // Counted, a single corrupt tombstone would block the workspace forever
-    // over a row nothing reads.
-    const repo = makeRepo()
-    await deliverAndConsumeQueue(syncedRow({id: 'deleted-upstream', updatedAt: 5, deleted: true}))
-    expect(await repo.workspaceViewGap(WS)).toBeNull()
-  })
-
-  it('ignores a newer tombstone over a row already tombstoned locally', async () => {
-    // Both sides gone: applying it would change nothing a live-row scan sees.
-    // Reachable as an edit-then-delete whose delete version cannot be decoded,
-    // and left counted it blocks the workspace forever over a dead row.
-    const repo = makeRepo()
-    await seedLocal('deleted-both-sides', 4, true)
-    await deliverAndConsumeQueue(syncedRow({id: 'deleted-both-sides', updatedAt: 9, deleted: true}))
-    expect(await repo.workspaceViewGap(WS)).toBeNull()
-  })
-
-  it('reports a newer tombstone whose local row is still live', async () => {
-    // The other side of the same conjunct: the passes can still see this block
-    // and the server says it is gone, so their view really is wrong.
-    const repo = makeRepo()
-    await seedLocal('deleted-upstream-only', 4)
-    await deliverAndConsumeQueue(syncedRow({id: 'deleted-upstream-only', updatedAt: 9, deleted: true}))
-    expect((await repo.workspaceViewGap(WS))?.transient).toBe(false)
-  })
-
-  it('reports no gap once those rows are in `blocks`', async () => {
+  it('reports no gap once the drain has resolved them', async () => {
     const repo = makeRepo()
     await deliverAndConsumeQueue(syncedRow({id: 'arrived', updatedAt: 5}))
-    await seedLocal('arrived', 5)
+    await markApplied('arrived')
     expect(await repo.workspaceViewGap(WS)).toBeNull()
+  })
+
+  it('reports the gap again when a NEWER delivery lands on a resolved row', async () => {
+    // Presence of a live row proves nothing, and the flag is what makes that
+    // true without anyone comparing stamps: PowerSync's put is an INSERT OR
+    // REPLACE over the storage columns, so every re-delivery resets it. This is
+    // the shape of an e2ee workspace whose key is evicted mid-session — each
+    // block keeps the plaintext it materialized with while arrivals pile up
+    // unreadable on top.
+    const repo = makeRepo()
+    await deliverAndConsumeQueue(syncedRow({id: 'gone-stale', updatedAt: 4}))
+    await markApplied('gone-stale')
+    await seedLocal('gone-stale', 4)
+    expect(await repo.workspaceViewGap(WS)).toBeNull()
+
+    await deliverAndConsumeQueue(syncedRow({id: 'gone-stale', updatedAt: 9}))
+    expect((await repo.workspaceViewGap(WS))?.transient).toBe(false)
   })
 
   it('ignores another workspace\'s rows', async () => {
@@ -300,7 +274,6 @@ describe('Repo.workspaceViewGap', () => {
     expect(await repo.workspaceViewGap(WS)).toBeNull()
     ;(repo as unknown as {syncObserver: unknown}).syncObserver = {
       isRematerializingWorkspace: (id: string) => id === 'ws-elsewhere',
-      leftBehindEpoch: () => 0,
     }
 
     expect(await repo.workspaceViewGap(WS)).toBeNull()
@@ -310,9 +283,9 @@ describe('Repo.workspaceViewGap', () => {
   })
 
   it('asks the in-flight predicate first, so one call is the whole question', async () => {
-    // Callers pick one of the two; the expensive one must not be the partial
-    // one, or every consumer that reaches for it silently loses the queue arm.
-    // That arm is TRANSIENT — the drain is running, and waiting is the remedy.
+    // Callers take exactly one of the two; the workspace-scoped one must not be
+    // the partial one, or every consumer that reaches for it loses the queue
+    // arm. That arm is TRANSIENT — the drain is running, waiting is the remedy.
     const repo = makeRepo()
     await deliver(syncedRow({id: 'arriving', updatedAt: 5}))
     expect(await repo.workspaceViewGap(WS)).toEqual({
@@ -326,7 +299,7 @@ describe('Repo.workspaceViewGap', () => {
     // stays far under vitest's 5000ms default, and a genuine hang then reports
     // in 5s rather than 20.
     const repo = makeRepo()
-    for (let i = 0; i < WORKSPACE_MATERIALIZATION_GAP_COUNT_CAP + 5; i++) {
+    for (let i = 0; i < WORKSPACE_UNAPPLIED_COUNT_CAP + 5; i++) {
       await deliver(syncedRow({id: `staged-${i}`, updatedAt: 5}))
     }
     await sharedDb.db.execute('DELETE FROM blocks_synced_changes')

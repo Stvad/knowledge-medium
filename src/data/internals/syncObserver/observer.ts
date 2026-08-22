@@ -108,14 +108,6 @@ export interface BlocksSyncedObserver {
    *  navigated away from would otherwise refuse every pass on the one they are
    *  in now, for as long as it runs. */
   isRematerializingWorkspace(workspaceId: string): boolean
-  /** Bumped every time a drain window leaves a row of `workspaceId`
-   *  unmaterialized — deferred or quarantined. Monotone and O(1): a caller
-   *  snapshots it and compares later to learn whether this device fell behind
-   *  DURING its pass. That is the same question
-   *  `WORKSPACE_MATERIALIZATION_GAP_SQL` answers from disk, and the reason this
-   *  exists is that the disk answer is a full scan and the re-ask happens
-   *  inside a write transaction. */
-  leftBehindEpoch(workspaceId: string): number
   /** Stop the subscription. Idempotent. */
   dispose(): void
 }
@@ -187,10 +179,10 @@ export const startBlocksSyncedObserver = (
   let unsubscribe: (() => void) | null = null
   let chain: Promise<void> = Promise.resolve()
   /** Outstanding {@link drainWorkspace} passes per workspace — the queue-blind
-   *  path — and, per workspace, how many drain windows have left a row of it
-   *  unmaterialized. Both are read by the view-gap predicates on `Repo`. */
+   *  path, read by the view-gap predicate on `Repo`. What the drain FAILED to
+   *  apply is not tracked here: it is written to the staging row itself, in the
+   *  transaction that decides it (`STAGING_NEEDS_APPLY_COLUMN`). */
   const workspaceRescans = new Map<string, number>()
-  const leftBehind = new Map<string, number>()
 
   /** §4.7 detection-only telemetry. One bounded, truncation-safe scan per
    *  workspace whose parent_id mutations might have closed a loop. A scan
@@ -229,9 +221,6 @@ export const startBlocksSyncedObserver = (
     removed: readonly string[],
   ): Promise<void> => {
     const outcome = await materializeStagingRows(db, { upserted, removed }, deps)
-    for (const workspaceId of outcome.leftBehind) {
-      leftBehind.set(workspaceId, (leftBehind.get(workspaceId) ?? 0) + 1)
-    }
     await applyOutcome(outcome)
   }
 
@@ -362,7 +351,6 @@ export const startBlocksSyncedObserver = (
     drainWorkspace,
     isRematerializingWorkspace: (workspaceId: string) =>
       (workspaceRescans.get(workspaceId) ?? 0) > 0,
-    leftBehindEpoch: (workspaceId: string) => leftBehind.get(workspaceId) ?? 0,
     dispose() {
       if (disposed) return
       disposed = true

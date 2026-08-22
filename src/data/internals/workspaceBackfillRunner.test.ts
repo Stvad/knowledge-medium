@@ -19,11 +19,17 @@ let sharedDb: TestDb
 
 /** A backfill that records its runs and writes one block, so the tx it used is
  *  observable through undo. */
-const probeBackfill = (runs: string[]): WorkspaceBackfill => ({
+const probeBackfill = (
+  runs: string[],
+  /** Runs after the pass has started and before its write — the window where a
+   *  precondition the gate already cleared can stop holding. */
+  beforeWrite?: () => Promise<void>,
+): WorkspaceBackfill => ({
   id: 'probe-backfill-v1',
   trigger: 'workspace-open',
   run: async ({workspaceId, tx}) => {
     runs.push(workspaceId)
+    await beforeWrite?.()
     const targetId = workspaceId === WS ? 'target' : `target-${workspaceId}`
     await tx(async t => {
       const row = await t.get(targetId)
@@ -355,27 +361,26 @@ describe('workspace backfill runner — sync gating', () => {
     expect(runs).toContain(WS)
   })
 
-  it('aborts a batch once rows were left unmaterialized after the pass started', async () => {
-    // A pass runs for minutes. A row that becomes unmaterializable AFTER the
-    // pre-claim scan — an evicted key, a delivery that will not decode — is
-    // deferred and its queue entry consumed, so the per-batch sync check reads
-    // clear again for every batch that follows. Re-asking the durable question
-    // from disk here would put a scan of every downloaded row inside the write
-    // lock; the observer's counter answers it in O(1).
-    //
-    // The observer is stubbed because this repo runs without one — what the
-    // counter MEANS is pinned against a real observer in
-    // `syncObserver/observer.test.ts`.
+  it('aborts a batch once a delivery is left unapplied after the pass started', async () => {
+    // A pass runs for minutes. A row that becomes unappliable AFTER the
+    // pre-claim gate — an evicted key, a delivery that will not decode — is
+    // deferred and its queue entry consumed, so anything that only watches work
+    // in flight reads clear again for every batch that follows. The flag the
+    // drain left on the staging row does not, and the per-transaction check is
+    // the SAME predicate the gate took, not a cheaper stand-in for it.
     const runs: string[] = []
-    const repo = makeRepo(probeBackfill(runs))
+    const repo = makeRepo(probeBackfill(runs, async () => {
+      // Between the gate and the write, which is the window under test.
+      await sharedDb.db.execute(BLOCKS_SYNCED_RAW_TABLE.put.sql, blockToSyncedRowParams({
+        id: 'undecodable', workspaceId: WS, parentId: null, orderKey: 'z0',
+        content: 'arrived mid-pass, could not be applied', properties: {}, references: [],
+        createdAt: 1, updatedAt: 5, userUpdatedAt: 5, createdBy: 'u', updatedBy: 'u',
+        deleted: false,
+      }))
+      await sharedDb.db.execute('DELETE FROM blocks_synced_changes')
+    }))
     await seedTarget(repo)
-    ;(repo as unknown as {syncObserver: unknown}).syncObserver = {
-      isRematerializingWorkspace: () => false,
-      // Still 0 at the preflight snapshot and at the pre-scan check; moves the
-      // moment the pass starts, so the check inside its write tx is the one
-      // that has to catch it.
-      leftBehindEpoch: () => runs.length,
-    }
+    repo.stopSyncObserver()
 
     await drain(repo)
 
