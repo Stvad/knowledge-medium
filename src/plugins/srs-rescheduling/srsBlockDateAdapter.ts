@@ -6,8 +6,9 @@
  */
 import type { Block } from '@/data/block'
 import { ChangeScope } from '@/data/api'
-import { aliasesProp, getBlockTypes } from '@/data/properties.js'
-import { getOrCreateDailyNote, isValidDateAlias } from '@/plugins/daily-notes'
+import { getAliases, getBlockTypes } from '@/data/properties.js'
+import { dailyNoteIso, getOrCreateDailyNote, isValidDateAlias } from '@/plugins/daily-notes'
+import { dailyNoteDateProp } from '@/plugins/daily-notes/schema.js'
 import type { BlockDateAdapter } from '@/plugins/daily-notes/blockDateAdapter.js'
 import { SRS_SM25_TYPE, srsNextReviewDateProp } from './schema.ts'
 
@@ -22,28 +23,32 @@ const decodeNextReviewDateId = (properties: Record<string, unknown>): string | n
   }
 }
 
-const decodeAliases = (properties: Record<string, unknown>): readonly string[] => {
-  const stored = properties[aliasesProp.name]
-  if (stored === undefined) return []
-  try {
-    return aliasesProp.codec.decode(stored)
-  } catch {
-    return []
-  }
-}
-
 const dailyNoteIsoFromBlockId = async (
   block: Block,
   dailyNoteId: string,
 ): Promise<string | null> => {
   const data = await block.repo.load(dailyNoteId)
   if (!data) return null
-  // Calendar-validity check (not shape-only): a daily-note row whose
-  // only date-shaped alias is e.g. `2026-13-01` would, under shape-only
-  // matching, feed bogus input to `addDaysIso` and roll over silently.
-  // Treat such rows as "no date" so scheduling refuses to act on them.
-  const aliasIso = decodeAliases(data.properties).find(isValidDateAlias)
-  if (aliasIso) return aliasIso
+  let date: Date | undefined
+  try {
+    date = dailyNoteDateProp.codec.decode(data.properties[dailyNoteDateProp.name])
+  } catch { /* unreadable cell — `dailyNoteIso` falls back to the alias */ }
+  // The shared read, not a local alias scan. A day whose ISO name another live
+  // page already claims YIELDS it, and its title is the long-form label — so
+  // neither the alias nor the content fallback finds anything, and a card
+  // scheduled for that day reads as unscheduled: the reschedule sheet opens on
+  // today, and the scrub gesture silently commits nothing.
+  //
+  // `dailyNoteIso` keeps the calendar-validity check this had: an alias like
+  // `2026-13-01` is "no date" rather than bogus input to `addDaysIso`, which
+  // rolls it over to a day a month away without complaining.
+  const iso = dailyNoteIso({
+    id: data.id,
+    workspaceId: data.workspaceId,
+    date,
+    aliases: getAliases(data),
+  })
+  if (iso) return iso
   const content = data.content.trim()
   return isValidDateAlias(content) ? content : null
 }
