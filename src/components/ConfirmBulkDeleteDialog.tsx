@@ -39,7 +39,7 @@ export const ConfirmBulkDeleteDialog = ({
           <DialogTitle>Delete {pluralize(totalCount, 'block')}?</DialogTitle>
         </DialogHeader>
         <p className="text-sm">
-          {targetCount === 1 ? 'This block' : `${pluralize(targetCount, 'selected block')}`}
+          {targetCount === 1 ? 'This block' : pluralize(targetCount, 'selected block')}
           {nested > 0 && <> and the {pluralize(nested, 'block')} nested
             {' '}{agree(targetCount, 'under it', 'under them')}</>}
           {' '}will be deleted.
