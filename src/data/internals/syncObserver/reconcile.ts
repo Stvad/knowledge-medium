@@ -233,3 +233,45 @@ export const STAGED_VIEW_GAP_SQL = `
  *  operator can hit — they are told what happened and that re-running
  *  continues, which is the whole contract of a resumable pass. */
 export const STAGED_SCAN_LIMIT = 10_000
+
+/**
+ * How many of a workspace's downloaded rows have NEVER reached `blocks`?
+ *
+ * The durable half of the same question {@link STAGED_VIEW_GAP_SQL} asks about
+ * work in flight. That one reads the QUEUE, so it can only see rows still
+ * waiting to be drained — and a row can be missing from `blocks` with the
+ * queue long since consumed: `materializeStagingRows` leaves a row staged and
+ * writes nothing when the workspace is not materializable (no key yet, mode
+ * unresolved, a key-store read that failed) or when its ciphertext does not
+ * decode, while `drainQueueOnce` deletes the queue rows either way. Nothing is
+ * then in progress, so no amount of waiting changes the answer and no
+ * in-flight flag can report it.
+ *
+ * It cannot distinguish a workspace that is one drain away from complete from
+ * one that will never complete, and it does not try: both mean this device
+ * cannot see the whole graph, which is the only thing its callers ask. That
+ * includes the case where the rows are permanently undecryptable — a one-way
+ * pass over a graph with unreadable blocks in it should refuse, and keep
+ * refusing, rather than migrate what it happens to be able to read.
+ *
+ * EXPENSIVE, unlike its sibling: `blocks_synced` carries no index but its
+ * primary key (a passive landing zone by design), and the healthy answer is
+ * zero, so the anti-join cannot short-circuit and every one of the workspace's
+ * downloaded rows is scanned. That is why it is not folded into the per-
+ * transaction predicate — call it ONCE, before a pass, not per batch.
+ *
+ * Bind `[workspaceId, cap]`; `cap` bounds only the COUNT (so a wholly
+ * unmaterialized workspace stops counting early), never the coverage.
+ */
+export const WORKSPACE_MATERIALIZATION_GAP_SQL = `
+  SELECT COUNT(*) AS missing FROM (
+    SELECT 1 FROM blocks_synced s
+     WHERE s.workspace_id = ?
+       AND NOT EXISTS (SELECT 1 FROM blocks b WHERE b.id = s.id)
+     LIMIT ?
+  )`
+
+/** Count cap for {@link WORKSPACE_MATERIALIZATION_GAP_SQL}. The number only
+ *  shapes the message an operator reads — "some" and "all of them" are
+ *  different diagnoses — so it stops where that distinction stops paying. */
+export const WORKSPACE_MATERIALIZATION_GAP_COUNT_CAP = 1_000

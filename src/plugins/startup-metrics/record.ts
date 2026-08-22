@@ -225,7 +225,12 @@ export const collectStartupMetricsEffect: AppEffect = {
     cleanups.push(onFirstSync(repo.db as unknown as SyncStatusDb, () => {
       if (done) return
       markStartup('synced')
-      void repo.flushSyncObserver().then(() => { if (!done) markStartup('drained') })
+      // A drain that FAILS now rejects the barrier rather than resolving over
+      // its own failure; there is no 'drained' mark to make in that case, and
+      // the observer has already reported it.
+      void repo.flushSyncObserver()
+        .then(() => { if (!done) markStartup('drained') })
+        .catch(() => {})
     }))
 
     // Headline TTI — the boot contention stopping: a sustained quiet window (no

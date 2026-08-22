@@ -22,12 +22,18 @@
  * skipped (prior committed windows survive) and the rows retry next tick.
  *
  * Drains serialize on a single promise chain, so two never overlap (duplicate
- * invalidations) and `flush()` is a real settle barrier for tests.
+ * invalidations) and `flush()` is a real settle barrier for tests. A barrier
+ * only settles as SUCCESS when the drain finished: a unit that throws or is
+ * cut short by `dispose()` rejects the promise it was awaited on, because the
+ * awaiters treat resolution as "the workspace is materialized" and act on it
+ * irreversibly.
  *
  * `drainWorkspace` re-materializes a workspace's staged rows directly from
  * `blocks_synced` (not the queue) — for when a workspace becomes
  * materializable without a staging change: a WK paste (deferred e2ee rows) or
- * a plaintext confirmation (§8 flows call it).
+ * a plaintext confirmation (§8 flows call it). Because it stages nothing, the
+ * queue cannot report it; `isRematerializingWorkspace` is how a reader learns
+ * `blocks` is being rewritten under it.
  *
  * The §4.7 cycle-scan telemetry that lived in rowEventsTail is relocated here
  * (`runCycleScan`), so the observer fully subsumes the tail's responsibilities.
@@ -86,8 +92,18 @@ export interface BlocksSyncedObserver {
   /** Re-materialize a workspace's staged rows after it becomes materializable
    *  (WK paste / plaintext confirm), or as the on-open recovery rescan. Reads
    *  `blocks_synced` directly. Server-enforced `updated_at` monotonicity makes
-   *  one gate correct for both — no separate healing mode. */
+   *  one gate correct for both — no separate healing mode.
+   *
+   *  REJECTS if the pass did not finish — see {@link startBlocksSyncedObserver}'s
+   *  enqueue. */
   drainWorkspace(workspaceId: string): Promise<void>
+  /** Is a {@link drainWorkspace} pass outstanding (running OR queued behind
+   *  another unit)? The one thing a reader cannot learn from the queue: that
+   *  path rewrites `blocks` straight from `blocks_synced` and stages nothing,
+   *  so `blocks_synced_changes` is empty throughout. `Repo.syncViewGap` reads
+   *  it — the observer's own in-flight state, which is what `clientSchema.ts`
+   *  asks for in place of proxying one of its inputs. */
+  isRematerializingWorkspace(): boolean
   /** Stop the subscription. Idempotent. */
   dispose(): void
 }
@@ -104,6 +120,12 @@ interface QueueRow {
  *  `@powersync/common`. */
 const isConnectionClosedError = (err: unknown): boolean =>
   !!err && typeof err === 'object' && (err as { name?: unknown }).name === 'ConnectionClosedError'
+
+/** Raised instead of returning when a drain is cut short by `dispose()`. An
+ *  interrupted pass did not materialize the workspace, and its awaiter decides
+ *  what that means — see {@link startBlocksSyncedObserver}'s enqueue. */
+const disposedMidDrain = (): Error =>
+  new Error('[blocksSyncedObserver] disposed before this drain finished')
 
 /**
  * The §4.7 cycle-scan starting set: ids whose parent_id actually moved while
@@ -142,6 +164,8 @@ export const startBlocksSyncedObserver = (
   let disposed = false
   let unsubscribe: (() => void) | null = null
   let chain: Promise<void> = Promise.resolve()
+  /** Outstanding {@link drainWorkspace} passes — the queue-blind path. */
+  let workspaceRescans = 0
 
   /** §4.7 detection-only telemetry. One bounded, truncation-safe scan per
    *  workspace whose parent_id mutations might have closed a loop. A scan
@@ -189,7 +213,7 @@ export const startBlocksSyncedObserver = (
     // one transaction. Each window commits independently (step 4), so the next
     // window — and any retry after a throw — resumes from the last consumed seq.
     for (;;) {
-      if (disposed) return
+      if (disposed) throw disposedMidDrain()
       const rows = await db.getAll<QueueRow>(
         'SELECT seq, id, op FROM blocks_synced_changes ORDER BY seq LIMIT ?',
         [drainChunk],
@@ -223,7 +247,7 @@ export const startBlocksSyncedObserver = (
   const materializeWorkspace = async (
     workspaceId: string,
   ): Promise<void> => {
-    if (disposed) return
+    if (disposed) throw disposedMidDrain()
     const ids = (await db.getAll<{ id: string }>(
       'SELECT id FROM blocks_synced WHERE workspace_id = ? ORDER BY id',
       [workspaceId],
@@ -238,30 +262,55 @@ export const startBlocksSyncedObserver = (
     // interrupted. Independently-committed windows keep memory flat and let a
     // re-invocation resume (already-materialized rows LWW-skip next pass).
     for (let i = 0; i < ids.length; i += drainChunk) {
-      if (disposed) return
+      if (disposed) throw disposedMidDrain()
       await applyWindow(ids.slice(i, i + drainChunk), [])
     }
   }
 
   // Serialize all work on one chain so drains never overlap and flush() awaits
-  // everything enqueued before it. A failed unit reports and doesn't break the
-  // chain (the `, () => {}` rejection handler keeps it alive).
+  // everything enqueued before it.
+  //
+  // The returned promise REJECTS when the unit did not finish — reporting
+  // through `onError` is not enough, because callers award success to this
+  // promise: the key gate opens the workspace on it, and `runReconcileRescan`
+  // writes its once-per-(workspace, client) marker on it. Resolving after a
+  // throw or a teardown therefore retires the recovery path for a workspace
+  // that is still only partly materialized, silently and one-way — the failure
+  // both of those call sites already say in comments they are guarding against
+  // (km-fsxp).
+  //
+  // The SPINE is a separate promise that never rejects. It is what keeps a
+  // failed unit from wedging every later drain, and — because it always
+  // attaches a rejection handler — what makes an unawaited `flush()` safe.
   const enqueue = (work: () => Promise<void>): Promise<void> => {
-    const next = chain.then(async () => {
-      if (disposed) return
+    const done = chain.then(async () => {
+      // Not reported through `onError`: teardown is expected, and the
+      // fire-and-forget drains below would warn on every tab close.
+      if (disposed) throw disposedMidDrain()
       try {
         await work()
       } catch (err) {
         onError(err)
+        throw err
       }
-    }, () => {})
-    chain = next
-    return next
+    })
+    chain = done.then(() => {}, () => {})
+    return done
   }
 
   const flush = (): Promise<void> => enqueue(drainQueueOnce)
-  const drainWorkspace = (workspaceId: string): Promise<void> =>
-    enqueue(() => materializeWorkspace(workspaceId))
+  const drainWorkspace = (workspaceId: string): Promise<void> => {
+    // Counted from ENQUEUE rather than from the first window: a rescan waiting
+    // its turn on the chain will still rewrite `blocks` with nothing in the
+    // queue to show for it, which is the whole blindness. Decremented off the
+    // promise, which settles on every exit including the disposed one, so the
+    // count cannot leak; the derived promise gets its own handler because
+    // `done` alone is what we hand back.
+    workspaceRescans += 1
+    const done = enqueue(() => materializeWorkspace(workspaceId))
+    void done.finally(() => { workspaceRescans -= 1 }).catch(() => {})
+    return done
+  }
 
   // Subscribe first, then drain once: the subscription catches future appends,
   // and the initial drain catches rows already queued — including any that
@@ -279,6 +328,7 @@ export const startBlocksSyncedObserver = (
   return {
     flush,
     drainWorkspace,
+    isRematerializingWorkspace: () => workspaceRescans > 0,
     dispose() {
       if (disposed) return
       disposed = true

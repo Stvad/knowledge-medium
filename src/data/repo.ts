@@ -95,6 +95,8 @@ import {
 import {
   STAGED_SCAN_LIMIT,
   STAGED_VIEW_GAP_SQL,
+  WORKSPACE_MATERIALIZATION_GAP_COUNT_CAP,
+  WORKSPACE_MATERIALIZATION_GAP_SQL,
 } from '@/data/internals/syncObserver/reconcile'
 import type { MaterializeDeps } from '@/data/internals/syncObserver/materialize'
 import type { Materializability } from '@/sync/transform'
@@ -2809,10 +2811,12 @@ export class Repo {
    * `audit-properties` (which reports it) — one predicate, because a rule
    * added to one of two copies is how these diverge.
    *
-   * NOT complete, and the staged-rows half is the incomplete part: it reads
-   * the QUEUE, so it is blind to `observer.materializeWorkspace`, which
-   * rewrites `blocks` straight from `blocks_synced` and stages nothing. Null
-   * means "no QUEUED work", not "`blocks` is at rest" (km-fsxp).
+   * Cheap enough to re-ask per transaction, and every arm is about work that
+   * is OUTSTANDING — so null means "nothing is in flight", not "`blocks` holds
+   * every row this device has downloaded". A row can be missing from `blocks`
+   * with nothing running at all; {@link workspaceViewGap} is the arm that
+   * answers that, and the reason it is a separate method is that answering it
+   * costs a scan.
    */
   async syncViewGap(): Promise<string | null> {
     const staged = await this.db.getOptional<{why: string}>(
@@ -2823,11 +2827,55 @@ export class Repo {
         + 'so this device is behind on materializing them into `blocks`'
     }
     if (staged !== null) return 'synced rows are still draining into `blocks`'
+    // The queue cannot see this one: `observer.materializeWorkspace` rewrites
+    // `blocks` straight from `blocks_synced` and stages nothing, so the arms
+    // above read clear for its whole run — and it is the BIG path (a fresh
+    // device's re-pass over the entire workspace). Asking the observer for its
+    // own in-flight state is what `clientSchema.ts` prescribes in place of
+    // proxying one of its inputs (km-fsxp).
+    if (this.syncObserver?.isRematerializingWorkspace()) {
+      return 'a full re-materialization of a workspace is in progress, '
+        + 'so `blocks` is still being rewritten'
+    }
     if (!this.backfillSyncSettledNow()) {
       return 'this device is not caught up with the server '
         + '(still downloading, disconnected, or a download error)'
     }
     return null
+  }
+
+  /**
+   * Why this device's view of ONE workspace is incomplete, or null.
+   *
+   * {@link syncViewGap} plus the durable question it cannot afford to ask:
+   * does `blocks` actually hold every `blocks_synced` row this device has
+   * downloaded for the workspace? Rows that could not be materialized when
+   * they arrived — workspace not yet unlocked, mode unresolved, a key-store
+   * read that failed, ciphertext that would not decode — stay staged while the
+   * drain consumes their queue entries, leaving a stable gap that no in-flight
+   * signal reports and no waiting clears.
+   *
+   * Supersedes rather than complements `syncViewGap`: it asks that first, so a
+   * caller needs exactly one of the two and the expensive one is never the
+   * incomplete one. Use it ONCE at the top of a pass whose writes cannot be
+   * taken back — a one-way migration, a deterministic-id mint — and leave the
+   * per-transaction re-checks on `syncViewGap`, whose cost is a bounded probe
+   * rather than a scan of every downloaded row (see the SQL's header).
+   */
+  async workspaceViewGap(workspaceId: string): Promise<string | null> {
+    const inFlight = await this.syncViewGap()
+    if (inFlight !== null) return inFlight
+    const {missing} = await this.db.get<{missing: number}>(
+      WORKSPACE_MATERIALIZATION_GAP_SQL,
+      [workspaceId, WORKSPACE_MATERIALIZATION_GAP_COUNT_CAP],
+    )
+    if (missing === 0) return null
+    const count = missing >= WORKSPACE_MATERIALIZATION_GAP_COUNT_CAP
+      ? `at least ${WORKSPACE_MATERIALIZATION_GAP_COUNT_CAP.toLocaleString()}`
+      : `${missing.toLocaleString()}`
+    return `${count} synced row(s) of this workspace have never materialized into `
+      + '`blocks` on this device, and nothing is in flight to change that '
+      + '(reload, or re-enter the workspace key, to re-run materialization)'
   }
 
   private async assertBackfillMayWrite(
@@ -3026,7 +3074,12 @@ export class Repo {
       // Note the create+tombstone pair is ROUTINE, not exceptional: every
       // mid-run abort releases the claim. Its being queued while stale is the
       // problem, not its existence.
-      const gap = await this.syncViewGap()
+      // The WORKSPACE-scoped predicate here, the cheap one per transaction:
+      // this is the once-per-pass moment, so it is where the scan for rows
+      // that never materialized at all belongs. A pass that claims and
+      // uploads from a graph half of which is still ciphertext on disk is the
+      // same stale-view write as one that claims mid-drain.
+      const gap = await this.workspaceViewGap(workspaceId)
       if (gap !== null) {
         deferred = gap
         console.warn(

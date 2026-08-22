@@ -20,7 +20,10 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { BLOCKS_SYNCED_RAW_TABLE, blockToSyncedRowParams } from '@/data/blockSchema'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
-import { decideStagingRow } from '@/data/internals/syncObserver/reconcile'
+import {
+  decideStagingRow,
+  WORKSPACE_MATERIALIZATION_GAP_COUNT_CAP,
+} from '@/data/internals/syncObserver/reconcile'
 import { ChangeScope } from '@/data/api'
 import type { BlockData } from '@/data/api'
 
@@ -182,6 +185,19 @@ describe('Repo.syncViewGap', () => {
     expect(await repo.syncViewGap()).toMatch(/draining/)
   })
 
+  it('reports a gap while a queue-blind workspace rescan is outstanding', async () => {
+    // Wiring only — that the predicate ASKS the observer. What the answer
+    // means (set at enqueue, cleared on settle, never set by a queue drain)
+    // is pinned against a real observer in `syncObserver/observer.test.ts`;
+    // reproducing it here would mean holding a rescan open across an awaited
+    // read, which is a race, not a test.
+    const repo = makeRepo()
+    expect(await repo.syncViewGap()).toBeNull()
+    ;(repo as unknown as {syncObserver: unknown}).syncObserver =
+      {isRematerializingWorkspace: () => true}
+    expect(await repo.syncViewGap()).toMatch(/re-materialization/)
+  })
+
   it('reports a gap for a staged delete whose row still matches stamp-for-stamp', async () => {
     // Isolates the `c.op = 'delete'` clause: synced row present, local row
     // present, stamps equal — I1 would call this identical content and skip.
@@ -196,4 +212,57 @@ describe('Repo.syncViewGap', () => {
     expect(await repo.syncViewGap()).toMatch(/draining/)
   })
 
+})
+
+/** Staged as a real arrival, then the queue signal consumed — the shape a row
+ *  has after a drain that could not materialize it (locked workspace, mode
+ *  unresolved, a key-store read that failed, ciphertext that would not decode).
+ *  Nothing is in flight and nothing ever will be. */
+const deliverAndConsumeQueue = async (d: BlockData) => {
+  await deliver(d)
+  await sharedDb.db.execute('DELETE FROM blocks_synced_changes')
+}
+
+describe('Repo.workspaceViewGap', () => {
+  it('reports rows that were downloaded and never materialized, with nothing in flight', async () => {
+    const repo = makeRepo()
+    await deliverAndConsumeQueue(syncedRow({id: 'never-decoded', updatedAt: 5}))
+
+    // The in-flight predicate is satisfied — this is exactly the state in which
+    // waiting is not a mitigation, because nothing is running.
+    expect(await repo.syncViewGap()).toBeNull()
+    expect(await repo.workspaceViewGap(WS)).toMatch(/never materialized/)
+  })
+
+  it('reports no gap once those rows are in `blocks`', async () => {
+    const repo = makeRepo()
+    await deliverAndConsumeQueue(syncedRow({id: 'arrived', updatedAt: 5}))
+    await seedLocal('arrived', 5)
+    expect(await repo.workspaceViewGap(WS)).toBeNull()
+  })
+
+  it('ignores another workspace\'s unmaterialized rows', async () => {
+    // A device is routinely a member of workspaces it has not opened, whose
+    // rows all defer. Scoping is what keeps that from refusing every pass.
+    const repo = makeRepo()
+    await deliverAndConsumeQueue(syncedRow({id: 'other', workspaceId: 'ws-other', updatedAt: 5}))
+    expect(await repo.workspaceViewGap(WS)).toBeNull()
+  })
+
+  it('asks the in-flight predicate first, so one call is the whole question', async () => {
+    // Callers pick one of the two; the expensive one must not be the partial
+    // one, or every consumer that reaches for it silently loses the queue arm.
+    const repo = makeRepo()
+    await deliver(syncedRow({id: 'arriving', updatedAt: 5}))
+    expect(await repo.workspaceViewGap(WS)).toMatch(/draining/)
+  })
+
+  it('caps the count it reports rather than the rows it examines', async () => {
+    const repo = makeRepo()
+    for (let i = 0; i < WORKSPACE_MATERIALIZATION_GAP_COUNT_CAP + 5; i++) {
+      await deliver(syncedRow({id: `staged-${i}`, updatedAt: 5}))
+    }
+    await sharedDb.db.execute('DELETE FROM blocks_synced_changes')
+    expect(await repo.workspaceViewGap(WS)).toMatch(/at least 1,000/)
+  }, 20_000)
 })

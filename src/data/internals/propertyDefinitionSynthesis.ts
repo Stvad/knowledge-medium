@@ -731,7 +731,13 @@ export const applyPropertyDefinitionSynthesis = async (
   // dialog since. A device that has fallen behind would mint a rival for a
   // definition it simply has not received yet, and the loser strands every
   // field row that bound to it.
-  const syncGap = await repo.syncViewGap()
+  //
+  // The WORKSPACE-scoped predicate, which is the expensive one: a key whose
+  // real definition merely failed to materialize reads as ORPHANED to the
+  // scan, and this pass answers an orphan by minting — so "nothing is in
+  // flight" is not the question. Once, here, because the mint is one-way; the
+  // in-transaction re-check below stays on the cheap arms.
+  const syncGap = await repo.workspaceViewGap(workspaceId)
   if (syncGap !== null) {
     throw new Error(`[propertyDefinitionSynthesis] ${syncGap}`)
   }
