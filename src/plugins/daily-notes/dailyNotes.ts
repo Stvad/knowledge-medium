@@ -190,15 +190,22 @@ export const getOrCreateDailyNote = async (
 
   const live = await repo.load(id)
 
-  // Read-only: GET, never create or repair — the same ergonomic guard
-  // `getOrCreateKernelPage` carries, and for a sharper reason here. A day that
-  // yielded one of its canonical aliases leaves `needsRepair` true on EVERY
-  // later call, so without this a viewer opening such a day gets `ReadOnlyError`
-  // out of the repair tx instead of the page. Placed after the occupant read
-  // and behind `refuseForeign`: being unable to write is not entitlement to
-  // read another workspace's block under this workspace's identity.
-  if (repo.isReadOnly) {
-    if (live) refuseForeign(live)
+  // Read-only: GET an EXISTING day, never create or repair. A day that yielded
+  // one of its canonical aliases leaves `needsRepair` true on every later call,
+  // so without this a viewer opening such a day gets `ReadOnlyError` out of the
+  // repair tx instead of the page.
+  //
+  // Only when the row is actually there. Handing back a deterministic id for a
+  // row that does not exist is worse than the error: `todayDailyNoteLanding`
+  // answers with it and workspace bootstrap opens a panel on a missing block,
+  // which `WorkspaceLandingResolver` calls out by name as a bug. A viewer with
+  // no such day gets the write refusal, as before.
+  //
+  // Placed after the occupant read and behind `refuseForeign`: being unable to
+  // write is not entitlement to read another workspace's block under this
+  // workspace's identity.
+  if (repo.isReadOnly && live) {
+    refuseForeign(live)
     return repo.block(id)
   }
 
@@ -221,6 +228,19 @@ export const getOrCreateDailyNote = async (
       if (!current || current.deleted) return
       refuseForeign(current)
       const currentAliases = stringListProperty(current.properties[aliasesProp.name])
+      // A name this row already co-claims with another live block wedges EVERY
+      // properties write on it, this repair included: the alias trigger deletes
+      // and re-inserts the row's whole bag, so the duplicate collides and
+      // aborts the caller's transaction — which here is the navigation that
+      // opened the day. Skip the repair rather than take the day down with it.
+      // The row is live and reachable; it just stays unrepaired until the
+      // duplicate is resolved. Latent cross-client duplicates are accepted by
+      // design (the uniqueness trigger skips sync-apply) and the general wedge
+      // they cause is its own issue.
+      for (const alias of currentAliases) {
+        const claimants = await tx.aliasClaimants(alias, workspaceId)
+        if (claimants.some(claimant => claimant.id !== id)) return
+      }
       const claimable = await partitionClaimableAliases(tx, id, dailyAliases, workspaceId)
       const merged = mergeStrings([...claimable, ...currentAliases])
       // Compare against the MERGED set, not the canonical one: while an alias

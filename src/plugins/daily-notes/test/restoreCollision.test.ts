@@ -67,6 +67,17 @@ const aliasesOf = async (id: string): Promise<readonly string[]> => {
   return encoded === undefined ? [] : aliasesProp.codec.decode(encoded)
 }
 
+/** A sync-shaped row: raw insert, so the uniqueness trigger's `WHEN` guard
+ *  skips it and co-claims are possible. Still maintains `block_aliases`. */
+const rawRow = async (id: string, content: string, aliases: string[]): Promise<void> => {
+  await sharedDb.db.execute(
+    `INSERT INTO blocks (id, workspace_id, parent_id, order_key, content, properties_json,
+      references_json, created_at, updated_at, user_updated_at, created_by, updated_by, deleted)
+     VALUES (?, ?, NULL, ?, ?, ?, '[]', 1, 1, 1, 'u', 'u', 0)`,
+    [id, WS, `k-${id}`, content, JSON.stringify({[aliasesProp.name]: aliases})],
+  )
+}
+
 /** A live page holding `alias`, created before the day is ever opened. */
 const squatterOwning = async (alias: string): Promise<void> => {
   await repo.tx(async tx => {
@@ -93,6 +104,30 @@ describe('reading a day\'s identity', () => {
       date: dailyNoteDateProp.codec.decode(block!.properties[dailyNoteDateProp.name]),
       aliases: [],
     })).toBeNull()
+  })
+
+  it('opens a day that co-claims one of its names with another live block', async () => {
+    // The alias trigger deletes and re-inserts the row's WHOLE bag on any
+    // properties write, so a name the row already shares with another live
+    // block aborts the repair — and with it the navigation that opened the
+    // day. Skipping the repair leaves the row unrepaired but reachable.
+    const id = dailyNoteBlockId(WS, ISO)
+    await rawRow(id, LONG, [ISO, 'Dup'])
+    await rawRow('other', 'Other', ['Dup'])
+
+    await expect(getOrCreateDailyNote(repo, WS, ISO)).resolves.toBeDefined()
+    expect(await repo.load(id)).not.toBeNull()
+  })
+
+  it('reports rather than handing a viewer a day that does not exist', async () => {
+    // The read-only short-circuit must not answer for a row that was never
+    // created: `todayDailyNoteLanding` would return the deterministic id and
+    // bootstrap would open a panel on a missing block, which the
+    // `WorkspaceLandingResolver` contract calls out by name as a bug.
+    vi.spyOn(repo, 'isReadOnly', 'get').mockReturnValue(true)
+
+    await expect(getOrCreateDailyNote(repo, WS, ISO)).rejects.toThrow()
+    expect(await repo.load(dailyNoteBlockId(WS, ISO))).toBeNull()
   })
 
   it('opens a contested day for a viewer instead of failing to repair it', async () => {
