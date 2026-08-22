@@ -316,17 +316,19 @@ describe('alias.mergeCollision', () => {
     })).rejects.toThrow(/no longer claims/)
   })
 
-  it('offers a claimant the index sees but the alias bag cannot decode', async () => {
+  it('keeps every indexed name off a source whose bag the codec rejects', async () => {
     // The alias trigger indexes any `$.alias` entry that is `typeof 'text'`;
-    // the string-list codec throws on a bag holding anything else. A
-    // sync-applied `["Journal", 7]` is therefore a real claimant the banner
-    // lists — and a bag-based premise check refuses it forever.
+    // the string-list codec throws on a bag holding anything else. So a
+    // sync-applied `["Journal", "Notes", 7]` claims BOTH names — the banner
+    // lists it, and a bag-based read sees an empty list. Refusing on that read
+    // dead-ends the merge; folding on it releases "Notes" and hands it to
+    // nobody, so `[[Notes]]` stops resolving anywhere.
     await createBlock('canonical', 'Journal', [], 'a0')
     await env.h.db.execute(
       `INSERT INTO blocks (id, workspace_id, parent_id, order_key, content, properties_json,
         references_json, created_at, updated_at, user_updated_at, created_by, updated_by, deleted)
        VALUES ('odd', ?, NULL, 'k-odd', 'Odd', ?, '[]', 5, 5, 5, 'u', 'u', 0)`,
-      [WS, JSON.stringify({[aliasesProp.name]: ['Journal', 7]})],
+      [WS, JSON.stringify({[aliasesProp.name]: ['Journal', 'Notes', 7]})],
     )
 
     await env.repo.run(ALIAS_COLLISION_MERGE_MUTATOR, {
@@ -337,8 +339,29 @@ describe('alias.mergeCollision', () => {
     })
 
     expect(await env.repo.load('odd')).toBeNull()
+    // Both names came across, and the malformed entry is gone from the bag.
     expect((await env.repo.load('canonical'))?.properties[aliasesProp.name])
-      .toEqual(aliasesProp.codec.encode(['Journal', 'Odd']))
+      .toEqual(aliasesProp.codec.encode(['Journal', 'Notes', 'Odd']))
+  })
+
+  it('does not re-claim a name the target released while the toast was open', async () => {
+    // The rejection toast names the page that owns the alias. If that page
+    // gives the name up before the user clicks, the merge must not hand it
+    // back — the user deliberately freed it, and the toast is just stale.
+    await createBlock('target', 'Existing', ['Existing'], 'a0')
+    await createBlock('source', 'Partial', ['Partial'], 'a1')
+    await env.repo.tx(tx => tx.setProperty('target', aliasesProp, ['Other name']),
+      {scope: ChangeScope.BlockDefault})
+
+    await env.repo.run(ALIAS_COLLISION_MERGE_MUTATOR, {
+      intoId: 'target',
+      fromIds: ['source'],
+      collisionAlias: 'Existing',
+      dropSourceAliases: ['Partial'],
+    })
+
+    expect((await env.repo.load('target'))?.properties[aliasesProp.name])
+      .toEqual(aliasesProp.codec.encode(['Other name']))
   })
 
   it('refuses to fold into a tombstone in the rejection direction too', async () => {

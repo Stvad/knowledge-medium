@@ -5,7 +5,7 @@ import {
   type BlockData,
   type Tx,
 } from '@/data/api'
-import { aliasesProp, getAliases } from '@/data/properties'
+import { aliasesProp } from '@/data/properties'
 import { foldBlocksInTx } from '@/data/blockMerge'
 import { mergeProperties } from '@/data/mergeProperties'
 
@@ -98,27 +98,39 @@ const claimableTitles = async (
   return claimable
 }
 
+/** What the alias INDEX believes this row claims.
+ *
+ *  Not `getAliases`: the string-list codec throws if ANY entry is not a string
+ *  and that read then reports the whole bag as empty, while the trigger indexes
+ *  every `$.alias` entry that is `typeof 'text'`. On a sync-applied
+ *  `["Journal", "Odd", 7]` the strict read carries neither name across, so
+ *  deleting the source releases both and nothing picks them up — `[[Odd]]`
+ *  stops resolving anywhere. Matching the trigger's rule also repairs the bag,
+ *  since what is written back is re-encoded from this. */
+const indexedAliases = (block: BlockData): string[] => {
+  const raw = block.properties[aliasesProp.name]
+  return Array.isArray(raw) ? raw.filter((value): value is string => typeof value === 'string') : []
+}
+
 /** The survivor's final alias bag. Precomputed from every participant rather
  *  than accumulated fold-by-fold, because the answer does not depend on the
  *  order the sources are folded in and the bag is written once, at the end. */
 const mergedAliases = (
   into: BlockData,
   collisionAlias: string,
+  collisionIsClaimed: boolean,
   sources: readonly BlockData[],
   drop: ReadonlySet<string>,
   keepTitles: ReadonlySet<string>,
 ): string[] => union([
-  ...getAliases(into),
-  // Stated outright rather than left to arrive via a source's bag. The whole
-  // point of the reclaim direction is that the survivor ends up holding this
-  // name, and `getAliases` returns [] for a bag it cannot decode — while the
-  // alias TRIGGER indexes any `typeof 'text'` entry, so a sync-applied
-  // `["Journal", 7]` is a real claimant whose claim would otherwise be
-  // released by the fold and picked up by nobody. In the rejection direction
-  // `into` already holds it and this dedupes away.
-  collisionAlias,
+  ...indexedAliases(into),
+  // Stated outright rather than left to arrive via a participant's bag, but
+  // ONLY when a participant still claims it. Stating it unconditionally means a
+  // stale rejection toast re-claims a name its target deliberately released
+  // since — the merge would hand back a name the user no longer wants there.
+  ...(collisionIsClaimed ? [collisionAlias] : []),
   ...sources.flatMap(source => [
-    ...getAliases(source).filter(alias => !drop.has(alias)),
+    ...indexedAliases(source).filter(alias => !drop.has(alias)),
     // A title goes after its own page's aliases, and every source after the
     // survivor's: the first entry reads as the page's primary name, and that
     // should stay the canonical one rather than an absorbed page's.
@@ -184,9 +196,9 @@ export const aliasCollisionMerge = defineMutator<AliasCollisionMergeArgs, void>(
     // that is `typeof 'text'`, while the string-list codec throws on a bag
     // holding anything else — so a sync-applied `["Journal", 7]` is a claimant
     // the banner offers and a bag check refuses forever.
-    const claimants = sourceIsAliasOwner
-      ? new Set((await tx.aliasClaimants(collisionAlias, into.workspaceId)).map(c => c.id))
-      : null
+    const claimantIds = new Set(
+      (await tx.aliasClaimants(collisionAlias, into.workspaceId)).map(c => c.id),
+    )
 
     const sources: BlockData[] = []
     for (const fromId of fromIds) {
@@ -194,7 +206,7 @@ export const aliasCollisionMerge = defineMutator<AliasCollisionMergeArgs, void>(
       if (from === null) throw new Error(`alias.mergeCollision: source ${fromId} not found`)
       // Source side — folding a page that no longer holds the name would
       // tombstone it and re-home its children for nothing.
-      if (claimants !== null && !claimants.has(fromId)) {
+      if (sourceIsAliasOwner && !claimantIds.has(fromId)) {
         throw new Error(
           `alias.mergeCollision: ${fromId} no longer claims "${collisionAlias}"`,
         )
@@ -214,7 +226,13 @@ export const aliasCollisionMerge = defineMutator<AliasCollisionMergeArgs, void>(
     const keepTitles = sourceIsAliasOwner
       ? await claimableTitles(tx, into, sources, drop)
       : new Set<string>()
-    const merged = mergedAliases(into, collisionAlias, sources, drop, keepTitles)
+    // Whether the merge is still ABOUT this name. False for a stale rejection
+    // toast whose target released it in the meantime.
+    const collisionIsClaimed = [into.id, ...sources.map(source => source.id)]
+      .some(id => claimantIds.has(id))
+    const merged = mergedAliases(
+      into, collisionAlias, collisionIsClaimed, sources, drop, keepTitles,
+    )
     await assertNoOutsideClaimant(tx, into, sources, merged)
     const finalAliases = aliasesProp.codec.encode(merged)
 
