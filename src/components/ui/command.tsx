@@ -81,7 +81,7 @@ const CommandInput = ({
 CommandInput.displayName = CommandPrimitive.Input.displayName
 
 /**
- * Keep the active row in view, a commit later than cmdk does it.
+ * Redo, for a query change only, the scroll cmdk gets wrong.
  *
  * cmdk scrolls to whichever row the DOM currently marks `aria-selected`.
  * On a query change it re-selects the first match from inside its own
@@ -89,32 +89,35 @@ CommandInput.displayName = CommandPrimitive.Input.displayName
  * iterating — so the scroll runs before React has moved the mark, and
  * lands on the row that WAS selected. In a re-sorted list that row is
  * anywhere, which parks the list mid-way with the top matches scrolled
- * past. Repeating the scroll here is not redundant: this effect runs in
- * the follow-up commit, where the DOM finally names the right row. Both
- * commits land before the browser paints, so the bad position is never
- * seen.
+ * past.
  *
- * Keyed on the query as well as the selection: a query change that
- * happens to keep the same row selected changes no value, and would
- * otherwise leave a scrolled list scrolled.
+ * The correction waits on a microtask, not on a second effect keyed to
+ * the selection: cmdk's bad scroll and the re-select it schedules both
+ * land inside this commit's layout phase, and React flushes that
+ * re-select synchronously before the phase returns — so the microtask
+ * runs once the DOM finally names the right row, and still before paint.
+ * Keying on the selection instead would also fire for pointer hover,
+ * where cmdk suppresses its own scroll on purpose and a correction jerks
+ * the list out from under the pointer. Only a query change reaches here.
  */
 const useSelectedItemInView = (listRef: React.RefObject<HTMLDivElement | null>) => {
   const search = useCommandState(state => state.search)
-  const selectedValue = useCommandState(state => state.value)
 
   React.useLayoutEffect(() => {
-    const selected = listRef.current?.querySelector('[cmdk-item=""][aria-selected="true"]')
-    if (!selected) return
-    // The first row of a group sits flush under its heading — reveal the
-    // heading with it, or the group reads as unlabelled.
-    if (selected.parentElement?.firstChild === selected) {
-      selected
-        .closest('[cmdk-group=""]')
-        ?.querySelector('[cmdk-group-heading=""]')
-        ?.scrollIntoView({block: "nearest"})
-    }
-    selected.scrollIntoView({block: "nearest"})
-  }, [search, selectedValue, listRef])
+    queueMicrotask(() => {
+      const selected = listRef.current?.querySelector('[cmdk-item=""][aria-selected="true"]')
+      if (!selected) return
+      // The first row of a group sits flush under its heading — reveal the
+      // heading with it, or the group reads as unlabelled.
+      if (selected.parentElement?.firstChild === selected) {
+        selected
+          .closest('[cmdk-group=""]')
+          ?.querySelector('[cmdk-group-heading=""]')
+          ?.scrollIntoView({block: "nearest"})
+      }
+      selected.scrollIntoView({block: "nearest"})
+    })
+  }, [search, listRef])
 }
 
 const CommandList = ({

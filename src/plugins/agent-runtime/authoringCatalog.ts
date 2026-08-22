@@ -134,13 +134,9 @@ const internalModuleIndex = import.meta.glob([
   '!/src/**/examples/**',
 ])
 
-// Excludes tests for the same reason `internalModuleIndex` does, but the
-// stakes are higher here: this glob is EAGER, so a co-located test file
-// would be evaluated wherever the catalog is imported — in the app, on the
-// vitest globals it calls at module scope; under the gate, into whichever
-// test file pulled the catalog in, whose run then carries a stranger's
-// hooks (`src/components/ui/command.test.tsx` reddened two unrelated files
-// this way).
+// The test exclusion is load-bearing, not tidiness: this glob is EAGER, so
+// a co-located test file gets evaluated wherever the catalog is imported —
+// in the app, on the vitest globals it calls at module scope.
 const eagerUiModules = import.meta.glob(
   ['/src/components/ui/*.{ts,tsx}', '!/src/components/ui/*.{test,spec}.{ts,tsx}'],
   {eager: true},
