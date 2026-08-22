@@ -16,6 +16,7 @@ import { definitionSeedsFacet } from '@/data/facets'
 import { kernelDataExtension } from '@/data/kernelDataExtension'
 import { resolveFacetRuntimeSync } from '@/facets/facet'
 import type { Repo } from '@/data/repo'
+import { BLOCKS_SYNCED_RAW_TABLE, blockToSyncedRowParams } from '@/data/blockSchema'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { confirmPlaintextForSession } from '@/sync/keys/modePin'
@@ -428,6 +429,27 @@ describe('planPropertyDefinitionSynthesis', () => {
     expect(flipBlockedBySynthesis(plan)).toMatch(/still catching up/)
   })
 
+  it('refuses the flip when the survey ran over rows this device never materialized', async () => {
+    // The same partial graph as above, arrived at without a mock — and the
+    // shape that makes the survey's output wrong rather than merely late: an
+    // unmaterialized definition makes its key read as UNRESOLVED, which is the
+    // reading the whole plan is built on.
+    await rawCell('b1', {'demo:orphan': 'hello'})
+    repo.stopSyncObserver()
+    await sharedDb.db.execute(BLOCKS_SYNCED_RAW_TABLE.put.sql, blockToSyncedRowParams({
+      id: 'never-materialized', workspaceId: WS, parentId: null, orderKey: 'z0',
+      content: 'the definition this device has not got', properties: {}, references: [],
+      createdAt: 1, updatedAt: 5, userUpdatedAt: 5, createdBy: 'u', updatedBy: 'u',
+      deleted: false,
+    }))
+    await sharedDb.db.execute('DELETE FROM blocks_synced_changes')
+
+    const plan = await planFor()
+
+    expect(plan.scanSyncGap).toMatch(/have not reached/)
+    expect(flipBlockedBySynthesis(plan)).toMatch(/still catching up/)
+  })
+
   it('refuses when the workspace turns out encrypted AFTER the pre-flight check', async () => {
     // The pre-flight check and the write are separated by the Properties-page
     // bootstrap and by the wait for the write lock, and the workspace's real
@@ -500,6 +522,35 @@ describe('planPropertyDefinitionSynthesis', () => {
 
     await expect(applyPropertyDefinitionSynthesis(repo, plan))
       .rejects.toThrow(/not caught up/)
+    expect(repo.block(await definitionIdFor('demo:orphan')).peek()).toBeUndefined()
+  })
+
+  it('refuses to WRITE over a row this device downloaded and never materialized', async () => {
+    // The shape the in-flight predicate cannot see, and the one that matters
+    // most here: a key whose real definition merely failed to materialize on
+    // arrival reads as ORPHANED to the scan, and an orphan is answered by
+    // MINTING. Nothing is running in this state and no waiting clears it, so
+    // "is a drain outstanding" answers yes-go-ahead — and the mint that
+    // follows loses the registry's ascending-createdAt sort to the real
+    // definition when it finally lands, stranding every field row bound to it.
+    await rawCell('b1', {'demo:orphan': 'x'})
+    const plan = await planFor()
+
+    // Stopped first so the row STAYS staged: this is a row the drain already
+    // passed over (locked workspace, unresolved mode, undecodable ciphertext)
+    // and whose queue entry it consumed on the way.
+    repo.stopSyncObserver()
+    await sharedDb.db.execute(BLOCKS_SYNCED_RAW_TABLE.put.sql, blockToSyncedRowParams({
+      id: 'never-materialized', workspaceId: WS, parentId: null, orderKey: 'z0',
+      content: 'the definition this device has not got', properties: {}, references: [],
+      createdAt: 1, updatedAt: 5, userUpdatedAt: 5, createdBy: 'u', updatedBy: 'u',
+      deleted: false,
+    }))
+    await sharedDb.db.execute('DELETE FROM blocks_synced_changes')
+    expect(await repo.syncViewGap()).toBeNull()
+
+    await expect(applyPropertyDefinitionSynthesis(repo, plan))
+      .rejects.toThrow(/have not reached/)
     expect(repo.block(await definitionIdFor('demo:orphan')).peek()).toBeUndefined()
   })
 

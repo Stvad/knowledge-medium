@@ -5,6 +5,7 @@ import { ChangeScope } from '@/data/api'
 import { workspaceBackfillsFacet, type WorkspaceBackfill } from '@/data/facets'
 import { Repo } from '@/data/repo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
+import { BLOCKS_SYNCED_RAW_TABLE, blockToSyncedRowParams } from '@/data/blockSchema'
 import { createTestRepo } from '@/data/test/createTestRepo'
 
 /** Properties of the shared `WorkspaceBackfill` runner, independent of any one
@@ -311,6 +312,75 @@ describe('workspace backfill runner — sync gating', () => {
 
     expect(runs).toEqual([WS])
     expect((await repo.load('target'))?.properties['probe:mark']).toBe('backfilled')
+  })
+
+  it('defers a pass whose workspace holds rows that were downloaded and never materialized', async () => {
+    // Distinct from the draining case above, and the reason the pre-claim gate
+    // asks the WORKSPACE-scoped predicate: the drain has already passed over
+    // this row and consumed its queue entry, so nothing is in flight and no
+    // waiting changes that — while the pass would claim, scan a graph it can
+    // only partly see, and upload from it.
+    const runs: string[] = []
+    const repo = makeRepo(probeBackfill(runs))
+    await seedTarget(repo)
+    repo.stopSyncObserver()
+    await sharedDb.db.execute(BLOCKS_SYNCED_RAW_TABLE.put.sql, blockToSyncedRowParams({
+      id: 'never-materialized', workspaceId: WS, parentId: null, orderKey: 'z0',
+      content: 'downloaded, never decoded', properties: {}, references: [],
+      createdAt: 1, updatedAt: 5, userUpdatedAt: 5, createdBy: 'u', updatedBy: 'u',
+      deleted: false,
+    }))
+    await sharedDb.db.execute('DELETE FROM blocks_synced_changes')
+
+    // Spied before `drain`, which schedules once itself — so a second call
+    // would be the runner re-arming.
+    const scheduled = vi.spyOn(repo, 'scheduleWorkspaceBackfills')
+
+    await drain(repo)
+    expect(runs).toEqual([])
+    // NO re-arm, unlike the transient deferrals above. `arm()` fires its
+    // callback synchronously once the device is caught up, so re-arming on a
+    // gap nothing is going to clear means this full scan every deep-idle tick
+    // for the rest of the session.
+    expect(scheduled).toHaveBeenCalledTimes(1)
+
+    // The positive control, and it is the real recovery gesture: re-run
+    // materialization — what a reload or a re-entered workspace key does — and
+    // the pass goes through. Without it this test would pass just as well
+    // against a runner that never started at all.
+    repo.startSyncObserver()
+    await repo.drainSyncWorkspace(WS)
+    repo.scheduleWorkspaceBackfills(WS)
+    await settleUntil(repo, () => runs.length > 0)
+    expect(runs).toContain(WS)
+  })
+
+  it('aborts a batch once rows were left unmaterialized after the pass started', async () => {
+    // A pass runs for minutes. A row that becomes unmaterializable AFTER the
+    // pre-claim scan — an evicted key, a delivery that will not decode — is
+    // deferred and its queue entry consumed, so the per-batch sync check reads
+    // clear again for every batch that follows. Re-asking the durable question
+    // from disk here would put a scan of every downloaded row inside the write
+    // lock; the observer's counter answers it in O(1).
+    //
+    // The observer is stubbed because this repo runs without one — what the
+    // counter MEANS is pinned against a real observer in
+    // `syncObserver/observer.test.ts`.
+    const runs: string[] = []
+    const repo = makeRepo(probeBackfill(runs))
+    await seedTarget(repo)
+    ;(repo as unknown as {syncObserver: unknown}).syncObserver = {
+      isRematerializingWorkspace: () => false,
+      // Still 0 at the preflight snapshot and at the pre-scan check; moves the
+      // moment the pass starts, so the check inside its write tx is the one
+      // that has to catch it.
+      leftBehindEpoch: () => runs.length,
+    }
+
+    await drain(repo)
+
+    expect(runs).toEqual([WS])                       // it started
+    expect((await repo.load('target'))?.properties['probe:mark']).toBeUndefined()
   })
 
   it('defers per DEVICE, not per backfill', async () => {

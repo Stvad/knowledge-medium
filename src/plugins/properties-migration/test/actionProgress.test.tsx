@@ -69,7 +69,7 @@ const runReporting = async (reported: PropertyCellBackfillProgress) => {
         : {properties_migration: 'cell'},
     },
     isReadOnly: false,
-    syncViewGap: async () => null,
+    workspaceViewGap: async () => null,
     undoManagerFor: () => ({clear: () => {}}),
     runWorkspaceBackfillNow: async () => {
       emit?.(reported)

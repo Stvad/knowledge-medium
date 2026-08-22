@@ -731,9 +731,14 @@ export const applyPropertyDefinitionSynthesis = async (
   // dialog since. A device that has fallen behind would mint a rival for a
   // definition it simply has not received yet, and the loser strands every
   // field row that bound to it.
-  const syncGap = await repo.syncViewGap()
+  //
+  // A key whose real definition merely failed to reach `blocks` reads as
+  // ORPHANED to the scan, and this pass answers an orphan by MINTING — so
+  // "nothing is in flight" is not the question {@link Repo.workspaceViewGap}
+  // is asked here.
+  const syncGap = await repo.workspaceViewGap(workspaceId)
   if (syncGap !== null) {
-    throw new Error(`[propertyDefinitionSynthesis] ${syncGap}`)
+    throw new Error(`[propertyDefinitionSynthesis] ${syncGap.reason}`)
   }
   // Re-read for the same reason, and because the plan may have been built
   // before this device received the workspace row that says it is encrypted.

@@ -233,3 +233,71 @@ export const STAGED_VIEW_GAP_SQL = `
  *  operator can hit — they are told what happened and that re-running
  *  continues, which is the whole contract of a resumable pass. */
 export const STAGED_SCAN_LIMIT = 10_000
+
+/**
+ * How many of a workspace's downloaded rows has `blocks` not caught up with?
+ *
+ * The durable half of the question {@link STAGED_VIEW_GAP_SQL} asks about work
+ * in flight. That one reads the QUEUE, so it sees only rows still waiting to be
+ * drained — and a row can be behind with the queue long since consumed:
+ * `materializeStagingRows` writes nothing when the workspace is not
+ * materializable (no key yet, mode unresolved, a key-store read that failed) or
+ * when the ciphertext does not decode, while `drainQueueOnce` deletes the queue
+ * rows either way. Nothing is then in progress, so no amount of waiting changes
+ * the answer and no in-flight flag can report it.
+ *
+ * Two ways to be behind, and the second is the one an id-only anti-join misses:
+ * the row was never materialized at all, or it materialized once and a NEWER
+ * delivery was left staged on top of it. The second is the ordinary shape of an
+ * e2ee workspace whose key is evicted mid-session — every existing block keeps
+ * its stale plaintext row while arrivals pile up unreadable, so presence proves
+ * nothing.
+ *
+ * It cannot distinguish a workspace that is one drain away from complete from
+ * one that will never complete, and it does not try: both mean this device
+ * cannot see the whole graph, which is the only thing its callers ask. That
+ * includes the case where the rows are permanently undecryptable — a one-way
+ * pass over a graph with unreadable blocks in it should refuse, and keep
+ * refusing, rather than migrate what it happens to be able to read.
+ *
+ * Deliberately NARROWER than its sibling, because this answer is durable and
+ * drives a "waiting will not help" verdict, where over-reporting would be a lie
+ * rather than a cheap safety margin. Two conjuncts, and both are needed:
+ *
+ *   1. `blocks` is BEHIND — missing the row, holding I2's `0` sentinel (a
+ *      speculative mint, which always yields), or holding an older stamp. Only
+ *      the SERVER being ahead counts, not the sibling's `<>`: a newer local row
+ *      is an unsent edit whose own upload echo settles it.
+ *   2. and applying it would CHANGE what a live-row scan sees. Every protected
+ *      pass reads `deleted = 0`, so a row tombstoned on both sides is invisible
+ *      either way — and counted, one corrupt tombstone would block the
+ *      workspace forever over something nothing reads. A tombstone whose local
+ *      row is still LIVE stays a gap: the passes can see it and the server says
+ *      it is gone. `COALESCE(b.deleted, 1)` reads a missing local row as
+ *      already-absent, which is what it is.
+ *
+ * EXPENSIVE, unlike its sibling: `blocks_synced` carries no index but its
+ * primary key (a passive landing zone by design), and the healthy answer is
+ * zero, so the scan cannot short-circuit and every one of the workspace's
+ * downloaded rows is read. That is why it is not folded into the per-
+ * transaction predicate — call it ONCE, before a pass, not per batch. What a
+ * pass falls behind on WHILE it runs is answered in memory instead, by
+ * `BlocksSyncedObserver.leftBehindEpoch`.
+ *
+ * Bind `[workspaceId, cap]`; `cap` bounds only the COUNT (so a wholly
+ * unmaterialized workspace stops counting early), never the coverage.
+ */
+export const WORKSPACE_MATERIALIZATION_GAP_SQL = `
+  SELECT COUNT(*) AS behind FROM (
+    SELECT 1 FROM blocks_synced s
+      LEFT JOIN blocks b ON b.id = s.id
+     WHERE s.workspace_id = ?
+       AND (b.id IS NULL OR b.updated_at = 0 OR s.updated_at > b.updated_at)
+       AND (s.deleted = 0 OR COALESCE(b.deleted, 1) = 0)
+     LIMIT ?
+  )`
+
+/** Count cap for {@link WORKSPACE_MATERIALIZATION_GAP_SQL}. The number only
+ *  shapes the message an operator reads — "some" and "all of them" are
+ *  different diagnoses — so it stops where that distinction stops paying. */
+export const WORKSPACE_MATERIALIZATION_GAP_COUNT_CAP = 1_000
