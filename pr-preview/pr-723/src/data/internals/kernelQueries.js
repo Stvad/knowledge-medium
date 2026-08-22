@@ -86,7 +86,7 @@ import{defineQuery as e}from"../api/query.js";import{_enum as t,array as n,boole
   WHERE ba.workspace_id = ?
     AND ba.alias = ?
     AND blocks.deleted = 0
-  ORDER BY blocks.created_at
+  ORDER BY blocks.created_at, blocks.id
   LIMIT 1
 `,H=`
   SELECT ${m(`blocks`)}
@@ -95,7 +95,7 @@ import{defineQuery as e}from"../api/query.js";import{_enum as t,array as n,boole
   WHERE ba.workspace_id = ?
     AND ba.alias = ?
     AND blocks.deleted = 0
-  ORDER BY blocks.created_at
+  ORDER BY blocks.created_at, blocks.id
 `,Se=`
   SELECT ${m(`blocks`)}
   FROM block_aliases ba
@@ -104,7 +104,7 @@ import{defineQuery as e}from"../api/query.js";import{_enum as t,array as n,boole
     AND ba.alias = ?
     AND blocks.id != ?
     AND blocks.deleted = 0
-  ORDER BY blocks.created_at
+  ORDER BY blocks.created_at, blocks.id
   LIMIT 1
 `,U=e=>`
     SELECT
