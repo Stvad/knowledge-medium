@@ -5,13 +5,11 @@ import { performance } from 'node:perf_hooks'
 
 const pnpm = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm'
 
-// First, because every task below reads node_modules. A worktree DIRECTORY
-// outlives the branch checked out in it, so a clean tree at current master can
-// sit over an install from a previous week — git refreshes package.json and the
-// lockfile, nothing re-runs install, and the drift surfaces as unrelated-looking
-// test failures rather than as a dependency problem (#736). `--frozen-lockfile`
-// also DOWNGRADES a package left newer than the branch asks for; that is the
-// same invariant, not a regression.
+// First: every task below reads node_modules. A worktree DIRECTORY outlives the
+// branch checked out in it, so a clean tree at current master can sit over a
+// weeks-old install — git refreshes package.json and the lockfile, nothing
+// re-runs install. `--frozen-lockfile` also DOWNGRADES a package left newer than
+// the branch asks for; that is the same invariant, not a regression.
 const installTask = {
   name: 'install',
   args: ['install', '--frozen-lockfile'],
