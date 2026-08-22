@@ -157,7 +157,12 @@ export interface MaterializeOutcome {
   /** Ids hard-deleted from `blocks`. */
   readonly deleted: readonly string[]
   /** Workspaces this pass left at least one row UNMATERIALIZED in — deferred or
-   *  quarantined. The id lists say which rows; this says whose VIEW the pass
+   *  quarantined. COARSER than `WORKSPACE_MATERIALIZATION_GAP_SQL` on purpose:
+   *  it does not ask whether the row would have been visible to a live-row
+   *  scan, so a dead tombstone bumps it too and can abort a pass that a retry
+   *  then completes. Answering that here means carrying the local `deleted`
+   *  state through the drain's hot loop to save an operator a click.
+   * The id lists say which rows; this says whose VIEW the pass
    *  failed to advance, which is the question a one-way pass running alongside
    *  the drain has to re-ask per transaction and cannot afford to answer from
    *  disk (`WORKSPACE_MATERIALIZATION_GAP_SQL` is a full scan). */

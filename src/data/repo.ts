@@ -3139,8 +3139,12 @@ export class Repo {
       // property of the DEVICE, not of a backfill, and the loop can reach it
       // more than once when an earlier pass loses the claim and continues.
       if (viewGap === undefined) {
-        viewGap = await this.workspaceViewGap(workspaceId)
+        // Snapshot BEFORE the scan, not after. The scan reads one DB snapshot;
+        // a window that defers a row while it runs is invisible to that read,
+        // and taken afterwards the baseline would silently absorb the bump the
+        // scan missed — leaving both halves blind to the same row.
         leftBehindAtStart = this.syncObserver?.leftBehindEpoch(workspaceId) ?? 0
+        viewGap = await this.workspaceViewGap(workspaceId)
       }
       const gap = viewGap
       if (gap !== null) {
