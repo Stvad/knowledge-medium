@@ -328,32 +328,20 @@ export const isValidDateAlias = (alias: string): boolean => {
 }
 
 /** "Which daily note is this?", or `null` for a block that isn't one. The one
- *  definition of that read, shared by the prev/next keyboard actions (which
- *  peek both values off a Block) and the title date-nav arrows (which take them
- *  from reactive hooks).
+ *  definition of that read — the prev/next actions peek the values off a Block,
+ *  the date-nav arrows take them from reactive hooks, and `srsBlockDateAdapter`
+ *  loads them off a row.
  *
- *  The typed `daily-note:date` property first, the ISO alias only as a
- *  fallback. An alias is user-editable AND withholdable: a day whose ISO name
- *  another live page already claims yields it rather than fighting for it,
- *  because claiming it aborts the transaction the page is created in. Reading
- *  identity out of the alias list then reports that page as not a daily note at
- *  all — no date arrows, and prev/next stepping from TODAY rather than from the
- *  day on screen, silently. The property is written wherever a daily note is
- *  CREATED or restored; the alias fallback covers what that misses — rows older
- *  than the property, and a seat that was already live when
- *  `ensureDailyNoteTarget` next ran, whose live-row branch only re-asserts the
- *  ISO alias.
+ *  The typed `daily-note:date` property first, the ISO alias as the fallback
+ *  for rows older than it. An alias is withholdable: a day whose ISO name
+ *  another live page claims yields it rather than fighting for it, and an
+ *  alias-only read then reports that page as not a daily note at all.
  *
- *  `isValidDateAlias`, NOT `isDateAlias`: a date-SHAPED alias that isn't a
- *  calendar day (`2026-02-30`) belongs to an ordinary alias-target page — the
- *  references processor routes it to `ensureAliasTarget` precisely because
- *  `parseLiteralDailyPageTitle` rejects it. Treating such an alias as the
- *  block's date hands a normal page the daily-note affordances, and
- *  `addDaysIso` then reads it as March 2nd — so "previous day" lands on
- *  2026-03-01, forward by a month. Callers fall back to today instead, the
- *  same as on any other non-daily page. The property goes through the same gate
- *  rather than being trusted: it is a plain date cell a user or an import can
- *  write anything into.
+ *  `isValidDateAlias`, NOT `isDateAlias`, on both: a date-SHAPED value that
+ *  isn't a calendar day (`2026-02-30`) belongs to an ordinary alias-target page,
+ *  and `addDaysIso` reads it as March 2nd — so "previous day" lands a month
+ *  forward instead of failing. Callers fall back to today, as on any non-daily
+ *  page.
  *
  *  Deliberately NOT a `DAILY_NOTE_TYPE` check: that would couple these read
  *  paths to type-tagging having reached every historical row. */
