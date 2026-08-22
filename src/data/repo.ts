@@ -3097,16 +3097,12 @@ export class Repo {
       // Note the create+tombstone pair is ROUTINE, not exceptional: every
       // mid-run abort releases the claim. Its being queued while stale is the
       // problem, not its existence.
-      // The WORKSPACE-scoped predicate here, the cheap one per transaction:
-      // this is the once-per-pass moment, so it is where the scan for rows
-      // this device never caught up with belongs. A pass that claims and
-      // uploads from a graph half of which is still ciphertext on disk is the
-      // same stale-view write as one that claims mid-drain.
-      //
-      // Memoized across the loop because it costs a scan of every downloaded
-      // row and its answer is a property of the DEVICE, not of a backfill —
-      // the loop can reach it more than once when an earlier pass loses the
-      // claim and continues.
+      // A pass that claims and uploads from a graph half of which is still
+      // ciphertext on disk is the same stale-view write as one that claims
+      // mid-drain, so this is `workspaceViewGap` and the per-transaction
+      // re-check is `syncViewGap`. Memoized across the loop: the answer is a
+      // property of the DEVICE, not of a backfill, and the loop can reach it
+      // more than once when an earlier pass loses the claim and continues.
       if (viewGap === undefined) viewGap = await this.workspaceViewGap(workspaceId)
       const gap = viewGap
       if (gap !== null) {

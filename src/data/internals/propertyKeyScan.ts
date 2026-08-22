@@ -144,12 +144,11 @@ export const scanPropertyKeys = async (
   // Sampled here, above the registry capture below, so every await in this
   // function is behind us before the resolver freezes.
   //
-  // The WORKSPACE-scoped predicate, which costs a scan of the workspace's
-  // downloaded rows — proportionate next to the survey it qualifies, and the
-  // only one that answers the question actually being asked. A key whose
-  // definition merely failed to materialize on arrival reads as UNRESOLVED
-  // here, with nothing in flight to explain it: the survey's whole output is
-  // wrong in the direction its readers act on.
+  // A key whose definition merely failed to reach `blocks` reads as UNRESOLVED
+  // here, with nothing in flight to explain it, so the survey's whole output is
+  // wrong in the direction its readers act on — hence
+  // {@link Repo.workspaceViewGap}, whose scan is proportionate next to the
+  // survey it qualifies.
   const syncGap = (await repo.workspaceViewGap(workspaceId))?.reason ?? null
   // Defence in depth; no test pins it. A workspace switch across the awaits
   // above would leave `registry` belonging to another workspace, silently

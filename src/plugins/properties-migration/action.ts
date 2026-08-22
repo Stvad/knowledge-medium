@@ -59,11 +59,9 @@ const passIsUnfit = async (
   if (needsFlip && await readWorkspaceOwnerId(repo.db, workspaceId) !== repo.user.id) {
     return 'only the workspace owner can switch this workspace to property blocks'
   }
-  // The WORKSPACE-scoped predicate, not the per-transaction one: what follows
-  // is the FLIP, a one-way fleet-wide server write, and it must not land over a
-  // graph this device has only partly materialized. "Nothing is in flight" does
-  // not answer that — rows that failed to materialize when they arrived sit
-  // there stably with the queue long since drained.
+  // What follows is the FLIP, a one-way fleet-wide server write, so it takes
+  // {@link Repo.workspaceViewGap}: rows this device never caught up with sit
+  // there stably, with the queue long since drained and nothing in flight.
   return (await repo.workspaceViewGap(workspaceId))?.reason ?? null
 }
 
