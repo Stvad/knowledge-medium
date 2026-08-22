@@ -16,10 +16,8 @@ var e=(e,t,n)=>e===`defer`?{kind:`defer`}:n.hasPendingUpload||n.localUpdatedAt!=
     SELECT 1 FROM blocks_synced s
       LEFT JOIN blocks b ON b.id = s.id
      WHERE s.workspace_id = ?
-       AND (
-              (b.id IS NULL AND s.deleted = 0)
-           OR (b.id IS NOT NULL AND (b.updated_at = 0 OR s.updated_at > b.updated_at))
-           )
+       AND (b.id IS NULL OR b.updated_at = 0 OR s.updated_at > b.updated_at)
+       AND (s.deleted = 0 OR COALESCE(b.deleted, 1) = 0)
      LIMIT ?
   )`,i=1e3;export{n as STAGED_SCAN_LIMIT,t as STAGED_VIEW_GAP_SQL,i as WORKSPACE_MATERIALIZATION_GAP_COUNT_CAP,r as WORKSPACE_MATERIALIZATION_GAP_SQL,e as decideStagingRow};
 //# sourceMappingURL=reconcile.js.map
