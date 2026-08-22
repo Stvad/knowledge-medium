@@ -179,7 +179,7 @@ describe('restoring a tombstoned daily-note seat', () => {
     // Filling an EMPTY title is not a rename, and was still fatal: it makes
     // `alias.sync` rule 2 append the label as a fresh alias, going around the
     // partition entirely, so a page already holding that name aborts the whole
-    // tx and the day stays tombstoned on every retry. Restore touches content
+    // tx and the day stays tombstoned on every retry. Restore writes no content
     // at all now.
     const id = dailyNoteBlockId(WS, ISO)
     await getOrCreateDailyNote(repo, WS, ISO)

@@ -51,11 +51,9 @@ const setup = async (): Promise<Harness> => {
   const { repo, cache } = createTestRepo({
     db: h.db,
     user: {id: 'user-1'},
-    // `aliasDataExtension` for the processor that reconciles content against
-    // aliases. Nothing here currently depends on it — this is about the next
-    // test written in this file, since without it a daily-note repro runs with
-    // the mechanism it is about switched off and passes for that reason. The
-    // restore-rename bug hid behind exactly that; see restoreCollision.test.ts.
+    // `aliasDataExtension` is required, not optional: without it the processor
+    // that reconciles content against aliases does not run, and a repro of any
+    // bug involving it passes for that reason.
     extensions: [dailyNotesDataExtension, aliasDataExtension],
   })
   return {h, cache, repo}
