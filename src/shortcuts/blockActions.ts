@@ -310,11 +310,11 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
       // `PanelFocusRecovery` does on the DOM side, so manual deletes
       // and surprise disappearances both land on the same target.
       const next = scopeRootId ? await blockAfterSubtreeRemoval(block, scopeRootId) : null
-      let deleted = false
-      await withMoveTransition(async () => {
-        deleted = await deleteBlockThroughUi(block)
-      })
-      // Don't move focus for a delete a guard refused.
+      // `animate` rather than wrapping the call in `withMoveTransition` here:
+      // a big delete asks first, and that dialog has to open outside the
+      // transition to be clickable at all (see `DeleteThroughUiOptions`).
+      const deleted = await deleteBlockThroughUi(block, {animate: true})
+      // Don't move focus for a delete a guard refused, or the user cancelled.
       if (deleted && next) void focusBlock(uiStateBlock, next.id, {renderScopeId: deps.renderScopeId})
     },
     defaultBinding: {
