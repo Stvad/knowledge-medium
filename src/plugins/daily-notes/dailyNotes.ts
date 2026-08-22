@@ -286,6 +286,13 @@ export const getOrCreateDailyNote = async (
       // replacing: replacing makes the diff a 1-for-1 swap whenever the row
       // had a single custom name, which rule 3 reads as a rename and follows
       // by rewriting content and re-keying that name's backlinks.
+      //
+      // ACCEPTED, not missed: when the row's ONLY name is the contested one and
+      // matches its title, the yield is itself a 1-for-1 swap and rule 3 does
+      // retitle it to the ISO. That is the honest end state — the page no
+      // longer owns the long name — and backlinks are left alone, because the
+      // released name still has a live claimant and the rename processor takes
+      // its handoff path.
       const claimable = await partitionClaimableAliases(
         tx, id, mergeStrings([...dailyAliases, ...stringListProperty(existing.properties[aliasesProp.name])]),
         workspaceId,
