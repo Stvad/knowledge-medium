@@ -64,7 +64,7 @@ const passIsUnfit = async (
   // graph this device has only partly materialized. "Nothing is in flight" does
   // not answer that — rows that failed to materialize when they arrived sit
   // there stably with the queue long since drained.
-  return repo.workspaceViewGap(workspaceId)
+  return (await repo.workspaceViewGap(workspaceId))?.reason ?? null
 }
 
 /** The synthesis advisory is sticky and re-runnable, so it needs a stable id or

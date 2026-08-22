@@ -739,7 +739,7 @@ export const applyPropertyDefinitionSynthesis = async (
   // in-transaction re-check below stays on the cheap arms.
   const syncGap = await repo.workspaceViewGap(workspaceId)
   if (syncGap !== null) {
-    throw new Error(`[propertyDefinitionSynthesis] ${syncGap}`)
+    throw new Error(`[propertyDefinitionSynthesis] ${syncGap.reason}`)
   }
   // Re-read for the same reason, and because the plan may have been built
   // before this device received the workspace row that says it is encrypted.

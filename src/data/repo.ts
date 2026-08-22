@@ -468,6 +468,19 @@ interface ReferenceTargetStampContext {
   readonly resolver: PropertySchemaResolver
 }
 
+/** Why this device's view of a workspace is incomplete — see
+ *  {@link Repo.workspaceViewGap}. */
+export interface ViewGap {
+  /** The CAUSE only; callers state their own consequence. */
+  readonly reason: string
+  /** Will waiting clear it? True for work in flight or a download still
+   *  running. False for rows this device downloaded and never caught up with,
+   *  which nothing is going to retry on its own — a caller that re-arms itself
+   *  on a deferral must not re-arm on this one, or it repeats an expensive
+   *  scan on every idle tick for the life of the session. */
+  readonly transient: boolean
+}
+
 /** What an operator-triggered backfill did, for a caller that has a human to
  *  report to. `undoHistoryCleared` is not incidental detail: the pass drops
  *  the workspace's undo stack whenever it writes, and a user who is not told
@@ -2861,21 +2874,28 @@ export class Repo {
    * taken back — a one-way migration, a deterministic-id mint — and leave the
    * per-transaction re-checks on `syncViewGap`, whose cost is a bounded probe
    * rather than a scan of every downloaded row (see the SQL's header).
+   *
+   * The two arms differ in whether WAITING is a remedy, which is why the answer
+   * carries {@link ViewGap.transient} rather than just its text: a caller that
+   * re-arms itself must not re-arm on the durable one.
    */
-  async workspaceViewGap(workspaceId: string): Promise<string | null> {
+  async workspaceViewGap(workspaceId: string): Promise<ViewGap | null> {
     const inFlight = await this.syncViewGap()
-    if (inFlight !== null) return inFlight
-    const {missing} = await this.db.get<{missing: number}>(
+    if (inFlight !== null) return {reason: inFlight, transient: true}
+    const {behind} = await this.db.get<{behind: number}>(
       WORKSPACE_MATERIALIZATION_GAP_SQL,
       [workspaceId, WORKSPACE_MATERIALIZATION_GAP_COUNT_CAP],
     )
-    if (missing === 0) return null
-    const count = missing >= WORKSPACE_MATERIALIZATION_GAP_COUNT_CAP
+    if (behind === 0) return null
+    const count = behind >= WORKSPACE_MATERIALIZATION_GAP_COUNT_CAP
       ? `at least ${WORKSPACE_MATERIALIZATION_GAP_COUNT_CAP.toLocaleString()}`
-      : `${missing.toLocaleString()}`
-    return `${count} synced row(s) of this workspace have never materialized into `
-      + '`blocks` on this device, and nothing is in flight to change that '
-      + '(reload, or re-enter the workspace key, to re-run materialization)'
+      : `${behind.toLocaleString()}`
+    return {
+      reason: `${count} synced row(s) of this workspace have not reached \`blocks\` on `
+        + 'this device — never materialized, or still showing an older version — '
+        + 'and nothing is in flight to change that',
+      transient: false,
+    }
   }
 
   private async assertBackfillMayWrite(
@@ -2986,6 +3006,9 @@ export class Repo {
     // refused it, so an operator hears "not yet, retry" rather than "already
     // done" — the same string an unattended run only logs.
     let deferred: string | null = null
+    /** The workspace view-gap answer for this RUN — see the gate below.
+     *  `undefined` = not asked yet, `null` = asked and clean. */
+    let viewGap: ViewGap | null | undefined
     /** Why a pass THREW. Distinct from `deferred`: waiting will not clear it,
      *  so an operator told "already done" would never learn the migration is
      *  incomplete — with some of its batches already committed. */
@@ -3076,31 +3099,44 @@ export class Repo {
       // problem, not its existence.
       // The WORKSPACE-scoped predicate here, the cheap one per transaction:
       // this is the once-per-pass moment, so it is where the scan for rows
-      // that never materialized at all belongs. A pass that claims and
+      // this device never caught up with belongs. A pass that claims and
       // uploads from a graph half of which is still ciphertext on disk is the
       // same stale-view write as one that claims mid-drain.
-      const gap = await this.workspaceViewGap(workspaceId)
+      //
+      // Memoized across the loop because it costs a scan of every downloaded
+      // row and its answer is a property of the DEVICE, not of a backfill —
+      // the loop can reach it more than once when an earlier pass loses the
+      // claim and continues.
+      if (viewGap === undefined) viewGap = await this.workspaceViewGap(workspaceId)
+      const gap = viewGap
       if (gap !== null) {
-        deferred = gap
+        deferred = gap.reason
         console.warn(
-          `[workspaceBackfills] "${backfill.id}" deferred: ${gap}, so claiming would ` +
-          `write from a stale view.`,
+          `[workspaceBackfills] "${backfill.id}" deferred: ${gap.reason}, so claiming ` +
+          `would write from a stale view.`,
         )
-        // Re-arm and RETURN, exactly as the TRANSIENT catch below does. The
-        // caught-up half of this gate would self-re-arm through `arm()`'s
-        // parked callback, but the staged-rows half has no gate to park on —
-        // nothing fires when the queue drains, so without this an automatic
-        // pass is written off for the whole session by a blocker that clears
-        // in milliseconds. Returning is what keeps that to ONE re-arm: the gap
-        // is a property of the device, not of a backfill, so every remaining
-        // one would defer identically — and `arm()` only de-dupes a PARKED
-        // gate, so N re-arms here would each schedule their own job and each
-        // job would re-run all N passes.
+        // Re-arm and RETURN, exactly as the TRANSIENT catch below does — but
+        // ONLY when waiting is a remedy. The caught-up half of this gate would
+        // self-re-arm through `arm()`'s parked callback, but the staged-rows
+        // half has no gate to park on — nothing fires when the queue drains,
+        // so without this an automatic pass is written off for the whole
+        // session by a blocker that clears in milliseconds. Returning is what
+        // keeps that to ONE re-arm: the gap is a property of the device, not
+        // of a backfill, so every remaining one would defer identically — and
+        // `arm()` only de-dupes a PARKED gate, so N re-arms here would each
+        // schedule their own job and each job would re-run all N passes.
+        //
+        // A DURABLE gap gets no re-arm. `arm()` fires its callback
+        // synchronously once the device is caught up, so re-arming on a
+        // condition that nothing is going to clear is a full scan of every
+        // downloaded row every deep-idle tick, for the rest of the session —
+        // and the next open re-runs the pass anyway, which is where a recovery
+        // gesture will have landed if one happened.
         //
         // Re-arming reaches `workspace-open` passes only, which is all
         // `scheduleWorkspaceBackfills` schedules. An `operator` pass defers to
         // its caller, who is a person that can be told to retry.
-        this.scheduleWorkspaceBackfills(workspaceId)
+        if (gap.transient) this.scheduleWorkspaceBackfills(workspaceId)
         return {completed, undoHistoryCleared, deferred, failed}
       }
       // Re-evaluated: the gap check above AWAITS, and a switch across that await

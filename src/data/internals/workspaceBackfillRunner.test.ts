@@ -332,8 +332,17 @@ describe('workspace backfill runner — sync gating', () => {
     }))
     await sharedDb.db.execute('DELETE FROM blocks_synced_changes')
 
+    // Spied before `drain`, which schedules once itself — so a second call
+    // would be the runner re-arming.
+    const scheduled = vi.spyOn(repo, 'scheduleWorkspaceBackfills')
+
     await drain(repo)
     expect(runs).toEqual([])
+    // NO re-arm, unlike the transient deferrals above. `arm()` fires its
+    // callback synchronously once the device is caught up, so re-arming on a
+    // gap nothing is going to clear means this full scan every deep-idle tick
+    // for the rest of the session.
+    expect(scheduled).toHaveBeenCalledTimes(1)
 
     // The positive control, and it is the real recovery gesture: re-run
     // materialization — what a reload or a re-entered workspace key does — and

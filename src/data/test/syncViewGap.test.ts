@@ -229,9 +229,44 @@ describe('Repo.workspaceViewGap', () => {
     await deliverAndConsumeQueue(syncedRow({id: 'never-decoded', updatedAt: 5}))
 
     // The in-flight predicate is satisfied — this is exactly the state in which
-    // waiting is not a mitigation, because nothing is running.
+    // waiting is not a mitigation, because nothing is running. Which is what
+    // `transient: false` says, and what a self-re-arming caller reads.
     expect(await repo.syncViewGap()).toBeNull()
-    expect(await repo.workspaceViewGap(WS)).toMatch(/never materialized/)
+    expect(await repo.workspaceViewGap(WS)).toEqual({
+      reason: expect.stringMatching(/have not reached/), transient: false,
+    })
+  })
+
+  it('reports a row `blocks` holds at an OLDER version than the staged one', async () => {
+    // Presence proves nothing, and this is the ordinary shape of an e2ee
+    // workspace whose key is evicted mid-session: every block keeps the
+    // plaintext row it materialized with while arrivals pile up unreadable.
+    // `materializeStagingRows` defers or quarantines them without writing, and
+    // `drainQueueOnce` eats the queue entry regardless.
+    const repo = makeRepo()
+    await seedLocal('gone-stale', 4)
+    await deliverAndConsumeQueue(syncedRow({id: 'gone-stale', updatedAt: 9}))
+    expect((await repo.workspaceViewGap(WS))?.transient).toBe(false)
+  })
+
+  it('ignores a row whose LOCAL copy is newer — an unsent edit settles itself', async () => {
+    // The one place this is deliberately narrower than the queue probe, which
+    // reports both directions because over-reporting costs it nothing. Here it
+    // would mean telling a caller that waiting cannot help, about an edit whose
+    // own upload echo clears it.
+    const repo = makeRepo()
+    await seedLocal('my-unsent-edit', 9)
+    await deliverAndConsumeQueue(syncedRow({id: 'my-unsent-edit', updatedAt: 4}))
+    expect(await repo.workspaceViewGap(WS)).toBeNull()
+  })
+
+  it('ignores a staged tombstone that never materialized', async () => {
+    // No pass can see the block either way — every one of them scans live rows.
+    // Counted, a single corrupt tombstone would block the workspace forever
+    // over a row nothing reads.
+    const repo = makeRepo()
+    await deliverAndConsumeQueue(syncedRow({id: 'deleted-upstream', updatedAt: 5, deleted: true}))
+    expect(await repo.workspaceViewGap(WS)).toBeNull()
   })
 
   it('reports no gap once those rows are in `blocks`', async () => {
@@ -241,7 +276,7 @@ describe('Repo.workspaceViewGap', () => {
     expect(await repo.workspaceViewGap(WS)).toBeNull()
   })
 
-  it('ignores another workspace\'s unmaterialized rows', async () => {
+  it('ignores another workspace\'s rows', async () => {
     // A device is routinely a member of workspaces it has not opened, whose
     // rows all defer. Scoping is what keeps that from refusing every pass.
     const repo = makeRepo()
@@ -252,9 +287,12 @@ describe('Repo.workspaceViewGap', () => {
   it('asks the in-flight predicate first, so one call is the whole question', async () => {
     // Callers pick one of the two; the expensive one must not be the partial
     // one, or every consumer that reaches for it silently loses the queue arm.
+    // That arm is TRANSIENT — the drain is running, and waiting is the remedy.
     const repo = makeRepo()
     await deliver(syncedRow({id: 'arriving', updatedAt: 5}))
-    expect(await repo.workspaceViewGap(WS)).toMatch(/draining/)
+    expect(await repo.workspaceViewGap(WS)).toEqual({
+      reason: expect.stringMatching(/draining/), transient: true,
+    })
   })
 
   it('caps the count it reports rather than the rows it examines', async () => {
@@ -263,6 +301,6 @@ describe('Repo.workspaceViewGap', () => {
       await deliver(syncedRow({id: `staged-${i}`, updatedAt: 5}))
     }
     await sharedDb.db.execute('DELETE FROM blocks_synced_changes')
-    expect(await repo.workspaceViewGap(WS)).toMatch(/at least 1,000/)
+    expect((await repo.workspaceViewGap(WS))?.reason).toMatch(/at least 1,000/)
   }, 20_000)
 })

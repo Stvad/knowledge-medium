@@ -123,9 +123,19 @@ const isConnectionClosedError = (err: unknown): boolean =>
 
 /** Raised instead of returning when a drain is cut short by `dispose()`. An
  *  interrupted pass did not materialize the workspace, and its awaiter decides
- *  what that means — see {@link startBlocksSyncedObserver}'s enqueue. */
+ *  what that means — see {@link startBlocksSyncedObserver}'s enqueue.
+ *
+ *  Branded by `name`, like {@link isConnectionClosedError} and for the same
+ *  reason: it rejects the awaiter but is never REPORTED. Teardown is expected,
+ *  and the fire-and-forget drains would warn on every tab close. */
+const DISPOSED_MID_DRAIN = 'ObserverDisposedError'
+
 const disposedMidDrain = (): Error =>
-  new Error('[blocksSyncedObserver] disposed before this drain finished')
+  Object.assign(new Error('[blocksSyncedObserver] disposed before this drain finished'),
+    { name: DISPOSED_MID_DRAIN })
+
+const isDisposedMidDrain = (err: unknown): boolean =>
+  !!err && typeof err === 'object' && (err as { name?: unknown }).name === DISPOSED_MID_DRAIN
 
 /**
  * The §4.7 cycle-scan starting set: ids whose parent_id actually moved while
@@ -284,13 +294,15 @@ export const startBlocksSyncedObserver = (
   // attaches a rejection handler — what makes an unawaited `flush()` safe.
   const enqueue = (work: () => Promise<void>): Promise<void> => {
     const done = chain.then(async () => {
-      // Not reported through `onError`: teardown is expected, and the
-      // fire-and-forget drains below would warn on every tab close.
-      if (disposed) throw disposedMidDrain()
+      // ONE catch for both disposal checks — the one here and the loop-top ones
+      // inside the drains. Written as two paths it was asymmetric: an
+      // already-running multi-window drain (the realistic tab close) reported
+      // teardown through `onError` while a not-yet-started one did not.
       try {
+        if (disposed) throw disposedMidDrain()
         await work()
       } catch (err) {
-        onError(err)
+        if (!isDisposedMidDrain(err)) onError(err)
         throw err
       }
     })

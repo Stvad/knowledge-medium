@@ -46,7 +46,7 @@ const plan = (candidates = 0) => ({
   blockers: [], brokenDefinitions: [],
 })
 
-import type { OperatorBackfillResult, Repo } from '@/data/repo'
+import type { OperatorBackfillResult, Repo, ViewGap } from '@/data/repo'
 import { describeOutcome, migratePropertiesToBlocksAction } from '../action.ts'
 
 const clearUndo = vi.fn()
@@ -54,13 +54,19 @@ const USER = 'user-1'
 
 const RAN = {outcome: 'ran', undoHistoryCleared: false} as OperatorBackfillResult
 
+/** The gap a device reports mid-drain: real text, and TRANSIENT, which is the
+ *  half the action does not read — it reports the reason and stops either way. */
+const DRAINING: ViewGap = {
+  reason: 'synced rows are still draining into `blocks`', transient: true,
+}
+
 const makeRepo = (
   result: OperatorBackfillResult = RAN,
   {flipped = false, owner = USER}: {flipped?: boolean; owner?: string} = {},
 ) => {
   const runWorkspaceBackfillNow = vi.fn(async () => result)
   const getAll = vi.fn(async () => [{n: 7}])
-  const workspaceViewGap = vi.fn(async (): Promise<string | null> => null)
+  const workspaceViewGap = vi.fn(async (): Promise<ViewGap | null> => null)
   // Two readers of the `workspaces` row now — the flip state and the owner.
   const getOptional = vi.fn(async (sql: string) => sql.includes('owner_user_id')
     ? {owner_user_id: owner}
@@ -177,7 +183,7 @@ describe('migrate_properties_to_blocks action', () => {
     // an unbounded json_each walk on the UI thread and the dialog would ask for
     // consent to a run the runner is about to refuse.
     const {repo, runWorkspaceBackfillNow, getAll, workspaceViewGap} = makeRepo(RAN, {flipped: true})
-    workspaceViewGap.mockResolvedValue('synced rows are still draining into `blocks`')
+    workspaceViewGap.mockResolvedValue(DRAINING)
 
     await invoke(repo)
 
@@ -193,7 +199,7 @@ describe('migrate_properties_to_blocks action', () => {
     // twice.
     const {repo, runWorkspaceBackfillNow, workspaceViewGap} = makeRepo()
     openDialog.mockImplementation(async () => {
-      workspaceViewGap.mockResolvedValue('synced rows are still draining into `blocks`')
+      workspaceViewGap.mockResolvedValue(DRAINING)
       return true
     })
 
@@ -211,7 +217,7 @@ describe('migrate_properties_to_blocks action', () => {
     // reversible half then declines — on a connected device a staged sync view is
     // the EXPECTED ending, not a corner case.
     const {repo, runWorkspaceBackfillNow, workspaceViewGap} = makeRepo()
-    workspaceViewGap.mockResolvedValue('synced rows are still draining into `blocks`')
+    workspaceViewGap.mockResolvedValue(DRAINING)
 
     await invoke(repo)
 
@@ -711,7 +717,7 @@ describe('the orphan-definition step', () => {
     // the window that makes the SECOND check the load-bearing one.
     let gapChecks = 0
     workspaceViewGap.mockImplementation(
-      async () => gapChecks++ === 0 ? null : 'synced rows are still draining into `blocks`')
+      async () => gapChecks++ === 0 ? null : DRAINING)
 
     await invoke(repo)
 

@@ -235,17 +235,23 @@ export const STAGED_VIEW_GAP_SQL = `
 export const STAGED_SCAN_LIMIT = 10_000
 
 /**
- * How many of a workspace's downloaded rows have NEVER reached `blocks`?
+ * How many of a workspace's downloaded rows has `blocks` not caught up with?
  *
- * The durable half of the same question {@link STAGED_VIEW_GAP_SQL} asks about
- * work in flight. That one reads the QUEUE, so it can only see rows still
- * waiting to be drained — and a row can be missing from `blocks` with the
- * queue long since consumed: `materializeStagingRows` leaves a row staged and
- * writes nothing when the workspace is not materializable (no key yet, mode
- * unresolved, a key-store read that failed) or when its ciphertext does not
- * decode, while `drainQueueOnce` deletes the queue rows either way. Nothing is
- * then in progress, so no amount of waiting changes the answer and no
- * in-flight flag can report it.
+ * The durable half of the question {@link STAGED_VIEW_GAP_SQL} asks about work
+ * in flight. That one reads the QUEUE, so it sees only rows still waiting to be
+ * drained — and a row can be behind with the queue long since consumed:
+ * `materializeStagingRows` writes nothing when the workspace is not
+ * materializable (no key yet, mode unresolved, a key-store read that failed) or
+ * when the ciphertext does not decode, while `drainQueueOnce` deletes the queue
+ * rows either way. Nothing is then in progress, so no amount of waiting changes
+ * the answer and no in-flight flag can report it.
+ *
+ * Two ways to be behind, and the second is the one an id-only anti-join misses:
+ * the row was never materialized at all, or it materialized once and a NEWER
+ * delivery was left staged on top of it. The second is the ordinary shape of an
+ * e2ee workspace whose key is evicted mid-session — every existing block keeps
+ * its stale plaintext row while arrivals pile up unreadable, so presence proves
+ * nothing.
  *
  * It cannot distinguish a workspace that is one drain away from complete from
  * one that will never complete, and it does not try: both mean this device
@@ -254,20 +260,37 @@ export const STAGED_SCAN_LIMIT = 10_000
  * pass over a graph with unreadable blocks in it should refuse, and keep
  * refusing, rather than migrate what it happens to be able to read.
  *
+ * Deliberately NARROWER than its sibling in two places, because this answer is
+ * durable and drives a "waiting will not help" verdict, where over-reporting
+ * would be a lie rather than a cheap safety margin:
+ *   - a staged TOMBSTONE with no local row is not a gap. No pass can see the
+ *     block either way, and a corrupt one would otherwise block the workspace
+ *     forever over a row nothing reads.
+ *   - only the SERVER being ahead counts (`s.updated_at > b.updated_at`), not
+ *     the sibling's `<>`. A local row that is newer is an unsent edit whose
+ *     echo will settle it, which is exactly the transient over-report the
+ *     sibling can afford and this one cannot.
+ * `b.updated_at = 0` stays a gap in both: it is I2's speculative-mint sentinel,
+ * where the local row always yields regardless of stamps.
+ *
  * EXPENSIVE, unlike its sibling: `blocks_synced` carries no index but its
  * primary key (a passive landing zone by design), and the healthy answer is
- * zero, so the anti-join cannot short-circuit and every one of the workspace's
- * downloaded rows is scanned. That is why it is not folded into the per-
+ * zero, so the scan cannot short-circuit and every one of the workspace's
+ * downloaded rows is read. That is why it is not folded into the per-
  * transaction predicate — call it ONCE, before a pass, not per batch.
  *
  * Bind `[workspaceId, cap]`; `cap` bounds only the COUNT (so a wholly
  * unmaterialized workspace stops counting early), never the coverage.
  */
 export const WORKSPACE_MATERIALIZATION_GAP_SQL = `
-  SELECT COUNT(*) AS missing FROM (
+  SELECT COUNT(*) AS behind FROM (
     SELECT 1 FROM blocks_synced s
+      LEFT JOIN blocks b ON b.id = s.id
      WHERE s.workspace_id = ?
-       AND NOT EXISTS (SELECT 1 FROM blocks b WHERE b.id = s.id)
+       AND (
+              (b.id IS NULL AND s.deleted = 0)
+           OR (b.id IS NOT NULL AND (b.updated_at = 0 OR s.updated_at > b.updated_at))
+           )
      LIMIT ?
   )`
 

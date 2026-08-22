@@ -446,7 +446,7 @@ describe('planPropertyDefinitionSynthesis', () => {
 
     const plan = await planFor()
 
-    expect(plan.scanSyncGap).toMatch(/never materialized/)
+    expect(plan.scanSyncGap).toMatch(/have not reached/)
     expect(flipBlockedBySynthesis(plan)).toMatch(/still catching up/)
   })
 
@@ -550,7 +550,7 @@ describe('planPropertyDefinitionSynthesis', () => {
     expect(await repo.syncViewGap()).toBeNull()
 
     await expect(applyPropertyDefinitionSynthesis(repo, plan))
-      .rejects.toThrow(/never materialized/)
+      .rejects.toThrow(/have not reached/)
     expect(repo.block(await definitionIdFor('demo:orphan')).peek()).toBeUndefined()
   })
 

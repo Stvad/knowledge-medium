@@ -262,7 +262,10 @@ describe('blocksSyncedObserver — the queue-blind rescan is observable', () => 
       if (windows >= 1) live?.dispose()
       return 'copy'
     }
-    const { observer } = start({ getMaterializability, drainChunkSize: 2 })
+    const errors: unknown[] = []
+    const { observer } = start({
+      getMaterializability, drainChunkSize: 2, onError: e => errors.push(e),
+    })
     await observer.flush()
     expect(await blocks()).toEqual([]) // all deferred; queue consumed
 
@@ -272,6 +275,10 @@ describe('blocksSyncedObserver — the queue-blind rescan is observable', () => 
     // Window 1 committed before the teardown landed. That the pass is resumable
     // is exactly why its caller has to be told it did not finish.
     expect(await blocks()).toEqual([{ id: 'b0', content: 'c0' }, { id: 'b1', content: 'c1' }])
+    // REJECTED but not REPORTED. The disposal checks inside the drain loops
+    // reach the same catch as a genuine failure, and routing them to `onError`
+    // means the default handler warns on every tab close mid-drain.
+    expect(errors).toEqual([])
   })
 })
 

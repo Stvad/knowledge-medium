@@ -150,7 +150,7 @@ export const scanPropertyKeys = async (
   // definition merely failed to materialize on arrival reads as UNRESOLVED
   // here, with nothing in flight to explain it: the survey's whole output is
   // wrong in the direction its readers act on.
-  const syncGap = await repo.workspaceViewGap(workspaceId)
+  const syncGap = (await repo.workspaceViewGap(workspaceId))?.reason ?? null
   // Defence in depth; no test pins it. A workspace switch across the awaits
   // above would leave `registry` belonging to another workspace, silently
   // degrading the effective-name rewrite below to stored names — or, past the
