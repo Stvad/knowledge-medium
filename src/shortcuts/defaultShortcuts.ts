@@ -55,6 +55,7 @@ import {
 } from '@/utils/codemirror.js'
 import { copyBlockIdsToClipboard, copySelectedBlocksToClipboard } from '@/utils/copy.js'
 import {
+  confirmBulkDeleteThroughUi,
   deleteBlockThroughUi,
   deleteBlocksThroughUi,
   ensureDeletableThroughUi,
@@ -971,6 +972,10 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
           // veto as `delete_block`; emptying a daily note's title and pressing
           // Backspace used to destroy it straight past the guard.
           if (!await ensureDeletableThroughUi([block])) return
+          // Same reason as the guards: an emptied block can still have a large
+          // subtree under it, and a cancelled confirmation that had already
+          // moved the cursor would look like the block vanished.
+          if (!await confirmBulkDeleteThroughUi([block])) return
           const prevVisible = await previousVisibleBlock(block, scopeRootId)
           if (prevVisible) {
             const prevData = await prevVisible.load()
@@ -980,7 +985,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
             })
             await focusBlock(uiStateBlock, prevVisible.id, {edit: true, renderScopeId: deps.renderScopeId})
           }
-          await deleteBlockThroughUi(block)
+          await deleteBlockThroughUi(block, {alreadyConfirmed: true})
           return
         }
 
@@ -1212,8 +1217,10 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
    * cleanly.
    *
    * Order is load-bearing:
-   *  - guards BEFORE the clipboard write, so a refused cut can't leave the user
-   *    believing the content was copied;
+   *  - guards and the bulk-delete confirmation BEFORE the clipboard write, so
+   *    neither a refused nor a cancelled cut leaves the user believing the
+   *    content was copied — or with their clipboard silently replaced by a cut
+   *    they called off;
    *  - the copy while the blocks still exist, in SELECTION order (the delete
    *    runs leaf-first so each removal can't disturb the next, which is not the
    *    order the markdown should come out in);
@@ -1240,6 +1247,10 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
 
     const blocks = selectedBlocks.toReversed()
     if (!await ensureDeletableThroughUi(blocks)) return
+    // Selection order, not the leaf-first `blocks`: the count skips a target
+    // already covered by an earlier target's subtree, which only saves queries
+    // when ancestors come first. Same set either way.
+    if (!await confirmBulkDeleteThroughUi(selectedBlocks)) return
 
     // Copy exactly the set we're about to delete rather than re-reading the
     // ui-state selection: with supplied deps the two can differ, and the copy
@@ -1252,10 +1263,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
       : null
     const focusTarget = after && !selectedIds.has(after.id) ? after : null
 
-    let deleted = false
-    await withMoveTransition(async () => {
-      deleted = await deleteBlocksThroughUi(blocks)
-    })
+    const deleted = await deleteBlocksThroughUi(blocks, {animate: true, alreadyConfirmed: true})
     if (!deleted) return
     await uiStateBlock.set(selectionStateProp, selectionStateProp.defaultValue)
     if (focusTarget) {
