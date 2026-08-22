@@ -1247,7 +1247,10 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
 
     const blocks = selectedBlocks.toReversed()
     if (!await ensureDeletableThroughUi(blocks)) return
-    if (!await confirmBulkDeleteThroughUi(blocks)) return
+    // Selection order, not the leaf-first `blocks`: the count skips a target
+    // already covered by an earlier target's subtree, which only saves queries
+    // when ancestors come first. Same set either way.
+    if (!await confirmBulkDeleteThroughUi(selectedBlocks)) return
 
     // Copy exactly the set we're about to delete rather than re-reading the
     // ui-state selection: with supplied deps the two can differ, and the copy

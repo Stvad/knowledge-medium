@@ -1,5 +1,8 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChangeScope } from '@/data/api'
+import { blockDeletionGuardsFacet } from '@/extensions/core'
+import { kernelDataExtension } from '@/data/kernelDataExtension'
+import { resolveFacetRuntimeSync } from '@/facets/facet'
 import type { Repo } from '@/data/repo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo, isBlockDeleted } from '@/data/test/createTestRepo'
@@ -145,6 +148,47 @@ describe('bulk-delete confirmation', () => {
 
     await deleting
     expect(seen).toEqual(['transition:0 pending'])
+  })
+
+  it('re-resolves the guards after the dialog, not just before it', async () => {
+    // The dialog is human-scale time: a sync landing a daily-note type on a
+    // target while it is open would otherwise be waved through by a guard pass
+    // that finished before the question was even asked.
+    const ids = await seedChildren('root', BULK_DELETE_CONFIRM_THRESHOLD, 'many')
+
+    const deleting = deleteBlocksThroughUi(ids.map(id => repo.block(id)))
+    await vi.waitFor(() => expect(pendingDialog()).toBeDefined())
+    // setFacetRuntime REPLACES the registries, so the kernel data contribution
+    // has to be re-included or `core.subtree` stops resolving.
+    repo.setFacetRuntime(resolveFacetRuntimeSync([
+      kernelDataExtension,
+      blockDeletionGuardsFacet.of(
+        block => (block.id === ids[3] ? 'Nope.' : null),
+        {source: 'test'},
+      ),
+    ]))
+    answerDialog(true)
+
+    expect(await deleting).toBe(false)
+    for (const id of ids) expect(await isBlockDeleted(repo, id)).toBe(false)
+  })
+
+  it('queries each subtree once when a selection spans a parent and its children', async () => {
+    // An outline range over an expanded parent is the ordinary way to select
+    // both. One query, not one per selected block.
+    await repo.mutate.createChild({parentId: 'root', id: 'parent', content: 'parent'})
+    const kids = await seedChildren('parent', BULK_DELETE_CONFIRM_THRESHOLD, 'kid')
+    const runQuery = vi.spyOn(repo, 'runQuery')
+
+    // Selection order: the parent, then its children, as the outline shows them.
+    const deleting = deleteBlocksThroughUi(
+      [repo.block('parent'), ...kids.map(id => repo.block(id))],
+    )
+    await vi.waitFor(() => expect(pendingDialog()).toBeDefined())
+    answerDialog(true)
+    await deleting
+
+    expect(runQuery.mock.calls.filter(([name]) => name === 'core.subtree')).toHaveLength(1)
   })
 
   it('skips the ask for a caller that already confirmed', async () => {

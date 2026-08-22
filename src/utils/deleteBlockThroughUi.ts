@@ -140,6 +140,14 @@ export const ensureDeletableThroughUi = async (blocks: readonly Block[]): Promis
  *
  * Separate export because a gesture that works between deciding and writing has
  * to ask before that work, not after — see `alreadyConfirmed`.
+ *
+ * Re-resolves the guards after the dialog closes, so `false` here can mean
+ * either "the user declined" or "a guard started refusing while we asked" —
+ * both are "don't proceed", which is all any caller does with it. The gap is
+ * human-scale (a sync can land a daily-note type mid-dialog) and this function
+ * is the one that opens it, so it is the one that closes it. Doing it here
+ * rather than in the choke point also keeps the no-dialog path — nearly every
+ * delete — at exactly one guard pass.
  */
 export const confirmBulkDeleteThroughUi = async (blocks: readonly Block[]): Promise<boolean> => {
   if (blocks.length === 0) return true
@@ -149,15 +157,25 @@ export const confirmBulkDeleteThroughUi = async (blocks: readonly Block[]): Prom
     targetCount: blocks.length,
     totalCount,
   })
-  return confirmed === true
+  if (confirmed !== true) return false
+  return ensureDeletableThroughUi(blocks)
 }
 
 /** Live blocks the delete would tombstone. Deduped across the input: a
- *  selection may hold both a block and its descendant, and the delete visits
- *  each row once. */
+ *  selection may hold both a block and its descendant — an outline range
+ *  spanning an expanded parent and its children is the ordinary way to get
+ *  one — and the delete visits each row once.
+ *
+ *  Skipping a target already covered by an earlier target's subtree is a
+ *  saving, not a correctness condition: the count is the same either way, but
+ *  selecting a page and its 200 children costs 1 query instead of 201. It pays
+ *  off when targets arrive ancestor-first, which is outline order, so callers
+ *  pass selection order here and leave the leaf-first ordering to the delete
+ *  itself. A leaf-first list just pays the redundant queries. */
 const countBlocksRemovedBy = async (blocks: readonly Block[]): Promise<number> => {
   const ids = new Set<string>()
   for (const block of blocks) {
+    if (ids.has(block.id)) continue
     const rows = await block.repo.runQuery<SubtreeRow[]>(
       'core.subtree',
       {id: block.id, hidePropertyChildren: true},
