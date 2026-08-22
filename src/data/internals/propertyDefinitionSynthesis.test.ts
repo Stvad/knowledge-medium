@@ -429,6 +429,27 @@ describe('planPropertyDefinitionSynthesis', () => {
     expect(flipBlockedBySynthesis(plan)).toMatch(/still catching up/)
   })
 
+  it('refuses the flip when the survey ran over rows this device never materialized', async () => {
+    // The same partial graph as above, arrived at without a mock — and the
+    // shape that makes the survey's output wrong rather than merely late: an
+    // unmaterialized definition makes its key read as UNRESOLVED, which is the
+    // reading the whole plan is built on.
+    await rawCell('b1', {'demo:orphan': 'hello'})
+    repo.stopSyncObserver()
+    await sharedDb.db.execute(BLOCKS_SYNCED_RAW_TABLE.put.sql, blockToSyncedRowParams({
+      id: 'never-materialized', workspaceId: WS, parentId: null, orderKey: 'z0',
+      content: 'the definition this device has not got', properties: {}, references: [],
+      createdAt: 1, updatedAt: 5, userUpdatedAt: 5, createdBy: 'u', updatedBy: 'u',
+      deleted: false,
+    }))
+    await sharedDb.db.execute('DELETE FROM blocks_synced_changes')
+
+    const plan = await planFor()
+
+    expect(plan.scanSyncGap).toMatch(/never materialized/)
+    expect(flipBlockedBySynthesis(plan)).toMatch(/still catching up/)
+  })
+
   it('refuses when the workspace turns out encrypted AFTER the pre-flight check', async () => {
     // The pre-flight check and the write are separated by the Properties-page
     // bootstrap and by the wait for the write lock, and the workspace's real
