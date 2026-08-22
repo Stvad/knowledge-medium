@@ -7,7 +7,7 @@ import { createTestRepo } from '@/data/test/createTestRepo'
 import { Repo } from '@/data/repo'
 import { aliasesProp } from '@/data/properties'
 import { aliasDataExtension } from '../dataExtension.ts'
-import { ALIAS_COLLISION_MERGE_MUTATOR } from '../collisionMerge.ts'
+import { ALIAS_COLLISION_MERGE_MUTATOR, AliasMergeBlockedError } from '../collisionMerge.ts'
 
 const WS = 'ws-1'
 
@@ -273,6 +273,91 @@ describe('alias.mergeCollision', () => {
 
     expect((await env.repo.load('rival-a'))?.deleted).toBe(false)
     expect((await env.repo.load('unrelated'))?.deleted).toBe(false)
+  })
+
+  it('refuses up front when a page outside the merge claims one of the names', async () => {
+    // Releasing every source covers names the SOURCES hold. It does nothing
+    // about a third page co-claiming one of them — the same latent duplicate
+    // state this flow exists for. Letting the trigger abort instead is not
+    // just a dead end: the rejection it raises names the SURVIVOR as the
+    // offender, and the collision toast then offers a merge the other way
+    // round, which tombstones the page the banner was trying to repair.
+    await createBlock('canonical', 'Journal', [], 'a0')
+    await coClaimRaw('rival', 'Rival', 'Journal', 1_000)
+    await env.repo.tx(tx => tx.setProperty('rival', aliasesProp, ['Journal', 'Zed']),
+      {scope: ChangeScope.BlockDefault})
+    await coClaimRaw('third', 'Third', 'Zed', 2_000)
+
+    await expect(env.repo.run(ALIAS_COLLISION_MERGE_MUTATOR, {
+      intoId: 'canonical',
+      fromIds: ['rival'],
+      collisionAlias: 'Journal',
+      sourceIsAliasOwner: true,
+    })).rejects.toBeInstanceOf(AliasMergeBlockedError)
+
+    expect((await env.repo.load('rival'))?.deleted).toBe(false)
+    expect((await env.repo.load('canonical'))?.deleted).toBe(false)
+  })
+
+  it('refuses a source that is no longer a live claimant', async () => {
+    // The stored alias bag survives a soft delete, so a bag check waves a
+    // tombstoned rival through — and it would then contribute its aliases and
+    // its title to the survivor without ever being folded, leaving its children
+    // under its own tombstone and its inbound references pinned there.
+    await createBlock('canonical', 'Journal', [], 'a0')
+    await coClaimRaw('rival', 'Rival', 'Journal', 1_000)
+    await env.repo.tx(tx => tx.delete('rival'), {scope: ChangeScope.BlockDefault})
+
+    await expect(env.repo.run(ALIAS_COLLISION_MERGE_MUTATOR, {
+      intoId: 'canonical',
+      fromIds: ['rival'],
+      collisionAlias: 'Journal',
+      sourceIsAliasOwner: true,
+    })).rejects.toThrow(/no longer claims/)
+  })
+
+  it('offers a claimant the index sees but the alias bag cannot decode', async () => {
+    // The alias trigger indexes any `$.alias` entry that is `typeof 'text'`;
+    // the string-list codec throws on a bag holding anything else. A
+    // sync-applied `["Journal", 7]` is therefore a real claimant the banner
+    // lists — and a bag-based premise check refuses it forever.
+    await createBlock('canonical', 'Journal', [], 'a0')
+    await env.h.db.execute(
+      `INSERT INTO blocks (id, workspace_id, parent_id, order_key, content, properties_json,
+        references_json, created_at, updated_at, user_updated_at, created_by, updated_by, deleted)
+       VALUES ('odd', ?, NULL, 'k-odd', 'Odd', ?, '[]', 5, 5, 5, 'u', 'u', 0)`,
+      [WS, JSON.stringify({[aliasesProp.name]: ['Journal', 7]})],
+    )
+
+    await env.repo.run(ALIAS_COLLISION_MERGE_MUTATOR, {
+      intoId: 'canonical',
+      fromIds: ['odd'],
+      collisionAlias: 'Journal',
+      sourceIsAliasOwner: true,
+    })
+
+    expect(await env.repo.load('odd')).toBeNull()
+    expect((await env.repo.load('canonical'))?.properties[aliasesProp.name])
+      .toEqual(aliasesProp.codec.encode(['Journal', 'Odd']))
+  })
+
+  it('refuses to fold into a tombstone in the rejection direction too', async () => {
+    // `keepTarget` discards the source's content, so folding into a deleted
+    // target destroys the source's page and leaves nothing that survives it.
+    // The toast can sit on screen as long as the banner can, and its target
+    // can be deleted meanwhile.
+    await createBlock('target', 'Existing', ['Existing'], 'a0')
+    await createBlock('source', 'Partial', ['Partial', 'Other'], 'a1')
+    await env.repo.tx(tx => tx.delete('target'), {scope: ChangeScope.BlockDefault})
+
+    await expect(env.repo.run(ALIAS_COLLISION_MERGE_MUTATOR, {
+      intoId: 'target',
+      fromIds: ['source'],
+      collisionAlias: 'Existing',
+      dropSourceAliases: ['Partial'],
+    })).rejects.toThrow(/is deleted/)
+
+    expect((await env.repo.load('source'))?.deleted).toBe(false)
   })
 
   it('refuses when the target was renamed away from the contested name', async () => {

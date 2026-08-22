@@ -33,9 +33,11 @@ export interface MergeBlocksInTxArgs {
 }
 
 export interface FoldBlocksInTxArgs extends Omit<MergeBlocksInTxArgs, 'from'> {
-  /** Folded in order. `mergeProperties` is applied cumulatively — each source
-   *  merges into the bag the previous ones produced, not into `into`'s
-   *  original. */
+  /** Folded in order, ids deduped. `mergeProperties` is applied cumulatively —
+   *  each source merges into the bag the previous ones produced, not into
+   *  `into`'s original. `aliasRewrites` is fold-wide and source-agnostic: the
+   *  same set rides every emitted merge event, so a rewrite is applied once per
+   *  source regardless of which one held the alias. */
   froms: readonly BlockData[]
 }
 
@@ -81,9 +83,13 @@ export const foldBlocksInTx = async (
     aliasRewrites = [],
   }: FoldBlocksInTxArgs,
 ): Promise<void> => {
-  // Visible children of `into`, extended as each source's are re-homed: it is
-  // the placement anchor for the next source's children, so a second source
-  // appended against the pre-fold anchor would interleave with the first's.
+  // Visible children of `into`, extended as each source's are re-homed. TWO
+  // roles, both load-bearing: the placement anchor for the next source's
+  // children (a second source appended against the pre-fold anchor interleaves
+  // with the first's), AND the "already visible" set `scanIntoChildren`
+  // classifies against — a re-homed child that is not in it gets read as a
+  // candidate field row on the strength of a bare `referenceTargetId`, which
+  // any whole-block reference carries.
   const intoChildren = [...await tx.childrenOf(into.id, undefined, {hidePropertyChildren: true})]
 
   // Accumulated across sources and written ONCE at the end — see the docblock.
@@ -107,6 +113,12 @@ export const foldBlocksInTx = async (
   }
 
   for (const from of froms) {
+    // A repeated id re-enters the body against the caller's PRE-LOOP snapshot,
+    // so `from.deleted` below still reads false and cannot catch it: the fold
+    // would merge its properties and concatenate its content a second time and
+    // emit two merge events for one block.
+    if (folded.some(done => done.id === from.id)) continue
+
     // Merging a block into itself would tombstone it (delete), double its
     // content (read-after-delete via requireExisting), and orphan its children
     // under the tombstone. Treat self-merge as a no-op.

@@ -42,7 +42,7 @@ import { retargetPanelBlockIds } from '@/utils/panelLayoutProjection.js'
 import { truncate } from '@/utils/string.js'
 import type { BlockHeaderContribution } from '@/extensions/blockInteraction.js'
 import type { BlockRenderer } from '@/types'
-import { ALIAS_COLLISION_MERGE_MUTATOR } from './collisionMerge.ts'
+import { ALIAS_COLLISION_MERGE_MUTATOR, AliasMergeBlockedError } from './collisionMerge.ts'
 
 /** Every wording here has to be TRUE of the state that produced it. When this
  *  page still claims the name, "links to it go there" is false — links land
@@ -110,14 +110,23 @@ export const DuplicateNameBanner: BlockRenderer = ({block}) => {
         showError('Merged, but panel update failed')
       }
     } catch (error) {
-      // The one refusal worth explaining: merging a block into its own
-      // descendant can never succeed, and the raw error says nothing useful.
-      // Direction matters in the copy: this error means THIS page sits inside
-      // the other one, so the user has to move this page out — the reverse of
-      // what a naive reading suggests.
-      showError(error instanceof MergeIntoDescendantError
-        ? `This page is inside “${truncate(name, 40)}” — move it out before merging.`
-        : `Couldn’t merge “${truncate(name, 40)}”.`)
+      // Two refusals worth explaining, because the raw error says nothing
+      // useful and both are things the user can act on.
+      if (error instanceof MergeIntoDescendantError) {
+        // Direction matters in the copy: this means THIS page sits inside the
+        // other one, so the user has to move this page out — the reverse of
+        // what a naive reading suggests.
+        showError(`This page is inside “${truncate(name, 40)}” — move it out before merging.`)
+        return
+      }
+      if (error instanceof AliasMergeBlockedError) {
+        showError(
+          `Can’t merge: “${truncate(error.alias, 40)}” is also used by a page this wouldn’t absorb. `
+          + 'Resolve that name first.',
+        )
+        return
+      }
+      showError(`Couldn’t merge “${truncate(name, 40)}”.`)
     } finally {
       setMerging(false)
     }
@@ -131,8 +140,9 @@ export const DuplicateNameBanner: BlockRenderer = ({block}) => {
       <span className="text-muted-foreground">
         {duplicateNameMessage(truncate(name, 40), rivalIds.length, sharesTheName)}
       </span>
-      {/* Opens the oldest rival when there are several — the one `[[Name]]`
-          currently resolves to, so it is the page the user is being sent to. */}
+      {/* The oldest rival. NOT necessarily where `[[Name]]` resolves — when
+          this page is itself the oldest claimant, links land here — so this is
+          "a page also called that", not "the page your links go to". */}
       <Button
         variant="ghost"
         size="sm"
