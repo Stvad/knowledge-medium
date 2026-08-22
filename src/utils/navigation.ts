@@ -18,11 +18,11 @@
 // returns the resolved destination. It **never rejects** (errors are logged →
 // `null`), so the many fire-and-forget callers can ignore the promise. Gesture
 // surfaces resolve a `NavigationDecision` through the intent policy first
-// (synchronously — see `resolveNavigationIntent`): a click surface routes the
-// decision through `applyNavigationDecision` (the one place that gates
+// (synchronously — see `resolveNavigationIntent`): a click surface gates the
+// event through `gateNavigationEvent` (the one place that decides
 // `preventDefault`), while `navigateFromGlobalCommand` goes through the shared
-// `navigateFromGesture` helper — both hand a `navigate` decision's input to
-// `navigate`. Every `NavigateInput` can carry an `origin` tag so execution-layer
+// `navigateFromGesture` helper — both then hand a `navigate` decision's input to
+// `navigateEnsuringTarget`. Every `NavigateInput` can carry an `origin` tag so execution-layer
 // decorators can redirect/observe by source, not just by the resolved target —
 // gesture navigations get it from the policy (the surface role); programmatic
 // callers set it explicitly.
@@ -586,7 +586,7 @@ const isNavigationDecision = (value: unknown): value is NavigationDecision => {
  * an `impl`/`decorator` that returns a promise violates the contract and falls
  * back to `defaultNavigationIntent` (async before/after observers are fine —
  * they're fire-and-forget). The resolved `NavigationDecision` is routed by the
- * surface (`applyNavigationDecision` for clicks) or, for navigate, by `navigate()`.
+ * surface (`gateNavigationEvent` for clicks) or, for navigate, by `navigate()`.
  */
 export const navigationIntentVerb = defineVerbFacet<NavigationGesture, NavigationDecision>({
   id: 'core.navigation-intent',
@@ -645,7 +645,8 @@ const gateNavigationEvent = (
 
 /** Apply a resolved decision to the click that produced it — `gateNavigationEvent`
  *  plus the navigation, so no clickable surface re-implements the native-vs-veto
- *  distinction:
+ *  distinction. Kept for extension click surfaces that resolve their own
+ *  decision (`apiCatalog`); in-repo openers gate and navigate separately:
  *    - `passthrough` → decline the event; the browser follows the href.
  *    - `navigate` / `suppress` → own the event (`stopPropagation` +
  *      `preventDefault`); `navigate` then fires the in-app navigation,
@@ -658,15 +659,14 @@ export const applyNavigationDecision = (
   if (gateNavigationEvent(e, decision)) void navigate(repo, decision.input)
 }
 
-/** Materialise a get-or-create target and return the live block, so the
- *  navigation lands on a page that exists. For surfaces whose block id is
- *  *derived* rather than looked up — `recentsPageBlockId` and friends name an id
- *  the workspace may never have created, or may have deleted since.
+/** Materialise a get-or-create target and return the live block. For surfaces
+ *  whose block id is *derived* rather than looked up — `recentsPageBlockId` and
+ *  friends name an id the workspace may never have created, or may have deleted
+ *  since. Best-effort: on a read-only workspace `getOrCreateKernelPage` gets
+ *  without creating, so the navigation still lands on a page that isn't there.
  *
- *  The navigation goes to the returned block's `id`. Today every kernel page
- *  resolves to its derived id, so that is the id the caller already passed;
- *  taking it from the block rather than assuming it keeps the caller correct if
- *  that ever stops being true. */
+ *  Returns the live block: the ensured id is authoritative, not the derived one
+ *  the caller passed. */
 export type EnsureNavigationTarget = (workspaceId: string) => Promise<{id: string}>
 
 export interface NavigationEnsureOptions {
@@ -693,17 +693,24 @@ const navigateEnsuringTarget = async (
   ensureTarget: EnsureNavigationTarget | undefined,
 ): Promise<NavigationResult | null> => {
   if (!ensureTarget || input.blockId !== requested.blockId) return navigate(repo, input)
-  let ensured: {id: string}
   try {
     // In the workspace the DECISION names: a policy may have retargeted only
     // that, and materialising against the captured one would create the page in
-    // one workspace and navigate its id through another's layout.
-    ensured = await ensureTarget(input.workspaceId ?? requested.workspaceId)
+    // one workspace and navigate its id through another's layout. The fallback
+    // is defence in depth — `resolveNavigationIntent` already carries the
+    // gesture's workspace into a decision that omitted one, so no test pins it.
+    const ensured = await ensureTarget(input.workspaceId ?? requested.workspaceId)
+    // Validated rather than trusted: `ensureTarget` reaches untypechecked
+    // callers through `apiCatalog`, and a bad id here reads as a blank panel
+    // several frames away instead of failing at the boundary.
+    if (typeof ensured?.id !== 'string') {
+      throw new Error('ensureTarget resolved without a block id')
+    }
+    return await navigate(repo, {...input, blockId: ensured.id})
   } catch (error) {
     console.error('[navigation] materialising the navigation target failed', error)
     return null
   }
-  return navigate(repo, {...input, blockId: ensured.id})
 }
 
 /** Resolve a gesture through the intent policy, then execute it. The single
@@ -879,7 +886,8 @@ export const openBlockFromEvent = (
 /** Returns an opener `(event, {blockId, workspaceId?}) => void` for places
  *  that resolve the target block from the event (lists, breadcrumbs, map
  *  markers rendered in a loop). Single subscription per component instead
- *  of one hook per item. */
+ *  of one hook per item. Returns
+ *  `(event, {blockId, workspaceId?}, {ensureTarget?}?) => void`. */
 export const useBlockOpener = ({plainClick = 'follow-link'}: BlockOpenerOptions = {}) => {
   const repo = useRepo()
   const {panelId} = useBlockContext()

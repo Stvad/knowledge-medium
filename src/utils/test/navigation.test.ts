@@ -89,6 +89,12 @@ const currentLayoutBlockIds = async () => {
 
 /** Stub `window.matchMedia` so the viewport rule resolves deterministically:
  *  `matches: true` → mobile (max-width query matches), `false` → desktop. */
+const stubViewport = (matches: boolean) => {
+  vi.stubGlobal('window', {
+    matchMedia: vi.fn().mockReturnValue({matches}),
+  })
+}
+
 const fakeMouseEvent = (
   mods: Partial<{shiftKey: boolean; altKey: boolean; metaKey: boolean; ctrlKey: boolean; button: number}> = {},
 ) => ({
@@ -98,12 +104,6 @@ const fakeMouseEvent = (
   preventDefault: vi.fn(),
 })
 type OpenerEvent = Parameters<typeof openBlockFromEvent>[1]
-
-const stubViewport = (matches: boolean) => {
-  vi.stubGlobal('window', {
-    matchMedia: vi.fn().mockReturnValue({matches}),
-  })
-}
 
 describe('navigate', () => {
   it("target 'main' creates the main panel when the layout is empty", async () => {
@@ -717,31 +717,28 @@ describe('navigationIntentVerb (intent policy seam)', () => {
 })
 
 describe('applyNavigationDecision (DOM routing)', () => {
-  // The single place that gates `preventDefault` for a clickable surface. A fake
-  // event with spied stopPropagation/preventDefault lets the node-env suite cover
-  // the native-vs-veto distinction that `useBlockOpener` delegates here.
-  const fakeClick = () => ({stopPropagation: vi.fn(), preventDefault: vi.fn()})
-  type ClickArg = Parameters<typeof applyNavigationDecision>[1]
-
+  // Retained for extension click surfaces that resolve their own decision; the
+  // in-repo openers gate and navigate separately, so this covers the applier's
+  // own native-vs-veto routing rather than `useBlockOpener`'s.
   it('passthrough: declines the event so the browser follows the href', async () => {
-    const e = fakeClick()
-    applyNavigationDecision(env.repo, e as unknown as ClickArg, PASSTHROUGH)
+    const e = fakeMouseEvent()
+    applyNavigationDecision(env.repo, e as unknown as OpenerEvent, PASSTHROUGH)
     expect(e.preventDefault).not.toHaveBeenCalled()
     expect(e.stopPropagation).not.toHaveBeenCalled()
     expect(await currentPanelBlockIds()).toEqual([])
   })
 
   it('suppress (veto): owns the event and no-ops — href is suppressed, no navigation', async () => {
-    const e = fakeClick()
-    applyNavigationDecision(env.repo, e as unknown as ClickArg, SUPPRESS)
+    const e = fakeMouseEvent()
+    applyNavigationDecision(env.repo, e as unknown as OpenerEvent, SUPPRESS)
     expect(e.preventDefault).toHaveBeenCalled()
     expect(e.stopPropagation).toHaveBeenCalled()
     expect(await currentPanelBlockIds()).toEqual([])
   })
 
   it('navigate: owns the event and runs the in-app navigation', async () => {
-    const e = fakeClick()
-    applyNavigationDecision(env.repo, e as unknown as ClickArg, goTo({blockId: 'b-go', target: 'main', workspaceId: WS}))
+    const e = fakeMouseEvent()
+    applyNavigationDecision(env.repo, e as unknown as OpenerEvent, goTo({blockId: 'b-go', target: 'main', workspaceId: WS}))
     expect(e.preventDefault).toHaveBeenCalled()
     expect(e.stopPropagation).toHaveBeenCalled()
     await vi.waitFor(async () => {
