@@ -38,6 +38,7 @@ import { PowerSyncDatabase, Schema } from '@powersync/node'
 import {
   BLOCKS_SYNCED_RAW_TABLE,
   CREATE_BLOCKS_PARENT_ORDER_INDEX_SQL,
+  CREATE_BLOCKS_SYNCED_NEEDS_APPLY_INDEX_SQL,
   CREATE_BLOCKS_SYNCED_TABLE_SQL,
   CREATE_BLOCKS_FIELD_FORM_INDEX_SQL,
   CREATE_BLOCKS_ANY_FIELD_FORM_INDEX_SQL,
@@ -112,6 +113,7 @@ const initializeTestDb = async (dbDir: string): Promise<PowerSyncDatabase> => {
   // client-schema add-ons (auxiliary tables + triggers).
   await db.execute(CREATE_BLOCKS_TABLE_SQL)
   await db.execute(CREATE_BLOCKS_SYNCED_TABLE_SQL)
+  await db.execute(CREATE_BLOCKS_SYNCED_NEEDS_APPLY_INDEX_SQL)
   await db.execute(CREATE_BLOCKS_PARENT_ORDER_INDEX_SQL)
   await db.execute(CREATE_BLOCKS_WORKSPACE_ACTIVE_INDEX_SQL)
   await db.execute(CREATE_BLOCKS_WORKSPACE_NONEMPTY_PROPERTIES_INDEX_SQL)
@@ -166,6 +168,7 @@ const getTemplateFingerprint = (): string => {
   hash.update(CREATE_BLOCKS_TABLE_SQL)
   hash.update('\0')
   hash.update(CREATE_BLOCKS_SYNCED_TABLE_SQL)
+  hash.update(CREATE_BLOCKS_SYNCED_NEEDS_APPLY_INDEX_SQL)
   hash.update('\0')
   hash.update(CREATE_BLOCKS_PARENT_ORDER_INDEX_SQL)
   hash.update('\0')

@@ -18,7 +18,10 @@ import {
   RAISE_FIELD_SEP_SQL,
 } from './raiseProtocol'
 import { STAGING_LOCAL_COLUMNS } from '@/data/blockSchema.js'
-import { SEED_STAGING_NEEDS_APPLY_SQL } from './syncObserver/reconcile.js'
+import {
+  SEED_STAGING_NEEDS_APPLY_CHUNK,
+  SEED_STAGING_NEEDS_APPLY_SQL,
+} from './syncObserver/reconcile.js'
 
 // ============================================================================
 // Tables
@@ -1043,6 +1046,23 @@ export const BACKFILL_BLOCK_TYPES_SQL = `
 
 export const BLOCKS_FTS_BACKFILL_MARKER_KEY = 'blocks_fts_backfill_v1'
 
+/** Marker for the one-shot `needs_apply` seed — see
+ *  {@link ensureStagingNeedsApplyColumn} for why it is not keyed on the ALTER. */
+export const STAGING_NEEDS_APPLY_SEEDED_MARKER_KEY = 'staging_needs_apply_seeded'
+
+export const SELECT_STAGING_NEEDS_APPLY_SEEDED_SQL = `
+  SELECT 1 FROM client_schema_state WHERE key = '${STAGING_NEEDS_APPLY_SEEDED_MARKER_KEY}'
+`
+
+export const RECORD_STAGING_NEEDS_APPLY_SEEDED_SQL = `
+  INSERT OR REPLACE INTO client_schema_state (key, completed_at)
+  VALUES ('${STAGING_NEEDS_APPLY_SEEDED_MARKER_KEY}', strftime('%s', 'now') * 1000)
+`
+
+/** Remaining unapplied staged rows — the seed loop's progress signal. */
+export const COUNT_STAGING_NEEDS_APPLY_SQL =
+  'SELECT COUNT(*) AS n FROM blocks_synced WHERE needs_apply = 1'
+
 export const SELECT_BLOCKS_FTS_BACKFILL_DONE_SQL = `
   SELECT 1 FROM client_schema_state WHERE key = '${BLOCKS_FTS_BACKFILL_MARKER_KEY}'
 `
@@ -1509,23 +1529,34 @@ export const ensureBlockUserUpdatedAtColumn = async (db: {
  * be anywhere else.
  *
  * Fresh installs skip both — `CREATE_BLOCKS_SYNCED_TABLE_SQL` carries the
- * column, so there is nothing to ALTER and nothing staged to seed. Neither
- * statement fires a trigger: ALTER fires no row triggers, and `blocks_synced`
- * has no UPDATE trigger.
+ * column, so there is nothing to ALTER and nothing staged to seed.
  */
-export const ensureStagingNeedsApplyColumn = async (db: {
-  execute: (sql: string) => Promise<unknown>
-  getAll: <T>(sql: string) => Promise<T[]>
-}): Promise<void> => {
+export const ensureStagingNeedsApplyColumn = async (
+  db: ClientSchemaBootstrapDb & {getAll: <T>(sql: string) => Promise<T[]>},
+): Promise<void> => {
   const columns = await db.getAll<{name: string}>('PRAGMA table_info(blocks_synced)')
   if (columns.length === 0) return
-  let added = false
   for (const column of STAGING_LOCAL_COLUMNS) {
-    if (columns.some(c => c.name === column.name)) continue
+    if (columns.some(existing => existing.name === column.name)) continue
     await db.execute(`ALTER TABLE blocks_synced ADD COLUMN ${column.definition}`)
-    added = true
   }
-  if (added) await db.execute(SEED_STAGING_NEEDS_APPLY_SQL)
+  // Marker-gated, NOT gated on "did this invocation add the column" — those two
+  // are not the same claim, and the difference is the whole failure mode: a
+  // crash or a throw between the ALTER and the seed leaves the column present
+  // and every staged row flagged, and a run keyed on the ALTER never seeds
+  // again. That reads as a permanent gap in every workspace, so every one-way
+  // pass refuses for the life of the install. The marker retries instead.
+  const done = await db.getOptional<{1: number}>(SELECT_STAGING_NEEDS_APPLY_SEEDED_SQL)
+  if (done !== null) return
+  // Bounded statements rather than one pass over the table: this is the boot
+  // path, and the devices it exists for are the ones holding the most rows.
+  for (;;) {
+    const before = await db.getOptional<{n: number}>(COUNT_STAGING_NEEDS_APPLY_SQL)
+    await db.execute(SEED_STAGING_NEEDS_APPLY_SQL, [SEED_STAGING_NEEDS_APPLY_CHUNK])
+    const after = await db.getOptional<{n: number}>(COUNT_STAGING_NEEDS_APPLY_SQL)
+    if ((before?.n ?? 0) === (after?.n ?? 0)) break
+  }
+  await db.execute(RECORD_STAGING_NEEDS_APPLY_SEEDED_SQL)
 }
 
 /**

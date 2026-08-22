@@ -23,6 +23,7 @@ import { createTestRepo } from '@/data/test/createTestRepo'
 import {
   decideStagingRow,
   WORKSPACE_UNAPPLIED_COUNT_CAP,
+  WORKSPACE_UNAPPLIED_SQL,
 } from '@/data/internals/syncObserver/reconcile'
 import { ChangeScope } from '@/data/api'
 import type { BlockData } from '@/data/api'
@@ -291,6 +292,18 @@ describe('Repo.workspaceViewGap', () => {
     expect(await repo.workspaceViewGap(WS)).toEqual({
       reason: expect.stringMatching(/draining/), transient: true,
     })
+  })
+
+  it('answers off the partial index, not a walk of every downloaded row', async () => {
+    // The entire reason this predicate can be re-asked inside every writing
+    // transaction rather than once at the top of a pass. A reshape of the SQL
+    // that stops matching `idx_blocks_synced_needs_apply` turns the hot-path
+    // gate back into a full scan, with the suite still green.
+    const plan = await sharedDb.db.getAll<{detail: string}>(
+      `EXPLAIN QUERY PLAN ${WORKSPACE_UNAPPLIED_SQL}`,
+      [WS, WORKSPACE_UNAPPLIED_COUNT_CAP],
+    )
+    expect(plan.map(row => row.detail).join(' | ')).toMatch(/idx_blocks_synced_needs_apply/)
   })
 
   it('caps the count it reports rather than the rows it examines', async () => {

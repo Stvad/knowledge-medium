@@ -279,29 +279,44 @@ export const WORKSPACE_UNAPPLIED_COUNT_CAP = 1_000
  *
  * The column arrives defaulting to "unapplied", which is right for every future
  * delivery and wrong for everything already on disk — so this clears it for the
- * rows a drain demonstrably already handled. Its rule is the same one
- * {@link decideStagingRow} applies going forward, expressed against what the
- * two tables can still show after the fact: the live row is at or ahead of the
- * staged stamp (and is not I2's `0` sentinel, which always yields), or the row
- * is a tombstone on both sides and so invisible to every reader either way.
+ * rows a drain demonstrably already handled. Its rule is {@link decideStagingRow}'s,
+ * expressed against what the two tables can still show after the fact: the live
+ * row carries the SAME nonzero stamp (I1 — identical content, the drain would
+ * skip it), or the row is a tombstone on both sides and so invisible to every
+ * reader either way.
  *
  * Necessarily an APPROXIMATION — it cannot see the upload queue or a decode
- * result — and that is tolerable only because it runs ONCE, at the ALTER, and
- * is dead afterwards. It errs toward leaving the flag SET, which reads as a gap
- * and refuses, rather than clearing one the drain would not have.
+ * result — and that is tolerable only because it runs ONCE and is dead
+ * afterwards. It errs toward leaving the flag SET, which reads as a gap and
+ * refuses: equality rather than `>=`, because a strictly-newer local row is an
+ * acked edit that `decideStagingRow` would APPLY over, not skip, and its echo
+ * re-delivers and re-judges it anyway.
+ *
+ * CHUNKED by the caller, which is why the row set is bounded here rather than
+ * by a WHERE alone: the population it exists for is the one this whole redesign
+ * is about — a device holding hundreds of thousands of staged rows — and its
+ * two correlated subqueries run on the boot path. Bind `[limit]`.
  */
 export const SEED_STAGING_NEEDS_APPLY_SQL = `
   UPDATE blocks_synced SET needs_apply = 0
-   WHERE EXISTS (
-           SELECT 1 FROM blocks b
-            WHERE b.id = blocks_synced.id
-              AND b.updated_at <> 0
-              AND b.updated_at >= blocks_synced.updated_at
-         )
-      OR (
-           blocks_synced.deleted = 1
-           AND COALESCE(
-                 (SELECT b.deleted FROM blocks b WHERE b.id = blocks_synced.id), 1
-               ) = 1
-         )
+   WHERE id IN (
+     SELECT s.id FROM blocks_synced s
+      WHERE s.needs_apply = 1
+        AND (
+              EXISTS (
+                SELECT 1 FROM blocks b
+                 WHERE b.id = s.id AND b.updated_at <> 0 AND b.updated_at = s.updated_at
+              )
+              OR (
+                s.deleted = 1
+                AND COALESCE((SELECT b.deleted FROM blocks b WHERE b.id = s.id), 1) = 1
+              )
+            )
+      LIMIT ?
+   )
 `
+
+/** Rows per {@link SEED_STAGING_NEEDS_APPLY_SQL} statement. Matches the drain's
+ *  own `STAGING_READ_CHUNK`: same table, same worst-case scale, same reason —
+ *  no single unbounded write holding the lock. */
+export const SEED_STAGING_NEEDS_APPLY_CHUNK = 500

@@ -60,6 +60,11 @@ const DRAINING: ViewGap = {
   reason: 'synced rows are still draining into `blocks`', transient: true,
 }
 
+/** The other kind: nothing is in flight, so retrying alone changes nothing. */
+const STRANDED: ViewGap = {
+  reason: '3 synced row(s) have not reached `blocks`', transient: false,
+}
+
 const makeRepo = (
   result: OperatorBackfillResult = RAN,
   {flipped = false, owner = USER}: {flipped?: boolean; owner?: string} = {},
@@ -159,6 +164,21 @@ describe('migrate_properties_to_blocks action', () => {
     await invoke(repo)
 
     expect(progressHandle.fail).toHaveBeenCalledWith(expect.stringContaining('Not started'))
+    expect(runWorkspaceBackfillNow).not.toHaveBeenCalled()
+  })
+
+  it('does not tell the operator to retry a refusal that retrying cannot clear', async () => {
+    // The message is their only feedback. Told "try again shortly" about a gap
+    // nothing is working on, they retry forever — and this refusal is the one
+    // that means a recovery gesture is needed, not patience.
+    const {repo, runWorkspaceBackfillNow, workspaceViewGap} = makeRepo()
+    workspaceViewGap.mockResolvedValue(STRANDED)
+
+    await invoke(repo)
+
+    expect(showInfo).toHaveBeenCalledWith(
+      expect.stringContaining('retrying alone will not clear this'))
+    expect(showInfo).not.toHaveBeenCalledWith(expect.stringContaining('try again shortly'))
     expect(runWorkspaceBackfillNow).not.toHaveBeenCalled()
   })
 

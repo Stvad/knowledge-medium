@@ -761,6 +761,9 @@ describe('workspace backfill runner — operator outcomes', () => {
     expect(await repo.runWorkspaceBackfillNow(WS, 'operator-sync-v1')).toEqual({
       outcome: 'deferred',
       undoHistoryCleared: false,
+      // Waiting IS the remedy for every deferral here; only a durable view gap
+      // reports false, and an operator is told so instead of "try again".
+      retryable: true,
       reason: 'this device is not caught up with the server '
         + '(still downloading, disconnected, or a download error)',
     })
@@ -802,6 +805,7 @@ describe('workspace backfill runner — operator outcomes', () => {
     expect(await repo.runWorkspaceBackfillNow('ws-departed', 'departed-ws-v1')).toEqual({
       outcome: 'deferred',
       undoHistoryCleared: false,
+      retryable: true,
       reason: expect.stringContaining('no longer active'),
     })
     expect(attempts).toEqual([])
@@ -822,6 +826,7 @@ describe('workspace backfill runner — operator outcomes', () => {
     expect(await repo.runWorkspaceBackfillNow(WS, 'switch-midflight-v1')).toEqual({
       outcome: 'deferred',
       undoHistoryCleared: false,
+      retryable: true,
       reason: expect.stringContaining('no longer active'),
     })
     expect(attempts).toEqual([])
@@ -844,6 +849,7 @@ describe('workspace backfill runner — operator outcomes', () => {
     expect(await repo.runWorkspaceBackfillNow(WS, 'reopen-midflight-v1')).toEqual({
       outcome: 'deferred',
       undoHistoryCleared: false,
+      retryable: true,
       reason: expect.stringContaining('re-opened'),
     })
     expect(attempts).toEqual([])

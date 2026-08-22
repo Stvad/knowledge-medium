@@ -37,8 +37,18 @@ const undoNote = (cleared: boolean): string =>
  *  after, and the runner's own `deferred` outcome — and they must not drift,
  *  because which one fires is an implementation detail of where the check
  *  sits, not something the user can act on differently. */
-const notStarted = (reason: string | undefined): string =>
-  `Not started — ${withPeriod(reason)} Nothing was changed; try again shortly.`
+const notStarted = (reason: string | undefined, retryable = true): string =>
+  `Not started — ${withPeriod(reason)} Nothing was changed; `
+  + (retryable
+    ? 'try again shortly.'
+    : 'and nothing is working on it — retrying alone will not clear this.')
+
+/** Why this device must not start the pass right now, and whether waiting is
+ *  the remedy. */
+interface Unfitness {
+  readonly reason: string
+  readonly retryable: boolean
+}
 
 /** Why this device must not start the pass right now, or null. The runner takes
  *  these checks itself — but only after the claim, and in the flip case only
@@ -46,8 +56,8 @@ const notStarted = (reason: string | undefined): string =>
 const passIsUnfit = async (
   repo: Repo,
   {workspaceId, needsFlip}: {workspaceId: string; needsFlip: boolean},
-): Promise<string | null> => {
-  if (repo.isReadOnly) return 'this workspace is read-only'
+): Promise<Unfitness | null> => {
+  if (repo.isReadOnly) return {reason: 'this workspace is read-only', retryable: false}
   // Ownership lives HERE, with the other preconditions, rather than as its own
   // check at one point in the sequence: this predicate is re-taken after the
   // confirmation, and ownership is exactly as capable of changing across that
@@ -57,12 +67,19 @@ const passIsUnfit = async (
   // Only when the flip is still ahead — an already-flipped workspace needs
   // nothing from the server, so a non-owner backfilling it is fine.
   if (needsFlip && await readWorkspaceOwnerId(repo.db, workspaceId) !== repo.user.id) {
-    return 'only the workspace owner can switch this workspace to property blocks'
+    return {
+      reason: 'only the workspace owner can switch this workspace to property blocks',
+      retryable: false,
+    }
   }
   // What follows is the FLIP, a one-way fleet-wide server write, so it takes
   // {@link Repo.workspaceViewGap}: rows this device never caught up with sit
   // there stably, with the queue long since drained and nothing in flight.
-  return (await repo.workspaceViewGap(workspaceId))?.reason ?? null
+  // `transient` travels with the reason because the operator's only feedback is
+  // this sentence — told "try again shortly" about a gap nothing will clear,
+  // they retry forever.
+  const gap = await repo.workspaceViewGap(workspaceId)
+  return gap === null ? null : {reason: gap.reason, retryable: gap.transient}
 }
 
 /** The synthesis advisory is sticky and re-runnable, so it needs a stable id or
@@ -167,7 +184,7 @@ const describePassOutcome = (
         message: (cleared
           ? `Stopped before finishing — ${withPeriod(result.reason)} Already-migrated blocks ` +
             'are skipped, so run it again.'
-          : notStarted(result.reason)),
+          : notStarted(result.reason, result.retryable)),
         failed: true,
       }
     case 'failed':
@@ -245,7 +262,7 @@ export const migratePropertiesToBlocksAction = ({repo}: {repo: Repo}): ActionCon
     // Re-taken after the dialog; this is the cheap early exit, not the guard.
     const ineligible = await passIsUnfit(repo, {workspaceId, needsFlip: !childBacked})
     if (ineligible !== null) {
-      showInfo(notStarted(ineligible))
+      showInfo(notStarted(ineligible.reason, ineligible.retryable))
       return
     }
     // §9 orphan synthesis, planned before the confirmation because this is the
@@ -307,16 +324,22 @@ export const migratePropertiesToBlocksAction = ({repo}: {repo: Repo}): ActionCon
     // nothing else is watching this await, so a transient failure here would
     // leave "Migrating properties to blocks…" spinning forever over a pass that
     // never started.
-    let unfit: string | null
+    let unfit: Unfitness | null
     try {
       unfit = await passIsUnfit(repo, {workspaceId, needsFlip: !childBacked})
     } catch (err) {
       console.error('[properties-migration] could not re-check eligibility:', err)
-      unfit = `this device could not check whether the pass may run (${
-        err instanceof Error ? err.message : String(err)})`
+      // Retryable: a read that threw says nothing about whether the underlying
+      // precondition holds, and a transient DB failure is exactly the kind that
+      // clears on its own.
+      unfit = {
+        reason: `this device could not check whether the pass may run (${
+          err instanceof Error ? err.message : String(err)})`,
+        retryable: true,
+      }
     }
     if (unfit !== null) {
-      banner.fail(notStarted(unfit))
+      banner.fail(notStarted(unfit.reason, unfit.retryable))
       return
     }
     // BEFORE the flip, per the §9 runbook. A definition is an ordinary dormant
