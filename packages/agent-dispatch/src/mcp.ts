@@ -11,6 +11,7 @@ import { createGraphMcpServer } from '@knowledge-medium/agent-cli/mcpServer'
 import { BLOCKED_WIKILINKS_ENV, createBlockedWikilinkWriteGuard, decodeBlockedWikilinks } from './blockedWikilinks.js'
 import { CHANNEL_PORT_ENV, CHANNEL_SECRET_HEADER, loadOrCreateChannelSecret } from './channelSecret.js'
 import { createDeliveryDedup } from './deliveryDedup.js'
+import { handleChannelPost } from './channelListener.js'
 
 const channelPort = Number(process.env[CHANNEL_PORT_ENV] ?? '') || null
 const blockedWikilinks = decodeBlockedWikilinks(process.env[BLOCKED_WIKILINKS_ENV])
@@ -57,63 +58,15 @@ if (channelPort) {
     request.on('data', chunk => { body += chunk })
     request.on('end', () => {
       void (async () => {
-        try {
-          const parsed = JSON.parse(body) as {content?: unknown, meta?: unknown}
-          if (typeof parsed.content !== 'string') throw new Error('content required')
-          const meta = parsed.meta && typeof parsed.meta === 'object'
-            ? Object.fromEntries(
-                Object.entries(parsed.meta as Record<string, unknown>)
-                  .filter(([, value]) => typeof value === 'string'),
-              ) as Record<string, string>
-            : undefined
-          // The notification STARTS the ambient session working, and only
-          // then do we acknowledge — so a lost ack leaves the sender unable
-          // to tell "never arrived" from "already running", and its retry
-          // would duplicate billed, write-capable agent work on the graph.
-          // Dropping a repeat of an id we have already dispatched is what
-          // makes that retry safe.
-          //
-          // Best-effort, not exactly-once: the window is bounded by
-          // DELIVERED_IDS_MAX and a restart of this process forgets
-          // everything. It covers the retry window, which is the case that
-          // actually occurs; a sender with no id is never deduplicated.
-          // Claimed BEFORE the await below, not after: `notification` waits
-          // for the stdio transport to drain, and that wait can outlast the
-          // sender's 10s timeout. Claiming afterwards left the first request
-          // in flight with nothing claimed, so the retry sailed past this
-          // check and queued the SAME notification again — both landing when
-          // stdout drained, and the session doing the work twice.
-          const outcome = dedup.claim(meta?.event_id)
-          if (outcome === 'delivered') {
-            response.writeHead(200).end('duplicate')
-            return
-          }
-          if (outcome === 'unconfirmed') {
-            // Someone holds this id and has not confirmed. Answering 200
-            // would tell a query sender its rows are with the session, and
-            // it would then advance its cursor past work that may never have
-            // run — with no block left behind for a sweep to find. 503 says
-            // "unknown, ask again", which its retry path already handles.
-            response.writeHead(503).end('in flight')
-            return
-          }
-          // The claim is NOT released if this throws. Once the write has
-          // begun there is no way to know from here whether the session saw
-          // it, and this system prefers work that needs re-triggering over
-          // work that runs twice: the sender's retry is answered
-          // `duplicate`, the block stays `running`, and the stale sweep
-          // re-queues it under a fresh id — the documented recovery.
-          await server.server.notification({
+        const {status, body: replyBody} = await handleChannelPost({
+          body,
+          dedup,
+          dispatch: event => server.server.notification({
             method: 'notifications/claude/channel',
-            params: {content: parsed.content, ...(meta ? {meta} : {})},
-          })
-          // Confirmed only once the write has completed. Until then the claim
-          // reads `unconfirmed`, so nobody may bank on it.
-          dedup.confirm(meta?.event_id)
-          response.writeHead(200).end('ok')
-        } catch {
-          response.writeHead(400).end('expected JSON {content, meta?}')
-        }
+            params: event,
+          }),
+        })
+        response.writeHead(status).end(replyBody)
       })()
     })
   })
