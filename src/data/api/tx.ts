@@ -402,6 +402,21 @@ export interface Tx {
    *  happens to be the oldest. Sees this tx's own writes. */
   aliasClaimants(alias: string, workspaceId: string): Promise<BlockData[]>
 
+  /** Every alias `blockId` claims, straight out of the trigger-maintained
+   *  index. `[]` for a tombstoned or missing row — a soft delete drops its
+   *  entries while leaving the stored property bag alone.
+   *
+   *  The authoritative answer to "what names does this row hold", and not the
+   *  same question as decoding its `alias` property. The trigger indexes
+   *  `json_each(properties_json, '$.alias')` filtered to `typeof 'text'`,
+   *  which yields values from a bare scalar and from an OBJECT as well as from
+   *  an array, and stringifies a nested array. The string-list codec accepts
+   *  none of those and throws for the whole bag if any entry is not a string.
+   *  Re-deriving those semantics in TypeScript is whack-a-mole, and each shape
+   *  missed silently RELEASES a name when the row is deleted. Sees this tx's
+   *  own writes. */
+  aliasesOf(blockId: string): Promise<string[]>
+
   // ──── Post-commit scheduling ────
 
   /** Schedule a follow-up post-commit job. Runs in its own
