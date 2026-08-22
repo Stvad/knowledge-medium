@@ -203,3 +203,17 @@ export const channelFailureFor = (status: number | null, error: unknown): RunFai
   }
   return {kind: 'network', retryable: true, label: RUN_FAILURE_LABELS.network}
 }
+
+/** The cause of a failed BRIDGE command, from the boundary rather than from
+ *  its rendered message.
+ *
+ *  Everything the daemon does between claiming a block and running it goes
+ *  through the bridge, and every one of those failures means the app tab is
+ *  slow, gone, or reconnecting — never that the task is bad. Left to the
+ *  string matcher they arrived as unrecognised prose and parked claimed
+ *  blocks as dead tasks: first the disconnected-client body, then the
+ *  60-second command timeout. Classifying at the boundary retires the whole
+ *  family instead of teaching the matcher one more sentence. */
+export const bridgeFailure = (): RunFailureClass =>
+  ({kind: 'network', retryable: true, label: RUN_FAILURE_LABELS.network})
+

@@ -241,3 +241,46 @@ describe('diffQueryRows', () => {
     expect(diff.invalidRows).toBe(2)
   })
 })
+
+describe('a claimed task belongs to the watcher that claimed it', () => {
+  const deferred = (owner: string) => ({
+    id: 'b-1',
+    properties: {
+      [PROPS.status]: 'queued', [PROPS.retryAfter]: 0, [PROPS.watcher]: owner,
+    },
+  })
+  const known = new Set(['claude-mentions', 'codex-mentions'])
+
+  it('refuses a due deferral to a DIFFERENT watcher that still exists', () => {
+    // Its prompt, its executor, its allowedTools. A task begun by a narrow
+    // watcher must not resume under a broad one.
+    expect(decidePending({
+      source: deferred('claude-mentions'), nowMs: 1_000,
+      watcherName: 'codex-mentions', knownWatchers: known,
+    })).toMatchObject({pending: false, reason: 'other-watcher'})
+  })
+
+  it('still fires it for its own watcher', () => {
+    expect(decidePending({
+      source: deferred('claude-mentions'), nowMs: 1_000,
+      watcherName: 'claude-mentions', knownWatchers: known,
+    })).toMatchObject({pending: true, reason: 'retry-due'})
+  })
+
+  it('releases a task whose owner no longer exists, rather than stranding it', () => {
+    // A renamed or deleted watcher would otherwise leave tasks nothing can
+    // ever match — worse than the reassignment the rule prevents.
+    expect(decidePending({
+      source: deferred('retired-watcher'), nowMs: 1_000,
+      watcherName: 'codex-mentions', knownWatchers: known,
+    })).toMatchObject({pending: true, reason: 'retry-due'})
+  })
+
+  it('leaves an UNCLAIMED block racy, as designed', () => {
+    expect(decidePending({
+      source: {id: 'b-1', editedAtMs: 1_000},
+      nowMs: 1_000, watcherName: 'codex-mentions', knownWatchers: known,
+    })).toMatchObject({pending: true})
+  })
+})
+

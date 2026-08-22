@@ -2996,6 +2996,31 @@ describe('retryable infrastructure failures (out of credits, expired login, netw
     expect(ids[1]).not.toBe(ids[0])
   })
 
+  it('defers rather than parks when a pre-run bridge command times out', async () => {
+    // Everything between the claim and the run goes through the bridge, and
+    // every one of those failures means the app tab is slow or gone — never
+    // that the task is bad. The 60s command timeout renders as prose the
+    // string matcher never recognised, so a slow tab parked each claimed
+    // mention as a dead task.
+    const {graph, blocks} = fakeGraph({
+      backlinks: [{id: 'b-1'}],
+      blocks: {'b-1': {content: '[[claude]] summarize inbox'}},
+    })
+    const realGetSubtree = graph.getSubtree
+    graph.getSubtree = async () => {
+      throw withRunFailure('Timed out waiting for runtime command get-subtree', {
+        kind: 'network', retryable: true, label: 'network or upstream failure',
+      })
+    }
+    void realGetSubtree
+    const engine = engineWith({graph, config: mentionConfig({runsPerHour: 100})})
+
+    await engine.tick()
+    await engine.drain()
+
+    expect(blocks.get('b-1')?.properties?.[PROPS.status]).toBe('queued')
+  })
+
   it('a genuine run failure still parks the task and does not arm a cooldown', async () => {
     const {graph, blocks} = fakeGraph({
       backlinks: [{id: 'b-1'}, {id: 'b-2'}],

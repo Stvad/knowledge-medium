@@ -29,6 +29,9 @@ export interface PendingDecision {
     /** A retryable infrastructure failure deferred this task and its
      *  `agent:retry-after` has come due. */
     | 'retry-due'
+    /** Claimed by a DIFFERENT watcher that still exists — its run, its
+     *  prompt, its permissions. */
+    | 'other-watcher'
     /** Deferred, but still inside its `agent:retry-after` window. */
     | 'retry-waiting'
 }
@@ -71,6 +74,13 @@ export interface PendingArgs {
    *  the user leave the block, or its settle window elapsed) — skip the
    *  clock-based still-typing gate. Baseline/status gates still apply. */
   quietExempt?: boolean
+  /** The watcher asking. With `knownWatchers`, this keeps a re-claim with
+   *  the watcher that made the original claim. */
+  watcherName?: string
+  /** Every CONFIGURED watcher name. Ownership is only enforced while the
+   *  recorded owner still exists: a renamed or deleted watcher would
+   *  otherwise strand its tasks forever, since nothing would match. */
+  knownWatchers?: ReadonlySet<string>
 }
 
 /**
@@ -88,8 +98,32 @@ export interface PendingArgs {
  *   watcher at an established page must not claim (and bill) its history;
  * - wait out the quiet period so half-typed requests aren't claimed.
  */
-export const decidePending = ({source, nowMs, quietMs = 0, baselineMs, quietExempt = false}: PendingArgs): PendingDecision => {
+export const decidePending = (
+  {source, nowMs, quietMs = 0, baselineMs, quietExempt = false, watcherName, knownWatchers}: PendingArgs,
+): PendingDecision => {
   if (prop(source, PROPS.reply)) return {pending: false, reason: 'is-reply'}
+
+  // A task that has been CLAIMED belongs to the watcher that claimed it. A
+  // block can be visible to several watchers, and a re-claim — a due
+  // deferral, or a stale `running` — would otherwise go to whichever scanned
+  // first and run under a different prompt, executor and allowedTools than
+  // the work started with. The permissions half is the part that matters:
+  // a task begun by a narrow watcher must not resume under a broad one.
+  //
+  // Only while the owner EXISTS. A renamed or deleted watcher leaves tasks
+  // nothing would ever match, and stranding them is worse than the reassign
+  // this prevents. An explicit Retry clears `agent:watcher`, which is how a
+  // person reassigns one deliberately.
+  //
+  // Unclaimed blocks are deliberately untouched by this: two watchers racing
+  // for a fresh mention is by design, and claim-verify settles it.
+  const owner = prop(source, PROPS.watcher)
+  if (
+    watcherName && typeof owner === 'string' && owner && owner !== watcherName
+    && knownWatchers?.has(owner)
+  ) {
+    return {pending: false, reason: 'other-watcher'}
+  }
 
   const status = taskStatus(source)
   if (status === 'running') {

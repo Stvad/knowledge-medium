@@ -3,15 +3,40 @@
  * Generic reads/writes live in @knowledge-medium/agent-cli/graph; this
  * module owns only the durable dispatch task protocol.
  */
-import type { BridgeClient } from '@knowledge-medium/agent-cli/client'
+import { errorMessage, type BridgeClient } from '@knowledge-medium/agent-cli/client'
 import { createBridgeGraph, type BacklinkSource, type BlockData, type BlockView, type BridgeGraph, type HydratedRef } from '@knowledge-medium/agent-cli/graph'
 import { PROPS, type Executor, type TaskStatus } from './config.js'
 import type { AgentResumeOptions } from './resumeCommand.js'
+import { bridgeFailure, withRunFailure } from './runFailure.js'
 
 export type { BacklinkSource, BlockData, BlockView, HydratedRef }
 
+/** Every bridge call, with its failures classified AT the boundary.
+ *
+ *  A bridge command fails because the app tab is slow, gone or
+ *  reconnecting — a transient the daemon should defer, never a task that
+ *  went wrong. Attaching that here means the retry path reads a value
+ *  instead of matching a sentence, which is what let a disconnected client
+ *  and then a command timeout each park claimed blocks as dead tasks in
+ *  turn, one rendered message at a time. */
+const withBridgeFailures = <T extends object>(graph: T): T =>
+  new Proxy(graph, {
+    get(target, key, receiver) {
+      const value = Reflect.get(target, key, receiver) as unknown
+      if (typeof value !== 'function') return value
+      return (...args: unknown[]) => {
+        const called = (value as (...a: unknown[]) => unknown).apply(target, args)
+        return called instanceof Promise
+          ? called.catch((error: unknown) => {
+            throw withRunFailure(errorMessage(error), bridgeFailure())
+          })
+          : called
+      }
+    },
+  })
+
 export const createGraph = (client: BridgeClient) => {
-  const bridgeGraph = createBridgeGraph(client)
+  const bridgeGraph = withBridgeFailures(createBridgeGraph(client))
 
   // KNOWN LIMITATION: this write goes through the bridge `update-block`
   // command, which stamps user_updated_at/updatedBy like a user edit —
