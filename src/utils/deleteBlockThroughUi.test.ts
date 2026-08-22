@@ -191,6 +191,42 @@ describe('bulk-delete confirmation', () => {
     expect(runQuery.mock.calls.filter(([name]) => name === 'core.subtree')).toHaveLength(1)
   })
 
+  it('counts authored descendants hanging under a property field row', async () => {
+    // The visible-subtree view prunes AT a recognized field row and takes the
+    // whole branch — including a comment thread someone wrote under a property
+    // value. The delete takes them too, so counting them out could drop the
+    // total under the threshold and skip the question for a delete that
+    // removes a dozen authored blocks.
+    await repo.tx(async tx => {
+      await tx.create({
+        id: 'def', workspaceId: WS, parentId: 'root', orderKey: 'b0', content: 'a property',
+        properties: {types: ['property-schema']},
+      })
+      await tx.create({
+        id: 'field', workspaceId: WS, parentId: 'root', orderKey: 'c0',
+        content: '::((def))', referenceTargetId: 'def', isFieldForm: true,
+      })
+      await tx.create({id: 'value', workspaceId: WS, parentId: 'field', orderKey: 'a0', content: 'v'})
+      // Authored content under the value — the part the visible view drops.
+      for (let i = 0; i < BULK_DELETE_CONFIRM_THRESHOLD; i++) {
+        await tx.create({
+          id: `comment-${i}`, workspaceId: WS, parentId: 'value', orderKey: `a${i}`,
+          content: `comment ${i}`,
+        })
+      }
+    }, {scope: ChangeScope.BlockDefault})
+
+    // Precondition: the field row really is recognized as machinery, or this
+    // test proves nothing — the visible view would include the branch anyway.
+    const visible = await repo.runQuery('core.subtree', {id: 'root', hidePropertyChildren: true})
+    expect((visible as {id: string}[]).map(row => row.id)).not.toContain('comment-0')
+
+    const deleting = deleteBlockThroughUi(repo.block('root'))
+    await vi.waitFor(() => expect(pendingDialog()).toBeDefined())
+    answerDialog(null)
+    await deleting
+  })
+
   it('skips the ask for a caller that already confirmed', async () => {
     const ids = await seedChildren('root', BULK_DELETE_CONFIRM_THRESHOLD, 'many')
 

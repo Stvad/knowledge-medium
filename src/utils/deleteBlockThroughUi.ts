@@ -134,9 +134,22 @@ export const ensureDeletableThroughUi = async (blocks: readonly Block[]): Promis
  * source block, but a merge REPARENTS the children rather than deleting them,
  * so counting the subtree there would warn about blocks that survive.
  *
- * Counts the VISIBLE subtree (`hidePropertyChildren`) — the delete also
- * tombstones property field/value rows, but a number the user can't reconcile
- * with what's on screen is worse than a slightly low one.
+ * Counts what the delete REMOVES — the full subtree, the same walk
+ * `deleteSubtreeInTx` makes. The visible view is the tempting one (its number
+ * is the one the user can count on screen) and it is wrong here: it prunes at
+ * a recognized field row, taking that row's whole branch with it, and an
+ * authored comment thread under a property value lives in that branch. Those
+ * blocks are deleted either way, so counting them out is the one direction of
+ * error that matters — it does not merely understate the number, it can drop
+ * the total under the threshold and skip the question entirely.
+ *
+ * The cost is that machinery rows count too, so a property-heavy block reads
+ * higher than what is on screen. In a workspace that has not flipped to
+ * properties-as-blocks there are no such rows and the two views agree. If the
+ * inflation ever makes this ask too often, the fix is a counting view in the
+ * data layer that drops machinery WITHOUT pruning its authored descendants —
+ * not a hand-rolled field-row classifier here, which is the restatement §9's
+ * named-predicate discipline exists to prevent.
  *
  * Separate export because a gesture that works between deciding and writing has
  * to ask before that work, not after — see `alreadyConfirmed`.
@@ -178,7 +191,7 @@ const countBlocksRemovedBy = async (blocks: readonly Block[]): Promise<number> =
     if (ids.has(block.id)) continue
     const rows = await block.repo.runQuery<SubtreeRow[]>(
       'core.subtree',
-      {id: block.id, hidePropertyChildren: true},
+      {id: block.id},
     )
     for (const row of rows) ids.add(row.id)
   }
