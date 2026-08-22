@@ -1214,8 +1214,13 @@ export const createEngine = (deps: EngineDeps) => {
       // the hourly budget in ten polls and defer the rows even once
       // it's back up.
       try {
-        // Same identity for query rows: the cursor is not advanced on failure,
-      // so a retry re-diffs the SAME row ids and rebuilds the same id.
+        // Identity = this DELIVERY, not merely these rows. A retry re-diffs the
+      // same ids against an unadvanced cursor and so rebuilds the same key;
+      // the generation is what stops a LEGITIMATE recurrence colliding with
+      // it, since the cursor forgets ids past MAX_CURSOR_IDS and the same
+      // rows can become new again long afterwards. Without it the listener
+      // answers that recurrence `duplicate` and the work vanishes silently.
+      const generation = await state.getDeliveryGeneration(watcher.name)
       await deliverToChannel({
         content: prompt,
         // SORTED: the identity is a property of WHICH rows these are, not of
@@ -1233,7 +1238,7 @@ export const createEngine = (deps: EngineDeps) => {
         // the second batch would then be acknowledged as a duplicate and
         // never run. Sorted for the reason above; encoded so the sort is the
         // only thing that can make two batches equal.
-        meta: {watcher: watcher.name, event_id: `${watcher.name}:${JSON.stringify(batch.map(row => row.id).sort())}`},
+        meta: {watcher: watcher.name, event_id: `${watcher.name}:${generation}:${JSON.stringify(batch.map(row => row.id).sort())}`},
       })
       } catch (error) {
         // Letting this reach the tick's per-watcher catch leaves the cursor
@@ -1251,6 +1256,11 @@ export const createEngine = (deps: EngineDeps) => {
       // returns before the spawn success branch that would otherwise clear it.
       clearInfraCooldown(laneOf(watcher), laneAtLaunch)
       recordLaunch()
+      // Acknowledged, so the next delivery is a NEW one. Bumped before the
+      // cursor advances: a crash between them costs a re-delivery under a
+      // fresh id, which the ambient session sees as new work — the direction
+      // that loses nothing.
+      await state.bumpDeliveryGeneration(watcher.name)
       await state.setCursor(watcher.name, diff.seenIds)
       log(`[${watcher.name}] delivered ${batch.length} new row(s) to the ambient channel session`)
       return

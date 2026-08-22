@@ -103,6 +103,20 @@ describe('createStreamJsonParser', () => {
     expect(events).toEqual([{kind: 'session', sessionId: 'sess-mid'}])
   })
 
+  it('reports extended thinking as activity, so a thinking-only run is not "nothing"', () => {
+    // A run can spend its whole budget on thinking and emit no text. The
+    // engine decides whether to replay a failed run from these events, so a
+    // transcript that produced only thinking must not look empty — it would
+    // be replayed and the reasoning paid for twice.
+    const events: RunEvent[] = []
+    const parser = createStreamJsonParser(event => events.push(event))
+
+    parser.feed(line({type: 'system', subtype: 'init', session_id: 'sess-1'}))
+    parser.feed(line({type: 'stream_event', event: {type: 'content_block_start', content_block: {type: 'thinking'}}}))
+
+    expect(events).toContainEqual({kind: 'activity', label: 'Thinking'})
+  })
+
   it('skips garbage and unknown lines without throwing', () => {
     const events: RunEvent[] = []
     const parser = createStreamJsonParser(event => events.push(event))

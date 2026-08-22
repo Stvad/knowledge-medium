@@ -129,18 +129,27 @@ const fakeGraph = (seed: FakeGraphSeed = {}) => {
 const memoryState = (
   seedLaunchTimes: number[] = [],
   opts: {armBaselines?: boolean} = {},
-): StateStore & {cursors: Map<string, string[]>, baselines: Map<string, number>, launches: number[]} => {
+): StateStore & {
+  cursors: Map<string, string[]>, generations: Map<string, number>,
+  baselines: Map<string, number>, launches: number[],
+} => {
   const cursors = new Map<string, string[]>()
+  const generations = new Map<string, number>()
   const baselines = new Map<string, number>()
   // Armed (epoch-0) baseline by default so most tests exercise the
   // post-baseline lifecycle; {armBaselines: false} tests establishment.
   const armed = opts.armBaselines ?? true
   const store = {
     cursors,
+    generations,
     baselines,
     launches: [...seedLaunchTimes],
     getCursor: async (name: string) => cursors.get(name) ?? null,
     setCursor: async (name: string, ids: string[]) => { cursors.set(name, ids) },
+    // A real counter, not a stub returning 0: the identity it feeds is only
+    // correct because it CHANGES after an acknowledged delivery.
+    getDeliveryGeneration: async (name: string) => generations.get(name) ?? 0,
+    bumpDeliveryGeneration: async (name: string) => { generations.set(name, (generations.get(name) ?? 0) + 1) },
     getBaseline: async (name: string) => baselines.get(name) ?? (armed ? 0 : null),
     setBaseline: async (name: string, ms: number) => { baselines.set(name, ms) },
     getLaunchTimes: async () => [...store.launches],
@@ -2950,6 +2959,36 @@ describe('retryable infrastructure failures (out of credits, expired login, netw
     await engine.tick()
     await engine.drain()
     expect(runTask).toHaveBeenCalledTimes(1)
+  })
+
+  it('gives a legitimate recurrence of the same rows a fresh delivery id', async () => {
+    // The cursor forgets ids past MAX_CURSOR_IDS, so the same rows can
+    // become new again much later. With only the ids in the key, the
+    // listener answers that recurrence `duplicate` and the work is dropped
+    // in silence — the generation is what tells the two apart.
+    const {graph} = fakeGraph()
+    graph.sqlAll = vi.fn(async () => [{id: 'a'}])
+    const state = memoryState()
+    state.cursors.set('inbox', [])
+    const deliverToChannel = vi.fn(async () => {})
+    const engine = engineWith({
+      graph, state, deliverToChannel,
+      config: parseConfig({
+        watchers: [{kind: 'query', name: 'inbox', sql: 'SELECT id FROM blocks', delivery: 'channel'}],
+      }),
+    })
+
+    await engine.tick()
+    await engine.drain()
+    // The cursor forgot it, exactly as MAX_CURSOR_IDS eviction would.
+    state.cursors.set('inbox', [])
+    await engine.tick()
+    await engine.drain()
+
+    const ids = deliverToChannel.mock.calls.map(call => (call[0] as {meta: {event_id?: string}}).meta.event_id)
+    expect(ids).toHaveLength(2)
+    expect(ids[0]).toBeTruthy()
+    expect(ids[1]).not.toBe(ids[0])
   })
 
   it('a genuine run failure still parks the task and does not arm a cooldown', async () => {

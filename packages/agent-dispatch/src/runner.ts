@@ -241,6 +241,12 @@ export const createStreamJsonParser = (onEvent?: (event: RunEvent) => void) => {
       if (eventType === 'content_block_start') {
         const contentBlock = streamEvent.content_block as Record<string, unknown> | undefined
         if (contentBlock?.type === 'tool_use') activityForToolUse(contentBlock)
+        // Extended thinking spends tokens and emits no text, so a run that
+        // only thought before losing its connection looked like nothing had
+        // happened and was replayed. Reported HERE rather than taught to a
+        // consumer: the parser is the only thing that sees the transcript.
+        // codex labels its own reasoning the same way.
+        else if (contentBlock?.type === 'thinking') emit({kind: 'activity', label: 'Thinking'})
         return
       }
       if (eventType === 'content_block_delta') {

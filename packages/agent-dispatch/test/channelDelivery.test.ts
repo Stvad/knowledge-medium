@@ -51,6 +51,14 @@ describe('channel delivery states its own failure cause', () => {
     })).toThrow()
   })
 
+  it('refuses a port fetch will not connect to, at wiring time', () => {
+    // `new URL` accepts these; only the request fails, locally and
+    // identically every time, which the retry path reads as an outage.
+    expect(() => createChannelDelivery({
+      port: 6000, secret: null, secretHeader: 'x', hint: 'hint',
+    })).toThrow(/refuses to connect/)
+  })
+
   it('resolves silently on a 2xx', async () => {
     const send = vi.fn(async () => new Response('ok', {status: 200}))
     await expect(deliver(send as unknown as typeof fetch)({content: 'x', meta: {}})).resolves.toBeUndefined()
