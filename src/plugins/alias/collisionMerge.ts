@@ -59,16 +59,9 @@ const aliasCollisionMergeArgsSchema = z.object({
   sourceIsAliasOwner: z.boolean().optional(),
 })
 
-const union = (values: readonly string[]): string[] => {
-  const seen = new Set<string>()
-  const out: string[] = []
-  for (const value of values) {
-    if (seen.has(value)) continue
-    seen.add(value)
-    out.push(value)
-  }
-  return out
-}
+/** First occurrence wins, order preserved. Exact — aliases are not trimmed, so
+ *  `uniqueStrings` from `@/utils/array` is the wrong helper here. */
+const union = (values: readonly string[]): string[] => [...new Set(values)]
 
 /** Which sources' titles are free to carry over as aliases.
  *
@@ -86,12 +79,10 @@ const union = (values: readonly string[]): string[] => {
  *  rolls back the whole merge — which would make the collision this flow exists
  *  to resolve permanently unresolvable.
  *
- *  Unowned is the whole test, even though a PARTICIPANT's claim is released by
- *  this same transaction and would be safe to take. Exempting participants adds
- *  no name: when one of them owns the title, `mergedAliases` already carries it
- *  — out of the survivor's own bag, or out of that source's aliases. Anything
- *  that stops the survivor's bag being a union over every participant has to
- *  revisit this. */
+ *  Unowned is the whole test, even for a PARTICIPANT whose claim this tx
+ *  releases: `mergedAliases` already carries a participant-owned title, so
+ *  exempting them adds no name. Revisit if the survivor's bag stops being a
+ *  union over every participant. */
 const claimableTitles = async (
   tx: Tx,
   into: BlockData,

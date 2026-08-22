@@ -83,14 +83,15 @@ export const foldBlocksInTx = async (
     aliasRewrites = [],
   }: FoldBlocksInTxArgs,
 ): Promise<void> => {
-  // Visible children of `into`, extended as each source's are re-homed. TWO
-  // roles, both load-bearing: the placement anchor for the next source's
-  // children (a second source appended against the pre-fold anchor interleaves
-  // with the first's), AND the "already visible" set `scanIntoChildren`
-  // classifies against — a re-homed child that is not in it gets read as a
-  // candidate field row on the strength of a bare `referenceTargetId`, which
-  // any whole-block reference carries.
-  const intoChildren = [...await tx.childrenOf(into.id, undefined, {hidePropertyChildren: true})]
+  // Both grow as each source's visible children are re-homed, and both are
+  // load-bearing. The anchor: a second source appended against the pre-fold
+  // position interleaves with the first's children. The id set: it is what
+  // `scanIntoChildren` treats as "already visible", and a re-homed child
+  // missing from it gets read as a candidate field row on the strength of a
+  // bare `referenceTargetId`, which any whole-block reference carries.
+  const intoVisible = await tx.childrenOf(into.id, undefined, {hidePropertyChildren: true})
+  const intoChildIds = new Set(intoVisible.map(child => child.id))
+  let lastVisibleOrderKey: string | null = intoVisible.at(-1)?.orderKey ?? null
 
   // Accumulated across sources and written ONCE at the end — see the docblock.
   let mergedProperties = into.properties
@@ -104,7 +105,7 @@ export const foldBlocksInTx = async (
     intoAnchor = null
     for (const child of await tx.childrenOf(into.id, undefined)) {
       intoAnchor = child.orderKey
-      if (intoChildren.some(visible => visible.id === child.id)) continue
+      if (intoChildIds.has(child.id)) continue
       const fieldId = getPropertyFieldTargetId(child)
       if (fieldId !== undefined && !intoFieldByFieldId.has(fieldId)) {
         intoFieldByFieldId.set(fieldId, child)
@@ -152,10 +153,11 @@ export const foldBlocksInTx = async (
     // the correct field/value children for `into` (PR #288 §9).
     const fromChildren = await tx.childrenOf(from.id, undefined, {hidePropertyChildren: true})
     if (fromChildren.length > 0) {
-      const keys = keysBetween(intoChildren.at(-1)?.orderKey ?? null, null, fromChildren.length)
+      const keys = keysBetween(lastVisibleOrderKey, null, fromChildren.length)
       for (let i = 0; i < fromChildren.length; i++) {
         await tx.move(fromChildren[i].id, {parentId: into.id, orderKey: keys[i]})
-        intoChildren.push({...fromChildren[i], parentId: into.id, orderKey: keys[i]})
+        intoChildIds.add(fromChildren[i].id)
+        lastVisibleOrderKey = keys[i]
       }
     }
 
@@ -181,11 +183,12 @@ export const foldBlocksInTx = async (
     //     (#19): the loser is unmarked, so nothing can read it as machinery.
     //   - a property `into` LACKS: the whole `from` field row moves over
     //     intact (value + comments), becoming `into`'s field row for it.
+    //
     // `into` as it stands BEFORE this source folds in — what the pre-backfill
-    // catch-up below has to judge against. Against the post-merge bag every
-    // source-only key looks like one `into` already held, so the catch-up
-    // mints a field row for it and the adopt branch collapses the source's
-    // real row into that fresh one: recreated, not moved (#23).
+    // catch-up below judges against. Against the post-merge bag every
+    // source-only key looks like one `into` already held, so the catch-up mints
+    // a field row for it and the adopt branch collapses the source's real row
+    // into that fresh one: recreated, not moved (#23).
     const intoBefore: BlockData = {...into, properties: mergedProperties}
     mergedProperties = mergeProps(mergedProperties, from.properties)
     const fromPropertyChildren = (await tx.childrenOf(
@@ -302,12 +305,10 @@ export const foldBlocksInTx = async (
   }
 
   // Every source was a no-op (self-merge or already tombstoned). Defence in
-  // depth as written: the update below is a no-change write that elides, and
-  // events are emitted per folded source, so deleting this line fails nothing
-  // today. It keeps "a no-op merge writes nothing" a property of the control
-  // flow rather than of write-elision — the single-source version needed that,
-  // because it reached `emitEvent` with no prior write and aborted with
-  // WorkspaceNotPinnedError (found by repoMutators.fuzz).
+  // depth: the update below is a no-change write that elides and events are
+  // per-source, so deleting this fails nothing today. It keeps "a no-op merge
+  // writes nothing" a property of the control flow rather than of
+  // write-elision.
   if (folded.length === 0) return
 
   await tx.update(into.id, {content: mergedContent, properties: mergedProperties})
