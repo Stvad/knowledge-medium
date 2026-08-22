@@ -3021,6 +3021,40 @@ describe('retryable infrastructure failures (out of credits, expired login, netw
     expect(blocks.get('b-1')?.properties?.[PROPS.status]).toBe('queued')
   })
 
+  it('backs off a channel query whose delivery fails PERMANENTLY, not just transiently', async () => {
+    // A configured port answered by something that is not our listener never
+    // recovers, and it left the tightest loop of the two: the cursor stays
+    // put and nothing is charged (a launch is recorded only after a delivery
+    // lands), so the same rows went out on every poll, outside runsPerHour.
+    const {graph} = fakeGraph()
+    graph.sqlAll = vi.fn(async () => [{id: 'a'}])
+    const state = memoryState()
+    state.cursors.set('inbox', [])
+    let nowMs = NOW
+    const time = {now: () => nowMs, advance: (ms: number) => { nowMs += ms }}
+    const deliverToChannel = vi.fn(async () => {
+      throw withRunFailure('channel listener replied 404', {kind: 'task', retryable: false, label: 'run failed'})
+    })
+    const engine = engineWith({
+      graph, state, deliverToChannel, now: time.now,
+      config: parseConfig({
+        watchers: [{kind: 'query', name: 'inbox', sql: 'SELECT id FROM blocks', delivery: 'channel'}],
+      }),
+    })
+
+    await engine.tick()
+    await engine.drain()
+    expect(deliverToChannel).toHaveBeenCalledTimes(1)
+
+    // Three more polls inside the window POST nothing.
+    for (let round = 0; round < 3; round += 1) {
+      await engine.tick()
+      await engine.drain()
+    }
+    expect(deliverToChannel).toHaveBeenCalledTimes(1)
+    expect(state.cursors.get('inbox')).toEqual([])   // the rows are held, not lost
+  })
+
   it('a genuine run failure still parks the task and does not arm a cooldown', async () => {
     const {graph, blocks} = fakeGraph({
       backlinks: [{id: 'b-1'}, {id: 'b-2'}],

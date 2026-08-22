@@ -3,7 +3,7 @@
  * Generic reads/writes live in @knowledge-medium/agent-cli/graph; this
  * module owns only the durable dispatch task protocol.
  */
-import { errorMessage, type BridgeClient } from '@knowledge-medium/agent-cli/client'
+import { errorMessage, isCommandRejection, type BridgeClient } from '@knowledge-medium/agent-cli/client'
 import { createBridgeGraph, type BacklinkSource, type BlockData, type BlockView, type BridgeGraph, type HydratedRef } from '@knowledge-medium/agent-cli/graph'
 import { PROPS, type Executor, type TaskStatus } from './config.js'
 import type { AgentResumeOptions } from './resumeCommand.js'
@@ -28,6 +28,11 @@ const withBridgeFailures = <T extends object>(graph: T): T =>
         const called = (value as (...a: unknown[]) => unknown).apply(target, args)
         return called instanceof Promise
           ? called.catch((error: unknown) => {
+            // Only failures to REACH the app are the transport's. A command
+            // the app received and refused is an answer, and dressing it as
+            // an outage cooled the whole executor lane — so deleting one
+            // block could pause every unrelated watcher on it.
+            if (isCommandRejection(error)) throw error
             throw withRunFailure(errorMessage(error), bridgeFailure())
           })
           : called

@@ -1255,7 +1255,15 @@ export const createEngine = (deps: EngineDeps) => {
         // an unrecognised one still propagates and is merely logged.
         const reason = truncate(errorMessage(error))
         const failure = classifyThrown(error, reason)
-        if (failure.retryable) noteInfraFailure(laneOf(watcher), failure, watcher.name)
+        // Back off for EITHER outcome. A retryable cause is the outage this
+        // was built for; a terminal one — the port answered, but by
+        // something that is not our listener — never recovers on its own,
+        // and it left the tightest loop of the two: the cursor stays put and
+        // nothing is charged (a launch is only recorded after a delivery
+        // lands), so the same rows went out every poll, forever, outside
+        // runsPerHour. The backoff bounds that to one attempt per window
+        // while the log says what is wrong.
+        noteInfraFailure(laneOf(watcher), failure, watcher.name)
         throw error
       }
       // A delivery that lands proves the listener is back, and this path

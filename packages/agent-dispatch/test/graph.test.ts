@@ -31,6 +31,22 @@ describe('bridge failures leave with their cause attached', () => {
     expect(statedRunFailure(error)).toMatchObject({kind: 'network', retryable: true})
   })
 
+  it('leaves a command the app REFUSED alone — that is an answer, not an outage', async () => {
+    // Dressing a rejection as a transport failure cooled the whole executor
+    // lane, so deleting one block could pause every unrelated watcher on it.
+    const rejecting = {
+      bridgeUrl: 'http://127.0.0.1:0',
+      runCommand: vi.fn(async () => {
+        throw Object.assign(new Error('updateBlock: block b-1 not found'), {__kmCommandRejected: true})
+      }),
+    } as unknown as BridgeClient
+    const graph = createGraph(rejecting)
+    const error = await graph.getBlock('b-1').then(() => null, (thrown: unknown) => thrown)
+
+    expect(statedRunFailure(error)).toBeNull()
+    expect((error as Error).message).toContain('not found')
+  })
+
   it('keeps the original message, so the log still says what happened', async () => {
     const graph = createGraph(failingClient('Timed out waiting for runtime command get-subtree'))
     await expect(graph.getSubtree('b-1')).rejects.toThrow(/Timed out waiting for runtime command/)

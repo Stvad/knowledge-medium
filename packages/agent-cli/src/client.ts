@@ -28,6 +28,18 @@ import {
 
 export const defaultProfileName = 'default'
 
+/** Marks an error as a command the app REJECTED, rather than a failure to
+ *  reach it. Carried as a property rather than an Error subclass: an error
+ *  crossing a worker or serialization boundary loses its prototype, and a
+ *  silently-false `instanceof` here would misreport a rejection as an
+ *  outage. */
+const COMMAND_REJECTED = '__kmCommandRejected'
+
+/** Did the app receive this command and refuse it? False for anything that
+ *  failed on the way there. */
+export const isCommandRejection = (error: unknown): boolean =>
+  (error as Record<string, unknown> | null)?.[COMMAND_REJECTED] === true
+
 export const errorMessage = (error: unknown): string =>
   error instanceof Error ? error.message : String(error)
 
@@ -335,8 +347,13 @@ export const createBridgeClient = (options: BridgeClientOptions = {}): BridgeCli
         return command.result
       }
       if (command.status === 'failed') {
+        // Also the app's answer, not a failure to reach it — same marking as
+        // the !ok result below, for the same reason.
         const error = command.result?.error
-        throw new Error(error?.message ?? `Runtime command ${id} failed`)
+        throw Object.assign(
+          new Error(error?.message ?? `Runtime command ${id} failed`),
+          {[COMMAND_REJECTED]: true},
+        )
       }
 
       await sleep(pollIntervalMs)
@@ -354,7 +371,11 @@ export const createBridgeClient = (options: BridgeClientOptions = {}): BridgeCli
 
     if (!result?.ok) {
       const error = result?.error
-      throw new Error(error?.message ?? 'Runtime command failed')
+      // MARKED: the app received this command and refused it. That is a
+      // different thing from the bridge being unreachable, and callers that
+      // retry transport failures must not retry this — a command the app
+      // has already answered will be answered the same way forever.
+      throw Object.assign(new Error(error?.message ?? 'Runtime command failed'), {[COMMAND_REJECTED]: true})
     }
 
     return result.value
