@@ -18,7 +18,7 @@ import { __resetLayoutSessionIdForTesting } from '@/utils/layoutSessionId'
 import { getOrCreateRecentsPage, recentsPageBlockId } from '@/data/recentsPage.ts'
 import { goTo, navigationIntentVerb, type NavigationDecision } from '@/utils/navigation.ts'
 import { RecentsHeaderItem } from './HeaderItem.tsx'
-import { openRecents, openRecentsAction } from './index.ts'
+import { openRecentsAction } from './index.ts'
 
 const WS = 'ws-recents'
 const USER: User = {id: 'user-1', name: 'Alice'}
@@ -58,6 +58,10 @@ const clickHeaderButton = () => {
   fireEvent.click(screen.getByRole('button', {name: 'Open recents'}))
 }
 
+/** The command, through the wiring the palette and the shortcut use. */
+const openRecents = () => openRecentsAction(repo)
+  .handler({uiStateBlock: {} as never}, new CustomEvent('test')) as Promise<void>
+
 const redirectNavigationTo = (blockId: string) => {
   repo.setRuntimeContributions(navigationIntentVerb.decoratorsFacet, 'test-policy', [
     next => gesture => {
@@ -71,7 +75,7 @@ describe('the open-recents command', () => {
   it('creates the Recents page on first use rather than navigating to an id with no row', async () => {
     expect(await repo.load(recentsPageBlockId(WS))).toBeNull()
 
-    await openRecents(repo)
+    await openRecents()
 
     expect(await currentMainPanelBlockId()).toBe(recentsPageBlockId(WS))
     expect(await repo.load(recentsPageBlockId(WS))).not.toBeNull()
@@ -82,12 +86,34 @@ describe('the open-recents command', () => {
     await repo.tx(async tx => { await tx.delete(id) }, {scope: ChangeScope.BlockDefault})
     expect(await isBlockDeleted(repo, id)).toBe(true)
 
-    // Through the action, so the wiring the palette and the shortcut use is
-    // what runs.
-    await openRecentsAction(repo).handler({uiStateBlock: {} as never}, new CustomEvent('test'))
+    await openRecents()
 
     expect(await currentMainPanelBlockId()).toBe(id)
     expect(await isBlockDeleted(repo, id)).toBe(false)
+  })
+
+  it('creates the page without touching undo history', async () => {
+    // The user asked to navigate, not to create. A lone entry on the stack
+    // makes their next cmd-Z delete the page they are looking at — and
+    // `UndoManager.record` clears the redo branch on every push, so it would
+    // also discard a redo they still wanted.
+    await repo.tx(async tx => {
+      await tx.create({id: 'note', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'v1'})
+    }, {scope: ChangeScope.BlockDefault})
+    await repo.tx(async tx => { await tx.update('note', {content: 'v2'}) },
+      {scope: ChangeScope.BlockDefault})
+    expect(await repo.undo()).toBe(true)
+    expect((await repo.load('note'))?.content).toBe('v1')
+
+    await openRecents()
+    expect(await repo.load(recentsPageBlockId(WS))).not.toBeNull()
+
+    // The redo branch survived the create, and cmd-Z still targets the edit.
+    expect(await repo.redo()).toBe(true)
+    expect((await repo.load('note'))?.content).toBe('v2')
+    expect(await repo.undo()).toBe(true)
+    expect((await repo.load('note'))?.content).toBe('v1')
+    expect(await isBlockDeleted(repo, recentsPageBlockId(WS))).toBe(false)
   })
 
   it('lets an intent policy redirect it without creating Recents', async () => {
@@ -95,7 +121,7 @@ describe('the open-recents command', () => {
     // blocked by — a page it is not going to open.
     redirectNavigationTo('b-policy-target')
 
-    await openRecents(repo)
+    await openRecents()
 
     expect(await currentMainPanelBlockId()).toBe('b-policy-target')
     expect(await repo.load(recentsPageBlockId(WS))).toBeNull()
@@ -110,16 +136,5 @@ describe('the recents header button', () => {
       expect(await currentMainPanelBlockId()).toBe(recentsPageBlockId(WS))
     })
     expect(await repo.load(recentsPageBlockId(WS))).not.toBeNull()
-  })
-
-  it('does not create Recents when a policy redirects the click', async () => {
-    redirectNavigationTo('b-policy-target')
-
-    clickHeaderButton()
-
-    await vi.waitFor(async () => {
-      expect(await currentMainPanelBlockId()).toBe('b-policy-target')
-    })
-    expect(await repo.load(recentsPageBlockId(WS))).toBeNull()
   })
 })

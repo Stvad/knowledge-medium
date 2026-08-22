@@ -168,6 +168,7 @@ export const extensionApiCatalog: ApiModuleGroup[] = [
       'NavigateInput', 'NavigationDecision', 'ResolvedNavigateInput', 'GlobalCommandNavigateInput',
       'NavigationRequest', 'NavigationResult', 'NavigationGesture', 'NavigationRole',
       'NavigationViewport', 'BlockOpenerPlainClick', 'BlockOpenerOptions', 'OpenBlockContext',
+      'OpenBlockFromEventOptions', 'NavigationEnsureOptions', 'EnsureNavigationTarget',
     ],
   },
 

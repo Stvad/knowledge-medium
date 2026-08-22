@@ -104,17 +104,24 @@ export const kernelPageBlockId = (workspaceId: string, namespace: string): strin
  *  daily notes, SRS review, locations, media capture, the Readwise backlog —
  *  reaches the same throw through this one function.
  *
- *  UNDOABLE, deliberately. Every caller bootstraps inside a `repo.undoGroup`
- *  alongside the action that needed the page (`getOrCreateDailyNote`,
- *  `createOrFindPlace`, media capture), so the create merges into that
- *  operation's entry and is reverted only by reverting the operation — which is
- *  what undo should do. A caller that writes with `skipUndo` and does NOT group
- *  leaves this create alone on the stack; that is the caller's to account for,
- *  not a reason to make the bootstrap invisible to undo for everyone. */
+ *  UNDOABLE by default, deliberately: a caller that bootstraps inside a
+ *  `repo.undoGroup` alongside the action that needed the page
+ *  (`getOrCreateDailyNote`, `createOrFindPlace`, media capture) has the create
+ *  merge into that operation's entry, so it is reverted only by reverting the
+ *  operation — which is what undo should do.
+ *
+ *  `skipUndo` is for the caller with NO such operation to merge into, where the
+ *  create would land alone on the stack. `undoGroup` cannot fix that case: one
+ *  tx records one entry whether grouped or not. A lone entry is worse than a
+ *  useless cmd-Z — `UndoManager.record` clears the redo branch on every push,
+ *  so an unattended create silently discards a redo the user still wanted.
+ *  Pass it when the write is machinery the user did not ask for: a
+ *  navigation-time ensure (`ensureTarget`), a backfill, a migration. */
 export const getOrCreateKernelPage = async (
   repo: Repo,
   workspaceId: string,
   spec: KernelPageSpec,
+  {skipUndo = false}: {skipUndo?: boolean} = {},
 ): Promise<Block> => {
   const id = kernelPageBlockId(workspaceId, spec.namespace)
   const aliases: readonly string[] = [spec.alias]
@@ -208,7 +215,7 @@ export const getOrCreateKernelPage = async (
         await tx.setProperty(id, aliasesProp, merged)
       }
       await tagTypes(tx, typeSnapshot, claimable)
-    }, {scope: ChangeScope.BlockDefault})
+    }, {scope: ChangeScope.BlockDefault, skipUndo})
     return repo.block(id)
   }
 
@@ -239,7 +246,7 @@ export const getOrCreateKernelPage = async (
     }, {systemMint: true})
     const claimable = await partitionClaimableAliases(tx, id, aliases, workspaceId)
     await tagTypes(tx, typeSnapshot, claimable)
-  }, {scope: ChangeScope.BlockDefault})
+  }, {scope: ChangeScope.BlockDefault, skipUndo})
 
   return repo.block(id)
 }

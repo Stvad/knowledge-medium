@@ -9,7 +9,7 @@ import type { AppExtension } from '@/facets/facet.js'
 import { systemToggle } from '@/facets/togglable.js'
 import { ActionContextTypes, type ActionConfig } from '@/shortcuts/types.js'
 import { getOrCreateRecentsPage, recentsPageBlockId } from '@/data/recentsPage.js'
-import { navigateFromGlobalCommand } from '@/utils/navigation.js'
+import { activeWorkspaceIdPreferringHash, navigateFromGlobalCommand } from '@/utils/navigation.js'
 import type { Repo } from '@/data/repo'
 import { RecentsHeaderItem } from './HeaderItem.tsx'
 import { RecentsPageBlockRenderer } from './RecentsPageBlockRenderer.tsx'
@@ -19,15 +19,15 @@ export const OPEN_RECENTS_ACTION_ID = 'open_recents'
 // `recentsPageBlockId` derives an id; it does not promise a row. Materialise the
 // page as part of the navigation so a workspace whose bootstrap never ran —
 // or where the page was since deleted — lands on Recents rather than nothing.
-// `ensureTarget` runs only if the intent policy still targets this page, so a
-// redirected command doesn't mint one nobody opens.
-export const openRecents = async (repo: Repo): Promise<void> => {
-  const workspaceId = repo.activeWorkspaceId
+// `skipUndo` because the user asked to navigate, not to create: a lone entry on
+// the stack makes their next cmd-Z delete this page, and discards their redo.
+const openRecents = async (repo: Repo): Promise<void> => {
+  const workspaceId = activeWorkspaceIdPreferringHash(repo)
   if (!workspaceId) return
   await navigateFromGlobalCommand(
     repo,
-    {blockId: recentsPageBlockId(workspaceId)},
-    {ensureTarget: ws => getOrCreateRecentsPage(repo, ws)},
+    {blockId: recentsPageBlockId(workspaceId), workspaceId},
+    {ensureTarget: ws => getOrCreateRecentsPage(repo, ws, {skipUndo: true})},
   )
 }
 
