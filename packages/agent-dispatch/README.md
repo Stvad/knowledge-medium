@@ -241,7 +241,7 @@ That puts `km-agent-dispatch` and `kmagent` on your PATH. Then:
 5. Reply text lands as a child block (marked `agent:reply` so it can never re-trigger), status flips to `done`, and the session id is stored as `agent:session`.
 6. **Threads:** a later `[[claude]]` mention anywhere under that block — including directly under Claude's reply — finds the nearest ancestor `agent:session` and `--resume`s it (never two concurrent resumes of one session).
 
-Failures reply visibly (`⚠️ …`) and set `agent:status=error` + `agent:error` — including infrastructure failures (bridge blip, spawn error), not just failed runs. A `running` block older than 30 min is treated as a crashed run and re-queued, at most 3 attempts total. To re-run a mention, use the chip's **Retry** action (or delete its `agent:*` properties).
+A failed RUN replies visibly (`⚠️ …`) and sets `agent:status=error` + `agent:error`. An infrastructure failure the daemon recognises does **not** — it goes to `agent:status=queued` with `agent:retry-after` and retries itself; see "Out of credits" below, and check the daemon log for a cooldown before hunting for failed tasks. A `running` block older than 30 min is treated as a crashed run and re-queued, at most 3 attempts total. To re-run a mention, use the chip's **Retry** action (or delete its `agent:*` properties).
 
 ## "Out of credits" is not a failed task
 

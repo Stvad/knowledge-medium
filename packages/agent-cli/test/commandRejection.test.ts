@@ -43,15 +43,22 @@ describe('a command the app refused is marked as such', () => {
     expect(isCommandRejection(error)).toBe(false)
   })
 
-  it('marks a command the app RAN and failed, too', async () => {
-    // The other half of "the app answered": a failed command is its answer
-    // just as much as a refused one.
-    vi.stubGlobal('fetch', bridgeAnswering({status: 'failed', result: {error: {message: 'extension bug'}}}))
+  it('does NOT mark a command failed because the client went away', async () => {
+    // The bridge sets `failed` in exactly one place: a target client that
+    // disconnected, whose pending commands are failed with ClientGone. That
+    // is the app becoming unreachable — marking it as an answer is what
+    // stops the daemon deferring a disconnect, which is the case the
+    // deferral exists for.
+    vi.stubGlobal('fetch', bridgeAnswering({
+      status: 'failed',
+      result: {ok: false, error: {name: 'ClientGone', message: 'Target client disconnected'}},
+    }))
 
     const error = await client().runCommand({name: 'get-block', args: {}} as never)
       .then(() => null, (thrown: unknown) => thrown)
 
-    expect(isCommandRejection(error)).toBe(true)
+    expect(isCommandRejection(error)).toBe(false)
+    expect((error as Error).message).toContain('Target client disconnected')
   })
 
   it('reports a plain value as not-a-rejection', () => {

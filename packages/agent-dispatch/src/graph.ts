@@ -16,9 +16,9 @@ export type { BacklinkSource, BlockData, BlockView, HydratedRef }
  *  A bridge command fails because the app tab is slow, gone or
  *  reconnecting — a transient the daemon should defer, never a task that
  *  went wrong. Attaching that here means the retry path reads a value
- *  instead of matching a sentence, which is what let a disconnected client
- *  and then a command timeout each park claimed blocks as dead tasks in
- *  turn, one rendered message at a time. */
+ *  instead of matching a rendered sentence, where a misphrased message
+ *  (a disconnected client, a command timeout) could park a claimed block
+ *  as a dead task. */
 const withBridgeFailures = <T extends object>(graph: T): T =>
   new Proxy(graph, {
     get(target, key, receiver) {

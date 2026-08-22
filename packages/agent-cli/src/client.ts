@@ -347,13 +347,12 @@ export const createBridgeClient = (options: BridgeClientOptions = {}): BridgeCli
         return command.result
       }
       if (command.status === 'failed') {
-        // Also the app's answer, not a failure to reach it — same marking as
-        // the !ok result below, for the same reason.
+        // NOT marked. The bridge sets this status in one place only: when
+        // the target client goes away and its pending commands are failed
+        // with ClientGone. That is the app becoming unreachable, which
+        // callers must treat as the transport failure it is.
         const error = command.result?.error
-        throw Object.assign(
-          new Error(error?.message ?? `Runtime command ${id} failed`),
-          {[COMMAND_REJECTED]: true},
-        )
+        throw new Error(error?.message ?? `Runtime command ${id} failed`)
       }
 
       await sleep(pollIntervalMs)
@@ -371,10 +370,10 @@ export const createBridgeClient = (options: BridgeClientOptions = {}): BridgeCli
 
     if (!result?.ok) {
       const error = result?.error
-      // MARKED: the app received this command and refused it. That is a
-      // different thing from the bridge being unreachable, and callers that
-      // retry transport failures must not retry this — a command the app
-      // has already answered will be answered the same way forever.
+      // MARKED, and only here: the command COMPLETED and the app answered
+      // `ok: false`. Callers that retry transport failures must not retry
+      // this — an answered command is answered the same way forever. A
+      // `failed` status is the opposite case and is left unmarked above.
       throw Object.assign(new Error(error?.message ?? 'Runtime command failed'), {[COMMAND_REJECTED]: true})
     }
 

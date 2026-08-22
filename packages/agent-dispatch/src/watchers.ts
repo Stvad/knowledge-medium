@@ -29,8 +29,8 @@ export interface PendingDecision {
     /** A retryable infrastructure failure deferred this task and its
      *  `agent:retry-after` has come due. */
     | 'retry-due'
-    /** Claimed by a DIFFERENT watcher that still exists — its run, its
-     *  prompt, its permissions. */
+    /** Claimed by a DIFFERENT watcher whose lease has not lapsed — its
+     *  run, its prompt, its permissions. */
     | 'other-watcher'
     /** Deferred, but still inside its `agent:retry-after` window. */
     | 'retry-waiting'

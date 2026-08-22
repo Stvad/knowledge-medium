@@ -8,8 +8,7 @@
  * retry safe.
  *
  * Its own module for a seam a test can drive: the ordering that matters
- * here (claim BEFORE dispatching, not after) is invisible from the outside
- * and was wrong for two rounds.
+ * here (claim BEFORE dispatching, not after) is invisible from the outside.
  *
  * Best-effort, and deliberately so. The window is bounded by `max` and the
  * whole set is lost when this process restarts. It covers the sender's

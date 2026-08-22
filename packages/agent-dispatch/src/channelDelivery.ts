@@ -4,13 +4,12 @@
  * Its own module so the failure classification has a seam a test can drive.
  * That matters more here than usual: this sender is the reason the daemon
  * can classify a delivery failure from the TRANSPORT rather than from the
- * sentence it renders — three separate review findings were the classifier
- * meeting a phrasing it had not been taught (a `503` reply, a dropped
- * bridge client, a fetch timeout), and each was fixed by adding one more
- * pattern until the shape itself was the problem.
+ * sentence it renders, which would otherwise need to recognise every
+ * phrasing a `503` reply, a dropped bridge client, or a fetch timeout
+ * might use.
  */
 import { errorMessage } from '@knowledge-medium/agent-cli/client'
-import { channelFailureFor, withRunFailure } from './runFailure.js'
+import { channelDispatched, channelFailureFor, withRunFailure } from './runFailure.js'
 import type { ChannelEvent } from './engine.js'
 
 /** How long a POST may take before we give up on it. The listener hands the
@@ -53,17 +52,23 @@ export const createChannelDelivery = (options: ChannelDeliveryOptions) => {
     } catch (error) {
       // Never got a response, so there is no status to read: the cause is
       // the transport itself (refused, unreachable, or our own timeout).
-      throw withRunFailure(
-        `channel listener unreachable: ${errorMessage(error)} — ${options.hint}`,
-        channelFailureFor(null, error),
+      throw Object.assign(
+        withRunFailure(
+          `channel listener unreachable: ${errorMessage(error)} — ${options.hint}`,
+          channelFailureFor(null, error),
+        ),
+        {dispatched: channelDispatched(null, error)},
       )
     }
     if (!response.ok) {
       // The listener CHOSE this status; it is the authoritative cause and
       // needs no parsing.
-      throw withRunFailure(
-        `channel listener replied ${response.status} — ${options.hint}`,
-        channelFailureFor(response.status, null),
+      throw Object.assign(
+        withRunFailure(
+          `channel listener replied ${response.status} — ${options.hint}`,
+          channelFailureFor(response.status, null),
+        ),
+        {dispatched: channelDispatched(response.status, null)},
       )
     }
   }

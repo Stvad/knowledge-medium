@@ -3,11 +3,9 @@
  * out — the HTTP plumbing stays in mcp.ts.
  *
  * Its own module because the decisions here are all about telling failures
- * apart, and every one of them was wrong at some point while it lived
- * inline with no test able to reach it: a malformed body answered like a
- * dead session, a dead session answered like a malformed body, and a
- * dispatch that never happened left a claim that answered every later
- * delivery of that id until the process restarted.
+ * apart — a malformed body, a dead session, and a dispatch that never
+ * happened each need a different response — which needs a seam a test can
+ * reach.
  */
 import type { createDeliveryDedup } from './deliveryDedup.js'
 

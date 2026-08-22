@@ -159,10 +159,9 @@ export const retryBackoffMs = (consecutiveFailures: number): number =>
  *  calls — and it knows structurally what happened: an HTTP status, an
  *  abort, a refused connection. Rendering that to a sentence for
  *  `classifyRunFailure` to re-parse throws the knowledge away, and the
- *  classifier then has to recognise every phrasing anyone might produce.
- *  Three separate review findings were exactly that gap — a `503` reply, a
- *  dropped bridge client, and a fetch timeout, each arriving as an
- *  unrecognised string in turn. So say it instead of spelling it.
+ *  classifier then has to recognise every phrasing anyone might produce —
+ *  a `503` reply, a dropped bridge client, a fetch timeout, each its own
+ *  wording. So say it instead of spelling it.
  *
  *  Carried as a plain property rather than checked with `instanceof`:
  *  errors that cross a worker or serialization boundary lose their
@@ -191,6 +190,22 @@ export const classifyThrown = (error: unknown, message: string): RunFailureClass
 /** The cause of a failed channel POST, from the transport rather than from
  *  its rendered message. A status the listener CHOSE is authoritative; a
  *  rejected fetch never got one, and an abort is our own 10s timeout. */
+/** Could this failure have left work running at the receiver?
+ *
+ *  The channel listener starts the ambient session before it acknowledges,
+ *  so `unknown` is the honest answer for anything that got as far as a
+ *  response — or as far as a connection that then broke. Only a connection
+ *  that never opened proves nothing was dispatched. Callers use it to decide
+ *  whether the run may be treated as never having happened. */
+export type Dispatched = 'no' | 'unknown'
+
+export const channelDispatched = (status: number | null, error: unknown): Dispatched => {
+  if (status !== null) return 'unknown'   // it answered; it may also have acted
+  const code = (error as {cause?: {code?: unknown}, code?: unknown} | null)
+  const reason = code?.code ?? code?.cause?.code
+  return reason === 'ECONNREFUSED' || reason === 'ENOTFOUND' || reason === 'EHOSTUNREACH' ? 'no' : 'unknown'
+}
+
 export const channelFailureFor = (status: number | null, error: unknown): RunFailureClass => {
   if (status !== null) {
     if (status === 429 || status === 529) return {kind: 'rate-limit', retryable: true, label: RUN_FAILURE_LABELS['rate-limit']}
@@ -215,10 +230,10 @@ export const channelFailureFor = (status: number | null, error: unknown): RunFai
  *  Everything the daemon does between claiming a block and running it goes
  *  through the bridge, and every one of those failures means the app tab is
  *  slow, gone, or reconnecting — never that the task is bad. Left to the
- *  string matcher they arrived as unrecognised prose and parked claimed
- *  blocks as dead tasks: first the disconnected-client body, then the
- *  60-second command timeout. Classifying at the boundary retires the whole
- *  family instead of teaching the matcher one more sentence. */
+ *  string matcher, an unrecognised rendering of any of those (a disconnected
+ *  client, a command timeout) parks a claimed block as a dead task.
+ *  Classifying at the boundary retires the whole family instead of teaching
+ *  the matcher one more sentence. */
 export const bridgeFailure = (): RunFailureClass =>
   ({kind: 'network', retryable: true, label: RUN_FAILURE_LABELS.network})
 

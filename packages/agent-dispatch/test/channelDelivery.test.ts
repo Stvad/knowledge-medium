@@ -42,6 +42,32 @@ describe('channel delivery states its own failure cause', () => {
     expect(JSON.parse(init.body as string)).toEqual({content: 'hello', meta: {watcher: 'w'}})
   })
 
+  it('says nothing was dispatched only when the connection never opened', async () => {
+    // The listener starts the ambient session before it acknowledges, so
+    // anything that got as far as a response — or as far as a connection
+    // that then broke — may have left work running. Only a refused
+    // connection proves otherwise, and the caller uses that to decide
+    // whether the run may be treated as never having happened.
+    const refused = vi.fn(async () => { throw Object.assign(new Error('connect'), {code: 'ECONNREFUSED'}) })
+    const err = await deliver(refused as unknown as typeof fetch)({content: 'x', meta: {}})
+      .then(() => null, (thrown: unknown) => thrown)
+    expect((err as {dispatched?: string}).dispatched).toBe('no')
+  })
+
+  it('will not vouch for a delivery that reached the listener', async () => {
+    const answered = vi.fn(async () => new Response('busy', {status: 503}))
+    const err = await deliver(answered as unknown as typeof fetch)({content: 'x', meta: {}})
+      .then(() => null, (thrown: unknown) => thrown)
+    expect((err as {dispatched?: string}).dispatched).toBe('unknown')
+  })
+
+  it('will not vouch for a connection that broke mid-flight', async () => {
+    const reset = vi.fn(async () => { throw Object.assign(new Error('reset'), {code: 'ECONNRESET'}) })
+    const err = await deliver(reset as unknown as typeof fetch)({content: 'x', meta: {}})
+      .then(() => null, (thrown: unknown) => thrown)
+    expect((err as {dispatched?: string}).dispatched).toBe('unknown')
+  })
+
   it('resolves silently on a 2xx', async () => {
     const send = vi.fn(async () => new Response('ok', {status: 200}))
     await expect(deliver(send as unknown as typeof fetch)({content: 'x', meta: {}})).resolves.toBeUndefined()

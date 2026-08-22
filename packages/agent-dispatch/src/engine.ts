@@ -49,19 +49,18 @@ const truncate = (value: string, max = 500): string =>
  *  Deliberately NOT called "billed". That name asks who paid, which sends
  *  you looking for output TEXT: a tool call with no textual preamble
  *  produces none, and a run that made an MCP write and then hit a usage
- *  limit was therefore replayed as though nothing had happened. It also
- *  smuggles in a cost model that is not always true — for a local model
- *  nothing is billed and a retry still repeats the work. The question the
- *  engine actually asks is whether a retry would REPEAT something: tokens
- *  spent, or worse, a graph write already made.
+ *  limit would be replayed as though nothing had happened. It also smuggles
+ *  in a cost model that is not always true — for a local model nothing is
+ *  billed and a retry still repeats the work. The question the engine
+ *  actually asks is whether a retry would REPEAT something: tokens spent,
+ *  or worse, a graph write already made.
  *
- *  One definition because two paths ask it. Answering it inline in each is
- *  how they drifted — the mention path read streamed text, the query path
- *  read `resultText`, and neither counted a tool call.
+ *  One definition because two paths ask it — answering it inline in each
+ *  risks the two drifting apart (e.g. one counting a tool call as a
+ *  response and the other not).
  *
  *  A session id is NOT proof: the runner emits it on the first line, before
- *  any model call. Treating it as proof would park every out-of-credits
- *  run, which is the bug this whole path exists to fix. */
+ *  any model call. Treating it as proof would park every out-of-credits run. */
 const createRunWatch = () => {
   let responded = false
   let text = ''
@@ -100,11 +99,10 @@ const createRunWatch = () => {
  *  repeat of the first one. asked-at is written only by the app's gestures
  *  and never by the daemon, so a deferral leaves it untouched.
  *
- *  Getting that second component wrong is not cosmetic, and it bit twice in
- *  the same shape: the reply key let a manual retry EDIT AND TRUNCATE the
- *  answer it was meant to supersede, and the channel event id made the
- *  listener drop a manual rerun as a duplicate so it never ran at all.
- *  Hence one derivation and three call sites, not three derivations. */
+ *  Getting that second component wrong corrupts a real answer (a retry
+ *  overwriting the reply it was meant to supersede) or drops a legitimate
+ *  rerun as a duplicate. Hence one derivation and three call sites, not
+ *  three derivations that could disagree. */
 const runIdentity = (sourceId: string, block: BlockView | undefined, attempt: number): string => {
   const askedAt = block?.properties?.[PROPS.askedAt]
   return `${sourceId}:${attempt}:${typeof askedAt === 'number' ? askedAt : 0}`
@@ -140,13 +138,12 @@ const logPreview = (content: string | null | undefined): string => {
   return cleaned ? JSON.stringify(truncate(cleaned, 100)) : '(empty)'
 }
 
-/** A deleted block surfaces as an `updateBlock: block <id> not found`
 /** Backoff schedule for retrying the IDEMPOTENT terminal reply reconcile
  *  past a transient bridge blip — recovering the billed answer instead of
  *  losing it to `status:error`. Bounded and short (≈1.7s worst case) so a
  *  genuinely-down bridge fails fast. Safe because reconcile is keyed by
  *  `replyKey`: a re-send converges to the same tree rather than duplicating
- *  it (unlike the old one-shot subtree create, which could NOT be retried). */
+ *  it. */
 const DELIVER_RETRY_DELAYS_MS = [200, 500, 1000] as const
 
 /** agent:session values are executor-scoped: codex thread ids are
@@ -448,13 +445,13 @@ export const createEngine = (deps: EngineDeps) => {
     // ONE failure boundary over every pre-claim step, and one refund site.
     //
     // The launch slot is charged at the decision, synchronously, so this
-    // stretch is already spending budget. Its bridge calls used to throw
-    // straight past it into launch()'s catch, which only logs: the slot
-    // stayed spent, no lane cooled, and the still-pending source did it
-    // again on the next tick until runsPerHour was exhausted and real work
-    // was deferred for an hour — the failure this path exists to prevent,
-    // produced by the path itself. Adding a guard per request would have
-    // been the third one; a boundary covers the ones nobody has hit yet.
+    // stretch is already spending budget. A bridge call throwing straight
+    // past this into launch()'s catch (which only logs) would leave the
+    // slot spent, no lane cooled, and the still-pending source doing this
+    // again next tick until runsPerHour was exhausted — deferring real work
+    // for an hour, the very failure this path exists to prevent. A guard per
+    // call site would only cover the ones already found; a boundary covers
+    // whatever throws next.
     //
     // Nothing is registered in `running` before this returns, so unwinding
     // is only: hand the slot back, and cool the lane if the cause warrants.
@@ -584,20 +581,9 @@ export const createEngine = (deps: EngineDeps) => {
     // Fresh reply subtree per attempt (a rerun posts a new reply, never
     // mutating the prior attempt's answer); split unless the watcher opted
     // out. Reconciles within THIS attempt share the key → converge in place.
-    //
-    // `agent:asked-at` is in the key because `attempt` ALONE cannot keep that
-    // promise: an explicit Retry clears `agent:attempts` (that counter is the
-    // crash budget, and resetting it is the point of the gesture), so the next
-    // run recomputed `attempt = 1` and reused the FIRST run's key — the retry
-    // then edited the previous answer in place, and a shorter one deleted its
-    // trailing blocks. A manual retry destroying the reply it was meant to
-    // supersede is the one outcome this must not have.
-    //
-    // asked-at is written ONLY by the app's Ask/Retry gestures and never by
-    // the daemon, which makes it exactly the right discriminator: a deferral
-    // leaves it alone, so the deferred run still converges its ⏳ note onto
-    // the real answer (the whole reason attempts is rolled back), while a
-    // person asking again starts a new reply.
+    // `agent:asked-at` is folded into the key for the reason given at
+    // runIdentity above: `attempt` alone can't tell a deliberate Retry
+    // (which resets the crash counter) apart from the run it supersedes.
     replyKey = replyKeyFor(sourceId, block, attempt)
     replyShape = watcher.splitReply ? 'outline' : 'block'
 
@@ -611,6 +597,9 @@ export const createEngine = (deps: EngineDeps) => {
       failure: RunFailureClass,
       detail: string,
       resume: {session?: string | null, resumeOptions?: AgentResumeOptions | null} = {},
+      /** The error this deferral came from, when there was one — read only
+       *  for whether the transport can vouch that nothing was dispatched. */
+      thrown?: unknown,
     ) => {
       deferIntended = true
       // Did someone else FINISH this while we were failing to hear back?
@@ -639,11 +628,19 @@ export const createEngine = (deps: EngineDeps) => {
         return
       }
       const retryAfter = noteInfraFailure(laneOf(watcher), failure, watcher.name)
-      // A run that never reached the model spent nothing, so the
-      // runsPerHour slot comes back too — letting doomed attempts eat the
-      // budget would defer REAL work for an hour once the outage lifts.
-      // (Same reasoning as the pre-claim refunds above.)
-      refundLaunch(launchStamp)
+      // A run that never reached the model spent nothing, so the runsPerHour
+      // slot comes back — letting doomed attempts eat the budget would defer
+      // REAL work for an hour once the outage lifts.
+      //
+      // UNLESS the transport cannot say that. A channel listener starts the
+      // ambient session before it acknowledges, so a lost acknowledgement
+      // means work may be running right now; refunding there let a task
+      // whose acks keep timing out launch forever outside the spend cap. The
+      // sender reports `dispatched: 'no'` only for a connection that never
+      // opened, and anything it cannot vouch for keeps its slot.
+      if ((thrown as {dispatched?: string} | undefined)?.dispatched !== 'unknown') {
+        refundLaunch(launchStamp)
+      }
       // DURABLE STATE FIRST, note second. The note is keyed by the attempt
       // number this write rolls back, so if the note lands and this does
       // not, the task keeps its claimed attempt — and the stale sweep's
@@ -689,7 +686,15 @@ export const createEngine = (deps: EngineDeps) => {
       const claimStamp = now()
       log(`[${watcher.name}] claiming ${sourceId} ${logPreview(block.content)} (${decision.reason}, attempt ${attempt})`)
       await graph.setTaskProps(sourceId, {
-        status: 'running', watcher: watcher.name, executor: runner.executor, attempts: attempt, nowMs: claimStamp,
+        status: 'running', watcher: watcher.name, executor: runner.executor, attempts: attempt,
+        // A deferral left its reason and its due time on the block; claiming
+        // it is when they stop being true. The spawn path would clear them
+        // on its terminal write anyway, but a CHANNEL task's lifecycle is
+        // finished by the ambient session, which only sets `agent:status` —
+        // so a retried one stayed `done` while still carrying "waiting to
+        // retry" and a retry-after for anything reading the graph.
+        error: null, retryAfter: null,
+        nowMs: claimStamp,
       })
 
       // Claim-verify: re-read and confirm OUR claim stuck — defends only
@@ -849,10 +854,9 @@ export const createEngine = (deps: EngineDeps) => {
       // spend slot and the attempt would replay work that already happened.
       //
       // DEPENDS ON a runner contract: `resultText` is the ANSWER and is
-      // empty on a failed run, while the CLI's error goes to `failureText`.
-      // runClaude used to put its error envelope in both, which made every
-      // out-of-credits failure read as an answer and parked exactly what
-      // this path exists to defer. Pinned by runner.test.ts's "fails when
+      // empty on a failed run, while the CLI's error goes to `failureText` —
+      // never both, or an out-of-credits failure reads as an answer and gets
+      // parked instead of deferred. Pinned by runner.test.ts's "fails when
       // the envelope reports is_error even with exit 0".
       watch.observeResult(result)
 
@@ -891,8 +895,8 @@ export const createEngine = (deps: EngineDeps) => {
       } else if (failure?.retryable && !watch.modelResponded) {
         // NOT a task failure — the run never got to attempt it (out of
         // credits, expired login, rate limited, network down). Parking it
-        // `error` here is what turned a single credit outage into a queue
-        // of dead tasks.
+        // `error` here turns one credit outage into a queue of dead tasks,
+        // because the daemon keeps picking work up.
         await deferForRetry(
           failure,
           truncate(result.stderr.trim() || result.failureText.trim() || `exit ${result.exitCode}`, 200),
@@ -939,10 +943,9 @@ export const createEngine = (deps: EngineDeps) => {
         // questions, and this branch answers the first. A run that reached
         // the model and then died on a transport error keeps its attempt and
         // its spend slot — replaying it would repeat work — but the
-        // transport is still broken, and calling that lane healthy let a
-        // persistent disconnect bill and terminally fail the entire queue
-        // without ever backing off, which is the failure this whole path
-        // exists to prevent.
+        // transport is still broken. Calling that lane healthy would let a
+        // persistent disconnect terminally fail the whole queue without ever
+        // backing off.
         //
         // So: a retryable CAUSE cools the lane even when the task is
         // terminal. Only a genuine task failure — the model answered and the
@@ -982,7 +985,7 @@ export const createEngine = (deps: EngineDeps) => {
         // Best-effort: if the defer itself can't be written the block stays
         // `running` and the stale sweep re-queues it, which is the same
         // fallback the parking path has always had.
-        await deferForRetry(startupFailure, reason)
+        await deferForRetry(startupFailure, reason, {}, error)
           .catch(deferError => log(`[${watcher.name}] could not defer ${sourceId}: ${errorMessage(deferError)}`))
         throw error
       }

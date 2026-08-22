@@ -3055,6 +3055,92 @@ describe('retryable infrastructure failures (out of credits, expired login, netw
     expect(state.cursors.get('inbox')).toEqual([])   // the rows are held, not lost
   })
 
+  it('keeps the spend slot when the transport cannot say the work did not start', async () => {
+    // The listener starts the session before it acknowledges. A lost ack
+    // means work may be running now, so refunding let a task whose acks keep
+    // timing out launch forever outside the hourly cap.
+    const {graph} = fakeGraph({
+      backlinks: [{id: 'b-1'}],
+      blocks: {'b-1': {content: '[[claude]] ambient task'}},
+    })
+    const state = memoryState()
+    const deliverToChannel = vi.fn(async () => {
+      throw Object.assign(
+        withRunFailure('channel listener replied 503', {kind: 'network', retryable: true, label: 'network'}),
+        {dispatched: 'unknown'},
+      )
+    })
+    const engine = engineWith({
+      graph, state, deliverToChannel,
+      config: parseConfig({
+        watchers: [{kind: 'backlinks', name: 'ambient', target: 'claude', quietMs: 0, delivery: 'channel'}],
+      }),
+    })
+
+    await engine.tick()
+    await engine.drain()
+
+    expect(state.launches).toHaveLength(1)
+  })
+
+  it('gives the slot back when the connection never opened', async () => {
+    const {graph} = fakeGraph({
+      backlinks: [{id: 'b-1'}],
+      blocks: {'b-1': {content: '[[claude]] ambient task'}},
+    })
+    const state = memoryState()
+    const deliverToChannel = vi.fn(async () => {
+      throw Object.assign(
+        withRunFailure('channel listener unreachable', {kind: 'network', retryable: true, label: 'network'}),
+        {dispatched: 'no'},
+      )
+    })
+    const engine = engineWith({
+      graph, state, deliverToChannel,
+      config: parseConfig({
+        watchers: [{kind: 'backlinks', name: 'ambient', target: 'claude', quietMs: 0, delivery: 'channel'}],
+      }),
+    })
+
+    await engine.tick()
+    await engine.drain()
+
+    expect(state.launches).toEqual([])
+  })
+
+  it('clears the deferral reason when the task is re-claimed', async () => {
+    // A channel task's lifecycle is finished by the ambient session, which
+    // only sets agent:status — so without this a retried one stayed `done`
+    // while still carrying "waiting to retry" and a retry-after.
+    const {graph, blocks} = fakeGraph({
+      backlinks: [{id: 'b-1'}],
+      blocks: {
+        'b-1': {
+          content: '[[claude]] ambient task',
+          properties: {
+            [PROPS.status]: 'queued', [PROPS.retryAfter]: NOW - 1_000,
+            [PROPS.error]: 'out of credits — waiting to retry', [PROPS.watcher]: 'ambient',
+          },
+        },
+      },
+    })
+    const engine = engineWith({
+      graph, deliverToChannel: vi.fn(async () => {}),
+      config: parseConfig({
+        runsPerHour: 100,
+        watchers: [{kind: 'backlinks', name: 'ambient', target: 'claude', quietMs: 0, delivery: 'channel'}],
+      }),
+    })
+
+    await engine.tick()
+    await engine.drain()
+
+    const props = blocks.get('b-1')!.properties!
+    expect(props[PROPS.status]).toBe('running')
+    expect(props[PROPS.error]).toBe('')
+    expect(props[PROPS.retryAfter]).toBe(0)
+  })
+
   it('a genuine run failure still parks the task and does not arm a cooldown', async () => {
     const {graph, blocks} = fakeGraph({
       backlinks: [{id: 'b-1'}, {id: 'b-2'}],
