@@ -9,10 +9,13 @@ const pnpm = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm'
 // branch checked out in it, so a clean tree at current master can sit over a
 // weeks-old install — git refreshes package.json and the lockfile, nothing
 // re-runs install. `--frozen-lockfile` also DOWNGRADES a package left newer than
-// the branch asks for; that is the same invariant, not a regression.
+// the branch asks for; that is the same invariant, not a regression. Keep the
+// purge flag: tasks here are spawned with no stdin, and an install that has to
+// recreate node_modules aborts without a TTY — which would hard-fail the gate on
+// exactly the stale worktrees this step exists to repair.
 const installTask = {
   name: 'install',
-  args: ['install', '--frozen-lockfile'],
+  args: ['install', '--frozen-lockfile', '--config.confirm-modules-purge=false'],
 }
 
 const compileTask = {
