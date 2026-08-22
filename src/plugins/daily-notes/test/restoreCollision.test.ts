@@ -11,7 +11,7 @@
  * rather than more coverage of the get-or-create contract.
  */
 
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChangeScope } from '@/data/api'
 import { aliasesProp } from '@/data/properties'
 import { PAGE_TYPE } from '@/data/blockTypes'
@@ -22,9 +22,11 @@ import { aliasDataExtension } from '@/plugins/alias/dataExtension.js'
 import { referencesDataExtension } from '@/plugins/references/dataExtension.js'
 import {
   dailyNoteBlockId,
+  dailyNoteIso,
   dailyNotesDataExtension,
   getOrCreateDailyNote,
 } from '@/plugins/daily-notes'
+import { dailyNoteDateProp } from '@/plugins/daily-notes/schema.js'
 
 const WS = 'ws-1'
 const ISO = '2026-04-28'
@@ -43,6 +45,7 @@ beforeEach(async () => {
   }).repo
   repo.setActiveWorkspaceId(WS)
 })
+afterEach(() => { vi.restoreAllMocks() })
 
 /** The shape `ensureDailyNoteTarget` leaves behind when a `[[2026-04-28]]`
  *  wikilink resolves before anyone opens the day: content IS the ISO text,
@@ -71,6 +74,39 @@ const squatterOwning = async (alias: string): Promise<void> => {
     await tx.setProperty('squatter', aliasesProp, [alias])
   }, {scope: ChangeScope.BlockDefault})
 }
+
+describe('reading a day\'s identity', () => {
+  it('ignores a date field on a page that is not the day it names', async () => {
+    // `daily-note:date` is globally registered, so any block can adopt it
+    // through the "+ Field" picker. Trusting it on a block whose id is not the
+    // derived one for that day hands an ordinary page the date arrows, and
+    // makes global prev/next step relative to whatever it holds.
+    await repo.tx(async tx => {
+      await tx.create({id: 'ordinary', workspaceId: WS, parentId: null, orderKey: 'a',
+        content: 'Some page'})
+      await tx.setProperty('ordinary', dailyNoteDateProp, new Date(`${ISO}T00:00:00Z`))
+    }, {scope: ChangeScope.BlockDefault})
+    const block = await repo.load('ordinary')
+
+    expect(dailyNoteIso({
+      id: 'ordinary', workspaceId: WS,
+      date: dailyNoteDateProp.codec.decode(block!.properties[dailyNoteDateProp.name]),
+      aliases: [],
+    })).toBeNull()
+  })
+
+  it('opens a contested day for a viewer instead of failing to repair it', async () => {
+    // A day that yielded a canonical alias leaves `needsRepair` true on every
+    // later call. Without a read-only short-circuit the repair transaction
+    // throws `ReadOnlyError` and the viewer cannot open the page at all.
+    await squatterOwning(LONG)
+    const note = await getOrCreateDailyNote(repo, WS, ISO)
+    vi.spyOn(repo, 'isReadOnly', 'get').mockReturnValue(true)
+
+    await expect(getOrCreateDailyNote(repo, WS, ISO)).resolves.toBeDefined()
+    expect(await repo.load(note.id)).not.toBeNull()
+  })
+})
 
 describe('opening a day whose name another page owns', () => {
   it('creates the day rather than dying on the contested name', async () => {

@@ -189,6 +189,19 @@ export const getOrCreateDailyNote = async (
   }
 
   const live = await repo.load(id)
+
+  // Read-only: GET, never create or repair — the same ergonomic guard
+  // `getOrCreateKernelPage` carries, and for a sharper reason here. A day that
+  // yielded one of its canonical aliases leaves `needsRepair` true on EVERY
+  // later call, so without this a viewer opening such a day gets `ReadOnlyError`
+  // out of the repair tx instead of the page. Placed after the occupant read
+  // and behind `refuseForeign`: being unable to write is not entitlement to
+  // read another workspace's block under this workspace's identity.
+  if (repo.isReadOnly) {
+    if (live) refuseForeign(live)
+    return repo.block(id)
+  }
+
   if (live) {
     refuseForeign(live)
     const aliases = stringListProperty(live.properties[aliasesProp.name])
@@ -368,6 +381,14 @@ export const dailyNoteIso = (
     for (const candidate of [fromDate, fromAlias]) {
       if (candidate !== null && dailyNoteBlockId(workspaceId, candidate) === id) return candidate
     }
+    // Identity was checkable and neither candidate passed, so the date cell is
+    // not this block's identity — it is an ordinary field value. Any block can
+    // adopt `daily-note:date` through the "+ Field" picker, and trusting it
+    // here hands a normal page the date arrows and makes global prev/next step
+    // relative to whatever it holds. The alias still stands on its own: it is
+    // what identified daily notes before the property existed, and rows that
+    // old predate the derived id too.
+    return fromAlias
   }
   return fromDate ?? fromAlias
 }
