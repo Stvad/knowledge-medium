@@ -880,24 +880,25 @@ describe('ensureTarget (materialising a get-or-create target)', () => {
     expect(ensureTarget).not.toHaveBeenCalled()
   })
 
-  it('materialises in the workspace the policy chose, not the captured one', async () => {
-    // A policy may retarget only the workspace; the navigation keeps that
-    // choice, so creating against the captured workspace would put the page in
-    // one workspace and navigate its id through another's layout. The ensure
-    // throws once it has recorded the workspace, so no navigation is left in
-    // flight past the test.
-    const err = vi.spyOn(console, 'error').mockImplementation(() => {})
-    try {
-      retargetTo({workspaceId: 'ws-policy-chose'})
-      const seen: string[] = []
-      openBlockFromEvent(
-        env.repo, fakeMouseEvent() as unknown as OpenerEvent, {blockId: 'b-derived', workspaceId: WS},
-        {ensureTarget: async ws => { seen.push(ws); throw new Error('stop here') }},
-      )
-      await vi.waitFor(() => { expect(seen).toEqual(['ws-policy-chose']) })
-    } finally {
-      err.mockRestore()
-    }
+  it('a policy that retargets only the WORKSPACE materialises nothing', async () => {
+    // `repo.isReadOnly` is one flag for the ACTIVE workspace, so an ensure
+    // aimed elsewhere cannot judge its own eligibility — and a
+    // workspace-derived id resolves to a different block there, which would
+    // overwrite the blockId the policy chose. So the gesture goes where the
+    // policy said and writes nothing.
+    retargetTo({workspaceId: 'ws-policy-chose'})
+    const ensureTarget = vi.fn(async () => ({id: 'b-never'}))
+    const e = fakeMouseEvent()
+    openBlockFromEvent(
+      env.repo, e as unknown as OpenerEvent, {blockId: 'b-derived', workspaceId: WS},
+      {ensureTarget},
+    )
+    // Gated, so this reached the navigate path rather than bailing early — and
+    // the ensure decision is made before any await, so the negative is complete.
+    expect(e.preventDefault).toHaveBeenCalled()
+    expect(ensureTarget).not.toHaveBeenCalled()
+    // It landed in the policy's workspace, so nothing shows up in this one.
+    expect(await currentPanelBlockIds()).toEqual([])
   })
 
   it('click: a throwing ensure is logged, not an unhandled rejection', async () => {

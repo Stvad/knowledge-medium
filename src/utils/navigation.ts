@@ -674,12 +674,20 @@ export interface NavigationEnsureOptions {
 }
 
 /** Execute a resolved navigation, materialising the target first — but ONLY
- *  when the decision still points at the block the caller named. A
- *  `navigationIntentVerb` policy that retargeted the gesture is going somewhere
+ *  when the decision still names the caller's block IN the caller's workspace.
+ *  A `navigationIntentVerb` policy that retargeted either is going somewhere
  *  else, and `ensureTarget` MUTATES: running it would create a page nobody then
  *  navigates to, and awaiting it would let a slow or failing create block a
  *  navigation that no longer depends on it. Never rejects, matching the
  *  fire-and-forget contract of every caller.
+ *
+ *  The WORKSPACE half is not symmetry for its own sake. `repo.isReadOnly` is one
+ *  flag for the active workspace, so a get-or-create aimed at another one cannot
+ *  judge its own eligibility: it would skip the write for an editable target, or
+ *  mint a page a viewer can't upload. And a workspace-derived id (every kernel
+ *  page) resolves to a DIFFERENT block there, which would then overwrite the
+ *  very blockId the policy chose. Narrowed rather than re-checked, so writes
+ *  stay inside the workspace the user has open.
  *
  *  The INTENT seam only, deliberately: a `navigationVerb` decorator that
  *  redirects or vetoes at EXECUTION time sees a target already materialised.
@@ -692,14 +700,11 @@ const navigateEnsuringTarget = async (
   requested: {blockId: string; workspaceId: string},
   ensureTarget: EnsureNavigationTarget | undefined,
 ): Promise<NavigationResult | null> => {
-  if (!ensureTarget || input.blockId !== requested.blockId) return navigate(repo, input)
+  const retargeted =
+    input.blockId !== requested.blockId || input.workspaceId !== requested.workspaceId
+  if (!ensureTarget || retargeted) return navigate(repo, input)
   try {
-    // In the workspace the DECISION names: a policy may have retargeted only
-    // that, and materialising against the captured one would create the page in
-    // one workspace and navigate its id through another's layout. The fallback
-    // is defence in depth — `resolveNavigationIntent` already carries the
-    // gesture's workspace into a decision that omitted one, so no test pins it.
-    const ensured = await ensureTarget(input.workspaceId ?? requested.workspaceId)
+    const ensured = await ensureTarget(requested.workspaceId)
     // Validated rather than trusted: `ensureTarget` reaches untypechecked
     // callers through `apiCatalog`, and a bad id here reads as a blank panel
     // several frames away instead of failing at the boundary.
