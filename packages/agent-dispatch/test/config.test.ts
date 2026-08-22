@@ -4,6 +4,17 @@ import path from 'node:path'
 import {configSchema, parseConfig} from '../src/config'
 
 describe('parseConfig', () => {
+  it('refuses a channel port fetch will not connect to', () => {
+    // `new URL` accepts these, so only the request fails — locally and
+    // identically every time, which the retry path reads as a transport
+    // outage and defers forever. Caught HERE so it reports as the config
+    // error it is (clean exit, no launchd restart loop) and is found while
+    // reading the config, even when no watcher uses channel delivery.
+    expect(() => parseConfig({watchers: [], channelPort: 6000})).toThrow(/refuses to connect/)
+    expect(() => parseConfig({watchers: [], channelPort: 70_000})).toThrow()
+    expect(parseConfig({watchers: [], channelPort: 8791}).channelPort).toBe(8791)
+  })
+
   it('applies defaults for a minimal mention-watcher config', () => {
     const config = parseConfig({
       watchers: [{kind: 'backlinks', name: 'claude-mentions', target: 'claude'}],

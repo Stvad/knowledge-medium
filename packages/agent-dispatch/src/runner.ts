@@ -69,6 +69,11 @@ export interface AgentRunResult {
   exitCode: number | null
   timedOut: boolean
   stderr: string
+  /** The executor's OWN error message for a FAILED run (empty on success,
+   *  and empty when the failure produced none). Kept separate from
+   *  `resultText` so runFailure.ts can classify credits/auth/rate-limit/
+   *  network causes without ever reading the assistant's answer. */
+  failureText: string
   /** Parsed --output-format json envelope (null if unparseable). */
   raw: Record<string, unknown> | null
 }
@@ -236,6 +241,13 @@ export const createStreamJsonParser = (onEvent?: (event: RunEvent) => void) => {
       if (eventType === 'content_block_start') {
         const contentBlock = streamEvent.content_block as Record<string, unknown> | undefined
         if (contentBlock?.type === 'tool_use') activityForToolUse(contentBlock)
+        // Extended thinking spends tokens and emits no text, so a run that
+        // only thought before losing its connection looked like nothing had
+        // happened and was replayed. Reported HERE rather than taught to a
+        // consumer: the parser is the only thing that sees the transcript.
+        // codex labels its own reasoning the same way.
+        else if (contentBlock?.type === 'server_tool_use') activityForToolUse(contentBlock)
+        else if (contentBlock?.type === 'thinking') emit({kind: 'activity', label: 'Thinking'})
         return
       }
       if (eventType === 'content_block_delta') {
@@ -328,11 +340,19 @@ export const runClaude = async (
 
   return {
     ok,
-    resultText: parsed?.resultText ?? '',
+    // On a FAILED run the `result` line carries claude's own error text
+    // rather than an answer ("Claude AI usage limit reached|…", "Credit
+    // balance is too low", …), so it belongs in `failureText` ONLY.
+    // Putting it in both — as this did — makes it indistinguishable from a
+    // billed reply, and a caller asking "did this run reach the model?"
+    // then reads every credits/auth failure as a delivered answer. codex's
+    // runner already keeps the two apart; this matches it.
+    resultText: ok ? (parsed?.resultText ?? '') : '',
     sessionId: parser.sessionId(),
     exitCode,
     timedOut,
     stderr,
+    failureText: ok ? '' : (parsed?.resultText ?? ''),
     raw: parsed?.raw ?? null,
   }
 }

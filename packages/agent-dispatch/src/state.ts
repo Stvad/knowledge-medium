@@ -18,9 +18,12 @@ interface StateData {
   /** Per-backlink-watcher first-tick timestamp: blocks edited before it
    *  are pre-existing content and never become tasks. */
   backlinkBaselines: Record<string, number>
+  /** Per-query-watcher count of ACKNOWLEDGED deliveries — see
+   *  StateStore.getDeliveryGeneration. */
+  deliveryGenerations: Record<string, number>
 }
 
-const emptyState = (): StateData => ({queryCursors: {}, launchTimes: [], backlinkBaselines: {}})
+const emptyState = (): StateData => ({queryCursors: {}, launchTimes: [], backlinkBaselines: {}, deliveryGenerations: {}})
 
 const normalizeState = (value: unknown): StateData => {
   const state = emptyState()
@@ -46,6 +49,12 @@ const normalizeState = (value: unknown): StateData => {
       if (typeof ms === 'number' && Number.isFinite(ms)) state.backlinkBaselines[name] = ms
     }
   }
+  const generations = (value as {deliveryGenerations?: unknown}).deliveryGenerations
+  if (generations && typeof generations === 'object') {
+    for (const [name, n] of Object.entries(generations as Record<string, unknown>)) {
+      if (typeof n === 'number' && Number.isFinite(n)) state.deliveryGenerations[name] = n
+    }
+  }
   return state
 }
 
@@ -53,6 +62,22 @@ export interface StateStore {
   /** null = never seen (first run baselines without firing). */
   getCursor: (watcherName: string) => Promise<string[] | null>
   setCursor: (watcherName: string, ids: string[]) => Promise<void>
+  /** How many query deliveries this watcher has had ACKNOWLEDGED.
+   *
+   *  Part of a channel delivery's identity, so that identity means "this
+   *  delivery" rather than "these row ids". The cursor deliberately forgets
+   *  ids past MAX_CURSOR_IDS, so the same rows can legitimately become new
+   *  again much later — and with only the ids in the key, the listener would
+   *  answer that recurrence `duplicate` and the work would be dropped in
+   *  silence. Bumped only after an acknowledged delivery, so a transport
+   *  retry of one delivery keeps its id. */
+  getDeliveryGeneration: (watcherName: string) => Promise<number>
+  /** Record an acknowledged delivery: bump the generation AND advance the
+   *  cursor, as one write. Separately they can disagree — a failure or a
+   *  crash between them leaves a bumped generation over an old cursor, and
+   *  the next tick then re-delivers the same rows under a FRESH id, which
+   *  walks past the receiver's dedup and repeats the work. */
+  commitDelivery: (watcherName: string, ids: string[]) => Promise<void>
   /** null = watcher never ticked (first tick sets it without firing). */
   getBaseline: (watcherName: string) => Promise<number | null>
   setBaseline: (watcherName: string, ms: number) => Promise<void>
@@ -101,6 +126,13 @@ export const createStateStore = (filePath: string): StateStore => {
 
   return {
     getCursor: async name => (await load()).queryCursors[name] ?? null,
+    getDeliveryGeneration: async name => (await load()).deliveryGenerations[name] ?? 0,
+    commitDelivery: async (name, ids) => {
+      const state = await load()
+      state.deliveryGenerations[name] = (state.deliveryGenerations[name] ?? 0) + 1
+      state.queryCursors[name] = ids
+      await persist(state)
+    },
     setCursor: async (name, ids) => {
       const state = await load()
       state.queryCursors[name] = ids
