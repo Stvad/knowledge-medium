@@ -105,7 +105,12 @@ const RETRYABLE_SIGNALS: ReadonlyArray<{kind: Exclude<RunFailureKind, 'task'>, p
   {
     // `claudeBin`/`codexBin` isn't on the daemon's PATH — the classic
     // launchd-has-a-different-PATH failure, which otherwise marks every
-    // task in the queue failed. Matched in the SPAWN-error shape node
+    // task in the queue failed.
+    //
+    // A missing working DIRECTORY raises the same ENOENT and is a permanent
+    // configuration error, not this transient. It never reaches here: the
+    // spawn site recognises it and reports it in its own words, because only
+    // the spawn site can tell the two apart. Matched in the SPAWN-error shape node
     // produces (`spawn claude ENOENT`) rather than on a bare ENOENT: a
     // codex run with shell access can print "ENOENT" for its own reasons,
     // and that is a genuine task failure.

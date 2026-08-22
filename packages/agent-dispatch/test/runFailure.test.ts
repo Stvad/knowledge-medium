@@ -115,6 +115,21 @@ describe('classifyRunFailure', () => {
   })
 })
 
+describe('a missing working directory is not the missing-binary transient', () => {
+  it('stays terminal, though node reports it with the same ENOENT', () => {
+    // Deferred it would never succeed, and it would cool the shared executor
+    // lane on every attempt, throttling watchers whose directories are fine.
+    expect(classifyRunFailure(signals({stderr: 'working directory does not exist: /nope'})))
+      .toMatchObject({kind: 'task', retryable: false})
+  })
+
+  it('leaves the real missing-binary case retryable', () => {
+    // The launchd-PATH transient this daemon exists to survive.
+    expect(classifyRunFailure(signals({stderr: 'spawn claude ENOENT'})))
+      .toMatchObject({kind: 'executor', retryable: true})
+  })
+})
+
 describe('a thrower that states its own cause', () => {
   it('is believed over its rendered message', () => {
     // The whole point: the daemon knows it got a 503 or an abort, so the

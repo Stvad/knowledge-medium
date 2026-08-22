@@ -62,6 +62,12 @@ export const STALE_RUNNING_MS = 30 * 60_000
  *  crashing or the ambient channel session keeps dropping the event. */
 export const MAX_ATTEMPTS = 3
 
+/** How long a claimed task stays its owner's alone. Past this the owner has
+ *  demonstrably not taken it — whatever the reason — and any watcher that
+ *  can see it may. Same constant as the stale-`running` sweep, which is the
+ *  same judgement: this has been sitting long enough to be abandoned. */
+export const OWNER_LEASE_MS = STALE_RUNNING_MS
+
 export interface PendingArgs {
   source: BlockView
   nowMs: number
@@ -74,13 +80,9 @@ export interface PendingArgs {
    *  the user leave the block, or its settle window elapsed) — skip the
    *  clock-based still-typing gate. Baseline/status gates still apply. */
   quietExempt?: boolean
-  /** The watcher asking. With `knownWatchers`, this keeps a re-claim with
-   *  the watcher that made the original claim. */
+  /** The watcher asking. A claimed task is its owner's to re-claim, for a
+   *  while — see `OWNER_LEASE_MS`. */
   watcherName?: string
-  /** Every CONFIGURED watcher name. Ownership is only enforced while the
-   *  recorded owner still exists: a renamed or deleted watcher would
-   *  otherwise strand its tasks forever, since nothing would match. */
-  knownWatchers?: ReadonlySet<string>
 }
 
 /**
@@ -99,30 +101,33 @@ export interface PendingArgs {
  * - wait out the quiet period so half-typed requests aren't claimed.
  */
 export const decidePending = (
-  {source, nowMs, quietMs = 0, baselineMs, quietExempt = false, watcherName, knownWatchers}: PendingArgs,
+  {source, nowMs, quietMs = 0, baselineMs, quietExempt = false, watcherName}: PendingArgs,
 ): PendingDecision => {
   if (prop(source, PROPS.reply)) return {pending: false, reason: 'is-reply'}
 
-  // A task that has been CLAIMED belongs to the watcher that claimed it. A
-  // block can be visible to several watchers, and a re-claim — a due
+  // A claimed task is its owner's to re-claim, but as a LEASE rather than a
+  // lock. A block can be visible to several watchers, and a re-claim — a due
   // deferral, or a stale `running` — would otherwise go to whichever scanned
   // first and run under a different prompt, executor and allowedTools than
-  // the work started with. The permissions half is the part that matters:
-  // a task begun by a narrow watcher must not resume under a broad one.
+  // the work began with; a task started by a narrow watcher must not resume
+  // under a broad one.
   //
-  // Only while the owner EXISTS. A renamed or deleted watcher leaves tasks
-  // nothing would ever match, and stranding them is worse than the reassign
-  // this prevents. An explicit Retry clears `agent:watcher`, which is how a
-  // person reassigns one deliberately.
+  // The lease EXPIRES because there are many ways an owner stops scanning a
+  // block and no way to tell them apart from here: renamed, deleted, or
+  // still named the same with a different target or kind. Asking "does that
+  // name still exist" answered only the first, and left the others queued
+  // for good. Waiting instead asks the question that actually matters — has
+  // the owner had a fair chance and not taken it — which is the same
+  // question, and the same constant, the stale-`running` sweep already uses.
   //
-  // Unclaimed blocks are deliberately untouched by this: two watchers racing
-  // for a fresh mention is by design, and claim-verify settles it.
+  // Unclaimed blocks are untouched: two watchers racing for a fresh mention
+  // is by design, and claim-verify settles it. An explicit Retry clears
+  // `agent:watcher` for deliberate reassignment.
   const owner = prop(source, PROPS.watcher)
-  if (
-    watcherName && typeof owner === 'string' && owner && owner !== watcherName
-    && knownWatchers?.has(owner)
-  ) {
-    return {pending: false, reason: 'other-watcher'}
+  if (watcherName && typeof owner === 'string' && owner && owner !== watcherName) {
+    const updatedAt = prop(source, PROPS.updatedAt)
+    const heldFor = typeof updatedAt === 'number' ? nowMs - updatedAt : Number.POSITIVE_INFINITY
+    if (heldFor < OWNER_LEASE_MS) return {pending: false, reason: 'other-watcher'}
   }
 
   const status = taskStatus(source)

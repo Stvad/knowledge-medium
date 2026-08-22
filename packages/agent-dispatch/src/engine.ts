@@ -237,8 +237,6 @@ export const createEngine = (deps: EngineDeps) => {
      *  once per watcher per tick. */
     logged: number
   }
-  /** Every configured watcher name — see decidePending's ownership rule. */
-  const knownWatchers: ReadonlySet<string> = new Set(config.watchers.map(watcher => watcher.name))
   const cooldowns = new Map<string, Cooldown>()
   /** How many times each lane has been armed, ever. Kept OUTSIDE `cooldowns`
    *  so it survives a clear, and monotonic so it can order two events that
@@ -465,7 +463,7 @@ export const createEngine = (deps: EngineDeps) => {
       if (!found) return null
       const pending = decidePending({
         source: found, nowMs: now(), quietMs: watcher.quietMs, baselineMs, quietExempt,
-        watcherName: watcher.name, knownWatchers,
+        watcherName: watcher.name,
       })
       if (!pending.pending) return null
       // A Stop on a DEFERRED task that landed after the scan's batched
@@ -1133,7 +1131,7 @@ export const createEngine = (deps: EngineDeps) => {
       const quietExempt = quietExemptBlockIds.has(source.id)
       const preview = decidePending({
         source: view, nowMs: now(), quietMs: watcher.quietMs, baselineMs, quietExempt,
-        watcherName: watcher.name, knownWatchers,
+        watcherName: watcher.name,
       })
 
       if (preview.reason === 'attempts-exhausted') {

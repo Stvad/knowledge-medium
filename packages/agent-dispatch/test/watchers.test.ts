@@ -5,6 +5,7 @@ import {
   findThreadSession,
   MAX_ATTEMPTS,
   MAX_CURSOR_IDS,
+  OWNER_LEASE_MS,
   STALE_RUNNING_MS,
   type BlockView,
 } from '../src/watchers'
@@ -242,45 +243,55 @@ describe('diffQueryRows', () => {
   })
 })
 
-describe('a claimed task belongs to the watcher that claimed it', () => {
-  const deferred = (owner: string) => ({
+describe('a claimed task is its owner\'s, on a lease', () => {
+  const NOW = 1_000_000
+  const deferred = (owner: string, claimedAt: number) => ({
     id: 'b-1',
     properties: {
-      [PROPS.status]: 'queued', [PROPS.retryAfter]: 0, [PROPS.watcher]: owner,
+      [PROPS.status]: 'queued', [PROPS.retryAfter]: 0,
+      [PROPS.watcher]: owner, [PROPS.updatedAt]: claimedAt,
     },
   })
-  const known = new Set(['claude-mentions', 'codex-mentions'])
 
-  it('refuses a due deferral to a DIFFERENT watcher that still exists', () => {
+  it('refuses a due deferral to a DIFFERENT watcher while the lease holds', () => {
     // Its prompt, its executor, its allowedTools. A task begun by a narrow
     // watcher must not resume under a broad one.
     expect(decidePending({
-      source: deferred('claude-mentions'), nowMs: 1_000,
-      watcherName: 'codex-mentions', knownWatchers: known,
+      source: deferred('claude-mentions', NOW - 60_000), nowMs: NOW,
+      watcherName: 'codex-mentions',
     })).toMatchObject({pending: false, reason: 'other-watcher'})
   })
 
-  it('still fires it for its own watcher', () => {
+  it('still fires it for its own watcher, lease or not', () => {
     expect(decidePending({
-      source: deferred('claude-mentions'), nowMs: 1_000,
-      watcherName: 'claude-mentions', knownWatchers: known,
+      source: deferred('claude-mentions', NOW - 60_000), nowMs: NOW,
+      watcherName: 'claude-mentions',
     })).toMatchObject({pending: true, reason: 'retry-due'})
   })
 
-  it('releases a task whose owner no longer exists, rather than stranding it', () => {
-    // A renamed or deleted watcher would otherwise leave tasks nothing can
-    // ever match — worse than the reassignment the rule prevents.
+  it('releases it once the owner has had its chance and not taken it', () => {
+    // Covers every reason an owner stops scanning a block — renamed,
+    // deleted, or still named the same with a different target — without
+    // having to tell them apart, which from here is not possible.
     expect(decidePending({
-      source: deferred('retired-watcher'), nowMs: 1_000,
-      watcherName: 'codex-mentions', knownWatchers: known,
+      source: deferred('retired-watcher', NOW - OWNER_LEASE_MS - 1), nowMs: NOW,
+      watcherName: 'codex-mentions',
+    })).toMatchObject({pending: true, reason: 'retry-due'})
+  })
+
+  it('releases one with no claim stamp rather than holding it for ever', () => {
+    expect(decidePending({
+      source: {id: 'b-1', properties: {
+        [PROPS.status]: 'queued', [PROPS.retryAfter]: 0, [PROPS.watcher]: 'gone',
+      }},
+      nowMs: NOW, watcherName: 'codex-mentions',
     })).toMatchObject({pending: true, reason: 'retry-due'})
   })
 
   it('leaves an UNCLAIMED block racy, as designed', () => {
     expect(decidePending({
-      source: {id: 'b-1', editedAtMs: 1_000},
-      nowMs: 1_000, watcherName: 'codex-mentions', knownWatchers: known,
+      source: {id: 'b-1', editedAtMs: NOW},
+      nowMs: NOW, watcherName: 'codex-mentions',
     })).toMatchObject({pending: true})
   })
 })
-
