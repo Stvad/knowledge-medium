@@ -233,6 +233,25 @@ describe('Repo.workspaceViewGap', () => {
     })
   })
 
+  it('reports no gap for this device\'s own undrained echo', async () => {
+    // THE case that decides whether a long uploading pass can finish. Every
+    // local write comes back down the stream and re-stages, and a delivery
+    // lands unapplied by default — so counting flagged-but-still-queued rows
+    // would make the pass refuse on its own progress, which is the bug the
+    // queue predicate's benign-echo exclusion exists to prevent. The queue arm
+    // owns rows the drain has not reached; this one owns rows it could not
+    // apply.
+    const repo = makeRepo()
+    await repo.tx(async tx => {
+      await tx.create({workspaceId: WS, parentId: null, orderKey: 'a0', content: 'mine'})
+    }, {scope: ChangeScope.BlockDefault})
+    const [{id}] = await sharedDb.db.getAll<{id: string}>('SELECT id FROM blocks LIMIT 1')
+    await deliver(syncedRow({id, content: 'mine', updatedAt: await localStamp(id)}))
+
+    expect(await sharedDb.db.getAll('SELECT seq FROM blocks_synced_changes')).toHaveLength(1)
+    expect(await repo.workspaceViewGap(WS)).toBeNull()
+  })
+
   it('reports no gap once the drain has resolved them', async () => {
     const repo = makeRepo()
     await deliverAndConsumeQueue(syncedRow({id: 'arrived', updatedAt: 5}))

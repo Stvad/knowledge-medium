@@ -253,6 +253,15 @@ export const STAGED_SCAN_LIMIT = 10_000
  * see, and a second predicate approximating the first from outside is how the
  * two come to disagree.
  *
+ * A row still in the QUEUE is not this arm's business, and excluding it is not
+ * an optimization — it is what keeps the two predicates from double-counting.
+ * Every delivery lands unapplied by default, so a device that is merely WRITING
+ * has its own echoes sitting flagged until the drain judges them; counted here
+ * they would make a long uploading pass refuse on its own progress, which is
+ * exactly the bug {@link STAGED_VIEW_GAP_SQL}'s benign-echo exclusion exists to
+ * prevent. So the queue arm owns rows the drain has not reached, this one owns
+ * rows it reached and could not apply, and the two are disjoint by construction.
+ *
  * CHEAP, unlike the join it replaced: `idx_blocks_synced_needs_apply` holds
  * only unapplied rows, so the healthy answer is an empty range. That is what
  * lets every caller ask it at the same altitude — once before a pass AND again
@@ -264,8 +273,9 @@ export const STAGED_SCAN_LIMIT = 10_000
  */
 export const WORKSPACE_UNAPPLIED_SQL = `
   SELECT COUNT(*) AS behind FROM (
-    SELECT 1 FROM blocks_synced
-     WHERE workspace_id = ? AND needs_apply = 1
+    SELECT 1 FROM blocks_synced s
+     WHERE s.workspace_id = ? AND s.needs_apply = 1
+       AND NOT EXISTS (SELECT 1 FROM blocks_synced_changes c WHERE c.id = s.id)
      LIMIT ?
   )`
 
@@ -292,31 +302,30 @@ export const WORKSPACE_UNAPPLIED_COUNT_CAP = 1_000
  * acked edit that `decideStagingRow` would APPLY over, not skip, and its echo
  * re-delivers and re-judges it anyway.
  *
- * CHUNKED by the caller, which is why the row set is bounded here rather than
- * by a WHERE alone: the population it exists for is the one this whole redesign
- * is about — a device holding hundreds of thousands of staged rows — and its
- * two correlated subqueries run on the boot path. Bind `[limit]`.
+ * ONE statement, deliberately, even at the 320k-row scale it exists for: it
+ * runs once, at boot, with nothing else contending for the write lock, and was
+ * measured at 296ms there on native SQLite. A chunked version needs a
+ * termination signal, and the two cheap ones are both unavailable — PowerSync
+ * exposes no affected-row count, and `changes()` is per-connection while reads
+ * and writes may not share one. Counting the remaining rows per chunk instead
+ * makes the pass quadratic, which is how it was written first and why this note
+ * exists.
  */
 export const SEED_STAGING_NEEDS_APPLY_SQL = `
   UPDATE blocks_synced SET needs_apply = 0
-   WHERE id IN (
-     SELECT s.id FROM blocks_synced s
-      WHERE s.needs_apply = 1
-        AND (
-              EXISTS (
-                SELECT 1 FROM blocks b
-                 WHERE b.id = s.id AND b.updated_at <> 0 AND b.updated_at = s.updated_at
-              )
-              OR (
-                s.deleted = 1
-                AND COALESCE((SELECT b.deleted FROM blocks b WHERE b.id = s.id), 1) = 1
-              )
-            )
-      LIMIT ?
-   )
+   WHERE needs_apply = 1
+     AND (
+           EXISTS (
+             SELECT 1 FROM blocks b
+              WHERE b.id = blocks_synced.id
+                AND b.updated_at <> 0
+                AND b.updated_at = blocks_synced.updated_at
+           )
+           OR (
+             blocks_synced.deleted = 1
+             AND COALESCE(
+                   (SELECT b.deleted FROM blocks b WHERE b.id = blocks_synced.id), 1
+                 ) = 1
+           )
+         )
 `
-
-/** Rows per {@link SEED_STAGING_NEEDS_APPLY_SQL} statement. Matches the drain's
- *  own `STAGING_READ_CHUNK`: same table, same worst-case scale, same reason —
- *  no single unbounded write holding the lock. */
-export const SEED_STAGING_NEEDS_APPLY_CHUNK = 500
