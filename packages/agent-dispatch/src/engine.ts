@@ -932,11 +932,23 @@ export const createEngine = (deps: EngineDeps) => {
           retryAfter: null,
           nowMs: now(),
         })
-        // A run that failed on its own merits still REACHED the model, so
-        // the infrastructure is evidently fine — drop any cooldown a
-        // previous outage left armed. A cancel proves nothing either way,
-        // so it leaves the cooldown alone.
-        if (!cancelled) clearInfraCooldown(laneOf(watcher), laneAtLaunch)
+        // "Do not replay this task" and "the lane is healthy" are DIFFERENT
+        // questions, and this branch answers the first. A run that reached
+        // the model and then died on a transport error keeps its attempt and
+        // its spend slot — replaying it would repeat work — but the
+        // transport is still broken, and calling that lane healthy let a
+        // persistent disconnect bill and terminally fail the entire queue
+        // without ever backing off, which is the failure this whole path
+        // exists to prevent.
+        //
+        // So: a retryable CAUSE cools the lane even when the task is
+        // terminal. Only a genuine task failure — the model answered and the
+        // run failed on its own merits — proves the infrastructure is fine.
+        // A cancel proves nothing either way and leaves the lane alone.
+        if (!cancelled) {
+          if (failure?.retryable) noteInfraFailure(laneOf(watcher), failure, watcher.name)
+          else clearInfraCooldown(laneOf(watcher), laneAtLaunch)
+        }
         log(`[${watcher.name}] ${cancelled ? 'CANCELLED' : 'FAILED'} ${sourceId}: ${reason}${result.sessionId ? ` (session ${result.sessionId})` : ''}`)
       }
     } catch (error) {
@@ -1308,7 +1320,11 @@ export const createEngine = (deps: EngineDeps) => {
       // a tool — before dying is not an un-attempt, so it must not hand its
       // spend slot back or re-fire its rows.
       if (!failure.retryable || watch.modelResponded) {
-        clearInfraCooldown(lane, laneAtLaunch)
+        // Same split as the mention path: these rows must not re-fire, but a
+        // retryable cause still means the transport is broken and the lane
+        // should back off.
+        if (failure.retryable) noteInfraFailure(lane, failure, watcher.name)
+        else clearInfraCooldown(lane, laneAtLaunch)
         log(`[${watcher.name}] FAILED${session ? ` (session ${session})` : ''}: exit ${result.exitCode} ${truncate(result.stderr.trim())}`)
         return
       }

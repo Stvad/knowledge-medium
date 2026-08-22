@@ -2894,6 +2894,64 @@ describe('retryable infrastructure failures (out of credits, expired login, netw
     expect(reconciles.at(-1)?.markdown).toContain('retrying automatically')
   })
 
+  it('still cools the lane when a run reaches the model and then the transport dies', async () => {
+    // "Do not replay this task" and "the lane is healthy" are different
+    // questions. A run that answered and then hit ECONNRESET keeps its
+    // attempt — replaying would repeat work — but the transport is still
+    // broken, and calling the lane healthy let a persistent disconnect bill
+    // and terminally fail the whole queue without ever backing off.
+    const {graph, blocks} = fakeGraph({
+      backlinks: [{id: 'b-1'}, {id: 'b-2'}],
+      blocks: {'b-1': {content: '[[claude]] one'}, 'b-2': {content: '[[claude]] two'}},
+    })
+    const time = clock()
+    const engine = engineWith({
+      graph, now: time.now,
+      config: mentionConfig({maxConcurrent: 1, runsPerHour: 100}),
+      runTask: vi.fn(async () => okRun({
+        ok: false, resultText: 'most of an answer', sessionId: null,
+        exitCode: 1, stderr: 'ECONNRESET', failureText: 'ECONNRESET',
+      })),
+    })
+
+    await engine.tick()
+    await engine.drain()
+    expect(blocks.get('b-1')?.properties?.[PROPS.status]).toBe('error')   // not replayed
+
+    // ...but the lane backed off, so b-2 is not fed into the same transport.
+    await engine.tick()
+    await engine.drain()
+    expect(blocks.get('b-2')?.properties).toEqual({})
+  })
+
+  it('cools the lane for a QUERY run that reached the model before the transport died', async () => {
+    const {graph} = fakeGraph()
+    graph.sqlAll = vi.fn(async () => [{id: 'a'}, {id: 'b'}])
+    const state = memoryState()
+    state.cursors.set('inbox', ['a'])
+    let nowMs = NOW
+    const time = {now: () => nowMs, advance: (ms: number) => { nowMs += ms }}
+    const runTask = vi.fn(async () => okRun({
+      ok: false, resultText: 'most of an answer', exitCode: 1,
+      stderr: 'ECONNRESET', failureText: 'ECONNRESET',
+    }))
+    const engine = engineWith({
+      graph, state, runTask, now: time.now,
+      config: parseConfig({watchers: [{kind: 'query', name: 'inbox', sql: 'SELECT id FROM blocks'}]}),
+    })
+
+    await engine.tick()
+    await engine.drain()
+    expect(state.cursors.get('inbox')).toEqual(['a', 'b'])   // not re-fired
+
+    // A new row arrives; the cooled lane must hold it rather than feed the
+    // same broken transport again.
+    graph.sqlAll = vi.fn(async () => [{id: 'a'}, {id: 'b'}, {id: 'c'}])
+    await engine.tick()
+    await engine.drain()
+    expect(runTask).toHaveBeenCalledTimes(1)
+  })
+
   it('a genuine run failure still parks the task and does not arm a cooldown', async () => {
     const {graph, blocks} = fakeGraph({
       backlinks: [{id: 'b-1'}, {id: 'b-2'}],

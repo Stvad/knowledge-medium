@@ -10,6 +10,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { createGraphMcpServer } from '@knowledge-medium/agent-cli/mcpServer'
 import { BLOCKED_WIKILINKS_ENV, createBlockedWikilinkWriteGuard, decodeBlockedWikilinks } from './blockedWikilinks.js'
 import { CHANNEL_PORT_ENV, CHANNEL_SECRET_HEADER, loadOrCreateChannelSecret } from './channelSecret.js'
+import { createDeliveryDedup } from './deliveryDedup.js'
 
 const channelPort = Number(process.env[CHANNEL_PORT_ENV] ?? '') || null
 const blockedWikilinks = decodeBlockedWikilinks(process.env[BLOCKED_WIKILINKS_ENV])
@@ -37,10 +38,7 @@ await server.connect(new StdioServerTransport())
 if (channelPort) {
   const secret = await loadOrCreateChannelSecret()
 
-  /** Delivery ids already dispatched, so a sender's retry of one we have
-   *  already handed to the session is dropped rather than run twice. */
-  const deliveredIds = new Set<string>()
-  const DELIVERED_IDS_MAX = 500
+  const dedup = createDeliveryDedup()
 
   const listener = http.createServer((request, response) => {
     if (request.method !== 'POST') {
@@ -79,22 +77,26 @@ if (channelPort) {
           // DELIVERED_IDS_MAX and a restart of this process forgets
           // everything. It covers the retry window, which is the case that
           // actually occurs; a sender with no id is never deduplicated.
-          const eventId = meta?.event_id
-          if (eventId && deliveredIds.has(eventId)) {
+          // Claimed BEFORE the await below, not after: `notification` waits
+          // for the stdio transport to drain, and that wait can outlast the
+          // sender's 10s timeout. Claiming afterwards left the first request
+          // in flight with nothing claimed, so the retry sailed past this
+          // check and queued the SAME notification again — both landing when
+          // stdout drained, and the session doing the work twice.
+          if (!dedup.claim(meta?.event_id)) {
             response.writeHead(200).end('duplicate')
             return
           }
+          // The claim is NOT released if this throws. Once the write has
+          // begun there is no way to know from here whether the session saw
+          // it, and this system prefers work that needs re-triggering over
+          // work that runs twice: the sender's retry is answered
+          // `duplicate`, the block stays `running`, and the stale sweep
+          // re-queues it under a fresh id — the documented recovery.
           await server.server.notification({
             method: 'notifications/claude/channel',
             params: {content: parsed.content, ...(meta ? {meta} : {})},
           })
-          if (eventId) {
-            deliveredIds.add(eventId)
-            // Oldest-first eviction; Set preserves insertion order.
-            if (deliveredIds.size > DELIVERED_IDS_MAX) {
-              deliveredIds.delete(deliveredIds.values().next().value as string)
-            }
-          }
           response.writeHead(200).end('ok')
         } catch {
           response.writeHead(400).end('expected JSON {content, meta?}')
