@@ -54,13 +54,13 @@ const deliver = (d: BlockData) =>
 /** A local `blocks` row with no processor run and no synced counterpart —
  *  the shape a row has mid-drain, and the only way to exercise one staged
  *  clause without a sibling clause firing first. */
-const seedLocal = (id: string, updatedAt: number) =>
+const seedLocal = (id: string, updatedAt: number, deleted = false) =>
   sharedDb.db.writeTransaction(async tx => {
     await tx.execute(
       `INSERT INTO blocks (id, workspace_id, parent_id, order_key, content, properties_json,
          created_at, updated_at, user_updated_at, created_by, updated_by, deleted)
-       VALUES (?, ?, NULL, 'a0', 'v', '{}', 1, ?, ?, 'u', 'u', 0)`,
-      [id, WS, updatedAt, updatedAt])
+       VALUES (?, ?, NULL, 'a0', 'v', '{}', 1, ?, ?, 'u', 'u', ?)`,
+      [id, WS, updatedAt, updatedAt, deleted ? 1 : 0])
   })
 
 const localStamp = async (id: string): Promise<number> =>
@@ -185,19 +185,6 @@ describe('Repo.syncViewGap', () => {
     expect(await repo.syncViewGap()).toMatch(/draining/)
   })
 
-  it('reports a gap while a queue-blind workspace rescan is outstanding', async () => {
-    // Wiring only — that the predicate ASKS the observer. What the answer
-    // means (set at enqueue, cleared on settle, never set by a queue drain)
-    // is pinned against a real observer in `syncObserver/observer.test.ts`;
-    // reproducing it here would mean holding a rescan open across an awaited
-    // read, which is a race, not a test.
-    const repo = makeRepo()
-    expect(await repo.syncViewGap()).toBeNull()
-    ;(repo as unknown as {syncObserver: unknown}).syncObserver =
-      {isRematerializingWorkspace: () => true}
-    expect(await repo.syncViewGap()).toMatch(/re-materialization/)
-  })
-
   it('reports a gap for a staged delete whose row still matches stamp-for-stamp', async () => {
     // Isolates the `c.op = 'delete'` clause: synced row present, local row
     // present, stamps equal — I1 would call this identical content and skip.
@@ -269,6 +256,25 @@ describe('Repo.workspaceViewGap', () => {
     expect(await repo.workspaceViewGap(WS)).toBeNull()
   })
 
+  it('ignores a newer tombstone over a row already tombstoned locally', async () => {
+    // Both sides gone: applying it would change nothing a live-row scan sees.
+    // Reachable as an edit-then-delete whose delete version cannot be decoded,
+    // and left counted it blocks the workspace forever over a dead row.
+    const repo = makeRepo()
+    await seedLocal('deleted-both-sides', 4, true)
+    await deliverAndConsumeQueue(syncedRow({id: 'deleted-both-sides', updatedAt: 9, deleted: true}))
+    expect(await repo.workspaceViewGap(WS)).toBeNull()
+  })
+
+  it('reports a newer tombstone whose local row is still live', async () => {
+    // The other side of the same conjunct: the passes can still see this block
+    // and the server says it is gone, so their view really is wrong.
+    const repo = makeRepo()
+    await seedLocal('deleted-upstream-only', 4)
+    await deliverAndConsumeQueue(syncedRow({id: 'deleted-upstream-only', updatedAt: 9, deleted: true}))
+    expect((await repo.workspaceViewGap(WS))?.transient).toBe(false)
+  })
+
   it('reports no gap once those rows are in `blocks`', async () => {
     const repo = makeRepo()
     await deliverAndConsumeQueue(syncedRow({id: 'arrived', updatedAt: 5}))
@@ -282,6 +288,25 @@ describe('Repo.workspaceViewGap', () => {
     const repo = makeRepo()
     await deliverAndConsumeQueue(syncedRow({id: 'other', workspaceId: 'ws-other', updatedAt: 5}))
     expect(await repo.workspaceViewGap(WS)).toBeNull()
+  })
+
+  it('reports a gap while a queue-blind rescan of THIS workspace is outstanding', async () => {
+    // Wiring only — that the predicate asks the observer, and asks about the
+    // workspace it was given. What the answer means (set at enqueue, cleared on
+    // settle, never set by a queue drain) is pinned against a real observer in
+    // `syncObserver/observer.test.ts`; reproducing it here would mean holding a
+    // rescan open across an awaited read, which is a race, not a test.
+    const repo = makeRepo()
+    expect(await repo.workspaceViewGap(WS)).toBeNull()
+    ;(repo as unknown as {syncObserver: unknown}).syncObserver = {
+      isRematerializingWorkspace: (id: string) => id === 'ws-elsewhere',
+      leftBehindEpoch: () => 0,
+    }
+
+    expect(await repo.workspaceViewGap(WS)).toBeNull()
+    expect(await repo.workspaceViewGap('ws-elsewhere')).toEqual({
+      reason: expect.stringMatching(/re-materialization/), transient: true,
+    })
   })
 
   it('asks the in-flight predicate first, so one call is the whole question', async () => {

@@ -97,13 +97,25 @@ export interface BlocksSyncedObserver {
    *  REJECTS if the pass did not finish — see {@link startBlocksSyncedObserver}'s
    *  enqueue. */
   drainWorkspace(workspaceId: string): Promise<void>
-  /** Is a {@link drainWorkspace} pass outstanding (running OR queued behind
-   *  another unit)? The one thing a reader cannot learn from the queue: that
-   *  path rewrites `blocks` straight from `blocks_synced` and stages nothing,
-   *  so `blocks_synced_changes` is empty throughout. `Repo.syncViewGap` reads
-   *  it — the observer's own in-flight state, which is what `clientSchema.ts`
-   *  asks for in place of proxying one of its inputs. */
-  isRematerializingWorkspace(): boolean
+  /** Is a {@link drainWorkspace} pass for `workspaceId` outstanding (running OR
+   *  queued behind another unit)? The one thing a reader cannot learn from the
+   *  queue: that path rewrites `blocks` straight from `blocks_synced` and
+   *  stages nothing, so `blocks_synced_changes` is empty throughout. The
+   *  observer's own in-flight state, which is what `clientSchema.ts` asks for
+   *  in place of proxying one of its inputs.
+   *
+   *  Per WORKSPACE, not device-wide: a rescan of the workspace someone just
+   *  navigated away from would otherwise refuse every pass on the one they are
+   *  in now, for as long as it runs. */
+  isRematerializingWorkspace(workspaceId: string): boolean
+  /** Bumped every time a drain window leaves a row of `workspaceId`
+   *  unmaterialized — deferred or quarantined. Monotone and O(1): a caller
+   *  snapshots it and compares later to learn whether this device fell behind
+   *  DURING its pass. That is the same question
+   *  `WORKSPACE_MATERIALIZATION_GAP_SQL` answers from disk, and the reason this
+   *  exists is that the disk answer is a full scan and the re-ask happens
+   *  inside a write transaction. */
+  leftBehindEpoch(workspaceId: string): number
   /** Stop the subscription. Idempotent. */
   dispose(): void
 }
@@ -174,8 +186,11 @@ export const startBlocksSyncedObserver = (
   let disposed = false
   let unsubscribe: (() => void) | null = null
   let chain: Promise<void> = Promise.resolve()
-  /** Outstanding {@link drainWorkspace} passes — the queue-blind path. */
-  let workspaceRescans = 0
+  /** Outstanding {@link drainWorkspace} passes per workspace — the queue-blind
+   *  path — and, per workspace, how many drain windows have left a row of it
+   *  unmaterialized. Both are read by the view-gap predicates on `Repo`. */
+  const workspaceRescans = new Map<string, number>()
+  const leftBehind = new Map<string, number>()
 
   /** §4.7 detection-only telemetry. One bounded, truncation-safe scan per
    *  workspace whose parent_id mutations might have closed a loop. A scan
@@ -214,6 +229,9 @@ export const startBlocksSyncedObserver = (
     removed: readonly string[],
   ): Promise<void> => {
     const outcome = await materializeStagingRows(db, { upserted, removed }, deps)
+    for (const workspaceId of outcome.leftBehind) {
+      leftBehind.set(workspaceId, (leftBehind.get(workspaceId) ?? 0) + 1)
+    }
     await applyOutcome(outcome)
   }
 
@@ -318,9 +336,11 @@ export const startBlocksSyncedObserver = (
     // promise, which settles on every exit including the disposed one, so the
     // count cannot leak; the derived promise gets its own handler because
     // `done` alone is what we hand back.
-    workspaceRescans += 1
+    const bump = (by: number) =>
+      workspaceRescans.set(workspaceId, (workspaceRescans.get(workspaceId) ?? 0) + by)
+    bump(1)
     const done = enqueue(() => materializeWorkspace(workspaceId))
-    void done.finally(() => { workspaceRescans -= 1 }).catch(() => {})
+    void done.finally(() => bump(-1)).catch(() => {})
     return done
   }
 
@@ -340,7 +360,9 @@ export const startBlocksSyncedObserver = (
   return {
     flush,
     drainWorkspace,
-    isRematerializingWorkspace: () => workspaceRescans > 0,
+    isRematerializingWorkspace: (workspaceId: string) =>
+      (workspaceRescans.get(workspaceId) ?? 0) > 0,
+    leftBehindEpoch: (workspaceId: string) => leftBehind.get(workspaceId) ?? 0,
     dispose() {
       if (disposed) return
       disposed = true

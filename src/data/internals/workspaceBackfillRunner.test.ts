@@ -355,6 +355,34 @@ describe('workspace backfill runner — sync gating', () => {
     expect(runs).toContain(WS)
   })
 
+  it('aborts a batch once rows were left unmaterialized after the pass started', async () => {
+    // A pass runs for minutes. A row that becomes unmaterializable AFTER the
+    // pre-claim scan — an evicted key, a delivery that will not decode — is
+    // deferred and its queue entry consumed, so the per-batch sync check reads
+    // clear again for every batch that follows. Re-asking the durable question
+    // from disk here would put a scan of every downloaded row inside the write
+    // lock; the observer's counter answers it in O(1).
+    //
+    // The observer is stubbed because this repo runs without one — what the
+    // counter MEANS is pinned against a real observer in
+    // `syncObserver/observer.test.ts`.
+    const runs: string[] = []
+    const repo = makeRepo(probeBackfill(runs))
+    await seedTarget(repo)
+    ;(repo as unknown as {syncObserver: unknown}).syncObserver = {
+      isRematerializingWorkspace: () => false,
+      // Still 0 at the preflight snapshot and at the pre-scan check; moves the
+      // moment the pass starts, so the check inside its write tx is the one
+      // that has to catch it.
+      leftBehindEpoch: () => runs.length,
+    }
+
+    await drain(repo)
+
+    expect(runs).toEqual([WS])                       // it started
+    expect((await repo.load('target'))?.properties['probe:mark']).toBeUndefined()
+  })
+
   it('defers per DEVICE, not per backfill', async () => {
     // The gap is a property of the device, so every remaining pass would defer
     // identically — and `arm()` only de-dupes a PARKED gate, which this path's

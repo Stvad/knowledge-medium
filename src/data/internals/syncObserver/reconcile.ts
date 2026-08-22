@@ -260,24 +260,29 @@ export const STAGED_SCAN_LIMIT = 10_000
  * pass over a graph with unreadable blocks in it should refuse, and keep
  * refusing, rather than migrate what it happens to be able to read.
  *
- * Deliberately NARROWER than its sibling in two places, because this answer is
- * durable and drives a "waiting will not help" verdict, where over-reporting
- * would be a lie rather than a cheap safety margin:
- *   - a staged TOMBSTONE with no local row is not a gap. No pass can see the
- *     block either way, and a corrupt one would otherwise block the workspace
- *     forever over a row nothing reads.
- *   - only the SERVER being ahead counts (`s.updated_at > b.updated_at`), not
- *     the sibling's `<>`. A local row that is newer is an unsent edit whose
- *     echo will settle it, which is exactly the transient over-report the
- *     sibling can afford and this one cannot.
- * `b.updated_at = 0` stays a gap in both: it is I2's speculative-mint sentinel,
- * where the local row always yields regardless of stamps.
+ * Deliberately NARROWER than its sibling, because this answer is durable and
+ * drives a "waiting will not help" verdict, where over-reporting would be a lie
+ * rather than a cheap safety margin. Two conjuncts, and both are needed:
+ *
+ *   1. `blocks` is BEHIND — missing the row, holding I2's `0` sentinel (a
+ *      speculative mint, which always yields), or holding an older stamp. Only
+ *      the SERVER being ahead counts, not the sibling's `<>`: a newer local row
+ *      is an unsent edit whose own upload echo settles it.
+ *   2. and applying it would CHANGE what a live-row scan sees. Every protected
+ *      pass reads `deleted = 0`, so a row tombstoned on both sides is invisible
+ *      either way — and counted, one corrupt tombstone would block the
+ *      workspace forever over something nothing reads. A tombstone whose local
+ *      row is still LIVE stays a gap: the passes can see it and the server says
+ *      it is gone. `COALESCE(b.deleted, 1)` reads a missing local row as
+ *      already-absent, which is what it is.
  *
  * EXPENSIVE, unlike its sibling: `blocks_synced` carries no index but its
  * primary key (a passive landing zone by design), and the healthy answer is
  * zero, so the scan cannot short-circuit and every one of the workspace's
  * downloaded rows is read. That is why it is not folded into the per-
- * transaction predicate — call it ONCE, before a pass, not per batch.
+ * transaction predicate — call it ONCE, before a pass, not per batch. What a
+ * pass falls behind on WHILE it runs is answered in memory instead, by
+ * `BlocksSyncedObserver.leftBehindEpoch`.
  *
  * Bind `[workspaceId, cap]`; `cap` bounds only the COUNT (so a wholly
  * unmaterialized workspace stops counting early), never the coverage.
@@ -287,10 +292,8 @@ export const WORKSPACE_MATERIALIZATION_GAP_SQL = `
     SELECT 1 FROM blocks_synced s
       LEFT JOIN blocks b ON b.id = s.id
      WHERE s.workspace_id = ?
-       AND (
-              (b.id IS NULL AND s.deleted = 0)
-           OR (b.id IS NOT NULL AND (b.updated_at = 0 OR s.updated_at > b.updated_at))
-           )
+       AND (b.id IS NULL OR b.updated_at = 0 OR s.updated_at > b.updated_at)
+       AND (s.deleted = 0 OR COALESCE(b.deleted, 1) = 0)
      LIMIT ?
   )`
 

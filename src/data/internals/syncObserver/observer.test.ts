@@ -225,16 +225,36 @@ describe('blocksSyncedObserver — the queue-blind rescan is observable', () => 
     const { observer } = start({ getMaterializability: constMat('copy') })
 
     const queued = observer.flush()
-    expect(observer.isRematerializingWorkspace()).toBe(false)
+    expect(observer.isRematerializingWorkspace('ws')).toBe(false)
     await queued
-    expect(observer.isRematerializingWorkspace()).toBe(false)
+    expect(observer.isRematerializingWorkspace('ws')).toBe(false)
 
     // Set at ENQUEUE, not at the first window: a rescan waiting its turn on the
     // chain will still rewrite `blocks` before any consumer hears otherwise.
     const rescan = observer.drainWorkspace('ws')
-    expect(observer.isRematerializingWorkspace()).toBe(true)
+    expect(observer.isRematerializingWorkspace('ws')).toBe(true)
+    // And scoped to it: someone who navigated to another workspace must not be
+    // refused for the whole of this one's rescan.
+    expect(observer.isRematerializingWorkspace('ws-other')).toBe(false)
     await rescan
-    expect(observer.isRematerializingWorkspace()).toBe(false)
+    expect(observer.isRematerializingWorkspace('ws')).toBe(false)
+  })
+
+  it('counts windows that left a row of a workspace unmaterialized', async () => {
+    // The in-memory half of the durable question, for the re-ask that happens
+    // inside a write transaction where the disk answer is a full scan.
+    await put(data({ id: 'b1', workspaceId: 'ws', content: 'c1' }))
+    let mode: Materializability = 'copy'
+    const { observer } = start({ getMaterializability: () => mode })
+    await observer.flush()
+    expect(observer.leftBehindEpoch('ws')).toBe(0)
+
+    mode = 'defer'
+    await put(data({ id: 'b2', workspaceId: 'ws', content: 'c2' }))
+    await observer.flush()
+
+    expect(observer.leftBehindEpoch('ws')).toBe(1)
+    expect(observer.leftBehindEpoch('ws-other')).toBe(0)
   })
 
   it('rejects a rescan the observer was disposed before it ever started', async () => {

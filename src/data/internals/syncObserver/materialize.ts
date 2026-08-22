@@ -156,6 +156,12 @@ export interface MaterializeOutcome {
   readonly quarantined: readonly string[]
   /** Ids hard-deleted from `blocks`. */
   readonly deleted: readonly string[]
+  /** Workspaces this pass left at least one row UNMATERIALIZED in — deferred or
+   *  quarantined. The id lists say which rows; this says whose VIEW the pass
+   *  failed to advance, which is the question a one-way pass running alongside
+   *  the drain has to re-ask per transaction and cannot afford to answer from
+   *  disk (`WORKSPACE_MATERIALIZATION_GAP_SQL` is a full scan). */
+  readonly leftBehind: readonly string[]
 }
 
 interface ApplyCandidate {
@@ -299,6 +305,7 @@ export const materializeStagingRows = async (
   const deferred: string[] = []
   const skippedStale: string[] = []
   const quarantined: string[] = []
+  const leftBehindWorkspaces = new Set<string>()
 
   const stagingRows = await readStagingRows(db, change.upserted, readChunkSize)
 
@@ -326,6 +333,7 @@ export const materializeStagingRows = async (
     const materializability = await resolveMaterializability(row.workspace_id)
     if (materializability === 'defer') {
       deferred.push(row.id)
+      leftBehindWorkspaces.add(row.workspace_id)
       continue
     }
     const localRow = localGateRowById.get(row.id)
@@ -353,6 +361,7 @@ export const materializeStagingRows = async (
       // copy-through never reaches here (decodeFromWire is identity for 'none').
       console.warn(`[materializeStagingRows] quarantined undecryptable block ${row.id}:`, err)
       quarantined.push(row.id)
+      leftBehindWorkspaces.add(row.workspace_id)
       continue
     }
     candidates.push({ plaintext, stagingUpdatedAt: row.updated_at, materializability })
@@ -363,7 +372,7 @@ export const materializeStagingRows = async (
   const deleted: string[] = []
 
   if (candidates.length === 0 && change.removed.length === 0) {
-    return { snapshots, applied, deferred, skippedStale, quarantined, deleted }
+    return { snapshots, applied, deferred, skippedStale, quarantined, deleted, leftBehind: [...leftBehindWorkspaces] }
   }
 
   // ── Phase 2 (inside the write tx): authoritative re-gate, then write. ──
@@ -524,5 +533,5 @@ export const materializeStagingRows = async (
     }
   }
 
-  return { snapshots, applied, deferred, skippedStale, quarantined, deleted }
+  return { snapshots, applied, deferred, skippedStale, quarantined, deleted, leftBehind: [...leftBehindWorkspaces] }
 }
