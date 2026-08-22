@@ -18,12 +18,14 @@
  *
  * The prev/next actions need to figure out "what daily note is this
  * panel showing right now" so the offset is relative. We do that by
- * walking ancestors of the panel's top-level block and looking for a
- * page whose `aliases` list contains an ISO-shaped date — that's the
- * canonical alias for a daily note, written by `getOrCreateDailyNote`
- * via `dailyPageAliases`. Falling back to `todayIso()` when nothing in
- * the ancestor chain is a daily note keeps the shortcuts functional
- * from any view.
+ * walking ancestors of the panel's top-level block and asking
+ * `dailyNoteIso` about each — which reads the typed `daily-note:date`
+ * property and the ISO alias, and confirms either against the block's
+ * deterministic id. Not the alias alone: a day whose ISO name another
+ * page claims has yielded it, and would then anchor prev/next to TODAY
+ * rather than to the day on screen. Falling back to `todayIso()` when
+ * nothing in the ancestor chain is a daily note keeps the shortcuts
+ * functional from any view.
  *
  * Originally lived in `src/shortcuts/defaultShortcuts.ts` alongside
  * the rest of the kernel action set; extracted here so the daily-notes

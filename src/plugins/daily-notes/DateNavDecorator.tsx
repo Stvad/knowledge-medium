@@ -14,9 +14,12 @@
  *
  *  Gate shape follows the `blockContentDecoratorsFacet` contract: the
  *  contribution decides only structural things (`isFocalRender`), and
- *  "is this block a daily note" is decided INSIDE the component from a
- *  reactive `aliases` read — so a block that gains or loses its ISO alias
- *  picks the arrows up (or drops them) without a decorator re-resolve.
+ *  "is this block a daily note" is decided INSIDE the component, reactively,
+ *  so a block that becomes or stops being one picks the arrows up (or drops
+ *  them) without a decorator re-resolve. Both inputs `dailyNoteIso` weighs are
+ *  read reactively for that reason — the typed date property AND the aliases.
+ *  Neither is redundant: a day whose ISO name another page claims has yielded
+ *  it, and would lose its arrows on an alias-only read.
  */
 import { useCallback, type ComponentType } from 'react'
 import { ChevronLeft, ChevronRight, type LucideIcon } from 'lucide-react'
