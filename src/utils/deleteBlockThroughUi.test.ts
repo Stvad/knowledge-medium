@@ -113,14 +113,17 @@ describe('bulk-delete confirmation', () => {
   })
 
   it('counts a block and its own descendant once', async () => {
-    // A selection can hold both; the delete visits each row once, so the
-    // number the user is shown has to as well.
+    // A selection can hold both; the delete visits each row once, so the count
+    // has to as well. Sized so double-counting the overlap crosses the
+    // threshold and deduping does not: the subtree is one short of it, and the
+    // child is picked up a second time by being selected in its own right.
     await repo.mutate.createChild({parentId: 'root', id: 'parent', content: 'parent'})
-    await repo.mutate.createChild({parentId: 'parent', id: 'kid', content: 'kid'})
+    const kids = await seedChildren('parent', BULK_DELETE_CONFIRM_THRESHOLD - 2, 'kid')
 
-    expect(await deleteBlocksThroughUi([repo.block('parent'), repo.block('kid')])).toBe(true)
-    // 2 affected blocks, not 3 — below the threshold, so no dialog at all.
+    expect(await deleteBlocksThroughUi([repo.block('parent'), repo.block(kids[0])])).toBe(true)
+
     expect(getDialogQueue()).toHaveLength(0)
+    expect(await isBlockDeleted(repo, kids[0])).toBe(true)
   })
 
   it('asks BEFORE starting the view transition', async () => {
