@@ -95,6 +95,16 @@ const stubViewport = (matches: boolean) => {
   })
 }
 
+const fakeMouseEvent = (
+  mods: Partial<{shiftKey: boolean; altKey: boolean; metaKey: boolean; ctrlKey: boolean; button: number}> = {},
+) => ({
+  shiftKey: false, altKey: false, metaKey: false, ctrlKey: false, button: 0,
+  ...mods,
+  stopPropagation: vi.fn(),
+  preventDefault: vi.fn(),
+})
+type OpenerEvent = Parameters<typeof openBlockFromEvent>[1]
+
 describe('navigate', () => {
   it("target 'main' creates the main panel when the layout is empty", async () => {
     navigate(env.repo, {blockId: 'b-main', target: 'main'})
@@ -707,31 +717,28 @@ describe('navigationIntentVerb (intent policy seam)', () => {
 })
 
 describe('applyNavigationDecision (DOM routing)', () => {
-  // The single place that gates `preventDefault` for a clickable surface. A fake
-  // event with spied stopPropagation/preventDefault lets the node-env suite cover
-  // the native-vs-veto distinction that `useBlockOpener` delegates here.
-  const fakeClick = () => ({stopPropagation: vi.fn(), preventDefault: vi.fn()})
-  type ClickArg = Parameters<typeof applyNavigationDecision>[1]
-
+  // Retained for extension click surfaces that resolve their own decision; the
+  // in-repo openers gate and navigate separately, so this covers the applier's
+  // own native-vs-veto routing rather than `useBlockOpener`'s.
   it('passthrough: declines the event so the browser follows the href', async () => {
-    const e = fakeClick()
-    applyNavigationDecision(env.repo, e as unknown as ClickArg, PASSTHROUGH)
+    const e = fakeMouseEvent()
+    applyNavigationDecision(env.repo, e as unknown as OpenerEvent, PASSTHROUGH)
     expect(e.preventDefault).not.toHaveBeenCalled()
     expect(e.stopPropagation).not.toHaveBeenCalled()
     expect(await currentPanelBlockIds()).toEqual([])
   })
 
   it('suppress (veto): owns the event and no-ops — href is suppressed, no navigation', async () => {
-    const e = fakeClick()
-    applyNavigationDecision(env.repo, e as unknown as ClickArg, SUPPRESS)
+    const e = fakeMouseEvent()
+    applyNavigationDecision(env.repo, e as unknown as OpenerEvent, SUPPRESS)
     expect(e.preventDefault).toHaveBeenCalled()
     expect(e.stopPropagation).toHaveBeenCalled()
     expect(await currentPanelBlockIds()).toEqual([])
   })
 
   it('navigate: owns the event and runs the in-app navigation', async () => {
-    const e = fakeClick()
-    applyNavigationDecision(env.repo, e as unknown as ClickArg, goTo({blockId: 'b-go', target: 'main', workspaceId: WS}))
+    const e = fakeMouseEvent()
+    applyNavigationDecision(env.repo, e as unknown as OpenerEvent, goTo({blockId: 'b-go', target: 'main', workspaceId: WS}))
     expect(e.preventDefault).toHaveBeenCalled()
     expect(e.stopPropagation).toHaveBeenCalled()
     await vi.waitFor(async () => {
@@ -744,16 +751,6 @@ describe('openBlockFromEvent (useBlockOpener wiring)', () => {
   // Exercises the opener-click logic end to end (gesture build → resolve →
   // applyNavigationDecision) without a React render — the most user-facing path
   // the PR touches, otherwise only covered piecewise.
-  const fakeMouseEvent = (
-    mods: Partial<{shiftKey: boolean; altKey: boolean; metaKey: boolean; ctrlKey: boolean; button: number}> = {},
-  ) => ({
-    shiftKey: false, altKey: false, metaKey: false, ctrlKey: false, button: 0,
-    ...mods,
-    stopPropagation: vi.fn(),
-    preventDefault: vi.fn(),
-  })
-  type OpenerEvent = Parameters<typeof openBlockFromEvent>[1]
-
   it('plain follow-link click owns the event and navigates', async () => {
     const e = fakeMouseEvent()
     openBlockFromEvent(env.repo, e as unknown as OpenerEvent, {blockId: 'b-open', workspaceId: WS})
@@ -804,6 +801,137 @@ describe('openBlockFromEvent (useBlockOpener wiring)', () => {
     const e = fakeMouseEvent()
     openBlockFromEvent(env.repo, e as unknown as OpenerEvent, {blockId: 'b-x'})
     expect(e.preventDefault).not.toHaveBeenCalled()
+  })
+})
+
+describe('ensureTarget (materialising a get-or-create target)', () => {
+  // For surfaces whose block id is DERIVED rather than looked up: the row may
+  // not exist yet, so it has to be created before the navigation lands on it —
+  // without giving up the click's synchronous event gating, and without paying
+  // for a page the gesture is no longer going to open.
+  const deferredTarget = () => {
+    let release: (block: {id: string}) => void = () => {}
+    const settled = new Promise<{id: string}>(resolve => { release = resolve })
+    return {ensure: vi.fn(() => settled), release}
+  }
+  const retargetTo = (input: Partial<{blockId: string; workspaceId: string}>) => {
+    env.repo.setRuntimeContributions(navigationIntentVerb.decoratorsFacet, 'test-policy', [
+      next => gesture => {
+        const decision = next(gesture) as NavigationDecision
+        return decision.kind === 'navigate' ? goTo({...decision.input, ...input}) : decision
+      },
+    ])
+  }
+
+  it('click: owns the event before the target exists, then lands on the ensured block', async () => {
+    const e = fakeMouseEvent()
+    const target = deferredTarget()
+    openBlockFromEvent(env.repo, e as unknown as OpenerEvent, {blockId: 'b-derived', workspaceId: WS}, {
+      plainClick: 'navigator', ensureTarget: target.ensure,
+    })
+    // Gating after the await would be too late: ancestor handlers have already
+    // run and the default action is committed.
+    expect(e.preventDefault).toHaveBeenCalled()
+    expect(e.stopPropagation).toHaveBeenCalled()
+    expect(target.ensure).toHaveBeenCalledWith(WS)
+    expect(await currentPanelBlockIds()).toEqual([])
+
+    // The navigation follows the block `ensureTarget` returned, not the id the
+    // caller asked for.
+    target.release({id: 'b-materialised'})
+    await vi.waitFor(async () => {
+      expect(await currentPanelBlockIds()).toEqual(['b-materialised'])
+    })
+  })
+
+  it('click: cmd-click passthrough leaves the event alone and materialises nothing', async () => {
+    const e = fakeMouseEvent({metaKey: true})
+    const ensureTarget = vi.fn(async () => ({id: 'b-never'}))
+    openBlockFromEvent(env.repo, e as unknown as OpenerEvent, {blockId: 'b-derived', workspaceId: WS}, {ensureTarget})
+    expect(e.preventDefault).not.toHaveBeenCalled()
+    expect(await currentPanelBlockIds()).toEqual([])
+    expect(ensureTarget).not.toHaveBeenCalled()
+  })
+
+  it('click: a vetoing policy owns the event and materialises nothing', async () => {
+    env.repo.setRuntimeContributions(navigationIntentVerb.decoratorsFacet, 'test-policy', [
+      () => () => SUPPRESS,
+    ])
+    const e = fakeMouseEvent()
+    const ensureTarget = vi.fn(async () => ({id: 'b-never'}))
+    openBlockFromEvent(env.repo, e as unknown as OpenerEvent, {blockId: 'b-derived', workspaceId: WS}, {ensureTarget})
+    expect(e.preventDefault).toHaveBeenCalled()
+    expect(await currentPanelBlockIds()).toEqual([])
+    expect(ensureTarget).not.toHaveBeenCalled()
+  })
+
+  it('click: a policy that retargets the gesture wins, and nothing is materialised', async () => {
+    retargetTo({blockId: 'b-policy-choice'})
+    const e = fakeMouseEvent()
+    // Never settles: a gesture the policy has already redirected must not wait
+    // on — or be cancelled by — a create it no longer depends on.
+    const ensureTarget = vi.fn(() => new Promise<{id: string}>(() => {}))
+    openBlockFromEvent(env.repo, e as unknown as OpenerEvent, {blockId: 'b-derived', workspaceId: WS}, {ensureTarget})
+    await vi.waitFor(async () => {
+      expect(await currentPanelBlockIds()).toEqual(['b-policy-choice'])
+    })
+    // Not merely "the id didn't win": `ensureTarget` MUTATES, so running it here
+    // would create a page nobody navigates to.
+    expect(ensureTarget).not.toHaveBeenCalled()
+  })
+
+  it('a policy that retargets only the WORKSPACE materialises nothing', async () => {
+    // `repo.isReadOnly` is one flag for the ACTIVE workspace, so an ensure
+    // aimed elsewhere cannot judge its own eligibility — and a
+    // workspace-derived id resolves to a different block there, which would
+    // overwrite the blockId the policy chose. So the gesture goes where the
+    // policy said and writes nothing.
+    retargetTo({workspaceId: 'ws-policy-chose'})
+    const ensureTarget = vi.fn(async () => ({id: 'b-never'}))
+    const e = fakeMouseEvent()
+    openBlockFromEvent(
+      env.repo, e as unknown as OpenerEvent, {blockId: 'b-derived', workspaceId: WS},
+      {ensureTarget},
+    )
+    // Gated, so this reached the navigate path rather than bailing early — and
+    // the ensure decision is made before any await, so the negative is complete.
+    expect(e.preventDefault).toHaveBeenCalled()
+    expect(ensureTarget).not.toHaveBeenCalled()
+    // It landed in the policy's workspace, so nothing shows up in this one.
+    expect(await currentPanelBlockIds()).toEqual([])
+  })
+
+  it('click: a throwing ensure is logged, not an unhandled rejection', async () => {
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      openBlockFromEvent(
+        env.repo, fakeMouseEvent() as unknown as OpenerEvent, {blockId: 'b-derived', workspaceId: WS},
+        {ensureTarget: async () => { throw new Error('create boom') }},
+      )
+      await vi.waitFor(() => {
+        expect(err).toHaveBeenCalledWith(
+          '[navigation] materialising the navigation target failed', expect.any(Error),
+        )
+      })
+      expect(await currentPanelBlockIds()).toEqual([])
+    } finally {
+      err.mockRestore()
+    }
+  })
+
+  it('command: navigateFromGlobalCommand lands on the ensured block', async () => {
+    await navigateFromGlobalCommand(env.repo, {blockId: 'b-derived', workspaceId: WS}, {
+      ensureTarget: async () => ({id: 'b-materialised'}),
+    })
+    expect(await currentPanelBlockIds()).toEqual(['b-materialised'])
+  })
+
+  it('command: a policy that retargets the command materialises nothing', async () => {
+    retargetTo({blockId: 'b-policy-choice'})
+    const ensureTarget = vi.fn(async () => ({id: 'b-never'}))
+    await navigateFromGlobalCommand(env.repo, {blockId: 'b-derived', workspaceId: WS}, {ensureTarget})
+    expect(await currentPanelBlockIds()).toEqual(['b-policy-choice'])
+    expect(ensureTarget).not.toHaveBeenCalled()
   })
 })
 

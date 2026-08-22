@@ -14,9 +14,13 @@ const RECENTS_ALIAS = 'Recents'
 export const recentsPageBlockId = (workspaceId: string): string =>
   kernelPageBlockId(workspaceId, RECENTS_PAGE_NS)
 
-export const getOrCreateRecentsPage = (repo: Repo, workspaceId: string): Promise<Block> =>
+export const getOrCreateRecentsPage = (
+  repo: Repo,
+  workspaceId: string,
+  options?: {skipUndo?: boolean},
+): Promise<Block> =>
   getOrCreateKernelPage(repo, workspaceId, {
     namespace: RECENTS_PAGE_NS,
     alias: RECENTS_ALIAS,
     markerType: RECENTS_PAGE_TYPE,
-  })
+  }, options)
