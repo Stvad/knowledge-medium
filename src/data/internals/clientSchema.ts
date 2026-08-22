@@ -1529,7 +1529,12 @@ export const ensureBlockUserUpdatedAtColumn = async (db: {
  * be anywhere else.
  *
  * Fresh installs skip both — `CREATE_BLOCKS_SYNCED_TABLE_SQL` carries the
- * column, so there is nothing to ALTER and nothing staged to seed.
+ * column, so there is nothing to ALTER and nothing staged to seed. They do NOT
+ * skip the marker read, which is why this runs with the other one-shot
+ * backfills rather than beside the CREATEs: `client_schema_state` is created by
+ * `CLIENT_SCHEMA_STATEMENTS`, and reading its marker before that exists throws
+ * and aborts the whole bootstrap — on a brand-new profile, which is the one
+ * case with nothing to migrate.
  */
 export const ensureStagingNeedsApplyColumn = async (
   db: ClientSchemaBootstrapDb & {getAll: <T>(sql: string) => Promise<T[]>},

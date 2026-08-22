@@ -450,6 +450,34 @@ describe('planPropertyDefinitionSynthesis', () => {
     expect(flipBlockedBySynthesis(plan)).toMatch(/still catching up/)
   })
 
+  it('refuses when a delivery is left unapplied AFTER the pre-flight check', async () => {
+    // The pre-flight and the write are separated by the Properties-page
+    // bootstrap and by the wait for the write lock. A key whose real definition
+    // is the row left unapplied in that window still reads as ORPHANED to the
+    // plan we are about to mint from — which is the outcome the deterministic
+    // id exists to prevent, since the real definition wins the registry's
+    // ascending sort when it lands and every field row bound to the loser
+    // strands.
+    await rawCell('b1', {'demo:orphan': 'x'})
+    const plan = await planFor()
+    repo.stopSyncObserver()
+    const realTx = repo.tx.bind(repo)
+    vi.spyOn(repo, 'tx').mockImplementation(async (fn, opts) => {
+      await sharedDb.db.execute(BLOCKS_SYNCED_RAW_TABLE.put.sql, blockToSyncedRowParams({
+        id: 'the-real-definition', workspaceId: WS, parentId: null, orderKey: 'z0',
+        content: 'arrived, could not be applied', properties: {}, references: [],
+        createdAt: 1, updatedAt: 5, userUpdatedAt: 5, createdBy: 'u', updatedBy: 'u',
+        deleted: false,
+      }))
+      await sharedDb.db.execute('DELETE FROM blocks_synced_changes')
+      return realTx(fn, opts)
+    })
+
+    await expect(applyPropertyDefinitionSynthesis(repo, plan))
+      .rejects.toThrow(/have not reached/)
+    expect(repo.block(await definitionIdFor('demo:orphan')).peek()).toBeUndefined()
+  })
+
   it('refuses when the workspace turns out encrypted AFTER the pre-flight check', async () => {
     // The pre-flight check and the write are separated by the Properties-page
     // bootstrap and by the wait for the write lock, and the workspace's real

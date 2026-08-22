@@ -55,6 +55,7 @@ import {
   REPROJECT_REF_MARKER_PREFIX,
   WORKSPACE_BACKFILL_MARKER_PREFIX,
   backfillBlockAliasesIfEmpty,
+  ensureStagingNeedsApplyColumn,
   backfillBlocksFtsIfEmpty,
   backfillBlockTypesIfEmpty,
 } from '@/data/internals/clientSchema'
@@ -113,7 +114,6 @@ const initializeTestDb = async (dbDir: string): Promise<PowerSyncDatabase> => {
   // client-schema add-ons (auxiliary tables + triggers).
   await db.execute(CREATE_BLOCKS_TABLE_SQL)
   await db.execute(CREATE_BLOCKS_SYNCED_TABLE_SQL)
-  await db.execute(CREATE_BLOCKS_SYNCED_NEEDS_APPLY_INDEX_SQL)
   await db.execute(CREATE_BLOCKS_PARENT_ORDER_INDEX_SQL)
   await db.execute(CREATE_BLOCKS_WORKSPACE_ACTIVE_INDEX_SQL)
   await db.execute(CREATE_BLOCKS_WORKSPACE_NONEMPTY_PROPERTIES_INDEX_SQL)
@@ -144,6 +144,13 @@ const initializeTestDb = async (dbDir: string): Promise<PowerSyncDatabase> => {
       return row ?? null
     },
   }
+  // Same position as production, and for the same reason — it reads a
+  // `client_schema_state` marker, which the loop above creates.
+  await ensureStagingNeedsApplyColumn({
+    ...backfillDb,
+    getAll: <T,>(sql: string) => db.getAll<T>(sql),
+  })
+  await db.execute(CREATE_BLOCKS_SYNCED_NEEDS_APPLY_INDEX_SQL)
   await backfillBlockAliasesIfEmpty(backfillDb)
   await backfillBlockTypesIfEmpty(backfillDb)
   await backfillBlocksFtsIfEmpty(backfillDb)
