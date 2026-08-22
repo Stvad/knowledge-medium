@@ -56,4 +56,28 @@ describe('CommandList', () => {
     await waitFor(() => expect(selectedRow()?.getAttribute('data-value')).toBe('b'))
     expect(scrolledTo.at(-1)).toBe(selectedRow())
   })
+
+  // A query that leaves the same row selected changes no value, so cmdk
+  // scrolls nothing at all — and a list the user had scrolled stays where
+  // it was, with the selected top match above the fold.
+  it('scrolls on a query change that leaves the selection alone', async () => {
+    render(
+      <Command>
+        <CommandInput/>
+        <CommandList>
+          <CommandGroup heading="Group">
+            <CommandItem value="alpha">alpha</CommandItem>
+            <CommandItem value="beta">beta</CommandItem>
+          </CommandGroup>
+        </CommandList>
+      </Command>,
+    )
+    await waitFor(() => expect(selectedRow()?.getAttribute('data-value')).toBe('alpha'))
+
+    scrolledTo = []
+    fireEvent.change(document.querySelector('[cmdk-input]')!, {target: {value: 'a'}})
+
+    await waitFor(() => expect(scrolledTo.at(-1)).toBe(selectedRow()))
+    expect(selectedRow()?.getAttribute('data-value')).toBe('alpha')
+  })
 })
