@@ -83,8 +83,18 @@ if (channelPort) {
           // in flight with nothing claimed, so the retry sailed past this
           // check and queued the SAME notification again — both landing when
           // stdout drained, and the session doing the work twice.
-          if (!dedup.claim(meta?.event_id)) {
+          const outcome = dedup.claim(meta?.event_id)
+          if (outcome === 'delivered') {
             response.writeHead(200).end('duplicate')
+            return
+          }
+          if (outcome === 'unconfirmed') {
+            // Someone holds this id and has not confirmed. Answering 200
+            // would tell a query sender its rows are with the session, and
+            // it would then advance its cursor past work that may never have
+            // run — with no block left behind for a sweep to find. 503 says
+            // "unknown, ask again", which its retry path already handles.
+            response.writeHead(503).end('in flight')
             return
           }
           // The claim is NOT released if this throws. Once the write has
@@ -97,6 +107,9 @@ if (channelPort) {
             method: 'notifications/claude/channel',
             params: {content: parsed.content, ...(meta ? {meta} : {})},
           })
+          // Confirmed only once the write has completed. Until then the claim
+          // reads `unconfirmed`, so nobody may bank on it.
+          dedup.confirm(meta?.event_id)
           response.writeHead(200).end('ok')
         } catch {
           response.writeHead(400).end('expected JSON {content, meta?}')

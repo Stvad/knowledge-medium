@@ -103,6 +103,20 @@ describe('createStreamJsonParser', () => {
     expect(events).toEqual([{kind: 'session', sessionId: 'sess-mid'}])
   })
 
+  it('reports a server-side tool as activity too', () => {
+    // WebSearch/WebFetch run server-side and can produce no text at all. A
+    // run that used one and then hit a usage limit still reached the model.
+    const events: RunEvent[] = []
+    const parser = createStreamJsonParser(event => events.push(event))
+
+    parser.feed(line({
+      type: 'stream_event',
+      event: {type: 'content_block_start', content_block: {type: 'server_tool_use', name: 'web_search'}},
+    }))
+
+    expect(events.some(event => event.kind === 'activity')).toBe(true)
+  })
+
   it('reports extended thinking as activity, so a thinking-only run is not "nothing"', () => {
     // A run can spend its whole budget on thinking and emit no text. The
     // engine decides whether to replay a failed run from these events, so a

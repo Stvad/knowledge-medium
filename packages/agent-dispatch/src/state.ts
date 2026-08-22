@@ -72,7 +72,12 @@ export interface StateStore {
    *  silence. Bumped only after an acknowledged delivery, so a transport
    *  retry of one delivery keeps its id. */
   getDeliveryGeneration: (watcherName: string) => Promise<number>
-  bumpDeliveryGeneration: (watcherName: string) => Promise<void>
+  /** Record an acknowledged delivery: bump the generation AND advance the
+   *  cursor, as one write. Separately they can disagree — a failure or a
+   *  crash between them leaves a bumped generation over an old cursor, and
+   *  the next tick then re-delivers the same rows under a FRESH id, which
+   *  walks past the receiver's dedup and repeats the work. */
+  commitDelivery: (watcherName: string, ids: string[]) => Promise<void>
   /** null = watcher never ticked (first tick sets it without firing). */
   getBaseline: (watcherName: string) => Promise<number | null>
   setBaseline: (watcherName: string, ms: number) => Promise<void>
@@ -122,9 +127,10 @@ export const createStateStore = (filePath: string): StateStore => {
   return {
     getCursor: async name => (await load()).queryCursors[name] ?? null,
     getDeliveryGeneration: async name => (await load()).deliveryGenerations[name] ?? 0,
-    bumpDeliveryGeneration: async name => {
+    commitDelivery: async (name, ids) => {
       const state = await load()
       state.deliveryGenerations[name] = (state.deliveryGenerations[name] ?? 0) + 1
+      state.queryCursors[name] = ids
       await persist(state)
     },
     setCursor: async (name, ids) => {

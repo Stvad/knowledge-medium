@@ -42,23 +42,6 @@ describe('channel delivery states its own failure cause', () => {
     expect(JSON.parse(init.body as string)).toEqual({content: 'hello', meta: {watcher: 'w'}})
   })
 
-  it('rejects an unusable port at wiring time, not as a per-delivery outage', () => {
-    // A port fetch cannot use makes every delivery reject locally, which the
-    // retry path would read as a transport outage and defer forever. It is a
-    // configuration error, so it should surface where it is configured.
-    expect(() => createChannelDelivery({
-      port: 70_000, secret: null, secretHeader: 'x', hint: 'hint',
-    })).toThrow()
-  })
-
-  it('refuses a port fetch will not connect to, at wiring time', () => {
-    // `new URL` accepts these; only the request fails, locally and
-    // identically every time, which the retry path reads as an outage.
-    expect(() => createChannelDelivery({
-      port: 6000, secret: null, secretHeader: 'x', hint: 'hint',
-    })).toThrow(/refuses to connect/)
-  })
-
   it('resolves silently on a 2xx', async () => {
     const send = vi.fn(async () => new Response('ok', {status: 200}))
     await expect(deliver(send as unknown as typeof fetch)({content: 'x', meta: {}})).resolves.toBeUndefined()

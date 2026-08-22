@@ -149,7 +149,12 @@ const memoryState = (
     // A real counter, not a stub returning 0: the identity it feeds is only
     // correct because it CHANGES after an acknowledged delivery.
     getDeliveryGeneration: async (name: string) => generations.get(name) ?? 0,
-    bumpDeliveryGeneration: async (name: string) => { generations.set(name, (generations.get(name) ?? 0) + 1) },
+    // Both halves in one call, like the real store — a double that advanced
+    // them separately could not observe the bug that made them one.
+    commitDelivery: async (name: string, ids: string[]) => {
+      generations.set(name, (generations.get(name) ?? 0) + 1)
+      cursors.set(name, ids)
+    },
     getBaseline: async (name: string) => baselines.get(name) ?? (armed ? 0 : null),
     setBaseline: async (name: string, ms: number) => { baselines.set(name, ms) },
     getLaunchTimes: async () => [...store.launches],

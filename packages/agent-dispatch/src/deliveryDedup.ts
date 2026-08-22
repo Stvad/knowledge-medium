@@ -17,20 +17,48 @@
  * boundary is not available and pretending otherwise would be worse than
  * the gap.
  */
+export type ClaimOutcome =
+  /** Nobody has this id; the caller should dispatch it. */
+  | 'dispatch'
+  /** A previous dispatch COMPLETED. Safe to report as a duplicate: the work
+   *  is with the session, so the sender may treat its delivery as done. */
+  | 'delivered'
+  /** Someone holds this id but has not confirmed delivery — still in flight,
+   *  or it failed. NOT a duplicate the sender may bank on. */
+  | 'unconfirmed'
+
 export const createDeliveryDedup = (max = 500) => {
-  const seen = new Set<string>()
+  // Three states, not two. A Set can only say "seen", which conflated "the
+  // session has this" with "someone tried and we do not know" — and a query
+  // sender told `duplicate` treats the delivery as done, bumps its
+  // generation and advances its cursor, dropping rows nothing ever ran.
+  // Unlike a mention there is no block left behind for a stale sweep to
+  // find, so those rows are simply gone.
+  const claims = new Map<string, 'pending' | 'delivered'>()
+  const remember = (id: string, state: 'pending' | 'delivered') => {
+    claims.set(id, state)
+    // Oldest-first eviction; Map preserves insertion order.
+    if (claims.size > max) claims.delete(claims.keys().next().value as string)
+  }
   return {
-    /** True when this id is ours to dispatch; false when someone already
-     *  claimed it. Claiming happens HERE, before the caller awaits delivery:
-     *  a claim recorded afterwards leaves the in-flight request unclaimed,
-     *  so a retry arriving during a slow dispatch is treated as new. */
-    claim: (id: string | undefined): boolean => {
-      if (!id) return true          // an unidentified event is never deduplicated
-      if (seen.has(id)) return false
-      seen.add(id)
-      if (seen.size > max) seen.delete(seen.values().next().value as string)
-      return true
+    /** Claim an id for dispatch. Claiming happens HERE, before the caller
+     *  awaits delivery: a claim recorded afterwards leaves the in-flight
+     *  request unclaimed, so a retry arriving during a slow dispatch is
+     *  treated as new work. */
+    claim: (id: string | undefined): ClaimOutcome => {
+      if (!id) return 'dispatch'   // an unidentified event is never deduplicated
+      const held = claims.get(id)
+      if (held === 'delivered') return 'delivered'
+      if (held === 'pending') return 'unconfirmed'
+      remember(id, 'pending')
+      return 'dispatch'
     },
-    get size(): number { return seen.size },
+    /** The dispatch completed — from here a repeat is a true duplicate. */
+    confirm: (id: string | undefined) => { if (id) remember(id, 'delivered') },
+    /** The dispatch failed before reaching the session. Releasing the claim
+     *  lets a retry through; only call it when nothing can have been
+     *  delivered, since a release after delivery runs the work twice. */
+    release: (id: string | undefined) => { if (id) claims.delete(id) },
+    get size(): number { return claims.size },
   }
 }

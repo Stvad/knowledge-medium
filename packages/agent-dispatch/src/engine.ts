@@ -1256,12 +1256,11 @@ export const createEngine = (deps: EngineDeps) => {
       // returns before the spawn success branch that would otherwise clear it.
       clearInfraCooldown(laneOf(watcher), laneAtLaunch)
       recordLaunch()
-      // Acknowledged, so the next delivery is a NEW one. Bumped before the
-      // cursor advances: a crash between them costs a re-delivery under a
-      // fresh id, which the ambient session sees as new work — the direction
-      // that loses nothing.
-      await state.bumpDeliveryGeneration(watcher.name)
-      await state.setCursor(watcher.name, diff.seenIds)
+      // Acknowledged: the generation and the cursor move TOGETHER. Apart,
+      // a failure between them leaves a bumped generation over an old
+      // cursor, and the next tick re-delivers the same rows under a fresh
+      // id — straight past the receiver's dedup, repeating the work.
+      await state.commitDelivery(watcher.name, diff.seenIds)
       log(`[${watcher.name}] delivered ${batch.length} new row(s) to the ambient channel session`)
       return
     }

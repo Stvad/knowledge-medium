@@ -246,6 +246,7 @@ export const createStreamJsonParser = (onEvent?: (event: RunEvent) => void) => {
         // happened and was replayed. Reported HERE rather than taught to a
         // consumer: the parser is the only thing that sees the transcript.
         // codex labels its own reasoning the same way.
+        else if (contentBlock?.type === 'server_tool_use') activityForToolUse(contentBlock)
         else if (contentBlock?.type === 'thinking') emit({kind: 'activity', label: 'Thinking'})
         return
       }
