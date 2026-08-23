@@ -1731,7 +1731,7 @@ b7b20b57449491d17522b2d52bf360256cc239e30bd54a2bfe17dfd8c399fd8f  ./src/App.js
 26ae93c25697f68037ee01d48c6943f8e4da172b8ae0527d1276579a1cc62796  ./src/App.js.map
 0b6cdff83c4e2e654daed8de1db8c4dca693242715e28de06767a51c7c78de15  ./src/appUpdate.js
 90769c02d289c099463e0237f99fa41a7d0faec88ff0ec0c7261af894a4fb1b9  ./src/appUpdate.js.map
-5429eb590a3894aaf8553b4c34637425253be7e62521910c8007882217c6fed2  ./src/appVersion.js
+124be859be15145e2d1c58b415221a59c3cc70bf4162fc35339f01e25cbadf18  ./src/appVersion.js
 76bd53c764d4393e8e6411205df2c6642a2c684e22691666337476b2a22938a5  ./src/appVersion.js.map
 fea5c9bcdb0b19b9e7a2c87061e8af20afffcb227e47dba1dada4088258e6f93  ./src/bootstrap/resolveWorkspace.js
 c357de0c880a035b6a5fc81aa7642f7adc3c69f64384e749738c74fb09afa57e  ./src/bootstrap/resolveWorkspace.js.map
@@ -2888,10 +2888,10 @@ cfd09beec3cebb8e6f4ca2e4be742bba53073fed5b947f20052bfa18ad641ace  ./src/plugins/
 2a3f7912d4aaebd280db068f43aeaece7518e2c955ce97b62f5768b50e73d870  ./src/plugins/plain-outliner/index.js.map
 b9c4371fedea1123cd65cdf791592a3f9d938aa701726549bcd97245e6e682aa  ./src/plugins/plain-outliner/interactions.js
 9f8ed566e44b6c88c127536173233bc21b542c5d7a5e78982941b8fbcb2bf84c  ./src/plugins/plain-outliner/interactions.js.map
-7513d6604d470d60fd42d16e7128d1136c44282ba17e755101ae045e12e3bf68  ./src/plugins/properties-migration/ConfirmMigrationDialog.js
-ef199bfda3936de81a8170288cca864e06cc9e298801706a5896c60843e12bf1  ./src/plugins/properties-migration/ConfirmMigrationDialog.js.map
+aeffd75d4c98dfb9dd3d73a51320113ca7e6edd25e41b82447c6b11f6fa9c116  ./src/plugins/properties-migration/ConfirmMigrationDialog.js
+23f7c1a10704b37bb1574ea5381450b2b52f0aceaef3ec99b3c09576dac83994  ./src/plugins/properties-migration/ConfirmMigrationDialog.js.map
 9bbadab2d753425341c7b934255636b98fa07d97d78878f676212a80d7c8d3ab  ./src/plugins/properties-migration/action.js
-c88338148b9c10f4b58a295c3846968aa61722535dda8e3adea8370611766dd8  ./src/plugins/properties-migration/action.js.map
+67912de1907cc3081b3f0483cb4c311d55bde9df93ff2bef4e6703037d4426d2  ./src/plugins/properties-migration/action.js.map
 c0487551bd9536ce0dc1a6e54e31a2a8fdd57dcbd941a6f7d3647bb887905f91  ./src/plugins/properties-migration/index.js
 f15d5c72579065b3c6a4228f5a10606add040d6f559a6a6e3867e69575f01dc5  ./src/plugins/properties-migration/plugin.js
 6aa2081c58894fc0105d4ed0184a14e8aef21dca4589df075abc039ad79c19fc  ./src/plugins/properties-migration/plugin.js.map
@@ -3394,8 +3394,8 @@ ea7891e59b3608440c35c38901ebf443535471174fcbae950c1c74f2885c571a  ./src/utils/vi
 69754adc2a0ce8f9699da30476838e93fd95bd4b61eda37060f239224bc9b656  ./src/utils/viewTransition.js.map
 eda7cd6e992fb9f7324505e9817253123005c192d80e9c52ac4b14967936955c  ./src/utils/viewport.js
 a2bcdb138bcf84f7f3f9fc982c821e724fe578c3ea7971a890ea1ea9bc4c837f  ./src/utils/viewport.js.map
-2a492122291eebc0836baf2046a600d59c5d4cb0ad3ecef6e0cd22d25a624b09  ./sw.js
-bfef575960895ae26d8517f2021bc0909bcbb8353f71975d10283280e08992e2  ./version.json
+755367f3a2ab3f672a2ca16059449e96c167dde6b3bb46d4ff3bd4caf82ca029  ./sw.js
+dd76c8ca2fdde70876ba4960a88ca4a8c15095c9f189f34c789625da2066d12d  ./version.json
 4a748afd443918bb16591c834c401dae33e87861ab5dbad0811c3a3b4a9214fb  ./vite.svg
 643714fb239b199a921024c34f82d13697a3803c91c97ff8da10455a09249406  ./wa-sqlite-async.wasm
 d167becf5a6949b1f31b1d026dc15e138b2b34b12fc44b71c56164392900b3b8  ./wa-sqlite.wasm
