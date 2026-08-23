@@ -117,6 +117,12 @@ describe('ensureStagingNeedsApplyColumn', () => {
     expect(await unapplied()).toEqual(['arrived-later'])
   })
 
+  // 1200 serial round-trips through the write lock: ~2.3s alone, which the
+  // 5000ms default cannot absorb once the gate runs one worker per core (a
+  // ~2.2x stretch is enough to blow it, and the tail is measured at 3-6x).
+  // A timeout here also strands the REST of the file: this test is what puts
+  // the dropped column back, so timing out before that leaves the next
+  // `rewindToPreMigration` dropping a column that is already gone.
   it('seeds a backlog larger than one chunk', async () => {
     // Bounded statements, so the loop — not the WHERE — is what finishes it.
     for (let i = 0; i < 600; i++) {
@@ -127,7 +133,7 @@ describe('ensureStagingNeedsApplyColumn', () => {
     await ensureStagingNeedsApplyColumn(sharedDb.db)
 
     expect(await unapplied()).toEqual([])
-  })
+  }, 30_000)
 
   it('is a no-op on a table that already has the column and the marker', async () => {
     await sharedDb.db.execute(
