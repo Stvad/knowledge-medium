@@ -532,9 +532,7 @@ export interface OperatorBackfillResult {
 }
 
 /** Why a backfill cannot run at all when the composition root wired no claim
- *  seam. One string, because the operator gesture refuses on it before writing
- *  and the automatic loop reports it after — and a human reading either must
- *  not have to tell two wordings apart. */
+ *  seam. */
 const NO_COMPLETION_CLAIM =
   'no BackfillCompletionClaim is configured, so completion cannot be recorded'
 
@@ -564,17 +562,43 @@ type BackfillClaimAttempt =
   | {readonly status: 'not-ours'}
   | {readonly status: 'refused'; readonly refusal: BackfillClaimRefusal}
 
+/** Would WAITING clear this refusal? Only a durable view gap and a role flip
+ *  say no — and the two callers disagree about which of them can see a role
+ *  flip, so the rule lives here rather than in each. */
+const retryableAfter = (refusal: BackfillClaimRefusal): boolean =>
+  refusal.kind === 'view-gap' ? refusal.transient : refusal.kind !== 'read-only'
+
+/** How an operator hears a pre-claim refusal. Everything is `deferred` — a
+ *  refusal happens before the body runs, so nothing is half-done — with
+ *  `retryable` carrying the only part the human can act on.
+ *
+ *  The `read-only` arm is DEFENCE IN DEPTH, not load-bearing: the gesture
+ *  short-circuits on `isReadOnly` before it calls `takeBackfillClaim`, and
+ *  every statement between the two checks is synchronous, so they cannot
+ *  disagree. It exists so the mapping stays total if that changes. */
+const refusedBackfillResult = (refusal: BackfillClaimRefusal): OperatorBackfillResult =>
+  refusal.kind === 'read-only'
+    ? {outcome: 'read-only', undoHistoryCleared: false}
+    : {
+      outcome: 'deferred',
+      undoHistoryCleared: false,
+      reason: refusal.reason,
+      retryable: retryableAfter(refusal),
+    }
+
 /** The backfill itself, runnable from inside a gesture that already holds the
  *  claim for it. See {@link Repo.withOperatorBackfillClaim}. */
 export interface OperatorBackfillPass {
+  /** A pass that did not return `ran` has ALREADY handed the claim back to
+   *  the gesture's `finally` — it does not release on its own. */
   run(): Promise<OperatorBackfillResult>
 }
 
 /** What {@link Repo.withOperatorBackfillClaim} did. `claimed: false` carries
  *  the outcome to report and means the body never ran, so nothing this gesture
  *  would have written exists. */
-export type OperatorBackfillClaimOutcome =
-  | {readonly claimed: true}
+export type OperatorBackfillClaimOutcome<T = void> =
+  | {readonly claimed: true; readonly value: T}
   | {readonly claimed: false; readonly result: OperatorBackfillResult}
 
 export class Repo {
@@ -3124,34 +3148,16 @@ export class Repo {
     }
   }
 
-
-  /** Why this run no longer belongs to the workspace it was scheduled for, or
-   *  null. Covers BOTH ways a run can outlive its workspace: switched away (id
-   *  differs) and switched away and back (id restored, generation moved).
-   *  Identity first, so each case reports its own cause. */
-  private staleBackfillRun(workspaceId: string, generation: number): string | null {
-    if (this.activeWorkspaceId !== workspaceId) {
-      return `workspace ${workspaceId} is no longer active`
-    }
-    if (this.workspaceGeneration !== generation) {
-      return `workspace ${workspaceId} was re-opened since this run was scheduled`
-    }
-    return null
-  }
-
   /**
    * Take the claim for one backfill, or say why this device may not.
    *
    * The preconditions and the claim write live in ONE method because their
    * ORDER is the whole point. `tryClaim` writes — the Migrations page, then
-   * the claim row — so a device that fails a precondition has to be turned
-   * away before that write: on a stale or disconnected device the old order
-   * wrote a claim, hit the in-transaction sync assertion, and released it,
-   * leaving both writes in the upload queue to land later and out of order
-   * against a completion this device never saw, which tombstoned the record
-   * and freed later operators to repeat the migration. And the last staleness
-   * check must have NOTHING awaited between it and `tryClaim`, which a caller
-   * doing the checks itself cannot promise.
+   * the claim row — so a device that fails a precondition must be turned away
+   * BEFORE that write, or its claim and the release that follows both sit in
+   * the upload queue and land later, out of order, against a completion it
+   * never saw. And the last staleness check must have NOTHING awaited between
+   * it and `tryClaim`, which a caller doing the checks itself cannot promise.
    *
    * What this closes is the STALE-DEVICE case. It does NOT make the claim
    * atomic: rows can stage in the window between the gap check and the claim
@@ -3167,13 +3173,22 @@ export class Repo {
     backfill: WorkspaceBackfill,
     generation: number,
   ): Promise<BackfillClaimAttempt> {
+    /** Both ways a run can outlive its workspace: switched away (id differs)
+     *  and switched away and back (id restored, generation moved). Identity
+     *  first, so each case reports its own cause. */
+    const runStale = (): string | null =>
+      this.activeWorkspaceId !== workspaceId
+        ? `workspace ${workspaceId} is no longer active`
+        : this.workspaceGeneration !== generation
+          ? `workspace ${workspaceId} was re-opened since this run was scheduled`
+          : null
     // A role flip to read-only during a deferral window must stop further
-    // writes — re-asked per backfill, since a run can span several txs.
+    // writes — re-asked on every attempt, since a run spans several txs.
     if (this.isReadOnly) return {status: 'refused', refusal: {kind: 'read-only'}}
     // Don't even START a pass whose workspace has been re-opened since it was
     // scheduled. `assertBackfillMayWrite` catches this per transaction, but
     // that is one tx too late to avoid the scan a backfill does first.
-    const stale = this.staleBackfillRun(workspaceId, generation)
+    const stale = runStale()
     if (stale !== null) return {status: 'refused', refusal: {kind: 'stale', reason: stale}}
     // An unprimed registry makes the whole graph look like it has zero
     // registered properties, so a pass would find no candidates, write
@@ -3215,7 +3230,7 @@ export class Repo {
     // leaves the earlier evaluation stale — including a switch away and back,
     // which restores the id and moves only the generation. Last statement
     // before the claim write, nothing awaited in between.
-    const staleNow = this.staleBackfillRun(workspaceId, generation)
+    const staleNow = runStale()
     if (staleNow !== null) {
       return {status: 'refused', refusal: {kind: 'stale', reason: staleNow}}
     }
@@ -3248,12 +3263,10 @@ export class Repo {
     workspaceId: string,
     backfillId: string,
   ): Promise<OperatorBackfillResult> {
-    let ran: OperatorBackfillResult | null = null
     const gesture = await this.withOperatorBackfillClaim(
-      workspaceId, backfillId, async pass => { ran = await pass.run() },
+      workspaceId, backfillId, pass => pass.run(),
     )
-    // Non-null whenever the body ran, and the body is one statement.
-    return gesture.claimed ? ran! : gesture.result
+    return gesture.claimed ? gesture.value : gesture.result
   }
 
   /**
@@ -3297,12 +3310,12 @@ export class Repo {
    * its `result` is the outcome to report, in the same vocabulary
    * {@link runWorkspaceBackfillNow} returns so one reporter covers both.
    */
-  async withOperatorBackfillClaim(
+  async withOperatorBackfillClaim<T>(
     workspaceId: string,
     backfillId: string,
-    body: (pass: OperatorBackfillPass) => Promise<void>,
-  ): Promise<OperatorBackfillClaimOutcome> {
-    const refuse = (result: OperatorBackfillResult): OperatorBackfillClaimOutcome =>
+    body: (pass: OperatorBackfillPass) => Promise<T>,
+  ): Promise<OperatorBackfillClaimOutcome<T>> {
+    const refuse = (result: OperatorBackfillResult): OperatorBackfillClaimOutcome<T> =>
       ({claimed: false, result})
     if (this.isReadOnly) return refuse({outcome: 'read-only', undoHistoryCleared: false})
     const backfill = this._workspaceBackfills.find(
@@ -3373,11 +3386,13 @@ export class Repo {
         return refuse({outcome: 'held-by-peer', undoHistoryCleared: false})
       }
       if (attempt.status === 'refused') {
-        return refuse(this.refusedBackfillResult(attempt.refusal))
+        return refuse(refusedBackfillResult(attempt.refusal))
       }
       try {
-        await body({run: () => this.runClaimedOperatorBackfill(workspaceId, backfill)})
-        return {claimed: true}
+        return {
+          claimed: true,
+          value: await body({run: () => this.runClaimedOperatorBackfill(workspaceId, backfill)}),
+        }
       } finally {
         // `finally`, because the body reports its own outcomes and returns
         // early from several of them. A claim left behind by a device that is
@@ -3397,26 +3412,6 @@ export class Repo {
       }
     } finally {
       this.inFlightOperatorBackfills.delete(flightKey)
-    }
-  }
-
-  /** How an operator hears a pre-claim refusal. Everything is `deferred` —
-   *  a refusal happens before the body runs, so nothing is half-done — with
-   *  `retryable` carrying the only part the human can act on.
-   *
-   *  The `read-only` arm is DEFENCE IN DEPTH, not load-bearing: the gesture
-   *  short-circuits on `isReadOnly` before it calls `takeBackfillClaim`, and
-   *  every statement between the two checks is synchronous, so they cannot
-   *  disagree. It exists so the mapping stays total if that changes. */
-  private refusedBackfillResult(refusal: BackfillClaimRefusal): OperatorBackfillResult {
-    if (refusal.kind === 'read-only') {
-      return {outcome: 'read-only', undoHistoryCleared: false}
-    }
-    return {
-      outcome: 'deferred',
-      undoHistoryCleared: false,
-      reason: refusal.reason,
-      retryable: refusal.kind === 'view-gap' ? refusal.transient : true,
     }
   }
 
@@ -3503,9 +3498,6 @@ export class Repo {
       return {completed, undoHistoryCleared, deferred, deferredRetryable, failed}
     }
     for (const backfill of backfills) {
-      // Everything that must hold before the claim row is written, plus the
-      // write itself — one method, because the last staleness check and
-      // `tryClaim` must have no await between them (see `takeBackfillClaim`).
       const attempt = await this.takeBackfillClaim(claim, workspaceId, backfill, generation)
       if (attempt.status === 'not-ours') continue
       if (attempt.status === 'refused') {
@@ -3519,11 +3511,7 @@ export class Repo {
         // reads as `held-by-peer` at the operator entry point, telling a human
         // "already done" about a pass that never started.
         if (refusal.kind === 'not-primed') continue
-        // Waiting clears a transient gap and a workspace switch; it clears
-        // neither a durable gap nor a role flip.
-        deferredRetryable = refusal.kind === 'view-gap'
-          ? refusal.transient
-          : refusal.kind !== 'read-only'
+        deferredRetryable = retryableAfter(refusal)
         // Re-arm ONLY when waiting is a remedy, and RETURN either way. The
         // caught-up half of the gap gate self-re-arms through `arm()`'s parked
         // callback; the staged-rows half has nothing to park on, so an

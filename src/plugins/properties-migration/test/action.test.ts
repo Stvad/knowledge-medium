@@ -453,11 +453,8 @@ describe('migrate_properties_to_blocks action', () => {
 describe('the graph-wide claim', () => {
   it('is taken before synthesis, and handed back only at the end', async () => {
     // The bug this pins (#710): the claim used to be taken inside the pass,
-    // which is the LAST thing this gesture does. Synthesis and the flip both
-    // write before it, so two devices that each cleared the dialog could mint
-    // rival definitions for the same key — same deterministic id, different
-    // preset, because which presets a device can prove is a local fact — and
-    // only then discover which of them owned the pass.
+    // which is the LAST thing this gesture does, while synthesis and the flip
+    // both write before it.
     const log: ClaimStubLog = {events: []}
     const {repo} = makeRepo(RAN, {log})
     planSynthesis.mockResolvedValue(plan(1))

@@ -959,9 +959,6 @@ describe('workspace backfill runner — a claim held across a gesture', () => {
   })
 
   it('takes the claim before the body writes anything, and hands it back after', async () => {
-    // The whole point: synthesis commits definition blocks BEFORE the pass, so
-    // a claim taken inside the pass lets two devices publish rival definitions
-    // for the same key and only then decide which of them backfills.
     const events: string[] = []
     const repo = gestureRepo(events, noopPass())
     await seedTarget(repo)
@@ -1016,16 +1013,20 @@ describe('workspace backfill runner — a claim held across a gesture', () => {
     expect(events).toEqual(['tryClaim', 'releaseClaim'])
   })
 
-  it('hands the claim back when the body returns early without running the pass', async () => {
-    // The migration's own shape: several branches report a refusal and return
-    // before reaching `pass.run()` — a flip that failed, a definition that
-    // could not be minted.
+  it('still reports `claimed` for a body that refused and never ran the pass', async () => {
+    // The migration's own shape: several branches report their own refusal and
+    // return before reaching `pass.run()` — a flip the server declined, a
+    // definition that could not be minted. Those are still CLAIMED runs, and
+    // the caller keys its own reporting off that: `claimed: false` would have
+    // the action print a second, contradictory outcome over the one the body
+    // just showed.
     const events: string[] = []
     const repo = gestureRepo(events, noopPass())
     await seedTarget(repo)
 
-    await repo.withOperatorBackfillClaim(WS, 'gesture-v1', async () => {})
+    const outcome = await repo.withOperatorBackfillClaim(WS, 'gesture-v1', async () => {})
 
+    expect(outcome).toEqual({claimed: true, value: undefined})
     expect(events).toEqual(['tryClaim', 'releaseClaim'])
   })
 

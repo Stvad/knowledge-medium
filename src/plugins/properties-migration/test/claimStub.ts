@@ -29,7 +29,7 @@ export const claimStub = (
   _workspaceId: string,
   _backfillId: string,
   body: (pass: OperatorBackfillPass) => Promise<void>,
-): Promise<OperatorBackfillClaimOutcome> => {
+): Promise<OperatorBackfillClaimOutcome<void>> => {
   const refused = refuse?.() ?? null
   if (refused !== null) {
     log?.events.push('claim-refused')
@@ -43,7 +43,7 @@ export const claimStub = (
         return runBackfill()
       },
     })
-    return {claimed: true}
+    return {claimed: true, value: undefined}
   } finally {
     log?.events.push('release')
   }

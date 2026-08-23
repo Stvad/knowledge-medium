@@ -152,8 +152,6 @@ const SAFE_VIA_PROTOTYPE: Record<string, string> = {
   withOperatorBackfillClaim: 'operator entry point; the claim and the body write only via the DELEGATED tx',
   runClaimedOperatorBackfill: 'private; the claimed half of the operator entry point',
   takeBackfillClaim: 'private; the pre-claim gate plus the same claim seam runWorkspaceBackfills already reaches',
-  refusedBackfillResult: 'pure mapping of a refusal to what the operator is told',
-  staleBackfillRun: 'read — compares the active workspace and its generation; assigns nothing',
   propertyRegistryReadyFor: 'read — inspects the registry snapshots; assigns nothing',
   workspaceSeeds: 'private read; reached only via the DELEGATED schedule/run seed-materialization members',
   scheduleReprojection: 'private; invoked by constructor-bound facetBridge',
