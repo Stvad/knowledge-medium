@@ -38,8 +38,8 @@ import type { PowerSyncDb } from '@/data/internals/commitPipeline.js'
 import { devAssertionsEnabled } from '@/data/internals/devAssertions.js'
 import type { ReferenceTargetLookups } from '@/data/internals/referenceTargetProcessor.js'
 import {
+  blocksAlreadyReflects,
   decideStagingRow,
-  localHoldsStagedVersion,
 } from './reconcile.js'
 import {
   ARRIVAL_PROCESSORS,
@@ -92,27 +92,6 @@ interface FlagDecision {
   /** The drain's answer: does `blocks` still need this row applied? */
   readonly needsApply: boolean
 }
-
-/** Is a row the drain cannot apply invisible to every reader anyway? A staged
- *  tombstone whose local row is absent or already tombstoned shows the block to
- *  nobody on either side — and every protected pass reads `deleted = 0`. Left
- *  flagged it would be a gap that no drain can ever clear and no pass can ever
- *  be harmed by. */
-const isInvisibleEitherWay = (staged: BlockRow, local: LocalGateRow | undefined): boolean =>
-  staged.deleted === 1 && (local === undefined || local.deleted)
-
-/** Does `blocks` already say everything this staged row would? The question the
- *  flag actually asks, and it does NOT depend on materializability — which is
- *  why it is answered before the branch that does. Two ways to be satisfied
- *  without applying anything: the live row is this exact version
- *  ({@link localHoldsStagedVersion}'s I1), or the block is invisible on both
- *  sides. `defer` is not only the locked-workspace case — a failed key-store
- *  read lands there too — so an unchanged re-delivery arriving in that window
- *  would otherwise be recorded as a durable gap with nothing in flight, on a
- *  device whose one-time reconcile rescan has long since run. */
-const blocksAlreadyReflects = (staged: BlockRow, local: LocalGateRow | undefined): boolean =>
-  localHoldsStagedVersion(local?.updatedAt ?? null, staged.updated_at)
-  || isInvisibleEitherWay(staged, local)
 
 // All block ids with an unsent local edit queued for upload. A pending edit
 // always wins over an incoming snapshot (the echo reconciles), so the gate
@@ -200,7 +179,7 @@ export interface MaterializeOutcome {
   /** Ids whose `needs_apply` flag this pass CLEARED — every row it decided
    *  leaves `blocks` correct: applied, skip-staled (the local row wins by the
    *  gate's own rule), or already reflected by `blocks` even though the drain
-   *  could not apply it ({@link blocksAlreadyReflects}). The rows it did NOT
+   *  could not apply it (`blocksAlreadyReflects`). The rows it did NOT
    *  clear are the durable gap `WORKSPACE_UNAPPLIED_SQL` reports. */
   readonly resolved: readonly string[]
 }
@@ -406,9 +385,17 @@ export const materializeStagingRows = async (
     const localRow = localGateRowById.get(row.id)
     const decide = (needsApply: boolean) =>
       decisions.push({id: row.id, stagedUpdatedAt: row.updated_at, needsApply})
+    // Asked before the branch that depends on materializability, because this
+    // does not: `defer` is not only the locked-workspace case — a failed
+    // key-store read lands there too — so an unchanged re-delivery arriving in
+    // that window would otherwise be recorded as a durable gap with nothing in
+    // flight, on a device whose one-time reconcile rescan has long since run.
+    const alreadyReflected = blocksAlreadyReflects(
+      { updatedAt: row.updated_at, deleted: row.deleted === 1 }, localRow,
+    )
     if (materializability === 'defer') {
       deferred.push(row.id)
-      decide(!blocksAlreadyReflects(row, localRow))
+      decide(!alreadyReflected)
       continue
     }
     const action = decideStagingRow(materializability, row.updated_at, {
@@ -440,9 +427,9 @@ export const materializeStagingRows = async (
       // copy-through never reaches here (decodeFromWire is identity for 'none').
       console.warn(`[materializeStagingRows] quarantined undecryptable block ${row.id}:`, err)
       quarantined.push(row.id)
-      // Same rule as the defer branch, though only its tombstone half can fire
-      // here: an equal-stamp row skip-stales above, before it reaches decrypt.
-      decide(!blocksAlreadyReflects(row, localRow))
+      // Same answer as the defer branch, though only its tombstone half can be
+      // true here: an equal-stamp row skip-stales above, before it reaches decrypt.
+      decide(!alreadyReflected)
       continue
     }
     candidates.push({ plaintext, stagingUpdatedAt: row.updated_at, materializability })

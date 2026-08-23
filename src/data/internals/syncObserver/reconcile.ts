@@ -103,7 +103,41 @@ export const localHoldsStagedVersion = (
   localUpdatedAt: number | null,
   stagedUpdatedAt: number,
 ): boolean =>
+  // `!== null` states the no-local-row case rather than guarding it: the staged
+  // stamp is never null, so the equality below already answers false. Deleting
+  // it fails nothing.
   localUpdatedAt !== null && localUpdatedAt !== 0 && localUpdatedAt === stagedUpdatedAt
+
+/** One row's version as the "already reflects" question reads it — the staged
+ *  row, and the live `blocks` row when there is one. */
+export interface RowVersion {
+  readonly updatedAt: number
+  readonly deleted: boolean
+}
+
+/** Is a row the drain cannot apply invisible to every reader anyway? A staged
+ *  tombstone whose local row is absent or already tombstoned shows the block to
+ *  nobody on either side — and every protected pass reads `deleted = 0`. Left
+ *  flagged it would be a gap that no drain can ever clear and no pass can ever
+ *  be harmed by. */
+const isInvisibleEitherWay = (staged: RowVersion, local: RowVersion | undefined): boolean =>
+  staged.deleted && (local === undefined || local.deleted)
+
+/**
+ * Does `blocks` already say everything this staged row would?
+ *
+ * The question `blocks_synced.needs_apply` records an answer to, and the reason
+ * a drain that CANNOT apply a row still has something to decide. Two ways to be
+ * satisfied without applying anything, and {@link SEED_STAGING_NEEDS_APPLY_SQL}
+ * is the same pair in SQL — which is why this lives here beside it rather than
+ * at its one call site in `materialize.ts`.
+ */
+export const blocksAlreadyReflects = (
+  staged: RowVersion,
+  local: RowVersion | undefined,
+): boolean =>
+  localHoldsStagedVersion(local?.updatedAt ?? null, staged.updatedAt)
+  || isInvisibleEitherWay(staged, local)
 
 /**
  * Decide what to do with one inserted/updated staging row.
