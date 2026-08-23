@@ -731,12 +731,14 @@ const reapSeatsInTx = async (
       // enumeration wrong is a silent soft-delete of a user's edit, so do not
       // attempt it: an incomplete guard here is worse than no reaping.
       //
-      // No MACHINERY puts those rows under an un-flipped seat any more — the
-      // dual-write and the cell → children pass both refuse an un-flipped
-      // workspace — but the shape is not machinery-exclusive: `is_field_form` is
+      // The BACKFILL no longer puts those rows under an un-flipped seat — it and
+      // the dual-write both refuse an un-flipped workspace — but two paths still
+      // reach the shape there, so the gate is not dead. `is_field_form` is
       // stamped from CONTENT by the derive pass, so a user who writes
-      // `::((aliases-definition))` under a seat and gives it a value has one,
-      // with a pristine cell and no projection to reveal the edit.
+      // `::((aliases-definition))` under a seat and gives it a value has one; and
+      // `blockMerge`'s pre-backfill catch-up materializes a key's children with
+      // no flip check at all (km-g5ev). Either way the cell stays pristine and
+      // the projection is dormant, so the seed match cannot see an edit.
       //
       // Not reaping is the documented SAFE MISS (see the gate list below): the
       // seat squats until the alias is re-typed and re-dropped, and normal

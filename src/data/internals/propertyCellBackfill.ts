@@ -14,9 +14,11 @@
  * still dual-written and still the synchronous read surface, while backfilling
  * first leaves a window in which new machinery is unrecognized and visible.
  *
- * So every batch re-asserts the flip and REFUSES an un-flipped workspace rather
- * than writing into it (see {@link sweep}), instead of carrying a second mode
- * for the order that is no longer run.
+ * So every batch that WRITES re-asserts the flip and REFUSES an un-flipped
+ * workspace (see {@link sweep}), instead of carrying a second mode for the order
+ * that is no longer run. A run that finds no candidate block opens no
+ * transaction and so never asks — and writes nothing either, which is the
+ * property the check exists for.
  *
  * `operator` trigger, so nothing schedules it. Its writes upload — that is the
  * point, one device builds the rows and every other device receives them —

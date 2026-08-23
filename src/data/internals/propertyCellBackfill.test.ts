@@ -215,8 +215,9 @@ describe('property cell → children backfill', {timeout: 30_000}, () => {
 
   it('picks up where a killed run stopped, with no progress state to consult', async () => {
     // Resumability is derived from the data: the candidate query asks which
-    // blocks still owe children. Simulated by migrating two blocks, then
-    // dropping the claim as a crash would leave it.
+    // blocks still owe children, so a run that stopped halfway simply finds less
+    // to do next time. Stands in for that by migrating two blocks and then
+    // giving the third its key.
     await create('b1', {'demo:note': 'one'})
     await create('b2', {'demo:note': 'two'})
     await create('b3', {})
@@ -528,8 +529,9 @@ describe('property cell → children backfill', {timeout: 30_000}, () => {
     expect(await run()).toMatchObject({outcome: 'failed'})
     expect(await fieldRowCount()).toBe(0)
 
-    // And it left no residue: the operator flips and runs again, which must
-    // migrate rather than come back "already done" off a recorded completion.
+    // And the operator can still act: flip, run again, and the blocks migrate.
+    // This does NOT pin "no completion was recorded" — an operator run always
+    // reclaims a completed claim, so it would pass either way.
     await flip()
 
     expect((await run()).outcome).toBe('ran')

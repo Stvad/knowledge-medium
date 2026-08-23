@@ -386,12 +386,14 @@ export const matchesAliasSeatSeed = (
  *  stops meaning "a user touched this" and starts meaning "this is a
  *  seat". Every caller gating on children has to subtract these ids first,
  *  and only when the workspace is FLIPPED: there an edit to a generated value
- *  row reprojects into the cell, so the seed match can still see drift. No
- *  machinery mints these rows before the flip any more, but `is_field_form` is
- *  stamped from CONTENT — a `::((definition))` block a user writes has the same
- *  shape — so un-flipped nothing can vouch for the subtree and the caller must
- *  not subtract (km-mzsv). Subtract on the `::` bit AND the id — a bare column
- *  match is a content stamp an ordinary `((fieldId))` child carries too. */
+ *  row reprojects into the cell, so the seed match can still see drift. The
+ *  backfill no longer mints these rows before the flip, but they remain
+ *  reachable there — `is_field_form` is stamped from CONTENT, so a
+ *  `::((definition))` block a user writes has the shape, and `blockMerge`'s
+ *  catch-up mints it un-gated — so un-flipped nothing can vouch for the subtree
+ *  and the caller must not subtract (km-mzsv). Subtract on the `::` bit AND the
+ *  id — a bare column match is a content stamp an ordinary `((fieldId))` child
+ *  carries too. */
 export const generatedSeatFieldIds = (workspaceId: string): ReadonlySet<string> => new Set([
   propertyDefinitionBlockId(workspaceId, aliasesProp.seedKey),
   propertyDefinitionBlockId(workspaceId, typesProp.seedKey),
