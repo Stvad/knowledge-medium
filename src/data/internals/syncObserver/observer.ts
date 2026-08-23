@@ -152,7 +152,7 @@ export interface BlocksSyncedObserver {
    *
    *  REJECTS if the pass did not finish — see {@link startBlocksSyncedObserver}'s
    *  enqueue. */
-  drainWorkspace(workspaceId: string, scope?: RematerializeScope): Promise<RematerializeReport>
+  drainWorkspace(workspaceId: string, scope: RematerializeScope): Promise<RematerializeReport>
   /** Is a {@link drainWorkspace} pass for `workspaceId` outstanding (running OR
    *  queued behind another unit)? The one thing a reader cannot learn from the
    *  queue: that path rewrites `blocks` straight from `blocks_synced` and
@@ -396,7 +396,12 @@ export const startBlocksSyncedObserver = (
   const flush = (): Promise<void> => enqueue(drainQueueOnce)
   const drainWorkspace = (
     workspaceId: string,
-    scope: RematerializeScope = 'all',
+    // REQUIRED, though every call site but one passes 'all'. The two scopes
+    // differ by three orders of magnitude on a real workspace, and a default
+    // here would be the second one in the stack — `Repo.rematerializeWorkspace`
+    // defaults to 'unapplied' — so a reader who learned one would have the
+    // other wrong.
+    scope: RematerializeScope,
   ): Promise<RematerializeReport> => {
     // Counted from ENQUEUE rather than from the first window: a rescan waiting
     // its turn on the chain will still rewrite `blocks` with nothing in the
@@ -405,9 +410,8 @@ export const startBlocksSyncedObserver = (
     // count cannot leak; the derived promise gets its own handler because
     // `done` alone is what we hand back.
     //
-    // The narrower `unapplied` scope is flagged the same way. It writes fewer
-    // rows, not none — and a reader that saw no rescan in flight while one is
-    // rewriting `blocks` is the exact blindness this counter exists to close.
+    // Both scopes, not just the wide one: the narrow pass writes fewer rows,
+    // not none.
     const bump = (by: number) =>
       workspaceRescans.set(workspaceId, (workspaceRescans.get(workspaceId) ?? 0) + by)
     bump(1)

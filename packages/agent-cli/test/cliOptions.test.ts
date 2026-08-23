@@ -1,6 +1,6 @@
 import { cac } from 'cac'
 import { describe, expect, it } from 'vitest'
-import { limitOption, workspaceAssertion } from '../src/cliOptions.js'
+import { limitOption, scopeAssertion, workspaceAssertion } from '../src/cliOptions.js'
 
 /** Parse argv the way the real CLI does and hand back what the option
  *  actually became — so this pins CAC's behaviour too, not just our handling
@@ -69,5 +69,25 @@ describe('limitOption', () => {
   it('passes a real limit through as a number', () => {
     expect(limitOption(parseOption('limit', ['page', 'x', '--limit', '25']) as number))
       .toEqual({limit: 25})
+  })
+})
+
+describe('scopeAssertion', () => {
+  it('normalizes the empty-value artifact back to an empty string', () => {
+    // `--scope ""` reaches CAC as the number 0. Left as 0 it stringifies to
+    // '0' and the kernel refuses naming a value the operator never typed.
+    expect(scopeAssertion(0)).toEqual({scope: ''})
+  })
+
+  it('omits the field entirely when the option is absent, so the kernel default applies', () => {
+    expect(scopeAssertion(undefined)).toEqual({})
+  })
+
+  it('rejects a repeated flag rather than coercing the array', () => {
+    expect(() => scopeAssertion(['all', 'unapplied'])).toThrow(/single value/)
+  })
+
+  it('passes a value through unvalidated — the kernel owns that refusal', () => {
+    expect(scopeAssertion('nonsense')).toEqual({scope: 'nonsense'})
   })
 })

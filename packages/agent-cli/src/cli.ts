@@ -41,7 +41,7 @@ import {
   renderKernelTypesInstallSummary,
 } from './kernelDts.js'
 import {renderSubtreeOutline} from './subtreeOutline.js'
-import {limitOption, workspaceAssertion} from './cliOptions.js'
+import {limitOption, scopeAssertion, workspaceAssertion} from './cliOptions.js'
 import {extensionScaffold, slugify, titleize} from './scaffold.js'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
@@ -997,20 +997,18 @@ cli
 cli
   .command('rematerialize-workspace', wireDescription('rematerialize-workspace'))
   .option('--workspace <id>', 'Assert the workspace being re-materialized (defaults to the active one, which it must be)')
-  .option('--scope <scope>', 'unapplied (default) — only the rows the durable refusal counts; all — every staged row of the workspace', {default: 'unapplied'})
+  // No CAC `default` for --scope: the kernel already defaults it, and that is
+  // also where the unknown-value refusal lives. Defaulting here too would make
+  // one of the two unreachable rather than agreeing with it.
+  .option('--scope <scope>', 'unapplied (default) — only the rows the durable refusal counts; all — every staged row of the workspace')
   .option('--wait <seconds>', `How long to wait for the pass to finish (default ${rematerializeDefaultWaitSeconds}).`, {default: rematerializeDefaultWaitSeconds})
-  .action(async (options: {workspace?: string | number; scope?: unknown; wait?: string | number}) => {
-    // Same 0-for-empty artifact CAC produces for `--workspace ""` as in
-    // `audit-properties`; normalize it back so the command layer's purpose-built
-    // refusal is what the operator sees.
-    const asserted = options.workspace === undefined
-      ? undefined
-      : options.workspace === 0 ? '' : String(options.workspace)
+  .action(async (options: {workspace?: unknown; scope?: unknown; wait?: string | number}) => {
+    const scope = scopeAssertion(options.scope)
     await ensureBridgeRunning()
     const value = await client().runCommand({
       type: 'rematerialize-workspace',
-      ...(asserted !== undefined ? {workspaceId: asserted} : {}),
-      ...(options.scope === undefined ? {} : {scope: String(options.scope)}),
+      ...workspaceAssertion(options.workspace),
+      ...scope,
     }, {timeoutMs: Math.max(1, Number(options.wait) || rematerializeDefaultWaitSeconds) * 1000})
       .catch((cause: unknown) => {
         // Giving up WAITING is not the pass giving up: it keeps running in the

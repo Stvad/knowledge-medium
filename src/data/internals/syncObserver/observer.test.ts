@@ -182,7 +182,7 @@ describe('blocksSyncedObserver — defer + drainWorkspace', () => {
 
     // WK arrives → the workspace becomes materializable; §8 calls drainWorkspace.
     mat = 'decrypt'
-    await observer.drainWorkspace('ws-e2ee')
+    await observer.drainWorkspace('ws-e2ee', 'all')
     expect(await blocks()).toEqual([{ id: 'e1', content: 'locked' }])
   })
 
@@ -215,7 +215,7 @@ describe('blocksSyncedObserver — defer + drainWorkspace', () => {
     // rescan) treat resolution as "the workspace is materialized" and act on it
     // irreversibly, so a pass that stopped two windows in must not report
     // success (km-fsxp).
-    await expect(observer.drainWorkspace('ws')).rejects.toThrow('boom')
+    await expect(observer.drainWorkspace('ws', 'all')).rejects.toThrow('boom')
 
     // Window 1 (b0,b1) committed; window 2's throw didn't roll it back.
     expect(await blocks()).toEqual([{ id: 'b0', content: 'c0' }, { id: 'b1', content: 'c1' }])
@@ -239,7 +239,7 @@ describe('blocksSyncedObserver — the queue-blind rescan is observable', () => 
 
     // Set at ENQUEUE, not at the first window: a rescan waiting its turn on the
     // chain will still rewrite `blocks` before any consumer hears otherwise.
-    const rescan = observer.drainWorkspace('ws')
+    const rescan = observer.drainWorkspace('ws', 'all')
     expect(observer.isRematerializingWorkspace('ws')).toBe(true)
     // And scoped to it: someone who navigated to another workspace must not be
     // refused for the whole of this one's rescan.
@@ -267,7 +267,7 @@ describe('blocksSyncedObserver — the queue-blind rescan is observable', () => 
     // And the re-pass that can finally apply it clears it — the flag is state,
     // not a one-way tripwire.
     mode = 'copy'
-    await observer.drainWorkspace('ws')
+    await observer.drainWorkspace('ws', 'all')
     expect(await unapplied('ws')).toEqual([])
   })
 
@@ -335,7 +335,7 @@ describe('blocksSyncedObserver — the queue-blind rescan is observable', () => 
     // handed the resolution it writes the recovery marker on.
     await put(data({ id: 'b1', workspaceId: 'ws', content: 'c1' }))
     const { observer } = start({ getMaterializability: constMat('copy') })
-    const rescan = observer.drainWorkspace('ws')
+    const rescan = observer.drainWorkspace('ws', 'all')
     observer.dispose()
     await expect(rescan).rejects.toThrow(/disposed/)
   })
@@ -363,7 +363,7 @@ describe('blocksSyncedObserver — the queue-blind rescan is observable', () => 
 
     mode = 'copy'
     live = observer
-    await expect(observer.drainWorkspace('ws')).rejects.toThrow(/disposed/)
+    await expect(observer.drainWorkspace('ws', 'all')).rejects.toThrow(/disposed/)
     // Window 1 committed before the teardown landed. That the pass is resumable
     // is exactly why its caller has to be told it did not finish.
     expect(await blocks()).toEqual([{ id: 'b0', content: 'c0' }, { id: 'b1', content: 'c1' }])

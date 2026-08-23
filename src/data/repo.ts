@@ -1186,7 +1186,7 @@ export class Repo {
    *  materializable (WK pasted / plaintext confirmed via the §8.2 gate). No-op
    *  if the observer isn't running. */
   async drainSyncWorkspace(workspaceId: string): Promise<void> {
-    if (this.syncObserver) await this.syncObserver.drainWorkspace(workspaceId)
+    if (this.syncObserver) await this.syncObserver.drainWorkspace(workspaceId, 'all')
   }
 
   /** Frozen snapshot of internal data-layer counters + timings
@@ -2921,11 +2921,9 @@ export class Repo {
     const count = behind >= WORKSPACE_UNAPPLIED_COUNT_CAP
       ? `at least ${WORKSPACE_UNAPPLIED_COUNT_CAP.toLocaleString()}`
       : `${behind.toLocaleString()}`
-    // The remedy is part of the CAUSE here, not a caller's consequence: this
-    // arm is the one nothing clears on its own, so a sentence that stops at the
-    // diagnosis leaves the reader with no move — which is the whole of km-boj1.
-    // Every caller's remedy is the same one, so stating it once here beats each
-    // of them remembering to.
+    // The remedy rides with the CAUSE on this arm alone: nothing clears it on
+    // its own, and every caller's answer is the same one, so stating it here
+    // beats each of them remembering to.
     return {
       reason: `${count} synced row(s) of this workspace have not reached \`blocks\` on `
         + 'this device — never materialized, or still showing an older version — '
@@ -2980,9 +2978,6 @@ export class Repo {
     options: {scope?: RematerializeScope} = {},
   ): Promise<WorkspaceRematerialization> {
     if (!workspaceId) throw new Error('rematerializeWorkspace requires a workspace id')
-    // Reported rather than silently doing nothing: without an observer there is
-    // no rematerialization path at all, and an operator running the remedy on a
-    // client that cannot run it must not read "0 rows, nothing left to do".
     if (!this.syncObserver) {
       throw new Error(
         '[rematerializeWorkspace] this client has no sync observer running, so there is '

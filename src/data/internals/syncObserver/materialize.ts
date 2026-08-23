@@ -600,12 +600,8 @@ export const materializeStagingRows = async (
     for (const decision of decisions) {
       const now = stagedNow.get(decision.id)
       if (now === undefined || now.updatedAt !== decision.stagedUpdatedAt) continue
-      // Only rows whose flag actually MOVES. These lists are both the write and
-      // the report, and the two want different things from that: the write is a
-      // no-op either way (a locked workspace re-defers the same rows every
-      // drain), but the report cannot tell afterwards which of the two it was —
-      // so `resolved` naming rows that were already resolved makes a re-pass
-      // over a healthy workspace read as though it had just repaired all of it.
+      // Only rows whose flag actually MOVES — see `resolved` / `reflagged` on
+      // MaterializeOutcome. The write is a no-op either way; the report is not.
       if (decision.needsApply === now.needsApply) continue
       if (decision.needsApply) reflagged.push(decision.id)
       else resolved.push(decision.id)
@@ -614,9 +610,7 @@ export const materializeStagingRows = async (
       for (let i = 0; i < ids.length; i += readChunkSize) {
         const chunk = ids.slice(i, i + readChunkSize)
         // `needs_apply <> value` is DEFENCE IN DEPTH now that the lists carry
-        // only movers — the read it would filter on is the one they were built
-        // from, inside this same lock. Kept because it is free and the two
-        // could drift.
+        // only movers: it filters on the read they were built from, in this lock.
         await tx.execute(setNeedsApplySql(value, chunk.length), chunk)
       }
     }
