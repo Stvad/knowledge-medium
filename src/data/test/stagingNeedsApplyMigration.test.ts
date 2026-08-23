@@ -117,12 +117,12 @@ describe('ensureStagingNeedsApplyColumn', () => {
     expect(await unapplied()).toEqual(['arrived-later'])
   })
 
-  // 1200 serial round-trips through the write lock: ~2.3s alone, which the
-  // 5000ms default cannot absorb once the gate runs one worker per core (a
-  // ~2.2x stretch is enough to blow it, and the tail is measured at 3-6x).
-  // A timeout here also strands the REST of the file: this test is what puts
-  // the dropped column back, so timing out before that leaves the next
-  // `rewindToPreMigration` dropping a column that is already gone.
+  // ~215ms alone (1200 serial round-trips through the write lock) — not tight
+  // against the 5000ms default, but it has timed out twice on a loaded machine,
+  // and a timeout HERE strands the rest of the file: this is the test that puts
+  // back the column `rewindToPreMigration` drops, so the next rewind then fails
+  // on a column that is already gone. The budget is insurance against that
+  // cascade, not a claim that the test is slow.
   it('seeds a backlog larger than one chunk', async () => {
     // Bounded statements, so the loop — not the WHERE — is what finishes it.
     for (let i = 0; i < 600; i++) {
