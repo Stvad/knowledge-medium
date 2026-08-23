@@ -329,6 +329,18 @@ const changedPropertyNames = (
   return changed
 }
 
+/** What to do with a cell value that does not decode under its schema's
+ *  codec (see the rejection comment below for why the default is a throw).
+ *
+ *  `'skip'` is for a caller reconciling a bag THIS TX DID NOT WRITE — the
+ *  revival path. There the bad value predates the tx, so rejecting prevents
+ *  nothing and instead makes the row permanently un-restorable: every
+ *  restore of it aborts on a key the restorer never touched, and a
+ *  tombstoned row has no editing surface to repair the key from. The key is
+ *  left alone (cell junk, no children) exactly as it was before the revival,
+ *  and the next real write to it still rejects. */
+export type UndecodableCellPolicy = 'reject' | 'skip'
+
 /** Find-or-create/update/delete the field+value children for `names` on
  *  `row` from its cell values. Exported for slice C's one-time backfill,
  *  which points the same convergence at whole workspaces. */
@@ -337,6 +349,7 @@ export const materializePropertyChildrenForExistingRow = async (
   row: BlockData,
   lookups: MaterializeLookups,
   names: readonly string[] = Object.keys(row.properties),
+  undecodable: UndecodableCellPolicy = 'reject',
 ): Promise<void> => {
   if (row.deleted) return
   if (names.length === 0) return
@@ -389,6 +402,7 @@ export const materializePropertyChildrenForExistingRow = async (
       // workspaces, where a PRE-EXISTING legacy junk value must not abort the
       // entire flip. That caller must catch per row and report the offending
       // block, not let one bad value throw the whole pass.
+      if (undecodable === 'skip') continue
       throw new Error(
         `Cannot materialize property "${name}" on block ${row.id}: its cell ` +
         `value does not decode under the "${schema.codec.type}" codec. Write ` +
@@ -454,18 +468,50 @@ export const materializePropertyChildrenForExistingRow = async (
   }
 }
 
+/**
+ * A row coming back from a tombstone. Such a row reconciles its WHOLE bag —
+ * both sides' keys — rather than the bag DIFF, because the trigger here is
+ * LIVENESS, not the bag.
+ *
+ * A subtree delete tombstones the owner's field and value rows along with it
+ * (§9 machinery traversal), and a revival — `tx.restore`, with or without a
+ * properties patch — usually leaves the bag identical. The diff is then empty,
+ * so a diff-only rule schedules nothing and the row comes back holding a cell
+ * value with no child-backed truth under it: post-flip the children ARE the
+ * property, so every reader that has moved to them sees it as missing (#778).
+ *
+ * The BEFORE side is not redundant with the after side: a restore patch that
+ * DROPS a key must still reach the reap branch, which is what tombstones
+ * children a non-subtree delete left live.
+ *
+ * Undo/redo replay does NOT come through here — `applyRaw` drives each row to
+ * its recorded snapshot with the same-tx pass skipped. It needs no revival
+ * rule: the children this processor writes land in the reviving tx's own
+ * snapshots, so replaying that tx replays them too.
+ */
+const isRevival = (before: BlockData | null): boolean =>
+  before !== null && before.deleted
+
 const materializePropertiesForChangedRow = async (
   tx: Tx,
   row: {before: BlockData | null; after: BlockData | null},
   lookups: PropertyChildrenLookups,
 ): Promise<void> => {
   if (row.after === null || row.after.deleted) return
+  const revived = isRevival(row.before)
   // Materialize-everything (§9 flat recognition): field rows and value rows
   // grow their own `::` children like every other block — recognition
   // reclaims nested machinery at any depth, so the old interior/prospective
   // carve-outs are deleted.
-  const changedNames = changedPropertyNames(row.before?.properties ?? {}, row.after.properties)
-  await materializePropertyChildrenForExistingRow(tx, row.after, lookups, changedNames)
+  const names = revived
+    ? [...new Set([
+        ...Object.keys(row.before!.properties),
+        ...Object.keys(row.after.properties),
+      ])]
+    : changedPropertyNames(row.before?.properties ?? {}, row.after.properties)
+  await materializePropertyChildrenForExistingRow(
+    tx, row.after, lookups, names, revived ? 'skip' : 'reject',
+  )
 }
 
 /** Move every child of `fromId` under `toId`, appended at the end. */
@@ -554,7 +600,13 @@ export const collapseDuplicateFieldRow = async (
 
 export const MATERIALIZE_PROPERTY_CHILDREN_PROCESSOR = defineSameTxProcessor({
   name: MATERIALIZE_PROPERTY_CHILDREN_PROCESSOR_NAME,
-  watches: {kind: 'field', table: 'blocks', fields: ['properties']},
+  // `deleted` is watched alongside `properties` so a REVIVAL re-materializes
+  // (see `namesToReconcile`): the bag is what this direction reads, but
+  // liveness is what makes the children go away and have to come back. Rows
+  // going the other way (live → tombstone) match too and are dropped by the
+  // `after.deleted` guard — one extra predicate per deleted row, versus a
+  // whole second processor to carry the revival case.
+  watches: {kind: 'field', table: 'blocks', fields: ['properties', 'deleted']},
   // Issue #402: re-runs over rows dirtied after it ran, so (a) a plugin's
   // raw bag write (merge retarget) grows/updates its backing children in
   // the same tx, and (b) a row that STOPPED being a field row this tx
