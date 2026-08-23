@@ -35,9 +35,14 @@ const MIGRATIONS_ALIAS = 'System Migrations (km)'
 export const migrationsPageBlockId = (workspaceId: string): string =>
   kernelPageBlockId(workspaceId, MIGRATIONS_PAGE_NS)
 
+/** `skipUndo` because this page has no attended caller by construction: it is
+ *  created lazily by `tryClaim`, from a backfill deferred to deep idle, whose
+ *  own writes already skip undo. Left undoable it lands alone on the stack —
+ *  and since recording clears the redo branch, an unattended pass would discard
+ *  a redo the user was still holding. */
 export const getOrCreateMigrationsPage = (repo: Repo, workspaceId: string): Promise<Block> =>
   getOrCreateKernelPage(repo, workspaceId, {
     namespace: MIGRATIONS_PAGE_NS,
     alias: MIGRATIONS_ALIAS,
     markerType: MIGRATIONS_PAGE_TYPE,
-  })
+  }, {skipUndo: true})

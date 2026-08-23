@@ -10,6 +10,7 @@ import {
   getOrCreateKernelPage,
   kernelPageBlockId,
 } from '@/data/kernelPage'
+import { getOrCreateMigrationsPage } from '@/data/migrationsPage'
 import { Repo } from '@/data/repo'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
@@ -388,5 +389,80 @@ describe('getOrCreateKernelPage', () => {
     expect(again.peekProperty(aliasesProp) ?? []).not.toContain('Foo')
     expect(env.repo.block('squatter').peekProperty(aliasesProp)).toEqual(['Foo'])
     expect(again.peekProperty(typesProp)).toEqual([PAGE_TYPE, FOO_PAGE_TYPE])
+  })
+})
+
+describe('skipUndo (unattended bootstrap)', () => {
+  const spec = {namespace: FOO_PAGE_NS, alias: 'Foo', markerType: FOO_PAGE_TYPE}
+
+  /** An edit, undone — so a redo is pending and the undo stack is non-empty,
+   *  which is the state an unattended create would damage. */
+  const editThenUndo = async (repo: Repo) => {
+    await repo.tx(async tx => {
+      await tx.create({id: 'note', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'v1'})
+    }, {scope: ChangeScope.BlockDefault})
+    await repo.tx(async tx => { await tx.update('note', {content: 'v2'}) },
+      {scope: ChangeScope.BlockDefault})
+    expect(await repo.undo()).toBe(true)
+    expect((await repo.load('note'))?.content).toBe('v1')
+  }
+
+  it('records nothing and leaves the pending redo branch intact', async () => {
+    const {repo} = env
+    await editThenUndo(repo)
+    const before = repo.undoManager.depths(ChangeScope.BlockDefault)
+
+    await getOrCreateKernelPage(repo, WS, spec, {skipUndo: true})
+    expect(await repo.load(kernelPageBlockId(WS, FOO_PAGE_NS))).not.toBeNull()
+
+    expect(repo.undoManager.depths(ChangeScope.BlockDefault)).toEqual(before)
+    // The half that actually bites: recording clears redo, so an unattended
+    // create would discard a redo the user was still holding.
+    expect(await repo.redo()).toBe(true)
+    expect((await repo.load('note'))?.content).toBe('v2')
+  })
+
+  it('the RESTORE path skips undo too, not just the create', async () => {
+    const {repo} = env
+    const id = (await getOrCreateKernelPage(repo, WS, spec, {skipUndo: true})).id
+    await repo.tx(async tx => { await tx.delete(id) }, {scope: ChangeScope.BlockDefault})
+    repo.undoManager.clear()
+
+    await getOrCreateKernelPage(repo, WS, spec, {skipUndo: true})
+
+    expect(repo.undoManager.depths(ChangeScope.BlockDefault)).toEqual({undo: 0, redo: 0})
+  })
+
+  it('the REPAIR path skips undo too — a live page missing its marker', async () => {
+    // The third write path, and the one no other test here reaches: create
+    // covers the empty id and restore covers the tombstone. Built damaged
+    // rather than created-then-damaged, matching this file's fixtures.
+    const {repo} = env
+    const id = kernelPageBlockId(WS, FOO_PAGE_NS)
+    const snapshot = repo.snapshotTypeRegistries()
+    await repo.tx(async tx => {
+      await tx.create({id, workspaceId: WS, parentId: null, orderKey: 'a0', content: 'Foo'})
+      await tx.setProperty(id, aliasesProp, ['Foo'])
+      await repo.addTypeInTx(tx, id, PAGE_TYPE, {}, snapshot)
+    }, {scope: ChangeScope.BlockDefault})
+    repo.undoManager.clear()
+
+    const page = await getOrCreateKernelPage(repo, WS, spec, {skipUndo: true})
+
+    // The repair really ran — otherwise this asserts nothing.
+    expect(page.peekProperty(typesProp)).toEqual([PAGE_TYPE, FOO_PAGE_TYPE])
+    expect(repo.undoManager.depths(ChangeScope.BlockDefault)).toEqual({undo: 0, redo: 0})
+  })
+
+  it('the Migrations page passes it — it has no attended caller', async () => {
+    // Created lazily by `tryClaim` from a deep-idle backfill, so there is no
+    // user operation for its entry to merge into.
+    const {repo} = env
+    await editThenUndo(repo)
+    const before = repo.undoManager.depths(ChangeScope.BlockDefault)
+
+    await getOrCreateMigrationsPage(repo, WS)
+
+    expect(repo.undoManager.depths(ChangeScope.BlockDefault)).toEqual(before)
   })
 })
