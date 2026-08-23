@@ -23,6 +23,7 @@ import { createTestRepo } from '@/data/test/createTestRepo'
 import {
   decideStagingRow,
   WORKSPACE_UNAPPLIED_COUNT_CAP,
+  WORKSPACE_UNAPPLIED_IDS_SQL,
   WORKSPACE_UNAPPLIED_SQL,
 } from '@/data/internals/syncObserver/reconcile'
 import { ChangeScope } from '@/data/api'
@@ -323,6 +324,30 @@ describe('Repo.workspaceViewGap', () => {
       [WS, WORKSPACE_UNAPPLIED_COUNT_CAP],
     )
     expect(plan.map(row => row.detail).join(' | ')).toMatch(/idx_blocks_synced_needs_apply/)
+  })
+
+  it('names the same rows the remedy re-materializes', async () => {
+    // The refusal counts a set; `rematerializeWorkspace` re-delivers a set.
+    // Those being the same set is the contract — rows an operator is told about
+    // but the pass never looks at (or the reverse) is how a remedy stops being
+    // one. Pinned over a fixture with one row of every reason the two clauses
+    // exist for, so a clause added to one side and not the other fails here.
+    const repo = makeRepo()
+    await deliverAndConsumeQueue(syncedRow({id: 'durable-gap', updatedAt: 5}))
+    await deliverAndConsumeQueue(syncedRow({id: 'resolved', updatedAt: 5}))
+    await markApplied('resolved')
+    await deliverAndConsumeQueue(syncedRow({id: 'other-ws', workspaceId: 'ws-other', updatedAt: 5}))
+    // Flagged, but still QUEUED — the in-flight predicate's row, not this one's.
+    await deliver(syncedRow({id: 'still-queued', updatedAt: 5}))
+
+    const ids = (await sharedDb.db.getAll<{id: string}>(WORKSPACE_UNAPPLIED_IDS_SQL, [WS]))
+      .map(row => row.id)
+    expect(ids).toEqual(['durable-gap'])
+    // Same count, from the arm the refusal actually reads. `repo` is in scope
+    // to keep the two answers taken against one device.
+    expect((await repo.db.get<{behind: number}>(
+      WORKSPACE_UNAPPLIED_SQL, [WS, WORKSPACE_UNAPPLIED_COUNT_CAP],
+    )).behind).toBe(ids.length)
   })
 
   it('caps the count it reports rather than the rows it examines', async () => {

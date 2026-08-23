@@ -319,13 +319,33 @@ export const STAGED_SCAN_LIMIT = 10_000
  * Bind `[workspaceId, cap]`; `cap` bounds only the COUNT (so a wholly
  * unapplied workspace stops counting early), never the coverage.
  */
+const WORKSPACE_UNAPPLIED_WHERE = `
+     WHERE s.workspace_id = ? AND s.needs_apply = 1
+       AND NOT EXISTS (SELECT 1 FROM blocks_synced_changes c WHERE c.id = s.id)`
+
 export const WORKSPACE_UNAPPLIED_SQL = `
   SELECT COUNT(*) AS behind FROM (
     SELECT 1 FROM blocks_synced s
-     WHERE s.workspace_id = ? AND s.needs_apply = 1
-       AND NOT EXISTS (SELECT 1 FROM blocks_synced_changes c WHERE c.id = s.id)
+    ${WORKSPACE_UNAPPLIED_WHERE}
      LIMIT ?
   )`
+
+/**
+ * The same rows {@link WORKSPACE_UNAPPLIED_SQL} counts, by id — what an
+ * operator-invoked rematerialization re-delivers to the drain.
+ *
+ * Shares the WHERE clause rather than restating it, because the remedy naming a
+ * different set than the refusal counts is the failure that matters here: rows
+ * the operator is told about but the pass never looks at, or the reverse.
+ *
+ * Unbounded, unlike the count: the caller materializes every id it gets back,
+ * in the same windows the queue drain uses, so the list is the work rather than
+ * a message. Bind `[workspaceId]`.
+ */
+export const WORKSPACE_UNAPPLIED_IDS_SQL = `
+  SELECT s.id FROM blocks_synced s
+  ${WORKSPACE_UNAPPLIED_WHERE}
+   ORDER BY s.id`
 
 /** Count cap for {@link WORKSPACE_UNAPPLIED_SQL}. The number only shapes the
  *  message an operator reads — "some" and "all of them" are different

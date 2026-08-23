@@ -91,6 +91,8 @@ import {
   startBlocksSyncedObserver,
   type BlocksSyncedObserver,
   type BlocksSyncedObserverArgs,
+  type RematerializeReport,
+  type RematerializeScope,
 } from '@/data/internals/syncObserver/observer'
 import {
   STAGED_SCAN_LIMIT,
@@ -479,6 +481,26 @@ export interface ViewGap {
    *  itself on a deferral must not re-arm on this one, and a caller with a
    *  human to tell must not tell them to try again. */
   readonly transient: boolean
+}
+
+/** What {@link Repo.rematerializeWorkspace} did, for the operator who ran it.
+ *
+ *  `unappliedBefore` / `unappliedAfter` are the number the durable refusal
+ *  reports, on either side of the pass — the one thing that answers "did that
+ *  help?". They carry {@link WORKSPACE_UNAPPLIED_COUNT_CAP}, so a value at the
+ *  cap is a floor rather than a total.
+ *
+ *  A pass that leaves `unappliedAfter` above zero has not failed — the drain
+ *  still cannot apply those rows, and the pass's own `deferred` / `quarantined`
+ *  counts say which reason. Neither is fixed by running it again: `deferred`
+ *  wants the workspace unlocked, `quarantined` wants bytes that decode. */
+export interface WorkspaceRematerialization extends RematerializeReport {
+  readonly workspaceId: string
+  readonly unappliedBefore: number
+  readonly unappliedAfter: number
+  /** What {@link Repo.workspaceViewGap} says now — null when the workspace's
+   *  one-way passes are unblocked. */
+  readonly remainingGap: ViewGap | null
 }
 
 /** What an operator-triggered backfill did, for a caller that has a human to
@@ -2894,19 +2916,89 @@ export class Repo {
         transient: true,
       }
     }
-    const {behind} = await this.db.get<{behind: number}>(
-      WORKSPACE_UNAPPLIED_SQL, [workspaceId, WORKSPACE_UNAPPLIED_COUNT_CAP],
-    )
+    const behind = await this.workspaceUnappliedCount(workspaceId)
     if (behind === 0) return null
     const count = behind >= WORKSPACE_UNAPPLIED_COUNT_CAP
       ? `at least ${WORKSPACE_UNAPPLIED_COUNT_CAP.toLocaleString()}`
       : `${behind.toLocaleString()}`
+    // The remedy is part of the CAUSE here, not a caller's consequence: this
+    // arm is the one nothing clears on its own, so a sentence that stops at the
+    // diagnosis leaves the reader with no move — which is the whole of km-boj1.
+    // Every caller's remedy is the same one, so stating it once here beats each
+    // of them remembering to.
     return {
       reason: `${count} synced row(s) of this workspace have not reached \`blocks\` on `
         + 'this device — never materialized, or still showing an older version — '
-        + 'and nothing is in flight to change that',
+        + 'and nothing is in flight to change that; the `rematerialize-workspace` '
+        + 'agent verb re-runs the drain over exactly these rows',
       transient: false,
     }
+  }
+
+  /**
+   * Re-run the drain over a workspace's staged rows, because an operator asked.
+   *
+   * The remedy for {@link workspaceViewGap}'s durable arm. Those rows reached
+   * the drain, were not applied, and had their queue entry consumed — so
+   * nothing re-delivers them, and every one-way pass on the workspace refuses
+   * for as long as they sit there. The queue-less rematerialization has always
+   * been able to clear them; until now it was reachable only from a workspace-
+   * key paste, an encryption-mode confirmation, or a once-per-(workspace,
+   * client) rescan that has already run on the device that needs it.
+   *
+   * A DERIVATION pass, not a data migration: it rebuilds this device's `blocks`
+   * from rows this device already downloaded, writes with `tx_context.source`
+   * NULL (so the upload triggers skip it), and touches no synced state. It
+   * therefore needs no per-graph claim, does not clear the undo stack, and is
+   * safe to run on any device, any number of times.
+   *
+   * Nothing here CLEARS a flag on its own reasoning. Every flag this drops is
+   * dropped by the drain, in the transaction that applied the row — so the
+   * proof that `blocks` holds the staged version is that it was just written
+   * there. The gap predicate, its seed, and `decideStagingRow` are untouched.
+   *
+   * The default `unapplied` scope re-delivers exactly the rows the refusal
+   * counts. `all` re-judges every staged row of the workspace instead — the
+   * gate-resolution pass — which is what to reach for when the flag itself is
+   * suspect, at the cost of a full pass over the workspace.
+   */
+  async rematerializeWorkspace(
+    workspaceId: string,
+    options: {scope?: RematerializeScope} = {},
+  ): Promise<WorkspaceRematerialization> {
+    if (!workspaceId) throw new Error('rematerializeWorkspace requires a workspace id')
+    // Reported rather than silently doing nothing: without an observer there is
+    // no rematerialization path at all, and an operator running the remedy on a
+    // client that cannot run it must not read "0 rows, nothing left to do".
+    if (!this.syncObserver) {
+      throw new Error(
+        '[rematerializeWorkspace] this client has no sync observer running, so there is '
+        + 'nothing to re-materialize with. Reload the app and try again.',
+      )
+    }
+    const scope = options.scope ?? 'unapplied'
+    const unappliedBefore = await this.workspaceUnappliedCount(workspaceId)
+    const pass = await this.syncObserver.drainWorkspace(workspaceId, scope)
+    return {
+      workspaceId,
+      unappliedBefore,
+      unappliedAfter: await this.workspaceUnappliedCount(workspaceId),
+      // The predicate the refusal takes, re-asked. Null is the operator's
+      // answer that the pass is now unblocked; anything else is what they would
+      // have been told on the next attempt anyway, one round earlier.
+      remainingGap: await this.workspaceViewGap(workspaceId),
+      ...pass,
+    }
+  }
+
+  /** How many of `workspaceId`'s downloaded rows the drain has not applied —
+   *  the number {@link workspaceViewGap}'s durable arm reports, capped the same
+   *  way (so `>= WORKSPACE_UNAPPLIED_COUNT_CAP` reads as a floor, not a total). */
+  private async workspaceUnappliedCount(workspaceId: string): Promise<number> {
+    const {behind} = await this.db.get<{behind: number}>(
+      WORKSPACE_UNAPPLIED_SQL, [workspaceId, WORKSPACE_UNAPPLIED_COUNT_CAP],
+    )
+    return behind
   }
 
   private async assertBackfillMayWrite(

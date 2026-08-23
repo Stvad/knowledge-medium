@@ -35,6 +35,13 @@
  * queue cannot report it; `isRematerializingWorkspace` is how a reader learns
  * `blocks` is being rewritten under it.
  *
+ * It is also the only thing that can re-deliver a row the drain reached and
+ * could not apply — the durable gap `WORKSPACE_UNAPPLIED_SQL` counts, whose
+ * queue entry is long since consumed. That is why it takes a
+ * {@link RematerializeScope}: `unapplied` re-runs the drain over exactly those
+ * rows, which is an operator's remedy for a refusal rather than a full pass
+ * over the workspace (`Repo.rematerializeWorkspace`).
+ *
  * The §4.7 cycle-scan telemetry that lived in rowEventsTail is relocated here
  * (`runCycleScan`), so the observer fully subsumes the tail's responsibilities.
  */
@@ -54,6 +61,7 @@ import {
   type SyncCache,
   type SyncInvalidationTarget,
 } from './invalidate.js'
+import { WORKSPACE_UNAPPLIED_IDS_SQL } from './reconcile.js'
 
 /** Drain-throttle window (ms). Matches the row_events tail default — coalesces
  *  sync-burst arrivals into one batched drain. */
@@ -85,18 +93,53 @@ export interface BlocksSyncedObserverArgs {
   readonly onError?: (err: unknown) => void
 }
 
+/** Which of a workspace's staged rows a {@link BlocksSyncedObserver.drainWorkspace}
+ *  pass re-materializes.
+ *
+ *  `unapplied` is the population {@link WORKSPACE_UNAPPLIED_IDS_SQL} names — the
+ *  rows a durable-gap refusal is counting, and nothing else. `all` is every
+ *  staged row of the workspace, which is what a gate-resolution rescan wants:
+ *  it also re-judges rows the flag says are fine, so it is the one that can
+ *  repair a row whose flag is wrong (a pre-flag legacy shadow), and the one
+ *  that costs a full pass over the workspace to do it. */
+export type RematerializeScope = 'all' | 'unapplied'
+
+/** What one queue-less rematerialization pass did, summed over its windows.
+ *
+ *  Every count is per row and the id set is distinct, so they partition
+ *  `scanned` — except `resolved`, which is orthogonal (it counts the rows whose
+ *  `needs_apply` flag the pass cleared, by any of the drain's reasons).
+ *
+ *  The point of reporting `deferred` and `quarantined` separately: when a pass
+ *  does NOT close the gap, these are why. Deferred means the workspace was not
+ *  materializable (locked e2ee, mode unresolved, a key-store read that failed);
+ *  quarantined means the ciphertext did not decode. Neither is fixed by running
+ *  the pass again. */
+export interface RematerializeReport {
+  readonly scope: RematerializeScope
+  /** Staged rows the pass fed to the drain. */
+  readonly scanned: number
+  readonly applied: number
+  readonly deferred: number
+  readonly skippedStale: number
+  readonly quarantined: number
+  /** Rows whose `needs_apply` flag this pass cleared. */
+  readonly resolved: number
+}
+
 export interface BlocksSyncedObserver {
   /** Drain the pending queue once. Awaitable settle barrier (awaits every
    *  drain enqueued before it). */
   flush(): Promise<void>
   /** Re-materialize a workspace's staged rows after it becomes materializable
-   *  (WK paste / plaintext confirm), or as the on-open recovery rescan. Reads
-   *  `blocks_synced` directly. Server-enforced `updated_at` monotonicity makes
-   *  one gate correct for both — no separate healing mode.
+   *  (WK paste / plaintext confirm), as the on-open recovery rescan, or because
+   *  an operator asked. Reads `blocks_synced` directly. Server-enforced
+   *  `updated_at` monotonicity makes one gate correct for all of them — no
+   *  separate healing mode.
    *
    *  REJECTS if the pass did not finish — see {@link startBlocksSyncedObserver}'s
    *  enqueue. */
-  drainWorkspace(workspaceId: string): Promise<void>
+  drainWorkspace(workspaceId: string, scope?: RematerializeScope): Promise<RematerializeReport>
   /** Is a {@link drainWorkspace} pass for `workspaceId` outstanding (running OR
    *  queued behind another unit)? The one thing a reader cannot learn from the
    *  queue: that path rewrites `blocks` straight from `blocks_synced` and
@@ -219,9 +262,10 @@ export const startBlocksSyncedObserver = (
   const applyWindow = async (
     upserted: readonly string[],
     removed: readonly string[],
-  ): Promise<void> => {
+  ): Promise<MaterializeOutcome> => {
     const outcome = await materializeStagingRows(db, { upserted, removed }, deps)
     await applyOutcome(outcome)
+    return outcome
   }
 
   const drainQueueOnce = async (): Promise<void> => {
@@ -263,12 +307,22 @@ export const startBlocksSyncedObserver = (
 
   const materializeWorkspace = async (
     workspaceId: string,
-  ): Promise<void> => {
+    scope: RematerializeScope,
+  ): Promise<RematerializeReport> => {
     if (disposed) throw disposedMidDrain()
+    // The id set is read ONCE, before the first window. A delivery that lands
+    // mid-pass is therefore not in it — correctly: that one is in the QUEUE,
+    // which the queue drain owns, and picking it up here would mean a pass
+    // whose end depends on the sync stream going quiet.
     const ids = (await db.getAll<{ id: string }>(
-      'SELECT id FROM blocks_synced WHERE workspace_id = ? ORDER BY id',
+      scope === 'unapplied'
+        ? WORKSPACE_UNAPPLIED_IDS_SQL
+        : 'SELECT id FROM blocks_synced WHERE workspace_id = ? ORDER BY id',
       [workspaceId],
     )).map(row => row.id)
+    const totals = {
+      applied: 0, deferred: 0, skippedStale: 0, quarantined: 0, resolved: 0,
+    }
     // Materialize in the same bounded windows as drainQueueOnce. A workspace
     // that synced while still unpinned (fresh-device initial sync: every row
     // defers and drainQueueOnce consumes its queue signal) can strand hundreds
@@ -280,8 +334,14 @@ export const startBlocksSyncedObserver = (
     // re-invocation resume (already-materialized rows LWW-skip next pass).
     for (let i = 0; i < ids.length; i += drainChunk) {
       if (disposed) throw disposedMidDrain()
-      await applyWindow(ids.slice(i, i + drainChunk), [])
+      const outcome = await applyWindow(ids.slice(i, i + drainChunk), [])
+      totals.applied += outcome.applied.length
+      totals.deferred += outcome.deferred.length
+      totals.skippedStale += outcome.skippedStale.length
+      totals.quarantined += outcome.quarantined.length
+      totals.resolved += outcome.resolved.length
     }
+    return { scope, scanned: ids.length, ...totals }
   }
 
   // Serialize all work on one chain so drains never overlap and flush() awaits
@@ -299,7 +359,7 @@ export const startBlocksSyncedObserver = (
   // The SPINE is a separate promise that never rejects. It is what keeps a
   // failed unit from wedging every later drain, and — because it always
   // attaches a rejection handler — what makes an unawaited `flush()` safe.
-  const enqueue = (work: () => Promise<void>): Promise<void> => {
+  const enqueue = <T>(work: () => Promise<T>): Promise<T> => {
     const done = chain.then(async () => {
       // ONE catch for both disposal checks — the one here and the loop-top ones
       // inside the drains. Written as two paths it was asymmetric: an
@@ -307,7 +367,7 @@ export const startBlocksSyncedObserver = (
       // teardown through `onError` while a not-yet-started one did not.
       try {
         if (disposed) throw disposedMidDrain()
-        await work()
+        return await work()
       } catch (err) {
         if (!isDisposedMidDrain(err)) onError(err)
         throw err
@@ -318,17 +378,24 @@ export const startBlocksSyncedObserver = (
   }
 
   const flush = (): Promise<void> => enqueue(drainQueueOnce)
-  const drainWorkspace = (workspaceId: string): Promise<void> => {
+  const drainWorkspace = (
+    workspaceId: string,
+    scope: RematerializeScope = 'all',
+  ): Promise<RematerializeReport> => {
     // Counted from ENQUEUE rather than from the first window: a rescan waiting
     // its turn on the chain will still rewrite `blocks` with nothing in the
     // queue to show for it, which is the whole blindness. Decremented off the
     // promise, which settles on every exit including the disposed one, so the
     // count cannot leak; the derived promise gets its own handler because
     // `done` alone is what we hand back.
+    //
+    // The narrower `unapplied` scope is flagged the same way. It writes fewer
+    // rows, not none — and a reader that saw no rescan in flight while one is
+    // rewriting `blocks` is the exact blindness this counter exists to close.
     const bump = (by: number) =>
       workspaceRescans.set(workspaceId, (workspaceRescans.get(workspaceId) ?? 0) + by)
     bump(1)
-    const done = enqueue(() => materializeWorkspace(workspaceId))
+    const done = enqueue(() => materializeWorkspace(workspaceId, scope))
     void done.finally(() => bump(-1)).catch(() => {})
     return done
   }
