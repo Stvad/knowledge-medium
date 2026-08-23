@@ -974,6 +974,45 @@ describe('merge integration (§9, slice B3)', () => {
     expect(siblings.map(v => v.content).sort()).toEqual(['from-status', 'into-status'])
   })
 
+  it("a source's ordinary block-ref child is not mistaken for the survivor's field row once re-homed", async () => {
+    // The sibling case to the PR #386 one below, and the half the fold's
+    // visible-child SET exists for. `from`'s ordinary `((STATUS))` child is
+    // re-homed under `into` BEFORE the field-row scan runs, so unless the set
+    // grows to include it the scan sees a child of `into` carrying a
+    // definition-shaped `reference_target_id` and registers it as `into`'s
+    // field row for Status — after which `from`'s genuine field row collapses
+    // into that unrelated block and is tombstoned.
+    await seedWorkspace('children')
+    const repo = setup()
+    await createBlock(repo, 'into')
+    await createBlock(repo, 'from')
+    await repo.tx(tx => tx.setProperty('from', statusSchema, 'from-status'),
+      {scope: ChangeScope.BlockDefault})
+    const [fromField] = await liveFieldRows('from')
+    await repo.tx(async tx => {
+      await tx.create({
+        id: 'plain-ref', workspaceId: WS, parentId: 'from', orderKey: keyAtStart(),
+        content: `((${STATUS_FIELD_ID}))`, referenceTargetId: STATUS_FIELD_ID,
+      })
+    }, {scope: ChangeScope.BlockDefault})
+
+    await repo.tx(async tx => {
+      const into = await tx.get('into')
+      const from = await tx.get('from')
+      await mergeBlocksInTx(tx, {into: into!, from: from!})
+    }, {scope: ChangeScope.BlockDefault})
+
+    // The genuine field row moved across intact, and the ordinary child took
+    // nothing under it.
+    const fromFieldRow = await sharedDb.db.get<{deleted: number; parent_id: string}>(
+      'SELECT deleted, parent_id FROM blocks WHERE id = ?', [fromField!.id],
+    )
+    expect(fromFieldRow.deleted).toBe(0)
+    expect(fromFieldRow.parent_id).toBe('into')
+    expect((await childrenRows('plain-ref')).filter(c => c.deleted === 0)).toEqual([])
+    expect(await cellValue('into')).toBe('from-status')
+  })
+
   it('an ordinary `((definitionId))` child of a value-row `into` is not mistaken for its field row (PR #386 review)', async () => {
     // `into` here is itself a property VALUE row — `owner`'s Status value —
     // which has its OWN ordinary child that happens to be a block-ref to the
