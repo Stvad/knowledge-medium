@@ -469,9 +469,9 @@ export const materializePropertyChildrenForExistingRow = async (
 }
 
 /**
- * A row coming back from a tombstone. Such a row reconciles its WHOLE bag —
- * both sides' keys — rather than the bag DIFF, because the trigger here is
- * LIVENESS, not the bag.
+ * Materialize one changed row. Normally that means the bag DIFF — but a row
+ * coming back from a tombstone reconciles its WHOLE bag, because the trigger
+ * there is LIVENESS, not the bag.
  *
  * A subtree delete tombstones the owner's field and value rows along with it
  * (§9 machinery traversal), and a revival — `tx.restore`, with or without a
@@ -480,44 +480,42 @@ export const materializePropertyChildrenForExistingRow = async (
  * value with no child-backed truth under it: post-flip the children ARE the
  * property, so every reader that has moved to them sees it as missing (#778).
  *
- * The BEFORE side is not redundant with the after side: a restore patch that
- * DROPS a key must still reach the reap branch, which is what tombstones
- * children a non-subtree delete left live.
- *
  * Undo/redo replay does NOT come through here — `applyRaw` drives each row to
  * its recorded snapshot with the same-tx pass skipped. It needs no revival
- * rule: the children this processor writes land in the reviving tx's own
- * snapshots, so replaying that tx replays them too.
+ * rule: the children written below land in the reviving tx's own snapshots, so
+ * replaying that tx replays them too.
  */
-const isRevival = (before: BlockData | null): boolean =>
-  before !== null && before.deleted
-
 const materializePropertiesForChangedRow = async (
   tx: Tx,
   row: {before: BlockData | null; after: BlockData | null},
   lookups: PropertyChildrenLookups,
 ): Promise<void> => {
   if (row.after === null || row.after.deleted) return
-  const revived = isRevival(row.before)
-  const changed = changedPropertyNames(row.before?.properties ?? {}, row.after.properties)
-  // Materialize-everything (§9 flat recognition): field rows and value rows
-  // grow their own `::` children like every other block — recognition
-  // reclaims nested machinery at any depth, so the old interior/prospective
-  // carve-outs are deleted.
-  const names = revived
-    ? [...new Set([
-        ...Object.keys(row.before!.properties),
-        ...Object.keys(row.after.properties),
-      ])]
-    : changed
+  const before = row.before
+  const changed = changedPropertyNames(before?.properties ?? {}, row.after.properties)
+  if (before === null || !before.deleted) {
+    // Materialize-everything (§9 flat recognition): field rows and value rows
+    // grow their own `::` children like every other block — recognition
+    // reclaims nested machinery at any depth, so the old interior/prospective
+    // carve-outs are deleted.
+    await materializePropertyChildrenForExistingRow(tx, row.after, lookups, changed)
+    return
+  }
+  // Revival. Both sides' keys, not just the restored one's: a restore patch
+  // that DROPS a key must still reach the reap branch, which is what tombstones
+  // children a non-subtree delete left live.
+  const wholeBag = [...new Set([
+    ...Object.keys(before.properties),
+    ...Object.keys(row.after.properties),
+  ])]
   // The decode rejection refuses a value THIS TX wrote. A revival that wrote no
   // property value has none to refuse, and rejecting a pre-existing one there
-  // only strands the block in the trash. A revival that DID write keeps the
-  // rejection — otherwise a `tx.restore` paired with a raw junk bag write in
-  // one tx would launder straight past the guard.
+  // only strands the block in the trash — a tombstoned row has no editing
+  // surface to repair the key from. A revival that DID write keeps the
+  // rejection, or `tx.restore` paired with a raw junk bag write in one tx would
+  // launder straight past the guard.
   await materializePropertyChildrenForExistingRow(
-    tx, row.after, lookups, names,
-    revived && changed.length === 0 ? 'skip' : 'reject',
+    tx, row.after, lookups, wholeBag, changed.length === 0 ? 'skip' : 'reject',
   )
 }
 
