@@ -231,10 +231,10 @@ export interface RunBackfillInput {
  *  its codec rejected — which an operator has to see, since those keys stay
  *  cell-only until the values are repaired and the pass re-run.
  *
- *  Declared off the pass's own progress type rather than re-listed: the
- *  hand-written copy had already fallen behind it by two fields, and both of
- *  them — the exact failure count and whether the workspace was being edited —
- *  are ones the operator acts on. */
+ *  Declared off the pass's own progress type rather than re-listed: a
+ *  hand-written copy falls behind it silently, and the fields it drifts on —
+ *  the exact failure count, the values that could not be migrated — are the
+ *  ones the operator acts on. */
 export type RunBackfillResult =
   OperatorBackfillResult
   & {backfillId: string; workspaceId: string}

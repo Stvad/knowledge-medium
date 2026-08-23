@@ -3179,10 +3179,6 @@ export class Repo {
           const resolution = resolver.resolve(name)
           return resolution.status === 'resolved' ? resolution.schema : undefined
         },
-        resolveFieldSchema: (fieldId) => {
-          const resolution = resolver.resolveField(fieldId)
-          return resolution.status === 'resolved' ? resolution.schema : undefined
-        },
         getAll: <T>(sql: string, params?: readonly unknown[]) =>
           this.db.getAll<T>(sql, params as unknown[] | undefined),
         // Scope and undo-recording are NOT the backfill's to choose. The scope

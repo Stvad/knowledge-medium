@@ -53,8 +53,7 @@ import { migratePropertiesToBlocksAction } from '../action.ts'
 
 const progress = (over: Partial<PropertyCellBackfillProgress> = {}): PropertyCellBackfillProgress => ({
   blocksScanned: 7, blocksMaterialized: 7, valuesMaterialized: 7,
-  valuesMaterializedTotal: 7, sweeps: 2,
-  orphanedOwnersSwept: 0, failures: [], failureCount: 0, editedUnderPass: false, ...over,
+  valuesMaterializedTotal: 7, sweeps: 2, failures: [], failureCount: 0, ...over,
 })
 
 /** Emits `reported` from inside the run, the way the pass notifies. */
@@ -88,17 +87,6 @@ afterEach(() => {
 })
 
 describe('the migration progress path', () => {
-  it('carries "the workspace was edited under the pass" through to the operator', async () => {
-    // The flag is the ONLY thing telling an operator the children may already
-    // be behind the cells — convergence deliberately does not loop on it. It
-    // reaches the banner only if the action reads it off the progress it is
-    // handed, which nothing else in the suite exercises.
-    await runReporting(progress({editedUnderPass: true}))
-
-    expect(progressHandle.done).toHaveBeenCalledWith(
-      expect.stringMatching(/may already be behind/i))
-  })
-
   it('gives the repair worklist a stable toast id, so a re-run replaces it', async () => {
     // The worklist itself says to run this again; without an id the next run
     // stacks a second sticky toast beside the first, identical apart from a
