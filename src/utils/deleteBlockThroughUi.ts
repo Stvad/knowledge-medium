@@ -41,8 +41,15 @@ const REFUSAL_TOAST_ID = 'block-deletion-refused'
 
 /** How many blocks one gesture may remove before it has to ask. Counted over
  *  the whole affected set, so the number means the same thing whether the user
- *  selected 30 blocks or pressed Delete on one collapsed page holding 30. */
-export const BULK_DELETE_CONFIRM_THRESHOLD = 10
+ *  selected 30 blocks or pressed Delete on one collapsed page holding 30.
+ *
+ *  Sized for a confirmation that stays worth reading: one the user meets often
+ *  enough to click through without looking is worse than none, since it trains
+ *  the reflex it exists to interrupt. The count includes property field/value
+ *  rows, so a property-heavy block reads higher than what is on screen — if
+ *  this starts asking about deletes that look small, that inflation is the
+ *  first thing to check, not the number here (see km-y6my). */
+export const BULK_DELETE_CONFIRM_THRESHOLD = 20
 
 export interface DeleteThroughUiOptions {
   /** Wrap the writes in the move view-transition. Owned here rather than by
