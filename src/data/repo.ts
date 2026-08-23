@@ -531,6 +531,52 @@ export interface OperatorBackfillResult {
   retryable?: boolean
 }
 
+/** Why a backfill cannot run at all when the composition root wired no claim
+ *  seam. One string, because the operator gesture refuses on it before writing
+ *  and the automatic loop reports it after — and a human reading either must
+ *  not have to tell two wordings apart. */
+const NO_COMPLETION_CLAIM =
+  'no BackfillCompletionClaim is configured, so completion cannot be recorded'
+
+/** What a device may do about a backfill claim it does not yet hold.
+ *
+ *  `tryClaim` WRITES — it ensures the Migrations page and creates the claim
+ *  row — so a device that fails one of these has to be turned away BEFORE that
+ *  write: a stale device leaves the create and its release both queued, and
+ *  they land later, out of order, against a completion it never saw, freeing
+ *  later operators to repeat the migration.
+ *
+ *  The kinds are separate because the callers answer them differently: the
+ *  automatic loop tries the next pass past a not-primed registry, re-arms on a
+ *  transient view gap, and stops on the rest. */
+type BackfillClaimRefusal =
+  | {readonly kind: 'read-only'}
+  | {readonly kind: 'stale'; readonly reason: string}
+  | {readonly kind: 'not-primed'; readonly reason: string}
+  | {readonly kind: 'view-gap'; readonly reason: string; readonly transient: boolean}
+
+/** What came of trying to take a claim. `not-ours` folds "a peer holds it"
+ *  and "it is already complete and this caller may not reclaim" together —
+ *  neither is this device's to run, and the claim seam does not tell them
+ *  apart. */
+type BackfillClaimAttempt =
+  | {readonly status: 'claimed'}
+  | {readonly status: 'not-ours'}
+  | {readonly status: 'refused'; readonly refusal: BackfillClaimRefusal}
+
+/** The backfill itself, runnable from inside a gesture that already holds the
+ *  claim for it. See {@link Repo.withOperatorBackfillClaim}. */
+export interface OperatorBackfillPass {
+  run(): Promise<OperatorBackfillResult>
+}
+
+/** What {@link Repo.withOperatorBackfillClaim} did. `claimed: false` carries
+ *  the outcome to report and means the body never ran, so nothing this gesture
+ *  would have written exists. */
+export type OperatorBackfillClaimOutcome =
+  | {readonly claimed: true}
+  | {readonly claimed: false; readonly result: OperatorBackfillResult}
+
 export class Repo {
   readonly db: PowerSyncDb
   readonly cache: BlockCache
@@ -3078,6 +3124,107 @@ export class Repo {
     }
   }
 
+
+  /** Why this run no longer belongs to the workspace it was scheduled for, or
+   *  null. Covers BOTH ways a run can outlive its workspace: switched away (id
+   *  differs) and switched away and back (id restored, generation moved).
+   *  Identity first, so each case reports its own cause. */
+  private staleBackfillRun(workspaceId: string, generation: number): string | null {
+    if (this.activeWorkspaceId !== workspaceId) {
+      return `workspace ${workspaceId} is no longer active`
+    }
+    if (this.workspaceGeneration !== generation) {
+      return `workspace ${workspaceId} was re-opened since this run was scheduled`
+    }
+    return null
+  }
+
+  /**
+   * Take the claim for one backfill, or say why this device may not.
+   *
+   * The preconditions and the claim write live in ONE method because their
+   * ORDER is the whole point. `tryClaim` writes — the Migrations page, then
+   * the claim row — so a device that fails a precondition has to be turned
+   * away before that write: on a stale or disconnected device the old order
+   * wrote a claim, hit the in-transaction sync assertion, and released it,
+   * leaving both writes in the upload queue to land later and out of order
+   * against a completion this device never saw, which tombstoned the record
+   * and freed later operators to repeat the migration. And the last staleness
+   * check must have NOTHING awaited between it and `tryClaim`, which a caller
+   * doing the checks itself cannot promise.
+   *
+   * What this closes is the STALE-DEVICE case. It does NOT make the claim
+   * atomic: rows can stage in the window between the gap check and the claim
+   * transaction, and a peer's claim that is staged-but-undrained is invisible
+   * to the in-tx re-read there. That residual is accepted, not overlooked —
+   * closing it means arbitration, which `graphBackfillClaim`'s header forbids
+   * by name and for a recorded reason (an earlier revision tried; the regress
+   * had no fixed point). Exactly-once here is a person running it in one place.
+   */
+  private async takeBackfillClaim(
+    claim: BackfillCompletionClaim,
+    workspaceId: string,
+    backfill: WorkspaceBackfill,
+    generation: number,
+  ): Promise<BackfillClaimAttempt> {
+    // A role flip to read-only during a deferral window must stop further
+    // writes — re-asked per backfill, since a run can span several txs.
+    if (this.isReadOnly) return {status: 'refused', refusal: {kind: 'read-only'}}
+    // Don't even START a pass whose workspace has been re-opened since it was
+    // scheduled. `assertBackfillMayWrite` catches this per transaction, but
+    // that is one tx too late to avoid the scan a backfill does first.
+    const stale = this.staleBackfillRun(workspaceId, generation)
+    if (stale !== null) return {status: 'refused', refusal: {kind: 'stale', reason: stale}}
+    // An unprimed registry makes the whole graph look like it has zero
+    // registered properties, so a pass would find no candidates, write
+    // nothing, and then record a PERMANENT per-graph completion — the
+    // migration marked done without migrating anything, on every device
+    // forever. Checked here rather than only inside the writes because a run
+    // that finds no candidates never opens a transaction at all.
+    if (!this.propertyRegistryReadyFor(workspaceId)) {
+      console.warn(
+        `[workspaceBackfills] "${backfill.id}" deferred: workspace ${workspaceId}'s ` +
+        `property registry is not primed, so a scan would see no registered ` +
+        `properties and complete vacuously. Retrying on the next open.`,
+      )
+      return {
+        status: 'refused',
+        refusal: {
+          kind: 'not-primed',
+          reason: `workspace ${workspaceId}'s property registry is not primed yet`,
+        },
+      }
+    }
+    // A pass that claims and uploads from a graph half of which is still
+    // ciphertext on disk is the same stale-view write as one that claims
+    // mid-drain. The SAME predicate `assertBackfillMayWrite` re-asks per
+    // transaction — there is deliberately no cheaper approximation for the hot
+    // path, because that split is what let the two answers disagree.
+    const gap = await this.workspaceViewGap(workspaceId)
+    if (gap !== null) {
+      console.warn(
+        `[workspaceBackfills] "${backfill.id}" deferred: ${gap.reason}, so claiming ` +
+        `would write from a stale view.`,
+      )
+      return {
+        status: 'refused',
+        refusal: {kind: 'view-gap', reason: gap.reason, transient: gap.transient},
+      }
+    }
+    // Re-evaluated: the gap check above AWAITS, and a switch across that await
+    // leaves the earlier evaluation stale — including a switch away and back,
+    // which restores the id and moves only the generation. Last statement
+    // before the claim write, nothing awaited in between.
+    const staleNow = this.staleBackfillRun(workspaceId, generation)
+    if (staleNow !== null) {
+      return {status: 'refused', refusal: {kind: 'stale', reason: staleNow}}
+    }
+    const won = await claim.tryClaim(workspaceId, backfill.id, {
+      reclaimCompleted: backfill.trigger === 'operator',
+    })
+    return won ? {status: 'claimed'} : {status: 'not-ours'}
+  }
+
   /**
    * Run ONE `operator`-triggered backfill now, because a human asked.
    *
@@ -3092,52 +3239,180 @@ export class Repo {
    * preconditions, `BlockDefault` scope, `skipUndo`, and the claim. Returns
    * what happened so a caller can tell the operator, rather than logging into
    * the void.
+   *
+   * The pass-only shape of {@link withOperatorBackfillClaim} — right when the
+   * gesture IS the pass. A gesture that writes before the pass has to hold the
+   * claim across those writes too, and takes that method directly.
    */
   async runWorkspaceBackfillNow(
     workspaceId: string,
     backfillId: string,
   ): Promise<OperatorBackfillResult> {
-    if (this.isReadOnly) return {outcome: 'read-only', undoHistoryCleared: false}
+    let ran: OperatorBackfillResult | null = null
+    const gesture = await this.withOperatorBackfillClaim(
+      workspaceId, backfillId, async pass => { ran = await pass.run() },
+    )
+    // Non-null whenever the body ran, and the body is one statement.
+    return gesture.claimed ? ran! : gesture.result
+  }
+
+  /**
+   * Hold this workspace's graph-wide claim for `backfillId` across a whole
+   * operator GESTURE, rather than only across the pass.
+   *
+   * The claim decides which device writes a once-per-graph repair. A gesture
+   * whose EARLIER steps also write source-of-truth rows therefore has to hold
+   * it from its first write: the properties migration synthesizes definition
+   * blocks and flips the workspace before its pass runs, and two devices that
+   * both cleared the confirmation before either wrote would otherwise publish
+   * rival definitions for the same key — same deterministic id, different
+   * preset, because which presets a device can prove is a LOCAL fact — and
+   * only then discover which of them owns the pass. Whichever definition sync
+   * settles on, the children the winner migrated decode under a codec it does
+   * not declare.
+   *
+   * `body` runs with the claim held and does its own reporting; `pass.run()`
+   * runs the backfill under that same claim. The claim is handed back on EVERY
+   * exit — normal return, throw, an early return inside the body — except a
+   * pass that recorded completion, which `releaseClaim` leaves alone because
+   * deleting it would drop the graph's record that the migration is done.
+   *
+   * `claimed: false` means the body never ran and this gesture wrote nothing;
+   * its `result` is the outcome to report, in the same vocabulary
+   * {@link runWorkspaceBackfillNow} returns so one reporter covers both.
+   */
+  async withOperatorBackfillClaim(
+    workspaceId: string,
+    backfillId: string,
+    body: (pass: OperatorBackfillPass) => Promise<void>,
+  ): Promise<OperatorBackfillClaimOutcome> {
+    const refuse = (result: OperatorBackfillResult): OperatorBackfillClaimOutcome =>
+      ({claimed: false, result})
+    if (this.isReadOnly) return refuse({outcome: 'read-only', undoHistoryCleared: false})
     const backfill = this._workspaceBackfills.find(
       b => b.id === backfillId && b.trigger === 'operator',
     )
-    if (!backfill) return {outcome: 'not-found', undoHistoryCleared: false}
+    if (!backfill) return refuse({outcome: 'not-found', undoHistoryCleared: false})
+    const claim = this.backfillCompletionClaim
+    if (!claim) {
+      // Refused here rather than left to the runner: without a claim seam
+      // there is nothing to hold, so a body that writes before the pass would
+      // do it unguarded — which is the hazard this gesture exists to close.
+      console.error(
+        `[workspaceBackfills] refusing operator gesture for "${backfillId}" in workspace ` +
+        `${workspaceId}: no BackfillCompletionClaim is configured, so completion cannot ` +
+        `be recorded once per graph.`,
+      )
+      return refuse({
+        outcome: 'failed', undoHistoryCleared: false, reason: NO_COMPLETION_CLAIM,
+      })
+    }
     // Single-flight per (workspace, backfill). Two invocations in ONE Repo —
     // an operator double-clicking, or clicking again during a long pass —
-    // share a claimant, so the second would read the first's claim as its own
-    // and proceed. Then either one aborting releases the claim they SHARE
-    // while the other is still writing, and the survivor's `markComplete`
-    // stamps a tombstone: the completion becomes invisible and the next
-    // operator repeats the whole migration. The claim cannot see this, since
-    // both invocations are legitimately the same claimant.
+    // share a claimant, so the second reads the first's claim as its own and
+    // proceeds. Then either one aborting releases the claim they SHARE while
+    // the other is still writing, and the survivor's `markComplete` stamps a
+    // tombstone: the completion becomes invisible and the next operator
+    // repeats the whole migration. The claim cannot see this, since both
+    // invocations are legitimately the same claimant.
+    //
+    // Around the WHOLE gesture, not just the pass: the steps before the pass
+    // write too, and a second invocation stopped only at the pass would have
+    // synthesized and flipped first.
     const flightKey = `${workspaceId}:${backfillId}`
     if (this.inFlightOperatorBackfills.has(flightKey)) {
-      return {outcome: 'already-running', undoHistoryCleared: false}
+      return refuse({outcome: 'already-running', undoHistoryCleared: false})
     }
     this.inFlightOperatorBackfills.add(flightKey)
     try {
-      const {completed, undoHistoryCleared, deferred, deferredRetryable, failed} = await this.runWorkspaceBackfills(
-        workspaceId, [backfill], this.workspaceGeneration,
-      )
-      // `completed` is LOCAL to this invocation. Keying on this id as well is
-      // defence in depth, not load-bearing: the call above passes a
-      // single-element array, so the set can only contain this backfill, and
-      // deleting the key fails no test. Written this way so a future caller
-      // passing more than one is correct by construction.
-      if (completed.has(backfill.id)) return {outcome: 'ran', undoHistoryCleared}
-      if (failed !== null) return {outcome: 'failed', undoHistoryCleared, reason: failed}
-      if (deferred !== null) {
-        return {outcome: 'deferred', undoHistoryCleared, reason: deferred, retryable: deferredRetryable}
+      let attempt: BackfillClaimAttempt
+      try {
+        attempt = await this.takeBackfillClaim(
+          claim, workspaceId, backfill, this.workspaceGeneration,
+        )
+      } catch (err) {
+        // `tryClaim` writes, so it can reject. Reported rather than thrown on:
+        // the caller has a human to tell, and nothing has been written by this
+        // gesture — the claim's own transaction either committed or rolled back.
+        const reason = err instanceof Error ? err.message : String(err)
+        console.error(
+          `[workspaceBackfills] could not claim "${backfillId}" for workspace ` +
+          `${workspaceId}: ${reason}`,
+        )
+        return refuse({outcome: 'failed', undoHistoryCleared: false, reason})
       }
-      // Nothing else is left. An operator run RECLAIMS a completed claim, so
-      // "already migrated" cannot land here — only a claim another device is
-      // holding, which includes one it took and never released.
-      return {outcome: 'held-by-peer', undoHistoryCleared}
+      if (attempt.status === 'not-ours') {
+        return refuse({outcome: 'held-by-peer', undoHistoryCleared: false})
+      }
+      if (attempt.status === 'refused') {
+        return refuse(this.refusedBackfillResult(attempt.refusal))
+      }
+      try {
+        await body({run: () => this.runClaimedOperatorBackfill(workspaceId, backfill)})
+        return {claimed: true}
+      } finally {
+        // `finally`, because the body reports its own outcomes and returns
+        // early from several of them. A claim left behind by a device that is
+        // no longer running anything blocks the pass for the whole graph until
+        // a human deletes the block.
+        //
+        // Swallowed: the body has already told the operator what happened, and
+        // a release that failed is a stranded claim with a documented recovery
+        // — not a reason to replace that report with an exception.
+        await claim.releaseClaim(workspaceId, backfill.id).catch((err: unknown) => {
+          console.error(
+            `[workspaceBackfills] could not release the claim on "${backfill.id}" for ` +
+            `workspace ${workspaceId} — delete the claim block on the Migrations page to ` +
+            `let this pass run again:`, err,
+          )
+        })
+      }
     } finally {
       this.inFlightOperatorBackfills.delete(flightKey)
     }
   }
 
+  /** How an operator hears a pre-claim refusal. `deferred` for everything
+   *  waiting or a repair can clear, with `retryable` saying which — the one
+   *  thing the human can act on. */
+  private refusedBackfillResult(refusal: BackfillClaimRefusal): OperatorBackfillResult {
+    if (refusal.kind === 'read-only') {
+      return {outcome: 'read-only', undoHistoryCleared: false}
+    }
+    return {
+      outcome: 'deferred',
+      undoHistoryCleared: false,
+      reason: refusal.reason,
+      retryable: refusal.kind === 'view-gap' ? refusal.transient : true,
+    }
+  }
+
+  /** The operator pass itself, with the single-flight key already held by the
+   *  caller — {@link withOperatorBackfillClaim}, which owns the claim around
+   *  it. */
+  private async runClaimedOperatorBackfill(
+    workspaceId: string,
+    backfill: WorkspaceBackfill,
+  ): Promise<OperatorBackfillResult> {
+    const {completed, undoHistoryCleared, deferred, deferredRetryable, failed} =
+      await this.runWorkspaceBackfills(workspaceId, [backfill], this.workspaceGeneration)
+    // `completed` is LOCAL to this invocation. Keying on this id as well is
+    // defence in depth, not load-bearing: the call above passes a
+    // single-element array, so the set can only contain this backfill, and
+    // deleting the key fails no test. Written this way so a future caller
+    // passing more than one is correct by construction.
+    if (completed.has(backfill.id)) return {outcome: 'ran', undoHistoryCleared}
+    if (failed !== null) return {outcome: 'failed', undoHistoryCleared, reason: failed}
+    if (deferred !== null) {
+      return {outcome: 'deferred', undoHistoryCleared, reason: deferred, retryable: deferredRetryable}
+    }
+    // Nothing else is left, and every other way out of the run sets one of the
+    // three above — so this is a claim that stopped being ours: a peer's
+    // claim can arrive between the gesture taking one and the pass re-reading
+    // it. An operator run RECLAIMS a completed claim, so "already migrated"
+    // cannot land here.
+    return {outcome: 'held-by-peer', undoHistoryCleared}
+  }
   /** `completed` is the ids that RAN TO COMPLETION — not merely those
    *  attempted, so a caller can report an outcome tied to its own request
    *  rather than to whatever else happened to finish. */
@@ -3178,127 +3453,53 @@ export class Repo {
         `${workspaceId}: no BackfillCompletionClaim is configured, so completion ` +
         `cannot be recorded once per graph.`,
       )
-      // Reported as a FAILURE, not left to the fallthrough — which now means
-      // "a peer holds the claim" and tells the operator to go delete a claim
-      // block that in this configuration does not exist.
-      failed = 'no BackfillCompletionClaim is configured, so completion cannot be recorded'
+      // Reported as a FAILURE, not left to the fallthrough — which means "a
+      // peer holds the claim" and would tell an operator to go delete a claim
+      // block that in this configuration does not exist. Reached only by the
+      // automatic path, which discards it; `withOperatorBackfillClaim` refuses
+      // on the same condition before a body can write.
+      failed = NO_COMPLETION_CLAIM
       return {completed, undoHistoryCleared, deferred, deferredRetryable, failed}
     }
-    // Stale covers BOTH ways a run can outlive its workspace: switched away (id
-    // differs) and switched away and back (id restored, generation moved).
-    // Identity first, so each case reports its own cause.
-    const runStale = (): string | null =>
-      this.activeWorkspaceId !== workspaceId
-        ? `workspace ${workspaceId} is no longer active`
-        : this.workspaceGeneration !== generation
-          ? `workspace ${workspaceId} was re-opened since this run was scheduled`
-          : null
     for (const backfill of backfills) {
-      // A role flip to read-only during the deferral window must stop further
-      // writes — re-check per backfill (the loop can span several txs).
-      if (this.isReadOnly) return {completed, undoHistoryCleared, deferred, deferredRetryable, failed}
-      // Don't even START a pass whose workspace has been re-opened since it was
-      // scheduled. `assertBackfillMayWrite` catches this per transaction, but
-      // that is one tx too late to avoid the scan a backfill does first.
-      if (this.workspaceGeneration !== generation) return {completed, undoHistoryCleared, deferred, deferredRetryable, failed}
-      // The generation check above cannot see an id mismatch on a MATCHING
-      // generation, which is what an operator naming a non-active workspace
-      // produces. `deferred` must be set: an empty result reads as
-      // `held-by-peer`, telling them "already done" about a run that never
-      // started.
-      const stale = runStale()
-      if (stale !== null) {
-        deferred = stale
+      // Everything that must hold before the claim row is written, plus the
+      // write itself — one method, because the last staleness check and
+      // `tryClaim` must have no await between them (see `takeBackfillClaim`).
+      const attempt = await this.takeBackfillClaim(claim, workspaceId, backfill, generation)
+      if (attempt.status === 'not-ours') continue
+      if (attempt.status === 'refused') {
+        const {refusal} = attempt
+        deferred = refusal.kind === 'read-only'
+          ? `workspace ${workspaceId} became read-only`
+          : refusal.reason
+        // `not-primed` is the one refusal about THIS pass rather than about
+        // the device, so the next backfill still gets its turn. Every other
+        // ends the run — and each sets a reason above, because an empty result
+        // reads as `held-by-peer` at the operator entry point, telling a human
+        // "already done" about a pass that never started.
+        if (refusal.kind === 'not-primed') continue
+        // Waiting clears a transient gap and a workspace switch; it clears
+        // neither a durable gap nor a role flip.
+        deferredRetryable = refusal.kind === 'view-gap'
+          ? refusal.transient
+          : refusal.kind !== 'read-only'
+        // Re-arm ONLY when waiting is a remedy, and RETURN either way. The
+        // caught-up half of the gap gate self-re-arms through `arm()`'s parked
+        // callback; the staged-rows half has nothing to park on, so an
+        // automatic pass would be written off for the whole session by a
+        // blocker that clears in milliseconds. Returning is what keeps that to
+        // ONE re-arm: the gap is a property of the device, so every remaining
+        // pass would defer identically, and `arm()` de-dupes only a PARKED
+        // gate — N re-arms would each schedule a job that re-runs all N. A
+        // DURABLE gap gets none: `arm()` fires synchronously once caught up,
+        // so it would spin until the next open on a condition nothing is
+        // working on. Either way this reaches `workspace-open` passes only;
+        // an `operator` pass defers to a person who can be told to retry.
+        if (refusal.kind === 'view-gap' && refusal.transient) {
+          this.scheduleWorkspaceBackfills(workspaceId)
+        }
         return {completed, undoHistoryCleared, deferred, deferredRetryable, failed}
       }
-      // BEFORE claiming: an unprimed registry makes the whole graph look like
-      // it has zero registered properties, so a pass would find no candidates,
-      // write nothing, and then record a PERMANENT per-graph completion — the
-      // migration marked done without migrating anything, on every device
-      // forever. Checked here rather than only inside the writes because a run
-      // that finds no candidates never opens a transaction at all.
-      if (!this.propertyRegistryReadyFor(workspaceId)) {
-        deferred = `workspace ${workspaceId}'s property registry is not primed yet`
-        console.warn(
-          `[workspaceBackfills] "${backfill.id}" deferred: workspace ${workspaceId}'s ` +
-          `property registry is not primed, so a scan would see no registered ` +
-          `properties and complete vacuously. Retrying on the next open.`,
-        )
-        continue
-      }
-      // BEFORE claiming, not only before writing. `tryClaim` itself WRITES —
-      // it ensures the Migrations page and creates the claim row — so on a
-      // disconnected or stale device the old order wrote a claim, hit the
-      // in-transaction sync assertion, and released it. Both writes then sat
-      // in the upload queue, and on reconnect the create could conflict with
-      // an unseen server completion while the following `deleted=1` patch
-      // tombstoned it, freeing later operators to repeat the migration.
-      // The SAME predicate the writes assert on, not just its caught-up half:
-      // a device can also be behind with rows staged and undrained, and that
-      // half reached `tryClaim` unchecked.
-      //
-      // What this closes is the STALE-DEVICE case — a device disconnected or
-      // catching up, whose claim create and release tombstone both sit in the
-      // upload queue and land later, out of order, against a completion it
-      // never saw. It does NOT make the claim atomic: rows can stage in the
-      // window between this check and `tryClaim`'s transaction, and a peer's
-      // claim that is staged-but-undrained is invisible to the in-tx re-read
-      // there. That residual is accepted, not overlooked — closing it means
-      // arbitration, which `graphBackfillClaim`'s header forbids by name and
-      // for a recorded reason (an earlier revision tried; the regress had no
-      // fixed point). Exactly-once here is a person running it in one place.
-      //
-      // Note the create+tombstone pair is ROUTINE, not exceptional: every
-      // mid-run abort releases the claim. Its being queued while stale is the
-      // problem, not its existence.
-      // A pass that claims and uploads from a graph half of which is still
-      // ciphertext on disk is the same stale-view write as one that claims
-      // mid-drain. The SAME predicate `assertBackfillMayWrite` re-asks per
-      // transaction — there is deliberately no cheaper approximation for the
-      // hot path, because that split is what let the two answers disagree.
-      const gap = await this.workspaceViewGap(workspaceId)
-      if (gap !== null) {
-        deferred = gap.reason
-        deferredRetryable = gap.transient
-        console.warn(
-          `[workspaceBackfills] "${backfill.id}" deferred: ${gap.reason}, so claiming ` +
-          `would write from a stale view.`,
-        )
-        // Re-arm and RETURN, exactly as the TRANSIENT catch below does — but
-        // ONLY when waiting is a remedy. The caught-up half of this gate would
-        // self-re-arm through `arm()`'s parked callback, but the staged-rows
-        // half has no gate to park on — nothing fires when the queue drains,
-        // so without this an automatic pass is written off for the whole
-        // session by a blocker that clears in milliseconds. Returning is what
-        // keeps that to ONE re-arm: the gap is a property of the device, not
-        // of a backfill, so every remaining one would defer identically — and
-        // `arm()` only de-dupes a PARKED gate, so N re-arms here would each
-        // schedule their own job and each job would re-run all N passes.
-        //
-        // A DURABLE gap gets no re-arm — not because the check is dear, but
-        // because it is pointless: `arm()` fires synchronously once the device
-        // is caught up, so this would spin on a condition nothing is working
-        // on for the rest of the session. The next open re-runs the pass
-        // anyway, which is where a recovery gesture will have landed.
-        //
-        // Re-arming reaches `workspace-open` passes only, which is all
-        // `scheduleWorkspaceBackfills` schedules. An `operator` pass defers to
-        // its caller, who is a person that can be told to retry.
-        if (gap.transient) this.scheduleWorkspaceBackfills(workspaceId)
-        return {completed, undoHistoryCleared, deferred, deferredRetryable, failed}
-      }
-      // Re-evaluated: the gap check above AWAITS, and a switch across that await
-      // leaves the earlier evaluation stale — including a switch away and back,
-      // which restores the id and moves only the generation. Last statement
-      // before the claim write, nothing awaited in between.
-      const staleNow = runStale()
-      if (staleNow !== null) {
-        deferred = staleNow
-        return {completed, undoHistoryCleared, deferred, deferredRetryable, failed}
-      }
-      if (!(await claim.tryClaim(workspaceId, backfill.id, {
-        reclaimCompleted: backfill.trigger === 'operator',
-      }))) continue
       const resolver = this.propertySchemaResolverFor(workspaceId)
       let wrote = false
       const ctx: WorkspaceBackfillContext = {

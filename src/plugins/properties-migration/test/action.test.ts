@@ -47,6 +47,7 @@ const plan = (candidates = 0) => ({
 })
 
 import type { OperatorBackfillResult, Repo, ViewGap } from '@/data/repo'
+import { claimStub, type ClaimStubLog } from './claimStub.ts'
 import { describeOutcome, migratePropertiesToBlocksAction } from '../action.ts'
 
 const clearUndo = vi.fn()
@@ -67,7 +68,12 @@ const STRANDED: ViewGap = {
 
 const makeRepo = (
   result: OperatorBackfillResult = RAN,
-  {flipped = false, owner = USER}: {flipped?: boolean; owner?: string} = {},
+  {flipped = false, owner = USER, refuseClaim, log}: {
+    flipped?: boolean
+    owner?: string
+    refuseClaim?: () => OperatorBackfillResult | null
+    log?: ClaimStubLog
+  } = {},
 ) => {
   const runWorkspaceBackfillNow = vi.fn(async () => result)
   const getAll = vi.fn(async () => [{n: 7}])
@@ -83,6 +89,10 @@ const makeRepo = (
     isReadOnly: false,
     workspaceViewGap,
     undoManagerFor: () => ({clear: clearUndo}),
+    // The gesture reaches the pass THROUGH the claim, so the stub is what
+    // makes `runWorkspaceBackfillNow` reachable at all — a fixture that ran
+    // the body unclaimed would make every ordering assertion below vacuous.
+    withOperatorBackfillClaim: claimStub(runWorkspaceBackfillNow, {log, refuse: refuseClaim}),
     runWorkspaceBackfillNow,
   } as unknown as Repo
   return {repo, runWorkspaceBackfillNow, getAll, workspaceViewGap, getOptional}
@@ -436,6 +446,85 @@ describe('migrate_properties_to_blocks action', () => {
 
     expect(progressHandle.done).not.toHaveBeenCalled()
     expect(progressHandle.fail).toHaveBeenCalledWith(expect.stringMatching(/not caught up/))
+  })
+})
+
+describe('the graph-wide claim', () => {
+  it('is taken before synthesis, and handed back only at the end', async () => {
+    // The bug this pins (#710): the claim used to be taken inside the pass,
+    // which is the LAST thing this gesture does. Synthesis and the flip both
+    // write before it, so two devices that each cleared the dialog could mint
+    // rival definitions for the same key — same deterministic id, different
+    // preset, because which presets a device can prove is a local fact — and
+    // only then discover which of them owned the pass.
+    const log: ClaimStubLog = {events: []}
+    const {repo} = makeRepo(RAN, {log})
+    planSynthesis.mockResolvedValue(plan(1))
+    applySynthesis.mockImplementation(async () => {
+      log.events.push('synthesize')
+      return {created: 1, converged: 0, skipped: []}
+    })
+    flipWorkspace.mockImplementation(async () => {
+      log.events.push('flip')
+      return {localApplied: true}
+    })
+
+    await invoke(repo)
+
+    expect(log.events).toEqual(['claim', 'synthesize', 'flip', 'run', 'release'])
+  })
+
+  it('stops before synthesis when another device holds it, and says where it lives', async () => {
+    // "Another device is doing this" has to arrive BEFORE this one writes its
+    // own definitions, and it has to name the recovery: no timeout releases a
+    // claim whose device never came back.
+    const {repo} = makeRepo(RAN, {
+      refuseClaim: () => ({outcome: 'held-by-peer', undoHistoryCleared: false}),
+    })
+    planSynthesis.mockResolvedValue(plan(2))
+
+    await invoke(repo)
+
+    expect(applySynthesis).not.toHaveBeenCalled()
+    expect(flipWorkspace).not.toHaveBeenCalled()
+    expect(progressHandle.fail).toHaveBeenCalledWith(
+      expect.stringMatching(/another client holds this migration/i))
+    expect(progressHandle.fail).toHaveBeenCalledWith(expect.stringMatching(/claim block/i))
+  })
+
+  it('says why a device that cannot take it is turning back', async () => {
+    // Silence here reads as "nothing to do": the banner is already up, and the
+    // operator has just consented to a migration.
+    const {repo} = makeRepo(RAN, {
+      refuseClaim: () => ({
+        outcome: 'deferred', undoHistoryCleared: false, retryable: true,
+        reason: 'this device is not caught up with the server',
+      }),
+    })
+    planSynthesis.mockResolvedValue(plan(2))
+
+    await invoke(repo)
+
+    expect(applySynthesis).not.toHaveBeenCalled()
+    expect(progressHandle.fail).toHaveBeenCalledWith(
+      expect.stringMatching(/not caught up with the server.*Nothing was changed/is))
+  })
+
+  it('keeps the flip inside the claimed region, so a failed flip still releases', async () => {
+    // The flip is the fleet-wide, one-way step. Outside the claim it would be
+    // the second write a rival device could make concurrently; inside it, a
+    // flip that throws still ends the gesture through the release.
+    const log: ClaimStubLog = {events: []}
+    const {repo, runWorkspaceBackfillNow} = makeRepo(RAN, {log})
+    flipWorkspace.mockRejectedValue(new Error('the server refused'))
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    await invoke(repo)
+
+    expect(log.events).toEqual(['claim', 'release'])
+    expect(runWorkspaceBackfillNow).not.toHaveBeenCalled()
+    expect(progressHandle.fail).toHaveBeenCalledWith(
+      expect.stringMatching(/could not switch this workspace/i))
   })
 })
 

@@ -925,3 +925,201 @@ describe('workspace backfill runner — concurrent operator invocations', () => 
     expect((await first).outcome).toBe('ran')
   })
 })
+
+/**
+ * `withOperatorBackfillClaim` — a gesture whose steps BEFORE the pass also
+ * write source-of-truth rows (the properties migration synthesizes definition
+ * blocks and flips the workspace), so it has to hold the graph-wide claim
+ * across all of them rather than take it inside the pass.
+ */
+describe('workspace backfill runner — a claim held across a gesture', () => {
+  /** Records the claim seam's calls in order, so a test can assert the claim
+   *  came before the body rather than merely that both happened. */
+  const spyClaim = (events: string[], {won = true}: {won?: boolean} = {}) => ({
+    tryClaim: async () => { events.push('tryClaim'); return won },
+    markComplete: async () => { events.push('markComplete') },
+    releaseClaim: async () => { events.push('releaseClaim') },
+  })
+
+  const gestureRepo = (events: string[], backfill: WorkspaceBackfill, won = true): Repo => {
+    const {repo} = createTestRepo({
+      db: sharedDb.db,
+      user: {id: 'user-1'},
+      backfillCompletionClaim: spyClaim(events, {won}),
+    })
+    repo.setActiveWorkspaceId(WS)
+    repo.setRuntimeContributions(workspaceBackfillsFacet, 'test-backfills', [backfill])
+    return repo
+  }
+
+  const noopPass = (runs: string[] = []): WorkspaceBackfill => ({
+    id: 'gesture-v1',
+    trigger: 'operator' as const,
+    run: async ({workspaceId}) => { runs.push(workspaceId) },
+  })
+
+  it('takes the claim before the body writes anything, and hands it back after', async () => {
+    // The whole point: synthesis commits definition blocks BEFORE the pass, so
+    // a claim taken inside the pass lets two devices publish rival definitions
+    // for the same key and only then decide which of them backfills.
+    const events: string[] = []
+    const repo = gestureRepo(events, noopPass())
+    await seedTarget(repo)
+
+    const outcome = await repo.withOperatorBackfillClaim(WS, 'gesture-v1', async pass => {
+      events.push('body-writes')
+      await pass.run()
+    })
+
+    expect(outcome).toEqual({claimed: true})
+    // The pass re-asks: a peer's claim can sync in during the body, and
+    // `tryClaim` on a claim we still hold is a read that answers `proceed`
+    // without writing. What matters here is the FIRST one, before the body.
+    expect(events).toEqual([
+      'tryClaim', 'body-writes', 'tryClaim', 'markComplete', 'releaseClaim',
+    ])
+  })
+
+  it('does not let the body run at all when a peer holds the claim', async () => {
+    // The regression this method exists for. Told "held by a peer" AFTER
+    // synthesizing, a device has already published its own definitions.
+    const events: string[] = []
+    const bodies: string[] = []
+    const repo = gestureRepo(events, noopPass(), false)
+    await seedTarget(repo)
+
+    const outcome = await repo.withOperatorBackfillClaim(WS, 'gesture-v1', async () => {
+      bodies.push('ran')
+    })
+
+    expect(bodies).toEqual([])
+    expect(outcome).toEqual({
+      claimed: false,
+      result: {outcome: 'held-by-peer', undoHistoryCleared: false},
+    })
+    // Nothing to hand back — releasing a claim this device never won would
+    // take it from the peer that does hold it.
+    expect(events).toEqual(['tryClaim'])
+  })
+
+  it('hands the claim back when the body throws', async () => {
+    // A body that dies partway has to release, or one device's bad moment
+    // blocks the pass for the whole graph until a human deletes the block.
+    const events: string[] = []
+    const repo = gestureRepo(events, noopPass())
+    await seedTarget(repo)
+
+    await expect(repo.withOperatorBackfillClaim(WS, 'gesture-v1', async () => {
+      throw new Error('synthesis exploded')
+    })).rejects.toThrow(/synthesis exploded/)
+
+    expect(events).toEqual(['tryClaim', 'releaseClaim'])
+  })
+
+  it('hands the claim back when the body returns early without running the pass', async () => {
+    // The migration's own shape: several branches report a refusal and return
+    // before reaching `pass.run()` — a flip that failed, a definition that
+    // could not be minted.
+    const events: string[] = []
+    const repo = gestureRepo(events, noopPass())
+    await seedTarget(repo)
+
+    await repo.withOperatorBackfillClaim(WS, 'gesture-v1', async () => {})
+
+    expect(events).toEqual(['tryClaim', 'releaseClaim'])
+  })
+
+  it('does not claim, or run the body, while this device is behind the server', async () => {
+    // `tryClaim` WRITES. The gate that protected the pass has to protect the
+    // gesture too, or the claim moves in front of it.
+    const events: string[] = []
+    const bodies: string[] = []
+    const {repo} = createTestRepo({
+      db: sharedDb.db,
+      user: {id: 'user-1'},
+      backfillSyncGate: () => () => {},
+      backfillCompletionClaim: spyClaim(events),
+    })
+    repo.setActiveWorkspaceId(WS)
+    repo.setRuntimeContributions(workspaceBackfillsFacet, 'test-backfills', [noopPass()])
+    await seedTarget(repo)
+
+    const outcome = await repo.withOperatorBackfillClaim(WS, 'gesture-v1', async () => {
+      bodies.push('ran')
+    })
+
+    expect(bodies).toEqual([])
+    expect(events).toEqual([])
+    expect(outcome).toEqual({
+      claimed: false,
+      result: {
+        outcome: 'deferred',
+        undoHistoryCleared: false,
+        retryable: true,
+        reason: 'this device is not caught up with the server '
+          + '(still downloading, disconnected, or a download error)',
+      },
+    })
+  })
+
+  it('single-flights the whole gesture, not just the pass', async () => {
+    // Two invocations in one Repo share a claimant, so the claim reads the
+    // second as the same owner. Stopped only at the pass, the second would
+    // have synthesized and flipped first.
+    const events: string[] = []
+    const bodies: string[] = []
+    const repo = gestureRepo(events, noopPass())
+    await seedTarget(repo)
+    let release!: () => void
+
+    const first = repo.withOperatorBackfillClaim(WS, 'gesture-v1', async () => {
+      bodies.push('first')
+      await new Promise<void>(resolve => { release = resolve })
+    })
+    await vi.waitFor(() => { expect(bodies).toHaveLength(1) })
+
+    expect(await repo.withOperatorBackfillClaim(WS, 'gesture-v1', async () => {
+      bodies.push('second')
+    })).toEqual({
+      claimed: false,
+      result: {outcome: 'already-running', undoHistoryCleared: false},
+    })
+    expect(bodies).toEqual(['first'])
+
+    release()
+    await first
+  })
+
+  it('reports a claim that threw rather than running the body unclaimed', async () => {
+    const events: string[] = []
+    const bodies: string[] = []
+    const {repo} = createTestRepo({
+      db: sharedDb.db,
+      user: {id: 'user-1'},
+      backfillCompletionClaim: {
+        tryClaim: async () => { throw new Error('claim write failed') },
+        markComplete: async () => {},
+        releaseClaim: async () => { events.push('releaseClaim') },
+      },
+    })
+    repo.setActiveWorkspaceId(WS)
+    repo.setRuntimeContributions(workspaceBackfillsFacet, 'test-backfills', [noopPass()])
+    await seedTarget(repo)
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    const outcome = await repo.withOperatorBackfillClaim(WS, 'gesture-v1', async () => {
+      bodies.push('ran')
+    })
+
+    expect(bodies).toEqual([])
+    // Nothing to release: the claim either committed or rolled back, and this
+    // device holds nothing either way.
+    expect(events).toEqual([])
+    expect(outcome).toEqual({
+      claimed: false,
+      result: {
+        outcome: 'failed', undoHistoryCleared: false, reason: 'claim write failed',
+      },
+    })
+  })
+})

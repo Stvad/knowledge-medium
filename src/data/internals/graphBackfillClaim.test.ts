@@ -151,6 +151,53 @@ describe('an operator reclaiming a completed pass', () => {
   })
 })
 
+describe('releasing a claim the pass already completed', () => {
+  /** A claim block this device owns, carrying whatever bookkeeping is passed.
+   *  Records deletions, which is what a release does. */
+  const ownClaim = (properties: Record<string, unknown>) => {
+    const deleted: string[] = []
+    const claim = createGraphBackfillClaim({
+      db: {getOptional: async () => null},
+      tx: async <R,>(fn: (tx: never) => Promise<R>): Promise<R> => fn({
+        get: async () => ({workspaceId: 'ws', deleted: false, properties}),
+        create: async () => 'unused',
+        update: async () => undefined,
+        restore: async () => undefined,
+        delete: async (id: string) => { deleted.push(id) },
+      } as never),
+      claimantId: 'device-a',
+      ensureHome: async () => undefined,
+    } as unknown as Parameters<typeof createGraphBackfillClaim>[0])
+    return {claim, deleted}
+  }
+
+  it('is a no-op — the completion record outlives the gesture that made it', async () => {
+    // LOAD-BEARING for `Repo.withOperatorBackfillClaim`, which releases in a
+    // `finally` and therefore releases a claim the pass has just stamped
+    // complete. Deleting it there would erase the graph's record that the
+    // migration ran, and every device would read the pass as never done.
+    const {claim, deleted} = ownClaim({
+      'migration:claimant': 'device-a',
+      'migration:claimed-at': 1000,
+      'migration:completed-at': 2000,
+    })
+
+    await claim.releaseClaim('ws', 'pass-v1')
+
+    expect(deleted).toEqual([])
+  })
+
+  it('hands back a claim that is still in flight', async () => {
+    const {claim, deleted} = ownClaim({
+      'migration:claimant': 'device-a', 'migration:claimed-at': 1000,
+    })
+
+    await claim.releaseClaim('ws', 'pass-v1')
+
+    expect(deleted).toHaveLength(1)
+  })
+})
+
 describe('a foreign block sitting at the claim id', () => {
   const foreignRow = {id: 'x', workspaceId: 'other-ws', deleted: false, properties: {}}
 
