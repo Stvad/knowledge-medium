@@ -32,7 +32,7 @@ import { seedProperty } from '@/data/propertySeeds'
 import { Repo } from '@/data/repo'
 import { aliasSeatSeed, computeAliasSeatId } from '@/data/targets'
 import { propertyDefinitionBlockId } from '@/data/definitionSeeds'
-import { encodedPropertyValueToChildContent, propertyFieldContent } from '@/data/propertyChildren'
+import { propertyFieldContent } from '@/data/propertyChildren'
 import { dailyNoteBlockId, dailyNotesDataExtension } from '@/plugins/daily-notes'
 import { definitionSeedsFacet, projectedPropertyDefinitionsFacet } from '@/data/facets.js'
 import { resolveFacetRuntimeSync, type AppExtension } from '@/facets/facet.js'
@@ -1727,50 +1727,9 @@ describe('references.reapOrphanAliasSeats — reference-drop reaping (#402)', ()
     expect(childrenAfter).toEqual([])
   })
 
-  it('does NOT reap an un-flipped seat whose children are backfilled field rows', async () => {
-    // The safe miss, chosen deliberately. Pre-flip the projection processor is
-    // dormant, so the seat's cell cannot vouch for its subtree: an edit to a
-    // generated value row leaves the cell pristine and the shape unchanged.
-    // Tolerating machine children here means enumerating every way a user
-    // could have touched them, and two review rounds found two holes in that
-    // enumeration, each a silent soft-delete of a user's edit. The seat squats
-    // until the alias is re-typed and re-dropped, and reaping resumes at the
-    // flip. Built by hand because the dual-write processors are dormant
-    // pre-flip, which is exactly why only the backfill produces this shape.
-    await env.repo.tx(
-      tx => tx.create({id: 'src', workspaceId: WS, parentId: null, orderKey: 'a0', content: '[[grue]]'}),
-      {scope: ChangeScope.BlockDefault},
-    )
-    await flush()
-    const seatId = aliasId('grue')
-    expect((await env.read(seatId))!.deleted).toBe(0)
-
-    const aliasesFieldId = propertyDefinitionBlockId(WS, aliasesProp.seedKey)
-    // Projected from the seat's OWN cell, exactly as the backfill does — a
-    // hand-written value is an edited value, which the reap must refuse.
-    const seatRow = (await env.repo.load(seatId))!
-    const generatedValue = encodedPropertyValueToChildContent(
-      aliasesProp, seatRow.properties[aliasesProp.name],
-    )
-    await env.repo.tx(async tx => {
-      const fieldRowId = await tx.create({
-        workspaceId: WS, parentId: seatId, orderKey: 'a0',
-        content: propertyFieldContent(aliasesFieldId),
-        referenceTargetId: aliasesFieldId, isFieldForm: true,
-      })
-      await tx.create({
-        workspaceId: WS, parentId: fieldRowId, orderKey: 'a0', content: generatedValue,
-      })
-    }, {scope: ChangeScope.BlockDefault})
-
-    await env.repo.mutate.setContent({id: 'src', content: ''})
-    await flush(5000)
-    expect((await env.read(seatId))!.deleted).toBe(0)
-  })
-
   it('keeps a CHILD-BACKED seat whose child merely REFERENCES the aliases definition', async () => {
-    // Flipped, because that is where the tolerance runs at all — un-flipped,
-    // any child blocks the reap and the bit never gets a say.
+    // Flipped, because that is the only workspace state a seat's generated
+    // children exist in at all.
     //
     // `reference_target_id` is a bare content stamp: any whole-block ref
     // carries one, so matching on the generated id alone would read a user's
@@ -1804,12 +1763,14 @@ describe('references.reapOrphanAliasSeats — reference-drop reaping (#402)', ()
   })
 
   it('keeps an UN-flipped seat whose generated value row the user edited', async () => {
-    // Post-flip an edit to a value child rewrites the seat's cell, so
-    // `matchesAliasSeatSeed` catches the drift. Pre-flip the projection
+    // Past the flip an edit to a value child rewrites the seat's cell, so
+    // `matchesAliasSeatSeed` catches the drift. Un-flipped the projection
     // processor is dormant: the cell stays pristine, the subtree still has the
     // accepted field-row -> one-leaf shape, and the reap would soft-delete the
-    // user's edit. The value rows are reachable pre-flip through search and
-    // recents, so this is an edit a user can actually make.
+    // user's edit. Hand-built, which is now the only way it exists un-flipped —
+    // and it is not unreachable, because `is_field_form` is stamped from
+    // CONTENT: a `::((aliases-definition))` block a user writes under a seat is
+    // this shape. The one case the flip gate is still for.
     await env.repo.tx(
       tx => tx.create({id: 'src', workspaceId: WS, parentId: null, orderKey: 'a0', content: '[[xyzzy]]'}),
       {scope: ChangeScope.BlockDefault},

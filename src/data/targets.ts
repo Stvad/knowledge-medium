@@ -365,8 +365,9 @@ const propertiesMatchSeed = (
  *  drifted (a rename, a user-added property, or an extra alias all break
  *  the match). Liveness/children checks are the caller's: the tombstone
  *  predicate below wants no live children at all, while the reaper
- *  additionally tolerates the seat's own GENERATED property children — in
- *  any workspace, since the backfill mints them before the flip. */
+ *  additionally tolerates the seat's own GENERATED property children — but only
+ *  in a child-backed workspace, where an edit to one shows up in the cell this
+ *  predicate reads. */
 export const matchesAliasSeatSeed = (
   row: Pick<AliasSeatRow, 'content' | 'properties'>,
 ): boolean => {
@@ -385,10 +386,11 @@ export const matchesAliasSeatSeed = (
  *  stops meaning "a user touched this" and starts meaning "this is a
  *  seat". Every caller gating on children has to subtract these ids first,
  *  and only when the workspace is FLIPPED: there an edit to a generated value
- *  row reprojects into the cell, so the seed match can still see drift. The
- *  backfill mints these rows pre-flip too, but the projection is dormant
- *  there, so nothing can vouch for the subtree and the caller must not
- *  subtract (km-mzsv). Subtract on the `::` bit AND the id — a bare column
+ *  row reprojects into the cell, so the seed match can still see drift. No
+ *  machinery mints these rows before the flip any more, but `is_field_form` is
+ *  stamped from CONTENT — a `::((definition))` block a user writes has the same
+ *  shape — so un-flipped nothing can vouch for the subtree and the caller must
+ *  not subtract (km-mzsv). Subtract on the `::` bit AND the id — a bare column
  *  match is a content stamp an ordinary `((fieldId))` child carries too. */
 export const generatedSeatFieldIds = (workspaceId: string): ReadonlySet<string> => new Set([
   propertyDefinitionBlockId(workspaceId, aliasesProp.seedKey),

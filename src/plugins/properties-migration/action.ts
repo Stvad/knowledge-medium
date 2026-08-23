@@ -103,14 +103,12 @@ export const describeOutcome = (
     blocksMaterialized: number
     valuesMaterializedTotal: number
     unmigrated: number
-    orphanedOwnersSwept: number
   },
-  editedUnderPass: boolean,
   {flipped, undoCleared}: {flipped: boolean; undoCleared: boolean}
     = {flipped: false, undoCleared: false},
 ): {message: string; failed: boolean; followUp?: string} => {
   const cleared = result.undoHistoryCleared || undoCleared
-  const described = describePassOutcome(result, counts, editedUnderPass, cleared)
+  const described = describePassOutcome(result, counts, cleared)
   // Both tails appended HERE, not inside the switch: a branch cannot forget a
   // suffix it does not apply, and every branch needs both.
   return {
@@ -133,20 +131,18 @@ const describePassOutcome = (
     blocksMaterialized: number
     valuesMaterializedTotal: number
     unmigrated: number
-    orphanedOwnersSwept: number
   },
-  editedUnderPass: boolean,
   /** Already folded by the caller — the pass's own clear OR the gesture's. */
   cleared: boolean,
 ): {message: string; failed: boolean; followUp?: string} => {
-  const {blocksMaterialized, valuesMaterializedTotal, unmigrated, orphanedOwnersSwept} = counts
+  const {blocksMaterialized, valuesMaterializedTotal, unmigrated} = counts
   switch (result.outcome) {
     case 'ran':
       // On VALUES, not on blocks: `blocksMaterialized` counts blocks accepted in
       // FULL, so one junk key on every block reads as zero for a run that wrote
-      // all the other keys. And on the RUN's total, not the last sweep's — past
-      // the flip the converging sweep is by definition the one that found nothing
-      // left pending, so a per-sweep zero is how every successful run ends.
+      // all the other keys. And on the RUN's total, not the last sweep's — the
+      // converging sweep is by definition the one that found nothing left
+      // pending, so a per-sweep zero is how every successful run ends.
       if (valuesMaterializedTotal === 0 && unmigrated > 0) {
         return {
           message: `Nothing was migrated — all ${unmigrated.toLocaleString()} property ` +
@@ -156,17 +152,7 @@ const describePassOutcome = (
         }
       }
       return {
-        message: `Migrated properties on ${blocksMaterialized.toLocaleString()} blocks.` +
-          // Deletion is the part of this pass an operator would want to check,
-          // and it is otherwise reported nowhere.
-          (orphanedOwnersSwept > 0
-            ? ` Removed the property children of ${orphanedOwnersSwept.toLocaleString()} ` +
-              'block(s) whose properties had been deleted.'
-            : '') +
-          (editedUnderPass
-            ? ' The workspace was edited while it ran, so some values may already be behind —' +
-              ' run this again.'
-            : ''),
+        message: `Migrated properties on ${blocksMaterialized.toLocaleString()} blocks.`,
         // Surfaced through `done`, not `fail`: the pass DID complete, and
         // saying otherwise would send an operator looking for a broken run
         // rather than for the handful of values named in the console.
@@ -453,9 +439,10 @@ export const migratePropertiesToBlocksAction = ({repo}: {repo: Repo}): ActionCon
       flipLanded = true
       if (!localApplied) {
         // The flip COMMITTED; this device just has no local `workspaces` row to
-        // stamp yet, so the pass would read 'cell' and take the reconcile branch
-        // on a workspace that is in fact flipped. Stop instead, and do not say
-        // nothing happened.
+        // stamp yet, so the pass would read 'cell' and refuse — every batch
+        // re-asserts the flip. Stop here instead, with the message that says the
+        // flip landed, rather than letting it fail on its own and report a
+        // migration that broke.
         banner.fail(`${FLIP_LANDED} This device has not received the workspace row yet, ` +
           'so the migration could not run here — run this again once sync catches up.' +
           undoNote(undoCleared))
@@ -468,14 +455,10 @@ export const migratePropertiesToBlocksAction = ({repo}: {repo: Repo}): ActionCon
     // indistinguishable from a hung one.
     let unmigrated = 0
     let valuesMaterializedTotal = 0
-    let orphanedOwnersSwept = 0
-    let editedUnderPass = false
     const unsubscribe = onPropertyCellBackfillProgress(progress => {
       materialized = progress.blocksMaterialized
       valuesMaterializedTotal = progress.valuesMaterializedTotal
-      orphanedOwnersSwept = progress.orphanedOwnersSwept
       unmigrated = progress.failureCount
-      editedUnderPass = progress.editedUnderPass
       // Counts are per-sweep, and the sweep number is shown because a second
       // pass over the same blocks is normal — without it the bar restarts from
       // zero for no reason the operator can see.
@@ -489,8 +472,7 @@ export const migratePropertiesToBlocksAction = ({repo}: {repo: Repo}): ActionCon
       const result = await repo.runWorkspaceBackfillNow(workspaceId, PROPERTY_CELL_BACKFILL_ID)
       const {message, failed, followUp} = describeOutcome(
         result,
-        {blocksMaterialized: materialized, valuesMaterializedTotal, unmigrated, orphanedOwnersSwept},
-        editedUnderPass,
+        {blocksMaterialized: materialized, valuesMaterializedTotal, unmigrated},
         {flipped: flipLanded, undoCleared},
       )
       if (failed) banner.fail(message)
