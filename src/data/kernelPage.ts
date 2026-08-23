@@ -114,9 +114,10 @@ export const kernelPageBlockId = (workspaceId: string, namespace: string): strin
  *  cannot substitute: one tx records one entry whether grouped or not, so an
  *  unattended create lands ALONE on the stack. That is worse than a useless
  *  cmd-Z, because `UndoManager.record` clears the redo branch on every push —
- *  so a background pass that creates its own parent page silently discards a
+ *  so a write nobody would attribute to their last action silently discards a
  *  redo the user still wanted. Pass it when the write is machinery the user did
- *  not ask for and cannot attribute to anything they just did. */
+ *  not ask for and cannot attribute to anything they just did — not a reason to
+ *  flip the default for everyone. */
 export const getOrCreateKernelPage = async (
   repo: Repo,
   workspaceId: string,

@@ -35,11 +35,15 @@ const MIGRATIONS_ALIAS = 'System Migrations (km)'
 export const migrationsPageBlockId = (workspaceId: string): string =>
   kernelPageBlockId(workspaceId, MIGRATIONS_PAGE_NS)
 
-/** `skipUndo` because this page has no attended caller by construction: it is
- *  created lazily by `tryClaim`, from a backfill deferred to deep idle, whose
- *  own writes already skip undo. Left undoable it lands alone on the stack —
- *  and since recording clears the redo branch, an unattended pass would discard
- *  a redo the user was still holding. */
+/** `skipUndo`: cmd-Z is never the right gesture for this page. Its only entry
+ *  point is `runWorkspaceBackfillNow` — an operator gesture whose own writes
+ *  skip undo, and which clears the workspace undo stack on its first committed
+ *  batch. But `tryClaim` ensures this parent BEFORE deciding the claim, so the
+ *  create also happens on every path where the pass then writes nothing and
+ *  clears nothing: a peer already holds the claim, no candidates, an early
+ *  throw. Those are exactly the paths where a lone entry would survive — and
+ *  the claim block filed under it is `skipUndo` too, so reverting only the
+ *  parent orphans it. */
 export const getOrCreateMigrationsPage = (repo: Repo, workspaceId: string): Promise<Block> =>
   getOrCreateKernelPage(repo, workspaceId, {
     namespace: MIGRATIONS_PAGE_NS,
