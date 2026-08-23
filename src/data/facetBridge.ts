@@ -441,8 +441,8 @@ export class FacetBridge {
           // snapshot can't. A combined rename+codec edit rides both: the
           // processor re-keys the cell, this pass re-encodes values under the
           // new codec — both converge on the new cell key. Same workspace only
-          // (the helper refuses cross-workspace diffs); synced-in changes are
-          // reconciled on the flipped-workspace open path (#389 item 2).
+          // (the helper refuses cross-workspace diffs); the PRIME case is the
+          // baseline's, below.
           const codecChanges = changedPropertyDefinitions(
             previousPropertyDefinitions, propertyDefinitions,
           ).filter(change => change.codecChanged)

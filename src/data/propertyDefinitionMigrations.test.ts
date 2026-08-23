@@ -31,6 +31,7 @@ import type { Repo } from './repo'
 const WS = 'ws-def-migrations'
 const FIELD_ID = 'field-status-migrations'
 const OTHER_WS = 'ws-def-migrations-other'
+const THIRD_WS = 'ws-def-migrations-third'
 
 const schemaWith = (name: string, codec = codecs.string as typeof codecs.string | typeof codecs.number) =>
   defineProperty(name, {
@@ -671,6 +672,45 @@ describe('changes observed only across a workspace switch (#780)', () => {
 
     // ...and coming back finds nothing to do, because that build was recorded.
     expect(scheduled).toHaveBeenCalledTimes(1)
+  }, 20_000)
+
+  it('migrates against the resolver captured at rebuild time, after the workspace falls out of retention', async () => {
+    await seedWorkspace('children')
+    const repo = setup()
+    await seedProperty(repo, 'p', 'done')
+    publishDefinition(repo, statusRenamed)
+    await vi.waitFor(() => {
+      if (repo.propertyDefinitions?.definitionsByFieldId.get(FIELD_ID)?.name !== 'state') {
+        throw new Error('[test] registry has not primed on the renamed definition yet')
+      }
+    })
+    // Captured the way the baseline path captures it: synchronously with the
+    // rebuild, BEFORE its async read of the stored baseline.
+    const resolver = repo.propertySchemaResolverFor(WS)
+
+    // Two further switches evict WS from the one-deep active/previous retention
+    // `propertySchemaResolverFor` serves from — the window that made the OLD
+    // deferred pass drop migrations silently (PR #386 review).
+    for (const workspaceId of [OTHER_WS, THIRD_WS]) {
+      repo.setActiveWorkspaceId(workspaceId)
+      // Each switch must actually PRIME a registry before the next one: the
+      // previous-slot rotation only happens when a non-null snapshot is
+      // replaced, so two switches that never build one leave WS in retention.
+      await vi.waitFor(() => {
+        if (repo.propertyDefinitions?.workspaceId !== workspaceId) {
+          throw new Error(`[test] registry has not primed for ${workspaceId} yet`)
+        }
+      })
+    }
+    expect(repo.propertySchemaResolverFor(WS).resolveField(FIELD_ID).status).not.toBe('resolved')
+
+    repo.schedulePropertyDefinitionMigrations(
+      WS, [{fieldId: FIELD_ID, oldName: 'status', newName: 'state', codecChanged: false}], resolver,
+    )
+
+    await vi.waitFor(async () => {
+      expect(await cell('p')).toEqual({state: 'done'})
+    }, {timeout: 5000})
   }, 20_000)
 
   it('migrates a definition that vanished from the registry and came back renamed', async () => {

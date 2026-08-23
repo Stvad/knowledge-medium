@@ -3794,7 +3794,12 @@ export class Repo {
         await this.propertyDefinitionBaselines.merge(workspaceId, facts)
         // Not a prime — the bridge's own in-memory diff covered this build.
         if (resolver === null) return
-        // First baseline on this device for this workspace: nothing to diff.
+        // First baseline on this device for this workspace. Redundant with the
+        // diff itself — a fieldId absent from `previous` is an ADDED
+        // definition, never a rename, so an absent baseline already yields no
+        // changes. Kept because this is the designed boundary, not a
+        // coincidence: a device with no observed before-state repairs nothing,
+        // and a reader deciding whether to "improve" that needs to see it.
         if (previous === null) return
         const changes = changedPropertyDefinitionFacts(previous, facts)
         if (changes.length > 0) {
