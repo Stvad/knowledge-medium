@@ -19,7 +19,11 @@ import { propertyMachinerySourceIds } from '@/plugins/backlinks/query'
 import type { Repo } from './repo'
 
 const WS = 'ws-derive-pass'
-const STATUS_FIELD_ID = 'field-status-pass'
+/** A real fieldId is the definition block's UUID, and the shape matters here:
+ *  the INLINE reference parser is UUID-only, so a synthetic id makes
+ *  `((id))` content that the whole-block grammar reads and the parser does
+ *  not — a fixture whose seeded `references` no build could have produced. */
+const STATUS_FIELD_ID = '0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d'
 
 const statusSchema = defineProperty('status', {
   codec: codecs.string,
