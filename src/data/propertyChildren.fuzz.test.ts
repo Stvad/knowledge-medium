@@ -116,6 +116,10 @@ const textArb = fc.oneof(
     '[[Some Page]]',
     '::[[Some Page]]',
     `[Mary](((${SAMPLE_UUID})))`,
+    // Spans embedded in PROSE — never escaped, so these drive the verbatim
+    // leg of the invariant above rather than the envelope leg.
+    'See [[Roadmap]] for the plan',
+    `context: ((${SAMPLE_UUID})) and trailing text`,
     'null',
     '"null"',
     `"::((${SAMPLE_UUID}))"`,
@@ -269,15 +273,26 @@ describe('#688: content is always storable text, never a span and never ill-form
     ['string', requiredStringSchema],
     ['url', urlSchema],
     ['optionalString', optionalStringSchema],
-  ])('%s: no value renders to span-shaped or ill-formed content', (_name, schema) => {
+  ])('%s: content is the value verbatim, or an envelope inert to both readers', (_name, schema) => {
     fc.assert(
       fc.property(textArb, v => {
         const content = propertyValueToChildContent(schema as typeof requiredStringSchema, v)
-        // BOTH readers of the §7 grammar, not just the whole-block one: the
-        // inline parser scans spans anywhere in content, so quoting alone left
-        // an escaped `"[[Page]]"` a live reference that a rename rewrites.
-        expect(parseExactReferenceBlockContent(content)).toBeNull()
-        expect(parseReferences(content)).toEqual([])
+        if (content !== v) {
+          // ESCAPED — inert to BOTH readers of the grammar, not just the
+          // whole-block one. Quoting stops only that reader, and the inline
+          // parser scans spans anywhere, so a merely-quoted `"[[Page]]"` was
+          // still a live reference that a rename could rewrite.
+          expect(parseExactReferenceBlockContent(content)).toBeNull()
+          expect(parseReferences(content)).toEqual([])
+        } else {
+          // VERBATIM — legitimate only if the WHOLE-BLOCK reader, the one that
+          // classifies a row as machinery, sees nothing. A span embedded in
+          // prose is left verbatim and does still index inline (#756): whether
+          // a property value may carry a live reference is a design question,
+          // not a misread, so this leg deliberately does not assert it away.
+          expect(parseExactReferenceBlockContent(content)).toBeNull()
+        }
+        // Ill-formed text survives neither path, so this holds either way.
         expect(LONE_SURROGATE.test(content)).toBe(false)
       }),
       fuzzParams(300),
