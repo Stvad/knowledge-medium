@@ -439,6 +439,15 @@ export const migratePropertiesToBlocksAction = ({repo}: {repo: Repo}): ActionCon
       // children are the truth, so the two just diverge. Every way the run can
       // end after this point without writing a batch (a peer holds the claim, the
       // runner defers, there is nothing left to migrate) leaves that window open.
+      //
+      // THIS DEVICE ONLY, deliberately (#684): a peer that stayed open across the
+      // flip keeps its pre-flip entries, and nothing watches the column's arrival
+      // to clear them. Declined rather than built — the stack is in-memory and the
+      // transition happens once per workspace, so a watcher is permanent machinery
+      // for a single scheduled event, and the damage a replayed pre-flip snapshot
+      // does is a stale cell over live children, which the next write to those
+      // children projects away. The dialog tells the operator to reload other
+      // devices, which is what actually clears them.
       repo.undoManagerFor(workspaceId).clear()
       undoCleared = true
       flipLanded = true
