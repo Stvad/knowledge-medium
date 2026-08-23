@@ -48,8 +48,8 @@ import {
 } from '@/data/api'
 import {
   FIELD_FORM_MARKER,
-  isGrammarShapedLabel,
   isIdCarryingReference,
+  isWholeContentReference,
   parseExactReferenceBlockContent,
   referenceBlockContentForId,
 } from '@/data/referenceBlock'
@@ -164,16 +164,22 @@ const codecAcceptsNull = (schema: AnyPropertySchema): boolean => {
  *  by consulting the inline parser because core cannot import a plugin, and
  *  because no span form in either reader can begin any other way. */
 const SPAN_OPENERS_RE = /[[(]/g
+/** The same class without `g`, for `.test`. A global regex carries `lastIndex`
+ *  across calls, so testing with one answers differently on alternate calls. */
+const SPAN_OPENER_RE = /[[(]/
 
 /** Would this text, stored VERBATIM as a value row's content, read back as
- *  something other than itself? Any §7 span does: `deriveReferenceColumns`
- *  classifies such content instead of storing it. So does a lone surrogate,
- *  which the content column returns as U+FFFD.
+ *  something other than itself? A whole-content reference does — one of the
+ *  two readers takes it as a pointer rather than text, EMBEDS included
+ *  (`isWholeContentReference`, not `isGrammarShapedLabel`: the latter asks
+ *  only the whole-block reader, which has no embed form, so `!((id))` was
+ *  stored verbatim and a merge then rewrote it). A lone surrogate does too —
+ *  the content column returns U+FFFD.
  *
  *  The ENCODER's question, and deliberately wider than
  *  {@link contentLosesPropertyValue}'s — see there for why the two differ. */
 const verbatimContentLosesValue = (content: string): boolean =>
-  isGrammarShapedLabel(content) || hasLoneSurrogate(content)
+  isWholeContentReference(content) || hasLoneSurrogate(content)
 
 /** Would writing this text into a value row DESTROY the property's value?
  *  For write paths that set `content` directly rather than encoding a typed
@@ -197,6 +203,12 @@ const verbatimContentLosesValue = (content: string): boolean =>
  *  rename edits the caller's data. Same characters, different intent, and each
  *  path knows which one it has.
  *
+ *  The null SENTINEL is the third destroyer and belongs here for the same
+ *  reason the marked span does: bare `null` content IS the unset value to a
+ *  codec that accepts one, so a replace producing it clears the property with
+ *  nothing reported. It is not in the narrowing argument above because it
+ *  destroys rather than re-roles.
+ *
  *  Scoped to the codecs that store content verbatim: everything else either
  *  emits machine-formatted text that cannot take these shapes, or (`ref`) is
  *  span-shaped by design and already refused by its own decode. */
@@ -205,6 +217,7 @@ export const contentLosesPropertyValue = (
   content: string,
 ): boolean => {
   if (schema.codec.type !== 'string' && schema.codec.type !== 'url') return false
+  if (codecAcceptsNull(schema) && content.trim() === 'null') return true
   return parseExactReferenceBlockContent(content)?.fieldForm === true
     || hasLoneSurrogate(content)
 }
@@ -212,10 +225,19 @@ export const contentLosesPropertyValue = (
 /** Store `s` as content that reads back as exactly `s` and as nothing else.
  *  `JSON.stringify` carries the value (and spells lone surrogates as ASCII
  *  escapes); the extra opener escaping neutralizes the reference grammar.
- *  `JSON.parse` undoes both, so `contentToEncodedValue` needs no counterpart. */
+ *  `JSON.parse` undoes both, so the decode needs no counterpart — only
+ *  {@link isEscapedEnvelope} to know it is looking at one. */
 const escapeContent = (s: string): string =>
   JSON.stringify(s).replace(SPAN_OPENERS_RE,
     c => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`)
+
+/** Could `trimmed` have come out of {@link escapeContent}? A JSON string
+ *  literal carrying no literal span opener — the two properties escapeContent
+ *  guarantees, and the second is what makes the shape self-identifying rather
+ *  than merely quote-shaped. Necessary, not sufficient: the caller still
+ *  confirms it parses and that the payload was worth escaping. */
+const isEscapedEnvelope = (trimmed: string): boolean =>
+  trimmed.startsWith('"') && trimmed.endsWith('"') && !SPAN_OPENER_RE.test(trimmed)
 
 /** Would `s`, written VERBATIM as a value child's content, read back as
  *  something other than `s`? These codecs (`string` | `url`) store a value as
@@ -239,8 +261,15 @@ const escapeContent = (s: string): string =>
  *  Recursive on the quoted form, or a value that is ITSELF a JSON string
  *  literal of an escapable string would decode one level short. The recursion
  *  is unbounded but the ESCAPE is applied once: `escapeContent`'s output opens
- *  with `"`, carries no span opener and no raw surrogate, so it can never
- *  itself need escaping. */
+ *  with `"`, carries no span opener and no raw surrogate, so it can never be
+ *  MISREAD once stored.
+ *
+ *  That is not the same as "escaping is idempotent", which it is not: fed back
+ *  in as a VALUE, an envelope escapes again (the quoted-form recursion, and
+ *  correctly so — a value that happens to look like an envelope is still a
+ *  value). Nothing double-escapes today because every re-encode path decodes
+ *  first (`runPropertyDefinitionMigrationBatch`, the materialize processor).
+ *  A future one must too; content is not a value. */
 const needsEscape = (schema: AnyPropertySchema, s: string): boolean => {
   const trimmed = s.trim()
   if (codecAcceptsNull(schema) && trimmed === 'null') return true
@@ -302,9 +331,16 @@ const contentToEncodedValue = (
   schema: AnyPropertySchema,
   content: string,
 ): unknown => {
+  // Unwrap ONLY what `escapeContent` could have produced. Quote-wrapping alone
+  // is not that signature: a person can type `"[[Page]]"` into a value row, and
+  // find-replace can turn the inside of an ordinary quoted value into a span —
+  // both then decoded to the unquoted string, silently dropping the quotes the
+  // user wrote. The discriminator is free, because escaping openers is already
+  // what makes the envelope inert: a real envelope carries NO literal `[` or
+  // `(`, so content that has one was written by someone else and is text.
   if (
     (schema.codec.type === 'string' || schema.codec.type === 'url')
-    && content.trim().startsWith('"') && content.trim().endsWith('"')
+    && isEscapedEnvelope(content.trim())
   ) {
     try {
       const parsed: unknown = JSON.parse(content.trim())

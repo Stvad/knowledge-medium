@@ -554,6 +554,11 @@ describe('findReplaceDataExtension', () => {
       defaultValue: '',
       changeScope: ChangeScope.BlockDefault,
     })
+    const nullableNoteSchema = defineProperty<string | undefined>('maybe-note', {
+      codec: codecs.optionalString,
+      defaultValue: undefined,
+      changeScope: ChangeScope.BlockDefault,
+    })
 
     const seedStringProperty = (value: string): Promise<{valueId: string}> =>
       seedFlippedWorkspaceWithProperty({
@@ -610,6 +615,53 @@ describe('findReplaceDataExtension', () => {
       expect((await load(valueId))?.content).toBe('[[Roadmap]]')
       // The property is intact -- that is what makes refusing it unjustified.
       expect((await load('owner'))?.properties[noteSchema.name]).toBe('[[Roadmap]]')
+    })
+
+    // Round 2 of review: the third destroyer. Bare `null` content IS the unset
+    // value to a codec that accepts one, so this cleared the property with
+    // nothing reported -- the guard checked spans and surrogates but not the
+    // sentinel the encoder itself escapes for.
+    it('skips a replacement producing the null sentinel for a nullable property', async () => {
+      const {valueId} = await seedFlippedWorkspaceWithProperty({
+        fieldId: '55555555-5555-4555-8555-555555555555',
+        schema: nullableNoteSchema,
+        value: 'placeholder',
+      })
+
+      const result = await env.repo.run<ApplyContentReplaceResult>(
+        FIND_REPLACE_APPLY_CONTENT_REPLACE_MUTATOR,
+        {
+          workspaceId: WS,
+          find: 'placeholder',
+          replace: 'null',
+          options: {matchCase: false, wholeWord: false},
+          items: [{blockId: valueId, originalContent: 'placeholder'}],
+        },
+      )
+
+      expect(result.skippedUnparseableProperty).toBe(1)
+      expect((await load(valueId))?.content).toBe('placeholder')
+      expect((await load('owner'))?.properties[nullableNoteSchema.name]).toBe('placeholder')
+    })
+
+    // ...and the same text is harmless for a codec with no null sentinel, so
+    // the clause stays gated on the codec rather than on the word.
+    it('allows the literal text "null" for a non-nullable string property', async () => {
+      const {valueId} = await seedStringProperty('placeholder')
+
+      const result = await env.repo.run<ApplyContentReplaceResult>(
+        FIND_REPLACE_APPLY_CONTENT_REPLACE_MUTATOR,
+        {
+          workspaceId: WS,
+          find: 'placeholder',
+          replace: 'null',
+          options: {matchCase: false, wholeWord: false},
+          items: [{blockId: valueId, originalContent: 'placeholder'}],
+        },
+      )
+
+      expect(result.skippedUnparseableProperty).toBe(0)
+      expect((await load('owner'))?.properties[noteSchema.name]).toBe('null')
     })
 
     it('still allows an ordinary string replacement', async () => {

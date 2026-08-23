@@ -1891,6 +1891,38 @@ describe('content <-> value codecs: escaping strings content cannot hold as itse
     expect(propertyChildContentToEncodedValue(statusSchema, value)).toBe(value)
   })
 
+  // Round 2 of review: the EMBED forms. `((id))` was escaped and `!((id))` was
+  // not, though they differ by one character and the inline reader indexes
+  // both — so a merge rewrote the second and silently edited the value.
+  it.each([
+    [`!((${SAMPLE_UUID}))`],
+    ['![[Some Page]]'],
+    [`  !((${SAMPLE_UUID}))  `],
+  ])('escapes the embed form %j, which the whole-block reader alone misses', value => {
+    const content = propertyValueToChildContent(statusSchema, value)
+    expect(content).not.toBe(value)
+    expect(propertyChildContentToEncodedValue(statusSchema, content)).toBe(value)
+  })
+
+  // Round 2 of review: quote-wrapping alone was treated as "this is an escaped
+  // envelope", so text a PERSON wrote with quotes lost them on the way back.
+  // A real envelope carries no literal span opener; this content does.
+  it('does not unwrap quoted text that escapeContent could not have produced', () => {
+    for (const content of ['"[[Page]]"', `"::((${SAMPLE_UUID}))"`, '"(x)"']) {
+      expect(propertyChildContentToEncodedValue(statusSchema, content)).toBe(content)
+    }
+  })
+
+  // ...while a real envelope still unwraps, including one whose PAYLOAD is a
+  // quoted string (the nesting case), which is what stops the discriminator
+  // from being "never unwrap".
+  it('still unwraps a genuine envelope', () => {
+    for (const value of [`::((${SAMPLE_UUID}))`, '[[Page]]', '"null"', 'a\uD800b']) {
+      const content = propertyValueToChildContent(statusSchema, value)
+      expect(propertyChildContentToEncodedValue(statusSchema, content)).toBe(value)
+    }
+  })
+
   // The ref codec renders `((id))` DELIBERATELY (#16) — that branch runs before
   // the string one and must not start escaping its own canonical form.
   it('does not touch the ref codec, whose value content IS a span by design', () => {
