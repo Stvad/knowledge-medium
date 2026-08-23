@@ -781,8 +781,19 @@ export const buildDenyMessage = (mapped, unmapped) => {
 // Process plumbing
 // ---------------------------------------------------------------------------
 
+/** Bulk `bd` output grows with the tracker, so spawnSync's 1 MiB default is a
+ *  ceiling every reader here crosses eventually — and crossing it aborts the
+ *  whole sync with a bare `ENOBUFS` that names no command. Hence one ceiling on
+ *  the shared helper, not on whichever call site crosses first. */
+const MAX_OUTPUT_BYTES = 256 * 1024 * 1024
+
 const run = (file, args, opts = {}) => {
-  const r = spawnSync(file, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], ...opts })
+  const r = spawnSync(file, args, {
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+    maxBuffer: MAX_OUTPUT_BYTES,
+    ...opts,
+  })
   if (r.error) throw r.error
   const combined = `${r.stdout ?? ''}\n${r.stderr ?? ''}`
   if (r.status !== 0) throw new Error(`${file} ${args[0]} exited ${r.status}: ${combined.trim().slice(0, 500)}`)
@@ -811,6 +822,7 @@ export const bdShowRows = (ids, opts = {}) => {
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
     timeout: 15_000,
+    maxBuffer: MAX_OUTPUT_BYTES,
     ...opts,
   })
   try {

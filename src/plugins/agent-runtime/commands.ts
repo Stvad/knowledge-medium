@@ -589,7 +589,7 @@ const SUBTREE_KEY_PROP = 'agent:subtreeKey'
  *  parsed with the app's own paste parser (`parseMarkdownToBlocks`) so the
  *  split matches "paste as markdown" exactly; `shape:'block'` keeps it one
  *  block. Every block is tagged `SUBTREE_KEY_PROP=key` plus `properties`
- *  (the daemon passes `claude:reply`).
+ *  (the daemon passes `agent:reply`).
  *
  *  Idempotent by `key`: the tagged blocks are made to carry the parsed
  *  tree's content/parentage by a positional (pre-order) reconcile — update

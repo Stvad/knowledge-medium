@@ -694,7 +694,6 @@ describe('agent runtime commands', () => {
       getAll: (sql, params) => env.repo.db.getAll(sql, params as unknown[] | undefined),
       tx: (fn, opts) => env.repo.tx(fn, {scope: ChangeScope.BlockDefault, skipUndo: true, ...opts}),
       resolveNameSchema: () => undefined,
-      resolveFieldSchema: () => undefined,
     })
 
     it('refuses the properties pass on a workspace that has not been switched over', async () => {

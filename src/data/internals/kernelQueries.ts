@@ -416,8 +416,13 @@ export const SELECT_ALIASES_IN_WORKSPACE_SQL = `
 /** Single-block lookup by exact alias (used by createOrRestore wrappers
  *  and call-site alias jumps). Returns the oldest match (deterministic
  *  tie-break on workspaces with two blocks accidentally claiming the
- *  same alias). Lookups go through `idx_block_aliases_ws_alias`; the
- *  blocks JOIN reads the row by primary key. */
+ *  same alias). `blocks.id` breaks the remaining tie so "oldest" is a
+ *  TOTAL order: two devices creating the same page in the same
+ *  millisecond leave `created_at` equal, and without this which row wins
+ *  is whatever the scan reaches first — so two clients can disagree
+ *  about where `[[Name]]` points. Lookups go through
+ *  `idx_block_aliases_ws_alias`; the blocks JOIN reads the row by
+ *  primary key. */
 export const SELECT_BLOCK_BY_ALIAS_IN_WORKSPACE_SQL = `
   SELECT ${buildQualifiedBlockColumnsSql('blocks')}
   FROM block_aliases ba
@@ -425,7 +430,7 @@ export const SELECT_BLOCK_BY_ALIAS_IN_WORKSPACE_SQL = `
   WHERE ba.workspace_id = ?
     AND ba.alias = ?
     AND blocks.deleted = 0
-  ORDER BY blocks.created_at
+  ORDER BY blocks.created_at, blocks.id
   LIMIT 1
 `
 
@@ -444,7 +449,7 @@ export const SELECT_BLOCKS_BY_ALIAS_IN_WORKSPACE_SQL = `
   WHERE ba.workspace_id = ?
     AND ba.alias = ?
     AND blocks.deleted = 0
-  ORDER BY blocks.created_at
+  ORDER BY blocks.created_at, blocks.id
 `
 
 /** Variant of `SELECT_BLOCK_BY_ALIAS_IN_WORKSPACE_SQL` that ignores
@@ -464,7 +469,7 @@ export const SELECT_BLOCK_BY_ALIAS_IN_WORKSPACE_EXCLUDING_SQL = `
     AND ba.alias = ?
     AND blocks.id != ?
     AND blocks.deleted = 0
-  ORDER BY blocks.created_at
+  ORDER BY blocks.created_at, blocks.id
   LIMIT 1
 `
 
@@ -1663,6 +1668,40 @@ export const aliasClaimantCountsQuery = defineQuery<
   },
 })
 
+/** Every LIVE claimant of an exact alias in a workspace, oldest first.
+ *
+ *  `aliasLookup` answers "the block named X" and settles ties on
+ *  `created_at`. That is the wrong question for a caller deciding whether a
+ *  name is CONTESTED: the uniqueness trigger skips sync-apply, so two devices
+ *  that create the same page offline both keep their claim, and a page can
+ *  hold its own name and share it at the same time — which a single-row
+ *  lookup reports as "fine, that's you".
+ *
+ *  Rows rather than the `aliasClaimantCounts` tally because the caller has to
+ *  ACT on the others: name them, open them, fold them in. Counts answer "is
+ *  this alias contested" for a list already truncated to a display limit;
+ *  this answers "who, exactly". */
+export const aliasClaimantsQuery = defineQuery<
+  {workspaceId: string; alias: string},
+  BlockData[]
+>({
+  name: 'core.aliasClaimants',
+  argsSchema: z.object({workspaceId: z.string(), alias: z.string()}),
+  resultSchema: blockDataArraySchema,
+  resolve: async ({workspaceId, alias}, ctx) => {
+    if (!workspaceId || !alias) return []
+    ctx.depend({
+      kind: 'plugin',
+      channel: KERNEL_ALIASES_CHANNEL,
+      key: kernelAliasesKey(workspaceId),
+    })
+    const rows = await ctx.db.getAll<BlockRow>(
+      SELECT_BLOCKS_BY_ALIAS_IN_WORKSPACE_SQL, [workspaceId, alias],
+    )
+    return ctx.hydrateBlocks(asBlockRows(rows))
+  },
+})
+
 /** Single-block lookup by exact alias in a workspace. */
 export const aliasLookupQuery = defineQuery<
   {workspaceId: string; alias: string},
@@ -1741,6 +1780,7 @@ export const KERNEL_QUERIES: ReadonlyArray<AnyQuery> = [
   aliasMatchesFuzzyQuery,
   blockTypesByIdsQuery,
   aliasClaimantCountsQuery,
+  aliasClaimantsQuery,
   aliasLookupQuery,
   findExtensionBlocksQuery,
 ]
@@ -1771,6 +1811,7 @@ declare module '@/data/api' {
     'core.aliasMatchesFuzzy': typeof aliasMatchesFuzzyQuery
     'core.blockTypesByIds': typeof blockTypesByIdsQuery
     'core.aliasClaimantCounts': typeof aliasClaimantCountsQuery
+    'core.aliasClaimants': typeof aliasClaimantsQuery
     'core.aliasLookup': typeof aliasLookupQuery
     'core.findExtensionBlocks': typeof findExtensionBlocksQuery
   }

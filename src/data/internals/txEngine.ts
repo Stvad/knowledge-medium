@@ -1056,6 +1056,18 @@ export class TxImpl implements Tx {
     return row === null ? null : parseBlockRow(row)
   }
 
+  async aliasesOf(blockId: string): Promise<string[]> {
+    if (blockId === '') return []
+    const rows = await this.ctx.txDb.getAll<{alias: string}>(
+      // Ordered so two callers (and two devices) see the same list; the index
+      // itself carries no order, and the bag's own order is restored by
+      // callers that care which name reads as primary.
+      'SELECT alias FROM block_aliases WHERE block_id = ? ORDER BY alias',
+      [blockId],
+    )
+    return rows.map(row => row.alias)
+  }
+
   async aliasClaimants(alias: string, workspaceId: string): Promise<BlockData[]> {
     // Same defensive empty-arg gate as `aliasLookup`: `block_aliases`
     // stores empty strings, so a bad caller would otherwise get real rows.

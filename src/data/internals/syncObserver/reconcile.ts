@@ -57,6 +57,82 @@ export type ReconcileAction =
   | { readonly kind: 'skip-stale' }
 
 /**
+ * Does the app-visible `blocks` row already hold exactly this staged version?
+ *
+ * INVARIANT I1 — equal NONZERO stamps ⟺ identical content: the server floor+bump
+ * strictly advances `updated_at` on any content change, so two rows can share a
+ * nonzero stamp only if neither changed content.
+ *
+ * The `!== 0` exemption (invariant I2) is required, not cosmetic: two devices
+ * that minted the same deterministic id both sit at 0; without the exemption the
+ * insert-or-skip loser would equal-stamp-skip forever and never converge to the
+ * server's created_at/created_by/user_updated_at (or even content, if the
+ * default template changed between the mints). A 0-stamped local row always
+ * yields.
+ *
+ * Standing alone, and not inlined in {@link decideStagingRow}, because it
+ * answers a question that does NOT depend on materializability: a drain that
+ * cannot apply a row still needs to know whether leaving it unapplied hides
+ * anything (`materialize.ts`, the `needs_apply` flag), and a second expression
+ * of this rule at that site is how the two come to disagree.
+ *
+ * TWO more statements of it live in SQL, which cannot call this, so a change
+ * here needs a matching change in BOTH — and they state it differently, which is
+ * why neither is obvious from the other. {@link STAGED_VIEW_GAP_SQL} carries its
+ * NEGATION over a left join (`b.updated_at = 0 OR b.updated_at <> s.updated_at`),
+ * with the no-local-row case split out into its own `b.id IS NULL` disjunct.
+ * {@link SEED_STAGING_NEEDS_APPLY_SQL} carries it as one half of a larger rule —
+ * this OR a tombstone invisible on both sides — the same combination the drain
+ * asks before it records the flag.
+ *
+ * Holds only for two SYNCED writes to one id: two INDEPENDENT mints of the same
+ * deterministic id in the same millisecond also share a nonzero stamp, and I1
+ * misreads them as identical (accepted, #744). Do not close that by advancing
+ * the touch's stamp server-side — it would break the "newer stamp ⟺ changed
+ * content" coupling this gate rests on, and make every fresh-client bootstrap
+ * re-materialize. The fix belongs on the creator side, at stamp 0.
+ */
+export const localHoldsStagedVersion = (
+  localUpdatedAt: number | null,
+  stagedUpdatedAt: number,
+): boolean =>
+  // `!== null` states the no-local-row case rather than guarding it: the staged
+  // stamp is never null, so the equality below already answers false. Deleting
+  // it fails nothing.
+  localUpdatedAt !== null && localUpdatedAt !== 0 && localUpdatedAt === stagedUpdatedAt
+
+/** One row's version as the "already reflects" question reads it — the staged
+ *  row, and the live `blocks` row when there is one. */
+export interface RowVersion {
+  readonly updatedAt: number
+  readonly deleted: boolean
+}
+
+/** Is a row the drain cannot apply invisible to every reader anyway? A staged
+ *  tombstone whose local row is absent or already tombstoned shows the block to
+ *  nobody on either side — and every protected pass reads `deleted = 0`. Left
+ *  flagged it would be a gap that no drain can ever clear and no pass can ever
+ *  be harmed by. */
+const isInvisibleEitherWay = (staged: RowVersion, local: RowVersion | undefined): boolean =>
+  staged.deleted && (local === undefined || local.deleted)
+
+/**
+ * Does `blocks` already say everything this staged row would?
+ *
+ * The question `blocks_synced.needs_apply` records an answer to, and the reason
+ * a drain that CANNOT apply a row still has something to decide. Two ways to be
+ * satisfied without applying anything, and {@link SEED_STAGING_NEEDS_APPLY_SQL}
+ * is the same pair in SQL — which is why this lives here beside it rather than
+ * at its one call site in `materialize.ts`.
+ */
+export const blocksAlreadyReflects = (
+  staged: RowVersion,
+  local: RowVersion | undefined,
+): boolean =>
+  localHoldsStagedVersion(local?.updatedAt ?? null, staged.updatedAt)
+  || isInvisibleEitherWay(staged, local)
+
+/**
  * Decide what to do with one inserted/updated staging row.
  *
  * The gate's input is now trustworthy: the server enforces `updated_at`
@@ -85,40 +161,12 @@ export const decideStagingRow = (
     // overwrite it. The upload echo reconciles when it returns.
     return { kind: 'skip-stale' }
   }
-  if (
-    local.localUpdatedAt !== null &&
-    local.localUpdatedAt === stagingUpdatedAt &&
-    local.localUpdatedAt !== 0
-  ) {
-    // EQUAL NONZERO stamps ⟺ identical content (invariant I1): the server
-    // floor+bump strictly advances the stamp on any content change, so two
-    // rows can share a nonzero stamp only if neither changed content. The one
-    // deliberate skip — a stale in-flight server read carrying different
-    // content under the same ms-stamp would otherwise clobber a local edit on
-    // disk and resurface after reload (the in-memory cache gate can't guard the
-    // persistent write). See commit 429fd4b2.
-    //
-    // The `!== 0` exemption (invariant I2) is required, not cosmetic: two
-    // devices that minted the same deterministic id both sit at 0; without the
-    // exemption the insert-or-skip loser would equal-stamp-skip forever and
-    // never converge to the server's created_at/created_by/user_updated_at (or
-    // even content, if the default template changed between the mints). A
-    // 0-stamped local row always yields.
-    //
-    // Residual blind spot (accepted, tracked): I1 assumes equal nonzero stamps
-    // come from the SAME write. Two clients that independently mint the SAME
-    // deterministic id in the SAME millisecond with DIVERGENT content produce
-    // equal nonzero stamps from *different* writes — I1 misreads them as
-    // identical and skips, so the insert-or-touch echo (apply_block_creates) is
-    // consumed and the loser strands. The fix is NOT to advance the touch's
-    // stamp server-side: that would force every id collision (the common
-    // fresh-client bootstrap) to re-materialize + reindex on every device and
-    // break the "newer stamp ⟺ changed content" coupling this whole gate relies
-    // on — re-opening #244 for non-minted creators. The fix is to systemMint
-    // (stamp 0) the deterministic-id creators so both mints yield via I2 above.
-    // Matrix-message ingest (agent-extensions/) is the last nonzero-stamp
-    // deterministic creator; until it mints at 0 this stays a real — but
-    // astronomically rare (same id, same ms, divergent content) — gap.
+  if (localHoldsStagedVersion(local.localUpdatedAt, stagingUpdatedAt)) {
+    // I1 (see the predicate): this snapshot is the version `blocks` already
+    // holds. The one deliberate skip — a stale in-flight server read carrying
+    // different content under the same ms-stamp would otherwise clobber a local
+    // edit on disk and resurface after reload (the in-memory cache gate can't
+    // guard the persistent write). See commit 429fd4b2.
     return { kind: 'skip-stale' }
   }
 

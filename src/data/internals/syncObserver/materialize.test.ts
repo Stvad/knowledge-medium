@@ -110,6 +110,27 @@ describe('materializeStagingRows — the needs_apply flag', () => {
     expect(second.resolved).toEqual([])
     expect(await needsApply('b1')).toBe(1)
   })
+
+  it('clears the flag for a re-delivery `blocks` already holds, even while deferring', async () => {
+    // Whether `blocks` is behind is answerable without knowing whether the
+    // workspace can be materialized: equal NONZERO stamps mean identical
+    // content (I1), so this row has nothing to apply on any path. Left flagged
+    // it would be a durable gap with nothing in flight — and `defer` is not
+    // only the locked-workspace case, it is also where a failed key-store read
+    // lands, so an ordinary re-delivery can arrive in that window.
+    await seedLocalBlock(blockData({ id: 'b1', content: 'v1', updatedAt: 5 }))
+    await stageRow(blockData({ id: 'b1', content: 'v1', updatedAt: 5 }))
+
+    const out = await materializeStagingRows(
+      env.db,
+      { upserted: ['b1'], removed: [] },
+      { getMaterializability: constMat('defer'), getCek: noKey },
+    )
+
+    expect(out.deferred).toEqual(['b1'])
+    expect(out.resolved).toEqual(['b1'])
+    expect(await needsApply('b1')).toBe(0)
+  })
 })
 
 describe('materializeStagingRows — copy-through (plaintext workspace)', () => {

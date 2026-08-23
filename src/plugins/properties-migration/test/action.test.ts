@@ -98,8 +98,7 @@ const dialogThatSwitchesWorkspace = (repo: Repo) => async () => {
 /** The counts `describeOutcome` reports on, for a run that migrated `blocks`
  *  blocks cleanly. Shared by every describe that renders an outcome. */
 const counts = (blocks: number) =>
-  ({blocksMaterialized: blocks, valuesMaterializedTotal: blocks,
-    unmigrated: 0, orphanedOwnersSwept: 0})
+  ({blocksMaterialized: blocks, valuesMaterializedTotal: blocks, unmigrated: 0})
 
 const invoke = (repo: Repo) =>
   migratePropertiesToBlocksAction({repo}).handler({} as never, {} as never)
@@ -764,23 +763,11 @@ describe('what a completed run tells the operator', () => {
     // Failures are per-value by design, so a systematic problem — a codec
     // rejecting everything, storage refusing writes — otherwise came back as
     // a success banner reading "Migrated properties on 0 blocks."
-    const {message, failed} = describeOutcome(RAN, {blocksMaterialized: 0, valuesMaterializedTotal: 0, unmigrated: 12, orphanedOwnersSwept: 0}, false)
+    const {message, failed} = describeOutcome(
+      RAN, {blocksMaterialized: 0, valuesMaterializedTotal: 0, unmigrated: 12})
 
     expect(failed).toBe(true)
     expect(message).toMatch(/systematic/i)
-  })
-
-  it('reports what it DELETED, which nothing else does', async () => {
-    // The sweep that removes stale children is by construction never the one
-    // that converges, and every other count is per-sweep — so a run whose only
-    // effect was deletion otherwise reads "Migrated properties on 0 blocks."
-    const {message} = describeOutcome(
-      RAN,
-      {blocksMaterialized: 0, valuesMaterializedTotal: 0, unmigrated: 0, orphanedOwnersSwept: 4},
-      false,
-    )
-
-    expect(message).toMatch(/removed the property children of 4/i)
   })
 
   it('is not "systematic" when one bad key per block hid a mostly-good run', async () => {
@@ -788,7 +775,7 @@ describe('what a completed run tells the operator', () => {
     // a run that wrote every other key on every block. Branching on it told the
     // operator nothing was migrated while tens of thousands of rows were.
     const {failed} = describeOutcome(
-      RAN, {blocksMaterialized: 0, valuesMaterializedTotal: 40, unmigrated: 20, orphanedOwnersSwept: 0}, false,
+      RAN, {blocksMaterialized: 0, valuesMaterializedTotal: 40, unmigrated: 20},
     )
 
     expect(failed).toBe(false)
@@ -805,8 +792,7 @@ describe('what a completed run tells the operator', () => {
       {outcome: 'already-running', undoHistoryCleared: false},
     ]
     for (const result of outcomes) {
-      const {message} = describeOutcome(result, counts(0), false,
-                                        {flipped: true, undoCleared: true})
+      const {message} = describeOutcome(result, counts(0), {flipped: true, undoCleared: true})
       expect(message, result.outcome).toMatch(/switched to property blocks/i)
       expect(message, result.outcome).not.toMatch(/not started/i)
     }
@@ -817,17 +803,10 @@ describe('what a completed run tells the operator', () => {
     // every run would tell an operator their gesture did something it did not.
     expect(describeOutcome(
       {outcome: 'deferred', undoHistoryCleared: false, reason: 'busy'},
-      counts(0), false, {flipped: false, undoCleared: false},
+      counts(0), {flipped: false, undoCleared: false},
     ).message).not.toMatch(/switched to property blocks/i)
   })
 
-  it('says to run again when the workspace was edited under the pass', async () => {
-    // Convergence deliberately does not loop on rewritten values, so this
-    // sentence is the only thing that tells an operator the children it just
-    // built may already be behind the cells.
-    expect(describeOutcome(RAN, counts(100), true, {flipped: false, undoCleared: false}).message).toMatch(/run this again/i)
-    expect(describeOutcome(RAN, counts(100), false, {flipped: false, undoCleared: false}).message).not.toMatch(/run this again/i)
-  })
 })
 
 describe('every outcome says whether the history is gone', () => {
@@ -846,16 +825,14 @@ describe('every outcome says whether the history is gone', () => {
 
   it('appends the undo notice to every outcome once the stack has been cleared', () => {
     for (const result of outcomes) {
-      const {message} = describeOutcome(result, counts(0), false,
-                                        {flipped: false, undoCleared: true})
+      const {message} = describeOutcome(result, counts(0), {flipped: false, undoCleared: true})
       expect(message, result.outcome).toMatch(/Undo history for this workspace was cleared/)
     }
   })
 
   it('says nothing about undo when nothing cleared it', () => {
     for (const result of outcomes) {
-      const {message} = describeOutcome(result, counts(0), false,
-                                        {flipped: false, undoCleared: false})
+      const {message} = describeOutcome(result, counts(0), {flipped: false, undoCleared: false})
       expect(message, result.outcome).not.toMatch(/Undo history/)
     }
   })
@@ -863,8 +840,8 @@ describe('every outcome says whether the history is gone', () => {
   it('covers the all-values-failed branch, which returns before the common tail', () => {
     const {message} = describeOutcome(
       RAN,
-      {blocksMaterialized: 0, valuesMaterializedTotal: 0, unmigrated: 5, orphanedOwnersSwept: 0},
-      false, {flipped: false, undoCleared: true})
+      {blocksMaterialized: 0, valuesMaterializedTotal: 0, unmigrated: 5},
+      {flipped: false, undoCleared: true})
     expect(message).toMatch(/all 5 property value\(s\) failed/)
     expect(message).toMatch(/Undo history for this workspace was cleared/)
   })
@@ -877,7 +854,7 @@ describe('what an aborted run tells the operator', () => {
     // already written.
     const {message} = describeOutcome(
       {outcome: 'deferred', undoHistoryCleared: true, reason: 'synced rows are still draining'},
-      counts(0), false,
+      counts(0),
     )
 
     expect(message).not.toMatch(/not started/i)
@@ -886,7 +863,7 @@ describe('what an aborted run tells the operator', () => {
 
   it('tells a failed run its undo history is gone too', async () => {
     const {message} = describeOutcome(
-      {outcome: 'failed', undoHistoryCleared: true, reason: 'the pass gave up.'}, counts(0), false,
+      {outcome: 'failed', undoHistoryCleared: true, reason: 'the pass gave up.'}, counts(0),
     )
 
     expect(message).toMatch(/undo history/i)

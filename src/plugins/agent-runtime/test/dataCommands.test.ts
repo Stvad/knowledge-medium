@@ -398,7 +398,7 @@ describe('reconcile-markdown-subtree command', () => {
     key: opts.key ?? KEY,
     ...(opts.shape ? {shape: opts.shape} : {}),
     ...(opts.final ? {final: true} : {}),
-    properties: {'claude:reply': true},
+    properties: {'agent:reply': true},
   }, context) as Promise<ReconcileResult>
 
   const replyRoots = async () =>
@@ -424,7 +424,7 @@ describe('reconcile-markdown-subtree command', () => {
     expect(childA1.parentId).toBe(topA.id)
     // Every block carries the passed marker AND the reconcile key.
     for (const row of [topA, topB, childA1]) {
-      expect(row.properties?.['claude:reply']).toBe(true)
+      expect(row.properties?.['agent:reply']).toBe(true)
       expect(row.properties?.['agent:subtreeKey']).toBe(KEY)
     }
   })

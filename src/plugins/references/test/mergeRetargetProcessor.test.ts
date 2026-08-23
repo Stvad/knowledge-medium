@@ -200,7 +200,7 @@ describe('references.retargetMergedBlockReferences', () => {
 
     await env.repo.run(ALIAS_COLLISION_MERGE_MUTATOR, {
       intoId: 'target',
-      fromId: 'source',
+      fromIds: ['source'],
       collisionAlias: 'Existing',
       dropSourceAliases: ['Partial'],
     })
@@ -253,7 +253,7 @@ describe('references.retargetMergedBlockReferences', () => {
 
     await env.repo.run(ALIAS_COLLISION_MERGE_MUTATOR, {
       intoId,
-      fromId: 'source',
+      fromIds: ['source'],
       collisionAlias: 'a]]b',
       dropSourceAliases: ['Partial'],
     })
@@ -293,7 +293,7 @@ describe('references.retargetMergedBlockReferences', () => {
 
     await env.repo.run(ALIAS_COLLISION_MERGE_MUTATOR, {
       intoId,
-      fromId: 'source',
+      fromIds: ['source'],
       collisionAlias: 'a[[b',
       dropSourceAliases: ['Partial'],
     })
