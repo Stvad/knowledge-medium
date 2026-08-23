@@ -1,2 +1,0 @@
-import e from"../../../node_modules/.pnpm/uuid@14.0.0/node_modules/uuid/dist/stringify.js";var t=16,n=async(n,r)=>{let i=new TextEncoder().encode(r);if(i.length===32)throw Error(`derived-id namespace label must not be 32 bytes — that is the asset content-key input set, which shares this HMAC key`);let a=new Uint8Array(await crypto.subtle.sign(`HMAC`,n,i)).slice(0,t);return a[6]=a[6]&15|64,a[8]=a[8]&63|128,e(a)};export{n as deriveWorkspaceIdNamespace};
-//# sourceMappingURL=derivedIdNamespace.js.map
