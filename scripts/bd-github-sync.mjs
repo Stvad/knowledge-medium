@@ -781,8 +781,16 @@ export const buildDenyMessage = (mapped, unmapped) => {
 // Process plumbing
 // ---------------------------------------------------------------------------
 
+// spawnSync's default is 1 MiB and the tracker outgrew it: the `bd list` below
+// returns every issue in one JSON array, which crossed 1 MiB in Aug 2026 and
+// failed the whole sync with ENOBUFS. Growth is monotonic — issues are never
+// removed — so the bound has to sit far above the data, not just above today's.
+const MAX_OUTPUT_BYTES = 256 * 1024 * 1024
+
 const run = (file, args, opts = {}) => {
-  const r = spawnSync(file, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], ...opts })
+  const r = spawnSync(file, args, {
+    encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: MAX_OUTPUT_BYTES, ...opts,
+  })
   if (r.error) throw r.error
   const combined = `${r.stdout ?? ''}\n${r.stderr ?? ''}`
   if (r.status !== 0) throw new Error(`${file} ${args[0]} exited ${r.status}: ${combined.trim().slice(0, 500)}`)
@@ -811,6 +819,7 @@ export const bdShowRows = (ids, opts = {}) => {
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
     timeout: 15_000,
+    maxBuffer: MAX_OUTPUT_BYTES,
     ...opts,
   })
   try {
