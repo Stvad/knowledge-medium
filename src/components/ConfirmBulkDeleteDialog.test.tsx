@@ -35,6 +35,18 @@ describe('ConfirmBulkDeleteDialog', () => {
       .toBe('4 selected blocks and the 26 blocks nested under them will be deleted.')
   })
 
+  it('wires the sentence up as the dialog description', () => {
+    // Radix always points DialogContent's aria-describedby at a generated id;
+    // rendered as a bare paragraph, the one sentence saying what is about to be
+    // destroyed carries no such id and a screen reader announces nothing for it.
+    renderDialog(1, 24)
+    const dialog = screen.getByRole('dialog')
+    const describedBy = dialog.getAttribute('aria-describedby')
+    expect(describedBy).toBeTruthy()
+    expect(document.getElementById(describedBy!)?.textContent)
+      .toBe('This block and the 23 blocks nested under it will be deleted.')
+  })
+
   it('drops the nesting clause when there is none', () => {
     renderDialog(12, 12)
     expect(screen.getByText(/will be deleted/).textContent)
