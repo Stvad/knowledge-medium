@@ -51,10 +51,12 @@ import {
 } from '@/data/blockSchema'
 import {
   CLIENT_SCHEMA_STATEMENTS,
+  PROPERTY_DEFINITION_BASELINE_PREFIX,
   RECONCILE_RESCAN_MARKER_PREFIX,
   REPROJECT_REF_MARKER_PREFIX,
   WORKSPACE_BACKFILL_MARKER_PREFIX,
   backfillBlockAliasesIfEmpty,
+  ensureClientSchemaStateValueColumn,
   ensureStagingNeedsApplyColumn,
   backfillBlocksFtsIfEmpty,
   backfillBlockTypesIfEmpty,
@@ -148,6 +150,10 @@ const initializeTestDb = async (dbDir: string): Promise<PowerSyncDatabase> => {
   // `client_schema_state` marker, which the loop above creates.
   await ensureStagingNeedsApplyColumn({
     ...backfillDb,
+    getAll: <T,>(sql: string) => db.getAll<T>(sql),
+  })
+  await ensureClientSchemaStateValueColumn({
+    execute: (sql: string) => db.execute(sql),
     getAll: <T,>(sql: string) => db.getAll<T>(sql),
   })
   await db.execute(CREATE_BLOCKS_SYNCED_NEEDS_APPLY_INDEX_SQL)
@@ -359,6 +365,9 @@ export const resetTestDb = async (db: PowerSyncDatabase): Promise<void> => {
       )
       await tx.execute(
         `DELETE FROM client_schema_state WHERE key LIKE '${RECONCILE_RESCAN_MARKER_PREFIX}%'`,
+      )
+      await tx.execute(
+        `DELETE FROM client_schema_state WHERE key LIKE '${PROPERTY_DEFINITION_BASELINE_PREFIX}%'`,
       )
     }
     // Restart AUTOINCREMENT counters (e.g. ps_crud.id) so per-test row-id

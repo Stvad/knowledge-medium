@@ -16,15 +16,21 @@
  *
  * Detection rides the registry rebuild: the facet bridge diffs the previous
  * vs incoming `PropertyDefinitionRegistrySnapshot` per fieldId (durable
- * identity), so every rename source — panel edit, outline edit of the
- * definition block, a synced-in rename from another device — funnels through
- * one seam. The multi-device rename RACE (a block edited offline across a
- * rename syncs up under a key no registry knows) is slice C's reconcile;
- * this one-shot pass can't reach it.
+ * identity). On PRIME there is no comparable previous snapshot — it is null or
+ * belongs to another workspace — so the durable per-workspace baseline
+ * (`propertyDefinitionBaseline.ts`) supplies the before-state instead, which is
+ * what catches a change synced in while this device was looking elsewhere
+ * (#780). The multi-device rename RACE (a block edited offline across a rename
+ * syncs up under a key no registry knows) is slice C's reconcile; this one-shot
+ * pass can't reach it.
  */
 
 import type { ResolvedPropertySchema } from '@/data/api'
 import type { PropertyDefinitionRegistrySnapshot } from '@/data/propertyDefinitionRegistry'
+import {
+  propertyDefinitionFacts,
+  type PropertyDefinitionFactsByFieldId,
+} from './propertyDefinitionBaseline'
 
 export interface PropertyDefinitionChange {
   readonly fieldId: string
@@ -55,51 +61,44 @@ export interface PropertyDefinitionMigrationPlan {
   readonly schema: ResolvedPropertySchema<unknown>
 }
 
-/** Diff two registry snapshots of the SAME workspace by durable fieldId.
- *  A workspace switch (different `workspaceId`) is never a migration. */
-export const changedPropertyDefinitions = (
-  previous: PropertyDefinitionRegistrySnapshot | null | undefined,
-  next: PropertyDefinitionRegistrySnapshot | null | undefined,
+/** Diff two sets of definition facts by durable fieldId. A fieldId absent from
+ *  `previous` is an ADDED definition, not a rename — nothing to re-key. */
+export const changedPropertyDefinitionFacts = (
+  previous: PropertyDefinitionFactsByFieldId,
+  next: PropertyDefinitionFactsByFieldId,
 ): PropertyDefinitionChange[] => {
-  if (!previous || !next) return []
-  if (previous.workspaceId !== next.workspaceId) return []
   const changes: PropertyDefinitionChange[] = []
-  for (const [fieldId, nextMetadata] of next.definitionsByFieldId) {
-    const previousMetadata = previous.definitionsByFieldId.get(fieldId)
-    if (!previousMetadata) continue
-    const nameChanged = previousMetadata.name !== nextMetadata.name
-    const previousCodecType = previous.schemasByFieldId.get(fieldId)?.codec.type
-    const nextCodecType = next.schemasByFieldId.get(fieldId)?.codec.type
+  for (const [fieldId, nextFacts] of next) {
+    const previousFacts = previous.get(fieldId)
+    if (!previousFacts) continue
+    const nameChanged = previousFacts.name !== nextFacts.name
     const codecChanged =
-      previousCodecType !== undefined
-      && nextCodecType !== undefined
-      && previousCodecType !== nextCodecType
+      previousFacts.codecType !== undefined
+      && nextFacts.codecType !== undefined
+      && previousFacts.codecType !== nextFacts.codecType
     if (!nameChanged && !codecChanged) continue
     changes.push({
       fieldId,
-      oldName: previousMetadata.name,
-      newName: nextMetadata.name,
+      oldName: previousFacts.name,
+      newName: nextFacts.name,
       codecChanged,
     })
   }
   return changes
 }
 
-/** Definitions PRESENT in `next` with no previous entry — new schemas whose
- *  name may already appear as `[[name]]` rows that derived to NULL before
- *  the definition existed (PR #288 §9's arrival-order hole). A null
- *  `previous` (boot's first snapshot) is deliberately not "everything added"
- *  — the once-per-workspace catch-up pass covers boot, running after
- *  registry readiness. */
-export const addedPropertyDefinitionNames = (
+/** Diff two registry snapshots of the SAME workspace by durable fieldId.
+ *  A workspace switch (different `workspaceId`) is never a migration —
+ *  and neither is a null side, which is the PRIME case: the durable
+ *  per-workspace baseline (`propertyDefinitionBaseline.ts`) is what
+ *  answers there. */
+export const changedPropertyDefinitions = (
   previous: PropertyDefinitionRegistrySnapshot | null | undefined,
   next: PropertyDefinitionRegistrySnapshot | null | undefined,
-): string[] => {
+): PropertyDefinitionChange[] => {
   if (!previous || !next) return []
   if (previous.workspaceId !== next.workspaceId) return []
-  const names: string[] = []
-  for (const [fieldId, metadata] of next.definitionsByFieldId) {
-    if (!previous.definitionsByFieldId.has(fieldId)) names.push(metadata.name)
-  }
-  return names
+  return changedPropertyDefinitionFacts(
+    propertyDefinitionFacts(previous), propertyDefinitionFacts(next),
+  )
 }

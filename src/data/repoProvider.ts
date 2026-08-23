@@ -63,6 +63,7 @@ import {
   backfillBlocksFtsIfEmpty,
   backfillBlockTypesIfEmpty,
   ensureBlockUserUpdatedAtColumn,
+  ensureClientSchemaStateValueColumn,
   ensureStagingNeedsApplyColumn,
   ensureUndoGroupIdColumns,
 } from '@/data/internals/clientSchema'
@@ -440,6 +441,12 @@ const initializePowerSyncDb = async (powerSyncDb: PowerSyncDatabase) => {
   // through every seeded row.
   await ensureStagingNeedsApplyColumn({
     ...backfillDb,
+    getAll: <T,>(sql: string) => powerSyncDb.getAll<T>(sql),
+  })
+  // Same position, same reason: it ALTERs `client_schema_state`, which the
+  // loop above creates.
+  await ensureClientSchemaStateValueColumn({
+    execute: (sql: string) => powerSyncDb.execute(sql),
     getAll: <T,>(sql: string) => powerSyncDb.getAll<T>(sql),
   })
   await powerSyncDb.execute(CREATE_BLOCKS_SYNCED_NEEDS_APPLY_INDEX_SQL)

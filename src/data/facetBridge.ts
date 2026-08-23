@@ -128,6 +128,12 @@ export interface FacetBridgeTarget {
     workspaceId: string,
     changes: readonly PropertyDefinitionChange[],
   ): void
+  /** Fold this snapshot into the workspace's durable definitions baseline, and
+   *  — when `detectChanges` — migrate whatever drifted from it (#780). */
+  syncPropertyDefinitionBaseline(
+    snapshot: PropertyDefinitionRegistrySnapshot,
+    options: {readonly detectChanges: boolean},
+  ): void
 }
 
 export class FacetBridge {
@@ -444,6 +450,21 @@ export class FacetBridge {
             target.schedulePropertyDefinitionMigrations(
               propertyDefinitions.workspaceId, codecChanges,
             )
+          }
+          // PRIME — no previous snapshot for THIS workspace, so the diff above
+          // structurally returned nothing (its two refusals are exactly "no
+          // previous" and "other workspace"). Hand the incoming snapshot to the
+          // durable per-workspace baseline instead: it is what sees a rename or
+          // codec change that synced in while this device was looking elsewhere,
+          // and (unlike an active-workspace change) no local tx ran here, so the
+          // same-tx rename processor never fired for it (#780). Every build also
+          // records the baseline, so a rename this device performed itself is
+          // already accounted for by the time it primes again.
+          if (propertyDefinitions) {
+            target.syncPropertyDefinitionBaseline(propertyDefinitions, {
+              detectChanges:
+                previousPropertyDefinitions?.workspaceId !== propertyDefinitions.workspaceId,
+            })
           }
           // No property-SPECIFIC reference-target rederive here. Recognition
           // is form-agnostic (a whole-block reference that resolves to a

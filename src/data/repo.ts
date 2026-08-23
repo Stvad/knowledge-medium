@@ -119,6 +119,11 @@ import type {
   PropertyDefinitionChange,
   PropertyDefinitionMigrationPlan,
 } from './internals/propertyDefinitionMigrations'
+import { changedPropertyDefinitionFacts } from './internals/propertyDefinitionMigrations'
+import {
+  propertyDefinitionFacts,
+  PropertyDefinitionBaselineStore,
+} from './internals/propertyDefinitionBaseline'
 import {
   encodedPropertyValueToChildContent,
   isFieldValueChild,
@@ -735,6 +740,16 @@ export class Repo {
    *  (PR #288 §7/§9, slice B2) — drained by
    *  `awaitPropertyDefinitionMigrations()`, same pattern. */
   private readonly propertyDefinitionMigrationJobs = new PendingIdleJobs((fn) => scheduleDeepIdle(fn, CATCHUP_DEEP_IDLE))
+  /** Durable per-workspace record of the definitions this device last saw —
+   *  the "before" side the PRIME diff needs (#780). Constructed in the
+   *  constructor (needs `this.db`), like `reprojectionMarkers`. */
+  private propertyDefinitionBaselines!: PropertyDefinitionBaselineStore
+  /** Baseline reads/writes run off the synchronous registry rebuild that
+   *  triggers them, and MUST stay ordered: a rebuild's diff compares against
+   *  the baseline as of the PREVIOUS rebuild, so two overlapping runs would
+   *  each read the other's before-state. One serial chain, drained by
+   *  `awaitPropertyDefinitionBaselines()`. */
+  private propertyDefinitionBaselineWork: Promise<void> = Promise.resolve()
   /** In-flight property-seed materialization passes (§4.3 of the schema-
    *  unification design) — drained by `awaitSeedMaterialization()`. Unlike its
    *  siblings the pass is create/restore-only + idempotent rather than
@@ -959,6 +974,7 @@ export class Repo {
       RECORD_REPROJECT_REF_MARKER_SQL,
       CLEAR_REPROJECT_REF_MARKER_SQL,
     )
+    this.propertyDefinitionBaselines = new PropertyDefinitionBaselineStore(this.db)
     this.backfillCompletionClaim = opts.backfillCompletionClaim
     this.backfillSyncGate = opts.backfillSyncGate
       ?? ((cb) => onSyncSettled(this.db as unknown as Parameters<typeof onSyncSettled>[0], cb))
@@ -1077,6 +1093,9 @@ export class Repo {
       getPropertyDefinitions: () => this._propertyDefinitionRegistry,
       schedulePropertyDefinitionMigrations: (workspaceId, changes) => {
         this.schedulePropertyDefinitionMigrations(workspaceId, changes)
+      },
+      syncPropertyDefinitionBaseline: (snapshot, options) => {
+        this.syncPropertyDefinitionBaseline(snapshot, options)
       },
     })
     this.mutate = nameDispatchProxy<MutateProxy>(name => this.dispatchMutator(name))
@@ -3694,6 +3713,11 @@ export class Repo {
   schedulePropertyDefinitionMigrations(
     workspaceId: string,
     changes: readonly PropertyDefinitionChange[],
+    /** Resolver captured at REBUILD time. The baseline path (#780) computes its
+     *  changes in an async continuation of the rebuild, by which point the
+     *  one-deep retention below may already have evicted `workspaceId` — so it
+     *  captures the resolver synchronously and hands it in here. */
+    capturedResolver?: PropertySchemaResolver,
   ): void {
     if (this.isReadOnly || !workspaceId || changes.length === 0) return
     // Resolve NOW, not when the deferred job runs. `changes` comes from this
@@ -3711,7 +3735,7 @@ export class Repo {
     // switch. A fieldId that doesn't resolve (shadowed / unavailable, §6) is
     // dropped from the plan — the same skip the run-time check used to do,
     // just performed here instead.
-    const resolver = this.propertySchemaResolverFor(workspaceId)
+    const resolver = capturedResolver ?? this.propertySchemaResolverFor(workspaceId)
     const plans: PropertyDefinitionMigrationPlan[] = changes.flatMap(change => {
       const resolution = resolver.resolveField(change.fieldId)
       return resolution.status === 'resolved' ? [{change, schema: resolution.schema}] : []
@@ -3725,6 +3749,79 @@ export class Repo {
   /** Test helper — drains migration passes whose deferral timer has fired. */
   async awaitPropertyDefinitionMigrations(): Promise<void> {
     await this.propertyDefinitionMigrationJobs.drain()
+  }
+
+  /**
+   * Fold a freshly-built registry snapshot into this device's durable
+   * per-workspace definitions baseline, and — on PRIME (`detectChanges`) —
+   * schedule the migration pass for whatever drifted from it (#780).
+   *
+   * PRIME is where the facet bridge's previous-vs-incoming diff is
+   * structurally blind: the previous snapshot is null (first build of the run)
+   * or belongs to another workspace, so a rename or codec change that SYNCED
+   * IN while this device was looking elsewhere is invisible to it — and,
+   * having run no `repo.tx` here, invisible to the same-tx rename processor
+   * too. The baseline is the before-state that survives both a workspace
+   * switch and a reload.
+   *
+   * Recording happens on EVERY build, not only on prime, so a change this
+   * device made itself (already re-keyed in its editing tx) is folded in
+   * before the next prime and never re-migrated.
+   *
+   * A workspace with NO baseline records one and migrates nothing: with no
+   * observed before-state, "everything changed" would re-key the whole graph
+   * off a diff this device never saw, and the state it can't see is not its to
+   * repair (the renaming device re-keyed and synced its own cells). See
+   * `propertyDefinitionBaseline.ts` for the full boundary.
+   */
+  syncPropertyDefinitionBaseline(
+    snapshot: PropertyDefinitionRegistrySnapshot,
+    {detectChanges}: {readonly detectChanges: boolean},
+  ): void {
+    if (this.isReadOnly) return
+    const {workspaceId} = snapshot
+    if (!workspaceId) return
+    const facts = propertyDefinitionFacts(snapshot)
+    // Captured HERE, synchronously with the rebuild that produced `snapshot`,
+    // for the same reason `schedulePropertyDefinitionMigrations` captures its
+    // plans eagerly: `propertySchemaResolverFor` serves only the active or
+    // immediately-previous workspace, and the baseline read below is async, so
+    // re-deriving it after the await could fail closed and drop the migration.
+    const resolver = detectChanges ? this.propertySchemaResolverFor(workspaceId) : null
+    this.propertyDefinitionBaselineWork = this.propertyDefinitionBaselineWork
+      .then(async () => {
+        const previous = await this.propertyDefinitionBaselines.read(workspaceId)
+        await this.propertyDefinitionBaselines.merge(workspaceId, facts)
+        // Not a prime — the bridge's own in-memory diff covered this build.
+        if (resolver === null) return
+        // First baseline on this device for this workspace: nothing to diff.
+        if (previous === null) return
+        const changes = changedPropertyDefinitionFacts(previous, facts)
+        if (changes.length > 0) {
+          this.schedulePropertyDefinitionMigrations(workspaceId, changes, resolver)
+        }
+      })
+      .catch(err => {
+        const reason = err instanceof Error ? err.message : String(err)
+        console.error(`[propertyDefinitionBaseline] workspace ${workspaceId} failed: ${reason}`)
+      })
+  }
+
+  /** Test helper — settles the baseline chain, including work enqueued by a
+   *  rebuild that ran while we were awaiting an earlier link. */
+  async awaitPropertyDefinitionBaselines(): Promise<void> {
+    let awaited: Promise<void> | null = null
+    while (awaited !== this.propertyDefinitionBaselineWork) {
+      awaited = this.propertyDefinitionBaselineWork
+      await awaited
+    }
+  }
+
+  /** Test escape hatch — drop the in-memory baseline mirror so the next read
+   *  re-reads `client_schema_state`. Mirrors
+   *  `__resetReprojectionMarkerCache`. */
+  __resetPropertyDefinitionBaselineCache(): void {
+    this.propertyDefinitionBaselines.reset()
   }
 
   private async runPropertyDefinitionMigrations(
