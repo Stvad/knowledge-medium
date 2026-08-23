@@ -77,9 +77,6 @@ export const renameProperty = async (args: {
   oldName: string
   newName: string
 }) => {
-  // `trimIfEdited`, not a bare trim: the field row commits on blur, so a bare
-  // focus-and-leave sends the stored key straight back — and trimming a key
-  // the user never touched re-keys the cell under a name nothing reads.
   const nextName = trimIfEdited(args.newName, args.oldName)
   if (!nextName || nextName === args.oldName) return
   if (args.oldName === typesProp.name || nextName === typesProp.name) return

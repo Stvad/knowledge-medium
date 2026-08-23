@@ -271,11 +271,7 @@ describe('property panel action visibility guards', () => {
     expect(update).toHaveBeenCalledWith('block-1', {properties: {b: 99, c: 1}})
   })
 
-  // The field row's rename input commits on BLUR, so a bare focus-and-leave
-  // sends the stored key straight back. A stored key can carry surrounding
-  // whitespace (an import, a pre-hygiene row, a synthesized orphan
-  // definition), and trimming one the user never edited re-keys the cell
-  // under a name nothing reads.
+  // A padded key is what synthesis mints for an orphaned cell key, verbatim.
   it('leaves an unedited padded key alone instead of re-keying its cell', async () => {
     const {update, block} = deleteBlock({' padded ': 1, keep: 'me'})
     await renameProperty({

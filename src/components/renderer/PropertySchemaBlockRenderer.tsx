@@ -104,7 +104,8 @@ export const PropertySchemaContentRenderer: BlockRenderer = ({block}: BlockRende
     setDraftName(propertyName)
   }
 
-  const writeName = useCallback(async (next: string) => {
+  const writeName = useCallback(async (draft: string) => {
+    const next = trimIfEdited(draft, propertyName)
     if (next === propertyName) return
     // Same invariant addSchema enforces at creation (PR #288 §7): the name
     // must survive a `[[name]]` round-trip — field-row retitles and every
@@ -222,7 +223,7 @@ export const PropertySchemaContentRenderer: BlockRenderer = ({block}: BlockRende
           placeholder="property name"
           disabled={readOnly}
           onChange={(e: ChangeEvent<HTMLInputElement>) => setDraftName(e.target.value)}
-          onBlur={() => { void writeName(trimIfEdited(draftName, propertyName)) }}
+          onBlur={() => { void writeName(draftName) }}
           onKeyDown={(e) => {
             if (e.key === 'Enter') {
               e.preventDefault()

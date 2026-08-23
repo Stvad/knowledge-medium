@@ -1,12 +1,7 @@
 // @vitest-environment happy-dom
 
 /** Focusing a definition's name field and leaving it must not rename the
- *  definition. Both editors trim on commit, and a committed name can
- *  legitimately carry surrounding whitespace (a pre-hygiene row, an import,
- *  or a synthesized orphan definition, which mints the cell key verbatim on
- *  purpose) — so an unconditional trim on blur renames without an edit, and
- *  a property definition's name is the cell key its values are stored
- *  under. */
+ *  definition — see `trimIfEdited` for why a stored name can carry padding. */
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, render, screen } from '@testing-library/react'
@@ -17,7 +12,6 @@ import { blockTypeLabelProp, propertyNameProp } from '@/data/properties'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { Repo } from '@/data/repo'
-import { RepoContext } from '@/context/repo'
 import { type FacetRuntime } from '@/facets/facet'
 import { AppRuntimeContextProvider } from '@/extensions/runtimeContext'
 import { kernelPropertyUiExtension } from '@/components/propertyEditors/typesPropertyUi'
@@ -109,11 +103,9 @@ const renderSchema = async () => {
 const renderType = async (id: string) => {
   await repo.block(id).load()
   return render(
-    <RepoContext.Provider value={repo}>
-      <AppRuntimeContextProvider value={runtime}>
-        <BlockTypeContentRenderer block={repo.block(id)} />
-      </AppRuntimeContextProvider>
-    </RepoContext.Provider>,
+    <AppRuntimeContextProvider value={runtime}>
+      <BlockTypeContentRenderer block={repo.block(id)} />
+    </AppRuntimeContextProvider>,
   )
 }
 
