@@ -1,0 +1,2 @@
+import{propertyDefinitionFacts as e}from"./propertyDefinitionBaseline.js";var t=(e,t)=>{let n=[];for(let[r,i]of t){let t=e.get(r);if(!t)continue;let a=t.name!==i.name,o=t.codecType!==void 0&&i.codecType!==void 0&&t.codecType!==i.codecType;!a&&!o||n.push({fieldId:r,oldName:t.name,newName:i.name,codecChanged:o})}return n},n=(n,r)=>!n||!r||n.workspaceId!==r.workspaceId?[]:t(e(n),e(r));export{t as changedPropertyDefinitionFacts,n as changedPropertyDefinitions};
+//# sourceMappingURL=propertyDefinitionMigrations.js.map
