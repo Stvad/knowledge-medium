@@ -14,6 +14,7 @@ import {
 import {
   propertyChildContentToEncodedValue,
   resolvePropertyValueFieldSchema,
+  contentLosesPropertyValue,
 } from '@/data/propertyChildren'
 import {
   DEFAULT_FIND_REPLACE_OPTIONS,
@@ -237,13 +238,21 @@ export const applyContentReplaceMutator = defineMutator<
         // turning `((id))` into `[[SomeName]]` resolved to a non-null target,
         // passed the guard, and PROJECT then wrote the WRONG id into the
         // owner's cell. Now it reads as unparseable and is reported as a skip.
+        //
+        // Decoding is NOT the whole question, and asking only it let #688
+        // through here: `codecs.string` / `codecs.url` accept any string, so a
+        // replace that turned a value into `::((id))` decoded fine, was
+        // written, and then had the row classified as a field row out from
+        // under it — the owner's key dropped with no error. `setProperty`
+        // ESCAPES such a value; this path writes content the user chose, so it
+        // refuses instead and offers "replace anyway" like every other skip.
         const breaksCodec = (() => {
           try {
             propertyChildContentToEncodedValue(schema, replaced.content)
-            return false
           } catch {
             return true
           }
+          return contentLosesPropertyValue(schema, replaced.content)
         })()
         if (breaksCodec) {
           result.skippedUnparseableProperty += 1

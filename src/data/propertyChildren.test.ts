@@ -119,6 +119,13 @@ const cellValue = async (id: string): Promise<unknown> => {
   return (JSON.parse(row.properties_json) as Record<string, unknown>)[statusSchema.name]
 }
 
+/** The envelope `escapeContent` produces: JSON-carried, with every reference-
+ *  span opener spelled as an escape so neither reader of the grammar sees a
+ *  span. Tests state this contract rather than the literal spelling. */
+const escapedContent = (value: string): string =>
+  JSON.stringify(value).replace(/[[(]/g,
+    c => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`)
+
 describe('dormant at properties_migration = cell', () => {
   it('setProperty writes the cell only — no field rows', async () => {
     await seedWorkspace('cell')
@@ -297,7 +304,7 @@ describe('flipped workspace: string values that verbatim content would destroy (
     // Escaped, so the derive reads it as prose: the bit is what the value-set
     // filter keys on, and the whole loss followed from it being stamped.
     expect(values[0]!.is_field_form).not.toBe(1)
-    expect(values[0]!.content).toBe(JSON.stringify(value))
+    expect(values[0]!.content).toBe(escapedContent(value))
   })
 
   // An UNMARKED span never set the bit, so it never dropped the key — it
@@ -1829,7 +1836,7 @@ describe('content <-> value codecs: escaping strings content cannot hold as itse
   it.each(GRAMMAR_SHAPED)('escapes %j and round-trips it exactly', value => {
     for (const schema of [statusSchema, urlSchema]) {
       const content = propertyValueToChildContent(schema, value)
-      expect(content).toBe(JSON.stringify(value))
+      expect(content).toBe(escapedContent(value))
       expect(propertyChildContentToEncodedValue(schema, content)).toBe(value)
     }
   })
@@ -1847,7 +1854,7 @@ describe('content <-> value codecs: escaping strings content cannot hold as itse
       const content = propertyValueToChildContent(statusSchema, value)
       // JSON spells it `\ud800` — pure ASCII, so nothing below the content
       // column has an ill-formed sequence to replace.
-      expect(content).toBe(JSON.stringify(value))
+      expect(content).toBe(escapedContent(value))
       expect(/[\uD800-\uDFFF]/.test(content)).toBe(false)
       expect(propertyChildContentToEncodedValue(statusSchema, content)).toBe(value)
     }
@@ -1867,7 +1874,7 @@ describe('content <-> value codecs: escaping strings content cannot hold as itse
     const inner = `::((${UUID}))`
     const quoted = JSON.stringify(inner)
     expect(propertyValueToChildContent(statusSchema, quoted))
-      .toBe(JSON.stringify(quoted))
+      .toBe(escapedContent(quoted))
     expect(propertyValueToChildContent(statusSchema, quoted))
       .not.toBe(propertyValueToChildContent(statusSchema, inner))
     for (const value of [inner, quoted, JSON.stringify(quoted)]) {

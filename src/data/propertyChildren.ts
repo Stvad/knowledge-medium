@@ -54,6 +54,7 @@ import {
   referenceBlockContentForId,
 } from '@/data/referenceBlock'
 import { jsonValuesEqual } from '@/data/internals/jsonCanonical'
+import { hasLoneSurrogate } from '@/utils/string'
 
 export const getPropertyFieldTargetId = (
   data: Pick<BlockData, 'referenceTargetId'> | null | undefined,
@@ -154,46 +155,82 @@ const codecAcceptsNull = (schema: AnyPropertySchema): boolean => {
   }
 }
 
-/** A UTF-16 code unit with no partner. `String.prototype.isWellFormed` is
- *  exactly this predicate but is ES2024, past this project's `lib`. */
-const LONE_SURROGATE_RE =
-  /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/
+/** The characters every reference span OPENS with. Escaping these is what
+ *  makes {@link escapeContent}'s output inert to BOTH readers of the grammar:
+ *  quoting alone only stops the whole-block parser, and the inline one
+ *  (`plugins/references/referenceParser`) scans spans anywhere in content, so
+ *  a merely-quoted `"[[Page]]"` is still an inline reference that a rename
+ *  rewrites — silently editing the value. Stated as the opener set rather than
+ *  by consulting the inline parser because core cannot import a plugin, and
+ *  because no span form in either reader can begin any other way. */
+const SPAN_OPENERS_RE = /[[(]/g
+
+/** Would this text, stored VERBATIM as a value row's content, be read as
+ *  something other than the text it is — losing the value (#688)? Two shapes:
+ *  a §7 reference span, which `deriveReferenceColumns` classifies instead of
+ *  storing (marked, it stamps `is_field_form`, and `isFieldValueChild` then
+ *  drops the row from the value set, taking the owner's key with it); and a
+ *  lone surrogate, which the content column returns as U+FFFD.
+ *
+ *  One definition, two callers with opposite remedies, which is the reason it
+ *  is named rather than inlined into `needsEscape`: a writer going through
+ *  `encodedValueToContent` ESCAPES (below), while a writer that rewrites
+ *  content directly cannot escape without changing what the user asked for,
+ *  and must REFUSE — see {@link contentLosesPropertyValue}. */
+const verbatimContentLosesValue = (content: string): boolean =>
+  isGrammarShapedLabel(content) || hasLoneSurrogate(content)
+
+/** The refusal half of {@link verbatimContentLosesValue}, for write paths that
+ *  set a value row's `content` DIRECTLY rather than encoding a typed value —
+ *  find-replace is the one caller. Those bypass `encodedValueToContent`, so
+ *  they get no escaping and the value is silently lost instead.
+ *
+ *  Scoped to the codecs that store content verbatim: everything else either
+ *  emits machine-formatted text that cannot take these shapes, or (`ref`) is
+ *  span-shaped by design and already refused by its own decode. */
+export const contentLosesPropertyValue = (
+  schema: AnyPropertySchema,
+  content: string,
+): boolean =>
+  (schema.codec.type === 'string' || schema.codec.type === 'url')
+  && verbatimContentLosesValue(content)
+
+/** Store `s` as content that reads back as exactly `s` and as nothing else.
+ *  `JSON.stringify` carries the value (and spells lone surrogates as ASCII
+ *  escapes); the extra opener escaping neutralizes the reference grammar.
+ *  `JSON.parse` undoes both, so `contentToEncodedValue` needs no counterpart. */
+const escapeContent = (s: string): string =>
+  JSON.stringify(s).replace(SPAN_OPENERS_RE,
+    c => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`)
 
 /** Would `s`, written VERBATIM as a value child's content, read back as
- *  something other than `s`? The verbatim string-family codecs (`string` |
- *  `url`) store a value as raw content, so any such divergence is silent
- *  value loss — the projection reads the child back and writes THAT over the
- *  owner's cell. Escaping via `JSON.stringify` (undone in
- *  `contentToEncodedValue`) stores the value intact instead. Three divergences
- *  exist, and only strings that hit one are escaped; every other string stays
- *  verbatim in the tree:
+ *  something other than `s`? These codecs (`string` | `url`) store a value as
+ *  raw content, so any divergence is silent value loss — the projection reads
+ *  the child back and writes THAT over the owner's cell. Only strings that hit
+ *  one of the three cases are escaped; every other string stays verbatim in
+ *  the tree.
  *   - the encoded-null SENTINEL: bare `null` content IS the null value to a
- *     codec that accepts one, so the string `'null'` can't be written as
- *     itself. Gated on `codecAcceptsNull` — elsewhere there is no collision.
- *   - a §7 reference SPAN: `deriveReferenceColumns` reads such content instead
- *     of storing it. A `::`-marked span stamps `is_field_form`, which
- *     `isFieldValueChild` filters OUT of the field row's value set — the
- *     projection then finds no values and drops the owner's key, losing the
- *     property with no error (#688). An unmarked span is milder but still not
- *     the string: it stamps `reference_target_id`, mints a seat for a
- *     `[[name]]` nothing claims, and puts the row in reach of reference
- *     maintenance, which rewrites content.
- *   - a LONE SURROGATE: the cell keeps one (`properties_json` is JSON, so it
- *     is escaped to ASCII) but the content column hands back U+FFFD, which
- *     the projection feeds to the cell as authoritative. Measured as the only
- *     mangling shape — NUL, C0 controls, newlines and padding all round-trip
- *     verbatim — so the test is well-formedness, not a character blacklist.
+ *     codec that accepts one. Gated on `codecAcceptsNull` — elsewhere there is
+ *     no collision, and the string stays verbatim.
+ *   - a reference SPAN (§7): `deriveReferenceColumns` reads such content
+ *     instead of storing it. Marked, it stamps `is_field_form`, which
+ *     `isFieldValueChild` filters out of the value set — the projection finds
+ *     nothing and drops the owner's key (#688). Unmarked, it becomes a live
+ *     reference rather than text.
+ *   - a LONE SURROGATE: the content column returns U+FFFD, and the projection
+ *     writes that back over the cell. Measured as the ONLY mangling shape —
+ *     NUL, C0 controls, newlines and padding all round-trip verbatim — so the
+ *     test is well-formedness, not a character blacklist.
  *
- *  Recursive on the quoted form so the escape stays unambiguous: a value that
- *  is ITSELF a JSON string literal of an escapable string escapes too, or its
- *  content would decode one level short. One level always suffices —
- *  `JSON.stringify(s)` opens with `"`, which no span form does, and spells
- *  surrogates as ASCII escapes, so the escaped form never needs escaping. */
+ *  Recursive on the quoted form, or a value that is ITSELF a JSON string
+ *  literal of an escapable string would decode one level short. The recursion
+ *  is unbounded but the ESCAPE is applied once: `escapeContent`'s output opens
+ *  with `"`, carries no span opener and no raw surrogate, so it can never
+ *  itself need escaping. */
 const needsEscape = (schema: AnyPropertySchema, s: string): boolean => {
   const trimmed = s.trim()
   if (codecAcceptsNull(schema) && trimmed === 'null') return true
-  if (isGrammarShapedLabel(s)) return true
-  if (LONE_SURROGATE_RE.test(s)) return true
+  if (verbatimContentLosesValue(s)) return true
   if (trimmed.startsWith('"') && trimmed.endsWith('"')) {
     try {
       const parsed: unknown = JSON.parse(trimmed)
@@ -234,7 +271,7 @@ const encodedValueToContent = (schema: AnyPropertySchema, encoded: unknown): str
     || schema.codec.type === 'url'
   ) {
     if (typeof encoded !== 'string') return JSON.stringify(encoded)
-    return needsEscape(schema, encoded) ? JSON.stringify(encoded) : encoded
+    return needsEscape(schema, encoded) ? escapeContent(encoded) : encoded
   }
   if (schema.codec.type === 'date') {
     if (typeof encoded !== 'string') return JSON.stringify(encoded)
