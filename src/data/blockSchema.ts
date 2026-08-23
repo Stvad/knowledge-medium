@@ -149,6 +149,32 @@ export const ensureBlockLocalColumns = async (db: {
   }
 }
 
+/**
+ * LOCAL-only staging column: has the drain decided that `blocks` correctly
+ * reflects this delivery?
+ *
+ * The durable record of "this device downloaded a row it has not applied",
+ * written by the materializer in the SAME transaction as the decision itself.
+ * Every other way of answering that question is a poll of concurrently-moving
+ * state from somewhere the decision is not made, and each one is its own
+ * time-of-check window.
+ *
+ * Self-maintaining, which is why it is a column here rather than a side table:
+ * PowerSync's put is an `INSERT OR REPLACE` over the STORAGE columns only, so
+ * every delivery — first or re-delivery — resets this to its default and a
+ * newer version is unapplied until the drain says otherwise; a staging delete
+ * takes it with the row. No path can leave it stale.
+ *
+ * `blocks_synced` carries INSERT and DELETE triggers but no UPDATE trigger, so
+ * clearing it enqueues nothing and cannot feed the drain its own tail.
+ *
+ * Appended after the storage columns, and by the upgrade migration too, so a
+ * fresh table and an ALTERed one have the same layout.
+ */
+export const STAGING_LOCAL_COLUMNS = [
+  {name: 'needs_apply', definition: 'needs_apply INTEGER NOT NULL DEFAULT 1'},
+] as const satisfies readonly {name: string; definition: string}[]
+
 /** Layout B staging table (design doc §9.2). PowerSync's blocks stream is
  *  retargeted to row_type `blocks_synced`, so EVERY downloaded row —
  *  plaintext or `enc:v1:` ciphertext — lands here first; a JS observer then
@@ -158,8 +184,22 @@ export const ensureBlockLocalColumns = async (db: {
  *  triggers — it's a passive landing zone, never read by app queries. */
 export const CREATE_BLOCKS_SYNCED_TABLE_SQL = `
   CREATE TABLE IF NOT EXISTS blocks_synced (
-${formatSqlList(BLOCK_STORAGE_COLUMNS.map(column => column.definition), 6)}
+${formatSqlList([...BLOCK_STORAGE_COLUMNS, ...STAGING_LOCAL_COLUMNS].map(column => column.definition), 6)}
   )
+`
+
+/** Serves the "is this device's view of the workspace behind" read, which every
+ *  one-way pass takes and re-takes inside its own write transaction.
+ *
+ *  PARTIAL, and that is the whole point: the healthy answer is that the
+ *  workspace has no unapplied rows, so the index holds nothing for it and the
+ *  read is a miss on an empty range rather than a scan of every downloaded row.
+ *  It carries the same shape as the change queue — one entry per arrival, gone
+ *  once the drain resolves it — so a bulk sync grows it and then drains it. */
+export const CREATE_BLOCKS_SYNCED_NEEDS_APPLY_INDEX_SQL = `
+  CREATE INDEX IF NOT EXISTS idx_blocks_synced_needs_apply
+  ON blocks_synced (workspace_id)
+  WHERE needs_apply = 1
 `
 
 /** Sibling iteration index. Matches the server-side

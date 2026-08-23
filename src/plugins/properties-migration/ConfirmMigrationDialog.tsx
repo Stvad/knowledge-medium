@@ -41,7 +41,9 @@ export interface ConfirmMigrationDialogProps {
  *  a while, and it drops this workspace's undo history. The undo line is the
  *  load-bearing one — clearing it silently is its own surprise, and the
  *  alternative (leaving history that reverts the migration on the next cmd-Z)
- *  is worse.
+ *  is worse. It says "on this device" and asks for a reload because the clear
+ *  reaches no peer (#684): an undo stack is in-memory, and a reload is the only
+ *  thing that empties one on a device that stayed open across the switch.
  *
  *  "On this device" in the interruption line is precise, not filler. Resuming
  *  works because the claimant id is persisted per browser profile
@@ -119,8 +121,10 @@ export const ConfirmMigrationDialog = ({
         <p className="text-destructive">
           {!childBacked && <>The switch cannot be undone from the app — it only ever
             moves forward, and reversing it is a hand-run database migration.{' '}</>}
-          Undo history for this workspace will be cleared. Undoing an edit made
-          before the migration would revert part of it.
+          Undo history for this workspace will be cleared on this device — undoing
+          an edit made before the migration would revert part of it. A device that
+          stays open while it runs keeps its own, so reload your other tabs and
+          devices afterwards.
         </p>
       </div>
       <DialogFooter>

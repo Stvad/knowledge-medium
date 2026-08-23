@@ -16,6 +16,7 @@ import { definitionSeedsFacet } from '@/data/facets'
 import { kernelDataExtension } from '@/data/kernelDataExtension'
 import { resolveFacetRuntimeSync } from '@/facets/facet'
 import type { Repo } from '@/data/repo'
+import { BLOCKS_SYNCED_RAW_TABLE, blockToSyncedRowParams } from '@/data/blockSchema'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { confirmPlaintextForSession } from '@/sync/keys/modePin'
@@ -25,8 +26,8 @@ import {
   flipBlockedBySynthesis,
   PROVE_DISTINCT_VALUE_LIMIT,
   provePresetId,
-  propertySynthesisWorkspaceRefusal,
   planPropertyDefinitionSynthesis,
+  resolveSynthesisNamespace,
   synthesizedPropertyDefinitionBlockId,
 } from './propertyDefinitionSynthesis'
 
@@ -94,6 +95,14 @@ const rawCell = async (
 
 const planFor = () => planPropertyDefinitionSynthesis(repo, WS)
 
+/** Where a synthesized definition for `key` lands — asked of the same function
+ *  the pass asks, so a test never hard-codes which namespace a mode uses. */
+const definitionIdFor = async (key: string, workspaceId = WS) => {
+  const namespace = await resolveSynthesisNamespace(repo, workspaceId)
+  if (namespace.kind !== 'ready') throw new Error(`namespace refused: ${namespace.reason}`)
+  return synthesizedPropertyDefinitionBlockId(namespace.namespace, workspaceId, key)
+}
+
 /** Builds the resolver mock `propertySchemaResolverFor` is stubbed to return:
  *  only `resolve` is caller-supplied, `resolveField`/`resolveBoundary` always
  *  report identity-unavailable. */
@@ -136,7 +145,7 @@ const mintedOrphan = async () => {
   await rawCell('b1', {'demo:orphan': 'hello'})
   const plan = await planFor()
   await applyPropertyDefinitionSynthesis(repo, plan)
-  const id = synthesizedPropertyDefinitionBlockId(WS, 'demo:orphan')
+  const id = await definitionIdFor('demo:orphan')
   return {plan, id}
 }
 
@@ -420,6 +429,55 @@ describe('planPropertyDefinitionSynthesis', () => {
     expect(flipBlockedBySynthesis(plan)).toMatch(/still catching up/)
   })
 
+  it('refuses the flip when the survey ran over rows this device never materialized', async () => {
+    // The same partial graph as above, arrived at without a mock — and the
+    // shape that makes the survey's output wrong rather than merely late: an
+    // unmaterialized definition makes its key read as UNRESOLVED, which is the
+    // reading the whole plan is built on.
+    await rawCell('b1', {'demo:orphan': 'hello'})
+    repo.stopSyncObserver()
+    await sharedDb.db.execute(BLOCKS_SYNCED_RAW_TABLE.put.sql, blockToSyncedRowParams({
+      id: 'never-materialized', workspaceId: WS, parentId: null, orderKey: 'z0',
+      content: 'the definition this device has not got', properties: {}, references: [],
+      createdAt: 1, updatedAt: 5, userUpdatedAt: 5, createdBy: 'u', updatedBy: 'u',
+      deleted: false,
+    }))
+    await sharedDb.db.execute('DELETE FROM blocks_synced_changes')
+
+    const plan = await planFor()
+
+    expect(plan.scanSyncGap).toMatch(/have not reached/)
+    expect(flipBlockedBySynthesis(plan)).toMatch(/still catching up/)
+  })
+
+  it('refuses when a delivery is left unapplied AFTER the pre-flight check', async () => {
+    // The pre-flight and the write are separated by the Properties-page
+    // bootstrap and by the wait for the write lock. A key whose real definition
+    // is the row left unapplied in that window still reads as ORPHANED to the
+    // plan we are about to mint from — which is the outcome the deterministic
+    // id exists to prevent, since the real definition wins the registry's
+    // ascending sort when it lands and every field row bound to the loser
+    // strands.
+    await rawCell('b1', {'demo:orphan': 'x'})
+    const plan = await planFor()
+    repo.stopSyncObserver()
+    const realTx = repo.tx.bind(repo)
+    vi.spyOn(repo, 'tx').mockImplementation(async (fn, opts) => {
+      await sharedDb.db.execute(BLOCKS_SYNCED_RAW_TABLE.put.sql, blockToSyncedRowParams({
+        id: 'the-real-definition', workspaceId: WS, parentId: null, orderKey: 'z0',
+        content: 'arrived, could not be applied', properties: {}, references: [],
+        createdAt: 1, updatedAt: 5, userUpdatedAt: 5, createdBy: 'u', updatedBy: 'u',
+        deleted: false,
+      }))
+      await sharedDb.db.execute('DELETE FROM blocks_synced_changes')
+      return realTx(fn, opts)
+    })
+
+    await expect(applyPropertyDefinitionSynthesis(repo, plan))
+      .rejects.toThrow(/have not reached/)
+    expect(repo.block(await definitionIdFor('demo:orphan')).peek()).toBeUndefined()
+  })
+
   it('refuses when the workspace turns out encrypted AFTER the pre-flight check', async () => {
     // The pre-flight check and the write are separated by the Properties-page
     // bootstrap and by the wait for the write lock, and the workspace's real
@@ -443,13 +501,22 @@ describe('planPropertyDefinitionSynthesis', () => {
     expect(minted).toBe(0)
   })
 
+  // The literal, because `derivedIds.test.ts` can no longer pin it: the namespace
+  // became a parameter there, so both sides of its equality are test-local and
+  // moving the constant reddens nothing. Moving it re-points every synthesized
+  // definition in every plaintext workspace, so it needs a pin somewhere.
+  it('resolves a plaintext workspace to the public namespace, unmoved', async () => {
+    expect(await resolveSynthesisNamespace(repo, WS)).toEqual(
+      {kind: 'ready', mode: 'plaintext', namespace: 'b1d6b0c7-6a2a-4c1e-9a19-2f0f7b6b3c41'})
+  })
+
   it('refuses a workspace this device has not confirmed unencrypted', async () => {
     // The authority is the mode pin, not the server column — and note the row
     // here says 'none', so a denylist on the column would wave this through.
     await seedWorkspaceRow('none', UNPINNED_WS)
 
-    expect(await propertySynthesisWorkspaceRefusal(repo, UNPINNED_WS))
-      .toMatch(/has not confirmed/)
+    const namespace = await resolveSynthesisNamespace(repo, UNPINNED_WS)
+    expect(namespace).toEqual({kind: 'refused', reason: expect.stringMatching(/has not resolved/)})
   })
 
   it('still says what it would have minted when the workspace is refused', async () => {
@@ -470,7 +537,7 @@ describe('planPropertyDefinitionSynthesis', () => {
     await seedWorkspaceRow('e2ee')
     await rawCell('b1', {'demo:orphan': 'x'})
 
-    expect((await planFor()).refusal).toMatch(/pinned as unencrypted but its row reads/)
+    expect((await planFor()).refusal).toMatch(/pinned as plaintext but its row reads/)
   })
 
   it('refuses to WRITE once this device has fallen behind, even with a clean plan', async () => {
@@ -483,8 +550,36 @@ describe('planPropertyDefinitionSynthesis', () => {
 
     await expect(applyPropertyDefinitionSynthesis(repo, plan))
       .rejects.toThrow(/not caught up/)
-    expect(repo.block(synthesizedPropertyDefinitionBlockId(WS, 'demo:orphan')).peek())
-      .toBeUndefined()
+    expect(repo.block(await definitionIdFor('demo:orphan')).peek()).toBeUndefined()
+  })
+
+  it('refuses to WRITE over a row this device downloaded and never materialized', async () => {
+    // The shape the in-flight predicate cannot see, and the one that matters
+    // most here: a key whose real definition merely failed to materialize on
+    // arrival reads as ORPHANED to the scan, and an orphan is answered by
+    // MINTING. Nothing is running in this state and no waiting clears it, so
+    // "is a drain outstanding" answers yes-go-ahead — and the mint that
+    // follows loses the registry's ascending-createdAt sort to the real
+    // definition when it finally lands, stranding every field row bound to it.
+    await rawCell('b1', {'demo:orphan': 'x'})
+    const plan = await planFor()
+
+    // Stopped first so the row STAYS staged: this is a row the drain already
+    // passed over (locked workspace, unresolved mode, undecodable ciphertext)
+    // and whose queue entry it consumed on the way.
+    repo.stopSyncObserver()
+    await sharedDb.db.execute(BLOCKS_SYNCED_RAW_TABLE.put.sql, blockToSyncedRowParams({
+      id: 'never-materialized', workspaceId: WS, parentId: null, orderKey: 'z0',
+      content: 'the definition this device has not got', properties: {}, references: [],
+      createdAt: 1, updatedAt: 5, userUpdatedAt: 5, createdBy: 'u', updatedBy: 'u',
+      deleted: false,
+    }))
+    await sharedDb.db.execute('DELETE FROM blocks_synced_changes')
+    expect(await repo.syncViewGap()).toBeNull()
+
+    await expect(applyPropertyDefinitionSynthesis(repo, plan))
+      .rejects.toThrow(/have not reached/)
+    expect(repo.block(await definitionIdFor('demo:orphan')).peek()).toBeUndefined()
   })
 
   it('refuses to WRITE once the workspace stops reading as plaintext, even with a clean plan', async () => {
@@ -493,14 +588,14 @@ describe('planPropertyDefinitionSynthesis', () => {
     await seedWorkspaceRow('e2ee')
 
     await expect(applyPropertyDefinitionSynthesis(repo, plan))
-      .rejects.toThrow(/pinned as unencrypted but its row reads/)
+      .rejects.toThrow(/pinned as plaintext but its row reads/)
   })
 
   it('refuses when this device has no workspace row, rather than assuming plaintext', async () => {
     await sharedDb.db.execute('DELETE FROM workspaces WHERE id = ?', [WS])
     await rawCell('b1', {'demo:orphan': 'x'})
 
-    expect((await planFor()).refusal).toMatch(/its row reads null/)
+    expect((await planFor()).refusal).toMatch(/no local row for the workspace/)
   })
 })
 
@@ -532,7 +627,7 @@ describe('applyPropertyDefinitionSynthesis', () => {
     expect(resolver.resolve('has]]bracket').status).toBe('resolved')
     // Verbatim, not trimmed — `addSchema` would have defined "padded" and left
     // the cell key " padded " orphaned.
-    const id = synthesizedPropertyDefinitionBlockId(WS, ' padded ')
+    const id = await definitionIdFor(' padded ')
     expect(repo.block(id).peek()?.properties['property-schema:name']).toBe(' padded ')
   })
 
@@ -558,7 +653,7 @@ describe('applyPropertyDefinitionSynthesis', () => {
     await rawCell('b1', {'demo:orphan': 'hello'})
     await applyPropertyDefinitionSynthesis(repo, await planFor())
 
-    const id = synthesizedPropertyDefinitionBlockId(WS, 'demo:orphan')
+    const id = await definitionIdFor('demo:orphan')
     const row = repo.block(id).peek()
     expect(row).toBeDefined()
     // Visible: a definition nobody chose is exactly the one a human needs to be
@@ -670,7 +765,7 @@ describe('applyPropertyDefinitionSynthesis: the id is occupied, or the key stopp
     const plan = await planFor()
     await getOrCreatePropertiesPage(repo, WS)
     await repo.userSchemas.addSchema({name: 'demo:orphan', presetId: 'string'})
-    const id = synthesizedPropertyDefinitionBlockId(WS, 'demo:orphan')
+    const id = await definitionIdFor('demo:orphan')
     await rawCell(id, {
       types: ['property-schema'],
       'property-schema:name': 'demo:orphan',
@@ -1061,7 +1156,7 @@ describe('applyPropertyDefinitionSynthesis: the id is occupied, or the key stopp
     // but the alternative is a DuplicateIdError out of the insert that takes
     // every other key's definition down with it.
     await rawCell('b1', {'demo:orphan': 'hello'})
-    const id = synthesizedPropertyDefinitionBlockId(WS, 'demo:orphan')
+    const id = await definitionIdFor('demo:orphan')
     await repo.tx(async tx => {
       await tx.create({id, workspaceId: 'some-other-ws', parentId: null,
                        orderKey: 'a0', content: 'squatter'})

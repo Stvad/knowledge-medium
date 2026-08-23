@@ -24,12 +24,17 @@ describe('matchesApiPublish', () => {
     expect(matchesApiPublish('cat x | gh api graphql -f query=@-')).toBe(true)
   })
 
-  // Explicit-GET commands still MATCH: a compound can mix a GET segment with
-  // a mutating one, so the look must happen. Reading back an object a GET
-  // merely printed costs one echoed line.
-  it('keeps looking at explicit-GET field commands; only plain no-field reads stay out', () => {
+  // A LONE explicit read publishes nothing — gh sends its fields as a query
+  // string — so its response object was READ, and calling that "published"
+  // sends the agent to edit text it never wrote. A COMPOUND still matches:
+  // the effective method is resolved across the whole skeleton, so exempting
+  // one there would exempt the mutation beside it.
+  it('exempts a lone explicit read, but not one compounded with a mutation', () => {
     expect(matchesApiPublish('gh api repos/Stvad/knowledge-medium/issues/652')).toBe(false)
-    expect(matchesApiPublish('gh api --method GET repos/Stvad/knowledge-medium/issues -f state=open')).toBe(true)
+    expect(matchesApiPublish('gh api --method GET repos/Stvad/knowledge-medium/issues -f state=open')).toBe(false)
+    expect(matchesApiPublish('gh api -X GET repos/Stvad/knowledge-medium/issues/700 -f per_page=1')).toBe(false)
+    const mixed = 'gh api -X POST repos/Stvad/knowledge-medium/issues/1/comments -f body=hi; gh api -X GET repos/Stvad/knowledge-medium/issues -f state=open'
+    expect(matchesApiPublish(mixed)).toBe(true)
   })
 
   it('ignores quoted prose and non-api gh commands', () => {
@@ -87,6 +92,13 @@ describe('publishedTargets', () => {
   it('drops CLI targets whose kind the command cannot have produced', () => {
     const out = `${url('issues/500')}\n${url('pull/652')}`
     expect(publishedTargets(PR_CREATE, out)).toEqual([{ kind: 'pr', number: 652 }])
+  })
+
+  // The harm the exemption prevents: the fetched issue's own html_url used to
+  // come back as something this command PUBLISHED.
+  it('claims no published target for a lone explicit read that returned an object', () => {
+    const cmd = 'gh api -X GET repos/Stvad/knowledge-medium/issues/700 -f per_page=1'
+    expect(publishedTargets(cmd, JSON.stringify({ html_url: url('issues/700') }))).toEqual([])
   })
 
   it('ignores foreign-repo URLs and output with no target', () => {
@@ -162,6 +174,19 @@ describe('mergedPrNumbers', () => {
     // a -R merge prints a foreign qualifier — never read back OUR PR of that number
     expect(mergedPrNumbers('Merged pull request other/repo#12 (y)')).toEqual([])
   })
+
+  // gh prints "Squashed and merged" / "Rebased and merged" for the other two
+  // strategies; matching only "Merged" left the merge-commit read-back dead
+  // for both — and squash is the strategy whose PR body carries the keywords
+  // no pre-gate can read.
+  it('reads the PR number from every merge strategy gh prints', () => {
+    expect(mergedPrNumbers('✓ Merged pull request Stvad/knowledge-medium#652 (T)')).toEqual([652])
+    expect(mergedPrNumbers('✓ Squashed and merged pull request Stvad/knowledge-medium#652 (T)')).toEqual([652])
+    expect(mergedPrNumbers('✓ Rebased and merged pull request Stvad/knowledge-medium#652 (T)')).toEqual([652])
+    // a foreign qualifier is still refused, and git's own subject is not a merge line
+    expect(mergedPrNumbers('✓ Squashed and merged pull request other/repo#652 (T)')).toEqual([])
+    expect(mergedPrNumbers('Merge pull request #652 from a/b')).toEqual([])
+  })
 })
 
 describe('apiPathFor', () => {
@@ -172,6 +197,16 @@ describe('apiPathFor', () => {
     expect(apiPathFor({ kind: 'review-comment', id: 7 })).toBe('repos/Stvad/knowledge-medium/pulls/comments/7')
     expect(apiPathFor({ kind: 'review', pr: 5, id: 7 })).toBe('repos/Stvad/knowledge-medium/pulls/5/reviews/7')
     expect(apiPathFor({ kind: 'release', tag: 'v1' })).toBe('repos/Stvad/knowledge-medium/releases/tags/v1')
+  })
+
+  it('sends a slashed release tag as one path parameter', () => {
+    expect(apiPathFor({ kind: 'release', tag: 'release/1.0' })).toBe(
+      'repos/Stvad/knowledge-medium/releases/tags/release%2F1.0',
+    )
+    // an already-encoded capture must not be encoded twice
+    expect(apiPathFor({ kind: 'release', tag: 'release%2F1.0' })).toBe(
+      'repos/Stvad/knowledge-medium/releases/tags/release%2F1.0',
+    )
   })
 })
 
@@ -193,6 +228,21 @@ describe('clipContext', () => {
 // is something to say) and the read-back loop.
 // Measured ~200ms per spawn solo; budgeted for the 6x load stretch.
 describe('bd-publish-verify process behavior', { timeout: 30_000 }, () => {
+  const A_TRACKED_ISSUE = { title: 'Tracked issue', state: 'open' }
+
+  // The merged-PR fixture pair: the PR gh's merge line names, and the commit
+  // it landed as. Covers the ordinary shape only — the two tests that turn on
+  // an ABSENT field (no default_branch, no base at all) keep their literals,
+  // so what makes them the interesting cases stays visible.
+  const mergedPr = (n: number, sha: string, message: string, base = 'master') => ({
+    [`repos/Stvad/knowledge-medium/pulls/${n}`]: {
+      html_url: url(`pull/${n}`),
+      merged: true,
+      merge_commit_sha: sha,
+      base: { ref: base, repo: { default_branch: 'master' } },
+    },
+    [`repos/Stvad/knowledge-medium/commits/${sha}`]: { commit: { message } },
+  })
   const script = fileURLToPath(new URL('./bd-publish-verify.mjs', import.meta.url))
 
   const makeRepo = (opts: {
@@ -210,9 +260,9 @@ describe('bd-publish-verify process behavior', { timeout: 30_000 }, () => {
     const shimLog = join(repo, 'shim.log')
     writeFileSync(shimLog, '')
     for (const [apiPath, body] of Object.entries(opts.fixtures ?? {})) {
-      // 'path#2' writes the fixture served on the SECOND GET of that path
-      const [pth, nth] = apiPath.split('#')
-      const base = `fixture-${pth.replaceAll('/', '_')}${nth ? `.${nth}` : ''}.json`
+      // 'path#fail' writes the fixture served with a nonzero exit
+      const [pth, mode] = apiPath.split('#')
+      const base = `fixture-${pth.replaceAll('/', '_')}${mode ? `.${mode}` : ''}.json`
       writeFileSync(join(repo, base), JSON.stringify(body))
     }
     const shows = opts.shows ?? [[]]
@@ -247,8 +297,6 @@ describe('bd-publish-verify process behavior', { timeout: 30_000 }, () => {
         "    echo '{}'; exit 0",
         '  fi',
         `  name=$(echo "$2" | tr '/' '_')`,
-        `  cnt=$(cat "${repo}/getcount-$name" 2>/dev/null || echo 0); cnt=$((cnt+1)); echo $cnt > "${repo}/getcount-$name"`,
-        `  if [ -f "${repo}/fixture-$name.$cnt.json" ]; then cat "${repo}/fixture-$name.$cnt.json"; exit 0; fi`,
         `  if [ -f "${repo}/fixture-$name.fail.json" ]; then cat "${repo}/fixture-$name.fail.json"; exit 1; fi`,
         `  f="${repo}/fixture-$name.json"`,
         '  if [ -f "$f" ]; then cat "$f"; exit 0; fi',
@@ -325,7 +373,7 @@ describe('bd-publish-verify process behavior', { timeout: 30_000 }, () => {
     const { hook, shimCalls } = makeRepo({
       fixtures: {
         'repos/Stvad/knowledge-medium/pulls/652': { html_url: url('pull/652'), title: 'T', body: 'tracks km-abc' },
-        'repos/Stvad/knowledge-medium/issues/12': { title: 'Tracked issue', state: 'open' },
+        'repos/Stvad/knowledge-medium/issues/12': A_TRACKED_ISSUE,
       },
       shows: [[{ id: 'km-abc', external_ref: url('issues/12') }]],
     })
@@ -361,7 +409,7 @@ describe('bd-publish-verify process behavior', { timeout: 30_000 }, () => {
           title: 'T',
           body: 'literal km-abc, relates to #12',
         },
-        'repos/Stvad/knowledge-medium/issues/12': { title: 'Tracked issue', state: 'open' },
+        'repos/Stvad/knowledge-medium/issues/12': A_TRACKED_ISSUE,
       },
       shows: [[{ id: 'km-abc', external_ref: url('issues/12') }]],
     })
@@ -380,8 +428,7 @@ describe('bd-publish-verify process behavior', { timeout: 30_000 }, () => {
     const sha = 'abc123def4567890abc123def4567890abc123de'
     const { hook } = makeRepo({
       fixtures: {
-        'repos/Stvad/knowledge-medium/pulls/652': { html_url: url('pull/652'), merged: true, merge_commit_sha: sha },
-        [`repos/Stvad/knowledge-medium/commits/${sha}`]: { commit: { message: 'stack tip (#652)\n\nFixes #700' } },
+        ...mergedPr(652, sha, 'stack tip (#652)\n\nFixes #700'),
         'repos/Stvad/knowledge-medium/issues/700': { title: 'Closed by merge', state: 'closed' },
       },
     })
@@ -394,11 +441,259 @@ describe('bd-publish-verify process behavior', { timeout: 30_000 }, () => {
     expect(context(r)).not.toContain('#652 →')
   })
 
+  // One invocation names the same object twice whenever a merge prints both
+  // the PR's URL and its success line: the target scan reads it, then the
+  // merge-commit leg reads it again. Each repeat spends another GH_TIMEOUT
+  // out of the deadline every later step divides into.
+  it('fetches an object named twice in one output only once', () => {
+    const sha = 'bb22cc33dd44ee55ff6677889900aabbccddeeff'
+    const { hook, shimCalls } = makeRepo({
+      fixtures: {
+        ...mergedPr(652, sha, 'tip (#652)'),
+      },
+    })
+    const r = hook('gh pr merge 652 --squash', `${url('pull/652')}\n✓ Merged pull request #652 (tip)`)
+    expect(r.status).toBe(0)
+    const fetches = shimCalls()
+      .split('\n')
+      .filter(l => l === 'gh api repos/Stvad/knowledge-medium/pulls/652')
+    expect(fetches.length).toBe(1)
+  })
+
+  // GitHub applies closing keywords only on the default branch. Merged into
+  // the branch below it in a stack, nothing was closed — advising a reopen
+  // would send the agent after an issue that is still open.
+  it('does not claim close keywords acted when the merge landed off the default branch', () => {
+    const sha = 'dd11ee22ff3344556677889900aabbccddeeff00'
+    const { hook } = makeRepo({
+      fixtures: {
+        ...mergedPr(652, sha, 'upper of the stack (#652)\n\nFixes #700', 'claude/lower-of-the-stack'),
+        'repos/Stvad/knowledge-medium/issues/700': { title: 'Still open', state: 'open' },
+      },
+    })
+    const r = hook('gh pr merge 652 --merge', '✓ Merged pull request #652 (upper of the stack)')
+    expect(r.status).toBe(0)
+    expect(context(r)).toContain('#700 → "Still open"')
+    expect(context(r)).toContain('have NOT acted')
+    expect(context(r)).toContain('claude/lower-of-the-stack')
+    expect(context(r)).not.toContain('ALREADY acted')
+    expect(context(r)).not.toContain('reopen it now')
+  })
+
+  // The gate let this through on the promise that this hook would check it.
+  // When the output names no object, that promise cannot be kept — say so
+  // rather than returning silently and leaving the text checked by nobody.
+  it('reports a covered publish whose output named no object', () => {
+    const { hook } = makeRepo({ fixtures: {} })
+    const r = hook(PR_CREATE, 'Creating pull request for x into master\nsomething went to a template')
+    expect(r.status).toBe(0)
+    expect(context(r)).toContain('treated as covered by the pre-publish gate')
+    expect(context(r)).toContain('nothing has checked the references')
+    // this branch has NO target by definition, so it must not name one: the
+    // manual check it asks for has to be one the agent can actually run
+    expect(context(r)).toContain('gh api')
+    expect(context(r)).not.toContain('issue view')
+  })
+
+  // Empty output is the case with LEAST to go on, so it is the last place the
+  // report may fall silent: the gate skipped this text on the read-back's
+  // promise, and printing nothing does not keep it.
+  it('reports a covered publish that printed nothing at all', () => {
+    const { hook } = makeRepo({ fixtures: {} })
+    const r = hook(PR_CREATE, '')
+    expect(r.status).toBe(0)
+    expect(context(r)).toContain('treated as covered by the pre-publish gate')
+  })
+
+  // A --dry-run creates nothing, so a read-back that finds nothing is correct
+  // rather than a broken promise. Warning here would train the agent to
+  // ignore the warning, which is the only thing making it worth having.
+  it('stays silent for a dry-run that published nothing', () => {
+    const { hook } = makeRepo({ fixtures: {} })
+    const r = hook('gh pr create --title t --body-file /tmp/x.md --dry-run', 'Would have created a Pull Request with:\ntitle\tt')
+    expect(r.status).toBe(0)
+    expect(r.stdout).toBe('')
+  })
+
+  // A command the tool reports as failed published nothing, so there is no
+  // unkept coverage promise — and telling the agent to go inspect a
+  // nonexistent object is the cry-wolf failure this report cannot afford.
+  it('stays silent when a covered command FAILED before publishing', () => {
+    const { hook } = makeRepo({ fixtures: {} })
+    const r = hook(PR_CREATE, 'HTTP 422: Validation Failed', { hook_event_name: 'PostToolUseFailure' })
+    expect(r.status).toBe(0)
+    expect(r.stdout).toBe('')
+  })
+
+  // gh prints EXISTING objects in its error text ("a pull request for branch
+  // X already exists: <url>"), so on a failure event attribution is UNKNOWN —
+  // the per-target notes must not read as "you published this, go fix it".
+  // Unknown is as far as it goes: an earlier segment of a failed compound
+  // really can have published the object named, so claiming it did NOT would
+  // be the same over-claim in the other direction.
+  it('says attribution is unknown when the command failed', () => {
+    const { hook } = makeRepo({
+      fixtures: {
+        'repos/Stvad/knowledge-medium/pulls/652': { html_url: url('pull/652'), title: 'T', body: 'relates to #12' },
+        'repos/Stvad/knowledge-medium/issues/12': A_TRACKED_ISSUE,
+      },
+    })
+    const r = hook(PR_CREATE, null, {
+      hook_event_name: 'PostToolUseFailure',
+      error: `a pull request for branch "x" already exists:\n${url('pull/652')}`,
+    })
+    expect(r.status).toBe(0)
+    expect(context(r)).toContain('attribution of the object(s) below is UNKNOWN')
+    expect(context(r)).toContain('Confirm which before editing')
+  })
+
+  // An unreadable base branch must not be reported as "merged off the default
+  // branch" — that advice tells the agent NOT to look for a wrongly closed
+  // issue, which is the dangerous direction to be wrong in.
+  it('says UNKNOWN when it cannot tell which branch the merge landed on', () => {
+    const sha = 'bb22cc33dd4455667788990011aabbccddeeff22'
+    const { hook } = makeRepo({
+      fixtures: {
+        'repos/Stvad/knowledge-medium/pulls/652': {
+          html_url: url('pull/652'),
+          merged: true,
+          merge_commit_sha: sha,
+          base: { ref: 'master', repo: {} },
+        },
+        [`repos/Stvad/knowledge-medium/commits/${sha}`]: { commit: { message: 'landed (#652)\n\nFixes #700' } },
+        'repos/Stvad/knowledge-medium/issues/700': { title: 'Some issue', state: 'closed' },
+      },
+    })
+    const r = hook('gh pr merge 652 --merge', '✓ Merged pull request #652 (landed)')
+    expect(r.status).toBe(0)
+    expect(context(r)).toContain('UNKNOWN')
+    expect(context(r)).not.toContain('have NOT acted')
+    expect(context(r)).not.toContain('ALREADY acted')
+  })
+
+  // A non-numeric budget yielded NaN, and every `>= deadline` test against NaN
+  // is false: nothing stopped on time while every echo blamed the budget.
+  it('falls back to the default budget when the override is not a number', () => {
+    const { hook } = makeRepo({
+      fixtures: {
+        'repos/Stvad/knowledge-medium/issues/643': { html_url: url('issues/643'), title: 'T', body: 'relates to #12' },
+        'repos/Stvad/knowledge-medium/issues/12': A_TRACKED_ISSUE,
+      },
+      budgetMs: 'not-a-number' as unknown as number,
+    })
+    const r = hook('gh issue edit 643 --body-file /tmp/x.md', url('issues/643'))
+    expect(r.status).toBe(0)
+    expect(context(r)).toContain('#12 → "Tracked issue" (issue, open)')
+    expect(context(r)).not.toContain('out of time budget')
+  })
+
+  // A publish carrying no TEXT has no reference the read-back could have
+  // verified, so an empty result there is not a broken promise. Without this
+  // the warning fires on label changes, reactions, merge-method calls and
+  // comment deletions — and it is worth having only while it is trusted.
+  it('stays silent for a covered publish that carries no text', () => {
+    const { hook } = makeRepo({ fixtures: {} })
+    for (const cmd of [
+      'gh pr comment 652 --delete-last',
+      'gh api repos/Stvad/knowledge-medium/issues/652/labels -f labels[]=bug',
+      'gh api -X PUT repos/Stvad/knowledge-medium/pulls/652/merge -f merge_method=squash',
+    ]) {
+      const r = hook(cmd, 'done, no url printed')
+      expect(r.status, cmd).toBe(0)
+      expect(r.stdout, cmd).toBe('')
+    }
+    // a text-bearing publish with the same empty output still reports
+    expect(context(hook(PR_CREATE, 'created, no url printed'))).toContain('treated as covered')
+  })
+
+  // `--method GET` sends the field flags as a query string, so a command that
+  // looks like a mutation is an ordinary read. Warning there spends the one
+  // thing this report has.
+  it('stays silent for an explicit GET carrying field flags', () => {
+    const { hook } = makeRepo({ fixtures: {} })
+    // a text-ish field name, so the check above passes it and the GET test is
+    // the thing actually doing the work
+    const r = hook('gh api --method GET repos/Stvad/knowledge-medium/actions/artifacts -f name=foo', '[]')
+    expect(r.status).toBe(0)
+    expect(r.stdout).toBe('')
+    // prose inside a field VALUE is payload, not the flag — a suppressor that
+    // believed it would cost the check itself
+    const q = String.fromCharCode(39)
+    const prose = hook(
+      `gh api -X PUT repos/Stvad/knowledge-medium/pulls/652/merge -f ${q}commit_message=mention --method GET${q}`,
+      'no url here',
+    )
+    expect(context(prose)).toContain('treated as covered')
+  })
+
+  // An uncovered publish was already checked BEFORE it shipped, so the same
+  // empty read-back there is expected, not a surprise.
+  it('stays silent when an uncovered publish names no object', () => {
+    const { hook } = makeRepo({ fixtures: {} })
+    const r = hook('gh pr merge 652 --squash', 'merged, no url printed')
+    expect(r.status).toBe(0)
+    expect(r.stdout).toBe('')
+  })
+
+  // The substitution line is an instruction an agent can act on without
+  // reading the table below it, so the number on it must be confirmed.
+  it('reports a bead mapping whose issue 404s as stale, not as unchecked', () => {
+    const { hook } = makeRepo({
+      fixtures: {
+        'repos/Stvad/knowledge-medium/pulls/652': { html_url: url('pull/652'), title: 'T', body: 'tracks km-abc' },
+        // no fixture for issues/12: the mapped issue 404s
+      },
+      shows: [[{ id: 'km-abc', external_ref: url('issues/12') }]],
+    })
+    const r = hook(PR_CREATE, url('pull/652'))
+    expect(r.status).toBe(0)
+    expect(context(r)).toContain('DOES NOT EXIST')
+    expect(context(r)).toContain('External: field is stale')
+    expect(context(r)).toContain('do not publish this number')
+  })
+
+  // A lookup that FAILED says nothing about the bead — advising a repair of
+  // its External: field would send the agent after a link that may be fine,
+  // and the reference table retries and can contradict this line outright.
+  it('reports a bead mapping it could not check as unconfirmed, not as stale', () => {
+    const { hook } = makeRepo({
+      fixtures: {
+        'repos/Stvad/knowledge-medium/pulls/652': { html_url: url('pull/652'), title: 'T', body: 'tracks km-abc' },
+        'repos/Stvad/knowledge-medium/issues/12#fail': { message: 'Server Error' },
+      },
+      shows: [[{ id: 'km-abc', external_ref: url('issues/12') }]],
+    })
+    const r = hook(PR_CREATE, url('pull/652'))
+    expect(r.status).toBe(0)
+    expect(context(r)).toContain('UNCONFIRMED')
+    expect(context(r)).toContain('read it yourself before publishing it')
+    expect(context(r)).not.toContain('is stale')
+  })
+
+  // Off the default branch nothing has closed yet — but the PR's own commits
+  // may never close anything at all, since a squash with custom text discards
+  // them. Promising eventual closure for those would be a different wrong
+  // answer from the one this branch exists to avoid.
+  it('keeps the squash caveat for the PR-s own commits on an off-default merge', () => {
+    const sha = 'aa11bb22cc3344556677889900aabbccddeeff11'
+    const { hook } = makeRepo({
+      fixtures: {
+        ...mergedPr(652, sha, 'squashed (#652)', 'release/2.0'),
+        'repos/Stvad/knowledge-medium/pulls/652/commits?per_page=100': [{ commit: { message: 'work\n\nFixes #700' } }],
+        'repos/Stvad/knowledge-medium/issues/700': { title: 'Still open', state: 'open' },
+      },
+    })
+    const r = hook('gh pr merge 652 --squash', '✓ Merged pull request #652 (squashed)')
+    expect(r.status).toBe(0)
+    expect(context(r)).toContain('may never')
+    expect(context(r)).not.toContain('ALREADY acted')
+  })
+
   it('echoes the post-mode issue-reference table for published refs', () => {
     const { hook } = makeRepo({
       fixtures: {
         'repos/Stvad/knowledge-medium/issues/643': { html_url: url('issues/643'), title: 'T', body: 'relates to #12' },
-        'repos/Stvad/knowledge-medium/issues/12': { title: 'Tracked issue', state: 'open' },
+        'repos/Stvad/knowledge-medium/issues/12': A_TRACKED_ISSUE,
       },
     })
     const r = hook('gh issue edit 643 --body-file /tmp/x.md', url('issues/643'))
@@ -435,7 +730,7 @@ describe('bd-publish-verify process behavior', { timeout: 30_000 }, () => {
           html_url: url('pull/652#pullrequestreview-77'),
           body: 'tracks km-abc',
         },
-        'repos/Stvad/knowledge-medium/issues/12': { title: 'Tracked issue', state: 'open' },
+        'repos/Stvad/knowledge-medium/issues/12': A_TRACKED_ISSUE,
       },
       shows: [[{ id: 'km-abc', external_ref: url('issues/12') }]],
     })
@@ -458,7 +753,7 @@ describe('bd-publish-verify process behavior', { timeout: 30_000 }, () => {
           name: 'km-abc ships',
           body: 'relates to #12',
         },
-        'repos/Stvad/knowledge-medium/issues/12': { title: 'Tracked issue', state: 'open' },
+        'repos/Stvad/knowledge-medium/issues/12': A_TRACKED_ISSUE,
       },
       shows: [[{ id: 'km-abc', external_ref: url('issues/12') }]],
     })
@@ -476,7 +771,7 @@ describe('bd-publish-verify process behavior', { timeout: 30_000 }, () => {
     const { hook } = makeRepo({
       fixtures: {
         'repos/Stvad/knowledge-medium/issues/643': { html_url: url('issues/643'), title: 'T', body: 'relates to #12' },
-        'repos/Stvad/knowledge-medium/issues/12': { title: 'Tracked issue', state: 'open' },
+        'repos/Stvad/knowledge-medium/issues/12': A_TRACKED_ISSUE,
       },
     })
     const r = hook('gh issue edit 643 -F /tmp/x.md; false', null, {
@@ -523,8 +818,7 @@ describe('bd-publish-verify process behavior', { timeout: 30_000 }, () => {
     const sha = 'def4567890def4567890def4567890def4567890'
     const { hook } = makeRepo({
       fixtures: {
-        'repos/Stvad/knowledge-medium/pulls/652': { html_url: url('pull/652'), merged: true, merge_commit_sha: sha },
-        [`repos/Stvad/knowledge-medium/commits/${sha}`]: { commit: { message: 'feat B (#652)' } },
+        ...mergedPr(652, sha, 'feat B (#652)'),
         'repos/Stvad/knowledge-medium/pulls/652/commits?per_page=100': [
           { commit: { message: 'feat A\n\nCloses #701' } },
           { commit: { message: 'feat B (#652)' } },
@@ -573,11 +867,29 @@ describe('bd-publish-verify process behavior', { timeout: 30_000 }, () => {
     expect(context(r)).toContain('no GitHub issue')
   })
 
-  it('exits 0 silently when the ground-truth fetch fails', () => {
+  // A failed read-back is the STRONGEST unkeepable coverage claim: the gate
+  // skipped this text on the promise of a read-back, an object is known to
+  // have been published, and it could not be examined. Silence would be the
+  // same hole the no-target branch exists to close.
+  it('reports a covered publish whose read-back fetch fails', () => {
     const { hook } = makeRepo({}) // no fixtures: every gh api GET 404s
     const r = hook(PR_CREATE, url('pull/652'))
     expect(r.status).toBe(0)
-    expect(r.stdout).toBe('')
+    expect(context(r)).toContain('could not read back')
+    expect(context(r)).toContain('references in what it published are unchecked')
+    // the command handed back must be one that can reach THIS kind
+    expect(context(r)).toContain('gh api repos/Stvad/knowledge-medium/pulls/652')
+    expect(context(r)).not.toContain('gh issue view')
+  })
+
+  // A comment target keeps only the comment id and a release only its tag, so
+  // an issue-shaped suggestion cannot reach their text at all.
+  it('hands back a command that fits a comment target, not an issue view', () => {
+    const { hook } = makeRepo({})
+    const r = hook('gh pr comment 652 --body hi', url('pull/652#issuecomment-99'))
+    expect(r.status).toBe(0)
+    expect(context(r)).toContain('gh api repos/Stvad/knowledge-medium/issues/comments/99')
+    expect(context(r)).not.toContain('gh issue view')
   })
 
   it('never spawns bd in a DB-less clone even with bead ids published', () => {

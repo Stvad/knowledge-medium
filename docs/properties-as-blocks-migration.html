@@ -337,8 +337,8 @@
 <aside class="doc-status">
   <strong>Status: current (planning), with one §9 correction — and slice C is no
   longer planning.</strong>
-  <strong>Last verified against code: 2026-08-20, branch
-  <code>claude/flip-then-backfill</code>.</strong>
+  <strong>Last verified against code: 2026-08-21, branch
+  <code>claude/e2ee-synthesis-namespace</code>.</strong>
   That verification covers the entries marked <strong>landed</strong> below
   &mdash; each was checked against the implementation on this branch, not
   against the pre-implementation snapshots this banner cites further down for
@@ -851,6 +851,35 @@
   <em>broken</em> definition deliberately does not block: it is usually a preset from an
   extension not loaded on this device, it is repairable, and at
   <code>'children'</code> the cell still carries the value.</p>
+  <p><strong>Revised 2026-08-21 (e2ee namespace derivation, PR #718):</strong>
+  &sect;8's HMAC namespace exists now, so two entries above are superseded rather
+  than edited: <em>&ldquo;E2EE is refused outright rather than given an HMAC
+  namespace&rdquo;</em> (PR #686), and <em>&ldquo;the e2ee refusal is
+  untouched&rdquo;</em> in the 2026-08-20 flip-then-backfill entry. An encrypted
+  workspace derives its synthesized-definition namespace as the first 16 bytes of
+  <code>HMAC-SHA256(K_id, "km/property-definition-ns/v1")</code> with the uuid
+  version/variant nibbles forced &mdash; <code>K_id</code> being the WK-derived
+  subkey &sect;10 of the e2ee design already uses to stop an asset path being a
+  content oracle. Three things worth carrying:</p>
+  <ul>
+    <li><strong>The allowlist became a symmetry.</strong> The gate no longer asks
+      &ldquo;is this affirmatively plaintext?&rdquo; but &ldquo;do the mode pin and
+      the local row AGREE?&rdquo;, in both directions, plus &ldquo;can a namespace
+      be produced for that mode?&rdquo; &mdash; one question with one answer
+      (<code>resolveSynthesisNamespace</code>), because a namespace produced for
+      the wrong mode <em>is</em> the leak. An e2ee workspace with no local
+      <code>K_id</code> refuses; it never falls back to the public constant.</li>
+    <li><strong>The successor trigger migration landed with it</strong>
+      (<code>20260821120000_allow_e2ee_properties_migration_flip.sql</code>), as
+      &sect;6 said it should: the e2ee clause goes and nothing else moves.</li>
+    <li><strong>The same oracle is still open elsewhere</strong>, and this is the
+      finding to carry out of the PR: <code>computeAliasSeatId</code> derives an
+      alias seat's block id from the alias TEXT under a public namespace, with no
+      encryption-mode gate on the path. Page names are a more sensitive input than
+      property keys, and the references processor mints a seat for every
+      <code>[[link]]</code>. Tracked separately (#719); the primitive to reuse
+      is <code>deriveWorkspaceIdNamespace</code>.</li>
+  </ul>
 </div>
 
 <h2 id="s1">1. Why move</h2>

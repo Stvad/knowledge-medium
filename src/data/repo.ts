@@ -95,6 +95,8 @@ import {
 import {
   STAGED_SCAN_LIMIT,
   STAGED_VIEW_GAP_SQL,
+  WORKSPACE_UNAPPLIED_COUNT_CAP,
+  WORKSPACE_UNAPPLIED_SQL,
 } from '@/data/internals/syncObserver/reconcile'
 import type { MaterializeDeps } from '@/data/internals/syncObserver/materialize'
 import type { Materializability } from '@/sync/transform'
@@ -466,6 +468,19 @@ interface ReferenceTargetStampContext {
   readonly resolver: PropertySchemaResolver
 }
 
+/** Why this device's view of a workspace is incomplete — see
+ *  {@link Repo.workspaceViewGap}. */
+export interface ViewGap {
+  /** The CAUSE only; callers state their own consequence. */
+  readonly reason: string
+  /** Will waiting clear it? True for work in flight or a download still
+   *  running. False for rows this device downloaded and never caught up with,
+   *  which nothing is going to retry on its own — so a caller that re-arms
+   *  itself on a deferral must not re-arm on this one, and a caller with a
+   *  human to tell must not tell them to try again. */
+  readonly transient: boolean
+}
+
 /** What an operator-triggered backfill did, for a caller that has a human to
  *  report to. `undoHistoryCleared` is not incidental detail: the pass drops
  *  the workspace's undo stack whenever it writes, and a user who is not told
@@ -486,6 +501,11 @@ export interface OperatorBackfillResult {
    *  pass that aborted partway is what most needs the distinction, since some
    *  of its batches committed. */
   reason?: string
+  /** Would WAITING clear the reason? False when nothing is in flight to change
+   *  it — a `transient: false` view gap — so the operator is told what to do
+   *  instead of to retry a gesture that will keep refusing. Absent for outcomes
+   *  that carry no reason. */
+  retryable?: boolean
 }
 
 export class Repo {
@@ -2809,10 +2829,14 @@ export class Repo {
    * `audit-properties` (which reports it) — one predicate, because a rule
    * added to one of two copies is how these diverge.
    *
-   * NOT complete, and the staged-rows half is the incomplete part: it reads
-   * the QUEUE, so it is blind to `observer.materializeWorkspace`, which
-   * rewrites `blocks` straight from `blocks_synced` and stages nothing. Null
-   * means "no QUEUED work", not "`blocks` is at rest" (km-fsxp).
+   * Cheap enough to re-ask per transaction, and every arm is about work that
+   * is OUTSTANDING — so null means "nothing is in flight", not "`blocks` holds
+   * every row this device has downloaded". Two things it cannot answer, both
+   * because it is DEVICE-wide while they are per workspace: whether a
+   * queue-blind `observer.materializeWorkspace` is rewriting `blocks` right
+   * now, and whether rows were left unmaterialized with nothing running at
+   * all. {@link workspaceViewGap} answers both, and every caller that has a
+   * workspace in hand takes that instead (km-fsxp).
    */
   async syncViewGap(): Promise<string | null> {
     const staged = await this.db.getOptional<{why: string}>(
@@ -2828,6 +2852,61 @@ export class Repo {
         + '(still downloading, disconnected, or a download error)'
     }
     return null
+  }
+
+  /**
+   * Why this device's view of ONE workspace is incomplete, or null.
+   *
+   * {@link syncViewGap} plus the durable question it cannot afford to ask:
+   * does `blocks` actually hold every `blocks_synced` row this device has
+   * downloaded for the workspace? Rows that could not be materialized when
+   * they arrived — workspace not yet unlocked, mode unresolved, a key-store
+   * read that failed, ciphertext that would not decode — stay staged while the
+   * drain consumes their queue entries, leaving a stable gap that no in-flight
+   * signal reports and no waiting clears.
+   *
+   * Supersedes rather than complements `syncViewGap`: it asks that first, so a
+   * caller with a workspace in hand needs exactly one of the two. Every arm is
+   * cheap — the durable one reads a flag the drain set, off a partial index
+   * holding only unapplied rows — so this is the predicate for BOTH the top of
+   * a one-way pass and its per-transaction re-checks. There is deliberately no
+   * cheaper approximation to reach for in the hot path; that split is what let
+   * the two answers disagree.
+   *
+   * The arms differ in whether WAITING is a remedy, which is why the answer
+   * carries {@link ViewGap.transient} rather than just its text: a caller that
+   * re-arms itself must not re-arm on the durable one.
+   */
+  async workspaceViewGap(workspaceId: string): Promise<ViewGap | null> {
+    const inFlight = await this.syncViewGap()
+    if (inFlight !== null) return {reason: inFlight, transient: true}
+    // The queue cannot see this one: `observer.materializeWorkspace` rewrites
+    // `blocks` straight from `blocks_synced` and stages nothing, so the arms
+    // above read clear for its whole run — and it is the BIG path (a fresh
+    // device's re-pass over the entire workspace). Asking the observer for its
+    // own in-flight state is what `clientSchema.ts` prescribes in place of
+    // proxying one of its inputs. Before the scan, being free and an answer
+    // the scan would give too.
+    if (this.syncObserver?.isRematerializingWorkspace(workspaceId)) {
+      return {
+        reason: 'a full re-materialization of this workspace is in progress, '
+          + 'so `blocks` is still being rewritten',
+        transient: true,
+      }
+    }
+    const {behind} = await this.db.get<{behind: number}>(
+      WORKSPACE_UNAPPLIED_SQL, [workspaceId, WORKSPACE_UNAPPLIED_COUNT_CAP],
+    )
+    if (behind === 0) return null
+    const count = behind >= WORKSPACE_UNAPPLIED_COUNT_CAP
+      ? `at least ${WORKSPACE_UNAPPLIED_COUNT_CAP.toLocaleString()}`
+      : `${behind.toLocaleString()}`
+    return {
+      reason: `${count} synced row(s) of this workspace have not reached \`blocks\` on `
+        + 'this device — never materialized, or still showing an older version — '
+        + 'and nothing is in flight to change that',
+      transient: false,
+    }
   }
 
   private async assertBackfillMayWrite(
@@ -2848,15 +2927,21 @@ export class Repo {
         `longer active. Its writes would land under the current session's access state.`,
       ), {kind: Repo.TRANSIENT})
     }
+    // The SAME predicate the pre-claim gate takes, not a cheaper stand-in for
+    // it: a pass runs for minutes, and a row that becomes unapplicable after
+    // the gate — an evicted key, a delivery that will not decode — is deferred
+    // with its queue entry consumed, so anything that only watches work in
+    // flight reads clear again for every batch that follows.
+    //
     // Re-sampled per transaction while the write lock is held, so a drain
     // cannot commit between this check and the write. Reading through
     // `this.db` rather than the tx handle is deliberate: the drain is excluded
     // by the lock, not by read isolation.
-    const gap = await this.syncViewGap()
+    const gap = await this.workspaceViewGap(workspaceId)
     if (gap !== null) {
       throw Object.assign(new Error(
-        `[workspaceBackfills] "${backfillId}" aborted: ${gap}. This pass would scan an ` +
-        `incomplete view of the graph and upload a properties bag built from it.`,
+        `[workspaceBackfills] "${backfillId}" aborted: ${gap.reason}. This pass would scan ` +
+        `an incomplete view of the graph and upload a properties bag built from it.`,
       ), {kind: Repo.TRANSIENT})
     }
   }
@@ -2899,7 +2984,7 @@ export class Repo {
     }
     this.inFlightOperatorBackfills.add(flightKey)
     try {
-      const {completed, undoHistoryCleared, deferred, failed} = await this.runWorkspaceBackfills(
+      const {completed, undoHistoryCleared, deferred, deferredRetryable, failed} = await this.runWorkspaceBackfills(
         workspaceId, [backfill], this.workspaceGeneration,
       )
       // `completed` is LOCAL to this invocation. Keying on this id as well is
@@ -2909,7 +2994,9 @@ export class Repo {
       // passing more than one is correct by construction.
       if (completed.has(backfill.id)) return {outcome: 'ran', undoHistoryCleared}
       if (failed !== null) return {outcome: 'failed', undoHistoryCleared, reason: failed}
-      if (deferred !== null) return {outcome: 'deferred', undoHistoryCleared, reason: deferred}
+      if (deferred !== null) {
+        return {outcome: 'deferred', undoHistoryCleared, reason: deferred, retryable: deferredRetryable}
+      }
       // Nothing else is left. An operator run RECLAIMS a completed claim, so
       // "already migrated" cannot land here — only a claim another device is
       // holding, which includes one it took and never released.
@@ -2930,6 +3017,10 @@ export class Repo {
     completed: ReadonlySet<string>
     undoHistoryCleared: boolean
     deferred: string | null
+    /** Whether waiting clears `deferred` — see {@link OperatorBackfillResult.retryable}.
+     *  True for every deferral but a durable view gap, which is the only one
+     *  nothing is working on. */
+    deferredRetryable: boolean
     failed: string | null
   }> {
     const completed = new Set<string>()
@@ -2938,6 +3029,8 @@ export class Repo {
     // refused it, so an operator hears "not yet, retry" rather than "already
     // done" — the same string an unattended run only logs.
     let deferred: string | null = null
+    let deferredRetryable = true
+
     /** Why a pass THREW. Distinct from `deferred`: waiting will not clear it,
      *  so an operator told "already done" would never learn the migration is
      *  incomplete — with some of its batches already committed. */
@@ -2957,7 +3050,7 @@ export class Repo {
       // "a peer holds the claim" and tells the operator to go delete a claim
       // block that in this configuration does not exist.
       failed = 'no BackfillCompletionClaim is configured, so completion cannot be recorded'
-      return {completed, undoHistoryCleared, deferred, failed}
+      return {completed, undoHistoryCleared, deferred, deferredRetryable, failed}
     }
     // Stale covers BOTH ways a run can outlive its workspace: switched away (id
     // differs) and switched away and back (id restored, generation moved).
@@ -2971,11 +3064,11 @@ export class Repo {
     for (const backfill of backfills) {
       // A role flip to read-only during the deferral window must stop further
       // writes — re-check per backfill (the loop can span several txs).
-      if (this.isReadOnly) return {completed, undoHistoryCleared, deferred, failed}
+      if (this.isReadOnly) return {completed, undoHistoryCleared, deferred, deferredRetryable, failed}
       // Don't even START a pass whose workspace has been re-opened since it was
       // scheduled. `assertBackfillMayWrite` catches this per transaction, but
       // that is one tx too late to avoid the scan a backfill does first.
-      if (this.workspaceGeneration !== generation) return {completed, undoHistoryCleared, deferred, failed}
+      if (this.workspaceGeneration !== generation) return {completed, undoHistoryCleared, deferred, deferredRetryable, failed}
       // The generation check above cannot see an id mismatch on a MATCHING
       // generation, which is what an operator naming a non-active workspace
       // produces. `deferred` must be set: an empty result reads as
@@ -2984,7 +3077,7 @@ export class Repo {
       const stale = runStale()
       if (stale !== null) {
         deferred = stale
-        return {completed, undoHistoryCleared, deferred, failed}
+        return {completed, undoHistoryCleared, deferred, deferredRetryable, failed}
       }
       // BEFORE claiming: an unprimed registry makes the whole graph look like
       // it has zero registered properties, so a pass would find no candidates,
@@ -3026,29 +3119,41 @@ export class Repo {
       // Note the create+tombstone pair is ROUTINE, not exceptional: every
       // mid-run abort releases the claim. Its being queued while stale is the
       // problem, not its existence.
-      const gap = await this.syncViewGap()
+      // A pass that claims and uploads from a graph half of which is still
+      // ciphertext on disk is the same stale-view write as one that claims
+      // mid-drain. The SAME predicate `assertBackfillMayWrite` re-asks per
+      // transaction — there is deliberately no cheaper approximation for the
+      // hot path, because that split is what let the two answers disagree.
+      const gap = await this.workspaceViewGap(workspaceId)
       if (gap !== null) {
-        deferred = gap
+        deferred = gap.reason
+        deferredRetryable = gap.transient
         console.warn(
-          `[workspaceBackfills] "${backfill.id}" deferred: ${gap}, so claiming would ` +
-          `write from a stale view.`,
+          `[workspaceBackfills] "${backfill.id}" deferred: ${gap.reason}, so claiming ` +
+          `would write from a stale view.`,
         )
-        // Re-arm and RETURN, exactly as the TRANSIENT catch below does. The
-        // caught-up half of this gate would self-re-arm through `arm()`'s
-        // parked callback, but the staged-rows half has no gate to park on —
-        // nothing fires when the queue drains, so without this an automatic
-        // pass is written off for the whole session by a blocker that clears
-        // in milliseconds. Returning is what keeps that to ONE re-arm: the gap
-        // is a property of the device, not of a backfill, so every remaining
-        // one would defer identically — and `arm()` only de-dupes a PARKED
-        // gate, so N re-arms here would each schedule their own job and each
-        // job would re-run all N passes.
+        // Re-arm and RETURN, exactly as the TRANSIENT catch below does — but
+        // ONLY when waiting is a remedy. The caught-up half of this gate would
+        // self-re-arm through `arm()`'s parked callback, but the staged-rows
+        // half has no gate to park on — nothing fires when the queue drains,
+        // so without this an automatic pass is written off for the whole
+        // session by a blocker that clears in milliseconds. Returning is what
+        // keeps that to ONE re-arm: the gap is a property of the device, not
+        // of a backfill, so every remaining one would defer identically — and
+        // `arm()` only de-dupes a PARKED gate, so N re-arms here would each
+        // schedule their own job and each job would re-run all N passes.
+        //
+        // A DURABLE gap gets no re-arm — not because the check is dear, but
+        // because it is pointless: `arm()` fires synchronously once the device
+        // is caught up, so this would spin on a condition nothing is working
+        // on for the rest of the session. The next open re-runs the pass
+        // anyway, which is where a recovery gesture will have landed.
         //
         // Re-arming reaches `workspace-open` passes only, which is all
         // `scheduleWorkspaceBackfills` schedules. An `operator` pass defers to
         // its caller, who is a person that can be told to retry.
-        this.scheduleWorkspaceBackfills(workspaceId)
-        return {completed, undoHistoryCleared, deferred, failed}
+        if (gap.transient) this.scheduleWorkspaceBackfills(workspaceId)
+        return {completed, undoHistoryCleared, deferred, deferredRetryable, failed}
       }
       // Re-evaluated: the gap check above AWAITS, and a switch across that await
       // leaves the earlier evaluation stale — including a switch away and back,
@@ -3057,7 +3162,7 @@ export class Repo {
       const staleNow = runStale()
       if (staleNow !== null) {
         deferred = staleNow
-        return {completed, undoHistoryCleared, deferred, failed}
+        return {completed, undoHistoryCleared, deferred, deferredRetryable, failed}
       }
       if (!(await claim.tryClaim(workspaceId, backfill.id, {
         reclaimCompleted: backfill.trigger === 'operator',
@@ -3163,7 +3268,7 @@ export class Repo {
           // gate + deep-idle deferral bound the retry.
           console.warn(`[workspaceBackfills] ${reason} — will retry when it clears`)
           this.scheduleWorkspaceBackfills(workspaceId)
-          return {completed, undoHistoryCleared, deferred, failed}
+          return {completed, undoHistoryCleared, deferred, deferredRetryable, failed}
         }
         failed = reason
         console.error(
@@ -3171,7 +3276,7 @@ export class Repo {
         )
       }
     }
-    return {completed, undoHistoryCleared, deferred, failed}
+    return {completed, undoHistoryCleared, deferred, deferredRetryable, failed}
   }
 
   /**

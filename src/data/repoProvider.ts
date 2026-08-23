@@ -37,6 +37,7 @@ import type { MaterializeDeps } from '@/data/internals/syncObserver/materialize.
 import {
   BLOCKS_SYNCED_RAW_TABLE,
   CREATE_BLOCKS_PARENT_ORDER_INDEX_SQL,
+  CREATE_BLOCKS_SYNCED_NEEDS_APPLY_INDEX_SQL,
   CREATE_BLOCKS_SYNCED_TABLE_SQL,
   CREATE_BLOCKS_FIELD_FORM_INDEX_SQL,
   CREATE_BLOCKS_ANY_FIELD_FORM_INDEX_SQL,
@@ -62,6 +63,7 @@ import {
   backfillBlocksFtsIfEmpty,
   backfillBlockTypesIfEmpty,
   ensureBlockUserUpdatedAtColumn,
+  ensureStagingNeedsApplyColumn,
   ensureUndoGroupIdColumns,
 } from '@/data/internals/clientSchema'
 import { runAnalyzeIfStale } from '@/data/maintenance'
@@ -431,6 +433,16 @@ const initializePowerSyncDb = async (powerSyncDb: PowerSyncDatabase) => {
       return row ?? null
     },
   }
+  // WITH the other one-shot backfills, not up with the CREATEs, because it is
+  // one: it reads a `client_schema_state` marker, and that table is created by
+  // the loop above. Its index follows it — on an upgrading device the ALTER and
+  // seed then run against an unindexed table instead of maintaining the index
+  // through every seeded row.
+  await ensureStagingNeedsApplyColumn({
+    ...backfillDb,
+    getAll: <T,>(sql: string) => powerSyncDb.getAll<T>(sql),
+  })
+  await powerSyncDb.execute(CREATE_BLOCKS_SYNCED_NEEDS_APPLY_INDEX_SQL)
   await backfillBlockAliasesIfEmpty(backfillDb)
   await backfillBlockTypesIfEmpty(backfillDb)
   await backfillBlocksFtsIfEmpty(backfillDb)

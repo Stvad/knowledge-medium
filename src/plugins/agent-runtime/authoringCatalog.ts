@@ -134,9 +134,13 @@ const internalModuleIndex = import.meta.glob([
   '!/src/**/examples/**',
 ])
 
-const eagerUiModules = import.meta.glob('/src/components/ui/*.{ts,tsx}', {
-  eager: true,
-}) as Record<string, RuntimeModule>
+// The test exclusion is load-bearing, not tidiness: this glob is EAGER, so
+// a co-located test file gets evaluated wherever the catalog is imported —
+// in the app, on the vitest globals it calls at module scope.
+const eagerUiModules = import.meta.glob(
+  ['/src/components/ui/*.{ts,tsx}', '!/src/components/ui/*.{test,spec}.{ts,tsx}'],
+  {eager: true},
+) as Record<string, RuntimeModule>
 
 /** A worked example: the label the catalog shows, plus the verbatim text of
  *  the compiled source file behind it. */
