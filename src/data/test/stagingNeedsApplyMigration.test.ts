@@ -117,12 +117,13 @@ describe('ensureStagingNeedsApplyColumn', () => {
     expect(await unapplied()).toEqual(['arrived-later'])
   })
 
-  // ~215ms alone (1200 serial round-trips through the write lock) — not tight
-  // against the 5000ms default, but it has timed out twice on a loaded machine,
-  // and a timeout HERE strands the rest of the file: this is the test that puts
-  // back the column `rewindToPreMigration` drops, so the next rewind then fails
-  // on a column that is already gone. The budget is insurance against that
-  // cascade, not a claim that the test is slow.
+  // 1200 serial round-trips through the write lock: ~250ms on an idle checkout,
+  // but measured past 5000ms on a loaded one, so the default is not a safe budget
+  // for it even outside a full gate run. Explicit because a timeout HERE also
+  // breaks the tests after it: vitest does not cancel the abandoned body, whose
+  // writes keep landing in the shared DB past the next `resetTestDb`. Making the
+  // rewind tolerate an already-dropped column does NOT fix that — tried, and the
+  // schema error just becomes a row-leak assertion. Not timing out is the fix.
   it('seeds a backlog larger than one chunk', async () => {
     // Bounded statements, so the loop — not the WHERE — is what finishes it.
     for (let i = 0; i < 600; i++) {
