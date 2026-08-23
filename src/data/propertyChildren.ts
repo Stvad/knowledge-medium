@@ -248,15 +248,8 @@ const isEscapedEnvelope = (trimmed: string): boolean =>
  *   - the encoded-null SENTINEL: bare `null` content IS the null value to a
  *     codec that accepts one. Gated on `codecAcceptsNull` — elsewhere there is
  *     no collision, and the string stays verbatim.
- *   - a reference SPAN (§7): `deriveReferenceColumns` reads such content
- *     instead of storing it. Marked, it stamps `is_field_form`, which
- *     `isFieldValueChild` filters out of the value set — the projection finds
- *     nothing and drops the owner's key (#688). Unmarked, it becomes a live
- *     reference rather than text.
- *   - a LONE SURROGATE: the content column returns U+FFFD, and the projection
- *     writes that back over the cell. Measured as the ONLY mangling shape —
- *     NUL, C0 controls, newlines and padding all round-trip verbatim — so the
- *     test is well-formedness, not a character blacklist.
+ *   - anything {@link verbatimContentLosesValue} names, which is where those
+ *     two shapes and why they lose the value are written down.
  *
  *  Recursive on the quoted form, or a value that is ITSELF a JSON string
  *  literal of an escapable string would decode one level short. The recursion

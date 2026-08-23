@@ -84,10 +84,9 @@ const enumSchema = defineProperty<typeof enumOptions[number]>('e', {
  *  to be UUID-shaped so the span forms below parse. */
 const SAMPLE_UUID = '22222222-2222-4222-8222-222222222222'
 
-// A block-ref-safe id alphabet: no whitespace/parens (RENDERABLE_BLOCK_REF_ID_RE,
-// referenceBlock.ts:23) and no dashes, so it can never accidentally take UUID
+// A block-ref-safe id alphabet: no whitespace/parens (`RENDERABLE_BLOCK_REF_ID_RE`) and no dashes, so it can never accidentally take UUID
 // shape and trip the separate case-canonicalization round-trip check
-// (referenceBlock.ts:111-127) — out of scope here, that guard belongs to
+// in `referenceBlockContentForId` — out of scope here, that guard belongs to
 // `referenceBlockContentForId`'s own suite, not this codec-boundary one.
 const ID_ALPHABET = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_'
 const idArb = fc.array(fc.constantFrom(...ID_ALPHABET), {minLength: 1, maxLength: 24})
@@ -316,7 +315,7 @@ describe('#688: content is always storable text, never a span and never ill-form
 describe('enum leniency: a retired option decodes but is not re-canonicalized', () => {
   it('a value stored before its option was removed still decodes, kept AS-IS rather than re-encoded', () => {
     const content = JSON.stringify('retired-option')
-    // decode is lenient (only checks it's a string, codecs.ts:255-259); encode
+    // decode is lenient (only checks it's a string, `enumCodec`); encode
     // would reject it (not a current member) — the fallback in
     // propertyChildContentToEncodedValue keeps the decoded value verbatim
     // instead of throwing or dropping it.

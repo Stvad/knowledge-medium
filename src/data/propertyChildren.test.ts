@@ -10,7 +10,6 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { ChangeScope, codecs, defineProperty, propertyValue, type BlockData } from '@/data/api'
 import { keyAtStart } from './orderKey'
 import { propertyFieldContent } from './propertyChildren'
-import { isGrammarShapedLabel } from './referenceBlock'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { projectedPropertyDefinitionsFacet } from '@/data/facets'
@@ -119,10 +118,14 @@ const cellValue = async (id: string): Promise<unknown> => {
   return (JSON.parse(row.properties_json) as Record<string, unknown>)[statusSchema.name]
 }
 
-/** What the escaped envelope must BE, rather than how it is spelled: it
- *  carries the value back, and carries no opener for either reader of the
- *  grammar to find. Asserting the spelling instead would only prove
- *  `escapeContent` agrees with a copy of itself. */
+/** What the escaped envelope must BE, rather than how it is spelled: it carries
+ *  the value back, and carries no span OPENER. Asserting the spelling instead
+ *  would only prove `escapeContent` agrees with a copy of itself.
+ *
+ *  The opener check is deliberately stronger than asking the whole-block parser
+ *  whether the content is a reference: every span form in EITHER reader has to
+ *  open with `[` or `(`, so no opener means no span for the inline reader
+ *  either — and that reader is the one a rename or merge rewrites through. */
 const expectEscapedEnvelope = (schema: typeof statusSchema, value: string, content: string): void => {
   expect(content).not.toBe(value)
   expect(content).not.toMatch(/[[(]/)
@@ -1863,8 +1866,9 @@ describe('content <-> value codecs: escaping strings content cannot hold as itse
 
   // Every §7 span form, marked and unmarked. The marked ones are the ones that
   // DELETE the property; the rest make a string value a live reference. The
-  // predicate is `isGrammarShapedLabel` — the parser itself — rather than a
-  // second copy of the grammar, so a form added to it is covered here for free.
+  // predicate is `isWholeContentReference` — the parser itself, plus the embed
+  // marker — rather than a second copy of the grammar, so a form added to it is
+  // covered here for free.
   const GRAMMAR_SHAPED = [
     `::((${UUID}))`,
     '::[[Some Page]]',
@@ -1880,14 +1884,6 @@ describe('content <-> value codecs: escaping strings content cannot hold as itse
       const content = propertyValueToChildContent(schema, value)
       expectEscapedEnvelope(schema, value, content)
     }
-  })
-
-  it.each(GRAMMAR_SHAPED)('the escaped content of %j is not itself a reference', value => {
-    // What the escape is FOR: the stored content must read as prose, or the
-    // derive stamps the row and the value-set filter drops it again. Asked of
-    // the parser rather than by eyeballing the quotes.
-    const content = propertyValueToChildContent(statusSchema, value)
-    expect(isGrammarShapedLabel(content)).toBe(false)
   })
 
   it('escapes a lone surrogate, which the content column would return as U+FFFD', () => {

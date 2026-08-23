@@ -246,7 +246,7 @@ export const applyContentReplaceMutator = defineMutator<
         // under it — the owner's key dropped with no error. `setProperty`
         // ESCAPES such a value; this path writes content the user chose, so it
         // refuses instead and offers "replace anyway" like every other skip.
-        const breaksCodec = (() => {
+        const unsafeToWrite = (() => {
           try {
             propertyChildContentToEncodedValue(schema, replaced.content)
           } catch {
@@ -254,7 +254,7 @@ export const applyContentReplaceMutator = defineMutator<
           }
           return contentLosesPropertyValue(schema, replaced.content)
         })()
-        if (breaksCodec) {
+        if (unsafeToWrite) {
           result.skippedUnparseableProperty += 1
           unparseableProperties.add(schema.name)
           result.retryableSkips.push({
