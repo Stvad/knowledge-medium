@@ -3764,6 +3764,8 @@ export class Repo {
     facts: PropertyDefinitionFactsByFieldId,
     {detectChanges}: {readonly detectChanges: boolean},
   ): void {
+    // Defence in depth — the bridge only calls this with a built registry's own
+    // workspaceId, which is never empty.
     if (!workspaceId) return
     // Deliberately NOT read-only-gated: `App` pins the workspace before
     // resolving the role, so gating would make that pin record nothing — and no

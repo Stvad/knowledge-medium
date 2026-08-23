@@ -107,6 +107,17 @@ describe('observePropertyDefinitions', () => {
     expect(storedFields(state.value)).toEqual({f: {name: 'a', codecType: 'string'}})
   })
 
+  it('refuses to REPLACE a codec it already recorded', async () => {
+    // Only learning a codec we never had is an exception to add-only. Taking a
+    // different one would absorb codec drift — #780's loss, for the codec case.
+    const {db, state} = fakeDb()
+    await observePropertyDefinitions(db, WS, facts({f: {name: 'a', codecType: 'string'}}))
+
+    await observePropertyDefinitions(db, WS, facts({f: {name: 'a', codecType: 'number'}}))
+
+    expect(storedFields(state.value)).toEqual({f: {name: 'a', codecType: 'string'}})
+  })
+
   it('refuses to learn a codec once the name has drifted', async () => {
     // A drifted name means the observation describes state nothing has applied;
     // taking its codec would record half of an unapplied change.

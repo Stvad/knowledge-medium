@@ -263,6 +263,18 @@ describe('definition facts (diff inputs)', () => {
     )).toEqual([{fieldId: 'f', oldName: 'a', newName: 'a', codecChanged: true}])
   })
 
+  it('reports no codec change when the PREVIOUS side never resolved one', () => {
+    // The baseline can hold a definition first seen while its preset was
+    // loading. Reading that absence as a change would re-encode the whole
+    // fleet the moment the preset arrives.
+    expect(changedPropertyDefinitionFacts(
+      propertyDefinitionFacts(snapshotWith([{fieldId: 'f', name: 'a'}]) as never),
+      propertyDefinitionFacts(
+        snapshotWith([{fieldId: 'f', name: 'a'}], new Map([['f', 'number']])) as never,
+      ),
+    )).toEqual([])
+  })
+
   it('reads a fieldId absent from the previous side as ADDED, never as a rename', () => {
     expect(changedPropertyDefinitionFacts(
       new Map(),
@@ -810,6 +822,85 @@ describe('changes observed only across a workspace switch (#780)', () => {
       expect(await cell('todo')).toEqual({state2: 42})
     }, {timeout: 5000})
     expect(await rowContent(valueRow.id)).toBe('  0042  ')
+  }, 20_000)
+
+  it('records nothing when the batch throws, so the next prime retries', async () => {
+    await seedWorkspace('children')
+    const repo = setup()
+    await seedProperty(repo, 'p', 'done')
+    await repo.awaitPropertyDefinitionBaselines()
+    // Recording sits AFTER the batch inside its try for exactly this reason:
+    // above it, a pass that died mid-way would be recorded as applied and the
+    // drift would never be re-detected.
+    const batch = vi.spyOn(
+      repo as unknown as {runPropertyDefinitionMigrationBatch: () => Promise<void>},
+      'runPropertyDefinitionMigrationBatch',
+    ).mockRejectedValue(new Error('[test] batch failed'))
+
+    await changeWhileInactive(repo, statusRenamed)
+    await vi.waitFor(() => {
+      expect(batch).toHaveBeenCalled()
+    }, {timeout: 5000})
+
+    expect(await baselineNames()).toEqual({[FIELD_ID]: 'status'})
+    batch.mockRestore()
+  }, 20_000)
+
+  it('records nothing in an UN-FLIPPED workspace, so the flip repairs it', async () => {
+    // The flip gate returns before the batch, and therefore before the record.
+    // Absorbing the drift here would leave a 'cell' workspace's rename
+    // permanently invisible to the prime that follows its flip.
+    await seedWorkspace('cell')
+    const repo = setup()
+    // No `seedProperty` here — an un-flipped workspace mints no field rows.
+    await repo.tx(async tx => {
+      await tx.create({
+        id: 'p', workspaceId: WS, parentId: null, orderKey: 'k-p', content: 'host',
+      })
+    }, {scope: ChangeScope.BlockDefault})
+    await repo.tx(tx => tx.setProperty('p', statusString, 'done'),
+      {scope: ChangeScope.BlockDefault})
+    await repo.awaitPropertyDefinitionBaselines()
+
+    await changeWhileInactive(repo, statusRenamed)
+    await vi.waitFor(async () => {
+      await repo.awaitPropertyDefinitionMigrations()
+      expect(await baselineNames()).toEqual({[FIELD_ID]: 'status'})
+    }, {timeout: 5000})
+  }, 20_000)
+
+  it('does not report unconvertible values for a rename, which re-encodes nothing', async () => {
+    await seedWorkspace('children')
+    const repo = setup(statusNumber)
+    await repo.tx(async tx => {
+      await tx.create({
+        id: 'p', workspaceId: WS, parentId: null, orderKey: 'k-p', content: 'host',
+      })
+    }, {scope: ChangeScope.BlockDefault})
+    await repo.tx(tx => tx.setProperty('p', statusNumber, 42 as never),
+      {scope: ChangeScope.BlockDefault})
+    const field = await sharedDb.db.get<{id: string}>(
+      'SELECT id FROM blocks WHERE parent_id = ? AND reference_target_id = ? AND deleted = 0',
+      ['p', FIELD_ID],
+    )
+    const valueRow = await sharedDb.db.get<{id: string}>(
+      'SELECT id FROM blocks WHERE parent_id = ? AND deleted = 0', [field.id],
+    )
+    // Pre-existing user state a rename does not make any worse.
+    await sharedDb.db.execute(
+      'UPDATE blocks SET content = ? WHERE id = ?', ['not a number', valueRow.id],
+    )
+    await repo.awaitPropertyDefinitionBaselines()
+    const errors: ProcessorRejection[] = []
+    repo.onUserError(err => { errors.push(err) })
+
+    await changeWhileInactive(repo, state2Number)
+    await vi.waitFor(async () => {
+      await repo.awaitPropertyDefinitionMigrations()
+      expect(await baselineNames()).toEqual({[FIELD_ID]: 'state2'})
+    }, {timeout: 5000})
+
+    expect(errors).toEqual([])
   }, 20_000)
 
   it('with NO recorded baseline, records one and migrates nothing', async () => {

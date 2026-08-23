@@ -69,8 +69,10 @@ const parseBaseline = (raw: string | null): Map<string, PropertyDefinitionFacts>
 
 const serializeBaseline = (facts: PropertyDefinitionFactsByFieldId): string => {
   const fields: Record<string, PropertyDefinitionFacts> = {}
-  // Sorted so an unchanged baseline serializes byte-identically whatever order
-  // the registry iterated in — that equality is what skips the write.
+  // Canonical key order, so the blob is diffable and two devices that observed
+  // the same definitions in different orders store the same bytes. (The
+  // write-skip below does not depend on it: the stored blob fixes iteration
+  // order, and an update only re-sets existing keys or appends.)
   for (const fieldId of [...facts.keys()].sort()) fields[fieldId] = facts.get(fieldId)!
   return JSON.stringify({fields})
 }
@@ -165,6 +167,10 @@ export const recordAppliedPropertyDefinitions = async (
   workspaceId: string,
   facts: PropertyDefinitionFactsByFieldId,
 ): Promise<void> => {
+  // Unreachable from the current caller (a batch with no plans returns earlier),
+  // but not a no-op: without it an empty call on a workspace with no row writes
+  // `{}`, turning "no baseline" into "present but empty" — and those two mean
+  // opposite things to the diff.
   if (facts.size === 0) return
   await updateBaseline(db, workspaceId, next => {
     for (const [fieldId, applied] of facts) next.set(fieldId, applied)
