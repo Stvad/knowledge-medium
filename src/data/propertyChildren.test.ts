@@ -1215,7 +1215,10 @@ describe('merge never reaps a source field row (#728)', () => {
     }, {scope: ChangeScope.BlockDefault})
 
     // Fold order is `created_at` ascending — arbitrary to the user — so it must
-    // not decide whether the note survives. Which value TEXT wins is still
+    // not decide whether the note survives. Only the keyless-source-FIRST arm
+    // exercises the adopt branch; folding it second routes through
+    // `collapseDuplicateFieldRow`, which never reaped — that arm is the control
+    // the first is compared against. Which value TEXT wins is still
     // order-dependent, via MATERIALIZE's cell-wins overwrite of the primary
     // value child; that is a `setProperty` rule reachable with no merge at all,
     // so it is deliberately not asserted here.
