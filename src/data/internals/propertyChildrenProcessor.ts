@@ -605,12 +605,11 @@ export const collapseDuplicateFieldRow = async (
 
 export const MATERIALIZE_PROPERTY_CHILDREN_PROCESSOR = defineSameTxProcessor({
   name: MATERIALIZE_PROPERTY_CHILDREN_PROCESSOR_NAME,
-  // `deleted` is watched alongside `properties` so a REVIVAL re-materializes
-  // (see `namesToReconcile`): the bag is what this direction reads, but
-  // liveness is what makes the children go away and have to come back. Rows
-  // going the other way (live → tombstone) match too and are dropped by the
-  // `after.deleted` guard — one extra predicate per deleted row, versus a
-  // whole second processor to carry the revival case.
+  // `deleted` alongside `properties` so a REVIVAL re-materializes even when the
+  // bag did not change (`materializePropertiesForChangedRow`) — the bag is what
+  // this direction reads, but liveness is what takes the children away. Same
+  // reason `core.aliasClaimRederive` watches it. Rows going the other way match
+  // too and are dropped by the `after.deleted` guard.
   watches: {kind: 'field', table: 'blocks', fields: ['properties', 'deleted']},
   // Issue #402: re-runs over rows dirtied after it ran, so (a) a plugin's
   // raw bag write (merge retarget) grows/updates its backing children in
