@@ -13,7 +13,7 @@ import { propertyFieldContent } from './propertyChildren'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { projectedPropertyDefinitionsFacet } from '@/data/facets'
-import { mergeBlocksInTx } from './blockMerge'
+import { foldBlocksInTx, mergeBlocksInTx } from './blockMerge'
 import type { Repo } from './repo'
 import {
   encodedPropertyValueToChildContent,
@@ -880,7 +880,7 @@ describe('merge integration (§9, slice B3)', () => {
     expect(strandedLive).toEqual([])
   })
 
-  it('honors a custom mergeProperties that drops a source-only property (no reproject-back)', async () => {
+  it('a custom mergeProperties dropping a source-only key does not reap its rows', async () => {
     await seedWorkspace('children')
     const repo = setup()
     await createBlock(repo, 'into')
@@ -892,18 +892,17 @@ describe('merge integration (§9, slice B3)', () => {
     await repo.tx(async tx => {
       const into = await tx.get('into')
       const from = await tx.get('from')
-      // Strategy keeps ONLY into's bag → deliberately drops from's `status`.
+      // Strategy keeps ONLY into's bag → drops from's `status` from the bag.
       await mergeBlocksInTx(tx, {into: into!, from: from!, mergeProperties: intoProps => intoProps})
     }, {scope: ChangeScope.BlockDefault})
 
-    // The dropped property must NOT reappear via a moved-and-reprojected field
-    // row — the merge honors the strategy.
-    expect(await cellValue('into')).toBeUndefined()
-    expect(await liveFieldRows('into')).toEqual([])
-    const ff = await sharedDb.db.get<{deleted: number}>(
-      'SELECT deleted FROM blocks WHERE id = ?', [fromField!.id],
-    )
-    expect(ff.deleted).toBe(1)
+    // Child-backed properties are owned by their ROWS (§5's one-direction
+    // rule), so editing the merged BAG is not a way to delete one: the row
+    // moves over intact and PROJECT re-derives the cell from it. A strategy
+    // that means to drop a property has to remove the rows itself, knowing
+    // what is nested under them (#728).
+    expect((await liveFieldRows('into')).map(f => f.id)).toEqual([fromField!.id])
+    expect(await cellValue('into')).toBe('from-only')
   })
 
   it('preserves user-authored descendants of the source value child', async () => {
@@ -1076,6 +1075,153 @@ describe('merge integration (§9, slice B3)', () => {
     )
     expect(fromValueRow.deleted).toBe(0)
     expect(fromValueRow.parent_id).toBe(fromField!.id)
+  })
+})
+
+describe('merge never reaps a source field row (#728)', () => {
+  const COUNT_FIELD_ID = 'field-count-children'
+  const countSchema = defineProperty<number>('count', {
+    codec: codecs.number,
+    defaultValue: 0,
+    changeScope: ChangeScope.BlockDefault,
+  })
+
+  /** `setup()` plus a NUMBER property. The state this suite is about — cell
+   *  key unset, rows still live — needs a codec that can REJECT a value
+   *  child's text, which `codecs.string` never does. */
+  const setupWithCount = (): Repo => {
+    const repo = setup()
+    repo.setRuntimeContributions(
+      projectedPropertyDefinitionsFacet,
+      'test-count-definition',
+      [{
+        metadata: {
+          fieldId: COUNT_FIELD_ID,
+          workspaceId: WS,
+          createdAt: 1,
+          name: countSchema.name,
+          changeScope: countSchema.changeScope,
+          hidden: false,
+          origin: 'user' as const,
+        },
+        schema: countSchema,
+      }],
+      {workspaceId: WS},
+    )
+    return repo
+  }
+
+  const countFieldRows = async (parentId: string): Promise<ChildRow[]> =>
+    (await childrenRows(parentId)).filter(
+      r => r.deleted === 0 && r.reference_target_id === COUNT_FIELD_ID)
+
+  const bagOf = async (id: string): Promise<Record<string, unknown>> => {
+    const row = await sharedDb.db.get<{properties_json: string}>(
+      'SELECT properties_json FROM blocks WHERE id = ?', [id],
+    )
+    return JSON.parse(row.properties_json) as Record<string, unknown>
+  }
+
+  const rowOf = async (id: string) => sharedDb.db.get<{
+    deleted: number; parent_id: string; content: string
+  }>('SELECT deleted, parent_id, content FROM blocks WHERE id = ?', [id])
+
+  /** Root of `id`'s LIVE ancestry, or null if `id` or any ancestor is
+   *  tombstoned — the difference between "not deleted" and "reachable", which
+   *  is what a merge left under a source tombstone gets wrong. */
+  const liveRootOf = async (id: string): Promise<string | null> => {
+    let cursor: string | null = id
+    while (cursor !== null) {
+      const row: {parent_id: string | null; deleted: number} = await sharedDb.db.get(
+        'SELECT parent_id, deleted FROM blocks WHERE id = ?', [cursor],
+      )
+      if (row.deleted === 1) return null
+      if (row.parent_id === null) return cursor
+      cursor = row.parent_id
+    }
+    return null
+  }
+
+  /** `from` holds a field row whose value no longer decodes, so PROJECT has
+   *  unset the cell key while keeping the rows visible/fixable (§9) — plus a
+   *  user-authored note under the value. Returns the three row ids. */
+  const seedKeylessFieldRow = async (
+    repo: Repo, owner: string,
+  ): Promise<{fieldId: string; valueId: string; noteId: string}> => {
+    await repo.tx(tx => tx.setProperty(owner, countSchema, 42),
+      {scope: ChangeScope.BlockDefault})
+    const [field] = await countFieldRows(owner)
+    const [value] = (await childrenRows(field!.id)).filter(v => v.deleted === 0)
+    await repo.mutate.setContent({id: value!.id, content: 'about forty-two'})
+    const noteId = `note-${owner}`
+    await repo.tx(async tx => {
+      await tx.create({
+        id: noteId, workspaceId: WS, parentId: value!.id, orderKey: 'a',
+        content: 'measured on the old scale',
+      })
+    }, {scope: ChangeScope.BlockDefault})
+
+    // Preconditions, asserted rather than assumed: an un-flipped workspace or
+    // a still-parsing value would never reach the branch under test.
+    expect(Object.hasOwn(await bagOf(owner), countSchema.name)).toBe(false)
+    expect((await countFieldRows(owner)).map(r => r.id)).toEqual([field!.id])
+    return {fieldId: field!.id, valueId: value!.id, noteId}
+  }
+
+  it('moves the row, its unparseable value and the user note onto the survivor', async () => {
+    await seedWorkspace('children')
+    const repo = setupWithCount()
+    await createBlock(repo, 'into')
+    await createBlock(repo, 'from')
+    const {fieldId, valueId, noteId} = await seedKeylessFieldRow(repo, 'from')
+
+    await repo.mutate.merge({intoId: 'into', fromId: 'from'})
+
+    expect(await rowOf(fieldId)).toMatchObject({deleted: 0, parent_id: 'into'})
+    expect(await rowOf(valueId)).toMatchObject({
+      deleted: 0, parent_id: fieldId, content: 'about forty-two',
+    })
+    expect(await rowOf(noteId)).toMatchObject({deleted: 0, parent_id: valueId})
+    expect(await liveRootOf(noteId)).toBe('into')
+    // The cell stays unset: the adopted row still has no value that decodes,
+    // so PROJECT adds nothing. Moving it is inert for the survivor's bag.
+    expect(Object.hasOwn(await bagOf('into'), countSchema.name)).toBe(false)
+    // Nothing stranded live under the `from` tombstone.
+    expect(await sharedDb.db.getAll(
+      `SELECT b.id FROM blocks b JOIN blocks p ON p.id = b.parent_id
+        WHERE p.deleted = 1 AND b.deleted = 0 AND b.workspace_id = ?`, [WS],
+    )).toEqual([])
+  })
+
+  it.each([
+    ['keyless source first', ['a', 'b']],
+    ['keyless source second', ['b', 'a']],
+  ] as const)('survives either fold order — %s', async (_label, order) => {
+    await seedWorkspace('children')
+    const repo = setupWithCount()
+    await createBlock(repo, 'into')
+    await createBlock(repo, 'a')
+    await createBlock(repo, 'b')
+    const {valueId, noteId} = await seedKeylessFieldRow(repo, 'a')
+    // `b` holds the same property with a value that DOES decode, so one source
+    // supplies the survivor's field row and the other has to fold into it.
+    await repo.tx(tx => tx.setProperty('b', countSchema, 7),
+      {scope: ChangeScope.BlockDefault})
+
+    await repo.tx(async tx => {
+      const into = await tx.get('into')
+      const froms = await Promise.all(order.map(id => tx.get(id)))
+      await foldBlocksInTx(tx, {into: into!, froms: froms.map(f => f!)})
+    }, {scope: ChangeScope.BlockDefault})
+
+    // Fold order is `created_at` ascending — arbitrary to the user — so it must
+    // not decide whether the note survives. Which value TEXT wins is still
+    // order-dependent, via MATERIALIZE's cell-wins overwrite of the primary
+    // value child; that is a `setProperty` rule reachable with no merge at all,
+    // so it is deliberately not asserted here.
+    expect(await liveRootOf(valueId)).toBe('into')
+    expect(await liveRootOf(noteId)).toBe('into')
+    expect((await bagOf('into'))[countSchema.name]).toBe(7)
   })
 })
 

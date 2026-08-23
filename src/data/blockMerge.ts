@@ -13,7 +13,6 @@ import {
   materializePropertyChildrenForExistingRow,
 } from './internals/propertyChildrenProcessor'
 import { mergeProperties } from './mergeProperties'
-import { deleteSubtreeInTx } from './subtreeDelete'
 
 export type ContentStrategy = 'concat' | 'keepTarget' | { separator: string }
 
@@ -275,20 +274,18 @@ export const foldBlocksInTx = async (
         await collapseDuplicateFieldRow(tx, intoField.id, fromField)
         continue
       }
-      // `into` lacks this field. Adopt it only if the merged bag actually keeps
-      // the property: a custom `mergeProperties` strategy can deliberately drop a
-      // source-only key, and since `into` never had it the final `properties`
-      // write is a no-op for that key — so MATERIALIZE wouldn't remove a moved
-      // field row, and its projection would add the property back, overriding the
-      // strategy. Orphan/unresolvable field rows (no schema) don't project, so
-      // they ride along harmlessly.
-      const schema = fieldId !== undefined
-        ? tx.resolvePropertyFieldSchema(from.workspaceId, fieldId)
-        : null
-      if (schema !== null && !Object.prototype.hasOwnProperty.call(mergedProperties, schema.name)) {
-        await deleteSubtreeInTx(tx, fromField.id)
-        continue
-      }
+      // `into` lacks this field, so there is nothing to dedupe against — move
+      // the row over intact. A merge RELOCATES and never reaps: the only rows it
+      // may tombstone are husks something emptied first (`collapseDuplicateFieldRow`
+      // above, `from` itself below), and a field row carries user-authored
+      // descendants at any depth.
+      //
+      // Deliberate consequence: a `mergeProperties` strategy that drops a key
+      // whose rows survive does NOT remove the property — PROJECT re-derives it
+      // from the moved row. Child-backed properties are owned by their rows
+      // (§5's one-direction rule), so dropping the key is not a way to delete
+      // one; a strategy that means it has to remove the rows itself, knowing
+      // what is nested under them (#728).
       const [key] = keysBetween(intoAnchor, null, 1)
       await tx.move(fromField.id, {parentId: into.id, orderKey: key})
       intoAnchor = key
