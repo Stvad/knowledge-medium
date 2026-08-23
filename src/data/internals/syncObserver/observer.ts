@@ -106,11 +106,12 @@ export type RematerializeScope = 'all' | 'unapplied'
 
 /** What one queue-less rematerialization pass did, summed over its windows.
  *
- *  Every count is per row and the id set is distinct, so they partition
- *  `scanned` — except `resolved`, which is orthogonal: it counts rows whose
- *  `needs_apply` flag this pass MOVED from set to clear, by any of the drain's
- *  reasons. A row that was already clear is not counted however it was decided,
- *  so a re-pass over a settled workspace correctly reports repairing nothing.
+ *  `applied` / `deferred` / `skippedStale` / `quarantined` are per row over a
+ *  distinct id set, so they sum to `scanned` MINUS any row whose staging row
+ *  left between the one-shot id read and its window (that one is scanned and
+ *  nothing else). `resolved` and `reflagged` are orthogonal to all of them —
+ *  they count flag MOVEMENT, in either direction, by any of the drain's
+ *  reasons.
  *
  *  The point of reporting `deferred` and `quarantined` separately: when a pass
  *  does NOT close the gap, these are why. Deferred means the workspace was not
@@ -125,8 +126,18 @@ export interface RematerializeReport {
   readonly deferred: number
   readonly skippedStale: number
   readonly quarantined: number
-  /** Rows whose `needs_apply` flag this pass moved from set to clear. */
+  /** Rows whose `needs_apply` flag this pass moved from set to clear.
+   *
+   *  NOT the success signal for `scope: 'all'`. That scope exists for a row the
+   *  flag is WRONG about — already clear, and `blocks` behind anyway — which by
+   *  definition moves no flag. `applied` is the number that says it did
+   *  something there; `resolved` is the one for the narrow scope. */
   readonly resolved: number
+  /** Rows whose flag this pass SET: it found a row it could not apply that
+   *  `blocks` does not already reflect. Nonzero means the pass left the gap
+   *  BIGGER — a workspace that answers `defer` re-flags rows an earlier drain
+   *  had cleared — which is otherwise a count going up with nothing to blame. */
+  readonly reflagged: number
 }
 
 export interface BlocksSyncedObserver {
@@ -316,14 +327,16 @@ export const startBlocksSyncedObserver = (
     // mid-pass is therefore not in it — correctly: that one is in the QUEUE,
     // which the queue drain owns, and picking it up here would mean a pass
     // whose end depends on the sync stream going quiet.
-    const ids = (await db.getAll<{ id: string }>(
-      scope === 'unapplied'
-        ? WORKSPACE_UNAPPLIED_IDS_SQL
-        : 'SELECT id FROM blocks_synced WHERE workspace_id = ? ORDER BY id',
-      [workspaceId],
-    )).map(row => row.id)
+    // Statement and params chosen together. They take the same one binding
+    // today, but `WORKSPACE_UNAPPLIED_IDS_SQL`'s count sibling takes a cap as a
+    // second — so a shared params array is one future edit away from binding a
+    // workspace id into the wrong slot.
+    const [idsSql, idsParams]: [string, unknown[]] = scope === 'unapplied'
+      ? [WORKSPACE_UNAPPLIED_IDS_SQL, [workspaceId]]
+      : ['SELECT id FROM blocks_synced WHERE workspace_id = ? ORDER BY id', [workspaceId]]
+    const ids = (await db.getAll<{ id: string }>(idsSql, idsParams)).map(row => row.id)
     const totals = {
-      applied: 0, deferred: 0, skippedStale: 0, quarantined: 0, resolved: 0,
+      applied: 0, deferred: 0, skippedStale: 0, quarantined: 0, resolved: 0, reflagged: 0,
     }
     // Materialize in the same bounded windows as drainQueueOnce. A workspace
     // that synced while still unpinned (fresh-device initial sync: every row
@@ -342,6 +355,7 @@ export const startBlocksSyncedObserver = (
       totals.skippedStale += outcome.skippedStale.length
       totals.quarantined += outcome.quarantined.length
       totals.resolved += outcome.resolved.length
+      totals.reflagged += outcome.reflagged.length
     }
     return { scope, scanned: ids.length, ...totals }
   }

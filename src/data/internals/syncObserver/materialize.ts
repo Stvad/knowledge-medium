@@ -187,6 +187,17 @@ export interface MaterializeOutcome {
    *  (`RematerializeScope` 'all') decides every row it reads and must report
    *  having repaired none of them. */
   readonly resolved: readonly string[]
+  /** The other direction: ids whose `needs_apply` flag this pass SET, having
+   *  found a row it cannot apply that `blocks` does not already reflect.
+   *
+   *  Every ordinary delivery arrives flagged, so on the queue path this is
+   *  almost always empty — a row is normally flagged by its own arrival, not by
+   *  a decision. It is the re-pass that makes it interesting: a workspace that
+   *  answers `defer` re-flags rows an earlier drain had cleared, so a
+   *  rematerialization can leave the gap BIGGER than it found it. Reported
+   *  because an operator watching the count grow otherwise has nothing to
+   *  attribute it to. */
+  readonly reflagged: readonly string[]
 }
 
 interface ApplyCandidate {
@@ -445,11 +456,12 @@ export const materializeStagingRows = async (
   const deleted: string[] = []
 
   const resolved: string[] = []
+  const reflagged: string[] = []
   // `decisions` counts too: a window whose every row skip-staled writes no
   // `blocks` row and still has flags to clear, and leaving them set would make
   // an echo-only drain look like a permanent gap.
   if (candidates.length === 0 && change.removed.length === 0 && decisions.length === 0) {
-    return { snapshots, applied, deferred, skippedStale, quarantined, deleted, resolved }
+    return { snapshots, applied, deferred, skippedStale, quarantined, deleted, resolved, reflagged }
   }
 
   // ── Phase 2 (inside the write tx): authoritative re-gate, then write. ──
@@ -585,7 +597,6 @@ export const materializeStagingRows = async (
     const stagedNow = await readStagingFlagState(
       tx, decisions.map(decision => decision.id), readChunkSize,
     )
-    const stale: string[] = []
     for (const decision of decisions) {
       const now = stagedNow.get(decision.id)
       if (now === undefined || now.updatedAt !== decision.stagedUpdatedAt) continue
@@ -596,10 +607,10 @@ export const materializeStagingRows = async (
       // so `resolved` naming rows that were already resolved makes a re-pass
       // over a healthy workspace read as though it had just repaired all of it.
       if (decision.needsApply === now.needsApply) continue
-      if (decision.needsApply) stale.push(decision.id)
+      if (decision.needsApply) reflagged.push(decision.id)
       else resolved.push(decision.id)
     }
-    for (const [value, ids] of [[0, resolved], [1, stale]] as const) {
+    for (const [value, ids] of [[0, resolved], [1, reflagged]] as const) {
       for (let i = 0; i < ids.length; i += readChunkSize) {
         const chunk = ids.slice(i, i + readChunkSize)
         // `needs_apply <> value` is DEFENCE IN DEPTH now that the lists carry
@@ -646,5 +657,5 @@ export const materializeStagingRows = async (
     }
   }
 
-  return { snapshots, applied, deferred, skippedStale, quarantined, deleted, resolved }
+  return { snapshots, applied, deferred, skippedStale, quarantined, deleted, resolved, reflagged }
 }

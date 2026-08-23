@@ -108,6 +108,10 @@ describe('materializeStagingRows — the needs_apply flag', () => {
     const second = await materializeStagingRows(env.db, { upserted: ['b1'], removed: [] }, deferred)
 
     expect(second.resolved).toEqual([])
+    // And it SAYS it put the flag back. This is the direction that makes a
+    // rematerialization leave the gap bigger than it found it, so an operator
+    // watching the count go up has something to attribute it to.
+    expect(second.reflagged).toEqual(['b1'])
     expect(await needsApply('b1')).toBe(1)
   })
 

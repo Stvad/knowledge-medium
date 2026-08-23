@@ -21,6 +21,7 @@ import { createTestRepo } from '@/data/test/createTestRepo'
 import type { Repo } from '@/data/repo'
 import type { BlockData } from '@/data/api'
 import type { Materializability } from '@/sync/transform'
+import { WORKSPACE_UNAPPLIED_COUNT_CAP } from '@/data/internals/syncObserver/reconcile'
 
 const WS = 'ws1'
 
@@ -75,6 +76,22 @@ const strandStampZeroMint = async (id: string) => {
   await sharedDb.db.execute('DELETE FROM blocks_synced_changes')
 }
 
+/** `n` stranded rows in three statements rather than 3n round-trips — the
+ *  same shape as {@link strandStampZeroMint}, at a size that crosses the
+ *  refusal's count cap. */
+const strandManyStampZeroMints = async (n: number) => {
+  const gen = `WITH RECURSIVE seq(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM seq WHERE i < ${n})`
+  await sharedDb.db.execute(
+    `${gen} INSERT INTO blocks (id, workspace_id, parent_id, order_key, content,
+       properties_json, created_at, updated_at, user_updated_at, created_by, updated_by, deleted)
+     SELECT 'bulk' || i, ?, NULL, 'a0', 'v1', '{}', 0, 0, 0, 'u', 'u', 0 FROM seq`, [WS])
+  await sharedDb.db.execute(
+    `${gen} INSERT INTO blocks_synced (id, workspace_id, parent_id, order_key, content,
+       properties_json, created_at, updated_at, user_updated_at, created_by, updated_by, deleted)
+     SELECT 'bulk' || i, ?, NULL, 'a0', 'v1', '{}', 500, 900, 900, 'u', 'u', 0 FROM seq`, [WS])
+  await sharedDb.db.execute('DELETE FROM blocks_synced_changes')
+}
+
 describe('Repo.rematerializeWorkspace', () => {
   it('closes a durable gap that nothing else on the device can reach', async () => {
     await strandStampZeroMint('stuck')
@@ -120,6 +137,27 @@ describe('Repo.rematerializeWorkspace', () => {
     await expect(repo.rematerializeWorkspace(WS)).rejects.toThrow(/no sync observer/)
     expect((await repo.workspaceViewGap(WS))?.transient).toBe(false)
   })
+
+  it('sizes the gap exactly, not clamped to the refusal\'s cap', async () => {
+    // The refusal's count stops at WORKSPACE_UNAPPLIED_COUNT_CAP because it
+    // spends the number on one sentence, where "some" and "all of them" are the
+    // only distinction that pays. A before/after pair is a SUBTRACTION, and the
+    // same cap there answers the one question the pair exists for wrongly: two
+    // ends both past the cap read as a delta of zero however many flags moved,
+    // and a clamped `before` reads as SMALLER than this pass's own uncapped
+    // `resolved` — a state that cannot exist.
+    const n = WORKSPACE_UNAPPLIED_COUNT_CAP + 5
+    await strandManyStampZeroMints(n)
+    const repo = makeRepo()
+
+    const result = await repo.rematerializeWorkspace(WS)
+    expect(result.unappliedBefore).toBe(n)
+    expect(result.unappliedAfter).toBe(0)
+    expect(result.resolved).toBe(n)
+    // The invariant the cap violated, stated so a future capping cannot pass:
+    // a pass cannot move more flags than there were flags.
+    expect(result.resolved).toBeLessThanOrEqual(result.unappliedBefore)
+  }, 20_000)   // ~2k bulk-inserted rows through a real drain; measured ~1.5s solo
 
   it('re-judges every staged row under the wider scope', async () => {
     // The escape hatch for a flag that is itself wrong: `unapplied` trusts the

@@ -347,6 +347,15 @@ export const WORKSPACE_UNAPPLIED_IDS_SQL = `
   ${WORKSPACE_UNAPPLIED_WHERE}
    ORDER BY s.id`
 
+/** The same rows again, counted to the end rather than to the cap.
+ *
+ *  For a before/after PAIR, which is a subtraction — see
+ *  `Repo.workspaceUnappliedExactCount` for why the capped sibling gives the
+ *  wrong answer there. Bind `[workspaceId]`. */
+export const WORKSPACE_UNAPPLIED_EXACT_COUNT_SQL = `
+  SELECT COUNT(*) AS behind FROM blocks_synced s
+  ${WORKSPACE_UNAPPLIED_WHERE}`
+
 /** Count cap for {@link WORKSPACE_UNAPPLIED_SQL}. The number only shapes the
  *  message an operator reads — "some" and "all of them" are different
  *  diagnoses — so it stops where that distinction stops paying. */

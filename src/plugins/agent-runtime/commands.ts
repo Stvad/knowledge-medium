@@ -522,11 +522,18 @@ const rematerializeRuntimeWorkspace = async (
   // fall back to the active workspace, and for the same reason — the option is
   // an assertion about which graph is being touched.
   const workspaceId = assertedWorkspaceOverride(input.workspaceId) ?? resolveWorkspaceId(repo)
-  // The pass rebuilds THIS client's view of the workspace it has open. Its
-  // materializability answer, its key state and its block cache are all the
-  // active workspace's, so pointing it elsewhere would rewrite rows for a
-  // workspace nobody opened — the one thing workspace-scoped maintenance is not
-  // allowed to do.
+  // The pass rebuilds THIS client's view of the workspace it has open. Its key
+  // state and its block cache are the active workspace's, so pointing it
+  // elsewhere would rewrite rows for a workspace nobody opened — the one thing
+  // workspace-scoped maintenance is not allowed to do.
+  //
+  // Checked ONCE, unlike `assertBackfillMayWrite`, which re-takes the same
+  // question inside every writing transaction of a pass of the same duration.
+  // Accepted, not overlooked: a user who navigates away mid-pass leaves it
+  // writing `blocks` for a workspace they no longer have open, but
+  // `getMaterializability` is keyed on each ROW's workspace_id rather than the
+  // active one, so the write is still correct — the cost is wasted work and
+  // cache growth, and the WK-paste path has had the same shape all along.
   if (workspaceId !== repo.activeWorkspaceId) {
     throw new Error(
       `rematerialize-workspace: --workspace ${workspaceId} is not the active workspace ` +

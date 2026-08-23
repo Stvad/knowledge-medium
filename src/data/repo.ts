@@ -98,6 +98,7 @@ import {
   STAGED_SCAN_LIMIT,
   STAGED_VIEW_GAP_SQL,
   WORKSPACE_UNAPPLIED_COUNT_CAP,
+  WORKSPACE_UNAPPLIED_EXACT_COUNT_SQL,
   WORKSPACE_UNAPPLIED_SQL,
 } from '@/data/internals/syncObserver/reconcile'
 import type { MaterializeDeps } from '@/data/internals/syncObserver/materialize'
@@ -485,10 +486,9 @@ export interface ViewGap {
 
 /** What {@link Repo.rematerializeWorkspace} did, for the operator who ran it.
  *
- *  `unappliedBefore` / `unappliedAfter` are the number the durable refusal
- *  reports, on either side of the pass — the one thing that answers "did that
- *  help?". They carry {@link WORKSPACE_UNAPPLIED_COUNT_CAP}, so a value at the
- *  cap is a floor rather than a total.
+ *  `unappliedBefore` / `unappliedAfter` are the size of the durable gap on
+ *  either side of the pass — the one thing that answers "did that help?", which
+ *  is why they are EXACT counts and not the capped one the refusal reports.
  *
  *  A pass that leaves `unappliedAfter` above zero has not failed — the drain
  *  still cannot apply those rows, and the pass's own `deferred` / `quarantined`
@@ -2938,29 +2938,42 @@ export class Repo {
   /**
    * Re-run the drain over a workspace's staged rows, because an operator asked.
    *
-   * The remedy for {@link workspaceViewGap}'s durable arm. Those rows reached
-   * the drain, were not applied, and had their queue entry consumed — so
-   * nothing re-delivers them, and every one-way pass on the workspace refuses
-   * for as long as they sit there. The queue-less rematerialization has always
-   * been able to clear them; until now it was reachable only from a workspace-
-   * key paste, an encryption-mode confirmation, or a once-per-(workspace,
-   * client) rescan that has already run on the device that needs it.
+   * The remedy for {@link workspaceViewGap}'s durable arm: rows that reached
+   * the drain, were not applied, and had their queue entry consumed, so nothing
+   * re-delivers them and every one-way pass on the workspace refuses for as
+   * long as they sit there.
    *
    * A DERIVATION pass, not a data migration: it rebuilds this device's `blocks`
    * from rows this device already downloaded, writes with `tx_context.source`
    * NULL (so the upload triggers skip it), and touches no synced state. It
-   * therefore needs no per-graph claim, does not clear the undo stack, and is
-   * safe to run on any device, any number of times.
+   * therefore needs no per-graph claim and does not clear the undo stack.
    *
    * Nothing here CLEARS a flag on its own reasoning. Every flag this drops is
    * dropped by the drain, in the transaction that applied the row — so the
    * proof that `blocks` holds the staged version is that it was just written
-   * there. The gap predicate, its seed, and `decideStagingRow` are untouched.
+   * there.
    *
    * The default `unapplied` scope re-delivers exactly the rows the refusal
-   * counts. `all` re-judges every staged row of the workspace instead — the
-   * gate-resolution pass — which is what to reach for when the flag itself is
-   * suspect, at the cost of a full pass over the workspace.
+   * counts. `all` re-judges every staged row instead, which is what to reach for
+   * when the FLAG is suspect rather than the rows it names — at the cost of a
+   * full pass, and reporting its repairs in `applied` rather than `resolved`
+   * (a row the flag is wrong about is already clear, so no flag moves).
+   *
+   * THREE things it is not, all of which its callers have claimed at some point:
+   *
+   * - not free of a transient revert. `decideStagingRow` documents that rescan
+   *   paths can write an older staged row over a newer LOCAL edit that is acked
+   *   but not yet echoed back; the echo re-asserts it, so the window is short
+   *   and self-healing, but a tab closed inside it reloads the reverted content.
+   *   Prefer running this with sync settled. Deliberately NOT guarded here: the
+   *   window is between the ack and the echo, which `syncViewGap` cannot see, so
+   *   a check would narrow it while reading as though it closed it.
+   * - not incapable of making things worse. A workspace that answers `defer`
+   *   re-flags rows an earlier drain cleared, so the gap can come back LARGER.
+   *   That is what `reflagged` is for.
+   * - not all-or-nothing. Windows commit independently, so a pass that REJECTS
+   *   still leaves its committed windows in place — but it rejects out of here,
+   *   so the caller gets the error and none of the counts. Re-running resumes.
    */
   async rematerializeWorkspace(
     workspaceId: string,
@@ -2977,17 +2990,17 @@ export class Repo {
       )
     }
     const scope = options.scope ?? 'unapplied'
-    const unappliedBefore = await this.workspaceUnappliedCount(workspaceId)
+    const unappliedBefore = await this.workspaceUnappliedExactCount(workspaceId)
     const pass = await this.syncObserver.drainWorkspace(workspaceId, scope)
     return {
+      ...pass,
       workspaceId,
       unappliedBefore,
-      unappliedAfter: await this.workspaceUnappliedCount(workspaceId),
+      unappliedAfter: await this.workspaceUnappliedExactCount(workspaceId),
       // The predicate the refusal takes, re-asked. Null is the operator's
       // answer that the pass is now unblocked; anything else is what they would
       // have been told on the next attempt anyway, one round earlier.
       remainingGap: await this.workspaceViewGap(workspaceId),
-      ...pass,
     }
   }
 
@@ -2997,6 +3010,25 @@ export class Repo {
   private async workspaceUnappliedCount(workspaceId: string): Promise<number> {
     const {behind} = await this.db.get<{behind: number}>(
       WORKSPACE_UNAPPLIED_SQL, [workspaceId, WORKSPACE_UNAPPLIED_COUNT_CAP],
+    )
+    return behind
+  }
+
+  /** The same population, counted to the end.
+   *
+   *  The capped sibling is right for the refusal, which spends the number on one
+   *  sentence — "some" and "all of them" are different diagnoses and nothing
+   *  past that pays. It is WRONG for a before/after pair, which is a subtraction:
+   *  clamped, two ends that both sit past the cap read as a delta of zero, and
+   *  the one question the pair exists to answer gets the opposite answer. (A
+   *  clamped `before` also reads as smaller than this pass's own uncapped
+   *  `resolved`, which is not a state that can exist.)
+   *
+   *  Affordable because this runs twice per deliberate operator action, never in
+   *  the per-transaction gate. */
+  private async workspaceUnappliedExactCount(workspaceId: string): Promise<number> {
+    const {behind} = await this.db.get<{behind: number}>(
+      WORKSPACE_UNAPPLIED_EXACT_COUNT_SQL, [workspaceId],
     )
     return behind
   }

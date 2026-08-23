@@ -311,6 +311,24 @@ describe('blocksSyncedObserver — the queue-blind rescan is observable', () => 
     expect(await unapplied('ws')).toEqual(['doomed'])
   })
 
+  it('does not leave the workspace flagged as rematerializing when a window throws', async () => {
+    // The count is decremented off the promise precisely so that it settles on
+    // every exit, not just the clean one — and a THROWING window is the exit
+    // that matters, because unlike dispose it leaves the observer live and
+    // reachable. Leaked, `workspaceViewGap` answers `transient: true` for the
+    // rest of the session and the properties-migration runner, which re-arms on
+    // exactly that, retries forever against a refusal nothing will clear.
+    await put(data({ id: 'r1', workspaceId: 'ws', content: 'c' }))
+    await env.db.execute('DELETE FROM blocks_synced_changes')
+    const { observer } = start({
+      getMaterializability: () => { throw new Error('boom') },
+      onError: () => {},
+    })
+
+    await expect(observer.drainWorkspace('ws', 'all')).rejects.toThrow('boom')
+    expect(observer.isRematerializingWorkspace('ws')).toBe(false)
+  })
+
   it('rejects a rescan the observer was disposed before it ever started', async () => {
     // Same rule one step earlier: a rescan still waiting its turn on the chain
     // when the tab closes has materialized nothing, and its awaiter must not be
@@ -427,6 +445,28 @@ describe('blocksSyncedObserver — operator rematerialization (km-boj1)', () => 
     expect(observer.isRematerializingWorkspace('ws')).toBe(true)
     await pass
     expect(observer.isRematerializingWorkspace('ws')).toBe(false)
+  })
+
+  it('reports the gap it made BIGGER', async () => {
+    // A rematerialization is not monotonic. A workspace that answers `defer`
+    // re-flags rows an earlier drain had legitimately cleared — here a staged
+    // tombstone that was invisible on both sides until its local row came back —
+    // so the operator's count can go UP. Without this number the only honest
+    // reading of that is "something happened", which is where they started.
+    await put(data({
+      id: 'back', workspaceId: 'ws', content: 'gone', deleted: true, updatedAt: 9,
+    }))
+    const { observer } = start({ getMaterializability: constMat('defer') })
+    await observer.flush()
+    expect(await unapplied('ws')).toEqual([])
+
+    await seedLocalBlock(data({ id: 'back', workspaceId: 'ws', content: 'restored' }))
+
+    expect(await observer.drainWorkspace('ws', 'unapplied'))
+      .toMatchObject({ scanned: 0, reflagged: 0 })   // the flag says nothing to do…
+    expect(await observer.drainWorkspace('ws', 'all'))
+      .toMatchObject({ scanned: 1, resolved: 0, reflagged: 1 })  // …and the wide scope disagrees
+    expect(await unapplied('ws')).toEqual(['back'])
   })
 
   it('reports why the rows it could not apply are still flagged', async () => {

@@ -1014,12 +1014,18 @@ cli
     }, {timeoutMs: Math.max(1, Number(options.wait) || rematerializeDefaultWaitSeconds) * 1000})
       .catch((cause: unknown) => {
         // Giving up WAITING is not the pass giving up: it keeps running in the
-        // app, and because it is idempotent and resumable, re-running is the
-        // whole recovery — unlike `run-backfill`, nothing it collected is lost.
+        // app, and its committed windows stay committed. What a re-run then
+        // does depends on the scope, and only one of the two RESUMES — which is
+        // why this does not repeat `run-backfill`'s "safe to re-run" line
+        // verbatim. There is also no single-flight: a second invocation queues
+        // behind the first rather than joining it.
         if (!(cause instanceof Error) || !/timed out/i.test(cause.message)) throw cause
         throw new Error(
           `${cause.message}\nThe pass is still running in the app — this only stopped ` +
-          'waiting for it. Re-running is safe and resumes from whatever is left.',
+          'waiting for it, and the windows it has already committed are kept. Re-running ' +
+          'is safe: at --scope unapplied it resumes (the rows it finished have dropped out ' +
+          'of the set), at --scope all it starts over. Either way a re-run queues BEHIND ' +
+          'the pass still running, so prefer waiting for that one to finish.',
         )
       })
     process.stdout.write(`${JSON.stringify(value, null, 2)}\n`)
