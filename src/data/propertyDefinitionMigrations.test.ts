@@ -765,6 +765,25 @@ describe('changes observed only across a workspace switch (#780)', () => {
     expect(await baselineNames()).toEqual({[FIELD_ID]: 'status'})
   }, 20_000)
 
+  it('leaves value-child content untouched — a rename re-encodes nothing', async () => {
+    await seedWorkspace('children')
+    const repo = setup()
+    const {valueRowId} = await seedProperty(repo, 'p', 'done')
+    // The shape a hand-typed or synced value has: not what this codec would
+    // canonicalize to. For a REF property the same rewrite strips an alias
+    // label (`[My Label](((id)))` renders back as a bare `((id))`), and these
+    // writes sync and are off the undo stack.
+    await sharedDb.db.execute('UPDATE blocks SET content = ? WHERE id = ?', ['  done  ', valueRowId])
+    await repo.awaitPropertyDefinitionBaselines()
+
+    await changeWhileInactive(repo, statusRenamed)
+
+    await vi.waitFor(async () => {
+      expect(await cell('p')).toEqual({state: '  done  '})
+    }, {timeout: 5000})
+    expect(await rowContent(valueRowId)).toBe('  done  ')
+  }, 20_000)
+
   it('with NO recorded baseline, records one and migrates nothing', async () => {
     await seedWorkspace('children')
     const repo = setup()

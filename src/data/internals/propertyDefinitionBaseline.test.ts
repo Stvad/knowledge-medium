@@ -94,6 +94,30 @@ describe('observePropertyDefinitions', () => {
     expect(storedFields(state.value)).toEqual({f1: {name: 'a'}, f2: {name: 'b'}})
   })
 
+  it('learns a codec it never had, so a later codec change is still detectable', async () => {
+    // A definition first seen while its preset plugin was loading is recorded
+    // metadata-only. The diff needs BOTH sides to carry a codecType, so an
+    // entry that could never acquire one would be blind to codec changes for
+    // the life of the baseline.
+    const {db, state} = fakeDb()
+    await observePropertyDefinitions(db, WS, facts({f: {name: 'a'}}))
+
+    await observePropertyDefinitions(db, WS, facts({f: {name: 'a', codecType: 'string'}}))
+
+    expect(storedFields(state.value)).toEqual({f: {name: 'a', codecType: 'string'}})
+  })
+
+  it('refuses to learn a codec once the name has drifted', async () => {
+    // A drifted name means the observation describes state nothing has applied;
+    // taking its codec would record half of an unapplied change.
+    const {db, state} = fakeDb()
+    await observePropertyDefinitions(db, WS, facts({f: {name: 'a'}}))
+
+    await observePropertyDefinitions(db, WS, facts({f: {name: 'b', codecType: 'string'}}))
+
+    expect(storedFields(state.value)).toEqual({f: {name: 'a'}})
+  })
+
   it('replaces an unparseable blob rather than reading it', async () => {
     const {db, state} = fakeDb('not json at all')
 

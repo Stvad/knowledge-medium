@@ -50,10 +50,10 @@ import {
   SELECT_PROPERTY_DEFINITION_BASELINE_SQL,
 } from './clientSchema'
 
-/** Stored shape: `{fields: {[fieldId]: {name, codecType?}}}`. Unparseable or
- *  unrecognized reads as absent and is replaced — the blob is derived,
- *  device-local and rebuilt by the next registry build, so the worst a bad read
- *  costs is one redundant no-op migration pass. */
+/** Stored shape: `{fields: {[fieldId]: {name, codecType?}}}`. Unparseable reads
+ *  as absent and is replaced: with no before-state there is nothing to diff, so
+ *  a corrupt blob costs one absorbed drift — the same boundary, and the same
+ *  reasoning, as a missing baseline. */
 const parseBaseline = (raw: string | null): Map<string, PropertyDefinitionFacts> | null => {
   if (raw === null) return null
   let parsed: unknown
@@ -145,7 +145,22 @@ export const observePropertyDefinitions = (
 ): Promise<PropertyDefinitionFactsByFieldId | null> =>
   updateBaseline(db, workspaceId, next => {
     for (const [fieldId, observed] of facts) {
-      if (!next.has(fieldId)) next.set(fieldId, observed)
+      const known = next.get(fieldId)
+      if (known === undefined) {
+        next.set(fieldId, observed)
+        continue
+      }
+      // One exception to add-only: LEARN a codec we never had, while the name
+      // still matches. A definition first seen while its preset plugin was
+      // loading is recorded metadata-only, and `changedPropertyDefinitionFacts`
+      // needs BOTH sides to carry a codecType — so without this that fieldId's
+      // codec changes would be undetectable for the life of the baseline. The
+      // name guard is load-bearing: a drifted name means this observation
+      // describes state we have NOT applied, and learning its codec would
+      // record half of an unapplied change.
+      if (known.codecType === undefined
+        && observed.codecType !== undefined
+        && known.name === observed.name) next.set(fieldId, observed)
     }
   })
 
