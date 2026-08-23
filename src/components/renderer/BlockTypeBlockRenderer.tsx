@@ -185,6 +185,11 @@ export const BlockTypeContentRenderer: BlockRenderer = ({block}: BlockRendererPr
   }
 
   const writeLabel = useCallback(async (next: string) => {
+    // Nothing to commit. The writer's own no-op needs the label AND the
+    // content to match, so without this an untouched blur on a type whose
+    // content diverges from its label — which imports and raw-created types
+    // keep — would mirror the label over that content and reconcile aliases.
+    if (next === label) return
     const currentContent = data?.content ?? ''
     try {
       await writeBlockTypeLabel(block, label, currentContent, next)
