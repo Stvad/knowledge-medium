@@ -222,7 +222,7 @@ describe('round trip: propertyChildContentToEncodedValue(propertyValueToChildCon
   })
 })
 
-describe('null-sentinel escaping (needsEscape, propertyChildren.ts:126-149)', () => {
+describe('null-sentinel escaping (needsEscape)', () => {
   it('optionalString: a string value that IS the sentinel, or unwraps to it, is JSON-escaped and never mistaken for absence', () => {
     for (const v of ['null', '"null"', '""null""', ' null ']) {
       const content = propertyValueToChildContent(optionalStringSchema, v)
