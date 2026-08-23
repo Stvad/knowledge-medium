@@ -44,7 +44,7 @@
  */
 import { describe, it, expect } from 'vitest'
 import fc from 'fast-check'
-import { fuzzParams } from '@/test/fuzz'
+import { fuzzParams, utf16UnitArb } from '@/test/fuzz'
 import { ChangeScope, CodecError, codecs, defineProperty } from '@/data/api'
 import { propertyChildContentToEncodedValue, propertyValueToChildContent } from './propertyChildren'
 import { parseExactReferenceBlockContent } from './referenceBlock'
@@ -92,17 +92,9 @@ const ID_ALPHABET = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456
 const idArb = fc.array(fc.constantFrom(...ID_ALPHABET), {minLength: 1, maxLength: 24})
   .map(chars => chars.join(''))
 
-/** A single arbitrary UTF-16 CODE UNIT, so a string built from it contains
- *  unpaired surrogates at random positions — one of the two shapes the content
- *  column cannot hold as itself (#688).
- *
- *  Not `fc.string({unit: 'binary'})`, which is what this suite used to claim
- *  covered them: that unit emits whole code points, so surrogates only ever
- *  appear correctly PAIRED. Measured on fast-check 4.9.0 — 0 lone surrogates in
- *  20,000 samples, versus ~14% of samples here. */
-const utf16UnitArb = fc.integer({min: 0, max: 0xffff}).map(c => String.fromCharCode(c))
-
-/** The value zoo: random UTF-16 (ill-formed included), ordinary text, and
+/** The value zoo: random UTF-16 built from single code units, so it carries the
+ *  unpaired surrogates that are one of the two shapes the content column cannot
+ *  hold as itself (#688); ordinary text; and
  *  hand-written grammar-shaped seeds — the span forms are far too structured
  *  for random generation to reach. */
 const textArb = fc.oneof(

@@ -459,6 +459,12 @@ a test that could not fail.
   exactly where normalization and surrogate edges bite (issue #458).
   Before trusting a green property, confirm its generator actually
   reaches the domain its docblock names.
+- The same defect, one layer in (issue #760): `fc.string({unit:
+  'binary'})` — the fix for the above — emits whole code POINTS, so its
+  surrogates are always correctly PAIRED. Three suites claimed "incl.
+  unpaired surrogates" over it and generated none (measured: 0 lone
+  surrogates in 20,000 samples). Fixing the obvious version of a
+  coverage claim is not the same as checking it.
 - A flake filed as a product ordering bug (#455) was neither: the
   prescribed fix was already implemented months earlier, and the real
   mechanism was `awaitSeedMaterialization()` not meaning "done" —
@@ -501,3 +507,13 @@ a test that could not fail.
    add `afterAll(guard.barrier)`. Symptom if you skip this:
    deep-tier-only, order-dependent flakes in whatever runs after the
    property (phantom rows, duplicate-id errors).
+7. Choose the string `unit` deliberately — the default and the usual
+   correction are both narrower than "any string". `fc.string()` is
+   `unit: 'grapheme-ascii'` (printable ASCII); `{unit: 'binary'}` is the
+   full code-point range but never a LONE surrogate. For ill-formed
+   UTF-16, draw from `utf16UnitArb` in `@/test/fuzz` (single code units),
+   alongside `'binary'` when astral coverage matters too. A suite may
+   legitimately want well-formed input only — `aead`/`cryptoCodecs`
+   exclude lone surrogates because `TextEncoder` folds them to U+FFFD,
+   which would fail their oracles for a reason unrelated to the property
+   — but say so, rather than leaving a claim the generator doesn't meet.
