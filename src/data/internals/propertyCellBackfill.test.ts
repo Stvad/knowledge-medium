@@ -132,10 +132,6 @@ const makeCtx = (): WorkspaceBackfillContext => {
       const resolution = resolver.resolve(name)
       return resolution.status === 'resolved' ? resolution.schema : undefined
     },
-    resolveFieldSchema: fieldId => {
-      const resolution = resolver.resolveField(fieldId)
-      return resolution.status === 'resolved' ? resolution.schema : undefined
-    },
   }
 }
 

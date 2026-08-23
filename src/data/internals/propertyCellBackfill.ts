@@ -179,6 +179,14 @@ export interface PropertyCellBackfillProgress {
   failureCount: number
 }
 
+/** A run's counters at zero. Two callers build one — the pass, and the
+ *  `WorkspaceBackfill` wrapper that parks the last run for the operator surface
+ *  — and a field added to the type must reach both. */
+const emptyProgress = (): PropertyCellBackfillProgress => ({
+  blocksScanned: 0, blocksMaterialized: 0, valuesMaterialized: 0,
+  valuesMaterializedTotal: 0, sweeps: 0, failures: [], failureCount: 0,
+})
+
 /** Cap on retained failure detail. `failureCount` stays exact; this only
  *  bounds what a pathological graph can accumulate in memory and hand back. */
 const MAX_REPORTED_FAILURES = 50
@@ -245,8 +253,7 @@ const namesPendingMaterialization = async (
     // than carried: convergence is "a sweep that materialized nothing", and
     // `materializeRow` counts NAMES HANDED to the materializer, so one such key
     // on one block kept every sweep looking like work and the run ended in a
-    // give-up — on exactly the graphs `audit-properties` exists to find, and
-    // after the flip had landed.
+    // give-up — on exactly the graphs `audit-properties` exists to find.
     if (fieldId === undefined) return false
     return !(materialized.has(fieldId) || reaped.has(fieldId))
   })
@@ -396,10 +403,7 @@ export const runPropertyCellBackfill = async (
   ctx: WorkspaceBackfillContext,
   onProgress?: (progress: PropertyCellBackfillProgress) => void | Promise<void>,
 ): Promise<PropertyCellBackfillProgress> => {
-  const progress: PropertyCellBackfillProgress = {
-    blocksScanned: 0, blocksMaterialized: 0, valuesMaterialized: 0,
-    valuesMaterializedTotal: 0, sweeps: 0, failures: [], failureCount: 0,
-  }
+  const progress = emptyProgress()
 
   for (;;) {
     progress.sweeps += 1
@@ -459,10 +463,7 @@ export const propertyCellBackfill: WorkspaceBackfill = {
     // floor — and the CLI has no progress listener, so this is its only
     // channel. `progress` is the same object throughout, so it carries the
     // last sweep's counts either way.
-    const progress: PropertyCellBackfillProgress = {
-      blocksScanned: 0, blocksMaterialized: 0, valuesMaterialized: 0,
-      valuesMaterializedTotal: 0, sweeps: 0, failures: [], failureCount: 0,
-    }
+    const progress = emptyProgress()
     try {
       Object.assign(progress, await runPropertyCellBackfill(ctx, p => {
         Object.assign(progress, p)
