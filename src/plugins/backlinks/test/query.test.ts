@@ -439,6 +439,36 @@ describe('backlinksDataExtension query', () => {
       )]).toEqual(['V'])
     })
 
+    it('leaves a source alone under a ROOT marked row, and classifies the same shape one level down', async () => {
+      // The root half of §9 recognition: a workspace-root block is user
+      // content whatever its content says, so `::((D))` typed at root is an
+      // ordinary reference and its children are ordinary children. Every
+      // other recognition condition holds for `R` — marked, resolving to a
+      // real definition — so position is the only thing keeping its child's
+      // backlink visible, and the second half proves that by moving the
+      // identical shape under an owner.
+      await seedFlipped()
+      await createIn({id: 'D', content: 'status'})
+      await sharedDb.db.execute(
+        `INSERT OR IGNORE INTO block_types (block_id, workspace_id, type) VALUES ('D', ?, 'property-schema')`,
+        [FLIP_WS],
+      )
+      await createIn({id: 'Target'})
+      await createIn({id: 'R', content: '::((D))', referenceTargetId: 'D'})
+      await createIn({
+        id: 'under-root', parentId: 'R', references: [{id: 'Target', alias: 'T'}],
+      })
+      await createIn({id: 'O'})
+      await createIn({id: 'F', parentId: 'O', content: '::((D))', referenceTargetId: 'D'})
+      await createIn({
+        id: 'under-owner', parentId: 'F', references: [{id: 'Target', alias: 'T'}],
+      })
+
+      expect([...await propertyMachinerySourceIds(
+        env.h.db, ['under-root', 'under-owner'], ['[]', ''],
+      )]).toEqual(['under-owner'])
+    })
+
     it('converges (does not hang or error) when a source sits under a cyclic, non-matching ancestor chain (issue #404 item 8b)', async () => {
       await seedFlipped()
       // A 2-cycle (issue #183 shape) with no field row anywhere on it —
