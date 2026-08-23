@@ -100,7 +100,8 @@
 import { describe, expect, it } from 'vitest'
 import fc from 'fast-check'
 import { matchKeybindingPress, parseKeybinding } from 'tinykeys'
-import { fuzzParams, fuzzTestTimeout, utf16UnitArb } from '@/test/fuzz'
+import { fuzzParams, fuzzTestTimeout } from '@/test/fuzz'
+import { utf16UnitArb } from '@/test/arbitraries/utf16'
 import { withRecoveredLetterKey } from '../utils.ts'
 
 const ASCII_A = 65

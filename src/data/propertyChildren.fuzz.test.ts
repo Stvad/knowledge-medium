@@ -44,7 +44,8 @@
  */
 import { describe, it, expect } from 'vitest'
 import fc from 'fast-check'
-import { fuzzParams, utf16UnitArb } from '@/test/fuzz'
+import { fuzzParams } from '@/test/fuzz'
+import { utf16UnitArb } from '@/test/arbitraries/utf16'
 import { ChangeScope, CodecError, codecs, defineProperty } from '@/data/api'
 import { propertyChildContentToEncodedValue, propertyValueToChildContent } from './propertyChildren'
 import { parseExactReferenceBlockContent } from './referenceBlock'
@@ -94,9 +95,9 @@ const idArb = fc.array(fc.constantFrom(...ID_ALPHABET), {minLength: 1, maxLength
 
 /** The value zoo: random UTF-16 built from single code units, so it carries the
  *  unpaired surrogates that are one of the two shapes the content column cannot
- *  hold as itself (#688); ordinary text; and
- *  hand-written grammar-shaped seeds — the span forms are far too structured
- *  for random generation to reach. */
+ *  hold as itself (#688); ordinary text; and hand-written grammar-shaped
+ *  seeds — the span forms are far too structured for random generation to
+ *  reach. */
 const textArb = fc.oneof(
   fc.string({unit: utf16UnitArb, maxLength: 12}),
   fc.string(),

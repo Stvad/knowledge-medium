@@ -165,17 +165,3 @@ export const statefulFuzzGuard = (): {
   }
   return {barrier, run}
 }
-
-/**
- * A single arbitrary UTF-16 CODE UNIT, so a string built from it carries
- * unpaired surrogates at random positions.
- *
- * Reach for this, not `fc.string({unit: 'binary'})`, whenever a suite means
- * ill-formed UTF-16: `'binary'` emits whole code POINTS, so the surrogates it
- * produces are always correctly PAIRED. Measured on fast-check 4.9.0 — 0 lone
- * surrogates in 20,000 `'binary'` samples, versus ~6% of samples here at the
- * short lengths these suites use. `'binary'` is still the right unit for astral
- * coverage; the two are complementary, and several suites draw from both.
- */
-export const utf16UnitArb: fc.Arbitrary<string> =
-  fc.integer({min: 0, max: 0xffff}).map(c => String.fromCharCode(c))

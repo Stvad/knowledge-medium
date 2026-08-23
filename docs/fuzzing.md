@@ -511,7 +511,8 @@ a test that could not fail.
    correction are both narrower than "any string". `fc.string()` is
    `unit: 'grapheme-ascii'` (printable ASCII); `{unit: 'binary'}` is the
    full code-point range but never a LONE surrogate. For ill-formed
-   UTF-16, draw from `utf16UnitArb` in `@/test/fuzz` (single code units),
+   UTF-16, draw from `utf16UnitArb` in `@/test/arbitraries/utf16` (single code
+   units),
    alongside `'binary'` when astral coverage matters too. A suite may
    legitimately want well-formed input only — `aead`/`cryptoCodecs`
    exclude lone surrogates because `TextEncoder` folds them to U+FFFD,

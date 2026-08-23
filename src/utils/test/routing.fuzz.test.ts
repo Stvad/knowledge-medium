@@ -10,7 +10,8 @@
  */
 import { describe, it, expect } from 'vitest'
 import fc from 'fast-check'
-import { fuzzParams, utf16UnitArb } from '@/test/fuzz'
+import { fuzzParams } from '@/test/fuzz'
+import { utf16UnitArb } from '@/test/arbitraries/utf16'
 import {
   parseLayout,
   parseAppHash,
