@@ -1,9 +1,8 @@
 import { describe, expect, it } from 'vitest'
-import { truncate, truncateMiddle } from '@/utils/string.js'
+import { hasLoneSurrogate, truncate, truncateMiddle } from '@/utils/string.js'
 
 /** Matches a surrogate code unit standing on its own — the artefact of
  *  cutting a string mid-character, which renders as `�`. */
-const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/
 
 describe('truncation is character-safe', () => {
   // Each of these is a surrogate PAIR in UTF-16, so any cut made by
@@ -15,14 +14,14 @@ describe('truncation is character-safe', () => {
   it('truncate does not split a character at the cut', () => {
     const result = truncate(emoji, 24)
 
-    expect(result).not.toMatch(LONE_SURROGATE)
+    expect(hasLoneSurrogate(result)).toBe(false)
     expect(result.endsWith('…')).toBe(true)
   })
 
   it('truncateMiddle does not split a character at EITHER cut', () => {
     const result = truncateMiddle(emoji, 24)
 
-    expect(result).not.toMatch(LONE_SURROGATE)
+    expect(hasLoneSurrogate(result)).toBe(false)
     expect(result).toContain('…')
   })
 
