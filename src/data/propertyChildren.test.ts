@@ -10,6 +10,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { ChangeScope, codecs, defineProperty, propertyValue, type BlockData } from '@/data/api'
 import { keyAtStart } from './orderKey'
 import { propertyFieldContent } from './propertyChildren'
+import { isGrammarShapedLabel } from './referenceBlock'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { projectedPropertyDefinitionsFacet } from '@/data/facets'
@@ -26,6 +27,9 @@ import { BLOCK_TYPE_TYPE } from './blockTypes'
 
 const WS = 'ws-prop-children'
 const STATUS_FIELD_ID = 'field-status-children'
+/** A synthetic block id for values that LOOK like references. All-2s, so it
+ *  is plainly not a real graph id — it only has to be UUID-shaped. */
+const SAMPLE_UUID = '22222222-2222-4222-8222-222222222222'
 
 const statusSchema = defineProperty('status', {
   codec: codecs.string,
@@ -250,6 +254,126 @@ describe('flipped workspace (properties_migration = children)', () => {
 
     await repo.tx(tx => tx.delete(field!.id), {scope: ChangeScope.BlockDefault})
     expect(await cellValue('p')).toBeUndefined()
+  })
+})
+
+/** #688: a string value the content column cannot hold AS ITSELF. Both shapes
+ *  survive the cell era (`properties_json` is JSON) and were destroyed by the
+ *  flip — the reason this is a must-fix BEFORE the first workspace flips.
+ *  End-to-end because the loss is not in the codec pair: encode and decode
+ *  agreed, and the value disappeared between them, in the derive processor and
+ *  the projection's value-set filter. */
+describe('flipped workspace: string values that verbatim content would destroy (#688)', () => {
+  const valueRows = async (parentId: string): Promise<Array<{
+    id: string
+    content: string
+    is_field_form: number | null
+    reference_target_id: string | null
+    deleted: number
+  }>> => {
+    const [field] = await liveFieldRows(parentId)
+    return sharedDb.db.getAll(
+      `SELECT id, content, is_field_form, reference_target_id, deleted
+         FROM blocks WHERE parent_id = ?`,
+      [field!.id],
+    )
+  }
+
+  // The headline shape: content that IS the §7 marked field form. The derive
+  // stamps `is_field_form`, `isFieldValueChild` drops the row from the value
+  // set, and the projection unsets the owner's key — silently.
+  it('a `::((id))` value keeps the property, and its row stays a VALUE not a field row', async () => {
+    await seedWorkspace('children')
+    const repo = setup()
+    await createBlock(repo, 'p')
+    const value = `::((${SAMPLE_UUID}))`
+
+    await repo.tx(tx => tx.setProperty('p', statusSchema, value),
+      {scope: ChangeScope.BlockDefault})
+
+    expect(await cellValue('p')).toBe(value)
+    const values = (await valueRows('p')).filter(v => v.deleted === 0)
+    expect(values).toHaveLength(1)
+    // Escaped, so the derive reads it as prose: the bit is what the value-set
+    // filter keys on, and the whole loss followed from it being stamped.
+    expect(values[0]!.is_field_form).not.toBe(1)
+    expect(values[0]!.content).toBe(JSON.stringify(value))
+  })
+
+  // An UNMARKED span never set the bit, so it never dropped the key — it
+  // stamped `reference_target_id` instead, making a string value a live
+  // reference that reference maintenance rewrites. Escaped for that reason,
+  // and pinned so a narrowing of the predicate to just the marked form shows up.
+  it('an unmarked `((id))` value is stored as text, not as a reference', async () => {
+    await seedWorkspace('children')
+    const repo = setup()
+    await createBlock(repo, 'p')
+    const value = `((${SAMPLE_UUID}))`
+
+    await repo.tx(tx => tx.setProperty('p', statusSchema, value),
+      {scope: ChangeScope.BlockDefault})
+
+    expect(await cellValue('p')).toBe(value)
+    const values = (await valueRows('p')).filter(v => v.deleted === 0)
+    expect(values[0]!.reference_target_id ?? null).toBeNull()
+  })
+
+  // The second shape (bead comment): the cell keeps a lone surrogate, the
+  // content column returns U+FFFD, and the projection writes the mangled
+  // spelling back over the cell as authoritative.
+  it.each([
+    ['high', 'a\uD800b'],
+    ['low', 'a\uDC00b'],
+  ])('a lone %s surrogate survives instead of projecting back as U+FFFD', async (_kind, value) => {
+    await seedWorkspace('children')
+    const repo = setup()
+    await createBlock(repo, 'p')
+
+    await repo.tx(tx => tx.setProperty('p', statusSchema, value),
+      {scope: ChangeScope.BlockDefault})
+
+    expect(await cellValue('p')).toBe(value)
+    expect(await cellValue('p')).not.toContain('�')
+  })
+
+  // The scope line for the escape: it engages only for values verbatim content
+  // cannot hold. A well-formed emoji is a surrogate PAIR, and padding, control
+  // characters and newlines all round-trip the column verbatim (measured), so
+  // none of them are escaped — the tree keeps showing the value as itself.
+  it.each([
+    ['an emoji (a valid surrogate pair)', 'a😀b'],
+    ['padding', '  padded  '],
+    ['a newline', 'a\r\nb'],
+    ['a NUL byte', 'a\u0000b'],
+  ])('leaves %s verbatim — the escape is not a blanket re-encoding', async (_name, value) => {
+    await seedWorkspace('children')
+    const repo = setup()
+    await createBlock(repo, 'p')
+
+    await repo.tx(tx => tx.setProperty('p', statusSchema, value),
+      {scope: ChangeScope.BlockDefault})
+
+    expect(await cellValue('p')).toBe(value)
+    const values = (await valueRows('p')).filter(v => v.deleted === 0)
+    expect(values[0]!.content).toBe(value)
+  })
+
+  // The projection is the half that actually lost the value, so drive it on
+  // its own: an unrelated edit under the field row reprojects the cell from
+  // the value children, and must reconstruct the same string.
+  it('reprojects the escaped value unchanged when the field row is touched again', async () => {
+    await seedWorkspace('children')
+    const repo = setup()
+    await createBlock(repo, 'p')
+    const value = `::((${SAMPLE_UUID}))`
+    await repo.tx(tx => tx.setProperty('p', statusSchema, value),
+      {scope: ChangeScope.BlockDefault})
+
+    const [field] = await liveFieldRows('p')
+    await repo.tx(tx => tx.update(field!.id, {content: field!.content}),
+      {scope: ChangeScope.BlockDefault})
+
+    expect(await cellValue('p')).toBe(value)
   })
 })
 
@@ -1677,6 +1801,98 @@ describe('content <-> value codecs: "null"-collision escaping (PR #386 review fi
     const content = propertyValueToChildContent(statusSchema, 'null')
     expect(content).toBe('null')
     expect(propertyChildContentToEncodedValue(statusSchema, content)).toBe('null')
+  })
+})
+
+describe('content <-> value codecs: escaping strings content cannot hold as itself (#688)', () => {
+  const urlSchema = defineProperty<string>('link', {
+    codec: codecs.url,
+    defaultValue: '',
+    changeScope: ChangeScope.BlockDefault,
+  })
+  const UUID = SAMPLE_UUID
+
+  // Every §7 span form, marked and unmarked. The marked ones are the ones that
+  // DELETE the property; the rest make a string value a live reference. The
+  // predicate is `isGrammarShapedLabel` — the parser itself — rather than a
+  // second copy of the grammar, so a form added to it is covered here for free.
+  const GRAMMAR_SHAPED = [
+    `::((${UUID}))`,
+    '::[[Some Page]]',
+    `::[Mary](((${UUID})))`,
+    `((${UUID}))`,
+    '[[Some Page]]',
+    `[Mary](((${UUID})))`,
+    `  ::((${UUID}))  `,
+  ]
+
+  it.each(GRAMMAR_SHAPED)('escapes %j and round-trips it exactly', value => {
+    for (const schema of [statusSchema, urlSchema]) {
+      const content = propertyValueToChildContent(schema, value)
+      expect(content).toBe(JSON.stringify(value))
+      expect(propertyChildContentToEncodedValue(schema, content)).toBe(value)
+    }
+  })
+
+  it.each(GRAMMAR_SHAPED)('the escaped content of %j is not itself a reference', value => {
+    // What the escape is FOR: the stored content must read as prose, or the
+    // derive stamps the row and the value-set filter drops it again. Asked of
+    // the parser rather than by eyeballing the quotes.
+    const content = propertyValueToChildContent(statusSchema, value)
+    expect(isGrammarShapedLabel(content)).toBe(false)
+  })
+
+  it('escapes a lone surrogate, which the content column would return as U+FFFD', () => {
+    for (const value of ['a\uD800b', 'a\uDC00b', '\uD800']) {
+      const content = propertyValueToChildContent(statusSchema, value)
+      // JSON spells it `\ud800` — pure ASCII, so nothing below the content
+      // column has an ill-formed sequence to replace.
+      expect(content).toBe(JSON.stringify(value))
+      expect(/[\uD800-\uDFFF]/.test(content)).toBe(false)
+      expect(propertyChildContentToEncodedValue(statusSchema, content)).toBe(value)
+    }
+  })
+
+  it('leaves strings content CAN hold verbatim (valid pairs, NUL, controls, padding)', () => {
+    for (const value of ['a😀b', 'a\u0000b', 'a\u0001\u001Fb', '  padded  ', 'a\r\nb', '((']) {
+      expect(propertyValueToChildContent(statusSchema, value)).toBe(value)
+      expect(propertyChildContentToEncodedValue(statusSchema, value)).toBe(value)
+    }
+  })
+
+  // The recursion's job: without it the escaped content of `'"::((id))"'` and
+  // of `'::((id))'` would be the same string, so one of the two could not come
+  // back. Nesting is what makes the escape injective.
+  it('a value that is ITSELF a quoted escapable string nests one level deeper', () => {
+    const inner = `::((${UUID}))`
+    const quoted = JSON.stringify(inner)
+    expect(propertyValueToChildContent(statusSchema, quoted))
+      .toBe(JSON.stringify(quoted))
+    expect(propertyValueToChildContent(statusSchema, quoted))
+      .not.toBe(propertyValueToChildContent(statusSchema, inner))
+    for (const value of [inner, quoted, JSON.stringify(quoted)]) {
+      const content = propertyValueToChildContent(statusSchema, value)
+      expect(propertyChildContentToEncodedValue(statusSchema, content)).toBe(value)
+    }
+  })
+
+  // A quoted string whose inner text needs NO escaping must stay verbatim, or
+  // the decode would unquote a value the user actually typed with quotes.
+  it('an ordinary quoted string is still stored verbatim, quotes and all', () => {
+    const value = '"hello"'
+    expect(propertyValueToChildContent(statusSchema, value)).toBe(value)
+    expect(propertyChildContentToEncodedValue(statusSchema, value)).toBe(value)
+  })
+
+  // The ref codec renders `((id))` DELIBERATELY (#16) — that branch runs before
+  // the string one and must not start escaping its own canonical form.
+  it('does not touch the ref codec, whose value content IS a span by design', () => {
+    const refSchema = defineProperty<string>('rel', {
+      codec: codecs.ref(), defaultValue: '', changeScope: ChangeScope.BlockDefault,
+    })
+    const content = propertyValueToChildContent(refSchema, UUID)
+    expect(content).toBe(`((${UUID}))`)
+    expect(propertyChildContentToEncodedValue(refSchema, content)).toBe(UUID)
   })
 })
 

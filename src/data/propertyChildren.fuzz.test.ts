@@ -3,10 +3,10 @@
  * Fuzz suite for `src/data/propertyChildren.ts`'s pure codec-boundary
  * functions — `propertyValueToChildContent` / `propertyChildContentToEncodedValue`
  * (the property-value ↔ child-content translation, PR #288 §7) across the
- * property-type zoo, plus the null-sentinel escaping guard (`needsEscape`,
- * propertyChildren.ts:136-149) it protects. See docs/fuzzing.md for tier
- * mechanics; `src/data/propertyChildren.test.ts` is the example-based
- * corpus for the surrounding dual-write/materialize machinery.
+ * property-type zoo, plus the content-escaping guard (`needsEscape`) it
+ * protects. See docs/fuzzing.md for tier mechanics;
+ * `src/data/propertyChildren.test.ts` is the example-based corpus for the
+ * surrounding dual-write/materialize machinery.
  *
  * Oracles, grounded in propertyChildren.ts:
  *  - Round trip: for a value V in a codec's documented domain,
@@ -16,15 +16,17 @@
  *    dual-write/materialize contract (`writePropertyValueChild`,
  *    `materializePropertyChildrenForExistingRow`): the child holds the
  *    property's value, and PROJECT reconstructs the cell from it.
- *  - Null-sentinel guard (:126-149, :151-153): content === the bare string
- *    `'null'` if and only if the encoded value is `null` AND the codec
- *    accepts null on decode (`codecAcceptsNull`). An absence-aware
- *    string-family codec (`optionalString`) that stores the LITERAL string
- *    `"null"` (or a JSON-quoted string that unescapes to it) must escape via
- *    `JSON.stringify` so it can never collide with the sentinel. A
- *    NON-absence-aware string-family codec (`codecs.string` /
- *    `codecs.url`) never needs escaping — `codecAcceptsNull` is false, so
- *    `needsEscape` short-circuits and content is always verbatim.
+ *  - Escaping guard (`needsEscape`): a verbatim string-family value that
+ *    content cannot hold AS ITSELF is stored `JSON.stringify`-escaped, so it
+ *    reads back as the value rather than as whatever the layers below content
+ *    make of it. Three reasons, and the sentinel one alone is codec-dependent:
+ *    content === the bare string `'null'` iff the encoded value is `null` AND
+ *    the codec accepts null on decode (`codecAcceptsNull`), so an
+ *    absence-aware codec (`optionalString`) escapes the LITERAL string
+ *    `"null"` while `codecs.string` / `codecs.url` store it as itself. The
+ *    other two — reference-shaped content and ill-formed UTF-16 (#688) — hold
+ *    for EVERY string-family codec, and are stated as an output invariant in
+ *    the "#688" describe below rather than as a per-value expectation.
  *  - Enum leniency (:261-286): a value outside the CURRENT option set still
  *    round-trips through content (`decode` is lenient on membership,
  *    codecs.ts:255-259) but is kept in its DECODED form rather than
@@ -46,6 +48,7 @@ import fc from 'fast-check'
 import { fuzzParams } from '@/test/fuzz'
 import { ChangeScope, CodecError, codecs, defineProperty } from '@/data/api'
 import { propertyChildContentToEncodedValue, propertyValueToChildContent } from './propertyChildren'
+import { parseExactReferenceBlockContent } from './referenceBlock'
 
 // ──── schemas under test, one per codec family ────
 
@@ -75,6 +78,10 @@ const enumSchema = defineProperty<typeof enumOptions[number]>('e', {
   codec: codecs.enum([...enumOptions]), defaultValue: 'open', changeScope: ChangeScope.BlockDefault,
 })
 
+/** A synthetic block id — all-2s, plainly not a real graph id; it only has
+ *  to be UUID-shaped so the span forms below parse. */
+const SAMPLE_UUID = '22222222-2222-4222-8222-222222222222'
+
 // A block-ref-safe id alphabet: no whitespace/parens (RENDERABLE_BLOCK_REF_ID_RE,
 // referenceBlock.ts:23) and no dashes, so it can never accidentally take UUID
 // shape and trip the separate case-canonicalization round-trip check
@@ -84,23 +91,41 @@ const ID_ALPHABET = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456
 const idArb = fc.array(fc.constantFrom(...ID_ALPHABET), {minLength: 1, maxLength: 24})
   .map(chars => chars.join(''))
 
+/** Arbitrary UTF-16, INCLUDING unpaired surrogates (`unit: 'binary'`) — one of
+ *  the two shapes the content column cannot hold as itself (#688), and one the
+ *  default `fc.string()` alphabet never produces. Mixed with hand-written
+ *  grammar-shaped seeds because the other shape — a whole `((id))`/`[[name]]`
+ *  span — is far too structured for random generation to reach. */
+const textArb = fc.oneof(
+  fc.string({unit: 'binary', maxLength: 12}),
+  fc.string(),
+  fc.constantFrom(
+    `::((${SAMPLE_UUID}))`,
+    `((${SAMPLE_UUID}))`,
+    '[[Some Page]]',
+    '::[[Some Page]]',
+    `[Mary](((${SAMPLE_UUID})))`,
+    'null',
+    '"null"',
+    `"::((${SAMPLE_UUID}))"`,
+  ),
+)
+
 describe('round trip: propertyChildContentToEncodedValue(propertyValueToChildContent(v)) recovers encode(v)', () => {
-  it('string (required): any string is verbatim content (codec never accepts null, so escaping never engages)', () => {
+  it('string (required): any string round-trips through content', () => {
     fc.assert(
-      fc.property(fc.string(), v => {
+      fc.property(textArb, v => {
         const content = propertyValueToChildContent(requiredStringSchema, v)
-        expect(content).toBe(v)
         expect(propertyChildContentToEncodedValue(requiredStringSchema, content)).toBe(v)
       }),
       fuzzParams(150),
     )
   })
 
-  it('url: any string is verbatim content (same non-absence-aware shape as required string)', () => {
+  it('url: any string round-trips through content (same verbatim-family shape as required string)', () => {
     fc.assert(
-      fc.property(fc.string(), v => {
+      fc.property(textArb, v => {
         const content = propertyValueToChildContent(urlSchema, v)
-        expect(content).toBe(v)
         expect(propertyChildContentToEncodedValue(urlSchema, content)).toBe(v)
       }),
       fuzzParams(150),
@@ -109,7 +134,7 @@ describe('round trip: propertyChildContentToEncodedValue(propertyValueToChildCon
 
   it('optionalString: round-trips through content; content === "null" iff the value is undefined', () => {
     fc.assert(
-      fc.property(fc.option(fc.string(), {nil: undefined}), v => {
+      fc.property(fc.option(textArb, {nil: undefined}), v => {
         const content = propertyValueToChildContent(optionalStringSchema, v)
         expect(content === 'null').toBe(v === undefined)
         expect(propertyChildContentToEncodedValue(optionalStringSchema, content))
@@ -211,6 +236,54 @@ describe('null-sentinel escaping (needsEscape, propertyChildren.ts:126-149)', ()
     const content = propertyValueToChildContent(requiredStringSchema, 'null')
     expect(content).toBe('null')
     expect(propertyChildContentToEncodedValue(requiredStringSchema, content)).toBe('null')
+  })
+})
+
+/**
+ * The escape's OUTPUT invariant, and the one that fails on #688's bug: what a
+ * string value renders to must be storable and readable as text. Stated over
+ * the content rather than over the round trip because the round trip is a
+ * function of `propertyChildren.ts` alone, while the loss happened OUTSIDE
+ * it — `deriveReferenceColumns` classified the content and the projection's
+ * value-set filter dropped the row. Anything the parser reads as a span, or
+ * that carries a lone surrogate, is content this module has handed to those
+ * layers as machinery instead of as a value.
+ */
+describe('#688: content is always storable text, never a span and never ill-formed', () => {
+  /** The `isWellFormed` predicate, restated here rather than imported: the
+   *  suite must be able to fail when the module's own copy is wrong. */
+  const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/
+
+  it.each([
+    ['string', requiredStringSchema],
+    ['url', urlSchema],
+    ['optionalString', optionalStringSchema],
+  ])('%s: no value renders to reference-shaped or ill-formed content', (_name, schema) => {
+    fc.assert(
+      fc.property(textArb, v => {
+        const content = propertyValueToChildContent(schema as typeof requiredStringSchema, v)
+        expect(parseExactReferenceBlockContent(content)).toBeNull()
+        expect(LONE_SURROGATE.test(content)).toBe(false)
+        // ...and the escape is only worth anything if the value comes back.
+        expect(propertyChildContentToEncodedValue(schema as typeof requiredStringSchema, content))
+          .toBe(v)
+      }),
+      fuzzParams(300),
+    )
+  })
+
+  // Injectivity: the escape must not map two distinct values onto one content,
+  // or one of them is unrecoverable no matter how the decode is written. The
+  // nesting recursion in `needsEscape` is what buys this.
+  it('distinct values never collide on the same content', () => {
+    fc.assert(
+      fc.property(textArb, textArb, (a, b) => {
+        fc.pre(a !== b)
+        expect(propertyValueToChildContent(requiredStringSchema, a))
+          .not.toBe(propertyValueToChildContent(requiredStringSchema, b))
+      }),
+      fuzzParams(300),
+    )
   })
 })
 

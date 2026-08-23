@@ -116,10 +116,12 @@ export const synthesizedPropertyDefinitionBlockId = (
  *  value unchanged through `encodedValueToContent` → `contentToEncodedValue`;
  *  see {@link provePresetId} for why that is the selection criterion.
  *
- *  One exception, tracked in #688 and not this module's to fix: a `string`
- *  value that is itself field-form content round-trips to nothing. Synthesis
- *  widens the set that can bite, because these keys come from writers nothing
- *  vetted. */
+ *  That criterion is only as good as `encodedValueToContent`'s promise that
+ *  what it emits is storable TEXT: the codec pair agreeing proves nothing about
+ *  the layers between them, and #688 was exactly that gap — a `string` value
+ *  shaped like a reference span round-tripped here while the real machinery
+ *  classified its row as a field row and dropped the property. `needsEscape`
+ *  is what closes it, so weakening it silently over-approves this proof. */
 export type SynthesizedPresetId = 'boolean' | 'number' | 'string' | 'raw-json'
 
 /** Tried narrowest-first; the first that carries every stored value wins.
