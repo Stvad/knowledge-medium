@@ -165,25 +165,37 @@ const codecAcceptsNull = (schema: AnyPropertySchema): boolean => {
  *  because no span form in either reader can begin any other way. */
 const SPAN_OPENERS_RE = /[[(]/g
 
-/** Would this text, stored VERBATIM as a value row's content, be read as
- *  something other than the text it is — losing the value (#688)? Two shapes:
- *  a §7 reference span, which `deriveReferenceColumns` classifies instead of
- *  storing (marked, it stamps `is_field_form`, and `isFieldValueChild` then
- *  drops the row from the value set, taking the owner's key with it); and a
- *  lone surrogate, which the content column returns as U+FFFD.
+/** Would this text, stored VERBATIM as a value row's content, read back as
+ *  something other than itself? Any §7 span does: `deriveReferenceColumns`
+ *  classifies such content instead of storing it. So does a lone surrogate,
+ *  which the content column returns as U+FFFD.
  *
- *  One definition, two callers with opposite remedies, which is the reason it
- *  is named rather than inlined into `needsEscape`: a writer going through
- *  `encodedValueToContent` ESCAPES (below), while a writer that rewrites
- *  content directly cannot escape without changing what the user asked for,
- *  and must REFUSE — see {@link contentLosesPropertyValue}. */
+ *  The ENCODER's question, and deliberately wider than
+ *  {@link contentLosesPropertyValue}'s — see there for why the two differ. */
 const verbatimContentLosesValue = (content: string): boolean =>
   isGrammarShapedLabel(content) || hasLoneSurrogate(content)
 
-/** The refusal half of {@link verbatimContentLosesValue}, for write paths that
- *  set a value row's `content` DIRECTLY rather than encoding a typed value —
- *  find-replace is the one caller. Those bypass `encodedValueToContent`, so
- *  they get no escaping and the value is silently lost instead.
+/** Would writing this text into a value row DESTROY the property's value?
+ *  For write paths that set `content` directly rather than encoding a typed
+ *  value — find-replace is the one caller. They bypass
+ *  `encodedValueToContent`, so they cannot escape, and must refuse instead.
+ *
+ *  NARROWER than {@link verbatimContentLosesValue} on purpose, and the gap is
+ *  the whole design: only a MARKED span destroys anything. It stamps
+ *  `is_field_form`, `isFieldValueChild` drops the row from the value set, and
+ *  the owner's key goes with it, silently (#688). An UNMARKED span keeps the
+ *  bit clear, stays in the value set and decodes right back — the value
+ *  survives; it has merely become a live reference.
+ *
+ *  So this refuses only real loss, and `Roadmap` → `[[Roadmap]]` across the
+ *  workspace still edits a property value like it edits any other block.
+ *  Refusing it would make property rows behave less like normal blocks for no
+ *  data-safety gain, which is the tenet, not an exception to it.
+ *
+ *  The encoder is wider for the opposite reason: `setProperty(b, note,
+ *  '[[Roadmap]]')` passes a STRING, so storing a live reference means a later
+ *  rename edits the caller's data. Same characters, different intent, and each
+ *  path knows which one it has.
  *
  *  Scoped to the codecs that store content verbatim: everything else either
  *  emits machine-formatted text that cannot take these shapes, or (`ref`) is
@@ -191,9 +203,11 @@ const verbatimContentLosesValue = (content: string): boolean =>
 export const contentLosesPropertyValue = (
   schema: AnyPropertySchema,
   content: string,
-): boolean =>
-  (schema.codec.type === 'string' || schema.codec.type === 'url')
-  && verbatimContentLosesValue(content)
+): boolean => {
+  if (schema.codec.type !== 'string' && schema.codec.type !== 'url') return false
+  return parseExactReferenceBlockContent(content)?.fieldForm === true
+    || hasLoneSurrogate(content)
+}
 
 /** Store `s` as content that reads back as exactly `s` and as nothing else.
  *  `JSON.stringify` carries the value (and spells lone surrogates as ASCII

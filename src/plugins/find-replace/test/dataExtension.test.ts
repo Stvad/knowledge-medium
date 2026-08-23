@@ -586,6 +586,32 @@ describe('findReplaceDataExtension', () => {
       expect((await load('owner'))?.properties[noteSchema.name]).toBe(find)
     })
 
+    // The gap between the two predicates, and the reason it exists. An UNMARKED
+    // span keeps the bit clear, so the row stays in the value set and decodes
+    // back to the text -- nothing is lost, the value has just become a link.
+    // `Roadmap` -> `[[Roadmap]]` across the workspace is an ordinary bulk edit,
+    // and refusing it on property rows only would buy no safety.
+    it('allows a replacement that turns the value into an unmarked reference', async () => {
+      const {valueId} = await seedStringProperty('Roadmap')
+
+      const result = await env.repo.run<ApplyContentReplaceResult>(
+        FIND_REPLACE_APPLY_CONTENT_REPLACE_MUTATOR,
+        {
+          workspaceId: WS,
+          find: 'Roadmap',
+          replace: '[[Roadmap]]',
+          options: {matchCase: false, wholeWord: false},
+          items: [{blockId: valueId, originalContent: 'Roadmap'}],
+        },
+      )
+
+      expect(result.skippedUnparseableProperty).toBe(0)
+      expect(result.updatedBlocks).toBe(1)
+      expect((await load(valueId))?.content).toBe('[[Roadmap]]')
+      // The property is intact -- that is what makes refusing it unjustified.
+      expect((await load('owner'))?.properties[noteSchema.name]).toBe('[[Roadmap]]')
+    })
+
     it('still allows an ordinary string replacement', async () => {
       // Liveness: the guard must not have become "refuse every string edit".
       const {valueId} = await seedStringProperty('draft')
