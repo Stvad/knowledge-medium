@@ -2,6 +2,7 @@ import { Button } from '@/components/ui/button'
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
@@ -38,12 +39,18 @@ export const ConfirmBulkDeleteDialog = ({
         <DialogHeader>
           <DialogTitle>Delete {pluralize(totalCount, 'block')}?</DialogTitle>
         </DialogHeader>
-        <p className="text-sm">
+        {/* DialogDescription, not a bare <p>: DialogContent always emits
+            aria-describedby pointing at the generated description id, and
+            only this component renders an element carrying it. A plain
+            paragraph leaves that reference dangling, so the one sentence
+            saying what is about to be destroyed is the part a screen reader
+            does not get. */}
+        <DialogDescription>
           {targetCount === 1 ? 'This block' : pluralize(targetCount, 'selected block')}
           {nested > 0 && <> and the {pluralize(nested, 'block')} nested
             {' '}{agree(targetCount, 'under it', 'under them')}</>}
           {' '}will be deleted.
-        </p>
+        </DialogDescription>
         <DialogFooter>
           <Button variant="outline" onClick={cancel}>Cancel</Button>
           <Button variant="destructive" onClick={() => resolve(true)}>Delete</Button>
