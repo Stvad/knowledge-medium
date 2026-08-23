@@ -48,7 +48,7 @@ const REFUSAL_TOAST_ID = 'block-deletion-refused'
  *  the reflex it exists to interrupt. The count includes property field/value
  *  rows, so a property-heavy block reads higher than what is on screen — if
  *  this starts asking about deletes that look small, that inflation is the
- *  first thing to check, not the number here (see km-y6my). */
+ *  first thing to check, not the number here (issue #738). */
 export const BULK_DELETE_CONFIRM_THRESHOLD = 20
 
 export interface DeleteThroughUiOptions {
