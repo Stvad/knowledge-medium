@@ -46,6 +46,7 @@ import {
   type SameTxCtx,
 } from '@/data/api'
 import { parsePropertyDefinitionMetadata } from '@/data/propertyDefinitionMetadata'
+import { withoutContestedRenames } from './propertyDefinitionMigrations'
 import {
   isFieldValueChild,
   isPropertyFieldInstance,
@@ -102,22 +103,12 @@ const collectRenames = (
   }
   // Pass 2: drop a rename onto a COLLIDING new name. The tx-start resolver
   // still maps the renamed field under its OLD name, so it can't tell us who
-  // wins the new name post-commit. If some OTHER definition already owns the
-  // new name and is NOT itself renaming away from it, re-keying our value under
-  // that name would overwrite that owner's cell projection with the wrong value
-  // (found by Codex on PR #386) — the renamed field is likely shadowed there,
-  // not the winner. Leave the whole re-key to the post-commit registry rebuild
-  // + PROJECT / slice-C reconcile under the shadowing model (#389 item 8). A
-  // SWAP (`a<->b`) is preserved: each new name is owned by a peer that IS
-  // renaming away, so it isn't a real collision.
-  const renamedFieldIds = new Set(candidates.map(c => c.fieldId))
-  return candidates.filter(c => {
-    const owner = ctx.resolvePropertySchemaName(workspaceId, c.newName)
-    return !(
-      owner.status === 'resolved'
-      && owner.schema.fieldId !== c.fieldId
-      && !renamedFieldIds.has(owner.schema.fieldId)
-    )
+  // wins the new name post-commit; the shared refusal handles the rest. Such a
+  // re-key is left to the post-commit registry rebuild + PROJECT / slice-C
+  // reconcile under the shadowing model (#389 item 8).
+  return withoutContestedRenames(candidates, (name) => {
+    const owner = ctx.resolvePropertySchemaName(workspaceId, name)
+    return owner.status === 'resolved' ? owner.schema.fieldId : undefined
   })
 }
 

@@ -161,7 +161,6 @@ const SAFE_VIA_PROTOTYPE: Record<string, string> = {
 
   // ── test-only escape hatches (assign fields — never call on a facade) ──
   __resetReprojectionMarkerCache: 'test-only',
-  __resetPropertyDefinitionBaselineCache: 'test-only',
   __setMutatorsForTesting: 'test-only; assigns fields — do not call on a facade',
   __setProcessorsForTesting: 'test-only; assigns fields — do not call on a facade',
   __setQueriesForTesting: 'test-only; assigns fields — do not call on a facade',

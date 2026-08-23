@@ -54,6 +54,7 @@ import {
   backfillBlockAliasesIfEmpty,
   backfillBlocksFtsIfEmpty,
   ensureBlockUserUpdatedAtColumn,
+  ensureClientSchemaStateValueColumn,
   ensureUndoGroupIdColumns,
   ANALYZE_ARMING_PROBES,
   ANALYZE_OPTIMIZE_SQL,
@@ -1399,6 +1400,24 @@ const fakeMigrationDb = (columnsByTable: Record<string, string[]>) => {
     },
   }
 }
+
+describe('ensureClientSchemaStateValueColumn — local migration', () => {
+  // Untested, this one fails in a single direction and quietly: a fresh install
+  // gets `value` from the CREATE, so only an UPGRADING device runs the ALTER —
+  // and the only reader catches its own error and logs, leaving the #780 fix a
+  // permanent no-op for every existing user while the suite stays green.
+  it('adds the column when the table predates it', async () => {
+    const db = fakeMigrationDb({client_schema_state: ['key', 'completed_at']})
+    await ensureClientSchemaStateValueColumn(db)
+    expect(db.executed).toEqual(['ALTER TABLE client_schema_state ADD COLUMN value TEXT'])
+  })
+
+  it('is a no-op once the column exists (fresh install / second boot)', async () => {
+    const db = fakeMigrationDb({client_schema_state: ['key', 'completed_at', 'value']})
+    await ensureClientSchemaStateValueColumn(db)
+    expect(db.executed).toEqual([])
+  })
+})
 
 describe('ensureBlockUserUpdatedAtColumn — local migration', () => {
   it('adds the column to BOTH tables and backfills blocks with the audit trigger suspended', async () => {

@@ -67,8 +67,10 @@ import {
 } from './facets'
 import { changedRefSchemaNames } from './internals/refProjection'
 import {
-  changedPropertyDefinitions,
+  changedPropertyDefinitionFacts,
+  propertyDefinitionFacts,
   type PropertyDefinitionChange,
+  type PropertyDefinitionFactsByFieldId,
 } from './internals/propertyDefinitionMigrations'
 import {readValuePresetRegistry} from './valuePresetRegistry'
 
@@ -128,10 +130,11 @@ export interface FacetBridgeTarget {
     workspaceId: string,
     changes: readonly PropertyDefinitionChange[],
   ): void
-  /** Fold this snapshot into the workspace's durable definitions baseline, and
-   *  — when `detectChanges` — migrate whatever drifted from it (#780). */
+  /** Fold these facts into the workspace's durable definitions baseline, and —
+   *  when `detectChanges` — migrate whatever drifted from it (#780). */
   syncPropertyDefinitionBaseline(
-    snapshot: PropertyDefinitionRegistrySnapshot,
+    workspaceId: string,
+    facts: PropertyDefinitionFactsByFieldId,
     options: {readonly detectChanges: boolean},
   ): void
 }
@@ -431,40 +434,46 @@ export class FacetBridge {
           if (refSchemaChanges.length > 0) {
             target.scheduleReprojection(refSchemaChanges, propertySchemas)
           }
-          // Codec-TYPE-change migrations (PR #288 §7/§9, slice B2): diff the
-          // registry snapshots by durable fieldId. RENAMES are no longer
-          // scheduled here — they are re-keyed atomically in the editing tx by
-          // the `core.migratePropertyRename` same-tx processor (one undoable
-          // step, no deferred plan-capture staleness, no half-migrated window).
-          // A codec-TYPE change still needs this deferred pass because it must
-          // build the NEW codec to re-encode values, which the same-tx registry
-          // snapshot can't. A combined rename+codec edit rides both: the
-          // processor re-keys the cell, this pass re-encodes values under the
-          // new codec — both converge on the new cell key. Same workspace only
-          // (the helper refuses cross-workspace diffs); the PRIME case is the
-          // baseline's, below.
-          const codecChanges = changedPropertyDefinitions(
-            previousPropertyDefinitions, propertyDefinitions,
-          ).filter(change => change.codecChanged)
-          if (codecChanges.length > 0 && propertyDefinitions) {
-            target.schedulePropertyDefinitionMigrations(
-              propertyDefinitions.workspaceId, codecChanges,
-            )
-          }
-          // PRIME — no previous snapshot for THIS workspace, so the diff above
-          // structurally returned nothing (its two refusals are exactly "no
-          // previous" and "other workspace"). Hand the incoming snapshot to the
-          // durable per-workspace baseline instead: it is what sees a rename or
-          // codec change that synced in while this device was looking elsewhere,
-          // and (unlike an active-workspace change) no local tx ran here, so the
-          // same-tx rename processor never fired for it (#780). Every build also
-          // records the baseline, so a rename this device performed itself is
-          // already accounted for by the time it primes again.
+          // Definition-change migrations (PR #288 §7/§9, slice B2), from the
+          // ONE workspace-scoped decision below: a build that carries a
+          // previous snapshot for the SAME workspace is diffed in memory; a
+          // PRIME (no previous, or another workspace's) is diffed against the
+          // durable baseline, which is what sees a change synced in while this
+          // device was looking elsewhere (#780).
           if (propertyDefinitions) {
-            target.syncPropertyDefinitionBaseline(propertyDefinitions, {
-              detectChanges:
-                previousPropertyDefinitions?.workspaceId !== propertyDefinitions.workspaceId,
-            })
+            const previous = previousPropertyDefinitions
+            const previousFacts = previous && previous.workspaceId === propertyDefinitions.workspaceId
+              ? propertyDefinitionFacts(previous)
+              : null
+            const facts = propertyDefinitionFacts(propertyDefinitions)
+            if (previousFacts) {
+              // RENAMES are not scheduled here — they are re-keyed atomically in
+              // the editing tx by the `core.migratePropertyRename` same-tx
+              // processor (one undoable step, no deferred plan-capture
+              // staleness). A codec-TYPE change still needs this deferred pass
+              // because it must build the NEW codec to re-encode values, which
+              // the same-tx registry snapshot can't. A combined rename+codec
+              // edit rides both and they converge on the new cell key.
+              const changes = changedPropertyDefinitionFacts(previousFacts, facts)
+              const scheduled = changes.filter(change => change.codecChanged)
+              if (scheduled.length > 0) {
+                target.schedulePropertyDefinitionMigrations(
+                  propertyDefinitions.workspaceId, scheduled,
+                )
+              }
+              // A rename nothing scheduled must not be RECORDED either. The
+              // same-tx processor covers a local one, but a synced-in rename
+              // reaches neither writer — and folding its new name into the
+              // baseline would make the next prime find a matching before-state
+              // and repair it never. Holding the fact back keeps it detectable
+              // there; the cost is one no-op pass for a local rename.
+              for (const change of changes) {
+                if (!change.codecChanged) facts.delete(change.fieldId)
+              }
+            }
+            target.syncPropertyDefinitionBaseline(
+              propertyDefinitions.workspaceId, facts, {detectChanges: previousFacts === null},
+            )
           }
           // No property-SPECIFIC reference-target rederive here. Recognition
           // is form-agnostic (a whole-block reference that resolves to a

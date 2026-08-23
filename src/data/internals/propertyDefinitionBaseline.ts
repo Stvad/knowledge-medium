@@ -1,74 +1,45 @@
 /**
- * Per-workspace, per-device record of the property definitions this client
- * last SAW (issue #780).
+ * Durable per-workspace record of the property definitions this DEVICE has
+ * accounted for — the "before" side the registry-PRIME diff needs (#780).
  *
- * The facet bridge detects a definition rename / codec change by diffing the
- * PREVIOUS in-memory registry snapshot against the incoming one. That diff is
- * structurally blind on PRIME: coming back to a workspace, the previous
- * snapshot is null (first prime of the run) or belongs to a different
- * workspace, so `changedPropertyDefinitions` refuses it and a change that
- * landed while this device wasn't looking at that workspace — a synced-in
- * rename, which runs no `repo.tx` here and so never reaches the same-tx rename
- * processor — is never migrated. Cells stay keyed by a name nothing resolves.
+ * The facet bridge detects a definition change by diffing the previous
+ * in-memory registry snapshot against the incoming one. On PRIME there is no
+ * comparable previous snapshot (it is null, or belongs to another workspace),
+ * so a change that landed while this device was looking elsewhere is invisible
+ * — and, having run no `repo.tx` here, invisible to the same-tx rename
+ * processor too. This store is the before-state that survives both a workspace
+ * switch and a reload.
  *
- * This store is the durable "previous" the prime case needs: a JSON blob per
- * workspace in `client_schema_state`, holding each definition's name and codec
- * type by durable fieldId. Local-only — it describes what THIS device has
- * observed, not shared state.
+ * Storage is one JSON row per workspace in `client_schema_state`, which is
+ * local and unsynced: this records what THIS device has seen, not shared state.
  *
- * ── What a MISSING baseline means ──
+ * ── Missing baseline means "migrate nothing" ──
  *
- * Nothing to migrate, not "everything changed". A device that has never
- * recorded a baseline for a workspace has no before-state to compare against,
- * and treating the whole registry as new would re-key every cell in the graph
- * off a diff it never actually observed. The state it can't see is also not
- * its to repair: the device that made the rename re-keyed its own cells in the
- * editing tx and synced them, so a first-time reader receives already-correct
- * rows. What genuinely survives that — a cell written under the old name on a
- * THIRD device that was offline across the rename — is a content-level
- * divergence between cells and their field rows, which no baseline can detect
- * and which belongs to slice C's reconcile.
+ * Not "everything changed": with no observed before-state, re-keying would run
+ * off a diff this device never made. Nor is a rename swallowed — the device
+ * that performed it re-keyed its own cells in the editing tx and synced them,
+ * so a first-time reader receives correct rows. What survives that is a cell
+ * that diverged from its field rows on a third device, which is a content-level
+ * reconcile no baseline can detect.
  *
- * ── What a baseline is INVALIDATED by ──
- *
- * Nothing revokes it; every registry build for a workspace merges its facts in
- * (see `merge`). Wiping `client_schema_state` (a local DB reset) returns the
- * device to the missing-baseline case above. A blob written by a future
- * version reads as missing rather than as a diff, so a shape change never
- * migrates against a misparsed before-state.
+ * Nothing revokes a baseline; every registry build folds its facts in. Wiping
+ * `client_schema_state` returns the device to the missing case above.
  */
 
-import type {PropertyDefinitionRegistrySnapshot} from '@/data/propertyDefinitionRegistry'
+import type {
+  PropertyDefinitionFacts,
+  PropertyDefinitionFactsByFieldId,
+} from './propertyDefinitionMigrations'
 import {
   PROPERTY_DEFINITION_BASELINE_PREFIX,
   RECORD_PROPERTY_DEFINITION_BASELINE_SQL,
   SELECT_PROPERTY_DEFINITION_BASELINE_SQL,
 } from './clientSchema'
 
-/** The identity-stable facts a definition-migration diff compares, per durable
- *  fieldId. `codecType` is absent when the registry carried the definition's
- *  metadata but no resolved schema (a definition block with no preset). */
-export interface PropertyDefinitionFacts {
-  readonly name: string
-  readonly codecType?: string
-}
-
-export type PropertyDefinitionFactsByFieldId = ReadonlyMap<string, PropertyDefinitionFacts>
-
-/** The diff inputs a registry snapshot contributes, by durable fieldId. */
-export const propertyDefinitionFacts = (
-  snapshot: PropertyDefinitionRegistrySnapshot,
-): Map<string, PropertyDefinitionFacts> => {
-  const facts = new Map<string, PropertyDefinitionFacts>()
-  for (const [fieldId, metadata] of snapshot.definitionsByFieldId) {
-    const codecType = snapshot.schemasByFieldId.get(fieldId)?.codec.type
-    facts.set(fieldId, codecType === undefined ? {name: metadata.name} : {name: metadata.name, codecType})
-  }
-  return facts
-}
-
-/** Stored shape. Versioned so a future change reads as "no baseline" (record
- *  and move on) rather than as a diff against a misparsed before-state. */
+/** Stored shape. Versioned so a blob written by a LATER build is recognized as
+ *  unreadable rather than misparsed — and then left alone rather than
+ *  overwritten, so an old tab open across a deploy can't cost the new one a
+ *  generation of observations. */
 interface StoredBaseline {
   readonly version: 1
   readonly fields: Record<string, {readonly name: string; readonly codecType?: string}>
@@ -76,20 +47,27 @@ interface StoredBaseline {
 
 const CURRENT_VERSION = 1
 
-const parseBaseline = (raw: string | null): Map<string, PropertyDefinitionFacts> | null => {
-  if (raw === null) return null
+type BaselineRead =
+  /** No row, or one this build should replace (unparseable / wrong shape). */
+  | {readonly kind: 'absent'}
+  | {readonly kind: 'facts'; readonly facts: Map<string, PropertyDefinitionFacts>}
+  /** A version this build doesn't know: don't diff against it, don't clobber it. */
+  | {readonly kind: 'foreign'}
+
+const readBaseline = (raw: string | null): BaselineRead => {
+  if (raw === null) return {kind: 'absent'}
   let parsed: unknown
   try {
     parsed = JSON.parse(raw)
   } catch {
-    return null
+    return {kind: 'absent'}
   }
-  if (
-    typeof parsed !== 'object' || parsed === null
-    || (parsed as StoredBaseline).version !== CURRENT_VERSION
-  ) return null
-  const fields = (parsed as StoredBaseline).fields
-  if (typeof fields !== 'object' || fields === null) return null
+  if (typeof parsed !== 'object' || parsed === null) return {kind: 'absent'}
+  const {version, fields} = parsed as StoredBaseline
+  if (version !== CURRENT_VERSION) {
+    return typeof version === 'number' ? {kind: 'foreign'} : {kind: 'absent'}
+  }
+  if (typeof fields !== 'object' || fields === null) return {kind: 'absent'}
   const facts = new Map<string, PropertyDefinitionFacts>()
   for (const [fieldId, entry] of Object.entries(fields)) {
     if (typeof entry?.name !== 'string') continue
@@ -97,76 +75,89 @@ const parseBaseline = (raw: string | null): Map<string, PropertyDefinitionFacts>
       ? {name: entry.name, codecType: entry.codecType}
       : {name: entry.name})
   }
-  return facts
+  return {kind: 'facts', facts}
 }
 
 const serializeBaseline = (facts: PropertyDefinitionFactsByFieldId): string => {
   const fields: StoredBaseline['fields'] = {}
-  // Sorted so an unchanged baseline serializes byte-identically regardless of
-  // registry iteration order — that equality is what skips the write.
+  // Sorted so an unchanged baseline serializes byte-identically whatever order
+  // the registry iterated in — that equality is what skips the write.
   for (const fieldId of [...facts.keys()].sort()) fields[fieldId] = facts.get(fieldId)!
   return JSON.stringify({version: CURRENT_VERSION, fields} satisfies StoredBaseline)
 }
 
+/** Fold one observation into what we already knew about a fieldId.
+ *
+ *  A build can observe a definition's METADATA without a schema — its preset
+ *  plugin hasn't loaded, or its config is invalid, and `userSchemasService`
+ *  publishes metadata-only. Replacing the fact wholesale would ERASE the codec
+ *  we already knew, and the next build that does resolve a schema would diff
+ *  against a codec-less baseline, report no codec change, and silently swallow
+ *  the re-encode. */
+const foldFact = (
+  known: PropertyDefinitionFacts | undefined,
+  observed: PropertyDefinitionFacts,
+): PropertyDefinitionFacts =>
+  observed.codecType === undefined && known?.codecType !== undefined
+    ? {name: observed.name, codecType: known.codecType}
+    : observed
+
 /** Minimal `client_schema_state` access surface, structurally typed so the
- *  store is unit-testable without a full Repo / PowerSync (mirrors
- *  `MarkerDb`). */
+ *  store is unit-testable without a full Repo / PowerSync. A transaction, not
+ *  a read plus a write: see `foldIn`. */
 export interface BaselineDb {
-  getOptional<T>(sql: string, params?: unknown[]): Promise<T | null>
-  execute(sql: string, params?: unknown[]): Promise<unknown>
+  writeTransaction<R>(fn: (tx: {
+    getOptional<T>(sql: string, params?: unknown[]): Promise<T | null>
+    execute(sql: string, params?: unknown[]): Promise<unknown>
+  }) => Promise<R>): Promise<R>
 }
 
 const baselineKey = (workspaceId: string) => `${PROPERTY_DEFINITION_BASELINE_PREFIX}${workspaceId}`
 
-/** Lazy per-workspace mirror of the stored baselines: one SELECT per workspace
- *  per lifetime, then in-memory. */
 export class PropertyDefinitionBaselineStore {
-  /** Workspace → last known facts. A present key with a `null` value is a
-   *  workspace we have READ and found no baseline for — distinct from one we
-   *  haven't read yet, which is what makes "missing" a decidable state rather
-   *  than an unread cache. */
-  private readonly cache = new Map<string, Map<string, PropertyDefinitionFacts> | null>()
-  /** Last serialization written per workspace, so an unchanged merge is free. */
-  private readonly written = new Map<string, string>()
-
   constructor(private readonly db: BaselineDb) {}
 
-  /** This workspace's stored baseline, or null when none has been recorded on
-   *  this device (see the module header for why that means "migrate nothing"). */
-  async read(workspaceId: string): Promise<PropertyDefinitionFactsByFieldId | null> {
-    if (!this.cache.has(workspaceId)) {
-      const row = await this.db.getOptional<{value: string | null}>(
+  /**
+   * Fold `facts` into this workspace's stored baseline and return the baseline
+   * AS IT WAS before the fold (null when this device has recorded none, or when
+   * the row was written by a build this one can't read).
+   *
+   * Read and write are ONE call, and one transaction, for two reasons. The
+   * caller's diff needs the pre-fold state, so exposing them separately would
+   * make an ordering requirement a convention. And the row is shared by every
+   * tab: each tab is its own Repo, so a store that unioned against a process-
+   * local mirror and then wrote the whole blob would delete the fieldIds only
+   * the OTHER tab had seen — which is #780 again, since the next prime reads a
+   * missing fieldId as a brand-new definition and swallows its rename. That is
+   * reachable today: a `?safeMode` tab's registry is a strict subset.
+   *
+   * The fold is a UNION over fieldIds, not a replace: a build can legitimately
+   * observe a subset, and forgetting a fieldId would make its return look like
+   * a brand-new definition.
+   */
+  async foldIn(
+    workspaceId: string,
+    facts: PropertyDefinitionFactsByFieldId,
+  ): Promise<PropertyDefinitionFactsByFieldId | null> {
+    return this.db.writeTransaction(async tx => {
+      const row = await tx.getOptional<{value: string | null}>(
         SELECT_PROPERTY_DEFINITION_BASELINE_SQL, [baselineKey(workspaceId)],
       )
-      const parsed = parseBaseline(row?.value ?? null)
-      this.cache.set(workspaceId, parsed)
-      if (parsed !== null && row?.value != null) this.written.set(workspaceId, row.value)
-    }
-    return this.cache.get(workspaceId) ?? null
-  }
-
-  /** Fold `facts` into this workspace's baseline. UNION, not replace: a
-   *  registry build can legitimately observe a subset (a projector re-priming,
-   *  a plugin's seeds not yet loaded), and forgetting a fieldId would make its
-   *  reappearance look like a brand-new definition — silently swallowing a
-   *  rename that happened in between. Writes only when the result changed. */
-  async merge(workspaceId: string, facts: PropertyDefinitionFactsByFieldId): Promise<void> {
-    const merged = new Map(await this.read(workspaceId) ?? [])
-    for (const [fieldId, entry] of facts) merged.set(fieldId, entry)
-    const serialized = serializeBaseline(merged)
-    this.cache.set(workspaceId, merged)
-    if (this.written.get(workspaceId) === serialized) return
-    await this.db.execute(
-      RECORD_PROPERTY_DEFINITION_BASELINE_SQL, [baselineKey(workspaceId), serialized],
-    )
-    this.written.set(workspaceId, serialized)
-  }
-
-  /** Drop the in-memory mirror so the next read re-reads the table. For tests /
-   *  migrations that mutate `client_schema_state` out of band (mirrors
-   *  `MarkerStore.reset`). */
-  reset(): void {
-    this.cache.clear()
-    this.written.clear()
+      const stored = row?.value ?? null
+      const read = readBaseline(stored)
+      if (read.kind === 'foreign') return null
+      const previous = read.kind === 'facts' ? read.facts : null
+      const merged = new Map(previous ?? [])
+      for (const [fieldId, observed] of facts) {
+        merged.set(fieldId, foldFact(merged.get(fieldId), observed))
+      }
+      const serialized = serializeBaseline(merged)
+      if (serialized !== stored) {
+        await tx.execute(
+          RECORD_PROPERTY_DEFINITION_BASELINE_SQL, [baselineKey(workspaceId), serialized],
+        )
+      }
+      return previous
+    })
   }
 }

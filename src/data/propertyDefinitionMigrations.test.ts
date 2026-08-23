@@ -24,7 +24,11 @@ import { projectedPropertyDefinitionsFacet } from '@/data/facets'
 import { isGrammarShapedLabel, isRoundTrippableReferenceLabel } from '@/data/referenceBlock'
 import { propertyChangeScopeProp, propertyNameProp } from '@/data/properties'
 import { PROPERTY_SCHEMA_TYPE } from '@/data/blockTypes'
-import { changedPropertyDefinitions } from './internals/propertyDefinitionMigrations'
+import {
+  changedPropertyDefinitionFacts,
+  propertyDefinitionFacts,
+  withoutContestedRenames,
+} from './internals/propertyDefinitionMigrations'
 import { PROPERTY_DEFINITION_BASELINE_PREFIX } from './internals/clientSchema'
 import type { Repo } from './repo'
 
@@ -217,24 +221,85 @@ const setupWithRealDefinition = async (
   return repo
 }
 
-describe('changedPropertyDefinitions (diff)', () => {
-  it('never diffs across workspaces', () => {
-    const metadata = (workspaceId: string) => ({
-      workspaceId,
-      schemas: new Map(),
-      definitionsByFieldId: new Map([[FIELD_ID, {
-        fieldId: FIELD_ID, workspaceId, createdAt: 1, name: 'a',
-        changeScope: ChangeScope.BlockDefault, hidden: false, origin: 'user' as const,
-      }]]),
-      definitionsByName: new Map(),
-      schemasByFieldId: new Map(),
-      seedsByKey: new Map(),
-      seedsByName: new Map(),
-    })
-    const prev = metadata('ws-a')
-    const next = {...metadata('ws-b')}
-    next.definitionsByFieldId.get(FIELD_ID)!
-    expect(changedPropertyDefinitions(prev as never, next as never)).toEqual([])
+describe('definition facts (diff inputs)', () => {
+  const snapshotWith = (
+    definitions: ReadonlyArray<{fieldId: string; name: string; seedKey?: string}>,
+    codecTypes: ReadonlyMap<string, string> = new Map(),
+  ) => ({
+    workspaceId: WS,
+    schemas: new Map(),
+    definitionsByFieldId: new Map(definitions.map(definition => [definition.fieldId, {
+      ...definition, workspaceId: WS, createdAt: 1,
+      changeScope: ChangeScope.BlockDefault, hidden: false, origin: 'user' as const,
+    }])),
+    definitionsByName: new Map(),
+    schemasByFieldId: new Map(
+      [...codecTypes].map(([fieldId, type]) => [fieldId, {codec: {type}}]),
+    ),
+    seedsByKey: new Map(),
+    seedsByName: new Map(),
+  })
+
+  it('omits seed-provenanced definitions, whose effective name depends on load order', () => {
+    const facts = propertyDefinitionFacts(snapshotWith([
+      {fieldId: 'user-field', name: 'Status'},
+      {fieldId: 'seed-field', name: 'Done', seedKey: 'system:kernel-data/property/done'},
+    ]) as never)
+    expect([...facts.keys()]).toEqual(['user-field'])
+  })
+
+  it('reports a rename, and a codec change only when BOTH sides resolved one', () => {
+    const previous = propertyDefinitionFacts(
+      snapshotWith([{fieldId: 'f', name: 'a'}], new Map([['f', 'string']])) as never,
+    )
+    expect(changedPropertyDefinitionFacts(
+      previous,
+      propertyDefinitionFacts(snapshotWith([{fieldId: 'f', name: 'b'}]) as never),
+    )).toEqual([{fieldId: 'f', oldName: 'a', newName: 'b', codecChanged: false}])
+    expect(changedPropertyDefinitionFacts(
+      previous,
+      propertyDefinitionFacts(
+        snapshotWith([{fieldId: 'f', name: 'a'}], new Map([['f', 'number']])) as never,
+      ),
+    )).toEqual([{fieldId: 'f', oldName: 'a', newName: 'a', codecChanged: true}])
+  })
+
+  it('reads a fieldId absent from the previous side as ADDED, never as a rename', () => {
+    expect(changedPropertyDefinitionFacts(
+      new Map(),
+      propertyDefinitionFacts(snapshotWith([{fieldId: 'f', name: 'b'}]) as never),
+    )).toEqual([])
+  })
+})
+
+describe('withoutContestedRenames', () => {
+  const rename = (fieldId: string, oldName: string, newName: string) =>
+    ({fieldId, oldName, newName})
+
+  it('drops a rename onto a NEW name a different, non-migrating definition owns', () => {
+    expect(withoutContestedRenames(
+      [rename('f1', 'a', 'b')], (name: string) => (name === 'b' ? 'f2' : undefined),
+    )).toEqual([])
+  })
+
+  it('drops a rename whose OLD name a different definition now answers to', () => {
+    expect(withoutContestedRenames(
+      [rename('f1', 'a', 'b')], (name: string) => (name === 'a' ? 'f2' : undefined),
+    )).toEqual([])
+  })
+
+  it('keeps a swap — each contested name is owned by a peer migrating in the same batch', () => {
+    const swap = [rename('f1', 'a', 'b'), rename('f2', 'b', 'a')]
+    expect(withoutContestedRenames(
+      swap, (name: string) => (name === 'b' ? 'f2' : 'f1'),
+    )).toEqual(swap)
+  })
+
+  it('keeps an uncontested rename, and a codec-only change that keeps its name', () => {
+    expect(withoutContestedRenames(
+      [rename('f1', 'a', 'b')], () => undefined,
+    )).toHaveLength(1)
+    expect(withoutContestedRenames([rename('f1', 'a', 'a')], () => 'f1')).toHaveLength(1)
   })
 })
 
@@ -567,32 +632,42 @@ describe('name round-trip guard (§7)', () => {
 describe('changes observed only across a workspace switch (#780)', () => {
   const statusRenamed = schemaWith('state')
 
+  /** Wait until the registry has primed on `workspaceId`, and (when given)
+   *  carries `name` for FIELD_ID. `setActiveWorkspaceId` returns BEFORE the
+   *  definition projector re-primes, so the rebuild that runs the baseline diff
+   *  happens later — draining without this fence finds an empty queue for the
+   *  wrong reason. */
+  const awaitRegistry = async (
+    repo: Repo, workspaceId: string, name?: string,
+  ): Promise<void> => {
+    await vi.waitFor(() => {
+      const snapshot = repo.propertyDefinitions
+      if (snapshot?.workspaceId !== workspaceId) {
+        throw new Error(`[test] registry has not primed for ${workspaceId} yet`)
+      }
+      if (name !== undefined && snapshot.definitionsByFieldId.get(FIELD_ID)?.name !== name) {
+        throw new Error(`[test] registry has not primed on ${name} yet`)
+      }
+    }, {timeout: 5000})
+  }
+
   /** Switch away from WS, apply `next` to WS's (now invisible) definition
-   *  bucket, then switch back and wait for the registry to prime on it.
+   *  bucket, then switch back.
    *
    *  Publishing while WS is inactive is the shape a SYNCED-IN change has: no
    *  `repo.tx` runs on this device, so the same-tx rename processor never
-   *  fires, and on the way back the bridge's previous snapshot belongs to the
-   *  OTHER workspace — its diff refuses cross-workspace pairs, so only the
-   *  durable baseline can see the change.
-   *
-   *  The wait is load-bearing, not hygiene: `setActiveWorkspaceId` returns
-   *  before the definition projector has re-primed, so the registry rebuild
-   *  that runs the baseline diff happens LATER. Draining without fencing on it
-   *  would find an empty queue for the wrong reason. */
+   *  fires. Waiting for OTHER_WS to prime before switching back is what makes
+   *  the return a genuine cross-workspace prime — without it the intervening
+   *  pin leaves the registry null and only the "no previous" half of the
+   *  condition is ever exercised. */
   const changeWhileInactive = async (
     repo: Repo, next: ReturnType<typeof schemaWith>,
   ): Promise<void> => {
     repo.setActiveWorkspaceId(OTHER_WS)
+    await awaitRegistry(repo, OTHER_WS)
     publishDefinition(repo, next)
     repo.setActiveWorkspaceId(WS)
-    await vi.waitFor(() => {
-      const snapshot = repo.propertyDefinitions
-      if (snapshot?.workspaceId !== WS
-        || snapshot.definitionsByFieldId.get(FIELD_ID)?.name !== next.name) {
-        throw new Error(`[test] registry has not primed on ${next.name} for ${WS} yet`)
-      }
-    })
+    await awaitRegistry(repo, WS, next.name)
     await repo.awaitPropertyDefinitionBaselines()
   }
 
@@ -624,6 +699,31 @@ describe('changes observed only across a workspace switch (#780)', () => {
     expect(await rowContent(valueRowId)).toBe('42')
   }, 20_000)
 
+  it('repairs a rename that synced in while the workspace was OPEN, at the next prime', async () => {
+    await seedWorkspace('children')
+    const repo = setup()
+    await seedProperty(repo, 'p', 'done')
+    await repo.awaitPropertyDefinitionBaselines()
+
+    // Synced in while WS is ACTIVE: no local tx, so the same-tx processor never
+    // sees it, and the bridge's in-memory diff schedules codec changes only —
+    // nothing re-keys the cell now.
+    publishDefinition(repo, statusRenamed)
+    await awaitRegistry(repo, WS, 'state')
+    await repo.awaitPropertyDefinitionBaselines()
+    expect(await cell('p')).toEqual({status: 'done'})
+
+    // Because nothing acted on it, the baseline must NOT have absorbed it —
+    // the next prime is what repairs it.
+    repo.setActiveWorkspaceId(OTHER_WS)
+    await awaitRegistry(repo, OTHER_WS)
+    repo.setActiveWorkspaceId(WS)
+
+    await vi.waitFor(async () => {
+      expect(await cell('p')).toEqual({state: 'done'})
+    }, {timeout: 5000})
+  }, 20_000)
+
   it('with NO recorded baseline, records one and migrates nothing', async () => {
     await seedWorkspace('children')
     const repo = setup()
@@ -636,7 +736,6 @@ describe('changes observed only across a workspace switch (#780)', () => {
     await sharedDb.db.execute(
       `DELETE FROM client_schema_state WHERE key LIKE '${PROPERTY_DEFINITION_BASELINE_PREFIX}%'`,
     )
-    repo.__resetPropertyDefinitionBaselineCache()
     const scheduled = vi.spyOn(repo, 'schedulePropertyDefinitionMigrations')
 
     await changeWhileInactive(repo, statusRenamed)
@@ -662,12 +761,9 @@ describe('changes observed only across a workspace switch (#780)', () => {
     expect(scheduled).toHaveBeenCalledTimes(1)
 
     repo.setActiveWorkspaceId(OTHER_WS)
+    await awaitRegistry(repo, OTHER_WS)
     repo.setActiveWorkspaceId(WS)
-    await vi.waitFor(() => {
-      if (repo.propertyDefinitions?.workspaceId !== WS) {
-        throw new Error(`[test] registry has not re-primed for ${WS} yet`)
-      }
-    })
+    await awaitRegistry(repo, WS)
     await repo.awaitPropertyDefinitionBaselines()
 
     // ...and coming back finds nothing to do, because that build was recorded.
@@ -679,28 +775,19 @@ describe('changes observed only across a workspace switch (#780)', () => {
     const repo = setup()
     await seedProperty(repo, 'p', 'done')
     publishDefinition(repo, statusRenamed)
-    await vi.waitFor(() => {
-      if (repo.propertyDefinitions?.definitionsByFieldId.get(FIELD_ID)?.name !== 'state') {
-        throw new Error('[test] registry has not primed on the renamed definition yet')
-      }
-    })
+    await awaitRegistry(repo, WS, 'state')
     // Captured the way the baseline path captures it: synchronously with the
     // rebuild, BEFORE its async read of the stored baseline.
     const resolver = repo.propertySchemaResolverFor(WS)
 
     // Two further switches evict WS from the one-deep active/previous retention
     // `propertySchemaResolverFor` serves from — the window that made the OLD
-    // deferred pass drop migrations silently (PR #386 review).
+    // deferred pass drop migrations silently (PR #386 review). Each switch must
+    // actually PRIME a registry: the previous-slot rotation only happens when a
+    // non-null snapshot is replaced.
     for (const workspaceId of [OTHER_WS, THIRD_WS]) {
       repo.setActiveWorkspaceId(workspaceId)
-      // Each switch must actually PRIME a registry before the next one: the
-      // previous-slot rotation only happens when a non-null snapshot is
-      // replaced, so two switches that never build one leave WS in retention.
-      await vi.waitFor(() => {
-        if (repo.propertyDefinitions?.workspaceId !== workspaceId) {
-          throw new Error(`[test] registry has not primed for ${workspaceId} yet`)
-        }
-      })
+      await awaitRegistry(repo, workspaceId)
     }
     expect(repo.propertySchemaResolverFor(WS).resolveField(FIELD_ID).status).not.toBe('resolved')
 
@@ -733,5 +820,89 @@ describe('changes observed only across a workspace switch (#780)', () => {
     await vi.waitFor(async () => {
       expect(await cell('p')).toEqual({state: 'done'})
     }, {timeout: 5000})
+  }, 20_000)
+})
+
+describe('contested names on the deferred path', () => {
+  const F_RENAMED = 'field-contested-renamed'
+  const F_OWNER = 'field-contested-owner'
+  const F_PLAIN = 'field-contested-plain'
+
+  // ONE instance per name — plain-schema resolution matches by identity, so a
+  // freshly built duplicate would not resolve to the published definition.
+  const SCHEMAS = new Map(
+    ['a', 'zz', 'q', 'b', 'r'].map(name => [name, schemaWith(name)] as const),
+  )
+
+  const publishTrio = (repo: Repo, names: Record<string, string>): void => {
+    repo.setRuntimeContributions(
+      projectedPropertyDefinitionsFacet,
+      'test-contested-definitions',
+      [F_RENAMED, F_OWNER, F_PLAIN].map((fieldId, index) => ({
+        metadata: {
+          fieldId, workspaceId: WS, createdAt: index + 1, name: names[fieldId]!,
+          changeScope: ChangeScope.BlockDefault, hidden: false, origin: 'user' as const,
+        },
+        schema: SCHEMAS.get(names[fieldId]!)!,
+      })),
+      {workspaceId: WS},
+    )
+  }
+
+  const liveRows = async (blockId: string, fieldId: string): Promise<number> =>
+    (await sharedDb.db.get<{n: number}>(
+      `SELECT COUNT(*) AS n FROM blocks
+        WHERE deleted = 0 AND (
+          (parent_id = ? AND reference_target_id = ?)
+          OR parent_id IN (SELECT id FROM blocks WHERE parent_id = ? AND reference_target_id = ?))`,
+      [blockId, fieldId, blockId, fieldId],
+    )).n
+
+  it('refuses a rename whose OLD name another definition now answers to, instead of tombstoning it', async () => {
+    await seedWorkspace('children')
+    const {repo} = createTestRepo({db: sharedDb.db, user: {id: 'user-1'}})
+    repo.setActiveWorkspaceId(WS)
+    const initial = {[F_RENAMED]: 'a', [F_OWNER]: 'zz', [F_PLAIN]: 'q'}
+    publishTrio(repo, initial)
+    await repo.tx(async tx => {
+      await tx.create({
+        id: 'host', workspaceId: WS, parentId: null, orderKey: 'k-host', content: 'host',
+      })
+    }, {scope: ChangeScope.BlockDefault})
+    for (const [fieldId, name] of Object.entries(initial)) {
+      await repo.tx(tx => tx.setProperty('host', SCHEMAS.get(name)!, `v-${fieldId}`),
+        {scope: ChangeScope.BlockDefault})
+    }
+    expect(await cell('host')).toEqual({
+      a: `v-${F_RENAMED}`, zz: `v-${F_OWNER}`, q: `v-${F_PLAIN}`,
+    })
+    expect(await liveRows('host', F_OWNER)).toBe(2)
+
+    // The state a rename lands in when it UN-SHADOWS a peer: `a` is now
+    // F_OWNER's name. F_PLAIN renames uncontested in the same batch, as the
+    // positive control that the pass really ran.
+    publishTrio(repo, {[F_RENAMED]: 'b', [F_OWNER]: 'a', [F_PLAIN]: 'r'})
+    await vi.waitFor(() => {
+      if (repo.propertyDefinitions?.definitionsByFieldId.get(F_OWNER)?.name !== 'a') {
+        throw new Error('[test] registry has not primed on the contested name yet')
+      }
+    }, {timeout: 5000})
+
+    vi.useFakeTimers()
+    repo.schedulePropertyDefinitionMigrations(WS, [
+      {fieldId: F_RENAMED, oldName: 'a', newName: 'b', codecChanged: false},
+      {fieldId: F_PLAIN, oldName: 'q', newName: 'r', codecChanged: false},
+    ])
+    await vi.runAllTimersAsync()
+    await repo.awaitPropertyDefinitionMigrations()
+    vi.useRealTimers()
+
+    // The uncontested rename applied — so the pass demonstrably ran — while the
+    // contested one left `a` alone. Dropping `a` would have made MATERIALIZE
+    // read it as a user deletion and tombstone F_OWNER's field row and value.
+    expect(await cell('host')).toEqual({
+      a: `v-${F_RENAMED}`, zz: `v-${F_OWNER}`, r: `v-${F_PLAIN}`,
+    })
+    expect(await liveRows('host', F_OWNER)).toBe(2)
   }, 20_000)
 })
