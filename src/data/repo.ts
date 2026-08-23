@@ -115,14 +115,12 @@ import {
 } from './internals/referenceTargetProcessor'
 import { parseExactReferenceBlockContent } from './referenceBlock'
 import type { BlockIdPolicy } from './blockId'
-import type {
-  PropertyDefinitionChange,
-  PropertyDefinitionMigrationPlan,
-} from './internals/propertyDefinitionMigrations'
 import {
   changedPropertyDefinitionFacts,
   withoutContestedRenames,
+  type PropertyDefinitionChange,
   type PropertyDefinitionFactsByFieldId,
+  type PropertyDefinitionMigrationPlan,
 } from './internals/propertyDefinitionMigrations'
 import {
   observePropertyDefinitions,
@@ -745,10 +743,10 @@ export class Repo {
    *  `awaitPropertyDefinitionMigrations()`, same pattern. */
   private readonly propertyDefinitionMigrationJobs = new PendingIdleJobs((fn) => scheduleDeepIdle(fn, CATCHUP_DEEP_IDLE))
   /** One serial chain, so a rebuild's fold lands before the next rebuild reads
-   *  its before-state. Not load-bearing for correctness — `foldIn` is one
-   *  transaction and a repeated migration is idempotent — so overlapping runs
-   *  would merely schedule the same pass twice off the same stale baseline.
-   *  Drained by `awaitPropertyDefinitionBaselines()`. */
+   *  its before-state. Not load-bearing for correctness — each update is one
+   *  transaction and a repeated migration is idempotent — but it IS the only
+   *  handle `awaitPropertyDefinitionBaselines()` has to drain, which every
+   *  integration test depends on. */
   private propertyDefinitionBaselineWork: Promise<void> = Promise.resolve()
   /** In-flight property-seed materialization passes (§4.3 of the schema-
    *  unification design) — drained by `awaitSeedMaterialization()`. Unlike its

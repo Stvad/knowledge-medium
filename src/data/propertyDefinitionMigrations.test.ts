@@ -116,7 +116,6 @@ const cell = async (id: string): Promise<Record<string, unknown>> => {
   return JSON.parse(row.properties_json) as Record<string, unknown>
 }
 
-/** fieldId -> recorded baseline name, from the stored blob. */
 const baselineNames = async (workspaceId = WS): Promise<Record<string, string>> => {
   const row = await sharedDb.db.getOptional<{value: string | null}>(
     'SELECT value FROM client_schema_state WHERE key = ?',
@@ -748,6 +747,22 @@ describe('changes observed only across a workspace switch (#780)', () => {
     await vi.waitFor(async () => {
       expect(await cell('p')).toEqual({state: 'done'})
     }, {timeout: 5000})
+  }, 20_000)
+
+  it('records a baseline even while the repo is read-only', async () => {
+    await seedWorkspace('children')
+    const {repo} = createTestRepo({db: sharedDb.db, user: {id: 'user-1'}})
+    // `App` pins the workspace BEFORE it resolves the role, so a prime
+    // routinely lands while this is still true. Gating the RECORD on it would
+    // leave the device with no baseline and no second prime — blind for the
+    // rest of the session, and starting the next one with nothing.
+    repo.setReadOnly(true)
+    repo.setActiveWorkspaceId(WS)
+    publishDefinition(repo, statusString)
+    await awaitRegistry(repo, WS, 'status')
+    await repo.awaitPropertyDefinitionBaselines()
+
+    expect(await baselineNames()).toEqual({[FIELD_ID]: 'status'})
   }, 20_000)
 
   it('with NO recorded baseline, records one and migrates nothing', async () => {

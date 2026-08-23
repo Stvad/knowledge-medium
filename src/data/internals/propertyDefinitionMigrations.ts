@@ -17,7 +17,7 @@
  * Detection rides the registry rebuild: the facet bridge diffs the previous
  * vs incoming `PropertyDefinitionRegistrySnapshot` per fieldId (durable
  * identity), falling back to `propertyDefinitionBaseline.ts` on a PRIME, where
- * there is no comparable previous snapshot. The multi-device rename RACE (a
+ * the previous snapshot is null. The multi-device rename RACE (a
  * block edited offline across a rename syncs up under a key no registry knows)
  * is slice C's reconcile; this one-shot pass can't reach it.
  */

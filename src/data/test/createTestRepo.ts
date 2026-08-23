@@ -137,9 +137,6 @@ export const createTestRepo = (opts: CreateTestRepoOptions): TestRepo => {
       markComplete: async (ws: string, id: string) => {
         // A backfill marker's payload is its PRESENCE; the table's `value`
         // column belongs to the rows that carry one and must stay NULL here.
-        // Binding it threw on every call once, unnoticed, because the runner
-        // recorded its outcome BEFORE this ran — so a completion that always
-        // failed still reported success.
         await opts.db.execute(
           'INSERT OR REPLACE INTO client_schema_state (key, completed_at) VALUES (?, ?)',
           [`workspace_backfill:${ws}:${id}`, Date.now()],

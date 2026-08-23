@@ -152,10 +152,7 @@ const initializeTestDb = async (dbDir: string): Promise<PowerSyncDatabase> => {
     ...backfillDb,
     getAll: <T,>(sql: string) => db.getAll<T>(sql),
   })
-  await ensureClientSchemaStateValueColumn({
-    execute: (sql: string) => db.execute(sql),
-    getAll: <T,>(sql: string) => db.getAll<T>(sql),
-  })
+  await ensureClientSchemaStateValueColumn(db)
   await db.execute(CREATE_BLOCKS_SYNCED_NEEDS_APPLY_INDEX_SQL)
   await backfillBlockAliasesIfEmpty(backfillDb)
   await backfillBlockTypesIfEmpty(backfillDb)
