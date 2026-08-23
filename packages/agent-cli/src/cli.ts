@@ -954,6 +954,9 @@ cli
 // the CLI's own clear timeout message.
 const runBackfillDefaultWaitSeconds = 3540
 
+/** Same bound, same reason — see the note above `runBackfillDefaultWaitSeconds`. */
+const rematerializeDefaultWaitSeconds = runBackfillDefaultWaitSeconds
+
 cli
   .command('run-backfill <backfillId>', wireDescription('run-backfill'))
   .option('--workspace <id>', 'Assert the workspace the pass writes to (defaults to the active one)')
@@ -982,6 +985,41 @@ cli
           'waiting for it. Re-running is safe (it is single-flighted and resumes from ' +
           'whatever is left), but the list of values it could not migrate is in the app ' +
           'console, not here.',
+        )
+      })
+    process.stdout.write(`${JSON.stringify(value, null, 2)}\n`)
+  })
+
+// A `--scope all` pass re-judges every staged row of the workspace, which on a
+// large graph is the same order of work as `run-backfill` — so it takes the
+// same wait, and for the same reason: the default command timeout would give up
+// while the app is still materializing.
+cli
+  .command('rematerialize-workspace', wireDescription('rematerialize-workspace'))
+  .option('--workspace <id>', 'Assert the workspace being re-materialized (defaults to the active one, which it must be)')
+  .option('--scope <scope>', 'unapplied (default) — only the rows the durable refusal counts; all — every staged row of the workspace', {default: 'unapplied'})
+  .option('--wait <seconds>', `How long to wait for the pass to finish (default ${rematerializeDefaultWaitSeconds}).`, {default: rematerializeDefaultWaitSeconds})
+  .action(async (options: {workspace?: string | number; scope?: unknown; wait?: string | number}) => {
+    // Same 0-for-empty artifact CAC produces for `--workspace ""` as in
+    // `audit-properties`; normalize it back so the command layer's purpose-built
+    // refusal is what the operator sees.
+    const asserted = options.workspace === undefined
+      ? undefined
+      : options.workspace === 0 ? '' : String(options.workspace)
+    await ensureBridgeRunning()
+    const value = await client().runCommand({
+      type: 'rematerialize-workspace',
+      ...(asserted !== undefined ? {workspaceId: asserted} : {}),
+      ...(options.scope === undefined ? {} : {scope: String(options.scope)}),
+    }, {timeoutMs: Math.max(1, Number(options.wait) || rematerializeDefaultWaitSeconds) * 1000})
+      .catch((cause: unknown) => {
+        // Giving up WAITING is not the pass giving up: it keeps running in the
+        // app, and because it is idempotent and resumable, re-running is the
+        // whole recovery — unlike `run-backfill`, nothing it collected is lost.
+        if (!(cause instanceof Error) || !/timed out/i.test(cause.message)) throw cause
+        throw new Error(
+          `${cause.message}\nThe pass is still running in the app — this only stopped ` +
+          'waiting for it. Re-running is safe and resumes from whatever is left.',
         )
       })
     process.stdout.write(`${JSON.stringify(value, null, 2)}\n`)
