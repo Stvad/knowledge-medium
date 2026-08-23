@@ -132,15 +132,16 @@ describe('name fields commit on blur only what the user edited', () => {
     const input = screen.getByPlaceholderText('property name') as HTMLInputElement
     expect(input.value).toBe(PADDED_NAME)
 
-    // Assert on the CAUSE: an unedited blur must not open a write at all.
-    // (A "the name is unchanged" read alone passes trivially before an
-    // in-flight write lands.)
+    // The CAUSE is the whole assertion here: `repo.tx` is called in the same
+    // microtask as the blur handler, so a spy on it cannot race. A trailing
+    // "the name is unchanged" read would be decoration — measured, it returns
+    // the pre-commit cache while the rename is already in flight, and stays
+    // green with the guard deleted.
     const txSpy = vi.spyOn(repo, 'tx')
     await user.click(input)
     await user.tab()
 
     expect(txSpy).not.toHaveBeenCalled()
-    expect(storedName()).toBe(PADDED_NAME)
   })
 
   // Positive control for the test above: the same harness DOES observe a
@@ -168,7 +169,6 @@ describe('name fields commit on blur only what the user edited', () => {
     await user.tab()
 
     expect(txSpy).not.toHaveBeenCalled()
-    expect(storedLabel()).toBe(PADDED_LABEL)
   })
 
   it('leaves a type whose content differs from its label alone on a bare focus', async () => {
@@ -186,7 +186,6 @@ describe('name fields commit on blur only what the user edited', () => {
     await user.tab()
 
     expect(txSpy).not.toHaveBeenCalled()
-    expect(storedContent('divergent-type')).toBe(DIVERGENT_CONTENT)
   })
 
   it('still trims a type label the user actually edited', async () => {

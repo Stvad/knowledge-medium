@@ -22,6 +22,14 @@ const stringProp = defineProperty<string>('roam:email', {
   changeScope: ChangeScope.BlockDefault,
 })
 
+// A cell key whose stored name carries padding — an import, or a definition
+// synthesized for an orphaned key, which mints it verbatim.
+const paddedProp = defineProperty<string>(' padded ', {
+  codec: codecs.string,
+  defaultValue: '',
+  changeScope: ChangeScope.BlockDefault,
+})
+
 describe('PropertyRow', () => {
   it('renders the raw JSON value when a known property fails to decode', () => {
     const row: PropertyPanelModelRow = {
@@ -203,5 +211,53 @@ describe('PropertyRow', () => {
 
     fireEvent.blur(screen.getByLabelText('custom editor'))
     expect(activation.onBlur).toHaveBeenCalledTimes(1)
+  })
+
+  // `renameProperty` decides whether the user edited anything by comparing the
+  // committed name against what this input hands back, so the input has to be
+  // seeded with the RAW key — not `labelText`, which the read-only branch a few
+  // lines away does render. Seeding it with the display label would rename every
+  // overridden row to its label on a bare focus-and-leave.
+  it('seeds the rename input with the raw key, not the display label', () => {
+    const row: PropertyPanelModelRow = {
+      name: ' padded ',
+      encodedValue: 'v',
+      isSet: true,
+      labelText: 'Padded (display)',
+      shape: paddedProp.codec.type,
+      // A key with no registered schema still carries a synthesized display
+      // schema — and `canRename` is true precisely because it is unknown.
+      schema: paddedProp,
+      schemaUnknown: true,
+      decodeFailed: false,
+      value: 'v',
+      Editor: undefined,
+      Glyph: undefined,
+      canRename: true,
+      canDelete: true,
+      canChangeShape: false,
+      isHidden: false,
+      readOnly: false,
+    }
+    const onRename = vi.fn()
+
+    render(
+      <PropertyRow
+        row={row}
+        block={{id: 'block-1'} as Block}
+        readOnly={false}
+        canConfigure={false}
+        onNavigate={vi.fn()}
+        onConfigure={vi.fn()}
+        onChange={vi.fn()}
+        onRename={onRename}
+        onDelete={vi.fn()}
+      />,
+    )
+
+    const input = screen.getByLabelText(`Field ${row.labelText}`) as HTMLInputElement
+    expect(input.value).toBe(' padded ')
+    fireEvent.blur(input)
+    expect(onRename).toHaveBeenCalledWith(' padded ')
   })
 })

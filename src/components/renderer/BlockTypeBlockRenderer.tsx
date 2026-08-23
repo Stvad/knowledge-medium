@@ -185,10 +185,12 @@ export const BlockTypeContentRenderer: BlockRenderer = ({block}: BlockRendererPr
   }
 
   const writeLabel = useCallback(async (next: string) => {
-    // Nothing to commit. The writer's own no-op needs the label AND the
-    // content to match, so without this an untouched blur on a type whose
-    // content diverges from its label — which imports and raw-created types
-    // keep — would mirror the label over that content and reconcile aliases.
+    // Nothing to commit. Not redundant with the writer's own no-op, which
+    // needs the label AND the `content` it mirrors into to BOTH match: with
+    // those two diverged, a bare focus-and-leave rewrote `content` (and, for
+    // a row carrying no alias yet, seeded one). Losing those incidental
+    // repairs is the point — repair belongs to a processor, not to whoever
+    // last tabbed through the field.
     if (next === label) return
     const currentContent = data?.content ?? ''
     try {

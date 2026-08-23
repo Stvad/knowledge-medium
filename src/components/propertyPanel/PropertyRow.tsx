@@ -114,6 +114,10 @@ export function PropertyRow({
           {renameAllowed ? (
             <Input
               className="h-7 min-w-0 border-transparent bg-transparent px-0 text-sm shadow-none focus-visible:border-transparent focus-visible:ring-0"
+              // The RAW key, never `row.labelText`: `renameProperty` reads
+              // "did the user edit this" off `newName === oldName`, so seeding
+              // the display label would rename every overridden row to its
+              // label on a bare focus-and-leave.
               defaultValue={row.name}
               aria-label={`Field ${row.labelText}`}
               data-property-label="true"
