@@ -167,9 +167,18 @@ const describePassOutcome = (
       return {
         // "Not started" only if NOTHING did: the pass aborts mid-run too, and a
         // run that flipped has already made its one irreversible change.
+        //
+        // `retryable` is read on BOTH branches. Past the flip `cleared` is
+        // always true, so a branch that ignored it told every durable
+        // blocker — a view gap nothing is draining, a workspace turned
+        // read-only — to "run it again", which is the forever-retry loop
+        // `retryable` exists to prevent.
         message: (cleared
-          ? `Stopped before finishing — ${withPeriod(result.reason)} Already-migrated blocks ` +
-            'are skipped, so run it again.'
+          ? `Stopped before finishing — ${withPeriod(result.reason)} ` +
+            (result.retryable === false
+              ? 'Nothing is working on it, so running this again will not get further ' +
+                'until that is fixed.'
+              : 'Already-migrated blocks are skipped, so run it again.')
           : notStarted(result.reason, result.retryable)),
         failed: true,
       }
@@ -187,9 +196,14 @@ const describePassOutcome = (
         // so this outcome only ever means another device holds the claim —
         // including one that took it and never came back, which no timeout
         // clears. Naming where the claim lives is the whole recovery.
-        message: 'Another client holds this migration — another device, or another tab of ' +
-          'this browser. Wait for it to finish; if nothing is running, check the claim ' +
-          'block on the "System Migrations (km)" page and delete it to release the pass.',
+        // NOT "another tab": the claimant id is per browser PROFILE, so two
+        // tabs share one claim and read it as their own — an overlap this
+        // seam does not separate and never reports. Naming tabs here sent
+        // operators to close one, which changes nothing.
+        message: 'Another client holds this migration — another device, or this browser ' +
+          'signed in elsewhere. Wait for it to finish; if nothing is running, check the ' +
+          'claim block on the "System Migrations (km)" page and delete it to release the ' +
+          'pass.',
         failed: true,
       }
     case 'already-running':

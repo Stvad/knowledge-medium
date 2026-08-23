@@ -75,7 +75,7 @@ const makeRepo = (
     log?: ClaimStubLog
   } = {},
 ) => {
-  const runWorkspaceBackfillNow = vi.fn(async () => result)
+  const runPass = vi.fn(async () => result)
   const getAll = vi.fn(async () => [{n: 7}])
   const workspaceViewGap = vi.fn(async (): Promise<ViewGap | null> => null)
   // Two readers of the `workspaces` row now — the flip state and the owner.
@@ -89,13 +89,14 @@ const makeRepo = (
     isReadOnly: false,
     workspaceViewGap,
     undoManagerFor: () => ({clear: clearUndo}),
-    // The gesture reaches the pass THROUGH the claim, so the stub is what
-    // makes `runWorkspaceBackfillNow` reachable at all — a fixture that ran
-    // the body unclaimed would make every ordering assertion below vacuous.
-    withOperatorBackfillClaim: claimStub(runWorkspaceBackfillNow, {log, refuse: refuseClaim}),
-    runWorkspaceBackfillNow,
+    // The gesture reaches the pass THROUGH the claim, so the stub is the only
+    // route to `runPass`. `repo.runPass` is deliberately
+    // ABSENT: a fixture that also answered that call directly would keep
+    // every assertion below green through a revert to it — which is the bug
+    // (#710) this file exists to pin. Missing, it is a TypeError instead.
+    withOperatorBackfillClaim: claimStub(runPass, {log, refuse: refuseClaim}),
   } as unknown as Repo
-  return {repo, runWorkspaceBackfillNow, getAll, workspaceViewGap, getOptional}
+  return {repo, runPass, getAll, workspaceViewGap, getOptional}
 }
 
 /** The dialog is a user-length pause; this is the seam for what happens during
@@ -167,20 +168,20 @@ describe('migrate_properties_to_blocks action', () => {
     // The banner is up by then and has no duration, and nothing else is
     // watching this await — a rejection would leave "Migrating properties to
     // blocks…" on screen forever over a pass that never started.
-    const {repo, runWorkspaceBackfillNow, workspaceViewGap} = makeRepo()
+    const {repo, runPass, workspaceViewGap} = makeRepo()
     workspaceViewGap.mockResolvedValueOnce(null).mockRejectedValueOnce(new Error('db is gone'))
 
     await invoke(repo)
 
     expect(progressHandle.fail).toHaveBeenCalledWith(expect.stringContaining('Not started'))
-    expect(runWorkspaceBackfillNow).not.toHaveBeenCalled()
+    expect(runPass).not.toHaveBeenCalled()
   })
 
   it('does not tell the operator to retry a refusal that retrying cannot clear', async () => {
     // The message is their only feedback. Told "try again shortly" about a gap
     // nothing is working on, they retry forever — and this refusal is the one
     // that means a recovery gesture is needed, not patience.
-    const {repo, runWorkspaceBackfillNow, workspaceViewGap} = makeRepo()
+    const {repo, runPass, workspaceViewGap} = makeRepo()
     workspaceViewGap.mockResolvedValue(STRANDED)
 
     await invoke(repo)
@@ -188,14 +189,14 @@ describe('migrate_properties_to_blocks action', () => {
     expect(showInfo).toHaveBeenCalledWith(
       expect.stringContaining('retrying alone will not clear this'))
     expect(showInfo).not.toHaveBeenCalledWith(expect.stringContaining('try again shortly'))
-    expect(runWorkspaceBackfillNow).not.toHaveBeenCalled()
+    expect(runPass).not.toHaveBeenCalled()
   })
 
   it('writes nothing when the user cancels the confirmation', async () => {
     // The confirmation is the whole guard on a pass that uploads hundreds of
     // thousands of rows and drops the workspace's undo history.
     openDialog.mockResolvedValue(null)
-    const {repo, runWorkspaceBackfillNow} = makeRepo(
+    const {repo, runPass} = makeRepo(
       {outcome: 'ran', undoHistoryCleared: true},
     )
 
@@ -204,21 +205,21 @@ describe('migrate_properties_to_blocks action', () => {
     // The FLIP as well as the pass: it is the gesture's first write now, and
     // it is the one the trigger will not let anyone take back.
     expect(flipWorkspace).not.toHaveBeenCalled()
-    expect(runWorkspaceBackfillNow).not.toHaveBeenCalled()
+    expect(runPass).not.toHaveBeenCalled()
   })
 
   it('refuses an already-flipped workspace before the workspace-wide scan', async () => {
     // No flip on this path, so nothing irreversible — but the candidate count is
     // an unbounded json_each walk on the UI thread and the dialog would ask for
     // consent to a run the runner is about to refuse.
-    const {repo, runWorkspaceBackfillNow, getAll, workspaceViewGap} = makeRepo(RAN, {flipped: true})
+    const {repo, runPass, getAll, workspaceViewGap} = makeRepo(RAN, {flipped: true})
     workspaceViewGap.mockResolvedValue(DRAINING)
 
     await invoke(repo)
 
     expect(getAll).not.toHaveBeenCalled()
     expect(openDialog).not.toHaveBeenCalled()
-    expect(runWorkspaceBackfillNow).not.toHaveBeenCalled()
+    expect(runPass).not.toHaveBeenCalled()
   })
 
   it('re-checks fitness after the confirmation, which is a user-length pause', async () => {
@@ -226,7 +227,7 @@ describe('migrate_properties_to_blocks action', () => {
     // the operator is reading it would otherwise be carried straight into the
     // irreversible write — the same reason the active-workspace check is taken
     // twice.
-    const {repo, runWorkspaceBackfillNow, workspaceViewGap} = makeRepo()
+    const {repo, runPass, workspaceViewGap} = makeRepo()
     openDialog.mockImplementation(async () => {
       workspaceViewGap.mockResolvedValue(DRAINING)
       return true
@@ -235,7 +236,7 @@ describe('migrate_properties_to_blocks action', () => {
     await invoke(repo)
 
     expect(flipWorkspace).not.toHaveBeenCalled()
-    expect(runWorkspaceBackfillNow).not.toHaveBeenCalled()
+    expect(runPass).not.toHaveBeenCalled()
     expect(progressHandle.fail).toHaveBeenCalledWith(expect.stringMatching(/draining/))
   })
 
@@ -245,13 +246,13 @@ describe('migrate_properties_to_blocks action', () => {
     // own preconditions AFTER the flip means the irreversible half lands and the
     // reversible half then declines — on a connected device a staged sync view is
     // the EXPECTED ending, not a corner case.
-    const {repo, runWorkspaceBackfillNow, workspaceViewGap} = makeRepo()
+    const {repo, runPass, workspaceViewGap} = makeRepo()
     workspaceViewGap.mockResolvedValue(DRAINING)
 
     await invoke(repo)
 
     expect(flipWorkspace).not.toHaveBeenCalled()
-    expect(runWorkspaceBackfillNow).not.toHaveBeenCalled()
+    expect(runPass).not.toHaveBeenCalled()
     expect(showInfo).toHaveBeenCalledWith(expect.stringMatching(/draining/))
   })
 
@@ -262,26 +263,26 @@ describe('migrate_properties_to_blocks action', () => {
     // promised to make no Supabase request. Refuse before the dialog rather than
     // fail afterwards on a PostgREST string.
     remoteSyncActive.mockReturnValue(false)
-    const {repo, runWorkspaceBackfillNow} = makeRepo()
+    const {repo, runPass} = makeRepo()
 
     await invoke(repo)
 
     expect(openDialog).not.toHaveBeenCalled()
     expect(flipWorkspace).not.toHaveBeenCalled()
-    expect(runWorkspaceBackfillNow).not.toHaveBeenCalled()
+    expect(runPass).not.toHaveBeenCalled()
   })
 
   it('still backfills a flipped workspace with sync off, since that needs no server', async () => {
     // The refusal above is about the FLIP, which is a server write. The pass
     // itself is local, so a workspace already past the flip must stay migratable.
     remoteSyncActive.mockReturnValue(false)
-    const {repo, runWorkspaceBackfillNow} = makeRepo(
+    const {repo, runPass} = makeRepo(
       RAN, {flipped: true},
     )
 
     await invoke(repo)
 
-    expect(runWorkspaceBackfillNow).toHaveBeenCalled()
+    expect(runPass).toHaveBeenCalled()
   })
 
   it('stops when the flip committed but this device cannot see it', async () => {
@@ -290,11 +291,11 @@ describe('migrate_properties_to_blocks action', () => {
     // reads 'cell' locally and is in fact flipped — the RECONCILE branch, which
     // is the one thing create-only exists to prevent.
     flipWorkspace.mockResolvedValue({localApplied: false})
-    const {repo, runWorkspaceBackfillNow} = makeRepo()
+    const {repo, runPass} = makeRepo()
 
     await invoke(repo)
 
-    expect(runWorkspaceBackfillNow).not.toHaveBeenCalled()
+    expect(runPass).not.toHaveBeenCalled()
     // And it must NOT read as "nothing happened" — the flip is fleet-wide and
     // one-way, and it landed.
     expect(progressHandle.fail).toHaveBeenCalledWith(
@@ -344,8 +345,8 @@ describe('migrate_properties_to_blocks action', () => {
   it('names both irreversible effects when the runner throws outright', async () => {
     // A rejection skips describeOutcome entirely, which is what otherwise
     // carries them — and by then the flip has committed and undo is gone.
-    const {repo, runWorkspaceBackfillNow} = makeRepo()
-    runWorkspaceBackfillNow.mockRejectedValue(new Error('claim write blew up'))
+    const {repo, runPass} = makeRepo()
+    runPass.mockRejectedValue(new Error('claim write blew up'))
 
     await invoke(repo)
 
@@ -363,8 +364,8 @@ describe('migrate_properties_to_blocks action', () => {
     // nothing maintains.
     const order: string[] = []
     flipWorkspace.mockImplementation(async () => { order.push('flip'); return {localApplied: true} })
-    const {repo, runWorkspaceBackfillNow} = makeRepo()
-    runWorkspaceBackfillNow.mockImplementation(async () => {
+    const {repo, runPass} = makeRepo()
+    runPass.mockImplementation(async () => {
       order.push('backfill')
       return RAN
     })
@@ -382,11 +383,11 @@ describe('migrate_properties_to_blocks action', () => {
     // refusal leaves the graph untouched — which is the part an operator needs
     // told, rather than being left to wonder what landed.
     flipWorkspace.mockRejectedValue(new Error('workspaces.properties_migration is writable by the workspace owner'))
-    const {repo, runWorkspaceBackfillNow} = makeRepo()
+    const {repo, runPass} = makeRepo()
 
     await invoke(repo)
 
-    expect(runWorkspaceBackfillNow).not.toHaveBeenCalled()
+    expect(runPass).not.toHaveBeenCalled()
     expect(progressHandle.fail).toHaveBeenCalledWith(expect.stringMatching(/nothing was migrated/i))
   })
 
@@ -395,14 +396,14 @@ describe('migrate_properties_to_blocks action', () => {
     // who had already flipped with no way to run the pass at all. Re-flipping
     // would be no better: forward-only, so a second flip is at best a no-op
     // write on the one gesture an operator repeats to catch stragglers.
-    const {repo, runWorkspaceBackfillNow} = makeRepo(
+    const {repo, runPass} = makeRepo(
       RAN, {flipped: true},
     )
 
     await invoke(repo)
 
     expect(flipWorkspace).not.toHaveBeenCalled()
-    expect(runWorkspaceBackfillNow).toHaveBeenCalled()
+    expect(runPass).toHaveBeenCalled()
     // The confirmation is the only place an operator finds out which of the two
     // jobs they are starting.
     expect(openDialog).toHaveBeenCalledWith(
@@ -413,7 +414,7 @@ describe('migrate_properties_to_blocks action', () => {
     // The runner's own active-workspace check runs only AFTER `tryClaim` has
     // written a Migrations page and a claim row, so a stale pin means two
     // blocks land in a graph the user never meant to touch.
-    const {repo, runWorkspaceBackfillNow} = makeRepo({outcome: 'ran', undoHistoryCleared: true})
+    const {repo, runPass} = makeRepo({outcome: 'ran', undoHistoryCleared: true})
     openDialog.mockImplementation(dialogThatSwitchesWorkspace(repo))
 
     await invoke(repo)
@@ -421,7 +422,7 @@ describe('migrate_properties_to_blocks action', () => {
     // Flipping the wrong graph is the worse half: forward-only by trigger, so
     // unlike a stray Migrations page it cannot be undone by a column write.
     expect(flipWorkspace).not.toHaveBeenCalled()
-    expect(runWorkspaceBackfillNow).not.toHaveBeenCalled()
+    expect(runPass).not.toHaveBeenCalled()
   })
 
   it('tells the user their undo history went with it', async () => {
@@ -515,14 +516,14 @@ describe('the graph-wide claim', () => {
     // the second write a rival device could make concurrently; inside it, a
     // flip that throws still ends the gesture through the release.
     const log: ClaimStubLog = {events: []}
-    const {repo, runWorkspaceBackfillNow} = makeRepo(RAN, {log})
+    const {repo, runPass} = makeRepo(RAN, {log})
     flipWorkspace.mockRejectedValue(new Error('the server refused'))
     vi.spyOn(console, 'error').mockImplementation(() => {})
 
     await invoke(repo)
 
     expect(log.events).toEqual(['claim', 'release'])
-    expect(runWorkspaceBackfillNow).not.toHaveBeenCalled()
+    expect(runPass).not.toHaveBeenCalled()
     expect(progressHandle.fail).toHaveBeenCalledWith(
       expect.stringMatching(/could not switch this workspace/i))
   })
@@ -534,7 +535,7 @@ describe('the orphan-definition step', () => {
     // unsatisfiable forever, and the flip is one-way. Refusing after the flip
     // would be refusing after the damage.
     flipBlocked.mockReturnValue('2 property key(s) cannot be given a definition')
-    const {repo, runWorkspaceBackfillNow, getAll} = makeRepo()
+    const {repo, runPass, getAll} = makeRepo()
 
     await invoke(repo)
 
@@ -543,7 +544,7 @@ describe('the orphan-definition step', () => {
     expect(getAll).not.toHaveBeenCalled()
     expect(openDialog).not.toHaveBeenCalled()
     expect(flipWorkspace).not.toHaveBeenCalled()
-    expect(runWorkspaceBackfillNow).not.toHaveBeenCalled()
+    expect(runPass).not.toHaveBeenCalled()
   })
 
   it('lets an already-flipped workspace run anyway, because there is nothing left to guard', async () => {
@@ -551,12 +552,12 @@ describe('the orphan-definition step', () => {
     // never migrate would be the worse trade — and no irreversible step
     // remains on this path.
     flipBlocked.mockReturnValue('2 property key(s) cannot be given a definition')
-    const {repo, runWorkspaceBackfillNow} = makeRepo(
+    const {repo, runPass} = makeRepo(
       RAN, {flipped: true})
 
     await invoke(repo)
 
-    expect(runWorkspaceBackfillNow).toHaveBeenCalled()
+    expect(runPass).toHaveBeenCalled()
   })
 
   it('says so when an already-flipped workspace has nothing to mint but real corruption', async () => {
@@ -564,14 +565,14 @@ describe('the orphan-definition step', () => {
     // the unreadable-bag warning is computed and then dropped — a run that
     // reports plain success over rows it could not inspect.
     flipBlocked.mockReturnValue('3 block(s) have a property bag this device cannot read')
-    const {repo, runWorkspaceBackfillNow} = makeRepo(
+    const {repo, runPass} = makeRepo(
       RAN, {flipped: true})
 
     await invoke(repo)
 
     expect(showInfo).toHaveBeenCalledWith(
       expect.stringMatching(/cannot read/), expect.anything())
-    expect(runWorkspaceBackfillNow).toHaveBeenCalled()
+    expect(runPass).toHaveBeenCalled()
   })
 
   it('clears the undo stack as soon as synthesis writes, not only at the flip', async () => {
@@ -632,7 +633,7 @@ describe('the orphan-definition step', () => {
     // editor runs the whole gesture, mints definitions that claim shared
     // property names, clears the workspace's undo history — and only then finds
     // out the flip was never available to them.
-    const {repo, runWorkspaceBackfillNow, getAll} = makeRepo(
+    const {repo, runPass, getAll} = makeRepo(
       RAN, {owner: 'someone-else'})
 
     await invoke(repo)
@@ -642,7 +643,7 @@ describe('the orphan-definition step', () => {
     expect(getAll).not.toHaveBeenCalled()
     expect(openDialog).not.toHaveBeenCalled()
     expect(flipWorkspace).not.toHaveBeenCalled()
-    expect(runWorkspaceBackfillNow).not.toHaveBeenCalled()
+    expect(runPass).not.toHaveBeenCalled()
   })
 
   it('re-checks ownership after the confirmation, which is a user-length pause', async () => {
@@ -650,7 +651,7 @@ describe('the orphan-definition step', () => {
     // replica during the dialog. It is re-taken because it lives in
     // `passIsUnfit`, which is re-taken — the whole point of putting it there.
     planSynthesis.mockResolvedValue(plan(2))
-    const {repo, runWorkspaceBackfillNow, getOptional} = makeRepo()
+    const {repo, runPass, getOptional} = makeRepo()
     let reads = 0
     getOptional.mockImplementation(async (sql: string) => sql.includes('owner_user_id')
       ? {owner_user_id: ++reads === 1 ? USER : 'someone-else'}
@@ -660,19 +661,19 @@ describe('the orphan-definition step', () => {
 
     expect(applySynthesis).not.toHaveBeenCalled()
     expect(flipWorkspace).not.toHaveBeenCalled()
-    expect(runWorkspaceBackfillNow).not.toHaveBeenCalled()
+    expect(runPass).not.toHaveBeenCalled()
     expect(progressHandle.fail).toHaveBeenCalledWith(
       expect.stringMatching(/only the workspace owner/i))
   })
 
   it('lets a non-owner backfill a workspace that is already flipped', async () => {
     // Nothing on that path needs the server, so ownership is irrelevant there.
-    const {repo, runWorkspaceBackfillNow} = makeRepo(
+    const {repo, runPass} = makeRepo(
       RAN, {flipped: true, owner: 'someone-else'})
 
     await invoke(repo)
 
-    expect(runWorkspaceBackfillNow).toHaveBeenCalled()
+    expect(runPass).toHaveBeenCalled()
   })
 
   it('does not flip a workspace the operator has navigated away from', async () => {
@@ -680,7 +681,7 @@ describe('the orphan-definition step', () => {
     // synthesis write. This gesture's standing rule is that it does not act on
     // a workspace that is no longer open, and the flip is the one step that
     // cannot be taken back.
-    const {repo, runWorkspaceBackfillNow, workspaceViewGap} = makeRepo()
+    const {repo, runPass, workspaceViewGap} = makeRepo()
     // On the SECOND fitness read — the one after the confirmation — so the
     // switch lands past the post-dialog check and the flip is the next thing
     // that would act.
@@ -693,7 +694,7 @@ describe('the orphan-definition step', () => {
     await invoke(repo)
 
     expect(flipWorkspace).not.toHaveBeenCalled()
-    expect(runWorkspaceBackfillNow).not.toHaveBeenCalled()
+    expect(runPass).not.toHaveBeenCalled()
     expect(progressHandle.fail).toHaveBeenCalledWith(
       expect.stringMatching(/different workspace is open now/i))
   })
@@ -733,12 +734,12 @@ describe('the orphan-definition step', () => {
   it('does not flip when the definitions could not be minted', async () => {
     planSynthesis.mockResolvedValue(plan(3))
     applySynthesis.mockRejectedValue(new Error('nope'))
-    const {repo, runWorkspaceBackfillNow} = makeRepo()
+    const {repo, runPass} = makeRepo()
 
     await invoke(repo)
 
     expect(flipWorkspace).not.toHaveBeenCalled()
-    expect(runWorkspaceBackfillNow).not.toHaveBeenCalled()
+    expect(runPass).not.toHaveBeenCalled()
     expect(progressHandle.fail).toHaveBeenCalledWith(expect.stringMatching(/nothing was migrated/))
   })
 
@@ -792,12 +793,12 @@ describe('the orphan-definition step', () => {
     applySynthesis.mockResolvedValue({created: 1, converged: 0,
                                       skipped: [{key: 'demo:orphan', reason: 'occupied'}]})
     flipBlocked.mockReturnValueOnce(null).mockReturnValue('still have no definition')
-    const {repo, runWorkspaceBackfillNow} = makeRepo()
+    const {repo, runPass} = makeRepo()
 
     await invoke(repo)
 
     expect(flipWorkspace).not.toHaveBeenCalled()
-    expect(runWorkspaceBackfillNow).not.toHaveBeenCalled()
+    expect(runPass).not.toHaveBeenCalled()
     expect(progressHandle.fail).toHaveBeenCalledWith(expect.stringMatching(/still have no definition/))
   })
 
@@ -806,11 +807,11 @@ describe('the orphan-definition step', () => {
     applySynthesis.mockResolvedValue({created: 1, converged: 0,
                                       skipped: [{key: 'demo:orphan', reason: 'occupied'}]})
     flipBlocked.mockReturnValueOnce(null).mockReturnValue('still have no definition')
-    const {repo, runWorkspaceBackfillNow} = makeRepo(RAN, {flipped: true})
+    const {repo, runPass} = makeRepo(RAN, {flipped: true})
 
     await invoke(repo)
 
-    expect(runWorkspaceBackfillNow).toHaveBeenCalled()
+    expect(runPass).toHaveBeenCalled()
     expect(showInfo).toHaveBeenCalledWith(
       expect.stringMatching(/still have no definition/), expect.anything())
   })
@@ -836,14 +837,14 @@ describe('the orphan-definition step', () => {
 
   it('stops without writing when the plan itself cannot be built', async () => {
     planSynthesis.mockRejectedValue(new Error('registry is not loaded'))
-    const {repo, runWorkspaceBackfillNow} = makeRepo()
+    const {repo, runPass} = makeRepo()
 
     await invoke(repo)
 
     expect(showInfo).toHaveBeenCalledWith(expect.stringMatching(/registry is not loaded/))
     expect(openDialog).not.toHaveBeenCalled()
     expect(flipWorkspace).not.toHaveBeenCalled()
-    expect(runWorkspaceBackfillNow).not.toHaveBeenCalled()
+    expect(runPass).not.toHaveBeenCalled()
   })
 })
 
@@ -896,6 +897,34 @@ describe('what a completed run tells the operator', () => {
     ).message).not.toMatch(/switched to property blocks/i)
   })
 
+})
+
+describe('a deferral the operator cannot clear by waiting', () => {
+  it('does not tell them to run it again, even once the flip has landed', async () => {
+    // Past the flip every outcome reports with the undo stack already cleared,
+    // which used to pick the "run it again" sentence unconditionally. A
+    // durable view gap and a workspace turned read-only both arrive here, and
+    // both are exactly what `retryable: false` exists to stop being retried
+    // forever.
+    const {message} = describeOutcome(
+      {outcome: 'deferred', undoHistoryCleared: true,
+       reason: '3 synced row(s) have not reached `blocks`', retryable: false},
+      counts(0), false, {flipped: true, undoCleared: true},
+    )
+
+    expect(message).toMatch(/will not get further/i)
+    expect(message).not.toMatch(/run it again/i)
+  })
+
+  it('still says to run it again when waiting IS the remedy', async () => {
+    const {message} = describeOutcome(
+      {outcome: 'deferred', undoHistoryCleared: true,
+       reason: 'synced rows are still draining', retryable: true},
+      counts(0), false, {flipped: true, undoCleared: true},
+    )
+
+    expect(message).toMatch(/run it again/i)
+  })
 })
 
 describe('every outcome says whether the history is gone', () => {

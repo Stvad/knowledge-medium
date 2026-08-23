@@ -362,6 +362,11 @@ export const createGraphBackfillClaim = (
       // today the difference is unobservable. Preserving it needs a second
       // key carried through the reclaim — worth it only once something reads
       // "was this graph migrated" as durable state (km-bmka).
+      //
+      // `Repo.withOperatorBackfillClaim` WIDENED this: it reclaims before its
+      // body writes, so any pre-pass abort — a synthesis that threw, a flip
+      // that was refused — now reaches this delete with the prior completion
+      // stamp already overwritten. Same residual, more ways in.
       await tx.delete(claimId)
     }, {scope: ChangeScope.BlockDefault, skipUndo: true,
         description: `release backfill claim ${backfillId}`})

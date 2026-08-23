@@ -3,7 +3,7 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChangeScope } from '@/data/api'
 import { workspaceBackfillsFacet, type WorkspaceBackfill } from '@/data/facets'
-import { Repo } from '@/data/repo'
+import { Repo, type OperatorBackfillResult } from '@/data/repo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { BLOCKS_SYNCED_RAW_TABLE, blockToSyncedRowParams } from '@/data/blockSchema'
 import { createTestRepo } from '@/data/test/createTestRepo'
@@ -1029,6 +1029,31 @@ describe('workspace backfill runner — a claim held across a gesture', () => {
     expect(events).toEqual(['tryClaim', 'releaseClaim'])
   })
 
+  it('does not let a failing pass hand back the claim the gesture still holds', async () => {
+    // The pass releases on its own failure paths — correct when the pass IS
+    // the gesture, wrong here: the body keeps running after `pass.run()`
+    // returns, and a release from inside it would leave those steps unclaimed.
+    // One owner, one release.
+    const events: string[] = []
+    const repo = gestureRepo(events, {
+      id: 'gesture-v1',
+      trigger: 'operator' as const,
+      run: async () => { throw new Error('pass exploded') },
+    })
+    await seedTarget(repo)
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    let outcome: OperatorBackfillResult | null = null
+    await repo.withOperatorBackfillClaim(WS, 'gesture-v1', async pass => {
+      outcome = await pass.run()
+      events.push('body-continues')
+    })
+
+    expect(outcome).toMatchObject({outcome: 'failed'})
+    // Exactly one release, and it lands AFTER the body is done.
+    expect(events).toEqual(['tryClaim', 'tryClaim', 'body-continues', 'releaseClaim'])
+  })
+
   it('does not claim, or run the body, while this device is behind the server', async () => {
     // `tryClaim` WRITES. The gate that protected the pass has to protect the
     // gesture too, or the claim moves in front of it.
@@ -1090,7 +1115,7 @@ describe('workspace backfill runner — a claim held across a gesture', () => {
     await first
   })
 
-  it('reports a claim that threw rather than running the body unclaimed', async () => {
+  it('releases and defers when the claim write throws, rather than running the body', async () => {
     const events: string[] = []
     const bodies: string[] = []
     const {repo} = createTestRepo({
@@ -1112,13 +1137,17 @@ describe('workspace backfill runner — a claim held across a gesture', () => {
     })
 
     expect(bodies).toEqual([])
-    // Nothing to release: the claim either committed or rolled back, and this
-    // device holds nothing either way.
-    expect(events).toEqual([])
+    // Released anyway: a throw does not prove the claim row is unwritten —
+    // `Repo.tx` can reject after its transaction commits — and the release is
+    // ownership-guarded, so it is a no-op when we hold nothing.
+    expect(events).toEqual(['releaseClaim'])
+    // `deferred`, not `failed`: nothing started, and "stopped partway" would
+    // send an operator looking for half-migrated data.
     expect(outcome).toEqual({
       claimed: false,
       result: {
-        outcome: 'failed', undoHistoryCleared: false, reason: 'claim write failed',
+        outcome: 'deferred', undoHistoryCleared: false,
+        reason: 'claim write failed', retryable: true,
       },
     })
   })

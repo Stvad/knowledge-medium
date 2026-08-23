@@ -3271,11 +3271,27 @@ export class Repo {
    * settles on, the children the winner migrated decode under a codec it does
    * not declare.
    *
+   * What it does NOT do is make the claim exclusive. Two devices confirming
+   * inside one sync round-trip each read their own DB, each find no claim, and
+   * each mint one — so both still run, and the rival definitions above are
+   * still reachable in that window. What moves is the window's SIZE: from
+   * "synthesis, the flip and a multi-minute pass" down to sync latency, which
+   * is the whole of the improvement. Closing it needs arbitration, which
+   * `graphBackfillClaim`'s header forbids by name and for a recorded reason.
+   *
    * `body` runs with the claim held and does its own reporting; `pass.run()`
-   * runs the backfill under that same claim. The claim is handed back on EVERY
-   * exit — normal return, throw, an early return inside the body — except a
-   * pass that recorded completion, which `releaseClaim` leaves alone because
-   * deleting it would drop the graph's record that the migration is done.
+   * runs the backfill under that same claim. The claim is handed back on every
+   * exit this process controls — normal return, throw, an early return inside
+   * the body — except a pass that recorded completion, which `releaseClaim`
+   * leaves alone because deleting it would drop the graph's record that the
+   * migration is done.
+   *
+   * A process that DIES mid-body controls no exit, and the hold now spans the
+   * fleet-wide one-way flip: a tab closed after the flip commits leaves the
+   * graph child-backed, unmigrated, and claimed, and every other device reads
+   * `held-by-peer` until a human deletes the claim block (`reclaimCompleted`
+   * reclaims only COMPLETED claims). That window is the price of the fix, and
+   * it is larger than the one master had.
    *
    * `claimed: false` means the body never ran and this gesture wrote nothing;
    * its `result` is the outcome to report, in the same vocabulary
@@ -3303,8 +3319,13 @@ export class Repo {
         `${workspaceId}: no BackfillCompletionClaim is configured, so completion cannot ` +
         `be recorded once per graph.`,
       )
+      // `deferred`, not `failed`: nothing started, so "stopped partway" would
+      // send an operator looking for half-migrated data. `retryable: false`
+      // carries the part they can act on — this is wiring, and waiting will
+      // not fix it.
       return refuse({
-        outcome: 'failed', undoHistoryCleared: false, reason: NO_COMPLETION_CLAIM,
+        outcome: 'deferred', undoHistoryCleared: false,
+        reason: NO_COMPLETION_CLAIM, retryable: false,
       })
     }
     // Single-flight per (workspace, backfill). Two invocations in ONE Repo —
@@ -3332,14 +3353,21 @@ export class Repo {
         )
       } catch (err) {
         // `tryClaim` writes, so it can reject. Reported rather than thrown on:
-        // the caller has a human to tell, and nothing has been written by this
-        // gesture — the claim's own transaction either committed or rolled back.
+        // the caller has a human to tell, and the body never ran.
+        //
+        // Released anyway, because a throw does NOT prove nothing committed:
+        // `Repo.tx` invalidates handles synchronously after the transaction
+        // resolves, so a failure there rejects over a claim row that is
+        // already written. The release is ownership-guarded and refuses a
+        // foreign or completed row, so on every interleaving where we do not
+        // hold the claim it is a no-op read.
         const reason = err instanceof Error ? err.message : String(err)
+        await claim.releaseClaim(workspaceId, backfill.id).catch(() => {})
         console.error(
           `[workspaceBackfills] could not claim "${backfillId}" for workspace ` +
           `${workspaceId}: ${reason}`,
         )
-        return refuse({outcome: 'failed', undoHistoryCleared: false, reason})
+        return refuse({outcome: 'deferred', undoHistoryCleared: false, reason, retryable: true})
       }
       if (attempt.status === 'not-ours') {
         return refuse({outcome: 'held-by-peer', undoHistoryCleared: false})
@@ -3372,9 +3400,14 @@ export class Repo {
     }
   }
 
-  /** How an operator hears a pre-claim refusal. `deferred` for everything
-   *  waiting or a repair can clear, with `retryable` saying which — the one
-   *  thing the human can act on. */
+  /** How an operator hears a pre-claim refusal. Everything is `deferred` —
+   *  a refusal happens before the body runs, so nothing is half-done — with
+   *  `retryable` carrying the only part the human can act on.
+   *
+   *  The `read-only` arm is DEFENCE IN DEPTH, not load-bearing: the gesture
+   *  short-circuits on `isReadOnly` before it calls `takeBackfillClaim`, and
+   *  every statement between the two checks is synchronous, so they cannot
+   *  disagree. It exists so the mapping stays total if that changes. */
   private refusedBackfillResult(refusal: BackfillClaimRefusal): OperatorBackfillResult {
     if (refusal.kind === 'read-only') {
       return {outcome: 'read-only', undoHistoryCleared: false}
@@ -3395,7 +3428,9 @@ export class Repo {
     backfill: WorkspaceBackfill,
   ): Promise<OperatorBackfillResult> {
     const {completed, undoHistoryCleared, deferred, deferredRetryable, failed} =
-      await this.runWorkspaceBackfills(workspaceId, [backfill], this.workspaceGeneration)
+      await this.runWorkspaceBackfills(
+        workspaceId, [backfill], this.workspaceGeneration, true,
+      )
     // `completed` is LOCAL to this invocation. Keying on this id as well is
     // defence in depth, not load-bearing: the call above passes a
     // single-element array, so the set can only contain this backfill, and
@@ -3420,6 +3455,12 @@ export class Repo {
     workspaceId: string,
     backfills: readonly WorkspaceBackfill[],
     generation: number,
+    /** Set when the CALLER holds the claim for the whole gesture
+     *  ({@link withOperatorBackfillClaim}). The pass still re-takes it — that
+     *  read is what yields to a peer's claim that arrived since — but it must
+     *  not hand back what it did not take: the caller writes after this
+     *  returns, and a release here would drop the claim mid-gesture. */
+    claimHeldByCaller = false,
   ): Promise<{
     completed: ReadonlySet<string>
     undoHistoryCleared: boolean
@@ -3583,8 +3624,12 @@ export class Repo {
       } catch (err) {
         const reason = err instanceof Error ? err.message : String(err)
         // Claimed but didn't finish — hand it back either way, or this pass is
-        // blocked for the whole graph by one device's bad moment.
-        await claim.releaseClaim(workspaceId, backfill.id).catch(() => {})
+        // blocked for the whole graph by one device's bad moment. Unless the
+        // caller owns it: then its `finally` is the single release, and this
+        // one would free the claim while the gesture is still running.
+        if (!claimHeldByCaller) {
+          await claim.releaseClaim(workspaceId, backfill.id).catch(() => {})
+        }
         if ((err as {kind?: string} | null)?.kind === Repo.TRANSIENT) {
           // The operator path has no other way to learn this: the re-arm below
           // only helps `workspace-open` passes (`scheduleWorkspaceBackfills`
