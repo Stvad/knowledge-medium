@@ -112,8 +112,8 @@ export const changedPropertyDefinitionFacts = (
 
 /**
  * Drop a rename whose OLD or NEW name a DIFFERENT definition owns and is not
- * itself migrating away from. Both halves protect a cell key that isn't this
- * definition's to write:
+ * itself vacating. Both halves protect a cell key that isn't this definition's
+ * to write:
  *
  *  - NEW name: re-keying under a name someone else owns overwrites that
  *    owner's cell projection with the wrong value (found by Codex on PR #386)
@@ -126,15 +126,27 @@ export const changedPropertyDefinitionFacts = (
  *    the sibling's field rows and value children.
  *
  * Either way the contested case belongs to the shadowing model's reconcile
- * (#389 item 8), not to a one-shot re-key. A SWAP (`a<->b`) is preserved: each
- * contested name's owner is itself migrating in the same batch. A codec-only
- * change passes trivially — both its names are its own.
+ * (#389 item 8), not to a one-shot re-key.
+ *
+ * Two subtleties, both of which cost a real tombstone before they were spelled
+ * out:
+ *
+ *  - Only a peer that CHANGES ITS NAME can vacate one. A codec-only change
+ *    (`oldName === newName`) is in the batch but keeps its name, so it must not
+ *    grant the exemption — the deferred path passes those through here too.
+ *  - Dropping a candidate can un-vacate the name that kept ANOTHER one, so this
+ *    iterates to a fixpoint. Dropping W (which was going to take `a`) has to
+ *    re-contest X's rename away from `a`, or X drops the key and nothing
+ *    re-sets it.
  *
  * Shared by both writers of a rename re-key, because the refusal is a property
- * of the RENAME, not of the path that noticed it. `ownerOfName` is whatever
- * registry view the caller resolves against; for the same-tx processor that is
- * the tx-start snapshot, where the old name still maps to the renamer itself,
- * so the OLD-name half is a no-op there.
+ * of the RENAME, not of the path that noticed it. Note the two callers resolve
+ * against OPPOSITE views and the exemption reads differently in each: the
+ * same-tx processor asks a tx-start (pre-rename) registry, where a peer owning
+ * the name is one about to leave it; the deferred batch asks a post-change one,
+ * where it is one that has just arrived at it. Both are "a peer accounts for
+ * this name in this same batch", which is what makes the drop-all-then-set-all
+ * apply safe.
  */
 export const withoutContestedRenames = <T extends {
   readonly fieldId: string
@@ -144,12 +156,19 @@ export const withoutContestedRenames = <T extends {
   candidates: readonly T[],
   ownerOfName: (name: string) => string | undefined,
 ): T[] => {
-  const migrating = new Set(candidates.map(candidate => candidate.fieldId))
-  const uncontested = (name: string, self: string): boolean => {
-    const owner = ownerOfName(name)
-    return owner === undefined || owner === self || migrating.has(owner)
+  let kept: T[] = [...candidates]
+  for (;;) {
+    const vacating = new Set(kept
+      .filter(candidate => candidate.oldName !== candidate.newName)
+      .map(candidate => candidate.fieldId))
+    const uncontested = (name: string, self: string): boolean => {
+      const owner = ownerOfName(name)
+      return owner === undefined || owner === self || vacating.has(owner)
+    }
+    const next = kept.filter(candidate =>
+      uncontested(candidate.newName, candidate.fieldId)
+      && uncontested(candidate.oldName, candidate.fieldId))
+    if (next.length === kept.length) return next
+    kept = next
   }
-  return candidates.filter(candidate =>
-    uncontested(candidate.newName, candidate.fieldId)
-    && uncontested(candidate.oldName, candidate.fieldId))
 }

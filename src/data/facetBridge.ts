@@ -457,20 +457,12 @@ export class FacetBridge {
               // pass: it must build the NEW codec to re-encode values, which
               // the same-tx registry snapshot can't. A combined edit rides both
               // and they converge on the new cell key.
-              const changes = changedPropertyDefinitionFacts(previousFacts, facts)
-              const scheduled = changes.filter(change => change.codecChanged)
-              if (scheduled.length > 0) {
+              const codecChanges = changedPropertyDefinitionFacts(previousFacts, facts)
+                .filter(change => change.codecChanged)
+              if (codecChanges.length > 0) {
                 target.schedulePropertyDefinitionMigrations(
-                  propertyDefinitions.workspaceId, scheduled,
+                  propertyDefinitions.workspaceId, codecChanges,
                 )
-              }
-              // A rename nothing scheduled must not be RECORDED either: a
-              // synced-in one reaches neither writer, and folding its new name
-              // in would leave the next prime a matching before-state and no
-              // repair. Cost of holding it back: one no-op pass for a rename
-              // the same-tx processor already applied.
-              for (const change of changes) {
-                if (!change.codecChanged) facts.delete(change.fieldId)
               }
             }
             target.syncPropertyDefinitionBaseline(

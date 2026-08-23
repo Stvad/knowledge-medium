@@ -190,7 +190,7 @@ const seedDefinitionBlock = async (
     if (repo.propertyDefinitions?.definitionsByFieldId.get(fieldId)?.name !== name) {
       throw new Error(`[test] ${fieldId} not yet visible in the property-definitions registry`)
     }
-  })
+  }, {timeout: 3000})
 }
 
 /** Rename a real definition block's name in ONE tx — this is what actually
@@ -293,6 +293,23 @@ describe('withoutContestedRenames', () => {
     expect(withoutContestedRenames(
       swap, (name: string) => (name === 'b' ? 'f2' : 'f1'),
     )).toEqual(swap)
+  })
+
+  it('re-contests a rename whose exempting peer was itself dropped', () => {
+    // X keeps `a` free only because W is taking it; W is then dropped for
+    // colliding on its own old name. Without a second pass X still drops `a`,
+    // nothing re-sets it, and MATERIALIZE tombstones W's rows.
+    const owners: Record<string, string> = {a: 'W', zz: 'V'}
+    expect(withoutContestedRenames(
+      [rename('X', 'a', 'b'), rename('W', 'zz', 'a')], (name: string) => owners[name],
+    )).toEqual([])
+  })
+
+  it('refuses the exemption to a codec-only peer, which vacates nothing', () => {
+    // W keeps the name it owns, so X's rename onto it is still a collision.
+    expect(withoutContestedRenames(
+      [rename('X', 'o', 'n'), rename('W', 'n', 'n')], (name: string) => (name === 'n' ? 'W' : undefined),
+    )).toEqual([rename('W', 'n', 'n')])
   })
 
   it('keeps an uncontested rename, and a codec-only change that keeps its name', () => {
@@ -712,10 +729,18 @@ describe('changes observed only across a workspace switch (#780)', () => {
     publishDefinition(repo, statusRenamed)
     await awaitRegistry(repo, WS, 'state')
     await repo.awaitPropertyDefinitionBaselines()
-    expect(await cell('p')).toEqual({status: 'done'})
 
-    // Because nothing acted on it, the baseline must NOT have absorbed it —
-    // the next prime is what repairs it.
+    // Rebuilds keep happening — a plugin finishing load, another definition
+    // arriving. Each one's in-memory previous snapshot already carries the new
+    // name, so none of them sees a change; the baseline must still not absorb
+    // the drift, or the prime below finds a matching before-state and the
+    // repair never comes.
+    for (let build = 0; build < 2; build += 1) {
+      publishDefinition(repo, statusRenamed)
+      await repo.awaitPropertyDefinitionBaselines()
+    }
+    expect(await baselineNames()).toEqual({[FIELD_ID]: 'status'})
+
     repo.setActiveWorkspaceId(OTHER_WS)
     await awaitRegistry(repo, OTHER_WS)
     repo.setActiveWorkspaceId(WS)
@@ -748,7 +773,7 @@ describe('changes observed only across a workspace switch (#780)', () => {
     expect(await baselineNames()).toEqual({[FIELD_ID]: 'state'})
   }, 20_000)
 
-  it('folds every build into the baseline, so a change handled while active is migrated exactly once', async () => {
+  it('records a change once its migration APPLIED, so the next prime finds nothing to redo', async () => {
     await seedWorkspace('children')
     const repo = setup()
     await seedProperty(repo, 'p', ' 42 ')
@@ -756,8 +781,8 @@ describe('changes observed only across a workspace switch (#780)', () => {
 
     await republish(repo, statusNumber)
     await repo.awaitPropertyDefinitionBaselines()
-    // The bridge's own in-memory diff owns a same-workspace build; the baseline
-    // records it without also scheduling it.
+    // The bridge's own in-memory diff owns a same-workspace build, and the
+    // applied pass is what advances the baseline past it.
     expect(await cell('p')).toEqual({status: 42})
     expect(scheduled).toHaveBeenCalledTimes(1)
 
@@ -901,9 +926,9 @@ describe('contested names on the deferred path', () => {
     // The uncontested rename applied — so the pass demonstrably ran — while the
     // contested one left `a` alone. Dropping `a` would have made MATERIALIZE
     // read it as a user deletion and tombstone F_OWNER's field row and value.
+    expect(await liveRows('host', F_OWNER)).toBe(2)
     expect(await cell('host')).toEqual({
       a: `v-${F_RENAMED}`, zz: `v-${F_OWNER}`, r: `v-${F_PLAIN}`,
     })
-    expect(await liveRows('host', F_OWNER)).toBe(2)
   }, 20_000)
 })

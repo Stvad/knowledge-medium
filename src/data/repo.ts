@@ -124,7 +124,10 @@ import {
   withoutContestedRenames,
   type PropertyDefinitionFactsByFieldId,
 } from './internals/propertyDefinitionMigrations'
-import { PropertyDefinitionBaselineStore } from './internals/propertyDefinitionBaseline'
+import {
+  observePropertyDefinitions,
+  recordAppliedPropertyDefinitions,
+} from './internals/propertyDefinitionBaseline'
 import {
   encodedPropertyValueToChildContent,
   isFieldValueChild,
@@ -741,11 +744,6 @@ export class Repo {
    *  (PR #288 §7/§9, slice B2) — drained by
    *  `awaitPropertyDefinitionMigrations()`, same pattern. */
   private readonly propertyDefinitionMigrationJobs = new PendingIdleJobs((fn) => scheduleDeepIdle(fn, CATCHUP_DEEP_IDLE))
-  /** Durable per-workspace record of the definitions this device last saw —
-   *  the "before" side the PRIME diff needs (#780). Constructed in the
-   *  constructor (needs `this.db`), like `reprojectionMarkers`. Holds no
-   *  in-memory mirror: the row is shared with every other tab's Repo. */
-  private propertyDefinitionBaselines!: PropertyDefinitionBaselineStore
   /** One serial chain, so a rebuild's fold lands before the next rebuild reads
    *  its before-state. Not load-bearing for correctness — `foldIn` is one
    *  transaction and a repeated migration is idempotent — so overlapping runs
@@ -976,7 +974,6 @@ export class Repo {
       RECORD_REPROJECT_REF_MARKER_SQL,
       CLEAR_REPROJECT_REF_MARKER_SQL,
     )
-    this.propertyDefinitionBaselines = new PropertyDefinitionBaselineStore(this.db)
     this.backfillCompletionClaim = opts.backfillCompletionClaim
     this.backfillSyncGate = opts.backfillSyncGate
       ?? ((cb) => onSyncSettled(this.db as unknown as Parameters<typeof onSyncSettled>[0], cb))
@@ -3776,13 +3773,17 @@ export class Repo {
     // write to an unsynced table; only the migration is gated, inside
     // `schedulePropertyDefinitionMigrations`.
     //
-    // Resolver captured synchronously with the rebuild that produced `facts`:
-    // `propertySchemaResolverFor` serves only the active or immediately-
-    // previous workspace, and the fold below is async.
+    // Resolver captured synchronously with the rebuild that produced `facts`,
+    // because `propertySchemaResolverFor` serves only the active or
+    // immediately-previous workspace and the fold below is async. Defence in
+    // depth rather than a live requirement: no test distinguishes capturing it
+    // here from capturing it inside the continuation, since the fold is a
+    // single round-trip and two further workspace switches would have to land
+    // inside it.
     const resolver = detectChanges ? this.propertySchemaResolverFor(workspaceId) : null
     this.propertyDefinitionBaselineWork = this.propertyDefinitionBaselineWork
       .then(async () => {
-        const previous = await this.propertyDefinitionBaselines.foldIn(workspaceId, facts)
+        const previous = await observePropertyDefinitions(this.db, workspaceId, facts)
         if (resolver === null) return
         // No baseline yet. Redundant with the diff (an absent fieldId is an
         // ADDED definition, never a rename), kept because it is the designed
@@ -3814,9 +3815,19 @@ export class Repo {
     plans: readonly PropertyDefinitionMigrationPlan[],
     resolver: PropertySchemaResolver,
   ): Promise<void> {
+    // Un-flipped: nothing re-keys here, so nothing is recorded either and the
+    // drift stays visible to the prime that follows the flip.
     if (!(await readIsChildBackedWorkspace(this.db, workspaceId))) return
     try {
       await this.runPropertyDefinitionMigrationBatch(workspaceId, plans, resolver)
+      // APPLIED — the only thing that advances a known fieldId's baseline. A
+      // pass that threw, or never ran at all, leaves the drift visible to the
+      // next prime instead of letting it be absorbed as though handled.
+      await recordAppliedPropertyDefinitions(this.db, workspaceId, new Map(
+        plans.map(({change, schema}) => [change.fieldId, {
+          name: schema.name, codecType: schema.codec.type,
+        }]),
+      ))
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err)
       const names = plans.map(({change}) => `"${change.newName}" (${change.fieldId})`).join(', ')
@@ -4043,6 +4054,12 @@ export class Repo {
     // silent unset. The rows stay in the tree, fixable by hand. Reported per
     // definition — one rebuild can change several.
     for (const {change, schema} of plans) {
+      // Only a CODEC change can strand a value. A pure rename re-encodes
+      // nothing, so an unparseable value child there is pre-existing state the
+      // user put in (a `[[Alias]]` typed into a ref property is supported and
+      // persistent) — and every local rename now takes one no-op pass through
+      // here at the next prime, which would otherwise toast about it at start-up.
+      if (!change.codecChanged) continue
       const unconvertible = unconvertibleByField.get(change.fieldId) ?? 0
       if (unconvertible === 0) continue
       // Claim only what's true: this pass never deletes a value row, so the
