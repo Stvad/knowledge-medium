@@ -508,11 +508,17 @@ const materializePropertiesForChangedRow = async (
   // branch that tombstones children a non-subtree delete left live.
   //
   // Split by WHO WROTE THE VALUE, because that is what the decode rejection is
-  // about. Both halves are live in the SAME tx on a real path:
-  // `createOrRestoreTargetBlock` restores a tombstone and then re-claims one
-  // key through `setProperty` (daily-note seats, kernel pages, shortcuts), so a
-  // per-tx policy would let one untouched legacy value veto the whole restore —
-  // the exact stranding the exemption exists to prevent.
+  // about. Both halves land in the SAME tx on real paths — restore a tombstone,
+  // then write properties on the row you just restored:
+  // `createOrRestoreTargetBlock`'s `onInsertedOrRestored` (media capture,
+  // daily-note seats) and `getOrCreateKernelPage`'s hand-rolled equivalent. A
+  // per-tx policy would let one untouched legacy value veto those restores
+  // outright — the exact stranding the exemption exists to prevent.
+  //
+  // Reachable twice per tx: MATERIALIZE opts into the issue-#402 re-run, so a
+  // later unsettled write to the owner row (DERIVE stamping a restore's content
+  // patch) re-enters this branch. `rerunBefore` hands back the same bag pair, so
+  // the split is identical and the writes below no-op.
   // A partition rather than an overlap. Overlapping is harmless today — the
   // first call throws before the second runs, and materialize is idempotent
   // otherwise — but it would make the call ORDER the only thing keeping a

@@ -1602,6 +1602,36 @@ describe('revival re-materializes property children (#778)', () => {
     expect(others).toHaveLength(1)
     expect(await liveFieldRows('p')).toEqual([])
   })
+  it('survives a same-tx re-run of the revival branch (issue #402 pass two)', async () => {
+    // MATERIALIZE opts into `rerunOnDirtyRows`, and DERIVE — registered right
+    // after it — stamps any row whose content changed. A restore that patches
+    // content into a resolving `((ref))` therefore dirties the owner AFTER
+    // materialize ran, re-entering the revival branch a second time in the same
+    // tx. It converges only because `rerunBefore` reconstructs the same bag
+    // pair; nothing else pins that, so pin it here: no duplicate field row, no
+    // spurious rejection of the untouched junk key.
+    await seedWorkspace('children')
+    const repo = await seedMaterializedProperty()
+    await createBlock(repo, 'target', 'a target')
+    await sharedDb.db.execute(
+      'UPDATE blocks SET properties_json = ? WHERE id = ?',
+      [JSON.stringify({[statusSchema.name]: null, keep: 'x'}), 'p'],
+    )
+    await repo.mutate.delete({id: 'p'})
+
+    await repo.tx(tx => tx.restore('p', {content: '((target))'}),
+      {scope: ChangeScope.BlockDefault})
+
+    const row = await sharedDb.db.get<{deleted: number; reference_target_id: string | null}>(
+      'SELECT deleted, reference_target_id FROM blocks WHERE id = ?', ['p'])
+    expect(row.deleted).toBe(0)
+    // DERIVE really did stamp the owner after materialize — without this the
+    // test would not be exercising the re-run at all.
+    expect(row.reference_target_id).toBe('target')
+    // One pass or two, the junk key stays unmaterialized and unrejected, and no
+    // duplicate field row appears.
+    expect(await liveFieldRows('p')).toEqual([])
+  })
 })
 
 describe('§9 recognition on the WRITE side (round-2 review fixes)', () => {
