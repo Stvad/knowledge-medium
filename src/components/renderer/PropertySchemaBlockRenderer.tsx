@@ -25,6 +25,7 @@ import type { BlockRenderer, BlockRendererProps } from '@/types.js'
 import { PropertyShapeGlyph } from '@/components/propertyPanel/shapeUi.js'
 import { DefaultBlockRenderer } from './DefaultBlockRenderer.tsx'
 import { deleteBlockThroughUi } from '@/utils/deleteBlockThroughUi.js'
+import { trimIfEdited } from '@/utils/nameFieldCommit.js'
 
 const renderConfigEditor = (
   preset: AnyJoinedValuePreset,
@@ -221,7 +222,7 @@ export const PropertySchemaContentRenderer: BlockRenderer = ({block}: BlockRende
           placeholder="property name"
           disabled={readOnly}
           onChange={(e: ChangeEvent<HTMLInputElement>) => setDraftName(e.target.value)}
-          onBlur={() => { void writeName(draftName.trim()) }}
+          onBlur={() => { void writeName(trimIfEdited(draftName, propertyName)) }}
           onKeyDown={(e) => {
             if (e.key === 'Enter') {
               e.preventDefault()

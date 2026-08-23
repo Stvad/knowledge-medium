@@ -39,6 +39,7 @@ import {
 import type { BlockRenderer, BlockRendererProps } from '@/types.js'
 import { DefaultBlockRenderer } from './DefaultBlockRenderer.tsx'
 import { deleteBlockThroughUi } from '@/utils/deleteBlockThroughUi.js'
+import { trimIfEdited } from '@/utils/nameFieldCommit.js'
 
 export const writeBlockTypeLabel = async (
   block: Block,
@@ -281,7 +282,7 @@ export const BlockTypeContentRenderer: BlockRenderer = ({block}: BlockRendererPr
           placeholder="type label"
           readOnly={readOnly}
           onChange={(e: ChangeEvent<HTMLInputElement>) => setDraftLabel(e.target.value)}
-          onBlur={() => { void writeLabel(draftLabel.trim()) }}
+          onBlur={() => { void writeLabel(trimIfEdited(draftLabel, label)) }}
           onKeyDown={(e) => {
             if (e.key === 'Enter') {
               e.preventDefault()
