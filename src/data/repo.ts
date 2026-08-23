@@ -55,6 +55,7 @@ import {
   refCodecKind,
   refTypedSchemaNames,
 } from './internals/refProjection'
+import { DeterministicIdCrossWorkspaceError, ReadOnlyError } from './api/errors'
 import { runTx, type PowerSyncDb } from './internals/commitPipeline'
 import { onSyncSettled } from './internals/firstSync'
 import { devAssertionsEnabled } from './internals/devAssertions'
@@ -561,6 +562,15 @@ type BackfillClaimAttempt =
   | {readonly status: 'claimed'}
   | {readonly status: 'not-ours'}
   | {readonly status: 'refused'; readonly refusal: BackfillClaimRefusal}
+
+/** Would waiting clear a claim write that THREW? Not for these two: a foreign
+ *  block parked at the deterministic claim id needs someone to move it, and a
+ *  workspace that turned read-only needs the role back. Everything else —
+ *  a transient DB failure above all — is worth retrying, so the default is
+ *  yes. Named errors rather than a taxonomy: these are the only two the claim
+ *  path throws that a person cannot fix by trying again. */
+const isPermanentClaimError = (err: unknown): boolean =>
+  err instanceof DeterministicIdCrossWorkspaceError || err instanceof ReadOnlyError
 
 /** Would WAITING clear this refusal? Only a durable view gap and a role flip
  *  say no — and the two callers disagree about which of them can see a role
@@ -3368,19 +3378,25 @@ export class Repo {
         // `tryClaim` writes, so it can reject. Reported rather than thrown on:
         // the caller has a human to tell, and the body never ran.
         //
-        // Released anyway, because a throw does NOT prove nothing committed:
-        // `Repo.tx` invalidates handles synchronously after the transaction
-        // resolves, so a failure there rejects over a claim row that is
-        // already written. The release is ownership-guarded and refuses a
-        // foreign or completed row, so on every interleaving where we do not
-        // hold the claim it is a no-op read.
+        // NOT released, though a throw does not prove nothing committed —
+        // `Repo.tx` invalidates handles synchronously after its transaction
+        // resolves, so a failure there can reject over a claim row that is
+        // already written. `releaseClaim` cannot tell that row from a SIBLING
+        // TAB's live one: `claimantId` is per browser profile, so both name
+        // this claimant and it would delete either. Trading a claim this
+        // device may have stranded — recoverable by deleting the block, which
+        // `held-by-peer` says — for freeing a second device to start an
+        // uploading pass while the first tab is still writing is the wrong
+        // way round.
         const reason = err instanceof Error ? err.message : String(err)
-        await claim.releaseClaim(workspaceId, backfill.id).catch(() => {})
         console.error(
           `[workspaceBackfills] could not claim "${backfillId}" for workspace ` +
           `${workspaceId}: ${reason}`,
         )
-        return refuse({outcome: 'deferred', undoHistoryCleared: false, reason, retryable: true})
+        return refuse({
+          outcome: 'deferred', undoHistoryCleared: false, reason,
+          retryable: !isPermanentClaimError(err),
+        })
       }
       if (attempt.status === 'not-ours') {
         return refuse({outcome: 'held-by-peer', undoHistoryCleared: false})
