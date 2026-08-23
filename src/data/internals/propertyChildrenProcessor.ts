@@ -329,16 +329,17 @@ const changedPropertyNames = (
   return changed
 }
 
-/** What to do with a cell value that does not decode under its schema's
- *  codec (see the rejection comment below for why the default is a throw).
+/** What to do with a cell value that does not decode under its schema's codec
+ *  (see the rejection comment at the throw for why `'reject'` is the default).
  *
- *  `'skip'` is for a caller reconciling a bag THIS TX DID NOT WRITE — the
- *  revival path. There the bad value predates the tx, so rejecting prevents
- *  nothing and instead makes the row permanently un-restorable: every
- *  restore of it aborts on a key the restorer never touched, and a
- *  tombstoned row has no editing surface to repair the key from. The key is
- *  left alone (cell junk, no children) exactly as it was before the revival,
- *  and the next real write to it still rejects. */
+ *  `'skip'` is for names whose value THIS TX DID NOT WRITE. Rejecting one of
+ *  those refuses nothing the caller can be blamed for and instead makes the row
+ *  permanently un-restorable — a tombstoned row has no editing surface to
+ *  repair the key from, so every later restore aborts the same way. The key is
+ *  left as it was found (cell junk, no children); the next write to it rejects.
+ *
+ *  The policy is per CALL, so a caller reconciling both kinds of name splits
+ *  them across two calls — see `materializePropertiesForChangedRow`. */
 export type UndecodableCellPolicy = 'reject' | 'skip'
 
 /** Find-or-create/update/delete the field+value children for `names` on
@@ -501,22 +502,25 @@ const materializePropertiesForChangedRow = async (
     await materializePropertyChildrenForExistingRow(tx, row.after, lookups, changed)
     return
   }
-  // Revival. Both sides' keys, not just the restored one's: a restore patch
-  // that DROPS a key must still reach the reap branch, which is what tombstones
-  // children a non-subtree delete left live.
-  const wholeBag = [...new Set([
-    ...Object.keys(before.properties),
-    ...Object.keys(row.after.properties),
-  ])]
-  // The decode rejection refuses a value THIS TX wrote. A revival that wrote no
-  // property value has none to refuse, and rejecting a pre-existing one there
-  // only strands the block in the trash — a tombstoned row has no editing
-  // surface to repair the key from. A revival that DID write keeps the
-  // rejection, or `tx.restore` paired with a raw junk bag write in one tx would
-  // launder straight past the guard.
-  await materializePropertyChildrenForExistingRow(
-    tx, row.after, lookups, wholeBag, changed.length === 0 ? 'skip' : 'reject',
-  )
+  // Revival: the diff PLUS the rest of the restored bag, which is the half a
+  // diff-driven rule misses. A key the restore patch DROPPED needs no special
+  // handling — dropping it IS a diff, so it rides `changed` into the reap
+  // branch that tombstones children a non-subtree delete left live.
+  //
+  // Split by WHO WROTE THE VALUE, because that is what the decode rejection is
+  // about. Both halves are live in the SAME tx on a real path:
+  // `createOrRestoreTargetBlock` restores a tombstone and then re-claims one
+  // key through `setProperty` (daily-note seats, kernel pages, shortcuts), so a
+  // per-tx policy would let one untouched legacy value veto the whole restore —
+  // the exact stranding the exemption exists to prevent.
+  // A partition rather than an overlap. Overlapping is harmless today — the
+  // first call throws before the second runs, and materialize is idempotent
+  // otherwise — but it would make the call ORDER the only thing keeping a
+  // written name's rejection, and that is not a thing to leave load-bearing.
+  const written = new Set(changed)
+  const untouched = Object.keys(row.after.properties).filter(name => !written.has(name))
+  await materializePropertyChildrenForExistingRow(tx, row.after, lookups, changed)
+  await materializePropertyChildrenForExistingRow(tx, row.after, lookups, untouched, 'skip')
 }
 
 /** Move every child of `fromId` under `toId`, appended at the end. */
