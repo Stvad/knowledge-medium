@@ -74,9 +74,16 @@ export type ReconcileAction =
  * answers a question that does NOT depend on materializability: a drain that
  * cannot apply a row still needs to know whether leaving it unapplied hides
  * anything (`materialize.ts`, the `needs_apply` flag), and a second expression
- * of this rule at that site is how the two come to disagree. `SEED_STAGING_NEEDS_APPLY_SQL`
- * is the third statement of it — in SQL, which cannot call this — so a change
- * here needs a matching change there.
+ * of this rule at that site is how the two come to disagree.
+ *
+ * TWO more statements of it live in SQL, which cannot call this, so a change
+ * here needs a matching change in BOTH — and they state it differently, which is
+ * why neither is obvious from the other. {@link STAGED_VIEW_GAP_SQL} carries its
+ * NEGATION over a left join (`b.updated_at = 0 OR b.updated_at <> s.updated_at`),
+ * with the no-local-row case split out into its own `b.id IS NULL` disjunct.
+ * {@link SEED_STAGING_NEEDS_APPLY_SQL} carries it as one half of a larger rule —
+ * this OR a tombstone invisible on both sides — the same combination the drain
+ * asks before it records the flag.
  *
  * Residual blind spot (accepted, tracked): I1 assumes equal nonzero stamps come
  * from the SAME write. Two clients that independently mint the SAME deterministic
