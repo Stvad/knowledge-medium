@@ -350,16 +350,16 @@ describe('Repo.workspaceViewGap', () => {
     )).behind).toBe(ids.length)
   })
 
+  // 1,005 serialized deliveries, 268ms solo. The "~6x the gate adds" reasoning
+  // this carried was measured wrong on the same shape one file away
+  // (`stagingNeedsApplyMigration`: 23x), and this test then timed out 4/4 at the
+  // 5,000ms default under a loaded gate. Budgeted, with the measurement.
   it('caps the count it reports rather than the rows it examines', async () => {
-    // 1,005 serialized deliveries, 268ms measured solo — so no explicit budget,
-    // matching the 10k-row test above: even at the ~6x the full gate adds this
-    // stays far under vitest's 5000ms default, and a genuine hang then reports
-    // in 5s rather than 20.
     const repo = makeRepo()
     for (let i = 0; i < WORKSPACE_UNAPPLIED_COUNT_CAP + 5; i++) {
       await deliver(syncedRow({id: `staged-${i}`, updatedAt: 5}))
     }
     await sharedDb.db.execute('DELETE FROM blocks_synced_changes')
     expect((await repo.workspaceViewGap(WS))?.reason).toMatch(/at least 1,000/)
-  })
+  }, 30_000)
 })

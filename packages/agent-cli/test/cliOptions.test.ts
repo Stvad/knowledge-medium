@@ -5,12 +5,13 @@ import { limitOption, scopeAssertion, workspaceAssertion } from '../src/cliOptio
 /** Parse argv the way the real CLI does and hand back what the option
  *  actually became — so this pins CAC's behaviour too, not just our handling
  *  of a value we assumed it produces. */
-const parseOption = (name: 'workspace' | 'limit', argv: string[]): unknown => {
+const parseOption = (name: 'workspace' | 'limit' | 'scope', argv: string[]): unknown => {
   const cli = cac('t')
   let seen: unknown
   cli.command('page <name>', 'x')
     .option('--workspace <id>', 'w')
     .option('--limit <n>', 'l')
+    .option('--scope <scope>', 's')
     .action((_name, options) => {
       seen = (options as Record<string, unknown>)[name]
     })
@@ -73,21 +74,25 @@ describe('limitOption', () => {
 })
 
 describe('scopeAssertion', () => {
-  it('normalizes the empty-value artifact back to an empty string', () => {
-    // `--scope ""` reaches CAC as the number 0. Left as 0 it stringifies to
-    // '0' and the kernel refuses naming a value the operator never typed.
-    expect(scopeAssertion(0)).toEqual({scope: ''})
+  // Driven through CAC, like its neighbours: the values this normalizes are
+  // CAC artifacts, so a test that hand-feeds them pins only our half.
+  it('keeps an EMPTY --scope as a value the kernel can name back', () => {
+    // Left as CAC's 0 it stringifies to '0' and the refusal quotes a value the
+    // operator never typed.
+    const parsed = parseOption('scope', ['page', 'x', '--scope', ''])
+    expect(parsed).toBe(0)
+
+    expect(scopeAssertion(parsed)).toEqual({scope: ''})
   })
 
-  it('omits the field entirely when the option is absent, so the kernel default applies', () => {
-    expect(scopeAssertion(undefined)).toEqual({})
+  it('omits the field when absent, so the kernel default is the only default', () => {
+    expect(scopeAssertion(parseOption('scope', ['page', 'x']))).toEqual({})
   })
 
-  it('rejects a repeated flag rather than coercing the array', () => {
-    expect(() => scopeAssertion(['all', 'unapplied'])).toThrow(/single value/)
-  })
+  it('refuses a repeated flag rather than coercing the array', () => {
+    const parsed = parseOption('scope', ['page', 'x', '--scope', 'all', '--scope', 'unapplied'])
+    expect(parsed).toEqual(['all', 'unapplied'])
 
-  it('passes a value through unvalidated — the kernel owns that refusal', () => {
-    expect(scopeAssertion('nonsense')).toEqual({scope: 'nonsense'})
+    expect(() => scopeAssertion(parsed)).toThrow(/single value/)
   })
 })

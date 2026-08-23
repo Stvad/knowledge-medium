@@ -134,9 +134,11 @@ export interface RematerializeReport {
    *  something there; `resolved` is the one for the narrow scope. */
   readonly resolved: number
   /** Rows whose flag this pass SET: it found a row it could not apply that
-   *  `blocks` does not already reflect. Nonzero means the pass left the gap
-   *  BIGGER — a workspace that answers `defer` re-flags rows an earlier drain
-   *  had cleared — which is otherwise a count going up with nothing to blame. */
+   *  `blocks` does not already reflect. This is how a pass can leave the gap
+   *  BIGGER than it found it — a workspace that answers `defer` re-flags rows an
+   *  earlier drain had cleared. Nonzero does not by itself mean it grew: one
+   *  pass can resolve and reflag different rows. Structurally 0 at scope
+   *  `unapplied`, where every row in the set is flagged already. */
   readonly reflagged: number
 }
 
@@ -327,14 +329,12 @@ export const startBlocksSyncedObserver = (
     // mid-pass is therefore not in it — correctly: that one is in the QUEUE,
     // which the queue drain owns, and picking it up here would mean a pass
     // whose end depends on the sync stream going quiet.
-    // Statement and params chosen together. They take the same one binding
-    // today, but `WORKSPACE_UNAPPLIED_IDS_SQL`'s count sibling takes a cap as a
-    // second — so a shared params array is one future edit away from binding a
-    // workspace id into the wrong slot.
-    const [idsSql, idsParams]: [string, unknown[]] = scope === 'unapplied'
-      ? [WORKSPACE_UNAPPLIED_IDS_SQL, [workspaceId]]
-      : ['SELECT id FROM blocks_synced WHERE workspace_id = ? ORDER BY id', [workspaceId]]
-    const ids = (await db.getAll<{ id: string }>(idsSql, idsParams)).map(row => row.id)
+    const ids = (await db.getAll<{ id: string }>(
+      scope === 'unapplied'
+        ? WORKSPACE_UNAPPLIED_IDS_SQL
+        : 'SELECT id FROM blocks_synced WHERE workspace_id = ? ORDER BY id',
+      [workspaceId],
+    )).map(row => row.id)
     const totals = {
       applied: 0, deferred: 0, skippedStale: 0, quarantined: 0, resolved: 0, reflagged: 0,
     }

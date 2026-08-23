@@ -961,18 +961,12 @@ cli
   .command('run-backfill <backfillId>', wireDescription('run-backfill'))
   .option('--workspace <id>', 'Assert the workspace the pass writes to (defaults to the active one)')
   .option('--wait <seconds>', `How long to wait for the pass to finish (default ${runBackfillDefaultWaitSeconds}). A full properties migration is hundreds of thousands of writes and runs for minutes; the default command timeout would give up while the app is still working, reporting a timeout for a run that is in fact progressing.`, {default: runBackfillDefaultWaitSeconds})
-  .action(async (backfillId: string, options: {workspace?: string | number; wait?: string | number}) => {
-    // Same 0-for-empty artifact CAC produces for `--workspace ""` as in
-    // `audit-properties`; normalize it back so the command layer's purpose-built
-    // refusal is what the operator sees.
-    const asserted = options.workspace === undefined
-      ? undefined
-      : options.workspace === 0 ? '' : String(options.workspace)
+  .action(async (backfillId: string, options: {workspace?: unknown; wait?: string | number}) => {
     await ensureBridgeRunning()
     const value = await client().runCommand({
       type: 'run-backfill',
       backfillId,
-      ...(asserted !== undefined ? {workspaceId: asserted} : {}),
+      ...workspaceAssertion(options.workspace),
     }, {timeoutMs: Math.max(1, Number(options.wait) || runBackfillDefaultWaitSeconds) * 1000})
       .catch((cause: unknown) => {
         // Giving up WAITING is not the pass giving up: it keeps running in the
@@ -1011,12 +1005,8 @@ cli
       ...scope,
     }, {timeoutMs: Math.max(1, Number(options.wait) || rematerializeDefaultWaitSeconds) * 1000})
       .catch((cause: unknown) => {
-        // Giving up WAITING is not the pass giving up: it keeps running in the
-        // app, and its committed windows stay committed. What a re-run then
-        // does depends on the scope, and only one of the two RESUMES — which is
-        // why this does not repeat `run-backfill`'s "safe to re-run" line
-        // verbatim. There is also no single-flight: a second invocation queues
-        // behind the first rather than joining it.
+        // The sniff is what makes this branch reachable: `client.runCommand`
+        // gives up POLLING and never aborts the app-side pass.
         if (!(cause instanceof Error) || !/timed out/i.test(cause.message)) throw cause
         throw new Error(
           `${cause.message}\nThe pass is still running in the app — this only stopped ` +

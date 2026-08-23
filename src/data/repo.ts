@@ -490,10 +490,11 @@ export interface ViewGap {
  *  either side of the pass — the one thing that answers "did that help?", which
  *  is why they are EXACT counts and not the capped one the refusal reports.
  *
- *  A pass that leaves `unappliedAfter` above zero has not failed — the drain
- *  still cannot apply those rows, and the pass's own `deferred` / `quarantined`
- *  counts say which reason. Neither is fixed by running it again: `deferred`
- *  wants the workspace unlocked, `quarantined` wants bytes that decode. */
+ *  Not closed arithmetic with `resolved`, deliberately: the pair excludes rows
+ *  with a live queue entry (that half is the in-flight predicate's) while `all`
+ *  re-judges every staged row, so a pass CAN resolve a row that neither end
+ *  counted. `resolved > unappliedBefore` is therefore reachable and is not a
+ *  bug — it is the two predicates owning disjoint populations. */
 export interface WorkspaceRematerialization extends RematerializeReport {
   readonly workspaceId: string
   readonly unappliedBefore: number
@@ -1184,7 +1185,13 @@ export class Repo {
 
   /** Re-materialize a workspace's staged `blocks_synced` rows after it becomes
    *  materializable (WK pasted / plaintext confirmed via the §8.2 gate). No-op
-   *  if the observer isn't running. */
+   *  if the observer isn't running.
+   *
+   *  `'all'`, not `'unapplied'`: this and the reconcile rescan are the paths for
+   *  a workspace whose FLAGS may be wrong — the deterministic-id shadow this
+   *  predates the flag entirely — so trusting the flag to name the work is the
+   *  one thing they must not do. Unpinned by any test (the two scopes agree on
+   *  every shape a test can build), which is why it is written here. */
   async drainSyncWorkspace(workspaceId: string): Promise<void> {
     if (this.syncObserver) await this.syncObserver.drainWorkspace(workspaceId, 'all')
   }
@@ -2946,10 +2953,9 @@ export class Repo {
    * NULL (so the upload triggers skip it), and touches no synced state. It
    * therefore needs no per-graph claim and does not clear the undo stack.
    *
-   * Nothing here CLEARS a flag on its own reasoning. Every flag this drops is
-   * dropped by the drain, in the transaction that applied the row — so the
-   * proof that `blocks` holds the staged version is that it was just written
-   * there.
+   * Nothing here clears a flag on its own reasoning: every flag this drops is
+   * dropped by the drain, on the drain's rules, in the transaction that decides
+   * it.
    *
    * The default `unapplied` scope re-delivers exactly the rows the refusal
    * counts. `all` re-judges every staged row instead, which is what to reach for
@@ -2957,21 +2963,22 @@ export class Repo {
    * full pass, and reporting its repairs in `applied` rather than `resolved`
    * (a row the flag is wrong about is already clear, so no flag moves).
    *
-   * THREE things it is not, all of which its callers have claimed at some point:
+   * What it is not:
    *
-   * - not free of a transient revert. `decideStagingRow` documents that rescan
-   *   paths can write an older staged row over a newer LOCAL edit that is acked
-   *   but not yet echoed back; the echo re-asserts it, so the window is short
-   *   and self-healing, but a tab closed inside it reloads the reverted content.
-   *   Prefer running this with sync settled. Deliberately NOT guarded here: the
-   *   window is between the ack and the echo, which `syncViewGap` cannot see, so
-   *   a check would narrow it while reading as though it closed it.
-   * - not incapable of making things worse. A workspace that answers `defer`
-   *   re-flags rows an earlier drain cleared, so the gap can come back LARGER.
-   *   That is what `reflagged` is for.
+   * - not free of a transient revert. A rescan can write an older staged row
+   *   over a newer LOCAL edit that is acked but not yet echoed back; the echo
+   *   re-asserts it, so the window is short and self-healing, but a tab closed
+   *   inside it reloads the reverted content. Prefer running this with sync
+   *   settled. NOT guarded, and the reason is not that the window is invisible
+   *   (it is — `syncViewGap` reads the download side only): the guard that
+   *   would close it is the strictly-newer-local skip `decideStagingRow` dropped
+   *   on purpose, because a device whose clock leads the server sees its own
+   *   creates echo back with a LOWER stamp, and that guard would strand them
+   *   flagged forever — manufacturing the durable gap this verb exists to clear.
    * - not all-or-nothing. Windows commit independently, so a pass that REJECTS
    *   still leaves its committed windows in place — but it rejects out of here,
-   *   so the caller gets the error and none of the counts. Re-running resumes.
+   *   so the caller gets the error and none of the counts. A re-run at
+   *   `unapplied` resumes; at `all` it starts over.
    */
   async rematerializeWorkspace(
     workspaceId: string,
@@ -3015,9 +3022,7 @@ export class Repo {
    *  sentence — "some" and "all of them" are different diagnoses and nothing
    *  past that pays. It is WRONG for a before/after pair, which is a subtraction:
    *  clamped, two ends that both sit past the cap read as a delta of zero, and
-   *  the one question the pair exists to answer gets the opposite answer. (A
-   *  clamped `before` also reads as smaller than this pass's own uncapped
-   *  `resolved`, which is not a state that can exist.)
+   *  the one question the pair exists to answer gets the opposite answer.
    *
    *  Affordable because this runs twice per deliberate operator action, never in
    *  the per-transaction gate. */

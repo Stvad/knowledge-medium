@@ -189,14 +189,8 @@ export interface MaterializeOutcome {
   readonly resolved: readonly string[]
   /** The other direction: ids whose `needs_apply` flag this pass SET, having
    *  found a row it cannot apply that `blocks` does not already reflect.
-   *
-   *  Every ordinary delivery arrives flagged, so on the queue path this is
-   *  almost always empty — a row is normally flagged by its own arrival, not by
-   *  a decision. It is the re-pass that makes it interesting: a workspace that
-   *  answers `defer` re-flags rows an earlier drain had cleared, so a
-   *  rematerialization can leave the gap BIGGER than it found it. Reported
-   *  because an operator watching the count grow otherwise has nothing to
-   *  attribute it to. */
+   *  Near-always empty on the queue path — a delivery arrives flagged, so its
+   *  own arrival does this, not a decision. */
   readonly reflagged: readonly string[]
 }
 

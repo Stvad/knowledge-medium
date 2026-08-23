@@ -154,10 +154,23 @@ describe('Repo.rematerializeWorkspace', () => {
     expect(result.unappliedBefore).toBe(n)
     expect(result.unappliedAfter).toBe(0)
     expect(result.resolved).toBe(n)
-    // The invariant the cap violated, stated so a future capping cannot pass:
-    // a pass cannot move more flags than there were flags.
-    expect(result.resolved).toBeLessThanOrEqual(result.unappliedBefore)
   }, 20_000)   // ~2k bulk-inserted rows through a real drain; measured ~1.5s solo
+
+  it('sizes the REMAINING gap exactly too', async () => {
+    // The `after` end needs its own scale case: in the test above every row is
+    // repaired, so `unappliedAfter` is 0 under a capped read and an exact one
+    // alike, and only `before` is pinned. Capped, a pass that repaired NOTHING
+    // reports a phantom delta of 5 here (1005 -> 1000) — the same lie in the
+    // same field, one end over.
+    const n = WORKSPACE_UNAPPLIED_COUNT_CAP + 5
+    await strandManyStampZeroMints(n)
+    const repo = makeRepo('defer')
+
+    const result = await repo.rematerializeWorkspace(WS)
+    expect(result.unappliedBefore).toBe(n)
+    expect(result.unappliedAfter).toBe(n)
+    expect(result.resolved).toBe(0)
+  }, 20_000)   // same fixture and cost as above
 
   it('re-judges every staged row under the wider scope', async () => {
     // The escape hatch for a flag that is itself wrong: `unapplied` trusts the
