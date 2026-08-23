@@ -499,6 +499,7 @@ const materializePropertiesForChangedRow = async (
 ): Promise<void> => {
   if (row.after === null || row.after.deleted) return
   const revived = isRevival(row.before)
+  const changed = changedPropertyNames(row.before?.properties ?? {}, row.after.properties)
   // Materialize-everything (§9 flat recognition): field rows and value rows
   // grow their own `::` children like every other block — recognition
   // reclaims nested machinery at any depth, so the old interior/prospective
@@ -508,9 +509,15 @@ const materializePropertiesForChangedRow = async (
         ...Object.keys(row.before!.properties),
         ...Object.keys(row.after.properties),
       ])]
-    : changedPropertyNames(row.before?.properties ?? {}, row.after.properties)
+    : changed
+  // The decode rejection refuses a value THIS TX wrote. A revival that wrote no
+  // property value has none to refuse, and rejecting a pre-existing one there
+  // only strands the block in the trash. A revival that DID write keeps the
+  // rejection — otherwise a `tx.restore` paired with a raw junk bag write in
+  // one tx would launder straight past the guard.
   await materializePropertyChildrenForExistingRow(
-    tx, row.after, lookups, names, revived ? 'skip' : 'reject',
+    tx, row.after, lookups, names,
+    revived && changed.length === 0 ? 'skip' : 'reject',
   )
 }
 

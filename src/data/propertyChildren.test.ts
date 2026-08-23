@@ -1525,6 +1525,26 @@ describe('revival re-materializes property children (#778)', () => {
         {scope: ChangeScope.BlockDefault}),
     ).rejects.toThrow(/does not decode/)
   })
+  it('still rejects an undecodable value the RESTORING tx itself writes', async () => {
+    // The exemption above is scoped to "this tx wrote no property value". A tx
+    // that restores AND raw-writes junk in one go must not launder past the
+    // guard just because it happens to also revive the row.
+    await seedWorkspace('children')
+    const repo = await seedMaterializedProperty()
+    await repo.mutate.delete({id: 'p'})
+
+    await expect(
+      repo.tx(async tx => {
+        await tx.restore('p')
+        await tx.update('p', {properties: {[statusSchema.name]: null}})
+      }, {scope: ChangeScope.BlockDefault}),
+    ).rejects.toThrow(/does not decode/)
+
+    // Rolled back atomically — the restore went with it.
+    const row = await sharedDb.db.get<{deleted: number}>(
+      'SELECT deleted FROM blocks WHERE id = ?', ['p'])
+    expect(row.deleted).toBe(1)
+  })
 })
 
 describe('§9 recognition on the WRITE side (round-2 review fixes)', () => {
