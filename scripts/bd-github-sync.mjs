@@ -781,8 +781,21 @@ export const buildDenyMessage = (mapped, unmapped) => {
 // Process plumbing
 // ---------------------------------------------------------------------------
 
+/** spawnSync's 1 MiB default is a size the tracker's own output GROWS past —
+ *  `bd list --json` over every issue crossed it at ~1.05 MB and took the whole
+ *  sync down with `ENOBUFS` on its FIRST call, so nothing synced at all. Every
+ *  bulk reader here (that list, `bd github sync`'s per-issue log) is on the
+ *  same trajectory, so the ceiling belongs on the shared helper rather than at
+ *  each call site that has crossed it so far. */
+const MAX_OUTPUT_BYTES = 256 * 1024 * 1024
+
 const run = (file, args, opts = {}) => {
-  const r = spawnSync(file, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], ...opts })
+  const r = spawnSync(file, args, {
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+    maxBuffer: MAX_OUTPUT_BYTES,
+    ...opts,
+  })
   if (r.error) throw r.error
   const combined = `${r.stdout ?? ''}\n${r.stderr ?? ''}`
   if (r.status !== 0) throw new Error(`${file} ${args[0]} exited ${r.status}: ${combined.trim().slice(0, 500)}`)
@@ -811,6 +824,7 @@ export const bdShowRows = (ids, opts = {}) => {
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
     timeout: 15_000,
+    maxBuffer: MAX_OUTPUT_BYTES,
     ...opts,
   })
   try {
