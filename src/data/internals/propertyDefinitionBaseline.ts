@@ -9,26 +9,16 @@
  *
  * ── The baseline advances on ADD or on APPLY, never on mere observation ──
  *
- * `observePropertyDefinitions` folds in only the fieldIds the baseline doesn't
- * know yet. A fieldId whose observed fact DIFFERS is left exactly as it was:
- * that difference IS the drift, and it has to stay visible to every subsequent
- * prime until a migration actually re-keys the cells, at which point
- * `recordAppliedPropertyDefinitions` writes the new fact.
+ * Two simplifications are wrong. Suppressing the drift for the rebuild that
+ * observes it: the NEXT rebuild's in-memory previous already carries the new
+ * name, sees no change, and folds it in. Recording at DETECTION time: the
+ * deferred pass runs 10–30s later on deep idle and may never run at all (tab
+ * closed, batch threw, workspace un-flipped, repo read-only).
  *
- * Getting this wrong is subtle, and two weaker shapes were measured failing.
- * Suppressing the drift for the one rebuild that observes it is not enough —
- * the NEXT rebuild's in-memory previous snapshot already carries the new name,
- * sees no change, and folds it in. Recording at DETECTION time rather than at
- * apply time is not enough either: the deferred pass runs 10–30s later on deep
- * idle and may never run at all (tab closed, batch threw, workspace not flipped
- * yet, repo read-only), and the change would be absorbed as though handled.
- * Both restore #780's silent loss. Only "the baseline says what this device has
- * DONE" is stable under an arbitrary number of intervening rebuilds.
- *
- * It also makes every refusal downstream self-healing for free: a contested
- * rename, an unresolvable fieldId, an un-flipped workspace — none of them
- * record, so each is re-detected at the next prime and applies as soon as the
- * obstacle clears.
+ * A consequence worth not undoing: every refusal downstream is self-healing.
+ * A contested rename, an unresolvable fieldId, an un-flipped workspace — none
+ * record, so each re-detects at the next prime and applies once the obstacle
+ * clears. Nothing here needs retry logic.
  *
  * Storage is one JSON row per workspace in `client_schema_state`, local and
  * unsynced: this records what THIS device has done, not shared state.
@@ -107,6 +97,10 @@ const baselineKey = (workspaceId: string) => `${PROPERTY_DEFINITION_BASELINE_PRE
  * that merged against a process-local mirror and then wrote the whole blob
  * would delete the fieldIds only the OTHER tab had seen — reachable today,
  * since a `?safeMode` tab's registry is a strict subset.
+ *
+ * One write transaction per registry rebuild is accepted: the serialize-compare
+ * skips the INSERT in the overwhelmingly common no-change case, and rebuilds
+ * are definition/preset/workspace-pin events, not typing.
  */
 const updateBaseline = async (
   db: BaselineDb,

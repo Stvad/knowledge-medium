@@ -439,13 +439,11 @@ export class FacetBridge {
           // against the durable baseline (`propertyDefinitionBaseline.ts`).
           if (propertyDefinitions) {
             const previous = previousPropertyDefinitions
-            // The workspace comparison is defence in depth, not a live branch:
-            // pinning a workspace runs this step before its projector primes,
-            // so a null-registry build always sits between two workspaces'
-            // snapshots and `previous` is null at every prime. It stays because
-            // what it prevents — diffing one workspace's definitions against
-            // another's, which reads as a rename of every shared fieldId — is
-            // graph-wide damage, and nothing else would catch it.
+            // Defence in depth: pinning a workspace rebuilds before its
+            // projector primes, so `previous` is null at every prime anyway. It
+            // stays because diffing one workspace's definitions against
+            // another's reads as a rename of every shared fieldId, and nothing
+            // else would catch it.
             const previousFacts = previous && previous.workspaceId === propertyDefinitions.workspaceId
               ? propertyDefinitionFacts(previous)
               : null

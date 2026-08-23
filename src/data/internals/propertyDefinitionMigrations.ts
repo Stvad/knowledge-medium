@@ -116,8 +116,8 @@ export const changedPropertyDefinitionFacts = (
  * to write:
  *
  *  - NEW name: re-keying under a name someone else owns overwrites that
- *    owner's cell projection with the wrong value (found by Codex on PR #386)
- *    — the renamer is likely shadowed there, not the winner.
+ *    owner's cell projection with the wrong value — the renamer is likely
+ *    shadowed there, not the winner.
  *  - OLD name: a rename UN-SHADOWS any definition that shared the old name
  *    (§6), so afterwards that name answers to the sibling. Dropping it would
  *    strand the sibling's cell — and in the deferred batch, whose re-key is an
@@ -128,16 +128,13 @@ export const changedPropertyDefinitionFacts = (
  * Either way the contested case belongs to the shadowing model's reconcile
  * (#389 item 8), not to a one-shot re-key.
  *
- * Two subtleties, both of which cost a real tombstone before they were spelled
- * out:
+ * Two subtleties:
  *
  *  - Only a peer that CHANGES ITS NAME can vacate one. A codec-only change
  *    (`oldName === newName`) is in the batch but keeps its name, so it must not
  *    grant the exemption — the deferred path passes those through here too.
  *  - Dropping a candidate can un-vacate the name that kept ANOTHER one, so this
- *    iterates to a fixpoint. Dropping W (which was going to take `a`) has to
- *    re-contest X's rename away from `a`, or X drops the key and nothing
- *    re-sets it.
+ *    iterates to a fixpoint.
  *
  * Shared by both writers of a rename re-key, because the refusal is a property
  * of the RENAME, not of the path that noticed it. Note the two callers resolve

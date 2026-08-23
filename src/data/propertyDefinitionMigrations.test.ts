@@ -765,23 +765,51 @@ describe('changes observed only across a workspace switch (#780)', () => {
     expect(await baselineNames()).toEqual({[FIELD_ID]: 'status'})
   }, 20_000)
 
-  it('leaves value-child content untouched — a rename re-encodes nothing', async () => {
+  it('a pass with nothing left to do rewrites no value-child text', async () => {
     await seedWorkspace('children')
-    const repo = setup()
-    const {valueRowId} = await seedProperty(repo, 'p', 'done')
-    // The shape a hand-typed or synced value has: not what this codec would
-    // canonicalize to. For a REF property the same rewrite strips an alias
-    // label (`[My Label](((id)))` renders back as a bare `((id))`), and these
-    // writes sync and are off the undo stack.
-    await sharedDb.db.execute('UPDATE blocks SET content = ? WHERE id = ?', ['  done  ', valueRowId])
+    // A NUMBER codec, so re-encoding is observable — it would normalize the
+    // stored text. This is the receiving device's shape: the renaming device
+    // re-keyed its cells and synced them, so the pass that runs here has
+    // nothing to change and must not rewrite anything on the way through.
+    // Every LOCAL rename takes exactly this pass at the next prime.
+    const repo = setup(statusNumber)
+    await repo.tx(async tx => {
+      for (const id of ['done', 'todo']) {
+        await tx.create({
+          id, workspaceId: WS, parentId: null, orderKey: `k-${id}`, content: 'host',
+        })
+      }
+    }, {scope: ChangeScope.BlockDefault})
+    for (const id of ['done', 'todo']) {
+      // `schemaWith` types every schema as string-valued whatever codec it
+      // carries (see its declaration), so the number goes through as never.
+      await repo.tx(tx => tx.setProperty(id, statusNumber, 42 as never),
+        {scope: ChangeScope.BlockDefault})
+    }
+    const field = await sharedDb.db.get<{id: string}>(
+      'SELECT id FROM blocks WHERE parent_id = ? AND reference_target_id = ? AND deleted = 0',
+      ['done', FIELD_ID],
+    )
+    const valueRow = await sharedDb.db.get<{id: string}>(
+      'SELECT id FROM blocks WHERE parent_id = ? AND deleted = 0', [field.id],
+    )
+    // Raw writes: the shape sync-applied rows have (no processor runs). `done`
+    // arrives already re-keyed, with value text the codec would not have
+    // written; `todo` is the positive control the pass still has to fix.
+    await sharedDb.db.writeTransaction(async tx => {
+      await tx.execute('UPDATE blocks SET content = ? WHERE id = ?', ['  0042  ', valueRow.id])
+      await tx.execute(
+        'UPDATE blocks SET properties_json = ? WHERE id = ?', ['{"state2":42}', 'done'],
+      )
+    })
     await repo.awaitPropertyDefinitionBaselines()
 
-    await changeWhileInactive(repo, statusRenamed)
+    await changeWhileInactive(repo, state2Number)
 
     await vi.waitFor(async () => {
-      expect(await cell('p')).toEqual({state: '  done  '})
+      expect(await cell('todo')).toEqual({state2: 42})
     }, {timeout: 5000})
-    expect(await rowContent(valueRowId)).toBe('  done  ')
+    expect(await rowContent(valueRow.id)).toBe('  0042  ')
   }, 20_000)
 
   it('with NO recorded baseline, records one and migrates nothing', async () => {
