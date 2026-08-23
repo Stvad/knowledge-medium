@@ -444,9 +444,10 @@ const initializePowerSyncDb = async (powerSyncDb: PowerSyncDatabase) => {
     getAll: <T,>(sql: string) => powerSyncDb.getAll<T>(sql),
   })
   // Same position, same reason: it ALTERs `client_schema_state`, which the
-  // loop above creates.
+  // loop above creates. Guarded like its neighbours — the wrapper is what keeps
+  // a future copy-paste of this block from raw-writing a synced table.
   await ensureClientSchemaStateValueColumn({
-    execute: (sql: string) => powerSyncDb.execute(sql),
+    ...backfillDb,
     getAll: <T,>(sql: string) => powerSyncDb.getAll<T>(sql),
   })
   await powerSyncDb.execute(CREATE_BLOCKS_SYNCED_NEEDS_APPLY_INDEX_SQL)

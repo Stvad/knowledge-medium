@@ -352,8 +352,8 @@ export const resetTestDb = async (db: PowerSyncDatabase): Promise<void> => {
     )
     for (const table of existing(RESET_CONTENT_TABLES)) await tx.execute(`DELETE FROM ${table}`)
     for (const table of existing(RESET_AUDIT_TABLES)) await tx.execute(`DELETE FROM ${table}`)
-    // Clear per-test dynamic markers — reprojection (schema-swap catch-up) and
-    // workspace backfills — so each is re-detected per test. A freshly-opened
+    // Clear the per-test dynamic rows — the catch-up markers and the
+    // definitions baseline — so each is re-detected per test. A freshly-opened
     // harness has none of these; we keep only the alias/type/FTS/ANALYZE
     // markers from template init.
     if (present.has('client_schema_state')) {

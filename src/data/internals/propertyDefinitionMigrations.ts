@@ -16,13 +16,10 @@
  *
  * Detection rides the registry rebuild: the facet bridge diffs the previous
  * vs incoming `PropertyDefinitionRegistrySnapshot` per fieldId (durable
- * identity). On PRIME there is no comparable previous snapshot — it is null or
- * belongs to another workspace — so the durable per-workspace baseline
- * (`propertyDefinitionBaseline.ts`) supplies the before-state instead, which is
- * what catches a change synced in while this device was looking elsewhere
- * (#780). The multi-device rename RACE (a block edited offline across a rename
- * syncs up under a key no registry knows) is slice C's reconcile; this one-shot
- * pass can't reach it.
+ * identity), falling back to `propertyDefinitionBaseline.ts` on a PRIME, where
+ * there is no comparable previous snapshot. The multi-device rename RACE (a
+ * block edited offline across a rename syncs up under a key no registry knows)
+ * is slice C's reconcile; this one-shot pass can't reach it.
  */
 
 import type { ResolvedPropertySchema } from '@/data/api'
@@ -38,20 +35,13 @@ export interface PropertyDefinitionChange {
   readonly codecChanged: boolean
 }
 
-/** One change, resolved to the schema the workspace selected for its
- *  fieldId — captured at `Repo.schedulePropertyDefinitionMigrations` time,
- *  NOT re-resolved when the deferred batch finally runs.
- *
- *  `Repo.propertySchemaResolverFor` only serves the ACTIVE workspace or the
- *  immediately-previous one (one-deep retention) and fails closed for any
- *  other workspace. The migration batch is deferred to a deep-idle job, so by
- *  the time it runs the user may have switched workspaces twice more —
- *  re-resolving THEN would silently return zero plans and drop the migration
- *  with no retry. Resolution is guaranteed to succeed at SCHEDULE time
- *  (`changes` comes from this workspace's own registry rebuild, which just
- *  primed its snapshot), so the plan is captured there instead. A change
- *  whose fieldId doesn't resolve then (shadowed / unavailable, §6) is
- *  dropped — same skip the old run-time check performed, just moved earlier. */
+/** One change, resolved to the schema the workspace selected for its fieldId —
+ *  captured when the migration is SCHEDULED, not when the deferred batch runs.
+ *  `Repo.propertySchemaResolverFor` serves only the active or immediately-
+ *  previous workspace and fails closed otherwise, so a batch that re-resolved
+ *  after two more workspace switches would return zero plans and drop the
+ *  migration with no retry. A fieldId that doesn't resolve at capture time
+ *  (shadowed / unavailable, §6) is dropped. */
 export interface PropertyDefinitionMigrationPlan {
   readonly change: PropertyDefinitionChange
   readonly schema: ResolvedPropertySchema<unknown>

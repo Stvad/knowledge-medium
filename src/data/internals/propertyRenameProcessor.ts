@@ -32,9 +32,7 @@
  *    The rename test asserts field rows SURVIVE.
  *
  * Synced-in renames don't run this pass (sync-apply is not `repo.tx`); they are
- * caught on registry PRIME, by diffing the durable per-workspace definitions
- * baseline (`propertyDefinitionBaseline.ts`, #780) — so one that arrives while
- * the workspace is already open is repaired the next time it primes.
+ * caught on registry prime by `propertyDefinitionBaseline.ts` (#780).
  * Flip-gated: dormant in a 'cell' workspace.
  */
 

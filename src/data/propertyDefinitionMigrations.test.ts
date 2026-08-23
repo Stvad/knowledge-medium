@@ -656,10 +656,11 @@ describe('changes observed only across a workspace switch (#780)', () => {
    *
    *  Publishing while WS is inactive is the shape a SYNCED-IN change has: no
    *  `repo.tx` runs on this device, so the same-tx rename processor never
-   *  fires. Waiting for OTHER_WS to prime before switching back is what makes
-   *  the return a genuine cross-workspace prime — without it the intervening
-   *  pin leaves the registry null and only the "no previous" half of the
-   *  condition is ever exercised. */
+   *  fires. Waiting for OTHER_WS to prime makes it a real workspace visit
+   *  (which is what rotates the resolver's previous slot); it does NOT make the
+   *  return a cross-workspace diff — pinning WS rebuilds once with a null
+   *  registry before its projector primes, so `previous` is null at the prime
+   *  either way. */
   const changeWhileInactive = async (
     repo: Repo, next: ReturnType<typeof schemaWith>,
   ): Promise<void> => {

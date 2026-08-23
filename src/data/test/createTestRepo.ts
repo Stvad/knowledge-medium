@@ -135,10 +135,11 @@ export const createTestRepo = (opts: CreateTestRepoOptions): TestRepo => {
           'SELECT key FROM client_schema_state WHERE key = ?', [`workspace_backfill:${ws}:${id}`],
         )) === null,
       markComplete: async (ws: string, id: string) => {
-        // `client_schema_state` is (key, completed_at) — there is no `value`
-        // column, and writing one threw on every call. It went unnoticed
-        // because the runner recorded its outcome BEFORE this ran, so a
-        // completion that always failed still reported success.
+        // A backfill marker's payload is its PRESENCE; the table's `value`
+        // column belongs to the rows that carry one and must stay NULL here.
+        // Binding it threw on every call once, unnoticed, because the runner
+        // recorded its outcome BEFORE this ran — so a completion that always
+        // failed still reported success.
         await opts.db.execute(
           'INSERT OR REPLACE INTO client_schema_state (key, completed_at) VALUES (?, ?)',
           [`workspace_backfill:${ws}:${id}`, Date.now()],

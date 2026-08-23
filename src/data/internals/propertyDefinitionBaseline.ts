@@ -13,17 +13,11 @@
  * Storage is one JSON row per workspace in `client_schema_state`, which is
  * local and unsynced: this records what THIS device has seen, not shared state.
  *
- * ── Missing baseline means "migrate nothing" ──
- *
- * Not "everything changed": with no observed before-state, re-keying would run
- * off a diff this device never made. Nor is a rename swallowed — the device
- * that performed it re-keyed its own cells in the editing tx and synced them,
- * so a first-time reader receives correct rows. What survives that is a cell
- * that diverged from its field rows on a third device, which is a content-level
- * reconcile no baseline can detect.
- *
- * Nothing revokes a baseline; every registry build folds its facts in. Wiping
- * `client_schema_state` returns the device to the missing case above.
+ * A MISSING baseline means "migrate nothing", not "everything changed": with no
+ * observed before-state, re-keying would run off a diff this device never made.
+ * Nor does that swallow a rename — the device that performed it re-keyed its
+ * own cells in the editing tx and synced them, so a first-time reader receives
+ * correct rows. Nothing revokes a baseline; every registry build folds into it.
  */
 
 import type {
@@ -37,9 +31,7 @@ import {
 } from './clientSchema'
 
 /** Stored shape. Versioned so a blob written by a LATER build is recognized as
- *  unreadable rather than misparsed — and then left alone rather than
- *  overwritten, so an old tab open across a deploy can't cost the new one a
- *  generation of observations. */
+ *  unreadable rather than misparsed — see `foldIn`, which then leaves it. */
 interface StoredBaseline {
   readonly version: 1
   readonly fields: Record<string, {readonly name: string; readonly codecType?: string}>
@@ -119,21 +111,19 @@ export class PropertyDefinitionBaselineStore {
 
   /**
    * Fold `facts` into this workspace's stored baseline and return the baseline
-   * AS IT WAS before the fold (null when this device has recorded none, or when
-   * the row was written by a build this one can't read).
+   * AS IT WAS before the fold (null when this device has recorded none, or the
+   * row came from a build this one can't read).
    *
-   * Read and write are ONE call, and one transaction, for two reasons. The
-   * caller's diff needs the pre-fold state, so exposing them separately would
-   * make an ordering requirement a convention. And the row is shared by every
-   * tab: each tab is its own Repo, so a store that unioned against a process-
-   * local mirror and then wrote the whole blob would delete the fieldIds only
-   * the OTHER tab had seen — which is #780 again, since the next prime reads a
-   * missing fieldId as a brand-new definition and swallows its rename. That is
-   * reachable today: a `?safeMode` tab's registry is a strict subset.
+   * Read and write are ONE call, and ONE transaction. The caller's diff needs
+   * the pre-fold state, so separate calls would make an ordering requirement a
+   * convention. And the row is shared by every tab's Repo: a store that unioned
+   * against a process-local mirror and wrote the whole blob would delete the
+   * fieldIds only the OTHER tab had seen — reachable today, since a `?safeMode`
+   * tab's registry is a strict subset.
    *
-   * The fold is a UNION over fieldIds, not a replace: a build can legitimately
-   * observe a subset, and forgetting a fieldId would make its return look like
-   * a brand-new definition.
+   * The fold is a UNION over fieldIds: a build can legitimately observe a
+   * subset, and forgetting a fieldId would make its return look like a
+   * brand-new definition, swallowing any rename in between.
    */
   async foldIn(
     workspaceId: string,

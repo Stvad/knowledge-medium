@@ -3760,14 +3760,9 @@ export class Repo {
 
   /**
    * Fold a build's definition facts into this device's durable per-workspace
-   * baseline, and — on PRIME (`detectChanges`) — schedule the migration pass
-   * for whatever drifted from it (#780).
-   *
-   * PRIME is where the bridge's previous-vs-incoming diff is structurally
-   * blind, so this is what sees a rename or codec change that SYNCED IN while
-   * the device was looking elsewhere. Recording happens on every build (minus
-   * the facts the bridge held back as unaccounted-for), so a change this device
-   * already handled isn't re-migrated at the next prime.
+   * baseline, and — on PRIME — schedule the migration pass for whatever drifted
+   * from it. See `propertyDefinitionBaseline.ts` for what the baseline is for
+   * and what a missing one means (#780).
    */
   syncPropertyDefinitionBaseline(
     workspaceId: string,
@@ -3775,27 +3770,23 @@ export class Repo {
     {detectChanges}: {readonly detectChanges: boolean},
   ): void {
     if (!workspaceId) return
-    // Deliberately NOT read-only-gated. Recording is a local write to an
-    // unsynced table, and skipping it strands the device: `App` pins the
-    // workspace BEFORE resolving the role, so a pin that arrives while the flag
-    // is still true would record nothing, and no later build is a prime — the
-    // session ends blind and the next one starts with no baseline. Only the
-    // migration itself is gated, by `schedulePropertyDefinitionMigrations`.
+    // Deliberately NOT read-only-gated: `App` pins the workspace before
+    // resolving the role, so gating would make that pin record nothing — and no
+    // later build is a prime, so the session ends blind. Recording is a local
+    // write to an unsynced table; only the migration is gated, inside
+    // `schedulePropertyDefinitionMigrations`.
     //
-    // The resolver is captured HERE, synchronously with the rebuild that
-    // produced `facts`, for the same reason that method captures its plans
-    // eagerly: `propertySchemaResolverFor` serves only the active or
-    // immediately-previous workspace, and the fold below is async, so
-    // re-deriving it after the await could fail closed and drop the migration.
+    // Resolver captured synchronously with the rebuild that produced `facts`:
+    // `propertySchemaResolverFor` serves only the active or immediately-
+    // previous workspace, and the fold below is async.
     const resolver = detectChanges ? this.propertySchemaResolverFor(workspaceId) : null
     this.propertyDefinitionBaselineWork = this.propertyDefinitionBaselineWork
       .then(async () => {
         const previous = await this.propertyDefinitionBaselines.foldIn(workspaceId, facts)
         if (resolver === null) return
-        // No baseline yet — nothing observed to diff against. Falls out of the
-        // diff anyway (an absent fieldId is an ADDED definition, never a
-        // rename); spelled out because it is the designed boundary and the next
-        // editor needs to see it rather than rediscover it.
+        // No baseline yet. Redundant with the diff (an absent fieldId is an
+        // ADDED definition, never a rename), kept because it is the designed
+        // boundary rather than a coincidence of the diff.
         if (previous === null) return
         const changes = changedPropertyDefinitionFacts(previous, facts)
         if (changes.length > 0) {

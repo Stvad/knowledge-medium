@@ -171,11 +171,9 @@ export const CREATE_BLOCK_ALIASES_WS_ALIAS_INDEX_SQL = `
 `
 
 /** Tiny key/value table for local, per-device schema state. Most rows are
- *  one-shot bootstrapping MARKERS (the alias backfill and friends), whose
- *  presence is the whole payload and whose `value` is NULL; a few carry a
- *  `value` blob (the property-definition baseline). Local-only either way —
- *  these describe the state of derived data on THIS device, not anything the
- *  server cares about.
+ *  one-shot bootstrapping MARKERS whose presence is the whole payload and whose
+ *  `value` is NULL; a few carry a `value` blob. Local-only either way — these
+ *  describe derived state on THIS device, not anything the server cares about.
  *
  *  Why a dedicated table instead of "is block_aliases empty?": a
  *  legitimately empty workspace, or a workspace whose user removed
@@ -184,8 +182,8 @@ export const CREATE_BLOCK_ALIASES_WS_ALIAS_INDEX_SQL = `
  *  meant to avoid. The marker captures "we ran the backfill once for
  *  this schema version" directly.
  *
- *  `value` is nullable, and every marker INSERT names its columns explicitly,
- *  so a marker write leaves it NULL without caring that the column exists. */
+ *  Every marker INSERT names its columns explicitly, so adding a column here
+ *  never has to touch them. */
 export const CREATE_CLIENT_SCHEMA_STATE_TABLE_SQL = `
   CREATE TABLE IF NOT EXISTS client_schema_state (
     key           TEXT PRIMARY KEY,
@@ -1303,12 +1301,9 @@ export const RECORD_RECONCILE_RESCAN_MARKER_SQL = `
   VALUES (?, strftime('%s', 'now') * 1000)
 `
 
-/** Per-workspace snapshot of the property definitions this device last SAW
- *  (`property_definition_baseline:<workspaceId>` → a JSON `value`). Read on
- *  registry prime to diff against, so a definition change that landed while
- *  the workspace was inactive is still detected — the in-memory previous
- *  snapshot belongs to another workspace (or to a previous run) and can't see
- *  it. Owned by `propertyDefinitionBaseline.ts`. */
+/** Per-workspace record of the property definitions this device has accounted
+ *  for (`property_definition_baseline:<workspaceId>` → a JSON `value`), owned
+ *  by `propertyDefinitionBaseline.ts`. */
 export const PROPERTY_DEFINITION_BASELINE_PREFIX = 'property_definition_baseline:'
 
 export const SELECT_PROPERTY_DEFINITION_BASELINE_SQL = `

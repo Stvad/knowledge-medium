@@ -434,26 +434,29 @@ export class FacetBridge {
           if (refSchemaChanges.length > 0) {
             target.scheduleReprojection(refSchemaChanges, propertySchemas)
           }
-          // Definition-change migrations (PR #288 §7/§9, slice B2), from the
-          // ONE workspace-scoped decision below: a build that carries a
-          // previous snapshot for the SAME workspace is diffed in memory; a
-          // PRIME (no previous, or another workspace's) is diffed against the
-          // durable baseline, which is what sees a change synced in while this
-          // device was looking elsewhere (#780).
+          // Definition-change migrations (PR #288 §7/§9, slice B2). ONE
+          // decision: a same-workspace build is diffed in memory, a PRIME
+          // against the durable baseline (`propertyDefinitionBaseline.ts`).
           if (propertyDefinitions) {
             const previous = previousPropertyDefinitions
+            // The workspace comparison is defence in depth, not a live branch:
+            // pinning a workspace runs this step before its projector primes,
+            // so a null-registry build always sits between two workspaces'
+            // snapshots and `previous` is null at every prime. It stays because
+            // what it prevents — diffing one workspace's definitions against
+            // another's, which reads as a rename of every shared fieldId — is
+            // graph-wide damage, and nothing else would catch it.
             const previousFacts = previous && previous.workspaceId === propertyDefinitions.workspaceId
               ? propertyDefinitionFacts(previous)
               : null
             const facts = propertyDefinitionFacts(propertyDefinitions)
             if (previousFacts) {
-              // RENAMES are not scheduled here — they are re-keyed atomically in
-              // the editing tx by the `core.migratePropertyRename` same-tx
-              // processor (one undoable step, no deferred plan-capture
-              // staleness). A codec-TYPE change still needs this deferred pass
-              // because it must build the NEW codec to re-encode values, which
-              // the same-tx registry snapshot can't. A combined rename+codec
-              // edit rides both and they converge on the new cell key.
+              // RENAMES are not scheduled here — `core.migratePropertyRename`
+              // re-keys a local one atomically in the editing tx, as one
+              // undoable step. A codec-TYPE change still needs this deferred
+              // pass: it must build the NEW codec to re-encode values, which
+              // the same-tx registry snapshot can't. A combined edit rides both
+              // and they converge on the new cell key.
               const changes = changedPropertyDefinitionFacts(previousFacts, facts)
               const scheduled = changes.filter(change => change.codecChanged)
               if (scheduled.length > 0) {
@@ -461,12 +464,11 @@ export class FacetBridge {
                   propertyDefinitions.workspaceId, scheduled,
                 )
               }
-              // A rename nothing scheduled must not be RECORDED either. The
-              // same-tx processor covers a local one, but a synced-in rename
-              // reaches neither writer — and folding its new name into the
-              // baseline would make the next prime find a matching before-state
-              // and repair it never. Holding the fact back keeps it detectable
-              // there; the cost is one no-op pass for a local rename.
+              // A rename nothing scheduled must not be RECORDED either: a
+              // synced-in one reaches neither writer, and folding its new name
+              // in would leave the next prime a matching before-state and no
+              // repair. Cost of holding it back: one no-op pass for a rename
+              // the same-tx processor already applied.
               for (const change of changes) {
                 if (!change.codecChanged) facts.delete(change.fieldId)
               }
