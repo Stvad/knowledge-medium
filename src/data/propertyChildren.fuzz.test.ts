@@ -12,7 +12,7 @@
  *  - Round trip: for a value V in a codec's documented domain,
  *    `propertyValueToChildContent` renders V to child content and
  *    `propertyChildContentToEncodedValue` must recover the SAME canonical
- *    encoded form `schema.codec.encode(V)` (:243-286). This is exactly the
+ *    encoded form `schema.codec.encode(V)`. This is exactly the
  *    dual-write/materialize contract (`writePropertyValueChild`,
  *    `materializePropertyChildrenForExistingRow`): the child holds the
  *    property's value, and PROJECT reconstructs the cell from it.
@@ -27,19 +27,18 @@
  *    other two — reference-shaped content and ill-formed UTF-16 (#688) — hold
  *    for EVERY string-family codec, and are stated as an output invariant in
  *    the "#688" describe below rather than as a per-value expectation.
- *  - Enum leniency (:261-286): a value outside the CURRENT option set still
+ *  - Enum leniency: a value outside the CURRENT option set still
  *    round-trips through content (`decode` is lenient on membership,
- *    codecs.ts:255-259) but is kept in its DECODED form rather than
+ *    `codecs.ts`) but is kept in its DECODED form rather than
  *    re-encoded, because `encode`/`where` would reject it — documented in
- *    the try/catch at propertyChildren.ts:271-285.
- *  - Ref addressing (:154-173, :213-225): a non-empty ref value renders as
+ *    the try/catch in `propertyChildContentToEncodedValue`.
+ *  - Ref addressing: a non-empty ref value renders as
  *    an editable `((id))` span and reads back via the CALLER-SUPPLIED
  *    `referenceTargetId` (the derived column), not by re-parsing content.
- *    An empty ref (`codecs.ref`'s "cleared" encoding, :172) renders as
+ *    An empty ref (`codecs.ref`'s "cleared" encoding) renders as
  *    empty content and is NOT independently re-decodable (no id to derive
- *    from) — the documented "property reads as unset" lossy path (:162-171
- *    the "empty ref is not a reference" comment), not a round-trip failure.
- *  - Number blank-content guard (:88-100): empty/whitespace-only content is
+ *    from) — the documented "property reads as unset" lossy path (the "empty ref is not a reference" comment), not a round-trip failure.
+ *  - Number blank-content guard: empty/whitespace-only content is
  *    unparseable (reserved for `undefined`, never a stored zero) and must
  *    throw `CodecError`, not silently decode to 0.
  */
@@ -314,7 +313,7 @@ describe('#688: content is always storable text, never a span and never ill-form
   })
 })
 
-describe('enum leniency: a retired option decodes but is not re-canonicalized (propertyChildren.ts:271-285)', () => {
+describe('enum leniency: a retired option decodes but is not re-canonicalized', () => {
   it('a value stored before its option was removed still decodes, kept AS-IS rather than re-encoded', () => {
     const content = JSON.stringify('retired-option')
     // decode is lenient (only checks it's a string, codecs.ts:255-259); encode
@@ -333,7 +332,7 @@ describe('ref: the empty/cleared value is a documented non-round-trip', () => {
   })
 })
 
-describe('number: blank content is unparseable, never a silent zero (propertyChildren.ts:88-100)', () => {
+describe('number: blank content is unparseable, never a silent zero', () => {
   it('empty and whitespace-only content throw CodecError', () => {
     for (const content of ['', '   ', '\t\n']) {
       expect(() => propertyChildContentToEncodedValue(numberSchema, content), `content ${JSON.stringify(content)}`)
