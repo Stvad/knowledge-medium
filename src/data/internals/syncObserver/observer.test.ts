@@ -405,9 +405,14 @@ describe('blocksSyncedObserver — operator rematerialization (km-boj1)', () => 
     expect(await unapplied('ws')).toEqual(['stuck'])
 
     expect(await observer.drainWorkspace('ws', 'unapplied')).toMatchObject({ scanned: 1 })
-    // And `all` is the wider pass it is narrower than — same workspace, both rows.
+    // And `all` is the wider pass it is narrower than — same workspace, both
+    // rows. It repaired nothing, and says so: at this point every row is
+    // already resolved, and the wide pass re-DECIDES all of them. Counting
+    // decisions instead of flags actually moved would report a settled
+    // workspace as one this pass had just repaired end to end — on a real graph,
+    // hundreds of thousands of rows of it.
     expect(await observer.drainWorkspace('ws', 'all'))
-      .toMatchObject({ scope: 'all', scanned: 2 })
+      .toMatchObject({ scope: 'all', scanned: 2, applied: 0, resolved: 0 })
   })
 
   it('flags the narrow pass as in flight too', async () => {

@@ -176,11 +176,16 @@ export interface MaterializeOutcome {
   readonly quarantined: readonly string[]
   /** Ids hard-deleted from `blocks`. */
   readonly deleted: readonly string[]
-  /** Ids whose `needs_apply` flag this pass CLEARED — every row it decided
-   *  leaves `blocks` correct: applied, skip-staled (the local row wins by the
-   *  gate's own rule), or already reflected by `blocks` even though the drain
-   *  could not apply it (`blocksAlreadyReflects`). The rows it did NOT
-   *  clear are the durable gap `WORKSPACE_UNAPPLIED_SQL` reports. */
+  /** Ids whose `needs_apply` flag this pass CLEARED — rows that arrived flagged
+   *  and that it decided leave `blocks` correct: applied, skip-staled (the local
+   *  row wins by the gate's own rule), or already reflected by `blocks` even
+   *  though the drain could not apply it (`blocksAlreadyReflects`). The rows it
+   *  did NOT clear are the durable gap `WORKSPACE_UNAPPLIED_SQL` reports.
+   *
+   *  A row that was ALREADY clear is not here, however the pass decided it. The
+   *  flag moving is the whole claim — a re-pass over a settled workspace
+   *  (`RematerializeScope` 'all') decides every row it reads and must report
+   *  having repaired none of them. */
   readonly resolved: readonly string[]
 }
 
@@ -575,10 +580,8 @@ export const materializeStagingRows = async (
     // this is a column on the staging row rather than something a reader
     // re-derives. A pass that reads the flag inside its own write transaction
     // is excluded from this one by the write lock, so it never sees a decision
-    // half-made. Only for the version actually judged, and only where the flag disagrees:
-    // a row replaced since Phase 1 belongs to whoever judges THAT version, and
-    // `needs_apply <> value` keeps a window that decided nothing new from
-    // rewriting pages (a locked workspace re-defers the same rows every drain).
+    // half-made. Only for the version actually judged: a row replaced since
+    // Phase 1 belongs to whoever judges THAT version.
     const stagedNow = await readStagingFlagState(
       tx, decisions.map(decision => decision.id), readChunkSize,
     )
@@ -586,12 +589,23 @@ export const materializeStagingRows = async (
     for (const decision of decisions) {
       const now = stagedNow.get(decision.id)
       if (now === undefined || now.updatedAt !== decision.stagedUpdatedAt) continue
+      // Only rows whose flag actually MOVES. These lists are both the write and
+      // the report, and the two want different things from that: the write is a
+      // no-op either way (a locked workspace re-defers the same rows every
+      // drain), but the report cannot tell afterwards which of the two it was —
+      // so `resolved` naming rows that were already resolved makes a re-pass
+      // over a healthy workspace read as though it had just repaired all of it.
+      if (decision.needsApply === now.needsApply) continue
       if (decision.needsApply) stale.push(decision.id)
       else resolved.push(decision.id)
     }
     for (const [value, ids] of [[0, resolved], [1, stale]] as const) {
       for (let i = 0; i < ids.length; i += readChunkSize) {
         const chunk = ids.slice(i, i + readChunkSize)
+        // `needs_apply <> value` is DEFENCE IN DEPTH now that the lists carry
+        // only movers — the read it would filter on is the one they were built
+        // from, inside this same lock. Kept because it is free and the two
+        // could drift.
         await tx.execute(setNeedsApplySql(value, chunk.length), chunk)
       }
     }

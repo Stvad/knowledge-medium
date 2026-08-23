@@ -107,8 +107,10 @@ export type RematerializeScope = 'all' | 'unapplied'
 /** What one queue-less rematerialization pass did, summed over its windows.
  *
  *  Every count is per row and the id set is distinct, so they partition
- *  `scanned` — except `resolved`, which is orthogonal (it counts the rows whose
- *  `needs_apply` flag the pass cleared, by any of the drain's reasons).
+ *  `scanned` — except `resolved`, which is orthogonal: it counts rows whose
+ *  `needs_apply` flag this pass MOVED from set to clear, by any of the drain's
+ *  reasons. A row that was already clear is not counted however it was decided,
+ *  so a re-pass over a settled workspace correctly reports repairing nothing.
  *
  *  The point of reporting `deferred` and `quarantined` separately: when a pass
  *  does NOT close the gap, these are why. Deferred means the workspace was not
@@ -123,7 +125,7 @@ export interface RematerializeReport {
   readonly deferred: number
   readonly skippedStale: number
   readonly quarantined: number
-  /** Rows whose `needs_apply` flag this pass cleared. */
+  /** Rows whose `needs_apply` flag this pass moved from set to clear. */
   readonly resolved: number
 }
 
