@@ -20,7 +20,11 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { BLOCKS_SYNCED_RAW_TABLE, blockToSyncedRowParams } from '@/data/blockSchema'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
-import { decideStagingRow } from '@/data/internals/syncObserver/reconcile'
+import {
+  decideStagingRow,
+  WORKSPACE_UNAPPLIED_COUNT_CAP,
+  WORKSPACE_UNAPPLIED_SQL,
+} from '@/data/internals/syncObserver/reconcile'
 import { ChangeScope } from '@/data/api'
 import type { BlockData } from '@/data/api'
 
@@ -51,13 +55,13 @@ const deliver = (d: BlockData) =>
 /** A local `blocks` row with no processor run and no synced counterpart —
  *  the shape a row has mid-drain, and the only way to exercise one staged
  *  clause without a sibling clause firing first. */
-const seedLocal = (id: string, updatedAt: number) =>
+const seedLocal = (id: string, updatedAt: number, deleted = false) =>
   sharedDb.db.writeTransaction(async tx => {
     await tx.execute(
       `INSERT INTO blocks (id, workspace_id, parent_id, order_key, content, properties_json,
          created_at, updated_at, user_updated_at, created_by, updated_by, deleted)
-       VALUES (?, ?, NULL, 'a0', 'v', '{}', 1, ?, ?, 'u', 'u', 0)`,
-      [id, WS, updatedAt, updatedAt])
+       VALUES (?, ?, NULL, 'a0', 'v', '{}', 1, ?, ?, 'u', 'u', ?)`,
+      [id, WS, updatedAt, updatedAt, deleted ? 1 : 0])
   })
 
 const localStamp = async (id: string): Promise<number> =>
@@ -196,4 +200,141 @@ describe('Repo.syncViewGap', () => {
     expect(await repo.syncViewGap()).toMatch(/draining/)
   })
 
+})
+
+/** Staged as a real arrival, then the queue signal consumed — the shape a row
+ *  has after a drain that could not apply it (locked workspace, mode
+ *  unresolved, a key-store read that failed, ciphertext that would not decode).
+ *  Nothing is in flight and nothing ever will be: a delivery lands with
+ *  `needs_apply` at its default and only the drain clears it. */
+const deliverAndConsumeQueue = async (d: BlockData) => {
+  await deliver(d)
+  await sharedDb.db.execute('DELETE FROM blocks_synced_changes')
+}
+
+/** What the drain does to a row it decided leaves `blocks` correct. Written
+ *  directly, because THIS file is about the predicate reading the flag — which
+ *  rows earn it is the drain's decision and is pinned where the drain lives
+ *  (`syncObserver/observer.test.ts`). */
+const markApplied = (id: string) =>
+  sharedDb.db.execute('UPDATE blocks_synced SET needs_apply = 0 WHERE id = ?', [id])
+
+describe('Repo.workspaceViewGap', () => {
+  it('reports rows the drain downloaded and never applied, with nothing in flight', async () => {
+    const repo = makeRepo()
+    await deliverAndConsumeQueue(syncedRow({id: 'never-decoded', updatedAt: 5}))
+
+    // The in-flight predicate is satisfied — this is exactly the state in which
+    // waiting is not a mitigation, because nothing is running. Which is what
+    // `transient: false` says, and what a self-re-arming caller reads.
+    expect(await repo.syncViewGap()).toBeNull()
+    expect(await repo.workspaceViewGap(WS)).toEqual({
+      reason: expect.stringMatching(/have not reached/), transient: false,
+    })
+  })
+
+  it('reports no gap for this device\'s own undrained echo', async () => {
+    // THE case that decides whether a long uploading pass can finish. Every
+    // local write comes back down the stream and re-stages, and a delivery
+    // lands unapplied by default — so counting flagged-but-still-queued rows
+    // would make the pass refuse on its own progress, which is the bug the
+    // queue predicate's benign-echo exclusion exists to prevent. The queue arm
+    // owns rows the drain has not reached; this one owns rows it could not
+    // apply.
+    const repo = makeRepo()
+    await repo.tx(async tx => {
+      await tx.create({workspaceId: WS, parentId: null, orderKey: 'a0', content: 'mine'})
+    }, {scope: ChangeScope.BlockDefault})
+    const [{id}] = await sharedDb.db.getAll<{id: string}>('SELECT id FROM blocks LIMIT 1')
+    await deliver(syncedRow({id, content: 'mine', updatedAt: await localStamp(id)}))
+
+    expect(await sharedDb.db.getAll('SELECT seq FROM blocks_synced_changes')).toHaveLength(1)
+    expect(await repo.workspaceViewGap(WS)).toBeNull()
+  })
+
+  it('reports no gap once the drain has resolved them', async () => {
+    const repo = makeRepo()
+    await deliverAndConsumeQueue(syncedRow({id: 'arrived', updatedAt: 5}))
+    await markApplied('arrived')
+    expect(await repo.workspaceViewGap(WS)).toBeNull()
+  })
+
+  it('reports the gap again when a NEWER delivery lands on a resolved row', async () => {
+    // Presence of a live row proves nothing, and the flag is what makes that
+    // true without anyone comparing stamps: PowerSync's put is an INSERT OR
+    // REPLACE over the storage columns, so every re-delivery resets it. This is
+    // the shape of an e2ee workspace whose key is evicted mid-session — each
+    // block keeps the plaintext it materialized with while arrivals pile up
+    // unreadable on top.
+    const repo = makeRepo()
+    await deliverAndConsumeQueue(syncedRow({id: 'gone-stale', updatedAt: 4}))
+    await markApplied('gone-stale')
+    await seedLocal('gone-stale', 4)
+    expect(await repo.workspaceViewGap(WS)).toBeNull()
+
+    await deliverAndConsumeQueue(syncedRow({id: 'gone-stale', updatedAt: 9}))
+    expect((await repo.workspaceViewGap(WS))?.transient).toBe(false)
+  })
+
+  it('ignores another workspace\'s rows', async () => {
+    // A device is routinely a member of workspaces it has not opened, whose
+    // rows all defer. Scoping is what keeps that from refusing every pass.
+    const repo = makeRepo()
+    await deliverAndConsumeQueue(syncedRow({id: 'other', workspaceId: 'ws-other', updatedAt: 5}))
+    expect(await repo.workspaceViewGap(WS)).toBeNull()
+  })
+
+  it('reports a gap while a queue-blind rescan of THIS workspace is outstanding', async () => {
+    // Wiring only — that the predicate asks the observer, and asks about the
+    // workspace it was given. What the answer means (set at enqueue, cleared on
+    // settle, never set by a queue drain) is pinned against a real observer in
+    // `syncObserver/observer.test.ts`; reproducing it here would mean holding a
+    // rescan open across an awaited read, which is a race, not a test.
+    const repo = makeRepo()
+    expect(await repo.workspaceViewGap(WS)).toBeNull()
+    ;(repo as unknown as {syncObserver: unknown}).syncObserver = {
+      isRematerializingWorkspace: (id: string) => id === 'ws-elsewhere',
+    }
+
+    expect(await repo.workspaceViewGap(WS)).toBeNull()
+    expect(await repo.workspaceViewGap('ws-elsewhere')).toEqual({
+      reason: expect.stringMatching(/re-materialization/), transient: true,
+    })
+  })
+
+  it('asks the in-flight predicate first, so one call is the whole question', async () => {
+    // Callers take exactly one of the two; the workspace-scoped one must not be
+    // the partial one, or every consumer that reaches for it loses the queue
+    // arm. That arm is TRANSIENT — the drain is running, waiting is the remedy.
+    const repo = makeRepo()
+    await deliver(syncedRow({id: 'arriving', updatedAt: 5}))
+    expect(await repo.workspaceViewGap(WS)).toEqual({
+      reason: expect.stringMatching(/draining/), transient: true,
+    })
+  })
+
+  it('answers off the partial index, not a walk of every downloaded row', async () => {
+    // The entire reason this predicate can be re-asked inside every writing
+    // transaction rather than once at the top of a pass. A reshape of the SQL
+    // that stops matching `idx_blocks_synced_needs_apply` turns the hot-path
+    // gate back into a full scan, with the suite still green.
+    const plan = await sharedDb.db.getAll<{detail: string}>(
+      `EXPLAIN QUERY PLAN ${WORKSPACE_UNAPPLIED_SQL}`,
+      [WS, WORKSPACE_UNAPPLIED_COUNT_CAP],
+    )
+    expect(plan.map(row => row.detail).join(' | ')).toMatch(/idx_blocks_synced_needs_apply/)
+  })
+
+  it('caps the count it reports rather than the rows it examines', async () => {
+    // 1,005 serialized deliveries, 268ms measured solo — so no explicit budget,
+    // matching the 10k-row test above: even at the ~6x the full gate adds this
+    // stays far under vitest's 5000ms default, and a genuine hang then reports
+    // in 5s rather than 20.
+    const repo = makeRepo()
+    for (let i = 0; i < WORKSPACE_UNAPPLIED_COUNT_CAP + 5; i++) {
+      await deliver(syncedRow({id: `staged-${i}`, updatedAt: 5}))
+    }
+    await sharedDb.db.execute('DELETE FROM blocks_synced_changes')
+    expect((await repo.workspaceViewGap(WS))?.reason).toMatch(/at least 1,000/)
+  })
 })

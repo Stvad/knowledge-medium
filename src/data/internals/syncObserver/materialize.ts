@@ -73,6 +73,33 @@ const UPSERT_BLOCK_SQL = `
 
 const DELETE_BLOCK_SQL = 'DELETE FROM blocks WHERE id = ?'
 
+const setNeedsApplySql = (value: 0 | 1, count: number): string =>
+  `UPDATE blocks_synced SET needs_apply = ${value} `
+  + `WHERE id IN (${buildInClause(count)}) AND needs_apply <> ${value}`
+
+/** What the drain decided about ONE staged version, and which version it was.
+ *
+ *  The stamp is load-bearing, not bookkeeping: Phase 1 reads the staging rows
+ *  OUTSIDE the write lock, so a newer delivery can replace one before Phase 2
+ *  commits — and that delivery has already reset the flag, correctly, for a
+ *  version nobody has judged yet. Writing by id alone would wipe that reset and
+ *  leave the newer row reading as applied while `blocks` holds the older
+ *  content. */
+interface FlagDecision {
+  readonly id: string
+  readonly stagedUpdatedAt: number
+  /** The drain's answer: does `blocks` still need this row applied? */
+  readonly needsApply: boolean
+}
+
+/** Is a row the drain cannot apply invisible to every reader anyway? A staged
+ *  tombstone whose local row is absent or already tombstoned shows the block to
+ *  nobody on either side — and every protected pass reads `deleted = 0`. Left
+ *  flagged it would be a gap that no drain can ever clear and no pass can ever
+ *  be harmed by. */
+const isInvisibleEitherWay = (staged: BlockRow, local: LocalGateRow | undefined): boolean =>
+  staged.deleted === 1 && (local === undefined || local.deleted)
+
 // All block ids with an unsent local edit queued for upload. A pending edit
 // always wins over an incoming snapshot (the echo reconciles), so the gate
 // needs this set. `ps_crud.data` is the upload envelope the blocks_upload_*
@@ -156,6 +183,11 @@ export interface MaterializeOutcome {
   readonly quarantined: readonly string[]
   /** Ids hard-deleted from `blocks`. */
   readonly deleted: readonly string[]
+  /** Ids whose `needs_apply` flag this pass CLEARED — every row it decided
+   *  leaves `blocks` correct: applied, skip-staled (the local row wins by the
+   *  gate's own rule), or invisible to every reader either way. The rows it did
+   *  NOT clear are the durable gap `WORKSPACE_UNAPPLIED_SQL` reports. */
+  readonly resolved: readonly string[]
 }
 
 interface ApplyCandidate {
@@ -196,10 +228,12 @@ const readStagingRows = async (
   return out
 }
 
-/** The local gate input for one id: the `blocks` row's `updated_at`
- *  (the row-version the gate compares). */
+/** The local gate input for one id: the `blocks` row's `updated_at` (the
+ *  row-version the gate compares) and whether it is tombstoned (which decides
+ *  whether a row the drain cannot apply is visible to anyone). */
 interface LocalGateRow {
   readonly updatedAt: number
+  readonly deleted: boolean
 }
 
 /** Local gate inputs for the `ids` the app already has a `blocks` row for,
@@ -213,11 +247,13 @@ const readLocalGateRows = async (
   const out = new Map<string, LocalGateRow>()
   for (let i = 0; i < ids.length; i += chunkSize) {
     const chunk = ids.slice(i, i + chunkSize)
-    const rows = await db.getAll<{ id: string; updated_at: number }>(
-      `SELECT id, updated_at FROM blocks WHERE id IN (${buildInClause(chunk.length)})`,
+    const rows = await db.getAll<{ id: string; updated_at: number; deleted: number }>(
+      `SELECT id, updated_at, deleted FROM blocks WHERE id IN (${buildInClause(chunk.length)})`,
       chunk,
     )
-    for (const row of rows) out.set(row.id, { updatedAt: row.updated_at })
+    for (const row of rows) {
+      out.set(row.id, { updatedAt: row.updated_at, deleted: row.deleted === 1 })
+    }
   }
   return out
 }
@@ -249,6 +285,27 @@ const readBlocksByIds = async (
 const readPendingUploadIds = async (db: RowsReader): Promise<Set<string>> => {
   const rows = await db.getAll<{ id: string }>(PENDING_UPLOAD_IDS_SQL)
   return new Set(rows.map(row => row.id))
+}
+
+/** Current staged version + flag for `ids`, read INSIDE the write tx so the
+ *  decision and its record commit together. Chunked like the other id-keyed
+ *  reads. Absent ids left the staging table since Phase 1. */
+const readStagingFlagState = async (
+  db: RowsReader, ids: readonly string[], chunkSize: number,
+): Promise<Map<string, { updatedAt: number; needsApply: boolean }>> => {
+  const out = new Map<string, { updatedAt: number; needsApply: boolean }>()
+  for (let i = 0; i < ids.length; i += chunkSize) {
+    const chunk = ids.slice(i, i + chunkSize)
+    const rows = await db.getAll<{ id: string; updated_at: number; needs_apply: number }>(
+      `SELECT id, updated_at, needs_apply FROM blocks_synced
+        WHERE id IN (${buildInClause(chunk.length)})`,
+      chunk,
+    )
+    for (const row of rows) {
+      out.set(row.id, { updatedAt: row.updated_at, needsApply: row.needs_apply === 1 })
+    }
+  }
+  return out
 }
 
 /** Subset of `ids` that still have a row in the `blocks_synced` staging table.
@@ -299,6 +356,13 @@ export const materializeStagingRows = async (
   const deferred: string[] = []
   const skippedStale: string[] = []
   const quarantined: string[] = []
+  /** One entry per staged version this pass judged — see {@link FlagDecision}.
+   *  Written back at the end of the write tx, in BOTH directions: the flag is
+   *  the drain's latest decision, not a one-way ratchet. Clear-only would mean
+   *  a row it once ruled invisible (a tombstone whose local counterpart was
+   *  also gone) stays cleared after the local row comes back, with nothing that
+   *  ever re-examines it short of a fresh delivery. */
+  const decisions: FlagDecision[] = []
 
   const stagingRows = await readStagingRows(db, change.upserted, readChunkSize)
 
@@ -315,20 +379,23 @@ export const materializeStagingRows = async (
   const resolveMaterializability = async (workspaceId: string): Promise<Materializability> => {
     const cached = materializabilityByWs.get(workspaceId)
     if (cached !== undefined) return cached
-    const resolved = await getMaterializability(workspaceId)
-    materializabilityByWs.set(workspaceId, resolved)
-    return resolved
+    const answer = await getMaterializability(workspaceId)
+    materializabilityByWs.set(workspaceId, answer)
+    return answer
   }
 
   // ── Phase 1 (outside the write tx): decide, then decrypt only survivors. ──
   const candidates: ApplyCandidate[] = []
   for (const row of stagingRows) {
     const materializability = await resolveMaterializability(row.workspace_id)
+    const localRow = localGateRowById.get(row.id)
+    const decide = (needsApply: boolean) =>
+      decisions.push({id: row.id, stagedUpdatedAt: row.updated_at, needsApply})
     if (materializability === 'defer') {
       deferred.push(row.id)
+      decide(!isInvisibleEitherWay(row, localRow))
       continue
     }
-    const localRow = localGateRowById.get(row.id)
     const action = decideStagingRow(materializability, row.updated_at, {
       localUpdatedAt: localRow?.updatedAt ?? null,
       hasPendingUpload: pendingUploadIds.has(row.id),
@@ -336,6 +403,11 @@ export const materializeStagingRows = async (
     if (action.kind !== 'apply') {
       // Skip-stale BEFORE decrypt: a stale ciphertext never gets decoded.
       skippedStale.push(row.id)
+      // RESOLVED, not a gap: the gate has ruled the local row correct — either
+      // it holds an unsent edit whose echo reconciles, or I1's equal nonzero
+      // stamps prove the content identical. Both re-deliver, which resets the
+      // flag, so nothing is lost by clearing it now.
+      decide(false)
       continue
     }
     const mode = materializability === 'decrypt' ? 'e2ee' : 'none'
@@ -353,6 +425,7 @@ export const materializeStagingRows = async (
       // copy-through never reaches here (decodeFromWire is identity for 'none').
       console.warn(`[materializeStagingRows] quarantined undecryptable block ${row.id}:`, err)
       quarantined.push(row.id)
+      decide(!isInvisibleEitherWay(row, localRow))
       continue
     }
     candidates.push({ plaintext, stagingUpdatedAt: row.updated_at, materializability })
@@ -362,8 +435,12 @@ export const materializeStagingRows = async (
   const applied: string[] = []
   const deleted: string[] = []
 
-  if (candidates.length === 0 && change.removed.length === 0) {
-    return { snapshots, applied, deferred, skippedStale, quarantined, deleted }
+  const resolved: string[] = []
+  // `decisions` counts too: a window whose every row skip-staled writes no
+  // `blocks` row and still has flags to clear, and leaving them set would make
+  // an echo-only drain look like a permanent gap.
+  if (candidates.length === 0 && change.removed.length === 0 && decisions.length === 0) {
+    return { snapshots, applied, deferred, skippedStale, quarantined, deleted, resolved }
   }
 
   // ── Phase 2 (inside the write tx): authoritative re-gate, then write. ──
@@ -431,6 +508,8 @@ export const materializeStagingRows = async (
         // A local edit landed between Phase 1 and the lock — it wins.
         skippedStale.push(plaintext.id)
       }
+      // Decided either way — written, or ruled against by the gate.
+      decisions.push({id: plaintext.id, stagedUpdatedAt: stagingUpdatedAt, needsApply: false})
     }
 
     // ── Arrival-processor pass (`arrivalProcessors.ts`): runs AFTER every
@@ -487,6 +566,31 @@ export const materializeStagingRows = async (
     // a cell. Recovery when it does: the parent's next content edit re-triggers
     // PROJECT locally, or a manual reproject. If a routine individual-block
     // hard-delete is ever introduced server-side, revisit this.
+
+    // The decision and its record commit together — that is the whole reason
+    // this is a column on the staging row rather than something a reader
+    // re-derives. A pass that reads the flag inside its own write transaction
+    // is excluded from this one by the write lock, so it never sees a decision
+    // half-made. Only for the version actually judged, and only where the flag disagrees:
+    // a row replaced since Phase 1 belongs to whoever judges THAT version, and
+    // `needs_apply <> value` keeps a window that decided nothing new from
+    // rewriting pages (a locked workspace re-defers the same rows every drain).
+    const stagedNow = await readStagingFlagState(
+      tx, decisions.map(decision => decision.id), readChunkSize,
+    )
+    const stale: string[] = []
+    for (const decision of decisions) {
+      const now = stagedNow.get(decision.id)
+      if (now === undefined || now.updatedAt !== decision.stagedUpdatedAt) continue
+      if (decision.needsApply) stale.push(decision.id)
+      else resolved.push(decision.id)
+    }
+    for (const [value, ids] of [[0, resolved], [1, stale]] as const) {
+      for (let i = 0; i < ids.length; i += readChunkSize) {
+        const chunk = ids.slice(i, i + readChunkSize)
+        await tx.execute(setNeedsApplySql(value, chunk.length), chunk)
+      }
+    }
   })
 
   // §9 arrival-order repair, alias half (adversarial-review rounds 1+2): a
@@ -524,5 +628,5 @@ export const materializeStagingRows = async (
     }
   }
 
-  return { snapshots, applied, deferred, skippedStale, quarantined, deleted }
+  return { snapshots, applied, deferred, skippedStale, quarantined, deleted, resolved }
 }

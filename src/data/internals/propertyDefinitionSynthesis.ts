@@ -731,9 +731,14 @@ export const applyPropertyDefinitionSynthesis = async (
   // dialog since. A device that has fallen behind would mint a rival for a
   // definition it simply has not received yet, and the loser strands every
   // field row that bound to it.
-  const syncGap = await repo.syncViewGap()
+  //
+  // A key whose real definition merely failed to reach `blocks` reads as
+  // ORPHANED to the scan, and this pass answers an orphan by MINTING — so
+  // "nothing is in flight" is not the question {@link Repo.workspaceViewGap}
+  // is asked here.
+  const syncGap = await repo.workspaceViewGap(workspaceId)
   if (syncGap !== null) {
-    throw new Error(`[propertyDefinitionSynthesis] ${syncGap}`)
+    throw new Error(`[propertyDefinitionSynthesis] ${syncGap.reason}`)
   }
   // Re-read for the same reason, and because the plan may have been built
   // before this device received the workspace row that says it is encrypted.
@@ -762,17 +767,29 @@ export const applyPropertyDefinitionSynthesis = async (
     // between. Minting under the wrong namespace is not undoable — deleting the
     // block afterwards does not unpublish the id.
     //
-    // Only the MODE is re-asked, and that is the whole trick: `K_id` cannot
-    // change under us (it is HKDF of the workspace key, immutable until
-    // rotation exists), so the preflight's namespace stays sound exactly as
-    // long as the mode it was derived for still holds. Re-reading `K_id` here
-    // would put an IndexedDB open inside the SQLite write lock, and
-    // `idbKeyedStore` registers no `onblocked` handler — a wedged store would
-    // hold the app's single writer indefinitely rather than failing.
+    // The view gap is re-asked in full, the same discipline
+    // `assertBackfillMayWrite` follows: a delivery that cannot be applied can
+    // land between the preflight and the lock, and a key whose real definition
+    // is the one left unapplied still reads as ORPHANED to the plan we are
+    // about to write from. Affordable here only because the durable half is a
+    // partial-index lookup now rather than a scan.
+    //
+    // Of the NAMESPACE inputs only the MODE is re-asked, and that is the whole
+    // trick: `K_id` cannot change under us (it is HKDF of the workspace key,
+    // immutable until rotation exists), so the preflight's namespace stays
+    // sound exactly as long as the mode it was derived for still holds.
+    // Re-reading `K_id` here would put an IndexedDB open inside the SQLite
+    // write lock, and `idbKeyedStore` registers no `onblocked` handler — a
+    // wedged store would hold the app's single writer indefinitely rather than
+    // failing.
     //
     // Read through `repo.db` rather than a tx handle, deliberately and for the
     // same reason `assertBackfillMayWrite` does: a concurrent drain is excluded
     // by the write lock, not by read isolation.
+    const lateGap = await repo.workspaceViewGap(workspaceId)
+    if (lateGap !== null) {
+      throw new Error(`[propertyDefinitionSynthesis] ${lateGap.reason}`)
+    }
     const late = await resolveSynthesisMode(repo, workspaceId)
     if (late.kind === 'refused') {
       throw new Error(`[propertyDefinitionSynthesis] ${late.reason}`)

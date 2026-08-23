@@ -38,6 +38,7 @@ import { PowerSyncDatabase, Schema } from '@powersync/node'
 import {
   BLOCKS_SYNCED_RAW_TABLE,
   CREATE_BLOCKS_PARENT_ORDER_INDEX_SQL,
+  CREATE_BLOCKS_SYNCED_NEEDS_APPLY_INDEX_SQL,
   CREATE_BLOCKS_SYNCED_TABLE_SQL,
   CREATE_BLOCKS_FIELD_FORM_INDEX_SQL,
   CREATE_BLOCKS_ANY_FIELD_FORM_INDEX_SQL,
@@ -54,6 +55,7 @@ import {
   REPROJECT_REF_MARKER_PREFIX,
   WORKSPACE_BACKFILL_MARKER_PREFIX,
   backfillBlockAliasesIfEmpty,
+  ensureStagingNeedsApplyColumn,
   backfillBlocksFtsIfEmpty,
   backfillBlockTypesIfEmpty,
 } from '@/data/internals/clientSchema'
@@ -142,6 +144,13 @@ const initializeTestDb = async (dbDir: string): Promise<PowerSyncDatabase> => {
       return row ?? null
     },
   }
+  // Same position as production, and for the same reason — it reads a
+  // `client_schema_state` marker, which the loop above creates.
+  await ensureStagingNeedsApplyColumn({
+    ...backfillDb,
+    getAll: <T,>(sql: string) => db.getAll<T>(sql),
+  })
+  await db.execute(CREATE_BLOCKS_SYNCED_NEEDS_APPLY_INDEX_SQL)
   await backfillBlockAliasesIfEmpty(backfillDb)
   await backfillBlockTypesIfEmpty(backfillDb)
   await backfillBlocksFtsIfEmpty(backfillDb)
@@ -166,6 +175,7 @@ const getTemplateFingerprint = (): string => {
   hash.update(CREATE_BLOCKS_TABLE_SQL)
   hash.update('\0')
   hash.update(CREATE_BLOCKS_SYNCED_TABLE_SQL)
+  hash.update(CREATE_BLOCKS_SYNCED_NEEDS_APPLY_INDEX_SQL)
   hash.update('\0')
   hash.update(CREATE_BLOCKS_PARENT_ORDER_INDEX_SQL)
   hash.update('\0')

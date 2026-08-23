@@ -17,6 +17,8 @@ import {
   PARENT_DELETED_RAISE_PREFIX,
   RAISE_FIELD_SEP_SQL,
 } from './raiseProtocol'
+import { STAGING_LOCAL_COLUMNS } from '@/data/blockSchema.js'
+import { SEED_STAGING_NEEDS_APPLY_SQL } from './syncObserver/reconcile.js'
 
 // ============================================================================
 // Tables
@@ -1041,6 +1043,19 @@ export const BACKFILL_BLOCK_TYPES_SQL = `
 
 export const BLOCKS_FTS_BACKFILL_MARKER_KEY = 'blocks_fts_backfill_v1'
 
+/** Marker for the one-shot `needs_apply` seed — see
+ *  {@link ensureStagingNeedsApplyColumn} for why it is not keyed on the ALTER. */
+export const STAGING_NEEDS_APPLY_SEEDED_MARKER_KEY = 'staging_needs_apply_seeded'
+
+export const SELECT_STAGING_NEEDS_APPLY_SEEDED_SQL = `
+  SELECT 1 FROM client_schema_state WHERE key = '${STAGING_NEEDS_APPLY_SEEDED_MARKER_KEY}'
+`
+
+export const RECORD_STAGING_NEEDS_APPLY_SEEDED_SQL = `
+  INSERT OR REPLACE INTO client_schema_state (key, completed_at)
+  VALUES ('${STAGING_NEEDS_APPLY_SEEDED_MARKER_KEY}', strftime('%s', 'now') * 1000)
+`
+
 export const SELECT_BLOCKS_FTS_BACKFILL_DONE_SQL = `
   SELECT 1 FROM client_schema_state WHERE key = '${BLOCKS_FTS_BACKFILL_MARKER_KEY}'
 `
@@ -1494,6 +1509,45 @@ export const ensureBlockUserUpdatedAtColumn = async (db: {
       },
     )
   }
+}
+
+/**
+ * Idempotent local-schema migration for the staging `needs_apply` flag.
+ *
+ * The column arrives defaulting to "unapplied", which is right for every future
+ * delivery and wrong for every row already staged — so a device that upgrades
+ * mid-life would read its whole workspace as behind. {@link SEED_STAGING_NEEDS_APPLY_SQL}
+ * clears it once for the rows a drain demonstrably already handled; see its
+ * header for why a one-shot approximation is the right tool there and would not
+ * be anywhere else.
+ *
+ * Fresh installs skip both — `CREATE_BLOCKS_SYNCED_TABLE_SQL` carries the
+ * column, so there is nothing to ALTER and nothing staged to seed. They do NOT
+ * skip the marker read, which is why this runs with the other one-shot
+ * backfills rather than beside the CREATEs: `client_schema_state` is created by
+ * `CLIENT_SCHEMA_STATEMENTS`, and reading its marker before that exists throws
+ * and aborts the whole bootstrap — on a brand-new profile, which is the one
+ * case with nothing to migrate.
+ */
+export const ensureStagingNeedsApplyColumn = async (
+  db: ClientSchemaBootstrapDb & {getAll: <T>(sql: string) => Promise<T[]>},
+): Promise<void> => {
+  const columns = await db.getAll<{name: string}>('PRAGMA table_info(blocks_synced)')
+  if (columns.length === 0) return
+  for (const column of STAGING_LOCAL_COLUMNS) {
+    if (columns.some(existing => existing.name === column.name)) continue
+    await db.execute(`ALTER TABLE blocks_synced ADD COLUMN ${column.definition}`)
+  }
+  // Marker-gated, NOT gated on "did this invocation add the column" — those two
+  // are not the same claim, and the difference is the whole failure mode: a
+  // crash or a throw between the ALTER and the seed leaves the column present
+  // and every staged row flagged, and a run keyed on the ALTER never seeds
+  // again. That reads as a permanent gap in every workspace, so every one-way
+  // pass refuses for the life of the install. The marker retries instead.
+  const done = await db.getOptional<{1: number}>(SELECT_STAGING_NEEDS_APPLY_SEEDED_SQL)
+  if (done !== null) return
+  await db.execute(SEED_STAGING_NEEDS_APPLY_SQL)
+  await db.execute(RECORD_STAGING_NEEDS_APPLY_SEEDED_SQL)
 }
 
 /**

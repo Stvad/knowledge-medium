@@ -233,3 +233,99 @@ export const STAGED_VIEW_GAP_SQL = `
  *  operator can hit — they are told what happened and that re-running
  *  continues, which is the whole contract of a resumable pass. */
 export const STAGED_SCAN_LIMIT = 10_000
+
+/**
+ * How many of a workspace's downloaded rows has the drain not applied?
+ *
+ * The durable half of the question {@link STAGED_VIEW_GAP_SQL} asks about work
+ * in flight. That one reads the QUEUE, so it sees only rows still waiting to be
+ * drained — and a row can be behind with the queue long since consumed:
+ * `materializeStagingRows` writes nothing when the workspace is not
+ * materializable (no key yet, mode unresolved, a key-store read that failed) or
+ * when the ciphertext does not decode, while `drainQueueOnce` deletes the queue
+ * rows either way. Nothing is then in progress, so no amount of waiting changes
+ * the answer.
+ *
+ * It reads the flag the drain itself sets — see `STAGING_NEEDS_APPLY_COLUMN`,
+ * which carries the rule. Deliberately NOT a comparison of staged against live
+ * rows: the drain already makes exactly this decision per row, with inputs
+ * (the upload queue, the decode result) that no query over the two tables can
+ * see, and a second predicate approximating the first from outside is how the
+ * two come to disagree.
+ *
+ * A row still in the QUEUE is not this arm's business, and excluding it is not
+ * an optimization — it is what keeps the two predicates from double-counting.
+ * Every delivery lands unapplied by default, so a device that is merely WRITING
+ * has its own echoes sitting flagged until the drain judges them; counted here
+ * they would make a long uploading pass refuse on its own progress, which is
+ * exactly the bug {@link STAGED_VIEW_GAP_SQL}'s benign-echo exclusion exists to
+ * prevent. So the queue arm owns rows the drain has not reached, this one owns
+ * rows it reached and could not apply, and the two are disjoint by construction.
+ *
+ * CHEAP, unlike the join it replaced: `idx_blocks_synced_needs_apply` holds
+ * only unapplied rows, so the healthy answer is an empty range. That is what
+ * lets every caller ask it at the same altitude — once before a pass AND again
+ * inside each writing transaction — instead of a cheap approximation in the
+ * hot path and an expensive truth at the top.
+ *
+ * Bind `[workspaceId, cap]`; `cap` bounds only the COUNT (so a wholly
+ * unapplied workspace stops counting early), never the coverage.
+ */
+export const WORKSPACE_UNAPPLIED_SQL = `
+  SELECT COUNT(*) AS behind FROM (
+    SELECT 1 FROM blocks_synced s
+     WHERE s.workspace_id = ? AND s.needs_apply = 1
+       AND NOT EXISTS (SELECT 1 FROM blocks_synced_changes c WHERE c.id = s.id)
+     LIMIT ?
+  )`
+
+/** Count cap for {@link WORKSPACE_UNAPPLIED_SQL}. The number only shapes the
+ *  message an operator reads — "some" and "all of them" are different
+ *  diagnoses — so it stops where that distinction stops paying. */
+export const WORKSPACE_UNAPPLIED_COUNT_CAP = 1_000
+
+/**
+ * One-time seed for `needs_apply` on a device that already has staged rows.
+ *
+ * The column arrives defaulting to "unapplied", which is right for every future
+ * delivery and wrong for everything already on disk — so this clears it for the
+ * rows a drain demonstrably already handled. Its rule is {@link decideStagingRow}'s,
+ * expressed against what the two tables can still show after the fact: the live
+ * row carries the SAME nonzero stamp (I1 — identical content, the drain would
+ * skip it), or the row is a tombstone on both sides and so invisible to every
+ * reader either way.
+ *
+ * Necessarily an APPROXIMATION — it cannot see the upload queue or a decode
+ * result — and that is tolerable only because it runs ONCE and is dead
+ * afterwards. It errs toward leaving the flag SET, which reads as a gap and
+ * refuses: equality rather than `>=`, because a strictly-newer local row is an
+ * acked edit that `decideStagingRow` would APPLY over, not skip, and its echo
+ * re-delivers and re-judges it anyway.
+ *
+ * ONE statement, deliberately, even at the 320k-row scale it exists for: it
+ * runs once, at boot, with nothing else contending for the write lock, and was
+ * measured at 296ms there on native SQLite. A chunked version needs a
+ * termination signal, and the two cheap ones are both unavailable — PowerSync
+ * exposes no affected-row count, and `changes()` is per-connection while reads
+ * and writes may not share one. Counting the remaining rows per chunk instead
+ * makes the pass quadratic, which is how it was written first and why this note
+ * exists.
+ */
+export const SEED_STAGING_NEEDS_APPLY_SQL = `
+  UPDATE blocks_synced SET needs_apply = 0
+   WHERE needs_apply = 1
+     AND (
+           EXISTS (
+             SELECT 1 FROM blocks b
+              WHERE b.id = blocks_synced.id
+                AND b.updated_at <> 0
+                AND b.updated_at = blocks_synced.updated_at
+           )
+           OR (
+             blocks_synced.deleted = 1
+             AND COALESCE(
+                   (SELECT b.deleted FROM blocks b WHERE b.id = blocks_synced.id), 1
+                 ) = 1
+           )
+         )
+`
