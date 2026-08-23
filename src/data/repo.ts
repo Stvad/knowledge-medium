@@ -3283,38 +3283,26 @@ export class Repo {
    * Hold this workspace's graph-wide claim for `backfillId` across a whole
    * operator GESTURE, rather than only across the pass.
    *
-   * The claim decides which device writes a once-per-graph repair. A gesture
-   * whose EARLIER steps also write source-of-truth rows therefore has to hold
-   * it from its first write: the properties migration synthesizes definition
-   * blocks and flips the workspace before its pass runs, and two devices that
-   * both cleared the confirmation before either wrote would otherwise publish
-   * rival definitions for the same key — same deterministic id, different
-   * preset, because which presets a device can prove is a LOCAL fact — and
-   * only then discover which of them owns the pass. Whichever definition sync
-   * settles on, the children the winner migrated decode under a codec it does
-   * not declare.
+   * The claim decides which device writes a once-per-graph repair, so a
+   * gesture whose earlier steps ALSO write source-of-truth rows has to hold it
+   * from its first write — otherwise two devices each write, and only then
+   * discover which of them owns the pass. (What that costs concretely is a
+   * property of the gesture, not of this seam: see the properties migration's
+   * call site.)
    *
-   * What it does NOT do is make the claim exclusive. Two devices confirming
-   * inside one sync round-trip each read their own DB, each find no claim, and
-   * each mint one — so both still run, and the rival definitions above are
-   * still reachable in that window. What moves is the window's SIZE: from
-   * "synthesis, the flip and a multi-minute pass" down to sync latency, which
-   * is the whole of the improvement. Closing it needs arbitration, which
+   * It does NOT make the claim exclusive, and cannot. Two devices claiming
+   * inside one sync round-trip each read their own DB, find nothing, and both
+   * proceed. What moves is the window's SIZE — from the whole gesture down to
+   * sync latency — and closing the rest needs arbitration, which
    * `graphBackfillClaim`'s header forbids by name and for a recorded reason.
    *
    * `body` runs with the claim held and does its own reporting; `pass.run()`
    * runs the backfill under that same claim. The claim is handed back on every
-   * exit this process controls — normal return, throw, an early return inside
-   * the body — except a pass that recorded completion, which `releaseClaim`
-   * leaves alone because deleting it would drop the graph's record that the
-   * migration is done.
-   *
-   * A process that DIES mid-body controls no exit, and the hold now spans the
-   * fleet-wide one-way flip: a tab closed after the flip commits leaves the
-   * graph child-backed, unmigrated, and claimed, and every other device reads
-   * `held-by-peer` until a human deletes the claim block (`reclaimCompleted`
-   * reclaims only COMPLETED claims). That window is the price of the fix, and
-   * it is larger than the one master had.
+   * exit this process controls — return, throw, an early return inside the
+   * body — except a pass that recorded completion, which `releaseClaim` leaves
+   * alone so the graph keeps its record that the migration is done. A process
+   * that DIES mid-body controls no exit and strands the claim; when the body
+   * makes an irreversible change, that strands it over a half-applied one.
    *
    * `claimed: false` means the body never ran and this gesture wrote nothing;
    * its `result` is the outcome to report, in the same vocabulary
