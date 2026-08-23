@@ -517,8 +517,10 @@ const materializePropertiesForChangedRow = async (
   //
   // Reachable twice per tx: MATERIALIZE opts into the issue-#402 re-run, so a
   // later unsettled write to the owner row (DERIVE stamping a restore's content
-  // patch) re-enters this branch. `rerunBefore` hands back the same bag pair, so
-  // the split is identical and the writes below no-op.
+  // patch) re-enters this branch. For a content-only trigger `rerunBefore` hands
+  // back the same bag pair, so the split is identical and the writes below
+  // no-op; a re-run whose trigger also moved the bag re-splits, which is equally
+  // fine — the halves stay correct however the names fall.
   // A partition rather than an overlap. Overlapping is harmless today — the
   // first call throws before the second runs, and materialize is idempotent
   // otherwise — but it would make the call ORDER the only thing keeping a
