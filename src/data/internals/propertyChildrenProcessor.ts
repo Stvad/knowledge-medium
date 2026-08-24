@@ -348,12 +348,23 @@ export interface MaterializeOptions {
   /** Bring a name's TOMBSTONED field row back instead of minting a
    *  replacement, when the owner has exactly one and no live one (#787).
    *
-   *  Opt-in, and only the revival path opts in, because a tombstoned field row
-   *  under a LIVE owner means the opposite thing: `tx.tombstonedPropertyFieldRows`
-   *  is also how the cell backfill recognizes "this property was deleted through
-   *  its children and this device's cell has not caught up", and reviving there
-   *  would resurrect exactly what the user reaped. What separates the two is the
-   *  owner's own liveness, which is only knowable in the tx that flips it. */
+   *  Opt-in, and only the revival path opts in. NOT because owner liveness
+   *  tells a tombstone's cause apart — it does not, and an earlier version of
+   *  this comment claimed otherwise. An owner returning from a tombstone can
+   *  carry a field-row tombstone OLDER than its own delete (a peer's deletion
+   *  arrived, this device's cell has not caught up — the stale-cell state
+   *  `propertyCellBackfill` reads as history), and nothing local separates that
+   *  from a row the owner's own subtree delete took down.
+   *
+   *  What makes reviving safe for THIS caller is narrower and checkable: the
+   *  revival already re-materializes the whole restored bag, so for a name with
+   *  a stale cell key it MINTS a replacement field row today. Reviving changes
+   *  which row id carries that, not whether the property comes back — measured
+   *  both ways. The cell backfill has no such contract, and reviving there
+   *  would resurrect what the user reaped, so it stays out.
+   *
+   *  The resurrection itself is real and predates this option; it is the
+   *  revival contract's own problem, tracked separately. */
   reviveTombstoned?: boolean
 }
 
@@ -361,11 +372,14 @@ export interface MaterializeOptions {
  *  children — so a revived property keeps its row identity instead of being
  *  replaced by a fresh mint. Returns whether anything came back.
  *
- *  Value children but NOT deeper content: a value child IS the property value,
- *  while a comment thread under one is ordinary user content and stays
- *  tombstoned like any other descendant of a restored block. What it must stop
- *  being is STRANDED — minting left it under a tombstoned value child nothing
- *  would ever revive, so no path could reach it again.
+ *  One level down and no further: the field row and its value. Everything
+ *  BELOW that stays tombstoned — a comment thread under the value (ordinary
+ *  user content, like any other descendant of a restored block) and, under §9
+ *  flat recognition, the value's own nested field rows if it carries properties
+ *  of its own. What all of it must stop being is STRANDED: minting left it
+ *  under a tombstoned value child nothing would ever revive, so no path could
+ *  reach it again. Reviving the two rows above it restores the chain, which is
+ *  the difference between "still deleted" and "gone".
  *
  *  ONE ambiguity rule, applied at both levels: revive only what is unambiguous.
  *  Several tombstones for one definition (an unset/re-set cycle before the
@@ -387,8 +401,8 @@ const reviveTombstonedFieldRow = async (
   if (matching.length !== 1) return false
   const fieldRow = matching[0]!
   await tx.restore(fieldRow.id)
-  // Bit-filtered like every §9 value read: a nested marked row is the field
-  // row's OWN machinery, never one of its values.
+  // Bit-filtered per §9: a marked child is the field row's OWN machinery, never
+  // one of its values. Not revived either — see the one-level-down note above.
   const values = (await tx.deletedChildrenOf(fieldRow.id))
     .filter(value => value.isFieldForm !== true)
   if (values.length === 1) await tx.restore(values[0]!.id)
