@@ -83,17 +83,25 @@ let repo: Repo
 
 beforeAll(async () => { sharedDb = await createTestDb() })
 afterAll(async () => { await sharedDb.cleanup() })
+/** Release a Repo the suite is done with, so the seed pass it leaves queued
+ *  cannot write once the shared database is reset under it. Nothing disposes a
+ *  test's Repo and every test here leaves a pass behind (the `beforeEach` pin
+ *  primes the registry, which schedules one); the abandoned Repo's `newId`
+ *  counter restarts at `gen-1` per `createTestRepo`, so two of them mint the
+ *  same tx ids and one dies on `command_events.tx_id`. Unpinned, the pass
+ *  refuses at the access gate before it can write. */
+const releaseRepo = (target: Repo | undefined): void => {
+  target?.setActiveWorkspaceId(null)
+}
+
 afterEach(() => {
-  // Unpin, so the seed pass this test leaves queued cannot write once the next
-  // one resets the shared database. Nothing disposes a test's Repo and every
-  // test here leaves a pass behind (the `beforeEach` pin primes the registry,
-  // which schedules one); the abandoned Repo's `newId` counter restarts at
-  // `gen-1` per `createTestRepo`, so two of them mint the same tx ids and one
-  // dies on `command_events.tx_id`. Unpinned, the pass refuses first.
-  repo?.setActiveWorkspaceId(null)
+  releaseRepo(repo)
   vi.restoreAllMocks()
 })
 beforeEach(async () => {
+  // Pins the `afterEach` call above — without it every test after the first
+  // fails here, rather than the leak going quiet until CI notices it.
+  expect(repo?.activeWorkspaceId ?? null).toBeNull()
   await resetTestDb(sharedDb.db)
   repo = createTestRepo({db: sharedDb.db}).repo
   repo.setActiveWorkspaceId(WS)
@@ -657,13 +665,14 @@ describe('scheduled seed materialization (Repo wiring, §4.3)', {timeout: 30_000
   })
 
   it('a Repo abandoned by an earlier test cannot write through the shared db', async () => {
-    // What the `afterEach` unpin buys, end to end — delete it below and this
-    // reports the swallowed `command_events.tx_id` collisions it prevents.
-    repo.setActiveWorkspaceId(null) // this test drives its own Repos
+    // What `releaseRepo` buys, end to end — the same action the `afterEach`
+    // runs. Drop it below and this reports the swallowed
+    // `command_events.tx_id` collisions it prevents.
+    releaseRepo(repo) // this test drives its own Repos
 
     const abandoned = await abandonableRepo()
     abandoned.scheduleWorkspaceSeedMaterialization(WS, false)
-    abandoned.setActiveWorkspaceId(null) // ← the teardown under test
+    releaseRepo(abandoned) // ← the teardown under test
 
     await resetTestDb(sharedDb.db) // the next test's beforeEach
     const current = await abandonableRepo()
@@ -672,13 +681,20 @@ describe('scheduled seed materialization (Repo wiring, §4.3)', {timeout: 30_000
     vi.spyOn(console, 'error').mockImplementation((...args: unknown[]) => {
       failures.push(args.map(String).join(' '))
     })
-    current.scheduleWorkspaceSeedMaterialization(WS, false)
-    await waitForMaterialization(async () => {
-      await Promise.all([abandoned.awaitSeedMaterialization(), current.awaitSeedMaterialization()])
-      const [seedKey] = [...(current.propertyDefinitions?.seedsByKey.keys() ?? [])]
-      expect(await sharedDb.db.getOptional(
-        'SELECT id FROM blocks WHERE id = ?', [propertyDefinitionBlockId(WS, seedKey!)])).not.toBeNull()
-    })
+    try {
+      current.scheduleWorkspaceSeedMaterialization(WS, false)
+      await waitForMaterialization(async () => {
+        await Promise.all([abandoned.awaitSeedMaterialization(), current.awaitSeedMaterialization()])
+        const [seedKey] = [...(current.propertyDefinitions?.seedsByKey.keys() ?? [])]
+        expect(await sharedDb.db.getOptional(
+          'SELECT id FROM blocks WHERE id = ?', [propertyDefinitionBlockId(WS, seedKey!)])).not.toBeNull()
+      })
+    } finally {
+      // The `afterEach` only reaches the module-level `repo` — which this test
+      // released on its way in. Both Repos it built are its own to release, or
+      // it leaves behind exactly the lifecycle it exists to close.
+      releaseRepo(current)
+    }
 
     expect(failures).toEqual([])
   })
