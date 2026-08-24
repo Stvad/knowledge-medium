@@ -252,6 +252,21 @@ describe('migrate_properties_to_blocks action', () => {
     expect(progressHandle.done).toHaveBeenCalledWith(expect.stringContaining('4 row(s)'))
   })
 
+  it('does not claim a catch-up when the re-check throws either', async () => {
+    // The last exit that still built its own sentence. Every row deferred and
+    // then the gate read fails: "caught up" is false on both halves of it.
+    const {repo, workspaceViewGap, rematerializeWorkspace} = makeRepo()
+    workspaceViewGap.mockResolvedValueOnce(STRANDED).mockRejectedValueOnce(new Error('db is gone'))
+    rematerializeWorkspace.mockResolvedValue(
+      pass({scanned: 26, deferred: 26, resolved: 0, unappliedBefore: 26, unappliedAfter: 26}))
+
+    await invoke(repo)
+
+    expect(showInfo).not.toHaveBeenCalledWith(expect.stringContaining('Caught up'))
+    expect(progressHandle.fail).not.toHaveBeenCalledWith(expect.stringContaining('Caught up'))
+    expect(showInfo).toHaveBeenCalledWith(expect.stringContaining('Run it again'))
+  })
+
   it('settles the banner when the re-check after a repair throws', async () => {
     // The banner has no duration. An uncaught throw between the repair and the
     // gate leaves "Catching up…" spinning over a gesture that has stopped —
@@ -262,7 +277,7 @@ describe('migrate_properties_to_blocks action', () => {
 
     await invoke(repo)
 
-    expect(progressHandle.fail).toHaveBeenCalledWith(expect.stringContaining('could not re-check'))
+    expect(progressHandle.fail).toHaveBeenCalledWith(expect.stringContaining('Could not re-check'))
     expect(progressHandle.done).not.toHaveBeenCalledWith(expect.stringContaining('Caught up'))
   })
 

@@ -204,11 +204,13 @@ const repairThenRecheck = async (
     stillUnfit = await passIsUnfit(repo, {workspaceId, needsFlip})
   } catch (err) {
     console.error('[properties-migration] could not re-check eligibility after repair:', err)
-    banner.fail('Caught up on rows this device never applied, but could not re-check whether '
-      + 'the migration may run.')
+    banner.fail(withCatchUp(repaired, 'Could not re-check whether the migration may run.'))
+    // Residual counts left out here as on the navigate-away exit: what the
+    // operator can act on now is that the CHECK failed, and re-running gives
+    // the deferred/quarantined diagnosis through the normal path.
     return {
-      reason: 'Caught up on rows this device had not applied, but could not then check whether '
-        + 'the migration may run. Nothing else was changed. Run it again.',
+      reason: withCatchUp(repaired,
+        'Could not check whether the migration may run, so it was not started. Run it again.'),
       retryable: true,
       standalone: true,
     }
