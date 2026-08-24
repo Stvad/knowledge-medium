@@ -667,19 +667,31 @@ describe('scheduled seed materialization (Repo wiring, §4.3)', {timeout: 30_000
     // What `releaseRepo` buys, end to end — the same action the `afterEach`
     // runs. Drop it below and this reports the swallowed
     // `command_events.tx_id` collisions it prevents.
-    releaseRepo(repo) // this test drives its own Repos
+    // Release AND drain: releasing stops a queued pass at the access gate, but
+    // one already past it is mid-write, and would straddle the reset below and
+    // collide with `current` on its own account. Draining settles those, so the
+    // only pass left to reach the reset is the released one under test.
+    const quiesce = async (target: Repo): Promise<void> => {
+      releaseRepo(target)
+      await target.awaitSeedMaterialization()
+    }
+    await quiesce(repo) // this test drives its own Repos
 
-    const abandoned = await abandonableRepo()
-    abandoned.scheduleWorkspaceSeedMaterialization(WS, false)
-    releaseRepo(abandoned) // ← the teardown under test
-
-    await resetTestDb(sharedDb.db) // the next test's beforeEach
-    const current = await abandonableRepo()
-
+    // Armed before the abandoned Repo exists, because the membership insert
+    // inside the SECOND `abandonableRepo()` is what wakes its parked pass —
+    // arming after that call leaves the window this test is about uncovered,
+    // and whether the pass reports inside it is down to the scheduler.
     const failures: string[] = []
     vi.spyOn(console, 'error').mockImplementation((...args: unknown[]) => {
       failures.push(args.map(String).join(' '))
     })
+
+    const abandoned = await abandonableRepo()
+    abandoned.scheduleWorkspaceSeedMaterialization(WS, false)
+    await quiesce(abandoned) // ← the teardown under test
+
+    await resetTestDb(sharedDb.db) // the next test's beforeEach
+    const current = await abandonableRepo()
     try {
       current.scheduleWorkspaceSeedMaterialization(WS, false)
       await waitForMaterialization(async () => {
