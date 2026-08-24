@@ -29,6 +29,9 @@ import {
   errorMessage,
   startBridgeInBackground,
   listStoredProfiles as listProfilesInStore,
+  MissingTokenError,
+  formatTokenContext,
+  withProfileHelp,
   loadStoredToken as loadStoredTokenFor,
   normalizeProfileName,
   removeStoredToken as removeStoredTokenFor,
@@ -355,11 +358,18 @@ const whoamiWithToken = (token: string): Promise<WhoamiInfo> =>
 const reloadAppAndWait = async ({timeoutMs = 30_000} = {}) => {
   const token = await resolveToken()
   if (!token) {
-    throw new Error(`No agent token configured for profile "${selectedProfileName}". Run \`kmagent --profile ${selectedProfileName} connect\` first.`)
+    throw new MissingTokenError(selectedProfileName)
   }
 
-  const before = await whoamiWithToken(token).catch(() => null)
-  if (!before?.connected) {
+  // Not swallowed, unlike the wait loop below: a whoami that THREW is not a
+  // disconnected tab. A stale token 401s right here, and reporting that as "no
+  // app tab" names the wrong cause and discards the typed error the top-level
+  // handler needs. The loop below keeps its catch because the app really is
+  // mid-reload there. NOT unit-pinned: reaching this line needs a live bridge
+  // answering 401, which no harness stands up, so a green suite says nothing
+  // about it.
+  const before = await whoamiWithToken(token)
+  if (!before.connected) {
     throw new Error('No app tab is currently connected — nothing to reload. Open the app, then retry.')
   }
   const previousClientId = before.clientId
@@ -590,10 +600,7 @@ cli
     await ensureBridgeRunning()
     const token = await resolveToken()
     if (!token) {
-      throw new Error(
-        `No agent token configured for profile "${selectedProfileName}". `
-        + `Run \`kmagent --profile ${selectedProfileName} connect\` first.`,
-      )
+      throw new MissingTokenError(selectedProfileName)
     }
     const info = await whoamiWithToken(token)
     process.stdout.write(`${JSON.stringify(info, null, 2)}\n`)
@@ -1131,7 +1138,17 @@ const main = async () => {
   await cli.runMatchedCommand()
 }
 
-main().catch((error: unknown) => {
-  process.stderr.write(`${errorMessage(error)}\n`)
+main().catch(async (error: unknown) => {
+  process.stderr.write(`${await withProfileHelp(
+    error,
+    async () => formatTokenContext({
+      // Degrades to `null` rather than rejecting: an unreadable store must not
+      // take the override and the selection down with it.
+      profiles: await listStoredProfiles().catch(() => null),
+      tokenStorePath,
+      selected: selectedProfileName,
+      envTokenOverride: (process.env.AGENT_RUNTIME_TOKEN ?? '').trim() !== '',
+    }),
+  )}\n`)
   process.exitCode = 1
 })
