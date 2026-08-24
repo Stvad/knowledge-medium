@@ -140,6 +140,20 @@ const passIsUnfit = async (
  * draws anyway — a DERIVATION pass and a DATA MIGRATION are different kinds and
  * do not belong in one gesture.
  */
+/** What the pass actually did, or null when it resolved nothing. Every exit
+ *  that mentions the repair is built from this, so none can claim a catch-up
+ *  that did not happen. */
+const describeCatchUp = (repaired: WorkspaceRematerialization): string | null =>
+  repaired.resolved === 0
+    ? null
+    : `Caught up on ${repaired.resolved.toLocaleString()} row(s) this device had downloaded `
+      + 'but never applied.'
+
+/** A complete operator sentence: what the repair did, then why the migration is
+ *  not running. Either half may be the whole of it. */
+const withCatchUp = (repaired: WorkspaceRematerialization, rest: string): string =>
+  [describeCatchUp(repaired), rest].filter(Boolean).join(' ')
+
 const repairThenRecheck = async (
   repo: Repo,
   {workspaceId, needsFlip}: {workspaceId: string; needsFlip: boolean},
@@ -172,9 +186,12 @@ const repairThenRecheck = async (
   // nobody has open, ending in the post-dialog check's silent return.
   if (repo.activeWorkspaceId !== workspaceId) {
     banner.done()
+    // No residual diagnosis here, deliberately: `deferred` / `quarantined` are
+    // advice about the workspace they just LEFT, which they cannot act on from
+    // where they are. Re-running there says it in full.
     return {
-      reason: 'Caught up on rows this device had not applied, but a different workspace is '
-        + 'open now, so the migration was not started.',
+      reason: withCatchUp(repaired,
+        'A different workspace is open now, so the migration was not started.'),
       retryable: true,
       standalone: true,
     }
@@ -203,15 +220,13 @@ const repairThenRecheck = async (
     // gap. `applied` is the right question for whether to CONTINUE, though —
     // it is exactly "did this rewrite local rows", and see the header for why a
     // rewrite must not be read straight into the migration.
-    const caughtUp = `Caught up on ${repaired.resolved.toLocaleString()} row(s) this device `
-      + 'had downloaded but never applied.'
-    if (repaired.applied === 0) {
-      banner.done(caughtUp)
-      return null
+    banner.done(describeCatchUp(repaired) ?? undefined)
+    if (repaired.applied === 0) return null
+    return {
+      reason: withCatchUp(repaired, 'Run the migration again to continue.'),
+      retryable: true,
+      standalone: true,
     }
-    banner.done(caughtUp)
-    return {reason: `${caughtUp} Run the migration again to continue.`, retryable: true,
-      standalone: true}
   }
   banner.done()
   return refusalAfterRepair(stillUnfit, repaired)
@@ -220,14 +235,13 @@ const repairThenRecheck = async (
 /**
  * A refusal that outlived the repair, phrased for what the repair did.
  *
- * ONE place answers this, because there are three ways to reach it and they do
- * not look like the same question: the gap survived and the counts explain it;
- * the gap survived and there is nothing to explain; or AUTHORITY changed
- * underneath — the workspace went read-only, or its owner did — in which case
- * the pass's counts explain nothing about the refusal. Each was got wrong in
- * turn, and always the same way: `notStarted`'s "Nothing was changed" is false
- * the moment a window has committed, and a per-branch flag is something a
- * branch can forget. Deciding it once means a new branch cannot.
+ * ONE place answers this, for three refusals that do not look like the same
+ * question: the gap survived and the counts explain it; the gap survived and
+ * there is nothing to explain; or AUTHORITY changed underneath — the workspace
+ * went read-only, or its owner did — in which case the counts explain nothing
+ * about the refusal. The rule they share is that a committed repair invalidates
+ * `notStarted`, whose "Nothing was changed" is false the moment a window lands;
+ * held here rather than as a per-branch flag, which a branch can forget.
  */
 const refusalAfterRepair = (
   stillUnfit: Unfitness,
@@ -241,8 +255,7 @@ const refusalAfterRepair = (
   return {
     ...stillUnfit,
     standalone: true,
-    reason: `Caught up on ${repaired.resolved.toLocaleString()} row(s) this device had not `
-      + `applied, but the migration was not started — ${reason}.`,
+    reason: withCatchUp(repaired, `The migration was not started — ${reason}.`),
   }
 }
 

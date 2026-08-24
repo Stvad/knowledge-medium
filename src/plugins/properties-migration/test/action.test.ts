@@ -307,9 +307,27 @@ describe('migrate_properties_to_blocks action', () => {
 
     await invoke(repo)
 
-    expect(showInfo).toHaveBeenCalledWith(expect.stringContaining('a different workspace'))
+    expect(showInfo).toHaveBeenCalledWith(expect.stringContaining('different workspace'))
+    expect(showInfo).toHaveBeenCalledWith(expect.stringContaining('Caught up on 2 row(s)'))
     expect(openDialog).not.toHaveBeenCalled()
     expect(runWorkspaceBackfillNow).not.toHaveBeenCalled()
+  })
+
+  it('does not claim a catch-up it did not achieve', async () => {
+    // Same exit, nothing resolved: the rows were all deferred. Saying "caught
+    // up" there is simply false, and this is the one exit that reports without
+    // going through the shared refusal phrasing.
+    const {repo, workspaceViewGap, rematerializeWorkspace} = makeRepo()
+    workspaceViewGap.mockResolvedValueOnce(STRANDED)
+    rematerializeWorkspace.mockImplementation(async () => {
+      ;(repo as unknown as {activeWorkspaceId: string}).activeWorkspaceId = 'ws-2'
+      return pass({scanned: 26, deferred: 26, resolved: 0, unappliedBefore: 26, unappliedAfter: 26})
+    })
+
+    await invoke(repo)
+
+    expect(showInfo).toHaveBeenCalledWith(expect.stringContaining('different workspace'))
+    expect(showInfo).not.toHaveBeenCalledWith(expect.stringContaining('Caught up'))
   })
 
   it('leaves a transient gap alone, because the drain is already on it', async () => {
