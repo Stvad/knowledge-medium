@@ -257,6 +257,26 @@ describe('migrate_properties_to_blocks action', () => {
     expect(rematerializeWorkspace).not.toHaveBeenCalled()
   })
 
+  it('stops after a repair the operator navigated away from, and says so', async () => {
+    // The repair is the one await here that runs for MINUTES, so it is the one
+    // a person can realistically navigate during. Everything downstream — the
+    // synthesis scan, and a dialog asking about "this workspace" — would be for
+    // a workspace nobody has open, ending in the post-dialog check's silent
+    // return. The repair still happened, so this says so rather than vanishing.
+    const {repo, runWorkspaceBackfillNow, workspaceViewGap, rematerializeWorkspace} = makeRepo()
+    workspaceViewGap.mockResolvedValueOnce(STRANDED)
+    rematerializeWorkspace.mockImplementation(async () => {
+      ;(repo as unknown as {activeWorkspaceId: string}).activeWorkspaceId = 'ws-2'
+      return pass({resolved: 2})
+    })
+
+    await invoke(repo)
+
+    expect(showInfo).toHaveBeenCalledWith(expect.stringContaining('a different workspace'))
+    expect(openDialog).not.toHaveBeenCalled()
+    expect(runWorkspaceBackfillNow).not.toHaveBeenCalled()
+  })
+
   it('leaves a transient gap alone, because the drain is already on it', async () => {
     // A re-materialization would queue BEHIND the drain that is mid-flight, so
     // it costs a wait and changes nothing. Waiting is the remedy here.

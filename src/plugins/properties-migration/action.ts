@@ -358,14 +358,25 @@ export const migratePropertiesToBlocksAction = ({repo}: {repo: Repo}): ActionCon
     // The one refusal with a local remedy: clear it and ask again, rather than
     // sending the operator away to run a verb by hand and come back.
     //
-    // The workspace is re-read HERE rather than trusted from the top: two
-    // awaited reads have happened since, and this is the first EXPENSIVE step —
-    // a pass that runs for minutes and grows the block cache. Starting one for a
-    // workspace the operator has already left is the one thing worth a second
-    // comparison. (The migration itself is guarded further down, after the
-    // dialog, which is the longer pause but not the costly one.)
+    // Bracketed by the workspace check, on BOTH sides, and neither side is the
+    // per-await rule the two irreversibility guards below decline to be. This
+    // await is the only one in the gesture that runs for MINUTES, so it is the
+    // only one where a person can realistically navigate mid-step:
+    //
+    // - before, because starting a minutes-long pass plus block-cache growth
+    //   for a workspace already abandoned is pure waste.
+    // - after, because everything downstream — the synthesis scan, and a dialog
+    //   asking the operator to confirm "this workspace" — would be about a
+    //   workspace nobody has open, ending in the post-dialog check's silent
+    //   return. That window existed before and was milliseconds wide; this pass
+    //   is what makes it long enough to matter.
     if (ineligible?.rematerializable && repo.activeWorkspaceId === workspaceId) {
       ineligible = await repairThenRecheck(repo, {workspaceId, needsFlip: !childBacked})
+      if (repo.activeWorkspaceId !== workspaceId) {
+        showInfo('Caught up on rows this device had not applied, but a different workspace '
+          + 'is open now, so the migration was not started.')
+        return
+      }
     }
     if (ineligible !== null) {
       showInfo(notStarted(ineligible.reason, ineligible.retryable))
@@ -506,13 +517,18 @@ export const migratePropertiesToBlocksAction = ({repo}: {repo: Repo}): ActionCon
       // Assumes no workspace has run an earlier build's pass, so none holds
       // stale property machinery. Owner's call not to carry a check for a state
       // that cannot exist.
-      // The second of exactly TWO active-workspace checks, not a rule applied
-      // at every await. Each guards a step the user cannot take back: the
-      // post-dialog one because a confirmation is a user-length pause, this one
-      // because the flip is fleet-wide and irreversible. Synthesis deliberately
-      // has neither — it writes dormant blocks scoped to the workspace named in
-      // its own argument, so navigating away withdraws nothing. Do not add a
-      // third.
+      // The second of the two IRREVERSIBILITY checks, and still not a rule
+      // applied at every await. Each guards a step the user cannot take back:
+      // the post-dialog one because a confirmation is a user-length pause, this
+      // one because the flip is fleet-wide. Synthesis deliberately has neither —
+      // it writes dormant blocks scoped to the workspace named in its own
+      // argument, so navigating away withdraws nothing. Do not add a third on
+      // this axis.
+      //
+      // The re-materialization repair brackets itself separately, on the
+      // COST axis: it is the one await here long enough for a person to
+      // navigate during it. That is not this rule eroding, and it is not a
+      // licence to guard the cheap awaits.
       if (repo.activeWorkspaceId !== workspaceId) {
         banner.fail('Stopped before switching this workspace over: a different workspace ' +
           'is open now. Nothing was switched.' + undoNote(undoCleared))
