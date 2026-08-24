@@ -1320,11 +1320,9 @@ describe('merge never reaps a source field row (#728)', () => {
       await foldBlocksInTx(tx, {into: into!, froms: froms.map(f => f!)})
     }, {scope: ChangeScope.BlockDefault})
 
-    // `foldBlocksInTx` folds in the order its caller supplies, and the alias
-    // collision caller's claimant list is `created_at, id` ascending
-    // (SELECT_BLOCKS_BY_ALIAS_IN_WORKSPACE_SQL) — an order the user never
-    // chose, so it must not decide whether the note survives.
-    // Only the keyless-source-FIRST arm
+    // `foldBlocksInTx` folds in whatever order its caller supplies — for the
+    // alias-collision flow, its own claimant order, which the user never chose
+    // — so the outcome must not depend on it. Only the keyless-source-FIRST arm
     // exercises the adopt branch; folding it second routes through
     // `collapseDuplicateFieldRow`, which never reaped — that arm is the control
     // the first is compared against. Which value TEXT wins is still
