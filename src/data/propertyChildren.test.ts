@@ -7,7 +7,7 @@
  */
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
-import { ChangeScope, codecs, defineProperty, propertyValue, type BlockData } from '@/data/api'
+import { ChangeScope, codecs, defineProperty, propertyValue, type AnyPropertySchema, type BlockData } from '@/data/api'
 import { keyAtStart } from './orderKey'
 import { propertyFieldContent } from './propertyChildren'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
@@ -49,26 +49,34 @@ const seedWorkspace = async (
   )
 }
 
-const setup = (): Repo => {
-  const {repo} = createTestRepo({db: sharedDb.db, user: {id: 'user-1'}})
-  repo.setActiveWorkspaceId(WS)
+/** Publish one projected property definition into `repo`'s facet runtime.
+ *  Contributions bucket by (sourceId, workspaceId), so each call ADDS a
+ *  definition rather than replacing the ones before it. */
+const registerDefinition = (
+  repo: Repo,
+  sourceId: string,
+  fieldId: string,
+  schema: AnyPropertySchema,
+): void => {
   repo.setRuntimeContributions(
     projectedPropertyDefinitionsFacet,
-    'test-status-definition',
+    sourceId,
     [{
       metadata: {
-        fieldId: STATUS_FIELD_ID,
-        workspaceId: WS,
-        createdAt: 1,
-        name: statusSchema.name,
-        changeScope: statusSchema.changeScope,
-        hidden: false,
-        origin: 'user' as const,
+        fieldId, workspaceId: WS, createdAt: 1,
+        name: schema.name, changeScope: schema.changeScope,
+        hidden: false, origin: 'user' as const,
       },
-      schema: statusSchema,
+      schema,
     }],
     {workspaceId: WS},
   )
+}
+
+const setup = (): Repo => {
+  const {repo} = createTestRepo({db: sharedDb.db, user: {id: 'user-1'}})
+  repo.setActiveWorkspaceId(WS)
+  registerDefinition(repo, 'test-status-definition', STATUS_FIELD_ID, statusSchema)
   return repo
 }
 
@@ -103,17 +111,23 @@ const childrenRows = async (parentId: string): Promise<ChildRow[]> =>
     [parentId],
   )
 
-const liveFieldRows = async (parentId: string): Promise<ChildRow[]> =>
-  (await childrenRows(parentId)).filter(
-    r => r.deleted === 0 && r.reference_target_id === STATUS_FIELD_ID,
-  )
+const liveFieldRowsFor = (fieldId: string) =>
+  async (parentId: string): Promise<ChildRow[]> =>
+    (await childrenRows(parentId)).filter(
+      r => r.deleted === 0 && r.reference_target_id === fieldId,
+    )
 
-const cellValue = async (id: string): Promise<unknown> => {
+const liveFieldRows = liveFieldRowsFor(STATUS_FIELD_ID)
+
+const bagOf = async (id: string): Promise<Record<string, unknown>> => {
   const row = await sharedDb.db.get<{properties_json: string}>(
     'SELECT properties_json FROM blocks WHERE id = ?', [id],
   )
-  return (JSON.parse(row.properties_json) as Record<string, unknown>)[statusSchema.name]
+  return JSON.parse(row.properties_json) as Record<string, unknown>
 }
+
+const cellValue = async (id: string): Promise<unknown> =>
+  (await bagOf(id))[statusSchema.name]
 
 describe('dormant at properties_migration = cell', () => {
   it('setProperty writes the cell only — no field rows', async () => {
@@ -355,26 +369,11 @@ describe('tx.setProperties (batch set + unset)', () => {
   const setupWithTwo = async (migration: string): Promise<Repo> => {
     await seedWorkspace(migration)
     const repo = setup()
-    repo.setRuntimeContributions(
-      projectedPropertyDefinitionsFacet,
-      'test-priority-definition',
-      [{
-        metadata: {
-          fieldId: PRIORITY_FIELD_ID, workspaceId: WS, createdAt: 1,
-          name: prioritySchema.name, changeScope: prioritySchema.changeScope,
-          hidden: false, origin: 'user' as const,
-        },
-        schema: prioritySchema,
-      }],
-      {workspaceId: WS},
-    )
+    registerDefinition(repo, 'test-priority-definition', PRIORITY_FIELD_ID, prioritySchema)
     return repo
   }
 
-  const priorityFieldRows = async (parentId: string): Promise<ChildRow[]> =>
-    (await childrenRows(parentId)).filter(
-      r => r.deleted === 0 && r.reference_target_id === PRIORITY_FIELD_ID,
-    )
+  const priorityFieldRows = liveFieldRowsFor(PRIORITY_FIELD_ID)
 
   it('cell workspace: applies set + unset in ONE bag rewrite', async () => {
     const repo = await setupWithTwo('cell')
@@ -406,19 +405,7 @@ describe('tx.setProperties (batch set + unset)', () => {
       changeScope: ChangeScope.BlockDefault,
     })
     const repo = await setupWithTwo('cell')
-    repo.setRuntimeContributions(
-      projectedPropertyDefinitionsFacet,
-      'test-count-definition',
-      [{
-        metadata: {
-          fieldId: 'field-count-children', workspaceId: WS, createdAt: 1,
-          name: countSchema.name, changeScope: countSchema.changeScope,
-          hidden: false, origin: 'user' as const,
-        },
-        schema: countSchema,
-      }],
-      {workspaceId: WS},
-    )
+    registerDefinition(repo, 'test-count-definition', 'field-count-children', countSchema)
     await createBlock(repo, 'p')
     await repo.tx(tx => tx.setProperty('p', countSchema, 5),
       {scope: ChangeScope.BlockDefault})
@@ -535,28 +522,12 @@ describe('flipped workspace — ref-typed property values are editable `((id))` 
     await seedWorkspace('children')
     const repo = setup()
     // A second projected definition alongside `status`, ref-typed.
-    repo.setRuntimeContributions(
-      projectedPropertyDefinitionsFacet,
-      'test-related-definition',
-      [{
-        metadata: {
-          fieldId: RELATED_FIELD_ID, workspaceId: WS, createdAt: 1,
-          name: relatedSchema.name, changeScope: relatedSchema.changeScope,
-          hidden: false, origin: 'user' as const,
-        },
-        schema: relatedSchema,
-      }],
-      {workspaceId: WS},
-    )
+    registerDefinition(repo, 'test-related-definition', RELATED_FIELD_ID, relatedSchema)
     return repo
   }
 
-  const relatedCell = async (id: string): Promise<unknown> => {
-    const row = await sharedDb.db.get<{properties_json: string}>(
-      'SELECT properties_json FROM blocks WHERE id = ?', [id],
-    )
-    return (JSON.parse(row.properties_json) as Record<string, unknown>)[relatedSchema.name]
-  }
+  const relatedCell = async (id: string): Promise<unknown> =>
+    (await bagOf(id))[relatedSchema.name]
 
   const relatedValueChild = async (parentId: string): Promise<ChildRow | undefined> => {
     const fields = (await childrenRows(parentId)).filter(
@@ -1091,36 +1062,11 @@ describe('merge never reaps a source field row (#728)', () => {
    *  child's text, which `codecs.string` never does. */
   const setupWithCount = (): Repo => {
     const repo = setup()
-    repo.setRuntimeContributions(
-      projectedPropertyDefinitionsFacet,
-      'test-count-definition',
-      [{
-        metadata: {
-          fieldId: COUNT_FIELD_ID,
-          workspaceId: WS,
-          createdAt: 1,
-          name: countSchema.name,
-          changeScope: countSchema.changeScope,
-          hidden: false,
-          origin: 'user' as const,
-        },
-        schema: countSchema,
-      }],
-      {workspaceId: WS},
-    )
+    registerDefinition(repo, 'test-count-definition', COUNT_FIELD_ID, countSchema)
     return repo
   }
 
-  const countFieldRows = async (parentId: string): Promise<ChildRow[]> =>
-    (await childrenRows(parentId)).filter(
-      r => r.deleted === 0 && r.reference_target_id === COUNT_FIELD_ID)
-
-  const bagOf = async (id: string): Promise<Record<string, unknown>> => {
-    const row = await sharedDb.db.get<{properties_json: string}>(
-      'SELECT properties_json FROM blocks WHERE id = ?', [id],
-    )
-    return JSON.parse(row.properties_json) as Record<string, unknown>
-  }
+  const countFieldRows = liveFieldRowsFor(COUNT_FIELD_ID)
 
   const rowOf = async (id: string) => sharedDb.db.get<{
     deleted: number; parent_id: string; content: string
