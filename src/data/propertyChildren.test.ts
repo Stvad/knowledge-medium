@@ -1402,6 +1402,68 @@ describe('pre-backfill window: merging into a cell-only target (§5, #389 item 9
   })
 })
 
+describe('the catch-up runs UN-flipped too, and must (km-g5ev)', () => {
+  /** Builds `from`'s field row the way a user would. `::((fieldId))` is
+   *  recognized from CONTENT, so the derive pass stamps a hand-written row like
+   *  a generated one — which is what lets an un-flipped block carry one at all.
+   *  (Not the only route: the catch-up under test mints them un-flipped too,
+   *  once some block already has one.) */
+  const handAuthoredFieldRow = async (
+    repo: Repo, owner: string, value: string,
+  ): Promise<void> => {
+    await repo.tx(async tx => {
+      await tx.create({
+        id: `${owner}-field`, workspaceId: WS, parentId: owner, orderKey: 'a0',
+        content: propertyFieldContent(STATUS_FIELD_ID),
+      })
+      await tx.create({
+        id: `${owner}-value`, workspaceId: WS, parentId: `${owner}-field`,
+        orderKey: 'a0', content: value,
+      })
+    }, {scope: ChangeScope.BlockDefault})
+  }
+
+  it('keeps the target-wins value reachable through a later flip', async () => {
+    await seedWorkspace('cell')
+    const repo = setup()
+    await seedDefinitionBlock(repo)
+    await createBlock(repo, 'into')
+    await repo.tx(tx => tx.setProperty('into', statusSchema, 'target-value'),
+      {scope: ChangeScope.BlockDefault})
+    await createBlock(repo, 'from')
+    await handAuthoredFieldRow(repo, 'from', 'source-value')
+    // Un-flipped precondition, asserted rather than assumed: the dual-write is
+    // flip-gated so `into` is cell-only, and `from`'s row is here because the
+    // helper above typed one.
+    expect(await liveFieldRows('into')).toEqual([])
+    expect((await liveFieldRows('from')).length).toBe(1)
+
+    await repo.tx(async tx => {
+      const into = await tx.get('into')
+      const from = await tx.get('from')
+      await mergeBlocksInTx(tx, {into: into!, from: from!})
+    }, {scope: ChangeScope.BlockDefault})
+
+    // Gating the catch-up on the flip is the tempting reading of "no pre-flip
+    // machinery", and it LOSES DATA: `from`'s row is adopted instead, so
+    // `into`'s only value row is the source's and the projection below
+    // publishes it over the target's. Measured, not reasoned.
+    const [intoField] = await liveFieldRows('into')
+    const values = (await childrenRows(intoField!.id)).filter(v => v.deleted === 0)
+    expect(values.map(v => v.content)).toEqual(['target-value', 'source-value'])
+
+    // The stake, played out: the projection is dormant until the flip, so the
+    // first touch of this field row afterwards is what publishes its first
+    // value into the cell. Target-wins has to still hold there.
+    await sharedDb.db.execute(
+      'UPDATE workspaces SET properties_migration = ? WHERE id = ?', ['children', WS],
+    )
+    await repo.tx(tx => tx.update(values[1]!.id, {content: 'source-value-edited'}),
+      {scope: ChangeScope.BlockDefault})
+    expect(await cellValue('into')).toBe('target-value')
+  })
+})
+
 describe('duplicate collapse preservation (§9, slice B3)', () => {
   it('keeps a divergent losing value as a sibling (with its comments) instead of deleting', async () => {
     await seedWorkspace('children')
