@@ -1,0 +1,2 @@
+import{c as e}from"react/compiler-runtime";import{Fragment as t,jsx as n,jsxs as r}from"react/jsx-runtime";var i=i=>{let a=e(3),{controls:o}=i,s;a[0]===Symbol.for(`react.memo_cache_sentinel`)?(s=n(`div`,{className:`mt-4 pt-3 border-t border-border text-xs text-muted-foreground`,children:`No backlinks.`}),a[0]=s):s=a[0];let c;return a[1]===o?c=a[2]:(c=r(t,{children:[o,s]}),a[1]=o,a[2]=c),c};export{i as BacklinksEmptyState};
+//# sourceMappingURL=BacklinksEmptyState.js.map
