@@ -108,6 +108,10 @@ describe('materializeStagingRows — the needs_apply flag', () => {
     const second = await materializeStagingRows(env.db, { upserted: ['b1'], removed: [] }, deferred)
 
     expect(second.resolved).toEqual([])
+    // And it SAYS it put the flag back. This is the direction that makes a
+    // rematerialization leave the gap bigger than it found it, so an operator
+    // watching the count go up has something to attribute it to.
+    expect(second.reflagged).toEqual(['b1'])
     expect(await needsApply('b1')).toBe(1)
   })
 
@@ -129,6 +133,27 @@ describe('materializeStagingRows — the needs_apply flag', () => {
 
     expect(out.deferred).toEqual(['b1'])
     expect(out.resolved).toEqual(['b1'])
+    expect(await needsApply('b1')).toBe(0)
+  })
+
+  it('does not re-report a row whose flag was already clear', async () => {
+    // `resolved` is the flag MOVING, not the decision that would have moved it.
+    // The re-pass is the normal shape of a workspace rematerialization at
+    // `scope: 'all'`, where every row is re-judged and almost none are behind —
+    // counting decisions there would report a settled workspace as one this
+    // pass had just repaired in full, which is the opposite diagnosis.
+    await seedLocalBlock(blockData({ id: 'b1', content: 'v1', updatedAt: 5 }))
+    await stageRow(blockData({ id: 'b1', content: 'v1', updatedAt: 5 }))
+    const deps = { getMaterializability: constMat('copy'), getCek: noKey }
+
+    const first = await materializeStagingRows(env.db, { upserted: ['b1'], removed: [] }, deps)
+    expect(first.resolved).toEqual(['b1'])
+    expect(await needsApply('b1')).toBe(0)
+
+    // Same row, same decision, nothing left to clear.
+    const second = await materializeStagingRows(env.db, { upserted: ['b1'], removed: [] }, deps)
+    expect(second.skippedStale).toEqual(['b1'])
+    expect(second.resolved).toEqual([])
     expect(await needsApply('b1')).toBe(0)
   })
 })

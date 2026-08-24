@@ -91,11 +91,14 @@ import {
   startBlocksSyncedObserver,
   type BlocksSyncedObserver,
   type BlocksSyncedObserverArgs,
+  type RematerializeReport,
+  type RematerializeScope,
 } from '@/data/internals/syncObserver/observer'
 import {
   STAGED_SCAN_LIMIT,
   STAGED_VIEW_GAP_SQL,
   WORKSPACE_UNAPPLIED_COUNT_CAP,
+  WORKSPACE_UNAPPLIED_EXACT_COUNT_SQL,
   WORKSPACE_UNAPPLIED_SQL,
 } from '@/data/internals/syncObserver/reconcile'
 import type { MaterializeDeps } from '@/data/internals/syncObserver/materialize'
@@ -479,6 +482,26 @@ export interface ViewGap {
    *  itself on a deferral must not re-arm on this one, and a caller with a
    *  human to tell must not tell them to try again. */
   readonly transient: boolean
+}
+
+/** What {@link Repo.rematerializeWorkspace} did, for the operator who ran it.
+ *
+ *  `unappliedBefore` / `unappliedAfter` are the size of the durable gap on
+ *  either side of the pass — the one thing that answers "did that help?", which
+ *  is why they are EXACT counts and not the capped one the refusal reports.
+ *
+ *  Not closed arithmetic with `resolved`, deliberately: the pair excludes rows
+ *  with a live queue entry (that half is the in-flight predicate's) while `all`
+ *  re-judges every staged row, so a pass CAN resolve a row that neither end
+ *  counted. `resolved > unappliedBefore` is therefore reachable and is not a
+ *  bug — it is the two predicates owning disjoint populations. */
+export interface WorkspaceRematerialization extends RematerializeReport {
+  readonly workspaceId: string
+  readonly unappliedBefore: number
+  readonly unappliedAfter: number
+  /** What {@link Repo.workspaceViewGap} says now — null when the workspace's
+   *  one-way passes are unblocked. */
+  readonly remainingGap: ViewGap | null
 }
 
 /** What an operator-triggered backfill did, for a caller that has a human to
@@ -1162,9 +1185,15 @@ export class Repo {
 
   /** Re-materialize a workspace's staged `blocks_synced` rows after it becomes
    *  materializable (WK pasted / plaintext confirmed via the §8.2 gate). No-op
-   *  if the observer isn't running. */
+   *  if the observer isn't running.
+   *
+   *  `'all'`, not `'unapplied'`: this and the reconcile rescan are the paths for
+   *  a workspace whose FLAGS may be wrong — the deterministic-id shadow this
+   *  predates the flag entirely — so trusting the flag to name the work is the
+   *  one thing they must not do. Unpinned by any test (the two scopes agree on
+   *  every shape a test can build), which is why it is written here. */
   async drainSyncWorkspace(workspaceId: string): Promise<void> {
-    if (this.syncObserver) await this.syncObserver.drainWorkspace(workspaceId)
+    if (this.syncObserver) await this.syncObserver.drainWorkspace(workspaceId, 'all')
   }
 
   /** Frozen snapshot of internal data-layer counters + timings
@@ -2894,19 +2923,114 @@ export class Repo {
         transient: true,
       }
     }
-    const {behind} = await this.db.get<{behind: number}>(
-      WORKSPACE_UNAPPLIED_SQL, [workspaceId, WORKSPACE_UNAPPLIED_COUNT_CAP],
-    )
+    const behind = await this.workspaceUnappliedCount(workspaceId)
     if (behind === 0) return null
     const count = behind >= WORKSPACE_UNAPPLIED_COUNT_CAP
       ? `at least ${WORKSPACE_UNAPPLIED_COUNT_CAP.toLocaleString()}`
       : `${behind.toLocaleString()}`
+    // The remedy rides with the CAUSE on this arm alone: nothing clears it on
+    // its own, and every caller's answer is the same one, so stating it here
+    // beats each of them remembering to.
     return {
       reason: `${count} synced row(s) of this workspace have not reached \`blocks\` on `
         + 'this device — never materialized, or still showing an older version — '
-        + 'and nothing is in flight to change that',
+        + 'and nothing is in flight to change that; the `rematerialize-workspace` '
+        + 'agent verb re-runs the drain over exactly these rows',
       transient: false,
     }
+  }
+
+  /**
+   * Re-run the drain over a workspace's staged rows, because an operator asked.
+   *
+   * The remedy for {@link workspaceViewGap}'s durable arm: rows that reached
+   * the drain, were not applied, and had their queue entry consumed, so nothing
+   * re-delivers them and every one-way pass on the workspace refuses for as
+   * long as they sit there.
+   *
+   * A DERIVATION pass, not a data migration: it rebuilds this device's `blocks`
+   * from rows this device already downloaded, writes with `tx_context.source`
+   * NULL (so the upload triggers skip it), and touches no synced state. It
+   * therefore needs no per-graph claim and does not clear the undo stack.
+   *
+   * Nothing here clears a flag on its own reasoning: every flag this drops is
+   * dropped by the drain, on the drain's rules, in the transaction that decides
+   * it.
+   *
+   * The default `unapplied` scope re-delivers exactly the rows the refusal
+   * counts. `all` re-judges every staged row instead, which is what to reach for
+   * when the FLAG is suspect rather than the rows it names — at the cost of a
+   * full pass, and reporting its repairs in `applied` rather than `resolved`
+   * (a row the flag is wrong about is already clear, so no flag moves).
+   *
+   * What it is not:
+   *
+   * - not free of a transient revert. A rescan can write an older staged row
+   *   over a newer LOCAL edit that is acked but not yet echoed back; the echo
+   *   re-asserts it, so the window is short and self-healing, but a tab closed
+   *   inside it reloads the reverted content. Prefer running this with sync
+   *   settled. NOT guarded, and the reason is not that the window is invisible
+   *   (it is — `syncViewGap` reads the download side only): the guard that
+   *   would close it is the strictly-newer-local skip `decideStagingRow` dropped
+   *   on purpose, because a device whose clock leads the server sees its own
+   *   creates echo back with a LOWER stamp, and that guard would strand them
+   *   flagged forever — manufacturing the durable gap this verb exists to clear.
+   * - not all-or-nothing. Windows commit independently, so a pass that REJECTS
+   *   still leaves its committed windows in place — but it rejects out of here,
+   *   so the caller gets the error and none of the counts. A re-run at
+   *   `unapplied` resumes; at `all` it starts over.
+   */
+  async rematerializeWorkspace(
+    workspaceId: string,
+    options: {scope?: RematerializeScope} = {},
+  ): Promise<WorkspaceRematerialization> {
+    if (!workspaceId) throw new Error('rematerializeWorkspace requires a workspace id')
+    if (!this.syncObserver) {
+      throw new Error(
+        '[rematerializeWorkspace] this client has no sync observer running, so there is '
+        + 'nothing to re-materialize with. Reload the app and try again.',
+      )
+    }
+    const scope = options.scope ?? 'unapplied'
+    const unappliedBefore = await this.workspaceUnappliedExactCount(workspaceId)
+    const pass = await this.syncObserver.drainWorkspace(workspaceId, scope)
+    return {
+      ...pass,
+      workspaceId,
+      unappliedBefore,
+      unappliedAfter: await this.workspaceUnappliedExactCount(workspaceId),
+      // The predicate the refusal takes, re-asked. Null is the operator's
+      // answer that the pass is now unblocked; anything else is what they would
+      // have been told on the next attempt anyway, one round earlier.
+      remainingGap: await this.workspaceViewGap(workspaceId),
+    }
+  }
+
+  /** How many of `workspaceId`'s downloaded rows the drain has not applied —
+   *  the number {@link workspaceViewGap}'s durable arm reports, capped the same
+   *  way (so `>= WORKSPACE_UNAPPLIED_COUNT_CAP` reads as a floor, not a total). */
+  private async workspaceUnappliedCount(workspaceId: string): Promise<number> {
+    const {behind} = await this.db.get<{behind: number}>(
+      WORKSPACE_UNAPPLIED_SQL, [workspaceId, WORKSPACE_UNAPPLIED_COUNT_CAP],
+    )
+    return behind
+  }
+
+  /** The same population, counted to the end.
+   *
+   *  The capped sibling is right for the refusal, which spends the number on one
+   *  sentence — "some" and "all of them" are different diagnoses and nothing
+   *  past that pays. It is WRONG for a before/after pair, which is a subtraction:
+   *  clamped, two ends that both sit past the cap read as a delta of zero, and
+   *  the one question the pair exists to answer gets the opposite answer.
+   *
+   *  Affordable because this runs twice per deliberate operator action, never in
+   *  the per-transaction gate. */
+  private async workspaceUnappliedExactCount(workspaceId: string): Promise<number> {
+    const {behind} = await this.db.get<{behind: number}>(
+      WORKSPACE_UNAPPLIED_EXACT_COUNT_SQL, [workspaceId],
+    )
+    return behind
   }
 
   private async assertBackfillMayWrite(

@@ -46,3 +46,18 @@ export const limitOption = (limit: unknown): {limit?: number} => {
   }
   return {limit: parsed}
 }
+
+/** Turn a `--scope` option into the command's `scope` field.
+ *
+ *  Same CAC artifact as `workspaceAssertion`, normalized the same way — without
+ *  it `--scope ""` reaches the kernel as the string '0' and is refused naming a
+ *  value nobody typed. The VALUE is not validated here: the kernel owns that
+ *  refusal, so one spelling of it exists rather than two that can disagree. */
+export const scopeAssertion = (scope: unknown): {scope?: string} => {
+  if (scope === undefined) return {}
+  if (scope === 0) return {scope: ''}
+  if (typeof scope !== 'string') {
+    throw new Error(`--scope expects a single value; got ${JSON.stringify(scope)}.`)
+  }
+  return {scope}
+}

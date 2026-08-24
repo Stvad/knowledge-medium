@@ -743,4 +743,44 @@ describe('agent runtime commands', () => {
       }
     })
   })
+
+  // The operator remedy for a durable materialization gap (km-boj1). The pass
+  // itself is pinned against a real observer in `data/test/rematerializeWorkspace`;
+  // what belongs HERE is the verb's refusals, which are the whole reason an
+  // operator-facing wrapper exists around a Repo method that would otherwise
+  // happily run against whatever it was handed.
+  describe('rematerialize-workspace', () => {
+    it('refuses an empty --workspace rather than falling back to the active one', async () => {
+      // `--workspace "$UNSET"` expands to this. The option asserts which graph
+      // the pass rewrites, so an empty expansion must fail, not default.
+      await expect(env.context.rematerializeWorkspace({workspaceId: '   '}))
+        .rejects.toThrow(/empty value/i)
+    })
+
+    it('refuses a workspace this client does not have open', async () => {
+      // Workspace-scoped maintenance must not touch workspaces nobody opened:
+      // materializability, key state and the block cache are all the ACTIVE
+      // workspace's, so the option is an assertion, not a target.
+      await expect(env.context.rematerializeWorkspace({workspaceId: 'ws-elsewhere'}))
+        .rejects.toThrow(/not the active workspace/i)
+    })
+
+    it('names an unrecognized scope instead of quietly picking one', async () => {
+      // Both scopes are legitimate answers with very different costs, so a
+      // typo must not silently resolve to either.
+      await expect(env.context.rematerializeWorkspace({scope: 'everything'}))
+        .rejects.toThrow(/--scope must be/i)
+    })
+
+    it('runs the narrow scope against the active workspace by default', async () => {
+      const spy = vi.spyOn(env.repo, 'rematerializeWorkspace')
+        .mockResolvedValue({} as Awaited<ReturnType<Repo['rematerializeWorkspace']>>)
+      try {
+        await env.context.rematerializeWorkspace({})
+        expect(spy).toHaveBeenCalledWith(WS, {scope: 'unapplied'})
+      } finally {
+        spy.mockRestore()
+      }
+    })
+  })
 })

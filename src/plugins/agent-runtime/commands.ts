@@ -1,6 +1,6 @@
 import React from 'react'
 import ReactDOM from 'react-dom'
-import type { Repo } from '@/data/repo'
+import type { Repo, WorkspaceRematerialization } from '@/data/repo'
 import type { Block } from '@/data/block'
 import { ChangeScope, type BlockData, type BlockReference, type SubtreeRow } from '@/data/api'
 import { aliasesProp, blockTypeTypeIdProp, extensionDescriptionProp, extensionNameProp, getBlockTypes, seedKeyProp, topLevelBlockIdProp } from '@/data/properties.js'
@@ -87,6 +87,7 @@ import type {
   MoveBlockPosition,
   RestoreBlockInput,
   RunBackfillResult,
+  RematerializeWorkspaceInput,
   SetExtensionEnabledInput,
   SetExtensionEnabledResult,
   SqlMode,
@@ -500,6 +501,48 @@ const runRuntimeBackfill = async (
       ? takeLastPropertyCellBackfillRun(workspaceId) ?? {}
       : {}),
   }
+}
+
+/** Re-run the drain over a workspace's downloaded-but-unapplied rows.
+ *
+ *  The operator answer to `workspaceViewGap`'s durable arm — rows this device
+ *  downloaded, could not apply, and consumed the queue entry for, which nothing
+ *  re-delivers on its own. A DERIVATION pass over local state (see
+ *  `Repo.rematerializeWorkspace`): no uploads, no claim, no undo-stack clearing,
+ *  safe to re-run. */
+const rematerializeRuntimeWorkspace = async (
+  repo: Repo,
+  input: RematerializeWorkspaceInput,
+): Promise<WorkspaceRematerialization> => {
+  const scope = input.scope ?? 'unapplied'
+  if (scope !== 'all' && scope !== 'unapplied') {
+    throw new Error(`rematerialize-workspace: --scope must be "unapplied" or "all", got "${scope}"`)
+  }
+  // Same rule as `run-backfill`: `--workspace "$UNSET"` must fail rather than
+  // fall back to the active workspace, and for the same reason — the option is
+  // an assertion about which graph is being touched.
+  const workspaceId = assertedWorkspaceOverride(input.workspaceId) ?? resolveWorkspaceId(repo)
+  // The pass rebuilds THIS client's view of the workspace it has open. Its key
+  // state and its block cache are the active workspace's, so pointing it
+  // elsewhere would rewrite rows for a workspace nobody opened — the one thing
+  // workspace-scoped maintenance is not allowed to do.
+  //
+  // Checked ONCE, unlike `assertBackfillMayWrite`, which re-takes the same
+  // question inside every writing transaction of a pass of the same duration.
+  // Accepted, not overlooked: a user who navigates away mid-pass leaves it
+  // writing `blocks` for a workspace they no longer have open, but
+  // `getMaterializability` is keyed on each ROW's workspace_id rather than the
+  // active one, so the write is still correct — the cost is wasted work and
+  // cache growth, and the WK-paste path has had the same shape all along.
+  if (workspaceId !== repo.activeWorkspaceId) {
+    throw new Error(
+      `rematerialize-workspace: --workspace ${workspaceId} is not the active workspace ` +
+      `(${repo.activeWorkspaceId ?? 'none'}). The pass rebuilds the view of the workspace ` +
+      'this client has open, so the option is an assertion, not a target — open that ' +
+      'workspace and re-run.',
+    )
+  }
+  return repo.rematerializeWorkspace(workspaceId, {scope})
 }
 
 const mapPosition = (
@@ -1669,6 +1712,7 @@ export const createAgentRuntimeContext = ({
     auditExtension: input => auditRuntimeExtension(repo, input),
     auditProperties: input => auditRuntimeProperties(repo, input),
     runBackfill: input => runRuntimeBackfill(repo, input),
+    rematerializeWorkspace: input => rematerializeRuntimeWorkspace(repo, input),
     actions: readRuntimeActions(runtime),
     renderers: runtime.read(blockRenderersFacet),
     refreshAppRuntime,
@@ -1867,6 +1911,16 @@ export const executeCommand = async (
         workspaceId: command.workspaceId === undefined
           ? undefined
           : requireString(command.workspaceId, 'workspaceId'),
+      })
+
+    case 'rematerialize-workspace':
+      return context.rematerializeWorkspace({
+        workspaceId: command.workspaceId === undefined
+          ? undefined
+          : requireString(command.workspaceId, 'workspaceId'),
+        scope: command.scope === undefined
+          ? undefined
+          : requireString(command.scope, 'scope'),
       })
 
     case 'run-action':

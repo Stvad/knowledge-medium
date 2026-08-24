@@ -59,6 +59,10 @@ export interface CreateTestRepoOptions {
   user?: User
   /** Start the Layout B sync observer. Default FALSE — see the module doc. */
   startSyncObserver?: boolean
+  /** Materialization POLICY for the observer (the §6 mode/key resolver).
+   *  Omitted, the Repo falls back to plaintext copy-through with no key; pass
+   *  one to exercise a locked/e2ee workspace through the Repo surface. */
+  syncObserverDeps?: RepoOptions['syncObserverDeps']
   /** Forward Repo's construction-time kernel runtime install. Default true. */
   installKernelRuntime?: boolean
   /** Override the workspace-backfill sync gate (default: opens immediately). */
@@ -112,6 +116,7 @@ export const createTestRepo = (opts: CreateTestRepoOptions): TestRepo => {
     newTxSeq: opts.newTxSeq ?? (() => ++txSeqCursor),
     isReadOnly: opts.isReadOnly,
     startSyncObserver: opts.startSyncObserver ?? false,
+    syncObserverDeps: opts.syncObserverDeps,
     installKernelRuntime: opts.installKernelRuntime,
     // `createTestDb` opens a real PowerSyncDatabase with no backend
     // connector, so the production gate (connected && !downloading) would

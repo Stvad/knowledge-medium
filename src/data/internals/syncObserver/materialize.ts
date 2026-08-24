@@ -176,12 +176,22 @@ export interface MaterializeOutcome {
   readonly quarantined: readonly string[]
   /** Ids hard-deleted from `blocks`. */
   readonly deleted: readonly string[]
-  /** Ids whose `needs_apply` flag this pass CLEARED — every row it decided
-   *  leaves `blocks` correct: applied, skip-staled (the local row wins by the
-   *  gate's own rule), or already reflected by `blocks` even though the drain
-   *  could not apply it (`blocksAlreadyReflects`). The rows it did NOT
-   *  clear are the durable gap `WORKSPACE_UNAPPLIED_SQL` reports. */
+  /** Ids whose `needs_apply` flag this pass CLEARED — rows that arrived flagged
+   *  and that it decided leave `blocks` correct: applied, skip-staled (the local
+   *  row wins by the gate's own rule), or already reflected by `blocks` even
+   *  though the drain could not apply it (`blocksAlreadyReflects`). The rows it
+   *  did NOT clear are the durable gap `WORKSPACE_UNAPPLIED_SQL` reports.
+   *
+   *  A row that was ALREADY clear is not here, however the pass decided it. The
+   *  flag moving is the whole claim — a re-pass over a settled workspace
+   *  (`RematerializeScope` 'all') decides every row it reads and must report
+   *  having repaired none of them. */
   readonly resolved: readonly string[]
+  /** The other direction: ids whose `needs_apply` flag this pass SET, having
+   *  found a row it cannot apply that `blocks` does not already reflect.
+   *  Near-always empty on the queue path — a delivery arrives flagged, so its
+   *  own arrival does this, not a decision. */
+  readonly reflagged: readonly string[]
 }
 
 interface ApplyCandidate {
@@ -440,11 +450,12 @@ export const materializeStagingRows = async (
   const deleted: string[] = []
 
   const resolved: string[] = []
+  const reflagged: string[] = []
   // `decisions` counts too: a window whose every row skip-staled writes no
   // `blocks` row and still has flags to clear, and leaving them set would make
   // an echo-only drain look like a permanent gap.
   if (candidates.length === 0 && change.removed.length === 0 && decisions.length === 0) {
-    return { snapshots, applied, deferred, skippedStale, quarantined, deleted, resolved }
+    return { snapshots, applied, deferred, skippedStale, quarantined, deleted, resolved, reflagged }
   }
 
   // ── Phase 2 (inside the write tx): authoritative re-gate, then write. ──
@@ -575,23 +586,25 @@ export const materializeStagingRows = async (
     // this is a column on the staging row rather than something a reader
     // re-derives. A pass that reads the flag inside its own write transaction
     // is excluded from this one by the write lock, so it never sees a decision
-    // half-made. Only for the version actually judged, and only where the flag disagrees:
-    // a row replaced since Phase 1 belongs to whoever judges THAT version, and
-    // `needs_apply <> value` keeps a window that decided nothing new from
-    // rewriting pages (a locked workspace re-defers the same rows every drain).
+    // half-made. Only for the version actually judged: a row replaced since
+    // Phase 1 belongs to whoever judges THAT version.
     const stagedNow = await readStagingFlagState(
       tx, decisions.map(decision => decision.id), readChunkSize,
     )
-    const stale: string[] = []
     for (const decision of decisions) {
       const now = stagedNow.get(decision.id)
       if (now === undefined || now.updatedAt !== decision.stagedUpdatedAt) continue
-      if (decision.needsApply) stale.push(decision.id)
+      // Only rows whose flag actually MOVES — see `resolved` / `reflagged` on
+      // MaterializeOutcome. The write is a no-op either way; the report is not.
+      if (decision.needsApply === now.needsApply) continue
+      if (decision.needsApply) reflagged.push(decision.id)
       else resolved.push(decision.id)
     }
-    for (const [value, ids] of [[0, resolved], [1, stale]] as const) {
+    for (const [value, ids] of [[0, resolved], [1, reflagged]] as const) {
       for (let i = 0; i < ids.length; i += readChunkSize) {
         const chunk = ids.slice(i, i + readChunkSize)
+        // `needs_apply <> value` is DEFENCE IN DEPTH now that the lists carry
+        // only movers: it filters on the read they were built from, in this lock.
         await tx.execute(setNeedsApplySql(value, chunk.length), chunk)
       }
     }
@@ -632,5 +645,5 @@ export const materializeStagingRows = async (
     }
   }
 
-  return { snapshots, applied, deferred, skippedStale, quarantined, deleted, resolved }
+  return { snapshots, applied, deferred, skippedStale, quarantined, deleted, resolved, reflagged }
 }
