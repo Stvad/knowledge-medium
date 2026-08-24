@@ -1171,15 +1171,18 @@ const aliasClaimProp = seedProperty({
   changeScope: ChangeScope.BlockDefault,
 })
 
-/** The user was offered the conflict and chose to keep the fallback name.
- *  Cleared when the conflict goes away, so a LATER collision on the same
- *  document is offered again rather than silently inheriting this answer. */
-const aliasFallbackAcceptedProp = seedProperty({
-  seedKey: extensionPropertySeedKey('aliasFallbackAccepted'),
+/** The TITLE the user was shown when they chose to keep the fallback name —
+ *  not a boolean. An answer is about one collision, and a document's title
+ *  changes underneath it: Readwise re-titles A to B, B is taken too, and a
+ *  boolean would carry the answer for A onto a conflict the user never saw.
+ *  Storing what was accepted makes the comparison say so, and means nothing
+ *  has to remember to clear it. */
+const aliasAcceptedForProp = seedProperty({
+  seedKey: extensionPropertySeedKey('aliasFallbackAcceptedFor'),
   revision: 1,
-  name: 'readwise:aliasFallbackAccepted',
-  preset: 'boolean',
-  defaultValue: false,
+  name: 'readwise:aliasFallbackAcceptedFor',
+  preset: 'optional-string',
+  defaultValue: undefined,
   changeScope: ChangeScope.BlockDefault,
 })
 
@@ -1304,14 +1307,6 @@ const ensureDocumentAlias = async (
     if (!bagUnchanged) await tx.setProperty(blockId, aliasesProp, next)
     const nextClaim = claimable ?? undefined
     if (claim !== nextClaim) await tx.setProperty(blockId, aliasClaimProp, nextClaim)
-
-    // The conflict is over once the document holds its real name, so an
-    // earlier "keep the fallback" is spent: a future collision has to be
-    // offered again rather than answered by that one.
-    if (claimable === title) {
-      const accepted: boolean = await tx.getProperty(blockId, aliasFallbackAcceptedProp)
-      if (accepted) await tx.setProperty(blockId, aliasFallbackAcceptedProp, false)
-    }
   }, { scope: ChangeScope.BlockDefault, description })
 }
 
@@ -1547,7 +1542,11 @@ export const unresolvedAliasConflicts = async (
   })
   const candidates = documents.filter(doc => {
     if (!doc.content) return false
-    if (storedProperty(doc, aliasFallbackAcceptedProp, false)) return false
+    // Scoped to the title it was given for, so a re-title onto another taken
+    // name is a new conflict rather than one already answered.
+    if (storedProperty<string | undefined>(doc, aliasAcceptedForProp, undefined) === doc.content) {
+      return false
+    }
     return !storedProperty<readonly string[]>(doc, aliasesProp, []).includes(doc.content)
   })
   if (!candidates.length) return []
@@ -1570,14 +1569,19 @@ export const unresolvedAliasConflicts = async (
   }, { scope: ChangeScope.BlockDefault, description: 'readwise: scan alias conflicts' })
 }
 
-/** "Keep this name" — stop offering this one. `ensureDocumentAlias` clears the
- *  flag if the document ever gets its real name back, so this answers THIS
- *  conflict rather than every future one. */
+/** "Keep this name" — stop offering THIS conflict.
+ *
+ *  The title is re-read inside the transaction rather than taken from the
+ *  caller: a dialog can sit open across a sync that re-titles the document,
+ *  and an answer stamped with the title on screen would then silence a
+ *  conflict the user never saw. Recording what is actually there means a
+ *  stale click answers nothing. */
 export const acceptFallbackAlias = async (repo: any, documentId: string): Promise<void> => {
-  await repo.tx(
-    (tx: any) => tx.setProperty(documentId, aliasFallbackAcceptedProp, true),
-    { scope: ChangeScope.BlockDefault, description: 'readwise: keep fallback name' },
-  )
+  await repo.tx(async (tx: any) => {
+    const doc = await tx.get(documentId)
+    if (!doc || doc.deleted) return
+    await tx.setProperty(documentId, aliasAcceptedForProp, doc.content)
+  }, { scope: ChangeScope.BlockDefault, description: 'readwise: keep fallback name' })
 }
 
 /** Surface whatever is unresolved, without stealing focus. Failure here is
@@ -1596,6 +1600,7 @@ const offerAliasConflicts = async (repo: any, workspaceId: string): Promise<void
         // the toast can sit for a whole auto-sync interval, and a conflict
         // resolved on the page in the meantime must not be offered again.
         onClick: () => { void (async () => {
+          if (repo.activeWorkspaceId !== workspaceId) return
           const fresh = await unresolvedAliasConflicts(repo, workspaceId)
           if (!fresh.length) return
           await openDialog(ReadwiseAliasConflictDialog, { conflicts: fresh, workspaceId })
@@ -1990,9 +1995,10 @@ const ReadwiseAliasConflictDialog = ({
   conflicts: initial, workspaceId, resolve,
 }: DialogContextProps<void> & {
   conflicts: readonly AliasConflict[]
-  /** The workspace the conflicts were found in, carried rather than re-read:
-   *  the user can switch workspaces between the toast and the click, and a
-   *  merge belongs to the workspace that produced the conflict. */
+  /** The workspace these conflicts were found in. Carried to be CHECKED, not
+   *  to be written against: a merge dispatches through the repo's ambient
+   *  workspace and read-only state, so carrying the id does not carry the
+   *  write context with it. If they diverge the only safe move is to refuse. */
   workspaceId: string
 }) => {
   const repo = useRepo()
@@ -2005,7 +2011,17 @@ const ReadwiseAliasConflictDialog = ({
     if (!rest.length) resolve()
   }
 
+  /** Re-checked inside each action rather than once when the dialog opened —
+   *  the switch can happen while the deletion preflight is on screen. */
+  const inWorkspace = (): boolean => {
+    if (repo.activeWorkspaceId === workspaceId) return true
+    showError('Switch back to the workspace these documents are in to resolve them.')
+    resolve()
+    return false
+  }
+
   const merge = async (conflict: AliasConflict) => {
+    if (!inWorkspace()) return
     setBusy(conflict.documentId)
     try {
       const merged = await mergeAliasCollision(repo, {
@@ -2023,6 +2039,7 @@ const ReadwiseAliasConflictDialog = ({
   }
 
   const keep = async (conflict: AliasConflict) => {
+    if (!inWorkspace()) return
     setBusy(conflict.documentId)
     try {
       await acceptFallbackAlias(repo, conflict.documentId)
@@ -2938,7 +2955,7 @@ export default [
   definitionSeedsFacet.of(highlightTypesProp, { source }),
   definitionSeedsFacet.of(connectedHintProp, { source }),
   definitionSeedsFacet.of(aliasClaimProp, { source }),
-  definitionSeedsFacet.of(aliasFallbackAcceptedProp, { source }),
+  definitionSeedsFacet.of(aliasAcceptedForProp, { source }),
   ...IMPORTED_PROPERTY_SCHEMAS.map(schema => definitionSeedsFacet.of(schema, { source })),
 
   propertyEditorOverridesFacet.of(connectedEditor, { source }),

@@ -43,9 +43,14 @@ export const mergeAliasCollision = async (
 
     // Any panel showing an absorbed page now points at a tombstone; move
     // them to the survivor, as the rejection toast does after the same call.
-    const uiState = await getUIStateBlock(repo, workspaceId, repo.user, {})
-    const layoutSessionBlock = await getLayoutSessionBlock(uiState, repo.activeLayoutSessionId)
+    //
+    // The whole lookup is inside the best-effort block, LOOKUP INCLUDED: the
+    // merge is already committed by here, so anything that throws past this
+    // point is a cosmetic failure being reported as a failed merge. A caller
+    // acting on `false` would retry against rivals that are now tombstones.
     try {
+      const uiState = await getUIStateBlock(repo, workspaceId, repo.user, {})
+      const layoutSessionBlock = await getLayoutSessionBlock(uiState, repo.activeLayoutSessionId)
       for (const rivalId of rivalIds) {
         await retargetPanelBlockIds(repo, layoutSessionBlock, rivalId, intoId)
       }

@@ -462,6 +462,28 @@ describe('readwise alias conflicts — what the sync offers to resolve', () => {
     expect(await conflicts()).toEqual([])
   })
 
+  it('does not carry a keep from one title onto the next', async () => {
+    const rootId = await createRoot()
+    await createRivalPage('rival', 'Deep Work')
+    await createRivalPage('rival-2', 'Digital Minimalism')
+    await sync(rootId, book(1, 'Deep Work', 11))
+    await acceptFallbackAlias(repo, documentId(1))
+    expect(await conflicts()).toEqual([])
+
+    // Re-titled straight onto another name the user holds, without the first
+    // conflict ever resolving. A yes/no flag would still be set here and would
+    // silence a collision the user has not been shown.
+    await sync(rootId, book(1, 'Digital Minimalism', 11))
+
+    expect(await conflicts()).toEqual([{
+      documentId: documentId(1),
+      title: 'Digital Minimalism',
+      fallback: 'Digital Minimalism (Readwise)',
+      rivalIds: ['rival-2'],
+      rivalTitles: ['Digital Minimalism'],
+    }])
+  })
+
   it('offers a LATER conflict again after the first one resolves', async () => {
     const rootId = await createRoot()
     await createRivalPage('rival', 'Deep Work')
