@@ -1396,7 +1396,7 @@ export class TxImpl implements Tx {
   }
 
   /** Child half of the §5 dual-write: find-or-create the field row
-   *  (`[[Schema Name]]` + fieldId in the local column) and its ONE primary
+   *  (`::((fieldId))` + fieldId in the local column) and its ONE primary
    *  value child (scalar-first), updating stale content and soft-deleting
    *  duplicates deterministically (`ORDER BY order_key, id` picks the same
    *  survivor on every replica — load-bearing for the processor pair's
