@@ -1615,6 +1615,281 @@ describe('delete cascade (machinery traversal, §9)', () => {
   })
 })
 
+describe('revival re-materializes property children (#778)', () => {
+  /** Delete-then-restore of a block that owns a materialized property. The
+   *  subtree delete tombstones the field/value rows; the restore flips only
+   *  the owner row and leaves its bag untouched. */
+  const deleteAndRestore = async (repo: Repo): Promise<void> => {
+    await repo.mutate.delete({id: 'p'})
+    expect(await liveFieldRows('p')).toEqual([])
+    await repo.mutate.restore({id: 'p'})
+  }
+
+  const liveValueContents = async (parentId: string): Promise<string[]> => {
+    const out: string[] = []
+    for (const field of await liveFieldRows(parentId)) {
+      for (const value of await childrenRows(field.id)) {
+        if (value.deleted === 0) out.push(value.content)
+      }
+    }
+    return out
+  }
+
+  const seedMaterializedProperty = async (): Promise<Repo> => {
+    const repo = setup()
+    await createBlock(repo, 'p')
+    await repo.tx(tx => tx.setProperty('p', statusSchema, 'done'),
+      {scope: ChangeScope.BlockDefault})
+    expect(await liveFieldRows('p')).toHaveLength(1)
+    return repo
+  }
+
+  it('restore rebuilds the field/value rows an unchanged bag would never trigger', async () => {
+    await seedWorkspace('children')
+    const repo = await seedMaterializedProperty()
+
+    await deleteAndRestore(repo)
+
+    // The cell survived the round-trip on its own — that is exactly what made
+    // this silent: post-flip the children are the truth, and only they were
+    // gone.
+    expect(await cellValue('p')).toBe('done')
+    expect(await liveFieldRows('p')).toHaveLength(1)
+    expect(await liveValueContents('p')).toEqual(['done'])
+  })
+
+  it('covers restore paths other than the mutator — the seam is liveness, not core.restore', async () => {
+    await seedWorkspace('children')
+    const repo = await seedMaterializedProperty()
+    await repo.mutate.delete({id: 'p'})
+
+    // The shape `targets.ts` / `stateBlocks.ts` / `graphBackfillClaim.ts` use:
+    // a raw `tx.restore` with a content patch and no properties patch.
+    await repo.tx(tx => tx.restore('p', {content: 'fresh'}),
+      {scope: ChangeScope.BlockDefault})
+
+    expect(await liveValueContents('p')).toEqual(['done'])
+  })
+
+  it('stays dormant in an un-flipped workspace', async () => {
+    await seedWorkspace('cell')
+    const repo = setup()
+    await createBlock(repo, 'p')
+    await repo.tx(tx => tx.setProperty('p', statusSchema, 'done'),
+      {scope: ChangeScope.BlockDefault})
+    expect(await childrenRows('p')).toEqual([])
+
+    await repo.mutate.delete({id: 'p'})
+    await repo.mutate.restore({id: 'p'})
+
+    expect(await cellValue('p')).toBe('done')
+    expect(await childrenRows('p')).toEqual([])
+  })
+
+  it('the re-materialized children ride the restore undo entry (cmd-Z, then redo)', async () => {
+    // Undo/redo replay drives rows to recorded snapshots with the same-tx pass
+    // SKIPPED, so nothing re-materializes on replay. What makes cmd-Z correct
+    // is that these writes happen INSIDE the restoring tx and are therefore
+    // part of its snapshots.
+    await seedWorkspace('children')
+    const repo = await seedMaterializedProperty()
+    await deleteAndRestore(repo)
+    const [rebuilt] = await liveFieldRows('p')
+
+    expect(await repo.undo(ChangeScope.BlockDefault)).toBe(true)
+    const afterUndo = await sharedDb.db.get<{deleted: number}>(
+      'SELECT deleted FROM blocks WHERE id = ?', [rebuilt!.id])
+    expect(afterUndo.deleted).toBe(1)
+
+    expect(await repo.redo(ChangeScope.BlockDefault)).toBe(true)
+    expect(await liveFieldRows('p')).toHaveLength(1)
+    expect(await liveValueContents('p')).toEqual(['done'])
+  })
+
+  it('undoing the DELETE restores the original rows, and adds no duplicate field row', async () => {
+    // The other way a tombstoned owner comes back. NOT a pin on the revival
+    // rule — it passes with that deleted, because replay skips the same-tx pass
+    // outright. It pins the CLAIM the rule rests on: that cmd-Z after a delete
+    // rebuilds the subtree from the delete tx's own snapshots and needs no
+    // revival handling, so no second field row for the same definition appears.
+    await seedWorkspace('children')
+    const repo = await seedMaterializedProperty()
+    const [original] = await liveFieldRows('p')
+
+    await repo.mutate.delete({id: 'p'})
+    expect(await repo.undo(ChangeScope.BlockDefault)).toBe(true)
+
+    const restored = await liveFieldRows('p')
+    expect(restored).toHaveLength(1)
+    expect(restored[0]!.id).toBe(original!.id)
+    expect(await liveValueContents('p')).toEqual(['done'])
+  })
+
+  it('a restore patch that DROPS a key reaps children the delete left live', async () => {
+    // `tx.delete` (not the subtree mutator) tombstones the owner alone, so its
+    // field row is still live when the restore lands. A restore whose patch
+    // drops the key must reap it — which is why the reconciled name set spans
+    // the BEFORE bag too, not just the restored one.
+    await seedWorkspace('children')
+    const repo = await seedMaterializedProperty()
+    await repo.tx(tx => tx.delete('p'), {scope: ChangeScope.BlockDefault})
+    expect(await liveFieldRows('p')).toHaveLength(1)
+
+    await repo.tx(tx => tx.restore('p', {properties: {}}),
+      {scope: ChangeScope.BlockDefault})
+
+    expect(await cellValue('p')).toBeUndefined()
+    expect(await liveFieldRows('p')).toEqual([])
+  })
+
+  it('does not resurrect a property the bag no longer carries', async () => {
+    // Boundary guard, not a pin: with the cell key gone from both bags the
+    // reconciled name set is empty, so no mutation of the revival rule can fail
+    // this. It fences the direction #787 would take — reviving the TOMBSTONED
+    // field row instead of minting a fresh one must not walk past the cell and
+    // resurrect a property the user deleted through its children.
+    await seedWorkspace('children')
+    const repo = await seedMaterializedProperty()
+    await repo.tx(tx => tx.unsetProperty('p', statusSchema),
+      {scope: ChangeScope.BlockDefault})
+    expect(await liveFieldRows('p')).toEqual([])
+
+    await deleteAndRestore(repo)
+
+    expect(await cellValue('p')).toBeUndefined()
+    expect(await liveFieldRows('p')).toEqual([])
+  })
+
+  it('a pre-existing undecodable cell value does not block the restore', async () => {
+    // Why the exemption exists is at `UndecodableCellPolicy`; this pins the
+    // regression it prevents — a restore that aborts on a key nobody touched.
+    await seedWorkspace('children')
+    const repo = await seedMaterializedProperty()
+    // Raw UPDATE: maintains the trigger-backed indexes, fires no processor —
+    // the shape a legacy row or a sync arrival has locally. `tx.update` cannot
+    // produce this state; the guard under test rejects it.
+    await sharedDb.db.execute(
+      'UPDATE blocks SET properties_json = ? WHERE id = ?',
+      [JSON.stringify({[statusSchema.name]: null}), 'p'],
+    )
+
+    await deleteAndRestore(repo)
+
+    const row = await sharedDb.db.get<{deleted: number}>(
+      'SELECT deleted FROM blocks WHERE id = ?', ['p'])
+    expect(row.deleted).toBe(0)
+    // The bad key is left exactly as the revival found it — no children, cell
+    // junk intact. A real write to it still rejects.
+    expect(await liveFieldRows('p')).toEqual([])
+    await expect(
+      repo.tx(tx => tx.update('p', {properties: {[statusSchema.name]: 42}}),
+        {scope: ChangeScope.BlockDefault}),
+    ).rejects.toThrow(/does not decode/)
+  })
+  it('still rejects an undecodable value the RESTORING tx itself writes', async () => {
+    // The exemption above is scoped to "this tx wrote no property value". A tx
+    // that restores AND raw-writes junk in one go must not launder past the
+    // guard just because it happens to also revive the row.
+    await seedWorkspace('children')
+    const repo = await seedMaterializedProperty()
+    await repo.mutate.delete({id: 'p'})
+
+    await expect(
+      repo.tx(async tx => {
+        await tx.restore('p')
+        await tx.update('p', {properties: {[statusSchema.name]: null}})
+      }, {scope: ChangeScope.BlockDefault}),
+    ).rejects.toThrow(/does not decode/)
+
+    // Rolled back atomically — the restore went with it.
+    const row = await sharedDb.db.get<{deleted: number}>(
+      'SELECT deleted FROM blocks WHERE id = ?', ['p'])
+    expect(row.deleted).toBe(1)
+  })
+  it('a valid write to ANOTHER key does not make a junk key veto the restore', async () => {
+    // The `createOrRestoreTargetBlock` shape (src/data/targets.ts): restore the
+    // tombstone, then re-claim one key via `setProperty` in the SAME tx. The
+    // rejection is per KEY, not per tx — a value the tx did not write stays
+    // exempt even when the tx wrote a different one, or this whole restore
+    // path aborts on a key nobody touched.
+    await seedWorkspace('children')
+    const repo = setup()
+    const OTHER_FIELD_ID = 'field-other-children'
+    const otherSchema = defineProperty<string>('other', {
+      codec: codecs.string,
+      defaultValue: '',
+      changeScope: ChangeScope.BlockDefault,
+    })
+    repo.setRuntimeContributions(
+      projectedPropertyDefinitionsFacet,
+      'test-other-definition',
+      [{
+        metadata: {
+          fieldId: OTHER_FIELD_ID, workspaceId: WS, createdAt: 1,
+          name: otherSchema.name, changeScope: otherSchema.changeScope,
+          hidden: false, origin: 'user' as const,
+        },
+        schema: otherSchema,
+      }],
+      {workspaceId: WS},
+    )
+    await createBlock(repo, 'p')
+    await repo.tx(tx => tx.setProperty('p', statusSchema, 'done'),
+      {scope: ChangeScope.BlockDefault})
+    // Raw UPDATE: fires no processor, so `status` holds a value no primitive
+    // could have written — the legacy / sync-arrival shape.
+    await sharedDb.db.execute(
+      'UPDATE blocks SET properties_json = ? WHERE id = ?',
+      [JSON.stringify({[statusSchema.name]: null}), 'p'],
+    )
+    await repo.mutate.delete({id: 'p'})
+
+    await repo.tx(async tx => {
+      await tx.restore('p')
+      await tx.setProperty('p', otherSchema, 'fresh')
+    }, {scope: ChangeScope.BlockDefault})
+
+    const row = await sharedDb.db.get<{deleted: number}>(
+      'SELECT deleted FROM blocks WHERE id = ?', ['p'])
+    expect(row.deleted).toBe(0)
+    // The written key materialized; the untouched junk key was left alone.
+    const others = (await childrenRows('p')).filter(
+      r => r.deleted === 0 && r.reference_target_id === OTHER_FIELD_ID)
+    expect(others).toHaveLength(1)
+    expect(await liveFieldRows('p')).toEqual([])
+  })
+  it('survives a same-tx re-run of the revival branch (issue #402 pass two)', async () => {
+    // MATERIALIZE opts into `rerunOnDirtyRows`, and DERIVE — registered right
+    // after it — stamps any row whose content changed. A restore that patches
+    // content into a resolving `((ref))` therefore dirties the owner AFTER
+    // materialize ran, re-entering the revival branch a second time in the same
+    // tx. It converges only because `rerunBefore` reconstructs the same bag
+    // pair; nothing else pins that, so pin it here: no duplicate field row, no
+    // spurious rejection of the untouched junk key.
+    await seedWorkspace('children')
+    const repo = await seedMaterializedProperty()
+    await createBlock(repo, 'target', 'a target')
+    await sharedDb.db.execute(
+      'UPDATE blocks SET properties_json = ? WHERE id = ?',
+      [JSON.stringify({[statusSchema.name]: null, keep: 'x'}), 'p'],
+    )
+    await repo.mutate.delete({id: 'p'})
+
+    await repo.tx(tx => tx.restore('p', {content: '((target))'}),
+      {scope: ChangeScope.BlockDefault})
+
+    const row = await sharedDb.db.get<{deleted: number; reference_target_id: string | null}>(
+      'SELECT deleted, reference_target_id FROM blocks WHERE id = ?', ['p'])
+    expect(row.deleted).toBe(0)
+    // DERIVE really did stamp the owner after materialize — without this the
+    // test would not be exercising the re-run at all.
+    expect(row.reference_target_id).toBe('target')
+    // One pass or two, the junk key stays unmaterialized and unrejected, and no
+    // duplicate field row appears.
+    expect(await liveFieldRows('p')).toEqual([])
+  })
+})
+
 describe('§9 recognition on the WRITE side (round-2 review fixes)', () => {
   const setupWithProperty = async (): Promise<{repo: Repo; fieldRowId: string; valueRowId: string}> => {
     await seedWorkspace('children')
