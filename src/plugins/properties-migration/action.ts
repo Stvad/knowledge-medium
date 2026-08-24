@@ -217,7 +217,18 @@ const repairThenRecheck = async (
   // Only when this pass is still the reason. Its counts explain THIS gap; on a
   // workspace that has meanwhile gone read-only they would explain nothing.
   if (!stillUnfit.rematerializable) return stillUnfit
-  return {...stillUnfit, reason: `${stillUnfit.reason} (${describeResidualGap(repaired)})`}
+  const withResidual = `${stillUnfit.reason} (${describeResidualGap(repaired)})`
+  // The FOURTH path that has to disown "Nothing was changed", and the one
+  // easiest to miss: the other three stop of their own accord, while this one
+  // decorates a genuine refusal and looks like it should take the caller's
+  // standard wrapper. It must not, once windows have committed.
+  if (repaired.applied === 0) return {...stillUnfit, reason: withResidual}
+  return {
+    ...stillUnfit,
+    standalone: true,
+    reason: `Caught up on ${repaired.resolved.toLocaleString()} row(s) this device had not `
+      + `applied, but the migration was not started — ${withResidual}.`,
+  }
 }
 
 /** Why the rows the repair could not apply are still there, in the pass's own

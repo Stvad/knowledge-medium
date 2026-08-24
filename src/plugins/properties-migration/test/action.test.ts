@@ -337,6 +337,23 @@ describe('migrate_properties_to_blocks action', () => {
     expect(showInfo).toHaveBeenCalledWith(expect.stringContaining('read-only'))
   })
 
+  it('owns its sentence when a partial repair still leaves rows stuck', async () => {
+    // A repair that applied SOME rows and left others deferred returns a real
+    // refusal, which is exactly why this path looks like it should take the
+    // caller's standard wrapper. It must not: "Nothing was changed" is false the
+    // moment a window commits, and this is the fourth path to have to say so.
+    const {repo, workspaceViewGap, rematerializeWorkspace} = makeRepo()
+    workspaceViewGap.mockResolvedValue(STRANDED)
+    rematerializeWorkspace.mockResolvedValue(pass({
+      scanned: 30, applied: 4, resolved: 4, deferred: 26, unappliedBefore: 30, unappliedAfter: 26,
+    }))
+
+    await invoke(repo)
+
+    expect(showInfo).toHaveBeenCalledWith(expect.stringContaining('Caught up on 4 row(s)'))
+    expect(showInfo).not.toHaveBeenCalledWith(expect.stringContaining('Nothing was changed'))
+  })
+
   it('says WHY the rows are still stuck when the repair could not move them', async () => {
     // The two residual causes are the pass's own, not the predicate's, and
     // neither is answered by running it again — so the count that names them is
