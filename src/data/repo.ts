@@ -2100,6 +2100,14 @@ export class Repo {
     return this.queryBlocks({...query, workspaceId})
   }
 
+  /** Tell a `subscribeBlocks` query that its subscriber now holds state the
+   *  subscription never delivered, so the next settle must reach it even when
+   *  the rows are unchanged. For `ProjectorLifecycle.upsert`, its only caller;
+   *  `LoaderHandle.forgetNotifiedValue` carries the reasoning. */
+  requireNextBlockDelivery(query: TypedBlockQuery): void {
+    this.query.typedBlocks(this.resolveTypedBlockQuery(query)).forgetNotifiedValue()
+  }
+
   /** Active-workspace shorthand for `subscribeBlocks`. Same caveat as
    *  `queryActiveWorkspace`: the workspace is captured at subscription
    *  time and does NOT re-resolve on later workspace switches. UI

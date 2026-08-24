@@ -119,6 +119,7 @@ const SAFE_VIA_PROTOTYPE: Record<string, string> = {
   onValuePresetsChange: 'delegates to constructor-bound facetBridge',
   queryActiveWorkspace: 'routes through the constructor-bound query proxy',
   queryBlocks: 'routes through the constructor-bound query proxy',
+  requireNextBlockDelivery: 'routes through the constructor-bound query proxy',
   subscribeActiveWorkspace: 'routes through the constructor-bound query proxy',
   subscribeBlocks: 'routes through the constructor-bound query proxy',
   setFacetRuntime: 'facetBridge write-back closures were constructor-bound to the real repo',
