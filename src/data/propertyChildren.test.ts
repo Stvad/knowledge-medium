@@ -1193,6 +1193,29 @@ describe('merge never reaps a source field row (#728)', () => {
     )).toEqual([])
   })
 
+  it('undo restores the row under the source, cell still unset', async () => {
+    await seedWorkspace('children')
+    const repo = setupWithCount()
+    await createBlock(repo, 'into')
+    await createBlock(repo, 'from')
+    const {fieldId, valueId, noteId} = await seedKeylessFieldRow(repo, 'from')
+    repo.undoManager.clear()
+
+    await repo.mutate.merge({intoId: 'into', fromId: 'from'})
+    expect(await liveRootOf(noteId)).toBe('into')
+
+    expect(await repo.undo()).toBe(true)
+    expect(await rowOf('from')).toMatchObject({deleted: 0})
+    expect(await rowOf(fieldId)).toMatchObject({deleted: 0, parent_id: 'from'})
+    expect(await rowOf(valueId)).toMatchObject({deleted: 0, parent_id: fieldId, content: 'about forty-two'})
+    expect(await rowOf(noteId)).toMatchObject({deleted: 0, parent_id: valueId})
+    expect(await liveRootOf(noteId)).toBe('from')
+    expect(Object.hasOwn(await bagOf('from'), countSchema.name)).toBe(false)
+
+    expect(await repo.redo()).toBe(true)
+    expect(await liveRootOf(noteId)).toBe('into')
+  })
+
   it.each([
     ['keyless source first', ['a', 'b']],
     ['keyless source second', ['b', 'a']],
@@ -1214,8 +1237,11 @@ describe('merge never reaps a source field row (#728)', () => {
       await foldBlocksInTx(tx, {into: into!, froms: froms.map(f => f!)})
     }, {scope: ChangeScope.BlockDefault})
 
-    // Fold order is `created_at` ascending — arbitrary to the user — so it must
-    // not decide whether the note survives. Only the keyless-source-FIRST arm
+    // `foldBlocksInTx` folds in the order its caller supplies, and the alias
+    // collision caller's claimant list is `created_at, id` ascending
+    // (SELECT_BLOCKS_BY_ALIAS_IN_WORKSPACE_SQL) — an order the user never
+    // chose, so it must not decide whether the note survives.
+    // Only the keyless-source-FIRST arm
     // exercises the adopt branch; folding it second routes through
     // `collapseDuplicateFieldRow`, which never reaped — that arm is the control
     // the first is compared against. Which value TEXT wins is still
