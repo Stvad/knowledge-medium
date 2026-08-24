@@ -48,20 +48,29 @@ export const errorMessage = (error: unknown): string =>
  * round a loop back to the same error.
  */
 export const unknownTokenProfileHelp = (
-  {profiles, tokenStorePath}: {
-    profiles: readonly {name: string; selected: boolean; savedAt?: number | null}[]
+  {profiles, tokenStorePath, inUse}: {
+    profiles: readonly {name: string; savedAt?: number | null}[]
     tokenStorePath: string
+    /** The profile actually selected — the CALLER's knowledge, never inferred
+     *  from which stored entry matched. A selected profile with no stored entry
+     *  is reachable (see the unsaved branch below), and deriving the name from
+     *  the store rendered it as "none", which is false. */
+    inUse: string
   },
 ): string => {
   if (profiles.length === 0) {
     return `No token profiles are saved in ${tokenStorePath} — pair one with \`kmagent connect\`.`
   }
-  const inUse = profiles.find(profile => profile.selected)?.name
-  const others = profiles.filter(profile => !profile.selected)
+  const others = profiles.filter(profile => profile.name !== inUse)
   if (others.length === 0) {
     return `\`${inUse}\` is the only saved profile in ${tokenStorePath}, so the profile is not `
       + 'the cause — focus the app tab, or re-pair with `kmagent connect`.'
   }
+  // A selected profile absent from the store means the token came from
+  // AGENT_RUNTIME_TOKEN: with no env token `resolveToken` returns null and the
+  // CLI refuses before it ever reaches the bridge. So the profile is not the
+  // lead here, and saying so beats listing alternatives to switch to.
+  const unsaved = !profiles.some(profile => profile.name === inUse)
   // ONE suggestion, the most recently paired. A year of test pairings leaves
   // ~20 profiles in a real store, and a `--profile X or --profile Y` chain over
   // all of them buries the answer it is trying to give. The full list still
@@ -69,7 +78,9 @@ export const unknownTokenProfileHelp = (
   const likeliest = [...others]
     .sort((a, b) => (b.savedAt ?? 0) - (a.savedAt ?? 0))[0]!
   return `Saved profiles in ${tokenStorePath}: ${profiles.map(p => p.name).join(', ')} `
-    + `(in use: \`${inUse ?? 'none'}\`). If the app tab is paired under another one, retry with `
+    + `(in use: \`${inUse}\`${unsaved
+      ? ', which has no saved token, so the one being sent came from AGENT_RUNTIME_TOKEN'
+      : ''}). If the app tab is paired under another one, retry with `
     + `\`--profile ${likeliest.name}\` (most recently paired) or another from that list.`
 }
 

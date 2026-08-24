@@ -1107,6 +1107,7 @@ main().catch(async (error: unknown) => {
     async () => unknownTokenProfileHelp({
       profiles: await listStoredProfiles(),
       tokenStorePath,
+      inUse: selectedProfileName,
     }),
   )}\n`)
   process.exitCode = 1

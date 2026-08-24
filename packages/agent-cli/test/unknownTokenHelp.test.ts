@@ -13,11 +13,9 @@ describe('unknownTokenProfileHelp', () => {
     // browser profile" as a possible cause and gives no way to check it. The
     // profile names live on THIS machine, so only the CLI can supply them.
     const help = unknownTokenProfileHelp({
-      profiles: [
-        {name: 'default', selected: true, savedAt: 1},
-        {name: 'work-browser', selected: false, savedAt: 2},
-      ],
+      profiles: [{name: 'default', savedAt: 1}, {name: 'work-browser', savedAt: 2}],
       tokenStorePath: store,
+      inUse: 'default',
     })
 
     expect(help).toContain('work-browser')
@@ -31,12 +29,13 @@ describe('unknownTokenProfileHelp', () => {
     // in front of you was paired under it.
     const help = unknownTokenProfileHelp({
       profiles: [
-        {name: 'default', selected: true, savedAt: 50},
-        {name: 'ancient', selected: false, savedAt: 1},
-        {name: 'newest', selected: false, savedAt: 99},
-        {name: 'middling', selected: false, savedAt: 40},
+        {name: 'default', savedAt: 50},
+        {name: 'ancient', savedAt: 1},
+        {name: 'newest', savedAt: 99},
+        {name: 'middling', savedAt: 40},
       ],
       tokenStorePath: store,
+      inUse: 'default',
     })
 
     expect(help).toContain('--profile newest')
@@ -48,11 +47,9 @@ describe('unknownTokenProfileHelp', () => {
 
   it('still suggests a retry when no profile carries a savedAt', async () => {
     const help = unknownTokenProfileHelp({
-      profiles: [
-        {name: 'default', selected: true, savedAt: null},
-        {name: 'other', selected: false, savedAt: null},
-      ],
+      profiles: [{name: 'default', savedAt: null}, {name: 'other', savedAt: null}],
       tokenStorePath: store,
+      inUse: 'default',
     })
 
     expect(help).toContain('--profile other')
@@ -62,8 +59,9 @@ describe('unknownTokenProfileHelp', () => {
     // Naming a retry that cannot help is worse than silence: it sends the
     // reader round a loop that ends where it started.
     const help = unknownTokenProfileHelp({
-      profiles: [{name: 'default', selected: true, savedAt: 1}],
+      profiles: [{name: 'default', savedAt: 1}],
       tokenStorePath: store,
+      inUse: 'default',
     })
 
     expect(help).not.toContain('--profile')
@@ -71,10 +69,27 @@ describe('unknownTokenProfileHelp', () => {
   })
 
   it('points at pairing when nothing is saved at all', async () => {
-    const help = unknownTokenProfileHelp({profiles: [], tokenStorePath: store})
+    const help = unknownTokenProfileHelp({profiles: [], tokenStorePath: store, inUse: 'default'})
 
     expect(help).toContain('connect')
     expect(help).toContain(store)
+  })
+
+  it('names the profile in use even when it has no saved token', async () => {
+    // Reachable with AGENT_RUNTIME_TOKEN set: the env token bypasses the store,
+    // so the bridge is reached under a profile that was never paired. Deriving
+    // "in use" from which stored entry matched rendered `none`, which is false
+    // and sends the reader looking for a profile to switch to when the stale
+    // env var is the cause.
+    const help = unknownTokenProfileHelp({
+      profiles: [{name: 'alpha', savedAt: 1}, {name: 'beta', savedAt: 5}],
+      tokenStorePath: store,
+      inUse: 'nosuch',
+    })
+
+    expect(help).toContain('`nosuch`')
+    expect(help).not.toContain('none')
+    expect(help).toContain('AGENT_RUNTIME_TOKEN')
   })
 
   it('exports the marker the server message actually contains', async () => {
