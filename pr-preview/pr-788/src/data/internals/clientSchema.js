@@ -65,7 +65,7 @@ import{STAGING_LOCAL_COLUMNS as e}from"../blockSchema.js";import{SEED_STAGING_NE
     completed_at  INTEGER NOT NULL,
     value         TEXT
   )
-`,oe=async e=>{(await e.getAll(`PRAGMA table_info(client_schema_state)`)).some(e=>e.name===`value`)||await e.execute(`ALTER TABLE client_schema_state ADD COLUMN value TEXT`)},d=`
+`,oe=async e=>{if(!(await e.getAll(`PRAGMA table_info(client_schema_state)`)).some(e=>e.name===`value`))try{await e.execute(`ALTER TABLE client_schema_state ADD COLUMN value TEXT`)}catch(e){if(!/duplicate column/i.test(e instanceof Error?e.message:String(e)))throw e}},d=`
   CREATE INDEX IF NOT EXISTS idx_block_aliases_ws_alias_lower
   ON block_aliases (workspace_id, alias_lower)
 `,f=`
