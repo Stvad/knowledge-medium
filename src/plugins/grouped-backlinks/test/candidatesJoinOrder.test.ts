@@ -8,8 +8,6 @@
  * choose, SQLite drives from every edge in the workspace and builds a throwaway
  * index on the chain — the `AUTOMATIC COVERING INDEX` this test forbids —
  * instead of probing the `(source_id, …)` primary key once per chain row.
- *
- * Measured on a real graph: 168ms → 1.2ms, same 204 rows.
  */
 import { afterAll, beforeAll, expect, it } from 'vitest'
 import { createTestDb, type TestDb } from '@/data/test/createTestDb'
