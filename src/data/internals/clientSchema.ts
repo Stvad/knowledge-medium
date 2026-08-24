@@ -1118,7 +1118,7 @@ export const BACKFILL_BLOCKS_FTS_SQL = `
  *
  *  ANALYZE here is UNBOUNDED, and that is load-bearing. `PRAGMA
  *  analysis_limit=N` — SQLite's documented pairing for `PRAGMA optimize`, used
- *  here until it regressed warm-boot first paint — caps the recorded
+ *  here until it regressed warm-boot first paint (#833) — caps the recorded
  *  rows-per-value at N+1 instead of extrapolating from the sample. Every hot
  *  index here leads with `workspace_id`, which on a real client has ONE value
  *  covering the whole table, so the sampled row claimed 401 (267 for a partial
