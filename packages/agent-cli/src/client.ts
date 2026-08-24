@@ -85,11 +85,20 @@ export const formatTokenContext = (
 }
 
 /** UTC instant, not a locale rendering: this goes in error output that gets
- *  pasted into issues, and it must mean the same thing wherever it is read. */
-const pairedAt = (savedAt: number | null | undefined): string =>
-  typeof savedAt === 'number'
-    ? `${new Date(savedAt).toISOString().slice(0, 16).replace('T', ' ')}Z`
-    : '(no pairing timestamp)'
+ *  pasted into issues, and it must mean the same thing wherever it is read.
+ *
+ *  A number out of Date's range (the store only checks `typeof === 'number'`)
+ *  makes `toISOString` THROW, which would take the whole listing down with it —
+ *  the same "one bad input suppresses every fact" failure the nullable
+ *  `profiles` exists to prevent, through a different door. Reported as its own
+ *  state rather than folded into "no timestamp", since a garbage value and an
+ *  absent one are different facts. */
+const pairedAt = (savedAt: number | null | undefined): string => {
+  if (typeof savedAt !== 'number') return '(no pairing timestamp)'
+  const instant = new Date(savedAt)
+  if (Number.isNaN(instant.getTime())) return '(unreadable timestamp)'
+  return `${instant.toISOString().slice(0, 16).replace('T', ' ')}Z`
+}
 
 /** A non-2xx from the bridge, carrying the STATUS so callers can classify on
  *  the protocol instead of on message text. */

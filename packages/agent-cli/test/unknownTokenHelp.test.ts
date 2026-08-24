@@ -45,6 +45,22 @@ describe('formatTokenContext', () => {
     expect(out).toContain('(no pairing timestamp)')
   })
 
+  it('survives a savedAt outside Date\'s range', () => {
+    // The store admits any `typeof === 'number'`, and `toISOString` throws on
+    // one out of range — which would abort the whole listing, reproducing the
+    // "one bad input suppresses every fact" failure the nullable `profiles`
+    // exists to prevent. A garbage value is its own state, not an absent one.
+    const out = formatTokenContext({
+      profiles: [{name: 'broken', savedAt: 1e100}, {name: 'fine', savedAt: Date.UTC(2026, 0, 2)}],
+      tokenStorePath: store, selected: 'fine', envTokenOverride: false,
+    })
+
+    expect(out).toContain('(unreadable timestamp)')
+    expect(out).not.toContain('(no pairing timestamp)')
+    expect(out).toContain('2026-01-02 00:00Z')
+    expect(out).toContain('selected profile: fine')
+  })
+
   it('notes the env override only when it is set', () => {
     const args = {profiles: dated, tokenStorePath: store, selected: 'alpha'}
 

@@ -365,8 +365,9 @@ const reloadAppAndWait = async ({timeoutMs = 30_000} = {}) => {
   // disconnected tab. A stale token 401s right here, and reporting that as "no
   // app tab" names the wrong cause and discards the typed error the top-level
   // handler needs. The loop below keeps its catch because the app really is
-  // mid-reload there. NOT unit-pinned — reaching this line needs a live bridge
-  // that 401s, which no harness stands up; verified by hand instead.
+  // mid-reload there. NOT unit-pinned: reaching this line needs a live bridge
+  // answering 401, which no harness stands up, so a green suite says nothing
+  // about it.
   const before = await whoamiWithToken(token)
   if (!before.connected) {
     throw new Error('No app tab is currently connected — nothing to reload. Open the app, then retry.')
