@@ -848,4 +848,95 @@ describe('references pipeline sequences', () => {
       vi.useRealTimers()
     }
   })
+
+  // Deterministic canary for issue #706, found by the stable-wrong-binding
+  // sweep's deep run (seed 1264869285). An alias edit on a TOMBSTONE
+  // releases no `block_aliases` claim, so `renameBacklinksProcessor`'s
+  // release arm skips it and the referrer's retained `[[α]]` edge still
+  // names the dead block. Restoring it then rebinds that edge to a LIVE
+  // block that no longer answers to α — and nothing watched on the SOURCE
+  // re-fires, so every re-parse recomputes the same wrong id (a fixpoint
+  // the add-only reconcile never heals). `collectRestorePlans` invalidates
+  // those edges at the deleted→live flip so `parseReferences` rebinds them.
+  //
+  // Pins both clauses: (a) an edge whose alias the restored block DROPPED
+  // rebinds to the alias's real owner, and (b) an edge whose alias it still
+  // claims is left alone (the `claimed.has(alias)` skip — without it a plain
+  // delete/restore would churn every backlink through a needless re-parse).
+  it('restoring a block re-aliased while dead rebinds its backlinks to the alias owner', async () => {
+    await guard.barrier()
+    vi.useFakeTimers({shouldAdvanceTime: true})
+    try {
+      const {repo, flush} = await buildEnv()
+      const refsOf = async (id: string) => JSON.parse(
+        (await sharedDb.db.getOptional<{references_json: string}>(
+          'SELECT references_json FROM blocks WHERE id = ?', [id]))!.references_json,
+      ) as Array<{id: string; alias: string; sourceField?: string}>
+
+      // A `[[Inbox]]` referrer mints the seat and binds to it.
+      const referrer = await repo.mutate.createChild({
+        parentId: ROOT, position: {kind: 'last'}, content: 'see [[Inbox]] and [[ay]]',
+      })
+      await flush()
+      const seat = computeAliasSeatId('Inbox', WS)
+      expect((await refsOf(referrer)).find(r => r.alias === 'Inbox')?.id,
+        'referrer binds the freshly minted seat').toBe(seat)
+
+      // Delete the seat, then — while it is dead, so no claim is released —
+      // rename it. A different live block takes 'Inbox' in the meantime.
+      await repo.mutate.delete({id: seat})
+      await flush()
+      const newOwner = await repo.mutate.createChild({
+        parentId: ROOT, position: {kind: 'last'}, content: 'the real Inbox',
+      })
+      await repo.mutate.setProperty({id: newOwner, schema: aliasesProp, value: ['Inbox']})
+      await repo.mutate.setProperty({id: seat, schema: aliasesProp, value: ['ax']})
+      await flush()
+
+      await repo.mutate.restore({id: seat})
+      await flush()
+
+      // (a) The restored block no longer answers to 'Inbox', so the edge
+      // follows the alias to its live owner — NOT back to the seat.
+      expect((await refsOf(referrer)).find(r => r.alias === 'Inbox')?.id,
+        'backlink rebound to the block that owns the alias now').toBe(newOwner)
+      // The author's text is untouched: 'Inbox' was released, so `[[Inbox]]`
+      // is still what they meant — only the binding moved.
+      expect((await sharedDb.db.getOptional<{content: string}>(
+        'SELECT content FROM blocks WHERE id = ?', [referrer]))!.content,
+      'the referrer keeps the wikilink it was written with').toBe('see [[Inbox]] and [[ay]]')
+
+      // (b) The untouched 'ay' seat: delete + restore with its alias intact.
+      // Asserted on the CAUSE — the referrer is not written at all — not on
+      // the resulting binding, which cannot pin this clause: dropping the
+      // edge schedules a re-parse that resolves 'ay' straight back to the
+      // same seat, so the end state is identical either way and only the
+      // needless write distinguishes them.
+      const ayeSeat = computeAliasSeatId('ay', WS)
+      expect((await refsOf(referrer)).find(r => r.alias === 'ay')?.id,
+        'the ay binding exists to begin with').toBe(ayeSeat)
+      const stampOfReferrer = async () => (await sharedDb.db.getOptional<{updated_at: number}>(
+        'SELECT updated_at FROM blocks WHERE id = ?', [referrer]))!.updated_at
+      await repo.mutate.delete({id: ayeSeat})
+      await flush()
+      const stampBeforeRestore = await stampOfReferrer()
+      // Any write the restore makes lands a strictly later stamp, so an
+      // unchanged one means no write — `skipMetadata` suppresses
+      // `user_updated_at`, not this column.
+      await vi.advanceTimersByTimeAsync(1000)
+      await repo.mutate.restore({id: ayeSeat})
+      await flush()
+      expect(await stampOfReferrer(),
+        'a restore that keeps its alias rewrites no backlink').toBe(stampBeforeRestore)
+      expect((await refsOf(referrer)).find(r => r.alias === 'ay')?.id,
+        'a restore that keeps its alias leaves the binding alone').toBe(ayeSeat)
+
+      await auditOrFail(sharedDb.db, repo)
+      const {inspected} = await sweepAliasBindings(sharedDb.db, WS)
+      expect(inspected, 'sweep inspected the rebound alias binding').toBeGreaterThan(0)
+    } finally {
+      vi.clearAllTimers()
+      vi.useRealTimers()
+    }
+  })
 })

@@ -155,6 +155,22 @@ const SELECT_BACKLINK_SOURCES_SQL = `
   ORDER BY source.order_key, source.id
 `
 
+/** Incoming CONTENT wikilink edges onto one target, with the alias each
+ *  names. `br.alias <> br.target_id` drops block-ref edges (`((id))`
+ *  projects `alias === id`): those name an id, not a name, so no alias
+ *  change can stale them. Rides `idx_block_references_target`. */
+const SELECT_INCOMING_ALIAS_EDGES_SQL = `
+  SELECT DISTINCT br.source_id AS sourceId, br.alias AS alias
+  FROM block_references br
+  JOIN blocks source ON source.id = br.source_id
+  WHERE br.workspace_id = ?
+    AND br.target_id = ?
+    AND br.source_field = ''
+    AND br.alias <> br.target_id
+    AND source.deleted = 0
+  ORDER BY source.order_key, source.id, br.alias
+`
+
 /** Is this source a MARKED NAME ROW for `alias` — a property field row
  *  whose whole content is `::[[alias]]`, addressing its definition by name
  *  rather than by id (§7/§9)? Selects the fallback tier: see
@@ -410,6 +426,48 @@ const collectTargetPlans = async (
   }
 }
 
+/** RESTORE side of the same invariant: an incoming `[[α]]` edge is only
+ *  valid while its target claims α.
+ *
+ *  A tombstone holds no `block_aliases` claim, so an alias edit on a
+ *  DELETED row releases nothing and `apply` skips it. The retained
+ *  tombstone-bound edge is deliberate — the add-only contract keeps it "so
+ *  restoring the old target rebinds cleanly" (issue #383). This is the case
+ *  where that premise fails: the aliases changed while the row was dead, so
+ *  the restore rebinds the edge to a LIVE block that no longer answers to α
+ *  — and since the edit that staled it was on the TARGET, nothing watched on
+ *  the source ever re-fires. The wrong state is a fixpoint: every re-parse of
+ *  the source recomputes the same wrong id, so `referencesChanged` sees no
+ *  delta. Found by `referencesRecompute.fuzz.test.ts` (issue #706), where α
+ *  had meanwhile been claimed by another live block — two live blocks
+ *  disagreeing about who owns the name, permanently.
+ *
+ *  Invalidate only, never rewrite content: α was released while dead and may
+ *  well belong to someone else now, so the source's own text is still what
+ *  its author meant. Dropping the edge is the write that schedules
+ *  `parseReferences` to rebind it, which resolves α exactly as the renderer
+ *  does — the same treatment `collectTargetPlans` gives a handoff.
+ *
+ *  The target's OWN claimed set is the test, not `aliasLookup`: "does this
+ *  block still answer to α" is what the restore staled. Whether it also WINS
+ *  α against a co-claimant is the sync-only duplicate-claim question
+ *  (#460/#378), deliberately not settled here. */
+const collectRestorePlans = async (
+  ctx: SameTxCtx,
+  after: BlockData,
+  plansBySourceId: Map<string, SourcePlan>,
+): Promise<void> => {
+  const claimed = new Set(getAliases(after))
+  const edges = await ctx.db.getAll<{sourceId: string; alias: string}>(
+    SELECT_INCOMING_ALIAS_EDGES_SQL,
+    [after.workspaceId, after.id],
+  )
+  for (const {sourceId, alias} of edges) {
+    if (claimed.has(alias)) continue
+    planFor(plansBySourceId, sourceId).staleEdges.push({alias, targetId: after.id})
+  }
+}
+
 /** Aliases that MORE THAN ONE target gives up in this one commit.
  *
  *  Normally impossible — the alias-uniqueness trigger admits a single
@@ -618,10 +676,14 @@ const aliasFieldChanged = (before: BlockData, after: BlockData): boolean => {
 
 export const renameBacklinksProcessor = defineSameTxProcessor({
   name: RENAME_BACKLINKS_PROCESSOR,
-  // Properties-only: alias diffs ride this field. The source content and
-  // `references` we write are watched by the post-commit
+  // `properties` carries the alias diffs. `deleted` is watched for the
+  // RESTORE direction only (`collectRestorePlans`): an alias edit on a
+  // tombstone is invisible to the release arm, so the deleted→live flip is
+  // where the resulting stale edge first becomes reachable. The DELETE
+  // direction is still deliberately absent — see the note below. The source
+  // content and `references` we write are watched by the post-commit
   // `parseReferences`, which re-derives the same list and writes nothing.
-  watches: {kind: 'field', table: 'blocks', fields: ['properties']},
+  watches: {kind: 'field', table: 'blocks', fields: ['properties', 'deleted']},
   // Deliberately NOT `rerunOnDirtyRows` — see the ORDERING note in the
   // header. This processor is placed after `alias.sync` so the alias diff
   // is already settled when it fires in pass one, which keeps the
@@ -642,6 +704,12 @@ export const renameBacklinksProcessor = defineSameTxProcessor({
     for (const row of event.changedRows) {
       if (row.before === null || row.after === null) continue
       if (row.after.deleted) continue
+      // Restore first: a tx that restores AND re-aliases in one go has both
+      // arms live, and the release arm's rewrites must see the invalidations
+      // already in the plan (`applyPlan` splices content once per source).
+      if (row.before.deleted) {
+        await collectRestorePlans(ctx, row.after, plansBySourceId)
+      }
       if (!aliasFieldChanged(row.before, row.after)) continue
       await collectTargetPlans(ctx, row.before, row.after, plansBySourceId, coReleased)
     }
