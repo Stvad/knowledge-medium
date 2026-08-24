@@ -1188,6 +1188,11 @@ describe('runAnalyzeIfStale — arming (stale-stats axis)', () => {
     const ins = db.prepare(
       `INSERT INTO blocks (${cols.join(',')}) VALUES (${cols.map(() => '?').join(',')})`,
     )
+    // One transaction, not 500 auto-commit ones. This db is file-backed, so
+    // each unwrapped insert costs its own fsync — measured 169ms of this hook's
+    // 175ms, paid per test. The stats are identical either way (verified:
+    // "500 500" settled, "500 401" after the pass), so this is cost only.
+    db.exec('BEGIN')
     for (let i = 0; i < 500; i++) {
       ins.run(...cols.map(c => {
         if (c === 'id') return `b-${i}`
@@ -1205,6 +1210,7 @@ describe('runAnalyzeIfStale — arming (stale-stats axis)', () => {
         return null
       }) as Array<string | number | null>)
     }
+    db.exec('COMMIT')
     // Settle, then corrupt to the degenerate legacy shape.
     db.exec('ANALYZE')
     db.exec(`UPDATE sqlite_stat1 SET stat = '0 0' WHERE tbl = 'blocks'`)
