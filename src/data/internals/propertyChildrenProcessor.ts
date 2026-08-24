@@ -400,18 +400,27 @@ const reviveTombstonedFieldRow = async (
   const matching = tombstones.filter(t => getPropertyFieldTargetId(t) === fieldId)
   if (matching.length !== 1) return false
   const fieldRow = matching[0]!
-  await tx.restore(fieldRow.id)
-  // Both halves of the same clause the field-row level uses: revive only when
-  // NOTHING LIVE holds the slot and exactly one tombstone offers to fill it.
-  // The live half is not theoretical — sync-apply skips the parent-liveness
-  // trigger, so a live value can sit under a tombstoned field row, and counting
-  // only tombstones reads that as unambiguous while a rival sibling is live.
-  //
-  // Bit-filtered per §9 on both sides: a marked child is the field row's OWN
-  // machinery, never one of its values. Not revived either — see the
-  // one-level-down note above.
+  // Bit-filtered per §9: a marked child is the field row's OWN machinery, never
+  // one of its values.
   const isValue = (child: BlockData): boolean => child.isFieldForm !== true
-  if ((await tx.childrenOf(fieldRow.id, undefined)).some(isValue)) return true
+
+  // Refuse BEFORE restoring anything, not after. Sync-apply skips the
+  // parent-liveness trigger, so a LIVE value can sit under a tombstoned field
+  // row — an arrival that crossed sync while this row was dead, which is the
+  // authoritative side post-flip. Restoring the field row hands that value to
+  // the caller's cell→child convergence, which overwrites its content with the
+  // local cell's: measured, the arrived text is destroyed. Declining to revive
+  // leaves it untouched under its tombstone and the caller mints, which is
+  // exactly what happened before revival existed.
+  //
+  // This is also the ambiguity rule's live half — nothing live may hold the
+  // slot — but placement is what makes it a refusal rather than a repair.
+  const liveValues = (await tx.childrenOf(fieldRow.id, undefined)).filter(isValue)
+  if (liveValues.length > 0) return false
+
+  await tx.restore(fieldRow.id)
+  // The tombstone half: exactly one offers to fill the slot. Several are
+  // indistinguishable — see the one ambiguity rule above.
   const values = (await tx.deletedChildrenOf(fieldRow.id)).filter(isValue)
   if (values.length === 1) await tx.restore(values[0]!.id)
   return true

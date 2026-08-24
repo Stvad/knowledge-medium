@@ -1943,12 +1943,23 @@ describe('revival re-materializes property children (#778)', () => {
 
     await repo.mutate.restore({id: 'p'})
 
-    const live = (await childrenRows(field!.id)).filter(v => v.deleted === 0)
-    expect(live).toHaveLength(1)
-    expect(live[0]!.id).toBe('arrived')
+    // Nothing under the old field row was touched: the arrived value keeps its
+    // OWN content. Asserting the content, not just the id — an id-only check
+    // stayed green while the cell overwrote the text underneath it.
+    const arrived = await sharedDb.db.get<{deleted: number; content: string}>(
+      'SELECT deleted, content FROM blocks WHERE id = ?', ['arrived'])
+    expect(arrived.content).toBe('rival')
+    expect(arrived.deleted).toBe(0)
     const own = await sharedDb.db.get<{deleted: number}>(
       'SELECT deleted FROM blocks WHERE id = ?', [ownValue!.id])
     expect(own.deleted).toBe(1)
+    // The field row stayed dead and the caller minted, exactly as it did before
+    // revival existed.
+    const fields = await liveFieldRows('p')
+    expect(fields).toHaveLength(1)
+    expect(fields[0]!.id).not.toBe(field!.id)
+    expect((await childrenRows(fields[0]!.id))
+      .filter(v => v.deleted === 0).map(v => v.content)).toEqual(['done'])
   })
 
   it('mints instead of reviving when the tombstone is ambiguous', async () => {
