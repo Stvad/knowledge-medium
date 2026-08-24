@@ -51,13 +51,14 @@ import {
   BACKFILL_BLOCKS_FTS_SQL,
   BLOCKS_FTS_BACKFILL_MARKER_KEY,
   CLIENT_SCHEMA_STATEMENTS,
+  CREATE_CLIENT_SCHEMA_STATE_TABLE_SQL,
+  UNBOUNDED_ANALYZE_MARKER_KEY,
   backfillBlockAliasesIfEmpty,
   backfillBlocksFtsIfEmpty,
   ensureBlockUserUpdatedAtColumn,
   ensureUndoGroupIdColumns,
   ANALYZE_ARMING_PROBES,
   ANALYZE_OPTIMIZE_SQL,
-  SET_ANALYZE_SAMPLE_LIMIT_SQL,
   runAnalyzeIfStale,
   runAnalyzeNow,
 } from './clientSchema'
@@ -1078,21 +1079,28 @@ const statRows = (db: DatabaseSync, tbl: string): Record<string, string> => {
   return Object.fromEntries(rows.map(r => [r.idx, r.stat]))
 }
 
-const analysisLimit = (db: DatabaseSync): number =>
-  (db.prepare('PRAGMA analysis_limit').get() as {analysis_limit: number}).analysis_limit
-
 // `PRAGMA optimize` replaced a hand-rolled two-axis staleness trigger (`blocks`
 // row-count drift + a fingerprint of the index set / which indexes have stats,
 // recorded as a marker row). SQLite already tracks both, and knows things we
-// could not see from outside — see the module comment on ANALYZE_SAMPLE_LIMIT
+// could not see from outside — see the module comment on ANALYZE_ARMING_PROBES
 // and `docs/pragma-optimize-spike/` for the measurements.
 //
-// What these pin is the two non-obvious parts: that the arming probes are
-// required, and that the sample limit never leaks onto the manual path.
+// What these pin are the two non-obvious parts: that the arming probes are
+// required, and that the recorded stats are exact rather than sampled.
 describe('runAnalyzeIfStale', () => {
   const seedBlocks = (n: number) => {
     for (let i = 0; i < n; i++) h.insertBlock({id: `blk-${i}`, order_key: `a${i}`})
   }
+
+  // Steady state — the one-shot repair already done, which is every boot but
+  // one. It has its own test below; without this the marker row it writes makes
+  // `client_schema_state` itself stale, and the boot after a repair proposes
+  // that (tiny) table on top of whatever the test set up.
+  beforeEach(() => {
+    h.db.exec(
+      `INSERT INTO client_schema_state (key, completed_at) VALUES ('${UNBOUNDED_ANALYZE_MARKER_KEY}', 1)`,
+    )
+  })
 
   it('populates stats for a newly created index', async () => {
     // The regression this whole mechanism exists for. A fresh index has no
@@ -1145,13 +1153,24 @@ describe('runAnalyzeIfStale', () => {
     expect(statRows(h.db, 'blocks')['idx_blocks_workspace_active']).toBeDefined()
   })
 
-  it('restores analysis_limit even when the optimize throws', async () => {
-    // Leaving the limit set would silently sample whatever ANALYZE runs next on
-    // this connection — including the manual, deliberately-unbounded one.
-    seedBlocks(8)
-    const {db} = buildRecordingDb({failOn: /^PRAGMA optimize$/})
-    await expect(runAnalyzeIfStale(db)).rejects.toThrow('forced failure')
-    expect(analysisLimit(h.db)).toBe(0)
+  it('repairs stats an older sampled build left behind, exactly once', async () => {
+    // `PRAGMA optimize` re-analyzes on a MISSING stat row or a ~10x row-count
+    // drift. A sampled row is present and its row count is exact, so neither
+    // rule fires and the bad per-value averages would outlive the fix on every
+    // device that already booted a sampled build. Simulated here by the shape
+    // the limit produced: a plausible-looking, far-too-small average.
+    seedBlocks(64)
+    await runAnalyzeIfStale(buildRecordingDb().db)
+    h.db.exec(`UPDATE sqlite_stat1 SET stat = '64 4' WHERE tbl = 'blocks'`)
+    h.db.exec(`DELETE FROM client_schema_state WHERE key = '${UNBOUNDED_ANALYZE_MARKER_KEY}'`)
+
+    await runAnalyzeIfStale(buildRecordingDb().db)
+    expect(statRows(h.db, 'blocks')['idx_blocks_workspace_active']).toBe('64 64')
+
+    // ...and then never again: a settled boot must not pay a full ANALYZE.
+    h.db.exec(`UPDATE sqlite_stat1 SET stat = '64 4' WHERE tbl = 'blocks'`)
+    await runAnalyzeIfStale(buildRecordingDb().db)
+    expect(statRows(h.db, 'blocks')['idx_blocks_workspace_active']).toBe('64 4')
   })
 
   it('still analyzes when a table an arming probe names is absent', async () => {
@@ -1184,6 +1203,10 @@ describe('runAnalyzeIfStale — arming (stale-stats axis)', () => {
     db = open()
     db.exec(CREATE_BLOCKS_TABLE_SQL)
     db.exec(CREATE_BLOCKS_WORKSPACE_ACTIVE_INDEX_SQL)
+    // The one-shot repair records its marker here; this adapter's getOptional
+    // always answers null, so it runs on every pass — which is what makes the
+    // exact-stats assertion below read the repaired rows.
+    db.exec(CREATE_CLIENT_SCHEMA_STATE_TABLE_SQL)
     const cols = BLOCK_STORAGE_COLUMNS.map(c => c.name)
     const ins = db.prepare(
       `INSERT INTO blocks (${cols.join(',')}) VALUES (${cols.map(() => '?').join(',')})`,
@@ -1196,9 +1219,9 @@ describe('runAnalyzeIfStale — arming (stale-stats axis)', () => {
     for (let i = 0; i < 500; i++) {
       ins.run(...cols.map(c => {
         if (c === 'id') return `b-${i}`
-        // One workspace for all 500, deliberately: it puts more rows behind a
-        // single leading-column value than ANALYZE_SAMPLE_LIMIT, which is what
-        // makes the sampling observable ('samples rather than fully scanning').
+        // One workspace for all 500, deliberately: it reproduces the real
+        // shape — one leading-column value covering the table — that a sampled
+        // ANALYZE records wrongly ('records the exact rows-per-workspace').
         if (c === 'workspace_id') return 'ws1'
         if (c === 'order_key') return `a${i}`
         if (c === 'created_at' || c === 'updated_at') return 1
@@ -1233,40 +1256,36 @@ describe('runAnalyzeIfStale — arming (stale-stats axis)', () => {
     expect(statRows(db, 'blocks')['idx_blocks_workspace_active']).not.toBe('0 0')
   })
 
-  it('samples rather than fully scanning', async () => {
-    // Pins that ANALYZE_SAMPLE_LIMIT actually reaches ANALYZE. Without the
-    // PRAGMA, `PRAGMA optimize` runs an UNBOUNDED pass — invisible at this scale
-    // except through the recorded distribution, which is why this asserts on the
-    // stat values rather than on timing.
+  it('records the exact rows-per-workspace, not a sampled approximation', async () => {
+    // REVERT-TEST for the unbounded ANALYZE. Reinstate `PRAGMA
+    // analysis_limit=400` around the optimize and this fails: a sampled pass
+    // caps the second field at the limit instead of extrapolating, so all 500
+    // rows sharing one workspace_id get recorded as ~401. On a real client that
+    // reads as "workspace_id selects 401 of 327k rows" and inverts the join
+    // order of every workspace-scoped query. Asserts the stat rather than a
+    // timing, because at this scale the two passes cost the same.
     await runAnalyzeIfStale(adapter())
     const [rowCount, avgPerWorkspace] = statRows(db, 'blocks')['idx_blocks_workspace_active']
       .split(' ').map(Number)
-    // The row count stays EXACT under a limit — only the per-column
-    // distinct-value average is approximated. Both halves matter: the exact
-    // count is what any row-estimate reader depends on, and the sampled average
-    // is the evidence the limit was in force (unbounded would record 500 here,
-    // one row per distinct workspace_id, since all 500 share one).
     expect(rowCount).toBe(500)
-    expect(avgPerWorkspace).toBeLessThan(500)
+    expect(avgPerWorkspace).toBe(500)
   })
 
   it('does not repair them without the probes — the arming is load-bearing', async () => {
     // Same DB, same PRAGMAs, only the arming omitted. `PRAGMA optimize` skips a
     // table this connection never planned a query against, so it walks away
     // leaving the stats that invert join order in place.
-    db.exec(SET_ANALYZE_SAMPLE_LIMIT_SQL)
     db.exec(ANALYZE_OPTIMIZE_SQL)
     expect(statRows(db, 'blocks')['idx_blocks_workspace_active']).toBe('0 0')
   })
 })
 
 describe('ANALYZE serialization', () => {
-  // `analysis_limit` is CONNECTION state and every statement is separately
-  // awaited, so overlapping callers interleave on it. Four schedulers point at
-  // these two functions. Both interleavings are harmful and they are mirror
-  // images: the manual clear landing inside an automatic pass makes that pass
-  // UNBOUNDED, and an automatic set landing inside the manual pass makes the
-  // escape hatch sampled.
+  // Four schedulers point at these two functions and each statement is
+  // separately awaited, so overlapping callers interleave. Two concurrent
+  // passes are two multi-second parks of the single SQLite worker to reach one
+  // settled sqlite_stat1, and the one-shot repair — whose marker is written
+  // only after its ANALYZE returns — would run twice.
   const taggedDb = (tag: string, log: string[]) => ({
     execute: async (sql: string) => {
       log.push(`${tag}:${sql.trim()}`)
@@ -1323,17 +1342,6 @@ describe('runAnalyzeNow', () => {
     expect(ranAnalyze()).toBe(true)
   })
 
-  it('is unbounded even after the automatic path ran', async () => {
-    // The escape hatch exists for stats that are present and schema-current but
-    // wrong. Sampled stats would defeat the point, so the limit the automatic
-    // path uses must not survive into it.
-    for (let i = 0; i < 8; i++) h.insertBlock({id: `blk-${i}`, order_key: `a${i}`})
-    await runAnalyzeIfStale(buildRecordingDb().db)
-    h.db.exec(SET_ANALYZE_SAMPLE_LIMIT_SQL)
-
-    await runAnalyzeNow(buildRecordingDb().db)
-    expect(analysisLimit(h.db)).toBe(0)
-  })
 })
 
 // The block_types side-index backs byType / typedBlocks — among the most

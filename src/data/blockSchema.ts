@@ -221,11 +221,10 @@ export const CREATE_BLOCKS_WORKSPACE_ACTIVE_INDEX_SQL = `
 /** Serves the properties cell → children backfill's candidate scan, which
  *  walks every property-carrying block of a workspace in id order.
  *
- *  `idx_blocks_workspace_active` cannot: the app ANALYZEs with
- *  `analysis_limit=400`, which records ~401 rows per `workspace_id`, so the
- *  planner picks it, reads the whole workspace and sorts into a temp B-tree —
- *  once per batch. Measured on a 1M-row workspace: 92s of scanning per sweep
- *  against 0.06s with this index.
+ *  `idx_blocks_workspace_active` cannot: it carries no `id`, so serving the
+ *  cursor from it means reading the whole workspace and sorting into a temp
+ *  B-tree — once per batch. Measured on a 1M-row workspace: 92s of scanning per
+ *  sweep against 0.06s with this index.
  *
  *  A query only gets it by carrying the literal `properties_json <> '{}'`
  *  term: SQLite cannot prove `json_type(...) = 'object' AND EXISTS(json_each

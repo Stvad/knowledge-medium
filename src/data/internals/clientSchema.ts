@@ -1113,36 +1113,24 @@ export const BACKFILL_BLOCKS_FTS_SQL = `
  *    of every table in the file (655ms warm, 3.1s cold),
  *  - it needs no marker row, no row-count probe, and no fingerprint.
  *
- *  Two things about it are non-obvious enough to be load-bearing; both are
- *  pinned by tests. See {@link ANALYZE_ARMING_PROBES} and
- *  {@link ANALYZE_SAMPLE_LIMIT}. */
-
-/** Bound on how many rows ANALYZE samples per index.
+ *  One part of it is non-obvious enough to be load-bearing and is pinned by
+ *  tests: see {@link ANALYZE_ARMING_PROBES}.
  *
- *  Load-bearing: WITHOUT it, `PRAGMA optimize` runs an UNBOUNDED ANALYZE over
- *  whatever it found stale. 400 is SQLite's own documented recommendation for
- *  this pairing, and measured on a real 347k-block client it holds a
- *  whole-database pass to ~290ms against ~655ms unbounded.
+ *  ANALYZE here is UNBOUNDED, and that is load-bearing. `PRAGMA
+ *  analysis_limit=N` — SQLite's documented pairing for `PRAGMA optimize`, used
+ *  here until it regressed warm-boot first paint — caps the recorded
+ *  rows-per-value at N+1 instead of extrapolating from the sample. Every hot
+ *  index here leads with `workspace_id`, which on a real client has ONE value
+ *  covering the whole table, so the sampled row claimed 401 (267 for a partial
+ *  index) where the truth was 327,354 — and the planner drove workspace-scoped
+ *  joins from a full scan of `blocks` rather than from the selective side. Same
+ *  inversion as a missing stat row, one order of magnitude less obvious. No
+ *  limit VALUE avoids it: the estimate IS the limit, so an honest one would have
+ *  to exceed the workspace's row count.
  *
- *  Note that the scan bound is NOT where the win comes from — analyzing only the
- *  stale table is (see the module comment above). What the limit buys is a
- *  ceiling on the worst case, e.g. a fresh device where every table is stale at
- *  once.
- *
- *  It approximates only the per-column distinct-value averages; the leading row
- *  count stays EXACT either way. Verified on the live client: an unbounded pass
- *  records `225605 75202 7` for `idx_block_references_ws_alias` where a limited
- *  one records `225605 134 3`. Across the 8 hot query shapes there is zero plan
- *  divergence between the two. */
-export const ANALYZE_SAMPLE_LIMIT = 400
-
-/** `analysis_limit` is a CONNECTION setting, not a database one, so it has to be
- *  set on the same connection that runs the optimize, immediately before. */
-export const SET_ANALYZE_SAMPLE_LIMIT_SQL = `PRAGMA analysis_limit=${ANALYZE_SAMPLE_LIMIT}`
-
-/** Restore the default so a later unbounded ANALYZE — {@link runAnalyzeNow},
- *  the manual escape hatch — isn't silently sampled on this connection. */
-export const CLEAR_ANALYZE_SAMPLE_LIMIT_SQL = `PRAGMA analysis_limit=0`
+ *  The limit was never where the win came from — analyzing only the stale table
+ *  is (above): unbounded costs 147ms against 52ms for one table on a 347k-block
+ *  client, at deep idle. */
 
 /** Dry run of what {@link ANALYZE_OPTIMIZE_SQL} is about to do, for logging.
  *
@@ -1155,6 +1143,28 @@ export const CLEAR_ANALYZE_SAMPLE_LIMIT_SQL = `PRAGMA analysis_limit=0`
 export const ANALYZE_DRY_RUN_SQL = `PRAGMA optimize(0x03)`
 
 export const ANALYZE_OPTIMIZE_SQL = `PRAGMA optimize`
+
+/** One-shot: replace the sampled stats earlier builds recorded with exact ones.
+ *
+ *  `PRAGMA optimize` only re-analyzes on a MISSING stat row or a ~10x row-count
+ *  drift. A sampled row is present and its row count is exact, so neither rule
+ *  ever fires and the bad per-value averages (see the module comment) would
+ *  survive on every existing device forever. Nothing distinguishes a sampled row
+ *  from an honest one by inspection — 401 is also what a genuinely selective
+ *  column looks like — so this is version-marked rather than detected.
+ *
+ *  `sqlite_stat1` is per-device local state, so this is a derivation pass: no
+ *  claim, no upload, safe to run everywhere and safe to re-run. */
+export const UNBOUNDED_ANALYZE_MARKER_KEY = 'analyze_unbounded_stats_v1'
+
+export const SELECT_UNBOUNDED_ANALYZE_DONE_SQL = `
+  SELECT 1 FROM client_schema_state WHERE key = '${UNBOUNDED_ANALYZE_MARKER_KEY}'
+`
+
+export const RECORD_UNBOUNDED_ANALYZE_DONE_SQL = `
+  INSERT OR REPLACE INTO client_schema_state (key, completed_at)
+  VALUES ('${UNBOUNDED_ANALYZE_MARKER_KEY}', strftime('%s', 'now') * 1000)
+`
 
 /** Planner-visible probes that ARM the staleness check. Load-bearing, and the
  *  single most surprising part of this design.
@@ -1639,34 +1649,16 @@ const readOptimizeRows = (result: unknown): string[] | null => {
 /** Serializes the two ANALYZE entry points against each other and against
  *  themselves.
  *
- *  `analysis_limit` is CONNECTION state, not per-statement, and each statement
- *  below is separately awaited — so without this, two overlapping callers
- *  interleave on it. There are four schedulers pointed at these functions
- *  (repoProvider's boot and first-sync checks, the Roam importer, the manual
- *  command), and the boot/first-sync pair has overlapped before. The two ways it
- *  goes wrong are mirror images: the manual path's `analysis_limit=0` landing
- *  between an automatic pass's SET and its optimize turns that pass UNBOUNDED —
- *  the multi-second park this whole mechanism exists to avoid — and an automatic
- *  SET landing between the manual clear and its ANALYZE silently samples the
- *  escape hatch whose entire point is being exact.
+ *  Four schedulers point at them (repoProvider's boot and first-sync checks, the
+ *  Roam importer, the manual command) and the boot/first-sync pair has
+ *  overlapped before. Two concurrent passes are two multi-second parks of the
+ *  single SQLite worker to reach one settled `sqlite_stat1`, and the one-shot
+ *  repair in {@link runAnalyzeIfStale} would run its full ANALYZE twice — its
+ *  marker is only written after the pass it gates finishes.
  *
  *  Scope, stated because it is not total: this serializes callers in ONE tab.
  *  PowerSync's shared worker owns the connection across tabs, so two tabs can
- *  still interleave, in BOTH directions — an earlier version of this comment
- *  claimed the automatic direction was self-limiting ("a pass that loses the
- *  limit is a pass with nothing to do"), which is wrong: the clobber can land
- *  after that pass's dry run has already found work, so it analyzes real work
- *  unbounded.
- *
- *  Not closed, deliberately. Closing it means holding a write lock across the
- *  whole sequence, and {@link ClientSchemaBootstrapDb} is execute/getOptional
- *  only so that bootstrap shims satisfy it — threading a lock through would mean
- *  every statement here moving onto a transaction-scoped handle, where a stray
- *  `db.execute` deadlocks against the lock its own caller holds. That risk is
- *  worse than the bug: the cross-tab window is now ONE statement boundary (see
- *  the ordering in {@link runAnalyzeIfStale}), and the cost of losing the race
- *  is an unbounded single-table ANALYZE (measured 147ms vs 52ms on a 347k
- *  client) or a manual pass that comes back sampled, which re-running fixes. */
+ *  still overlap; the cost there is duplicated work, not a wrong result. */
 let analyzeChain: Promise<unknown> = Promise.resolve()
 const serializeAnalyze = <T>(run: () => Promise<T>): Promise<T> => {
   // `.then(run, run)`, both arms deliberately: a throwing pass must not poison
@@ -1688,45 +1680,38 @@ const serializeAnalyze = <T>(run: () => Promise<T>): Promise<T> => {
 export const runAnalyzeIfStale = async (
   db: ClientSchemaBootstrapDb,
 ): Promise<AnalyzeResult> => serializeAnalyze(async () => {
-  // Arm and dry-run BEFORE setting the limit, so the limit is set immediately
-  // before the only statement that consumes it. In-tab that is redundant
-  // ({@link serializeAnalyze} already excludes other callers); across tabs it is
-  // the whole mitigation, shrinking the window in which another tab's
-  // `analysis_limit=0` can land from five statement boundaries to one.
-  //
-  // Safe because the dry run does NOT depend on the limit — it reports WHICH
-  // tables are stale, not how many rows to sample. Verified rather than assumed:
-  // the proposal set is identical with and without the limit set.
   await armAnalyzeProbes(db)
   const proposed = readOptimizeRows(await db.execute(ANALYZE_DRY_RUN_SQL))
-  await db.execute(SET_ANALYZE_SAMPLE_LIMIT_SQL)
-  try {
-    await db.execute(ANALYZE_OPTIMIZE_SQL)
-    return {proposed}
-  } finally {
-    // Restore the connection default even if optimize threw — leaving the limit
-    // set would silently sample the manual full ANALYZE that a user runs next.
-    await db.execute(CLEAR_ANALYZE_SAMPLE_LIMIT_SQL)
-  }
+  await db.execute(ANALYZE_OPTIMIZE_SQL)
+  // Last, so `proposed` still reports what the optimize itself decided rather
+  // than the empty set a preceding full ANALYZE would leave it. Ordinary boots
+  // pay one marker read; the sampled rows it replaces are exactly the ones the
+  // optimize above walks away from (see UNBOUNDED_ANALYZE_MARKER_KEY).
+  await repairSampledStats(db)
+  return {proposed}
 })
 
-/** Unconditional, UNBOUNDED `ANALYZE` for the manual command-palette command.
+/** Marker-gated full ANALYZE; see {@link UNBOUNDED_ANALYZE_MARKER_KEY}. */
+const repairSampledStats = async (db: ClientSchemaBootstrapDb): Promise<void> => {
+  const done = await db.getOptional<{1: number}>(SELECT_UNBOUNDED_ANALYZE_DONE_SQL)
+  if (done !== null) return
+  await db.execute('ANALYZE')
+  await db.execute(RECORD_UNBOUNDED_ANALYZE_DONE_SQL)
+}
+
+/** Unconditional `ANALYZE` for the manual command-palette command.
  *
  *  The escape hatch for the case the heuristic can't model: stats that are
- *  present and schema-current but wrong for the current query mix. Deliberately
- *  not sampled — `analysis_limit` is cleared first, so the user who reached for
- *  the manual button gets exact stats rather than the automatic path's
- *  approximation. Reports the table size so the caller can surface it.
+ *  present and schema-current but wrong for the current query mix — where the
+ *  automatic path, by design, walks away. Reports the table size so the caller
+ *  can surface it.
  *
  *  A multi-second scan holding the single SQLite worker, so it stays manual and
- *  off the render path. Shares {@link serializeAnalyze} with the automatic path:
- *  the clear and the ANALYZE are two statements, and an automatic pass setting
- *  the sample limit between them would sample this one. */
+ *  off the render path. */
 export const runAnalyzeNow = async (
   db: ClientSchemaBootstrapDb,
 ): Promise<{count: number}> => serializeAnalyze(async () => {
   const count = await getBlocksCount(db)
-  await db.execute(CLEAR_ANALYZE_SAMPLE_LIMIT_SQL)
   await db.execute('ANALYZE')
   return {count}
 })
