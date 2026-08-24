@@ -243,12 +243,13 @@ describe('VideoNotesLayout', () => {
     expect(probe.getAttribute('data-scope')).toBe(PANE_SCOPE) // scope still flows
   })
 
-  // Measured solo (n=7, 5ms poll) the two waits below settle in 11-171ms and
-  // 12-178ms; inside the full suite, in a run stretched 3.5x by contention,
-  // 172ms and 239ms. vi.waitFor's 1000ms default leaves under 6x over that solo
-  // tail — inside the p99.9 stretch this gate sees — which is how the second
-  // one timed out in CI (github issue #739). Both stay strictly under the it()
-  // budget so a stall names the assertion that never settled.
+  // Measured solo (n=7): both waits below settle in ~11-178ms, but that tail is
+  // ~15x the median, leaving under 6x over vi.waitFor's 1000ms default — inside
+  // the stretch this gate sees under one-worker-per-core load. The it() budget
+  // must clear the SUM of the budgets on this path (findByRole's 3s + 10s +
+  // 10s), not merely each one: a slow first wait would otherwise leave the
+  // second unable to reach its own budget, and the stall reports an opaque test
+  // timeout instead of the assertion that never settled.
   const PANEL_WRITE_WAIT = 10_000
 
   it('zero children: renders the empty-state affordance; render alone creates nothing', async () => {
@@ -279,7 +280,7 @@ describe('VideoNotesLayout', () => {
       expect(panel.peekProperty(focusedBlockLocationProp)?.blockId).toBe(childIds[0])
       expect(panel.peekProperty(editorFocusRequestProp)).toBeGreaterThanOrEqual(1)
     }, {timeout: PANEL_WRITE_WAIT})
-  }, 20_000)
+  }, 30_000)
 
   it('fills the pane absolutely in a full panel, but sizes itself in a stacked panel', async () => {
     await setup({videoChildren: ['note-1']})
