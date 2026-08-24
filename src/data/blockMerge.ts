@@ -223,8 +223,11 @@ export const foldBlocksInTx = async (
     await scanIntoChildren()
 
     // Pre-backfill catch-up (§5, #389 item 9). `into` holds a full cell and
-    // zero field rows — the shape of a row the backfill has not reached yet, of
-    // a row that arrives by sync, and of every row in an un-flipped workspace.
+    // zero field rows — the cell-only shape: the backfill has not reached this
+    // row, or it arrived by sync, or its workspace has not flipped. True of THIS
+    // row, not of un-flipped rows generally — `from` below can carry a field row
+    // un-flipped, which is why the catch-up runs there at all.
+    //
     // Without this, a key BOTH blocks hold takes the adopt branch below, and
     // since target-wins makes the merged bag a no-op for that key, MATERIALIZE
     // has no change to reconcile — so PROJECT rebuilds the cell from the only
@@ -239,15 +242,16 @@ export const foldBlocksInTx = async (
     // Must run BEFORE the adopt loop, not after: once `from`'s row is adopted,
     // `into` HAS a field row for that fieldId and the catch-up no longer fires.
     //
-    // Deliberately NOT flip-gated, unlike every other writer of property
-    // children (km-g5ev). `from` can carry a field row in an un-flipped
-    // workspace because recognition is content-derived — a hand-written
-    // `::((fieldId))` classifies like a generated one. Gate the catch-up there
-    // and the adopt branch runs instead, leaving `into` with the SOURCE's value
-    // as its only value row; the projection publishes that over the target's at
-    // the first touch past the flip. Gating loses the data it looks like it
-    // protects — pinned by "keeps the target-wins value reachable through a
-    // later flip".
+    // Deliberately NOT flip-gated (km-g5ev), unlike the three other writers of
+    // property children: `writePropertyValueChild`'s dual-write and the
+    // MATERIALIZE processor both check `isPropertyChildBackedWorkspace`, and the
+    // backfill refuses an un-flipped workspace outright. Recognition is
+    // content-derived, so a hand-written `::((fieldId))` classifies like a
+    // generated one — gate the catch-up and the adopt branch runs instead,
+    // leaving `into` with the SOURCE's value as its only value row, which the
+    // projection publishes over the target's at the first touch past the flip.
+    // Gating loses the data it looks like it protects — pinned by "keeps the
+    // target-wins value reachable through a later flip".
     //
     // The `has(fieldId)` clause is the condition for needing catch-up at all —
     // a key `into` already has a row for takes the collapse branch and wants
