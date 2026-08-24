@@ -59,17 +59,15 @@ export type PropertyDefinitionFactsByFieldId = ReadonlyMap<string, PropertyDefin
 
 /** The diff inputs a registry snapshot contributes, by durable fieldId.
  *
- *  SEED-provenanced definitions are excluded. Their effective name flips with
- *  whether the seed is currently registered — `effectivePropertyDefinitionName`
- *  answers the DECLARED name while it is and the STORED one otherwise — so a
- *  build that catches a dynamic extension mid-load would diff a phantom rename
- *  and re-key every consuming cell onto a name the app stops resolving a moment
- *  later. Nothing is lost: seeds are code-owned and non-renamable, so a user
- *  rename can never be the change detected here, and a seed's DECLARED name or
- *  codec changing across a client upgrade is a deliberate migration rather than
- *  something to fall out of this diff. `seedKey` comes from the row's own
- *  deterministic-id provenance check, so it is stable across builds whether or
- *  not the seed is registered on this one. */
+ *  SEED-provenanced definitions are excluded. A user cannot rename or re-type
+ *  one, so nothing a user did can be the change detected here — and a seed's
+ *  DECLARED name or codec changing across a client upgrade is a deliberate
+ *  migration (#797), not something to fall out of a diff. Their effective name
+ *  is also unstable across builds: `effectivePropertyDefinitionName` answers the
+ *  DECLARED name while the seed is registered and the STORED one otherwise, so a
+ *  build catching a dynamic extension mid-load would diff a rename that never
+ *  happened. `seedKey` comes from the row's own deterministic-id provenance
+ *  check, so it is stable whether or not the seed is registered on this build. */
 export const propertyDefinitionFacts = (
   snapshot: PropertyDefinitionRegistrySnapshot,
 ): Map<string, PropertyDefinitionFacts> => {

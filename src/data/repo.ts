@@ -3992,25 +3992,14 @@ export class Repo {
                         projected = encoded
                         hasProjection = true
                       }
-                      // Canonicalize the child content under the NEW codec so
+                      // Canonicalize the child content under the new codec so
                       // the stored text matches what setProperty would write.
-                      //
-                      // ONLY for a codec change. A rename leaves the codec
-                      // alone, so there is nothing to re-encode — and doing it
-                      // anyway REWRITES user text: `encodedValueToContent`
-                      // renders a ref as a bare `((id))`, so a value child the
-                      // user typed as `[My Label](((id)))` comes back stripped
-                      // of its label, as `1.50` comes back `1.5`. Those writes
-                      // are `References`-scoped and `skipMetadata`, so they sync
-                      // and cmd-Z cannot reach them. Renames only started
-                      // arriving here with the durable baseline (#780); before
-                      // that this branch only ever saw a real codec change. The
-                      // same-tx rename processor never touches content either.
-                      if (change.codecChanged) {
-                        const canonical = encodedPropertyValueToChildContent(schema, encoded)
-                        if (value.content !== canonical) {
-                          await tx.update(value.id, {content: canonical}, {skipMetadata: true})
-                        }
+                      // Every change that reaches this batch is a codec change
+                      // (the bridge filters to one, the baseline emits only
+                      // those), so re-encoding is always what was asked for.
+                      const canonical = encodedPropertyValueToChildContent(schema, encoded)
+                      if (value.content !== canonical) {
+                        await tx.update(value.id, {content: canonical}, {skipMetadata: true})
                       }
                     } catch {
                       parentUnconvertible += 1
@@ -4076,11 +4065,6 @@ export class Repo {
     // silent unset. The rows stay in the tree, fixable by hand. Reported per
     // definition — one rebuild can change several.
     for (const {change, schema} of plans) {
-      // Only a CODEC change can strand a value; a rename re-encodes nothing.
-      // An unparseable child under a rename is pre-existing user state, and
-      // every local rename takes one pass through here at the next prime —
-      // which would otherwise toast about it at start-up.
-      if (!change.codecChanged) continue
       const unconvertible = unconvertibleByField.get(change.fieldId) ?? 0
       if (unconvertible === 0) continue
       // Claim only what's true: this pass never deletes a value row, so the
