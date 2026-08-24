@@ -1514,10 +1514,20 @@ const fetchExportPage = async (
 
 /** A schema's `defaultValue` is what the app shows for an absent cell, but the
  *  codec is not given the chance to apply it — decoding `undefined` throws.
- *  Every read here is of a property the sync may never have written. */
+ *  Every read here is of a property the sync may never have written.
+ *
+ *  A malformed cell falls back too, rather than throwing. Sync apply can land a
+ *  bag the codec rejects, and these reads drive a WORKSPACE-WIDE scan: one such
+ *  row would otherwise stop every other document's conflict from ever being
+ *  offered, silently, since the caller can only catch the whole scan. */
 const storedProperty = <T,>(block: any, schema: { name: string; codec: any }, fallback: T): T => {
   const raw = block.properties?.[schema.name]
-  return raw === undefined ? fallback : schema.codec.decode(raw) as T
+  if (raw === undefined) return fallback
+  try {
+    return schema.codec.decode(raw) as T
+  } catch {
+    return fallback
+  }
 }
 
 export type AliasConflict = {
@@ -1528,6 +1538,11 @@ export type AliasConflict = {
   fallback: string | null
   rivalIds: readonly string[]
   rivalTitles: readonly string[]
+  /** A rival that is itself a Readwise document. Merging one in is not
+   *  durable: it keeps its deterministic id, and the next export update for
+   *  that record finds the tombstone and restores it, recreating the collision
+   *  and undoing half the merge. Those conflicts are keep-only. */
+  managedRival: boolean
 }
 
 /** Documents that could not take their own name and whose user has not said to
@@ -1575,24 +1590,30 @@ export const unresolvedAliasConflicts = async (
         fallback: storedProperty<readonly string[]>(doc, aliasesProp, [])[0] ?? null,
         rivalIds: rivals.map((row: any) => row.id),
         rivalTitles: rivals.map((row: any) => row.content),
+        managedRival: rivals.some((row: any) =>
+          getBlockTypes(row).includes(READWISE_DOCUMENT_TYPE)),
       })
     }
     return conflicts
   }, { scope: ChangeScope.BlockDefault, description: 'readwise: scan alias conflicts' })
 }
 
-/** "Keep this name" — stop offering THIS conflict.
+/** "Keep this name" — stop offering the conflict the user was SHOWN.
  *
- *  The title is re-read inside the transaction rather than taken from the
- *  caller: a dialog can sit open across a sync that re-titles the document,
- *  and an answer stamped with the title on screen would then silence a
- *  conflict the user never saw. Recording what is actually there means a
- *  stale click answers nothing. */
-export const acceptFallbackAlias = async (repo: any, documentId: string): Promise<void> => {
+ *  `shownTitle` is what the dialog displayed, and the write is refused if the
+ *  document no longer has it. A dialog can sit open across a sync that
+ *  re-titles the document, and recording whatever is there at click time would
+ *  answer a collision the user never saw — the click has to be about the thing
+ *  it was made about, or about nothing. */
+export const acceptFallbackAlias = async (
+  repo: any,
+  documentId: string,
+  shownTitle: string,
+): Promise<void> => {
   await repo.tx(async (tx: any) => {
     const doc = await tx.get(documentId)
-    if (!doc || doc.deleted) return
-    await tx.setProperty(documentId, aliasAcceptedForProp, doc.content)
+    if (!doc || doc.deleted || doc.content !== shownTitle) return
+    await tx.setProperty(documentId, aliasAcceptedForProp, shownTitle)
   }, { scope: ChangeScope.BlockDefault, description: 'readwise: keep fallback name' })
 }
 
@@ -2054,7 +2075,7 @@ const ReadwiseAliasConflictDialog = ({
     if (!inWorkspace()) return
     setBusy(conflict.documentId)
     try {
-      await acceptFallbackAlias(repo, conflict.documentId)
+      await acceptFallbackAlias(repo, conflict.documentId, conflict.title)
       done(conflict.documentId)
     } finally {
       setBusy(null)
@@ -2088,12 +2109,21 @@ const ReadwiseAliasConflictDialog = ({
                   ? `“${truncate(conflict.rivalTitles[0] ?? conflict.title, 60)}” has the name`
                   : `${conflict.rivalIds.length} other pages have the name`}
               </div>
+              {conflict.managedRival && (
+                <div style={{ color: 'var(--muted-foreground)' }}>
+                  That page is a Readwise document too, so merging it would not
+                  stick — the next sync brings it back. Rename one of them in
+                  Readwise instead.
+                </div>
+              )}
               <div className='flex gap-2'>
-                <Button
-                  size='sm'
-                  onClick={() => merge(conflict)}
-                  disabled={busy !== null}
-                >Merge that page in</Button>
+                {!conflict.managedRival && (
+                  <Button
+                    size='sm'
+                    onClick={() => merge(conflict)}
+                    disabled={busy !== null}
+                  >Merge that page in</Button>
+                )}
                 <Button
                   size='sm'
                   variant='outline'

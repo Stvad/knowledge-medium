@@ -442,6 +442,7 @@ describe('readwise alias conflicts — what the sync offers to resolve', () => {
       fallback: 'Deep Work (Readwise)',
       rivalIds: ['rival'],
       rivalTitles: ['Deep Work'],
+      managedRival: false,
     }])
   })
 
@@ -457,7 +458,7 @@ describe('readwise alias conflicts — what the sync offers to resolve', () => {
     await createRivalPage('rival', 'Deep Work')
     await sync(rootId, book(1, 'Deep Work', 11))
 
-    await acceptFallbackAlias(repo, documentId(1))
+    await acceptFallbackAlias(repo, documentId(1), 'Deep Work')
 
     expect(await conflicts()).toEqual([])
     // and the answer survives the syncs that follow it, which is the whole
@@ -471,7 +472,7 @@ describe('readwise alias conflicts — what the sync offers to resolve', () => {
     await createRivalPage('rival', 'Deep Work')
     await createRivalPage('rival-2', 'Digital Minimalism')
     await sync(rootId, book(1, 'Deep Work', 11))
-    await acceptFallbackAlias(repo, documentId(1))
+    await acceptFallbackAlias(repo, documentId(1), 'Deep Work')
     expect(await conflicts()).toEqual([])
 
     // Re-titled straight onto another name the user holds, without the first
@@ -485,14 +486,49 @@ describe('readwise alias conflicts — what the sync offers to resolve', () => {
       fallback: 'Digital Minimalism (Readwise)',
       rivalIds: ['rival-2'],
       rivalTitles: ['Digital Minimalism'],
+      managedRival: false,
     }])
+  })
+
+  it('refuses a keep clicked for a title the document no longer has', async () => {
+    const rootId = await createRoot()
+    await createRivalPage('rival', 'Deep Work')
+    await createRivalPage('rival-2', 'Digital Minimalism')
+    await sync(rootId, book(1, 'Deep Work', 11))
+
+    // The dialog was showing the Deep Work conflict; a sync re-titled the
+    // document onto another taken name while it sat open, and the click lands
+    // after that.
+    await sync(rootId, book(1, 'Digital Minimalism', 11))
+    await acceptFallbackAlias(repo, documentId(1), 'Deep Work')
+
+    // Recording the shown title alone would leave an answer for Deep Work
+    // parked on the document. Nothing spends it — the clear only fires when
+    // the document WINS a title — so when Readwise puts the document back on
+    // Deep Work, still taken, that stale answer would silence it.
+    await sync(rootId, book(1, 'Deep Work', 11))
+
+    expect((await conflicts()).map(c => c.title)).toEqual(['Deep Work'])
+  })
+
+  it('will not offer to merge one Readwise document into another', async () => {
+    const rootId = await createRoot()
+    await sync(rootId, book(1, 'Deep Work', 11))
+    await sync(rootId, book(2, 'Deep Work', 12))
+
+    // Two export records sharing a title. Merging the first into the second
+    // does not stick: it keeps its deterministic id, and the next update for
+    // that record restores it from the tombstone.
+    const [conflict] = await conflicts()
+    expect(conflict.rivalIds).toEqual([documentId(1)])
+    expect(conflict.managedRival).toBe(true)
   })
 
   it('offers a LATER conflict again after the first one resolves', async () => {
     const rootId = await createRoot()
     await createRivalPage('rival', 'Deep Work')
     await sync(rootId, book(1, 'Deep Work', 11))
-    await acceptFallbackAlias(repo, documentId(1))
+    await acceptFallbackAlias(repo, documentId(1), 'Deep Work')
 
     // The rival gives the name up, so the document takes it back and the
     // answer is spent.
