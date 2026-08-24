@@ -83,13 +83,12 @@ let repo: Repo
 
 beforeAll(async () => { sharedDb = await createTestDb() })
 afterAll(async () => { await sharedDb.cleanup() })
-/** Release a Repo the suite is done with, so the seed pass it leaves queued
- *  cannot write once the shared database is reset under it. Nothing disposes a
- *  test's Repo and every test here leaves a pass behind (the `beforeEach` pin
- *  primes the registry, which schedules one); the abandoned Repo's `newId`
- *  counter restarts at `gen-1` per `createTestRepo`, so two of them mint the
- *  same tx ids and one dies on `command_events.tx_id`. Unpinned, the pass
- *  refuses at the access gate before it can write. */
+/** Release a Repo the suite is done with. Every test here leaves a seed pass
+ *  queued (the `beforeEach` pin primes the registry, which schedules one) and
+ *  nothing disposes the Repo, so the pass fires during a LATER test, against a
+ *  database reset under it. Its writes are not merely redundant: tx ids come
+ *  from a per-Repo `createTestRepo` counter, so two live Repos over one
+ *  database collide. Unpinned, the pass refuses at the access gate first. */
 const releaseRepo = (target: Repo | undefined): void => {
   target?.setActiveWorkspaceId(null)
 }
