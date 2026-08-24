@@ -1061,10 +1061,9 @@ describe('mutating verbs refuse a target outside the active workspace (#790)', (
       expect(ran).toBe(false)
     })
 
-    // One per independently guarded dependency. Without these, deleting any of
-    // the three from the guarded set left the whole suite green — an unpinned
-    // guard that would regress silently, since each of these ids still reaches
-    // a handler that can mutate or navigate through it.
+    // One case per independently guarded dependency: each of these ids reaches
+    // a handler that can mutate or navigate through it, so a new one needs its
+    // own case here or the guarded set can lose an entry silently.
     it.each([
       ['uiStateBlockId'],
       ['anchorBlockId'],
