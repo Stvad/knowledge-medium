@@ -526,6 +526,63 @@ const withGrainWarnings = async (
   return warnings.length > 0 ? {...block, agentWarnings: warnings} : block
 }
 
+/** Refuse a mutating verb aimed at a workspace this client does not have open.
+ *
+ *  Field-row recognition resolves the definition through
+ *  `Repo.propertySchemaResolverFor`, which serves the active workspace and the
+ *  retained previous one and fails CLOSED for any other — so a mutation run
+ *  against a background workspace runs with recognition off and the guards
+ *  that read it inverted. Measured: a delete there rewrites `::((fieldId))`
+ *  field rows to the definition's prose and clears their stamp, detaching the
+ *  property from its owner irreversibly (#790).
+ *
+ *  Here rather than in the kernel, which is the tempting place for it:
+ *  `repo.tx` is deliberately workspace-agnostic. Sync arrival is the only
+ *  routine background-workspace writer and needs no recognition (it runs no
+ *  mutators and no post-commit processors — a peer that deleted with the
+ *  workspace open uploads the correctly-handled rows), and tests seed unopened
+ *  workspaces directly. A kernel throw would refuse both.
+ *
+ *  The bridge's own transport already pins a client's audience to its active
+ *  workspace, so this is not about which client is talking — it is about a
+ *  block ID naming a row in another workspace, which nothing upstream can
+ *  catch (`sql` is not workspace-scoped, so an agent that found an id that way
+ *  has one). `eval` and raw `sql execute` reach `repo` directly and stay
+ *  unguardable; eval'd code calling a `context` verb lands here like anyone
+ *  else.
+ *
+ *  Same assertion shape `run-backfill` and `audit-properties` carry: a
+ *  workspace names an expectation about this client's state, never a target to
+ *  switch to. */
+const assertActiveWorkspace = (repo: Repo, verb: string, workspaceId: string): void => {
+  if (workspaceId === repo.activeWorkspaceId) return
+  throw new Error(
+    `${verb}: target is in workspace ${workspaceId}, which is not the active one `
+    + `(${repo.activeWorkspaceId ?? 'none'}). Mutating verbs write through the active `
+    + "workspace's property and alias registries, which resolve nothing for another "
+    + 'workspace — open that workspace and re-run.',
+  )
+}
+
+/** `assertActiveWorkspace` for a verb whose target is an existing block.
+ *  A MISSING block passes: it has no workspace to compare, and answering
+ *  "wrong workspace" would send the caller after a problem they don't have.
+ *  Each verb reports its own not-found error a few lines later.
+ *
+ *  A raw read rather than `repo.load`, which filters `deleted = 0`:
+ *  `restore-block`'s target is ALWAYS a tombstone, so routing through the
+ *  loader would make that verb's guard a permanent no-op. */
+const assertActiveWorkspaceBlock = async (
+  repo: Repo,
+  verb: string,
+  blockId: string,
+): Promise<void> => {
+  const row = await repo.db.getOptional<{workspace_id: string}>(
+    'SELECT workspace_id FROM blocks WHERE id = ?', [blockId],
+  )
+  if (row) assertActiveWorkspace(repo, verb, row.workspace_id)
+}
+
 const createRuntimeBlock = async (
   repo: Repo,
   input: CreateBlockInput = {},
@@ -547,6 +604,7 @@ const createRuntimeBlock = async (
   const references = input.data?.references as BlockReference[] | undefined
 
   if (input.parentId) {
+    await assertActiveWorkspaceBlock(repo, 'create-block', input.parentId)
     const id = await repo.mutate.createChild({
       parentId: input.parentId,
       content,
@@ -562,6 +620,7 @@ const createRuntimeBlock = async (
   if (!workspaceId) {
     throw new Error('createBlock with no parentId requires an active workspace')
   }
+  assertActiveWorkspace(repo, 'create-block', workspaceId)
 
   const id = explicitId ?? crypto.randomUUID()
   await repo.tx(async tx => {
@@ -628,6 +687,7 @@ const reconcileMarkdownSubtree = async (
     const parent = await tx.get(parentId)
     if (!parent) throw new Error(`reconcile-markdown-subtree: parent ${parentId} not found`)
     const {workspaceId} = parent
+    assertActiveWorkspace(repo, 'reconcile-markdown-subtree', workspaceId)
 
     // This subtree's existing blocks, in pre-order (the target we reconcile
     // onto). Walk children depth-first following ONLY tagged blocks, so user
@@ -790,6 +850,7 @@ const updateRuntimeBlock = async (
   await repo.tx(async tx => {
     const before = await tx.get(input.id)
     if (!before || before.deleted) return
+    assertActiveWorkspace(repo, 'update-block', before.workspaceId)
     found = true
     const nextProperties = input.properties === undefined
       ? undefined
@@ -819,6 +880,7 @@ const moveRuntimeBlock = async (
   repo: Repo,
   input: MoveBlockInput,
 ): Promise<BlockData | null> => {
+  await assertActiveWorkspaceBlock(repo, 'move-block', input.id)
   await repo.mutate.move(input)
   return repo.load(input.id)
 }
@@ -827,6 +889,7 @@ const deleteRuntimeBlock = async (
   repo: Repo,
   input: DeleteBlockInput,
 ): Promise<DeleteBlockResult> => {
+  await assertActiveWorkspaceBlock(repo, 'delete-block', input.id)
   // eslint-disable-next-line no-restricted-syntax -- programmatic delete: agent bridge is not a UI gesture; UI-layer guards deliberately don't apply
   await repo.mutate.delete(input)
   return {id: input.id, deleted: true}
@@ -836,6 +899,7 @@ const restoreRuntimeBlock = async (
   repo: Repo,
   input: RestoreBlockInput,
 ): Promise<BlockData | null> => {
+  await assertActiveWorkspaceBlock(repo, 'restore-block', input.id)
   await repo.mutate.restore(input)
   return repo.load(input.id)
 }

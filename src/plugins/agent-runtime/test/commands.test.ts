@@ -744,3 +744,137 @@ describe('agent runtime commands', () => {
     })
   })
 })
+
+// The bridge is the only surface that can aim a kernel mutator at a workspace
+// the user does not have open (the UI's blocks come from workspace-scoped
+// queries; sync arrival runs no mutators). That matters because the write path
+// is NOT workspace-agnostic: field-row recognition resolves the definition
+// through the ACTIVE workspace's registry, which fails closed for any other —
+// so a delete aimed at a background workspace rewrites property field rows to
+// prose instead of leaving their dangling ref intact, detaching the property
+// from its owner (#790). Each case asserts the refusal AND that the row is
+// untouched, because a refusal after the write would satisfy `rejects` just as
+// well.
+describe('mutating verbs refuse a target outside the active workspace (#790)', () => {
+  const BG = 'ws-bg'
+  const BG_ROOT = 'bg-root'
+
+  const seedBackground = async (): Promise<void> => {
+    await env.repo.tx(async tx => {
+      await tx.create({
+        id: BG_ROOT, workspaceId: BG, parentId: null, orderKey: 'a0', content: 'bg body',
+      })
+      await tx.create({
+        id: 'bg-child', workspaceId: BG, parentId: BG_ROOT, orderKey: 'a0', content: 'bg child',
+      })
+    }, {scope: ChangeScope.BlockDefault, description: 'seed background workspace'})
+  }
+
+  const refusal = /is not the active one/
+
+  it('delete-block refuses and leaves the subtree live', async () => {
+    await seedBackground()
+
+    await expect(executeCommand({
+      commandId: 'c', type: 'delete-block', blockId: BG_ROOT,
+    }, env.context)).rejects.toThrow(refusal)
+
+    expect((await env.repo.load(BG_ROOT))!.deleted).toBe(false)
+    expect((await env.repo.load('bg-child'))!.deleted).toBe(false)
+  })
+
+  it('update-block refuses and leaves content and properties alone', async () => {
+    await seedBackground()
+
+    await expect(executeCommand({
+      commandId: 'c', type: 'update-block', blockId: BG_ROOT,
+      content: 'rewritten', properties: {injected: 'yes'},
+    }, env.context)).rejects.toThrow(refusal)
+
+    const after = (await env.repo.load(BG_ROOT))!
+    expect(after.content).toBe('bg body')
+    expect(after.properties.injected).toBeUndefined()
+  })
+
+  it('restore-block refuses a tombstone in another workspace', async () => {
+    await seedBackground()
+    // Deleted through the kernel rather than the bridge — the row has to
+    // already be a tombstone for restore to be the operation under test.
+    await env.repo.mutate.delete({id: BG_ROOT})
+
+    await expect(executeCommand({
+      commandId: 'c', type: 'restore-block', blockId: BG_ROOT,
+    }, env.context)).rejects.toThrow(refusal)
+
+    // Raw, because `repo.load` filters tombstones out — the same asymmetry
+    // that made the first version of this guard a no-op for restore.
+    const row = await env.h.db.get<{deleted: number}>(
+      'SELECT deleted FROM blocks WHERE id = ?', [BG_ROOT])
+    expect(row.deleted).toBe(1)
+  })
+
+  it('move-block refuses and leaves the parent edge intact', async () => {
+    await seedBackground()
+
+    await expect(executeCommand({
+      commandId: 'c', type: 'move-block', blockId: 'bg-child',
+      parentId: null, position: {kind: 'last'},
+    }, env.context)).rejects.toThrow(refusal)
+
+    expect((await env.repo.load('bg-child'))!.parentId).toBe(BG_ROOT)
+  })
+
+  it('create-block refuses a parent in another workspace, minting nothing', async () => {
+    await seedBackground()
+
+    await expect(executeCommand({
+      commandId: 'c', type: 'create-block', parentId: BG_ROOT, content: 'injected',
+    }, env.context)).rejects.toThrow(refusal)
+
+    const children = await env.h.db.getAll<{id: string}>(
+      'SELECT id FROM blocks WHERE parent_id = ? AND deleted = 0', [BG_ROOT])
+    expect(children.map(r => r.id)).toEqual(['bg-child'])
+  })
+
+  it('create-block refuses an explicit foreign workspaceId for a root block', async () => {
+    await expect(executeCommand({
+      commandId: 'c', type: 'create-block', data: {workspaceId: BG, content: 'injected'},
+    }, env.context)).rejects.toThrow(refusal)
+
+    const rows = await env.h.db.getAll<{id: string}>(
+      'SELECT id FROM blocks WHERE workspace_id = ?', [BG])
+    expect(rows).toEqual([])
+  })
+
+  it('reconcile-markdown-subtree refuses a parent in another workspace', async () => {
+    await seedBackground()
+
+    await expect(executeCommand({
+      commandId: 'c', type: 'reconcile-markdown-subtree',
+      parentId: BG_ROOT, markdown: '- injected', key: 'k1',
+    }, env.context)).rejects.toThrow(refusal)
+
+    const children = await env.h.db.getAll<{id: string}>(
+      'SELECT id FROM blocks WHERE parent_id = ? AND deleted = 0', [BG_ROOT])
+    expect(children.map(r => r.id)).toEqual(['bg-child'])
+  })
+
+  // The refusal must not swallow the verb's own not-found report: a missing id
+  // has no workspace to compare, and answering "wrong workspace" for it would
+  // send the caller looking for a workspace problem they don't have. Two
+  // tests, because the two verbs take different routes to the same rule —
+  // update-block compares the row it already read inside its tx, delete-block
+  // goes through the shared pre-read, whose "no row, no opinion" branch is
+  // pinned only here.
+  it('update-block still reports not-found for a missing block', async () => {
+    await expect(executeCommand({
+      commandId: 'c', type: 'update-block', blockId: 'no-such-block', content: 'x',
+    }, env.context)).rejects.toThrow(/not found/)
+  })
+
+  it('delete-block still reports not-found for a missing block', async () => {
+    await expect(executeCommand({
+      commandId: 'c', type: 'delete-block', blockId: 'no-such-block',
+    }, env.context)).rejects.toThrow(/does not exist/)
+  })
+})
