@@ -24,6 +24,7 @@ import { keyBetween, keysBetween } from '@/data/orderKey.js'
 import { pluginBlockId } from '@/extensions/pluginIds.js'
 import { extensionPropertySeedKey, extensionTypeSeedKey } from '@/extensions/dynamicExtensionSeeds.js'
 import { showError, showInfo, showProgress, showSuccess } from '@/utils/toast.js'
+import { truncate } from '@/utils/string.js'
 import { useRepo } from '@/context/repo.js'
 import type { Block } from '@/data/block.js'
 import type { Repo } from '@/data/repo.js'
@@ -34,7 +35,7 @@ import { dueByDailyNoteRef } from '@/plugins/daily-notes/dueQuery.js'
 import { useStartOfToday } from '@/plugins/daily-notes/today.js'
 import { BLOCK_TYPE_TYPE, PAGE_TYPE } from '@/data/blockTypes.js'
 import { aliasesProp, getBlockTypes, showPropertiesProp } from '@/data/properties.js'
-import { createOrRestoreTargetBlock, ensureAliasTarget } from '@/data/targets.js'
+import { createOrRestoreTargetBlock, ensureAliasTarget, partitionClaimableAliases } from '@/data/targets.js'
 import {
   addDaysIso, dailyNoteBlockId, getOrCreateDailyNote, todayIso,
 } from '@/plugins/daily-notes/dailyNotes.js'
@@ -1138,16 +1139,136 @@ const applyManagedProperties = async (
   if (changed) await tx.update(blockId, { properties: next })
 }
 
-const mergeSourceOwnedAlias = async (
+// ---------------------------------------------------------------------------
+// document naming
+//
+// A Readwise title is very often a page the user ALREADY has — the book they
+// took notes on before importing it. Claiming that name trips
+// `block_aliases_workspace_alias_unique`, and the rollback used to take the
+// document, its highlights, and (because `runSync` awaited the throw) every
+// book after it in the export, with `lastSyncedAt` never advancing past the
+// offending book. That is issue #378's failure reached from the sync side.
+//
+// Kernel pages answer it by yielding the name entirely, which is right for a
+// page reached by its id. A Readwise document is reached by NAME, so it takes a
+// suffixed one instead and stays linkable. Its `content` is still the real
+// title, which is what puts it in the state `DuplicateNameBanner` reads: the
+// banner then offers `alias.mergeCollision` in the reclaim direction, which
+// folds the other page in and hands the real name back.
+
+const FALLBACK_ALIAS_MARKER = 'Readwise'
+
+/** Suffix probe depth. Two documents sharing a title is ordinary (a re-import,
+ *  an article and the book it became); twenty is not, and past that claiming
+ *  nothing beats an unbounded walk. */
+const FALLBACK_ALIAS_SLOTS = 20
+
+const fallbackAlias = (title: string, index: number): string =>
+  `${title} (${FALLBACK_ALIAS_MARKER}${index === 1 ? '' : ` ${index}`})`
+
+/** Could the sync itself have written this alias for `title`? What it guards is
+ *  an alias the USER put on the document: the reconcile below overwrites only a
+ *  bag it recognises as its own. */
+const isSyncOwnedAlias = (alias: string, title: string): boolean => {
+  if (alias === title) return true
+  const prefix = `${title} (${FALLBACK_ALIAS_MARKER}`
+  if (!alias.startsWith(prefix) || !alias.endsWith(')')) return false
+  const tail = alias.slice(prefix.length, -1)
+  return tail === '' || /^ \d+$/.test(tail)
+}
+
+/** Is `name` there for the taking — unowned, or already this document's? */
+const aliasIsFree = async (
   tx: any,
   blockId: string,
+  name: string,
+  workspaceId: string,
+): Promise<boolean> => {
+  const owner = await tx.aliasLookup(name, workspaceId)
+  return owner === null || owner.id === blockId
+}
+
+/** Is this whole bag one the sync could have written? Vacuously true of an
+ *  empty bag, false as soon as one entry is the user's. */
+const isSyncOwnedAliasBag = (
+  bag: readonly string[],
+  title: string,
   previousTitle: string | undefined,
-  nextTitle: string,
-) => {
-  const current = await tx.getProperty(blockId, aliasesProp)
-  if (current.length === 0 || (previousTitle !== undefined && current.length === 1 && current[0] === previousTitle)) {
-    await tx.setProperty(blockId, aliasesProp, [nextTitle])
+): boolean => bag.every(alias =>
+  isSyncOwnedAlias(alias, title)
+  || (previousTitle !== undefined && isSyncOwnedAlias(alias, previousTitle)))
+
+/** The alias this document may claim right now — the title when it is free,
+ *  else the first free suffix, else `null` (claim nothing). */
+const resolveDocumentAlias = async (
+  tx: any,
+  blockId: string,
+  title: string,
+  workspaceId: string,
+): Promise<string | null> => {
+  if (await aliasIsFree(tx, blockId, title, workspaceId)) return title
+  for (let index = 1; index <= FALLBACK_ALIAS_SLOTS; index++) {
+    const candidate = fallbackAlias(title, index)
+    if (await aliasIsFree(tx, blockId, candidate, workspaceId)) return candidate
   }
+  return null
+}
+
+/** Drop the name the document holds, so the transaction that RENAMES it can
+ *  commit. Splitting the alias write out (below) is not enough on its own: A3
+ *  reacts to the bag the row ALREADY has, and appends the new title to it. An
+ *  empty bag is the one shape the rule skips.
+ *
+ *  Called only when the new title is contested — releasing on every rename
+ *  would route around alias.sync rule 1, and with it
+ *  `references.renameBacklinks`, leaving every `[[Old Title]]` in the graph
+ *  pointing nowhere.
+ *
+ *  A bag the USER wrote is left alone, and a rename into a contested name then
+ *  still fails for that one book — `runSync` reports it and carries on with the
+ *  rest. Emptying someone's alias to get a title through is the worse trade. */
+const releaseSyncOwnedAlias = async (
+  tx: any,
+  blockId: string,
+  previousTitle: string,
+  title: string,
+): Promise<void> => {
+  const current: readonly string[] = await tx.getProperty(blockId, aliasesProp)
+  if (current.length === 0) return
+  if (!isSyncOwnedAliasBag(current, title, previousTitle)) return
+  await tx.setProperty(blockId, aliasesProp, [])
+}
+
+/** Name the document, in a transaction of its OWN.
+ *
+ *  Never the one that rewrote `content`. `alias.sync`'s A3 rule heals a content
+ *  change by APPENDING the new content to the alias bag, and when the new title
+ *  is the contested one that append is refused and rolls the content rewrite —
+ *  and everything else in the transaction — back with it. Probing for a free
+ *  name does not help there: the probe's answer is not what A3 appends. Split
+ *  out, the worst an alias collision can do is leave the document without the
+ *  name it wanted, which is the state the duplicate-name banner exists for.
+ *
+ *  Re-run on every sync, so a name that frees up (the rival renamed, deleted,
+ *  or merged in) is taken back and the placeholder suffix released. */
+const ensureDocumentAlias = async (
+  repo: any,
+  blockId: string,
+  title: string,
+  previousTitle: string | undefined,
+  workspaceId: string,
+  description: string,
+): Promise<void> => {
+  await repo.tx(async (tx: any) => {
+    const current: readonly string[] = await tx.getProperty(blockId, aliasesProp)
+    if (!isSyncOwnedAliasBag(current, title, previousTitle)) return
+    const claimable = await resolveDocumentAlias(tx, blockId, title, workspaceId)
+    const next = claimable === null ? [] : [claimable]
+    // Compare before writing: while a title stays contested this runs on every
+    // sync, and an unguarded setProperty would rewrite the same bag each time.
+    if (current.length === next.length && current.every((alias, i) => alias === next[i])) return
+    await tx.setProperty(blockId, aliasesProp, next)
+  }, { scope: ChangeScope.BlockDefault, description })
 }
 
 const lookupOrCreateAuthorPage = async (
@@ -1344,7 +1465,9 @@ type SyncDeps = {
   repo: ReturnType<typeof useRepo> | any
 }
 
-const ensureRoot = async (repo: any, workspaceId: string) => {
+/** Exported for `readwise.aliasConflict.test.tsx` — the library root yields its
+ *  name the same way a document does, and that has to be pinned somewhere. */
+export const ensureRoot = async (repo: any, workspaceId: string) => {
   const rootId = pluginBlockId(workspaceId, READWISE_NS, 'library-root')
   const typeSnapshot = repo.snapshotTypeRegistries()
   await repo.tx(async (tx: any) => {
@@ -1360,7 +1483,12 @@ const ensureRoot = async (repo: any, workspaceId: string) => {
         freshContent: 'Readwise Library',
       })
     }
-    await repo.addTypeInTx(tx, rootId, PAGE_TYPE, { [aliasesProp.name]: ['Readwise Library'] }, typeSnapshot)
+    // Yielded rather than claimed, for the same reason a kernel page yields: a
+    // user page already called "Readwise Library" would otherwise abort this
+    // transaction and take the whole sync with it. The root is reached by its
+    // deterministic id, so it loses nothing but the name.
+    const rootAliases = await partitionClaimableAliases(tx, rootId, ['Readwise Library'], workspaceId)
+    await repo.addTypeInTx(tx, rootId, PAGE_TYPE, { [aliasesProp.name]: rootAliases }, typeSnapshot)
     await repo.addTypeInTx(tx, rootId, READWISE_LIBRARY_TYPE, {}, typeSnapshot)
   }, { scope: ChangeScope.BlockDefault, description: 'readwise: create root' })
   return rootId
@@ -1410,7 +1538,10 @@ const ensureHighlightsSection = async (
   return sectionId
 }
 
-const syncBookToBlocks = async (
+/** Exported for `readwise.aliasConflict.test.tsx`, which drives one book through
+ *  the real writer against a real repo — the alias fallback only means anything
+ *  as the state it leaves in the DB. */
+export const syncBookToBlocks = async (
   repo: any,
   workspaceId: string,
   rootId: string,
@@ -1435,131 +1566,149 @@ const syncBookToBlocks = async (
     ? await getOrCreateDailyNote(repo, workspaceId, reviewDateIso)
     : null
 
-  await repo.tx(async (tx: any) => {
-    // 1. document page
-    const existing = await tx.get(bookId)
-    if (!existing || existing.deleted) {
-      const siblings = await tx.childrenOf(rootId)
-      const firstKey = siblings.length ? siblings[0].orderKey : null
-      await createOrRestoreTargetBlock(tx, {
-        id: bookId,
-        workspaceId,
-        parentId: rootId,
-        orderKey: keyBetween(null, firstKey),
-        freshContent: title,
-      })
-    } else if (existing.content !== title) {
-      await tx.update(bookId, { content: title })
-    }
-    await repo.addTypeInTx(tx, bookId, PAGE_TYPE, { [aliasesProp.name]: [title] }, typeSnapshot)
-    await repo.addTypeInTx(tx, bookId, READWISE_DOCUMENT_TYPE, {}, typeSnapshot)
-    await addConfiguredTypes(tx, repo, bookId, documentPageTypeIds, typeSnapshot)
-    await mergeSourceOwnedAlias(tx, bookId, existing?.content, title)
-    const authorPageId = await lookupOrCreateAuthorPage(
-      tx,
-      repo,
-      workspaceId,
-      book.author,
-      authorPageTypeIds,
-      typeSnapshot,
-    )
-    await applyManagedProperties(tx, bookId, DOCUMENT_PROPERTY_SCHEMAS, documentPropertyEntries(book, authorPageId))
-
-    // 2. supplemental template children. Property-backed template lines are
-    //    intentionally omitted here because their values live on the
-    //    Readwise document type.
-    const bookKids = await tx.childrenOf(bookId)
-    const metaIds = supplementalLines.map((_, i) =>
-      pluginBlockId(workspaceId, READWISE_NS, `book:${book.user_book_id}:meta:${i}`))
-
-    // Template lines sit at the top of the book page, before any other children.
-    const firstNonMetaKey = bookKids.find((k: any) => !metaIds.includes(k.id))?.orderKey ?? null
-    const metaKeys = keysBetween(null, firstNonMetaKey, supplementalLines.length || 1)
-
-    for (let i = 0; i < supplementalLines.length; i++) {
-      const id = metaIds[i]
-      const content = supplementalLines[i]
-      const orderKey = metaKeys[i]
-      const existingMetaBlock = await tx.get(id)
-      if (!existingMetaBlock || existingMetaBlock.deleted) {
+  // One undo entry for the two transactions below — the split is an alias-sync
+  // constraint (see `ensureDocumentAlias`), not two things the user did.
+  await repo.undoGroup(async (repo: any) => {
+    // Read inside the transaction, used by the one after it: which name the
+    // document held is how `ensureDocumentAlias` tells its own alias from one
+    // the user set.
+    let previousTitle: string | undefined
+    await repo.tx(async (tx: any) => {
+      // 1. document page
+      const existing = await tx.get(bookId)
+      previousTitle = existing?.content
+      if (!existing || existing.deleted) {
+        const siblings = await tx.childrenOf(rootId)
+        const firstKey = siblings.length ? siblings[0].orderKey : null
         await createOrRestoreTargetBlock(tx, {
-          id, workspaceId, parentId: bookId, orderKey, freshContent: content,
-        })
-      } else {
-        if (existingMetaBlock.content !== content) {
-          await tx.update(id, { content })
-        }
-      }
-    }
-    // 3. highlights live under a deterministic sub-bullet on the document
-    //    page, with notes still nested under their highlight.
-    if (!highlights.length) return
-
-    await ensureHighlightsSection(tx, workspaceId, bookId, highlightsSectionId, metaIds)
-
-    const sectionKids = await tx.childrenOf(highlightsSectionId)
-    const lastHighlightKey = sectionKids.length ? sectionKids[sectionKids.length - 1].orderKey : null
-    const newHighlightKeys = keysBetween(lastHighlightKey, null, highlights.length || 1)
-    let nextNewHighlightKey = 0
-
-    for (let i = 0; i < highlights.length; i++) {
-      const h = highlights[i]
-      const hId = pluginBlockId(workspaceId, READWISE_NS, `hl:${h.id}`)
-      const hVars = highlightVars(h)
-      const hLines = renderTemplateLines(highlightTemplate, hVars)
-      const hContent = hLines[0] ?? (h.text ?? '')
-      const noteLines = renderSupplementalTemplateLines(
-        highlightTemplate.split('\n').slice(1).join('\n'),
-        hVars,
-        HIGHLIGHT_PROPERTY_TEMPLATE_KEYS,
-      )
-      const noteText = nonEmptyString(h.note)
-
-      const existingH = await tx.get(hId)
-      if (!existingH || existingH.deleted) {
-        await createOrRestoreTargetBlock(tx, {
-          id: hId,
+          id: bookId,
           workspaceId,
-          parentId: highlightsSectionId,
-          orderKey: newHighlightKeys[nextNewHighlightKey++],
-          freshContent: hContent,
+          parentId: rootId,
+          orderKey: keyBetween(null, firstKey),
+          freshContent: title,
         })
-      } else {
-        if (existingH.content !== hContent) {
-          await tx.update(hId, { content: hContent })
+      } else if (existing.content !== title) {
+        if (!await aliasIsFree(tx, bookId, title, workspaceId)) {
+          await releaseSyncOwnedAlias(tx, bookId, existing.content, title)
         }
+        await tx.update(bookId, { content: title })
       }
-      await repo.addTypeInTx(tx, hId, READWISE_HIGHLIGHT_TYPE, {}, typeSnapshot)
-      await addConfiguredTypes(tx, repo, hId, highlightTypeIds, typeSnapshot)
-      await applyManagedProperties(tx, hId, HIGHLIGHT_PROPERTY_SCHEMAS, highlightPropertyEntries(book, h))
-      if (reviewDateBlock) {
-        await ensureHighlightReviewState(tx, hId, reviewDateBlock.id)
-      }
+      // No alias in `initialValues`: naming the document is `ensureDocumentAlias`'s
+      // job, in a transaction this one must not share.
+      await repo.addTypeInTx(tx, bookId, PAGE_TYPE, {}, typeSnapshot)
+      await repo.addTypeInTx(tx, bookId, READWISE_DOCUMENT_TYPE, {}, typeSnapshot)
+      await addConfiguredTypes(tx, repo, bookId, documentPageTypeIds, typeSnapshot)
+      const authorPageId = await lookupOrCreateAuthorPage(
+        tx,
+        repo,
+        workspaceId,
+        book.author,
+        authorPageTypeIds,
+        typeSnapshot,
+      )
+      await applyManagedProperties(tx, bookId, DOCUMENT_PROPERTY_SCHEMAS, documentPropertyEntries(book, authorPageId))
 
-      // a single deterministic note child
-      const noteId = pluginBlockId(workspaceId, READWISE_NS, `hl:${h.id}:note`)
-      const extraLines = [noteText, ...noteLines].filter(s => s && s.trim().length)
-      const noteBlock = await tx.get(noteId)
-      if (extraLines.length === 0) {
-        if (noteBlock) await tx.delete(noteId)
-      } else {
-        const noteContent = extraLines.join('\n')
-        if (!noteBlock || noteBlock.deleted) {
-          const hKids = await tx.childrenOf(hId)
-          const lastHKid = hKids.length ? hKids[hKids.length - 1].orderKey : null
+      // 2. supplemental template children. Property-backed template lines are
+      //    intentionally omitted here because their values live on the
+      //    Readwise document type.
+      const bookKids = await tx.childrenOf(bookId)
+      const metaIds = supplementalLines.map((_, i) =>
+        pluginBlockId(workspaceId, READWISE_NS, `book:${book.user_book_id}:meta:${i}`))
+
+      // Template lines sit at the top of the book page, before any other children.
+      const firstNonMetaKey = bookKids.find((k: any) => !metaIds.includes(k.id))?.orderKey ?? null
+      const metaKeys = keysBetween(null, firstNonMetaKey, supplementalLines.length || 1)
+
+      for (let i = 0; i < supplementalLines.length; i++) {
+        const id = metaIds[i]
+        const content = supplementalLines[i]
+        const orderKey = metaKeys[i]
+        const existingMetaBlock = await tx.get(id)
+        if (!existingMetaBlock || existingMetaBlock.deleted) {
           await createOrRestoreTargetBlock(tx, {
-            id: noteId, workspaceId, parentId: hId,
-            orderKey: keyBetween(lastHKid, null),
-            freshContent: noteContent,
+            id, workspaceId, parentId: bookId, orderKey, freshContent: content,
           })
-        } else if (noteBlock.content !== noteContent) {
-          await tx.update(noteId, { content: noteContent })
+        } else {
+          if (existingMetaBlock.content !== content) {
+            await tx.update(id, { content })
+          }
         }
-        await repo.addTypeInTx(tx, noteId, READWISE_NOTE_TYPE, {}, typeSnapshot)
-        await applyManagedProperties(tx, noteId, NOTE_PROPERTY_SCHEMAS, notePropertyEntries(h))
       }
-    }
-  }, { scope: ChangeScope.BlockDefault, description: `readwise: sync book ${book.user_book_id}` })
+      // 3. highlights live under a deterministic sub-bullet on the document
+      //    page, with notes still nested under their highlight.
+      if (!highlights.length) return
+
+      await ensureHighlightsSection(tx, workspaceId, bookId, highlightsSectionId, metaIds)
+
+      const sectionKids = await tx.childrenOf(highlightsSectionId)
+      const lastHighlightKey = sectionKids.length ? sectionKids[sectionKids.length - 1].orderKey : null
+      const newHighlightKeys = keysBetween(lastHighlightKey, null, highlights.length || 1)
+      let nextNewHighlightKey = 0
+
+      for (let i = 0; i < highlights.length; i++) {
+        const h = highlights[i]
+        const hId = pluginBlockId(workspaceId, READWISE_NS, `hl:${h.id}`)
+        const hVars = highlightVars(h)
+        const hLines = renderTemplateLines(highlightTemplate, hVars)
+        const hContent = hLines[0] ?? (h.text ?? '')
+        const noteLines = renderSupplementalTemplateLines(
+          highlightTemplate.split('\n').slice(1).join('\n'),
+          hVars,
+          HIGHLIGHT_PROPERTY_TEMPLATE_KEYS,
+        )
+        const noteText = nonEmptyString(h.note)
+
+        const existingH = await tx.get(hId)
+        if (!existingH || existingH.deleted) {
+          await createOrRestoreTargetBlock(tx, {
+            id: hId,
+            workspaceId,
+            parentId: highlightsSectionId,
+            orderKey: newHighlightKeys[nextNewHighlightKey++],
+            freshContent: hContent,
+          })
+        } else {
+          if (existingH.content !== hContent) {
+            await tx.update(hId, { content: hContent })
+          }
+        }
+        await repo.addTypeInTx(tx, hId, READWISE_HIGHLIGHT_TYPE, {}, typeSnapshot)
+        await addConfiguredTypes(tx, repo, hId, highlightTypeIds, typeSnapshot)
+        await applyManagedProperties(tx, hId, HIGHLIGHT_PROPERTY_SCHEMAS, highlightPropertyEntries(book, h))
+        if (reviewDateBlock) {
+          await ensureHighlightReviewState(tx, hId, reviewDateBlock.id)
+        }
+
+        // a single deterministic note child
+        const noteId = pluginBlockId(workspaceId, READWISE_NS, `hl:${h.id}:note`)
+        const extraLines = [noteText, ...noteLines].filter(s => s && s.trim().length)
+        const noteBlock = await tx.get(noteId)
+        if (extraLines.length === 0) {
+          if (noteBlock) await tx.delete(noteId)
+        } else {
+          const noteContent = extraLines.join('\n')
+          if (!noteBlock || noteBlock.deleted) {
+            const hKids = await tx.childrenOf(hId)
+            const lastHKid = hKids.length ? hKids[hKids.length - 1].orderKey : null
+            await createOrRestoreTargetBlock(tx, {
+              id: noteId, workspaceId, parentId: hId,
+              orderKey: keyBetween(lastHKid, null),
+              freshContent: noteContent,
+            })
+          } else if (noteBlock.content !== noteContent) {
+            await tx.update(noteId, { content: noteContent })
+          }
+          await repo.addTypeInTx(tx, noteId, READWISE_NOTE_TYPE, {}, typeSnapshot)
+          await applyManagedProperties(tx, noteId, NOTE_PROPERTY_SCHEMAS, notePropertyEntries(h))
+        }
+      }
+    }, { scope: ChangeScope.BlockDefault, description: `readwise: sync book ${book.user_book_id}` })
+
+    await ensureDocumentAlias(
+      repo, bookId, title, previousTitle, workspaceId,
+      `readwise: name document ${book.user_book_id}`,
+    )
+  })
 }
 
 const runSync = async (repo: any, { silent = false } = {}) => {
@@ -1595,27 +1744,51 @@ const runSync = async (repo: any, { silent = false } = {}) => {
     let pageCursor: string | null = null
     let bookCount = 0
     let highlightCount = 0
+    let syncedHighlightCount = 0
+    const failed: string[] = []
     do {
       const { results, nextPageCursor } = await fetchExportPage(token, updatedAfter, pageCursor)
       pageCursor = nextPageCursor
       for (const book of results) {
         bookCount++
-        highlightCount += (book.highlights ?? []).length
+        const bookHighlights = (book.highlights ?? []).length
+        highlightCount += bookHighlights
         if (!progress) progress = showProgress('Readwise: syncing…')
         progress.update(`Readwise: ${bookCount} books, ${highlightCount} highlights…`)
-        await syncBookToBlocks(
-          repo, workspaceId, rootId, book,
-          pageTitleTemplate, bookTemplate, highlightTemplate,
-          authorPageTypeIds, documentPageTypeIds, highlightTypeIds, reviewDateIso,
-        )
+        // Per book, so one document that will not write cannot cost the user
+        // every book after it in the export. Before this, a single unresolvable
+        // write aborted the run with the cursor un-advanced, so the next sync
+        // re-fetched from the same place and died at the same book — the
+        // library stopped importing entirely.
+        try {
+          await syncBookToBlocks(
+            repo, workspaceId, rootId, book,
+            pageTitleTemplate, bookTemplate, highlightTemplate,
+            authorPageTypeIds, documentPageTypeIds, highlightTypeIds, reviewDateIso,
+          )
+          syncedHighlightCount += bookHighlights
+        } catch (err) {
+          failed.push(nonEmptyString(book.title) ?? `#${book.user_book_id}`)
+          console.error('[readwise] book sync failed', book.user_book_id, err)
+        }
       }
     } while (pageCursor)
 
-    const finishedAt = new Date().toISOString()
-    await prefs.set(lastSyncedAtProp, finishedAt)
-    progress?.done(bookCount === 0
-      ? undefined
-      : `Readwise: synced ${bookCount} book(s), ${highlightCount} highlight(s)`)
+    // The cursor only advances on a clean pass: it is the only thing that
+    // brings a failed book back, and moving it past one that did not land
+    // would drop that book until Readwise happens to touch it again.
+    if (failed.length === 0) await prefs.set(lastSyncedAtProp, new Date().toISOString())
+
+    // Counted from what landed, not from what was fetched — a report that
+    // includes a failed book's highlights is a report that lied.
+    const synced = `Readwise: synced ${bookCount - failed.length} book(s), ${syncedHighlightCount} highlight(s)`
+    if (failed.length === 0) {
+      progress?.done(bookCount === 0 ? undefined : synced)
+    } else {
+      const message = `${synced} — ${failed.length} failed (${truncate(failed.join(', '), 80)}). Retrying next sync.`
+      if (progress) progress.fail(message)
+      else if (!silent) showError(message)
+    }
   } catch (err: any) {
     if (progress) {
       progress.fail(`Readwise sync failed: ${err?.message ?? err}`)
