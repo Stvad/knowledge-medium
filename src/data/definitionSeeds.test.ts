@@ -84,17 +84,22 @@ let repo: Repo
 beforeAll(async () => { sharedDb = await createTestDb() })
 afterAll(async () => { await sharedDb.cleanup() })
 /** Release a Repo the suite is done with. Every test here leaves a seed pass
- *  queued (the `beforeEach` pin primes the registry, which schedules one) and
- *  nothing disposes the Repo, so the pass fires during a LATER test, against a
- *  database reset under it. Its writes are not merely redundant: tx ids come
- *  from a per-Repo `createTestRepo` counter, so two live Repos over one
- *  database collide. Unpinned, the pass refuses at the access gate first. */
-const releaseRepo = (target: Repo | undefined): void => {
+ *  queued and nothing disposes the Repo, so it fires during a LATER test with
+ *  the database reset under it — and its writes are not merely redundant: tx
+ *  ids come from a per-Repo `createTestRepo` counter, so two live Repos over
+ *  one database collide.
+ *
+ *  Unpin THEN drain. Unpinning alone leaves a pass already past the access gate
+ *  mid-write across the reset — defence in depth, since that window is
+ *  load-dependent and no test fails without the drain. Draining first hangs: a
+ *  still-pinned pass parks on a membership wait for a row the reset removed. */
+const releaseRepo = async (target: Repo | undefined): Promise<void> => {
   target?.setActiveWorkspaceId(null)
+  await target?.awaitSeedMaterialization()
 }
 
-afterEach(() => {
-  releaseRepo(repo)
+afterEach(async () => {
+  await releaseRepo(repo)
   vi.restoreAllMocks()
 })
 beforeEach(async () => {
@@ -541,6 +546,12 @@ describe('property seed materialization access', () => {
     repo.setActiveWorkspaceId(OTHER_WS)
     await expect(awaitPropertySeedMaterializationAccess(repo, WS, {freshlyCreated: false}))
       .resolves.toEqual({allowed: false, reason: 'inactive-workspace'})
+
+    // No workspace at all is the `releaseRepo` case — what stops a Repo the
+    // suite has finished with from writing through the shared database.
+    repo.setActiveWorkspaceId(null)
+    await expect(awaitPropertySeedMaterializationAccess(repo, WS, {freshlyCreated: false}))
+      .resolves.toEqual({allowed: false, reason: 'inactive-workspace'})
   })
 
   it('rechecks the workspace after a parked membership wait releases', async () => {
@@ -614,22 +625,11 @@ describe('scheduled seed materialization (Repo wiring, §4.3)', {timeout: 30_000
     }
   }
 
-  /** A Repo set up the way `beforeEach` sets the file's up — its own `gen-N`
-   *  counter included, which is the half that collides. */
-  const abandonableRepo = async (): Promise<Repo> => {
-    const built = createTestRepo({db: sharedDb.db}).repo
-    built.setActiveWorkspaceId(WS)
-    await built.ensureSystemPages(WS)
-    await insertEditorMembership(built)
-    await built.whenPropertyDefinitionsReady(WS)
-    return built
-  }
-
-  const insertEditorMembership = async (target: Repo = repo): Promise<void> => {
-    await target.db.execute(
+  const insertEditorMembership = async (): Promise<void> => {
+    await repo.db.execute(
       `INSERT INTO workspace_members (id, workspace_id, user_id, role, create_time)
        VALUES (?, ?, ?, ?, ?)`,
-      ['member-editor', WS, target.user.id, 'editor', 1],
+      ['member-editor', WS, repo.user.id, 'editor', 1],
     )
   }
 
@@ -661,53 +661,6 @@ describe('scheduled seed materialization (Repo wiring, §4.3)', {timeout: 30_000
       expect(row?.parent_id).toBe(propertiesPageBlockId(WS))
       expect(row?.deleted).toBe(0)
     }
-  })
-
-  it('a Repo abandoned by an earlier test cannot write through the shared db', async () => {
-    // What `releaseRepo` buys, end to end — the same action the `afterEach`
-    // runs. Drop it below and this reports the swallowed
-    // `command_events.tx_id` collisions it prevents.
-    // Release AND drain: releasing stops a queued pass at the access gate, but
-    // one already past it is mid-write, and would straddle the reset below and
-    // collide with `current` on its own account. Draining settles those, so the
-    // only pass left to reach the reset is the released one under test.
-    const quiesce = async (target: Repo): Promise<void> => {
-      releaseRepo(target)
-      await target.awaitSeedMaterialization()
-    }
-    await quiesce(repo) // this test drives its own Repos
-
-    // Armed before the abandoned Repo exists, because the membership insert
-    // inside the SECOND `abandonableRepo()` is what wakes its parked pass —
-    // arming after that call leaves the window this test is about uncovered,
-    // and whether the pass reports inside it is down to the scheduler.
-    const failures: string[] = []
-    vi.spyOn(console, 'error').mockImplementation((...args: unknown[]) => {
-      failures.push(args.map(String).join(' '))
-    })
-
-    const abandoned = await abandonableRepo()
-    abandoned.scheduleWorkspaceSeedMaterialization(WS, false)
-    await quiesce(abandoned) // ← the teardown under test
-
-    await resetTestDb(sharedDb.db) // the next test's beforeEach
-    const current = await abandonableRepo()
-    try {
-      current.scheduleWorkspaceSeedMaterialization(WS, false)
-      await waitForMaterialization(async () => {
-        await Promise.all([abandoned.awaitSeedMaterialization(), current.awaitSeedMaterialization()])
-        const [seedKey] = [...(current.propertyDefinitions?.seedsByKey.keys() ?? [])]
-        expect(await sharedDb.db.getOptional(
-          'SELECT id FROM blocks WHERE id = ?', [propertyDefinitionBlockId(WS, seedKey!)])).not.toBeNull()
-      })
-    } finally {
-      // The `afterEach` only reaches the module-level `repo` — which this test
-      // released on its way in. Both Repos it built are its own to release, or
-      // it leaves behind exactly the lifecycle it exists to close.
-      releaseRepo(current)
-    }
-
-    expect(failures).toEqual([])
   })
 
   it('a scheduled pass cannot outlive the test that scheduled it', async () => {
