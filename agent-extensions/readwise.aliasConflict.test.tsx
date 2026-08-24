@@ -29,7 +29,9 @@ import { dailyNotesDataExtension } from '@/plugins/daily-notes/dataExtension.js'
 import { referencesDataExtension } from '@/plugins/references/dataExtension.js'
 import type { AppExtension } from '@/facets/facet.js'
 
-import readwiseContributions, { ensureRoot, syncBookToBlocks } from './readwise.tsx'
+import readwiseContributions, {
+  acceptFallbackAlias, ensureRoot, syncBookToBlocks, unresolvedAliasConflicts,
+} from './readwise.tsx'
 
 const READWISE_NS = '45fb169f-ffac-458b-b2a7-6cec87d2d7ee'
 const DOCUMENT_TYPE = 'readwise-document'
@@ -37,7 +39,10 @@ const WS = 'ws-1'
 const REVIEW_DATE = '2026-08-24'
 
 const readwiseDataAndUi = readwiseContributions
-  .filter(c => !['core.app-mounts', 'core.app-effects'].includes(c.facet.id)) as unknown as AppExtension[]
+  // `'facet' in c` also drops the nested AppExtension arrays (the dialog host),
+  // which is what these suites want: they exclude every app mount anyway.
+  .filter(c => 'facet' in (c as object)
+    && !['core.app-mounts', 'core.app-effects'].includes((c as any).facet.id)) as unknown as AppExtension[]
 
 let sharedDb: TestDb
 let repo: Repo
@@ -273,6 +278,26 @@ describe('readwise document alias — the title is already a page name', () => {
     expect(aliasesOf(await repo.load(documentId(1)))).toEqual(['My Notes On Deep Work'])
   })
 
+  it('leaves a hand-added second fallback name alone', async () => {
+    const rootId = await createRoot()
+    await createRivalPage('rival', 'Deep Work')
+    await sync(rootId, book(1, 'Deep Work', 11))
+    expect(aliasesOf(await repo.load(documentId(1)))).toEqual(['Deep Work (Readwise)'])
+
+    // Indistinguishable from the sync's own work by SHAPE — it is exactly what
+    // the generator emits for slot 2 — and obviously not the sync's by RECORD,
+    // which only ever claimed one name.
+    await repo.tx(
+      tx => tx.setProperty(documentId(1), aliasesProp,
+        ['Deep Work (Readwise)', 'Deep Work (Readwise 2)']),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await sync(rootId, book(1, 'Deep Work', 11))
+
+    expect(aliasesOf(await repo.load(documentId(1))))
+      .toEqual(['Deep Work (Readwise)', 'Deep Work (Readwise 2)'])
+  })
+
   it('leaves a user alias merely SHAPED like a fallback alone', async () => {
     const rootId = await createRoot()
     await createRivalPage('rival', 'Deep Work')
@@ -292,14 +317,17 @@ describe('readwise document alias — the title is already a page name', () => {
 
   it('does not claim a name a sync-applied row co-holds', async () => {
     const rootId = await createRoot()
+    await createRivalPage('rival', 'Deep Work')
     await sync(rootId, book(1, 'Deep Work', 11))
 
-    // The bag a merge leaves behind: the real name plus the placeholder it
-    // was parked on. Written while the name is still uncontested.
-    await repo.tx(
-      tx => tx.setProperty(documentId(1), aliasesProp, ['Deep Work', 'Deep Work (Readwise)']),
-      {scope: ChangeScope.BlockDefault},
-    )
+    // The bag a merge leaves behind: the placeholder the sync recorded
+    // claiming, plus the real name handed back. Reached the way the sync
+    // reaches it, so the recorded claim matches — set by hand it would read as
+    // the user's work and the reconcile would rightly leave it alone.
+    await repo.tx(async tx => {
+      await tx.setProperty('rival', aliasesProp, [])
+      await tx.setProperty(documentId(1), aliasesProp, ['Deep Work (Readwise)', 'Deep Work'])
+    }, {scope: ChangeScope.BlockDefault})
     await coClaimRaw('synced-rival', 'Deep Work', LATE)
     expect(await claimantIdsOf('Deep Work')).toHaveLength(2)
 
@@ -393,5 +421,67 @@ describe('readwise document alias — the merge the banner offers', () => {
     // document's own.
     await sync(rootId, book(1, 'Deep Work', 11))
     expect(aliasesOf(await repo.load(documentId(1)))).toEqual(['Deep Work'])
+  })
+})
+
+describe('readwise alias conflicts — what the sync offers to resolve', () => {
+  const conflicts = () => unresolvedAliasConflicts(repo, WS)
+
+  it('reports a document parked on a fallback, with the page holding its name', async () => {
+    const rootId = await createRoot()
+    await createRivalPage('rival', 'Deep Work')
+    await sync(rootId, book(1, 'Deep Work', 11))
+
+    expect(await conflicts()).toEqual([{
+      documentId: documentId(1),
+      title: 'Deep Work',
+      fallback: 'Deep Work (Readwise)',
+      rivalIds: ['rival'],
+      rivalTitles: ['Deep Work'],
+    }])
+  })
+
+  it('says nothing about a document holding its own name', async () => {
+    const rootId = await createRoot()
+    await sync(rootId, book(1, 'Deep Work', 11))
+
+    expect(await conflicts()).toEqual([])
+  })
+
+  it('stops reporting one the user chose to keep', async () => {
+    const rootId = await createRoot()
+    await createRivalPage('rival', 'Deep Work')
+    await sync(rootId, book(1, 'Deep Work', 11))
+
+    await acceptFallbackAlias(repo, documentId(1))
+
+    expect(await conflicts()).toEqual([])
+    // and the answer survives the syncs that follow it, which is the whole
+    // point of recording it rather than suppressing the toast in memory
+    await sync(rootId, book(1, 'Deep Work', 11))
+    expect(await conflicts()).toEqual([])
+  })
+
+  it('offers a LATER conflict again after the first one resolves', async () => {
+    const rootId = await createRoot()
+    await createRivalPage('rival', 'Deep Work')
+    await sync(rootId, book(1, 'Deep Work', 11))
+    await acceptFallbackAlias(repo, documentId(1))
+
+    // The rival gives the name up, so the document takes it back and the
+    // answer is spent.
+    await repo.tx(
+      tx => tx.setProperty('rival', aliasesProp, []),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await sync(rootId, book(1, 'Deep Work', 11))
+    expect(aliasesOf(await repo.load(documentId(1)))).toEqual(['Deep Work'])
+
+    // Readwise re-titles the book onto another name the user already uses: a
+    // fresh conflict, offered again rather than answered by the earlier keep.
+    await createRivalPage('rival-2', 'Digital Minimalism')
+    await sync(rootId, book(1, 'Digital Minimalism', 11))
+
+    expect((await conflicts()).map(c => c.documentId)).toEqual([documentId(1)])
   })
 })
