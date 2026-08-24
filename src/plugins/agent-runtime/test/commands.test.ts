@@ -12,7 +12,7 @@ import { extensionsDataExtension } from '@/plugins/extensions-settings/dataExten
 import { resolveFacetRuntimeSync } from '@/facets/facet'
 import { __setCompileImplForTest, readApproval } from '@/extensions/compileExtensionModule'
 import { actionsFacet, appMountsFacet, blockRenderersFacet } from '@/extensions/core'
-import { ActionContextTypes } from '@/shortcuts/types'
+import { ActionContextTypes, type BlockShortcutDependencies } from '@/shortcuts/types'
 import { createAgentRuntimeContext, executeCommand } from '../commands'
 import type { AgentRuntimeContext, InstallExtensionResult } from '../protocol'
 import { InvalidBlockIdError } from '@/data/blockId'
@@ -876,5 +876,99 @@ describe('mutating verbs refuse a target outside the active workspace (#790)', (
     await expect(executeCommand({
       commandId: 'c', type: 'delete-block', blockId: 'no-such-block',
     }, env.context)).rejects.toThrow(/does not exist/)
+  })
+
+  // The refusal has to beat the PARSE, not just the write: a doomed request
+  // shouldn't pay `parseMarkdownToBlocks` first. Asserted as "the transaction
+  // never opened", which is what distinguishes the pre-flight from the in-tx
+  // assertion that also (still) guards it.
+  it('reconcile-markdown-subtree refuses before opening a transaction', async () => {
+    await seedBackground()
+    const txSpy = vi.spyOn(env.repo, 'tx')
+
+    await expect(executeCommand({
+      commandId: 'c', type: 'reconcile-markdown-subtree',
+      parentId: BG_ROOT, markdown: '- a\n- b\n- c', key: 'k2',
+    }, env.context)).rejects.toThrow(refusal)
+
+    expect(txSpy).not.toHaveBeenCalled()
+    txSpy.mockRestore()
+  })
+
+  // `run-action` is the widest route to a kernel mutator — it turns
+  // caller-supplied ids into Block facades and hands them to a handler that
+  // may call `Block.delete()`. Guarding only the typed verbs would leave the
+  // corruption reachable through here (Codex, PR #803 review). The refusal has
+  // to land before `invokeAction`, because once a handler runs, its writes are
+  // outside our reach — so these assert the handler never ran, not merely that
+  // the command rejected.
+  describe('run-action', () => {
+    let ran: boolean
+    let seenBlockId: string | undefined
+
+    const probeAction = {
+      id: 'test.probe',
+      description: 'records that it was dispatched',
+      context: ActionContextTypes.GLOBAL,
+      handler: (deps: BlockShortcutDependencies) => {
+        ran = true
+        seenBlockId = deps.block?.id
+      },
+    }
+
+    const withProbeAction = (): AgentRuntimeContext => {
+      const runtime = resolveFacetRuntimeSync(
+        [staticDataExtensions, extensionsDataExtension, actionsFacet.of(probeAction, {source: 'test'})],
+        {repo: env.repo, workspaceId: WS, safeMode: false},
+      )
+      env.repo.setFacetRuntime(runtime)
+      return createAgentRuntimeContext({repo: env.repo, runtime, safeMode: false})
+    }
+
+    beforeEach(() => { ran = false; seenBlockId = undefined })
+
+    it('refuses a blockId dependency in another workspace before dispatch', async () => {
+      await seedBackground()
+      const context = withProbeAction()
+
+      await expect(executeCommand({
+        commandId: 'c', type: 'run-action', id: 'test.probe',
+        dependencies: {blockId: BG_ROOT},
+      }, context)).rejects.toThrow(refusal)
+
+      expect(ran).toBe(false)
+    })
+
+    it('refuses a foreign id hidden among selectedBlockIds', async () => {
+      await seedBackground()
+      const context = withProbeAction()
+      await env.repo.tx(async tx => {
+        await tx.create({id: 'here', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'x'})
+      }, {scope: ChangeScope.BlockDefault, description: 'seed active block'})
+
+      // The active id first, so a check that only looked at the head of the
+      // list — or only at `blockId` — would pass this.
+      await expect(executeCommand({
+        commandId: 'c', type: 'run-action', id: 'test.probe',
+        dependencies: {blockId: 'here', selectedBlockIds: ['here', BG_ROOT]},
+      }, context)).rejects.toThrow(refusal)
+
+      expect(ran).toBe(false)
+    })
+
+    it('still dispatches for an active-workspace block', async () => {
+      const context = withProbeAction()
+      await env.repo.tx(async tx => {
+        await tx.create({id: 'here', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'x'})
+      }, {scope: ChangeScope.BlockDefault, description: 'seed active block'})
+
+      await executeCommand({
+        commandId: 'c', type: 'run-action', id: 'test.probe',
+        dependencies: {blockId: 'here'},
+      }, context)
+
+      expect(ran).toBe(true)
+      expect(seenBlockId).toBe('here')
+    })
   })
 })

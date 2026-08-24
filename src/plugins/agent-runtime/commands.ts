@@ -526,34 +526,21 @@ const withGrainWarnings = async (
   return warnings.length > 0 ? {...block, agentWarnings: warnings} : block
 }
 
-/** Refuse a mutating verb aimed at a workspace this client does not have open.
+/** Refuse a bridge mutation aimed at a workspace this client does not have open.
  *
  *  Field-row recognition resolves the definition through
  *  `Repo.propertySchemaResolverFor`, which serves the active workspace and the
  *  retained previous one and fails CLOSED for any other — so a mutation run
- *  against a background workspace runs with recognition off and the guards
- *  that read it inverted. Measured: a delete there rewrites `::((fieldId))`
- *  field rows to the definition's prose and clears their stamp, detaching the
- *  property from its owner irreversibly (#790).
+ *  against a background workspace runs with recognition off, and a delete
+ *  there rewrites `::((fieldId))` field rows to prose instead of leaving the
+ *  dangling ref intact (#790).
  *
- *  Here rather than in the kernel, which is the tempting place for it:
- *  `repo.tx` is deliberately workspace-agnostic. Sync arrival is the only
- *  routine background-workspace writer and needs no recognition (it runs no
- *  mutators and no post-commit processors — a peer that deleted with the
- *  workspace open uploads the correctly-handled rows), and tests seed unopened
- *  workspaces directly. A kernel throw would refuse both.
- *
- *  The bridge's own transport already pins a client's audience to its active
- *  workspace, so this is not about which client is talking — it is about a
- *  block ID naming a row in another workspace, which nothing upstream can
- *  catch (`sql` is not workspace-scoped, so an agent that found an id that way
- *  has one). `eval` and raw `sql execute` reach `repo` directly and stay
- *  unguardable; eval'd code calling a `context` verb lands here like anyone
- *  else.
- *
- *  Same assertion shape `run-backfill` and `audit-properties` carry: a
- *  workspace names an expectation about this client's state, never a target to
- *  switch to. */
+ *  Not in the kernel: `repo.tx` is workspace-agnostic on purpose — sync
+ *  arrival writes background rows through a path that needs no recognition,
+ *  and tests seed unopened workspaces directly — so a throw there would refuse
+ *  both. The bridge is where a block ID can name a row outside the workspace
+ *  its client is paired to. `eval` and raw `sql execute` reach `repo` directly
+ *  and stay unguardable. */
 const assertActiveWorkspace = (repo: Repo, verb: string, workspaceId: string): void => {
   if (workspaceId === repo.activeWorkspaceId) return
   throw new Error(
@@ -571,7 +558,17 @@ const assertActiveWorkspace = (repo: Repo, verb: string, workspaceId: string): v
  *
  *  A raw read rather than `repo.load`, which filters `deleted = 0`:
  *  `restore-block`'s target is ALWAYS a tombstone, so routing through the
- *  loader would make that verb's guard a permanent no-op. */
+ *  loader would make that verb's guard a permanent no-op.
+ *
+ *  ACCEPTED residual race, deliberately not closed (PR #803 review): this read
+ *  is not in the mutator's own transaction, so an id absent here that sync
+ *  delivers for a background workspace before that transaction opens is
+ *  mutated unguarded. Closing it means replacing each `repo.mutate.X` with a
+ *  hand-rolled `repo.tx` + `tx.run`, restating the mutator's own scope and
+ *  description at the call site — and `run-action` could not use it anyway,
+ *  since the mutations happen inside an action handler. A pre-check is the
+ *  only mechanism available to every caller here, so the tighter one would buy
+ *  coupling and inconsistency without closing the class. */
 const assertActiveWorkspaceBlock = async (
   repo: Repo,
   verb: string,
@@ -672,6 +669,10 @@ const reconcileMarkdownSubtree = async (
   input: ReconcileMarkdownSubtreeInput,
 ): Promise<ReconcileMarkdownSubtreeResult> => {
   const {parentId, key, properties, shape, final} = input
+  // Before `parseMarkdownToBlocks`, not merely before the write: a doomed
+  // request should not pay the parser first. The in-tx assertion below stays —
+  // this one is the cheap refusal, that one is the atomic decision.
+  await assertActiveWorkspaceBlock(repo, 'reconcile-markdown-subtree', parentId)
   // shape 'block' → the whole markdown is ONE root block (newlines kept);
   // 'outline' (default) → split along the markdown outline.
   const parsed: ParsedBlock[] = shape === 'block'
@@ -1261,6 +1262,24 @@ const runRuntimeAction = async (
     anchorBlock,
     scopeRootId,
   } as BaseShortcutDependencies
+  // `run-action` is the widest route to a kernel mutator: it turns
+  // caller-supplied ids into Block facades and hands them to a handler that
+  // may call `Block.delete()` (the `delete_block` action does). Guarding only
+  // the typed verbs would leave the same background-workspace corruption
+  // reachable through here — so every id that became a dependency is checked
+  // BEFORE dispatch, which is also the last point we can refuse: once
+  // `invokeAction` runs, the writes are inside a handler we don't control.
+  for (const dependencyId of [
+    dependencies.blockId, command.blockId,
+    dependencies.uiStateBlockId, command.uiStateBlockId,
+    dependencies.anchorBlockId, scopeRootId,
+    ...selectedBlockIds,
+  ]) {
+    if (isString(dependencyId) && dependencyId) {
+      await assertActiveWorkspaceBlock(context.repo, `run-action ${actionId}`, dependencyId)
+    }
+  }
+
   const trigger = new CustomEvent('agent-runtime:run-action', {detail: {actionId}})
   let returned: unknown
   try {
