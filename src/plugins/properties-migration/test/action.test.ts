@@ -337,6 +337,28 @@ describe('migrate_properties_to_blocks action', () => {
     expect(showInfo).toHaveBeenCalledWith(expect.stringContaining('read-only'))
   })
 
+  it('still owns its sentence when AUTHORITY changed under the repair', async () => {
+    // The third way to reach the post-repair refusal, and the one whose counts
+    // explain nothing: the workspace went read-only while the pass ran. The
+    // refusal is about permission, but rows were still rewritten, so the
+    // caller's "Nothing was changed" is as false here as anywhere else.
+    const {repo, workspaceViewGap, rematerializeWorkspace} = makeRepo()
+    workspaceViewGap.mockResolvedValueOnce(STRANDED)
+    rematerializeWorkspace.mockImplementation(async () => {
+      ;(repo as unknown as {isReadOnly: boolean}).isReadOnly = true
+      return pass({scanned: 5, applied: 5, resolved: 5, unappliedBefore: 5})
+    })
+
+    await invoke(repo)
+
+    expect(showInfo).toHaveBeenCalledWith(expect.stringContaining('Caught up on 5 row(s)'))
+    expect(showInfo).toHaveBeenCalledWith(expect.stringContaining('read-only'))
+    expect(showInfo).not.toHaveBeenCalledWith(expect.stringContaining('Nothing was changed'))
+    // And no residual-gap counts: they would be explaining a refusal they have
+    // nothing to do with.
+    expect(showInfo).not.toHaveBeenCalledWith(expect.stringContaining('just re-checked'))
+  })
+
   it('owns its sentence when a partial repair still leaves rows stuck', async () => {
     // A repair that applied SOME rows and left others deferred returns a real
     // refusal, which is exactly why this path looks like it should take the

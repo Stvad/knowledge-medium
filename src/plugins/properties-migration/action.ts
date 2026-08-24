@@ -214,20 +214,35 @@ const repairThenRecheck = async (
       standalone: true}
   }
   banner.done()
-  // Only when this pass is still the reason. Its counts explain THIS gap; on a
-  // workspace that has meanwhile gone read-only they would explain nothing.
-  if (!stillUnfit.rematerializable) return stillUnfit
-  const withResidual = `${stillUnfit.reason} (${describeResidualGap(repaired)})`
-  // The FOURTH path that has to disown "Nothing was changed", and the one
-  // easiest to miss: the other three stop of their own accord, while this one
-  // decorates a genuine refusal and looks like it should take the caller's
-  // standard wrapper. It must not, once windows have committed.
-  if (repaired.applied === 0) return {...stillUnfit, reason: withResidual}
+  return refusalAfterRepair(stillUnfit, repaired)
+}
+
+/**
+ * A refusal that outlived the repair, phrased for what the repair did.
+ *
+ * ONE place answers this, because there are three ways to reach it and they do
+ * not look like the same question: the gap survived and the counts explain it;
+ * the gap survived and there is nothing to explain; or AUTHORITY changed
+ * underneath — the workspace went read-only, or its owner did — in which case
+ * the pass's counts explain nothing about the refusal. Each was got wrong in
+ * turn, and always the same way: `notStarted`'s "Nothing was changed" is false
+ * the moment a window has committed, and a per-branch flag is something a
+ * branch can forget. Deciding it once means a new branch cannot.
+ */
+const refusalAfterRepair = (
+  stillUnfit: Unfitness,
+  repaired: WorkspaceRematerialization,
+): Unfitness => {
+  // The counts belong only to a refusal the pass is still the reason for.
+  const reason = stillUnfit.rematerializable
+    ? `${stillUnfit.reason} (${describeResidualGap(repaired)})`
+    : stillUnfit.reason
+  if (repaired.applied === 0) return {...stillUnfit, reason}
   return {
     ...stillUnfit,
     standalone: true,
     reason: `Caught up on ${repaired.resolved.toLocaleString()} row(s) this device had not `
-      + `applied, but the migration was not started — ${withResidual}.`,
+      + `applied, but the migration was not started — ${reason}.`,
   }
 }
 
