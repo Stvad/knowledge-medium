@@ -52,7 +52,7 @@ const countSampleWrites = (): (() => number) => {
 describe('interactionMetricsEffect', () => {
   it('takes one sample and does not re-sample until the cadence elapses', async () => {
     const samples = countSampleWrites()
-    const stop = interactionMetricsEffect.start({ repo, workspaceId: WS } as Parameters<
+    const stop = await interactionMetricsEffect.start({ repo, workspaceId: WS } as Parameters<
       typeof interactionMetricsEffect.start
     >[0])
     await settleSamples()
@@ -71,7 +71,7 @@ describe('interactionMetricsEffect', () => {
     vi.useFakeTimers()
     try {
       const samples = countSampleWrites()
-      const stop = interactionMetricsEffect.start({ repo, workspaceId: WS } as Parameters<
+      const stop = await interactionMetricsEffect.start({ repo, workspaceId: WS } as Parameters<
         typeof interactionMetricsEffect.start
       >[0])
       await vi.advanceTimersByTimeAsync(1)

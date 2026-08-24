@@ -47,9 +47,30 @@ export interface TimingSample {
   totalMs: number
 }
 
+/** The subset of a sample a trend actually compares. Split out from the stored
+ *  record so a live `repo.metrics()` snapshot can be compared against stored
+ *  history WITHOUT first being written and read back — which would otherwise
+ *  make the monitor's verdict depend on the recorder having sampled first. */
+export interface InteractionComparable {
+  /** `db.writeTransaction.calls`: writes this session. The denominator that
+   *  turns a raw resolve count into resolves-per-write, which is the signal
+   *  that catches an over-broad invalidation dep (a query re-resolving on every
+   *  write instead of on writes that concern it). Latency metrics are blind to
+   *  that class -- each resolve looks perfectly normal. */
+  writes: number
+  /** Per-query resolve timings, top `TOP_QUERIES` by `totalMs`. Keyed by query
+   *  NAME (`repo.metrics().queries` is already name-keyed, not handle-keyed). */
+  queries: Record<string, TimingSample>
+  /** `handleStore` fan-out counters -- invalidations, handlesWalked/Matched,
+   *  loaderRuns, midLoadInvalidations, reloadsAfterSettle. A flat number map,
+   *  stored whole: it is bounded, and which counter matters depends on the
+   *  regression being chased. */
+  fanout: Record<string, number>
+}
+
 /** One persisted interaction sample: the state of the data layer's own counters
  *  at a point in a page session. */
-export interface InteractionRecordData {
+export interface InteractionRecordData extends InteractionComparable {
   /** Wall-clock epoch ms of this (possibly re-)write. A session's record is
    *  updated in place as the session goes on, so this advances. */
   recordedAt: number
@@ -67,22 +88,8 @@ export interface InteractionRecordData {
   /** Live blocks in the workspace. The dominant confound for every timing
    *  below — without it a trend reads graph growth as a regression. */
   blockCount: number
-  /** `db.writeTransaction.calls`: writes this session. The denominator that
-   *  turns a raw resolve count into resolves-per-write, which is the signal
-   *  that catches an over-broad invalidation dep (a query re-resolving on every
-   *  write instead of on writes that concern it). Latency metrics are blind to
-   *  that class — each resolve looks perfectly normal. */
-  writes: number
-  /** Per-query resolve timings, top `TOP_QUERIES` by `totalMs`. Keyed by query
-   *  NAME (`repo.metrics().queries` is already name-keyed, not handle-keyed). */
-  queries: Record<string, TimingSample>
   /** Per-DB-method timings (`getAll`, `execute`, `writeTransaction`, …). */
   db: Record<string, TimingSample>
-  /** `handleStore` fan-out counters — invalidations, handlesWalked/Matched,
-   *  loaderRuns, midLoadInvalidations, reloadsAfterSettle. A flat number map,
-   *  stored whole: it is bounded, and which counter matters depends on the
-   *  regression being chased. */
-  fanout: Record<string, number>
   handles: {
     count: number
     totalDeps: number
@@ -147,6 +154,25 @@ const toTimingSample = (t: {
  */
 export const queryNameFromHandleKey = (key: string): string => key.split(':[')[0]
 
+/** Pure: the comparable subset of a metrics snapshot. Shared by the stored
+ *  record and by the monitor's live reading of the current session, so the two
+ *  can never diverge in what "the same measurement" means. */
+export const interactionComparable = (
+  metrics: ReturnType<Repo['metrics']>,
+): InteractionComparable => {
+  const queries: Record<string, TimingSample> = {}
+  for (const [name, timing] of Object.entries(metrics.queries)
+    .sort(([, a], [, b]) => b.totalMs - a.totalMs)
+    .slice(0, TOP_QUERIES)) {
+    queries[name] = toTimingSample(timing)
+  }
+  return {
+    writes: metrics.db.writeTransaction?.calls ?? 0,
+    queries,
+    fanout: { ...metrics.handleStore },
+  }
+}
+
 /** Pure: fold a metrics snapshot + session metadata into a storable record. */
 export const buildInteractionRecord = (
   metrics: ReturnType<Repo['metrics']>,
@@ -160,12 +186,6 @@ export const buildInteractionRecord = (
     blockCount: number
   },
 ): InteractionRecordData => {
-  const queries: Record<string, TimingSample> = {}
-  for (const [name, timing] of Object.entries(metrics.queries)
-    .sort(([, a], [, b]) => b.totalMs - a.totalMs)
-    .slice(0, TOP_QUERIES)) {
-    queries[name] = toTimingSample(timing)
-  }
   const db: Record<string, TimingSample> = {}
   for (const [method, timing] of Object.entries(metrics.db)) {
     db[method] = toTimingSample(timing)
@@ -180,10 +200,8 @@ export const buildInteractionRecord = (
     deviceLabel: meta.deviceLabel,
     sessionMs: meta.recordedAt - meta.startedAt,
     blockCount: meta.blockCount,
-    writes: metrics.db.writeTransaction?.calls ?? 0,
-    queries,
+    ...interactionComparable(metrics),
     db,
-    fanout: { ...metrics.handleStore },
     handles: {
       count: inventory.handleCount,
       totalDeps: inventory.totalDeps,

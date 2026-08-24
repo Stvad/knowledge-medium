@@ -59,6 +59,7 @@ import { dbMaintenancePlugin } from '@/plugins/db-maintenance'
 import { propertiesMigrationPlugin } from '@/plugins/properties-migration'
 import { startupMetricsPlugin } from '@/plugins/startup-metrics'
 import { interactionMetricsPlugin } from '@/plugins/interaction-metrics'
+import { perfMonitorPlugin } from '@/plugins/perf-monitor'
 import { extensionsSettingsPlugin } from '@/plugins/extensions-settings'
 import { keybindingsSettingsPlugin } from '@/plugins/keybindings-settings'
 import { extractTypePlugin } from '@/plugins/extract-type'
@@ -158,6 +159,7 @@ export const staticAppExtensions = ({repo}: {repo: Repo}): AppExtension[] => [
   propertiesMigrationPlugin({repo}),
   startupMetricsPlugin,
   interactionMetricsPlugin,
+  perfMonitorPlugin({repo}),
   updateIndicatorPlugin,
   blockInfoPlugin,
   agentRuntimePlugin,
