@@ -83,7 +83,16 @@ let repo: Repo
 
 beforeAll(async () => { sharedDb = await createTestDb() })
 afterAll(async () => { await sharedDb.cleanup() })
-afterEach(() => { vi.restoreAllMocks() })
+afterEach(() => {
+  // Unpin, so the seed pass this test leaves queued cannot write once the next
+  // one resets the shared database. Nothing disposes a test's Repo and every
+  // test here leaves a pass behind (the `beforeEach` pin primes the registry,
+  // which schedules one); the abandoned Repo's `newId` counter restarts at
+  // `gen-1` per `createTestRepo`, so two of them mint the same tx ids and one
+  // dies on `command_events.tx_id`. Unpinned, the pass refuses first.
+  repo?.setActiveWorkspaceId(null)
+  vi.restoreAllMocks()
+})
 beforeEach(async () => {
   await resetTestDb(sharedDb.db)
   repo = createTestRepo({db: sharedDb.db}).repo
@@ -598,11 +607,22 @@ describe('scheduled seed materialization (Repo wiring, §4.3)', {timeout: 30_000
     }
   }
 
-  const insertEditorMembership = async (): Promise<void> => {
-    await repo.db.execute(
+  /** A Repo set up the way `beforeEach` sets the file's up — its own `gen-N`
+   *  counter included, which is the half that collides. */
+  const abandonableRepo = async (): Promise<Repo> => {
+    const built = createTestRepo({db: sharedDb.db}).repo
+    built.setActiveWorkspaceId(WS)
+    await built.ensureSystemPages(WS)
+    await insertEditorMembership(built)
+    await built.whenPropertyDefinitionsReady(WS)
+    return built
+  }
+
+  const insertEditorMembership = async (target: Repo = repo): Promise<void> => {
+    await target.db.execute(
       `INSERT INTO workspace_members (id, workspace_id, user_id, role, create_time)
        VALUES (?, ?, ?, ?, ?)`,
-      ['member-editor', WS, repo.user.id, 'editor', 1],
+      ['member-editor', WS, target.user.id, 'editor', 1],
     )
   }
 
@@ -634,6 +654,33 @@ describe('scheduled seed materialization (Repo wiring, §4.3)', {timeout: 30_000
       expect(row?.parent_id).toBe(propertiesPageBlockId(WS))
       expect(row?.deleted).toBe(0)
     }
+  })
+
+  it('a Repo abandoned by an earlier test cannot write through the shared db', async () => {
+    // What the `afterEach` unpin buys, end to end — delete it below and this
+    // reports the swallowed `command_events.tx_id` collisions it prevents.
+    repo.setActiveWorkspaceId(null) // this test drives its own Repos
+
+    const abandoned = await abandonableRepo()
+    abandoned.scheduleWorkspaceSeedMaterialization(WS, false)
+    abandoned.setActiveWorkspaceId(null) // ← the teardown under test
+
+    await resetTestDb(sharedDb.db) // the next test's beforeEach
+    const current = await abandonableRepo()
+
+    const failures: string[] = []
+    vi.spyOn(console, 'error').mockImplementation((...args: unknown[]) => {
+      failures.push(args.map(String).join(' '))
+    })
+    current.scheduleWorkspaceSeedMaterialization(WS, false)
+    await waitForMaterialization(async () => {
+      await Promise.all([abandoned.awaitSeedMaterialization(), current.awaitSeedMaterialization()])
+      const [seedKey] = [...(current.propertyDefinitions?.seedsByKey.keys() ?? [])]
+      expect(await sharedDb.db.getOptional(
+        'SELECT id FROM blocks WHERE id = ?', [propertyDefinitionBlockId(WS, seedKey!)])).not.toBeNull()
+    })
+
+    expect(failures).toEqual([])
   })
 
   it('a scheduled pass cannot outlive the test that scheduled it', async () => {
