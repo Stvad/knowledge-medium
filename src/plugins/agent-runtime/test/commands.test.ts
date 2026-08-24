@@ -1061,6 +1061,26 @@ describe('mutating verbs refuse a target outside the active workspace (#790)', (
       expect(ran).toBe(false)
     })
 
+    // One per independently guarded dependency. Without these, deleting any of
+    // the three from the guarded set left the whole suite green — an unpinned
+    // guard that would regress silently, since each of these ids still reaches
+    // a handler that can mutate or navigate through it.
+    it.each([
+      ['uiStateBlockId'],
+      ['anchorBlockId'],
+      ['scopeRootId'],
+    ])('refuses a foreign %s', async (dependency) => {
+      await seedBackground()
+      const context = withProbeAction()
+
+      await expect(executeCommand({
+        commandId: 'c', type: 'run-action', id: 'test.probe',
+        dependencies: {[dependency]: BG_ROOT},
+      }, context)).rejects.toThrow(refusal)
+
+      expect(ran).toBe(false)
+    })
+
     // A whole multi-select is one deduplicated query, not one read per entry:
     // the protocol puts no bound on `selectedBlockIds`, and the CLI's command
     // timeout is finite.

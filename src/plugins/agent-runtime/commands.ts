@@ -596,35 +596,20 @@ const assertActiveWorkspace = (repo: Repo, verb: string, workspaceId: string): v
 
 /** `assertActiveWorkspace` for every existing block a verb is about to touch.
  *
- *  MISSING blocks pass: they have no workspace to compare, and answering
- *  "wrong workspace" would send the caller after a problem they don't have.
- *  Each verb reports its own not-found error a few lines later.
+ *  Contract for callers:
+ *    - MISSING blocks PASS, so each verb still reports its own not-found error.
+ *    - The read is raw, not `repo.load`, so it sees tombstones —
+ *      `restore-block`'s target always is one.
+ *    - Pass the whole id set; it is deduplicated into one query.
+ *    - ISSUE THE WRITE on the synchronous path immediately after this
+ *      resolves. The lookup is async and the active workspace can move during
+ *      it, so the pin re-check at the end is the last word — an await between
+ *      it and the write reopens the window it closes.
  *
- *  A raw read rather than `repo.load`, which filters `deleted = 0`:
- *  `restore-block`'s target is ALWAYS a tombstone, so routing through the
- *  loader would make that verb's guard a permanent no-op.
- *
- *  One deduplicated query, not one per id: `run-action` passes a whole
- *  multi-select through here, and the protocol puts no bound on it.
- *
- *  The pin re-check at the end is the reason this lookup can be trusted at
- *  all. It is async, and `bridge.ts` runs commands detached without cancelling
- *  in-flight ones, so the active workspace can move while the read is in
- *  flight — leaving a target that was verified against workspace A to be
- *  written under B's registry. Refusing there means the caller retries instead
- *  of writing with recognition off. Callers must issue their write on the
- *  synchronous path immediately after this resolves, which is what makes the
- *  re-check the LAST word: nothing can interleave between it and the write,
- *  and `repo.tx` independently refuses if the workspace generation moves while
- *  it waits for definition readiness.
- *
- *  Two residuals stay ACCEPTED, both for the same reason — they need the check
- *  to be inside the writing transaction, which is the kernel-side move tracked
- *  separately, not something a caller-side check can reach:
- *    - an id absent from this read that sync delivers for a background
- *      workspace before the mutator opens its transaction;
- *    - a switch DURING a `run-action` handler, whose writes happen inside code
- *      the bridge does not control. */
+ *  Two residuals are accepted, both needing the check inside the writing
+ *  transaction: an id absent here that sync delivers before the mutator's
+ *  transaction opens, and a switch during a `run-action` handler. See the
+ *  kernel-side follow-up issue. */
 const assertActiveWorkspaceBlocks = async (
   repo: Repo,
   verb: string,
