@@ -29,6 +29,8 @@ import {
   errorMessage,
   startBridgeInBackground,
   listStoredProfiles as listProfilesInStore,
+  unknownTokenProfileHelp,
+  withUnknownTokenHelp,
   loadStoredToken as loadStoredTokenFor,
   normalizeProfileName,
   removeStoredToken as removeStoredTokenFor,
@@ -1099,7 +1101,13 @@ const main = async () => {
   await cli.runMatchedCommand()
 }
 
-main().catch((error: unknown) => {
-  process.stderr.write(`${errorMessage(error)}\n`)
+main().catch(async (error: unknown) => {
+  process.stderr.write(`${await withUnknownTokenHelp(
+    errorMessage(error),
+    async () => unknownTokenProfileHelp({
+      profiles: await listStoredProfiles(),
+      tokenStorePath,
+    }),
+  )}\n`)
   process.exitCode = 1
 })

@@ -17,6 +17,21 @@ import {z} from 'zod'
 
 // ---------- Token / audience ----------
 
+/** The distinctive first sentence of {@link unknownTokenMessage}. The CLI
+ *  matches on THIS rather than the whole string so it can enrich a 401 the
+ *  bridge produced, without the two copies having to stay byte-identical
+ *  across versions (an older bridge may still be running). */
+export const UNKNOWN_TOKEN_MARKER = 'Agent token is not registered with the local bridge.'
+
+/** What the bridge returns for a token it has no client for. Lives here, not
+ *  in the server, because the CLI appends the half only IT can know — which
+ *  profiles are actually paired on this machine. */
+export const unknownTokenMessage = [
+  UNKNOWN_TOKEN_MARKER,
+  'Open or focus the app tab for the same workspace, then retry; if needed, run `kmagent connect` to pair a fresh token.',
+  'Common causes: the bridge restarted, the app tab disconnected or idled out, the token was revoked, or the CLI is using a token/profile from another workspace or browser profile.',
+].join(' ')
+
 export const tokenScopeSchema = z.enum(['read-write', 'read-only'])
 export type TokenScope = z.infer<typeof tokenScopeSchema>
 

@@ -23,13 +23,65 @@ import {
   type CommandStatusResponse,
   type EventsNextResponse,
   type KnownCommand,
+  UNKNOWN_TOKEN_MARKER,
   type WhoamiInfo,
 } from './protocol.js'
+
+export { UNKNOWN_TOKEN_MARKER } from './protocol.js'
 
 export const defaultProfileName = 'default'
 
 export const errorMessage = (error: unknown): string =>
   error instanceof Error ? error.message : String(error)
+
+/**
+ * The half of the bridge's unknown-token error that only the CLI can supply:
+ * WHICH profiles are paired on this machine.
+ *
+ * The bridge lists "a token/profile from another workspace or browser profile"
+ * among the causes and stops there, because profile names live in a local file
+ * it does not read. An agent reading that text concludes the bridge is down —
+ * it is the one cause the message names but cannot help you check.
+ *
+ * Says nothing suggestive when the profile in use is the only one saved: a
+ * retry that cannot work is worse than silence, since it sends the reader
+ * round a loop back to the same error.
+ */
+export const unknownTokenProfileHelp = (
+  {profiles, tokenStorePath}: {
+    profiles: readonly {name: string; selected: boolean; savedAt?: number | null}[]
+    tokenStorePath: string
+  },
+): string => {
+  if (profiles.length === 0) {
+    return `No token profiles are saved in ${tokenStorePath} — pair one with \`kmagent connect\`.`
+  }
+  const inUse = profiles.find(profile => profile.selected)?.name
+  const others = profiles.filter(profile => !profile.selected)
+  if (others.length === 0) {
+    return `\`${inUse}\` is the only saved profile in ${tokenStorePath}, so the profile is not `
+      + 'the cause — focus the app tab, or re-pair with `kmagent connect`.'
+  }
+  // ONE suggestion, the most recently paired. A year of test pairings leaves
+  // ~20 profiles in a real store, and a `--profile X or --profile Y` chain over
+  // all of them buries the answer it is trying to give. The full list still
+  // goes out, so a half-remembered name stays findable.
+  const likeliest = [...others]
+    .sort((a, b) => (b.savedAt ?? 0) - (a.savedAt ?? 0))[0]!
+  return `Saved profiles in ${tokenStorePath}: ${profiles.map(p => p.name).join(', ')} `
+    + `(in use: \`${inUse ?? 'none'}\`). If the app tab is paired under another one, retry with `
+    + `\`--profile ${likeliest.name}\` (most recently paired) or another from that list.`
+}
+
+/** Appends {@link unknownTokenProfileHelp} to a bridge error that is the
+ *  unknown-token one, and returns any other message untouched. */
+export const withUnknownTokenHelp = (
+  message: string,
+  help: () => Promise<string>,
+): Promise<string> =>
+  message.includes(UNKNOWN_TOKEN_MARKER)
+    ? help().then(extra => `${message}\n${extra}`, () => message)
+    : Promise.resolve(message)
 
 export const sleep = (ms: number): Promise<void> =>
   new Promise(resolve => setTimeout(resolve, ms))
