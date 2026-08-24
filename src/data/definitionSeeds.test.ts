@@ -90,19 +90,15 @@ beforeEach(async () => {
   repo.setActiveWorkspaceId(WS)
   await repo.ensureSystemPages(WS)
 })
-// Unpin before the next test starts: an abandoned Repo is not inert. The
-// `ensureSystemPages` tx above primes the property registry, which schedules a
-// seed pass; with no membership row it PARKS on `awaitLocalMemberRole`, holding
-// a `workspace_members` subscription on the SHARED db. So a membership INSERT
-// later in the file wakes EVERY earlier test's Repo at once, and they
-// materialize concurrently with the live one through `gen-N` counters that
-// restart per Repo — colliding on the UNIQUE `command_events.tx_id`, into a
-// database `resetTestDb` has since emptied (#455, #806). Unpinning aborts the
-// parked generation; the assertion is the pin — without it 58 tests here fail.
+// An abandoned Repo is not inert: the `ensureSystemPages` tx above primes the
+// property registry, which schedules a seed pass that PARKS on
+// `awaitLocalMemberRole` holding a `workspace_members` subscription on the
+// SHARED db. Left pinned, every earlier test's Repo wakes on a later test's
+// membership INSERT and materializes into a database `resetTestDb` has since
+// emptied. Unpinning aborts the parked generation; the assertion is the pin.
 afterEach(async () => {
   repo.setActiveWorkspaceId(null)
-  // The abort clears the pending set within a macrotask or two (measured max
-  // 56ms, typically 13); 2s leaves room for the ~6x full-suite load stretch.
+  // 2s against a measured ~56ms worst case for the abort to clear the set.
   await vi.waitFor(() => expect(outstandingSeedPasses()).toBe(0), {timeout: 2_000, interval: 10})
 })
 
