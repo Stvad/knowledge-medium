@@ -222,6 +222,25 @@ describe('LoaderHandle structural diffing (§9.4)', () => {
     expect(fired.length).toBe(1) // unchanged — equal arrays don't fire
   })
 
+  it('fires an equal-valued re-resolve once the notified baseline is forgotten', async () => {
+    // For a subscriber that also publishes state of its own: the baseline
+    // stands in for what it knows, and stops being one the moment it knows
+    // something this handle never told it.
+    const store = makeStore()
+    const { loader } = collectingLoader([1, 2, 3])
+    const h = store.getOrCreate('q', () =>
+      new LoaderHandle<number[]>({ store, key: 'q', loader }),
+    )
+    const fired: number[][] = []
+    h.subscribe((v) => fired.push(v))
+    await vi.waitFor(() => expect(fired.length).toBe(1))
+
+    h.forgetNotifiedValue()
+    h.invalidate()
+    await vi.waitFor(() => expect(fired.length).toBe(2))
+    expect(fired[1]).toEqual([1, 2, 3])
+  })
+
   it('fires listeners when the resolved value changes', async () => {
     const store = makeStore()
     let n = 1

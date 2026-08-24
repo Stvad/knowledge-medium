@@ -922,6 +922,22 @@ export class LoaderHandle<T> implements Handle<T>, RegisteredHandle {
     return p
   }
 
+  /** Drop the structural-diff baseline, so the next settle notifies even when
+   *  its value equals the last one delivered.
+   *
+   *  The baseline is a valid stand-in for "what subscribers know" only while
+   *  everything they know came from here. A subscriber that also publishes
+   *  state of its own (a definition projector's imperative `upsert`) breaks
+   *  that: a write and its undo can land inside one loader window, leaving the
+   *  reload's value equal to the last delivered one — dedup then suppresses the
+   *  only delivery that could have retracted what the subscriber published, and
+   *  nothing later will, because nothing later differs either. */
+  forgetNotifiedValue(): void {
+    if (this.disposed) { this.resolveLive().forgetNotifiedValue(); return }
+    this.notifiedValue = undefined
+    this.hasNotifiedValue = false
+  }
+
   subscribe(listener: (value: T) => void): Unsubscribe {
     if (this.disposed) return this.resolveLive().subscribe(listener)
     this.listeners.add(listener)
