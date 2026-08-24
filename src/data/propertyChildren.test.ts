@@ -1403,9 +1403,11 @@ describe('pre-backfill window: merging into a cell-only target (§5, #389 item 9
 })
 
 describe('the catch-up runs UN-flipped too, and must (km-g5ev)', () => {
-  /** The only way to hold a field row before the flip: `::((fieldId))` is
-   *  recognized from CONTENT, so the derive pass stamps a hand-written one
-   *  the same as a generated one. No pass mints these pre-flip. */
+  /** Builds `from`'s field row the way a user would. `::((fieldId))` is
+   *  recognized from CONTENT, so the derive pass stamps a hand-written row like
+   *  a generated one — which is what lets an un-flipped block carry one at all.
+   *  (Not the only route: the catch-up under test mints them un-flipped too,
+   *  once some block already has one.) */
   const handAuthoredFieldRow = async (
     repo: Repo, owner: string, value: string,
   ): Promise<void> => {
@@ -1430,8 +1432,9 @@ describe('the catch-up runs UN-flipped too, and must (km-g5ev)', () => {
       {scope: ChangeScope.BlockDefault})
     await createBlock(repo, 'from')
     await handAuthoredFieldRow(repo, 'from', 'source-value')
-    // Un-flipped precondition: `into` is cell-only because nothing dual-writes
-    // here, and `from`'s row exists only because a user typed it.
+    // Un-flipped precondition, asserted rather than assumed: the dual-write is
+    // flip-gated so `into` is cell-only, and `from`'s row is here because the
+    // helper above typed one.
     expect(await liveFieldRows('into')).toEqual([])
     expect((await liveFieldRows('from')).length).toBe(1)
 
