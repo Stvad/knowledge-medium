@@ -1163,9 +1163,14 @@ describe('runAnalyzeIfStale', () => {
     await runAnalyzeIfStale(buildRecordingDb().db)
     h.db.exec(`UPDATE sqlite_stat1 SET stat = '64 4' WHERE tbl = 'blocks'`)
     h.db.exec(`DELETE FROM client_schema_state WHERE key = '${UNBOUNDED_ANALYZE_MARKER_KEY}'`)
+    h.db.exec('CREATE INDEX idx_test_repair ON blocks (workspace_id, updated_at)')
 
-    await runAnalyzeIfStale(buildRecordingDb().db)
+    const result = await runAnalyzeIfStale(buildRecordingDb().db)
     expect(statRows(h.db, 'blocks')['idx_blocks_workspace_active']).toBe('64 64')
+    // The repair runs LAST. Moved ahead of the optimize, its full ANALYZE would
+    // settle the new index first and leave the report empty — the operator log
+    // would then say "nothing was stale" on the boot that parked the worker.
+    expect(result.proposed).toEqual([expect.stringContaining('"blocks"')])
 
     // ...and then never again: a settled boot must not pay a full ANALYZE.
     h.db.exec(`UPDATE sqlite_stat1 SET stat = '64 4' WHERE tbl = 'blocks'`)
@@ -1203,10 +1208,13 @@ describe('runAnalyzeIfStale — arming (stale-stats axis)', () => {
     db = open()
     db.exec(CREATE_BLOCKS_TABLE_SQL)
     db.exec(CREATE_BLOCKS_WORKSPACE_ACTIVE_INDEX_SQL)
-    // The one-shot repair records its marker here; this adapter's getOptional
-    // always answers null, so it runs on every pass — which is what makes the
-    // exact-stats assertion below read the repaired rows.
+    // Steady state, as in the sibling describe: the one-shot repair already
+    // done. Without the marker its full ANALYZE runs after every optimize and
+    // launders the very stats these tests are reading.
     db.exec(CREATE_CLIENT_SCHEMA_STATE_TABLE_SQL)
+    db.exec(
+      `INSERT INTO client_schema_state (key, completed_at) VALUES ('${UNBOUNDED_ANALYZE_MARKER_KEY}', 1)`,
+    )
     const cols = BLOCK_STORAGE_COLUMNS.map(c => c.name)
     const ins = db.prepare(
       `INSERT INTO blocks (${cols.join(',')}) VALUES (${cols.map(() => '?').join(',')})`,
@@ -1247,7 +1255,7 @@ describe('runAnalyzeIfStale — arming (stale-stats axis)', () => {
 
   const adapter = () => ({
     execute: async (sql: string) => ({rows: {_array: db.prepare(sql).all()}}),
-    getOptional: async () => null,
+    getOptional: async <T,>(sql: string) => (db.prepare(sql).get() ?? null) as T | null,
   })
 
   it('repairs degenerate "0 0" stats', async () => {
