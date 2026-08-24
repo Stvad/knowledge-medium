@@ -11,6 +11,7 @@
  */
 
 import { v4 as uuidv4 } from 'uuid'
+import { isInstalledAppDisplayMode } from './layoutSessionId.js'
 
 const CLIENT_ID_KEY = 'km:client-id'
 
@@ -36,3 +37,15 @@ export const getClientId = (): string => {
 
 /** Test helper — drop the in-process cache so the next call re-resolves. */
 export const resetClientIdCache = (): void => { cached = undefined }
+
+/** Coarse device/surface label used to GROUP per-device telemetry — e.g.
+ *  `installed:MacIntel`. Deliberately coarse: it is a grouping key for
+ *  comparing a series against itself, not a fingerprint, so a bounded set of
+ *  values is a feature. The `navigator.platform` fallback to a userAgent prefix
+ *  exists only because the former is deprecated and may be empty. */
+export const getDeviceLabel = (): string => {
+  const surface = isInstalledAppDisplayMode() ? 'installed' : 'browser'
+  if (typeof navigator === 'undefined') return `${surface}:unknown`
+  const platform = navigator.platform || navigator.userAgent.slice(0, 40)
+  return `${surface}:${platform}`
+}

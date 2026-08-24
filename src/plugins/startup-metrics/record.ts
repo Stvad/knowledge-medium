@@ -17,8 +17,7 @@ import { onFirstSync, type SyncStatusDb } from '@/data/internals/firstSync.js'
 import { getPluginUIStateBlock, getPluginUIStateChild } from '@/data/stateBlocks.js'
 import { keyAtStart } from '@/data/orderKey.js'
 import { appVersion } from '@/appVersion.js'
-import { getClientId } from '@/utils/clientId.js'
-import { isInstalledAppDisplayMode } from '@/utils/layoutSessionId.js'
+import { getClientId, getDeviceLabel } from '@/utils/clientId.js'
 import { scheduleIdle } from '@/utils/scheduleIdle.js'
 import {
   getLastLongTaskEndMs,
@@ -90,13 +89,6 @@ export const startupMetricsUIStateType = seedType({
   properties: [],
 })
 
-const startupDeviceLabel = (): string => {
-  const surface = isInstalledAppDisplayMode() ? 'installed' : 'browser'
-  if (typeof navigator === 'undefined') return `${surface}:unknown`
-  const platform = navigator.platform || navigator.userAgent.slice(0, 40)
-  return `${surface}:${platform}`
-}
-
 /** Pure: fold the timeline + metadata into a storable record. */
 export const buildStartupRecord = (
   timeline: StartupTimeline,
@@ -126,7 +118,7 @@ export const buildStartupRecord = (
 export const writeStartupRecord = async (repo: Repo, workspaceId: string): Promise<string> => {
   const root = await getPluginUIStateBlock(repo, workspaceId, repo.user, startupMetricsUIStateType)
   const clientId = getClientId()
-  const deviceLabel = startupDeviceLabel()
+  const deviceLabel = getDeviceLabel()
   // Group records by client: a per-installation block keyed by the opaque
   // clientId (so every device converges on its own group, distinct from peers
   // even after sync) but titled with the device label + a short id suffix so two
