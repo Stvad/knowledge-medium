@@ -419,22 +419,32 @@ export class TxImpl implements Tx {
     return flipped
   }
 
-  async reapedPropertyFieldTargets(
+  async tombstonedPropertyFieldRows(
     workspaceId: string,
     parentId: string,
-  ): Promise<Set<string>> {
-    const rows = await this.ctx.txDb.getAll<{reference_target_id: string}>(
+  ): Promise<BlockData[]> {
+    const rows = await this.ctx.txDb.getAll<BlockRow>(
       // INDEXED BY, and the workspace term exists to reach it: every other
       // field-row index is `WHERE deleted = 0`, so a tombstone query that let
       // the planner choose scanned the field rows of the whole DATABASE once
       // per owner (measured: `SCAN blocks USING INDEX idx_blocks_any_field_form`
       // as first written). This runs inside the write transaction, per block.
-      `SELECT reference_target_id FROM blocks INDEXED BY idx_blocks_any_field_form
+      `SELECT ${COLUMN_LIST} FROM blocks INDEXED BY idx_blocks_any_field_form
         WHERE workspace_id = ? AND parent_id = ? AND is_field_form = 1 AND deleted = 1
-          AND reference_target_id IS NOT NULL`,
+          AND reference_target_id IS NOT NULL
+        ORDER BY order_key, id`,
       [workspaceId, parentId],
     )
-    return new Set(rows.map(row => row.reference_target_id))
+    return rows.map(parseBlockRow)
+  }
+
+  async deletedChildrenOf(parentId: string): Promise<BlockData[]> {
+    const rows = await this.ctx.txDb.getAll<BlockRow>(
+      `SELECT ${COLUMN_LIST} FROM blocks WHERE parent_id = ? AND deleted = 1
+        ORDER BY order_key, id`,
+      [parentId],
+    )
+    return rows.map(parseBlockRow)
   }
 
   async livePropertyDefinitionNames(

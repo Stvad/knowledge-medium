@@ -245,7 +245,8 @@ const namesPendingMaterialization = async (
   // Read under the SAME write lock as the materialization it gates. Taken with
   // the candidate scan instead, a tombstone that landed while the batch waited
   // for the writer would be missed — and missing it is the whole failure.
-  const reaped = await tx.reapedPropertyFieldTargets(row.workspaceId, row.id)
+  const reaped = new Set((await tx.tombstonedPropertyFieldRows(row.workspaceId, row.id))
+    .map(getPropertyFieldTargetId))
   return Object.keys(row.properties).filter(name => {
     const fieldId = ctx.resolveNameSchema(name)?.fieldId
     // An unregistered key has no definition to point a field row AT, so the

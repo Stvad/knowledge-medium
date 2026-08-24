@@ -1822,6 +1822,117 @@ describe('revival re-materializes property children (#778)', () => {
     expect(await liveFieldRows('p')).toEqual([])
   })
 
+  it('revives the ORIGINAL field/value rows rather than minting replacements', async () => {
+    // Minting converges the value but abandons the tombstoned originals, so the
+    // property's row identity does not survive a delete→restore round-trip and
+    // two devices restoring the same block mint rival field rows for one
+    // definition (#787).
+    await seedWorkspace('children')
+    const repo = await seedMaterializedProperty()
+    const [field] = await liveFieldRows('p')
+    const [value] = (await childrenRows(field!.id)).filter(v => v.deleted === 0)
+
+    await deleteAndRestore(repo)
+
+    const restoredFields = await liveFieldRows('p')
+    expect(restoredFields).toHaveLength(1)
+    expect(restoredFields[0]!.id).toBe(field!.id)
+    const restoredValues = (await childrenRows(field!.id)).filter(v => v.deleted === 0)
+    expect(restoredValues).toHaveLength(1)
+    expect(restoredValues[0]!.id).toBe(value!.id)
+    expect(restoredValues[0]!.content).toBe('done')
+  })
+
+  it('reconnects user content nested under a revived value child', async () => {
+    // A comment thread under a property value is arbitrary user content. Reviving
+    // does not un-delete it — a restored block's own descendants stay
+    // tombstoned — but it must stop being STRANDED: minting left it under a
+    // tombstoned value child nothing would ever revive, so it was unreachable
+    // and unrestorable for good.
+    await seedWorkspace('children')
+    const repo = await seedMaterializedProperty()
+    const [field] = await liveFieldRows('p')
+    const [value] = (await childrenRows(field!.id)).filter(v => v.deleted === 0)
+    await repo.tx(tx => tx.create({
+      id: 'comment', workspaceId: WS, parentId: value!.id, orderKey: 'm', content: 'a note',
+    }), {scope: ChangeScope.BlockDefault})
+
+    await deleteAndRestore(repo)
+
+    const comment = await sharedDb.db.get<{deleted: number; parent_id: string}>(
+      'SELECT deleted, parent_id FROM blocks WHERE id = ?', ['comment'])
+    expect(comment.parent_id).toBe(value!.id)
+    // Still tombstoned, but every ancestor is live again, so it is reachable and
+    // the user can restore it.
+    expect(comment.deleted).toBe(1)
+    const ancestors = await sharedDb.db.getAll<{deleted: number}>(
+      'SELECT deleted FROM blocks WHERE id IN (?, ?, ?)', [value!.id, field!.id, 'p'])
+    expect(ancestors.map(a => a.deleted)).toEqual([0, 0, 0])
+  })
+
+  it('converges a revived value to a cell that moved while the row was dead', async () => {
+    // Reviving must not be trusted over the cell. A raw bag write to a tombstoned
+    // row (or a sync arrival) moves the cell on while the children are down, so
+    // the revived value has to be brought to the cell, not left at its old text.
+    await seedWorkspace('children')
+    const repo = await seedMaterializedProperty()
+    const [field] = await liveFieldRows('p')
+    await repo.mutate.delete({id: 'p'})
+    await sharedDb.db.execute(
+      'UPDATE blocks SET properties_json = ? WHERE id = ?',
+      [JSON.stringify({[statusSchema.name]: 'moved-on'}), 'p'])
+
+    await repo.mutate.restore({id: 'p'})
+
+    const values = (await childrenRows(field!.id)).filter(v => v.deleted === 0)
+    expect(values).toHaveLength(1)
+    expect(values[0]!.content).toBe('moved-on')
+  })
+
+  it('mints instead of reviving when the tombstone is ambiguous', async () => {
+    // Two tombstoned field rows for one definition — an unset/re-set cycle
+    // before the owner was deleted. Picking one would need a rule that is
+    // deterministic across replicas AND right about which was live last; there
+    // is no such rule that does not resurrect a row the user deleted on
+    // purpose. Keep the ambiguous case on the minting behaviour.
+    await seedWorkspace('children')
+    const repo = await seedMaterializedProperty()
+    const [first] = await liveFieldRows('p')
+    await repo.tx(tx => tx.unsetProperty('p', statusSchema),
+      {scope: ChangeScope.BlockDefault})
+    await repo.tx(tx => tx.setProperty('p', statusSchema, 'done'),
+      {scope: ChangeScope.BlockDefault})
+    const [second] = await liveFieldRows('p')
+    expect(second!.id).not.toBe(first!.id)
+
+    await deleteAndRestore(repo)
+
+    const restored = await liveFieldRows('p')
+    expect(restored).toHaveLength(1)
+    expect([first!.id, second!.id]).not.toContain(restored[0]!.id)
+    expect((await childrenRows(restored[0]!.id))
+      .filter(v => v.deleted === 0)[0]!.content).toBe('done')
+  })
+
+  it('still mints when there is no tombstone to revive', async () => {
+    await seedWorkspace('children')
+    const repo = setup()
+    await createBlock(repo, 'p')
+    // Cell-only: a raw bag write that no processor saw, so no field row ever
+    // existed for this key.
+    await sharedDb.db.execute(
+      'UPDATE blocks SET properties_json = ? WHERE id = ?',
+      [JSON.stringify({[statusSchema.name]: 'fresh'}), 'p'])
+    await repo.tx(tx => tx.delete('p'), {scope: ChangeScope.BlockDefault})
+
+    await repo.tx(tx => tx.restore('p'), {scope: ChangeScope.BlockDefault})
+
+    const fields = await liveFieldRows('p')
+    expect(fields).toHaveLength(1)
+    expect((await childrenRows(fields[0]!.id))
+      .filter(v => v.deleted === 0)[0]!.content).toBe('fresh')
+  })
+
   it('a pre-existing undecodable cell value does not block the restore', async () => {
     // Why the exemption exists is at `UndecodableCellPolicy`; this pins the
     // regression it prevents — a restore that aborts on a key nobody touched.
