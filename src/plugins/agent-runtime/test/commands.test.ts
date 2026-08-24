@@ -12,7 +12,7 @@ import { extensionsDataExtension } from '@/plugins/extensions-settings/dataExten
 import { resolveFacetRuntimeSync } from '@/facets/facet'
 import { __setCompileImplForTest, readApproval } from '@/extensions/compileExtensionModule'
 import { actionsFacet, appMountsFacet, blockRenderersFacet } from '@/extensions/core'
-import { ActionContextTypes } from '@/shortcuts/types'
+import { ActionContextTypes, type BlockShortcutDependencies } from '@/shortcuts/types'
 import { createAgentRuntimeContext, executeCommand } from '../commands'
 import type { AgentRuntimeContext, InstallExtensionResult } from '../protocol'
 import { InvalidBlockIdError } from '@/data/blockId'
@@ -781,6 +781,324 @@ describe('agent runtime commands', () => {
       } finally {
         spy.mockRestore()
       }
+    })
+  })
+})
+
+// The bridge is the only surface that can aim a kernel mutator at a workspace
+// the user does not have open (the UI's blocks come from workspace-scoped
+// queries; sync arrival runs no mutators). That matters because the write path
+// is NOT workspace-agnostic: field-row recognition resolves the definition
+// through the ACTIVE workspace's registry, which fails closed for any other —
+// so a delete aimed at a background workspace rewrites property field rows to
+// prose instead of leaving their dangling ref intact, detaching the property
+// from its owner (#790). Each case asserts the refusal AND that the row is
+// untouched, because a refusal after the write would satisfy `rejects` just as
+// well.
+describe('mutating verbs refuse a target outside the active workspace (#790)', () => {
+  const BG = 'ws-bg'
+  const BG_ROOT = 'bg-root'
+
+  const seedBackground = async (): Promise<void> => {
+    await env.repo.tx(async tx => {
+      await tx.create({
+        id: BG_ROOT, workspaceId: BG, parentId: null, orderKey: 'a0', content: 'bg body',
+      })
+      await tx.create({
+        id: 'bg-child', workspaceId: BG, parentId: BG_ROOT, orderKey: 'a0', content: 'bg child',
+      })
+    }, {scope: ChangeScope.BlockDefault, description: 'seed background workspace'})
+  }
+
+  const refusal = /is not the active one/
+
+  it('delete-block refuses and leaves the subtree live', async () => {
+    await seedBackground()
+
+    await expect(executeCommand({
+      commandId: 'c', type: 'delete-block', blockId: BG_ROOT,
+    }, env.context)).rejects.toThrow(refusal)
+
+    expect((await env.repo.load(BG_ROOT))!.deleted).toBe(false)
+    expect((await env.repo.load('bg-child'))!.deleted).toBe(false)
+  })
+
+  it('update-block refuses and leaves content and properties alone', async () => {
+    await seedBackground()
+
+    await expect(executeCommand({
+      commandId: 'c', type: 'update-block', blockId: BG_ROOT,
+      content: 'rewritten', properties: {injected: 'yes'},
+    }, env.context)).rejects.toThrow(refusal)
+
+    const after = (await env.repo.load(BG_ROOT))!
+    expect(after.content).toBe('bg body')
+    expect(after.properties.injected).toBeUndefined()
+  })
+
+  it('restore-block refuses a tombstone in another workspace', async () => {
+    await seedBackground()
+    // Deleted through the kernel rather than the bridge — the row has to
+    // already be a tombstone for restore to be the operation under test.
+    await env.repo.mutate.delete({id: BG_ROOT})
+
+    await expect(executeCommand({
+      commandId: 'c', type: 'restore-block', blockId: BG_ROOT,
+    }, env.context)).rejects.toThrow(refusal)
+
+    // Raw, because `repo.load` filters tombstones out — the same asymmetry
+    // that made the first version of this guard a no-op for restore.
+    const row = await env.h.db.get<{deleted: number}>(
+      'SELECT deleted FROM blocks WHERE id = ?', [BG_ROOT])
+    expect(row.deleted).toBe(1)
+  })
+
+  it('move-block refuses and leaves the parent edge intact', async () => {
+    await seedBackground()
+
+    await expect(executeCommand({
+      commandId: 'c', type: 'move-block', blockId: 'bg-child',
+      parentId: null, position: {kind: 'last'},
+    }, env.context)).rejects.toThrow(refusal)
+
+    expect((await env.repo.load('bg-child'))!.parentId).toBe(BG_ROOT)
+  })
+
+  it('create-block refuses a parent in another workspace, minting nothing', async () => {
+    await seedBackground()
+
+    await expect(executeCommand({
+      commandId: 'c', type: 'create-block', parentId: BG_ROOT, content: 'injected',
+    }, env.context)).rejects.toThrow(refusal)
+
+    const children = await env.h.db.getAll<{id: string}>(
+      'SELECT id FROM blocks WHERE parent_id = ? AND deleted = 0', [BG_ROOT])
+    expect(children.map(r => r.id)).toEqual(['bg-child'])
+  })
+
+  it('create-block refuses an explicit foreign workspaceId for a root block', async () => {
+    await expect(executeCommand({
+      commandId: 'c', type: 'create-block', data: {workspaceId: BG, content: 'injected'},
+    }, env.context)).rejects.toThrow(refusal)
+
+    const rows = await env.h.db.getAll<{id: string}>(
+      'SELECT id FROM blocks WHERE workspace_id = ?', [BG])
+    expect(rows).toEqual([])
+  })
+
+  it('reconcile-markdown-subtree refuses a parent in another workspace', async () => {
+    await seedBackground()
+
+    await expect(executeCommand({
+      commandId: 'c', type: 'reconcile-markdown-subtree',
+      parentId: BG_ROOT, markdown: '- injected', key: 'k1',
+    }, env.context)).rejects.toThrow(refusal)
+
+    const children = await env.h.db.getAll<{id: string}>(
+      'SELECT id FROM blocks WHERE parent_id = ? AND deleted = 0', [BG_ROOT])
+    expect(children.map(r => r.id)).toEqual(['bg-child'])
+  })
+
+  // The refusal must not swallow the verb's own not-found report: a missing id
+  // has no workspace to compare, and answering "wrong workspace" for it would
+  // send the caller looking for a workspace problem they don't have. Two
+  // tests, because the two verbs take different routes to the same rule —
+  // update-block compares the row it already read inside its tx, delete-block
+  // goes through the shared pre-read, whose "no row, no opinion" branch is
+  // pinned only here.
+  it('update-block still reports not-found for a missing block', async () => {
+    await expect(executeCommand({
+      commandId: 'c', type: 'update-block', blockId: 'no-such-block', content: 'x',
+    }, env.context)).rejects.toThrow(/not found/)
+  })
+
+  it('delete-block still reports not-found for a missing block', async () => {
+    await expect(executeCommand({
+      commandId: 'c', type: 'delete-block', blockId: 'no-such-block',
+    }, env.context)).rejects.toThrow(/does not exist/)
+  })
+
+  // The target lookup is async and bridge commands run detached, so the active
+  // workspace can move while it is in flight — leaving a target verified
+  // against A to be written under B's registry. Driven through the workspace
+  // getter, because the switch has to land in one specific gap: after the
+  // guard compared the row, before it re-checks its own pin. `reads` is
+  // asserted at the end so that if the guard's read count ever changes, this
+  // fails loudly instead of quietly exercising a different gap.
+  it('refuses when the active workspace moves while the targets are being checked', async () => {
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'here', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'x'})
+    }, {scope: ChangeScope.BlockDefault, description: 'seed active block'})
+
+    let reads = 0
+    const spy = vi.spyOn(env.repo, 'activeWorkspaceId', 'get')
+      .mockImplementation(() => (reads++ >= 2 ? 'ws-elsewhere' : WS))
+
+    try {
+      await expect(executeCommand({
+        commandId: 'c', type: 'delete-block', blockId: 'here',
+      }, env.context)).rejects.toThrow(/active workspace changed/)
+    } finally {
+      spy.mockRestore()
+    }
+    expect(reads).toBeGreaterThanOrEqual(3)
+
+    // The row the caller named is still live — the refusal beat the write.
+    const row = await env.h.db.get<{deleted: number}>(
+      'SELECT deleted FROM blocks WHERE id = ?', ['here'])
+    expect(row.deleted).toBe(0)
+  })
+
+  // The refusal has to beat the PARSE, not just the write: a doomed request
+  // shouldn't pay `parseMarkdownToBlocks` first. Asserted as "the transaction
+  // never opened", which is what distinguishes the pre-flight from the in-tx
+  // assertion that also (still) guards it.
+  it('reconcile-markdown-subtree refuses before opening a transaction', async () => {
+    await seedBackground()
+    const txSpy = vi.spyOn(env.repo, 'tx')
+
+    await expect(executeCommand({
+      commandId: 'c', type: 'reconcile-markdown-subtree',
+      parentId: BG_ROOT, markdown: '- a\n- b\n- c', key: 'k2',
+    }, env.context)).rejects.toThrow(refusal)
+
+    expect(txSpy).not.toHaveBeenCalled()
+    txSpy.mockRestore()
+  })
+
+  // `run-action` is the widest route to a kernel mutator — it turns
+  // caller-supplied ids into Block facades and hands them to a handler that
+  // may call `Block.delete()`. Guarding only the typed verbs would leave the
+  // corruption reachable through here (Codex, PR #803 review). The refusal has
+  // to land before `invokeAction`, because once a handler runs, its writes are
+  // outside our reach — so these assert the handler never ran, not merely that
+  // the command rejected.
+  describe('run-action', () => {
+    let ran: boolean
+    let seenBlockId: string | undefined
+
+    const probeAction = {
+      id: 'test.probe',
+      description: 'records that it was dispatched',
+      context: ActionContextTypes.GLOBAL,
+      handler: (deps: BlockShortcutDependencies) => {
+        ran = true
+        seenBlockId = deps.block?.id
+      },
+    }
+
+    const withProbeAction = (): AgentRuntimeContext => {
+      const runtime = resolveFacetRuntimeSync(
+        [staticDataExtensions, extensionsDataExtension, actionsFacet.of(probeAction, {source: 'test'})],
+        {repo: env.repo, workspaceId: WS, safeMode: false},
+      )
+      env.repo.setFacetRuntime(runtime)
+      return createAgentRuntimeContext({repo: env.repo, runtime, safeMode: false})
+    }
+
+    beforeEach(() => { ran = false; seenBlockId = undefined })
+
+    it('refuses a blockId dependency in another workspace before dispatch', async () => {
+      await seedBackground()
+      const context = withProbeAction()
+
+      await expect(executeCommand({
+        commandId: 'c', type: 'run-action', id: 'test.probe',
+        dependencies: {blockId: BG_ROOT},
+      }, context)).rejects.toThrow(refusal)
+
+      expect(ran).toBe(false)
+    })
+
+    it('refuses a foreign id hidden among selectedBlockIds', async () => {
+      await seedBackground()
+      const context = withProbeAction()
+      await env.repo.tx(async tx => {
+        await tx.create({id: 'here', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'x'})
+      }, {scope: ChangeScope.BlockDefault, description: 'seed active block'})
+
+      // The active id first, so a check that only looked at the head of the
+      // list — or only at `blockId` — would pass this.
+      await expect(executeCommand({
+        commandId: 'c', type: 'run-action', id: 'test.probe',
+        dependencies: {blockId: 'here', selectedBlockIds: ['here', BG_ROOT]},
+      }, context)).rejects.toThrow(refusal)
+
+      expect(ran).toBe(false)
+    })
+
+    // The back-compat top-level `blockId` is IGNORED when `dependencies.blockId`
+    // is present, so validating it too refused requests whose effective
+    // dependencies were entirely local (Codex, PR #803 review). Precedence is
+    // decided once now, and the guard reads the chosen id.
+    it('ignores a foreign id in a field the fallback chain does not select', async () => {
+      await seedBackground()
+      const context = withProbeAction()
+      await env.repo.tx(async tx => {
+        await tx.create({id: 'here', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'x'})
+      }, {scope: ChangeScope.BlockDefault, description: 'seed active block'})
+
+      await executeCommand({
+        commandId: 'c', type: 'run-action', id: 'test.probe',
+        dependencies: {blockId: 'here'},
+        blockId: BG_ROOT,
+      }, context)
+
+      expect(ran).toBe(true)
+      expect(seenBlockId).toBe('here')
+    })
+
+    // ...but the same field IS validated when nothing outranks it.
+    it('refuses a foreign id in the back-compat field when it is the one selected', async () => {
+      await seedBackground()
+      const context = withProbeAction()
+
+      await expect(executeCommand({
+        commandId: 'c', type: 'run-action', id: 'test.probe',
+        blockId: BG_ROOT,
+      }, context)).rejects.toThrow(refusal)
+
+      expect(ran).toBe(false)
+    })
+
+    // A whole multi-select is one deduplicated query, not one read per entry:
+    // the protocol puts no bound on `selectedBlockIds`, and the CLI's command
+    // timeout is finite.
+    it('checks a whole selection in a single query', async () => {
+      const context = withProbeAction()
+      await env.repo.tx(async tx => {
+        await tx.create({id: 'here', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'x'})
+      }, {scope: ChangeScope.BlockDefault, description: 'seed active block'})
+      const spy = vi.spyOn(env.repo.db, 'getAll')
+
+      await executeCommand({
+        commandId: 'c', type: 'run-action', id: 'test.probe',
+        // Repeats, plus a duplicate of `blockId`, so a per-id implementation
+        // would issue six reads where one is needed.
+        dependencies: {blockId: 'here', selectedBlockIds: ['here', 'here', 'here', 'here', 'here']},
+      }, context)
+
+      const guardReads = spy.mock.calls.filter(
+        ([sql]) => typeof sql === 'string' && sql.includes('json_each'))
+      expect(guardReads).toHaveLength(1)
+      expect(JSON.parse(guardReads[0][1]![0] as string)).toEqual(['here'])
+      spy.mockRestore()
+      expect(ran).toBe(true)
+    })
+
+    it('still dispatches for an active-workspace block', async () => {
+      const context = withProbeAction()
+      await env.repo.tx(async tx => {
+        await tx.create({id: 'here', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'x'})
+      }, {scope: ChangeScope.BlockDefault, description: 'seed active block'})
+
+      await executeCommand({
+        commandId: 'c', type: 'run-action', id: 'test.probe',
+        dependencies: {blockId: 'here'},
+      }, context)
+
+      expect(ran).toBe(true)
+      expect(seenBlockId).toBe('here')
     })
   })
 })
