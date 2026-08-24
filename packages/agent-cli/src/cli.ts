@@ -361,8 +361,14 @@ const reloadAppAndWait = async ({timeoutMs = 30_000} = {}) => {
     throw new MissingTokenError(selectedProfileName)
   }
 
-  const before = await whoamiWithToken(token).catch(() => null)
-  if (!before?.connected) {
+  // Not swallowed, unlike the wait loop below: a whoami that THREW is not a
+  // disconnected tab. A stale token 401s right here, and reporting that as "no
+  // app tab" names the wrong cause and discards the typed error the top-level
+  // handler needs. The loop below keeps its catch because the app really is
+  // mid-reload there. NOT unit-pinned — reaching this line needs a live bridge
+  // that 401s, which no harness stands up; verified by hand instead.
+  const before = await whoamiWithToken(token)
+  if (!before.connected) {
     throw new Error('No app tab is currently connected — nothing to reload. Open the app, then retry.')
   }
   const previousClientId = before.clientId
