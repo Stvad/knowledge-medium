@@ -1179,15 +1179,22 @@ const isSyncOwnedAlias = (alias: string, title: string): boolean => {
   return false
 }
 
-/** Is `name` there for the taking — unowned, or already this document's? */
+/** Is `name` there for the taking — unowned, or already this document's?
+ *
+ *  Every claimant, not `aliasLookup`. That form is `LIMIT 1` ordered by
+ *  `created_at`, and co-claimants exist (the uniqueness trigger skips sync
+ *  apply), so a question of the form "is anyone else holding this" reads FREE
+ *  whenever the row it returns is this document — the older one. Claiming on
+ *  that answer writes the bag straight into the trigger, and the book then
+ *  fails on every run with the cursor pinned behind it. */
 const aliasIsFree = async (
   tx: any,
   blockId: string,
   name: string,
   workspaceId: string,
 ): Promise<boolean> => {
-  const owner = await tx.aliasLookup(name, workspaceId)
-  return owner === null || owner.id === blockId
+  const claimants: readonly {id: string}[] = await tx.aliasClaimants(name, workspaceId)
+  return claimants.every(row => row.id === blockId)
 }
 
 /** Is this whole bag one the sync could have written? Vacuously true of an
@@ -1491,8 +1498,7 @@ const ROOT_ALIAS = 'Readwise Library'
  *  whole export. `setProperty` rewrites the WHOLE bag, so an entry the root
  *  co-holds with a sync-applied row (sync apply skips the uniqueness trigger,
  *  so two live rows can hold one name) is re-inserted under that trigger and
- *  refused. A nameless root still works; a dead sync does not.
- *  DEFENCE IN DEPTH: nothing in the suite can produce that co-claim. */
+ *  refused. A nameless root still works; a dead sync does not. */
 const reclaimRootAlias = async (repo: any, rootId: string, workspaceId: string): Promise<void> => {
   try {
     await repo.tx(async (tx: any) => {

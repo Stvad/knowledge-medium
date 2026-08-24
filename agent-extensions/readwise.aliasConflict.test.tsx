@@ -97,6 +97,25 @@ const createRivalPage = async (id: string, name: string): Promise<void> => {
   }, {scope: ChangeScope.BlockDefault})
 }
 
+/** A second live claimant of a name another block already holds, landed the way
+ *  sync apply lands one. `repo.tx` cannot produce this — the uniqueness trigger
+ *  rejects it — but that trigger skips sync-applied rows, and a raw insert is
+ *  the same shape and still maintains `block_aliases`. `createdAt` is what
+ *  decides which row `aliasLookup` returns, so it is the whole point here:
+ *  a co-claimant YOUNGER than the document is the one the single-row form
+ *  hides. Same recipe as `coClaimRaw` in the alias plugin's merge tests. */
+const LATE = 4_000_000_000_000
+
+const coClaimRaw = async (id: string, name: string, createdAt: number): Promise<void> => {
+  await sharedDb.db.execute(
+    `INSERT INTO blocks (id, workspace_id, parent_id, order_key, content, properties_json,
+      references_json, created_at, updated_at, user_updated_at, created_by, updated_by, deleted)
+     VALUES (?, ?, NULL, ?, ?, ?, '[]', ?, ?, ?, 'u', 'u', 0)`,
+    [id, WS, `k-${id}`, name, JSON.stringify({[aliasesProp.name]: aliasesProp.codec.encode([name])}),
+      createdAt, createdAt, createdAt],
+  )
+}
+
 const sync = (rootId: string, record: ReturnType<typeof book>) =>
   syncBookToBlocks(repo, WS, rootId, record, '{title}', '', '{text}', [], [], [], REVIEW_DATE)
 
@@ -155,6 +174,28 @@ describe('readwise library root', () => {
     // before the first book and would take the whole run with it.
     expect(aliasesOf(await repo.load(rootId))).toEqual([])
     expect(await claimantIdsOf('Readwise Library')).toEqual(['rival'])
+  })
+
+  it('survives an alias write the uniqueness trigger refuses', async () => {
+    await createRivalPage('rival', 'Readwise Library')
+    const rootId = await ensureRoot(repo, WS)
+
+    // A name on the root that a sync-applied row also holds. The reclaim below
+    // rewrites the WHOLE bag, so this entry goes back in under the trigger and
+    // is refused — and `ensureRoot` runs ahead of the per-book isolation, so an
+    // escaping throw would cost every book in the export.
+    await repo.tx(
+      tx => tx.setProperty(rootId, aliasesProp, ['My Library']),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await coClaimRaw('synced-rival', 'My Library', LATE)
+    await repo.tx(
+      tx => tx.setProperty('rival', aliasesProp, []),
+      {scope: ChangeScope.BlockDefault},
+    )
+
+    await expect(ensureRoot(repo, WS)).resolves.toBe(rootId)
+    expect(aliasesOf(await repo.load(rootId))).toEqual(['My Library'])
   })
 
   it('takes its name back once the conflict clears', async () => {
@@ -247,6 +288,28 @@ describe('readwise document alias — the title is already a page name', () => {
     await sync(rootId, book(1, 'Deep Work', 11))
 
     expect(aliasesOf(await repo.load(documentId(1)))).toEqual(['Deep Work (Readwise 2024)'])
+  })
+
+  it('does not claim a name a sync-applied row co-holds', async () => {
+    const rootId = await createRoot()
+    await sync(rootId, book(1, 'Deep Work', 11))
+
+    // The bag a merge leaves behind: the real name plus the placeholder it
+    // was parked on. Written while the name is still uncontested.
+    await repo.tx(
+      tx => tx.setProperty(documentId(1), aliasesProp, ['Deep Work', 'Deep Work (Readwise)']),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await coClaimRaw('synced-rival', 'Deep Work', LATE)
+    expect(await claimantIdsOf('Deep Work')).toHaveLength(2)
+
+    // Reconciling that two-entry bag down to one is a WRITE, and writing
+    // `Deep Work` back re-inserts it under the uniqueness trigger against the
+    // co-claimant. Asking the one-row form whether the name is free answers
+    // yes — it returns this document, the older of the two.
+    await expect(sync(rootId, book(1, 'Deep Work', 11))).resolves.toBeUndefined()
+
+    expect(aliasesOf(await repo.load(documentId(1)))).toEqual(['Deep Work (Readwise)'])
   })
 
   it('retires the placeholder when a re-title lands on a free name', async () => {
