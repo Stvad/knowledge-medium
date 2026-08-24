@@ -11,6 +11,12 @@ import { BlockCache } from '@/data/blockCache'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { BLOCKS_SYNCED_RAW_TABLE, blockToSyncedRowParams } from '@/data/blockSchema'
 import { typesProp } from '@/data/properties'
+import {
+  TYPED_BLOCKS_LIVE_CHANNEL,
+  TYPED_BLOCKS_STRUCTURE_CHANNEL,
+  typedBlocksLiveKey,
+  typedBlocksStructureKey,
+} from '@/data/invalidation'
 import { definitionSeedsFacet, typeSeedsFacet } from '../facets'
 import { kernelDataExtension } from '../kernelDataExtension'
 import { Repo } from '../repo'
@@ -108,6 +114,7 @@ afterEach(() => { env.repo.stopSyncObserver() })
 const create = async (args: {
   id: string
   workspaceId?: string
+  parentId?: string | null
   types?: readonly string[]
   properties?: Record<string, unknown>
   references?: BlockReference[]
@@ -119,7 +126,7 @@ const create = async (args: {
   await env.repo.tx(tx => tx.create({
     id: args.id,
     workspaceId: args.workspaceId ?? WS,
-    parentId: null,
+    parentId: args.parentId ?? null,
     orderKey: `k-${args.id}`,
     properties,
     references: args.references ?? [],
@@ -335,6 +342,129 @@ describe('repo.queryBlocks', () => {
         where: {[reviewerProp.name]: {target: {}}},
       })
       expect(ids(anyTarget).sort()).toEqual(['source-future', 'source-past', 'source-unrelated'])
+    })
+
+    it('ancestor-scoped empty target predicate names the target ids, not workspace liveness', async () => {
+      // Mirrors what the backlinks filter UI actually builds: the "exists"
+      // operator on a ref property emits {scope:'ancestor', target:{}}
+      // (propertyFilter.ts). `live-target` resolves; `missing-target` has no
+      // row at all, which is the case a fresh create would admit.
+      await create({id: 'live-target'})
+      await create({
+        id: 'parent-live',
+        properties: {[reviewerProp.name]: reviewerProp.codec.encode('live-target')},
+        references: [{id: 'live-target', alias: 'live-target', sourceField: reviewerProp.name}],
+      })
+      await create({id: 'entry-live', parentId: 'parent-live', types: ['entry']})
+      await create({
+        id: 'parent-dangling',
+        properties: {[reviewerProp.name]: reviewerProp.codec.encode('missing-target')},
+        references: [{id: 'missing-target', alias: 'missing-target', sourceField: reviewerProp.name}],
+      })
+      await create({id: 'entry-dangling', parentId: 'parent-dangling', types: ['entry']})
+
+      // A candidate gate is required for any ancestor-scoped predicate; the
+      // real filter gets one from `referencedBy` (the backlinked page).
+      const handle = env.repo.query.typedBlocks({
+        workspaceId: WS,
+        types: ['entry'],
+        match: [{scope: 'ancestor', where: {[reviewerProp.name]: {target: {}}}}],
+      })
+      await handle.load()
+      const deps = handle.__depsForTest()
+
+      // The coarse channel fires on every create/delete in the workspace,
+      // including edits that cannot change this result.
+      expect(deps).not.toContainEqual({
+        kind: 'plugin',
+        channel: TYPED_BLOCKS_LIVE_CHANNEL,
+        key: typedBlocksLiveKey(WS),
+      })
+      // Deleting/restoring a resolving target flips membership.
+      expect(deps).toContainEqual({
+        kind: 'plugin',
+        channel: TYPED_BLOCKS_STRUCTURE_CHANNEL,
+        key: typedBlocksStructureKey(WS, 'live-target'),
+      })
+      // And a target with no row yet still gets named: the id lives in the
+      // encoded ref PROPERTY, which is what the deps are read from, so it is
+      // available with or without a projected edge. Creating that block is
+      // precisely the event to wake on.
+      expect(deps).toContainEqual({
+        kind: 'plugin',
+        channel: TYPED_BLOCKS_STRUCTURE_CHANNEL,
+        key: typedBlocksStructureKey(WS, 'missing-target'),
+      })
+    })
+
+    it('the count path declares the same target deps as the rows path', async () => {
+      // Regression guard: `collectTypedBlockAxisDeps` suppresses the coarse
+      // live channel for every resolver, but only the ancestor walk declares
+      // the precise ids that replace it. A resolver that walks ancestors
+      // without picking them up would UNDER-fire — the direction that leaves
+      // a permanently stale view. `resolveTypedBlockCount` (the inline badge)
+      // and `resolveTypedBlockIds` both take that path.
+      await create({id: 'live-target'})
+      await create({
+        id: 'parent-live',
+        properties: {[reviewerProp.name]: reviewerProp.codec.encode('live-target')},
+        references: [{id: 'live-target', alias: 'live-target', sourceField: reviewerProp.name}],
+      })
+      await create({id: 'entry-live', parentId: 'parent-live', types: ['entry']})
+
+      const handle = env.repo.query.typedBlockCount({
+        workspaceId: WS,
+        types: ['entry'],
+        match: [{scope: 'ancestor', where: {[reviewerProp.name]: {target: {}}}}],
+      })
+      await handle.load()
+      const deps = handle.__depsForTest()
+
+      expect(deps).not.toContainEqual({
+        kind: 'plugin',
+        channel: TYPED_BLOCKS_LIVE_CHANNEL,
+        key: typedBlocksLiveKey(WS),
+      })
+      expect(deps).toContainEqual({
+        kind: 'plugin',
+        channel: TYPED_BLOCKS_STRUCTURE_CHANNEL,
+        key: typedBlocksStructureKey(WS, 'live-target'),
+      })
+    })
+
+    it('reads target ids from the property value, not the not-yet-projected edge', async () => {
+      // `block_references` is trigger-maintained from `references_json`, which
+      // the references processor writes POST-COMMIT. A ref-typed property
+      // write therefore commits — and invalidates on the property channel —
+      // before its edge row exists. Deriving deps from the edge index would
+      // see nothing in that window and register nothing; on the
+      // `kind: 'structure'` paths nothing later fires to correct it, so the
+      // handle would stay stale forever. This block has the property set and
+      // NO references, which is exactly that window.
+      await create({id: 'live-target'})
+      await create({
+        id: 'parent-unprojected',
+        properties: {[reviewerProp.name]: reviewerProp.codec.encode('live-target')},
+      })
+      await create({id: 'entry-unprojected', parentId: 'parent-unprojected', types: ['entry']})
+
+      const edges = await env.repo.db.getAll(
+        'SELECT * FROM block_references WHERE source_id = ?', ['parent-unprojected'],
+      )
+      expect(edges).toEqual([])
+
+      const handle = env.repo.query.typedBlocks({
+        workspaceId: WS,
+        types: ['entry'],
+        match: [{scope: 'ancestor', where: {[reviewerProp.name]: {target: {}}}}],
+      })
+      await handle.load()
+
+      expect(handle.__depsForTest()).toContainEqual({
+        kind: 'plugin',
+        channel: TYPED_BLOCKS_STRUCTURE_CHANNEL,
+        key: typedBlocksStructureKey(WS, 'live-target'),
+      })
     })
 
     it('rejects the target operator on non-ref properties', async () => {
