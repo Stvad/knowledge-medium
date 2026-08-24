@@ -1,0 +1,2 @@
+import{CallbackSet as e}from"../../utils/callbackSet.js";var t=`view_perf_trend`,n=new Map,r=new e(`perf-monitor-analysis`),i=e=>{n.set(e.workspaceId,e),r.notify()},a=e=>(e==null?void 0:n.get(e))??null,o=e=>r.add(e),s=()=>{n.clear(),r.clear()};export{t as VIEW_PERF_TREND_ACTION_ID,a as getPerfAnalysisFor,i as publishPerfAnalysis,s as resetPerfAnalysisStore,o as subscribePerfAnalysis};
+//# sourceMappingURL=store.js.map
