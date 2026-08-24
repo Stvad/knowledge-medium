@@ -1188,6 +1188,11 @@ describe('runAnalyzeIfStale — arming (stale-stats axis)', () => {
     const ins = db.prepare(
       `INSERT INTO blocks (${cols.join(',')}) VALUES (${cols.map(() => '?').join(',')})`,
     )
+    // One transaction, not 500 auto-commit ones: this db is file-backed, so an
+    // unwrapped insert costs its own fsync and the loop then dominates a hook
+    // that runs per test — enough to cross vitest's hookTimeout under gate load.
+    // Batching is a cost change only; ANALYZE records the same stats either way.
+    db.exec('BEGIN')
     for (let i = 0; i < 500; i++) {
       ins.run(...cols.map(c => {
         if (c === 'id') return `b-${i}`
@@ -1205,6 +1210,7 @@ describe('runAnalyzeIfStale — arming (stale-stats axis)', () => {
         return null
       }) as Array<string | number | null>)
     }
+    db.exec('COMMIT')
     // Settle, then corrupt to the degenerate legacy shape.
     db.exec('ANALYZE')
     db.exec(`UPDATE sqlite_stat1 SET stat = '0 0' WHERE tbl = 'blocks'`)
