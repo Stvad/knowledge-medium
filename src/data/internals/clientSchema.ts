@@ -202,8 +202,18 @@ export const ensureClientSchemaStateValueColumn = async (db: {
   getAll: <T>(sql: string) => Promise<T[]>
 }): Promise<void> => {
   const columns = await db.getAll<{name: string}>('PRAGMA table_info(client_schema_state)')
-  if (!columns.some(column => column.name === 'value')) {
+  if (columns.some(column => column.name === 'value')) return
+  try {
     await db.execute('ALTER TABLE client_schema_state ADD COLUMN value TEXT')
+  } catch (error) {
+    // PRAGMA-then-ALTER is a TOCTOU across tabs, and this DB is explicitly
+    // multi-tab: both can read "no column" before either alters, and the loser
+    // throws. Its boot is memoized on the rejection, so that tab stays broken
+    // until a reload. The winner's column is exactly what we wanted, so treat
+    // the duplicate as success — anything else still propagates.
+    if (!/duplicate column/i.test(error instanceof Error ? error.message : String(error))) {
+      throw error
+    }
   }
 }
 

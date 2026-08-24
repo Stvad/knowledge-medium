@@ -1417,6 +1417,19 @@ describe('ensureClientSchemaStateValueColumn — local migration', () => {
     await ensureClientSchemaStateValueColumn(db)
     expect(db.executed).toEqual([])
   })
+
+  it('tolerates losing the ALTER race to another tab, but not other errors', async () => {
+    const base = fakeMigrationDb({client_schema_state: ['key', 'completed_at']})
+    await expect(ensureClientSchemaStateValueColumn({
+      ...base,
+      execute: async () => { throw new Error('duplicate column name: value') },
+    })).resolves.toBeUndefined()
+
+    await expect(ensureClientSchemaStateValueColumn({
+      ...base,
+      execute: async () => { throw new Error('database is locked') },
+    })).rejects.toThrow('database is locked')
+  })
 })
 
 describe('ensureBlockUserUpdatedAtColumn — local migration', () => {
