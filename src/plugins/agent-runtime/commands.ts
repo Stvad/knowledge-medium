@@ -1210,6 +1210,15 @@ const runtimeBlock = (
   id: unknown,
 ) => isString(id) && id ? repo.block(id) : null
 
+/** The id a dependency's fallback chain actually selects. `runtimeBlock`'s
+ *  `??` chain expressed as the ID rather than the facade, so the workspace
+ *  guard can validate exactly what the handler is handed instead of
+ *  re-deciding precedence over the raw fields — an ignored back-compat id
+ *  belonging to another workspace must not refuse a request whose effective
+ *  dependencies are all local. */
+const chosenBlockId = (...candidates: readonly unknown[]): string | undefined =>
+  candidates.find((id): id is string => isString(id) && id !== '')
+
 const runRuntimeAction = async (
   command: KnownAgentCommand,
   context: AgentRuntimeContext,
@@ -1223,12 +1232,11 @@ const runRuntimeAction = async (
   }
 
   const dependencies = command.dependencies ?? {}
-  const realUiStateBlock = runtimeBlock(context.repo, dependencies.uiStateBlockId)
-    ?? runtimeBlock(context.repo, command.uiStateBlockId)
+  const uiStateBlockId = chosenBlockId(dependencies.uiStateBlockId, command.uiStateBlockId)
+  const blockId = chosenBlockId(dependencies.blockId, command.blockId)
+  const realUiStateBlock = runtimeBlock(context.repo, uiStateBlockId)
   const uiStateBlock = realUiStateBlock ?? fakeUiStateBlock(context.repo)
-  const block = runtimeBlock(context.repo, dependencies.blockId)
-    ?? runtimeBlock(context.repo, command.blockId)
-    ?? uiStateBlock
+  const block = runtimeBlock(context.repo, blockId) ?? uiStateBlock
 
   if (action.context === 'edit-mode-cm' || action.context === 'property-editing') {
     throw new Error(
@@ -1240,7 +1248,8 @@ const runRuntimeAction = async (
     ? dependencies.selectedBlockIds.filter(isString)
     : []
   const selectedBlocks = selectedBlockIds.map(id => context.repo.block(id))
-  const anchorBlock = runtimeBlock(context.repo, dependencies.anchorBlockId)
+  const anchorBlockId = chosenBlockId(dependencies.anchorBlockId)
+  const anchorBlock = runtimeBlock(context.repo, anchorBlockId)
 
   // Imperative runner (no React context), so scopeRootId isn't injected
   // by useShortcutSurfaceActivations. Forward a caller-supplied one, else
@@ -1249,6 +1258,21 @@ const runRuntimeAction = async (
   const scopeRootId = isString(dependencies.scopeRootId)
     ? dependencies.scopeRootId
     : realUiStateBlock?.peekProperty(topLevelBlockIdProp)
+
+  // `run-action` is the widest route to a kernel mutator: it turns
+  // caller-supplied ids into Block facades and hands them to a handler that
+  // may call `Block.delete()` (the `delete_block` action does). Guarding only
+  // the typed verbs would leave the same background-workspace corruption
+  // reachable through here — so every id that BECOMES a dependency is checked
+  // before dispatch, which is also the last point we can refuse: once
+  // `invokeAction` runs, the writes are inside a handler we don't control.
+  for (const dependencyId of [
+    blockId, uiStateBlockId, anchorBlockId, scopeRootId, ...selectedBlockIds,
+  ]) {
+    if (dependencyId !== undefined) {
+      await assertActiveWorkspaceBlock(context.repo, `run-action ${actionId}`, dependencyId)
+    }
+  }
 
   // Route imperative agent dispatch through the same `invokeAction` choke the
   // keyboard / pointer / runActionById paths use, so the action-dispatch
@@ -1262,24 +1286,6 @@ const runRuntimeAction = async (
     anchorBlock,
     scopeRootId,
   } as BaseShortcutDependencies
-  // `run-action` is the widest route to a kernel mutator: it turns
-  // caller-supplied ids into Block facades and hands them to a handler that
-  // may call `Block.delete()` (the `delete_block` action does). Guarding only
-  // the typed verbs would leave the same background-workspace corruption
-  // reachable through here — so every id that became a dependency is checked
-  // BEFORE dispatch, which is also the last point we can refuse: once
-  // `invokeAction` runs, the writes are inside a handler we don't control.
-  for (const dependencyId of [
-    dependencies.blockId, command.blockId,
-    dependencies.uiStateBlockId, command.uiStateBlockId,
-    dependencies.anchorBlockId, scopeRootId,
-    ...selectedBlockIds,
-  ]) {
-    if (isString(dependencyId) && dependencyId) {
-      await assertActiveWorkspaceBlock(context.repo, `run-action ${actionId}`, dependencyId)
-    }
-  }
-
   const trigger = new CustomEvent('agent-runtime:run-action', {detail: {actionId}})
   let returned: unknown
   try {

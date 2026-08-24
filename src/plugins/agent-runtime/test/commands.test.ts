@@ -956,6 +956,40 @@ describe('mutating verbs refuse a target outside the active workspace (#790)', (
       expect(ran).toBe(false)
     })
 
+    // The back-compat top-level `blockId` is IGNORED when `dependencies.blockId`
+    // is present, so validating it too refused requests whose effective
+    // dependencies were entirely local (Codex, PR #803 review). Precedence is
+    // decided once now, and the guard reads the chosen id.
+    it('ignores a foreign id in a field the fallback chain does not select', async () => {
+      await seedBackground()
+      const context = withProbeAction()
+      await env.repo.tx(async tx => {
+        await tx.create({id: 'here', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'x'})
+      }, {scope: ChangeScope.BlockDefault, description: 'seed active block'})
+
+      await executeCommand({
+        commandId: 'c', type: 'run-action', id: 'test.probe',
+        dependencies: {blockId: 'here'},
+        blockId: BG_ROOT,
+      }, context)
+
+      expect(ran).toBe(true)
+      expect(seenBlockId).toBe('here')
+    })
+
+    // ...but the same field IS validated when nothing outranks it.
+    it('refuses a foreign id in the back-compat field when it is the one selected', async () => {
+      await seedBackground()
+      const context = withProbeAction()
+
+      await expect(executeCommand({
+        commandId: 'c', type: 'run-action', id: 'test.probe',
+        blockId: BG_ROOT,
+      }, context)).rejects.toThrow(refusal)
+
+      expect(ran).toBe(false)
+    })
+
     it('still dispatches for an active-workspace block', async () => {
       const context = withProbeAction()
       await env.repo.tx(async tx => {
