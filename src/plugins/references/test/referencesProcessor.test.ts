@@ -2259,4 +2259,64 @@ describe('parseReferences — property field rows reference their definition, ne
     const refs = JSON.parse((await env.read('root-status'))!.references_json)
     expect(refs).toEqual([{id: aliasId('status'), alias: 'status'}])
   })
+
+  it('holds for a BACKGROUND flipped workspace, whose registry is not loaded (#779)', async () => {
+    // The no-phantom-page guarantee must not depend on registry scope: a
+    // machinery write can land in a workspace that is neither active nor the
+    // retained previous one (sync arrival, a plugin seeding a note in a target
+    // workspace), where `propertySchemaResolverFor` fails closed and NOTHING
+    // about the row can be recognized. Pinned in a second workspace rather than
+    // left implied by the active-workspace case above, because that is exactly
+    // the difference a recognition-based suppression could not survive.
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const BG_WS = 'ws-bg'
+    await sharedDb.db.execute(
+      `INSERT INTO workspaces
+         (id, name, owner_user_id, create_time, update_time, encryption_mode, wk_canary, properties_migration)
+       VALUES (?, 'bg', 'user-1', 1, 1, 'none', NULL, 'children')`,
+      [BG_WS],
+    )
+    const bgFieldId = propertyDefinitionBlockId(BG_WS, 'test:references/property/bg-status')
+
+    // Precondition — the fail-closed is real here, so the assertions below
+    // can't pass merely because the scenario never reached it.
+    expect(env.repo.propertySchemaResolverFor(BG_WS).resolveField(bgFieldId))
+      .toEqual({status: 'identity-unavailable', reason: 'registry-not-workspace-keyed'})
+
+    // The shape both writers produce (eager dual-write and the deferred
+    // materialize processor): field row born classified, one value child.
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'bg-host', workspaceId: BG_WS, parentId: null, orderKey: 'a0', content: 'host'})
+      const fieldRowId = await tx.create({
+        id: 'bg-field',
+        workspaceId: BG_WS,
+        parentId: 'bg-host',
+        orderKey: 'a0',
+        referenceTargetId: bgFieldId,
+        isFieldForm: true,
+        content: propertyFieldContent(bgFieldId),
+      })
+      await tx.create({id: 'bg-value', workspaceId: BG_WS, parentId: fieldRowId, orderKey: 'a0', content: 'done'})
+    }, {scope: ChangeScope.BlockDefault})
+    await flush(4000)
+
+    expect(errorSpy, `processor crashed: ${errorSpy.mock.calls.map(c => c.join(' ')).join('; ')}`)
+      .not.toHaveBeenCalled()
+    errorSpy.mockRestore()
+
+    // Nothing was minted: the workspace holds exactly the rows written. Asked
+    // as "which rows exist" rather than "is there a page named X" because the
+    // regression would mint a seat named after whatever the content decayed to.
+    const rows = await sharedDb.db.getAll<{id: string}>(
+      'SELECT id FROM blocks WHERE workspace_id = ? AND deleted = 0 ORDER BY id',
+      [BG_WS],
+    )
+    expect(rows.map(r => r.id)).toEqual(['bg-field', 'bg-host', 'bg-value'])
+
+    // ...and the field row carries the same by-id definition ref it gets in the
+    // active workspace — an unloaded registry changes the reference VALUES not
+    // at all.
+    expect(JSON.parse((await env.read('bg-field'))!.references_json))
+      .toEqual([{id: bgFieldId, alias: bgFieldId}])
+  })
 })
