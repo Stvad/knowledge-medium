@@ -1,5 +1,5 @@
 import { FolderTree } from 'lucide-react'
-import type { OperatorBackfillResult, Repo } from '@/data/repo'
+import type { OperatorBackfillResult, Repo, WorkspaceRematerialization } from '@/data/repo'
 import {
   PROPERTY_CELL_BACKFILL_ID,
   countPropertyCellBackfillCandidates,
@@ -48,6 +48,12 @@ const notStarted = (reason: string | undefined, retryable = true): string =>
 interface Unfitness {
   readonly reason: string
   readonly retryable: boolean
+  /** The durable materialization gap, and only that.
+   *
+   *  The one unfitness a local pass can clear, which is why it is called out
+   *  rather than inferred from `retryable: false` — read-only and non-owner are
+   *  refusals about AUTHORITY, and re-materializing local rows moves neither. */
+  readonly rematerializable?: boolean
 }
 
 /** Why this device must not start the pass right now, or null. The runner takes
@@ -79,7 +85,90 @@ const passIsUnfit = async (
   // this sentence — told "try again shortly" about a gap nothing will clear,
   // they retry forever.
   const gap = await repo.workspaceViewGap(workspaceId)
-  return gap === null ? null : {reason: gap.reason, retryable: gap.transient}
+  return gap === null ? null : {
+    reason: gap.reason,
+    retryable: gap.transient,
+    // The durable arm exactly. The transient one is the drain still working,
+    // which a re-materialization would queue behind rather than help.
+    rematerializable: !gap.transient,
+  }
+}
+
+/**
+ * Clear a durable materialization gap, then ask the gate again.
+ *
+ * Those rows reached the drain, could not be applied, and had their queue entry
+ * consumed, so nothing re-delivers them and the refusal is permanent — but the
+ * remedy is a pass over rows this device already downloaded: local, uploading
+ * nothing, claiming nothing, and safe to repeat. Making the operator leave the
+ * dialog to run it by hand was asking them to learn "materialization gap"
+ * before they could migrate.
+ *
+ * FOUR things this deliberately does not do:
+ *
+ * - it does not weaken the gate. The predicate is re-taken afterwards and still
+ *   holds its veto; what goes away is a manual step, not a check.
+ * - it does not use the wide scope. That one is a full pass over the workspace
+ *   and can leave the gap LARGER (`reflagged`), which is a deliberate operator
+ *   choice and not something a migration does on someone's behalf.
+ * - it does not loop. A gap the narrow pass cannot clear is `deferred` (the
+ *   workspace is not materializable) or `quarantined` (ciphertext that will not
+ *   decode), and neither is answered by running it again.
+ * - it does not belong in `assertBackfillMayWrite`, the per-transaction
+ *   re-check. That one re-samples while the write lock is held, dozens of times
+ *   across a pass that runs for minutes; a repair there would be a
+ *   minutes-long pass inside a gate meant to cost microseconds.
+ *
+ * Cost accepted: a rescan can briefly write an older staged row over a local
+ * edit that is acked but not yet echoed back, and running this for the operator
+ * means they did not choose that. The echo re-asserts it, and the durable arm
+ * only fires with nothing in flight on the download side.
+ */
+const repairThenRecheck = async (
+  repo: Repo,
+  {workspaceId, needsFlip}: {workspaceId: string; needsFlip: boolean},
+): Promise<Unfitness | null> => {
+  // Seconds at this scope on a real gap, but it is a pass over the DB and the
+  // gesture has shown nothing yet — without a banner the command reads as hung.
+  const banner = showProgress('Catching up on rows this device never applied…')
+  let repaired: WorkspaceRematerialization
+  try {
+    repaired = await repo.rematerializeWorkspace(workspaceId, {scope: 'unapplied'})
+  } catch (err) {
+    // A failed repair is not a failed migration: fall back to the refusal the
+    // caller would have shown anyway, which is still true.
+    console.error('[properties-migration] could not re-materialize before the pass:', err)
+    banner.done()
+    return passIsUnfit(repo, {workspaceId, needsFlip})
+  }
+  const stillUnfit = await passIsUnfit(repo, {workspaceId, needsFlip})
+  if (stillUnfit === null) {
+    banner.done(`Applied ${repaired.applied.toLocaleString()} row(s) this device had `
+      + 'downloaded but never materialized.')
+    return null
+  }
+  banner.done()
+  // Only when this pass is still the reason. Its counts explain THIS gap; on a
+  // workspace that has meanwhile gone read-only they would explain nothing.
+  if (!stillUnfit.rematerializable) return stillUnfit
+  return {...stillUnfit, reason: `${stillUnfit.reason} (${describeResidualGap(repaired)})`}
+}
+
+/** Why the rows the repair could not apply are still there, in the pass's own
+ *  terms — the part an operator acts on, since neither cause is answered by
+ *  running it again. */
+const describeResidualGap = (pass: WorkspaceRematerialization): string => {
+  const parts: string[] = []
+  if (pass.deferred > 0) {
+    parts.push(`${pass.deferred.toLocaleString()} could not be read on this device — `
+      + 'the workspace needs unlocking, or its encryption mode is unresolved')
+  }
+  if (pass.quarantined > 0) {
+    parts.push(`${pass.quarantined.toLocaleString()} did not decrypt`)
+  }
+  return parts.length > 0
+    ? `just re-checked: ${parts.join('; ')}`
+    : 'just re-checked, and they did not move'
 }
 
 /** The synthesis advisory is sticky and re-runnable, so it needs a stable id or
@@ -246,7 +335,12 @@ export const migratePropertiesToBlocksAction = ({repo}: {repo: Repo}): ActionCon
     // for something the runner is about to refuse — including asking a
     // non-owner to consent to a flip the server will never let them make.
     // Re-taken after the dialog; this is the cheap early exit, not the guard.
-    const ineligible = await passIsUnfit(repo, {workspaceId, needsFlip: !childBacked})
+    let ineligible = await passIsUnfit(repo, {workspaceId, needsFlip: !childBacked})
+    // The one refusal with a local remedy: clear it and ask again, rather than
+    // sending the operator away to run a verb by hand and come back.
+    if (ineligible?.rematerializable) {
+      ineligible = await repairThenRecheck(repo, {workspaceId, needsFlip: !childBacked})
+    }
     if (ineligible !== null) {
       showInfo(notStarted(ineligible.reason, ineligible.retryable))
       return

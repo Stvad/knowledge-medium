@@ -46,7 +46,9 @@ const plan = (candidates = 0) => ({
   blockers: [], brokenDefinitions: [],
 })
 
-import type { OperatorBackfillResult, Repo, ViewGap } from '@/data/repo'
+import type {
+  OperatorBackfillResult, Repo, ViewGap, WorkspaceRematerialization,
+} from '@/data/repo'
 import { describeOutcome, migratePropertiesToBlocksAction } from '../action.ts'
 
 const clearUndo = vi.fn()
@@ -65,6 +67,14 @@ const STRANDED: ViewGap = {
   reason: '3 synced row(s) have not reached `blocks`', transient: false,
 }
 
+/** What the narrow re-materialization reports. Defaults to a pass that found
+ *  nothing, so a test opts INTO having repaired something. */
+const pass = (o: Partial<WorkspaceRematerialization> = {}): WorkspaceRematerialization => ({
+  workspaceId: 'ws-1', scope: 'unapplied', scanned: 0, applied: 0, deferred: 0,
+  skippedStale: 0, quarantined: 0, resolved: 0, reflagged: 0,
+  unappliedBefore: 0, unappliedAfter: 0, remainingGap: null, ...o,
+})
+
 const makeRepo = (
   result: OperatorBackfillResult = RAN,
   {flipped = false, owner = USER}: {flipped?: boolean; owner?: string} = {},
@@ -72,6 +82,7 @@ const makeRepo = (
   const runWorkspaceBackfillNow = vi.fn(async () => result)
   const getAll = vi.fn(async () => [{n: 7}])
   const workspaceViewGap = vi.fn(async (): Promise<ViewGap | null> => null)
+  const rematerializeWorkspace = vi.fn(async () => pass())
   // Two readers of the `workspaces` row now — the flip state and the owner.
   const getOptional = vi.fn(async (sql: string) => sql.includes('owner_user_id')
     ? {owner_user_id: owner}
@@ -82,10 +93,14 @@ const makeRepo = (
     db: {getAll, getOptional},
     isReadOnly: false,
     workspaceViewGap,
+    rematerializeWorkspace,
     undoManagerFor: () => ({clear: clearUndo}),
     runWorkspaceBackfillNow,
   } as unknown as Repo
-  return {repo, runWorkspaceBackfillNow, getAll, workspaceViewGap, getOptional}
+  return {
+    repo, runWorkspaceBackfillNow, getAll, workspaceViewGap, getOptional,
+    rematerializeWorkspace,
+  }
 }
 
 /** The dialog is a user-length pause; this is the seam for what happens during
@@ -163,6 +178,76 @@ describe('migrate_properties_to_blocks action', () => {
     await invoke(repo)
 
     expect(progressHandle.fail).toHaveBeenCalledWith(expect.stringContaining('Not started'))
+    expect(runWorkspaceBackfillNow).not.toHaveBeenCalled()
+  })
+
+  it('repairs a durable materialization gap instead of sending the operator away', async () => {
+    // The refusal used to be the end of the gesture: the rows are downloaded,
+    // unapplied, and nothing re-delivers them, so the operator had to learn the
+    // recovery verb, leave, run it, and come back. The remedy is a pass over
+    // rows this device already has, so the gesture does it.
+    const {repo, runWorkspaceBackfillNow, workspaceViewGap, rematerializeWorkspace} = makeRepo()
+    workspaceViewGap.mockResolvedValueOnce(STRANDED)   // …and clean on every re-take after
+    rematerializeWorkspace.mockResolvedValue(pass({applied: 3, resolved: 3, unappliedBefore: 3}))
+
+    await invoke(repo)
+
+    // NARROW scope, never the wide one: that is a full pass over the workspace
+    // and can leave the gap larger, which is an operator's call to make.
+    expect(rematerializeWorkspace).toHaveBeenCalledWith('ws-1', {scope: 'unapplied'})
+    expect(runWorkspaceBackfillNow).toHaveBeenCalled()
+  })
+
+  it('leaves a transient gap alone, because the drain is already on it', async () => {
+    // A re-materialization would queue BEHIND the drain that is mid-flight, so
+    // it costs a wait and changes nothing. Waiting is the remedy here.
+    const {repo, workspaceViewGap, rematerializeWorkspace} = makeRepo()
+    workspaceViewGap.mockResolvedValue(DRAINING)
+
+    await invoke(repo)
+
+    expect(rematerializeWorkspace).not.toHaveBeenCalled()
+  })
+
+  it('does not re-materialize over a refusal about authority', async () => {
+    // Read-only and non-owner are not about what this device HAS. Keying the
+    // repair on `retryable: false` rather than the gap itself would run a pass
+    // over local rows to answer a question about permission.
+    const {repo, workspaceViewGap, rematerializeWorkspace} = makeRepo()
+    workspaceViewGap.mockResolvedValue(null)
+    ;(repo as unknown as {isReadOnly: boolean}).isReadOnly = true
+
+    await invoke(repo)
+
+    expect(rematerializeWorkspace).not.toHaveBeenCalled()
+    expect(showInfo).toHaveBeenCalledWith(expect.stringContaining('read-only'))
+  })
+
+  it('says WHY the rows are still stuck when the repair could not move them', async () => {
+    // The two residual causes are the pass's own, not the predicate's, and
+    // neither is answered by running it again — so the count that names them is
+    // the whole difference between "try the verb" and "unlock the workspace".
+    const {repo, runWorkspaceBackfillNow, workspaceViewGap, rematerializeWorkspace} = makeRepo()
+    workspaceViewGap.mockResolvedValue(STRANDED)
+    rematerializeWorkspace.mockResolvedValue(
+      pass({scanned: 26, deferred: 26, unappliedBefore: 26, unappliedAfter: 26}))
+
+    await invoke(repo)
+
+    expect(showInfo).toHaveBeenCalledWith(expect.stringContaining('26 could not be read'))
+    expect(runWorkspaceBackfillNow).not.toHaveBeenCalled()
+  })
+
+  it('falls back to the plain refusal when the repair itself throws', async () => {
+    // A repair that failed says nothing about the migration; the refusal it was
+    // trying to clear is still true and is still what the operator needs.
+    const {repo, runWorkspaceBackfillNow, workspaceViewGap, rematerializeWorkspace} = makeRepo()
+    workspaceViewGap.mockResolvedValue(STRANDED)
+    rematerializeWorkspace.mockRejectedValue(new Error('no observer'))
+
+    await invoke(repo)
+
+    expect(showInfo).toHaveBeenCalledWith(expect.stringContaining('Not started'))
     expect(runWorkspaceBackfillNow).not.toHaveBeenCalled()
   })
 
