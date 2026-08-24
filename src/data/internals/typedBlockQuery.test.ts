@@ -431,6 +431,41 @@ describe('repo.queryBlocks', () => {
       })
     })
 
+    it('reads target ids from the property value, not the not-yet-projected edge', async () => {
+      // `block_references` is trigger-maintained from `references_json`, which
+      // the references processor writes POST-COMMIT. A ref-typed property
+      // write therefore commits — and invalidates on the property channel —
+      // before its edge row exists. Deriving deps from the edge index would
+      // see nothing in that window and register nothing; on the
+      // `kind: 'structure'` paths nothing later fires to correct it, so the
+      // handle would stay stale forever. This block has the property set and
+      // NO references, which is exactly that window.
+      await create({id: 'live-target'})
+      await create({
+        id: 'parent-unprojected',
+        properties: {[reviewerProp.name]: reviewerProp.codec.encode('live-target')},
+      })
+      await create({id: 'entry-unprojected', parentId: 'parent-unprojected', types: ['entry']})
+
+      const edges = await env.repo.db.getAll(
+        'SELECT * FROM block_references WHERE source_id = ?', ['parent-unprojected'],
+      )
+      expect(edges).toEqual([])
+
+      const handle = env.repo.query.typedBlocks({
+        workspaceId: WS,
+        types: ['entry'],
+        match: [{scope: 'ancestor', where: {[reviewerProp.name]: {target: {}}}}],
+      })
+      await handle.load()
+
+      expect(handle.__depsForTest()).toContainEqual({
+        kind: 'plugin',
+        channel: TYPED_BLOCKS_STRUCTURE_CHANNEL,
+        key: typedBlocksStructureKey(WS, 'live-target'),
+      })
+    })
+
     it('rejects the target operator on non-ref properties', async () => {
       await expect(env.repo.queryBlocks({workspaceId: WS, 
         where: {status: {target: {priority: {gt: 0}}}},

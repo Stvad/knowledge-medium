@@ -30,6 +30,7 @@ import {
   type Schema,
   type SubtreeRow,
   type TypedBlockQueryReferenceFilter,
+  type AnyPropertySchema,
 } from '@/data/api'
 import { SELECT_BLOCK_COLUMNS_SQL, buildQualifiedBlockColumnsSql, type BlockRow } from '@/data/blockSchema'
 import { SYSTEM_BLOCK_TYPES, USER_TYPE } from '@/data/blockTypes'
@@ -37,6 +38,7 @@ import { userStateRootBlockIds } from '@/data/derivedIds'
 import { seedKeyProp } from '@/data/properties'
 import { propertyDefinitionBlockId } from '@/data/definitionSeeds'
 import type { Repo } from '@/data/repo'
+import { refCodecKind } from './refProjection'
 import {
   ANCESTORS_SQL,
   CHILDREN_IDS_SQL,
@@ -53,6 +55,7 @@ import {
   compileTypedBlockQuery,
   isSelectiveWhereValue,
   normalizeTypedBlockQuery,
+  inlineJsonPath,
 } from './typedBlockQuery'
 import {
   KERNEL_ALIASES_CHANNEL,
@@ -878,11 +881,11 @@ const TARGET_DEP_KIND = 't'
  *  candidate seed (no per-predicate filtering) since we want every
  *  potentially-relevant ancestor in the dep set.
  *
- *  With `targetPropCount > 0` a second arm rides the SAME walk to return the
- *  target ids those rows point at, for the named properties. One statement
- *  rather than two so the recursive walk — the expensive part — is paid once;
- *  the arms are told apart by `dep_kind`. See `declareAncestorDeps`. */
-const ANCESTOR_DEP_NODES_SQL = (candidatesCte: string, targetPropCount: number) => `
+ *  Each `targetArms` entry rides the SAME walk to return the target ids those
+ *  rows point at, for one named property. One statement rather than two so the
+ *  recursive walk — the expensive part — is paid once; the arms are told apart
+ *  by `dep_kind`. See `declareAncestorDeps`. */
+const ANCESTOR_DEP_NODES_SQL = (candidatesCte: string, targetArms: readonly string[]) => `
   WITH RECURSIVE
     ${candidatesCte},
     walk(anc_id, anc_parent_id, depth, path) AS (
@@ -902,13 +905,10 @@ const ANCESTOR_DEP_NODES_SQL = (candidatesCte: string, targetPropCount: number) 
         AND walk.depth < 100
         AND INSTR(walk.path, '!' || hex(parent.id) || '/') = 0
     )
-  SELECT DISTINCT '${ANCESTOR_DEP_KIND}' AS dep_kind, anc_id AS dep_id FROM walk${targetPropCount === 0 ? '' : `
+  SELECT DISTINCT '${ANCESTOR_DEP_KIND}' AS dep_kind, anc_id AS dep_id FROM walk${
+    targetArms.map(arm => `
   UNION
-  SELECT DISTINCT '${TARGET_DEP_KIND}', r.target_id
-  FROM walk
-  JOIN block_references r
-    ON r.source_id = walk.anc_id
-   AND r.source_field IN (${Array.from({length: targetPropCount}, () => '?').join(', ')})`}
+  ${arm}`).join('')}
 `
 
 
@@ -1100,6 +1100,44 @@ const typedBlockNeedsAncestorChain = (
   matchPredicates.some(p => p.scope === 'ancestor') ||
   excludePredicates.some(p => p.scope === 'ancestor')
 
+/** One UNION arm per named property, reading the target ids out of the SAME
+ *  `properties_json` expression the predicate itself compiles to
+ *  (`compileTargetTraversal`).
+ *
+ *  NOT `block_references`: that edge index is trigger-maintained from
+ *  `references_json`, which the references processor writes POST-COMMIT. A
+ *  ref-typed property write therefore lands (and invalidates on the property
+ *  channel) before its edge exists, so a resolve in that window would see no
+ *  target and register no dep. On the `kind: 'structure'` paths the ancestor
+ *  deps do not fire on the later `references_json` edit either, so the miss
+ *  would be permanent. Reading the property value cannot skew from the
+ *  predicate, because it is the same expression. */
+const targetLivenessArms = (
+  props: ReadonlySet<string>,
+  propertySchemas: ReadonlyMap<string, AnyPropertySchema>,
+): string[] => {
+  const arms: string[] = []
+  for (const name of [...props].sort()) {
+    const extract = `json_extract(b.properties_json, ${inlineJsonPath(name)})`
+    const kind = refCodecKind(propertySchemas.get(name))
+    if (kind === 'ref') {
+      arms.push(
+        `SELECT DISTINCT '${TARGET_DEP_KIND}', ${extract}\n` +
+        `  FROM walk JOIN blocks b ON b.id = walk.anc_id\n` +
+        `  WHERE ${extract} IS NOT NULL`,
+      )
+    } else if (kind === 'refList') {
+      // Same fan-out the predicate uses; `json_each` over a NULL/absent value
+      // yields no rows, which is why it needs no null guard there or here.
+      arms.push(
+        `SELECT DISTINCT '${TARGET_DEP_KIND}', je.value\n` +
+        `  FROM walk JOIN blocks b ON b.id = walk.anc_id, json_each(${extract}) je`,
+      )
+    }
+  }
+  return arms
+}
+
 const declareAncestorDeps = async (
   normalized: ResolvedTypedBlockQuery,
   ctx: QueryCtx,
@@ -1112,22 +1150,22 @@ const declareAncestorDeps = async (
   targetProps: ReadonlySet<string>,
 ): Promise<void> => {
   assertAncestorWalkBounded(normalized)
-  const targetPropList = [...targetProps]
   const candidatesCte = buildCandidatesCte(normalized, ctx.repo.propertySchemas)
-  const rows = await ctx.db.getAll<{dep_kind: string; dep_id: string}>(
-    ANCESTOR_DEP_NODES_SQL(candidatesCte.sql, targetPropList.length),
-    [...candidatesCte.params, ...targetPropList],
+  const rows = await ctx.db.getAll<{dep_kind: string; dep_id: string | null}>(
+    ANCESTOR_DEP_NODES_SQL(
+      candidatesCte.sql,
+      targetLivenessArms(targetProps, ctx.repo.propertySchemas),
+    ),
+    candidatesCte.params,
   )
   for (const row of rows) {
+    if (row.dep_id === null) continue
     if (row.dep_kind === TARGET_DEP_KIND) {
       // The predicate compiles to `EXISTS(… AND deleted = 0)`, so this target
-      // being created, deleted or restored flips membership — and
+      // being created, deleted or restored flips membership, and
       // `typedBlocks.structure` is emitted keyed on the changed block's own
-      // id, so naming it covers every direction. Dangling targets are named
-      // too: the edge row exists whether or not the target does, and creating
-      // it is precisely the event to wake on. Measured on a 328k-block
-      // workspace: 2 ids for a daily note's backlinks, replacing a channel
-      // that fired on all ~328k.
+      // id. A target with no row yet still gets a dep — that is the case a
+      // later create would otherwise admit unnoticed.
       //
       // The branch only diverges from the fallthrough when `kind === 'row'`:
       // a row dep would also fire on the target's CONTENT edits, which cannot

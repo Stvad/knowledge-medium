@@ -27,7 +27,7 @@ export const jsonPathForProperty = (name: string): string =>
  *  trusted facets, but the literal still gets standard `''`-escaping
  *  defensively so a name containing a single quote can't break the
  *  surrounding SQL. */
-const inlineJsonPath = (name: string): string => {
+export const inlineJsonPath = (name: string): string => {
   const path = jsonPathForProperty(name)
   return `'${path.replaceAll("'", "''")}'`
 }
