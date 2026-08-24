@@ -1731,7 +1731,7 @@ b7b20b57449491d17522b2d52bf360256cc239e30bd54a2bfe17dfd8c399fd8f  ./src/App.js
 26ae93c25697f68037ee01d48c6943f8e4da172b8ae0527d1276579a1cc62796  ./src/App.js.map
 0b6cdff83c4e2e654daed8de1db8c4dca693242715e28de06767a51c7c78de15  ./src/appUpdate.js
 90769c02d289c099463e0237f99fa41a7d0faec88ff0ec0c7261af894a4fb1b9  ./src/appUpdate.js.map
-d9db952b8953142e13255e81f653dd8b97423998c2f4766567663263dc9a1077  ./src/appVersion.js
+52ad274fd05805d89d058571adbf47ce7c0c5f38612041ffcb52715f48f64601  ./src/appVersion.js
 76bd53c764d4393e8e6411205df2c6642a2c684e22691666337476b2a22938a5  ./src/appVersion.js.map
 fea5c9bcdb0b19b9e7a2c87061e8af20afffcb227e47dba1dada4088258e6f93  ./src/bootstrap/resolveWorkspace.js
 c357de0c880a035b6a5fc81aa7642f7adc3c69f64384e749738c74fb09afa57e  ./src/bootstrap/resolveWorkspace.js.map
@@ -2786,8 +2786,8 @@ b0a377cdbe42bf3a39625273fa709358066282bcfcdeb75e0d064e61fec4a71a  ./src/plugins/
 01ed842406ab19937eef282091aab8c7732762db0c891aaf5578922851033d2c  ./src/plugins/grouped-backlinks/index.js.map
 2ef6de1cf5830f59d75d4be5fd391fa3b906ef401d9e22774a41261ef07d8527  ./src/plugins/grouped-backlinks/propertyEditorOverride.js
 bbacfb42acc72b901dfa93998e831f9585ac0ca8c97edd79312b36e26d99c754  ./src/plugins/grouped-backlinks/propertyEditorOverride.js.map
-7643bb5c3c0c0783218f4990c3637f91cc7d35c36888f53d693f9d3e57b5c235  ./src/plugins/grouped-backlinks/query.js
-1e5552a3ef21bf168df6f708d44404a6a704a83873e4bd3884c69d7fdab155c2  ./src/plugins/grouped-backlinks/query.js.map
+fa63ff9ad34b47f9ec937deb50989b48e495e844159e3d88bae015df4fe2631d  ./src/plugins/grouped-backlinks/query.js
+b1b3fd1db87509c47863f21a2ac1230926b7ac492b361a710ca7560fa1fa5a29  ./src/plugins/grouped-backlinks/query.js.map
 bce4c8dcb266c103ecfc89bd999bafd1fe9664fe0004c9b4476097081953b3bb  ./src/plugins/grouped-backlinks/resolveConfig.js
 84b5fcd7533f58a689d9e71b7a7281f4c700ebb517b64018bab77771df399f37  ./src/plugins/grouped-backlinks/resolveConfig.js.map
 2a0b9a372ddd7c88899e7057af0aa0cff6ad50245577a01f98407989e6cd62c2  ./src/plugins/grouped-backlinks/useGroupedBacklinks.js
@@ -3394,8 +3394,8 @@ ea7891e59b3608440c35c38901ebf443535471174fcbae950c1c74f2885c571a  ./src/utils/vi
 69754adc2a0ce8f9699da30476838e93fd95bd4b61eda37060f239224bc9b656  ./src/utils/viewTransition.js.map
 eda7cd6e992fb9f7324505e9817253123005c192d80e9c52ac4b14967936955c  ./src/utils/viewport.js
 a2bcdb138bcf84f7f3f9fc982c821e724fe578c3ea7971a890ea1ea9bc4c837f  ./src/utils/viewport.js.map
-2545d491fb2b2d7ba22a6279e986ffc0a63e98148d56059004ca08e731410e3d  ./sw.js
-028b008762d3129b18b8a23fffb4dda1bcd182a3ca2e6818b068a648f3bae464  ./version.json
+9eec3c4bba99c53900843d7e909fc69226078da99238830388fa82c27557ee01  ./sw.js
+045cde1b533ac03561c2f30bed29611e1bbb497a9735f1df98aad4639123fdc1  ./version.json
 4a748afd443918bb16591c834c401dae33e87861ab5dbad0811c3a3b4a9214fb  ./vite.svg
 643714fb239b199a921024c34f82d13697a3803c91c97ff8da10455a09249406  ./wa-sqlite-async.wasm
 d167becf5a6949b1f31b1d026dc15e138b2b34b12fc44b71c56164392900b3b8  ./wa-sqlite.wasm
