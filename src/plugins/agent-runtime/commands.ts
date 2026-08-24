@@ -575,10 +575,13 @@ const assertActiveWorkspace = (repo: Repo, verb: string, workspaceId: string): v
  *  and `repo.tx` independently refuses if the workspace generation moves while
  *  it waits for definition readiness.
  *
- *  What this still cannot cover — and no bridge-side check can — is a switch
- *  DURING a `run-action` handler, whose writes happen inside code the bridge
- *  does not control. That is the residual the kernel-side move exists to
- *  close (see the follow-up issue). */
+ *  Two residuals stay ACCEPTED, both for the same reason — they need the check
+ *  to be inside the writing transaction, which is the kernel-side move tracked
+ *  separately, not something a caller-side check can reach:
+ *    - an id absent from this read that sync delivers for a background
+ *      workspace before the mutator opens its transaction;
+ *    - a switch DURING a `run-action` handler, whose writes happen inside code
+ *      the bridge does not control. */
 const assertActiveWorkspaceBlocks = async (
   repo: Repo,
   verb: string,
