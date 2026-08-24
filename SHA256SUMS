@@ -1725,13 +1725,13 @@ ae8a34564e983755fe682da4aca1ea82b94c7d1330a7cf5dd047e58f88a038af  ./node_modules
 9663342235211346f2ee6e5d83a558e433a50ccc005f353274ffd40e74cace99  ./node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/core/util.js.map
 dc5cf8ea66e9dd7eaab28ea68ed79db0cf51f9bc5155e0752f0d2d367a693e11  ./node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/core/versions.js
 f9bb82f7783b12e0b4dbb105be10bdfc217bd6976b7b97899e899a15760f0755  ./node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/core/versions.js.map
-b9d110b13e2ac7462609f84686fddc99eeef905cebdb3b1aeab0b23b57d2ba61  ./packages/agent-cli/src/protocol.js
-a6644f492672ba39392bcc9b1059a0f55eb8fd87d7a9f42411d6b57ed669ed97  ./packages/agent-cli/src/protocol.js.map
+4a59d9f86b83cbeb49d4b526f06d5a95d5d16897fc5fcd508a8232050581f114  ./packages/agent-cli/src/protocol.js
+c0695743458c54ce857bc9dc2aa9bdb92ec4e64fff515973098f51ed892a5990  ./packages/agent-cli/src/protocol.js.map
 b7b20b57449491d17522b2d52bf360256cc239e30bd54a2bfe17dfd8c399fd8f  ./src/App.js
 26ae93c25697f68037ee01d48c6943f8e4da172b8ae0527d1276579a1cc62796  ./src/App.js.map
 0b6cdff83c4e2e654daed8de1db8c4dca693242715e28de06767a51c7c78de15  ./src/appUpdate.js
 90769c02d289c099463e0237f99fa41a7d0faec88ff0ec0c7261af894a4fb1b9  ./src/appUpdate.js.map
-18c517bbc59f7f298198e2e904d001c7b3bb972984ba80d48c6b72049cea886a  ./src/appVersion.js
+66b766cd0b587982195bb932b7d75edfa6489af4d135027c8058a3ddd85e38c0  ./src/appVersion.js
 76bd53c764d4393e8e6411205df2c6642a2c684e22691666337476b2a22938a5  ./src/appVersion.js.map
 fea5c9bcdb0b19b9e7a2c87061e8af20afffcb227e47dba1dada4088258e6f93  ./src/bootstrap/resolveWorkspace.js
 c357de0c880a035b6a5fc81aa7642f7adc3c69f64384e749738c74fb09afa57e  ./src/bootstrap/resolveWorkspace.js.map
@@ -3394,8 +3394,8 @@ ea7891e59b3608440c35c38901ebf443535471174fcbae950c1c74f2885c571a  ./src/utils/vi
 69754adc2a0ce8f9699da30476838e93fd95bd4b61eda37060f239224bc9b656  ./src/utils/viewTransition.js.map
 eda7cd6e992fb9f7324505e9817253123005c192d80e9c52ac4b14967936955c  ./src/utils/viewport.js
 a2bcdb138bcf84f7f3f9fc982c821e724fe578c3ea7971a890ea1ea9bc4c837f  ./src/utils/viewport.js.map
-56b52edf0ea552077aa116def78b1ef786f7b2868118db046d79e209fe7bffd3  ./sw.js
-a6f837a4ff7177634195a48b816cf451d5a930724a9a059ff058e4b857217764  ./version.json
+a3f58f3e8c795283af9469836f2d78e2372f9f7d48633b12ea8f4780850dbcc7  ./sw.js
+8677624f9e334bc09b2ba348b070ef6f86d170cbcdcd34da72e495235308c913  ./version.json
 4a748afd443918bb16591c834c401dae33e87861ab5dbad0811c3a3b4a9214fb  ./vite.svg
 643714fb239b199a921024c34f82d13697a3803c91c97ff8da10455a09249406  ./wa-sqlite-async.wasm
 d167becf5a6949b1f31b1d026dc15e138b2b34b12fc44b71c56164392900b3b8  ./wa-sqlite.wasm
