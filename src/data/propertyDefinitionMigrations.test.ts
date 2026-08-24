@@ -116,15 +116,12 @@ const cell = async (id: string): Promise<Record<string, unknown>> => {
   return JSON.parse(row.properties_json) as Record<string, unknown>
 }
 
-const baselineNames = async (workspaceId = WS): Promise<Record<string, string>> => {
+const baselineCodecs = async (workspaceId = WS): Promise<Record<string, string>> => {
   const row = await sharedDb.db.getOptional<{value: string | null}>(
     'SELECT value FROM client_schema_state WHERE key = ?',
     [`${PROPERTY_DEFINITION_BASELINE_PREFIX}${workspaceId}`],
   )
-  const fields = (JSON.parse(row?.value ?? '{}') as {
-    fields?: Record<string, {name: string}>
-  }).fields ?? {}
-  return Object.fromEntries(Object.entries(fields).map(([id, entry]) => [id, entry.name]))
+  return (JSON.parse(row?.value ?? '{}') as {codecs?: Record<string, string>}).codecs ?? {}
 }
 
 const rowContent = async (id: string): Promise<string> =>
@@ -657,9 +654,7 @@ describe('name round-trip guard (§7)', () => {
   })
 })
 
-describe('changes observed only across a workspace switch (#780)', () => {
-  const statusRenamed = schemaWith('state')
-
+describe('codec changes observed only across a workspace switch (#780)', () => {
   /** Wait until the registry has primed on `workspaceId`, and (when given)
    *  carries `name` for FIELD_ID. `setActiveWorkspaceId` returns BEFORE the
    *  definition projector re-primes, so the rebuild that runs the baseline diff
@@ -683,12 +678,11 @@ describe('changes observed only across a workspace switch (#780)', () => {
    *  bucket, then switch back.
    *
    *  Publishing while WS is inactive is the shape a SYNCED-IN change has: no
-   *  `repo.tx` runs on this device, so the same-tx rename processor never
-   *  fires. Waiting for OTHER_WS to prime makes it a real workspace visit
-   *  (which is what rotates the resolver's previous slot); it does NOT make the
-   *  return a cross-workspace diff — pinning WS rebuilds once with a null
-   *  registry before its projector primes, so `previous` is null at the prime
-   *  either way. */
+   *  `repo.tx` runs on this device. Waiting for OTHER_WS to prime makes it a
+   *  real workspace visit (which is what rotates the resolver's previous slot);
+   *  it does NOT make the return a cross-workspace diff — pinning WS rebuilds
+   *  once with a null registry before its projector primes, so `previous` is
+   *  null at the prime either way. */
   const changeWhileInactive = async (
     repo: Repo, next: ReturnType<typeof schemaWith>,
   ): Promise<void> => {
@@ -699,20 +693,6 @@ describe('changes observed only across a workspace switch (#780)', () => {
     await awaitRegistry(repo, WS, next.name)
     await repo.awaitPropertyDefinitionBaselines()
   }
-
-  it('re-keys cells for a rename that landed while the workspace was inactive', async () => {
-    await seedWorkspace('children')
-    const repo = setup()
-    await seedProperty(repo, 'p', 'done')
-    await repo.awaitPropertyDefinitionBaselines()
-    expect(await cell('p')).toEqual({status: 'done'})
-
-    await changeWhileInactive(repo, statusRenamed)
-
-    await vi.waitFor(async () => {
-      expect(await cell('p')).toEqual({state: 'done'})
-    }, {timeout: 5000})
-  }, 20_000)
 
   it('re-encodes values for a codec change that landed while the workspace was inactive', async () => {
     await seedWorkspace('children')
@@ -728,36 +708,82 @@ describe('changes observed only across a workspace switch (#780)', () => {
     expect(await rowContent(valueRowId)).toBe('42')
   }, 20_000)
 
-  it('repairs a rename that synced in while the workspace was OPEN, at the next prime', async () => {
+  it('re-encodes a codec change that synced in while the workspace was OPEN, at the next prime', async () => {
     await seedWorkspace('children')
     const repo = setup()
-    await seedProperty(repo, 'p', 'done')
+    await seedProperty(repo, 'p', ' 42 ')
     await repo.awaitPropertyDefinitionBaselines()
 
-    // Synced in while WS is ACTIVE: no local tx, so the same-tx processor never
-    // sees it, and the bridge's in-memory diff schedules codec changes only —
-    // nothing re-keys the cell now.
-    publishDefinition(repo, statusRenamed)
-    await awaitRegistry(repo, WS, 'state')
+    // Synced in while WS is ACTIVE. The bridge's own in-memory diff schedules
+    // this one, so it applies immediately — the point of the test is what the
+    // baseline does NOT do: absorb it before the pass has run.
+    publishDefinition(repo, statusNumber)
+    await awaitRegistry(repo, WS, 'status')
+    await vi.waitFor(async () => {
+      expect(await cell('p')).toEqual({status: 42})
+    }, {timeout: 5000})
     await repo.awaitPropertyDefinitionBaselines()
 
     // Rebuilds keep happening — a plugin finishing load, another definition
-    // arriving. Each one's in-memory previous snapshot already carries the new
-    // name, so none of them sees a change; the baseline must still not absorb
-    // the drift, or the prime below finds a matching before-state and the
-    // repair never comes.
+    // arriving. Each one's in-memory previous already carries the new codec, so
+    // none sees a change; the baseline must reflect what was APPLIED, not
+    // whichever build happened to observe it.
     for (let build = 0; build < 2; build += 1) {
-      publishDefinition(repo, statusRenamed)
+      publishDefinition(repo, statusNumber)
       await repo.awaitPropertyDefinitionBaselines()
     }
-    expect(await baselineNames()).toEqual({[FIELD_ID]: 'status'})
+    const scheduled = vi.spyOn(repo, 'schedulePropertyDefinitionMigrations')
 
     repo.setActiveWorkspaceId(OTHER_WS)
     await awaitRegistry(repo, OTHER_WS)
     repo.setActiveWorkspaceId(WS)
+    await awaitRegistry(repo, WS)
+    await repo.awaitPropertyDefinitionBaselines()
 
+    expect(scheduled).not.toHaveBeenCalled()
+  }, 20_000)
+
+  it('records nothing when the batch throws, so the next prime retries', async () => {
+    await seedWorkspace('children')
+    const repo = setup()
+    await seedProperty(repo, 'p', ' 42 ')
+    await repo.awaitPropertyDefinitionBaselines()
+    // Recording sits AFTER the batch inside its try for exactly this reason:
+    // above it, a pass that died mid-way would be recorded as applied and the
+    // drift would never be re-detected.
+    const batch = vi.spyOn(
+      repo as unknown as {runPropertyDefinitionMigrationBatch: () => Promise<void>},
+      'runPropertyDefinitionMigrationBatch',
+    ).mockRejectedValue(new Error('[test] batch failed'))
+
+    await changeWhileInactive(repo, statusNumber)
+    await vi.waitFor(() => {
+      expect(batch).toHaveBeenCalled()
+    }, {timeout: 5000})
+
+    expect(await baselineCodecs()).toEqual({[FIELD_ID]: 'string'})
+    batch.mockRestore()
+  }, 20_000)
+
+  it('records nothing in an UN-FLIPPED workspace, so the flip repairs it', async () => {
+    // The flip gate returns before the batch, and therefore before the record.
+    // Absorbing the drift here would leave a 'cell' workspace's codec change
+    // permanently invisible to the prime that follows its flip.
+    await seedWorkspace('cell')
+    const repo = setup()
+    await repo.tx(async tx => {
+      await tx.create({
+        id: 'p', workspaceId: WS, parentId: null, orderKey: 'k-p', content: 'host',
+      })
+    }, {scope: ChangeScope.BlockDefault})
+    await repo.tx(tx => tx.setProperty('p', statusString, ' 42 '),
+      {scope: ChangeScope.BlockDefault})
+    await repo.awaitPropertyDefinitionBaselines()
+
+    await changeWhileInactive(repo, statusNumber)
     await vi.waitFor(async () => {
-      expect(await cell('p')).toEqual({state: 'done'})
+      await repo.awaitPropertyDefinitionMigrations()
+      expect(await baselineCodecs()).toEqual({[FIELD_ID]: 'string'})
     }, {timeout: 5000})
   }, 20_000)
 
@@ -774,139 +800,13 @@ describe('changes observed only across a workspace switch (#780)', () => {
     await awaitRegistry(repo, WS, 'status')
     await repo.awaitPropertyDefinitionBaselines()
 
-    expect(await baselineNames()).toEqual({[FIELD_ID]: 'status'})
-  }, 20_000)
-
-  it('a pass with nothing left to do rewrites no value-child text', async () => {
-    await seedWorkspace('children')
-    // A NUMBER codec, so re-encoding is observable — it would normalize the
-    // stored text. This is the receiving device's shape: the renaming device
-    // re-keyed its cells and synced them, so the pass that runs here has
-    // nothing to change and must not rewrite anything on the way through.
-    // Every LOCAL rename takes exactly this pass at the next prime.
-    const repo = setup(statusNumber)
-    await repo.tx(async tx => {
-      for (const id of ['done', 'todo']) {
-        await tx.create({
-          id, workspaceId: WS, parentId: null, orderKey: `k-${id}`, content: 'host',
-        })
-      }
-    }, {scope: ChangeScope.BlockDefault})
-    for (const id of ['done', 'todo']) {
-      // `schemaWith` types every schema as string-valued whatever codec it
-      // carries (see its declaration), so the number goes through as never.
-      await repo.tx(tx => tx.setProperty(id, statusNumber, 42 as never),
-        {scope: ChangeScope.BlockDefault})
-    }
-    const field = await sharedDb.db.get<{id: string}>(
-      'SELECT id FROM blocks WHERE parent_id = ? AND reference_target_id = ? AND deleted = 0',
-      ['done', FIELD_ID],
-    )
-    const valueRow = await sharedDb.db.get<{id: string}>(
-      'SELECT id FROM blocks WHERE parent_id = ? AND deleted = 0', [field.id],
-    )
-    // Raw writes: the shape sync-applied rows have (no processor runs). `done`
-    // arrives already re-keyed, with value text the codec would not have
-    // written; `todo` is the positive control the pass still has to fix.
-    await sharedDb.db.writeTransaction(async tx => {
-      await tx.execute('UPDATE blocks SET content = ? WHERE id = ?', ['  0042  ', valueRow.id])
-      await tx.execute(
-        'UPDATE blocks SET properties_json = ? WHERE id = ?', ['{"state2":42}', 'done'],
-      )
-    })
-    await repo.awaitPropertyDefinitionBaselines()
-
-    await changeWhileInactive(repo, state2Number)
-
-    await vi.waitFor(async () => {
-      expect(await cell('todo')).toEqual({state2: 42})
-    }, {timeout: 5000})
-    expect(await rowContent(valueRow.id)).toBe('  0042  ')
-  }, 20_000)
-
-  it('records nothing when the batch throws, so the next prime retries', async () => {
-    await seedWorkspace('children')
-    const repo = setup()
-    await seedProperty(repo, 'p', 'done')
-    await repo.awaitPropertyDefinitionBaselines()
-    // Recording sits AFTER the batch inside its try for exactly this reason:
-    // above it, a pass that died mid-way would be recorded as applied and the
-    // drift would never be re-detected.
-    const batch = vi.spyOn(
-      repo as unknown as {runPropertyDefinitionMigrationBatch: () => Promise<void>},
-      'runPropertyDefinitionMigrationBatch',
-    ).mockRejectedValue(new Error('[test] batch failed'))
-
-    await changeWhileInactive(repo, statusRenamed)
-    await vi.waitFor(() => {
-      expect(batch).toHaveBeenCalled()
-    }, {timeout: 5000})
-
-    expect(await baselineNames()).toEqual({[FIELD_ID]: 'status'})
-    batch.mockRestore()
-  }, 20_000)
-
-  it('records nothing in an UN-FLIPPED workspace, so the flip repairs it', async () => {
-    // The flip gate returns before the batch, and therefore before the record.
-    // Absorbing the drift here would leave a 'cell' workspace's rename
-    // permanently invisible to the prime that follows its flip.
-    await seedWorkspace('cell')
-    const repo = setup()
-    // No `seedProperty` here — an un-flipped workspace mints no field rows.
-    await repo.tx(async tx => {
-      await tx.create({
-        id: 'p', workspaceId: WS, parentId: null, orderKey: 'k-p', content: 'host',
-      })
-    }, {scope: ChangeScope.BlockDefault})
-    await repo.tx(tx => tx.setProperty('p', statusString, 'done'),
-      {scope: ChangeScope.BlockDefault})
-    await repo.awaitPropertyDefinitionBaselines()
-
-    await changeWhileInactive(repo, statusRenamed)
-    await vi.waitFor(async () => {
-      await repo.awaitPropertyDefinitionMigrations()
-      expect(await baselineNames()).toEqual({[FIELD_ID]: 'status'})
-    }, {timeout: 5000})
-  }, 20_000)
-
-  it('does not report unconvertible values for a rename, which re-encodes nothing', async () => {
-    await seedWorkspace('children')
-    const repo = setup(statusNumber)
-    await repo.tx(async tx => {
-      await tx.create({
-        id: 'p', workspaceId: WS, parentId: null, orderKey: 'k-p', content: 'host',
-      })
-    }, {scope: ChangeScope.BlockDefault})
-    await repo.tx(tx => tx.setProperty('p', statusNumber, 42 as never),
-      {scope: ChangeScope.BlockDefault})
-    const field = await sharedDb.db.get<{id: string}>(
-      'SELECT id FROM blocks WHERE parent_id = ? AND reference_target_id = ? AND deleted = 0',
-      ['p', FIELD_ID],
-    )
-    const valueRow = await sharedDb.db.get<{id: string}>(
-      'SELECT id FROM blocks WHERE parent_id = ? AND deleted = 0', [field.id],
-    )
-    // Pre-existing user state a rename does not make any worse.
-    await sharedDb.db.execute(
-      'UPDATE blocks SET content = ? WHERE id = ?', ['not a number', valueRow.id],
-    )
-    await repo.awaitPropertyDefinitionBaselines()
-    const errors: ProcessorRejection[] = []
-    repo.onUserError(err => { errors.push(err) })
-
-    await changeWhileInactive(repo, state2Number)
-    await vi.waitFor(async () => {
-      await repo.awaitPropertyDefinitionMigrations()
-      expect(await baselineNames()).toEqual({[FIELD_ID]: 'state2'})
-    }, {timeout: 5000})
-
-    expect(errors).toEqual([])
+    expect(await baselineCodecs()).toEqual({[FIELD_ID]: 'string'})
   }, 20_000)
 
   it('with NO recorded baseline, records one and migrates nothing', async () => {
     await seedWorkspace('children')
     const repo = setup()
-    await seedProperty(repo, 'p', 'done')
+    await seedProperty(repo, 'p', ' 42 ')
     await repo.awaitPropertyDefinitionBaselines()
     // A device that has never recorded a baseline for this workspace — a fresh
     // install, or one whose `client_schema_state` was wiped. The drive below is
@@ -917,44 +817,21 @@ describe('changes observed only across a workspace switch (#780)', () => {
     )
     const scheduled = vi.spyOn(repo, 'schedulePropertyDefinitionMigrations')
 
-    await changeWhileInactive(repo, statusRenamed)
+    await changeWhileInactive(repo, statusNumber)
 
-    // Not "everything changed": nothing is scheduled at all and the cell is
+    // Not "everything changed": nothing is scheduled at all and the value is
     // left alone. The baseline IS recorded, so the NEXT drift is detected.
     expect(scheduled).not.toHaveBeenCalled()
-    expect(await cell('p')).toEqual({status: 'done'})
-    expect(await baselineNames()).toEqual({[FIELD_ID]: 'state'})
-  }, 20_000)
-
-  it('records a change once its migration APPLIED, so the next prime finds nothing to redo', async () => {
-    await seedWorkspace('children')
-    const repo = setup()
-    await seedProperty(repo, 'p', ' 42 ')
-    const scheduled = vi.spyOn(repo, 'schedulePropertyDefinitionMigrations')
-
-    await republish(repo, statusNumber)
-    await repo.awaitPropertyDefinitionBaselines()
-    // The bridge's own in-memory diff owns a same-workspace build, and the
-    // applied pass is what advances the baseline past it.
-    expect(await cell('p')).toEqual({status: 42})
-    expect(scheduled).toHaveBeenCalledTimes(1)
-
-    repo.setActiveWorkspaceId(OTHER_WS)
-    await awaitRegistry(repo, OTHER_WS)
-    repo.setActiveWorkspaceId(WS)
-    await awaitRegistry(repo, WS)
-    await repo.awaitPropertyDefinitionBaselines()
-
-    // ...and coming back finds nothing to do, because that build was recorded.
-    expect(scheduled).toHaveBeenCalledTimes(1)
+    expect(await cell('p')).toEqual({status: ' 42 '})
+    expect(await baselineCodecs()).toEqual({[FIELD_ID]: 'number'})
   }, 20_000)
 
   it('migrates against the resolver captured at rebuild time, after the workspace falls out of retention', async () => {
     await seedWorkspace('children')
     const repo = setup()
-    await seedProperty(repo, 'p', 'done')
-    publishDefinition(repo, statusRenamed)
-    await awaitRegistry(repo, WS, 'state')
+    await seedProperty(repo, 'p', ' 42 ')
+    publishDefinition(repo, statusNumber)
+    await awaitRegistry(repo, WS, 'status')
     // Captured the way the baseline path captures it: synchronously with the
     // rebuild, BEFORE its async read of the stored baseline.
     const resolver = repo.propertySchemaResolverFor(WS)
@@ -971,33 +848,11 @@ describe('changes observed only across a workspace switch (#780)', () => {
     expect(repo.propertySchemaResolverFor(WS).resolveField(FIELD_ID).status).not.toBe('resolved')
 
     repo.schedulePropertyDefinitionMigrations(
-      WS, [{fieldId: FIELD_ID, oldName: 'status', newName: 'state', codecChanged: false}], resolver,
+      WS, [{fieldId: FIELD_ID, oldName: 'status', newName: 'status', codecChanged: true}], resolver,
     )
 
     await vi.waitFor(async () => {
-      expect(await cell('p')).toEqual({state: 'done'})
-    }, {timeout: 5000})
-  }, 20_000)
-
-  it('migrates a definition that vanished from the registry and came back renamed', async () => {
-    await seedWorkspace('children')
-    const repo = setup()
-    await seedProperty(repo, 'p', 'done')
-    await repo.awaitPropertyDefinitionBaselines()
-
-    // The definition drops out of the registry entirely (a delete, or any build
-    // that observes a subset). The baseline is a UNION over builds, so it keeps
-    // the fact — replacing it wholesale would make the return below look like a
-    // brand-new definition and swallow the rename.
-    repo.setRuntimeContributions(
-      projectedPropertyDefinitionsFacet, 'test-status-definition', [], {workspaceId: WS},
-    )
-    await repo.awaitPropertyDefinitionBaselines()
-
-    await changeWhileInactive(repo, statusRenamed)
-
-    await vi.waitFor(async () => {
-      expect(await cell('p')).toEqual({state: 'done'})
+      expect(await cell('p')).toEqual({status: 42})
     }, {timeout: 5000})
   }, 20_000)
 })

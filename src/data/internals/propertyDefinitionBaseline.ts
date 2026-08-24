@@ -1,50 +1,73 @@
 /**
- * Durable per-workspace record of the property definitions this DEVICE has
- * ACCOUNTED FOR — the "before" side the registry-PRIME diff needs (#780).
+ * Durable per-workspace record of the property-definition CODEC TYPES this
+ * DEVICE has accounted for — the "before" side the registry-PRIME diff needs
+ * (#780).
  *
  * The facet bridge detects a definition change by diffing the previous
  * in-memory registry snapshot against the incoming one, and has no comparable
  * previous snapshot on PRIME. This is the before-state that survives a
  * workspace switch and a reload.
  *
+ * ── Why only codecs ──
+ *
+ * Sync carries a definition change WITH its consequences: the device that
+ * renamed re-keyed every consuming cell in the same tx, and those rows upload
+ * like any other write. A receiving device therefore gets correct cells and has
+ * nothing to re-key. What survives is a row the originating device never had,
+ * or lost LWW on — a block created or edited offline across the change. That is
+ * a divergence between a cell and its field rows, which the slice C reconcile
+ * detects from CONTENT, on whichever device holds the stale row and whether or
+ * not it ever recorded a before-state. A baseline is a strictly weaker answer
+ * there, so renames are left to it.
+ *
+ * A CODEC change is the case content comparison cannot see: cells and field
+ * rows agree, and only the stored encoding is stale. Detecting that needs a
+ * before-state, which is what this is.
+ *
  * ── The baseline advances on ADD or on APPLY, never on mere observation ──
+ *
+ * `observePropertyDefinitionCodecs` folds in only the fieldIds it doesn't know
+ * yet — including one whose codec resolves for the first time, since a
+ * definition first seen while its preset plugin was loading has none. A fieldId
+ * whose observed codec DIFFERS is left as it was: that difference IS the drift,
+ * and has to stay visible to every prime until a migration re-encodes the
+ * values.
  *
  * Two simplifications are wrong. Suppressing the drift for the rebuild that
  * observes it: the NEXT rebuild's in-memory previous already carries the new
- * name, sees no change, and folds it in. Recording at DETECTION time: the
+ * codec, sees no change, and folds it in. Recording at DETECTION time: the
  * deferred pass runs 10–30s later on deep idle and may never run at all (tab
  * closed, batch threw, workspace un-flipped, repo read-only).
  *
- * A consequence worth not undoing: every refusal downstream is self-healing.
- * A contested rename, an unresolvable fieldId, an un-flipped workspace — none
- * record, so each re-detects at the next prime and applies once the obstacle
- * clears. Nothing here needs retry logic.
+ * A consequence worth not undoing: every refusal downstream is self-healing. An
+ * unresolvable fieldId, an un-flipped workspace — neither records, so each
+ * re-detects at the next prime and applies once the obstacle clears. Nothing
+ * here needs retry logic.
  *
  * Storage is one JSON row per workspace in `client_schema_state`, local and
  * unsynced: this records what THIS device has done, not shared state.
  *
  * A MISSING baseline means "migrate nothing", not "everything changed": with no
- * observed before-state, re-keying would run off a diff this device never made.
- * Nor does that swallow a rename — the device that performed it re-keyed its
- * own cells in the editing tx and synced them, so a first-time reader receives
- * correct rows.
+ * observed before-state, re-encoding would run off a diff this device never
+ * made.
  */
 
-import type {
-  PropertyDefinitionFacts,
-  PropertyDefinitionFactsByFieldId,
-} from './propertyDefinitionMigrations'
 import {
   PROPERTY_DEFINITION_BASELINE_PREFIX,
   RECORD_PROPERTY_DEFINITION_BASELINE_SQL,
   SELECT_PROPERTY_DEFINITION_BASELINE_SQL,
 } from './clientSchema'
 
-/** Stored shape: `{fields: {[fieldId]: {name, codecType?}}}`. Unparseable reads
- *  as absent and is replaced: with no before-state there is nothing to diff, so
- *  a corrupt blob costs one absorbed drift — the same boundary, and the same
+/** fieldId → codec type. A definition whose schema hasn't resolved is absent
+ *  rather than recorded with a placeholder, so the first build that DOES
+ *  resolve one adds it instead of reading as a change. */
+export type PropertyDefinitionCodecTypes = ReadonlyMap<string, string>
+
+/** Stored shape: `{codecs: {[fieldId]: codecType}}`. Unparseable reads as
+ *  absent and is replaced: with no before-state there is nothing to diff, so a
+ *  corrupt blob costs one absorbed drift — the same boundary, and the same
  *  reasoning, as a missing baseline. */
-const parseBaseline = (raw: string | null): Map<string, PropertyDefinitionFacts> | null => {
+const parseBaseline = (raw: string | null): Map<string, string> | null => {
   if (raw === null) return null
   let parsed: unknown
   try {
@@ -52,29 +75,23 @@ const parseBaseline = (raw: string | null): Map<string, PropertyDefinitionFacts>
   } catch {
     return null
   }
-  const fields = (parsed as {fields?: unknown} | null)?.fields
-  if (typeof fields !== 'object' || fields === null) return null
-  const facts = new Map<string, PropertyDefinitionFacts>()
-  for (const [fieldId, entry] of Object.entries(fields as Record<string, {
-    name?: unknown
-    codecType?: unknown
-  }>)) {
-    if (typeof entry?.name !== 'string') continue
-    facts.set(fieldId, typeof entry.codecType === 'string'
-      ? {name: entry.name, codecType: entry.codecType}
-      : {name: entry.name})
+  const codecs = (parsed as {codecs?: unknown} | null)?.codecs
+  if (typeof codecs !== 'object' || codecs === null) return null
+  const types = new Map<string, string>()
+  for (const [fieldId, codecType] of Object.entries(codecs as Record<string, unknown>)) {
+    if (typeof codecType === 'string') types.set(fieldId, codecType)
   }
-  return facts
+  return types
 }
 
-const serializeBaseline = (facts: PropertyDefinitionFactsByFieldId): string => {
-  const fields: Record<string, PropertyDefinitionFacts> = {}
+const serializeBaseline = (types: PropertyDefinitionCodecTypes): string => {
+  const codecs: Record<string, string> = {}
   // Canonical key order, so the blob is diffable and two devices that observed
   // the same definitions in different orders store the same bytes. (The
   // write-skip below does not depend on it: the stored blob fixes iteration
   // order, and an update only re-sets existing keys or appends.)
-  for (const fieldId of [...facts.keys()].sort()) fields[fieldId] = facts.get(fieldId)!
-  return JSON.stringify({fields})
+  for (const fieldId of [...types.keys()].sort()) codecs[fieldId] = types.get(fieldId)!
+  return JSON.stringify({codecs})
 }
 
 export interface BaselineTx {
@@ -107,8 +124,8 @@ const baselineKey = (workspaceId: string) => `${PROPERTY_DEFINITION_BASELINE_PRE
 const updateBaseline = async (
   db: BaselineDb,
   workspaceId: string,
-  update: (next: Map<string, PropertyDefinitionFacts>) => void,
-): Promise<PropertyDefinitionFactsByFieldId | null> =>
+  update: (next: Map<string, string>) => void,
+): Promise<PropertyDefinitionCodecTypes | null> =>
   db.writeTransaction(async tx => {
     const row = await tx.getOptional<{value: string | null}>(
       SELECT_PROPERTY_DEFINITION_BASELINE_SQL, [baselineKey(workspaceId)],
@@ -127,52 +144,37 @@ const updateBaseline = async (
   })
 
 /**
- * Fold a registry build's `facts` in and return the baseline as it was before —
- * the caller's "previous" for its drift diff.
+ * Fold a registry build's codec types in and return the baseline as it was
+ * before — the caller's "previous" for its drift diff.
  *
- * ADD-only: a fieldId the baseline already knows keeps its recorded fact, even
+ * ADD-only: a fieldId the baseline already knows keeps its recorded codec, even
  * when this build observed a different one. See the module header for why that
  * is the design and not a conservatism.
  */
-export const observePropertyDefinitions = (
+export const observePropertyDefinitionCodecs = (
   db: BaselineDb,
   workspaceId: string,
-  facts: PropertyDefinitionFactsByFieldId,
-): Promise<PropertyDefinitionFactsByFieldId | null> =>
+  types: PropertyDefinitionCodecTypes,
+): Promise<PropertyDefinitionCodecTypes | null> =>
   updateBaseline(db, workspaceId, next => {
-    for (const [fieldId, observed] of facts) {
-      const known = next.get(fieldId)
-      if (known === undefined) {
-        next.set(fieldId, observed)
-        continue
-      }
-      // One exception to add-only: LEARN a codec we never had, while the name
-      // still matches. A definition first seen while its preset plugin was
-      // loading is recorded metadata-only, and `changedPropertyDefinitionFacts`
-      // needs BOTH sides to carry a codecType — so without this that fieldId's
-      // codec changes would be undetectable for the life of the baseline. The
-      // name guard is load-bearing: a drifted name means this observation
-      // describes state we have NOT applied, and learning its codec would
-      // record half of an unapplied change.
-      if (known.codecType === undefined
-        && observed.codecType !== undefined
-        && known.name === observed.name) next.set(fieldId, observed)
+    for (const [fieldId, codecType] of types) {
+      if (!next.has(fieldId)) next.set(fieldId, codecType)
     }
   })
 
-/** Record definitions whose migration has APPLIED — the only way a known
- *  fieldId's recorded fact ever changes. */
-export const recordAppliedPropertyDefinitions = async (
+/** Record definitions whose re-encode has APPLIED — the only way a known
+ *  fieldId's recorded codec ever changes. */
+export const recordAppliedPropertyDefinitionCodecs = async (
   db: BaselineDb,
   workspaceId: string,
-  facts: PropertyDefinitionFactsByFieldId,
+  types: PropertyDefinitionCodecTypes,
 ): Promise<void> => {
   // Unreachable from the current caller (a batch with no plans returns earlier),
   // but not a no-op: without it an empty call on a workspace with no row writes
   // `{}`, turning "no baseline" into "present but empty" — and those two mean
   // opposite things to the diff.
-  if (facts.size === 0) return
+  if (types.size === 0) return
   await updateBaseline(db, workspaceId, next => {
-    for (const [fieldId, applied] of facts) next.set(fieldId, applied)
+    for (const [fieldId, codecType] of types) next.set(fieldId, codecType)
   })
 }

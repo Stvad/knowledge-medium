@@ -116,15 +116,14 @@ import {
 import { parseExactReferenceBlockContent } from './referenceBlock'
 import type { BlockIdPolicy } from './blockId'
 import {
-  changedPropertyDefinitionFacts,
   withoutContestedRenames,
   type PropertyDefinitionChange,
   type PropertyDefinitionFactsByFieldId,
   type PropertyDefinitionMigrationPlan,
 } from './internals/propertyDefinitionMigrations'
 import {
-  observePropertyDefinitions,
-  recordAppliedPropertyDefinitions,
+  observePropertyDefinitionCodecs,
+  recordAppliedPropertyDefinitionCodecs,
 } from './internals/propertyDefinitionBaseline'
 import {
   encodedPropertyValueToChildContent,
@@ -3754,10 +3753,10 @@ export class Repo {
   }
 
   /**
-   * Fold a build's definition facts into this device's durable per-workspace
-   * baseline, and — on PRIME — schedule the migration pass for whatever drifted
-   * from it. See `propertyDefinitionBaseline.ts` for what the baseline is for
-   * and what a missing one means (#780).
+   * Fold a build's definition codec types into this device's durable
+   * per-workspace baseline, and — on PRIME — schedule the re-encode pass for
+   * whatever drifted from it. See `propertyDefinitionBaseline.ts` for why this
+   * covers codec changes only, and what a missing baseline means (#780).
    */
   syncPropertyDefinitionBaseline(
     workspaceId: string,
@@ -3767,29 +3766,42 @@ export class Repo {
     // Defence in depth — the bridge only calls this with a built registry's own
     // workspaceId, which is never empty.
     if (!workspaceId) return
+    const codecTypes = new Map<string, string>()
+    for (const [fieldId, fact] of facts) {
+      if (fact.codecType !== undefined) codecTypes.set(fieldId, fact.codecType)
+    }
     // Deliberately NOT read-only-gated: `App` pins the workspace before
     // resolving the role, so gating would make that pin record nothing — and no
     // later build is a prime, so the session ends blind. Recording is a local
     // write to an unsynced table; only the migration is gated, inside
     // `schedulePropertyDefinitionMigrations`.
     //
-    // Resolver captured synchronously with the rebuild that produced `facts`,
-    // because `propertySchemaResolverFor` serves only the active or
-    // immediately-previous workspace and the fold below is async. Defence in
-    // depth rather than a live requirement: no test distinguishes capturing it
-    // here from capturing it inside the continuation, since the fold is a
-    // single round-trip and two further workspace switches would have to land
-    // inside it.
+    // Captured synchronously with the rebuild — see `capturedResolver` on
+    // `schedulePropertyDefinitionMigrations`. Defence in depth: no test
+    // distinguishes this from capturing inside the continuation.
     const resolver = detectChanges ? this.propertySchemaResolverFor(workspaceId) : null
     this.propertyDefinitionBaselineWork = this.propertyDefinitionBaselineWork
       .then(async () => {
-        const previous = await observePropertyDefinitions(this.db, workspaceId, facts)
+        const previous = await observePropertyDefinitionCodecs(
+          this.db, workspaceId, codecTypes,
+        )
         if (resolver === null) return
         // No baseline yet. Redundant with the diff (an absent fieldId is an
-        // ADDED definition, never a rename), kept because it is the designed
+        // ADDED definition, never a change), kept because it is the designed
         // boundary rather than a coincidence of the diff.
         if (previous === null) return
-        const changes = changedPropertyDefinitionFacts(previous, facts)
+        // A re-encode, never a re-key: the name is whatever this build reads, on
+        // both sides of the change. Renames that reach the batch come from the
+        // bridge's own in-memory diff (a combined rename+codec edit), which
+        // carries the real before-name.
+        const changes: PropertyDefinitionChange[] = []
+        for (const [fieldId, codecType] of codecTypes) {
+          const knownType = previous.get(fieldId)
+          if (knownType === undefined || knownType === codecType) continue
+          const name = facts.get(fieldId)?.name
+          if (name === undefined) continue
+          changes.push({fieldId, oldName: name, newName: name, codecChanged: true})
+        }
         if (changes.length > 0) {
           this.schedulePropertyDefinitionMigrations(workspaceId, changes, resolver)
         }
@@ -3820,13 +3832,10 @@ export class Repo {
     if (!(await readIsChildBackedWorkspace(this.db, workspaceId))) return
     try {
       await this.runPropertyDefinitionMigrationBatch(workspaceId, plans, resolver)
-      // APPLIED — the only thing that advances a known fieldId's baseline. A
-      // pass that threw, or never ran at all, leaves the drift visible to the
-      // next prime instead of letting it be absorbed as though handled.
-      await recordAppliedPropertyDefinitions(this.db, workspaceId, new Map(
-        plans.map(({change, schema}) => [change.fieldId, {
-          name: schema.name, codecType: schema.codec.type,
-        }]),
+      // Only an APPLIED pass advances a known fieldId — a throw, or a pass that
+      // never ran, leaves the drift visible to the next prime.
+      await recordAppliedPropertyDefinitionCodecs(this.db, workspaceId, new Map(
+        plans.map(({change, schema}) => [change.fieldId, schema.codec.type]),
       ))
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err)
