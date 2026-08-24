@@ -1,18 +1,12 @@
 // @vitest-environment happy-dom
 //
-// A Readwise title that is already a page name used to be fatal. The document
-// page claimed `[title]` as its alias inside the transaction that created it,
-// the uniqueness trigger aborted, and the rollback took the page, its
-// highlights, and — because `runSync` awaited the throw — every book after it in
-// the export. `lastSyncedAt` never advanced past the offending book, so the next
-// sync re-fetched from the same place and died in the same spot: the library
-// stopped importing at all.
-//
-// What is pinned here is the fallback. The document is written regardless, under
-// a suffixed alias so it stays linkable, with its CONTENT still the real title —
-// which is what leaves it in the state `DuplicateNameBanner` reads. The last
-// group drives that banner for real, so "and then offer a merge" is pinned as an
-// offer the user can actually take rather than as copy nobody exercises.
+// What is pinned here is the fallback taken when a Readwise title is already a
+// page name — the case that aborts the claiming transaction. The document is
+// written regardless, under a suffixed alias so it stays linkable, with its
+// CONTENT still the real title, which is what leaves it in the state
+// `DuplicateNameBanner` reads. The last group drives that banner for real, so
+// "and then offer a merge" is pinned as an offer the user can actually take
+// rather than as copy nobody exercises.
 //
 // Wire-level constants are spelled out rather than imported: they are what sits
 // in the user's DB, and pinning them is the point.
@@ -222,6 +216,23 @@ describe('readwise document alias — the title is already a page name', () => {
     await sync(rootId, book(1, 'Deep Work', 11))
 
     expect(aliasesOf(await repo.load(documentId(1)))).toEqual(['My Notes On Deep Work'])
+  })
+
+  it('leaves a user alias merely SHAPED like a fallback alone', async () => {
+    const rootId = await createRoot()
+    await createRivalPage('rival', 'Deep Work')
+    await sync(rootId, book(1, 'Deep Work', 11))
+
+    // Past the probe depth, so no sync could have written it. Recognising the
+    // shape rather than the generated set would read this as the sync's own and
+    // overwrite it.
+    await repo.tx(
+      tx => tx.setProperty(documentId(1), aliasesProp, ['Deep Work (Readwise 2024)']),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await sync(rootId, book(1, 'Deep Work', 11))
+
+    expect(aliasesOf(await repo.load(documentId(1)))).toEqual(['Deep Work (Readwise 2024)'])
   })
 
   it('re-titles the document to a second contested name without losing it', async () => {

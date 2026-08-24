@@ -1142,18 +1142,15 @@ const applyManagedProperties = async (
 // ---------------------------------------------------------------------------
 // document naming
 //
-// A Readwise title is very often a page the user ALREADY has — the book they
-// took notes on before importing it. Claiming that name trips
-// `block_aliases_workspace_alias_unique`, and the rollback used to take the
-// document, its highlights, and (because `runSync` awaited the throw) every
-// book after it in the export, with `lastSyncedAt` never advancing past the
-// offending book. That is issue #378's failure reached from the sync side.
+// A Readwise title is very often a page the user ALREADY has, so claiming it
+// trips `block_aliases_workspace_alias_unique` and takes the whole transaction
+// that claimed it down with it — which is why naming is split out of the write.
 //
-// Kernel pages answer it by yielding the name entirely, which is right for a
-// page reached by its id. A Readwise document is reached by NAME, so it takes a
-// suffixed one instead and stays linkable. Its `content` is still the real
-// title, which is what puts it in the state `DuplicateNameBanner` reads: the
-// banner then offers `alias.mergeCollision` in the reclaim direction, which
+// Kernel pages answer a contested name by yielding it entirely, which is right
+// for a page reached by its id. A Readwise document is reached by NAME, so it
+// takes a suffixed one instead and stays linkable. Its `content` is still the
+// real title, which is what puts it in the state `DuplicateNameBanner` reads:
+// the banner offers `alias.mergeCollision` in the reclaim direction, which
 // folds the other page in and hands the real name back.
 
 const FALLBACK_ALIAS_MARKER = 'Readwise'
@@ -1168,13 +1165,18 @@ const fallbackAlias = (title: string, index: number): string =>
 
 /** Could the sync itself have written this alias for `title`? What it guards is
  *  an alias the USER put on the document: the reconcile below overwrites only a
- *  bag it recognises as its own. */
+ *  bag it recognises as its own.
+ *
+ *  Matched against what `fallbackAlias` can actually emit, rather than parsed
+ *  back out of the string. A shape test admits names the generator never
+ *  produces — `Foo (Readwise 2024)`, `Foo (Readwise 01)` — and those can only
+ *  have come from the user. */
 const isSyncOwnedAlias = (alias: string, title: string): boolean => {
   if (alias === title) return true
-  const prefix = `${title} (${FALLBACK_ALIAS_MARKER}`
-  if (!alias.startsWith(prefix) || !alias.endsWith(')')) return false
-  const tail = alias.slice(prefix.length, -1)
-  return tail === '' || /^ \d+$/.test(tail)
+  for (let index = 1; index <= FALLBACK_ALIAS_SLOTS; index++) {
+    if (alias === fallbackAlias(title, index)) return true
+  }
+  return false
 }
 
 /** Is `name` there for the taking — unowned, or already this document's? */
@@ -1755,11 +1757,8 @@ const runSync = async (repo: any, { silent = false } = {}) => {
         highlightCount += bookHighlights
         if (!progress) progress = showProgress('Readwise: syncing…')
         progress.update(`Readwise: ${bookCount} books, ${highlightCount} highlights…`)
-        // Per book, so one document that will not write cannot cost the user
-        // every book after it in the export. Before this, a single unresolvable
-        // write aborted the run with the cursor un-advanced, so the next sync
-        // re-fetched from the same place and died at the same book — the
-        // library stopped importing entirely.
+        // Per book: one document that will not write must not cost the user
+        // every book after it in the export.
         try {
           await syncBookToBlocks(
             repo, workspaceId, rootId, book,
