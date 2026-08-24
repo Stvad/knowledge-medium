@@ -1191,7 +1191,14 @@ const aliasIsFree = async (
 }
 
 /** Is this whole bag one the sync could have written? Vacuously true of an
- *  empty bag, false as soon as one entry is the user's. */
+ *  empty bag, false as soon as one entry is the user's.
+ *
+ *  Entry-wise on purpose. The sync writes one alias, but `alias.sync` appends
+ *  the new content on a re-title, so a bag of {placeholder, title} is a shape
+ *  the two produce together — and reconciling that pair back down is what
+ *  retires the placeholder, both after a re-title and after a merge.
+ *  ACCEPTED consequence: two fallback names for the same title also read as
+ *  the sync's, though only a hand-added alias can have built that. */
 const isSyncOwnedAliasBag = (
   bag: readonly string[],
   title: string,
@@ -1491,6 +1498,16 @@ export const ensureRoot = async (repo: any, workspaceId: string) => {
     // deterministic id, so it loses nothing but the name.
     const rootAliases = await partitionClaimableAliases(tx, rootId, ['Readwise Library'], workspaceId)
     await repo.addTypeInTx(tx, rootId, PAGE_TYPE, { [aliasesProp.name]: rootAliases }, typeSnapshot)
+
+    // `addTypeInTx` applies `initialValues` only where the property is ABSENT,
+    // and a root that yielded the name was seeded with an empty bag — present,
+    // so no later sync would ever fill it. Re-probe and add, the way a kernel
+    // page repairs itself. Additive: an alias the user put on the root is not
+    // this function's to remove. Compared before writing because while the
+    // name stays contested this runs on every sync.
+    const storedAliases: readonly string[] = await tx.getProperty(rootId, aliasesProp)
+    const missing = rootAliases.filter(alias => !storedAliases.includes(alias))
+    if (missing.length) await tx.setProperty(rootId, aliasesProp, [...storedAliases, ...missing])
     await repo.addTypeInTx(tx, rootId, READWISE_LIBRARY_TYPE, {}, typeSnapshot)
   }, { scope: ChangeScope.BlockDefault, description: 'readwise: create root' })
   return rootId

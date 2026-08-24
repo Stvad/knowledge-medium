@@ -156,6 +156,20 @@ describe('readwise library root', () => {
     expect(aliasesOf(await repo.load(rootId))).toEqual([])
     expect(await claimantIdsOf('Readwise Library')).toEqual(['rival'])
   })
+
+  it('takes its name back once the conflict clears', async () => {
+    await createRivalPage('rival', 'Readwise Library')
+    const rootId = await ensureRoot(repo, WS)
+    expect(aliasesOf(await repo.load(rootId))).toEqual([])
+
+    await repo.tx(
+      tx => tx.setProperty('rival', aliasesProp, []),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await ensureRoot(repo, WS)
+
+    expect(aliasesOf(await repo.load(rootId))).toEqual(['Readwise Library'])
+  })
 })
 
 describe('readwise document alias — the title is already a page name', () => {
@@ -233,6 +247,23 @@ describe('readwise document alias — the title is already a page name', () => {
     await sync(rootId, book(1, 'Deep Work', 11))
 
     expect(aliasesOf(await repo.load(documentId(1)))).toEqual(['Deep Work (Readwise 2024)'])
+  })
+
+  it('retires the placeholder when a re-title lands on a free name', async () => {
+    const rootId = await createRoot()
+    await createRivalPage('rival', 'Deep Work')
+    await sync(rootId, book(1, 'Deep Work', 11))
+    expect(aliasesOf(await repo.load(documentId(1)))).toEqual(['Deep Work (Readwise)'])
+
+    // Uncontested, so nothing is released first: `alias.sync` cannot re-key a
+    // bag that does not hold the old content, so it appends the new title and
+    // the bag is briefly two entries. Reconciling that pair back down to one is
+    // what retires the placeholder.
+    await sync(rootId, book(1, 'Digital Minimalism', 11))
+
+    const doc = await repo.load(documentId(1))
+    expect(doc?.content).toBe('Digital Minimalism')
+    expect(aliasesOf(doc)).toEqual(['Digital Minimalism'])
   })
 
   it('re-titles the document to a second contested name without losing it', async () => {
