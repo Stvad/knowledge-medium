@@ -7,13 +7,13 @@
  */
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
-import { ChangeScope, codecs, defineProperty, propertyValue, type BlockData } from '@/data/api'
+import { ChangeScope, codecs, defineProperty, propertyValue, type AnyPropertySchema, type BlockData } from '@/data/api'
 import { keyAtStart } from './orderKey'
 import { propertyFieldContent } from './propertyChildren'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { projectedPropertyDefinitionsFacet } from '@/data/facets'
-import { mergeBlocksInTx } from './blockMerge'
+import { foldBlocksInTx, mergeBlocksInTx } from './blockMerge'
 import type { Repo } from './repo'
 import {
   encodedPropertyValueToChildContent,
@@ -26,6 +26,9 @@ import { BLOCK_TYPE_TYPE } from './blockTypes'
 
 const WS = 'ws-prop-children'
 const STATUS_FIELD_ID = 'field-status-children'
+/** A synthetic block id for values that LOOK like references. All-2s, so it
+ *  is plainly not a real graph id — it only has to be UUID-shaped. */
+const SAMPLE_UUID = '22222222-2222-4222-8222-222222222222'
 
 const statusSchema = defineProperty('status', {
   codec: codecs.string,
@@ -49,26 +52,34 @@ const seedWorkspace = async (
   )
 }
 
-const setup = (): Repo => {
-  const {repo} = createTestRepo({db: sharedDb.db, user: {id: 'user-1'}})
-  repo.setActiveWorkspaceId(WS)
+/** Publish one projected property definition into `repo`'s facet runtime.
+ *  Contributions bucket by (sourceId, workspaceId), so each call ADDS a
+ *  definition rather than replacing the ones before it. */
+const registerDefinition = (
+  repo: Repo,
+  sourceId: string,
+  fieldId: string,
+  schema: AnyPropertySchema,
+): void => {
   repo.setRuntimeContributions(
     projectedPropertyDefinitionsFacet,
-    'test-status-definition',
+    sourceId,
     [{
       metadata: {
-        fieldId: STATUS_FIELD_ID,
-        workspaceId: WS,
-        createdAt: 1,
-        name: statusSchema.name,
-        changeScope: statusSchema.changeScope,
-        hidden: false,
-        origin: 'user' as const,
+        fieldId, workspaceId: WS, createdAt: 1,
+        name: schema.name, changeScope: schema.changeScope,
+        hidden: false, origin: 'user' as const,
       },
-      schema: statusSchema,
+      schema,
     }],
     {workspaceId: WS},
   )
+}
+
+const setup = (): Repo => {
+  const {repo} = createTestRepo({db: sharedDb.db, user: {id: 'user-1'}})
+  repo.setActiveWorkspaceId(WS)
+  registerDefinition(repo, 'test-status-definition', STATUS_FIELD_ID, statusSchema)
   return repo
 }
 
@@ -103,16 +114,36 @@ const childrenRows = async (parentId: string): Promise<ChildRow[]> =>
     [parentId],
   )
 
-const liveFieldRows = async (parentId: string): Promise<ChildRow[]> =>
-  (await childrenRows(parentId)).filter(
-    r => r.deleted === 0 && r.reference_target_id === STATUS_FIELD_ID,
-  )
+const liveFieldRowsFor = (fieldId: string) =>
+  async (parentId: string): Promise<ChildRow[]> =>
+    (await childrenRows(parentId)).filter(
+      r => r.deleted === 0 && r.reference_target_id === fieldId,
+    )
 
-const cellValue = async (id: string): Promise<unknown> => {
+const liveFieldRows = liveFieldRowsFor(STATUS_FIELD_ID)
+
+const bagOf = async (id: string): Promise<Record<string, unknown>> => {
   const row = await sharedDb.db.get<{properties_json: string}>(
     'SELECT properties_json FROM blocks WHERE id = ?', [id],
   )
-  return (JSON.parse(row.properties_json) as Record<string, unknown>)[statusSchema.name]
+  return JSON.parse(row.properties_json) as Record<string, unknown>
+}
+
+const cellValue = async (id: string): Promise<unknown> =>
+  (await bagOf(id))[statusSchema.name]
+
+/** What the escaped envelope must BE, rather than how it is spelled: it carries
+ *  the value back, and carries no span OPENER. Asserting the spelling instead
+ *  would only prove `escapeContent` agrees with a copy of itself.
+ *
+ *  The opener check is deliberately stronger than asking the whole-block parser
+ *  whether the content is a reference: every span form in EITHER reader has to
+ *  open with `[` or `(`, so no opener means no span for the inline reader
+ *  either — and that reader is the one a rename or merge rewrites through. */
+const expectEscapedEnvelope = (schema: typeof statusSchema, value: string, content: string): void => {
+  expect(content).not.toBe(value)
+  expect(content).not.toMatch(/[[(]/)
+  expect(propertyChildContentToEncodedValue(schema, content)).toBe(value)
 }
 
 describe('dormant at properties_migration = cell', () => {
@@ -253,6 +284,126 @@ describe('flipped workspace (properties_migration = children)', () => {
   })
 })
 
+/** #688: a string value the content column cannot hold AS ITSELF. Both shapes
+ *  survive the cell era (`properties_json` is JSON) and were destroyed by the
+ *  flip — the reason this is a must-fix BEFORE the first workspace flips.
+ *  End-to-end because the loss is not in the codec pair: encode and decode
+ *  agreed, and the value disappeared between them, in the derive processor and
+ *  the projection's value-set filter. */
+describe('flipped workspace: string values that verbatim content would destroy (#688)', () => {
+  const valueRows = async (parentId: string): Promise<Array<{
+    id: string
+    content: string
+    is_field_form: number | null
+    reference_target_id: string | null
+    deleted: number
+  }>> => {
+    const [field] = await liveFieldRows(parentId)
+    return sharedDb.db.getAll(
+      `SELECT id, content, is_field_form, reference_target_id, deleted
+         FROM blocks WHERE parent_id = ?`,
+      [field!.id],
+    )
+  }
+
+  // The headline shape: content that IS the §7 marked field form. The derive
+  // stamps `is_field_form`, `isFieldValueChild` drops the row from the value
+  // set, and the projection unsets the owner's key — silently.
+  it('a `::((id))` value keeps the property, and its row stays a VALUE not a field row', async () => {
+    await seedWorkspace('children')
+    const repo = setup()
+    await createBlock(repo, 'p')
+    const value = `::((${SAMPLE_UUID}))`
+
+    await repo.tx(tx => tx.setProperty('p', statusSchema, value),
+      {scope: ChangeScope.BlockDefault})
+
+    expect(await cellValue('p')).toBe(value)
+    const values = (await valueRows('p')).filter(v => v.deleted === 0)
+    expect(values).toHaveLength(1)
+    // Escaped, so the derive reads it as prose: the bit is what the value-set
+    // filter keys on, and the whole loss followed from it being stamped.
+    expect(values[0]!.is_field_form).not.toBe(1)
+    expectEscapedEnvelope(statusSchema, value, values[0]!.content)
+  })
+
+  // An UNMARKED span never set the bit, so it never dropped the key — it
+  // stamped `reference_target_id` instead, making a string value a live
+  // reference that reference maintenance rewrites. Escaped for that reason,
+  // and pinned so a narrowing of the predicate to just the marked form shows up.
+  it('an unmarked `((id))` value is stored as text, not as a reference', async () => {
+    await seedWorkspace('children')
+    const repo = setup()
+    await createBlock(repo, 'p')
+    const value = `((${SAMPLE_UUID}))`
+
+    await repo.tx(tx => tx.setProperty('p', statusSchema, value),
+      {scope: ChangeScope.BlockDefault})
+
+    expect(await cellValue('p')).toBe(value)
+    const values = (await valueRows('p')).filter(v => v.deleted === 0)
+    expect(values[0]!.reference_target_id ?? null).toBeNull()
+  })
+
+  // The second shape (bead comment): the cell keeps a lone surrogate, the
+  // content column returns U+FFFD, and the projection writes the mangled
+  // spelling back over the cell as authoritative.
+  it.each([
+    ['high', 'a\uD800b'],
+    ['low', 'a\uDC00b'],
+  ])('a lone %s surrogate survives instead of projecting back as U+FFFD', async (_kind, value) => {
+    await seedWorkspace('children')
+    const repo = setup()
+    await createBlock(repo, 'p')
+
+    await repo.tx(tx => tx.setProperty('p', statusSchema, value),
+      {scope: ChangeScope.BlockDefault})
+
+    expect(await cellValue('p')).toBe(value)
+    expect(await cellValue('p')).not.toContain('�')
+  })
+
+  // The scope line for the escape: it engages only for values verbatim content
+  // cannot hold. A well-formed emoji is a surrogate PAIR, and padding, control
+  // characters and newlines all round-trip the column verbatim (measured), so
+  // none of them are escaped — the tree keeps showing the value as itself.
+  it.each([
+    ['an emoji (a valid surrogate pair)', 'a😀b'],
+    ['padding', '  padded  '],
+    ['a newline', 'a\r\nb'],
+    ['a NUL byte', 'a\u0000b'],
+  ])('leaves %s verbatim — the escape is not a blanket re-encoding', async (_name, value) => {
+    await seedWorkspace('children')
+    const repo = setup()
+    await createBlock(repo, 'p')
+
+    await repo.tx(tx => tx.setProperty('p', statusSchema, value),
+      {scope: ChangeScope.BlockDefault})
+
+    expect(await cellValue('p')).toBe(value)
+    const values = (await valueRows('p')).filter(v => v.deleted === 0)
+    expect(values[0]!.content).toBe(value)
+  })
+
+  // The projection is the half that actually lost the value, so drive it on
+  // its own: an unrelated edit under the field row reprojects the cell from
+  // the value children, and must reconstruct the same string.
+  it('reprojects the escaped value unchanged when the field row is touched again', async () => {
+    await seedWorkspace('children')
+    const repo = setup()
+    await createBlock(repo, 'p')
+    const value = `::((${SAMPLE_UUID}))`
+    await repo.tx(tx => tx.setProperty('p', statusSchema, value),
+      {scope: ChangeScope.BlockDefault})
+
+    const [field] = await liveFieldRows('p')
+    await repo.tx(tx => tx.update(field!.id, {content: field!.content}),
+      {scope: ChangeScope.BlockDefault})
+
+    expect(await cellValue('p')).toBe(value)
+  })
+})
+
 describe('tx.unsetProperty', () => {
   it('cell workspace: removes just the key, no children involved', async () => {
     await seedWorkspace('cell')
@@ -355,26 +506,11 @@ describe('tx.setProperties (batch set + unset)', () => {
   const setupWithTwo = async (migration: string): Promise<Repo> => {
     await seedWorkspace(migration)
     const repo = setup()
-    repo.setRuntimeContributions(
-      projectedPropertyDefinitionsFacet,
-      'test-priority-definition',
-      [{
-        metadata: {
-          fieldId: PRIORITY_FIELD_ID, workspaceId: WS, createdAt: 1,
-          name: prioritySchema.name, changeScope: prioritySchema.changeScope,
-          hidden: false, origin: 'user' as const,
-        },
-        schema: prioritySchema,
-      }],
-      {workspaceId: WS},
-    )
+    registerDefinition(repo, 'test-priority-definition', PRIORITY_FIELD_ID, prioritySchema)
     return repo
   }
 
-  const priorityFieldRows = async (parentId: string): Promise<ChildRow[]> =>
-    (await childrenRows(parentId)).filter(
-      r => r.deleted === 0 && r.reference_target_id === PRIORITY_FIELD_ID,
-    )
+  const priorityFieldRows = liveFieldRowsFor(PRIORITY_FIELD_ID)
 
   it('cell workspace: applies set + unset in ONE bag rewrite', async () => {
     const repo = await setupWithTwo('cell')
@@ -406,19 +542,7 @@ describe('tx.setProperties (batch set + unset)', () => {
       changeScope: ChangeScope.BlockDefault,
     })
     const repo = await setupWithTwo('cell')
-    repo.setRuntimeContributions(
-      projectedPropertyDefinitionsFacet,
-      'test-count-definition',
-      [{
-        metadata: {
-          fieldId: 'field-count-children', workspaceId: WS, createdAt: 1,
-          name: countSchema.name, changeScope: countSchema.changeScope,
-          hidden: false, origin: 'user' as const,
-        },
-        schema: countSchema,
-      }],
-      {workspaceId: WS},
-    )
+    registerDefinition(repo, 'test-count-definition', 'field-count-children', countSchema)
     await createBlock(repo, 'p')
     await repo.tx(tx => tx.setProperty('p', countSchema, 5),
       {scope: ChangeScope.BlockDefault})
@@ -535,28 +659,12 @@ describe('flipped workspace — ref-typed property values are editable `((id))` 
     await seedWorkspace('children')
     const repo = setup()
     // A second projected definition alongside `status`, ref-typed.
-    repo.setRuntimeContributions(
-      projectedPropertyDefinitionsFacet,
-      'test-related-definition',
-      [{
-        metadata: {
-          fieldId: RELATED_FIELD_ID, workspaceId: WS, createdAt: 1,
-          name: relatedSchema.name, changeScope: relatedSchema.changeScope,
-          hidden: false, origin: 'user' as const,
-        },
-        schema: relatedSchema,
-      }],
-      {workspaceId: WS},
-    )
+    registerDefinition(repo, 'test-related-definition', RELATED_FIELD_ID, relatedSchema)
     return repo
   }
 
-  const relatedCell = async (id: string): Promise<unknown> => {
-    const row = await sharedDb.db.get<{properties_json: string}>(
-      'SELECT properties_json FROM blocks WHERE id = ?', [id],
-    )
-    return (JSON.parse(row.properties_json) as Record<string, unknown>)[relatedSchema.name]
-  }
+  const relatedCell = async (id: string): Promise<unknown> =>
+    (await bagOf(id))[relatedSchema.name]
 
   const relatedValueChild = async (parentId: string): Promise<ChildRow | undefined> => {
     const fields = (await childrenRows(parentId)).filter(
@@ -880,7 +988,7 @@ describe('merge integration (§9, slice B3)', () => {
     expect(strandedLive).toEqual([])
   })
 
-  it('honors a custom mergeProperties that drops a source-only property (no reproject-back)', async () => {
+  it('a custom mergeProperties dropping a source-only key does not reap its rows', async () => {
     await seedWorkspace('children')
     const repo = setup()
     await createBlock(repo, 'into')
@@ -892,18 +1000,17 @@ describe('merge integration (§9, slice B3)', () => {
     await repo.tx(async tx => {
       const into = await tx.get('into')
       const from = await tx.get('from')
-      // Strategy keeps ONLY into's bag → deliberately drops from's `status`.
+      // Strategy keeps ONLY into's bag → drops from's `status` from the bag.
       await mergeBlocksInTx(tx, {into: into!, from: from!, mergeProperties: intoProps => intoProps})
     }, {scope: ChangeScope.BlockDefault})
 
-    // The dropped property must NOT reappear via a moved-and-reprojected field
-    // row — the merge honors the strategy.
-    expect(await cellValue('into')).toBeUndefined()
-    expect(await liveFieldRows('into')).toEqual([])
-    const ff = await sharedDb.db.get<{deleted: number}>(
-      'SELECT deleted FROM blocks WHERE id = ?', [fromField!.id],
-    )
-    expect(ff.deleted).toBe(1)
+    // Child-backed properties are owned by their ROWS (§5's one-direction
+    // rule), so editing the merged BAG is not a way to delete one: the row
+    // moves over intact and PROJECT re-derives the cell from it. A strategy
+    // that means to drop a property has to remove the rows itself, knowing
+    // what is nested under them (#728).
+    expect((await liveFieldRows('into')).map(f => f.id)).toEqual([fromField!.id])
+    expect(await cellValue('into')).toBe('from-only')
   })
 
   it('preserves user-authored descendants of the source value child', async () => {
@@ -1076,6 +1183,155 @@ describe('merge integration (§9, slice B3)', () => {
     )
     expect(fromValueRow.deleted).toBe(0)
     expect(fromValueRow.parent_id).toBe(fromField!.id)
+  })
+})
+
+describe('merge never reaps a source field row (#728)', () => {
+  const COUNT_FIELD_ID = 'field-count-children'
+  const countSchema = defineProperty<number>('count', {
+    codec: codecs.number,
+    defaultValue: 0,
+    changeScope: ChangeScope.BlockDefault,
+  })
+
+  /** `setup()` plus a NUMBER property. The state this suite is about — cell
+   *  key unset, rows still live — needs a codec that can REJECT a value
+   *  child's text, which `codecs.string` never does. */
+  const setupWithCount = (): Repo => {
+    const repo = setup()
+    registerDefinition(repo, 'test-count-definition', COUNT_FIELD_ID, countSchema)
+    return repo
+  }
+
+  const countFieldRows = liveFieldRowsFor(COUNT_FIELD_ID)
+
+  const rowOf = async (id: string) => sharedDb.db.get<{
+    deleted: number; parent_id: string; content: string
+  }>('SELECT deleted, parent_id, content FROM blocks WHERE id = ?', [id])
+
+  /** Root of `id`'s LIVE ancestry, or null if `id` or any ancestor is
+   *  tombstoned — the difference between "not deleted" and "reachable", which
+   *  is what a merge left under a source tombstone gets wrong. */
+  const liveRootOf = async (id: string): Promise<string | null> => {
+    let cursor: string | null = id
+    while (cursor !== null) {
+      const row: {parent_id: string | null; deleted: number} = await sharedDb.db.get(
+        'SELECT parent_id, deleted FROM blocks WHERE id = ?', [cursor],
+      )
+      if (row.deleted === 1) return null
+      if (row.parent_id === null) return cursor
+      cursor = row.parent_id
+    }
+    return null
+  }
+
+  /** `from` holds a field row whose value no longer decodes, so PROJECT has
+   *  unset the cell key while keeping the rows visible/fixable (§9) — plus a
+   *  user-authored note under the value. Returns the three row ids. */
+  const seedKeylessFieldRow = async (
+    repo: Repo, owner: string,
+  ): Promise<{fieldId: string; valueId: string; noteId: string}> => {
+    await repo.tx(tx => tx.setProperty(owner, countSchema, 42),
+      {scope: ChangeScope.BlockDefault})
+    const [field] = await countFieldRows(owner)
+    const [value] = (await childrenRows(field!.id)).filter(v => v.deleted === 0)
+    await repo.mutate.setContent({id: value!.id, content: 'about forty-two'})
+    const noteId = `note-${owner}`
+    await repo.tx(async tx => {
+      await tx.create({
+        id: noteId, workspaceId: WS, parentId: value!.id, orderKey: 'a',
+        content: 'measured on the old scale',
+      })
+    }, {scope: ChangeScope.BlockDefault})
+
+    // Preconditions, asserted rather than assumed: an un-flipped workspace or
+    // a still-parsing value would never reach the branch under test.
+    expect(Object.hasOwn(await bagOf(owner), countSchema.name)).toBe(false)
+    expect((await countFieldRows(owner)).map(r => r.id)).toEqual([field!.id])
+    return {fieldId: field!.id, valueId: value!.id, noteId}
+  }
+
+  it('moves the row, its unparseable value and the user note onto the survivor', async () => {
+    await seedWorkspace('children')
+    const repo = setupWithCount()
+    await createBlock(repo, 'into')
+    await createBlock(repo, 'from')
+    const {fieldId, valueId, noteId} = await seedKeylessFieldRow(repo, 'from')
+
+    await repo.mutate.merge({intoId: 'into', fromId: 'from'})
+
+    expect(await rowOf(fieldId)).toMatchObject({deleted: 0, parent_id: 'into'})
+    expect(await rowOf(valueId)).toMatchObject({
+      deleted: 0, parent_id: fieldId, content: 'about forty-two',
+    })
+    expect(await rowOf(noteId)).toMatchObject({deleted: 0, parent_id: valueId})
+    expect(await liveRootOf(noteId)).toBe('into')
+    // The cell stays unset: the adopted row still has no value that decodes,
+    // so PROJECT adds nothing. Moving it is inert for the survivor's bag.
+    expect(Object.hasOwn(await bagOf('into'), countSchema.name)).toBe(false)
+    // Nothing stranded live under the `from` tombstone.
+    expect(await sharedDb.db.getAll(
+      `SELECT b.id FROM blocks b JOIN blocks p ON p.id = b.parent_id
+        WHERE p.deleted = 1 AND b.deleted = 0 AND b.workspace_id = ?`, [WS],
+    )).toEqual([])
+  })
+
+  it('undo restores the row under the source, cell still unset', async () => {
+    await seedWorkspace('children')
+    const repo = setupWithCount()
+    await createBlock(repo, 'into')
+    await createBlock(repo, 'from')
+    const {fieldId, valueId, noteId} = await seedKeylessFieldRow(repo, 'from')
+    repo.undoManager.clear()
+
+    await repo.mutate.merge({intoId: 'into', fromId: 'from'})
+    expect(await liveRootOf(noteId)).toBe('into')
+
+    expect(await repo.undo()).toBe(true)
+    expect(await rowOf('from')).toMatchObject({deleted: 0})
+    expect(await rowOf(fieldId)).toMatchObject({deleted: 0, parent_id: 'from'})
+    expect(await rowOf(valueId)).toMatchObject({deleted: 0, parent_id: fieldId, content: 'about forty-two'})
+    expect(await rowOf(noteId)).toMatchObject({deleted: 0, parent_id: valueId})
+    expect(await liveRootOf(noteId)).toBe('from')
+    expect(Object.hasOwn(await bagOf('from'), countSchema.name)).toBe(false)
+
+    expect(await repo.redo()).toBe(true)
+    expect(await liveRootOf(noteId)).toBe('into')
+  })
+
+  it.each([
+    ['keyless source first', ['a', 'b']],
+    ['keyless source second', ['b', 'a']],
+  ] as const)('survives either fold order — %s', async (_label, order) => {
+    await seedWorkspace('children')
+    const repo = setupWithCount()
+    await createBlock(repo, 'into')
+    await createBlock(repo, 'a')
+    await createBlock(repo, 'b')
+    const {valueId, noteId} = await seedKeylessFieldRow(repo, 'a')
+    // `b` holds the same property with a value that DOES decode, so one source
+    // supplies the survivor's field row and the other has to fold into it.
+    await repo.tx(tx => tx.setProperty('b', countSchema, 7),
+      {scope: ChangeScope.BlockDefault})
+
+    await repo.tx(async tx => {
+      const into = await tx.get('into')
+      const froms = await Promise.all(order.map(id => tx.get(id)))
+      await foldBlocksInTx(tx, {into: into!, froms: froms.map(f => f!)})
+    }, {scope: ChangeScope.BlockDefault})
+
+    // `foldBlocksInTx` folds in whatever order its caller supplies — for the
+    // alias-collision flow, its own claimant order, which the user never chose
+    // — so the outcome must not depend on it. Only the keyless-source-FIRST arm
+    // exercises the adopt branch; folding it second routes through
+    // `collapseDuplicateFieldRow`, which never reaped — that arm is the control
+    // the first is compared against. Which value TEXT wins is still
+    // order-dependent, via MATERIALIZE's cell-wins overwrite of the primary
+    // value child; that is a `setProperty` rule reachable with no merge at all,
+    // so it is deliberately not asserted here.
+    expect(await liveRootOf(valueId)).toBe('into')
+    expect(await liveRootOf(noteId)).toBe('into')
+    expect((await bagOf('into'))[countSchema.name]).toBe(7)
   })
 })
 
@@ -1775,6 +2031,123 @@ describe('content <-> value codecs: "null"-collision escaping (PR #386 review fi
     const content = propertyValueToChildContent(statusSchema, 'null')
     expect(content).toBe('null')
     expect(propertyChildContentToEncodedValue(statusSchema, content)).toBe('null')
+  })
+})
+
+describe('content <-> value codecs: escaping strings content cannot hold as itself (#688)', () => {
+  const urlSchema = defineProperty<string>('link', {
+    codec: codecs.url,
+    defaultValue: '',
+    changeScope: ChangeScope.BlockDefault,
+  })
+  const UUID = SAMPLE_UUID
+
+  // Every §7 span form, marked and unmarked. The marked ones are the ones that
+  // DELETE the property; the rest make a string value a live reference. The
+  // predicate is `isWholeContentReference` — the parser itself, plus the embed
+  // marker — rather than a second copy of the grammar, so a form added to it is
+  // covered here for free.
+  const GRAMMAR_SHAPED = [
+    `::((${UUID}))`,
+    '::[[Some Page]]',
+    `::[Mary](((${UUID})))`,
+    `((${UUID}))`,
+    '[[Some Page]]',
+    `[Mary](((${UUID})))`,
+    `  ::((${UUID}))  `,
+  ]
+
+  it.each(GRAMMAR_SHAPED)('escapes %j and round-trips it exactly', value => {
+    for (const schema of [statusSchema, urlSchema]) {
+      const content = propertyValueToChildContent(schema, value)
+      expectEscapedEnvelope(schema, value, content)
+    }
+  })
+
+  it('escapes a lone surrogate, which the content column would return as U+FFFD', () => {
+    for (const value of ['a\uD800b', 'a\uDC00b', '\uD800']) {
+      const content = propertyValueToChildContent(statusSchema, value)
+      // JSON spells it `\ud800` — pure ASCII, so nothing below the content
+      // column has an ill-formed sequence to replace.
+      expectEscapedEnvelope(statusSchema, value, content)
+      // ...and specifically ASCII-escaped, which is what the content column
+      // needs — a raw surrogate there comes back as U+FFFD.
+      expect(/[\uD800-\uDFFF]/.test(content)).toBe(false)
+    }
+  })
+
+  it('leaves strings content CAN hold verbatim (valid pairs, NUL, controls, padding)', () => {
+    for (const value of ['a😀b', 'a\u0000b', 'a\u0001\u001Fb', '  padded  ', 'a\r\nb', '((']) {
+      expect(propertyValueToChildContent(statusSchema, value)).toBe(value)
+      expect(propertyChildContentToEncodedValue(statusSchema, value)).toBe(value)
+    }
+  })
+
+  // The recursion's job: without it the escaped content of `'"::((id))"'` and
+  // of `'::((id))'` would be the same string, so one of the two could not come
+  // back. Nesting is what makes the escape injective.
+  it('a value that is ITSELF a quoted escapable string nests one level deeper', () => {
+    const inner = `::((${UUID}))`
+    const quoted = JSON.stringify(inner)
+    expectEscapedEnvelope(statusSchema, quoted,
+      propertyValueToChildContent(statusSchema, quoted))
+    expect(propertyValueToChildContent(statusSchema, quoted))
+      .not.toBe(propertyValueToChildContent(statusSchema, inner))
+    for (const value of [inner, quoted, JSON.stringify(quoted)]) {
+      const content = propertyValueToChildContent(statusSchema, value)
+      expect(propertyChildContentToEncodedValue(statusSchema, content)).toBe(value)
+    }
+  })
+
+  // A quoted string whose inner text needs NO escaping must stay verbatim, or
+  // the decode would unquote a value the user actually typed with quotes.
+  it('an ordinary quoted string is still stored verbatim, quotes and all', () => {
+    const value = '"hello"'
+    expect(propertyValueToChildContent(statusSchema, value)).toBe(value)
+    expect(propertyChildContentToEncodedValue(statusSchema, value)).toBe(value)
+  })
+
+  // Round 2 of review: the EMBED forms. `((id))` was escaped and `!((id))` was
+  // not, though they differ by one character and the inline reader indexes
+  // both — so a merge rewrote the second and silently edited the value.
+  it.each([
+    [`!((${SAMPLE_UUID}))`],
+    ['![[Some Page]]'],
+    [`  !((${SAMPLE_UUID}))  `],
+  ])('escapes the embed form %j, which the whole-block reader alone misses', value => {
+    const content = propertyValueToChildContent(statusSchema, value)
+    expect(content).not.toBe(value)
+    expect(propertyChildContentToEncodedValue(statusSchema, content)).toBe(value)
+  })
+
+  // Round 2 of review: quote-wrapping alone was treated as "this is an escaped
+  // envelope", so text a PERSON wrote with quotes lost them on the way back.
+  // A real envelope carries no literal span opener; this content does.
+  it('does not unwrap quoted text that escapeContent could not have produced', () => {
+    for (const content of ['"[[Page]]"', `"::((${SAMPLE_UUID}))"`, '"(x)"']) {
+      expect(propertyChildContentToEncodedValue(statusSchema, content)).toBe(content)
+    }
+  })
+
+  // ...while a real envelope still unwraps, including one whose PAYLOAD is a
+  // quoted string (the nesting case), which is what stops the discriminator
+  // from being "never unwrap".
+  it('still unwraps a genuine envelope', () => {
+    for (const value of [`::((${SAMPLE_UUID}))`, '[[Page]]', '"null"', 'a\uD800b']) {
+      const content = propertyValueToChildContent(statusSchema, value)
+      expect(propertyChildContentToEncodedValue(statusSchema, content)).toBe(value)
+    }
+  })
+
+  // The ref codec renders `((id))` DELIBERATELY (#16) — that branch runs before
+  // the string one and must not start escaping its own canonical form.
+  it('does not touch the ref codec, whose value content IS a span by design', () => {
+    const refSchema = defineProperty<string>('rel', {
+      codec: codecs.ref(), defaultValue: '', changeScope: ChangeScope.BlockDefault,
+    })
+    const content = propertyValueToChildContent(refSchema, UUID)
+    expect(content).toBe(`((${UUID}))`)
+    expect(propertyChildContentToEncodedValue(refSchema, content)).toBe(UUID)
   })
 })
 
