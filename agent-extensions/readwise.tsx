@@ -1519,7 +1519,11 @@ const fetchExportPage = async (
  *  A malformed cell falls back too, rather than throwing. Sync apply can land a
  *  bag the codec rejects, and these reads drive a WORKSPACE-WIDE scan: one such
  *  row would otherwise stop every other document's conflict from ever being
- *  offered, silently, since the caller can only catch the whole scan. */
+ *  offered, silently, since the caller can only catch the whole scan.
+ *
+ *  BOUNDARY GUARD, not pinned: producing a bag the codec rejects means writing
+ *  a shape only sync apply lands, and the raw-insert fixture here goes through
+ *  the same trigger-maintained index the local path does. */
 const storedProperty = <T,>(block: any, schema: { name: string; codec: any }, fallback: T): T => {
   const raw = block.properties?.[schema.name]
   if (raw === undefined) return fallback
