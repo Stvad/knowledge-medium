@@ -53,7 +53,7 @@ export const runPerfAnalysis = async (
   const regressions: Regression[] = [
     ...queryRegressions(current, interactionBaseline),
     fanoutRegression(current, interactionBaseline),
-    startup.length > 0 ? startupRegression(startup[0], startup.slice(1)) : null,
+    startupRegression(startup),
   ]
     .filter((r): r is Regression => r !== null)
     .sort((a, b) => b.ratio - a.ratio)

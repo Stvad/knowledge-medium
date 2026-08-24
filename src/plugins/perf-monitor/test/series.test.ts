@@ -27,6 +27,15 @@ const sample = (over: Partial<InteractionComparable> = {}): InteractionComparabl
 const history = (n: number, s: () => InteractionComparable): InteractionComparable[] =>
   Array.from({ length: n }, s)
 
+/** History whose most recent session ALSO shows `now`. The current reading is
+ *  the median of a small recent window, so a regression registers once it is
+ *  the majority of that window -- one session cannot swing it. */
+const sinceRegressed = (
+  now: () => InteractionComparable,
+  base: () => InteractionComparable,
+  baseCount = 8,
+): InteractionComparable[] => [now(), ...history(baseCount, base)]
+
 describe('median', () => {
   it('averages the middle pair on an even count', () => {
     expect(median([1, 2, 3, 4])).toBe(2.5)
@@ -37,7 +46,8 @@ describe('median', () => {
 
 describe('queryRegressions', () => {
   it('flags a query whose p95 doubled against the trailing median', () => {
-    const found = queryRegressions(sample({ queries: { 'backlinks.forBlock': q(40) } }), history(8, sample))
+    const slow = () => sample({ queries: { 'backlinks.forBlock': q(40) } })
+    const found = queryRegressions(slow(), sinceRegressed(slow, sample))
     expect(found).toHaveLength(1)
     expect(found[0]).toMatchObject({
       metric: 'query:backlinks.forBlock', baseline: 10, current: 40, ratio: 4,
@@ -62,15 +72,32 @@ describe('queryRegressions', () => {
   })
 
   it('reports nothing until the baseline is long enough to be one', () => {
-    const short = history(MIN_BASELINE_SESSIONS - 1, sample)
-    expect(queryRegressions(sample({ queries: { 'backlinks.forBlock': q(80) } }), short)).toEqual([])
-    const enough = history(MIN_BASELINE_SESSIONS, sample)
-    expect(queryRegressions(sample({ queries: { 'backlinks.forBlock': q(80) } }), enough)).toHaveLength(1)
+    const slow = () => sample({ queries: { 'backlinks.forBlock': q(80) } })
+    // One history entry is consumed smoothing the current reading, so the
+    // baseline the comparison sees is one shorter than the history given.
+    expect(
+      queryRegressions(slow(), sinceRegressed(slow, sample, MIN_BASELINE_SESSIONS)),
+    ).toEqual([])
+    expect(
+      queryRegressions(slow(), sinceRegressed(slow, sample, MIN_BASELINE_SESSIONS + 1)),
+    ).toHaveLength(1)
+  })
+
+  // The cost of smoothing the current reading, stated as a rule: a regression
+  // is reported once it is the MAJORITY of the recent window, not on its first
+  // session.
+  it('does not fire on a single anomalous session', () => {
+    const found = queryRegressions(
+      sample({ queries: { 'backlinks.forBlock': q(400) } }),
+      history(10, sample),
+    )
+    expect(found).toEqual([])
   })
 
   it('orders the worst ratio first', () => {
     const base = () => sample({ queries: { a: q(10), b: q(10) } })
-    const found = queryRegressions(sample({ queries: { a: q(30), b: q(100) } }), history(8, base))
+    const slow = () => sample({ queries: { a: q(30), b: q(100) } })
+    const found = queryRegressions(slow(), [slow(), ...history(8, base)])
     expect(found.map((r) => r.metric)).toEqual(['query:b', 'query:a'])
   })
 })
@@ -80,8 +107,8 @@ describe('fanoutRegression', () => {
   // no latency metric moves -- there are simply many times more of them.
   it('flags a rise in re-resolves per write even with unchanged latencies', () => {
     const base = () => sample({ writes: 100, fanout: { loaderRuns: 50 } })
-    const now = sample({ writes: 100, fanout: { loaderRuns: 400 } })
-    expect(fanoutRegression(now, history(8, base))).toMatchObject({
+    const now = () => sample({ writes: 100, fanout: { loaderRuns: 400 } })
+    expect(fanoutRegression(now(), sinceRegressed(now, base))).toMatchObject({
       metric: 'fanout:loaderRunsPerWrite', baseline: 0.5, current: 4, ratio: 8,
     })
   })
@@ -101,17 +128,21 @@ describe('startupRegression', () => {
     expect(bootstrapGapMs({ recordedAt: 0 } as StartupRecordData)).toBeNull()
   })
 
-  // Modelled on the real series: a gap held within ~70ms for three weeks, then
-  // stepped to ~5s. TTI over the same window was far noisier.
-  it('flags the step in the bootstrap gap', () => {
-    const past = Array.from({ length: 8 }, (_, i) => boot(1000, 1320 + i * 10))
-    expect(startupRegression(boot(1000, 6000), past)).toMatchObject({
+  const held = (n: number) => Array.from({ length: n }, (_, i) => boot(1000, 1320 + i * 10))
+
+  it('flags the step in the bootstrap gap once it persists', () => {
+    const series = [boot(1000, 6000), boot(1000, 6100), boot(1000, 5900), ...held(8)]
+    expect(startupRegression(series)).toMatchObject({
       metric: 'startup:bootstrapGapMs', current: 5000,
     })
   })
 
   it('stays quiet while the gap holds', () => {
-    const past = Array.from({ length: 8 }, (_, i) => boot(1000, 1320 + i * 10))
-    expect(startupRegression(boot(1000, 1400), past)).toBeNull()
+    expect(startupRegression(held(11))).toBeNull()
+  })
+
+  it('does not fire on a single anomalous boot', () => {
+    const series = [boot(1000, 9000), ...held(10)]
+    expect(startupRegression(series)).toBeNull()
   })
 })
