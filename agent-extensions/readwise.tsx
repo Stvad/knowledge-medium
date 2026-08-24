@@ -1258,8 +1258,12 @@ const releaseSyncOwnedAlias = async (
  *  out, the worst an alias collision can do is leave the document without the
  *  name it wanted, which is the state the duplicate-name banner exists for.
  *
- *  Re-run on every sync, so a name that frees up (the rival renamed, deleted,
- *  or merged in) is taken back and the placeholder suffix released. */
+ *  Re-run every time the document is synced, so a name that frees up (the
+ *  rival renamed, deleted, or merged in) is taken back and the placeholder
+ *  released. Not every sync: `runSync` walks the INCREMENTAL export, so a
+ *  document Readwise has not touched since `lastSyncedAt` is not revisited and
+ *  keeps its placeholder until it is. The merge the banner offers hands the
+ *  name back directly and does not wait for that. */
 const ensureDocumentAlias = async (
   repo: any,
   blockId: string,
@@ -1474,6 +1478,37 @@ type SyncDeps = {
   repo: ReturnType<typeof useRepo> | any
 }
 
+const ROOT_ALIAS = 'Readwise Library'
+
+/** Give the root its name back once whatever held it goes away. `addTypeInTx`
+ *  seeds `initialValues` only where the property is ABSENT, so a root that
+ *  yielded the name keeps the empty bag it was seeded with, and no later sync
+ *  would fill it. Additive: an alias the user put on the root is not this
+ *  function's to remove.
+ *
+ *  Its own transaction, and its failure is swallowed, because `ensureRoot` runs
+ *  before `runSync`'s per-book isolation — anything that aborts here costs the
+ *  whole export. `setProperty` rewrites the WHOLE bag, so an entry the root
+ *  co-holds with a sync-applied row (sync apply skips the uniqueness trigger,
+ *  so two live rows can hold one name) is re-inserted under that trigger and
+ *  refused. A nameless root still works; a dead sync does not.
+ *  DEFENCE IN DEPTH: nothing in the suite can produce that co-claim. */
+const reclaimRootAlias = async (repo: any, rootId: string, workspaceId: string): Promise<void> => {
+  try {
+    await repo.tx(async (tx: any) => {
+      const stored: readonly string[] = await tx.getProperty(rootId, aliasesProp)
+      const claimable = await partitionClaimableAliases(tx, rootId, [ROOT_ALIAS], workspaceId)
+      const missing = claimable.filter(alias => !stored.includes(alias))
+      // Compared before writing: while the name stays contested this runs on
+      // every sync.
+      if (!missing.length) return
+      await tx.setProperty(rootId, aliasesProp, [...stored, ...missing])
+    }, { scope: ChangeScope.BlockDefault, description: 'readwise: name library root' })
+  } catch (err) {
+    console.error('[readwise] library root alias reclaim failed', err)
+  }
+}
+
 /** Exported for `readwise.aliasConflict.test.tsx` — the library root yields its
  *  name the same way a document does, and that has to be pinned somewhere. */
 export const ensureRoot = async (repo: any, workspaceId: string) => {
@@ -1489,27 +1524,18 @@ export const ensureRoot = async (repo: any, workspaceId: string) => {
         workspaceId,
         parentId: null,
         orderKey: keyBetween(lastKey, null),
-        freshContent: 'Readwise Library',
+        freshContent: ROOT_ALIAS,
       })
     }
     // Yielded rather than claimed, for the same reason a kernel page yields: a
     // user page already called "Readwise Library" would otherwise abort this
     // transaction and take the whole sync with it. The root is reached by its
     // deterministic id, so it loses nothing but the name.
-    const rootAliases = await partitionClaimableAliases(tx, rootId, ['Readwise Library'], workspaceId)
+    const rootAliases = await partitionClaimableAliases(tx, rootId, [ROOT_ALIAS], workspaceId)
     await repo.addTypeInTx(tx, rootId, PAGE_TYPE, { [aliasesProp.name]: rootAliases }, typeSnapshot)
-
-    // `addTypeInTx` applies `initialValues` only where the property is ABSENT,
-    // and a root that yielded the name was seeded with an empty bag — present,
-    // so no later sync would ever fill it. Re-probe and add, the way a kernel
-    // page repairs itself. Additive: an alias the user put on the root is not
-    // this function's to remove. Compared before writing because while the
-    // name stays contested this runs on every sync.
-    const storedAliases: readonly string[] = await tx.getProperty(rootId, aliasesProp)
-    const missing = rootAliases.filter(alias => !storedAliases.includes(alias))
-    if (missing.length) await tx.setProperty(rootId, aliasesProp, [...storedAliases, ...missing])
     await repo.addTypeInTx(tx, rootId, READWISE_LIBRARY_TYPE, {}, typeSnapshot)
   }, { scope: ChangeScope.BlockDefault, description: 'readwise: create root' })
+  await reclaimRootAlias(repo, rootId, workspaceId)
   return rootId
 }
 
