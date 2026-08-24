@@ -158,7 +158,20 @@ const SELECT_BACKLINK_SOURCES_SQL = `
 /** Incoming CONTENT wikilink edges onto one target, with the alias each
  *  names. `br.alias <> br.target_id` drops block-ref edges (`((id))`
  *  projects `alias === id`): those name an id, not a name, so no alias
- *  change can stale them. Rides `idx_block_references_target`. */
+ *  change can stale them. Rides `idx_block_references_target`.
+ *
+ *  ACCEPTED, not overlooked: that predicate infers the source SYNTAX from
+ *  edge equality, so it also drops a `[[α]]` whose α is literally its own
+ *  target's uuid — a block that claims its own id as an alias. Such an edge
+ *  keeps a stale binding through the restore this file otherwise repairs.
+ *  `block_references` stores no syntax marker (only source/target/alias/
+ *  source_field), so telling the two apart needs the source CONTENT: a
+ *  `tx.get` + parse per incoming edge, on the user's commit path, for every
+ *  ordinary `((id))` backlink of every restored block — paid always, to
+ *  serve a name no one types. Widening the predicate instead of narrowing it
+ *  is worse: without it every block-ref backlink is invalidated on every
+ *  restore and re-parsed back to the identical edge. `SELECT_BACKLINK_
+ *  SOURCES_SQL` above makes the same trade for the same reason. */
 const SELECT_INCOMING_ALIAS_EDGES_SQL = `
   SELECT DISTINCT br.source_id AS sourceId, br.alias AS alias
   FROM block_references br
