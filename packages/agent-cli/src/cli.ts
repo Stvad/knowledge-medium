@@ -30,7 +30,7 @@ import {
   startBridgeInBackground,
   listStoredProfiles as listProfilesInStore,
   MissingTokenError,
-  unknownTokenProfileHelp,
+  formatTokenContext,
   withProfileHelp,
   loadStoredToken as loadStoredTokenFor,
   normalizeProfileName,
@@ -1102,10 +1102,12 @@ const main = async () => {
 main().catch(async (error: unknown) => {
   process.stderr.write(`${await withProfileHelp(
     error,
-    async () => unknownTokenProfileHelp({
-      profiles: await listStoredProfiles(),
+    async () => formatTokenContext({
+      // Degrades to `null` rather than rejecting: an unreadable store must not
+      // take the override and the selection down with it.
+      profiles: await listStoredProfiles().catch(() => null),
       tokenStorePath,
-      inUse: selectedProfileName,
+      selected: selectedProfileName,
       envTokenOverride: (process.env.AGENT_RUNTIME_TOKEN ?? '').trim() !== '',
     }),
   )}\n`)

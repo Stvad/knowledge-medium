@@ -35,60 +35,63 @@ export const errorMessage = (error: unknown): string =>
   error instanceof Error ? error.message : String(error)
 
 /**
- * The half of the bridge's unknown-token error that only the CLI can supply:
- * WHICH profiles are paired on this machine. The bridge names "a token/profile
- * from another workspace or browser profile" among its causes but cannot check
- * it — profile names live in a local file the server never reads.
+ * The local token facts the bridge's own error cannot supply: which profiles
+ * are paired on this machine, which one is selected, and whether an env token
+ * is overriding the selection. Printed underneath that error.
  *
- * Never suggests a retry that cannot work. `AGENT_RUNTIME_TOKEN` wins over
- * every stored profile in `resolveToken`, so under an override `--profile X`
- * sends the same token and reproduces the 401; and with one saved profile there
- * is nothing to switch to. Both cases say what IS actionable instead.
+ * FACTS ONLY — no cause, no recommended remedy. Composing a diagnosis out of
+ * this state is what the first version did, and every state combination is
+ * another sentence that can be false: "most recently paired" over undated
+ * entries ranks nothing, "the profile is not the cause" is wrong when the sole
+ * saved token was revoked, and a bare `kmagent connect` re-pairs `default`
+ * rather than the profile that failed. Twelve review findings, all of that
+ * shape. The reader draws the conclusion from the listing in one glance; the
+ * tool cannot get a fact wrong.
+ *
+ * `profiles: null` means the store could not be read. It is a value rather
+ * than a throw because the override and the selection are true regardless —
+ * letting an unreadable store suppress them lost the one piece of advice that
+ * needed no store at all.
  */
-export const unknownTokenProfileHelp = (
-  {profiles, tokenStorePath, inUse, envTokenOverride}: {
-    profiles: readonly {name: string; savedAt?: number | null}[]
+export const formatTokenContext = (
+  {profiles, tokenStorePath, selected, envTokenOverride}: {
+    profiles: readonly {name: string; savedAt?: number | null}[] | null
     tokenStorePath: string
-    /** The profile actually selected — the CALLER's knowledge, never inferred
-     *  from which stored entry matched, which renders as "none" when the
-     *  selected profile has no entry. */
-    inUse: string
-    /** Whether `AGENT_RUNTIME_TOKEN` supplied the token. Passed in rather than
-     *  read here so this stays pure, and stated as a FACT rather than inferred
-     *  from a missing store entry — the two coincide but only one is checkable. */
+    selected: string
     envTokenOverride: boolean
   },
 ): string => {
+  const lines: string[] = []
+  if (profiles === null) {
+    lines.push(`Token store: ${tokenStorePath} (could not be read)`)
+  } else if (profiles.length === 0) {
+    lines.push(`Token store: ${tokenStorePath} (no profiles saved)`)
+  } else {
+    lines.push(`Token store: ${tokenStorePath}`)
+    const width = Math.max(...profiles.map(profile => profile.name.length))
+    // Alphabetical, not by recency: the instants are printed, so ordering by
+    // them would be the tool ranking candidates it has no business ranking —
+    // and a name is what a reader half-remembers.
+    for (const profile of [...profiles].sort((a, b) => a.name.localeCompare(b.name))) {
+      lines.push(
+        `  ${profile.name.padEnd(width)}  ${pairedAt(profile.savedAt)}`
+        + (profile.name === selected ? '  ← selected' : ''),
+      )
+    }
+  }
+  lines.push(`selected profile: ${selected}`)
   if (envTokenOverride) {
-    return 'AGENT_RUNTIME_TOKEN is set, so that token is sent whatever `--profile` says '
-      + `(\`resolveToken\` prefers it over every profile in ${tokenStorePath}). Unset it, or `
-      + 'replace it with a token the app tab has registered.'
+    lines.push('AGENT_RUNTIME_TOKEN is set — it overrides --profile.')
   }
-  if (profiles.length === 0) {
-    return `No token profiles are saved in ${tokenStorePath} — pair one with \`kmagent connect\`.`
-  }
-  const others = profiles.filter(profile => profile.name !== inUse)
-  if (others.length === 0) {
-    return `\`${inUse}\` is the only profile saved in ${tokenStorePath}, so there is no other `
-      + 'saved profile to switch to — focus the app tab, or re-pair this one with '
-      + '`kmagent connect` in case its token was revoked or belongs to another workspace.'
-  }
-  // ONE suggestion: a store accumulates a profile per past pairing, so a
-  // `--profile X or --profile Y` chain over all of them buries the answer. The
-  // full list still goes out, so a half-remembered name stays findable.
-  //
-  // Claim recency only when a timestamp actually ranks the candidates. Undated
-  // entries (the legacy single-token store shape) all compare equal, which makes
-  // the pick alphabetical — labelling that "most recently paired" would dress an
-  // arbitrary choice as evidence.
-  const ranked = [...others].sort((a, b) => (b.savedAt ?? 0) - (a.savedAt ?? 0))
-  const likeliest = ranked[0]!
-  const byRecency = typeof likeliest.savedAt === 'number'
-  return `Saved profiles in ${tokenStorePath}: ${profiles.map(p => p.name).join(', ')} `
-    + `(in use: \`${inUse}\`). If the app tab is paired under another one, retry with `
-    + `\`--profile ${likeliest.name}\`${byRecency ? ' (most recently paired)' : ''} `
-    + 'or another from that list.'
+  return lines.join('\n')
 }
+
+/** UTC instant, not a locale rendering: this goes in error output that gets
+ *  pasted into issues, and it must mean the same thing wherever it is read. */
+const pairedAt = (savedAt: number | null | undefined): string =>
+  typeof savedAt === 'number'
+    ? `${new Date(savedAt).toISOString().slice(0, 16).replace('T', ' ')}Z`
+    : '(no pairing timestamp)'
 
 /** A non-2xx from the bridge, carrying the STATUS so callers can classify on
  *  the protocol instead of on message text. */
@@ -130,9 +133,15 @@ const isMissingTokenError = (error: unknown): boolean =>
   typeof error === 'object' && error !== null
   && (error as {code?: unknown}).code === 'missing-token'
 
-/** Appends {@link unknownTokenProfileHelp} to the two failures a profile can
- *  explain — the bridge's unknown-token 401 and the local missing-token
- *  refusal — and returns any other error's message untouched. */
+/** Appends {@link formatTokenContext} to the two failures the token context can
+ *  explain — the bridge's unknown-token 401 and the local missing-token refusal
+ *  — and returns any other error's message untouched.
+ *
+ *  Fires on `kmagent connect`'s verification of a freshly pasted token too,
+ *  where the store is beside the point. ACCEPTED rather than plumbed around:
+ *  under facts-only that output is irrelevant, not misleading, and carrying a
+ *  token-source flag through the error would re-add the branch this module was
+ *  rewritten to delete. */
 export const withProfileHelp = (
   error: unknown,
   help: () => Promise<string>,
