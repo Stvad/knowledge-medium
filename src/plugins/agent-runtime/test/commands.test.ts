@@ -878,6 +878,37 @@ describe('mutating verbs refuse a target outside the active workspace (#790)', (
     }, env.context)).rejects.toThrow(/does not exist/)
   })
 
+  // The target lookup is async and bridge commands run detached, so the active
+  // workspace can move while it is in flight — leaving a target verified
+  // against A to be written under B's registry. Driven through the workspace
+  // getter, because the switch has to land in one specific gap: after the
+  // guard compared the row, before it re-checks its own pin. `reads` is
+  // asserted at the end so that if the guard's read count ever changes, this
+  // fails loudly instead of quietly exercising a different gap.
+  it('refuses when the active workspace moves while the targets are being checked', async () => {
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'here', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'x'})
+    }, {scope: ChangeScope.BlockDefault, description: 'seed active block'})
+
+    let reads = 0
+    const spy = vi.spyOn(env.repo, 'activeWorkspaceId', 'get')
+      .mockImplementation(() => (reads++ >= 2 ? 'ws-elsewhere' : WS))
+
+    try {
+      await expect(executeCommand({
+        commandId: 'c', type: 'delete-block', blockId: 'here',
+      }, env.context)).rejects.toThrow(/active workspace changed/)
+    } finally {
+      spy.mockRestore()
+    }
+    expect(reads).toBeGreaterThanOrEqual(3)
+
+    // The row the caller named is still live — the refusal beat the write.
+    const row = await env.h.db.get<{deleted: number}>(
+      'SELECT deleted FROM blocks WHERE id = ?', ['here'])
+    expect(row.deleted).toBe(0)
+  })
+
   // The refusal has to beat the PARSE, not just the write: a doomed request
   // shouldn't pay `parseMarkdownToBlocks` first. Asserted as "the transaction
   // never opened", which is what distinguishes the pre-flight from the in-tx
@@ -988,6 +1019,31 @@ describe('mutating verbs refuse a target outside the active workspace (#790)', (
       }, context)).rejects.toThrow(refusal)
 
       expect(ran).toBe(false)
+    })
+
+    // A whole multi-select is one deduplicated query, not one read per entry:
+    // the protocol puts no bound on `selectedBlockIds`, and the CLI's command
+    // timeout is finite.
+    it('checks a whole selection in a single query', async () => {
+      const context = withProbeAction()
+      await env.repo.tx(async tx => {
+        await tx.create({id: 'here', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'x'})
+      }, {scope: ChangeScope.BlockDefault, description: 'seed active block'})
+      const spy = vi.spyOn(env.repo.db, 'getAll')
+
+      await executeCommand({
+        commandId: 'c', type: 'run-action', id: 'test.probe',
+        // Repeats, plus a duplicate of `blockId`, so a per-id implementation
+        // would issue six reads where one is needed.
+        dependencies: {blockId: 'here', selectedBlockIds: ['here', 'here', 'here', 'here', 'here']},
+      }, context)
+
+      const guardReads = spy.mock.calls.filter(
+        ([sql]) => typeof sql === 'string' && sql.includes('json_each'))
+      expect(guardReads).toHaveLength(1)
+      expect(JSON.parse(guardReads[0][1]![0] as string)).toEqual(['here'])
+      spy.mockRestore()
+      expect(ran).toBe(true)
     })
 
     it('still dispatches for an active-workspace block', async () => {

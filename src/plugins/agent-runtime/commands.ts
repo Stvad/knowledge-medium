@@ -551,8 +551,9 @@ const assertActiveWorkspace = (repo: Repo, verb: string, workspaceId: string): v
   )
 }
 
-/** `assertActiveWorkspace` for a verb whose target is an existing block.
- *  A MISSING block passes: it has no workspace to compare, and answering
+/** `assertActiveWorkspace` for every existing block a verb is about to touch.
+ *
+ *  MISSING blocks pass: they have no workspace to compare, and answering
  *  "wrong workspace" would send the caller after a problem they don't have.
  *  Each verb reports its own not-found error a few lines later.
  *
@@ -560,25 +561,52 @@ const assertActiveWorkspace = (repo: Repo, verb: string, workspaceId: string): v
  *  `restore-block`'s target is ALWAYS a tombstone, so routing through the
  *  loader would make that verb's guard a permanent no-op.
  *
- *  ACCEPTED residual race, deliberately not closed (PR #803 review): this read
- *  is not in the mutator's own transaction, so an id absent here that sync
- *  delivers for a background workspace before that transaction opens is
- *  mutated unguarded. Closing it means replacing each `repo.mutate.X` with a
- *  hand-rolled `repo.tx` + `tx.run`, restating the mutator's own scope and
- *  description at the call site — and `run-action` could not use it anyway,
- *  since the mutations happen inside an action handler. A pre-check is the
- *  only mechanism available to every caller here, so the tighter one would buy
- *  coupling and inconsistency without closing the class. */
-const assertActiveWorkspaceBlock = async (
+ *  One deduplicated query, not one per id: `run-action` passes a whole
+ *  multi-select through here, and the protocol puts no bound on it.
+ *
+ *  The pin re-check at the end is the reason this lookup can be trusted at
+ *  all. It is async, and `bridge.ts` runs commands detached without cancelling
+ *  in-flight ones, so the active workspace can move while the read is in
+ *  flight — leaving a target that was verified against workspace A to be
+ *  written under B's registry. Refusing there means the caller retries instead
+ *  of writing with recognition off. Callers must issue their write on the
+ *  synchronous path immediately after this resolves, which is what makes the
+ *  re-check the LAST word: nothing can interleave between it and the write,
+ *  and `repo.tx` independently refuses if the workspace generation moves while
+ *  it waits for definition readiness.
+ *
+ *  What this still cannot cover — and no bridge-side check can — is a switch
+ *  DURING a `run-action` handler, whose writes happen inside code the bridge
+ *  does not control. That is the residual the kernel-side move exists to
+ *  close (see the follow-up issue). */
+const assertActiveWorkspaceBlocks = async (
+  repo: Repo,
+  verb: string,
+  blockIds: readonly (string | undefined)[],
+): Promise<void> => {
+  const unique = [...new Set(blockIds.filter((id): id is string => id !== undefined && id !== ''))]
+  if (unique.length === 0) return
+  const pinned = repo.activeWorkspaceId
+  const rows = await repo.db.getAll<{workspace_id: string}>(
+    'SELECT workspace_id FROM blocks WHERE id IN (SELECT value FROM json_each(?))',
+    [JSON.stringify(unique)],
+  )
+  for (const row of rows) assertActiveWorkspace(repo, verb, row.workspace_id)
+  if (repo.activeWorkspaceId !== pinned) {
+    throw new Error(
+      `${verb}: the active workspace changed from ${pinned ?? 'none'} to `
+      + `${repo.activeWorkspaceId ?? 'none'} while checking this command's targets. `
+      + 'Refusing rather than writing against a registry they were not checked '
+      + 'for — re-run against the workspace you want.',
+    )
+  }
+}
+
+const assertActiveWorkspaceBlock = (
   repo: Repo,
   verb: string,
   blockId: string,
-): Promise<void> => {
-  const row = await repo.db.getOptional<{workspace_id: string}>(
-    'SELECT workspace_id FROM blocks WHERE id = ?', [blockId],
-  )
-  if (row) assertActiveWorkspace(repo, verb, row.workspace_id)
-}
+): Promise<void> => assertActiveWorkspaceBlocks(repo, verb, [blockId])
 
 const createRuntimeBlock = async (
   repo: Repo,
@@ -1266,13 +1294,9 @@ const runRuntimeAction = async (
   // reachable through here — so every id that BECOMES a dependency is checked
   // before dispatch, which is also the last point we can refuse: once
   // `invokeAction` runs, the writes are inside a handler we don't control.
-  for (const dependencyId of [
+  await assertActiveWorkspaceBlocks(context.repo, `run-action ${actionId}`, [
     blockId, uiStateBlockId, anchorBlockId, scopeRootId, ...selectedBlockIds,
-  ]) {
-    if (dependencyId !== undefined) {
-      await assertActiveWorkspaceBlock(context.repo, `run-action ${actionId}`, dependencyId)
-    }
-  }
+  ])
 
   // Route imperative agent dispatch through the same `invokeAction` choke the
   // keyboard / pointer / runActionById paths use, so the action-dispatch
