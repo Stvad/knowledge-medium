@@ -373,9 +373,8 @@ describe('repo.queryBlocks', () => {
       await handle.load()
       const deps = handle.__depsForTest()
 
-      // The coarse channel fires on every create/delete in the graph;
-      // measured ~500ms of re-resolve per structural edit on a 328k-block
-      // workspace, for edits that cannot change this result.
+      // The coarse channel fires on every create/delete in the workspace,
+      // including edits that cannot change this result.
       expect(deps).not.toContainEqual({
         kind: 'plugin',
         channel: TYPED_BLOCKS_LIVE_CHANNEL,
@@ -387,8 +386,10 @@ describe('repo.queryBlocks', () => {
         channel: TYPED_BLOCKS_STRUCTURE_CHANNEL,
         key: typedBlocksStructureKey(WS, 'live-target'),
       })
-      // And a target with no row yet still gets named — the edge row exists,
-      // so creating that block is precisely the event we must wake on.
+      // And a target with no row yet still gets named: the id lives in the
+      // encoded ref PROPERTY, which is what the deps are read from, so it is
+      // available with or without a projected edge. Creating that block is
+      // precisely the event to wake on.
       expect(deps).toContainEqual({
         kind: 'plugin',
         channel: TYPED_BLOCKS_STRUCTURE_CHANNEL,
