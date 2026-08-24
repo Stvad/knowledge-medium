@@ -1922,6 +1922,35 @@ describe('revival re-materializes property children (#778)', () => {
     expect(peer.parent_id).toBe(field!.id)
   })
 
+  it('does not revive a value when sync left a live one under the tombstoned field row', async () => {
+    // Sync-apply skips the parent-liveness trigger, so a LIVE value child can
+    // sit under a tombstoned field row. The tombstone count alone then reads as
+    // unambiguous while a competing sibling is live and simply excluded from it
+    // — reviving would put two divergent values back.
+    //
+    // Same clause the field-row level already has: revive only when nothing
+    // live is holding the slot.
+    await seedWorkspace('children')
+    const repo = await seedMaterializedProperty()
+    const [field] = await liveFieldRows('p')
+    const [ownValue] = (await childrenRows(field!.id)).filter(v => v.deleted === 0)
+    await repo.tx(tx => tx.create({
+      id: 'arrived', workspaceId: WS, parentId: field!.id, orderKey: 'zz', content: 'rival',
+    }), {scope: ChangeScope.BlockDefault})
+    await repo.mutate.delete({id: 'p'})
+    // The sync-shaped state: a live value under a tombstoned field row.
+    await sharedDb.db.execute('UPDATE blocks SET deleted = 0 WHERE id = ?', ['arrived'])
+
+    await repo.mutate.restore({id: 'p'})
+
+    const live = (await childrenRows(field!.id)).filter(v => v.deleted === 0)
+    expect(live).toHaveLength(1)
+    expect(live[0]!.id).toBe('arrived')
+    const own = await sharedDb.db.get<{deleted: number}>(
+      'SELECT deleted FROM blocks WHERE id = ?', [ownValue!.id])
+    expect(own.deleted).toBe(1)
+  })
+
   it('mints instead of reviving when the tombstone is ambiguous', async () => {
     // Two tombstoned field rows for one definition — an unset/re-set cycle
     // before the owner was deleted. Picking one would need a rule that is

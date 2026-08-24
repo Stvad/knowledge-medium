@@ -401,10 +401,18 @@ const reviveTombstonedFieldRow = async (
   if (matching.length !== 1) return false
   const fieldRow = matching[0]!
   await tx.restore(fieldRow.id)
-  // Bit-filtered per §9: a marked child is the field row's OWN machinery, never
-  // one of its values. Not revived either — see the one-level-down note above.
-  const values = (await tx.deletedChildrenOf(fieldRow.id))
-    .filter(value => value.isFieldForm !== true)
+  // Both halves of the same clause the field-row level uses: revive only when
+  // NOTHING LIVE holds the slot and exactly one tombstone offers to fill it.
+  // The live half is not theoretical — sync-apply skips the parent-liveness
+  // trigger, so a live value can sit under a tombstoned field row, and counting
+  // only tombstones reads that as unambiguous while a rival sibling is live.
+  //
+  // Bit-filtered per §9 on both sides: a marked child is the field row's OWN
+  // machinery, never one of its values. Not revived either — see the
+  // one-level-down note above.
+  const isValue = (child: BlockData): boolean => child.isFieldForm !== true
+  if ((await tx.childrenOf(fieldRow.id, undefined)).some(isValue)) return true
+  const values = (await tx.deletedChildrenOf(fieldRow.id)).filter(isValue)
   if (values.length === 1) await tx.restore(values[0]!.id)
   return true
 }
