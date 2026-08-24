@@ -1914,6 +1914,37 @@ describe('revival re-materializes property children (#778)', () => {
       .filter(v => v.deleted === 0)[0]!.content).toBe('done')
   })
 
+  it('leaves the tombstone alone when the same tx already minted a live field row', async () => {
+    // The `createOrRestoreTargetBlock` shape: restore, then `setProperty` in the
+    // same tx. setProperty's dual-write mints a live field row before
+    // materialize runs, so identity is already decided — reviving the tombstone
+    // on top would only add a duplicate, and folding a duplicate RELOCATES its
+    // children, dragging the old value's comment thread onto the new value.
+    await seedWorkspace('children')
+    const repo = await seedMaterializedProperty()
+    const [oldField] = await liveFieldRows('p')
+    const [oldValue] = (await childrenRows(oldField!.id)).filter(v => v.deleted === 0)
+    await repo.tx(tx => tx.create({
+      id: 'comment', workspaceId: WS, parentId: oldValue!.id, orderKey: 'm', content: 'a note',
+    }), {scope: ChangeScope.BlockDefault})
+    await repo.mutate.delete({id: 'p'})
+
+    await repo.tx(async tx => {
+      await tx.restore('p')
+      await tx.setProperty('p', statusSchema, 'new')
+    }, {scope: ChangeScope.BlockDefault})
+
+    const fields = await liveFieldRows('p')
+    expect(fields).toHaveLength(1)
+    expect(fields[0]!.id).not.toBe(oldField!.id)
+    expect((await childrenRows(fields[0]!.id))
+      .filter(v => v.deleted === 0).map(v => v.content)).toEqual(['new'])
+    // The old value's comment stayed put — not relocated onto the new value.
+    const comment = await sharedDb.db.get<{deleted: number; parent_id: string}>(
+      'SELECT deleted, parent_id FROM blocks WHERE id = ?', ['comment'])
+    expect(comment.parent_id).toBe(oldValue!.id)
+  })
+
   it('still mints when there is no tombstone to revive', async () => {
     await seedWorkspace('children')
     const repo = setup()
