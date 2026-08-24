@@ -181,13 +181,13 @@ describe('migrate_properties_to_blocks action', () => {
     expect(runWorkspaceBackfillNow).not.toHaveBeenCalled()
   })
 
-  it('repairs a durable materialization gap instead of sending the operator away', async () => {
+  it('repairs a durable materialization gap without being asked', async () => {
     // The refusal used to be the end of the gesture: the rows are downloaded,
     // unapplied, and nothing re-delivers them, so the operator had to learn the
     // recovery verb, leave, run it, and come back. The remedy is a pass over
     // rows this device already has, so the gesture does it.
-    const {repo, runWorkspaceBackfillNow, workspaceViewGap, rematerializeWorkspace} = makeRepo()
-    workspaceViewGap.mockResolvedValueOnce(STRANDED)   // …and clean on every re-take after
+    const {repo, workspaceViewGap, rematerializeWorkspace} = makeRepo()
+    workspaceViewGap.mockResolvedValueOnce(STRANDED)   // ...and clean on every re-take after
     rematerializeWorkspace.mockResolvedValue(pass({applied: 3, resolved: 3, unappliedBefore: 3}))
 
     await invoke(repo)
@@ -195,6 +195,40 @@ describe('migrate_properties_to_blocks action', () => {
     // NARROW scope, never the wide one: that is a full pass over the workspace
     // and can leave the gap larger, which is an operator's call to make.
     expect(rematerializeWorkspace).toHaveBeenCalledWith('ws-1', {scope: 'unapplied'})
+  })
+
+  it('does not hand a repair\u2019s own writes to the migration', async () => {
+    // THE data rule. The pass can write an older staged row over a local edit
+    // that is acked but not echoed back - normally harmless, because the echo
+    // re-asserts it. Migrating that window is what makes it permanent: the
+    // backfill is create-only over keys with no field row, children are the
+    // property truth, so a child minted from the reverted value is never
+    // revisited and the healed cell no longer reaches it. One more click is the
+    // whole fix, and by then the echo has landed.
+    const {repo, runWorkspaceBackfillNow, workspaceViewGap, rematerializeWorkspace} = makeRepo()
+    workspaceViewGap.mockResolvedValueOnce(STRANDED)
+    rematerializeWorkspace.mockResolvedValue(pass({applied: 3, resolved: 3, unappliedBefore: 3}))
+
+    await invoke(repo)
+
+    expect(openDialog).not.toHaveBeenCalled()
+    expect(runWorkspaceBackfillNow).not.toHaveBeenCalled()
+    expect(showInfo).toHaveBeenCalledWith(expect.stringContaining('Run the migration again'))
+    // And NOT wrapped in the standard refusal, whose "Nothing was changed" is
+    // false the moment the repair wrote a row.
+    expect(showInfo).not.toHaveBeenCalledWith(expect.stringContaining('Nothing was changed'))
+  })
+
+  it('continues in one gesture when the repair rewrote nothing', async () => {
+    // Every flagged row skip-staled: the flags cleared, no local row was
+    // rewritten, so there is no reverted snapshot to keep out of the migration.
+    const {repo, runWorkspaceBackfillNow, workspaceViewGap, rematerializeWorkspace} = makeRepo()
+    workspaceViewGap.mockResolvedValueOnce(STRANDED)
+    rematerializeWorkspace.mockResolvedValue(
+      pass({scanned: 3, applied: 0, skippedStale: 3, resolved: 3, unappliedBefore: 3}))
+
+    await invoke(repo)
+
     expect(runWorkspaceBackfillNow).toHaveBeenCalled()
   })
 
@@ -230,15 +264,16 @@ describe('migrate_properties_to_blocks action', () => {
   it('does not claim nothing changed when the repair stopped partway', async () => {
     // Its windows commit independently, so a rejection can still have rewritten
     // local rows. Every other refusal here may say "Nothing was changed"; after
-    // this one that sentence is false, so the banner says what really happened.
+    // this one that sentence is false.
     const {repo, workspaceViewGap, rematerializeWorkspace} = makeRepo()
     workspaceViewGap.mockResolvedValue(STRANDED)
     rematerializeWorkspace.mockRejectedValue(new Error('window failed'))
 
     await invoke(repo)
 
-    expect(progressHandle.fail).toHaveBeenCalledWith(
+    expect(showInfo).toHaveBeenCalledWith(
       expect.stringContaining('Any rows it did reach are materialized'))
+    expect(showInfo).not.toHaveBeenCalledWith(expect.stringContaining('Nothing was changed'))
   })
 
   it('does not start a minutes-long repair for a workspace the operator has left', async () => {
@@ -317,17 +352,19 @@ describe('migrate_properties_to_blocks action', () => {
     expect(runWorkspaceBackfillNow).not.toHaveBeenCalled()
   })
 
-  it('falls back to the plain refusal when the repair itself throws', async () => {
-    // A repair that failed says nothing about the migration; the refusal it was
-    // trying to clear is still true and is still what the operator needs.
+  it('stops the gesture when the repair throws, even if the gate then reads clean', async () => {
+    // The drain can write every window and fail only on a post-pass read, so
+    // re-taking the gate here can come back CLEAN over a repair that just told
+    // the operator it did not finish. Continuing on that would migrate the
+    // snapshot the same breath said was not trusted.
     const {repo, runWorkspaceBackfillNow, workspaceViewGap, rematerializeWorkspace} = makeRepo()
-    workspaceViewGap.mockResolvedValue(STRANDED)
-    rematerializeWorkspace.mockRejectedValue(new Error('no observer'))
+    workspaceViewGap.mockResolvedValueOnce(STRANDED)   // clean on every re-take after
+    rematerializeWorkspace.mockRejectedValue(new Error('post-pass read failed'))
 
     await invoke(repo)
 
-    expect(showInfo).toHaveBeenCalledWith(expect.stringContaining('Not started'))
     expect(runWorkspaceBackfillNow).not.toHaveBeenCalled()
+    expect(showInfo).toHaveBeenCalledWith(expect.stringContaining('Run it again'))
   })
 
   it('does not tell the operator to retry a refusal that retrying cannot clear', async () => {

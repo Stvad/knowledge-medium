@@ -54,6 +54,10 @@ interface Unfitness {
    *  rather than inferred from `retryable: false` — read-only and non-owner are
    *  refusals about AUTHORITY, and re-materializing local rows moves neither. */
   readonly rematerializable?: boolean
+  /** The reason is a COMPLETE message and the caller must not wrap it in
+   *  {@link notStarted}, whose "Nothing was changed" is false after a repair
+   *  that wrote local rows. */
+  readonly standalone?: boolean
 }
 
 /** Why this device must not start the pass right now, or null. The runner takes
@@ -116,11 +120,25 @@ const passIsUnfit = async (
  *   re-check. That one re-samples while the write lock is held, dozens of times
  *   across a pass that runs for minutes; a repair there would be a
  *   minutes-long pass inside a gate meant to cost microseconds.
+ * - it does not hand its own result to the migration. A repair that WROTE ends
+ *   the gesture; the operator runs the migration again. See below — this is the
+ *   one constraint here that is about data rather than cost.
  *
- * Cost accepted: a rescan can briefly write an older staged row over a local
- * edit that is acked but not yet echoed back, and running this for the operator
- * means they did not choose that. The echo re-asserts it, and the durable arm
- * only fires with nothing in flight on the download side.
+ * WHY A REPAIR THAT WROTE MUST NOT FEED THE MIGRATION. The pass can write an
+ * older staged row over a local edit that is acked but not yet echoed back —
+ * documented on `rematerializeWorkspace`, invisible to every predicate here,
+ * and normally harmless because the echo re-asserts it moments later. Reading
+ * that window INTO the migration is what makes it permanent: the backfill is
+ * create-only over keys with no field row (`materializedFieldIds`), children
+ * are the property truth and the cell only a derived read surface, so a child
+ * minted from the reverted value is never revisited. The echo then heals the
+ * cell and the child keeps the old value — a self-healing transient turned into
+ * a lost edit, uploaded fleet-wide.
+ *
+ * Ending the gesture is the whole fix, and it is cheap: by the time a person
+ * clicks again the echo has landed. It is also the categorical line the repo
+ * draws anyway — a DERIVATION pass and a DATA MIGRATION are different kinds and
+ * do not belong in one gesture.
  */
 const repairThenRecheck = async (
   repo: Repo,
@@ -135,16 +153,31 @@ const repairThenRecheck = async (
   } catch (err) {
     console.error('[properties-migration] could not re-materialize before the pass:', err)
     // Its windows commit independently, so a rejection can still have rewritten
-    // local rows — "Nothing was changed", which every other refusal here is
-    // entitled to say, would be false. Said on the BANNER rather than folded
-    // into the returned reason, because the caller's sentence is about the
-    // migration and this one is about the repair.
-    banner.fail('Could not finish catching up on rows this device never applied. Any rows it '
-      + 'did reach are materialized; nothing was uploaded, and the migration did not start.')
-    return passIsUnfit(repo, {workspaceId, needsFlip}).catch(() => ({
-      reason: 'this device could not check whether the pass may run',
+    // local rows: "Nothing was changed" would be false, and so would proceeding.
+    // A re-taken gate can come back CLEAN here — the drain may have written
+    // every window and failed only on a post-pass read — and continuing on that
+    // would migrate the snapshot this just told the operator it did not trust.
+    banner.fail('Could not finish catching up on rows this device never applied.')
+    return {
+      reason: 'Could not finish catching up on rows this device had not applied. Any rows it '
+        + 'did reach are materialized and nothing was uploaded; the migration was not started. '
+        + 'Run it again.',
       retryable: true,
-    }))
+      standalone: true,
+    }
+  }
+  // The pass runs for MINUTES, so it is the one await here a person can
+  // realistically navigate during. Everything downstream — the synthesis scan,
+  // and a dialog asking about "this workspace" — would be for a workspace
+  // nobody has open, ending in the post-dialog check's silent return.
+  if (repo.activeWorkspaceId !== workspaceId) {
+    banner.done()
+    return {
+      reason: 'Caught up on rows this device had not applied, but a different workspace is '
+        + 'open now, so the migration was not started.',
+      retryable: true,
+      standalone: true,
+    }
   }
   // Caught for the same reason the post-dialog re-check is: these are database
   // reads, and a throw here would leave a duration-less banner spinning over a
@@ -155,16 +188,30 @@ const repairThenRecheck = async (
   } catch (err) {
     console.error('[properties-migration] could not re-check eligibility after repair:', err)
     banner.fail('Caught up on rows this device never applied, but could not re-check whether '
-      + 'the migration may run. Nothing else was changed.')
-    return {reason: 'this device could not re-check whether the pass may run', retryable: true}
+      + 'the migration may run.')
+    return {
+      reason: 'Caught up on rows this device had not applied, but could not then check whether '
+        + 'the migration may run. Nothing else was changed. Run it again.',
+      retryable: true,
+      standalone: true,
+    }
   }
   if (stillUnfit === null) {
-    // `resolved`, not `applied`: a flagged row that a pending local edit
-    // supersedes is skip-staled rather than written, and its flag clears all the
-    // same — so `applied` can read 0 over a repair that genuinely closed the gap.
-    banner.done(`Caught up on ${repaired.resolved.toLocaleString()} row(s) this device had `
-      + 'downloaded but never applied.')
-    return null
+    // `resolved`, not `applied`, for the COUNT: a flagged row that a pending
+    // local edit supersedes is skip-staled rather than written, and its flag
+    // clears all the same, so `applied` can read 0 over a repair that closed the
+    // gap. `applied` is the right question for whether to CONTINUE, though —
+    // it is exactly "did this rewrite local rows", and see the header for why a
+    // rewrite must not be read straight into the migration.
+    const caughtUp = `Caught up on ${repaired.resolved.toLocaleString()} row(s) this device `
+      + 'had downloaded but never applied.'
+    if (repaired.applied === 0) {
+      banner.done(caughtUp)
+      return null
+    }
+    banner.done(caughtUp)
+    return {reason: `${caughtUp} Run the migration again to continue.`, retryable: true,
+      standalone: true}
   }
   banner.done()
   // Only when this pass is still the reason. Its counts explain THIS gap; on a
@@ -358,28 +405,20 @@ export const migratePropertiesToBlocksAction = ({repo}: {repo: Repo}): ActionCon
     // The one refusal with a local remedy: clear it and ask again, rather than
     // sending the operator away to run a verb by hand and come back.
     //
-    // Bracketed by the workspace check, on BOTH sides, and neither side is the
-    // per-await rule the two irreversibility guards below decline to be. This
-    // await is the only one in the gesture that runs for MINUTES, so it is the
-    // only one where a person can realistically navigate mid-step:
-    //
-    // - before, because starting a minutes-long pass plus block-cache growth
-    //   for a workspace already abandoned is pure waste.
-    // - after, because everything downstream — the synthesis scan, and a dialog
-    //   asking the operator to confirm "this workspace" — would be about a
-    //   workspace nobody has open, ending in the post-dialog check's silent
-    //   return. That window existed before and was milliseconds wide; this pass
-    //   is what makes it long enough to matter.
+    // Guarded on the way IN too, not just on the way out (which the repair does
+    // itself): starting a minutes-long pass plus block-cache growth for a
+    // workspace already abandoned is pure waste. Neither side is the per-await
+    // rule the two irreversibility guards below decline to be — this is the one
+    // await in the gesture long enough for a person to navigate during it.
     if (ineligible?.rematerializable && repo.activeWorkspaceId === workspaceId) {
       ineligible = await repairThenRecheck(repo, {workspaceId, needsFlip: !childBacked})
-      if (repo.activeWorkspaceId !== workspaceId) {
-        showInfo('Caught up on rows this device had not applied, but a different workspace '
-          + 'is open now, so the migration was not started.')
-        return
-      }
     }
     if (ineligible !== null) {
-      showInfo(notStarted(ineligible.reason, ineligible.retryable))
+      // A repair that ran owns its own sentence, complete: `notStarted`'s
+      // "Nothing was changed" is false once local rows have been rewritten.
+      showInfo(ineligible.standalone
+        ? ineligible.reason
+        : notStarted(ineligible.reason, ineligible.retryable))
       return
     }
     // §9 orphan synthesis, planned before the confirmation because this is the
