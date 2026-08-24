@@ -90,6 +90,26 @@ beforeEach(async () => {
   repo.setActiveWorkspaceId(WS)
   await repo.ensureSystemPages(WS)
 })
+// Unpin before the next test starts: an abandoned Repo is not inert. The
+// `ensureSystemPages` tx above primes the property registry, which schedules a
+// seed pass; with no membership row it PARKS on `awaitLocalMemberRole`, holding
+// a `workspace_members` subscription on the SHARED db. So a membership INSERT
+// later in the file wakes EVERY earlier test's Repo at once, and they
+// materialize concurrently with the live one through `gen-N` counters that
+// restart per Repo — colliding on the UNIQUE `command_events.tx_id`, into a
+// database `resetTestDb` has since emptied (#455, #806). Unpinning aborts the
+// parked generation; the assertion is the pin — without it 58 tests here fail.
+afterEach(async () => {
+  repo.setActiveWorkspaceId(null)
+  // The abort clears the pending set within a macrotask or two (measured max
+  // 56ms, typically 13); 2s leaves room for the ~6x full-suite load stretch.
+  await vi.waitFor(() => expect(outstandingSeedPasses()).toBe(0), {timeout: 2_000, interval: 10})
+})
+
+/** Seed-materialization passes `repo` still has scheduled or in flight. */
+const outstandingSeedPasses = (): number => (repo as unknown as {
+  pendingSeedMaterializationWorkspaces: Set<string>
+}).pendingSeedMaterializationWorkspaces.size
 
 describe('seed name hygiene — a seed name/label is mirrored into block content (§7)', () => {
   const UUID = '0f7b3c1a-9d2e-4f60-8a1b-2c3d4e5f6a7b'
@@ -557,11 +577,6 @@ describe('scheduled seed materialization (Repo wiring, §4.3)', {timeout: 30_000
     vi.waitFor(check, {timeout: 15_000, interval: 50})
 
   type WithRun = {runWorkspaceSeedMaterialization: (...a: unknown[]) => Promise<void>}
-
-  /** Number of seed-materialization passes currently scheduled or running. */
-  const outstandingSeedPasses = (): number => (repo as unknown as {
-    pendingSeedMaterializationWorkspaces: Set<string>
-  }).pendingSeedMaterializationWorkspaces.size
 
   /** Run `schedule()` and return only once the pass it queued has finished.
    *
