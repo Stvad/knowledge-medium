@@ -718,8 +718,9 @@ const reapSeatsInTx = async (
       // mint-time 4s window too, which predates the reaper), and
       // tombstoning its parent would strand it live under a tombstone.
       // Skipping the whole seat is the safe miss.
+      //
       // FLIP-GATED, deliberately, and this is the one place in this branch
-      // where the backfill's pre-flip rows are NOT treated like post-flip ones.
+      // where a seat's generated-LOOKING children are not treated as machinery.
       //
       // Post-flip, an edit to a generated value row reprojects into the seat's
       // cell, so `matchesAliasSeatSeed` above sees the drift and refuses. That
@@ -729,6 +730,15 @@ const reapSeatsInTx = async (
       // touched it — shape, content, the property bag, and so on. Getting that
       // enumeration wrong is a silent soft-delete of a user's edit, so do not
       // attempt it: an incomplete guard here is worse than no reaping.
+      //
+      // The BACKFILL no longer puts those rows under an un-flipped seat — it and
+      // the dual-write both refuse an un-flipped workspace — but two paths still
+      // reach the shape there, so the gate is not dead. `is_field_form` is
+      // stamped from CONTENT by the derive pass, so a user who writes
+      // `::((aliases-definition))` under a seat and gives it a value has one; and
+      // `blockMerge`'s pre-backfill catch-up materializes a key's children with
+      // no flip check at all (km-g5ev). Either way the cell stays pristine and
+      // the projection is dormant, so the seed match cannot see an edit.
       //
       // Not reaping is the documented SAFE MISS (see the gate list below): the
       // seat squats until the alias is re-typed and re-dropped, and normal

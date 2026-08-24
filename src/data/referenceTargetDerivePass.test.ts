@@ -12,11 +12,18 @@ import { BLOCKS_TABLE_COLUMN_NAMES, blockToRowParams } from '@/data/blockSchema'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { projectedPropertyDefinitionsFacet } from '@/data/facets'
-import { aliasesProp } from '@/data/properties'
+import { aliasesProp, typesProp } from '@/data/properties'
+import { PROPERTY_SCHEMA_TYPE } from '@/data/blockTypes'
+import { registrySeedParams } from '@/data/internals/kernelQueries'
+import { propertyMachinerySourceIds } from '@/plugins/backlinks/query'
 import type { Repo } from './repo'
 
 const WS = 'ws-derive-pass'
-const STATUS_FIELD_ID = 'field-status-pass'
+/** A real fieldId is the definition block's UUID. No assertion here turns on
+ *  the shape — the whole-block grammar takes any non-paren id — but the
+ *  INLINE parser is UUID-only, so a synthetic one would make the seeded
+ *  `references` below a shape no real parse could have produced. */
+const STATUS_FIELD_ID = '0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d'
 
 const statusSchema = defineProperty('status', {
   codec: codecs.string,
@@ -100,6 +107,13 @@ const readColumn = async (id: string): Promise<string | null> => {
     'SELECT reference_target_id FROM blocks WHERE id = ?', [id],
   )
   return row.reference_target_id
+}
+
+const refsOf = async (id: string): Promise<unknown> => {
+  const row = await sharedDb.db.get<{references_json: string}>(
+    'SELECT references_json FROM blocks WHERE id = ?', [id],
+  )
+  return JSON.parse(row.references_json)
 }
 
 describe('reference-target initial derive pass', () => {
@@ -600,5 +614,62 @@ describe('late-binding stamp → owner-cell re-projection (§9 recognition, issu
     // background repair that followed it.
     await repo.undo(ChangeScope.BlockDefault)
     expect(await cellOf(STATUS_FIELD_ID, aliasesProp.name)).toBeUndefined()
+  })
+
+  /** The stamp writes one local column and re-runs no reference parsing, so
+   *  whether a row's stored `references` can go stale across the transition
+   *  decides whether the repair needs a references reconcile bolted on
+   *  (issue #781). It can't, and this pins the two facts that make it so:
+   *  parse output does not read recognition, and the display-side machinery
+   *  filter is a live query rather than parse-time state. */
+  it('recognizes a row without touching its parsed references — the machinery filter follows the stamp', async () => {
+    await seedDormantWorkspace()
+    const repo = setup()
+    // The upgrading device's shape: derived columns NULL because they
+    // predate the column, `references` already parsed by the older build.
+    // Raw writes, so no processor re-derives anything before the sweep runs.
+    await seedRow({id: 'owner', content: 'page'})
+    await seedRow({
+      id: STATUS_FIELD_ID,
+      content: 'status',
+      // The SQL predicate resolves definition-ness through `block_types`
+      // (trigger-maintained), not through the runtime registry `setup()`
+      // contributes — without the type this row would never recognize.
+      properties: {[typesProp.name]: [PROPERTY_SCHEMA_TYPE]},
+    })
+    await seedRow({id: 'target-page', content: 'Target'})
+    await seedRow({
+      id: 'row', parentId: 'owner', content: `::((${STATUS_FIELD_ID}))`,
+      references: [{id: STATUS_FIELD_ID, alias: STATUS_FIELD_ID}],
+    })
+    await seedRow({
+      id: 'value', parentId: 'row', content: '[[Target]]',
+      references: [{id: 'target-page', alias: 'Target'}],
+    })
+    await flipSeededWorkspace()
+
+    // Pre-stamp the row is an ordinary block, so nothing under it is
+    // machinery and both edges display. Asserting this half is what makes
+    // the post-stamp assertion evidence rather than a tautology.
+    expect(await propertyMachinerySourceIds(
+      sharedDb.db, ['row', 'value'], registrySeedParams(repo),
+    )).toEqual(new Set())
+
+    await runPass(repo)
+    expect(await readColumn('row')).toBe(STATUS_FIELD_ID)
+
+    // Same stored edges, read differently: the interior value row is now
+    // suppressed from the backlink panel and the field row itself is not
+    // (its edge to its own definition IS the "used by" backlink).
+    expect(await propertyMachinerySourceIds(
+      sharedDb.db, ['row', 'value'], registrySeedParams(repo),
+    )).toEqual(new Set(['value']))
+
+    // And the edges themselves are untouched — deliberately. Parse writes
+    // them from content alone, so a field row carries a reference to its
+    // definition exactly as an unrecognized `::((id))` row does, and
+    // definition merge/rename retarget reach both through the same index.
+    expect(await refsOf('row')).toEqual([{id: STATUS_FIELD_ID, alias: STATUS_FIELD_ID}])
+    expect(await refsOf('value')).toEqual([{id: 'target-page', alias: 'Target'}])
   })
 })

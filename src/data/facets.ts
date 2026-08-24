@@ -188,12 +188,6 @@ export interface WorkspaceBackfillContext {
    *  deliberately leaves in the cell (`pnpm agent audit-properties` reports
    *  the set). */
   resolveNameSchema: (name: string) => ResolvedPropertySchema<unknown> | undefined
-  /** Resolve a property FIELD id — the other direction, for a pass that has to
-   *  reason about existing field rows rather than only about cell keys. The
-   *  cell → children pass needs it to notice a key that was DELETED: the
-   *  materializer removes a key's children when it is asked about a name the
-   *  bag no longer has, and nothing else can name it. */
-  resolveFieldSchema: (fieldId: string) => ResolvedPropertySchema<unknown> | undefined
 }
 
 const isWorkspaceBackfill = (value: unknown): value is WorkspaceBackfill =>

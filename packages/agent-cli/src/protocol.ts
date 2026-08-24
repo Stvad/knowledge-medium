@@ -153,7 +153,7 @@ export const createBlockCommandSchema = z.looseObject({
  *  safe to retry. `shape: 'block'` keeps the whole markdown as ONE block
  *  (no outline split); `'outline'` (default) splits along the markdown
  *  outline. `properties` (looseObject passthrough) is applied to every
- *  block — the dispatch daemon uses it to tag `claude:reply`. Streaming a
+ *  block — the dispatch daemon uses it to tag `agent:reply`. Streaming a
  *  reply calls this repeatedly with the growing text (same key); the last
  *  call passes `final: true`. Replaces the old one-shot
  *  `create-blocks-from-markdown`. */
