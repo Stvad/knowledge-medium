@@ -337,7 +337,11 @@ describe('readwise document alias — the title is already a page name', () => {
     // yes — it returns this document, the older of the two.
     await expect(sync(rootId, book(1, 'Deep Work', 11))).resolves.toBeUndefined()
 
-    expect(aliasesOf(await repo.load(documentId(1)))).toEqual(['Deep Work (Readwise)'])
+    const after = await repo.load(documentId(1))
+    // The document keeps its real title as CONTENT — the whole design rests on
+    // that, since it is what the duplicate-name banner reads.
+    expect(after?.content).toBe('Deep Work')
+    expect(aliasesOf(after)).toEqual(['Deep Work (Readwise)'])
   })
 
   it('retires the placeholder when a re-title lands on a free name', async () => {

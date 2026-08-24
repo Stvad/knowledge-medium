@@ -1307,6 +1307,18 @@ const ensureDocumentAlias = async (
     if (!bagUnchanged) await tx.setProperty(blockId, aliasesProp, next)
     const nextClaim = claimable ?? undefined
     if (claim !== nextClaim) await tx.setProperty(blockId, aliasClaimProp, nextClaim)
+
+    // An acceptance is spent the moment the document actually holds its title:
+    // that conflict is over, and a later collision on the SAME title is a
+    // different one the user has not been asked about.
+    //
+    // This and the stored title are complementary, and deleting either brings
+    // a bug back. The title covers a re-title onto ANOTHER taken name; this
+    // covers the name being won back and lost again.
+    if (claimable === title) {
+      const acceptedFor: string | undefined = await tx.getProperty(blockId, aliasAcceptedForProp)
+      if (acceptedFor !== undefined) await tx.unsetProperty(blockId, aliasAcceptedForProp)
+    }
   }, { scope: ChangeScope.BlockDefault, description })
 }
 
