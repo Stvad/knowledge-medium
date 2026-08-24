@@ -98,11 +98,9 @@ const passIsUnfit = async (
  * Clear a durable materialization gap, then ask the gate again.
  *
  * Those rows reached the drain, could not be applied, and had their queue entry
- * consumed, so nothing re-delivers them and the refusal is permanent — but the
+ * consumed, so nothing re-delivers them and the refusal is permanent. The
  * remedy is a pass over rows this device already downloaded: local, uploading
- * nothing, claiming nothing, and safe to repeat. Making the operator leave the
- * dialog to run it by hand was asking them to learn "materialization gap"
- * before they could migrate.
+ * nothing, claiming nothing, safe to repeat.
  *
  * FOUR things this deliberately does not do:
  *
@@ -135,16 +133,37 @@ const repairThenRecheck = async (
   try {
     repaired = await repo.rematerializeWorkspace(workspaceId, {scope: 'unapplied'})
   } catch (err) {
-    // A failed repair is not a failed migration: fall back to the refusal the
-    // caller would have shown anyway, which is still true.
     console.error('[properties-migration] could not re-materialize before the pass:', err)
-    banner.done()
-    return passIsUnfit(repo, {workspaceId, needsFlip})
+    // Its windows commit independently, so a rejection can still have rewritten
+    // local rows — "Nothing was changed", which every other refusal here is
+    // entitled to say, would be false. Said on the BANNER rather than folded
+    // into the returned reason, because the caller's sentence is about the
+    // migration and this one is about the repair.
+    banner.fail('Could not finish catching up on rows this device never applied. Any rows it '
+      + 'did reach are materialized; nothing was uploaded, and the migration did not start.')
+    return passIsUnfit(repo, {workspaceId, needsFlip}).catch(() => ({
+      reason: 'this device could not check whether the pass may run',
+      retryable: true,
+    }))
   }
-  const stillUnfit = await passIsUnfit(repo, {workspaceId, needsFlip})
+  // Caught for the same reason the post-dialog re-check is: these are database
+  // reads, and a throw here would leave a duration-less banner spinning over a
+  // gesture that has stopped.
+  let stillUnfit: Unfitness | null
+  try {
+    stillUnfit = await passIsUnfit(repo, {workspaceId, needsFlip})
+  } catch (err) {
+    console.error('[properties-migration] could not re-check eligibility after repair:', err)
+    banner.fail('Caught up on rows this device never applied, but could not re-check whether '
+      + 'the migration may run. Nothing else was changed.')
+    return {reason: 'this device could not re-check whether the pass may run', retryable: true}
+  }
   if (stillUnfit === null) {
-    banner.done(`Applied ${repaired.applied.toLocaleString()} row(s) this device had `
-      + 'downloaded but never materialized.')
+    // `resolved`, not `applied`: a flagged row that a pending local edit
+    // supersedes is skip-staled rather than written, and its flag clears all the
+    // same — so `applied` can read 0 over a repair that genuinely closed the gap.
+    banner.done(`Caught up on ${repaired.resolved.toLocaleString()} row(s) this device had `
+      + 'downloaded but never applied.')
     return null
   }
   banner.done()
@@ -338,7 +357,14 @@ export const migratePropertiesToBlocksAction = ({repo}: {repo: Repo}): ActionCon
     let ineligible = await passIsUnfit(repo, {workspaceId, needsFlip: !childBacked})
     // The one refusal with a local remedy: clear it and ask again, rather than
     // sending the operator away to run a verb by hand and come back.
-    if (ineligible?.rematerializable) {
+    //
+    // The workspace is re-read HERE rather than trusted from the top: two
+    // awaited reads have happened since, and this is the first EXPENSIVE step —
+    // a pass that runs for minutes and grows the block cache. Starting one for a
+    // workspace the operator has already left is the one thing worth a second
+    // comparison. (The migration itself is guarded further down, after the
+    // dialog, which is the longer pause but not the costly one.)
+    if (ineligible?.rematerializable && repo.activeWorkspaceId === workspaceId) {
       ineligible = await repairThenRecheck(repo, {workspaceId, needsFlip: !childBacked})
     }
     if (ineligible !== null) {

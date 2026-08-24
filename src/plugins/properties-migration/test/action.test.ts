@@ -198,6 +198,65 @@ describe('migrate_properties_to_blocks action', () => {
     expect(runWorkspaceBackfillNow).toHaveBeenCalled()
   })
 
+  it('counts the gap it CLOSED, not only the rows it wrote', async () => {
+    // A flagged row that a pending local edit supersedes is skip-staled rather
+    // than written, and its flag clears all the same — so `applied` reads 0 over
+    // a repair that genuinely closed the gap, and the banner would deny doing
+    // the thing it just did.
+    const {repo, workspaceViewGap, rematerializeWorkspace} = makeRepo()
+    workspaceViewGap.mockResolvedValueOnce(STRANDED)
+    rematerializeWorkspace.mockResolvedValue(
+      pass({scanned: 4, applied: 0, skippedStale: 4, resolved: 4, unappliedBefore: 4}))
+
+    await invoke(repo)
+
+    expect(progressHandle.done).toHaveBeenCalledWith(expect.stringContaining('4 row(s)'))
+  })
+
+  it('settles the banner when the re-check after a repair throws', async () => {
+    // The banner has no duration. An uncaught throw between the repair and the
+    // gate leaves "Catching up…" spinning over a gesture that has stopped —
+    // the same failure the post-dialog re-check is already caught for.
+    const {repo, workspaceViewGap, rematerializeWorkspace} = makeRepo()
+    workspaceViewGap.mockResolvedValueOnce(STRANDED).mockRejectedValueOnce(new Error('db is gone'))
+    rematerializeWorkspace.mockResolvedValue(pass({resolved: 1}))
+
+    await invoke(repo)
+
+    expect(progressHandle.fail).toHaveBeenCalledWith(expect.stringContaining('could not re-check'))
+    expect(progressHandle.done).not.toHaveBeenCalledWith(expect.stringContaining('Caught up'))
+  })
+
+  it('does not claim nothing changed when the repair stopped partway', async () => {
+    // Its windows commit independently, so a rejection can still have rewritten
+    // local rows. Every other refusal here may say "Nothing was changed"; after
+    // this one that sentence is false, so the banner says what really happened.
+    const {repo, workspaceViewGap, rematerializeWorkspace} = makeRepo()
+    workspaceViewGap.mockResolvedValue(STRANDED)
+    rematerializeWorkspace.mockRejectedValue(new Error('window failed'))
+
+    await invoke(repo)
+
+    expect(progressHandle.fail).toHaveBeenCalledWith(
+      expect.stringContaining('Any rows it did reach are materialized'))
+  })
+
+  it('does not start a minutes-long repair for a workspace the operator has left', async () => {
+    // Two awaited reads happen before this point, and the repair is the first
+    // EXPENSIVE step — minutes of writes plus block-cache growth. The migration's
+    // own guard is after the dialog, which is the longer pause but not the
+    // costly one.
+    const {repo, workspaceViewGap, rematerializeWorkspace} = makeRepo()
+    workspaceViewGap.mockImplementation(async () => {
+      ;(repo as unknown as {activeWorkspaceId: string}).activeWorkspaceId = 'ws-2'
+      return STRANDED
+    })
+
+    await invoke(repo)
+
+    expect(rematerializeWorkspace).not.toHaveBeenCalled()
+  })
+
   it('leaves a transient gap alone, because the drain is already on it', async () => {
     // A re-materialization would queue BEHIND the drain that is mid-flight, so
     // it costs a wait and changes nothing. Waiting is the remedy here.
