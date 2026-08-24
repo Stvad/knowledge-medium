@@ -219,9 +219,13 @@ describe('migrate_properties_to_blocks action', () => {
     expect(showInfo).not.toHaveBeenCalledWith(expect.stringContaining('Nothing was changed'))
   })
 
-  it('continues in one gesture when the repair rewrote nothing', async () => {
-    // Every flagged row skip-staled: the flags cleared, no local row was
-    // rewritten, so there is no reverted snapshot to keep out of the migration.
+  it('ends the gesture whenever a repair ran, even one that wrote nothing', async () => {
+    // No "it wrote nothing, so carry on" exception, because such an exception
+    // has to read THIS invocation's counts: two invocations racing both pass the
+    // gap check, the observer serializes their passes, and the second sees flags
+    // the first cleared — reporting 0 written while carrying the first one's
+    // snapshot. The rule is about the gesture, not about a count, so nothing can
+    // race it. Costs one click in the rare all-skip-staled case.
     const {repo, runWorkspaceBackfillNow, workspaceViewGap, rematerializeWorkspace} = makeRepo()
     workspaceViewGap.mockResolvedValueOnce(STRANDED)
     rematerializeWorkspace.mockResolvedValue(
@@ -229,7 +233,8 @@ describe('migrate_properties_to_blocks action', () => {
 
     await invoke(repo)
 
-    expect(runWorkspaceBackfillNow).toHaveBeenCalled()
+    expect(runWorkspaceBackfillNow).not.toHaveBeenCalled()
+    expect(showInfo).toHaveBeenCalledWith(expect.stringContaining('Run the migration again'))
   })
 
   it('counts the gap it CLOSED, not only the rows it wrote', async () => {

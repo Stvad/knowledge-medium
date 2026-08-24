@@ -214,14 +214,15 @@ const repairThenRecheck = async (
     }
   }
   if (stillUnfit === null) {
-    // `resolved`, not `applied`, for the COUNT: a flagged row that a pending
-    // local edit supersedes is skip-staled rather than written, and its flag
-    // clears all the same, so `applied` can read 0 over a repair that closed the
-    // gap. `applied` is the right question for whether to CONTINUE, though —
-    // it is exactly "did this rewrite local rows", and see the header for why a
-    // rewrite must not be read straight into the migration.
     banner.done(describeCatchUp(repaired) ?? undefined)
-    if (repaired.applied === 0) return null
+    // ALWAYS, with no "it wrote nothing, so carry on" exception. Such an
+    // exception has to read this invocation's counts, and they answer a
+    // narrower question than the rule needs: two invocations racing here both
+    // pass the gap check, the observer serializes their passes, and the second
+    // sees flags the FIRST cleared — so it reports having written nothing and
+    // would carry the first one's snapshot into the migration. "A repair ran,
+    // so this gesture ends" is a rule about the gesture rather than about a
+    // count, and nothing can race it.
     return {
       reason: withCatchUp(repaired, 'Run the migration again to continue.'),
       retryable: true,
