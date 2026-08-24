@@ -36,63 +36,86 @@ export const errorMessage = (error: unknown): string =>
 
 /**
  * The half of the bridge's unknown-token error that only the CLI can supply:
- * WHICH profiles are paired on this machine.
+ * WHICH profiles are paired on this machine. The bridge names "a token/profile
+ * from another workspace or browser profile" among its causes but cannot check
+ * it — profile names live in a local file the server never reads.
  *
- * The bridge lists "a token/profile from another workspace or browser profile"
- * among the causes and stops there, because profile names live in a local file
- * it does not read. An agent reading that text concludes the bridge is down —
- * it is the one cause the message names but cannot help you check.
- *
- * Says nothing suggestive when the profile in use is the only one saved: a
- * retry that cannot work is worse than silence, since it sends the reader
- * round a loop back to the same error.
+ * Never suggests a retry that cannot work. `AGENT_RUNTIME_TOKEN` wins over
+ * every stored profile in `resolveToken`, so under an override `--profile X`
+ * sends the same token and reproduces the 401; and with one saved profile there
+ * is nothing to switch to. Both cases say what IS actionable instead.
  */
 export const unknownTokenProfileHelp = (
-  {profiles, tokenStorePath, inUse}: {
+  {profiles, tokenStorePath, inUse, envTokenOverride}: {
     profiles: readonly {name: string; savedAt?: number | null}[]
     tokenStorePath: string
     /** The profile actually selected — the CALLER's knowledge, never inferred
-     *  from which stored entry matched. A selected profile with no stored entry
-     *  is reachable (see the unsaved branch below), and deriving the name from
-     *  the store rendered it as "none", which is false. */
+     *  from which stored entry matched, which renders as "none" when the
+     *  selected profile has no entry. */
     inUse: string
+    /** Whether `AGENT_RUNTIME_TOKEN` supplied the token. Passed in rather than
+     *  read here so this stays pure, and stated as a FACT rather than inferred
+     *  from a missing store entry — the two coincide but only one is checkable. */
+    envTokenOverride: boolean
   },
 ): string => {
+  if (envTokenOverride) {
+    return 'AGENT_RUNTIME_TOKEN is set, so that token is sent whatever `--profile` says '
+      + `(\`resolveToken\` prefers it over every profile in ${tokenStorePath}). Unset it, or `
+      + 'replace it with a token the app tab has registered.'
+  }
   if (profiles.length === 0) {
     return `No token profiles are saved in ${tokenStorePath} — pair one with \`kmagent connect\`.`
   }
   const others = profiles.filter(profile => profile.name !== inUse)
   if (others.length === 0) {
-    return `\`${inUse}\` is the only saved profile in ${tokenStorePath}, so the profile is not `
-      + 'the cause — focus the app tab, or re-pair with `kmagent connect`.'
+    return `\`${inUse}\` is the only profile saved in ${tokenStorePath}, so there is no other `
+      + 'saved profile to switch to — focus the app tab, or re-pair this one with '
+      + '`kmagent connect` in case its token was revoked or belongs to another workspace.'
   }
-  // A selected profile absent from the store means the token came from
-  // AGENT_RUNTIME_TOKEN: with no env token `resolveToken` returns null and the
-  // CLI refuses before it ever reaches the bridge. So the profile is not the
-  // lead here, and saying so beats listing alternatives to switch to.
-  const unsaved = !profiles.some(profile => profile.name === inUse)
-  // ONE suggestion, the most recently paired. A year of test pairings leaves
-  // ~20 profiles in a real store, and a `--profile X or --profile Y` chain over
-  // all of them buries the answer it is trying to give. The full list still
-  // goes out, so a half-remembered name stays findable.
+  // ONE suggestion, the most recently paired. A real store accumulates ~20
+  // profiles from past test pairings, and a `--profile X or --profile Y` chain
+  // over all of them buries the answer. The full list still goes out, so a
+  // half-remembered name stays findable.
   const likeliest = [...others]
     .sort((a, b) => (b.savedAt ?? 0) - (a.savedAt ?? 0))[0]!
   return `Saved profiles in ${tokenStorePath}: ${profiles.map(p => p.name).join(', ')} `
-    + `(in use: \`${inUse}\`${unsaved
-      ? ', which has no saved token, so the one being sent came from AGENT_RUNTIME_TOKEN'
-      : ''}). If the app tab is paired under another one, retry with `
+    + `(in use: \`${inUse}\`). If the app tab is paired under another one, retry with `
     + `\`--profile ${likeliest.name}\` (most recently paired) or another from that list.`
 }
 
-/** Appends {@link unknownTokenProfileHelp} to a bridge error that is the
- *  unknown-token one, and returns any other message untouched. */
+/** A non-2xx from the bridge, carrying the STATUS so callers can classify on
+ *  the protocol instead of on message text. */
+export class BridgeHttpError extends Error {
+  constructor(message: string, readonly status: number) {
+    super(message)
+    this.name = 'BridgeHttpError'
+  }
+}
+
+/** Is this the bridge refusing an unregistered token?
+ *
+ *  Status AND text, because neither alone is sound: `kmagent eval` runs
+ *  arbitrary code in the app and can throw a message containing the marker
+ *  while auth succeeded, and 401 alone covers other refusals with their own
+ *  remedies. Read `status` structurally rather than by `instanceof`, which does
+ *  not survive a realm boundary (see the MCP server's worker paths). */
+const isUnknownTokenError = (error: unknown): boolean =>
+  typeof error === 'object' && error !== null
+  && (error as {status?: unknown}).status === 401
+  && errorMessage(error).includes(UNKNOWN_TOKEN_MARKER)
+
+/** Appends {@link unknownTokenProfileHelp} to the bridge's unknown-token 401,
+ *  and returns any other error's message untouched. */
 export const withUnknownTokenHelp = (
-  message: string,
+  error: unknown,
   help: () => Promise<string>,
-): Promise<string> =>
-  message.includes(UNKNOWN_TOKEN_MARKER)
+): Promise<string> => {
+  const message = errorMessage(error)
+  return isUnknownTokenError(error)
     ? help().then(extra => `${message}\n${extra}`, () => message)
     : Promise.resolve(message)
+}
 
 export const sleep = (ms: number): Promise<void> =>
   new Promise(resolve => setTimeout(resolve, ms))
@@ -248,7 +271,10 @@ export const requestJson = async <T = unknown>(
   const body = text ? JSON.parse(text) : null
 
   if (!response.ok) {
-    throw new Error(body?.error ?? `Request failed with status ${response.status}`)
+    throw new BridgeHttpError(
+      body?.error ?? `Request failed with status ${response.status}`,
+      response.status,
+    )
   }
 
   return body as T

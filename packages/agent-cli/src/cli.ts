@@ -1103,11 +1103,12 @@ const main = async () => {
 
 main().catch(async (error: unknown) => {
   process.stderr.write(`${await withUnknownTokenHelp(
-    errorMessage(error),
+    error,
     async () => unknownTokenProfileHelp({
       profiles: await listStoredProfiles(),
       tokenStorePath,
       inUse: selectedProfileName,
+      envTokenOverride: (process.env.AGENT_RUNTIME_TOKEN ?? '').trim() !== '',
     }),
   )}\n`)
   process.exitCode = 1
