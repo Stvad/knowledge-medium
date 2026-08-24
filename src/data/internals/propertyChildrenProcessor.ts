@@ -367,12 +367,17 @@ export interface MaterializeOptions {
  *  being is STRANDED — minting left it under a tombstoned value child nothing
  *  would ever revive, so no path could reach it again.
  *
- *  Ambiguity mints. Two tombstoned rows for one definition (an unset/re-set
- *  cycle before the owner was deleted) would need a pick that is both
- *  deterministic across replicas and right about which was live last; ordering
- *  gives the first but not the second, and guessing wrong resurrects a row the
- *  user deleted on purpose. Content converges either way — only identity is
- *  lost — so the ambiguous case keeps the minting behaviour. */
+ *  ONE ambiguity rule, applied at both levels: revive only what is unambiguous.
+ *  Several tombstones for one definition (an unset/re-set cycle before the
+ *  owner was deleted), or several tombstoned values under one field row (a
+ *  divergent conflict peer the user resolved by deleting it), are
+ *  indistinguishable at revival time from rows the owner's own delete took
+ *  down. Picking among them would need a rule that is deterministic across
+ *  replicas AND right about which was live last; ordering gives the first, not
+ *  the second, and guessing wrong resurrects a row the user deleted on purpose.
+ *  So the ambiguous case revives nothing and the caller's loop mints from the
+ *  cell — content converges either way, only identity is lost, and the
+ *  tombstones stay reachable under a live parent instead of resurrected. */
 const reviveTombstonedFieldRow = async (
   tx: Tx,
   fieldId: string,
@@ -382,10 +387,11 @@ const reviveTombstonedFieldRow = async (
   if (matching.length !== 1) return false
   const fieldRow = matching[0]!
   await tx.restore(fieldRow.id)
-  for (const value of await tx.deletedChildrenOf(fieldRow.id)) {
-    if (value.isFieldForm === true) continue   // nested machinery, not a value
-    await tx.restore(value.id)
-  }
+  // Bit-filtered like every §9 value read: a nested marked row is the field
+  // row's OWN machinery, never one of its values.
+  const values = (await tx.deletedChildrenOf(fieldRow.id))
+    .filter(value => value.isFieldForm !== true)
+  if (values.length === 1) await tx.restore(values[0]!.id)
   return true
 }
 

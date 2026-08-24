@@ -1889,6 +1889,39 @@ describe('revival re-materializes property children (#778)', () => {
     expect(values[0]!.content).toBe('moved-on')
   })
 
+  it('does not revive a value the user deleted before the owner went down', async () => {
+    // A field row keeps DIVERGENT value siblings as a surfaced conflict, so a
+    // user can resolve one by deleting it. The owner's later subtree delete
+    // tombstones the survivor too — and at revival time both are just
+    // tombstoned value children, with nothing structural telling them apart.
+    // Reviving both would put the resolved conflict back.
+    //
+    // So the ambiguity rule is the same at both levels: revive only what is
+    // unambiguous. Several tombstoned values revive none, and the loop mints
+    // one from the cell; the tombstones stay reachable under the live field row
+    // rather than resurrected.
+    await seedWorkspace('children')
+    const repo = await seedMaterializedProperty()
+    const [field] = await liveFieldRows('p')
+    await repo.tx(tx => tx.create({
+      id: 'peer', workspaceId: WS, parentId: field!.id, orderKey: 'zz', content: 'rival',
+    }), {scope: ChangeScope.BlockDefault})
+    await repo.tx(tx => tx.delete('peer'), {scope: ChangeScope.BlockDefault})
+
+    await deleteAndRestore(repo)
+
+    // Field-row identity still survives — only the value level was ambiguous.
+    const fields = await liveFieldRows('p')
+    expect(fields).toHaveLength(1)
+    expect(fields[0]!.id).toBe(field!.id)
+    const live = (await childrenRows(field!.id)).filter(v => v.deleted === 0)
+    expect(live.map(v => v.content)).toEqual(['done'])
+    const peer = await sharedDb.db.get<{deleted: number; parent_id: string}>(
+      'SELECT deleted, parent_id FROM blocks WHERE id = ?', ['peer'])
+    expect(peer.deleted).toBe(1)
+    expect(peer.parent_id).toBe(field!.id)
+  })
+
   it('mints instead of reviving when the tombstone is ambiguous', async () => {
     // Two tombstoned field rows for one definition — an unset/re-set cycle
     // before the owner was deleted. Picking one would need a rule that is
