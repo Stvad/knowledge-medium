@@ -73,15 +73,21 @@ export const unknownTokenProfileHelp = (
       + 'saved profile to switch to — focus the app tab, or re-pair this one with '
       + '`kmagent connect` in case its token was revoked or belongs to another workspace.'
   }
-  // ONE suggestion, the most recently paired. A real store accumulates ~20
-  // profiles from past test pairings, and a `--profile X or --profile Y` chain
-  // over all of them buries the answer. The full list still goes out, so a
-  // half-remembered name stays findable.
-  const likeliest = [...others]
-    .sort((a, b) => (b.savedAt ?? 0) - (a.savedAt ?? 0))[0]!
+  // ONE suggestion: a store accumulates a profile per past pairing, so a
+  // `--profile X or --profile Y` chain over all of them buries the answer. The
+  // full list still goes out, so a half-remembered name stays findable.
+  //
+  // Claim recency only when a timestamp actually ranks the candidates. Undated
+  // entries (the legacy single-token store shape) all compare equal, which makes
+  // the pick alphabetical — labelling that "most recently paired" would dress an
+  // arbitrary choice as evidence.
+  const ranked = [...others].sort((a, b) => (b.savedAt ?? 0) - (a.savedAt ?? 0))
+  const likeliest = ranked[0]!
+  const byRecency = typeof likeliest.savedAt === 'number'
   return `Saved profiles in ${tokenStorePath}: ${profiles.map(p => p.name).join(', ')} `
     + `(in use: \`${inUse}\`). If the app tab is paired under another one, retry with `
-    + `\`--profile ${likeliest.name}\` (most recently paired) or another from that list.`
+    + `\`--profile ${likeliest.name}\`${byRecency ? ' (most recently paired)' : ''} `
+    + 'or another from that list.'
 }
 
 /** A non-2xx from the bridge, carrying the STATUS so callers can classify on
@@ -90,6 +96,21 @@ export class BridgeHttpError extends Error {
   constructor(message: string, readonly status: number) {
     super(message)
     this.name = 'BridgeHttpError'
+  }
+}
+
+/** No token is configured for the selected profile — refused LOCALLY, before
+ *  any request. Typed so the profile listing can attach to it as well: this is
+ *  the commonest shape of the failure and it never reaches the bridge. `code`
+ *  rather than `instanceof`, which does not survive a realm boundary. */
+export class MissingTokenError extends Error {
+  readonly code = 'missing-token'
+  constructor(readonly profileName: string) {
+    super(
+      `No agent token configured for profile "${profileName}". `
+      + `Run \`kmagent --profile ${profileName} connect\` to pair the CLI with the app.`,
+    )
+    this.name = 'MissingTokenError'
   }
 }
 
@@ -105,14 +126,19 @@ const isUnknownTokenError = (error: unknown): boolean =>
   && (error as {status?: unknown}).status === 401
   && errorMessage(error).includes(UNKNOWN_TOKEN_MARKER)
 
-/** Appends {@link unknownTokenProfileHelp} to the bridge's unknown-token 401,
- *  and returns any other error's message untouched. */
-export const withUnknownTokenHelp = (
+const isMissingTokenError = (error: unknown): boolean =>
+  typeof error === 'object' && error !== null
+  && (error as {code?: unknown}).code === 'missing-token'
+
+/** Appends {@link unknownTokenProfileHelp} to the two failures a profile can
+ *  explain — the bridge's unknown-token 401 and the local missing-token
+ *  refusal — and returns any other error's message untouched. */
+export const withProfileHelp = (
   error: unknown,
   help: () => Promise<string>,
 ): Promise<string> => {
   const message = errorMessage(error)
-  return isUnknownTokenError(error)
+  return isUnknownTokenError(error) || isMissingTokenError(error)
     ? help().then(extra => `${message}\n${extra}`, () => message)
     : Promise.resolve(message)
 }
@@ -367,9 +393,7 @@ export const createBridgeClient = (options: BridgeClientOptions = {}): BridgeCli
   const requireToken = async (): Promise<string> => {
     const token = await clientResolveToken()
     if (!token) {
-      throw new Error(
-        `No agent token configured for profile "${profileName}". Run \`kmagent --profile ${profileName} connect\` to pair the CLI with the app.`,
-      )
+      throw new MissingTokenError(profileName)
     }
     return token
   }

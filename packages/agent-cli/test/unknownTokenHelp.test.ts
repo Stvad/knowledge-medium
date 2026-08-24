@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import {
   BridgeHttpError,
+  MissingTokenError,
   UNKNOWN_TOKEN_MARKER,
   unknownTokenProfileHelp,
-  withUnknownTokenHelp,
+  withProfileHelp,
 } from '../src/client.js'
 
 const store = '/tmp/agent-token.json'
@@ -25,10 +26,8 @@ describe('unknownTokenProfileHelp', () => {
   })
 
   it('suggests ONE retry — the most recently paired — not a chain of them', async () => {
-    // Measured against the real store: 19 profiles accumulate over a year of
-    // test pairings, and enumerating a `--profile X or --profile Y` for each
-    // buries the answer in the suggestion. Recency is the signal that the tab
-    // in front of you was paired under it.
+    // A store accumulates a profile per past pairing, so a `--profile X or
+    // --profile Y` chain over all of them buries the answer it is giving.
     const help = unknownTokenProfileHelp({
       profiles: [
         {name: 'default', savedAt: 50},
@@ -48,7 +47,11 @@ describe('unknownTokenProfileHelp', () => {
     expect(help).toContain('middling')
   })
 
-  it('still suggests a retry when no profile carries a savedAt', async () => {
+  it('suggests a retry without claiming recency when no timestamp is usable', async () => {
+    // Undated entries come from the legacy single-token store shape. With every
+    // savedAt absent the comparator ranks nothing, so the pick is alphabetical —
+    // calling that "most recently paired" dresses an arbitrary choice as
+    // evidence and can point at the wrong profile.
     const help = unknownTokenProfileHelp({
       profiles: [{name: 'default', savedAt: null}, {name: 'other', savedAt: null}],
       tokenStorePath: store,
@@ -57,6 +60,19 @@ describe('unknownTokenProfileHelp', () => {
     })
 
     expect(help).toContain('--profile other')
+    expect(help).not.toMatch(/recently paired/i)
+  })
+
+  it('keeps the recency claim when a timestamp actually ranks the options', async () => {
+    const help = unknownTokenProfileHelp({
+      profiles: [{name: 'default', savedAt: 1}, {name: 'zeta', savedAt: 9}, {name: 'alpha'}],
+      tokenStorePath: store,
+      inUse: 'default',
+      envTokenOverride: false,
+    })
+
+    expect(help).toContain('--profile zeta')
+    expect(help).toMatch(/recently paired/i)
   })
 
   it('says the profile is NOT the problem when the one in use is the only one', async () => {
@@ -121,19 +137,19 @@ describe('unknownTokenProfileHelp', () => {
   })
 })
 
-describe('withUnknownTokenHelp', () => {
+describe('withProfileHelp', () => {
   const help = async () => 'PROFILE-HELP'
 
   it('leaves an unrelated error alone', async () => {
     // Every CLI failure goes through this path — a stray append would put a
     // profile listing under "block not found" and read as the cause.
-    expect(await withUnknownTokenHelp(new Error('Unknown command `frobnicate`'), help))
+    expect(await withProfileHelp(new Error('Unknown command `frobnicate`'), help))
       .toBe('Unknown command `frobnicate`')
   })
 
   it('appends to the bridge\'s 401', async () => {
     const error = new BridgeHttpError(`${UNKNOWN_TOKEN_MARKER} Common causes: …`, 401)
-    expect(await withUnknownTokenHelp(error, help)).toContain('PROFILE-HELP')
+    expect(await withProfileHelp(error, help)).toContain('PROFILE-HELP')
   })
 
   it('ignores the marker when it did not come from a 401', async () => {
@@ -141,7 +157,15 @@ describe('withUnknownTokenHelp', () => {
     // containing this sentence while submission and auth both succeeded.
     // Classifying on text alone appended token guidance to that.
     const error = new Error(`${UNKNOWN_TOKEN_MARKER} thrown by evaluated code`)
-    expect(await withUnknownTokenHelp(error, help)).not.toContain('PROFILE-HELP')
+    expect(await withProfileHelp(error, help)).not.toContain('PROFILE-HELP')
+  })
+
+  it('enriches the LOCAL missing-token error too', async () => {
+    // The commonest shape of this failure never reaches the bridge: an unpaired
+    // selected profile is refused locally, with no 401 and no marker. Leaving it
+    // bare is what made AGENTS.md's promise false in its own example case.
+    expect(await withProfileHelp(new MissingTokenError('default'), help))
+      .toContain('PROFILE-HELP')
   })
 
   it('still reports the original error when reading the token store throws', async () => {
@@ -149,7 +173,7 @@ describe('withUnknownTokenHelp', () => {
     // possible, and swallowing the real error to report THAT would be a strict
     // loss over not having this at all.
     const error = new BridgeHttpError(`${UNKNOWN_TOKEN_MARKER} Common causes: …`, 401)
-    expect(await withUnknownTokenHelp(error, async () => { throw new Error('EACCES') }))
+    expect(await withProfileHelp(error, async () => { throw new Error('EACCES') }))
       .toBe(error.message)
   })
 })

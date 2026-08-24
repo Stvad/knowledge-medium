@@ -29,8 +29,9 @@ import {
   errorMessage,
   startBridgeInBackground,
   listStoredProfiles as listProfilesInStore,
+  MissingTokenError,
   unknownTokenProfileHelp,
-  withUnknownTokenHelp,
+  withProfileHelp,
   loadStoredToken as loadStoredTokenFor,
   normalizeProfileName,
   removeStoredToken as removeStoredTokenFor,
@@ -357,7 +358,7 @@ const whoamiWithToken = (token: string): Promise<WhoamiInfo> =>
 const reloadAppAndWait = async ({timeoutMs = 30_000} = {}) => {
   const token = await resolveToken()
   if (!token) {
-    throw new Error(`No agent token configured for profile "${selectedProfileName}". Run \`kmagent --profile ${selectedProfileName} connect\` first.`)
+    throw new MissingTokenError(selectedProfileName)
   }
 
   const before = await whoamiWithToken(token).catch(() => null)
@@ -592,10 +593,7 @@ cli
     await ensureBridgeRunning()
     const token = await resolveToken()
     if (!token) {
-      throw new Error(
-        `No agent token configured for profile "${selectedProfileName}". `
-        + `Run \`kmagent --profile ${selectedProfileName} connect\` first.`,
-      )
+      throw new MissingTokenError(selectedProfileName)
     }
     const info = await whoamiWithToken(token)
     process.stdout.write(`${JSON.stringify(info, null, 2)}\n`)
@@ -1102,7 +1100,7 @@ const main = async () => {
 }
 
 main().catch(async (error: unknown) => {
-  process.stderr.write(`${await withUnknownTokenHelp(
+  process.stderr.write(`${await withProfileHelp(
     error,
     async () => unknownTokenProfileHelp({
       profiles: await listStoredProfiles(),
