@@ -76,12 +76,11 @@ describe('formatTokenContext', () => {
   })
 
   it('asserts no cause and recommends no remedy', () => {
-    // The regression guard for this module's whole reason to exist. Four review
-    // rounds produced twelve findings, every one an INFERENCE that was false in
-    // some reachable state — a recency claim over undated entries, a profile
-    // ruled out as the cause when it was the cause, a re-pair command aimed at
-    // the wrong profile. Facts have no such failure mode, so this file states
-    // facts. Re-adding advice reintroduces the class, not one bug.
+    // The regression guard for this module's reason to exist. Advice about a
+    // cause or a remedy has to be true in every combination of the state it is
+    // drawn from, and it repeatedly was not; facts have no such failure mode.
+    // Re-adding advice reintroduces the class, not one bug — which is why this
+    // asserts over every input shape rather than one.
     const outputs = [true, false].flatMap(envTokenOverride =>
       [dated, [], null, [{name: 'legacy'}]].map(profiles => formatTokenContext({
         profiles, tokenStorePath: store, selected: 'alpha', envTokenOverride,

@@ -39,14 +39,12 @@ export const errorMessage = (error: unknown): string =>
  * are paired on this machine, which one is selected, and whether an env token
  * is overriding the selection. Printed underneath that error.
  *
- * FACTS ONLY — no cause, no recommended remedy. Composing a diagnosis out of
- * this state is what the first version did, and every state combination is
- * another sentence that can be false: "most recently paired" over undated
- * entries ranks nothing, "the profile is not the cause" is wrong when the sole
- * saved token was revoked, and a bare `kmagent connect` re-pairs `default`
- * rather than the profile that failed. Twelve review findings, all of that
- * shape. The reader draws the conclusion from the listing in one glance; the
- * tool cannot get a fact wrong.
+ * FACTS ONLY — no cause, no recommended remedy. A diagnosis composed from this
+ * state has to hold across every combination of it, and the combinations
+ * outnumber the branches you would write: "most recently paired" ranks nothing
+ * when entries are undated, and a bare `kmagent connect` re-pairs `default`
+ * rather than the profile that failed. A printed fact has no such failure mode,
+ * and the reader draws the conclusion from the listing in one glance.
  *
  * `profiles: null` means the store could not be read. It is a value rather
  * than a throw because the override and the selection are true regardless —
