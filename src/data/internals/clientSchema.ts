@@ -1669,19 +1669,27 @@ const readOptimizeRows = (result: unknown): string[] | null => {
     .filter((sql): sql is string => typeof sql === 'string')
 }
 
-/** Serializes the two ANALYZE entry points against each other and against
+/** Serializes the three ANALYZE entry points against each other and against
  *  themselves.
  *
- *  Four schedulers point at them (repoProvider's boot and first-sync checks, the
- *  Roam importer, the manual command) and the boot/first-sync pair has
- *  overlapped before. Two concurrent passes are two multi-second parks of the
- *  single SQLite worker to reach one settled `sqlite_stat1`, and the one-shot
- *  repair in {@link runAnalyzeIfStale} would run its full ANALYZE twice — its
- *  marker is only written after the pass it gates finishes.
+ *  Five schedulers point at them (repoProvider's boot check, first-sync check
+ *  and repair, the Roam importer, the manual command) and the boot/first-sync
+ *  pair has overlapped before. Two concurrent passes are two multi-second parks
+ *  of this tab's SQLite connection to reach one settled `sqlite_stat1`, and
+ *  {@link runSampledStatsRepair} would run its full ANALYZE twice — its marker
+ *  is written only after the pass it gates finishes.
  *
- *  Scope, stated because it is not total: this serializes callers in ONE tab.
- *  PowerSync's shared worker owns the connection across tabs, so two tabs can
- *  still overlap; the cost there is duplicated work, not a wrong result. */
+ *  Scope, stated because it is not total: this is a module-level chain, so it
+ *  coordinates one TAB. Tabs do not share a connection here (each opens a
+ *  dedicated worker — see {@link RESET_ANALYZE_SAMPLE_LIMIT_SQL}), they share
+ *  the database file, and `navigator.locks` keeps their writes apart. So two
+ *  tabs can each run a pass: duplicated work, not a wrong result.
+ *
+ *  Corollary worth knowing before reasoning about staleness across tabs:
+ *  writing `sqlite_stat1` does NOT bump `schema_version`, so a tab that was
+ *  already open when another tab analyzed keeps its old query plans for the
+ *  life of its connection. It heals on reload, and the marker in the shared DB
+ *  means it will not redo the repair itself. */
 let analyzeChain: Promise<unknown> = Promise.resolve()
 const serializeAnalyze = <T>(run: () => Promise<T>): Promise<T> => {
   // `.then(run, run)`, both arms deliberately: a throwing pass must not poison
