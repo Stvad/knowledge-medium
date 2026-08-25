@@ -203,6 +203,26 @@ describe('appendClientRecord retention', () => {
     expect(await liveIds()).toEqual([fresh, ...[...ids].reverse()])
   })
 
+  // The append commits the record and then AWAITS a retention scan, so a caller
+  // that claims ownership from the return value leaves the row readable but
+  // unclaimed for the length of that scan. The reader excludes this session's
+  // record by id, so anything reading in that window counts the live session
+  // twice — once live, once as its own stored copy.
+  it('reports the record before yielding to the retention pass', async () => {
+    const order: string[] = []
+    const realTx = repo.tx.bind(repo)
+    vi.spyOn(repo, 'tx').mockImplementation(async (fn, opts) => {
+      if (opts?.description?.endsWith('retention')) order.push('prune')
+      return realTx(fn, opts)
+    })
+    for (let i = 0; i < 3; i++) await append(3)
+    await appendClientRecord(repo, repo.tx.bind(repo), {
+      ...spec(1),
+      onCommitted: () => order.push('claimed'),
+    })
+    expect(order).toEqual(['claimed', 'prune'])
+  })
+
   // The record is already committed when the pass runs. Routing its failure
   // through the caller's failure path retries a write that landed: the startup
   // recorder appends up to three records for one boot, and the interaction

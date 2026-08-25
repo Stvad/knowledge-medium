@@ -53,6 +53,12 @@ export interface ClientRecordSpec {
   recordName: string
   /** Writes the record property. Runs inside the create transaction. */
   setProperty: (tx: Parameters<Parameters<Repo['tx']>[0]>[0], blockId: string) => Promise<void>
+  /** Called as soon as the record is DURABLE, before the retention pass this
+   *  call also runs. A caller that publishes ownership from the return value
+   *  instead leaves a window in which the row is committed and readable but
+   *  unclaimed — and the reader excludes this session's record by id, so it
+   *  would count the live session twice. */
+  onCommitted?: (blockId: string) => void
 }
 
 /** This client's group id, DERIVED — no read, no create. The reader matches on
@@ -103,7 +109,7 @@ export const appendClientRecord = async (
   const blockId = uuidv4()
   // Newest-first within the group: prepend before the current first sibling.
   const first = await repo.db.getOptional<{ order_key: string }>(
-    'SELECT order_key FROM blocks WHERE parent_id = ? AND deleted = 0 ORDER BY order_key LIMIT 1',
+    'SELECT order_key FROM blocks WHERE parent_id = ? AND deleted = 0 ORDER BY order_key, id LIMIT 1',
     [groupId],
   )
   await recordTx(async (tx) => {
@@ -122,6 +128,7 @@ export const appendClientRecord = async (
     await repo.addTypeInTx(tx, blockId, spec.recordType.id, {})
     await spec.setProperty(tx, blockId)
   }, { scope: ChangeScope.Automation, description: spec.description })
+  spec.onCommitted?.(blockId)
   // Best-effort, and deliberately AFTER the record is committed and reported.
   // Routing a retention failure through the caller's failure path retries a
   // write that already landed: the startup recorder appends up to three records
@@ -148,6 +155,11 @@ const retentionDescription = (spec: ClientRecordSpec): string => `${spec.descrip
 
 /** Drop this client's own records past `retain`.
  *
+ *  Ordered by `(order_key, id)`, the tree's canonical sibling order, so that
+ *  retention and `loadRecords` agree on which row sits at the boundary. Jitter
+ *  makes a key collision improbable enough that no test reproduces one, so the
+ *  tiebreaker is unpinned defence in depth.
+ *
  *  Only THIS client's group, so two devices can never fight over the same rows;
  *  and only rows carrying a record, for both the offset and the deletion set —
  *  counting a hand-created child toward the offset would eventually hand user
@@ -163,7 +175,7 @@ const pruneGroup = async (
     `SELECT id FROM blocks
       WHERE parent_id = ? AND deleted = 0 AND id != ?
         AND json_extract(properties_json, ?) IS NOT NULL
-      ORDER BY order_key
+      ORDER BY order_key, id
       LIMIT -1 OFFSET ?`,
     [groupId, keepId, jsonPathForProperty(spec.recordName), spec.retain],
   )

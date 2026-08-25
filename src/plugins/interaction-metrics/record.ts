@@ -374,8 +374,11 @@ export const writeInteractionSample = async (
         setProperty: async (tx, id) => {
           await tx.setProperty(id, interactionRecordProp, data, { skipMetadata: true })
         },
+        // Claimed at commit, not from the return value: the append also awaits
+        // a retention pass, and an analysis in that window would find the row
+        // readable but unclaimed and count this session twice.
+        onCommitted: (id) => setPageRecord(repo, workspaceId, id, startedAt),
       })
-      setPageRecord(repo, workspaceId, blockId, startedAt)
       return blockId
     })
   } catch (err) {

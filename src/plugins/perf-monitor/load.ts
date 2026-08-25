@@ -132,7 +132,7 @@ export const loadRecords = async <T extends { recordedAt: number }>(
          FROM blocks
         WHERE parent_id = ? AND deleted = 0
           AND json_extract(properties_json, ?) IS NOT NULL
-        ORDER BY order_key
+        ORDER BY order_key, id
         LIMIT ? OFFSET ?`,
       [recordPath, groupId, recordPath, HISTORY_LIMIT, page * HISTORY_LIMIT],
     )
