@@ -1283,9 +1283,8 @@ describe('runAnalyzeIfStale — arming (stale-stats axis)', () => {
 describe('ANALYZE serialization', () => {
   // Four schedulers point at these two functions and each statement is
   // separately awaited, so overlapping callers interleave. Two concurrent
-  // passes are two multi-second parks of the single SQLite worker to reach one
-  // settled sqlite_stat1, and the one-shot repair — whose marker is written
-  // only after its ANALYZE returns — would run twice.
+  // passes are two multi-second parks of this tab's SQLite connection to reach
+  // one settled sqlite_stat1.
   const taggedDb = (tag: string, log: string[]) => ({
     execute: async (sql: string) => {
       log.push(`${tag}:${sql.trim()}`)
@@ -1311,9 +1310,9 @@ describe('ANALYZE serialization', () => {
   it('a failed pass does not wedge the queue', async () => {
     // The chain must not stay rejected — one throwing caller would otherwise
     // take every later ANALYZE with it, for the life of the tab.
-    // Matched from the constant, not a literal: this regex was anchored to
-    // `PRAGMA optimize` exactly and silently stopped matching — so the pass
-    // succeeded and the test asserted nothing — the moment the mask was added.
+    // Derive the pattern from ANALYZE_OPTIMIZE_SQL, never a literal: a hardcoded
+    // one stops matching when the mask changes, and the injection then fails
+    // nothing while the test still passes.
     const {db: failing} = buildRecordingDb({
       failOn: new RegExp(`^${ANALYZE_OPTIMIZE_SQL.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`),
     })
