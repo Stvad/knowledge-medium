@@ -13,6 +13,8 @@ import {
   queryRegressions,
   startupRegression,
   MIN_BASELINE_SESSIONS,
+  MIN_INTERACTION_HISTORY,
+  MIN_STARTUP_HISTORY,
 } from '../series'
 
 const q = (p95Ms: number, calls = 100) => ({ calls, p50Ms: p95Ms / 2, p95Ms, totalMs: p95Ms * calls })
@@ -20,7 +22,7 @@ const q = (p95Ms: number, calls = 100) => ({ calls, p50Ms: p95Ms / 2, p95Ms, tot
 const sample = (over: Partial<InteractionComparable> = {}): InteractionComparable => ({
   writes: 100,
   queries: { 'backlinks.forBlock': q(10) },
-  fanout: { loaderRuns: 50 },
+  fanout: { loaderInvalidations: 50 },
   ...over,
 })
 
@@ -94,6 +96,30 @@ describe('queryRegressions', () => {
     expect(found).toEqual([])
   })
 
+  // A gap in the recent window would otherwise leave a single live sample
+  // standing in for the whole smoothed reading, voiding the guarantee exactly
+  // when history is thinnest.
+  it('will not judge on one sample when the recent window has gaps', () => {
+    const withQ = () => sample({ queries: { seasonal: q(10) } })
+    const without = () => sample({ queries: { other: q(10) } })
+    // Present now and in the old baseline, absent from the two most recent.
+    const found = queryRegressions(
+      sample({ queries: { seasonal: q(90) } }),
+      [without(), without(), ...history(8, withQ)],
+    )
+    expect(found).toEqual([])
+  })
+
+  // The exported minimum and what the comparison actually consumes must agree;
+  // they drifted once, and the visible symptom was the chip reporting "no
+  // slowdowns" for a comparison that could never have run.
+  it('starts comparing at exactly the advertised history length', () => {
+    const slow = () => sample({ queries: { 'backlinks.forBlock': q(80) } })
+    const at = (n: number) => queryRegressions(slow(), sinceRegressed(slow, sample, n - 1))
+    expect(at(MIN_INTERACTION_HISTORY - 1)).toEqual([])
+    expect(at(MIN_INTERACTION_HISTORY)).toHaveLength(1)
+  })
+
   it('orders the worst ratio first', () => {
     const base = () => sample({ queries: { a: q(10), b: q(10) } })
     const slow = () => sample({ queries: { a: q(30), b: q(100) } })
@@ -106,15 +132,22 @@ describe('fanoutRegression', () => {
   // The signal for an over-broad invalidation dep: every resolve stays fast, so
   // no latency metric moves -- there are simply many times more of them.
   it('flags a rise in re-resolves per write even with unchanged latencies', () => {
-    const base = () => sample({ writes: 100, fanout: { loaderRuns: 50 } })
-    const now = () => sample({ writes: 100, fanout: { loaderRuns: 400 } })
+    const base = () => sample({ writes: 100, fanout: { loaderInvalidations: 50 } })
+    const now = () => sample({ writes: 100, fanout: { loaderInvalidations: 400 } })
     expect(fanoutRegression(now(), sinceRegressed(now, base))).toMatchObject({
-      metric: 'fanout:loaderRunsPerWrite', baseline: 0.5, current: 4, ratio: 8,
+      metric: 'fanout:invalidationsPerWrite', baseline: 0.5, current: 4, ratio: 8,
     })
   })
 
   it('reports nothing for a session that has not written', () => {
     expect(fanoutRegression(sample({ writes: 0 }), history(8, sample))).toBeNull()
+  })
+
+  // No ratio exists against a zero baseline; reporting one as infinite would
+  // turn "this has always been zero" into the loudest possible finding.
+  it('treats an unchanged zero as unchanged, not as an infinite regression', () => {
+    const zero = () => sample({ writes: 100, fanout: { loaderInvalidations: 0 } })
+    expect(fanoutRegression(zero(), history(10, zero))).toBeNull()
   })
 })
 
@@ -139,6 +172,13 @@ describe('startupRegression', () => {
 
   it('stays quiet while the gap holds', () => {
     expect(startupRegression(held(11))).toBeNull()
+  })
+
+  it('starts comparing at exactly the advertised history length', () => {
+    const stepped = (n: number) =>
+      [boot(1000, 6000), boot(1000, 6100), boot(1000, 5900), ...held(n - 3)]
+    expect(startupRegression(stepped(MIN_STARTUP_HISTORY - 1))).toBeNull()
+    expect(startupRegression(stepped(MIN_STARTUP_HISTORY))).not.toBeNull()
   })
 
   it('does not fire on a single anomalous boot', () => {

@@ -17,7 +17,8 @@ import {
   fanoutRegression,
   queryRegressions,
   startupRegression,
-  MIN_BASELINE_SESSIONS,
+  MIN_INTERACTION_HISTORY,
+  MIN_STARTUP_HISTORY,
   type Regression,
 } from './series.js'
 
@@ -63,8 +64,13 @@ export const runPerfAnalysis = async (
     analyzedAt: now,
     baselineSessions: interactionBaseline.length,
     regressions,
+    // Derived from what the comparisons actually consume, not from the
+    // baseline length alone: with history that is long enough to look
+    // sufficient but too short once the recent window is taken out, every
+    // comparison necessarily returns null and the chip would report "no
+    // slowdowns" for a comparison that never ran.
     insufficientHistory:
-      interactionBaseline.length < MIN_BASELINE_SESSIONS &&
-      startup.length - 1 < MIN_BASELINE_SESSIONS,
+      interactionBaseline.length < MIN_INTERACTION_HISTORY &&
+      startup.length < MIN_STARTUP_HISTORY,
   }
 }

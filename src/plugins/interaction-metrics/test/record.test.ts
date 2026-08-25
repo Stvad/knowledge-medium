@@ -140,14 +140,24 @@ describe('buildInteractionRecord', () => {
     expect(JSON.stringify(record)).not.toContain('blk-private')
   })
 
-  it('keeps the costliest queries and drops the tail', () => {
+  // Ranking by cost and truncating would hide the transition most worth
+  // catching: a cheap query has no stored baseline, so when it becomes
+  // expensive the comparison meets a name it has never seen and reads it as a
+  // newly mounted surface rather than a regression.
+  it('keeps every measured query, including the cheap ones', () => {
     const queries: Record<string, ReturnType<typeof timing>> = {}
     for (let i = 0; i < 20; i++) queries[`q${i}`] = timing({ totalMs: i })
     const record = buildInteractionRecord(metricsFixture({ queries } as Partial<ReturnType<Repo['metrics']>>), META)
-    const kept = Object.keys(record.queries)
-    expect(kept).toHaveLength(12)
-    expect(kept).toContain('q19')
-    expect(kept).not.toContain('q0')
+    expect(Object.keys(record.queries)).toHaveLength(20)
+    expect(record.queries.q0).toBeDefined()
+  })
+
+  it('bounds the stored set so a pathological session cannot grow the record', () => {
+    const queries: Record<string, ReturnType<typeof timing>> = {}
+    for (let i = 0; i < 200; i++) queries[`q${i}`] = timing({ totalMs: i })
+    const record = buildInteractionRecord(metricsFixture({ queries } as Partial<ReturnType<Repo['metrics']>>), META)
+    expect(Object.keys(record.queries)).toHaveLength(64)
+    expect(record.queries.q199).toBeDefined()
   })
 })
 

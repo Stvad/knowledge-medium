@@ -48,6 +48,16 @@ const RECENT_WINDOW = 3
 /** Resolves needed before a query's p95 is treated as a measurement. */
 const MIN_CALLS = 20
 
+/** Sessions of stored history the interaction comparison needs before it can
+ *  return anything: the baseline, plus the entries consumed smoothing the
+ *  current reading. Exported so the "still building a baseline" state is
+ *  derived from what the comparison requires rather than re-guessed. */
+export const MIN_INTERACTION_HISTORY = MIN_BASELINE_SESSIONS + RECENT_WINDOW - 1
+
+/** Same, for startup — where the current side is drawn entirely from stored
+ *  records, so a full window is consumed rather than a window less one. */
+export const MIN_STARTUP_HISTORY = MIN_BASELINE_SESSIONS + RECENT_WINDOW
+
 export interface Regression {
   /** Stable machine id, e.g. `query:groupedBacklinks.forBlock`. */
   metric: string
@@ -77,11 +87,19 @@ const trendRegression = (
   recent: readonly number[],
   baseline: readonly number[],
 ): Regression | null => {
-  if (recent.length === 0 || baseline.length < MIN_BASELINE_SESSIONS) return null
+  // The recent side needs a FULL window, not merely a non-empty one: a caller
+  // that could only measure this metric in the live session would otherwise
+  // hand over a single sample, and the smoothing guarantee -- that one session
+  // cannot swing a verdict -- would be silently void exactly when the history
+  // is thinnest.
+  if (recent.length < RECENT_WINDOW || baseline.length < MIN_BASELINE_SESSIONS) return null
   const current = median(recent.slice(0, RECENT_WINDOW))
   const base = median(baseline)
   if (current < spec.minAbsolute) return null
-  const ratio = base === 0 ? Infinity : current / base
+  // No ratio exists against a zero baseline. Reporting one as infinite turns
+  // "this metric has always been zero" into the loudest possible finding.
+  if (base === 0) return null
+  const ratio = current / base
   if (ratio < REGRESSION_RATIO) return null
   return {
     metric: spec.metric,
@@ -125,24 +143,30 @@ export const queryRegressions = (
   return out.sort((a, b) => b.ratio - a.ratio)
 }
 
-/** Loader re-resolves per write.
+/** Handle invalidations per write.
  *
  *  This is the metric that catches the class of bug latency metrics cannot see:
  *  a query wired to an over-broad invalidation dep re-resolves on writes that
  *  do not concern it. Every individual resolve stays perfectly fast, so p95
- *  never moves — there are simply many times more of them. */
+ *  never moves — there are simply many times more of them.
+ *
+ *  `loaderInvalidations`, not `loaderRuns`: a cold `load()` from `subscribe()`
+ *  bumps `loaderRuns` too, so that counter charges ordinary mounting and
+ *  navigation to write fan-out. Measured on a real session, `loaderRuns` ran
+ *  10× `loaderInvalidations` — a session that browsed more than it wrote would
+ *  have read as regressed. */
 export const fanoutRegression = (
   current: InteractionComparable,
   history: readonly InteractionComparable[],
 ): Regression | null => {
   const perWrite = (r: InteractionComparable): number | null =>
-    r.writes > 0 ? (r.fanout.loaderRuns ?? 0) / r.writes : null
+    r.writes > 0 ? (r.fanout.loaderInvalidations ?? 0) / r.writes : null
   const now = perWrite(current)
   if (now === null) return null
   const rate = (rs: readonly InteractionComparable[]) =>
     rs.map(perWrite).filter((v): v is number => v !== null)
   return trendRegression(
-    { metric: 'fanout:loaderRunsPerWrite', label: 'query re-resolves per write', unit: 'ratio', minAbsolute: 0 },
+    { metric: 'fanout:invalidationsPerWrite', label: 'handle invalidations per write', unit: 'ratio', minAbsolute: 0 },
     [now, ...rate(history.slice(0, RECENT_WINDOW - 1))],
     rate(history.slice(RECENT_WINDOW - 1)),
   )

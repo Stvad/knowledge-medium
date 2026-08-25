@@ -24,10 +24,14 @@ import { appVersion } from '@/appVersion.js'
 import { getClientId, getDeviceLabel } from '@/utils/clientId.js'
 import { v4 as uuidv4 } from 'uuid'
 
-/** Queries retained per record, ranked by `totalMs`. The tail of a session's
- *  query set is long and uninteresting; the cost that shows up in a trend is
- *  concentrated in the head. Bounds the stored payload to a predictable size. */
-const TOP_QUERIES = 12
+/** Safety valve on the stored query set, NOT a policy about which queries
+ *  matter. Every measured query is kept, because ranking by cost and truncating
+ *  hides precisely the transition worth catching: a query that was cheap has no
+ *  stored baseline, so when it becomes expensive the comparison sees a name it
+ *  has never met and treats it as a newly mounted surface rather than a
+ *  regression. A real session measures ~13 queries in ~3KB, so this bound only
+ *  exists so a pathological future cannot grow the record without limit. */
+const MAX_QUERIES = 64
 
 /** Fat-handle outliers retained. Mirrors `handleStoreInventory.topHeavy`, which
  *  is already capped upstream; re-stated here so the record's own bound is
@@ -58,8 +62,9 @@ export interface InteractionComparable {
    *  write instead of on writes that concern it). Latency metrics are blind to
    *  that class -- each resolve looks perfectly normal. */
   writes: number
-  /** Per-query resolve timings, top `TOP_QUERIES` by `totalMs`. Keyed by query
-   *  NAME (`repo.metrics().queries` is already name-keyed, not handle-keyed). */
+  /** Per-query resolve timings for every query this session measured, keyed by
+   *  query NAME (`repo.metrics().queries` is already name-keyed, not
+   *  handle-keyed). Bounded only by `MAX_QUERIES`. */
   queries: Record<string, TimingSample>
   /** `handleStore` fan-out counters -- invalidations, handlesWalked/Matched,
    *  loaderRuns, midLoadInvalidations, reloadsAfterSettle. A flat number map,
@@ -181,7 +186,7 @@ export const interactionComparable = (
   const queries: Record<string, TimingSample> = {}
   for (const [name, timing] of Object.entries(metrics.queries)
     .sort(([, a], [, b]) => b.totalMs - a.totalMs)
-    .slice(0, TOP_QUERIES)) {
+    .slice(0, MAX_QUERIES)) {
     queries[name] = toTimingSample(timing)
   }
   return {
