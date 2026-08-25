@@ -79,8 +79,8 @@ export const summarize = (analysis: PerfAnalysis): PerfVerdict => {
     }
   }
   // The blocker is CONTEXT on whatever verdict was reached; only an unjudged
-  // series makes a verdict partial. Folding the two together turned a clean
-  // comparison in a read-only workspace into a pending one.
+  // series makes a verdict partial. Folding the two together would report a
+  // clean comparison in a read-only workspace as pending.
   const unjudged = pendingNotes(analysis)
   const notes0 = [...unjudged, ...(blocked ? [blocked] : [])]
   const notes = [...notes0]
@@ -104,9 +104,8 @@ export const summarize = (analysis: PerfAnalysis): PerfVerdict => {
     return {
       kind: 'pending',
       headline: 'Building a baseline',
-      // The pending notes say WHICH series is missing and why; dropping them
-      // for a bare count is how a workspace switch came to read as "building a
-      // baseline · 20 sessions recorded so far".
+      // A bare count does not say WHICH series is missing, or that one of them
+      // can never fill this session; the pending notes carry both.
       notes: [`${analysis.baseline.interaction} sessions recorded so far`, ...notes0],
       regressions: [],
     }

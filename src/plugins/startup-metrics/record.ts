@@ -147,8 +147,7 @@ export const buildStartupRecord = (
  *  startup-metrics ui-state subtree. Returns the new block id. */
 export const writeStartupRecord = async (repo: Repo, workspaceId: string): Promise<string | null> => {
   // Eligibility is owned by `sessionContext`, not re-derived here: the same
-  // rules bind both recorders, and this one previously checked a weaker version
-  // of them.
+  // rules bind both recorders.
   if (!(await awaitRecordingAllowed(repo, workspaceId))) return null
   try {
     return await countingOwnWrites(repo, async (recordTx) => {
@@ -190,12 +189,12 @@ const INTERACTIVE_QUIET_MS = 2_000
 
 /** If `interactive` is never reached (sync never completes, thread never quiets),
  *  still persist what we have so the earlier marks aren't lost. */
-const SETTLE_FALLBACK_MS = 60_000
+export const SETTLE_FALLBACK_MS = 60_000
 
 /** Attempts at the write itself, and the gap between them. A decline is
  *  expected while a fresh device waits for its membership row to replicate. */
 const WRITE_ATTEMPTS = 3
-const WRITE_RETRY_MS = 30_000
+export const WRITE_RETRY_MS = 30_000
 
 // Once per page session: boot happens once, and the marks are boot-relative, so
 // a later workspace switch must not record a second "startup".

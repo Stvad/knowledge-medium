@@ -140,9 +140,11 @@ export const loadRecords = async <T extends { recordedAt: number }>(
       if (!row.payload) continue
       try {
         const record = JSON.parse(row.payload) as T
-        // A missing `recordedAt` makes every sort comparison NaN, which
-        // randomises the whole window rather than merely misplacing one row.
-        if (typeof record?.recordedAt === 'number' && isUsable(record)) {
+        // `recordedAt` drives the sort, so it is checked here rather than in
+        // either series' validator. Absent makes every comparison NaN and
+        // randomises the whole window; `Infinity` (which `1e400` parses to)
+        // sorts to the front and pushes this boot out of the currency window.
+        if (Number.isFinite(record?.recordedAt) && isUsable(record)) {
           records.push({ id: row.id, record })
         }
       } catch {

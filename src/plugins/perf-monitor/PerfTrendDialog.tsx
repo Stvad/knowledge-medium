@@ -143,8 +143,8 @@ export function PerfTrendDialog({ resolve, workspaceId }: DialogContextProps<voi
             <p className="text-muted-foreground">No analysis yet this session.</p>
           ) : (
             (() => {
-              // The same verdict the status chip renders. Deciding here what an
-              // empty regression list means is how these two came to disagree.
+              // The same verdict the status chip renders — neither surface
+              // decides for itself what an empty regression list means.
               const verdict = summarize(analysis)
               return (
                 <>

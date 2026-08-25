@@ -16,9 +16,12 @@ import {
   buildStartupRecord,
   collectStartupMetricsEffect,
   resetStartupMetricsRecorded,
+  SETTLE_FALLBACK_MS,
+  STARTUP_RECORD_PATH,
   startupMetricsUIStateType,
   startupRecordProp,
   startupRecordType,
+  WRITE_RETRY_MS,
   writeStartupRecord,
 } from '../record'
 import {
@@ -278,14 +281,24 @@ describe('collectStartupMetricsEffect', () => {
       return realTx(fn, opts)
     })
 
+    // The retry sits behind a 30s production timer, advanced rather than waited
+    // out. Installed BEFORE the effect: `useFakeTimers` swaps the global timer
+    // functions and does not adopt timers already scheduled, so arming it after
+    // the first failure would leave the retry pending on the real clock.
+    // `shouldAdvanceTime` keeps the database's own async work progressing.
+    vi.useFakeTimers({ shouldAdvanceTime: true })
     markStartup('firstContentPaint')
     startEffect(WS)
+    // `waitFor` advances the mocked clock itself, which the first attempt needs:
+    // its deferrals are timers but the database work between them is real I/O
+    // that a bare `advanceTimersByTime` returns without waiting for.
     await vi.waitFor(() => expect(failures).toBe(1))
     expect(await countRecords()).toBe(0)
 
-    // Past the retry delay, the second attempt lands.
-    await vi.waitFor(async () => expect(await countRecords()).toBe(1), { timeout: 45_000 })
-  }, 60_000)
+    await vi.advanceTimersByTimeAsync(WRITE_RETRY_MS + 500)
+    vi.useRealTimers()
+    await vi.waitFor(async () => expect(await countRecords()).toBe(1))
+  }, 20_000)
 
   it('marks interactive after first paint and persists exactly one record', async () => {
     markStartup('firstContentPaint')
@@ -296,44 +309,45 @@ describe('collectStartupMetricsEffect', () => {
     expect(getStartupTimeline().marks.interactive).toBeDefined()
   })
 
+  // Asserted on the RECORD, not on a count or an elapsed window. Counting cannot
+  // pin this: with the gate deleted the pre-paint write lands, sets the
+  // once-per-boot flag, and the run still ends with exactly one record — the
+  // only difference is WHEN it was taken. The stored `firstContentPaintMs` is
+  // that difference, and it is durable rather than a race.
   it('does not record before first paint (no firstContentPaint mark)', async () => {
+    // A real pre-paint window, driven rather than slept through: far past the
+    // 250ms paint re-poll and every idle hop the write path uses, and short of
+    // the settle fallback, which is meant to record without paint. A write that
+    // starts in here builds its record from a timeline with no paint mark, and
+    // that lands in the stored row whenever the transaction finishes.
+    vi.useFakeTimers({ shouldAdvanceTime: true })
     startEffect(WS)
-    // Deliberate exception to AGENTS.md's "poll with vi.waitFor, not setTimeout"
-    // rule: that rule is for waiting on an EXPECTED round-trip. This is the
-    // inverse — a prove-absence check with no event to poll for. The recorder's
-    // only write paths are deferred (setTimeout / scheduleIdle), so an immediate
-    // count is trivially 0 even if the paint gate were broken; we must give an
-    // erroneous pre-paint write a real window to land before asserting it
-    // didn't. 50ms stays well under the effect's 60s settle-fallback. (The
-    // positive fence below proves the effect is live, so the 0 isn't a no-op.)
-    await new Promise(r => setTimeout(r, 50))
-    expect(await countRecords()).toBe(0)
-    // Then prove the effect is genuinely live (so the 0 above isn't a dead
-    // effect): once paint is marked, the same re-poll writes exactly one
-    // record — the count goes 0 → 1, never to a spurious pre-paint extra.
+    await vi.advanceTimersByTimeAsync(SETTLE_FALLBACK_MS / 2)
+
+    // Paint is marked while the clock is still mocked: switching back first
+    // would discard the effect's pending re-poll timer and leave it inert.
     markStartup('firstContentPaint')
+    await vi.advanceTimersByTimeAsync(1_000)
+    vi.useRealTimers()
     await vi.waitFor(async () => expect(await countRecords()).toBe(1))
+
+    const rows = await sharedDb.db.getAll<{ properties_json: string }>(
+      `SELECT properties_json FROM blocks
+       WHERE deleted = 0 AND json_extract(properties_json, ?) IS NOT NULL`,
+      [STARTUP_RECORD_PATH],
+    )
+    expect(rows).toHaveLength(1)
+    const record = JSON.parse(rows[0].properties_json)[startupRecordProp.name]
+    expect(record.firstContentPaintMs).toBeDefined()
   })
 
   // Boot happens once and the marks are boot-relative, so a restart — a plugin
   // toggle, a workspace switch — must not log a second startup.
   //
-  // Asserted on the CAUSE, not on a count after a wait. The write path is
-  // `scheduleIdle → record() → scheduleIdle → writeStartupRecord → several
-  // awaits`, so a count taken straight after the restart is 1 whether or not
-  // the guard holds; the previous version of this test also restarted on a
-  // second workspace and counted only under the first, so the duplicate landed
-  // in a subtree it never looked at.
-  // Boot happens once and the marks are boot-relative, so a restart — a plugin
-  // toggle, a workspace switch — must not log a second startup.
-  //
   // Asserted on the CAUSE: the restart arms nothing, so it returns no disposer.
-  // Counting records after the restart instead cannot work — the count is
-  // already 1, so both the bare assertion and a `waitFor` on it pass on the
-  // first tick, while the duplicate write is still several idle hops and awaits
-  // away. (The previous version also restarted on a second workspace while
-  // counting only under the first, so the duplicate landed where it never
-  // looked.)
+  // A count cannot pin this — it is already 1, so both a bare assertion and a
+  // `waitFor` on it pass on the first tick while the duplicate write is still
+  // several idle hops and awaits away.
   it('records at most once per session even if the effect restarts', async () => {
     markStartup('firstContentPaint')
     expect(startEffect(WS)).toBeTypeOf('function')

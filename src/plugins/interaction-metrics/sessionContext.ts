@@ -81,13 +81,12 @@ interface SessionFacts {
    *  means the counters were zeroed under us (`repo.resetMetrics()` is a
    *  supported hook), which the own-write count is a subtrahend of.
    *
-   *  Advancing it by our own writes as they land would detect slightly more
-   *  resets, and was how it worked. It also made the watermark exceed the true
-   *  counter whenever a reading landed between one of our transactions
-   *  committing and it being credited — reporting a reset that never happened,
-   *  which clears the correction and forks a second record block into the
-   *  graph. Missing a reset costs one stale comparison; inventing one writes to
-   *  the user's data. */
+   *  Advancing it by a delta instead would detect slightly more resets, and puts
+   *  it above the true counter whenever a reading lands between one of our
+   *  transactions committing and it being credited — inventing a reset, which
+   *  clears the correction and forks a second record block into the graph.
+   *  Missing a reset costs one stale comparison; inventing one writes to the
+   *  user's data. */
   writeWatermark: number
   pageRecord: { blockId: string; workspaceId: string; startedAt: number } | null
 }
