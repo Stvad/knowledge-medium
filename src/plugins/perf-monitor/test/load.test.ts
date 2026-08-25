@@ -14,10 +14,10 @@ import {
   interactionMetricsUIStateType,
   interactionRecordProp,
   interactionRecordType,
-  resetInteractionSessions,
   writeInteractionSample,
   type InteractionRecordData,
 } from '@/plugins/interaction-metrics/record'
+import { resetMetricsSession } from '@/plugins/interaction-metrics/sessionContext'
 import { INTERACTION_RECORD_PATH, loadRecords } from '../load'
 
 const WS = 'ws-1'
@@ -31,7 +31,7 @@ beforeAll(async () => { sharedDb = await createTestDb() })
 afterAll(async () => { await sharedDb.cleanup() })
 beforeEach(async () => {
   await resetTestDb(sharedDb.db)
-  resetInteractionSessions()
+  resetMetricsSession()
   repo = createTestRepo({
     db: sharedDb.db,
     user: USER,
@@ -72,7 +72,7 @@ describe('loadRecords', () => {
 
   it('returns newest first', async () => {
     await writeInteractionSample(repo, WS)
-    resetInteractionSessions() // simulate a second page session
+    resetMetricsSession() // simulate a second page session
     await writeInteractionSample(repo, WS)
     const records = await loadRecords<InteractionRecordData>(
       repo, WS, interactionMetricsUIStateType.id, PATH,

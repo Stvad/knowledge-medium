@@ -14,10 +14,10 @@ import { definitionSeedsFacet, typeSeedsFacet } from '@/data/facets'
 import {
   interactionRecordProp,
   interactionRecordType,
-  resetInteractionSessions,
   writeInteractionSample,
   type InteractionRecordData,
 } from '@/plugins/interaction-metrics/record'
+import { resetMetricsSession } from '@/plugins/interaction-metrics/sessionContext'
 import { runPerfAnalysis } from '../analyze'
 
 const WS = 'ws-1'
@@ -31,7 +31,7 @@ beforeAll(async () => { sharedDb = await createTestDb() })
 afterAll(async () => { await sharedDb.cleanup() })
 beforeEach(async () => {
   await resetTestDb(sharedDb.db)
-  resetInteractionSessions()
+  resetMetricsSession()
   repo = createTestRepo({
     db: sharedDb.db,
     user: USER,
@@ -45,7 +45,7 @@ beforeEach(async () => {
 
 /** Each call stands in for a separate past page session. */
 const pastSession = async (over?: Partial<InteractionRecordData>): Promise<string> => {
-  resetInteractionSessions()
+  resetMetricsSession()
   const id = (await writeInteractionSample(repo, WS))!
   if (over) {
     const block = repo.block(id)
@@ -68,11 +68,15 @@ const pastSession = async (over?: Partial<InteractionRecordData>): Promise<strin
  * the test passes for the wrong reason.
  */
 const seedFiringHistory = async (): Promise<void> => {
+  // Stamped far in the future so these sort above any real record an earlier
+  // step in the test left behind: the recent window is the first two entries,
+  // and a stray record carrying no writes is (correctly) not usable history —
+  // which would leave the live sample standing alone and report insufficient.
   for (let i = 0; i < 8; i++) {
-    await pastSession({ recordedAt: 1000 + i, writes: 100, fanout: { loaderInvalidations: 10 } })
+    await pastSession({ recordedAt: 3e12 + i, writes: 100, fanout: { loaderInvalidations: 10 } })
   }
   for (let i = 0; i < 2; i++) {
-    await pastSession({ recordedAt: 2000 + i, writes: 10, fanout: { loaderInvalidations: 100 } })
+    await pastSession({ recordedAt: 4e12 + i, writes: 10, fanout: { loaderInvalidations: 100 } })
   }
 }
 
@@ -101,7 +105,7 @@ describe('runPerfAnalysis', () => {
 
   it('reports a fan-out regression on an attributable session', async () => {
     await seedFiringHistory()
-    resetInteractionSessions()
+    resetMetricsSession()
     await writeInteractionSample(repo, WS)
     const analysis = await runPerfAnalysis(repo, WS, 1000)
     expect(analysis.interactionComparable).toBe(true)
@@ -110,7 +114,7 @@ describe('runPerfAnalysis', () => {
 
   it('does not compare interaction counters once the session is unattributable', async () => {
     await seedFiringHistory()
-    resetInteractionSessions()
+    resetMetricsSession()
     await writeInteractionSample(repo, WS)
     await writeInteractionSample(repo, OTHER_WS) // blends the counters
 
@@ -126,12 +130,12 @@ describe('runPerfAnalysis', () => {
     await pastSession()
     await pastSession()
     // A third session that HAS written its record: it is history for nothing.
-    resetInteractionSessions()
+    resetMetricsSession()
     await writeInteractionSample(repo, WS)
     expect((await runPerfAnalysis(repo, WS, 1000)).baselineSessions).toBe(2)
 
     // A fresh session that has NOT yet written one: all three are history.
-    resetInteractionSessions()
+    resetMetricsSession()
     expect((await runPerfAnalysis(repo, WS, 1000)).baselineSessions).toBe(3)
   })
 

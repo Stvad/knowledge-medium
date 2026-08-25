@@ -58,6 +58,19 @@ export const MIN_INTERACTION_HISTORY = MIN_BASELINE_SESSIONS + RECENT_WINDOW - 1
  *  records, so a full window is consumed rather than a window less one. */
 export const MIN_STARTUP_HISTORY = MIN_BASELINE_SESSIONS + RECENT_WINDOW
 
+/** The outcome of one comparison. `insufficient` is deliberately distinct from
+ *  `steady`: "nothing was judged" and "everything was judged and is fine" are
+ *  the same empty regression list but opposite statements, and collapsing them
+ *  is how a monitor reports a clean bill of health for a comparison that never
+ *  ran. Readiness is derived from these rather than from row counts, because a
+ *  row that carries no usable sample is not history. */
+export type TrendResult =
+  | { status: 'insufficient' }
+  | { status: 'steady' }
+  | { status: 'regressed'; regression: Regression }
+
+const INSUFFICIENT: TrendResult = { status: 'insufficient' }
+
 export interface Regression {
   /** Stable machine id, e.g. `query:groupedBacklinks.forBlock`. */
   metric: string
@@ -86,30 +99,47 @@ const trendRegression = (
   spec: { metric: string; label: string; unit: 'ms' | 'ratio'; minAbsolute: number },
   recent: readonly number[],
   baseline: readonly number[],
-): Regression | null => {
+): TrendResult => {
   // The recent side needs a FULL window, not merely a non-empty one: a caller
   // that could only measure this metric in the live session would otherwise
   // hand over a single sample, and the smoothing guarantee -- that one session
   // cannot swing a verdict -- would be silently void exactly when the history
   // is thinnest.
-  if (recent.length < RECENT_WINDOW || baseline.length < MIN_BASELINE_SESSIONS) return null
+  if (recent.length < RECENT_WINDOW || baseline.length < MIN_BASELINE_SESSIONS) return INSUFFICIENT
   const current = median(recent.slice(0, RECENT_WINDOW))
   const base = median(baseline)
-  if (current < spec.minAbsolute) return null
+  // Judged, and too small to matter — a verdict, not a gap in the data.
+  if (current < spec.minAbsolute) return { status: 'steady' }
   // No ratio exists against a zero baseline. Reporting one as infinite turns
   // "this metric has always been zero" into the loudest possible finding.
-  if (base === 0) return null
+  if (base === 0) return { status: 'steady' }
   const ratio = current / base
-  if (ratio < REGRESSION_RATIO) return null
+  if (ratio < REGRESSION_RATIO) return { status: 'steady' }
   return {
-    metric: spec.metric,
-    label: spec.label,
-    baseline: round2(base),
-    current: round2(current),
-    ratio: round2(ratio),
-    unit: spec.unit,
+    status: 'regressed',
+    regression: {
+      metric: spec.metric,
+      label: spec.label,
+      baseline: round2(base),
+      current: round2(current),
+      ratio: round2(ratio),
+      unit: spec.unit,
+    },
   }
 }
+
+/** A series is READY when at least one of its metrics could actually be
+ *  judged. Row count alone is not readiness: records with no writes, or startup
+ *  records missing their paint marks, are rows that carry no usable sample. */
+export const anyJudged = (results: readonly TrendResult[]): boolean =>
+  results.some((r) => r.status !== 'insufficient')
+
+/** The regressions among these results, worst ratio first. The single place
+ *  ordering is decided, so no caller has to re-sort and none can disagree. */
+export const regressionsIn = (results: readonly TrendResult[]): Regression[] =>
+  results
+    .flatMap((r) => (r.status === 'regressed' ? [r.regression] : []))
+    .sort((a, b) => b.ratio - a.ratio)
 
 /** Per-query p95 regressions, worst ratio first. A query absent from the
  *  baseline is skipped rather than treated as infinitely regressed: a newly
@@ -121,11 +151,13 @@ const trendRegression = (
 export const queryRegressions = (
   current: InteractionComparable,
   history: readonly InteractionComparable[],
-): Regression[] => {
+): TrendResult[] => {
   const recentPast = history.slice(0, RECENT_WINDOW - 1)
   const baselineSessions = history.slice(RECENT_WINDOW - 1)
-  const out: Regression[] = []
+  const out: TrendResult[] = []
   for (const [name, sample] of Object.entries(current.queries)) {
+    // Not enough resolves to have a distribution, or too fast to feel: this
+    // query contributes nothing to the verdict either way.
     if (sample.calls < MIN_CALLS || sample.p95Ms < MIN_ABSOLUTE_MS) continue
     const measured = (r: InteractionComparable): number | null => {
       const q = r.queries[name]
@@ -133,14 +165,13 @@ export const queryRegressions = (
     }
     const recent = [sample.p95Ms, ...recentPast.map(measured).filter((v): v is number => v !== null)]
     const baseline = baselineSessions.map(measured).filter((v): v is number => v !== null)
-    const found = trendRegression(
+    out.push(trendRegression(
       { metric: `query:${name}`, label: `${name} p95`, unit: 'ms', minAbsolute: MIN_ABSOLUTE_MS },
       recent,
       baseline,
-    )
-    if (found) out.push(found)
+    ))
   }
-  return out.sort((a, b) => b.ratio - a.ratio)
+  return out
 }
 
 /** Handle invalidations per write.
@@ -161,10 +192,12 @@ export const invalidationsPerWrite = (r: InteractionComparable): number | null =
 export const fanoutRegression = (
   current: InteractionComparable,
   history: readonly InteractionComparable[],
-): Regression | null => {
+): TrendResult => {
   const perWrite = invalidationsPerWrite
   const now = perWrite(current)
-  if (now === null) return null
+  // A session that has not written has no rate to compare, which is a gap in
+  // the data rather than a clean result.
+  if (now === null) return INSUFFICIENT
   const rate = (rs: readonly InteractionComparable[]) =>
     rs.map(perWrite).filter((v): v is number => v !== null)
   return trendRegression(
@@ -184,10 +217,18 @@ export const bootstrapGapMs = (r: StartupRecordData): number | null =>
 
 /** `series` is this device's startup records, NEWEST FIRST — the shape
  *  `loadRecords` returns. Takes the whole series rather than a current/baseline
- *  split because both sides are windows over it. */
+ *  split because both sides are windows over it.
+ *
+ *  `currentTimeOriginMs` is this page session's `performance.timeOrigin`. The
+ *  newest stored records are NOT necessarily from this boot — the write can
+ *  fail, the recorder can be disabled or read-only, and the analysis can simply
+ *  run before it. Comparing without one would republish a verdict from earlier
+ *  page loads as though it described this one. */
 export const startupRegression = (
   series: readonly StartupRecordData[],
-): Regression | null => {
+  currentTimeOriginMs: number,
+): TrendResult => {
+  if (!series.some((r) => r.timeOriginMs === currentTimeOriginMs)) return INSUFFICIENT
   const gaps = (rs: readonly StartupRecordData[]) =>
     rs.map(bootstrapGapMs).filter((v): v is number => v !== null)
   return trendRegression(

@@ -7,22 +7,26 @@ import {
   countLiveBlocks,
   interactionComparable,
   interactionMetricsUIStateType,
-  interactionSessionFor,
   type InteractionRecordData,
 } from '@/plugins/interaction-metrics/record.js'
+import {
+  metricsSessionContext,
+  observeWorkspace,
+} from '@/plugins/interaction-metrics/sessionContext.js'
 import {
   startupMetricsUIStateType,
   type StartupRecordData,
 } from '@/plugins/startup-metrics/record.js'
 import { INTERACTION_RECORD_PATH, STARTUP_RECORD_PATH, loadRecords } from './load.js'
 import {
+  anyJudged,
   fanoutRegression,
   median,
   queryRegressions,
+  regressionsIn,
   startupRegression,
-  MIN_INTERACTION_HISTORY,
-  MIN_STARTUP_HISTORY,
   type Regression,
+  type TrendResult,
 } from './series.js'
 
 export interface PerfAnalysis {
@@ -67,7 +71,11 @@ export const runPerfAnalysis = async (
   // one workspace's history manufactures regressions. The recorder stops
   // sampling in that state; this reader holds the same snapshot and needs the
   // same rule -- it does not inherit it by the recorder having one.
-  const session = interactionSessionFor(workspaceId)
+  // The monitor observes workspace activation itself: it and the recorder are
+  // independent toggles, so neither can rely on the other being the one
+  // watching. `observeWorkspace` is idempotent, so both calling is correct.
+  observeWorkspace(workspaceId)
+  const session = metricsSessionContext(repo, workspaceId)
 
   // Exclude THIS session's record by id, not by position: it is updated in
   // place, so it is history for nothing. Dropping the first row blindly would
@@ -76,17 +84,20 @@ export const runPerfAnalysis = async (
   const history = interaction.filter((r) => r.id !== session.recordId).map((r) => r.record)
   const current = interactionComparable(repo.metrics(), session.ownWrites)
 
-  const interactionReady = session.attributable && history.length >= MIN_INTERACTION_HISTORY
-  const startupReady = startup.length >= MIN_STARTUP_HISTORY
-
-  const regressions: Regression[] = [
-    ...(session.attributable
-      ? [...queryRegressions(current, history), fanoutRegression(current, history)]
-      : []),
-    startupRegression(startup.map((r) => r.record)),
+  // Judged, not counted. A record with no writes, or a startup record missing
+  // its paint marks, is a row that carries no usable sample — so readiness has
+  // to come from whether a comparison actually produced a verdict.
+  const interactionResults: TrendResult[] = session.attributable
+    ? [...queryRegressions(current, history), fanoutRegression(current, history)]
+    : []
+  const startupResults: TrendResult[] = [
+    startupRegression(startup.map((r) => r.record), performance.timeOrigin),
   ]
-    .filter((r): r is Regression => r !== null)
-    .sort((a, b) => b.ratio - a.ratio)
+
+  const interactionReady = anyJudged(interactionResults)
+  const startupReady = anyJudged(startupResults)
+
+  const regressions = regressionsIn([...interactionResults, ...startupResults])
 
   // Graph size is the dominant confound for every timing here, and it is
   // REPORTED rather than corrected for. Filtering the baseline to comparable

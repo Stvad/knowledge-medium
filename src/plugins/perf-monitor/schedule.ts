@@ -8,6 +8,7 @@ import { appEffectsFacet, type AppEffect } from '@/extensions/core.js'
 import type { Repo } from '@/data/repo'
 import { PendingIdleJobs } from '@/data/internals/idleMarkerJobs.js'
 import { scheduleDeepIdle, LAZY_DEEP_IDLE } from '@/utils/scheduleIdle.js'
+import { observeWorkspace } from '@/plugins/interaction-metrics/sessionContext.js'
 import { runPerfAnalysis } from './analyze.js'
 import { publishPerfAnalysis } from './store.js'
 
@@ -39,6 +40,10 @@ export const perfAnalysisEffect: AppEffect = {
   id: 'perf-monitor.analyze',
   start: ({ repo, workspaceId }) => {
     if (!workspaceId) return
+    // At activation, not at analysis time: a session can enter a second
+    // workspace and leave again long before the first analysis is due, and the
+    // page-global counters carry its work regardless.
+    observeWorkspace(workspaceId)
     let cancelled = false
     let timer: ReturnType<typeof setTimeout> | undefined
     const armIn = (delayMs: number): void => {

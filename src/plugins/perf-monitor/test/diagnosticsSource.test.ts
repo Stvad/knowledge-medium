@@ -43,21 +43,16 @@ describe('mapAnalysisToSnapshot', () => {
     expect(snapshot.detail).toContain('12')
   })
 
-  // The day-one state for every existing user: months of startup records and no
-  // interaction records at all. A single flag across both series turns that into
-  // a clean verdict for a comparison that never ran.
-  it('says so when one series is compared and the other is not', () => {
+  // A partial comparison is not health. The judgement itself lives in
+  // `summarize`, shared with the trend dialog; this pins that the chip's
+  // severity follows it rather than being decided again here.
+  it('does not report a partial comparison as ok', () => {
     const snapshot = mapAnalysisToSnapshot(analysis({
       ready: { interaction: false, startup: true },
       baselineSessions: 0,
     }))
+    expect(snapshot.severity).toBe('info')
     expect(snapshot.detail).toContain('interaction history still building')
-  })
-
-  it('distinguishes a series that is still filling from one that cannot be compared', () => {
-    const blended = mapAnalysisToSnapshot(analysis({ interactionComparable: false }))
-    expect(blended.detail).toContain('more than one workspace')
-    expect(blended.detail).not.toContain('still building')
   })
 
   // An `error` reddens the whole status chip, which is the app's signal for

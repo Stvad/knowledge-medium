@@ -221,6 +221,9 @@ export const collectStartupMetricsEffect: AppEffect = {
     // the next load will never read.
     if (!workspaceId || recorded || !isClientIdPersistent()) return
     let done = false
+    // Distinct from `done`, which the record path sets on ITS way through:
+    // this tracks teardown, so a callback already queued can tell the two apart.
+    let disposed = false
     const cleanups: Array<() => void> = []
     const runCleanups = () => { for (const c of cleanups.splice(0)) c() }
 
@@ -230,6 +233,12 @@ export const collectStartupMetricsEffect: AppEffect = {
       runCleanups()
       recorded = true
       scheduleIdle(() => {
+        // Re-checked inside the deferred callback, not only before scheduling
+        // it: a workspace switch tears the effect down in between, and this
+        // callback still holds the OLD workspace id while `repo.isReadOnly` has
+        // already moved to the new one. Writing then enqueues rows the old
+        // workspace's RLS refuses into the sync rejection quarantine.
+        if (disposed) return
         void writeStartupRecord(repo, workspaceId).catch(err =>
           console.warn('[startup-metrics] failed to write record', err),
         )
@@ -300,6 +309,6 @@ export const collectStartupMetricsEffect: AppEffect = {
     }
     waitForPaint()
 
-    return () => { done = true; runCleanups() }
+    return () => { done = true; disposed = true; runCleanups() }
   },
 }

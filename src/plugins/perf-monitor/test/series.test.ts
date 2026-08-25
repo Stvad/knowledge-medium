@@ -15,7 +15,16 @@ import {
   MIN_BASELINE_SESSIONS,
   MIN_INTERACTION_HISTORY,
   MIN_STARTUP_HISTORY,
+  regressionsIn,
+  type TrendResult,
 } from '../series'
+
+/** The regressions a set of comparisons produced. Results are now explicit
+ *  about "not judged" versus "judged and fine"; these tests are about which
+ *  regressions come out, so they collapse that back down. */
+const regs = (results: TrendResult[] | TrendResult) =>
+  regressionsIn(Array.isArray(results) ? results : [results])
+const reg = (result: TrendResult) => regs(result)[0] ?? null
 
 const q = (p95Ms: number, calls = 100) => ({ calls, p50Ms: p95Ms / 2, p95Ms, totalMs: p95Ms * calls })
 
@@ -49,7 +58,7 @@ describe('median', () => {
 describe('queryRegressions', () => {
   it('flags a query whose p95 doubled against the trailing median', () => {
     const slow = () => sample({ queries: { 'backlinks.forBlock': q(40) } })
-    const found = queryRegressions(slow(), sinceRegressed(slow, sample))
+    const found = regs(queryRegressions(slow(), sinceRegressed(slow, sample)))
     expect(found).toHaveLength(1)
     expect(found[0]).toMatchObject({
       metric: 'query:backlinks.forBlock', baseline: 10, current: 40, ratio: 4,
@@ -59,18 +68,18 @@ describe('queryRegressions', () => {
   // A newly mounted surface is not a regression. Reporting one as infinitely
   // regressed is how an alarm teaches its reader to ignore it.
   it('ignores a query with no baseline rather than treating it as regressed', () => {
-    const found = queryRegressions(sample({ queries: { 'brandNew.query': q(500) } }), history(8, sample))
+    const found = regs(queryRegressions(sample({ queries: { 'brandNew.query': q(500) } }), history(8, sample)))
     expect(found).toEqual([])
   })
 
   it('ignores a query too fast to feel, however much it grew', () => {
     const base = () => sample({ queries: { tiny: q(0.1) } })
-    expect(queryRegressions(sample({ queries: { tiny: q(4) } }), history(8, base))).toEqual([])
+    expect(regs(queryRegressions(sample({ queries: { tiny: q(4) } }), history(8, base)))).toEqual([])
   })
 
   it('ignores a query with too few resolves to have a distribution', () => {
     const base = () => sample({ queries: { rare: q(10, 100) } })
-    expect(queryRegressions(sample({ queries: { rare: q(90, 3) } }), history(8, base))).toEqual([])
+    expect(regs(queryRegressions(sample({ queries: { rare: q(90, 3) } }), history(8, base)))).toEqual([])
   })
 
   it('reports nothing until the baseline is long enough to be one', () => {
@@ -78,10 +87,10 @@ describe('queryRegressions', () => {
     // One history entry is consumed smoothing the current reading, so the
     // baseline the comparison sees is one shorter than the history given.
     expect(
-      queryRegressions(slow(), sinceRegressed(slow, sample, MIN_BASELINE_SESSIONS)),
+      regs(queryRegressions(slow(), sinceRegressed(slow, sample, MIN_BASELINE_SESSIONS))),
     ).toEqual([])
     expect(
-      queryRegressions(slow(), sinceRegressed(slow, sample, MIN_BASELINE_SESSIONS + 1)),
+      regs(queryRegressions(slow(), sinceRegressed(slow, sample, MIN_BASELINE_SESSIONS + 1))),
     ).toHaveLength(1)
   })
 
@@ -89,10 +98,10 @@ describe('queryRegressions', () => {
   // is reported once it is the MAJORITY of the recent window, not on its first
   // session.
   it('does not fire on a single anomalous session', () => {
-    const found = queryRegressions(
+    const found = regs(queryRegressions(
       sample({ queries: { 'backlinks.forBlock': q(400) } }),
       history(10, sample),
-    )
+    ))
     expect(found).toEqual([])
   })
 
@@ -103,10 +112,10 @@ describe('queryRegressions', () => {
     const withQ = () => sample({ queries: { seasonal: q(10) } })
     const without = () => sample({ queries: { other: q(10) } })
     // Present now and in the old baseline, absent from the two most recent.
-    const found = queryRegressions(
+    const found = regs(queryRegressions(
       sample({ queries: { seasonal: q(90) } }),
       [without(), without(), ...history(8, withQ)],
-    )
+    ))
     expect(found).toEqual([])
   })
 
@@ -115,7 +124,7 @@ describe('queryRegressions', () => {
   // slowdowns" for a comparison that could never have run.
   it('starts comparing at exactly the advertised history length', () => {
     const slow = () => sample({ queries: { 'backlinks.forBlock': q(80) } })
-    const at = (n: number) => queryRegressions(slow(), sinceRegressed(slow, sample, n - 1))
+    const at = (n: number) => regs(queryRegressions(slow(), sinceRegressed(slow, sample, n - 1)))
     expect(at(MIN_INTERACTION_HISTORY - 1)).toEqual([])
     expect(at(MIN_INTERACTION_HISTORY)).toHaveLength(1)
   })
@@ -123,7 +132,7 @@ describe('queryRegressions', () => {
   it('orders the worst ratio first', () => {
     const base = () => sample({ queries: { a: q(10), b: q(10) } })
     const slow = () => sample({ queries: { a: q(30), b: q(100) } })
-    const found = queryRegressions(slow(), [slow(), ...history(8, base)])
+    const found = regs(queryRegressions(slow(), [slow(), ...history(8, base)]))
     expect(found.map((r) => r.metric)).toEqual(['query:b', 'query:a'])
   })
 })
@@ -134,26 +143,31 @@ describe('fanoutRegression', () => {
   it('flags a rise in re-resolves per write even with unchanged latencies', () => {
     const base = () => sample({ writes: 100, fanout: { loaderInvalidations: 50 } })
     const now = () => sample({ writes: 100, fanout: { loaderInvalidations: 400 } })
-    expect(fanoutRegression(now(), sinceRegressed(now, base))).toMatchObject({
+    expect(reg(fanoutRegression(now(), sinceRegressed(now, base)))).toMatchObject({
       metric: 'fanout:invalidationsPerWrite', baseline: 0.5, current: 4, ratio: 8,
     })
   })
 
   it('reports nothing for a session that has not written', () => {
-    expect(fanoutRegression(sample({ writes: 0 }), history(8, sample))).toBeNull()
+    expect(reg(fanoutRegression(sample({ writes: 0 }), history(8, sample)))).toBeNull()
   })
 
   // No ratio exists against a zero baseline; reporting one as infinite would
   // turn "this has always been zero" into the loudest possible finding.
   it('treats an unchanged zero as unchanged, not as an infinite regression', () => {
     const zero = () => sample({ writes: 100, fanout: { loaderInvalidations: 0 } })
-    expect(fanoutRegression(zero(), history(10, zero))).toBeNull()
+    expect(reg(fanoutRegression(zero(), history(10, zero)))).toBeNull()
   })
 })
 
 describe('startupRegression', () => {
-  const boot = (repoReadyMs: number, firstContentPaintMs: number): StartupRecordData =>
-    ({ recordedAt: 0, appVersion: '', appSha: '', clientId: '', deviceLabel: '', timeOriginMs: 0,
+  const THIS_BOOT = 5_000
+  const boot = (
+    repoReadyMs: number,
+    firstContentPaintMs: number,
+    timeOriginMs = THIS_BOOT,
+  ): StartupRecordData =>
+    ({ recordedAt: 0, appVersion: '', appSha: '', clientId: '', deviceLabel: '', timeOriginMs,
        repoReadyMs, firstContentPaintMs }) as StartupRecordData
 
   it('measures repo-ready to paint, not time-to-interactive', () => {
@@ -165,24 +179,34 @@ describe('startupRegression', () => {
 
   it('flags the step in the bootstrap gap once it persists', () => {
     const series = [boot(1000, 6000), boot(1000, 6100), boot(1000, 5900), ...held(8)]
-    expect(startupRegression(series)).toMatchObject({
+    expect(reg(startupRegression(series, THIS_BOOT))).toMatchObject({
       metric: 'startup:bootstrapGapMs', current: 5000,
     })
   })
 
   it('stays quiet while the gap holds', () => {
-    expect(startupRegression(held(11))).toBeNull()
+    expect(reg(startupRegression(held(11), THIS_BOOT))).toBeNull()
+  })
+
+  // The newest stored records are not necessarily from THIS boot: the write can
+  // fail, the recorder can be disabled or read-only, and the analysis can
+  // simply run before it. Comparing without one republishes an earlier page
+  // load's verdict as though it described this one.
+  it('will not judge startup without a record from this boot', () => {
+    const series = [boot(1000, 6000), boot(1000, 6100), boot(1000, 5900), ...held(8)]
+    expect(startupRegression(series, THIS_BOOT).status).toBe('regressed')
+    expect(startupRegression(series, THIS_BOOT + 1).status).toBe('insufficient')
   })
 
   it('starts comparing at exactly the advertised history length', () => {
     const stepped = (n: number) =>
       [boot(1000, 6000), boot(1000, 6100), boot(1000, 5900), ...held(n - 3)]
-    expect(startupRegression(stepped(MIN_STARTUP_HISTORY - 1))).toBeNull()
-    expect(startupRegression(stepped(MIN_STARTUP_HISTORY))).not.toBeNull()
+    expect(reg(startupRegression(stepped(MIN_STARTUP_HISTORY - 1), THIS_BOOT))).toBeNull()
+    expect(reg(startupRegression(stepped(MIN_STARTUP_HISTORY), THIS_BOOT))).not.toBeNull()
   })
 
   it('does not fire on a single anomalous boot', () => {
     const series = [boot(1000, 9000), ...held(10)]
-    expect(startupRegression(series)).toBeNull()
+    expect(reg(startupRegression(series, THIS_BOOT))).toBeNull()
   })
 })

@@ -22,6 +22,14 @@ import { getPluginUIStateBlock, getPluginUIStateChild } from '@/data/stateBlocks
 import { keyAtStart } from '@/data/orderKey.js'
 import { appVersion } from '@/appVersion.js'
 import { getClientId, getDeviceLabel } from '@/utils/clientId.js'
+import {
+  clearPageRecord,
+  metricsSessionContext,
+  noteOwnWrite,
+  observeWorkspace,
+  pageRecordStartedAt,
+  setPageRecord,
+} from './sessionContext.js'
 import { v4 as uuidv4 } from 'uuid'
 
 /** Safety valve on the stored query set, NOT a policy about which queries
@@ -256,76 +264,23 @@ export const buildInteractionRecord = (
 
 // ──── per-session write ────
 
-interface PageSession {
-  blockId: string
-  /** The workspace this page session's counters are attributable to. */
-  workspaceId: string
-  startedAt: number
-}
+/** Session-scoped facts (identity, attributability, own writes, the record this
+ *  session owns) live in `./sessionContext`; this module asks rather than
+ *  deciding. See that module for why. */
 
-/** ONE record per page session, not per workspace.
- *
- *  `repo.metrics()` counters are monotonic from Repo construction and are not
- *  segmented by workspace, so a second workspace opened in the same page
- *  session inherits the first one's queries and writes while reporting its own
- *  block count. Rather than pretend to attribute that, sampling STOPS: the
- *  record written while only one workspace had been seen stays correct, and no
- *  blended one is ever written. Losing the (rare) multi-workspace session beats
- *  poisoning the baseline every later comparison is measured against. */
-let pageSession: PageSession | null = null
-let seenWorkspace: string | null = null
-let unattributable = false
-/** Transactions this recorder has issued itself — see `interactionComparable`. */
-let ownWrites = 0
-
-/** Test helper — forget this process's session so the next sample re-creates. */
-export const resetInteractionSessions = (): void => {
-  pageSession = null
-  seenWorkspace = null
-  unattributable = false
-  ownWrites = 0
-}
-
-/**
- * Note that `workspaceId` is now active in this page session.
- *
- * The rule lives here, at the moment a workspace is OBSERVED, rather than at
- * the moment a sample is written. Those differ: a session can enter a second
- * workspace and leave again before that workspace's first sample is ever due,
- * and a rule enforced only at write time would never see it — while the
- * counters would carry its work regardless.
- */
-export const observeInteractionWorkspace = (workspaceId: string): void => {
-  if (seenWorkspace === null) seenWorkspace = workspaceId
-  else if (seenWorkspace !== workspaceId) unattributable = true
-}
-
-/** What this page session can honestly say about its own counters, for readers
- *  that compare the LIVE `repo.metrics()` rather than the stored record.
- *
- *  Exposed because the attributability rule belongs to the counters, not to the
- *  recorder: a reader holding a live snapshot is subject to exactly the same
- *  blending, and one that trusted the recorder to have handled it would compare
- *  two workspaces' work against one workspace's history. */
-export const interactionSessionFor = (
-  workspaceId: string,
-): { attributable: boolean; recordId: string | null; ownWrites: number } => ({
-  attributable: !unattributable && (seenWorkspace === null || seenWorkspace === workspaceId),
-  recordId: pageSession?.workspaceId === workspaceId ? pageSession.blockId : null,
-  ownWrites,
-})
-
-/** Live blocks in a workspace. Shared with the monitor, which pairs it with a
- *  LIVE `repo.metrics()` snapshot and so needs the same measurement, not the
- *  size recorded by some earlier session. Measured at ~15ms on a 327k-block
- *  graph — affordable for an idle-gated caller, not for a hot path. */
-export const countLiveBlocks = async (repo: Repo, workspaceId: string): Promise<number> => {
+const countLiveBlocksImpl = async (repo: Repo, workspaceId: string): Promise<number> => {
   const row = await repo.db.getOptional<{ n: number }>(
     'SELECT COUNT(*) AS n FROM blocks WHERE workspace_id = ? AND deleted = 0',
     [workspaceId],
   )
   return row?.n ?? 0
 }
+
+/** Live blocks in a workspace. Shared with the monitor, which pairs it with a
+ *  LIVE `repo.metrics()` snapshot and so needs the same measurement, not the
+ *  size recorded by some earlier session. Measured at ~15ms on a 327k-block
+ *  graph — affordable for an idle-gated caller, not for a hot path. */
+export const countLiveBlocks = countLiveBlocksImpl
 
 const isLive = async (repo: Repo, blockId: string): Promise<boolean> => {
   const row = await repo.db.getOptional<{ id: string }>(
@@ -335,7 +290,7 @@ const isLive = async (repo: Repo, blockId: string): Promise<boolean> => {
   return Boolean(row)
 }
 
-const openSession = async (repo: Repo, workspaceId: string): Promise<PageSession> => {
+const openSession = async (repo: Repo, workspaceId: string): Promise<{ blockId: string; startedAt: number }> => {
   const root = await getPluginUIStateBlock(repo, workspaceId, repo.user, interactionMetricsUIStateType)
   const clientId = getClientId()
   const group = await getPluginUIStateChild(root, clientId, `${getDeviceLabel()} · ${clientId.slice(0, 8)}`)
@@ -361,10 +316,9 @@ const openSession = async (repo: Repo, workspaceId: string): Promise<PageSession
     // Same tx as the create, so a record is never briefly untyped.
     await repo.addTypeInTx(tx, blockId, interactionRecordType.id, {})
   }, { scope: ChangeScope.Automation, description: 'interaction metrics record' })
-  ownWrites++
-  const session: PageSession = { blockId, workspaceId, startedAt }
-  pageSession = session
-  return session
+  noteOwnWrite()
+  setPageRecord(workspaceId, blockId, startedAt)
+  return { blockId, startedAt }
 }
 
 /**
@@ -381,26 +335,26 @@ export const writeInteractionSample = async (
   repo: Repo,
   workspaceId: string,
 ): Promise<string | null> => {
-  // Both entry points route the attribution rule through one function, so a
-  // direct caller cannot bypass what the effect enforces.
-  observeInteractionWorkspace(workspaceId)
-  if (unattributable) return null
-  // Checked HERE rather than at scheduling time: the workspace role resolves
-  // asynchronously after mount, so a check when the effect starts can run
-  // before `isReadOnly` is known. In a viewer workspace the Automation scope
-  // admits this write locally and the server's RLS then refuses the upload,
-  // parking it in the rejection quarantine -- which the status chip reports to
-  // the user as changes that could not sync. A recurring sampler would keep
-  // manufacturing those.
-  if (repo.isReadOnly) return null
-  // The record can be deleted from another device, or by a user browsing the
-  // metrics tree. Writing a property to a tombstone does not restore it, so
-  // without this the session would keep updating a row no reader can see.
+  // Asked, not re-derived. Read-only in particular must be consulted HERE
+  // rather than at scheduling time, because the workspace role resolves
+  // asynchronously after mount.
+  observeWorkspace(workspaceId)
+  const context = metricsSessionContext(repo, workspaceId)
+  if (!context.canRecord || !context.attributable) return null
+
   // Snapshot BEFORE any of this sample's own setup work, so a first sample does
   // not report the transactions that created its own record block.
   const metrics = repo.metrics()
-  const live = pageSession && (await isLive(repo, pageSession.blockId)) ? pageSession : null
-  const session = live ?? (await openSession(repo, workspaceId))
+  // The record can be deleted from another device, or by a user browsing the
+  // metrics tree. Writing a property to a tombstone does not restore it, so
+  // without this the session would keep updating a row no reader can see.
+  const existing =
+    context.recordId && (await isLive(repo, context.recordId))
+      ? { blockId: context.recordId, startedAt: pageRecordStartedAt(workspaceId)! }
+      : null
+  if (!existing) clearPageRecord()
+  const session = existing ?? (await openSession(repo, workspaceId))
+
   const data = buildInteractionRecord(metrics, {
     recordedAt: Date.now(),
     startedAt: session.startedAt,
@@ -413,11 +367,11 @@ export const writeInteractionSample = async (
     // imports or syncs a lot of blocks would otherwise report the final
     // timings against the opening graph size.
     blockCount: await countLiveBlocks(repo, workspaceId),
-    ownWrites,
+    ownWrites: context.ownWrites,
   })
   await repo.tx(async (tx) => {
     await tx.setProperty(session.blockId, interactionRecordProp, data)
   }, { scope: ChangeScope.Automation, description: 'interaction metrics record' })
-  ownWrites++
+  noteOwnWrite()
   return session.blockId
 }

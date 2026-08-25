@@ -14,10 +14,9 @@ import { definitionSeedsFacet, typeSeedsFacet } from '@/data/facets'
 import {
   interactionRecordProp,
   interactionRecordType,
-  interactionSessionFor,
-  resetInteractionSessions,
   writeInteractionSample,
 } from '../record'
+import { metricsSessionContext, resetMetricsSession } from '../sessionContext'
 import { drainInteractionSamples, interactionMetricsEffect } from '../schedule'
 
 const WS = 'ws-1'
@@ -30,7 +29,7 @@ beforeAll(async () => { sharedDb = await createTestDb() })
 afterAll(async () => { await sharedDb.cleanup() })
 beforeEach(async () => {
   await resetTestDb(sharedDb.db)
-  resetInteractionSessions()
+  resetMetricsSession()
   repo = createTestRepo({
     db: sharedDb.db,
     user: USER,
@@ -112,7 +111,7 @@ describe('interactionMetricsEffect', () => {
     await vi.advanceTimersByTimeAsync(5_000)
     stopB?.()
 
-    expect(interactionSessionFor(WS).attributable).toBe(false)
+    expect(metricsSessionContext(repo, WS).attributable).toBe(false)
     await settleSamples()
     expect(await writeInteractionSample(repo, WS)).toBeNull()
     stopA?.()

@@ -31,6 +31,7 @@ import {
 } from '@/plugins/startup-metrics/record.js'
 import { INTERACTION_RECORD_PATH, STARTUP_RECORD_PATH, loadRecords } from './load.js'
 import { bootstrapGapMs, invalidationsPerWrite } from './series.js'
+import { summarize } from './verdict.js'
 import { runPerfAnalysisNow } from './schedule.js'
 import { getPerfAnalysisFor, subscribePerfAnalysis } from './store.js'
 
@@ -128,27 +129,38 @@ export function PerfTrendDialog({ resolve, workspaceId }: DialogContextProps<voi
         <section className="text-sm">
           {!analysis ? (
             <p className="text-muted-foreground">No analysis yet this session.</p>
-          ) : analysis.insufficientHistory ? (
-            <p className="text-muted-foreground">
-              Building a baseline — {analysis.baselineSessions} recorded sessions so far.
-            </p>
-          ) : analysis.regressions.length === 0 ? (
-            <p>No slowdowns against the last {analysis.baselineSessions} sessions.</p>
           ) : (
-            <ul className="space-y-1">
-              {analysis.regressions.map((r) => (
-                <li key={r.metric} className="flex items-baseline gap-2">
-                  <Activity className="h-3.5 w-3.5 shrink-0 translate-y-0.5" />
-                  <span>
-                    <strong>{r.label}</strong>{' '}
-                    <span className="tabular-nums">
-                      {r.unit === 'ms' ? `${ms(r.baseline)} → ${ms(r.current)}` : `${r.baseline} → ${r.current}`}
-                    </span>{' '}
-                    <span className="text-muted-foreground">({r.ratio}× baseline)</span>
-                  </span>
-                </li>
-              ))}
-            </ul>
+            (() => {
+              // The same verdict the status chip renders. Deciding here what an
+              // empty regression list means is how these two came to disagree.
+              const verdict = summarize(analysis)
+              return (
+                <>
+                  <p className={verdict.kind === 'clean' ? undefined : 'text-muted-foreground'}>
+                    {verdict.headline}
+                  </p>
+                  {verdict.regressions.length > 0 && (
+                    <ul className="space-y-1 mt-1">
+                      {verdict.regressions.map((r) => (
+                        <li key={r.metric} className="flex items-baseline gap-2">
+                          <Activity className="h-3.5 w-3.5 shrink-0 translate-y-0.5" />
+                          <span>
+                            <strong>{r.label}</strong>{' '}
+                            <span className="tabular-nums">
+                              {r.unit === 'ms' ? `${ms(r.baseline)} → ${ms(r.current)}` : `${r.baseline} → ${r.current}`}
+                            </span>{' '}
+                            <span className="text-muted-foreground">({r.ratio}× baseline)</span>
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                  {verdict.notes.length > 0 && (
+                    <p className="text-xs text-muted-foreground mt-1">{verdict.notes.join(' · ')}</p>
+                  )}
+                </>
+              )
+            })()
           )}
           <Button size="sm" variant="outline" className="mt-3" onClick={() => void refresh()} disabled={refreshing}>
             <RefreshCw className={`h-3.5 w-3.5 mr-1.5 ${refreshing ? 'animate-spin' : ''}`} /> Re-analyze

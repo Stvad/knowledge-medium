@@ -17,9 +17,9 @@ import {
   interactionRecordProp,
   interactionRecordType,
   queryNameFromHandleKey,
-  resetInteractionSessions,
   writeInteractionSample,
 } from '../record'
+import { resetMetricsSession } from '../sessionContext'
 
 const WS = 'ws-1'
 const USER: User = { id: 'user-1', name: 'Alice' }
@@ -31,7 +31,7 @@ beforeAll(async () => { sharedDb = await createTestDb() })
 afterAll(async () => { await sharedDb.cleanup() })
 beforeEach(async () => {
   await resetTestDb(sharedDb.db)
-  resetInteractionSessions()
+  resetMetricsSession()
   resetClientIdCache()
   repo = createTestRepo({
     db: sharedDb.db,
