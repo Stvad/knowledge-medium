@@ -11,12 +11,18 @@ import { scheduleDeepIdle, LAZY_DEEP_IDLE } from '@/utils/scheduleIdle.js'
 import { runPerfAnalysis } from './analyze.js'
 import { publishPerfAnalysis } from './store.js'
 
-/** Wall clock between analyses. Long: the series it reads only gains a point
- *  per session, and re-deriving the same verdict is pure cost. Short enough
- *  that a regression which develops mid-session is still noticed. */
+/** Wall clock before the first analysis, and between later ones. Long: the
+ *  series it reads only gains a point per session, and re-deriving the same
+ *  verdict is pure cost. Short enough that a regression which develops
+ *  mid-session is still noticed. */
+const FIRST_ANALYSIS_MS = LAZY_DEEP_IDLE.minDelayMs
 const REANALYZE_MS = 10 * 60_000
 
-const jobs = new PendingIdleJobs((fn) => scheduleDeepIdle(fn, LAZY_DEEP_IDLE))
+// Floor on a plain timer, idle window on `scheduleDeepIdle` — the split and its
+// reason are documented in `@/plugins/interaction-metrics/schedule`. Here it
+// matters mostly so a test that mounts the app does not run a workspace scan
+// per file.
+const jobs = new PendingIdleJobs((fn) => scheduleDeepIdle(fn, { minDelayMs: 0 }))
 
 /** Test helper — drain in-flight analyses. */
 export const drainPerfAnalyses = (): Promise<void> => jobs.drain()
@@ -35,18 +41,20 @@ export const perfAnalysisEffect: AppEffect = {
     if (!workspaceId) return
     let cancelled = false
     let timer: ReturnType<typeof setTimeout> | undefined
-    const analyze = (): void => {
-      jobs.schedule(async () => {
-        if (cancelled) return
-        try {
-          await runPerfAnalysisNow(repo, workspaceId)
-        } catch (err) {
-          console.warn('[perf-monitor] analysis failed', err)
-        }
-        if (!cancelled) timer = setTimeout(analyze, REANALYZE_MS)
-      })
+    const armIn = (delayMs: number): void => {
+      timer = setTimeout(() => {
+        jobs.schedule(async () => {
+          if (cancelled) return
+          try {
+            await runPerfAnalysisNow(repo, workspaceId)
+          } catch (err) {
+            console.warn('[perf-monitor] analysis failed', err)
+          }
+          if (!cancelled) armIn(REANALYZE_MS)
+        })
+      }, delayMs)
     }
-    analyze()
+    armIn(FIRST_ANALYSIS_MS)
     return () => {
       cancelled = true
       if (timer) clearTimeout(timer)

@@ -37,14 +37,16 @@ beforeEach(async () => {
 })
 afterEach(() => { vi.restoreAllMocks() })
 
-/** Let the scheduler's deferral macrotask fire, then await the job it queued. */
-const settleSamples = async (): Promise<void> => {
-  await new Promise<void>((resolve) => setTimeout(resolve, 0))
+/** Advance past the sampler's wall-clock floor, then drain the idle job it
+ *  queued. The floor is a real timer precisely so it holds outside the browser,
+ *  which means a test has to move the clock rather than yield a macrotask. */
+const settleSamples = async (ms = 61_000): Promise<void> => {
+  await vi.advanceTimersByTimeAsync(ms)
   await drainInteractionSamples()
 }
 
 /** Count SAMPLES, not record blocks: a session updates one block in place, so
- *  the block count stays 1 however many times the effect re-samples — an
+ *  the block count stays 1 however many times the effect re-samples -- an
  *  assertion on it stays green with the cadence guard deleted. */
 const countSampleWrites = (): (() => number) => {
   const spy = vi.spyOn(repo, 'tx')
@@ -53,6 +55,22 @@ const countSampleWrites = (): (() => number) => {
 }
 
 describe('interactionMetricsEffect', () => {
+  beforeEach(() => { vi.useFakeTimers() })
+  afterEach(() => { vi.useRealTimers() })
+
+  // The floor must hold in every environment, not just the browser: the idle
+  // scheduler drops it outside one, and a sampler that fires immediately writes
+  // metrics records in every test file that mounts the app.
+  it('does not sample before the wall-clock floor', async () => {
+    const samples = countSampleWrites()
+    const stop = await interactionMetricsEffect.start({ repo, workspaceId: WS } as Parameters<
+      typeof interactionMetricsEffect.start
+    >[0])
+    await settleSamples(30_000)
+    expect(samples()).toBe(0)
+    stop?.()
+  })
+
   it('takes one sample and does not re-sample until the cadence elapses', async () => {
     const samples = countSampleWrites()
     const stop = await interactionMetricsEffect.start({ repo, workspaceId: WS } as Parameters<
@@ -63,30 +81,25 @@ describe('interactionMetricsEffect', () => {
     const afterFirst = samples()
     expect(afterFirst).toBeGreaterThan(0)
 
-    // Drive several more macrotasks. A re-arm routed through the idle scheduler
-    // would have taken a fresh sample on each of them.
-    for (let i = 0; i < 5; i++) await settleSamples()
+    // Well past the floor but short of the resample cadence.
+    await settleSamples(60_000)
     expect(samples()).toBe(afterFirst)
+
+    // And past the cadence it samples again.
+    await settleSamples(5 * 60_000)
+    expect(samples()).toBeGreaterThan(afterFirst)
     stop?.()
   })
 
   it('stops sampling once the effect is torn down', async () => {
-    vi.useFakeTimers()
-    try {
-      const samples = countSampleWrites()
-      const stop = await interactionMetricsEffect.start({ repo, workspaceId: WS } as Parameters<
-        typeof interactionMetricsEffect.start
-      >[0])
-      await vi.advanceTimersByTimeAsync(1)
-      await drainInteractionSamples()
-      const afterFirst = samples()
-      stop?.()
-      // Past the resample cadence: a live effect would have queued another.
-      await vi.advanceTimersByTimeAsync(10 * 60_000)
-      await drainInteractionSamples()
-      expect(samples()).toBe(afterFirst)
-    } finally {
-      vi.useRealTimers()
-    }
+    const samples = countSampleWrites()
+    const stop = await interactionMetricsEffect.start({ repo, workspaceId: WS } as Parameters<
+      typeof interactionMetricsEffect.start
+    >[0])
+    await settleSamples()
+    const afterFirst = samples()
+    stop?.()
+    await settleSamples(10 * 60_000)
+    expect(samples()).toBe(afterFirst)
   })
 })
