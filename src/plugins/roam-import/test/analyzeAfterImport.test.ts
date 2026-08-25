@@ -9,7 +9,11 @@ import {
 import { staticDataExtensions } from '@/extensions/staticDataExtensions.js'
 import { referencesLocalSchema } from '@/plugins/references/localSchema.js'
 
-const runAnalyzeIfStale = vi.hoisted(() => vi.fn(async () => ({proposed: []})))
+// Typed to the real signature so the `probes` argument is readable below.
+type AnalyzeCall = (db: unknown, probes?: readonly string[]) => Promise<{proposed: string[]}>
+const runAnalyzeIfStale = vi.hoisted(() =>
+  vi.fn<AnalyzeCall>(async () => ({proposed: []})),
+)
 vi.mock('@/data/maintenance', () => ({runAnalyzeIfStale}))
 // Run the idle callback inline so the assertion does not race a real idle frame.
 vi.mock('@/utils/scheduleIdle.js', () => ({
@@ -41,7 +45,7 @@ describe('scheduleImportAnalyze', () => {
     scheduleImportAnalyze({db: {}} as unknown as Repo)
 
     expect(runAnalyzeIfStale).toHaveBeenCalledTimes(1)
-    const probes = runAnalyzeIfStale.mock.calls[0][1] as readonly string[]
+    const probes = runAnalyzeIfStale.mock.calls[0][1] ?? []
     expect(probes).toEqual([...installedAnalyzeArmingProbes()])
     // Named explicitly: `installedAnalyzeArmingProbes()` alone would still pass
     // if it silently fell back to the core probes.
