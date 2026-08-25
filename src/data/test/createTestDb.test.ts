@@ -127,6 +127,20 @@ describe('createTestDb harness', () => {
     await expect(own.db.execute('SELECT 1')).rejects.toThrow()
   }, 30_000)
 
+  it('releases every Repo even when an earlier one throws on unpin', async () => {
+    const own = await createTestDb()
+    const first = createTestRepo({db: own.db}).repo
+    const second = createTestRepo({db: own.db}).repo
+    second.setActiveWorkspaceId('ws-second')
+    vi.spyOn(first, 'setActiveWorkspaceId').mockImplementation(() => {
+      throw new Error('disposer blew up')
+    })
+
+    await expect(own.cleanup()).rejects.toThrow('disposer blew up')
+    // The failure is reported, but not by abandoning the Repos behind it.
+    expect(second.activeWorkspaceId).toBeNull()
+  }, 30_000)
+
   it('writeTransaction commits on success, rolls back on throw', async () => {
     await h.db.writeTransaction(async tx => {
       await tx.execute(
