@@ -279,10 +279,16 @@ export const countLiveBlocks = async (repo: Repo, workspaceId: string): Promise<
   return row?.n ?? 0
 }
 
-/** Live AND still where the reader looks. A record moved to another parent is
- *  invisible to `loadRecords`, which matches on the derived client group — so
- *  continuing to update it would write this session into a place nothing reads,
- *  and the session would silently vanish from the trend.
+/** Still OURS to write to: live, under the group the reader matches on, and
+ *  still carrying a record.
+ *
+ *  All three, and the same three retention asks. A row whose record was
+ *  stripped is user content by that rule — so accepting it here would let the
+ *  next sample write telemetry back onto a block a person had just repurposed,
+ *  with retention then refusing to clean up what the recorder had restored.
+ *  Placement matters for a different reason: a record moved elsewhere is
+ *  invisible to `loadRecords`, so updating it writes the session where nothing
+ *  reads.
  *
  *  Asked twice: once to decide whether a replacement is due, and again inside
  *  the writing transaction, which several awaits later is the only place the
@@ -293,14 +299,18 @@ const isUsableRecord = async (
   workspaceId: string,
 ): Promise<boolean> => {
   const row = await repo.db.getOptional<{ parent_id: string | null }>(
-    'SELECT parent_id FROM blocks WHERE id = ? AND deleted = 0',
-    [blockId],
+    `SELECT parent_id FROM blocks
+      WHERE id = ? AND deleted = 0 AND json_extract(properties_json, ?) IS NOT NULL`,
+    [blockId, INTERACTION_RECORD_PATH],
   )
   return row?.parent_id === clientGroupId(repo, workspaceId, interactionMetricsUIStateType)
 }
 
-/** The same question, read through a transaction. `tx.get` does not filter
- *  tombstones, so liveness is checked rather than implied. */
+/** The same three questions, read through a transaction. `tx.get` does not
+ *  filter tombstones, so liveness is checked rather than implied; `== null`
+ *  rather than `=== undefined` because clearing the property through its codec
+ *  leaves the key present holding JSON null, which `json_extract` reports as
+ *  absent — the same spelling retention had to handle. */
 const isUsableRow = async (
   tx: Parameters<Parameters<Repo['tx']>[0]>[0],
   blockId: string,
@@ -309,7 +319,8 @@ const isUsableRow = async (
 ): Promise<boolean> => {
   const row = await tx.get(blockId)
   return !!row && !row.deleted &&
-    row.parentId === clientGroupId(repo, workspaceId, interactionMetricsUIStateType)
+    row.parentId === clientGroupId(repo, workspaceId, interactionMetricsUIStateType) &&
+    row.properties[interactionRecordProp.name] != null
 }
 
 /**

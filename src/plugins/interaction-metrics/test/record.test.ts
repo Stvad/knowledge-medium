@@ -389,6 +389,66 @@ describe('writeInteractionSample', () => {
     expect(second).not.toBe(first)
   })
 
+  // Retention treats a row whose record was stripped as user content and refuses
+  // to touch it. The recorder has to agree, or the next sample writes telemetry
+  // back onto a block someone just repurposed and retention then declines to
+  // clean up what the recorder restored.
+  //
+  // The two checks are tested SEPARATELY because each masks the other: with the
+  // preflight blind, the in-transaction re-take still refuses (returning null),
+  // and with the re-take blind the preflight still opens a replacement — so a
+  // test that only asserts "not the same id" passes with either one deleted.
+  it('opens a replacement when the current record was stripped before the sample', async () => {
+    const first = (await writeInteractionSample(repo, WS))!
+    await sharedDb.db.execute(
+      'UPDATE blocks SET properties_json = ?, content = ? WHERE id = ?',
+      ['{}', 'a note someone made here', first])
+
+    // A REPLACEMENT, not a refusal — that is what only the preflight can do.
+    const second = await writeInteractionSample(repo, WS)
+    expect(second).not.toBeNull()
+    expect(second).not.toBe(first)
+
+    const repurposed = await sharedDb.db.getOptional<{ properties_json: string; content: string }>(
+      'SELECT properties_json, content FROM blocks WHERE id = ?', [first])
+    expect(repurposed?.properties_json).toBe('{}')
+    expect(repurposed?.content).toBe('a note someone made here')
+  })
+
+  // Cleared through the codec rather than by hand: `optionalIdentity` encodes
+  // `undefined` as `null`, so the key stays present and a strict check reads the
+  // row as still ours.
+  it('opens a replacement when the current record was cleared to null', async () => {
+    const first = (await writeInteractionSample(repo, WS))!
+    await sharedDb.db.execute(
+      'UPDATE blocks SET properties_json = ? WHERE id = ?',
+      [JSON.stringify({ [interactionRecordProp.name]: null }), first])
+
+    const second = await writeInteractionSample(repo, WS)
+    expect(second).not.toBeNull()
+    expect(second).not.toBe(first)
+  })
+
+  // Stripped in the window between the preflight and the write, so only the
+  // in-transaction re-take can still refuse.
+  it('refuses when the current record is stripped mid-write', async () => {
+    const first = (await writeInteractionSample(repo, WS))!
+    const realTx = repo.tx.bind(repo)
+    vi.spyOn(repo, 'tx').mockImplementation(async (fn, opts) => {
+      if (opts?.description === 'interaction metrics record') {
+        await sharedDb.db.execute(
+          'UPDATE blocks SET properties_json = ? WHERE id = ?', ['{}', first])
+      }
+      return realTx(fn, opts)
+    })
+    expect(await writeInteractionSample(repo, WS)).toBeNull()
+    vi.restoreAllMocks()
+
+    const repurposed = await sharedDb.db.getOptional<{ properties_json: string }>(
+      'SELECT properties_json FROM blocks WHERE id = ?', [first])
+    expect(repurposed?.properties_json).toBe('{}')
+  })
+
   // A reset landing INSIDE a write body leaves our own before/after delta
   // spanning two epochs — the `after` counters are post-zeroing, so the delta is
   // negative, and subtracting a negative inflates the corrected fan-out. That is
