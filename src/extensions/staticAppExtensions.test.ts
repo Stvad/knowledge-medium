@@ -75,9 +75,10 @@ describe('app boot composition', () => {
     const runtime = resolveAppRuntimeSync(staticAppExtensions({ repo }), {
       overrides: new Map(), safeMode: false,
     })
+    const contributed = [...(referencesLocalSchema.analyzeProbes ?? [])]
+    expect(contributed).not.toHaveLength(0)
     expect(resolveAnalyzeArmingProbes(runtime.read(localSchemaFacet)))
-      .toEqual(expect.arrayContaining(referencesLocalSchema.analyzeProbes ?? []))
-    expect(referencesLocalSchema.analyzeProbes ?? []).not.toHaveLength(0)
+      .toEqual(expect.arrayContaining(contributed))
   })
 
   it('still composes in safe mode (degraded-boot path)', () => {
