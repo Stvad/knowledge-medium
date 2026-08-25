@@ -1,2 +1,2 @@
-import{createWorkspaceSnapshotStore as e}from"../../utils/workspaceSnapshotStore.js";var t=`view_perf_trend`,n=e(`perf-monitor-analysis`),r=n.publish,i=n.getFor,a=n.subscribe,o=n.reset;export{t as VIEW_PERF_TREND_ACTION_ID,i as getPerfAnalysisFor,r as publishPerfAnalysis,o as resetPerfAnalysisStore,a as subscribePerfAnalysis};
+import{createWorkspaceSnapshotStore as e}from"../../utils/workspaceSnapshotStore.js";var t=`view_perf_trend`,n=e(`perf-monitor-analysis`),r=e=>{let t=n.getFor(e.workspaceId);t&&t.analyzedAt>e.analyzedAt||n.publish(e)},i=n.getFor,a=n.subscribe,o=n.reset;export{t as VIEW_PERF_TREND_ACTION_ID,i as getPerfAnalysisFor,r as publishPerfAnalysis,o as resetPerfAnalysisStore,a as subscribePerfAnalysis};
 //# sourceMappingURL=store.js.map
