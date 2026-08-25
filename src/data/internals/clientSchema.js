@@ -445,7 +445,7 @@ ${k.filter(e=>e.name!==`workspace_id`).map(e=>`          CASE WHEN OLD.${e.name}
   SELECT b.id, b.workspace_id, je.value
   FROM blocks b, json_each(b.properties_json, '$.types') AS je
   WHERE b.deleted = 0 AND typeof(je.value) = 'text'
-`,Z=`blocks_fts_backfill_v1`,Q=`staging_needs_apply_seeded`,xe=K(Q),Se=q(Q),Ce=K(Z),we=q(Z),Te=`
+`,Z=`blocks_fts_backfill_v1`,Q=`staging_needs_apply_seeded_v2`,xe=K(Q),Se=q(Q),Ce=K(Z),we=q(Z),Te=`
   INSERT OR IGNORE INTO blocks_fts_rowids (block_id)
   SELECT id
   FROM blocks
