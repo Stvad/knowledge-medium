@@ -1,2 +1,2 @@
-import{CallbackSet as e}from"../../utils/callbackSet.js";var t=`view_perf_trend`,n=new Map,r=new e(`perf-monitor-analysis`),i=e=>{n.set(e.workspaceId,e),r.notify()},a=e=>(e==null?void 0:n.get(e))??null,o=e=>r.add(e),s=()=>{n.clear(),r.clear()};export{t as VIEW_PERF_TREND_ACTION_ID,a as getPerfAnalysisFor,i as publishPerfAnalysis,s as resetPerfAnalysisStore,o as subscribePerfAnalysis};
+import{createWorkspaceSnapshotStore as e}from"../../utils/workspaceSnapshotStore.js";var t=`view_perf_trend`,n=e(`perf-monitor-analysis`),r=n.publish,i=n.getFor,a=n.subscribe,o=n.reset;export{t as VIEW_PERF_TREND_ACTION_ID,i as getPerfAnalysisFor,r as publishPerfAnalysis,o as resetPerfAnalysisStore,a as subscribePerfAnalysis};
 //# sourceMappingURL=store.js.map
