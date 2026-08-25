@@ -1,0 +1,2 @@
+import{resolveFacetRuntimeSync as e}from"../facets/facet.js";import{localSchemaFacet as t}from"./facets.js";import{ANALYZE_ARMING_PROBES as n}from"./internals/clientSchema.js";var r=n=>e(n).read(t),i=e=>[...n,...e.flatMap(e=>e.analyzeProbes??[])],a=async(e,t)=>{for(let n of t)for(let t of n.statements??[])await e.execute(t);for(let n of t)for(let t of n.backfills??[])await t.run(e)};export{a as applyLocalSchemaContributions,i as resolveAnalyzeArmingProbes,r as resolveLocalSchemaContributions};
+//# sourceMappingURL=localSchema.js.map
