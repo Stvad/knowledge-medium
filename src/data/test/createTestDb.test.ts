@@ -88,6 +88,11 @@ describe('createTestDb harness', () => {
   })
 
   it('cleanup releases the Repos built over the db before closing it', async () => {
+    // Opens its OWN db, against the one-db-per-file rule: the subject here is
+    // `cleanup()` CLOSING one, which it cannot do to the db the other tests in
+    // this file share. One 154ms open per suite run — a separate file would
+    // cost more than that in import alone.
+    //
     // A pinned Repo is not idle: the tx below primes the property registry,
     // which schedules a seed pass that parks on a `workspace_members` row this
     // db never gets — a live subscription on a database about to close under
