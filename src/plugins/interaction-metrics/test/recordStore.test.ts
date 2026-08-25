@@ -10,7 +10,7 @@ import { Repo } from '@/data/repo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { resetClientIdCache } from '@/utils/clientId'
-import { type User } from '@/data/api'
+import { ChangeScope, type User } from '@/data/api'
 import { definitionSeedsFacet, typeSeedsFacet } from '@/data/facets'
 import {
   interactionMetricsUIStateType,
@@ -18,6 +18,7 @@ import {
   interactionRecordType,
   type InteractionRecordData,
 } from '../record'
+import { keyAtStart } from '@/data/orderKey'
 import { appendClientRecord, clientGroupId, type ClientRecordSpec } from '../recordStore'
 
 const WS = 'ws-1'
@@ -71,6 +72,27 @@ const liveIds = async (): Promise<string[]> =>
     [clientGroupId(repo, WS, interactionMetricsUIStateType)],
   )).map((r) => r.id)
 
+/** A child of the group that is NOT one of ours — the hand-created block these
+ *  inspectable subtrees are allowed to hold. */
+const insertForeign = async (id: string): Promise<void> => {
+  const groupId = clientGroupId(repo, WS, interactionMetricsUIStateType)
+  // Ordered ahead of every existing child, derived rather than guessed — the
+  // keys are fractional and jittered, so a literal cannot be relied on to sort
+  // first.
+  const first = await sharedDb.db.getOptional<{ order_key: string }>(
+    'SELECT order_key FROM blocks WHERE parent_id = ? AND deleted = 0 ORDER BY order_key LIMIT 1',
+    [groupId],
+  )
+  await sharedDb.db.execute(
+    `INSERT INTO blocks
+       (id, workspace_id, parent_id, order_key, content, properties_json, deleted,
+        created_at, updated_at, created_by, updated_by)
+     VALUES (?, ?, ?, ?, ?, '{}', 0, 1, 1, ?, ?)`,
+    [id, WS, groupId, keyAtStart(first?.order_key ?? null),
+     'a note someone made here', USER.id, USER.id],
+  )
+}
+
 /** Run `during` as the retention transaction is entered — the window between
  *  the pass selecting its rows and it obtaining the write lock. */
 const duringRetention = (during: () => Promise<void>): void => {
@@ -109,6 +131,76 @@ describe('appendClientRecord retention', () => {
     // Precondition: the pass really did delete, so a green result cannot mean
     // the deletion branch was never reached.
     expect(live).toEqual([fresh, ids[2], victim])
+  })
+
+  // Clearing the record through the property codec leaves the KEY present
+  // holding JSON null (`optionalIdentity.encode(undefined)` is `null`), which
+  // `json_extract` reports as absent. A re-take testing `=== undefined` reads
+  // that as still ours and deletes a block a person just repurposed.
+  it('leaves a row alone when its record is cleared to null after selection', async () => {
+    const ids: string[] = []
+    for (let i = 0; i < 3; i++) ids.push((await append(3)).blockId)
+    const victim = ids[0]
+    duringRetention(async () => {
+      await sharedDb.db.execute(
+        'UPDATE blocks SET properties_json = ? WHERE id = ?',
+        [JSON.stringify({ [interactionRecordProp.name]: null }), victim],
+      )
+    })
+    const fresh = (await append(1)).blockId
+    expect(await liveIds()).toEqual([fresh, ids[2], victim])
+  })
+
+  // A record dragged out of the group is invisible to the reader, so it is no
+  // longer ours to collect — and deleting it would take it from wherever the
+  // person put it.
+  it('leaves a row alone when it is moved out of the group after selection', async () => {
+    const ids: string[] = []
+    for (let i = 0; i < 3; i++) ids.push((await append(3)).blockId)
+    const victim = ids[0]
+    await repo.tx(async (tx) => {
+      await tx.create({ id: 'elsewhere', workspaceId: WS, parentId: null, orderKey: 'a0',
+        content: 'a page', properties: {} }, { systemMint: true })
+    }, { scope: ChangeScope.Automation })
+    duringRetention(async () => {
+      await sharedDb.db.execute(
+        'UPDATE blocks SET parent_id = ? WHERE id = ?', ['elsewhere', victim])
+    })
+    const fresh = (await append(1)).blockId
+
+    expect(await liveIds()).toEqual([fresh, ids[2]])
+    const moved = await sharedDb.db.getOptional<{ deleted: number }>(
+      'SELECT deleted FROM blocks WHERE id = ?', [victim])
+    expect(moved?.deleted).toBe(0)
+  })
+
+  // The record filter is applied to the SELECT as well as to each deletion, and
+  // only the SELECT can keep a foreign row out of the OFFSET. Counting one
+  // toward the bound pushes a genuine record past it, and the per-row re-take
+  // cannot see that: the row it is handed is unambiguously ours.
+  it('does not let a foreign child consume a retention slot', async () => {
+    const ids: string[] = []
+    for (let i = 0; i < 3; i++) ids.push((await append(3)).blockId)
+    // Ordered ahead of every record, so an unfiltered SELECT spends the single
+    // retained slot on it and evicts the newest real record instead.
+    await insertForeign('hand-written')
+    const fresh = (await append(1)).blockId
+
+    const live = await liveIds()
+    expect(live).toContain('hand-written')
+    expect(live).toContain(ids[2])
+    expect(live).toEqual([fresh, 'hand-written', ids[2]])
+  })
+
+  // Deletes here are non-undoable, and the pass is several awaits past the
+  // create's own gate — including a scan of the whole group.
+  it('refuses to prune once the workspace stops being writable', async () => {
+    const ids: string[] = []
+    for (let i = 0; i < 3; i++) ids.push((await append(3)).blockId)
+    duringRetention(async () => { repo.setReadOnly(true) })
+    const fresh = (await append(1)).blockId
+
+    expect(await liveIds()).toEqual([fresh, ...[...ids].reverse()])
   })
 
   // The record is already committed when the pass runs. Routing its failure

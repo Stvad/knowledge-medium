@@ -24,7 +24,7 @@ import { jsonPathForProperty } from '@/data/internals/typedBlockQuery.js'
 import { keyAtStart } from '@/data/orderKey.js'
 import { getClientId, getDeviceLabel } from '@/utils/clientId.js'
 import { v4 as uuidv4 } from 'uuid'
-import { assertStillWritable } from './sessionContext.js'
+import { assertStillWritable, NoLongerEligible } from './sessionContext.js'
 
 export interface ClientRecordSpec {
   workspaceId: string
@@ -42,9 +42,8 @@ export interface ClientRecordSpec {
    *  with a STRONGER rule must pass it, because the shared default cannot see
    *  it. The interaction recorder's attributability rule is exactly that case. */
   assertEligible?: (repo: Repo, workspaceId: string) => void
-  /** Records to keep in this client's group. Both recorders bound their own
-   *  series here rather than each rolling retention, which is how one of them
-   *  went unbounded for two months. */
+  /** Records to keep in this client's group. Required, so a recorder cannot
+   *  reach the graph without stating a bound. */
   retain: number
   /** Name of the record property — retention only ever considers rows CARRYING
    *  one, since these groups are inspectable and can hold a hand-created child
@@ -131,7 +130,12 @@ export const appendClientRecord = async (
   try {
     await pruneGroup(repo, recordTx, spec, groupId, blockId)
   } catch (err) {
-    console.warn(`[${retentionDescription(spec)}] failed`, err)
+    // Losing eligibility mid-pass is the expected refusal, not a fault; the next
+    // append re-attempts. Anything else means the bound is not being enforced,
+    // which is how a series goes unbounded, so it stays loud.
+    if (!(err instanceof NoLongerEligible)) {
+      console.error(`[${retentionDescription(spec)}] failed`, err)
+    }
   }
   return { blockId, groupId }
 }
@@ -165,18 +169,31 @@ const pruneGroup = async (
   )
   if (stale.length === 0) return
   await recordTx(async (tx) => {
+    // Deletes are the one thing here that cannot be taken back — `Automation` is
+    // non-undoable — and this transaction is reached several awaits after the
+    // create's own gate, across a `getAll` over the whole group. Re-take it.
+    assertStillWritable(repo, spec.workspaceId)
     // Retention of a recorder's own rows in a hidden ui-state subtree: no user
     // gesture and no user-visible block, so the deletion guards — which exist to
     // protect user-authored content — have nothing to say here.
     for (const row of stale) {
       // The selection above is separated from this write by an await, and these
-      // rows are hand-editable: a row whose record property was stripped in that
-      // window — by a person, or by a sync-applied edit from another device — is
-      // user content by the time we get the lock. Re-take the classification
-      // where the deletion actually happens. (`tx.get` does not filter
-      // tombstones, so liveness is part of the re-take, not an extra check.)
+      // rows are hand-editable: a row that stopped being one of ours in that
+      // window — stripped by a person, moved out of the group, or edited on
+      // another device and synced in — is user content by the time we get the
+      // lock. Re-take EVERY clause the selection used, or the re-take admits
+      // rows the query would have excluded.
+      //
+      // `== null` and not `=== undefined`: the property codec is
+      // `optionalIdentity`, whose `encode(undefined)` is `null`, so clearing the
+      // record leaves the key present holding JSON null — which `json_extract`
+      // reports as absent and a strict check would read as still ours.
+      // `!now` and `now.deleted` are defence in depth and unpinnable through
+      // this path — a hard delete cannot happen here and `tx.delete` no-ops on a
+      // tombstone. The parent and property clauses below are load-bearing.
       const now = await tx.get(row.id)
-      if (!now || now.deleted || now.properties[spec.recordName] === undefined) continue
+      if (!now || now.deleted || now.parentId !== groupId) continue
+      if (now.properties[spec.recordName] == null) continue
       // eslint-disable-next-line no-restricted-syntax -- programmatic delete: telemetry retention
       await tx.delete(row.id)
     }

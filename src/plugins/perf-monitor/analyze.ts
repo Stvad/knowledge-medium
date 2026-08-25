@@ -98,11 +98,7 @@ export const runPerfAnalysis = async (
   // workspace carries both workspaces' work, so comparing that snapshot against
   // one workspace's history manufactures regressions. The recorder stops
   // sampling in that state; this reader holds the same snapshot and needs the
-  // same rule -- it does not inherit it by the recorder having one. Taking the
-  // snapshot and the facts that qualify it through the same call is what keeps
-  // the two consumers from diverging: a manual re-analysis is a second entry
-  // point into this snapshot and re-bases the accounting exactly as a sample
-  // does.
+  // same rule -- it does not inherit it by the recorder having one.
   const { metrics, session } = readLiveSession(repo, workspaceId)
 
   // Exclude THIS session's record by id, not by position: it is updated in

@@ -143,14 +143,13 @@ export const interactionRecordType = seedType({
   properties: [interactionRecordProp],
 })
 
-/** JSON path addressing the record property. The name carries a colon (the
- *  namespace separator), which must be QUOTED inside a path expression — stated
- *  once, here, beside the name it quotes. */
 /** ~4 page sessions/day on an active device at ~1.7KB each: about three months
  *  of history for ~680KB per client group. The reader never looks past 40, so
  *  this is purely how far back an investigation can reach. */
 export const INTERACTION_RETAIN = 400
 
+/** JSON path addressing the record property. The name carries a colon (the
+ *  namespace separator), which must be QUOTED inside a path expression. */
 export const INTERACTION_RECORD_PATH = jsonPathForProperty(interactionRecordProp.name)
 
 /** Parent ui-state container; each session adds one child under its client's group. */
@@ -197,15 +196,9 @@ export const queryNameFromHandleKey = (key: string): string =>
  *  can never diverge in what "the same measurement" means. */
 export const interactionComparable = (
   metrics: ReturnType<Repo['metrics']>,
-  /** What the recorder itself cost, discounted from BOTH sides of the ratio.
-   *
-   *  `writes` is the denominator, so counting our own bookkeeping deflates it;
-   *  the invalidations are the numerator, and a record create is a live-set
-   *  membership change, so it fires `kernel.content` and `typedBlocks.live` and
-   *  really does invalidate any mounted workspace-wide handle. Correcting only
-   *  the denominator moves the ratio UP on exactly the quiet sessions where our
-   *  own writes dominate — the direction that invents regressions. */
-  own: OwnActivity = { writes: 0, fanout: {} },
+  /** What the recorder itself cost, subtracted from BOTH sides of the ratio —
+   *  see {@link OwnActivity} for why one side alone is worse than neither. */
+  own: OwnActivity,
 ): InteractionComparable => {
   const queries: Record<string, TimingSample> = {}
   for (const [name, timing] of Object.entries(metrics.queries)

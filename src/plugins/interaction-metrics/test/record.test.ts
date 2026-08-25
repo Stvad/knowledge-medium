@@ -358,6 +358,26 @@ describe('writeInteractionSample', () => {
     expect((await stored(first))!.fanout.loaderInvalidations).toBe(before)
   })
 
+  // A reset landing INSIDE a write body leaves our own before/after delta
+  // spanning two epochs — the `after` counters are post-zeroing, so the delta is
+  // negative, and subtracting a negative inflates the corrected fan-out. That is
+  // the direction that invents regressions.
+  it('credits nothing when a reset lands inside its own write', async () => {
+    await writeInteractionSample(repo, WS)
+    const realTx = repo.tx.bind(repo)
+    vi.spyOn(repo, 'tx').mockImplementation(async (fn, opts) => {
+      const out = await realTx(fn, opts)
+      if (opts?.description === 'interaction metrics record') repo.resetMetrics()
+      return out
+    })
+    await writeInteractionSample(repo, WS)
+    vi.restoreAllMocks()
+
+    const own = metricsSessionContext(repo, WS).own
+    expect(own.writes).toBe(0)
+    expect(own.fanout).toEqual({})
+  })
+
   // blockCount is the dominant confound for every timing in the record, so a
   // session that grows the graph must not report its final timings against the
   // size the graph had when it opened.

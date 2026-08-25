@@ -208,14 +208,19 @@ describe('collectStartupMetricsEffect', () => {
   const effectCleanups: Array<() => void> = []
   afterEach(() => { for (const c of effectCleanups.splice(0)) c() })
 
-  const startEffect = (workspaceId: string): void => {
+  /** Returns the disposer the effect handed back — `undefined` means it
+   *  declined to arm anything, which is the only synchronous evidence the
+   *  once-per-session gate produced. */
+  const startEffect = (workspaceId: string): (() => void) | undefined => {
     const cleanup = collectStartupMetricsEffect.start({
       repo,
       workspaceId,
       runtime: {} as FacetRuntime,
       safeMode: false,
     })
-    if (typeof cleanup === 'function') effectCleanups.push(cleanup)
+    if (typeof cleanup !== 'function') return undefined
+    effectCleanups.push(cleanup)
+    return cleanup
   }
 
   const countRecords = async (): Promise<number> => {
@@ -310,16 +315,31 @@ describe('collectStartupMetricsEffect', () => {
     await vi.waitFor(async () => expect(await countRecords()).toBe(1))
   })
 
+  // Boot happens once and the marks are boot-relative, so a restart — a plugin
+  // toggle, a workspace switch — must not log a second startup.
+  //
+  // Asserted on the CAUSE, not on a count after a wait. The write path is
+  // `scheduleIdle → record() → scheduleIdle → writeStartupRecord → several
+  // awaits`, so a count taken straight after the restart is 1 whether or not
+  // the guard holds; the previous version of this test also restarted on a
+  // second workspace and counted only under the first, so the duplicate landed
+  // in a subtree it never looked at.
+  // Boot happens once and the marks are boot-relative, so a restart — a plugin
+  // toggle, a workspace switch — must not log a second startup.
+  //
+  // Asserted on the CAUSE: the restart arms nothing, so it returns no disposer.
+  // Counting records after the restart instead cannot work — the count is
+  // already 1, so both the bare assertion and a `waitFor` on it pass on the
+  // first tick, while the duplicate write is still several idle hops and awaits
+  // away. (The previous version also restarted on a second workspace while
+  // counting only under the first, so the duplicate landed where it never
+  // looked.)
   it('records at most once per session even if the effect restarts', async () => {
     markStartup('firstContentPaint')
-    startEffect(WS)
+    expect(startEffect(WS)).toBeTypeOf('function')
     await vi.waitFor(async () => expect(await countRecords()).toBe(1))
-    // A second workspace open in the same session must not log a second
-    // startup. The once-per-session guard (`recorded`) makes the restart a
-    // synchronous no-op — no further write is scheduled — so the count is
-    // already final, no settle wait needed.
-    startEffect('ws-2')
-    expect(await countRecords()).toBe(1)
+
+    expect(startEffect(WS)).toBeUndefined()
   })
 
   it('debounces interactive off long-task events when the Long Tasks API is present', () => {

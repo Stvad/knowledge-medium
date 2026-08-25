@@ -12,8 +12,8 @@ import { viewPerfTrendActionContribution } from './trendAction.ts'
  *  the diagnostics seam (so the system-status chip carries it without knowing
  *  anything about performance) plus a trend view for investigations.
  *
- *  Reading is the half that was missing: the recorders were already writing.
- *  A metrics series nothing reads is indistinguishable from no metrics at all. */
+ *  A metrics series nothing reads is indistinguishable from no metrics at all,
+ *  so a recorder added without a reader here is not finished. */
 export const perfMonitorPlugin = ({ repo }: { repo: Repo }): AppExtension =>
   systemToggle({
     id: 'system:perf-monitor',

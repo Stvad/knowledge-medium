@@ -22,10 +22,14 @@ import { getClientId } from '@/utils/clientId.js'
 export { INTERACTION_RECORD_PATH } from '@/plugins/interaction-metrics/record.js'
 export { STARTUP_RECORD_PATH } from '@/plugins/startup-metrics/record.js'
 
+// `Number.isFinite`, not `typeof === 'number'`: JSON has no Infinity literal but
+// `1e400` parses as one, and these blobs are hand-editable. A non-finite p95
+// reaching the recent window publishes an `Infinity×` regression; reaching the
+// baseline suppresses a real one.
 const isTimingSample = (v: unknown): boolean =>
   typeof v === 'object' && v !== null &&
-  typeof (v as { calls?: unknown }).calls === 'number' &&
-  typeof (v as { p95Ms?: unknown }).p95Ms === 'number'
+  Number.isFinite((v as { calls?: unknown }).calls) &&
+  Number.isFinite((v as { p95Ms?: unknown }).p95Ms)
 
 /**
  * A validator must cover EVERY field a reader dereferences — the comparison and
@@ -33,13 +37,9 @@ const isTimingSample = (v: unknown): boolean =>
  * an opaque, deliberately hand-inspectable blob, so any field can arrive with
  * the wrong type, and the consequence is never a bad number: it is a throw
  * inside the analysis (dead for the rest of the session) or inside the dialog
- * render. Adding a field to either reader means adding it here.
- *
- * The fields every reader of an interaction record dereferences, INCLUDING the
- * nested query samples. A record whose `queries` is an object of nulls passes
- *  a shallow check and then throws inside the comparison or the trend table —
- *  taking out the analysis for the rest of the session, and the dialog render,
- *  rather than skipping one unreadable row. */
+ * render, rather than skipping one unreadable row. Adding a field to either
+ * reader means adding it here — INCLUDING inside the nested query samples, since
+ * a `queries` map of nulls passes a shallow check and throws later. */
 export const isUsableInteractionRecord = (r: {
   queries?: unknown
   fanout?: unknown
@@ -48,7 +48,7 @@ export const isUsableInteractionRecord = (r: {
   appSha?: unknown
 }): boolean =>
   isAbsentOrString(r.appSha) &&
-  typeof r.writes === 'number' && typeof r.blockCount === 'number' &&
+  Number.isFinite(r.writes) && Number.isFinite(r.blockCount) &&
   typeof r.queries === 'object' && r.queries !== null &&
   Object.values(r.queries as Record<string, unknown>).every(isTimingSample) &&
   typeof r.fanout === 'object' && r.fanout !== null &&

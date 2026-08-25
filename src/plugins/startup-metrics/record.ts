@@ -234,6 +234,10 @@ export const collectStartupMetricsEffect: AppEffect = {
     const runCleanups = () => { for (const c of cleanups.splice(0)) c() }
 
     const record = () => {
+      // `recorded` here is not reachable through a single instance — the
+      // start gate already refuses — but two instances can be live at once
+      // (a restart before the first write lands), and the second's timers
+      // outlive the first's success.
       if (done || recorded || recording) return
       done = true
       runCleanups()

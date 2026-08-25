@@ -62,8 +62,8 @@ const slowestQuery = (r: InteractionRecordData): { name: string; p95Ms: number }
 }
 
 /** Shares `invalidationsPerWrite` with the comparison rather than recomputing
- *  it: a table that charted a different number than the alarm fires on is worse
- *  than no table, and these did drift once. */
+ *  it: a table charting a different number than the alarm fires on is worse
+ *  than no table. */
 const perWrite = (r: InteractionRecordData): string => {
   const rate = invalidationsPerWrite(r)
   return rate === null ? '—' : (Math.round(rate * 100) / 100).toFixed(2)
