@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { createTestDb, type TestDb } from './createTestDb'
+import { createTestRepo } from './createTestRepo'
 import { BLOCKS_TABLE_COLUMN_NAMES } from '@/data/blockSchema'
 import {
   ALIAS_BACKFILL_MARKER_KEY,
@@ -85,6 +86,27 @@ describe('createTestDb harness', () => {
       BLOCK_TYPES_BACKFILL_MARKER_KEY,
     ]))
   })
+
+  it('cleanup releases the Repos built over the db before closing it', async () => {
+    // A pinned Repo is not idle: the tx below primes the property registry,
+    // which schedules a seed pass that parks on a `workspace_members` row this
+    // db never gets — a live subscription on a database about to close under
+    // it, which then logs a failure as it dies. Asserted as Repo state rather
+    // than as the absence of that log line: whether the dying subscription
+    // actually logs depends on table churn racing the close, so an
+    // absence-of-log assertion here is green either way.
+    const own = await createTestDb()
+    const {repo} = createTestRepo({db: own.db})
+    repo.setActiveWorkspaceId('ws-release')
+    await repo.ensureSystemPages('ws-release')
+
+    await own.cleanup()
+
+    expect(repo.activeWorkspaceId).toBeNull()
+    expect((repo as unknown as {
+      pendingSeedMaterializationWorkspaces: Set<string>
+    }).pendingSeedMaterializationWorkspaces.size).toBe(0)
+  }, 30_000)
 
   it('writeTransaction commits on success, rolls back on throw', async () => {
     await h.db.writeTransaction(async tx => {

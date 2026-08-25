@@ -16,6 +16,12 @@
  * test for registry / cache / handle-store isolation. For sync-materialization
  * tests, pass `startSyncObserver: true` and stop it in your own cleanup.
  *
+ * Repos built here are registered against their db so `createTestDb`'s cleanup
+ * releases them before closing it (see `releaseTestRepos`). That covers the
+ * database going away underneath a parked pass; it does NOT make a Repo safe to
+ * abandon mid-file. A file whose tests insert `workspace_members` rows must
+ * release each test's Repo itself — see `definitionSeeds.test.ts`.
+ *
  * CAVEAT — last-write-wins observer tests: the default `now` is a deterministic
  * counter starting at 1.7e12, NOT `Date.now`. A sync-observer test whose
  * last-write-wins gates compare the local `now()` against synced-row timestamps
@@ -155,5 +161,40 @@ export const createTestRepo = (opts: CreateTestRepoOptions): TestRepo => {
   if (opts.extensions?.length) {
     repo.setFacetRuntime(resolveFacetRuntimeSync([kernelDataExtension, ...opts.extensions]))
   }
+  registerTestRepo(opts.db, repo)
   return { repo, cache }
+}
+
+/** Every Repo built over a given test database, so `createTestDb`'s cleanup can
+ *  release them before closing it.
+ *
+ *  `WeakRef`, not the Repo: a time-bounded deep fuzz run builds one Repo per
+ *  property iteration, and holding them all would grow without bound. It also
+ *  happens to select exactly the right ones — a Repo with a parked pass is kept
+ *  alive by the subscription that pass holds on the db, and one that has been
+ *  collected had nothing left to release. */
+const reposByDb = new WeakMap<CreateTestRepoOptions['db'], Set<WeakRef<Repo>>>()
+
+/** Track a Repo built by hand (`new Repo(...)`) rather than by `createTestRepo`,
+ *  so `releaseTestRepos` covers it too. */
+export const registerTestRepo = (db: CreateTestRepoOptions['db'], repo: Repo): void => {
+  const existing = reposByDb.get(db)
+  if (existing) existing.add(new WeakRef(repo))
+  else reposByDb.set(db, new Set([new WeakRef(repo)]))
+}
+
+/** Unpin every Repo built over `db` and let its deferred work settle.
+ *
+ *  A pinned Repo is not idle: any `repo.tx` primes the property registry, which
+ *  schedules a seed-materialization pass, which parks on a `workspace_members`
+ *  row that most tests never insert — holding a subscription on a db that is
+ *  about to close under it. Unpinning aborts that wait; a pass whose idle timer
+ *  has not fired yet then refuses at the access gate without touching the db. */
+export const releaseTestRepos = async (db: CreateTestRepoOptions['db']): Promise<void> => {
+  const refs = reposByDb.get(db)
+  if (!refs) return
+  const live = [...refs].map(ref => ref.deref()).filter((repo): repo is Repo => repo !== undefined)
+  for (const repo of live) repo.setActiveWorkspaceId(null)
+  await Promise.all(live.map(repo => repo.awaitSeedMaterialization()))
+  refs.clear()
 }

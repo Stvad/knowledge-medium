@@ -72,6 +72,7 @@ import {
   WORKSPACE_MEMBERS_RAW_TABLE,
 } from '@/data/workspaceSchema'
 import { staticDataExtensions } from '@/extensions/staticDataExtensions.js'
+import { releaseTestRepos } from '@/data/test/createTestRepo'
 
 export interface TestDb {
   /** The real PowerSync database — same type as production. */
@@ -293,6 +294,10 @@ export const createTestDb = async (): Promise<TestDb> => {
   return {
     db,
     cleanup: async () => {
+      // Before closing: a Repo still pinned to a workspace has a parked seed
+      // pass subscribed to this database, which logs a failure when the db
+      // shuts down under it.
+      await releaseTestRepos(db)
       await db.close()
       rmSync(dbDir, {recursive: true, force: true})
     },

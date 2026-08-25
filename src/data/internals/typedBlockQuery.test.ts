@@ -9,6 +9,7 @@ import {
 } from '@/data/api'
 import { BlockCache } from '@/data/blockCache'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
+import { registerTestRepo } from '@/data/test/createTestRepo'
 import { BLOCKS_SYNCED_RAW_TABLE, blockToSyncedRowParams } from '@/data/blockSchema'
 import { typesProp } from '@/data/properties'
 import {
@@ -99,6 +100,9 @@ const setup = async (): Promise<Harness> => {
     }), {source: 'test'}),
   ]))
   repo.setActiveWorkspaceId(WS)
+  // Hand-rolled Repo (see the createTestRepo doc's last-write-wins caveat), so
+  // register it by hand for `cleanup`'s release.
+  registerTestRepo(h.db, repo)
   return {h, repo}
 }
 
