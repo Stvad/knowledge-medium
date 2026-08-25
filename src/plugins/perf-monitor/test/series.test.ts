@@ -156,7 +156,18 @@ describe('fanoutRegression', () => {
   // turn "this has always been zero" into the loudest possible finding.
   it('treats an unchanged zero as unchanged, not as an infinite regression', () => {
     const zero = () => sample({ writes: 100, fanout: { loaderInvalidations: 0 } })
-    expect(reg(fanoutRegression(zero(), history(10, zero)))).toBeNull()
+    expect(fanoutRegression(zero(), history(10, zero)).status).toBe('steady')
+  })
+
+  // The other way to reach a zero baseline is the dangerous one: `steady` is a
+  // positive health claim, so reporting it here would let the chip certify an
+  // arbitrarily large move from nothing as "no slowdowns".
+  it('will not certify a move from a zero baseline as healthy', () => {
+    const base = () => sample({ writes: 100, fanout: { loaderInvalidations: 0 } })
+    const now = () => sample({ writes: 100, fanout: { loaderInvalidations: 6000 } })
+    const result = fanoutRegression(now(), [now(), now(), ...history(8, base)])
+    expect(result.status).toBe('insufficient')
+    expect(result.status).not.toBe('steady')
   })
 })
 

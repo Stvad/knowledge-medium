@@ -16,7 +16,7 @@ import {
   interactionRecordType,
   writeInteractionSample,
 } from '../record'
-import { metricsSessionContext, resetMetricsSession } from '../sessionContext'
+import { metricsSessionContext, observeWorkspaceEffect, resetMetricsSession } from '../sessionContext'
 import { drainInteractionSamples, interactionMetricsEffect } from '../schedule'
 
 const WS = 'ws-1'
@@ -24,6 +24,7 @@ const USER: User = { id: 'user-1', name: 'Alice' }
 
 let sharedDb: TestDb
 let repo: Repo
+
 
 beforeAll(async () => { sharedDb = await createTestDb() })
 afterAll(async () => { await sharedDb.cleanup() })
@@ -115,6 +116,26 @@ describe('interactionMetricsEffect', () => {
     await settleSamples()
     expect(await writeInteractionSample(repo, WS)).toBeNull()
     stopA?.()
+  })
+
+  // The two metrics plugins are independently togglable, so observation cannot
+  // live only in their effects: enabling one after a workspace switch would
+  // start the history at whatever workspace happened to be active and attribute
+  // the earlier one's counters to it.
+  it('observes activation even when neither metrics plugin ran', async () => {
+    await observeWorkspaceEffect.start({ repo, workspaceId: WS } as Parameters<
+      typeof observeWorkspaceEffect.start
+    >[0])
+    await observeWorkspaceEffect.start({ repo, workspaceId: 'ws-2' } as Parameters<
+      typeof observeWorkspaceEffect.start
+    >[0])
+    expect(metricsSessionContext(repo, WS).attributable).toBe(false)
+  })
+
+  // Refusing is this rule's whole job, so the default when nothing has been
+  // observed must not be to allow.
+  it('does not claim attributability for a workspace nobody observed', () => {
+    expect(metricsSessionContext(repo, WS).attributable).toBe(false)
   })
 
   it('stops sampling once the effect is torn down', async () => {

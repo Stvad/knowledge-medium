@@ -19,6 +19,10 @@
  * counters are monotonic from Repo construction and are not segmented by
  * workspace.
  */
+import { appEffectsFacet, type AppEffect } from '@/extensions/core.js'
+import type { Repo } from '@/data/repo'
+import { awaitLocalMemberRole } from '@/data/workspaces.js'
+import { isRemoteSyncActive } from '@/data/repoProvider.js'
 import { isClientIdPersistent } from '@/utils/clientId.js'
 
 /** Why this session may not persist metrics, or null when it may. */
@@ -71,8 +75,39 @@ export const observeWorkspace = (workspaceId: string): void => {
   else if (seenWorkspace !== workspaceId) unattributable = true
 }
 
-/** Record that a recorder issued one transaction of its own. */
-export const noteOwnWrite = (): void => { ownWrites++ }
+/**
+ * The always-on half of the rule.
+ *
+ * `observeWorkspace` has to see EVERY workspace this page session activates,
+ * and the plugins that consume it are independently togglable — so if
+ * observation lived only in their effects, enabling one mid-session would start
+ * the history at whatever workspace happened to be active, silently attributing
+ * work done in an earlier one to it. This effect is registered in the
+ * composition root outside either toggle, so the counters cannot outrun what
+ * has been observed.
+ */
+export const observeWorkspaceEffect: AppEffect = {
+  id: 'metrics.observe-workspace',
+  start: ({ workspaceId }) => {
+    if (workspaceId) observeWorkspace(workspaceId)
+  },
+}
+
+export const observeWorkspaceEffectContribution = appEffectsFacet.of(observeWorkspaceEffect, {
+  source: 'interaction-metrics',
+})
+
+/** Record transactions a recorder issued itself.
+ *
+ *  Counted as a DELTA measured around the write rather than incremented per
+ *  `repo.tx` call, because the recorders do not issue all their own
+ *  transactions: `getPluginUIStateBlock` / `getPluginUIStateChild` each commit
+ *  one on first use, and those land in the same lifetime counter. Both
+ *  recorders must report, since the count they feed is the denominator of the
+ *  other's fan-out ratio. */
+export const noteOwnWrites = (count: number): void => {
+  if (count > 0) ownWrites += count
+}
 
 /** Remember the record block this page session owns. */
 export const setPageRecord = (workspaceId: string, blockId: string, startedAt: number): void => {
@@ -105,7 +140,11 @@ export const metricsSessionContext = (
   return {
     canRecord: blockedBy === null,
     blockedBy,
-    attributable: !unattributable && (seenWorkspace === null || seenWorkspace === workspaceId),
+    // Requires an EXPLICIT observation. Defaulting to attributable when nobody
+    // has observed would let a caller that never registered the workspace claim
+    // the counters anyway — the permissive direction on a rule whose whole job
+    // is to refuse.
+    attributable: !unattributable && seenWorkspace === workspaceId,
     ownWrites,
     recordId: pageRecord?.workspaceId === workspaceId ? pageRecord.blockId : null,
   }
@@ -117,4 +156,53 @@ export const resetMetricsSession = (): void => {
   unattributable = false
   ownWrites = 0
   pageRecord = null
+}
+
+/** How long to wait for the membership row before giving up on this attempt.
+ *  The callers are idle-scheduled and retry, so a timeout costs one sample. */
+const ROLE_WAIT_MS = 10_000
+
+/**
+ * The authoritative "may I write here?" — awaited, unlike `canRecord`.
+ *
+ * `repo.isReadOnly` is NOT sufficient on its own: it defaults to FALSE until
+ * the `workspace_members` row replicates, so a viewer opening a shared
+ * workspace on a fresh device reads as writable for as long as the initial
+ * sync takes. Every record written in that window is admitted locally by the
+ * Automation scope and then refused by RLS, landing in the rejection quarantine
+ * the status chip reports to the user as changes that could not sync — and the
+ * interaction recorder would keep manufacturing them every five minutes.
+ *
+ * `src/data/definitionSeeds.ts` reached the same conclusion for seed writes and
+ * this mirrors its shape, including the re-check that the workspace is still
+ * the active one after the await.
+ *
+ * An unresolved role is treated as NOT allowed: the callers retry, so refusing
+ * costs one sample while allowing costs a quarantined upload.
+ *
+ * Short-circuits when remote sync is inactive (local-only, tests). The whole
+ * point of the wait is to avoid an upload the server will refuse; with nothing
+ * uploading there is nothing to refuse, and waiting for a membership row that
+ * a local-only workspace has no reason to replicate would disable recording
+ * outright.
+ */
+export const awaitRecordingAllowed = async (
+  repo: Repo,
+  workspaceId: string,
+): Promise<boolean> => {
+  if (!metricsSessionContext(repo, workspaceId).canRecord) return false
+  if (!isRemoteSyncActive()) return !repo.isReadOnly
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), ROLE_WAIT_MS)
+  try {
+    const role = await awaitLocalMemberRole(repo, workspaceId, repo.user.id, {
+      signal: controller.signal,
+    })
+    if (repo.activeWorkspaceId !== workspaceId) return false
+    return role !== 'viewer' && !repo.isReadOnly
+  } catch {
+    return false
+  } finally {
+    clearTimeout(timer)
+  }
 }

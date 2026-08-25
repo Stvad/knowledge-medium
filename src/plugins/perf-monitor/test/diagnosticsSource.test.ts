@@ -12,6 +12,8 @@ const analysis = (over: Partial<PerfAnalysis> = {}): PerfAnalysis => ({
   insufficientHistory: false,
   ready: { interaction: true, startup: true },
   interactionComparable: true,
+  recordingBlockedBy: null,
+  baseline: { interaction: 12, startup: 12 },
   graphGrowth: null,
   ...over,
 })

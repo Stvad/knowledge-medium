@@ -27,6 +27,7 @@ const USER: User = { id: 'user-1', name: 'Alice' }
 let sharedDb: TestDb
 let repo: Repo
 
+
 beforeAll(async () => { sharedDb = await createTestDb() })
 afterAll(async () => { await sharedDb.cleanup() })
 beforeEach(async () => {
@@ -143,18 +144,26 @@ describe('runPerfAnalysis', () => {
   // sizes would quietly disable the monitor on a steadily growing graph, which
   // is the normal case.
   it('reports how much the graph grew rather than suppressing the comparison', async () => {
+    const addBlocks = async (tag: string, n: number): Promise<void> => {
+      await repo.tx(async (tx) => {
+        for (let i = 0; i < n; i++) {
+          await tx.create({ id: `${tag}-${i}`, workspaceId: WS, parentId: null, orderKey: `b${i}`,
+            content: 'x', properties: {} }, { systemMint: true })
+        }
+      }, { scope: ChangeScope.Automation })
+    }
+    // The baseline needs a graph to have measured; a session recorded against an
+    // empty workspace contributes no size.
+    await addBlocks('seed', 10)
     await pastSession()
     await pastSession()
-    const before = (await runPerfAnalysis(repo, WS, 1000)).graphGrowth!
-    await repo.tx(async (tx) => {
-      for (let i = 0; i < 40; i++) {
-        await tx.create({ id: `grew-${i}`, workspaceId: WS, parentId: null, orderKey: `b${i}`,
-          content: 'x', properties: {} }, { systemMint: true })
-      }
-    }, { scope: ChangeScope.Automation })
+    const before = (await runPerfAnalysis(repo, WS, 1000)).graphGrowth
+    expect(before).not.toBeNull()
+
+    await addBlocks('grew', 40)
     const after = await runPerfAnalysis(repo, WS, 2000)
-    expect(after.graphGrowth!).toBeGreaterThan(before)
+    expect(after.graphGrowth!).toBeGreaterThan(before!)
     // Still compares — a bigger graph is context, not a reason to go quiet.
-    expect(after.insufficientHistory).toBe((await runPerfAnalysis(repo, WS, 3000)).insufficientHistory)
+    expect(after.insufficientHistory).toBe(true)
   })
 })

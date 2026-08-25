@@ -59,6 +59,7 @@ import { dbMaintenancePlugin } from '@/plugins/db-maintenance'
 import { propertiesMigrationPlugin } from '@/plugins/properties-migration'
 import { startupMetricsPlugin } from '@/plugins/startup-metrics'
 import { interactionMetricsPlugin } from '@/plugins/interaction-metrics'
+import { observeWorkspaceEffectContribution } from '@/plugins/interaction-metrics/sessionContext'
 import { perfMonitorPlugin } from '@/plugins/perf-monitor'
 import { extensionsSettingsPlugin } from '@/plugins/extensions-settings'
 import { keybindingsSettingsPlugin } from '@/plugins/keybindings-settings'
@@ -160,6 +161,11 @@ export const staticAppExtensions = ({repo}: {repo: Repo}): AppExtension[] => [
   startupMetricsPlugin,
   interactionMetricsPlugin,
   perfMonitorPlugin({repo}),
+  // Deliberately OUTSIDE both metrics toggles: the rule that page-global
+  // counters belong to one workspace can only hold if every workspace
+  // activation is seen, and a plugin that was disabled for part of the session
+  // saw none of them.
+  observeWorkspaceEffectContribution,
   updateIndicatorPlugin,
   blockInfoPlugin,
   agentRuntimePlugin,

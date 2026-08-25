@@ -110,9 +110,14 @@ const trendRegression = (
   const base = median(baseline)
   // Judged, and too small to matter — a verdict, not a gap in the data.
   if (current < spec.minAbsolute) return { status: 'steady' }
-  // No ratio exists against a zero baseline. Reporting one as infinite turns
-  // "this metric has always been zero" into the loudest possible finding.
-  if (base === 0) return { status: 'steady' }
+  // A zero baseline admits no ratio, and the two reasons you can arrive at one
+  // are opposite statements. Still zero: judged, and genuinely unchanged.
+  // Zero before and something now: the metric moved from nothing to a value
+  // that already cleared the floor above, and calling that `steady` would let
+  // the chip certify an arbitrarily large regression as healthy — the one
+  // outcome this feature exists to prevent. It is not a regression we can rate
+  // either, since there is no ratio, so it is honestly reported as unjudged.
+  if (base <= 0) return current === 0 ? { status: 'steady' } : INSUFFICIENT
   const ratio = current / base
   if (ratio < REGRESSION_RATIO) return { status: 'steady' }
   return {
@@ -228,7 +233,13 @@ export const startupRegression = (
   series: readonly StartupRecordData[],
   currentTimeOriginMs: number,
 ): TrendResult => {
-  if (!series.some((r) => r.timeOriginMs === currentTimeOriginMs)) return INSUFFICIENT
+  // Inside the recent WINDOW, not merely somewhere in the series. Presence
+  // alone only implies currency via the sort order, and a backwards clock
+  // correction between boots sinks this boot's record below older ones — the
+  // guard would still pass while the window described earlier page loads.
+  if (!series.slice(0, RECENT_WINDOW).some((r) => r.timeOriginMs === currentTimeOriginMs)) {
+    return INSUFFICIENT
+  }
   const gaps = (rs: readonly StartupRecordData[]) =>
     rs.map(bootstrapGapMs).filter((v): v is number => v !== null)
   return trendRegression(

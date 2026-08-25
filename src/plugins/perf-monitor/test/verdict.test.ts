@@ -15,6 +15,8 @@ const analysis = (over: Partial<PerfAnalysis> = {}): PerfAnalysis => ({
   insufficientHistory: false,
   ready: { interaction: true, startup: true },
   interactionComparable: true,
+  recordingBlockedBy: null,
+  baseline: { interaction: 12, startup: 12 },
   graphGrowth: null,
   ...over,
 })
@@ -46,6 +48,41 @@ describe('summarize', () => {
     const blended = summarize(analysis({ interactionComparable: false }))
     expect(blended.notes.join(' ')).toContain('more than one workspace')
     expect(blended.notes.join(' ')).not.toContain('interaction history still building')
+  })
+
+  // "Still building" promises something that will never arrive when no recorder
+  // can write in this environment at all.
+  it('reports a blocked environment as disabled, not as still building', () => {
+    const v = summarize(analysis({
+      recordingBlockedBy: 'no-persistent-client',
+      insufficientHistory: true,
+    }))
+    expect(v.headline).toBe('Performance history disabled')
+    expect(v.notes.join(' ')).toContain('durable client id')
+  })
+
+  // The count belongs to the series that was judged; reporting the other one's
+  // is how a startup-only verdict claimed "compared against 0 sessions".
+  it('reports the baseline count of the series it actually compared', () => {
+    const v = summarize(analysis({
+      ready: { interaction: false, startup: true },
+      baseline: { interaction: 0, startup: 14 },
+    }))
+    expect(v.notes.join(' ')).toContain('14 recent sessions')
+    expect(v.notes.join(' ')).not.toContain('0 recent sessions')
+  })
+
+  // Dropping the pending notes for a bare count is how a workspace switch came
+  // to read as "building a baseline" for a user with months of history.
+  it('keeps the explanation when it says it is building a baseline', () => {
+    const v = summarize(analysis({
+      insufficientHistory: true,
+      interactionComparable: false,
+      ready: { interaction: false, startup: false },
+      baseline: { interaction: 20, startup: 0 },
+    }))
+    expect(v.headline).toBe('Building a baseline')
+    expect(v.notes.join(' ')).toContain('more than one workspace')
   })
 
   it('leads with the worst regression and keeps the graph-growth context', () => {

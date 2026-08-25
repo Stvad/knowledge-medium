@@ -50,6 +50,20 @@ const pendingNotes = (analysis: PerfAnalysis): string[] => {
 }
 
 export const summarize = (analysis: PerfAnalysis): PerfVerdict => {
+  // A blocked environment can never accumulate history, so reporting it as
+  // "still building" promises something that will never arrive.
+  if (analysis.recordingBlockedBy !== null) {
+    return {
+      kind: 'pending',
+      headline: 'Performance history disabled',
+      notes: [
+        analysis.recordingBlockedBy === 'no-persistent-client'
+          ? 'this browser does not keep a durable client id (private mode or blocked storage)'
+          : 'this workspace is read-only',
+      ],
+      regressions: [],
+    }
+  }
   const pending = pendingNotes(analysis)
   const notes = [...pending]
   const growth = graphNote(analysis.graphGrowth)
@@ -68,7 +82,10 @@ export const summarize = (analysis: PerfAnalysis): PerfVerdict => {
     return {
       kind: 'pending',
       headline: 'Building a baseline',
-      notes: [`${analysis.baselineSessions} sessions recorded so far`],
+      // The pending notes say WHICH series is missing and why; dropping them
+      // for a bare count is how a workspace switch came to read as "building a
+      // baseline · 20 sessions recorded so far".
+      notes: [`${analysis.baseline.interaction} sessions recorded so far`, ...pending],
       regressions: [],
     }
   }
@@ -81,7 +98,11 @@ export const summarize = (analysis: PerfAnalysis): PerfVerdict => {
       pending.length > 0
         ? 'Partial comparison'
         : 'No slowdowns vs baseline',
-    notes: [`compared against ${analysis.baselineSessions} recent sessions`, ...notes],
+    notes: [
+      // The count for the series that was actually judged, not the other one's.
+      `compared against ${analysis.ready.interaction ? analysis.baseline.interaction : analysis.baseline.startup} recent sessions`,
+      ...notes,
+    ],
     regressions: [],
   }
 }

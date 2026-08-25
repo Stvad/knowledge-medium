@@ -53,18 +53,29 @@ export const loadRecords = async <T extends { recordedAt: number }>(
     getClientId(),
   )
   const rows = await repo.db.getAll<{ id: string; payload: string | null }>(
+    // The payload filter is INSIDE the query, before the LIMIT. Records are
+    // prepended, so a row carrying no record sits at the FRONT of this window —
+    // filtering in JS afterwards would let such rows consume the whole window
+    // and return nothing while the group visibly holds hundreds of records.
     `SELECT id, json_extract(properties_json, ?) AS payload
        FROM blocks
       WHERE parent_id = ? AND deleted = 0
+        AND json_extract(properties_json, ?) IS NOT NULL
       ORDER BY order_key
       LIMIT ?`,
-    [recordPath, groupId, HISTORY_LIMIT],
+    [recordPath, groupId, recordPath, HISTORY_LIMIT],
   )
   const records: Array<{ id: string; record: T }> = []
   for (const row of rows) {
     if (!row.payload) continue
     try {
-      records.push({ id: row.id, record: JSON.parse(row.payload) as T })
+      const record = JSON.parse(row.payload) as T
+      // Shape-checked, not merely parseable. The record is an opaque blob that
+      // is deliberately hand-inspectable, so a hand-edited or future-shaped row
+      // can parse and still be missing fields the comparison reads — and a
+      // missing `recordedAt` makes every sort comparison NaN, which randomises
+      // the whole window rather than just misplacing one row.
+      if (typeof record?.recordedAt === 'number') records.push({ id: row.id, record })
     } catch {
       // A record written by a future/older shape is skipped, not fatal: the
       // series is a diagnostic, and one unreadable row must not blind it.

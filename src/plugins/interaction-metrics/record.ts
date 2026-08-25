@@ -23,9 +23,10 @@ import { keyAtStart } from '@/data/orderKey.js'
 import { appVersion } from '@/appVersion.js'
 import { getClientId, getDeviceLabel } from '@/utils/clientId.js'
 import {
+  awaitRecordingAllowed,
   clearPageRecord,
   metricsSessionContext,
-  noteOwnWrite,
+  noteOwnWrites,
   observeWorkspace,
   pageRecordStartedAt,
   setPageRecord,
@@ -290,35 +291,54 @@ const isLive = async (repo: Repo, blockId: string): Promise<boolean> => {
   return Boolean(row)
 }
 
-const openSession = async (repo: Repo, workspaceId: string): Promise<{ blockId: string; startedAt: number }> => {
-  const root = await getPluginUIStateBlock(repo, workspaceId, repo.user, interactionMetricsUIStateType)
-  const clientId = getClientId()
-  const group = await getPluginUIStateChild(root, clientId, `${getDeviceLabel()} · ${clientId.slice(0, 8)}`)
-  const blockId = uuidv4()
-  const startedAt = Date.now() - performance.now()
-  // Newest-first within the client's group, matching startup-metrics.
-  const first = await repo.db.getOptional<{ order_key: string }>(
-    'SELECT order_key FROM blocks WHERE parent_id = ? AND deleted = 0 ORDER BY order_key LIMIT 1',
-    [group.id],
+/** Everything the recorders' own transactions must be measured around — see
+ *  `noteOwnWrites`. Returns whatever `body` returns. */
+const countingOwnWrites = async <T>(repo: Repo, body: () => Promise<T>): Promise<T> => {
+  const before = repo.metrics().db.writeTransaction.calls
+  try {
+    return await body()
+  } finally {
+    noteOwnWrites(repo.metrics().db.writeTransaction.calls - before)
+  }
+}
+
+/** Records kept per client group. The reader never looks past this many, and
+ *  nothing else prunes: a session-per-row series replicated to every device
+ *  otherwise grows for the life of the graph. Only THIS client's own group is
+ *  touched, so two devices can never fight over the same rows. */
+const RETAIN_RECORDS = 60
+
+const pruneOwnGroup = async (repo: Repo, groupId: string, keepId: string): Promise<void> => {
+  const stale = await repo.db.getAll<{ id: string }>(
+    `SELECT id FROM blocks
+      WHERE parent_id = ? AND deleted = 0 AND id != ?
+      ORDER BY order_key
+      LIMIT -1 OFFSET ?`,
+    [groupId, keepId, RETAIN_RECORDS],
   )
+  if (stale.length === 0) return
   await repo.tx(async (tx) => {
-    await tx.create(
-      {
-        id: blockId,
-        workspaceId,
-        parentId: group.id,
-        orderKey: keyAtStart(first?.order_key ?? null),
-        content: new Date(startedAt).toISOString(),
-        properties: {},
-      },
-      { systemMint: true },
-    )
-    // Same tx as the create, so a record is never briefly untyped.
-    await repo.addTypeInTx(tx, blockId, interactionRecordType.id, {})
+    // Retention of this client's own telemetry rows in a hidden ui-state
+    // subtree: no user gesture, no user-visible block, so the deletion guards —
+    // which exist to protect user-authored content — have nothing to say here.
+    for (const row of stale) {
+      // eslint-disable-next-line no-restricted-syntax -- programmatic delete: telemetry retention
+      await tx.delete(row.id)
+    }
   }, { scope: ChangeScope.Automation, description: 'interaction metrics record' })
-  noteOwnWrite()
-  setPageRecord(workspaceId, blockId, startedAt)
-  return { blockId, startedAt }
+}
+
+/** Thrown to roll back a record write whose eligibility lapsed mid-transaction. */
+class NoLongerEligible extends Error {}
+
+/** Re-read eligibility INSIDE the writing transaction. The checks before it
+ *  are separated from the commit by several awaits — a workspace switch or a
+ *  role resolving to viewer lands in that window, and an Automation-scope write
+ *  is admitted locally regardless, so the refusal has to be re-taken where the
+ *  write actually happens. */
+const assertStillEligible = (repo: Repo, workspaceId: string): void => {
+  const now = metricsSessionContext(repo, workspaceId)
+  if (!now.canRecord || !now.attributable) throw new NoLongerEligible()
 }
 
 /**
@@ -335,12 +355,10 @@ export const writeInteractionSample = async (
   repo: Repo,
   workspaceId: string,
 ): Promise<string | null> => {
-  // Asked, not re-derived. Read-only in particular must be consulted HERE
-  // rather than at scheduling time, because the workspace role resolves
-  // asynchronously after mount.
   observeWorkspace(workspaceId)
   const context = metricsSessionContext(repo, workspaceId)
-  if (!context.canRecord || !context.attributable) return null
+  if (!context.attributable) return null
+  if (!(await awaitRecordingAllowed(repo, workspaceId))) return null
 
   // Snapshot BEFORE any of this sample's own setup work, so a first sample does
   // not report the transactions that created its own record block.
@@ -353,11 +371,11 @@ export const writeInteractionSample = async (
       ? { blockId: context.recordId, startedAt: pageRecordStartedAt(workspaceId)! }
       : null
   if (!existing) clearPageRecord()
-  const session = existing ?? (await openSession(repo, workspaceId))
 
+  const startedAt = existing?.startedAt ?? Date.now() - performance.now()
   const data = buildInteractionRecord(metrics, {
     recordedAt: Date.now(),
-    startedAt: session.startedAt,
+    startedAt,
     appVersion: appVersion.display,
     appSha: appVersion.sha,
     clientId: getClientId(),
@@ -369,9 +387,56 @@ export const writeInteractionSample = async (
     blockCount: await countLiveBlocks(repo, workspaceId),
     ownWrites: context.ownWrites,
   })
-  await repo.tx(async (tx) => {
-    await tx.setProperty(session.blockId, interactionRecordProp, data)
-  }, { scope: ChangeScope.Automation, description: 'interaction metrics record' })
-  noteOwnWrite()
-  return session.blockId
+
+  try {
+    return await countingOwnWrites(repo, async () => {
+      if (existing) {
+        await repo.tx(async (tx) => {
+          assertStillEligible(repo, workspaceId)
+          // `skipMetadata`: a metrics sample is bookkeeping, not user intent.
+          // Without it every resample stamps `user_updated_at`, and the block-ref
+          // picker orders by exactly that — so a hidden ISO-timestamp block would
+          // hold the top of the (( completion list on any five-minute pause.
+          await tx.setProperty(existing.blockId, interactionRecordProp, data, { skipMetadata: true })
+        }, { scope: ChangeScope.Automation, description: 'interaction metrics record' })
+        return existing.blockId
+      }
+
+      const root = await getPluginUIStateBlock(repo, workspaceId, repo.user, interactionMetricsUIStateType)
+      const clientId = getClientId()
+      const group = await getPluginUIStateChild(root, clientId, `${getDeviceLabel()} · ${clientId.slice(0, 8)}`)
+      const blockId = uuidv4()
+      // Newest-first within the client's group, matching startup-metrics.
+      const first = await repo.db.getOptional<{ order_key: string }>(
+        'SELECT order_key FROM blocks WHERE parent_id = ? AND deleted = 0 ORDER BY order_key LIMIT 1',
+        [group.id],
+      )
+      // Create, type-tag and populate in ONE transaction. Split across two, a
+      // failure or a closed page between them leaves a durable typed child with
+      // no record on it — and the reader applies its row limit before skipping
+      // such children, so they crowd real history out of the baseline.
+      await repo.tx(async (tx) => {
+        assertStillEligible(repo, workspaceId)
+        await tx.create(
+          {
+            id: blockId,
+            workspaceId,
+            parentId: group.id,
+            orderKey: keyAtStart(first?.order_key ?? null),
+            content: new Date(startedAt).toISOString(),
+            properties: {},
+          },
+          { systemMint: true },
+        )
+        await repo.addTypeInTx(tx, blockId, interactionRecordType.id, {})
+        await tx.setProperty(blockId, interactionRecordProp, data, { skipMetadata: true })
+      }, { scope: ChangeScope.Automation, description: 'interaction metrics record' })
+      setPageRecord(workspaceId, blockId, startedAt)
+      await pruneOwnGroup(repo, group.id, blockId)
+      return blockId
+    })
+  } catch (err) {
+    if (err instanceof NoLongerEligible) return null
+    throw err
+  }
 }

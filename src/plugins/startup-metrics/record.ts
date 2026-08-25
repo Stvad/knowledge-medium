@@ -17,7 +17,11 @@ import { onFirstSync, type SyncStatusDb } from '@/data/internals/firstSync.js'
 import { getPluginUIStateBlock, getPluginUIStateChild } from '@/data/stateBlocks.js'
 import { keyAtStart } from '@/data/orderKey.js'
 import { appVersion } from '@/appVersion.js'
-import { getClientId, getDeviceLabel, isClientIdPersistent } from '@/utils/clientId.js'
+import { getClientId, getDeviceLabel } from '@/utils/clientId.js'
+import {
+  awaitRecordingAllowed,
+  noteOwnWrites,
+} from '@/plugins/interaction-metrics/sessionContext.js'
 import { scheduleIdle } from '@/utils/scheduleIdle.js'
 import {
   getLastLongTaskEndMs,
@@ -133,12 +137,11 @@ export const buildStartupRecord = (
  *  block (one per browser/device installation) inside the per-user
  *  startup-metrics ui-state subtree. Returns the new block id. */
 export const writeStartupRecord = async (repo: Repo, workspaceId: string): Promise<string | null> => {
-  // A viewer workspace admits this Automation-scope write locally and the
-  // server's RLS then refuses the upload, parking it in the rejection
-  // quarantine the status chip reports to the user as changes that could not
-  // sync. Checked here rather than at scheduling time because the workspace
-  // role resolves asynchronously after mount.
-  if (repo.isReadOnly) return null
+  // Eligibility is owned by `sessionContext`, not re-derived here: the same
+  // rules bind both recorders, and this one previously checked a weaker version
+  // of them.
+  if (!(await awaitRecordingAllowed(repo, workspaceId))) return null
+  const writesBefore = repo.metrics().db.writeTransaction.calls
   const root = await getPluginUIStateBlock(repo, workspaceId, repo.user, startupMetricsUIStateType)
   const clientId = getClientId()
   const deviceLabel = getDeviceLabel()
@@ -176,10 +179,17 @@ export const writeStartupRecord = async (repo: Repo, workspaceId: string): Promi
       },
       { systemMint: true },
     )
-    await tx.setProperty(id, startupRecordProp, data)
+    // `skipMetadata`: bookkeeping, not user intent -- see the interaction
+    // recorder for what stamping `user_updated_at` here would do to Recents.
+    await tx.setProperty(id, startupRecordProp, data, { skipMetadata: true })
     // Same tx as the create, so a record is never briefly untyped.
     await repo.addTypeInTx(tx, id, startupRecordType.id, {})
   }, { scope: ChangeScope.Automation, description: 'startup metrics record' })
+  // Reported so the interaction recorder's fan-out denominator excludes them:
+  // both recorders feed one lifetime counter, so both must report. Counted as a
+  // delta because the `getPluginUIState*` calls above commit their own
+  // transactions on first use.
+  noteOwnWrites(repo.metrics().db.writeTransaction.calls - writesBefore)
   return id
 }
 
@@ -216,10 +226,7 @@ export const resetStartupMetricsRecorded = (): void => { recorded = false }
 export const collectStartupMetricsEffect: AppEffect = {
   id: 'startup-metrics.collect',
   start: ({ repo, workspaceId }) => {
-    // See the interaction recorder's schedule for why this is checked at
-    // scheduling time: without a persistent client id every load writes a group
-    // the next load will never read.
-    if (!workspaceId || recorded || !isClientIdPersistent()) return
+    if (!workspaceId || recorded) return
     let done = false
     // Distinct from `done`, which the record path sets on ITS way through:
     // this tracks teardown, so a callback already queued can tell the two apart.

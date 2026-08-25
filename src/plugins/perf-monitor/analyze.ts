@@ -12,6 +12,7 @@ import {
 import {
   metricsSessionContext,
   observeWorkspace,
+  type RecordingBlocker,
 } from '@/plugins/interaction-metrics/sessionContext.js'
 import {
   startupMetricsUIStateType,
@@ -48,6 +49,13 @@ export interface PerfAnalysis {
    *  workspace, so only startup was compared. Surfaced rather than silently
    *  folded into a clean verdict. */
   interactionComparable: boolean
+  /** Non-null when recording is structurally impossible in this environment,
+   *  so "still building a baseline" would be a promise that can never be kept. */
+  recordingBlockedBy: RecordingBlocker | null
+  /** Sessions of history each comparison actually had. Per series, because
+   *  they fill independently and one number reported for the other is how a
+   *  startup-only verdict came to claim "compared against 0 sessions". */
+  baseline: { interaction: number; startup: number }
   /** Live graph size over the baseline's, when both are known. Not used to
    *  filter or normalize — see `runPerfAnalysis` — but reported alongside a
    *  regression so a reader can tell code from data growth. */
@@ -117,6 +125,8 @@ export const runPerfAnalysis = async (
     workspaceId,
     analyzedAt: now,
     baselineSessions: history.length,
+    recordingBlockedBy: session.blockedBy,
+    baseline: { interaction: history.length, startup: startup.length },
     regressions,
     // Derived from what the comparisons actually consume, not from the
     // baseline length alone: with history that is long enough to look

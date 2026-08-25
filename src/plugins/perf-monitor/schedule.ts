@@ -8,7 +8,7 @@ import { appEffectsFacet, type AppEffect } from '@/extensions/core.js'
 import type { Repo } from '@/data/repo'
 import { PendingIdleJobs } from '@/data/internals/idleMarkerJobs.js'
 import { scheduleDeepIdle, LAZY_DEEP_IDLE } from '@/utils/scheduleIdle.js'
-import { observeWorkspace } from '@/plugins/interaction-metrics/sessionContext.js'
+import { metricsSessionContext, observeWorkspace } from '@/plugins/interaction-metrics/sessionContext.js'
 import { runPerfAnalysis } from './analyze.js'
 import { publishPerfAnalysis } from './store.js'
 
@@ -44,6 +44,12 @@ export const perfAnalysisEffect: AppEffect = {
     // workspace and leave again long before the first analysis is due, and the
     // page-global counters carry its work regardless.
     observeWorkspace(workspaceId)
+    // Same early-out the recorders take, for the same reason and one layer
+    // earlier: without a durable client id the reader derives a fresh group id
+    // every load, so no scan it runs can ever find history. Analysis is two
+    // block scans plus a workspace COUNT(*) every ten minutes -- exactly the
+    // cost this feature promises not to impose for nothing.
+    if (metricsSessionContext(repo, workspaceId).blockedBy === 'no-persistent-client') return
     let cancelled = false
     let timer: ReturnType<typeof setTimeout> | undefined
     const armIn = (delayMs: number): void => {

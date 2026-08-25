@@ -27,6 +27,7 @@ const PATH = INTERACTION_RECORD_PATH
 let sharedDb: TestDb
 let repo: Repo
 
+
 beforeAll(async () => { sharedDb = await createTestDb() })
 afterAll(async () => { await sharedDb.cleanup() })
 beforeEach(async () => {
