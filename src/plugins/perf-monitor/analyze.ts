@@ -10,8 +10,7 @@ import {
   type InteractionRecordData,
 } from '@/plugins/interaction-metrics/record.js'
 import {
-  metricsSessionContext,
-  observeWorkspace,
+  readLiveSession,
   type RecordingBlocker,
 } from '@/plugins/interaction-metrics/sessionContext.js'
 import {
@@ -99,19 +98,19 @@ export const runPerfAnalysis = async (
   // workspace carries both workspaces' work, so comparing that snapshot against
   // one workspace's history manufactures regressions. The recorder stops
   // sampling in that state; this reader holds the same snapshot and needs the
-  // same rule -- it does not inherit it by the recorder having one.
-  // The monitor observes workspace activation itself: it and the recorder are
-  // independent toggles, so neither can rely on the other being the one
-  // watching. `observeWorkspace` is idempotent, so both calling is correct.
-  observeWorkspace(repo, workspaceId)
-  const session = metricsSessionContext(repo, workspaceId)
+  // same rule -- it does not inherit it by the recorder having one. Taking the
+  // snapshot and the facts that qualify it through the same call is what keeps
+  // the two consumers from diverging: a manual re-analysis is a second entry
+  // point into this snapshot and re-bases the accounting exactly as a sample
+  // does.
+  const { metrics, session } = readLiveSession(repo, workspaceId)
 
   // Exclude THIS session's record by id, not by position: it is updated in
   // place, so it is history for nothing. Dropping the first row blindly would
   // discard a genuine past session in exactly the case where no current record
   // exists.
   const history = interaction.filter((r) => r.id !== session.recordId).map((r) => r.record)
-  const current = interactionComparable(repo.metrics(), session.ownWrites)
+  const current = interactionComparable(metrics, session.own)
 
   // Judged, not counted. A record with no writes, or a startup record missing
   // its paint marks, is a row that carries no usable sample — so readiness has

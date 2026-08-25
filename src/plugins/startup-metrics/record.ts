@@ -166,7 +166,7 @@ export const writeStartupRecord = async (repo: Repo, workspaceId: string): Promi
         recordType: startupRecordType,
         description: 'startup metrics record',
         retain: STARTUP_RETAIN,
-        recordPath: STARTUP_RECORD_PATH,
+        recordName: startupRecordProp.name,
         content: new Date(data.recordedAt).toISOString(),
         setProperty: async (tx, blockId) => {
           // `skipMetadata`: bookkeeping, not user intent — stamping

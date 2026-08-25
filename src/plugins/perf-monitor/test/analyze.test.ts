@@ -81,6 +81,27 @@ const seedFiringHistory = async (): Promise<void> => {
 }
 
 describe('runPerfAnalysis', () => {
+  // `resetMetrics()` is a supported hook for measuring a discrete operation.
+  // The recorder re-bases on its next sample, but the trend view's "Re-analyze"
+  // is a second entry point into the same live snapshot: running first, it would
+  // subtract a previous epoch's own-writes from fresh counters and keep
+  // excluding a record that no longer describes the live span. Both consumers
+  // therefore take the snapshot and the facts qualifying it from one call.
+  it('re-bases the accounting when the counters are reset under it', async () => {
+    await pastSession()
+    await pastSession()
+    // This session's own record: excluded from history, because it is updated
+    // in place and so is history for nothing.
+    await writeInteractionSample(repo, WS)
+    const before = await runPerfAnalysis(repo, WS, 1)
+
+    repo.resetMetrics()
+    const after = await runPerfAnalysis(repo, WS, 2)
+
+    // The reset ended the span that record describes, so it is history now.
+    expect(after.baseline.interaction).toBe(before.baseline.interaction + 1)
+  })
+
   // repo.metrics() is page-global. The recorder stops sampling once a session
   // has seen two workspaces; the reader holds the same blended snapshot and
   // does not inherit that rule by the recorder having one.

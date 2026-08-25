@@ -30,11 +30,28 @@ export interface MetricsSessionContext {
   /** Are the live counters attributable to this one workspace? False once the
    *  page session has been in more than one. */
   attributable: boolean
-  /** Transactions the recorders issued themselves, to be discounted from any
-   *  write count derived from the live counters. */
-  ownWrites: number
+  /** What the recorders themselves cost, to be discounted from any reading of
+   *  the live counters. */
+  own: OwnActivity
   /** The record block this page session owns in `workspaceId`, if any. */
   recordId: string | null
+}
+
+/**
+ * The recorders' own contribution to the page-global counters.
+ *
+ * BOTH sides, because the fan-out metric is a ratio of one to the other and
+ * correcting only the denominator is worse than correcting neither: it moves
+ * the ratio UP, which is the direction that invents regressions. A record
+ * create changes live-set membership, which fires `kernel.content` and
+ * `typedBlocks.live` — so any mounted workspace-wide handle (Recents, an open
+ * search, a typed-block view) really is invalidated by our own bookkeeping.
+ */
+export interface OwnActivity {
+  /** Transactions the recorders issued. */
+  writes: number
+  /** `handleStore` counter deltas measured across those transactions. */
+  fanout: Readonly<Record<string, number>>
 }
 
 /** Minimal read surface, so this module needs no Repo import (and stays cheap
@@ -58,6 +75,7 @@ interface SessionFacts {
   seenWorkspace: string | null
   unattributable: boolean
   ownWrites: number
+  ownFanout: Record<string, number>
   /** Highest `writeTransaction.calls` observed. A DROP means the counters were
    *  zeroed under us (`repo.resetMetrics()` is a supported hook), which the
    *  own-write count is a subtrahend of. Compared against the watermark rather
@@ -72,7 +90,7 @@ const facts = new WeakMap<object, SessionFacts>()
 const factsFor = (repo: object): SessionFacts => {
   let f = facts.get(repo)
   if (!f) {
-    f = { seenWorkspace: null, unattributable: false, ownWrites: 0, writeWatermark: 0, pageRecord: null }
+    f = { seenWorkspace: null, unattributable: false, ownWrites: 0, ownFanout: {}, writeWatermark: 0, pageRecord: null }
     facts.set(repo, f)
   }
   return f
@@ -122,14 +140,22 @@ export const noteCounterTotal = (repo: object, totalWrites: number): void => {
   const f = factsFor(repo)
   if (totalWrites < f.writeWatermark) {
     f.ownWrites = 0
+    // `resetMetrics()` zeroes the handle-store counters in the same call, so
+    // the fan-out subtrahend belongs to the old epoch exactly as the write one
+    // does. Left behind it would be subtracted from counters that never
+    // contained it.
+    f.ownFanout = {}
     f.pageRecord = null
   }
   f.writeWatermark = totalWrites
 }
 
-const noteOwnWrites = (repo: object, count: number): void => {
-  if (count <= 0) return
+const noteOwnWrites = (repo: object, count: number, fanout: Record<string, number>): void => {
   const f = factsFor(repo)
+  // Not gated on `count`: the `ensure` helpers write through `repo.tx` directly,
+  // so a body can invalidate without issuing a counted transaction.
+  for (const [k, v] of Object.entries(fanout)) if (v !== 0) f.ownFanout[k] = (f.ownFanout[k] ?? 0) + v
+  if (count <= 0) return
   f.ownWrites += count
   // The watermark advances with our own writes too. Sampled only at the START
   // of a sample it would lag by everything that sample then wrote, and a reset
@@ -176,9 +202,37 @@ export const metricsSessionContext = (
     // the counters anyway — the permissive direction on a rule whose whole job
     // is to refuse.
     attributable: !f.unattributable && f.seenWorkspace === workspaceId,
-    ownWrites: f.ownWrites,
+    // Copied, not aliased: the live map keeps accumulating while a consumer
+    // holds this reading across its awaits.
+    own: { writes: f.ownWrites, fanout: { ...f.ownFanout } },
     recordId: f.pageRecord?.workspaceId === workspaceId ? f.pageRecord.blockId : null,
   }
+}
+
+/**
+ * One reading of the live counters, together with the session facts that
+ * qualify them.
+ *
+ * The rebase and the snapshot must come from the SAME reading. `resetMetrics()`
+ * is a supported hook, and a consumer that snapshots without re-basing
+ * subtracts a previous epoch's own-writes from post-reset counters — inflating
+ * the fan-out ratio and excluding a record block that no longer describes the
+ * live span. The recorder does this on every sample; the monitor's manual
+ * "re-analyze" is a second entry point into the same snapshot, which is exactly
+ * why it is taken here rather than at each call site.
+ *
+ * `observeWorkspace` is included because the reading is only attributable if
+ * the workspace has been observed, and the two consumers are separately
+ * togglable — neither can rely on the other having watched.
+ */
+export const readLiveSession = (
+  repo: Repo,
+  workspaceId: string,
+): { metrics: ReturnType<Repo['metrics']>; session: MetricsSessionContext } => {
+  observeWorkspace(repo, workspaceId)
+  const metrics = repo.metrics()
+  noteCounterTotal(repo, metrics.db.writeTransaction?.calls ?? 0)
+  return { metrics, session: metricsSessionContext(repo, workspaceId) }
 }
 
 /** Test helper — forget one Repo's session facts. */
@@ -251,7 +305,7 @@ export const awaitRecordingAllowed = async (
  *  Shared by BOTH recorders: they feed one lifetime counter, so a correction
  *  applied to only one of them is worse than none. */
 export const countingOwnWrites = async <T>(
-  repo: { tx: Repo['tx'] },
+  repo: { tx: Repo['tx']; metrics: () => { handleStore: Readonly<Record<string, number>> } },
   body: (recordTx: Repo['tx']) => Promise<T>,
 ): Promise<T> => {
   let issued = 0
@@ -259,12 +313,24 @@ export const countingOwnWrites = async <T>(
     issued++
     return repo.tx(fn, opts)
   }) as Repo['tx']
+  // Fan-out is measured across the WHOLE body, not per counted transaction. The
+  // `ensure`-style helpers commit their own transactions on first use, and those
+  // creates fire the same workspace-wide channels — left out, they would inflate
+  // the numerator on precisely the session that has the least other traffic. The
+  // asymmetry with `issued` is deliberate, because the two directions of error
+  // are opposite: a concurrent user write caught in this window is
+  // over-subtracted, which shrinks the ratio and suppresses a finding, whereas
+  // attributing one to `issued` would shrink the denominator and invent one.
+  const before = repo.metrics().handleStore
   try {
     return await body(recordTx)
   } finally {
+    const after = repo.metrics().handleStore
+    const fanout: Record<string, number> = {}
+    for (const [k, v] of Object.entries(after)) fanout[k] = v - (before[k] ?? 0)
     // Credited to the Repo the writes actually happened in, which a stale
     // callback finishing after a sign-out still names correctly.
-    noteOwnWrites(repo, issued)
+    noteOwnWrites(repo, issued, fanout)
   }
 }
 

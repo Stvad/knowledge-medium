@@ -25,10 +25,11 @@ import {
   countingOwnWrites,
   NoLongerEligible,
   metricsSessionContext,
-  noteCounterTotal,
   observeWorkspace,
   pageRecordStartedAt,
+  readLiveSession,
   setPageRecord,
+  type OwnActivity,
 } from './sessionContext.js'
 
 /** Safety valve on the stored query set, NOT a policy about which queries
@@ -196,13 +197,15 @@ export const queryNameFromHandleKey = (key: string): string =>
  *  can never diverge in what "the same measurement" means. */
 export const interactionComparable = (
   metrics: ReturnType<Repo['metrics']>,
-  /** Transactions the recorder issued itself, discounted from `writes`.
+  /** What the recorder itself cost, discounted from BOTH sides of the ratio.
    *
-   *  `writes` is the DENOMINATOR of the fan-out ratio, so counting our own
-   *  bookkeeping deflates it — the direction that hides regressions. The
-   *  numerator needs no matching correction: nothing subscribes to the hidden
-   *  ui-state blocks these writes touch, so they invalidate no handles. */
-  ownWrites = 0,
+   *  `writes` is the denominator, so counting our own bookkeeping deflates it;
+   *  the invalidations are the numerator, and a record create is a live-set
+   *  membership change, so it fires `kernel.content` and `typedBlocks.live` and
+   *  really does invalidate any mounted workspace-wide handle. Correcting only
+   *  the denominator moves the ratio UP on exactly the quiet sessions where our
+   *  own writes dominate — the direction that invents regressions. */
+  own: OwnActivity = { writes: 0, fanout: {} },
 ): InteractionComparable => {
   const queries: Record<string, TimingSample> = {}
   for (const [name, timing] of Object.entries(metrics.queries)
@@ -210,10 +213,14 @@ export const interactionComparable = (
     .slice(0, MAX_QUERIES)) {
     queries[name] = toTimingSample(timing)
   }
+  const fanout: Record<string, number> = {}
+  for (const [name, value] of Object.entries(metrics.handleStore)) {
+    fanout[name] = Math.max(0, value - (own.fanout[name] ?? 0))
+  }
   return {
-    writes: Math.max(0, (metrics.db.writeTransaction?.calls ?? 0) - ownWrites),
+    writes: Math.max(0, (metrics.db.writeTransaction?.calls ?? 0) - own.writes),
     queries,
-    fanout: { ...metrics.handleStore },
+    fanout,
   }
 }
 
@@ -228,7 +235,7 @@ export const buildInteractionRecord = (
     clientId: string
     deviceLabel: string
     blockCount: number
-    ownWrites: number
+    own: OwnActivity
   },
 ): InteractionRecordData => {
   const db: Record<string, TimingSample> = {}
@@ -245,7 +252,7 @@ export const buildInteractionRecord = (
     deviceLabel: meta.deviceLabel,
     sessionMs: meta.recordedAt - meta.startedAt,
     blockCount: meta.blockCount,
-    ...interactionComparable(metrics, meta.ownWrites),
+    ...interactionComparable(metrics, meta.own),
     db,
     handles: {
       count: inventory.handleCount,
@@ -315,18 +322,11 @@ export const writeInteractionSample = async (
   if (!(await awaitRecordingAllowed(repo, workspaceId))) return null
 
   // Snapshot BEFORE any of this sample's own setup work, so a first sample does
-  // not report the transactions that created its own record block. The own-write
-  // count is re-read HERE rather than reused from the check above: the other
-  // recorder can commit during the await between them, which the snapshot would
-  // then include and a stale count would fail to discount.
-  const metrics = repo.metrics()
-  noteCounterTotal(repo, metrics.db.writeTransaction?.calls ?? 0)
-  // Re-read AFTER the reset check, and take both facts from the same reading:
-  // a reset clears the record this session owns, so a `recordId` captured
-  // before it would keep updating a row describing counters that no longer
-  // exist.
-  const current = metricsSessionContext(repo, workspaceId)
-  const ownWrites = current.ownWrites
+  // not report the transactions that created its own record block. Taken again
+  // HERE rather than reused from the check above: the other recorder can commit
+  // during the await between them, which the snapshot would then include and a
+  // stale correction would fail to discount.
+  const { metrics, session: current } = readLiveSession(repo, workspaceId)
   // The record can be deleted from another device, or by a user browsing the
   // metrics tree. Writing a property to a tombstone does not restore it, so
   // without this the session would keep updating a row no reader can see.
@@ -349,7 +349,7 @@ export const writeInteractionSample = async (
     // imports or syncs a lot of blocks would otherwise report the final
     // timings against the opening graph size.
     blockCount: await countLiveBlocks(repo, workspaceId),
-    ownWrites,
+    own: current.own,
   })
 
   try {
@@ -372,7 +372,7 @@ export const writeInteractionSample = async (
         recordType: interactionRecordType,
         description: 'interaction metrics record',
         retain: INTERACTION_RETAIN,
-        recordPath: INTERACTION_RECORD_PATH,
+        recordName: interactionRecordProp.name,
         // STRONGER than the shared default: these counters are only meaningful
         // if they belong to one workspace, and a switch during the awaits above
         // invalidates them. The shared path cannot know that rule.

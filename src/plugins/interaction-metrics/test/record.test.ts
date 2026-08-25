@@ -19,7 +19,7 @@ import {
   queryNameFromHandleKey,
   writeInteractionSample,
 } from '../record'
-import { observeWorkspace, resetMetricsSession } from '../sessionContext'
+import { metricsSessionContext, observeWorkspace, resetMetricsSession } from '../sessionContext'
 import { INTERACTION_RETAIN } from '../record'
 
 const WS = 'ws-1'
@@ -69,7 +69,8 @@ const metricsFixture = (over: Partial<ReturnType<Repo['metrics']>> = {}): Return
 
 const META = {
   recordedAt: 5_000, startedAt: 1_000, appVersion: '2026.08.24', appSha: 'abc1234',
-  clientId: 'client-9', deviceLabel: 'installed:MacIntel', blockCount: 327_902, ownWrites: 0,
+  clientId: 'client-9', deviceLabel: 'installed:MacIntel', blockCount: 327_902,
+  own: { writes: 0, fanout: {} },
 }
 
 describe('queryNameFromHandleKey', () => {
@@ -120,13 +121,22 @@ describe('buildInteractionRecord', () => {
   // Tx descriptions are interpolated with user content at ~30 call sites
   // (`append tag [[<name>]]`, `rename property <name>`), so the record must not
   // carry them at all -- there is no safe subset to keep.
-  // A monitor must not measure its own bookkeeping: `writes` is the DENOMINATOR
-  // of the fan-out ratio, so counting the recorder's own transactions deflates
-  // it -- the direction that hides regressions rather than inventing them.
-  it('discounts the recorder\'s own transactions from the write count', () => {
+  // A monitor must not measure its own bookkeeping -- on BOTH sides of the
+  // ratio. Correcting only the denominator moves the ratio UP on exactly the
+  // quiet sessions where our own writes dominate, which invents regressions;
+  // and a record create is a live-set membership change, so it really does
+  // invalidate every mounted workspace-wide handle.
+  it('discounts the recorder\'s own transactions and their fan-out', () => {
     const metrics = metricsFixture({ db: { writeTransaction: timing({ calls: 10 }) } } as Partial<ReturnType<Repo['metrics']>>)
     expect(buildInteractionRecord(metrics, META).writes).toBe(10)
-    expect(buildInteractionRecord(metrics, { ...META, ownWrites: 4 }).writes).toBe(6)
+    const corrected = buildInteractionRecord(
+      metrics,
+      { ...META, own: { writes: 4, fanout: { invalidations: 6 } } },
+    )
+    expect(corrected.writes).toBe(6)
+    expect(corrected.fanout.invalidations).toBe(4)
+    // Only the counters we actually caused; the rest of the map is untouched.
+    expect(corrected.fanout.loaderRuns).toBe(12)
   })
 
   it('stores no transaction descriptions', () => {
@@ -325,6 +335,27 @@ describe('writeInteractionSample', () => {
     const stored = repo.block(second!)
     await stored.load()
     expect(stored.peekProperty(interactionRecordProp)!.writes).toBeGreaterThanOrEqual(0)
+  })
+
+  // The fan-out correction only earns its place if the premise holds: a record
+  // create is a live-set membership change, so it fires `kernel.content` and
+  // invalidates every mounted workspace-wide handle. This is the test that says
+  // so — if it ever stops being true, the correction is dead weight.
+  it('discounts the invalidations its own writes cause on a mounted query', async () => {
+    const handle = repo.query.recentBlocks({ workspaceId: WS })
+    handle.subscribe(() => {})
+    await handle.load()
+
+    const before = repo.handleStore.metrics.loaderInvalidations
+    const first = (await writeInteractionSample(repo, WS))!
+    const caused = repo.handleStore.metrics.loaderInvalidations - before
+    expect(caused).toBeGreaterThan(0)
+    expect(metricsSessionContext(repo, WS).own.fanout.loaderInvalidations).toBe(caused)
+
+    // The next sample snapshots counters that now carry `caused`, and reports
+    // the rate the USER's writes produced — unchanged by our bookkeeping.
+    await writeInteractionSample(repo, WS)
+    expect((await stored(first))!.fanout.loaderInvalidations).toBe(before)
   })
 
   // blockCount is the dominant confound for every timing in the record, so a

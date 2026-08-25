@@ -20,6 +20,7 @@ import {
   pluginUIStateBlockId,
   stateChildBlockId,
 } from '@/data/stateBlocks.js'
+import { jsonPathForProperty } from '@/data/internals/typedBlockQuery.js'
 import { keyAtStart } from '@/data/orderKey.js'
 import { getClientId, getDeviceLabel } from '@/utils/clientId.js'
 import { v4 as uuidv4 } from 'uuid'
@@ -45,10 +46,12 @@ export interface ClientRecordSpec {
    *  series here rather than each rolling retention, which is how one of them
    *  went unbounded for two months. */
   retain: number
-  /** JSON path of the record property — retention only ever considers rows
-   *  CARRYING one, since these groups are inspectable and can hold a
-   *  hand-created child that must never be reachable by a cleanup pass. */
-  recordPath: string
+  /** Name of the record property — retention only ever considers rows CARRYING
+   *  one, since these groups are inspectable and can hold a hand-created child
+   *  that must never be reachable by a cleanup pass. The NAME rather than the
+   *  JSON path because retention needs both forms (SQL and in-transaction), and
+   *  deriving the path from the name here is what keeps them the same rule. */
+  recordName: string
   /** Writes the record property. Runs inside the create transaction. */
   setProperty: (tx: Parameters<Parameters<Repo['tx']>[0]>[0], blockId: string) => Promise<void>
 }
@@ -120,9 +123,24 @@ export const appendClientRecord = async (
     await repo.addTypeInTx(tx, blockId, spec.recordType.id, {})
     await spec.setProperty(tx, blockId)
   }, { scope: ChangeScope.Automation, description: spec.description })
-  await pruneGroup(repo, recordTx, spec, groupId, blockId)
+  // Best-effort, and deliberately AFTER the record is committed and reported.
+  // Routing a retention failure through the caller's failure path retries a
+  // write that already landed: the startup recorder appends up to three records
+  // for one boot, and the interaction recorder forgets the row it owns and
+  // opens a second. The next append re-attempts the prune.
+  try {
+    await pruneGroup(repo, recordTx, spec, groupId, blockId)
+  } catch (err) {
+    console.warn(`[${retentionDescription(spec)}] failed`, err)
+  }
   return { blockId, groupId }
 }
+
+/** Its own tx description, not the record's: these are separate transactions
+ *  with separate failure modes, and a shared description makes them
+ *  indistinguishable in the tx log — where attributing a write to a call site is
+ *  the whole point. */
+const retentionDescription = (spec: ClientRecordSpec): string => `${spec.description} retention`
 
 /** Drop this client's own records past `retain`.
  *
@@ -143,7 +161,7 @@ const pruneGroup = async (
         AND json_extract(properties_json, ?) IS NOT NULL
       ORDER BY order_key
       LIMIT -1 OFFSET ?`,
-    [groupId, keepId, spec.recordPath, spec.retain],
+    [groupId, keepId, jsonPathForProperty(spec.recordName), spec.retain],
   )
   if (stale.length === 0) return
   await recordTx(async (tx) => {
@@ -151,8 +169,16 @@ const pruneGroup = async (
     // gesture and no user-visible block, so the deletion guards — which exist to
     // protect user-authored content — have nothing to say here.
     for (const row of stale) {
+      // The selection above is separated from this write by an await, and these
+      // rows are hand-editable: a row whose record property was stripped in that
+      // window — by a person, or by a sync-applied edit from another device — is
+      // user content by the time we get the lock. Re-take the classification
+      // where the deletion actually happens. (`tx.get` does not filter
+      // tombstones, so liveness is part of the re-take, not an extra check.)
+      const now = await tx.get(row.id)
+      if (!now || now.deleted || now.properties[spec.recordName] === undefined) continue
       // eslint-disable-next-line no-restricted-syntax -- programmatic delete: telemetry retention
       await tx.delete(row.id)
     }
-  }, { scope: ChangeScope.Automation, description: spec.description })
+  }, { scope: ChangeScope.Automation, description: retentionDescription(spec) })
 }
