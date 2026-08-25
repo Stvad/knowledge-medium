@@ -1140,12 +1140,10 @@ export const ANALYZE_DRY_RUN_SQL = `PRAGMA optimize(0x03)`
  *  Bare `PRAGMA optimize` is the obvious simplification and it silently
  *  re-samples: the default mask `0xfffe` carries a `0x10` bit imposing SQLite's
  *  own `SQLITE_DEFAULT_OPTIMIZE_LIMIT` of 2000, which `analysis_limit=0` does
- *  NOT clear. On the shipped build (wa-sqlite 3.53.0) a 5000-row
- *  single-workspace index records `5000 2001` bare against `5000 5000` under
- *  `0x02` — the module comment's fabricated selectivity, rearmed.
- *
- *  The trade, since `0xfffe` means "every bit we ever add": naming `0x02` opts
- *  out of bits SQLite adds later. Revisit on a SQLite upgrade. */
+ *  NOT clear — reinstating the fabricated selectivity of the module comment.
+ *  Behaviour is version-dependent (confirmed on wa-sqlite 3.53.0), and `0xfffe`
+ *  means "every bit we ever add", so naming `0x02` also opts out of bits SQLite
+ *  adds later: revisit the mask on a SQLite upgrade rather than assuming. */
 export const ANALYZE_OPTIMIZE_SQL = `PRAGMA optimize(0x02)`
 
 /** `analysis_limit` is CONNECTION state, so an ANALYZE inherits whatever was
@@ -1171,14 +1169,32 @@ export const RESET_ANALYZE_SAMPLE_LIMIT_SQL = `PRAGMA analysis_limit=0`
  *  `sqlite_stat1` is per-device local state, so this is a derivation pass: no
  *  claim, no upload, safe to run everywhere and safe to re-run.
  *
- *  The most expensive thing this module does — seconds, cold, on a large client,
- *  parking the tab's only SQLite connection against reads as well as writes.
- *  Hence LAZY_DEEP_IDLE at its caller, never the catch-up tier: that tier
- *  force-runs on its fallback deadline, which would put this in front of a user
- *  30s into their session. A session that never idles simply pays it next boot.
- *  Scoping it to fewer tables is open, not foreclosed — `row_events` and
- *  `ps_oplog` each carry more index volume than `blocks` on a real client. */
+ *  Scoped to {@link ANALYZE_REPAIR_TABLES}, not the whole file: measured warm on
+ *  a live 328k-block client, those four cost 2.1s against 4.0s for `ANALYZE`
+ *  with no argument, and the rest (`row_events` 1217ms, `command_events` 404ms)
+ *  drive no query plan the app depends on. Anything missed is not stranded —
+ *  the optimize path is exact now, so it heals on that table's next staleness.
+ *
+ *  Still the most expensive thing this module does, and it holds the tab's only
+ *  SQLite connection against reads as well as writes. Hence LAZY_DEEP_IDLE at
+ *  its caller, never the catch-up tier, which force-runs on a deadline. ACCEPTED
+ *  residual: an idle frame is main-thread slack, not user inactivity, so this
+ *  can still land while someone is working — once per device, ~2s. Gating on
+ *  real inactivity is new machinery for a one-shot; the alternative worth
+ *  weighing is dropping the one-shot entirely and letting devices heal on the
+ *  next index change, which costs slow warm boots until then. */
 export const UNBOUNDED_ANALYZE_MARKER_KEY = 'analyze_unbounded_stats_v1'
+
+/** The tables whose statistics decide query plans the app depends on — the same
+ *  set {@link ANALYZE_ARMING_PROBES} names, deliberately. Everything else in the
+ *  file (`row_events`, `command_events`, `blocks_synced`, the FTS shadows) is
+ *  half the cost of a full pass and backs no hot query. */
+export const ANALYZE_REPAIR_TABLES: readonly string[] = [
+  'blocks',
+  'block_references',
+  'block_types',
+  'block_aliases',
+]
 
 export const SELECT_UNBOUNDED_ANALYZE_DONE_SQL = `
   SELECT 1 FROM client_schema_state WHERE key = '${UNBOUNDED_ANALYZE_MARKER_KEY}'
@@ -1742,7 +1758,15 @@ export const runSampledStatsRepair = async (
 ): Promise<boolean> => serializeAnalyze(async () => {
   const done = await db.getOptional<{1: number}>(SELECT_UNBOUNDED_ANALYZE_DONE_SQL)
   if (done !== null) return false
-  await analyzeUnbounded(db, 'ANALYZE')
+  for (const table of ANALYZE_REPAIR_TABLES) {
+    // Per table, and tolerant: `block_references` is plugin-contributed, so a
+    // disabled plugin must cost the repair that table, not the whole pass.
+    try {
+      await analyzeUnbounded(db, `ANALYZE ${table}`)
+    } catch (error) {
+      console.warn(`[clientSchema] exact-stats repair skipped ${table}`, error)
+    }
+  }
   await db.execute(RECORD_UNBOUNDED_ANALYZE_DONE_SQL)
   return true
 })
@@ -1761,5 +1785,9 @@ export const runAnalyzeNow = async (
 ): Promise<{count: number}> => serializeAnalyze(async () => {
   const count = await getBlocksCount(db)
   await analyzeUnbounded(db, 'ANALYZE')
+  // A whole-file unbounded pass is a superset of the one-shot repair, so claim
+  // its marker: otherwise a user who reaches for this button still pays the
+  // automatic repair later in the same session, for work already done.
+  await db.execute(RECORD_UNBOUNDED_ANALYZE_DONE_SQL)
   return {count}
 })

@@ -1406,6 +1406,17 @@ describe('runAnalyzeNow', () => {
     expect(ranAnalyze()).toBe(true)
   })
 
+
+  it('claims the one-shot marker, so the repair does not redo its work', async () => {
+    // The manual pass is a whole-file unbounded ANALYZE — a superset of the
+    // scoped repair. Without this a user who rebuilds stats by hand still pays
+    // the automatic multi-second repair later in the same session.
+    h.db.exec(`DELETE FROM client_schema_state WHERE key = '${UNBOUNDED_ANALYZE_MARKER_KEY}'`)
+    h.insertBlock({id: 'only-block'})
+
+    await runAnalyzeNow(buildRecordingDb().db)
+    expect(await runSampledStatsRepair(buildRecordingDb().db)).toBe(false)
+  })
 })
 
 // The block_types side-index backs byType / typedBlocks — among the most
