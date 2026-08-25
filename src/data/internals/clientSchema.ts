@@ -1190,6 +1190,16 @@ export const ANALYZE_OPTIMIZE_SQL = `PRAGMA optimize`
  *  primitive: it plans without touching a single data page — all four probes
  *  measured 2ms total on a live 347k-block client.
  *
+ *  A probe must plan to a `SEARCH … USING INDEX`; a `SCAN` does not arm. Measured
+ *  on the shipped build against degenerate `"0 0"` stats: `SELECT 1 FROM blocks`,
+ *  `… LIMIT 1`, `SELECT workspace_id FROM blocks`, `WHERE rowid = 0`, and
+ *  `ORDER BY workspace_id` ALL plan to `SCAN` and ALL leave the stats
+ *  unrepaired. The predicate therefore has to match a real index — including
+ *  a partial index's own `WHERE`, which is why the `blocks` probe carries
+ *  `deleted = 0`. Get that wrong and the probe is silently inert, so these and
+ *  every contributed probe are pinned by a test that reads the plan back
+ *  (`src/data/localSchema.test.ts`).
+ *
  *  The NEW-INDEX rule needs none of this (verified on a live client: a virgin
  *  connection with no prior query re-analyzed a table whose index had just been
  *  created), and that is the rule the 6297ms regression actually needed. Arming
@@ -1205,9 +1215,12 @@ export const ANALYZE_OPTIMIZE_SQL = `PRAGMA optimize`
  *  because a future probe written as a write would fail every boot's ANALYZE. */
 export const SELECT_BLOCKS_COUNT_SQL = `SELECT COUNT(*) AS count FROM blocks`
 
+/** CORE tables only. A plugin's table is armed by that plugin, through
+ *  `LocalSchemaContribution.analyzeTables` — see `resolveAnalyzeArmingProbes`
+ *  in `src/data/localSchema.ts`, which is what callers should pass to
+ *  {@link runAnalyzeIfStale}. */
 export const ANALYZE_ARMING_PROBES: readonly string[] = [
   `SELECT id FROM blocks WHERE workspace_id = '' AND deleted = 0`,
-  `SELECT target_id FROM block_references WHERE workspace_id = '' AND alias = ''`,
   `SELECT block_id FROM block_types WHERE type = '' AND workspace_id = ''`,
   `SELECT block_id FROM block_aliases WHERE workspace_id = '' AND alias = ''`,
 ]
@@ -1629,8 +1642,11 @@ export interface AnalyzeResult {
  *  than one unarmed table, and is a mode this code has already been burned by.
  *  A probe that silently fails still shows up as an unrepaired table, which is
  *  what the tests assert on — so the guard doesn't blunt the pin. */
-const armAnalyzeProbes = async (db: ClientSchemaBootstrapDb): Promise<void> => {
-  for (const probe of ANALYZE_ARMING_PROBES) {
+const armAnalyzeProbes = async (
+  db: ClientSchemaBootstrapDb,
+  probes: readonly string[],
+): Promise<void> => {
+  for (const probe of probes) {
     try {
       await db.execute(`EXPLAIN QUERY PLAN ${probe}`)
     } catch (error) {
@@ -1699,9 +1715,15 @@ const serializeAnalyze = <T>(run: () => Promise<T>): Promise<T> => {
  *
  *  Still belongs off the first-paint critical path (deep idle / post-sync): when
  *  it DOES fire it runs a real ANALYZE on the single SQLite worker, and on a
- *  cold fresh device that can be every table at once. */
+ *  cold fresh device that can be every table at once.
+ *
+ *  `probes` defaults to the CORE tables. A caller that can reach the local-schema
+ *  contributions should pass `resolveAnalyzeArmingProbes` of them instead, so
+ *  plugin-owned tables are armed too; the default is what a bootstrap-time
+ *  caller with no runtime yet gets. */
 export const runAnalyzeIfStale = async (
   db: ClientSchemaBootstrapDb,
+  probes: readonly string[] = ANALYZE_ARMING_PROBES,
 ): Promise<AnalyzeResult> => serializeAnalyze(async () => {
   // Arm and dry-run BEFORE setting the limit, so the limit is set immediately
   // before the only statement that consumes it. In-tab that is redundant
@@ -1712,7 +1734,7 @@ export const runAnalyzeIfStale = async (
   // Safe because the dry run does NOT depend on the limit — it reports WHICH
   // tables are stale, not how many rows to sample. Verified rather than assumed:
   // the proposal set is identical with and without the limit set.
-  await armAnalyzeProbes(db)
+  await armAnalyzeProbes(db, probes)
   const proposed = readOptimizeRows(await db.execute(ANALYZE_DRY_RUN_SQL))
   await db.execute(SET_ANALYZE_SAMPLE_LIMIT_SQL)
   try {
