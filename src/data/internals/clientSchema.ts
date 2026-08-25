@@ -1654,8 +1654,7 @@ const readOptimizeRows = (result: unknown): string[] | null => {
  *  Corollary worth knowing before reasoning about staleness across tabs:
  *  writing `sqlite_stat1` does NOT bump `schema_version`, so a tab that was
  *  already open when another tab analyzed keeps its old query plans for the
- *  life of its connection. It heals on reload, and the marker in the shared DB
- *  means it will not redo the repair itself. */
+ *  life of its connection. It heals on reload. */
 let analyzeChain: Promise<unknown> = Promise.resolve()
 const serializeAnalyze = <T>(run: () => Promise<T>): Promise<T> => {
   // `.then(run, run)`, both arms deliberately: a throwing pass must not poison
