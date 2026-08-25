@@ -77,6 +77,23 @@ export const startupRecordProp = seedProperty<StartupRecordData | undefined>({
   changeScope: ChangeScope.Automation,
 })
 
+/** The record blocks themselves. Typing the rows -- not just their container --
+ *  is what lets them be found by typed query, audited and migrated instead of
+ *  being inferred from tree position plus the presence of a property.
+ *
+ *  Records written before this type existed stay untagged, and nothing is
+ *  backfilled: the readers of this series match on the container's children, so
+ *  untyped history keeps working, and rewriting hundreds of historical rows to
+ *  add a tag no reader requires would be a migration bought for nothing. */
+export const startupRecordType = seedType({
+  seedKey: 'system:startup-metrics/type/startup-record',
+  revision: 1,
+  id: 'startup-metrics-record',
+  label: 'Startup metrics record',
+  hideFromCompletion: true,
+  properties: [],
+})
+
 /** Parent ui-state container; each boot adds one child under it. */
 export const startupMetricsUIStateType = seedType({
   seedKey: 'system:startup-metrics/type/startup-metrics',
@@ -160,6 +177,8 @@ export const writeStartupRecord = async (repo: Repo, workspaceId: string): Promi
       { systemMint: true },
     )
     await tx.setProperty(id, startupRecordProp, data)
+    // Same tx as the create, so a record is never briefly untyped.
+    await repo.addTypeInTx(tx, id, startupRecordType.id, {})
   }, { scope: ChangeScope.Automation, description: 'startup metrics record' })
   return id
 }

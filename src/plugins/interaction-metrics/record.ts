@@ -266,6 +266,20 @@ export const resetInteractionSessions = (): void => {
   unattributable = false
 }
 
+/** What this page session can honestly say about its own counters, for readers
+ *  that compare the LIVE `repo.metrics()` rather than the stored record.
+ *
+ *  Exposed because the attributability rule belongs to the counters, not to the
+ *  recorder: a reader holding a live snapshot is subject to exactly the same
+ *  blending, and one that trusted the recorder to have handled it would compare
+ *  two workspaces' work against one workspace's history. */
+export const interactionSessionFor = (
+  workspaceId: string,
+): { attributable: boolean; recordId: string | null } => ({
+  attributable: !unattributable && (pageSession === null || pageSession.workspaceId === workspaceId),
+  recordId: pageSession?.workspaceId === workspaceId ? pageSession.blockId : null,
+})
+
 const countLiveBlocks = async (repo: Repo, workspaceId: string): Promise<number> => {
   const row = await repo.db.getOptional<{ n: number }>(
     'SELECT COUNT(*) AS n FROM blocks WHERE workspace_id = ? AND deleted = 0',

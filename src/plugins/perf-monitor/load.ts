@@ -22,7 +22,9 @@ import { getClientId } from '@/utils/clientId.js'
  *  tracks the current build rather than averaging over months of them. */
 export const HISTORY_LIMIT = 40
 
-/** This client's record blocks for one recorder, newest first.
+/** This client's records for one recorder, newest first, each with the id of
+ *  the block holding it — so a caller can identify a specific record (e.g. the
+ *  one the current session owns) rather than relying on its position.
  *
  * `recordedAt` orders the result rather than `order_key`: the rows are written
  * newest-first, but an interaction record is UPDATED in place through its
@@ -38,28 +40,28 @@ export const loadRecords = async <T extends { recordedAt: number }>(
    *  rather than assembled from a name so escaping never becomes this
    *  function's problem — property names may carry colons. */
   recordPath: string,
-): Promise<T[]> => {
+): Promise<Array<{ id: string; record: T }>> => {
   const groupId = stateChildBlockId(
     pluginUIStateBlockId(workspaceId, repo.user.id, typeId),
     getClientId(),
   )
-  const rows = await repo.db.getAll<{ payload: string | null }>(
-    `SELECT json_extract(properties_json, ?) AS payload
+  const rows = await repo.db.getAll<{ id: string; payload: string | null }>(
+    `SELECT id, json_extract(properties_json, ?) AS payload
        FROM blocks
       WHERE parent_id = ? AND deleted = 0
       ORDER BY order_key
       LIMIT ?`,
     [recordPath, groupId, HISTORY_LIMIT],
   )
-  const records: T[] = []
+  const records: Array<{ id: string; record: T }> = []
   for (const row of rows) {
     if (!row.payload) continue
     try {
-      records.push(JSON.parse(row.payload) as T)
+      records.push({ id: row.id, record: JSON.parse(row.payload) as T })
     } catch {
       // A record written by a future/older shape is skipped, not fatal: the
       // series is a diagnostic, and one unreadable row must not blind it.
     }
   }
-  return records.sort((a, b) => b.recordedAt - a.recordedAt)
+  return records.sort((a, b) => b.record.recordedAt - a.record.recordedAt)
 }

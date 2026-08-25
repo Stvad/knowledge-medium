@@ -91,8 +91,8 @@ export function PerfTrendDialog({ resolve, workspaceId }: DialogContextProps<voi
           loadRecords<InteractionRecordData>(repo, ws, interactionMetricsUIStateType.id, '$.interactionRecord'),
         ])
         if (!live) return
-        setStartup(s)
-        setInteraction(i)
+        setStartup(s.map((r) => r.record))
+        setInteraction(i.map((r) => r.record))
       } catch (e) {
         if (live) showError(`Couldn't read performance history: ${e instanceof Error ? e.message : String(e)}`)
       }

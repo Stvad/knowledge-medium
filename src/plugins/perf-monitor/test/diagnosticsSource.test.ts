@@ -10,6 +10,8 @@ const analysis = (over: Partial<PerfAnalysis> = {}): PerfAnalysis => ({
   baselineSessions: 12,
   regressions: [],
   insufficientHistory: false,
+  interactionComparable: true,
+  graphGrowth: null,
   ...over,
 })
 

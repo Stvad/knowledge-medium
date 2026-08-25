@@ -19,6 +19,21 @@ const formatRegression = (r: { label: string; baseline: number; current: number;
     ? `${r.label} ${Math.round(r.baseline)}ms → ${Math.round(r.current)}ms`
     : `${r.label} ${r.baseline} → ${r.current}`
 
+/** Why the graph size is reported and not corrected for: see `runPerfAnalysis`.
+ *  Shown only once it has actually moved, so the common case stays quiet. */
+const graphNote = (growth: number | null): string | null =>
+  growth !== null && growth >= 1.05
+    ? `graph ${Math.round((growth - 1) * 100)}% larger than the baseline's`
+    : null
+
+/** A comparison that could not run must not read as one that ran and found
+ *  nothing — the whole point of this feature. */
+const attributionNote = (comparable: boolean): string | null =>
+  comparable ? null : 'interaction metrics not comparable this session (more than one workspace opened)'
+
+const joined = (...parts: Array<string | null>): string | undefined =>
+  parts.filter((p): p is string => Boolean(p)).join(' · ') || undefined
+
 export const mapAnalysisToSnapshot = (analysis: PerfAnalysis): DiagnosticSnapshot => {
   // Too little history is reported as its own state rather than as health: a
   // silent "ok" from a comparison that never ran is the failure mode this whole
@@ -36,7 +51,10 @@ export const mapAnalysisToSnapshot = (analysis: PerfAnalysis): DiagnosticSnapsho
     return {
       severity: 'ok',
       summary: 'No slowdowns vs baseline',
-      detail: `Compared against ${analysis.baselineSessions} recent sessions`,
+      detail: joined(
+        `Compared against ${analysis.baselineSessions} recent sessions`,
+        attributionNote(analysis.interactionComparable),
+      ),
       actionId: VIEW_PERF_TREND_ACTION_ID,
       actionLabel: 'View trend',
     }
@@ -46,8 +64,12 @@ export const mapAnalysisToSnapshot = (analysis: PerfAnalysis): DiagnosticSnapsho
   return {
     severity: 'warning',
     summary: `${worst.label} ${worst.ratio}× slower than baseline`,
-    detail: analysis.regressions.slice(0, 3).map(formatRegression).join(' · ') +
-      (rest > 2 ? ` · +${rest - 2} more` : ''),
+    detail: joined(
+      analysis.regressions.slice(0, 3).map(formatRegression).join(' · ') +
+        (rest > 2 ? ` · +${rest - 2} more` : ''),
+      graphNote(analysis.graphGrowth),
+      attributionNote(analysis.interactionComparable),
+    ),
     actionId: VIEW_PERF_TREND_ACTION_ID,
     actionLabel: 'View trend',
     // A quiet dot rather than a red chip -- see the module docblock.

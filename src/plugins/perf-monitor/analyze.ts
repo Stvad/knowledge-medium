@@ -6,6 +6,7 @@ import type { Repo } from '@/data/repo'
 import {
   interactionComparable,
   interactionMetricsUIStateType,
+  interactionSessionFor,
   type InteractionRecordData,
 } from '@/plugins/interaction-metrics/record.js'
 import {
@@ -15,6 +16,7 @@ import {
 import { loadRecords } from './load.js'
 import {
   fanoutRegression,
+  median,
   queryRegressions,
   startupRegression,
   MIN_INTERACTION_HISTORY,
@@ -32,6 +34,14 @@ export interface PerfAnalysis {
   /** True when the series is too short to judge — reported distinctly from
    *  "nothing regressed", because they call for opposite reactions. */
   insufficientHistory: boolean
+  /** False when this page session's live counters cannot be attributed to one
+   *  workspace, so only startup was compared. Surfaced rather than silently
+   *  folded into a clean verdict. */
+  interactionComparable: boolean
+  /** Live graph size over the baseline's, when both are known. Not used to
+   *  filter or normalize — see `runPerfAnalysis` — but reported alongside a
+   *  regression so a reader can tell code from data growth. */
+  graphGrowth: number | null
 }
 
 export const runPerfAnalysis = async (
@@ -46,23 +56,44 @@ export const runPerfAnalysis = async (
     repo, workspaceId, startupMetricsUIStateType.id, '$.startupRecord',
   )
 
-  // The newest stored interaction record is THIS session's (it is updated in
-  // place), so it is history for nothing and must not be its own baseline.
-  const interactionBaseline = interaction.slice(1)
+  // The live counters are page-global. A page session that has seen a second
+  // workspace carries both workspaces' work, so comparing that snapshot against
+  // one workspace's history manufactures regressions. The recorder stops
+  // sampling in that state; this reader holds the same snapshot and needs the
+  // same rule -- it does not inherit it by the recorder having one.
+  const session = interactionSessionFor(workspaceId)
+
+  // Exclude THIS session's record by id, not by position: it is updated in
+  // place, so it is history for nothing. Dropping the first row blindly would
+  // discard a genuine past session in exactly the case where no current record
+  // exists.
+  const history = interaction.filter((r) => r.id !== session.recordId).map((r) => r.record)
   const current = interactionComparable(repo.metrics())
 
   const regressions: Regression[] = [
-    ...queryRegressions(current, interactionBaseline),
-    fanoutRegression(current, interactionBaseline),
-    startupRegression(startup),
+    ...(session.attributable
+      ? [...queryRegressions(current, history), fanoutRegression(current, history)]
+      : []),
+    startupRegression(startup.map((r) => r.record)),
   ]
     .filter((r): r is Regression => r !== null)
     .sort((a, b) => b.ratio - a.ratio)
 
+  // Graph size is the dominant confound for every timing here, and it is
+  // REPORTED rather than corrected for. Filtering the baseline to comparable
+  // graph sizes would quietly disable the monitor on a steadily growing graph
+  // -- the normal case -- and normalizing assumes a per-query cost model that
+  // does not exist. A query that got twice as slow because its input doubled is
+  // also a real slowdown the user feels; what they need is to be able to tell
+  // which kind it is.
+  const baseCount = median(history.map((r) => r.blockCount).filter((n) => n > 0))
+  const liveCount = history[0]?.blockCount ?? 0
+  const graphGrowth = baseCount > 0 && liveCount > 0 ? liveCount / baseCount : null
+
   return {
     workspaceId,
     analyzedAt: now,
-    baselineSessions: interactionBaseline.length,
+    baselineSessions: history.length,
     regressions,
     // Derived from what the comparisons actually consume, not from the
     // baseline length alone: with history that is long enough to look
@@ -70,7 +101,8 @@ export const runPerfAnalysis = async (
     // comparison necessarily returns null and the chip would report "no
     // slowdowns" for a comparison that never ran.
     insufficientHistory:
-      interactionBaseline.length < MIN_INTERACTION_HISTORY &&
-      startup.length < MIN_STARTUP_HISTORY,
+      history.length < MIN_INTERACTION_HISTORY && startup.length < MIN_STARTUP_HISTORY,
+    interactionComparable: session.attributable,
+    graphGrowth,
   }
 }

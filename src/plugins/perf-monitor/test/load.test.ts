@@ -56,7 +56,8 @@ describe('loadRecords', () => {
       repo, WS, interactionMetricsUIStateType.id, PATH,
     )
     expect(records).toHaveLength(1)
-    expect(records[0].clientId).toBeTruthy()
+    expect(records[0].record.clientId).toBeTruthy()
+    expect(records[0].id).toBeTruthy()
   })
 
   // A reader that used `getPluginUIStateBlock` would mint the whole ui-state
@@ -77,6 +78,6 @@ describe('loadRecords', () => {
       repo, WS, interactionMetricsUIStateType.id, PATH,
     )
     expect(records).toHaveLength(2)
-    expect(records[0].recordedAt).toBeGreaterThanOrEqual(records[1].recordedAt)
+    expect(records[0].record.recordedAt).toBeGreaterThanOrEqual(records[1].record.recordedAt)
   })
 })
