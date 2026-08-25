@@ -14,16 +14,14 @@ import { ChangeScope, seedProperty, seedType } from '@/data/api'
 import type { Repo } from '@/data/repo'
 import type { AppEffect } from '@/extensions/core.js'
 import { onFirstSync, type SyncStatusDb } from '@/data/internals/firstSync.js'
-import { getPluginUIStateBlock, getPluginUIStateChild } from '@/data/stateBlocks.js'
-import { keyAtStart } from '@/data/orderKey.js'
 import { appVersion } from '@/appVersion.js'
 import { getClientId, getDeviceLabel } from '@/utils/clientId.js'
 import {
-  assertStillWritable,
   awaitRecordingAllowed,
   countingOwnWrites,
   NoLongerEligible,
 } from '@/plugins/interaction-metrics/sessionContext.js'
+import { appendClientRecord } from '@/plugins/interaction-metrics/recordStore.js'
 import { scheduleIdle } from '@/utils/scheduleIdle.js'
 import {
   getLastLongTaskEndMs,
@@ -35,7 +33,6 @@ import {
   onLongTask,
   type StartupTimeline,
 } from '@/utils/startupTimeline.js'
-import { v4 as uuidv4 } from 'uuid'
 
 /** One persisted cold-start sample. All `*Ms` fields are ms-since-boot
  *  (`performance.timeOrigin`); a field is absent if its phase wasn't reached
@@ -145,51 +142,26 @@ export const writeStartupRecord = async (repo: Repo, workspaceId: string): Promi
   if (!(await awaitRecordingAllowed(repo, workspaceId))) return null
   try {
     return await countingOwnWrites(repo, async (recordTx) => {
-  const root = await getPluginUIStateBlock(repo, workspaceId, repo.user, startupMetricsUIStateType)
-  const clientId = getClientId()
-  const deviceLabel = getDeviceLabel()
-  // Group records by client: a per-installation block keyed by the opaque
-  // clientId (so every device converges on its own group, distinct from peers
-  // even after sync) but titled with the device label + a short id suffix so two
-  // browsers sharing a platform string stay distinguishable in the tree.
-  const group = await getPluginUIStateChild(root, clientId, `${deviceLabel} · ${clientId.slice(0, 8)}`)
-  const data = buildStartupRecord(getStartupTimeline(), {
-    recordedAt: Date.now(),
-    appVersion: appVersion.display,
-    appSha: appVersion.sha,
-    clientId,
-    deviceLabel,
-  })
-  const id = uuidv4()
-  // Newest-first: read the current first sibling's order key and prepend before
-  // it, so the log reads reverse-chronologically within this client's group.
-  const first = await repo.db.getOptional<{ order_key: string }>(
-    'SELECT order_key FROM blocks WHERE parent_id = ? AND deleted = 0 ORDER BY order_key LIMIT 1',
-    [group.id],
-  )
-  await recordTx(async tx => {
-    assertStillWritable(repo, workspaceId)
-    await tx.create(
-      {
-        id,
+      const clientId = getClientId()
+      const data = buildStartupRecord(getStartupTimeline(), {
+        recordedAt: Date.now(),
+        appVersion: appVersion.display,
+        appSha: appVersion.sha,
+        clientId,
+        deviceLabel: getDeviceLabel(),
+      })
+      return appendClientRecord(repo, recordTx, {
         workspaceId,
-        parentId: group.id,
-        orderKey: keyAtStart(first?.order_key ?? null),
-        // Content is just the ISO timestamp so the entry is legible in the tree.
-        // FTS indexes it, so a timestamp can surface in (( block-ref autocomplete
-        // (not [[-link, which isn't FTS-backed) — acceptable.
+        containerType: startupMetricsUIStateType,
+        recordType: startupRecordType,
+        description: 'startup metrics record',
         content: new Date(data.recordedAt).toISOString(),
-        properties: {},
-      },
-      { systemMint: true },
-    )
-    // `skipMetadata`: bookkeeping, not user intent -- see the interaction
-    // recorder for what stamping `user_updated_at` here would do to Recents.
-    await tx.setProperty(id, startupRecordProp, data, { skipMetadata: true })
-    // Same tx as the create, so a record is never briefly untyped.
-    await repo.addTypeInTx(tx, id, startupRecordType.id, {})
-  }, { scope: ChangeScope.Automation, description: 'startup metrics record' })
-      return id
+        setProperty: async (tx, blockId) => {
+          // `skipMetadata`: bookkeeping, not user intent — stamping
+          // `user_updated_at` would float this hidden row into Recents.
+          await tx.setProperty(blockId, startupRecordProp, data, { skipMetadata: true })
+        },
+      })
     })
   } catch (err) {
     if (err instanceof NoLongerEligible) return null
@@ -216,9 +188,15 @@ const WRITE_RETRY_MS = 30_000
 // Once per page session: boot happens once, and the marks are boot-relative, so
 // a later workspace switch must not record a second "startup".
 let recorded = false
+/** A write is in flight. Distinct from `recorded`, which is only true once one
+ *  has LANDED: a plugin toggle can restart this effect while the previous
+ *  instance's write is still running, and at that moment `recorded` is still
+ *  false — so checking it alone lets both instances write, and two records for
+ *  one boot then take two of the three slots in the recent window. */
+let recording = false
 
 /** Test helper — re-arm the once-per-session guard. */
-export const resetStartupMetricsRecorded = (): void => { recorded = false }
+export const resetStartupMetricsRecorded = (): void => { recorded = false; recording = false }
 
 /**
  * On first workspace open, detect time-to-interactivity and persist one record.
@@ -244,7 +222,7 @@ export const collectStartupMetricsEffect: AppEffect = {
     const runCleanups = () => { for (const c of cleanups.splice(0)) c() }
 
     const record = () => {
-      if (done) return
+      if (done || recorded || recording) return
       done = true
       runCleanups()
       attemptWrite(0)
@@ -263,8 +241,10 @@ export const collectStartupMetricsEffect: AppEffect = {
           const retry = setTimeout(() => attemptWrite(attempt + 1), WRITE_RETRY_MS)
           cleanups.push(() => clearTimeout(retry))
         }
+        recording = true
         void writeStartupRecord(repo, workspaceId)
           .then((id) => {
+            recording = false
             if (id !== null) { recorded = true; return }
             retryLater()
           })
@@ -272,6 +252,7 @@ export const collectStartupMetricsEffect: AppEffect = {
           // case a retry exists for, so it takes the same path rather than
           // being logged and dropped.
           .catch((err) => {
+            recording = false
             console.warn('[startup-metrics] failed to write record', err)
             retryLater()
           })

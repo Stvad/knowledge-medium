@@ -1,28 +1,23 @@
 /**
  * Interaction-metrics persistence: fold a `repo.metrics()` snapshot into a
  * durable per-session record, stored as a block-per-session under a hidden
- * per-user ui-state subtree — the same storage shape (and for the same
- * conflict-freedom reason) as `src/plugins/startup-metrics/record.ts`.
+ * per-user ui-state subtree — block-per-session so two devices never write the
+ * same row.
  *
- * Why this exists: `repo.metrics()` already measures everything here, on every
- * run. What it does not do is survive a reload, so a regression is only ever
- * visible to whoever happens to be looking at a live tab. Two real regressions
- * shipped in one week under exactly that blind spot (#818). This is the "keep
- * the series so the trend is checkable" half; `@/plugins/perf-monitor` is the
- * half that reads it.
+ * The data layer already measures all of this on every run; what it does not do
+ * is survive a reload, which is the whole of what this adds. The recorder takes
+ * no measurement of its own: it snapshots counters that are maintained
+ * regardless, so its only runtime cost is one snapshot and one small write per
+ * sample, on genuine idle (see `./schedule`).
  *
- * The recorder adds NO measurement of its own — it snapshots counters the data
- * layer maintains regardless. Its only runtime cost is one snapshot + one small
- * write per sample, and sampling is gated on genuine idle (see `schedule.ts`).
+ * `@/plugins/perf-monitor` is the half that reads the series.
  */
-
 import { ChangeScope, seedProperty, seedType } from '@/data/api'
 import type { Repo } from '@/data/repo'
-import { getPluginUIStateBlock, getPluginUIStateChild } from '@/data/stateBlocks.js'
-import { keyAtStart } from '@/data/orderKey.js'
 import { jsonPathForProperty } from '@/data/internals/typedBlockQuery.js'
 import { appVersion } from '@/appVersion.js'
 import { getClientId, getDeviceLabel } from '@/utils/clientId.js'
+import { appendClientRecord, ensureClientGroup } from './recordStore.js'
 import {
   assertStillAttributable,
   awaitRecordingAllowed,
@@ -34,7 +29,6 @@ import {
   pageRecordStartedAt,
   setPageRecord,
 } from './sessionContext.js'
-import { v4 as uuidv4 } from 'uuid'
 
 /** Safety valve on the stored query set, NOT a policy about which queries
  *  matter. Every measured query is kept, because ranking by cost and truncating
@@ -393,37 +387,22 @@ export const writeInteractionSample = async (
         return existing.blockId
       }
 
-      const root = await getPluginUIStateBlock(repo, workspaceId, repo.user, interactionMetricsUIStateType)
-      const clientId = getClientId()
-      const group = await getPluginUIStateChild(root, clientId, `${getDeviceLabel()} · ${clientId.slice(0, 8)}`)
-      const blockId = uuidv4()
-      // Newest-first within the client's group, matching startup-metrics.
-      const first = await repo.db.getOptional<{ order_key: string }>(
-        'SELECT order_key FROM blocks WHERE parent_id = ? AND deleted = 0 ORDER BY order_key LIMIT 1',
-        [group.id],
-      )
-      // Create, type-tag and populate in ONE transaction. Split across two, a
-      // failure or a closed page between them leaves a durable typed child with
-      // no record on it — and the reader applies its row limit before skipping
-      // such children, so they crowd real history out of the baseline.
-      await recordTx(async (tx) => {
-        assertStillAttributable(repo, workspaceId)
-        await tx.create(
-          {
-            id: blockId,
-            workspaceId,
-            parentId: group.id,
-            orderKey: keyAtStart(first?.order_key ?? null),
-            content: new Date(startedAt).toISOString(),
-            properties: {},
-          },
-          { systemMint: true },
-        )
-        await repo.addTypeInTx(tx, blockId, interactionRecordType.id, {})
-        await tx.setProperty(blockId, interactionRecordProp, data, { skipMetadata: true })
-      }, { scope: ChangeScope.Automation, description: 'interaction metrics record' })
+      const blockId = await appendClientRecord(repo, recordTx, {
+        workspaceId,
+        containerType: interactionMetricsUIStateType,
+        recordType: interactionRecordType,
+        description: 'interaction metrics record',
+        content: new Date(startedAt).toISOString(),
+        setProperty: async (tx, id) => {
+          await tx.setProperty(id, interactionRecordProp, data, { skipMetadata: true })
+        },
+      })
       setPageRecord(workspaceId, blockId, startedAt)
-      await pruneOwnGroup(repo, recordTx, group.id, blockId)
+      await pruneOwnGroup(
+        repo, recordTx,
+        await ensureClientGroup(repo, workspaceId, interactionMetricsUIStateType),
+        blockId,
+      )
       return blockId
     })
   } catch (err) {

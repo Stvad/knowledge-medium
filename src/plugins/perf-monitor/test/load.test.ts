@@ -18,7 +18,13 @@ import {
   type InteractionRecordData,
 } from '@/plugins/interaction-metrics/record'
 import { resetMetricsSession } from '@/plugins/interaction-metrics/sessionContext'
-import { INTERACTION_RECORD_PATH, isUsableInteractionRecord, loadRecords } from '../load'
+import {
+  HISTORY_LIMIT,
+  INTERACTION_RECORD_PATH,
+  isUsableInteractionRecord,
+  isUsableStartupRecord,
+  loadRecords,
+} from '../load'
 
 const WS = 'ws-1'
 const USER: User = { id: 'user-1', name: 'Alice' }
@@ -85,6 +91,43 @@ describe('loadRecords', () => {
       repo, WS, interactionMetricsUIStateType.id, PATH, isUsableInteractionRecord,
     )
     expect(records).toEqual([])
+  })
+
+  // Marks stay optional, but a PRESENT one has to be finite: the comparison
+  // subtracts them, and NaN takes neither the steady nor the regressed branch,
+  // so one hand-edited row could publish a NaN comparison to the chip.
+  it('rejects a startup record whose present marks are not finite', () => {
+    expect(isUsableStartupRecord({ timeOriginMs: 1 })).toBe(true)
+    expect(isUsableStartupRecord({ timeOriginMs: 1, repoReadyMs: 5 })).toBe(true)
+    expect(isUsableStartupRecord({ timeOriginMs: 1, repoReadyMs: 'x' })).toBe(false)
+    expect(isUsableStartupRecord({ timeOriginMs: 1, firstContentPaintMs: NaN })).toBe(false)
+  })
+
+  // Validation happens after the JSON parse, so a limit applied to ROWS lets
+  // unreadable ones at the front of the window push real history out of reach —
+  // and the monitor reports an insufficient baseline while the group holds
+  // plenty of good records.
+  it('looks past a window full of unreadable rows', async () => {
+    const blockId = (await writeInteractionSample(repo, WS))!
+    const parent = (await sharedDb.db.getAll<{ parent_id: string; order_key: string }>(
+      'SELECT parent_id, order_key FROM blocks WHERE id = ?', [blockId],
+    ))[0]
+    // Uppercase keys sort before the real record's, so these occupy the front.
+    for (let i = 0; i < HISTORY_LIMIT; i++) {
+      await sharedDb.db.execute(
+        `INSERT INTO blocks
+           (id, workspace_id, parent_id, order_key, content, properties_json, deleted,
+            created_at, updated_at, created_by, updated_by)
+         VALUES (?, ?, ?, ?, '', ?, 0, 1, 1, ?, ?)`,
+        [`junk-${i}`, WS, parent.parent_id, `A${String(i).padStart(3, '0')}`,
+         JSON.stringify({ 'interaction-metrics:record': { recordedAt: 1, queries: { bad: null } } }),
+         USER.id, USER.id],
+      )
+    }
+    const records = await loadRecords<InteractionRecordData>(
+      repo, WS, interactionMetricsUIStateType.id, PATH, isUsableInteractionRecord,
+    )
+    expect(records.map((r) => r.id)).toEqual([blockId])
   })
 
   it('returns newest first', async () => {

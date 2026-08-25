@@ -246,7 +246,11 @@ export const countingOwnWrites = async <T>(
   try {
     return await body(recordTx)
   } finally {
-    noteOwnWrites(issued)
+    // Only if these facts still describe the Repo the writes happened in. A
+    // local sign-out can swap the Repo while `body` awaits, and crediting the
+    // old instance's transactions to counters that restarted at zero would
+    // subtract writes that never occurred there.
+    if (boundRepo === repo) noteOwnWrites(issued)
   }
 }
 

@@ -136,6 +136,13 @@ const trendRegression = (
 /** A series is READY when at least one of its metrics could actually be
  *  judged. Row count alone is not readiness: records with no writes, or startup
  *  records missing their paint marks, are rows that carry no usable sample. */
+/** The entries a comparison uses as its BASELINE, given a history newest-first.
+ *  The leading ones are consumed smoothing the current reading, so anything
+ *  describing the baseline — including the graph size it was measured at — has
+ *  to be derived from the same slice or it contextualises a different window. */
+export const baselineWindow = <T>(history: readonly T[]): readonly T[] =>
+  history.slice(RECENT_WINDOW - 1)
+
 export const anyJudged = (results: readonly TrendResult[]): boolean =>
   results.some((r) => r.status !== 'insufficient')
 

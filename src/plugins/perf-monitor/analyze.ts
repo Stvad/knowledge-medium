@@ -27,6 +27,7 @@ import {
 } from './load.js'
 import {
   anyJudged,
+  baselineWindow,
   fanoutRegression,
   median,
   queryRegressions,
@@ -140,7 +141,7 @@ export const runPerfAnalysis = async (
   // does not exist. A query that got twice as slow because its input doubled is
   // also a real slowdown the user feels; what they need is to be able to tell
   // which kind it is.
-  const baseCount = median(history.map((r) => r.blockCount).filter((n) => n > 0))
+  const baseCount = median(baselineWindow(history).map((r) => r.blockCount).filter((n) => n > 0))
   // Counted live, not read off the newest record: the timings on the current
   // side of every comparison are live too, so the graph size paired with them
   // has to be the one they actually ran against.

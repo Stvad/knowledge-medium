@@ -45,11 +45,26 @@ export const isUsableInteractionRecord = (r: {
   typeof r.queries === 'object' && r.queries !== null &&
   Object.values(r.queries as Record<string, unknown>).every(isTimingSample)
 
-/** A startup record is read only for its marks, and every one of them is
- *  optional by design (a phase the session never reached is absent), so
- *  `recordedAt` plus a boot identity is all a reader can require. */
-export const isUsableStartupRecord = (r: { timeOriginMs?: unknown }): boolean =>
-  typeof r.timeOriginMs === 'number'
+const isAbsentOrFinite = (v: unknown): boolean => v === undefined || Number.isFinite(v)
+
+/** Marks stay OPTIONAL — a phase the session never reached is absent by design
+ *  — but a mark that is PRESENT has to be a finite number. The comparison
+ *  subtracts them, and a NaN takes neither the steady nor the regressed branch,
+ *  so a single hand-edited row could publish `NaN× slower than baseline`. */
+export const isUsableStartupRecord = (r: {
+  timeOriginMs?: unknown
+  repoReadyMs?: unknown
+  firstContentPaintMs?: unknown
+  interactiveMs?: unknown
+}): boolean =>
+  typeof r.timeOriginMs === 'number' &&
+  isAbsentOrFinite(r.repoReadyMs) &&
+  isAbsentOrFinite(r.firstContentPaintMs) &&
+  isAbsentOrFinite(r.interactiveMs)
+
+/** Pages of `HISTORY_LIMIT` rows to read before giving up on finding usable
+ *  records. Bounds the cost when a group is full of unreadable rows. */
+const MAX_PAGES = 3
 
 /** Sessions of history retained per comparison. Enough for the median to be
  *  stable across session heterogeneity, small enough that the baseline still
@@ -84,33 +99,40 @@ export const loadRecords = async <T extends { recordedAt: number }>(
     pluginUIStateBlockId(workspaceId, repo.user.id, typeId),
     getClientId(),
   )
-  const rows = await repo.db.getAll<{ id: string; payload: string | null }>(
-    // The payload filter is INSIDE the query, before the LIMIT. Records are
-    // prepended, so a row carrying no record sits at the FRONT of this window —
-    // filtering in JS afterwards would let such rows consume the whole window
-    // and return nothing while the group visibly holds hundreds of records.
-    `SELECT id, json_extract(properties_json, ?) AS payload
-       FROM blocks
-      WHERE parent_id = ? AND deleted = 0
-        AND json_extract(properties_json, ?) IS NOT NULL
-      ORDER BY order_key
-      LIMIT ?`,
-    [recordPath, groupId, recordPath, HISTORY_LIMIT],
-  )
+  // Paged until HISTORY_LIMIT USABLE records are collected, not until that many
+  // rows are read. Validation happens after JSON parse, so a limit applied to
+  // rows lets malformed or future-shaped ones at the front of the window push
+  // valid history out of reach — and the monitor then reports an insufficient
+  // baseline while the group visibly holds hundreds of good records. Bounded by
+  // MAX_PAGES so a group full of unreadable rows cannot turn into a full scan.
   const records: Array<{ id: string; record: T }> = []
-  for (const row of rows) {
-    if (!row.payload) continue
-    try {
-      const record = JSON.parse(row.payload) as T
-      // A missing `recordedAt` makes every sort comparison NaN, which
-      // randomises the whole window rather than merely misplacing one row.
-      if (typeof record?.recordedAt === 'number' && isUsable(record)) {
-        records.push({ id: row.id, record })
+  for (let page = 0; page < MAX_PAGES && records.length < HISTORY_LIMIT; page++) {
+    const rows = await repo.db.getAll<{ id: string; payload: string | null }>(
+      // The payload filter is INSIDE the query, before the LIMIT: records are
+      // prepended, so a row carrying no record sits at the FRONT of this window.
+      `SELECT id, json_extract(properties_json, ?) AS payload
+         FROM blocks
+        WHERE parent_id = ? AND deleted = 0
+          AND json_extract(properties_json, ?) IS NOT NULL
+        ORDER BY order_key
+        LIMIT ? OFFSET ?`,
+      [recordPath, groupId, recordPath, HISTORY_LIMIT, page * HISTORY_LIMIT],
+    )
+    for (const row of rows) {
+      if (!row.payload) continue
+      try {
+        const record = JSON.parse(row.payload) as T
+        // A missing `recordedAt` makes every sort comparison NaN, which
+        // randomises the whole window rather than merely misplacing one row.
+        if (typeof record?.recordedAt === 'number' && isUsable(record)) {
+          records.push({ id: row.id, record })
+        }
+      } catch {
+        // A record written by a future/older shape is skipped, not fatal: the
+        // series is a diagnostic, and one unreadable row must not blind it.
       }
-    } catch {
-      // A record written by a future/older shape is skipped, not fatal: the
-      // series is a diagnostic, and one unreadable row must not blind it.
     }
+    if (rows.length < HISTORY_LIMIT) break
   }
   return records.sort((a, b) => b.record.recordedAt - a.record.recordedAt)
 }

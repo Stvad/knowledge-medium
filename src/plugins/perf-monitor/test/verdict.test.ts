@@ -98,6 +98,15 @@ describe('summarize', () => {
     expect(v.notes.join(' ')).toContain('not being recorded')
   })
 
+  // Read-only stops new samples; it does not invalidate a comparison that just
+  // ran cleanly against history already on disk.
+  it('keeps a clean verdict when only recording is blocked', () => {
+    const v = summarize(analysis({ recordingBlockedBy: 'read-only-workspace' }))
+    expect(v.kind).toBe('clean')
+    expect(v.headline).toBe('No slowdowns vs baseline')
+    expect(v.notes.join(' ')).toContain('not being recorded')
+  })
+
   // A rate that went up is not "slower", and the rate is the metric this
   // feature exists to catch.
   it('says a rate got higher, not slower', () => {

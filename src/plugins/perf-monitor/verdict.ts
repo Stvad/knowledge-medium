@@ -62,10 +62,11 @@ export const summarize = (analysis: PerfAnalysis): PerfVerdict => {
         : 'new samples are not being recorded: this workspace is read-only'
 
   // Blocked recording stops the series GROWING. It does not invalidate history
-  // already on disk, nor this session's own live counters, so a real regression
-  // found against them still has to be reported — with the blocker as context,
-  // not in place of the finding.
-  if (blocked !== null && analysis.regressions.length === 0) {
+  // already on disk, nor this session's own live counters, so ANY verdict
+  // reached against them still stands — clean as much as regressed — and the
+  // blocker is context on it. The disabled headline is for the one case where
+  // nothing was judged at all, and so there is no other verdict to carry it.
+  if (blocked !== null && analysis.insufficientHistory) {
     return {
       kind: 'pending',
       headline: 'Performance history disabled',
@@ -73,8 +74,12 @@ export const summarize = (analysis: PerfAnalysis): PerfVerdict => {
       regressions: [],
     }
   }
-  const pending = [...pendingNotes(analysis), ...(blocked ? [blocked] : [])]
-  const notes = [...pending]
+  // The blocker is CONTEXT on whatever verdict was reached; only an unjudged
+  // series makes a verdict partial. Folding the two together turned a clean
+  // comparison in a read-only workspace into a pending one.
+  const unjudged = pendingNotes(analysis)
+  const notes0 = [...unjudged, ...(blocked ? [blocked] : [])]
+  const notes = [...notes0]
   const growth = graphNote(analysis.graphGrowth)
 
   if (analysis.regressions.length > 0) {
@@ -94,7 +99,7 @@ export const summarize = (analysis: PerfAnalysis): PerfVerdict => {
       // The pending notes say WHICH series is missing and why; dropping them
       // for a bare count is how a workspace switch came to read as "building a
       // baseline · 20 sessions recorded so far".
-      notes: [`${analysis.baseline.interaction} sessions recorded so far`, ...pending],
+      notes: [`${analysis.baseline.interaction} sessions recorded so far`, ...notes0],
       regressions: [],
     }
   }
@@ -102,11 +107,8 @@ export const summarize = (analysis: PerfAnalysis): PerfVerdict => {
   // judged at all, that is not a clean bill of health for it, and saying so is
   // the whole point of this feature.
   return {
-    kind: pending.length > 0 ? 'pending' : 'clean',
-    headline:
-      pending.length > 0
-        ? 'Partial comparison'
-        : 'No slowdowns vs baseline',
+    kind: unjudged.length > 0 ? 'pending' : 'clean',
+    headline: unjudged.length > 0 ? 'Partial comparison' : 'No slowdowns vs baseline',
     notes: [
       // The count for the series that was actually judged, not the other one's.
       `compared against ${analysis.ready.interaction ? analysis.baseline.interaction : analysis.baseline.startup} recent sessions`,

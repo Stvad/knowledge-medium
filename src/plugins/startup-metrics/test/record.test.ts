@@ -234,6 +234,33 @@ describe('collectStartupMetricsEffect', () => {
   // By the time the deferred write runs, `record()` has torn down every timer
   // and listener, so a write that FAILS has no path back unless it owns one —
   // and a rejection is as transient as a decline.
+  // A plugin toggle can restart this effect while the previous instance's write
+  // is still running. At that instant `recorded` is still false, so it cannot
+  // be the only guard — two records for one boot would both match the
+  // current-boot check and take two of the three recent-window slots.
+  it('does not write twice when restarted while a write is in flight', async () => {
+    const realTx = repo.tx.bind(repo)
+    let release: (() => void) | undefined
+    const held = new Promise<void>((r) => { release = r })
+    let seen = 0
+    vi.spyOn(repo, 'tx').mockImplementation(async (fn, opts) => {
+      if (opts?.description === 'startup metrics record' && seen++ === 0) await held
+      return realTx(fn, opts)
+    })
+
+    markStartup('firstContentPaint')
+    startEffect(WS)
+    await vi.waitFor(() => expect(seen).toBeGreaterThan(0))
+    // The toggle: a second collector starts before the first write lands.
+    startEffect(WS)
+    release!()
+
+    await vi.waitFor(async () => expect(await countRecords()).toBe(1))
+    // Give a second write every chance to appear before asserting it did not.
+    await new Promise((r) => setTimeout(r, 50))
+    expect(await countRecords()).toBe(1)
+  }, 20_000)
+
   it('retries a write that rejects', async () => {
     const realTx = repo.tx.bind(repo)
     let failures = 0

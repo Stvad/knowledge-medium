@@ -155,8 +155,9 @@ describe('runPerfAnalysis', () => {
     // The baseline needs a graph to have measured; a session recorded against an
     // empty workspace contributes no size.
     await addBlocks('seed', 10)
-    await pastSession()
-    await pastSession()
+    // Enough sessions that the BASELINE window is non-empty once the leading
+    // entries consumed by the recent median are excluded.
+    for (let i = 0; i < 5; i++) await pastSession()
     const before = (await runPerfAnalysis(repo, WS, 1000)).graphGrowth
     expect(before).not.toBeNull()
 
