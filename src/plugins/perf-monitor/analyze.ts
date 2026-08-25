@@ -4,6 +4,7 @@
  */
 import type { Repo } from '@/data/repo'
 import {
+  countLiveBlocks,
   interactionComparable,
   interactionMetricsUIStateType,
   interactionSessionFor,
@@ -87,7 +88,10 @@ export const runPerfAnalysis = async (
   // also a real slowdown the user feels; what they need is to be able to tell
   // which kind it is.
   const baseCount = median(history.map((r) => r.blockCount).filter((n) => n > 0))
-  const liveCount = history[0]?.blockCount ?? 0
+  // Counted live, not read off the newest record: the timings on the current
+  // side of every comparison are live too, so the graph size paired with them
+  // has to be the one they actually ran against.
+  const liveCount = await countLiveBlocks(repo, workspaceId)
   const graphGrowth = baseCount > 0 && liveCount > 0 ? liveCount / baseCount : null
 
   return {

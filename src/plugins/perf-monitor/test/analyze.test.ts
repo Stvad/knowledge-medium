@@ -118,12 +118,22 @@ describe('runPerfAnalysis', () => {
     expect((await runPerfAnalysis(repo, WS, 1000)).baselineSessions).toBe(3)
   })
 
-  it('reports how much the graph grew rather than correcting for it', async () => {
+  // Reported, not corrected for: filtering the baseline to comparable graph
+  // sizes would quietly disable the monitor on a steadily growing graph, which
+  // is the normal case.
+  it('reports how much the graph grew rather than suppressing the comparison', async () => {
     await pastSession()
     await pastSession()
-    const analysis = await runPerfAnalysis(repo, WS, 1000)
-    // Same graph across sessions here, so growth is flat rather than absent —
-    // the field is populated whenever both sides are known.
-    expect(analysis.graphGrowth).toBeCloseTo(1, 5)
+    const before = (await runPerfAnalysis(repo, WS, 1000)).graphGrowth!
+    await repo.tx(async (tx) => {
+      for (let i = 0; i < 40; i++) {
+        await tx.create({ id: `grew-${i}`, workspaceId: WS, parentId: null, orderKey: `b${i}`,
+          content: 'x', properties: {} }, { systemMint: true })
+      }
+    }, { scope: ChangeScope.Automation })
+    const after = await runPerfAnalysis(repo, WS, 2000)
+    expect(after.graphGrowth!).toBeGreaterThan(before)
+    // Still compares — a bigger graph is context, not a reason to go quiet.
+    expect(after.insufficientHistory).toBe((await runPerfAnalysis(repo, WS, 3000)).insufficientHistory)
   })
 })

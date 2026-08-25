@@ -280,7 +280,11 @@ export const interactionSessionFor = (
   recordId: pageSession?.workspaceId === workspaceId ? pageSession.blockId : null,
 })
 
-const countLiveBlocks = async (repo: Repo, workspaceId: string): Promise<number> => {
+/** Live blocks in a workspace. Shared with the monitor, which pairs it with a
+ *  LIVE `repo.metrics()` snapshot and so needs the same measurement, not the
+ *  size recorded by some earlier session. Measured at ~15ms on a 327k-block
+ *  graph — affordable for an idle-gated caller, not for a hot path. */
+export const countLiveBlocks = async (repo: Repo, workspaceId: string): Promise<number> => {
   const row = await repo.db.getOptional<{ n: number }>(
     'SELECT COUNT(*) AS n FROM blocks WHERE workspace_id = ? AND deleted = 0',
     [workspaceId],
