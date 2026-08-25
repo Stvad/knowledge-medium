@@ -10,6 +10,7 @@ const analysis = (over: Partial<PerfAnalysis> = {}): PerfAnalysis => ({
   baselineSessions: 12,
   regressions: [],
   insufficientHistory: false,
+  ready: { interaction: true, startup: true },
   interactionComparable: true,
   graphGrowth: null,
   ...over,
@@ -40,6 +41,23 @@ describe('mapAnalysisToSnapshot', () => {
     const snapshot = mapAnalysisToSnapshot(analysis())
     expect(snapshot.severity).toBe('ok')
     expect(snapshot.detail).toContain('12')
+  })
+
+  // The day-one state for every existing user: months of startup records and no
+  // interaction records at all. A single flag across both series turns that into
+  // a clean verdict for a comparison that never ran.
+  it('says so when one series is compared and the other is not', () => {
+    const snapshot = mapAnalysisToSnapshot(analysis({
+      ready: { interaction: false, startup: true },
+      baselineSessions: 0,
+    }))
+    expect(snapshot.detail).toContain('interaction history still building')
+  })
+
+  it('distinguishes a series that is still filling from one that cannot be compared', () => {
+    const blended = mapAnalysisToSnapshot(analysis({ interactionComparable: false }))
+    expect(blended.detail).toContain('more than one workspace')
+    expect(blended.detail).not.toContain('still building')
   })
 
   // An `error` reddens the whole status chip, which is the app's signal for

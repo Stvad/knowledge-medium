@@ -11,7 +11,8 @@
 import { appEffectsFacet, type AppEffect } from '@/extensions/core.js'
 import { PendingIdleJobs } from '@/data/internals/idleMarkerJobs.js'
 import { scheduleDeepIdle, LAZY_DEEP_IDLE } from '@/utils/scheduleIdle.js'
-import { writeInteractionSample } from './record.js'
+import { isClientIdPersistent } from '@/utils/clientId.js'
+import { observeInteractionWorkspace, writeInteractionSample } from './record.js'
 
 /** Wall clock before the first sample. Single-sourced from the shared lazy
  *  tier so the floor stays one number, but applied with a plain timer — see
@@ -47,6 +48,18 @@ export const interactionMetricsEffect: AppEffect = {
   id: 'interaction-metrics.sample',
   start: ({ repo, workspaceId }) => {
     if (!workspaceId) return
+    // Checked ONCE here, unlike the read-only guard inside the write: whether
+    // this client has a persistent id is fixed for the page session, while the
+    // workspace role resolves asynchronously after mount. Without a persistent
+    // id, per-client history is written where the next session will never look
+    // for it -- unreadable groups accumulating in the graph forever, so the
+    // right amount to record is none.
+    if (!isClientIdPersistent()) return
+    // Marked synchronously, at the moment the workspace becomes active -- not
+    // when a sample eventually runs. A session can enter a second workspace and
+    // leave before that workspace's first sample is due, and the page-global
+    // counters would carry its work with nothing having observed the switch.
+    observeInteractionWorkspace(workspaceId)
     let cancelled = false
     let timer: ReturnType<typeof setTimeout> | undefined
     const armIn = (delayMs: number): void => {

@@ -29,7 +29,7 @@ import {
   startupMetricsUIStateType,
   type StartupRecordData,
 } from '@/plugins/startup-metrics/record.js'
-import { loadRecords } from './load.js'
+import { INTERACTION_RECORD_PATH, STARTUP_RECORD_PATH, loadRecords } from './load.js'
 import { bootstrapGapMs, invalidationsPerWrite } from './series.js'
 import { runPerfAnalysisNow } from './schedule.js'
 import { getPerfAnalysisFor, subscribePerfAnalysis } from './store.js'
@@ -87,8 +87,8 @@ export function PerfTrendDialog({ resolve, workspaceId }: DialogContextProps<voi
     void (async () => {
       try {
         const [s, i] = await Promise.all([
-          loadRecords<StartupRecordData>(repo, ws, startupMetricsUIStateType.id, '$.startupRecord'),
-          loadRecords<InteractionRecordData>(repo, ws, interactionMetricsUIStateType.id, '$.interactionRecord'),
+          loadRecords<StartupRecordData>(repo, ws, startupMetricsUIStateType.id, STARTUP_RECORD_PATH),
+          loadRecords<InteractionRecordData>(repo, ws, interactionMetricsUIStateType.id, INTERACTION_RECORD_PATH),
         ])
         if (!live) return
         setStartup(s.map((r) => r.record))

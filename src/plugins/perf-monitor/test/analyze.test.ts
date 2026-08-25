@@ -82,6 +82,23 @@ describe('runPerfAnalysis', () => {
   // does not inherit that rule by the recorder having one.
   // The positive control for the test below: with this history the fan-out
   // comparison DOES fire, so the suppression it asserts is a real difference.
+  // The day-one state for every existing user: months of startup records, zero
+  // interaction records. A single readiness flag across both series turns that
+  // into "no slowdowns" for a comparison that never ran.
+  it('tracks readiness per series, not across them', async () => {
+    await pastSession()
+    const thin = await runPerfAnalysis(repo, WS, 1000)
+    expect(thin.ready.interaction).toBe(false)
+    expect(thin.ready.startup).toBe(false)
+
+    await seedFiringHistory()
+    const filled = await runPerfAnalysis(repo, WS, 2000)
+    expect(filled.ready.interaction).toBe(true)
+    // Startup records are written by a different recorder that never ran here,
+    // so that series stays unready — which is exactly the asymmetry under test.
+    expect(filled.ready.startup).toBe(false)
+  })
+
   it('reports a fan-out regression on an attributable session', async () => {
     await seedFiringHistory()
     resetInteractionSessions()

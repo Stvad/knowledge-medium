@@ -11,7 +11,13 @@ import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb
 import { createTestRepo } from '@/data/test/createTestRepo'
 import type { User } from '@/data/api'
 import { definitionSeedsFacet, typeSeedsFacet } from '@/data/facets'
-import { interactionRecordProp, interactionRecordType, resetInteractionSessions } from '../record'
+import {
+  interactionRecordProp,
+  interactionRecordType,
+  interactionSessionFor,
+  resetInteractionSessions,
+  writeInteractionSample,
+} from '../record'
 import { drainInteractionSamples, interactionMetricsEffect } from '../schedule'
 
 const WS = 'ws-1'
@@ -89,6 +95,27 @@ describe('interactionMetricsEffect', () => {
     await settleSamples(5 * 60_000)
     expect(samples()).toBeGreaterThan(afterFirst)
     stop?.()
+  })
+
+  // The scenario the write-time check cannot see: a session visits a second
+  // workspace and leaves before that workspace's first sample is ever due. The
+  // page-global counters carry its work regardless, so the switch has to be
+  // observed when the workspace becomes active, not when a sample runs.
+  it('marks a workspace visit that ends before its first sample', async () => {
+    const stopA = await interactionMetricsEffect.start({ repo, workspaceId: WS } as Parameters<
+      typeof interactionMetricsEffect.start
+    >[0])
+    // Enter and leave the second workspace well inside the sampling floor.
+    const stopB = await interactionMetricsEffect.start({ repo, workspaceId: 'ws-2' } as Parameters<
+      typeof interactionMetricsEffect.start
+    >[0])
+    await vi.advanceTimersByTimeAsync(5_000)
+    stopB?.()
+
+    expect(interactionSessionFor(WS).attributable).toBe(false)
+    await settleSamples()
+    expect(await writeInteractionSample(repo, WS)).toBeNull()
+    stopA?.()
   })
 
   it('stops sampling once the effect is torn down', async () => {

@@ -27,9 +27,17 @@ const graphNote = (growth: number | null): string | null =>
     : null
 
 /** A comparison that could not run must not read as one that ran and found
- *  nothing — the whole point of this feature. */
-const attributionNote = (comparable: boolean): string | null =>
-  comparable ? null : 'interaction metrics not comparable this session (more than one workspace opened)'
+ *  nothing — the whole point of this feature. Distinguishes the two reasons a
+ *  series stays out of the verdict, because they resolve differently: waiting
+ *  fixes one, and only a fresh page session fixes the other. */
+const pendingNote = (analysis: PerfAnalysis): string | null => {
+  if (!analysis.interactionComparable) {
+    return 'interaction metrics not comparable this session (more than one workspace opened)'
+  }
+  if (!analysis.ready.interaction) return 'interaction history still building'
+  if (!analysis.ready.startup) return 'startup history still building'
+  return null
+}
 
 const joined = (...parts: Array<string | null>): string | undefined =>
   parts.filter((p): p is string => Boolean(p)).join(' · ') || undefined
@@ -53,7 +61,7 @@ export const mapAnalysisToSnapshot = (analysis: PerfAnalysis): DiagnosticSnapsho
       summary: 'No slowdowns vs baseline',
       detail: joined(
         `Compared against ${analysis.baselineSessions} recent sessions`,
-        attributionNote(analysis.interactionComparable),
+        pendingNote(analysis),
       ),
       actionId: VIEW_PERF_TREND_ACTION_ID,
       actionLabel: 'View trend',
@@ -68,7 +76,7 @@ export const mapAnalysisToSnapshot = (analysis: PerfAnalysis): DiagnosticSnapsho
       analysis.regressions.slice(0, 3).map(formatRegression).join(' · ') +
         (rest > 2 ? ` · +${rest - 2} more` : ''),
       graphNote(analysis.graphGrowth),
-      attributionNote(analysis.interactionComparable),
+      pendingNote(analysis),
     ),
     actionId: VIEW_PERF_TREND_ACTION_ID,
     actionLabel: 'View trend',

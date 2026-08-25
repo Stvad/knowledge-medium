@@ -17,7 +17,7 @@ import { onFirstSync, type SyncStatusDb } from '@/data/internals/firstSync.js'
 import { getPluginUIStateBlock, getPluginUIStateChild } from '@/data/stateBlocks.js'
 import { keyAtStart } from '@/data/orderKey.js'
 import { appVersion } from '@/appVersion.js'
-import { getClientId, getDeviceLabel } from '@/utils/clientId.js'
+import { getClientId, getDeviceLabel, isClientIdPersistent } from '@/utils/clientId.js'
 import { scheduleIdle } from '@/utils/scheduleIdle.js'
 import {
   getLastLongTaskEndMs,
@@ -216,7 +216,10 @@ export const resetStartupMetricsRecorded = (): void => { recorded = false }
 export const collectStartupMetricsEffect: AppEffect = {
   id: 'startup-metrics.collect',
   start: ({ repo, workspaceId }) => {
-    if (!workspaceId || recorded) return
+    // See the interaction recorder's schedule for why this is checked at
+    // scheduling time: without a persistent client id every load writes a group
+    // the next load will never read.
+    if (!workspaceId || recorded || !isClientIdPersistent()) return
     let done = false
     const cleanups: Array<() => void> = []
     const runCleanups = () => { for (const c of cleanups.splice(0)) c() }

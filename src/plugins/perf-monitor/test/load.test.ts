@@ -18,11 +18,11 @@ import {
   writeInteractionSample,
   type InteractionRecordData,
 } from '@/plugins/interaction-metrics/record'
-import { loadRecords } from '../load'
+import { INTERACTION_RECORD_PATH, loadRecords } from '../load'
 
 const WS = 'ws-1'
 const USER: User = { id: 'user-1', name: 'Alice' }
-const PATH = '$.interactionRecord'
+const PATH = INTERACTION_RECORD_PATH
 
 let sharedDb: TestDb
 let repo: Repo

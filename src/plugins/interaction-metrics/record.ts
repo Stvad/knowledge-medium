@@ -112,7 +112,12 @@ export interface InteractionRecordData extends InteractionComparable {
 export const interactionRecordProp = seedProperty<InteractionRecordData | undefined>({
   seedKey: 'system:interaction-metrics/property/interaction-record',
   revision: 1,
-  name: 'interactionRecord',
+  // Namespaced: property names share one workspace-wide schema namespace, so a
+  // flat `interactionRecord` is a name an installed extension could plausibly
+  // claim -- and the winner of that race decides the codec and scope these
+  // records decode under. Free to fix now; after records persist under a name
+  // it orphans them.
+  name: 'interaction-metrics:record',
   preset: 'optional-json',
   defaultValue: undefined,
   // Automation scope, like `startupRecord`: synced and non-undoable, but NOT in
@@ -182,6 +187,15 @@ export const queryNameFromHandleKey = (key: string): string =>
  *  can never diverge in what "the same measurement" means. */
 export const interactionComparable = (
   metrics: ReturnType<Repo['metrics']>,
+  /** Transactions the recorder issued itself, discounted from `writes`.
+   *
+   *  A monitor must not measure its own bookkeeping. `writes` is the
+   *  DENOMINATOR of the fan-out ratio, so counting the recorder's own
+   *  transactions deflates it — the direction that hides regressions rather
+   *  than inventing them. The numerator needs no matching correction: nothing
+   *  subscribes to the hidden ui-state blocks these writes touch, so they
+   *  invalidate no handles. */
+  ownWrites = 0,
 ): InteractionComparable => {
   const queries: Record<string, TimingSample> = {}
   for (const [name, timing] of Object.entries(metrics.queries)
@@ -190,7 +204,7 @@ export const interactionComparable = (
     queries[name] = toTimingSample(timing)
   }
   return {
-    writes: metrics.db.writeTransaction?.calls ?? 0,
+    writes: Math.max(0, (metrics.db.writeTransaction?.calls ?? 0) - ownWrites),
     queries,
     fanout: { ...metrics.handleStore },
   }
@@ -207,6 +221,7 @@ export const buildInteractionRecord = (
     clientId: string
     deviceLabel: string
     blockCount: number
+    ownWrites: number
   },
 ): InteractionRecordData => {
   const db: Record<string, TimingSample> = {}
@@ -223,7 +238,7 @@ export const buildInteractionRecord = (
     deviceLabel: meta.deviceLabel,
     sessionMs: meta.recordedAt - meta.startedAt,
     blockCount: meta.blockCount,
-    ...interactionComparable(metrics),
+    ...interactionComparable(metrics, meta.ownWrites),
     db,
     handles: {
       count: inventory.handleCount,
@@ -258,12 +273,31 @@ interface PageSession {
  *  blended one is ever written. Losing the (rare) multi-workspace session beats
  *  poisoning the baseline every later comparison is measured against. */
 let pageSession: PageSession | null = null
+let seenWorkspace: string | null = null
 let unattributable = false
+/** Transactions this recorder has issued itself — see `interactionComparable`. */
+let ownWrites = 0
 
 /** Test helper — forget this process's session so the next sample re-creates. */
 export const resetInteractionSessions = (): void => {
   pageSession = null
+  seenWorkspace = null
   unattributable = false
+  ownWrites = 0
+}
+
+/**
+ * Note that `workspaceId` is now active in this page session.
+ *
+ * The rule lives here, at the moment a workspace is OBSERVED, rather than at
+ * the moment a sample is written. Those differ: a session can enter a second
+ * workspace and leave again before that workspace's first sample is ever due,
+ * and a rule enforced only at write time would never see it — while the
+ * counters would carry its work regardless.
+ */
+export const observeInteractionWorkspace = (workspaceId: string): void => {
+  if (seenWorkspace === null) seenWorkspace = workspaceId
+  else if (seenWorkspace !== workspaceId) unattributable = true
 }
 
 /** What this page session can honestly say about its own counters, for readers
@@ -275,9 +309,10 @@ export const resetInteractionSessions = (): void => {
  *  two workspaces' work against one workspace's history. */
 export const interactionSessionFor = (
   workspaceId: string,
-): { attributable: boolean; recordId: string | null } => ({
-  attributable: !unattributable && (pageSession === null || pageSession.workspaceId === workspaceId),
+): { attributable: boolean; recordId: string | null; ownWrites: number } => ({
+  attributable: !unattributable && (seenWorkspace === null || seenWorkspace === workspaceId),
   recordId: pageSession?.workspaceId === workspaceId ? pageSession.blockId : null,
+  ownWrites,
 })
 
 /** Live blocks in a workspace. Shared with the monitor, which pairs it with a
@@ -326,6 +361,7 @@ const openSession = async (repo: Repo, workspaceId: string): Promise<PageSession
     // Same tx as the create, so a record is never briefly untyped.
     await repo.addTypeInTx(tx, blockId, interactionRecordType.id, {})
   }, { scope: ChangeScope.Automation, description: 'interaction metrics record' })
+  ownWrites++
   const session: PageSession = { blockId, workspaceId, startedAt }
   pageSession = session
   return session
@@ -345,6 +381,9 @@ export const writeInteractionSample = async (
   repo: Repo,
   workspaceId: string,
 ): Promise<string | null> => {
+  // Both entry points route the attribution rule through one function, so a
+  // direct caller cannot bypass what the effect enforces.
+  observeInteractionWorkspace(workspaceId)
   if (unattributable) return null
   // Checked HERE rather than at scheduling time: the workspace role resolves
   // asynchronously after mount, so a check when the effect starts can run
@@ -354,16 +393,15 @@ export const writeInteractionSample = async (
   // the user as changes that could not sync. A recurring sampler would keep
   // manufacturing those.
   if (repo.isReadOnly) return null
-  if (pageSession && pageSession.workspaceId !== workspaceId) {
-    unattributable = true
-    return null
-  }
   // The record can be deleted from another device, or by a user browsing the
   // metrics tree. Writing a property to a tombstone does not restore it, so
   // without this the session would keep updating a row no reader can see.
+  // Snapshot BEFORE any of this sample's own setup work, so a first sample does
+  // not report the transactions that created its own record block.
+  const metrics = repo.metrics()
   const live = pageSession && (await isLive(repo, pageSession.blockId)) ? pageSession : null
   const session = live ?? (await openSession(repo, workspaceId))
-  const data = buildInteractionRecord(repo.metrics(), {
+  const data = buildInteractionRecord(metrics, {
     recordedAt: Date.now(),
     startedAt: session.startedAt,
     appVersion: appVersion.display,
@@ -375,9 +413,11 @@ export const writeInteractionSample = async (
     // imports or syncs a lot of blocks would otherwise report the final
     // timings against the opening graph size.
     blockCount: await countLiveBlocks(repo, workspaceId),
+    ownWrites,
   })
   await repo.tx(async (tx) => {
     await tx.setProperty(session.blockId, interactionRecordProp, data)
   }, { scope: ChangeScope.Automation, description: 'interaction metrics record' })
+  ownWrites++
   return session.blockId
 }

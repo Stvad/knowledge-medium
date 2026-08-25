@@ -68,7 +68,7 @@ const metricsFixture = (over: Partial<ReturnType<Repo['metrics']>> = {}): Return
 
 const META = {
   recordedAt: 5_000, startedAt: 1_000, appVersion: '2026.08.24', appSha: 'abc1234',
-  clientId: 'client-9', deviceLabel: 'installed:MacIntel', blockCount: 327_902,
+  clientId: 'client-9', deviceLabel: 'installed:MacIntel', blockCount: 327_902, ownWrites: 0,
 }
 
 describe('queryNameFromHandleKey', () => {
@@ -119,6 +119,15 @@ describe('buildInteractionRecord', () => {
   // Tx descriptions are interpolated with user content at ~30 call sites
   // (`append tag [[<name>]]`, `rename property <name>`), so the record must not
   // carry them at all -- there is no safe subset to keep.
+  // A monitor must not measure its own bookkeeping: `writes` is the DENOMINATOR
+  // of the fan-out ratio, so counting the recorder's own transactions deflates
+  // it -- the direction that hides regressions rather than inventing them.
+  it('discounts the recorder\'s own transactions from the write count', () => {
+    const metrics = metricsFixture({ db: { writeTransaction: timing({ calls: 10 }) } } as Partial<ReturnType<Repo['metrics']>>)
+    expect(buildInteractionRecord(metrics, META).writes).toBe(10)
+    expect(buildInteractionRecord(metrics, { ...META, ownWrites: 4 }).writes).toBe(6)
+  })
+
   it('stores no transaction descriptions', () => {
     const record = buildInteractionRecord(metricsFixture(), META)
     const serialized = JSON.stringify(record)

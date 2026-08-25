@@ -17,6 +17,13 @@ import type { Repo } from '@/data/repo'
 import { pluginUIStateBlockId, stateChildBlockId } from '@/data/stateBlocks.js'
 import { getClientId } from '@/utils/clientId.js'
 
+/** JSON paths of the two record properties. A property name carrying a colon
+ *  (the namespace separator) must be QUOTED inside the path expression, which
+ *  is why these are written once here rather than assembled from a name at each
+ *  call site. */
+export const INTERACTION_RECORD_PATH = '$."interaction-metrics:record"'
+export const STARTUP_RECORD_PATH = '$.startupRecord'
+
 /** Sessions of history retained per comparison. Enough for the median to be
  *  stable across session heterogeneity, small enough that the baseline still
  *  tracks the current build rather than averaging over months of them. */

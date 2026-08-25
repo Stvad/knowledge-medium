@@ -14,7 +14,7 @@ import {
   startupMetricsUIStateType,
   type StartupRecordData,
 } from '@/plugins/startup-metrics/record.js'
-import { loadRecords } from './load.js'
+import { INTERACTION_RECORD_PATH, STARTUP_RECORD_PATH, loadRecords } from './load.js'
 import {
   fanoutRegression,
   median,
@@ -32,8 +32,13 @@ export interface PerfAnalysis {
   baselineSessions: number
   /** Worst first. Empty when nothing regressed. */
   regressions: Regression[]
-  /** True when the series is too short to judge — reported distinctly from
-   *  "nothing regressed", because they call for opposite reactions. */
+  /** Per SERIES, because they fill up independently: every existing user has
+   *  months of startup records and zero interaction records, and one `&&`
+   *  across the two turns that state into "no slowdowns, compared against 0
+   *  sessions" — a clean verdict from a comparison that never ran, which is
+   *  the failure this feature exists to remove. */
+  ready: { interaction: boolean; startup: boolean }
+  /** True when NEITHER series can be compared yet. */
   insufficientHistory: boolean
   /** False when this page session's live counters cannot be attributed to one
    *  workspace, so only startup was compared. Surfaced rather than silently
@@ -51,10 +56,10 @@ export const runPerfAnalysis = async (
   now: number,
 ): Promise<PerfAnalysis> => {
   const interaction = await loadRecords<InteractionRecordData>(
-    repo, workspaceId, interactionMetricsUIStateType.id, '$.interactionRecord',
+    repo, workspaceId, interactionMetricsUIStateType.id, INTERACTION_RECORD_PATH,
   )
   const startup = await loadRecords<StartupRecordData>(
-    repo, workspaceId, startupMetricsUIStateType.id, '$.startupRecord',
+    repo, workspaceId, startupMetricsUIStateType.id, STARTUP_RECORD_PATH,
   )
 
   // The live counters are page-global. A page session that has seen a second
@@ -69,7 +74,10 @@ export const runPerfAnalysis = async (
   // discard a genuine past session in exactly the case where no current record
   // exists.
   const history = interaction.filter((r) => r.id !== session.recordId).map((r) => r.record)
-  const current = interactionComparable(repo.metrics())
+  const current = interactionComparable(repo.metrics(), session.ownWrites)
+
+  const interactionReady = session.attributable && history.length >= MIN_INTERACTION_HISTORY
+  const startupReady = startup.length >= MIN_STARTUP_HISTORY
 
   const regressions: Regression[] = [
     ...(session.attributable
@@ -104,8 +112,8 @@ export const runPerfAnalysis = async (
     // sufficient but too short once the recent window is taken out, every
     // comparison necessarily returns null and the chip would report "no
     // slowdowns" for a comparison that never ran.
-    insufficientHistory:
-      history.length < MIN_INTERACTION_HISTORY && startup.length < MIN_STARTUP_HISTORY,
+    ready: { interaction: interactionReady, startup: startupReady },
+    insufficientHistory: !interactionReady && !startupReady,
     interactionComparable: session.attributable,
     graphGrowth,
   }
