@@ -3,5 +3,5 @@ import{stateChildBlockId as e}from"../../data/derivedIds.js";import{getClientId 
         WHERE parent_id = ? AND deleted = 0
           AND json_extract(properties_json, ?) IS NOT NULL
         ORDER BY order_key
-        LIMIT ? OFFSET ?`,[o,c,o,40,e*40]);for(let e of t)if(e.payload)try{let t=JSON.parse(e.payload);typeof t?.recordedAt==`number`&&s(t)&&l.push({id:e.id,record:t})}catch{}if(t.length<40)break}return l.sort((e,t)=>t.record.recordedAt-e.record.recordedAt)};export{f as HISTORY_LIMIT,a as INTERACTION_RECORD_PATH,o as STARTUP_RECORD_PATH,c as isUsableInteractionRecord,u as isUsableStartupRecord,p as loadRecords};
+        LIMIT ? OFFSET ?`,[o,c,o,40,e*40]);for(let e of t)if(e.payload)try{let t=JSON.parse(e.payload);typeof t?.recordedAt==`number`&&s(t)&&l.push({id:e.id,record:t})}catch{}if(t.length<40)break}return l.sort((e,t)=>t.record.recordedAt-e.record.recordedAt).slice(0,40)};export{f as HISTORY_LIMIT,a as INTERACTION_RECORD_PATH,o as STARTUP_RECORD_PATH,c as isUsableInteractionRecord,u as isUsableStartupRecord,p as loadRecords};
 //# sourceMappingURL=load.js.map
