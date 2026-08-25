@@ -1119,60 +1119,53 @@ export const BACKFILL_BLOCKS_FTS_SQL = `
  *  ANALYZE here is UNBOUNDED, and that is load-bearing — see
  *  {@link ANALYZE_OPTIMIZE_SQL} for the two caps that have to stay off.
  *  Sampling cannot describe this schema: every hot index leads with
- *  `workspace_id`, which on a real client has ONE value covering the table, and
- *  a sampled pass records the sample size as the rows-per-value estimate. The
- *  planner then drives workspace-scoped joins from a full scan of `blocks`
- *  instead of from the selective side — the same inversion a missing stat row
- *  causes, at a magnitude that reads as plausible. No limit VALUE avoids it: the
- *  estimate IS the limit, so an honest one would have to exceed the workspace's
- *  row count. Cost of dropping it is one table's ANALYZE at deep idle; #833 is
- *  what it bought. */
+ *  `workspace_id`, which on a real client has one or two values covering
+ *  essentially the whole table, and a sampled pass records the sample size as
+ *  the rows-per-value estimate. The planner then drives workspace-scoped joins
+ *  from a full scan of `blocks` instead of from the selective side — the same
+ *  inversion a missing stat row causes, at a magnitude that reads as plausible.
+ *  No limit VALUE avoids it: the estimate IS the limit, so an honest one would
+ *  have to exceed the workspace's row count. #833 is what it bought. */
 
 /** Dry run of what {@link ANALYZE_OPTIMIZE_SQL} is about to do, for logging.
  *
- *  Mask `0x03` is debug(`0x01`) + "analyze what might benefit"(`0x02`), which is
- *  the default mask plus the debug bit — so it reports exactly the work the real
- *  call will perform. `PRAGMA optimize(-1)` is the obvious-looking choice and is
- *  WRONG for this: it also sets `0x10000` ("analyze all tables"), so it reports
- *  work the default mask declines to do. Verified against ground truth in four
- *  states (settled / stale-and-armed / stale-and-unarmed / new index). */
+ *  Mask `0x03` is debug(`0x01`) + {@link ANALYZE_OPTIMIZE_SQL}'s `0x02` — so it
+ *  reports exactly the work the real call will perform, verified byte-identical
+ *  on the shipped build. `PRAGMA optimize(-1)` is the obvious-looking choice and
+ *  is WRONG for this: it also sets `0x10000` ("analyze all tables"), so it
+ *  reports work the real call declines to do. Keep the two masks in step. */
 export const ANALYZE_DRY_RUN_SQL = `PRAGMA optimize(0x03)`
 
 /** `0x02` — "analyze what might benefit" — and NOT the default mask.
  *
  *  The obvious simplification — bare `PRAGMA optimize` — is wrong, and silently.
- *  Its default mask is `0x12`, and the `0x10` bit imposes SQLite's own
+ *  The default mask is `0xfffe`, whose `0x10` bit imposes SQLite's own
  *  `SQLITE_DEFAULT_OPTIMIZE_LIMIT` of 2000 rows; clearing `analysis_limit` does
- *  NOT disable it. Over a 5000-row single-workspace index with the limit at
- *  zero, bare and `0x12` both record `5000 2001` where `0x02` records
- *  `5000 5000` — the fabricated selectivity of the module comment, rearmed for
- *  the next release that adds an index.
+ *  NOT disable it. Verified on the shipped wa-sqlite build (3.53.0): over a
+ *  5000-row single-workspace index with the limit at zero, bare records
+ *  `5000 2001` where `0x02` records `5000 5000` — the fabricated selectivity of
+ *  the module comment, rearmed for the next release that adds an index.
  *
- *  Dropping the bit costs nothing else: `0x02` still re-analyzes only what the
+ *  The trade, since `0xfffe` means "every bit we ever add": naming `0x02` opts
+ *  out of future optimizations SQLite puts behind new bits. Accepted — an
+ *  unbounded ANALYZE is the point of this module — but revisit the mask on a
+ *  SQLite upgrade rather than assuming it still means what it means today.
+ *
+ *  Dropping `0x10` costs nothing else: `0x02` still re-analyzes only what the
  *  staleness rules name, still requires {@link ANALYZE_ARMING_PROBES}, and still
- *  honours an explicit `analysis_limit`. It also makes the real call agree with
- *  {@link ANALYZE_DRY_RUN_SQL}, which is `0x02` plus the debug bit. */
+ *  honours an explicit `analysis_limit`. */
 export const ANALYZE_OPTIMIZE_SQL = `PRAGMA optimize(0x02)`
 
-/** Zero the connection's `analysis_limit` IMMEDIATELY before every statement
- *  that performs an ANALYZE — the optimize, the one-shot repair, the manual
- *  command. One statement earlier is one more boundary for another tab's SET.
+/** `analysis_limit` is CONNECTION state, so an ANALYZE inherits whatever was
+ *  set last. Nothing in this tree sets it any more, but the agent bridge runs
+ *  arbitrary SQL on this same connection — so every ANALYZE goes through
+ *  {@link analyzeUnbounded}, which pairs this with the statement it protects.
  *
- *  `analysis_limit` is CONNECTION state and PowerSync's shared worker owns one
- *  connection across tabs. Nothing in this tree sets it any more, so the only
- *  writer is a tab still running a pre-#833 build: this is a rollout-window
- *  hazard that ends when the last such tab closes, not a standing one.
- *
- *  Accepted residual, deliberately not closed: an old tab's SET can still land
- *  inside our ANALYZE, and if its CLEAR lands before our read-back we mark a
- *  sampled pass as repaired. Closing it needs a lock held across the sequence,
- *  which {@link ClientSchemaBootstrapDb}'s execute/getOptional shape cannot
- *  express without deadlocking bootstrap shims — permanent structure for a
- *  transient window. The device keeps sampled rows until the next index
- *  addition re-analyzes them, or the user runs the manual command. */
+ *  Not defended against another TAB: with an OPFS VFS each tab opens a
+ *  DEDICATED worker (`vfsRequiresDedicatedWorkers`), so tabs do not share a
+ *  connection and cannot see each other's PRAGMA state. An earlier revision of
+ *  this comment claimed a shared worker and built a read-back guard on it. */
 export const RESET_ANALYZE_SAMPLE_LIMIT_SQL = `PRAGMA analysis_limit=0`
-
-export const READ_ANALYZE_SAMPLE_LIMIT_SQL = `PRAGMA analysis_limit`
 
 /** One-shot: replace the sampled stats earlier builds recorded with exact ones.
  *
@@ -1183,15 +1176,16 @@ export const READ_ANALYZE_SAMPLE_LIMIT_SQL = `PRAGMA analysis_limit`
  *  from an honest one by inspection — 401 is also what a genuinely selective
  *  column looks like — so this is version-marked rather than detected.
  *
- *  Written only when the pass that earns it was provably unsampled (see
- *  {@link RESET_ANALYZE_SAMPLE_LIMIT_SQL}); until then the repair runs again
- *  next boot. `sqlite_stat1` is per-device local state, so this is a derivation
- *  pass: no claim, no upload, safe to run everywhere and safe to re-run.
+ *  `sqlite_stat1` is per-device local state, so this is a derivation pass: no
+ *  claim, no upload, safe to run everywhere and safe to re-run.
  *
- *  The most expensive thing this module does — seconds, cold, on a large client
- *  — so it runs once per device at deep idle and says so (the caller logs
- *  `repaired`). Not split per-table: `blocks` dominates the figure and a table
- *  is ANALYZE's finest granularity, so chunking moves the park, not its size. */
+ *  The most expensive thing this module does — seconds, cold, on a large client,
+ *  parking the tab's only SQLite connection against reads as well as writes.
+ *  Hence LAZY_DEEP_IDLE at its caller, never the catch-up tier: that tier
+ *  force-runs on its fallback deadline, which would put this in front of a user
+ *  30s into their session. A session that never idles simply pays it next boot.
+ *  Scoping it to fewer tables is open, not foreclosed — `row_events` and
+ *  `ps_oplog` each carry more index volume than `blocks` on a real client. */
 export const UNBOUNDED_ANALYZE_MARKER_KEY = 'analyze_unbounded_stats_v1'
 
 export const SELECT_UNBOUNDED_ANALYZE_DONE_SQL = `
@@ -1651,12 +1645,6 @@ export interface AnalyzeResult {
    *  them), NOT that nothing happened: the optimize still ran, we just can't
    *  report what it did. Observability only; nothing branches on it. */
   proposed: string[] | null
-  /** True when the one-shot sampled-stats repair ran and completed this pass.
-   *  Reported separately because it is invisible in `proposed` — the boot it
-   *  targets is precisely one where the optimize found nothing stale, so a
-   *  caller logging on `proposed` alone would narrate silence over the
-   *  multi-second worker park (see {@link UNBOUNDED_ANALYZE_MARKER_KEY}). */
-  repaired: boolean
 }
 
 /** Announce interest in the hot tables so the staleness check considers them.
@@ -1719,43 +1707,45 @@ const serializeAnalyze = <T>(run: () => Promise<T>): Promise<T> => {
  *
  *  Still belongs off the first-paint critical path (deep idle / post-sync): when
  *  it DOES fire it runs a real ANALYZE on the single SQLite worker, and on a
- *  cold fresh device that can be every table at once. */
+ *  cold fresh device that can be every table at once.
+ *
+ *  Cheap enough for the catch-up idle tier, which force-runs on a deadline. The
+ *  one-shot repair is NOT — it is scheduled separately; see
+ *  {@link runSampledStatsRepair}. */
 export const runAnalyzeIfStale = async (
   db: ClientSchemaBootstrapDb,
 ): Promise<AnalyzeResult> => serializeAnalyze(async () => {
   await armAnalyzeProbes(db)
+  // The dry run fixes `proposed` BEFORE anything analyzes, which is what makes
+  // it a report of the optimize's own decision rather than of leftover state.
   const proposed = readOptimizeRows(await db.execute(ANALYZE_DRY_RUN_SQL))
-  // Immediately before the statement that would consume it, not at the top of
-  // the pass: the arming probes and the dry run are four more boundaries for
-  // another tab's SET to land in.
-  await db.execute(RESET_ANALYZE_SAMPLE_LIMIT_SQL)
-  await db.execute(ANALYZE_OPTIMIZE_SQL)
-  // Last, so `proposed` still reports what the optimize itself decided rather
-  // than the empty set a preceding full ANALYZE would leave it. Ordinary boots
-  // pay one marker read; the sampled rows it replaces are exactly the ones the
-  // optimize above walks away from (see UNBOUNDED_ANALYZE_MARKER_KEY).
-  const repaired = await repairSampledStats(db)
-  return {proposed, repaired}
+  await analyzeUnbounded(db, ANALYZE_OPTIMIZE_SQL)
+  return {proposed}
 })
 
-/** Marker-gated full ANALYZE; see {@link UNBOUNDED_ANALYZE_MARKER_KEY}. */
-const repairSampledStats = async (db: ClientSchemaBootstrapDb): Promise<boolean> => {
-  const done = await db.getOptional<{1: number}>(SELECT_UNBOUNDED_ANALYZE_DONE_SQL)
-  if (done !== null) return false
+/** Every ANALYZE in this module goes through here, so the reset cannot be
+ *  forgotten at a fourth site. Paired, not hoisted to the top of a pass:
+ *  {@link RESET_ANALYZE_SAMPLE_LIMIT_SQL} is only sound adjacent to the
+ *  statement it protects. */
+const analyzeUnbounded = async (db: ClientSchemaBootstrapDb, sql: string): Promise<void> => {
   await db.execute(RESET_ANALYZE_SAMPLE_LIMIT_SQL)
-  await db.execute('ANALYZE')
-  // Refuse the marker only on a POSITIVE reading of a non-zero limit: a db
-  // surface that cannot answer the PRAGMA would otherwise never mark, and pay a
-  // full ANALYZE on every boot forever — worse than the race this catches.
-  if ((await readAnalyzeSampleLimit(db)) !== 0) return false
-  await db.execute(RECORD_UNBOUNDED_ANALYZE_DONE_SQL)
-  return true
+  await db.execute(sql)
 }
 
-const readAnalyzeSampleLimit = async (db: ClientSchemaBootstrapDb): Promise<number> => {
-  const row = await db.getOptional<{analysis_limit: number}>(READ_ANALYZE_SAMPLE_LIMIT_SQL)
-  return row?.analysis_limit ?? 0
-}
+/** The one-shot marker-gated full ANALYZE; see
+ *  {@link UNBOUNDED_ANALYZE_MARKER_KEY} for why it exists and what it costs.
+ *  Returns whether it ran, so the caller can say so — it is invisible in
+ *  {@link runAnalyzeIfStale}'s report by construction, since the devices it
+ *  targets are exactly the ones where the optimize finds nothing stale. */
+export const runSampledStatsRepair = async (
+  db: ClientSchemaBootstrapDb,
+): Promise<boolean> => serializeAnalyze(async () => {
+  const done = await db.getOptional<{1: number}>(SELECT_UNBOUNDED_ANALYZE_DONE_SQL)
+  if (done !== null) return false
+  await analyzeUnbounded(db, 'ANALYZE')
+  await db.execute(RECORD_UNBOUNDED_ANALYZE_DONE_SQL)
+  return true
+})
 
 /** Unconditional `ANALYZE` for the manual command-palette command.
  *
@@ -1770,7 +1760,6 @@ export const runAnalyzeNow = async (
   db: ClientSchemaBootstrapDb,
 ): Promise<{count: number}> => serializeAnalyze(async () => {
   const count = await getBlocksCount(db)
-  await db.execute(RESET_ANALYZE_SAMPLE_LIMIT_SQL)
-  await db.execute('ANALYZE')
+  await analyzeUnbounded(db, 'ANALYZE')
   return {count}
 })

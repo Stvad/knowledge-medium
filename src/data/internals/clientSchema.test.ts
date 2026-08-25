@@ -52,7 +52,6 @@ import {
   BLOCKS_FTS_BACKFILL_MARKER_KEY,
   CLIENT_SCHEMA_STATEMENTS,
   CREATE_CLIENT_SCHEMA_STATE_TABLE_SQL,
-  RESET_ANALYZE_SAMPLE_LIMIT_SQL,
   UNBOUNDED_ANALYZE_MARKER_KEY,
   backfillBlockAliasesIfEmpty,
   backfillBlocksFtsIfEmpty,
@@ -62,6 +61,7 @@ import {
   ANALYZE_OPTIMIZE_SQL,
   runAnalyzeIfStale,
   runAnalyzeNow,
+  runSampledStatsRepair,
 } from './clientSchema'
 
 interface TestDb {
@@ -1069,10 +1069,6 @@ const buildRecordingDb = ({
   return {db, executed, ranAnalyze: () => executed.some(s => /^ANALYZE\b/.test(s))}
 }
 
-const markerRows = (db: DatabaseSync): string[] =>
-  (db.prepare('SELECT key FROM client_schema_state').all() as Array<{key: string}>)
-    .map(r => r.key)
-
 const statRows = (db: DatabaseSync, tbl: string): Record<string, string> => {
   const present = db.prepare(
     `SELECT 1 FROM sqlite_master WHERE type='table' AND name='sqlite_stat1'`,
@@ -1126,9 +1122,7 @@ describe('runAnalyzeIfStale', () => {
     await runAnalyzeIfStale(buildRecordingDb().db)
     const settled = statRows(h.db, 'blocks')
 
-    const {db, proposedFrom} = {db: buildRecordingDb().db, proposedFrom: null}
-    void proposedFrom
-    const result = await runAnalyzeIfStale(db)
+    const result = await runAnalyzeIfStale(buildRecordingDb().db)
     // Nothing stale => the dry run proposes nothing and no stats move. This is
     // the every-boot case: it has to stay free.
     expect(result.proposed).toEqual([])
@@ -1164,64 +1158,24 @@ describe('runAnalyzeIfStale', () => {
     // rule fires and the bad per-value averages would outlive the fix on every
     // device that already booted a sampled build. Simulated here by the shape
     // the limit produced: a plausible-looking, far-too-small average.
+    //
+    // Nothing else in the setup may make `blocks` stale — an earlier version
+    // created an index here to pin an ordering, which handed `PRAGMA optimize`
+    // a missing stat row, re-analyzed the whole table, and repaired the stat
+    // before this assertion read it. The test passed with the repair deleted.
     seedBlocks(64)
     await runAnalyzeIfStale(buildRecordingDb().db)
+    await runSampledStatsRepair(buildRecordingDb().db)
     h.db.exec(`UPDATE sqlite_stat1 SET stat = '64 4' WHERE tbl = 'blocks'`)
     h.db.exec(`DELETE FROM client_schema_state WHERE key = '${UNBOUNDED_ANALYZE_MARKER_KEY}'`)
-    h.db.exec('CREATE INDEX idx_test_repair ON blocks (workspace_id, updated_at)')
 
-    const result = await runAnalyzeIfStale(buildRecordingDb().db)
+    expect(await runSampledStatsRepair(buildRecordingDb().db)).toBe(true)
     expect(statRows(h.db, 'blocks')['idx_blocks_workspace_active']).toBe('64 64')
-    // The repair runs LAST. Moved ahead of the optimize, its full ANALYZE would
-    // settle the new index first and leave the report empty — the operator log
-    // would then say "nothing was stale" on the boot that parked the worker.
-    expect(result.proposed).toEqual([expect.stringContaining('"blocks"')])
 
     // ...and then never again: a settled boot must not pay a full ANALYZE.
     h.db.exec(`UPDATE sqlite_stat1 SET stat = '64 4' WHERE tbl = 'blocks'`)
-    await runAnalyzeIfStale(buildRecordingDb().db)
+    expect(await runSampledStatsRepair(buildRecordingDb().db)).toBe(false)
     expect(statRows(h.db, 'blocks')['idx_blocks_workspace_active']).toBe('64 4')
-  })
-
-  it('declines the marker when a sample limit lands mid-pass, and retries', async () => {
-    // PowerSync's shared worker owns one connection across tabs, so during a
-    // rollout a tab on the previous build can set analysis_limit between this
-    // pass's statements. The repair's ANALYZE is then sampled — and the marker
-    // is one-shot, so recording it anyway would freeze the bad statistics on
-    // that device for good. Simulated by clobbering the limit as the ANALYZE
-    // runs, which is exactly where the other tab's SET would land.
-    seedBlocks(64)
-    h.db.exec(`DELETE FROM client_schema_state WHERE key = '${UNBOUNDED_ANALYZE_MARKER_KEY}'`)
-    const clobbering = buildRecordingDb()
-    const inner = clobbering.db.execute
-    clobbering.db.execute = async (sql: string, params?: unknown[]) => {
-      const result = await inner(sql, params)
-      if (/^ANALYZE$/.test(sql.trim())) h.db.exec('PRAGMA analysis_limit=400')
-      return result
-    }
-
-    const clobbered = await runAnalyzeIfStale(clobbering.db)
-    expect(clobbered.repaired).toBe(false)
-    expect(markerRows(h.db)).not.toContain(UNBOUNDED_ANALYZE_MARKER_KEY)
-
-    // Next boot, clean connection: the repair is still owed, so it runs.
-    h.db.exec(RESET_ANALYZE_SAMPLE_LIMIT_SQL)
-    const retried = await runAnalyzeIfStale(buildRecordingDb().db)
-    expect(retried.repaired).toBe(true)
-    expect(markerRows(h.db)).toContain(UNBOUNDED_ANALYZE_MARKER_KEY)
-  })
-
-  it('reports the repair, which is invisible in what the optimize proposed', async () => {
-    // The boot this targets is one where nothing is stale, so `proposed` is
-    // empty and repoProvider's log would say nothing at all about the longest
-    // worker park it will ever take.
-    seedBlocks(64)
-    await runAnalyzeIfStale(buildRecordingDb().db)
-    h.db.exec(`DELETE FROM client_schema_state WHERE key = '${UNBOUNDED_ANALYZE_MARKER_KEY}'`)
-
-    const result = await runAnalyzeIfStale(buildRecordingDb().db)
-    expect(result.proposed).toEqual([])
-    expect(result.repaired).toBe(true)
   })
 
   it('still analyzes when a table an arming probe names is absent', async () => {
@@ -1321,9 +1275,15 @@ describe('runAnalyzeIfStale — arming (stale-stats axis)', () => {
     // drop the `0x02` mask from ANALYZE_OPTIMIZE_SQL and it comes back 2001,
     // because the default mask's `0x10` bit applies SQLite's own 2000-row limit
     // whatever `analysis_limit` says. Either way the planner is told
-    // "workspace_id selects a few hundred rows" about a column with one value,
-    // and every workspace-scoped join inverts. Asserts the stat rather than a
-    // timing, because at this scale the passes cost the same.
+    // "workspace_id selects a few hundred rows" about a column that has one or
+    // two values, and every workspace-scoped join inverts. Asserts the stat
+    // rather than a timing, because at this scale the passes cost the same.
+    //
+    // Mutation-subsumed by 'clears a standing sample limit' below — every
+    // mutation that kills this kills that one too. Kept anyway: the `rowCount`
+    // assertion guards the FIXTURE, not the code. Both caps (400 and 2000) are
+    // invisible below 2500 rows, so a shrunk fixture would leave the mask pin
+    // reading green against nothing, and this is the line that fails first.
     await runAnalyzeIfStale(adapter())
     const [rowCount, avgPerWorkspace] = statRows(db, 'blocks')['idx_blocks_workspace_active']
       .split(' ').map(Number)
@@ -1331,12 +1291,12 @@ describe('runAnalyzeIfStale — arming (stale-stats axis)', () => {
     expect(avgPerWorkspace).toBe(2500)
   })
 
-  it('clears a sample limit inherited from another tab before analyzing', async () => {
-    // The mirror of the mid-pass clobber: the previous build's sequence is
-    // SET -> optimize -> CLEAR, so a tab that goes away between the first two
-    // leaves 400 standing on the shared connection. Everything this pass records
-    // would then be sampled — and it would look clean at the read-back, because
-    // by then the limit is whatever that tab left, not something we caused.
+  it('clears a standing sample limit before analyzing', async () => {
+    // `analysis_limit` is CONNECTION state, so an ANALYZE inherits whatever was
+    // set last — the agent bridge runs arbitrary SQL on this same connection.
+    // Everything the pass records would otherwise be sampled.
+    // (NOT another tab: an OPFS VFS gives each tab its own dedicated worker and
+    // connection, so tabs cannot see each other's PRAGMA state.)
     db.exec('PRAGMA analysis_limit=400')
 
     await runAnalyzeIfStale(adapter())
@@ -1345,25 +1305,14 @@ describe('runAnalyzeIfStale — arming (stale-stats axis)', () => {
     expect(avgPerWorkspace).toBe(2500)
   })
 
-  it('clears an inherited limit for the one-shot repair too, then marks it', async () => {
-    // The repair runs its own ANALYZE, so it needs its own reset — and the
-    // window it defends is AFTER the optimize's reset, which is why this sets
-    // the limit from inside the optimize statement rather than up front. With
-    // only the optimize's reset, the repair analyzes at 400 and the marker
-    // records a sampled pass as the exact repair, permanently.
+  it('clears a standing limit for the one-shot repair too, then marks it', async () => {
+    // The repair runs its own ANALYZE through the same helper, so it carries
+    // its own reset. Without one the marker records a sampled pass as the exact
+    // repair — and the marker is one-shot, so that device never retries.
     db.exec(`DELETE FROM client_schema_state WHERE key = '${UNBOUNDED_ANALYZE_MARKER_KEY}'`)
-    const base = adapter()
-    const db2 = {
-      ...base,
-      execute: async (sql: string) => {
-        const result = await base.execute(sql)
-        if (sql.trim() === ANALYZE_OPTIMIZE_SQL) db.exec('PRAGMA analysis_limit=400')
-        return result
-      },
-    }
+    db.exec('PRAGMA analysis_limit=400')
 
-    const result = await runAnalyzeIfStale(db2)
-    expect(result.repaired).toBe(true)
+    expect(await runSampledStatsRepair(adapter())).toBe(true)
     const [, avgPerWorkspace] = statRows(db, 'blocks')['idx_blocks_workspace_active']
       .split(' ').map(Number)
     expect(avgPerWorkspace).toBe(2500)
@@ -1371,8 +1320,8 @@ describe('runAnalyzeIfStale — arming (stale-stats axis)', () => {
 
   it('the manual command is unbounded even on a connection left sampling', async () => {
     // The escape hatch exists for stats that are present and schema-current but
-    // wrong. A limit inherited from an older tab would hand the user who reached
-    // for the button the same approximation they are trying to escape.
+    // wrong. A limit left standing on the connection would hand the user who
+    // reached for the button the same approximation they are trying to escape.
     db.exec('PRAGMA analysis_limit=400')
 
     await runAnalyzeNow(adapter())

@@ -66,9 +66,9 @@ import {
   ensureStagingNeedsApplyColumn,
   ensureUndoGroupIdColumns,
 } from '@/data/internals/clientSchema'
-import { runAnalyzeIfStale } from '@/data/maintenance'
+import { runAnalyzeIfStale, runSampledStatsRepair } from '@/data/maintenance'
 import { onFirstSync } from '@/data/internals/firstSync.js'
-import { CATCHUP_DEEP_IDLE, scheduleDeepIdle } from '@/utils/scheduleIdle.js'
+import { CATCHUP_DEEP_IDLE, LAZY_DEEP_IDLE, scheduleDeepIdle } from '@/utils/scheduleIdle.js'
 import { toLocalDbOpenError } from '@/utils/localDbCorruption.js'
 import {
   captureDbOpenCorruption,
@@ -469,7 +469,7 @@ const initializePowerSyncDb = async (powerSyncDb: PowerSyncDatabase) => {
   //
   const scheduleAnalyzeCheck = (reason: string) => {
     scheduleDeepIdle(() => {
-      void runAnalyzeIfStale(backfillDb).then(({proposed, repaired}) => {
+      void runAnalyzeIfStale(backfillDb).then(({proposed}) => {
         // Silent when nothing was stale, which is every boot after the first —
         // but when it DOES park the worker, say which tables it was for.
         // Otherwise the only symptom of a mis-tuned staleness rule is an
@@ -477,18 +477,30 @@ const initializePowerSyncDb = async (powerSyncDb: PowerSyncDatabase) => {
         if (proposed && proposed.length > 0) {
           console.info(`[Repo] ANALYZE (${reason}):`, proposed.join(', '))
         }
-        // The one-shot repair is invisible in `proposed` — its whole premise is
-        // stats the optimize walks away from — so it needs saying separately, on
-        // the one boot where the pause is longest.
-        if (repaired) {
-          console.info(`[Repo] ANALYZE (${reason}): full pass, one-time exact-stats repair`)
-        }
       }).catch(error => {
         console.warn(`[Repo] ANALYZE check failed (${reason}):`, error)
       })
     }, CATCHUP_DEEP_IDLE)
   }
   scheduleAnalyzeCheck('boot')
+
+  // The one-shot exact-stats repair, on its OWN schedule and a different tier.
+  // LAZY_DEEP_IDLE has no fallback deadline: unlike the check above it never
+  // force-runs, because it is a whole-database ANALYZE that holds this tab's
+  // only SQLite connection against reads as well as writes for seconds. The
+  // catch-up tier would fire it ~30s into a session whether or not the user is
+  // idle, which is the freeze this file exists to avoid. Nothing depends on it
+  // landing THIS session; a session that never idles pays it on the next open.
+  scheduleDeepIdle(() => {
+    void runSampledStatsRepair(backfillDb).then(repaired => {
+      // Say so: it is invisible in the check's `proposed` (the devices it
+      // targets are the ones where nothing reads as stale), and it is the
+      // longest single pause this module ever takes.
+      if (repaired) console.info('[Repo] ANALYZE: one-time exact-stats repair complete')
+    }).catch(error => {
+      console.warn('[Repo] exact-stats repair failed:', error)
+    })
+  }, LAZY_DEEP_IDLE)
 
   // (b) First sync of THIS session: a fresh device boots with an empty
   // `blocks`, so (a) skips. Once PowerSync finishes the initial sync and

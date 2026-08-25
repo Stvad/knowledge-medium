@@ -11,5 +11,5 @@
  * (idle / post-sync) — `ANALYZE` is a multi-second pass on a large DB on
  * the single SQLite worker. See the docs on each function.
  */
-export { runAnalyzeIfStale, runAnalyzeNow } from './internals/clientSchema'
+export { runAnalyzeIfStale, runAnalyzeNow, runSampledStatsRepair } from './internals/clientSchema'
 export type { AnalyzeResult } from './internals/clientSchema'
