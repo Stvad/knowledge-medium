@@ -270,8 +270,19 @@ export interface Tx {
    *  writer would otherwise be missed, and the pass would recreate the property
    *  and upload it.
    *
-   *  Deleted rows only, since `childrenOf` already covers the live ones. */
-  reapedPropertyFieldTargets(workspaceId: string, parentId: string): Promise<Set<string>>
+   *  Deleted rows only, since `childrenOf` already covers the live ones. Ordered
+   *  `(order_key, id)`, and whole rows rather than a target set because the
+   *  revival path (#787) restores these rather than only counting them: a
+   *  restore that minted replacements abandoned the originals, so a property's
+   *  row identity did not survive a delete→restore and two devices restoring
+   *  the same block minted rival field rows for one definition. */
+  tombstonedPropertyFieldRows(workspaceId: string, parentId: string): Promise<BlockData[]>
+
+  /** Tombstoned children of `parentId`, ordered `(order_key, id)` — the
+   *  complement of `childrenOf`, which is live-only. Exists for the revival
+   *  path: bringing a tombstoned field row back means bringing its value
+   *  children back with it, and those are invisible to every live-only read. */
+  deletedChildrenOf(parentId: string): Promise<BlockData[]>
 
   /** For each of `names` that has a LIVE `property-schema` block in this
    *  workspace, the ids of those blocks — read inside the transaction.
