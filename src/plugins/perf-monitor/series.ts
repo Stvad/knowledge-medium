@@ -155,12 +155,14 @@ export const queryRegressions = (
  *  navigation to write fan-out. Measured on a real session, `loaderRuns` ran
  *  10× `loaderInvalidations` — a session that browsed more than it wrote would
  *  have read as regressed. */
+export const invalidationsPerWrite = (r: InteractionComparable): number | null =>
+  r.writes > 0 ? (r.fanout.loaderInvalidations ?? 0) / r.writes : null
+
 export const fanoutRegression = (
   current: InteractionComparable,
   history: readonly InteractionComparable[],
 ): Regression | null => {
-  const perWrite = (r: InteractionComparable): number | null =>
-    r.writes > 0 ? (r.fanout.loaderInvalidations ?? 0) / r.writes : null
+  const perWrite = invalidationsPerWrite
   const now = perWrite(current)
   if (now === null) return null
   const rate = (rs: readonly InteractionComparable[]) =>

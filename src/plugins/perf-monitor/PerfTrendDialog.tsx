@@ -30,7 +30,7 @@ import {
   type StartupRecordData,
 } from '@/plugins/startup-metrics/record.js'
 import { loadRecords } from './load.js'
-import { bootstrapGapMs } from './series.js'
+import { bootstrapGapMs, invalidationsPerWrite } from './series.js'
 import { runPerfAnalysisNow } from './schedule.js'
 import { getPerfAnalysisFor, subscribePerfAnalysis } from './store.js'
 
@@ -56,8 +56,13 @@ const slowestQuery = (r: InteractionRecordData): { name: string; p95Ms: number }
   return worst
 }
 
-const perWrite = (r: InteractionRecordData): string =>
-  r.writes > 0 ? (Math.round(((r.fanout.loaderRuns ?? 0) / r.writes) * 100) / 100).toFixed(2) : '—'
+/** Shares `invalidationsPerWrite` with the comparison rather than recomputing
+ *  it: a table that charted a different number than the alarm fires on is worse
+ *  than no table, and these did drift once. */
+const perWrite = (r: InteractionRecordData): string => {
+  const rate = invalidationsPerWrite(r)
+  return rate === null ? '—' : (Math.round(rate * 100) / 100).toFixed(2)
+}
 
 const Th = ({ children }: { children: React.ReactNode }) => (
   <th className="text-left font-medium text-muted-foreground pr-3 pb-1 whitespace-nowrap">{children}</th>
@@ -198,9 +203,9 @@ export function PerfTrendDialog({ resolve, workspaceId }: DialogContextProps<voi
                 <thead>
                   <tr>
                     <Th>Session</Th><Th>Build</Th><Th>Blocks</Th><Th>Writes</Th>
-                    {/* Re-resolves per write is the ratio that catches an
+                    {/* Invalidations per write is the ratio that catches an
                         over-broad invalidation dep, which no latency column can. */}
-                    <Th>Re-resolves / write</Th><Th>Slowest query p95</Th>
+                    <Th>Invalidations / write</Th><Th>Slowest query p95</Th>
                   </tr>
                 </thead>
                 <tbody>
