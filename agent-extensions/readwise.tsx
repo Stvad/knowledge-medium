@@ -1169,6 +1169,11 @@ const aliasClaimProp = seedProperty({
   preset: 'optional-string',
   defaultValue: undefined,
   changeScope: ChangeScope.BlockDefault,
+  // Bookkeeping, not something to edit: the ownership rule reads it to decide
+  // whether an alias is the sync's to rewrite, so clearing this row by hand
+  // makes the sync treat its own fallback as the user's and stop reconciling
+  // it — the document then never reclaims its title.
+  hidden: true,
 })
 
 /** The TITLE the user was shown when they chose to keep the fallback name —
@@ -1184,6 +1189,11 @@ const aliasAcceptedForProp = seedProperty({
   preset: 'optional-string',
   defaultValue: undefined,
   changeScope: ChangeScope.BlockDefault,
+  // Bookkeeping, not something to edit: the ownership rule reads it to decide
+  // whether an alias is the sync's to rewrite, so clearing this row by hand
+  // makes the sync treat its own fallback as the user's and stop reconciling
+  // it — the document then never reclaims its title.
+  hidden: true,
 })
 
 const FALLBACK_ALIAS_MARKER = 'Readwise'
