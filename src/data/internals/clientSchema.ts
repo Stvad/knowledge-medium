@@ -1143,7 +1143,7 @@ export const BACKFILL_BLOCKS_FTS_SQL = `
  *  the rows-per-value estimate — inverting join order exactly as the missing
  *  stat row above does, at a magnitude that reads as plausible. No limit VALUE
  *  avoids it: the estimate IS the limit, so an honest one would have to exceed
- *  the workspace's row count. #833 is what it bought. */
+ *  the workspace's row count. */
 
 /** Dry run of what {@link ANALYZE_OPTIMIZE_SQL} is about to do, for logging.
  *

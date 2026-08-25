@@ -1233,11 +1233,10 @@ describe('runAnalyzeIfStale — arming (stale-stats axis)', () => {
     // two values, and every workspace-scoped join inverts. Asserts the stat
     // rather than a timing, because at this scale the passes cost the same.
     //
-    // Mutation-subsumed by 'clears a standing sample limit' below — every
-    // mutation that kills this kills that one too. Kept anyway: the `rowCount`
-    // assertion guards the FIXTURE, not the code. Both caps (400 and 2000) are
-    // invisible below 2500 rows, so a shrunk fixture would leave the mask pin
-    // reading green against nothing, and this is the line that fails first.
+    // The fixture must stay ABOVE 2000 rows: both caps (400, and SQLite's own
+    // 2000) are invisible below that, so a smaller one leaves the assertion
+    // below reading green against nothing. `rowCount` is what fails first if
+    // someone shrinks it, which is why it is asserted alongside.
     await runAnalyzeIfStale(adapter())
     const [rowCount, avgPerWorkspace] = statRows(db, 'blocks')['idx_blocks_workspace_active']
       .split(' ').map(Number)
