@@ -2,6 +2,6 @@ import{stateChildBlockId as e}from"../../data/derivedIds.js";import{getClientId 
          FROM blocks
         WHERE parent_id = ? AND deleted = 0
           AND json_extract(properties_json, ?) IS NOT NULL
-        ORDER BY order_key
+        ORDER BY order_key, id
         LIMIT ? OFFSET ?`,[o,c,o,40,e*40]);for(let e of t)if(e.payload)try{let t=JSON.parse(e.payload);Number.isFinite(t?.recordedAt)&&s(t)&&l.push({id:e.id,record:t})}catch{}if(t.length<40)break}return l.sort((e,t)=>t.record.recordedAt-e.record.recordedAt).slice(0,40)};export{d as HISTORY_LIMIT,i as INTERACTION_RECORD_PATH,r as STARTUP_RECORD_PATH,o as isUsableInteractionRecord,l as isUsableStartupRecord,f as loadRecords};
 //# sourceMappingURL=load.js.map
