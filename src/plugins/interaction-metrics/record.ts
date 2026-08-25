@@ -20,13 +20,16 @@ import { ChangeScope, seedProperty, seedType } from '@/data/api'
 import type { Repo } from '@/data/repo'
 import { getPluginUIStateBlock, getPluginUIStateChild } from '@/data/stateBlocks.js'
 import { keyAtStart } from '@/data/orderKey.js'
+import { jsonPathForProperty } from '@/data/internals/typedBlockQuery.js'
 import { appVersion } from '@/appVersion.js'
 import { getClientId, getDeviceLabel } from '@/utils/clientId.js'
 import {
+  assertStillAttributable,
   awaitRecordingAllowed,
   clearPageRecord,
+  countingOwnWrites,
+  NoLongerEligible,
   metricsSessionContext,
-  noteOwnWrites,
   observeWorkspace,
   pageRecordStartedAt,
   setPageRecord,
@@ -145,6 +148,11 @@ export const interactionRecordType = seedType({
   hideFromCompletion: true,
   properties: [],
 })
+
+/** JSON path addressing the record property. The name carries a colon (the
+ *  namespace separator), which must be QUOTED inside a path expression — stated
+ *  once, here, beside the name it quotes. */
+export const INTERACTION_RECORD_PATH = jsonPathForProperty(interactionRecordProp.name)
 
 /** Parent ui-state container; each session adds one child under its client's group. */
 export const interactionMetricsUIStateType = seedType({
@@ -283,32 +291,6 @@ const isLive = async (repo: Repo, blockId: string): Promise<boolean> => {
   return Boolean(row)
 }
 
-/** Run `body`, counting the recorder's own transactions.
- *
- *  Counted per transaction WE issue, not as a delta on the global counter
- *  across our awaits: a user write landing in that window would be attributed
- *  to us and then subtracted from `writes`, shrinking the fan-out denominator
- *  and inventing regressions. The `getPluginUIState*` calls commit their own
- *  transactions on first use and are deliberately NOT counted — they cannot be
- *  told apart from a concurrent user write, and under-counting only shrinks the
- *  reported ratio, which suppresses a finding rather than fabricating one.
- */
-const countingOwnWrites = async <T>(
-  repo: Repo,
-  body: (recordTx: typeof repo.tx) => Promise<T>,
-): Promise<T> => {
-  let issued = 0
-  const recordTx: typeof repo.tx = async (fn, opts) => {
-    issued++
-    return repo.tx(fn, opts)
-  }
-  try {
-    return await body(recordTx)
-  } finally {
-    noteOwnWrites(issued)
-  }
-}
-
 /** Records kept per client group. The reader never looks past this many, and
  *  nothing else prunes: a session-per-row series replicated to every device
  *  otherwise grows for the life of the graph. Only THIS client's own group is
@@ -321,12 +303,18 @@ const pruneOwnGroup = async (
   groupId: string,
   keepId: string,
 ): Promise<void> => {
+  // Restricted to rows CARRYING a record, for both the offset and the deletion
+  // set. These blocks are deliberately inspectable, so the group can hold a
+  // hand-created child — and counting one toward the retention offset would
+  // eventually hand user-authored content to `tx.delete`. Telemetry retention
+  // must never be able to reach anything a person wrote.
   const stale = await repo.db.getAll<{ id: string }>(
     `SELECT id FROM blocks
       WHERE parent_id = ? AND deleted = 0 AND id != ?
+        AND json_extract(properties_json, ?) IS NOT NULL
       ORDER BY order_key
       LIMIT -1 OFFSET ?`,
-    [groupId, keepId, RETAIN_RECORDS],
+    [groupId, keepId, INTERACTION_RECORD_PATH, RETAIN_RECORDS],
   )
   if (stale.length === 0) return
   await recordTx(async (tx) => {
@@ -338,24 +326,6 @@ const pruneOwnGroup = async (
       await tx.delete(row.id)
     }
   }, { scope: ChangeScope.Automation, description: 'interaction metrics record' })
-}
-
-/** Thrown to roll back a record write whose eligibility lapsed mid-transaction. */
-class NoLongerEligible extends Error {}
-
-/** Re-read eligibility INSIDE the writing transaction. The checks before it
- *  are separated from the commit by several awaits — a workspace switch or a
- *  role resolving to viewer lands in that window, and an Automation-scope write
- *  is admitted locally regardless, so the refusal has to be re-taken where the
- *  write actually happens. */
-const assertStillEligible = (repo: Repo, workspaceId: string): void => {
-  // The active workspace is checked DIRECTLY, not only through
-  // attributability: a switch is observed by the new workspace's effect, which
-  // may not have run yet, so `attributable` can still read true for a record
-  // whose snapshot already contains the new workspace's work.
-  if (repo.activeWorkspaceId !== workspaceId) throw new NoLongerEligible()
-  const now = metricsSessionContext(repo, workspaceId)
-  if (!now.canRecord || !now.attributable) throw new NoLongerEligible()
 }
 
 /**
@@ -372,7 +342,7 @@ export const writeInteractionSample = async (
   repo: Repo,
   workspaceId: string,
 ): Promise<string | null> => {
-  observeWorkspace(workspaceId)
+  observeWorkspace(repo, workspaceId)
   const context = metricsSessionContext(repo, workspaceId)
   if (!context.attributable) return null
   if (!(await awaitRecordingAllowed(repo, workspaceId))) return null
@@ -409,7 +379,7 @@ export const writeInteractionSample = async (
     return await countingOwnWrites(repo, async (recordTx) => {
       if (existing) {
         await recordTx(async (tx) => {
-          assertStillEligible(repo, workspaceId)
+          assertStillAttributable(repo, workspaceId)
           // `skipMetadata`: a metrics sample is bookkeeping, not user intent.
           // Without it every resample stamps `user_updated_at`, and the block-ref
           // picker orders by exactly that — so a hidden ISO-timestamp block would
@@ -433,7 +403,7 @@ export const writeInteractionSample = async (
       // no record on it — and the reader applies its row limit before skipping
       // such children, so they crowd real history out of the baseline.
       await recordTx(async (tx) => {
-        assertStillEligible(repo, workspaceId)
+        assertStillAttributable(repo, workspaceId)
         await tx.create(
           {
             id: blockId,

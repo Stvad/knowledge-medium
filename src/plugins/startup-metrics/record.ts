@@ -19,8 +19,10 @@ import { keyAtStart } from '@/data/orderKey.js'
 import { appVersion } from '@/appVersion.js'
 import { getClientId, getDeviceLabel } from '@/utils/clientId.js'
 import {
+  assertStillWritable,
   awaitRecordingAllowed,
-  noteOwnWrites,
+  countingOwnWrites,
+  NoLongerEligible,
 } from '@/plugins/interaction-metrics/sessionContext.js'
 import { scheduleIdle } from '@/utils/scheduleIdle.js'
 import {
@@ -141,7 +143,8 @@ export const writeStartupRecord = async (repo: Repo, workspaceId: string): Promi
   // rules bind both recorders, and this one previously checked a weaker version
   // of them.
   if (!(await awaitRecordingAllowed(repo, workspaceId))) return null
-  const writesBefore = repo.metrics().db.writeTransaction.calls
+  try {
+    return await countingOwnWrites(repo, async (recordTx) => {
   const root = await getPluginUIStateBlock(repo, workspaceId, repo.user, startupMetricsUIStateType)
   const clientId = getClientId()
   const deviceLabel = getDeviceLabel()
@@ -164,7 +167,8 @@ export const writeStartupRecord = async (repo: Repo, workspaceId: string): Promi
     'SELECT order_key FROM blocks WHERE parent_id = ? AND deleted = 0 ORDER BY order_key LIMIT 1',
     [group.id],
   )
-  await repo.tx(async tx => {
+  await recordTx(async tx => {
+    assertStillWritable(repo, workspaceId)
     await tx.create(
       {
         id,
@@ -185,12 +189,12 @@ export const writeStartupRecord = async (repo: Repo, workspaceId: string): Promi
     // Same tx as the create, so a record is never briefly untyped.
     await repo.addTypeInTx(tx, id, startupRecordType.id, {})
   }, { scope: ChangeScope.Automation, description: 'startup metrics record' })
-  // Reported so the interaction recorder's fan-out denominator excludes them:
-  // both recorders feed one lifetime counter, so both must report. Counted as a
-  // delta because the `getPluginUIState*` calls above commit their own
-  // transactions on first use.
-  noteOwnWrites(repo.metrics().db.writeTransaction.calls - writesBefore)
-  return id
+      return id
+    })
+  } catch (err) {
+    if (err instanceof NoLongerEligible) return null
+    throw err
+  }
 }
 
 // ──── collection effect ────
@@ -203,6 +207,11 @@ const INTERACTIVE_QUIET_MS = 2_000
 /** If `interactive` is never reached (sync never completes, thread never quiets),
  *  still persist what we have so the earlier marks aren't lost. */
 const SETTLE_FALLBACK_MS = 60_000
+
+/** Attempts at the write itself, and the gap between them. A decline is
+ *  expected while a fresh device waits for its membership row to replicate. */
+const WRITE_ATTEMPTS = 3
+const WRITE_RETRY_MS = 30_000
 
 // Once per page session: boot happens once, and the marks are boot-relative, so
 // a later workspace switch must not record a second "startup".
@@ -238,20 +247,25 @@ export const collectStartupMetricsEffect: AppEffect = {
       if (done) return
       done = true
       runCleanups()
+      attemptWrite(0)
+    }
+
+    /** The write can DECLINE transiently — the membership role may not have
+     *  replicated yet — and by the time it runs, `record()` has already torn
+     *  down every timer and listener that could lead back here. Without its own
+     *  retry the boot simply has no record for the rest of the session, and the
+     *  startup series stays unjudged. */
+    const attemptWrite = (attempt: number): void => {
       scheduleIdle(() => {
-        // Re-checked inside the deferred callback, not only before scheduling
-        // it: a workspace switch tears the effect down in between, and this
-        // callback still holds the OLD workspace id while `repo.isReadOnly` has
-        // already moved to the new one. Writing then enqueues rows the old
-        // workspace's RLS refuses into the sync rejection quarantine.
         if (disposed) return
-        // Latched only once a record actually LANDS. The write can decline
-        // transiently — the membership role may not have replicated yet — and
-        // latching before it returns would spend this boot's only attempt on a
-        // failure, leaving the startup series with no record from this session
-        // for the rest of it.
         void writeStartupRecord(repo, workspaceId)
-          .then((id) => { if (id !== null) recorded = true })
+          .then((id) => {
+            if (id !== null) { recorded = true; return }
+            if (attempt + 1 < WRITE_ATTEMPTS && !disposed) {
+              const retry = setTimeout(() => attemptWrite(attempt + 1), WRITE_RETRY_MS)
+              cleanups.push(() => clearTimeout(retry))
+            }
+          })
           .catch(err => console.warn('[startup-metrics] failed to write record', err))
       })
     }

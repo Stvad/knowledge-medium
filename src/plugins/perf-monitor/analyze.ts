@@ -88,7 +88,7 @@ export const runPerfAnalysis = async (
   // The monitor observes workspace activation itself: it and the recorder are
   // independent toggles, so neither can rely on the other being the one
   // watching. `observeWorkspace` is idempotent, so both calling is correct.
-  observeWorkspace(workspaceId)
+  observeWorkspace(repo, workspaceId)
   const session = metricsSessionContext(repo, workspaceId)
 
   // Exclude THIS session's record by id, not by position: it is updated in

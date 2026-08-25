@@ -240,6 +240,28 @@ describe('writeInteractionSample', () => {
     expect(await childIds(await groupId())).toContain(second)
   })
 
+  // These blocks are deliberately inspectable, so the group can hold a
+  // hand-created child. Telemetry retention must never be able to reach
+  // anything a person wrote — including by counting it toward the offset.
+  it('never prunes a block that carries no record', async () => {
+    const blockId = (await writeInteractionSample(repo, WS))!
+    const parent = (await sharedDb.db.getAll<{ parent_id: string }>(
+      'SELECT parent_id FROM blocks WHERE id = ?', [blockId],
+    ))[0].parent_id
+    await repo.tx(async (tx) => {
+      await tx.create({ id: 'hand-written', workspaceId: WS, parentId: parent, orderKey: 'a0',
+        content: 'a note someone made here', properties: {} }, { systemMint: true })
+    }, { scope: ChangeScope.Automation })
+
+    resetMetricsSession()
+    await writeInteractionSample(repo, WS)
+
+    const survivor = await sharedDb.db.getOptional<{ deleted: number }>(
+      'SELECT deleted FROM blocks WHERE id = ?', ['hand-written'],
+    )
+    expect(survivor?.deleted).toBe(0)
+  })
+
   // blockCount is the dominant confound for every timing in the record, so a
   // session that grows the graph must not report its final timings against the
   // size the graph had when it opened.

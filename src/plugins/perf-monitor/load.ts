@@ -16,13 +16,13 @@
 import type { Repo } from '@/data/repo'
 import { pluginUIStateBlockId, stateChildBlockId } from '@/data/stateBlocks.js'
 import { getClientId } from '@/utils/clientId.js'
+import { jsonPathForProperty } from '@/data/internals/typedBlockQuery.js'
+import { startupRecordProp } from '@/plugins/startup-metrics/record.js'
 
-/** JSON paths of the two record properties. A property name carrying a colon
- *  (the namespace separator) must be QUOTED inside the path expression, which
- *  is why these are written once here rather than assembled from a name at each
- *  call site. */
-export const INTERACTION_RECORD_PATH = '$."interaction-metrics:record"'
-export const STARTUP_RECORD_PATH = '$.startupRecord'
+/** Each series' JSON path comes from the module that owns its property, so a
+ *  rename cannot leave the reader addressing a name nothing writes. */
+export { INTERACTION_RECORD_PATH } from '@/plugins/interaction-metrics/record.js'
+export const STARTUP_RECORD_PATH = jsonPathForProperty(startupRecordProp.name)
 
 /** The fields every reader of an interaction record dereferences. */
 export const isUsableInteractionRecord = (r: {

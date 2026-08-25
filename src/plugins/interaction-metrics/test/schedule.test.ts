@@ -16,7 +16,12 @@ import {
   interactionRecordType,
   writeInteractionSample,
 } from '../record'
-import { metricsSessionContext, observeWorkspaceEffect, resetMetricsSession } from '../sessionContext'
+import {
+  metricsSessionContext,
+  observeWorkspace,
+  observeWorkspaceEffect,
+  resetMetricsSession,
+} from '../sessionContext'
 import { drainInteractionSamples, interactionMetricsEffect } from '../schedule'
 
 const WS = 'ws-1'
@@ -130,6 +135,16 @@ describe('interactionMetricsEffect', () => {
       typeof observeWorkspaceEffect.start
     >[0])
     expect(metricsSessionContext(repo, WS).attributable).toBe(false)
+  })
+
+  // A local sign-out swaps the Repo without a reload and its counters restart
+  // from zero, so state carried over would describe writes that no longer exist
+  // and latch a different workspace as unattributable for good.
+  it('forgets the previous Repo when a new one appears', async () => {
+    observeWorkspace(repo, 'ws-old')
+    const other = createTestRepo({ db: sharedDb.db, user: USER }).repo
+    observeWorkspace(other, WS)
+    expect(metricsSessionContext(other, WS).attributable).toBe(true)
   })
 
   // Refusing is this rule's whole job, so the default when nothing has been

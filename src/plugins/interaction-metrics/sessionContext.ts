@@ -49,6 +49,11 @@ interface PageRecord {
   startedAt: number
 }
 
+/** The Repo these facts describe. A local sign-out swaps the Repo without a
+ *  reload, and the new one's counters start from zero — so state carried over
+ *  from the previous instance would describe writes that no longer exist, and a
+ *  different workspace would latch `unattributable` for good. */
+let boundRepo: object | null = null
 let seenWorkspace: string | null = null
 let unattributable = false
 let ownWrites = 0
@@ -64,7 +69,20 @@ let pageRecord: PageRecord | null = null
  * are independent toggles, so neither can be relied on to be the one watching.
  * Idempotent, so all of them calling is correct rather than merely harmless.
  */
-export const observeWorkspace = (workspaceId: string): void => {
+/** Drop everything if this is a different Repo than the facts describe. */
+const rebindIfNewRepo = (repo: object): void => {
+  if (boundRepo === repo) return
+  boundRepo = repo
+  seenWorkspace = null
+  unattributable = false
+  ownWrites = 0
+  pageRecord = null
+}
+
+export const observeWorkspace = (repo: object, workspaceId: string): void => {
+  // Rebinds too, so an observation is never discarded by a later read doing the
+  // rebind for the first time.
+  rebindIfNewRepo(repo)
   if (seenWorkspace === null) seenWorkspace = workspaceId
   else if (seenWorkspace !== workspaceId) unattributable = true
 }
@@ -82,8 +100,8 @@ export const observeWorkspace = (workspaceId: string): void => {
  */
 export const observeWorkspaceEffect: AppEffect = {
   id: 'metrics.observe-workspace',
-  start: ({ workspaceId }) => {
-    if (workspaceId) observeWorkspace(workspaceId)
+  start: ({ repo, workspaceId }) => {
+    if (workspaceId) observeWorkspace(repo, workspaceId)
   },
 }
 
@@ -119,6 +137,7 @@ export const metricsSessionContext = (
   repo: SessionRepoFacts,
   workspaceId: string,
 ): MetricsSessionContext => {
+  rebindIfNewRepo(repo)
   // Order matters only for which blocker is REPORTED; both are disqualifying.
   //
   // Without a persistent client id, per-client history is written where the
@@ -146,6 +165,7 @@ export const metricsSessionContext = (
 
 /** Test helper — forget this process's session. */
 export const resetMetricsSession = (): void => {
+  boundRepo = null
   seenWorkspace = null
   unattributable = false
   ownWrites = 0
@@ -199,4 +219,62 @@ export const awaitRecordingAllowed = async (
   } finally {
     clearTimeout(timer)
   }
+}
+
+/** Run `body`, counting the transactions the recorder issues through the
+ *  `recordTx` it is handed.
+ *
+ *  Counted per transaction WE issue, not as a delta on the global counter
+ *  across our awaits: a user write landing in that window would be attributed
+ *  to us and subtracted from `writes`, shrinking the fan-out denominator and
+ *  inventing regressions. Transactions the `ensure`-style helpers commit on
+ *  first use are deliberately NOT counted — they cannot be told apart from a
+ *  concurrent user write, and under-counting only shrinks the reported ratio,
+ *  which suppresses a finding rather than fabricating one.
+ *
+ *  Shared by BOTH recorders: they feed one lifetime counter, so a correction
+ *  applied to only one of them is worse than none. */
+export const countingOwnWrites = async <T>(
+  repo: { tx: Repo['tx'] },
+  body: (recordTx: Repo['tx']) => Promise<T>,
+): Promise<T> => {
+  let issued = 0
+  const recordTx = (async (fn, opts) => {
+    issued++
+    return repo.tx(fn, opts)
+  }) as Repo['tx']
+  try {
+    return await body(recordTx)
+  } finally {
+    noteOwnWrites(issued)
+  }
+}
+
+/** Thrown to roll back a record write whose eligibility lapsed mid-transaction. */
+export class NoLongerEligible extends Error {}
+
+/** Re-read writability INSIDE the writing transaction. The checks before it are
+ *  separated from the commit by several awaits — a workspace switch or a role
+ *  resolving to viewer lands in that window, and an Automation-scope write is
+ *  admitted locally regardless, so the refusal has to be re-taken where the
+ *  write actually happens. Both recorders need this. */
+export const assertStillWritable = (repo: Repo, workspaceId: string): void => {
+  if (repo.activeWorkspaceId !== workspaceId) throw new NoLongerEligible()
+  if (!metricsSessionContext(repo, workspaceId).canRecord) throw new NoLongerEligible()
+}
+
+/** Additionally require the counters to be attributable to this workspace.
+ *
+ *  INTERACTION only. A startup record is a timeline of this boot and does not
+ *  derive from the page-global counters, so blending across workspaces says
+ *  nothing about whether it is truthful — gating it on attributability would
+ *  refuse a perfectly good record.
+ *
+ *  The active workspace is checked directly rather than only through
+ *  attributability: a switch is observed by the new workspace's effect, which
+ *  may not have run yet, so `attributable` can still read true for a record
+ *  whose snapshot already contains the new workspace's work. */
+export const assertStillAttributable = (repo: Repo, workspaceId: string): void => {
+  assertStillWritable(repo, workspaceId)
+  if (!metricsSessionContext(repo, workspaceId).attributable) throw new NoLongerEligible()
 }

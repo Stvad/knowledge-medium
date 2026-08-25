@@ -41,7 +41,7 @@ export const interactionMetricsEffect: AppEffect = {
   start: ({ repo, workspaceId }) => {
     if (!workspaceId) return
     // Observed synchronously, at the moment the workspace becomes active.
-    observeWorkspace(workspaceId)
+    observeWorkspace(repo, workspaceId)
     // Asking the same context the write asks, one layer earlier: a client with
     // no durable identity can never accumulate readable history, and that is
     // fixed for the whole page session, so there is no point arming timers.

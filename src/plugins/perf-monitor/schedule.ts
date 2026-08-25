@@ -43,7 +43,7 @@ export const perfAnalysisEffect: AppEffect = {
     // At activation, not at analysis time: a session can enter a second
     // workspace and leave again long before the first analysis is due, and the
     // page-global counters carry its work regardless.
-    observeWorkspace(workspaceId)
+    observeWorkspace(repo, workspaceId)
     // Same early-out the recorders take, for the same reason and one layer
     // earlier: without a durable client id the reader derives a fresh group id
     // every load, so no scan it runs can ever find history. Analysis is two
