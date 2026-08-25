@@ -45,6 +45,16 @@ export interface LocalSchemaContribution {
   statements?: readonly string[]
   triggerNames?: readonly string[]
   backfills?: readonly LocalSchemaBackfill[]
+  /** `EXPLAIN QUERY PLAN`-able SELECTs that announce this contribution's tables
+   *  to `PRAGMA optimize`'s staleness check, which only considers tables the
+   *  connection has planned a query against. Declared here so core never has to
+   *  name a plugin's table; see `ANALYZE_ARMING_PROBES` in `clientSchema.ts`.
+   *
+   *  Each must plan to a `SEARCH … USING INDEX` — a `SCAN` does not arm, so a
+   *  probe with no usable index is silently inert. Reads only, and param-free:
+   *  {@link LocalSchemaDb} declares the params-less shape, so a bound `?` would
+   *  bind NULL. Both are pinned by tests over every contributed probe. */
+  analyzeProbes?: readonly string[]
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -63,6 +73,7 @@ const isLocalSchemaContribution = (value: unknown): value is LocalSchemaContribu
   typeof value.id === 'string' &&
   (value.statements === undefined || isStringArray(value.statements)) &&
   (value.triggerNames === undefined || isStringArray(value.triggerNames)) &&
+  (value.analyzeProbes === undefined || isStringArray(value.analyzeProbes)) &&
   (
     value.backfills === undefined ||
     (Array.isArray(value.backfills) && value.backfills.every(isLocalSchemaBackfill))

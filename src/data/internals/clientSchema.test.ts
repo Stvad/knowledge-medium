@@ -44,7 +44,6 @@ import {
   CREATE_BLOCK_REFERENCES_TARGET_INDEX_SQL,
   CREATE_BLOCK_REFERENCES_WS_ALIAS_INDEX_SQL,
 } from '@/plugins/references/localSchema'
-import { syncedWriteTarget } from '@/data/syncedTableWriteGuard'
 import {
   ALIAS_BACKFILL_MARKER_KEY,
   BACKFILL_BLOCK_ALIASES_SQL,
@@ -55,7 +54,6 @@ import {
   backfillBlocksFtsIfEmpty,
   ensureBlockUserUpdatedAtColumn,
   ensureUndoGroupIdColumns,
-  ANALYZE_ARMING_PROBES,
   ANALYZE_OPTIMIZE_SQL,
   SET_ANALYZE_SAMPLE_LIMIT_SQL,
   runAnalyzeIfStale,
@@ -1302,16 +1300,11 @@ describe('ANALYZE serialization', () => {
   })
 })
 
-describe('ANALYZE_ARMING_PROBES', () => {
-  it('are reads, so the synced-table write guard passes them through', () => {
-    // The probes run through repoProvider's guarded `execute`. One written as a
-    // write to `blocks` would reject there and take out the ANALYZE on every
-    // single boot — in production only, since the guard wraps only that shim.
-    for (const probe of ANALYZE_ARMING_PROBES) {
-      expect(syncedWriteTarget(`EXPLAIN QUERY PLAN ${probe}`)).toBeNull()
-    }
-  })
-})
+// The probes' own properties — read-only, param-free, and each one planning to
+// an index SEARCH — are checked over the RESOLVED set (core + every installed
+// contribution) in `src/data/localSchema.test.ts`. Asserting them over the core
+// constant alone would leave a contributed probe unchecked, which is the half
+// that has no author looking at this file.
 
 describe('runAnalyzeNow', () => {
   it('runs ANALYZE unconditionally and reports the live count', async () => {

@@ -187,6 +187,11 @@ export const referencesLocalSchema: LocalSchemaContribution = {
     CREATE_BLOCKS_REFERENCES_DELETE_TRIGGER_SQL,
   ],
   triggerNames: BLOCK_REFERENCES_TRIGGER_NAMES,
+  // Drives `idx_block_references_ws_alias`, matching its leading columns, so
+  // the plan is a SEARCH and the probe actually arms — see `analyzeProbes`.
+  analyzeProbes: [
+    `SELECT target_id FROM block_references WHERE workspace_id = '' AND alias = ''`,
+  ],
   backfills: [
     {
       id: 'references.block-references-source-field',
