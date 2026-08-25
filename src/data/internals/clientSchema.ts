@@ -986,6 +986,37 @@ export const CREATE_BLOCKS_FTS_DELETE_TRIGGER_SQL = `
   END
 `
 
+// ============================================================================
+// One-shot markers
+// ============================================================================
+
+/** A SINGLETON one-shot marker: one fixed key in `client_schema_state`,
+ *  written once, read once per bootstrap pass.
+ *
+ *  Not `MarkerStore` (`./idleMarkerJobs.ts`), which is the extraction for the
+ *  OTHER marker family — prefixed SETS of per-workspace keys, enumerated with
+ *  `getAll` (absent from {@link ClientSchemaBootstrapDb}) and cached in memory.
+ *  A single global key read once per pass can use neither the enumeration nor
+ *  the cache.
+ *
+ *  The generated text is what each marker's hand-rolled const used to spell
+ *  out, character for character. */
+export const markerDoneSql = (key: string): string => `
+  SELECT 1 FROM client_schema_state WHERE key = '${key}'
+`
+
+export const recordMarkerSql = (key: string): string => `
+  INSERT OR REPLACE INTO client_schema_state (key, completed_at)
+  VALUES ('${key}', strftime('%s', 'now') * 1000)
+`
+
+/** Takes the SQL rather than the key so call sites keep naming their own
+ *  `SELECT_*_DONE_SQL` const, which is also what tests reach for. */
+export const isMarkerSet = async (
+  db: ClientSchemaBootstrapDb,
+  sql: string,
+): Promise<boolean> => (await db.getOptional<{1: number}>(sql)) !== null
+
 /** One-shot backfill from `blocks.properties_json`. Called after the
  *  CLIENT_SCHEMA_STATEMENTS run, gated on a `client_schema_state` row
  *  so existing installations populate the index once on the first
@@ -1007,14 +1038,9 @@ export const CREATE_BLOCKS_FTS_DELETE_TRIGGER_SQL = `
  *  the user just paid for. */
 export const ALIAS_BACKFILL_MARKER_KEY = 'block_aliases_backfill_v1'
 
-export const SELECT_BLOCK_ALIASES_BACKFILL_DONE_SQL = `
-  SELECT 1 FROM client_schema_state WHERE key = '${ALIAS_BACKFILL_MARKER_KEY}'
-`
+export const SELECT_BLOCK_ALIASES_BACKFILL_DONE_SQL = markerDoneSql(ALIAS_BACKFILL_MARKER_KEY)
 
-export const RECORD_BLOCK_ALIASES_BACKFILL_DONE_SQL = `
-  INSERT OR REPLACE INTO client_schema_state (key, completed_at)
-  VALUES ('${ALIAS_BACKFILL_MARKER_KEY}', strftime('%s', 'now') * 1000)
-`
+export const RECORD_BLOCK_ALIASES_BACKFILL_DONE_SQL = recordMarkerSql(ALIAS_BACKFILL_MARKER_KEY)
 
 export const BACKFILL_BLOCK_ALIASES_SQL = `
   INSERT OR IGNORE INTO block_aliases (block_id, workspace_id, alias, alias_lower)
@@ -1025,14 +1051,9 @@ export const BACKFILL_BLOCK_ALIASES_SQL = `
 
 export const BLOCK_TYPES_BACKFILL_MARKER_KEY = 'block_types_backfill_v1'
 
-export const SELECT_BLOCK_TYPES_BACKFILL_DONE_SQL = `
-  SELECT 1 FROM client_schema_state WHERE key = '${BLOCK_TYPES_BACKFILL_MARKER_KEY}'
-`
+export const SELECT_BLOCK_TYPES_BACKFILL_DONE_SQL = markerDoneSql(BLOCK_TYPES_BACKFILL_MARKER_KEY)
 
-export const RECORD_BLOCK_TYPES_BACKFILL_DONE_SQL = `
-  INSERT OR REPLACE INTO client_schema_state (key, completed_at)
-  VALUES ('${BLOCK_TYPES_BACKFILL_MARKER_KEY}', strftime('%s', 'now') * 1000)
-`
+export const RECORD_BLOCK_TYPES_BACKFILL_DONE_SQL = recordMarkerSql(BLOCK_TYPES_BACKFILL_MARKER_KEY)
 
 export const BACKFILL_BLOCK_TYPES_SQL = `
   INSERT OR IGNORE INTO block_types (block_id, workspace_id, type)
@@ -1047,23 +1068,13 @@ export const BLOCKS_FTS_BACKFILL_MARKER_KEY = 'blocks_fts_backfill_v1'
  *  {@link ensureStagingNeedsApplyColumn} for why it is not keyed on the ALTER. */
 export const STAGING_NEEDS_APPLY_SEEDED_MARKER_KEY = 'staging_needs_apply_seeded'
 
-export const SELECT_STAGING_NEEDS_APPLY_SEEDED_SQL = `
-  SELECT 1 FROM client_schema_state WHERE key = '${STAGING_NEEDS_APPLY_SEEDED_MARKER_KEY}'
-`
+export const SELECT_STAGING_NEEDS_APPLY_SEEDED_SQL = markerDoneSql(STAGING_NEEDS_APPLY_SEEDED_MARKER_KEY)
 
-export const RECORD_STAGING_NEEDS_APPLY_SEEDED_SQL = `
-  INSERT OR REPLACE INTO client_schema_state (key, completed_at)
-  VALUES ('${STAGING_NEEDS_APPLY_SEEDED_MARKER_KEY}', strftime('%s', 'now') * 1000)
-`
+export const RECORD_STAGING_NEEDS_APPLY_SEEDED_SQL = recordMarkerSql(STAGING_NEEDS_APPLY_SEEDED_MARKER_KEY)
 
-export const SELECT_BLOCKS_FTS_BACKFILL_DONE_SQL = `
-  SELECT 1 FROM client_schema_state WHERE key = '${BLOCKS_FTS_BACKFILL_MARKER_KEY}'
-`
+export const SELECT_BLOCKS_FTS_BACKFILL_DONE_SQL = markerDoneSql(BLOCKS_FTS_BACKFILL_MARKER_KEY)
 
-export const RECORD_BLOCKS_FTS_BACKFILL_DONE_SQL = `
-  INSERT OR REPLACE INTO client_schema_state (key, completed_at)
-  VALUES ('${BLOCKS_FTS_BACKFILL_MARKER_KEY}', strftime('%s', 'now') * 1000)
-`
+export const RECORD_BLOCKS_FTS_BACKFILL_DONE_SQL = recordMarkerSql(BLOCKS_FTS_BACKFILL_MARKER_KEY)
 
 export const BACKFILL_BLOCKS_FTS_ROWIDS_SQL = `
   INSERT OR IGNORE INTO blocks_fts_rowids (block_id)
@@ -1433,8 +1444,7 @@ interface ClientSchemaBootstrapDb {
 export const backfillBlockAliasesIfEmpty = async (
   db: ClientSchemaBootstrapDb,
 ): Promise<void> => {
-  const done = await db.getOptional<{1: number}>(SELECT_BLOCK_ALIASES_BACKFILL_DONE_SQL)
-  if (done !== null) return
+  if (await isMarkerSet(db, SELECT_BLOCK_ALIASES_BACKFILL_DONE_SQL)) return
   await db.execute(BACKFILL_BLOCK_ALIASES_SQL)
   // Record completion regardless of whether any rows were inserted —
   // an empty workspace is fully backfilled too, and we don't want to
@@ -1445,8 +1455,7 @@ export const backfillBlockAliasesIfEmpty = async (
 export const backfillBlockTypesIfEmpty = async (
   db: ClientSchemaBootstrapDb,
 ): Promise<void> => {
-  const done = await db.getOptional<{1: number}>(SELECT_BLOCK_TYPES_BACKFILL_DONE_SQL)
-  if (done !== null) return
+  if (await isMarkerSet(db, SELECT_BLOCK_TYPES_BACKFILL_DONE_SQL)) return
   await db.execute(BACKFILL_BLOCK_TYPES_SQL)
   await db.execute(RECORD_BLOCK_TYPES_BACKFILL_DONE_SQL)
 }
@@ -1454,8 +1463,7 @@ export const backfillBlockTypesIfEmpty = async (
 export const backfillBlocksFtsIfEmpty = async (
   db: ClientSchemaBootstrapDb,
 ): Promise<void> => {
-  const done = await db.getOptional<{1: number}>(SELECT_BLOCKS_FTS_BACKFILL_DONE_SQL)
-  if (done !== null) return
+  if (await isMarkerSet(db, SELECT_BLOCKS_FTS_BACKFILL_DONE_SQL)) return
   await db.execute(BACKFILL_BLOCKS_FTS_ROWIDS_SQL)
   await db.execute(BACKFILL_BLOCKS_FTS_SQL)
   await db.execute(RECORD_BLOCKS_FTS_BACKFILL_DONE_SQL)
@@ -1544,8 +1552,7 @@ export const ensureStagingNeedsApplyColumn = async (
   // and every staged row flagged, and a run keyed on the ALTER never seeds
   // again. That reads as a permanent gap in every workspace, so every one-way
   // pass refuses for the life of the install. The marker retries instead.
-  const done = await db.getOptional<{1: number}>(SELECT_STAGING_NEEDS_APPLY_SEEDED_SQL)
-  if (done !== null) return
+  if (await isMarkerSet(db, SELECT_STAGING_NEEDS_APPLY_SEEDED_SQL)) return
   await db.execute(SEED_STAGING_NEEDS_APPLY_SQL)
   await db.execute(RECORD_STAGING_NEEDS_APPLY_SEEDED_SQL)
 }
