@@ -493,9 +493,6 @@ const initializePowerSyncDb = async (powerSyncDb: PowerSyncDatabase) => {
   // landing THIS session; a session that never idles pays it on the next open.
   scheduleDeepIdle(() => {
     void runSampledStatsRepair(backfillDb).then(repaired => {
-      // Say so: it is invisible in the check's `proposed` (the devices it
-      // targets are the ones where nothing reads as stale), and it is the
-      // longest single pause this module ever takes.
       if (repaired) console.info('[Repo] ANALYZE: one-time exact-stats repair complete')
     }).catch(error => {
       console.warn('[Repo] exact-stats repair failed:', error)

@@ -1121,11 +1121,10 @@ export const BACKFILL_BLOCKS_FTS_SQL = `
  *  Sampling cannot describe this schema: every hot index leads with
  *  `workspace_id`, which on a real client has one or two values covering
  *  essentially the whole table, and a sampled pass records the sample size as
- *  the rows-per-value estimate. The planner then drives workspace-scoped joins
- *  from a full scan of `blocks` instead of from the selective side — the same
- *  inversion a missing stat row causes, at a magnitude that reads as plausible.
- *  No limit VALUE avoids it: the estimate IS the limit, so an honest one would
- *  have to exceed the workspace's row count. #833 is what it bought. */
+ *  the rows-per-value estimate — inverting join order exactly as the missing
+ *  stat row above does, at a magnitude that reads as plausible. No limit VALUE
+ *  avoids it: the estimate IS the limit, so an honest one would have to exceed
+ *  the workspace's row count. #833 is what it bought. */
 
 /** Dry run of what {@link ANALYZE_OPTIMIZE_SQL} is about to do, for logging.
  *
@@ -1138,22 +1137,15 @@ export const ANALYZE_DRY_RUN_SQL = `PRAGMA optimize(0x03)`
 
 /** `0x02` — "analyze what might benefit" — and NOT the default mask.
  *
- *  The obvious simplification — bare `PRAGMA optimize` — is wrong, and silently.
- *  The default mask is `0xfffe`, whose `0x10` bit imposes SQLite's own
- *  `SQLITE_DEFAULT_OPTIMIZE_LIMIT` of 2000 rows; clearing `analysis_limit` does
- *  NOT disable it. Verified on the shipped wa-sqlite build (3.53.0): over a
- *  5000-row single-workspace index with the limit at zero, bare records
- *  `5000 2001` where `0x02` records `5000 5000` — the fabricated selectivity of
- *  the module comment, rearmed for the next release that adds an index.
+ *  Bare `PRAGMA optimize` is the obvious simplification and it silently
+ *  re-samples: the default mask `0xfffe` carries a `0x10` bit imposing SQLite's
+ *  own `SQLITE_DEFAULT_OPTIMIZE_LIMIT` of 2000, which `analysis_limit=0` does
+ *  NOT clear. On the shipped build (wa-sqlite 3.53.0) a 5000-row
+ *  single-workspace index records `5000 2001` bare against `5000 5000` under
+ *  `0x02` — the module comment's fabricated selectivity, rearmed.
  *
  *  The trade, since `0xfffe` means "every bit we ever add": naming `0x02` opts
- *  out of future optimizations SQLite puts behind new bits. Accepted — an
- *  unbounded ANALYZE is the point of this module — but revisit the mask on a
- *  SQLite upgrade rather than assuming it still means what it means today.
- *
- *  Dropping `0x10` costs nothing else: `0x02` still re-analyzes only what the
- *  staleness rules name, still requires {@link ANALYZE_ARMING_PROBES}, and still
- *  honours an explicit `analysis_limit`. */
+ *  out of bits SQLite adds later. Revisit on a SQLite upgrade. */
 export const ANALYZE_OPTIMIZE_SQL = `PRAGMA optimize(0x02)`
 
 /** `analysis_limit` is CONNECTION state, so an ANALYZE inherits whatever was
