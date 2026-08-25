@@ -1044,8 +1044,16 @@ export const BACKFILL_BLOCK_TYPES_SQL = `
 export const BLOCKS_FTS_BACKFILL_MARKER_KEY = 'blocks_fts_backfill_v1'
 
 /** Marker for the one-shot `needs_apply` seed — see
- *  {@link ensureStagingNeedsApplyColumn} for why it is not keyed on the ALTER. */
-export const STAGING_NEEDS_APPLY_SEEDED_MARKER_KEY = 'staging_needs_apply_seeded'
+ *  {@link ensureStagingNeedsApplyColumn} for why it is not keyed on the ALTER.
+ *
+ *  VERSIONED, and the version is the re-run mechanism: the seed's rule gained a
+ *  third arm (identical synced columns) after the first two were found to leave
+ *  a real graph's rows permanently flagged, and a device that recorded the old
+ *  marker would otherwise never apply the wider rule. Bump this whenever the
+ *  seed learns to clear something it previously could not. The stale key is
+ *  left in `client_schema_state`; it costs a row and answers "did the old rule
+ *  run here". */
+export const STAGING_NEEDS_APPLY_SEEDED_MARKER_KEY = 'staging_needs_apply_seeded_v2'
 
 export const SELECT_STAGING_NEEDS_APPLY_SEEDED_SQL = `
   SELECT 1 FROM client_schema_state WHERE key = '${STAGING_NEEDS_APPLY_SEEDED_MARKER_KEY}'

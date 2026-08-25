@@ -34,6 +34,7 @@
 // it lives in the data-free `@/sync/transform` layer. `materialize.ts`
 // re-exports it for the observer's callers; reconcile only consumes it.
 import type { Materializability } from '@/sync/transform.js'
+import { BLOCK_STORAGE_COLUMNS } from '@/data/blockSchema.js'
 
 /** Local state for the block id a staging row targets. */
 export interface LocalRowState {
@@ -366,18 +367,30 @@ export const WORKSPACE_UNAPPLIED_COUNT_CAP = 1_000
  *
  * The column arrives defaulting to "unapplied", which is right for every future
  * delivery and wrong for everything already on disk — so this clears it for the
- * rows a drain demonstrably already handled. Its rule is {@link decideStagingRow}'s,
- * expressed against what the two tables can still show after the fact: the live
- * row carries the SAME nonzero stamp (I1 — identical content, the drain would
- * skip it), or the row is a tombstone on both sides and so invisible to every
- * reader either way.
+ * rows a drain demonstrably already handled. THREE ways to demonstrate it:
  *
- * Necessarily an APPROXIMATION — it cannot see the upload queue or a decode
- * result — and that is tolerable only because it runs ONCE and is dead
- * afterwards. It errs toward leaving the flag SET, which reads as a gap and
- * refuses: equality rather than `>=`, because a strictly-newer local row is an
- * acked edit that `decideStagingRow` would APPLY over, not skip, and its echo
- * re-delivers and re-judges it anyway.
+ *   - the live row carries the SAME nonzero stamp (I1 — identical content, the
+ *     drain would skip it);
+ *   - the row is a tombstone on both sides, invisible to every reader either way;
+ *   - every synced column is identical, which is not an inference about content
+ *     from a stamp but the thing a stamp is used to infer.
+ *
+ * The third exists because I1's `<> 0` guard rejects a shape it was never aimed
+ * at. I2 exempts stamp 0 because equal stamps at 0 do not imply equal CONTENT —
+ * two devices minting the same deterministic id both sit there. That is a
+ * statement about what a STAMP proves, and it is right. It says nothing about a
+ * pair whose every column has been compared and matched, and a row like that
+ * needs no applying by definition: `blocks` already holds the staged version,
+ * which is the whole claim the flag makes. Measured on a production graph:
+ * 1,126 rows identical in all twelve synced columns, both stamps 0, flagged and
+ * unclearable, refusing every one-way pass on three workspaces.
+ *
+ * Still an APPROXIMATION in its first two arms — they cannot see the upload
+ * queue or a decode result — and that is tolerable only because this runs ONCE
+ * and is dead afterwards. It errs toward leaving the flag SET, which reads as a
+ * gap and refuses: equality rather than `>=`, because a strictly-newer local row
+ * is an acked edit that `decideStagingRow` would APPLY over, not skip, and its
+ * echo re-delivers and re-judges it anyway.
  *
  * ONE statement, deliberately, even at the 320k-row scale it exists for: it
  * runs once, at boot, with nothing else contending for the write lock, and was
@@ -388,6 +401,18 @@ export const WORKSPACE_UNAPPLIED_COUNT_CAP = 1_000
  * makes the pass quadratic, which is how it was written first and why this note
  * exists.
  */
+/** Every synced column equal, `IS` rather than `=` so a NULL matches a NULL
+ *  (`user_updated_at` is nullable). Derived from {@link BLOCK_STORAGE_COLUMNS}
+ *  rather than listed, because a hand-written list is what turns "identical"
+ *  into "identical except the column someone added last month" — and this
+ *  clause CLEARS a flag, so a column missing from it is a false clear. `id` is
+ *  excluded: it is the join. */
+const STORAGE_COLUMNS_IDENTICAL = BLOCK_STORAGE_COLUMNS
+  .map(column => column.name)
+  .filter(name => name !== 'id')
+  .map(name => `b.${name} IS blocks_synced.${name}`)
+  .join(' AND ')
+
 export const SEED_STAGING_NEEDS_APPLY_SQL = `
   UPDATE blocks_synced SET needs_apply = 0
    WHERE needs_apply = 1
@@ -403,6 +428,11 @@ export const SEED_STAGING_NEEDS_APPLY_SQL = `
              AND COALESCE(
                    (SELECT b.deleted FROM blocks b WHERE b.id = blocks_synced.id), 1
                  ) = 1
+           )
+           OR EXISTS (
+             SELECT 1 FROM blocks b
+              WHERE b.id = blocks_synced.id
+                AND ${STORAGE_COLUMNS_IDENTICAL}
            )
          )
 `

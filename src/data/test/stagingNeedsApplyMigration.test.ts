@@ -77,6 +77,39 @@ describe('ensureStagingNeedsApplyColumn', () => {
     expect(await unapplied()).toEqual(['behind', 'never-arrived'])
   })
 
+  it('clears a row identical in every synced column, both stamps 0', async () => {
+    // The shape measured on a production graph: 1,126 rows whose twelve synced
+    // columns all match and whose stamps are 0 on BOTH sides. I1's `<> 0` guard
+    // rejects them — correctly, as a statement about what a stamp proves — and
+    // they are then flagged forever, refusing every one-way pass. Comparing the
+    // columns is not an inference from the stamp; it is the thing the stamp is
+    // used to infer.
+    await deliver(row({id: 'twins', updatedAt: 0, userUpdatedAt: 0, createdAt: 0}))
+    await sharedDb.db.execute(
+      `INSERT INTO blocks (id, workspace_id, parent_id, order_key, content, properties_json,
+         references_json, created_at, updated_at, user_updated_at, created_by, updated_by, deleted)
+       VALUES ('twins', ?, NULL, 'a0', 'v1', '{}', '[]', 0, 0, 0, 'u', 'u', 0)`, [WS])
+
+    await ensureStagingNeedsApplyColumn(sharedDb.db)
+
+    expect(await unapplied()).toEqual([])
+  })
+
+  it('keeps the flag when ANY synced column differs', async () => {
+    // The clause CLEARS, so it has to be total over the synced columns. Content
+    // here, but the point is the derivation from BLOCK_STORAGE_COLUMNS: a
+    // hand-written list would clear a row that differs in whatever it forgot.
+    await deliver(row({id: 'not-twins', updatedAt: 0, userUpdatedAt: 0, createdAt: 0}))
+    await sharedDb.db.execute(
+      `INSERT INTO blocks (id, workspace_id, parent_id, order_key, content, properties_json,
+         references_json, created_at, updated_at, user_updated_at, created_by, updated_by, deleted)
+       VALUES ('not-twins', ?, NULL, 'a0', 'DIFFERENT', '{}', '[]', 0, 0, 0, 'u', 'u', 0)`, [WS])
+
+    await ensureStagingNeedsApplyColumn(sharedDb.db)
+
+    expect(await unapplied()).toEqual(['not-twins'])
+  })
+
   it('leaves the flag SET for a local row that is strictly newer', async () => {
     // `decideStagingRow` would APPLY the staged row over it, not skip — so the
     // seed must not read "local is ahead" as "already handled". Its echo
