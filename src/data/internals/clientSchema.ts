@@ -1146,15 +1146,20 @@ export const ANALYZE_DRY_RUN_SQL = `PRAGMA optimize(0x03)`
  *  adds later: revisit the mask on a SQLite upgrade rather than assuming. */
 export const ANALYZE_OPTIMIZE_SQL = `PRAGMA optimize(0x02)`
 
-/** `analysis_limit` is CONNECTION state, so an ANALYZE inherits whatever was
- *  set last. Nothing in this tree sets it any more, but the agent bridge runs
- *  arbitrary SQL on this same connection — so every ANALYZE goes through
- *  {@link analyzeUnbounded}, which pairs this with the statement it protects.
+/** `analysis_limit` is CONNECTION state, so an ANALYZE inherits whatever was set
+ *  last. Nothing in this tree sets it, so this asserts a precondition rather
+ *  than winning a race — every ANALYZE here is unbounded whatever the connection
+ *  carries. Paired with each statement in {@link analyzeUnbounded} for that
+ *  reason, not hoisted to once per pass.
  *
- *  Not defended against another TAB: with an OPFS VFS each tab opens a
- *  DEDICATED worker (`vfsRequiresDedicatedWorkers`), so tabs do not share a
- *  connection and cannot see each other's PRAGMA state. An earlier revision of
- *  this comment claimed a shared worker and built a read-back guard on it. */
+ *  It is NOT a race guard, and should not be mistaken for one: the agent bridge
+ *  executes arbitrary SQL on this connection outside {@link serializeAnalyze},
+ *  so a deliberate `analysis_limit=400` can land between the pair. Closing that
+ *  needs a lock across both statements, which {@link ClientSchemaBootstrapDb}'s
+ *  execute/getOptional shape cannot express without deadlocking bootstrap shims.
+ *
+ *  Tabs are not the hazard: with an OPFS VFS each opens a DEDICATED worker, so
+ *  they share the file, not a connection or its PRAGMA state. */
 export const RESET_ANALYZE_SAMPLE_LIMIT_SQL = `PRAGMA analysis_limit=0`
 
 /** Planner-visible probes that ARM the staleness check. Load-bearing, and the
