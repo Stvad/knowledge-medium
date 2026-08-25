@@ -1300,6 +1300,18 @@ const ensureDocumentAlias = async (
     const claimable = await resolveDocumentAlias(tx, blockId, title, workspaceId)
     const next = claimable === null ? [] : [claimable]
 
+    // Never write a bag that DROPS the document's own title while it holds it.
+    // The kernel reads the disappearance of the alias that equals `content` as
+    // a rename and rewrites content to follow, so re-parking a document that
+    // already has its name would retitle the document to the placeholder and
+    // take the real title off the block — along with the state the
+    // duplicate-name banner reads, which is the way back.
+    //
+    // Nothing is lost by keeping it. The document reached this only by another
+    // row claiming a name it already held, which sync apply permits, and a
+    // shared name is what that banner exists to report.
+    if (current.includes(title) && !next.includes(title)) return
+
     // Compare before writing: while a title stays contested this runs on every
     // sync, and an unguarded setProperty would rewrite the same bag each time.
     const bagUnchanged = current.length === next.length

@@ -315,33 +315,40 @@ describe('readwise document alias — the title is already a page name', () => {
     expect(aliasesOf(await repo.load(documentId(1)))).toEqual(['Deep Work (Readwise 2024)'])
   })
 
-  it('does not claim a name a sync-applied row co-holds', async () => {
+  it('keeps a name it already holds when another row co-claims it', async () => {
+    const rootId = await createRoot()
+    await sync(rootId, book(1, 'Deep Work', 11))
+    expect(aliasesOf(await repo.load(documentId(1)))).toEqual(['Deep Work'])
+
+    // Another device creates its own page of the same name. Sync apply skips
+    // the uniqueness trigger, so both rows hold it — the kernel allows this.
+    await coClaimRaw('laptop-page', 'Deep Work', LATE)
+    await sync(rootId, book(1, 'Deep Work', 11))
+
+    // Re-parking here would rewrite the bag so that the entry equal to the
+    // CONTENT disappears, which the kernel reads as a rename: the document
+    // would be retitled to `Deep Work (Readwise)` and the real title lost.
+    const doc = await repo.load(documentId(1))
+    expect(doc?.content).toBe('Deep Work')
+    expect(aliasesOf(doc)).toEqual(['Deep Work'])
+  })
+
+  it('steps off a fallback another row co-claims', async () => {
     const rootId = await createRoot()
     await createRivalPage('rival', 'Deep Work')
     await sync(rootId, book(1, 'Deep Work', 11))
+    expect(aliasesOf(await repo.load(documentId(1)))).toEqual(['Deep Work (Readwise)'])
 
-    // The bag a merge leaves behind: the placeholder the sync recorded
-    // claiming, plus the real name handed back. Reached the way the sync
-    // reaches it, so the recorded claim matches — set by hand it would read as
-    // the user's work and the reconcile would rightly leave it alone.
-    await repo.tx(async tx => {
-      await tx.setProperty('rival', aliasesProp, [])
-      await tx.setProperty(documentId(1), aliasesProp, ['Deep Work (Readwise)', 'Deep Work'])
-    }, {scope: ChangeScope.BlockDefault})
-    await coClaimRaw('synced-rival', 'Deep Work', LATE)
-    expect(await claimantIdsOf('Deep Work')).toHaveLength(2)
+    // A second row lands on the FALLBACK, younger than the document — so the
+    // single-row lookup answers with the document and reports the name free.
+    // Dropping a fallback is safe where dropping the title is not: it is not
+    // the content, so nothing reads the change as a rename.
+    await coClaimRaw('other-device', 'Deep Work (Readwise)', LATE)
+    await sync(rootId, book(1, 'Deep Work', 11))
 
-    // Reconciling that two-entry bag down to one is a WRITE, and writing
-    // `Deep Work` back re-inserts it under the uniqueness trigger against the
-    // co-claimant. Asking the one-row form whether the name is free answers
-    // yes — it returns this document, the older of the two.
-    await expect(sync(rootId, book(1, 'Deep Work', 11))).resolves.toBeUndefined()
-
-    const after = await repo.load(documentId(1))
-    // The document keeps its real title as CONTENT — the whole design rests on
-    // that, since it is what the duplicate-name banner reads.
-    expect(after?.content).toBe('Deep Work')
-    expect(aliasesOf(after)).toEqual(['Deep Work (Readwise)'])
+    const doc = await repo.load(documentId(1))
+    expect(doc?.content).toBe('Deep Work')
+    expect(aliasesOf(doc)).toEqual(['Deep Work (Readwise 2)'])
   })
 
   it('retires the placeholder when a re-title lands on a free name', async () => {
