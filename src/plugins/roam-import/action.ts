@@ -8,8 +8,7 @@ import { importRoam } from './import.ts'
 import { showProgress } from '@/utils/toast.js'
 import { CATCHUP_DEEP_IDLE, scheduleDeepIdle } from '@/utils/scheduleIdle.js'
 import { runAnalyzeIfStale } from '@/data/maintenance'
-import { resolveAnalyzeArmingProbes } from '@/data/localSchema.js'
-import { localSchemaFacet } from '@/data/facets.js'
+import { installedAnalyzeArmingProbes } from '@/data/localSchema.js'
 import type { RoamExport } from './types.ts'
 
 export const importRoamAction = ({repo}: {repo: Repo}): ActionConfig => ({
@@ -73,15 +72,13 @@ export const importRoamAction = ({repo}: {repo: Repo}): ActionConfig => ({
           // 2s cap would land it right as the freshly-imported tree renders.
           // Fire-and-forget: if this one no-ops, the next boot's check covers it.
           //
-          // Probes off the repo's FacetRuntime, not the core default: an import
-          // grows the reference edges as much as it grows `blocks`, and
-          // `block_references` is armed only by the references plugin's own
-          // contribution.
+          // The INSTALLED probe set, not the core default: an import grows the
+          // reference edges as much as it grows `blocks`, and `block_references`
+          // is armed only by the references plugin's contribution. Not
+          // `repo.facetRuntime` either — that one is toggle-filtered, and the
+          // table is installed whether or not the plugin is enabled.
           scheduleDeepIdle(() => {
-            const probes = resolveAnalyzeArmingProbes(
-              repo.facetRuntime?.read(localSchemaFacet) ?? [],
-            )
-            void runAnalyzeIfStale(repo.db, probes).catch(error => {
+            void runAnalyzeIfStale(repo.db, installedAnalyzeArmingProbes()).catch(error => {
               console.warn('[roam-import] ANALYZE check failed:', error)
             })
           }, CATCHUP_DEEP_IDLE)

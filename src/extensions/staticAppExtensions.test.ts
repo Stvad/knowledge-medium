@@ -11,7 +11,11 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { createTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { localSchemaFacet, sameTxProcessorsFacet } from '@/data/facets.js'
-import { resolveAnalyzeArmingProbes } from '@/data/localSchema.js'
+import {
+  resolveAnalyzeArmingProbes,
+  resolveLocalSchemaContributions,
+} from '@/data/localSchema.js'
+import { staticDataExtensions } from '@/extensions/staticDataExtensions.js'
 import { referencesLocalSchema } from '@/plugins/references/localSchema.js'
 import { actionsFacet, appMountsFacet } from '@/extensions/core.js'
 import { staticAppExtensions } from '@/extensions/staticAppExtensions.js'
@@ -62,22 +66,30 @@ describe('app boot composition', () => {
       .toBeLessThan(order.indexOf(RENAME_BACKLINKS_PROCESSOR))
   })
 
-  // `roam-import` reads the ANALYZE arming probes off `repo.facetRuntime` at
-  // action-handler time, and by then AppRuntimeProvider has REPLACED the
-  // data-only runtime installed at repo construction with this one. If the app
-  // runtime stopped carrying `localSchemaFacet` the read would come back empty
-  // and the import would silently fall back to the core probes — leaving
-  // `block_references` unarmed on the one pass that grows it most. There is no
-  // error in that failure, so it is pinned here rather than left to the read.
-  // The `repo.facetRuntime` docstring names this same contract.
-  it('carries the local-schema contributions, so non-React facet reads see them', () => {
+  // The app runtime is TOGGLE-FILTERED and the installed local schema is NOT,
+  // so the two disagree about which tables exist — and the ANALYZE paths must
+  // follow the schema, never the runtime. `staticDataExtensions` lists
+  // `referencesDataExtension` directly, so `block_references` and its triggers
+  // are installed and maintained whether or not the References plugin is
+  // enabled; a caller that resolved probes from the runtime would stop arming a
+  // table the database is still growing, with no error to show for it.
+  //
+  // Pinned as the asymmetry itself, both directions, because the failure is
+  // invisible from either side alone: the runtime read looks like a perfectly
+  // reasonable way to reach plugin contributions.
+  it('prunes plugin facets when toggled off, while the installed schema keeps them', () => {
     const { repo } = createTestRepo({ db: shared.db })
     const runtime = resolveAppRuntimeSync(staticAppExtensions({ repo }), {
-      overrides: new Map(), safeMode: false,
+      // Both, because srs-review contributes the same data extension.
+      overrides: new Map([['system:references', false], ['system:srs-review', false]]),
+      safeMode: false,
     })
     const contributed = (referencesLocalSchema.analyzeTables ?? []).map(t => t.probe)
     expect(contributed).not.toHaveLength(0)
+
     expect(resolveAnalyzeArmingProbes(runtime.read(localSchemaFacet)))
+      .not.toEqual(expect.arrayContaining(contributed))
+    expect(resolveAnalyzeArmingProbes(resolveLocalSchemaContributions(staticDataExtensions)))
       .toEqual(expect.arrayContaining(contributed))
   })
 

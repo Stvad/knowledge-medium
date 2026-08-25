@@ -79,7 +79,7 @@ import {
 import { releasePowerSyncConnection } from '@/data/releasePowerSyncConnection.js'
 import {
   applyLocalSchemaContributions,
-  resolveAnalyzeArmingProbes,
+  installedAnalyzeArmingProbes,
   resolveLocalSchemaContributions,
 } from '@/data/localSchema.js'
 import { guardSyncedTableWrites } from '@/data/syncedTableWriteGuard.js'
@@ -472,7 +472,7 @@ const initializePowerSyncDb = async (powerSyncDb: PowerSyncDatabase) => {
     scheduleDeepIdle(() => {
       void runAnalyzeIfStale(
         backfillDb,
-        resolveAnalyzeArmingProbes(localSchemaContributions),
+        installedAnalyzeArmingProbes(),
       ).then(({proposed}) => {
         // Silent when nothing was stale, which is every boot after the first —
         // but when it DOES park the worker, say which tables it was for.
