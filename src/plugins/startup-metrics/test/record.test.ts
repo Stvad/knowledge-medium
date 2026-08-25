@@ -231,6 +231,29 @@ describe('collectStartupMetricsEffect', () => {
     return rows[0]?.n ?? 0
   }
 
+  // By the time the deferred write runs, `record()` has torn down every timer
+  // and listener, so a write that FAILS has no path back unless it owns one —
+  // and a rejection is as transient as a decline.
+  it('retries a write that rejects', async () => {
+    const realTx = repo.tx.bind(repo)
+    let failures = 0
+    vi.spyOn(repo, 'tx').mockImplementation(async (fn, opts) => {
+      if (opts?.description === 'startup metrics record' && failures === 0) {
+        failures++
+        throw new Error('transient database failure')
+      }
+      return realTx(fn, opts)
+    })
+
+    markStartup('firstContentPaint')
+    startEffect(WS)
+    await vi.waitFor(() => expect(failures).toBe(1))
+    expect(await countRecords()).toBe(0)
+
+    // Past the retry delay, the second attempt lands.
+    await vi.waitFor(async () => expect(await countRecords()).toBe(1), { timeout: 45_000 })
+  }, 60_000)
+
   it('marks interactive after first paint and persists exactly one record', async () => {
     markStartup('firstContentPaint')
     startEffect(WS)

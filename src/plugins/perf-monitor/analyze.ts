@@ -68,6 +68,26 @@ export interface PerfAnalysis {
   graphGrowth: number | null
 }
 
+/** The verdict for an environment that can never record, WITHOUT the history
+ *  scans — there is nothing for them to find. Lets the chip state the case
+ *  instead of the effect returning early and leaving it blank forever. */
+export const blockedPerfAnalysis = (
+  workspaceId: string,
+  blockedBy: RecordingBlocker,
+  now: number,
+): PerfAnalysis => ({
+  workspaceId,
+  analyzedAt: now,
+  baselineSessions: 0,
+  regressions: [],
+  ready: { interaction: false, startup: false },
+  insufficientHistory: true,
+  interactionComparable: false,
+  recordingBlockedBy: blockedBy,
+  baseline: { interaction: 0, startup: 0 },
+  graphGrowth: null,
+})
+
 export const runPerfAnalysis = async (
   repo: Repo,
   workspaceId: string,

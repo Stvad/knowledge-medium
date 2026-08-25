@@ -258,15 +258,23 @@ export const collectStartupMetricsEffect: AppEffect = {
     const attemptWrite = (attempt: number): void => {
       scheduleIdle(() => {
         if (disposed) return
+        const retryLater = (): void => {
+          if (attempt + 1 >= WRITE_ATTEMPTS || disposed) return
+          const retry = setTimeout(() => attemptWrite(attempt + 1), WRITE_RETRY_MS)
+          cleanups.push(() => clearTimeout(retry))
+        }
         void writeStartupRecord(repo, workspaceId)
           .then((id) => {
             if (id !== null) { recorded = true; return }
-            if (attempt + 1 < WRITE_ATTEMPTS && !disposed) {
-              const retry = setTimeout(() => attemptWrite(attempt + 1), WRITE_RETRY_MS)
-              cleanups.push(() => clearTimeout(retry))
-            }
+            retryLater()
           })
-          .catch(err => console.warn('[startup-metrics] failed to write record', err))
+          // A rejection is as transient as a decline — a failed write is the
+          // case a retry exists for, so it takes the same path rather than
+          // being logged and dropped.
+          .catch((err) => {
+            console.warn('[startup-metrics] failed to write record', err)
+            retryLater()
+          })
       })
     }
 

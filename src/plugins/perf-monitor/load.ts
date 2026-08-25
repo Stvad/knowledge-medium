@@ -24,16 +24,26 @@ import { startupRecordProp } from '@/plugins/startup-metrics/record.js'
 export { INTERACTION_RECORD_PATH } from '@/plugins/interaction-metrics/record.js'
 export const STARTUP_RECORD_PATH = jsonPathForProperty(startupRecordProp.name)
 
-/** The fields every reader of an interaction record dereferences. */
+const isTimingSample = (v: unknown): boolean =>
+  typeof v === 'object' && v !== null &&
+  typeof (v as { calls?: unknown }).calls === 'number' &&
+  typeof (v as { p95Ms?: unknown }).p95Ms === 'number'
+
+/** The fields every reader of an interaction record dereferences, INCLUDING the
+ *  nested query samples. A record whose `queries` is an object of nulls passes
+ *  a shallow check and then throws inside the comparison or the trend table —
+ *  taking out the analysis for the rest of the session, and the dialog render,
+ *  rather than skipping one unreadable row. */
 export const isUsableInteractionRecord = (r: {
   queries?: unknown
   fanout?: unknown
   writes?: unknown
   blockCount?: unknown
 }): boolean =>
-  typeof r.queries === 'object' && r.queries !== null &&
   typeof r.fanout === 'object' && r.fanout !== null &&
-  typeof r.writes === 'number' && typeof r.blockCount === 'number'
+  typeof r.writes === 'number' && typeof r.blockCount === 'number' &&
+  typeof r.queries === 'object' && r.queries !== null &&
+  Object.values(r.queries as Record<string, unknown>).every(isTimingSample)
 
 /** A startup record is read only for its marks, and every one of them is
  *  optional by design (a phase the session never reached is absent), so

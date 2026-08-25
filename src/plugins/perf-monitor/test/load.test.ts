@@ -72,6 +72,21 @@ describe('loadRecords', () => {
     expect(await blockCount()).toBe(before)
   })
 
+  // A row that parses but is missing what the comparison dereferences would
+  // otherwise throw inside the analysis, killing it for the rest of the session
+  // rather than costing one skipped sample.
+  it('skips a record whose query samples are malformed', async () => {
+    const blockId = (await writeInteractionSample(repo, WS))!
+    await sharedDb.db.execute(
+      `UPDATE blocks SET properties_json = json_set(properties_json, ?, json('{"bad":null}')) WHERE id = ?`,
+      [`${PATH}.queries`, blockId],
+    )
+    const records = await loadRecords<InteractionRecordData>(
+      repo, WS, interactionMetricsUIStateType.id, PATH, isUsableInteractionRecord,
+    )
+    expect(records).toEqual([])
+  })
+
   it('returns newest first', async () => {
     await writeInteractionSample(repo, WS)
     resetMetricsSession() // simulate a second page session

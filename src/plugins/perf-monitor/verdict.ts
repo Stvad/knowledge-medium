@@ -1,11 +1,9 @@
 /**
  * The single statement of what the analysis found.
  *
- * Both surfaces — the status chip and the trend dialog — render THIS, rather
- * than each deciding for itself what an empty regression list means. They
- * disagreed twice while each held its own copy of that judgement, most visibly
- * with the dialog announcing "no slowdowns against the last 0 sessions" for a
- * comparison that had never run.
+ * Both surfaces — the status chip and the trend dialog — render THIS rather
+ * than each deciding for itself what an empty regression list means, which is
+ * the difference between "judged and fine" and "nothing was judged".
  */
 import type { PerfAnalysis } from './analyze.js'
 import type { Regression } from './series.js'

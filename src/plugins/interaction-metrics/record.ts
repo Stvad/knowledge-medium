@@ -348,8 +348,12 @@ export const writeInteractionSample = async (
   if (!(await awaitRecordingAllowed(repo, workspaceId))) return null
 
   // Snapshot BEFORE any of this sample's own setup work, so a first sample does
-  // not report the transactions that created its own record block.
+  // not report the transactions that created its own record block. The own-write
+  // count is re-read HERE rather than reused from the check above: the other
+  // recorder can commit during the await between them, which the snapshot would
+  // then include and a stale count would fail to discount.
   const metrics = repo.metrics()
+  const ownWrites = metricsSessionContext(repo, workspaceId).ownWrites
   // The record can be deleted from another device, or by a user browsing the
   // metrics tree. Writing a property to a tombstone does not restore it, so
   // without this the session would keep updating a row no reader can see.
@@ -372,7 +376,7 @@ export const writeInteractionSample = async (
     // imports or syncs a lot of blocks would otherwise report the final
     // timings against the opening graph size.
     blockCount: await countLiveBlocks(repo, workspaceId),
-    ownWrites: context.ownWrites,
+    ownWrites,
   })
 
   try {

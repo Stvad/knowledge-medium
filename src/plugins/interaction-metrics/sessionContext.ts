@@ -263,6 +263,14 @@ export const assertStillWritable = (repo: Repo, workspaceId: string): void => {
   if (!metricsSessionContext(repo, workspaceId).canRecord) throw new NoLongerEligible()
 }
 
+// ACCEPTED, not overlooked: this reads `repo.isReadOnly`, which App updates from
+// a React effect and so lags the membership row. A demotion landing between
+// `awaitRecordingAllowed` and the transaction it guards therefore still commits
+// one Automation write that RLS refuses. Re-reading the authoritative role would
+// mean a database read inside every telemetry transaction, forever, to close a
+// window measured in microseconds whose cost is a single quarantined row — and
+// the next sample's gate refuses, so it does not repeat.
+
 /** Additionally require the counters to be attributable to this workspace.
  *
  *  INTERACTION only. A startup record is a timeline of this boot and does not
