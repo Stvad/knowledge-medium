@@ -15,12 +15,17 @@ export const resolveLocalSchemaContributions = (
 /** The core probes plus whatever the installed contributions bring, for
  *  `runAnalyzeIfStale`. Every caller that can reach the contributions should go
  *  through here: a plugin table left out is simply never re-analyzed on the
- *  drift axis, which is invisible until a join order inverts. */
+ *  drift axis, which is invisible until a join order inverts.
+ *
+ *  The sibling reader for `LocalSchemaAnalyzeTable.name` — the one-shot
+ *  exact-stats repair's table list — is on the warm-boot branch, not here. Both
+ *  read the SAME declaration on purpose: the repair set and the probe set are
+ *  the same tables, and two fields would let them drift. */
 export const resolveAnalyzeArmingProbes = (
   contributions: readonly LocalSchemaContribution[],
 ): readonly string[] => [
   ...ANALYZE_ARMING_PROBES,
-  ...contributions.flatMap(contribution => contribution.analyzeProbes ?? []),
+  ...contributions.flatMap(c => (c.analyzeTables ?? []).map(table => table.probe)),
 ]
 
 export const applyLocalSchemaContributions = async (

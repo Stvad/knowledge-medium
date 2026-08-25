@@ -75,7 +75,7 @@ describe('app boot composition', () => {
     const runtime = resolveAppRuntimeSync(staticAppExtensions({ repo }), {
       overrides: new Map(), safeMode: false,
     })
-    const contributed = [...(referencesLocalSchema.analyzeProbes ?? [])]
+    const contributed = (referencesLocalSchema.analyzeTables ?? []).map(t => t.probe)
     expect(contributed).not.toHaveLength(0)
     expect(resolveAnalyzeArmingProbes(runtime.read(localSchemaFacet)))
       .toEqual(expect.arrayContaining(contributed))

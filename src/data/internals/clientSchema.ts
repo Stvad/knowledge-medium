@@ -1197,7 +1197,7 @@ export const ANALYZE_OPTIMIZE_SQL = `PRAGMA optimize`
 export const SELECT_BLOCKS_COUNT_SQL = `SELECT COUNT(*) AS count FROM blocks`
 
 /** CORE tables only. A plugin's table is armed by that plugin, through
- *  `LocalSchemaContribution.analyzeProbes` — see `resolveAnalyzeArmingProbes`
+ *  `LocalSchemaContribution.analyzeTables` — see `resolveAnalyzeArmingProbes`
  *  in `src/data/localSchema.ts`, which is what callers should pass to
  *  {@link runAnalyzeIfStale}. */
 export const ANALYZE_ARMING_PROBES: readonly string[] = [

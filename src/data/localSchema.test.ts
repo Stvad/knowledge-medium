@@ -66,6 +66,19 @@ describe('resolveAnalyzeArmingProbes', () => {
     ]))
   })
 
+  it('has each contributed probe search the table its `name` claims', () => {
+    // `name` and `probe` are read by DIFFERENT paths — the exact-stats repair
+    // analyzes the name, the staleness check runs the probe — so nothing in
+    // production ever compares them, and a copy-paste that leaves them naming
+    // different tables would repair one table while arming another. Both halves
+    // would look right in isolation. This is the only place they meet.
+    const declared = contributions.flatMap(c => c.analyzeTables ?? [])
+    expect(declared.length).toBeGreaterThan(0)
+    for (const {name, probe} of declared) {
+      expect(planOf(probe)).toContain(`SEARCH ${name}`)
+    }
+  })
+
   it('carries the core probes as well as the contributed ones', () => {
     // `resolveAnalyzeArmingProbes` is the only caller-facing composition point;
     // a bug that returned contributions ALONE would still pass the plan check

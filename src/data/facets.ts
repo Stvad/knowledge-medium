@@ -40,21 +40,38 @@ export interface LocalSchemaBackfill {
   run: (db: LocalSchemaDb) => Promise<void>
 }
 
+/** One table a contribution owns that the ANALYZE paths have to reach.
+ *
+ *  Both pieces, because the two paths need different things and asking for them
+ *  separately is what lets them drift apart. The one-shot exact-stats repair
+ *  wants a NAME, to `ANALYZE` it. The arming probes want SQL, and a name cannot
+ *  be turned into one: measured on the shipped wa-sqlite build against
+ *  degenerate stats, every generic name-only shape (`SELECT 1 FROM t`,
+ *  `… LIMIT 1`, a covering scan, `WHERE rowid = 0`, `ORDER BY <indexed col>`)
+ *  plans to `SCAN`, and a `SCAN` does not arm. */
+export interface LocalSchemaAnalyzeTable {
+  name: string
+  /** An `EXPLAIN QUERY PLAN`-able SELECT that must plan to `SEARCH <name> USING
+   *  INDEX`. The predicate has to match a real index — including a partial
+   *  index's own `WHERE` — or the probe is silently inert: no error, just a
+   *  table that quietly stops being re-analyzed on the drift axis. Reads only,
+   *  and param-free ({@link LocalSchemaDb} declares the params-less shape, so a
+   *  bound `?` would bind NULL). All of that is pinned by tests over the
+   *  resolved set, including that the plan searches the table `name` claims. */
+  probe: string
+}
+
 export interface LocalSchemaContribution {
   id: string
   statements?: readonly string[]
   triggerNames?: readonly string[]
   backfills?: readonly LocalSchemaBackfill[]
-  /** `EXPLAIN QUERY PLAN`-able SELECTs that announce this contribution's tables
-   *  to `PRAGMA optimize`'s staleness check, which only considers tables the
-   *  connection has planned a query against. Declared here so core never has to
-   *  name a plugin's table; see `ANALYZE_ARMING_PROBES` in `clientSchema.ts`.
-   *
-   *  Each must plan to a `SEARCH … USING INDEX` — a `SCAN` does not arm, so a
-   *  probe with no usable index is silently inert. Reads only, and param-free:
-   *  {@link LocalSchemaDb} declares the params-less shape, so a bound `?` would
-   *  bind NULL. Both are pinned by tests over every contributed probe. */
-  analyzeProbes?: readonly string[]
+  /** Tables this contribution owns that core's ANALYZE paths must reach, so
+   *  core never has to name a plugin's table. Consumed by
+   *  `resolveAnalyzeArmingProbes` (`src/data/localSchema.ts`), and by the
+   *  one-shot exact-stats repair's table list — deliberately the same set, so
+   *  it is declared once here rather than twice in core. */
+  analyzeTables?: readonly LocalSchemaAnalyzeTable[]
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -62,6 +79,11 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 
 const isStringArray = (value: unknown): value is readonly string[] =>
   Array.isArray(value) && value.every(item => typeof item === 'string')
+
+const isLocalSchemaAnalyzeTable = (value: unknown): value is LocalSchemaAnalyzeTable =>
+  isRecord(value) &&
+  typeof value.name === 'string' &&
+  typeof value.probe === 'string'
 
 const isLocalSchemaBackfill = (value: unknown): value is LocalSchemaBackfill =>
   isRecord(value) &&
@@ -73,7 +95,10 @@ const isLocalSchemaContribution = (value: unknown): value is LocalSchemaContribu
   typeof value.id === 'string' &&
   (value.statements === undefined || isStringArray(value.statements)) &&
   (value.triggerNames === undefined || isStringArray(value.triggerNames)) &&
-  (value.analyzeProbes === undefined || isStringArray(value.analyzeProbes)) &&
+  (
+    value.analyzeTables === undefined ||
+    (Array.isArray(value.analyzeTables) && value.analyzeTables.every(isLocalSchemaAnalyzeTable))
+  ) &&
   (
     value.backfills === undefined ||
     (Array.isArray(value.backfills) && value.backfills.every(isLocalSchemaBackfill))
