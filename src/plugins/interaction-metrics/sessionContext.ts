@@ -117,6 +117,21 @@ export const observeWorkspaceEffectContribution = appEffectsFacet.of(observeWork
  *  one on first use, and those land in the same lifetime counter. Both
  *  recorders must report, since the count they feed is the denominator of the
  *  other's fan-out ratio. */
+/** Re-base when the Repo's counters have been zeroed under us.
+ *
+ *  `repo.resetMetrics()` is a supported hook for measuring a discrete
+ *  operation, and it resets the totals `ownWrites` is a subtrahend of. Left
+ *  alone, the next sample subtracts pre-reset telemetry writes from post-reset
+ *  counters — usually clamping `writes` to zero — and then overwrites this
+ *  session's row with counters describing only part of it. A reset starts a new
+ *  accounting epoch AND a new record, since the old row describes a span the
+ *  counters no longer cover. */
+export const noteCounterTotal = (totalWrites: number): void => {
+  if (totalWrites >= ownWrites) return
+  ownWrites = 0
+  pageRecord = null
+}
+
 export const noteOwnWrites = (count: number): void => {
   if (count > 0) ownWrites += count
 }

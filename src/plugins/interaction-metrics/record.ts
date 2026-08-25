@@ -25,6 +25,7 @@ import {
   countingOwnWrites,
   NoLongerEligible,
   metricsSessionContext,
+  noteCounterTotal,
   observeWorkspace,
   pageRecordStartedAt,
   setPageRecord,
@@ -289,7 +290,7 @@ const isLive = async (repo: Repo, blockId: string): Promise<boolean> => {
  *  nothing else prunes: a session-per-row series replicated to every device
  *  otherwise grows for the life of the graph. Only THIS client's own group is
  *  touched, so two devices can never fight over the same rows. */
-const RETAIN_RECORDS = 60
+export const RETAIN_RECORDS = 60
 
 const pruneOwnGroup = async (
   repo: Repo,
@@ -347,13 +348,19 @@ export const writeInteractionSample = async (
   // recorder can commit during the await between them, which the snapshot would
   // then include and a stale count would fail to discount.
   const metrics = repo.metrics()
-  const ownWrites = metricsSessionContext(repo, workspaceId).ownWrites
+  noteCounterTotal(metrics.db.writeTransaction?.calls ?? 0)
+  // Re-read AFTER the reset check, and take both facts from the same reading:
+  // a reset clears the record this session owns, so a `recordId` captured
+  // before it would keep updating a row describing counters that no longer
+  // exist.
+  const current = metricsSessionContext(repo, workspaceId)
+  const ownWrites = current.ownWrites
   // The record can be deleted from another device, or by a user browsing the
   // metrics tree. Writing a property to a tombstone does not restore it, so
   // without this the session would keep updating a row no reader can see.
   const existing =
-    context.recordId && (await isLive(repo, context.recordId))
-      ? { blockId: context.recordId, startedAt: pageRecordStartedAt(workspaceId)! }
+    current.recordId && (await isLive(repo, current.recordId))
+      ? { blockId: current.recordId, startedAt: pageRecordStartedAt(workspaceId)! }
       : null
   if (!existing) clearPageRecord()
 

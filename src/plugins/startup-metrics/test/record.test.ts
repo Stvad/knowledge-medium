@@ -256,9 +256,10 @@ describe('collectStartupMetricsEffect', () => {
     release!()
 
     await vi.waitFor(async () => expect(await countRecords()).toBe(1))
-    // Give a second write every chance to appear before asserting it did not.
-    await new Promise((r) => setTimeout(r, 50))
-    expect(await countRecords()).toBe(1)
+    // Assert the CAUSE, not elapsed-time absence: the second collector must
+    // never have entered the write at all, which a sleep could only ever
+    // suggest. `seen` counts record transactions.
+    expect(seen).toBe(1)
   }, 20_000)
 
   it('retries a write that rejects', async () => {

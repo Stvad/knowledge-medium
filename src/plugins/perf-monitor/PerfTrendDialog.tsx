@@ -8,7 +8,7 @@
  * view there was nowhere in the app to see it — the startup recorder had been
  * writing a per-session timeline for two months that nothing had ever read.
  */
-import { useEffect, useState, useSyncExternalStore } from 'react'
+import { useCallback, useEffect, useState, useSyncExternalStore } from 'react'
 import { Activity, RefreshCw, TrendingUp } from 'lucide-react'
 import {
   Dialog,
@@ -88,30 +88,38 @@ export function PerfTrendDialog({ resolve, workspaceId }: DialogContextProps<voi
   const [refreshing, setRefreshing] = useState(false)
   const ws = workspaceId ?? repo.activeWorkspaceId
 
-  useEffect(() => {
+  /** Reads both series. Shared by the mount effect and the manual refresh: the
+   *  tables are what a reader checks the verdict against, so refreshing one
+   *  without the other shows a verdict computed from history the tables do not
+   *  display. `alive` guards against a resolve after unmount. */
+  const loadSeries = useCallback(async (alive: () => boolean): Promise<void> => {
     if (!ws) return
-    let live = true
-    void (async () => {
-      try {
-        const [s, i] = await Promise.all([
-          loadRecords<StartupRecordData>(repo, ws, startupMetricsUIStateType.id, STARTUP_RECORD_PATH, isUsableStartupRecord),
-          loadRecords<InteractionRecordData>(repo, ws, interactionMetricsUIStateType.id, INTERACTION_RECORD_PATH, isUsableInteractionRecord),
-        ])
-        if (!live) return
-        setStartup(s.map((r) => r.record))
-        setInteraction(i.map((r) => r.record))
-      } catch (e) {
-        if (live) showError(`Couldn't read performance history: ${e instanceof Error ? e.message : String(e)}`)
-      }
-    })()
-    return () => { live = false }
+    try {
+      const [s, i] = await Promise.all([
+        loadRecords<StartupRecordData>(repo, ws, startupMetricsUIStateType.id, STARTUP_RECORD_PATH, isUsableStartupRecord),
+        loadRecords<InteractionRecordData>(repo, ws, interactionMetricsUIStateType.id, INTERACTION_RECORD_PATH, isUsableInteractionRecord),
+      ])
+      if (!alive()) return
+      setStartup(s.map((r) => r.record))
+      setInteraction(i.map((r) => r.record))
+    } catch (e) {
+      if (alive()) showError(`Couldn't read performance history: ${e instanceof Error ? e.message : String(e)}`)
+    }
   }, [repo, ws])
+
+  useEffect(() => {
+    let live = true
+    // Async IIFE: the state lands on resolve, not during the effect.
+    void (async () => { await loadSeries(() => live) })()
+    return () => { live = false }
+  }, [loadSeries])
 
   const refresh = async () => {
     if (!ws) return
     setRefreshing(true)
     try {
       await runPerfAnalysisNow(repo, ws)
+      await loadSeries(() => true)
     } catch (e) {
       showError(`Analysis failed: ${e instanceof Error ? e.message : String(e)}`)
     } finally {

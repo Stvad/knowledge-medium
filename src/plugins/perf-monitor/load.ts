@@ -40,10 +40,15 @@ export const isUsableInteractionRecord = (r: {
   writes?: unknown
   blockCount?: unknown
 }): boolean =>
-  typeof r.fanout === 'object' && r.fanout !== null &&
   typeof r.writes === 'number' && typeof r.blockCount === 'number' &&
   typeof r.queries === 'object' && r.queries !== null &&
-  Object.values(r.queries as Record<string, unknown>).every(isTimingSample)
+  Object.values(r.queries as Record<string, unknown>).every(isTimingSample) &&
+  typeof r.fanout === 'object' && r.fanout !== null &&
+  // Counter VALUES too, not just the map: they are consumed as numbers, and a
+  // string yields NaN, which takes neither the steady nor the regressed branch.
+  Object.values(r.fanout as Record<string, unknown>).every(
+    (v) => v === undefined || Number.isFinite(v),
+  )
 
 const isAbsentOrFinite = (v: unknown): boolean => v === undefined || Number.isFinite(v)
 

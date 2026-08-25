@@ -15,6 +15,7 @@ import {
   buildInteractionRecord,
   interactionMetricsUIStateType,
   interactionRecordProp,
+  RETAIN_RECORDS,
   interactionRecordType,
   queryNameFromHandleKey,
   writeInteractionSample,
@@ -270,15 +271,34 @@ describe('writeInteractionSample', () => {
   // These blocks are deliberately inspectable, so the group can hold a
   // hand-created child. Telemetry retention must never be able to reach
   // anything a person wrote — including by counting it toward the offset.
+  //
+  // The retention pass only deletes PAST its offset, so the group has to be
+  // driven past it: with a handful of rows the deletion branch never runs and
+  // the predicate under test is unreachable.
   it('never prunes a block that carries no record', async () => {
-    const blockId = (await writeInteractionSample(repo, WS))!
+    const first = (await writeInteractionSample(repo, WS))!
     const parent = (await sharedDb.db.getAll<{ parent_id: string }>(
-      'SELECT parent_id FROM blocks WHERE id = ?', [blockId],
+      'SELECT parent_id FROM blocks WHERE id = ?', [first],
     ))[0].parent_id
-    await repo.tx(async (tx) => {
-      await tx.create({ id: 'hand-written', workspaceId: WS, parentId: parent, orderKey: 'a0',
-        content: 'a note someone made here', properties: {} }, { systemMint: true })
-    }, { scope: ChangeScope.Automation })
+
+    const insert = async (id: string, orderKey: string, telemetry: boolean): Promise<void> => {
+      await sharedDb.db.execute(
+        `INSERT INTO blocks
+           (id, workspace_id, parent_id, order_key, content, properties_json, deleted,
+            created_at, updated_at, created_by, updated_by)
+         VALUES (?, ?, ?, ?, ?, ?, 0, 1, 1, ?, ?)`,
+        [id, WS, parent, orderKey, telemetry ? '' : 'a note someone made here',
+         telemetry
+           ? JSON.stringify({ 'interaction-metrics:record': { recordedAt: 1, writes: 0, blockCount: 0, queries: {}, fanout: {} } })
+           : '{}',
+         USER.id, USER.id],
+      )
+    }
+    // Enough telemetry rows to push anything after them past the retention
+    // offset, then the hand-written block LAST so it is squarely in the range
+    // an unfiltered pass would delete.
+    for (let i = 0; i <= RETAIN_RECORDS; i++) await insert(`rec-${i}`, `a${String(i).padStart(4, '0')}`, true)
+    await insert('hand-written', 'z999', false)
 
     resetMetricsSession()
     await writeInteractionSample(repo, WS)
@@ -287,6 +307,25 @@ describe('writeInteractionSample', () => {
       'SELECT deleted FROM blocks WHERE id = ?', ['hand-written'],
     )
     expect(survivor?.deleted).toBe(0)
+    // Precondition: the pass really did run and delete telemetry rows, so a
+    // green result cannot mean "the deletion branch was never reached".
+    const remaining = await sharedDb.db.getAll<{ n: number }>(
+      "SELECT count(*) AS n FROM blocks WHERE parent_id = ? AND deleted = 1", [parent],
+    )
+    expect(remaining[0].n).toBeGreaterThan(0)
+  })
+
+  // `resetMetrics()` is a supported hook for measuring a discrete operation. It
+  // zeroes the totals this session's accounting is relative to, so continuing
+  // would subtract pre-reset writes from post-reset counters.
+  it('starts a new record when the Repo counters are reset', async () => {
+    const first = (await writeInteractionSample(repo, WS))!
+    repo.resetMetrics()
+    const second = await writeInteractionSample(repo, WS)
+    expect(second).not.toBe(first)
+    const stored = repo.block(second!)
+    await stored.load()
+    expect(stored.peekProperty(interactionRecordProp)!.writes).toBeGreaterThanOrEqual(0)
   })
 
   // blockCount is the dominant confound for every timing in the record, so a
