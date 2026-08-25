@@ -212,6 +212,23 @@ export const CREATE_BLOCKS_PARENT_ORDER_INDEX_SQL = `
   WHERE deleted = 0
 `
 
+/** The tombstone complement of `idx_blocks_parent_order`, which is partial to
+ *  `deleted = 0` — so `tx.deletedChildrenOf` had no index to reach and planned
+ *  as `SCAN blocks` plus a temp B-tree sort, once per revived property, inside
+ *  the write transaction. Measured with EXPLAIN QUERY PLAN; with this index the
+ *  same query is `SEARCH ... USING COVERING INDEX`.
+ *
+ *  Cheap despite sitting on the hot table: a partial index over `deleted = 1`
+ *  holds only tombstones, and a row enters or leaves it only when `deleted`
+ *  flips — edits to live rows never touch it. Same lesson as
+ *  `idx_blocks_any_field_form`, which exists because the OTHER tombstone query
+ *  here scanned the field rows of the whole database once per owner. */
+export const CREATE_BLOCKS_PARENT_DELETED_INDEX_SQL = `
+  CREATE INDEX IF NOT EXISTS idx_blocks_parent_deleted
+  ON blocks (parent_id, order_key, id)
+  WHERE deleted = 1
+`
+
 export const CREATE_BLOCKS_WORKSPACE_ACTIVE_INDEX_SQL = `
   CREATE INDEX IF NOT EXISTS idx_blocks_workspace_active
   ON blocks (workspace_id)

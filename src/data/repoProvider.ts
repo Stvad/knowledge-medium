@@ -36,6 +36,7 @@ import { getWorkspaceKeyStore } from '@/sync/keys/keyStore.js'
 import type { MaterializeDeps } from '@/data/internals/syncObserver/materialize.js'
 import {
   BLOCKS_SYNCED_RAW_TABLE,
+  CREATE_BLOCKS_PARENT_DELETED_INDEX_SQL,
   CREATE_BLOCKS_PARENT_ORDER_INDEX_SQL,
   CREATE_BLOCKS_SYNCED_NEEDS_APPLY_INDEX_SQL,
   CREATE_BLOCKS_SYNCED_TABLE_SQL,
@@ -78,6 +79,7 @@ import {
 import { releasePowerSyncConnection } from '@/data/releasePowerSyncConnection.js'
 import {
   applyLocalSchemaContributions,
+  installedAnalyzeArmingProbes,
   resolveLocalSchemaContributions,
 } from '@/data/localSchema.js'
 import { guardSyncedTableWrites } from '@/data/syncedTableWriteGuard.js'
@@ -360,6 +362,7 @@ const initializePowerSyncDb = async (powerSyncDb: PowerSyncDatabase) => {
   // into `blocks`.
   await powerSyncDb.execute(CREATE_BLOCKS_SYNCED_TABLE_SQL)
   await powerSyncDb.execute(CREATE_BLOCKS_PARENT_ORDER_INDEX_SQL)
+  await powerSyncDb.execute(CREATE_BLOCKS_PARENT_DELETED_INDEX_SQL)
   await powerSyncDb.execute(CREATE_BLOCKS_WORKSPACE_ACTIVE_INDEX_SQL)
   await powerSyncDb.execute(CREATE_BLOCKS_WORKSPACE_NONEMPTY_PROPERTIES_INDEX_SQL)
   // Idempotent local migration: add the LOCAL-only derived columns
@@ -446,10 +449,8 @@ const initializePowerSyncDb = async (powerSyncDb: PowerSyncDatabase) => {
   await backfillBlockAliasesIfEmpty(backfillDb)
   await backfillBlockTypesIfEmpty(backfillDb)
   await backfillBlocksFtsIfEmpty(backfillDb)
-  await applyLocalSchemaContributions(
-    backfillDb,
-    resolveLocalSchemaContributions(staticDataExtensions),
-  )
+  const localSchemaContributions = resolveLocalSchemaContributions(staticDataExtensions)
+  await applyLocalSchemaContributions(backfillDb, localSchemaContributions)
 
   // ANALYZE off the cold-start path. wa-sqlite never auto-populates
   // `sqlite_stat1`, so the planner makes pessimal join-order choices on
@@ -469,7 +470,10 @@ const initializePowerSyncDb = async (powerSyncDb: PowerSyncDatabase) => {
   //
   const scheduleAnalyzeCheck = (reason: string) => {
     scheduleDeepIdle(() => {
-      void runAnalyzeIfStale(backfillDb).then(({proposed}) => {
+      void runAnalyzeIfStale(
+        backfillDb,
+        installedAnalyzeArmingProbes(),
+      ).then(({proposed}) => {
         // Silent when nothing was stale, which is every boot after the first —
         // but when it DOES park the worker, say which tables it was for.
         // Otherwise the only symptom of a mis-tuned staleness rule is an

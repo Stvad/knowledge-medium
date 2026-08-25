@@ -83,8 +83,29 @@ let repo: Repo
 
 beforeAll(async () => { sharedDb = await createTestDb() })
 afterAll(async () => { await sharedDb.cleanup() })
-afterEach(() => { vi.restoreAllMocks() })
+/** Release a Repo the suite is done with. Every test here leaves a seed pass
+ *  queued and nothing disposes the Repo, so it fires during a LATER test with
+ *  the database reset under it — and its writes are not merely redundant: tx
+ *  ids come from a per-Repo `createTestRepo` counter, so two live Repos over
+ *  one database collide.
+ *
+ *  Unpin THEN drain. Unpinning alone leaves a pass already past the access gate
+ *  mid-write across the reset — defence in depth, since that window is
+ *  load-dependent and no test fails without the drain. Draining first hangs: a
+ *  still-pinned pass parks on a membership wait for a row the reset removed. */
+const releaseRepo = async (target: Repo | undefined): Promise<void> => {
+  target?.setActiveWorkspaceId(null)
+  await target?.awaitSeedMaterialization()
+}
+
+afterEach(async () => {
+  await releaseRepo(repo)
+  vi.restoreAllMocks()
+})
 beforeEach(async () => {
+  // Pins the `afterEach` call above — without it every test after the first
+  // fails here, rather than the leak going quiet until CI notices it.
+  expect(repo?.activeWorkspaceId ?? null).toBeNull()
   await resetTestDb(sharedDb.db)
   repo = createTestRepo({db: sharedDb.db}).repo
   repo.setActiveWorkspaceId(WS)
@@ -539,6 +560,12 @@ describe('property seed materialization access', () => {
 
     repo.setReadOnly(false)
     repo.setActiveWorkspaceId(OTHER_WS)
+    await expect(awaitPropertySeedMaterializationAccess(repo, WS, {freshlyCreated: false}))
+      .resolves.toEqual({allowed: false, reason: 'inactive-workspace'})
+
+    // No workspace at all is the `releaseRepo` case — what stops a Repo the
+    // suite has finished with from writing through the shared database.
+    repo.setActiveWorkspaceId(null)
     await expect(awaitPropertySeedMaterializationAccess(repo, WS, {freshlyCreated: false}))
       .resolves.toEqual({allowed: false, reason: 'inactive-workspace'})
   })
