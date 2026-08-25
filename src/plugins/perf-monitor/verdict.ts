@@ -57,6 +57,21 @@ const pendingNotes = (analysis: PerfAnalysis): string[] => {
   return notes
 }
 
+/** How much history the comparison actually had.
+ *
+ *  Labelled per series once both were judged: the two fill independently and
+ *  use their own windows, so a single bare number is the other series' count
+ *  misreported as this one's. Unlabelled when only one was judged — there is no
+ *  second count for a reader to confuse it with. */
+const comparedAgainst = (analysis: PerfAnalysis): string => {
+  const { interaction, startup } = analysis.ready
+  if (interaction && startup) {
+    return `compared against ${analysis.baseline.interaction} interaction and ${analysis.baseline.startup} startup sessions`
+  }
+  const n = interaction ? analysis.baseline.interaction : analysis.baseline.startup
+  return `compared against ${n} recent ${interaction ? 'interaction' : 'startup'} sessions`
+}
+
 export const summarize = (analysis: PerfAnalysis): PerfVerdict => {
   const blocked =
     analysis.recordingBlockedBy === null
@@ -116,11 +131,7 @@ export const summarize = (analysis: PerfAnalysis): PerfVerdict => {
   return {
     kind: unjudged.length > 0 ? 'pending' : 'clean',
     headline: unjudged.length > 0 ? 'Partial comparison' : 'No slowdowns vs baseline',
-    notes: [
-      // The count for the series that was actually judged, not the other one's.
-      `compared against ${analysis.ready.interaction ? analysis.baseline.interaction : analysis.baseline.startup} recent sessions`,
-      ...notes,
-    ],
+    notes: [comparedAgainst(analysis), ...notes],
     regressions: [],
   }
 }

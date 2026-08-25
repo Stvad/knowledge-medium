@@ -49,12 +49,24 @@ describe('summarize', () => {
       ready: { interaction: false, startup: true },
       baseline: { interaction: 0, startup: 14 },
     }))
-    expect(v.notes.join(' ')).toContain('14 recent sessions')
-    expect(v.notes.join(' ')).not.toContain('0 recent sessions')
+    expect(v.notes.join(' ')).toContain('14 recent startup sessions')
+    expect(v.notes.join(' ')).not.toContain('0 recent')
   })
 
-  // Dropping the pending notes for a bare count is how a workspace switch came
-  // to read as "building a baseline" for a user with months of history.
+  // Both series were judged, and they fill independently against their own
+  // windows. One bare number here is the other series' count misreported as
+  // this one's.
+  it('reports both counts, labelled, when both series were judged', () => {
+    const v = summarize(analysis({
+      ready: { interaction: true, startup: true },
+      baseline: { interaction: 7, startup: 31 },
+    })).notes.join(' ')
+    expect(v).toContain('7 interaction')
+    expect(v).toContain('31 startup')
+  })
+
+  // A bare count says nothing about WHICH series is missing, or that one of
+  // them can never fill this session.
   it('keeps the explanation when it says it is building a baseline', () => {
     const v = summarize(analysis({
       interactionComparable: false,

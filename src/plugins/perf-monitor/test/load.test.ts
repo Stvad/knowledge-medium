@@ -18,9 +18,11 @@ import {
   type InteractionRecordData,
 } from '@/plugins/interaction-metrics/record'
 import { resetMetricsSession } from '@/plugins/interaction-metrics/sessionContext'
+import { clientGroupId } from '@/plugins/interaction-metrics/recordStore'
 import {
   HISTORY_LIMIT,
   INTERACTION_RECORD_PATH,
+  MAX_PAGES,
   isUsableInteractionRecord,
   isUsableStartupRecord,
   loadRecords,
@@ -49,6 +51,13 @@ beforeEach(async () => {
   repo.setActiveWorkspaceId(WS)
 })
 
+/** The fields `isUsableInteractionRecord` and the comparison dereference. */
+const RECORD = {
+  startedAt: 0, appVersion: 'v', appSha: 'sha', clientId: 'c', deviceLabel: 'd',
+  sessionMs: 1, blockCount: 1, writes: 1, queries: {}, fanout: {}, db: {},
+  handles: { count: 0, totalDeps: 0, maxDeps: 0, p50Deps: 0, p95Deps: 0, topHeavy: [] },
+}
+
 const blockCount = async (): Promise<number> =>
   (await sharedDb.db.getAll<{ n: number }>('SELECT COUNT(*) AS n FROM blocks'))[0].n
 
@@ -75,6 +84,39 @@ describe('loadRecords', () => {
     )
     expect(records).toEqual([])
     expect(await blockCount()).toBe(before)
+  })
+
+  // A session's record is UPDATED IN PLACE, so a long-lived tab's row keeps the
+  // tree position it was created at while its timestamp advances past every row
+  // created since. Paged by tree position, that row falls out of the window once
+  // enough newer siblings exist, and the in-memory sort cannot recover a row the
+  // paging already excluded — the reader then silently analyses a stale
+  // baseline while the newest sample sits in the group unread.
+  it('reads a record whose timestamp advanced after newer siblings were created', async () => {
+    const groupId = clientGroupId(repo, WS, interactionMetricsUIStateType)
+    const insert = async (id: string, orderKey: string, recordedAt: number): Promise<void> => {
+      await sharedDb.db.execute(
+        `INSERT INTO blocks
+           (id, workspace_id, parent_id, order_key, content, properties_json, deleted,
+            created_at, updated_at, created_by, updated_by)
+         VALUES (?, ?, ?, ?, '', ?, 0, 1, 1, ?, ?)`,
+        [id, WS, groupId, orderKey,
+         JSON.stringify({ [interactionRecordProp.name]: { ...RECORD, recordedAt } }),
+         USER.id, USER.id],
+      )
+    }
+    // The long-lived tab's row, created FIRST (largest order key, since records
+    // are prepended) and re-stamped most recently.
+    await insert('long-lived', 'z999', 9_000_000)
+    // Enough newer-created siblings to fill every page the reader will read.
+    const buried = HISTORY_LIMIT * MAX_PAGES + 5
+    for (let i = 0; i < buried; i++) {
+      await insert(`later-${i}`, `a${String(i).padStart(4, '0')}`, 1_000_000 + i)
+    }
+
+    const records = await loadRecords<InteractionRecordData>(
+      repo, WS, interactionMetricsUIStateType.id, PATH, isUsableInteractionRecord)
+    expect(records[0].id).toBe('long-lived')
   })
 
   // A row that parses but is missing what the comparison dereferences would

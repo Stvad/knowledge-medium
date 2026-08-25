@@ -82,7 +82,7 @@ export const isUsableStartupRecord = (r: {
 
 /** Pages of `HISTORY_LIMIT` rows to read before giving up on finding usable
  *  records. Bounds the cost when a group is full of unreadable rows. */
-const MAX_PAGES = 3
+export const MAX_PAGES = 3
 
 /** Sessions of history retained per comparison. Enough for the median to be
  *  stable across session heterogeneity, small enough that the baseline still
@@ -128,13 +128,21 @@ export const loadRecords = async <T extends { recordedAt: number }>(
     const rows = await repo.db.getAll<{ id: string; payload: string | null }>(
       // The payload filter is INSIDE the query, before the LIMIT: records are
       // prepended, so a row carrying no record sits at the FRONT of this window.
+      //
+      // Ordered by the RECORD's own timestamp, not by tree position. A session's
+      // record is updated in place, so a long-lived tab's row stays where it was
+      // created while becoming the most recent sample — and paging by
+      // `order_key` then sorting afterwards cannot recover a row the paging
+      // already excluded. `(order_key, id)` only breaks ties, in the tree's
+      // canonical order.
       `SELECT id, json_extract(properties_json, ?) AS payload
          FROM blocks
         WHERE parent_id = ? AND deleted = 0
           AND json_extract(properties_json, ?) IS NOT NULL
-        ORDER BY order_key, id
+        ORDER BY json_extract(properties_json, ?) DESC, order_key, id
         LIMIT ? OFFSET ?`,
-      [recordPath, groupId, recordPath, HISTORY_LIMIT, page * HISTORY_LIMIT],
+      [recordPath, groupId, recordPath, `${recordPath}.recordedAt`,
+       HISTORY_LIMIT, page * HISTORY_LIMIT],
     )
     for (const row of rows) {
       if (!row.payload) continue
@@ -158,6 +166,11 @@ export const loadRecords = async <T extends { recordedAt: number }>(
   // each page, so a page that ends one short of the limit runs another and can
   // return nearly twice it. Over-long history biases the baseline toward older,
   // smaller-graph sessions, which reads as a regression.
+  //
+  // Re-sorted rather than trusted: the query orders on a value SQLite reads
+  // untyped, so a hand-edited string timestamp sorts by JSON type rather than
+  // numerically. The rows are already the right ones by then — this only fixes
+  // their order.
   return records
     .sort((a, b) => b.record.recordedAt - a.record.recordedAt)
     .slice(0, HISTORY_LIMIT)
