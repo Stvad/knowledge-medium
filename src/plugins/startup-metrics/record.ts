@@ -150,7 +150,7 @@ export const writeStartupRecord = async (repo: Repo, workspaceId: string): Promi
         clientId,
         deviceLabel: getDeviceLabel(),
       })
-      return appendClientRecord(repo, recordTx, {
+      return (await appendClientRecord(repo, recordTx, {
         workspaceId,
         containerType: startupMetricsUIStateType,
         recordType: startupRecordType,
@@ -161,7 +161,7 @@ export const writeStartupRecord = async (repo: Repo, workspaceId: string): Promi
           // `user_updated_at` would float this hidden row into Recents.
           await tx.setProperty(blockId, startupRecordProp, data, { skipMetadata: true })
         },
-      })
+      })).blockId
     })
   } catch (err) {
     if (err instanceof NoLongerEligible) return null

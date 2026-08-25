@@ -19,7 +19,7 @@ import {
   queryNameFromHandleKey,
   writeInteractionSample,
 } from '../record'
-import { resetMetricsSession } from '../sessionContext'
+import { observeWorkspace, resetMetricsSession } from '../sessionContext'
 
 const WS = 'ws-1'
 const USER: User = { id: 'user-1', name: 'Alice' }
@@ -238,6 +238,33 @@ describe('writeInteractionSample', () => {
     const second = await writeInteractionSample(repo, WS)
     expect(second).not.toBe(first)
     expect(await childIds(await groupId())).toContain(second)
+  })
+
+  /** Flip state in the window between the pre-checks and the write: run
+   *  `lapse` as the record transaction is entered, so the in-transaction
+   *  re-check is the only thing that can still refuse. (Patching `repo.db`
+   *  instead recurses through the timing proxy and blows the stack.) */
+  const lapseBeforeWrite = (lapse: () => void): void => {
+    const realTx = repo.tx.bind(repo)
+    vi.spyOn(repo, 'tx').mockImplementation(async (fn, opts) => {
+      if (opts?.description === 'interaction metrics record') lapse()
+      return realTx(fn, opts)
+    })
+  }
+
+  // The pre-checks run before several awaits — including a membership wait of
+  // up to ten seconds — so eligibility can lapse before the write. Both of
+  // these were unpinned, which is how a refactor silently weakened one.
+  it('refuses when the workspace stops being attributable mid-write', async () => {
+    lapseBeforeWrite(() => observeWorkspace(repo, 'ws-2'))
+    expect(await writeInteractionSample(repo, WS)).toBeNull()
+    expect(await childIds(await groupId())).toEqual([])
+  })
+
+  it('refuses when the workspace turns read-only mid-write', async () => {
+    lapseBeforeWrite(() => repo.setReadOnly(true))
+    expect(await writeInteractionSample(repo, WS)).toBeNull()
+    expect(await childIds(await groupId())).toEqual([])
   })
 
   // These blocks are deliberately inspectable, so the group can hold a

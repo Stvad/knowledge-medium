@@ -134,5 +134,11 @@ export const loadRecords = async <T extends { recordedAt: number }>(
     }
     if (rows.length < HISTORY_LIMIT) break
   }
-  return records.sort((a, b) => b.record.recordedAt - a.record.recordedAt)
+  // Truncated, not merely loop-bounded: the page condition is checked BEFORE
+  // each page, so a page that ends one short of the limit runs another and can
+  // return nearly twice it. Over-long history biases the baseline toward older,
+  // smaller-graph sessions, which reads as a regression.
+  return records
+    .sort((a, b) => b.record.recordedAt - a.record.recordedAt)
+    .slice(0, HISTORY_LIMIT)
 }

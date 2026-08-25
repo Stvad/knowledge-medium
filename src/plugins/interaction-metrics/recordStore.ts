@@ -3,13 +3,14 @@
  *
  * Both recorders keep the same shape — a per-client group under a hidden
  * ui-state subtree, one prepended block per session, typed, carrying a single
- * identity-codec property — and they kept it by copying. Every guard that
- * belonged to that shape (write eligibility re-taken inside the transaction,
- * `skipMetadata` so bookkeeping does not float the block into Recents, the
- * type tag landing in the same transaction as the create, the recorder's own
- * transactions being counted) had to be applied twice, and four consecutive
- * review rounds found one of the two places missed. Written once, it cannot be
- * missed once.
+ * identity-codec property — and used to keep it by copying, so every guard
+ * belonging to the shape had to be applied twice.
+ *
+ * What lives here is only what the shape itself guarantees. A recorder with a
+ * STRONGER rule than the shape knows about must pass it (`assertEligible`), and
+ * retention is still the interaction recorder's own: sharing a write path does
+ * not make two recorders identical, and assuming it does is how the extraction
+ * itself dropped a check on its first attempt.
  */
 import { ChangeScope, type TypeContribution } from '@/data/api'
 import type { Repo } from '@/data/repo'
@@ -26,10 +27,15 @@ export interface ClientRecordSpec {
   /** Type applied to the record row itself, so the rows are queryable and
    *  auditable rather than inferred from tree position. */
   recordType: TypeContribution
-  /** `repo.tx` description; also what the own-write accounting recognises. */
+  /** `repo.tx` description — for the tx log and for reading the diff later. */
   description: string
   /** Row content — legible in the tree, and FTS-indexed, so keep it dull. */
   content: string
+  /** Re-taken as the first operation inside the create transaction. Defaults to
+   *  `assertStillWritable`, which is all the shared shape can know; a recorder
+   *  with a STRONGER rule must pass it, because the shared default cannot see
+   *  it. The interaction recorder's attributability rule is exactly that case. */
+  assertEligible?: (repo: Repo, workspaceId: string) => void
   /** Writes the record property. Runs inside the create transaction. */
   setProperty: (tx: Parameters<Parameters<Repo['tx']>[0]>[0], blockId: string) => Promise<void>
 }
@@ -64,7 +70,7 @@ export const appendClientRecord = async (
   repo: Repo,
   recordTx: Repo['tx'],
   spec: ClientRecordSpec,
-): Promise<string> => {
+): Promise<{ blockId: string; groupId: string }> => {
   const groupId = await ensureClientGroup(repo, spec.workspaceId, spec.containerType)
   const blockId = uuidv4()
   // Newest-first within the group: prepend before the current first sibling.
@@ -73,7 +79,7 @@ export const appendClientRecord = async (
     [groupId],
   )
   await recordTx(async (tx) => {
-    assertStillWritable(repo, spec.workspaceId)
+    ;(spec.assertEligible ?? assertStillWritable)(repo, spec.workspaceId)
     await tx.create(
       {
         id: blockId,
@@ -88,5 +94,5 @@ export const appendClientRecord = async (
     await repo.addTypeInTx(tx, blockId, spec.recordType.id, {})
     await spec.setProperty(tx, blockId)
   }, { scope: ChangeScope.Automation, description: spec.description })
-  return blockId
+  return { blockId, groupId }
 }

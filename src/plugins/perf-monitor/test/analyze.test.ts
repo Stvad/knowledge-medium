@@ -155,9 +155,9 @@ describe('runPerfAnalysis', () => {
     // The baseline needs a graph to have measured; a session recorded against an
     // empty workspace contributes no size.
     await addBlocks('seed', 10)
-    // Enough sessions that the BASELINE window is non-empty once the leading
-    // entries consumed by the recent median are excluded.
-    for (let i = 0; i < 5; i++) await pastSession()
+    // Enough history that comparisons actually RUN — otherwise the assertion
+    // below that a bigger graph does not silence them proves nothing.
+    await seedFiringHistory()
     const before = (await runPerfAnalysis(repo, WS, 1000)).graphGrowth
     expect(before).not.toBeNull()
 
@@ -165,6 +165,7 @@ describe('runPerfAnalysis', () => {
     const after = await runPerfAnalysis(repo, WS, 2000)
     expect(after.graphGrowth!).toBeGreaterThan(before!)
     // Still compares — a bigger graph is context, not a reason to go quiet.
-    expect(after.insufficientHistory).toBe(true)
+    expect(after.ready.interaction).toBe(true)
+    expect(after.insufficientHistory).toBe(false)
   })
 })

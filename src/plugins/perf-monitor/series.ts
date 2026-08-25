@@ -133,9 +133,6 @@ const trendRegression = (
   }
 }
 
-/** A series is READY when at least one of its metrics could actually be
- *  judged. Row count alone is not readiness: records with no writes, or startup
- *  records missing their paint marks, are rows that carry no usable sample. */
 /** The entries a comparison uses as its BASELINE, given a history newest-first.
  *  The leading ones are consumed smoothing the current reading, so anything
  *  describing the baseline — including the graph size it was measured at — has
@@ -143,6 +140,9 @@ const trendRegression = (
 export const baselineWindow = <T>(history: readonly T[]): readonly T[] =>
   history.slice(RECENT_WINDOW - 1)
 
+/** A series is READY when at least one of its metrics could actually be judged.
+ *  Row count alone is not readiness: records with no writes, or startup records
+ *  missing their paint marks, are rows that carry no usable sample. */
 export const anyJudged = (results: readonly TrendResult[]): boolean =>
   results.some((r) => r.status !== 'insufficient')
 
@@ -165,7 +165,7 @@ export const queryRegressions = (
   history: readonly InteractionComparable[],
 ): TrendResult[] => {
   const recentPast = history.slice(0, RECENT_WINDOW - 1)
-  const baselineSessions = history.slice(RECENT_WINDOW - 1)
+  const baselineSessions = baselineWindow(history)
   const out: TrendResult[] = []
   for (const [name, sample] of Object.entries(current.queries)) {
     // Only the data-sufficiency filter here. The magnitude floor is applied by
@@ -218,7 +218,7 @@ export const fanoutRegression = (
   return trendRegression(
     { metric: 'fanout:invalidationsPerWrite', label: 'handle invalidations per write', unit: 'ratio', minAbsolute: 0 },
     [now, ...rate(history.slice(0, RECENT_WINDOW - 1))],
-    rate(history.slice(RECENT_WINDOW - 1)),
+    rate(baselineWindow(history)),
   )
 }
 

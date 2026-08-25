@@ -17,7 +17,7 @@ import type { Repo } from '@/data/repo'
 import { jsonPathForProperty } from '@/data/internals/typedBlockQuery.js'
 import { appVersion } from '@/appVersion.js'
 import { getClientId, getDeviceLabel } from '@/utils/clientId.js'
-import { appendClientRecord, ensureClientGroup } from './recordStore.js'
+import { appendClientRecord } from './recordStore.js'
 import {
   assertStillAttributable,
   awaitRecordingAllowed,
@@ -387,22 +387,22 @@ export const writeInteractionSample = async (
         return existing.blockId
       }
 
-      const blockId = await appendClientRecord(repo, recordTx, {
+      const { blockId, groupId } = await appendClientRecord(repo, recordTx, {
         workspaceId,
         containerType: interactionMetricsUIStateType,
         recordType: interactionRecordType,
         description: 'interaction metrics record',
+        // STRONGER than the shared default: these counters are only meaningful
+        // if they belong to one workspace, and a switch during the awaits above
+        // invalidates them. The shared path cannot know that rule.
+        assertEligible: assertStillAttributable,
         content: new Date(startedAt).toISOString(),
         setProperty: async (tx, id) => {
           await tx.setProperty(id, interactionRecordProp, data, { skipMetadata: true })
         },
       })
       setPageRecord(workspaceId, blockId, startedAt)
-      await pruneOwnGroup(
-        repo, recordTx,
-        await ensureClientGroup(repo, workspaceId, interactionMetricsUIStateType),
-        blockId,
-      )
+      await pruneOwnGroup(repo, recordTx, groupId, blockId)
       return blockId
     })
   } catch (err) {
