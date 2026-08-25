@@ -112,8 +112,17 @@ export function PerfTrendDialog({ resolve, workspaceId }: DialogContextProps<voi
     return () => { live = false }
   }, [loadSeries])
 
+  // The dialog is pinned to the workspace it opened on, but a fresh analysis
+  // reads AMBIENT state — `repo.isReadOnly` describes whichever workspace is
+  // active now. Re-analyzing a pinned workspace from inside another would
+  // report its blocker as the active one's: an editable workspace shown as
+  // recording-disabled, or a read-only one shown as fine.
+  const stale = !ws || ws !== repo.activeWorkspaceId
+
   const refresh = async () => {
-    if (!ws) return
+    // Unpinned defence in depth behind the button's `disabled` — a click cannot
+    // reach here while `stale`. It covers the gap between render and click.
+    if (stale) return
     setRefreshing(true)
     try {
       await runPerfAnalysisNow(repo, ws)
@@ -174,9 +183,14 @@ export function PerfTrendDialog({ resolve, workspaceId }: DialogContextProps<voi
               )
             })()
           )}
-          <Button size="sm" variant="outline" className="mt-3" onClick={() => void refresh()} disabled={refreshing}>
+          <Button size="sm" variant="outline" className="mt-3" onClick={() => void refresh()} disabled={refreshing || stale}>
             <RefreshCw className={`h-3.5 w-3.5 mr-1.5 ${refreshing ? 'animate-spin' : ''}`} /> Re-analyze
           </Button>
+          {stale && (
+            <p className="text-xs text-muted-foreground mt-1">
+              Switched workspace since this opened — reopen here to re-analyze.
+            </p>
+          )}
         </section>
 
         <section>

@@ -282,7 +282,11 @@ export const countLiveBlocks = async (repo: Repo, workspaceId: string): Promise<
 /** Live AND still where the reader looks. A record moved to another parent is
  *  invisible to `loadRecords`, which matches on the derived client group — so
  *  continuing to update it would write this session into a place nothing reads,
- *  and the session would silently vanish from the trend. */
+ *  and the session would silently vanish from the trend.
+ *
+ *  Asked twice: once to decide whether a replacement is due, and again inside
+ *  the writing transaction, which several awaits later is the only place the
+ *  answer is still true. */
 const isUsableRecord = async (
   repo: Repo,
   blockId: string,
@@ -293,6 +297,19 @@ const isUsableRecord = async (
     [blockId],
   )
   return row?.parent_id === clientGroupId(repo, workspaceId, interactionMetricsUIStateType)
+}
+
+/** The same question, read through a transaction. `tx.get` does not filter
+ *  tombstones, so liveness is checked rather than implied. */
+const isUsableRow = async (
+  tx: Parameters<Parameters<Repo['tx']>[0]>[0],
+  blockId: string,
+  repo: Repo,
+  workspaceId: string,
+): Promise<boolean> => {
+  const row = await tx.get(blockId)
+  return !!row && !row.deleted &&
+    row.parentId === clientGroupId(repo, workspaceId, interactionMetricsUIStateType)
 }
 
 /**
@@ -350,6 +367,15 @@ export const writeInteractionSample = async (
       if (existing) {
         await recordTx(async (tx) => {
           assertStillAttributable(repo, workspaceId)
+          // Placement re-taken INSIDE the transaction, not just before it: the
+          // check above is separated from this write by the block count, and a
+          // sync-applied or hand edit landing in that window leaves us writing
+          // this session into a row the reader can no longer find. Refusing
+          // costs one sample — the next one finds the row unusable and opens a
+          // replacement — while writing costs the session.
+          if (!(await isUsableRow(tx, existing.blockId, repo, workspaceId))) {
+            throw new NoLongerEligible()
+          }
           // `skipMetadata`: a metrics sample is bookkeeping, not user intent.
           // Without it every resample stamps `user_updated_at`, and the block-ref
           // picker orders by exactly that — so a hidden ISO-timestamp block would

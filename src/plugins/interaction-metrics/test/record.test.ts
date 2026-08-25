@@ -358,6 +358,37 @@ describe('writeInteractionSample', () => {
     expect((await stored(first))!.fanout.loaderInvalidations).toBe(before)
   })
 
+  // The placement check runs before the block count, so a sync-applied or hand
+  // edit can move the record out of the group before the update lands. Writing
+  // then puts this session where `loadRecords` cannot find it — the sample is
+  // lost either way, but silently rather than as a refusal the next sample
+  // recovers from.
+  it('refuses to update a record moved out of the group mid-write', async () => {
+    const first = (await writeInteractionSample(repo, WS))!
+    await repo.tx(async (tx) => {
+      await tx.create({ id: 'elsewhere', workspaceId: WS, parentId: null, orderKey: 'a0',
+        content: 'a page', properties: {} }, { systemMint: true })
+    }, { scope: ChangeScope.Automation })
+
+    const realTx = repo.tx.bind(repo)
+    vi.spyOn(repo, 'tx').mockImplementation(async (fn, opts) => {
+      if (opts?.description === 'interaction metrics record') {
+        await sharedDb.db.execute(
+          'UPDATE blocks SET parent_id = ? WHERE id = ?', ['elsewhere', first])
+      }
+      return realTx(fn, opts)
+    })
+    expect(await writeInteractionSample(repo, WS)).toBeNull()
+    vi.restoreAllMocks()
+
+    // Untouched where it now lives, and the next sample opens a replacement.
+    const moved = await sharedDb.db.getOptional<{ parent_id: string }>(
+      'SELECT parent_id FROM blocks WHERE id = ?', [first])
+    expect(moved?.parent_id).toBe('elsewhere')
+    const second = await writeInteractionSample(repo, WS)
+    expect(second).not.toBe(first)
+  })
+
   // A reset landing INSIDE a write body leaves our own before/after delta
   // spanning two epochs — the `after` counters are post-zeroing, so the delta is
   // negative, and subtracting a negative inflates the corrected fan-out. That is
