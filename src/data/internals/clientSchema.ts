@@ -1109,8 +1109,10 @@ export const BACKFILL_BLOCKS_FTS_SQL = `
  *    documented as an accepted gap (a table EMPTY at ANALYZE time, so carrying
  *    no stat row at all, that later fills — `block_types` sat under it),
  *  - it costs 0ms on a settled 347k-block client versus a `COUNT(*)` over every
- *    row just to decide, and re-analyzes only the STALE TABLE (14-52ms) instead
- *    of every table in the file (655ms warm, 3.1s cold),
+ *    row just to decide, and re-analyzes only the STALE TABLE instead of every
+ *    table in the file. Unbounded, on a live 328k-block client: `blocks` 498ms
+ *    warm, the whole file 9.8s COLD (that last one was recorded here as 3.1s,
+ *    which measurement did not reproduce — assume seconds, not hundreds of ms),
  *  - it needs no marker row, no row-count probe, and no fingerprint.
  *
  *  One part of it is non-obvious enough to be load-bearing and is pinned by
@@ -1129,8 +1131,12 @@ export const BACKFILL_BLOCKS_FTS_SQL = `
  *  to exceed the workspace's row count.
  *
  *  The limit was never where the win came from — analyzing only the stale table
- *  is (above): unbounded costs 147ms against 52ms for one table on a 347k-block
- *  client, at deep idle. */
+ *  is (above). What it costs to drop, measured on the live client this
+ *  regressed: `ANALYZE blocks` unbounded is 498ms warm, against a 4s cold
+ *  workspace scan on EVERY boot with the sampled row in place. Confirmed there
+ *  end to end — an unbounded pass rewrote `idx_blocks_workspace_active` from
+ *  `327671 267` to `327916 109306`, and the definition-projector query went from
+ *  the full-workspace scan to `idx_block_types_type_workspace` driving, 57ms. */
 
 /** Dry run of what {@link ANALYZE_OPTIMIZE_SQL} is about to do, for logging.
  *
@@ -1142,7 +1148,36 @@ export const BACKFILL_BLOCKS_FTS_SQL = `
  *  states (settled / stale-and-armed / stale-and-unarmed / new index). */
 export const ANALYZE_DRY_RUN_SQL = `PRAGMA optimize(0x03)`
 
-export const ANALYZE_OPTIMIZE_SQL = `PRAGMA optimize`
+/** `0x02` — "analyze what might benefit" — and NOT the default mask.
+ *
+ *  The default is `0x12`, and the `0x10` bit imposes SQLite's OWN
+ *  `SQLITE_DEFAULT_OPTIMIZE_LIMIT` of 2000 rows. Clearing `analysis_limit` does
+ *  not disable it: measured on 3.53.3 over a 5000-row single-workspace index,
+ *  `PRAGMA optimize` and `PRAGMA optimize(0x12)` both record `5000 2001` with
+ *  the limit at zero, where `0x02` records `5000 5000`. That is the same
+ *  fabricated selectivity the module comment above is about, so the bit has to
+ *  come off — otherwise the next release that adds an index re-samples every
+ *  `blocks` stat row and the regression comes back.
+ *
+ *  Dropping it costs nothing else: `0x02` still re-analyzes only what the
+ *  staleness rules name (settled proposes nothing; a new index proposes its
+ *  table), still requires {@link ANALYZE_ARMING_PROBES}, and still honours an
+ *  explicitly-set `analysis_limit`. It also makes the real call agree with
+ *  {@link ANALYZE_DRY_RUN_SQL}, which is `0x02` plus the debug bit and was
+ *  therefore reporting unlimited work the old default then sampled. */
+export const ANALYZE_OPTIMIZE_SQL = `PRAGMA optimize(0x02)`
+
+/** Zero the connection's `analysis_limit` before a pass, and read it back after.
+ *
+ *  `analysis_limit` is CONNECTION state and PowerSync's shared worker owns one
+ *  connection across tabs, so during a rollout a tab still running the previous
+ *  build can set it to 400 mid-pass. The read-back is what makes that
+ *  survivable: a pass that finds a non-zero limit at the end may have recorded
+ *  sampled rows, so it declines to write the one-shot marker and the next boot
+ *  runs the repair again. */
+export const RESET_ANALYZE_SAMPLE_LIMIT_SQL = `PRAGMA analysis_limit=0`
+
+export const READ_ANALYZE_SAMPLE_LIMIT_SQL = `PRAGMA analysis_limit`
 
 /** One-shot: replace the sampled stats earlier builds recorded with exact ones.
  *
@@ -1153,8 +1188,17 @@ export const ANALYZE_OPTIMIZE_SQL = `PRAGMA optimize`
  *  from an honest one by inspection — 401 is also what a genuinely selective
  *  column looks like — so this is version-marked rather than detected.
  *
- *  `sqlite_stat1` is per-device local state, so this is a derivation pass: no
- *  claim, no upload, safe to run everywhere and safe to re-run. */
+ *  Written only when the pass that earns it was provably unsampled (see
+ *  {@link RESET_ANALYZE_SAMPLE_LIMIT_SQL}); until then the repair runs again
+ *  next boot. `sqlite_stat1` is per-device local state, so this is a derivation
+ *  pass: no claim, no upload, safe to run everywhere and safe to re-run.
+ *
+ *  It is the most expensive thing this module does — measured 9.8s COLD on a
+ *  live 328k-block client, once per device, at deep idle, and reported (the
+ *  caller logs `repaired`). Not split per-table: `blocks` dominates that figure
+ *  and a single table is the finest granularity ANALYZE has, so chunking would
+ *  move the park rather than shrink it. The device it replaces was paying ~4s on
+ *  every boot. */
 export const UNBOUNDED_ANALYZE_MARKER_KEY = 'analyze_unbounded_stats_v1'
 
 export const SELECT_UNBOUNDED_ANALYZE_DONE_SQL = `
@@ -1614,6 +1658,12 @@ export interface AnalyzeResult {
    *  them), NOT that nothing happened: the optimize still ran, we just can't
    *  report what it did. Observability only; nothing branches on it. */
   proposed: string[] | null
+  /** True when the one-shot sampled-stats repair ran and completed this pass.
+   *  Reported separately because it is invisible in `proposed` — the boot it
+   *  targets is precisely one where the optimize found nothing stale, so a
+   *  caller logging on `proposed` alone would narrate silence over the
+   *  multi-second worker park (see {@link UNBOUNDED_ANALYZE_MARKER_KEY}). */
+  repaired: boolean
 }
 
 /** Announce interest in the hot tables so the staleness check considers them.
@@ -1680,6 +1730,7 @@ const serializeAnalyze = <T>(run: () => Promise<T>): Promise<T> => {
 export const runAnalyzeIfStale = async (
   db: ClientSchemaBootstrapDb,
 ): Promise<AnalyzeResult> => serializeAnalyze(async () => {
+  await db.execute(RESET_ANALYZE_SAMPLE_LIMIT_SQL)
   await armAnalyzeProbes(db)
   const proposed = readOptimizeRows(await db.execute(ANALYZE_DRY_RUN_SQL))
   await db.execute(ANALYZE_OPTIMIZE_SQL)
@@ -1687,16 +1738,26 @@ export const runAnalyzeIfStale = async (
   // than the empty set a preceding full ANALYZE would leave it. Ordinary boots
   // pay one marker read; the sampled rows it replaces are exactly the ones the
   // optimize above walks away from (see UNBOUNDED_ANALYZE_MARKER_KEY).
-  await repairSampledStats(db)
-  return {proposed}
+  const repaired = await repairSampledStats(db)
+  return {proposed, repaired}
 })
 
 /** Marker-gated full ANALYZE; see {@link UNBOUNDED_ANALYZE_MARKER_KEY}. */
-const repairSampledStats = async (db: ClientSchemaBootstrapDb): Promise<void> => {
+const repairSampledStats = async (db: ClientSchemaBootstrapDb): Promise<boolean> => {
   const done = await db.getOptional<{1: number}>(SELECT_UNBOUNDED_ANALYZE_DONE_SQL)
-  if (done !== null) return
+  if (done !== null) return false
   await db.execute('ANALYZE')
+  // Refuse the marker only on a POSITIVE reading of a non-zero limit: a db
+  // surface that cannot answer the PRAGMA would otherwise never mark, and pay a
+  // full ANALYZE on every boot forever — worse than the race this catches.
+  if ((await readAnalyzeSampleLimit(db)) !== 0) return false
   await db.execute(RECORD_UNBOUNDED_ANALYZE_DONE_SQL)
+  return true
+}
+
+const readAnalyzeSampleLimit = async (db: ClientSchemaBootstrapDb): Promise<number> => {
+  const row = await db.getOptional<{analysis_limit: number}>(READ_ANALYZE_SAMPLE_LIMIT_SQL)
+  return row?.analysis_limit ?? 0
 }
 
 /** Unconditional `ANALYZE` for the manual command-palette command.

@@ -469,13 +469,19 @@ const initializePowerSyncDb = async (powerSyncDb: PowerSyncDatabase) => {
   //
   const scheduleAnalyzeCheck = (reason: string) => {
     scheduleDeepIdle(() => {
-      void runAnalyzeIfStale(backfillDb).then(({proposed}) => {
+      void runAnalyzeIfStale(backfillDb).then(({proposed, repaired}) => {
         // Silent when nothing was stale, which is every boot after the first —
         // but when it DOES park the worker, say which tables it was for.
         // Otherwise the only symptom of a mis-tuned staleness rule is an
         // unexplained pause.
         if (proposed && proposed.length > 0) {
           console.info(`[Repo] ANALYZE (${reason}):`, proposed.join(', '))
+        }
+        // The one-shot repair is invisible in `proposed` — its whole premise is
+        // stats the optimize walks away from — so it needs saying separately, on
+        // the one boot where the pause is longest.
+        if (repaired) {
+          console.info(`[Repo] ANALYZE (${reason}): full pass, one-time exact-stats repair`)
         }
       }).catch(error => {
         console.warn(`[Repo] ANALYZE check failed (${reason}):`, error)
