@@ -11,7 +11,9 @@
  */
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
-import { BLOCKS_SYNCED_RAW_TABLE, blockToSyncedRowParams } from '@/data/blockSchema'
+import {
+  BLOCK_STORAGE_COLUMNS, BLOCKS_SYNCED_RAW_TABLE, blockToSyncedRowParams,
+} from '@/data/blockSchema'
 import {
   RECORD_STAGING_NEEDS_APPLY_SEEDED_SQL,
   STAGING_NEEDS_APPLY_SEEDED_MARKER_KEY,
@@ -49,6 +51,16 @@ const rewindToPreMigration = async () => {
 const deliver = (d: BlockData) =>
   sharedDb.db.execute(BLOCKS_SYNCED_RAW_TABLE.put.sql, blockToSyncedRowParams(d))
 
+/** A live `blocks` row built from the SAME fixture and the SAME column list the
+ *  seed's identity clause derives from, so "identical in every synced column" is
+ *  true by construction rather than by two hand-aligned literal lists — and a
+ *  thirteenth column cannot quietly break these tests. */
+const seedLocalFrom = (d: BlockData) =>
+  sharedDb.db.execute(
+    `INSERT INTO blocks (${BLOCK_STORAGE_COLUMNS.map(c => c.name).join(', ')})
+     VALUES (${BLOCK_STORAGE_COLUMNS.map(() => '?').join(', ')})`,
+    blockToSyncedRowParams(d))
+
 const seedLocal = (id: string, updatedAt: number, deleted = false) =>
   sharedDb.db.execute(
     `INSERT INTO blocks (id, workspace_id, parent_id, order_key, content, properties_json,
@@ -78,36 +90,58 @@ describe('ensureStagingNeedsApplyColumn', () => {
   })
 
   it('clears a row identical in every synced column, both stamps 0', async () => {
-    // The shape measured on a production graph: 1,126 rows whose twelve synced
-    // columns all match and whose stamps are 0 on BOTH sides. I1's `<> 0` guard
-    // rejects them — correctly, as a statement about what a stamp proves — and
-    // they are then flagged forever, refusing every one-way pass. Comparing the
-    // columns is not an inference from the stamp; it is the thing the stamp is
-    // used to infer.
-    await deliver(row({id: 'twins', updatedAt: 0, userUpdatedAt: 0, createdAt: 0}))
-    await sharedDb.db.execute(
-      `INSERT INTO blocks (id, workspace_id, parent_id, order_key, content, properties_json,
-         references_json, created_at, updated_at, user_updated_at, created_by, updated_by, deleted)
-       VALUES ('twins', ?, NULL, 'a0', 'v1', '{}', '[]', 0, 0, 0, 'u', 'u', 0)`, [WS])
+    // The shape measured on a production graph: rows whose synced columns all
+    // match and whose stamps are 0 on BOTH sides. I1's `<> 0` guard rejects
+    // them — correctly, as a claim about what a stamp proves — and they are then
+    // flagged with only the operator verb able to clear them. Comparing the
+    // columns proves directly what the stamp is used to infer.
+    const twin = row({id: 'twins', updatedAt: 0, userUpdatedAt: 0, createdAt: 0})
+    await deliver(twin)
+    await seedLocalFrom(twin)
 
     await ensureStagingNeedsApplyColumn(sharedDb.db)
 
     expect(await unapplied()).toEqual([])
   })
 
-  it('keeps the flag when ANY synced column differs', async () => {
-    // The clause CLEARS, so it has to be total over the synced columns. Content
-    // here, but the point is the derivation from BLOCK_STORAGE_COLUMNS: a
-    // hand-written list would clear a row that differs in whatever it forgot.
-    await deliver(row({id: 'not-twins', updatedAt: 0, userUpdatedAt: 0, createdAt: 0}))
-    await sharedDb.db.execute(
-      `INSERT INTO blocks (id, workspace_id, parent_id, order_key, content, properties_json,
-         references_json, created_at, updated_at, user_updated_at, created_by, updated_by, deleted)
-       VALUES ('not-twins', ?, NULL, 'a0', 'DIFFERENT', '{}', '[]', 0, 0, 0, 'u', 'u', 0)`, [WS])
+  // EVERY column, not one. The clause CLEARS a flag, so its safety rests
+  // entirely on being total over the synced columns — and a version comparing
+  // only `content` passes a single-column test just as happily. Reduced to one
+  // column, this loop fails eleven times.
+  //
+  // The STAGED side carries the perturbation: `blocks_synced` is a raw table
+  // with no trigger that parses its JSON, whereas the same value on `blocks`
+  // reaches `json_each` in the alias/type triggers and throws there instead of
+  // reaching the assertion — which on a shared DB takes the rest of the file
+  // with it.
+  const PERTURBABLE = BLOCK_STORAGE_COLUMNS.map(c => c.name).filter(name => name !== 'id')
+  it.each(PERTURBABLE)('keeps the flag when %s alone differs', async (column) => {
+    const twin = row({id: 'not-twins', updatedAt: 0, userUpdatedAt: 0, createdAt: 0})
+    await seedLocalFrom(twin)
+    const params = blockToSyncedRowParams(twin)
+    const at = BLOCK_STORAGE_COLUMNS.findIndex(c => c.name === column)
+    params[at] = typeof params[at] === 'number' ? (params[at] as number) + 7 : 'perturbed'
+    await sharedDb.db.execute(BLOCKS_SYNCED_RAW_TABLE.put.sql, params)
 
     await ensureStagingNeedsApplyColumn(sharedDb.db)
 
     expect(await unapplied()).toEqual(['not-twins'])
+  })
+
+  it('re-seeds a device that recorded the PREVIOUS marker version', async () => {
+    // The version bump is the whole reach of this rule: every device that
+    // matters already ran the old seed, so without it the wider arm is dead
+    // everywhere it was written for.
+    await sharedDb.db.execute(
+      "INSERT OR REPLACE INTO client_schema_state (key, completed_at) VALUES (?, 1)",
+      ['staging_needs_apply_seeded'])
+    const twin = row({id: 'twins', updatedAt: 0, userUpdatedAt: 0, createdAt: 0})
+    await deliver(twin)
+    await seedLocalFrom(twin)
+
+    await ensureStagingNeedsApplyColumn(sharedDb.db)
+
+    expect(await unapplied()).toEqual([])
   })
 
   it('leaves the flag SET for a local row that is strictly newer', async () => {
