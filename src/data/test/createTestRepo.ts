@@ -211,10 +211,14 @@ export const registerTestRepo = (db: CreateTestRepoOptions['db'], repo: Repo): v
  *  about to close under it. Unpinning aborts that wait; a pass whose idle timer
  *  has not fired yet then refuses at the access gate without touching the db.
  *
- *  Best-effort per Repo, reporting afterwards: unpinning runs projector
- *  disposers synchronously, and one that throws would otherwise leave every
- *  Repo after it in the loop pinned — the exact state this exists to prevent,
- *  reached while reporting that it failed. */
+ *  Deliberately unguarded. `pinWorkspace(null)` returns before the block that
+ *  throws, so the only way an unpin fails is a projector disposer throwing
+ *  during teardown — which nothing here does, and which would be a bug worth
+ *  crashing this teardown loudly. Catching it per Repo instead buys a partial
+ *  release on a run that is already red, and costs the two failure modes that
+ *  come with continuing: a caught unpin leaves the Repo RE-PINNED (the setter
+ *  rolls back and reschedules a pass), so draining it afterwards never
+ *  settles. Letting the throw propagate here makes both unreachable. */
 export const releaseTestRepos = async (db: CreateTestRepoOptions['db']): Promise<void> => {
   const entry = reposByDb.get(db)
   if (!entry) return
@@ -222,20 +226,6 @@ export const releaseTestRepos = async (db: CreateTestRepoOptions['db']): Promise
     .map(ref => ref.deref())
     .filter((repo): repo is Repo => repo !== undefined)
   entry.refs.clear()
-
-  const failures: unknown[] = []
-  for (const repo of live) {
-    try {
-      repo.setActiveWorkspaceId(null)
-    } catch (error) {
-      failures.push(error)
-    }
-  }
-  for (const settled of await Promise.allSettled(live.map(repo => repo.awaitSeedMaterialization()))) {
-    if (settled.status === 'rejected') failures.push(settled.reason)
-  }
-  if (failures.length === 1) throw failures[0]
-  if (failures.length > 1) {
-    throw new AggregateError(failures, `[releaseTestRepos] ${failures.length} Repos failed to release`)
-  }
+  for (const repo of live) repo.setActiveWorkspaceId(null)
+  await Promise.all(live.map(repo => repo.awaitSeedMaterialization()))
 }
