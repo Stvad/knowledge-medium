@@ -15,6 +15,7 @@ import type { Repo } from '@/data/repo'
 import type { AppEffect } from '@/extensions/core.js'
 import { onFirstSync, type SyncStatusDb } from '@/data/internals/firstSync.js'
 import { appVersion } from '@/appVersion.js'
+import { jsonPathForProperty } from '@/data/internals/typedBlockQuery.js'
 import { getClientId, getDeviceLabel } from '@/utils/clientId.js'
 import {
   awaitRecordingAllowed,
@@ -80,6 +81,14 @@ export const startupRecordProp = seedProperty<StartupRecordData | undefined>({
   changeScope: ChangeScope.Automation,
 })
 
+/** JSON path addressing the record property — stated beside the name it
+ *  addresses, so a rename cannot leave a reader pointing at nothing. */
+/** ~439 bytes each, so a far longer horizon costs little: about 1.3 years of
+ *  boots for ~880KB per client group. */
+export const STARTUP_RETAIN = 2000
+
+export const STARTUP_RECORD_PATH = jsonPathForProperty(startupRecordProp.name)
+
 /** The record blocks themselves. Typing the rows -- not just their container --
  *  is what lets them be found by typed query, audited and migrated instead of
  *  being inferred from tree position plus the presence of a property.
@@ -94,7 +103,8 @@ export const startupRecordType = seedType({
   id: 'startup-metrics-record',
   label: 'Startup metrics record',
   hideFromCompletion: true,
-  properties: [],
+  // See the interaction record: the payload belongs to the type's contract.
+  properties: [startupRecordProp],
 })
 
 /** Parent ui-state container; each boot adds one child under it. */
@@ -155,6 +165,8 @@ export const writeStartupRecord = async (repo: Repo, workspaceId: string): Promi
         containerType: startupMetricsUIStateType,
         recordType: startupRecordType,
         description: 'startup metrics record',
+        retain: STARTUP_RETAIN,
+        recordPath: STARTUP_RECORD_PATH,
         content: new Date(data.recordedAt).toISOString(),
         setProperty: async (tx, blockId) => {
           // `skipMetadata`: bookkeeping, not user intent — stamping

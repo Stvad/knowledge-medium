@@ -14,7 +14,12 @@
  */
 import { ChangeScope, type TypeContribution } from '@/data/api'
 import type { Repo } from '@/data/repo'
-import { getPluginUIStateBlock, getPluginUIStateChild } from '@/data/stateBlocks.js'
+import {
+  getPluginUIStateBlock,
+  getPluginUIStateChild,
+  pluginUIStateBlockId,
+  stateChildBlockId,
+} from '@/data/stateBlocks.js'
 import { keyAtStart } from '@/data/orderKey.js'
 import { getClientId, getDeviceLabel } from '@/utils/clientId.js'
 import { v4 as uuidv4 } from 'uuid'
@@ -36,9 +41,30 @@ export interface ClientRecordSpec {
    *  with a STRONGER rule must pass it, because the shared default cannot see
    *  it. The interaction recorder's attributability rule is exactly that case. */
   assertEligible?: (repo: Repo, workspaceId: string) => void
+  /** Records to keep in this client's group. Both recorders bound their own
+   *  series here rather than each rolling retention, which is how one of them
+   *  went unbounded for two months. */
+  retain: number
+  /** JSON path of the record property — retention only ever considers rows
+   *  CARRYING one, since these groups are inspectable and can hold a
+   *  hand-created child that must never be reachable by a cleanup pass. */
+  recordPath: string
   /** Writes the record property. Runs inside the create transaction. */
   setProperty: (tx: Parameters<Parameters<Repo['tx']>[0]>[0], blockId: string) => Promise<void>
 }
+
+/** This client's group id, DERIVED — no read, no create. The reader matches on
+ *  exactly this parent, so anything that has to agree with the reader about
+ *  where records live must use this rather than a remembered id. */
+export const clientGroupId = (
+  repo: Repo,
+  workspaceId: string,
+  containerType: TypeContribution,
+): string =>
+  stateChildBlockId(
+    pluginUIStateBlockId(workspaceId, repo.user.id, containerType.id),
+    getClientId(),
+  )
 
 /** This client's group under `containerType`, creating it if absent. */
 export const ensureClientGroup = async (
@@ -94,5 +120,39 @@ export const appendClientRecord = async (
     await repo.addTypeInTx(tx, blockId, spec.recordType.id, {})
     await spec.setProperty(tx, blockId)
   }, { scope: ChangeScope.Automation, description: spec.description })
+  await pruneGroup(repo, recordTx, spec, groupId, blockId)
   return { blockId, groupId }
+}
+
+/** Drop this client's own records past `retain`.
+ *
+ *  Only THIS client's group, so two devices can never fight over the same rows;
+ *  and only rows carrying a record, for both the offset and the deletion set —
+ *  counting a hand-created child toward the offset would eventually hand user
+ *  content to `tx.delete`. */
+const pruneGroup = async (
+  repo: Repo,
+  recordTx: Repo['tx'],
+  spec: ClientRecordSpec,
+  groupId: string,
+  keepId: string,
+): Promise<void> => {
+  const stale = await repo.db.getAll<{ id: string }>(
+    `SELECT id FROM blocks
+      WHERE parent_id = ? AND deleted = 0 AND id != ?
+        AND json_extract(properties_json, ?) IS NOT NULL
+      ORDER BY order_key
+      LIMIT -1 OFFSET ?`,
+    [groupId, keepId, spec.recordPath, spec.retain],
+  )
+  if (stale.length === 0) return
+  await recordTx(async (tx) => {
+    // Retention of a recorder's own rows in a hidden ui-state subtree: no user
+    // gesture and no user-visible block, so the deletion guards — which exist to
+    // protect user-authored content — have nothing to say here.
+    for (const row of stale) {
+      // eslint-disable-next-line no-restricted-syntax -- programmatic delete: telemetry retention
+      await tx.delete(row.id)
+    }
+  }, { scope: ChangeScope.Automation, description: spec.description })
 }

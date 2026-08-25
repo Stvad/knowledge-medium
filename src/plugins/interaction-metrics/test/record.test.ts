@@ -15,12 +15,12 @@ import {
   buildInteractionRecord,
   interactionMetricsUIStateType,
   interactionRecordProp,
-  RETAIN_RECORDS,
   interactionRecordType,
   queryNameFromHandleKey,
   writeInteractionSample,
 } from '../record'
 import { observeWorkspace, resetMetricsSession } from '../sessionContext'
+import { INTERACTION_RETAIN } from '../record'
 
 const WS = 'ws-1'
 const USER: User = { id: 'user-1', name: 'Alice' }
@@ -33,7 +33,6 @@ beforeAll(async () => { sharedDb = await createTestDb() })
 afterAll(async () => { await sharedDb.cleanup() })
 beforeEach(async () => {
   await resetTestDb(sharedDb.db)
-  resetMetricsSession()
   resetClientIdCache()
   repo = createTestRepo({
     db: sharedDb.db,
@@ -297,10 +296,10 @@ describe('writeInteractionSample', () => {
     // Enough telemetry rows to push anything after them past the retention
     // offset, then the hand-written block LAST so it is squarely in the range
     // an unfiltered pass would delete.
-    for (let i = 0; i <= RETAIN_RECORDS; i++) await insert(`rec-${i}`, `a${String(i).padStart(4, '0')}`, true)
+    for (let i = 0; i <= INTERACTION_RETAIN; i++) await insert(`rec-${i}`, `a${String(i).padStart(4, '0')}`, true)
     await insert('hand-written', 'z999', false)
 
-    resetMetricsSession()
+    resetMetricsSession(repo)
     await writeInteractionSample(repo, WS)
 
     const survivor = await sharedDb.db.getOptional<{ deleted: number }>(

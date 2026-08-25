@@ -16,21 +16,27 @@
 import type { Repo } from '@/data/repo'
 import { pluginUIStateBlockId, stateChildBlockId } from '@/data/stateBlocks.js'
 import { getClientId } from '@/utils/clientId.js'
-import { jsonPathForProperty } from '@/data/internals/typedBlockQuery.js'
-import { startupRecordProp } from '@/plugins/startup-metrics/record.js'
 
 /** Each series' JSON path comes from the module that owns its property, so a
  *  rename cannot leave the reader addressing a name nothing writes. */
 export { INTERACTION_RECORD_PATH } from '@/plugins/interaction-metrics/record.js'
-export const STARTUP_RECORD_PATH = jsonPathForProperty(startupRecordProp.name)
+export { STARTUP_RECORD_PATH } from '@/plugins/startup-metrics/record.js'
 
 const isTimingSample = (v: unknown): boolean =>
   typeof v === 'object' && v !== null &&
   typeof (v as { calls?: unknown }).calls === 'number' &&
   typeof (v as { p95Ms?: unknown }).p95Ms === 'number'
 
-/** The fields every reader of an interaction record dereferences, INCLUDING the
- *  nested query samples. A record whose `queries` is an object of nulls passes
+/**
+ * A validator must cover EVERY field a reader dereferences — the comparison and
+ * the trend table both — not just the ones a past bug named. These records are
+ * an opaque, deliberately hand-inspectable blob, so any field can arrive with
+ * the wrong type, and the consequence is never a bad number: it is a throw
+ * inside the analysis (dead for the rest of the session) or inside the dialog
+ * render. Adding a field to either reader means adding it here.
+ *
+ * The fields every reader of an interaction record dereferences, INCLUDING the
+ * nested query samples. A record whose `queries` is an object of nulls passes
  *  a shallow check and then throws inside the comparison or the trend table —
  *  taking out the analysis for the rest of the session, and the dialog render,
  *  rather than skipping one unreadable row. */
@@ -39,7 +45,9 @@ export const isUsableInteractionRecord = (r: {
   fanout?: unknown
   writes?: unknown
   blockCount?: unknown
+  appSha?: unknown
 }): boolean =>
+  isAbsentOrString(r.appSha) &&
   typeof r.writes === 'number' && typeof r.blockCount === 'number' &&
   typeof r.queries === 'object' && r.queries !== null &&
   Object.values(r.queries as Record<string, unknown>).every(isTimingSample) &&
@@ -51,6 +59,9 @@ export const isUsableInteractionRecord = (r: {
   )
 
 const isAbsentOrFinite = (v: unknown): boolean => v === undefined || Number.isFinite(v)
+/** The trend table calls `.slice` on it, so a number or object throws during
+ *  render and takes the whole dialog with it. */
+const isAbsentOrString = (v: unknown): boolean => v === undefined || typeof v === 'string'
 
 /** Marks stay OPTIONAL — a phase the session never reached is absent by design
  *  — but a mark that is PRESENT has to be a finite number. The comparison
@@ -61,7 +72,9 @@ export const isUsableStartupRecord = (r: {
   repoReadyMs?: unknown
   firstContentPaintMs?: unknown
   interactiveMs?: unknown
+  appSha?: unknown
 }): boolean =>
+  isAbsentOrString(r.appSha) &&
   typeof r.timeOriginMs === 'number' &&
   isAbsentOrFinite(r.repoReadyMs) &&
   isAbsentOrFinite(r.firstContentPaintMs) &&

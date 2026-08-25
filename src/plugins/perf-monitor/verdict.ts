@@ -88,7 +88,11 @@ export const summarize = (analysis: PerfAnalysis): PerfVerdict => {
 
   if (analysis.regressions.length > 0) {
     const worst = analysis.regressions[0]
-    if (growth) notes.unshift(growth)
+    // Growth is measured over the INTERACTION baseline, so it only contextualises
+    // interaction findings. Attached to a startup regression it would claim the
+    // graph grew relative to a baseline that regression never used.
+    const aboutInteraction = analysis.regressions.some((r) => !r.metric.startsWith('startup:'))
+    if (growth && aboutInteraction) notes.unshift(growth)
     return {
       kind: 'regressed',
       headline: `${worst.label} ${worst.ratio}× ${worsened(worst)}`,

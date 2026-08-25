@@ -20,7 +20,6 @@ import {
   metricsSessionContext,
   observeWorkspace,
   observeWorkspaceEffect,
-  resetMetricsSession,
 } from '../sessionContext'
 import { drainInteractionSamples, interactionMetricsEffect } from '../schedule'
 
@@ -35,7 +34,6 @@ beforeAll(async () => { sharedDb = await createTestDb() })
 afterAll(async () => { await sharedDb.cleanup() })
 beforeEach(async () => {
   await resetTestDb(sharedDb.db)
-  resetMetricsSession()
   repo = createTestRepo({
     db: sharedDb.db,
     user: USER,

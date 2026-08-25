@@ -17,7 +17,7 @@ import type { Repo } from '@/data/repo'
 import { jsonPathForProperty } from '@/data/internals/typedBlockQuery.js'
 import { appVersion } from '@/appVersion.js'
 import { getClientId, getDeviceLabel } from '@/utils/clientId.js'
-import { appendClientRecord } from './recordStore.js'
+import { appendClientRecord, clientGroupId } from './recordStore.js'
 import {
   assertStillAttributable,
   awaitRecordingAllowed,
@@ -136,12 +136,20 @@ export const interactionRecordType = seedType({
   id: 'interaction-metrics-record',
   label: 'Interaction metrics record',
   hideFromCompletion: true,
-  properties: [],
+  // The payload is part of the record's CONTRACT, not an ad hoc cell: declaring
+  // it means type-aware schema and property tooling sees a typed record with a
+  // field rather than a JSON blob it has no account of.
+  properties: [interactionRecordProp],
 })
 
 /** JSON path addressing the record property. The name carries a colon (the
  *  namespace separator), which must be QUOTED inside a path expression — stated
  *  once, here, beside the name it quotes. */
+/** ~4 page sessions/day on an active device at ~1.7KB each: about three months
+ *  of history for ~680KB per client group. The reader never looks past 40, so
+ *  this is purely how far back an investigation can reach. */
+export const INTERACTION_RETAIN = 400
+
 export const INTERACTION_RECORD_PATH = jsonPathForProperty(interactionRecordProp.name)
 
 /** Parent ui-state container; each session adds one child under its client's group. */
@@ -271,49 +279,20 @@ export const countLiveBlocks = async (repo: Repo, workspaceId: string): Promise<
   return row?.n ?? 0
 }
 
-const isLive = async (repo: Repo, blockId: string): Promise<boolean> => {
-  const row = await repo.db.getOptional<{ id: string }>(
-    'SELECT id FROM blocks WHERE id = ? AND deleted = 0',
+/** Live AND still where the reader looks. A record moved to another parent is
+ *  invisible to `loadRecords`, which matches on the derived client group — so
+ *  continuing to update it would write this session into a place nothing reads,
+ *  and the session would silently vanish from the trend. */
+const isUsableRecord = async (
+  repo: Repo,
+  blockId: string,
+  workspaceId: string,
+): Promise<boolean> => {
+  const row = await repo.db.getOptional<{ parent_id: string | null }>(
+    'SELECT parent_id FROM blocks WHERE id = ? AND deleted = 0',
     [blockId],
   )
-  return Boolean(row)
-}
-
-/** Records kept per client group. The reader never looks past this many, and
- *  nothing else prunes: a session-per-row series replicated to every device
- *  otherwise grows for the life of the graph. Only THIS client's own group is
- *  touched, so two devices can never fight over the same rows. */
-export const RETAIN_RECORDS = 60
-
-const pruneOwnGroup = async (
-  repo: Repo,
-  recordTx: typeof repo.tx,
-  groupId: string,
-  keepId: string,
-): Promise<void> => {
-  // Restricted to rows CARRYING a record, for both the offset and the deletion
-  // set. These blocks are deliberately inspectable, so the group can hold a
-  // hand-created child — and counting one toward the retention offset would
-  // eventually hand user-authored content to `tx.delete`. Telemetry retention
-  // must never be able to reach anything a person wrote.
-  const stale = await repo.db.getAll<{ id: string }>(
-    `SELECT id FROM blocks
-      WHERE parent_id = ? AND deleted = 0 AND id != ?
-        AND json_extract(properties_json, ?) IS NOT NULL
-      ORDER BY order_key
-      LIMIT -1 OFFSET ?`,
-    [groupId, keepId, INTERACTION_RECORD_PATH, RETAIN_RECORDS],
-  )
-  if (stale.length === 0) return
-  await recordTx(async (tx) => {
-    // Retention of this client's own telemetry rows in a hidden ui-state
-    // subtree: no user gesture, no user-visible block, so the deletion guards —
-    // which exist to protect user-authored content — have nothing to say here.
-    for (const row of stale) {
-      // eslint-disable-next-line no-restricted-syntax -- programmatic delete: telemetry retention
-      await tx.delete(row.id)
-    }
-  }, { scope: ChangeScope.Automation, description: 'interaction metrics record' })
+  return row?.parent_id === clientGroupId(repo, workspaceId, interactionMetricsUIStateType)
 }
 
 /**
@@ -341,7 +320,7 @@ export const writeInteractionSample = async (
   // recorder can commit during the await between them, which the snapshot would
   // then include and a stale count would fail to discount.
   const metrics = repo.metrics()
-  noteCounterTotal(metrics.db.writeTransaction?.calls ?? 0)
+  noteCounterTotal(repo, metrics.db.writeTransaction?.calls ?? 0)
   // Re-read AFTER the reset check, and take both facts from the same reading:
   // a reset clears the record this session owns, so a `recordId` captured
   // before it would keep updating a row describing counters that no longer
@@ -352,10 +331,10 @@ export const writeInteractionSample = async (
   // metrics tree. Writing a property to a tombstone does not restore it, so
   // without this the session would keep updating a row no reader can see.
   const existing =
-    current.recordId && (await isLive(repo, current.recordId))
-      ? { blockId: current.recordId, startedAt: pageRecordStartedAt(workspaceId)! }
+    current.recordId && (await isUsableRecord(repo, current.recordId, workspaceId))
+      ? { blockId: current.recordId, startedAt: pageRecordStartedAt(repo, workspaceId)! }
       : null
-  if (!existing) clearPageRecord()
+  if (!existing) clearPageRecord(repo)
 
   const startedAt = existing?.startedAt ?? Date.now() - performance.now()
   const data = buildInteractionRecord(metrics, {
@@ -387,11 +366,13 @@ export const writeInteractionSample = async (
         return existing.blockId
       }
 
-      const { blockId, groupId } = await appendClientRecord(repo, recordTx, {
+      const { blockId } = await appendClientRecord(repo, recordTx, {
         workspaceId,
         containerType: interactionMetricsUIStateType,
         recordType: interactionRecordType,
         description: 'interaction metrics record',
+        retain: INTERACTION_RETAIN,
+        recordPath: INTERACTION_RECORD_PATH,
         // STRONGER than the shared default: these counters are only meaningful
         // if they belong to one workspace, and a switch during the awaits above
         // invalidates them. The shared path cannot know that rule.
@@ -401,8 +382,7 @@ export const writeInteractionSample = async (
           await tx.setProperty(id, interactionRecordProp, data, { skipMetadata: true })
         },
       })
-      setPageRecord(workspaceId, blockId, startedAt)
-      await pruneOwnGroup(repo, recordTx, groupId, blockId)
+      setPageRecord(repo, workspaceId, blockId, startedAt)
       return blockId
     })
   } catch (err) {

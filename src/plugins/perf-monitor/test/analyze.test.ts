@@ -32,7 +32,6 @@ beforeAll(async () => { sharedDb = await createTestDb() })
 afterAll(async () => { await sharedDb.cleanup() })
 beforeEach(async () => {
   await resetTestDb(sharedDb.db)
-  resetMetricsSession()
   repo = createTestRepo({
     db: sharedDb.db,
     user: USER,
@@ -46,7 +45,7 @@ beforeEach(async () => {
 
 /** Each call stands in for a separate past page session. */
 const pastSession = async (over?: Partial<InteractionRecordData>): Promise<string> => {
-  resetMetricsSession()
+  resetMetricsSession(repo)
   const id = (await writeInteractionSample(repo, WS))!
   if (over) {
     const block = repo.block(id)
@@ -106,7 +105,7 @@ describe('runPerfAnalysis', () => {
 
   it('reports a fan-out regression on an attributable session', async () => {
     await seedFiringHistory()
-    resetMetricsSession()
+    resetMetricsSession(repo)
     await writeInteractionSample(repo, WS)
     const analysis = await runPerfAnalysis(repo, WS, 1000)
     expect(analysis.interactionComparable).toBe(true)
@@ -115,7 +114,7 @@ describe('runPerfAnalysis', () => {
 
   it('does not compare interaction counters once the session is unattributable', async () => {
     await seedFiringHistory()
-    resetMetricsSession()
+    resetMetricsSession(repo)
     await writeInteractionSample(repo, WS)
     await writeInteractionSample(repo, OTHER_WS) // blends the counters
 
@@ -131,12 +130,12 @@ describe('runPerfAnalysis', () => {
     await pastSession()
     await pastSession()
     // A third session that HAS written its record: it is history for nothing.
-    resetMetricsSession()
+    resetMetricsSession(repo)
     await writeInteractionSample(repo, WS)
     expect((await runPerfAnalysis(repo, WS, 1000)).baseline.interaction).toBe(2)
 
     // A fresh session that has NOT yet written one: all three are history.
-    resetMetricsSession()
+    resetMetricsSession(repo)
     expect((await runPerfAnalysis(repo, WS, 1000)).baseline.interaction).toBe(3)
   })
 

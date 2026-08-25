@@ -43,21 +43,40 @@ export interface SessionRepoFacts {
   isReadOnly: boolean
 }
 
-interface PageRecord {
-  blockId: string
-  workspaceId: string
-  startedAt: number
+/**
+ * Facts are held PER REPO, not in globals with a rebind.
+ *
+ * A local sign-out swaps the Repo without a reload, and an old recorder can
+ * still be awaiting or writing when it does. With one global slot, that stale
+ * callback rebinds the facts back to the Repo it belongs to and clears the new
+ * one's — losing a multi-workspace refusal or the record the new session owns.
+ * Keyed by Repo, a stale callback simply reads its own (correct) facts and
+ * cannot touch anyone else's, and a discarded Repo's entry is collected with
+ * it.
+ */
+interface SessionFacts {
+  seenWorkspace: string | null
+  unattributable: boolean
+  ownWrites: number
+  /** Highest `writeTransaction.calls` observed. A DROP means the counters were
+   *  zeroed under us (`repo.resetMetrics()` is a supported hook), which the
+   *  own-write count is a subtrahend of. Compared against the watermark rather
+   *  than against `ownWrites`: user writes can carry the total back up past
+   *  `ownWrites`, and a reset is undetectable when `ownWrites` is zero. */
+  writeWatermark: number
+  pageRecord: { blockId: string; workspaceId: string; startedAt: number } | null
 }
 
-/** The Repo these facts describe. A local sign-out swaps the Repo without a
- *  reload, and the new one's counters start from zero — so state carried over
- *  from the previous instance would describe writes that no longer exist, and a
- *  different workspace would latch `unattributable` for good. */
-let boundRepo: object | null = null
-let seenWorkspace: string | null = null
-let unattributable = false
-let ownWrites = 0
-let pageRecord: PageRecord | null = null
+const facts = new WeakMap<object, SessionFacts>()
+
+const factsFor = (repo: object): SessionFacts => {
+  let f = facts.get(repo)
+  if (!f) {
+    f = { seenWorkspace: null, unattributable: false, ownWrites: 0, writeWatermark: 0, pageRecord: null }
+    facts.set(repo, f)
+  }
+  return f
+}
 
 /**
  * Note that `workspaceId` is now active in this page session.
@@ -69,22 +88,10 @@ let pageRecord: PageRecord | null = null
  * are independent toggles, so neither can be relied on to be the one watching.
  * Idempotent, so all of them calling is correct rather than merely harmless.
  */
-/** Drop everything if this is a different Repo than the facts describe. */
-const rebindIfNewRepo = (repo: object): void => {
-  if (boundRepo === repo) return
-  boundRepo = repo
-  seenWorkspace = null
-  unattributable = false
-  ownWrites = 0
-  pageRecord = null
-}
-
 export const observeWorkspace = (repo: object, workspaceId: string): void => {
-  // Rebinds too, so an observation is never discarded by a later read doing the
-  // rebind for the first time.
-  rebindIfNewRepo(repo)
-  if (seenWorkspace === null) seenWorkspace = workspaceId
-  else if (seenWorkspace !== workspaceId) unattributable = true
+  const f = factsFor(repo)
+  if (f.seenWorkspace === null) f.seenWorkspace = workspaceId
+  else if (f.seenWorkspace !== workspaceId) f.unattributable = true
 }
 
 /**
@@ -95,8 +102,7 @@ export const observeWorkspace = (repo: object, workspaceId: string): void => {
  * observation lived only in their effects, enabling one mid-session would start
  * the history at whatever workspace happened to be active, silently attributing
  * work done in an earlier one to it. This effect is registered in the
- * composition root outside either toggle, so the counters cannot outrun what
- * has been observed.
+ * composition root outside either toggle.
  */
 export const observeWorkspaceEffect: AppEffect = {
   id: 'metrics.observe-workspace',
@@ -109,50 +115,47 @@ export const observeWorkspaceEffectContribution = appEffectsFacet.of(observeWork
   source: 'interaction-metrics',
 })
 
-/** Record transactions a recorder issued itself.
- *
- *  Counted as a DELTA measured around the write rather than incremented per
- *  `repo.tx` call, because the recorders do not issue all their own
- *  transactions: `getPluginUIStateBlock` / `getPluginUIStateChild` each commit
- *  one on first use, and those land in the same lifetime counter. Both
- *  recorders must report, since the count they feed is the denominator of the
- *  other's fan-out ratio. */
-/** Re-base when the Repo's counters have been zeroed under us.
- *
- *  `repo.resetMetrics()` is a supported hook for measuring a discrete
- *  operation, and it resets the totals `ownWrites` is a subtrahend of. Left
- *  alone, the next sample subtracts pre-reset telemetry writes from post-reset
- *  counters — usually clamping `writes` to zero — and then overwrites this
- *  session's row with counters describing only part of it. A reset starts a new
- *  accounting epoch AND a new record, since the old row describes a span the
- *  counters no longer cover. */
-export const noteCounterTotal = (totalWrites: number): void => {
-  if (totalWrites >= ownWrites) return
-  ownWrites = 0
-  pageRecord = null
+/** Re-base when the Repo's counters have been zeroed under us — see
+ *  `writeWatermark`. A reset starts a new accounting epoch AND a new record,
+ *  since the old row describes a span the counters no longer cover. */
+export const noteCounterTotal = (repo: object, totalWrites: number): void => {
+  const f = factsFor(repo)
+  if (totalWrites < f.writeWatermark) {
+    f.ownWrites = 0
+    f.pageRecord = null
+  }
+  f.writeWatermark = totalWrites
 }
 
-const noteOwnWrites = (count: number): void => {
-  if (count > 0) ownWrites += count
+const noteOwnWrites = (repo: object, count: number): void => {
+  if (count <= 0) return
+  const f = factsFor(repo)
+  f.ownWrites += count
+  // The watermark advances with our own writes too. Sampled only at the START
+  // of a sample it would lag by everything that sample then wrote, and a reset
+  // landing between two samples would fall inside that lag — invisible.
+  f.writeWatermark += count
 }
 
 /** Remember the record block this page session owns. */
-export const setPageRecord = (workspaceId: string, blockId: string, startedAt: number): void => {
-  pageRecord = { workspaceId, blockId, startedAt }
-}
+export const setPageRecord = (
+  repo: object, workspaceId: string, blockId: string, startedAt: number,
+): void => { factsFor(repo).pageRecord = { blockId, workspaceId, startedAt } }
 
 /** Forget it — the block was deleted underneath us, so a replacement is due. */
-export const clearPageRecord = (): void => { pageRecord = null }
+export const clearPageRecord = (repo: object): void => { factsFor(repo).pageRecord = null }
 
 /** Start of the page session that owns `workspaceId`'s record, if any. */
-export const pageRecordStartedAt = (workspaceId: string): number | null =>
-  pageRecord?.workspaceId === workspaceId ? pageRecord.startedAt : null
+export const pageRecordStartedAt = (repo: object, workspaceId: string): number | null => {
+  const r = factsFor(repo).pageRecord
+  return r?.workspaceId === workspaceId ? r.startedAt : null
+}
 
 export const metricsSessionContext = (
   repo: SessionRepoFacts,
   workspaceId: string,
 ): MetricsSessionContext => {
-  rebindIfNewRepo(repo)
+  const f = factsFor(repo)
   // Order matters only for which blocker is REPORTED; both are disqualifying.
   //
   // Without a persistent client id, per-client history is written where the
@@ -172,19 +175,15 @@ export const metricsSessionContext = (
     // has observed would let a caller that never registered the workspace claim
     // the counters anyway — the permissive direction on a rule whose whole job
     // is to refuse.
-    attributable: !unattributable && seenWorkspace === workspaceId,
-    ownWrites,
-    recordId: pageRecord?.workspaceId === workspaceId ? pageRecord.blockId : null,
+    attributable: !f.unattributable && f.seenWorkspace === workspaceId,
+    ownWrites: f.ownWrites,
+    recordId: f.pageRecord?.workspaceId === workspaceId ? f.pageRecord.blockId : null,
   }
 }
 
-/** Test helper — forget this process's session. */
-export const resetMetricsSession = (): void => {
-  boundRepo = null
-  seenWorkspace = null
-  unattributable = false
-  ownWrites = 0
-  pageRecord = null
+/** Test helper — forget one Repo's session facts. */
+export const resetMetricsSession = (repo: object): void => {
+  facts.delete(repo)
 }
 
 /** How long to wait for the membership row before giving up on this attempt.
@@ -263,11 +262,9 @@ export const countingOwnWrites = async <T>(
   try {
     return await body(recordTx)
   } finally {
-    // Only if these facts still describe the Repo the writes happened in. A
-    // local sign-out can swap the Repo while `body` awaits, and crediting the
-    // old instance's transactions to counters that restarted at zero would
-    // subtract writes that never occurred there.
-    if (boundRepo === repo) noteOwnWrites(issued)
+    // Credited to the Repo the writes actually happened in, which a stale
+    // callback finishing after a sign-out still names correctly.
+    noteOwnWrites(repo, issued)
   }
 }
 

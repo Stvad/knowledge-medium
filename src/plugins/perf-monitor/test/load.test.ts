@@ -38,7 +38,6 @@ beforeAll(async () => { sharedDb = await createTestDb() })
 afterAll(async () => { await sharedDb.cleanup() })
 beforeEach(async () => {
   await resetTestDb(sharedDb.db)
-  resetMetricsSession()
   repo = createTestRepo({
     db: sharedDb.db,
     user: USER,
@@ -132,7 +131,7 @@ describe('loadRecords', () => {
 
   it('returns newest first', async () => {
     await writeInteractionSample(repo, WS)
-    resetMetricsSession() // simulate a second page session
+    resetMetricsSession(repo) // simulate a second page session
     await writeInteractionSample(repo, WS)
     const records = await loadRecords<InteractionRecordData>(
       repo, WS, interactionMetricsUIStateType.id, PATH, isUsableInteractionRecord)
