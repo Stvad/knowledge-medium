@@ -10,7 +10,9 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { createTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
-import { sameTxProcessorsFacet } from '@/data/facets.js'
+import { localSchemaFacet, sameTxProcessorsFacet } from '@/data/facets.js'
+import { resolveAnalyzeArmingProbes } from '@/data/localSchema.js'
+import { referencesLocalSchema } from '@/plugins/references/localSchema.js'
 import { actionsFacet, appMountsFacet } from '@/extensions/core.js'
 import { staticAppExtensions } from '@/extensions/staticAppExtensions.js'
 import { resolveAppRuntimeSync } from '@/facets/resolveAppRuntime.js'
@@ -58,6 +60,24 @@ describe('app boot composition', () => {
     expect(order).toContain(RENAME_BACKLINKS_PROCESSOR)
     expect(order.indexOf(ALIAS_SYNC_PROCESSOR))
       .toBeLessThan(order.indexOf(RENAME_BACKLINKS_PROCESSOR))
+  })
+
+  // `roam-import` reads the ANALYZE arming probes off `repo.facetRuntime` at
+  // action-handler time, and by then AppRuntimeProvider has REPLACED the
+  // data-only runtime installed at repo construction with this one. If the app
+  // runtime stopped carrying `localSchemaFacet` the read would come back empty
+  // and the import would silently fall back to the core probes — leaving
+  // `block_references` unarmed on the one pass that grows it most. There is no
+  // error in that failure, so it is pinned here rather than left to the read.
+  // The `repo.facetRuntime` docstring names this same contract.
+  it('carries the local-schema contributions, so non-React facet reads see them', () => {
+    const { repo } = createTestRepo({ db: shared.db })
+    const runtime = resolveAppRuntimeSync(staticAppExtensions({ repo }), {
+      overrides: new Map(), safeMode: false,
+    })
+    expect(resolveAnalyzeArmingProbes(runtime.read(localSchemaFacet)))
+      .toEqual(expect.arrayContaining(referencesLocalSchema.analyzeProbes ?? []))
+    expect(referencesLocalSchema.analyzeProbes ?? []).not.toHaveLength(0)
   })
 
   it('still composes in safe mode (degraded-boot path)', () => {
