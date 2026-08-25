@@ -1407,6 +1407,25 @@ describe('runAnalyzeNow', () => {
   })
 
 
+  it('leaves the marker absent when a table it needed could not be analyzed', async () => {
+    // The tolerated case is a table that is ABSENT. A table that exists and
+    // FAILS is not tolerable: marking anyway strands it on sampled statistics
+    // permanently, while the caller logs that the repair completed.
+    h.insertBlock({id: 'b-repair-fail'})
+    h.db.exec(`DELETE FROM client_schema_state WHERE key = '${UNBOUNDED_ANALYZE_MARKER_KEY}'`)
+    const {db} = buildRecordingDb({failOn: /^ANALYZE blocks$/})
+
+    expect(await runSampledStatsRepair(db)).toBe(false)
+    expect(
+      h.db.prepare(
+        `SELECT 1 FROM client_schema_state WHERE key = '${UNBOUNDED_ANALYZE_MARKER_KEY}'`,
+      ).get(),
+    ).toBeUndefined()
+
+    // ...and the next boot still owes it.
+    expect(await runSampledStatsRepair(buildRecordingDb().db)).toBe(true)
+  })
+
   it('claims the one-shot marker, so the repair does not redo its work', async () => {
     // The manual pass is a whole-file unbounded ANALYZE — a superset of the
     // scoped repair. Without this a user who rebuilds stats by hand still pays

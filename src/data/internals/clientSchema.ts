@@ -1758,18 +1758,36 @@ export const runSampledStatsRepair = async (
 ): Promise<boolean> => serializeAnalyze(async () => {
   const done = await db.getOptional<{1: number}>(SELECT_UNBOUNDED_ANALYZE_DONE_SQL)
   if (done !== null) return false
+  let repairedEveryTable = true
   for (const table of ANALYZE_REPAIR_TABLES) {
-    // Per table, and tolerant: `block_references` is plugin-contributed, so a
-    // disabled plugin must cost the repair that table, not the whole pass.
+    // ABSENT is the one tolerable outcome — `block_references` is
+    // plugin-contributed — and it is tested for explicitly rather than inferred
+    // from a caught error. Everything else (a corrupt index, a read-only or
+    // full disk, a worker that died mid-pass) leaves that table on sampled
+    // statistics, and marking anyway would strand it there for good while
+    // logging that the repair completed.
+    if (!(await tableExists(db, table))) continue
     try {
       await analyzeUnbounded(db, `ANALYZE ${table}`)
     } catch (error) {
-      console.warn(`[clientSchema] exact-stats repair skipped ${table}`, error)
+      console.warn(`[clientSchema] exact-stats repair failed for ${table}`, error)
+      repairedEveryTable = false
     }
   }
+  // No marker means the next boot tries again — this is a derivation pass over
+  // local state, so a redundant re-run is a scan, and a missed one is permanent.
+  if (!repairedEveryTable) return false
   await db.execute(RECORD_UNBOUNDED_ANALYZE_DONE_SQL)
   return true
 })
+
+/** Param-free on purpose, matching every other statement here: the shims
+ *  callers pass declare a params-less shape, so a bound `?` would silently bind
+ *  NULL. The names come from {@link ANALYZE_REPAIR_TABLES}, not from input. */
+const tableExists = async (db: ClientSchemaBootstrapDb, table: string): Promise<boolean> =>
+  (await db.getOptional(
+    `SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = '${table}'`,
+  )) !== null
 
 /** Unconditional `ANALYZE` for the manual command-palette command.
  *
