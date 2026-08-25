@@ -1345,6 +1345,42 @@ describe('runAnalyzeIfStale — arming (stale-stats axis)', () => {
     expect(avgPerWorkspace).toBe(2500)
   })
 
+  it('clears an inherited limit for the one-shot repair too, then marks it', async () => {
+    // The repair runs its own ANALYZE, so it needs its own reset — and the
+    // window it defends is AFTER the optimize's reset, which is why this sets
+    // the limit from inside the optimize statement rather than up front. With
+    // only the optimize's reset, the repair analyzes at 400 and the marker
+    // records a sampled pass as the exact repair, permanently.
+    db.exec(`DELETE FROM client_schema_state WHERE key = '${UNBOUNDED_ANALYZE_MARKER_KEY}'`)
+    const base = adapter()
+    const db2 = {
+      ...base,
+      execute: async (sql: string) => {
+        const result = await base.execute(sql)
+        if (sql.trim() === ANALYZE_OPTIMIZE_SQL) db.exec('PRAGMA analysis_limit=400')
+        return result
+      },
+    }
+
+    const result = await runAnalyzeIfStale(db2)
+    expect(result.repaired).toBe(true)
+    const [, avgPerWorkspace] = statRows(db, 'blocks')['idx_blocks_workspace_active']
+      .split(' ').map(Number)
+    expect(avgPerWorkspace).toBe(2500)
+  })
+
+  it('the manual command is unbounded even on a connection left sampling', async () => {
+    // The escape hatch exists for stats that are present and schema-current but
+    // wrong. A limit inherited from an older tab would hand the user who reached
+    // for the button the same approximation they are trying to escape.
+    db.exec('PRAGMA analysis_limit=400')
+
+    await runAnalyzeNow(adapter())
+    const [, avgPerWorkspace] = statRows(db, 'blocks')['idx_blocks_workspace_active']
+      .split(' ').map(Number)
+    expect(avgPerWorkspace).toBe(2500)
+  })
+
   it('does not repair them without the probes — the arming is load-bearing', async () => {
     // Same DB, same PRAGMAs, only the arming omitted. `PRAGMA optimize` skips a
     // table this connection never planned a query against, so it walks away
