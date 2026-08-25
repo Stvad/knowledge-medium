@@ -6,6 +6,7 @@ import { BlockCache } from '@/data/blockCache'
 import { Repo } from '@/data/repo'
 import { definitionSeedsFacet } from '@/data/facets'
 import { createTestDb, type TestDb } from '@/data/test/createTestDb'
+import { registerTestRepo } from '@/data/test/createTestRepo'
 import { getPluginPrefsBlock } from '@/data/stateBlocks'
 import {
   currentLoadTimeProp,
@@ -37,6 +38,7 @@ const makeRepo = (h: TestDb): Repo => {
     [previousLoadTimeProp, currentLoadTimeProp],
   )
   repo.setActiveWorkspaceId(WS)
+  registerTestRepo(h.db, repo)
   return repo
 }
 

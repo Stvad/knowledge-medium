@@ -9,6 +9,7 @@ import { kernelPageBlockId } from '@/data/kernelPage'
 import { hasBlockType } from '@/data/properties'
 import { Repo } from '@/data/repo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
+import { registerTestRepo } from '@/data/test/createTestRepo'
 import { isBlockRefId, parseBlockRefs } from '@/plugins/references/referenceParser'
 import { computeContentHash } from '@/sync/crypto/contentHash.js'
 import { deriveContentKey } from '@/sync/crypto/contentKey.js'
@@ -61,6 +62,7 @@ const setup = async (): Promise<Harness> => {
     ]),
   )
   repo.setActiveWorkspaceId(WS)
+  registerTestRepo(sharedDb.db, repo)
   // A normal block to embed the !((id)) under.
   let parentId = ''
   await repo.tx(

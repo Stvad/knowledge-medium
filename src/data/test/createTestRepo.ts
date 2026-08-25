@@ -17,10 +17,13 @@
  * tests, pass `startSyncObserver: true` and stop it in your own cleanup.
  *
  * Repos built here are registered against their db so `createTestDb`'s cleanup
- * releases them before closing it (see `releaseTestRepos`). That covers the
- * database going away underneath a parked pass; it does NOT make a Repo safe to
- * abandon mid-file. A file whose tests insert `workspace_members` rows must
- * release each test's Repo itself — see `definitionSeeds.test.ts`.
+ * releases them before closing it (see `releaseTestRepos`). A harness that
+ * builds its Repo by hand must call `registerTestRepo` to get the same cover —
+ * an unregistered pinned Repo is invisible to the release. Either way this
+ * covers only the database going away underneath a parked pass; it does NOT
+ * make a Repo safe to abandon mid-file. A file whose tests insert
+ * `workspace_members` rows must release each test's Repo itself — see
+ * `definitionSeeds.test.ts`.
  *
  * CAVEAT — last-write-wins observer tests: the default `now` is a deterministic
  * counter starting at 1.7e12, NOT `Date.now`. A sync-observer test whose
@@ -173,14 +176,31 @@ export const createTestRepo = (opts: CreateTestRepoOptions): TestRepo => {
  *  happens to select exactly the right ones — a Repo with a parked pass is kept
  *  alive by the subscription that pass holds on the db, and one that has been
  *  collected had nothing left to release. */
-const reposByDb = new WeakMap<CreateTestRepoOptions['db'], Set<WeakRef<Repo>>>()
+const reposByDb = new WeakMap<CreateTestRepoOptions['db'], RepoRefs>()
+
+interface RepoRefs {
+  refs: Set<WeakRef<Repo>>
+  /** Size at which to drop cleared refs — see `registerTestRepo`. */
+  sweepAt: number
+}
+
+const SWEEP_FLOOR = 64
 
 /** Track a Repo built by hand (`new Repo(...)`) rather than by `createTestRepo`,
- *  so `releaseTestRepos` covers it too. */
+ *  so `releaseTestRepos` covers it too. A pinned Repo that never registers is
+ *  invisible to the release, and its db closes under the pass it parked.
+ *
+ *  Collection clears a `WeakRef` but leaves its Set entry, so the set alone
+ *  would still grow with the iteration count of a deep fuzz run. Sweep the
+ *  cleared ones on a doubling watermark: amortized O(1) per registration. */
 export const registerTestRepo = (db: CreateTestRepoOptions['db'], repo: Repo): void => {
-  const existing = reposByDb.get(db)
-  if (existing) existing.add(new WeakRef(repo))
-  else reposByDb.set(db, new Set([new WeakRef(repo)]))
+  const entry = reposByDb.get(db) ?? {refs: new Set<WeakRef<Repo>>(), sweepAt: SWEEP_FLOOR}
+  if (entry.refs.size >= entry.sweepAt) {
+    for (const ref of entry.refs) if (ref.deref() === undefined) entry.refs.delete(ref)
+    entry.sweepAt = Math.max(SWEEP_FLOOR, entry.refs.size * 2)
+  }
+  entry.refs.add(new WeakRef(repo))
+  reposByDb.set(db, entry)
 }
 
 /** Unpin every Repo built over `db` and let its deferred work settle.
@@ -191,10 +211,12 @@ export const registerTestRepo = (db: CreateTestRepoOptions['db'], repo: Repo): v
  *  about to close under it. Unpinning aborts that wait; a pass whose idle timer
  *  has not fired yet then refuses at the access gate without touching the db. */
 export const releaseTestRepos = async (db: CreateTestRepoOptions['db']): Promise<void> => {
-  const refs = reposByDb.get(db)
-  if (!refs) return
-  const live = [...refs].map(ref => ref.deref()).filter((repo): repo is Repo => repo !== undefined)
+  const entry = reposByDb.get(db)
+  if (!entry) return
+  const live = [...entry.refs]
+    .map(ref => ref.deref())
+    .filter((repo): repo is Repo => repo !== undefined)
+  entry.refs.clear()
   for (const repo of live) repo.setActiveWorkspaceId(null)
   await Promise.all(live.map(repo => repo.awaitSeedMaterialization()))
-  refs.clear()
 }

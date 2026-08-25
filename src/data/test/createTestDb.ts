@@ -296,10 +296,18 @@ export const createTestDb = async (): Promise<TestDb> => {
     cleanup: async () => {
       // Before closing: a Repo still pinned to a workspace has a parked seed
       // pass subscribed to this database, which logs a failure when the db
-      // shuts down under it.
-      await releaseTestRepos(db)
-      await db.close()
-      rmSync(dbDir, {recursive: true, force: true})
+      // shuts down under it. Nested finally so a release that throws (a
+      // projector disposer runs synchronously inside the unpin) still surfaces
+      // without also leaking the database handle and its tmpdir.
+      try {
+        await releaseTestRepos(db)
+      } finally {
+        try {
+          await db.close()
+        } finally {
+          rmSync(dbDir, {recursive: true, force: true})
+        }
+      }
     },
   }
 }

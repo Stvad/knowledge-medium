@@ -27,6 +27,7 @@ import { resolveFacetRuntimeSync } from '@/facets/facet'
 import { kernelDataExtension } from '@/data/kernelDataExtension'
 import { Repo } from '@/data/repo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
+import { registerTestRepo } from '@/data/test/createTestRepo'
 import {
   ASSETS_TYPE_CONTRIBUTION,
   MEDIA_PROPERTY_SCHEMAS,
@@ -56,6 +57,7 @@ const buildRepo = (userId: string = USER): Repo => {
     ]),
   )
   r.setActiveWorkspaceId(WS)
+  registerTestRepo(sharedDb.db, r)
   return r
 }
 

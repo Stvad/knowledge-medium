@@ -13,6 +13,7 @@ import {
 } from '@/data/api'
 import { BlockCache } from '@/data/blockCache'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
+import { registerTestRepo } from '@/data/test/createTestRepo'
 import {
   definitionSeedsFacet,
   projectedPropertyDefinitionsFacet,
@@ -64,6 +65,7 @@ beforeEach(async () => {
     // Start empty so setFacetRuntime is the only registration path.
     installKernelRuntime: false,
   })
+  registerTestRepo(h.db, repo)
 })
 
 afterEach(() => { repo.stopSyncObserver() })

@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { createTestDb, type TestDb } from './createTestDb'
 import { createTestRepo } from './createTestRepo'
 import { BLOCKS_TABLE_COLUMN_NAMES } from '@/data/blockSchema'
@@ -111,6 +111,20 @@ describe('createTestDb harness', () => {
     expect((repo as unknown as {
       pendingSeedMaterializationWorkspaces: Set<string>
     }).pendingSeedMaterializationWorkspaces.size).toBe(0)
+  }, 30_000)
+
+  it('cleanup closes the db even when releasing a Repo throws', async () => {
+    // Unpinning runs projector disposers synchronously, so a release CAN throw.
+    // The failure must still surface — but not by stranding an open database
+    // and its tmpdir for the rest of the run.
+    const own = await createTestDb()
+    const {repo} = createTestRepo({db: own.db})
+    vi.spyOn(repo, 'setActiveWorkspaceId').mockImplementation(() => {
+      throw new Error('disposer blew up')
+    })
+
+    await expect(own.cleanup()).rejects.toThrow('disposer blew up')
+    await expect(own.db.execute('SELECT 1')).rejects.toThrow()
   }, 30_000)
 
   it('writeTransaction commits on success, rolls back on throw', async () => {
