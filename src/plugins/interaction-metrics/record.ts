@@ -171,22 +171,16 @@ const toTimingSample = (t: {
 })
 
 /**
- * Recover the query name from a HandleStore key.
+ * Recover the query name from a HandleStore key
+ * (`query:<name>@<registryEpoch>` plus `:<serialized args>` when the query
+ * takes them; the serialization always starts with `[`).
  *
- * A query handle is keyed `query:<name>@<registryEpoch>` plus, when the query
- * takes arguments, `:<serialized args>` — and the serialization always starts
- * with `[`, so the first `:[` in a key is its args boundary.
- *
- * The args split is a PRIVACY boundary, not a cosmetic one: args carry block
- * ids and raw search text (quick-find keys on the typed query), and this record
- * is a synced block that a human or agent may paste into an issue. It fails
- * SAFE — any name that did contain `:[` would truncate EARLIER, never later, so
- * no argument content can survive it whatever the name looks like, and neither
- * of the two cosmetic trims below can lengthen the result.
- *
- * The epoch has to go for a different reason: a registry swap bumps it, so
- * leaving it in would file the same query under a new name mid-session and
- * silently break the grouping a trend depends on.
+ * The args split is a PRIVACY boundary: args carry block ids and raw search
+ * text, and this record is a synced block someone may paste into an issue. It
+ * fails SAFE — a name containing `:[` truncates EARLIER, never later, and
+ * neither cosmetic trim can lengthen the result. The epoch has to go for a
+ * different reason: a registry swap bumps it, which would file the same query
+ * under a new name mid-session and break the grouping a trend depends on.
  */
 export const queryNameFromHandleKey = (key: string): string =>
   key.split(':[')[0].replace(/^query:/, '').replace(/@\d+$/, '')
@@ -198,12 +192,10 @@ export const interactionComparable = (
   metrics: ReturnType<Repo['metrics']>,
   /** Transactions the recorder issued itself, discounted from `writes`.
    *
-   *  A monitor must not measure its own bookkeeping. `writes` is the
-   *  DENOMINATOR of the fan-out ratio, so counting the recorder's own
-   *  transactions deflates it — the direction that hides regressions rather
-   *  than inventing them. The numerator needs no matching correction: nothing
-   *  subscribes to the hidden ui-state blocks these writes touch, so they
-   *  invalidate no handles. */
+   *  `writes` is the DENOMINATOR of the fan-out ratio, so counting our own
+   *  bookkeeping deflates it — the direction that hides regressions. The
+   *  numerator needs no matching correction: nothing subscribes to the hidden
+   *  ui-state blocks these writes touch, so they invalidate no handles. */
   ownWrites = 0,
 ): InteractionComparable => {
   const queries: Record<string, TimingSample> = {}
@@ -291,14 +283,29 @@ const isLive = async (repo: Repo, blockId: string): Promise<boolean> => {
   return Boolean(row)
 }
 
-/** Everything the recorders' own transactions must be measured around — see
- *  `noteOwnWrites`. Returns whatever `body` returns. */
-const countingOwnWrites = async <T>(repo: Repo, body: () => Promise<T>): Promise<T> => {
-  const before = repo.metrics().db.writeTransaction.calls
+/** Run `body`, counting the recorder's own transactions.
+ *
+ *  Counted per transaction WE issue, not as a delta on the global counter
+ *  across our awaits: a user write landing in that window would be attributed
+ *  to us and then subtracted from `writes`, shrinking the fan-out denominator
+ *  and inventing regressions. The `getPluginUIState*` calls commit their own
+ *  transactions on first use and are deliberately NOT counted — they cannot be
+ *  told apart from a concurrent user write, and under-counting only shrinks the
+ *  reported ratio, which suppresses a finding rather than fabricating one.
+ */
+const countingOwnWrites = async <T>(
+  repo: Repo,
+  body: (recordTx: typeof repo.tx) => Promise<T>,
+): Promise<T> => {
+  let issued = 0
+  const recordTx: typeof repo.tx = async (fn, opts) => {
+    issued++
+    return repo.tx(fn, opts)
+  }
   try {
-    return await body()
+    return await body(recordTx)
   } finally {
-    noteOwnWrites(repo.metrics().db.writeTransaction.calls - before)
+    noteOwnWrites(issued)
   }
 }
 
@@ -308,7 +315,12 @@ const countingOwnWrites = async <T>(repo: Repo, body: () => Promise<T>): Promise
  *  touched, so two devices can never fight over the same rows. */
 const RETAIN_RECORDS = 60
 
-const pruneOwnGroup = async (repo: Repo, groupId: string, keepId: string): Promise<void> => {
+const pruneOwnGroup = async (
+  repo: Repo,
+  recordTx: typeof repo.tx,
+  groupId: string,
+  keepId: string,
+): Promise<void> => {
   const stale = await repo.db.getAll<{ id: string }>(
     `SELECT id FROM blocks
       WHERE parent_id = ? AND deleted = 0 AND id != ?
@@ -317,7 +329,7 @@ const pruneOwnGroup = async (repo: Repo, groupId: string, keepId: string): Promi
     [groupId, keepId, RETAIN_RECORDS],
   )
   if (stale.length === 0) return
-  await repo.tx(async (tx) => {
+  await recordTx(async (tx) => {
     // Retention of this client's own telemetry rows in a hidden ui-state
     // subtree: no user gesture, no user-visible block, so the deletion guards —
     // which exist to protect user-authored content — have nothing to say here.
@@ -337,6 +349,11 @@ class NoLongerEligible extends Error {}
  *  is admitted locally regardless, so the refusal has to be re-taken where the
  *  write actually happens. */
 const assertStillEligible = (repo: Repo, workspaceId: string): void => {
+  // The active workspace is checked DIRECTLY, not only through
+  // attributability: a switch is observed by the new workspace's effect, which
+  // may not have run yet, so `attributable` can still read true for a record
+  // whose snapshot already contains the new workspace's work.
+  if (repo.activeWorkspaceId !== workspaceId) throw new NoLongerEligible()
   const now = metricsSessionContext(repo, workspaceId)
   if (!now.canRecord || !now.attributable) throw new NoLongerEligible()
 }
@@ -389,9 +406,9 @@ export const writeInteractionSample = async (
   })
 
   try {
-    return await countingOwnWrites(repo, async () => {
+    return await countingOwnWrites(repo, async (recordTx) => {
       if (existing) {
-        await repo.tx(async (tx) => {
+        await recordTx(async (tx) => {
           assertStillEligible(repo, workspaceId)
           // `skipMetadata`: a metrics sample is bookkeeping, not user intent.
           // Without it every resample stamps `user_updated_at`, and the block-ref
@@ -415,7 +432,7 @@ export const writeInteractionSample = async (
       // failure or a closed page between them leaves a durable typed child with
       // no record on it — and the reader applies its row limit before skipping
       // such children, so they crowd real history out of the baseline.
-      await repo.tx(async (tx) => {
+      await recordTx(async (tx) => {
         assertStillEligible(repo, workspaceId)
         await tx.create(
           {
@@ -432,7 +449,7 @@ export const writeInteractionSample = async (
         await tx.setProperty(blockId, interactionRecordProp, data, { skipMetadata: true })
       }, { scope: ChangeScope.Automation, description: 'interaction metrics record' })
       setPageRecord(workspaceId, blockId, startedAt)
-      await pruneOwnGroup(repo, group.id, blockId)
+      await pruneOwnGroup(repo, recordTx, group.id, blockId)
       return blockId
     })
   } catch (err) {

@@ -28,6 +28,12 @@ const formatValue = (r: Regression): string =>
 
 export const formatRegression = (r: Regression): string => `${r.label} ${formatValue(r)}`
 
+/** A duration got SLOWER; a rate got HIGHER. The fan-out metric is a rate, and
+ *  it is the one this feature exists to catch, so the headline describing it as
+ *  "slower" misnames the primary diagnostic. */
+const worsened = (r: Regression): string =>
+  r.unit === 'ms' ? 'slower than baseline' : 'higher than baseline'
+
 /** Why the graph size is reported and not corrected for: see `runPerfAnalysis`.
  *  Shown only once it has moved, so the common case stays quiet. */
 const graphNote = (growth: number | null): string | null =>
@@ -50,21 +56,26 @@ const pendingNotes = (analysis: PerfAnalysis): string[] => {
 }
 
 export const summarize = (analysis: PerfAnalysis): PerfVerdict => {
-  // A blocked environment can never accumulate history, so reporting it as
-  // "still building" promises something that will never arrive.
-  if (analysis.recordingBlockedBy !== null) {
+  const blocked =
+    analysis.recordingBlockedBy === null
+      ? null
+      : analysis.recordingBlockedBy === 'no-persistent-client'
+        ? 'new samples are not being recorded: this browser keeps no durable client id'
+        : 'new samples are not being recorded: this workspace is read-only'
+
+  // Blocked recording stops the series GROWING. It does not invalidate history
+  // already on disk, nor this session's own live counters, so a real regression
+  // found against them still has to be reported — with the blocker as context,
+  // not in place of the finding.
+  if (blocked !== null && analysis.regressions.length === 0) {
     return {
       kind: 'pending',
       headline: 'Performance history disabled',
-      notes: [
-        analysis.recordingBlockedBy === 'no-persistent-client'
-          ? 'this browser does not keep a durable client id (private mode or blocked storage)'
-          : 'this workspace is read-only',
-      ],
+      notes: [blocked],
       regressions: [],
     }
   }
-  const pending = pendingNotes(analysis)
+  const pending = [...pendingNotes(analysis), ...(blocked ? [blocked] : [])]
   const notes = [...pending]
   const growth = graphNote(analysis.graphGrowth)
 
@@ -73,7 +84,7 @@ export const summarize = (analysis: PerfAnalysis): PerfVerdict => {
     if (growth) notes.unshift(growth)
     return {
       kind: 'regressed',
-      headline: `${worst.label} ${worst.ratio}× slower than baseline`,
+      headline: `${worst.label} ${worst.ratio}× ${worsened(worst)}`,
       notes,
       regressions: analysis.regressions,
     }

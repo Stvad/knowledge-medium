@@ -26,19 +26,11 @@ const FIRST_SAMPLE_MS = LAZY_DEEP_IDLE.minDelayMs
 const RESAMPLE_MS = 5 * 60_000
 
 // The two halves of "never near boot, only when idle" are scheduled
-// separately, on purpose.
-//
-// The FLOOR is a plain timer. Under Node/jsdom `scheduleDeepIdle` collapses to
-// `setTimeout(0)` and drops `minDelayMs` entirely, so a job scheduled through it
-// runs immediately — which in tests means every file that mounts the app writes
-// metrics records, on a repo that may not even have this plugin's type seeds
-// registered. That surfaced as an unhandled error from an unrelated test file,
-// and would have been test pollution even when it succeeded. A plain timer
-// holds in both environments.
-//
-// The IDLE WINDOW stays `scheduleDeepIdle`, with no force-run fallback, so a
-// due sample still waits for the main thread to be genuinely free rather than
-// landing mid-interaction. `minDelayMs: 0` because the floor above already ran.
+// separately. The FLOOR is a plain timer: outside the browser
+// `scheduleDeepIdle` collapses to `setTimeout(0)` and drops `minDelayMs`, so a
+// job whose floor lives there runs immediately. The IDLE WINDOW stays
+// `scheduleDeepIdle` with no force-run fallback, and takes `minDelayMs: 0`
+// because the floor above already ran.
 const jobs = new PendingIdleJobs((fn) => scheduleDeepIdle(fn, { minDelayMs: 0 }))
 
 /** Test helper — drain in-flight samples. */

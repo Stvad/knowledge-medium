@@ -18,7 +18,7 @@ import {
   type InteractionRecordData,
 } from '@/plugins/interaction-metrics/record'
 import { resetMetricsSession } from '@/plugins/interaction-metrics/sessionContext'
-import { INTERACTION_RECORD_PATH, loadRecords } from '../load'
+import { INTERACTION_RECORD_PATH, isUsableInteractionRecord, loadRecords } from '../load'
 
 const WS = 'ws-1'
 const USER: User = { id: 'user-1', name: 'Alice' }
@@ -54,8 +54,7 @@ describe('loadRecords', () => {
   it('finds what the recorder wrote', async () => {
     await writeInteractionSample(repo, WS)
     const records = await loadRecords<InteractionRecordData>(
-      repo, WS, interactionMetricsUIStateType.id, PATH,
-    )
+      repo, WS, interactionMetricsUIStateType.id, PATH, isUsableInteractionRecord)
     expect(records).toHaveLength(1)
     expect(records[0].record.clientId).toBeTruthy()
     expect(records[0].id).toBeTruthy()
@@ -66,7 +65,9 @@ describe('loadRecords', () => {
   // every workspace, including ones where the recorders are switched off.
   it('creates nothing when there is no history', async () => {
     const before = await blockCount()
-    const records = await loadRecords(repo, WS, interactionMetricsUIStateType.id, PATH)
+    const records = await loadRecords<InteractionRecordData>(
+      repo, WS, interactionMetricsUIStateType.id, PATH, isUsableInteractionRecord,
+    )
     expect(records).toEqual([])
     expect(await blockCount()).toBe(before)
   })
@@ -76,8 +77,7 @@ describe('loadRecords', () => {
     resetMetricsSession() // simulate a second page session
     await writeInteractionSample(repo, WS)
     const records = await loadRecords<InteractionRecordData>(
-      repo, WS, interactionMetricsUIStateType.id, PATH,
-    )
+      repo, WS, interactionMetricsUIStateType.id, PATH, isUsableInteractionRecord)
     expect(records).toHaveLength(2)
     expect(records[0].record.recordedAt).toBeGreaterThanOrEqual(records[1].record.recordedAt)
   })

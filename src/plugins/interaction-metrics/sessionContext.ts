@@ -1,19 +1,13 @@
 /**
- * One owner for the question every part of the metrics feature keeps asking:
- * **what can this page session honestly say?**
+ * One owner for the question every part of the metrics feature asks: **what can
+ * this page session honestly say?**
  *
- * That question has several independent answers — is there a durable identity
- * to file history under, may we write here, are the counters attributable to
- * one workspace, how much of them is our own bookkeeping — and each one was
- * previously checked by whichever module needed it first. That is a defect
- * generator, not a style problem: every consumer that re-derives an answer is a
- * place the rule can be forgotten, and six separate defects on this feature were
- * exactly that (a recorder and a reader disagreeing, an effect and a write
- * disagreeing, a chip and a dialog disagreeing).
- *
- * So the facts live here and the consumers ASK. The recorder asks "may I
- * write?", the monitor asks "may I compare?", and both get the same answer from
- * the same place.
+ * The answers are independent — is there a durable identity to file history
+ * under, may we write here, are the counters attributable to one workspace, how
+ * much of them is our own bookkeeping — and consumers must ASK rather than
+ * re-derive. A consumer that answers for itself is a place the rule can be
+ * forgotten, and the rules bind a recorder and a reader that are separately
+ * togglable.
  *
  * Everything here is page-session scoped, because `repo.metrics()` is: its
  * counters are monotonic from Repo construction and are not segmented by

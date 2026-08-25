@@ -77,6 +77,22 @@ describe('queryRegressions', () => {
     expect(regs(queryRegressions(sample({ queries: { tiny: q(4) } }), history(8, base)))).toEqual([])
   })
 
+  // The magnitude floor belongs after the recent median. Applied to the live
+  // sample alone, one fast session drops a query whose recent window is
+  // sustainably regressed — the single-session swing the smoothing exists to
+  // prevent, in the healthy direction.
+  it('does not let one fast session hide a sustained regression', () => {
+    const slow = () => sample({ queries: { 'backlinks.forBlock': q(40) } })
+    const base = () => sample({ queries: { 'backlinks.forBlock': q(10) } })
+    // The live session recovers below the floor; the two before it did not.
+    const found = regs(queryRegressions(
+      sample({ queries: { 'backlinks.forBlock': q(1) } }),
+      [slow(), slow(), ...history(8, base)],
+    ))
+    expect(found.map((r) => r.metric)).toEqual(['query:backlinks.forBlock'])
+    expect(found[0].current).toBe(40)
+  })
+
   it('ignores a query with too few resolves to have a distribution', () => {
     const base = () => sample({ queries: { rare: q(10, 100) } })
     expect(regs(queryRegressions(sample({ queries: { rare: q(90, 3) } }), history(8, base)))).toEqual([])

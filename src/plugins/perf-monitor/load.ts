@@ -24,6 +24,23 @@ import { getClientId } from '@/utils/clientId.js'
 export const INTERACTION_RECORD_PATH = '$."interaction-metrics:record"'
 export const STARTUP_RECORD_PATH = '$.startupRecord'
 
+/** The fields every reader of an interaction record dereferences. */
+export const isUsableInteractionRecord = (r: {
+  queries?: unknown
+  fanout?: unknown
+  writes?: unknown
+  blockCount?: unknown
+}): boolean =>
+  typeof r.queries === 'object' && r.queries !== null &&
+  typeof r.fanout === 'object' && r.fanout !== null &&
+  typeof r.writes === 'number' && typeof r.blockCount === 'number'
+
+/** A startup record is read only for its marks, and every one of them is
+ *  optional by design (a phase the session never reached is absent), so
+ *  `recordedAt` plus a boot identity is all a reader can require. */
+export const isUsableStartupRecord = (r: { timeOriginMs?: unknown }): boolean =>
+  typeof r.timeOriginMs === 'number'
+
 /** Sessions of history retained per comparison. Enough for the median to be
  *  stable across session heterogeneity, small enough that the baseline still
  *  tracks the current build rather than averaging over months of them. */
@@ -47,6 +64,11 @@ export const loadRecords = async <T extends { recordedAt: number }>(
    *  rather than assembled from a name so escaping never becomes this
    *  function's problem — property names may carry colons. */
   recordPath: string,
+  /** Whether a parsed row carries the fields this series is READ for. The
+   *  record is an opaque blob that is deliberately hand-inspectable, so a
+   *  hand-edited or future-shaped row can parse cleanly and still be missing
+   *  what the comparison and the trend table dereference. */
+  isUsable: (record: T) => boolean,
 ): Promise<Array<{ id: string; record: T }>> => {
   const groupId = stateChildBlockId(
     pluginUIStateBlockId(workspaceId, repo.user.id, typeId),
@@ -70,12 +92,11 @@ export const loadRecords = async <T extends { recordedAt: number }>(
     if (!row.payload) continue
     try {
       const record = JSON.parse(row.payload) as T
-      // Shape-checked, not merely parseable. The record is an opaque blob that
-      // is deliberately hand-inspectable, so a hand-edited or future-shaped row
-      // can parse and still be missing fields the comparison reads — and a
-      // missing `recordedAt` makes every sort comparison NaN, which randomises
-      // the whole window rather than just misplacing one row.
-      if (typeof record?.recordedAt === 'number') records.push({ id: row.id, record })
+      // A missing `recordedAt` makes every sort comparison NaN, which
+      // randomises the whole window rather than merely misplacing one row.
+      if (typeof record?.recordedAt === 'number' && isUsable(record)) {
+        records.push({ id: row.id, record })
+      }
     } catch {
       // A record written by a future/older shape is skipped, not fatal: the
       // series is a diagnostic, and one unreadable row must not blind it.

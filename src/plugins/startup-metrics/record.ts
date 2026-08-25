@@ -238,7 +238,6 @@ export const collectStartupMetricsEffect: AppEffect = {
       if (done) return
       done = true
       runCleanups()
-      recorded = true
       scheduleIdle(() => {
         // Re-checked inside the deferred callback, not only before scheduling
         // it: a workspace switch tears the effect down in between, and this
@@ -246,9 +245,14 @@ export const collectStartupMetricsEffect: AppEffect = {
         // already moved to the new one. Writing then enqueues rows the old
         // workspace's RLS refuses into the sync rejection quarantine.
         if (disposed) return
-        void writeStartupRecord(repo, workspaceId).catch(err =>
-          console.warn('[startup-metrics] failed to write record', err),
-        )
+        // Latched only once a record actually LANDS. The write can decline
+        // transiently — the membership role may not have replicated yet — and
+        // latching before it returns would spend this boot's only attempt on a
+        // failure, leaving the startup series with no record from this session
+        // for the rest of it.
+        void writeStartupRecord(repo, workspaceId)
+          .then((id) => { if (id !== null) recorded = true })
+          .catch(err => console.warn('[startup-metrics] failed to write record', err))
       })
     }
 

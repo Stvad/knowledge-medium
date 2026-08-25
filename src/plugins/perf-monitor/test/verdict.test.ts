@@ -85,6 +85,29 @@ describe('summarize', () => {
     expect(v.notes.join(' ')).toContain('more than one workspace')
   })
 
+  // Blocked recording stops the series GROWING; it does not invalidate history
+  // already on disk or this session's own counters, so a real finding against
+  // them must survive.
+  it('still reports a regression when recording is disabled', () => {
+    const v = summarize(analysis({
+      recordingBlockedBy: 'read-only-workspace',
+      regressions: [regression({ ratio: 6 })],
+    }))
+    expect(v.kind).toBe('regressed')
+    expect(v.regressions).toHaveLength(1)
+    expect(v.notes.join(' ')).toContain('not being recorded')
+  })
+
+  // A rate that went up is not "slower", and the rate is the metric this
+  // feature exists to catch.
+  it('says a rate got higher, not slower', () => {
+    const v = summarize(analysis({
+      regressions: [regression({ label: 'handle invalidations per write', unit: 'ratio', ratio: 4 })],
+    }))
+    expect(v.headline).toContain('higher than baseline')
+    expect(v.headline).not.toContain('slower')
+  })
+
   it('leads with the worst regression and keeps the graph-growth context', () => {
     const v = summarize(analysis({
       regressions: [regression({ ratio: 9 }), regression({ metric: 'query:other', ratio: 3 })],

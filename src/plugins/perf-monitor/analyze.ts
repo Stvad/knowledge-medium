@@ -18,7 +18,13 @@ import {
   startupMetricsUIStateType,
   type StartupRecordData,
 } from '@/plugins/startup-metrics/record.js'
-import { INTERACTION_RECORD_PATH, STARTUP_RECORD_PATH, loadRecords } from './load.js'
+import {
+  INTERACTION_RECORD_PATH,
+  STARTUP_RECORD_PATH,
+  isUsableInteractionRecord,
+  isUsableStartupRecord,
+  loadRecords,
+} from './load.js'
 import {
   anyJudged,
   fanoutRegression,
@@ -68,10 +74,10 @@ export const runPerfAnalysis = async (
   now: number,
 ): Promise<PerfAnalysis> => {
   const interaction = await loadRecords<InteractionRecordData>(
-    repo, workspaceId, interactionMetricsUIStateType.id, INTERACTION_RECORD_PATH,
+    repo, workspaceId, interactionMetricsUIStateType.id, INTERACTION_RECORD_PATH, isUsableInteractionRecord,
   )
   const startup = await loadRecords<StartupRecordData>(
-    repo, workspaceId, startupMetricsUIStateType.id, STARTUP_RECORD_PATH,
+    repo, workspaceId, startupMetricsUIStateType.id, STARTUP_RECORD_PATH, isUsableStartupRecord,
   )
 
   // The live counters are page-global. A page session that has seen a second

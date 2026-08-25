@@ -161,9 +161,12 @@ export const queryRegressions = (
   const baselineSessions = history.slice(RECENT_WINDOW - 1)
   const out: TrendResult[] = []
   for (const [name, sample] of Object.entries(current.queries)) {
-    // Not enough resolves to have a distribution, or too fast to feel: this
-    // query contributes nothing to the verdict either way.
-    if (sample.calls < MIN_CALLS || sample.p95Ms < MIN_ABSOLUTE_MS) continue
+    // Only the data-sufficiency filter here. The magnitude floor is applied by
+    // `trendRegression` AFTER the recent median, because applying it to the
+    // live sample alone lets one fast session drop a query whose recent window
+    // is sustainably regressed — the same single-session swing the smoothing
+    // exists to prevent, in the healthy direction.
+    if (sample.calls < MIN_CALLS) continue
     const measured = (r: InteractionComparable): number | null => {
       const q = r.queries[name]
       return q !== undefined && q.calls >= MIN_CALLS ? q.p95Ms : null
