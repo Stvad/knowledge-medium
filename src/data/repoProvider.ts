@@ -66,9 +66,9 @@ import {
   ensureStagingNeedsApplyColumn,
   ensureUndoGroupIdColumns,
 } from '@/data/internals/clientSchema'
-import { runAnalyzeIfStale, runSampledStatsRepair } from '@/data/maintenance'
+import { runAnalyzeIfStale } from '@/data/maintenance'
 import { onFirstSync } from '@/data/internals/firstSync.js'
-import { CATCHUP_DEEP_IDLE, LAZY_DEEP_IDLE, scheduleDeepIdle } from '@/utils/scheduleIdle.js'
+import { CATCHUP_DEEP_IDLE, scheduleDeepIdle } from '@/utils/scheduleIdle.js'
 import { toLocalDbOpenError } from '@/utils/localDbCorruption.js'
 import {
   captureDbOpenCorruption,
@@ -483,21 +483,6 @@ const initializePowerSyncDb = async (powerSyncDb: PowerSyncDatabase) => {
     }, CATCHUP_DEEP_IDLE)
   }
   scheduleAnalyzeCheck('boot')
-
-  // The one-shot exact-stats repair, on its OWN schedule and a different tier.
-  // LAZY_DEEP_IDLE has no fallback deadline: unlike the check above it never
-  // force-runs, because it is a whole-database ANALYZE that holds this tab's
-  // only SQLite connection against reads as well as writes for seconds. The
-  // catch-up tier would fire it ~30s into a session whether or not the user is
-  // idle, which is the freeze this file exists to avoid. Nothing depends on it
-  // landing THIS session; a session that never idles pays it on the next open.
-  scheduleDeepIdle(() => {
-    void runSampledStatsRepair(backfillDb).then(repaired => {
-      if (repaired) console.info('[Repo] ANALYZE: one-time exact-stats repair complete')
-    }).catch(error => {
-      console.warn('[Repo] exact-stats repair failed:', error)
-    })
-  }, LAZY_DEEP_IDLE)
 
   // (b) First sync of THIS session: a fresh device boots with an empty
   // `blocks`, so (a) skips. Once PowerSync finishes the initial sync and

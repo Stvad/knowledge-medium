@@ -1157,54 +1157,6 @@ export const ANALYZE_OPTIMIZE_SQL = `PRAGMA optimize(0x02)`
  *  this comment claimed a shared worker and built a read-back guard on it. */
 export const RESET_ANALYZE_SAMPLE_LIMIT_SQL = `PRAGMA analysis_limit=0`
 
-/** One-shot: replace the sampled stats earlier builds recorded with exact ones.
- *
- *  `PRAGMA optimize` only re-analyzes on a MISSING stat row or a ~10x row-count
- *  drift. A sampled row is present and its row count is exact, so neither rule
- *  ever fires and the bad per-value averages (see the module comment) would
- *  survive on every existing device forever. Nothing distinguishes a sampled row
- *  from an honest one by inspection — 401 is also what a genuinely selective
- *  column looks like — so this is version-marked rather than detected.
- *
- *  `sqlite_stat1` is per-device local state, so this is a derivation pass: no
- *  claim, no upload, safe to run everywhere and safe to re-run.
- *
- *  Scoped to {@link ANALYZE_REPAIR_TABLES}, not the whole file: measured warm on
- *  a live 328k-block client, those four cost 2.1s against 4.0s for `ANALYZE`
- *  with no argument, and the rest (`row_events` 1217ms, `command_events` 404ms)
- *  drive no query plan the app depends on. Anything missed is not stranded —
- *  the optimize path is exact now, so it heals on that table's next staleness.
- *
- *  Still the most expensive thing this module does, and it holds the tab's only
- *  SQLite connection against reads as well as writes. Hence LAZY_DEEP_IDLE at
- *  its caller, never the catch-up tier, which force-runs on a deadline. ACCEPTED
- *  residual: an idle frame is main-thread slack, not user inactivity, so this
- *  can still land while someone is working — once per device, ~2s. Gating on
- *  real inactivity is new machinery for a one-shot; the alternative worth
- *  weighing is dropping the one-shot entirely and letting devices heal on the
- *  next index change, which costs slow warm boots until then. */
-export const UNBOUNDED_ANALYZE_MARKER_KEY = 'analyze_unbounded_stats_v1'
-
-/** The tables whose statistics decide query plans the app depends on — the same
- *  set {@link ANALYZE_ARMING_PROBES} names, deliberately. Everything else in the
- *  file (`row_events`, `command_events`, `blocks_synced`, the FTS shadows) is
- *  half the cost of a full pass and backs no hot query. */
-export const ANALYZE_REPAIR_TABLES: readonly string[] = [
-  'blocks',
-  'block_references',
-  'block_types',
-  'block_aliases',
-]
-
-export const SELECT_UNBOUNDED_ANALYZE_DONE_SQL = `
-  SELECT 1 FROM client_schema_state WHERE key = '${UNBOUNDED_ANALYZE_MARKER_KEY}'
-`
-
-export const RECORD_UNBOUNDED_ANALYZE_DONE_SQL = `
-  INSERT OR REPLACE INTO client_schema_state (key, completed_at)
-  VALUES ('${UNBOUNDED_ANALYZE_MARKER_KEY}', strftime('%s', 'now') * 1000)
-`
-
 /** Planner-visible probes that ARM the staleness check. Load-bearing, and the
  *  single most surprising part of this design.
  *
@@ -1685,15 +1637,13 @@ const readOptimizeRows = (result: unknown): string[] | null => {
     .filter((sql): sql is string => typeof sql === 'string')
 }
 
-/** Serializes the three ANALYZE entry points against each other and against
+/** Serializes the two ANALYZE entry points against each other and against
  *  themselves.
  *
- *  Five schedulers point at them (repoProvider's boot check, first-sync check
- *  and repair, the Roam importer, the manual command) and the boot/first-sync
- *  pair has overlapped before. Two concurrent passes are two multi-second parks
- *  of this tab's SQLite connection to reach one settled `sqlite_stat1`, and
- *  {@link runSampledStatsRepair} would run its full ANALYZE twice — its marker
- *  is written only after the pass it gates finishes.
+ *  Four schedulers point at them (repoProvider's boot and first-sync checks, the
+ *  Roam importer, the manual command) and the boot/first-sync pair has
+ *  overlapped before. Two concurrent passes are two multi-second parks of this
+ *  tab's SQLite connection to reach one settled `sqlite_stat1`.
  *
  *  Scope, stated because it is not total: this is a module-level chain, so it
  *  coordinates one TAB. Tabs do not share a connection here (each opens a
@@ -1725,9 +1675,13 @@ const serializeAnalyze = <T>(run: () => Promise<T>): Promise<T> => {
  *  it DOES fire it runs a real ANALYZE on the single SQLite worker, and on a
  *  cold fresh device that can be every table at once.
  *
- *  Cheap enough for the catch-up idle tier, which force-runs on a deadline. The
- *  one-shot repair is NOT — it is scheduled separately; see
- *  {@link runSampledStatsRepair}. */
+ *  Deliberately on the catch-up idle tier, which force-runs on a deadline. A
+ *  freshly created index has NO `sqlite_stat1` row, and SQLite then assumes ~10
+ *  rows for an equality seek on its leading column — the join-order inversion
+ *  this module exists to prevent. So between a release adding an index and this
+ *  pass running, plans are pathological. Bounding that at 30s is worth the
+ *  ~0.3-1.2s the pass costs; waiting for genuine idle would trade a bounded
+ *  pause for an unbounded stretch of bad plans. */
 export const runAnalyzeIfStale = async (
   db: ClientSchemaBootstrapDb,
 ): Promise<AnalyzeResult> => serializeAnalyze(async () => {
@@ -1748,47 +1702,6 @@ const analyzeUnbounded = async (db: ClientSchemaBootstrapDb, sql: string): Promi
   await db.execute(sql)
 }
 
-/** The one-shot marker-gated full ANALYZE; see
- *  {@link UNBOUNDED_ANALYZE_MARKER_KEY} for why it exists and what it costs.
- *  Returns whether it ran, so the caller can say so — it is invisible in
- *  {@link runAnalyzeIfStale}'s report by construction, since the devices it
- *  targets are exactly the ones where the optimize finds nothing stale. */
-export const runSampledStatsRepair = async (
-  db: ClientSchemaBootstrapDb,
-): Promise<boolean> => serializeAnalyze(async () => {
-  const done = await db.getOptional<{1: number}>(SELECT_UNBOUNDED_ANALYZE_DONE_SQL)
-  if (done !== null) return false
-  let repairedEveryTable = true
-  for (const table of ANALYZE_REPAIR_TABLES) {
-    // ABSENT is the one tolerable outcome — `block_references` is
-    // plugin-contributed — and it is tested for explicitly rather than inferred
-    // from a caught error. Everything else (a corrupt index, a read-only or
-    // full disk, a worker that died mid-pass) leaves that table on sampled
-    // statistics, and marking anyway would strand it there for good while
-    // logging that the repair completed.
-    if (!(await tableExists(db, table))) continue
-    try {
-      await analyzeUnbounded(db, `ANALYZE ${table}`)
-    } catch (error) {
-      console.warn(`[clientSchema] exact-stats repair failed for ${table}`, error)
-      repairedEveryTable = false
-    }
-  }
-  // No marker means the next boot tries again — this is a derivation pass over
-  // local state, so a redundant re-run is a scan, and a missed one is permanent.
-  if (!repairedEveryTable) return false
-  await db.execute(RECORD_UNBOUNDED_ANALYZE_DONE_SQL)
-  return true
-})
-
-/** Param-free on purpose, matching every other statement here: the shims
- *  callers pass declare a params-less shape, so a bound `?` would silently bind
- *  NULL. The names come from {@link ANALYZE_REPAIR_TABLES}, not from input. */
-const tableExists = async (db: ClientSchemaBootstrapDb, table: string): Promise<boolean> =>
-  (await db.getOptional(
-    `SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = '${table}'`,
-  )) !== null
-
 /** Unconditional `ANALYZE` for the manual command-palette command.
  *
  *  The escape hatch for the case the heuristic can't model: stats that are
@@ -1803,9 +1716,5 @@ export const runAnalyzeNow = async (
 ): Promise<{count: number}> => serializeAnalyze(async () => {
   const count = await getBlocksCount(db)
   await analyzeUnbounded(db, 'ANALYZE')
-  // A whole-file unbounded pass is a superset of the one-shot repair, so claim
-  // its marker: otherwise a user who reaches for this button still pays the
-  // automatic repair later in the same session, for work already done.
-  await db.execute(RECORD_UNBOUNDED_ANALYZE_DONE_SQL)
   return {count}
 })

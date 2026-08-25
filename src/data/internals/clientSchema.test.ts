@@ -52,7 +52,6 @@ import {
   BLOCKS_FTS_BACKFILL_MARKER_KEY,
   CLIENT_SCHEMA_STATEMENTS,
   CREATE_CLIENT_SCHEMA_STATE_TABLE_SQL,
-  UNBOUNDED_ANALYZE_MARKER_KEY,
   backfillBlockAliasesIfEmpty,
   backfillBlocksFtsIfEmpty,
   ensureBlockUserUpdatedAtColumn,
@@ -61,7 +60,6 @@ import {
   ANALYZE_OPTIMIZE_SQL,
   runAnalyzeIfStale,
   runAnalyzeNow,
-  runSampledStatsRepair,
 } from './clientSchema'
 
 interface TestDb {
@@ -1093,16 +1091,6 @@ describe('runAnalyzeIfStale', () => {
     for (let i = 0; i < n; i++) h.insertBlock({id: `blk-${i}`, order_key: `a${i}`})
   }
 
-  // Steady state — the one-shot repair already done, which is every boot but
-  // one. It has its own test below; without this the marker row it writes makes
-  // `client_schema_state` itself stale, and the boot after a repair proposes
-  // that (tiny) table on top of whatever the test set up.
-  beforeEach(() => {
-    h.db.exec(
-      `INSERT INTO client_schema_state (key, completed_at) VALUES ('${UNBOUNDED_ANALYZE_MARKER_KEY}', 1)`,
-    )
-  })
-
   it('populates stats for a newly created index', async () => {
     // The regression this whole mechanism exists for. A fresh index has no
     // sqlite_stat1 row, so SQLite assumes ~10 rows for an equality seek on its
@@ -1152,32 +1140,6 @@ describe('runAnalyzeIfStale', () => {
     expect(statRows(h.db, 'blocks')['idx_blocks_workspace_active']).toBeDefined()
   })
 
-  it('repairs stats an older sampled build left behind, exactly once', async () => {
-    // `PRAGMA optimize` re-analyzes on a MISSING stat row or a ~10x row-count
-    // drift. A sampled row is present and its row count is exact, so neither
-    // rule fires and the bad per-value averages would outlive the fix on every
-    // device that already booted a sampled build. Simulated here by the shape
-    // the limit produced: a plausible-looking, far-too-small average.
-    //
-    // Nothing else in the setup may make `blocks` stale — an earlier version
-    // created an index here to pin an ordering, which handed `PRAGMA optimize`
-    // a missing stat row, re-analyzed the whole table, and repaired the stat
-    // before this assertion read it. The test passed with the repair deleted.
-    seedBlocks(64)
-    await runAnalyzeIfStale(buildRecordingDb().db)
-    await runSampledStatsRepair(buildRecordingDb().db)
-    h.db.exec(`UPDATE sqlite_stat1 SET stat = '64 4' WHERE tbl = 'blocks'`)
-    h.db.exec(`DELETE FROM client_schema_state WHERE key = '${UNBOUNDED_ANALYZE_MARKER_KEY}'`)
-
-    expect(await runSampledStatsRepair(buildRecordingDb().db)).toBe(true)
-    expect(statRows(h.db, 'blocks')['idx_blocks_workspace_active']).toBe('64 64')
-
-    // ...and then never again: a settled boot must not pay a full ANALYZE.
-    h.db.exec(`UPDATE sqlite_stat1 SET stat = '64 4' WHERE tbl = 'blocks'`)
-    expect(await runSampledStatsRepair(buildRecordingDb().db)).toBe(false)
-    expect(statRows(h.db, 'blocks')['idx_blocks_workspace_active']).toBe('64 4')
-  })
-
   it('still analyzes when a table an arming probe names is absent', async () => {
     // A probe is best-effort: one missing table must not cost the session its
     // stats entirely. That failure mode — "no stats at all this session" — is
@@ -1208,13 +1170,7 @@ describe('runAnalyzeIfStale — arming (stale-stats axis)', () => {
     db = open()
     db.exec(CREATE_BLOCKS_TABLE_SQL)
     db.exec(CREATE_BLOCKS_WORKSPACE_ACTIVE_INDEX_SQL)
-    // Steady state, as in the sibling describe: the one-shot repair already
-    // done. Without the marker its full ANALYZE runs after every optimize and
-    // launders the very stats these tests are reading.
     db.exec(CREATE_CLIENT_SCHEMA_STATE_TABLE_SQL)
-    db.exec(
-      `INSERT INTO client_schema_state (key, completed_at) VALUES ('${UNBOUNDED_ANALYZE_MARKER_KEY}', 1)`,
-    )
     const cols = BLOCK_STORAGE_COLUMNS.map(c => c.name)
     const ins = db.prepare(
       `INSERT INTO blocks (${cols.join(',')}) VALUES (${cols.map(() => '?').join(',')})`,
@@ -1300,19 +1256,6 @@ describe('runAnalyzeIfStale — arming (stale-stats axis)', () => {
     db.exec('PRAGMA analysis_limit=400')
 
     await runAnalyzeIfStale(adapter())
-    const [, avgPerWorkspace] = statRows(db, 'blocks')['idx_blocks_workspace_active']
-      .split(' ').map(Number)
-    expect(avgPerWorkspace).toBe(2500)
-  })
-
-  it('clears a standing limit for the one-shot repair too, then marks it', async () => {
-    // The repair runs its own ANALYZE through the same helper, so it carries
-    // its own reset. Without one the marker records a sampled pass as the exact
-    // repair — and the marker is one-shot, so that device never retries.
-    db.exec(`DELETE FROM client_schema_state WHERE key = '${UNBOUNDED_ANALYZE_MARKER_KEY}'`)
-    db.exec('PRAGMA analysis_limit=400')
-
-    expect(await runSampledStatsRepair(adapter())).toBe(true)
     const [, avgPerWorkspace] = statRows(db, 'blocks')['idx_blocks_workspace_active']
       .split(' ').map(Number)
     expect(avgPerWorkspace).toBe(2500)
@@ -1407,35 +1350,6 @@ describe('runAnalyzeNow', () => {
   })
 
 
-  it('leaves the marker absent when a table it needed could not be analyzed', async () => {
-    // The tolerated case is a table that is ABSENT. A table that exists and
-    // FAILS is not tolerable: marking anyway strands it on sampled statistics
-    // permanently, while the caller logs that the repair completed.
-    h.insertBlock({id: 'b-repair-fail'})
-    h.db.exec(`DELETE FROM client_schema_state WHERE key = '${UNBOUNDED_ANALYZE_MARKER_KEY}'`)
-    const {db} = buildRecordingDb({failOn: /^ANALYZE blocks$/})
-
-    expect(await runSampledStatsRepair(db)).toBe(false)
-    expect(
-      h.db.prepare(
-        `SELECT 1 FROM client_schema_state WHERE key = '${UNBOUNDED_ANALYZE_MARKER_KEY}'`,
-      ).get(),
-    ).toBeUndefined()
-
-    // ...and the next boot still owes it.
-    expect(await runSampledStatsRepair(buildRecordingDb().db)).toBe(true)
-  })
-
-  it('claims the one-shot marker, so the repair does not redo its work', async () => {
-    // The manual pass is a whole-file unbounded ANALYZE — a superset of the
-    // scoped repair. Without this a user who rebuilds stats by hand still pays
-    // the automatic multi-second repair later in the same session.
-    h.db.exec(`DELETE FROM client_schema_state WHERE key = '${UNBOUNDED_ANALYZE_MARKER_KEY}'`)
-    h.insertBlock({id: 'only-block'})
-
-    await runAnalyzeNow(buildRecordingDb().db)
-    expect(await runSampledStatsRepair(buildRecordingDb().db)).toBe(false)
-  })
 })
 
 // The block_types side-index backs byType / typedBlocks — among the most
