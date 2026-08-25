@@ -155,10 +155,13 @@ const retentionDescription = (spec: ClientRecordSpec): string => `${spec.descrip
 
 /** Drop this client's own records past `retain`.
  *
- *  Ordered by `(order_key, id)`, the tree's canonical sibling order, so that
- *  retention and `loadRecords` agree on which row sits at the boundary. Jitter
- *  makes a key collision improbable enough that no test reproduces one, so the
- *  tiebreaker is unpinned defence in depth.
+ *  Ordered by the record's own timestamp, the SAME key `loadRecords` pages by.
+ *  Records are updated in place, so tree position is creation order, not
+ *  recency — ordering retention by position would evict the row a long-lived
+ *  tab is still writing to while the reader considers it the newest sample.
+ *  `(order_key, id)` only breaks ties, in the tree's canonical order; jitter
+ *  makes a key collision improbable enough that no test reproduces one, so that
+ *  part is unpinned defence in depth.
  *
  *  Only THIS client's group, so two devices can never fight over the same rows;
  *  and only rows carrying a record, for both the offset and the deletion set —
@@ -175,9 +178,10 @@ const pruneGroup = async (
     `SELECT id FROM blocks
       WHERE parent_id = ? AND deleted = 0 AND id != ?
         AND json_extract(properties_json, ?) IS NOT NULL
-      ORDER BY order_key, id
+      ORDER BY json_extract(properties_json, ?) DESC, order_key, id
       LIMIT -1 OFFSET ?`,
-    [groupId, keepId, jsonPathForProperty(spec.recordName), spec.retain],
+    [groupId, keepId, jsonPathForProperty(spec.recordName),
+     `${jsonPathForProperty(spec.recordName)}.recordedAt`, spec.retain],
   )
   if (stale.length === 0) return
   await recordTx(async (tx) => {

@@ -223,6 +223,27 @@ describe('appendClientRecord retention', () => {
     expect(order).toEqual(['claimed', 'prune'])
   })
 
+  // Records are updated IN PLACE, so tree position is creation order and not
+  // recency. `loadRecords` pages by the record's own timestamp; retention
+  // ordering by position would evict the row a long-lived tab is still writing
+  // to — the reader's newest sample — while keeping rows it considers older.
+  it('keeps the most recently stamped record, not the most recently created', async () => {
+    const ids: string[] = []
+    for (let i = 0; i < 3; i++) ids.push((await append(3)).blockId)
+    // The OLDEST-created row, re-stamped as the newest sample — a tab that has
+    // stayed open across the sessions that created the others.
+    await sharedDb.db.execute(
+      'UPDATE blocks SET properties_json = ? WHERE id = ?',
+      [JSON.stringify({ [interactionRecordProp.name]: { ...DATA, recordedAt: 9_000_000 } }), ids[0]],
+    )
+    const fresh = (await append(1)).blockId
+
+    const live = await liveIds()
+    expect(live).toContain(ids[0])
+    // And it really did prune, so this is not a vacuous pass.
+    expect(live).toEqual([fresh, ids[0]])
+  })
+
   // The record is already committed when the pass runs. Routing its failure
   // through the caller's failure path retries a write that landed: the startup
   // recorder appends up to three records for one boot, and the interaction
