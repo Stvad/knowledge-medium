@@ -1,32 +1,10 @@
 // @vitest-environment node
 import { describe, expect, it } from 'vitest'
-import type { PerfAnalysis } from '../analyze'
+import { analysisFixture as analysis, regressionFixture as regression } from './fixtures'
 import { mapAnalysisToSnapshot } from '../diagnosticsSource'
 import { VIEW_PERF_TREND_ACTION_ID } from '../store'
 
-const analysis = (over: Partial<PerfAnalysis> = {}): PerfAnalysis => ({
-  workspaceId: 'ws-1',
-  analyzedAt: 1000,
-  baselineSessions: 12,
-  regressions: [],
-  insufficientHistory: false,
-  ready: { interaction: true, startup: true },
-  interactionComparable: true,
-  recordingBlockedBy: null,
-  baseline: { interaction: 12, startup: 12 },
-  graphGrowth: null,
-  ...over,
-})
 
-const regression = (over = {}) => ({
-  metric: 'query:backlinks.forBlock',
-  label: 'backlinks.forBlock p95',
-  baseline: 10,
-  current: 40,
-  ratio: 4,
-  unit: 'ms' as const,
-  ...over,
-})
 
 describe('mapAnalysisToSnapshot', () => {
   // "Not enough history to judge" and "judged, nothing wrong" call for opposite
@@ -34,7 +12,7 @@ describe('mapAnalysisToSnapshot', () => {
   // ok from a comparison that never ran is the failure this feature exists to
   // remove.
   it('reports a short series as its own state, not as health', () => {
-    const snapshot = mapAnalysisToSnapshot(analysis({ insufficientHistory: true, baselineSessions: 2 }))
+    const snapshot = mapAnalysisToSnapshot(analysis({ ready: { interaction: false, startup: false }, baseline: { interaction: 2, startup: 0 } }))
     expect(snapshot.severity).toBe('info')
     expect(snapshot.summary).toMatch(/baseline/i)
   })
@@ -51,7 +29,6 @@ describe('mapAnalysisToSnapshot', () => {
   it('does not report a partial comparison as ok', () => {
     const snapshot = mapAnalysisToSnapshot(analysis({
       ready: { interaction: false, startup: true },
-      baselineSessions: 0,
     }))
     expect(snapshot.severity).toBe('info')
     expect(snapshot.detail).toContain('interaction history still building')

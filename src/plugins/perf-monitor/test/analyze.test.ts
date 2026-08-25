@@ -133,11 +133,11 @@ describe('runPerfAnalysis', () => {
     // A third session that HAS written its record: it is history for nothing.
     resetMetricsSession()
     await writeInteractionSample(repo, WS)
-    expect((await runPerfAnalysis(repo, WS, 1000)).baselineSessions).toBe(2)
+    expect((await runPerfAnalysis(repo, WS, 1000)).baseline.interaction).toBe(2)
 
     // A fresh session that has NOT yet written one: all three are history.
     resetMetricsSession()
-    expect((await runPerfAnalysis(repo, WS, 1000)).baselineSessions).toBe(3)
+    expect((await runPerfAnalysis(repo, WS, 1000)).baseline.interaction).toBe(3)
   })
 
   // Reported, not corrected for: filtering the baseline to comparable graph
@@ -166,6 +166,6 @@ describe('runPerfAnalysis', () => {
     expect(after.graphGrowth!).toBeGreaterThan(before!)
     // Still compares — a bigger graph is context, not a reason to go quiet.
     expect(after.ready.interaction).toBe(true)
-    expect(after.insufficientHistory).toBe(false)
+    expect(after.ready.startup || after.ready.interaction).toBe(true)
   })
 })

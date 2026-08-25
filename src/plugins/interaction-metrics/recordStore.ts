@@ -3,14 +3,14 @@
  *
  * Both recorders keep the same shape — a per-client group under a hidden
  * ui-state subtree, one prepended block per session, typed, carrying a single
- * identity-codec property — and used to keep it by copying, so every guard
- * belonging to the shape had to be applied twice.
+ * identity-codec property — so the guards belonging to that shape live here
+ * once: eligibility re-taken inside the transaction, `skipMetadata` so
+ * bookkeeping does not float the row into Recents, the type tag landing in the
+ * same transaction as the create.
  *
- * What lives here is only what the shape itself guarantees. A recorder with a
- * STRONGER rule than the shape knows about must pass it (`assertEligible`), and
- * retention is still the interaction recorder's own: sharing a write path does
- * not make two recorders identical, and assuming it does is how the extraction
- * itself dropped a check on its first attempt.
+ * Only what the SHAPE guarantees belongs here. A recorder with a stronger rule
+ * passes it (`assertEligible`), and retention remains the interaction
+ * recorder's own — sharing a write path does not make two recorders identical.
  */
 import { ChangeScope, type TypeContribution } from '@/data/api'
 import type { Repo } from '@/data/repo'

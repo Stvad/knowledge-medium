@@ -40,8 +40,6 @@ import {
 export interface PerfAnalysis {
   workspaceId: string
   analyzedAt: number
-  /** Interaction sessions of history the comparison had. */
-  baselineSessions: number
   /** Worst first. Empty when nothing regressed. */
   regressions: Regression[]
   /** Per SERIES, because they fill up independently: every existing user has
@@ -50,8 +48,6 @@ export interface PerfAnalysis {
    *  sessions" — a clean verdict from a comparison that never ran, which is
    *  the failure this feature exists to remove. */
   ready: { interaction: boolean; startup: boolean }
-  /** True when NEITHER series can be compared yet. */
-  insufficientHistory: boolean
   /** False when this page session's live counters cannot be attributed to one
    *  workspace, so only startup was compared. Surfaced rather than silently
    *  folded into a clean verdict. */
@@ -79,10 +75,8 @@ export const blockedPerfAnalysis = (
 ): PerfAnalysis => ({
   workspaceId,
   analyzedAt: now,
-  baselineSessions: 0,
   regressions: [],
   ready: { interaction: false, startup: false },
-  insufficientHistory: true,
   interactionComparable: false,
   recordingBlockedBy: blockedBy,
   baseline: { interaction: 0, startup: 0 },
@@ -151,7 +145,6 @@ export const runPerfAnalysis = async (
   return {
     workspaceId,
     analyzedAt: now,
-    baselineSessions: history.length,
     recordingBlockedBy: session.blockedBy,
     baseline: { interaction: history.length, startup: startup.length },
     regressions,
@@ -161,7 +154,6 @@ export const runPerfAnalysis = async (
     // comparison necessarily returns null and the chip would report "no
     // slowdowns" for a comparison that never ran.
     ready: { interaction: interactionReady, startup: startupReady },
-    insufficientHistory: !interactionReady && !startupReady,
     interactionComparable: session.attributable,
     graphGrowth,
   }

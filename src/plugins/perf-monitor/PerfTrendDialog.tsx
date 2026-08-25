@@ -2,11 +2,9 @@
  * The trend view: this device's recorded performance history, plus the current
  * verdict about it.
  *
- * The reason this exists rather than a smarter alarm: an alarm answers "is
- * something wrong now", and an investigation asks "when did this change, and
- * what shipped around then". Only the series answers the second, and until this
- * view there was nowhere in the app to see it — the startup recorder had been
- * writing a per-session timeline for two months that nothing had ever read.
+ * Distinct from the chip on purpose. An alarm answers "is something wrong
+ * now"; an investigation asks "when did this change, and what shipped around
+ * then" — and only the series answers the second.
  */
 import { useCallback, useEffect, useState, useSyncExternalStore } from 'react'
 import { Activity, RefreshCw, TrendingUp } from 'lucide-react'

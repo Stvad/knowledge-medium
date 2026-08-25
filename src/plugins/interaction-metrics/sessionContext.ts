@@ -132,7 +132,7 @@ export const noteCounterTotal = (totalWrites: number): void => {
   pageRecord = null
 }
 
-export const noteOwnWrites = (count: number): void => {
+const noteOwnWrites = (count: number): void => {
   if (count > 0) ownWrites += count
 }
 
@@ -220,7 +220,9 @@ export const awaitRecordingAllowed = async (
   workspaceId: string,
 ): Promise<boolean> => {
   if (!metricsSessionContext(repo, workspaceId).canRecord) return false
-  if (!isRemoteSyncActive()) return !repo.isReadOnly
+  // `canRecord` already implies not read-only, so there is nothing left to
+  // check here: with no uploads there is no refusal to avoid.
+  if (!isRemoteSyncActive()) return true
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), ROLE_WAIT_MS)
   try {

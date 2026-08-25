@@ -1,32 +1,28 @@
 /**
  * Cadenced scheduling for the performance analysis, on the same terms as the
- * interaction recorder: genuine idle only, never near boot. See
- * `@/plugins/interaction-metrics/schedule` for why the re-arm delay is a plain
- * timer rather than the idle scheduler's own floor.
+ * recorder: genuine idle only, never near boot.
  */
 import { appEffectsFacet, type AppEffect } from '@/extensions/core.js'
 import type { Repo } from '@/data/repo'
-import { PendingIdleJobs } from '@/data/internals/idleMarkerJobs.js'
-import { scheduleDeepIdle, LAZY_DEEP_IDLE } from '@/utils/scheduleIdle.js'
+import { LAZY_DEEP_IDLE } from '@/utils/scheduleIdle.js'
+import { cadencedIdleJob } from '@/utils/cadencedIdleJob.js'
 import { metricsSessionContext, observeWorkspace } from '@/plugins/interaction-metrics/sessionContext.js'
 import { blockedPerfAnalysis, runPerfAnalysis } from './analyze.js'
 import { publishPerfAnalysis } from './store.js'
 
-/** Wall clock before the first analysis, and between later ones. Long: the
- *  series it reads only gains a point per session, and re-deriving the same
- *  verdict is pure cost. Short enough that a regression which develops
- *  mid-session is still noticed. */
-const FIRST_ANALYSIS_MS = LAZY_DEEP_IDLE.minDelayMs
+/** Wall clock between analyses. Long: the series it reads only gains a point
+ *  per session, and re-deriving the same verdict is pure cost. Short enough
+ *  that a regression developing mid-session is still noticed. */
 const REANALYZE_MS = 10 * 60_000
 
-// Floor on a plain timer, idle window on `scheduleDeepIdle` — the split and its
-// reason are documented in `@/plugins/interaction-metrics/schedule`. Here it
-// matters mostly so a test that mounts the app does not run a workspace scan
-// per file.
-const jobs = new PendingIdleJobs((fn) => scheduleDeepIdle(fn, { minDelayMs: 0 }))
+const job = cadencedIdleJob({
+  firstDelayMs: LAZY_DEEP_IDLE.minDelayMs,
+  repeatDelayMs: REANALYZE_MS,
+  label: 'perf-monitor',
+})
 
 /** Test helper — drain in-flight analyses. */
-export const drainPerfAnalyses = (): Promise<void> => jobs.drain()
+export const drainPerfAnalyses = (): Promise<void> => job.drain()
 
 /** Run now, publish, return. Used by the effect and by the trend view's manual
  *  refresh. Throws on failure so a caller can surface it. */
@@ -40,41 +36,17 @@ export const perfAnalysisEffect: AppEffect = {
   id: 'perf-monitor.analyze',
   start: ({ repo, workspaceId }) => {
     if (!workspaceId) return
-    // At activation, not at analysis time: a session can enter a second
-    // workspace and leave again long before the first analysis is due, and the
-    // page-global counters carry its work regardless.
     observeWorkspace(repo, workspaceId)
     // Without a durable client id the reader derives a fresh group id every
     // load, so no scan can ever find history — but the chip still has to SAY
     // so, or the one state this environment can be in is the one it never
-    // shows. Publish the verdict, skip the scans, and stop: two block scans
-    // plus a workspace COUNT every ten minutes is exactly the cost this
-    // feature promises not to impose for nothing.
+    // shows. Publish the verdict, skip the scans, and stop.
     const blockedBy = metricsSessionContext(repo, workspaceId).blockedBy
     if (blockedBy === 'no-persistent-client') {
       publishPerfAnalysis(blockedPerfAnalysis(workspaceId, blockedBy, Date.now()))
       return
     }
-    let cancelled = false
-    let timer: ReturnType<typeof setTimeout> | undefined
-    const armIn = (delayMs: number): void => {
-      timer = setTimeout(() => {
-        jobs.schedule(async () => {
-          if (cancelled) return
-          try {
-            await runPerfAnalysisNow(repo, workspaceId)
-          } catch (err) {
-            console.warn('[perf-monitor] analysis failed', err)
-          }
-          if (!cancelled) armIn(REANALYZE_MS)
-        })
-      }, delayMs)
-    }
-    armIn(FIRST_ANALYSIS_MS)
-    return () => {
-      cancelled = true
-      if (timer) clearTimeout(timer)
-    }
+    return job.start(async () => { await runPerfAnalysisNow(repo, workspaceId) })
   },
 }
 

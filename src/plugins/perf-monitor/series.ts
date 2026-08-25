@@ -1,29 +1,21 @@
 /**
  * The comparison: is this session slower than this device's recent history?
  *
- * Everything here is pure. The judgement it encodes, and why:
+ * Everything here is pure. The judgements it encodes:
  *
- * COMPARE A DEVICE AGAINST ITSELF. Absolute thresholds do not survive contact
- * with a fleet — a phone and a desktop disagree by more than any regression
- * does, and so do two graphs. The series is therefore per-client, and the
- * baseline is that client's own trailing median.
+ * COMPARE A DEVICE AGAINST ITSELF. Absolute thresholds do not survive a fleet —
+ * a phone and a desktop disagree by more than any regression does, and so do
+ * two graphs. The baseline is this client's own trailing median.
  *
- * A TREND, NOT A SESSION. One of the two regressions that motivated this
- * (#818) degraded gradually as the graph grew past the point where SQLite's
- * index stats made a wrong query plan look attractive. No single-session
- * threshold would ever have fired on it; only its own past does.
+ * A TREND, NOT A SESSION, on BOTH sides. A regression can arrive gradually, so
+ * a threshold against a fixed number never fires on it; and read as a single
+ * session the current side fires on every anomalous one. Both sides are
+ * therefore medians over a window, which costs a detection lag in sessions.
  *
- * MEDIAN, NOT MEAN. Sessions are wildly heterogeneous — a cold start, a big
- * sync, an open panel that mounts fifty handles. The mean tracks the outliers;
- * the median tracks the typical session, which is the thing a human means by
- * "it got slower".
- *
- * SMOOTH BOTH SIDES. "A trend, not a session" constrains the CURRENT side too:
- * read as a single session it fires on every anomalous boot, and an alarm that
- * cries wolf is worse than none. The current reading is therefore the median of
- * a small recent window, which costs a detection lag measured in sessions.
+ * MEDIAN, NOT MEAN. Sessions are heterogeneous — a cold start, a big sync, an
+ * open panel mounting fifty handles. The mean tracks the outliers; the median
+ * tracks the typical session, which is what a human means by "it got slower".
  */
-
 import type { InteractionComparable } from '@/plugins/interaction-metrics/record.js'
 import type { StartupRecordData } from '@/plugins/startup-metrics/record.js'
 

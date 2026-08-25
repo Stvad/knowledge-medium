@@ -4,29 +4,10 @@
  * an empty regression list means opposite things.
  */
 import { describe, expect, it } from 'vitest'
-import type { PerfAnalysis } from '../analyze'
+import { analysisFixture as analysis, regressionFixture as regression } from './fixtures'
 import { summarize } from '../verdict'
 
-const analysis = (over: Partial<PerfAnalysis> = {}): PerfAnalysis => ({
-  workspaceId: 'ws-1',
-  analyzedAt: 1000,
-  baselineSessions: 12,
-  regressions: [],
-  insufficientHistory: false,
-  ready: { interaction: true, startup: true },
-  interactionComparable: true,
-  recordingBlockedBy: null,
-  baseline: { interaction: 12, startup: 12 },
-  graphGrowth: null,
-  ...over,
-})
 
-const regression = (over = {}) => ({
-  metric: 'query:backlinks.forBlock',
-  label: 'backlinks.forBlock p95',
-  baseline: 10, current: 40, ratio: 4, unit: 'ms' as const,
-  ...over,
-})
 
 describe('summarize', () => {
   it('calls a fully judged, unregressed comparison clean', () => {
@@ -55,7 +36,7 @@ describe('summarize', () => {
   it('reports a blocked environment as disabled, not as still building', () => {
     const v = summarize(analysis({
       recordingBlockedBy: 'no-persistent-client',
-      insufficientHistory: true,
+      ready: { interaction: false, startup: false },
     }))
     expect(v.headline).toBe('Performance history disabled')
     expect(v.notes.join(' ')).toContain('durable client id')
@@ -76,7 +57,6 @@ describe('summarize', () => {
   // to read as "building a baseline" for a user with months of history.
   it('keeps the explanation when it says it is building a baseline', () => {
     const v = summarize(analysis({
-      insufficientHistory: true,
       interactionComparable: false,
       ready: { interaction: false, startup: false },
       baseline: { interaction: 20, startup: 0 },

@@ -40,11 +40,6 @@ import {
  *  exists so a pathological future cannot grow the record without limit. */
 const MAX_QUERIES = 64
 
-/** Fat-handle outliers retained. Mirrors `handleStoreInventory.topHeavy`, which
- *  is already capped upstream; re-stated here so the record's own bound is
- *  visible at the shape. */
-const TOP_HEAVY = 5
-
 /** One timing distribution as stored. A subset of `TimingSnapshot` — the fields
  *  a trend can act on. `p95Ms` is over the reservoir's last 256 samples, NOT the
  *  whole session, so on a long session it describes recent behaviour; `calls`
@@ -250,7 +245,7 @@ export const buildInteractionRecord = (
       maxDeps: inventory.maxDeps,
       p50Deps: inventory.p50Deps,
       p95Deps: inventory.p95Deps,
-      topHeavy: inventory.topHeavy.slice(0, TOP_HEAVY).map((h) => ({
+      topHeavy: inventory.topHeavy.map((h) => ({
         query: queryNameFromHandleKey(h.key),
         depCount: h.depCount,
       })),
@@ -264,19 +259,17 @@ export const buildInteractionRecord = (
  *  session owns) live in `./sessionContext`; this module asks rather than
  *  deciding. See that module for why. */
 
-const countLiveBlocksImpl = async (repo: Repo, workspaceId: string): Promise<number> => {
+/** Live blocks in a workspace. Shared with the monitor, which pairs it with a
+ *  LIVE `repo.metrics()` snapshot and so needs the same measurement, not the
+ *  size recorded by some earlier session. ~15ms on a 327k-block graph:
+ *  affordable for an idle-gated caller, not for a hot path. */
+export const countLiveBlocks = async (repo: Repo, workspaceId: string): Promise<number> => {
   const row = await repo.db.getOptional<{ n: number }>(
     'SELECT COUNT(*) AS n FROM blocks WHERE workspace_id = ? AND deleted = 0',
     [workspaceId],
   )
   return row?.n ?? 0
 }
-
-/** Live blocks in a workspace. Shared with the monitor, which pairs it with a
- *  LIVE `repo.metrics()` snapshot and so needs the same measurement, not the
- *  size recorded by some earlier session. Measured at ~15ms on a 327k-block
- *  graph — affordable for an idle-gated caller, not for a hot path. */
-export const countLiveBlocks = countLiveBlocksImpl
 
 const isLive = async (repo: Repo, blockId: string): Promise<boolean> => {
   const row = await repo.db.getOptional<{ id: string }>(

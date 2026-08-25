@@ -6,6 +6,10 @@
  * the difference between "judged and fine" and "nothing was judged".
  */
 import type { PerfAnalysis } from './analyze.js'
+
+/** Nothing was judged at all. Derived rather than stored, so it cannot be set
+ *  inconsistently with `ready`. */
+const nothingJudged = (a: PerfAnalysis): boolean => !a.ready.interaction && !a.ready.startup
 import type { Regression } from './series.js'
 
 export interface PerfVerdict {
@@ -66,7 +70,7 @@ export const summarize = (analysis: PerfAnalysis): PerfVerdict => {
   // reached against them still stands — clean as much as regressed — and the
   // blocker is context on it. The disabled headline is for the one case where
   // nothing was judged at all, and so there is no other verdict to carry it.
-  if (blocked !== null && analysis.insufficientHistory) {
+  if (blocked !== null && nothingJudged(analysis)) {
     return {
       kind: 'pending',
       headline: 'Performance history disabled',
@@ -92,7 +96,7 @@ export const summarize = (analysis: PerfAnalysis): PerfVerdict => {
       regressions: analysis.regressions,
     }
   }
-  if (analysis.insufficientHistory) {
+  if (nothingJudged(analysis)) {
     return {
       kind: 'pending',
       headline: 'Building a baseline',
