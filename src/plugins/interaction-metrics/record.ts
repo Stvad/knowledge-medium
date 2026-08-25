@@ -115,6 +115,18 @@ export const interactionRecordProp = seedProperty<InteractionRecordData | undefi
   changeScope: ChangeScope.Automation,
 })
 
+/** The record blocks themselves. Typing the rows -- not just their container --
+ *  is what lets them be found by typed query, audited, and migrated, instead of
+ *  being inferred from position in the tree plus the presence of a property. */
+export const interactionRecordType = seedType({
+  seedKey: 'system:interaction-metrics/type/interaction-record',
+  revision: 1,
+  id: 'interaction-metrics-record',
+  label: 'Interaction metrics record',
+  hideFromCompletion: true,
+  properties: [],
+})
+
 /** Parent ui-state container; each session adds one child under its client's group. */
 export const interactionMetricsUIStateType = seedType({
   seedKey: 'system:interaction-metrics/type/interaction-metrics',
@@ -142,17 +154,23 @@ const toTimingSample = (t: {
 /**
  * Recover the query name from a HandleStore key.
  *
- * `handleKey(name, args)` is `name` when args are absent and `` `${name}:${json}` ``
- * otherwise, where `json` is `stableArgsKey`'s output and so always starts with
- * `[`. The first `:[` in a key is therefore its args boundary.
+ * A query handle is keyed `query:<name>@<registryEpoch>` plus, when the query
+ * takes arguments, `:<serialized args>` — and the serialization always starts
+ * with `[`, so the first `:[` in a key is its args boundary.
  *
- * This is a PRIVACY boundary, not a cosmetic one: args carry block ids and raw
- * search text (quick-find keys on the typed query), and this record is a synced
- * block that a human or agent may paste into an issue. The split fails SAFE —
- * any name that did contain `:[` would truncate EARLIER, never later, so no
- * argument content can survive it whatever the name looks like.
+ * The args split is a PRIVACY boundary, not a cosmetic one: args carry block
+ * ids and raw search text (quick-find keys on the typed query), and this record
+ * is a synced block that a human or agent may paste into an issue. It fails
+ * SAFE — any name that did contain `:[` would truncate EARLIER, never later, so
+ * no argument content can survive it whatever the name looks like, and neither
+ * of the two cosmetic trims below can lengthen the result.
+ *
+ * The epoch has to go for a different reason: a registry swap bumps it, so
+ * leaving it in would file the same query under a new name mid-session and
+ * silently break the grouping a trend depends on.
  */
-export const queryNameFromHandleKey = (key: string): string => key.split(':[')[0]
+export const queryNameFromHandleKey = (key: string): string =>
+  key.split(':[')[0].replace(/^query:/, '').replace(/@\d+$/, '')
 
 /** Pure: the comparable subset of a metrics snapshot. Shared by the stored
  *  record and by the monitor's live reading of the current session, so the two
@@ -218,24 +236,30 @@ export const buildInteractionRecord = (
 
 // ──── per-session write ────
 
-interface SessionState {
+interface PageSession {
   blockId: string
+  /** The workspace this page session's counters are attributable to. */
+  workspaceId: string
   startedAt: number
-  /** Counted once per session: a session's graph barely moves, and the count is
-   *  a full scan of the workspace's live blocks — cheap enough at idle, not
-   *  cheap enough to repeat every sample. */
-  blockCount: number
 }
 
-/** workspaceId → the record this page session owns there. Keyed by workspace
- *  because a session that switches workspaces has genuinely separate counters
- *  to attribute; keyed per SESSION (fresh block ids) because two devices must
- *  never write the same row — the same reason startup-metrics is
- *  block-per-session. */
-const sessions = new Map<string, SessionState>()
+/** ONE record per page session, not per workspace.
+ *
+ *  `repo.metrics()` counters are monotonic from Repo construction and are not
+ *  segmented by workspace, so a second workspace opened in the same page
+ *  session inherits the first one's queries and writes while reporting its own
+ *  block count. Rather than pretend to attribute that, sampling STOPS: the
+ *  record written while only one workspace had been seen stays correct, and no
+ *  blended one is ever written. Losing the (rare) multi-workspace session beats
+ *  poisoning the baseline every later comparison is measured against. */
+let pageSession: PageSession | null = null
+let unattributable = false
 
-/** Test helper — forget this process's sessions so the next sample re-creates. */
-export const resetInteractionSessions = (): void => { sessions.clear() }
+/** Test helper — forget this process's session so the next sample re-creates. */
+export const resetInteractionSessions = (): void => {
+  pageSession = null
+  unattributable = false
+}
 
 const countLiveBlocks = async (repo: Repo, workspaceId: string): Promise<number> => {
   const row = await repo.db.getOptional<{ n: number }>(
@@ -245,13 +269,20 @@ const countLiveBlocks = async (repo: Repo, workspaceId: string): Promise<number>
   return row?.n ?? 0
 }
 
-const openSession = async (repo: Repo, workspaceId: string): Promise<SessionState> => {
+const isLive = async (repo: Repo, blockId: string): Promise<boolean> => {
+  const row = await repo.db.getOptional<{ id: string }>(
+    'SELECT id FROM blocks WHERE id = ? AND deleted = 0',
+    [blockId],
+  )
+  return Boolean(row)
+}
+
+const openSession = async (repo: Repo, workspaceId: string): Promise<PageSession> => {
   const root = await getPluginUIStateBlock(repo, workspaceId, repo.user, interactionMetricsUIStateType)
   const clientId = getClientId()
   const group = await getPluginUIStateChild(root, clientId, `${getDeviceLabel()} · ${clientId.slice(0, 8)}`)
   const blockId = uuidv4()
   const startedAt = Date.now() - performance.now()
-  const blockCount = await countLiveBlocks(repo, workspaceId)
   // Newest-first within the client's group, matching startup-metrics.
   const first = await repo.db.getOptional<{ order_key: string }>(
     'SELECT order_key FROM blocks WHERE parent_id = ? AND deleted = 0 ORDER BY order_key LIMIT 1',
@@ -269,34 +300,61 @@ const openSession = async (repo: Repo, workspaceId: string): Promise<SessionStat
       },
       { systemMint: true },
     )
+    // Same tx as the create, so a record is never briefly untyped.
+    await repo.addTypeInTx(tx, blockId, interactionRecordType.id, {})
   }, { scope: ChangeScope.Automation, description: 'interaction metrics record' })
-  const state: SessionState = { blockId, startedAt, blockCount }
-  sessions.set(workspaceId, state)
-  return state
+  const session: PageSession = { blockId, workspaceId, startedAt }
+  pageSession = session
+  return session
 }
 
 /**
- * Sample `repo.metrics()` into this session's record, creating the record block
- * on the first sample and UPDATING it in place afterwards.
+ * Sample `repo.metrics()` into this page session's record, creating the record
+ * block on the first sample and UPDATING it in place afterwards. Returns the
+ * record's block id, or null when this session is not one that may be sampled.
  *
  * Update-in-place rather than append-per-sample: the series a trend reads is
  * one point per session, and a mid-session sample is a strictly worse version
  * of the session's final one. Re-writing one small block costs a write; a
  * growing append log would cost the graph.
  */
-export const writeInteractionSample = async (repo: Repo, workspaceId: string): Promise<string> => {
-  const state = sessions.get(workspaceId) ?? (await openSession(repo, workspaceId))
+export const writeInteractionSample = async (
+  repo: Repo,
+  workspaceId: string,
+): Promise<string | null> => {
+  if (unattributable) return null
+  // Checked HERE rather than at scheduling time: the workspace role resolves
+  // asynchronously after mount, so a check when the effect starts can run
+  // before `isReadOnly` is known. In a viewer workspace the Automation scope
+  // admits this write locally and the server's RLS then refuses the upload,
+  // parking it in the rejection quarantine -- which the status chip reports to
+  // the user as changes that could not sync. A recurring sampler would keep
+  // manufacturing those.
+  if (repo.isReadOnly) return null
+  if (pageSession && pageSession.workspaceId !== workspaceId) {
+    unattributable = true
+    return null
+  }
+  // The record can be deleted from another device, or by a user browsing the
+  // metrics tree. Writing a property to a tombstone does not restore it, so
+  // without this the session would keep updating a row no reader can see.
+  const live = pageSession && (await isLive(repo, pageSession.blockId)) ? pageSession : null
+  const session = live ?? (await openSession(repo, workspaceId))
   const data = buildInteractionRecord(repo.metrics(), {
     recordedAt: Date.now(),
-    startedAt: state.startedAt,
+    startedAt: session.startedAt,
     appVersion: appVersion.display,
     appSha: appVersion.sha,
     clientId: getClientId(),
     deviceLabel: getDeviceLabel(),
-    blockCount: state.blockCount,
+    // Re-counted per sample rather than cached from session start: this is the
+    // dominant confound for every timing in the record, and a session that
+    // imports or syncs a lot of blocks would otherwise report the final
+    // timings against the opening graph size.
+    blockCount: await countLiveBlocks(repo, workspaceId),
   })
   await repo.tx(async (tx) => {
-    await tx.setProperty(state.blockId, interactionRecordProp, data)
+    await tx.setProperty(session.blockId, interactionRecordProp, data)
   }, { scope: ChangeScope.Automation, description: 'interaction metrics record' })
-  return state.blockId
+  return session.blockId
 }

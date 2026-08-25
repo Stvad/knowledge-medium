@@ -115,7 +115,13 @@ export const buildStartupRecord = (
 /** Append one startup record as a fresh child block under this client's group
  *  block (one per browser/device installation) inside the per-user
  *  startup-metrics ui-state subtree. Returns the new block id. */
-export const writeStartupRecord = async (repo: Repo, workspaceId: string): Promise<string> => {
+export const writeStartupRecord = async (repo: Repo, workspaceId: string): Promise<string | null> => {
+  // A viewer workspace admits this Automation-scope write locally and the
+  // server's RLS then refuses the upload, parking it in the rejection
+  // quarantine the status chip reports to the user as changes that could not
+  // sync. Checked here rather than at scheduling time because the workspace
+  // role resolves asynchronously after mount.
+  if (repo.isReadOnly) return null
   const root = await getPluginUIStateBlock(repo, workspaceId, repo.user, startupMetricsUIStateType)
   const clientId = getClientId()
   const deviceLabel = getDeviceLabel()

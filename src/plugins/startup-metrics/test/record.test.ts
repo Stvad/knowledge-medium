@@ -100,7 +100,7 @@ describe('writeStartupRecord', () => {
     )
     expect(row?.parent_id).toBe(group)
 
-    const block = repo.block(id)
+    const block = repo.block(id!)
     await block.load()
     expect(block.peekProperty(startupRecordProp)).toMatchObject({
       recordedAt: 1700,
@@ -158,8 +158,8 @@ describe('writeStartupRecord', () => {
       (await sharedDb.db.getOptional<{ parent_id: string }>(
         'SELECT parent_id FROM blocks WHERE id = ?', [id],
       ))?.parent_id
-    expect(await parentOf(recA)).toBe(groupA.id)
-    expect(await parentOf(recB)).toBe(groupB.id)
+    expect(await parentOf(recA!)).toBe(groupA.id)
+    expect(await parentOf(recB!)).toBe(groupB.id)
   })
 
   it('block-per-session: two writes create two distinct records (no clobber)', async () => {
@@ -185,6 +185,15 @@ describe('writeStartupRecord', () => {
       [group],
     )
     expect(ordered.map(c => c.id)).toEqual([third, second, first])
+  })
+
+  it('writes nothing in a read-only workspace', async () => {
+    // Automation scope is admitted locally and refused by the server's RLS,
+    // landing in the rejection quarantine the status chip surfaces.
+    repo.setReadOnly(true)
+    const tx = vi.spyOn(repo, 'tx')
+    expect(await writeStartupRecord(repo, WS)).toBeNull()
+    expect(tx).not.toHaveBeenCalled()
   })
 })
 

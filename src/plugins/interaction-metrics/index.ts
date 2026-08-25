@@ -2,7 +2,11 @@ import type { AppExtension } from '@/facets/facet.js'
 import { systemToggle } from '@/facets/togglable.js'
 import { definitionSeedsFacet, typeSeedsFacet } from '@/data/facets.js'
 import { interactionMetricsEffectContribution } from './schedule.ts'
-import { interactionMetricsUIStateType, interactionRecordProp } from './record.ts'
+import {
+  interactionMetricsUIStateType,
+  interactionRecordProp,
+  interactionRecordType,
+} from './record.ts'
 
 /** Records a durable per-session snapshot of the data layer's own counters
  *  (query latencies, invalidation fan-out, handle inventory) so interaction
@@ -16,4 +20,5 @@ export const interactionMetricsPlugin: AppExtension = systemToggle({
   interactionMetricsEffectContribution,
   definitionSeedsFacet.of(interactionRecordProp, { source: 'interaction-metrics' }),
   typeSeedsFacet.of(interactionMetricsUIStateType, { source: 'interaction-metrics' }),
+  typeSeedsFacet.of(interactionRecordType, { source: 'interaction-metrics' }),
 ])

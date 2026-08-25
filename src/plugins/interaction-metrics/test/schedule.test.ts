@@ -10,8 +10,8 @@ import { Repo } from '@/data/repo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import type { User } from '@/data/api'
-import { definitionSeedsFacet } from '@/data/facets'
-import { interactionRecordProp, resetInteractionSessions } from '../record'
+import { definitionSeedsFacet, typeSeedsFacet } from '@/data/facets'
+import { interactionRecordProp, interactionRecordType, resetInteractionSessions } from '../record'
 import { drainInteractionSamples, interactionMetricsEffect } from '../schedule'
 
 const WS = 'ws-1'
@@ -28,7 +28,10 @@ beforeEach(async () => {
   repo = createTestRepo({
     db: sharedDb.db,
     user: USER,
-    extensions: [definitionSeedsFacet.of(interactionRecordProp, { source: 'test' })],
+    extensions: [
+      definitionSeedsFacet.of(interactionRecordProp, { source: 'test' }),
+      typeSeedsFacet.of(interactionRecordType, { source: 'test' }),
+    ],
   }).repo
   repo.setActiveWorkspaceId(WS)
 })

@@ -9,12 +9,13 @@ import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { getPluginUIStateBlock, getPluginUIStateChild } from '@/data/stateBlocks'
 import { getClientId, resetClientIdCache } from '@/utils/clientId'
-import type { User } from '@/data/api'
-import { definitionSeedsFacet } from '@/data/facets'
+import { ChangeScope, type User } from '@/data/api'
+import { definitionSeedsFacet, typeSeedsFacet } from '@/data/facets'
 import {
   buildInteractionRecord,
   interactionMetricsUIStateType,
   interactionRecordProp,
+  interactionRecordType,
   queryNameFromHandleKey,
   resetInteractionSessions,
   writeInteractionSample,
@@ -35,7 +36,10 @@ beforeEach(async () => {
   repo = createTestRepo({
     db: sharedDb.db,
     user: USER,
-    extensions: [definitionSeedsFacet.of(interactionRecordProp, { source: 'test' })],
+    extensions: [
+      definitionSeedsFacet.of(interactionRecordProp, { source: 'test' }),
+      typeSeedsFacet.of(interactionRecordType, { source: 'test' }),
+    ],
   }).repo
   repo.setActiveWorkspaceId(WS)
 })
@@ -68,20 +72,30 @@ const META = {
 }
 
 describe('queryNameFromHandleKey', () => {
-  it('keeps a bare name and strips the serialized args', () => {
-    expect(queryNameFromHandleKey('core.recentActivity')).toBe('core.recentActivity')
-    expect(queryNameFromHandleKey('groupedBacklinks.forBlock:[["string","blk-42"]]'))
+  // Production keys are `query:<name>@<registryEpoch>` plus serialized args --
+  // the shape `Repo.dispatchQuery` builds, not a bare name.
+  it('strips the query wrapper, the registry epoch and the args', () => {
+    expect(queryNameFromHandleKey('query:core.recentActivity@2')).toBe('core.recentActivity')
+    expect(queryNameFromHandleKey('query:groupedBacklinks.forBlock@7:[["string","blk-42"]]'))
       .toBe('groupedBacklinks.forBlock')
   })
 
+  // A registry swap bumps the epoch. Leaving it in would file the same query
+  // under a new name mid-session and break the grouping a trend depends on.
+  it('groups the same query across registry epochs', () => {
+    expect(queryNameFromHandleKey('query:core.children@2:[["string","b"]]'))
+      .toBe(queryNameFromHandleKey('query:core.children@31:[["string","b"]]'))
+  })
+
   it('keeps a name that contains a colon, since the args boundary is `:[`', () => {
-    expect(queryNameFromHandleKey('plugin:tasks/dueSoon:[["number",3]]')).toBe('plugin:tasks/dueSoon')
+    expect(queryNameFromHandleKey('query:plugin:tasks/dueSoon@1:[["number",3]]'))
+      .toBe('plugin:tasks/dueSoon')
   })
 
   // The reason this function exists: args carry block ids and raw search text,
   // and the record is a synced block a human may paste into a public issue.
   it('drops argument content even when the argument itself contains the boundary', () => {
-    const key = 'quickFind.search:[["string","a:[b secret"]]'
+    const key = 'query:quickFind.search@1:[["string","a:[b secret"]]'
     expect(queryNameFromHandleKey(key)).toBe('quickFind.search')
     expect(queryNameFromHandleKey(key)).not.toContain('secret')
   })
@@ -117,7 +131,7 @@ describe('buildInteractionRecord', () => {
       metricsFixture({
         handleStoreInventory: {
           handleCount: 2, totalDeps: 5, maxDeps: 4, p50Deps: 1, p95Deps: 4,
-          topHeavy: [{ key: 'groupedBacklinks.forBlock:[["string","blk-private"]]', depCount: 4 }],
+          topHeavy: [{ key: 'query:groupedBacklinks.forBlock@3:[["string","blk-private"]]', depCount: 4 }],
         },
       } as Partial<ReturnType<Repo['metrics']>>),
       META,
@@ -142,6 +156,11 @@ describe('writeInteractionSample', () => {
     const root = await getPluginUIStateBlock(repo, WS, USER, interactionMetricsUIStateType)
     return (await getPluginUIStateChild(root, getClientId())).id
   }
+  const stored = async (blockId: string) => {
+    const block = repo.block(blockId)
+    await block.load()
+    return block.peekProperty(interactionRecordProp)
+  }
   const childIds = async (parent: string): Promise<string[]> =>
     (await sharedDb.db.getAll<{ id: string }>(
       'SELECT id FROM blocks WHERE parent_id = ? AND deleted = 0',
@@ -150,8 +169,9 @@ describe('writeInteractionSample', () => {
 
   it('creates one record block under the client group and stores the sample', async () => {
     const blockId = await writeInteractionSample(repo, WS)
+    expect(blockId).not.toBeNull()
     expect(await childIds(await groupId())).toEqual([blockId])
-    const block = repo.block(blockId)
+    const block = repo.block(blockId!)
     await block.load()
     expect(block.peekProperty(interactionRecordProp)).toMatchObject({
       clientId: getClientId(),
@@ -166,5 +186,53 @@ describe('writeInteractionSample', () => {
     const second = await writeInteractionSample(repo, WS)
     expect(second).toBe(first)
     expect(await childIds(await groupId())).toHaveLength(1)
+  })
+
+  // Automation scope is admitted locally in a read-only workspace and then
+  // refused by the server's RLS, parking the write in the rejection quarantine
+  // that the status chip reports to the user. A recurring sampler would keep
+  // manufacturing those.
+  it('writes nothing in a read-only workspace', async () => {
+    repo.setReadOnly(true)
+    const tx = vi.spyOn(repo, 'tx')
+    expect(await writeInteractionSample(repo, WS)).toBeNull()
+    expect(tx).not.toHaveBeenCalled()
+  })
+
+  // repo.metrics() counters are page-global, not per workspace, so a second
+  // workspace would inherit the first's queries and writes while reporting its
+  // own block count.
+  it('stops sampling once a page session has seen a second workspace', async () => {
+    const first = await writeInteractionSample(repo, WS)
+    expect(first).not.toBeNull()
+    expect(await writeInteractionSample(repo, 'ws-2')).toBeNull()
+    // And does not resume on switching back -- the counters stay blended.
+    expect(await writeInteractionSample(repo, WS)).toBeNull()
+  })
+
+  // Writing a property to a tombstone does not restore it, so without this the
+  // session would keep updating a row no reader can see.
+  it('opens a replacement record when the current one is deleted', async () => {
+    const first = await writeInteractionSample(repo, WS)
+    await repo.tx(async (tx) => { await tx.delete(first!) }, { scope: ChangeScope.Automation })
+    const second = await writeInteractionSample(repo, WS)
+    expect(second).not.toBe(first)
+    expect(await childIds(await groupId())).toContain(second)
+  })
+
+  // blockCount is the dominant confound for every timing in the record, so a
+  // session that grows the graph must not report its final timings against the
+  // size the graph had when it opened.
+  it('re-counts the graph on each sample', async () => {
+    const first = await writeInteractionSample(repo, WS)
+    const before = (await stored(first!))!.blockCount
+    await repo.tx(async (tx) => {
+      for (let i = 0; i < 3; i++) {
+        await tx.create({ id: `extra-${i}`, workspaceId: WS, parentId: null, orderKey: `a${i}`,
+          content: 'x', properties: {} }, { systemMint: true })
+      }
+    }, { scope: ChangeScope.Automation })
+    await writeInteractionSample(repo, WS)
+    expect((await stored(first!))!.blockCount).toBe(before + 3)
   })
 })
