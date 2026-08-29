@@ -27,15 +27,14 @@ import { createContext, useContext, type PropsWithChildren, type ReactElement } 
  * Default `false` — with no provider mounted, behaviour is exactly what it
  * was.
  *
- * DELIBERATELY NOT a key on `blockContext`: `blockContext` is a dependency
- * of `DefaultBlockRenderer`'s `resolveContext` memo, and that memo's
- * identity is in turn the element TYPE of every slot it builds
- * (`ContentSlot` / `FooterSlot` / `ControlsSlot` / `Layout`) — so flipping
- * a flag on it gives React a new type and remounts each block's slots, the
- * live CodeMirror editor included. That is exactly the regression #548 /
- * #553 fixed by taking `aliases` back out of the resolve context, and it
- * defeats the whole point of keeping the lane alive. A dedicated context
- * re-renders only the activation hook's callers.
+ * DELIBERATELY NOT a key on `blockContext`: it is a dependency of
+ * `DefaultBlockRenderer`'s `resolveContext` memo, whose identity is the
+ * element TYPE of every slot that memo builds — so flipping a flag there
+ * remounts each block's slots, the live CodeMirror editor included, which
+ * defeats the point of keeping the lane alive. That invariant and its
+ * precedent belong to `BlockResolveContext`; see
+ * `src/extensions/blockInteraction.ts`. A dedicated context re-renders
+ * only the activation hook's callers.
  *
  * SCOPE — three boundaries worth stating outright:
  *
