@@ -30,6 +30,7 @@
  */
 
 import { PowerSyncDatabase, Schema, WASQLiteOpenFactory, WASQLiteVFS } from '@powersync/web'
+import { prepareLocalDbForVfs, resolveLocalDbVfs, type LocalDbVfs } from '@/data/localDbVfs.js'
 import { createPowerSyncConnector, hasRemoteSyncConfig } from '@/services/powersync.js'
 import { createSyncResolver, type SyncResolver } from '@/sync/keys/resolver.js'
 import { getWorkspaceKeyStore } from '@/sync/keys/keyStore.js'
@@ -170,6 +171,11 @@ export const syncObserverDepsFor = (
   }
 }
 
+// Resolved once per page load, BEFORE the first `getPowerSyncDb` — every
+// connection this process opens has to agree on the VFS, and the handoff that
+// makes the on-disk state safe for it has already run by then.
+let resolvedLocalDbVfs: LocalDbVfs | null = null
+
 // Firefox and Safari block OPFS in private browsing — `getDirectory()`
 // throws SecurityError. Probe once and surface a useful message before
 // PowerSync gets to fail with the opaque internal error.
@@ -195,19 +201,41 @@ const assertOpfsAvailable = (): Promise<void> => {
   return opfsProbe
 }
 
-// OPFSCoopSyncVFS gives fast sync access handles (much faster than IDB
+// Both OPFS VFSes give fast sync access handles (much faster than IDB
 // transactions); enableMultiTabs lets the SharedSync worker coordinate
-// one sync stream across all open tabs of the same workspace.
-const buildPowerSyncDb = (userId: string) => new PowerSyncDatabase({
-  schema: appSchema,
-  database: new WASQLiteOpenFactory({
-    dbFilename: dbFilenameForUser(userId),
-    vfs: WASQLiteVFS.OPFSCoopSyncVFS,
-  }),
-  flags: {
-    enableMultiTabs: true,
-  },
-})
+// one sync stream across all open tabs of the same workspace. Which VFS is
+// resolved per-device in `ensurePowerSyncReady` — see `localDbVfs.ts`.
+//
+// `additionalReaders` opens read-only connections in their own workers, so a
+// read no longer queues behind an in-flight write on PowerSync's single
+// connection. Only OPFSWriteAheadVFS supports it; PowerSync ignores it for the
+// others.
+const ADDITIONAL_READERS = 1
+
+// SQLite's default 2000 pages (~8 MB) is catastrophic for import-heavy
+// workspaces (250k blocks ~ 700 MB on disk): every cold page is a synchronous
+// OPFS read on the worker thread, so a page-open's load + ancestors + children
+// + backlinks queries all serialise behind cold-page I/O. Budget is TOTAL, not
+// per connection — PowerSync applies `cache_size` to each connection it opens,
+// so adding readers divides the same 256 MiB rather than multiplying it.
+const TOTAL_PAGE_CACHE_KB = 262144
+
+const buildPowerSyncDb = (userId: string) => {
+  const vfs = resolvedLocalDbVfs ?? WASQLiteVFS.OPFSCoopSyncVFS
+  const connections = vfs === WASQLiteVFS.OPFSWriteAheadVFS ? 1 + ADDITIONAL_READERS : 1
+  return new PowerSyncDatabase({
+    schema: appSchema,
+    database: new WASQLiteOpenFactory({
+      dbFilename: dbFilenameForUser(userId),
+      vfs,
+      additionalReaders: ADDITIONAL_READERS,
+      cacheSizeKb: Math.floor(TOTAL_PAGE_CACHE_KB / connections),
+    }),
+    flags: {
+      enableMultiTabs: true,
+    },
+  })
+}
 
 export const getPowerSyncDb = (userId: string): PowerSyncDatabase => {
   const existing = dbsByUser.get(userId)
@@ -250,6 +278,11 @@ export const ensurePowerSyncReady = async (
 
   const dbFilename = dbFilenameForUser(userId)
   await recordPreviewDatabaseForReaper(dbFilename)
+  if (!resolvedLocalDbVfs) {
+    const target = await resolveLocalDbVfs()
+    await prepareLocalDbForVfs(dbFilename, target)
+    resolvedLocalDbVfs = target
+  }
   const db = getPowerSyncDb(userId)
 
   let initPromise = initPromises.get(userId)
@@ -330,28 +363,10 @@ const initializePowerSyncDb = async (powerSyncDb: PowerSyncDatabase) => {
   // journal mode. Re-evaluate if PowerSync ever ships a WAL-capable
   // browser VFS.
 
-  // Cache + temp-store tuning. SQLite's default `cache_size` is 2000
-  // pages = ~8 MB — fine for tiny DBs, catastrophic for users with
-  // import-heavy workspaces (250k blocks ≈ 700 MB on-disk). Each cold
-  // page becomes a synchronous OPFS read on the worker thread, so a
-  // page-open's load + ancestors + children + backlinks queries all
-  // serialize behind cold-page I/O. Raising the cache to 256 MiB lets
-  // the hot index + active-page footprint live in worker RAM, dropping
-  // most reads to memory speed after a brief warmup.
-  //
-  // Negative value = absolute KiB (positive = page count, which depends
-  // on page_size). 262144 KiB = 256 MiB.
-  //
-  // Trade: ~256 MiB resident browser memory while the app is open. On
-  // small DBs SQLite only allocates pages it touches, so steady-state
-  // memory tracks the actual working set (much less than the cap).
-  //
-  // `temp_store = MEMORY` keeps temp B-trees (DISTINCT, ORDER BY,
-  // recursive CTEs) off OPFS — they're transient and don't need to
-  // survive a crash, and the OPFS VFS doesn't perform well as a temp
-  // store anyway.
-  await powerSyncDb.execute('PRAGMA cache_size = -262144')
-  await powerSyncDb.execute('PRAGMA temp_store = MEMORY')
+  // Cache + temp-store tuning is passed to the open factory instead
+  // (`TOTAL_PAGE_CACHE_KB`, and PowerSync's `temporaryStorage`, which defaults
+  // to MEMORY): a pragma executed here takes the write lock and so reaches only
+  // the writer connection, leaving read-only connections on the 50 MB default.
 
   // ── blocks + its indexes ──
   await powerSyncDb.execute(CREATE_BLOCKS_TABLE_SQL)
