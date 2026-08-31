@@ -109,4 +109,4 @@ downgrade handoff.
 
 The recovery zip (`getRawSqliteDbBackup`, used when the database won't open) now bundles
 the sidecars, but `importRawSqliteDb` restores a single `.db`. Restoring a zip captured
-with outstanding write-ahead frames therefore drops them. Tracked in km-t9g3.
+with outstanding write-ahead frames therefore drops them. Tracked in [#849](https://github.com/Stvad/knowledge-medium/issues/849).
