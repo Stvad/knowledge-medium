@@ -906,7 +906,7 @@ describe('a deferral the operator cannot clear by waiting', () => {
     const {message} = describeOutcome(
       {outcome: 'deferred', undoHistoryCleared: true,
        reason: '3 synced row(s) have not reached `blocks`', retryable: false},
-      counts(0), false, {flipped: true, undoCleared: true},
+      counts(0), {flipped: true, undoCleared: true},
     )
 
     expect(message).toMatch(/will not get further/i)
@@ -917,7 +917,7 @@ describe('a deferral the operator cannot clear by waiting', () => {
     const {message} = describeOutcome(
       {outcome: 'deferred', undoHistoryCleared: true,
        reason: 'synced rows are still draining', retryable: true},
-      counts(0), false, {flipped: true, undoCleared: true},
+      counts(0), {flipped: true, undoCleared: true},
     )
 
     expect(message).toMatch(/run it again/i)
