@@ -447,6 +447,8 @@ describe('deleteLocalSqliteDb', () => {
       'kmp-v6-user-1.db-journal',
       'kmp-v6-user-1.db-wal',
       'kmp-v6-user-1.db-shm',
+      'kmp-v6-user-1.db-wa0',
+      'kmp-v6-user-1.db-wa1',
       'kmp-v6-user-1.db',
     ])
   })
@@ -461,7 +463,7 @@ describe('deleteLocalSqliteDb', () => {
     })
 
     await expect(deleteLocalSqliteDb('user-1')).resolves.toBeUndefined()
-    expect(removeEntry).toHaveBeenCalledTimes(4)
+    expect(removeEntry).toHaveBeenCalledTimes(6)
   })
 
   it('leaves the .db in place (and throws) when a journal sibling cannot be deleted', async () => {

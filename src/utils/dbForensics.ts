@@ -18,6 +18,7 @@
  * imported from the DB-open path without a cycle.
  */
 
+import { DB_FILE_SIBLING_SUFFIXES } from '@/data/localDbStorage.js'
 import { IdbKeyedStore } from '@/utils/idbKeyedStore.js'
 import { scanForZeroPages, type OpfsPageScanResult } from '@/utils/opfsPageScan.js'
 
@@ -32,8 +33,6 @@ const SNAPSHOT_PREFIX = 'snapshot:'
 const MAX_SESSION_EVENTS = 24
 const MAX_UNCLEAN_ARCHIVES = 20
 const MAX_SNAPSHOTS = 10
-
-const DB_FILE_SIBLING_SUFFIXES = ['-journal', '-wal', '-shm'] as const
 
 export interface ForensicSessionRecord {
   startedAt: number

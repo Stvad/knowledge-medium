@@ -1,3 +1,4 @@
+import { WRITE_AHEAD_SIDECAR_SUFFIXES } from '@/data/localDbVfs.js'
 import {
   SERVICE_WORKER_META_CACHE,
   previewDatabaseRecordUrl,
@@ -11,6 +12,17 @@ import {
 // fails with "Filename too long" and no useful error. 7 (prefix) +
 // 40 (user) + 3 (suffix) = 50 — safe headroom.
 const MAX_USER_SEGMENT = 40
+
+// Every file SQLite or the VFS derives from the main `.db` name. Backup,
+// wipe, import-replace and the forensic inventory all key off this ONE list:
+// a suffix missing from it is a file that survives a wipe and then replays
+// over the next database at that name.
+export const DB_FILE_SIBLING_SUFFIXES = [
+  '-journal',
+  '-wal',
+  '-shm',
+  ...WRITE_AHEAD_SIDECAR_SUFFIXES,
+] as const
 
 // v6 = baseline (OPFSCoopSync + multi-tabs on @powersync/web@1.38.1).
 // History: v3 was the original IDB layout; v4 introduced OPFS; v5

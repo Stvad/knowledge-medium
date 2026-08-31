@@ -17,7 +17,7 @@
 import { v4 as uuidv4 } from 'uuid'
 import { Zip, ZipPassThrough } from 'fflate'
 import type { Repo } from '../data/repo'
-import { dbFilenameForUser } from '@/data/localDbStorage'
+import { DB_FILE_SIBLING_SUFFIXES, dbFilenameForUser } from '@/data/localDbStorage'
 
 export interface RawSqliteDbBlobExport {
   blob: Blob
@@ -38,6 +38,7 @@ export interface RawSqliteDbFileExport {
 
 interface PowerSyncReadLockDb {
   readLock<T>(callback: (db: unknown) => Promise<T>): Promise<T>
+  execute(sql: string): Promise<unknown>
 }
 
 interface SaveFilePickerOptions {
@@ -380,6 +381,14 @@ const withPowerSyncReadLock = async <T,>(repo: Repo, callback: () => Promise<T>)
   if (typeof db.readLock !== 'function') {
     throw new Error('PowerSync database does not expose readLock; cannot safely snapshot live SQLite DB.')
   }
+  // Under OPFSWriteAheadVFS committed transactions live in the `-wa*` sidecars
+  // until checkpointed, and this exports the main file's BYTES — so without
+  // this the download is an intact-looking database missing its most recent
+  // writes. A no-op under OPFSCoopSyncVFS (rollback-journal mode). Outside the
+  // read lock: the pragma refuses while a transaction is in progress.
+  if (typeof db.execute === 'function') {
+    await db.execute('PRAGMA wal_checkpoint=truncate')
+  }
   return db.readLock(async () => callback())
 }
 
@@ -390,12 +399,6 @@ const pipeBlobToFileHandle = async (
   const writable = await fileHandle.createWritable({keepExistingData: false})
   await blob.stream().pipeTo(writable)
 }
-
-// SQLite sibling files derived from the main .db name. Rollback-journal mode
-// uses -journal; -wal/-shm only appear if a WAL-capable VFS is ever used, but
-// removing them is harmless when absent and defends against a crashed prior
-// session leaving one behind.
-const DB_FILE_SIBLING_SUFFIXES = ['-journal', '-wal', '-shm'] as const
 
 const removeEntryIfExists = async (
   root: FileSystemDirectoryHandle,
