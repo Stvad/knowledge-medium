@@ -374,7 +374,7 @@ f8f41cd9097c96f0bae125f5b230e7edb0b4cc4ba06024c9bc117b53fdcf274e  ./node_modules
 fdc9eaac3f7fb2f6911fd3dc3cf51cd03d74a397937abe0edb92a356c43fdc21  ./node_modules/.pnpm/@ungap_structured-clone@1.3.0/node_modules/@ungap/structured-clone/esm/serialize.js.map
 4e842fb37aa538aa4098f5d5d02952e108e09f77ffb412a27322d0db53882f73  ./node_modules/.pnpm/@vimeo_player@2.29.0/node_modules/@vimeo/player/dist/player.es.js
 b11e936d8261e558ed51d1c75e18ed2b252d93094455b0ac82e78ffc81eb36df  ./node_modules/.pnpm/@vimeo_player@2.29.0/node_modules/@vimeo/player/dist/player.es.js.map
-7ec832b0f8e52d451dc47f64f54fa34250c814c6cbd602c21e3bf06ea3d79ceb  ./node_modules/.pnpm/@vis.gl_react-google-maps@1.8.3_react-dom@19.2.6_react@19.2.6__react@19.2.6/node_modules/@vis.gl/react-google-maps/dist/index.modern.js
+c605f8e4d934b697a8a954bb476ccad39565c2224998f0704d223b988410e708  ./node_modules/.pnpm/@vis.gl_react-google-maps@1.8.3_react-dom@19.2.6_react@19.2.6__react@19.2.6/node_modules/@vis.gl/react-google-maps/dist/index.modern.js
 57dde44bb6f2ce26c0a76e238386d88195da452d6b3061cace2b4d173a27522a  ./node_modules/.pnpm/@vis.gl_react-google-maps@1.8.3_react-dom@19.2.6_react@19.2.6__react@19.2.6/node_modules/@vis.gl/react-google-maps/dist/index.modern.js.map
 d07f22b5eb0ecc5b1c3a7b96d3793ccbbff8d1658f11ce5162b977e652d3da2a  ./node_modules/.pnpm/aria-hidden@1.2.6/node_modules/aria-hidden/dist/es2015/index.js
 a41bcdc6256f2b2c71395bb747c0a04c4863a4bc51d7f4e51b3eb2ba35571f86  ./node_modules/.pnpm/aria-hidden@1.2.6/node_modules/aria-hidden/dist/es2015/index.js.map
@@ -1731,7 +1731,7 @@ b7b20b57449491d17522b2d52bf360256cc239e30bd54a2bfe17dfd8c399fd8f  ./src/App.js
 26ae93c25697f68037ee01d48c6943f8e4da172b8ae0527d1276579a1cc62796  ./src/App.js.map
 0b6cdff83c4e2e654daed8de1db8c4dca693242715e28de06767a51c7c78de15  ./src/appUpdate.js
 90769c02d289c099463e0237f99fa41a7d0faec88ff0ec0c7261af894a4fb1b9  ./src/appUpdate.js.map
-92415fc09d1536a517ee784de13093f61caa891ac0c60927a5074ee070a50267  ./src/appVersion.js
+e36cf3d65a8d34f69420ef5e8c17d45cc55d5b610ca7a6ec199add81c17fc28a  ./src/appVersion.js
 76bd53c764d4393e8e6411205df2c6642a2c684e22691666337476b2a22938a5  ./src/appVersion.js.map
 fea5c9bcdb0b19b9e7a2c87061e8af20afffcb227e47dba1dada4088258e6f93  ./src/bootstrap/resolveWorkspace.js
 c357de0c880a035b6a5fc81aa7642f7adc3c69f64384e749738c74fb09afa57e  ./src/bootstrap/resolveWorkspace.js.map
@@ -2328,8 +2328,8 @@ d39eb1fb7e3a9b1702ab5106cdfc78f33e715131f14d597a0882754d3d945515  ./src/plugins/
 b1872b9a40a7e949417eedbb217930c0c1a45430a3d4bfc55be5c5aaa8697550  ./src/plugins/agent-runtime/AgentTokensDialog.js.map
 b82c0f25c1af8e3ad620ca1ed34976b9314ee458da3a778cc6e5373860a9107b  ./src/plugins/agent-runtime/BridgePairingDialog.js
 4308a81a3a1b68334e5984c7fc8feaae24dc44a72599b1c83b9a416c38ad4316  ./src/plugins/agent-runtime/BridgePairingDialog.js.map
-7f7671fbe3093d9455fbff322c324e28bd820a59b298e4929c24952e89ba4879  ./src/plugins/agent-runtime/authoringCatalog.js
-4cfe699d791d9257fa418274abaf836089199e75d35498f86b2a44757f8a8bd0  ./src/plugins/agent-runtime/authoringCatalog.js.map
+be2640166a3db95d74e79c01d81e7cb02c955cd0d25531b6d0810709c4e612f7  ./src/plugins/agent-runtime/authoringCatalog.js
+69dff6ad67cd16247966286139ffbc8be94f9eead97e6f8213691d7497380c75  ./src/plugins/agent-runtime/authoringCatalog.js.map
 e9f3373e71b32c6ce8eb79fba07752bcf55226349d110e272d1bb4a67528bce8  ./src/plugins/agent-runtime/bridge.js
 fba6d6896e7a47ed25c8e42f073ccf421ca75c9cea05eaa1857fbbd050144141  ./src/plugins/agent-runtime/bridge.js.map
 963f0a8010ec590d1b982ca53a535071d79991e96e951ccf323312fa5c5444fb  ./src/plugins/agent-runtime/commands.js
@@ -2732,8 +2732,8 @@ d05dabc9c50fee6cf472ee17b48bfdbcb525a3fd34ed0e4500f31143f0422681  ./src/plugins/
 e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855  ./src/plugins/find-replace/types.js
 c24e8d96d28faffd838fc0c75ec50c705ebd9492a5f24ff478ba24db4793da87  ./src/plugins/geo/LocationPropertyEditor.js
 536c5136294b67eb2fb826145c0e246a24cfe976f1d381ab0149333426c5866a  ./src/plugins/geo/LocationPropertyEditor.js.map
-76bba0e44b6541e3f47d1bc9b493021636af2ab1336d93ec9170dbd45024b139  ./src/plugins/geo/MapView.js
-f3986111f86a939ab0ffbf00b4681ee658e8ef3ee787e48c08d152a5acb261a6  ./src/plugins/geo/MapView.js.map
+dec3d95290731fca56443860f5d1cf1a228686236129b3f0a1e24d6d6b9f33cb  ./src/plugins/geo/MapView.js
+510b59d2d97038e4e7c460e5a0c97424ddd4b460bf4a6632a31a8e01021bfd41  ./src/plugins/geo/MapView.js.map
 d53e573de6607da044d746cc0f498946a6ab59368335fde25aaf94d1375a84fd  ./src/plugins/geo/blockTypes.js
 411b3f0460d8185d8c2ca96f4622a259ac28a7dece5d24b64bcb399c0152e847  ./src/plugins/geo/blockTypes.js.map
 109a81963626001dd87ac29988dae1ffb83720a1bb3e1e192e937786187486b1  ./src/plugins/geo/codeMirrorExtensions.js
@@ -2754,6 +2754,8 @@ d37b0ccfe9ffdb0117574ed09d47e55e311d7149db58f61dd2344136c85d0704  ./src/plugins/
 1407986b26f8ff03037258d711a3c39bca90bc10677e586761fbcecbe3e49e7f  ./src/plugins/geo/index.js.map
 5cbc6f2c3a0e21a7aec479164d78eb29d0692535127758ba2135b9c3a376d5b4  ./src/plugins/geo/locationsPage.js
 6c4f4348c03b675246ddbfaad2a609f0ac64e44279ff05bb34ae717a3a27da84  ./src/plugins/geo/locationsPage.js.map
+5517070247dfb14801cd64a6b1c467ac9b31c70b79ad90d88616de21d0d9dcbe  ./src/plugins/geo/mapViewport.js
+bf5e10f4d41f0f5217a980f698db67c84f335cca09814e35c4f3f4855ce0d578  ./src/plugins/geo/mapViewport.js.map
 42299af734a088aaf73c0b35fda42722716ac9e04a912757107f6575941df546  ./src/plugins/geo/pickCurrentLocation.js
 f6b4b43d83f918f06f918a91395a5405b01d4b01e525357e0d43800fa6cd5e06  ./src/plugins/geo/pickCurrentLocation.js.map
 d0e90f30bc399c3fae232e2b09dc589b5795203e4be54ee2dc7c2e065a905a18  ./src/plugins/geo/placeAutocomplete.js
@@ -3394,8 +3396,8 @@ ea7891e59b3608440c35c38901ebf443535471174fcbae950c1c74f2885c571a  ./src/utils/vi
 69754adc2a0ce8f9699da30476838e93fd95bd4b61eda37060f239224bc9b656  ./src/utils/viewTransition.js.map
 eda7cd6e992fb9f7324505e9817253123005c192d80e9c52ac4b14967936955c  ./src/utils/viewport.js
 a2bcdb138bcf84f7f3f9fc982c821e724fe578c3ea7971a890ea1ea9bc4c837f  ./src/utils/viewport.js.map
-c0085942eba62a9dca002587755a683a9aec008ea835538ce3fb84673cbaf9ac  ./sw.js
-cc8a37c6aed5cbe095086266a9e60465f874a6e2bfa2da24a358af6d644fc6dc  ./version.json
+5799a734f105f900acb1d7b3dac559fa94ef60d28f9ddee0dca0eaec6639f51d  ./sw.js
+37161de932e692272767012dfb6ff487a5f24fc65416202311a84de26d187332  ./version.json
 4a748afd443918bb16591c834c401dae33e87861ab5dbad0811c3a3b4a9214fb  ./vite.svg
 643714fb239b199a921024c34f82d13697a3803c91c97ff8da10455a09249406  ./wa-sqlite-async.wasm
 d167becf5a6949b1f31b1d026dc15e138b2b34b12fc44b71c56164392900b3b8  ./wa-sqlite.wasm
