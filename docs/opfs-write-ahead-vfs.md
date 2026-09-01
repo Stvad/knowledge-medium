@@ -277,10 +277,14 @@ A restorable fileset is a real `.db` in rollback-journal mode, with siblings dra
 ONE group — the `-wa0`/`-wa1` pair, or `-journal`. Two shapes fall outside that:
 
 - **Sibling-only archives.** When the `.db` is 0 bytes but a journal has content, capture
-  bundles the journal alone. That archive is forensic: read it with `sqlite3 .recover`.
-  There is no conversion that makes it importable, and there should not be — writing a
-  journal back with no database is the replay-onto-a-fresh-`.db` corruption that
-  `dbFileSiblings` exists to prevent.
+  bundles the journal alone. Expect nothing from it: a rollback journal holds before-images
+  of the pages one interrupted transaction was about to change, so without the database it
+  belongs to it is not a database at all and no `sqlite3` command will read it —
+  `.recover` answers `file is not a database (26)`. It is captured because the reset that
+  follows would otherwise delete the last bytes on the device, not because there is a
+  procedure. There is likewise no conversion that makes it importable, and there should not
+  be: writing a journal back with no database is the replay-onto-a-fresh-`.db` corruption
+  that `dbFileSiblings` exists to prevent.
 - **`-wal` / `-shm`.** Capture collects any sibling with bytes, these included. Neither VFS
   here writes WAL mode, so they should never appear; if they do, the database they belong
   to is one `OPFSWriteAheadVFS` cannot open at all (it throws on `SQLITE_OPEN_WAL`).
