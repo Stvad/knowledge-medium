@@ -1301,6 +1301,36 @@ const releaseSyncOwnedAlias = async (
   await tx.setProperty(blockId, aliasesProp, [])
 }
 
+/** Free a TOMBSTONE of the names another row has taken since it died, and only
+ *  those.
+ *
+ *  Restoring re-inserts the stored bag under the uniqueness trigger, so a claim
+ *  someone else now holds refuses the restore itself — before any naming can
+ *  pick something free, and the book then fails on every retry.
+ *
+ *  The kernel's `stripAliasesOnRestore` drops the WHOLE bag, which fixes that by
+ *  destroying whatever the user added: an emptied bag reads as the sync's to
+ *  fill, so the next naming pass writes only the Readwise name and their aliases
+ *  are gone for good. Contested entries could not have been kept anyway;
+ *  everything else survives.
+ *
+ *  Safe to write here because a soft delete drops the row's index entries, so
+ *  rewriting a tombstone's bag claims nothing. */
+const pruneContestedAliases = async (
+  tx: any,
+  blockId: string,
+  workspaceId: string,
+): Promise<void> => {
+  const bag = await readAliasBag(tx, blockId)
+  if (bag === null || bag.length === 0) return
+  const kept: string[] = []
+  for (const alias of bag) {
+    const claimants: readonly {id: string}[] = await tx.aliasClaimants(alias, workspaceId)
+    if (claimants.every(row => row.id === blockId)) kept.push(alias)
+  }
+  if (kept.length !== bag.length) await tx.setProperty(blockId, aliasesProp, kept)
+}
+
 /** Give up a fallback another row has come to co-hold, BEFORE the book's
  *  properties are written.
  *
@@ -1802,6 +1832,7 @@ export const ensureRoot = async (repo: any, workspaceId: string) => {
   await repo.tx(async (tx: any) => {
     const existing = await tx.get(rootId)
     if (!existing || existing.deleted) {
+      if (existing?.deleted) await pruneContestedAliases(tx, rootId, workspaceId)
       const roots = await tx.childrenOf(null, workspaceId)
       const lastKey = roots.length ? roots[roots.length - 1].orderKey : null
       await createOrRestoreTargetBlock(tx, {
@@ -1810,12 +1841,6 @@ export const ensureRoot = async (repo: any, workspaceId: string) => {
         parentId: null,
         orderKey: keyBetween(lastKey, null),
         freshContent: ROOT_ALIAS,
-        // This row owns a name, so its tombstone's bag can hold one another
-        // page has taken since. Restoring it as-is re-inserts that claim under
-        // the uniqueness trigger and the restore itself is refused; the naming
-        // below never runs to pick something free. Children that own no alias
-        // must NOT pass this — a user-set alias on them has to survive.
-        stripAliasesOnRestore: true,
       })
     }
     // Yielded rather than claimed, for the same reason a kernel page yields: a
@@ -1910,6 +1935,7 @@ export const syncBookToBlocks = async (
       // 1. document page
       const existing = await tx.get(bookId)
       if (!existing || existing.deleted) {
+        if (existing?.deleted) await pruneContestedAliases(tx, bookId, workspaceId)
         const siblings = await tx.childrenOf(rootId)
         const firstKey = siblings.length ? siblings[0].orderKey : null
         await createOrRestoreTargetBlock(tx, {
@@ -1918,9 +1944,6 @@ export const syncBookToBlocks = async (
           parentId: rootId,
           orderKey: keyBetween(null, firstKey),
           freshContent: title,
-          // See `ensureRoot`: alias-owning row, so the tombstone's claim goes.
-          // `ensureDocumentAlias` then takes whatever name is actually free.
-          stripAliasesOnRestore: true,
         })
       } else if (existing.content !== title) {
         if (!await aliasIsFree(tx, bookId, title, workspaceId)) {

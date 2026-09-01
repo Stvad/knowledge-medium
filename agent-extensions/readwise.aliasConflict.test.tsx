@@ -506,6 +506,25 @@ describe('readwise document alias — the title is already a page name', () => {
     expect(aliasesOf(doc)).toEqual(['Deep Work (Readwise 2)'])
   })
 
+  it('keeps a user alias when restoring a document whose own name was taken', async () => {
+    const rootId = await createRoot()
+    await sync(rootId, book(1, 'Deep Work', 11))
+    await repo.tx(
+      tx => tx.setProperty(documentId(1), aliasesProp, ['Deep Work', 'My Notes']),
+      {scope: ChangeScope.BlockDefault},
+    )
+
+    await repo.tx(tx => tx.delete(documentId(1)), {scope: ChangeScope.BlockDefault})
+    await createRivalPage('rival', 'Deep Work')
+
+    await expect(sync(rootId, book(1, 'Deep Work', 11))).resolves.toBeUndefined()
+
+    // Only the name another page has taken is given up. `My Notes` is the
+    // user's and still free, so dropping it would destroy their data to fix
+    // a collision it had nothing to do with.
+    expect(aliasesOf(await repo.load(documentId(1)))).toContain('My Notes')
+  })
+
   it('retires the placeholder when a re-title lands on a free name', async () => {
     const rootId = await createRoot()
     await createRivalPage('rival', 'Deep Work')
