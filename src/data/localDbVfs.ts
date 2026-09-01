@@ -19,11 +19,9 @@
  */
 
 import { WASQLiteOpenFactory, WASQLiteVFS } from '@powersync/web'
+import { WRITE_AHEAD_SIDECAR_SUFFIXES } from '@/data/localDbStorage.js'
 
 export type LocalDbVfs = WASQLiteVFS.OPFSCoopSyncVFS | WASQLiteVFS.OPFSWriteAheadVFS
-
-/** `OPFSWriteAheadVFS`'s write-ahead log — two files, alternated WAL2-style. */
-export const WRITE_AHEAD_SIDECAR_SUFFIXES = ['-wa0', '-wa1'] as const
 
 /**
  * Pins the VFS for this origin, bypassing the capability probe: `coop-sync` or
@@ -52,6 +50,24 @@ export class LocalDbVfsHandoffError extends Error {
   }
 }
 
+/**
+ * Recognise the handoff error across HMR / bundle boundaries where `instanceof`
+ * can fail, the way `corruptErrorUserId` does for the corruption error. The
+ * bootstrap fallback branches on this to offer actions that fit — the generic
+ * one offers Sign out, which does nothing for either cause.
+ */
+export const isLocalDbVfsHandoffError = (error: unknown): boolean => {
+  if (error instanceof LocalDbVfsHandoffError) return true
+  return typeof error === 'object'
+    && error !== null
+    && (error as {name?: unknown}).name === 'LocalDbVfsHandoffError'
+}
+
+/** Pin the compatibility VFS for this device, for the bootstrap fallback's escape hatch. */
+export const pinCoopSyncVfs = (): void => {
+  globalThis.localStorage?.setItem(LOCAL_DB_VFS_OVERRIDE_KEY, 'coop-sync')
+}
+
 export const readLocalDbVfsOverride = (): LocalDbVfs | null => {
   try {
     const raw = globalThis.localStorage?.getItem(LOCAL_DB_VFS_OVERRIDE_KEY)
@@ -61,7 +77,16 @@ export const readLocalDbVfsOverride = (): LocalDbVfs | null => {
   }
 }
 
-let writeAheadSupport: Promise<boolean> | null = null
+/**
+ * `unknown` is NOT a synonym for `unsupported`, and conflating them costs a
+ * boot: a device that really does support the write-ahead VFS, whose probe
+ * merely failed to run (worker fetch offline, timeout under load), would be
+ * routed to CoopSync — and the downgrade then refuses, because it cannot
+ * checkpoint the sidecars it finds, leaving the app unable to open at all.
+ */
+export type WriteAheadSupport = 'supported' | 'unsupported' | 'unknown'
+
+let writeAheadSupport: Promise<WriteAheadSupport> | null = null
 
 /**
  * Whether this browser can hold two concurrent sync access handles on one OPFS
@@ -69,32 +94,42 @@ let writeAheadSupport: Promise<boolean> | null = null
  * page's lifetime, not persisted — a stale "supported" written by a previous
  * browser version would pick a VFS that cannot open.
  */
-export const supportsWriteAheadVfs = (): Promise<boolean> => {
+export const writeAheadVfsSupport = (): Promise<WriteAheadSupport> => {
   writeAheadSupport ??= runProbeWorker()
   return writeAheadSupport
 }
 
 const PROBE_TIMEOUT_MS = 5_000
 
-const runProbeWorker = async (): Promise<boolean> => {
+const runProbeWorker = async (): Promise<WriteAheadSupport> => {
   let worker: Worker
   try {
     worker = new Worker(new URL('./writeAheadVfsProbe.worker.ts', import.meta.url), {type: 'module'})
-  } catch {
-    return false
+  } catch (err) {
+    // Distinct warnings on each inconclusive path: without them a probe that
+    // stops resolving in production is indistinguishable from a browser that
+    // genuinely lacks the feature, and the whole rollout is silently inert.
+    console.warn('[localDbVfs] write-ahead probe worker could not be started', err)
+    return 'unknown'
   }
   try {
-    return await new Promise<boolean>(resolve => {
-      // A probe that never answers means we don't know, and "don't know" has to
-      // resolve to the VFS that works everywhere.
-      const timer = setTimeout(() => resolve(false), PROBE_TIMEOUT_MS)
+    return await new Promise<WriteAheadSupport>(resolve => {
+      const timer = setTimeout(() => {
+        console.warn(`[localDbVfs] write-ahead probe timed out after ${PROBE_TIMEOUT_MS}ms`)
+        resolve('unknown')
+      }, PROBE_TIMEOUT_MS)
       worker.onmessage = (event: MessageEvent<{supported?: unknown}>) => {
         clearTimeout(timer)
-        resolve(event.data?.supported === true)
+        // The worker answers `false` only when the handles were actually
+        // refused; anything else reaching us is a probe that did not run.
+        resolve(typeof event.data?.supported === 'boolean'
+          ? (event.data.supported ? 'supported' : 'unsupported')
+          : 'unknown')
       }
-      worker.onerror = () => {
+      worker.onerror = event => {
         clearTimeout(timer)
-        resolve(false)
+        console.warn('[localDbVfs] write-ahead probe worker failed to run', event.message)
+        resolve('unknown')
       }
       worker.postMessage('probe')
     })
@@ -103,12 +138,33 @@ const runProbeWorker = async (): Promise<boolean> => {
   }
 }
 
-export const resolveLocalDbVfs = async (): Promise<LocalDbVfs> => {
+export const resolveLocalDbVfs = async (
+  dbFilename: string,
+  deps: Pick<LocalDbVfsHandoffDeps, 'fileSize' | 'writeAheadSupport'> = defaultHandoffDeps,
+): Promise<LocalDbVfs> => {
   const override = readLocalDbVfsOverride()
   if (override) return override
-  return (await supportsWriteAheadVfs())
+
+  const support = await deps.writeAheadSupport()
+  if (support === 'supported') return WASQLiteVFS.OPFSWriteAheadVFS
+  if (support === 'unsupported') return WASQLiteVFS.OPFSCoopSyncVFS
+
+  // Inconclusive. Sidecars on disk are proof this device ran the write-ahead
+  // VFS before, so staying on it is the option that cannot lose data: the
+  // alternative is a downgrade this session has no way to carry out.
+  return (await anyWriteAheadSidecar(dbFilename, deps))
     ? WASQLiteVFS.OPFSWriteAheadVFS
     : WASQLiteVFS.OPFSCoopSyncVFS
+}
+
+const anyWriteAheadSidecar = async (
+  dbFilename: string,
+  deps: Pick<LocalDbVfsHandoffDeps, 'fileSize'>,
+): Promise<boolean> => {
+  const sizes = await Promise.all(
+    WRITE_AHEAD_SIDECAR_SUFFIXES.map(suffix => deps.fileSize(`${dbFilename}${suffix}`)),
+  )
+  return sizes.some(size => size !== null)
 }
 
 export interface LocalDbVfsHandoffDeps {
@@ -121,7 +177,7 @@ export interface LocalDbVfsHandoffDeps {
     vfs: LocalDbVfs,
     fn: (execute: (sql: string) => Promise<unknown>) => Promise<void>,
   ) => Promise<void>
-  supportsWriteAhead: () => Promise<boolean>
+  writeAheadSupport: () => Promise<WriteAheadSupport>
 }
 
 /**
@@ -133,6 +189,26 @@ export const prepareLocalDbForVfs = async (
   dbFilename: string,
   target: LocalDbVfs,
   deps: LocalDbVfsHandoffDeps = defaultHandoffDeps,
+): Promise<void> => {
+  try {
+    await runHandoff(dbFilename, target, deps)
+  } catch (err) {
+    if (isLocalDbVfsHandoffError(err)) throw err
+    // Anything else here is an OPFS DOMException or a failed open. Untranslated
+    // it blocks boot with jargon in a <pre>; the causes are the same ones the
+    // typed message already names.
+    throw new LocalDbVfsHandoffError(
+      'Could not prepare this device\'s local database for this browser\'s storage mode. Another tab of ' +
+      'the app may still be holding it — close the other tabs and reload.',
+      {cause: err},
+    )
+  }
+}
+
+const runHandoff = async (
+  dbFilename: string,
+  target: LocalDbVfs,
+  deps: LocalDbVfsHandoffDeps,
 ): Promise<void> => {
   if (target === WASQLiteVFS.OPFSWriteAheadVFS) {
     // `OPFSWriteAheadVFS`'s xAccess only reports files it already has open, so
@@ -148,14 +224,9 @@ export const prepareLocalDbForVfs = async (
     return
   }
 
-  const sidecars: string[] = []
-  for (const suffix of WRITE_AHEAD_SIDECAR_SUFFIXES) {
-    const name = `${dbFilename}${suffix}`
-    if ((await deps.fileSize(name)) !== null) sidecars.push(name)
-  }
-  if (sidecars.length === 0) return
+  if (!(await anyWriteAheadSidecar(dbFilename, deps))) return
 
-  if (!(await deps.supportsWriteAhead())) {
+  if ((await deps.writeAheadSupport()) !== 'supported') {
     throw new LocalDbVfsHandoffError(
       'This browser can no longer read part of its local database: the pending changes are in a storage ' +
       'mode it has stopped supporting. They are still on this device, in this browser profile — another ' +
@@ -186,8 +257,27 @@ export const prepareLocalDbForVfs = async (
   // `OPFSCoopSyncVFS` wrote in the meantime and drop those writes instead.
   // Both names, not the pre-open inventory: opening the connection above
   // CREATES whichever of the pair was missing.
-  for (const suffix of WRITE_AHEAD_SIDECAR_SUFFIXES) {
-    await deps.removeFile(`${dbFilename}${suffix}`)
+  //
+  // Nothing holds a cross-tab lock across this loop. It does not need one: OPFS
+  // refuses to remove a file another context still has open, so a second tab on
+  // the write-ahead VFS makes this throw rather than discard its log. Accepted
+  // residual: that tab could commit and then close between the check above and
+  // this loop, and lose those frames — it needs a downgrade (a pinned override
+  // or lost capability) racing a closing tab inside one boot, and closing the
+  // window costs a worker-held exclusive handle and a protocol to go with it.
+  try {
+    for (const suffix of WRITE_AHEAD_SIDECAR_SUFFIXES) {
+      await deps.removeFile(`${dbFilename}${suffix}`)
+    }
+  } catch (err) {
+    if (err instanceof DOMException && err.name === 'NoModificationAllowedError') {
+      throw new LocalDbVfsHandoffError(
+        'Another tab of the app is still using this device\'s local database, so its pending changes ' +
+        'could not be filed away. Close the other tabs and reload.',
+        {cause: err},
+      )
+    }
+    throw err
   }
 }
 
@@ -228,16 +318,43 @@ const opfsRemoveFile = async (name: string): Promise<void> => {
   }
 }
 
+/**
+ * Opening this connection can block indefinitely when another context holds the
+ * database. Unbounded, that is a worse outcome than any refusal: it happens
+ * before the error boundary exists, so the user gets a loading screen with no
+ * message and no button, forever. A bounded wait at least reaches a fallback
+ * that tells them to close the other tab.
+ */
+const HANDOFF_CONNECTION_TIMEOUT_MS = 15_000
+
 const withTemporaryConnection: LocalDbVfsHandoffDeps['withConnection'] = async (
   dbFilename,
   vfs,
   fn,
 ) => {
   const db = new WASQLiteOpenFactory({dbFilename, vfs, flags: {enableMultiTabs: true}}).openDB()
+  let timer: ReturnType<typeof setTimeout> | undefined
   try {
-    await fn(sql => db.execute(sql))
+    await Promise.race([
+      fn(sql => db.execute(sql)),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () => reject(new LocalDbVfsHandoffError(
+            'Timed out waiting for this device\'s local database. Another tab of the app is probably ' +
+            'still holding it — close the other tabs and reload.',
+          )),
+          HANDOFF_CONNECTION_TIMEOUT_MS,
+        )
+      }),
+    ])
   } finally {
-    await db.close()
+    clearTimeout(timer)
+    // Never let a close failure replace the error that actually mattered.
+    try {
+      await db.close()
+    } catch (err) {
+      console.warn('[localDbVfs] handoff connection failed to close', err)
+    }
   }
 }
 
@@ -245,5 +362,5 @@ const defaultHandoffDeps: LocalDbVfsHandoffDeps = {
   fileSize: opfsFileSize,
   removeFile: opfsRemoveFile,
   withConnection: withTemporaryConnection,
-  supportsWriteAhead: supportsWriteAheadVfs,
+  writeAheadSupport: writeAheadVfsSupport,
 }

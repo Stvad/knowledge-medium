@@ -1,4 +1,3 @@
-import { WRITE_AHEAD_SIDECAR_SUFFIXES } from '@/data/localDbVfs.js'
 import {
   SERVICE_WORKER_META_CACHE,
   previewDatabaseRecordUrl,
@@ -17,6 +16,9 @@ const MAX_USER_SEGMENT = 40
 // wipe, import-replace and the forensic inventory all key off this ONE list:
 // a suffix missing from it is a file that survives a wipe and then replays
 // over the next database at that name.
+/** `OPFSWriteAheadVFS`'s write-ahead log — two files, alternated WAL2-style. */
+export const WRITE_AHEAD_SIDECAR_SUFFIXES = ['-wa0', '-wa1'] as const
+
 export const DB_FILE_SIBLING_SUFFIXES = [
   '-journal',
   '-wal',

@@ -11,6 +11,17 @@ import {
   removeRecoveryBackupTemps,
 } from './exportSqliteDb'
 
+// The export path holds the lock and DISCARDS `tx.execute`'s result — only
+// `localDbVfs.walPagesRemaining` parses one — so this fake returns nothing.
+const fakeWriteLock = () => {
+  const execute = vi.fn(async () => undefined)
+  const writeLock = vi.fn(
+    async <T,>(fn: (tx: {execute: (sql: string) => Promise<unknown>}) => Promise<T>) => fn({execute}),
+  )
+  return {execute, writeLock}
+}
+
+
 // Minimal File stand-ins: jsdom's Blob.stream()/arrayBuffer() are unreliable, so
 // the fakes carry their own, letting us drive the real streaming-zip code.
 const fakeFile = (bytes: Uint8Array) => ({
@@ -70,8 +81,7 @@ describe('exportRawSqliteDb', () => {
       value: {getDirectory},
     })
 
-    const execute = vi.fn(async () => ({rows: {_array: [{'0': '0'}]}}))
-    const writeLock = vi.fn(async <T,>(fn: (tx: {execute: (sql: string) => Promise<unknown>}) => Promise<T>) => fn({execute}))
+    const {execute, writeLock} = fakeWriteLock()
     const result = await exportRawSqliteDb({
       user: {id: 'user-1'},
       db: {writeLock},
@@ -109,8 +119,7 @@ describe('exportRawSqliteDb', () => {
       configurable: true,
       value: {getDirectory, estimate},
     })
-    const execute = vi.fn(async () => ({rows: {_array: [{'0': '0'}]}}))
-    const writeLock = vi.fn(async <T,>(fn: (tx: {execute: (sql: string) => Promise<unknown>}) => Promise<T>) => fn({execute}))
+    const {writeLock} = fakeWriteLock()
 
     const promise = exportRawSqliteDb({
       user: {id: 'user-1'},
@@ -152,8 +161,7 @@ describe('exportRawSqliteDb', () => {
       configurable: true,
       value: {getDirectory, estimate},
     })
-    const execute = vi.fn(async () => ({rows: {_array: [{'0': '0'}]}}))
-    const writeLock = vi.fn(async <T,>(fn: (tx: {execute: (sql: string) => Promise<unknown>}) => Promise<T>) => fn({execute}))
+    const {writeLock} = fakeWriteLock()
 
     const error: Error = await exportRawSqliteDb({
       user: {id: 'user-1'},

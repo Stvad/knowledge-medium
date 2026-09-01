@@ -3,6 +3,7 @@ import { Button } from '@/components/ui/button'
 import { useSignOut } from '@/components/Login.js'
 import type { FallbackProps } from 'react-error-boundary'
 import { corruptErrorUserId } from '@/utils/localDbCorruption.js'
+import { isLocalDbVfsHandoffError, pinCoopSyncVfs } from '@/data/localDbVfs.js'
 import { LocalDbCorruptionFallback } from '@/components/util/LocalDbCorruptionFallback.js'
 import {
   getLocalDbCorruptionSnapshot,
@@ -50,7 +51,46 @@ export function BootstrapErrorFallback({error}: FallbackProps) {
     return <LocalDbCorruptionFallback userId={corruptUserId} detail={errorMessage(error)} />
   }
 
+  // The storage-mode handoff failed. Both causes (another tab holding the file,
+  // an inconclusive capability probe) are transient and the data is intact, so
+  // the generic screen's Sign out is a red herring — it leaves the DB alone and
+  // reads as the escalation path. Reload, or fall back to the storage mode that
+  // works everywhere.
+  if (isLocalDbVfsHandoffError(error)) {
+    return <LocalDbHandoffFallback detail={errorMessage(error)} />
+  }
+
   return <GenericBootstrapErrorFallback error={error} />
+}
+
+function LocalDbHandoffFallback({detail}: {detail: string}) {
+  const useCompatibilityMode = () => {
+    pinCoopSyncVfs()
+    window.location.reload()
+  }
+
+  return (
+    <div className="flex min-h-screen items-center justify-center px-6">
+      <div className="w-full max-w-md space-y-4 rounded-lg border bg-card p-6 shadow-sm">
+        <div className="space-y-1">
+          <h1 className="text-lg font-semibold">Couldn&apos;t open your local database</h1>
+          <p className="text-sm text-muted-foreground">
+            Your notes are safe on this device — this is about how they&apos;re stored, not the
+            data itself.
+          </p>
+        </div>
+        <pre className="max-h-32 overflow-auto rounded bg-muted p-2 text-xs text-muted-foreground">
+          {detail}
+        </pre>
+        <div className="flex gap-2">
+          <Button onClick={() => window.location.reload()}>Reload</Button>
+          <Button variant="outline" onClick={useCompatibilityMode}>
+            Use compatibility storage mode
+          </Button>
+        </div>
+      </div>
+    </div>
+  )
 }
 
 function GenericBootstrapErrorFallback({error}: {error: unknown}) {

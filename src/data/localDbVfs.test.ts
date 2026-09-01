@@ -2,6 +2,8 @@ import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest'
 import { WASQLiteVFS } from '@powersync/web'
 import {
   LOCAL_DB_VFS_OVERRIDE_KEY,
+  resolveLocalDbVfs,
+  type WriteAheadSupport,
   LocalDbVfsHandoffError,
   prepareLocalDbForVfs,
   readLocalDbVfsOverride,
@@ -23,9 +25,9 @@ const checkpointResult = (pages: number) => ({
 const harness = (
   files: Record<string, number>,
   {
-    supportsWriteAhead = true,
+    writeAheadSupport = 'supported',
     pagesLeftAfterCheckpoint = 0,
-  }: {supportsWriteAhead?: boolean; pagesLeftAfterCheckpoint?: number} = {},
+  }: {writeAheadSupport?: WriteAheadSupport; pagesLeftAfterCheckpoint?: number} = {},
 ): Harness => {
   const calls: string[] = []
   const present = {...files}
@@ -47,7 +49,7 @@ const harness = (
         })
         calls.push(`close:${vfs}`)
       },
-      supportsWriteAhead: async () => supportsWriteAhead,
+      writeAheadSupport: async () => writeAheadSupport,
     },
   }
 }
@@ -121,7 +123,7 @@ describe('prepareLocalDbForVfs — downgrade to CoopSync', () => {
   })
 
   it('refuses rather than dropping sidecar commits it cannot checkpoint', async () => {
-    const h = harness({[DB]: 4096, [`${DB}-wa0`]: 20704}, {supportsWriteAhead: false})
+    const h = harness({[DB]: 4096, [`${DB}-wa0`]: 20704}, {writeAheadSupport: 'unsupported'})
     await expect(prepareLocalDbForVfs(DB, WASQLiteVFS.OPFSCoopSyncVFS, h.deps))
       .rejects.toBeInstanceOf(LocalDbVfsHandoffError)
     expect(h.calls).toEqual([])
@@ -159,5 +161,37 @@ describe('readLocalDbVfsOverride', () => {
       getItem: () => { throw new DOMException('denied', 'SecurityError') },
     })
     expect(readLocalDbVfsOverride()).toBeNull()
+  })
+})
+
+
+describe('resolveLocalDbVfs — an inconclusive probe is not a "no"', () => {
+  const resolveWith = (support: WriteAheadSupport, files: Record<string, number>) =>
+    resolveLocalDbVfs(DB, {
+      fileSize: async name => (name in files ? files[name] : null),
+      writeAheadSupport: async () => support,
+    })
+
+  it('keeps using the write-ahead VFS when the probe failed but its sidecars exist', async () => {
+    // The sidecars are proof this device ran the write-ahead VFS before, so a
+    // probe that merely failed to RUN must not route to CoopSync — the
+    // downgrade would then refuse (it cannot checkpoint) and boot would fail.
+    expect(await resolveWith('unknown', {[DB]: 4096, [`${DB}-wa0`]: 20704}))
+      .toBe(WASQLiteVFS.OPFSWriteAheadVFS)
+  })
+
+  it('falls back to CoopSync on an inconclusive probe when there is nothing to lose', async () => {
+    expect(await resolveWith('unknown', {[DB]: 4096}))
+      .toBe(WASQLiteVFS.OPFSCoopSyncVFS)
+  })
+
+  it('honours a definitive no even with sidecars present, so the downgrade can run', async () => {
+    expect(await resolveWith('unsupported', {[DB]: 4096, [`${DB}-wa0`]: 20704}))
+      .toBe(WASQLiteVFS.OPFSCoopSyncVFS)
+  })
+
+  it('uses the write-ahead VFS when the probe says yes', async () => {
+    expect(await resolveWith('supported', {[DB]: 4096}))
+      .toBe(WASQLiteVFS.OPFSWriteAheadVFS)
   })
 })

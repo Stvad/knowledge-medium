@@ -110,7 +110,6 @@ export async function exportRawSqliteDb(repo: Repo): Promise<RawSqliteDbBlobExpo
 
   const root = await navigator.storage.getDirectory()
   const sourceHandle = await root.getFileHandle(dbFilename)
-  // Sizing only — the copy re-reads the handle after the checkpoint below.
   const sourceFile = await sourceHandle.getFile()
 
   // This fallback path writes a full second copy of the .db into OPFS (a stable

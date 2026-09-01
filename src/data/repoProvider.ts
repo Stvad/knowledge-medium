@@ -177,8 +177,10 @@ let resolvedLocalDbVfs: LocalDbVfs | null = null
 
 // ...but the handoff is per FILE, not per process: signing in as a second user
 // without a reload opens a different `.db`, which has its own sidecars and its
-// own possible hot journal.
-const preparedDbFiles = new Set<string>()
+// own possible hot journal. Keyed by the PROMISE, not the name — two concurrent
+// boots for one file would otherwise both pass a `has()` check taken before
+// either finished, and run two checkpoint connections against each other.
+const preparedDbFiles = new Map<string, Promise<void>>()
 
 // Firefox and Safari block OPFS in private browsing — `getDirectory()`
 // throws SecurityError. Probe once and surface a useful message before
@@ -225,7 +227,14 @@ const ADDITIONAL_READERS = 1
 const TOTAL_PAGE_CACHE_KB = 262144
 
 const buildPowerSyncDb = (userId: string) => {
-  const vfs = resolvedLocalDbVfs ?? WASQLiteVFS.OPFSCoopSyncVFS
+  // Not a default: `prepareLocalDbForVfs` has already fixed the on-disk state up
+  // for the RESOLVED VFS, so opening with a different one is the silent
+  // data-loss shape this whole module exists to prevent — CoopSync over live
+  // `-wa*` sidecars reads an intact, older database. Fail loudly instead.
+  if (!resolvedLocalDbVfs) {
+    throw new Error('getPowerSyncDb called before ensurePowerSyncReady resolved the local DB VFS')
+  }
+  const vfs = resolvedLocalDbVfs
   const connections = vfs === WASQLiteVFS.OPFSWriteAheadVFS ? 1 + ADDITIONAL_READERS : 1
   return new PowerSyncDatabase({
     schema: appSchema,
@@ -282,10 +291,20 @@ export const ensurePowerSyncReady = async (
 
   const dbFilename = dbFilenameForUser(userId)
   await recordPreviewDatabaseForReaper(dbFilename)
-  resolvedLocalDbVfs ??= await resolveLocalDbVfs()
-  if (!preparedDbFiles.has(dbFilename)) {
-    await prepareLocalDbForVfs(dbFilename, resolvedLocalDbVfs)
-    preparedDbFiles.add(dbFilename)
+  resolvedLocalDbVfs ??= await resolveLocalDbVfs(dbFilename)
+  let prepared = preparedDbFiles.get(dbFilename)
+  if (!prepared) {
+    prepared = prepareLocalDbForVfs(dbFilename, resolvedLocalDbVfs)
+    preparedDbFiles.set(dbFilename, prepared)
+  }
+  try {
+    await prepared
+  } catch (error) {
+    // A failed handoff must not latch: the common causes (another tab holding
+    // the file, an inconclusive probe) clear on their own, and a cached
+    // rejection would make every later attempt in this process fail too.
+    preparedDbFiles.delete(dbFilename)
+    throw error
   }
   const db = getPowerSyncDb(userId)
 
