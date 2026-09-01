@@ -276,7 +276,7 @@ const runHandoff = async (
     await execute('PRAGMA wal_checkpoint=truncate')
     remaining = await execute('PRAGMA wal_checkpoint=noop')
   })
-  if (walPagesRemaining(remaining) !== 0) {
+  if (!checkpointDrained(remaining)) {
     throw new LocalDbVfsHandoffError(
       'Could not write this device\'s pending local changes back into the main database file — another ' +
       'tab of the app is probably still holding it. Close the other tabs and reload.',
@@ -313,19 +313,23 @@ const runHandoff = async (
 }
 
 /**
- * Pages still in the write-ahead log, per `PRAGMA wal_checkpoint`. The VFS
- * answers with a single cell whose column name IS the value, so this reads
- * positionally. Returns `null` when the shape isn't recognised — the caller
- * treats that as "not proven empty", because the alternative to a loud refusal
- * here is deleting a log that still holds commits.
+ * Whether a `PRAGMA wal_checkpoint` result says nothing is left outstanding.
+ *
+ * Read positionally because the two VFSes answer differently, and the first
+ * cell means "nothing outstanding" as zero under both: `OPFSWriteAheadVFS`
+ * returns one cell whose column NAME is the remaining page count, while under
+ * `OPFSCoopSyncVFS` SQLite answers its own pragma with `busy, log, checkpointed`
+ * — busy 0 in rollback-journal mode, where there is no WAL to drain at all.
+ *
+ * An unrecognised shape is NOT drained: every caller is about to do something
+ * that discards or omits the log, and a loud refusal beats a silent one.
  */
-const walPagesRemaining = (result: unknown): number | null => {
+export const checkpointDrained = (result: unknown): boolean => {
   const rows = (result as {rows?: {_array?: unknown[]}} | undefined)?.rows?._array
   const row = Array.isArray(rows) ? rows[0] : undefined
-  if (!row || typeof row !== 'object') return null
+  if (!row || typeof row !== 'object') return false
   const [value] = Object.values(row as Record<string, unknown>)
-  const pages = Number(value)
-  return Number.isFinite(pages) ? pages : null
+  return Number(value) === 0
 }
 
 const opfsFileSize = async (name: string): Promise<number | null> => {
@@ -386,14 +390,21 @@ const withTemporaryConnection: LocalDbVfsHandoffDeps['withConnection'] = async (
     // put the caller right back on an endless loading screen. A connection we
     // give up on leaks its worker for the rest of the page's life, which is the
     // cheaper half of that trade — the page is on its way to an error screen.
+    let closeTimer: ReturnType<typeof setTimeout> | undefined
     await Promise.race([
-      Promise.resolve(db.close()).catch(err => {
-        console.warn('[localDbVfs] handoff connection failed to close', err)
+      Promise.resolve(db.close())
+        .catch(err => {
+          console.warn('[localDbVfs] handoff connection failed to close', err)
+        })
+        // Or every healthy handoff reports an abandonment a few seconds later,
+        // burying the ones that really did hang.
+        .finally(() => clearTimeout(closeTimer)),
+      new Promise<void>(resolve => {
+        closeTimer = setTimeout(() => {
+          console.warn('[localDbVfs] handoff connection did not close in time; abandoning it')
+          resolve()
+        }, HANDOFF_CLOSE_TIMEOUT_MS)
       }),
-      new Promise<void>(resolve => setTimeout(() => {
-        console.warn('[localDbVfs] handoff connection did not close in time; abandoning it')
-        resolve()
-      }, HANDOFF_CLOSE_TIMEOUT_MS)),
     ])
   }
 }

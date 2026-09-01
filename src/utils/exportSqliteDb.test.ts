@@ -11,10 +11,12 @@ import {
   removeRecoveryBackupTemps,
 } from './exportSqliteDb'
 
-// The export path holds the lock and DISCARDS `tx.execute`'s result — only
-// `localDbVfs.walPagesRemaining` parses one — so this fake returns nothing.
-const fakeWriteLock = () => {
-  const execute = vi.fn(async () => undefined)
+// What SQLite actually answers `PRAGMA wal_checkpoint` with in rollback-journal
+// mode, i.e. every CoopSync user: busy 0, nothing outstanding.
+const DRAINED = {rows: {_array: [{busy: 0, log: -1, checkpointed: -1}]}}
+
+const fakeWriteLock = (checkpointResult: unknown = DRAINED) => {
+  const execute = vi.fn(async () => checkpointResult)
   const writeLock = vi.fn(
     async <T,>(fn: (tx: {execute: (sql: string) => Promise<unknown>}) => Promise<T>) => fn({execute}),
   )
@@ -135,6 +137,29 @@ describe('exportRawSqliteDb', () => {
       expect.stringContaining('export-snapshot'),
       {create: true},
     )
+  })
+
+  it('refuses rather than backing up a database whose log did not drain', async () => {
+    // A partial checkpoint does not fail the statement; copying anyway yields a
+    // backup that opens cleanly and is missing its most recent writes.
+    const {writeLock} = fakeWriteLock({rows: {_array: [{'12': '12'}]}})
+    const getFileHandle = vi.fn(async () => ({
+      getFile: vi.fn(async () => ({size: 11})),
+      createWritable: vi.fn(),
+    }))
+    Object.defineProperty(navigator, 'storage', {
+      configurable: true,
+      value: {
+        // The refusal drops the partial snapshot on its way out.
+        getDirectory: vi.fn(async () => ({getFileHandle, removeEntry: vi.fn(async () => {})})),
+        estimate: async () => ({quota: 1e9, usage: 0}),
+      },
+    })
+
+    await expect(exportRawSqliteDb({
+      user: {id: 'user-1'},
+      db: {writeLock},
+    } as unknown as Repo)).rejects.toThrow(/missing them/)
   })
 
   it('rewraps a QuotaExceededError from the snapshot write and removes the partial snapshot', async () => {

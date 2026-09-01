@@ -18,6 +18,7 @@ import { v4 as uuidv4 } from 'uuid'
 import { Zip, ZipPassThrough } from 'fflate'
 import type { Repo } from '../data/repo'
 import { DB_FILE_SIBLING_SUFFIXES, dbFilenameForUser } from '@/data/localDbStorage'
+import { checkpointDrained } from '@/data/localDbVfs.js'
 
 export interface RawSqliteDbBlobExport {
   blob: Blob
@@ -399,6 +400,17 @@ const withCheckpointedDbLock = async <T,>(repo: Repo, callback: () => Promise<T>
     // Through `tx`, not `repo.db.execute` — the latter would queue for the
     // write lock this callback is already holding.
     await tx.execute('PRAGMA wal_checkpoint=truncate')
+    // A partial checkpoint does not fail the statement, and the copy below
+    // takes only the main file — so an unverified flush yields a backup that
+    // opens cleanly and is missing its most recent writes. Same confirmation
+    // the VFS handoff makes before it discards a log.
+    if (!checkpointDrained(await tx.execute('PRAGMA wal_checkpoint=noop'))) {
+      throw new Error(
+        'Could not flush this device\'s pending changes into the database file, so a backup taken now ' +
+        'would be missing them. Another tab of the app is probably still holding the database — close ' +
+        'the other tabs and try again.',
+      )
+    }
     return callback()
   })
 }
