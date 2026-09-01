@@ -55,12 +55,19 @@ not reproduce them: the worst shape it finds is the bursty one above, where Coop
 costs ~2.4x, not 1000ms. So the harness is missing something the real app has — treat
 the stall as open, and do not claim this VFS fixes it or that it doesn't.
 
-Untested hypothesis for where the harness falls short: `LOCK_NOTIFY_INTERVAL` is a 1s
-`setInterval` plus a `setTimeout(0)` immediate notify, and Chrome throttles both in
-**backgrounded** tabs. Two real tabs almost always means one is in the background,
-whereas both of this harness's workers belong to the foreground page. If that is the
-mechanism, the write-ahead VFS removes it outright — there is no handle to hand off —
-but that is a guess until someone reproduces it with a genuinely backgrounded tab.
+The background-throttling hypothesis was tested and did **not** hold. `LOCK_NOTIFY_INTERVAL`
+is a 1s `setInterval` plus a `setTimeout(0)` immediate notify, so a hidden tab whose
+timers Chrome throttles looked like the obvious candidate. Two real tabs, both hidden,
+alternating one write every 1.5s on CoopSync: p50 10ms, max 16ms over ~50 writes. No
+stall.
+
+So three harnesses of increasing realism — two workers sustained, two workers bursty,
+two hidden tabs at human cadence — all fail to produce it, which is evidence that the
+hand-off notify race named as the root cause is **not sufficient on its own** on Chrome.
+What none of them have is the real app: a multi-GB database, PowerSync's own sync worker
+writing concurrently, the shared sync worker, and real transaction sizes. The next
+measurement worth making is on the live client with its real database, not in another
+synthetic harness — and until then, nobody should claim this VFS fixes that issue.
 
 ## The file format is compatible; the state outside the file is not
 
