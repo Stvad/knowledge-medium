@@ -37,19 +37,20 @@ export const keyHintsByActionId = (
 
 /** The keys shown on one grade button: its own grade action, plus the
  *  reveal chord on the default-grade button — `srs-review.reveal` casts
- *  that grade once the answer is up, so that button would otherwise
- *  under-report what triggers it. Either half drops out on its own when
- *  its action is unbound, and the hint disappears only when both are. */
+ *  that grade once the answer is up, so the button would otherwise
+ *  under-report what triggers it. Deduped: the settings UI permits binding
+ *  both to one chord (warning that the loser is shadowed), and either
+ *  winner grades the same, so listing it twice would only look broken. */
 export const gradeButtonHint = (
   hints: ReadonlyMap<string, string>,
   signal: SrsSignal,
 ): string | undefined => {
   const gradeActionId = SRS_GRADE_ACTION_IDS.get(signal)
-  const parts = [
+  const parts = new Set([
     gradeActionId ? hints.get(gradeActionId) : undefined,
     signal === SRS_DEFAULT_GRADE_SIGNAL ? hints.get(SRS_REVEAL_ACTION_ID) : undefined,
-  ].filter(Boolean)
-  return parts.length > 0 ? parts.join(' · ') : undefined
+  ].filter(Boolean))
+  return parts.size > 0 ? [...parts].join(' · ') : undefined
 }
 
 /** The same map against the live runtime. Overrides are pushed in place,

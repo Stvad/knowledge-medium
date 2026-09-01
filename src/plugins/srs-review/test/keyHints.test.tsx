@@ -118,6 +118,15 @@ describe('gradeButtonHint', () => {
   it('gives no hint when neither action is bound', () => {
     expect(gradeButtonHint(new Map(), SRS_DEFAULT_GRADE_SIGNAL)).toBeUndefined()
   })
+
+  it('names a chord once when both actions are bound to it', () => {
+    const shared = new Map([
+      [SRS_GRADE_ACTION_IDS.get(SRS_DEFAULT_GRADE_SIGNAL)!, 'G'],
+      [SRS_REVEAL_ACTION_ID, 'G'],
+    ])
+
+    expect(gradeButtonHint(shared, SRS_DEFAULT_GRADE_SIGNAL)).toBe('G')
+  })
 })
 
 describe('useActionKeyHints', () => {

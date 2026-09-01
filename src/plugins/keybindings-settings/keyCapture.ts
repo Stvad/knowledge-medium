@@ -228,8 +228,8 @@ export const formatChord = (chord: string): string => {
   // Sequence chords are space-separated; format each press independently
   // and rejoin with the same separator so "g g" displays as "G G".
   return chord.split(' ').map(press =>
-    // tinykeys' own tokenizer, shared with storage: a plain split('+')
-    // eats the key of `Shift++` and shows the bare modifier.
+    // The tokenizer storage uses: a plain split('+') eats the key of
+    // `Shift++` and shows the bare modifier.
     splitPressTokens(press)
       .map(part => {
         if (part === '$mod') return platformModGlyph()

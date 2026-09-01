@@ -10,15 +10,11 @@ import {
   ArchiveX,
   ArrowLeft,
   CalendarClock,
-  Check,
   ChevronLeft,
   ExternalLink,
-  Gauge,
   PartyPopper,
   RefreshCw,
-  RotateCcw,
   SkipForward,
-  Sparkles,
 } from 'lucide-react'
 import type { Block } from '@/data/block'
 import { useRepo } from '@/context/repo.js'
@@ -27,7 +23,6 @@ import { usePluginUIStateChildBlock } from '@/data/globalState.js'
 import { NestedBlockContextProvider } from '@/context/block.js'
 import { BlockComponent } from '@/components/BlockComponent.js'
 import { Button } from '@/components/ui/button.js'
-import { cn } from '@/lib/utils.js'
 import { showError, showInfo } from '@/utils/toast.js'
 import { useActionContextActivations } from '@/shortcuts/useActionContext.js'
 import { useBlockOpener } from '@/utils/navigation.js'
@@ -35,13 +30,10 @@ import { PromotableBreadcrumbList, usePromotableBreadcrumb } from '@/plugins/bre
 import { ReschedulePicker } from '@/plugins/daily-notes'
 import { openDialog } from '@/utils/dialogs.js'
 import {
-  formatIntervalDays,
   formatRescheduleToastMessage,
   rescheduleBlock,
-  srsFactorProp,
-  srsIntervalProp,
 } from '@/plugins/srs-rescheduling'
-import { SrsSignal, estimateSrsIntervalDays } from '@/plugins/srs-rescheduling/scheduler.js'
+import { SrsSignal } from '@/plugins/srs-rescheduling/scheduler.js'
 import { useReviewDeckCards } from './useDueCards.ts'
 import { decideGrade, showsEnrolledCardActions } from './gradeDecision.ts'
 import { archiveSrsCard } from './archive.ts'
@@ -54,7 +46,8 @@ import {
   makeSrsReviewController,
   type SrsReviewController,
 } from './actions.ts'
-import { gradeButtonHint, useActionKeyHints } from './keyHints.ts'
+import { GradeButtons, ShowAnswerButton } from './ReviewControls.tsx'
+import { useActionKeyHints } from './keyHints.ts'
 import { SRS_REVIEW_CARD_ID, SRS_REVIEW_REVEALED } from './reviewCardLayout.tsx'
 
 /** Breadcrumb context overrides — mirrors the breadcrumbs plugin's own
@@ -76,60 +69,6 @@ const isInteractiveTarget = (el: HTMLElement | null): boolean => {
   // them) — the review context must not shadow that, or keyboard users
   // couldn't operate the grade/reschedule/archive controls.
   return ['INPUT', 'TEXTAREA', 'SELECT', 'BUTTON', 'A'].includes(el.tagName)
-}
-
-interface GradeButton {
-  signal: SrsSignal
-  label: string
-  icon: typeof Check
-  className: string
-}
-
-const GRADE_BUTTONS: readonly GradeButton[] = [
-  {signal: SrsSignal.AGAIN, label: 'Again', icon: RotateCcw, className: 'text-rose-600'},
-  {signal: SrsSignal.HARD, label: 'Hard', icon: Gauge, className: 'text-amber-600'},
-  {signal: SrsSignal.GOOD, label: 'Good', icon: Check, className: 'text-emerald-600'},
-  {signal: SrsSignal.EASY, label: 'Easy', icon: Sparkles, className: 'text-sky-600'},
-]
-
-/** The four grade buttons, each labelled with the interval the card would
- *  next be scheduled for if you picked it ("1d", "4d", "2mo", …). The
- *  estimate reads the card's live interval/factor so it tracks edits made
- *  elsewhere, and uses the same formatter as the post-grade toast so the
- *  two agree. Split into its own component so the `useProperty` reads only
- *  run for the card on screen. */
-export const GradeButtons = ({card, busy, keyHints, onGrade}: {
-  card: Block
-  busy: boolean
-  keyHints: ReadonlyMap<string, string>
-  onGrade: (signal: SrsSignal) => void
-}) => {
-  const [interval] = useProperty(card, srsIntervalProp)
-  const [factor] = useProperty(card, srsFactorProp)
-  return (
-    <div className="grid grid-cols-4 gap-2">
-      {GRADE_BUTTONS.map(btn => {
-        const hint = gradeButtonHint(keyHints, btn.signal)
-        return (
-          <Button
-            key={btn.label}
-            type="button"
-            variant="outline"
-            className="flex h-auto flex-col gap-1 py-2"
-            disabled={busy}
-            onClick={() => onGrade(btn.signal)}
-          >
-            <btn.icon className={cn('h-4 w-4', btn.className)} />
-            <span className="text-sm font-medium">{btn.label}</span>
-            <span className="text-[11px] font-medium tabular-nums text-muted-foreground">
-              {formatIntervalDays(estimateSrsIntervalDays({interval, factor}, btn.signal))}
-            </span>
-            {hint && <span className="text-[10px] opacity-50">{hint}</span>}
-          </Button>
-        )
-      })}
-    </div>
-  )
 }
 
 /** Reschedule and Archive, shown only for a card that is actually ENROLLED.
@@ -630,10 +569,7 @@ export const ReviewSession = ({deck, tagName}: {deck: Block; tagName: string}) =
 
       <div className="mt-4">
         {!revealed ? (
-          <Button type="button" className="w-full" onClick={() => setRevealed(true)} disabled={busy}>
-            Show answer
-            {revealHint && <span className="ml-2 text-xs opacity-70">{revealHint}</span>}
-          </Button>
+          <ShowAnswerButton hint={revealHint} busy={busy} onReveal={() => setRevealed(true)} />
         ) : currentBlock ? (
           <GradeButtons
             card={currentBlock}
