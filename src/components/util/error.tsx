@@ -1,10 +1,11 @@
-import { useSyncExternalStore } from 'react'
+import { useState, useSyncExternalStore } from 'react'
 import { Button } from '@/components/ui/button'
 import { useSignOut } from '@/components/Login.js'
 import type { FallbackProps } from 'react-error-boundary'
 import { corruptErrorUserId } from '@/utils/localDbCorruption.js'
-import { isLocalDbVfsHandoffError } from '@/data/localDbVfs.js'
+import { handoffErrorUserId, isLocalDbVfsHandoffError } from '@/data/localDbVfs.js'
 import { LocalDbCorruptionFallback } from '@/components/util/LocalDbCorruptionFallback.js'
+import { downloadLocalDbBackup } from '@/utils/localDbRecovery.js'
 import {
   getLocalDbCorruptionSnapshot,
   subscribeLocalDbCorruption,
@@ -55,27 +56,55 @@ export function BootstrapErrorFallback({error}: FallbackProps) {
   // another tab holding the file, so the generic screen's Sign out is a red
   // herring — it leaves the DB alone and reads as the escalation path.
   if (isLocalDbVfsHandoffError(error)) {
-    return <LocalDbHandoffFallback detail={errorMessage(error)} />
+    return <LocalDbHandoffFallback detail={errorMessage(error)} userId={handoffErrorUserId(error)} />
   }
 
   return <GenericBootstrapErrorFallback error={error} />
 }
 
-function LocalDbHandoffFallback({detail}: {detail: string}) {
+function LocalDbHandoffFallback({detail, userId}: {detail: string; userId: string | null}) {
+  const [busy, setBusy] = useState(false)
+  const [status, setStatus] = useState<string | null>(null)
+
+  // Every one of these refusals leaves the user unable to open their database,
+  // and some of them tell the user to take a backup — so offer the one action
+  // that works without an open connection, rather than only Reload.
+  const handleExport = async () => {
+    if (!userId) return
+    setBusy(true)
+    setStatus('Preparing download…')
+    try {
+      const {filename, size} = await downloadLocalDbBackup(userId)
+      setStatus(`Download started for ${filename} (${(size / 1024 / 1024).toFixed(1)} MiB).`)
+    } catch (err) {
+      setStatus(`Couldn't export the database: ${errorMessage(err)}`)
+    } finally {
+      setBusy(false)
+    }
+  }
+
   return (
     <div className="flex min-h-screen items-center justify-center px-6">
       <div className="w-full max-w-md space-y-4 rounded-lg border bg-card p-6 shadow-sm">
         <div className="space-y-1">
           <h1 className="text-lg font-semibold">Couldn&apos;t open your local database</h1>
           <p className="text-sm text-muted-foreground">
-            Your notes are safe on this device — this is about how they&apos;re stored, not the
+            Your notes are still on this device — this is about how they&apos;re stored, not the
             data itself.
           </p>
         </div>
         <pre className="max-h-32 overflow-auto rounded bg-muted p-2 text-xs text-muted-foreground">
           {detail}
         </pre>
-        <Button onClick={() => window.location.reload()}>Reload</Button>
+        {status && <p className="text-sm text-muted-foreground">{status}</p>}
+        <div className="flex gap-2">
+          <Button onClick={() => window.location.reload()}>Reload</Button>
+          {userId && (
+            <Button variant="outline" onClick={handleExport} disabled={busy}>
+              {busy ? 'Exporting…' : 'Export a backup'}
+            </Button>
+          )}
+        </div>
       </div>
     </div>
   )

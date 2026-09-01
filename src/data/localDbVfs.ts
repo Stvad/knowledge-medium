@@ -40,10 +40,32 @@ const OVERRIDE_VALUES: Record<string, LocalDbVfs> = {
 export class LocalDbVfsHandoffError extends Error {
   override name = 'LocalDbVfsHandoffError'
 
+  /**
+   * Set by the caller that knows it. Every refusal here leaves the user unable
+   * to open their database, and the only useful thing to offer them is a copy
+   * of it — which `downloadLocalDbBackup` needs this to find.
+   */
+  userId?: string
+
   constructor(message: string, options?: {cause?: unknown}) {
     super(message)
     if (options?.cause !== undefined) this.cause = options.cause
   }
+}
+
+/** Attach the account whose database this refusal is about, for the fallback. */
+export const tagHandoffErrorUserId = (error: unknown, userId: string): unknown => {
+  if (isLocalDbVfsHandoffError(error) && typeof error === 'object' && error !== null) {
+    (error as {userId?: string}).userId = userId
+  }
+  return error
+}
+
+/** The account from a tagged handoff error, or null. Mirrors `corruptErrorUserId`. */
+export const handoffErrorUserId = (error: unknown): string | null => {
+  if (!isLocalDbVfsHandoffError(error)) return null
+  const userId = (error as {userId?: unknown}).userId
+  return typeof userId === 'string' && userId.length > 0 ? userId : null
 }
 
 /**
@@ -116,6 +138,31 @@ const runProbeWorker = async (): Promise<boolean> => {
   } finally {
     worker.terminate()
   }
+}
+
+/**
+ * Turn a failed open into the handoff refusal when the cause is that this
+ * browser can no longer read a database it has already moved. Classified after
+ * the fact rather than by pre-checking: a probe here could only answer with the
+ * same boolean that already chose the VFS, and a false negative would refuse a
+ * database that opens perfectly well.
+ */
+export const asLostWriteAheadSupport = async (
+  error: unknown,
+  dbFilename: string,
+  vfs: LocalDbVfs,
+  deps: Pick<LocalDbVfsHandoffDeps, 'fileSize'> = defaultHandoffDeps,
+): Promise<unknown> => {
+  if (vfs !== WASQLiteVFS.OPFSWriteAheadVFS) return error
+  if (isLocalDbVfsHandoffError(error)) return error
+  if (!(await anyWriteAheadSidecar(dbFilename, deps))) return error
+  return new LocalDbVfsHandoffError(
+    'This browser could not open this device\'s local database. It was last written in a storage mode ' +
+    'this browser may no longer support — the data is still here, in this browser profile, and another ' +
+    'browser has its own separate storage and cannot reach it. Updating this browser (or re-enabling ' +
+    'whatever disabled the feature) should restore access; export a backup below either way.',
+    {cause: error},
+  )
 }
 
 export const resolveLocalDbVfs = async (

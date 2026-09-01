@@ -30,7 +30,13 @@
  */
 
 import { PowerSyncDatabase, Schema, WASQLiteOpenFactory, WASQLiteVFS } from '@powersync/web'
-import { prepareLocalDbForVfs, resolveLocalDbVfs, type LocalDbVfs } from '@/data/localDbVfs.js'
+import {
+  asLostWriteAheadSupport,
+  prepareLocalDbForVfs,
+  resolveLocalDbVfs,
+  tagHandoffErrorUserId,
+  type LocalDbVfs,
+} from '@/data/localDbVfs.js'
 import { createPowerSyncConnector, hasRemoteSyncConfig } from '@/services/powersync.js'
 import { createSyncResolver, type SyncResolver } from '@/sync/keys/resolver.js'
 import { getWorkspaceKeyStore } from '@/sync/keys/keyStore.js'
@@ -314,7 +320,7 @@ export const ensurePowerSyncReady = async (
     // capture + classify pair as the init catch; both are needed because
     // neither path passes through the other.
     captureDbOpenCorruption(userId, dbFilename, error)
-    throw toLocalDbOpenError(error, userId)
+    throw tagHandoffErrorUserId(toLocalDbOpenError(error, userId), userId)
   }
   const db = getPowerSyncDb(userId)
 
@@ -332,7 +338,14 @@ export const ensurePowerSyncReady = async (
     // userId so the bootstrap error boundary can offer Export + Reset. Any other
     // failure passes through unchanged.
     captureDbOpenCorruption(userId, dbFilename, error)
-    throw toLocalDbOpenError(error, userId)
+    // A database that has already moved to the write-ahead VFS cannot be opened
+    // by a browser that has lost the capability. That is not corruption, and
+    // the generic screen's Reload / Sign out cannot help — say what happened and
+    // let them take a copy.
+    const classified = await asLostWriteAheadSupport(
+      toLocalDbOpenError(error, userId), dbFilename, resolvedLocalDbVfs.get(dbFilename) ?? WASQLiteVFS.OPFSCoopSyncVFS,
+    )
+    throw tagHandoffErrorUserId(classified, userId)
   }
 
   // Out-of-band forensic instrumentation (issue #284): record the session (with

@@ -1,11 +1,14 @@
 import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest'
 import { WASQLiteVFS } from '@powersync/web'
 import {
+  asLostWriteAheadSupport,
+  handoffErrorUserId,
   LOCAL_DB_VFS_OVERRIDE_KEY,
   LocalDbVfsHandoffError,
   prepareLocalDbForVfs,
   readLocalDbVfsOverride,
   resolveLocalDbVfs,
+  tagHandoffErrorUserId,
   type LocalDbVfsHandoffDeps,
 } from './localDbVfs'
 
@@ -170,5 +173,38 @@ describe('readLocalDbVfsOverride', () => {
       getItem: () => { throw new DOMException('denied', 'SecurityError') },
     })
     expect(readLocalDbVfsOverride()).toBeNull()
+  })
+})
+
+
+describe('a refusal carries enough context to offer a backup', () => {
+  const sized = (files: Record<string, number>) => ({
+    fileSize: async (name: string) => (name in files ? files[name] : null),
+  })
+
+  it('classifies a failed write-ahead open on a database that has already moved', async () => {
+    const opened = await asLostWriteAheadSupport(
+      new Error('NoModificationAllowedError'), DB, WASQLiteVFS.OPFSWriteAheadVFS,
+      sized({[DB]: 4096, [`${DB}-wa0`]: 0}),
+    )
+    expect(opened).toBeInstanceOf(LocalDbVfsHandoffError)
+    // The generic screen offers Sign out, which cannot restore this profile.
+    expect((opened as Error).message).toContain('this browser profile')
+  })
+
+  it('leaves an unrelated open failure alone', async () => {
+    const original = new Error('something else entirely')
+    expect(await asLostWriteAheadSupport(
+      original, DB, WASQLiteVFS.OPFSWriteAheadVFS, sized({[DB]: 4096}),
+    )).toBe(original)
+    expect(await asLostWriteAheadSupport(
+      original, DB, WASQLiteVFS.OPFSCoopSyncVFS, sized({[DB]: 4096, [`${DB}-wa0`]: 0}),
+    )).toBe(original)
+  })
+
+  it('carries the account so the fallback can export without an open connection', () => {
+    const tagged = tagHandoffErrorUserId(new LocalDbVfsHandoffError('nope'), 'user-1')
+    expect(handoffErrorUserId(tagged)).toBe('user-1')
+    expect(handoffErrorUserId(new Error('unrelated'))).toBeNull()
   })
 })

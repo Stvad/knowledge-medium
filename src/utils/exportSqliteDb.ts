@@ -376,13 +376,24 @@ export async function importRawSqliteDb(repo: Repo, file: File): Promise<void> {
     // file; without this, createWritable() throws NoModificationAllowedError.
     await repo.db.close()
 
-    // Rollback-journal mode normally deletes -journal on clean close and
-    // we don't run native SQLite WAL, but be defensive — a leftover sibling
-    // from a crashed prior session would be replayed against the freshly
-    // imported DB and silently corrupt it.
-    for (const suffix of DB_FILE_SIBLING_SUFFIXES) {
+    // Every sibling has to go before the replacement lands, and in this order.
+    // A leftover from a crashed prior session would be replayed against the
+    // freshly imported DB and silently corrupt it.
+    //
+    // Note this is the OPPOSITE order to `deleteLocalSqliteDb`, and for the
+    // same reason: there, the write-ahead pair goes last because a log that
+    // outlives its `.db` is inert (the VFS truncates both when it opens a `.db`
+    // that does not exist). Here a new `.db` IS written afterwards, so a
+    // surviving log would find a file to replay onto. Both must be gone before
+    // that write, and failing here leaves the original untouched.
+    for (const suffix of [...WRITE_AHEAD_SIDECAR_SUFFIXES, ...SQLITE_JOURNAL_SUFFIXES]) {
       await removeEntryIfExists(root, dbFilename + suffix)
     }
+
+    // Drop the old `.db` before writing the new one. If the write then fails,
+    // the next boot finds no database rather than the previous one silently
+    // short of the log just deleted — and the import can simply be retried.
+    await removeEntryIfExists(root, dbFilename)
 
     const replacement = await stagingHandle.getFile()
     const fileHandle = await root.getFileHandle(dbFilename, {create: true})
