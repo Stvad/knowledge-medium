@@ -63,7 +63,12 @@ export function MarkdownContentRenderer({
   const inline = blockContext.isReference === true
   const Container = containerElement ?? (inline ? 'span' : 'div')
   const baseClassName = containerClassName ?? (inline ? '' : DEFAULT_CONTAINER_CLASS)
-  const className = [baseClassName, titleClass].filter(Boolean).join(' ')
+  // Marks rendered markdown so element styling (list markers and their
+  // gutter) can be scoped to it. Preflight strips both from every `ul`/`ol`,
+  // which is right for the app's own chrome — menus, pickers, the recents
+  // tree are all `<li>`s that must stay unmarked — and wrong only here.
+  const className = ['markdown-content', baseClassName, titleClass]
+    .filter(Boolean).join(' ')
 
   const resolveMarkdownConfig = runtime.read(markdownExtensionsFacet)
   // Pass the reactive `renderData` as `data` so the (React-Compiler-memoized)
@@ -80,6 +85,7 @@ export function MarkdownContentRenderer({
     <Container className={className}>
       <Markdown
         remarkPlugins={markdownConfig.remarkPlugins}
+        rehypePlugins={markdownConfig.rehypePlugins}
         components={components}
       >
         {content}

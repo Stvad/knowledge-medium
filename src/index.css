@@ -253,6 +253,39 @@
     padding-left: 0.65em;
   }
 
+  /* Preflight strips the marker and gutter off every `ul`/`ol`, which is what
+     the app's own chrome wants — menus, pickers and the recents tree are all
+     unmarked `<li>`s — but leaves a list typed into a block rendering as bare
+     unindented lines. Restore both, scoped to rendered markdown. Sized in `em`
+     so the gutter scales with the surrounding text (a title block renders at
+     1.5rem). An `outside` marker is drawn in that gutter, and the content
+     container clips its overflow — so the gutter has to stay wide enough for
+     the widest marker (`100.`) or the leading digit is cut off, not merely
+     crowded. */
+  .markdown-content :is(ul, ol) {
+    padding-left: 2em;
+  }
+
+  .markdown-content ul {
+    list-style-type: disc;
+  }
+
+  .markdown-content ol {
+    list-style-type: decimal;
+  }
+
+  /* Subordinate to the outline's own bullets: these mark structure INSIDE one
+     block, and shouldn't read as loudly as the rows they sit in. */
+  .markdown-content li::marker {
+    color: hsl(var(--muted-foreground));
+  }
+
+  /* A GFM task item carries its own marker — the checkbox. It keeps the
+     gutter, so its checkbox lines up with the text of any plain sibling. */
+  .markdown-content .task-list-item {
+    list-style-type: none;
+  }
+
   a {
     @apply text-link underline;
     /* A long URL is a single unbreakable token; let it wrap to fit

@@ -18,6 +18,7 @@ const renderMarkdown = (content: string) => {
   return render(
     <Markdown
       remarkPlugins={markdownConfig.remarkPlugins}
+      rehypePlugins={markdownConfig.rehypePlugins}
       components={markdownConfig.components}
     >
       {content}
@@ -83,6 +84,51 @@ describe('gfm markdown extension', () => {
     const {container} = renderMarkdown('> quote\n> more')
 
     expect(container.querySelector('blockquote > p')?.textContent).toBe('quote\nmore')
+  })
+
+  // A list is rendered by markers and indent, both of which preflight strips
+  // off every `ul`/`ol` for the app's own chrome — so what a block showed was
+  // unmarked, unindented lines. The gutter and marker are restored in CSS
+  // (`.markdown-content`); asserted here only as far as the DOM goes, which is
+  // that the list survives as a real list rather than as text.
+  it('drops every newline separator inside a list', () => {
+    const {container} = renderMarkdown('1. one\n2. two')
+
+    const list = container.querySelector('ol')
+    expect([...list!.childNodes].map(node => node.nodeName)).toEqual(['LI', 'LI'])
+  })
+
+  it('drops the separator between an item and its nested list', () => {
+    const {container} = renderMarkdown('- a\n  - nested')
+
+    const item = container.querySelector('li')
+    expect([...item!.childNodes].map(node => node.nodeName)).toEqual(['#text', 'UL'])
+  })
+
+  // Same rule as a multi-paragraph quote: preflight zeroes paragraph margins,
+  // so this separator is what draws the blank line between the two paragraphs
+  // of a loose item. Only the edges are padding.
+  it('keeps the separator between two paragraphs of a loose list item', () => {
+    const {container} = renderMarkdown('- first\n\n  second')
+
+    const item = container.querySelector('li')
+    expect([...item!.childNodes].map(node => node.nodeName))
+      .toEqual(['P', '#text', 'P'])
+  })
+
+  // A separator is recognised by its block-level neighbours, never by being
+  // whitespace: the space between two inline elements is authored text, and
+  // the pretty-printer's newline is spelled identically to a soft line break.
+  it('keeps authored whitespace between two inline elements in a list item', () => {
+    const {container} = renderMarkdown('- **bold** *italic*')
+
+    expect(container.querySelector('li')?.textContent).toBe('bold italic')
+  })
+
+  it('keeps a soft line break between two inline elements in a list item', () => {
+    const {container} = renderMarkdown('- **bold**\n  *italic*')
+
+    expect(container.querySelector('li')?.textContent).toBe('bold\nitalic')
   })
 
   it('opens a fullscreen preview when an embedded image is clicked', async () => {

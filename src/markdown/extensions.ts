@@ -26,6 +26,11 @@ export interface MarkdownRenderContext {
 
 export interface MarkdownRenderConfig {
   remarkPlugins: PluggableList
+  /** Applied to the hast tree after remark, before components render — the
+   *  layer where element identity (`tagName`) is still readable, unlike in a
+   *  `components` override, whose children have already been mapped through
+   *  whatever other extensions replaced them with. */
+  rehypePlugins: PluggableList
   components: Components
 }
 
@@ -46,6 +51,7 @@ export const resolveMarkdownRenderConfig = (
   context: MarkdownRenderContext,
 ): MarkdownRenderConfig => {
   const remarkPlugins: PluggableList = []
+  const rehypePlugins: PluggableList = []
   const components: Components = {}
 
   for (const extension of extensions) {
@@ -56,6 +62,10 @@ export const resolveMarkdownRenderConfig = (
       remarkPlugins.push(...extensionConfig.remarkPlugins)
     }
 
+    if (extensionConfig.rehypePlugins) {
+      rehypePlugins.push(...extensionConfig.rehypePlugins)
+    }
+
     if (extensionConfig.components) {
       Object.assign(components, extensionConfig.components)
     }
@@ -63,6 +73,7 @@ export const resolveMarkdownRenderConfig = (
 
   return {
     remarkPlugins,
+    rehypePlugins,
     components,
   }
 }
@@ -72,6 +83,7 @@ export const markdownExtensionsFacet = defineFacet<MarkdownExtension, MarkdownRe
   combine: extensions => context => resolveMarkdownRenderConfig(extensions, context),
   empty: () => () => ({
     remarkPlugins: [],
+    rehypePlugins: [],
     components: {},
   }),
   validate: isFunction<MarkdownExtension>,
