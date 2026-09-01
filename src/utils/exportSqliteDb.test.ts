@@ -396,6 +396,25 @@ describe('importRawSqliteDb', () => {
     expect([...opfs.names()]).toEqual(['kmp-v6-user-1.db'])
   })
 
+  it('finds the real end-of-directory record past a decoy in the archive comment', async () => {
+    // Those four bytes can occur after the record too — any tool that stamps a
+    // comment can put them there — and the scan runs backwards from EOF, so the
+    // decoy is found FIRST. Without validating the candidate, a perfectly good
+    // backup is refused as damaged.
+    const dbBytes = concatChunks([SQLITE_HEADER_BYTES, new Uint8Array(200).fill(0x41)])
+    const archive = streamedZip([['x.db', dbBytes]])
+    const eocdAt = archive.length - 22
+    const comment = new Uint8Array(40)
+    comment.set([0x50, 0x4b, 0x05, 0x06])          // the decoy
+    new DataView(archive.buffer, archive.byteOffset).setUint16(eocdAt + 20, comment.length, true)
+    const stamped = concatChunks([archive, comment])
+    const opfs = installFakeOpfs()
+
+    await importRawSqliteDb(fakeRepo(), [fileWithStream(sliceInto(stamped, 64), 'recovery.zip')], writeAheadSupported)
+
+    expect(opfs.bytes('kmp-v6-user-1.db')).toEqual(dbBytes)
+  })
+
   it('refuses an archive whose member content does not match its recorded checksum', async () => {
     // Same length, different bytes — only the directory's CRC sees this. It is
     // the one check that catches corruption which is neither truncation nor a

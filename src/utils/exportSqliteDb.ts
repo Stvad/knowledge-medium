@@ -1061,8 +1061,12 @@ const zipCentralDirectory = async (archive: Blob): Promise<ZipDirectoryEntry[]> 
   for (let at = tail.byteLength - EOCD_SIZE; at >= 0; at--) {
     if (tail.getUint32(at, true) !== EOCD_SIGNATURE) continue
     // Validate the candidate rather than trusting the first signature found:
-    // these bytes can also occur inside member data. A real record ends exactly
-    // at EOF and points at a directory that ends exactly where it begins.
+    // these bytes can also occur inside member data, or after the record in an
+    // archive comment — and the scan runs backwards, so a decoy is seen first.
+    // A real record ends exactly at EOF and points at a directory that ends
+    // exactly where it begins. The two clauses are independent and either alone
+    // catches an accidental decoy; both are kept because a CRAFTED one can
+    // satisfy either by itself, and neither is individually pinned by a test.
     if (at + EOCD_SIZE + tail.getUint16(at + 20, true) !== tail.byteLength) continue
     const count = tail.getUint16(at + 10, true)
     const size = tail.getUint32(at + 12, true)
