@@ -1,8 +1,9 @@
 import { useMemo } from 'react'
 import { CalendarCheck, CalendarPlus, Layers, Tag } from 'lucide-react'
 import type { Block } from '@/data/block'
+import { ChangeScope } from '@/data/api'
 import { useRepo } from '@/context/repo.js'
-import { usePluginPrefsProperty } from '@/data/globalState.js'
+import { usePluginPrefsBlock, usePluginPrefsProperty } from '@/data/globalState.js'
 import { cn } from '@/lib/utils.js'
 import {
   blockTaggingPrefsType,
@@ -61,9 +62,15 @@ const DeckOption = ({workspaceId, tagName, label, icon: Icon, onPick, pinned, on
         type="button"
         onClick={onTogglePinned}
         aria-pressed={pinned}
+        // The deck name goes into the accessible name — with several decks,
+        // identical icon-only toggles are indistinguishable to a screen
+        // reader; `aria-pressed` only carries the state.
+        aria-label={pinned
+          ? `Hide ${label} from today’s daily note`
+          : `Show ${label} on today’s daily note`}
         title={pinned
-          ? 'Shown on today’s daily note — click to hide'
-          : 'Show due count on today’s daily note'}
+          ? `Hide ${label} from today’s daily note`
+          : `Show ${label} on today’s daily note`}
         className={cn(
           'flex shrink-0 items-center rounded-lg border px-2.5 transition-colors hover:bg-muted',
           pinned ? 'border-border text-primary' : 'border-border/60 text-muted-foreground',
@@ -88,12 +95,27 @@ export const DeckPicker = ({deck}: {deck: Block}) => {
   // Same never-configured fallback the daily-note hint reads (all-due deck
   // pinned), so the toggles here show what the note actually shows. The
   // first toggle materialises the explicit list.
-  const [storedDecks, setStoredDecks] = usePluginPrefsProperty(srsReviewPrefsType, dailyNoteDecksProp)
+  const prefsBlock = usePluginPrefsBlock(srsReviewPrefsType)
+  const [storedDecks] = usePluginPrefsProperty(srsReviewPrefsType, dailyNoteDecksProp)
   const pinnedDecks = useMemo(() => normalizeDailyNoteDecks(storedDecks) ?? [''], [storedDecks])
+  // Re-read inside the tx, not from `pinnedDecks`: two quick toggles both
+  // computing from the render-time snapshot would each write the whole
+  // array and the second would undo the first.
   const togglePinned = (tagName: string) =>
-    setStoredDecks(pinnedDecks.includes(tagName)
-      ? pinnedDecks.filter(t => t !== tagName)
-      : [...pinnedDecks, tagName])
+    void prefsBlock.repo.tx(
+      async tx => {
+        const current =
+          normalizeDailyNoteDecks(await tx.getProperty(prefsBlock.id, dailyNoteDecksProp)) ?? ['']
+        await tx.setProperty(
+          prefsBlock.id,
+          dailyNoteDecksProp,
+          current.includes(tagName)
+            ? current.filter(t => t !== tagName)
+            : [...current, tagName],
+        )
+      },
+      {scope: ChangeScope.UserPrefs, description: 'toggle srs daily-note deck'},
+    )
 
   return (
     <div className="mx-auto w-full max-w-xl space-y-4 py-4">

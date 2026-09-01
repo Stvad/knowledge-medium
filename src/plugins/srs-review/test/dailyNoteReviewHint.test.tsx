@@ -17,6 +17,7 @@ const TODAY_ID = dailyNoteBlockId(WS, todayIso(new Date(START_OF_TODAY)))
 
 // Reassigned per test; the mocks close over them.
 let storedDecks: unknown = null
+let curatedTags: unknown = []
 let dueCounts: Record<string, number | undefined> = {}
 
 vi.mock('@/context/repo.js', () => ({useRepo: () => ({})}))
@@ -24,7 +25,10 @@ vi.mock('@/hooks/block.js', () => ({
   useWorkspaceId: (block: Block) => (block as unknown as {workspaceId?: string}).workspaceId ?? WS,
 }))
 vi.mock('@/data/globalState.js', () => ({
-  usePluginPrefsProperty: () => [storedDecks, vi.fn()],
+  usePluginPrefsProperty: (_type: unknown, prop: {name: string}) =>
+    prop.name === 'srs-review:daily-note-decks'
+      ? [storedDecks, vi.fn()]
+      : [curatedTags, vi.fn()],
 }))
 vi.mock('@/plugins/daily-notes/today.js', () => ({
   useStartOfToday: () => START_OF_TODAY,
@@ -56,6 +60,7 @@ const renderHint = (blockId: string) => {
 
 beforeEach(() => {
   storedDecks = null
+  curatedTags = ['Spanish', 'German']
   dueCounts = {}
 })
 afterEach(cleanup)
@@ -71,13 +76,21 @@ describe('the hint decorator contribution', () => {
 })
 
 describe('deck selection semantics', () => {
+  const CURATED = ['Spanish', 'German']
+
   it('defaults an unconfigured pref to the all-due deck, keeps an explicit none', () => {
-    expect(dailyNoteHintDecks(null)).toEqual([''])
-    expect(dailyNoteHintDecks([])).toEqual([])
+    expect(dailyNoteHintDecks(null, CURATED)).toEqual([''])
+    expect(dailyNoteHintDecks([], CURATED)).toEqual([])
   })
 
   it('orders the all-due deck first and drops junk entries', () => {
-    expect(dailyNoteHintDecks(['Spanish', '', 'Spanish', 42])).toEqual(['', 'Spanish'])
+    expect(dailyNoteHintDecks(['Spanish', '', 'Spanish', 42], CURATED)).toEqual(['', 'Spanish'])
+  })
+
+  it('drops a pinned tag that left the curated list, keeping the all-due deck', () => {
+    // A removed tag has no picker row left to unpin it from — the hint must
+    // not keep rendering a line the user can no longer manage.
+    expect(dailyNoteHintDecks(['', 'French'], CURATED)).toEqual([''])
   })
 })
 

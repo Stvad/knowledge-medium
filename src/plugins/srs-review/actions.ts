@@ -77,7 +77,17 @@ const revealAction: ActionConfig<typeof SRS_REVIEW_CONTEXT> = {
   description: 'SRS review: Show answer / Good',
   context: SRS_REVIEW_CONTEXT,
   defaultBinding: {keys: ['Space', 'Enter']},
-  handler: deps => { controllerOf(deps).revealOrGradeDefault() },
+  handler: (deps, trigger) => {
+    // A held key auto-repeats, and the coordinator dispatches repeats. Now
+    // that this action grades once revealed, the first repeat after the
+    // reveal would grade Good before the user has seen the answer — and
+    // after the write advances the session, further repeats would chain
+    // onto the next card. One physical press, one intent. The 1–4 grade
+    // keys don't need this: their grade is gated on `revealed`, which
+    // advancing resets.
+    if (trigger instanceof KeyboardEvent && trigger.repeat) return
+    controllerOf(deps).revealOrGradeDefault()
+  },
 }
 
 interface GradeBinding {

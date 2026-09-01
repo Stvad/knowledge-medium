@@ -18,6 +18,11 @@ import {
 } from '@/extensions/blockInteraction.js'
 import type { BlockRenderer } from '@/types.js'
 import { navigateFromGlobalCommand } from '@/utils/navigation.js'
+import {
+  blockTaggingPrefsType,
+  blockTagsConfigProp,
+  normalizeBlockTagsConfig,
+} from '@/plugins/block-tagging/config.js'
 import { DAILY_NOTE_TYPE } from '@/plugins/daily-notes/schema.js'
 import { dailyNoteBlockId, todayIso } from '@/plugins/daily-notes/dailyNotes.js'
 import { useStartOfToday } from '@/plugins/daily-notes/today.js'
@@ -36,9 +41,15 @@ export const reviewHintLabel = (tagName: string, count: number): string => {
 
 /** The decks the hint shows, from the stored pref: never configured (null)
  *  falls back to the all-due deck; an explicit `[]` means the user turned
- *  every deck off. The all-due deck sorts first, tags keep stored order. */
-export const dailyNoteHintDecks = (stored: unknown): string[] => {
-  const decks = normalizeDailyNoteDecks(stored) ?? ['']
+ *  every deck off. The all-due deck sorts first, tags keep stored order.
+ *
+ *  Tag decks are intersected with the curated tag list: the picker only
+ *  offers curated tags for pinning, so a tag removed from the Tags pref
+ *  would otherwise keep its hint line with no surface left to unpin it.
+ *  The stale pin stays stored — re-adding the tag restores it. */
+export const dailyNoteHintDecks = (stored: unknown, curatedTags: readonly string[]): string[] => {
+  const decks = (normalizeDailyNoteDecks(stored) ?? [''])
+    .filter(tag => tag === '' || curatedTags.includes(tag))
   return decks.includes('') ? ['', ...decks.filter(t => t !== '')] : decks
 }
 
@@ -71,7 +82,11 @@ const DeckHintLine = ({workspaceId, tagName}: {workspaceId: string; tagName: str
 
 const ReviewHintLines = ({workspaceId}: {workspaceId: string}) => {
   const [stored] = usePluginPrefsProperty(srsReviewPrefsType, dailyNoteDecksProp)
-  const decks = useMemo(() => dailyNoteHintDecks(stored), [stored])
+  const [storedTags] = usePluginPrefsProperty(blockTaggingPrefsType, blockTagsConfigProp)
+  const decks = useMemo(
+    () => dailyNoteHintDecks(stored, normalizeBlockTagsConfig(storedTags)),
+    [stored, storedTags],
+  )
   if (decks.length === 0) return null
   return (
     <div className="mt-1 flex flex-col items-start gap-0.5">
