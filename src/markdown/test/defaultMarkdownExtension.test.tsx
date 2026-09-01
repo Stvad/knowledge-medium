@@ -69,9 +69,9 @@ describe('gfm markdown extension', () => {
     expect([...blockquote!.childNodes].map(node => node.nodeName)).toEqual(['P'])
   })
 
-  // The separator BETWEEN two quoted paragraphs is what draws the blank line
-  // between them (preflight zeroes paragraph margins), exactly as it does for a
-  // block's own top-level paragraphs. Only the edges are padding.
+  // The separator BETWEEN two quoted paragraphs is the blank line the author
+  // wrote (preflight zeroes paragraph margins), exactly as at a block's top
+  // level. Only the edges are the pretty-printer's.
   it('keeps the separator between two quoted paragraphs', () => {
     const {container} = renderMarkdown('> first\n>\n> second')
 
@@ -88,10 +88,18 @@ describe('gfm markdown extension', () => {
 
   // A list is rendered by markers and indent, both of which preflight strips
   // off every `ul`/`ol` for the app's own chrome — so what a block showed was
-  // unmarked, unindented lines. The gutter and marker are restored in CSS
-  // (`.markdown-content`); asserted here only as far as the DOM goes, which is
-  // that the list survives as a real list rather than as text.
-  it('drops every newline separator inside a list', () => {
+  // unmarked, unindented lines. The gutter and marker are restored by CSS
+  // keyed on this class; stamping it here rather than reaching down from the
+  // container is what keeps an embedded block's own chrome list out of it.
+  it('marks the lists markdown produced, keeping gfm\'s own marks', () => {
+    const {container} = renderMarkdown('1. one\n\n- [ ] task')
+
+    expect(container.querySelector('ol')?.className).toBe('markdown-list')
+    expect(container.querySelector('ul')?.className)
+      .toBe('contains-task-list markdown-list')
+  })
+
+  it('drops every newline separator inside a tight list', () => {
     const {container} = renderMarkdown('1. one\n2. two')
 
     const list = container.querySelector('ol')
@@ -105,10 +113,11 @@ describe('gfm markdown extension', () => {
     expect([...item!.childNodes].map(node => node.nodeName)).toEqual(['#text', 'UL'])
   })
 
-  // Same rule as a multi-paragraph quote: preflight zeroes paragraph margins,
-  // so this separator is what draws the blank line the author wrote between
-  // the two blocks of a loose item. Only the edges are padding.
-  it('keeps the separator between two paragraphs of a loose list item', () => {
+  // The author's blank line survives wherever they put it, and the tight cases
+  // above are the contrast: same tags either side, no blank line in the source,
+  // no blank line rendered. Preflight zeroes block margins, so this separator
+  // is the only thing drawing it.
+  it('keeps the separator between the paragraphs of a loose list item', () => {
     const {container} = renderMarkdown('- first\n\n  second')
 
     const item = container.querySelector('li')
@@ -116,10 +125,6 @@ describe('gfm markdown extension', () => {
       .toEqual(['P', '#text', 'P'])
   })
 
-  // The blank line is the author's whatever the second block is — a quote or a
-  // sublist earns it as much as a paragraph does. The tight item above is the
-  // contrast: there the first child is text, not a paragraph, and no blank
-  // line was written.
   it('keeps the separator before a non-paragraph block of a loose list item', () => {
     const {container} = renderMarkdown('- first\n\n  > quoted')
 
@@ -128,9 +133,42 @@ describe('gfm markdown extension', () => {
       .toEqual(['P', '#text', 'BLOCKQUOTE'])
   })
 
-  // A separator is recognised by its block-level neighbours, never by being
-  // whitespace: the space between two inline elements is authored text, and
-  // the pretty-printer's newline is spelled identically to a soft line break.
+  it('keeps the separator between the rows of a loose list', () => {
+    const {container} = renderMarkdown('- one\n\n- two')
+
+    const list = container.querySelector('ul')
+    expect([...list!.childNodes].map(node => node.nodeName))
+      .toEqual(['LI', '#text', 'LI'])
+  })
+
+  // remark-gfm synthesizes the space after a task checkbox, so it carries no
+  // source position either — but it is content, not layout. Whitespace only
+  // reads as the pretty-printer's when it is a line break.
+  it('keeps the space gfm synthesizes after a task checkbox', () => {
+    const {container} = renderMarkdown('- [ ] task item')
+
+    expect(container.querySelector('li')?.textContent).toBe(' task item')
+  })
+
+  // The same rule at a block's top level, which used to be exempt: two
+  // paragraphs the author spaced keep their line, a list they ran straight on
+  // from a paragraph does not get one invented for it.
+  it('keeps a top-level separator the author wrote', () => {
+    const {container} = renderMarkdown('para one\n\npara two')
+
+    expect([...container.childNodes].map(node => node.nodeName))
+      .toEqual(['P', '#text', 'P'])
+  })
+
+  it('drops a top-level separator the author did not write', () => {
+    const {container} = renderMarkdown('text\n- item')
+
+    expect([...container.childNodes].map(node => node.nodeName)).toEqual(['P', 'UL'])
+  })
+
+  // Authored whitespace has a source position; the pretty-printer's does not.
+  // That is the whole distinction — the two are spelled identically, so a
+  // content-based rule eats the space between two inline elements.
   it('keeps authored whitespace between two inline elements in a list item', () => {
     const {container} = renderMarkdown('- **bold** *italic*')
 

@@ -256,7 +256,11 @@
   /* Preflight strips the marker and gutter off every `ul`/`ol`, which is what
      the app's own chrome wants — menus, pickers and the recents tree are all
      unmarked `<li>`s — but leaves a list typed into a block rendering as bare
-     unindented lines. Restore both, scoped to rendered markdown.
+     unindented lines. Restore both, for lists that are BOTH markdown's own
+     (`.markdown-list`, stamped by the renderer, so an embedded block's chrome
+     list inside the same container is not swept up) and on a block surface
+     (`.markdown-content`, absent on the inline ones, where a gutter would land
+     mid-sentence).
 
      `em` so the gutter scales with the surrounding text (a title block renders
      at 1.5rem). An `outside` marker is drawn in that gutter and the content
@@ -266,27 +270,27 @@
      clipped. The alternatives cost more than the case is worth — an `inside`
      marker breaks wrapped-line alignment for every list, and no CSS length can
      be derived from a marker's width. */
-  .markdown-content :is(ul, ol) {
+  .markdown-content .markdown-list {
     padding-left: 2em;
   }
 
-  .markdown-content ul {
+  .markdown-content ul.markdown-list {
     list-style-type: disc;
   }
 
-  .markdown-content ol {
+  .markdown-content ol.markdown-list {
     list-style-type: decimal;
   }
 
   /* Subordinate to the outline's own bullets: these mark structure INSIDE one
      block, and shouldn't read as loudly as the rows they sit in. */
-  .markdown-content li::marker {
+  .markdown-content .markdown-list > li::marker {
     color: hsl(var(--muted-foreground));
   }
 
   /* A GFM task item carries its own marker — the checkbox. It keeps the
      gutter, so its checkbox lines up with the text of any plain sibling. */
-  .markdown-content .task-list-item {
+  .markdown-content .markdown-list > .task-list-item {
     list-style-type: none;
   }
 

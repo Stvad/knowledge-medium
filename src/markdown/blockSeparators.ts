@@ -1,45 +1,42 @@
-import type { Element, Root, RootContent } from 'hast'
+import type { ElementContent, Nodes, Root, RootContent } from 'hast'
 import { visit } from 'unist-util-visit'
 
-/** Block-level tags `mdast-util-to-hast` can emit as a container's children. */
-const BLOCK_TAGS = new Set([
-  'blockquote', 'div', 'dl', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
-  'hr', 'li', 'ol', 'p', 'pre', 'table', 'ul',
-])
+type Child = RootContent | ElementContent
 
-/** …minus the list row, which already starts its own line. A blank line
- *  between rows is what made every list render double-spaced. */
-const SPACED_BLOCK_TAGS = new Set([...BLOCK_TAGS].filter(tag => tag !== 'li'))
+/** A line break the pretty-printer synthesized — the only whitespace in the
+ *  tree that carries no meaning. Whitespace the author typed has a source
+ *  position, and a plugin's own synthesized whitespace is a space rather than
+ *  a break (remark-gfm puts one after a task checkbox). */
+const isPrettyPrinted = (node: Child) =>
+  node.type === 'text' && !node.position &&
+  node.value.trim() === '' && node.value.includes('\n')
 
-const tagIn = (node: RootContent | undefined, tags: ReadonlySet<string>) =>
-  node?.type === 'element' && tags.has(node.tagName)
+/** Whether the source had a blank line between these two nodes. A node with
+ *  no position was synthesized by some other plugin and reports none. */
+const blankLineBetween = (before: Child | undefined, after: Child | undefined) =>
+  before?.position !== undefined && after?.position !== undefined &&
+  after.position.start.line - before.position.end.line > 1
+
+const keptChildren = <T extends Child>(children: T[]): T[] =>
+  children.filter((child, index) =>
+    !isPrettyPrinted(child) ||
+    blankLineBetween(children[index - 1], children[index + 1]))
 
 /** `mdast-util-to-hast` pretty-prints, separating a container's block children
- *  with literal `"\n"` text nodes. Content renders with `white-space:
- *  pre-wrap`, so each one draws a real blank line.
+ *  with `"\n"` text nodes of its own. Content renders with `white-space:
+ *  pre-wrap`, so each one draws a real blank line — above and below a quote,
+ *  between every pair of list rows.
  *
- *  Keep a separator only between two blocks that want a blank line between
- *  them (preflight zeroes their margins, so this newline is the only thing
- *  drawing it); drop it at a container's edges, between list rows, and beside
- *  a row's own inline content.
- *
- *  Recognise one by POSITION, never by content: the pretty-printer emits
- *  exactly `"\n"`, which is also how an authored soft line break is spelled,
- *  so only a block-level neighbour tells the two apart — a content-only rule
- *  eats the space in `- **bold** *italic*`.
- *
- *  Root is left alone (`visit` reaches elements only, and root is not one):
- *  its separators space a block's own top-level blocks. */
+ *  Drop the pretty-printer's, keep the author's. Both facts are in the tree:
+ *  a synthesized node has no source position, and the neighbours' spans say
+ *  whether a blank line stood between them. Nothing here reasons about WHICH
+ *  tags sit either side; the rule that did kept being wrong about one more
+ *  pair (a quote after a paragraph, loose rows). Preflight zeroes block
+ *  margins, so a kept separator is the only thing drawing that line. */
 export const rehypeTrimBlockSeparators = () => (tree: Root) => {
-  visit(tree, 'element', (node: Element) => {
-    node.children = node.children.filter((child, index) => {
-      if (child.type !== 'text' || child.value.trim() !== '') return true
-
-      const before = node.children[index - 1]
-      const after = node.children[index + 1]
-      if (!tagIn(before, BLOCK_TAGS) && !tagIn(after, BLOCK_TAGS)) return true
-
-      return tagIn(before, SPACED_BLOCK_TAGS) && tagIn(after, SPACED_BLOCK_TAGS)
-    })
+  visit(tree, (node: Nodes) => {
+    if (node.type === 'root' || node.type === 'element') {
+      node.children = keptChildren(node.children)
+    }
   })
 }

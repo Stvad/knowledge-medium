@@ -50,11 +50,40 @@ const MarkdownAnchor: AnchorComponent = ({href, children, rel, node: _node, ...p
   }, children)
 }
 
+/** Marks the lists MARKDOWN produced, so their styling can be written without
+ *  a descendant selector. A `components` override only ever sees elements from
+ *  the markdown AST, so the mark cannot reach a React component rendered
+ *  inside the same container — an embedded block's own chrome list, say, which
+ *  `.markdown-content ul` could not tell apart. Merges rather than replaces:
+ *  remark-gfm marks a task list on the same element. */
+const MARKDOWN_LIST_CLASS = 'markdown-list'
+
+const withListClass = (className: string | undefined) =>
+  [className, MARKDOWN_LIST_CLASS].filter(Boolean).join(' ')
+
+const MarkdownUnorderedList: NonNullable<Components['ul']> = (
+  {node: _node, className, children, ...props},
+) => {
+  void _node
+
+  return createElement('ul', {...props, className: withListClass(className)}, children)
+}
+
+const MarkdownOrderedList: NonNullable<Components['ol']> = (
+  {node: _node, className, children, ...props},
+) => {
+  void _node
+
+  return createElement('ol', {...props, className: withListClass(className)}, children)
+}
+
 export const gfmMarkdownExtension: MarkdownExtension = () => ({
   remarkPlugins: [remarkGfm],
   rehypePlugins: [rehypeTrimBlockSeparators],
   components: {
     a: MarkdownAnchor,
     img: MarkdownImage,
+    ol: MarkdownOrderedList,
+    ul: MarkdownUnorderedList,
   },
 })
