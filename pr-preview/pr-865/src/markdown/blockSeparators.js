@@ -1,3 +1,3 @@
-import{visit as e}from"../../node_modules/.pnpm/unist-util-visit@5.0.0/node_modules/unist-util-visit/lib/index.js";var t=e=>e.type===`text`&&!e.position&&e.value.trim()===``&&e.value.includes(`
-`),n=(e,t)=>e?.position!==void 0&&t?.position!==void 0&&t.position.start.line-e.position.end.line>1,r=e=>e.filter((r,i)=>!t(r)||n(e[i-1],e[i+1])),i=()=>t=>{e(t,e=>{(e.type===`root`||e.type===`element`)&&(e.children=r(e.children))})};export{i as rehypeTrimBlockSeparators};
+import{visit as e}from"../../node_modules/.pnpm/unist-util-visit@5.0.0/node_modules/unist-util-visit/lib/index.js";var t=new Set([`blockquote`,`div`,`dl`,`h1`,`h2`,`h3`,`h4`,`h5`,`h6`,`hr`,`li`,`ol`,`p`,`pre`,`table`,`ul`]),n=e=>e?.type===`element`&&t.has(e.tagName),r=(e,t,r)=>e.type===`text`&&!e.position&&e.value.trim()===``&&e.value.includes(`
+`)&&(n(t)||n(r)),i=(e,t)=>e?.position!==void 0&&t?.position!==void 0&&t.position.start.line-e.position.end.line>1,a=e=>e.filter((t,n)=>{let a=e[n-1],o=e[n+1];return!r(t,a,o)||i(a,o)}),o=()=>t=>{e(t,e=>{(e.type===`root`||e.type===`element`)&&(e.children=a(e.children))})};export{o as rehypeTrimBlockSeparators};
 //# sourceMappingURL=blockSeparators.js.map
