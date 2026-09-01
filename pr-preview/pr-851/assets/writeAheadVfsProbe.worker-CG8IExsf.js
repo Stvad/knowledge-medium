@@ -1,2 +1,0 @@
-const e=`.km-write-ahead-probe`,t=async()=>{let t=await navigator.storage.getDirectory(),n=await t.getFileHandle(e,{create:!0}),r=[];try{try{r.push(await n.createSyncAccessHandle({mode:`readwrite-unsafe`}))}catch{return!1}try{r.push(await n.createSyncAccessHandle({mode:`readwrite-unsafe`}))}catch{return!1}return!0}finally{for(let e of r)try{e.close()}catch{}await t.removeEntry(e).catch(()=>{})}};self.onmessage=()=>{t().then(e=>self.postMessage({supported:e}),()=>self.postMessage({supported:!1}))};
-//# sourceMappingURL=writeAheadVfsProbe.worker-CG8IExsf.js.map
