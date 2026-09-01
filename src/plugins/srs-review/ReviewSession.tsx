@@ -49,12 +49,12 @@ import { reviewDeckStartedProp, reviewProgressProp, srsReviewProgressType } from
 import { reconcileRestoredQueue, restoreSavedSession } from './reviewProgress.ts'
 import { useTodayKey } from '@/plugins/daily-notes/today.js'
 import {
-  SRS_GRADE_ACTION_IDS,
   SRS_REVEAL_ACTION_ID,
   SRS_REVIEW_CONTEXT,
+  makeSrsReviewController,
   type SrsReviewController,
 } from './actions.ts'
-import { useActionKeyHints } from './keyHints.ts'
+import { gradeButtonHint, useActionKeyHints } from './keyHints.ts'
 import { SRS_REVIEW_CARD_ID, SRS_REVIEW_REVEALED } from './reviewCardLayout.tsx'
 
 /** Breadcrumb context overrides — mirrors the breadcrumbs plugin's own
@@ -109,8 +109,7 @@ const GradeButtons = ({card, busy, keyHints, onGrade}: {
   return (
     <div className="grid grid-cols-4 gap-2">
       {GRADE_BUTTONS.map(btn => {
-        const actionId = SRS_GRADE_ACTION_IDS.get(btn.signal)
-        const hint = actionId ? keyHints.get(actionId) : undefined
+        const hint = gradeButtonHint(keyHints, btn.signal)
         return (
           <Button
             key={btn.label}
@@ -446,9 +445,11 @@ export const ReviewSession = ({deck, tagName}: {deck: Block; tagName: string}) =
   // Enter / 1-4. Deactivating on editable focus is cheap and keeps the
   // guarantee local, so it stays.
   const [surfaceFocused, setSurfaceFocused] = useState(false)
-  const controller = useMemo<SrsReviewController>(() => ({
-    reveal: () => { if (!busy) setRevealed(true) },
-    grade: signal => { if (revealed && !busy) void grade(signal) },
+  const controller = useMemo<SrsReviewController>(() => makeSrsReviewController({
+    busy,
+    revealed,
+    reveal: () => setRevealed(true),
+    grade: signal => void grade(signal),
   }), [busy, revealed, grade])
   const shortcutActivations = useMemo(() => [{
     context: SRS_REVIEW_CONTEXT,

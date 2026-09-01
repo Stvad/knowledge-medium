@@ -18,13 +18,14 @@ import {
 import type { ActionConfig } from '@/shortcuts/types.js'
 import { SrsSignal } from '@/plugins/srs-rescheduling/scheduler.js'
 import {
+  SRS_DEFAULT_GRADE_SIGNAL,
   SRS_GRADE_ACTION_IDS,
   SRS_REVEAL_ACTION_ID,
   SRS_REVIEW_CONTEXT,
   srsReviewActionContext,
   srsReviewActions,
 } from '../actions.ts'
-import { keyHintsByActionId, useActionKeyHints } from '../keyHints.ts'
+import { gradeButtonHint, keyHintsByActionId, useActionKeyHints } from '../keyHints.ts'
 
 const AGAIN_ACTION_ID = SRS_GRADE_ACTION_IDS.get(SrsSignal.AGAIN)!
 
@@ -89,6 +90,33 @@ describe('keyHintsByActionId', () => {
     const hints = keyHintsByActionId([syntheticAction('elsewhere', 'KeyR', 'global')], SRS_REVIEW_CONTEXT)
 
     expect(hints.has('elsewhere')).toBe(false)
+  })
+})
+
+describe('gradeButtonHint', () => {
+  const HINTS = new Map([
+    [AGAIN_ACTION_ID, '1'],
+    [SRS_GRADE_ACTION_IDS.get(SRS_DEFAULT_GRADE_SIGNAL)!, '3'],
+    [SRS_REVEAL_ACTION_ID, 'Space'],
+  ])
+
+  it('adds the reveal chord to the default-grade button only', () => {
+    // Reveal grades this signal once the answer is up, so the button
+    // under-reports what triggers it if the chord is left off.
+    expect(gradeButtonHint(HINTS, SRS_DEFAULT_GRADE_SIGNAL)).toBe('3 · Space')
+    expect(gradeButtonHint(HINTS, SrsSignal.AGAIN)).toBe('1')
+  })
+
+  it('keeps whichever half is still bound', () => {
+    const noGradeKey = new Map([[SRS_REVEAL_ACTION_ID, 'Space']])
+    expect(gradeButtonHint(noGradeKey, SRS_DEFAULT_GRADE_SIGNAL)).toBe('Space')
+
+    const noRevealKey = new Map([[SRS_GRADE_ACTION_IDS.get(SRS_DEFAULT_GRADE_SIGNAL)!, '3']])
+    expect(gradeButtonHint(noRevealKey, SRS_DEFAULT_GRADE_SIGNAL)).toBe('3')
+  })
+
+  it('gives no hint when neither action is bound', () => {
+    expect(gradeButtonHint(new Map(), SRS_DEFAULT_GRADE_SIGNAL)).toBeUndefined()
   })
 })
 

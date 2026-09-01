@@ -17,7 +17,33 @@ export const SRS_REVIEW_CONTEXT = 'srs-review'
 export interface SrsReviewController {
   reveal: () => void
   grade: (signal: SrsSignal) => void
+  /** Reveal a hidden answer; grade a revealed one Good. Space/Enter, so a
+   *  pass through well-known cards is one key per card. */
+  revealOrGradeDefault: () => void
 }
+
+/** The grade `srs-review.reveal` casts on an already-revealed card.
+ *  Exported because that button's key hint has to name the reveal chord
+ *  too, and a second literal is how the hint went stale before. */
+export const SRS_DEFAULT_GRADE_SIGNAL = SrsSignal.GOOD
+
+/** Builds the controller from the session's live state. The gating lives
+ *  here — grading is only reachable once the answer is on screen, and
+ *  nothing fires while a grade write is in flight. */
+export const makeSrsReviewController = ({busy, revealed, reveal, grade}: {
+  busy: boolean
+  revealed: boolean
+  reveal: () => void
+  grade: (signal: SrsSignal) => void
+}): SrsReviewController => ({
+  reveal: () => { if (!busy) reveal() },
+  grade: signal => { if (revealed && !busy) grade(signal) },
+  revealOrGradeDefault: () => {
+    if (busy) return
+    if (revealed) grade(SRS_DEFAULT_GRADE_SIGNAL)
+    else reveal()
+  },
+})
 
 export interface SrsReviewDependencies extends BaseShortcutDependencies {
   controller: SrsReviewController
@@ -49,14 +75,26 @@ export const srsReviewActionContext: ActionContextConfig<typeof SRS_REVIEW_CONTE
 const controllerOf = (deps: BaseShortcutDependencies): SrsReviewController =>
   (deps as SrsReviewDependencies).controller
 
+// Id stays `srs-review.reveal` (saved keybinding overrides key on it) even
+// though the action now also carries the default vote.
 export const SRS_REVEAL_ACTION_ID = 'srs-review.reveal'
 
 const revealAction: ActionConfig<typeof SRS_REVIEW_CONTEXT> = {
   id: SRS_REVEAL_ACTION_ID,
-  description: 'SRS review: Show answer',
+  description: 'SRS review: Show answer / Good',
   context: SRS_REVIEW_CONTEXT,
   defaultBinding: {keys: ['Space', 'Enter']},
-  handler: deps => { controllerOf(deps).reveal() },
+  handler: (deps, trigger) => {
+    // A held key auto-repeats, and the coordinator dispatches repeats. Now
+    // that this action grades once revealed, the first repeat after the
+    // reveal would grade Good before the user has seen the answer — and
+    // after the write advances the session, further repeats would chain
+    // onto the next card. One physical press, one intent. The 1–4 grade
+    // keys don't need this: their grade is gated on `revealed`, which
+    // advancing resets.
+    if (trigger instanceof KeyboardEvent && trigger.repeat) return
+    controllerOf(deps).revealOrGradeDefault()
+  },
 }
 
 interface GradeBinding {
