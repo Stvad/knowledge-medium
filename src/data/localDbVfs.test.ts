@@ -81,24 +81,14 @@ describe('resolveLocalDbVfs — the move is one-way, and the sidecars are the re
     expect(vfs).toBe(WASQLiteVFS.OPFSWriteAheadVFS)
   })
 
-  it('does NOT move a database on its own while the deploy gate is closed', async () => {
-    // Deploy 1 reads the record without creating one. This expectation flips
-    // with MOVE_NEW_DATABASES, deliberately: the constant should not be able to
-    // change without a test changing with it.
+  it('moves a database with no sidecars now the deploy gate is open', async () => {
+    // This expectation flips with MOVE_NEW_DATABASES, deliberately: the
+    // constant should not be able to change without a test changing with it.
     const h = harness({[DB]: 4096})
-    expect(await resolveLocalDbVfs(DB, h.deps)).toBe(WASQLiteVFS.OPFSCoopSyncVFS)
+    expect(await resolveLocalDbVfs(DB, h.deps)).toBe(WASQLiteVFS.OPFSWriteAheadVFS)
   })
 
-  it('does not even probe while the gate is closed', async () => {
-    let probed = false
-    await resolveLocalDbVfs(DB, {
-      fileSize: async () => null,
-      supportsWriteAhead: async () => { probed = true; return true },
-    })
-    expect(probed).toBe(false)
-  })
-
-  it('still lets the pin opt a device in — that is how the rollout starts', async () => {
+  it('still lets the pin opt a device in — that is how the rollout started', async () => {
     const h = harness({[DB]: 4096})
     vi.stubGlobal('localStorage', {getItem: () => 'write-ahead'})
     try {

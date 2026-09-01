@@ -220,17 +220,17 @@ export const asLostWriteAheadSupport = async (
 /**
  * The deploy gate for the rollout (`docs/opfs-write-ahead-vfs.md`).
  *
- * FALSE ships a build that READS the record without CREATING one: a database
- * that already has sidecars still opens write-ahead, but no new database is
- * moved. It must ship at least one deploy AHEAD of the flip, because the
- * hazard this whole module exists to prevent is a build without the sidecar
- * branch meeting a database that has moved — and a `git revert` of the flip and
- * the branch together is exactly that build.
+ * TRUE as of Deploy 2: a database with no sidecars is moved to the write-ahead
+ * VFS when this browser supports it. Deploy 1 — which reads the record without
+ * creating one — shipped ahead of this, so there is a build to roll back TO
+ * that handles a moved database correctly.
  *
- * The pin still opts a device in while this is false, which is how the rollout
- * is meant to start.
+ * Setting this back to `false` is the safe rollback. Reverting the module along
+ * with it is NOT: a build without the sidecar branch opens a moved database
+ * with CoopSync, which reads an intact but older file and drops whatever is
+ * still in the log.
  */
-const MOVE_NEW_DATABASES = false
+const MOVE_NEW_DATABASES = true
 
 export const resolveLocalDbVfs = async (
   dbFilename: string,
