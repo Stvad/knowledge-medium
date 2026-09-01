@@ -377,6 +377,21 @@ describe('importRawSqliteDb', () => {
     expect([...opfs.names()]).toEqual([])
   })
 
+  it('takes the whole set back down when the .db write fails, journal included', async () => {
+    // The write-ahead pair is safe to strand — the VFS truncates orphaned
+    // sidecars. A `-journal` is not: SQLite replays it onto the fresh database
+    // the next boot creates, which is the corruption `dbFileSiblings` exists to
+    // prevent. So a failed restore has to leave nothing, not "no database".
+    const opfs = installFakeOpfs({}, {failWriteTo: 'kmp-v6-user-1.db'})
+
+    await expect(importRawSqliteDb(fakeRepo(), [
+      fileWithStream([SQLITE_HEADER_BYTES], 'backup.db'),
+      fileWithStream([new Uint8Array([1, 2])], 'backup.db-journal'),
+    ])).rejects.toThrow(/no space/)
+
+    expect([...opfs.names()]).toEqual([])
+  })
+
   it('refuses a selection that is not one database and its own siblings', async () => {
     const opfs = installFakeOpfs()
     const db = fileWithStream([SQLITE_HEADER_BYTES], 'backup.db')
@@ -407,7 +422,10 @@ const sliceInto = (bytes: Uint8Array, size: number): Array<Uint8Array<ArrayBuffe
  * creates, streams into, reads back and removes real files across several
  * names, which the per-test hand-rolled handles above cannot express.
  */
-const installFakeOpfs = (initial: Record<string, Uint8Array> = {}) => {
+const installFakeOpfs = (
+  initial: Record<string, Uint8Array> = {},
+  {failWriteTo}: {failWriteTo?: string} = {},
+) => {
   const files = new Map(Object.entries(initial).map(([n, b]) => [n, b] as const))
   const writes: string[] = []
 
@@ -424,7 +442,10 @@ const installFakeOpfs = (initial: Record<string, Uint8Array> = {}) => {
         createWritable: async () => {
           const chunks: Uint8Array[] = []
           const stream = new WritableStream<Uint8Array>({
-            write: chunk => void chunks.push(new Uint8Array(chunk)),
+            write: chunk => {
+              if (name === failWriteTo) throw new DOMException('no space', 'QuotaExceededError')
+              chunks.push(new Uint8Array(chunk))
+            },
             close: () => {
               files.set(name, concatChunks(chunks))
               writes.push(name)

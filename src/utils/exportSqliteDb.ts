@@ -365,6 +365,13 @@ interface StagedImportFile {
  * to. Matched by SHAPE — the database is the one member every other member
  * extends by a known sibling suffix — so a backup taken under one account still
  * restores under another, as a bare `.db` always could.
+ *
+ * A fileset needs a database, and the caller's header check enforces it. Do not
+ * relax that to accept the sibling-only backup `getRawSqliteDbBackup` can
+ * produce (a hot journal beside a 0-byte `.db`): writing a journal with no
+ * database is the case `dbFileSiblings` exists to prevent — the next boot
+ * creates a fresh `.db` and SQLite replays the stale journal onto it. That
+ * backup is for reading offline with `sqlite3 .recover`, not for restoring.
  */
 const classifyDbFileSet = (names: readonly string[]): {main: string; siblings: Array<{name: string; suffix: string}>} => {
   const main = new Set(names).size === names.length
@@ -490,32 +497,39 @@ export async function importRawSqliteDb(repo: Repo, files: readonly File[]): Pro
     // file; without this, createWritable() throws NoModificationAllowedError.
     await repo.db.close()
 
-    // The original `.db` goes FIRST. Every sibling has to be gone before the
-    // replacement lands — a journal or a write-ahead log beside a new file of
-    // that name gets replayed onto it — but removing siblings while the old
-    // `.db` still stands means a failure part-way leaves that database short of
-    // its own committed frames, which is the one outcome worth avoiding here.
-    // Dropping it first makes the failure state "no database", which the next
-    // open treats as fresh (the VFS truncates orphaned sidecars) and which the
-    // user fixes by retrying the import.
-    //
-    // `removeEntryIfExists` rethrows anything that is not NotFoundError, so the
-    // loop is also the check: nothing is written onto a file that resisted
-    // removal.
-    await removeEntryIfExists(root, dbFilename)
-    for (const suffix of DB_FILE_SIBLING_SUFFIXES) {
-      await removeEntryIfExists(root, dbFilename + suffix)
-    }
+    // Past this point the old database is gone and the new one is not there
+    // yet, so ANY failure has to take the whole set down with it — see the
+    // catch. Only the write-ahead pair is safe to strand; a stranded
+    // `-journal`/`-wal` is not inert at all, SQLite replays it onto the fresh
+    // database the next boot creates.
+    try {
+      // The original `.db` goes FIRST. Every sibling has to be gone before the
+      // replacement lands — a journal or a write-ahead log beside a new file of
+      // that name gets replayed onto it — but removing siblings while the old
+      // `.db` still stands means a failure part-way leaves that database short
+      // of its own committed frames, which is the one outcome worth avoiding
+      // here.
+      //
+      // `removeEntryIfExists` rethrows anything that is not NotFoundError, so
+      // the loop is also the check: nothing is written onto a file that
+      // resisted removal.
+      await removeEntryIfExists(root, dbFilename)
+      for (const suffix of DB_FILE_SIBLING_SUFFIXES) {
+        await removeEntryIfExists(root, dbFilename + suffix)
+      }
 
-    // Writing back runs the other way: siblings first, the `.db` LAST. Until the
-    // `.db` exists the logs are inert (the VFS truncates orphaned sidecars), so
-    // a failure part-way still leaves "no database" rather than a database that
-    // opens, reports ok, and is missing whatever its log held.
-    const lastFirst = [...staged.filter(f => f.suffix !== ''), ...staged.filter(f => f.suffix === '')]
-    for (const {suffix, stagingName} of lastFirst) {
-      const replacement = await opfsFile(root, stagingName)
-      const fileHandle = await root.getFileHandle(dbFilename + suffix, {create: true})
-      await pipeBlobToFileHandle(replacement, fileHandle)
+      // Writing back runs the other way: siblings first, the `.db` LAST, so no
+      // moment of the successful path has a complete-looking database sitting
+      // without the log its own committed frames are still in.
+      const lastFirst = [...staged.filter(f => f.suffix !== ''), ...staged.filter(f => f.suffix === '')]
+      for (const {suffix, stagingName} of lastFirst) {
+        const replacement = await opfsFile(root, stagingName)
+        const fileHandle = await root.getFileHandle(dbFilename + suffix, {create: true})
+        await pipeBlobToFileHandle(replacement, fileHandle)
+      }
+    } catch (err) {
+      await discardLocalDbFiles(root, dbFilename)
+      throw err
     }
   } finally {
     await Promise.allSettled(temps.map(name => removeEntryIfExists(root, name)))
@@ -689,6 +703,22 @@ const removeEntryIfExists = async (
     if (!(err instanceof DOMException && err.name === 'NotFoundError')) {
       throw err
     }
+  }
+}
+
+/**
+ * Best-effort teardown of a half-replaced database, in the deletion order
+ * `dbFileSiblings` sets out: journals first, then the `.db`, then the
+ * write-ahead pair. Used when a restore fails between taking the old files
+ * down and getting the new ones in — leaving the journals there would hand the
+ * next boot a stale rollback log to replay onto a fresh database.
+ */
+const discardLocalDbFiles = async (
+  root: FileSystemDirectoryHandle,
+  dbFilename: string,
+): Promise<void> => {
+  for (const suffixes of [SQLITE_JOURNAL_SUFFIXES, [''], WRITE_AHEAD_SIDECAR_SUFFIXES]) {
+    await Promise.allSettled(suffixes.map(suffix => removeEntryIfExists(root, dbFilename + suffix)))
   }
 }
 
