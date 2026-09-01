@@ -1,0 +1,2 @@
+import{definitionSeedsFacet as e,typeSeedsFacet as t}from"../../data/facets.js";import{dailyNoteDecksProp as n,reviewDeckStartedProp as r,reviewDeckTagProp as i,reviewProgressProp as a,srsReviewDeckType as o,srsReviewPrefsType as s,srsReviewProgressType as c}from"./schema.js";var l=[e.of(i,{source:`srs-review`}),e.of(r,{source:`srs-review`}),e.of(a,{source:`srs-review`}),e.of(n,{source:`srs-review`}),t.of(o,{source:`srs-review`}),t.of(c,{source:`srs-review`}),t.of(s,{source:`srs-review`})];export{l as srsReviewDataExtension};
+//# sourceMappingURL=dataExtension.js.map
