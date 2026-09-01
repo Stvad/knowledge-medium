@@ -142,9 +142,21 @@ entirely once no pre-flip build is live.
 - **Backups.** `exportRawSqliteDb` copies the main file's bytes, so it now checkpoints
   first — otherwise the download is an intact-looking database missing its most recent
   writes.
-- **Wipe / import-replace / forensic inventory.** All three key off one
-  `DB_FILE_SIBLING_SUFFIXES` list (`src/data/dbFileSiblings.ts`), which now includes the
-  sidecars. A sidecar surviving a wipe would replay over the next database at that name.
+- **Wipe / import-replace / preview sweep / forensic inventory.** Backup and the
+  forensic inventory take the whole `DB_FILE_SIBLING_SUFFIXES` list
+  (`src/data/dbFileSiblings.ts`), but the deleting paths split it, and the two halves
+  have OPPOSITE orders for the same reason:
+
+  - **Wipe and the preview sweep** remove SQLite's journals first, then the main file,
+    then the sidecars best-effort. A log that outlives its `.db` is inert — the VFS
+    truncates both when it opens a `.db` that does not exist — whereas deleting a log
+    while its `.db` survives strips committed frames from a database the caller is then
+    told was left intact.
+  - **Import** removes the sidecars and journals first, then the old `.db`, and only
+    then writes the replacement. Here a new `.db` *is* written afterwards, so a
+    surviving log would find a file to replay onto; and dropping the old `.db` before
+    the write means a failed import leaves no database rather than the previous one
+    silently short of the log just deleted.
 - **Page cache.** PowerSync applies `cache_size` per connection, and a `PRAGMA` executed
   through the app takes the write lock, so it reaches only the writer. The budget is now
   passed to the open factory and divided across connections, keeping the total at the

@@ -32,6 +32,7 @@
 import { PowerSyncDatabase, Schema, WASQLiteOpenFactory, WASQLiteVFS } from '@powersync/web'
 import {
   asLostWriteAheadSupport,
+  markDbOpenFailure,
   prepareLocalDbForVfs,
   resolveLocalDbVfs,
   tagHandoffErrorUserId,
@@ -401,7 +402,13 @@ export const ensurePowerSyncReady = async (
 }
 
 const initializePowerSyncDb = async (powerSyncDb: PowerSyncDatabase) => {
-  await powerSyncDb.init()
+  try {
+    await powerSyncDb.init()
+  } catch (error) {
+    // Everything below this line is schema and migrations, which fail for
+    // reasons that say nothing about whether the VFS could open the file.
+    throw markDbOpenFailure(error)
+  }
 
   // No `PRAGMA journal_mode=WAL`: none of wa-sqlite's PowerSync-bundled
   // VFSes implement xShmMap (the wal-index shared-memory primitive

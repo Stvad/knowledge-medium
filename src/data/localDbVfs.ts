@@ -20,7 +20,7 @@
 
 import { WASQLiteOpenFactory, WASQLiteVFS } from '@powersync/web'
 import { WRITE_AHEAD_SIDECAR_SUFFIXES } from '@/data/dbFileSiblings.js'
-import { isLocalDbCorruptionError } from '@/utils/localDbCorruption.js'
+import { corruptErrorUserId, isLocalDbCorruptionError } from '@/utils/localDbCorruption.js'
 
 export type LocalDbVfs = WASQLiteVFS.OPFSCoopSyncVFS | WASQLiteVFS.OPFSWriteAheadVFS
 
@@ -101,13 +101,20 @@ let writeAheadSupport: Promise<boolean> | null = null
  * session and deciding again on the next boot.
  */
 export const supportsWriteAheadVfs = (): Promise<boolean> => {
-  writeAheadSupport ??= runProbeWorker()
+  writeAheadSupport ??= (async () => {
+    // One retry, because an inconclusive answer is not the same as "no": acting
+    // on it sends this tab to CoopSync while another tab may be moving the very
+    // same database. A second attempt converts most transient failures into a
+    // real answer; a still-inconclusive one settles as "no", which is only ever
+    // a decision about a database that has not moved.
+    return (await runProbeWorker()) ?? (await runProbeWorker()) ?? false
+  })()
   return writeAheadSupport
 }
 
 const PROBE_TIMEOUT_MS = 5_000
 
-const runProbeWorker = async (): Promise<boolean> => {
+const runProbeWorker = async (): Promise<boolean | null> => {
   let worker: Worker
   try {
     worker = new Worker(new URL('./writeAheadVfsProbe.worker.ts', import.meta.url), {type: 'module'})
@@ -116,22 +123,22 @@ const runProbeWorker = async (): Promise<boolean> => {
     // is indistinguishable from a browser that lacks the feature, and the whole
     // rollout would go quietly inert.
     console.warn('[localDbVfs] write-ahead probe worker could not be started', err)
-    return false
+    return null
   }
   try {
-    return await new Promise<boolean>(resolve => {
+    return await new Promise<boolean | null>(resolve => {
       const timer = setTimeout(() => {
         console.warn(`[localDbVfs] write-ahead probe timed out after ${PROBE_TIMEOUT_MS}ms`)
-        resolve(false)
+        resolve(null)
       }, PROBE_TIMEOUT_MS)
       worker.onmessage = (event: MessageEvent<{supported?: unknown}>) => {
         clearTimeout(timer)
-        resolve(event.data?.supported === true)
+        resolve(typeof event.data?.supported === 'boolean' ? event.data.supported : null)
       }
       worker.onerror = event => {
         clearTimeout(timer)
         console.warn('[localDbVfs] write-ahead probe worker failed to run', event.message)
-        resolve(false)
+        resolve(null)
       }
       worker.postMessage('probe')
     })
@@ -139,6 +146,23 @@ const runProbeWorker = async (): Promise<boolean> => {
     worker.terminate()
   }
 }
+
+/**
+ * Marks an error as having come from the VFS OPEN specifically, so
+ * `asLostWriteAheadSupport` can tell it apart from a schema or migration
+ * failure after the database was already open.
+ */
+const DB_OPEN_FAILURE = Symbol.for('km.localDbVfs.openFailure')
+
+export const markDbOpenFailure = <T,>(error: T): T => {
+  if (typeof error === 'object' && error !== null) {
+    (error as Record<symbol, unknown>)[DB_OPEN_FAILURE] = true
+  }
+  return error
+}
+
+const isDbOpenFailure = (error: unknown): boolean =>
+  typeof error === 'object' && error !== null && (error as Record<symbol, unknown>)[DB_OPEN_FAILURE] === true
 
 /**
  * Turn a failed open into the handoff refusal when the cause is that this
@@ -155,6 +179,13 @@ export const asLostWriteAheadSupport = async (
 ): Promise<unknown> => {
   if (vfs !== WASQLiteVFS.OPFSWriteAheadVFS) return error
   if (isLocalDbVfsHandoffError(error)) return error
+  // Corruption keeps its own classification: it has a recovery flow (Export +
+  // Reset) that this one does not, and every database on this path has
+  // sidecars, so a blanket wrap would swallow all of them.
+  if (isLocalDbCorruptionError(error) || corruptErrorUserId(error) !== null) return error
+  // Only a failure to OPEN. `initializePowerSyncDb` also runs the schema and
+  // migrations, and a failure there says nothing about browser support.
+  if (!isDbOpenFailure(error)) return error
   if (!(await anyWriteAheadSidecar(dbFilename, deps))) return error
   return new LocalDbVfsHandoffError(
     'This browser could not open this device\'s local database. It was last written in a storage mode ' +

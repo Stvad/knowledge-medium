@@ -4,6 +4,7 @@ import {
   asLostWriteAheadSupport,
   handoffErrorUserId,
   LOCAL_DB_VFS_OVERRIDE_KEY,
+  markDbOpenFailure,
   LocalDbVfsHandoffError,
   prepareLocalDbForVfs,
   readLocalDbVfsOverride,
@@ -184,7 +185,7 @@ describe('a refusal carries enough context to offer a backup', () => {
 
   it('classifies a failed write-ahead open on a database that has already moved', async () => {
     const opened = await asLostWriteAheadSupport(
-      new Error('NoModificationAllowedError'), DB, WASQLiteVFS.OPFSWriteAheadVFS,
+      markDbOpenFailure(new Error('NoModificationAllowedError')), DB, WASQLiteVFS.OPFSWriteAheadVFS,
       sized({[DB]: 4096, [`${DB}-wa0`]: 0}),
     )
     expect(opened).toBeInstanceOf(LocalDbVfsHandoffError)
@@ -193,13 +194,30 @@ describe('a refusal carries enough context to offer a backup', () => {
   })
 
   it('leaves an unrelated open failure alone', async () => {
-    const original = new Error('something else entirely')
+    const original = markDbOpenFailure(new Error('something else entirely'))
     expect(await asLostWriteAheadSupport(
       original, DB, WASQLiteVFS.OPFSWriteAheadVFS, sized({[DB]: 4096}),
     )).toBe(original)
     expect(await asLostWriteAheadSupport(
       original, DB, WASQLiteVFS.OPFSCoopSyncVFS, sized({[DB]: 4096, [`${DB}-wa0`]: 0}),
     )).toBe(original)
+  })
+
+  it('never takes a corruption error — it has its own recovery flow', async () => {
+    // Every database on this path has sidecars, so a blanket wrap would swallow
+    // all corruption and route users away from Export + Reset.
+    const corrupt = markDbOpenFailure(new Error('database disk image is malformed'))
+    expect(await asLostWriteAheadSupport(
+      corrupt, DB, WASQLiteVFS.OPFSWriteAheadVFS, sized({[DB]: 4096, [`${DB}-wa0`]: 0}),
+    )).toBe(corrupt)
+  })
+
+  it('ignores a failure raised after the database was already open', async () => {
+    // Schema and migration failures say nothing about browser support.
+    const afterOpen = new Error('migration failed')
+    expect(await asLostWriteAheadSupport(
+      afterOpen, DB, WASQLiteVFS.OPFSWriteAheadVFS, sized({[DB]: 4096, [`${DB}-wa0`]: 0}),
+    )).toBe(afterOpen)
   })
 
   it('carries the account so the fallback can export without an open connection', () => {

@@ -96,6 +96,12 @@ function LocalDbHandoffFallback({detail, userId}: {detail: string; userId: strin
         <pre className="max-h-32 overflow-auto rounded bg-muted p-2 text-xs text-muted-foreground">
           {detail}
         </pre>
+        {userId && (
+          <p className="text-sm text-muted-foreground">
+            Close any other tabs of the app before exporting — a copy taken while another
+            tab is writing can be inconsistent.
+          </p>
+        )}
         {status && <p className="text-sm text-muted-foreground">{status}</p>}
         <div className="flex gap-2">
           <Button onClick={() => window.location.reload()}>Reload</Button>
