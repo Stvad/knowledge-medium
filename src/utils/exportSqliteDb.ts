@@ -24,6 +24,7 @@ import { dbFilenameForUser } from '@/data/localDbStorage'
 import {
   DB_FILE_SIBLING_SUFFIXES,
   SQLITE_JOURNAL_SUFFIXES,
+  SQLITE_ROLLBACK_JOURNAL_SUFFIX,
   WRITE_AHEAD_SIDECAR_SUFFIXES,
 } from '@/data/dbFileSiblings.js'
 
@@ -391,30 +392,59 @@ const classifyDbFileSet = (names: readonly string[]): {main: string; siblings: A
 }
 
 /**
- * A hot rollback journal and a write-ahead log cannot both belong to one
- * database. `prepareLocalDbForVfs` refuses that combination at boot — applying
- * the journal underneath the log is the two measured data-loss shapes in one —
- * so restoring it would replace a working database with one the app cannot
- * open. Refused here, where it costs a message instead.
+ * The sibling sets a restore may put BACK — deliberately narrower than
+ * `DB_FILE_SIBLING_SUFFIXES`, which the deletion sweep uses. Deletion clears
+ * anything SQLite could replay, whoever wrote it; a restore writes only what
+ * this app produces and can open again.
+ *
+ * A fileset draws from ONE group: the write-ahead pair, or the rollback
+ * journal. Both at once is a state no database has, and `prepareLocalDbForVfs`
+ * refuses it at boot. `-wal`/`-shm` are in neither group, because they only
+ * accompany a WAL-mode database — see `assertRestorableDatabase`.
+ *
+ * A whitelist rather than a list of rejected combinations: the failure being
+ * excluded is "restores cleanly, then cannot boot", and each new way to reach
+ * it is invisible until someone hits it.
  */
-const assertRestorableSet = (entries: ReadonlyArray<{suffix: string; size: number}>): void => {
-  const has = (suffixes: readonly string[], hot = false) =>
-    entries.some(entry => suffixes.includes(entry.suffix) && (!hot || entry.size > 0))
-  if (has(WRITE_AHEAD_SIDECAR_SUFFIXES) && has(SQLITE_JOURNAL_SUFFIXES, true)) {
-    throw new Error(
-      'This backup holds both a rollback journal and a write-ahead log, which no single ' +
-      'database can have. Restoring it would leave a database this app cannot open. ' +
-      'Select the files from one backup only.',
-    )
-  }
+const RESTORABLE_SIBLING_GROUPS: ReadonlyArray<readonly string[]> = [
+  WRITE_AHEAD_SIDECAR_SUFFIXES,
+  [SQLITE_ROLLBACK_JOURNAL_SUFFIX],
+]
+
+const assertRestorableSet = (suffixes: readonly string[]): void => {
+  const siblings = suffixes.filter(suffix => suffix !== '')
+  if (siblings.length === 0) return
+  if (RESTORABLE_SIBLING_GROUPS.some(group => siblings.every(s => group.includes(s)))) return
+  throw new Error(
+    'These files cannot be restored together. Select the database on its own, with its ' +
+    `${WRITE_AHEAD_SIDECAR_SUFFIXES.join(' / ')} pair, or with its ` +
+    `${SQLITE_ROLLBACK_JOURNAL_SUFFIX} — from one backup.`,
+  )
 }
 
-const assertSqliteHeader = async (blob: Blob): Promise<void> => {
+/** Bytes 18 and 19 of a SQLite header: 1 = rollback journal, 2 = WAL. */
+const SQLITE_WAL_FORMAT_VERSION = 2
+const SQLITE_HEADER_PROBE_BYTES = 20
+
+const assertRestorableDatabase = async (blob: Blob): Promise<void> => {
   if (blob.size < SQLITE_MAGIC.length) {
     throw new Error('Selected file is too small to be a SQLite database.')
   }
-  if (!await startsWithMagic(blob, SQLITE_MAGIC)) {
+  const head = new Uint8Array(await blob.slice(0, SQLITE_HEADER_PROBE_BYTES).arrayBuffer())
+  if (!SQLITE_MAGIC.every((byte, i) => head[i] === byte)) {
     throw new Error('Selected file is not a SQLite database (missing magic header).')
+  }
+  // `OPFSWriteAheadVFS` throws on SQLITE_OPEN_WAL and is the default now, so a
+  // database left in WAL mode replaces a working one with one that cannot open
+  // at all. Nothing here writes WAL mode; such a file came from elsewhere, and
+  // the sibling whitelist cannot see this because a bare `.db` carries the mode
+  // in its own header. (A file too short to have the field reads as undefined,
+  // which is not 2.)
+  if (head[18] === SQLITE_WAL_FORMAT_VERSION || head[19] === SQLITE_WAL_FORMAT_VERSION) {
+    throw new Error(
+      'This database is in WAL journal mode, which this app cannot open. Convert it first ' +
+      "— sqlite3 <file> 'PRAGMA journal_mode=delete' — and import it again.",
+    )
   }
 }
 
@@ -425,13 +455,12 @@ const opfsFile = async (root: FileSystemDirectoryHandle, name: string): Promise<
 const validateSelection = async (files: readonly File[]): Promise<Array<{suffix: string; file: File}>> => {
   const {main, siblings} = classifyDbFileSet(files.map(file => file.name))
   const byName = new Map(files.map(file => [file.name, file]))
-  await assertSqliteHeader(byName.get(main)!)
-  const selection = [
+  await assertRestorableDatabase(byName.get(main)!)
+  assertRestorableSet(siblings.map(({suffix}) => suffix))
+  return [
     {suffix: '', file: byName.get(main)!},
     ...siblings.map(({name, suffix}) => ({suffix, file: byName.get(name)!})),
   ]
-  assertRestorableSet(selection.map(({suffix, file}) => ({suffix, size: file.size})))
-  return selection
 }
 
 const stageSelection = async (
@@ -475,15 +504,14 @@ const stageRecoveryArchive = async (
   }
 
   const {main, siblings} = classifyDbFileSet(members.map(member => member.name))
-  const byName = new Map(members.map(member => [member.name, member]))
-  await assertSqliteHeader(await opfsFile(root, byName.get(main)!.stagingName))
+  const stagingByName = new Map(members.map(member => [member.name, member.stagingName]))
+  await assertRestorableDatabase(await opfsFile(root, stagingByName.get(main)!))
+  assertRestorableSet(siblings.map(({suffix}) => suffix))
 
-  const staged = [
-    {suffix: '', ...byName.get(main)!},
-    ...siblings.map(({name, suffix}) => ({suffix, ...byName.get(name)!})),
+  return [
+    {suffix: '', stagingName: stagingByName.get(main)!},
+    ...siblings.map(({name, suffix}) => ({suffix, stagingName: stagingByName.get(name)!})),
   ]
-  assertRestorableSet(staged)
-  return staged
 }
 
 /**
@@ -828,8 +856,8 @@ const extractZipToOpfs = async (
   root: FileSystemDirectoryHandle,
   archive: File,
   nextTempName: () => string,
-): Promise<Array<{ name: string; stagingName: string; size: number }>> => {
-  const members: Array<{ name: string; stagingName: string; size: number }> = []
+): Promise<Array<{ name: string; stagingName: string }>> => {
+  const members: Array<{ name: string; stagingName: string }> = []
   const open = new Map<string, FileSystemWritableFileStream>()
   let writeChain: Promise<void> = Promise.resolve()
   let unzipError: unknown = null
@@ -838,8 +866,7 @@ const extractZipToOpfs = async (
   unzip.register(UnzipInflate)
   unzip.onfile = member => {
     const stagingName = nextTempName()
-    const entry = { name: member.name, stagingName, size: 0 }
-    members.push(entry)
+    members.push({ name: member.name, stagingName })
     writeChain = writeChain.then(async () => {
       const handle = await root.getFileHandle(stagingName, { create: true })
       open.set(member.name, await handle.createWritable({ keepExistingData: false }))
@@ -856,10 +883,7 @@ const extractZipToOpfs = async (
       writeChain = writeChain.then(async () => {
         const writable = open.get(member.name)
         if (!writable) return
-        if (data) {
-          await writable.write(data)
-          entry.size += data.length
-        }
+        if (data) await writable.write(data)
         if (final) {
           await writable.close()
           open.delete(member.name)

@@ -412,26 +412,56 @@ describe('importRawSqliteDb', () => {
     expect([...opfs.bytes('kmp-v6-user-1.db-journal')]).toEqual([8, 8])
   })
 
-  it('refuses a rollback journal and a write-ahead log in one backup, before destroying anything', async () => {
-    // No single database has both, and `prepareLocalDbForVfs` refuses the
-    // combination at boot — so restoring it trades a working database for one
-    // the app cannot open.
+  it('restores only sibling sets this app can boot again, and destroys nothing first', async () => {
+    // One class, not three cases: a fileset that restores cleanly and then
+    // cannot open. Whitelisted rather than enumerated, because each new way to
+    // reach it is invisible until someone hits it — a journal beside a
+    // write-ahead log (a state no database has, refused at boot by
+    // `prepareLocalDbForVfs`), and `-wal`/`-shm`, which only accompany a
+    // WAL-mode database `OPFSWriteAheadVFS` cannot open at all.
     const opfs = installFakeOpfs({'kmp-v6-user-1.db': new Uint8Array([9])})
+    const db = () => fileWithStream([SQLITE_HEADER_BYTES], 'backup.db')
 
+    for (const rejected of ['backup.db-journal', 'backup.db-wal', 'backup.db-shm']) {
+      await expect(importRawSqliteDb(fakeRepo(), [
+        db(), fileWithStream([new Uint8Array([1])], rejected), fileWithStream([new Uint8Array([3])], 'backup.db-wa0'),
+      ])).rejects.toThrow(/cannot be restored together/)
+    }
     await expect(importRawSqliteDb(fakeRepo(), [
-      fileWithStream([SQLITE_HEADER_BYTES], 'backup.db'),
-      fileWithStream([new Uint8Array([1, 2])], 'backup.db-journal'),
-      fileWithStream([new Uint8Array([3])], 'backup.db-wa0'),
-    ])).rejects.toThrow(/cannot open/)
+      db(), fileWithStream([new Uint8Array([1])], 'backup.db-wal'),
+    ])).rejects.toThrow(/cannot be restored together/)
 
-    // A zero-byte journal is a clean close, not a hot one — that combination
-    // is fine and must not be caught by the same rule.
-    await importRawSqliteDb(fakeRepo(), [
-      fileWithStream([SQLITE_HEADER_BYTES], 'backup.db'),
-      fileWithStream([], 'backup.db-journal'),
-      fileWithStream([new Uint8Array([3])], 'backup.db-wa0'),
-    ])
+    // Untouched: the refusal comes before anything is destroyed.
+    expect([...opfs.bytes('kmp-v6-user-1.db')]).toEqual([9])
+
+    // Both legitimate shapes still restore.
+    await importRawSqliteDb(fakeRepo(), [db(), fileWithStream([new Uint8Array([3])], 'backup.db-wa0')])
     expect([...opfs.bytes('kmp-v6-user-1.db-wa0')]).toEqual([3])
+    await importRawSqliteDb(fakeRepo(), [db(), fileWithStream([new Uint8Array([4])], 'backup.db-journal')])
+    expect([...opfs.bytes('kmp-v6-user-1.db-journal')]).toEqual([4])
+  })
+
+  it('refuses a WAL-mode database, which no sibling rule can see', async () => {
+    // The mode lives in the `.db` header, so a bare file carries it in with no
+    // siblings at all. `OPFSWriteAheadVFS` throws on SQLITE_OPEN_WAL, so this
+    // would trade a working database for one that cannot be opened.
+    const opfs = installFakeOpfs({'kmp-v6-user-1.db': new Uint8Array([9])})
+    const walHeader = new Uint8Array(20)
+    walHeader.set(SQLITE_HEADER_BYTES)
+    walHeader[18] = 2
+    walHeader[19] = 2
+
+    await expect(importRawSqliteDb(fakeRepo(), [fileWithStream([walHeader], 'wal-mode.db')]))
+      .rejects.toThrow(/WAL journal mode/)
+    expect([...opfs.bytes('kmp-v6-user-1.db')]).toEqual([9])
+
+    // The legacy value in the same field must still import.
+    const legacy = new Uint8Array(20)
+    legacy.set(SQLITE_HEADER_BYTES)
+    legacy[18] = 1
+    legacy[19] = 1
+    await importRawSqliteDb(fakeRepo(), [fileWithStream([legacy], 'rollback.db')])
+    expect([...opfs.bytes('kmp-v6-user-1.db')]).toEqual([...legacy])
   })
 
   it('refuses a selection that is not one database and its own siblings', async () => {
