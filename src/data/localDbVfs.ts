@@ -44,11 +44,25 @@ const OVERRIDE_VALUES: Record<string, LocalDbVfs> = {
 export class LocalDbVfsHandoffError extends Error {
   override name = 'LocalDbVfsHandoffError'
 
-  constructor(message: string, options?: {cause?: unknown}) {
+  /**
+   * Whether pinning the compatibility VFS could get past this. FALSE when
+   * CoopSync is already the target that failed — offering it there reloads into
+   * the identical refusal and leaves a pin behind that helps nothing.
+   */
+  readonly compatibilityModeHelps: boolean
+
+  constructor(message: string, options?: {cause?: unknown; compatibilityModeHelps?: boolean}) {
     super(message)
+    this.compatibilityModeHelps = options?.compatibilityModeHelps ?? false
     if (options?.cause !== undefined) this.cause = options.cause
   }
 }
+
+/** Reads the flag off an error that may have crossed a bundle boundary. */
+export const handoffCompatibilityModeHelps = (error: unknown): boolean =>
+  typeof error === 'object'
+  && error !== null
+  && (error as {compatibilityModeHelps?: unknown}).compatibilityModeHelps === true
 
 /**
  * Recognise the handoff error across HMR / bundle boundaries where `instanceof`
@@ -63,9 +77,19 @@ export const isLocalDbVfsHandoffError = (error: unknown): boolean => {
     && (error as {name?: unknown}).name === 'LocalDbVfsHandoffError'
 }
 
-/** Pin the compatibility VFS for this device, for the bootstrap fallback's escape hatch. */
-export const pinCoopSyncVfs = (): void => {
-  globalThis.localStorage?.setItem(LOCAL_DB_VFS_OVERRIDE_KEY, 'coop-sync')
+/**
+ * Pin the compatibility VFS for this device, for the bootstrap fallback's escape
+ * hatch. Returns whether it stuck: storage can throw (private mode, a storage
+ * policy), and the reader already treats that as normal — a recovery button
+ * that throws out of its own click handler would just be inert.
+ */
+export const pinCoopSyncVfs = (): boolean => {
+  try {
+    globalThis.localStorage?.setItem(LOCAL_DB_VFS_OVERRIDE_KEY, 'coop-sync')
+    return true
+  } catch {
+    return false
+  }
 }
 
 export const readLocalDbVfsOverride = (): LocalDbVfs | null => {
@@ -200,7 +224,7 @@ export const prepareLocalDbForVfs = async (
     throw new LocalDbVfsHandoffError(
       'Could not prepare this device\'s local database for this browser\'s storage mode. Another tab of ' +
       'the app may still be holding it — close the other tabs and reload.',
-      {cause: err},
+      {cause: err, compatibilityModeHelps: target === WASQLiteVFS.OPFSWriteAheadVFS},
     )
   }
 }
@@ -326,6 +350,7 @@ const opfsRemoveFile = async (name: string): Promise<void> => {
  * that tells them to close the other tab.
  */
 const HANDOFF_CONNECTION_TIMEOUT_MS = 15_000
+const HANDOFF_CLOSE_TIMEOUT_MS = 3_000
 
 const withTemporaryConnection: LocalDbVfsHandoffDeps['withConnection'] = async (
   dbFilename,
@@ -349,12 +374,20 @@ const withTemporaryConnection: LocalDbVfsHandoffDeps['withConnection'] = async (
     ])
   } finally {
     clearTimeout(timer)
-    // Never let a close failure replace the error that actually mattered.
-    try {
-      await db.close()
-    } catch (err) {
-      console.warn('[localDbVfs] handoff connection failed to close', err)
-    }
+    // Bounded, because close() waits on the SAME lock the open was stuck on:
+    // awaiting it unbounded here would swallow the timeout we just raised and
+    // put the caller right back on an endless loading screen. A connection we
+    // give up on leaks its worker for the rest of the page's life, which is the
+    // cheaper half of that trade — the page is on its way to an error screen.
+    await Promise.race([
+      Promise.resolve(db.close()).catch(err => {
+        console.warn('[localDbVfs] handoff connection failed to close', err)
+      }),
+      new Promise<void>(resolve => setTimeout(() => {
+        console.warn('[localDbVfs] handoff connection did not close in time; abandoning it')
+        resolve()
+      }, HANDOFF_CLOSE_TIMEOUT_MS)),
+    ])
   }
 }
 

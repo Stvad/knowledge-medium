@@ -171,9 +171,11 @@ export const syncObserverDepsFor = (
   }
 }
 
-// Resolved once per page load, BEFORE the first `getPowerSyncDb` — every
-// connection this process opens has to agree on the VFS.
-let resolvedLocalDbVfs: LocalDbVfs | null = null
+// Resolved BEFORE the first `getPowerSyncDb` for that file. Per file, not per
+// process: every connection to ONE database must agree on the VFS, but the
+// answer itself depends on that file — when the capability probe is
+// inconclusive it turns on whether this database has write-ahead sidecars.
+const resolvedLocalDbVfs = new Map<string, LocalDbVfs>()
 
 // ...but the handoff is per FILE, not per process: signing in as a second user
 // without a reload opens a different `.db`, which has its own sidecars and its
@@ -227,19 +229,20 @@ const ADDITIONAL_READERS = 1
 const TOTAL_PAGE_CACHE_KB = 262144
 
 const buildPowerSyncDb = (userId: string) => {
+  const dbFilename = dbFilenameForUser(userId)
   // Not a default: `prepareLocalDbForVfs` has already fixed the on-disk state up
   // for the RESOLVED VFS, so opening with a different one is the silent
   // data-loss shape this whole module exists to prevent — CoopSync over live
   // `-wa*` sidecars reads an intact, older database. Fail loudly instead.
-  if (!resolvedLocalDbVfs) {
+  const vfs = resolvedLocalDbVfs.get(dbFilename)
+  if (!vfs) {
     throw new Error('getPowerSyncDb called before ensurePowerSyncReady resolved the local DB VFS')
   }
-  const vfs = resolvedLocalDbVfs
   const connections = vfs === WASQLiteVFS.OPFSWriteAheadVFS ? 1 + ADDITIONAL_READERS : 1
   return new PowerSyncDatabase({
     schema: appSchema,
     database: new WASQLiteOpenFactory({
-      dbFilename: dbFilenameForUser(userId),
+      dbFilename,
       vfs,
       additionalReaders: ADDITIONAL_READERS,
       cacheSizeKb: Math.floor(TOTAL_PAGE_CACHE_KB / connections),
@@ -291,10 +294,15 @@ export const ensurePowerSyncReady = async (
 
   const dbFilename = dbFilenameForUser(userId)
   await recordPreviewDatabaseForReaper(dbFilename)
-  resolvedLocalDbVfs ??= await resolveLocalDbVfs(dbFilename)
   let prepared = preparedDbFiles.get(dbFilename)
   if (!prepared) {
-    prepared = prepareLocalDbForVfs(dbFilename, resolvedLocalDbVfs)
+    prepared = (async () => {
+      const target = await resolveLocalDbVfs(dbFilename)
+      await prepareLocalDbForVfs(dbFilename, target)
+      // Only after the handoff succeeds: `buildPowerSyncDb` reads this, and a
+      // file whose preparation failed must not get a connection at all.
+      resolvedLocalDbVfs.set(dbFilename, target)
+    })()
     preparedDbFiles.set(dbFilename, prepared)
   }
   try {

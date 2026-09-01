@@ -1,9 +1,13 @@
-import { useSyncExternalStore } from 'react'
+import { useState, useSyncExternalStore } from 'react'
 import { Button } from '@/components/ui/button'
 import { useSignOut } from '@/components/Login.js'
 import type { FallbackProps } from 'react-error-boundary'
 import { corruptErrorUserId } from '@/utils/localDbCorruption.js'
-import { isLocalDbVfsHandoffError, pinCoopSyncVfs } from '@/data/localDbVfs.js'
+import {
+  handoffCompatibilityModeHelps,
+  isLocalDbVfsHandoffError,
+  pinCoopSyncVfs,
+} from '@/data/localDbVfs.js'
 import { LocalDbCorruptionFallback } from '@/components/util/LocalDbCorruptionFallback.js'
 import {
   getLocalDbCorruptionSnapshot,
@@ -57,15 +61,26 @@ export function BootstrapErrorFallback({error}: FallbackProps) {
   // reads as the escalation path. Reload, or fall back to the storage mode that
   // works everywhere.
   if (isLocalDbVfsHandoffError(error)) {
-    return <LocalDbHandoffFallback detail={errorMessage(error)} />
+    return (
+      <LocalDbHandoffFallback
+        detail={errorMessage(error)}
+        offerCompatibilityMode={handoffCompatibilityModeHelps(error)}
+      />
+    )
   }
 
   return <GenericBootstrapErrorFallback error={error} />
 }
 
-function LocalDbHandoffFallback({detail}: {detail: string}) {
+function LocalDbHandoffFallback(
+  {detail, offerCompatibilityMode}: {detail: string; offerCompatibilityMode: boolean},
+) {
+  const [pinFailed, setPinFailed] = useState(false)
+
   const useCompatibilityMode = () => {
-    pinCoopSyncVfs()
+    // Reload either way: the pin is an optimisation on the retry, not a
+    // precondition for it.
+    if (!pinCoopSyncVfs()) setPinFailed(true)
     window.location.reload()
   }
 
@@ -82,11 +97,21 @@ function LocalDbHandoffFallback({detail}: {detail: string}) {
         <pre className="max-h-32 overflow-auto rounded bg-muted p-2 text-xs text-muted-foreground">
           {detail}
         </pre>
+        {pinFailed && (
+          <p className="text-sm text-destructive">
+            This browser wouldn&apos;t save the preference — reloading anyway.
+          </p>
+        )}
         <div className="flex gap-2">
           <Button onClick={() => window.location.reload()}>Reload</Button>
-          <Button variant="outline" onClick={useCompatibilityMode}>
-            Use compatibility storage mode
-          </Button>
+          {/* Only where switching TO the compatibility mode is a route out. When
+              it is already the mode that failed, this would reload into the same
+              refusal and leave a pin behind that helps nothing. */}
+          {offerCompatibilityMode && (
+            <Button variant="outline" onClick={useCompatibilityMode}>
+              Use compatibility storage mode
+            </Button>
+          )}
         </div>
       </div>
     </div>

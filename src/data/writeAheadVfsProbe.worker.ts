@@ -28,16 +28,33 @@ interface UnsafeModeFileHandle {
   createSyncAccessHandle(options?: {mode?: string}): Promise<ProbeAccessHandle>
 }
 
-const probe = async (): Promise<boolean> => {
+/**
+ * `false` means the handles were REFUSED — the browser lacks the mode. Anything
+ * else is inconclusive and must say so: the caller treats a definitive `false`
+ * as grounds to move an existing write-ahead database back to CoopSync, and a
+ * transient failure is not grounds for that.
+ *
+ * Only the SECOND open is diagnostic. A browser without the mode ignores the
+ * unknown option and hands back an ordinary exclusive handle, so the first open
+ * succeeds there too and the second is what fails. A first-open failure means
+ * something else is wrong.
+ */
+const probe = async (): Promise<boolean | null> => {
   const root = await navigator.storage.getDirectory()
   const handle = (await root.getFileHandle(PROBE_FILE, {create: true})) as unknown as UnsafeModeFileHandle
   const opened: ProbeAccessHandle[] = []
   try {
-    opened.push(await handle.createSyncAccessHandle({mode: 'readwrite-unsafe'}))
-    opened.push(await handle.createSyncAccessHandle({mode: 'readwrite-unsafe'}))
+    try {
+      opened.push(await handle.createSyncAccessHandle({mode: 'readwrite-unsafe'}))
+    } catch {
+      return null
+    }
+    try {
+      opened.push(await handle.createSyncAccessHandle({mode: 'readwrite-unsafe'}))
+    } catch {
+      return false
+    }
     return true
-  } catch {
-    return false
   } finally {
     for (const access of opened) {
       try {
@@ -53,6 +70,7 @@ const probe = async (): Promise<boolean> => {
 self.onmessage = () => {
   probe().then(
     supported => self.postMessage({supported}),
-    () => self.postMessage({supported: false}),
+    // Reaching here means the probe could not run at all — not an answer.
+    () => self.postMessage({supported: null}),
   )
 }

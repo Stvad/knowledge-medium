@@ -1,6 +1,7 @@
 import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest'
 import { WASQLiteVFS } from '@powersync/web'
 import {
+  handoffCompatibilityModeHelps,
   LOCAL_DB_VFS_OVERRIDE_KEY,
   resolveLocalDbVfs,
   type WriteAheadSupport,
@@ -193,5 +194,24 @@ describe('resolveLocalDbVfs — an inconclusive probe is not a "no"', () => {
   it('uses the write-ahead VFS when the probe says yes', async () => {
     expect(await resolveWith('supported', {[DB]: 4096}))
       .toBe(WASQLiteVFS.OPFSWriteAheadVFS)
+  })
+})
+
+
+describe('the compatibility-mode escape hatch is only offered where it leads somewhere', () => {
+  it('is not offered when CoopSync is the target that already failed', async () => {
+    const h = harness({[DB]: 4096, [`${DB}-wa0`]: 20704}, {writeAheadSupport: 'unsupported'})
+    const error = await prepareLocalDbForVfs(DB, WASQLiteVFS.OPFSCoopSyncVFS, h.deps).catch(e => e)
+    expect(error).toBeInstanceOf(LocalDbVfsHandoffError)
+    // Pinning CoopSync here reloads into this identical refusal.
+    expect(handoffCompatibilityModeHelps(error)).toBe(false)
+  })
+
+  it('is offered when the write-ahead path is the one that failed', async () => {
+    const h = harness({[DB]: 4096, [`${DB}-journal`]: 8192})
+    h.deps.withConnection = async () => { throw new DOMException('busy', 'NoModificationAllowedError') }
+    const error = await prepareLocalDbForVfs(DB, WASQLiteVFS.OPFSWriteAheadVFS, h.deps).catch(e => e)
+    expect(error).toBeInstanceOf(LocalDbVfsHandoffError)
+    expect(handoffCompatibilityModeHelps(error)).toBe(true)
   })
 })
