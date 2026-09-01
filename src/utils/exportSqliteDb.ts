@@ -499,6 +499,11 @@ const withCheckpointedDbLock = async <T,>(
   // break a hang, not to bound a legitimate export. A very large database on
   // slow storage could in principle trip it.
   return withDeadline(signal => db.writeLock(async tx => {
+    // The lock REQUEST is not abortable, so this callback can start long after
+    // the deadline gave up — the abort only reaches work already running. Bail
+    // before the checkpoint, which is the expensive half and holds the writer
+    // for everyone else.
+    if (signal.aborted) throw new Error('Export abandoned before the database lock was granted.')
     // Through `tx`, not `repo.db.execute` — the latter would queue for the
     // write lock this callback is already holding.
     await tx.execute('PRAGMA wal_checkpoint=truncate')
@@ -513,6 +518,9 @@ const withCheckpointedDbLock = async <T,>(
         'the other tabs and try again.',
       )
     }
+    // Again before the copy: the checkpoint above can itself outlast the
+    // deadline, and the copy writes to the caller's chosen destination.
+    if (signal.aborted) throw new Error('Export abandoned before the copy began.')
     return callback(signal)
   }), EXPORT_LOCK_TIMEOUT_MS,
     'Timed out preparing this device\'s database for backup. Another tab of the app is probably ' +
