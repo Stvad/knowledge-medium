@@ -183,6 +183,25 @@ confidence.
 **Deploy 2 — flip the constant** (`MOVE_NEW_DATABASES = true`). Databases begin moving.
 To back out, set it to `false` again and deploy; do NOT revert the module with it.
 
+**Deploy 2 has a precondition of its own: no tab may still be running a pre-flip
+build when the first move happens on that device.** The service worker deliberately
+does not reload open pages (`registerServiceWorker.ts`, and no `clients.claim()` in
+`sw/worker.ts`) — a new build reaches a tab only when that tab reloads. So a device can
+have one abandoned tab on the old build, resolved to CoopSync at its own boot, while a
+reloaded tab picks up Deploy 2 and moves the database. When the new tab closes, the old
+one reacquires the file and reads a main file that is now stale relative to the
+sidecars — the sequential hazard above, reached without any rollback.
+
+There is no detecting our way out of this. A new-build tab cannot see an old-build one:
+the sync SharedWorker's URL is content-hashed per build so the two do not share one, and
+PowerSync's cross-tab locks are held only for the duration of an operation, so an idle
+tab holds nothing to query. Any announce-and-detect mechanism only works between builds
+that both have it, which by definition excludes the build being upgraded from.
+
+So the procedure is the control: **close every app tab on every device before Deploy 2
+goes out, and let them come back one at a time.** With few devices that is free. The
+same reasoning is why changing the pin is a reload boundary.
+
 **The rule this exists to make possible:**
 
 > Once Deploy 2 has run on a device, never serve that device a build older than
