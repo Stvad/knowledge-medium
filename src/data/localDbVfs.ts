@@ -13,9 +13,9 @@
  * the state OUTSIDE that file: `OPFSWriteAheadVFS` keeps its own write-ahead
  * log in `<db>-wa0` / `<db>-wa1` sidecars, and `OPFSCoopSyncVFS` relies on
  * SQLite's rollback journal. Both directions of the switch therefore have a
- * silent-data-loss failure mode, and `prepareLocalDbForVfs` is what closes
- * them. Measured on Chrome 148 (2026-08-31), including `PRAGMA
- * integrity_check` reporting `ok` in both failure modes.
+ * silent-data-loss failure mode — neither of which `PRAGMA integrity_check`
+ * reports — and `prepareLocalDbForVfs` is what closes them. The evidence is in
+ * `docs/opfs-write-ahead-vfs.md`.
  */
 
 import { WASQLiteOpenFactory, WASQLiteVFS } from '@powersync/web'
@@ -157,22 +157,54 @@ export const prepareLocalDbForVfs = async (
 
   if (!(await deps.supportsWriteAhead())) {
     throw new LocalDbVfsHandoffError(
-      'This device\'s local database was last used with a storage mode this browser no longer supports, ' +
-      'and it holds changes that only that mode can read. Open the app in a Chromium-based browser once ' +
-      'so the pending changes can be written back, or restore from a backup.',
+      'This browser can no longer read part of its local database: the pending changes are in a storage ' +
+      'mode it has stopped supporting. They are still on this device, in this browser profile — another ' +
+      'browser has its own separate storage and cannot reach them. Updating this browser (or re-enabling ' +
+      'whatever disabled the feature) and reopening the app will recover them; otherwise restore from a backup.',
     )
   }
 
   // Committed transactions can live only in the sidecars — the main file reads
   // as an intact, older database, so skipping this loses them with no error.
+  // The checkpoint can also come back PARTIAL (another connection pinned an
+  // older read point) without failing the statement, so the drain is confirmed
+  // rather than assumed: `wal_checkpoint=noop` reports what is still in the log.
+  let remaining: unknown
   await deps.withConnection(dbFilename, WASQLiteVFS.OPFSWriteAheadVFS, async execute => {
     await execute('PRAGMA wal_checkpoint=truncate')
+    remaining = await execute('PRAGMA wal_checkpoint=noop')
   })
+  if (walPagesRemaining(remaining) !== 0) {
+    throw new LocalDbVfsHandoffError(
+      'Could not write this device\'s pending local changes back into the main database file — another ' +
+      'tab of the app is probably still holding it. Close the other tabs and reload.',
+    )
+  }
 
   // Deleting them is equally load-bearing: a checkpoint does not empty the
   // files, so a later switch back would replay that stale log OVER whatever
   // `OPFSCoopSyncVFS` wrote in the meantime and drop those writes instead.
-  for (const name of sidecars) await deps.removeFile(name)
+  // Both names, not the pre-open inventory: opening the connection above
+  // CREATES whichever of the pair was missing.
+  for (const suffix of WRITE_AHEAD_SIDECAR_SUFFIXES) {
+    await deps.removeFile(`${dbFilename}${suffix}`)
+  }
+}
+
+/**
+ * Pages still in the write-ahead log, per `PRAGMA wal_checkpoint`. The VFS
+ * answers with a single cell whose column name IS the value, so this reads
+ * positionally. Returns `null` when the shape isn't recognised — the caller
+ * treats that as "not proven empty", because the alternative to a loud refusal
+ * here is deleting a log that still holds commits.
+ */
+const walPagesRemaining = (result: unknown): number | null => {
+  const rows = (result as {rows?: {_array?: unknown[]}} | undefined)?.rows?._array
+  const row = Array.isArray(rows) ? rows[0] : undefined
+  if (!row || typeof row !== 'object') return null
+  const [value] = Object.values(row as Record<string, unknown>)
+  const pages = Number(value)
+  return Number.isFinite(pages) ? pages : null
 }
 
 const opfsFileSize = async (name: string): Promise<number | null> => {

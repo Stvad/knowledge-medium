@@ -36,9 +36,8 @@ export interface RawSqliteDbFileExport {
   size: number
 }
 
-interface PowerSyncReadLockDb {
-  readLock<T>(callback: (db: unknown) => Promise<T>): Promise<T>
-  execute(sql: string): Promise<unknown>
+interface PowerSyncWriteLockDb {
+  writeLock<T>(callback: (tx: {execute(sql: string): Promise<unknown>}) => Promise<T>): Promise<T>
 }
 
 interface SaveFilePickerOptions {
@@ -94,7 +93,7 @@ export async function exportRawSqliteDbToFile(
 
   const root = await navigator.storage.getDirectory()
   const fileHandle = await root.getFileHandle(dbFilename)
-  const size = await withPowerSyncReadLock(repo, async () => {
+  const size = await withCheckpointedDbLock(repo, async () => {
     const sourceFile = await fileHandle.getFile()
     await pipeBlobToFileHandle(sourceFile, destinationHandle)
     return sourceFile.size
@@ -111,6 +110,7 @@ export async function exportRawSqliteDb(repo: Repo): Promise<RawSqliteDbBlobExpo
 
   const root = await navigator.storage.getDirectory()
   const sourceHandle = await root.getFileHandle(dbFilename)
+  // Sizing only — the copy re-reads the handle after the checkpoint below.
   const sourceFile = await sourceHandle.getFile()
 
   // This fallback path writes a full second copy of the .db into OPFS (a stable
@@ -126,8 +126,10 @@ export async function exportRawSqliteDb(repo: Repo): Promise<RawSqliteDbBlobExpo
 
   const snapshotHandle = await root.getFileHandle(snapshotName, {create: true})
   try {
-    await withPowerSyncReadLock(repo, async () => {
-      await pipeBlobToFileHandle(sourceFile, snapshotHandle)
+    await withCheckpointedDbLock(repo, async () => {
+      // A FRESH handle: `sourceFile` above predates the checkpoint, so piping it
+      // would copy the file as it stood before the sidecars were folded in.
+      await pipeBlobToFileHandle(await sourceHandle.getFile(), snapshotHandle)
     })
   } catch (err) {
     // Drop the empty/partial snapshot so repeated failures don't accumulate.
@@ -376,20 +378,30 @@ export async function importRawSqliteDb(repo: Repo, file: File): Promise<void> {
   }
 }
 
-const withPowerSyncReadLock = async <T,>(repo: Repo, callback: () => Promise<T>): Promise<T> => {
-  const db = repo.db as unknown as Partial<PowerSyncReadLockDb>
-  if (typeof db.readLock !== 'function') {
-    throw new Error('PowerSync database does not expose readLock; cannot safely snapshot live SQLite DB.')
+/**
+ * Run `callback` with NO other writer able to touch the database, having first
+ * flushed everything into the main `.db` file.
+ *
+ * Both are required because the export copies the main file's raw bytes. Under
+ * OPFSWriteAheadVFS committed transactions sit in the `-wa*` sidecars until
+ * checkpointed, so an un-checkpointed export is an intact-looking database
+ * missing its most recent writes (the checkpoint is a no-op under
+ * OPFSCoopSyncVFS). And the two steps have to share ONE exclusion: a writer
+ * admitted between them commits straight back into a sidecar, putting the
+ * staleness back. It is a WRITE lock rather than a read lock because with a
+ * reader pool a read lock no longer excludes the writer at all.
+ */
+const withCheckpointedDbLock = async <T,>(repo: Repo, callback: () => Promise<T>): Promise<T> => {
+  const db = repo.db as unknown as Partial<PowerSyncWriteLockDb>
+  if (typeof db.writeLock !== 'function') {
+    throw new Error('PowerSync database does not expose writeLock; cannot safely snapshot live SQLite DB.')
   }
-  // Under OPFSWriteAheadVFS committed transactions live in the `-wa*` sidecars
-  // until checkpointed, and this exports the main file's BYTES — so without
-  // this the download is an intact-looking database missing its most recent
-  // writes. A no-op under OPFSCoopSyncVFS (rollback-journal mode). Outside the
-  // read lock: the pragma refuses while a transaction is in progress.
-  if (typeof db.execute === 'function') {
-    await db.execute('PRAGMA wal_checkpoint=truncate')
-  }
-  return db.readLock(async () => callback())
+  return db.writeLock(async tx => {
+    // Through `tx`, not `repo.db.execute` — the latter would queue for the
+    // write lock this callback is already holding.
+    await tx.execute('PRAGMA wal_checkpoint=truncate')
+    return callback()
+  })
 }
 
 const pipeBlobToFileHandle = async (

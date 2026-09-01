@@ -42,7 +42,7 @@ afterEach(() => {
 })
 
 describe('exportRawSqliteDb', () => {
-  it('copies the OPFS file under PowerSync readLock before returning a blob', async () => {
+  it('checkpoints, then copies the OPFS file under one write lock, before returning a blob', async () => {
     const snapshotFile = new File(['snapshot-data'], 'snapshot.db')
     const pipeTo = vi.fn(async () => undefined)
     const sourceFile = {
@@ -70,10 +70,11 @@ describe('exportRawSqliteDb', () => {
       value: {getDirectory},
     })
 
-    const readLock = vi.fn(async <T,>(fn: () => Promise<T>) => fn())
+    const execute = vi.fn(async () => ({rows: {_array: [{'0': '0'}]}}))
+    const writeLock = vi.fn(async <T,>(fn: (tx: {execute: (sql: string) => Promise<unknown>}) => Promise<T>) => fn({execute}))
     const result = await exportRawSqliteDb({
       user: {id: 'user-1'},
-      db: {readLock},
+      db: {writeLock},
     } as unknown as Repo)
 
     expect(getFileHandle).toHaveBeenCalledWith('kmp-v6-user-1.db')
@@ -81,7 +82,13 @@ describe('exportRawSqliteDb', () => {
       expect.stringMatching(/^\.kmp-v6-user-1\.db\.export-snapshot-/),
       {create: true},
     )
-    expect(readLock).toHaveBeenCalledOnce()
+    expect(writeLock).toHaveBeenCalledOnce()
+    // Inside the lock, so no writer can commit back into a sidecar between the
+    // flush and the byte copy.
+    expect(execute).toHaveBeenCalledWith('PRAGMA wal_checkpoint=truncate')
+    // Twice: once to size the snapshot, once INSIDE the lock — the pre-checkpoint
+    // File would copy the database as it stood before the sidecars were folded in.
+    expect(sourceHandle.getFile).toHaveBeenCalledTimes(2)
     expect(sourceFile.arrayBuffer).not.toHaveBeenCalled()
     expect(sourceFile.stream).toHaveBeenCalledOnce()
     expect(snapshotHandle.createWritable).toHaveBeenCalledWith({keepExistingData: false})
@@ -102,18 +109,19 @@ describe('exportRawSqliteDb', () => {
       configurable: true,
       value: {getDirectory, estimate},
     })
-    const readLock = vi.fn(async <T,>(fn: () => Promise<T>) => fn())
+    const execute = vi.fn(async () => ({rows: {_array: [{'0': '0'}]}}))
+    const writeLock = vi.fn(async <T,>(fn: (tx: {execute: (sql: string) => Promise<unknown>}) => Promise<T>) => fn({execute}))
 
     const promise = exportRawSqliteDb({
       user: {id: 'user-1'},
-      db: {readLock},
+      db: {writeLock},
     } as unknown as Repo)
 
     await expect(promise).rejects.toThrow(/Not enough browser storage/)
     await expect(promise).rejects.toThrow(/100\.0 MiB/) // required
     await expect(promise).rejects.toThrow(/20\.0 MiB/) // available
     // Bails before locking the DB or creating the doomed snapshot file.
-    expect(readLock).not.toHaveBeenCalled()
+    expect(writeLock).not.toHaveBeenCalled()
     expect(getFileHandle).not.toHaveBeenCalledWith(
       expect.stringContaining('export-snapshot'),
       {create: true},
@@ -144,11 +152,12 @@ describe('exportRawSqliteDb', () => {
       configurable: true,
       value: {getDirectory, estimate},
     })
-    const readLock = vi.fn(async <T,>(fn: () => Promise<T>) => fn())
+    const execute = vi.fn(async () => ({rows: {_array: [{'0': '0'}]}}))
+    const writeLock = vi.fn(async <T,>(fn: (tx: {execute: (sql: string) => Promise<unknown>}) => Promise<T>) => fn({execute}))
 
     const error: Error = await exportRawSqliteDb({
       user: {id: 'user-1'},
-      db: {readLock},
+      db: {writeLock},
     } as unknown as Repo).then(
       () => { throw new Error('expected export to reject') },
       (e: unknown) => e as Error,

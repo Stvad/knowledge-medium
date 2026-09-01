@@ -15,9 +15,17 @@ interface Harness {
   calls: string[]
 }
 
+// `PRAGMA wal_checkpoint` answers with one cell whose column name IS the value.
+const checkpointResult = (pages: number) => ({
+  rows: {_array: [{[String(pages)]: String(pages)}]},
+})
+
 const harness = (
   files: Record<string, number>,
-  {supportsWriteAhead = true}: {supportsWriteAhead?: boolean} = {},
+  {
+    supportsWriteAhead = true,
+    pagesLeftAfterCheckpoint = 0,
+  }: {supportsWriteAhead?: boolean; pagesLeftAfterCheckpoint?: number} = {},
 ): Harness => {
   const calls: string[] = []
   const present = {...files}
@@ -33,6 +41,9 @@ const harness = (
         calls.push(`open:${vfs}`)
         await fn(async sql => {
           calls.push(`sql:${sql}`)
+          if (sql === 'PRAGMA wal_checkpoint=truncate') return checkpointResult(377)
+          if (sql === 'PRAGMA wal_checkpoint=noop') return checkpointResult(pagesLeftAfterCheckpoint)
+          return undefined
         })
         calls.push(`close:${vfs}`)
       },
@@ -73,16 +84,40 @@ describe('prepareLocalDbForVfs — downgrade to CoopSync', () => {
     expect(h.calls).toEqual([
       `open:${WASQLiteVFS.OPFSWriteAheadVFS}`,
       'sql:PRAGMA wal_checkpoint=truncate',
+      'sql:PRAGMA wal_checkpoint=noop',
       `close:${WASQLiteVFS.OPFSWriteAheadVFS}`,
       `remove:${DB}-wa0`,
       `remove:${DB}-wa1`,
     ])
   })
 
-  it('deletes a zero-byte sidecar too — a stale log replays over later CoopSync writes', async () => {
+  it('deletes BOTH sidecars — the handoff connection recreates whichever was missing', async () => {
     const h = harness({[DB]: 4096, [`${DB}-wa1`]: 0})
     await prepareLocalDbForVfs(DB, WASQLiteVFS.OPFSCoopSyncVFS, h.deps)
+    expect(h.calls).toContain(`remove:${DB}-wa0`)
     expect(h.calls).toContain(`remove:${DB}-wa1`)
+  })
+
+  it('refuses when the checkpoint drained only part of the log', async () => {
+    const h = harness({[DB]: 4096, [`${DB}-wa0`]: 20704}, {pagesLeftAfterCheckpoint: 12})
+    await expect(prepareLocalDbForVfs(DB, WASQLiteVFS.OPFSCoopSyncVFS, h.deps))
+      .rejects.toBeInstanceOf(LocalDbVfsHandoffError)
+    expect(h.calls.filter(c => c.startsWith('remove:'))).toEqual([])
+  })
+
+  it('refuses when the checkpoint result cannot be read — unproven is not empty', async () => {
+    const h = harness({[DB]: 4096, [`${DB}-wa0`]: 20704})
+    const inner = h.deps.withConnection
+    h.deps.withConnection = (dbFilename, vfs, fn) =>
+      inner(dbFilename, vfs, async execute => {
+        await fn(async sql => {
+          await execute(sql)
+          return {unexpected: 'shape'}
+        })
+      })
+    await expect(prepareLocalDbForVfs(DB, WASQLiteVFS.OPFSCoopSyncVFS, h.deps))
+      .rejects.toBeInstanceOf(LocalDbVfsHandoffError)
+    expect(h.calls.filter(c => c.startsWith('remove:'))).toEqual([])
   })
 
   it('refuses rather than dropping sidecar commits it cannot checkpoint', async () => {

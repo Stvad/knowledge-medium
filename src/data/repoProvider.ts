@@ -172,9 +172,13 @@ export const syncObserverDepsFor = (
 }
 
 // Resolved once per page load, BEFORE the first `getPowerSyncDb` — every
-// connection this process opens has to agree on the VFS, and the handoff that
-// makes the on-disk state safe for it has already run by then.
+// connection this process opens has to agree on the VFS.
 let resolvedLocalDbVfs: LocalDbVfs | null = null
+
+// ...but the handoff is per FILE, not per process: signing in as a second user
+// without a reload opens a different `.db`, which has its own sidecars and its
+// own possible hot journal.
+const preparedDbFiles = new Set<string>()
 
 // Firefox and Safari block OPFS in private browsing — `getDirectory()`
 // throws SecurityError. Probe once and surface a useful message before
@@ -278,10 +282,10 @@ export const ensurePowerSyncReady = async (
 
   const dbFilename = dbFilenameForUser(userId)
   await recordPreviewDatabaseForReaper(dbFilename)
-  if (!resolvedLocalDbVfs) {
-    const target = await resolveLocalDbVfs()
-    await prepareLocalDbForVfs(dbFilename, target)
-    resolvedLocalDbVfs = target
+  resolvedLocalDbVfs ??= await resolveLocalDbVfs()
+  if (!preparedDbFiles.has(dbFilename)) {
+    await prepareLocalDbForVfs(dbFilename, resolvedLocalDbVfs)
+    preparedDbFiles.add(dbFilename)
   }
   const db = getPowerSyncDb(userId)
 

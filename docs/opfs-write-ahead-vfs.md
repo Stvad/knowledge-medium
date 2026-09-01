@@ -22,19 +22,45 @@ Before this, every read queued behind every write on PowerSync's single
 `DatabaseClient` — a documented single-connection pool. This is the main reason to
 switch; it is a client-architecture win, not a VFS micro-benchmark win.
 
-**Somewhat faster writes.** Measured with two workers on one file, 40 small write
-transactions each:
+### Measurements
+
+**Reads, through the real app** (`db.getAll` of a 50-block page query, 5 trials per page
+load, median of trial medians, dev-sized 461-block database):
+
+| concurrent reads | `OPFSCoopSyncVFS` | `OPFSWriteAheadVFS` + 1 reader |
+|---|---|---|
+| 1 (serial) | 3.0ms | 1.9ms |
+| 10 | 20.5ms | 10.8ms |
+| 40 | 57.4ms | 30.9ms |
+
+About 2x, which is what one extra connection should buy, and the direction held across
+all three shapes. Trial-to-trial spread on a database this small is wide (±50% within a
+single page load), and single runs disagreed with each other until the trial count went
+up — so read 2x as the size of the effect, not a precise figure. **This needs re-running
+on a production-sized database** before anyone quotes a number.
+
+**Writes, two raw wa-sqlite workers on one file:**
 
 | | `OPFSCoopSyncVFS` | `OPFSWriteAheadVFS` |
 |---|---|---|
-| 1 writer, 1 idle connection | p50 2.0ms, max 5.6ms | p50 1.0ms, max 2.2ms |
-| 2 concurrent writers | p50 1.8ms, max 77.8ms | p50 1.0ms, max 44.7ms |
-| writer + concurrent reader | writes p50 1.8ms / reads p50 0.2ms | writes p50 1.0ms / reads p50 0.0ms |
+| 1 writer, 1 idle connection | p50 2.0ms | p50 1.5ms |
+| 2 sustained writers | p50 1.7–2.6ms, max 58.9ms | p50 1.0–1.2ms, max 34.2ms |
+| bursty alternation (idle between writes) | p50 8.0–9.9ms | p50 4.0–4.1ms |
 
-Note what this does *not* show: the ~1s multi-tab stalls in
-[#255](https://github.com/Stvad/knowledge-medium/issues/255) did not reproduce on
-Chrome. That report is Firefox, where the exclusive-handle hand-off is forced and this
-VFS cannot help. Do not sell the switch as fixing #255.
+### On the multi-tab stall (#255) — unresolved
+
+[#255](https://github.com/Stvad/knowledge-medium/issues/255) reports ~1s stalls with two
+tabs, and Vlad confirms they happen **on Chrome**, not only Firefox. This harness does
+not reproduce them: the worst shape it finds is the bursty one above, where CoopSync
+costs ~2.4x, not 1000ms. So the harness is missing something the real app has — treat
+the stall as open, and do not claim this VFS fixes it or that it doesn't.
+
+Untested hypothesis for where the harness falls short: `LOCK_NOTIFY_INTERVAL` is a 1s
+`setInterval` plus a `setTimeout(0)` immediate notify, and Chrome throttles both in
+**backgrounded** tabs. Two real tabs almost always means one is in the background,
+whereas both of this harness's workers belong to the foreground page. If that is the
+mechanism, the write-ahead VFS removes it outright — there is no handle to hand off —
+but that is a guess until someone reproduces it with a genuinely backgrounded tab.
 
 ## The file format is compatible; the state outside the file is not
 
